@@ -97,6 +97,11 @@ import {
   validateSnapshotRoutingDestinationConflicts,
   validateSnapshotRoutingRecords,
 } from "../lib/slugs.js";
+import {
+  auditHistoryRowsAreFieldIdentical,
+  divergentAuditHistoryReplayError,
+  forbiddenAuditHistoryTombstoneError,
+} from "./audit-history-import.js";
 
 type RemoteObjectType = TodosPostgresSyncRecordType | "comments" | "dependencies" | "verifications" | "commits" | "refs" | "template_tasks" | "plan_project_link_receipts" | "plan_project_link_rollback_receipts";
 
@@ -879,6 +884,34 @@ class PostgresJsonRecordStore {
       );
     }
     return value;
+  }
+
+  async insertImmutableAuditHistory(
+    value: TaskHistory,
+    context: TodosStorageContext = {},
+  ): Promise<"inserted" | "identical"> {
+    await this.ensureSchema();
+    const inserted = await this.options.client.query<{ object_id: string }>(
+      `INSERT INTO ${this.tableName} (
+        service, object_type, object_id, payload, updated_at,
+        deleted_at, source_machine_id, version
+      ) VALUES ($1, $2, $3, $4::jsonb, $5::timestamptz, NULL, $6, NULL)
+      ON CONFLICT (service, object_type, object_id) DO NOTHING
+      RETURNING object_id`,
+      [
+        this.service,
+        "audit_history",
+        value.id,
+        jsonbParam(value),
+        value.created_at,
+        context.requestId ?? this.sourceMachineId ?? null,
+      ],
+    );
+    if (inserted.rows.length > 0) return "inserted";
+
+    const existing = await this.get<TaskHistory>("audit_history", value.id);
+    if (existing && auditHistoryRowsAreFieldIdentical(existing, value)) return "identical";
+    throw new Error(divergentAuditHistoryReplayError(value.id));
   }
 
   /**
@@ -2860,6 +2893,10 @@ async function importSnapshot(
     existingTaskLists,
   ));
   if (result.errors.length > 0) return result;
+  const auditHistory = await preflightAuditHistoryImport(snapshot.auditHistory, snapshot.tombstones ?? [], store);
+  result.errors.push(...auditHistory.errors);
+  if (result.errors.length > 0) return result;
+  result.skipped += auditHistory.identical;
   const entries: ReadonlyArray<readonly [
     RemoteObjectType,
     { id: string; updated_at?: string; created_at?: string; version?: number },
@@ -2872,8 +2909,17 @@ async function importSnapshot(
     ...snapshot.taskLists.map((row) => ["task_lists", row] as const),
     ...snapshot.templates.map((row) => ["templates", row] as const),
     ...(snapshot.templateTasks ?? []).map((row) => ["template_tasks", row] as const),
-    ...snapshot.auditHistory.map((row) => ["audit_history", row] as const),
   ];
+  for (const row of auditHistory.rowsToInsert) {
+    try {
+      const outcome = await store.insertImmutableAuditHistory(row, context);
+      if (outcome === "inserted") result.inserted += 1;
+      else result.skipped += 1;
+    } catch (error) {
+      result.errors.push(error instanceof Error ? error.message : String(error));
+      return result;
+    }
+  }
   for (const [type, row] of entries) {
     try {
       const existing = await store.get(type, row.id);
@@ -2902,6 +2948,44 @@ async function importSnapshot(
     }
   }
   return result;
+}
+
+async function preflightAuditHistoryImport(
+  rows: TaskHistory[],
+  tombstones: ReadonlyArray<NonNullable<TodosStorageSnapshot["tombstones"]>[number]>,
+  store: PostgresJsonRecordStore,
+): Promise<{
+  rowsToInsert: TaskHistory[];
+  identical: number;
+  errors: string[];
+}> {
+  const errors = tombstones
+    .filter((tombstone) => (tombstone.object_type as string) === "audit_history")
+    .map((tombstone) => forbiddenAuditHistoryTombstoneError(tombstone.object_id));
+  const rowsToInsert: TaskHistory[] = [];
+  const seen = new Map<string, TaskHistory>();
+  let identical = 0;
+
+  for (const row of rows) {
+    const prior = seen.get(row.id);
+    if (prior) {
+      if (auditHistoryRowsAreFieldIdentical(prior, row)) identical += 1;
+      else errors.push(divergentAuditHistoryReplayError(row.id));
+      continue;
+    }
+    seen.set(row.id, row);
+
+    const existing = await store.get<TaskHistory>("audit_history", row.id);
+    if (!existing) {
+      rowsToInsert.push(row);
+    } else if (auditHistoryRowsAreFieldIdentical(existing, row)) {
+      identical += 1;
+    } else {
+      errors.push(divergentAuditHistoryReplayError(row.id));
+    }
+  }
+
+  return { rowsToInsert, identical, errors };
 }
 
 async function requireRecord<T>(type: RemoteObjectType, id: string, store: PostgresJsonRecordStore): Promise<T> {

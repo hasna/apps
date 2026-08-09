@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { Database } from "bun:sqlite";
 import { closeDatabase, getDatabase, resetDatabase } from "../db/database.js";
-import { createTask, getTask } from "../db/tasks.js";
+import { createTask, getTask, handoffStaleTaskLock } from "../db/tasks.js";
 import { createLocalSqliteTodosStorageAdapter } from "../storage/local-sqlite.js";
 import type { TodosStorageAdapter } from "../storage/interfaces.js";
+import type { TaskHistory } from "../types/index.js";
 import { handleV1Request, type V1RequestDependencies } from "./v1.js";
 
 const STALE_LOCK_VERSION = "2020-01-01T00:00:00.000Z";
@@ -62,6 +63,45 @@ async function request(id: string, payload = body()): Promise<Response> {
   }), url, dependencies);
   if (!response) throw new Error("v1 route returned null");
   return response;
+}
+
+async function importRequest(payload: Record<string, unknown>): Promise<Response> {
+  const url = new URL("https://todos.example.test/v1/import");
+  const response = await handleV1Request(new Request(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }), url, dependencies);
+  if (!response) throw new Error("v1 import route returned null");
+  return response;
+}
+
+async function protectedImportState() {
+  const transferred = createTask({ title: "server immutable handoff receipt" }, db);
+  const control = createTask({ title: "server unrelated import control" }, db);
+  setLock(transferred.id, HOLDER, STALE_LOCK_VERSION);
+  const receipt = handoffStaleTaskLock({
+    task_id: transferred.id,
+    actor: ACTOR,
+    expected_holder: HOLDER,
+    expected_lock_version: STALE_LOCK_VERSION,
+    stale_after_seconds: 3_600,
+    new_holder: ACTOR,
+    reason: "Create a protected receipt for import attack coverage.",
+  }, db);
+  const audit = (await store.audit.getTaskHistory(transferred.id))
+    .find((entry) => entry.id === receipt.receipt_id);
+  if (!audit) throw new Error("server stale-lock handoff receipt history is missing");
+  return { transferred, control, receipt, audit };
+}
+
+async function protectedStateBytes(taskId: string, receiptId: string, controlId: string): Promise<string> {
+  return JSON.stringify({
+    receipt: (await store.audit.getTaskHistory(taskId)).find((entry) => entry.id === receiptId) ?? null,
+    transferred: getTask(taskId, db),
+    control: getTask(controlId, db),
+    controlHistory: await store.audit.getTaskHistory(controlId),
+  });
 }
 
 describe("POST /v1/tasks/:id/stale-lock-handoff", () => {
@@ -197,5 +237,70 @@ describe("POST /v1/tasks/:id/stale-lock-handoff", () => {
       expect(getTask(task.id, db)).toEqual(before);
       expect(await store.audit.getTaskHistory(task.id)).toEqual(historyBefore);
     }
+  });
+});
+
+describe("POST /v1/import — immutable stale-lock handoff receipts", () => {
+  test("rejects a divergent same-ID audit row with 409 and zero mutation", async () => {
+    const state = await protectedImportState();
+    const before = await protectedStateBytes(state.transferred.id, state.receipt.receipt_id, state.control.id);
+    const divergent: TaskHistory = {
+      ...state.audit,
+      new_value: `${state.audit.new_value ?? ""}\nATTACK_OVERWRITE`,
+    };
+
+    const response = await importRequest({ auditHistory: [divergent] });
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      error: `AUDIT_HISTORY_DIVERGENT_REPLAY: immutable audit_history row ${state.receipt.receipt_id} differs from stored row`,
+      code: "AUDIT_HISTORY_DIVERGENT_REPLAY",
+      conflict: true,
+      audit_history_id: state.receipt.receipt_id,
+    });
+    expect(await protectedStateBytes(state.transferred.id, state.receipt.receipt_id, state.control.id)).toBe(before);
+  });
+
+  test("rejects every audit_history tombstone with 400 and zero mutation", async () => {
+    const state = await protectedImportState();
+    const before = await protectedStateBytes(state.transferred.id, state.receipt.receipt_id, state.control.id);
+
+    const response = await importRequest({
+      tombstones: [{
+        object_type: "audit_history",
+        object_id: state.receipt.receipt_id,
+        deleted_at: "2026-08-09T12:01:00.000Z",
+        updated_at: "2026-08-09T12:01:00.000Z",
+      }],
+    });
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      error: `AUDIT_HISTORY_TOMBSTONE_FORBIDDEN: audit_history tombstone ${state.receipt.receipt_id} is not allowed`,
+      code: "AUDIT_HISTORY_TOMBSTONE_FORBIDDEN",
+      conflict: false,
+      audit_history_id: state.receipt.receipt_id,
+    });
+    expect(await protectedStateBytes(state.transferred.id, state.receipt.receipt_id, state.control.id)).toBe(before);
+  });
+
+  test("accepts a field-identical audit row replay as an idempotent skip", async () => {
+    const state = await protectedImportState();
+    const before = await protectedStateBytes(state.transferred.id, state.receipt.receipt_id, state.control.id);
+
+    const response = await importRequest({ auditHistory: [{ ...state.audit }] });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      result: {
+        inserted: 0,
+        updated: 0,
+        deleted: 0,
+        skipped: 1,
+        errors: [],
+      },
+      received: 1,
+    });
+    expect(await protectedStateBytes(state.transferred.id, state.receipt.receipt_id, state.control.id)).toBe(before);
   });
 });

@@ -38,6 +38,11 @@ import {
   rollbackPlanProjectLink,
 } from "../lib/plan-project-link.js";
 import { normalizeExactTaskId } from "../lib/stale-lock-handoff.js";
+import {
+  AUDIT_HISTORY_TOMBSTONE_FORBIDDEN,
+  forbiddenAuditHistoryTombstoneError,
+  parseAuditHistoryImportFailure,
+} from "../storage/audit-history-import.js";
 
 export interface V1RequestDependencies {
   getVerifier?: typeof getCloudVerifier;
@@ -1650,11 +1655,10 @@ export async function handleV1Request(
     }
 
     // ── /v1/import (bulk snapshot ingest / backfill) ──
-    // Accepts a full or partial TodosStorageSnapshot and upserts every record by
-    // primary key via the storage adapter. Idempotent: re-posting the same rows
-    // never duplicates (ON CONFLICT DO UPDATE, guarded by updated_at/version), so
-    // large local→cloud backfills can be chunked and safely retried. Requires the
-    // `todos:write` scope (enforced above for non-GET methods).
+    // Accepts a full or partial TodosStorageSnapshot. Mutable records use the
+    // storage adapter's guarded upsert path; audit history is append-only, so
+    // exact replay skips while divergent same-ID rows and every audit tombstone
+    // reject before mutation. Requires `todos:write` (enforced above).
     if (resource === "import") {
       if (method !== "POST") return error(405, `method ${method} not allowed on /v1/import`);
       if (typeof store.sync.importSnapshot !== "function") {
@@ -1700,7 +1704,29 @@ export async function handleV1Request(
       if (received === 0) {
         return error(400, "empty snapshot: provide at least one record array (tasks/projects/plans/...)");
       }
+      const forbiddenAuditTombstone = (snapshot.tombstones ?? [])
+        .find((tombstone) => (tombstone.object_type as string) === "audit_history");
+      if (forbiddenAuditTombstone) {
+        return error(
+          400,
+          forbiddenAuditHistoryTombstoneError(forbiddenAuditTombstone.object_id),
+          {
+            code: AUDIT_HISTORY_TOMBSTONE_FORBIDDEN,
+            conflict: false,
+            audit_history_id: forbiddenAuditTombstone.object_id,
+          },
+        );
+      }
       const result = await store.sync.importSnapshot(snapshot, contextFromPrincipal(principal));
+      const auditFailureMessage = result.errors.find((message) => parseAuditHistoryImportFailure(message) !== null);
+      if (auditFailureMessage) {
+        const failure = parseAuditHistoryImportFailure(auditFailureMessage)!;
+        return error(failure.status, auditFailureMessage, {
+          code: failure.code,
+          conflict: failure.conflict,
+          audit_history_id: failure.auditHistoryId,
+        });
+      }
       return json({ result, received });
     }
 

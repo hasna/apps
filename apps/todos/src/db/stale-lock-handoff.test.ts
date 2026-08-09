@@ -4,7 +4,9 @@ import { closeDatabase, getDatabase, resetDatabase } from "./database.js";
 import { createTask, getTask, handoffStaleTaskLock } from "./tasks.js";
 import { getTaskHistory } from "./audit.js";
 import { receiptFromStaleLockHandoffHistory } from "../lib/stale-lock-handoff.js";
-import { StaleLockHandoffError } from "../types/index.js";
+import { importSqliteTodosStorageSnapshot } from "../storage/sqlite-snapshot.js";
+import type { TodosStorageSnapshot } from "../storage/interfaces.js";
+import { StaleLockHandoffError, type TaskHistory } from "../types/index.js";
 
 const STALE_LOCK_VERSION = "2020-01-01T00:00:00.000Z";
 const HOLDER = "holder-a";
@@ -55,6 +57,43 @@ function expectHandoffCode(fn: () => unknown, code: StaleLockHandoffError["code"
     expect(error).toBeInstanceOf(StaleLockHandoffError);
     expect((error as StaleLockHandoffError).code).toBe(code);
   }
+}
+
+function emptySnapshot(overrides: Record<string, unknown> = {}): TodosStorageSnapshot {
+  return {
+    exportedAt: "2026-08-09T12:00:00.000Z",
+    source: "sqlite",
+    tasks: [],
+    projects: [],
+    projectMachinePaths: [],
+    plans: [],
+    agents: [],
+    taskLists: [],
+    templates: [],
+    templateTasks: [],
+    auditHistory: [],
+    tombstones: [],
+    ...overrides,
+  } as TodosStorageSnapshot;
+}
+
+function protectedHandoffState() {
+  const transferred = createTask({ title: "immutable handoff receipt" }, db);
+  const control = createTask({ title: "unrelated import control" }, db);
+  setLock(transferred.id, HOLDER, STALE_LOCK_VERSION);
+  const receipt = handoffStaleTaskLock(input(transferred.id), db);
+  const audit = getTaskHistory(transferred.id, db).find((entry) => entry.id === receipt.receipt_id);
+  if (!audit) throw new Error("stale-lock handoff receipt history is missing");
+  return { transferred, control, receipt, audit };
+}
+
+function protectedStateBytes(taskId: string, receiptId: string, controlId: string): string {
+  return JSON.stringify({
+    receipt: getTaskHistory(taskId, db).find((entry) => entry.id === receiptId) ?? null,
+    transferred: getTask(taskId, db),
+    control: getTask(controlId, db),
+    controlHistory: getTaskHistory(controlId, db),
+  });
 }
 
 describe("handoffStaleTaskLock — exact SQLite CAS", () => {
@@ -150,5 +189,74 @@ describe("handoffStaleTaskLock — exact SQLite CAS", () => {
     );
     expect(getTask(task.id, db)).toEqual(afterSuccess);
     expect(historyCount(task.id)).toBe(afterSuccessAudit);
+  });
+});
+
+describe("SQLite snapshot import — immutable stale-lock handoff receipts", () => {
+  test("rejects a divergent same-ID audit row before any snapshot mutation", () => {
+    const state = protectedHandoffState();
+    const before = protectedStateBytes(state.transferred.id, state.receipt.receipt_id, state.control.id);
+    const divergent: TaskHistory = {
+      ...state.audit,
+      new_value: `${state.audit.new_value ?? ""}\nATTACK_OVERWRITE`,
+    };
+
+    const result = importSqliteTodosStorageSnapshot(emptySnapshot({
+      auditHistory: [divergent],
+    }), db);
+
+    expect(result).toEqual({
+      inserted: 0,
+      updated: 0,
+      deleted: 0,
+      skipped: 0,
+      errors: [
+        `AUDIT_HISTORY_DIVERGENT_REPLAY: immutable audit_history row ${state.receipt.receipt_id} differs from stored row`,
+      ],
+    });
+    expect(protectedStateBytes(state.transferred.id, state.receipt.receipt_id, state.control.id)).toBe(before);
+  });
+
+  test("rejects every audit_history tombstone before any snapshot mutation", () => {
+    const state = protectedHandoffState();
+    const before = protectedStateBytes(state.transferred.id, state.receipt.receipt_id, state.control.id);
+
+    const result = importSqliteTodosStorageSnapshot(emptySnapshot({
+      tombstones: [{
+        object_type: "audit_history",
+        object_id: state.receipt.receipt_id,
+        deleted_at: "2026-08-09T12:01:00.000Z",
+        updated_at: "2026-08-09T12:01:00.000Z",
+      }],
+    }), db);
+
+    expect(result).toEqual({
+      inserted: 0,
+      updated: 0,
+      deleted: 0,
+      skipped: 0,
+      errors: [
+        `AUDIT_HISTORY_TOMBSTONE_FORBIDDEN: audit_history tombstone ${state.receipt.receipt_id} is not allowed`,
+      ],
+    });
+    expect(protectedStateBytes(state.transferred.id, state.receipt.receipt_id, state.control.id)).toBe(before);
+  });
+
+  test("treats a field-identical audit row replay as an idempotent skip", () => {
+    const state = protectedHandoffState();
+    const before = protectedStateBytes(state.transferred.id, state.receipt.receipt_id, state.control.id);
+
+    const result = importSqliteTodosStorageSnapshot(emptySnapshot({
+      auditHistory: [{ ...state.audit }],
+    }), db);
+
+    expect(result).toEqual({
+      inserted: 0,
+      updated: 0,
+      deleted: 0,
+      skipped: 1,
+      errors: [],
+    });
+    expect(protectedStateBytes(state.transferred.id, state.receipt.receipt_id, state.control.id)).toBe(before);
   });
 });

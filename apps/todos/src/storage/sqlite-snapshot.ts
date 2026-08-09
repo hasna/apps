@@ -7,6 +7,7 @@ import { listProjects } from "../db/projects.js";
 import { listTaskLists } from "../db/task-lists.js";
 import { listTasks, replaceTaskTags } from "../db/tasks.js";
 import { getTemplateTasks, listTemplates } from "../db/templates.js";
+import type { TaskHistory } from "../types/index.js";
 import {
   getStorageTombstone,
   listStorageTombstones,
@@ -21,6 +22,11 @@ import type {
   TodosProjectMachinePath,
 } from "./interfaces.js";
 import { validateSnapshotRoutingDestinationConflicts, validateSnapshotRoutingRecords } from "../lib/slugs.js";
+import {
+  auditHistoryRowsAreFieldIdentical,
+  divergentAuditHistoryReplayError,
+  forbiddenAuditHistoryTombstoneError,
+} from "./audit-history-import.js";
 
 const PROJECT_COLUMNS = [
   "id", "name", "path", "description", "task_list_id", "task_prefix", "task_counter",
@@ -126,7 +132,10 @@ export function importSqliteTodosStorageSnapshot(
   }
   // Preflight the full snapshot before any write so malformed routing metadata
   // cannot leave an otherwise-valid prefix partially imported.
+  const auditImport = preflightAuditHistoryImport(d, snapshot.auditHistory, snapshot.tombstones ?? []);
+  result.errors.push(...auditImport.errors);
   if (result.errors.length > 0) return result;
+  result.skipped += auditImport.identicalReplayCount;
 
   const applyRows = (
     objectType: StorageTombstoneObjectType,
@@ -173,10 +182,94 @@ export function importSqliteTodosStorageSnapshot(
       replaceTaskTags(row["id"], row["tags"].filter((tag): tag is string => typeof tag === "string"), d);
     }
   });
-  applyRows("audit_history", "task_history", AUDIT_COLUMNS, snapshot.auditHistory);
+  insertAuditHistoryRows(d, auditImport.rowsToInsert, result);
   applyTombstones(d, snapshot.tombstones ?? [], result);
 
   return result;
+}
+
+function preflightAuditHistoryImport(
+  db: Database,
+  rows: readonly TaskHistory[],
+  tombstones: readonly TodosStorageTombstone[],
+): {
+  rowsToInsert: TaskHistory[];
+  identicalReplayCount: number;
+  errors: string[];
+} {
+  const errors = tombstones
+    .filter((tombstone) => (tombstone.object_type as string) === "audit_history")
+    .map((tombstone) => forbiddenAuditHistoryTombstoneError(tombstone.object_id));
+  const rowsToInsert: TaskHistory[] = [];
+  const seen = new Map<string, TaskHistory>();
+  let identicalReplayCount = 0;
+
+  for (const rawRow of rows) {
+    try {
+      const row = asRecord(rawRow) as unknown as TaskHistory;
+      if (typeof row.id !== "string" || !row.id) {
+        throw new Error("task_history row is missing id");
+      }
+      const prior = seen.get(row.id);
+      if (prior) {
+        if (auditHistoryRowsAreFieldIdentical(prior, row)) identicalReplayCount += 1;
+        else errors.push(divergentAuditHistoryReplayError(row.id));
+        continue;
+      }
+      seen.set(row.id, row);
+
+      const existing = getAuditHistoryById(db, row.id);
+      if (!existing) {
+        rowsToInsert.push(row);
+      } else if (auditHistoryRowsAreFieldIdentical(existing, row)) {
+        identicalReplayCount += 1;
+      } else {
+        errors.push(divergentAuditHistoryReplayError(row.id));
+      }
+    } catch (error) {
+      errors.push(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  return { rowsToInsert, identicalReplayCount, errors };
+}
+
+function insertAuditHistoryRows(
+  db: Database,
+  rows: readonly TaskHistory[],
+  result: TodosStorageImportResult,
+): void {
+  for (const rawRow of rows) {
+    try {
+      const row = asRecord(rawRow);
+      const presentColumns = AUDIT_COLUMNS.filter((column) => column in row);
+      if (!presentColumns.includes("id")) presentColumns.unshift("id");
+      const placeholders = presentColumns.map(() => "?").join(", ");
+      const values = presentColumns.map((column) => valueForColumn(column, row[column]));
+      const changes = db.run(
+        `INSERT OR IGNORE INTO task_history (${presentColumns.join(", ")}) VALUES (${placeholders})`,
+        values,
+      ).changes;
+      if (changes > 0) {
+        result.inserted += 1;
+        continue;
+      }
+      const existing = getAuditHistoryById(db, String(row["id"]));
+      if (existing && auditHistoryRowsAreFieldIdentical(existing, row as unknown as TaskHistory)) {
+        result.skipped += 1;
+      } else {
+        result.errors.push(divergentAuditHistoryReplayError(String(row["id"])));
+      }
+    } catch (error) {
+      result.errors.push(error instanceof Error ? error.message : String(error));
+    }
+  }
+}
+
+function getAuditHistoryById(db: Database, id: string): TaskHistory | null {
+  return db.query(
+    `SELECT ${AUDIT_COLUMNS.join(", ")} FROM task_history WHERE id = ? LIMIT 1`,
+  ).get(id) as TaskHistory | null;
 }
 
 function upsertById(
@@ -288,7 +381,7 @@ function tableForTombstone(objectType: TodosStorageTombstone["object_type"]): st
   if (objectType === "task_lists") return "task_lists";
   if (objectType === "templates") return "task_templates";
   if (objectType === "template_tasks") return "template_tasks";
-  return "task_history";
+  throw new Error(`unsupported storage tombstone object_type: ${String(objectType)}`);
 }
 
 function listRows<T extends readonly string[]>(

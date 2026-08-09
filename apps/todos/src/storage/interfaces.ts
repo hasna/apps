@@ -476,6 +476,11 @@ export interface TodosStorageSnapshot {
 }
 
 export interface TodosStorageTombstone {
+  /**
+   * `audit_history` remains representable for legacy/export readback, but it is
+   * never importable: every snapshot importer must reject that object type
+   * before applying any row or tombstone mutation.
+   */
   object_type: "tasks" | "projects" | "project_machine_paths" | "plans" | "agents" | "task_lists" | "templates" | "template_tasks" | "audit_history";
   object_id: string;
   deleted_at: string;
