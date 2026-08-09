@@ -258,60 +258,110 @@ describe("workflow runner", () => {
     }
   });
 
-  test("resumes a failed terminal receipt without repeating the external effect", async () => {
+  test.each([
+    {
+      name: "failed",
+      terminal: { status: "failed" as const, exitCode: 1, error: "effect failed" },
+      continueOnFailure: false,
+      expectedResult: "failed",
+      expectedEffect: "failed",
+      expectedNext: "skipped",
+      expectedMarker: "effect\n",
+    },
+    {
+      name: "timed out with continueOnFailure",
+      terminal: { status: "timed_out" as const, exitCode: 1, error: "effect timed out" },
+      continueOnFailure: true,
+      expectedResult: "succeeded",
+      expectedEffect: "timed_out",
+      expectedNext: "succeeded",
+      expectedMarker: "effect\nnext\n",
+    },
+    {
+      name: "policy-blocked gate",
+      terminal: { status: "failed" as const, exitCode: 12, error: "policy denied" },
+      continueOnFailure: false,
+      expectedResult: "succeeded",
+      expectedEffect: "skipped",
+      expectedNext: "skipped",
+      expectedMarker: "effect\n",
+    },
+  ])("consumes a $name terminal receipt exactly once on resume", async ({
+    name,
+    terminal,
+    continueOnFailure,
+    expectedResult,
+    expectedEffect,
+    expectedNext,
+    expectedMarker,
+  }) => {
     const store = new Store(":memory:");
-    const root = mkdtempSync(join(tmpdir(), "loops-operation-failed-terminal-resume-"));
+    const root = mkdtempSync(join(tmpdir(), `loops-operation-${name.replaceAll(" ", "-")}-resume-`));
     const marker = join(root, "effect-count");
     try {
       const workflow = store.createWorkflow({
-        name: "failed-terminal-receipt-resume",
-        steps: [{
-          id: "effect",
-          target: {
-            type: "command",
-            command: `printf 'effect\\n' >> ${JSON.stringify(marker)}`,
-            shell: true,
+        name: `terminal-receipt-${name}`,
+        steps: [
+          {
+            id: name === "policy-blocked gate" ? "gate" : "effect",
+            continueOnFailure,
+            target: {
+              type: "command",
+              command: `printf 'effect\\n' >> ${JSON.stringify(marker)}`,
+              shell: true,
+            },
           },
-        }],
+          {
+            id: "next",
+            dependsOn: [name === "policy-blocked gate" ? "gate" : "effect"],
+            target: {
+              type: "command",
+              command: `printf 'next\\n' >> ${JSON.stringify(marker)}`,
+              shell: true,
+            },
+          },
+        ],
       });
-      const idempotencyKey = "failed-terminal-receipt-resume-key";
+      const effectStepId = workflow.steps[0]!.id;
+      const idempotencyKey = `terminal-receipt-${name}-key`;
       const run = store.createWorkflowRun({ workflow, idempotencyKey });
-      store.startWorkflowStepRun(run.id, "effect");
+      store.startWorkflowStepRun(run.id, effectStepId);
       const descriptor = parsePrivateOperationDescriptor(
         store.listWorkflowEvents(run.id).find((event) =>
-          event.eventType === "private_operation_descriptor" && event.stepId === "effect"
+          event.eventType === "private_operation_descriptor" && event.stepId === effectStepId
         )?.payload,
       );
       store.appendWorkflowEvent(
         run.id,
         "private_operation_admitted",
-        "effect",
+        effectStepId,
         operationAdmissionReceipt(descriptor) as unknown as Record<string, unknown>,
       );
       writeFileSync(marker, "effect\n");
       store.appendWorkflowEvent(
         run.id,
         "private_operation_terminal",
-        "effect",
+        effectStepId,
         operationTerminalReceipt(descriptor, {
-          status: "failed",
-          exitCode: 9,
+          ...terminal,
           durationMs: 1,
           stdout: "",
-          stderr: "effect failed",
+          stderr: "",
         }) as unknown as Record<string, unknown>,
       );
 
       const result = await executeWorkflow(store, workflow, { idempotencyKey });
 
-      expect(result.status).toBe("failed");
-      expect(readFileSync(marker, "utf8")).toBe("effect\n");
-      expect(store.getWorkflowStepRun(run.id, "effect")).toMatchObject({
-        status: "failed",
-        error: expect.stringContaining("reconciled from immutable operation receipt"),
-      });
+      expect(result.status).toBe(expectedResult);
+      expect(store.getWorkflowRun(run.id)?.status).toBe(expectedResult);
+      expect(readFileSync(marker, "utf8")).toBe(expectedMarker);
+      expect(store.getWorkflowStepRun(run.id, effectStepId)?.status).toBe(expectedEffect);
+      expect(store.getWorkflowStepRun(run.id, "next")?.status).toBe(expectedNext);
       expect(store.listWorkflowEvents(run.id).filter((event) =>
-        event.eventType === "private_operation_terminal" && event.stepId === "effect"
+        event.eventType === "step_started" && event.stepId === effectStepId
+      )).toHaveLength(1);
+      expect(store.listWorkflowEvents(run.id).filter((event) =>
+        event.eventType === "private_operation_terminal" && event.stepId === effectStepId
       )).toHaveLength(1);
     } finally {
       store.close();

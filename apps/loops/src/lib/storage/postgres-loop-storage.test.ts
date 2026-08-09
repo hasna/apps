@@ -1452,7 +1452,143 @@ suite("PostgresLoopStorage (live)", () => {
     });
 
     expect(result.abandoned.some((run) => run.id === claim!.run.id)).toBe(false);
+    expect(result.operationReconciliationRequired.map((run) => run.id)).toContain(claim!.run.id);
     expect((await storage.getRun(claim!.run.id))?.status).toBe("running");
+  });
+
+  test("all hosted recovery entrypoints propagate admitted-operation reconciliation without mutation", async () => {
+    const claimedAt = new Date("2026-07-06T12:10:00.000Z");
+    const recoveredAt = new Date("2026-07-06T12:30:00.000Z");
+    const createFixture = async (prefix: string) => {
+      const workflow = await storage.createWorkflow({
+        name: `${prefix}-workflow`,
+        steps: [{ id: "effect", target: { type: "command", command: "printf", args: ["effect"] } }],
+      });
+      const loop = await storage.createLoop(loopInput(`${prefix}-loop`, {
+        target: { type: "workflow", workflowId: workflow.id },
+        machine: { id: "missing-pg-runner" },
+        leaseMs: 1_000,
+        maxAttempts: 2,
+        retryDelayMs: 1_000,
+      }), claimedAt);
+      await storage.updateLoop(loop.id, { nextRunAt: claimedAt.toISOString() });
+      const claim = await storage.claimRun(loop, claimedAt.toISOString(), `${prefix}-runner`, claimedAt);
+      if (!claim) throw new Error(`failed to create ${prefix} claim`);
+      const workflowRun = await storage.createWorkflowRun({
+        workflow,
+        loop,
+        loopRun: claim.run,
+        operationAuthority: { authorityId: "loops-control-plane", tenantId: "tenant-test" },
+      });
+      const descriptor = parsePrivateOperationDescriptor(
+        (await storage.listWorkflowEvents(workflowRun.id)).find((event) =>
+          event.eventType === "private_operation_descriptor" && event.stepId === "effect"
+        )?.payload,
+      );
+      await storage.appendWorkflowEvent(
+        workflowRun.id,
+        "private_operation_admitted",
+        "effect",
+        operationAdmissionReceipt(descriptor) as unknown as Record<string, unknown>,
+      );
+      return { loop, claim, workflowRun };
+    };
+    const fixtures = await Promise.all([
+      createFixture("pg-legacy-recovery"),
+      createFixture("pg-per-run-recovery"),
+      createFixture("pg-poll-recovery"),
+    ]);
+    const before = await Promise.all(fixtures.map(async (fixture) => ({
+      run: await storage.getRun(fixture.claim.run.id),
+      workflowRun: await storage.getWorkflowRun(fixture.workflowRun.id),
+      loop: await storage.getLoop(fixture.loop.id),
+    })));
+    const principal = (principalId: string, runner: boolean): TenantAuthContext => ({
+      tenantId: "tenant-test",
+      principalId,
+      requestId: `${principalId}-request`,
+      kid: `${principalId}-kid`,
+      agent: principalId,
+      scopes: runner ? ["loops:runner"] : ["loops:*"],
+      roles: runner ? ["worker"] : ["admin"],
+      tokenKind: runner ? "machine" : "api_key",
+      claims: {
+        v: 1,
+        kid: `${principalId}-kid`,
+        app: "loops",
+        agent: principalId,
+        scopes: runner ? ["loops:runner"] : ["loops:*"],
+        iat: 1,
+        exp: null,
+      },
+    });
+    const createServer = (auth: TenantAuthContext) => createLoopsApiServer({
+      host: "127.0.0.1",
+      port: 0,
+      storage,
+      now: () => recoveredAt,
+      random: () => 0.5,
+      authenticator: { authenticate: async () => ({ ok: true, status: 200, principal: auth }) },
+      withTenantStorage: (_principal, fn) => fn(storage),
+    });
+
+    const adminServer = createServer(principal("pg-recovery-admin", false));
+    try {
+      const legacy = await fetch(`http://127.0.0.1:${adminServer.port}/v1/leases/recover`, { method: "POST" });
+      expect(legacy.status).toBe(200);
+      expect(await legacy.json()).toMatchObject({
+        reconciliation: {
+          outcomes: expect.arrayContaining(fixtures.map((fixture) => ({
+            runId: fixture.claim.run.id,
+            outcome: "operation_reconciliation_required",
+            reason: "admitted_external_operation_will_not_be_repeated_blindly",
+          }))),
+        },
+      });
+
+      const target = fixtures[1]!;
+      const perRun = await fetch(`http://127.0.0.1:${adminServer.port}/v1/runs/${target.claim.run.id}/recover`, { method: "POST" });
+      expect(perRun.status).toBe(200);
+      expect(await perRun.json()).toMatchObject({
+        reconciliation: {
+          outcomes: [{
+            runId: target.claim.run.id,
+            outcome: "operation_reconciliation_required",
+            reason: "admitted_external_operation_will_not_be_repeated_blindly",
+          }],
+        },
+      });
+    } finally {
+      adminServer.stop(true);
+    }
+
+    const runnerServer = createServer(principal("healthy-pg-runner", true));
+    try {
+      const poll = await fetch(`http://127.0.0.1:${runnerServer.port}/v1/runners/claim`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ runnerId: "healthy-pg-runner" }),
+      });
+      expect(poll.status).toBe(200);
+      expect(await poll.json()).toMatchObject({
+        claims: [],
+        reconciliation: {
+          outcomes: expect.arrayContaining(fixtures.map((fixture) => ({
+            runId: fixture.claim.run.id,
+            outcome: "operation_reconciliation_required",
+            reason: "admitted_external_operation_will_not_be_repeated_blindly",
+          }))),
+        },
+      });
+    } finally {
+      runnerServer.stop(true);
+    }
+
+    await Promise.all(fixtures.map(async (fixture, index) => {
+      expect(await storage.getRun(fixture.claim.run.id)).toEqual(before[index]!.run);
+      expect(await storage.getWorkflowRun(fixture.workflowRun.id)).toEqual(before[index]!.workflowRun);
+      expect(await storage.getLoop(fixture.loop.id)).toEqual(before[index]!.loop);
+    }));
   });
 
   test("recoverExpiredRunLeasesDetailed honours protectClaimedByInLoops", async () => {

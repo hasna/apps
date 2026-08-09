@@ -158,6 +158,47 @@ function blockedExitCodesForStep(step: WorkflowStep): number[] {
   return GATE_STEP_PATTERN.test(step.name ? `${step.id} ${step.name}` : step.id) ? DEFAULT_BLOCKED_EXIT_CODES : [];
 }
 
+type WorkflowStepResult = Omit<ExecutorResult, "status"> & {
+  status: ExecutorResult["status"] | "cancelled" | "skipped";
+};
+
+async function finalizeWorkflowStepResult(
+  store: WorkflowExecutionStore,
+  workflowRunId: string,
+  step: WorkflowStep,
+  result: WorkflowStepResult,
+  opts: Pick<ExecuteWorkflowOptions, "daemonLeaseId">,
+): Promise<WorkflowStepResult["status"]> {
+  const blockedExit =
+    result.status === "failed" && result.exitCode !== undefined && blockedExitCodesForStep(step).includes(result.exitCode);
+  if (blockedExit) {
+    await store.finalizeWorkflowStepRun(workflowRunId, step.id, {
+      status: "skipped",
+      finishedAt: result.finishedAt,
+      durationMs: result.durationMs,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      exitCode: result.exitCode,
+      error: `${BLOCKED_STEP_ERROR_PREFIX} step ${step.id} exited with blocked exit code ${result.exitCode}`,
+    }, {
+      daemonLeaseId: opts.daemonLeaseId,
+    });
+    return "skipped";
+  }
+  await store.finalizeWorkflowStepRun(workflowRunId, step.id, {
+    status: result.status,
+    finishedAt: result.finishedAt,
+    durationMs: result.durationMs,
+    stdout: result.stdout,
+    stderr: result.stderr,
+    exitCode: result.exitCode,
+    error: result.error,
+  }, {
+    daemonLeaseId: opts.daemonLeaseId,
+  });
+  return result.status;
+}
+
 function targetWithStepAccount(step: WorkflowStep, goalNodePrompt?: string): ExecutableTarget {
   const account = step.account ?? step.target.account;
   const timeoutMs = step.timeoutMs !== undefined ? step.timeoutMs : step.target.timeoutMs;
@@ -240,16 +281,18 @@ export async function executeWorkflow(
   // skip (no pid, or a live process), startWorkflowStepRun refuses the double
   // claim and the try/catch below finalizes the run instead of stranding it.
   const resumedRunningSteps = (await store.listWorkflowStepRuns(run.id)).filter((step) => step.status === "running");
-  const reconciledTerminalSteps = new Set<string>();
+  const reconciledTerminalResults = new Map<string, WorkflowStepResult>();
   for (const resumedStep of resumedRunningSteps) {
     const workflowStep = workflow.steps.find((step) => step.id === resumedStep.stepId);
     if (!workflowStep) throw new ValidationError(`workflow step missing during resume: ${resumedStep.stepId}`);
     const descriptor = await operationDescriptorForStep(store, workflow, run.id, workflowStep);
     const operation = await operationStateForStep(store, descriptor);
     if (operation.terminal) {
-      await store.finalizeWorkflowStepRun(run.id, resumedStep.stepId, {
+      const finishedAt = nowIso();
+      const terminalResult: WorkflowStepResult = {
         status: operation.terminal.state,
-        finishedAt: nowIso(),
+        startedAt: resumedStep.startedAt ?? finishedAt,
+        finishedAt,
         durationMs: operation.terminal.durationMs ?? 0,
         stdout: "",
         stderr: "",
@@ -257,8 +300,9 @@ export async function executeWorkflow(
         error: operation.terminal.state === "succeeded"
           ? undefined
           : `reconciled from immutable operation receipt ${operation.terminal.receiptId}`,
-      }, { daemonLeaseId: opts.daemonLeaseId });
-      reconciledTerminalSteps.add(resumedStep.stepId);
+      };
+      const status = await finalizeWorkflowStepResult(store, run.id, workflowStep, terminalResult, opts);
+      reconciledTerminalResults.set(resumedStep.stepId, { ...terminalResult, status });
       continue;
     }
     if (operation.admission) {
@@ -305,10 +349,17 @@ export async function executeWorkflow(
         break;
       }
       const existing = await store.getWorkflowStepRun(run.id, step.id);
-      if (reconciledTerminalSteps.has(step.id)) {
-        if ((existing?.status === "failed" || existing?.status === "timed_out") && !step.continueOnFailure) {
-          terminalStatus = existing.status;
-          blockingError = existing.error ?? `step ${step.id} reconciled as ${existing.status}`;
+      const reconciledTerminal = reconciledTerminalResults.get(step.id);
+      if (reconciledTerminal) {
+        if (reconciledTerminal.status === "succeeded" || reconciledTerminal.status === "skipped") continue;
+        if (reconciledTerminal.status === "cancelled") {
+          terminalStatus = "cancelled";
+          blockingError = `step ${step.id} cancelled`;
+          break;
+        }
+        if (!step.continueOnFailure) {
+          terminalStatus = reconciledTerminal.status;
+          blockingError = `step ${step.id} ${reconciledTerminal.status}${reconciledTerminal.error ? `: ${reconciledTerminal.error}` : ""}`;
           break;
         }
         continue;
@@ -445,37 +496,11 @@ export async function executeWorkflow(
         break;
       }
       opts.beforePersist?.();
-      const blockedExit =
-        result.status === "failed" && result.exitCode !== undefined && blockedExitCodesForStep(step).includes(result.exitCode);
-      if (blockedExit) {
-        // Intentional gate control flow: record as skipped/blocked, never as failure.
-        await store.finalizeWorkflowStepRun(run.id, step.id, {
-          status: "skipped",
-          finishedAt: result.finishedAt,
-          durationMs: result.durationMs,
-          stdout: result.stdout,
-          stderr: result.stderr,
-          exitCode: result.exitCode,
-          error: `${BLOCKED_STEP_ERROR_PREFIX} step ${step.id} exited with blocked exit code ${result.exitCode}`,
-        }, {
-          daemonLeaseId: opts.daemonLeaseId,
-        });
-        continue;
-      }
-      await store.finalizeWorkflowStepRun(run.id, step.id, {
-        status: result.status,
-        finishedAt: result.finishedAt,
-        durationMs: result.durationMs,
-        stdout: result.stdout,
-        stderr: result.stderr,
-        exitCode: result.exitCode,
-        error: result.error,
-      }, {
-        daemonLeaseId: opts.daemonLeaseId,
-      });
-      if (result.status !== "succeeded" && !step.continueOnFailure) {
-        terminalStatus = result.status;
-        blockingError = `step ${step.id} ${result.status}${result.error ? `: ${result.error}` : ""}`;
+      const finalizedStatus = await finalizeWorkflowStepResult(store, run.id, step, result, opts);
+      if (finalizedStatus === "skipped") continue;
+      if (finalizedStatus !== "succeeded" && !step.continueOnFailure) {
+        terminalStatus = finalizedStatus;
+        blockingError = `step ${step.id} ${finalizedStatus}${result.error ? `: ${result.error}` : ""}`;
         break;
       }
     }

@@ -804,6 +804,8 @@ export interface RecoverExpiredRunLeasesResult {
   abandoned: LoopRun[];
   /** Runs whose lease expired while their process (group) is still alive; lease deferred. */
   deferred: LoopRun[];
+  /** Runs left unchanged because an admitted private operation has no terminal receipt. */
+  operationReconciliationRequired: LoopRun[];
 }
 
 export interface ExpiredRunLeaseCandidate {
@@ -5122,6 +5124,60 @@ export class Store {
     const protectClause = protectLoopIds.length > 0
       ? ` AND (claimed_by IS NULL OR claimed_by <> ? OR loop_id NOT IN (${protectLoopIds.map(() => "?").join(",")}))`
       : "";
+    const unresolvedOperationPredicate = `EXISTS (
+      SELECT 1
+      FROM workflow_runs AS operation_workflow
+      JOIN workflow_events AS admitted_event
+        ON admitted_event.workflow_run_id = operation_workflow.id
+      WHERE operation_workflow.loop_run_id = loop_runs.id
+        AND admitted_event.event_type = 'private_operation_admitted'
+        AND NOT EXISTS (
+          SELECT 1
+          FROM workflow_events AS terminal_event
+          WHERE terminal_event.workflow_run_id = admitted_event.workflow_run_id
+            AND terminal_event.step_id = admitted_event.step_id
+            AND terminal_event.event_type = 'private_operation_terminal'
+        )
+    )`;
+    const candidateArgs = [
+      now.toISOString(),
+      opts.runId ?? null,
+      opts.runId ?? null,
+      opts.expectedLeaseExpiresAt ?? null,
+      opts.expectedLeaseExpiresAt ?? null,
+      opts.expectedUpdatedAt ?? null,
+      opts.expectedUpdatedAt ?? null,
+      opts.excludeClaimedBy ?? null,
+      opts.excludeClaimedBy ?? null,
+      ...(protectLoopIds.length > 0 ? [protect!.claimedBy, ...protectLoopIds] : []),
+    ];
+    const operationRows = opts.refuseAdmittedPrivateOperations
+      ? this.db
+          .query<RunRow, Array<string | number | null>>(
+            `SELECT * FROM loop_runs
+             WHERE status = 'running' AND lease_expires_at <= ?
+               AND (? IS NULL OR id = ?)
+               AND (? IS NULL OR lease_expires_at = ?)
+               AND (? IS NULL OR updated_at = ?)
+               AND (? IS NULL OR claimed_by IS NULL OR claimed_by <> ?)
+               AND ${unresolvedOperationPredicate}${protectClause}
+             ORDER BY lease_expires_at ASC
+             LIMIT ?`,
+          )
+          .all(...candidateArgs, limit)
+      : [];
+    const operationReconciliationRequired: LoopRun[] = operationRows
+      .map((row) => this.getRun(row.id))
+      .filter((run): run is LoopRun => Boolean(run));
+    const reconciliationRunIds = new Set(operationReconciliationRequired.map((run) => run.id));
+    const requiresOperationReconciliation = (runId: string): boolean => Boolean(
+      this.db.query<{ found: number }, [string, string]>(
+        `SELECT 1 AS found FROM loop_runs
+         WHERE id = ? AND status = 'running' AND lease_expires_at <= ?
+           AND ${unresolvedOperationPredicate}
+         LIMIT 1`,
+      ).get(runId, now.toISOString()),
+    );
     const rows = this.db
       .query<RunRow, Array<string | number | null>>(
         `SELECT * FROM loop_runs
@@ -5130,27 +5186,12 @@ export class Store {
            AND (? IS NULL OR lease_expires_at = ?)
            AND (? IS NULL OR updated_at = ?)
            AND (? IS NULL OR claimed_by IS NULL OR claimed_by <> ?)
-           AND (? = 0 OR NOT EXISTS (
-             SELECT 1
-             FROM workflow_runs AS operation_workflow
-             JOIN workflow_events AS operation_event
-               ON operation_event.workflow_run_id = operation_workflow.id
-             WHERE operation_workflow.loop_run_id = loop_runs.id
-               AND operation_event.event_type = 'private_operation_admitted'
-           ))${protectClause}
+           AND (? = 0 OR NOT ${unresolvedOperationPredicate})${protectClause}
          ORDER BY lease_expires_at ASC
          LIMIT ?`,
       )
       .all(
-        now.toISOString(),
-        opts.runId ?? null,
-        opts.runId ?? null,
-        opts.expectedLeaseExpiresAt ?? null,
-        opts.expectedLeaseExpiresAt ?? null,
-        opts.expectedUpdatedAt ?? null,
-        opts.expectedUpdatedAt ?? null,
-        opts.excludeClaimedBy ?? null,
-        opts.excludeClaimedBy ?? null,
+        ...candidateArgs.slice(0, 9),
         opts.refuseAdmittedPrivateOperations ? 1 : 0,
         ...(protectLoopIds.length > 0 ? [protect!.claimedBy, ...protectLoopIds] : []),
         scanLimit,
@@ -5193,14 +5234,7 @@ export class Store {
                AND ($daemonLeaseId IS NULL OR EXISTS (
                  SELECT 1 FROM daemon_lease WHERE id=$daemonLeaseId AND expires_at > $now
                ))
-               AND ($refuseAdmittedPrivateOperations = 0 OR NOT EXISTS (
-                 SELECT 1
-                 FROM workflow_runs AS operation_workflow
-                 JOIN workflow_events AS operation_event
-                   ON operation_event.workflow_run_id = operation_workflow.id
-                 WHERE operation_workflow.loop_run_id = loop_runs.id
-                   AND operation_event.event_type = 'private_operation_admitted'
-               ))`,
+               AND ($refuseAdmittedPrivateOperations = 0 OR NOT ${unresolvedOperationPredicate})`,
           )
           .run({
             $id: row.id,
@@ -5215,6 +5249,17 @@ export class Store {
           });
         if (res.changes !== 1) {
           this.db.exec("COMMIT");
+          if (
+            opts.refuseAdmittedPrivateOperations &&
+            !reconciliationRunIds.has(row.id) &&
+            requiresOperationReconciliation(row.id)
+          ) {
+            const unchanged = this.getRun(row.id);
+            if (unchanged) {
+              operationReconciliationRequired.push(unchanged);
+              reconciliationRunIds.add(unchanged.id);
+            }
+          }
           continue;
         }
         const workflowRows = this.db
@@ -5297,7 +5342,7 @@ export class Store {
       const run = this.getRun(row.id);
       if (run) recovered.push(run);
     }
-    return { abandoned: recovered, deferred };
+    return { abandoned: recovered, deferred, operationReconciliationRequired };
   }
 
   expireLoops(now: Date = new Date(), opts: DaemonLeaseFence = {}): Loop[] {
