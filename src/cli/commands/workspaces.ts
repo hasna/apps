@@ -1935,26 +1935,45 @@ function registerProjectCommands(program: Command): void {
     .option("--bulk", "Import direct child directories")
     .option("--dry-run", "Preview imports without writing project rows")
     .option("--tags <tags>", "Comma-separated tags")
+    .option("--metadata-json <json>", "Authoritative metadata JSON object")
     .option("--agent <id-or-slug>", "Attributing agent")
     .option("-j, --json", "Output JSON")
     .action(async (path, opts) => {
       try {
         const store = resolveProjectStore();
         const agentId = mutationAgentId(store, opts.agent);
+        const metadata = parseJsonObject(opts.metadataJson, "--metadata-json");
         const result = opts.bulk
-          ? await importWorkspaceBulk(store, path, { dryRun: opts.dryRun, tags: splitList(opts.tags), agent_id: agentId })
-          : await importWorkspace(store, path, { dryRun: opts.dryRun, tags: splitList(opts.tags), agent_id: agentId });
-        if (wantsJson(opts)) { printObject(projectPayload(result), opts); return; }
+          ? await importWorkspaceBulk(store, path, {
+              dryRun: opts.dryRun,
+              tags: splitList(opts.tags),
+              metadata,
+              agent_id: agentId,
+            })
+          : await importWorkspace(store, path, {
+              dryRun: opts.dryRun,
+              tags: splitList(opts.tags),
+              metadata,
+              agent_id: agentId,
+            });
+        const rejected = "imported" in result ? result.errors.length > 0 : Boolean(result.error);
+        if (wantsJson(opts)) {
+          printObject(projectPayload(result), opts);
+          if (rejected) process.exitCode = 1;
+          return;
+        }
         if ("imported" in result) {
           console.log(chalk.green(`✓ Imported ${result.imported.length} project(s)`));
           if (result.previews.length) console.log(chalk.dim(`  previews: ${result.previews.length}`));
           if (result.skipped.length) console.log(chalk.dim(`  skipped: ${result.skipped.length}`));
           if (result.errors.length) console.log(chalk.yellow(`  errors: ${result.errors.length}`));
+          if (rejected) process.exitCode = 1;
           return;
         }
         if (result.workspace) console.log(chalk.green(`✓ Imported project: ${result.workspace.slug}`));
         else if (result.preview) console.log(`${chalk.dim("[dry-run]")} ${result.preview.slug} ${result.preview.path}`);
         else console.log(chalk.yellow(result.skipped ?? result.error ?? "No import performed"));
+        if (rejected) process.exitCode = 1;
       } catch (err) {
         console.error(chalk.red(err instanceof Error ? err.message : String(err)));
         process.exit(1);

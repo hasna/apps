@@ -16,8 +16,10 @@ import {
   getWorkspace,
   getWorkspaceBySlug,
   mutateProjectResourceLinks,
+  mutateProjectResourceLinksForRegistration,
 } from "../db/workspaces.js";
 import { canonicalJson, sha256 } from "./guarded-project-mutation.js";
+import { buildProjectContextBundle } from "./project-context-bundle.js";
 import {
   normalizeProjectResourceLinks,
   projectResourceLinkCollection,
@@ -43,6 +45,7 @@ import {
   type ProjectRegistrationAuthorityReceipt,
   type ProjectRegistrationAuthorityRecord,
   type ProjectRegistrationAuthorityRequest,
+  type ProjectRegistrationAuthorityTransport,
   type ProjectRegistrationResourceKind,
 } from "./project-registration.js";
 import { PROJECT_MARKER_FILENAME } from "./workspace-runtime.js";
@@ -174,10 +177,12 @@ class FakeAuthority implements ProjectRegistrationAuthorityAdapter {
   channelTargetIdFactory: ((selectorDigest: string) => string) | null = null;
   targetIdFactory: ((request: ProjectRegistrationAuthorityRequest, selectorDigest: string) => string) | null = null;
   packageVersion = "test-1.0.0";
+  capabilityCalls = 0;
 
   constructor(
     readonly authority: ProjectRegistrationAuthorityName,
     readonly resources: ProjectRegistrationResourceKind[],
+    readonly transport: ProjectRegistrationAuthorityTransport | undefined,
     readonly failSteps: Set<string> = new Set(),
     readonly readbackMismatchKinds: Set<ProjectRegistrationResourceKind> = new Set(),
     readonly disconnectAfterCreateSteps: Set<string> = new Set(),
@@ -186,6 +191,7 @@ class FakeAuthority implements ProjectRegistrationAuthorityAdapter {
   ) {}
 
   async capability(): Promise<ProjectRegistrationAuthorityCapability> {
+    this.capabilityCalls += 1;
     return {
       authority: this.authority,
       route: `${this.authority}.project-registration.v1`,
@@ -482,18 +488,21 @@ class FakeAuthority implements ProjectRegistrationAuthorityAdapter {
   }
 }
 
-function fakeAuthorities(
+type FakeAuthoritySet = {
+  authorities: ProjectRegistrationAuthorities;
+  todos: FakeAuthority;
+  mementos: FakeAuthority;
+  conversations: FakeAuthority;
+};
+
+function buildFakeAuthorities(
+  transports: Record<ProjectRegistrationAuthorityName, ProjectRegistrationAuthorityTransport | undefined>,
   failSteps: string[] = [],
   readbackMismatchKinds: Partial<Record<ProjectRegistrationAuthorityName, ProjectRegistrationResourceKind[]>> = {},
   disconnectAfterCreateSteps: string[] = [],
   failLookupSteps: string[] = [],
   driftDirectoryOnFailSteps: string[] = [],
-): {
-  authorities: ProjectRegistrationAuthorities;
-  todos: FakeAuthority;
-  mementos: FakeAuthority;
-  conversations: FakeAuthority;
-} {
+): FakeAuthoritySet {
   const failures = new Set(failSteps);
   const disconnects = new Set(disconnectAfterCreateSteps);
   const lookupFailures = new Set(failLookupSteps);
@@ -501,6 +510,7 @@ function fakeAuthorities(
   const todos = new FakeAuthority(
     "todos",
     ["project", "task_list"],
+    transports.todos,
     failures,
     new Set(readbackMismatchKinds.todos ?? []),
     disconnects,
@@ -510,6 +520,7 @@ function fakeAuthorities(
   const mementos = new FakeAuthority(
     "mementos",
     ["project"],
+    transports.mementos,
     failures,
     new Set(readbackMismatchKinds.mementos ?? []),
     disconnects,
@@ -519,6 +530,7 @@ function fakeAuthorities(
   const conversations = new FakeAuthority(
     "conversations",
     ["channel"],
+    transports.conversations,
     failures,
     new Set(readbackMismatchKinds.conversations ?? []),
     disconnects,
@@ -531,6 +543,30 @@ function fakeAuthorities(
     mementos,
     conversations,
   };
+}
+
+function fakeAuthorities(
+  failSteps: string[] = [],
+  readbackMismatchKinds: Partial<Record<ProjectRegistrationAuthorityName, ProjectRegistrationResourceKind[]>> = {},
+  disconnectAfterCreateSteps: string[] = [],
+  failLookupSteps: string[] = [],
+  driftDirectoryOnFailSteps: string[] = [],
+): FakeAuthoritySet {
+  return buildFakeAuthorities(
+    { todos: "local", mementos: "local", conversations: "local" },
+    failSteps,
+    readbackMismatchKinds,
+    disconnectAfterCreateSteps,
+    failLookupSteps,
+    driftDirectoryOnFailSteps,
+  );
+}
+
+function fakeAuthoritiesWithTransports(
+  transports: Record<ProjectRegistrationAuthorityName, ProjectRegistrationAuthorityTransport | undefined>,
+  failSteps: string[] = [],
+): FakeAuthoritySet {
+  return buildFakeAuthorities(transports, failSteps);
 }
 
 class FakeCloudProjectAuthority {
@@ -718,6 +754,27 @@ describe("full project registration naming policy", () => {
 });
 
 describe("full project registration capability gate", () => {
+  test("rejects incomplete finance metadata before any authority or filesystem mutation", async () => {
+    const db = makeDb();
+    const target = tempTarget("finance-metadata-rejected");
+    try {
+      await expect(registerFullProject(
+        input("op-finance-metadata-rejected", target.target, {
+          metadata: {
+            business_area: "finance",
+            ledger_authority: "@hasna/accounting",
+          },
+        }),
+        { db, authorities: unavailableProjectRegistrationAuthorities() },
+      )).rejects.toThrow(/missing required fields/i);
+      expect(db.query("SELECT COUNT(*) AS n FROM workspaces").get()).toEqual({ n: 0 });
+      expect(db.query("SELECT COUNT(*) AS n FROM project_registration_manifests").get()).toEqual({ n: 0 });
+      expect(existsSync(target.path)).toBe(false);
+    } finally {
+      db.close();
+    }
+  });
+
   test("returns the exact dependency contract before any project or filesystem mutation", async () => {
     const db = makeDb();
     const target = tempTarget("no-go");
@@ -741,13 +798,123 @@ describe("full project registration capability gate", () => {
       db.close();
     }
   });
+
+  test("rejects all undeclared authority transports before local Projects can probe or mutate", async () => {
+    const db = makeDb();
+    const target = tempTarget("undeclared-local-authorities");
+    const fakes = fakeAuthoritiesWithTransports({
+      todos: undefined,
+      mementos: undefined,
+      conversations: undefined,
+    });
+    try {
+      const result = await registerFullProject(
+        input("op-undeclared-local-authorities", target.target),
+        { db, authorities: fakes.authorities },
+      );
+
+      expect(result).toMatchObject({
+        ok: false,
+        outcome: "no_go",
+        failed_step: "authority_preflight",
+        reason_code: "authority_transport_mismatch",
+      });
+      expect(result.dependencies.map((blocker) => blocker.authority).sort()).toEqual([
+        "conversations",
+        "mementos",
+        "todos",
+      ]);
+      expect(fakes.todos.capabilityCalls + fakes.mementos.capabilityCalls + fakes.conversations.capabilityCalls).toBe(0);
+      expect(fakes.todos.requests.length + fakes.mementos.requests.length + fakes.conversations.requests.length).toBe(0);
+      expect(db.query("SELECT COUNT(*) AS n FROM workspaces").get()).toEqual({ n: 0 });
+      expect(db.query("SELECT COUNT(*) AS n FROM project_registration_manifests").get()).toEqual({ n: 0 });
+      expect(db.query("SELECT COUNT(*) AS n FROM project_registration_receipts").get()).toEqual({ n: 0 });
+      expect(existsSync(target.path)).toBe(false);
+    } finally {
+      db.close();
+    }
+  });
+
+  test("rejects all undeclared authority transports before hosted Projects can probe or mutate", async () => {
+    const db = makeDb();
+    const target = tempTarget("undeclared-hosted-authorities");
+    const fakes = fakeAuthoritiesWithTransports({
+      todos: undefined,
+      mementos: undefined,
+      conversations: undefined,
+    });
+    const projects = new FakeCloudProjectAuthority();
+    try {
+      const result = await registerFullProject(
+        input("op-undeclared-hosted-authorities", target.target, { id: "wks_undeclaredhosted01" }),
+        { db, authorities: fakes.authorities, projectStore: projects.asStore() },
+      );
+
+      expect(result).toMatchObject({
+        ok: false,
+        outcome: "no_go",
+        failed_step: "authority_preflight",
+        reason_code: "authority_transport_mismatch",
+      });
+      expect(result.dependencies.map((blocker) => blocker.authority).sort()).toEqual([
+        "conversations",
+        "mementos",
+        "todos",
+      ]);
+      expect(fakes.todos.capabilityCalls + fakes.mementos.capabilityCalls + fakes.conversations.capabilityCalls).toBe(0);
+      expect(fakes.todos.requests.length + fakes.mementos.requests.length + fakes.conversations.requests.length).toBe(0);
+      expect(projects.creates).toBe(0);
+      expect(projects.project).toBeNull();
+      expect(db.query("SELECT COUNT(*) AS n FROM workspaces").get()).toEqual({ n: 0 });
+      expect(db.query("SELECT COUNT(*) AS n FROM project_registration_manifests").get()).toEqual({ n: 0 });
+      expect(db.query("SELECT COUNT(*) AS n FROM project_registration_receipts").get()).toEqual({ n: 0 });
+      expect(existsSync(target.path)).toBe(false);
+    } finally {
+      db.close();
+    }
+  });
+
+  test("rejects a partially undeclared authority set before any adapter is probed", async () => {
+    const db = makeDb();
+    const target = tempTarget("partially-undeclared-authorities");
+    const fakes = fakeAuthoritiesWithTransports({
+      todos: "local",
+      mementos: undefined,
+      conversations: "local",
+    });
+    try {
+      const result = await registerFullProject(
+        input("op-partially-undeclared-authorities", target.target),
+        { db, authorities: fakes.authorities },
+      );
+
+      expect(result).toMatchObject({
+        ok: false,
+        outcome: "no_go",
+        failed_step: "authority_preflight",
+        reason_code: "authority_transport_mismatch",
+      });
+      expect(result.dependencies.map((blocker) => blocker.authority)).toEqual(["mementos"]);
+      expect(fakes.todos.capabilityCalls + fakes.mementos.capabilityCalls + fakes.conversations.capabilityCalls).toBe(0);
+      expect(fakes.todos.requests.length + fakes.mementos.requests.length + fakes.conversations.requests.length).toBe(0);
+      expect(db.query("SELECT COUNT(*) AS n FROM workspaces").get()).toEqual({ n: 0 });
+      expect(db.query("SELECT COUNT(*) AS n FROM project_registration_manifests").get()).toEqual({ n: 0 });
+      expect(db.query("SELECT COUNT(*) AS n FROM project_registration_receipts").get()).toEqual({ n: 0 });
+      expect(existsSync(target.path)).toBe(false);
+    } finally {
+      db.close();
+    }
+  });
 });
 
 describe("full project registration transaction", () => {
   test("hosted Projects authority never creates a local shadow row and rolls its exact row back on failure", async () => {
     const db = makeDb();
     const target = tempTarget("hosted-no-shadow");
-    const fakes = fakeAuthorities(["conversations_channel"]);
+    const fakes = fakeAuthoritiesWithTransports(
+      { todos: "api", mementos: "api", conversations: "api" },
+      ["conversations_channel"],
+    );
     const projects = new FakeCloudProjectAuthority();
     projects.disconnectAfterCreate = true;
     try {
@@ -772,7 +939,9 @@ describe("full project registration transaction", () => {
   test("removes a hosted project when its local immutable receipt cannot persist", async () => {
     const db = makeDb();
     const target = tempTarget("hosted-receipt-failure");
-    const fakes = fakeAuthorities();
+    const fakes = fakeAuthoritiesWithTransports(
+      { todos: "api", mementos: "api", conversations: "api" },
+    );
     const projects = new FakeCloudProjectAuthority();
     db.run(`
       CREATE TRIGGER fail_hosted_project_receipt
@@ -808,6 +977,9 @@ describe("full project registration transaction", () => {
     const fakes = fakeAuthorities();
     const projectId = "wks_retrofitexisting01";
     try {
+      expect(fakes.todos.transport).toBe("local");
+      expect(fakes.mementos.transport).toBe("local");
+      expect(fakes.conversations.transport).toBe("local");
       const existing = createWorkspace({
         id: projectId,
         name: "Fleet Resources",
@@ -844,8 +1016,24 @@ describe("full project registration transaction", () => {
       }, db);
       expect(seeded.ok).toBe(true);
       const seededProject = getWorkspace(projectId, db)!;
+      const financeMetadata = {
+        owner: "quintilian",
+        business_area: "finance",
+        jurisdiction: "RO",
+        legal_entities: ["Example Alpha SRL"],
+        fiscal_cycle: "monthly",
+        data_classification: "restricted",
+        retention_policy: "knowledge:finance-retention-v1",
+        ledger_authority: "@hasna/accounting",
+        evidence_store: "@hasna/files",
+        approver: "role:finance-controller",
+        external_recipient_policy: "@hasna/invoices:approved-recipient-only",
+      };
       const request: FullProjectRegistrationInput = {
-        ...input("op-retrofit-existing", target.target, { id: projectId }),
+        ...input("op-retrofit-existing", target.target, {
+          id: projectId,
+          metadata: financeMetadata,
+        }),
         mode: "retrofit",
         expected_project_revision: seededProject.updated_at,
       };
@@ -866,6 +1054,29 @@ describe("full project registration transaction", () => {
       expect(db.query(
         "SELECT COUNT(*) AS n FROM project_resource_links WHERE project_id = ? AND authority = 'contacts'",
       ).get(projectId)).toEqual({ n: 1 });
+      const appliedProject = getWorkspace(projectId, db)!;
+      expect(appliedProject.metadata).toEqual(financeMetadata);
+      const context = await buildProjectContextBundle({
+        mode: "local",
+        getProject: async (id: string) => getWorkspace(id, db),
+      } as ProjectStore, projectId, {
+        generatedAt: new Date("2026-08-09T00:00:00.000Z"),
+        env: { HASNA_MACHINE_ID: "station02-test" },
+        hostname: "station02",
+      });
+      expect(context.project.finance).toEqual({
+        schema: "hasna.projects.finance_project_metadata.v1",
+        business_area: "finance",
+        jurisdiction: "RO",
+        legal_entities: ["Example Alpha SRL"],
+        fiscal_cycle: "monthly",
+        data_classification: "restricted",
+        retention_policy: "knowledge:finance-retention-v1",
+        ledger_authority: "@hasna/accounting",
+        evidence_store: "@hasna/files",
+        approver: "role:finance-controller",
+        external_recipient_policy: "@hasna/invoices:approved-recipient-only",
+      });
       expect(JSON.stringify(first)).not.toContain(target.path);
 
       const requestCounts = {
@@ -939,6 +1150,67 @@ describe("full project registration transaction", () => {
     seed(fakes.todos, todosProjectId, "todos_project");
     seed(fakes.todos, todosTaskListId, "todos_task_list");
     seed(fakes.mementos, mementosProjectId, "mementos_project");
+    const unrelatedLinks = [
+      {
+        authority: "conversations" as const,
+        service_instance: "urn:hasna:conversations:service:unrelated",
+        source_package: "@hasna/conversations" as const,
+        target_kind: "channel" as const,
+        locator: {
+          kind: "external_uuid" as const,
+          value: "33333333-3333-4333-8333-333333333333",
+        },
+        scope: "collection" as const,
+        labels: { channel_name: "unrelated-project-channel" },
+      },
+      {
+        authority: "todos" as const,
+        service_instance: "urn:hasna:todos:service:unrelated",
+        source_package: "@hasna/todos" as const,
+        target_kind: "project" as const,
+        locator: {
+          kind: "canonical_uri" as const,
+          value: "urn:hasna:todos:project:unrelated-project",
+        },
+        scope: "collection" as const,
+        labels: { name: "Unrelated Todos project" },
+      },
+      {
+        authority: "todos" as const,
+        service_instance: "urn:hasna:todos:service:unrelated",
+        source_package: "@hasna/todos" as const,
+        target_kind: "task_list" as const,
+        locator: {
+          kind: "canonical_uri" as const,
+          value: "urn:hasna:todos:task_list:unrelated-list",
+        },
+        scope: "collection" as const,
+        labels: { name: "Unrelated Todos task list" },
+      },
+      {
+        authority: "mementos" as const,
+        service_instance: "urn:hasna:mementos:service:unrelated",
+        source_package: "@hasna/mementos" as const,
+        target_kind: "project" as const,
+        locator: {
+          kind: "canonical_uri" as const,
+          value: "urn:hasna:mementos:project:unrelated-project",
+        },
+        scope: "collection" as const,
+        labels: { name: "Unrelated Mementos project" },
+      },
+    ];
+    const unrelatedLinkIds = unrelatedLinks
+      .map((link) => projectResourceLinkId(projectId, link))
+      .sort();
+    const persistedUnrelatedLinkIds = (): string[] => (
+      db.query(
+        `SELECT id
+         FROM project_resource_links
+         WHERE project_id = ? AND id IN (?, ?, ?, ?)
+         ORDER BY id`,
+      ).all(projectId, ...unrelatedLinkIds) as Array<{ id: string }>
+    ).map((row) => row.id);
     try {
       const existing = createWorkspace({
         id: projectId,
@@ -955,10 +1227,24 @@ describe("full project registration transaction", () => {
         },
         require_exact_identity: true,
       }, db);
+      const seededLinks = mutateProjectResourceLinksForRegistration({
+        project_id: projectId,
+        operation_id: "op-retrofit-linked-authorities-extra-links",
+        step_id: "seed-unrelated-same-kind-links",
+        mode: "add",
+        expected_revision: existing.updated_at,
+        links: unrelatedLinks,
+        max_items: 32,
+        response_byte_limit: 1_000_000,
+        time_budget_ms: 10_000,
+        source: "system",
+        command: "seed unrelated same-kind links",
+      }, existing.integrations, db);
+      expect(seededLinks.ok).toBe(true);
       const request: FullProjectRegistrationInput = {
         ...input("op-retrofit-linked-authorities", target.target, { id: projectId }),
         mode: "retrofit",
-        expected_project_revision: existing.updated_at,
+        expected_project_revision: getWorkspace(projectId, db)!.updated_at,
       };
 
       const first = await registerFullProject(request, { db, authorities: fakes.authorities });
@@ -994,7 +1280,8 @@ describe("full project registration transaction", () => {
       });
       expect(db.query(
         "SELECT COUNT(*) AS n FROM project_resource_links WHERE project_id = ?",
-      ).get(projectId)).toEqual({ n: 4 });
+      ).get(projectId)).toEqual({ n: 8 });
+      expect(persistedUnrelatedLinkIds()).toEqual(unrelatedLinkIds);
       expect(existsSync(target.path)).toBe(true);
 
       const requestCount = fakes.conversations.requests.length
@@ -1005,6 +1292,10 @@ describe("full project registration transaction", () => {
       expect(
         fakes.conversations.requests.length + fakes.todos.requests.length + fakes.mementos.requests.length,
       ).toBe(requestCount);
+      expect(db.query(
+        "SELECT COUNT(*) AS n FROM project_resource_links WHERE project_id = ?",
+      ).get(projectId)).toEqual({ n: 8 });
+      expect(persistedUnrelatedLinkIds()).toEqual(unrelatedLinkIds);
 
       writeFileSync(join(target.path, PROJECT_REGISTRATION_GOALS_FILENAME), "# Foreign goals\n");
       const rollbackProbe = await registerFullProject({
@@ -1025,6 +1316,10 @@ describe("full project registration transaction", () => {
       expect(fakes.todos.records.has(todosProjectId)).toBe(true);
       expect(fakes.todos.records.has(todosTaskListId)).toBe(true);
       expect(fakes.mementos.records.has(mementosProjectId)).toBe(true);
+      expect(db.query(
+        "SELECT COUNT(*) AS n FROM project_resource_links WHERE project_id = ?",
+      ).get(projectId)).toEqual({ n: 8 });
+      expect(persistedUnrelatedLinkIds()).toEqual(unrelatedLinkIds);
     } finally {
       db.close();
     }
@@ -1277,7 +1572,12 @@ describe("full project registration transaction", () => {
     const db = makeDb();
     const sourceTarget = tempTarget("orphan-authority-rollback-source");
     const target = tempTarget("orphan-authority-rollback-recovery");
-    const fakes = fakeAuthorities();
+    const fakes = fakeAuthoritiesWithTransports({
+      todos: "api",
+      mementos: "api",
+      conversations: "api",
+    });
+    const sourceProjects = new FakeCloudProjectAuthority();
     const projects = new FakeCloudProjectAuthority();
     projects.failResourceLinkMutation = true;
     const sourceOperationId = "op-orphan-authority-rollback-source";
@@ -1286,7 +1586,7 @@ describe("full project registration transaction", () => {
     try {
       const source = await registerFullProject(
         input(sourceOperationId, sourceTarget.target, { id: projectId }),
-        { db: sourceDb, authorities: fakes.authorities },
+        { db: sourceDb, authorities: fakes.authorities, projectStore: sourceProjects.asStore() },
       );
       const sourceForward = (stepId: string) => source.receipts.find(
         (receipt) => receipt.step_id === stepId && receipt.direction === "forward",
@@ -1659,7 +1959,9 @@ describe("full project registration transaction", () => {
   test("preserves unrelated hosted integrations and typed links during accepted retrofit", async () => {
     const db = makeDb();
     const target = tempTarget("retrofit-hosted-preserves-unrelated");
-    const fakes = fakeAuthorities();
+    const fakes = fakeAuthoritiesWithTransports(
+      { todos: "api", mementos: "api", conversations: "api" },
+    );
     const projects = new FakeCloudProjectAuthority();
     const projectId = "wks_retrofithosted001";
     const revision = "2026-08-09T00:00:00.000Z";
@@ -1705,6 +2007,9 @@ describe("full project registration transaction", () => {
       updated_at: revision,
     }];
     try {
+      expect(fakes.todos.transport).toBe("api");
+      expect(fakes.mementos.transport).toBe("api");
+      expect(fakes.conversations.transport).toBe("api");
       const result = await registerFullProject({
         ...input("op-retrofit-hosted-preserve", target.target, { id: projectId }),
         mode: "retrofit",
@@ -1810,6 +2115,19 @@ describe("full project registration transaction", () => {
     const target = tempTarget("retrofit-file-conflict");
     const fakes = fakeAuthorities();
     const projectId = "wks_retrofitfile00001";
+    const financeMetadata = {
+      owner: "quintilian",
+      business_area: "finance",
+      jurisdiction: "RO",
+      legal_entities: ["Example Alpha SRL"],
+      fiscal_cycle: "monthly",
+      data_classification: "restricted",
+      retention_policy: "knowledge:finance-retention-v1",
+      ledger_authority: "@hasna/accounting",
+      evidence_store: "@hasna/files",
+      approver: "role:finance-controller",
+      external_recipient_policy: "@hasna/invoices:approved-recipient-only",
+    };
     mkdirSync(target.path);
     writeFileSync(join(target.path, PROJECT_REGISTRATION_GOALS_FILENAME), "# Foreign goals\n");
     try {
@@ -1849,7 +2167,10 @@ describe("full project registration transaction", () => {
       }, db);
       expect(seeded.ok).toBe(true);
       const result = await registerFullProject({
-        ...input("op-retrofit-file-conflict", target.target, { id: projectId }),
+        ...input("op-retrofit-file-conflict", target.target, {
+          id: projectId,
+          metadata: financeMetadata,
+        }),
         mode: "retrofit",
         expected_project_revision: getWorkspace(projectId, db)!.updated_at,
       }, { db, authorities: fakes.authorities });
@@ -1862,6 +2183,13 @@ describe("full project registration transaction", () => {
       expect(fakes.mementos.records.size).toBe(0);
       expect(fakes.conversations.records.size).toBe(0);
       expect(getWorkspace(projectId, db)?.integrations).toEqual({ github_repo: "hasna/projects" });
+      expect(getWorkspace(projectId, db)?.metadata).toEqual({ owner: "quintilian" });
+      expect(result.rollback).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          step_id: "projects_metadata",
+          status: "completed",
+        }),
+      ]));
       expect(db.query(
         "SELECT COUNT(*) AS n FROM project_resource_links WHERE project_id = ? AND authority = 'contacts'",
       ).get(projectId)).toEqual({ n: 1 });

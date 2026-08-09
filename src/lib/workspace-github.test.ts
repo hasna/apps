@@ -253,6 +253,78 @@ describe("workspace GitHub services", () => {
     rmSync(rootPath, { recursive: true, force: true });
   });
 
+  test("GitHub import validates and persists finance and generic metadata", async () => {
+    const { db, store } = setup();
+    const financeMetadata = {
+      business_area: "finance",
+      jurisdiction: "RO",
+      legal_entities: ["Example Shared Import SRL"],
+      fiscal_cycle: "monthly",
+      data_classification: "restricted",
+      retention_policy: "knowledge:finance-retention-v1",
+      ledger_authority: "@hasna/accounting",
+      evidence_store: "@hasna/files",
+      approver: "role:finance-controller",
+      external_recipient_policy: "@hasna/invoices:approved-recipient-only",
+    };
+    const genericMetadata = {
+      jurisdiction: "informational-only",
+      ledger_authority: "generic-ledger-label",
+      custom_owner: "workspace-team",
+    };
+
+    const financeResult = await importWorkspaceFromGitHub(store, "hasna/shared-finance-github", {
+      remoteOnly: true,
+      metadata: financeMetadata,
+    });
+    const genericResult = await importWorkspaceFromGitHub(store, "hasna/shared-generic-github", {
+      remoteOnly: true,
+      metadata: genericMetadata,
+    });
+
+    expect(financeResult.status).toBe("imported");
+    expect(genericResult.status).toBe("imported");
+    expect(getWorkspaceBySlug("shared-finance-github", db)?.metadata).toMatchObject({
+      ...financeMetadata,
+      github_imported: true,
+      github_full_name: "hasna/shared-finance-github",
+      remote_only: true,
+      cloned: false,
+    });
+    expect(getWorkspaceBySlug("shared-generic-github", db)?.metadata).toMatchObject({
+      ...genericMetadata,
+      github_imported: true,
+      github_full_name: "hasna/shared-generic-github",
+      remote_only: true,
+      cloned: false,
+    });
+  });
+
+  test("GitHub import rejects finance metadata beyond the context budget before persistence", async () => {
+    const { db, store } = setup();
+    const reviewerMaximumProfile = {
+      business_area: "finance",
+      jurisdiction: "RO",
+      legal_entities: Array.from(
+        { length: 100 },
+        (_, index) => `${String(index).padStart(3, "0")}${"x".repeat(253)}`,
+      ),
+      fiscal_cycle: "monthly",
+      data_classification: "restricted",
+      retention_policy: "knowledge:finance-retention-v1",
+      ledger_authority: "@hasna/accounting",
+      evidence_store: "@hasna/files",
+      approver: "role:finance-controller",
+      external_recipient_policy: "@hasna/invoices:approved-recipient-only",
+    };
+
+    await expect(importWorkspaceFromGitHub(store, "hasna/shared-over-limit-github", {
+      remoteOnly: true,
+      metadata: reviewerMaximumProfile,
+    })).rejects.toThrow(/exceeds .* context budget/i);
+    expect(getWorkspaceBySlug("shared-over-limit-github", db)).toBeNull();
+  });
+
   test("GitHub import skips existing git clone targets with a different origin", async () => {
     const { db, store } = setup();
     const rootPath = mkdtempSync(join(tmpdir(), "workspace-github-origin-mismatch-"));

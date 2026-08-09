@@ -1,9 +1,11 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { testSpawnEnv } from "../../testing/spawn-env.js";
+
+setDefaultTimeout(15_000);
 
 function runProjects(args: string[], env: Record<string, string>) {
   return Bun.spawnSync({

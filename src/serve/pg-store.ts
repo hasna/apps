@@ -50,6 +50,7 @@ import {
   type AsyncProjectResourceLinkProducerEvidenceVerifier,
   type ProjectResourceLinkProducerAttestation,
 } from "../lib/project-resource-link-migrations.js";
+import { normalizeProjectMetadata } from "../lib/project-management.js";
 import { deriveWorkspaceRegistryFields } from "../lib/workspace-plan.js";
 import type {
   Agent,
@@ -658,6 +659,7 @@ export class ProjectsPgStore {
 
     const kind = input.kind ?? recipe?.kind ?? root?.default_kind ?? "generic";
     const tags = normalizeList([...(root?.tags ?? []), ...(recipe?.default_tags ?? []), ...(input.tags ?? [])]);
+    const metadata = normalizeProjectMetadata(input.metadata);
     // Slug allocation is server-authoritative. Derive slug-dependent defaults
     // only after ensureUniqueSlug has selected the value this row will persist;
     // otherwise a duplicate request can point at the first project's path and
@@ -684,7 +686,7 @@ export class ProjectsPgStore {
           input.s3_prefix ?? null,
           json(tags),
           json(derived.integrations),
-          json(input.metadata ?? {}),
+          json(metadata),
           ts,
           ts,
         ],
@@ -745,6 +747,9 @@ export class ProjectsPgStore {
       metadata = withoutCanonicalMachineMetadata(metadata);
     } else if (metadata === undefined && existingMetadataMachine !== undefined) {
       metadata = withoutCanonicalMachineMetadata(before.metadata);
+    }
+    if (metadata !== undefined) {
+      metadata = normalizeProjectMetadata(metadata, before.metadata);
     }
 
     const updates: string[] = [];
@@ -939,6 +944,9 @@ export class ProjectsPgStore {
     if (patch.root_id && !root) throw new ValidationError(`Root not found: ${patch.root_id}`);
     const recipe = patch.recipe_id ? await this.getRecipe(patch.recipe_id) : null;
     if (patch.recipe_id && !recipe) throw new ValidationError(`Recipe not found: ${patch.recipe_id}`);
+    const metadata = patch.metadata === undefined
+      ? undefined
+      : normalizeProjectMetadata(patch.metadata, before.metadata);
 
     const updates: string[] = [];
     const params: unknown[] = [];
@@ -960,7 +968,7 @@ export class ProjectsPgStore {
     if (patch.s3_prefix !== undefined) set("s3_prefix", patch.s3_prefix);
     if (patch.tags !== undefined) set("tags", json(normalizeList(patch.tags)));
     if (patch.integrations !== undefined) set("integrations", json(patch.integrations));
-    if (patch.metadata !== undefined) set("metadata", json(patch.metadata));
+    if (metadata !== undefined) set("metadata", json(metadata));
     if (patch.last_opened_at !== undefined) set("last_opened_at", patch.last_opened_at);
     if (!updates.length) return before;
     set("updated_at", nowIso());
@@ -1886,6 +1894,12 @@ export class ProjectsPgStore {
       precondition_digest: preDigest,
     });
     const before = await this.requireWorkspace(input.project_id);
+    const normalizedPatch: UpdateWorkspaceInput = input.patch.metadata === undefined
+      ? input.patch
+      : {
+          ...input.patch,
+          metadata: normalizeProjectMetadata(input.patch.metadata, before.metadata),
+        };
     if (input.patch.integrations !== undefined) {
       assertProjectResourceLinkIntegrationMutation(
         before.integrations,
@@ -1925,12 +1939,17 @@ export class ProjectsPgStore {
       return withResponseControl(result, input, started);
     }
     if (input.dry_run) {
-      const after = { ...before, ...input.patch } as Workspace;
+      const after = { ...before, ...normalizedPatch } as Workspace;
       const result = { ok: true, dry_run: true, outcome: "planned" as const, idempotency_key: idempotencyKey, request_digest: reqDigest, precondition_digest: preDigest, project_id: input.project_id, expected_revision: input.expected_revision, current_revision: currentRevision, before, after, receipt: null };
       return withResponseControl(result, input, started);
     }
     if (timedOut(started, input.time_budget_ms)) throw new ValidationError("guarded mutation time budget exceeded before write");
-    const after = await this.guardedConditionalUpdate(input.project_id, { ...input.patch, agent_id: input.agent_id ?? input.patch.agent_id, source: input.source ?? input.patch.source ?? "mcp", command: input.command ?? input.patch.command }, input.expected_revision);
+    const after = await this.guardedConditionalUpdate(input.project_id, {
+      ...normalizedPatch,
+      agent_id: input.agent_id ?? input.patch.agent_id,
+      source: input.source ?? input.patch.source ?? "mcp",
+      command: input.command ?? input.patch.command,
+    }, input.expected_revision);
     if (!after) {
       const fresh = await this.requireWorkspace(input.project_id);
       const receipt = await this.guardedTerminalNonacceptance({ operation_id: input.operation_id, step_id: input.step_id, direction, idempotency_key: idempotencyKey, target_id: input.project_id, request_digest: reqDigest, precondition_digest: preDigest, expected_revision: input.expected_revision, reason: "stale_revision", before: fresh });

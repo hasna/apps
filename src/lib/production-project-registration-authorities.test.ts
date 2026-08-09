@@ -22,6 +22,7 @@ import {
   type ProjectRegistrationResourceKind,
 } from "./project-registration.js";
 import { productionProjectRegistrationAuthorities } from "./production-project-registration-authorities.js";
+import type { ProjectStore } from "../store/project-store.js";
 
 function digest(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -351,6 +352,209 @@ describe("production project registration authorities", () => {
     expect(options.todos?.baseUrl).toBe("https://todos.example.test");
     expect(options.mementos?.baseUrl).toBe("https://mementos.example.test");
     expect(options.conversations?.baseUrl).toBe("https://conversations.example.test");
+    expect(authorities.todos.transport).toBe("api");
+    expect(authorities.mementos.transport).toBe("api");
+    expect(authorities.conversations.transport).toBe("api");
+  });
+
+  test("hosted Projects refuses local external authorities before imports or mutation", async () => {
+    const root = mkdtempSync(join(tmpdir(), "projects-authority-hosted-local-mismatch-"));
+    const db = projectDb();
+    let imports = 0;
+    const authorities = productionProjectRegistrationAuthorities({
+      env: {
+        HASNA_TODOS_DB_PATH: join(root, "todos.db"),
+        HASNA_MEMENTOS_API_URL: "https://mementos.example.test/v1",
+        HASNA_MEMENTOS_API_KEY: "fixture-auth",
+        HASNA_CONVERSATIONS_API_URL: "https://conversations.example.test/v1",
+        HASNA_CONVERSATIONS_API_KEY: "fixture-auth",
+      },
+      importModule: async () => {
+        imports += 1;
+        throw new Error("authority import must not run for incompatible transports");
+      },
+    });
+    try {
+      const result = await registerFullProject(
+        registrationInput(root, "op-hosted-projects-local-authorities"),
+        {
+          db,
+          authorities,
+          projectStore: { mode: "api" } as ProjectStore,
+        },
+      );
+      expect(result).toMatchObject({
+        ok: false,
+        outcome: "no_go",
+        failed_step: "authority_preflight",
+        reason_code: "authority_transport_mismatch",
+      });
+      expect(result.dependencies.map((blocker) => blocker.authority)).toEqual(["todos"]);
+      expect(imports).toBe(0);
+      expect(db.query("SELECT COUNT(*) AS n FROM workspaces").get()).toEqual({ n: 0 });
+      expect(db.query("SELECT COUNT(*) AS n FROM project_registration_manifests").get()).toEqual({ n: 0 });
+      expect(db.query("SELECT COUNT(*) AS n FROM project_registration_receipts").get()).toEqual({ n: 0 });
+      expect(existsSync(join(root, "project"))).toBe(false);
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("local Projects refuses hosted external authorities before imports or mutation", async () => {
+    const root = mkdtempSync(join(tmpdir(), "projects-authority-local-hosted-mismatch-"));
+    const db = projectDb();
+    let imports = 0;
+    const authorities = productionProjectRegistrationAuthorities({
+      env: {
+        HASNA_TODOS_DB_PATH: join(root, "todos.db"),
+        HASNA_MEMENTOS_DB_PATH: join(root, "mementos.db"),
+        HASNA_CONVERSATIONS_API_URL: "https://conversations.example.test/v1",
+        HASNA_CONVERSATIONS_API_KEY: "fixture-auth",
+      },
+      importModule: async () => {
+        imports += 1;
+        throw new Error("authority import must not run for incompatible transports");
+      },
+    });
+    try {
+      const result = await registerFullProject(
+        registrationInput(root, "op-local-projects-hosted-authorities"),
+        { db, authorities },
+      );
+      expect(result).toMatchObject({
+        ok: false,
+        outcome: "no_go",
+        failed_step: "authority_preflight",
+        reason_code: "authority_transport_mismatch",
+      });
+      expect(result.dependencies.map((blocker) => blocker.authority)).toEqual(["conversations"]);
+      expect(imports).toBe(0);
+      expect(db.query("SELECT COUNT(*) AS n FROM workspaces").get()).toEqual({ n: 0 });
+      expect(db.query("SELECT COUNT(*) AS n FROM project_registration_manifests").get()).toEqual({ n: 0 });
+      expect(db.query("SELECT COUNT(*) AS n FROM project_registration_receipts").get()).toEqual({ n: 0 });
+      expect(existsSync(join(root, "project"))).toBe(false);
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("hosted Projects rejects all undeclared production adapters before imports, requests, or mutation", async () => {
+    const root = mkdtempSync(join(tmpdir(), "projects-authority-hosted-undeclared-"));
+    const db = projectDb();
+    let imports = 0;
+    let requests = 0;
+    const authorities = productionProjectRegistrationAuthorities({
+      env: {
+        HASNA_TODOS_API_URL: "https://todos.example.test/v1",
+        HASNA_TODOS_API_KEY: "fixture-auth",
+        HASNA_MEMENTOS_API_URL: "https://mementos.example.test/v1",
+        HASNA_MEMENTOS_API_KEY: "fixture-auth",
+        HASNA_CONVERSATIONS_API_URL: "https://conversations.example.test/v1",
+        HASNA_CONVERSATIONS_API_KEY: "fixture-auth",
+      },
+      fetch: (async () => {
+        requests += 1;
+        throw new Error("authority request must not run without transport provenance");
+      }) as unknown as typeof fetch,
+      importModule: async () => {
+        imports += 1;
+        throw new Error("authority import must not run without transport provenance");
+      },
+    });
+    for (const authority of [authorities.todos, authorities.mementos, authorities.conversations]) {
+      Object.defineProperty(authority, "transport", { value: undefined });
+    }
+    try {
+      const result = await registerFullProject(
+        registrationInput(root, "op-hosted-projects-undeclared-authorities"),
+        {
+          db,
+          authorities,
+          projectStore: { mode: "api" } as ProjectStore,
+        },
+      );
+      expect(result).toMatchObject({
+        ok: false,
+        outcome: "no_go",
+        failed_step: "authority_preflight",
+        reason_code: "authority_transport_mismatch",
+      });
+      expect(result.dependencies.map((blocker) => blocker.authority).sort()).toEqual([
+        "conversations",
+        "mementos",
+        "todos",
+      ]);
+      expect(imports).toBe(0);
+      expect(requests).toBe(0);
+      expect(db.query("SELECT COUNT(*) AS n FROM workspaces").get()).toEqual({ n: 0 });
+      expect(db.query("SELECT COUNT(*) AS n FROM project_registration_manifests").get()).toEqual({ n: 0 });
+      expect(db.query("SELECT COUNT(*) AS n FROM project_registration_receipts").get()).toEqual({ n: 0 });
+      expect(existsSync(join(root, "project"))).toBe(false);
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("local Projects rejects all undeclared production adapters before imports, requests, or mutation", async () => {
+    const root = mkdtempSync(join(tmpdir(), "projects-authority-local-undeclared-"));
+    const db = projectDb();
+    let imports = 0;
+    let requests = 0;
+    const databasePaths = {
+      todos: join(root, "todos.db"),
+      mementos: join(root, "mementos.db"),
+      conversations: join(root, "conversations.db"),
+    };
+    const authorities = productionProjectRegistrationAuthorities({
+      env: {
+        HASNA_TODOS_DB_PATH: databasePaths.todos,
+        HASNA_MEMENTOS_DB_PATH: databasePaths.mementos,
+        HASNA_CONVERSATIONS_DB_PATH: databasePaths.conversations,
+      },
+      fetch: (async () => {
+        requests += 1;
+        throw new Error("authority request must not run without transport provenance");
+      }) as unknown as typeof fetch,
+      importModule: async () => {
+        imports += 1;
+        throw new Error("authority import must not run without transport provenance");
+      },
+    });
+    for (const authority of [authorities.todos, authorities.mementos, authorities.conversations]) {
+      Object.defineProperty(authority, "transport", { value: undefined });
+    }
+    try {
+      const result = await registerFullProject(
+        registrationInput(root, "op-local-projects-undeclared-authorities"),
+        { db, authorities },
+      );
+      expect(result).toMatchObject({
+        ok: false,
+        outcome: "no_go",
+        failed_step: "authority_preflight",
+        reason_code: "authority_transport_mismatch",
+      });
+      expect(result.dependencies.map((blocker) => blocker.authority).sort()).toEqual([
+        "conversations",
+        "mementos",
+        "todos",
+      ]);
+      expect(imports).toBe(0);
+      expect(requests).toBe(0);
+      expect(db.query("SELECT COUNT(*) AS n FROM workspaces").get()).toEqual({ n: 0 });
+      expect(db.query("SELECT COUNT(*) AS n FROM project_registration_manifests").get()).toEqual({ n: 0 });
+      expect(db.query("SELECT COUNT(*) AS n FROM project_registration_receipts").get()).toEqual({ n: 0 });
+      expect(existsSync(join(root, "project"))).toBe(false);
+      expect(existsSync(databasePaths.todos)).toBe(false);
+      expect(existsSync(databasePaths.mementos)).toBe(false);
+      expect(existsSync(databasePaths.conversations)).toBe(false);
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   test("validates hosted Conversations adoption only for the exact channel and an unclaimed or matching project", async () => {
@@ -460,6 +664,9 @@ describe("production project registration authorities", () => {
       importModule: localImporter(fakes),
     });
     try {
+      expect(authorities.todos.transport).toBe("local");
+      expect(authorities.mementos.transport).toBe("local");
+      expect(authorities.conversations.transport).toBe("local");
       const accepted = await registerFullProject(input, { db, authorities });
       expect(accepted.ok).toBe(true);
       expect(accepted.outcome).toBe("accepted");

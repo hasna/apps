@@ -23,6 +23,7 @@ import { hostname } from "node:os";
 import { listWorkspacesByPath } from "../db/workspaces.js";
 import { doctorWorkspace, type WorkspaceDoctorResult } from "./workspace-doctor.js";
 import {
+  financeProjectMetadata,
   projectExternalLinksSummary,
   projectManagementSummary,
   projectPathHealth,
@@ -233,6 +234,7 @@ export async function buildProjectAgentContext(
 function compactProject(project: Workspace, locations: WorkspaceLocation[]): JsonObject {
   const management = projectManagementSummary(project);
   const health = projectPathHealth(project);
+  const finance = financeProjectMetadata(project);
   return {
     id: project.id,
     slug: project.slug,
@@ -253,6 +255,7 @@ function compactProject(project: Workspace, locations: WorkspaceLocation[]): Jso
       session_policy: management.start_session_policy,
       windows: management.start_windows,
     },
+    ...(finance ? { finance } : {}),
     last_opened_at: project.last_opened_at,
     updated_at: project.updated_at,
   };

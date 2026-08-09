@@ -136,6 +136,7 @@ import {
   assertProjectResourceLinkReadContractEquality,
   normalizeProjectResourceLinks,
 } from "../lib/project-resource-links.js";
+import { normalizeProjectMetadata } from "../lib/project-management.js";
 import type {
   Agent,
   AgentRun,
@@ -1086,12 +1087,21 @@ class ApiProjectStore implements ProjectStore {
   }
 
   async createProject(input: CreateWorkspaceInput): Promise<Workspace> {
-    const created = await this.client.create<Workspace>(RESOURCE, input);
+    const metadata = normalizeProjectMetadata(input.metadata);
+    const created = await this.client.create<Workspace>(RESOURCE, {
+      ...input,
+      metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
+    });
     return normalizeApiWorkspace(created) ?? created;
   }
 
   async updateProject(id: string, patch: UpdateWorkspaceInput): Promise<Workspace> {
-    const updated = await this.client.update<Workspace>(RESOURCE, id, patch);
+    const updated = await this.client.update<Workspace>(RESOURCE, id, {
+      ...patch,
+      ...(patch.metadata !== undefined
+        ? { metadata: normalizeProjectMetadata(patch.metadata) }
+        : {}),
+    });
     return normalizeApiWorkspace(updated) ?? updated;
   }
 

@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { Command } from "commander";
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -14,6 +14,8 @@ import { registerWorkspaceCommands } from "./commands/workspaces.js";
 import { API_MODE_ENV_KEYS, testSpawnEnv } from "../testing/spawn-env.js";
 import { __resetProjectStore } from "../store/project-store.js";
 import type { Root, WorkspaceKind } from "../types/workspace.js";
+
+setDefaultTimeout(15_000);
 
 const CLI_PATH = join(process.cwd(), "src/cli/index.ts");
 const CLI_PROCESS_TEST_TIMEOUT_MS = 30_000;

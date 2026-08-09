@@ -35,6 +35,7 @@ import {
   type ConversationsChannelRunner,
   type ProjectChannelEnsureResult,
 } from "./project-channel.js";
+import { normalizeProjectMetadata } from "./project-management.js";
 import {
   applyWorkspaceTmux,
   applyWorkspaceTmuxProfile,
@@ -253,6 +254,7 @@ function plannedWorkspace(input: WorkspaceCreationPlanInput, db?: Database): {
     ...(recipe?.default_tags ?? []),
     ...(input.tags ?? []),
   ]);
+  const metadata = normalizeProjectMetadata(input.metadata);
   const { primary_path: primaryPath, integrations } = deriveWorkspaceRegistryFields(input, {
     root,
     slug,
@@ -276,7 +278,7 @@ function plannedWorkspace(input: WorkspaceCreationPlanInput, db?: Database): {
     s3_prefix: input.s3_prefix ?? null,
     tags,
     integrations,
-    metadata: input.metadata ?? {},
+    metadata,
     last_opened_at: null,
     created_at: null,
     updated_at: null,
@@ -300,7 +302,7 @@ function plannedWorkspace(input: WorkspaceCreationPlanInput, db?: Database): {
       s3_prefix: input.s3_prefix,
       tags: input.tags,
       integrations,
-      metadata: input.metadata,
+      metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
       agent_id: input.agent_id,
       source: input.source,
       prompt: input.prompt,

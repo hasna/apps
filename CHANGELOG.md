@@ -6,7 +6,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [0.1.120]
+## [0.1.122]
 
 ### Fixed
 
@@ -16,6 +16,27 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   prove the immutable target. Adopted resources remain outside rollback
   ownership, conflicts stay terminal, and Mementos path drift is reported as a
   required receipt-backed path-update CAS without exposing either path.
+
+## [0.1.121]
+
+### Fixed
+
+- Full-project retrofit reconciliation now replaces only the exact typed links
+  derived from the registration's accepted authority receipts, preserving
+  unrelated Conversations channel, Todos project and task-list, and Mementos
+  project links through success, exact retry, and rollback.
+- Production full-project registration now fails closed before authority
+  imports or mutation when an external authority omits transport provenance,
+  hosted Projects is paired with a local authority, or local Projects is paired
+  with a hosted authority.
+
+## [0.1.120]
+
+### Fixed
+
+- The two subprocess-heavy CLI integration test files now use a file-local
+  15-second default, covering their sequential command invocations without
+  changing Bun's package-wide timeout policy or production behavior.
 
 ## [0.1.119]
 

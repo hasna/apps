@@ -5,6 +5,7 @@ import { hostname } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { getDatabase, now, uuid } from "./database.js";
 import { assertProjectWorkspaceId, projectWorkspaceStorePath } from "../lib/project-store-paths.js";
+import { normalizeProjectMetadata } from "../lib/project-management.js";
 import { redactProjectText, redactProjectValue } from "../lib/redaction.js";
 import {
   assertCompleteStableProjectId,
@@ -800,6 +801,7 @@ export function createWorkspace(input: CreateWorkspaceInput, db?: Database): Wor
     ...(recipe?.default_tags ?? []),
     ...(input.tags ?? []),
   ]);
+  const metadata = normalizeProjectMetadata(input.metadata);
 
   d.run(
     `INSERT INTO workspaces (
@@ -820,7 +822,7 @@ export function createWorkspace(input: CreateWorkspaceInput, db?: Database): Wor
       input.s3_prefix ?? null,
       json(tags),
       json(input.integrations ?? {}),
-      json(input.metadata ?? {}),
+      json(metadata),
       ts,
       ts,
     ],
@@ -1003,6 +1005,9 @@ export function updateWorkspace(id: string, input: UpdateWorkspaceInput, db?: Da
     metadata = withoutCanonicalMachineMetadata(metadata);
   } else if (metadata === undefined && existingMetadataMachine !== undefined) {
     metadata = withoutCanonicalMachineMetadata(before.metadata);
+  }
+  if (metadata !== undefined) {
+    metadata = normalizeProjectMetadata(metadata, before.metadata);
   }
   if (input.integrations !== undefined) {
     assertProjectResourceLinkIntegrationMutation(
@@ -2235,7 +2240,9 @@ function previewWorkspacePatch(before: Workspace, patch: UpdateWorkspaceInput): 
     ...(patch.s3_prefix !== undefined ? { s3_prefix: patch.s3_prefix } : {}),
     ...(patch.tags !== undefined ? { tags: patch.tags } : {}),
     ...(patch.integrations !== undefined ? { integrations: patch.integrations } : {}),
-    ...(patch.metadata !== undefined ? { metadata: patch.metadata } : {}),
+    ...(patch.metadata !== undefined
+      ? { metadata: normalizeProjectMetadata(patch.metadata, before.metadata) }
+      : {}),
     ...(patch.last_opened_at !== undefined ? { last_opened_at: patch.last_opened_at } : {}),
   } as Workspace;
 }
