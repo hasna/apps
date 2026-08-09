@@ -2,6 +2,16 @@
 
 All notable changes to `@hasna/contracts` are documented here.
 
+## [0.10.4] - 2026-08-09
+
+- Fails closed when a deployment approval is not authorized by the required
+  approval authority and actor lineage.
+- Rejects incoherent deployment lineage and terminal state across linked
+  deployment records.
+
+PATCH, not minor. This release tightens validation of invalid or unauthorized
+deployment records without changing public signatures or adding contracts.
+
 ## [0.10.3] - 2026-08-09
 
 - Adds thirteen strict, versioned deployment control-plane contracts covering
