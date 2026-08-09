@@ -861,7 +861,22 @@ export function validateProjectChannelRegistrationLookup(
   if (request.authority !== "conversations") {
     throw new Error("project channel registration lookup authority mismatch.");
   }
-  assertProjectChannelRegistrationIdentity(request, capability);
+  for (const [name, value] of [
+    ["authority_route", request.authority_route],
+    ["package_version", request.package_version],
+    ["authority_id", request.authority_id],
+    ["tenant_id", request.tenant_id],
+    ["corpus_id", request.corpus_id],
+  ] as const) {
+    assertRequiredText(name, value);
+  }
+  // A terminal lookup may intentionally target immutable evidence written by
+  // an older package/route/authority/corpus identity. Those historical fields
+  // remain exact SQL predicates below; only the tenant stays bound to today's
+  // advertised capability so one tenant cannot substitute another's receipt.
+  if (request.tenant_id !== capability.tenant_id) {
+    throw new Error("project channel registration authority identity mismatch.");
+  }
   if (request.resource_kind !== "channel") throw new Error("resource_kind must be channel.");
   if (request.direction !== "forward" && request.direction !== "inverse") {
     throw new Error("direction must be forward or inverse.");
