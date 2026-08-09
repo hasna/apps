@@ -1433,6 +1433,9 @@ async function handleV1(
     const content = str(body.content);
     const requestedChannel = body.channel ? normalizeChannelName(String(body.channel)) : null;
     const requestedSession = str(body.session_id);
+    const workingDir = str(body.working_dir);
+    const repository = str(body.repository);
+    const branch = str(body.branch);
     const metadataObject = jsonObject(body.metadata);
     if ("metadata" in body && body.metadata != null && !metadataObject) {
       return fieldError(
@@ -1535,6 +1538,9 @@ async function handleV1(
     assertNoSensitiveOptionalText(channelName ?? undefined, "Message channel");
     assertNoSensitiveOptionalText(requestedProjectId ?? undefined, "Message project");
     assertNoSensitiveContent(sessionId, "Message session");
+    assertNoSensitiveOptionalText(workingDir, "Message working directory");
+    assertNoSensitiveOptionalText(repository, "Message repository");
+    assertNoSensitiveOptionalText(branch, "Message branch");
     if (metadataObject) assertNoSensitiveValue(metadataObject, "Message metadata");
     if (metadata) assertNoSensitiveContent(metadata, "Message metadata");
     const blocking = body.blocking === true;
@@ -1563,10 +1569,26 @@ async function handleV1(
         }
       }
       const inserted = await tx.get<Record<string, unknown>>(
-        `INSERT INTO messages (uuid, session_id, from_agent, to_agent, channel, project_id, content, priority, metadata, blocking, reply_to)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-         RETURNING id, uuid, session_id, from_agent, to_agent, channel, project_id, content, priority, metadata, blocking, reply_to, created_at`,
-        [messageUuid, sessionId, from, toAgent, channelName ?? null, projectId, content, priority, metadata, blocking, replyTo],
+        `INSERT INTO messages (uuid, session_id, from_agent, to_agent, channel, project_id, content, priority, working_dir, repository, branch, metadata, blocking, reply_to)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+         RETURNING id, uuid, session_id, from_agent, to_agent, channel, project_id, content, priority,
+                   working_dir, repository, branch, metadata, blocking, reply_to, created_at`,
+        [
+          messageUuid,
+          sessionId,
+          from,
+          toAgent,
+          channelName ?? null,
+          projectId,
+          content,
+          priority,
+          workingDir ?? null,
+          repository ?? null,
+          branch ?? null,
+          metadata,
+          blocking,
+          replyTo,
+        ],
       );
       if (!inserted) return null;
 

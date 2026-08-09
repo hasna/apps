@@ -180,6 +180,7 @@ export const openapiSpec = {
               from: { type: "string" }, to: { type: "string" }, content: { type: "string" },
               channel: { type: "string" }, project_id: { type: "string" },
               session_id: { type: "string" }, priority: { type: "string" }, blocking: { type: "boolean" },
+              working_dir: { type: "string" }, repository: { type: "string" }, branch: { type: "string" },
               reply_to: { type: "integer" },
               reply_to_uuid: { type: "string" },
               attachments: {

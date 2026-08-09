@@ -59,17 +59,26 @@ describe("registerMessagingCommands", () => {
     expect(send?.options.some((o) => o.long === "--attach")).toBe(true);
     expect(send?.options.some((o) => o.long === "--attachment")).toBe(true);
     expect(send?.options.some((o) => o.long === "--reply-to")).toBe(true);
+    expect(send?.options.some((o) => o.long === "--working-dir")).toBe(true);
+    expect(send?.options.some((o) => o.long === "--repository")).toBe(true);
+    expect(send?.options.some((o) => o.long === "--branch")).toBe(true);
 
     const parsed = send?.parseOptions([
       "--attach", "evidence.txt", "handoff.bundle",
       "--attachment", "alias.json",
       "--reply-to", "42",
+      "--working-dir", "/synthetic/cli-context",
+      "--repository", "hasna/conversations-cli-context",
+      "--branch", "fix/cli-context",
     ]);
     expect(parsed?.unknown).toEqual([]);
     expect(send?.opts()).toMatchObject({
       attach: ["evidence.txt", "handoff.bundle"],
       attachment: ["alias.json"],
       replyTo: "42",
+      workingDir: "/synthetic/cli-context",
+      repository: "hasna/conversations-cli-context",
+      branch: "fix/cli-context",
     });
   });
 
