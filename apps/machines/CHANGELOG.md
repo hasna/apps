@@ -74,6 +74,15 @@ reported success about things it had not actually established.
   than reached by deleting a check. Physical classes are untouched: `dgx-spark`
   keeps `tailscale:join` and gets no absence item.
 
+## [0.2.18] - 2026-08-09
+
+### Added
+
+- `machines exec` runs bounded local or remote commands through the package-owned
+  runner with required `--machine` and `--timeout-ms`, argv or `--script` stdin
+  input, scoped mutation approval bound to the exact command, separate capped
+  stdout/stderr, propagated exit codes, and redacted output.
+
 ## [0.2.17] - 2026-08-09
 
 ### Fixed

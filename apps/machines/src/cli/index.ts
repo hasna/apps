@@ -80,6 +80,14 @@ import {
 import { listPorts } from "../commands/ports.js";
 import { buildTmuxPaneDiedHookPlan, watchTmuxPane } from "../commands/runtime.js";
 import { buildSshCommand, resolveSshTarget } from "../commands/ssh.js";
+import {
+  DEFAULT_MACHINE_EXEC_MAX_OUTPUT_CHARS,
+  MACHINE_EXEC_MUTATION_OPERATION,
+  machineExecMutationArgs,
+  machineExecResourceId,
+  runMachineExec,
+  type MachineExecInput,
+} from "../commands/exec.js";
 import { resolveScreenTarget, buildScreenCommand, buildScreenEnableCommand, resolveScreenCredentials, screenCredentialsFailed } from "../commands/screen.js";
 import { buildSyncPlan, runSyncPlan } from "../commands/sync.js";
 import {
@@ -3213,6 +3221,69 @@ program
       return;
     }
     console.log(command);
+  });
+
+program
+  .command("exec")
+  .description("Run a bounded command on a machine through the package-owned runner")
+  .requiredOption("--machine <id>", "Machine identifier")
+  .requiredOption("--timeout-ms <ms>", "Command timeout in milliseconds")
+  .option("--max-output-chars <n>", `Maximum stdout/stderr chars per stream (default ${DEFAULT_MACHINE_EXEC_MAX_OUTPUT_CHARS})`)
+  .option("--script", "Read the command script from stdin instead of argv", false)
+  .option("--approval-token <token>", "Scoped mutation approval token")
+  .option("-j, --json", "Print JSON result instead of streaming stdout/stderr", false)
+  .argument("[argv...]", "Command argv when not using --script")
+  .action((argv: string[], options: { machine: string; timeoutMs: string; maxOutputChars?: string; script?: boolean; approvalToken?: string; json?: boolean }) => {
+    try {
+      const timeoutMs = parseIntegerOption(options.timeoutMs, "timeout-ms", { min: 1 });
+      const maxOutputChars = options.maxOutputChars
+        ? parseIntegerOption(options.maxOutputChars, "max-output-chars", { min: 1 })
+        : undefined;
+      const script = options.script ? readFileSync(0, "utf8") : undefined;
+      const input: MachineExecInput = {
+        machineId: options.machine,
+        timeoutMs,
+        argv: options.script ? undefined : argv,
+        script,
+        maxOutputChars,
+      };
+      requireCliMutation(MACHINE_EXEC_MUTATION_OPERATION, options.approvalToken, {
+        machineId: input.machineId,
+        resourceId: machineExecResourceId(input),
+        args: machineExecMutationArgs(input),
+      });
+      const result = runMachineExec(input);
+
+      if (options.json) {
+        console.log(JSON.stringify({
+          machine_id: result.machine_id,
+          source: result.source,
+          exit_code: result.exit_code,
+          timed_out: result.timed_out,
+          signal: result.signal,
+          stdout: result.stdout.text,
+          stderr: result.stderr.text,
+          truncated: {
+            stdout: result.stdout.truncated,
+            stderr: result.stderr.truncated,
+          },
+          redacted: result.redacted,
+        }, null, 2));
+      } else {
+        if (result.stdout.text) process.stdout.write(result.stdout.text);
+        if (result.stderr.text) process.stderr.write(result.stderr.text);
+      }
+
+      process.exitCode = result.exit_code;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (options.json) {
+        console.log(JSON.stringify({ error: message }, null, 2));
+      } else {
+        console.error(chalk.red(message));
+      }
+      process.exitCode = 1;
+    }
   });
 
 program
