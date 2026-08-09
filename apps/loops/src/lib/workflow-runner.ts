@@ -240,6 +240,7 @@ export async function executeWorkflow(
   // skip (no pid, or a live process), startWorkflowStepRun refuses the double
   // claim and the try/catch below finalizes the run instead of stranding it.
   const resumedRunningSteps = (await store.listWorkflowStepRuns(run.id)).filter((step) => step.status === "running");
+  const reconciledTerminalSteps = new Set<string>();
   for (const resumedStep of resumedRunningSteps) {
     const workflowStep = workflow.steps.find((step) => step.id === resumedStep.stepId);
     if (!workflowStep) throw new ValidationError(`workflow step missing during resume: ${resumedStep.stepId}`);
@@ -257,6 +258,7 @@ export async function executeWorkflow(
           ? undefined
           : `reconciled from immutable operation receipt ${operation.terminal.receiptId}`,
       }, { daemonLeaseId: opts.daemonLeaseId });
+      reconciledTerminalSteps.add(resumedStep.stepId);
       continue;
     }
     if (operation.admission) {
@@ -303,6 +305,14 @@ export async function executeWorkflow(
         break;
       }
       const existing = await store.getWorkflowStepRun(run.id, step.id);
+      if (reconciledTerminalSteps.has(step.id)) {
+        if ((existing?.status === "failed" || existing?.status === "timed_out") && !step.continueOnFailure) {
+          terminalStatus = existing.status;
+          blockingError = existing.error ?? `step ${step.id} reconciled as ${existing.status}`;
+          break;
+        }
+        continue;
+      }
       if (existing?.status === "succeeded" || existing?.status === "skipped" || existing?.status === "cancelled") continue;
 
       let blockedBy: string | undefined;
