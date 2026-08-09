@@ -108,6 +108,22 @@ describe("project-agent-assist: context", () => {
     });
   });
 
+  test("keeps generic authority-like metadata readable without inventing finance authority", async () => {
+    const project = makeProject({
+      metadata: {
+        approver: "role:release-manager",
+        evidence_store: "shared-project-files",
+        jurisdiction: "global",
+        retention_policy: "standard-project-retention",
+        data_classification: "internal",
+      },
+    });
+
+    const ctx = await buildProjectAgentContext(localStore(), { target: project.slug });
+    expect(ctx.target.resolved).toBe(true);
+    expect(ctx.project?.["finance"]).toBeUndefined();
+  });
+
   test("reports the derived channel and labels it, for an unlinked project", async () => {
     // Regression: ensure stopped writing integrations.conversations_channel, so
     // reading that field directly left this bundle blank for ~96% of the

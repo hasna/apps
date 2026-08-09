@@ -57,13 +57,11 @@ export const PROJECT_MANAGEMENT_TAXONOMY = {
   integration_keys: ["todos_project_id", "todos_task_list_id", "brief_id", "brief_path", "canvases_project_id", "canvases_default_canvas_id"] as const,
 } as const;
 
-const FINANCE_AUTHORITY_FIELDS = FINANCE_PROJECT_METADATA_FIELDS.filter(
-  (field): field is Exclude<FinanceProjectMetadataField, "business_area"> => field !== "business_area",
-);
 const FINANCE_JURISDICTION_PATTERN = /^[A-Z0-9][A-Z0-9._:-]{1,63}$/;
 const FINANCE_METADATA_TEXT_MAX_LENGTH = 512;
 const FINANCE_LEGAL_ENTITY_MAX_LENGTH = 256;
 const FINANCE_LEGAL_ENTITY_MAX_ITEMS = 100;
+const FINANCE_PROJECT_METADATA_CONTEXT_MAX_BYTES = 4 * 1024;
 
 function metadataHasOwn(metadata: JsonObject, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(metadata, key);
@@ -76,9 +74,7 @@ function normalizedLowerToken(value: unknown): string | null {
 }
 
 function hasFinanceProjectMetadataIntent(metadata: JsonObject): boolean {
-  const businessArea = normalizedLowerToken(metadata["business_area"]);
-  return businessArea === "finance"
-    || FINANCE_AUTHORITY_FIELDS.some((field) => metadataHasOwn(metadata, field));
+  return normalizedLowerToken(metadata["business_area"]) === "finance";
 }
 
 function requiredFinanceMetadataString(metadata: JsonObject, field: FinanceProjectMetadataField): string {
@@ -129,9 +125,10 @@ function normalizeFinanceLegalEntities(value: unknown): string[] {
 /**
  * Normalize the authoritative finance-project metadata contract.
  *
- * Finance authority is activated by `business_area: finance` or by any of the
- * finance-specific authority fields. Tags are intentionally ignored: they
- * remain free-form discovery labels and cannot establish authority.
+ * Finance authority is activated only by `business_area: finance`. Generic
+ * projects may use similarly named metadata keys without opting into this
+ * authoritative contract. Tags are intentionally ignored: they remain
+ * free-form discovery labels and cannot establish authority.
  *
  * When `existingMetadata` is already finance-authoritative, replacement
  * metadata must preserve the complete contract rather than silently stripping
@@ -142,9 +139,17 @@ export function normalizeProjectMetadata(
   existingMetadata?: JsonObject,
 ): JsonObject {
   const next: JsonObject = { ...(metadata ?? {}) };
+  const explicitlyClearsFinance = metadataHasOwn(next, "business_area")
+    && next["business_area"] === null;
   const isFinance = hasFinanceProjectMetadataIntent(next)
-    || (existingMetadata ? hasFinanceProjectMetadataIntent(existingMetadata) : false);
-  if (!isFinance) return next;
+    || (!explicitlyClearsFinance
+      && existingMetadata
+      ? hasFinanceProjectMetadataIntent(existingMetadata)
+      : false);
+  if (!isFinance) {
+    if (explicitlyClearsFinance) delete next["business_area"];
+    return next;
+  }
 
   const missing = FINANCE_PROJECT_METADATA_FIELDS.filter((field) => !metadataHasOwn(next, field));
   if (missing.length > 0) {
@@ -176,18 +181,30 @@ export function normalizeProjectMetadata(
     );
   }
 
-  return {
-    ...next,
+  const profile: FinanceProjectMetadata = {
+    schema: FINANCE_PROJECT_METADATA_SCHEMA,
     business_area: "finance",
     jurisdiction,
     legal_entities: normalizeFinanceLegalEntities(next["legal_entities"]),
-    fiscal_cycle: fiscalCycle,
-    data_classification: classification,
+    fiscal_cycle: fiscalCycle as FinanceFiscalCycle,
+    data_classification: classification as FinanceDataClassification,
     retention_policy: requiredFinanceMetadataString(next, "retention_policy"),
     ledger_authority: requiredFinanceMetadataString(next, "ledger_authority"),
     evidence_store: requiredFinanceMetadataString(next, "evidence_store"),
     approver: requiredFinanceMetadataString(next, "approver"),
     external_recipient_policy: requiredFinanceMetadataString(next, "external_recipient_policy"),
+  };
+  const profileBytes = Buffer.byteLength(JSON.stringify(profile), "utf8");
+  if (profileBytes > FINANCE_PROJECT_METADATA_CONTEXT_MAX_BYTES) {
+    throw new Error(
+      `Finance project metadata exceeds ${FINANCE_PROJECT_METADATA_CONTEXT_MAX_BYTES}-byte context budget`,
+    );
+  }
+
+  const { schema: _schema, ...storedProfile } = profile;
+  return {
+    ...next,
+    ...storedProfile,
   };
 }
 

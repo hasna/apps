@@ -1331,15 +1331,17 @@ server.tool(
     bulk: z.boolean().optional(),
     dry_run: z.boolean().optional(),
     tags: z.array(z.string()).optional(),
+    metadata: z.record(z.unknown()).optional(),
     agent: z.string().optional(),
   },
   async (input) => {
     try {
       const store = resolveProjectStore();
       const owner = mcpMutationAgent(store, input.agent);
+      const metadata = input.metadata as JsonObject | undefined;
       return jsonProjectText(input.bulk
-        ? await importWorkspaceBulk(store, input.path, { dryRun: input.dry_run, tags: input.tags, agent_id: owner })
-        : await importWorkspace(store, input.path, { dryRun: input.dry_run, tags: input.tags, agent_id: owner }));
+        ? await importWorkspaceBulk(store, input.path, { dryRun: input.dry_run, tags: input.tags, metadata, agent_id: owner })
+        : await importWorkspace(store, input.path, { dryRun: input.dry_run, tags: input.tags, metadata, agent_id: owner }));
     } catch (err) {
       return errorText(`Error: ${err instanceof Error ? err.message : String(err)}`);
     }

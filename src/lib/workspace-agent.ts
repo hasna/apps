@@ -1754,15 +1754,17 @@ export function buildWorkspaceAgentTools(ctx: WorkspaceAgentToolContext) {
         path: z.string().min(1),
         bulk: z.boolean().optional(),
         tags: z.array(z.string()).optional(),
+        metadata: z.record(z.string(), z.unknown()).optional(),
       }),
       execute: async (input) => {
+        const metadata = input.metadata as JsonObject | undefined;
         if (!approve) {
-          if (input.bulk) return projectPayload({ status: "planned", result: await importWorkspaceBulk(store, input.path, { dryRun: true, tags: input.tags, agent_id: actorAgent.id }) });
-          return { status: "planned", preview: await planWorkspaceImport(store, input.path, { tags: input.tags, agent_id: actorAgent.id }) };
+          if (input.bulk) return projectPayload({ status: "planned", result: await importWorkspaceBulk(store, input.path, { dryRun: true, tags: input.tags, metadata, agent_id: actorAgent.id }) });
+          return { status: "planned", preview: await planWorkspaceImport(store, input.path, { tags: input.tags, metadata, agent_id: actorAgent.id }) };
         }
         return projectPayload(input.bulk
-          ? await importWorkspaceBulk(store, input.path, { tags: input.tags, agent_id: actorAgent.id })
-          : await importWorkspace(store, input.path, { tags: input.tags, agent_id: actorAgent.id }));
+          ? await importWorkspaceBulk(store, input.path, { tags: input.tags, metadata, agent_id: actorAgent.id })
+          : await importWorkspace(store, input.path, { tags: input.tags, metadata, agent_id: actorAgent.id }));
       },
     }),
     projects_scan_roots: tool({

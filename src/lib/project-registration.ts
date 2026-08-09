@@ -20,6 +20,7 @@ import {
   mutateProjectResourceLinksForRegistration,
   readProjectResourceLinks,
   rollbackProjectResourceLinks,
+  updateWorkspace,
   workspaceSlugify,
 } from "../db/workspaces.js";
 import { getDatabase, now } from "../db/database.js";
@@ -2310,6 +2311,223 @@ async function updateProjectIntegrations(input: {
   return run();
 }
 
+function metadataReplacementForExactReadback(
+  current: JsonObject,
+  desired: JsonObject,
+): JsonObject {
+  if (
+    current["business_area"] === "finance"
+    && desired["business_area"] !== "finance"
+    && !Object.prototype.hasOwnProperty.call(desired, "business_area")
+  ) {
+    return { ...desired, business_area: null };
+  }
+  return desired;
+}
+
+async function writeRegistrationProjectMetadata(input: {
+  project: Workspace;
+  metadata: JsonObject;
+  store?: ProjectStore;
+  db: Database;
+}): Promise<Workspace> {
+  const patch = metadataReplacementForExactReadback(input.project.metadata, input.metadata);
+  if (input.store) {
+    await input.store.updateProject(input.project.id, {
+      metadata: patch,
+      source: "system",
+      command: PROJECT_REGISTRATION_ROUTE,
+    });
+  } else {
+    updateWorkspace(input.project.id, {
+      metadata: patch,
+      source: "system",
+      command: PROJECT_REGISTRATION_ROUTE,
+    }, input.db);
+  }
+  const readback = await readRegistrationProject(input.project.id, input.db, input.store);
+  if (
+    !readback
+    || readback.id !== input.project.id
+    || readback.slug !== input.project.slug
+    || canonicalJson(readback.metadata) !== canonicalJson(input.metadata)
+  ) {
+    throw new ProjectRegistrationStepError(
+      "projects_metadata",
+      "project_metadata_exact_readback_mismatch",
+    );
+  }
+  return readback;
+}
+
+async function updateRetrofitProjectMetadata(input: {
+  operation_id: string;
+  project: Workspace;
+  metadata: JsonObject;
+  db: Database;
+  store?: ProjectStore;
+}): Promise<{ project: Workspace; receipt: ProjectRegistrationReceipt | null }> {
+  if (canonicalJson(input.project.metadata) === canonicalJson(input.metadata)) {
+    return { project: input.project, receipt: null };
+  }
+  const beforeMetadata = input.project.metadata;
+  const requestDigest = sha256(canonicalJson(input.metadata));
+  const preconditionDigest = sha256(canonicalJson({
+    project_id: input.project.id,
+    expected_revision: input.project.updated_at,
+    expected_metadata_digest: sha256(canonicalJson(beforeMetadata)),
+  }));
+  const idempotencyKey = deriveProjectRegistrationIdempotencyKey({
+    operation_id: input.operation_id,
+    step_id: "projects_metadata",
+    direction: "forward",
+    target_selector: input.project.id,
+    request_digest: requestDigest,
+    precondition_digest: preconditionDigest,
+  });
+  let after: Workspace | null = null;
+  try {
+    after = await writeRegistrationProjectMetadata({
+      project: input.project,
+      metadata: input.metadata,
+      store: input.store,
+      db: input.db,
+    });
+    const acceptedMetadataDigest = sha256(canonicalJson(after.metadata));
+    const receipt = appendRegistrationReceipt({
+      operation_id: input.operation_id,
+      step_id: "projects_metadata",
+      authority: "projects",
+      resource_kind: "metadata",
+      direction: "forward",
+      idempotency_key: idempotencyKey,
+      target_id: after.id,
+      request_digest: requestDigest,
+      precondition_digest: preconditionDigest,
+      outcome: "accepted",
+      result_revision: after.updated_at,
+      result_digest: acceptedMetadataDigest,
+      artifacts: [{
+        authority: "projects",
+        target_id: after.id,
+        metadata_digest: acceptedMetadataDigest,
+      }],
+      preconditions: [{
+        predicate: "exact_project_revision_and_metadata",
+        project_id: input.project.id,
+        expected_revision: input.project.updated_at,
+        expected_metadata_digest: sha256(canonicalJson(beforeMetadata)),
+      }],
+      rollback: [{
+        action: "restore_exact_project_metadata",
+        project_id: input.project.id,
+        before_metadata: beforeMetadata,
+        accepted_metadata_digest: acceptedMetadataDigest,
+      }],
+    }, input.db);
+    return { project: after, receipt };
+  } catch (err) {
+    if (after) {
+      try {
+        await writeRegistrationProjectMetadata({
+          project: after,
+          metadata: beforeMetadata,
+          store: input.store,
+          db: input.db,
+        });
+      } catch {
+        throw new ProjectRegistrationStepError(
+          "projects_metadata",
+          "project_metadata_receipt_failure_left_split_state",
+          true,
+        );
+      }
+    }
+    throw err;
+  }
+}
+
+async function rollbackRetrofitProjectMetadata(input: {
+  operation_id: string;
+  accepted: ProjectRegistrationReceipt;
+  db: Database;
+  store?: ProjectStore;
+}): Promise<{ project: Workspace; receipt: ProjectRegistrationReceipt }> {
+  const rollback = input.accepted.rollback[0] as {
+    project_id?: string;
+    before_metadata?: JsonObject;
+    accepted_metadata_digest?: string;
+  } | undefined;
+  if (
+    !rollback?.project_id
+    || !rollback.before_metadata
+    || !rollback.accepted_metadata_digest
+  ) {
+    throw new ProjectRegistrationStepError(
+      "projects_metadata",
+      "project_metadata_rollback_contract_missing",
+    );
+  }
+  const current = await readRegistrationProject(rollback.project_id, input.db, input.store);
+  if (
+    !current
+    || sha256(canonicalJson(current.metadata)) !== rollback.accepted_metadata_digest
+  ) {
+    throw new ProjectRegistrationStepError(
+      "projects_metadata",
+      "project_metadata_drift_refuses_inverse",
+    );
+  }
+  const requestDigest = sha256(canonicalJson(rollback.before_metadata));
+  const preconditionDigest = sha256(canonicalJson({
+    project_id: current.id,
+    expected_revision: current.updated_at,
+    expected_metadata_digest: rollback.accepted_metadata_digest,
+  }));
+  const idempotencyKey = deriveProjectRegistrationIdempotencyKey({
+    operation_id: input.operation_id,
+    step_id: "projects_metadata",
+    direction: "inverse",
+    target_selector: current.id,
+    request_digest: requestDigest,
+    precondition_digest: preconditionDigest,
+  });
+  const restored = await writeRegistrationProjectMetadata({
+    project: current,
+    metadata: rollback.before_metadata,
+    store: input.store,
+    db: input.db,
+  });
+  const resultDigest = sha256(canonicalJson(restored.metadata));
+  const receipt = appendRegistrationReceipt({
+    operation_id: input.operation_id,
+    step_id: "projects_metadata",
+    authority: "projects",
+    resource_kind: "metadata",
+    direction: "inverse",
+    idempotency_key: idempotencyKey,
+    target_id: restored.id,
+    request_digest: requestDigest,
+    precondition_digest: preconditionDigest,
+    outcome: "accepted",
+    result_revision: restored.updated_at,
+    result_digest: resultDigest,
+    artifacts: [{
+      authority: "projects",
+      target_id: restored.id,
+      metadata_restored: true,
+      metadata_digest: resultDigest,
+    }],
+    preconditions: [{
+      accepted_receipt_id: input.accepted.receipt_id,
+      expected_revision: current.updated_at,
+      expected_metadata_digest: rollback.accepted_metadata_digest,
+    }],
+    rollback: [],
+  }, input.db);
+  return { project: restored, receipt };
+}
+
 async function rollbackProjectIntegrations(input: {
   operation_id: string;
   accepted: ProjectRegistrationReceipt;
@@ -2881,6 +3099,7 @@ export async function registerFullProject(
   let directoryOwnership: OwnedDirectoryIdentity | null = null;
   let directoryCreatedByOperation = false;
   let integrationReceipt: ProjectRegistrationReceipt | null = null;
+  let metadataReceipt: ProjectRegistrationReceipt | null = null;
   let project: Workspace | null = null;
   let createdProject: Workspace | null = null;
   let expectedProjectStateDigest: string | null = null;
@@ -2892,6 +3111,18 @@ export async function registerFullProject(
       const adopting = retrofitProject !== null;
       if (retrofitProject) {
         project = retrofitProject;
+        failedStep = "projects_metadata";
+        const metadataUpdate = await updateRetrofitProjectMetadata({
+          operation_id: input.operation_id,
+          project,
+          metadata: validated.project_metadata,
+          db,
+          store: authorityStore,
+        });
+        project = metadataUpdate.project;
+        retrofitProject = project;
+        metadataReceipt = metadataUpdate.receipt;
+        failedStep = "projects_project";
       } else {
         const existingById = await authorityStore!.getProject(validated.project_id);
         const existingBySlug = await authorityStore!.getProject(validated.project_slug);
@@ -3403,6 +3634,9 @@ export async function registerFullProject(
           action: "receipt_scoped_conditional_inverse",
           accepted_receipt_id: item.receipt.receipt_id,
         })),
+        ...(metadataReceipt
+          ? [{ step_id: "projects_metadata", action: "restore_exact_project_metadata" }]
+          : []),
         { step_id: "projects_directory", action: "remove_if_inode_matches_and_empty" },
         { step_id: "projects_project", action: "cleanup_creation_plan_if_state_digest_matches" },
       ],
@@ -3501,6 +3735,27 @@ export async function registerFullProject(
           reason_code: "authority_inverse_failed",
           accepted_receipt_id: external.receipt.receipt_id,
           target_id: external.receipt.target_id,
+        });
+      }
+    }
+
+    if (metadataReceipt) {
+      try {
+        await rollbackRetrofitProjectMetadata({
+          operation_id: input.operation_id,
+          accepted: metadataReceipt,
+          db,
+          store: authorityStore,
+        });
+        rollback.push({
+          step_id: "projects_metadata",
+          status: "completed",
+        });
+      } catch {
+        rollback.push({
+          step_id: "projects_metadata",
+          status: "failed",
+          reason_code: "project_metadata_inverse_failed",
         });
       }
     }

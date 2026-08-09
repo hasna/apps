@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDatabase } from "../db/database.js";
@@ -192,6 +192,21 @@ function makeFakeApiStore() {
   const store = {
     mode: "api" as const,
     baseUrl: "https://projects.hasna.xyz/v1",
+    listProjects: track("listProjects", () => []),
+    matchRoots: track("matchRoots", () => []),
+    createProject: track("createProject", (args) => {
+      const input = args[0] as Partial<Workspace>;
+      return makeCloudProject({
+        id: `wks_${calls.filter((call) => call.method === "createProject").length}`,
+        slug: input.slug ?? String(input.name ?? "cloud-project").toLowerCase().replace(/\s+/g, "-"),
+        name: input.name ?? "Cloud Project",
+        kind: input.kind ?? "generic",
+        primary_path: input.primary_path ?? null,
+        tags: input.tags ?? [],
+        integrations: input.integrations ?? {},
+        metadata: input.metadata ?? {},
+      });
+    }),
     resolveTarget: track("resolveTarget", () => project),
     updateProject: track("updateProject", () => makeCloudProject({ tags: ["cloud-tag"] })),
     archiveProject: track("archiveProject", () => makeCloudProject({ status: "archived" })),
@@ -283,6 +298,52 @@ describe("prompt-agent mutations route through the Store in api/cloud mode", () 
     // api mode leaves attribution to the server (derived from the bearer key).
     expect((updateCall!.args[1] as { agent_id?: string }).agent_id).toBeUndefined();
     expect(calls.some((c) => c.method === "resolveTarget")).toBe(true);
+  });
+
+  test("projects_create and projects_import pass finance metadata through the Agent surface", async () => {
+    const financeMetadata = {
+      business_area: "finance",
+      jurisdiction: "RO",
+      legal_entities: ["Example Alpha SRL"],
+      fiscal_cycle: "monthly",
+      data_classification: "restricted",
+      retention_policy: "knowledge:finance-retention-v1",
+      ledger_authority: "@hasna/accounting",
+      evidence_store: "@hasna/files",
+      approver: "role:finance-controller",
+      external_recipient_policy: "@hasna/invoices:approved-recipient-only",
+    };
+    const importPath = mkdtempSync(join(tmpdir(), "project-agent-finance-import-"));
+    writeFileSync(
+      join(importPath, "package.json"),
+      JSON.stringify({ name: "agent-finance-import" }),
+      "utf-8",
+    );
+    try {
+      const { store, calls } = makeFakeApiStore();
+      const tools = apiTools(store);
+
+      const created = await invoke(tools.projects_create, {
+        name: "Agent Finance Create",
+        metadata: financeMetadata,
+      });
+      expect(created.error).toBeUndefined();
+
+      const imported = await invoke(tools.projects_import, {
+        path: importPath,
+        metadata: financeMetadata,
+      });
+      expect(imported.error).toBeUndefined();
+
+      const createCalls = calls.filter((call) => call.method === "createProject");
+      expect(createCalls).toHaveLength(2);
+      expect((createCalls[0]!.args[0] as { metadata?: unknown }).metadata).toEqual(financeMetadata);
+      expect((createCalls[1]!.args[0] as { metadata?: Record<string, unknown> }).metadata).toMatchObject(
+        financeMetadata,
+      );
+    } finally {
+      rmSync(importPath, { recursive: true, force: true });
+    }
   });
 
   test("projects_tag calls store.updateProject with the merged tag set", async () => {

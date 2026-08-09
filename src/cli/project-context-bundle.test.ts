@@ -217,6 +217,82 @@ describe("projects context-bundle", () => {
     }
   });
 
+  test("emits generic authority-like metadata without activating finance validation", () => {
+    const fx = fixture({
+      metadata: {
+        approver: "role:release-manager",
+        evidence_store: "shared-project-files",
+        jurisdiction: "global",
+        retention_policy: "standard-project-retention",
+        data_classification: "internal",
+      },
+    });
+    try {
+      const result = runProjects(["context-bundle", fx.projectId, "--json"], fx.env);
+      expect(result.exitCode).toBe(0);
+      expect(text(result.stderr)).toBe("");
+      const bundle = JSON.parse(text(result.stdout)) as {
+        project: Record<string, unknown>;
+      };
+      expect(bundle.project["finance"]).toBeUndefined();
+    } finally {
+      fx.cleanup();
+    }
+  });
+
+  test("keeps every accepted boundary finance profile within the bundle byte limit", () => {
+    const fx = fixture({
+      metadata: {
+        business_area: "finance",
+        jurisdiction: "RO",
+        legal_entities: Array.from(
+          { length: 8 },
+          (_, index) => `${String(index).padStart(3, "0")}-${"e".repeat(252)}`,
+        ),
+        fiscal_cycle: "monthly",
+        data_classification: "restricted",
+        retention_policy: `knowledge:${"r".repeat(288)}`,
+        ledger_authority: `authority:${"l".repeat(288)}`,
+        evidence_store: `store:${"e".repeat(292)}`,
+        approver: `role:${"a".repeat(294)}`,
+        external_recipient_policy: `policy:${"p".repeat(292)}`,
+      },
+    });
+    try {
+      const result = runProjects(["context-bundle", fx.projectId, "--json"], fx.env);
+      expect(result.exitCode).toBe(0);
+      expect(text(result.stderr)).toBe("");
+      const bundle = JSON.parse(text(result.stdout)) as {
+        project: { finance: Record<string, unknown> };
+      };
+      expect(Buffer.byteLength(JSON.stringify(bundle.project.finance), "utf8")).toBeGreaterThan(3_800);
+      expect(Buffer.byteLength(text(result.stdout), "utf8")).toBeLessThanOrEqual(8 * 1024);
+    } finally {
+      fx.cleanup();
+    }
+  });
+
+  test("rejects the reviewer maximum-size finance profile before context readback", () => {
+    const legalEntities = Array.from(
+      { length: 100 },
+      (_, index) => `${String(index).padStart(3, "0")}-${"x".repeat(252)}`,
+    );
+    expect(() => fixture({
+      metadata: {
+        business_area: "finance",
+        jurisdiction: "RO",
+        legal_entities: legalEntities,
+        fiscal_cycle: "monthly",
+        data_classification: "restricted",
+        retention_policy: "knowledge:finance-retention-v1",
+        ledger_authority: "@hasna/accounting",
+        evidence_store: "@hasna/files",
+        approver: "role:finance-controller",
+        external_recipient_policy: "@hasna/invoices:approved-recipient-only",
+      },
+    })).toThrow(/exceeds .* context budget/i);
+  });
+
   test("rejects a slug even when it resolves to the same project", () => {
     const fx = fixture();
     try {

@@ -305,6 +305,96 @@ describe("projects-mcp project-first surface", () => {
     expect(tools).not.toContain("projects_sync");
   });
 
+  test("projects_create and projects_import accept and persist finance metadata over MCP", () => {
+    const root = mkdtempSync(join(tmpdir(), "project-mcp-finance-metadata-"));
+    const dbPath = join(root, "projects.db");
+    const importPath = join(root, "mcp-finance-import");
+    mkdirSync(importPath, { recursive: true });
+    writeFileSync(
+      join(importPath, "package.json"),
+      JSON.stringify({ name: "mcp-finance-import" }),
+      "utf-8",
+    );
+    const financeMetadata = {
+      business_area: "finance",
+      jurisdiction: "RO",
+      legal_entities: ["Example Alpha SRL"],
+      fiscal_cycle: "monthly",
+      data_classification: "restricted",
+      retention_policy: "knowledge:finance-retention-v1",
+      ledger_authority: "@hasna/accounting",
+      evidence_store: "@hasna/files",
+      approver: "role:finance-controller",
+      external_recipient_policy: "@hasna/invoices:approved-recipient-only",
+    };
+    const messages = [
+      {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-06-18",
+          capabilities: {},
+          clientInfo: { name: "project-mcp-test", version: "0" },
+        },
+      },
+      { jsonrpc: "2.0", method: "notifications/initialized", params: {} },
+      {
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/call",
+        params: {
+          name: "projects_create",
+          arguments: {
+            name: "MCP Finance Create",
+            slug: "mcp-finance-create",
+            metadata: financeMetadata,
+          },
+        },
+      },
+      {
+        jsonrpc: "2.0",
+        id: 3,
+        method: "tools/call",
+        params: {
+          name: "projects_import",
+          arguments: {
+            path: importPath,
+            metadata: financeMetadata,
+          },
+        },
+      },
+    ];
+
+    try {
+      const result = runMcpSession(
+        messages,
+        testSpawnEnv({
+          HASNA_PROJECTS_DB_PATH: dbPath,
+          HASNA_PROJECTS_HOME: join(root, "projects-home"),
+        }),
+      );
+      expect(result.exitCode).toBe(0);
+      expect(Buffer.from(result.stderr).toString("utf-8")).toBe("");
+
+      const db = new Database(dbPath);
+      const rows = db.query(
+        "SELECT slug, metadata FROM workspaces WHERE slug IN (?, ?) ORDER BY slug",
+      ).all("mcp-finance-create", "mcp-finance-import") as Array<{
+        slug: string;
+        metadata: string;
+      }>;
+      db.close();
+
+      expect(rows).toHaveLength(2);
+      for (const row of rows) {
+        expect(JSON.parse(row.metadata)).toMatchObject(financeMetadata);
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("redacts project registry values in MCP JSON-RPC tool output", async () => {
     const root = mkdtempSync(join(tmpdir(), "project-mcp-redaction-"));
     const dbPath = join(root, "projects.db");

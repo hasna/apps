@@ -70,8 +70,9 @@ describe("project management taxonomy", () => {
 
   test("rejects incomplete or invalid finance metadata without treating tags as authority", () => {
     expect(() => normalizeProjectMetadata({
+      business_area: "finance",
       ledger_authority: "@hasna/accounting",
-    })).toThrow(/missing required fields.*business_area.*jurisdiction.*legal_entities/i);
+    })).toThrow(/missing required fields.*jurisdiction.*legal_entities/i);
     expect(() => normalizeProjectMetadata({
       business_area: "finance",
       jurisdiction: "RO",
@@ -100,6 +101,42 @@ describe("project management taxonomy", () => {
       metadata: { business_area: "engineering" },
       tags: ["finance"],
     })).toBeNull();
+  });
+
+  test("keeps generic authority-like metadata keys non-finance without an explicit discriminator", () => {
+    const genericMetadata = {
+      approver: "role:release-manager",
+      evidence_store: "shared-project-files",
+      jurisdiction: "global",
+      retention_policy: "standard-project-retention",
+      data_classification: "internal",
+    };
+
+    expect(normalizeProjectMetadata(genericMetadata)).toEqual(genericMetadata);
+    expect(financeProjectMetadata({
+      metadata: genericMetadata,
+      tags: ["finance"],
+    })).toBeNull();
+  });
+
+  test("rejects finance metadata whose authoritative profile exceeds the context budget", () => {
+    const legalEntities = Array.from(
+      { length: 100 },
+      (_, index) => `${String(index).padStart(3, "0")}-${"x".repeat(252)}`,
+    );
+
+    expect(() => normalizeProjectMetadata({
+      business_area: "finance",
+      jurisdiction: "RO",
+      legal_entities: legalEntities,
+      fiscal_cycle: "monthly",
+      data_classification: "restricted",
+      retention_policy: "knowledge:finance-retention-v1",
+      ledger_authority: "@hasna/accounting",
+      evidence_store: "@hasna/files",
+      approver: "role:finance-controller",
+      external_recipient_policy: "@hasna/invoices:approved-recipient-only",
+    })).toThrow(/exceeds .* context budget/i);
   });
 
   test("normalizes canonical stage, priority, start agent, and start windows", () => {

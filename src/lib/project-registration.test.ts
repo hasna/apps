@@ -18,6 +18,7 @@ import {
   mutateProjectResourceLinks,
 } from "../db/workspaces.js";
 import { canonicalJson, sha256 } from "./guarded-project-mutation.js";
+import { buildProjectContextBundle } from "./project-context-bundle.js";
 import {
   normalizeProjectResourceLinks,
   projectResourceLinkCollection,
@@ -823,8 +824,24 @@ describe("full project registration transaction", () => {
       }, db);
       expect(seeded.ok).toBe(true);
       const seededProject = getWorkspace(projectId, db)!;
+      const financeMetadata = {
+        owner: "quintilian",
+        business_area: "finance",
+        jurisdiction: "RO",
+        legal_entities: ["Example Alpha SRL"],
+        fiscal_cycle: "monthly",
+        data_classification: "restricted",
+        retention_policy: "knowledge:finance-retention-v1",
+        ledger_authority: "@hasna/accounting",
+        evidence_store: "@hasna/files",
+        approver: "role:finance-controller",
+        external_recipient_policy: "@hasna/invoices:approved-recipient-only",
+      };
       const request: FullProjectRegistrationInput = {
-        ...input("op-retrofit-existing", target.target, { id: projectId }),
+        ...input("op-retrofit-existing", target.target, {
+          id: projectId,
+          metadata: financeMetadata,
+        }),
         mode: "retrofit",
         expected_project_revision: seededProject.updated_at,
       };
@@ -845,6 +862,29 @@ describe("full project registration transaction", () => {
       expect(db.query(
         "SELECT COUNT(*) AS n FROM project_resource_links WHERE project_id = ? AND authority = 'contacts'",
       ).get(projectId)).toEqual({ n: 1 });
+      const appliedProject = getWorkspace(projectId, db)!;
+      expect(appliedProject.metadata).toEqual(financeMetadata);
+      const context = await buildProjectContextBundle({
+        mode: "local",
+        getProject: async (id: string) => getWorkspace(id, db),
+      } as ProjectStore, projectId, {
+        generatedAt: new Date("2026-08-09T00:00:00.000Z"),
+        env: { HASNA_MACHINE_ID: "station02-test" },
+        hostname: "station02",
+      });
+      expect(context.project.finance).toEqual({
+        schema: "hasna.projects.finance_project_metadata.v1",
+        business_area: "finance",
+        jurisdiction: "RO",
+        legal_entities: ["Example Alpha SRL"],
+        fiscal_cycle: "monthly",
+        data_classification: "restricted",
+        retention_policy: "knowledge:finance-retention-v1",
+        ledger_authority: "@hasna/accounting",
+        evidence_store: "@hasna/files",
+        approver: "role:finance-controller",
+        external_recipient_policy: "@hasna/invoices:approved-recipient-only",
+      });
       expect(JSON.stringify(first)).not.toContain(target.path);
 
       const requestCounts = {
@@ -1211,6 +1251,19 @@ describe("full project registration transaction", () => {
     const target = tempTarget("retrofit-file-conflict");
     const fakes = fakeAuthorities();
     const projectId = "wks_retrofitfile00001";
+    const financeMetadata = {
+      owner: "quintilian",
+      business_area: "finance",
+      jurisdiction: "RO",
+      legal_entities: ["Example Alpha SRL"],
+      fiscal_cycle: "monthly",
+      data_classification: "restricted",
+      retention_policy: "knowledge:finance-retention-v1",
+      ledger_authority: "@hasna/accounting",
+      evidence_store: "@hasna/files",
+      approver: "role:finance-controller",
+      external_recipient_policy: "@hasna/invoices:approved-recipient-only",
+    };
     mkdirSync(target.path);
     writeFileSync(join(target.path, PROJECT_REGISTRATION_GOALS_FILENAME), "# Foreign goals\n");
     try {
@@ -1250,7 +1303,10 @@ describe("full project registration transaction", () => {
       }, db);
       expect(seeded.ok).toBe(true);
       const result = await registerFullProject({
-        ...input("op-retrofit-file-conflict", target.target, { id: projectId }),
+        ...input("op-retrofit-file-conflict", target.target, {
+          id: projectId,
+          metadata: financeMetadata,
+        }),
         mode: "retrofit",
         expected_project_revision: getWorkspace(projectId, db)!.updated_at,
       }, { db, authorities: fakes.authorities });
@@ -1263,6 +1319,13 @@ describe("full project registration transaction", () => {
       expect(fakes.mementos.records.size).toBe(0);
       expect(fakes.conversations.records.size).toBe(0);
       expect(getWorkspace(projectId, db)?.integrations).toEqual({ github_repo: "hasna/projects" });
+      expect(getWorkspace(projectId, db)?.metadata).toEqual({ owner: "quintilian" });
+      expect(result.rollback).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          step_id: "projects_metadata",
+          status: "completed",
+        }),
+      ]));
       expect(db.query(
         "SELECT COUNT(*) AS n FROM project_resource_links WHERE project_id = ? AND authority = 'contacts'",
       ).get(projectId)).toEqual({ n: 1 });

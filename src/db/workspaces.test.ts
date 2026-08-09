@@ -980,7 +980,10 @@ describe("workspace domain services", () => {
 
       expect(() => createWorkspace({
         name: "Incomplete Finance",
-        metadata: { ledger_authority: "@hasna/accounting" },
+        metadata: {
+          business_area: "finance",
+          ledger_authority: "@hasna/accounting",
+        },
       }, db)).toThrow(/missing required fields/i);
       expect(() => planWorkspaceCreation({
         name: "Incomplete Finance Plan",
@@ -1013,7 +1016,10 @@ describe("workspace domain services", () => {
       __resetProjectStore();
       const store = resolveProjectStore({});
       const rejectedImport = await importWorkspace(store, importPath, {
-        metadata: { evidence_store: "@hasna/files" },
+        metadata: {
+          business_area: "finance",
+          evidence_store: "@hasna/files",
+        },
       });
       expect(rejectedImport.error).toMatch(/missing required fields/i);
       expect(await store.listProjects({ query: "monthly-filing" })).toHaveLength(0);
