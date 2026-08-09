@@ -419,7 +419,7 @@ async function handleV1Request(ctx: V1RequestContext): Promise<Response> {
         outcomes.push({ runId: candidate.runId, outcome: "conflict", reason: "workflow_lookup_cap_exceeded" });
         continue;
       }
-      let operationWasAdmitted = false;
+      let operationRequiresReconciliation = false;
       let lookupCapExceeded = false;
       for (const workflowRun of workflowRuns) {
         const events = await storage.listWorkflowEvents(workflowRun.id, HOSTED_STUCK_EVENT_LIMIT + 1);
@@ -427,8 +427,15 @@ async function handleV1Request(ctx: V1RequestContext): Promise<Response> {
           lookupCapExceeded = true;
           break;
         }
-        if (events.some((event) => event.eventType === "private_operation_admitted")) {
-          operationWasAdmitted = true;
+        const terminalStepIds = new Set(
+          events
+            .filter((event) => event.eventType === "private_operation_terminal")
+            .map((event) => event.stepId),
+        );
+        if (events.some((event) =>
+          event.eventType === "private_operation_admitted" && !terminalStepIds.has(event.stepId)
+        )) {
+          operationRequiresReconciliation = true;
           break;
         }
       }
@@ -436,7 +443,7 @@ async function handleV1Request(ctx: V1RequestContext): Promise<Response> {
         outcomes.push({ runId: candidate.runId, outcome: "conflict", reason: "operation_lookup_cap_exceeded" });
         continue;
       }
-      if (operationWasAdmitted) {
+      if (operationRequiresReconciliation) {
         outcomes.push({
           runId: candidate.runId,
           outcome: "operation_reconciliation_required",
@@ -452,6 +459,14 @@ async function handleV1Request(ctx: V1RequestContext): Promise<Response> {
         expectedUpdatedAt: current.updatedAt,
         refuseAdmittedPrivateOperations: true,
       });
+      if (recovered.operationReconciliationRequired.some((run) => run.id === candidate.runId)) {
+        outcomes.push({
+          runId: candidate.runId,
+          outcome: "operation_reconciliation_required",
+          reason: "admitted_external_operation_will_not_be_repeated_blindly",
+        });
+        continue;
+      }
       if (recovered.abandoned.length !== 1) {
         outcomes.push({ runId: candidate.runId, outcome: "conflict", reason: "candidate_changed_during_recovery" });
         continue;
@@ -480,6 +495,7 @@ async function handleV1Request(ctx: V1RequestContext): Promise<Response> {
       abandoned: recovered.abandoned.map((run) => publicRun(run, false, { redactError: true })),
       deferred: recovered.deferred.map((run) => publicRun(run, false, { redactError: true })),
       advancementDeferred: advancementDeferred.map((run) => publicRun(run, false, { redactError: true })),
+      reconciliation: { outcomes: operationReconciliationOutcomes(recovered.operationReconciliationRequired) },
     });
   }
   return fail("not_found", 404);
@@ -515,6 +531,14 @@ function publicStuckRunCandidate(candidate: StuckRunSnapshotSource): PublicStuck
     loopId: candidate.loopId,
     snapshotId: stuckRunSnapshotId(candidate),
   };
+}
+
+function operationReconciliationOutcomes(runs: readonly LoopRun[]) {
+  return runs.map((run) => ({
+    runId: run.id,
+    outcome: "operation_reconciliation_required" as const,
+    reason: "admitted_external_operation_will_not_be_repeated_blindly",
+  }));
 }
 
 function parseExpiredRunLeaseCandidate(value: unknown): PublicStuckRunCandidate {
@@ -943,6 +967,7 @@ async function handleRunsRequest(ctx: V1RequestContext, segments: string[]): Pro
       abandoned: abandoned.map((run) => publicRun(run, false, { redactError: true })),
       deferred: deferred.map((run) => publicRun(run, false, { redactError: true })),
       advancementDeferred: advancementDeferred.map((run) => publicRun(run, false, { redactError: true })),
+      reconciliation: { outcomes: operationReconciliationOutcomes(recovered.operationReconciliationRequired) },
     });
   }
 
@@ -1536,13 +1561,13 @@ async function handleRunnerRequest(ctx: V1RequestContext, segments: string[]): P
     const body = await readJsonBody<Record<string, unknown>>(ctx.request, ctx.bodyLimitBytes);
     const runner = runnerRecord(body);
     requireBoundRunner(ctx.auth, runner);
-    const claims = await claimRuns(storage, runner, {
+    const claimResult = await claimRuns(storage, runner, {
       now: ctx.now(),
       maxClaims: optionalPositiveInteger(body.maxClaims, 1, 100) ?? 1,
       random: ctx.random,
       circuitBreakerThreshold: ctx.circuitBreakerThreshold,
     });
-    return ok({ runner, claims });
+    return ok({ runner, ...claimResult });
   }
   return fail("not_found", 404);
 }
@@ -1590,7 +1615,10 @@ async function claimRuns(
     random: () => number;
     circuitBreakerThreshold?: CircuitBreakerThreshold;
   },
-): Promise<Array<Record<string, unknown>>> {
+): Promise<{
+  claims: Array<Record<string, unknown>>;
+  reconciliation: { outcomes: ReturnType<typeof operationReconciliationOutcomes> };
+}> {
   const claims: Array<Record<string, unknown>> = [];
   const dueLoopsForPoll = await storage.dueLoops(opts.now);
   // Loops this poll never got to look at because claim capacity ran out first.
@@ -1691,7 +1719,10 @@ async function claimRuns(
     });
   }
 
-  return claims;
+  return {
+    claims,
+    reconciliation: { outcomes: operationReconciliationOutcomes(recovered.operationReconciliationRequired) },
+  };
 }
 
 function runnerMatchesLoop(machine: { id?: string; requestedId?: string } | undefined, runner: RunnerRecord): boolean {

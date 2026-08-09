@@ -69,6 +69,53 @@ function runnerPrincipal(principalId: string) {
   };
 }
 
+async function createAdmittedExpiredWorkflowRun(
+  storage: LoopStorageContract,
+  input: {
+    prefix: string;
+    claimedAt: Date;
+    machineId?: string;
+  },
+) {
+  const workflow = await storage.createWorkflow({
+    name: `${input.prefix}-workflow`,
+    steps: [{ id: "effect", target: { type: "command", command: "printf", args: ["effect"] } }],
+  });
+  const loop = await storage.createLoop({
+    name: `${input.prefix}-loop`,
+    schedule: { type: "interval", everyMs: 60_000 },
+    target: { type: "workflow", workflowId: workflow.id },
+    maxAttempts: 2,
+    retryDelayMs: 1_000,
+    leaseMs: 1_000,
+    ...(input.machineId ? { machine: { id: input.machineId } } : {}),
+  }, input.claimedAt);
+  await storage.updateLoop(loop.id, { nextRunAt: input.claimedAt.toISOString() });
+  const claim = await storage.claimRun(loop, input.claimedAt.toISOString(), `${input.prefix}-runner`, input.claimedAt);
+  if (!claim) throw new Error(`failed to create admitted expired run for ${input.prefix}`);
+  const workflowRun = await storage.createWorkflowRun({
+    workflow,
+    loop,
+    loopRun: claim.run,
+    operationAuthority: {
+      authorityId: "loops-control-plane",
+      tenantId: testPrincipal.tenantId,
+    },
+  });
+  const descriptorEvent = (await storage.listWorkflowEvents(workflowRun.id)).find((event) =>
+    event.eventType === "private_operation_descriptor" && event.stepId === "effect"
+  );
+  if (!descriptorEvent) throw new Error(`missing private operation descriptor for ${input.prefix}`);
+  const descriptor = descriptorEvent.payload as unknown as PrivateOperationDescriptor;
+  await storage.appendWorkflowEvent(
+    workflowRun.id,
+    "private_operation_admitted",
+    "effect",
+    operationAdmissionReceipt(descriptor) as unknown as Record<string, unknown>,
+  );
+  return { workflow, loop, claim, workflowRun };
+}
+
 describe("loops-api foundation", () => {
   test("status output is import-safe and path-safe", async () => {
     const mod = await import("./index.js");
@@ -2745,7 +2792,19 @@ describe("loops-api foundation", () => {
       }).toEqual({
         response: {
           status: 200,
-          body: { ok: true, abandoned: [], deferred: [], advancementDeferred: [] },
+          body: {
+            ok: true,
+            abandoned: [],
+            deferred: [],
+            advancementDeferred: [],
+            reconciliation: {
+              outcomes: [{
+                runId: claim!.run.id,
+                outcome: "operation_reconciliation_required",
+                reason: "admitted_external_operation_will_not_be_repeated_blindly",
+              }],
+            },
+          },
         },
         run: {
           status: beforeRun?.status,
@@ -2798,6 +2857,91 @@ describe("loops-api foundation", () => {
         nextRunAt: "2026-01-01T00:01:00.000Z",
         retryScheduledFor: undefined,
       });
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  });
+
+  test("per-run recovery propagates admitted-operation reconciliation without mutation", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    const claimedAt = new Date("2026-01-01T00:00:00.000Z");
+    const recoveredAt = new Date("2026-01-01T00:20:00.000Z");
+    const fixture = await createAdmittedExpiredWorkflowRun(storage, {
+      prefix: "per-run-recovery-fence",
+      claimedAt,
+    });
+    const before = {
+      run: await storage.getRun(fixture.claim.run.id),
+      workflowRun: await storage.getWorkflowRun(fixture.workflowRun.id),
+      loop: await storage.getLoop(fixture.loop.id),
+    };
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage, now: () => recoveredAt });
+    try {
+      const response = await fetch(apiUrl(server, `/v1/runs/${fixture.claim.run.id}/recover`), { method: "POST" });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        abandoned: [],
+        deferred: [],
+        advancementDeferred: [],
+        reconciliation: {
+          outcomes: [{
+            runId: fixture.claim.run.id,
+            outcome: "operation_reconciliation_required",
+            reason: "admitted_external_operation_will_not_be_repeated_blindly",
+          }],
+        },
+      });
+      expect(await storage.getRun(fixture.claim.run.id)).toEqual(before.run);
+      expect(await storage.getWorkflowRun(fixture.workflowRun.id)).toEqual(before.workflowRun);
+      expect(await storage.getLoop(fixture.loop.id)).toEqual(before.loop);
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  });
+
+  test("hosted polling propagates admitted-operation reconciliation without mutation", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    const claimedAt = new Date("2026-01-01T00:00:00.000Z");
+    const recoveredAt = new Date("2026-01-01T00:20:00.000Z");
+    const fixture = await createAdmittedExpiredWorkflowRun(storage, {
+      prefix: "poll-recovery-fence",
+      claimedAt,
+      machineId: "missing-runner",
+    });
+    const before = {
+      run: await storage.getRun(fixture.claim.run.id),
+      workflowRun: await storage.getWorkflowRun(fixture.workflowRun.id),
+      loop: await storage.getLoop(fixture.loop.id),
+    };
+    const server = createTestServer(
+      mod,
+      { host: "127.0.0.1", port: 0, storage, now: () => recoveredAt },
+      runnerPrincipal("healthy-runner"),
+    );
+    try {
+      const response = await fetch(apiUrl(server, "/v1/runners/claim"), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ runnerId: "healthy-runner" }),
+      });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        claims: [],
+        reconciliation: {
+          outcomes: [{
+            runId: fixture.claim.run.id,
+            outcome: "operation_reconciliation_required",
+            reason: "admitted_external_operation_will_not_be_repeated_blindly",
+          }],
+        },
+      });
+      expect(await storage.getRun(fixture.claim.run.id)).toEqual(before.run);
+      expect(await storage.getWorkflowRun(fixture.workflowRun.id)).toEqual(before.workflowRun);
+      expect(await storage.getLoop(fixture.loop.id)).toEqual(before.loop);
     } finally {
       server.stop(true);
       await storage.close();

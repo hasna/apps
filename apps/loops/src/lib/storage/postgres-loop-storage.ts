@@ -1630,6 +1630,51 @@ export class PostgresLoopStorage implements LoopStorageContract {
     const protect = opts.protectClaimedByInLoops;
     const protectLoopIds = protect ? [...new Set(protect.loopIds)] : [];
     const protectClaimedBy = protectLoopIds.length > 0 ? protect!.claimedBy : null;
+    const unresolvedOperationPredicate = `EXISTS (
+      SELECT 1
+      FROM workflow_runs AS operation_workflow
+      JOIN workflow_events AS admitted_event
+        ON admitted_event.workflow_run_id = operation_workflow.id
+       AND admitted_event.tenant_id = open_loops_current_tenant_id()
+      WHERE operation_workflow.tenant_id = open_loops_current_tenant_id()
+        AND operation_workflow.loop_run_id = loop_runs.id
+        AND admitted_event.event_type = 'private_operation_admitted'
+        AND NOT EXISTS (
+          SELECT 1
+          FROM workflow_events AS terminal_event
+          WHERE terminal_event.tenant_id = open_loops_current_tenant_id()
+            AND terminal_event.workflow_run_id = admitted_event.workflow_run_id
+            AND terminal_event.step_id = admitted_event.step_id
+            AND terminal_event.event_type = 'private_operation_terminal'
+        )
+    )`;
+    const commonArgs = [
+      finished,
+      opts.runId ?? null,
+      opts.expectedLeaseExpiresAt ?? null,
+      opts.expectedUpdatedAt ?? null,
+      opts.excludeClaimedBy ?? null,
+      protectClaimedBy,
+      protectLoopIds,
+    ];
+    const operationRows = opts.refuseAdmittedPrivateOperations
+      ? await this.client.many<RunRow>(
+          `SELECT * FROM loop_runs
+           WHERE tenant_id = open_loops_current_tenant_id() AND status='running' AND lease_expires_at <= $1
+             AND ($2::text IS NULL OR id = $2)
+             AND ($3::timestamptz IS NULL OR lease_expires_at = $3::timestamptz)
+             AND ($4::timestamptz IS NULL OR updated_at = $4::timestamptz)
+             AND ($5::text IS NULL OR claimed_by IS DISTINCT FROM $5)
+             AND ($6::text IS NULL OR claimed_by IS NULL OR claimed_by <> $6 OR NOT (loop_id = ANY($7::text[])))
+             AND ${unresolvedOperationPredicate}
+           ORDER BY lease_expires_at ASC LIMIT $8`,
+          [...commonArgs, limit],
+        )
+      : [];
+    const operationReconciliationRequired = (
+      await Promise.all(operationRows.map((row) => this.getRun(row.id)))
+    ).filter((run): run is LoopRun => Boolean(run));
+    const reconciliationRunIds = new Set(operationReconciliationRequired.map((run) => run.id));
     const rows = await this.client.many<RunRow>(
       `SELECT * FROM loop_runs
        WHERE tenant_id = open_loops_current_tenant_id() AND status='running' AND lease_expires_at <= $1
@@ -1638,25 +1683,10 @@ export class PostgresLoopStorage implements LoopStorageContract {
          AND ($4::timestamptz IS NULL OR updated_at = $4::timestamptz)
          AND ($5::text IS NULL OR claimed_by IS DISTINCT FROM $5)
          AND ($6::text IS NULL OR claimed_by IS NULL OR claimed_by <> $6 OR NOT (loop_id = ANY($7::text[])))
-         AND ($8::boolean = FALSE OR NOT EXISTS (
-           SELECT 1
-           FROM workflow_runs AS operation_workflow
-           JOIN workflow_events AS operation_event
-             ON operation_event.workflow_run_id = operation_workflow.id
-            AND operation_event.tenant_id = open_loops_current_tenant_id()
-           WHERE operation_workflow.tenant_id = open_loops_current_tenant_id()
-             AND operation_workflow.loop_run_id = loop_runs.id
-             AND operation_event.event_type = 'private_operation_admitted'
-         ))
+         AND ($8::boolean = FALSE OR NOT ${unresolvedOperationPredicate})
        ORDER BY lease_expires_at ASC LIMIT $9`,
       [
-        finished,
-        opts.runId ?? null,
-        opts.expectedLeaseExpiresAt ?? null,
-        opts.expectedUpdatedAt ?? null,
-        opts.excludeClaimedBy ?? null,
-        protectClaimedBy,
-        protectLoopIds,
+        ...commonArgs,
         opts.refuseAdmittedPrivateOperations ?? false,
         scanLimit,
       ],
@@ -1672,16 +1702,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
              AND ($4::timestamptz IS NULL OR lease_expires_at=$4::timestamptz)
              AND ($5::timestamptz IS NULL OR updated_at=$5::timestamptz)
              AND ($6::text IS NULL OR EXISTS (SELECT 1 FROM daemon_lease WHERE tenant_id = open_loops_current_tenant_id() AND id=$6 AND expires_at > $3))
-             AND ($7::boolean = FALSE OR NOT EXISTS (
-               SELECT 1
-               FROM workflow_runs AS operation_workflow
-               JOIN workflow_events AS operation_event
-                 ON operation_event.workflow_run_id = operation_workflow.id
-                AND operation_event.tenant_id = open_loops_current_tenant_id()
-               WHERE operation_workflow.tenant_id = open_loops_current_tenant_id()
-                 AND operation_workflow.loop_run_id = loop_runs.id
-                 AND operation_event.event_type = 'private_operation_admitted'
-             ))`,
+             AND ($7::boolean = FALSE OR NOT ${unresolvedOperationPredicate})`,
           [
             row.id,
             finished,
@@ -1749,9 +1770,27 @@ export class PostgresLoopStorage implements LoopStorageContract {
         }
         return this.loadRun(c, row.id);
       });
-      if (run) recovered.push(run);
+      if (run) {
+        recovered.push(run);
+      } else if (opts.refuseAdmittedPrivateOperations && !reconciliationRunIds.has(row.id)) {
+        const unresolved = await this.client.get<{ found: number }>(
+          `SELECT 1 AS found FROM loop_runs
+           WHERE tenant_id = open_loops_current_tenant_id() AND id=$1
+             AND status='running' AND lease_expires_at <= $2
+             AND ${unresolvedOperationPredicate}
+           LIMIT 1`,
+          [row.id, finished],
+        );
+        if (unresolved) {
+          const unchanged = await this.getRun(row.id);
+          if (unchanged) {
+            operationReconciliationRequired.push(unchanged);
+            reconciliationRunIds.add(unchanged.id);
+          }
+        }
+      }
     }
-    return { abandoned: recovered, deferred: [] };
+    return { abandoned: recovered, deferred: [], operationReconciliationRequired };
   }
 
   async pruneHistory(...args: M<"pruneHistory">["args"]): Promise<M<"pruneHistory">["result"]> {
