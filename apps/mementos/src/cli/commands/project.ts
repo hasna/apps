@@ -171,14 +171,20 @@ export function registerProjectCommands(program: Command): void {
         const allProjects = listProjects();
         const limit = positiveIntOrDefault(opts.limit, DEFAULT_COMPACT_LIMIT);
         const offset = cursorOrOffset(opts.cursor, opts.offset) ?? 0;
+        const explicitPagination =
+          opts.limit !== undefined ||
+          opts.cursor !== undefined ||
+          opts.offset !== undefined;
         const projects = globalOpts.json
-          ? allProjects
+          ? (explicitPagination
+            ? allProjects.slice(offset, offset + limit)
+            : allProjects)
           : allProjects.slice(offset, offset + limit + 1);
         const hasMore = !globalOpts.json && projects.length > limit;
         const displayProjects = hasMore ? projects.slice(0, limit) : projects;
 
         if (globalOpts.json) {
-          outputJson(allProjects);
+          outputJson(projects);
           return;
         }
 

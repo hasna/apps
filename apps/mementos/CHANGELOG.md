@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.14.80 — Honor project pagination flags
+
+- Apply explicit `--limit`, `--cursor`, and `--offset` windows to both JSON and
+  human `mementos projects` output, including short and empty terminal pages.
+- Preserve the no-flag `mementos --json projects` contract that returns the
+  complete project list.
+- Add an isolated CLI regression that proves JSON and human pagination against
+  a deterministic five-project store.
+
 ## 0.14.79 — Accept npm's verified publish Sigstore bundle
 
 **Immutable release recovery.** Version 0.14.78 was published only under
