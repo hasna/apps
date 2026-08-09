@@ -72,6 +72,7 @@ const roots = [
   "LICENSE",
   "docs/skill-standard.md",
   "skills",
+  "agent-skills",
   "bin",
   "dist",
 ];
@@ -81,6 +82,7 @@ const secretRoots = [
   "README.md",
   "docs/skill-standard.md",
   "skills",
+  "agent-skills",
 ];
 
 const ignoredDirs = new Set([".git", "node_modules"]);
@@ -218,6 +220,19 @@ try {
 } catch (error) {
   console.error("Release guard failed: could not compute the package file list.");
   console.error(sanitizeForPublicLog(`  ${error instanceof Error ? error.message : String(error)}`));
+  process.exit(1);
+}
+
+const packedFileSet = new Set(packedFiles);
+const requiredAgentSkillFiles = collectFiles(join(repoRoot, "agent-skills"))
+  .map((file) => relative(repoRoot, file).replace(/\\/g, "/"))
+  .sort();
+const missingAgentSkillFiles = requiredAgentSkillFiles.filter((file) => !packedFileSet.has(file));
+if (missingAgentSkillFiles.length > 0) {
+  console.error("Release guard failed: repository-managed agent skill files are missing from the package:");
+  for (const missing of missingAgentSkillFiles) {
+    console.error(sanitizeForPublicLog(`  package-boundary: ${missing}`));
+  }
   process.exit(1);
 }
 

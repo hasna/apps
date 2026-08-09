@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.1.61] - 2026-08-09
+
 ### Removed
 - **The deployment "mode" concept is gone, in all three unrelated places it had
   grown.** Skills has one deployment story: you run it. Where it runs and who
@@ -110,6 +112,10 @@ All notable changes to this project will be documented in this file.
   reading `$HOME`. Auth (`auth.json`) still resolves from `$HOME` at startup.
 
 ### Fixed
+- Named `skills sync` now resolves repository-managed instruction skills from
+  the packaged `agent-skills/` tree as well as the public `skills/` catalog.
+  The npm tarball includes those agent skills and the release guard rejects a
+  package that silently omits any of their files.
 - **A skill may now be named `config`, `custom`, `auth`, or `installed`.** Those
   names were previously excluded outright by a denylist that existed only because
   the corpus shared the app root with app data. The denylist is deleted.
