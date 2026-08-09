@@ -1270,6 +1270,34 @@ function requireLinkedRecord(
   }
 }
 
+function deploymentRecordKey(
+  reference: { schema: string; id: string },
+): string {
+  return `${reference.schema}\u0000${reference.id}`;
+}
+
+function requireLinkedDeploymentRecord(
+  reference: DeploymentRecordReference,
+  records: Map<string, LinkedRecord>,
+  path: string,
+  issues: string[],
+): void {
+  const target = records.get(deploymentRecordKey(reference));
+  if (!target) {
+    issues.push(`${path}: missing linked record ${reference.id}`);
+    return;
+  }
+  if (target.digest !== reference.digest) {
+    issues.push(`${path}: digest mismatch`);
+  }
+  if (
+    reference.revision !== undefined
+    && target.revision !== reference.revision
+  ) {
+    issues.push(`${path}: revision mismatch`);
+  }
+}
+
 export function validateDeploymentContractSet(
   schemas: DeploymentContractSchemas,
   input: DeploymentContractSet,
@@ -1363,13 +1391,44 @@ export function validateDeploymentContractSet(
   );
   const receiptMap = linkedRecordMap(receipts, "deploymentReceipts", issues);
   linkedRecordMap(launches, "launchEvidence", issues);
+  const deploymentRecordMap = new Map<string, LinkedRecord>();
+  for (const record of [
+    ...products,
+    ...intents,
+    ...candidates,
+    ...artifacts,
+    ...attestations,
+    ...environments,
+    ...requests,
+    ...plans,
+    ...approvals,
+    ...attempts,
+    ...providerReceipts,
+    ...receipts,
+    ...launches,
+  ] as Array<LinkedRecord & { schema: string }>) {
+    deploymentRecordMap.set(deploymentRecordKey(record), record);
+  }
 
   intents.forEach((intent) =>
     requireLinkedRecord(intent.product, productMap, `intentSnapshots.${intent.id}.product`, issues));
   candidates.forEach((candidate) =>
     requireLinkedRecord(candidate.intent, intentMap, `verifiedSourceCandidates.${candidate.id}.intent`, issues));
-  artifacts.forEach((artifact) =>
-    requireLinkedRecord(artifact.sourceCandidate, candidateMap, `buildArtifacts.${artifact.id}.sourceCandidate`, issues));
+  artifacts.forEach((artifact) => {
+    requireLinkedRecord(artifact.sourceCandidate, candidateMap, `buildArtifacts.${artifact.id}.sourceCandidate`, issues);
+    const candidate = candidateMap.get(artifact.sourceCandidate.id) as
+      | (LinkedRecord & { status: string })
+      | undefined;
+    if (
+      artifact.status === "active"
+      && candidate
+      && candidate.status !== "verified"
+    ) {
+      issues.push(
+        `buildArtifacts.${artifact.id}.sourceCandidate: active artifacts require a verified source candidate`,
+      );
+    }
+  });
   attestations.forEach((attestation) => {
     requireLinkedRecord(attestation.artifact, artifactMap, `artifactAttestations.${attestation.id}.artifact`, issues);
     const artifact = artifactMap.get(attestation.artifact.id) as
@@ -1398,6 +1457,17 @@ export function validateDeploymentContractSet(
   });
   plans.forEach((plan) => {
     requireLinkedRecord(plan.request, requestMap, `deploymentPlans.${plan.id}.request`, issues);
+    plan.actions.forEach((
+      action: { inputs: DeploymentRecordReference[] },
+      actionIndex: number,
+    ) =>
+      action.inputs.forEach((input, inputIndex) =>
+        requireLinkedDeploymentRecord(
+          input,
+          deploymentRecordMap,
+          `deploymentPlans.${plan.id}.actions.${actionIndex}.inputs.${inputIndex}`,
+          issues,
+        )));
     const request = requestMap.get(plan.request.id) as
       | (LinkedRecord & {
         product: DeploymentRecordReference;
@@ -1487,14 +1557,109 @@ export function validateDeploymentContractSet(
         );
       }
     });
+    const boundKinds = new Set(
+      approval.boundInputDigests.map(
+        (binding: { kind: string }) => binding.kind,
+      ),
+    );
+    for (const requiredKind of ["plan", "request", "intent"]) {
+      if (!boundKinds.has(requiredKind)) {
+        issues.push(
+          `deploymentApprovalDecisions.${approval.id}.boundInputDigests: missing required ${requiredKind} binding`,
+        );
+      }
+    }
   });
   attempts.forEach((attempt) => {
     requireLinkedRecord(attempt.plan, planMap, `deploymentAttempts.${attempt.id}.plan`, issues);
+    const plan = planMap.get(attempt.plan.id) as
+      | (LinkedRecord & { request: DeploymentRecordReference })
+      | undefined;
+    const request = plan
+      ? requestMap.get(plan.request.id) as
+        | (LinkedRecord & { environment: DeploymentRecordReference })
+        | undefined
+      : undefined;
     attempt.approvals.forEach((
-      approval: { decision: LinkedRecord },
+      approval: {
+        decision: LinkedRecord;
+        scope: string;
+        actionId: string | null;
+        phaseId: string | null;
+        runtimeMaterialDigest: string | null;
+      },
       index: number,
-    ) =>
-      requireLinkedRecord(approval.decision, approvalMap, `deploymentAttempts.${attempt.id}.approvals.${index}`, issues));
+    ) => {
+      const approvalPath = `deploymentAttempts.${attempt.id}.approvals.${index}`;
+      requireLinkedRecord(approval.decision, approvalMap, approvalPath, issues);
+      const linkedApproval = approvalMap.get(approval.decision.id) as
+        | (LinkedRecord & {
+          decision: { status: string };
+          scope: string;
+          actionId: string | null;
+          phaseId: string | null;
+          runtimeMaterial: { digest: string } | null;
+          environment: DeploymentRecordReference;
+          attemptScope: { minimum: number; maximum: number };
+          expiresAt: string;
+        })
+        | undefined;
+      if (!linkedApproval) {
+        return;
+      }
+      if (linkedApproval.decision.status !== "allowed") {
+        issues.push(
+          `${approvalPath}.decision: linked approval decision is not allowed`,
+        );
+      }
+      if (
+        Date.parse(linkedApproval.expiresAt) <= Date.parse(attempt.createdAt)
+      ) {
+        issues.push(
+          `${approvalPath}.decision: linked approval expired before the attempt`,
+        );
+      }
+      if (
+        request
+        && !sameDeploymentReference(
+          linkedApproval.environment,
+          request.environment,
+        )
+      ) {
+        issues.push(
+          `${approvalPath}.decision: linked approval environment does not match plan request environment`,
+        );
+      }
+      if (
+        attempt.attemptNumber < linkedApproval.attemptScope.minimum
+        || attempt.attemptNumber > linkedApproval.attemptScope.maximum
+      ) {
+        issues.push(
+          `${approvalPath}.decision: attempt number is outside linked approval scope`,
+        );
+      }
+      if (
+        approval.scope !== linkedApproval.scope
+        || approval.actionId !== linkedApproval.actionId
+        || approval.phaseId !== linkedApproval.phaseId
+        || approval.runtimeMaterialDigest
+          !== (linkedApproval.runtimeMaterial?.digest ?? null)
+      ) {
+        issues.push(
+          `${approvalPath}: approval scope does not match linked decision`,
+        );
+      }
+    });
+    if (
+      attempt.state === "succeeded"
+      && attempt.actionSteps.some(
+        (step: { state: string }) => step.state !== "succeeded",
+      )
+    ) {
+      issues.push(
+        `deploymentAttempts.${attempt.id}.state: succeeded attempt requires every action step to succeed`,
+      );
+    }
   });
   providerReceipts.forEach((receipt) =>
     requireLinkedRecord(receipt.attempt, attemptMap, `providerReceipts.${receipt.id}.attempt`, issues));
@@ -1526,6 +1691,18 @@ export function validateDeploymentContractSet(
     requireLinkedRecord(launch.product, productMap, `launchEvidence.${launch.id}.product`, issues);
     requireLinkedRecord(launch.environment, environmentMap, `launchEvidence.${launch.id}.environment`, issues);
     requireLinkedRecord(launch.deploymentReceipt, receiptMap, `launchEvidence.${launch.id}.deploymentReceipt`, issues);
+    const receipt = receiptMap.get(launch.deploymentReceipt.id) as
+      | (LinkedRecord & { outcome: string })
+      | undefined;
+    if (
+      launch.status === "launched"
+      && receipt
+      && receipt.outcome !== "succeeded"
+    ) {
+      issues.push(
+        `launchEvidence.${launch.id}.deploymentReceipt: launched evidence requires a succeeded deployment receipt`,
+      );
+    }
   });
 
   return {
