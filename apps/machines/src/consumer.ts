@@ -153,11 +153,13 @@ export type {
 export {
   MACHINE_DETAILS_KIND,
   getMachineDetails,
+  resolveMachineDetails,
 } from "./details.js";
 export type {
   MachineDetails,
   MachineDetailsMetadataValue,
   MachineDetailsOptions,
+  ResolveMachineDetailsOptions,
   MachineDetailsSource,
   MachineDetailsStatus,
   MachineDetailsStatusState,

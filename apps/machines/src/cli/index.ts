@@ -121,7 +121,7 @@ import {
   type NoteMachineContext,
   type NoteMachineContextSource,
 } from "../notes.js";
-import { getMachineDetails, type MachineDetails } from "../details.js";
+import { resolveMachineDetails, type MachineDetails } from "../details.js";
 import { getBrowserPlanFleet, type BrowserPlanFleet } from "../browserplan.js";
 import {
   checkMachineCompatibility,
@@ -1964,8 +1964,8 @@ program
   .option("--machine <id>", "Machine identifier; defaults to local")
   .option("--tailscale", "Probe tailscale while resolving details", false)
   .option("-j, --json", "Print JSON output", false)
-  .action((options: { machine?: string; tailscale?: boolean; json?: boolean }) => {
-    const result = getMachineDetails(options.machine ?? "local", {
+  .action(async (options: { machine?: string; tailscale?: boolean; json?: boolean }) => {
+    const result = await resolveMachineDetails(options.machine ?? "local", {
       includeTailscale: options.tailscale,
     });
     printJsonOrText(result, renderMachineDetails(result), options.json);

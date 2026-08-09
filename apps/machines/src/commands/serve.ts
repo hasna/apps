@@ -7,7 +7,7 @@ import { getAgentStatus } from "../agent/runtime.js";
 import { PRIVATE_OUTPUT_DENIED_WARNING, isPrivateOutputEnabled } from "../redaction.js";
 import { discoverMachineTopology, redactRouteForOutput, redactTopologyForOutput, resolveMachineRoute } from "../topology.js";
 import { listMachineTrashPolicies, resolveNoteMachineContext, type NoteActorType, type NoteMachineContextSource } from "../notes.js";
-import { getMachineDetails } from "../details.js";
+import { resolveMachineDetails } from "../details.js";
 import { getBrowserPlanFleet } from "../browserplan.js";
 import { createTrustedNotificationApproval, listNotificationChannels, testNotificationChannel } from "./notifications.js";
 import {
@@ -524,7 +524,7 @@ export function startDashboardServer(options: ServeOptions = {}): ReturnType<typ
         if (request.method !== "GET") {
           return jsonError("Use GET for machine details.", 405);
         }
-        return Response.json(getMachineDetails(
+        return Response.json(await resolveMachineDetails(
           url.searchParams.get("machine") ?? url.searchParams.get("machine_id") ?? "local",
           { includeTailscale: url.searchParams.get("tailscale") === "true" },
         ));

@@ -1802,6 +1802,7 @@
                 "manifest_metadata",
                 "heartbeat",
                 "topology",
+                "registry",
                 "fallback"
               ]
             },

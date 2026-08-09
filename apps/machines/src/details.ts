@@ -1,4 +1,9 @@
 import { getDb } from "./db.js";
+import {
+  resolveMachineRegistryStore,
+  type MachineRecord,
+  type MachineRegistryStore,
+} from "./cloud/registry.js";
 import { REDACTED_VALUE, isSensitiveKey, redactErrorMessage, redactSensitiveValue } from "./redaction.js";
 import {
   MACHINES_CONSUMER_CONTRACT_VERSION,
@@ -36,7 +41,7 @@ export interface MachineDetailsTimestamps {
 
 export interface MachineDetailsSource {
   authority: "open-machines";
-  metadata_source: "manifest_metadata" | "heartbeat" | "topology" | "fallback";
+  metadata_source: "manifest_metadata" | "heartbeat" | "topology" | "registry" | "fallback";
   manifest_declared: boolean;
   heartbeat_present: boolean;
   topology_entry: boolean;
@@ -74,6 +79,10 @@ export interface MachineDetailsOptions {
   topology?: MachineTopology;
   now?: Date;
   includeTailscale?: boolean;
+}
+
+export interface ResolveMachineDetailsOptions extends MachineDetailsOptions {
+  registryStore?: Pick<MachineRegistryStore, "get">;
 }
 
 interface SyncRunSummary {
@@ -243,8 +252,7 @@ function safeMetadataValue(key: string, value: unknown): MachineDetailsMetadataV
   return undefined;
 }
 
-function displayMetadata(machine: MachineTopologyEntry): Record<string, MachineDetailsMetadataValue> | undefined {
-  const metadata = machine.metadata;
+function displayMetadata(metadata: Record<string, unknown>): Record<string, MachineDetailsMetadataValue> | undefined {
   const allowedKeys = [
     "machine_type",
     "machineType",
@@ -283,6 +291,14 @@ function timestampsForMachine(machine: MachineTopologyEntry | null, syncRun: Syn
   };
 }
 
+function timestampsForRegistry(record: MachineRecord, syncRun: SyncRunSummary | null): MachineDetailsTimestamps {
+  return {
+    ...(stringValue(record.updatedAt) ? { updated_at: record.updatedAt } : {}),
+    ...(syncRun?.updated_at ? { recent_sync_at: syncRun.updated_at } : {}),
+    ...(syncRun?.status ? { recent_sync_status: syncRun.status } : {}),
+  };
+}
+
 function sourceForMachine(topology: MachineTopology, machine: MachineTopologyEntry | null): MachineDetailsSource {
   if (!machine) {
     return {
@@ -305,28 +321,56 @@ function sourceForMachine(topology: MachineTopology, machine: MachineTopologyEnt
   };
 }
 
-function detailsWarnings(topology: MachineTopology, machine: MachineTopologyEntry | null, requestedMachineId: string): string[] {
-  const warnings = [...topology.warnings];
-  if (!machine) warnings.push(`unknown_machine:details:${requestedMachineId}`);
-  return warnings;
+function sourceForRegistry(topology: MachineTopology, record: MachineRecord): MachineDetailsSource {
+  return {
+    authority: "open-machines",
+    metadata_source: "registry",
+    manifest_declared: false,
+    heartbeat_present: false,
+    topology_entry: false,
+    local: record.id === topology.local_machine_id,
+  };
 }
 
-export function getMachineDetails(machineId: string, options: MachineDetailsOptions = {}): MachineDetails {
-  const requestedMachineId = normalizeMachineId(machineId);
-  const topology = topologyForDetails(requestedMachineId, options);
-  const machine = findMachine(topology, requestedMachineId);
-  const resolvedMachineId = machine?.machine_id ?? requestedMachineId;
+function detailsWarnings(
+  topology: MachineTopology,
+  known: boolean,
+  requestedMachineId: string,
+  additionalWarnings: string[] = [],
+): string[] {
+  const warnings = [...topology.warnings, ...additionalWarnings];
+  if (!known) warnings.push(`unknown_machine:details:${requestedMachineId}`);
+  return [...new Set(warnings)];
+}
+
+function buildMachineDetails(
+  requestedMachineId: string,
+  topology: MachineTopology,
+  machine: MachineTopologyEntry | null,
+  registryRecord: MachineRecord | null,
+  options: MachineDetailsOptions,
+  additionalWarnings: string[] = [],
+): MachineDetails {
+  const registryMachine = !machine && registryRecord?.id === requestedMachineId ? registryRecord : null;
+  const resolvedMachineId = machine?.machine_id ?? registryMachine?.id ?? requestedMachineId;
   const syncRun = latestSyncRun(resolvedMachineId);
-  const friendlyName = machine?.friendly_name ?? undefined;
-  const displayName = machine?.display_name ?? resolvedMachineId;
+  const friendlyName = machine?.friendly_name ?? stringValue(registryMachine?.friendlyName);
+  const displayName = machine?.display_name ?? friendlyName ?? resolvedMachineId;
   const status = statusForMachine(machine);
-  const timestamps = timestampsForMachine(machine, syncRun);
-  const metadata = machine?.metadata ?? {};
-  const roles = machine ? firstMetadataArray(metadata, ["roles", "machine_roles", "machineRoles"]) : [];
-  const capabilities = machine ? firstMetadataArray(metadata, ["capabilities", "capability_flags", "capabilityFlags"]) : [];
-  const machineType = machine ? firstMetadataString(metadata, ["machine_type", "machineType", "type"]) : undefined;
-  const role = machine ? firstMetadataString(metadata, ["role", "machine_role", "machineRole"]) : undefined;
-  const safeDisplayMetadata = machine ? displayMetadata(machine) : undefined;
+  const timestamps = machine
+    ? timestampsForMachine(machine, syncRun)
+    : registryMachine
+      ? timestampsForRegistry(registryMachine, syncRun)
+      : timestampsForMachine(null, syncRun);
+  const metadata = machine?.metadata ?? registryMachine?.metadata ?? {};
+  const known = Boolean(machine || registryMachine);
+  const roles = known ? firstMetadataArray(metadata, ["roles", "machine_roles", "machineRoles"]) : [];
+  const capabilities = known ? firstMetadataArray(metadata, ["capabilities", "capability_flags", "capabilityFlags"]) : [];
+  const machineType = known ? firstMetadataString(metadata, ["machine_type", "machineType", "type"]) : undefined;
+  const role = known ? firstMetadataString(metadata, ["role", "machine_role", "machineRole"]) : undefined;
+  const safeDisplayMetadata = known ? displayMetadata(metadata) : undefined;
+  const tags = machine?.tags ?? (registryMachine ? firstMetadataArray(metadata, ["tags"]) : []);
+  const platform = machine?.platform ? String(machine.platform) : stringValue(registryMachine?.platform);
   const details: MachineDetails = {
     schema_version: MACHINES_CONSUMER_CONTRACT_VERSION,
     package: packageInfo(),
@@ -337,20 +381,62 @@ export function getMachineDetails(machineId: string, options: MachineDetailsOpti
     ...(friendlyName ? { friendly_name: friendlyName, friendlyName } : {}),
     display_name: displayName,
     displayName,
-    known: Boolean(machine),
+    known,
     status,
-    ...(machine?.platform ? { platform: String(machine.platform) } : {}),
+    ...(platform ? { platform } : {}),
     ...(machineType ? { machine_type: machineType } : {}),
     ...(role ? { role } : {}),
     ...(roles.length > 0 ? { roles } : {}),
     ...(capabilities.length > 0 ? { machine_capabilities: capabilities } : {}),
-    ...(machine?.tags.length ? { tags: machine.tags } : {}),
+    ...(tags.length > 0 ? { tags } : {}),
     ...(timestamps.updated_at ? { updated_at: timestamps.updated_at } : {}),
     ...(timestamps.last_seen_at ? { last_seen_at: timestamps.last_seen_at } : {}),
     timestamps,
-    source: sourceForMachine(topology, machine),
+    source: machine
+      ? sourceForMachine(topology, machine)
+      : registryMachine
+        ? sourceForRegistry(topology, registryMachine)
+        : sourceForMachine(topology, null),
     ...(safeDisplayMetadata ? { display_metadata: safeDisplayMetadata } : {}),
-    warnings: detailsWarnings(topology, machine, requestedMachineId),
+    warnings: detailsWarnings(topology, known, requestedMachineId, additionalWarnings),
   };
   return details;
+}
+
+export function getMachineDetails(machineId: string, options: MachineDetailsOptions = {}): MachineDetails {
+  const requestedMachineId = normalizeMachineId(machineId);
+  const topology = topologyForDetails(requestedMachineId, options);
+  return buildMachineDetails(
+    requestedMachineId,
+    topology,
+    findMachine(topology, requestedMachineId),
+    null,
+    options,
+  );
+}
+
+export async function resolveMachineDetails(
+  machineId: string,
+  options: ResolveMachineDetailsOptions = {},
+): Promise<MachineDetails> {
+  const requestedMachineId = normalizeMachineId(machineId);
+  const topology = topologyForDetails(requestedMachineId, options);
+  const machine = findMachine(topology, requestedMachineId);
+  if (machine) {
+    return buildMachineDetails(requestedMachineId, topology, machine, null, options);
+  }
+
+  try {
+    const registryRecord = await (options.registryStore ?? resolveMachineRegistryStore()).get(requestedMachineId);
+    return buildMachineDetails(requestedMachineId, topology, null, registryRecord, options);
+  } catch {
+    return buildMachineDetails(
+      requestedMachineId,
+      topology,
+      null,
+      null,
+      options,
+      [`registry_lookup_failed:details:${requestedMachineId}`],
+    );
+  }
 }

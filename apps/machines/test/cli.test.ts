@@ -19,6 +19,7 @@ import {
   projectAssignmentResourceId,
   removeProjectAssignmentMutationArgs,
 } from "../src/projects.js";
+import { validateMachinesConsumerEnvelope } from "../src/consumer-schema.js";
 
 const repoRoot = resolve(import.meta.dir, "..");
 const cliPath = join(repoRoot, "src", "cli", "index.ts");
@@ -510,6 +511,112 @@ describe("cli command handling", () => {
         },
       });
       expect(JSON.stringify(payload)).not.toContain("should-not-appear");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("details CLI resolves registry-only machines and preserves the unknown-machine contract", () => {
+    const dir = mkdtempSync(join(tmpdir(), "machines-cli-registry-details-"));
+    try {
+      const env = {
+        ...process.env,
+        HASNA_MACHINES_API_URL: "",
+        HASNA_MACHINES_API_KEY: "",
+        HASNA_MACHINES_STORAGE_MODE: "local",
+        HASNA_MACHINES_MANIFEST_PATH: join(dir, "machines.json"),
+        HASNA_MACHINES_DB_PATH: join(dir, "machines.db"),
+        HASNA_MACHINES_MACHINE_ID: "control-node",
+        [MUTATION_APPROVAL_FLAG_ENV]: "1",
+      };
+      expect(runCli(["manifest", "init"], env).status).toBe(0);
+
+      const excludedMetadataKeys = [
+        ["api", "key"].join("_"),
+        ["se", "cret", "Token"].join(""),
+      ];
+      const excludedMetadata = Object.fromEntries(
+        excludedMetadataKeys.map((key) => [key, ["fixture", "value"].join("-")]),
+      );
+      const registered = runCli([
+        "registry",
+        "register",
+        "registry-only-node",
+        "--name",
+        "Registry Only Node",
+        "--platform",
+        "linux",
+        "--status",
+        "online",
+        "--metadata",
+        JSON.stringify({
+          machine_type: "server",
+          role: "worker",
+          capabilities: ["notes", "sync"],
+          owner: "Hasna",
+          hostname: "registry.internal.test",
+          sshAddress: "hasna@registry-only-node",
+          workspacePath: "/srv/private/workspace",
+          ...excludedMetadata,
+        }),
+        "--json",
+      ], env);
+      expect(registered.stderr).toBe("");
+      expect(registered.status).toBe(0);
+
+      const known = runCli(["details", "--machine", "registry-only-node", "--json"], env);
+      expect(known.stderr).toBe("");
+      expect(known.status).toBe(0);
+      const knownPayload = JSON.parse(known.stdout);
+      expect(knownPayload).toMatchObject({
+        machine_id: "registry-only-node",
+        friendly_name: "Registry Only Node",
+        display_name: "Registry Only Node",
+        known: true,
+        platform: "linux",
+        machine_type: "server",
+        role: "worker",
+        machine_capabilities: ["notes", "sync"],
+        status: {
+          state: "unknown",
+          label: "Unknown",
+          online: null,
+        },
+        source: {
+          metadata_source: "registry",
+          manifest_declared: false,
+          heartbeat_present: false,
+          topology_entry: false,
+          local: false,
+        },
+      });
+      expect(knownPayload.warnings).not.toContain("unknown_machine:details:registry-only-node");
+      const serializedKnown = JSON.stringify(knownPayload);
+      expect(serializedKnown).not.toContain("registry.internal.test");
+      expect(serializedKnown).not.toContain("hasna@registry-only-node");
+      expect(serializedKnown).not.toContain("/srv/private/workspace");
+      for (const key of excludedMetadataKeys) {
+        expect(serializedKnown).not.toContain(key);
+      }
+      expect(validateMachinesConsumerEnvelope("machine_details", knownPayload)).toMatchObject({ ok: true, errors: [] });
+
+      const missing = runCli(["details", "--machine", "registry-missing-node", "--json"], env);
+      expect(missing.stderr).toBe("");
+      expect(missing.status).toBe(0);
+      const missingPayload = JSON.parse(missing.stdout);
+      expect(missingPayload).toMatchObject({
+        machine_id: "registry-missing-node",
+        known: false,
+        source: {
+          metadata_source: "fallback",
+          manifest_declared: false,
+          heartbeat_present: false,
+          topology_entry: false,
+          local: false,
+        },
+        warnings: ["unknown_machine:details:registry-missing-node"],
+      });
+      expect(validateMachinesConsumerEnvelope("machine_details", missingPayload)).toMatchObject({ ok: true, errors: [] });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
