@@ -24,6 +24,7 @@ import {
   cloudRegisterAgent,
   cloudLockTask,
   cloudUnlockTask,
+  cloudHandoffStaleTaskLock,
   cloudAddDependency,
   cloudRemoveDependency,
   cloudGetDependencies,
@@ -1149,6 +1150,44 @@ describe("cloud agent + lock + deps + verification routing (identity/coordinatio
     expect(calls[0]!.method).toBe("POST");
     expect(calls[0]!.url).toBe("https://todos.example.com/v1/tasks/t1/unlock");
     expect(calls[0]!.body).toEqual({ agent_id: "cli" });
+  });
+
+  test("stale-lock handoff -> exact v1 route with every explicit CAS input and unwraps receipt", async () => {
+    const receipt = {
+      schema_version: "todos.stale-lock-handoff.v1" as const,
+      receipt_id: "33333333-3333-4333-8333-333333333333",
+      task_id: "11111111-1111-4111-8111-111111111111",
+      actor: "nausicaa",
+      previous_holder: "holder-a",
+      previous_lock_version: "2020-01-01T00:00:00.000Z",
+      new_holder: "nausicaa",
+      new_lock_version: "2026-08-09T10:00:00.000Z",
+      stale_after_seconds: 3_600,
+      stale_cutoff: "2026-08-09T09:00:00.000Z",
+      reason: "stale exact lock",
+      created_at: "2026-08-09T10:00:00.000Z",
+    };
+    const calls = installFetch(() => ({ body: { receipt } }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+    await expect(cloudHandoffStaleTaskLock(client, {
+      task_id: receipt.task_id,
+      expected_holder: receipt.previous_holder,
+      expected_lock_version: receipt.previous_lock_version,
+      stale_after_seconds: receipt.stale_after_seconds,
+      new_holder: receipt.new_holder,
+      reason: receipt.reason,
+    })).resolves.toEqual(receipt);
+    expect(calls[0]!.method).toBe("POST");
+    expect(calls[0]!.url).toBe(
+      `https://todos.example.com/v1/tasks/${receipt.task_id}/stale-lock-handoff`,
+    );
+    expect(calls[0]!.body).toEqual({
+      expected_holder: receipt.previous_holder,
+      expected_lock_version: receipt.previous_lock_version,
+      stale_after_seconds: receipt.stale_after_seconds,
+      new_holder: receipt.new_holder,
+      reason: receipt.reason,
+    });
   });
 
   test("deps add -> POST /v1/tasks/:id/dependencies, unwraps { dependency }", async () => {

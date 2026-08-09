@@ -21,6 +21,8 @@ const taskSchema = {
     reason: { type: "string", nullable: true },
     tags: { type: "array", items: { type: "string" } },
     version: { type: "number" },
+    locked_by: { type: "string", nullable: true },
+    locked_at: { type: "string", format: "date-time", nullable: true },
     created_at: { type: "string" },
     updated_at: { type: "string" },
   },
@@ -191,6 +193,71 @@ const taskCommentSchema = {
     content: { type: "string" },
     type: { type: "string", enum: ["comment", "progress", "note"] },
     progress_pct: { type: "number", nullable: true },
+    created_at: { type: "string", format: "date-time" },
+  },
+} as const;
+
+const staleLockHandoffInputSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "expected_holder",
+    "expected_lock_version",
+    "stale_after_seconds",
+    "new_holder",
+    "reason",
+  ],
+  properties: {
+    expected_holder: { type: "string", minLength: 1 },
+    expected_lock_version: {
+      type: "string",
+      format: "date-time",
+      pattern: "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+      description: "Exact authoritative locked_at token read from the task; no default or normalization is applied.",
+    },
+    stale_after_seconds: {
+      type: "integer",
+      minimum: 1,
+      description: "Lock age threshold supplied by the caller. The lock must be strictly older at the CAS instant.",
+    },
+    new_holder: {
+      type: "string",
+      minLength: 1,
+      description: "Must match the agent bound to the authenticated API key.",
+    },
+    reason: { type: "string", minLength: 1, maxLength: 4096 },
+  },
+} as const;
+
+const staleLockHandoffReceiptSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "schema_version",
+    "receipt_id",
+    "task_id",
+    "actor",
+    "previous_holder",
+    "previous_lock_version",
+    "new_holder",
+    "new_lock_version",
+    "stale_after_seconds",
+    "stale_cutoff",
+    "reason",
+    "created_at",
+  ],
+  properties: {
+    schema_version: { type: "string", enum: ["todos.stale-lock-handoff.v1"] },
+    receipt_id: { type: "string", format: "uuid" },
+    task_id: { type: "string", format: "uuid" },
+    actor: { type: "string" },
+    previous_holder: { type: "string" },
+    previous_lock_version: { type: "string", format: "date-time" },
+    new_holder: { type: "string" },
+    new_lock_version: { type: "string", format: "date-time" },
+    stale_after_seconds: { type: "integer", minimum: 1 },
+    stale_cutoff: { type: "string", format: "date-time" },
+    reason: { type: "string" },
     created_at: { type: "string", format: "date-time" },
   },
 } as const;
@@ -391,6 +458,8 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
         ProjectTaskListEnsureResult: projectTaskListEnsureResultSchema,
         ProjectTaskListRollbackResult: projectTaskListRollbackResultSchema,
         TaskComment: taskCommentSchema,
+        StaleLockHandoffInput: staleLockHandoffInputSchema,
+        StaleLockHandoffReceipt: staleLockHandoffReceiptSchema,
         TaskGitRef: taskGitRefSchema,
         Plan: planSchema,
         PlanProjectLinkReceipt: planProjectLinkReceiptSchema,
@@ -1386,6 +1455,52 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
                 },
               },
             },
+          },
+        },
+      },
+      "/v1/tasks/{id}/stale-lock-handoff": {
+        post: {
+          operationId: "handoffStaleTaskLock",
+          summary: "Atomically transfer one exact stale task lock",
+          description:
+            "Compares one full task UUID, current holder, and exact locked_at version, verifies the lock is strictly older than the supplied threshold, then transfers it directly and writes an immutable task-history receipt in the same backend transaction.",
+          parameters: [
+            {
+              name: "id",
+              in: "path",
+              required: true,
+              schema: { type: "string", format: "uuid" },
+              description: "Exact full task UUID. Short ids and prefixes are rejected.",
+            },
+          ],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/StaleLockHandoffInput" },
+              },
+            },
+          },
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["receipt"],
+                    properties: {
+                      receipt: { $ref: "#/components/schemas/StaleLockHandoffReceipt" },
+                    },
+                  },
+                },
+              },
+            },
+            "400": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "403": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "404": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "409": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "501": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
           },
         },
       },

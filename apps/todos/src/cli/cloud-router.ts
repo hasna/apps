@@ -11,7 +11,7 @@
 import { resolveStorageClient, type HasnaStorageClient } from "@hasna/contracts/client/storage";
 import { normalizeStorageMode } from "@hasna/contracts/mode";
 import { resolve as resolvePath } from "node:path";
-import type { Agent, CreatePlanInput, CreateTaskListInput, CreateTemplateInput, Plan, PlanProjectLinkResult, PlanProjectLinkRollbackResult, Project, ProjectTaskListEnsureResult, ProjectTaskListRollbackResult, RegisterAgentInput, Task, TaskComment, TaskDependency, TaskFilter, TaskHistory, TaskList, TaskTemplate, TemplateWithTasks, UpdatePlanInput, UpdateTaskListInput } from "../types/index.js";
+import type { Agent, CreatePlanInput, CreateTaskListInput, CreateTemplateInput, Plan, PlanProjectLinkResult, PlanProjectLinkRollbackResult, Project, ProjectTaskListEnsureResult, ProjectTaskListRollbackResult, RegisterAgentInput, StaleLockHandoffReceipt, Task, TaskComment, TaskDependency, TaskFilter, TaskHistory, TaskList, TaskTemplate, TemplateWithTasks, UpdatePlanInput, UpdateTaskListInput } from "../types/index.js";
 import { isBlockingDependencyStatus } from "../types/index.js";
 import type { TodosTaskFailureResult, UpdateTemplateInput } from "../storage/interfaces.js";
 import { redactEvidenceText } from "../lib/redaction.js";
@@ -2415,6 +2415,34 @@ export async function cloudUnlockTask(
     return Boolean((raw as { success: unknown }).success);
   }
   return true;
+}
+
+/** Exact remote CAS (`POST /v1/tasks/:id/stale-lock-handoff`). */
+export async function cloudHandoffStaleTaskLock(
+  client: HasnaStorageClient,
+  input: {
+    task_id: string;
+    expected_holder: string;
+    expected_lock_version: string;
+    stale_after_seconds: number;
+    new_holder: string;
+    reason: string;
+  },
+): Promise<StaleLockHandoffReceipt> {
+  const raw = await client.transport.post<unknown>(
+    `/tasks/${encodeURIComponent(input.task_id)}/stale-lock-handoff`,
+    {
+      expected_holder: input.expected_holder,
+      expected_lock_version: input.expected_lock_version,
+      stale_after_seconds: input.stale_after_seconds,
+      new_holder: input.new_holder,
+      reason: input.reason,
+    },
+  );
+  if (raw && typeof raw === "object" && "receipt" in (raw as Record<string, unknown>)) {
+    return (raw as { receipt: StaleLockHandoffReceipt }).receipt;
+  }
+  throw new Error("STALE_LOCK_HANDOFF_RECEIPT_MISSING: remote response did not include receipt");
 }
 
 /**

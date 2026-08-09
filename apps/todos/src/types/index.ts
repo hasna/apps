@@ -1135,6 +1135,45 @@ export interface LockResult {
   error?: string;
 }
 
+/**
+ * Exact compare-and-swap input for taking over one stale task lock.
+ *
+ * `expected_lock_version` is the authoritative `locked_at` value read from the
+ * task. It is intentionally a string token rather than a duration-derived
+ * guess: holder and version must still match exactly when the backend performs
+ * the mutation.
+ */
+export interface StaleLockHandoffInput {
+  task_id: string;
+  actor: string;
+  expected_holder: string;
+  expected_lock_version: string;
+  stale_after_seconds: number;
+  new_holder: string;
+  reason: string;
+}
+
+/**
+ * Immutable task-history receipt for a successful stale-lock handoff.
+ *
+ * `receipt_id` is also the owning TaskHistory row id, so the receipt can be
+ * read back through the existing task history API instead of a parallel log.
+ */
+export interface StaleLockHandoffReceipt {
+  schema_version: "todos.stale-lock-handoff.v1";
+  receipt_id: string;
+  task_id: string;
+  actor: string;
+  previous_holder: string;
+  previous_lock_version: string;
+  new_holder: string;
+  new_lock_version: string;
+  stale_after_seconds: number;
+  stale_cutoff: string;
+  reason: string;
+  created_at: string;
+}
+
 // Task History (audit log)
 export interface TaskHistory {
   id: string;
@@ -1375,6 +1414,28 @@ export class LockError extends Error {
   ) {
     super(`Task ${taskId} is locked by ${lockedBy}`);
     this.name = "LockError";
+  }
+}
+
+export type StaleLockHandoffErrorCode =
+  | "STALE_LOCK_HANDOFF_INVALID_TASK_ID"
+  | "STALE_LOCK_HANDOFF_INVALID_INPUT"
+  | "STALE_LOCK_HANDOFF_ACTOR_MISMATCH"
+  | "STALE_LOCK_HANDOFF_NOT_LOCKED"
+  | "STALE_LOCK_HANDOFF_HOLDER_MISMATCH"
+  | "STALE_LOCK_HANDOFF_VERSION_MISMATCH"
+  | "STALE_LOCK_HANDOFF_NOT_STALE"
+  | "STALE_LOCK_HANDOFF_TERMINAL"
+  | "STALE_LOCK_HANDOFF_CONFLICT";
+
+export class StaleLockHandoffError extends Error {
+  constructor(
+    public readonly code: StaleLockHandoffErrorCode,
+    message: string,
+    public readonly details: Record<string, unknown> = {},
+  ) {
+    super(message);
+    this.name = "StaleLockHandoffError";
   }
 }
 

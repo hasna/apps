@@ -12,6 +12,7 @@ import {
   startTask,
   completeTask,
   failTask,
+  handoffStaleTaskLock,
   claimNextTask,
   getNextTask,
   getActiveWork,
@@ -218,6 +219,7 @@ export function createLocalSqliteTodosStorageAdapter(
         unlockTask(id, agentId, database());
         return true;
       },
+      handoffStaleLock: (input) => handoffStaleTaskLock(input, database()),
       delete: (id) => deleteTask(id, database()),
       start: (id, agentId) => startTask(id, agentId, database()),
       complete: (id, agentId, options) => completeTask(id, agentId, database(), options),

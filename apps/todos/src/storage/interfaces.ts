@@ -14,6 +14,8 @@ import type {
   RegisterAgentInput,
   RenameProjectInput,
   RenameProjectResult,
+  StaleLockHandoffInput,
+  StaleLockHandoffReceipt,
   Task,
   TaskComment,
   TaskDependency,
@@ -250,6 +252,15 @@ export interface TodosTaskStore {
   lock?(id: string, agentId: string, context?: TodosStorageContext): MaybePromise<TodosLockResult>;
   /** Release a lock. Optional — cloud adapters only. */
   unlock?(id: string, agentId?: string, context?: TodosStorageContext): MaybePromise<boolean>;
+  /**
+   * Atomically transfer one exact stale lock by holder + immutable lock
+   * version. Optional for third-party adapters; the v1 route fails closed with
+   * 501 when the backing store cannot provide the CAS.
+   */
+  handoffStaleLock?(
+    input: StaleLockHandoffInput,
+    context?: TodosStorageContext,
+  ): MaybePromise<StaleLockHandoffReceipt>;
   /**
    * Resolve the single task carrying `metadata.fingerprint === fingerprint` in the
    * shared dataset, or null. Backs the `/v1/tasks/upsert` idempotent create-or-update

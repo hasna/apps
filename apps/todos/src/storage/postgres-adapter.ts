@@ -14,6 +14,8 @@ import type {
   PlanProjectLinkRollbackResult,
   Project,
   RegisterAgentInput,
+  StaleLockHandoffInput,
+  StaleLockHandoffReceipt,
   Task,
   TaskComment,
   TaskDependency,
@@ -65,6 +67,12 @@ import {
   planProjectLinkRollbackReceiptId,
   planProjectLinkResultDigest,
 } from "../lib/plan-project-link-contract.js";
+import {
+  buildStaleLockHandoffReceipt,
+  prepareStaleLockHandoff,
+  staleLockHandoffHistory,
+  throwStaleLockHandoffConflict,
+} from "../lib/stale-lock-handoff.js";
 import {
   DEFAULT_TODOS_POSTGRES_CURSOR_TABLE,
   DEFAULT_TODOS_POSTGRES_SYNC_TABLE,
@@ -151,6 +159,7 @@ export function createPostgresTodosStorageAdapter(
       getChangedSince: (since, filters) => getChangedSince(since, filters, store),
       lock: (id, agentId) => lockTask(id, agentId, store),
       unlock: (id, agentId) => unlockTask(id, agentId, store),
+      handoffStaleLock: (input, context) => store.handoffStaleLock(input, context),
       getByFingerprint: (fingerprint) => store.getTaskByFingerprint(fingerprint),
     },
     dependencies: {
@@ -317,6 +326,108 @@ class PostgresJsonRecordStore {
       [this.service, type, id],
     );
     return result.rows[0] ? payloadRecord<T>(result.rows[0].payload) : null;
+  }
+
+  /**
+   * One-statement PostgreSQL CAS: lock the exact task row, transfer only when
+   * holder + immutable locked_at token + staleness still match, and insert the
+   * task-history receipt from the successful UPDATE in the same statement.
+   */
+  async handoffStaleLock(
+    input: StaleLockHandoffInput,
+    context: TodosStorageContext = {},
+  ): Promise<StaleLockHandoffReceipt> {
+    const prepared = prepareStaleLockHandoff(input);
+    const receipt = buildStaleLockHandoffReceipt(prepared);
+    const history = staleLockHandoffHistory(receipt, this.machineId(context));
+    await this.ensureSchema();
+
+    const result = await this.options.client.query<{
+      current_payload: unknown | null;
+      updated_payload: unknown | null;
+      audit_payload: unknown | null;
+    }>(
+      `/* todos:stale-lock-handoff-atomic */ WITH
+       target AS MATERIALIZED (
+         SELECT payload
+         FROM ${this.tableName}
+         WHERE service = $1
+           AND object_type = 'tasks'
+           AND object_id = $2
+           AND deleted_at IS NULL
+         FOR UPDATE
+       ),
+       updated AS (
+         UPDATE ${this.tableName} AS task_record
+         SET payload = jsonb_set(
+               jsonb_set(
+                 jsonb_set(
+                   jsonb_set(
+                     task_record.payload,
+                     '{locked_by}',
+                     to_jsonb($6::text),
+                     true
+                   ),
+                   '{locked_at}',
+                   to_jsonb($7::text),
+                   true
+                 ),
+                 '{updated_at}',
+                 to_jsonb($7::text),
+                 true
+               ),
+               '{version}',
+               to_jsonb(COALESCE((task_record.payload->>'version')::integer, 0) + 1),
+               true
+             ),
+             updated_at = $7::timestamptz,
+             source_machine_id = $10,
+             version = COALESCE(task_record.version, 0) + 1
+         FROM target
+         WHERE task_record.service = $1
+           AND task_record.object_type = 'tasks'
+           AND task_record.object_id = $2
+           AND task_record.deleted_at IS NULL
+           AND target.payload->>'locked_by' = $3
+           AND target.payload->>'locked_at' = $4
+           AND todos_try_timestamptz(target.payload->>'locked_at') < $5::timestamptz
+           AND COALESCE(target.payload->>'status', '') NOT IN ('completed', 'failed', 'cancelled')
+         RETURNING task_record.payload
+       ),
+       audit AS (
+         INSERT INTO ${this.tableName} (
+           service, object_type, object_id, payload, updated_at,
+           deleted_at, source_machine_id, version
+         )
+         SELECT $1, 'audit_history', $8, $9::jsonb, $7::timestamptz,
+                NULL, $10, NULL
+         FROM updated
+         RETURNING payload
+       )
+       SELECT
+         (SELECT payload FROM target) AS current_payload,
+         (SELECT payload FROM updated) AS updated_payload,
+         (SELECT payload FROM audit) AS audit_payload`,
+      [
+        this.service,
+        prepared.task_id,
+        prepared.expected_holder,
+        prepared.expected_lock_version,
+        prepared.stale_cutoff,
+        prepared.new_holder,
+        prepared.operation_timestamp,
+        receipt.receipt_id,
+        jsonbParam(history),
+        this.machineId(context),
+      ],
+    );
+
+    const row = result.rows[0];
+    if (!row?.current_payload) throw new TaskNotFoundError(prepared.task_id);
+    if (!row.updated_payload || !row.audit_payload) {
+      throwStaleLockHandoffConflict(payloadRecord<Task>(row.current_payload), prepared);
+    }
+    return receipt;
   }
 
   async list<T>(type: RemoteObjectType): Promise<T[]> {

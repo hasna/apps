@@ -4,7 +4,7 @@
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
 // Source: Todos V1 API 0.15.18
 
-export interface Task { "id"?: string; "title"?: string; "description"?: string; "status"?: "pending" | "in_progress" | "completed" | "failed" | "cancelled"; "priority"?: "low" | "medium" | "high" | "critical"; "project_id"?: string | null; "parent_id"?: string | null; "assigned_to"?: string | null; "agent_id"?: string | null; "reason"?: string | null; "tags"?: Array<string>; "version"?: number; "created_at"?: string; "updated_at"?: string }
+export interface Task { "id"?: string; "title"?: string; "description"?: string; "status"?: "pending" | "in_progress" | "completed" | "failed" | "cancelled"; "priority"?: "low" | "medium" | "high" | "critical"; "project_id"?: string | null; "parent_id"?: string | null; "assigned_to"?: string | null; "agent_id"?: string | null; "reason"?: string | null; "tags"?: Array<string>; "version"?: number; "locked_by"?: string | null; "locked_at"?: string | null; "created_at"?: string; "updated_at"?: string }
 
 export interface Project { "id"?: string; "name"?: string; "path"?: string; "description"?: string | null; "task_list_id"?: string | null; "task_prefix"?: string | null; "task_counter"?: number; "created_at"?: string; "updated_at"?: string }
 
@@ -23,6 +23,10 @@ export interface ProjectTaskListEnsureResult { "mode": "plan" | "apply"; "action
 export interface ProjectTaskListRollbackResult { "schema_version": "todos.project-task-list-ensure.v1"; "action": "removed"; "project_id": string; "task_list_id": string; "accepted_receipt_id": string; "rollback_receipt_id": string; "removed_at": string }
 
 export interface TaskComment { "id": string; "task_id": string; "agent_id": string | null; "session_id": string | null; "content": string; "type": "comment" | "progress" | "note"; "progress_pct": number | null; "created_at": string }
+
+export interface StaleLockHandoffInput { "expected_holder": string; "expected_lock_version": string; "stale_after_seconds": number; "new_holder": string; "reason": string }
+
+export interface StaleLockHandoffReceipt { "schema_version": "todos.stale-lock-handoff.v1"; "receipt_id": string; "task_id": string; "actor": string; "previous_holder": string; "previous_lock_version": string; "new_holder": string; "new_lock_version": string; "stale_after_seconds": number; "stale_cutoff": string; "reason": string; "created_at": string }
 
 export interface TaskGitRef { "id": string; "task_id": string; "ref_type": "branch" | "pull_request"; "name": string; "url": string | null; "provider": string | null; "metadata": Record<string, unknown>; "created_at": string; "updated_at": string }
 
@@ -543,6 +547,15 @@ export class TodosV1Client {
     /** Link a git branch or pull-request ref to a task */
     async linkTaskGitRef(id: string, body: { "ref_type": "branch" | "pull_request"; "name": string; "url"?: string; "provider"?: string; "metadata"?: Record<string, unknown> }, init?: RequestInit): Promise<{ "ref": TaskGitRef }> {
       return this.request("POST", `/v1/tasks/${encodeURIComponent(String(id))}/refs`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Atomically transfer one exact stale task lock */
+    async handoffStaleTaskLock(id: string, body: StaleLockHandoffInput, init?: RequestInit): Promise<{ "receipt": StaleLockHandoffReceipt }> {
+      return this.request("POST", `/v1/tasks/${encodeURIComponent(String(id))}/stale-lock-handoff`, {
         body,
         query: undefined,
         init,
