@@ -128,7 +128,7 @@ import {
   runUsageHook,
 } from "./lib/usage-hook.js";
 import { profileCredentialLayers } from "./lib/credential-state.js";
-import { assertGovernedInstructionHome, configsSessionToolFor, resolveRequiredInstructionSourceIds, runConfigsPrelaunch, REQUIRED_INSTRUCTION_SOURCES_ENV, type ConfigsPrelaunchMode, type ConfigsPrelaunchOptions } from "./lib/configs-prelaunch.js";
+import { assertGovernedInstructionHome, configsSessionToolFor, profileIdentityExportHealth, resolveRequiredInstructionSourceIds, runConfigsPrelaunch, REQUIRED_INSTRUCTION_SOURCES_ENV, type ConfigsPrelaunchMode, type ConfigsPrelaunchOptions } from "./lib/configs-prelaunch.js";
 import { getConfigsPrelaunchSummary, type ConfigsPrelaunchSummary } from "./lib/configs-prelaunch-status.js";
 import {
   listSupervisorStates,
@@ -3000,6 +3000,24 @@ program
           console.log(chalk.yellow(`  ! ${p.name}: no email recorded`));
         }
         if (missing) continue;
+        const identityExport = profileIdentityExportHealth(p);
+        if (identityExport.status === "missing-managed") {
+          console.log(
+            chalk.red(
+              `    ✗ ${p.name}: managed identity export is missing (${identityExport.path}); ` +
+                `the next launch will regenerate it from canonical instruction sources`,
+            ),
+          );
+          problems++;
+        } else if (identityExport.status === "missing-external") {
+          console.log(
+            chalk.red(
+              `    ✗ ${p.name}: identity export is missing (${identityExport.path}); ` +
+                `restore that file or set the profile identity to a resolvable identities reference`,
+            ),
+          );
+          problems++;
+        }
         // Sessions-registry drift check: the Claude binary owns `sessions/` and
         // an update may recreate it as a real dir, silently unsharing this
         // profile from machine-wide cross-session discovery. Without this

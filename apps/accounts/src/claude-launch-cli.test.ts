@@ -28,6 +28,7 @@ let home: string;
 let binDir: string;
 let launchCwd: string;
 let claudeLog: string;
+let identitiesLog: string;
 let securityLog: string;
 let keychainState: string;
 let keychainLock: string;
@@ -50,12 +51,15 @@ beforeAll(() => {
   binDir = mkdtempSync(join(tmpdir(), "accounts-claude-bin-"));
   securityBin = writeExecutable("security", fakeSecuritySource());
   writeExecutable("claude", fakeClaudeSource());
+  writeExecutable("identities", fakeIdentitiesSource(), { windowsBatch: true });
+  writeExecutable("configs", fakeConfigsSource(), { windowsBatch: true });
 });
 
 beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), "accounts-claude-cli-"));
   launchCwd = mkdtempSync(join(tmpdir(), "accounts-claude-cwd-"));
   claudeLog = join(home, "fake-claude.jsonl");
+  identitiesLog = join(home, "fake-identities.jsonl");
   securityLog = join(home, "fake-security.jsonl");
   keychainState = join(home, "fake-keychain.json");
   keychainLock = join(home, "keychain.lock");
@@ -70,10 +74,19 @@ afterAll(() => {
   removeTestDirectory(binDir);
 });
 
-function writeExecutable(name: string, source: string): string {
+function writeExecutable(
+  name: string,
+  source: string,
+  options: { windowsBatch?: boolean } = {},
+): string {
   const script = join(binDir, `fake-${name}.ts`);
   writeFileSync(script, source);
   if (process.platform === "win32") {
+    if (options.windowsBatch) {
+      const wrapper = join(binDir, `${name}.cmd`);
+      writeFileSync(wrapper, `@echo off\r\n"${process.execPath}" run "${script}" %*\r\n`);
+      return wrapper;
+    }
     const executable = join(binDir, `${name}.exe`);
     const built = spawnSync(process.execPath, ["build", "--compile", script, "--outfile", executable], {
       encoding: "utf8",
@@ -177,6 +190,39 @@ process.exit(64);
 `;
 }
 
+function fakeIdentitiesSource(): string {
+  return `
+import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
+const commandIndex = process.argv.indexOf("instructions");
+const args = commandIndex >= 0 ? process.argv.slice(commandIndex) : process.argv.slice(2);
+if (process.env.FAKE_IDENTITIES_LOG) {
+  appendFileSync(process.env.FAKE_IDENTITIES_LOG, JSON.stringify({ args }) + "\\n");
+}
+function reject(reason) {
+  console.error("fake identities rejected " + reason + ": " + JSON.stringify(args));
+  process.exit(64);
+}
+if (args[0] !== "instructions" || args[1] !== "export" || !args[2]) reject("command");
+if (args.includes("--format") || args.includes("--json")) reject("legacy flags");
+if (!args.includes("--canonical")) reject("missing canonical flag");
+mkdirSync(dirname(args[2]), { recursive: true });
+writeFileSync(args[2], JSON.stringify({
+  contract: "hasna.identities.configs-instructions/v1",
+  sources: [{ id: "hasna-agent-operating-rules", layer: "global", content: "rules" }],
+}) + "\\n");
+process.exit(0);
+`;
+}
+
+function fakeConfigsSource(): string {
+  return `
+const args = process.argv.slice(2);
+if (args[0] !== "session" || !["apply", "plan"].includes(args[1])) process.exit(64);
+process.exit(0);
+`;
+}
+
 function baseEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
@@ -186,6 +232,7 @@ function baseEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
     HASNA_ACCOUNTS_API_URL: "",
     HASNA_ACCOUNTS_API_KEY: "",
     FAKE_CLAUDE_LOG: claudeLog,
+    FAKE_IDENTITIES_LOG: identitiesLog,
     FAKE_SECURITY_LOG: securityLog,
     FAKE_KEYCHAIN_STATE: keychainState,
     ACCOUNTS_TEST_KEYCHAIN_LOCK_PATH: keychainLock,
@@ -517,6 +564,46 @@ test("headless launch keeps Claude stdout clean and returns its exit code", () =
   expect(claudeEntries()[0]?.active).toBeUndefined();
   expect(claudeEntries()[0]?.supervisor).toBeUndefined();
   expect(storeCurrent()).toEqual({});
+});
+
+test("launch materializes a missing managed identity export before reaching Claude", () => {
+  addProfile("account006");
+  const exportPath = join(
+    profileDir("account006"),
+    ".hasna",
+    "accounts",
+    "identity-exports",
+    "account006.configs.json",
+  );
+  expectStatus(
+    runCli(["set", "account006", "--tool", "claude", "--identity", exportPath]),
+    0,
+  );
+  expect(existsSync(exportPath)).toBe(false);
+
+  const result = runCli(
+    ["launch", "account006", "--tool", "claude", "--headless", "--", "Materialization probe"],
+    { cwd: launchCwd },
+  );
+
+  expectStatus(result, 0);
+  expect(result.stdout).toBe("fake-claude-stdout\n");
+  expect(result.stderr).not.toContain("profile identity export file not found");
+  expect(existsSync(exportPath)).toBe(true);
+  expect(entries<{ args: string[] }>(identitiesLog)).toEqual([
+    {
+      args: [
+        "instructions",
+        "export",
+        exportPath,
+        "--canonical",
+      ],
+    },
+  ]);
+  expect(claudeEntries()[0]).toMatchObject({
+    args: ["-p", "Materialization probe"],
+    cwd: launchCwd,
+  });
 });
 
 test("background convenience relays exact native bg and name argv", () => {

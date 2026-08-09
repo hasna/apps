@@ -59,3 +59,32 @@ test("doctor passes a profile created with the shared home available", () => {
   expect(result.status).toBe(0);
   expect(result.stdout).toContain("healthy.");
 });
+
+test("doctor reports a missing managed identity export that launch can regenerate", () => {
+  const name = "account006";
+  const exportPath = join(
+    home,
+    "profiles",
+    "claude",
+    name,
+    ".hasna",
+    "accounts",
+    "identity-exports",
+    `${name}.configs.json`,
+  );
+  const add = runCli(
+    sharedHome,
+    "add",
+    name,
+    "--email",
+    `${name}@example.com`,
+    "--identity",
+    exportPath,
+  );
+  expect(add.status).toBe(0);
+
+  const result = runCli(sharedHome, "doctor");
+  expect(result.status).toBe(1);
+  expect(result.stdout).toContain(`${name}: managed identity export is missing`);
+  expect(result.stdout).toContain("the next launch will regenerate it from canonical instruction sources");
+});

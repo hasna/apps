@@ -1,8 +1,8 @@
 import { execFileSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { closeSync, existsSync, openSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, openSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, extname, isAbsolute, join } from "node:path";
+import { join } from "node:path";
 import type { Profile, ToolDef } from "../types.js";
 import { AccountsError } from "../types.js";
 import { claudeKeychainCredentialFromProfile } from "./claude-auth.js";
@@ -14,9 +14,11 @@ import {
   writeClaudeKeychain,
 } from "./keychain.js";
 import { providerLaunchEnv } from "./env.js";
+import { preparePortableCommand } from "./portable-command.js";
 import { redactText } from "./redaction.js";
 
 export { redactArgv, redactText } from "./redaction.js";
+export { prepareWindowsBatchCommand } from "./portable-command.js";
 
 export interface ClaudeLaunchOptions {
   headless?: boolean;
@@ -271,80 +273,14 @@ function signalExitCode(signal: NodeJS.Signals | null): number {
   return signal ? 1 : 0;
 }
 
-function environmentValue(env: NodeJS.ProcessEnv, name: string): string | undefined {
-  const key = Object.keys(env).find((candidate) => candidate.toLowerCase() === name.toLowerCase());
-  return key ? env[key] : undefined;
-}
-
-function resolveExecutable(bin: string, env: NodeJS.ProcessEnv): string {
-  if (process.platform !== "win32" || isAbsolute(bin) || /[\\/]/.test(bin)) return bin;
-  const extensions = extname(bin)
-    ? [""]
-    : (environmentValue(env, "PATHEXT") ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean);
-  for (const entry of (environmentValue(env, "PATH") ?? "").split(delimiter)) {
-    const directory = entry.replace(/^"(.*)"$/, "$1");
-    if (!directory) continue;
-    for (const extension of extensions) {
-      const candidate = join(directory, `${bin}${extension.toLowerCase()}`);
-      if (existsSync(candidate)) return candidate;
-      const upperCandidate = join(directory, `${bin}${extension.toUpperCase()}`);
-      if (existsSync(upperCandidate)) return upperCandidate;
-    }
-  }
-  return bin;
-}
-
-const WINDOWS_CMD_META_CHARACTERS = /([()\][%!^"`<>&|;, *?])/g;
-
-function escapeWindowsCommand(value: string): string {
-  return value.replace(WINDOWS_CMD_META_CHARACTERS, "^$1");
-}
-
-function escapeWindowsBatchArgument(value: string): string {
-  if (/[\r\n]/.test(value)) {
-    throw new AccountsError("Windows batch arguments cannot contain line breaks.");
-  }
-  let escaped = value
-    .replace(/(?=(\\+?)?)\1"/g, "$1$1\\\"")
-    .replace(/(?=(\\+?)?)\1$/, "$1$1");
-  escaped = `"${escaped}"`.replace(WINDOWS_CMD_META_CHARACTERS, "^$1");
-  // A batch shim parses its command line after cmd.exe has already parsed it.
-  return escaped.replace(WINDOWS_CMD_META_CHARACTERS, "^$1");
-}
-
-export interface WindowsBatchCommand {
-  command: string;
-  args: ["/d", "/s", "/c", string];
-  windowsVerbatimArguments: true;
-}
-
-export function prepareWindowsBatchCommand(
-  executable: string,
-  args: string[],
-  commandInterpreter: string,
-): WindowsBatchCommand {
-  const command = [
-    escapeWindowsCommand(executable),
-    ...args.map(escapeWindowsBatchArgument),
-  ].join(" ");
-  return {
-    command: commandInterpreter,
-    args: ["/d", "/s", "/c", `"${command}"`],
-    windowsVerbatimArguments: true,
-  };
-}
-
 async function relayProcess(tool: ToolDef, args: string[], env: NodeJS.ProcessEnv, cwd: string): Promise<number> {
   return await new Promise<number>((resolve, reject) => {
-    const executable = resolveExecutable(tool.bin, env);
-    const batchCommand = process.platform === "win32" && /\.(?:bat|cmd)$/i.test(executable)
-      ? prepareWindowsBatchCommand(executable, args, environmentValue(env, "COMSPEC") || "cmd.exe")
-      : undefined;
-    const child = spawn(batchCommand?.command ?? executable, batchCommand?.args ?? args, {
+    const prepared = preparePortableCommand(tool.bin, args, env);
+    const child = spawn(prepared.command, prepared.args, {
       cwd,
       env,
       stdio: "inherit",
-      windowsVerbatimArguments: batchCommand?.windowsVerbatimArguments,
+      windowsVerbatimArguments: prepared.windowsVerbatimArguments,
     });
     let forwardedSignal: NodeJS.Signals | undefined;
     let killTimer: ReturnType<typeof setTimeout> | undefined;

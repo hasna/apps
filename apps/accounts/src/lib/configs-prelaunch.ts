@@ -5,7 +5,9 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import type { Profile, ToolDef } from "../types.js";
 import { AccountsError } from "../types.js";
 import { controlledProbeEnv } from "./env.js";
+import { preparePortableCommand } from "./portable-command.js";
 import { redactText } from "./redaction.js";
+import { assertSafeWritePath } from "./safe-path.js";
 import {
   assessConfigsManifest,
   getConfigsPrelaunchSummary,
@@ -137,7 +139,12 @@ function expandPath(path: string): string {
 }
 
 function looksLikePath(value: string): boolean {
-  return value === "~" || value.startsWith("~/") || value.startsWith("./") || value.startsWith("../") || value.includes("/");
+  return value === "~" ||
+    value.startsWith("~/") ||
+    value.startsWith("./") ||
+    value.startsWith("../") ||
+    value.includes("/") ||
+    value.includes("\\");
 }
 
 function slug(value: string): string {
@@ -145,8 +152,46 @@ function slug(value: string): string {
   return normalized || "identity";
 }
 
-function profileIdentityExportPath(profile: Profile): string {
-  return join(profile.dir, ".hasna", "accounts", "identity-exports", `${slug(profile.identity ?? profile.name)}.configs.json`);
+function profileIdentityExportDirectory(profile: Profile): string {
+  return join(profile.dir, ".hasna", "accounts", "identity-exports");
+}
+
+function profileIdentityExportPath(profile: Profile, identity: string): string {
+  return join(profileIdentityExportDirectory(profile), `${slug(identity)}.configs.json`);
+}
+
+export type ProfileIdentityExportHealth =
+  | { status: "not-configured" }
+  | { status: "reference"; path: string }
+  | { status: "ready"; path: string }
+  | { status: "missing-managed"; path: string }
+  | { status: "missing-external"; path: string };
+
+/**
+ * Classify the profile's instruction identity without mutating it.
+ *
+ * A missing path is repairable only when it is a direct configs export in the
+ * Accounts-owned identity-export directory. The filename is not tied to the
+ * current profile name because the supported rename operation preserves both
+ * the profile directory and its recorded identity path. Arbitrary paths remain
+ * operator-owned inputs and fail closed.
+ */
+export function profileIdentityExportHealth(profile: Profile): ProfileIdentityExportHealth {
+  const identity = profile.identity?.trim();
+  if (!identity) return { status: "not-configured" };
+  if (!looksLikePath(identity)) {
+    return { status: "reference", path: profileIdentityExportPath(profile, identity) };
+  }
+
+  const path = expandPath(identity);
+  if (existsSync(path)) return { status: "ready", path };
+  const resolvedPath = resolve(path);
+  const managedDirectory = resolve(profileIdentityExportDirectory(profile));
+  const isManaged =
+    dirname(resolvedPath) === managedDirectory && resolvedPath.endsWith(".configs.json");
+  return isManaged
+    ? { status: "missing-managed", path }
+    : { status: "missing-external", path };
 }
 
 interface ResolvedIdentityExports {
@@ -154,31 +199,24 @@ interface ResolvedIdentityExports {
   bypassReason?: string;
 }
 
-function resolveIdentityExports(profile: Profile, tool: ToolDef, opts: ConfigsPrelaunchOptions, runner: ConfigsRunner): ResolvedIdentityExports {
-  const exports = [...(opts.identityExports ?? []).map(expandPath)];
-  const identity = profile.identity?.trim();
-  if (!identity || opts.includeProfileIdentity === false) return { paths: exports };
-
-  const identityPath = expandPath(identity);
-  if (existsSync(identityPath)) return { paths: [...exports, identityPath] };
-  if (looksLikePath(identity)) {
-    const reason = `profile identity export file not found`;
-    if (opts.allowFailure) return { paths: exports, bypassReason: reason };
-    throw new AccountsError(`${reason} for ${tool.id}/${profile.name}: ${identityPath}`);
-  }
-
-  const exportPath = profileIdentityExportPath(profile);
+function materializeIdentityExport(
+  profile: Profile,
+  tool: ToolDef,
+  opts: ConfigsPrelaunchOptions,
+  runner: ConfigsRunner,
+  exportPath: string,
+  exports: string[],
+  source: { kind: "canonical" } | { kind: "identity"; target: string },
+): ResolvedIdentityExports {
+  assertSafeWritePath(exportPath, { mustStayUnder: profile.dir });
   mkdirSync(dirname(exportPath), { recursive: true });
-  const result = runner(opts.identitiesBin ?? "identities", [
+  const args = [
     "instructions",
     "export",
     exportPath,
-    "--identity",
-    identity,
-    "--format",
-    "configs",
-    "--json",
-  ]);
+    ...(source.kind === "canonical" ? ["--canonical"] : ["--identity", source.target]),
+  ];
+  const result = runner(opts.identitiesBin ?? "identities", args);
   const failed = !!result.error || (result.status ?? 1) !== 0;
   if (failed && !opts.allowFailure) {
     const detail = result.error ? `: ${redactText(result.error.message)}` : outputSummary(result);
@@ -186,6 +224,26 @@ function resolveIdentityExports(profile: Profile, tool: ToolDef, opts: ConfigsPr
   }
   if (failed) return { paths: exports, bypassReason: "identity instruction export failed" };
   return { paths: [...exports, exportPath] };
+}
+
+function resolveIdentityExports(profile: Profile, tool: ToolDef, opts: ConfigsPrelaunchOptions, runner: ConfigsRunner): ResolvedIdentityExports {
+  const exports = [...(opts.identityExports ?? []).map(expandPath)];
+  if (opts.includeProfileIdentity === false) return { paths: exports };
+
+  const health = profileIdentityExportHealth(profile);
+  if (health.status === "not-configured") return { paths: exports };
+  if (health.status === "ready") return { paths: [...exports, health.path] };
+  if (health.status === "missing-external") {
+    const reason = `profile identity export file not found`;
+    if (opts.allowFailure) return { paths: exports, bypassReason: reason };
+    throw new AccountsError(`${reason} for ${tool.id}/${profile.name}: ${health.path}`);
+  }
+
+  const source =
+    health.status === "missing-managed"
+      ? ({ kind: "canonical" } as const)
+      : ({ kind: "identity", target: profile.identity!.trim() } as const);
+  return materializeIdentityExport(profile, tool, opts, runner, health.path, exports, source);
 }
 
 /**
@@ -386,10 +444,13 @@ function resolveIncumbentFloor(profile: Profile, tool: ToolDef): IncumbentFloor 
 }
 
 function defaultRunner(command: string, args: string[]) {
-  return spawnSync(command, args, {
+  const env = controlledProbeEnv();
+  const prepared = preparePortableCommand(command, args, env);
+  return spawnSync(prepared.command, prepared.args, {
     encoding: "buffer",
     stdio: ["ignore", "pipe", "pipe"],
-    env: controlledProbeEnv(),
+    env,
+    windowsVerbatimArguments: prepared.windowsVerbatimArguments,
   });
 }
 

@@ -726,6 +726,10 @@ when intentionally bypassing a failed prelaunch check. If the account profile ha
 `identity: agent:marcus`, accounts exports that OpenIdentities overlay into the
 profile home and passes it to `configs session apply` as `--identity-export`.
 Repeat `--identity-export <path>` to add prebuilt global/tool/account exports.
+If an Accounts-managed profile identity export is missing, the next launch
+recreates it from the canonical instruction sources before applying the session.
+Missing operator-owned export paths remain fail-closed and are reported by
+`accounts doctor`.
 
 `accounts list`, `accounts show`, and `accounts supervisor status --json`
 include redacted prelaunch diagnostics: last run mode/result, audited

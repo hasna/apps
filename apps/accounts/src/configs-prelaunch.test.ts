@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Profile } from "./types.js";
@@ -9,6 +9,7 @@ import { addCustomTool, getTool } from "./lib/tools.js";
 import {
   configsPrelaunchCommand,
   configsSessionToolFor,
+  profileIdentityExportHealth,
   runConfigsPrelaunch,
 } from "./lib/configs-prelaunch.js";
 import { getConfigsPrelaunchSummary, readManifestSourceIds } from "./lib/configs-prelaunch-status.js";
@@ -1165,6 +1166,162 @@ describe("configs prelaunch", () => {
       cleanup();
     }
   });
+
+  test("classifies Windows backslash identities as paths instead of identity references", () => {
+    resetHome();
+    try {
+      const identity = "C:\\managed\\account006.configs.json";
+      const p = profileInHome("claude", { identity });
+      let called = false;
+
+      expect(profileIdentityExportHealth(p)).toMatchObject({
+        status: "missing-external",
+      });
+      expect(() =>
+        runConfigsPrelaunch(p, getTool("claude"), {
+          runner: () => {
+            called = true;
+            return { status: 0, stdout: Buffer.from("ok"), stderr: Buffer.from("") };
+          },
+        }),
+      ).toThrow("profile identity export file not found");
+      expect(called).toBe(false);
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("REGRESSION d994ad1e: materializes a missing managed profile identity export before launch", () => {
+    resetHome();
+    try {
+      const p = profileInHome("claude", {
+        name: "account006",
+        dir: join(home, "account006"),
+      });
+      const exportDir = join(p.dir, ".hasna", "accounts", "identity-exports");
+      const exportPath = join(exportDir, "account006.configs.json");
+      p.identity = exportPath;
+      mkdirSync(exportDir, { recursive: true });
+
+      const calls: string[][] = [];
+      const result = runConfigsPrelaunch(p, getTool("claude"), {
+        configsBin: "configs-dev",
+        identitiesBin: "identities-dev",
+        runner: (bin, args) => {
+          calls.push([bin, ...args]);
+          if (bin === "identities-dev") {
+            writeFileSync(
+              exportPath,
+              JSON.stringify({
+                contract: "hasna.identities.configs-instructions/v1",
+                sources: [{ id: "global-codewith", layer: "global", content: "rules" }],
+              }) + "\n",
+            );
+          }
+          if (bin === "configs-dev") writeManifest(p, "claude");
+          return { status: 0, stdout: Buffer.from("ok"), stderr: Buffer.from("") };
+        },
+      });
+
+      expect(calls[0]).toEqual([
+        "identities-dev",
+        "instructions",
+        "export",
+        exportPath,
+        "--canonical",
+      ]);
+      expect(calls[1]).toContain("--identity-export");
+      expect(calls[1]).toContain(exportPath);
+      expect(existsSync(exportPath)).toBe(true);
+      expect(result.result).toBe("applied");
+      expect(result.identityExports).toEqual([exportPath]);
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("rematerializes a managed export whose filename predates a supported profile rename", () => {
+    resetHome();
+    try {
+      const p = profileInHome("claude", {
+        name: "renamed-profile",
+        dir: join(home, "profiles", "claude", "original-profile"),
+      });
+      const exportDir = join(p.dir, ".hasna", "accounts", "identity-exports");
+      const exportPath = join(exportDir, "original-profile.configs.json");
+      p.identity = exportPath;
+      mkdirSync(exportDir, { recursive: true });
+
+      expect(profileIdentityExportHealth(p)).toEqual({
+        status: "missing-managed",
+        path: exportPath,
+      });
+
+      const calls: string[][] = [];
+      const result = runConfigsPrelaunch(p, getTool("claude"), {
+        runner: (bin, args) => {
+          calls.push([bin, ...args]);
+          if (bin === "identities") {
+            writeFileSync(
+              exportPath,
+              JSON.stringify({
+                contract: "hasna.identities.configs-instructions/v1",
+                sources: [{ id: "global-codewith", layer: "global", content: "rules" }],
+              }) + "\n",
+            );
+          }
+          if (bin === "configs") writeManifest(p, "claude");
+          return { status: 0, stdout: Buffer.from("ok"), stderr: Buffer.from("") };
+        },
+      });
+
+      expect(calls[0]).toEqual([
+        "identities",
+        "instructions",
+        "export",
+        exportPath,
+        "--canonical",
+      ]);
+      expect(result.result).toBe("applied");
+      expect(result.identityExports).toEqual([exportPath]);
+    } finally {
+      cleanup();
+    }
+  });
+
+  test.skipIf(process.platform === "win32")(
+    "refuses to materialize a managed identity export through a symlinked directory",
+    () => {
+      resetHome();
+      try {
+        const p = profileInHome("claude", {
+          name: "account006",
+          dir: join(home, "account006"),
+        });
+        const exportDir = join(p.dir, ".hasna", "accounts", "identity-exports");
+        const exportPath = join(exportDir, "account006.configs.json");
+        const outside = join(home, "outside");
+        p.identity = exportPath;
+        mkdirSync(join(p.dir, ".hasna", "accounts"), { recursive: true });
+        mkdirSync(outside, { recursive: true });
+        symlinkSync(outside, exportDir, "dir");
+
+        let called = false;
+        expect(() =>
+          runConfigsPrelaunch(p, getTool("claude"), {
+            runner: () => {
+              called = true;
+              return { status: 0, stdout: Buffer.from("ok"), stderr: Buffer.from("") };
+            },
+          }),
+        ).toThrow("refusing to write under symlink directory");
+        expect(called).toBe(false);
+        expect(existsSync(join(outside, "account006.configs.json"))).toBe(false);
+      } finally {
+        cleanup();
+      }
+    },
+  );
 
   test("does not reuse a stale generated identity export when export failure is bypassed", () => {
     resetHome();
