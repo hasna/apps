@@ -104,11 +104,21 @@ function seed(opts: {
 
   const dbPath = join(tempDir, "repos.db");
   const db = getDb(dbPath);
-  db.prepare(
+  const inserted = db.prepare(
     "INSERT INTO repos (path, name, org, remote_url, default_branch, updated_at) VALUES (?, ?, 'hasna', ?, 'main', ?)",
   ).run(clonePath, repoName, opts.indexedRemote ?? `github.com/hasna/${repoName}`, "2026-07-01 00:00:00");
 
-  return { root, originPath, seedPath, clonePath, dbPath, db, repoName, firstSha };
+  return {
+    root,
+    originPath,
+    seedPath,
+    clonePath,
+    dbPath,
+    db,
+    repoName,
+    repoId: Number(inserted.lastInsertRowid),
+    firstSha,
+  };
 }
 
 function codeOf(run: () => unknown): string {
@@ -186,6 +196,16 @@ describe("worktree name and path computation", () => {
 });
 
 describe("addWorktree", () => {
+  test("resolves an exact numeric registry ID to the same repository as its exact path", () => {
+    const { clonePath, repoId } = seed();
+    const byPath = addWorktree({ repo: clonePath, task: "by-path" });
+    const byNumericId = addWorktree({ repo: String(repoId), task: "by-numeric-id" });
+
+    expect(byNumericId.lease.repo_catalog_id).toBe(byPath.lease.repo_catalog_id);
+    expect(byNumericId.lease.repo_path).toBe(byPath.lease.repo_path);
+    expect(byNumericId.lease.repo_id).toBe(byPath.lease.repo_id);
+  });
+
   test("refuses a mismatched managed checkout before creating a branch, directory, or lease", () => {
     const { root, clonePath, db } = seed({
       repoName: "iapp-fixture",

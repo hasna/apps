@@ -353,13 +353,25 @@ export function computeWorktreePath(repoName: string, worktreeName: string): str
 
 // ── repo resolution and parent health ────────────────────────────────────────
 
+function exactRepoLookup(input: string): string | number {
+  // Commander supplies every positional argument as a string, while getRepo's
+  // exact registry-id branch deliberately accepts a number. Convert only the
+  // canonical positive-decimal form: "713" is an id, while "0713", "+713"
+  // and other string shapes remain available to exact path/name resolution.
+  if (/^[1-9]\d*$/.test(input)) {
+    const id = Number(input);
+    if (Number.isSafeInteger(id)) return id;
+  }
+  return input;
+}
+
 function resolveRepo(input: string): Repo {
   if (!input || typeof input !== "string") {
     fail("INVALID_REQUEST", "a repo id, path or unique name is required");
   }
   let repo: Repo | null;
   try {
-    repo = getRepo(input);
+    repo = getRepo(exactRepoLookup(input));
   } catch (error) {
     if (error instanceof AmbiguousRepoNameError) {
       fail("AMBIGUOUS_REPO", error.message, { repo: input });
