@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.45
+
+Fixes `repos worktree add <repo>` rejecting an exact numeric registry ID even
+though the same repository resolved by exact path (#72; todos
+f0c117d2-cc6c-4692-a3b5-529133db3812).
+
+- Canonical positive-decimal inputs are converted to safe integer IDs before
+  the exact repository lookup.
+- Leading-zero, signed, zero, and unsafe-integer strings remain available to
+  exact path or name resolution instead of being coerced.
+- A focused regression proves that an exact numeric registry ID and exact path
+  resolve the same repository catalog ID, path, and remote identity.
+
 ## 0.1.44
 
 Fixes `repos repo <name>` and exact-path lookup returning an indexed managed
