@@ -593,6 +593,31 @@ describe("deployment contract records", () => {
     expect(result.issues).toContain(expected(fixtures));
   });
 
+  test("attempt decision actors must match the linked approval actors", () => {
+    const fixtures = createDeploymentFixtureSet();
+    const contractSet = deploymentFixtureSetToContractSet(fixtures);
+    const attemptDraft = clone(fixtures.deploymentAttempt);
+    attemptDraft.decisionActors = [{
+      kind: "agent",
+      id: "unrelated-decision-actor",
+      name: "Unrelated Decision Actor",
+    }];
+    const downstream = recomputeAttemptDownstream(fixtures, attemptDraft);
+
+    contractSet.deploymentAttempts = [downstream.deploymentAttempt];
+    contractSet.providerReceipts = [downstream.providerReceipt];
+    contractSet.deploymentReceipts = [downstream.deploymentReceipt];
+    contractSet.launchEvidence = [downstream.launchEvidence];
+
+    const result = validateDeploymentContractSet(runtimeSchemas, contractSet);
+    expect(result).toEqual({
+      success: false,
+      issues: [
+        `deploymentAttempts.${downstream.deploymentAttempt.id}.decisionActors: decision actors do not match linked approval actors`,
+      ],
+    });
+  });
+
   test("action inputs must resolve to a linked deployment record", () => {
     const fixtures = createDeploymentFixtureSet();
     const contractSet = deploymentFixtureSetToContractSet(fixtures);
@@ -618,6 +643,27 @@ describe("deployment contract records", () => {
     expect(result.issues).toContain(
       `deploymentPlans.${deploymentPlan.id}.actions.0.inputs.0: missing linked record artifact-missing-action-input`,
     );
+  });
+
+  test("attempt action steps must exist in the linked deployment plan", () => {
+    const fixtures = createDeploymentFixtureSet();
+    const contractSet = deploymentFixtureSetToContractSet(fixtures);
+    const attemptDraft = clone(fixtures.deploymentAttempt);
+    attemptDraft.actionSteps[0]!.actionId = "unapproved-action";
+    const downstream = recomputeAttemptDownstream(fixtures, attemptDraft);
+
+    contractSet.deploymentAttempts = [downstream.deploymentAttempt];
+    contractSet.providerReceipts = [downstream.providerReceipt];
+    contractSet.deploymentReceipts = [downstream.deploymentReceipt];
+    contractSet.launchEvidence = [downstream.launchEvidence];
+
+    const result = validateDeploymentContractSet(runtimeSchemas, contractSet);
+    expect(result).toEqual({
+      success: false,
+      issues: [
+        `deploymentAttempts.${downstream.deploymentAttempt.id}.actionSteps.0.actionId: action is not present in linked deployment plan ${fixtures.deploymentPlan.id}`,
+      ],
+    });
   });
 
   test("a succeeded attempt cannot contain a failed action step", () => {
