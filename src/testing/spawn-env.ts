@@ -2,12 +2,11 @@
  * Test-only helper: build the environment for a spawned `projects` CLI/MCP
  * process.
  *
- * Tests inherit `process.env`, and operator machines routinely export
- * `HASNA_PROJECTS_API_URL` / `HASNA_PROJECTS_API_KEY` / storage-mode aliases so
- * their shell talks to the cloud registry. Inheriting those turns every "local
- * mode" test into an api-mode run against the *real* backend, which both masks
- * local-store regressions and creates real project rows as a side effect of
- * `bun test`.
+ * Tests inherit `process.env`, and operator machines routinely export cloud
+ * selectors for Projects and its Todos, Mementos, and Conversations
+ * authorities. Inheriting those turns local tests into runs against the *real*
+ * backends, which both masks local-store regressions and creates real rows as a
+ * side effect of `bun test`.
  *
  * So: strip the api-mode selectors from the inherited environment unless the
  * test explicitly opts into api mode by passing them in `overrides`.
@@ -21,6 +20,24 @@ export const API_MODE_ENV_KEYS = [
   "PROJECTS_API_KEY",
   "PROJECTS_STORAGE_MODE",
   "PROJECTS_MODE",
+  "HASNA_TODOS_API_URL",
+  "HASNA_TODOS_API_KEY",
+  "HASNA_TODOS_DB_PATH",
+  "TODOS_API_URL",
+  "TODOS_API_KEY",
+  "TODOS_DB_PATH",
+  "HASNA_MEMENTOS_API_URL",
+  "HASNA_MEMENTOS_API_KEY",
+  "HASNA_MEMENTOS_DB_PATH",
+  "MEMENTOS_API_URL",
+  "MEMENTOS_API_KEY",
+  "MEMENTOS_DB_PATH",
+  "HASNA_CONVERSATIONS_API_URL",
+  "HASNA_CONVERSATIONS_API_KEY",
+  "HASNA_CONVERSATIONS_DB_PATH",
+  "CONVERSATIONS_API_URL",
+  "CONVERSATIONS_API_KEY",
+  "CONVERSATIONS_DB_PATH",
 ] as const;
 
 export function testSpawnEnv(overrides: Record<string, string> = {}): Record<string, string> {
