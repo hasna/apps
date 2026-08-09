@@ -1398,4 +1398,30 @@ export const PG_MIGRATIONS: string[] = [
      RETURN NEW;
    END
    $knowledge_guarded_adoption_claim_once$ LANGUAGE plpgsql`,
+
+  // The adoption transition intentionally permits binding fields to change,
+  // but never the row identity. This trigger sorts before the authority
+  // trigger so a live adoption claim cannot authorize a primary-key rewrite,
+  // while ordinary unbound-row behavior remains unchanged.
+  `CREATE OR REPLACE FUNCTION knowledge_guarded_item_id_immutable()
+   RETURNS TRIGGER AS $knowledge_guarded_item_id_immutable$
+   BEGIN
+     IF OLD.id IS DISTINCT FROM NEW.id
+        AND NULLIF(
+          current_setting('hasna.knowledge_guarded_adoption_key', true),
+          ''
+        ) IS NOT NULL THEN
+       RAISE EXCEPTION 'guarded knowledge item identity and binding are immutable'
+         USING ERRCODE = 'restrict_violation';
+     END IF;
+     RETURN NEW;
+   END
+   $knowledge_guarded_item_id_immutable$ LANGUAGE plpgsql`,
+  `DROP TRIGGER IF EXISTS trg_knowledge_guarded_00_item_id_immutable
+     ON knowledge_items`,
+  `CREATE TRIGGER trg_knowledge_guarded_00_item_id_immutable
+     BEFORE UPDATE OF id ON knowledge_items
+     FOR EACH ROW EXECUTE FUNCTION knowledge_guarded_item_id_immutable()`,
+  `ALTER TABLE knowledge_items
+     ENABLE ALWAYS TRIGGER trg_knowledge_guarded_00_item_id_immutable`,
 ];

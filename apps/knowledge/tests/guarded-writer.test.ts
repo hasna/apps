@@ -854,6 +854,80 @@ describe('FCAME-1 guarded Knowledge writer', () => {
     expect((await writer().readBindingState(staleTarget)).state).toBe('legacy_unbound');
   });
 
+  test('database trigger refuses a primary-key change under a valid live adoption claim', async () => {
+    const target = 'k_fcame_adoption_trigger_primary_key';
+    const replacement = 'k_fcame_adoption_trigger_primary_key_replacement';
+    const content = 'primary-key-stable legacy content';
+    await createLegacyItem(target, content);
+    const before = await itemSnapshot(target);
+    const deterministicKey = computeKnowledgeGuardedAdoptionDeterministicKey({
+      action: 'adopt',
+      operation_id: 'op-adoption-trigger-primary-key-change',
+      step_id: 'step-adopt',
+      target_id: target,
+      binding: BINDING,
+      expected_version: 1,
+      expected_content_sha256: createHash('sha256').update(content).digest('hex'),
+      adoption_receipt_id: null,
+    });
+    const receiptId = computeKnowledgeGuardedAdoptionReceiptId(deterministicKey);
+    await db.query(
+      `INSERT INTO knowledge_guarded_adoption_claims (
+         deterministic_key, planned_receipt_id, operation_id, step_id, action, target_id,
+         authority_classification, authority_id, tenant_id, scope, parent_id,
+         expected_version, expected_content_sha256, adoption_receipt_id
+       ) VALUES ($1,$2,'op-adoption-trigger-primary-key-change','step-adopt','adopt',
+                 $3,$4,$5,$6,$7,$8,1,$9,NULL)`,
+      [
+        deterministicKey,
+        receiptId,
+        target,
+        BINDING.authority.classification,
+        BINDING.authority.authority_id,
+        BINDING.tenant_id,
+        BINDING.scope,
+        BINDING.parent_id,
+        createHash('sha256').update(content).digest('hex'),
+      ],
+    );
+    await db.query(
+      `SELECT set_config('hasna.knowledge_guarded_adoption_key', $1, false)`,
+      [deterministicKey],
+    );
+    try {
+      await expect(db.query(
+        `UPDATE knowledge_items SET
+           id = $1,
+           authority_classification = $2,
+           authority_id = $3,
+           tenant_id = $4,
+           scope = $5,
+           parent_id = $6,
+           guarded_adoption_receipt_id = $7
+         WHERE id = $8`,
+        [
+          replacement,
+          BINDING.authority.classification,
+          BINDING.authority.authority_id,
+          BINDING.tenant_id,
+          BINDING.scope,
+          BINDING.parent_id,
+          receiptId,
+          target,
+        ],
+      )).rejects.toThrow(/identity and binding are immutable/i);
+    } finally {
+      await db.query(`SELECT set_config('hasna.knowledge_guarded_adoption_key', '', false)`);
+    }
+
+    expect(await itemSnapshot(target)).toEqual(before);
+    expect((await writer().readBindingState(target)).state).toBe('legacy_unbound');
+    expect((await db.query(
+      `SELECT 1 FROM knowledge_items WHERE id = $1`,
+      [replacement],
+    )).rows).toHaveLength(0);
+  });
+
   test('adoption claim binds only its planned receipt once', async () => {
     const unrelatedKey = computeKnowledgeGuardedAdoptionDeterministicKey({
       action: 'adopt',
