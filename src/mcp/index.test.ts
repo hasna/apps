@@ -265,9 +265,15 @@ describe("projects-mcp project-first surface", () => {
     expect(stderr).toBe("");
     const responses = stdout.trim().split("\n").map((line) => JSON.parse(line)) as Array<{
       id?: number;
-      result?: { tools?: Array<{ name: string }> };
+      result?: {
+        tools?: Array<{
+          name: string;
+          inputSchema?: { properties?: Record<string, unknown> };
+        }>;
+      };
     }>;
-    const tools = responses.find((response) => response.id === 2)?.result?.tools?.map((tool) => tool.name) ?? [];
+    const listedTools = responses.find((response) => response.id === 2)?.result?.tools ?? [];
+    const tools = listedTools.map((tool) => tool.name);
     const legacyCreateTool = ["projects", "workspaces_create"].join("_");
     expect(tools).toContain("projects_create");
     expect(tools).toContain("projects_list");
@@ -303,6 +309,9 @@ describe("projects-mcp project-first surface", () => {
     expect(tools).toContain("projects_loops_list");
     expect(tools).not.toContain(legacyCreateTool);
     expect(tools).not.toContain("projects_sync");
+    expect(
+      listedTools.find((tool) => tool.name === "projects_import_github")?.inputSchema?.properties,
+    ).toHaveProperty("metadata");
   });
 
   test("projects_create and projects_import accept and persist finance metadata over MCP", () => {
@@ -390,6 +399,78 @@ describe("projects-mcp project-first surface", () => {
       for (const row of rows) {
         expect(JSON.parse(row.metadata)).toMatchObject(financeMetadata);
       }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("projects_import_github accepts and persists finance metadata over MCP", () => {
+    const root = mkdtempSync(join(tmpdir(), "project-mcp-finance-github-"));
+    const dbPath = join(root, "projects.db");
+    const financeMetadata = {
+      business_area: "finance",
+      jurisdiction: "RO",
+      legal_entities: ["Example MCP GitHub SRL"],
+      fiscal_cycle: "monthly",
+      data_classification: "restricted",
+      retention_policy: "knowledge:finance-retention-v1",
+      ledger_authority: "@hasna/accounting",
+      evidence_store: "@hasna/files",
+      approver: "role:finance-controller",
+      external_recipient_policy: "@hasna/invoices:approved-recipient-only",
+    };
+    const messages = [
+      {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-06-18",
+          capabilities: {},
+          clientInfo: { name: "project-mcp-test", version: "0" },
+        },
+      },
+      { jsonrpc: "2.0", method: "notifications/initialized", params: {} },
+      {
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/call",
+        params: {
+          name: "projects_import_github",
+          arguments: {
+            repo: "hasna/mcp-finance-github",
+            remote_only: true,
+            metadata: financeMetadata,
+          },
+        },
+      },
+    ];
+
+    try {
+      const result = runMcpSession(
+        messages,
+        testSpawnEnv({
+          HASNA_PROJECTS_DB_PATH: dbPath,
+          HASNA_PROJECTS_HOME: join(root, "projects-home"),
+        }),
+      );
+      expect(result.exitCode).toBe(0);
+      expect(Buffer.from(result.stderr).toString("utf-8")).toBe("");
+
+      const db = new Database(dbPath);
+      const row = db.query(
+        "SELECT metadata FROM workspaces WHERE slug = ?",
+      ).get("mcp-finance-github") as { metadata: string } | null;
+      db.close();
+
+      expect(row).not.toBeNull();
+      expect(JSON.parse(row!.metadata)).toMatchObject({
+        ...financeMetadata,
+        github_imported: true,
+        github_full_name: "hasna/mcp-finance-github",
+        remote_only: true,
+        cloned: false,
+      });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

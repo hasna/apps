@@ -346,6 +346,47 @@ describe("prompt-agent mutations route through the Store in api/cloud mode", () 
     }
   });
 
+  test("projects_import_github exposes and persists finance metadata through the Agent surface", async () => {
+    const financeMetadata = {
+      business_area: "finance",
+      jurisdiction: "RO",
+      legal_entities: ["Example GitHub SRL"],
+      fiscal_cycle: "monthly",
+      data_classification: "restricted",
+      retention_policy: "knowledge:finance-retention-v1",
+      ledger_authority: "@hasna/accounting",
+      evidence_store: "@hasna/files",
+      approver: "role:finance-controller",
+      external_recipient_policy: "@hasna/invoices:approved-recipient-only",
+    };
+    const { store, calls } = makeFakeApiStore();
+    const tools = apiTools(store);
+    const githubImportTool = tools.projects_import_github as unknown as {
+      inputSchema: {
+        parse(input: Record<string, unknown>): Record<string, unknown>;
+      };
+    };
+    const parsed = githubImportTool.inputSchema.parse({
+      repo: "hasna/agent-finance-github",
+      remote_only: true,
+      metadata: financeMetadata,
+    });
+
+    expect(parsed.metadata).toEqual(financeMetadata);
+    const imported = await invoke(tools.projects_import_github, parsed);
+    expect(imported.error).toBeUndefined();
+
+    const createCall = calls.find((call) => call.method === "createProject");
+    expect(createCall).toBeDefined();
+    expect((createCall!.args[0] as { metadata?: Record<string, unknown> }).metadata).toMatchObject({
+      ...financeMetadata,
+      github_imported: true,
+      github_full_name: "hasna/agent-finance-github",
+      remote_only: true,
+      cloned: false,
+    });
+  });
+
   test("projects_tag calls store.updateProject with the merged tag set", async () => {
     const { store, calls } = makeFakeApiStore();
     const tools = apiTools(store);
