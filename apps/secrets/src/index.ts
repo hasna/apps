@@ -589,13 +589,13 @@ switch (command) {
     let execValue: string;
     if (scopedExec) {
       try {
-        const { getAwsSecretValue, loadAwsProfiles, resolveAwsAccountProfile } = await import("./aws.js");
+        const { getAwsSecretValueForEnv, loadAwsProfiles, resolveAwsAccountProfile } = await import("./aws.js");
         const target = resolveAwsAccountProfile(
           execFlags.provider,
           execFlags.account,
           await loadAwsProfiles(),
         );
-        execValue = await getAwsSecretValue(execFlags.env, {
+        execValue = await getAwsSecretValueForEnv(execFlags.provider, execFlags.env, {
           credentialMode: "profile",
           profile: target.profile,
           ...(target.region ? { region: target.region } : {}),

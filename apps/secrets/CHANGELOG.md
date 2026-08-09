@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.20 — 2026-08-09
+
+- Resolve account-scoped `--env` selectors through paged AWS metadata using
+  canonical provider paths, with exact-name compatibility and fail-closed
+  handling for missing, ambiguous, non-current, or non-string secrets.
+
 ## 0.2.19 — 2026-08-09
 
 - Add account-scoped `secrets exec --provider ... --account ... --env ...`

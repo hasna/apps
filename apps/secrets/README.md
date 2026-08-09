@@ -38,8 +38,8 @@ secrets exec example/anthropic/test/api_key --as ANTHROPIC_API_KEY -- my-tool sy
 ```
 
 Consume an AWS Secrets Manager value from an account configured in the standard
-shared AWS profile files. The secret name and child variable are both selected
-by `--env`; the value is never printed or written into the local vault:
+shared AWS profile files. `--env` names the child variable and its account-scoped
+secret selector; the value is never printed or written into the local vault:
 
 ```bash
 secrets exec --provider your-source-profile --account 123456789012 \
@@ -47,8 +47,11 @@ secrets exec --provider your-source-profile --account 123456789012 \
 ```
 
 The account route must resolve to exactly one configured profile whose standard
-role, SSO, or account fields match the requested provider and account. Ambiguous
-or missing routes fail before the child process runs.
+role, SSO, or account fields match the requested provider and account. A literal
+remote secret name remains supported. Otherwise canonical names shaped as
+`<provider>/oss/<workload>/<key>` map to the normalized environment name
+`<PROVIDER>_<WORKLOAD>_<KEY>`. All metadata pages are considered, and missing,
+ambiguous, non-current, or non-string selections fail before the child runs.
 
 Prove a secret exists or compare values without revealing them:
 
