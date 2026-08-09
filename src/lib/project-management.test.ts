@@ -4,20 +4,104 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Workspace } from "../types/workspace.js";
 import {
+  FINANCE_DATA_CLASSIFICATIONS,
+  FINANCE_FISCAL_CYCLES,
+  FINANCE_PROJECT_METADATA_SCHEMA,
   PROJECT_PRIORITIES,
   PROJECT_STAGES,
   PROJECT_START_AGENTS,
   PROJECT_START_SESSION_POLICIES,
   expandProjectIntegrationUnlinkKeys,
+  financeProjectMetadata,
   mergeProjectIntegrationFields,
   mergeProjectManagementMetadata,
   mergeProjectTags,
+  normalizeProjectMetadata,
   projectExternalLinksSummary,
   removeProjectTags,
   unlinkProjectIntegrationFields,
 } from "./project-management.js";
 
 describe("project management taxonomy", () => {
+  test("normalizes the authoritative finance metadata contract", () => {
+    const metadata = normalizeProjectMetadata({
+      keep: true,
+      business_area: " Finance ",
+      jurisdiction: " ro ",
+      legal_entities: [" Example Alpha SRL ", "Example Beta SRL", "Example Alpha SRL"],
+      fiscal_cycle: " MONTHLY ",
+      data_classification: " Restricted ",
+      retention_policy: " knowledge:finance-retention-v1 ",
+      ledger_authority: " @hasna/accounting ",
+      evidence_store: " @hasna/files ",
+      approver: " role:finance-controller ",
+      external_recipient_policy: " @hasna/invoices:approved-recipient-only ",
+    });
+
+    expect(FINANCE_FISCAL_CYCLES).toContain("monthly");
+    expect(FINANCE_DATA_CLASSIFICATIONS).toContain("restricted");
+    expect(metadata).toEqual({
+      keep: true,
+      business_area: "finance",
+      jurisdiction: "RO",
+      legal_entities: ["Example Alpha SRL", "Example Beta SRL"],
+      fiscal_cycle: "monthly",
+      data_classification: "restricted",
+      retention_policy: "knowledge:finance-retention-v1",
+      ledger_authority: "@hasna/accounting",
+      evidence_store: "@hasna/files",
+      approver: "role:finance-controller",
+      external_recipient_policy: "@hasna/invoices:approved-recipient-only",
+    });
+    expect(financeProjectMetadata({ metadata })).toEqual({
+      schema: FINANCE_PROJECT_METADATA_SCHEMA,
+      business_area: "finance",
+      jurisdiction: "RO",
+      legal_entities: ["Example Alpha SRL", "Example Beta SRL"],
+      fiscal_cycle: "monthly",
+      data_classification: "restricted",
+      retention_policy: "knowledge:finance-retention-v1",
+      ledger_authority: "@hasna/accounting",
+      evidence_store: "@hasna/files",
+      approver: "role:finance-controller",
+      external_recipient_policy: "@hasna/invoices:approved-recipient-only",
+    });
+  });
+
+  test("rejects incomplete or invalid finance metadata without treating tags as authority", () => {
+    expect(() => normalizeProjectMetadata({
+      ledger_authority: "@hasna/accounting",
+    })).toThrow(/missing required fields.*business_area.*jurisdiction.*legal_entities/i);
+    expect(() => normalizeProjectMetadata({
+      business_area: "finance",
+      jurisdiction: "RO",
+      legal_entities: [],
+      fiscal_cycle: "monthly",
+      data_classification: "restricted",
+      retention_policy: "knowledge:finance-retention-v1",
+      ledger_authority: "@hasna/accounting",
+      evidence_store: "@hasna/files",
+      approver: "role:finance-controller",
+      external_recipient_policy: "@hasna/invoices:approved-recipient-only",
+    })).toThrow(/legal_entities must be a non-empty array/i);
+    expect(() => normalizeProjectMetadata({
+      business_area: "finance",
+      jurisdiction: "RO",
+      legal_entities: ["Example Alpha SRL"],
+      fiscal_cycle: "weekly",
+      data_classification: "restricted",
+      retention_policy: "knowledge:finance-retention-v1",
+      ledger_authority: "@hasna/accounting",
+      evidence_store: "@hasna/files",
+      approver: "role:finance-controller",
+      external_recipient_policy: "@hasna/invoices:approved-recipient-only",
+    })).toThrow(/fiscal_cycle must be one of/i);
+    expect(financeProjectMetadata({
+      metadata: { business_area: "engineering" },
+      tags: ["finance"],
+    })).toBeNull();
+  });
+
   test("normalizes canonical stage, priority, start agent, and start windows", () => {
     const metadata = mergeProjectManagementMetadata({ keep: true }, {
       stage: " Active ",

@@ -953,6 +953,89 @@ describe("workspace domain services", () => {
     }
   });
 
+  test("enforces authoritative finance metadata across create, plan, update, and import", async () => {
+    const db = makeDb();
+    const financeMetadata = {
+      business_area: " Finance ",
+      jurisdiction: " ro ",
+      legal_entities: [" Example Alpha SRL "],
+      fiscal_cycle: " MONTHLY ",
+      data_classification: " Restricted ",
+      retention_policy: " knowledge:finance-retention-v1 ",
+      ledger_authority: " @hasna/accounting ",
+      evidence_store: " @hasna/files ",
+      approver: " role:finance-controller ",
+      external_recipient_policy: " @hasna/invoices:approved-recipient-only ",
+    };
+    const importRoot = tmpDir();
+    const importPath = join(importRoot, "monthly-filing");
+    mkdirSync(importPath);
+    try {
+      const taggedOnly = createWorkspace({
+        name: "Finance Tag Only",
+        tags: ["finance"],
+        metadata: { owner: "tests" },
+      }, db);
+      expect(taggedOnly.metadata).toEqual({ owner: "tests" });
+
+      expect(() => createWorkspace({
+        name: "Incomplete Finance",
+        metadata: { ledger_authority: "@hasna/accounting" },
+      }, db)).toThrow(/missing required fields/i);
+      expect(() => planWorkspaceCreation({
+        name: "Incomplete Finance Plan",
+        metadata: { business_area: "finance" },
+      }, { db })).toThrow(/missing required fields/i);
+
+      const created = createWorkspace({
+        name: "Monthly Filing",
+        slug: "monthly-filing",
+        metadata: financeMetadata,
+      }, db);
+      expect(created.metadata).toMatchObject({
+        business_area: "finance",
+        jurisdiction: "RO",
+        legal_entities: ["Example Alpha SRL"],
+        fiscal_cycle: "monthly",
+        data_classification: "restricted",
+        ledger_authority: "@hasna/accounting",
+        evidence_store: "@hasna/files",
+      });
+      expect(() => updateWorkspace(created.id, {
+        metadata: { owner: "replacement-without-finance-authority" },
+      }, db)).toThrow(/missing required fields/i);
+
+      process.env[PROJECTS_DB_PATH_ENV] = ":memory:";
+      delete process.env["HASNA_PROJECTS_API_URL"];
+      delete process.env["HASNA_PROJECTS_API_KEY"];
+      delete process.env["HASNA_PROJECTS_STORAGE_MODE"];
+      closeDatabase();
+      __resetProjectStore();
+      const store = resolveProjectStore({});
+      const rejectedImport = await importWorkspace(store, importPath, {
+        metadata: { evidence_store: "@hasna/files" },
+      });
+      expect(rejectedImport.error).toMatch(/missing required fields/i);
+      expect(await store.listProjects({ query: "monthly-filing" })).toHaveLength(0);
+
+      const imported = await importWorkspace(store, importPath, { metadata: financeMetadata });
+      expect(imported.error).toBeUndefined();
+      expect(imported.workspace?.metadata).toMatchObject({
+        business_area: "finance",
+        jurisdiction: "RO",
+        fiscal_cycle: "monthly",
+        ledger_authority: "@hasna/accounting",
+        evidence_store: "@hasna/files",
+      });
+    } finally {
+      closeDatabase();
+      __resetProjectStore();
+      delete process.env[PROJECTS_DB_PATH_ENV];
+      rmSync(importRoot, { recursive: true, force: true });
+      db.close();
+    }
+  });
+
   test("plans and applies safe migration into the canonical workspace store", () => {
     const db = makeDb();
     const previousHome = process.env["HASNA_PROJECTS_HOME"];

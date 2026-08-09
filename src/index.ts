@@ -398,16 +398,22 @@ export type {
   ProjectTargetResolution,
 } from "./lib/project-resolver.js";
 export {
+  FINANCE_DATA_CLASSIFICATIONS,
+  FINANCE_FISCAL_CYCLES,
+  FINANCE_PROJECT_METADATA_FIELDS,
+  FINANCE_PROJECT_METADATA_SCHEMA,
   PROJECT_MANAGEMENT_TAXONOMY,
   PROJECT_PRIORITIES,
   PROJECT_STAGES,
   expandProjectIntegrationUnlinkKey,
   expandProjectIntegrationUnlinkKeys,
+  financeProjectMetadata,
   hasProjectIntegrationFields,
   hasProjectManagementFields,
   mergeProjectIntegrationFields,
   mergeProjectManagementMetadata,
   mergeProjectTags,
+  normalizeProjectMetadata,
   projectDashboardSummary,
   projectExternalLinksSummary,
   projectManagementSummary,
@@ -417,6 +423,10 @@ export {
   unlinkProjectIntegrationFields,
 } from "./lib/project-management.js";
 export type {
+  FinanceDataClassification,
+  FinanceFiscalCycle,
+  FinanceProjectMetadata,
+  FinanceProjectMetadataField,
   ProjectDashboardSummary,
   ProjectExternalLinksSummary,
   ProjectIntegrationUnlinkGroup,

@@ -676,6 +676,27 @@ describe("full project registration naming policy", () => {
 });
 
 describe("full project registration capability gate", () => {
+  test("rejects incomplete finance metadata before any authority or filesystem mutation", async () => {
+    const db = makeDb();
+    const target = tempTarget("finance-metadata-rejected");
+    try {
+      await expect(registerFullProject(
+        input("op-finance-metadata-rejected", target.target, {
+          metadata: {
+            business_area: "finance",
+            ledger_authority: "@hasna/accounting",
+          },
+        }),
+        { db, authorities: unavailableProjectRegistrationAuthorities() },
+      )).rejects.toThrow(/missing required fields/i);
+      expect(db.query("SELECT COUNT(*) AS n FROM workspaces").get()).toEqual({ n: 0 });
+      expect(db.query("SELECT COUNT(*) AS n FROM project_registration_manifests").get()).toEqual({ n: 0 });
+      expect(existsSync(target.path)).toBe(false);
+    } finally {
+      db.close();
+    }
+  });
+
   test("returns the exact dependency contract before any project or filesystem mutation", async () => {
     const db = makeDb();
     const target = tempTarget("no-go");

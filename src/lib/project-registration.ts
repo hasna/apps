@@ -45,6 +45,7 @@ import {
   projectResourceLinkConversationsChannelLocatorKind,
   projectResourceLinkId,
 } from "./project-resource-links.js";
+import { normalizeProjectMetadata } from "./project-management.js";
 import { assertProjectWorkspaceId } from "./project-store-paths.js";
 import {
   cleanupWorkspaceCreation,
@@ -784,6 +785,7 @@ function deriveRegistrationProjectId(operationId: string, slug: string): string 
 function validateInput(input: FullProjectRegistrationInput): {
   project_id: string;
   project_slug: string;
+  project_metadata: JsonObject;
   request_digest: string;
 } {
   assertRegistrationOperationId(input.operation_id);
@@ -803,6 +805,7 @@ function validateInput(input: FullProjectRegistrationInput): {
   if (input.project.metadata && PROJECT_REGISTRATION_PROVENANCE_KEY in input.project.metadata) {
     throw new Error(`${PROJECT_REGISTRATION_PROVENANCE_KEY} is reserved for registration provenance`);
   }
+  const projectMetadata = normalizeProjectMetadata(input.project.metadata);
   if (!input.goals_markdown?.trim()) throw new Error("project registration requires non-empty GOALS.md content");
   if (!Number.isInteger(input.response_byte_limit) || input.response_byte_limit < 64 * 1024) {
     throw new Error("response_byte_limit must be an integer of at least 65536");
@@ -832,12 +835,17 @@ function validateInput(input: FullProjectRegistrationInput): {
       s3_bucket: input.project.s3_bucket ?? null,
       s3_prefix: input.project.s3_prefix ?? null,
       tags: input.project.tags ?? [],
-      metadata_digest: sha256(canonicalJson(input.project.metadata ?? {})),
+      metadata_digest: sha256(canonicalJson(projectMetadata)),
       target_path_digest: input.target.digest,
       goals_digest: sha256(input.goals_markdown),
     },
   }));
-  return { project_id: projectId, project_slug: projectSlug, request_digest: requestDigest };
+  return {
+    project_id: projectId,
+    project_slug: projectSlug,
+    project_metadata: projectMetadata,
+    request_digest: requestDigest,
+  };
 }
 
 async function readRegistrationProject(
@@ -2811,7 +2819,7 @@ export async function registerFullProject(
     s3_bucket: input.project.s3_bucket,
     s3_prefix: input.project.s3_prefix,
     tags: input.project.tags,
-    metadata: input.project.metadata,
+    metadata: validated.project_metadata,
     agent_id: input.project.agent_id,
     source: input.project.source ?? "cli",
     prompt: input.project.prompt,

@@ -9,7 +9,7 @@ import {
   completeAgentRun,
   ensureCliAgent,
 } from "../db/workspaces.js";
-import type { Workspace } from "../types/workspace.js";
+import type { JsonObject, Workspace } from "../types/workspace.js";
 import { closeDatabase, getDatabase, PROJECTS_DB_PATH_ENV } from "../db/database.js";
 import { resolveProjectStore, __resetProjectStore, type ProjectStore } from "../store/project-store.js";
 import {
@@ -44,7 +44,11 @@ function localStore(): ProjectStore {
   return resolveProjectStore({});
 }
 
-function makeProject(overrides: { root?: boolean; status?: "active" | "archived" } = {}): Workspace {
+function makeProject(overrides: {
+  root?: boolean;
+  status?: "active" | "archived";
+  metadata?: JsonObject;
+} = {}): Workspace {
   let rootId: string | undefined;
   if (overrides.root) {
     const root = createRoot({ name: "Agent Root", base_path: mkdtempSync(join(tmpdir(), "aa-root-")) });
@@ -57,6 +61,7 @@ function makeProject(overrides: { root?: boolean; status?: "active" | "archived"
     kind: "project",
     primary_path: dir,
     root_id: rootId,
+    metadata: overrides.metadata,
     agent_id: ensureCliAgent().id,
   });
 }
@@ -70,6 +75,37 @@ describe("project-agent-assist: context", () => {
     expect(ctx.project?.["slug"]).toBe("agent-project");
     expect(ctx.machine.hostname).toBeTruthy();
     expect(ctx.kind).toBe("projects.agent_context");
+  });
+
+  test("exposes normalized finance authority metadata to project agents", async () => {
+    const project = makeProject({
+      metadata: {
+        business_area: "finance",
+        jurisdiction: "RO",
+        legal_entities: ["Example Alpha SRL"],
+        fiscal_cycle: "monthly",
+        data_classification: "restricted",
+        retention_policy: "knowledge:finance-retention-v1",
+        ledger_authority: "@hasna/accounting",
+        evidence_store: "@hasna/files",
+        approver: "role:finance-controller",
+        external_recipient_policy: "@hasna/invoices:approved-recipient-only",
+      },
+    });
+    const ctx = await buildProjectAgentContext(localStore(), { target: project.slug });
+    expect(ctx.project?.["finance"]).toEqual({
+      schema: "hasna.projects.finance_project_metadata.v1",
+      business_area: "finance",
+      jurisdiction: "RO",
+      legal_entities: ["Example Alpha SRL"],
+      fiscal_cycle: "monthly",
+      data_classification: "restricted",
+      retention_policy: "knowledge:finance-retention-v1",
+      ledger_authority: "@hasna/accounting",
+      evidence_store: "@hasna/files",
+      approver: "role:finance-controller",
+      external_recipient_policy: "@hasna/invoices:approved-recipient-only",
+    });
   });
 
   test("reports the derived channel and labels it, for an unlinked project", async () => {

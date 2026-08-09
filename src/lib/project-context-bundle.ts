@@ -4,9 +4,13 @@ import { isAbsolute } from "node:path";
 import type { ProjectStore } from "../store/project-store.js";
 import type { Workspace, WorkspaceIntegrations } from "../types/workspace.js";
 import { projectChannelSummary } from "./project-channel.js";
+import {
+  financeProjectMetadata,
+  type FinanceProjectMetadata,
+} from "./project-management.js";
 import { redactProjectValue } from "./redaction.js";
 
-export const PROJECT_CONTEXT_BUNDLE_SCHEMA = "hasna.projects.project_context_bundle.v1" as const;
+export const PROJECT_CONTEXT_BUNDLE_SCHEMA = "hasna.projects.project_context_bundle.v2" as const;
 const PROJECT_CONTEXT_BUNDLE_MAX_BYTES = 8 * 1024;
 const SAFE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:@+-]*$/;
 const STRICT_ISO_PATTERN =
@@ -41,6 +45,7 @@ export interface ProjectContextBundleV1 {
     status: Workspace["status"];
     path: string | null;
     updated_at: string;
+    finance?: FinanceProjectMetadata;
   };
   links: {
     todos: {
@@ -209,6 +214,7 @@ export async function buildProjectContextBundle(
   const updatedAt = normalizeTimestamp(project.updated_at, "project.updated_at");
   const generatedAt = normalizeTimestamp((options.generatedAt ?? new Date()).toISOString(), "generated_at");
   const commandNames = ["show", "context", "why", "context-bundle"] as const;
+  const finance = financeProjectMetadata(project);
   const bundle: ProjectContextBundleV1 = {
     schema: PROJECT_CONTEXT_BUNDLE_SCHEMA,
     generated_at: generatedAt,
@@ -234,6 +240,7 @@ export async function buildProjectContextBundle(
       status: project.status,
       path: project.primary_path,
       updated_at: updatedAt,
+      ...(finance ? { finance } : {}),
     },
     links: buildLinks(project),
     station: buildStation(project, env, options.hostname ?? hostname()),

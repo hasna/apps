@@ -7,6 +7,7 @@ import {
 } from "../db/workspaces.js";
 import type { ProjectStore } from "../store/project-store.js";
 import type { EventSource, JsonObject, Root, Workspace, WorkspaceKind, WorkspaceLock } from "../types/workspace.js";
+import { normalizeProjectMetadata } from "./project-management.js";
 import { LEGACY_WORKSPACE_MARKER_FILENAME, PROJECT_MARKER_FILENAME } from "./workspace-runtime.js";
 
 export interface WorkspaceImportPreview {
@@ -146,7 +147,7 @@ export async function planWorkspaceImport(store: ProjectStore, path: string, opt
     kind,
     root_id: root?.id,
     tags,
-    metadata: { ...(options.metadata ?? {}) },
+    metadata: normalizeProjectMetadata(options.metadata),
     git_remote: remote,
     confidence: Math.min(1, 0.45 + signals.length * 0.12),
     signals,
