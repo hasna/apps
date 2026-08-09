@@ -1193,9 +1193,43 @@ export interface DeploymentContractSchemas {
 }
 
 interface LinkedRecord {
+  schema?: string;
   id: string;
   digest: string;
   revision?: number;
+}
+
+interface DeploymentRecordReference extends LinkedRecord {
+  schema: string;
+}
+
+function sameDeploymentReference(
+  left: DeploymentRecordReference,
+  right: DeploymentRecordReference,
+): boolean {
+  return left.schema === right.schema
+    && left.id === right.id
+    && left.digest === right.digest
+    && left.revision === right.revision;
+}
+
+function sameDeploymentReferenceSet(
+  left: readonly DeploymentRecordReference[],
+  right: readonly DeploymentRecordReference[],
+): boolean {
+  if (left.length !== right.length) {
+    return false;
+  }
+  const referenceKey = (reference: DeploymentRecordReference) =>
+    [
+      reference.schema,
+      reference.id,
+      reference.revision ?? "",
+      reference.digest,
+    ].join("\u0000");
+  const leftKeys = left.map(referenceKey).sort();
+  const rightKeys = right.map(referenceKey).sort();
+  return leftKeys.every((key, index) => key === rightKeys[index]);
 }
 
 function linkedRecordMap(
@@ -1362,10 +1396,98 @@ export function validateDeploymentContractSet(
       requireLinkedRecord(request.priorReceipt, receiptMap, `deploymentRequests.${request.id}.priorReceipt`, issues);
     }
   });
-  plans.forEach((plan) =>
-    requireLinkedRecord(plan.request, requestMap, `deploymentPlans.${plan.id}.request`, issues));
-  approvals.forEach((approval) =>
-    requireLinkedRecord(approval.plan, planMap, `deploymentApprovalDecisions.${approval.id}.plan`, issues));
+  plans.forEach((plan) => {
+    requireLinkedRecord(plan.request, requestMap, `deploymentPlans.${plan.id}.request`, issues);
+    const request = requestMap.get(plan.request.id) as
+      | (LinkedRecord & {
+        product: DeploymentRecordReference;
+        environment: DeploymentRecordReference;
+        intent: DeploymentRecordReference;
+        artifact?: DeploymentRecordReference;
+        attestations: DeploymentRecordReference[];
+        priorReceipt?: DeploymentRecordReference;
+      })
+      | undefined;
+    if (!request) {
+      return;
+    }
+    const pinnedRequestInputs = [
+      request.product,
+      request.environment,
+      request.intent,
+      ...(request.artifact ? [request.artifact] : []),
+      ...(request.priorReceipt ? [request.priorReceipt] : []),
+    ];
+    if (!sameDeploymentReferenceSet(plan.inputs, pinnedRequestInputs)) {
+      issues.push(
+        `deploymentPlans.${plan.id}.inputs: input set does not exactly match linked request ${request.id}`,
+      );
+    }
+  });
+  approvals.forEach((approval) => {
+    requireLinkedRecord(approval.plan, planMap, `deploymentApprovalDecisions.${approval.id}.plan`, issues);
+    const plan = planMap.get(approval.plan.id) as
+      | (LinkedRecord & {
+        request: DeploymentRecordReference;
+        inputs: DeploymentRecordReference[];
+        rollbackInputs: DeploymentRecordReference[];
+        providerCapabilityDigests: string[];
+      })
+      | undefined;
+    if (!plan) {
+      return;
+    }
+    const request = requestMap.get(plan.request.id) as
+      | (LinkedRecord & {
+        product: DeploymentRecordReference;
+        environment: DeploymentRecordReference;
+        intent: DeploymentRecordReference;
+        artifact?: DeploymentRecordReference;
+        attestations: DeploymentRecordReference[];
+        priorReceipt?: DeploymentRecordReference;
+      })
+      | undefined;
+    const planBoundDigests = new Set([
+      plan.digest,
+      plan.request.digest,
+      ...plan.inputs.map((input) => input.digest),
+      ...plan.rollbackInputs.map((input) => input.digest),
+      ...plan.providerCapabilityDigests,
+      ...(request?.attestations.map((attestation) => attestation.digest) ?? []),
+    ]);
+    const expectedDigestByKind = new Map<string, string>([
+      ["plan", plan.digest],
+      ["request", plan.request.digest],
+      ...(request
+        ? [
+          ["product", request.product.digest],
+          ["environment", request.environment.digest],
+          ["intent", request.intent.digest],
+          ...(request.artifact
+            ? [["artifact", request.artifact.digest]]
+            : []),
+          ...(request.priorReceipt
+            ? [["prior-receipt", request.priorReceipt.digest]]
+            : []),
+        ] as Array<[string, string]>
+        : []),
+    ]);
+    approval.boundInputDigests.forEach((
+      binding: { kind: string; digest: string },
+      index: number,
+    ) => {
+      const expectedDigest = expectedDigestByKind.get(binding.kind);
+      if (expectedDigest && binding.digest !== expectedDigest) {
+        issues.push(
+          `deploymentApprovalDecisions.${approval.id}.boundInputDigests.${index}: ${binding.kind} digest does not match linked plan lineage`,
+        );
+      } else if (!expectedDigest && !planBoundDigests.has(binding.digest)) {
+        issues.push(
+          `deploymentApprovalDecisions.${approval.id}.boundInputDigests.${index}: digest is not bound by linked plan ${plan.id}`,
+        );
+      }
+    });
+  });
   attempts.forEach((attempt) => {
     requireLinkedRecord(attempt.plan, planMap, `deploymentAttempts.${attempt.id}.plan`, issues);
     attempt.approvals.forEach((
@@ -1380,6 +1502,18 @@ export function validateDeploymentContractSet(
     requireLinkedRecord(receipt.request, requestMap, `deploymentReceipts.${receipt.id}.request`, issues);
     requireLinkedRecord(receipt.plan, planMap, `deploymentReceipts.${receipt.id}.plan`, issues);
     requireLinkedRecord(receipt.attempt, attemptMap, `deploymentReceipts.${receipt.id}.attempt`, issues);
+    requireLinkedRecord(receipt.intent, intentMap, `deploymentReceipts.${receipt.id}.intent`, issues);
+    const request = requestMap.get(receipt.request.id) as
+      | (LinkedRecord & { intent: DeploymentRecordReference })
+      | undefined;
+    if (
+      request
+      && !sameDeploymentReference(receipt.intent, request.intent)
+    ) {
+      issues.push(
+        `deploymentReceipts.${receipt.id}.intent: reference does not match linked request intent`,
+      );
+    }
     receipt.approvals.forEach((approval: LinkedRecord, index: number) =>
       requireLinkedRecord(approval, approvalMap, `deploymentReceipts.${receipt.id}.approvals.${index}`, issues));
     receipt.providerReceipts.forEach((

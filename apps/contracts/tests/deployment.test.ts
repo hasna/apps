@@ -54,6 +54,98 @@ function redigest<T extends Record<string, unknown>>(value: T): T {
   return withDeploymentRecordDigest(value) as T;
 }
 
+type DeploymentFixtures = ReturnType<typeof createDeploymentFixtureSet>;
+
+function recomputePlanDownstream(
+  fixtures: DeploymentFixtures,
+  deploymentPlan: DeploymentFixtures["deploymentPlan"],
+  approvalDraft = clone(fixtures.deploymentApprovalDecision),
+) {
+  approvalDraft.plan = {
+    schema: deploymentPlan.schema,
+    id: deploymentPlan.id,
+    digest: deploymentPlan.digest,
+  };
+  const planBinding = approvalDraft.boundInputDigests.find(
+    (binding) => binding.kind === "plan",
+  );
+  if (!planBinding) {
+    throw new Error("fixture approval is missing the plan digest binding");
+  }
+  planBinding.digest = deploymentPlan.digest;
+  const deploymentApprovalDecision = DeploymentApprovalDecisionSchema.parse(
+    redigest(approvalDraft),
+  );
+
+  const attemptDraft = clone(fixtures.deploymentAttempt);
+  attemptDraft.plan = {
+    schema: deploymentPlan.schema,
+    id: deploymentPlan.id,
+    digest: deploymentPlan.digest,
+  };
+  attemptDraft.approvals[0]!.decision = {
+    schema: deploymentApprovalDecision.schema,
+    id: deploymentApprovalDecision.id,
+    digest: deploymentApprovalDecision.digest,
+  };
+  const deploymentAttempt = DeploymentAttemptSchema.parse(
+    redigest(attemptDraft),
+  );
+
+  const providerReceiptDraft = clone(fixtures.providerReceipt);
+  providerReceiptDraft.attempt = {
+    schema: deploymentAttempt.schema,
+    id: deploymentAttempt.id,
+    revision: deploymentAttempt.revision,
+    digest: deploymentAttempt.digest,
+  };
+  const providerReceipt = ProviderReceiptSchema.parse(
+    redigest(providerReceiptDraft),
+  );
+
+  const receiptDraft = clone(fixtures.deploymentReceipt);
+  receiptDraft.plan = {
+    schema: deploymentPlan.schema,
+    id: deploymentPlan.id,
+    digest: deploymentPlan.digest,
+  };
+  receiptDraft.approvals = [{
+    schema: deploymentApprovalDecision.schema,
+    id: deploymentApprovalDecision.id,
+    digest: deploymentApprovalDecision.digest,
+  }];
+  receiptDraft.attempt = {
+    schema: deploymentAttempt.schema,
+    id: deploymentAttempt.id,
+    revision: deploymentAttempt.revision,
+    digest: deploymentAttempt.digest,
+  };
+  receiptDraft.providerReceipts = [{
+    schema: providerReceipt.schema,
+    id: providerReceipt.id,
+    digest: providerReceipt.digest,
+  }];
+  const deploymentReceipt = DeploymentReceiptSchema.parse(
+    redigest(receiptDraft),
+  );
+
+  const launchDraft = clone(fixtures.launchEvidence);
+  launchDraft.deploymentReceipt = {
+    schema: deploymentReceipt.schema,
+    id: deploymentReceipt.id,
+    digest: deploymentReceipt.digest,
+  };
+  const launchEvidence = LaunchEvidenceSchema.parse(redigest(launchDraft));
+
+  return {
+    deploymentApprovalDecision,
+    deploymentAttempt,
+    providerReceipt,
+    deploymentReceipt,
+    launchEvidence,
+  };
+}
+
 describe("deployment contract records", () => {
   test("all thirteen registered fixtures parse and retain canonical digests", () => {
     const fixtures = createDeploymentFixtureSet();
@@ -216,6 +308,104 @@ describe("deployment contract records", () => {
     expect(result.success).toBe(false);
     expect(result.issues.some((issue) => issue.endsWith("digest mismatch"))).toBe(
       true,
+    );
+  });
+
+  test("recomputed downstream records cannot swap a required plan input for another request reference", () => {
+    const fixtures = createDeploymentFixtureSet();
+    const contractSet = deploymentFixtureSetToContractSet(fixtures);
+
+    const planDraft = clone(fixtures.deploymentPlan);
+    const inputIndex = planDraft.inputs.findIndex(
+      (input) => input.schema === DEPLOYMENT_SCHEMA_IDS.intentSnapshot,
+    );
+    expect(inputIndex).toBeGreaterThanOrEqual(0);
+    planDraft.inputs[inputIndex] = {
+      schema: fixtures.artifactAttestation.schema,
+      id: fixtures.artifactAttestation.id,
+      digest: fixtures.artifactAttestation.digest,
+    };
+    const deploymentPlan = DeploymentPlanSchema.parse(redigest(planDraft));
+    const downstream = recomputePlanDownstream(fixtures, deploymentPlan);
+
+    contractSet.deploymentPlans = [deploymentPlan];
+    contractSet.deploymentApprovalDecisions = [
+      downstream.deploymentApprovalDecision,
+    ];
+    contractSet.deploymentAttempts = [downstream.deploymentAttempt];
+    contractSet.providerReceipts = [downstream.providerReceipt];
+    contractSet.deploymentReceipts = [downstream.deploymentReceipt];
+    contractSet.launchEvidence = [downstream.launchEvidence];
+
+    const result = validateDeploymentContractSet(runtimeSchemas, contractSet);
+    expect(result.issues).toContain(
+      `deploymentPlans.${deploymentPlan.id}.inputs: input set does not exactly match linked request ${fixtures.deploymentRequest.id}`,
+    );
+  });
+
+  test("recomputed downstream records cannot bind an approval kind to another lineage digest", () => {
+    const fixtures = createDeploymentFixtureSet();
+    const contractSet = deploymentFixtureSetToContractSet(fixtures);
+
+    const approvalDraft = clone(fixtures.deploymentApprovalDecision);
+    const bindingIndex = approvalDraft.boundInputDigests.findIndex(
+      (binding) => binding.kind === "intent",
+    );
+    expect(bindingIndex).toBeGreaterThanOrEqual(0);
+    approvalDraft.boundInputDigests[bindingIndex]!.digest =
+      fixtures.deploymentPlan.digest;
+    const downstream = recomputePlanDownstream(
+      fixtures,
+      fixtures.deploymentPlan,
+      approvalDraft,
+    );
+
+    contractSet.deploymentApprovalDecisions = [
+      downstream.deploymentApprovalDecision,
+    ];
+    contractSet.deploymentAttempts = [downstream.deploymentAttempt];
+    contractSet.providerReceipts = [downstream.providerReceipt];
+    contractSet.deploymentReceipts = [downstream.deploymentReceipt];
+    contractSet.launchEvidence = [downstream.launchEvidence];
+
+    const result = validateDeploymentContractSet(runtimeSchemas, contractSet);
+    expect(result.issues).toContain(
+      `deploymentApprovalDecisions.${downstream.deploymentApprovalDecision.id}.boundInputDigests.${bindingIndex}: intent digest does not match linked plan lineage`,
+    );
+  });
+
+  test("recomputed downstream records cannot substitute a receipt intent", () => {
+    const fixtures = createDeploymentFixtureSet();
+    const contractSet = deploymentFixtureSetToContractSet(fixtures);
+    const alternateIntent = IntentSnapshotSchema.parse(redigest({
+      ...clone(fixtures.intentSnapshot),
+      id: "intent-snapshot-receipt-substitute",
+    }));
+    contractSet.intentSnapshots.push(alternateIntent);
+
+    const receiptDraft = clone(fixtures.deploymentReceipt);
+    receiptDraft.intent = {
+      schema: alternateIntent.schema,
+      id: alternateIntent.id,
+      digest: alternateIntent.digest,
+    };
+    const deploymentReceipt = DeploymentReceiptSchema.parse(
+      redigest(receiptDraft),
+    );
+    const launchDraft = clone(fixtures.launchEvidence);
+    launchDraft.deploymentReceipt = {
+      schema: deploymentReceipt.schema,
+      id: deploymentReceipt.id,
+      digest: deploymentReceipt.digest,
+    };
+    const launchEvidence = LaunchEvidenceSchema.parse(redigest(launchDraft));
+
+    contractSet.deploymentReceipts = [deploymentReceipt];
+    contractSet.launchEvidence = [launchEvidence];
+
+    const result = validateDeploymentContractSet(runtimeSchemas, contractSet);
+    expect(result.issues).toContain(
+      `deploymentReceipts.${deploymentReceipt.id}.intent: reference does not match linked request intent`,
     );
   });
 });
