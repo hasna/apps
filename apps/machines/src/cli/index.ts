@@ -1548,7 +1548,7 @@ manifestCommand
   .option("--bun-path <path>", "Bun executable directory")
   .option("--tag <tag...>", "Machine tags")
   .option("--package <name...>", "Desired packages")
-  .option("--app <spec...>", "Desired apps as name[:manager[:packageName]]")
+  .option("--app <spec...>", "Desired simple apps as name[:manager[:packageName]]; use --from-stdin for exact custom commands")
   .option("--file <spec...>", "File sync spec source:target[:copy|symlink]")
   .option("--metadata <json>", "Machine metadata as JSON")
   .option("--from-stdin", "Read the full MachineManifest JSON from stdin")

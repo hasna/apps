@@ -31,7 +31,7 @@ function buildAppCommand(machine: MachineManifest, app: ManifestAppSpec): string
   const quotedPackageName = shellQuote(packageName);
   const manager = getAppManager(machine, app);
   if (manager === "custom") {
-    return packageName;
+    return app.installCommand ?? packageName;
   }
 
   if (machine.platform === "macos") {
@@ -53,6 +53,7 @@ function buildAppProbeCommand(machine: MachineManifest, app: ManifestAppSpec): s
   const manager = getAppManager(machine, app);
 
   if (manager === "custom") {
+    if (app.probeCommand) return app.probeCommand;
     return `if command -v ${packageName} >/dev/null 2>&1; then printf 'installed=1\\nversion=custom\\n'; else printf 'installed=0\\n'; fi`;
   }
 
@@ -71,20 +72,28 @@ function buildAppProbeCommand(machine: MachineManifest, app: ManifestAppSpec): s
 }
 
 function buildAppSteps(machine: MachineManifest): SetupStep[] {
-  return (machine.apps || []).map((app) => ({
-    id: `app-${app.name}`,
-    title: `Install ${app.name} on ${machine.id}`,
-    command: buildAppCommand(machine, app),
-    manager:
-      getAppManager(machine, app) === "custom"
-        ? "custom"
-        : machine.platform === "macos"
-          ? "brew"
-          : machine.platform === "windows"
-            ? "custom"
-            : "apt",
-    privileged: machine.platform === "linux",
-  }));
+  return (machine.apps || []).map((app) => {
+    const appManager = getAppManager(machine, app);
+    const step: SetupStep = {
+      id: `app-${app.name}`,
+      title: `Install ${app.name} on ${machine.id}`,
+      command: buildAppCommand(machine, app),
+      manager:
+        appManager === "custom"
+          ? "custom"
+          : machine.platform === "macos"
+            ? "brew"
+            : machine.platform === "windows"
+              ? "custom"
+              : "apt",
+      privileged: machine.platform === "linux",
+    };
+    if (appManager === "custom" && app.probeCommand) {
+      step.probeCommand = app.probeCommand;
+      if (app.expectedVersion) step.expectedVersion = app.expectedVersion;
+    }
+    return step;
+  });
 }
 
 function resolveMachine(machineId?: string): MachineManifest {
@@ -98,15 +107,45 @@ function resolveMachine(machineId?: string): MachineManifest {
 }
 
 function parseProbeOutput(app: ManifestAppSpec, machine: MachineManifest, stdout: string): InstalledAppStatus {
-  const lines = stdout.trim().split("\n").filter(Boolean);
-  const installedLine = lines.find((line) => line.startsWith("installed="));
-  const versionLine = lines.find((line) => line.startsWith("version="));
+  const lines = stdout.trim().split(/\r?\n/).filter(Boolean);
+  const installedLines = lines.filter((line) => line.startsWith("installed="));
+  const versionLines = lines.filter((line) => line.startsWith("version="));
+  const recognizedLineCount = installedLines.length + versionLines.length;
+  if (installedLines.length !== 1 || recognizedLineCount !== lines.length) {
+    throw new Error(`App probe ${app.name} returned malformed output: expected one installed=0|1 line and an optional version line.`);
+  }
+
+  const installedValue = installedLines[0]!.slice("installed=".length);
+  if (installedValue !== "0" && installedValue !== "1") {
+    throw new Error(`App probe ${app.name} returned malformed output: installed must be 0 or 1.`);
+  }
+
+  if (installedValue === "0") {
+    if (versionLines.length > 0) {
+      throw new Error(`App probe ${app.name} returned malformed output: an absent app must not report a version.`);
+    }
+    return {
+      name: app.name,
+      packageName: getPackageName(app),
+      manager: getAppManager(machine, app),
+      installed: false,
+    };
+  }
+
+  if (versionLines.length !== 1) {
+    throw new Error(`App probe ${app.name} returned malformed output: installed=1 requires exactly one version line.`);
+  }
+  const version = versionLines[0]!.slice("version=".length);
+  if (!version.trim()) {
+    throw new Error(`App probe ${app.name} returned malformed output: version must not be blank.`);
+  }
+  const expectedVersion = getAppManager(machine, app) === "custom" ? app.expectedVersion : undefined;
   return {
     name: app.name,
     packageName: getPackageName(app),
     manager: getAppManager(machine, app),
-    installed: installedLine === "installed=1",
-    version: versionLine?.slice("version=".length) || undefined,
+    installed: expectedVersion === undefined || version === expectedVersion,
+    version,
   };
 }
 
