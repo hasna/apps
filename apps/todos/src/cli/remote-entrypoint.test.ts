@@ -200,6 +200,36 @@ describe("remote CLI entrypoint authority boundary", () => {
         const url = new URL(request.url);
         const body = await request.json().catch(() => ({}));
         requests.push({ method: request.method, path: url.pathname, body });
+        if (url.pathname === "/v1/openapi.json" && request.method === "GET") {
+          return Response.json({
+            openapi: "3.1.0",
+            paths: {
+              "/v1/tasks/{id}/fail": {
+                post: {
+                  requestBody: {
+                    content: {
+                      "application/json": {
+                        schema: { $ref: "#/components/schemas/FailTaskInput" },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            components: {
+              schemas: {
+                FailTaskInput: {
+                  type: "object",
+                  properties: {
+                    agent_id: { type: "string" },
+                    reason: { type: "string" },
+                    retry: { type: "boolean" },
+                  },
+                },
+              },
+            },
+          });
+        }
         if (url.pathname === `/v1/tasks/${TASK_FIXTURE_ID}/fail` && request.method === "POST") {
           return Response.json({
             result: {
@@ -239,11 +269,14 @@ describe("remote CLI entrypoint authority boundary", () => {
         task: { id: TASK_FIXTURE_ID, status: "failed", reason: "remote reason" },
         retryTask: { id: OTHER_TASK_FIXTURE_ID, status: "pending" },
       });
-      expect(requests).toEqual([{
-        method: "POST",
-        path: `/v1/tasks/${TASK_FIXTURE_ID}/fail`,
-        body: { agent_id: "nausicaa", reason: "remote reason", retry: true },
-      }]);
+      expect(requests).toEqual([
+        { method: "GET", path: "/v1/openapi.json", body: {} },
+        {
+          method: "POST",
+          path: `/v1/tasks/${TASK_FIXTURE_ID}/fail`,
+          body: { agent_id: "nausicaa", reason: "remote reason", retry: true },
+        },
+      ]);
       expect(recursiveInventory(cwd)).toEqual(before);
       expectNoLocalDatabase(home, localDbPath);
     } finally {
