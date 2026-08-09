@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { unlinkSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { closeDatabase, getDatabase, resetDatabase } from "../db/database.js";
 import { createPlan } from "../db/plans.js";
 import { createProject } from "../db/projects.js";
@@ -9,27 +11,22 @@ import { generateReleaseNotes, renderReleaseNotesMarkdown } from "./release-note
 import { validateJsonContract } from "../json-contracts.js";
 import { localRoutingTestEnv } from "../test/local-routing-env.fixture.test.js";
 
-const dbPath = "/tmp/todos-release-notes-test.db";
+function createCliDatabaseFixture(): { root: string; dbPath: string } {
+  const root = mkdtempSync(join(tmpdir(), "todos-release-notes-cli-"));
+  return { root, dbPath: join(root, "todos.db") };
+}
 
 beforeEach(() => {
-  process.env["TODOS_DB_PATH"] = dbPath;
   resetDatabase();
-  try { unlinkSync(dbPath); } catch {}
-  try { unlinkSync(`${dbPath}-shm`); } catch {}
-  try { unlinkSync(`${dbPath}-wal`); } catch {}
 });
 
 afterEach(() => {
   closeDatabase();
-  delete process.env["TODOS_DB_PATH"];
-  try { unlinkSync(dbPath); } catch {}
-  try { unlinkSync(`${dbPath}-shm`); } catch {}
-  try { unlinkSync(`${dbPath}-wal`); } catch {}
 });
 
 describe("local release notes generation", () => {
   test("builds deterministic changelog JSON and Markdown from local task evidence", () => {
-    const db = getDatabase();
+    const db = getDatabase(":memory:");
     const project = createProject({ name: "Release Project", path: "/tmp/release-project" }, db);
     const plan = createPlan({ name: "v1.1", project_id: project.id }, db);
     const task = createTask({
@@ -95,42 +92,61 @@ describe("local release notes generation", () => {
   });
 
   test("CLI returns JSON release notes without network access", async () => {
-    const db = getDatabase();
-    const project = createProject({ name: "CLI Release", path: "/tmp/cli-release" }, db);
-    const task = createTask({
-      title: "Document CLI release notes",
-      project_id: project.id,
-      tags: ["release"],
-    }, db);
-    db.run("UPDATE tasks SET status = 'completed', completed_at = ? WHERE id = ?", [
-      "2026-01-03T03:04:05.000Z",
-      task.id,
-    ]);
-    closeDatabase();
+    const fixture = createCliDatabaseFixture();
+    try {
+      const db = getDatabase(fixture.dbPath);
+      const project = createProject({ name: "CLI Release", path: "/tmp/cli-release" }, db);
+      const task = createTask({
+        title: "Document CLI release notes",
+        project_id: project.id,
+        tags: ["release"],
+      }, db);
+      db.run("UPDATE tasks SET status = 'completed', completed_at = ? WHERE id = ?", [
+        "2026-01-03T03:04:05.000Z",
+        task.id,
+      ]);
+      closeDatabase();
 
-    const proc = Bun.spawn({
-      cmd: [
-        process.execPath,
-        "src/cli/index.tsx",
-        "release-notes",
-        "--project",
-        project.id,
-        "--json",
-      ],
-      cwd: `${import.meta.dir}/../..`,
-      env: localRoutingTestEnv({ TODOS_DB_PATH: dbPath, TODOS_AUTO_PROJECT: "false" }),
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    const stdout = await new Response(proc.stdout).text();
-    const stderr = await new Response(proc.stderr).text();
-    const exitCode = await proc.exited;
+      const proc = Bun.spawn({
+        cmd: [
+          process.execPath,
+          "src/cli/index.tsx",
+          "release-notes",
+          "--project",
+          project.id,
+          "--json",
+        ],
+        cwd: `${import.meta.dir}/../..`,
+        env: localRoutingTestEnv({ TODOS_DB_PATH: fixture.dbPath, TODOS_AUTO_PROJECT: "false" }),
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const stdout = await new Response(proc.stdout).text();
+      const stderr = await new Response(proc.stderr).text();
+      const exitCode = await proc.exited;
 
-    expect(stderr).toBe("");
-    expect(exitCode).toBe(0);
-    const payload = JSON.parse(stdout);
-    expect(payload.scope.project_id).toBe(project.id);
-    expect(payload.summary.tasks).toBe(1);
-    expect(payload.tasks[0].title).toBe("Document CLI release notes");
+      expect(stderr).toBe("");
+      expect(exitCode).toBe(0);
+      const payload = JSON.parse(stdout);
+      expect(payload.scope.project_id).toBe(project.id);
+      expect(payload.summary.tasks).toBe(1);
+      expect(payload.tasks[0].title).toBe("Document CLI release notes");
+    } finally {
+      closeDatabase();
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  test("CLI persistence fixtures do not reuse the legacy shared database path", () => {
+    const first = createCliDatabaseFixture();
+    const second = createCliDatabaseFixture();
+    try {
+      expect(first.dbPath).not.toBe(second.dbPath);
+      expect(first.dbPath).not.toBe(join(tmpdir(), "todos-release-notes-test.db"));
+      expect(second.dbPath).not.toBe(join(tmpdir(), "todos-release-notes-test.db"));
+    } finally {
+      rmSync(first.root, { recursive: true, force: true });
+      rmSync(second.root, { recursive: true, force: true });
+    }
   });
 });
