@@ -74,6 +74,16 @@ reported success about things it had not actually established.
   than reached by deleting a check. Physical classes are untouched: `dgx-spark`
   keeps `tailscale:join` and gets no absence item.
 
+## [0.2.17] - 2026-08-09
+
+### Fixed
+
+- Preserve PATH during remote zsh command-version probes, so Bun-installed
+  CLIs and the remote `@hasna/machines` version report their actual versions
+  instead of `missing`.
+
+Task `2ea60467-1c68-49e1-bcfa-dff5a28f3047`; [PR #81](https://github.com/hasna/machines/pull/81).
+
 ## [0.2.16] - 2026-08-09
 
 ### Fixed
