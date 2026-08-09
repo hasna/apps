@@ -2581,7 +2581,7 @@ export async function cloudGetTaskList(client: HasnaStorageClient, id: string): 
   return raw == null ? null : unwrapTaskList(raw);
 }
 
-function resolveTaskListFromCandidates(lists: TaskList[], input: string): string | null {
+function resolveTaskListFromCandidates(lists: TaskList[], input: string): TaskList | null {
   const normalizedIdRef = input.toLowerCase();
   const matchGroups = [
     lists.filter((list) => list.id.toLowerCase() === normalizedIdRef),
@@ -2589,7 +2589,7 @@ function resolveTaskListFromCandidates(lists: TaskList[], input: string): string
     lists.filter((list) => list.id.toLowerCase().startsWith(normalizedIdRef)),
   ];
   for (const matches of matchGroups) {
-    if (matches.length === 1) return matches[0]!.id;
+    if (matches.length === 1) return matches[0]!;
     if (matches.length > 1) {
       throw new Error(`Task list reference is ambiguous: "${input}"`);
     }
@@ -2608,25 +2608,25 @@ async function legacyProjectTaskLists(
   );
 }
 
-/** Resolve a cloud task-list UUID, unique UUID prefix, or project-scoped slug. */
-export async function cloudResolveTaskListRef(
+/**
+ * Resolve a cloud task-list UUID, unique UUID prefix, or project-scoped slug
+ * without discarding its owning project. Exact-list reads use that project as
+ * a compatibility bound when an older authority ignores task_list_id.
+ */
+export async function cloudResolveTaskList(
   client: HasnaStorageClient,
   ref: string,
   projectId?: string,
-): Promise<string> {
+): Promise<TaskList> {
   const input = ref.trim();
   const normalizedIdRef = input.toLowerCase();
-  // An unscoped exact UUID is already canonical. A project-scoped UUID must
-  // still be validated so create/update callers cannot cross that boundary.
-  if (UUID_RE.test(input) && !projectId) return normalizedIdRef;
-
-  if (UUID_RE.test(input) && projectId) {
+  if (UUID_RE.test(input)) {
     const direct = await cloudGetTaskList(client, normalizedIdRef);
     if (direct?.id?.toLowerCase() === normalizedIdRef) {
-      if (direct.project_id === projectId) return direct.id;
+      if (!projectId || direct.project_id === projectId) return direct;
       if (direct.project_id == null) {
         const project = await cloudGetProjectById(client, projectId);
-        if (project?.task_list_id === direct.slug) return direct.id;
+        if (project?.task_list_id === direct.slug) return direct;
       }
       throw new Error(`Task list not found: "${input}"`);
     }
@@ -2636,7 +2636,9 @@ export async function cloudResolveTaskListRef(
     await cloudListTaskLists(client, projectId),
     input,
   );
-  if (scopedMatch) return scopedMatch;
+  if (scopedMatch && (!projectId || scopedMatch.project_id === projectId)) {
+    return scopedMatch;
+  }
 
   // Legacy projects can own a globally stored task-list row: the canonical link
   // is `project.task_list_id === task_list.slug` while the row itself carries
@@ -2653,6 +2655,20 @@ export async function cloudResolveTaskListRef(
   }
 
   throw new Error(`Task list not found: "${input}"`);
+}
+
+/** Resolve only the canonical task-list UUID for create/update callers. */
+export async function cloudResolveTaskListRef(
+  client: HasnaStorageClient,
+  ref: string,
+  projectId?: string,
+): Promise<string> {
+  const input = ref.trim();
+  // Preserve the no-read fast path for callers that only need an already
+  // canonical unscoped UUID. Exact-list reads call cloudResolveTaskList above
+  // because they also need the owning project compatibility scope.
+  if (UUID_RE.test(input) && !projectId) return input.toLowerCase();
+  return (await cloudResolveTaskList(client, ref, projectId)).id;
 }
 
 /** Create a task list in the cloud (`POST /v1/task-lists`). */

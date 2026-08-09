@@ -34,6 +34,7 @@ import {
   cloudTaskHistory,
   cloudUpsertTaskByFingerprint,
   cloudResolveProjectRef,
+  cloudResolveTaskList,
   cloudResolveTaskListRef,
   cloudResolvePlan,
   cloudListAgents,
@@ -1004,7 +1005,16 @@ export function registerTaskCommands(program: Command) {
         filter["project_id"] = projectId;
       }
       if (opts.list && cloud) {
-        filter["task_list_id"] = await cloudResolveTaskListRef(cloud, opts.list, projectId);
+        const resolvedTaskList = await cloudResolveTaskList(cloud, opts.list, projectId);
+        filter["task_list_id"] = resolvedTaskList.id;
+        // A legacy authority may ignore task_list_id while still honoring
+        // project_id. Preserve the resolved list's owning project as a bounded
+        // compatibility scope, then enforce the exact list locally. An explicit
+        // project was already passed into the resolver and any mismatch failed
+        // before this command can issue a task read.
+        if (!projectId && resolvedTaskList.project_id) {
+          filter["project_id"] = resolvedTaskList.project_id;
+        }
       } else if (opts.list) {
         const db = getDatabase();
         const listId = resolvePartialId(db, "task_lists", opts.list);
@@ -1168,7 +1178,13 @@ export function registerTaskCommands(program: Command) {
         cloud && Array.isArray(filter["status"]) && filter["status"].length > 1,
       );
       const reordersAfterQuery = Boolean(opts.sort) || combinesScalarStatusPages;
-      const narrowsAfterQuery = Boolean(opts.dueToday) || Boolean(opts.overdue) || (creatorFilterActive && cloud);
+      // Exact task-list reads may also narrow after the query when a legacy
+      // authority ignores task_list_id. The caller's output limit must therefore
+      // be applied after the bounded compatibility scan and exact local filter,
+      // just like creator/due filters below.
+      const taskListFilterActive = Boolean(cloud && filter["task_list_id"]);
+      const narrowsAfterQuery = Boolean(opts.dueToday) || Boolean(opts.overdue) ||
+        (creatorFilterActive && cloud) || taskListFilterActive;
       const withholdLimit = requestedLimit !== undefined && (reordersAfterQuery || narrowsAfterQuery);
 
       // Withholding the caller's limit fixed the ordering defect and removed the only

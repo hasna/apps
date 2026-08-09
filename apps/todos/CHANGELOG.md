@@ -7,10 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.18] - 2026-08-09
+
+### Fixed
+
+- **Hosted exact-list reads reuse the resolved list's project scope.** UUID and
+  slug reads now bound legacy compatibility scans by the owning project, apply
+  output limits after exact local filtering, and reject conflicting explicit
+  project/list scopes before reading tasks.
+
+## [0.15.17] - 2026-08-09
+
+### Fixed
+
+- **Task failure now routes through the selected authority.** `todos fail
+  --reason [--retry]` uses the supported local or authenticated `/v1` lifecycle
+  path, preserves failure reasons in readback, exposes the operation through
+  OpenAPI and the generated SDK, and rejects unsupported lifecycle status
+  values at the server boundary ([#237](https://github.com/hasna/todos/pull/237)).
+
 ## [0.15.16] - 2026-08-09
 
 ### Fixed
 
+- **Takumi MCP registration uses Takumi's first-class CLI.** Registering or
+  removing Todos now calls scoped `takumi mcp add/remove` commands instead of
+  the previously rejected generic path ([#233](https://github.com/hasna/todos/pull/233)).
+- **Remote task creation is single-attempt and authority-verified.** Every
+  create is read back by exact ID from the configured authority before success
+  is printed, preventing duplicate or reported-but-unreadable task success
+  ([#235](https://github.com/hasna/todos/pull/235)).
 - **P1: partial task-manifest outbox delivery is retry-safe.** When a client
   acknowledged row 1, crashed or lost the response, then resumed the two-row
   sequence, the repeated row-1 acknowledgement was rejected as a graph
@@ -21,6 +47,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The unchanged `todos.task-manifest.v1` capability now advertises
   `idempotent_outbox_delivery: true`, with a runtime guard that distinguishes
   older authorities where the field is absent or false.
+- **Hosted exact task-list reads are complete or explicit.** Legacy unfiltered
+  pages use bounded, stable `total`/`offset` pagination with matching-only
+  output; incomplete or unsupported authority shapes fail closed instead of
+  silently omitting matches ([#238](https://github.com/hasna/todos/pull/238)).
+- **PostgreSQL outbox delivery and compensation no longer race.**
+  Operation-scoped locking serializes delivery with compensation, and graph
+  rollback proceeds only after every expected outbox row is atomically
+  cancelled ([#240](https://github.com/hasna/todos/pull/240)).
 
 ## [0.15.12] - 2026-08-08
 

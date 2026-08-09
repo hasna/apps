@@ -77,8 +77,8 @@ async function runCli(args: string[], root: string, baseUrl: string, env: Record
   return { exitCode: await proc.exited, stdout, stderr };
 }
 
-function taskList(id: string, slug: string) {
-  return { id, project_id: PROJECT_ID, slug, name: slug };
+function taskList(id: string, slug: string, projectId: string | null = PROJECT_ID) {
+  return { id, project_id: projectId, slug, name: slug };
 }
 
 function project(id = PROJECT_ID, name = "Open Emails", path = PROJECT_PATH) {
@@ -368,7 +368,110 @@ describe("cloud CLI task-list filtering", () => {
       expect(seenTaskRequests).toHaveLength(2);
       expect(seenTaskRequests.map(({ status }) => status).sort()).toEqual(["in_progress", "pending"]);
       expect(seenTaskRequests.every(({ taskListId }) => taskListId === LIST_ID)).toBe(true);
-      expect(taskListRequests).toBe(ref === LIST_ID ? 0 : 1);
+      expect(taskListRequests).toBe(1);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test.each([
+    ["exact UUID", LIST_ID],
+    ["unique slug", "release"],
+  ])("automatically forwards the resolved list project for an unscoped %s", async (_label, ref) => {
+    const taskRequests: URL[] = [];
+    const secondTaskId = "55555555-5555-4555-8555-555555555555";
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(request) {
+        const url = new URL(request.url);
+        if (url.pathname === `/v1/task-lists/${LIST_ID}`) {
+          return Response.json({ task_list: taskList(LIST_ID, "release") });
+        }
+        if (url.pathname === "/v1/task-lists") {
+          return Response.json({ task_lists: [taskList(LIST_ID, "release")] });
+        }
+        if (url.pathname === "/v1/tasks") {
+          taskRequests.push(url);
+          if (url.searchParams.get("project_id") !== PROJECT_ID) {
+            return Response.json({
+              tasks: [
+                { id: OTHER_TASK_ID, task_list_id: OTHER_LIST_ID, title: "Global foreign task", status: "pending", priority: "medium", tags: [] },
+              ],
+              count: 1,
+              total: 61_117,
+            });
+          }
+          return Response.json({
+            tasks: [
+              { id: OTHER_TASK_ID, task_list_id: OTHER_LIST_ID, title: "Project foreign task", status: "pending", priority: "medium", tags: [] },
+              { id: TASK_ID, task_list_id: LIST_ID, title: "First matching task", status: "pending", priority: "medium", tags: [] },
+              { id: secondTaskId, task_list_id: LIST_ID, title: "Second matching task", status: "pending", priority: "medium", tags: [] },
+            ],
+            count: 3,
+            total: 3,
+          });
+        }
+        return Response.json({ error: "not found" }, { status: 404 });
+      },
+    });
+    const root = mkdtempSync(join(tmpdir(), "todos-cloud-list-project-scope-"));
+    tempRoots.push(root);
+    try {
+      const result = await runCli(
+        ["--json", "list", "--all", "--list", ref, "--format", "json", "--limit", "1"],
+        root,
+        `http://127.0.0.1:${server.port}`,
+        { TODOS_LIST_SCAN_LIMIT: "4" },
+      );
+      expect(result).toMatchObject({ exitCode: 0, stderr: "" });
+      expect(taskRequests).toHaveLength(1);
+      expect(taskRequests[0]!.searchParams.get("project_id")).toBe(PROJECT_ID);
+      expect(taskRequests[0]!.searchParams.get("task_list_id")).toBe(LIST_ID);
+      expect(taskRequests[0]!.searchParams.get("limit")).toBe("4");
+      expect(JSON.parse(result.stdout)).toEqual([
+        expect.objectContaining({ id: TASK_ID, task_list_id: LIST_ID }),
+      ]);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("rejects an explicit project and task-list slug mismatch before reading tasks", async () => {
+    const foreignProjectId = "66666666-6666-4666-8666-666666666666";
+    let taskRequests = 0;
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(request) {
+        const url = new URL(request.url);
+        if (url.pathname === "/v1/projects") {
+          return Response.json({ projects: [project()] });
+        }
+        if (url.pathname === `/v1/projects/${PROJECT_ID}`) {
+          return Response.json({ project: project() });
+        }
+        if (url.pathname === "/v1/task-lists") {
+          return Response.json({
+            task_lists: [taskList(LIST_ID, "release", foreignProjectId)],
+          });
+        }
+        if (url.pathname === "/v1/tasks") taskRequests++;
+        return Response.json({ tasks: [] });
+      },
+    });
+    const root = mkdtempSync(join(tmpdir(), "todos-cloud-list-scope-mismatch-"));
+    tempRoots.push(root);
+    try {
+      const result = await runCli(
+        ["--project", PROJECT_SLUG, "--json", "list", "--all", "--list", "release", "--format", "json"],
+        root,
+        `http://127.0.0.1:${server.port}`,
+      );
+      expect(result.exitCode).not.toBe(0);
+      expect(JSON.parse(result.stdout)).toEqual({ error: 'Task list not found: "release"' });
+      expect(result.stderr).toContain('Task list not found: "release"');
+      expect(taskRequests).toBe(0);
     } finally {
       server.stop(true);
     }
@@ -381,6 +484,9 @@ describe("cloud CLI task-list filtering", () => {
       port: 0,
       fetch(request) {
         const url = new URL(request.url);
+        if (url.pathname === `/v1/task-lists/${LIST_ID}`) {
+          return Response.json({ task_list: taskList(LIST_ID, "release", null) });
+        }
         if (url.pathname === "/v1/tasks") {
           taskRequests.push(url);
           return Response.json({
@@ -423,6 +529,9 @@ describe("cloud CLI task-list filtering", () => {
         port: 0,
         fetch(request) {
           const url = new URL(request.url);
+          if (url.pathname === `/v1/task-lists/${LIST_ID}`) {
+            return Response.json({ task_list: taskList(LIST_ID, "release", null) });
+          }
           if (url.pathname === "/v1/tasks") {
             taskRequests.push(url);
             const offset = Number(url.searchParams.get("offset") ?? "0");
@@ -493,6 +602,9 @@ describe("cloud CLI task-list filtering", () => {
       port: 0,
       fetch(request) {
         const url = new URL(request.url);
+        if (url.pathname === `/v1/task-lists/${LIST_ID}`) {
+          return Response.json({ task_list: taskList(LIST_ID, "release", null) });
+        }
         if (url.pathname === "/v1/tasks") {
           taskRequests.push(url);
           return Response.json(response);
