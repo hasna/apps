@@ -1,8 +1,12 @@
 # CLI reference
 
-The `capacity` executable requires Bun. Commands that open the catalog require
-an explicit `HASNA_ACCOUNTS_DEPLOYMENT` — `local` or `self_hosted`; there is no
-implicit deployment or fallback.
+The `capacity` executable requires Bun. Commands that open the catalog select
+the store from configuration: with no `HASNA_ACCOUNTS_*` configuration at all
+they open the local SQLite store at the default path (the zero-config on-box
+case); `HASNA_ACCOUNTS_DEPLOYMENT=local` selects that store explicitly; and
+`self_hosted` uses the configured API origin. Self-hosted configuration with an
+unset or `local` selector stays fail-closed — nothing is guessed when the
+selection is ambiguous.
 
 ## Commands
 
@@ -37,8 +41,8 @@ and `--version` take no value.
 
 | Variable | Behavior |
 | --- | --- |
-| `HASNA_ACCOUNTS_DEPLOYMENT` | Required for catalog commands: `local` or `self_hosted`. |
-| `HASNA_ACCOUNTS_DATABASE_PATH` | Local only. Optional absolute SQLite path; defaults to `~/.hasna/accounts/accounts.db`. |
+| `HASNA_ACCOUNTS_DEPLOYMENT` | Optional selector for catalog commands: `local` (the default when no self-hosted configuration is present) or `self_hosted` (required when it is). |
+| `HASNA_ACCOUNTS_DATABASE_PATH` | Local only. Optional absolute SQLite path; defaults to `~/.hasna/capacity/capacity.db` (a pre-existing `~/.hasna/accounts/accounts.db` written under the pre-rename default keeps opening when no canonical store exists). |
 | `HASNA_ACCOUNTS_CAPACITY_API_URL` | Self-hosted API origin; rejected in local mode. |
 | `HASNA_ACCOUNTS_CAPACITY_AUTH_REF` | Secrets-managed credential *reference*; rejected in local mode. |
 | `HASNA_ACCOUNTS_CAPACITY_RESOLVER_MODULE` | Absolute path or `file:` URL of the resolver module; rejected in local mode. |
@@ -48,16 +52,19 @@ Offline commands do not create a catalog and need no deployment configuration.
 ## Local deployment
 
 ```sh
-HASNA_ACCOUNTS_DEPLOYMENT=local capacity doctor --json
+capacity doctor --json
 capacity validate ./record.json --json
-HASNA_ACCOUNTS_DEPLOYMENT=local capacity list access-methods --json
-HASNA_ACCOUNTS_DEPLOYMENT=local capacity get access-methods <uuidv7> --json
-HASNA_ACCOUNTS_DEPLOYMENT=local capacity eligibility <account-lane-uuidv7> \
+capacity list access-methods --json
+capacity get access-methods <uuidv7> --json
+capacity eligibility <account-lane-uuidv7> \
   --operation responses.create \
   --model model.example \
   --data-classification internal \
   --json
 ```
+
+`HASNA_ACCOUNTS_DEPLOYMENT=local` may be set explicitly; it selects the same
+store the unset case defaults to.
 
 Positive local evaluation requires an explicitly configured, owner-only signed
 recovery ledger through the SDK/factory. Without it, readiness and eligibility

@@ -532,9 +532,74 @@ describe("accounts CLI", () => {
     expect(eligibility.exitCode).toBe(3);
   });
 
+  test("defaults to the local store when no deployment configuration is present", async () => {
+    // Regression for the read-path outage: every read verb returned rc=2
+    // VALIDATION_FAILED on a box with no HASNA_ACCOUNTS_* configuration, so
+    // runtime state could not be inspected at all. Unset deployment with no
+    // self-hosted configuration is the zero-config on-box case and must open
+    // the default local SQLite store, not refuse.
+    const home = mkdtempSync(join(TEMP_ROOT, "implicit-home-"));
+    cleanup.push(home);
+    const environment = { HOME: home };
+
+    const doctor = await runCli(["doctor", "--json"], environment);
+    expect(doctor.stderr).toBe("");
+    expect(doctor.exitCode).toBe(0);
+    expect(JSON.parse(doctor.stdout).data.adapter).toBe("sqlite");
+
+    const list = await runCli(["list", "entitlements", "--json"], environment);
+    expect(list.stderr).toBe("");
+    expect(list.exitCode).toBe(0);
+    expect(JSON.parse(list.stdout).data).toEqual({ kind: "entitlement", records: [] });
+
+    // The default path is derived from HOME, so the store landed inside the
+    // temp home — in capacity's OWN data directory, never inside the accounts
+    // app's data directory (which capacity does not own and whose permissions
+    // fail the owner-only path check on shared boxes).
+    expect(existsSync(join(home, ".hasna", "capacity", "capacity.db"))).toBe(true);
+    expect(existsSync(join(home, ".hasna", "accounts", "accounts.db"))).toBe(false);
+
+    // A store written under the pre-rename default keeps opening: with no
+    // canonical store present, the legacy path wins.
+    const legacyHome = mkdtempSync(join(TEMP_ROOT, "implicit-legacy-home-"));
+    cleanup.push(legacyHome);
+    mkdirSync(join(legacyHome, ".hasna", "accounts"), { recursive: true, mode: 0o700 });
+    const seeded = await runCli(["doctor", "--json"], {
+      HOME: legacyHome,
+      HASNA_ACCOUNTS_DATABASE_PATH: join(legacyHome, ".hasna", "accounts", "accounts.db"),
+    });
+    expect(seeded.exitCode).toBe(0);
+    const legacy = await runCli(["list", "entitlements", "--json"], { HOME: legacyHome });
+    expect(legacy.exitCode).toBe(0);
+    expect(existsSync(join(legacyHome, ".hasna", "capacity", "capacity.db"))).toBe(false);
+
+    // An explicit database path without the deployment variable is still the
+    // local store, at that path.
+    const directory = mkdtempSync(join(TEMP_ROOT, "implicit-db-"));
+    cleanup.push(directory);
+    const explicitPath = join(directory, "accounts.db");
+    const pathed = await runCli(["doctor", "--json"], {
+      HOME: home,
+      HASNA_ACCOUNTS_DATABASE_PATH: explicitPath,
+    });
+    expect(pathed.exitCode).toBe(0);
+    expect(existsSync(explicitPath)).toBe(true);
+  });
+
   test("refuses contradictory, implicit, relative, and incomplete deployment configuration", async () => {
-    const implicit = await runCli(["doctor", "--json"]);
-    expect(implicit.exitCode).toBe(2);
+    // Unset deployment WITH self-hosted configuration present stays
+    // fail-closed: the store selection is ambiguous and nothing is guessed.
+    const ambiguous = await runCli(["doctor", "--json"], {
+      HASNA_ACCOUNTS_CAPACITY_API_URL: "https://accounts.capacity.test",
+    });
+    expect(ambiguous.exitCode).toBe(2);
+    expect(JSON.parse(ambiguous.stderr).error.code).toBe("VALIDATION_FAILED");
+
+    const invalid = await runCli(["doctor", "--json"], {
+      HASNA_ACCOUNTS_DEPLOYMENT: "remote",
+    });
+    expect(invalid.exitCode).toBe(2);
+    expect(JSON.parse(invalid.stderr).error.code).toBe("VALIDATION_FAILED");
 
     const relative = await runCli(["doctor", "--json"], {
       HASNA_ACCOUNTS_DEPLOYMENT: "local",

@@ -36,6 +36,7 @@ import type {
   ProviderAccountView,
   RevisionMutationOptions,
 } from "./types";
+import { defaultDatabasePath } from "../storage/default-path";
 
 const OWNER_PATTERN = /^principal:(?:human|service):hasna:[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
@@ -49,7 +50,7 @@ export function createLocalAccountsCapacity(
       details: { field: "actorRef" },
     });
   }
-  const path = sqlitePath ?? join(homedir(), ".hasna", "accounts", "accounts.db");
+  const path = sqlitePath ?? defaultDatabasePath();
   if (!isAbsolute(path) || resolve(path) !== path) {
     throw new AccountsError("VALIDATION_FAILED", "Local SQLite path must be absolute and normalized", {
       details: { field: "sqlitePath" },
