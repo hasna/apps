@@ -2022,7 +2022,7 @@ describe("project-first CLI surface", () => {
     expect(unlinkedPayload.project.external_links.brief.linked).toBe(false);
   });
 
-  test("top-level events list and record expose project audit events", () => {
+  cliProcessTest("top-level events list and record expose project audit events", () => {
     const root = mkdtempSync(join(tmpdir(), "projects-cli-events-"));
     const env = { HASNA_PROJECTS_DB_PATH: join(root, "projects.db") };
     const targetPath = join(root, "evented-app");
@@ -2585,7 +2585,7 @@ describe("project-first CLI surface", () => {
     }
   });
 
-  test("top-level start accepts exact requested tmux windows as JSON", () => {
+  cliProcessTest("top-level start accepts exact requested tmux windows as JSON", () => {
     const root = mkdtempSync(join(tmpdir(), "projects-cli-start-windows-json-"));
     const env = { HASNA_PROJECTS_DB_PATH: join(root, "projects.db") };
 
@@ -2650,7 +2650,7 @@ describe("project-first CLI surface", () => {
     ]);
   });
 
-  test("top-level status reports expected project tmux session", () => {
+  cliProcessTest("top-level status reports expected project tmux session", () => {
     const root = mkdtempSync(join(tmpdir(), "projects-cli-status-"));
     const env = { HASNA_PROJECTS_DB_PATH: join(root, "projects.db") };
 
