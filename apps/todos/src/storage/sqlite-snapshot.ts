@@ -134,6 +134,7 @@ export function importSqliteTodosStorageSnapshot(
     columns: readonly string[],
     rows: readonly unknown[],
     updateClockColumn?: string,
+    acceptEqualClock = true,
     afterUpsert?: (row: Record<string, unknown>, changed: boolean) => void,
   ) => {
     for (const row of rows) {
@@ -146,7 +147,7 @@ export function importSqliteTodosStorageSnapshot(
           result.skipped += 1;
           continue;
         }
-        const state = upsertById(d, table, columns, record, updateClockColumn);
+        const state = upsertById(d, table, columns, record, updateClockColumn, acceptEqualClock);
         if (state === "inserted") result.inserted += 1;
         else if (state === "updated") result.updated += 1;
         else result.skipped += 1;
@@ -161,10 +162,13 @@ export function importSqliteTodosStorageSnapshot(
   applyRows("project_machine_paths", "project_machine_paths", PROJECT_MACHINE_PATH_COLUMNS, snapshot.projectMachinePaths ?? [], "updated_at");
   applyRows("agents", "agents", AGENT_COLUMNS, snapshot.agents, "last_seen_at");
   applyRows("task_lists", "task_lists", TASK_LIST_COLUMNS, snapshot.taskLists, "updated_at");
-  applyRows("plans", "plans", PLAN_COLUMNS, snapshot.plans, "updated_at");
+  // Plans have no optimistic-lock version. Equal-clock replacement therefore
+  // cannot distinguish an idempotent replay from a competing full-row writer;
+  // first-writer-wins is the only safe deterministic rule.
+  applyRows("plans", "plans", PLAN_COLUMNS, snapshot.plans, "updated_at", false);
   applyRows("templates", "task_templates", TEMPLATE_COLUMNS, snapshot.templates);
   applyRows("template_tasks", "template_tasks", TEMPLATE_TASK_COLUMNS, snapshot.templateTasks ?? []);
-  applyRows("tasks", "tasks", TASK_COLUMNS, sortedTasks(snapshot.tasks), "updated_at", (row, changed) => {
+  applyRows("tasks", "tasks", TASK_COLUMNS, sortedTasks(snapshot.tasks), "updated_at", true, (row, changed) => {
     if (changed && Array.isArray(row["tags"]) && typeof row["id"] === "string") {
       replaceTaskTags(row["id"], row["tags"].filter((tag): tag is string => typeof tag === "string"), d);
     }
@@ -181,6 +185,7 @@ function upsertById(
   columns: readonly string[],
   row: Record<string, unknown>,
   updateClockColumn?: string,
+  acceptEqualClock = true,
 ): "inserted" | "updated" | "skipped" {
   const id = row["id"];
   if (typeof id !== "string" || !id) throw new Error(`${table} row is missing id`);
@@ -199,7 +204,7 @@ function upsertById(
       : `${column} = excluded.${column}`))
     .join(", ");
   const clockGuard = updateClockColumn && presentColumns.includes(updateClockColumn)
-    ? ` WHERE ${table}.${updateClockColumn} IS NULL OR ${table}.${updateClockColumn} <= excluded.${updateClockColumn}`
+    ? ` WHERE ${table}.${updateClockColumn} IS NULL OR ${table}.${updateClockColumn} ${acceptEqualClock ? "<=" : "<"} excluded.${updateClockColumn}`
     : "";
   const sql = updateSet
     ? `INSERT INTO ${table} (${presentColumns.join(", ")}) VALUES (${placeholders})

@@ -1342,6 +1342,21 @@ export class ResourceConflictError extends Error {
   }
 }
 
+export class PlanRevisionConflictError extends Error {
+  static readonly code = "PLAN_REVISION_CONFLICT";
+
+  constructor(
+    public readonly planId: string,
+    public readonly expectedUpdatedAt: string,
+    public readonly currentUpdatedAt: string,
+  ) {
+    super(
+      `Plan revision conflict for ${planId}: expected ${expectedUpdatedAt}, current ${currentUpdatedAt}`,
+    );
+    this.name = "PlanRevisionConflictError";
+  }
+}
+
 export class PlanNotFoundError extends Error {
   static readonly code = "PLAN_NOT_FOUND";
   static readonly suggestion = "Use list_plans to see available plans.";

@@ -7,7 +7,7 @@
  * require `todos:write` (a `todos:*` key satisfies both). This is a real wrapper
  * over the core storage lib — there are NO stubs; unimplemented routes 404.
  */
-import { LockError, ProjectNotFoundError, ResourceConflictError, TaskNotFoundError, TaskNotStartableError, TaskReferenceAmbiguousError, TASK_PRIORITIES, TASK_STATUSES } from "../types/index.js";
+import { LockError, PlanNotFoundError, PlanRevisionConflictError, ProjectNotFoundError, ResourceConflictError, TaskNotFoundError, TaskNotStartableError, TaskReferenceAmbiguousError, TASK_PRIORITIES, TASK_STATUSES } from "../types/index.js";
 import { collapseEnumValues, resolveEnumVocabulary } from "../lib/enum-vocabulary.js";
 import type { CreatePlanInput, CreateProjectInput, CreateTaskInput, CreateTaskListInput, CreateTemplateInput, RenameProjectInput, TaskComment, TemplateTaskInput, UpdateTaskInput, UpdateTaskListInput } from "../types/index.js";
 import type { TodosStorageContext, TodosStorageSnapshot, TodosTaskCompletionOptions, UpdateTemplateInput } from "../storage/interfaces.js";
@@ -467,6 +467,80 @@ export function countSnapshotRecords(s: TodosStorageSnapshot): number {
     s.auditHistory.length +
     (s.tombstones?.length ?? 0)
   );
+}
+
+interface PlanCompletionImport {
+  id: string;
+  expected_updated_at: string;
+  status: "completed";
+}
+
+function validatePlanCompletionImports(raw: unknown):
+  | { present: false; operations: [] }
+  | { present: true; operations: PlanCompletionImport[]; error?: string } {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return { present: false, operations: [] };
+  }
+  const body = raw as Record<string, unknown>;
+  if (!Object.prototype.hasOwnProperty.call(body, "planCompletions")) {
+    return { present: false, operations: [] };
+  }
+  if (!Array.isArray(body["planCompletions"]) || body["planCompletions"].length !== 1) {
+    return {
+      present: true,
+      operations: [],
+      error: "planCompletions must contain exactly one completion operation",
+    };
+  }
+  const operation = body["planCompletions"][0];
+  if (!operation || typeof operation !== "object" || Array.isArray(operation)) {
+    return { present: true, operations: [], error: "plan completion must be an object" };
+  }
+  const record = operation as Record<string, unknown>;
+  const allowed = new Set(["id", "expected_updated_at", "status"]);
+  const unknown = Object.keys(record).find((key) => !allowed.has(key));
+  if (unknown) {
+    return { present: true, operations: [], error: `unknown plan completion field: ${unknown}` };
+  }
+  if (typeof record["id"] !== "string" || !record["id"].trim()) {
+    return { present: true, operations: [], error: "plan completion id must be a non-empty string" };
+  }
+  if (record["status"] !== "completed") {
+    return { present: true, operations: [], error: "plan completion status must be completed" };
+  }
+  const expectedUpdatedAt = typeof record["expected_updated_at"] === "string"
+    ? record["expected_updated_at"]
+    : "";
+  const timestampMatch = RFC3339_DATE_TIME.exec(expectedUpdatedAt);
+  const parsedTimestamp = Date.parse(expectedUpdatedAt);
+  if (!timestampMatch || Number.isNaN(parsedTimestamp)) {
+    return {
+      present: true,
+      operations: [],
+      error: "plan completion expected_updated_at must be an RFC 3339 date-time with an explicit offset",
+    };
+  }
+  const [, year, month, day] = timestampMatch as unknown as [string, string, string, string];
+  const calendarProbe = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)));
+  if (
+    calendarProbe.getUTCFullYear() !== Number(year)
+    || calendarProbe.getUTCMonth() !== Number(month) - 1
+    || calendarProbe.getUTCDate() !== Number(day)
+  ) {
+    return {
+      present: true,
+      operations: [],
+      error: "plan completion expected_updated_at names a date that does not exist",
+    };
+  }
+  return {
+    present: true,
+    operations: [{
+      id: record["id"],
+      expected_updated_at: expectedUpdatedAt,
+      status: "completed",
+    }],
+  };
 }
 
 /**
@@ -1544,6 +1618,39 @@ export async function handleV1Request(
       if (raw === null) return error(400, "invalid JSON body");
       const snapshot = normalizeImportSnapshot(raw);
       const received = countSnapshotRecords(snapshot);
+      const completionImports = validatePlanCompletionImports(raw);
+      if (completionImports.present) {
+        if (completionImports.error) return error(400, completionImports.error);
+        if (received !== 0) {
+          return error(400, "planCompletions cannot be combined with snapshot record arrays");
+        }
+        if (typeof store.plans.completeAtRevision !== "function") {
+          return error(501, "atomic plan completion is not supported by this storage backend");
+        }
+        const operation = completionImports.operations[0]!;
+        const completed = await store.plans.completeAtRevision(
+          operation.id,
+          operation.expected_updated_at,
+          contextFromPrincipal(principal),
+        );
+        return json({
+          result: {
+            inserted: 0,
+            updated: completed.applied ? 1 : 0,
+            deleted: 0,
+            skipped: completed.applied ? 0 : 1,
+            errors: [],
+          },
+          received: 1,
+          planCompletions: [{
+            id: operation.id,
+            status: "completed",
+            expected_updated_at: operation.expected_updated_at,
+            result_updated_at: completed.plan.updated_at,
+            applied: completed.applied,
+          }],
+        });
+      }
       if (received === 0) {
         return error(400, "empty snapshot: provide at least one record array (tasks/projects/plans/...)");
       }
@@ -1583,6 +1690,18 @@ export async function handleV1Request(
     }
     if (e instanceof TaskNotFoundError) {
       return error(404, e.message, { code: TaskNotFoundError.code });
+    }
+    if (e instanceof PlanNotFoundError) {
+      return error(404, e.message, { code: PlanNotFoundError.code });
+    }
+    if (e instanceof PlanRevisionConflictError) {
+      return error(409, e.message, {
+        code: PlanRevisionConflictError.code,
+        conflict: true,
+        plan_id: e.planId,
+        expected_updated_at: e.expectedUpdatedAt,
+        current_updated_at: e.currentUpdatedAt,
+      });
     }
     if (e instanceof LockError) return error(409, e.message, { code: LockError.code });
     if (e instanceof TaskNotStartableError) {

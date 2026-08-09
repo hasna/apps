@@ -1586,6 +1586,38 @@ function unwrapPlan(raw: unknown): Plan {
   return raw as Plan;
 }
 
+async function cloudGetPlanById(client: HasnaStorageClient, id: string): Promise<Plan | null> {
+  const raw = await client.get<unknown>("plans", id);
+  return raw ? unwrapPlan(raw) : null;
+}
+
+function isUnavailablePlanPatchRoute(error: unknown): boolean {
+  if (!error || typeof error !== "object" || (error as { status?: unknown }).status !== 404) return false;
+  const body = (error as { body?: unknown }).body;
+  const remoteMessage = body && typeof body === "object" && !Array.isArray(body)
+    ? (body as { error?: unknown }).error
+    : undefined;
+  return remoteMessage === "unknown /v1 resource: plans";
+}
+
+function isExactPlanCompletionPatch(patch: UpdatePlanInput): boolean {
+  const entries = Object.entries(patch).filter(([, value]) => value !== undefined);
+  return entries.length === 1 && entries[0]?.[0] === "status" && entries[0]?.[1] === "completed";
+}
+
+const PLAN_COMPLETION_PROTECTED_FIELDS = [
+  "id",
+  "slug",
+  "project_id",
+  "task_list_id",
+  "agent_id",
+  "name",
+  "description",
+  "created_at",
+  "machine_id",
+  "synced_at",
+] as const satisfies ReadonlyArray<keyof Plan>;
+
 /** Create one cloud plan (`POST /v1/plans`). */
 export async function cloudCreatePlan(client: HasnaStorageClient, input: CreatePlanInput): Promise<Plan> {
   return unwrapPlan(await requiredRemoteRoute(client, "/v1/plans", () =>
@@ -1594,7 +1626,84 @@ export async function cloudCreatePlan(client: HasnaStorageClient, input: CreateP
 
 /** Update one cloud plan (`PATCH /v1/plans/:id`). */
 export async function cloudUpdatePlan(client: HasnaStorageClient, id: string, patch: UpdatePlanInput): Promise<Plan> {
-  return unwrapPlan(await client.update<unknown>("plans", id, patch as unknown as Record<string, unknown>));
+  try {
+    return unwrapPlan(await client.update<unknown>("plans", id, patch as unknown as Record<string, unknown>));
+  } catch (error) {
+    if (!isExactPlanCompletionPatch(patch) || !isUnavailablePlanPatchRoute(error)) throw error;
+
+    // Some deployed authorities can read plans but predate the generic plan
+    // PATCH route. `/v1/import` is the authenticated compatibility route those
+    // authorities already expose, but a full plan snapshot is unsafe: Plan has
+    // no version and equal-clock imports can overwrite concurrent field edits.
+    // Ask the server for a status-only revision CAS instead. Legacy servers that
+    // do not implement this operation reject the empty snapshot and fail closed.
+    const existing = await cloudGetPlanById(client, id);
+    if (!existing) throw error;
+    if (existing.status === "completed") return existing;
+    const imported = await requiredRemoteRoute(client, "/v1/import", () =>
+      client.transport.post<unknown>("/import", {
+        source: "postgres",
+        planCompletions: [{
+          id,
+          expected_updated_at: existing.updated_at,
+          status: "completed",
+        }],
+      }));
+    const envelope = imported && typeof imported === "object" && !Array.isArray(imported)
+      ? imported as {
+        received?: unknown;
+        result?: { errors?: unknown };
+        planCompletions?: Array<{
+          id?: unknown;
+          status?: unknown;
+          expected_updated_at?: unknown;
+          result_updated_at?: unknown;
+          applied?: unknown;
+        }>;
+      }
+      : null;
+    const completion = envelope?.planCompletions?.[0];
+    if (
+      envelope?.received !== 1
+      || !envelope.result
+      || !Array.isArray(envelope.result.errors)
+      || envelope.result.errors.length > 0
+      || envelope.planCompletions?.length !== 1
+      || completion?.id !== id
+      || completion.status !== "completed"
+      || completion.expected_updated_at !== existing.updated_at
+      || typeof completion.result_updated_at !== "string"
+      || typeof completion.applied !== "boolean"
+    ) {
+      throw new Error(
+        "REMOTE_API_INCOMPATIBLE: /v1/import did not confirm one atomic plan completion; " +
+          "local SQLite fallback is disabled",
+      );
+    }
+
+    const persisted = await cloudGetPlanById(client, id);
+    if (!persisted) {
+      throw new Error(
+        `REMOTE_API_INCOMPATIBLE: /v1/import acknowledged plan completion ${id} but authoritative readback returned no plan; ` +
+          "local SQLite fallback is disabled",
+      );
+    }
+    if (persisted.status !== "completed" || persisted.updated_at !== completion.result_updated_at) {
+      throw new Error(
+        `REMOTE_API_INCOMPATIBLE: /v1/import completion readback did not match its receipt for plan ${id}; ` +
+          "local SQLite fallback is disabled",
+      );
+    }
+    for (const key of PLAN_COMPLETION_PROTECTED_FIELDS) {
+      if (persisted[key] !== existing[key]) {
+        throw new Error(
+          `REMOTE_PLAN_COMPLETION_CONFLICT: /v1/import completion changed protected plan field ${key}; ` +
+            "local SQLite fallback is disabled",
+        );
+      }
+    }
+    return persisted;
+  }
 }
 
 /** Delete one cloud plan (`DELETE /v1/plans/:id`). */

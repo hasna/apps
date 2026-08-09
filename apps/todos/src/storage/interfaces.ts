@@ -274,7 +274,22 @@ export interface TodosPlanStore {
   get(id: string, context?: TodosStorageContext): MaybePromise<Plan | null>;
   list(projectId?: string, context?: TodosStorageContext): MaybePromise<Plan[]>;
   update(id: string, input: UpdatePlanInput, context?: TodosStorageContext): MaybePromise<Plan>;
+  /**
+   * Atomically complete one plan only when its stored revision exactly matches
+   * the caller's observation. Optional for third-party adapters; `/v1/import`
+   * fails closed when the backing store cannot provide this CAS.
+   */
+  completeAtRevision?(
+    id: string,
+    expectedUpdatedAt: string,
+    context?: TodosStorageContext,
+  ): MaybePromise<TodosPlanCompletionAtRevisionResult>;
   delete(id: string, context?: TodosStorageContext): MaybePromise<boolean>;
+}
+
+export interface TodosPlanCompletionAtRevisionResult {
+  plan: Plan;
+  applied: boolean;
 }
 
 export interface TodosPlanProjectLinkApplyInput {

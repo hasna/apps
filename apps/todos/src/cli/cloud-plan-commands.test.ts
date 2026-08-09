@@ -127,6 +127,441 @@ describe("cloud CLI plan commands", () => {
     }
   });
 
+  test("completes a readable hosted plan when generic plan PATCH is unavailable", async () => {
+    const missingPlanId = "88888888-8888-4888-8888-888888888888";
+    const requests: Array<{
+      method: string;
+      path: string;
+      authorization: string | null;
+      body?: unknown;
+    }> = [];
+    let patchFailure: { status: number; error: string } | null = null;
+    let plan = {
+      id: PLAN_ID,
+      slug: "hosted-closure",
+      name: "Hosted closure",
+      description: "Existing hosted plan",
+      status: "active",
+      project_id: "project-hosted",
+      task_list_id: null,
+      agent_id: "closure-agent",
+      created_at: "2026-08-08T20:00:00.000Z",
+      updated_at: "2026-08-08T20:00:00.000Z",
+    };
+    const tasks = [
+      {
+        id: "11111111-1111-4111-8111-111111111111",
+        short_id: "CLOSE-1",
+        title: "Root task",
+        status: "completed",
+        plan_id: PLAN_ID,
+        parent_id: null,
+      },
+      {
+        id: "22222222-2222-4222-8222-222222222222",
+        short_id: "CLOSE-2",
+        title: "Child task",
+        status: "completed",
+        plan_id: PLAN_ID,
+        parent_id: "11111111-1111-4111-8111-111111111111",
+      },
+    ];
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url);
+        const body = ["POST", "PATCH"].includes(request.method) ? await request.json() : undefined;
+        requests.push({
+          method: request.method,
+          path: url.pathname,
+          authorization: request.headers.get("authorization"),
+          body,
+        });
+        if (url.pathname === `/v1/plans/${PLAN_ID}` && request.method === "GET") {
+          return Response.json({ plan });
+        }
+        if (url.pathname === `/v1/plans/${missingPlanId}` && request.method === "GET") {
+          return Response.json({ error: "plan not found" }, { status: 404 });
+        }
+        if (url.pathname === "/v1/plans" && request.method === "GET") {
+          return Response.json({ plans: [plan], count: 1, total: 1 });
+        }
+        if (url.pathname === `/v1/plans/${PLAN_ID}` && request.method === "PATCH") {
+          if (patchFailure) {
+            return Response.json({ error: patchFailure.error }, { status: patchFailure.status });
+          }
+          return Response.json({ error: "unknown /v1 resource: plans" }, { status: 404 });
+        }
+        if (url.pathname === "/v1/import" && request.method === "POST") {
+          const completion = (body as {
+            planCompletions?: Array<{
+              id: string;
+              expected_updated_at: string;
+              status: "completed";
+            }>;
+          }).planCompletions?.[0];
+          if (
+            !completion
+            || completion.id !== PLAN_ID
+            || completion.status !== "completed"
+            || completion.expected_updated_at !== plan.updated_at
+          ) {
+            return Response.json({ error: "expected one exact plan completion" }, { status: 409 });
+          }
+          plan = {
+            ...plan,
+            status: "completed",
+            updated_at: "2026-08-08T20:00:00.002Z",
+          };
+          return Response.json({
+            result: { inserted: 0, updated: 1, deleted: 0, skipped: 0, errors: [] },
+            received: 1,
+            planCompletions: [{
+              id: PLAN_ID,
+              status: "completed",
+              expected_updated_at: completion.expected_updated_at,
+              result_updated_at: plan.updated_at,
+              applied: true,
+            }],
+          });
+        }
+        if (url.pathname === "/v1/tasks" && request.method === "GET") {
+          return Response.json({ tasks, count: tasks.length, total: tasks.length });
+        }
+        return Response.json({ error: "not found" }, { status: 404 });
+      },
+    });
+    const root = mkdtempSync(join(tmpdir(), "todos-cloud-plan-complete-fallback-"));
+    tempRoots.push(root);
+    try {
+      const shownBefore = await runCli(
+        ["--json", "plans", "--show", PLAN_ID],
+        root,
+        `http://127.0.0.1:${server.port}`,
+      );
+      expect(shownBefore).toMatchObject({ exitCode: 0, stderr: "" });
+      expect(JSON.parse(shownBefore.stdout)).toMatchObject({
+        plan: { id: PLAN_ID, status: "active" },
+        tasks: [
+          { id: tasks[0]!.id, status: "completed", plan_id: PLAN_ID },
+          { id: tasks[1]!.id, status: "completed", plan_id: PLAN_ID },
+        ],
+      });
+
+      const completed = await runCli(
+        ["--json", "plans", "--complete", PLAN_ID],
+        root,
+        `http://127.0.0.1:${server.port}`,
+      );
+      expect(completed).toMatchObject({ exitCode: 0, stderr: "" });
+      expect(JSON.parse(completed.stdout)).toMatchObject({ id: PLAN_ID, status: "completed" });
+
+      const shownAfter = await runCli(
+        ["--json", "plans", "--show", PLAN_ID],
+        root,
+        `http://127.0.0.1:${server.port}`,
+      );
+      expect(shownAfter).toMatchObject({ exitCode: 0, stderr: "" });
+      expect(JSON.parse(shownAfter.stdout)).toMatchObject({
+        plan: { id: PLAN_ID, status: "completed" },
+        tasks: [
+          { id: tasks[0]!.id, status: "completed", plan_id: PLAN_ID },
+          { id: tasks[1]!.id, status: "completed", plan_id: PLAN_ID },
+        ],
+      });
+
+      const importRequestsBeforeMissing = requests.filter((request) => request.path === "/v1/import").length;
+      const missing = await runCli(
+        ["--json", "plans", "--complete", missingPlanId],
+        root,
+        `http://127.0.0.1:${server.port}`,
+      );
+      expect(missing.exitCode).toBe(1);
+      expect(missing.stderr).toContain(`Plan not found: ${missingPlanId}`);
+      expect(requests.filter((request) => request.path === "/v1/import")).toHaveLength(importRequestsBeforeMissing);
+
+      for (const failure of [
+        { status: 401, error: "unauthorized" },
+        { status: 400, error: "invalid plan status" },
+        { status: 405, error: `method PATCH not allowed on /v1/plans/${PLAN_ID}` },
+        { status: 404, error: "plan not found" },
+        { status: 503, error: "temporarily unavailable" },
+      ]) {
+        patchFailure = failure;
+        const importRequestsBeforeFailure = requests.filter((request) => request.path === "/v1/import").length;
+        const rejected = await runCli(
+          ["--json", "plans", "--complete", PLAN_ID],
+          root,
+          `http://127.0.0.1:${server.port}`,
+        );
+        expect(rejected.exitCode).toBe(1);
+        expect(rejected.stderr).toContain(failure.error);
+        expect(requests.filter((request) => request.path === "/v1/import")).toHaveLength(importRequestsBeforeFailure);
+      }
+      patchFailure = null;
+
+      expect(requests).toContainEqual(expect.objectContaining({
+        method: "PATCH",
+        path: `/v1/plans/${PLAN_ID}`,
+        authorization: `Bearer ${TEST_API_KEY}`,
+        body: { status: "completed" },
+      }));
+      expect(requests).toContainEqual(expect.objectContaining({
+        method: "POST",
+        path: "/v1/import",
+        authorization: `Bearer ${TEST_API_KEY}`,
+        body: expect.objectContaining({
+          planCompletions: [expect.objectContaining({
+            id: PLAN_ID,
+            status: "completed",
+            expected_updated_at: "2026-08-08T20:00:00.000Z",
+          })],
+        }),
+      }));
+      const importRequest = requests.find((request) => request.path === "/v1/import");
+      expect(Object.keys(importRequest?.body as Record<string, unknown>).sort()).toEqual([
+        "planCompletions",
+        "source",
+      ]);
+      expect(requests.filter((request) => request.path === "/v1/import")).toHaveLength(1);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("fails closed when an equal-clock writer changes protected plan fields before fallback completion", async () => {
+    const observedUpdatedAt = "2099-08-08T20:00:00.000Z";
+    const equalClock = "2099-08-08T20:00:00.001Z";
+    let plan = {
+      id: PLAN_ID,
+      slug: "hosted-closure",
+      name: "Observed name",
+      description: "Observed description",
+      status: "active",
+      project_id: "project-observed",
+      task_list_id: "task-list-observed",
+      agent_id: "agent-observed",
+      created_at: "2026-08-08T20:00:00.000Z",
+      updated_at: observedUpdatedAt,
+    };
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url);
+        if (url.pathname === `/v1/plans/${PLAN_ID}` && request.method === "GET") {
+          return Response.json({ plan });
+        }
+        if (url.pathname === `/v1/plans/${PLAN_ID}` && request.method === "PATCH") {
+          return Response.json({ error: "unknown /v1 resource: plans" }, { status: 404 });
+        }
+        if (url.pathname === "/v1/import" && request.method === "POST") {
+          const body = await request.json() as {
+            plans?: Array<typeof plan>;
+            planCompletions?: Array<{
+              id: string;
+              expected_updated_at: string;
+              status: "completed";
+            }>;
+          };
+          const completion = body.planCompletions?.[0];
+          if (completion) {
+            plan = {
+              ...plan,
+              name: "Concurrent name",
+              description: "Concurrent description",
+              project_id: "project-concurrent",
+              task_list_id: "task-list-concurrent",
+              agent_id: "agent-concurrent",
+              updated_at: equalClock,
+            };
+            return Response.json({
+              error: `Plan revision conflict: expected ${completion.expected_updated_at}, current ${plan.updated_at}`,
+              code: "PLAN_REVISION_CONFLICT",
+              conflict: true,
+            }, { status: 409 });
+          }
+
+          // Legacy unsafe behavior: a full-plan writer changes protected fields
+          // at the candidate clock, then the equal-clock completion snapshot is
+          // accepted and overwrites them. The pre-fix client follows this branch
+          // and falsely reports success because status-only readback passes.
+          const imported = body.plans?.[0];
+          if (!imported) return Response.json({ error: "missing completion" }, { status: 400 });
+          plan = {
+            ...plan,
+            name: "Concurrent name",
+            description: "Concurrent description",
+            project_id: "project-concurrent",
+            task_list_id: "task-list-concurrent",
+            agent_id: "agent-concurrent",
+            updated_at: imported.updated_at,
+          };
+          plan = { ...plan, ...imported };
+          return Response.json({
+            result: { inserted: 0, updated: 1, deleted: 0, skipped: 0, errors: [] },
+            received: 1,
+          });
+        }
+        if (url.pathname === "/v1/tasks" && request.method === "GET") {
+          return Response.json({ tasks: [], count: 0, total: 0 });
+        }
+        return Response.json({ error: "not found" }, { status: 404 });
+      },
+    });
+    const root = mkdtempSync(join(tmpdir(), "todos-cloud-plan-complete-conflict-"));
+    tempRoots.push(root);
+    try {
+      const completed = await runCli(
+        ["--json", "plans", "--complete", PLAN_ID],
+        root,
+        `http://127.0.0.1:${server.port}`,
+      );
+      expect(completed.exitCode).toBe(1);
+      expect(completed.stderr).toContain("Plan revision conflict");
+      expect(plan).toMatchObject({
+        status: "active",
+        name: "Concurrent name",
+        description: "Concurrent description",
+        project_id: "project-concurrent",
+        task_list_id: "task-list-concurrent",
+        agent_id: "agent-concurrent",
+        updated_at: equalClock,
+      });
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("fails closed when the legacy import route cannot perform atomic plan completion", async () => {
+    const requests: Array<{ method: string; path: string; body?: unknown }> = [];
+    const plan = {
+      id: PLAN_ID,
+      slug: "legacy-import",
+      name: "Legacy import",
+      description: "Must remain active",
+      status: "active",
+      project_id: null,
+      task_list_id: null,
+      agent_id: null,
+      created_at: "2026-08-08T20:00:00.000Z",
+      updated_at: "2026-08-08T20:00:00.000Z",
+    };
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url);
+        const body = request.method === "POST" ? await request.json() : undefined;
+        requests.push({ method: request.method, path: url.pathname, body });
+        if (url.pathname === `/v1/plans/${PLAN_ID}` && request.method === "GET") {
+          return Response.json({ plan });
+        }
+        if (url.pathname === `/v1/plans/${PLAN_ID}` && request.method === "PATCH") {
+          return Response.json({ error: "unknown /v1 resource: plans" }, { status: 404 });
+        }
+        if (url.pathname === "/v1/import" && request.method === "POST") {
+          return Response.json({
+            error: "empty snapshot: provide at least one record array (tasks/projects/plans/...)",
+          }, { status: 400 });
+        }
+        return Response.json({ error: "not found" }, { status: 404 });
+      },
+    });
+    const root = mkdtempSync(join(tmpdir(), "todos-cloud-plan-complete-legacy-import-"));
+    tempRoots.push(root);
+    try {
+      const completed = await runCli(
+        ["--json", "plans", "--complete", PLAN_ID],
+        root,
+        `http://127.0.0.1:${server.port}`,
+      );
+      expect(completed.exitCode).toBe(1);
+      expect(completed.stderr).toContain("empty snapshot");
+      expect(plan.status).toBe("active");
+      const importRequest = requests.find((request) => request.path === "/v1/import");
+      expect(importRequest?.body).toMatchObject({
+        planCompletions: [{
+          id: PLAN_ID,
+          expected_updated_at: plan.updated_at,
+          status: "completed",
+        }],
+      });
+      expect((importRequest?.body as { plans?: unknown }).plans).toBeUndefined();
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("rejects completed-status readback when a protected plan field changed", async () => {
+    let plan = {
+      id: PLAN_ID,
+      slug: "readback-guard",
+      name: "Observed name",
+      description: "Observed description",
+      status: "active",
+      project_id: null,
+      task_list_id: null,
+      agent_id: null,
+      created_at: "2026-08-08T20:00:00.000Z",
+      updated_at: "2026-08-08T20:00:00.000Z",
+    };
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url);
+        if (url.pathname === `/v1/plans/${PLAN_ID}` && request.method === "GET") {
+          return Response.json({ plan });
+        }
+        if (url.pathname === `/v1/plans/${PLAN_ID}` && request.method === "PATCH") {
+          return Response.json({ error: "unknown /v1 resource: plans" }, { status: 404 });
+        }
+        if (url.pathname === "/v1/import" && request.method === "POST") {
+          const expectedUpdatedAt = plan.updated_at;
+          plan = {
+            ...plan,
+            status: "completed",
+            name: "Unexpected concurrent name",
+            updated_at: "2026-08-08T20:00:00.002Z",
+          };
+          return Response.json({
+            result: { inserted: 0, updated: 1, deleted: 0, skipped: 0, errors: [] },
+            received: 1,
+            planCompletions: [{
+              id: PLAN_ID,
+              status: "completed",
+              expected_updated_at: expectedUpdatedAt,
+              result_updated_at: plan.updated_at,
+              applied: true,
+            }],
+          });
+        }
+        return Response.json({ error: "not found" }, { status: 404 });
+      },
+    });
+    const root = mkdtempSync(join(tmpdir(), "todos-cloud-plan-complete-readback-guard-"));
+    tempRoots.push(root);
+    try {
+      const completed = await runCli(
+        ["--json", "plans", "--complete", PLAN_ID],
+        root,
+        `http://127.0.0.1:${server.port}`,
+      );
+      expect(completed.exitCode).toBe(1);
+      expect(completed.stderr).toContain(
+        "REMOTE_PLAN_COMPLETION_CONFLICT: /v1/import completion changed protected plan field name",
+      );
+      expect(plan).toMatchObject({
+        status: "completed",
+        name: "Unexpected concurrent name",
+      });
+    } finally {
+      server.stop(true);
+    }
+  });
+
   test("shows every nested plan task in authority order without duplicates", async () => {
     const plan = {
       id: PLAN_ID,

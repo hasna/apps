@@ -433,6 +433,14 @@ export function createShadowTodosStorageAdapter(
         mirror.enqueueUpsert("plans", plan, context);
         return plan;
       },
+      async completeAtRevision(id, expectedUpdatedAt, context) {
+        if (typeof local.plans.completeAtRevision !== "function") {
+          throw new Error("Atomic plan completion is not supported by the local shadow adapter");
+        }
+        const completed = await local.plans.completeAtRevision(id, expectedUpdatedAt, context);
+        if (completed.applied) mirror.enqueueUpsert("plans", completed.plan, context);
+        return completed;
+      },
       async delete(id, context) {
         const deleted = await local.plans.delete(id, context);
         if (deleted) mirror.enqueueDelete("plans", id, context);

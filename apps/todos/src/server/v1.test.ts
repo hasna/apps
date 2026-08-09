@@ -1518,6 +1518,204 @@ describe("/v1 short task reference resolution", () => {
   });
 });
 
+describe("/v1/import atomic plan completion", () => {
+  test("completes only status at the exact observed revision and replays idempotently", async () => {
+    const project = await store.projects.create({
+      name: "Atomic completion project",
+      path: "/workspace/atomic-completion-project",
+    });
+    const taskList = await store.taskLists.create({
+      name: "Atomic completion task list",
+      slug: "atomic-completion-task-list",
+      project_id: project.id,
+    });
+    const agentResult = await store.agents.register({ name: "cassius" });
+    if ("conflict" in agentResult) throw new Error(agentResult.message);
+    const plan = await store.plans.create({
+      name: "Atomic completion",
+      slug: "atomic-completion",
+      description: "Protected description",
+      project_id: project.id,
+      task_list_id: taskList.id,
+      agent_id: agentResult.id,
+    });
+    const response = await request("/v1/import", "POST", {
+      source: "postgres",
+      planCompletions: [{
+        id: plan.id,
+        expected_updated_at: plan.updated_at,
+        status: "completed",
+      }],
+    });
+    expect(response?.status).toBe(200);
+    const body = await response!.json() as {
+      received: number;
+      result: { updated: number; skipped: number; errors: string[] };
+      planCompletions: Array<{
+        id: string;
+        status: string;
+        expected_updated_at: string;
+        result_updated_at: string;
+        applied: boolean;
+      }>;
+    };
+    expect(body).toMatchObject({
+      received: 1,
+      result: { updated: 1, skipped: 0, errors: [] },
+      planCompletions: [{
+        id: plan.id,
+        status: "completed",
+        expected_updated_at: plan.updated_at,
+        applied: true,
+      }],
+    });
+    const completed = await store.plans.get(plan.id);
+    expect(completed).toMatchObject({
+      status: "completed",
+      slug: plan.slug,
+      name: plan.name,
+      description: plan.description,
+      project_id: plan.project_id,
+      task_list_id: plan.task_list_id,
+      agent_id: plan.agent_id,
+      created_at: plan.created_at,
+      updated_at: body.planCompletions[0]!.result_updated_at,
+    });
+
+    const replay = await request("/v1/import", "POST", {
+      planCompletions: [{
+        id: plan.id,
+        expected_updated_at: completed!.updated_at,
+        status: "completed",
+      }],
+    });
+    expect(replay?.status).toBe(200);
+    expect(await replay!.json()).toMatchObject({
+      result: { updated: 0, skipped: 1, errors: [] },
+      planCompletions: [{
+        id: plan.id,
+        result_updated_at: completed!.updated_at,
+        applied: false,
+      }],
+    });
+  });
+
+  test("returns 409 without mutation after the observed plan revision changes", async () => {
+    const concurrentProject = await store.projects.create({
+      name: "Concurrent completion project",
+      path: "/workspace/concurrent-completion-project",
+    });
+    const concurrentTaskList = await store.taskLists.create({
+      name: "Concurrent completion task list",
+      slug: "concurrent-completion-task-list",
+      project_id: concurrentProject.id,
+    });
+    const concurrentAgentResult = await store.agents.register({ name: "cicero" });
+    if ("conflict" in concurrentAgentResult) throw new Error(concurrentAgentResult.message);
+    const plan = await store.plans.create({
+      name: "Observed name",
+      slug: "stale-completion",
+      description: "Observed description",
+    });
+    const concurrentUpdatedAt = "2099-08-08T20:00:00.001Z";
+    db.run(
+      `UPDATE plans
+       SET name = ?, description = ?, project_id = ?, task_list_id = ?, agent_id = ?, updated_at = ?
+       WHERE id = ?`,
+      [
+        "Concurrent name",
+        "Concurrent description",
+        concurrentProject.id,
+        concurrentTaskList.id,
+        concurrentAgentResult.id,
+        concurrentUpdatedAt,
+        plan.id,
+      ],
+    );
+
+    const response = await request("/v1/import", "POST", {
+      planCompletions: [{
+        id: plan.id,
+        expected_updated_at: plan.updated_at,
+        status: "completed",
+      }],
+    });
+    expect(response?.status).toBe(409);
+    expect(await response!.json()).toMatchObject({
+      code: "PLAN_REVISION_CONFLICT",
+      conflict: true,
+      plan_id: plan.id,
+      expected_updated_at: plan.updated_at,
+      current_updated_at: concurrentUpdatedAt,
+    });
+    expect(await store.plans.get(plan.id)).toMatchObject({
+      status: "active",
+      name: "Concurrent name",
+      description: "Concurrent description",
+      project_id: concurrentProject.id,
+      task_list_id: concurrentTaskList.id,
+      agent_id: concurrentAgentResult.id,
+      updated_at: concurrentUpdatedAt,
+    });
+  });
+
+  test("rejects malformed, mixed, and unsupported completion imports without snapshot writes", async () => {
+    const plan = await store.plans.create({ name: "Validation control" });
+    const mixed = await request("/v1/import", "POST", {
+      plans: [plan],
+      planCompletions: [{
+        id: plan.id,
+        expected_updated_at: plan.updated_at,
+        status: "completed",
+      }],
+    });
+    expect(mixed?.status).toBe(400);
+    expect((await store.plans.get(plan.id))?.status).toBe("active");
+
+    const malformed = await request("/v1/import", "POST", {
+      planCompletions: [{
+        id: plan.id,
+        expected_updated_at: "not-a-date",
+        status: "completed",
+      }],
+    });
+    expect(malformed?.status).toBe(400);
+    expect((await store.plans.get(plan.id))?.status).toBe("active");
+
+    const nonexistentDate = await request("/v1/import", "POST", {
+      planCompletions: [{
+        id: plan.id,
+        expected_updated_at: "2026-02-30T12:00:00Z",
+        status: "completed",
+      }],
+    });
+    expect(nonexistentDate?.status).toBe(400);
+    expect(await nonexistentDate!.json()).toMatchObject({
+      error: "plan completion expected_updated_at names a date that does not exist",
+    });
+    expect((await store.plans.get(plan.id))?.status).toBe("active");
+
+    const withoutCas = {
+      ...store,
+      plans: { ...store.plans, completeAtRevision: undefined },
+    } as TodosStorageAdapter;
+    const url = new URL("https://todos.example.test/v1/import");
+    const unsupported = await handleV1Request(new Request(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        planCompletions: [{
+          id: plan.id,
+          expected_updated_at: plan.updated_at,
+          status: "completed",
+        }],
+      }),
+    }), url, { ...dependencies, getStorageAdapter: () => withoutCas });
+    expect(unsupported?.status).toBe(501);
+    expect((await store.plans.get(plan.id))?.status).toBe("active");
+  });
+});
+
 describe("/v1/integrity", () => {
   test("GET reports every referential condition from the backing store (SQLite half of the duality gate)", async () => {
     const created = await request("/v1/projects", "POST", { name: "Integrity", path: "/workspace/integrity" });

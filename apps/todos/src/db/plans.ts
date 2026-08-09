@@ -1,6 +1,6 @@
 import type { Database, SQLQueryBindings } from "bun:sqlite";
 import type { CreatePlanInput, Plan, UpdatePlanInput } from "../types/index.js";
-import { PlanNotFoundError } from "../types/index.js";
+import { PlanNotFoundError, PlanRevisionConflictError } from "../types/index.js";
 import { databasePathFromDatabase } from "../lib/event-emission-safety.js";
 import { emitLocalEventHooksQuiet } from "../lib/event-hooks.js";
 import { getDatabase, now, uuid } from "./database.js";
@@ -188,6 +188,55 @@ export function updatePlan(
   return d.transaction(() => {
     guardPlanRowsSqlite([id], d);
     return updatePlanStored(id, input, d);
+  })();
+}
+
+function nextPlanCompletionTimestamp(expectedUpdatedAt: string): string {
+  const expected = Date.parse(expectedUpdatedAt);
+  const minimum = Number.isNaN(expected) ? Date.now() : expected + 2;
+  return new Date(Math.max(Date.now(), minimum)).toISOString();
+}
+
+export function completePlanAtRevision(
+  id: string,
+  expectedUpdatedAt: string,
+  db?: Database,
+): { plan: Plan; applied: boolean } {
+  const d = db || getDatabase();
+  return d.transaction(() => {
+    guardPlanRowsSqlite([id], d);
+    const plan = getPlan(id, d);
+    if (!plan) throw new PlanNotFoundError(id);
+    if (plan.updated_at !== expectedUpdatedAt) {
+      throw new PlanRevisionConflictError(id, expectedUpdatedAt, plan.updated_at);
+    }
+    if (plan.status === "completed") return { plan, applied: false };
+
+    const updatedAt = nextPlanCompletionTimestamp(expectedUpdatedAt);
+    const result = d.run(
+      `UPDATE plans
+       SET status = 'completed', updated_at = ?
+       WHERE id = ? AND updated_at = ? AND status <> 'completed'`,
+      [updatedAt, id, expectedUpdatedAt],
+    );
+    if (result.changes !== 1) {
+      const current = getPlan(id, d);
+      if (!current) throw new PlanNotFoundError(id);
+      throw new PlanRevisionConflictError(id, expectedUpdatedAt, current.updated_at);
+    }
+    const completed = getPlan(id, d)!;
+    emitLocalEventHooksQuiet({
+      type: "plan.updated",
+      payload: {
+        id,
+        old_status: plan.status,
+        new_status: completed.status,
+        name: completed.name,
+        project_id: completed.project_id,
+      },
+      databasePath: databasePathFromDatabase(d),
+    });
+    return { plan: completed, applied: true };
   })();
 }
 

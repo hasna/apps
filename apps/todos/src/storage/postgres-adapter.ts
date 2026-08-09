@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { LockError, PlanNotFoundError, ProjectNotFoundError, ResourceConflictError, TaskNotFoundError, TaskNotStartableError, TaskReferenceAmbiguousError, isTerminalStatus } from "../types/index.js";
+import { LockError, PlanNotFoundError, PlanRevisionConflictError, ProjectNotFoundError, ResourceConflictError, TaskNotFoundError, TaskNotStartableError, TaskReferenceAmbiguousError, isTerminalStatus } from "../types/index.js";
 import type {
   Agent,
   CreateCommentInput,
@@ -189,6 +189,8 @@ export function createPostgresTodosStorageAdapter(
         .filter((plan) => projectId === undefined || plan.project_id === projectId)
         .sort((a, b) => a.name.localeCompare(b.name)),
       update: (id, input) => updatePlan(id, input, store),
+      completeAtRevision: (id, expectedUpdatedAt, context) =>
+        store.completePlanAtRevision(id, expectedUpdatedAt, context),
       delete: (id, context) => store.deletePlan(id, context),
     },
     planProjectLinks: {
@@ -908,6 +910,69 @@ class PostgresJsonRecordStore {
     const row = result.rows[0];
     if (!row?.plan_found || !row.payload) throw new PlanNotFoundError(value.id);
     return payloadRecord<Plan>(row.payload);
+  }
+
+  /**
+   * Complete a plan by partial mutation under an exact observed-revision CAS.
+   *
+   * The sync-row version increment is as important as the CAS: plans carry no
+   * payload version, so a full import from the same observed revision can use
+   * the exact completion clock. Version 1 makes that equal-clock unversioned
+   * import lose if completion wins first; the revision predicate makes
+   * completion lose with a 409 if the field writer wins first.
+   */
+  async completePlanAtRevision(
+    id: string,
+    expectedUpdatedAt: string,
+    context: TodosStorageContext = {},
+  ): Promise<{ plan: Plan; applied: boolean }> {
+    await this.ensureSchema();
+    const result = await this.options.client.query<{ payload: unknown }>(
+      `/* todos:complete-plan-revision-cas */ WITH next_clock AS (
+         SELECT date_trunc(
+           'milliseconds',
+           GREATEST(clock_timestamp(), ($3::text)::timestamptz + interval '2 milliseconds')
+         ) AS completed_at
+       ), stored AS (
+         UPDATE ${this.tableName} AS record SET
+           payload = record.payload || jsonb_build_object(
+             'status', 'completed',
+             'updated_at', to_char(
+               next_clock.completed_at AT TIME ZONE 'UTC',
+               'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
+             )
+           ),
+           updated_at = next_clock.completed_at,
+           deleted_at = NULL,
+           source_machine_id = COALESCE($4, record.source_machine_id),
+           version = COALESCE(record.version, 0) + 1
+         FROM next_clock
+         WHERE record.service = $1
+           AND record.object_type = 'plans'
+           AND record.object_id = $2
+           AND record.deleted_at IS NULL
+           AND record.payload->>'updated_at' = $3::text
+           AND record.payload->>'status' IS DISTINCT FROM 'completed'
+         RETURNING record.payload
+       )
+       SELECT payload FROM stored`,
+      [
+        this.service,
+        id,
+        expectedUpdatedAt,
+        context.requestId ?? this.sourceMachineId ?? null,
+      ],
+    );
+    const payload = result.rows[0]?.payload;
+    if (payload) return { plan: payloadRecord<Plan>(payload), applied: true };
+
+    const current = await this.get<Plan>("plans", id);
+    if (!current) throw new PlanNotFoundError(id);
+    if (current.updated_at !== expectedUpdatedAt) {
+      throw new PlanRevisionConflictError(id, expectedUpdatedAt, current.updated_at);
+    }
+    if (current.status === "completed") return { plan: current, applied: false };
+    throw new PlanRevisionConflictError(id, expectedUpdatedAt, current.updated_at);
   }
 
   /**

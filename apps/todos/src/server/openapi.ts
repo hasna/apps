@@ -1895,9 +1895,9 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
       "/v1/import": {
         post: {
           operationId: "importSnapshot",
-          summary: "Bulk-ingest a full or partial snapshot (idempotent upsert by id)",
+          summary: "Bulk-ingest a snapshot or atomically complete one observed plan",
           description:
-            "Upserts every record carried in the body by primary key. All record arrays are optional and default to []; a caller may backfill a single object type (e.g. just tasks) or a complete snapshot. Re-posting the same rows never duplicates. Requires the todos:write scope.",
+            "Upserts every snapshot record by primary key, or accepts exactly one planCompletions operation that changes only plan status under an expected_updated_at CAS. Snapshot records and planCompletions are mutually exclusive. Requires the todos:write scope.",
           requestBody: {
             required: true,
             content: {
@@ -1917,6 +1917,21 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
                     templateTasks: { type: "array", items: { $ref: "#/components/schemas/TemplateTask" } },
                     auditHistory: { type: "array", items: { type: "object" } },
                     tombstones: { type: "array", items: { type: "object" } },
+                    planCompletions: {
+                      type: "array",
+                      minItems: 1,
+                      maxItems: 1,
+                      items: {
+                        type: "object",
+                        additionalProperties: false,
+                        required: ["id", "expected_updated_at", "status"],
+                        properties: {
+                          id: { type: "string" },
+                          expected_updated_at: { type: "string", format: "date-time" },
+                          status: { type: "string", enum: ["completed"] },
+                        },
+                      },
+                    },
                   },
                 },
               },
@@ -1938,6 +1953,26 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
                           deleted: { type: "number" },
                           skipped: { type: "number" },
                           errors: { type: "array", items: { type: "string" } },
+                        },
+                      },
+                      planCompletions: {
+                        type: "array",
+                        items: {
+                          type: "object",
+                          required: [
+                            "id",
+                            "status",
+                            "expected_updated_at",
+                            "result_updated_at",
+                            "applied",
+                          ],
+                          properties: {
+                            id: { type: "string" },
+                            status: { type: "string", enum: ["completed"] },
+                            expected_updated_at: { type: "string", format: "date-time" },
+                            result_updated_at: { type: "string", format: "date-time" },
+                            applied: { type: "boolean" },
+                          },
                         },
                       },
                     },

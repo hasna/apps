@@ -28,6 +28,7 @@ import {
 } from "../db/projects.js";
 import {
   createPlan,
+  completePlanAtRevision,
   getPlan,
   listPlans,
   updatePlan,
@@ -240,6 +241,8 @@ export function createLocalSqliteTodosStorageAdapter(
       get: (id) => getPlan(id, database()),
       list: (projectId) => listPlans(projectId, database()),
       update: (id, input) => updatePlan(id, input, database()),
+      completeAtRevision: (id, expectedUpdatedAt) =>
+        completePlanAtRevision(id, expectedUpdatedAt, database()),
       delete: (id) => deletePlan(id, database()),
     },
     planProjectLinks: {
