@@ -9,6 +9,7 @@ import type {
   ProjectRegistrationAuthorityReceipt,
   ProjectRegistrationAuthorityRecord,
   ProjectRegistrationAuthorityRequest,
+  ProjectRegistrationAuthorityTransport,
   ProjectRegistrationResourceKind,
 } from "./project-registration.js";
 
@@ -343,13 +344,16 @@ async function loadLocalAuthority(
 
 class LazyProjectRegistrationAuthority implements ProjectRegistrationAuthorityAdapter {
   readonly authority: ProjectRegistrationAuthorityName;
+  readonly transport?: ProjectRegistrationAuthorityTransport;
   private delegate: Promise<ProjectRegistrationAuthorityAdapter> | null = null;
 
   constructor(
     authority: ProjectRegistrationAuthorityName,
+    transport: ProjectRegistrationAuthorityTransport | undefined,
     private readonly load: () => Promise<ProjectRegistrationAuthorityAdapter>,
   ) {
     this.authority = authority;
+    this.transport = transport;
   }
 
   private resolve(): Promise<ProjectRegistrationAuthorityAdapter> {
@@ -404,8 +408,14 @@ function configuredAuthority(
   authority: ProjectRegistrationAuthorityName,
   options: Required<ProductionProjectRegistrationAuthorityOptions>,
 ): ProjectRegistrationAuthorityAdapter {
-  return new LazyProjectRegistrationAuthority(authority, async () => {
-    const http = authorityHttpConfig(AUTHORITY_ENDPOINTS[authority], options.env);
+  const config = AUTHORITY_ENDPOINTS[authority];
+  const transport = firstConfigured(options.env, config.dbPathKeys)
+    ? "local"
+    : firstConfigured(options.env, [...config.apiUrlKeys, ...config.apiKeyKeys])
+      ? "api"
+      : undefined;
+  return new LazyProjectRegistrationAuthority(authority, transport, async () => {
+    const http = authorityHttpConfig(config, options.env);
     return http
       ? loadHttpAuthority(authority, http, options.fetch, options.importModule)
       : loadLocalAuthority(authority, options.importModule);
