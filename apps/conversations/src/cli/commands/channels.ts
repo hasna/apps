@@ -767,7 +767,11 @@ export function registerChannelCommands(program: Command): void {
         printErrorLine(chalk.red("Channel name cannot be empty."));
         process.exit(1);
       }
-      const members = await getStore().getChannelMembers(channelArg);
+      const store = getStore();
+      if (!await store.getChannel(channelArg)) {
+        emitCliError(`Channel #${channelArg} not found.`, opts);
+      }
+      const members = await store.getChannelMembers(channelArg);
       const window = getCliWindow({ limit: opts.limit, cursor: opts.cursor });
       const page = windowItems(members, window);
 

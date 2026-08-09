@@ -2058,6 +2058,8 @@ async function handleV1(
   if (chanMembersMatch) {
     const name = normalizeChannelName(decodeURIComponent(chanMembersMatch[1]));
     if (method === "GET") {
+      const exists = await client.get(`SELECT name FROM channels WHERE name = $1`, [name]);
+      if (!exists) return json({ error: `Channel not found: ${name}` }, 404);
       const rows = await client.many(
         `SELECT channel, agent, joined_at FROM channel_members WHERE channel = $1 ORDER BY joined_at ASC`,
         [name],

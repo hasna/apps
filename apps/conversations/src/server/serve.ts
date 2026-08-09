@@ -470,6 +470,16 @@ export function startDashboardServer(port = 0, host?: string) {
         }
       }
 
+      const channelMembersMatch = path.match(/^\/api\/channels\/([^/]+)\/members$/);
+      if (channelMembersMatch && req.method === "GET") {
+        const channelName = decodeURIComponent(channelMembersMatch[1]);
+        const store = getStore();
+        if (!await store.getChannel(channelName)) {
+          return jsonResponse({ error: `Channel not found: ${channelName}` }, 404);
+        }
+        return jsonResponse(await store.getChannelMembers(channelName));
+      }
+
       // Channel update/archive/unarchive by name
       const channelArchiveMatch = path.match(/^\/api\/channels\/([^/]+)\/archive$/);
       if (channelArchiveMatch && req.method === "POST") {

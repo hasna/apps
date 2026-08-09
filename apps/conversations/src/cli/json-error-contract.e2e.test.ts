@@ -74,6 +74,24 @@ describe("--json error contract", () => {
     expect(parsed.error).toContain("not found");
   });
 
+  test("channel members <missing> --json emits a JSON not-found error", () => {
+    const { parsed } = expectJsonError(["channel", "members", "missing-members-channel", "--json"]);
+    expect(parsed.error).toContain("not found");
+  });
+
+  test("channel members <existing-empty> --json still succeeds with an empty list", () => {
+    const created = runCli(["channel", "create", "existing-empty-members", "--from", "alice", "--json"]);
+    expect(created.exitCode, created.stderr).toBe(0);
+
+    const left = runCli(["channel", "leave", "existing-empty-members", "--from", "alice", "--json"]);
+    expect(left.exitCode, left.stderr).toBe(0);
+    expect(JSON.parse(left.stdout)).toMatchObject({ left: true });
+
+    const members = runCli(["channel", "members", "existing-empty-members", "--json"]);
+    expect(members.exitCode, members.stderr).toBe(0);
+    expect(JSON.parse(members.stdout)).toEqual([]);
+  });
+
   test("without --json the same error stays human-readable on stderr", () => {
     const res = runCli(["show", "999999999"]);
     expect(res.exitCode).toBe(1);

@@ -776,6 +776,33 @@ beforeAll(() => {
 afterAll(() => { server.stop(true); });
 
 describe("conversations-serve", () => {
+  test("GET /v1/channels/:name/members distinguishes missing from existing empty channels", async () => {
+    activeFakeClient!.__debug.seedChannel({
+      id: "chn_00000000000000000000000000000053",
+      name: "existing-empty-members",
+      description: null,
+      topic: null,
+      project_id: null,
+      created_by: "alice",
+      created_at: "2026-08-09T00:00:00.000Z",
+      archived_at: null,
+      metadata: null,
+      tags: null,
+    }, [], []);
+
+    const existing = await fetch(`${base}/v1/channels/existing-empty-members/members`, {
+      headers: { "x-api-key": rwKey },
+    });
+    expect(existing.status).toBe(200);
+    expect(await existing.json()).toEqual({ members: [] });
+
+    const missing = await fetch(`${base}/v1/channels/missing-members-channel/members`, {
+      headers: { "x-api-key": rwKey },
+    });
+    expect(missing.status).toBe(404);
+    expect(await missing.json()).toEqual({ error: "Channel not found: missing-members-channel" });
+  });
+
   test("POST /v1/channel-notifications/baseline executes one atomic snapshot statement", async () => {
     const store = new ApiStore(createHasnaStorageClient(
       "conversations",
