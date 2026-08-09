@@ -88,6 +88,27 @@ function writeClaudeAuth(profile: Profile): void {
   writeFileSync(join(profile.dir, ".credentials.json"), credentials);
 }
 
+function writeRenewableClaudeAuth(profile: Profile): void {
+  const accessKey = "access" + "Token";
+  const refreshKey = "refresh" + "Token";
+  writeFileSync(
+    join(profile.dir, ".claude.json"),
+    JSON.stringify({
+      oauthAccount: { accountUuid: ACCOUNT_UUID, emailAddress: profile.email },
+    }) + "\n",
+  );
+  writeFileSync(
+    join(profile.dir, ".credentials.json"),
+    JSON.stringify({
+      claudeAiOauth: {
+        [accessKey]: `${FIXTURE_SECRET}-aged-access`,
+        [refreshKey]: `${FIXTURE_SECRET}-refresh`,
+        expiresAt: Date.now() - 60_000,
+      },
+    }) + "\n",
+  );
+}
+
 function parkClaudeAuth(profile: Profile): void {
   const accessKey = "access" + "Token";
   const refreshKey = "refresh" + "Token";
@@ -154,6 +175,35 @@ function countingFetch(body = usageShape(25, 40)): { impl: typeof fetch; calls: 
     });
   }) as unknown as typeof fetch;
   return { impl, calls: () => count };
+}
+
+function refreshFetch(tokenStatus = 200): {
+  impl: typeof fetch;
+  tokenCalls: () => number;
+  usageCalls: () => number;
+} {
+  let tokenCalls = 0;
+  let usageCalls = 0;
+  const impl = (async (input: unknown) => {
+    if (String(input).includes("/oauth/token")) {
+      tokenCalls += 1;
+      if (tokenStatus !== 200) return new Response("invalid_grant", { status: tokenStatus });
+      return new Response(
+        JSON.stringify({
+          access_token: `${FIXTURE_SECRET}-fresh-access`,
+          refresh_token: `${FIXTURE_SECRET}-fresh-refresh`,
+          expires_in: 3600,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    usageCalls += 1;
+    return new Response(JSON.stringify(usageShape(25, 40)), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }) as unknown as typeof fetch;
+  return { impl, tokenCalls: () => tokenCalls, usageCalls: () => usageCalls };
 }
 
 function runUsageCli(args: string[]) {
@@ -403,6 +453,87 @@ test("refresh is the explicit provider-fetch gate and still fetches once per dis
     source: "fetch",
     sessionHeadroom: 75,
     weeklyHeadroom: 60,
+  });
+});
+
+test("a rejected real refresh overrides renewable metadata and fails launchability closed", async () => {
+  writeRenewableClaudeAuth(profiles[0]!);
+  const fetched = refreshFetch(401);
+
+  const report = await collectProfilesUsage(
+    {
+      refresh: true,
+      env: fixtureEnv(),
+      fetchImpl: fetched.impl,
+      processScanner: () => [],
+    },
+    resolveStore(fixtureEnv()),
+  );
+  const claude = report.profiles.find((profile) => profile.tool === "claude")!;
+
+  expect(fetched.tokenCalls()).toBe(1);
+  expect(fetched.usageCalls()).toBe(0);
+  expect(claude.usage).toEqual({
+    kind: "readiness-proxy",
+    status: "degraded",
+    reason: "no-cached-rate-limit-data",
+  });
+  expect(claude.launchable).toEqual({ status: "no", reason: "auth-unavailable" });
+});
+
+test("a renewable profile whose real refresh succeeds remains launchable", async () => {
+  writeRenewableClaudeAuth(profiles[0]!);
+  const fetched = refreshFetch();
+
+  const report = await collectProfilesUsage(
+    {
+      refresh: true,
+      env: fixtureEnv(),
+      fetchImpl: fetched.impl,
+      processScanner: () => [],
+    },
+    resolveStore(fixtureEnv()),
+  );
+  const claude = report.profiles.find((profile) => profile.tool === "claude")!;
+
+  expect(fetched.tokenCalls()).toBe(1);
+  expect(fetched.usageCalls()).toBe(1);
+  expect(claude.usage.kind).toBe("rate-limit");
+  expect(claude.launchable).toEqual({ status: "yes", reason: "auth-renewable" });
+});
+
+test("missing and foreign-occupied Claude directories remain non-launchable", async () => {
+  rmSync(profiles[0]!.dir, { recursive: true, force: true });
+  const missing = await collectProfilesUsage(
+    { env: fixtureEnv(), processScanner: () => [] },
+    resolveStore(fixtureEnv()),
+  );
+  expect(missing.profiles.find((profile) => profile.tool === "claude")?.launchable).toEqual({
+    status: "no",
+    reason: "profile-directory-missing",
+  });
+
+  mkdirSync(profiles[0]!.dir, { recursive: true });
+  writeClaudeAuth(profiles[0]!);
+  parkClaudeAuth(profiles[0]!);
+  writeFileSync(
+    join(profiles[0]!.dir, ".claude.json"),
+    JSON.stringify({
+      oauthAccount: {
+        accountUuid: "22222222-2222-4222-8222-222222222222",
+        emailAddress: "occupant@example.test",
+      },
+    }) + "\n",
+  );
+  writeSwitchedAccountMarker(profiles[0]!.dir, { profile: "occupant" });
+
+  const occupied = await collectProfilesUsage(
+    { env: fixtureEnv(), processScanner: () => [] },
+    resolveStore(fixtureEnv()),
+  );
+  expect(occupied.profiles.find((profile) => profile.tool === "claude")?.launchable).toEqual({
+    status: "no",
+    reason: "profile-directory-occupied",
   });
 });
 

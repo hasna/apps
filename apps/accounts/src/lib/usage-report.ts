@@ -321,6 +321,8 @@ function profileUsageAvailability(
 function profileLaunchability(
   readiness: AccountsProfileReadiness | undefined,
   providerAvailable: boolean | undefined,
+  account: AccountUsageEntry | undefined,
+  refreshRequested: boolean,
 ): ProfileLaunchability {
   if (!readiness) {
     return { status: "unknown", reason: "profile-readiness-unavailable" };
@@ -337,7 +339,21 @@ function profileLaunchability(
     return { status: "unknown", reason: "auth-not-locally-verifiable" };
   }
   if (readiness.login.valid) return { status: "yes", reason: "ready" };
-  if (readiness.login.renewable) return { status: "yes", reason: "auth-renewable" };
+  if (readiness.login.renewable) {
+    // `renewable` is only a structural claim: a refresh-token-shaped field is
+    // present. When the caller explicitly exercises the real refresh path, its
+    // result outranks that metadata. A rejected refresh leaves the account at
+    // `needs-refresh`; a freshly minted token rejected by the usage endpoint
+    // returns `unauthorized`. Neither profile is launchable even though the
+    // pre-refresh readiness snapshot still says renewable.
+    if (
+      refreshRequested &&
+      (!account || account.status !== "ok" || account.error?.kind === "unauthorized")
+    ) {
+      return { status: "no", reason: "auth-unavailable" };
+    }
+    return { status: "yes", reason: "auth-renewable" };
+  }
   return { status: "no", reason: "auth-unavailable" };
 }
 
@@ -458,6 +474,8 @@ export async function collectProfilesUsage(
           launchable: profileLaunchability(
             profileReadiness,
             providerAvailableByTool.get(profile.tool),
+            profile.tool === "claude" ? claudeAccountByProfile.get(profile.name) : undefined,
+            opts.refresh === true,
           ),
         };
       }),
