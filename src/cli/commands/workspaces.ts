@@ -33,9 +33,9 @@ import {
 import {
   ProjectRegistrationPathHandle,
   registerFullProject,
-  unavailableProjectRegistrationAuthorities,
   type FullProjectRegistrationProjectInput,
 } from "../../lib/project-registration.js";
+import { productionProjectRegistrationAuthorities } from "../../lib/production-project-registration-authorities.js";
 import { doctorWorkspace } from "../../lib/workspace-doctor.js";
 import { resolveProjectStore, type ProjectStore } from "../../store/project-store.js";
 
@@ -1613,7 +1613,7 @@ function registerProjectCommands(program: Command): void {
           response_byte_limit: payload.response_byte_limit,
           time_budget_ms: payload.time_budget_ms,
         }, {
-          authorities: unavailableProjectRegistrationAuthorities(),
+          authorities: productionProjectRegistrationAuthorities(),
         });
         if (wantsJson(opts)) {
           printObject(result, opts);

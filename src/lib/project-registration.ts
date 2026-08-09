@@ -200,6 +200,8 @@ export interface ProjectRegistrationAuthorityLookupRequest extends ProjectRegist
   corpus_id: string;
   target_selector: string;
   idempotency_key: string;
+  request_digest: string;
+  precondition_digest: string;
   target_id?: string;
   max_items: 1;
 }
@@ -1188,6 +1190,8 @@ async function resolveAuthorityMutation(input: {
     corpus_id: input.capability.corpus_id,
     target_selector: input.request.target_selector,
     idempotency_key: input.request.idempotency_key,
+    request_digest: input.request.request_digest,
+    precondition_digest: input.request.precondition_digest,
     target_id: directReceipt?.target_id ?? undefined,
     max_items: 1,
     response_byte_limit: input.request.response_byte_limit,
