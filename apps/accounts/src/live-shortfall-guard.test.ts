@@ -55,6 +55,26 @@ const CANONICAL = [
   "global-credential-exposure-hygiene",
 ];
 
+const GLOBAL_AGENT_SOURCES = [
+  "hasna-global-coding-agent-non-overridable-rules",
+  "hasna-global-coding-agent-system-prompt",
+  "hasna-agent-operating-rules",
+];
+
+const CONFIGURED_PROVIDER_POPULATION = [
+  ...GLOBAL_AGENT_SOURCES,
+  "hasna-antigravity-global-agent-overlay",
+  "hasna-claude-global-agent-overlay",
+  "hasna-codewith-global-agent-overlay",
+  "hasna-codex-global-agent-overlay",
+  "hasna-opencode-global-agent-overlay",
+];
+
+const CLAUDE_REQUIRED_SOURCES = [
+  ...GLOBAL_AGENT_SOURCES,
+  "hasna-claude-global-agent-overlay",
+];
+
 function writeIdentityExport(name: string, ids: string[]): string {
   const path = join(home, `${name}.configs.json`);
   writeFileSync(
@@ -140,11 +160,31 @@ test("the required set is resolvable from configuration, not only from a caller 
   expect(resolveRequiredInstructionSourceIds({ env: process.env })).toEqual(CANONICAL);
 });
 
+test("provider overlay scoping follows the source-id convention without a provider allowlist", () => {
+  process.env.HASNA_ACCOUNTS_REQUIRED_INSTRUCTION_SOURCES = [
+    "global-neutral-source",
+    "hasna-claude-global-agent-overlay",
+    "hasna-futuretool-global-agent-overlay",
+  ].join(",");
+
+  expect(resolveRequiredInstructionSourceIds({ env: process.env, configsTool: "claude" })).toEqual([
+    "global-neutral-source",
+    "hasna-claude-global-agent-overlay",
+  ]);
+});
+
 test("an explicit caller list beats the environment, and whitespace/empties are ignored", () => {
   process.env.HASNA_ACCOUNTS_REQUIRED_INSTRUCTION_SOURCES = " a , , b ,";
 
   expect(resolveRequiredInstructionSourceIds({ env: process.env })).toEqual(["a", "b"]);
   expect(resolveRequiredInstructionSourceIds({ env: process.env, explicit: ["c"] })).toEqual(["c"]);
+  expect(
+    resolveRequiredInstructionSourceIds({
+      env: process.env,
+      explicit: ["caller-neutral", "hasna-claude-global-agent-overlay", "hasna-codex-global-agent-overlay"],
+      configsTool: "claude",
+    }),
+  ).toEqual(["caller-neutral", "hasna-claude-global-agent-overlay"]);
 });
 
 test("no configuration means no required set — reported as absent, never invented", () => {
@@ -163,4 +203,42 @@ test("configuration arms the guard end to end, without the caller passing a lite
       runner: manifestWriter(profile, ["hasna-agent-operating-rules"]),
     }),
   ).toThrow(/missing 2 of 3 required instruction sources/i);
+});
+
+test("a valid Claude render ignores unrelated provider overlays in the configured population", () => {
+  process.env.HASNA_ACCOUNTS_REQUIRED_INSTRUCTION_SOURCES = CONFIGURED_PROVIDER_POPULATION.join(",");
+  const profile = addProfile({ name: "claude-provider-scoped", tool: "claude" });
+  const identityExport = writeIdentityExport("claude-provider-scoped", CLAUDE_REQUIRED_SOURCES);
+
+  const result = runConfigsPrelaunch(profile, getTool("claude"), {
+    identityExports: [identityExport],
+    requiredSourceIds: resolveRequiredInstructionSourceIds({ env: process.env }),
+    runner: manifestWriter(profile, CLAUDE_REQUIRED_SOURCES),
+  });
+
+  expect(result.result).toBe("applied");
+  expect(result.prelaunch.lastRun?.shortfallGuard).toBe("armed");
+});
+
+test("a Claude render still fails when a genuinely Claude-required source is missing", () => {
+  process.env.HASNA_ACCOUNTS_REQUIRED_INSTRUCTION_SOURCES = CONFIGURED_PROVIDER_POPULATION.join(",");
+  const profile = addProfile({ name: "claude-provider-shortfall", tool: "claude" });
+  const missingSource = "hasna-global-coding-agent-system-prompt";
+  const renderedSources = CLAUDE_REQUIRED_SOURCES.filter((id) => id !== missingSource);
+  const identityExport = writeIdentityExport("claude-provider-shortfall", renderedSources);
+
+  let message = "";
+  try {
+    runConfigsPrelaunch(profile, getTool("claude"), {
+      identityExports: [identityExport],
+      requiredSourceIds: resolveRequiredInstructionSourceIds({ env: process.env }),
+      runner: manifestWriter(profile, renderedSources),
+    });
+  } catch (error) {
+    message = error instanceof Error ? error.message : String(error);
+  }
+
+  expect(message).toMatch(/missing 1 of 4 required instruction sources/i);
+  expect(message).toContain(missingSource);
+  expect(message).not.toContain("hasna-codewith-global-agent-overlay");
 });

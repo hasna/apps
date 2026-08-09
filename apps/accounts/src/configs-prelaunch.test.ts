@@ -111,6 +111,7 @@ describe("configs prelaunch", () => {
   test("maps Claude, Codex, and Codewith tools to configs session tools", () => {
     expect(configsSessionToolFor(getTool("claude"))).toBe("claude");
     expect(configsSessionToolFor(getTool("codex"))).toBe("codex");
+    expect(configsSessionToolFor(getTool("codex-app"))).toBe("codex");
     expect(configsSessionToolFor(getTool("codewith"))).toBe("codewith");
     expect(getTool("codewith").envVar).toBe("CODEWITH_HOME");
   });

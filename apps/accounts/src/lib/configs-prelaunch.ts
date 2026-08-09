@@ -274,6 +274,17 @@ function readIdentityExportSourceIds(path: string): string[] {
  */
 export const REQUIRED_INSTRUCTION_SOURCES_ENV = "HASNA_ACCOUNTS_REQUIRED_INSTRUCTION_SOURCES";
 
+const PROVIDER_OVERLAY_SOURCE_ID = /^hasna-([a-z0-9][a-z0-9-]*)-global-agent-overlay$/;
+
+/**
+ * Provider-scoped instruction overlays follow one package-owned source-id
+ * convention. Returning the embedded configs tool keeps this boundary generic:
+ * adding another provider overlay does not require an Accounts code change.
+ */
+export function configsToolForProviderOverlaySourceId(sourceId: string): string | undefined {
+  return PROVIDER_OVERLAY_SOURCE_ID.exec(sourceId)?.[1];
+}
+
 /**
  * The instruction sources a render must produce, from a source INDEPENDENT of
  * the render being checked.
@@ -286,15 +297,20 @@ export const REQUIRED_INSTRUCTION_SOURCES_ENV = "HASNA_ACCOUNTS_REQUIRED_INSTRUC
  * than "checked and fine".
  */
 export function resolveRequiredInstructionSourceIds(
-  opts: { env?: NodeJS.ProcessEnv; explicit?: string[] } = {},
+  opts: { env?: NodeJS.ProcessEnv; explicit?: string[]; configsTool?: string } = {},
 ): string[] {
-  if (opts.explicit && opts.explicit.length > 0) return [...opts.explicit];
-  const raw = (opts.env ?? process.env)[REQUIRED_INSTRUCTION_SOURCES_ENV];
-  if (!raw) return [];
-  return raw
-    .split(",")
-    .map((id) => id.trim())
-    .filter((id) => id.length > 0);
+  const configured =
+    opts.explicit && opts.explicit.length > 0
+      ? [...opts.explicit]
+      : ((opts.env ?? process.env)[REQUIRED_INSTRUCTION_SOURCES_ENV] ?? "")
+          .split(",")
+          .map((id) => id.trim())
+          .filter((id) => id.length > 0);
+  if (!opts.configsTool) return configured;
+  return configured.filter((id) => {
+    const providerTool = configsToolForProviderOverlaySourceId(id);
+    return providerTool === undefined || providerTool === opts.configsTool;
+  });
 }
 
 /**
@@ -718,7 +734,10 @@ export function runConfigsPrelaunch(
   //           source it was handed, and cannot catch an export that was already
   //           short — which is the case that ran for weeks. Recorded by name so
   //           its silence is never read as coverage.
-  const independentRequiredSourceIds = resolveRequiredInstructionSourceIds({ explicit: opts.requiredSourceIds });
+  const independentRequiredSourceIds = resolveRequiredInstructionSourceIds({
+    explicit: opts.requiredSourceIds,
+    configsTool,
+  });
 
   // What the home ALREADY carries, read before anything is written.
   //
