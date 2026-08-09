@@ -10,6 +10,8 @@ import type { KnowledgeItem } from './store.js';
 
 export const KNOWLEDGE_GUARDED_WRITE_CONTRACT = 'FCAME-1' as const;
 export const KNOWLEDGE_PRIVATE_INPUT_SCHEMA = 'hasna.knowledge.private-input.v1' as const;
+export const KNOWLEDGE_PRIVATE_TITLE_LOOKUP_SCHEMA = 'hasna.knowledge.private-title-lookup.v1' as const;
+export const KNOWLEDGE_PRIVATE_RESULT_SCHEMA = 'hasna.knowledge.private-result.v1' as const;
 
 export type KnowledgeAuthorityClassification = 'user_hosted' | 'hasna_saas';
 export type KnowledgeGuardedWriteVerb = 'create' | 'update';
@@ -220,6 +222,36 @@ export interface CreateKnowledgePrivateInputDescriptorOptions {
   expires_in_ms?: number;
 }
 
+export interface KnowledgePrivateTitleLookupDescriptor {
+  readonly contract: typeof KNOWLEDGE_GUARDED_WRITE_CONTRACT;
+  readonly schema: typeof KNOWLEDGE_PRIVATE_TITLE_LOOKUP_SCHEMA;
+  /** Process-private handle. Deliberately non-enumerable and omitted by toJSON. */
+  readonly descriptor_id: string;
+  readonly operation_id: string;
+  readonly step_id: string;
+  readonly title_digest: string;
+  readonly binding_digest: string;
+  readonly binding: KnowledgeGuardedBinding;
+  readonly expires_at: string;
+  toJSON(): Omit<KnowledgePrivateTitleLookupDescriptor, 'descriptor_id' | 'toJSON'>;
+}
+
+export interface CreateKnowledgePrivateTitleLookupDescriptorOptions {
+  operation_id: string;
+  step_id: string;
+  binding: KnowledgeGuardedBinding;
+  title: string;
+  /** Defaults to five minutes; bounded to one hour. */
+  expires_in_ms?: number;
+}
+
+export interface KnowledgeGuardedTitleLookupEnvelope {
+  contract: typeof KNOWLEDGE_GUARDED_WRITE_CONTRACT;
+  descriptor: Omit<KnowledgePrivateTitleLookupDescriptor, 'descriptor_id' | 'toJSON'>;
+  title: string;
+  limits: KnowledgeGuardedBounds;
+}
+
 export interface KnowledgeGuardedWriteEnvelope {
   contract: typeof KNOWLEDGE_GUARDED_WRITE_CONTRACT;
   descriptor: Omit<KnowledgePrivateInputDescriptor, 'toJSON'>;
@@ -393,6 +425,51 @@ export interface KnowledgeGuardedWriteResult {
   readback: KnowledgeGuardedReadback;
 }
 
+export interface KnowledgePrivateItemProof {
+  id: string;
+  version: number;
+  title_sha256: string;
+  content_sha256: string;
+  url_sha256: string | null;
+  tags_sha256: string;
+  metadata_sha256: string;
+  archived: boolean;
+}
+
+export interface KnowledgeGuardedTitleLookup {
+  contract: typeof KNOWLEDGE_GUARDED_WRITE_CONTRACT;
+  exact: true;
+  bounded: true;
+  item_count: 0 | 1;
+  binding: KnowledgeGuardedBinding;
+  title_digest: string;
+  items: readonly KnowledgePrivateItemProof[];
+  limits: KnowledgeGuardedBounds;
+}
+
+export type KnowledgePrivateResultKind = 'write' | 'readback' | 'title_lookup';
+
+export interface KnowledgePrivateResultDescriptor {
+  readonly contract: typeof KNOWLEDGE_GUARDED_WRITE_CONTRACT;
+  readonly schema: typeof KNOWLEDGE_PRIVATE_RESULT_SCHEMA;
+  /** Process-private handle. Deliberately non-enumerable and omitted by toJSON. */
+  readonly descriptor_id: string;
+  readonly kind: KnowledgePrivateResultKind;
+  readonly result_digest: string;
+  readonly item_count: number;
+  readonly expires_at: string;
+  toJSON(): Omit<KnowledgePrivateResultDescriptor, 'descriptor_id' | 'toJSON'>;
+}
+
+export interface KnowledgePrivateResultProof {
+  kind: KnowledgePrivateResultKind;
+  item_count: number;
+  items: readonly KnowledgePrivateItemProof[];
+  deterministic_key?: string;
+  receipt_id?: string;
+  duplicate?: boolean;
+}
+
 export const DEFAULT_KNOWLEDGE_GUARDED_LIMITS: KnowledgeGuardedLimits = Object.freeze({
   submission: Object.freeze({
     max_calls: 1,
@@ -419,6 +496,18 @@ const MAX_GUARDED_WALL_TIME_MS = 30_000;
 const MAX_DESCRIPTOR_LIFETIME_MS = 60 * 60 * 1000;
 const PRIVATE_PAYLOADS = new WeakMap<object, {
   payload: KnowledgeGuardedPayload;
+  revoked: boolean;
+}>();
+const PRIVATE_TITLE_LOOKUPS = new WeakMap<object, {
+  title: string;
+  revoked: boolean;
+}>();
+type KnowledgePrivateResultValue =
+  | { kind: 'write'; value: KnowledgeGuardedWriteResult }
+  | { kind: 'readback'; value: KnowledgeGuardedReadback }
+  | { kind: 'title_lookup'; value: KnowledgeGuardedTitleLookup };
+const PRIVATE_RESULTS = new WeakMap<object, {
+  result: KnowledgePrivateResultValue;
   revoked: boolean;
 }>();
 
@@ -1138,6 +1227,171 @@ export function materializeKnowledgePrivateInput(
     throw new Error('private input descriptor has expired.');
   }
   return state.payload;
+}
+
+export function createKnowledgePrivateTitleLookupDescriptor(
+  options: CreateKnowledgePrivateTitleLookupDescriptorOptions,
+): KnowledgePrivateTitleLookupDescriptor {
+  assertBoundText(options.operation_id, 'operation_id');
+  assertBoundText(options.step_id, 'step_id');
+  assertKnowledgeGuardedBinding(options.binding);
+  assertBoundText(options.title, 'title', 2048);
+  const expiresIn = options.expires_in_ms ?? 5 * 60 * 1000;
+  if (!Number.isInteger(expiresIn) || expiresIn < 1 || expiresIn > MAX_DESCRIPTOR_LIFETIME_MS) {
+    throw new Error(`expires_in_ms must be between 1 and ${MAX_DESCRIPTOR_LIFETIME_MS}.`);
+  }
+  const titleDigest = knowledgeGuardedContentSha256(options.title);
+  const bindingDigest = knowledgeGuardedDigest({
+    binding: options.binding,
+    operation_id: options.operation_id,
+    step_id: options.step_id,
+    title_digest: titleDigest,
+  });
+  const metadata = Object.freeze({
+    contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+    schema: KNOWLEDGE_PRIVATE_TITLE_LOOKUP_SCHEMA,
+    operation_id: options.operation_id,
+    step_id: options.step_id,
+    title_digest: titleDigest,
+    binding_digest: bindingDigest,
+    binding: Object.freeze({
+      authority: Object.freeze({ ...options.binding.authority }),
+      tenant_id: options.binding.tenant_id,
+      scope: options.binding.scope,
+      parent_id: options.binding.parent_id,
+    }),
+    expires_at: new Date(Date.now() + expiresIn).toISOString(),
+  } satisfies Omit<KnowledgePrivateTitleLookupDescriptor, 'descriptor_id' | 'toJSON'>);
+  const descriptor = {
+    ...metadata,
+    toJSON: () => metadata,
+  } as KnowledgePrivateTitleLookupDescriptor;
+  Object.defineProperty(descriptor, 'descriptor_id', {
+    value: `kpl_${randomUUID()}`,
+    enumerable: false,
+    configurable: false,
+    writable: false,
+  });
+  Object.freeze(descriptor);
+  PRIVATE_TITLE_LOOKUPS.set(descriptor, { title: options.title, revoked: false });
+  return descriptor;
+}
+
+export function revokeKnowledgePrivateTitleLookupDescriptor(
+  descriptor: KnowledgePrivateTitleLookupDescriptor,
+): void {
+  const state = PRIVATE_TITLE_LOOKUPS.get(descriptor);
+  if (!state) throw new Error('private title lookup descriptor was not created by @hasna/knowledge.');
+  state.revoked = true;
+}
+
+/** @internal */
+export function materializeKnowledgePrivateTitleLookup(
+  descriptor: KnowledgePrivateTitleLookupDescriptor,
+): string {
+  const state = PRIVATE_TITLE_LOOKUPS.get(descriptor);
+  if (!state) throw new Error('private title lookup descriptor was not created by @hasna/knowledge.');
+  if (state.revoked) throw new Error('private title lookup descriptor has been revoked.');
+  if (Date.parse(descriptor.expires_at) <= Date.now()) {
+    throw new Error('private title lookup descriptor has expired.');
+  }
+  if (knowledgeGuardedContentSha256(state.title) !== descriptor.title_digest) {
+    throw new Error('private title lookup descriptor digest changed after freeze.');
+  }
+  return state.title;
+}
+
+export function knowledgePrivateItemProof(item: KnowledgeItem): KnowledgePrivateItemProof {
+  return Object.freeze({
+    id: item.id,
+    version: Number(item.version ?? 1),
+    title_sha256: knowledgeGuardedContentSha256(item.title),
+    content_sha256: knowledgeGuardedContentSha256(item.content),
+    url_sha256: item.url === null || item.url === undefined
+      ? null
+      : knowledgeGuardedContentSha256(item.url),
+    tags_sha256: knowledgeGuardedDigest(item.tags ?? []),
+    metadata_sha256: knowledgeGuardedDigest(item.metadata ?? {}),
+    archived: item.archived === true,
+  });
+}
+
+/** @internal */
+export function createKnowledgePrivateResultDescriptor(
+  result: KnowledgePrivateResultValue,
+  expiresInMs = 5 * 60 * 1000,
+): KnowledgePrivateResultDescriptor {
+  if (!Number.isInteger(expiresInMs) || expiresInMs < 1 || expiresInMs > MAX_DESCRIPTOR_LIFETIME_MS) {
+    throw new Error(`expires_in_ms must be between 1 and ${MAX_DESCRIPTOR_LIFETIME_MS}.`);
+  }
+  const itemCount = result.kind === 'title_lookup'
+    ? result.value.item_count
+    : 1;
+  const metadata = Object.freeze({
+    contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+    schema: KNOWLEDGE_PRIVATE_RESULT_SCHEMA,
+    kind: result.kind,
+    result_digest: knowledgeGuardedDigest(result.value),
+    item_count: itemCount,
+    expires_at: new Date(Date.now() + expiresInMs).toISOString(),
+  } satisfies Omit<KnowledgePrivateResultDescriptor, 'descriptor_id' | 'toJSON'>);
+  const descriptor = {
+    ...metadata,
+    toJSON: () => metadata,
+  } as KnowledgePrivateResultDescriptor;
+  Object.defineProperty(descriptor, 'descriptor_id', {
+    value: `kpr_${randomUUID()}`,
+    enumerable: false,
+    configurable: false,
+    writable: false,
+  });
+  Object.freeze(descriptor);
+  PRIVATE_RESULTS.set(descriptor, { result, revoked: false });
+  return descriptor;
+}
+
+export function revokeKnowledgePrivateResultDescriptor(
+  descriptor: KnowledgePrivateResultDescriptor,
+): void {
+  const state = PRIVATE_RESULTS.get(descriptor);
+  if (!state) throw new Error('private result descriptor was not created by @hasna/knowledge.');
+  state.revoked = true;
+}
+
+export function inspectKnowledgePrivateResult(
+  descriptor: KnowledgePrivateResultDescriptor,
+): KnowledgePrivateResultProof {
+  const state = PRIVATE_RESULTS.get(descriptor);
+  if (!state) throw new Error('private result descriptor was not created by @hasna/knowledge.');
+  if (state.revoked) throw new Error('private result descriptor has been revoked.');
+  if (Date.parse(descriptor.expires_at) <= Date.now()) {
+    throw new Error('private result descriptor has expired.');
+  }
+  if (knowledgeGuardedDigest(state.result.value) !== descriptor.result_digest) {
+    throw new Error('private result descriptor digest changed after freeze.');
+  }
+  if (state.result.kind === 'write') {
+    return Object.freeze({
+      kind: 'write',
+      item_count: 1,
+      items: Object.freeze([knowledgePrivateItemProof(state.result.value.readback.item)]),
+      deterministic_key: state.result.value.deterministic_key,
+      receipt_id: state.result.value.receipt.receipt_id,
+      duplicate: state.result.value.duplicate,
+    });
+  }
+  if (state.result.kind === 'readback') {
+    return Object.freeze({
+      kind: 'readback',
+      item_count: 1,
+      items: Object.freeze([knowledgePrivateItemProof(state.result.value.item)]),
+    });
+  }
+  return Object.freeze({
+    kind: 'title_lookup',
+    item_count: state.result.value.item_count,
+    items: Object.freeze([...state.result.value.items]),
+  });
 }
 
 export function assertKnowledgeTerminalCompleteness(

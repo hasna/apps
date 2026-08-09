@@ -1,4 +1,4 @@
-import { type CreateKnowledgeGuardedManifestOptions, type KnowledgeGuardedBinding, type KnowledgeGuardedBindingStateReadback, type KnowledgeGuardedBounds, type KnowledgeGuardedAdoptionReconciliation, type KnowledgeGuardedAdoptionReceipt, type KnowledgeGuardedAdoptionResult, type KnowledgeGuardedLegacyAdoptionOptions, type KnowledgeGuardedLegacyRollbackOptions, type KnowledgeGuardedLimits, type KnowledgeGuardedManifestReconciliation, type KnowledgeGuardedManifestSubmission, type KnowledgeGuardedReadback, type KnowledgeGuardedReceipt, type KnowledgeGuardedRollbackResult, type KnowledgeGuardedWriteResult, type KnowledgePrivateInputDescriptor, type KnowledgeTerminalReconciliation } from './guarded-write-contract.js';
+import { type CreateKnowledgeGuardedManifestOptions, type KnowledgeGuardedBinding, type KnowledgeGuardedBindingStateReadback, type KnowledgeGuardedBounds, type KnowledgeGuardedAdoptionReconciliation, type KnowledgeGuardedAdoptionReceipt, type KnowledgeGuardedAdoptionResult, type KnowledgeGuardedLegacyAdoptionOptions, type KnowledgeGuardedLegacyRollbackOptions, type KnowledgeGuardedLimits, type KnowledgeGuardedManifestReconciliation, type KnowledgeGuardedManifestSubmission, type KnowledgeGuardedReadback, type KnowledgeGuardedReceipt, type KnowledgeGuardedRollbackResult, type KnowledgeGuardedWriteResult, type KnowledgePrivateInputDescriptor, type KnowledgePrivateResultDescriptor, type KnowledgePrivateTitleLookupDescriptor, type KnowledgeTerminalReconciliation } from './guarded-write-contract.js';
 export interface CreateKnowledgeGuardedWriterOptions {
     binding: KnowledgeGuardedBinding;
     env?: NodeJS.ProcessEnv;
@@ -16,8 +16,11 @@ export interface KnowledgeGuardedWriter {
     createManifest(manifest: CreateKnowledgeGuardedManifestOptions, bounds?: KnowledgeGuardedBounds): Promise<KnowledgeGuardedManifestSubmission>;
     reconcileManifest(manifestId: string, bounds?: KnowledgeGuardedBounds): Promise<KnowledgeGuardedManifestReconciliation>;
     execute(descriptor: KnowledgePrivateInputDescriptor): Promise<KnowledgeGuardedWriteResult>;
+    executePrivate(descriptor: KnowledgePrivateInputDescriptor): Promise<KnowledgePrivateResultDescriptor>;
+    lookupTitle(descriptor: KnowledgePrivateTitleLookupDescriptor): Promise<KnowledgePrivateResultDescriptor>;
     reconcile(deterministicKey: string, operationId: string, stepId: string, bounds?: KnowledgeGuardedBounds): Promise<KnowledgeTerminalReconciliation>;
     readback(fullId: string, bounds?: KnowledgeGuardedBounds): Promise<KnowledgeGuardedReadback>;
+    readbackPrivate(fullId: string, bounds?: KnowledgeGuardedBounds): Promise<KnowledgePrivateResultDescriptor>;
     readBindingState(fullId: string, bounds?: KnowledgeGuardedBounds): Promise<KnowledgeGuardedBindingStateReadback>;
     adoptLegacy(options: KnowledgeGuardedLegacyAdoptionOptions): Promise<KnowledgeGuardedAdoptionResult>;
     rollbackLegacyAdoption(options: KnowledgeGuardedLegacyRollbackOptions): Promise<KnowledgeGuardedRollbackResult>;
@@ -33,6 +36,10 @@ export declare class KnowledgeGuardedOperationConflictError extends Error {
     readonly receipt: KnowledgeGuardedReceipt;
     readonly code = "guarded_operation_conflict";
     constructor(receipt: KnowledgeGuardedReceipt);
+}
+export declare class KnowledgePrivateTitleLookupAmbiguousError extends Error {
+    readonly code = "private_title_lookup_ambiguous";
+    constructor();
 }
 export declare class KnowledgeGuardedManifestConflictError extends Error {
     readonly manifest: KnowledgeGuardedManifestSubmission['manifest'];

@@ -175,6 +175,40 @@ const result = await guarded.execute(privateInput);
 // an exact full-ID readback. A rejection throws KnowledgeGuardedWriteRejectedError.
 ```
 
+For callers that must keep returned titles and bodies off public result
+surfaces, use `executePrivate(...)` and `readbackPrivate(...)`. They return an
+opaque private-result descriptor whose JSON form contains only its kind, item
+count, expiry, and result digest. `inspectKnowledgePrivateResult(...)`
+materializes a metadata-only proof inside the process: full item ID, version,
+title/content/source/tag/metadata digests, and replay receipt identity, never
+the title or body.
+
+Deduplicate reviewed sources by an exact title only through the package-owned
+private title descriptor:
+
+```ts
+import {
+  createKnowledgePrivateTitleLookupDescriptor,
+  inspectKnowledgePrivateResult,
+} from '@hasna/knowledge';
+
+const lookup = createKnowledgePrivateTitleLookupDescriptor({
+  operation_id: 'doctrine-rollout-2026-08',
+  step_id: 'lookup-one',
+  binding,
+  title: privateReviewedTitle,
+});
+const proof = inspectKnowledgePrivateResult(await guarded.lookupTitle(lookup));
+```
+
+The producer sends the title only in the authenticated bounded request. The
+server matches the exact authority, tenant, scope, parent, and title, selects at
+most two rows to detect ambiguity, and returns zero or one digest-only proof.
+Two matching titles fail closed with `private_title_lookup_ambiguous`; the
+endpoint never falls back to a collection scan and never returns item bodies or
+titles. `knowledge guarded capabilities --json` reports this private transport
+support without reading configuration, opening a store, or making a request.
+
 The deterministic key is:
 
 ```text

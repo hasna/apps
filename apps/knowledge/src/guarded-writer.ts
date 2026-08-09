@@ -17,9 +17,11 @@ import {
   computeKnowledgeGuardedAdoptionDeterministicKey,
   computeKnowledgeGuardedDeterministicKey,
   computeKnowledgeGuardedManifestDeterministicKey,
+  createKnowledgePrivateResultDescriptor,
   knowledgeGuardedDigest,
   knowledgeGuardedUtf8Bytes,
   materializeKnowledgePrivateInput,
+  materializeKnowledgePrivateTitleLookup,
   normalizeKnowledgeGuardedLimits,
   type CreateKnowledgeGuardedManifestOptions,
   type KnowledgeGuardedBinding,
@@ -38,10 +40,14 @@ import {
   type KnowledgeGuardedReadback,
   type KnowledgeGuardedReceipt,
   type KnowledgeGuardedSubmission,
+  type KnowledgeGuardedTitleLookup,
+  type KnowledgeGuardedTitleLookupEnvelope,
   type KnowledgeGuardedRollbackResult,
   type KnowledgeGuardedWriteEnvelope,
   type KnowledgeGuardedWriteResult,
   type KnowledgePrivateInputDescriptor,
+  type KnowledgePrivateResultDescriptor,
+  type KnowledgePrivateTitleLookupDescriptor,
   type KnowledgeTerminalReconciliation,
 } from './guarded-write-contract.js';
 
@@ -69,6 +75,8 @@ export interface KnowledgeGuardedWriter {
     bounds?: KnowledgeGuardedBounds,
   ): Promise<KnowledgeGuardedManifestReconciliation>;
   execute(descriptor: KnowledgePrivateInputDescriptor): Promise<KnowledgeGuardedWriteResult>;
+  executePrivate(descriptor: KnowledgePrivateInputDescriptor): Promise<KnowledgePrivateResultDescriptor>;
+  lookupTitle(descriptor: KnowledgePrivateTitleLookupDescriptor): Promise<KnowledgePrivateResultDescriptor>;
   reconcile(
     deterministicKey: string,
     operationId: string,
@@ -79,6 +87,10 @@ export interface KnowledgeGuardedWriter {
     fullId: string,
     bounds?: KnowledgeGuardedBounds,
   ): Promise<KnowledgeGuardedReadback>;
+  readbackPrivate(
+    fullId: string,
+    bounds?: KnowledgeGuardedBounds,
+  ): Promise<KnowledgePrivateResultDescriptor>;
   readBindingState(
     fullId: string,
     bounds?: KnowledgeGuardedBounds,
@@ -116,6 +128,14 @@ export class KnowledgeGuardedOperationConflictError extends Error {
       + 'are already bound to a different deterministic key.',
     );
     this.name = 'KnowledgeGuardedOperationConflictError';
+  }
+}
+
+export class KnowledgePrivateTitleLookupAmbiguousError extends Error {
+  readonly code = 'private_title_lookup_ambiguous';
+  constructor() {
+    super('private_title_lookup_ambiguous: more than one exact title exists in the frozen binding.');
+    this.name = 'KnowledgePrivateTitleLookupAmbiguousError';
   }
 }
 
@@ -420,6 +440,74 @@ class GuardedWriter implements KnowledgeGuardedWriter {
       reconciliation,
       readback,
     };
+  }
+
+  async executePrivate(
+    descriptor: KnowledgePrivateInputDescriptor,
+  ): Promise<KnowledgePrivateResultDescriptor> {
+    const result = await this.execute(descriptor);
+    return createKnowledgePrivateResultDescriptor({ kind: 'write', value: result });
+  }
+
+  async lookupTitle(
+    descriptor: KnowledgePrivateTitleLookupDescriptor,
+  ): Promise<KnowledgePrivateResultDescriptor> {
+    if (!sameBinding(descriptor.binding, this.binding)) {
+      throw new Error('private title lookup descriptor binding does not match this guarded writer.');
+    }
+    const title = materializeKnowledgePrivateTitleLookup(descriptor);
+    const bindingDigest = knowledgeGuardedDigest({
+      binding: descriptor.binding,
+      operation_id: descriptor.operation_id,
+      step_id: descriptor.step_id,
+      title_digest: descriptor.title_digest,
+    });
+    if (bindingDigest !== descriptor.binding_digest) {
+      throw new Error('private title lookup descriptor binding digest changed after freeze.');
+    }
+    const envelope: KnowledgeGuardedTitleLookupEnvelope = {
+      contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+      descriptor: descriptor.toJSON(),
+      title,
+      limits: this.limits.readback,
+    };
+    if (knowledgeGuardedUtf8Bytes(envelope) > this.limits.readback.max_bytes) {
+      throw new Error('private_title_lookup_request_exceeds_byte_cap.');
+    }
+    let response: KnowledgeGuardedTitleLookup;
+    try {
+      response = await this.transport.post<KnowledgeGuardedTitleLookup>(
+        '/guarded-writes/lookups/title',
+        envelope,
+        {
+          headers: {
+            ...boundHeaders(this.limits.readback),
+            'x-knowledge-tenant-id': this.binding.tenant_id,
+          },
+          timeoutMs: this.limits.readback.wall_time_ms,
+          retry: false,
+        },
+      );
+    } catch (error) {
+      if (parseErrorBody(error)?.error === 'private_title_lookup_ambiguous') {
+        throw new KnowledgePrivateTitleLookupAmbiguousError();
+      }
+      throw error;
+    }
+    if (
+      knowledgeGuardedUtf8Bytes(response) > this.limits.readback.max_bytes
+      || response.contract !== KNOWLEDGE_GUARDED_WRITE_CONTRACT
+      || response.exact !== true
+      || response.bounded !== true
+      || response.title_digest !== descriptor.title_digest
+      || !sameBinding(response.binding, this.binding)
+      || response.item_count !== response.items.length
+      || response.item_count > 1
+      || response.items.some((item) => item.title_sha256 !== descriptor.title_digest)
+    ) {
+      throw new Error('private_title_lookup_exact_bounded_readback_failed.');
+    }
+    return createKnowledgePrivateResultDescriptor({ kind: 'title_lookup', value: response });
   }
 
   async createManifest(
@@ -801,6 +889,14 @@ class GuardedWriter implements KnowledgeGuardedWriter {
       throw new Error('guarded_readback_response_exceeds_byte_cap.');
     }
     return response;
+  }
+
+  async readbackPrivate(
+    fullId: string,
+    bounds: KnowledgeGuardedBounds = this.limits.readback,
+  ): Promise<KnowledgePrivateResultDescriptor> {
+    const result = await this.readback(fullId, bounds);
+    return createKnowledgePrivateResultDescriptor({ kind: 'readback', value: result });
   }
 }
 

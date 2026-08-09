@@ -360,6 +360,7 @@ describe('knowledge cli', () => {
     expect(out).toContain('inventory');
     expect(out).toContain('context pack <query>');
     expect(out).toContain('proposals context');
+    expect(out).toContain('guarded capabilities');
 
     const sub = runCli(['help', 'list']);
     expect(sub.exitCode).toBe(0);
@@ -373,6 +374,18 @@ describe('knowledge cli', () => {
     const context = runCli(['help', 'context']);
     expect(context.exitCode).toBe(0);
     expect(new TextDecoder().decode(context.stdout)).toContain('knowledge context pack');
+
+    const guarded = runCli(['guarded', 'capabilities', '--json']);
+    expect(guarded.exitCode).toBe(0);
+    const guardedResult = JSON.parse(new TextDecoder().decode(guarded.stdout)) as Record<string, unknown>;
+    expect(guardedResult).toMatchObject({
+      ok: true,
+      contract: 'FCAME-1',
+      private_input: true,
+      private_result: true,
+      exact_title_lookup: true,
+      private_transport_body_output: false,
+    });
   });
 
   test("'<sub> --help' prints that subcommand's usage, not root help", () => {

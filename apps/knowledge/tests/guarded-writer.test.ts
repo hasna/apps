@@ -24,6 +24,8 @@ import {
   computeKnowledgeGuardedRecoveryKey,
   createKnowledgeGuardedWriter,
   createKnowledgePrivateInputDescriptor,
+  createKnowledgePrivateTitleLookupDescriptor,
+  inspectKnowledgePrivateResult,
   knowledgeGuardedDigest,
   type KnowledgeGuardedBinding,
   type KnowledgeGuardedManifestBinding,
@@ -1406,6 +1408,114 @@ describe('FCAME-1 guarded Knowledge writer', () => {
     expect(boundClaim.rows[0]!.receipt_id).toBe(result.receipt.receipt_id);
 
     await expect(writer().readback(result.readback.item.short_id!)).rejects.toThrow();
+  });
+
+  test('private write and exact readback descriptors expose digests, never private fields or handles', async () => {
+    const targetId = 'k_fcame_private_result_descriptor';
+    const title = 'Private result descriptor title';
+    const content = 'private result descriptor body';
+    const tags = ['doctrine', 'private-result'];
+    const metadata = { source: 'reviewed-canonical-source', privacy_class: 'internal-redacted' };
+    const input = descriptor({
+      operation: 'op-private-result-descriptor',
+      step: 'step-create',
+      target: targetId,
+      payload: { title, content, tags, metadata },
+    });
+
+    const privateResult = await writer().executePrivate(input);
+    const serialized = JSON.stringify(privateResult);
+    expect(serialized).not.toContain(title);
+    expect(serialized).not.toContain(content);
+    expect(serialized).not.toContain(targetId);
+    expect(serialized).not.toContain(privateResult.descriptor_id);
+    expect(serialized).toContain(privateResult.result_digest);
+
+    const proof = inspectKnowledgePrivateResult(privateResult);
+    expect(proof.kind).toBe('write');
+    expect(proof.item_count).toBe(1);
+    expect(proof.items).toEqual([{
+      id: targetId,
+      version: 1,
+      title_sha256: createHash('sha256').update(title).digest('hex'),
+      content_sha256: createHash('sha256').update(content).digest('hex'),
+      url_sha256: null,
+      tags_sha256: knowledgeGuardedDigest(tags),
+      metadata_sha256: knowledgeGuardedDigest(metadata),
+      archived: false,
+    }]);
+    expect(JSON.stringify(proof)).not.toContain(title);
+    expect(JSON.stringify(proof)).not.toContain(content);
+
+    const exact = await writer().readbackPrivate(targetId);
+    expect(inspectKnowledgePrivateResult(exact).items).toEqual(proof.items);
+
+    const replay = await writer().executePrivate(input);
+    const replayProof = inspectKnowledgePrivateResult(replay);
+    expect(replayProof.duplicate).toBe(true);
+    expect(replayProof.receipt_id).toBe(proof.receipt_id);
+    expect(replayProof.items).toEqual(proof.items);
+  });
+
+  test('private title lookup is authoritative, bounded, exact-scope, and ambiguity refusing', async () => {
+    const title = 'Private title lookup target';
+    const targetId = 'k_fcame_private_title_lookup';
+    await writer().execute(descriptor({
+      operation: 'op-private-title-lookup-create',
+      step: 'step-create',
+      target: targetId,
+      payload: { title, content: 'private title lookup body' },
+    }));
+
+    const lookup = createKnowledgePrivateTitleLookupDescriptor({
+      operation_id: 'op-private-title-lookup',
+      step_id: 'step-lookup',
+      binding: BINDING,
+      title,
+    });
+    const serializedLookup = JSON.stringify(lookup);
+    expect(serializedLookup).not.toContain(title);
+    expect(serializedLookup).not.toContain(lookup.descriptor_id);
+    expect(serializedLookup).toContain(lookup.title_digest);
+
+    const result = await writer().lookupTitle(lookup);
+    const proof = inspectKnowledgePrivateResult(result);
+    expect(proof.kind).toBe('title_lookup');
+    expect(proof.item_count).toBe(1);
+    expect(proof.items[0]?.id).toBe(targetId);
+    expect(proof.items[0]?.title_sha256).toBe(lookup.title_digest);
+    expect(JSON.stringify(result)).not.toContain(title);
+    expect(JSON.stringify(proof)).not.toContain(title);
+
+    const wrongScope = createKnowledgeGuardedWriter({
+      binding: { ...BINDING, scope: 'project:wrong', parent_id: 'project:wrong' },
+      env,
+    });
+    await expect(wrongScope.lookupTitle(lookup)).rejects.toThrow(/binding/i);
+
+    const expired = createKnowledgePrivateTitleLookupDescriptor({
+      operation_id: 'op-private-title-lookup-expired',
+      step_id: 'step-lookup',
+      binding: BINDING,
+      title,
+      expires_in_ms: 1,
+    });
+    await Bun.sleep(5);
+    await expect(writer().lookupTitle(expired)).rejects.toThrow(/expired/i);
+
+    await writer().execute(descriptor({
+      operation: 'op-private-title-lookup-duplicate',
+      step: 'step-create',
+      target: 'k_fcame_private_title_lookup_duplicate',
+      payload: { title, content: 'second item with the same title' },
+    }));
+    const ambiguous = createKnowledgePrivateTitleLookupDescriptor({
+      operation_id: 'op-private-title-lookup-ambiguous',
+      step_id: 'step-lookup',
+      binding: BINDING,
+      title,
+    });
+    await expect(writer().lookupTitle(ambiguous)).rejects.toThrow(/ambiguous/i);
   });
 
   test('same-operation replay proves one effect; changed semantics are refused', async () => {

@@ -1,6 +1,8 @@
 import type { KnowledgeItem } from './store.js';
 export declare const KNOWLEDGE_GUARDED_WRITE_CONTRACT: 'FCAME-1';
 export declare const KNOWLEDGE_PRIVATE_INPUT_SCHEMA: 'hasna.knowledge.private-input.v1';
+export declare const KNOWLEDGE_PRIVATE_TITLE_LOOKUP_SCHEMA: 'hasna.knowledge.private-title-lookup.v1';
+export declare const KNOWLEDGE_PRIVATE_RESULT_SCHEMA: 'hasna.knowledge.private-result.v1';
 export type KnowledgeAuthorityClassification = 'user_hosted' | 'hasna_saas';
 export type KnowledgeGuardedWriteVerb = 'create' | 'update';
 export interface KnowledgeAuthorityBinding {
@@ -185,6 +187,33 @@ export interface CreateKnowledgePrivateInputDescriptorOptions {
     /** Defaults to five minutes; bounded to one hour. */
     expires_in_ms?: number;
 }
+export interface KnowledgePrivateTitleLookupDescriptor {
+    readonly contract: typeof KNOWLEDGE_GUARDED_WRITE_CONTRACT;
+    readonly schema: typeof KNOWLEDGE_PRIVATE_TITLE_LOOKUP_SCHEMA;
+    /** Process-private handle. Deliberately non-enumerable and omitted by toJSON. */
+    readonly descriptor_id: string;
+    readonly operation_id: string;
+    readonly step_id: string;
+    readonly title_digest: string;
+    readonly binding_digest: string;
+    readonly binding: KnowledgeGuardedBinding;
+    readonly expires_at: string;
+    toJSON(): Omit<KnowledgePrivateTitleLookupDescriptor, 'descriptor_id' | 'toJSON'>;
+}
+export interface CreateKnowledgePrivateTitleLookupDescriptorOptions {
+    operation_id: string;
+    step_id: string;
+    binding: KnowledgeGuardedBinding;
+    title: string;
+    /** Defaults to five minutes; bounded to one hour. */
+    expires_in_ms?: number;
+}
+export interface KnowledgeGuardedTitleLookupEnvelope {
+    contract: typeof KNOWLEDGE_GUARDED_WRITE_CONTRACT;
+    descriptor: Omit<KnowledgePrivateTitleLookupDescriptor, 'descriptor_id' | 'toJSON'>;
+    title: string;
+    limits: KnowledgeGuardedBounds;
+}
 export interface KnowledgeGuardedWriteEnvelope {
     contract: typeof KNOWLEDGE_GUARDED_WRITE_CONTRACT;
     descriptor: Omit<KnowledgePrivateInputDescriptor, 'toJSON'>;
@@ -334,6 +363,46 @@ export interface KnowledgeGuardedWriteResult {
     reconciliation: KnowledgeTerminalReconciliation;
     readback: KnowledgeGuardedReadback;
 }
+export interface KnowledgePrivateItemProof {
+    id: string;
+    version: number;
+    title_sha256: string;
+    content_sha256: string;
+    url_sha256: string | null;
+    tags_sha256: string;
+    metadata_sha256: string;
+    archived: boolean;
+}
+export interface KnowledgeGuardedTitleLookup {
+    contract: typeof KNOWLEDGE_GUARDED_WRITE_CONTRACT;
+    exact: true;
+    bounded: true;
+    item_count: 0 | 1;
+    binding: KnowledgeGuardedBinding;
+    title_digest: string;
+    items: readonly KnowledgePrivateItemProof[];
+    limits: KnowledgeGuardedBounds;
+}
+export type KnowledgePrivateResultKind = 'write' | 'readback' | 'title_lookup';
+export interface KnowledgePrivateResultDescriptor {
+    readonly contract: typeof KNOWLEDGE_GUARDED_WRITE_CONTRACT;
+    readonly schema: typeof KNOWLEDGE_PRIVATE_RESULT_SCHEMA;
+    /** Process-private handle. Deliberately non-enumerable and omitted by toJSON. */
+    readonly descriptor_id: string;
+    readonly kind: KnowledgePrivateResultKind;
+    readonly result_digest: string;
+    readonly item_count: number;
+    readonly expires_at: string;
+    toJSON(): Omit<KnowledgePrivateResultDescriptor, 'descriptor_id' | 'toJSON'>;
+}
+export interface KnowledgePrivateResultProof {
+    kind: KnowledgePrivateResultKind;
+    item_count: number;
+    items: readonly KnowledgePrivateItemProof[];
+    deterministic_key?: string;
+    receipt_id?: string;
+    duplicate?: boolean;
+}
 export declare const DEFAULT_KNOWLEDGE_GUARDED_LIMITS: KnowledgeGuardedLimits;
 export declare function assertKnowledgeGuardedBinding(binding: KnowledgeGuardedBinding): void;
 export declare function assertKnowledgeGuardedPrecondition(verb: KnowledgeGuardedWriteVerb, precondition: KnowledgeGuardedPrecondition): void;
@@ -400,6 +469,11 @@ export declare function computeKnowledgeGuardedManifestDeterministicKey(maintain
 export declare function assertKnowledgeGuardedPayload(verb: KnowledgeGuardedWriteVerb, payload: KnowledgeGuardedPayload): void;
 export declare function createKnowledgePrivateInputDescriptor(options: CreateKnowledgePrivateInputDescriptorOptions): KnowledgePrivateInputDescriptor;
 export declare function revokeKnowledgePrivateInputDescriptor(descriptor: KnowledgePrivateInputDescriptor): void;
+export declare function createKnowledgePrivateTitleLookupDescriptor(options: CreateKnowledgePrivateTitleLookupDescriptorOptions): KnowledgePrivateTitleLookupDescriptor;
+export declare function revokeKnowledgePrivateTitleLookupDescriptor(descriptor: KnowledgePrivateTitleLookupDescriptor): void;
+export declare function knowledgePrivateItemProof(item: KnowledgeItem): KnowledgePrivateItemProof;
+export declare function revokeKnowledgePrivateResultDescriptor(descriptor: KnowledgePrivateResultDescriptor): void;
+export declare function inspectKnowledgePrivateResult(descriptor: KnowledgePrivateResultDescriptor): KnowledgePrivateResultProof;
 export declare function assertKnowledgeTerminalCompleteness(reconciliation: KnowledgeTerminalReconciliation, expected: {
     deterministic_key: string;
     operation_id: string;

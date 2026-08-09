@@ -108,7 +108,7 @@ describe('public package release safety', () => {
     }
   });
 
-  test('guarded private-input public declarations match the runtime export contract', () => {
+  test('guarded private transport declarations match the runtime export contract', () => {
     const rootDeclaration = readFileSync(join(repoRoot, 'dist/index.d.ts'), 'utf8');
     const guardedContractDeclaration = readFileSync(join(repoRoot, 'dist/guarded-write-contract.d.ts'), 'utf8');
 
@@ -116,9 +116,22 @@ describe('public package release safety', () => {
     expect(declarationExportsIdentifier(rootDeclaration, 'createKnowledgePrivateInputDescriptor')).toBe(true);
     expect(declarationExportsIdentifier(guardedContractDeclaration, 'createKnowledgePrivateInputDescriptor')).toBe(true);
 
+    expect(rootRuntimeExports.createKnowledgePrivateTitleLookupDescriptor).toBeFunction();
+    expect(declarationExportsIdentifier(rootDeclaration, 'createKnowledgePrivateTitleLookupDescriptor')).toBe(true);
+    expect(declarationExportsIdentifier(guardedContractDeclaration, 'createKnowledgePrivateTitleLookupDescriptor')).toBe(true);
+    expect(rootRuntimeExports.inspectKnowledgePrivateResult).toBeFunction();
+    expect(declarationExportsIdentifier(rootDeclaration, 'inspectKnowledgePrivateResult')).toBe(true);
+    expect(declarationExportsIdentifier(guardedContractDeclaration, 'inspectKnowledgePrivateResult')).toBe(true);
+
     expect(rootRuntimeExports.materializeKnowledgePrivateInput).toBeUndefined();
     expect(declarationExportsIdentifier(rootDeclaration, 'materializeKnowledgePrivateInput')).toBe(false);
     expect(declarationExportsIdentifier(guardedContractDeclaration, 'materializeKnowledgePrivateInput')).toBe(false);
+    expect(rootRuntimeExports.materializeKnowledgePrivateTitleLookup).toBeUndefined();
+    expect(declarationExportsIdentifier(rootDeclaration, 'materializeKnowledgePrivateTitleLookup')).toBe(false);
+    expect(declarationExportsIdentifier(guardedContractDeclaration, 'materializeKnowledgePrivateTitleLookup')).toBe(false);
+    expect(rootRuntimeExports.createKnowledgePrivateResultDescriptor).toBeUndefined();
+    expect(declarationExportsIdentifier(rootDeclaration, 'createKnowledgePrivateResultDescriptor')).toBe(false);
+    expect(declarationExportsIdentifier(guardedContractDeclaration, 'createKnowledgePrivateResultDescriptor')).toBe(false);
   });
 
   /**

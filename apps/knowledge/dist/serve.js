@@ -1399,6 +1399,8 @@ function makeShortId(id) {
 import { createHash as createHash3, randomUUID as randomUUID2 } from "crypto";
 var KNOWLEDGE_GUARDED_WRITE_CONTRACT = "FCAME-1";
 var KNOWLEDGE_PRIVATE_INPUT_SCHEMA = "hasna.knowledge.private-input.v1";
+var KNOWLEDGE_PRIVATE_TITLE_LOOKUP_SCHEMA = "hasna.knowledge.private-title-lookup.v1";
+var KNOWLEDGE_PRIVATE_RESULT_SCHEMA = "hasna.knowledge.private-result.v1";
 var DEFAULT_KNOWLEDGE_GUARDED_LIMITS = Object.freeze({
   submission: Object.freeze({
     max_calls: 1,
@@ -1423,6 +1425,8 @@ var MAX_GUARDED_BYTES = 4 * 1024 * 1024;
 var MAX_GUARDED_WALL_TIME_MS = 30000;
 var MAX_DESCRIPTOR_LIFETIME_MS = 60 * 60 * 1000;
 var PRIVATE_PAYLOADS = new WeakMap;
+var PRIVATE_TITLE_LOOKUPS = new WeakMap;
+var PRIVATE_RESULTS = new WeakMap;
 function assertObjectKeys(value, field, allowed, required = allowed) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`${field} must be an object.`);
@@ -1941,6 +1945,151 @@ function materializeKnowledgePrivateInput(descriptor) {
     throw new Error("private input descriptor has expired.");
   }
   return state.payload;
+}
+function createKnowledgePrivateTitleLookupDescriptor(options) {
+  assertBoundText(options.operation_id, "operation_id");
+  assertBoundText(options.step_id, "step_id");
+  assertKnowledgeGuardedBinding(options.binding);
+  assertBoundText(options.title, "title", 2048);
+  const expiresIn = options.expires_in_ms ?? 5 * 60 * 1000;
+  if (!Number.isInteger(expiresIn) || expiresIn < 1 || expiresIn > MAX_DESCRIPTOR_LIFETIME_MS) {
+    throw new Error(`expires_in_ms must be between 1 and ${MAX_DESCRIPTOR_LIFETIME_MS}.`);
+  }
+  const titleDigest = knowledgeGuardedContentSha256(options.title);
+  const bindingDigest = knowledgeGuardedDigest({
+    binding: options.binding,
+    operation_id: options.operation_id,
+    step_id: options.step_id,
+    title_digest: titleDigest
+  });
+  const metadata = Object.freeze({
+    contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+    schema: KNOWLEDGE_PRIVATE_TITLE_LOOKUP_SCHEMA,
+    operation_id: options.operation_id,
+    step_id: options.step_id,
+    title_digest: titleDigest,
+    binding_digest: bindingDigest,
+    binding: Object.freeze({
+      authority: Object.freeze({ ...options.binding.authority }),
+      tenant_id: options.binding.tenant_id,
+      scope: options.binding.scope,
+      parent_id: options.binding.parent_id
+    }),
+    expires_at: new Date(Date.now() + expiresIn).toISOString()
+  });
+  const descriptor = {
+    ...metadata,
+    toJSON: () => metadata
+  };
+  Object.defineProperty(descriptor, "descriptor_id", {
+    value: `kpl_${randomUUID2()}`,
+    enumerable: false,
+    configurable: false,
+    writable: false
+  });
+  Object.freeze(descriptor);
+  PRIVATE_TITLE_LOOKUPS.set(descriptor, { title: options.title, revoked: false });
+  return descriptor;
+}
+function revokeKnowledgePrivateTitleLookupDescriptor(descriptor) {
+  const state = PRIVATE_TITLE_LOOKUPS.get(descriptor);
+  if (!state)
+    throw new Error("private title lookup descriptor was not created by @hasna/knowledge.");
+  state.revoked = true;
+}
+function materializeKnowledgePrivateTitleLookup(descriptor) {
+  const state = PRIVATE_TITLE_LOOKUPS.get(descriptor);
+  if (!state)
+    throw new Error("private title lookup descriptor was not created by @hasna/knowledge.");
+  if (state.revoked)
+    throw new Error("private title lookup descriptor has been revoked.");
+  if (Date.parse(descriptor.expires_at) <= Date.now()) {
+    throw new Error("private title lookup descriptor has expired.");
+  }
+  if (knowledgeGuardedContentSha256(state.title) !== descriptor.title_digest) {
+    throw new Error("private title lookup descriptor digest changed after freeze.");
+  }
+  return state.title;
+}
+function knowledgePrivateItemProof(item) {
+  return Object.freeze({
+    id: item.id,
+    version: Number(item.version ?? 1),
+    title_sha256: knowledgeGuardedContentSha256(item.title),
+    content_sha256: knowledgeGuardedContentSha256(item.content),
+    url_sha256: item.url === null || item.url === undefined ? null : knowledgeGuardedContentSha256(item.url),
+    tags_sha256: knowledgeGuardedDigest(item.tags ?? []),
+    metadata_sha256: knowledgeGuardedDigest(item.metadata ?? {}),
+    archived: item.archived === true
+  });
+}
+function createKnowledgePrivateResultDescriptor(result, expiresInMs = 5 * 60 * 1000) {
+  if (!Number.isInteger(expiresInMs) || expiresInMs < 1 || expiresInMs > MAX_DESCRIPTOR_LIFETIME_MS) {
+    throw new Error(`expires_in_ms must be between 1 and ${MAX_DESCRIPTOR_LIFETIME_MS}.`);
+  }
+  const itemCount = result.kind === "title_lookup" ? result.value.item_count : 1;
+  const metadata = Object.freeze({
+    contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+    schema: KNOWLEDGE_PRIVATE_RESULT_SCHEMA,
+    kind: result.kind,
+    result_digest: knowledgeGuardedDigest(result.value),
+    item_count: itemCount,
+    expires_at: new Date(Date.now() + expiresInMs).toISOString()
+  });
+  const descriptor = {
+    ...metadata,
+    toJSON: () => metadata
+  };
+  Object.defineProperty(descriptor, "descriptor_id", {
+    value: `kpr_${randomUUID2()}`,
+    enumerable: false,
+    configurable: false,
+    writable: false
+  });
+  Object.freeze(descriptor);
+  PRIVATE_RESULTS.set(descriptor, { result, revoked: false });
+  return descriptor;
+}
+function revokeKnowledgePrivateResultDescriptor(descriptor) {
+  const state = PRIVATE_RESULTS.get(descriptor);
+  if (!state)
+    throw new Error("private result descriptor was not created by @hasna/knowledge.");
+  state.revoked = true;
+}
+function inspectKnowledgePrivateResult(descriptor) {
+  const state = PRIVATE_RESULTS.get(descriptor);
+  if (!state)
+    throw new Error("private result descriptor was not created by @hasna/knowledge.");
+  if (state.revoked)
+    throw new Error("private result descriptor has been revoked.");
+  if (Date.parse(descriptor.expires_at) <= Date.now()) {
+    throw new Error("private result descriptor has expired.");
+  }
+  if (knowledgeGuardedDigest(state.result.value) !== descriptor.result_digest) {
+    throw new Error("private result descriptor digest changed after freeze.");
+  }
+  if (state.result.kind === "write") {
+    return Object.freeze({
+      kind: "write",
+      item_count: 1,
+      items: Object.freeze([knowledgePrivateItemProof(state.result.value.readback.item)]),
+      deterministic_key: state.result.value.deterministic_key,
+      receipt_id: state.result.value.receipt.receipt_id,
+      duplicate: state.result.value.duplicate
+    });
+  }
+  if (state.result.kind === "readback") {
+    return Object.freeze({
+      kind: "readback",
+      item_count: 1,
+      items: Object.freeze([knowledgePrivateItemProof(state.result.value.item)])
+    });
+  }
+  return Object.freeze({
+    kind: "title_lookup",
+    item_count: state.result.value.item_count,
+    items: Object.freeze([...state.result.value.items])
+  });
 }
 function assertKnowledgeTerminalCompleteness(reconciliation, expected) {
   if (reconciliation.contract !== KNOWLEDGE_GUARDED_WRITE_CONTRACT || reconciliation.deterministic_key !== expected.deterministic_key || reconciliation.operation_id !== expected.operation_id || reconciliation.step_id !== expected.step_id || reconciliation.exact !== true || reconciliation.bounded !== true || reconciliation.receipt_count !== 1 || reconciliation.terminal_complete !== true || reconciliation.receipt === null) {
@@ -3337,6 +3486,37 @@ class GuardedWriteRepo {
       limits
     };
   }
+  async lookupTitle(title, binding, limits) {
+    const rows = await this.client.many(`SELECT * FROM knowledge_items
+        WHERE title = $1
+          AND authority_classification = $2
+          AND authority_id = $3
+          AND tenant_id = $4
+          AND scope = $5
+          AND parent_id = $6
+        ORDER BY id
+        LIMIT 2`, [
+      title,
+      binding.authority.classification,
+      binding.authority.authority_id,
+      binding.tenant_id,
+      binding.scope,
+      binding.parent_id
+    ]);
+    if (rows.length > 1)
+      throw new PrivateTitleLookupAmbiguousError;
+    const items = rows.map((row) => knowledgePrivateItemProof(rowToItem(row)));
+    return {
+      contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+      exact: true,
+      bounded: true,
+      item_count: items.length,
+      binding,
+      title_digest: knowledgeGuardedContentSha256(title),
+      items,
+      limits
+    };
+  }
   async readback(fullId, binding, limits) {
     const row = await this.client.get(`SELECT * FROM knowledge_items
         WHERE id = $1
@@ -3364,6 +3544,13 @@ class GuardedWriteRepo {
       item: rowToItem(row),
       limits
     };
+  }
+}
+
+class PrivateTitleLookupAmbiguousError extends Error {
+  constructor() {
+    super("more than one exact title exists in the frozen binding.");
+    this.name = "PrivateTitleLookupAmbiguousError";
   }
 }
 function knowledgeOpenApi(version) {
@@ -3723,6 +3910,17 @@ function knowledgeOpenApi(version) {
           }
         }
       },
+      "/v1/guarded-writes/lookups/title": {
+        post: {
+          operationId: "lookupGuardedKnowledgeTitle",
+          summary: "Bounded exact-title lookup under one frozen FCAME-1 binding",
+          description: "Returns zero or one metadata-only item proof. More than one exact title is an ambiguity error; " + "item bodies and titles are never returned.",
+          responses: {
+            "200": { description: "Exact bounded metadata-only result containing zero or one item proof." },
+            "409": { description: "More than one exact title exists under the frozen binding." }
+          }
+        }
+      },
       "/v1/guarded-adoptions": {
         post: {
           operationId: "executeGuardedKnowledgeAdoption",
@@ -4078,6 +4276,67 @@ function validateGuardedEnvelope(value, headerBounds, authority, idempotencyKey)
     throw new HttpError(400, error instanceof Error ? error.message : "invalid guarded write envelope.");
   }
 }
+function validatePrivateTitleLookupEnvelope(value, headerBounds, authority) {
+  try {
+    if (!value || typeof value !== "object") {
+      throw new Error("private title lookup envelope is required.");
+    }
+    const envelope = value;
+    assertExactRequestKeys(value, "private title lookup envelope", ["contract", "descriptor", "title", "limits"]);
+    if (envelope.contract !== KNOWLEDGE_GUARDED_WRITE_CONTRACT) {
+      throw new Error("unsupported guarded-write contract.");
+    }
+    const descriptor = envelope.descriptor;
+    if (!descriptor || descriptor.contract !== KNOWLEDGE_GUARDED_WRITE_CONTRACT || descriptor.schema !== KNOWLEDGE_PRIVATE_TITLE_LOOKUP_SCHEMA) {
+      throw new Error("invalid private title lookup descriptor schema.");
+    }
+    assertExactRequestKeys(descriptor, "private title lookup descriptor", [
+      "contract",
+      "schema",
+      "operation_id",
+      "step_id",
+      "title_digest",
+      "binding_digest",
+      "binding",
+      "expires_at"
+    ]);
+    if (typeof descriptor.operation_id !== "string" || descriptor.operation_id.length === 0 || typeof descriptor.step_id !== "string" || descriptor.step_id.length === 0 || typeof envelope.title !== "string" || envelope.title.length === 0 || envelope.title.length > 2048) {
+      throw new Error("private title lookup operation, step, and bounded title are required.");
+    }
+    const descriptorExpiresAt = Date.parse(descriptor.expires_at);
+    const descriptorNow = Date.now();
+    if (!Number.isFinite(descriptorExpiresAt) || descriptorExpiresAt <= descriptorNow || descriptorExpiresAt > descriptorNow + 60 * 60 * 1000) {
+      throw new Error("private title lookup descriptor is expired or malformed.");
+    }
+    assertKnowledgeGuardedBinding(descriptor.binding);
+    assertConfiguredAuthority(descriptor.binding, authority);
+    assertKnowledgeGuardedBounds(envelope.limits, "private title lookup bounds");
+    if (canonicalKnowledgeGuardedJson(envelope.limits) !== canonicalKnowledgeGuardedJson(headerBounds)) {
+      throw new Error("private title lookup limits must exactly match the producer bound headers.");
+    }
+    const titleDigest = knowledgeGuardedContentSha256(envelope.title);
+    if (titleDigest !== descriptor.title_digest) {
+      throw new Error("private title lookup digest does not match the frozen descriptor.");
+    }
+    const bindingDigest = knowledgeGuardedDigest({
+      binding: descriptor.binding,
+      operation_id: descriptor.operation_id,
+      step_id: descriptor.step_id,
+      title_digest: descriptor.title_digest
+    });
+    if (bindingDigest !== descriptor.binding_digest) {
+      throw new Error("private title lookup binding digest does not match.");
+    }
+    if (knowledgeGuardedUtf8Bytes(envelope) > headerBounds.max_bytes) {
+      throw new Error("private title lookup envelope exceeds the producer byte cap.");
+    }
+    return envelope;
+  } catch (error) {
+    if (error instanceof HttpError)
+      throw error;
+    throw new HttpError(400, error instanceof Error ? error.message : "invalid private title lookup envelope.");
+  }
+}
 function validateGuardedAdoptionEnvelope(value, headerBounds, authority, idempotencyKey) {
   try {
     if (!value || typeof value !== "object") {
@@ -4365,6 +4624,31 @@ function createServeHandler(deps) {
               error: "operation_binding_conflict",
               receipt: error.receipt
             }, 409, bounds, startedAt);
+          }
+          throw error;
+        }
+      }
+      if (path === "/v1/guarded-writes/lookups/title" && method === "POST") {
+        if (!guardedRepo) {
+          return json({ error: "guarded_authority_unconfigured" }, 503);
+        }
+        const startedAt = Date.now();
+        const tenantId = req.headers.get("x-knowledge-tenant-id");
+        if (!tenantId)
+          throw new HttpError(400, "x-knowledge-tenant-id is required.");
+        await authOrThrow(req, ["knowledge:read"], tenantId);
+        const bounds = guardedBoundsFromHeaders(req);
+        const raw = await readBoundedJson(req, bounds, startedAt);
+        const envelope = validatePrivateTitleLookupEnvelope(raw, bounds, guardedRepo.authority);
+        if (envelope.descriptor.binding.tenant_id !== tenantId) {
+          throw new HttpError(403, "descriptor tenant does not match the authenticated request tenant.");
+        }
+        try {
+          const result = await guardedRepo.lookupTitle(envelope.title, envelope.descriptor.binding, bounds);
+          return boundedJson(result, 200, bounds, startedAt);
+        } catch (error) {
+          if (error instanceof PrivateTitleLookupAmbiguousError) {
+            return boundedJson({ error: "private_title_lookup_ambiguous" }, 409, bounds, startedAt);
           }
           throw error;
         }
