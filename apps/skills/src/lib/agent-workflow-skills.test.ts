@@ -72,6 +72,30 @@ describe("repository-managed agent workflow skills", () => {
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
   });
 
+  test("fleet-package-rollout uses the executable manifest route and keeps SSH non-executing", () => {
+    const skillPath = join(AGENT_SKILLS_DIR, "fleet-package-rollout", "SKILL.md");
+    expect(existsSync(skillPath)).toBe(true);
+
+    const skill = readFileSync(skillPath, "utf8");
+    expect(skill).toContain("machines apps plan --machine <canary>");
+    expect(skill).toContain("machines apps apply --machine <canary> --yes");
+    expect(skill).toContain("machines apps status --machine <canary> --json");
+    expect(skill).toContain("Positive control (executable route)");
+    expect(skill).toContain("Negative control (non-executing route)");
+    expect(skill).toContain("machines ssh --machine <canary> --cmd 'printf rollout-probe'");
+    expect(skill).toContain("Never pass `--private-metadata`");
+    expect(skill).toContain("Never run raw `ssh`");
+    expect(skill).toMatch(
+      /`machines ssh` is a route resolver and command formatter\. It does not execute the\s+requested command\./,
+    );
+    expect(skill.match(/^machines ssh --machine <canary>/gm) ?? []).toHaveLength(1);
+    expect(skill).not.toContain(
+      "route one exact, non-interactive install command through `machines ssh`",
+    );
+    expect(skill).not.toMatch(/^\s*(?:ssh|scp)\s+/m);
+    expect(skill).not.toMatch(/^\s*machines ssh .*--private-metadata/m);
+  });
+
   test("merge-pr guard passes its raw-fixture behavior suite", () => {
     const result = spawnSync(
       "python3",
