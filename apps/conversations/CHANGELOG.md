@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+### Fixed
+
+- **Status output no longer exposes a removed deployment-mode field.** CLI and server status payloads identify the answering connection through mutually exclusive `api_url` and `db_path` fields, while human output labels the connection as HTTP API or SQLite.
+
 ## 0.5.36 - 2026-08-09
 
 ### Added

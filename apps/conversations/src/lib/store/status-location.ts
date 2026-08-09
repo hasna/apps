@@ -5,17 +5,15 @@ import { cloudApiUrl, isCloudStore } from "./index.js";
 type Env = Record<string, string | undefined>;
 
 /**
- * Which store answered, and the safest true thing that can be said about where
- * it is.
+ * The safest true thing that can be said about the connection that answered.
  *
  * A union rather than one type with two optional fields, so `api_url` and
  * `db_path` cannot both be present: a status payload carrying both would say
- * nothing about which store actually served the request, which is the one
- * question this shape exists to answer.
+ * nothing about which connection actually served the request.
  */
 export type StoreStatusLocation =
-  | { mode: "self_hosted"; api_url: string | null }
-  | { mode: "local"; db_path: string };
+  | { api_url: string | null }
+  | { db_path: string };
 
 /**
  * The store-location fragment of every status payload.
@@ -30,16 +28,16 @@ export type StoreStatusLocation =
  * third status surface added later inherits the redaction instead of having to
  * remember it.
  *
- * The `mode` field and the `api_url`/`db_path` split are load-bearing and are
- * preserved exactly: they make a status response say which store answered, so a
- * silent downgrade to the on-box SQLite file is visible in the response rather
- * than having to be inferred from a channel count. Redaction narrows the VALUE;
- * it must not blur which field is present, and the union above enforces that.
+ * The `api_url`/`db_path` split is load-bearing: it makes a status response say
+ * which connection answered, so an unexpected fallback to the on-box SQLite file
+ * is visible rather than having to be inferred from a channel count. Redaction
+ * narrows the VALUE; it must not blur which field is present, and the union above
+ * enforces that.
  */
 export function storeStatusLocation(env: Env = process.env): StoreStatusLocation {
   // `env` reaches BOTH branches. It previously reached only the cloud one, while
   // `getDbPath()` read `process.env` directly — so a caller (or a test) that
   // injected a DB path got an answer the injection had not influenced.
-  if (!isCloudStore(env)) return { mode: "local", db_path: getDbPath(env) };
-  return { mode: "self_hosted", api_url: loggableUrl(cloudApiUrl(env)) };
+  if (!isCloudStore(env)) return { db_path: getDbPath(env) };
+  return { api_url: loggableUrl(cloudApiUrl(env)) };
 }

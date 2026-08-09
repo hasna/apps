@@ -23,7 +23,8 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { LOCAL } from "./serve-store.probe.js";
+import { storeStatusLocation } from "../lib/store/status-location.js";
+import { LOCAL, statusConnectionMarkers } from "./serve-store.probe.js";
 
 const PROBE = join(import.meta.dir, "serve-store.probe.ts");
 
@@ -170,6 +171,19 @@ afterAll(() => {
   if (sandboxHome) rmSync(sandboxHome, { recursive: true, force: true });
 });
 
+test("the default-host API status still identifies the API connection when api_url is null", () => {
+  const status = storeStatusLocation({
+    HASNA_CONVERSATIONS_STORAGE_MODE: "cloud",
+    HASNA_CONVERSATIONS_API_KEY: FAKE_KEY,
+  });
+
+  expect(status).toEqual({ api_url: null });
+  expect(statusConnectionMarkers(status)).toEqual({
+    apiUrlPresent: true,
+    dbPathPresent: false,
+  });
+});
+
 // Which stub-cloud count each endpoint class must return when the store is hosted.
 const HOSTED_EXPECTATIONS: Array<[string, number]> = [
   ["status", CLOUD.channels],
@@ -214,8 +228,7 @@ describe("dashboard server — hosted store answers every endpoint class", () =>
     });
   }
 
-  test("/api/status names the store that answered it", () => {
-    expect(hosted.status.mode).toBe("self_hosted");
+  test("/api/status names the connection that answered it", () => {
     expect(hosted.status.apiUrlPresent).toBe(true);
     expect(hosted.status.dbPathPresent).toBe(false);
   });
@@ -319,7 +332,7 @@ describe("dashboard server — a local-selecting variable is reported honestly, 
   ];
 
   for (const [label, build] of LOCAL_SELECTORS) {
-    test(`${label} alongside a valid url+key pair reports mode=local, not self_hosted`, async () => {
+    test(`${label} alongside a valid url+key pair reports the SQLite connection`, async () => {
       const db = join(sandboxHome, ".hasna", "conversations", "messages.db");
       const run = await probe("probe", {
         HASNA_CONVERSATIONS_API_URL: cloudUrl,
@@ -328,8 +341,7 @@ describe("dashboard server — a local-selecting variable is reported honestly, 
       });
       expect(run.exitCode, run.stderr).toBe(0);
 
-      // The endpoint must not claim to be hosted while serving the on-box store.
-      expect(run.result.status.mode).toBe("local");
+      // The endpoint must report the on-box connection it actually served.
       expect(run.result.status.dbPathPresent).toBe(true);
       expect(run.result.status.apiUrlPresent).toBe(false);
       // And it really is the local dataset, not the cloud one.
@@ -345,7 +357,8 @@ describe("dashboard server — a local-selecting variable is reported honestly, 
       CONVERSATIONS_API_KEY: FAKE_KEY,
     });
     expect(run.exitCode, run.stderr).toBe(0);
-    expect(run.result.status.mode).toBe("self_hosted");
+    expect(run.result.status.apiUrlPresent).toBe(true);
+    expect(run.result.status.dbPathPresent).toBe(false);
     expect(run.result.channels.size).toBe(CLOUD.channels);
   });
 });
@@ -372,7 +385,6 @@ describe("dashboard server — legitimate local use is untouched", () => {
   });
 
   test("/api/status reports the local store and its db path", () => {
-    expect(local.status.mode).toBe("local");
     expect(local.status.dbPathPresent).toBe(true);
     expect(local.status.apiUrlPresent).toBe(false);
     expect(local.status.size).toBe(LOCAL.channels);

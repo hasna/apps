@@ -21,6 +21,23 @@ const RAW =
 const MARKERS = ["SYNTHUSER", "SYNTHPASS", "SYNTHPATH", "SYNTHQUERY", "SYNTHFRAGMENT"];
 
 describe("storeStatusLocation", () => {
+  test("status payloads expose connection location without deployment-mode keys or values", () => {
+    const local = storeStatusLocation({ [DB_VAR]: "/tmp/conversations-status-contract.db" });
+    const hosted = storeStatusLocation({ [URL_VAR]: RAW, [KEY_VAR]: FAKE_KEY });
+
+    for (const location of [local, hosted]) {
+      expect(Object.keys(location)).not.toContain("mode");
+      expect(Object.keys(location)).not.toContain("deploymentMode");
+      expect(Object.keys(location)).not.toContain("deploymentModes");
+      expect(JSON.stringify(location)).not.toMatch(/"(?:self_hosted|remote|hybrid)"/);
+    }
+
+    expect("db_path" in local).toBe(true);
+    expect("api_url" in local).toBe(false);
+    expect("api_url" in hosted).toBe(true);
+    expect("db_path" in hosted).toBe(false);
+  });
+
   // This is the exact value that reached three output surfaces before the fix:
   // `printLine` in the human status, `printJson` in `status --json`, and the
   // JSON body of the server's `/api/status` route.
@@ -30,7 +47,6 @@ describe("storeStatusLocation", () => {
 
     const location = storeStatusLocation({ [URL_VAR]: RAW, [KEY_VAR]: FAKE_KEY });
 
-    expect(location.mode).toBe("self_hosted");
     const shown = ("api_url" in location ? location.api_url : null) ?? "";
     expect(MARKERS.filter((m) => shown.includes(m))).toEqual([]);
     expect(shown).toBe("https://conv.example.invalid:8443");
@@ -52,7 +68,6 @@ describe("storeStatusLocation", () => {
   test("it still says which store answered", () => {
     const probeDb = "/tmp/conversations-status-location-probe.db";
     const local = storeStatusLocation({ [DB_VAR]: probeDb });
-    expect(local.mode).toBe("local");
     expect("db_path" in local).toBe(true);
     expect("api_url" in local).toBe(false);
     // Asserting the injected path comes back, not merely that the field exists.
@@ -65,9 +80,10 @@ describe("storeStatusLocation", () => {
     expect("db_path" in cloud).toBe(false);
   });
 
-  test("a pinned local mode reports local even with hosted credentials present", () => {
+  test("a pinned local selector reports the SQLite connection even with API credentials present", () => {
     const local = storeStatusLocation({ [MODE_VAR]: "local", [URL_VAR]: RAW, [KEY_VAR]: FAKE_KEY });
-    expect(local.mode).toBe("local");
+    expect("db_path" in local).toBe(true);
+    expect("api_url" in local).toBe(false);
     expect(MARKERS.filter((m) => JSON.stringify(local).includes(m))).toEqual([]);
   });
 
@@ -77,7 +93,6 @@ describe("storeStatusLocation", () => {
   // — which is why `loggableUrl` distinguishes null from its sentinel.
   test("a hosted store on the default host announces null, not a sentinel", () => {
     const location = storeStatusLocation({ [MODE_VAR]: "cloud", [KEY_VAR]: FAKE_KEY });
-    expect(location.mode).toBe("self_hosted");
     expect("api_url" in location ? location.api_url : "missing").toBeNull();
   });
 
@@ -94,7 +109,9 @@ describe("storeStatusLocation", () => {
     }
   });
 
-  test("nothing configured at all reports the local store", () => {
-    expect(storeStatusLocation({}).mode).toBe("local");
+  test("nothing configured at all reports the SQLite connection", () => {
+    const location = storeStatusLocation({});
+    expect("db_path" in location).toBe(true);
+    expect("api_url" in location).toBe(false);
   });
 });

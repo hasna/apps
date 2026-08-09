@@ -22,6 +22,13 @@ import { sendMessage } from "../lib/messages.js";
 /** Local fixture sizes. Every one differs from its stub-cloud counterpart. */
 export const LOCAL = { channels: 3, projects: 2, messages: 4 };
 
+export function statusConnectionMarkers(rec: Record<string, unknown>) {
+  return {
+    apiUrlPresent: "api_url" in rec,
+    dbPathPresent: "db_path" in rec,
+  };
+}
+
 /**
  * One GET per endpoint CLASS in serve.ts, keyed by the lib module each one used to
  * import directly. A class passes only if it answered from the configured store —
@@ -159,10 +166,8 @@ async function probeAll(includeWrites: boolean): Promise<void> {
         // The error MESSAGE is asserted on, so a refusal is distinguishable from a
         // generic 500. Never a credential value: store errors name variables only.
         error: res.ok ? undefined : rec.error ?? String(body).slice(0, 200),
-        // Which store the endpoint says answered it, where it says so.
-        mode: rec.mode,
-        apiUrlPresent: Boolean(rec.api_url),
-        dbPathPresent: Boolean(rec.db_path),
+        // Which connection the endpoint says answered it, where it says so.
+        ...statusConnectionMarkers(rec),
       };
     } catch (error) {
       results[endpointClass] = { path, threw: true, message: (error as Error).message };

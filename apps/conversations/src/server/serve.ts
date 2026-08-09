@@ -84,9 +84,9 @@ function jsonResponse(data: unknown, status = 200): Response {
 // configuration present. That is what made the macOS app look like it worked while
 // showing a fraction of the fleet's conversations.
 //
-// The `mode` field and the api_url/db_path split are load-bearing, not cosmetic:
-// they make this endpoint say which store answered it, so a regression to local is
-// visible in the response instead of having to be inferred from a channel count.
+// The api_url/db_path split is load-bearing, not cosmetic: it makes this endpoint
+// say which connection answered it, so an unexpected fallback to local SQLite is
+// visible instead of having to be inferred from a channel count.
 async function getStatus() {
   const store = getStore();
 

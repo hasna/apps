@@ -363,10 +363,9 @@ export function registerAnalyticsCommands(program: Command): void {
     .description("Show database stats")
     .option("-j, --json", "Output as JSON")
     .action(async (opts) => {
-      // ONE path through the Store: counts come from whichever transport the client
-      // is flipped to (LocalStore sqlite or the self_hosted/cloud API), so operators
-      // verifying a flip see the store agents actually read/write — never raw sqlite,
-      // never the stale local db while cloud is active.
+      // ONE path through the Store: counts come from whichever connection the client
+      // resolves (local SQLite or the server HTTP API), so operators see the store
+      // agents actually read/write — never raw sqlite while the API connection is active.
       const store = getStore();
 
       const [totalMessages, sessions, channels, projects, totalUnread] = await Promise.all([
@@ -399,14 +398,13 @@ export function registerAnalyticsCommands(program: Command): void {
         printJson(stats);
       } else {
         printLine(chalk.bold("Conversations Status"));
-        // Branching on the payload's own discriminant rather than a second
-        // store resolution: the printed lines and the JSON body can no longer
-        // disagree about which store answered.
-        if (stats.mode === "self_hosted") {
-          printLine(`  Mode:       self_hosted (cloud API)`);
+        // Branching on the payload's mutually exclusive location fields rather
+        // than a second store resolution keeps the human and JSON outputs aligned.
+        if ("api_url" in stats) {
+          printLine(`  Connection: HTTP API`);
           printLine(`  API URL:    ${stats.api_url ?? "(set)"}`);
         } else {
-          printLine(`  Mode:       local`);
+          printLine(`  Connection: SQLite`);
           printLine(`  DB Path:    ${stats.db_path}`);
         }
         printLine(`  Messages:   ${stats.total_messages}`);
