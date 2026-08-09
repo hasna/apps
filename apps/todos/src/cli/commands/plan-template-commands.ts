@@ -37,7 +37,7 @@ import {
   cloudDeletePlan,
   cloudListPlans,
   cloudListTemplates,
-  cloudListTasks,
+  cloudListPlanTasks,
   cloudApplyPlanProjectLink,
   cloudPlanPlanProjectLink,
   cloudResolvePlan,
@@ -441,7 +441,7 @@ export function registerPlanTemplateCommands(program: Command) {
           if (!plan) {
             handleError(new Error(`Plan not found: ${opts.show}`));
           }
-          const tasks = await cloudListTasks(cloud, { plan_id: plan.id, include_subtasks: true });
+          const tasks = await cloudListPlanTasks(cloud, plan.id);
           if (globalOpts.json) {
             output({ plan, tasks, artifact: null }, true);
             return;

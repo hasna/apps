@@ -637,6 +637,157 @@ describe("cloud CLI plan commands", () => {
     }
   });
 
+  test("exhausts paged plan tasks without admitting tasks from another plan", async () => {
+    const plan = {
+      id: PLAN_ID,
+      slug: "paged-delivery",
+      name: "Paged delivery",
+      description: null,
+      status: "active",
+      project_id: null,
+      created_at: "2026-08-09T00:00:00.000Z",
+      updated_at: "2026-08-09T00:00:00.000Z",
+    };
+    const roots = Array.from({ length: 71 }, (_, index) => ({
+      id: `10000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
+      short_id: `PLAN-${index + 1}`,
+      title: `Root ${index + 1}`,
+      plan_id: PLAN_ID,
+      parent_id: null,
+    }));
+    const child = {
+      id: "20000000-0000-4000-8000-000000000001",
+      short_id: "PLAN-CHILD",
+      title: "Existing child",
+      plan_id: PLAN_ID,
+      parent_id: roots[0]!.id,
+    };
+    const newlyLinked = {
+      id: "30000000-0000-4000-8000-000000000001",
+      short_id: "PLAN-NEW",
+      title: "Newly linked root",
+      plan_id: PLAN_ID,
+      parent_id: null,
+    };
+    const unrelated = {
+      id: "40000000-0000-4000-8000-000000000001",
+      short_id: "OTHER-1",
+      title: "Different plan",
+      plan_id: "88888888-8888-4888-8888-888888888888",
+      parent_id: null,
+    };
+    const tasks = [...roots, child, newlyLinked, unrelated];
+    const taskQueries: URLSearchParams[] = [];
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(request) {
+        const url = new URL(request.url);
+        if (url.pathname === `/v1/plans/${PLAN_ID}` && request.method === "GET") {
+          return Response.json({ plan });
+        }
+        if (url.pathname === "/v1/tasks" && request.method === "GET") {
+          taskQueries.push(new URLSearchParams(url.searchParams));
+          const planTasks = tasks.filter((task) => task.plan_id === url.searchParams.get("plan_id"));
+          const visibleTasks = url.searchParams.get("include_subtasks") === "true"
+            ? planTasks
+            : planTasks.filter((task) => task.parent_id === null);
+          const offset = Number(url.searchParams.get("offset") ?? "0");
+          const page = visibleTasks.slice(offset, offset + 72);
+          return Response.json({ tasks: page, count: page.length, total: visibleTasks.length });
+        }
+        return Response.json({ error: "not found" }, { status: 404 });
+      },
+    });
+    const root = mkdtempSync(join(tmpdir(), "todos-cloud-plans-paged-"));
+    tempRoots.push(root);
+    try {
+      const shown = await runCli(
+        ["--json", "plans", "--show", PLAN_ID],
+        root,
+        `http://127.0.0.1:${server.port}`,
+      );
+      expect(shown).toMatchObject({ exitCode: 0, stderr: "" });
+      const shownTasks = (JSON.parse(shown.stdout) as { tasks: Array<{ id: string }> }).tasks;
+      const shownIds = shownTasks.map((task) => task.id);
+      expect(shownIds).toContain(newlyLinked.id);
+      expect(shownIds).toContain(child.id);
+      expect(shownIds).not.toContain(unrelated.id);
+      expect(shownTasks).toHaveLength(73);
+      expect(new Set(shownIds).size).toBe(shownTasks.length);
+      expect(taskQueries).toHaveLength(2);
+      expect(Object.fromEntries(taskQueries[0]!)).toMatchObject({
+        plan_id: PLAN_ID,
+        include_subtasks: "true",
+      });
+      expect(Object.fromEntries(taskQueries[1]!)).toMatchObject({
+        plan_id: PLAN_ID,
+        include_subtasks: "true",
+        offset: "72",
+      });
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("fails closed when hosted plan tasks include a task from another plan", async () => {
+    const plan = {
+      id: PLAN_ID,
+      slug: "foreign-plan-row",
+      name: "Foreign plan row",
+      description: null,
+      status: "active",
+      project_id: null,
+      created_at: "2026-08-09T00:00:00.000Z",
+      updated_at: "2026-08-09T00:00:00.000Z",
+    };
+    const foreignTask = {
+      id: "40000000-0000-4000-8000-000000000001",
+      short_id: "OTHER-1",
+      title: "Different plan",
+      plan_id: "88888888-8888-4888-8888-888888888888",
+      parent_id: null,
+    };
+    const taskQueries: URLSearchParams[] = [];
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(request) {
+        const url = new URL(request.url);
+        if (url.pathname === `/v1/plans/${PLAN_ID}` && request.method === "GET") {
+          return Response.json({ plan });
+        }
+        if (url.pathname === "/v1/tasks" && request.method === "GET") {
+          taskQueries.push(new URLSearchParams(url.searchParams));
+          return Response.json({ tasks: [foreignTask], count: 1, total: 1 });
+        }
+        return Response.json({ error: "not found" }, { status: 404 });
+      },
+    });
+    const root = mkdtempSync(join(tmpdir(), "todos-cloud-plans-foreign-row-"));
+    tempRoots.push(root);
+    try {
+      const result = await runCli(
+        ["--json", "plans", "--show", PLAN_ID],
+        root,
+        `http://127.0.0.1:${server.port}`,
+      );
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toContain("REMOTE_PLAN_TASK_LIST_INCOMPLETE");
+      expect(result.stderr).toContain(foreignTask.id);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        error: expect.stringContaining("REMOTE_PLAN_TASK_LIST_INCOMPLETE"),
+      });
+      expect(taskQueries).toHaveLength(1);
+      expect(Object.fromEntries(taskQueries[0]!)).toMatchObject({
+        plan_id: PLAN_ID,
+        include_subtasks: "true",
+      });
+    } finally {
+      server.stop(true);
+    }
+  });
+
   test("plans, applies, and rolls back guarded project linkage through the remote authority", async () => {
     const projectId = "88888888-8888-4888-8888-888888888888";
     const idempotencyKey = "cli-link-fixture";

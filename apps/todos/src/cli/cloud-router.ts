@@ -693,6 +693,70 @@ async function requestRawCloudTaskPage(
   };
 }
 
+function cloudPlanTaskListError(planId: string, detail: string): Error {
+  return new Error(
+    `REMOTE_PLAN_TASK_LIST_INCOMPLETE: hosted authority returned an incomplete task set for plan ${planId}; ` +
+      `${detail}; refusing an incomplete plan result`,
+  );
+}
+
+function appendExactPlanTaskPage(
+  target: Task[],
+  seen: Set<string>,
+  page: Task[],
+  planId: string,
+): void {
+  for (const task of page) {
+    if (task.plan_id !== planId) {
+      throw cloudPlanTaskListError(planId, `response includes task ${task.id} from plan ${task.plan_id ?? "null"}`);
+    }
+    if (seen.has(task.id)) {
+      throw cloudPlanTaskListError(planId, `pagination repeats task id ${task.id}`);
+    }
+    seen.add(task.id);
+    target.push(task);
+  }
+}
+
+/**
+ * Read every task in one hosted plan, including subtasks.
+ *
+ * The authority may cap an unbounded-looking `/v1/tasks` response while still
+ * reporting the full filtered `total`. Plan show has no user pagination surface,
+ * so returning that first page would present a plausible but incomplete plan.
+ * Follow the authority total to exhaustion and fail closed if the population
+ * changes, stalls, repeats a row, or widens beyond the requested plan.
+ */
+export async function cloudListPlanTasks(client: HasnaStorageClient, planId: string): Promise<Task[]> {
+  const filter: TaskFilter = { plan_id: planId, include_subtasks: true };
+  const firstPage = await requestRawCloudTaskPage(client, filter);
+  const tasks: Task[] = [];
+  const seen = new Set<string>();
+  appendExactPlanTaskPage(tasks, seen, firstPage.tasks, planId);
+
+  // Authorities predating the `total` envelope returned the complete filtered
+  // set in one response. Preserve that compatibility; current authorities expose
+  // `total`, which makes a truncated result detectable and exhaustible.
+  if (firstPage.total === undefined) return tasks;
+  const total = firstPage.total;
+  if (tasks.length > total) {
+    throw cloudPlanTaskListError(planId, `first page contains ${tasks.length} rows but reports total ${total}`);
+  }
+
+  while (tasks.length < total) {
+    const page = await requestRawCloudTaskPage(client, { ...filter, offset: tasks.length });
+    if (page.total !== total) {
+      throw cloudPlanTaskListError(planId, `pagination total changed from ${total} to ${String(page.total)}`);
+    }
+    if (page.tasks.length === 0 || tasks.length + page.tasks.length > total) {
+      throw cloudPlanTaskListError(planId, "pagination did not make bounded progress toward the reported total");
+    }
+    appendExactPlanTaskPage(tasks, seen, page.tasks, planId);
+  }
+
+  return tasks;
+}
+
 function cloudTaskListFilterError(
   code:
     | "REMOTE_TASK_LIST_FILTER_UNSUPPORTED"
