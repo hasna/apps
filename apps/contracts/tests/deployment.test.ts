@@ -694,6 +694,35 @@ describe("deployment contract records", () => {
     });
   });
 
+  test("a succeeded attempt must contain every linked deployment plan action", () => {
+    const fixtures = createDeploymentFixtureSet();
+    const contractSet = deploymentFixtureSetToContractSet(fixtures);
+    const planDraft = clone(fixtures.deploymentPlan);
+    const secondAction = clone(planDraft.actions[0]!);
+    secondAction.id = "verify-workload";
+    secondAction.dependsOn = ["apply-workload"];
+    planDraft.actions.push(secondAction);
+    const deploymentPlan = DeploymentPlanSchema.parse(redigest(planDraft));
+    const downstream = recomputePlanDownstream(fixtures, deploymentPlan);
+
+    contractSet.deploymentPlans = [deploymentPlan];
+    contractSet.deploymentApprovalDecisions = [
+      downstream.deploymentApprovalDecision,
+    ];
+    contractSet.deploymentAttempts = [downstream.deploymentAttempt];
+    contractSet.providerReceipts = [downstream.providerReceipt];
+    contractSet.deploymentReceipts = [downstream.deploymentReceipt];
+    contractSet.launchEvidence = [downstream.launchEvidence];
+
+    const result = validateDeploymentContractSet(runtimeSchemas, contractSet);
+    expect(result).toEqual({
+      success: false,
+      issues: [
+        `deploymentAttempts.${downstream.deploymentAttempt.id}.actionSteps: succeeded attempt is missing linked deployment plan actions`,
+      ],
+    });
+  });
+
   test("a succeeded attempt cannot contain a failed action step", () => {
     const fixtures = createDeploymentFixtureSet();
     const contractSet = deploymentFixtureSetToContractSet(fixtures);

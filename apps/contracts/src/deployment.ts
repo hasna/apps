@@ -1701,6 +1701,14 @@ export function validateDeploymentContractSet(
           );
         }
       });
+      if (
+        attempt.state === "succeeded"
+        && attempt.actionSteps.length < planActionIds.size
+      ) {
+        issues.push(
+          `deploymentAttempts.${attempt.id}.actionSteps: succeeded attempt is missing linked deployment plan actions`,
+        );
+      }
     }
     if (
       attempt.state === "succeeded"
