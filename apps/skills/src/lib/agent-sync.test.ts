@@ -220,6 +220,35 @@ describe("syncSkillsToAgents", () => {
     }
   });
 
+  test("a named repository-managed agent skill syncs from the bundled agent-skills tree", () => {
+    const corpus = tempDir("sync-corpus-");
+    const home = tempDir("sync-home-");
+    try {
+      const { actions } = syncSkillsToAgents({
+        rootDir: corpus,
+        homeDir: home,
+        names: ["fleet-package-rollout"],
+        agents: ["codewith"],
+      });
+      const skillPath = join(home, ".codewith", "skills", "fleet-package-rollout", "SKILL.md");
+
+      expect(actions).toEqual([{
+        skill: "fleet-package-rollout",
+        agent: "codewith",
+        path: skillPath,
+        action: "create",
+      }]);
+      expect(existsSync(skillPath)).toBe(true);
+      const synced = existsSync(skillPath) ? readFileSync(skillPath, "utf-8") : "";
+      expect(synced).toContain("# Fleet Package Rollout");
+      expect(synced).toContain("Positive control (executable route)");
+      expect(synced).not.toContain("executable skill from the @hasna/skills catalog");
+    } finally {
+      rmSync(corpus, { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   test("a named skill absent from the corpus is reported as skipped, not written", () => {
     const corpus = tempDir("sync-corpus-");
     const home = tempDir("sync-home-");
@@ -247,6 +276,11 @@ describe("syncSkillsToAgents", () => {
       expect(() => syncSkillsToAgents({
         homeDir: home,
         names: ["../../skills/todos-plan"],
+        agents: ["codewith"],
+      })).toThrow("Invalid skill name");
+      expect(() => syncSkillsToAgents({
+        homeDir: home,
+        names: ["../agent-skills/fleet-package-rollout"],
         agents: ["codewith"],
       })).toThrow("Invalid skill name");
 

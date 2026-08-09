@@ -27,6 +27,7 @@ export type SyncAgent = "claude" | "codewith" | "codex" | "opencode" | "cursor";
 export const SYNC_AGENTS: readonly SyncAgent[] = ["claude", "codewith", "codex", "opencode", "cursor"] as const;
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+const BUNDLED_SKILL_ROOTS = ["skills", "agent-skills"] as const;
 
 /**
  * Ownership marker written beside every SKILL.md this tool syncs. Its presence is how a
@@ -330,9 +331,11 @@ function sourceSkillMd(
 function findBundledSkillSource(name: string): SyncSource | null {
   let dir = __dirname;
   for (let i = 0; i < 5; i += 1) {
-    const path = join(dir, "skills", name);
-    if (existsSync(path) && existsSync(join(path, "SKILL.md"))) {
-      return { name, path, source: "bundled" };
+    for (const root of BUNDLED_SKILL_ROOTS) {
+      const path = join(dir, root, name);
+      if (existsSync(path) && existsSync(join(path, "SKILL.md"))) {
+        return { name, path, source: "bundled" };
+      }
     }
     dir = dirname(dir);
   }
