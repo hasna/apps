@@ -64,10 +64,19 @@ function boundAndRedact(value: string, maxChars: number): BoundedStream {
   if (redacted.length <= maxChars) {
     return { text: redacted, truncated: false };
   }
-  return {
-    text: `${redacted.slice(0, maxChars)}...[truncated ${redacted.length - maxChars} chars]`,
-    truncated: true,
-  };
+
+  let keep = maxChars;
+  let text = "";
+  while (keep >= 0) {
+    const suffix = `...[truncated ${redacted.length - keep} chars]`;
+    text = `${redacted.slice(0, keep)}${suffix}`;
+    if (text.length <= maxChars) {
+      return { text, truncated: true };
+    }
+    keep -= 1;
+  }
+
+  return { text: redacted.slice(0, maxChars), truncated: true };
 }
 
 export function resolveMachineExecCommand(input: MachineExecInput): string {

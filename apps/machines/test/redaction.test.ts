@@ -57,4 +57,14 @@ describe("redaction helpers", () => {
     for (const sample of samples) expect(message).not.toContain(sample);
     expect(message).not.toContain("Bearer abcdefghijklmnopqrstuvwxyz");
   });
+
+  test("redacts AWS secret access key assignments composed at runtime", () => {
+    const key = ["AWS", "SECRET", "ACCESS", "KEY"].join("_");
+    const value = ["wJalr", "XUtn", "FEMI", "/", "KEY", "EXAMPLE"].join("");
+    const assignment = `${key}=${value}`;
+    const message = redactErrorMessage(`export failed: ${assignment} in env`);
+    expect(message).toContain(`AWS_SECRET_ACCESS_KEY=${REDACTED_VALUE}`);
+    expect(message).not.toContain(value);
+    expect(message).not.toContain(assignment);
+  });
 });

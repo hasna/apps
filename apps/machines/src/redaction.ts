@@ -85,6 +85,7 @@ export function redactNetworkValue(value: string): string {
 
 export function redactErrorMessage(value: string): string {
   return redactSensitiveStringPatterns(redactPath(value))
+    .replace(/\bAWS_SECRET_ACCESS_KEY=([^\s"'<>]+)/gi, `AWS_SECRET_ACCESS_KEY=${REDACTED_VALUE}`)
     .replace(/\b(password|passwd|token|secret|api[_-]?key|credential)=([^\s"'<>]+)/gi, (_match, key) => `${key}=${REDACTED_VALUE}`)
     .replace(DATABASE_URL_PATTERN, (match) => {
       const scheme = match.match(/^([a-z][a-z0-9+.-]*:\/\/)/i)?.[1] ?? "";

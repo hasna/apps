@@ -1,4 +1,7 @@
+import { redactErrorMessage } from "../redaction.js";
 import { resolveMachineRoute, type MachineRouteOptions } from "../topology.js";
+
+export const UNSAFE_SSH_TARGET_ERROR = "Unsafe SSH target";
 
 export interface ResolvedSshTarget {
   machineId: string;
@@ -18,13 +21,21 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
+function unsafeSshTargetError(target: string): Error {
+  const redacted = redactErrorMessage(target.trim() || target);
+  if (redacted.includes("[redacted]") || redacted !== target.trim()) {
+    return new Error(UNSAFE_SSH_TARGET_ERROR);
+  }
+  return new Error(`${UNSAFE_SSH_TARGET_ERROR}: ${redacted}`);
+}
+
 export function validateSshTarget(target: string): string {
   const trimmed = target.trim();
   if (!trimmed || trimmed.startsWith("-") || /[\s"'`$\\;&|<>()[\]{}]/.test(trimmed)) {
-    throw new Error(`Unsafe SSH target: ${target}`);
+    throw unsafeSshTargetError(target);
   }
   if (!/^(?:[A-Za-z0-9._%+-]+@)?[A-Za-z0-9._:-]+$/.test(trimmed)) {
-    throw new Error(`Unsafe SSH target: ${target}`);
+    throw unsafeSshTargetError(target);
   }
   return trimmed;
 }

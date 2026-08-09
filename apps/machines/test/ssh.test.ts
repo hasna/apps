@@ -3,7 +3,7 @@ import { mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { manifestAdd, manifestInit } from "../src/commands/manifest.js";
-import { buildSshCommand, buildSshCommandArgs, buildSshCommandPlan, resolveSshTarget, validateSshTarget } from "../src/commands/ssh.js";
+import { buildSshCommand, buildSshCommandArgs, buildSshCommandPlan, resolveSshTarget, UNSAFE_SSH_TARGET_ERROR, validateSshTarget } from "../src/commands/ssh.js";
 
 describe("smart ssh", () => {
   test("prefers LAN when reachable", () => {
@@ -121,7 +121,21 @@ describe("smart ssh", () => {
 
   test("rejects unsafe shell targets before building ssh commands", () => {
     expect(validateSshTarget("operator@demo-node-01")).toBe("operator@demo-node-01");
-    expect(() => validateSshTarget("-oProxyCommand=sh")).toThrow("Unsafe SSH target");
-    expect(() => validateSshTarget("operator@host;touch /tmp/pwned")).toThrow("Unsafe SSH target");
+    expect(() => validateSshTarget("-oProxyCommand=sh")).toThrow(UNSAFE_SSH_TARGET_ERROR);
+    expect(() => validateSshTarget("operator@host;touch /tmp/pwned")).toThrow(UNSAFE_SSH_TARGET_ERROR);
+  });
+
+  test("unsafe SSH target errors omit private machine route targets", () => {
+    const privateHost = ["demo-node-01", "private", "example"].join(".");
+    const unsafeTarget = `operator@${privateHost};touch /tmp/pwned`;
+    try {
+      validateSshTarget(unsafeTarget);
+      throw new Error("expected validateSshTarget to throw");
+    } catch (error) {
+      const message = String((error as Error).message ?? error);
+      expect(message).toBe(UNSAFE_SSH_TARGET_ERROR);
+      expect(message).not.toContain(privateHost);
+      expect(message).not.toContain("operator@");
+    }
   });
 });

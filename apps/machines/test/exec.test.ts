@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   DEFAULT_MACHINE_EXEC_MAX_OUTPUT_CHARS,
+  DEFAULT_MACHINE_EXEC_MAX_SCRIPT_CHARS,
   resolveMachineExecCommand,
   runMachineExec,
   type MachineExecInput,
@@ -91,22 +92,84 @@ describe("machines exec command", () => {
     const runner: MachineCommandRunner = () => ({
       machineId: "local",
       source: "local",
-      stdout: "a".repeat(40),
-      stderr: "b".repeat(40),
+      stdout: "a".repeat(120),
+      stderr: "b".repeat(120),
       exitCode: 0,
     });
+    const maxOutputChars = 50;
 
     const result = runMachineExec({
       machineId: "local",
       timeoutMs: 1000,
       argv: ["echo", "x"],
-      maxOutputChars: 10,
+      maxOutputChars,
     }, runner);
 
     expect(result.stdout.text).toContain("...[truncated");
     expect(result.stderr.text).toContain("...[truncated");
+    expect(result.stdout.text.length).toBeLessThanOrEqual(maxOutputChars);
+    expect(result.stderr.text.length).toBeLessThanOrEqual(maxOutputChars);
     expect(result.stdout.truncated).toBe(true);
     expect(result.stderr.truncated).toBe(true);
+  });
+
+  test("returned stdout and stderr including truncation suffix obey maxOutputChars", () => {
+    const longOutput = "x".repeat(500);
+    const runner: MachineCommandRunner = () => ({
+      machineId: "local",
+      source: "local",
+      stdout: longOutput,
+      stderr: longOutput,
+      exitCode: 0,
+    });
+    const maxOutputChars = 64;
+
+    const result = runMachineExec({
+      machineId: "local",
+      timeoutMs: 1000,
+      argv: ["echo", "x"],
+      maxOutputChars,
+    }, runner);
+
+    expect(result.stdout.text.length).toBeLessThanOrEqual(maxOutputChars);
+    expect(result.stderr.text.length).toBeLessThanOrEqual(maxOutputChars);
+    expect(result.stdout.truncated).toBe(true);
+    expect(result.stderr.truncated).toBe(true);
+  });
+
+  test("rejects scripts longer than 65536 characters before execution", () => {
+    let called = false;
+    const runner: MachineCommandRunner = () => {
+      called = true;
+      return {
+        machineId: "local",
+        source: "local",
+        stdout: "",
+        stderr: "",
+        exitCode: 0,
+      };
+    };
+
+    expect(() => resolveMachineExecCommand({
+      machineId: "local",
+      timeoutMs: 1000,
+      script: "x".repeat(DEFAULT_MACHINE_EXEC_MAX_SCRIPT_CHARS + 1),
+    })).toThrow(`Script exceeds ${DEFAULT_MACHINE_EXEC_MAX_SCRIPT_CHARS} characters`);
+    expect(() => runMachineExec({
+      machineId: "local",
+      timeoutMs: 1000,
+      script: "x".repeat(DEFAULT_MACHINE_EXEC_MAX_SCRIPT_CHARS + 1),
+    }, runner)).toThrow(`Script exceeds ${DEFAULT_MACHINE_EXEC_MAX_SCRIPT_CHARS} characters`);
+    expect(called).toBe(false);
+  });
+
+  test("accepts scripts at the 65536 character pre-materialization bound", () => {
+    const script = "x".repeat(DEFAULT_MACHINE_EXEC_MAX_SCRIPT_CHARS);
+    expect(resolveMachineExecCommand({
+      machineId: "local",
+      timeoutMs: 1000,
+      script,
+    })).toBe(`bash -c '${"x".repeat(DEFAULT_MACHINE_EXEC_MAX_SCRIPT_CHARS)}'`);
   });
 
   test("default output cap matches package constant", () => {
