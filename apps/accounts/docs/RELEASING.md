@@ -12,9 +12,9 @@ rather than assumed unchanged.
 ## Required external controls
 
 The repository and npm package must have all of these controls before a tag is
-created. The workflow checks the GitHub ruleset and release environment live and
-fails before packing or publishing if either is absent or weaker than this
-contract.
+created. The workflow checks the GitHub ruleset, release environment, and signed
+independent-agent review receipt live and fails before packing or publishing if
+any is absent or weaker than this contract.
 
 ### GitHub release-tag ruleset
 
@@ -119,26 +119,168 @@ the preflight calls; a missing secret fails before packing or publication.
 Create a protected `npm-release` environment:
 
 - allow deployments only from tags matching `npm/accounts/v*`;
-- require exactly one user reviewer matching the release actor;
-- allow that reviewer to approve their own deployment;
+- require **zero** GitHub environment reviewers and no manual approval;
 - store only `RELEASE_APP_ID`, `RELEASE_APP_PRIVATE_KEY`, and the
   `NPM_DIST_TAG_TOKEN` described below.
 
 The npm trusted publisher must include the same environment name. A mismatch
-causes npm OIDC publication to fail. This repository currently has one
-release-authorized organization owner and repository collaborator, so preventing
-self-review would make every release impossible. The live preflight therefore
-derives the triggering user's ID and login from GitHub, requires that exact user
-as the sole environment reviewer, requires their live repository permission to
-be `admin`, and requires `prevent_self_review=false`. It does not hardcode the
-user or numeric IDs.
+causes npm OIDC publication to fail. The live preflight still requires the
+triggering GitHub user to have repository `admin` permission, but that user is
+not a reviewer and cannot approve the deployment. The release-tag ruleset
+separately limits tag creation to organization administrators.
 
-The release-tag ruleset separately limits tag creation to organization
-administrators. Together, the controls mean that the organization administrator
-who creates a protected release tag must explicitly approve the environment
-deployment without granting release authority to another identity. The
-preflight also requires custom deployment policies only and exactly one policy:
-a tag policy for `npm/accounts/v*`.
+The preflight rejects any `required_reviewers` protection rule. It also requires
+custom deployment policies only and exactly one policy: a tag policy for
+`npm/accounts/v*`. The environment remains the scope boundary for release
+secrets, not a human approval queue.
+
+### Independent coding-agent release review
+
+Every release requires one fixed independent adversarial coding agent. Human
+approval, a publisher's self-review, and an unsigned statement are all
+insufficient.
+
+The trust root is versioned at `config/release-review-trust.json`, not supplied
+by workflow variables. Generation 1 pins reviewer display identity `Rawls`,
+agent id `019fe5d3-a6dc-71a0-b6cc-243ea32513b6`, and the canonical 44-byte
+Ed25519 SPKI DER public key whose SHA-256 is
+`4e5e4d72beb074d44779c0f26dd2cd38c9ed5129131fd1432259f82943273da6`.
+The matching private key is held only by Rawls in the vault item
+`hasna/accounts/npm-release/reviewer-ed25519-private-key`; it is never present
+in this repository, the release workflow, or the `npm-release` environment.
+`RELEASE_REVIEWER_AGENT` and `RELEASE_REVIEW_PUBLIC_KEY` are deliberately
+ignored and must not be configured as release authority.
+
+The bootstrap is finite: generation 1 is accepted only for
+`@hasna/accounts@0.2.42`, with the exact Rawls identity, public key/hash, and
+vault reference above. Rawls created that key and reviews this PR. There is no
+flag, environment variable, or general runtime path that permits another
+generation-1 bootstrap.
+
+After reviewing the exact release commit, the reviewer posts one **unedited
+GitHub commit comment** on that commit. Its body is exactly this signed wrapper:
+
+```json
+{
+  "schema": "hasna.signed-release-review-receipt/v1",
+  "payload": "<canonical-base64 of the exact UTF-8 JSON payload>",
+  "signature": {
+    "algorithm": "ed25519",
+    "value": "<canonical-base64 Ed25519 signature over the decoded payload bytes>"
+  }
+}
+```
+
+The decoded payload has exactly these fields:
+
+```json
+{
+  "schema": "hasna.release-review/v1",
+  "repository": "hasna/accounts",
+  "commit": "<exact 40-character release commit>",
+  "package": {
+    "name": "@hasna/accounts",
+    "version": "X.Y.Z"
+  },
+  "tag": "npm/accounts/vX.Y.Z",
+  "workflow": {
+    "path": ".github/workflows/release.yml",
+    "revision": "<exact git blob SHA of release.yml at the release commit>"
+  },
+  "trust": {
+    "path": "config/release-review-trust.json",
+    "revision": "<exact git blob SHA of the trust document at the release commit>"
+  },
+  "registry": "https://registry.npmjs.org",
+  "reviewer": {
+    "type": "coding-agent",
+    "agent": "Rawls",
+    "id": "019fe5d3-a6dc-71a0-b6cc-243ea32513b6"
+  },
+  "publisher": {
+    "type": "coding-agent",
+    "agent": "<publisher Agent trailer>"
+  },
+  "verdict": "GO",
+  "openReachableInScopeBlockers": {
+    "p0": 0,
+    "p1": 0
+  }
+}
+```
+
+The publisher then records that exact comment ID and its own registered agent
+identity in the immutable annotated tag. The workflow fetches the comment by ID,
+requires it to belong to the tagged commit and to have never been edited,
+verifies the signature under the fixed public key, and checks every payload
+field against live package, git, workflow, trust-document, tag, and registry
+state. The reviewer agent must differ from the publisher agent.
+
+Missing, stale, mismatched, edited, invalidly signed, self-reviewed, `NO_GO`, or
+non-zero P0/P1 receipts fail before deterministic packing or publication. The
+GitHub comment is transport only; the reviewer-only signature is the authority,
+so the publishing workflow cannot make its own assertion sufficient.
+
+#### Reviewer-only signer and comment posting
+
+Only Rawls runs the signer, from a clean checkout whose `HEAD` is the exact
+reviewed commit. The command consumes the named vault key without reading it in
+the shell and prints only the numeric GitHub commit-comment id:
+
+```bash
+secrets exec hasna/accounts/npm-release/reviewer-ed25519-private-key \
+  --as RELEASE_REVIEW_SIGNING_PRIVATE_KEY -- \
+  bun run release-review:sign -- \
+    --commit COMMIT_SHA \
+    --publisher-agent PUBLISHER_AGENT
+```
+
+The signer reads `package.json`, `release.yml`, and the trust document from the
+exact commit, derives both git blob revisions, constructs the canonical payload,
+confirms the private key derives the pinned public key, signs in memory, and
+posts that exact body through the reviewer's existing authenticated `gh` CLI.
+It verifies GitHub returned the exact body on the exact commit, with equal
+`created_at` and `updated_at`, then returns the positive numeric id. The private
+key variable is removed from the process environment before any subprocess,
+stripped from every git and `gh` child, never written to a file, and discarded
+when `secrets exec` terminates the child.
+
+Safe provisioning verification is metadata-only:
+
+```bash
+secrets get hasna/accounts/npm-release/reviewer-ed25519-private-key --check
+```
+
+Never use `--show`, command substitution, a temporary key file, or a shell
+variable holding the key. The vault reference pattern is
+`hasna/accounts/npm-release/<purpose>`; this release uses the exact
+`reviewer-ed25519-private-key` item named above.
+
+#### Rotation, revocation, and custody
+
+Unchanged trust is accepted only when the candidate trust bytes are identical
+to the trust document shipped in the prior promoted `latest` release. A changed
+document must increment `generation` exactly once and contain an Ed25519
+signature by the **prior** key over the canonical new trust payload. That
+payload binds the prior package/version/registry, the SHA-256 of its exact trust
+bytes, and every field of the new trust core.
+
+The preflight selects the promoted `latest` SemVer below the candidate from the
+canonical npm packument; it does not accept a prior version selected only by the
+candidate or a merely staged package version. It fetches that immutable tarball,
+verifies package identity, `gitHead`, advertised SLSA provenance, and registry
+SHA-512 integrity, extracts
+the shipped trust document, and verifies the old-key rotation signature. The
+threat boundary is npm version immutability plus the prior release's completed
+provenance/registry verification; replacing both old and new keys only in a new
+candidate cannot satisfy this chain.
+
+Revoking the vault item immediately prevents new receipts. Rotate before
+revocation when the old key remains trustworthy. If the old key is unavailable
+or untrustworthy, automated rotation is impossible and releases fail closed;
+there is no environment-variable or publisher-controlled recovery bootstrap.
+Private-key custody remains solely with Rawls. Public trust material and signed
+rotation envelopes are reviewed repository data and contain no secret.
 
 ### npm trusted publisher
 
@@ -178,16 +320,21 @@ authority boundaries.
 
 ## Release environment provisioning
 
-Until the two environment secrets exist, **no tag can publish**. The workflow's
-first step fails before checkout and names whichever secret is missing, so this
-is diagnosed in seconds rather than several minutes into a release run.
+Until the required environment secrets and candidate-pinned review trust exist,
+**no tag can publish**. The workflow's first step names missing environment
+secrets before checkout; the preflight validates the reviewed trust document
+before packing or publication.
 
-Both secrets live in the `npm-release` environment of `hasna/accounts`:
+The secrets live in the `npm-release` environment of `hasna/accounts`:
 
 | Secret | Purpose | Created by |
 | --- | --- | --- |
 | `NPM_DIST_TAG_TOKEN` | granular npm token scoped to `@hasna/accounts`, used only by the dist-tag promotion step | an npm owner of the package |
 | `RELEASE_APP_ID` + `RELEASE_APP_PRIVATE_KEY` | GitHub App credentials; the workflow MINTS a short-lived installation token from them per run and exposes it to the preflight as `RELEASE_GITHUB_ADMIN_TOKEN`, which reads the live release-tag ruleset and environment configuration | any holder of the `hasna-identity` App credentials |
+
+Reviewer identity and public trust material live only in the reviewed
+`config/release-review-trust.json`. The `npm-release` environment defines no
+reviewer or public-key variables.
 
 `RELEASE_GITHUB_ADMIN_TOKEN` is deliberately **not** stored. A GitHub App
 installation token expires roughly an hour after it is minted, so storing one
@@ -197,7 +344,7 @@ provisioning. Minting per run is also better security than the PAT this
 originally called for: the credential is installation-scoped, repository-scoped,
 short-lived, and nothing durable exists to leak.
 
-Verify presence without reading either value:
+Verify environment secret names without reading any value:
 
 ```bash
 gh api repos/hasna/accounts/environments/npm-release/secrets \
@@ -376,14 +523,22 @@ root, so a release cannot silently accept a changed live trust document.
 
 1. Land a separate release PR that changes only the version, changelog, and
    release-specific metadata. Wait for exact-head CI and review.
-2. From that reviewed commit on `main`, create and push the annotated tag:
+2. Have the fixed independent release-review agent review the exact commit and
+   post the signed, unedited commit-comment receipt described above. Record the
+   returned numeric comment ID.
+3. From that reviewed commit on `main`, create and push the annotated tag. The
+   tag must carry exactly one review-comment trailer and exactly one publishing
+   agent trailer:
 
    ```sh
-   git tag -a npm/accounts/vX.Y.Z COMMIT_SHA -m "Release @hasna/accounts X.Y.Z"
+   git tag -a npm/accounts/vX.Y.Z COMMIT_SHA \
+     -m "Release @hasna/accounts X.Y.Z" \
+     -m "Release-Review-Comment: COMMENT_ID" \
+     -m "Agent: PUBLISHER_AGENT"
    git push origin npm/accounts/vX.Y.Z
    ```
 
-3. The protected tag starts the release workflow. Do not run `npm publish`
+4. The protected tag starts the release workflow. Do not run `npm publish`
    locally and do not move any dist-tag manually while it is running. If the
    workflow itself is unavailable, use "Break-glass direct publish" above
    deliberately; do not improvise around the guard.
@@ -433,6 +588,8 @@ Before publication, the workflow requires:
 
 - exact repository, workflow, protected tag, annotated tag, and commit
   agreement;
+- one valid exact-candidate signed independent coding-agent review receipt with
+  `GO` and zero open reachable in-scope P0/P1 blockers;
 - the tagged commit to be contained in `origin/main`;
 - a clean checkout and a live matching release-tag ruleset;
 - exact pinned Node, npm, and Bun versions;

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { createHash } from "node:crypto";
+import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { gzipSync } from "node:zlib";
 import {
@@ -21,6 +21,8 @@ import {
   RELEASE_BUN_VERSION,
   RELEASE_NODE_VERSION,
   RELEASE_NPM_VERSION,
+  RELEASE_REVIEW_SIGNING_SECRET_REF,
+  RELEASE_REVIEW_TRUST_PATH,
   RELEASE_WORKFLOW,
   assertDeterministicPacks,
   assertExactCliVersion,
@@ -38,6 +40,8 @@ import {
   originIntentPackumentUrl,
   packagePurl,
   packumentListsVersion,
+  parseReleaseReviewTrust,
+  parseReleaseTagAuthorization,
   parseRetryOptions,
   promoteLatestMonotonically,
   readLimited,
@@ -51,6 +55,7 @@ import {
   verifyDistTags,
   verifyDownloadedTarball,
   verifyReleaseEnvironment,
+  verifyReleaseReviewReceipt,
   verifyRegistryMetadata,
   verifyRegistryReleaseAttempt,
   verifyReleaseRulesets,
@@ -58,6 +63,7 @@ import {
   waitForInstallVisibility,
   type PackResult,
   type ReleaseCandidate,
+  type ReleaseReviewExpectation,
 } from "./release-provenance";
 
 const manifest = {
@@ -85,6 +91,114 @@ const candidate: ReleaseCandidate = {
   stagingTag: "release-candidate-0.3.0",
   intendedTag: "latest",
 };
+
+const reviewKeyPair = generateKeyPairSync("ed25519");
+const reviewPublicKey = reviewKeyPair.publicKey.export({
+  format: "der",
+  type: "spki",
+}).toString("base64");
+const reviewTrust = parseReleaseReviewTrust({
+  schema: "hasna.release-review-trust/v1",
+  generation: 7,
+  repository: candidate.repository,
+  reviewer: {
+    type: "coding-agent",
+    agent: "rawls-npm-release-reviewer",
+    id: "019fe5d3-a6dc-71a0-b6cc-243ea32513b6",
+  },
+  publicKey: {
+    algorithm: "ed25519",
+    encoding: "base64-spki-der",
+    value: reviewPublicKey,
+    sha256: createHash("sha256")
+      .update(reviewKeyPair.publicKey.export({ format: "der", type: "spki" }))
+      .digest("hex"),
+  },
+  signer: { secretRef: RELEASE_REVIEW_SIGNING_SECRET_REF },
+  rotation: null,
+});
+const reviewExpectation: ReleaseReviewExpectation = {
+  commentId: 98_765_432,
+  repository: candidate.repository,
+  commit: candidate.commit,
+  packageName: candidate.name,
+  version: candidate.version,
+  tag: candidate.tag,
+  workflow: RELEASE_WORKFLOW,
+  workflowRevision: "89abcdef0123456789abcdef0123456789abcdef",
+  trustPath: RELEASE_REVIEW_TRUST_PATH,
+  trustRevision: "fedcba9876543210fedcba9876543210fedcba98",
+  registry: "https://registry.npmjs.org",
+  reviewerAgent: "rawls-npm-release-reviewer",
+  reviewerAgentId: "019fe5d3-a6dc-71a0-b6cc-243ea32513b6",
+  publisherAgent: "cato-npm-release-publisher",
+};
+
+function releaseReviewPayload(overrides: Record<string, unknown> = {}) {
+  return {
+    schema: "hasna.release-review/v1",
+    repository: reviewExpectation.repository,
+    commit: reviewExpectation.commit,
+    package: {
+      name: reviewExpectation.packageName,
+      version: reviewExpectation.version,
+    },
+    tag: reviewExpectation.tag,
+    workflow: {
+      path: reviewExpectation.workflow,
+      revision: reviewExpectation.workflowRevision,
+    },
+    trust: {
+      path: reviewExpectation.trustPath,
+      revision: reviewExpectation.trustRevision,
+    },
+    registry: reviewExpectation.registry,
+    reviewer: {
+      type: "coding-agent",
+      agent: reviewExpectation.reviewerAgent,
+      id: reviewExpectation.reviewerAgentId,
+    },
+    publisher: {
+      type: "coding-agent",
+      agent: reviewExpectation.publisherAgent,
+    },
+    verdict: "GO",
+    openReachableInScopeBlockers: {
+      p0: 0,
+      p1: 0,
+    },
+    ...overrides,
+  };
+}
+
+function releaseReviewComment(
+  payload = releaseReviewPayload(),
+  options: {
+    commentId?: number;
+    commit?: string;
+    privateKey?: typeof reviewKeyPair.privateKey;
+    signature?: string;
+    updatedAt?: string;
+  } = {},
+) {
+  const payloadBytes = Buffer.from(JSON.stringify(payload));
+  const signature = options.signature ??
+    sign(null, payloadBytes, options.privateKey ?? reviewKeyPair.privateKey).toString("base64");
+  return {
+    id: options.commentId ?? reviewExpectation.commentId,
+    commit_id: options.commit ?? reviewExpectation.commit,
+    created_at: "2026-08-09T09:00:00Z",
+    updated_at: options.updatedAt ?? "2026-08-09T09:00:00Z",
+    body: JSON.stringify({
+      schema: "hasna.signed-release-review-receipt/v1",
+      payload: payloadBytes.toString("base64"),
+      signature: {
+        algorithm: "ed25519",
+        value: signature,
+      },
+    }),
+  };
+}
 
 function attestation(
   predicateType: string,
@@ -308,6 +422,8 @@ test("accepts only the exact tokenless protected GitHub OIDC workflow and pinned
     NPM_DIST_TAG_TOKEN_CONFIGURED: "true",
     RELEASE_APP_ID_CONFIGURED: "true",
     RELEASE_APP_PRIVATE_KEY_CONFIGURED: "true",
+    RELEASE_REVIEWER_AGENT: "publisher-controlled-and-ignored",
+    RELEASE_REVIEW_PUBLIC_KEY: "publisher-controlled-and-ignored",
     ACTIONS_ID_TOKEN_REQUEST_URL: "https://example.invalid/oidc",
     ACTIONS_ID_TOKEN_REQUEST_TOKEN: "present",
   };
@@ -464,15 +580,10 @@ test("requires a live active release-tag ruleset with immutable restricted autho
   }])).toThrow("exactly creation, update, and deletion");
 });
 
-test("requires protected release-environment reviewers and an exact tag deployment policy", () => {
+test("requires zero environment reviewers and an exact tag deployment policy", () => {
   const environment = {
     name: "npm-release",
     protection_rules: [
-      {
-        type: "required_reviewers",
-        prevent_self_review: false,
-        reviewers: [{ type: "User", reviewer: { id: 123, login: "release-owner" } }],
-      },
       { type: "branch_policy" },
     ],
     deployment_branch_policy: {
@@ -504,35 +615,22 @@ test("requires protected release-environment reviewers and an exact tag deployme
     administrationScope,
     repository,
   )).not.toThrow();
-  expect(() => verifyReleaseEnvironment({
-    ...environment,
-    protection_rules: [{ type: "branch_policy" }],
-  }, policies, actor, administrationScope, repository))
-    .toThrow("require reviewers");
-  expect(() => verifyReleaseEnvironment({
-    ...environment,
-    protection_rules: [
-      {
-        type: "required_reviewers",
-        prevent_self_review: true,
-        reviewers: [{ type: "User", reviewer: { id: 123, login: "release-owner" } }],
-      },
-      { type: "branch_policy" },
-    ],
-  }, policies, actor, administrationScope, repository))
-    .toThrow("allow the authorized reviewer");
+  expect(() => {
+    verifyReleaseEnvironment(environment, policies, actor, administrationScope, repository);
+    verifyReleaseReviewReceipt(releaseReviewComment(), reviewExpectation, reviewTrust);
+  }).not.toThrow();
   expect(() => verifyReleaseEnvironment({
     ...environment,
     protection_rules: [
       {
         type: "required_reviewers",
         prevent_self_review: false,
-        reviewers: [{ type: "User", reviewer: { id: 999, login: "other-owner" } }],
+        reviewers: [{ type: "User", reviewer: { id: 123, login: "release-owner" } }],
       },
       { type: "branch_policy" },
     ],
   }, policies, actor, administrationScope, repository))
-    .toThrow("exactly match the live release actor");
+    .toThrow("zero required reviewers");
   expect(() => verifyReleaseEnvironment(environment, policies, {
     ...actor,
     permission: "write",
@@ -595,6 +693,146 @@ test("requires protected release-environment reviewers and an exact tag deployme
     { total_count: 1 },
     repository,
   )).toThrow("must list its repositories");
+});
+
+test("requires an exact immutable signed independent-agent release review receipt", () => {
+  expect(() => verifyReleaseReviewReceipt(
+    releaseReviewComment(),
+    reviewExpectation,
+    reviewTrust,
+  )).not.toThrow();
+
+  expect(() => verifyReleaseReviewReceipt(
+    undefined,
+    reviewExpectation,
+    reviewTrust,
+  )).toThrow("release review comment");
+
+  expect(() => verifyReleaseReviewReceipt(
+    releaseReviewComment(releaseReviewPayload({
+      commit: "fedcba9876543210fedcba9876543210fedcba98",
+    })),
+    reviewExpectation,
+    reviewTrust,
+  )).toThrow("release review commit disagrees");
+
+  expect(() => verifyReleaseReviewReceipt(
+    releaseReviewComment(releaseReviewPayload(), {
+      commit: "fedcba9876543210fedcba9876543210fedcba98",
+    }),
+    reviewExpectation,
+    reviewTrust,
+  )).toThrow("release review commit disagrees with the tagged candidate");
+
+  for (const payload of [
+    releaseReviewPayload({
+      package: { name: "@hasna/other", version: reviewExpectation.version },
+    }),
+    releaseReviewPayload({
+      package: { name: reviewExpectation.packageName, version: "9.9.9" },
+    }),
+    releaseReviewPayload({ tag: "npm/accounts/v9.9.9" }),
+    releaseReviewPayload({
+      workflow: {
+        path: ".github/workflows/other.yml",
+        revision: reviewExpectation.workflowRevision,
+      },
+    }),
+    releaseReviewPayload({
+      workflow: {
+        path: reviewExpectation.workflow,
+        revision: "fedcba9876543210fedcba9876543210fedcba98",
+      },
+    }),
+    releaseReviewPayload({
+      trust: {
+        path: reviewExpectation.trustPath,
+        revision: "1111111111111111111111111111111111111111",
+      },
+    }),
+    releaseReviewPayload({ registry: "https://registry.example.invalid" }),
+  ]) {
+    expect(() => verifyReleaseReviewReceipt(
+      releaseReviewComment(payload),
+      reviewExpectation,
+      reviewTrust,
+    )).toThrow("release review");
+  }
+
+  expect(() => verifyReleaseReviewReceipt(
+    releaseReviewComment(releaseReviewPayload({
+      reviewer: {
+        type: "coding-agent",
+        agent: reviewExpectation.publisherAgent,
+        id: reviewExpectation.reviewerAgentId,
+      },
+    })),
+    reviewExpectation,
+    reviewTrust,
+  )).toThrow("independent");
+
+  expect(() => verifyReleaseReviewReceipt(
+    releaseReviewComment(releaseReviewPayload({
+      reviewer: {
+        type: "coding-agent",
+        agent: "other-independent-reviewer",
+        id: "11111111-1111-4111-8111-111111111111",
+      },
+    })),
+    reviewExpectation,
+    reviewTrust,
+  )).toThrow("reviewer agent disagrees");
+
+  expect(() => verifyReleaseReviewReceipt(
+    releaseReviewComment(releaseReviewPayload({ verdict: "NO_GO" })),
+    reviewExpectation,
+    reviewTrust,
+  )).toThrow("verdict must be GO");
+
+  for (const blockers of [{ p0: 1, p1: 0 }, { p0: 0, p1: 1 }]) {
+    expect(() => verifyReleaseReviewReceipt(
+      releaseReviewComment(releaseReviewPayload({
+        openReachableInScopeBlockers: blockers,
+      })),
+      reviewExpectation,
+      reviewTrust,
+    )).toThrow("zero open reachable in-scope P0/P1 blockers");
+  }
+
+  const otherKeyPair = generateKeyPairSync("ed25519");
+  expect(() => verifyReleaseReviewReceipt(
+    releaseReviewComment(releaseReviewPayload(), { privateKey: otherKeyPair.privateKey }),
+    reviewExpectation,
+    reviewTrust,
+  )).toThrow("signature is invalid");
+
+  expect(() => verifyReleaseReviewReceipt(
+    releaseReviewComment(releaseReviewPayload(), {
+      updatedAt: "2026-08-09T09:01:00Z",
+    }),
+    reviewExpectation,
+    reviewTrust,
+  )).toThrow("must not be edited");
+});
+
+test("release tag metadata binds one publisher agent and one exact review comment", () => {
+  expect(parseReleaseTagAuthorization(
+    "Release @hasna/accounts 0.3.0\n\nRelease-Review-Comment: 98765432\nAgent: cato-npm-release-publisher",
+  )).toEqual({
+    reviewCommentId: 98_765_432,
+    publisherAgent: "cato-npm-release-publisher",
+  });
+  expect(() => parseReleaseTagAuthorization("Release @hasna/accounts 0.3.0"))
+    .toThrow("Release-Review-Comment");
+  expect(() => parseReleaseTagAuthorization(
+    "Release @hasna/accounts 0.3.0\n\nRelease-Review-Comment: 98765432",
+  )).toThrow("Agent");
+  expect(() => parseReleaseTagAuthorization(
+    "Release-Review-Comment: 98765432\nRelease-Review-Comment: 98765433\nAgent: cato",
+  )).toThrow("exactly one Release-Review-Comment");
+  expect(() => parseReleaseTagAuthorization(
+    "Release-Review-Comment: 98765432\nAgent: cato\nAgent: other",
+  )).toThrow("exactly one Agent");
 });
 
 test("allows only advancing or exact-idempotent semantic promotion", () => {
@@ -2076,6 +2314,8 @@ test("release workflow publishes one preserved tarball under staging before prom
   // authorization error — from creeping back in.
   expect(workflow).toContain("RELEASE_APP_ID_CONFIGURED");
   expect(workflow).toContain("RELEASE_APP_PRIVATE_KEY_CONFIGURED");
+  expect(workflow).not.toContain("RELEASE_REVIEWER_AGENT_CONFIGURED");
+  expect(workflow).not.toContain("RELEASE_REVIEW_PUBLIC_KEY_CONFIGURED");
   expect(workflow).not.toContain("secrets.RELEASE_GITHUB_ADMIN_TOKEN");
   expect(workflow).toContain("uses: actions/create-github-app-token");
   expect(workflow).toContain("repositories: accounts");
@@ -2097,6 +2337,8 @@ test("release workflow publishes one preserved tarball under staging before prom
       /RELEASE_GITHUB_ADMIN_TOKEN: \$\{\{ steps\.release-admin-token\.outputs\.token \}\}/g,
     ),
   ).toHaveLength(3);
+  expect(workflow).not.toContain("vars.RELEASE_REVIEWER_AGENT");
+  expect(workflow).not.toContain("vars.RELEASE_REVIEW_PUBLIC_KEY");
   // The token must be minted before the first step that consumes it.
   expect(workflow.indexOf("id: release-admin-token"))
     .toBeLessThan(workflow.indexOf("release-provenance.ts preflight"));
@@ -2420,6 +2662,8 @@ test("release workflow names its missing environment secrets before doing any wo
   // missing are the App's, not the token's.
   expect(workflow).toContain("RELEASE_APP_ID is not configured");
   expect(workflow).toContain("RELEASE_APP_PRIVATE_KEY is not configured");
+  expect(workflow).not.toContain("RELEASE_REVIEWER_AGENT is not configured");
+  expect(workflow).not.toContain("RELEASE_REVIEW_PUBLIC_KEY is not configured");
   expect(workflow.indexOf("uses: actions/checkout")).toBeGreaterThan(secretsStep);
 });
 

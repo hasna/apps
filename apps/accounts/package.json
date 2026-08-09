@@ -1,6 +1,6 @@
 {
   "name": "@hasna/accounts",
-  "version": "0.2.41",
+  "version": "0.2.42",
   "description": "Manage and switch between multiple Claude Code (and other AI coding tool) profiles/accounts locally — isolated config dirs, per-account email, one-command switching.",
   "type": "module",
   "main": "dist/index.js",
@@ -36,6 +36,7 @@
     "hasna.contract.json",
     "docker-compose.yml",
     "examples",
+    "config/release-review-trust.json",
     "CHANGELOG.md",
     "LICENSE",
     "README.md"
@@ -53,6 +54,7 @@
     "conformance": "bunx @hasna/contracts repo-conformance .",
     "prepack": "bun run build",
     "prepublishOnly": "bun run scripts/release-provenance.ts reject-direct-publish",
+    "release-review:sign": "bun run scripts/release-review-sign.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "test:postgres": "bun run ./test/run-postgres.ts"

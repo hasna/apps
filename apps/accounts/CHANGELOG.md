@@ -6,6 +6,30 @@ All notable changes to `@hasna/accounts` are documented here. The format is base
 
 ## [Unreleased]
 
+## [0.2.42] - 2026-08-09
+
+`npm/accounts/v0.2.41` is immutable and remains unpublished at its old
+human-review-bound candidate. This forward release carries the 0.2.41 product
+changes without moving or recreating that tag.
+
+### Fixed
+
+- **The npm release gate now requires one cryptographically authenticated
+  independent coding-agent review instead of a human environment approval
+  (OPE-00210).** The `npm-release` environment retains its environment-scoped
+  secrets and exact custom tag-only deployment policy, but must have zero
+  required reviewers. An immutable annotated tag names the publishing agent
+  and an exact GitHub commit-comment receipt. The workflow verifies that
+  receipt under the Rawls Ed25519 public key pinned in a versioned trust
+  document and requires exact agreement on repository, commit, package/version,
+  tag, workflow blob, trust-document blob, registry, publisher, reviewer, `GO`,
+  and zero open reachable in-scope P0/P1 blockers. A reviewer-only signer builds
+  and posts that canonical receipt without exposing its vault-held private key;
+  later key changes require an old-key signature anchored to immutable prior
+  published package bytes. Missing, stale, mismatched, edited, self-reviewed,
+  `NO_GO`, unauthorized rotations, or blocking receipts fail before packing or
+  publication.
+
 ## [0.2.41] - 2026-08-09
 
 Release span measured from the previous release tag to the head being published

@@ -1,0 +1,20 @@
+{
+  "schema": "hasna.release-review-trust/v1",
+  "generation": 1,
+  "repository": "hasna/accounts",
+  "reviewer": {
+    "type": "coding-agent",
+    "agent": "Rawls",
+    "id": "019fe5d3-a6dc-71a0-b6cc-243ea32513b6"
+  },
+  "publicKey": {
+    "algorithm": "ed25519",
+    "encoding": "base64-spki-der",
+    "value": "MCowBQYDK2VwAyEA1trfyZBjRZgzYg3oov1AxW+Js5K6Tc/1b1hv/TpJniA=",
+    "sha256": "4e5e4d72beb074d44779c0f26dd2cd38c9ed5129131fd1432259f82943273da6"
+  },
+  "signer": {
+    "secretRef": "hasna/accounts/npm-release/reviewer-ed25519-private-key"
+  },
+  "rotation": null
+}
