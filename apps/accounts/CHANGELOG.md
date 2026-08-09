@@ -6,6 +6,13 @@ All notable changes to `@hasna/accounts` are documented here. The format is base
 
 ## [Unreleased]
 
+## [0.2.41] - 2026-08-09
+
+Release span measured from the previous release tag to the head being published
+(`npm/accounts/v0.2.40` = `5bd2a69c` .. `6b9b3859`): six commits, four of them
+behaviour changes. `6418605` (#143) and `d3270bf` (#145) are docs-only release
+records.
+
 ### Added
 
 - **The machine-shared Claude session registry: native cross-session messaging
@@ -29,6 +36,30 @@ All notable changes to `@hasna/accounts` are documented here. The format is base
   counts do not see the machine-wide union. Auth stays strictly per-profile:
   the one path touched is `<configDir>/sessions`, and the registry — pids and
   `/tmp` socket paths — is machine-local and must never be synced off-box.
+
+### Fixed
+
+- **Accounts-managed identity exports are rematerialized before configs
+  prelaunch (#147).** A missing generated export is now distinguished from an
+  operator-owned missing path and regenerated from the canonical,
+  store-independent identities contract before launch. Managed ownership
+  survives profile renames, `accounts doctor` reports both missing conditions
+  truthfully, and symlink redirection of the generated export write is refused.
+  The supported child command is normalized to
+  `instructions export <exportPath> --canonical`.
+- **The destructive fixture purge is snapshot-or-refuse (#135).** Migration
+  `0005a` archives matching `accounts`, cascade-reached `current_selections`,
+  and `custom_tools` rows before migration `0006` can delete them.
+  `accounts-migrate --dry-run` enforces the live row-count envelope before the
+  purge, and `--restore-purge-archive` restores the preserved rows in the order
+  required by the existing triggers and later schema. This release does not
+  claim the production migration freeze is lifted; that requires the migration
+  to run against the preserved original.
+- **Release verification waits for npm's install path to see the candidate
+  (#144).** The verifier polls the abbreviated packument that npm resolves
+  before invoking the consumer install, and gives each install/signature check
+  an isolated npm cache. A retry therefore observes current registry state
+  instead of replaying a pre-publication cached `ETARGET`/404.
 
 ## [0.2.40] - 2026-08-08
 
