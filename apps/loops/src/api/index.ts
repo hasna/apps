@@ -54,7 +54,6 @@ import {
 import {
   buildDeploymentStatus,
   deploymentStatusLine,
-  resolveLoopDeploymentMode,
 } from "../lib/mode.js";
 import { dueSlots } from "../lib/recurrence.js";
 import {
@@ -136,9 +135,12 @@ export interface ApiAuthenticator {
   ): Promise<TenantAuthDecision>;
 }
 
+export type ServerDataBackend = "sqlite" | "postgresql";
+
 export interface LoopsApiServerOptions {
   host?: string;
   port?: number;
+  backend?: ServerDataBackend;
   storage?: LoopStorageContract;
   bodyLimitBytes?: number;
   evidenceLimitBytes?: number;
@@ -168,12 +170,16 @@ export interface LoopsApiServerOptions {
   }>;
 }
 
-/** Deployment mode for the general foundation envelopes. */
-function foundationMode(): string {
-  return buildDeploymentStatus({}).activeDeploymentMode;
+function resolveServerDataBackend(opts: LoopsApiServerOptions): ServerDataBackend {
+  if (!opts.storage) return opts.backend ?? "postgresql";
+  const inferred = opts.storage.backend === "sqlite" ? "sqlite" : "postgresql";
+  if (opts.backend && opts.backend !== inferred) {
+    throw new Error(`loops-api backend ${opts.backend} does not match storage backend ${inferred}`);
+  }
+  return inferred;
 }
 
-/** Shared { status, version, mode } envelope for /health, /ready, /version. */
+/** Shared { status, version } envelope for /ready and /version. */
 function foundationEnvelope(
   status: string,
   extra: Record<string, unknown> = {},
@@ -181,20 +187,18 @@ function foundationEnvelope(
   return {
     status,
     version: packageVersion(),
-    mode: foundationMode(),
     service: "loops",
     ...extra,
   };
 }
 
 export function contractHealthResponse(
-  env: Record<string, string | undefined> = process.env,
-): { status: "ok"; version: string; mode: "local" | "cloud" } {
-  const runtimeMode = resolveLoopDeploymentMode(env).deploymentMode;
+  backend: ServerDataBackend,
+): { status: "ok"; version: string; backend: ServerDataBackend } {
   return {
     status: "ok",
     version: packageVersion(),
-    mode: runtimeMode === "local" ? "local" : "cloud",
+    backend,
   };
 }
 
@@ -216,6 +220,7 @@ export function createLoopsApiServer(opts: LoopsApiServerOptions = {}) {
   }
   const authenticator = opts.authenticator;
   const withTenantStorage = opts.withTenantStorage;
+  const backend = resolveServerDataBackend(opts);
   const defaultReady = async (): Promise<{ ready: boolean; code?: string }> => {
     if (!opts.storage) return { ready: false, code: "storage_unconfigured" };
     try {
@@ -232,9 +237,9 @@ export function createLoopsApiServer(opts: LoopsApiServerOptions = {}) {
     idleTimeout: 60,
     async fetch(request) {
       const url = new URL(request.url);
-      // ── Open foundation probes ({ status, version, mode }) ───────────────
+      // ── Open foundation probes ────────────────────────────────────────────
       if (request.method === "GET" && (url.pathname === "/health" || url.pathname === "/healthz")) {
-        return Response.json(contractHealthResponse());
+        return Response.json(contractHealthResponse(backend));
       }
       if (request.method === "GET" && (url.pathname === "/version" || url.pathname === "/v1/version")) {
         return Response.json(foundationEnvelope("ok"));

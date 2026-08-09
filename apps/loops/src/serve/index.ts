@@ -867,6 +867,7 @@ async function runServe(opts: { host: string; port: number }): Promise<void> {
     const server = createLoopsApiServer({
       host: opts.host,
       port: opts.port,
+      backend: "postgresql",
       authenticator,
       withTenantStorage: (principal, fn) =>
         executor.withRequestContext(principal, (transactionClient) =>
@@ -1006,8 +1007,8 @@ program
 
 program
   .command("version")
-  .description("print { status, version, mode }")
-  .action(() => console.log(JSON.stringify({ status: "ok", version: packageVersion(), mode: "self_hosted" })));
+  .description("print { status, version }")
+  .action(() => console.log(JSON.stringify({ status: "ok", version: packageVersion() })));
 
 if (import.meta.main) {
   // Bare `loops-serve` (no subcommand) defaults to `serve`. Commander cannot

@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
+import { fileURLToPath } from "node:url";
 import type { QueryResultRow } from "pg";
 import type { PoolQueryClient, TypedQueryClient } from "../generated/storage-kit/query.js";
 import type { PostgresStorage } from "../lib/storage/postgres.js";
+import { packageVersion } from "../lib/version.js";
 import {
   assertTenantEnforcementBootstrap,
   assertTenantEnforcementBootstrapIfPending,
@@ -260,5 +262,30 @@ describe("loops-serve database bootstrap", () => {
     const transferCommand = program.commands.find((command) => command.name() === "shared-to-dedicated-transfer");
     expect(transferCommand).toBeDefined();
     expect(transferCommand!.options).toHaveLength(0);
+  });
+
+  test("version exposes status and version without retired deployment modes", () => {
+    const result = Bun.spawnSync([
+      process.execPath,
+      fileURLToPath(new URL("./index.ts", import.meta.url)),
+      "version",
+    ]);
+    const stdout = result.stdout.toString().trim();
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr.toString()).toBe("");
+    expect(stdout).toBe(JSON.stringify({ status: "ok", version: packageVersion() }));
+    expect(JSON.parse(stdout)).toEqual({
+      status: "ok",
+      version: packageVersion(),
+    });
+    expect(stdout).not.toContain("mode");
+    expect(stdout).not.toContain("deploymentMode");
+    expect(stdout).not.toContain("self_hosted");
+    expect(stdout).not.toContain("remote");
+    expect(stdout).not.toContain("hybrid");
+
+    const versionCommand = program.commands.find((command) => command.name() === "version");
+    expect(versionCommand?.description()).toBe("print { status, version }");
   });
 });

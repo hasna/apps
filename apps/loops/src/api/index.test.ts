@@ -128,7 +128,7 @@ describe("loops-api foundation", () => {
     expect(JSON.stringify(status)).not.toContain("dbPath");
   });
 
-  test("health uses the strict contracts shape and maps self_hosted runtime to cloud storage mode", async () => {
+  test("health exposes status and version without retired deployment modes", async () => {
     const mod = await import("./index.js");
     const previousMode = process.env.HASNA_LOOPS_STORAGE_MODE;
     const mutableBun = Bun as unknown as { serve: typeof Bun.serve };
@@ -145,6 +145,7 @@ describe("loops-api foundation", () => {
       mod.createLoopsApiServer({
         host: "127.0.0.1",
         port: 0,
+        backend: "sqlite",
         authenticator: {
           authenticate: async () => {
             throw new Error("health must not authenticate");
@@ -158,15 +159,110 @@ describe("loops-api foundation", () => {
       const response = await fetchHandler(
         new Request("http://loops.test/health"),
       );
-      expect(await response.json()).toEqual({
+      const body = await response.json();
+      expect(body).toEqual({
         status: "ok",
         version: packageVersion(),
-        mode: "cloud",
+        backend: "sqlite",
       });
+      const serialized = JSON.stringify(body);
+      expect(serialized).not.toContain("mode");
+      expect(serialized).not.toContain("deploymentMode");
+      expect(serialized).not.toContain("self_hosted");
+      expect(serialized).not.toContain("remote");
+      expect(serialized).not.toContain("hybrid");
     } finally {
       mutableBun.serve = originalServe;
       if (previousMode === undefined) delete process.env.HASNA_LOOPS_STORAGE_MODE;
       else process.env.HASNA_LOOPS_STORAGE_MODE = previousMode;
+    }
+  });
+
+  test("foundation routes and schema omit retired deployment modes", async () => {
+    const mod = await import("./index.js");
+    const server = createTestServer(mod, {
+      host: "127.0.0.1",
+      port: 0,
+      storage: createSqliteLoopStorage(":memory:"),
+      readyCheck: async () => ({ ready: true }),
+    });
+    try {
+      for (const path of ["/health", "/healthz", "/ready", "/readyz", "/version", "/v1/version"]) {
+        const response = await fetch(apiUrl(server, path));
+        expect(response.status).toBe(200);
+        const body = await response.json() as Record<string, unknown>;
+        expect(typeof body.status).toBe("string");
+        expect(body.version).toBe(packageVersion());
+        if (path === "/health" || path === "/healthz") {
+          expect(body.backend).toBe("sqlite");
+        } else {
+          expect(body.backend).toBeUndefined();
+        }
+        const serialized = JSON.stringify(body);
+        expect(serialized).not.toContain("mode");
+        expect(serialized).not.toContain("deploymentMode");
+        expect(serialized).not.toContain("self_hosted");
+        expect(serialized).not.toContain("remote");
+        expect(serialized).not.toContain("hybrid");
+      }
+
+      const document = mod.openApiDocument() as {
+        paths: Record<string, {
+          get?: {
+            responses?: Record<string, {
+              content?: {
+                "application/json"?: {
+                  schema?: { $ref?: string; type?: string; additionalProperties?: boolean };
+                };
+              };
+            }>;
+          };
+        }>;
+        components: {
+          schemas: {
+            HealthFoundation: {
+              properties: Record<string, unknown>;
+              required: string[];
+            };
+            Foundation: {
+              properties: Record<string, unknown>;
+              required: string[];
+            };
+          };
+        };
+      };
+      expect(document.paths["/health"]?.get?.responses?.["200"]?.content?.["application/json"]?.schema?.$ref)
+        .toBe("#/components/schemas/HealthFoundation");
+      expect(document.paths["/healthz"]?.get?.responses?.["200"]?.content?.["application/json"]?.schema?.$ref)
+        .toBe("#/components/schemas/HealthFoundation");
+      expect(document.paths["/status"]?.get?.responses?.["200"]?.content?.["application/json"]?.schema)
+        .toEqual({ type: "object", additionalProperties: true });
+
+      const healthFoundation = document.components.schemas.HealthFoundation;
+      expect(healthFoundation.properties.status).toBeDefined();
+      expect(healthFoundation.properties.version).toBeDefined();
+      expect(healthFoundation.properties.backend).toBeDefined();
+      expect(healthFoundation.required).toContain("status");
+      expect(healthFoundation.required).toContain("version");
+      expect(healthFoundation.required).toContain("backend");
+      expect(JSON.stringify(healthFoundation)).not.toContain("mode");
+      expect(JSON.stringify(healthFoundation)).not.toContain("self_hosted");
+      expect(JSON.stringify(healthFoundation)).not.toContain("remote");
+      expect(JSON.stringify(healthFoundation)).not.toContain("hybrid");
+
+      const foundation = document.components.schemas.Foundation;
+      expect(foundation.properties.status).toBeDefined();
+      expect(foundation.properties.version).toBeDefined();
+      expect(foundation.properties.mode).toBeUndefined();
+      expect(foundation.properties.deploymentMode).toBeUndefined();
+      expect(foundation.required).toContain("status");
+      expect(foundation.required).toContain("version");
+      expect(foundation.required).not.toContain("mode");
+      expect(JSON.stringify(foundation)).not.toContain("self_hosted");
+      expect(JSON.stringify(foundation)).not.toContain("remote");
+      expect(JSON.stringify(foundation)).not.toContain("hybrid");
+    } finally {
+      server.stop(true);
     }
   });
 

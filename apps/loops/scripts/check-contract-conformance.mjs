@@ -7,18 +7,14 @@ import { contractHealthResponse } from "../src/api/index.ts";
 
 export const repoRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
 
-const conformanceEnv = {
-  HASNA_LOOPS_STORAGE_MODE: "self_hosted",
-};
-
 function readJson(path) {
   return JSON.parse(readFileSync(path, "utf8"));
 }
 
 export function runRawContractConformance(root = repoRoot) {
   return runRepoConformance(root, {
-    env: conformanceEnv,
-    healthSample: contractHealthResponse(conformanceEnv),
+    env: {},
+    healthSample: contractHealthResponse("postgresql"),
   });
 }
 

@@ -33,7 +33,9 @@ export interface StuckRunReconciliationOutcome { "runId": string; "outcome": "re
 
 export interface StuckRunReconciliationResponse { "ok": boolean; "reconciliation": { "outcomes": Array<StuckRunReconciliationOutcome> } }
 
-export interface Foundation { "status": string; "version": string; "mode": string; "service"?: string; "detail"?: string }
+export interface Foundation { "status": string; "version": string; "service"?: string; "detail"?: string }
+
+export interface HealthFoundation { "status": string; "version": string; "backend": "sqlite" | "postgresql" }
 
 export interface Loop { "id": string; "name": string; "description"?: string | null; "labels": Array<string>; "status": "active" | "paused" | "stopped" | "expired"; "schedule"?: Record<string, unknown>; "target"?: Record<string, unknown>; "nextRunAt"?: string | null; "createdAt"?: string; "updatedAt"?: string }
 
@@ -167,7 +169,7 @@ export class LoopsClient {
   }
 
     /** Liveness probe */
-    async healthCheck(init?: RequestInit): Promise<Foundation> {
+    async healthCheck(init?: RequestInit): Promise<HealthFoundation> {
       return this.request("GET", `/health`, {
         body: undefined,
         query: undefined,
@@ -175,7 +177,7 @@ export class LoopsClient {
       });
     }
 
-    async healthzProbe(init?: RequestInit): Promise<Record<string, unknown>> {
+    async healthzProbe(init?: RequestInit): Promise<HealthFoundation> {
       return this.request("GET", `/healthz`, {
         body: undefined,
         query: undefined,

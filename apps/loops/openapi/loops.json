@@ -22,7 +22,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Foundation"
+                  "$ref": "#/components/schemas/HealthFoundation"
                 }
               }
             }
@@ -3032,8 +3032,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true
+                  "$ref": "#/components/schemas/HealthFoundation"
                 }
               }
             }
@@ -3948,9 +3947,6 @@
           "version": {
             "type": "string"
           },
-          "mode": {
-            "type": "string"
-          },
           "service": {
             "type": "string"
           },
@@ -3960,8 +3956,30 @@
         },
         "required": [
           "status",
+          "version"
+        ]
+      },
+      "HealthFoundation": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "backend": {
+            "type": "string",
+            "enum": [
+              "sqlite",
+              "postgresql"
+            ]
+          }
+        },
+        "required": [
+          "status",
           "version",
-          "mode"
+          "backend"
         ]
       },
       "Loop": {

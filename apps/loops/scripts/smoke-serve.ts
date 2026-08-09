@@ -83,14 +83,29 @@ function assert(cond: unknown, msg: string) {
   if (!cond) throw new Error(`SMOKE FAIL: ${msg}`);
 }
 
+function assertNoRetiredDeploymentModes(value: unknown, label: string) {
+  const serialized = JSON.stringify(value);
+  assert(!serialized.includes('"mode"'), `${label} omits mode`);
+  assert(!serialized.includes("deploymentMode"), `${label} omits deploymentMode`);
+  assert(!serialized.includes("self_hosted"), `${label} omits self_hosted`);
+  assert(!serialized.includes("remote"), `${label} omits remote`);
+  assert(!serialized.includes("hybrid"), `${label} omits hybrid`);
+}
+
 // Foundation probes (open)
 const health = await (await fetch(`${base}/health`)).json();
-assert(health.status === "ok" && health.version && health.mode, "health {status,version,mode}");
+assert(
+  health.status === "ok" && health.version && health.backend === "postgresql",
+  "health {status,version,backend:postgresql}",
+);
+assertNoRetiredDeploymentModes(health, "health");
 const ready = await fetch(`${base}/ready`);
 const readyBody = await ready.json();
 assert(ready.status === 200 && readyBody.status === "ready", `ready -> ${ready.status} ${JSON.stringify(readyBody)}`);
+assertNoRetiredDeploymentModes(readyBody, "ready");
 const version = await (await fetch(`${base}/version`)).json();
-assert(version.version && version.mode, "version {version,mode}");
+assert(version.status === "ok" && version.version, "version {status,version}");
+assertNoRetiredDeploymentModes(version, "version");
 
 // Unauthenticated /v1 must be rejected
 const noauth = await fetch(`${base}/v1/loops`);
