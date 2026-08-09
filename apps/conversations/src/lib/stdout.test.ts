@@ -1,5 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { printJson, printJsonLine, writeAllSync, writeStdout, type SyncWriter } from "./stdout.js";
+import {
+  printJson,
+  printJsonLine,
+  writeAllBytesSync,
+  writeAllSync,
+  writeStdout,
+  writeStdoutBytes,
+  type SyncWriter,
+} from "./stdout.js";
 
 /** Collect everything a writer is handed, with a scriptable accept policy. */
 function recordingWriter(policy: (chunk: Uint8Array, call: number) => number | Error) {
@@ -18,6 +26,9 @@ function recordingWriter(policy: (chunk: Uint8Array, call: number) => number | E
     },
     text() {
       return Buffer.concat(chunks.map((c) => Buffer.from(c))).toString("utf8");
+    },
+    bytes() {
+      return Buffer.concat(chunks.map((c) => Buffer.from(c)));
     },
   };
 }
@@ -123,6 +134,20 @@ describe("writeAllSync", () => {
   test("writeStdout of an empty string does not call the writer", () => {
     const sink = recordingWriter(() => 0);
     expect(writeStdout("", sink.writer)).toBe("complete");
+    expect(sink.calls).toBe(0);
+  });
+
+  test("writes arbitrary bytes without UTF-8 conversion across partial accepts", () => {
+    const payload = Buffer.from([0x00, 0x01, 0x7f, 0x80, 0xc8, 0xff]);
+    const sink = recordingWriter((chunk) => Math.min(chunk.length, 2));
+    expect(writeAllBytesSync(payload, sink.writer)).toBe("complete");
+    expect(sink.bytes()).toEqual(payload);
+    expect(sink.calls).toBeGreaterThan(1);
+  });
+
+  test("writeStdoutBytes of an empty buffer does not call the writer", () => {
+    const sink = recordingWriter(() => 0);
+    expect(writeStdoutBytes(Buffer.alloc(0), sink.writer)).toBe("complete");
     expect(sink.calls).toBe(0);
   });
 });

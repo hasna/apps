@@ -77,19 +77,18 @@ function errorCodeOf(error: unknown): string | null {
 export type WriteOutcome = "complete" | "reader-closed";
 
 /**
- * Write every byte of `text`, or stop because the reader closed the pipe.
+ * Write every byte in `bytes`, or stop because the reader closed the pipe.
  *
  * `writer` is injectable so the partial-write, back-pressure and reader-closed
  * paths can be exercised without needing a real full pipe, which is not
  * reproducible on demand in a test.
  */
-export function writeAllSync(text: string, writer: SyncWriter): WriteOutcome {
-  const buffer = Buffer.from(text, "utf8");
+export function writeAllBytesSync(bytes: Uint8Array, writer: SyncWriter): WriteOutcome {
   let offset = 0;
-  while (offset < buffer.length) {
+  while (offset < bytes.length) {
     let accepted: number;
     try {
-      accepted = writer(buffer.subarray(offset));
+      accepted = writer(bytes.subarray(offset));
     } catch (error) {
       const code = errorCodeOf(error);
       if (code === "EAGAIN" || code === "EWOULDBLOCK") {
@@ -113,6 +112,10 @@ export function writeAllSync(text: string, writer: SyncWriter): WriteOutcome {
   return "complete";
 }
 
+export function writeAllSync(text: string, writer: SyncWriter): WriteOutcome {
+  return writeAllBytesSync(Buffer.from(text, "utf8"), writer);
+}
+
 const fdWriter = (fd: number): SyncWriter => (chunk) => writeSync(fd, chunk);
 
 const stdoutWriter = fdWriter(1);
@@ -121,6 +124,14 @@ const stderrWriter = fdWriter(2);
 /** Write `text` to stdout, completing the write before returning. */
 export function writeStdout(text: string, writer: SyncWriter = stdoutWriter): WriteOutcome {
   return writeAllSync(text, writer);
+}
+
+/** Write arbitrary bytes to stdout without text encoding or a trailing newline. */
+export function writeStdoutBytes(
+  bytes: Uint8Array,
+  writer: SyncWriter = stdoutWriter,
+): WriteOutcome {
+  return writeAllBytesSync(bytes, writer);
 }
 
 /**

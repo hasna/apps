@@ -272,11 +272,32 @@ export const openapiSpec = {
         parameters: [
           { name: "id", in: "path", required: true, schema: { type: "integer" } },
           { name: "name", in: "path", required: true, schema: { type: "string" } },
+          {
+            name: "encoding",
+            in: "query",
+            required: false,
+            schema: { type: "string", enum: ["base64"] },
+            description: "Return a JSON base64 envelope for JSON-only storage clients; omit for raw bytes.",
+          },
         ],
         responses: {
           "200": {
             description: "attachment bytes",
-            content: { "application/octet-stream": { schema: { type: "string", format: "binary" } } },
+            content: {
+              "application/octet-stream": { schema: { type: "string", format: "binary" } },
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["name", "mime_type", "size", "content_base64"],
+                  properties: {
+                    name: { type: "string" },
+                    mime_type: { type: "string" },
+                    size: { type: "integer" },
+                    content_base64: { type: "string", format: "byte" },
+                  },
+                },
+              },
+            },
           },
           "404": { description: "not found" },
         },

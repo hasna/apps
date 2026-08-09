@@ -1699,6 +1699,48 @@ describe("conversations-serve", () => {
     expect(downloadedPdf.status).toBe(200);
     expect(downloadedPdf.headers.get("content-type")).toBe("application/pdf");
     expect(Buffer.from(await downloadedPdf.arrayBuffer())).toEqual(pdf);
+
+    const encoded = await fetch(
+      `${base}/v1/messages/${message.id}/attachments/evidence.txt?encoding=base64`,
+      { headers: { "x-api-key": rwKey } },
+    );
+    expect(encoded.status).toBe(200);
+    expect(encoded.headers.get("content-type")).toContain("application/json");
+    expect(await encoded.json()).toEqual({
+      name: "evidence.txt",
+      mime_type: "text/plain",
+      size: text.length,
+      content_base64: text.toString("base64"),
+    });
+
+    const missingName = await fetch(
+      `${base}/v1/messages/${message.id}/attachments/absent.txt?encoding=base64`,
+      { headers: { "x-api-key": rwKey } },
+    );
+    expect(missingName.status).toBe(404);
+    expect(await missingName.json()).toMatchObject({
+      code: "ATTACHMENT_NOT_FOUND",
+      error: `Requested attachment not found on message #${message.id}`,
+    });
+
+    const missingMessage = await fetch(
+      `${base}/v1/messages/999999999/attachments/absent.txt?encoding=base64`,
+      { headers: { "x-api-key": rwKey } },
+    );
+    expect(missingMessage.status).toBe(404);
+    expect(await missingMessage.json()).toMatchObject({
+      code: "MESSAGE_NOT_FOUND",
+      error: "Message #999999999 not found",
+    });
+
+    const denied = await fetch(
+      `${base}/v1/messages/${message.id}/attachments/evidence.txt?encoding=base64`,
+    );
+    expect(denied.status).toBe(401);
+    expect(await denied.json()).toMatchObject({
+      reason: "missing_token",
+      error: "Missing API key. Send it as 'x-api-key: <key>' or 'Authorization: Bearer <key>'.",
+    });
   });
 
   test("POST /v1/messages rejects invalid or unsupported attachments before inserting a message", async () => {

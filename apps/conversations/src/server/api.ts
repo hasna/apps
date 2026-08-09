@@ -1615,6 +1615,25 @@ async function handleV1(
   if (attachmentMatch && method === "GET") {
     const messageId = Number(attachmentMatch[1]);
     const name = decodeURIComponent(attachmentMatch[2]);
+    const encoding = url.searchParams.get("encoding");
+    if (encoding !== null && encoding !== "base64") {
+      return json({
+        error: `Unsupported attachment encoding: ${encoding}`,
+        code: "ATTACHMENT_ENCODING_UNSUPPORTED",
+        hint: "Omit encoding for raw bytes or use encoding=base64 for a JSON response.",
+      }, 400);
+    }
+    const message = await client.get<{ id: number }>(
+      "SELECT id FROM messages WHERE id = $1",
+      [messageId],
+    );
+    if (!message) {
+      return json({
+        error: `Message #${messageId} not found`,
+        code: "MESSAGE_NOT_FOUND",
+        hint: `Check the message id with conversations show ${messageId} --json.`,
+      }, 404);
+    }
     const row = await client.get<{
       content: Buffer | Uint8Array;
       mime_type: string;
@@ -1623,10 +1642,24 @@ async function handleV1(
       "SELECT content, mime_type, size FROM message_attachments WHERE message_id = $1 AND name = $2",
       [messageId, name],
     );
-    if (!row) return json({ error: "Attachment not found" }, 404);
+    if (!row) {
+      return json({
+        error: `Requested attachment not found on message #${messageId}`,
+        code: "ATTACHMENT_NOT_FOUND",
+        hint: `List available names with conversations show ${messageId} --json.`,
+      }, 404);
+    }
     const content = row.content instanceof Uint8Array
       ? row.content
       : Buffer.from(row.content);
+    if (encoding === "base64") {
+      return json({
+        name,
+        mime_type: row.mime_type,
+        size: Number(row.size),
+        content_base64: Buffer.from(content).toString("base64"),
+      });
+    }
     const body = content.buffer.slice(
       content.byteOffset,
       content.byteOffset + content.byteLength,

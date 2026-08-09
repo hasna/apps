@@ -522,6 +522,7 @@ export interface ConversationsStore {
   rollbackChannelProjectMessageLinkage: Async<typeof projectMessageLinkageLib.rollbackChannelProjectMessageLinkage>;
   getMessageById: Async<typeof messagesLib.getMessageById>;
   getMessageByUuid: Async<typeof messagesLib.getMessageByUuid>;
+  getMessageAttachment: Async<typeof messagesLib.getMessageAttachment>;
   deleteMessage: Async<typeof messagesLib.deleteMessage>;
   editMessage: Async<typeof messagesLib.editMessage>;
   readMessages: Async<typeof messagesLib.readMessages>;
@@ -696,6 +697,7 @@ export class LocalStore implements ConversationsStore {
   rollbackChannelProjectMessageLinkage: ConversationsStore["rollbackChannelProjectMessageLinkage"] = async (...a) => projectMessageLinkageLib.rollbackChannelProjectMessageLinkage(...a);
   getMessageById: ConversationsStore["getMessageById"] = async (...a) => messagesLib.getMessageById(...a);
   getMessageByUuid: ConversationsStore["getMessageByUuid"] = async (...a) => messagesLib.getMessageByUuid(...a);
+  getMessageAttachment: ConversationsStore["getMessageAttachment"] = async (...a) => messagesLib.getMessageAttachment(...a);
   deleteMessage: ConversationsStore["deleteMessage"] = async (...a) => messagesLib.deleteMessage(...a);
   editMessage: ConversationsStore["editMessage"] = async (...a) => {
     const edited = messagesLib.editMessage(...a);

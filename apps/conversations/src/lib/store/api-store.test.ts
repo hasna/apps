@@ -800,6 +800,97 @@ describe("ApiStore.sendMessage wire body", () => {
   });
 });
 
+describe("ApiStore attachment retrieval", () => {
+  const message = {
+    id: 701,
+    uuid: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+    session_id: "channel:handoffs",
+    from_agent: "alice",
+    to_agent: "handoffs",
+    channel: "handoffs",
+    project_id: null,
+    content: "remote attachment",
+    priority: "normal",
+    working_dir: null,
+    repository: null,
+    branch: null,
+    metadata: null,
+    created_at: "2026-08-09T00:00:00.000Z",
+    read_at: null,
+    edited_at: null,
+    pinned_at: null,
+    blocking: false,
+    attachments: [{
+      name: "handoff.pdf",
+      path: "/v1/messages/701/attachments/handoff.pdf",
+      size: Buffer.byteLength("synthetic remote PDF\n"),
+      mime_type: "application/pdf",
+    }],
+    reply_to: null,
+  };
+
+  test("decodes the app-owned base64 response into exact bytes", async () => {
+    const requests: Array<{ path: string; query: unknown }> = [];
+    const bytes = Buffer.from("synthetic remote PDF\n");
+    const client = {
+      name: "conversations",
+      baseUrl: "https://conversations.hasna.xyz/v1",
+      get: async (resource: string, id: string) => {
+        expect(resource).toBe("messages");
+        expect(id).toBe("701");
+        return { message };
+      },
+      transport: {
+        baseUrl: "https://conversations.hasna.xyz/v1",
+        get: async (path: string, options: { query?: unknown }) => {
+          requests.push({ path, query: options.query });
+          return {
+            name: "handoff.pdf",
+            mime_type: "application/pdf",
+            size: bytes.length,
+            content_base64: bytes.toString("base64"),
+          };
+        },
+      },
+    } as unknown as HasnaStorageClient;
+
+    const result = await new ApiStore(client).getMessageAttachment(701, "handoff.pdf");
+
+    expect(result).toMatchObject({
+      message_id: 701,
+      name: "handoff.pdf",
+      mime_type: "application/pdf",
+      size: bytes.length,
+    });
+    expect(Buffer.from(result.content)).toEqual(bytes);
+    expect(requests).toEqual([{
+      path: "/messages/701/attachments/handoff.pdf",
+      query: { encoding: "base64" },
+    }]);
+  });
+
+  test("maps a hosted permission denial to the actionable attachment error", async () => {
+    const denied = Object.assign(new Error("Forbidden"), {
+      name: "HasnaHttpError",
+      status: 403,
+    });
+    const client = {
+      name: "conversations",
+      baseUrl: "https://conversations.hasna.xyz/v1",
+      get: async () => {
+        throw denied;
+      },
+      transport: {} as unknown as HasnaStorageClient["transport"],
+    } as unknown as HasnaStorageClient;
+
+    await expect(
+      new ApiStore(client).getMessageAttachment(701, "handoff.pdf"),
+    ).rejects.toThrow(
+      "Permission denied while reading attachment \"handoff.pdf\" from message #701. Check read permissions",
+    );
+  });
+});
+
 // Regression: ApiStore asked the server for `order=asc` whenever `latest` was
 // unset, so `read --channel X --limit 40` against the hosted API selected the
 // OLDEST 40 rows server-side. A client-side sort could never have fixed that —
