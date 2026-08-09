@@ -18665,7 +18665,28 @@ var PG_MIGRATIONS = [
      END IF;
      RETURN NEW;
    END
-   $knowledge_guarded_adoption_claim_once$ LANGUAGE plpgsql`
+   $knowledge_guarded_adoption_claim_once$ LANGUAGE plpgsql`,
+  `CREATE OR REPLACE FUNCTION knowledge_guarded_item_id_immutable()
+   RETURNS TRIGGER AS $knowledge_guarded_item_id_immutable$
+   BEGIN
+     IF OLD.id IS DISTINCT FROM NEW.id
+        AND NULLIF(
+          current_setting('hasna.knowledge_guarded_adoption_key', true),
+          ''
+        ) IS NOT NULL THEN
+       RAISE EXCEPTION 'guarded knowledge item identity and binding are immutable'
+         USING ERRCODE = 'restrict_violation';
+     END IF;
+     RETURN NEW;
+   END
+   $knowledge_guarded_item_id_immutable$ LANGUAGE plpgsql`,
+  `DROP TRIGGER IF EXISTS trg_knowledge_guarded_00_item_id_immutable
+     ON knowledge_items`,
+  `CREATE TRIGGER trg_knowledge_guarded_00_item_id_immutable
+     BEFORE UPDATE OF id ON knowledge_items
+     FOR EACH ROW EXECUTE FUNCTION knowledge_guarded_item_id_immutable()`,
+  `ALTER TABLE knowledge_items
+     ENABLE ALWAYS TRIGGER trg_knowledge_guarded_00_item_id_immutable`
 ];
 // src/serve.ts
 import { readFileSync as readFileSync5 } from "fs";
