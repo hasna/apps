@@ -13,6 +13,7 @@ import {
   deterministicTodosTaskManifestId,
   type TodosTaskManifest,
   type TodosTaskManifestAuthority,
+  type TodosTaskManifestPostgresClient,
 } from "./index.js";
 
 const PG_URL = process.env["TODOS_TEST_PG_URL"];
@@ -123,6 +124,152 @@ describe.skipIf(!PG_URL)("task-manifest PostgreSQL authority", () => {
       [clean.receipt.receipt_id],
     );
     expect(Number(cancelled.rows[0]?.count)).toBe(2);
+  });
+
+  test("serializes delivery behind compensation and never acknowledges a cancelled effect", async () => {
+    const applied = await authority.apply(manifest("delivery-compensation-interleaving"));
+    let releaseCompensation!: () => void;
+    let signalCompensationLocked!: () => void;
+    let signalDeliveryLockAttempt!: () => void;
+    const compensationRelease = new Promise<void>((resolve) => {
+      releaseCompensation = resolve;
+    });
+    const compensationLocked = new Promise<void>((resolve) => {
+      signalCompensationLocked = resolve;
+    });
+    const deliveryLockAttempted = new Promise<void>((resolve) => {
+      signalDeliveryLockAttempt = resolve;
+    });
+    const compensationClient: TodosTaskManifestPostgresClient = {
+      async query(sql, params) {
+        return client!.query(sql, params);
+      },
+      async transaction(fn) {
+        return client!.transaction((tx) => fn({
+          async query(sql, params) {
+            const result = await tx.query(sql, params);
+            if (sql.includes("FROM todos_task_manifest_outbox o")
+              && sql.includes("ORDER BY o.id")
+              && sql.includes("FOR UPDATE OF o")) {
+              signalCompensationLocked();
+              await compensationRelease;
+            }
+            return result;
+          },
+        }));
+      },
+    };
+    const deliveryClient: TodosTaskManifestPostgresClient = {
+      async query(sql, params) {
+        return client!.query(sql, params);
+      },
+      async transaction(fn) {
+        return client!.transaction((tx) => fn({
+          async query(sql, params) {
+            if (sql.includes("pg_advisory_xact_lock")) {
+              signalDeliveryLockAttempt();
+            }
+            return tx.query(sql, params);
+          },
+        }));
+      },
+    };
+    const compensationAuthority = createPostgresTodosTaskManifestAuthority(compensationClient, {
+      service: SERVICE,
+      now: () => "2026-08-07T00:00:00.000Z",
+    });
+    const deliveryAuthority = createPostgresTodosTaskManifestAuthority(deliveryClient, {
+      service: SERVICE,
+      now: () => "2026-08-07T00:00:01.000Z",
+    });
+    await compensationAuthority.readExact(applied.receipt.receipt_id);
+    await deliveryAuthority.readExact(applied.receipt.receipt_id);
+
+    const compensationPromise = compensationAuthority.compensate({
+      receipt_id: applied.receipt.receipt_id,
+      idempotency_key: `${applied.receipt.operation_id}:compensate`,
+      if_binding_version: applied.receipt.binding_version,
+    });
+    await compensationLocked;
+    const deliveryPromise = deliveryAuthority.markOutboxDelivered(applied.outbox_ids[0]!);
+    await deliveryLockAttempted;
+    releaseCompensation();
+
+    const compensation = await compensationPromise;
+    await expect(deliveryPromise).rejects.toThrow(/Pending outbox row not found/);
+    const binding = await client!.query<{ state: string }>(
+      "SELECT state FROM todos_task_manifest_bindings WHERE operation_id = $1",
+      [applied.receipt.operation_id],
+    );
+    const graph = await client!.query<{ count: string }>(
+      `SELECT count(*) AS count FROM todos_sync_records
+       WHERE service = $1 AND object_id IN ($2, $3, $4)`,
+      [SERVICE, applied.graph.plan_id, applied.graph.task_ids.one!, applied.graph.task_ids.two!],
+    );
+    const outbox = await client!.query<{ status: string; attempts: number }>(
+      "SELECT status, attempts FROM todos_task_manifest_outbox WHERE id = $1",
+      [applied.outbox_ids[0]!],
+    );
+    expect({
+      compensation_absent: compensation.absent,
+      binding_state: binding.rows[0]?.state,
+      graph_deleted: Number(graph.rows[0]?.count) === 0,
+      outbox_status: outbox.rows[0]?.status,
+      attempts: outbox.rows[0]?.attempts,
+    }).toEqual({
+      compensation_absent: true,
+      binding_state: "compensated",
+      graph_deleted: true,
+      outbox_status: "cancelled",
+      attempts: 0,
+    });
+  });
+
+  test("rolls back compensation unless every expected outbox row is cancelled", async () => {
+    const applied = await authority.apply(manifest("partial-outbox-cancellation"));
+    const suppressedOutboxId = applied.outbox_ids[0]!;
+    if (!/^[0-9a-f-]{36}$/.test(suppressedOutboxId)) {
+      throw new Error("Expected a deterministic UUID outbox id");
+    }
+    await client!.query(`CREATE FUNCTION taskmanifest_test_skip_cancel()
+      RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NULL; END; $$`);
+    await client!.query(`CREATE TRIGGER taskmanifest_test_skip_cancel
+      BEFORE UPDATE OF status ON todos_task_manifest_outbox
+      FOR EACH ROW
+      WHEN (NEW.status = 'cancelled' AND OLD.id = '${suppressedOutboxId}')
+      EXECUTE FUNCTION taskmanifest_test_skip_cancel()`);
+    try {
+      await expect(authority.compensate({
+        receipt_id: applied.receipt.receipt_id,
+        idempotency_key: `${applied.receipt.operation_id}:compensate`,
+        if_binding_version: applied.receipt.binding_version,
+      })).rejects.toThrow(/failed to cancel every expected outbox row/);
+      const binding = await client!.query<{ state: string }>(
+        "SELECT state FROM todos_task_manifest_bindings WHERE operation_id = $1",
+        [applied.receipt.operation_id],
+      );
+      const graph = await client!.query<{ count: string }>(
+        `SELECT count(*) AS count FROM todos_sync_records
+         WHERE service = $1 AND object_id IN ($2, $3, $4)`,
+        [SERVICE, applied.graph.plan_id, applied.graph.task_ids.one!, applied.graph.task_ids.two!],
+      );
+      const outbox = await client!.query<{ status: string }>(
+        "SELECT status FROM todos_task_manifest_outbox WHERE apply_receipt_id = $1 ORDER BY id",
+        [applied.receipt.receipt_id],
+      );
+      expect({
+        binding_state: binding.rows[0]?.state,
+        graph_rows: Number(graph.rows[0]?.count),
+        outbox_statuses: outbox.rows.map((row) => row.status),
+      }).toEqual({
+        binding_state: "applied",
+        graph_rows: 3,
+        outbox_statuses: ["pending", "pending"],
+      });
+    } finally {
+      await client!.query("DROP TRIGGER taskmanifest_test_skip_cancel ON todos_task_manifest_outbox");
+      await client!.query("DROP FUNCTION taskmanifest_test_skip_cancel()");
+    }
   });
 
   test("rolls back sync rows, outbox, bindings, and receipts on a late staged fault", async () => {

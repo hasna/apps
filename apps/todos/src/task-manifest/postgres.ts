@@ -303,6 +303,28 @@ export class PostgresTodosTaskManifestBackend implements TodosTaskManifestBacken
   async markOutboxDelivered(outboxId: string, deliveredAt: string): Promise<void> {
     await this.ensureSchema();
     await this.client.transaction(async (tx) => {
+      const owned = await tx.query<{ operation_id: unknown }>(
+        `SELECT r.operation_id
+         FROM todos_task_manifest_outbox o
+         JOIN todos_task_manifest_receipts r
+           ON r.receipt_id = o.apply_receipt_id
+         WHERE r.tenant_id = $1
+           AND r.authority = 'todos'
+           AND r.route = 'todos.task-manifest.v1'
+           AND r.schema_version = 1
+           AND r.kind = 'apply'
+           AND o.id = $2
+         LIMIT 1`,
+        [this.tenantId, outboxId],
+      );
+      const operationId = owned.rows[0]?.operation_id;
+      if (operationId == null) {
+        throw new TodosTaskManifestError("TODOS_TASK_MANIFEST_GRAPH_CONFLICT", `Pending outbox row not found: ${outboxId}`);
+      }
+      await tx.query(
+        "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+        [`${this.service}\u001f${String(operationId)}`],
+      );
       const result = await tx.query(`UPDATE todos_task_manifest_outbox
         SET status = 'delivered', delivered_at = $1, attempts = attempts + 1
         WHERE id = $2 AND status = 'pending'
@@ -379,7 +401,13 @@ export class PostgresTodosTaskManifestBackend implements TodosTaskManifestBacken
       const delivered = await tx.query(
         `SELECT o.id FROM todos_task_manifest_outbox o
          JOIN todos_task_manifest_receipts r ON r.receipt_id = o.apply_receipt_id
-         WHERE r.tenant_id = $1 AND o.apply_receipt_id = $2 AND o.status = 'delivered'
+         WHERE r.tenant_id = $1
+           AND r.authority = 'todos'
+           AND r.route = 'todos.task-manifest.v1'
+           AND r.schema_version = 1
+           AND r.kind = 'apply'
+           AND o.apply_receipt_id = $2
+           AND o.status = 'delivered'
          LIMIT 1`,
         [this.tenantId, input.receipt_id],
       );
@@ -393,15 +421,20 @@ export class PostgresTodosTaskManifestBackend implements TodosTaskManifestBacken
         },
         ...(manifest.effects ?? []).map((effect) => ({ topic: effect.topic, payload: effect.payload as Record<string, unknown> })),
       ];
-      const outboxRows = await tx.query<JsonRecord>(`SELECT id, topic, payload, payload_digest, status, attempts, delivered_at
-        FROM todos_task_manifest_outbox
-        WHERE apply_receipt_id = $1
+      const outboxRows = await tx.query<JsonRecord>(`SELECT o.id, o.topic, o.payload, o.payload_digest, o.status, o.attempts, o.delivered_at
+        FROM todos_task_manifest_outbox o
+        WHERE o.apply_receipt_id = $1
           AND EXISTS (
             SELECT 1 FROM todos_task_manifest_receipts r
-            WHERE r.receipt_id = todos_task_manifest_outbox.apply_receipt_id
+            WHERE r.receipt_id = o.apply_receipt_id
               AND r.tenant_id = $2
+              AND r.authority = 'todos'
+              AND r.route = 'todos.task-manifest.v1'
+              AND r.schema_version = 1
+              AND r.kind = 'apply'
           )
-        ORDER BY id`, [input.receipt_id, this.tenantId]);
+        ORDER BY o.id
+        FOR UPDATE OF o`, [input.receipt_id, this.tenantId]);
       if (outboxRows.rows.length !== expectedEffects.length) {
         throw new TodosTaskManifestError("TODOS_TASK_MANIFEST_COMPENSATION_REFUSED", "Compensation refused: outbox changed since apply");
       }
@@ -496,14 +529,27 @@ export class PostgresTodosTaskManifestBackend implements TodosTaskManifestBacken
       }
       if (stored.rows.length !== managedIds.length) throw new TodosTaskManifestError("TODOS_TASK_MANIFEST_COMPENSATION_REFUSED", "Compensation refused: managed graph is incomplete");
 
-      await tx.query(`UPDATE todos_task_manifest_outbox
+      const cancelled = await tx.query<{ id: unknown }>(`UPDATE todos_task_manifest_outbox
         SET status = 'cancelled'
         WHERE apply_receipt_id = $1 AND status = 'pending'
           AND EXISTS (
             SELECT 1 FROM todos_task_manifest_receipts r
             WHERE r.receipt_id = todos_task_manifest_outbox.apply_receipt_id
               AND r.tenant_id = $2
-          )`, [input.receipt_id, this.tenantId]);
+              AND r.authority = 'todos'
+              AND r.route = 'todos.task-manifest.v1'
+              AND r.schema_version = 1
+              AND r.kind = 'apply'
+          )
+        RETURNING id`, [input.receipt_id, this.tenantId]);
+      const cancelledIds = new Set(cancelled.rows.map((row) => String(row.id)));
+      if (cancelledIds.size !== applyResult.outbox_ids.length
+        || applyResult.outbox_ids.some((id) => !cancelledIds.has(id))) {
+        throw new TodosTaskManifestError(
+          "TODOS_TASK_MANIFEST_COMPENSATION_REFUSED",
+          "Compensation refused: failed to cancel every expected outbox row",
+        );
+      }
       const typedIds: Array<[string, string[]]> = [
         ["dependencies", applyResult.graph.dependency_ids], ["comments", applyResult.graph.comment_ids],
         ["verifications", applyResult.graph.verification_ids], ["tasks", taskIds], ["plans", [applyResult.graph.plan_id]],
