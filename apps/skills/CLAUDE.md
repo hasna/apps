@@ -400,12 +400,15 @@ argument to `skills mcp --register <agent>`.
 The one deliberate exception is the last-mile **agent-folder sync** (`skills sync`,
 `src/lib/agent-sync.ts`). It writes a per-tool-adapted `SKILL.md` from the corpus into
 each coding agent's *global* skills directory (`~/.claude/skills/<name>/SKILL.md`,
-`~/.codex/…`, `~/.config/opencode/…`, `~/.cursor/…`) so the agent auto-loads it —
-instruction skills as prose, executable skills as a pointer. `installSkillForAgent()` is
-its single-skill entry point (no longer a stub). Writes are **non-clobbering**: every
-directory the sync writes carries a `.hasna-skills.json` marker, and a skill directory
-without that marker is treated as the user's own and skipped unless `--force`. `.skills/`
-itself remains output state and is never an install target:
+`~/.codewith/…`, `~/.codex/…`, `~/.config/opencode/…`, `~/.cursor/…`) so the agent
+auto-loads it — instruction skills as prose, executable portable skills as a pointer.
+An explicitly named bundled skill resolves from the package when the portable corpus
+does not contain it, allowing a reviewed source skill to repair a stale agent copy.
+`installSkillForAgent()` is its single-skill entry point (no longer a stub). Writes are
+**non-clobbering**: every directory the sync writes carries a `.hasna-skills.json`
+marker, and a skill directory without that marker is treated as the user's own and
+skipped unless `--force`. `.skills/` itself remains output state and is never an
+install target:
 
 ```
 .skills/

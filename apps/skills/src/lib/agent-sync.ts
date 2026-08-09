@@ -11,18 +11,22 @@
  */
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { listPortableSkills, normalizePortableSkillName, readPortableSkillManifest } from "./portable-skills.js";
 import type { SkillKind } from "./registry-types.js";
 
 /**
- * The coding agents `skills sync` targets by default. Claude Code, Codex, OpenCode, and
- * Cursor — the four that load a `<dir>/<name>/SKILL.md`. (Gemini is retired; Windsurf/pi
- * are addressable through installSkillForAgent but are not in the default fan-out.)
+ * The coding agents `skills sync` targets by default. These runtimes load a
+ * `<home>/.<agent>/skills/<name>/SKILL.md` tree (OpenCode is the one path exception).
+ * Gemini is retired; Windsurf/pi are addressable through installSkillForAgent but are
+ * not in the default fan-out.
  */
-export type SyncAgent = "claude" | "codex" | "opencode" | "cursor";
-export const SYNC_AGENTS: readonly SyncAgent[] = ["claude", "codex", "opencode", "cursor"] as const;
+export type SyncAgent = "claude" | "codewith" | "codex" | "opencode" | "cursor";
+export const SYNC_AGENTS: readonly SyncAgent[] = ["claude", "codewith", "codex", "opencode", "cursor"] as const;
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 /**
  * Ownership marker written beside every SKILL.md this tool syncs. Its presence is how a
@@ -140,6 +144,12 @@ export interface SyncSkillsResult {
   actions: AgentSyncAction[];
 }
 
+interface SyncSource {
+  name: string;
+  path: string;
+  source: "bundled" | "corpus";
+}
+
 export function syncSkillsToAgents(options: SyncSkillsOptions = {}): SyncSkillsResult {
   const agents = options.agents?.length ? options.agents : [...SYNC_AGENTS];
   const homeDir = options.homeDir ?? homedir();
@@ -150,11 +160,24 @@ export function syncSkillsToAgents(options: SyncSkillsOptions = {}): SyncSkillsR
   const actions: AgentSyncAction[] = [];
   const requested = normalizeRequested(options.names);
 
-  let targets = corpus;
+  let targets: SyncSource[] = corpus.map((skill) => ({
+    name: skill.name,
+    path: skill.path,
+    source: "corpus",
+  }));
   if (requested) {
-    const present: string[] = [];
+    const present: SyncSource[] = [];
     const missing: string[] = [];
-    for (const name of requested) (byName.has(name) ? present : missing).push(name);
+    for (const name of requested) {
+      const portable = byName.get(name);
+      if (portable) {
+        present.push({ name: portable.name, path: portable.path, source: "corpus" });
+        continue;
+      }
+      const bundled = findBundledSkillSource(name);
+      if (bundled) present.push(bundled);
+      else missing.push(name);
+    }
     for (const name of missing) {
       for (const agent of agents) {
         actions.push({
@@ -166,19 +189,26 @@ export function syncSkillsToAgents(options: SyncSkillsOptions = {}): SyncSkillsR
         });
       }
     }
-    targets = present.map((name) => byName.get(name)!).filter(Boolean);
+    targets = present;
   }
 
   for (const skill of targets) {
     const manifest = readPortableSkillManifest(skill.path, skill.name);
     const kind: SkillKind = manifest.kind ?? "executable";
-    const source = sourceSkillMd(skill.path, skill.name, manifest.description, kind);
+    const source = sourceSkillMd(
+      skill.path,
+      skill.name,
+      manifest.description,
+      kind,
+      skill.source === "bundled",
+    );
     for (const agent of agents) {
       const adapted = adaptSkillMdForAgent(source, agent);
       actions.push(writeManagedAgentSkill({
         skill: skill.name,
         agent,
         skillMd: adapted,
+        source: skill.source,
         homeDir,
         dryRun: options.dryRun,
         force: options.force,
@@ -193,6 +223,7 @@ export interface WriteManagedAgentSkillParams {
   skill: string;
   agent: SyncAgent;
   skillMd: string;
+  source?: "bundled" | "corpus";
   homeDir?: string;
   dryRun?: boolean;
   force?: boolean;
@@ -210,6 +241,7 @@ export function writeManagedAgentSkill(params: WriteManagedAgentSkillParams): Ag
   const dir = join(agentGlobalSkillsDir(params.agent, homeDir), params.skill);
   const result = writeManagedSkillDir(dir, params.skillMd, {
     skill: params.skill,
+    source: params.source,
     dryRun: params.dryRun,
     force: params.force,
   });
@@ -278,8 +310,14 @@ export function removeManagedAgentSkill(skill: string, agent: SyncAgent, homeDir
   return true;
 }
 
-function sourceSkillMd(skillPath: string, name: string, description: string, kind: SkillKind): string {
-  if (kind === "instruction") {
+function sourceSkillMd(
+  skillPath: string,
+  name: string,
+  description: string,
+  kind: SkillKind,
+  preferBundledDocs = false,
+): string {
+  if (kind === "instruction" || preferBundledDocs) {
     const skillMdPath = join(skillPath, "SKILL.md");
     if (existsSync(skillMdPath)) return readFileSync(skillMdPath, "utf-8");
   }
@@ -287,6 +325,18 @@ function sourceSkillMd(skillPath: string, name: string, description: string, kin
   // runnable bytes are not copied into an agent folder, only a description of the skill
   // and how to run it.
   return pointerSkillMd(name, description);
+}
+
+function findBundledSkillSource(name: string): SyncSource | null {
+  let dir = __dirname;
+  for (let i = 0; i < 5; i += 1) {
+    const path = join(dir, "skills", name);
+    if (existsSync(path) && existsSync(join(path, "SKILL.md"))) {
+      return { name, path, source: "bundled" };
+    }
+    dir = dirname(dir);
+  }
+  return null;
 }
 
 function corpusLocation(options: SyncSkillsOptions): { rootDir?: string; homeDir?: string } {
