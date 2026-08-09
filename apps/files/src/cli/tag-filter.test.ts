@@ -23,22 +23,36 @@ afterEach(async () => {
 });
 
 describe("files list --tag", () => {
-  test("local CLI returns the exact member and known-negative controls stay empty", async () => {
+  test("local CLI composes source and tag filters with known-negative controls", async () => {
     testDir = mkdtempSync(join(tmpdir(), "files-cli-tag-local-"));
-    await seedLocalFiles(testDir);
+    const sourceId = await seedLocalFiles(testDir);
 
-    const matching = await runCli(["list", "--tag", MATCHING_TAG, "--json"], localEnv(testDir));
+    const matching = await runCli([
+      "list",
+      "--source",
+      sourceId,
+      "--tag",
+      MATCHING_TAG,
+      "--json",
+    ], localEnv(testDir));
     expect(matching.exitCode).toBe(0);
     expect(parseIds(matching.stdout)).toEqual([MEMBER_ID]);
 
     for (const tag of ABSENT_TAGS) {
-      const negative = await runCli(["list", "--tag", tag, "--json"], localEnv(testDir));
+      const negative = await runCli([
+        "list",
+        "--source",
+        sourceId,
+        "--tag",
+        tag,
+        "--json",
+      ], localEnv(testDir));
       expect(negative.exitCode).toBe(0);
       expect(parseIds(negative.stdout)).toEqual([]);
     }
   });
 
-  test("API CLI sends the exact tag instead of returning a plausible unrelated row", async () => {
+  test("API CLI composes the exact source and tag instead of returning a plausible unrelated row", async () => {
     testDir = mkdtempSync(join(tmpdir(), "files-cli-tag-api-"));
     const member = syntheticFile(MEMBER_ID, [MATCHING_TAG]);
     const unrelated = syntheticFile(NON_MEMBER_ID, ["zz"]);
@@ -50,9 +64,15 @@ describe("files list --tag", () => {
         if (req.headers.get("x-api-key") !== API_KEY) {
           return Response.json({ error: "Unauthorized" }, { status: 401 });
         }
+        const sourceId = url.searchParams.get("source_id");
         const tag = url.searchParams.get("tag");
-        if (tag === MATCHING_TAG) return Response.json({ items: [member] });
-        if (ABSENT_TAGS.includes(tag as typeof ABSENT_TAGS[number])) return Response.json({ items: [] });
+        if (sourceId === "src_cli_tag" && tag === MATCHING_TAG) return Response.json({ items: [member] });
+        if (
+          sourceId === "src_cli_tag"
+          && ABSENT_TAGS.includes(tag as typeof ABSENT_TAGS[number])
+        ) {
+          return Response.json({ items: [] });
+        }
         return Response.json({ items: [unrelated] });
       },
     });
@@ -62,19 +82,33 @@ describe("files list --tag", () => {
       HASNA_FILES_API_URL: `http://127.0.0.1:${server.port}`,
       HASNA_FILES_API_KEY: API_KEY,
     };
-    const matching = await runCli(["list", "--tag", MATCHING_TAG, "--json"], env);
+    const matching = await runCli([
+      "list",
+      "--source",
+      "src_cli_tag",
+      "--tag",
+      MATCHING_TAG,
+      "--json",
+    ], env);
     expect(matching.exitCode).toBe(0);
     expect(parseIds(matching.stdout)).toEqual([MEMBER_ID]);
 
     for (const tag of ABSENT_TAGS) {
-      const negative = await runCli(["list", "--tag", tag, "--json"], env);
+      const negative = await runCli([
+        "list",
+        "--source",
+        "src_cli_tag",
+        "--tag",
+        tag,
+        "--json",
+      ], env);
       expect(negative.exitCode).toBe(0);
       expect(parseIds(negative.stdout)).toEqual([]);
     }
   });
 });
 
-async function seedLocalFiles(root: string): Promise<void> {
+async function seedLocalFiles(root: string): Promise<string> {
   process.env.HASNA_FILES_DATA_DIR = root;
   process.env.HASNA_FILES_DB_PATH = join(root, "files.db");
   const { closeDb } = await import("../db/database.js");
@@ -114,6 +148,7 @@ async function seedLocalFiles(root: string): Promise<void> {
   tagFile(MEMBER_ID, MATCHING_TAG);
   tagFile(NON_MEMBER_ID, "zz");
   closeDb();
+  return source.id;
 }
 
 function syntheticFile(id: string, tags: string[]) {

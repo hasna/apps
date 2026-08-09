@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.16 — 2026-08-09
+
+- Preserve combined local `source` and `tag` filtering by binding SQLite JOIN
+  parameters before WHERE parameters, matching the generated SQL placeholder
+  order without changing sorting, pagination, or the other list filters.
+- Add store and CLI regressions with known-positive and absent-tag controls,
+  covering both local and hosted list paths.
+
 ## 0.3.15 — 2026-08-09
 
 Release of the immutable evidence authority and hosted lineage hardening merged
