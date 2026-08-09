@@ -57,11 +57,6 @@ export function startPolling(opts: PollOptions): PollHandle {
   /** The read currently in flight, so `stop()` can wait for it to finish. */
   let current: Promise<void> | null = null;
 
-  // Seed lastSeenId at call time so we never replay messages that already
-  // existed when watching began. The read is issued synchronously (the local
-  // transport resolves inline; the cloud transport on the next tick) and every
-  // poll awaits it before querying, keeping the "only NEW messages" contract in
-  // both modes.
   const health = createPollHealth({ label: "watch", report: opts.on_poll_error });
 
   let resolveReady!: () => void;

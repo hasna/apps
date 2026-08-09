@@ -20,6 +20,11 @@ export interface NotificationPollStore {
   markChannelNotificationsRead(agent: string, messageIds: number[]): Promise<number>;
 }
 
+/** Store operation required only while a watcher takes its silent baseline. */
+export interface NotificationBaselineStore {
+  baselineChannelNotifications(agent: string): Promise<number>;
+}
+
 export interface NotificationPollOptions {
   store: NotificationPollStore;
   /** The primary identity. Anything this loop writes goes under this name. */
@@ -64,30 +69,18 @@ export interface UnionNotificationBatch {
 }
 
 /**
- * Silently acknowledge every subscribed-channel notification that exists while
- * a watcher is arming.
+ * Silently acknowledge the subscribed-channel notifications visible at each
+ * identity's arm-time snapshot.
  *
- * Reads stay preview-only and acknowledgement stays per identity. Repeating
- * bounded reads is required because each transport may cap a notification page;
- * a single "mark all" shaped read can otherwise leave older pre-arm rows for
- * the first live poll to replay.
+ * Each call is one atomic store statement. A notification committed while the
+ * statement is running falls outside that snapshot and remains live; repeatedly
+ * reading and marking a moving unread set would consume that arrival as history.
  */
 export async function baselineChannelNotifications(
-  store: NotificationPollStore,
+  store: NotificationBaselineStore,
   agents: string[],
-  limit = DEFAULT_LIMIT,
 ): Promise<void> {
-  while (true) {
-    const batch = await readChannelNotificationsUnion(store, {
-      agents,
-      unread_only: true,
-      limit,
-      mark_read: true,
-      include_content: false,
-    });
-    if (batch.notifications.length === 0) return;
-    await batch.markRead();
-  }
+  for (const agent of agents) await store.baselineChannelNotifications(agent);
 }
 
 /**
