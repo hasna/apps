@@ -43,7 +43,7 @@ import { buildSyncPlan, runSyncPlan } from "../commands/sync.js";
 import { getAgentStatus } from "../agent/runtime.js";
 import { discoverMachineTopology, redactRouteForOutput, redactTopologyForOutput, resolveMachineRoute, resolveMachineWorkspace } from "../topology.js";
 import { listMachineTrashPolicies, resolveNoteMachineContext } from "../notes.js";
-import { getMachineDetails } from "../details.js";
+import { resolveMachineDetails } from "../details.js";
 import { getBrowserPlanFleet } from "../browserplan.js";
 import { checkMachineCompatibility } from "../compatibility.js";
 import {
@@ -357,7 +357,7 @@ export function createMcpServer(version: string, options: McpServerOptions = {})
     async ({ machine_id, include_tailscale }) => ({
       content: [{
         type: "text",
-        text: JSON.stringify(getMachineDetails(machine_id ?? "local", {
+        text: JSON.stringify(await resolveMachineDetails(machine_id ?? "local", {
           includeTailscale: include_tailscale,
         }), null, 2),
       }],

@@ -578,7 +578,7 @@ export const MACHINES_CONSUMER_SCHEMA_BUNDLE: MachinesConsumerSchemaBundle = {
           required: ["authority", "metadata_source", "manifest_declared", "heartbeat_present", "topology_entry", "local"],
           properties: {
             authority: { const: "open-machines" },
-            metadata_source: { enum: ["manifest_metadata", "heartbeat", "topology", "fallback"] },
+            metadata_source: { enum: ["manifest_metadata", "heartbeat", "topology", "registry", "fallback"] },
             manifest_declared: { type: "boolean" },
             heartbeat_present: { type: "boolean" },
             topology_entry: { type: "boolean" },
@@ -1572,7 +1572,7 @@ export function validateMachinesConsumerEnvelope(
       const source = value.source as Record<string, unknown>;
       requireFields(source, ["authority", "metadata_source", "manifest_declared", "heartbeat_present", "topology_entry", "local"], errors);
       if (source.authority !== "open-machines") errors.push("source.authority");
-      if (!["manifest_metadata", "heartbeat", "topology", "fallback"].includes(String(source.metadata_source))) errors.push("source.metadata_source");
+      if (!["manifest_metadata", "heartbeat", "topology", "registry", "fallback"].includes(String(source.metadata_source))) errors.push("source.metadata_source");
       if (typeof source.manifest_declared !== "boolean") errors.push("source.manifest_declared");
       if (typeof source.heartbeat_present !== "boolean") errors.push("source.heartbeat_present");
       if (typeof source.topology_entry !== "boolean") errors.push("source.topology_entry");
