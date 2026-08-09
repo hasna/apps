@@ -228,8 +228,14 @@ class ConversationsSdkAuthority implements ProjectRegistrationAuthorityAdapter {
     receipt: ProjectRegistrationAuthorityReceipt,
   ): Promise<boolean> {
     if (request.resource_kind !== "channel" || typeof request.desired.channel !== "string") return false;
-    const channel = await this.client.getChannel(request.desired.channel);
-    if (!channel) return false;
+    const response = await this.client.getChannel(request.desired.channel);
+    if (!response) return false;
+    const nestedChannel = response.channel;
+    const channel = nestedChannel
+      && typeof nestedChannel === "object"
+      && !Array.isArray(nestedChannel)
+      ? nestedChannel as Record<string, unknown>
+      : response;
     return channel.id === receipt.target_id
       && channel.name === request.desired.channel
       && (channel.project_id === null || channel.project_id === request.project_id);

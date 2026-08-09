@@ -368,7 +368,7 @@ describe("production project registration authorities", () => {
         return fakes.conversations.capability();
       }
       async getChannel() {
-        return channel;
+        return { channel };
       }
     }
     const authority = productionProjectRegistrationAuthorities({
