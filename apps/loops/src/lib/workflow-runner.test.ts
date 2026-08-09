@@ -258,6 +258,67 @@ describe("workflow runner", () => {
     }
   });
 
+  test("resumes a failed terminal receipt without repeating the external effect", async () => {
+    const store = new Store(":memory:");
+    const root = mkdtempSync(join(tmpdir(), "loops-operation-failed-terminal-resume-"));
+    const marker = join(root, "effect-count");
+    try {
+      const workflow = store.createWorkflow({
+        name: "failed-terminal-receipt-resume",
+        steps: [{
+          id: "effect",
+          target: {
+            type: "command",
+            command: `printf 'effect\\n' >> ${JSON.stringify(marker)}`,
+            shell: true,
+          },
+        }],
+      });
+      const idempotencyKey = "failed-terminal-receipt-resume-key";
+      const run = store.createWorkflowRun({ workflow, idempotencyKey });
+      store.startWorkflowStepRun(run.id, "effect");
+      const descriptor = parsePrivateOperationDescriptor(
+        store.listWorkflowEvents(run.id).find((event) =>
+          event.eventType === "private_operation_descriptor" && event.stepId === "effect"
+        )?.payload,
+      );
+      store.appendWorkflowEvent(
+        run.id,
+        "private_operation_admitted",
+        "effect",
+        operationAdmissionReceipt(descriptor) as unknown as Record<string, unknown>,
+      );
+      writeFileSync(marker, "effect\n");
+      store.appendWorkflowEvent(
+        run.id,
+        "private_operation_terminal",
+        "effect",
+        operationTerminalReceipt(descriptor, {
+          status: "failed",
+          exitCode: 9,
+          durationMs: 1,
+          stdout: "",
+          stderr: "effect failed",
+        }) as unknown as Record<string, unknown>,
+      );
+
+      const result = await executeWorkflow(store, workflow, { idempotencyKey });
+
+      expect(result.status).toBe("failed");
+      expect(readFileSync(marker, "utf8")).toBe("effect\n");
+      expect(store.getWorkflowStepRun(run.id, "effect")).toMatchObject({
+        status: "failed",
+        error: expect.stringContaining("reconciled from immutable operation receipt"),
+      });
+      expect(store.listWorkflowEvents(run.id).filter((event) =>
+        event.eventType === "private_operation_terminal" && event.stepId === "effect"
+      )).toHaveLength(1);
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("crash after an admitted external effect ends in reconciliation instead of blind replay", async () => {
     const store = new Store(":memory:");
     const root = mkdtempSync(join(tmpdir(), "loops-operation-uncertain-resume-"));

@@ -91,6 +91,33 @@ describe("textOutputBlocks", () => {
     expect(json).toContain("operationTemplateId");
   });
 
+  test("public shell command metadata omits the command body and its arguments", () => {
+    const value = publicLoop({
+      id: "shell-loop",
+      name: "private-shell-command",
+      status: "active",
+      schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+      target: {
+        type: "command",
+        command: "bash /private/worktree/deploy.sh --recipient private@example.test --capability NON_SECRET_SENTINEL",
+        shell: true,
+      },
+      catchUp: "latest",
+      catchUpLimit: 1,
+      overlap: "skip",
+      maxAttempts: 1,
+      retryDelayMs: 60_000,
+      leaseMs: 60_000,
+      createdAt: "2026-01-01T00:00:00Z",
+      updatedAt: "2026-01-01T00:00:00Z",
+    }) as { target: { command: string } };
+    const json = JSON.stringify(value);
+    expect(value.target.command).toBe("shell");
+    expect(json).not.toContain("/private/worktree");
+    expect(json).not.toContain("private@example.test");
+    expect(json).not.toContain("NON_SECRET_SENTINEL");
+  });
+
   test("redacts workflow step prompts without leaking a prefix", () => {
     const value = publicWorkflow({
       id: "workflow",

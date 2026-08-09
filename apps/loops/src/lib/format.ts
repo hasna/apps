@@ -84,7 +84,7 @@ function publicTarget(
   if (target.type === "command") {
     return {
       type: "command",
-      command: safeCommandName(target.command),
+      command: target.shell ? "shell" : safeCommandName(target.command),
       shell: target.shell,
       timeoutMs: target.timeoutMs,
       idleTimeoutMs: target.idleTimeoutMs,
