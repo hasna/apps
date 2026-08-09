@@ -128,6 +128,12 @@ export interface RdapResponse {
   [key: string]: unknown;
 }
 
+function getVcardPropertyValue(entry: unknown[]): unknown {
+  // RFC 7095 jCard properties are [name, parameters, value type, value].
+  // Keep accepting the package's legacy three-field fixtures as a fallback.
+  return entry.length >= 4 ? entry[3] : entry[2];
+}
+
 /**
  * Query RDAP for a domain via rdap.org public bootstrap.
  * Returns structured JSON with registrant, registrar, expiry, nameservers.
@@ -193,17 +199,23 @@ export function extractRegistrantFromRdap(rdap: RdapResponse): {
 
   for (const entry of vcard) {
     if (!Array.isArray(entry) || entry.length < 3) continue;
-    const [prop, _params, type] = entry;
+    const [prop] = entry;
+    const value = getVcardPropertyValue(entry);
 
-    if (prop === "fn") result.name = type ?? null;
-    else if (prop === "email") result.email = type ?? null;
-    else if (prop === "tel") result.phone = type ?? null;
+    if (prop === "fn") result.name = typeof value === "string" ? value : null;
+    else if (prop === "email") result.email = typeof value === "string" ? value : null;
+    else if (prop === "tel") result.phone = typeof value === "string" ? value : null;
     else if (prop === "org") {
-      result.organization = Array.isArray(type) ? type[0] ?? null : type ?? null;
+      const organization = Array.isArray(value) ? value[0] : value;
+      result.organization = typeof organization === "string" ? organization : null;
     }
     // Also capture N (structured name) if fn is missing
     else if (prop === "n" && !result.name) {
-      const parts = Array.isArray(type) ? type.filter(Boolean) : [type];
+      const parts = Array.isArray(value)
+        ? value.filter((part): part is string => typeof part === "string" && part.length > 0)
+        : typeof value === "string"
+          ? [value]
+          : [];
       result.name = parts.reverse().join(" ").trim() || null;
     }
   }
@@ -228,7 +240,10 @@ export function extractRegistrarFromRdap(rdap: RdapResponse): string | null {
       if (entity.vcardArray?.[1]) {
         const vcard = entity.vcardArray[1] as unknown[];
         for (const entry of vcard) {
-          if (Array.isArray(entry) && entry[0] === "fn") return entry[2] ?? null;
+          if (Array.isArray(entry) && entry[0] === "fn") {
+            const value = getVcardPropertyValue(entry);
+            return typeof value === "string" ? value : null;
+          }
         }
       }
       if (entity.remarks) {

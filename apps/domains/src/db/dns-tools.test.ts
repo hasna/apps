@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 const tempDir = mkdtempSync(join(tmpdir(), "open-domains-dns-tools-test-"));
 process.env["DOMAINS_DIR"] = tempDir;
 
-import { createDomain } from "./domains";
+import { createDomain, getDomainByName } from "./domains";
 import { closeDatabase } from "./database";
 import {
   extractRegistrantFromRdap,
@@ -35,7 +35,6 @@ afterAll(() => {
 
 describe("RDAP Data Extraction", () => {
   test("extractRegistrantFromRdap with full vCard", async () => {
-    // Code destructures as [prop, _params, type] so value is at index 2
     const rdap: RdapResponse = {
       entities: [
         {
@@ -43,10 +42,10 @@ describe("RDAP Data Extraction", () => {
           vcardArray: [
             "vcard",
             [
-              ["fn", {}, "John Doe"],
-              ["email", {}, "john@example.com"],
-              ["tel", {}, "tel:+1.5551234567"],
-              ["org", {}, "Example Corp"],
+              ["fn", {}, "text", "John Doe"],
+              ["email", {}, "text", "john@example.com"],
+              ["tel", {}, "uri", "tel:+1.5551234567"],
+              ["org", {}, "text", "Example Corp"],
             ],
           ],
         },
@@ -69,7 +68,7 @@ describe("RDAP Data Extraction", () => {
               roles: ["registrant"],
               vcardArray: [
                 "vcard",
-                [["fn", {}, "Jane Smith"]],
+                [["fn", {}, "text", "Jane Smith"]],
               ],
             },
           ],
@@ -89,8 +88,8 @@ describe("RDAP Data Extraction", () => {
           vcardArray: [
             "vcard",
             [
-              ["n", {}, ["Doe", "John", "A", "Mr"]],
-              ["email", {}, "john@example.com"],
+              ["n", {}, "text", ["Doe", "John", "A", "Mr"]],
+              ["email", {}, "text", "john@example.com"],
             ],
           ],
         },
@@ -133,7 +132,7 @@ describe("RDAP Data Extraction", () => {
           roles: ["registrar"],
           vcardArray: [
             "vcard",
-            [["fn", {}, "Example Registrar Inc"]],
+            [["fn", {}, "text", "Example Registrar Inc"]],
           ],
         },
       ],
@@ -228,6 +227,44 @@ describe("RDAP Data Extraction", () => {
 // ============================================================
 
 describe("DNS tool input validation", () => {
+  test("whoisLookup persists the real four-field RDAP registrar vCard value", async () => {
+    const originalFetch = globalThis.fetch;
+    const domainName = "alumia-rdap-regression.example";
+    const registrar = "GoDaddy Corporate Domains, LLC";
+    const rdapFixture: RdapResponse = {
+      handle: "ALUMIA-REGRESSION",
+      entities: [
+        {
+          roles: ["registrar"],
+          vcardArray: [
+            "vcard",
+            [
+              ["version", {}, "text", "4.0"],
+              ["fn", {}, "text", registrar],
+            ],
+          ],
+        },
+      ],
+    };
+
+    await createDomain({ name: domainName, registrar: "Previous Registrar" });
+    globalThis.fetch = mock(async (input: RequestInfo | URL) => {
+      expect(String(input)).toBe(`https://rdap.org/domain/${domainName}`);
+      return new Response(JSON.stringify(rdapFixture), {
+        status: 200,
+        headers: { "content-type": "application/rdap+json" },
+      });
+    }) as typeof fetch;
+
+    try {
+      const result = await whoisLookup(domainName);
+      expect(result.registrar).toBe(registrar);
+      expect((await getDomainByName(domainName))?.registrar).toBe(registrar);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("whoisLookup uses RDAP when host WHOIS tools are unavailable", async () => {
     const originalPath = process.env.PATH;
     const originalFetch = globalThis.fetch;
