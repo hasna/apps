@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 interface CliResult {
   stdout: string;
@@ -107,6 +107,57 @@ describe("search find --path", () => {
       ]);
       expect(negativePayload.total).toBe(0);
       expect(negativePayload.results).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  test("rejects root-name and root-id collisions plus an unconfigured filesystem path", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "search-find-path-collisions-"));
+    const indexedRoot = join(dir, "indexed");
+    const unconfiguredRoot = join(dir, "unconfigured");
+    const collidingName = `path-name-collision-${Date.now()}`;
+    mkdirSync(indexedRoot, { recursive: true });
+    mkdirSync(unconfiguredRoot, { recursive: true });
+    writeFileSync(join(indexedRoot, "executor-collision.txt"), "executor must stay scoped\n");
+    const env = testEnv(dir);
+
+    try {
+      const added = await runCli(
+        ["index", "add", indexedRoot, "--name", collidingName, "--json"],
+        env,
+      );
+      expect(added.exitCode).toBe(0);
+      const rootId = JSON.parse(added.stdout).root.id as string;
+
+      for (const ref of [collidingName, rootId]) {
+        const collision = await runCli(
+          ["find", "executor", "--path", ref, "--json", "--no-refresh"],
+          env,
+        );
+        expect(collision.exitCode).not.toBe(0);
+        expect(collision.stdout).toBe("");
+        expect(collision.stderr).toContain(`Index root not found: ${resolve(ref)}`);
+        expect(collision.stderr).not.toContain(indexedRoot);
+
+        const genericRoot = await runCli(
+          ["find", "executor", "--root", ref, "--json", "--no-refresh"],
+          env,
+        );
+        expect(genericRoot.exitCode).toBe(0);
+        expect(genericRoot.stderr).toBe("");
+        expect(JSON.parse(genericRoot.stdout).results).toEqual([
+          expect.objectContaining({ path: join(indexedRoot, "executor-collision.txt") }),
+        ]);
+      }
+
+      const missing = await runCli(
+        ["find", "executor", "--path", unconfiguredRoot, "--json", "--no-refresh"],
+        env,
+      );
+      expect(missing.exitCode).not.toBe(0);
+      expect(missing.stdout).toBe("");
+      expect(missing.stderr).toContain(`Index root not found: ${unconfiguredRoot}`);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
