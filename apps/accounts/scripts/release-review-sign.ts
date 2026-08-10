@@ -1,22 +1,28 @@
 #!/usr/bin/env bun
 
 import {
+  createHash,
   createPrivateKey,
   createPublicKey,
   sign,
 } from "node:crypto";
 import { resolve } from "node:path";
 import { spawnSync } from "node:child_process";
+import { readFileSync, writeFileSync } from "node:fs";
 import {
   RELEASE_REVIEW_PAYLOAD_SCHEMA,
   RELEASE_REVIEW_RECEIPT_SCHEMA,
+  RELEASE_REVIEW_TRUST_SCHEMA,
   RELEASE_REVIEW_TRUST_PATH,
   RELEASE_WORKFLOW,
   buildReleaseReviewPayload,
+  buildReleaseReviewTrustRotationPayload,
+  parseReleaseReviewTrust,
   releaseTag,
   repositorySlug,
   resolveReleaseReviewTrust,
   verifyReleaseReviewReceipt,
+  verifyReleaseReviewTrustChain,
   type ReleaseReviewExpectation,
   type ReleaseReviewTrust,
 } from "./release-provenance";
@@ -26,6 +32,17 @@ const REGISTRY = "https://registry.npmjs.org";
 const MAX_GH_OUTPUT_BYTES = 8 * 1024 * 1024;
 
 type SignerExpectation = Omit<ReleaseReviewExpectation, "commentId">;
+type TrustRotationOptions = {
+  root: string;
+  signingSecret: string;
+  previousVersion: string;
+  previousTrustBytes: Uint8Array;
+  reviewerAgent: string;
+  reviewerId: string;
+  signerSecretRef: string;
+  publicKey: string;
+  publicKeyEncoding: string;
+};
 type PostComment = (
   repository: string,
   commit: string,
@@ -38,6 +55,11 @@ function check(condition: unknown, message: string): asserts condition {
 
 function exactCommit(value: string, label: string): string {
   check(value.match(/^[0-9a-f]{40}$/), `${label} must be an exact 40-character lowercase git SHA`);
+  return value;
+}
+
+function semver(value: string, label: string): string {
+  check(value.match(/^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$/), `${label} must be an exact SemVer`);
   return value;
 }
 
@@ -97,6 +119,74 @@ function exactPublicKeyMatchesTrust(
     derived === trust.publicKey.value,
     `${PRIVATE_KEY_ENV} does not match the pinned public key in ${RELEASE_REVIEW_TRUST_PATH}`,
   );
+}
+
+function publicKeySha256(publicKey: string): string {
+  return createHash("sha256").update(Buffer.from(publicKey, "base64")).digest("hex");
+}
+
+function releaseReviewTrustDocument(trust: ReleaseReviewTrust): string {
+  return `${JSON.stringify(trust, null, 2)}\n`;
+}
+
+export function rotateReleaseReviewTrustDocument(options: TrustRotationOptions): ReleaseReviewTrust {
+  check(
+    options.publicKeyEncoding === "base64-spki-der",
+    "rotation public key encoding must be base64-spki-der",
+  );
+  const previousTrustBytes = Buffer.from(options.previousTrustBytes);
+  const previousTrust = parseReleaseReviewTrust(previousTrustBytes);
+  const currentTrustBytes = readFileSync(resolve(options.root, RELEASE_REVIEW_TRUST_PATH));
+  check(
+    currentTrustBytes.equals(previousTrustBytes),
+    `${RELEASE_REVIEW_TRUST_PATH} must match the previous published trust bytes before rotation`,
+  );
+  const signingKey = privateKey(options.signingSecret);
+  exactPublicKeyMatchesTrust(signingKey, previousTrust);
+  const nextTrustCore = {
+    schema: RELEASE_REVIEW_TRUST_SCHEMA,
+    generation: previousTrust.generation + 1,
+    repository: previousTrust.repository,
+    reviewer: {
+      type: "coding-agent" as const,
+      agent: options.reviewerAgent,
+      id: options.reviewerId,
+    },
+    publicKey: {
+      algorithm: "ed25519" as const,
+      encoding: "base64-spki-der" as const,
+      value: options.publicKey,
+      sha256: publicKeySha256(options.publicKey),
+    },
+    signer: {
+      secretRef: options.signerSecretRef,
+    },
+  };
+  const payload = buildReleaseReviewTrustRotationPayload(nextTrustCore, {
+    package: "@hasna/accounts",
+    version: options.previousVersion,
+    registry: REGISTRY,
+    trustSha256: createHash("sha256").update(previousTrustBytes).digest("hex"),
+  });
+  const payloadBytes = Buffer.from(JSON.stringify(payload));
+  const nextTrust = parseReleaseReviewTrust({
+    ...nextTrustCore,
+    rotation: {
+      payload: payloadBytes.toString("base64"),
+      signature: {
+        algorithm: "ed25519",
+        value: sign(null, payloadBytes, signingKey).toString("base64"),
+      },
+    },
+  });
+  const nextTrustBytes = Buffer.from(releaseReviewTrustDocument(nextTrust));
+  const verifiedTrust = verifyReleaseReviewTrustChain(
+    nextTrustBytes,
+    options.previousVersion,
+    { version: options.previousVersion, trustBytes: previousTrustBytes },
+  );
+  writeFileSync(resolve(options.root, RELEASE_REVIEW_TRUST_PATH), nextTrustBytes);
+  return verifiedTrust;
 }
 
 async function defaultPostComment(
@@ -195,14 +285,35 @@ function option(args: string[], name: string): string {
 
 async function main(): Promise<void> {
   const root = resolve(process.cwd());
+  const args = process.argv.slice(2);
   const signingSecret = process.env[PRIVATE_KEY_ENV];
   delete process.env[PRIVATE_KEY_ENV];
   check(
     typeof signingSecret === "string" && signingSecret.length > 0,
     `${PRIVATE_KEY_ENV} is missing; invoke this reviewer-only path through secrets exec`,
   );
-  const commit = exactCommit(option(process.argv.slice(2), "--commit"), "review commit");
-  const publisherAgent = option(process.argv.slice(2), "--publisher-agent");
+  if (args.includes("--rotate-trust")) {
+    const previousTrustRef = exactCommit(option(args, "--previous-trust-ref"), "previous trust ref");
+    const previousVersion = semver(option(args, "--previous-version"), "previous release version");
+    const previousTrustBytes = Buffer.from(
+      command(root, "git", ["show", `${previousTrustRef}:${RELEASE_REVIEW_TRUST_PATH}`]),
+    );
+    const trust = rotateReleaseReviewTrustDocument({
+      root,
+      signingSecret,
+      previousVersion,
+      previousTrustBytes,
+      reviewerAgent: option(args, "--reviewer-agent"),
+      reviewerId: option(args, "--reviewer-id"),
+      signerSecretRef: option(args, "--signer-secret-ref"),
+      publicKey: option(args, "--public-key"),
+      publicKeyEncoding: option(args, "--public-key-encoding"),
+    });
+    console.log(`rotated ${RELEASE_REVIEW_TRUST_PATH} to generation ${trust.generation}`);
+    return;
+  }
+  const commit = exactCommit(option(args, "--commit"), "review commit");
+  const publisherAgent = option(args, "--publisher-agent");
   check(
     command(root, "git", ["rev-parse", "HEAD"]).trim() === commit,
     "review signer checkout HEAD must equal --commit",

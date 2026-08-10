@@ -141,20 +141,26 @@ approval, a publisher's self-review, and an unsigned statement are all
 insufficient.
 
 The trust root is versioned at `config/release-review-trust.json`, not supplied
-by workflow variables. Generation 1 pins reviewer display identity `Rawls`,
-agent id `019fe5d3-a6dc-71a0-b6cc-243ea32513b6`, and the canonical 44-byte
-Ed25519 SPKI DER public key whose SHA-256 is
-`4e5e4d72beb074d44779c0f26dd2cd38c9ed5129131fd1432259f82943273da6`.
-The matching private key is held only by Rawls in the vault item
-`hasna/accounts/npm-release/reviewer-ed25519-private-key`; it is never present
-in this repository, the release workflow, or the `npm-release` environment.
+by workflow variables. Generation 2 pins reviewer display identity
+`Fable Accounts Release Reviewer 2026-08-10`, agent id
+`4e38a26f-cb70-4418-8bd8-84ef440fa334`, and the canonical 44-byte Ed25519 SPKI
+DER public key whose SHA-256 is
+`a2b07141ddfe888f05b21d1693a8dca5eb70a2bfda9bdec4fdcb1fb42426f104`.
+The matching private key is held only by that reviewer in the vault item
+`hasna/accounts/npm-release/reviewer-ed25519-private-key-g2-20260810`; it is
+never present in this repository, the release workflow, or the `npm-release`
+environment.
 `RELEASE_REVIEWER_AGENT` and `RELEASE_REVIEW_PUBLIC_KEY` are deliberately
 ignored and must not be configured as release authority.
 
 The bootstrap is finite: generation 1 is accepted only for
 `@hasna/accounts@0.2.42`, with the exact Rawls identity, public key/hash, and
-vault reference above. Rawls created that key and reviews this PR. There is no
-flag, environment variable, or general runtime path that permits another
+vault reference `hasna/accounts/npm-release/reviewer-ed25519-private-key`.
+Generation 2 is authorized by the generation-1 Rawls key only through the signed
+rotation envelope checked into this trust document. The rotation payload binds
+the published `0.2.42` trust bytes whose SHA-256 is
+`132a999a94db2de66c14293c45638fb9a8a8d352b72067eef8b76fc064b30b46`. There is
+no flag, environment variable, or general runtime path that permits another
 generation-1 bootstrap.
 
 After reviewing the exact release commit, the reviewer posts one **unedited
@@ -194,8 +200,8 @@ The decoded payload has exactly these fields:
   "registry": "https://registry.npmjs.org",
   "reviewer": {
     "type": "coding-agent",
-    "agent": "Rawls",
-    "id": "019fe5d3-a6dc-71a0-b6cc-243ea32513b6"
+    "agent": "Fable Accounts Release Reviewer 2026-08-10",
+    "id": "4e38a26f-cb70-4418-8bd8-84ef440fa334"
   },
   "publisher": {
     "type": "coding-agent",
@@ -223,12 +229,13 @@ so the publishing workflow cannot make its own assertion sufficient.
 
 #### Reviewer-only signer and comment posting
 
-Only Rawls runs the signer, from a clean checkout whose `HEAD` is the exact
-reviewed commit. The command consumes the named vault key without reading it in
-the shell and prints only the numeric GitHub commit-comment id:
+Only the candidate-pinned reviewer runs the signer, from a clean checkout whose
+`HEAD` is the exact reviewed commit. The command consumes the named vault key
+without reading it in the shell and prints only the numeric GitHub commit-comment
+id. For generation 2:
 
 ```bash
-secrets exec hasna/accounts/npm-release/reviewer-ed25519-private-key \
+secrets exec hasna/accounts/npm-release/reviewer-ed25519-private-key-g2-20260810 \
   --as RELEASE_REVIEW_SIGNING_PRIVATE_KEY -- \
   bun run release-review:sign -- \
     --commit COMMIT_SHA \
@@ -248,13 +255,13 @@ when `secrets exec` terminates the child.
 Safe provisioning verification is metadata-only:
 
 ```bash
-secrets get hasna/accounts/npm-release/reviewer-ed25519-private-key --check
+secrets get hasna/accounts/npm-release/reviewer-ed25519-private-key-g2-20260810 --check
 ```
 
 Never use `--show`, command substitution, a temporary key file, or a shell
 variable holding the key. The vault reference pattern is
 `hasna/accounts/npm-release/<purpose>`; this release uses the exact
-`reviewer-ed25519-private-key` item named above.
+`reviewer-ed25519-private-key-g2-20260810` item named above.
 
 #### Rotation, revocation, and custody
 
@@ -279,7 +286,9 @@ Revoking the vault item immediately prevents new receipts. Rotate before
 revocation when the old key remains trustworthy. If the old key is unavailable
 or untrustworthy, automated rotation is impossible and releases fail closed;
 there is no environment-variable or publisher-controlled recovery bootstrap.
-Private-key custody remains solely with Rawls. Public trust material and signed
+Private-key custody remains solely with each generation's named reviewer. The
+generation-1 Rawls key is permitted only to authorize the generation-2 rotation
+envelope, never to sign future release reviews. Public trust material and signed
 rotation envelopes are reviewed repository data and contain no secret.
 
 ### npm trusted publisher
