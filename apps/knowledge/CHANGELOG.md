@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.102
+
+- Republish the same reviewed bounded-query product code through the isolated
+  exact-clone provenance path so the registry can record the landed commit.
+
 ## 0.2.101
 
 - Reject command-shaped unknown lookups before they can fall through to the
