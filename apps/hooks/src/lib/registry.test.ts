@@ -13,8 +13,8 @@ import {
 
 describe("registry", () => {
   describe("HOOKS", () => {
-    test("contains 48 hooks", () => {
-      expect(HOOKS).toHaveLength(48);
+    test("contains 49 hooks", () => {
+      expect(HOOKS).toHaveLength(49);
     });
 
     test("every hook has required fields", () => {
@@ -99,7 +99,7 @@ describe("registry", () => {
 
     test("returns Security hooks", () => {
       const hooks = getHooksByCategory("Security");
-      expect(hooks).toHaveLength(3);
+      expect(hooks).toHaveLength(4);
     });
 
     test("returns Notifications hooks", () => {
@@ -315,7 +315,7 @@ describe("registry", () => {
 
     test("correct count per event type", () => {
       expect(HOOKS.filter((h) => h.event === "PreToolUse")).toHaveLength(15);
-      expect(HOOKS.filter((h) => h.event === "PostToolUse")).toHaveLength(15);
+      expect(HOOKS.filter((h) => h.event === "PostToolUse")).toHaveLength(16);
       expect(HOOKS.filter((h) => h.event === "Stop")).toHaveLength(9);
       expect(HOOKS.filter((h) => h.event === "Notification")).toHaveLength(3);
       expect(HOOKS.filter((h) => h.event === "SessionStart")).toHaveLength(5);
