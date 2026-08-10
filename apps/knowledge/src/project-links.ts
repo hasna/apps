@@ -199,6 +199,7 @@ export interface KnowledgeProjectResourceListOptions {
 }
 
 export interface KnowledgeProjectLinksAuthority {
+  close(): Promise<void>;
   capability(): Promise<KnowledgeProjectRegistrationCapability>;
   registerCollection(request: KnowledgeProjectRegistrationRequest): Promise<KnowledgeProjectRegistrationReceipt>;
   readCollection(collectionId: string): Promise<KnowledgeProjectCollectionRecord>;
@@ -307,6 +308,7 @@ interface SqlRunResult {
 }
 
 interface ProjectLinksSql {
+  close(): Promise<void>;
   get<T extends Record<string, unknown>>(sql: string, params?: readonly unknown[]): Promise<T | null>;
   many<T extends Record<string, unknown>>(sql: string, params?: readonly unknown[]): Promise<T[]>;
   run(sql: string, params?: readonly unknown[]): Promise<SqlRunResult>;
@@ -323,6 +325,8 @@ class PostgresProjectLinksSql implements ProjectLinksSql {
     private readonly client: TypedQueryClient,
     private readonly transactionClient?: PoolQueryClient,
   ) {}
+
+  async close(): Promise<void> {}
 
   async get<T extends Record<string, unknown>>(sql: string, params: readonly unknown[] = []): Promise<T | null> {
     return this.client.get<T>(postgresSql(sql), params);
@@ -347,8 +351,16 @@ class PostgresProjectLinksSql implements ProjectLinksSql {
 
 class SqliteProjectLinksSql implements ProjectLinksSql {
   private tail: Promise<void> = Promise.resolve();
+  private closed = false;
 
   constructor(readonly db: Database) {}
+
+  async close(): Promise<void> {
+    await this.tail;
+    if (this.closed) return;
+    this.closed = true;
+    this.db.close();
+  }
 
   async get<T extends Record<string, unknown>>(sql: string, params: readonly unknown[] = []): Promise<T | null> {
     return (this.db.query(sql).get(...params as SQLQueryBindings[]) as T | null) ?? null;
@@ -741,6 +753,10 @@ class PackageOwnedKnowledgeProjectLinksAuthority implements KnowledgeProjectLink
     this.now = options.now ?? (() => new Date().toISOString());
   }
 
+  async close(): Promise<void> {
+    await this.sql.close();
+  }
+
   private capabilityValue(): KnowledgeProjectRegistrationCapability {
     return {
       authority: 'knowledge',
@@ -899,11 +915,16 @@ class PackageOwnedKnowledgeProjectLinksAuthority implements KnowledgeProjectLink
     idempotency_key: string;
     request_digest?: string;
     precondition_digest?: string;
+    accepted_receipt_id?: string;
   }): void {
     if (
       existing.idempotency_key !== input.idempotency_key
       || (input.request_digest !== undefined && existing.request_digest !== input.request_digest)
       || (input.precondition_digest !== undefined && existing.precondition_digest !== input.precondition_digest)
+      || (
+        input.accepted_receipt_id !== undefined
+        && existing.accepted_receipt_id !== input.accepted_receipt_id
+      )
     ) {
       throw new KnowledgeProjectLinksError(
         'KNOWLEDGE_PROJECT_LINKS_IDEMPOTENCY_MISMATCH',
@@ -1127,6 +1148,34 @@ class PackageOwnedKnowledgeProjectLinksAuthority implements KnowledgeProjectLink
     return row ? toReceipt(row) : null;
   }
 
+  private async hasOtherAcceptedForwardReceipt(
+    sql: ProjectLinksSql,
+    accepted: KnowledgeProjectRegistrationReceipt,
+  ): Promise<boolean> {
+    const itemPredicate = accepted.action === 'bind_item'
+      ? 'AND item_id = ?'
+      : 'AND item_id IS NULL';
+    const row = await sql.get<{ receipt_id: string }>(
+      `SELECT receipt_id
+         FROM knowledge_project_link_receipts
+        WHERE authority_id = ? AND tenant_id = ? AND corpus_id = ?
+          AND action = ? AND direction = 'forward' AND outcome = 'accepted'
+          AND collection_id = ? AND receipt_id <> ?
+          ${itemPredicate}
+        LIMIT 1`,
+      [
+        this.identity.authority_id,
+        this.identity.tenant_id,
+        this.identity.corpus_id,
+        accepted.action,
+        accepted.collection_id,
+        accepted.receipt_id,
+        ...(accepted.action === 'bind_item' ? [accepted.item_id] : []),
+      ],
+    );
+    return row !== null;
+  }
+
   private assertInverseIdentity(request: KnowledgeProjectInverseRequest): void {
     this.assertIdentity(request);
     requiredString(request.accepted_receipt_id, 'accepted_receipt_id');
@@ -1166,6 +1215,9 @@ class PackageOwnedKnowledgeProjectLinksAuthority implements KnowledgeProjectLink
       } else if (!aggregate) {
         outcome = 'terminal_nonacceptance';
         reason = 'accepted_collection_is_already_absent';
+      } else if (await this.hasOtherAcceptedForwardReceipt(tx, accepted)) {
+        outcome = 'terminal_nonacceptance';
+        reason = 'collection_has_later_accepted_adopter';
       } else {
         const membership = await tx.get<{ count: number | string }>(
           `SELECT COUNT(*) AS count
@@ -1511,6 +1563,9 @@ class PackageOwnedKnowledgeProjectLinksAuthority implements KnowledgeProjectLink
       } else if (!membership) {
         outcome = 'terminal_nonacceptance';
         reason = 'accepted_membership_is_already_absent';
+      } else if (await this.hasOtherAcceptedForwardReceipt(tx, accepted)) {
+        outcome = 'terminal_nonacceptance';
+        reason = 'membership_has_later_accepted_adopter';
       } else if (
         membership.bound_receipt_id !== accepted.receipt_id
         || Number(membership.created_by_operation) !== 1
@@ -1992,6 +2047,8 @@ export class KnowledgeProjectLinksHttpClient implements KnowledgeProjectLinksAut
     this.fetchImpl = options.fetch ?? guardedFetch;
     this.root = options.baseUrl.replace(/\/+$/, '');
   }
+
+  async close(): Promise<void> {}
 
   private headers(extra: Record<string, string> = {}): Headers {
     const headers = new Headers(this.options.headers);

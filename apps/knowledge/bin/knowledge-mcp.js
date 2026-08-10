@@ -29252,8 +29252,16 @@ class KnowledgeProjectLinksError extends Error {
 class SqliteProjectLinksSql {
   db;
   tail = Promise.resolve();
+  closed = false;
   constructor(db) {
     this.db = db;
+  }
+  async close() {
+    await this.tail;
+    if (this.closed)
+      return;
+    this.closed = true;
+    this.db.close();
   }
   async get(sql, params = []) {
     return this.db.query(sql).get(...params) ?? null;
@@ -29622,6 +29630,9 @@ class PackageOwnedKnowledgeProjectLinksAuthority {
     };
     this.now = options.now ?? (() => new Date().toISOString());
   }
+  async close() {
+    await this.sql.close();
+  }
   capabilityValue() {
     return {
       authority: "knowledge",
@@ -29724,7 +29735,7 @@ class PackageOwnedKnowledgeProjectLinksAuthority {
     return row ? toReceipt(row) : null;
   }
   assertIdempotent(existing, input) {
-    if (existing.idempotency_key !== input.idempotency_key || input.request_digest !== undefined && existing.request_digest !== input.request_digest || input.precondition_digest !== undefined && existing.precondition_digest !== input.precondition_digest) {
+    if (existing.idempotency_key !== input.idempotency_key || input.request_digest !== undefined && existing.request_digest !== input.request_digest || input.precondition_digest !== undefined && existing.precondition_digest !== input.precondition_digest || input.accepted_receipt_id !== undefined && existing.accepted_receipt_id !== input.accepted_receipt_id) {
       throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_IDEMPOTENCY_MISMATCH", "operation and step identity are already bound to a different Knowledge project-link request.", { receipt_id: existing.receipt_id });
     }
   }
@@ -29873,6 +29884,25 @@ class PackageOwnedKnowledgeProjectLinksAuthority {
     ]);
     return row ? toReceipt(row) : null;
   }
+  async hasOtherAcceptedForwardReceipt(sql, accepted) {
+    const itemPredicate = accepted.action === "bind_item" ? "AND item_id = ?" : "AND item_id IS NULL";
+    const row = await sql.get(`SELECT receipt_id
+         FROM knowledge_project_link_receipts
+        WHERE authority_id = ? AND tenant_id = ? AND corpus_id = ?
+          AND action = ? AND direction = 'forward' AND outcome = 'accepted'
+          AND collection_id = ? AND receipt_id <> ?
+          ${itemPredicate}
+        LIMIT 1`, [
+      this.identity.authority_id,
+      this.identity.tenant_id,
+      this.identity.corpus_id,
+      accepted.action,
+      accepted.collection_id,
+      accepted.receipt_id,
+      ...accepted.action === "bind_item" ? [accepted.item_id] : []
+    ]);
+    return row !== null;
+  }
   assertInverseIdentity(request) {
     this.assertIdentity(request);
     requiredString(request.accepted_receipt_id, "accepted_receipt_id");
@@ -29904,6 +29934,9 @@ class PackageOwnedKnowledgeProjectLinksAuthority {
       } else if (!aggregate) {
         outcome = "terminal_nonacceptance";
         reason = "accepted_collection_is_already_absent";
+      } else if (await this.hasOtherAcceptedForwardReceipt(tx, accepted)) {
+        outcome = "terminal_nonacceptance";
+        reason = "collection_has_later_accepted_adopter";
       } else {
         const membership = await tx.get(`SELECT COUNT(*) AS count
              FROM knowledge_project_collection_memberships
@@ -30170,6 +30203,9 @@ class PackageOwnedKnowledgeProjectLinksAuthority {
       } else if (!membership) {
         outcome = "terminal_nonacceptance";
         reason = "accepted_membership_is_already_absent";
+      } else if (await this.hasOtherAcceptedForwardReceipt(tx, accepted)) {
+        outcome = "terminal_nonacceptance";
+        reason = "membership_has_later_accepted_adopter";
       } else if (membership.bound_receipt_id !== accepted.receipt_id || Number(membership.created_by_operation) !== 1) {
         outcome = "terminal_nonacceptance";
         reason = "membership_is_owned_by_a_different_receipt";
@@ -30498,6 +30534,7 @@ class KnowledgeProjectLinksHttpClient {
     this.fetchImpl = options.fetch ?? guardedFetch;
     this.root = options.baseUrl.replace(/\/+$/, "");
   }
+  async close() {}
   headers(extra = {}) {
     const headers = new Headers(this.options.headers);
     headers.set("accept", "application/json");
@@ -31673,6 +31710,11 @@ class KnowledgeService {
       }
     });
     return this.cachedProjectLinksAuthority;
+  }
+  async close() {
+    const authority = this.cachedProjectLinksAuthority;
+    this.cachedProjectLinksAuthority = undefined;
+    await authority?.close();
   }
   async listItems(options = {}) {
     return this.itemStore().list(options);

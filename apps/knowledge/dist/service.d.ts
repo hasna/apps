@@ -392,6 +392,7 @@ export declare class KnowledgeService {
      * the authenticated HTTP producer, never a local mirror.
      */
     projectLinksAuthority(): KnowledgeProjectLinksAuthority;
+    close(): Promise<void>;
     /** Bounded list query via the unified Store. */
     listItems(options?: ItemListOptions): Promise<ItemListResult>;
     /** Fetch one knowledge item by id or short id via the unified Store. */

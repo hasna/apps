@@ -1744,6 +1744,12 @@ export class KnowledgeService {
     return this.cachedProjectLinksAuthority;
   }
 
+  async close(): Promise<void> {
+    const authority = this.cachedProjectLinksAuthority;
+    this.cachedProjectLinksAuthority = undefined;
+    await authority?.close();
+  }
+
   /** Bounded list query via the unified Store. */
   async listItems(options: ItemListOptions = {}): Promise<ItemListResult> {
     return this.itemStore().list(options);

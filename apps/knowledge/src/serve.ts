@@ -2679,6 +2679,23 @@ export function knowledgeOpenApi(version: string): Record<string, unknown> {
             'created_at',
             'updated_at',
           ],
+          properties: {
+            source_project_id: { type: 'string' },
+            project_id: { type: 'string' },
+            project_slug: { type: 'string' },
+            project_name: { type: 'string' },
+            collection_id: { type: 'string' },
+            collection_slug: { type: 'string' },
+            collection_name: { type: 'string' },
+            membership_rule: {
+              type: 'string',
+              enum: ['explicit_collection_binding'],
+            },
+            revision: { type: 'string' },
+            digest: { type: 'string' },
+            created_at: { type: 'string', format: 'date-time' },
+            updated_at: { type: 'string', format: 'date-time' },
+          },
           additionalProperties: false,
         },
         ProjectResource: {
@@ -2696,6 +2713,36 @@ export function knowledgeOpenApi(version: string): Record<string, unknown> {
             'locator',
             'metadata',
           ],
+          properties: {
+            key: { type: 'string' },
+            kind: {
+              type: 'string',
+              enum: ['project', 'collection', 'item', 'taxonomy'],
+            },
+            id: { type: 'string' },
+            project_id: { type: 'string' },
+            source_project_id: { type: 'string' },
+            collection_id: { type: 'string' },
+            revision: { type: 'string' },
+            digest: { type: 'string' },
+            title: { type: 'string' },
+            locator: {
+              type: 'object',
+              required: ['kind', 'value'],
+              properties: {
+                kind: {
+                  type: 'string',
+                  enum: ['external_uuid', 'canonical_uri'],
+                },
+                value: { type: 'string' },
+              },
+              additionalProperties: false,
+            },
+            metadata: {
+              type: 'object',
+              additionalProperties: true,
+            },
+          },
           additionalProperties: false,
         },
         ProjectResourcePage: {

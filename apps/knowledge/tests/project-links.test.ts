@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from 'bun:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -21,10 +21,12 @@ import { createServeHandler, knowledgeOpenApi } from '../src/serve';
 import { createMigratedPglite } from './fixtures/pglite-client';
 
 const tempRoots: string[] = [];
+const localAuthorities: KnowledgeProjectLinksAuthority[] = [];
 const fixedNow = () => '2026-08-10T12:00:00.000Z';
 const repoRoot = join(fileURLToPath(new URL('.', import.meta.url)), '..');
 
-afterAll(() => {
+afterAll(async () => {
+  for (const authority of localAuthorities.splice(0)) await authority.close();
   for (const root of tempRoots) rmSync(root, { recursive: true, force: true });
 });
 
@@ -198,6 +200,90 @@ async function inverseRequest(
   };
 }
 
+function receiptLookupRequest(
+  capability: KnowledgeProjectRegistrationCapability,
+  receipt: KnowledgeProjectRegistrationReceipt,
+) {
+  return {
+    authority_id: capability.authority_id,
+    tenant_id: capability.tenant_id,
+    corpus_id: capability.corpus_id,
+    operation_id: receipt.operation_id,
+    step_id: receipt.step_id,
+    action: receipt.action,
+    direction: receipt.direction,
+    idempotency_key: receipt.idempotency_key,
+    max_items: 1 as const,
+  };
+}
+
+interface TestJsonSchema {
+  $ref?: string;
+  type?: string;
+  format?: string;
+  enum?: unknown[];
+  required?: string[];
+  properties?: Record<string, TestJsonSchema>;
+  items?: TestJsonSchema;
+  additionalProperties?: boolean | TestJsonSchema;
+}
+
+function expectSchemaAccepts(
+  schemas: Record<string, TestJsonSchema>,
+  schema: TestJsonSchema,
+  value: unknown,
+  path = '$',
+): void {
+  if (schema.$ref) {
+    const name = schema.$ref.split('/').at(-1)!;
+    expectSchemaAccepts(schemas, schemas[name]!, value, path);
+    return;
+  }
+  if (schema.enum) {
+    expect(schema.enum, `${path} enum`).toContain(value);
+  }
+  if (schema.type === 'string') {
+    expect(typeof value, `${path} type`).toBe('string');
+    if (schema.format === 'date-time') {
+      expect(Number.isNaN(Date.parse(value as string)), `${path} date-time`).toBe(false);
+    }
+    return;
+  }
+  if (schema.type === 'integer') {
+    expect(Number.isInteger(value), `${path} type`).toBe(true);
+    return;
+  }
+  if (schema.type === 'boolean') {
+    expect(typeof value, `${path} type`).toBe('boolean');
+    return;
+  }
+  if (schema.type === 'array') {
+    expect(Array.isArray(value), `${path} type`).toBe(true);
+    for (const [index, entry] of (value as unknown[]).entries()) {
+      expectSchemaAccepts(schemas, schema.items!, entry, `${path}[${index}]`);
+    }
+    return;
+  }
+  if (schema.type === 'object') {
+    expect(value !== null && typeof value === 'object' && !Array.isArray(value), `${path} type`)
+      .toBe(true);
+    const record = value as Record<string, unknown>;
+    for (const field of schema.required ?? []) {
+      expect(record, `${path}.${field} required`).toHaveProperty(field);
+      expect(schema.properties, `${path}.${field} schema`).toHaveProperty(field);
+    }
+    if (schema.additionalProperties === false) {
+      expect(
+        Object.keys(record).filter((field) => !schema.properties?.[field]),
+        `${path} additional properties`,
+      ).toEqual([]);
+    }
+    for (const [field, fieldSchema] of Object.entries(schema.properties ?? {})) {
+      if (field in record) expectSchemaAccepts(schemas, fieldSchema, record[field], `${path}.${field}`);
+    }
+  }
+}
+
 function localHarness(items = new Map<string, KnowledgeItem>()) {
   const root = tempRoot();
   const store = mapItemStore(items);
@@ -212,6 +298,7 @@ function localHarness(items = new Map<string, KnowledgeItem>()) {
       now: fixedNow,
     },
   });
+  localAuthorities.push(authority);
   return { root, store, items, authority };
 }
 
@@ -321,13 +408,14 @@ describe('Knowledge Projects resource-link producer', () => {
         now: fixedNow,
       },
     });
+    localAuthorities.push(reopened);
     expect((await reopened.readCollection(registration.collection_id!)).digest)
       .toBe((await harness.authority.readCollection(registration.collection_id!)).digest);
     expect((await reopened.readAllProjectResources('wks_project_alpha')).length)
       .toBe(postMutationResources.length);
   });
 
-  test('registration and bind-existing are idempotent/adoptable, while inverse only removes owned effects', async () => {
+  test('later accepted adopters preserve creator-owned collections and memberships', async () => {
     const existing = item('k_existing', 'Existing', ['Convention']);
     const { authority } = localHarness(new Map([[existing.id, existing]]));
     const request = await registrationRequest(authority);
@@ -344,6 +432,20 @@ describe('Knowledge Projects resource-link producer', () => {
     expect(adoptedRegistration.reason).toBe('adopted_existing_collection');
     expect(adoptedRegistration.created_by_operation).toBe(false);
 
+    const capability = await authority.capability();
+    const registrationInverseRequest = await inverseRequest(capability, accepted, {
+      operationId: 'op-inverse-owned-collection',
+      stepId: 'step-inverse-owned-collection',
+      idempotencyKey: 'idem-inverse-owned-collection',
+    });
+    const registrationInverse = await authority.compensateRegistration(registrationInverseRequest);
+    expect(registrationInverse.outcome).toBe('terminal_nonacceptance');
+    expect(registrationInverse.reason).toBe('collection_has_later_accepted_adopter');
+    expect(await authority.lookupReceipt(receiptLookupRequest(capability, adoptedRegistration)))
+      .toEqual(adoptedRegistration);
+    expect((await authority.readCollection(accepted.collection_id!)).collection_id)
+      .toBe(accepted.collection_id);
+
     const binding = await authority.bindItem(
       await bindingRequest(authority, accepted.collection_id!, existing.id),
     );
@@ -357,7 +459,6 @@ describe('Knowledge Projects resource-link producer', () => {
     expect(adoptedBinding.reason).toBe('adopted_existing_membership');
     expect(adoptedBinding.created_by_operation).toBe(false);
 
-    const capability = await authority.capability();
     const adoptedInverseRequest = await inverseRequest(capability, adoptedBinding, {
       operationId: 'op-inverse-adopted-membership',
       stepId: 'step-inverse-adopted-membership',
@@ -375,22 +476,101 @@ describe('Knowledge Projects resource-link producer', () => {
       idempotencyKey: 'idem-inverse-owned-membership',
     });
     const bindingInverse = await authority.compensateItemBinding(bindingInverseRequest);
-    expect(bindingInverse.outcome).toBe('accepted');
-    expect(await authority.verifyItemBindingInverse(bindingInverseRequest))
-      .toMatchObject({ target_id: existing.id, absent: true });
+    expect(bindingInverse.outcome).toBe('terminal_nonacceptance');
+    expect(bindingInverse.reason).toBe('membership_has_later_accepted_adopter');
+    expect(await authority.lookupReceipt(receiptLookupRequest(capability, adoptedBinding)))
+      .toEqual(adoptedBinding);
+    expect(await authority.readItemBinding(accepted.collection_id!, existing.id))
+      .toMatchObject({ item_id: existing.id });
+  });
 
-    const registrationInverseRequest = await inverseRequest(capability, accepted, {
-      operationId: 'op-inverse-owned-collection',
-      stepId: 'step-inverse-owned-collection',
-      idempotencyKey: 'idem-inverse-owned-collection',
-    });
-    const registrationInverse = await authority.compensateRegistration(registrationInverseRequest);
-    expect(registrationInverse.outcome).toBe('accepted');
-    expect(await authority.verifyRegistrationInverse(registrationInverseRequest))
-      .toMatchObject({ target_id: accepted.collection_id, absent: true });
-    await expect(authority.readCollection(accepted.collection_id!)).rejects.toBeInstanceOf(
-      KnowledgeProjectLinksError,
+  test('inverse removes solely owned effects and binds idempotency to the accepted receipt', async () => {
+    const first = item('k_inverse_first', 'Inverse First');
+    const second = item('k_inverse_second', 'Inverse Second');
+    const { authority } = localHarness(new Map([
+      [first.id, first],
+      [second.id, second],
+    ]));
+    const firstRegistration = await authority.registerCollection(
+      await registrationRequest(authority),
     );
+    const secondRegistration = await authority.registerCollection(
+      await registrationRequest(authority, {
+        operationId: 'op-register-beta',
+        stepId: 'step-register-beta',
+        idempotencyKey: 'idem-register-beta',
+        projectId: 'wks_project_beta',
+        projectSlug: 'beta',
+        projectName: 'Beta',
+      }),
+    );
+    const capability = await authority.capability();
+
+    const firstRegistrationInverse = await inverseRequest(capability, firstRegistration, {
+      operationId: 'op-inverse-registration',
+      stepId: 'step-inverse-registration',
+      idempotencyKey: 'idem-inverse-registration',
+    });
+    expect((await authority.compensateRegistration(firstRegistrationInverse)).outcome)
+      .toBe('accepted');
+    expect(await authority.verifyRegistrationInverse(firstRegistrationInverse))
+      .toMatchObject({ target_id: firstRegistration.collection_id, absent: true });
+    await expect(
+      authority.compensateRegistration({
+        ...firstRegistrationInverse,
+        accepted_receipt_id: secondRegistration.receipt_id,
+      }),
+    ).rejects.toMatchObject({
+      code: 'KNOWLEDGE_PROJECT_LINKS_IDEMPOTENCY_MISMATCH',
+    });
+    expect((await authority.readCollection(secondRegistration.collection_id!)).collection_id)
+      .toBe(secondRegistration.collection_id);
+
+    const firstBinding = await authority.bindItem(
+      await bindingRequest(authority, secondRegistration.collection_id!, first.id),
+    );
+    const secondBinding = await authority.bindItem(
+      await bindingRequest(authority, secondRegistration.collection_id!, second.id),
+    );
+    const firstBindingInverse = await inverseRequest(capability, firstBinding, {
+      operationId: 'op-inverse-binding',
+      stepId: 'step-inverse-binding',
+      idempotencyKey: 'idem-inverse-binding',
+    });
+    expect((await authority.compensateItemBinding(firstBindingInverse)).outcome)
+      .toBe('accepted');
+    expect(await authority.verifyItemBindingInverse(firstBindingInverse))
+      .toMatchObject({ target_id: first.id, absent: true });
+    await expect(
+      authority.compensateItemBinding({
+        ...firstBindingInverse,
+        accepted_receipt_id: secondBinding.receipt_id,
+      }),
+    ).rejects.toMatchObject({
+      code: 'KNOWLEDGE_PROJECT_LINKS_IDEMPOTENCY_MISMATCH',
+    });
+    expect(await authority.readItemBinding(secondRegistration.collection_id!, second.id))
+      .toMatchObject({ item_id: second.id });
+  });
+
+  test('local authority close releases the owned SQLite handle before directory cleanup', async () => {
+    const root = tempRoot();
+    const authority = createLocalKnowledgeProjectLinksAuthority({
+      databasePath: join(root, 'knowledge.db'),
+      itemStore: mapItemStore(new Map()),
+      options: {
+        packageVersion: '9.9.9',
+        authorityId: 'knowledge-test',
+        tenantId: 'tenant-test',
+        corpusId: 'corpus-test',
+        now: fixedNow,
+      },
+    });
+    await authority.capability();
+    await authority.close();
+    await authority.close();
+    rmSync(root, { recursive: true, force: true });
+    expect(existsSync(root)).toBe(false);
   });
 
   test('Postgres executes the same aggregate, membership, receipt, and resource semantics', async () => {
@@ -429,6 +609,7 @@ describe('Knowledge Projects resource-link producer', () => {
       (error) => String(error),
     );
     expect(receiptMutation).toContain('immutable');
+    await authority.close();
     await db.close();
   });
 
@@ -487,11 +668,18 @@ describe('Knowledge Projects resource-link producer', () => {
     await client.bindItem(await bindingRequest(client, registration.collection_id!, apiItem.id));
     expect((await client.readAllProjectResources('wks_project_alpha')).map((entry) => entry.kind))
       .toEqual(['collection', 'item', 'project', 'taxonomy']);
+    const exactResource = await client.readProjectResource(
+      'wks_project_alpha',
+      'item',
+      apiItem.id,
+    );
+    await client.close();
     server.stop(true);
 
     const sdk = createKnowledgeClient({ projectLinksAuthority: authority });
     expect((await sdk.projectLinks.capability()).route).toBe(KNOWLEDGE_PROJECT_REGISTRATION_ROUTE);
-    expect((await sdk.projectLinks.readCollection(registration.collection_id!)).collection_id)
+    const collectionRecord = await sdk.projectLinks.readCollection(registration.collection_id!);
+    expect(collectionRecord.collection_id)
       .toBe(registration.collection_id);
 
     const openapi = knowledgeOpenApi('9.9.9');
@@ -499,7 +687,10 @@ describe('Knowledge Projects resource-link producer', () => {
     expect(openapi.paths).toHaveProperty('/v1/project-registration/items/bind');
     expect(openapi.paths).toHaveProperty('/v1/projects/{projectId}/resources');
     expect(openapi.paths).toHaveProperty('/v1/projects/{projectId}/resources/{kind}/{resourceId}');
-    expect(openapi.components.schemas).toHaveProperty('ProjectResourcePage');
+    const schemas = (openapi.components as { schemas: Record<string, TestJsonSchema> }).schemas;
+    expect(schemas).toHaveProperty('ProjectResourcePage');
+    expectSchemaAccepts(schemas, schemas.ProjectCollectionRecord!, collectionRecord);
+    expectSchemaAccepts(schemas, schemas.ProjectResource!, exactResource);
   });
 
   test('CLI registers, binds, exhausts, and exactly reads the same local producer', () => {

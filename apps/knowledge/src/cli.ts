@@ -23,6 +23,7 @@ import {
   KNOWLEDGE_PROJECT_REGISTRATION_ROUTE,
   createLocalKnowledgeProjectLinksAuthority,
   digestKnowledgeProjectLinksValue,
+  type KnowledgeProjectLinksAuthority,
   type KnowledgeProjectReceiptAction,
   type KnowledgeProjectRegistrationDirection,
   type KnowledgeProjectResourceKind,
@@ -1022,6 +1023,8 @@ async function run(argv: string[]): Promise<void> {
 
   const serviceScope = command === 'project-panel' || command === 'app-wiki' ? (flags.scope ?? 'project') : flags.scope;
   const service = createKnowledgeService({ scope: serviceScope });
+  let standaloneProjectLinksAuthority: KnowledgeProjectLinksAuthority | undefined;
+  try {
   if (command === 'storage') {
     const storageAction = positional[1] ?? 'status';
     if (storageAction === 'import-legacy') {
@@ -1091,7 +1094,7 @@ async function run(argv: string[]): Promise<void> {
 
   const projectLinksAuthority = () => {
     if (!storePathOverridden || isKnowledgeApiMode()) return service.projectLinksAuthority();
-    return createLocalKnowledgeProjectLinksAuthority({
+    standaloneProjectLinksAuthority ??= createLocalKnowledgeProjectLinksAuthority({
       databasePath: join(dirname(storePath), 'knowledge.db'),
       itemStore,
       options: {
@@ -1101,6 +1104,7 @@ async function run(argv: string[]): Promise<void> {
         corpusId: process.env.HASNA_KNOWLEDGE_PROJECT_CORPUS_ID ?? 'knowledge',
       },
     });
+    return standaloneProjectLinksAuthority;
   };
 
   if (command === 'project-registration') {
@@ -2720,6 +2724,10 @@ async function run(argv: string[]): Promise<void> {
   const hint = suggestion ? ` Did you mean '${suggestion}'?` : '';
   log('warn', 'Unknown command', { input: positional[0], suggestion });
   throw new Error(`Unknown command: ${positional[0]}.${hint} Run 'knowledge --help' for available commands.`);
+  } finally {
+    await standaloneProjectLinksAuthority?.close();
+    await service.close();
+  }
 }
 
 /**

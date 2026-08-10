@@ -179,6 +179,7 @@ export interface KnowledgeProjectResourceListOptions {
     kinds?: KnowledgeProjectResourceKind[];
 }
 export interface KnowledgeProjectLinksAuthority {
+    close(): Promise<void>;
     capability(): Promise<KnowledgeProjectRegistrationCapability>;
     registerCollection(request: KnowledgeProjectRegistrationRequest): Promise<KnowledgeProjectRegistrationReceipt>;
     readCollection(collectionId: string): Promise<KnowledgeProjectCollectionRecord>;
@@ -232,6 +233,7 @@ export declare class KnowledgeProjectLinksHttpClient implements KnowledgeProject
     private readonly fetchImpl;
     private readonly root;
     constructor(options: KnowledgeProjectLinksHttpClientOptions);
+    close(): Promise<void>;
     private headers;
     private request;
     capability(): Promise<KnowledgeProjectRegistrationCapability>;
