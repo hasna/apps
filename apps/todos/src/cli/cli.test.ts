@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, setDefaultTimeout } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { getDatabase, closeDatabase, resetDatabase } from "../db/database.js";
@@ -229,6 +229,102 @@ describe("CLI integration", () => {
       rmSync(eventsDir, { recursive: true, force: true });
     }
   });
+
+  it("routes task-manifest commands through the local SQLite authority", async () => {
+    const dbPath = join(testRoot, "task-manifest-local", "todos.db");
+    mkdirSync(dirname(dbPath), { recursive: true });
+    const db = new Database(dbPath);
+    let projectId = "";
+    try {
+      runMigrations(db);
+      projectId = createProject({ name: "Task Manifest Local CLI", path: testRoot }, db).id;
+    } finally {
+      db.close();
+    }
+
+    const writeManifest = (operationId: string, key: string): string => {
+      const manifestPath = join(testRoot, `${key}.json`);
+      writeFileSync(manifestPath, JSON.stringify({
+        version: 1,
+        operation_id: operationId,
+        idempotency_key: `${operationId}:apply`,
+        project_id: projectId,
+        plan: { key: key, name: `Task manifest ${key}` },
+        tasks: [{
+          key: "verify",
+          title: `Verify task-manifest ${key}`,
+          comments: [{ content: `comment for ${key}`, agent_id: "codex" }],
+          verifications: [{ command: `verify ${key}`, status: "passed", agent_id: "codex" }],
+        }],
+      }));
+      return manifestPath;
+    };
+
+    const deliverManifestPath = writeManifest("task-manifest-cli-local-deliver", "deliver");
+    const compensateManifestPath = writeManifest("task-manifest-cli-local-compensate", "compensate");
+    const capability = await runCli(["--json", "task-manifest", "capability", "--tenant-id", "tenant-local"], dbPath);
+    const first = await runCli(["--json", "task-manifest", "apply", "--tenant-id", "tenant-local", "--file", deliverManifestPath], dbPath);
+    const second = await runCli(["--json", "task-manifest", "apply", "--tenant-id", "tenant-local", "--file", deliverManifestPath], dbPath);
+    const firstResult = JSON.parse(first.stdout).result;
+    const readExact = await runCli(["--json", "task-manifest", "read-exact", "--tenant-id", "tenant-local", firstResult.receipt.receipt_id], dbPath);
+    const lookup = await runCli([
+      "--json", "task-manifest", "lookup", "--tenant-id", "tenant-local", "--plan-id", firstResult.graph.plan_id,
+    ], dbPath);
+    const delivered = await runCli([
+      "--json", "task-manifest", "outbox-delivered", "--tenant-id", "tenant-local", firstResult.outbox_ids[0],
+    ], dbPath);
+
+    const compensateApply = await runCli(["--json", "task-manifest", "apply", "--tenant-id", "tenant-local", "--file", compensateManifestPath], dbPath);
+    const compensateApplyResult = JSON.parse(compensateApply.stdout).result;
+    const compensated = await runCli([
+      "--json", "task-manifest", "compensate", "--tenant-id", "tenant-local",
+      "--receipt-id", compensateApplyResult.receipt.receipt_id,
+      "--idempotency-key", "task-manifest-cli-local-compensate:compensate",
+      "--if-binding-version", "1",
+    ], dbPath);
+
+    for (const result of [capability, first, second, readExact, lookup, delivered, compensateApply, compensated]) {
+      expect({ exitCode: result.exitCode, stderr: result.stderr }).toEqual({ exitCode: 0, stderr: "" });
+    }
+    expect(JSON.parse(capability.stdout).capability).toMatchObject({
+      authority: "todos",
+      route: "todos.task-manifest.v1",
+      tenant_id: "tenant-local",
+      backend: "sqlite",
+    });
+    expect(firstResult.duplicate).toBe(false);
+    expect(JSON.parse(second.stdout).result).toMatchObject({
+      duplicate: true,
+      receipt: { receipt_id: firstResult.receipt.receipt_id },
+      graph: { plan_id: firstResult.graph.plan_id },
+    });
+    expect(JSON.parse(readExact.stdout).result).toMatchObject({
+      duplicate: false,
+      receipt: { receipt_id: firstResult.receipt.receipt_id },
+      graph: { plan_id: firstResult.graph.plan_id },
+    });
+    expect(JSON.parse(lookup.stdout).result).toEqual({
+      authority: "todos",
+      route: "todos.task-manifest.v1",
+      schema_version: 1,
+      tenant_id: "tenant-local",
+      plan_id: firstResult.graph.plan_id,
+      apply_receipt_id: firstResult.receipt.receipt_id,
+      binding_version: 1,
+      state: "applied",
+    });
+    expect(JSON.parse(delivered.stdout)).toEqual({ delivered: true });
+    expect(JSON.parse(compensated.stdout).result).toMatchObject({
+      duplicate: false,
+      receipt: {
+        kind: "compensate",
+        apply_receipt_id: compensateApplyResult.receipt.receipt_id,
+        binding_version: 2,
+      },
+      absent: true,
+      readback: { complete: true },
+    });
+  }, 30000);
 
   it("should return JSON errors for tester issue reports in command-local JSON mode", async () => {
     const result = await runCli([
@@ -2809,7 +2905,7 @@ describe("CLI integration", () => {
     expect(added.exitCode).toBe(0);
     expect(JSON.parse(added.stdout).redaction_patterns).toEqual(["INTERNAL-[0-9]{4}"]);
 
-    const redactionProbe = ["INTERNAL-1234 ", "TOKEN", "=", "secretsecret"].join("");
+    const redactionProbe = [["INTERNAL", "-1234 "].join(""), "TOKEN", "=", "secretsecret"].join("");
     const scan = await runCli(["redaction", "scan", redactionProbe, "--json"], dbPath);
     expect(scan.exitCode).toBe(0);
     const payload = JSON.parse(scan.stdout);

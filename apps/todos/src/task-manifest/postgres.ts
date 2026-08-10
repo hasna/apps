@@ -1,4 +1,5 @@
 import { canonicalDigest, canonicalJson } from "./canonical.js";
+import { taskManifestPlanSlug } from "./plan-slug.js";
 import {
   validateTaskManifestBindingLookupRows,
   type NormalizedTaskManifest,
@@ -84,7 +85,7 @@ function taskPayload(
 
 function planPayload(input: Pick<NormalizedTaskManifest, "manifest" | "graph" | "now">): JsonRecord {
   return {
-    id: input.graph.plan_id, slug: null, project_id: input.manifest.project_id,
+    id: input.graph.plan_id, slug: taskManifestPlanSlug(input.manifest, input.graph.plan_id), project_id: input.manifest.project_id,
     task_list_id: input.manifest.task_list_id ?? null, agent_id: null,
     name: input.manifest.plan.name, description: input.manifest.plan.description ?? null,
     status: input.manifest.plan.status ?? "active", created_at: input.now,

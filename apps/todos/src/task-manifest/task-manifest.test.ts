@@ -14,6 +14,7 @@ import {
   supportsIdempotentOutboxDelivery,
   type TodosTaskManifest,
 } from "./index.js";
+import { taskManifestPlanSlug } from "./plan-slug.js";
 
 const PROJECT_ID = "3583f012-71bb-40e5-997f-05dfdb2c2542";
 const TENANT_ID = "tenant-receipt-recovery";
@@ -135,6 +136,9 @@ describe("task-manifest SQLite authority", () => {
       events_emails: expect.stringMatching(/^[0-9a-f-]{36}$/),
     });
     expect(first.outbox_ids).toHaveLength(2);
+    const plan = db.query("SELECT slug FROM plans WHERE id = ?").get(first.graph.plan_id) as { slug: string } | null;
+    expect(plan?.slug).toBe(taskManifestPlanSlug(manifest(), first.graph.plan_id));
+    expect(plan?.slug.endsWith(first.graph.plan_id)).toBe(true);
     expect(db.query("SELECT count(*) AS count FROM todos_task_manifest_receipts").get()).toEqual({ count: 1 });
     expect(db.query("SELECT count(*) AS count FROM todos_task_manifest_outbox").get()).toEqual({ count: 2 });
     expect(() => db.run("UPDATE todos_task_manifest_receipts SET result_digest = 'changed'"))

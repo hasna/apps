@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.26] - 2026-08-10
+
+### Fixed
+
+- **Task-manifest CLI execution is supported across local, SQLite, and
+  PostgreSQL authorities.** The CLI now preserves deterministic plan slugs
+  across backends and the test fixtures share one bounded projection for the
+  unrelated external Bun ancestor-package warning.
+
 ## [0.15.25] - 2026-08-10
 
 ### Fixed

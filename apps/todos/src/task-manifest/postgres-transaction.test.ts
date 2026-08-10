@@ -4,11 +4,13 @@ import {
   createPostgresTodosTaskManifestAuthority,
   type TodosTaskManifestPostgresClient,
 } from "./index.js";
+import { taskManifestPlanSlug } from "./plan-slug.js";
 
 describe("task-manifest PostgreSQL transaction contract", () => {
   test("requires and uses the authoritative transaction callback for every graph write", async () => {
     const rootWrites: string[] = [];
     const transactionWrites: string[] = [];
+    const syncPayloads: Array<{ objectType: string; objectId: string; payload: Record<string, unknown> }> = [];
     let transactions = 0;
     const client: TodosTaskManifestPostgresClient = {
       async query(sql) {
@@ -18,9 +20,16 @@ describe("task-manifest PostgreSQL transaction contract", () => {
       async transaction(fn) {
         transactions += 1;
         return fn({
-          async query(sql) {
+          async query(sql, params) {
             if (/^\s*(INSERT|UPDATE|DELETE)\b/i.test(sql)) transactionWrites.push(sql);
             if (sql.includes("object_type = 'projects'")) return { rows: [{ found: 1 }] };
+            if (/^\s*INSERT INTO\b/i.test(sql) && sql.includes("object_type, object_id, payload") && params) {
+              syncPayloads.push({
+                objectType: String(params[1]),
+                objectId: String(params[2]),
+                payload: JSON.parse(String(params[3])) as Record<string, unknown>,
+              });
+            }
             return { rows: [] };
           },
         });
@@ -41,6 +50,12 @@ describe("task-manifest PostgreSQL transaction contract", () => {
     expect(transactions).toBe(1);
     expect(transactionWrites.length).toBeGreaterThanOrEqual(3);
     expect(rootWrites).toEqual([]);
+    const planSync = syncPayloads.find((entry) => entry.objectType === "plans");
+    expect(planSync).toBeDefined();
+    expect(planSync?.payload["slug"]).toBe(taskManifestPlanSlug({
+      plan: { key: "callback", name: "Callback" },
+    }, planSync!.objectId));
+    expect(String(planSync?.payload["slug"]).endsWith(planSync!.objectId)).toBe(true);
   });
 
   test("fails closed when a client has no transaction callback", () => {

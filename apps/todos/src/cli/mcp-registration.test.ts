@@ -11,6 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { localRoutingTestEnv } from "../test/local-routing-env.fixture.test.js";
+import { projectExternalBunDuplicatePackageWarning } from "../test/bun-fixture-isolation.js";
 
 const roots: string[] = [];
 
@@ -60,7 +61,8 @@ async function runCli(
     new Response(proc.stderr).text(),
     proc.exited,
   ]);
-  return { exitCode, stdout, stderr };
+  const projected = projectExternalBunDuplicatePackageWarning(stderr);
+  return { exitCode, stdout, stderr: projected.stderr };
 }
 
 function readJson(path: string): Record<string, any> {

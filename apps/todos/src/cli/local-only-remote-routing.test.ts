@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { projectExternalBunDuplicatePackageWarning } from "../test/bun-fixture-isolation.js";
 
 const REPO_ROOT = join(import.meta.dir, "../..");
 const tempRoots: string[] = [];
@@ -28,7 +29,8 @@ async function runCli(
   );
   const stdout = await new Response(proc.stdout).text();
   const stderr = await new Response(proc.stderr).text();
-  return { exitCode: await proc.exited, stdout, stderr };
+  const projected = projectExternalBunDuplicatePackageWarning(stderr);
+  return { exitCode: await proc.exited, stdout, stderr: projected.stderr };
 }
 
 afterEach(() => {

@@ -1,5 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { canonicalDigest, canonicalJson } from "./canonical.js";
+import { taskManifestPlanSlug } from "./plan-slug.js";
 import {
   validateTaskManifestBindingLookupRows,
   type NormalizedTaskManifest,
@@ -102,7 +103,7 @@ export class SqliteTodosTaskManifestBackend implements TodosTaskManifestBackend 
       this.db.query(`INSERT INTO plans (id, project_id, name, description, status, task_list_id, slug, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
         input.graph.plan_id, manifest.project_id, manifest.plan.name, manifest.plan.description ?? null,
-        manifest.plan.status ?? "active", manifest.task_list_id ?? null, null, input.now, input.now,
+        manifest.plan.status ?? "active", manifest.task_list_id ?? null, taskManifestPlanSlug(manifest, input.graph.plan_id), input.now, input.now,
       );
       fault(faults, "after_plan_write");
 
@@ -356,7 +357,7 @@ export class SqliteTodosTaskManifestBackend implements TodosTaskManifestBackend 
       const plan = this.db.query("SELECT project_id, name, description, status, task_list_id, slug FROM plans WHERE id = ? LIMIT 1").get(applyResult.graph.plan_id) as Record<string, unknown> | null;
       if (!plan || plan["project_id"] !== manifest.project_id || plan["name"] !== manifest.plan.name
         || plan["description"] !== (manifest.plan.description ?? null) || plan["status"] !== (manifest.plan.status ?? "active")
-        || plan["task_list_id"] !== (manifest.task_list_id ?? null) || plan["slug"] !== null) {
+        || plan["task_list_id"] !== (manifest.task_list_id ?? null) || plan["slug"] !== taskManifestPlanSlug(manifest, applyResult.graph.plan_id)) {
         throw new TodosTaskManifestError("TODOS_TASK_MANIFEST_COMPENSATION_REFUSED", "Compensation refused: plan changed since apply");
       }
       for (const task of manifest.tasks) {
