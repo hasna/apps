@@ -101,11 +101,13 @@ const actor = decision.principal.agent ?? decision.principal.kid;
 That subject is fixed at issuance — `issue-key --agent <name>`, see
 [Cloud service](#cloud-service-self_hosted) — and is covered by the token
 signature, so a caller can neither assert nor override it. No endpoint accepts an
-agent parameter: `/v1/secrets/get` takes `key` and nothing else, and an unknown
-`agent` query parameter or header is ignored rather than rejected. In local mode
-the same column is filled from `AGENT_ID ?? USER ?? hostname()`, which *is*
-self-asserted. The two modes populate one column from two sources with different
-trust properties; read the mode before reading the value.
+agent *identity* parameter: `/v1/secrets/get` takes `key` and nothing else, and
+an unknown `agent` query parameter or header is ignored rather than rejected.
+(`POST /v1/users` does take a `type` of `human` or `agent`; that is a user record
+kind, not the identity of the caller.) In local mode the same column is instead
+filled from `AGENT_ID ?? USER ?? hostname()`, which *is* self-asserted. The two
+modes populate one column from two sources with different trust properties; read
+the mode before reading the value.
 
 The consequence that matters when interpreting a row: **every caller sharing one
 key collapses to one `agent` value.** A deployment in which many callers share a
@@ -116,8 +118,10 @@ narrow the access to a machine either, so it must not be described as
 machine-attributed; that claims a narrowing the record does not contain.
 
 Distinct per-caller attribution therefore comes from distinct credentials, each
-issued with its own `--agent`. It is not reachable by any client-side change,
-because the client does not supply this value.
+issued with its own `--agent`. In cloud mode it is not reachable by any
+client-side change, because the client does not supply this value at all; in
+local mode the value is whatever the calling process asserts, which is a
+different property and not a substitute for it.
 
 Inspect metadata-only secret reference health:
 
@@ -264,11 +268,13 @@ All six actions use the following output contract. It extends the current flat
 values copied from request context.
 
 The `agent` field below describes the intended contract for these grant-aware
-events. On the existing `get` / `set` / `delete` rows it is the issued-to subject
-of the calling credential and carries exactly the attribution that credential
-carries — see [What the `agent` column attributes](#what-the-agent-column-attributes).
+events. On the existing `get` / `set` / `delete` rows it is not a per-caller
+identity but the identity resolved for the caller by the active mode — the
+credential's issued-to subject in cloud mode, the process environment in local
+mode — and it carries exactly the attribution that source carries; see
+[What the `agent` column attributes](#what-the-agent-column-attributes).
 A resolver implementing these events inherits that limit: it cannot narrow an
-access below the granularity of the credential used to make it.
+access below the granularity of the identity available to it.
 
 ```ts
 interface SecretAccessAuditEventV1 {
