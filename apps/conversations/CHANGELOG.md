@@ -8,6 +8,12 @@ All notable changes to this project will be documented in this file.
 
 - **Channel creation is atomic across validation, insertion, and creator membership.** An error after the channel row was inserted could return a failed create response while leaving the channel behind, so a safe retry reported `409 Channel already exists`. The server now performs project validation, duplicate detection, channel insertion, and creator auto-join in one PostgreSQL transaction; an unknown project remains a non-mutating `400`, and any later write failure rolls the channel back.
 
+## 0.5.41 - 2026-08-10
+
+### Fixed
+
+- **Historical project-channel registration receipts remain readable after capability identity changes.** Lookup accepts the receipt's stored route, package version, authority ID, and corpus ID while enforcing current-tenant authorization and exact operation, target, request, and precondition predicates; create and inverse paths still require the current advertised identity (#141).
+
 ## 0.5.38 - 2026-08-09
 
 ### Fixed
