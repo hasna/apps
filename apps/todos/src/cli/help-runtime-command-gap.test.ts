@@ -111,6 +111,12 @@ describe("remote help/runtime command gap", () => {
     expect(isTodosCliCommandVisibleForRoute("fail", "remote-http")).toBe(true); // remote-http
     expect(isTodosCliCommandVisibleForRoute("burndown", "remote-http")).toBe(false); // local-only
     expect(isTodosCliCommandVisibleForRoute("burndown", "local")).toBe(true); // local route shows all
+    expect(isTodosCliCommandVisibleForRoute("stale-lock-handoff", "remote-http")).toBe(false);
+    expect(isTodosCliCommandVisibleForRoute(
+      "stale-lock-handoff",
+      "remote-http",
+      new Set(["stale-lock-handoff"]),
+    )).toBe(true);
     // Unknown/optional families self-gate at runtime and stay visible.
     expect(isTodosCliCommandVisibleForRoute("not-a-real-command", "remote-http")).toBe(true);
   });

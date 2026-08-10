@@ -3,6 +3,7 @@ import {
   getTodosCloudClient,
   getTodosRemoteAuthorityConfigStatus,
   resolveTodosCliStorageMode,
+  type TodosRemoteCommandCapability,
 } from "./cloud-router.js";
 
 type Env = Record<string, string | undefined>;
@@ -144,6 +145,10 @@ const REMOTE_COMMANDS = new Set([
   "record-verification", "release", "remove", "show", "standup", "start", "status", "tag", "task", "task-lists",
   "stale-lock-handoff", "template-export", "template-import", "template-preview", "templates", "timeline", "tl", "unlock", "unassign", "untag", "update",
 ]);
+const REMOTE_COMMAND_CAPABILITIES =
+  new Map<string, TodosRemoteCommandCapability>([
+    ["stale-lock-handoff", "stale-lock-handoff"],
+  ]);
 
 const COMMAND_CAPABILITY_MATRIX = new Map<string, TodosCliCommandOwner>();
 for (const command of REGISTERED_CANONICAL_COMMANDS) COMMAND_CAPABILITY_MATRIX.set(command, "local-only");
@@ -171,11 +176,14 @@ export function getTodosCliCommandCapabilityMatrix(): ReadonlyMap<string, TodosC
 export function isTodosCliCommandVisibleForRoute(
   command: string,
   route: TodosCliAuthorityInitialization["route"],
+  remoteCapabilities: ReadonlySet<TodosRemoteCommandCapability> = new Set(),
 ): boolean {
   if (route === "local") return true;
   const owner = COMMAND_CAPABILITY_MATRIX.get(command);
   if (!owner) return true;
-  return owner !== "local-only";
+  if (owner === "local-only") return false;
+  const requiredCapability = REMOTE_COMMAND_CAPABILITIES.get(command);
+  return requiredCapability ? remoteCapabilities.has(requiredCapability) : true;
 }
 
 /**
@@ -184,13 +192,18 @@ export function isTodosCliCommandVisibleForRoute(
  * local-only commands are omitted from remote metadata so help, manual, and
  * completions continue to describe the shared /v1 surface.
  */
-export function applyTodosCliHelpVisibility(program: Command, route: TodosCliAuthorityInitialization["route"]): void {
+export function applyTodosCliHelpVisibility(
+  program: Command,
+  route: TodosCliAuthorityInitialization["route"],
+  remoteCapabilities: ReadonlySet<TodosRemoteCommandCapability> = new Set(),
+): void {
   if (route === "local") return;
   program.configureHelp({
     visibleCommands(this: Help, command: Command): Command[] {
       return Help.prototype.visibleCommands
         .call(this, command)
-        .filter((subcommand) => isTodosCliCommandVisibleForRoute(subcommand.name(), route));
+        .filter((subcommand) =>
+          isTodosCliCommandVisibleForRoute(subcommand.name(), route, remoteCapabilities));
     },
   });
 }

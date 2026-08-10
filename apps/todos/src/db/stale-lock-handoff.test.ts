@@ -138,6 +138,41 @@ describe("handoffStaleTaskLock — exact SQLite CAS", () => {
     expect(historyCount(sibling.id)).toBe(siblingHistoryBefore);
   });
 
+  test("refreshes a same-name stale holder only through exact CAS and a new audit receipt", () => {
+    const task = createTask({ title: "same-name stale session" }, db);
+    setLock(task.id, NEW_HOLDER, STALE_LOCK_VERSION);
+    const historyBefore = historyCount(task.id);
+
+    const receipt = handoffStaleTaskLock(input(task.id, {
+      expected_holder: NEW_HOLDER,
+    }), db);
+
+    expect(receipt).toMatchObject({
+      task_id: task.id,
+      actor: NEW_HOLDER,
+      previous_holder: NEW_HOLDER,
+      previous_lock_version: STALE_LOCK_VERSION,
+      new_holder: NEW_HOLDER,
+    });
+    expect(receipt.new_lock_version).not.toBe(STALE_LOCK_VERSION);
+    expect(getTask(task.id, db)).toMatchObject({
+      locked_by: NEW_HOLDER,
+      locked_at: receipt.new_lock_version,
+    });
+    expect(historyCount(task.id)).toBe(historyBefore + 1);
+
+    const afterSuccess = getTask(task.id, db);
+    const historyAfterSuccess = historyCount(task.id);
+    expectHandoffCode(
+      () => handoffStaleTaskLock(input(task.id, {
+        expected_holder: NEW_HOLDER,
+      }), db),
+      "STALE_LOCK_HANDOFF_VERSION_MISMATCH",
+    );
+    expect(getTask(task.id, db)).toEqual(afterSuccess);
+    expect(historyCount(task.id)).toBe(historyAfterSuccess);
+  });
+
   test("rejects a known-live lock with the same holder/version shape and changes neither row nor audit", () => {
     const task = createTask({ title: "live exact lock" }, db);
     const liveVersion = new Date().toISOString();

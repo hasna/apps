@@ -760,6 +760,83 @@ describe("remote CLI entrypoint authority boundary", () => {
     expect(help.stdout).toMatch(/\bstatus\b/);
   });
 
+  test("remote help and stale-lock handoff fail closed when the authority omits the route", async () => {
+    const TASK_ID = "11111111-1111-4111-8111-111111111111";
+    const requests: string[] = [];
+    let advertiseHandoff = false;
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url);
+        requests.push(`${request.method} ${url.pathname}`);
+        if (url.pathname === "/v1/openapi.json" && request.method === "GET") {
+          return Response.json({
+            openapi: "3.1.0",
+            paths: advertiseHandoff
+              ? {
+                  "/v1/tasks/{id}/stale-lock-handoff": {
+                    post: {},
+                  },
+                }
+              : {},
+          });
+        }
+        if (url.pathname === `/v1/tasks/${TASK_ID}/stale-lock-handoff`) {
+          return Response.json(
+            { error: "unknown task action: stale-lock-handoff" },
+            { status: 404 },
+          );
+        }
+        return Response.json({ error: "fixture route missing" }, { status: 404 });
+      },
+    });
+    const root = mkdtempSync(join(tmpdir(), "todos-stale-lock-capability-"));
+    tempRoots.push(root);
+    const env = {
+      PATH: process.env.PATH ?? "",
+      BUN_INSTALL: process.env.BUN_INSTALL ?? join(process.env.HOME ?? "/home/hasna", ".bun"),
+      HOME: join(root, "home"),
+      LANG: "C.UTF-8",
+      TODOS_AUTO_PROJECT: "false",
+      HASNA_TODOS_STORAGE_MODE: "remote",
+      HASNA_TODOS_API_URL: `http://127.0.0.1:${server.port}`,
+      HASNA_TODOS_API_KEY: "fixture-remote-key",
+    };
+    mkdirSync(env.HOME);
+
+    try {
+      const help = await runCli(executable, ["--help"], env);
+      expect(help.exitCode).toBe(0);
+      expect(help.stdout).not.toMatch(/\bstale-lock-handoff\b/);
+
+      const result = await runCli(executable, [
+        "--agent", "fixture-agent",
+        "stale-lock-handoff", TASK_ID,
+        "--expected-holder", "previous-agent",
+        "--expected-lock-version", "2020-01-01T00:00:00.000Z",
+        "--stale-after-seconds", "3600",
+        "--new-holder", "fixture-agent",
+        "--reason", "remote version-skew control",
+      ], env);
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toContain("REMOTE_STALE_LOCK_HANDOFF_UNSUPPORTED");
+      expect(requests).toEqual([
+        "GET /v1/openapi.json",
+        "GET /v1/openapi.json",
+      ]);
+
+      advertiseHandoff = true;
+      requests.length = 0;
+      const compatibleHelp = await runCli(executable, ["--help"], env);
+      expect(compatibleHelp.exitCode).toBe(0);
+      expect(compatibleHelp.stdout).toMatch(/\bstale-lock-handoff\b/);
+      expect(requests).toEqual(["GET /v1/openapi.json"]);
+    } finally {
+      server.stop(true);
+    }
+  });
+
   test("built status command uses /v1 and never opens the local or Postgres adapter", async () => {
     const requests: Array<{ method: string; path: string; authorization: string | null }> = [];
     const server = Bun.serve({
@@ -875,6 +952,16 @@ describe("remote CLI entrypoint authority boundary", () => {
         if (request.headers.get("authorization") !== "Bearer fixture-remote-key") {
           return Response.json({ error: "fixture auth required" }, { status: 401 });
         }
+        if (url.pathname === "/v1/openapi.json" && request.method === "GET") {
+          return Response.json({
+            openapi: "3.1.0",
+            paths: {
+              "/v1/tasks/{id}/stale-lock-handoff": {
+                post: {},
+              },
+            },
+          });
+        }
         const agent = { id: AGENT_ID, name: "fixture-agent", last_seen_at: "2026-07-18T00:00:00.000Z" };
         const task = {
           id: TASK_ID,
@@ -971,6 +1058,7 @@ describe("remote CLI entrypoint authority boundary", () => {
         "POST /v1/agents/fixture-agent/release",
         `POST /v1/tasks/${TASK_ID}/lock`,
         `POST /v1/tasks/${TASK_ID}/unlock`,
+        "GET /v1/openapi.json",
         `POST /v1/tasks/${TASK_ID}/stale-lock-handoff`,
         "GET /v1/tasks?status=in_progress",
         "GET /v1/activity?limit=5000",

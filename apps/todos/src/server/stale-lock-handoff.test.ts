@@ -135,6 +135,36 @@ describe("POST /v1/tasks/:id/stale-lock-handoff", () => {
     expect(history.some((entry) => entry.id === payload.receipt.receipt_id)).toBe(true);
   });
 
+  test("refreshes a same-name stale holder while preserving exact CAS and audit evidence", async () => {
+    principal.agent = HOLDER;
+    const task = createTask({ title: "same-name remote session" }, db);
+    setLock(task.id, HOLDER, STALE_LOCK_VERSION);
+    const historyBefore = await store.audit.getTaskHistory(task.id);
+
+    const response = await request(task.id, body({ new_holder: HOLDER }));
+    expect(response.status).toBe(200);
+    const payload = await response.json() as {
+      receipt: {
+        receipt_id: string;
+        previous_holder: string;
+        previous_lock_version: string;
+        new_holder: string;
+        new_lock_version: string;
+      };
+    };
+    expect(payload.receipt).toMatchObject({
+      previous_holder: HOLDER,
+      previous_lock_version: STALE_LOCK_VERSION,
+      new_holder: HOLDER,
+    });
+    expect(payload.receipt.new_lock_version).not.toBe(STALE_LOCK_VERSION);
+    expect(getTask(task.id, db)).toMatchObject({
+      locked_by: HOLDER,
+      locked_at: payload.receipt.new_lock_version,
+    });
+    expect(await store.audit.getTaskHistory(task.id)).toHaveLength(historyBefore.length + 1);
+  });
+
   test("rejects impersonation with 403 and zero mutation even for todos:write", async () => {
     const task = createTask({ title: "auth binding" }, db);
     setLock(task.id, HOLDER, STALE_LOCK_VERSION);

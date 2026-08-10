@@ -72,8 +72,11 @@ export interface CloudTaskCompletionInput {
 const completionCapabilityCache = new Map<string, Promise<ReadonlySet<string>>>();
 const retryCapabilityCache = new Map<string, Promise<boolean>>();
 const gitRefCapabilityCache = new Map<string, Promise<ReadonlySet<RemoteGitRefCapability>>>();
+const remoteCommandCapabilityCache =
+  new Map<string, Promise<ReadonlySet<TodosRemoteCommandCapability>>>();
 
 type RemoteGitRefCapability = "task-read" | "task-write" | "reverse-read";
+export type TodosRemoteCommandCapability = "stale-lock-handoff";
 
 export interface TodosRemoteAuthorityConfigStatus {
   selected: boolean;
@@ -514,6 +517,7 @@ export function resetTodosCloudClient(): void {
   retryCapabilityCache.clear();
   listTagsCapabilityCache.clear();
   gitRefCapabilityCache.clear();
+  remoteCommandCapabilityCache.clear();
 }
 
 function assertRemotePrGroupView(value: unknown, route: string): PrGroupStateView {
@@ -2247,6 +2251,48 @@ function openApiHasOperation(
     typeof (route as Record<string, unknown>)[method] === "object");
 }
 
+async function fetchTodosRemoteCommandCapabilities(
+  client: HasnaStorageClient,
+): Promise<ReadonlySet<TodosRemoteCommandCapability>> {
+  const document = await requiredRemoteRoute(client, "/v1/openapi.json", () =>
+    client.transport.get<unknown>("/openapi.json"));
+  const supported = new Set<TodosRemoteCommandCapability>();
+  if (openApiHasOperation(document, "/v1/tasks/{id}/stale-lock-handoff", "post")) {
+    supported.add("stale-lock-handoff");
+  }
+  return supported;
+}
+
+/**
+ * Commands whose remote executability depends on the deployed authority
+ * version. The result is cached per authority, never per credential.
+ */
+export async function getTodosRemoteCommandCapabilities(
+  client: HasnaStorageClient,
+): Promise<ReadonlySet<TodosRemoteCommandCapability>> {
+  const authority = remoteAuthorityBase(client);
+  let capabilities = remoteCommandCapabilityCache.get(authority);
+  if (!capabilities) {
+    capabilities = fetchTodosRemoteCommandCapabilities(client);
+    remoteCommandCapabilityCache.set(authority, capabilities);
+  }
+  return capabilities;
+}
+
+async function requireStaleLockHandoffCapability(
+  client: HasnaStorageClient,
+): Promise<void> {
+  const authority = remoteAuthorityBase(client);
+  const capabilities = await getTodosRemoteCommandCapabilities(client);
+  if (!capabilities.has("stale-lock-handoff")) {
+    throw new Error(
+      `REMOTE_STALE_LOCK_HANDOFF_UNSUPPORTED: configured Todos authority ${authority} does not advertise ` +
+        "POST /v1/tasks/{id}/stale-lock-handoff; no lock mutation was sent; deploy a compatible " +
+        "@hasna/todos /v1 server before retrying; local SQLite fallback is disabled",
+    );
+  }
+}
+
 async function fetchGitRefCapabilities(client: HasnaStorageClient): Promise<ReadonlySet<RemoteGitRefCapability>> {
   const document = await requiredRemoteRoute(client, "/v1/openapi.json", () =>
     client.transport.get<unknown>("/openapi.json"));
@@ -2435,6 +2481,7 @@ export async function cloudHandoffStaleTaskLock(
     reason: string;
   },
 ): Promise<StaleLockHandoffReceipt> {
+  await requireStaleLockHandoffCapability(client);
   const raw = await client.transport.post<unknown>(
     `/tasks/${encodeURIComponent(input.task_id)}/stale-lock-handoff`,
     {

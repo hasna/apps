@@ -7,8 +7,23 @@ import {
   initializeTodosCliAuthority,
   type TodosCliAuthorityInitialization,
 } from "./stage-a.js";
+import {
+  getTodosCloudClient,
+  getTodosRemoteCommandCapabilities,
+  type TodosRemoteCommandCapability,
+} from "./cloud-router.js";
 
 const program = new Command();
+
+function remoteMetadataRequested(args: readonly string[] = process.argv.slice(2)): boolean {
+  return args.some((arg) =>
+    arg === "--help" ||
+    arg === "-h" ||
+    arg === "help" ||
+    arg === "manual" ||
+    arg === "completions" ||
+    arg === "completion");
+}
 
 type RegisterEventsCommands = (
   program: Command,
@@ -134,6 +149,20 @@ try {
   process.exit(1);
 }
 
+let remoteCommandCapabilities: ReadonlySet<TodosRemoteCommandCapability> = new Set();
+if (authority.route !== "local" && remoteMetadataRequested()) {
+  try {
+    const client = getTodosCloudClient();
+    if (client) {
+      remoteCommandCapabilities = await getTodosRemoteCommandCapabilities(client);
+    }
+  } catch {
+    // Remote metadata fails closed: an unreachable or older authority cannot
+    // make a version-gated mutation appear executable in help or completions.
+    remoteCommandCapabilities = new Set();
+  }
+}
+
 const [
   { handleError },
   { registerTaskCommands },
@@ -233,12 +262,12 @@ registerStorageCommands(program);
 registerScaleHardeningCommands(program);
 registerPrGroupCommands(program);
 await registerOptionalEventsCommands(program);
-registerHelpCommands(program, authority.route);
+registerHelpCommands(program, authority.route, remoteCommandCapabilities);
 
 // Remote metadata describes the authority-served catalog. An admitted local
 // redaction invocation is a separate Stage-A route that pins the process to
 // local storage before the command modules above are imported.
-applyTodosCliHelpVisibility(program, authority.route);
+applyTodosCliHelpVisibility(program, authority.route, remoteCommandCapabilities);
 
 // Single top-level guard: any error thrown from an async action handler (e.g. a
 // TaskNotFoundError when a full UUID references a task absent from the local
