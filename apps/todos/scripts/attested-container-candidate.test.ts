@@ -249,10 +249,20 @@ describe("attested no-push container candidate", () => {
     );
     expect(workflow).toContain("push-to-registry: false");
     expect(workflow).toContain("--output type=oci");
-    expect(workflow).toContain("SCAN_REPORT: todos-candidate.trivy.json");
+    const scanReportConsumers = [
+      "SCAN_REPORT: todos-candidate.trivy.json",
+      "output: ${{ env.SCAN_REPORT }}",
+      '--trivy-report "${SCAN_REPORT}"',
+      "report_sha=\"$(sha256sum \"${SCAN_REPORT}\" | cut -d ' ' -f 1)\"",
+      "printf '%s  %s\\n' \"${report_sha}\" \"${SCAN_REPORT}\"",
+    ];
+    for (const consumer of scanReportConsumers) {
+      expect(workflow).toContain(consumer);
+    }
+    expect([...workflow.matchAll(/\bSCAN_REPORT\b/g)]).toHaveLength(
+      scanReportConsumers.length,
+    );
     expect(workflow).not.toContain("TRIVY_REPORT:");
-    expect(workflow).toContain("output: ${{ env.SCAN_REPORT }}");
-    expect(workflow).toContain('--trivy-report "${SCAN_REPORT}"');
     expect(workflow).toContain('test "$(git rev-parse refs/remotes/origin/main)" = "${SOURCE_SHA}"');
     expect(workflow).toContain("gh attestation verify");
     expect(workflow).toContain("tampered");
