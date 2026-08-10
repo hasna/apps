@@ -139,9 +139,19 @@ describe('knowledge-serve', () => {
     const h = buildHandler();
     const res = await h(new Request('http://x/openapi.json'));
     expect(res.status).toBe(200);
-    const spec = (await res.json()) as { paths: Record<string, unknown> };
+    const spec = (await res.json()) as {
+      paths: Record<string, any>;
+    };
     expect(Object.keys(spec.paths)).toContain('/v1/notes');
+    expect(Object.keys(spec.paths)).toContain('/v1/notes/search');
     expect(Object.keys(spec.paths)).toContain('/v1/notes/{id}');
+    expect(Object.keys(spec.paths)).toContain('/v1/guarded-writes/queries');
+    expect(
+      spec.paths['/v1/notes'].get.responses['200'].content['application/json'].schema.$ref,
+    ).toBe('#/components/schemas/NoteList');
+    expect(
+      spec.paths['/v1/notes/search'].get.responses['200'].content['application/json'].schema.$ref,
+    ).toBe('#/components/schemas/NoteSearchList');
   });
 
   test('unauthenticated /v1 requests are rejected', async () => {

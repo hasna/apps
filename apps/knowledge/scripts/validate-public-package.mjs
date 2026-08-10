@@ -21,6 +21,7 @@ const publicDocs = [
 const publicScripts = [
   'scripts/apply-cloud-migrations.mjs',
   'scripts/lib/remote-temp-dir.mjs',
+  'scripts/live-private-query.mjs',
   'scripts/smoke-machine-sync-release.mjs',
   'scripts/smoke-machines-adapter.mjs',
   'scripts/smoke-open-files-installed-boundary.mjs',

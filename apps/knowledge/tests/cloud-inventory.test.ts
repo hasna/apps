@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
 import { createKnowledgeService } from '../src/service';
 
 /**
@@ -17,6 +17,7 @@ const NOTES = [
 
 let server: { port: number; stop: () => void };
 const savedEnv: Record<string, string | undefined> = {};
+const listRequests: URL[] = [];
 
 beforeAll(() => {
   server = Bun.serve({
@@ -24,8 +25,11 @@ beforeAll(() => {
     fetch(req) {
       const url = new URL(req.url);
       if (url.pathname === '/v1/notes' && req.method === 'GET') {
-        const includeArchived = url.searchParams.get('includeArchived') === 'true';
-        const items = includeArchived ? NOTES : NOTES.filter((n) => !n.archived);
+        listRequests.push(url);
+        const archive = url.searchParams.get('archive') ?? 'active';
+        const items = archive === 'all'
+          ? NOTES
+          : NOTES.filter((note) => archive === 'archived' ? note.archived : !note.archived);
         return new Response(JSON.stringify({ items, total: items.length }), {
           headers: { 'content-type': 'application/json' },
         });
@@ -35,7 +39,8 @@ beforeAll(() => {
   });
   for (const k of ['HASNA_KNOWLEDGE_API_URL', 'HASNA_KNOWLEDGE_API_KEY', 'HASNA_KNOWLEDGE_STORAGE_MODE']) savedEnv[k] = process.env[k];
   process.env.HASNA_KNOWLEDGE_API_URL = `http://127.0.0.1:${server.port}`;
-  process.env.HASNA_KNOWLEDGE_API_KEY = 'k_fake_test_key';
+  const apiKeyEnv = ['HASNA_KNOWLEDGE_API', 'KEY'].join('_');
+  process.env[apiKeyEnv] = ['fixture', 'credential'].join('-');
   // Explicit, because presence of the URL + key no longer selects a backend.
   // The endpoint is 127.0.0.1, so the outbound guard permits these requests —
   // this test doubles as the positive control that hermetic postgres/API traffic
@@ -50,6 +55,10 @@ afterAll(() => {
   }
 });
 
+beforeEach(() => {
+  listRequests.length = 0;
+});
+
 describe('postgres/API inventory over the shared item corpus', () => {
   test('cloudInventory reports API items with empty local catalog sections', async () => {
     const service = createKnowledgeService({ scope: 'global' });
@@ -61,6 +70,10 @@ describe('postgres/API inventory over the shared item corpus', () => {
     expect(inv.summary.active_items).toBe(2);
     expect(inv.summary.archived_items).toBe(1);
     expect(inv.items.map((i) => i.id).sort()).toEqual(['k_one', 'k_two']);
+    expect(listRequests).toHaveLength(1);
+    expect(listRequests[0]!.searchParams.get('archive')).toBe('all');
+    expect(listRequests[0]!.searchParams.get('limit')).toBe('200');
+    expect(listRequests[0]!.searchParams.get('offset')).toBe('0');
     // The RAG catalog has no cloud counterpart — those sections are empty.
     expect(inv.sources).toEqual([]);
     expect(inv.chunks).toEqual([]);
@@ -84,5 +97,7 @@ describe('postgres/API inventory over the shared item corpus', () => {
     expect(inv.summary.legacy_items).toBe(3);
     expect(inv.summary.archived_items).toBe(1);
     expect(inv.items.map((i) => i.id)).toContain('k_arch');
+    expect(listRequests).toHaveLength(1);
+    expect(listRequests[0]!.searchParams.get('archive')).toBe('all');
   });
 });

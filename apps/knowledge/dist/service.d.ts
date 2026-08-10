@@ -17,7 +17,7 @@ import { type KnowledgeSyncConflict, type KnowledgeSyncConflictResolutionProposa
 import { type WikiCompileOptions } from './wiki-compiler';
 import { type StorageContract, type StorageValidationResult } from './storage-contract';
 import { type KnowledgeItem } from './store';
-import { type ItemStore, type ItemCreateInput, type ItemPatch, type ItemListResult } from './item-store';
+import { type ItemStore, type ItemCreateInput, type ItemPatch, type ItemListOptions, type ItemListResult } from './item-store';
 import { type KnowledgeConfig, type KnowledgeWorkspace } from './workspace';
 import { type KnowledgeLegacyWorkspaceMergeResult, type KnowledgeLegacyWorkspaceMigrationResult } from './workspace-migration';
 export interface KnowledgeServiceOptions {
@@ -354,6 +354,10 @@ export type KnowledgeSyncConflictResolveResult = {
     audit_event_id: string;
     message: string;
 };
+export declare class KnowledgeSemanticSearchUnavailableError extends Error {
+    readonly code = "semantic_query_unavailable";
+    constructor();
+}
 export declare class KnowledgeService {
     private readonly options;
     private ensuredWorkspace?;
@@ -371,8 +375,8 @@ export declare class KnowledgeService {
      * surface, so no path touches sqlite or the raw HTTP client directly.
      */
     itemStore(): ItemStore;
-    /** List every knowledge item (including archived) via the unified Store. */
-    listItems(): Promise<ItemListResult>;
+    /** Bounded list query via the unified Store. */
+    listItems(options?: ItemListOptions): Promise<ItemListResult>;
     /** Fetch one knowledge item by id or short id via the unified Store. */
     getItem(idOrShort: string): Promise<KnowledgeItem | null>;
     /** Create (or upsert on a caller-supplied id) an item via the unified Store. */
@@ -516,15 +520,10 @@ export declare class KnowledgeService {
     /** True when the client-flip resolves to the cloud HTTP transport. In api mode
      * the shared corpus is the cloud knowledge-items, not a local sqlite catalog. */
     private isApiMode;
+    private cloudStore;
     /** Fetch the entire shared knowledge-item corpus from the cloud (api mode). */
     private fetchCloudItems;
-    semanticSearch(options: Omit<EmbeddingSearchOptions, 'dbPath' | 'config'>): Promise<import("./embeddings").SemanticSearchResult | {
-        provider: 'openai';
-        model: string;
-        dimensions: number;
-        query: string;
-        results: import("./search").HybridSearchEntry[];
-    }>;
+    semanticSearch(options: Omit<EmbeddingSearchOptions, 'dbPath' | 'config'>): Promise<import("./embeddings").SemanticSearchResult>;
     search(options: Omit<HybridSearchOptions, 'dbPath' | 'config'>): Promise<HybridSearchResult>;
     retrieveContext(options: Omit<RetrievalOptions, 'dbPath' | 'config'>): Promise<KnowledgeContextPack>;
     contextPack(options: Omit<KnowledgeAgentContextPackOptions, 'dbPath' | 'config' | 'safetyPolicy'>): Promise<KnowledgeAgentContextPack>;

@@ -25,8 +25,23 @@ export interface NoteInput {
 export interface NoteListOptions {
     limit?: number;
     offset?: number;
-    search?: string;
-    includeArchived?: boolean;
+    /** Literal case-insensitive id/title/content filter. */
+    filter?: string;
+    /** Repeated raw tag filters; every raw filter narrows the result. */
+    tags?: string[];
+    archive?: 'active' | 'archived' | 'all';
+    sort?: 'created' | 'title';
+    direction?: 'asc' | 'desc';
+}
+export interface NoteSearchOptions {
+    query: string;
+    limit?: number;
+    offset?: number;
+    archive?: 'active' | 'archived' | 'all';
+}
+export interface NoteSearchHit {
+    item: KnowledgeItem;
+    rank: number;
 }
 /**
  * Attribution and concurrency control for a write. `actor`/`reason` are handed
@@ -86,6 +101,14 @@ export declare class NoteRepo {
     create(input: NoteInput, options?: NoteWriteOptions): Promise<KnowledgeItem>;
     list(options?: NoteListOptions, guardedTenantId?: string): Promise<{
         items: KnowledgeItem[];
+        total: number;
+    }>;
+    /**
+     * Ranked producer-side PostgreSQL full-text query. This endpoint is separate
+     * from list filtering so public list compatibility remains literal.
+     */
+    search(options: NoteSearchOptions, guardedTenantId?: string): Promise<{
+        items: NoteSearchHit[];
         total: number;
     }>;
     get(idOrShort: string, guardedTenantId?: string): Promise<KnowledgeItem | null>;

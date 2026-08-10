@@ -29,6 +29,7 @@ const publicDocs = [
 
 const publicScripts = [
   'scripts/apply-cloud-migrations.mjs',
+  'scripts/live-private-query.mjs',
   // Imported by scripts/smoke-machine-sync-release.mjs, so it must ship with it or the
   // published script fails to resolve at runtime.
   'scripts/lib/remote-temp-dir.mjs',
@@ -119,6 +120,9 @@ describe('public package release safety', () => {
     expect(rootRuntimeExports.createKnowledgePrivateTitleLookupDescriptor).toBeFunction();
     expect(declarationExportsIdentifier(rootDeclaration, 'createKnowledgePrivateTitleLookupDescriptor')).toBe(true);
     expect(declarationExportsIdentifier(guardedContractDeclaration, 'createKnowledgePrivateTitleLookupDescriptor')).toBe(true);
+    expect(rootRuntimeExports.createKnowledgePrivateQueryDescriptor).toBeFunction();
+    expect(declarationExportsIdentifier(rootDeclaration, 'createKnowledgePrivateQueryDescriptor')).toBe(true);
+    expect(declarationExportsIdentifier(guardedContractDeclaration, 'createKnowledgePrivateQueryDescriptor')).toBe(true);
     expect(rootRuntimeExports.inspectKnowledgePrivateResult).toBeFunction();
     expect(declarationExportsIdentifier(rootDeclaration, 'inspectKnowledgePrivateResult')).toBe(true);
     expect(declarationExportsIdentifier(guardedContractDeclaration, 'inspectKnowledgePrivateResult')).toBe(true);
@@ -129,6 +133,9 @@ describe('public package release safety', () => {
     expect(rootRuntimeExports.materializeKnowledgePrivateTitleLookup).toBeUndefined();
     expect(declarationExportsIdentifier(rootDeclaration, 'materializeKnowledgePrivateTitleLookup')).toBe(false);
     expect(declarationExportsIdentifier(guardedContractDeclaration, 'materializeKnowledgePrivateTitleLookup')).toBe(false);
+    expect(rootRuntimeExports.materializeKnowledgePrivateQuery).toBeUndefined();
+    expect(declarationExportsIdentifier(rootDeclaration, 'materializeKnowledgePrivateQuery')).toBe(false);
+    expect(declarationExportsIdentifier(guardedContractDeclaration, 'materializeKnowledgePrivateQuery')).toBe(false);
     expect(rootRuntimeExports.createKnowledgePrivateResultDescriptor).toBeUndefined();
     expect(declarationExportsIdentifier(rootDeclaration, 'createKnowledgePrivateResultDescriptor')).toBe(false);
     expect(declarationExportsIdentifier(guardedContractDeclaration, 'createKnowledgePrivateResultDescriptor')).toBe(false);

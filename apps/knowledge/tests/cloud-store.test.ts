@@ -102,4 +102,78 @@ describe('knowledge cloud-store resolver (postgres client flip)', () => {
     expect(store).not.toBeNull();
     expect(store!.baseUrl).toBe('https://knowledge.example.test/v1');
   });
+
+  test('list sends exactly one bounded producer request with repeated tags and uses producer total', async () => {
+    const requests: URL[] = [];
+    const server = Bun.serve({
+      port: 0,
+      hostname: '127.0.0.1',
+      fetch(request) {
+        requests.push(new URL(request.url));
+        return Response.json({ items: [], total: 7 });
+      },
+    });
+    try {
+      const store = resolveKnowledgeCloudStore({
+        NODE_ENV: 'test',
+        HASNA_KNOWLEDGE_STORAGE_MODE: 'postgres',
+        HASNA_KNOWLEDGE_API_URL: `http://127.0.0.1:${server.port}`,
+        HASNA_KNOWLEDGE_API_KEY: 'k_fake_test_key',
+      } as NodeJS.ProcessEnv)!;
+      const result = await store.list({
+        search: 'literal % query',
+        tags: ['red', 'blue,green'],
+        archive: 'all',
+        sort: 'title',
+        direction: 'desc',
+        limit: 2,
+        offset: 4,
+      });
+      expect(result).toEqual({ items: [], total: 7 });
+      expect(requests).toHaveLength(1);
+      expect(requests[0]!.pathname).toBe('/v1/notes');
+      expect(requests[0]!.searchParams.get('filter')).toBe('literal % query');
+      expect(requests[0]!.searchParams.getAll('tags')).toEqual(['red', 'blue,green']);
+      expect(requests[0]!.searchParams.get('archive')).toBe('all');
+      expect(requests[0]!.searchParams.get('sort')).toBe('title');
+      expect(requests[0]!.searchParams.get('direction')).toBe('desc');
+      expect(requests[0]!.searchParams.get('limit')).toBe('2');
+      expect(requests[0]!.searchParams.get('offset')).toBe('4');
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test('ranked search sends one producer request and requires rank plus total evidence', async () => {
+    const requests: URL[] = [];
+    const server = Bun.serve({
+      port: 0,
+      hostname: '127.0.0.1',
+      fetch(request) {
+        requests.push(new URL(request.url));
+        return Response.json({ items: [], total: 0 });
+      },
+    });
+    try {
+      const store = resolveKnowledgeCloudStore({
+        NODE_ENV: 'test',
+        HASNA_KNOWLEDGE_STORAGE_MODE: 'postgres',
+        HASNA_KNOWLEDGE_API_URL: `http://127.0.0.1:${server.port}`,
+        HASNA_KNOWLEDGE_API_KEY: 'k_fake_test_key',
+      } as NodeJS.ProcessEnv)!;
+      expect(await store.search({
+        query: 'alpha OR beta',
+        archive: 'active',
+        limit: 3,
+        offset: 6,
+      })).toEqual({ items: [], total: 0 });
+      expect(requests).toHaveLength(1);
+      expect(requests[0]!.pathname).toBe('/v1/notes/search');
+      expect(requests[0]!.searchParams.get('q')).toBe('alpha OR beta');
+      expect(requests[0]!.searchParams.get('limit')).toBe('3');
+      expect(requests[0]!.searchParams.get('offset')).toBe('6');
+    } finally {
+      server.stop(true);
+    }
+  });
 });

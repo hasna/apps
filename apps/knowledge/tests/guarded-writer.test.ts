@@ -9,10 +9,13 @@ import * as publicApi from '../src/index';
 import {
   DEFAULT_KNOWLEDGE_GUARDED_LIMITS,
   KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+  KNOWLEDGE_RELATIONS_METADATA_KEY,
+  KNOWLEDGE_RELATIONS_SCHEMA,
   KnowledgeGuardedAdoptionRejectedError,
   KnowledgeGuardedManifestConflictError,
   KnowledgeGuardedManifestStepRefusedError,
   KnowledgeGuardedOperationConflictError,
+  KnowledgePrivateQueryResponseError,
   KnowledgeGuardedWriteRejectedError,
   assertKnowledgeGuardedManifestTerminalCompleteness,
   assertKnowledgeTerminalCompleteness,
@@ -24,9 +27,11 @@ import {
   computeKnowledgeGuardedRecoveryKey,
   createKnowledgeGuardedWriter,
   createKnowledgePrivateInputDescriptor,
+  createKnowledgePrivateQueryDescriptor,
   createKnowledgePrivateTitleLookupDescriptor,
   inspectKnowledgePrivateResult,
   knowledgeGuardedDigest,
+  revokeKnowledgePrivateQueryDescriptor,
   type KnowledgeGuardedBinding,
   type KnowledgeGuardedManifestBinding,
   type KnowledgeGuardedManifestRecovery,
@@ -240,6 +245,47 @@ test('REGRESSION: guarded writer uses the supplied env endpoint and credential, 
     else process.env.HASNA_KNOWLEDGE_API_URL = savedAmbient.url;
     if (savedAmbient.key === undefined) delete process.env.HASNA_KNOWLEDGE_API_KEY;
     else process.env.HASNA_KNOWLEDGE_API_KEY = savedAmbient.key;
+  }
+});
+
+test('private query transport failures are controlled and never disclose selector material', async () => {
+  const originalFetch = globalThis.fetch;
+  const selectorMaterial = 'private-query-selector-must-not-cross-error-boundary';
+  const guarded = createKnowledgeGuardedWriter({
+    binding: BINDING,
+    env: {
+      HASNA_KNOWLEDGE_STORAGE_MODE: 'postgres',
+      HASNA_KNOWLEDGE_API_URL: 'http://127.0.0.1:65532',
+      HASNA_KNOWLEDGE_API_KEY: SUPPLIED_SENTINEL_KEY,
+    },
+  });
+  const query = createKnowledgePrivateQueryDescriptor({
+    operation_id: 'op-private-query-malformed-response',
+    step_id: 'step-private-query-malformed-response',
+    binding: BINDING,
+    selector: { kind: 'exact_title', title: selectorMaterial },
+    limit: 1,
+  });
+
+  try {
+    for (const response of [undefined, new Response('{}', {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    })]) {
+      globalThis.fetch = (async () => response as Response) as typeof fetch;
+      let caught: unknown;
+      try {
+        await guarded.query(query);
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(KnowledgePrivateQueryResponseError);
+      expect((caught as KnowledgePrivateQueryResponseError).code).toBe('private_query_response_invalid');
+      expect(String(caught)).not.toContain(selectorMaterial);
+      expect(JSON.stringify(caught)).not.toContain(selectorMaterial);
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
   }
 });
 
@@ -1516,6 +1562,330 @@ describe('FCAME-1 guarded Knowledge writer', () => {
       title,
     });
     await expect(writer().lookupTitle(ambiguous)).rejects.toThrow(/ambiguous/i);
+  });
+
+  test('private bounded queries cover every selector with archive, page, tenant, and proof privacy', async () => {
+    const baseId = 'k_private_query_base';
+    const canonicalId = 'k_private_query_canonical';
+    const successorId = 'k_private_query_successor';
+    const versionedId = 'k_private_query_versioned';
+    const archivedId = 'k_private_query_archived';
+    const duplicateTitle = 'Private bounded duplicate title';
+    const lexical = 'private bounded lexical phrase';
+    const guarded = writer();
+
+    for (const input of [
+      descriptor({
+        operation: 'op-private-query-base',
+        step: 'step-create',
+        target: baseId,
+        payload: { title: duplicateTitle, content: `${lexical} base body` },
+      }),
+      descriptor({
+        operation: 'op-private-query-canonical',
+        step: 'step-create',
+        target: canonicalId,
+        payload: { title: 'Private canonical item', content: 'canonical body' },
+      }),
+      descriptor({
+        operation: 'op-private-query-successor',
+        step: 'step-create',
+        target: successorId,
+        payload: {
+          title: duplicateTitle,
+          content: `${lexical} successor body`,
+          metadata: {
+            [KNOWLEDGE_RELATIONS_METADATA_KEY]: {
+              schema: KNOWLEDGE_RELATIONS_SCHEMA,
+              supersedes_item_id: baseId,
+              canonical_item_id: canonicalId,
+            },
+          },
+        },
+      }),
+      descriptor({
+        operation: 'op-private-query-versioned',
+        step: 'step-create',
+        target: versionedId,
+        payload: { title: 'Private version one', content: 'historical body one' },
+      }),
+      descriptor({
+        operation: 'op-private-query-archived',
+        step: 'step-create',
+        target: archivedId,
+        payload: { title: 'Private archived query item', content: 'archived body' },
+      }),
+    ]) {
+      await guarded.execute(input);
+    }
+    await guarded.execute(descriptor({
+      operation: 'op-private-query-versioned-update',
+      step: 'step-update',
+      target: versionedId,
+      verb: 'update',
+      version: 1,
+      payload: { title: 'Private version two', content: 'current body two' },
+    }));
+    await guarded.execute(descriptor({
+      operation: 'op-private-query-archive-update',
+      step: 'step-update',
+      target: archivedId,
+      verb: 'update',
+      version: 1,
+      payload: { archived: true },
+    }));
+
+    const otherTenant = 'tenant-private-query-other';
+    const otherBinding = { ...BINDING, tenant_id: otherTenant };
+    const otherEnv = {
+      ...env,
+      HASNA_KNOWLEDGE_API_KEY: mintApiKey({
+        app: 'knowledge',
+        scopes: ['knowledge:read', 'knowledge:write'],
+        tid: otherTenant,
+        signingSecret: SIGNING,
+      }).token,
+    };
+    await expect(
+      createKnowledgeGuardedWriter({ binding: otherBinding, env: otherEnv }).execute(
+        descriptor({
+        operation: 'op-private-query-other-tenant',
+        step: 'step-create',
+        target: 'k_private_query_other_tenant',
+        binding: otherBinding,
+        payload: {
+          title: 'Cross-tenant relation collision',
+          content: lexical,
+          metadata: {
+            [KNOWLEDGE_RELATIONS_METADATA_KEY]: {
+              schema: KNOWLEDGE_RELATIONS_SCHEMA,
+              supersedes_item_id: baseId,
+              canonical_item_id: canonicalId,
+            },
+          },
+        },
+        }),
+      ),
+    ).rejects.toMatchObject({
+      receipt: { code: 'relation_binding_mismatch', effect_count: 0 },
+    });
+
+    const cases = [
+      {
+        kind: 'exact_title' as const,
+        selector: { kind: 'exact_title' as const, title: duplicateTitle },
+        expectedTotal: 2,
+      },
+      {
+        kind: 'lexical_overlap' as const,
+        selector: { kind: 'lexical_overlap' as const, query: lexical },
+        expectedTotal: 2,
+      },
+      {
+        kind: 'supersession' as const,
+        selector: { kind: 'supersession' as const, supersedes_item_id: baseId },
+        expectedTotal: 1,
+      },
+      {
+        kind: 'current_version' as const,
+        selector: { kind: 'current_version' as const, item_id: versionedId },
+        expectedTotal: 1,
+      },
+      {
+        kind: 'historical_version' as const,
+        selector: { kind: 'historical_version' as const, item_id: versionedId, version: 1 },
+        expectedTotal: 1,
+      },
+      {
+        kind: 'canonical_pointer' as const,
+        selector: { kind: 'canonical_pointer' as const, canonical_item_id: canonicalId },
+        expectedTotal: 1,
+      },
+    ];
+
+    for (const [index, entry] of cases.entries()) {
+      const rawSelector = Object.values(entry.selector).slice(1).join(':');
+      const query = createKnowledgePrivateQueryDescriptor({
+        operation_id: `op-private-query-${entry.kind}`,
+        step_id: `step-query-${index}`,
+        binding: BINDING,
+        selector: entry.selector,
+        limit: entry.kind === 'exact_title' ? 1 : 2,
+      });
+      const serialized = JSON.stringify(query);
+      expect(serialized).not.toContain(rawSelector);
+      expect(serialized).not.toContain(query.descriptor_id);
+      const result = await guarded.query(query);
+      const proof = inspectKnowledgePrivateResult(result);
+      expect(proof.kind).toBe('query');
+      expect(proof.query_kind).toBe(entry.kind);
+      expect(proof.total).toBe(entry.expectedTotal);
+      expect(proof.item_count).toBeLessThanOrEqual(query.page.limit);
+      expect(JSON.stringify(result)).not.toContain(rawSelector);
+      expect(JSON.stringify(proof)).not.toContain(rawSelector);
+      expect(JSON.stringify(proof)).not.toContain(baseId);
+      expect(JSON.stringify(proof)).not.toContain(canonicalId);
+      expect(JSON.stringify(proof)).not.toContain(versionedId);
+      if (entry.kind === 'exact_title') {
+        expect(proof.page).toEqual({ limit: 1, offset: 0, returned: 1, has_more: true });
+      }
+      if (entry.kind === 'historical_version') {
+        expect((proof.items[0] as any).record_kind).toBe('historical');
+        expect(proof.items[0]!.version).toBe(1);
+      }
+      if (entry.kind === 'current_version') {
+        expect((proof.items[0] as any).record_kind).toBe('current');
+        expect(proof.items[0]!.version).toBe(2);
+      }
+    }
+
+    const activeArchived = createKnowledgePrivateQueryDescriptor({
+      operation_id: 'op-private-query-archived-active',
+      step_id: 'step-query',
+      binding: BINDING,
+      selector: { kind: 'current_version', item_id: archivedId },
+      archive: 'active',
+      limit: 2,
+    });
+    expect(inspectKnowledgePrivateResult(await guarded.query(activeArchived)).total).toBe(0);
+    const archivedOnly = createKnowledgePrivateQueryDescriptor({
+      operation_id: 'op-private-query-archived-only',
+      step_id: 'step-query',
+      binding: BINDING,
+      selector: { kind: 'current_version', item_id: archivedId },
+      archive: 'archived',
+      limit: 2,
+    });
+    expect(inspectKnowledgePrivateResult(await guarded.query(archivedOnly)).total).toBe(1);
+
+    const semantic = createKnowledgePrivateQueryDescriptor({
+      operation_id: 'op-private-query-semantic',
+      step_id: 'step-query',
+      binding: BINDING,
+      selector: { kind: 'semantic_overlap', query: 'private semantic request' },
+      limit: 2,
+    });
+    expect(inspectKnowledgePrivateResult(await guarded.query(semantic))).toMatchObject({
+      kind: 'query',
+      query_kind: 'semantic_overlap',
+      status: 'unavailable',
+      code: 'semantic_query_unavailable',
+      total: 0,
+      item_count: 0,
+    });
+  }, budget(20_000));
+
+  test('private query descriptors and envelopes fail closed on bounds, binding, expiry, revocation, tampering, and extra keys', async () => {
+    const rawTitle = 'Private query fail-closed selector';
+    const valid = createKnowledgePrivateQueryDescriptor({
+      operation_id: 'op-private-query-fail-closed',
+      step_id: 'step-query',
+      binding: BINDING,
+      selector: { kind: 'exact_title', title: rawTitle },
+      limit: 2,
+      offset: 3,
+    });
+    await expect(writer().query(valid, {
+      max_calls: 1,
+      max_items: 1,
+      max_bytes: 1_048_576,
+      wall_time_ms: 5_000,
+    })).rejects.toThrow(/page\.limit/);
+    expect(() => createKnowledgePrivateQueryDescriptor({
+      operation_id: 'op-private-query-zero',
+      step_id: 'step-query',
+      binding: BINDING,
+      selector: { kind: 'exact_title', title: rawTitle },
+      limit: 0,
+    })).toThrow(/page\.limit/);
+    expect(() => createKnowledgePrivateQueryDescriptor({
+      operation_id: 'op-private-query-max-plus-one',
+      step_id: 'step-query',
+      binding: BINDING,
+      selector: { kind: 'exact_title', title: rawTitle },
+      limit: 51,
+    })).toThrow(/page\.limit/);
+    expect(() => createKnowledgePrivateQueryDescriptor({
+      operation_id: 'op-private-query-negative-offset',
+      step_id: 'step-query',
+      binding: BINDING,
+      selector: { kind: 'exact_title', title: rawTitle },
+      offset: -1,
+    })).toThrow(/page\.offset/);
+    expect(() => createKnowledgePrivateQueryDescriptor({
+      operation_id: 'op-private-query-extra-selector-key',
+      step_id: 'step-query',
+      binding: BINDING,
+      selector: { kind: 'exact_title', title: rawTitle, extra: true } as any,
+    })).toThrow(/unexpected: extra/);
+
+    const wrongScopeWriter = createKnowledgeGuardedWriter({
+      binding: { ...BINDING, scope: 'project:wrong', parent_id: 'project:wrong' },
+      env,
+    });
+    await expect(wrongScopeWriter.query(valid)).rejects.toThrow(/binding/i);
+
+    const revoked = createKnowledgePrivateQueryDescriptor({
+      operation_id: 'op-private-query-revoked',
+      step_id: 'step-query',
+      binding: BINDING,
+      selector: { kind: 'exact_title', title: rawTitle },
+      limit: 2,
+    });
+    revokeKnowledgePrivateQueryDescriptor(revoked);
+    await expect(writer().query(revoked)).rejects.toThrow(/revoked/);
+
+    const expired = createKnowledgePrivateQueryDescriptor({
+      operation_id: 'op-private-query-expired',
+      step_id: 'step-query',
+      binding: BINDING,
+      selector: { kind: 'exact_title', title: rawTitle },
+      limit: 2,
+      expires_in_ms: 1,
+    });
+    await Bun.sleep(5);
+    await expect(writer().query(expired)).rejects.toThrow(/expired/);
+
+    const bounds = {
+      max_calls: 1,
+      max_items: 2,
+      max_bytes: 1_048_576,
+      wall_time_ms: 5_000,
+    };
+    const request = async (body: unknown) => fetch(
+      `http://127.0.0.1:${server.port}/v1/guarded-writes/queries`,
+      {
+        method: 'POST',
+        headers: {
+          'x-api-key': env.HASNA_KNOWLEDGE_API_KEY!,
+          'x-knowledge-tenant-id': BINDING.tenant_id,
+          'x-knowledge-max-calls': String(bounds.max_calls),
+          'x-knowledge-max-items': String(bounds.max_items),
+          'x-knowledge-max-bytes': String(bounds.max_bytes),
+          'x-knowledge-wall-time-ms': String(bounds.wall_time_ms),
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify(body),
+      },
+    );
+    const tampered = await request({
+      contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+      descriptor: { ...valid.toJSON(), selector_digest: '0'.repeat(64) },
+      selector: { kind: 'exact_title', title: rawTitle },
+      limits: bounds,
+    });
+    expect(tampered.status).toBe(400);
+    expect(JSON.stringify(await tampered.json())).not.toContain(rawTitle);
+
+    const extraEnvelope = await request({
+      contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+      descriptor: valid.toJSON(),
+      selector: { kind: 'exact_title', title: rawTitle },
+      limits: bounds,
+      extra: true,
+    });
+    expect(extraEnvelope.status).toBe(400);
+    expect(JSON.stringify(await extraEnvelope.json())).not.toContain(rawTitle);
   });
 
   test('same-operation replay proves one effect; changed semantics are refused', async () => {

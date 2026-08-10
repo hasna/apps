@@ -30,12 +30,25 @@ export { KNOWLEDGE_APP_SLUG };
 /** Cloud resource path served under /v1 by knowledge-serve. */
 export declare const KNOWLEDGE_RESOURCE = "notes";
 export interface KnowledgeCloudListOptions {
+    /** Literal id/title/content filter used by `knowledge list`. */
     search?: string;
-    tag?: string;
-    includeArchived?: boolean;
-    archivedOnly?: boolean;
+    tags?: string[];
+    archive?: 'active' | 'archived' | 'all';
+    sort?: 'created' | 'title';
+    direction?: 'asc' | 'desc';
     limit?: number;
     offset?: number;
+}
+export interface KnowledgeCloudSearchOptions {
+    query: string;
+    archive?: 'active' | 'archived' | 'all';
+    limit?: number;
+    offset?: number;
+}
+export interface KnowledgeCloudSearchHit {
+    item: KnowledgeItem;
+    /** Producer-computed PostgreSQL ts_rank_cd score. */
+    rank: number;
 }
 export interface KnowledgeCloudCreateInput {
     /** Optional caller-supplied stable id. Forwarded to the server, which upserts
@@ -85,7 +98,12 @@ export interface KnowledgeCloudStore {
     readonly baseUrl: string;
     list(options?: KnowledgeCloudListOptions): Promise<{
         items: KnowledgeItem[];
-        total: number | null;
+        total: number;
+    }>;
+    /** Ranked producer-side PostgreSQL full-text query. */
+    search(options: KnowledgeCloudSearchOptions): Promise<{
+        items: KnowledgeCloudSearchHit[];
+        total: number;
     }>;
     get(idOrShort: string): Promise<KnowledgeItem | null>;
     create(input: KnowledgeCloudCreateInput): Promise<KnowledgeItem>;

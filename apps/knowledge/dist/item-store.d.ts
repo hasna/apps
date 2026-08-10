@@ -35,8 +35,29 @@ export interface ItemUpdateOptions {
      */
     expectedVersion?: number;
 }
+export type ItemArchiveFilter = 'active' | 'archived' | 'all';
+export type ItemListSort = 'created' | 'title';
+export type ItemListDirection = 'asc' | 'desc';
+/**
+ * Bounded list query shared by the local and hosted transports.
+ *
+ * `search` is deliberately a literal case-insensitive match over full id,
+ * title, and content. Ranked full-text/semantic retrieval is a separate
+ * producer query and must not change the long-standing `knowledge list`
+ * compatibility contract.
+ */
+export interface ItemListOptions {
+    search?: string;
+    tags?: string[];
+    archive?: ItemArchiveFilter;
+    sort?: ItemListSort;
+    direction?: ItemListDirection;
+    limit?: number;
+    offset?: number;
+}
 export interface ItemListResult {
     items: KnowledgeItem[];
+    total: number;
     /** Whether the backing store exists (always true for the API transport). */
     exists: boolean;
 }
@@ -63,7 +84,9 @@ export interface ItemStore {
     readonly exists: boolean;
     /** Whether this transport retains entry history at all. */
     readonly supportsVersions: boolean;
-    /** Every item including archived; callers filter/sort/paginate. */
+    /** Bounded, producer-side list query. */
+    list(options?: ItemListOptions): Promise<ItemListResult>;
+    /** Every item including archived; retained only for genuine bulk operations. */
     listAll(): Promise<ItemListResult>;
     get(idOrShort: string): Promise<KnowledgeItem | null>;
     create(input: ItemCreateInput): Promise<KnowledgeItem>;

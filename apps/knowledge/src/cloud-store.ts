@@ -62,12 +62,27 @@ function transportOverrides(env: NodeJS.ProcessEnv) {
 export const KNOWLEDGE_RESOURCE = 'notes';
 
 export interface KnowledgeCloudListOptions {
+  /** Literal id/title/content filter used by `knowledge list`. */
   search?: string;
-  tag?: string;
-  includeArchived?: boolean;
-  archivedOnly?: boolean;
+  tags?: string[];
+  archive?: 'active' | 'archived' | 'all';
+  sort?: 'created' | 'title';
+  direction?: 'asc' | 'desc';
   limit?: number;
   offset?: number;
+}
+
+export interface KnowledgeCloudSearchOptions {
+  query: string;
+  archive?: 'active' | 'archived' | 'all';
+  limit?: number;
+  offset?: number;
+}
+
+export interface KnowledgeCloudSearchHit {
+  item: KnowledgeItem;
+  /** Producer-computed PostgreSQL ts_rank_cd score. */
+  rank: number;
 }
 
 export interface KnowledgeCloudCreateInput {
@@ -124,7 +139,9 @@ export class KnowledgeVersionConflictError extends Error {
 export interface KnowledgeCloudStore {
   /** `<origin>/v1` base URL the client targets. */
   readonly baseUrl: string;
-  list(options?: KnowledgeCloudListOptions): Promise<{ items: KnowledgeItem[]; total: number | null }>;
+  list(options?: KnowledgeCloudListOptions): Promise<{ items: KnowledgeItem[]; total: number }>;
+  /** Ranked producer-side PostgreSQL full-text query. */
+  search(options: KnowledgeCloudSearchOptions): Promise<{ items: KnowledgeCloudSearchHit[]; total: number }>;
   get(idOrShort: string): Promise<KnowledgeItem | null>;
   create(input: KnowledgeCloudCreateInput): Promise<KnowledgeItem>;
   update(
@@ -142,15 +159,36 @@ export interface KnowledgeCloudStore {
   getVersion(idOrShort: string, version: number): Promise<KnowledgeItemVersion | null>;
 }
 
-function toQuery(options: KnowledgeCloudListOptions): Record<string, string | number | boolean | undefined> {
-  const q: Record<string, string | number | boolean | undefined> = {};
-  if (options.search) q.search = options.search;
+function toQuery(options: KnowledgeCloudListOptions): Record<
+  string,
+  string | number | boolean | undefined | ReadonlyArray<string | number | boolean>
+> {
+  const q: Record<
+    string,
+    string | number | boolean | undefined | ReadonlyArray<string | number | boolean>
+  > = {};
+  if (options.search) q.filter = options.search;
+  if (options.tags?.length) q.tags = options.tags;
+  if (options.archive) q.archive = options.archive;
+  if (options.sort) q.sort = options.sort;
+  if (options.direction) q.direction = options.direction;
   if (options.limit !== undefined) q.limit = options.limit;
   if (options.offset !== undefined) q.offset = options.offset;
-  // The server filters archived server-side; request archived rows when either
-  // "include archived" or "archived only" is asked for, then refine below.
-  if (options.includeArchived || options.archivedOnly) q.includeArchived = true;
   return q;
+}
+
+function boundedQueryInteger(
+  value: number | undefined,
+  fallback: number,
+  field: string,
+  minimum: number,
+  maximum: number,
+): number {
+  const resolved = value ?? fallback;
+  if (!Number.isFinite(resolved) || !Number.isInteger(resolved) || resolved < minimum || resolved > maximum) {
+    throw new Error(`${field} must be an integer between ${minimum} and ${maximum}.`);
+  }
+  return resolved;
 }
 
 function wrap(client: HasnaStorageClient): KnowledgeCloudStore {
@@ -158,18 +196,45 @@ function wrap(client: HasnaStorageClient): KnowledgeCloudStore {
     baseUrl: client.baseUrl,
 
     async list(options: KnowledgeCloudListOptions = {}) {
-      // Pull enough rows to satisfy client-side tag/archived refinement; the
-      // server caps at 200 per page, so page through when needed.
-      const wantLimit = options.limit ?? 200;
-      const query = toQuery({ ...options, limit: Math.min(Math.max(wantLimit, 1), 200) });
+      const limit = boundedQueryInteger(options.limit, 200, 'limit', 1, 200);
+      const offset = boundedQueryInteger(options.offset, 0, 'offset', 0, 10_000);
+      const query = toQuery({ ...options, limit, offset });
       const res = await client.list<KnowledgeItem>(KNOWLEDGE_RESOURCE, { query });
-      let items = res.items;
-      if (options.archivedOnly) items = items.filter((x) => x.archived === true);
-      if (options.tag) {
-        const t = options.tag.toLowerCase();
-        items = items.filter((x) => (x.tags ?? []).some((tag) => tag.toLowerCase() === t));
+      if (!Number.isInteger(res.total) || Number(res.total) < 0) {
+        throw new Error('knowledge cloud list response is missing a valid producer total.');
       }
-      return { items, total: res.total };
+      return { items: res.items, total: Number(res.total) };
+    },
+
+    async search(options: KnowledgeCloudSearchOptions) {
+      const limit = boundedQueryInteger(options.limit, 20, 'limit', 1, 200);
+      const offset = boundedQueryInteger(options.offset, 0, 'offset', 0, 10_000);
+      const response = await client.transport.get<{ items: KnowledgeCloudSearchHit[]; total: number }>(
+        `/${KNOWLEDGE_RESOURCE}/search`,
+        {
+          query: {
+            q: options.query,
+            archive: options.archive ?? 'active',
+            limit,
+            offset,
+          },
+        },
+      );
+      if (
+        !Number.isInteger(response.total)
+        || response.total < 0
+        || !Array.isArray(response.items)
+        || response.items.some((hit) => (
+          !hit
+          || typeof hit !== 'object'
+          || !hit.item
+          || typeof hit.rank !== 'number'
+          || !Number.isFinite(hit.rank)
+        ))
+      ) {
+        throw new Error('knowledge cloud search response is missing producer rank or total evidence.');
+      }
+      return response;
     },
 
     async get(idOrShort: string) {
@@ -349,7 +414,7 @@ export async function fetchAllCloudItems(store: KnowledgeCloudStore): Promise<Kn
   const pageSize = 200;
   const all: KnowledgeItem[] = [];
   for (let offset = 0; ; offset += pageSize) {
-    const { items } = await store.list({ includeArchived: true, limit: pageSize, offset });
+    const { items } = await store.list({ archive: 'all', limit: pageSize, offset });
     all.push(...items);
     if (items.length < pageSize) break;
     if (offset > 100_000) break; // hard safety cap
