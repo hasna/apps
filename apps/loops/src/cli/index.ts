@@ -39,7 +39,7 @@ import {
 } from "../lib/format.js";
 import { computeNextAfter, parseDuration } from "../lib/recurrence.js";
 import { Store } from "../lib/store.js";
-import { getStore, isCloudStore, type LoopStore } from "../lib/store/index.js";
+import { CloudUnsupportedError, getStore, isCloudStore, type LoopStore } from "../lib/store/index.js";
 import { executeWorkflow, preflightWorkflow } from "../lib/workflow-runner.js";
 import { runLoopNow, tick } from "../lib/scheduler.js";
 import { daemonStatus, stopDaemon } from "../daemon/control.js";
@@ -48,7 +48,7 @@ import { enableStartup, installStartup } from "../daemon/install.js";
 import { normalizeGoalSpec } from "../lib/workflow-spec.js";
 import { runDoctor } from "../lib/doctor.js";
 import { buildHealthReport, buildHealthScan, expectationForLoop, writeHealthScanReports } from "../lib/health.js";
-import { buildHostedDoctorReport, buildHostedHealthReport } from "../lib/hosted-diagnostics.js";
+import { buildHostedDoctorReport, buildHostedHealthReport, buildHostedHealthScan } from "../lib/hosted-diagnostics.js";
 import { isPrivateOperationEventType } from "../lib/operation-contract.js";
 import { runLoopsUiApp } from "./ui.js";
 import {
@@ -2216,6 +2216,43 @@ health
   .option("--route-project-path <path>", "fallback project path for --auto-route when the finding has no cwd")
   .option("-j, --json", "print JSON for this command")
   .action(runAction(async (opts) => {
+    if (isCloudStore()) {
+      if (opts.startDaemon || opts.daemon || opts.doctor || opts.upsertTodos) {
+        throw new CloudUnsupportedError(
+          "hosted health scan only supports read-only hosted checks; daemon, doctor, and todos routing remain machine-local",
+        );
+      }
+      const store = getStore();
+      try {
+        const hosted = await buildHostedHealthScan(store, {
+          includeStatuses: parseLoopStatuses(opts.include, "--include"),
+          limit: positiveInteger(opts.limit, "--limit") ?? 200,
+          maxFindings: nonNegativeInteger(opts.maxFindings, "--max-findings") ?? 100,
+          latestRun: opts.latestRun !== false,
+          staleRunningMs: opts.staleRunningAfter
+            ? positiveDuration(opts.staleRunningAfter, "--stale-running-after")
+            : undefined,
+        });
+        const scan = writeHealthScanReports(hosted.scan, { reportDir: opts.reportDir ?? opts.evidenceDir });
+        const output = { ...scan, backend: hosted.backend, unchecked: hosted.unchecked };
+        if (opts.json || isJson()) console.log(JSON.stringify(compactHealthScanOutput(output), null, 2));
+        else {
+          console.log(
+            `health_scan backend=hosted status=${scan.status} loops=${scan.counts.loops} findings=${scan.counts.findings} ` +
+              `reported=${scan.counts.reportedFindings} truncated=${scan.counts.truncatedFindings} ` +
+              `latest=${scan.counts.latestRunFindings} stale_running=${scan.counts.staleRunning}`,
+          );
+          for (const finding of scan.findings) {
+            console.log(`${finding.severity} ${finding.kind} ${finding.fingerprint} ${finding.loop?.name ?? ""} ${finding.message}`);
+          }
+          printUnchecked(hosted.unchecked);
+        }
+        if (scan.status !== "ok") process.exitCode = scan.status === "critical" ? 2 : 1;
+      } finally {
+        await store.close();
+      }
+      return;
+    }
     assertLocalOnlyCommand("health scan");
     const store = new Store();
     try {

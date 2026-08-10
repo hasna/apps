@@ -6,7 +6,6 @@ import type { DaemonStatus } from "../daemon/control.js";
 import type { DoctorCheck, DoctorReport } from "./doctor.js";
 import { redact } from "./format.js";
 import { dataDir } from "./paths.js";
-import type { Store } from "./store.js";
 
 /**
  * The entire read surface the loop-health classifier needs: loops, and the
@@ -1143,7 +1142,7 @@ export function buildHealthReport(
   };
 }
 
-export function buildHealthScan(store: Store, opts: BuildHealthScanOptions = {}): LoopsHealthScan {
+export function buildHealthScan(store: HealthSource, opts: BuildHealthScanOptions = {}): LoopsHealthScan {
   const generatedAt = (opts.now ?? new Date()).toISOString();
   const now = opts.now ?? new Date(generatedAt);
   const includeStatuses = [...includedStatusSet(opts.includeStatuses)];

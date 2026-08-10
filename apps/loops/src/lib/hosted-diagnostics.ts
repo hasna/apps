@@ -1,12 +1,15 @@
 import type { Loop, LoopRun, LoopStatus, RunStatus } from "../types.js";
 import { isDaemonRunning } from "../daemon/control.js";
 import type { LoopStore } from "./store/index.js";
-import { ApiStore } from "./store/index.js";
+import { ApiStore, HostedResponseShapeError } from "./store/index.js";
 import {
+  buildHealthScan,
   buildHealthReport,
   RESTART_INTERRUPTED_RUN_PREFIX,
+  type BuildHealthScanOptions,
   type HealthSource,
   type LoopsHealthReport,
+  type LoopsHealthScan,
 } from "./health.js";
 import { localRuntimeChecks, type DoctorCheck, type DoctorReport } from "./doctor.js";
 import { preflightTarget } from "./executor.js";
@@ -43,6 +46,12 @@ export interface HostedHealthResult {
   backend: HostedBackend;
   report: LoopsHealthReport;
   executionTruth: HostedExecutionTruth[];
+  unchecked: UncheckedItem[];
+}
+
+export interface HostedHealthScanResult {
+  backend: HostedBackend;
+  scan: LoopsHealthScan;
   unchecked: UncheckedItem[];
 }
 
@@ -113,7 +122,8 @@ async function latestRunsFor(store: LoopStore, loopIds: string[], into: Map<stri
   for (const loopId of loopIds) {
     try {
       into.set(loopId, await store.listRuns({ loopId, limit: EXECUTION_TRUTH_RUN_LIMIT }));
-    } catch {
+    } catch (error) {
+      if (error instanceof HostedResponseShapeError) throw error;
       failed.push(loopId);
     }
   }
@@ -266,6 +276,51 @@ export async function buildHostedHealthReport(
   }
 
   return { backend: hostedBackend(store), report, executionTruth, unchecked };
+}
+
+/**
+ * Build the bounded health scan from a hosted snapshot. The classifier is
+ * shared with local SQLite through {@link HealthSource}; only snapshot
+ * population differs by transport.
+ *
+ * Failed per-loop reads remain visible in `unchecked` and degrade the scan,
+ * rather than becoming an empty history that looks like a clean fleet.
+ */
+export async function buildHostedHealthScan(
+  store: LoopStore,
+  opts: BuildHealthScanOptions = {},
+): Promise<HostedHealthScanResult> {
+  const limit = opts.limit ?? DEFAULT_LOOP_LIMIT;
+  const statuses = opts.includeStatuses?.length ? [...new Set(opts.includeStatuses)] : undefined;
+  const loops = statuses
+    ? (await Promise.all(statuses.map((status) =>
+        store.listLoops({ status, limit, includeArchived: opts.includeArchived })
+      ))).flat()
+    : await store.listLoops({ limit, includeArchived: opts.includeArchived });
+  const runs = new Map<string, LoopRun[]>();
+  const unreachable = await latestRunsFor(store, loops.map((loop) => loop.id), runs);
+  const snapshot = new HostedSnapshot(loops, runs);
+  let scan = buildHealthScan(snapshot, opts);
+
+  if (snapshot.misses.size > 0) {
+    const pending = [...snapshot.misses];
+    snapshot.misses.clear();
+    unreachable.push(...(await latestRunsFor(store, pending, runs)));
+    scan = buildHealthScan(snapshot, opts);
+  }
+
+  const unchecked: UncheckedItem[] = [];
+  for (const loopId of new Set([...unreachable, ...snapshot.misses])) {
+    unchecked.push({
+      id: `runs:${loopId}`,
+      reason: "runs for this loop could not be read from the hosted API; any check depending on them was skipped.",
+    });
+  }
+  if (unchecked.length > 0 && scan.status === "ok") {
+    scan = { ...scan, ok: false, status: "degraded" };
+  }
+
+  return { backend: hostedBackend(store), scan, unchecked };
 }
 
 /** Bounded count of runs in a status, with the cap made visible rather than implied. */

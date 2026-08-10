@@ -435,12 +435,19 @@ function clean(query: Query): Record<string, string | number | boolean> {
   return out;
 }
 
-/** Pull `key` out of an `{ ok, <key>: [...] }` list envelope, else `fallback`. */
-function pickArray<T>(raw: unknown, key: string, fallback: T[] = []): T[] {
+export class HostedResponseShapeError extends Error {
+  constructor(key: string) {
+    super(`hosted Loops API response is malformed: expected '${key}' to be an array`);
+    this.name = "HostedResponseShapeError";
+  }
+}
+
+/** Pull `key` out of an `{ ok, <key>: [...] }` list envelope, failing closed when malformed. */
+function pickArray<T>(raw: unknown, key: string): T[] {
   if (raw && typeof raw === "object" && Array.isArray((raw as Record<string, unknown>)[key])) {
     return (raw as Record<string, T[]>)[key]!;
   }
-  return fallback;
+  throw new HostedResponseShapeError(key);
 }
 
 /** Pull `key` out of an `{ ok, <key>: {...} }` object envelope, else the raw value. */
