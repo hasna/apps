@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Remote stale-lock recovery follows the deployed authority contract.** The
+  CLI advertises and invokes `stale-lock-handoff` only when the authority's
+  OpenAPI document exposes the exact route, sends no mutation to older
+  authorities, and permits a new authenticated session with the same agent name
+  to refresh an exact stale lock through holder/version CAS plus an audit
+  receipt.
+
 ## [0.15.20] - 2026-08-09
 
 ### Added

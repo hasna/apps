@@ -4,9 +4,15 @@ import { getPackageVersion } from "../lib/package-version.js";
 import {
   applyTodosCliAuthorityEnvironment,
   applyTodosCliHelpVisibility,
+  getUnavailableTodosCliRemoteMetadataCommand,
   initializeTodosCliAuthority,
   type TodosCliAuthorityInitialization,
 } from "./stage-a.js";
+import {
+  getTodosCloudClient,
+  getTodosRemoteCommandCapabilities,
+  type TodosRemoteCommandCapability,
+} from "./cloud-router.js";
 
 const program = new Command();
 
@@ -134,6 +140,21 @@ try {
   process.exit(1);
 }
 
+let remoteCommandCapabilities: ReadonlySet<TodosRemoteCommandCapability> = new Set();
+const metadataRequested = authority.route === "remote-diagnostic";
+if (authority.route !== "local" && metadataRequested) {
+  try {
+    const client = getTodosCloudClient();
+    if (client) {
+      remoteCommandCapabilities = await getTodosRemoteCommandCapabilities(client);
+    }
+  } catch {
+    // Remote metadata fails closed: an unreachable or older authority cannot
+    // make a version-gated mutation appear executable in help or completions.
+    remoteCommandCapabilities = new Set();
+  }
+}
+
 const [
   { handleError },
   { registerTaskCommands },
@@ -233,18 +254,31 @@ registerStorageCommands(program);
 registerScaleHardeningCommands(program);
 registerPrGroupCommands(program);
 await registerOptionalEventsCommands(program);
-registerHelpCommands(program, authority.route);
+registerHelpCommands(program, authority.route, remoteCommandCapabilities);
 
 // Remote metadata describes the authority-served catalog. An admitted local
 // redaction invocation is a separate Stage-A route that pins the process to
 // local storage before the command modules above are imported.
-applyTodosCliHelpVisibility(program, authority.route);
+applyTodosCliHelpVisibility(program, authority.route, remoteCommandCapabilities);
 
 // Single top-level guard: any error thrown from an async action handler (e.g. a
 // TaskNotFoundError when a full UUID references a task absent from the local
 // mirror) surfaces as a clean red message + exit(1) instead of an unhandled
 // promise-rejection stack trace.
 try {
+  if (metadataRequested) {
+    const unavailableCommand = getUnavailableTodosCliRemoteMetadataCommand(
+      authority.route,
+      remoteCommandCapabilities,
+      process.argv.slice(2),
+    );
+    if (unavailableCommand) {
+      throw new Error(
+        `REMOTE_COMMAND_UNAVAILABLE: configured Todos authority does not advertise ${unavailableCommand}; ` +
+          "help is unavailable for this command",
+      );
+    }
+  }
   await program.parseAsync();
 } catch (err) {
   handleError(err);

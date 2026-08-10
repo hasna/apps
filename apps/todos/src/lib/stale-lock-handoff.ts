@@ -122,14 +122,6 @@ export function prepareStaleLockHandoff(
       { actor, new_holder: newHolder },
     );
   }
-  if (canonicalAgentRef(expectedHolder) === canonicalAgentRef(newHolder)) {
-    throw new StaleLockHandoffError(
-      "STALE_LOCK_HANDOFF_INVALID_INPUT",
-      "new_holder must differ from expected_holder",
-      { field: "new_holder" },
-    );
-  }
-
   const operationTimestamp = options.now ?? new Date().toISOString();
   if (!CANONICAL_LOCK_VERSION_RE.test(operationTimestamp)
       || new Date(Date.parse(operationTimestamp)).toISOString() !== operationTimestamp) {

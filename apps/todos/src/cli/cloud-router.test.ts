@@ -1219,7 +1219,18 @@ describe("cloud agent + lock + deps + verification routing (identity/coordinatio
       reason: "stale exact lock",
       created_at: "2026-08-09T10:00:00.000Z",
     };
-    const calls = installFetch(() => ({ body: { receipt } }));
+    const calls = installFetch((call) => call.url.endsWith("/v1/openapi.json")
+      ? {
+          body: {
+            openapi: "3.1.0",
+            paths: {
+              "/v1/tasks/{id}/stale-lock-handoff": {
+                post: {},
+              },
+            },
+          },
+        }
+      : { body: { receipt } });
     const client = getTodosCloudClient(CLOUD_ENV)!;
     await expect(cloudHandoffStaleTaskLock(client, {
       task_id: receipt.task_id,
@@ -1229,11 +1240,13 @@ describe("cloud agent + lock + deps + verification routing (identity/coordinatio
       new_holder: receipt.new_holder,
       reason: receipt.reason,
     })).resolves.toEqual(receipt);
-    expect(calls[0]!.method).toBe("POST");
-    expect(calls[0]!.url).toBe(
+    expect(calls[0]!.method).toBe("GET");
+    expect(calls[0]!.url).toBe("https://todos.example.com/v1/openapi.json");
+    expect(calls[1]!.method).toBe("POST");
+    expect(calls[1]!.url).toBe(
       `https://todos.example.com/v1/tasks/${receipt.task_id}/stale-lock-handoff`,
     );
-    expect(calls[0]!.body).toEqual({
+    expect(calls[1]!.body).toEqual({
       expected_holder: receipt.previous_holder,
       expected_lock_version: receipt.previous_lock_version,
       stale_after_seconds: receipt.stale_after_seconds,

@@ -3,6 +3,7 @@ import { COMPLETION_SHELLS, createCliManual, generateCompletionScript, renderCli
 import { handleError } from "../helpers.js";
 import { isTodosCliCommandVisibleForRoute } from "../stage-a.js";
 import type { TodosCliAuthorityInitialization } from "../stage-a.js";
+import type { TodosRemoteCommandCapability } from "../cloud-router.js";
 
 function globalOptions(program: Command): Record<string, any> {
   const command = program as Command & { optsWithGlobals?: () => Record<string, any> };
@@ -17,6 +18,7 @@ function parseShell(value: string): CompletionShell {
 export function registerHelpCommands(
   program: Command,
   route: TodosCliAuthorityInitialization["route"] = "local",
+  remoteCapabilities: ReadonlySet<TodosRemoteCommandCapability> = new Set(),
 ) {
   program
     .command("completions")
@@ -26,7 +28,7 @@ export function registerHelpCommands(
     .action((shell: string) => {
       try {
         console.log(generateCompletionScript(program, parseShell(shell), (command) =>
-          isTodosCliCommandVisibleForRoute(command, route),
+          isTodosCliCommandVisibleForRoute(command, route, remoteCapabilities),
         ));
       } catch (error) {
         handleError(error);
@@ -42,7 +44,8 @@ export function registerHelpCommands(
       try {
         const globalOpts = globalOptions(program);
         const manual = createCliManual(program, {
-          isCommandVisible: (command) => isTodosCliCommandVisibleForRoute(command, route),
+          isCommandVisible: (command) =>
+            isTodosCliCommandVisibleForRoute(command, route, remoteCapabilities),
           localOnly: route === "local",
         });
         const format = (opts.json || globalOpts.json) ? "json" : opts.format || "markdown";

@@ -298,6 +298,60 @@ describe("PostgreSQL stale-lock handoff SQL", () => {
     ]);
   });
 
+  test("same-name recovery still refreshes locked_at through the exact PostgreSQL CAS", async () => {
+    const calls: Array<{ sql: string; values: readonly unknown[] }> = [];
+    const before = lockedTask({ locked_by: "nausicaa" });
+    const client: TodosPostgresQueryClient = {
+      async query<T>(sql: string, values: readonly unknown[] = []) {
+        calls.push({ sql, values });
+        if (!sql.includes("todos:stale-lock-handoff-atomic")) {
+          return { rows: [] as T[] };
+        }
+        return {
+          rows: [{
+            current_payload: before,
+            updated_payload: {
+              ...before,
+              locked_at: "2026-08-09T10:00:00.000Z",
+              version: 2,
+            },
+            audit_payload: { action: "stale_lock_handoff" },
+          }] as T[],
+        };
+      },
+    };
+    const adapter = createPostgresTodosStorageAdapter({ client, service: "pg-same-holder" });
+
+    const receipt = await adapter.tasks.handoffStaleLock!({
+      task_id: TASK_ID,
+      actor: "nausicaa",
+      expected_holder: "nausicaa",
+      expected_lock_version: LOCK_VERSION,
+      stale_after_seconds: 3600,
+      new_holder: "nausicaa",
+      reason: "Refresh the exact stale lock for a new session",
+    });
+
+    expect(receipt).toMatchObject({
+      previous_holder: "nausicaa",
+      previous_lock_version: LOCK_VERSION,
+      new_holder: "nausicaa",
+    });
+    expect(receipt.new_lock_version).not.toBe(LOCK_VERSION);
+    const mutation = calls.find((call) =>
+      call.sql.includes("todos:stale-lock-handoff-atomic")
+    );
+    expect(mutation?.values.slice(0, 7)).toEqual([
+      "pg-same-holder",
+      TASK_ID,
+      "nausicaa",
+      LOCK_VERSION,
+      receipt.stale_cutoff,
+      "nausicaa",
+      receipt.new_lock_version,
+    ]);
+  });
+
   test("classifies a failed CAS from the locked snapshot and returns no receipt", async () => {
     const before = lockedTask({ locked_by: "different-holder" });
     const client: TodosPostgresQueryClient = {
