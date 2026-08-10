@@ -22,7 +22,7 @@ env:
   OCI_ARCHIVE: todos-candidate.oci.tar
   OCI_LAYOUT: todos-candidate.oci-layout
   MACHINE_MANIFEST: todos-candidate.manifest.json
-  TRIVY_REPORT: todos-candidate.trivy.json
+  SCAN_REPORT: todos-candidate.trivy.json
   PRODUCT_PROJECTION_RECORD: todos-candidate.product-projection.json
   INTENT_SNAPSHOT_RECORD: todos-candidate.intent-snapshot.json
   SOURCE_CANDIDATE_RECORD: todos-candidate.verified-source-candidate.json
@@ -108,7 +108,7 @@ jobs:
         with:
           input: ${{ env.OCI_ARCHIVE }}
           format: json
-          output: ${{ env.TRIVY_REPORT }}
+          output: ${{ env.SCAN_REPORT }}
           scanners: vuln
           vuln-type: os,library
           severity: CRITICAL,HIGH
@@ -124,7 +124,7 @@ jobs:
           bun run scripts/attested-container-candidate.ts manifest \
             --oci-layout "${OCI_LAYOUT}" \
             --oci-archive "${OCI_ARCHIVE}" \
-            --trivy-report "${TRIVY_REPORT}" \
+            --trivy-report "${SCAN_REPORT}" \
             --output "${MACHINE_MANIFEST}" \
             --repository "${GITHUB_REPOSITORY}" \
             --source-sha "${SOURCE_SHA}" \
@@ -140,13 +140,13 @@ jobs:
           set -Eeuo pipefail
           archive_sha="$(sha256sum "${OCI_ARCHIVE}" | cut -d ' ' -f 1)"
           manifest_sha="$(sha256sum "${MACHINE_MANIFEST}" | cut -d ' ' -f 1)"
-          report_sha="$(sha256sum "${TRIVY_REPORT}" | cut -d ' ' -f 1)"
+          report_sha="$(sha256sum "${SCAN_REPORT}" | cut -d ' ' -f 1)"
           oci_digest="$(jq -er '.artifact.ociManifestDigest' "${MACHINE_MANIFEST}")"
           {
             printf '%s  %s\n' "${archive_sha}" "${OCI_ARCHIVE}"
             printf '%s  oci://hasna/todos@sha256:%s\n' "${oci_digest}" "${oci_digest}"
             printf '%s  %s\n' "${manifest_sha}" "${MACHINE_MANIFEST}"
-            printf '%s  %s\n' "${report_sha}" "${TRIVY_REPORT}"
+            printf '%s  %s\n' "${report_sha}" "${SCAN_REPORT}"
           } > todos-candidate.subject-checksums.txt
 
       - name: Create GitHub OIDC keyless provenance
