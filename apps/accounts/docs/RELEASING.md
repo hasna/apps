@@ -136,35 +136,40 @@ secrets, not a human approval queue.
 
 ### Independent coding-agent release review
 
-Every release requires one fixed independent adversarial coding agent. Human
-approval, a publisher's self-review, and an unsigned statement are all
-insufficient.
+Every release requires one fixed independent adversarial coding agent. For a
+Codewith release, the reviewer is one independent Codewith sub-agent. Fable is
+decision and adjudication support only: an active Codewith release receipt must
+not name Fable as the reviewer. Human approval, publisher self-review, and an
+unsigned statement are also insufficient.
 
-The trust root is versioned at `config/release-review-trust.json`, not supplied
-by workflow variables. Generation 2 pins reviewer display identity
-`Fable Accounts Release Reviewer 2026-08-10`, agent id
-`4e38a26f-cb70-4418-8bd8-84ef440fa334`, and the canonical 44-byte Ed25519 SPKI
-DER public key whose SHA-256 is
-`a2b07141ddfe888f05b21d1693a8dca5eb70a2bfda9bdec4fdcb1fb42426f104`.
-The matching private key is held only by that reviewer in the vault item
-`hasna/accounts/npm-release/reviewer-ed25519-private-key-g2-20260810`; it is
-never present in this repository, the release workflow, or the `npm-release`
-environment.
-`RELEASE_REVIEWER_AGENT` and `RELEASE_REVIEW_PUBLIC_KEY` are deliberately
-ignored and must not be configured as release authority.
+The active trust root is versioned at `config/release-review-trust.json`, not
+supplied by workflow variables. Generation 3 pins display identity
+`Sagan Accounts Release Reviewer 2026-08-10`, stable Codewith sub-agent id
+`019feba2-ca72-7301-97e1-9fd609b0bb50`, and the canonical Ed25519 SPKI DER
+public key whose SHA-256 is
+`98c824dbe600dafa01dfeb54b853ef9472a684a76b1dea4b8da3bf4d124c9215`.
+The matching private key is held only in
+`hasna/accounts/npm-release/reviewer-ed25519-private-key-g3-20260810`; it is
+never present in this repository, the workflow, or the `npm-release`
+environment. `RELEASE_REVIEWER_AGENT` and `RELEASE_REVIEW_PUBLIC_KEY` are
+deliberately ignored.
 
-The bootstrap is finite: generation 1 is accepted only for
-`@hasna/accounts@0.2.42`, with the exact Rawls identity, public key/hash, and
-vault reference `hasna/accounts/npm-release/reviewer-ed25519-private-key`.
-Generation 2 is authorized by the generation-1 Rawls key only through the signed
-rotation envelope checked into this trust document. The rotation payload binds
-the published `0.2.42` trust bytes whose SHA-256 is
-`132a999a94db2de66c14293c45638fb9a8a8d352b72067eef8b76fc064b30b46`. There is
-no flag, environment variable, or general runtime path that permits another
-generation-1 bootstrap.
+The chain remains finite and checkable. Generation 1 is accepted only for the
+published `@hasna/accounts@0.2.42` Rawls bootstrap. Generation 2 is preserved
+byte-for-byte at
+`config/release-review-trust-history/generation-2.json` (SHA-256
+`a5939127c06762926ac4a37b3b1648d826bc4d481c74a7d85d50bc5b4ee25fcd`) and
+its Rawls-authorized rotation remains verifiable history. Generation 3 is
+authorized by the generation-2 key only through the repository rotation path.
+Its signed envelope binds the exact predecessor history path, repository,
+generation, SHA-256, and every field of the generation-3 trust core. No flag,
+environment variable, or general runtime path may bootstrap or skip a
+generation.
 
-After reviewing the exact release commit, the reviewer posts one **unedited
-GitHub commit comment** on that commit. Its body is exactly this signed wrapper:
+The independent sub-agent review is an unedited GitHub pull-request comment.
+The signer validates its exact PR, comment id, stable reviewer id, exact commit
+verdict, unedited state, and body SHA-256. It then posts one **unedited GitHub
+commit comment** on the exact release commit. Its body is this signed wrapper:
 
 ```json
 {
@@ -197,11 +202,18 @@ The decoded payload has exactly these fields:
     "path": "config/release-review-trust.json",
     "revision": "<exact git blob SHA of the trust document at the release commit>"
   },
+  "reviewArtifact": {
+    "type": "github-pull-request-comment",
+    "pullRequest": 155,
+    "commentId": 5240299387,
+    "commit": "<exact 40-character release commit>",
+    "bodySha256": "<SHA-256 of the exact unedited review comment body>"
+  },
   "registry": "https://registry.npmjs.org",
   "reviewer": {
     "type": "coding-agent",
-    "agent": "Fable Accounts Release Reviewer 2026-08-10",
-    "id": "4e38a26f-cb70-4418-8bd8-84ef440fa334"
+    "agent": "Sagan Accounts Release Reviewer 2026-08-10",
+    "id": "019feba2-ca72-7301-97e1-9fd609b0bb50"
   },
   "publisher": {
     "type": "coding-agent",
@@ -215,12 +227,12 @@ The decoded payload has exactly these fields:
 }
 ```
 
-The publisher then records that exact comment ID and its own registered agent
-identity in the immutable annotated tag. The workflow fetches the comment by ID,
-requires it to belong to the tagged commit and to have never been edited,
-verifies the signature under the fixed public key, and checks every payload
-field against live package, git, workflow, trust-document, tag, and registry
-state. The reviewer agent must differ from the publisher agent.
+The publisher records the exact signed-receipt comment ID, exact `PR#comment`
+review-artifact identity, and its own registered agent identity in the immutable
+annotated tag. The workflow fetches both comments by ID, requires both to be
+unedited and bound to the same exact commit, verifies the receipt signature, and
+checks every field against live package, git, workflow, trust, tag, artifact,
+and registry state. The reviewer must differ from the publisher.
 
 Missing, stale, mismatched, edited, invalidly signed, self-reviewed, `NO_GO`, or
 non-zero P0/P1 receipts fail before deterministic packing or publication. The
@@ -232,14 +244,16 @@ so the publishing workflow cannot make its own assertion sufficient.
 Only the candidate-pinned reviewer runs the signer, from a clean checkout whose
 `HEAD` is the exact reviewed commit. The command consumes the named vault key
 without reading it in the shell and prints only the numeric GitHub commit-comment
-id. For generation 2:
+id. For generation 3:
 
 ```bash
-secrets exec hasna/accounts/npm-release/reviewer-ed25519-private-key-g2-20260810 \
+secrets exec hasna/accounts/npm-release/reviewer-ed25519-private-key-g3-20260810 \
   --as RELEASE_REVIEW_SIGNING_PRIVATE_KEY -- \
   bun run release-review:sign -- \
     --commit COMMIT_SHA \
-    --publisher-agent PUBLISHER_AGENT
+    --publisher-agent PUBLISHER_AGENT \
+    --review-artifact-pr REVIEW_PR_NUMBER \
+    --review-artifact-comment REVIEW_COMMENT_ID
 ```
 
 The signer reads `package.json`, `release.yml`, and the trust document from the
@@ -255,29 +269,31 @@ when `secrets exec` terminates the child.
 Safe provisioning verification is metadata-only:
 
 ```bash
-secrets get hasna/accounts/npm-release/reviewer-ed25519-private-key-g2-20260810 --check
+secrets get hasna/accounts/npm-release/reviewer-ed25519-private-key-g3-20260810 --check
 ```
 
 Never use `--show`, command substitution, a temporary key file, or a shell
 variable holding the key. The vault reference pattern is
 `hasna/accounts/npm-release/<purpose>`; this release uses the exact
-`reviewer-ed25519-private-key-g2-20260810` item named above.
+`reviewer-ed25519-private-key-g3-20260810` item named above.
 
 #### Rotation, revocation, and custody
 
 Unchanged trust is accepted only when the candidate trust bytes are identical
 to the trust document shipped in the prior promoted `latest` release. A changed
 document must increment `generation` exactly once and contain an Ed25519
-signature by the **prior** key over the canonical new trust payload. That
-payload binds the prior package/version/registry, the SHA-256 of its exact trust
-bytes, and every field of the new trust core.
+signature by the **prior** key. The bootstrap rotation binds the prior
+package/version/registry and exact shipped trust bytes. Later rotations bind
+the exact predecessor history path, repository, generation, SHA-256, and every
+field of the new trust core.
 
 The preflight selects the promoted `latest` SemVer below the candidate from the
 canonical npm packument; it does not accept a prior version selected only by the
 candidate or a merely staged package version. It fetches that immutable tarball,
 verifies package identity, `gitHead`, advertised SLSA provenance, and registry
-SHA-512 integrity, extracts
-the shipped trust document, and verifies the old-key rotation signature. The
+SHA-512 integrity, extracts the shipped trust document, then walks every
+committed intermediate history document in order and verifies each old-key
+rotation signature. The
 threat boundary is npm version immutability plus the prior release's completed
 provenance/registry verification; replacing both old and new keys only in a new
 candidate cannot satisfy this chain.
@@ -287,9 +303,11 @@ revocation when the old key remains trustworthy. If the old key is unavailable
 or untrustworthy, automated rotation is impossible and releases fail closed;
 there is no environment-variable or publisher-controlled recovery bootstrap.
 Private-key custody remains solely with each generation's named reviewer. The
-generation-1 Rawls key is permitted only to authorize the generation-2 rotation
-envelope, never to sign future release reviews. Public trust material and signed
-rotation envelopes are reviewed repository data and contain no secret.
+generation-1 Rawls key may authorize only generation 2, and the generation-2
+key may authorize only generation 3. Neither old key may sign an active release
+receipt. Public trust material, immutable history, and signed rotation envelopes
+contain no secret. Rollback restores the archived exact generation-2 document
+and its matching signer custody; it does not rewrite generation history.
 
 ### npm trusted publisher
 
@@ -536,13 +554,15 @@ root, so a release cannot silently accept a changed live trust document.
    post the signed, unedited commit-comment receipt described above. Record the
    returned numeric comment ID.
 3. From that reviewed commit on `main`, create and push the annotated tag. The
-   tag must carry exactly one review-comment trailer and exactly one publishing
-   agent trailer:
+   tag must carry exactly one signed-receipt comment trailer, exactly one
+   independent-review artifact trailer, and exactly one publishing-agent
+   trailer:
 
    ```sh
    git tag -a npm/accounts/vX.Y.Z COMMIT_SHA \
      -m "Release @hasna/accounts X.Y.Z" \
      -m "Release-Review-Comment: COMMENT_ID" \
+     -m "Release-Review-Artifact: REVIEW_PR_NUMBER#REVIEW_COMMENT_ID" \
      -m "Agent: PUBLISHER_AGENT"
    git push origin npm/accounts/vX.Y.Z
    ```

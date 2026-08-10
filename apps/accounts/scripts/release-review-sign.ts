@@ -6,9 +6,9 @@ import {
   createPublicKey,
   sign,
 } from "node:crypto";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import {
   RELEASE_REVIEW_PAYLOAD_SCHEMA,
   RELEASE_REVIEW_RECEIPT_SCHEMA,
@@ -16,12 +16,16 @@ import {
   RELEASE_REVIEW_TRUST_PATH,
   RELEASE_WORKFLOW,
   buildReleaseReviewPayload,
+  buildReleaseReviewTrustPredecessorRotationPayload,
   buildReleaseReviewTrustRotationPayload,
   parseReleaseReviewTrust,
+  releaseReviewArtifactBodySha256,
+  releaseReviewTrustHistoryPath,
   releaseTag,
   repositorySlug,
   resolveReleaseReviewTrust,
   verifyReleaseReviewReceipt,
+  verifyReleaseReviewArtifact,
   verifyReleaseReviewTrustChain,
   type ReleaseReviewExpectation,
   type ReleaseReviewTrust,
@@ -35,7 +39,7 @@ type SignerExpectation = Omit<ReleaseReviewExpectation, "commentId">;
 type TrustRotationOptions = {
   root: string;
   signingSecret: string;
-  previousVersion: string;
+  previousVersion?: string;
   previousTrustBytes: Uint8Array;
   reviewerAgent: string;
   reviewerId: string;
@@ -162,12 +166,34 @@ export function rotateReleaseReviewTrustDocument(options: TrustRotationOptions):
       secretRef: options.signerSecretRef,
     },
   };
-  const payload = buildReleaseReviewTrustRotationPayload(nextTrustCore, {
-    package: "@hasna/accounts",
-    version: options.previousVersion,
-    registry: REGISTRY,
-    trustSha256: createHash("sha256").update(previousTrustBytes).digest("hex"),
-  });
+  const historyPath = previousTrust.generation > 1
+    ? releaseReviewTrustHistoryPath(previousTrust.generation)
+    : undefined;
+  if (historyPath) {
+    const absoluteHistoryPath = resolve(options.root, historyPath);
+    mkdirSync(dirname(absoluteHistoryPath), { recursive: true });
+    if (existsSync(absoluteHistoryPath)) {
+      check(
+        readFileSync(absoluteHistoryPath).equals(previousTrustBytes),
+        `${historyPath} must preserve the exact predecessor trust bytes`,
+      );
+    } else {
+      writeFileSync(absoluteHistoryPath, previousTrustBytes, { flag: "wx", mode: 0o644 });
+    }
+  }
+  const payload = historyPath
+    ? buildReleaseReviewTrustPredecessorRotationPayload(nextTrustCore, {
+        repository: previousTrust.repository,
+        path: historyPath,
+        generation: previousTrust.generation,
+        trustSha256: createHash("sha256").update(previousTrustBytes).digest("hex"),
+      })
+    : buildReleaseReviewTrustRotationPayload(nextTrustCore, {
+        package: "@hasna/accounts",
+        version: semver(options.previousVersion ?? "", "previous release version"),
+        registry: REGISTRY,
+        trustSha256: createHash("sha256").update(previousTrustBytes).digest("hex"),
+      });
   const payloadBytes = Buffer.from(JSON.stringify(payload));
   const nextTrust = parseReleaseReviewTrust({
     ...nextTrustCore,
@@ -182,11 +208,35 @@ export function rotateReleaseReviewTrustDocument(options: TrustRotationOptions):
   const nextTrustBytes = Buffer.from(releaseReviewTrustDocument(nextTrust));
   const verifiedTrust = verifyReleaseReviewTrustChain(
     nextTrustBytes,
-    options.previousVersion,
-    { version: options.previousVersion, trustBytes: previousTrustBytes },
+    options.previousVersion ?? "0.0.0",
+    { version: options.previousVersion ?? "0.0.0", trustBytes: previousTrustBytes },
+    historyPath ? [{ path: historyPath, trustBytes: previousTrustBytes }] : [],
   );
   writeFileSync(resolve(options.root, RELEASE_REVIEW_TRUST_PATH), nextTrustBytes);
   return verifiedTrust;
+}
+
+function positiveInteger(value: string, label: string): number {
+  check(value.match(/^[1-9][0-9]*$/), `${label} must be a positive integer`);
+  const parsed = Number(value);
+  check(Number.isSafeInteger(parsed), `${label} exceeds the safe integer range`);
+  return parsed;
+}
+
+function reviewArtifactComment(root: string, repository: string, commentId: number): unknown {
+  const output = command(root, "gh", [
+    "api",
+    `repos/${repository}/issues/comments/${commentId}`,
+  ]);
+  try {
+    return JSON.parse(output) as unknown;
+  } catch (error) {
+    throw new Error(
+      `GitHub review artifact response is invalid JSON: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
 }
 
 async function defaultPostComment(
@@ -294,10 +344,13 @@ async function main(): Promise<void> {
   );
   if (args.includes("--rotate-trust")) {
     const previousTrustRef = exactCommit(option(args, "--previous-trust-ref"), "previous trust ref");
-    const previousVersion = semver(option(args, "--previous-version"), "previous release version");
     const previousTrustBytes = Buffer.from(
       command(root, "git", ["show", `${previousTrustRef}:${RELEASE_REVIEW_TRUST_PATH}`]),
     );
+    const previousTrust = parseReleaseReviewTrust(previousTrustBytes);
+    const previousVersion = previousTrust.generation === 1
+      ? semver(option(args, "--previous-version"), "previous release version")
+      : undefined;
     const trust = rotateReleaseReviewTrustDocument({
       root,
       signingSecret,
@@ -314,6 +367,14 @@ async function main(): Promise<void> {
   }
   const commit = exactCommit(option(args, "--commit"), "review commit");
   const publisherAgent = option(args, "--publisher-agent");
+  const reviewArtifactPullRequest = positiveInteger(
+    option(args, "--review-artifact-pr"),
+    "review artifact pull request",
+  );
+  const reviewArtifactCommentId = positiveInteger(
+    option(args, "--review-artifact-comment"),
+    "review artifact comment",
+  );
   check(
     command(root, "git", ["rev-parse", "HEAD"]).trim() === commit,
     "review signer checkout HEAD must equal --commit",
@@ -333,13 +394,28 @@ async function main(): Promise<void> {
   check(manifest.name === "@hasna/accounts", "review signer package must be @hasna/accounts");
   check(manifest.publishConfig?.registry === REGISTRY, "review signer registry disagrees");
   const resolvedTrust = await resolveReleaseReviewTrust(root, manifest, commit);
+  const repository = repositorySlug(manifest);
+  const artifactComment = reviewArtifactComment(root, repository, reviewArtifactCommentId);
+  const reviewArtifact = {
+    type: "github-pull-request-comment" as const,
+    pullRequest: reviewArtifactPullRequest,
+    commentId: reviewArtifactCommentId,
+    commit,
+    bodySha256: releaseReviewArtifactBodySha256(artifactComment),
+  };
+  verifyReleaseReviewArtifact(
+    artifactComment,
+    repository,
+    reviewArtifact,
+    resolvedTrust.trust.reviewer.id,
+  );
   const workflowRevision = exactCommit(
     command(root, "git", ["rev-parse", `${commit}:${RELEASE_WORKFLOW}`]).trim(),
     "release workflow revision",
   );
   const commentId = await postReleaseReviewReceipt({
     expectation: {
-      repository: repositorySlug(manifest),
+      repository,
       commit,
       packageName: manifest.name,
       version: manifest.version,
@@ -352,6 +428,7 @@ async function main(): Promise<void> {
       reviewerAgent: resolvedTrust.trust.reviewer.agent,
       reviewerAgentId: resolvedTrust.trust.reviewer.id,
       publisherAgent,
+      reviewArtifact,
     },
     trust: resolvedTrust.trust,
     env: { [PRIVATE_KEY_ENV]: signingSecret },

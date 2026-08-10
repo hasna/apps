@@ -10,8 +10,10 @@ import {
   RELEASE_REVIEW_PAYLOAD_SCHEMA,
   RELEASE_REVIEW_RECEIPT_SCHEMA,
   RELEASE_REVIEW_SIGNING_SECRET_REF,
+  RELEASE_REVIEW_TRUST_HISTORY_DIRECTORY,
   RELEASE_REVIEW_TRUST_PATH,
   buildReleaseReviewPayload,
+  buildReleaseReviewTrustPredecessorRotationPayload,
   buildReleaseReviewTrustRotationPayload,
   parseReleaseReviewTrust,
   verifyReleaseReviewReceipt,
@@ -34,8 +36,21 @@ const generationTwoPublicKey =
 const generationTwoPublicKeySha256 = createHash("sha256")
   .update(Buffer.from(generationTwoPublicKey, "base64"))
   .digest("hex");
+const generationTwoTrustHistoryPath =
+  "config/release-review-trust-history/generation-2.json";
+const generationTwoTrustSha256 =
+  "a5939127c06762926ac4a37b3b1648d826bc4d481c74a7d85d50bc5b4ee25fcd";
+const generationThreeReviewerId = "019feba2-ca72-7301-97e1-9fd609b0bb50";
+const generationThreeReviewerAgent = "Sagan Accounts Release Reviewer 2026-08-10";
+const generationThreeSigningSecretRef =
+  "hasna/accounts/npm-release/reviewer-ed25519-private-key-g3-20260810";
+const generationThreePublicKey =
+  "MCowBQYDK2VwAyEAyyNvq/+eREX4XVrcYnErgScxAqBGclPVUjACstGb0HA=";
+const generationThreePublicKeySha256 =
+  "98c824dbe600dafa01dfeb54b853ef9472a684a76b1dea4b8da3bf4d124c9215";
 const oldKey = generateKeyPairSync("ed25519");
 const nextKey = generateKeyPairSync("ed25519");
+const generationThreeKey = generateKeyPairSync("ed25519");
 const attackerKey = generateKeyPairSync("ed25519");
 
 function publicKeyValue(key = oldKey.publicKey): string {
@@ -108,6 +123,39 @@ function rotatedTrustBytes(signingKey = oldKey.privateKey): Buffer {
   });
 }
 
+function generationThreeTrustBytes(signingKey = nextKey.privateKey): Buffer {
+  const core = {
+    ...trustCore(
+      3,
+      generationThreeKey.publicKey,
+      {
+        type: "coding-agent",
+        agent: generationThreeReviewerAgent,
+        id: generationThreeReviewerId,
+      },
+    ),
+    signer: { secretRef: generationThreeSigningSecretRef },
+  };
+  const predecessor = rotatedTrustBytes();
+  const payload = buildReleaseReviewTrustPredecessorRotationPayload(core, {
+    repository: "hasna/accounts",
+    path: generationTwoTrustHistoryPath,
+    generation: 2,
+    trustSha256: createHash("sha256").update(predecessor).digest("hex"),
+  });
+  const payloadBytes = Buffer.from(JSON.stringify(payload));
+  return trustBytes({
+    ...core,
+    rotation: {
+      payload: payloadBytes.toString("base64"),
+      signature: {
+        algorithm: "ed25519",
+        value: sign(null, payloadBytes, signingKey).toString("base64"),
+      },
+    },
+  });
+}
+
 const expectation: ReleaseReviewExpectation = {
   commentId: 42,
   repository: "hasna/accounts",
@@ -123,6 +171,13 @@ const expectation: ReleaseReviewExpectation = {
   reviewerAgent: "Rawls",
   reviewerAgentId: reviewerId,
   publisherAgent: "cato-npm-release-rule-0809",
+  reviewArtifact: {
+    type: "github-pull-request-comment",
+    pullRequest: 155,
+    commentId: 5_240_299_387,
+    commit: "0123456789abcdef0123456789abcdef01234567",
+    bodySha256: "c84261ecd9a51f5e79bc8108c30189b7d4e393420c8563479cd18740380a3b73",
+  },
 };
 
 function signedComment(
@@ -162,39 +217,54 @@ test("preserves the finite generation-one Rawls bootstrap and rejects a generic 
     .toThrow("generation 1 bootstrap");
 });
 
-test("repository trust document rotates to generation two Fable reviewer under the published 0.2.42 trust root", () => {
+test("repository trust chain preserves generation two and activates generation three Sagan", () => {
   const candidateTrustBytes = readFileSync(
     new URL("../config/release-review-trust.json", import.meta.url),
   );
-  const trust = verifyReleaseReviewTrustChain(candidateTrustBytes, "0.2.43", {
+  const generationTwoTrustBytes = readFileSync(
+    new URL("../config/release-review-trust-history/generation-2.json", import.meta.url),
+  );
+  expect(createHash("sha256").update(generationTwoTrustBytes).digest("hex"))
+    .toBe(generationTwoTrustSha256);
+  const historical = verifyReleaseReviewTrustChain(generationTwoTrustBytes, "0.2.43", {
     version: RELEASE_REVIEW_BOOTSTRAP_VERSION,
     trustBytes: pinnedBootstrapBytes,
   });
-  expect(trust.generation).toBe(2);
-  expect(trust.reviewer).toEqual({
+  expect(historical.generation).toBe(2);
+  expect(historical.reviewer).toEqual({
     type: "coding-agent",
     agent: generationTwoReviewerAgent,
     id: generationTwoReviewerId,
   });
+  const trust = verifyReleaseReviewTrustChain(candidateTrustBytes, "0.2.43", {
+    version: RELEASE_REVIEW_BOOTSTRAP_VERSION,
+    trustBytes: pinnedBootstrapBytes,
+  }, [{ path: generationTwoTrustHistoryPath, trustBytes: generationTwoTrustBytes }]);
+  expect(trust.generation).toBe(3);
+  expect(trust.reviewer).toEqual({
+    type: "coding-agent",
+    agent: generationThreeReviewerAgent,
+    id: generationThreeReviewerId,
+  });
   expect(trust.publicKey).toEqual({
     algorithm: "ed25519",
     encoding: "base64-spki-der",
-    value: generationTwoPublicKey,
-    sha256: generationTwoPublicKeySha256,
+    value: generationThreePublicKey,
+    sha256: generationThreePublicKeySha256,
   });
-  expect(trust.signer.secretRef).toBe(generationTwoSigningSecretRef);
+  expect(trust.signer.secretRef).toBe(generationThreeSigningSecretRef);
   const payload = JSON.parse(
     Buffer.from(trust.rotation?.payload ?? "", "base64").toString("utf8"),
   );
-  expect(payload.previousRelease).toEqual({
-    package: "@hasna/accounts",
-    version: RELEASE_REVIEW_BOOTSTRAP_VERSION,
-    registry: "https://registry.npmjs.org",
-    trustSha256: createHash("sha256").update(pinnedBootstrapBytes).digest("hex"),
+  expect(payload.previousTrust).toEqual({
+    repository: "hasna/accounts",
+    path: generationTwoTrustHistoryPath,
+    generation: 2,
+    trustSha256: generationTwoTrustSha256,
   });
   expect(payload.nextTrust).toEqual({
     schema: "hasna.release-review-trust/v1",
-    generation: 2,
+    generation: 3,
     repository: "hasna/accounts",
     reviewer: trust.reviewer,
     publicKey: trust.publicKey,
@@ -202,11 +272,38 @@ test("repository trust document rotates to generation two Fable reviewer under t
   });
 });
 
+test("generation-three transition requires the exact generation-two predecessor and signature", () => {
+  const generationTwo = rotatedTrustBytes();
+  const generationThree = generationThreeTrustBytes();
+  expect(() => verifyReleaseReviewTrustChain(generationThree, "0.2.43", {
+    version: RELEASE_REVIEW_BOOTSTRAP_VERSION,
+    trustBytes: bootstrapBytes,
+  }, [{ path: generationTwoTrustHistoryPath, trustBytes: generationTwo }])).not.toThrow();
+
+  const substitutedGenerationTwo = rotatedTrustBytes(attackerKey.privateKey);
+  expect(() => verifyReleaseReviewTrustChain(generationThree, "0.2.43", {
+    version: RELEASE_REVIEW_BOOTSTRAP_VERSION,
+    trustBytes: bootstrapBytes,
+  }, [{ path: generationTwoTrustHistoryPath, trustBytes: substitutedGenerationTwo }]))
+    .toThrow();
+  expect(() => verifyReleaseReviewTrustChain(
+    generationThreeTrustBytes(oldKey.privateKey),
+    "0.2.43",
+    { version: RELEASE_REVIEW_BOOTSTRAP_VERSION, trustBytes: bootstrapBytes },
+    [{ path: generationTwoTrustHistoryPath, trustBytes: generationTwo }],
+  )).toThrow("prior trust root");
+  expect(() => verifyReleaseReviewTrustChain(generationThree, "0.2.43", {
+    version: RELEASE_REVIEW_BOOTSTRAP_VERSION,
+    trustBytes: bootstrapBytes,
+  })).toThrow("generation-2 history");
+});
+
 test("publishes the trust document and exposes the finite reviewer signer command", () => {
   const manifest = JSON.parse(
     readFileSync(new URL("../package.json", import.meta.url), "utf8"),
   );
   expect(manifest.files).toContain(RELEASE_REVIEW_TRUST_PATH);
+  expect(manifest.files).toContain(RELEASE_REVIEW_TRUST_HISTORY_DIRECTORY);
   expect(manifest.scripts["release-review:sign"])
     .toBe("bun run scripts/release-review-sign.ts");
 });
@@ -249,6 +346,32 @@ test("repo-owned signer writes generation-two rotation using only the prior trus
   }
 });
 
+test("generation-two key may authorize generation three but cannot sign an active release receipt", async () => {
+  const generationTwo = rotatedTrustBytes();
+  const generationThree = generationThreeTrustBytes();
+  const activeTrust = verifyReleaseReviewTrustChain(
+    generationThree,
+    "0.2.43",
+    { version: RELEASE_REVIEW_BOOTSTRAP_VERSION, trustBytes: bootstrapBytes },
+    [{ path: generationTwoTrustHistoryPath, trustBytes: generationTwo }],
+  );
+  const generationThreeExpectation = {
+    ...expectation,
+    reviewerAgent: generationThreeReviewerAgent,
+    reviewerAgentId: generationThreeReviewerId,
+  };
+  await expect(postReleaseReviewReceipt({
+    expectation: generationThreeExpectation,
+    trust: activeTrust,
+    env: {
+      RELEASE_REVIEW_SIGNING_PRIVATE_KEY: nextKey.privateKey
+        .export({ format: "pem", type: "pkcs8" })
+        .toString(),
+    },
+    postComment: async () => signedComment(),
+  })).rejects.toThrow("does not match the pinned public key");
+});
+
 test("rejects substituted prior roots and unauthorized rotation", () => {
   const substitutedPrior = trustBytes({
     ...trustCore(1, attackerKey.publicKey),
@@ -257,7 +380,7 @@ test("rejects substituted prior roots and unauthorized rotation", () => {
   expect(() => verifyReleaseReviewTrustChain(rotatedTrustBytes(), "0.2.43", {
     version: RELEASE_REVIEW_BOOTSTRAP_VERSION,
     trustBytes: substitutedPrior,
-  })).toThrow("prior release trust");
+  })).toThrow("exact predecessor trust bytes");
   expect(() => verifyReleaseReviewTrustChain(
     rotatedTrustBytes(nextKey.privateKey),
     "0.2.43",
