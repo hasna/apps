@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import { resolve } from "node:path";
 import type { DbAdapter, SqliteAdapter } from "../storage.js";
-import { getMementosPackageVersion } from "../lib/package-version.js";
 import type {
   Project,
   ProjectAuthorityIdentity,
@@ -44,6 +43,7 @@ import {
   type MementosProjectRegistrationRecord,
   type MementosProjectRegistrationRequest,
 } from "./types.js";
+import { buildMementosProjectRegistrationCapability } from "./identity.js";
 
 const WORKSPACE_ID_PATTERN = /^wks_[A-Za-z0-9][A-Za-z0-9_-]{11,}$/;
 const OPERATION_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/;
@@ -1050,27 +1050,7 @@ implements MementosProjectRegistrationAuthority {
   ) {
     this.now = options.now ?? (() => new Date().toISOString());
     this.faultInjector = options.faultInjector;
-    this.capabilityValue = {
-      authority: "mementos",
-      route: MEMENTOS_PROJECT_REGISTRATION_ROUTE,
-      package_version: options.packageVersion ?? getMementosPackageVersion(),
-      authority_id: options.authorityId ?? "mementos",
-      tenant_id: options.tenantId ?? "default",
-      corpus_id: options.corpusId ?? "default",
-      supported_resources: ["project"],
-      conditional_create: true,
-      immutable_receipts: true,
-      exact_terminal_lookup: true,
-      exact_readback: true,
-      conditional_inverse: true,
-      ambiguous_outcome_reconciliation: true,
-      guarded_update: true,
-      guarded_update_route: MEMENTOS_PROJECT_GUARDED_UPDATE_ROUTE,
-      no_write_dry_run: true,
-      expected_revision_compare_and_swap: true,
-      caller_idempotency: true,
-      exact_inverse_rollback: true,
-    };
+    this.capabilityValue = buildMementosProjectRegistrationCapability(options);
   }
 
   private fault(

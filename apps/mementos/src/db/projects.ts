@@ -13,6 +13,7 @@ import { getDatabase, now, uuid } from "./database.js";
 import { isApiMode, apiJson } from "./api-mode.js";
 import { getMementosPackageVersion } from "../lib/package-version.js";
 import { MEMENTOS_PROJECT_GUARDED_UPDATE_ROUTE } from "../project-registration/types.js";
+import { resolveMementosProjectAuthorityIdentity } from "../project-registration/identity.js";
 
 function parseProjectRow(row: Record<string, unknown>): Project {
   return {
@@ -57,11 +58,8 @@ export class ProjectGuardedUpdateError extends Error {
   }
 }
 
-const PROJECT_UPDATE_AUTHORITY: ProjectAuthorityIdentity = {
-  authority_id: "mementos",
-  tenant_id: "default",
-  corpus_id: "default",
-};
+const PROJECT_UPDATE_AUTHORITY: ProjectAuthorityIdentity =
+  resolveMementosProjectAuthorityIdentity();
 const BOUNDED_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/;
 
 function canonicalizeProjectUpdateValue(value: unknown): unknown {

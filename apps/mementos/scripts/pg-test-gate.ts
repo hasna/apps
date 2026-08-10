@@ -19,8 +19,13 @@
  * printed, in full or in part.
  */
 import { createHash } from "node:crypto";
-import { PgAdapterAsync } from "../src/storage.js";
+import { PgAdapter, PgAdapterAsync } from "../src/storage.js";
 import { applyPgMigrations } from "../src/db/pg-migrate.js";
+import {
+  getMementosProjectResourceExact,
+  readAllMementosProjectResources,
+  readMementosProjectResourcePage,
+} from "../src/project-registration/project-resources.js";
 
 const ENV_VAR = "MEMENTOS_TEST_DATABASE_URL";
 
@@ -41,6 +46,10 @@ const pg = new PgAdapterAsync(connectionString);
 const probeSuffix = crypto.randomUUID();
 const agentId = crypto.randomUUID();
 const memoryId = crypto.randomUUID();
+const projectId = crypto.randomUUID();
+const knowledgeId = crypto.randomUUID();
+const sessionJobId = crypto.randomUUID();
+const laterMemoryId = crypto.randomUUID();
 const probeKey = `pg-test-gate-${probeSuffix}`;
 const probeValue = `pg-test-gate value ${probeSuffix}`;
 let checks = 0;
@@ -116,13 +125,149 @@ try {
   }
   checks++;
 
+  // 5. The public producer population must use the same storage-neutral SQL
+  //    path on PostgreSQL as SQLite: project + disjoint knowledge/memory
+  //    partitions + session job, exact readback, later-child inclusion, and a
+  //    revision-bound cursor that refuses a changed collection.
+  await pg.run(
+    "INSERT INTO projects (id, name, path) VALUES ($1, $2, $3)",
+    projectId,
+    `pg-producer-project-${probeSuffix}`,
+    `/pg-producer/${probeSuffix}`,
+  );
+  await pg.run(
+    `INSERT INTO memories (id, key, value, category, scope, importance, source, status, project_id)
+     VALUES ($1, $2, $3, 'knowledge', 'private', 5, 'system', 'active', $4)`,
+    knowledgeId,
+    `pg-producer-knowledge-${probeSuffix}`,
+    "knowledge",
+    projectId,
+  );
+  await pg.run(
+    `INSERT INTO memories (id, key, value, category, scope, importance, source, status, project_id)
+     VALUES ($1, $2, $3, 'history', 'private', 5, 'system', 'active', $4)`,
+    memoryId,
+    probeKey,
+    probeValue,
+    projectId,
+  );
+  await pg.run(
+    `INSERT INTO session_memory_jobs (id, session_id, project_id, source, status, transcript)
+     VALUES ($1, $2, $3, 'manual', 'pending', $4)`,
+    sessionJobId,
+    `pg-producer-session-${probeSuffix}`,
+    projectId,
+    "session transcript",
+  );
+
+  const syncPg = new PgAdapter(connectionString);
+  try {
+    const firstPage = readMementosProjectResourcePage(
+      projectId,
+      { limit: 1 },
+      syncPg,
+      {
+        authorityId: "mementos-pg-test",
+        tenantId: "tenant-pg-test",
+        corpusId: "corpus-pg-test",
+      },
+    );
+    const complete = readAllMementosProjectResources(
+      projectId,
+      { page_size: 1 },
+      syncPg,
+      {
+        authorityId: "mementos-pg-test",
+        tenantId: "tenant-pg-test",
+        corpusId: "corpus-pg-test",
+      },
+    );
+    const stableKeys = complete.resources.map(
+      (resource) => `${resource.resource_kind}:${resource.stable_id}`,
+    );
+    if (
+      complete.total !== 4
+      || complete.count !== 4
+      || new Set(stableKeys).size !== 4
+      || complete.has_more
+      || complete.next_cursor !== null
+    ) {
+      fail("PostgreSQL project-resource traversal was incomplete or duplicated");
+    }
+    const exact = getMementosProjectResourceExact(
+      projectId,
+      "memory",
+      memoryId,
+      syncPg,
+      {
+        authorityId: "mementos-pg-test",
+        tenantId: "tenant-pg-test",
+        corpusId: "corpus-pg-test",
+      },
+    );
+    if (exact.resource.stable_id !== memoryId) {
+      fail("PostgreSQL project-resource exact readback changed the stable ID");
+    }
+
+    await pg.run(
+      `INSERT INTO memories (id, key, value, category, scope, importance, source, status, project_id)
+       VALUES ($1, $2, $3, 'fact', 'private', 5, 'system', 'active', $4)`,
+      laterMemoryId,
+      `pg-producer-later-${probeSuffix}`,
+      "later",
+      projectId,
+    );
+    const later = readAllMementosProjectResources(
+      projectId,
+      { page_size: 1 },
+      syncPg,
+      {
+        authorityId: "mementos-pg-test",
+        tenantId: "tenant-pg-test",
+        corpusId: "corpus-pg-test",
+      },
+    );
+    if (
+      later.total !== 5
+      || !later.resources.some((resource) => resource.stable_id === laterMemoryId)
+    ) {
+      fail("PostgreSQL fresh traversal omitted the later explicit project child");
+    }
+    let changedCursorRefused = false;
+    try {
+      readMementosProjectResourcePage(
+        projectId,
+        { limit: 1, cursor: firstPage.next_cursor },
+        syncPg,
+        {
+          authorityId: "mementos-pg-test",
+          tenantId: "tenant-pg-test",
+          corpusId: "corpus-pg-test",
+        },
+      );
+    } catch (error) {
+      changedCursorRefused = error instanceof Error
+        && /collection changed/i.test(error.message);
+    }
+    if (!changedCursorRefused) {
+      fail("PostgreSQL revision-bound cursor did not refuse a changed collection");
+    }
+  } finally {
+    syncPg.close();
+  }
+  checks++;
+
   console.log(
-    `[pg-test-gate] PASS: ${checks} live PostgreSQL checks (schema, round-trip, delete, audit-value-hash)`
+    `[pg-test-gate] PASS: ${checks} live PostgreSQL checks (schema, round-trip, delete, audit-value-hash, project-resources)`
   );
 } catch (error) {
   fail(error instanceof Error ? error.message : String(error));
 } finally {
   await pg.run("DELETE FROM memories WHERE id = $1", memoryId).catch(() => {});
+  await pg.run("DELETE FROM memories WHERE id = $1", knowledgeId).catch(() => {});
+  await pg.run("DELETE FROM memories WHERE id = $1", laterMemoryId).catch(() => {});
+  await pg.run("DELETE FROM session_memory_jobs WHERE id = $1", sessionJobId).catch(() => {});
+  await pg.run("DELETE FROM projects WHERE id = $1", projectId).catch(() => {});
   await pg.run("DELETE FROM agents WHERE id = $1", agentId).catch(() => {});
   await pg.close();
 }

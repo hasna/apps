@@ -16,6 +16,7 @@ import {
   previewMemoryProjectLink,
   rollbackMemoryProjectLink,
 } from "../../db/memory-project-link.js";
+import { resolveMementosProjectAuthorityIdentity } from "../../project-registration/index.js";
 import { getProject } from "../../db/projects.js";
 import { getAgent } from "../../db/agents.js";
 import { parseDuration } from "../../lib/duration.js";
@@ -70,9 +71,7 @@ export function registerCrudCommands(program: Command): void {
             throw new Error("Receipt lookup cannot be combined with link, rollback, or dry-run options");
           }
           const receipt = getMemoryProjectLinkReceipt(memoryId, lookupReceipt, {
-            authority_id: "mementos",
-            tenant_id: "default",
-            corpus_id: "default",
+            ...resolveMementosProjectAuthorityIdentity(),
           });
           if (globalOpts.json) outputJson(receipt);
           else {
@@ -101,9 +100,7 @@ export function registerCrudCommands(program: Command): void {
         }
 
         const common = {
-          authority_id: "mementos" as const,
-          tenant_id: "default" as const,
-          corpus_id: "default" as const,
+          ...resolveMementosProjectAuthorityIdentity(),
           operation_id: (opts.operationId as string | undefined) ?? idempotencyKey,
           step_id: (opts.stepId as string | undefined)
             ?? (rollbackReceipt

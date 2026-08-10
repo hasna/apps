@@ -145,6 +145,71 @@ export interface Project {
   updated_at: string;
 }
 
+export type MementosProjectResourceKind =
+  | "project"
+  | "knowledge"
+  | "memory"
+  | "session";
+
+export interface MementosProjectResourceAuthority {
+  authority: "mementos";
+  authority_id: string;
+  tenant_id: string;
+  corpus_id: string;
+  package_version: string;
+}
+
+export interface MementosProjectResource {
+  authority: "mementos";
+  source_package: "@hasna/mementos";
+  project_id: string;
+  resource_kind: MementosProjectResourceKind;
+  stable_id: string;
+  revision: string;
+  digest: string;
+  membership: "project_aggregate" | "explicit_project_id_or_focus";
+}
+
+export interface MementosProjectResourcePage {
+  schema: "mementos.project-resources.v1";
+  authority: MementosProjectResourceAuthority;
+  project_id: string;
+  project_revision: string;
+  collection_revision: string;
+  resource_kinds: MementosProjectResourceKind[];
+  resources: MementosProjectResource[];
+  count: number;
+  total: number;
+  limit: number;
+  cursor: string | null;
+  next_cursor: string | null;
+  has_more: boolean;
+  complete: true;
+  truncated: false;
+}
+
+export interface MementosProjectResourceExactResult {
+  schema: "mementos.project-resource.v1";
+  authority: MementosProjectResourceAuthority;
+  project_id: string;
+  project_revision: string;
+  collection_revision: string;
+  resource: MementosProjectResource;
+  complete: true;
+  truncated: false;
+}
+
+export interface ListMementosProjectResourcesOptions {
+  limit?: number;
+  cursor?: string;
+  resource_kinds?: MementosProjectResourceKind[];
+}
+
+export interface ListAllMementosProjectResourcesOptions {
+  page_size?: number;
+  resource_kinds?: MementosProjectResourceKind[];
+}
+
 export interface UpdateProjectInput {
   name?: string;
   path?: string;
@@ -819,6 +884,96 @@ export class MementosClient {
 
   getProject(idOrName: string): Promise<Project> {
     return this.get(`/api/projects/${encodeURIComponent(idOrName)}`);
+  }
+
+  listProjectResources(
+    projectId: string,
+    options: ListMementosProjectResourcesOptions = {},
+  ): Promise<MementosProjectResourcePage> {
+    return this.get(`/api/projects/${encodeURIComponent(projectId)}/resources`, {
+      limit: options.limit,
+      cursor: options.cursor,
+      resource_kinds: options.resource_kinds?.join(","),
+    });
+  }
+
+  async listAllProjectResources(
+    projectId: string,
+    options: ListAllMementosProjectResourcesOptions = {},
+  ): Promise<MementosProjectResourcePage> {
+    const pageSize = options.page_size ?? 100;
+    let cursor: string | undefined;
+    let first: MementosProjectResourcePage | undefined;
+    const resources: MementosProjectResource[] = [];
+    const seen = new Set<string>();
+
+    do {
+      const page = await this.listProjectResources(projectId, {
+        limit: pageSize,
+        cursor,
+        resource_kinds: options.resource_kinds,
+      });
+      if (!first) first = page;
+      if (
+        page.project_id !== projectId
+        || page.collection_revision !== first.collection_revision
+        || page.total !== first.total
+        || JSON.stringify(page.resource_kinds) !== JSON.stringify(first.resource_kinds)
+      ) {
+        throw new MementosError(
+          `Project resource collection changed during complete traversal for ${projectId}`,
+          409,
+        );
+      }
+      for (const resource of page.resources) {
+        const key = `${resource.resource_kind}:${resource.stable_id}`;
+        if (seen.has(key)) {
+          throw new MementosError(
+            `Project resource traversal returned duplicate stable ID ${key}`,
+            502,
+          );
+        }
+        seen.add(key);
+        resources.push(resource);
+      }
+      if (page.has_more && !page.next_cursor) {
+        throw new MementosError(
+          `Project resource page for ${projectId} claimed more results without a cursor`,
+          502,
+        );
+      }
+      cursor = page.next_cursor ?? undefined;
+    } while (cursor);
+
+    if (!first || resources.length !== first.total) {
+      throw new MementosError(
+        `Project resource traversal for ${projectId} was incomplete`,
+        502,
+        { returned: resources.length, expected: first?.total },
+      );
+    }
+    return {
+      ...first,
+      resources,
+      count: resources.length,
+      total: resources.length,
+      limit: pageSize,
+      cursor: null,
+      next_cursor: null,
+      has_more: false,
+      complete: true,
+      truncated: false,
+    };
+  }
+
+  getProjectResource(
+    projectId: string,
+    resourceKind: MementosProjectResourceKind,
+    stableId: string,
+  ): Promise<MementosProjectResourceExactResult> {
+    return this.get(
+      `/api/projects/${encodeURIComponent(projectId)}/resources/${encodeURIComponent(resourceKind)}/${encodeURIComponent(stableId)}`,
+    );
   }
 
   async updateProject(

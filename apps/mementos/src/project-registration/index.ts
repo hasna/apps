@@ -22,6 +22,22 @@ export {
   hasMementosProjectReferences,
   mementosProjectReferenceCounts,
 } from "./project-references.js";
+export {
+  buildMementosProjectRegistrationCapability,
+  MEMENTOS_PROJECT_AUTHORITY_ENV,
+  resolveMementosProjectAuthorityIdentity,
+} from "./identity.js";
+export {
+  MementosProjectResourceError,
+  getMementosProjectResourceExact,
+  readAllMementosProjectResources,
+  readMementosProjectResourcePage,
+} from "./project-resources.js";
+export type {
+  MementosProjectResourceErrorCode,
+  ReadAllMementosProjectResourcesOptions,
+  ReadMementosProjectResourcePageOptions,
+} from "./project-resources.js";
 export type {
   MementosProjectReferenceCounts,
   MementosProjectReferenceKey,
@@ -31,6 +47,8 @@ export {
   MEMENTOS_PROJECT_REGISTRATION_ROUTE,
   MEMENTOS_PROJECT_REGISTRATION_SCHEMA_VERSION,
   MEMENTOS_PROJECT_GUARDED_UPDATE_ROUTE,
+  MEMENTOS_PROJECT_RESOURCE_KINDS,
+  MEMENTOS_PROJECT_RESOURCE_ROUTE,
   MementosProjectRegistrationError,
 } from "./types.js";
 export type {
@@ -58,4 +76,9 @@ export type {
   MementosProjectRegistrationRequest,
   MementosProjectRegistrationResourceKind,
   MementosProjectRegistrationResponseControl,
+  MementosProjectResource,
+  MementosProjectResourceAuthority,
+  MementosProjectResourceExactResult,
+  MementosProjectResourceKind,
+  MementosProjectResourcePage,
 } from "./types.js";

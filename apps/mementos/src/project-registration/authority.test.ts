@@ -187,6 +187,11 @@ describe("package-owned Mementos project registration authority", () => {
       expected_revision_compare_and_swap: true,
       caller_idempotency: true,
       exact_inverse_rollback: true,
+      project_resource_enumeration: true,
+      project_resource_route: "mementos.project-resources.v1",
+      project_resource_kinds: ["project", "knowledge", "memory", "session"],
+      stable_keyset_pagination: true,
+      explicit_membership_only: true,
     });
     expect(typeof guardedAuthority.guardedUpdateProject).toBe("function");
     expect(typeof guardedAuthority.getGuardedProjectUpdateReceipt).toBe("function");

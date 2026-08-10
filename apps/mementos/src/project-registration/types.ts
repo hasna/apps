@@ -3,6 +3,16 @@ export const MEMENTOS_PROJECT_REGISTRATION_CALLER_ROUTE = "projects.full-registr
 export const MEMENTOS_PROJECT_REGISTRATION_SCHEMA_VERSION = 1 as const;
 export const MEMENTOS_PROJECT_GUARDED_UPDATE_ROUTE =
   "mementos.project-guarded-update.v1" as const;
+export const MEMENTOS_PROJECT_RESOURCE_ROUTE =
+  "mementos.project-resources.v1" as const;
+export const MEMENTOS_PROJECT_RESOURCE_KINDS = [
+  "project",
+  "knowledge",
+  "memory",
+  "session",
+] as const;
+export type MementosProjectResourceKind =
+  (typeof MEMENTOS_PROJECT_RESOURCE_KINDS)[number];
 
 export type MementosProjectRegistrationResourceKind = "project";
 export type MementosProjectRegistrationDirection = "forward" | "inverse";
@@ -44,6 +54,59 @@ export interface MementosProjectRegistrationCapability {
   expected_revision_compare_and_swap: true;
   caller_idempotency: true;
   exact_inverse_rollback: true;
+  project_resource_enumeration: true;
+  project_resource_route: typeof MEMENTOS_PROJECT_RESOURCE_ROUTE;
+  project_resource_kinds: ["project", "knowledge", "memory", "session"];
+  stable_keyset_pagination: true;
+  explicit_membership_only: true;
+}
+
+export interface MementosProjectResourceAuthority {
+  authority: "mementos";
+  authority_id: string;
+  tenant_id: string;
+  corpus_id: string;
+  package_version: string;
+}
+
+export interface MementosProjectResource {
+  authority: "mementos";
+  source_package: "@hasna/mementos";
+  project_id: string;
+  resource_kind: MementosProjectResourceKind;
+  stable_id: string;
+  revision: string;
+  digest: string;
+  membership: "project_aggregate" | "explicit_project_id_or_focus";
+}
+
+export interface MementosProjectResourcePage {
+  schema: typeof MEMENTOS_PROJECT_RESOURCE_ROUTE;
+  authority: MementosProjectResourceAuthority;
+  project_id: string;
+  project_revision: string;
+  collection_revision: string;
+  resource_kinds: MementosProjectResourceKind[];
+  resources: MementosProjectResource[];
+  count: number;
+  total: number;
+  limit: number;
+  cursor: string | null;
+  next_cursor: string | null;
+  has_more: boolean;
+  complete: true;
+  truncated: false;
+}
+
+export interface MementosProjectResourceExactResult {
+  schema: "mementos.project-resource.v1";
+  authority: MementosProjectResourceAuthority;
+  project_id: string;
+  project_revision: string;
+  collection_revision: string;
+  resource: MementosProjectResource;
+  complete: true;
+  truncated: false;
 }
 
 export interface MementosProjectRegistrationReceipt {

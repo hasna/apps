@@ -18,6 +18,7 @@ import { getDatabase, now } from "./database.js";
 import { parseMemoryRow } from "./memories.js";
 import { getMementosPackageVersion } from "../lib/package-version.js";
 import { MEMENTOS_MEMORY_PROJECT_LINK_ROUTE } from "../memory-project-link/schema.js";
+import { resolveMementosProjectAuthorityIdentity } from "../project-registration/identity.js";
 
 export type MemoryProjectLinkErrorCode =
   | "MEMORY_PROJECT_LINK_INVALID_INPUT"
@@ -43,11 +44,8 @@ export class MemoryProjectLinkError extends Error {
   }
 }
 
-const LINK_AUTHORITY: ProjectAuthorityIdentity = {
-  authority_id: "mementos",
-  tenant_id: "default",
-  corpus_id: "default",
-};
+const LINK_AUTHORITY: ProjectAuthorityIdentity =
+  resolveMementosProjectAuthorityIdentity();
 const BOUNDED_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/;
 
 function canonicalize(value: unknown): unknown {
