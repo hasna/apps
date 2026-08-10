@@ -6,6 +6,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.125]
+
+### Changed
+
+- Reissue the already-reviewed production verifier release through a
+  publication source that preserves immutable registry `gitHead` provenance
+  after npm 10.9.8 silently omitted it from linked-worktree publication
+  0.1.124.
+
 ## [0.1.124]
 
 ### Fixed
