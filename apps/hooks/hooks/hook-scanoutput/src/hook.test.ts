@@ -4,6 +4,8 @@ import {
   buildHookOutput,
   extractToolOutputText,
   formatWarning,
+  MAX_SCAN_BYTES,
+  SCAN_TIMEOUT_MS,
   type ScanFn,
   type ScanOutcome,
 } from "./hook";
@@ -145,6 +147,20 @@ describe("hook-scanoutput / analyzeToolOutput", () => {
     const outcome = analyzeToolOutput("", fakeScanner());
     expect(outcome.status).toBe("empty");
     expect(formatWarning(outcome)).toBe("");
+  });
+
+  test("bounds the scan explicitly, because it sits on a tool call's critical path", () => {
+    // The Claude installer target writes no `timeout` into settings.json, so the
+    // wiring supplies no outer bound and the scanner's own default is 10s.
+    let seen: { maxBytes?: number; timeoutMs?: number } | undefined;
+    const spy: ScanFn = (opts) => {
+      seen = opts;
+      return fakeScanner()(opts);
+    };
+    analyzeToolOutput("x", spy);
+    expect(seen?.maxBytes).toBe(MAX_SCAN_BYTES);
+    expect(seen?.timeoutMs).toBe(SCAN_TIMEOUT_MS);
+    expect(SCAN_TIMEOUT_MS).toBeLessThan(10_000);
   });
 
   test("FAIL-OPEN: a scanner that throws degrades to a reported error, never a crash", () => {
