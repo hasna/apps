@@ -102,6 +102,7 @@ import {
   divergentAuditHistoryReplayError,
   forbiddenAuditHistoryTombstoneError,
 } from "./audit-history-import.js";
+import { deterministicUuid } from "../task-manifest/canonical.js";
 
 type RemoteObjectType = TodosPostgresSyncRecordType | "comments" | "dependencies" | "verifications" | "commits" | "refs" | "template_tasks" | "plan_project_link_receipts" | "plan_project_link_rollback_receipts";
 
@@ -2391,7 +2392,10 @@ async function addGitRef(
       left.created_at.localeCompare(right.created_at) || left.id.localeCompare(right.id))[0];
   const timestamp = new Date().toISOString();
   const gitRef: TodosTaskGitRefRecord = {
-    id: existing?.id ?? randomUUID(),
+    // Concurrent writers can both observe no existing stable-key row. Derive
+    // the same fallback identity so the store's primary-key ON CONFLICT is the
+    // atomic convergence point instead of allowing two random object IDs.
+    id: existing?.id ?? deterministicUuid("todos:git-ref:v1", input.task_id, input.ref_type, input.name),
     task_id: input.task_id,
     ref_type: input.ref_type,
     name: input.name,
