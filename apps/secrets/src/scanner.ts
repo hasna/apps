@@ -804,7 +804,29 @@ export function scanInputExposures(options: InputExposureScanOptions = {}): Expo
       recordSkip(result, STDIN_LABEL, "max_file_bytes", read.bytes);
       return finalizeResult(result);
     }
-    payload = read.buffer as Buffer;
+    // Zero bytes off stdin is "could not look", not "looked and it was clean".
+    //
+    // This is the ONE payload source that cannot tell the two apart. A stdin
+    // redirected from /dev/null, a closed descriptor, a producer that exited
+    // before writing, and a hook wired to the wrong stream all return an
+    // identical successful read of zero bytes with no error. Nothing later in
+    // this function can recover the distinction, so the gate has to refuse.
+    //
+    // A named file and an inlined buffer/text are deliberately NOT covered:
+    // both carry positive evidence that a real unit was read — statSync plus
+    // readFileSync succeeded on an identified path, or the caller affirmatively
+    // supplied the value — so an empty one is a true clean and keeps exit 0.
+    //
+    // Note the return happens BEFORE filesScanned is set, so this case reports
+    // filesScanned 0 rather than claiming a unit that produced no bytes.
+    if (read.buffer === undefined || read.buffer.length === 0) {
+      pushError(
+        result,
+        "Read 0 bytes from standard input: nothing was scanned. Pipe the text in, or name a file.",
+      );
+      return finalizeResult(result);
+    }
+    payload = read.buffer;
   }
 
   // An inlined buffer/text can also exceed the bound; the same refusal applies

@@ -768,6 +768,14 @@ switch (command) {
         // blocking read would hang. That is the refusal code rather than the
         // usage code on purpose: a caller keying on 2 to mean "unverified" is
         // then correct without having to parse the message.
+        //
+        // This check is a courtesy for an interactive human — it swaps a hang
+        // for a usage message — and it is NOT the guard against an unscanned
+        // pass. isTTY discriminates human from non-human; the question that
+        // matters is connected from empty, and isTTY is false in agent
+        // sessions, hooks, CI and cron, i.e. every context this mode targets.
+        // The real guard is in scanInputExposures: zero bytes off stdin raises
+        // an error and so exits 2.
         const readsStdin = root === undefined || root === "-";
         if (readsStdin && process.stdin.isTTY) {
           console.error("secrets scan input reads stdin: pipe the text in, or name a file.");

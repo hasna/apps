@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { scanInputExposures } from "../src/scanner.js";
+import { scanInputExposures, stagedScanExitCode } from "../src/scanner.js";
 
 const rootDir = join(import.meta.dir, "..");
 
@@ -206,12 +206,83 @@ describe("secrets scan input — CLI gate", () => {
     expect(result.stdout).toBe("");
   });
 
-  it("exits 0 with a zero byte count on empty stdin", () => {
+  // REVERSED DELIBERATELY. This assertion read `exitCode).toBe(0)` and was a
+  // specified contract that contradicted the mode's own docstring, "2 means
+  // could not look, never looked and it was clean". It is updated rather than
+  // deleted so the reversal is visible in the diff.
+  //
+  // Zero bytes off stdin cannot be distinguished from a stdin that was never
+  // connected — /dev/null, a closed descriptor and a dead producer all read as
+  // a successful zero-byte read — so the gate refuses. filesScanned must be 0
+  // here: the old result claimed one unit scanned while reading nothing, which
+  // satisfied a caller sanity-checking filesScanned >= 1.
+  it("exits 2 on empty stdin, and claims no scanned unit", () => {
     const result = runScan(["input", "--json"], "");
+    const parsed = JSON.parse(result.stdout);
+
+    expect(result.exitCode).toBe(2);
+    expect(parsed.findingCount).toBe(0);
+    expect(parsed.stats.bytesScanned).toBe(0);
+    expect(parsed.stats.filesScanned).toBe(0);
+    expect(parsed.stats.errors.length).toBeGreaterThan(0);
+    expect(parsed.stats.errors[0]).toContain("0 bytes");
+  });
+
+  // The explicit `-` path resolves to the same stdin read and must refuse
+  // identically; it was one of the three shapes measured returning 0.
+  it("exits 2 on empty stdin given explicitly as -", () => {
+    const result = runScan(["input", "-", "--json"], "");
+    const parsed = JSON.parse(result.stdout);
+
+    expect(result.exitCode).toBe(2);
+    expect(parsed.stats.filesScanned).toBe(0);
+    expect(parsed.stats.bytesScanned).toBe(0);
+  });
+
+  // THE BOUNDARY, and it is the half that must NOT move. An empty FILE was
+  // successfully opened, stat'd and read; we have positive evidence that a real
+  // identified unit was examined and contained nothing. That is a true clean,
+  // so it keeps exit 0 — and filesScanned 1 is accurate, because the unit is a
+  // file that was read rather than a byte that was found. Staged mode counts an
+  // empty blob the same way.
+  it("exits 0 on a genuinely empty FILE, which was read and is truly clean", () => {
+    const emptyPath = join(testDir, "empty.txt");
+    writeFileSync(emptyPath, "");
+
+    const result = runScan(["input", emptyPath, "--json"]);
     const parsed = JSON.parse(result.stdout);
 
     expect(result.exitCode).toBe(0);
     expect(parsed.findingCount).toBe(0);
     expect(parsed.stats.bytesScanned).toBe(0);
+    expect(parsed.stats.filesScanned).toBe(1);
+    expect(parsed.stats.errors).toEqual([]);
+  });
+
+  // Same reasoning on the library surface: passing `text: ""` is the caller
+  // affirmatively supplying a value, which the API distinguishes from supplying
+  // nothing by the presence of the option. Not the indistinguishable case.
+  it("exits 0 for inlined empty text and empty buffer on the library surface", () => {
+    for (const options of [{ text: "" }, { buffer: Buffer.alloc(0) }]) {
+      const result = scanInputExposures(options);
+
+      expect(result.findingCount).toBe(0);
+      expect(result.stats.bytesScanned).toBe(0);
+      expect(result.stats.filesScanned).toBe(1);
+      expect(result.stats.errors).toEqual([]);
+      expect(stagedScanExitCode(result)).toBe(0);
+    }
+  });
+
+  // Positive control on the refusal: the same mode still returns 0 on a clean
+  // NON-empty stdin, so the 2 above is attributable to emptiness and not to the
+  // gate having been broken into always refusing.
+  it("still exits 0 on clean non-empty stdin, so the refusal is not blanket", () => {
+    const result = runScan(["input", "--json"], "clean output\n");
+    const parsed = JSON.parse(result.stdout);
+
+    expect(result.exitCode).toBe(0);
+    expect(parsed.stats.bytesScanned).toBeGreaterThan(0);
+    expect(parsed.stats.filesScanned).toBe(1);
   });
 });
