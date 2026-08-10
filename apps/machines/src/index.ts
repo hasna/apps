@@ -158,6 +158,7 @@ export {
   diffApps,
   getAppsStatus,
   listApps,
+  validateAppsCandidate,
 } from "./commands/apps.js";
 export type { RunAppsInstallOptions } from "./commands/apps.js";
 export {

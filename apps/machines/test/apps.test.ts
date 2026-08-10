@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { buildAppsPlan, diffApps, getAppsStatus, listApps, runAppsInstall } from "../src/commands/apps.js";
+import { buildAppsPlan, diffApps, getAppsStatus, listApps, runAppsInstall, runAppsPlan, validateAppsCandidate } from "../src/commands/apps.js";
 import { manifestAdd, manifestInit } from "../src/commands/manifest.js";
 import type { MachineCommandRunner } from "../src/remote.js";
+import { exactBunCandidate, exactBunFixtureSource, exactBunTargetFixtures, writeExactBunCandidate } from "./fixtures/exact-bun.js";
 
 describe("apps", () => {
   afterEach(() => {
@@ -450,5 +451,355 @@ describe("apps", () => {
     expect(() => runAppsInstall("remote-mac", { apply: true, yes: true, expectedPlanDigest: approvedPlan.planDigest }, runner))
       .toThrow("Approved plan digest");
     expect(calls).toEqual([]);
+  });
+
+  test("validates, plans, and carries an exact candidate source only through runner stdin", () => {
+    const dir = mkdtempSync(join(tmpdir(), "machines-apps-exact-candidate-"));
+    const manifestPath = join(dir, "candidate.json");
+    process.env["HASNA_MACHINES_MANIFEST_PATH"] = manifestPath;
+    writeExactBunCandidate(manifestPath);
+
+    expect(validateAppsCandidate("station-exact", { manifestPath })).toMatchObject({
+      schema: "machines.apps.validation.v1",
+      valid: true,
+      machineId: "station-exact",
+      platform: "linux",
+      packageCount: 2,
+      errors: [],
+    });
+    const plan = buildAppsPlan("station-exact", { manifestPath });
+    expect("schema" in plan && plan.schema).toBe("machines.apps.plan.v2");
+    if (!("schema" in plan)) throw new Error("expected exact plan");
+    expect(plan.steps.map((step) => step.package.selector)).toEqual([
+      "@hasnaxyz/infinity@1.0.12",
+      "@hasnaxyz/factory@0.6.9",
+    ]);
+    const planJson = JSON.stringify(plan);
+    expect(planJson).not.toContain("private-user");
+    expect(planJson).not.toContain("/private/home");
+    expect(planJson).not.toContain("must-not-escape");
+    expect(planJson).not.toContain('"command"');
+    expect(planJson).not.toContain("publish-token");
+
+    let sourceLoads = 0;
+    let stdin: string | Buffer | undefined;
+    let command = "";
+    const probes = plan.steps.map((step) => ({
+      schema: "machines.bun_package_probe.v1",
+      package: step.package.name,
+      expectedVersion: step.package.version,
+      observedVersion: step.package.version,
+      installed: true,
+      checks: {
+        packageJson: { ok: true, version: step.package.version },
+        registryProvenance: { ok: true, integrity: step.package.registryIntegrity, lockSource: "registry" },
+        sdkImport: { ok: true },
+        cliHelp: { ok: true, bin: step.package.bin, exitCode: 0 },
+      },
+      status: "pass",
+      reasonCodes: [],
+    }));
+    const runner: MachineCommandRunner = (machineId, value, options) => {
+      command = value;
+      stdin = options?.stdin;
+      return {
+        machineId,
+        source: "ssh",
+        stdout: JSON.stringify({
+          schema: "machines.exact_bun_transaction_result.v1",
+          machineId,
+          platform: "linux",
+          state: "COMMITTED",
+          executed: 2,
+          probes,
+          reasonCodes: [],
+        }),
+        stderr: "",
+        exitCode: 0,
+      };
+    };
+    const applied = runAppsPlan(plan, {
+      apply: true,
+      yes: true,
+      manifestPath,
+      expectedPlanDigest: plan.planDigest,
+      sourceLoader: () => { sourceLoads += 1; return exactBunFixtureSource; },
+      bootstrapSourceLoader: () => Buffer.from("// reviewed bootstrap fixture\n"),
+    }, runner);
+    expect("state" in applied && applied.state).toBe("COMMITTED");
+    expect(sourceLoads).toBe(1);
+    expect(stdin).toBeInstanceOf(Buffer);
+    expect(String(stdin)).toContain(exactBunFixtureSource.toString("base64"));
+    expect(String(stdin)).toContain("reviewed bootstrap fixture");
+    expect(command).toEndWith("/bin/bun' run -");
+    expect(command).not.toContain("apps exact-bun-");
+    expect(command).not.toContain(exactBunFixtureSource.toString("base64"));
+    expect(JSON.stringify(applied)).not.toContain("/private/home");
+  });
+
+  test("applies a proven installed-state replan as a zero-step no-op", () => {
+    const dir = mkdtempSync(join(tmpdir(), "machines-apps-exact-installed-state-"));
+    const manifestPath = join(dir, "candidate.json");
+    process.env["HASNA_MACHINES_MANIFEST_PATH"] = manifestPath;
+    writeExactBunCandidate(manifestPath);
+
+    const initial = buildAppsPlan("station-exact", { manifestPath });
+    if (!("schema" in initial)) throw new Error("expected exact plan");
+    const installedState = {
+      schema: "machines.apps.status.v2" as const,
+      machineId: initial.machineId,
+      platform: initial.platform,
+      source: "ssh" as const,
+      packages: initial.steps.map((step) => ({
+        schema: "machines.bun_package_probe.v1" as const,
+        package: step.package.name,
+        expectedVersion: step.package.version,
+        observedVersion: step.package.version,
+        installed: true as const,
+        checks: {
+          packageJson: { ok: true as const, version: step.package.version },
+          registryProvenance: { ok: true as const, integrity: step.package.registryIntegrity, lockSource: "registry" as const },
+          sdkImport: { ok: true as const },
+          cliHelp: { ok: true as const, bin: step.package.bin, exitCode: 0 as const },
+        },
+        status: "pass" as const,
+        reasonCodes: [] as [],
+      })),
+      status: "pass" as const,
+      reasonCodes: [],
+    };
+
+    const noOp = buildAppsPlan("station-exact", { manifestPath, installedState });
+    if (!("schema" in noOp)) throw new Error("expected exact plan");
+    expect(noOp.steps).toEqual([]);
+    expect(noOp.probes).toHaveLength(2);
+
+    let sourceLoads = 0;
+    let targetCalls = 0;
+    const applied = runAppsPlan(noOp, {
+      apply: true,
+      yes: true,
+      manifestPath,
+      installedState,
+      expectedPlanDigest: noOp.planDigest,
+      sourceLoader: () => { sourceLoads += 1; return exactBunFixtureSource; },
+    }, (machineId) => {
+      targetCalls += 1;
+      return { machineId, source: "ssh", stdout: "", stderr: "", exitCode: 0 };
+    });
+    expect("state" in applied && applied.state).toBe("COMMITTED");
+    expect(applied.executed).toBe(0);
+    expect(sourceLoads).toBe(0);
+    expect(targetCalls).toBe(0);
+  });
+
+  test("derives and applies one exact Factory step on Linux 0.2.18 and macOS 0.2.17 fixtures", () => {
+    let bootstrapTransactions = 0;
+    let bootstrapStatusReads = 0;
+    for (const fixture of exactBunTargetFixtures) {
+      const dir = mkdtempSync(join(tmpdir(), `machines-apps-exact-${fixture.id}-`));
+      const manifestPath = join(dir, "candidate.json");
+      writeExactBunCandidate(manifestPath, fixture.id, { platform: fixture.platform, bunPath: fixture.bunPath });
+      const initial = buildAppsPlan(fixture.id, { manifestPath });
+      if (!("schema" in initial)) throw new Error("expected exact plan");
+      let fullSourceLoads = 0;
+      let fullTransactionCalls = 0;
+      const fullApply = runAppsPlan(initial, {
+        apply: true,
+        yes: true,
+        manifestPath,
+        expectedPlanDigest: initial.planDigest,
+        sourceLoader: () => { fullSourceLoads += 1; return exactBunFixtureSource; },
+        bootstrapSourceLoader: () => Buffer.from("// reviewed bootstrap fixture\n"),
+      }, (machineId, command) => {
+        fullTransactionCalls += 1;
+        expect(command).not.toContain("apps exact-bun-");
+        return {
+          machineId,
+          source: "ssh",
+          stdout: JSON.stringify({
+            schema: "machines.exact_bun_transaction_result.v1",
+            machineId,
+            platform: fixture.platform,
+            state: "COMMITTED",
+            executed: 2,
+            probes: initial.steps.map((step) => ({
+              schema: "machines.bun_package_probe.v1",
+              package: step.package.name,
+              expectedVersion: step.package.version,
+              observedVersion: step.package.version,
+              installed: true,
+              checks: {
+                packageJson: { ok: true, version: step.package.version },
+                registryProvenance: { ok: true, integrity: step.package.registryIntegrity, lockSource: "registry" },
+                sdkImport: { ok: true },
+                cliHelp: { ok: true, bin: step.package.bin, exitCode: 0 },
+              },
+              status: "pass",
+              reasonCodes: [],
+            })),
+            reasonCodes: [],
+          }),
+          stderr: "",
+          exitCode: 0,
+        };
+      });
+      expect(fullApply.executed).toBe(2);
+      expect(fullSourceLoads).toBe(1);
+      expect(fullTransactionCalls).toBe(1);
+      bootstrapTransactions += fullTransactionCalls;
+      const probes = initial.steps.map((step, index) => ({
+        schema: "machines.bun_package_probe.v1" as const,
+        package: step.package.name,
+        expectedVersion: step.package.version,
+        observedVersion: index === 0 ? step.package.version : fixture.outdatedFactoryVersion,
+        installed: true,
+        checks: {
+          packageJson: { ok: index === 0, version: index === 0 ? step.package.version : fixture.outdatedFactoryVersion },
+          registryProvenance: {
+            ok: index === 0,
+            integrity: index === 0 ? step.package.registryIntegrity : "",
+            lockSource: "registry" as const,
+          },
+          sdkImport: { ok: true },
+          cliHelp: { ok: true, bin: step.package.bin, exitCode: 0 },
+        },
+        status: index === 0 ? "pass" as const : "fail" as const,
+        reasonCodes: index === 0 ? [] : ["installed_version_mismatch", "registry_lock_mismatch"],
+      }));
+      let statusCalls = 0;
+      const installedState = getAppsStatus(fixture.id, (machineId, command) => {
+        statusCalls += 1;
+        expect(command).not.toContain("apps exact-bun-");
+        return {
+          machineId,
+          source: "ssh",
+          stdout: JSON.stringify({
+            schema: "machines.exact_bun_transaction_result.v1",
+            machineId,
+            platform: fixture.platform,
+            state: "COMMITTED",
+            executed: 2,
+            probes,
+            reasonCodes: [],
+          }),
+          stderr: "",
+          exitCode: 0,
+        };
+      }, {
+        manifestPath,
+        bootstrapSourceLoader: () => Buffer.from("// reviewed bootstrap fixture\n"),
+      });
+      if (!("packages" in installedState)) throw new Error("expected exact status");
+      expect(installedState.status).toBe("unmanaged");
+      expect(statusCalls).toBe(1);
+      bootstrapStatusReads += statusCalls;
+      const oneStep = buildAppsPlan(fixture.id, { manifestPath, installedState });
+      if (!("schema" in oneStep)) throw new Error("expected exact plan");
+      expect(oneStep.steps).toEqual([initial.steps[1]]);
+
+      let sourceLoads = 0;
+      let transactionCalls = 0;
+      const applied = runAppsPlan(oneStep, {
+        apply: true,
+        yes: true,
+        manifestPath,
+        installedState,
+        expectedPlanDigest: oneStep.planDigest,
+        sourceLoader: () => { sourceLoads += 1; return exactBunFixtureSource; },
+        bootstrapSourceLoader: () => Buffer.from("// reviewed bootstrap fixture\n"),
+      }, (machineId, command) => {
+        transactionCalls += 1;
+        expect(command).not.toContain("apps exact-bun-");
+        const step = oneStep.steps[0]!;
+        return {
+          machineId,
+          source: "ssh",
+          stdout: JSON.stringify({
+            schema: "machines.exact_bun_transaction_result.v1",
+            machineId,
+            platform: fixture.platform,
+            state: "COMMITTED",
+            executed: 1,
+            probes: [{
+              schema: "machines.bun_package_probe.v1",
+              package: step.package.name,
+              expectedVersion: step.package.version,
+              observedVersion: step.package.version,
+              installed: true,
+              checks: {
+                packageJson: { ok: true, version: step.package.version },
+                registryProvenance: { ok: true, integrity: step.package.registryIntegrity, lockSource: "registry" },
+                sdkImport: { ok: true },
+                cliHelp: { ok: true, bin: step.package.bin, exitCode: 0 },
+              },
+              status: "pass",
+              reasonCodes: [],
+            }],
+            reasonCodes: [],
+          }),
+          stderr: "",
+          exitCode: 0,
+        };
+      });
+      expect(applied.executed).toBe(1);
+      expect(sourceLoads).toBe(1);
+      expect(transactionCalls).toBe(1);
+
+      const satisfiedState = structuredClone(installedState);
+      satisfiedState.status = "pass";
+      satisfiedState.packages[1] = (applied.probes ?? [])[0]!;
+      const noOp = buildAppsPlan(fixture.id, { manifestPath, installedState: satisfiedState });
+      expect(noOp.steps).toEqual([]);
+      expect(noOp.planDigest).not.toBe(oneStep.planDigest);
+      rmSync(dir, { recursive: true, force: true });
+    }
+    console.info(`TARGET_BOOTSTRAP_CONTROL station01=0.2.18/linux station03=0.2.17/macos target_exact_bun_commands=0 bootstrap_transactions=${bootstrapTransactions} bootstrap_status_reads=${bootstrapStatusReads}`);
+  });
+
+  test("rejects a non-target-only exact candidate before planning or applying", () => {
+    const dir = mkdtempSync(join(tmpdir(), "machines-apps-exact-multi-target-"));
+    const manifestPath = join(dir, "candidate.json");
+    const candidate = exactBunCandidate();
+    (candidate.machines as Array<Record<string, unknown>>).push({
+      id: "unrelated-target",
+      platform: "linux",
+      workspacePath: "/unrelated/private/path",
+      apps: [],
+    });
+    writeFileSync(manifestPath, `${JSON.stringify(candidate, null, 2)}\n`);
+
+    expect(validateAppsCandidate("station-exact", { manifestPath })).toMatchObject({
+      valid: false,
+      errors: ["candidate_manifest_not_target_only"],
+    });
+    expect(() => buildAppsPlan("station-exact", { manifestPath })).toThrow("exactly one target machine");
+
+    let calls = 0;
+    const runner: MachineCommandRunner = (machineId) => {
+      calls += 1;
+      return { machineId, source: "ssh", stdout: "", stderr: "", exitCode: 0 };
+    };
+    expect(() => runAppsInstall("station-exact", {
+      apply: true,
+      yes: true,
+      manifestPath,
+      expectedPlanDigest: "0".repeat(64),
+    }, runner)).toThrow("exactly one target machine");
+    expect(calls).toBe(0);
+  });
+
+  test("fails closed when explicit and environment manifest authorities differ", () => {
+    const dir = mkdtempSync(join(tmpdir(), "machines-apps-manifest-authority-"));
+    const explicit = join(dir, "candidate.json");
+    const configured = join(dir, "other.json");
+    writeExactBunCandidate(explicit);
+    writeExactBunCandidate(configured);
+    process.env["HASNA_MACHINES_MANIFEST_PATH"] = configured;
+    expect(validateAppsCandidate("station-exact", { manifestPath: explicit })).toMatchObject({
+      valid: false,
+      errors: ["manifest_authority_conflict"],
+    });
+    expect(() => buildAppsPlan("station-exact", { manifestPath: explicit })).toThrow("resolve to different files");
   });
 });

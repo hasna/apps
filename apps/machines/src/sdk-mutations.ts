@@ -12,6 +12,7 @@ import type {
   NotificationConfig,
   NotificationDispatchSummary,
   NotificationTestResult,
+  AppsPlanResult,
   SetupResult,
   SyncResult,
 } from "./types.js";
@@ -93,7 +94,7 @@ import {
 
 type ApplyOptions = { apply?: boolean; yes?: boolean };
 type SdkApplyOptions<T extends ApplyOptions> = T & SdkMutationApprovalOptions;
-type MutationPlan = SetupResult | SyncResult;
+type MutationPlan = SetupResult | SyncResult | AppsPlanResult;
 type NotificationSdkOptions = SdkMutationApprovalOptions & {
   approvalToken?: string;
   trustedApproval?: TrustedNotificationApproval;
@@ -269,17 +270,21 @@ export function runAppsInstall(
   machineId?: string,
   options: SdkApplyOptions<RunAppsInstallOptions> = {},
   runner?: MachineCommandRunner,
-): SetupResult {
-  const plan = rawRunAppsInstall(machineId, { apply: false });
+): AppsPlanResult {
+  const plan = rawRunAppsInstall(machineId, {
+    apply: false,
+    manifestPath: options.manifestPath,
+    env: options.env,
+  });
   assertPlanApplyApproved("machines_apps_apply", plan, options);
   return rawRunAppsInstall(machineId, options, runner);
 }
 
 export function runAppsPlan(
-  plan: SetupResult,
+  plan: AppsPlanResult,
   options: SdkApplyOptions<RunAppsInstallOptions> = {},
   runner?: MachineCommandRunner,
-): SetupResult {
+): AppsPlanResult {
   assertPlanApplyApproved("machines_apps_apply", plan, options);
   return rawRunAppsPlan(plan, options, runner);
 }

@@ -17,6 +17,37 @@ export interface ManifestPackageSpec {
   verify?: boolean;
   /** Optional MCP health endpoint checked after install/update (expects HTTP 200). */
   mcpHealthUrl?: string;
+  /** Optional target-local exact Bun registry delivery contract. */
+  exactBunRegistry?: ExactBunRegistryDeliveryV1;
+}
+
+export interface ExactBunRegistrySourceRef {
+  provider: "files" | "task-attachment";
+  ref: string;
+  sha256: string;
+  sizeBytes: number;
+}
+
+export interface ExactBunRegistryDeliveryV1 {
+  schema: "machines.exact_bun_registry.v1";
+  order: number;
+  mode: "live-global";
+  source: ExactBunRegistrySourceRef;
+  archiveSha256: string;
+  registryIntegrity: string;
+  secretRefs: ["hasna/npm/live/publish-token", "hasnaxyz/npm/live/publish-token"];
+  quarantine: {
+    minimumReleaseAge: 604800;
+    exactExclusions: ["@hasnaxyz/infinity", "@hasnaxyz/factory", "@hasna/secrets", "@hasna/events"];
+  };
+  probe: {
+    sdkImport: string;
+    cli: {
+      bin: string;
+      args: ["--help"];
+    };
+  };
+  rollback: "byte-preimage";
 }
 
 export interface FreezeEntry {
@@ -218,6 +249,88 @@ export interface AppsStatusResult {
 export interface AppsDiffResult extends AppsStatusResult {
   missing: string[];
   installed: string[];
+}
+
+export interface ExactBunPackageProbe {
+  schema: "machines.bun_package_probe.v1";
+  package: string;
+  expectedVersion: string;
+  observedVersion: string;
+  installed: boolean;
+  checks: {
+    packageJson: { ok: boolean; version: string };
+    registryProvenance: { ok: boolean; integrity: string; lockSource: "registry" };
+    sdkImport: { ok: boolean };
+    cliHelp: { ok: boolean; bin: string; exitCode: number };
+  };
+  status: "pass" | "fail";
+  reasonCodes: string[];
+}
+
+export interface ExactBunRegistryPlanStep {
+  id: string;
+  kind: "bun-registry-exact";
+  order: number;
+  package: {
+    name: string;
+    version: string;
+    selector: string;
+    bin: string;
+    archiveSha256: string;
+    registryIntegrity: string;
+  };
+  source: ExactBunRegistrySourceRef;
+  policy: ExactBunRegistryDeliveryV1["quarantine"];
+  probe: {
+    schema: "machines.bun_package_probe.v1";
+    sdkImport: string;
+    cliBin: string;
+    cliArgs: ["--help"];
+  };
+  rollback: { mode: "byte-preimage"; scope: "target-transaction" };
+}
+
+export interface ExactBunAppsPlan {
+  schema: "machines.apps.plan.v2";
+  machineId: string;
+  platform: "linux" | "macos";
+  mode: "plan" | "apply";
+  planDigest?: string;
+  steps: ExactBunRegistryPlanStep[];
+  executed: number;
+  collateral: {
+    removals: 0;
+    unrelatedUpdates: 0;
+    serviceOperations: 0;
+    configurationWrites: 0;
+    privilegedSteps: 0;
+    otherMachines: 0;
+  };
+  probes?: ExactBunPackageProbe[];
+  state?: "COMMITTED" | "ROLLED_BACK" | "ROLLBACK_FAILED";
+  reasonCodes?: string[];
+}
+
+export type AppsPlanResult = SetupResult | ExactBunAppsPlan;
+
+export interface AppsValidationResult {
+  schema: "machines.apps.validation.v1";
+  valid: boolean;
+  machineId: string;
+  platform: MachinePlatform | null;
+  packageCount: number;
+  errors: string[];
+  warnings: string[];
+}
+
+export interface ExactBunAppsStatusResult {
+  schema: "machines.apps.status.v2";
+  machineId: string;
+  platform: "linux" | "macos";
+  source: "local" | "lan" | "tailscale" | "ssh";
+  packages: ExactBunPackageProbe[];
+  status: "pass" | "unmanaged";
+  reasonCodes: string[];
 }
 
 export interface CliToolStatus {

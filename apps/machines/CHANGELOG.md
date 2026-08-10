@@ -74,6 +74,20 @@ reported success about things it had not actually established.
   than reached by deleting a check. Physical classes are untouched: `dgx-spark`
   keeps `tailscale:join` and gets no absence item.
 
+## [0.2.19] - 2026-08-10
+
+### Added
+
+- Add a target-only exact Bun registry candidate contract and safe two-step
+  plan for `@hasnaxyz/infinity@1.0.12` followed by
+  `@hasnaxyz/factory@0.6.9`. Machines verifies one immutable installer source,
+  forwards its bytes only through bounded executor stdin, consumes the two
+  station-local npm credential references only through nested `secrets exec`,
+  validates Bun registry/quarantine/lock provenance and package-specific SDK
+  and CLI probes, and restores the byte preimage for the complete pair on any
+  failure. Existing app and reconcile behavior remains unchanged for manifests
+  without this opt-in contract.
+
 ## [0.2.18] - 2026-08-09
 
 ### Added

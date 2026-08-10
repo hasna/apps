@@ -13,12 +13,23 @@ import {
   manifestValidate,
 } from "../src/commands/manifest.js";
 import {
+  LEGACY_BUN_REGISTRY_SOURCE_SHA256,
   detectCurrentMachineManifest,
   getManifestSourceRef,
   readManifest,
   readManifestWithSource,
   type ManifestSourceAdapter,
 } from "../src/manifests.js";
+import { exactBunCandidate, writeExactBunCandidate } from "./fixtures/exact-bun.js";
+
+function expectExactCandidateRejected(mutate: (candidate: any) => void): void {
+  const dir = mkdtempSync(join(tmpdir(), "machines-exact-manifest-invalid-"));
+  const path = join(dir, "machines.json");
+  const candidate: any = structuredClone(exactBunCandidate());
+  mutate(candidate);
+  writeFileSync(path, `${JSON.stringify(candidate)}\n`);
+  expect(() => readManifest(path)).toThrow();
+}
 
 describe("manifest commands", () => {
   test("initializes and adds machines", () => {
@@ -159,5 +170,39 @@ describe("manifest commands", () => {
     expect(loaded.info.warnings).toEqual([]);
     expect(loaded.manifest.machines[0]?.id).toBe("adapter-node");
     expect(JSON.stringify(loaded.info)).not.toContain("tenant/prod");
+  });
+
+  test("accepts the target-only exact Bun registry candidate", () => {
+    const dir = mkdtempSync(join(tmpdir(), "machines-exact-manifest-valid-"));
+    const path = join(dir, "machines.json");
+    writeExactBunCandidate(path);
+    const manifest = readManifest(path);
+    expect(manifest.machines).toHaveLength(1);
+    expect(manifest.machines[0]?.packages?.map((pkg) => [pkg.name, pkg.exactBunRegistry?.order])).toEqual([
+      ["@hasnaxyz/infinity", 10],
+      ["@hasnaxyz/factory", 20],
+    ]);
+  });
+
+  test("rejects incompatible source, secret, Bun path, selector, policy, and fleet-wide exact delivery", () => {
+    expectExactCandidateRejected((candidate) => {
+      candidate.machines[0].packages[0].exactBunRegistry.source.sha256 = LEGACY_BUN_REGISTRY_SOURCE_SHA256;
+    });
+    expectExactCandidateRejected((candidate) => {
+      candidate.machines[0].packages[0].exactBunRegistry.secretRefs = ["hasna/npm/live/publish-token"];
+    });
+    expectExactCandidateRejected((candidate) => {
+      candidate.machines[0].bunPath = "/usr/local/bin/node";
+    });
+    expectExactCandidateRejected((candidate) => {
+      candidate.machines[0].packages[0].version = ">=1.0.12";
+    });
+    expectExactCandidateRejected((candidate) => {
+      candidate.machines[0].packages[0].exactBunRegistry.quarantine.exactExclusions = ["@hasnaxyz/infinity"];
+    });
+    expectExactCandidateRejected((candidate) => {
+      candidate.packages = [candidate.machines[0].packages[0]];
+      candidate.machines[0].packages = [candidate.machines[0].packages[1]];
+    });
   });
 });

@@ -22,6 +22,69 @@ export interface ReadManifestWithSourceOptions {
   adapter?: ManifestSourceAdapter | null;
 }
 
+export const EXACT_BUN_REGISTRY_SECRET_REFS = [
+  "hasna/npm/live/publish-token",
+  "hasnaxyz/npm/live/publish-token",
+] as const;
+
+export const EXACT_BUN_REGISTRY_EXCLUSIONS = [
+  "@hasnaxyz/infinity",
+  "@hasnaxyz/factory",
+  "@hasna/secrets",
+  "@hasna/events",
+] as const;
+
+export const EXACT_BUN_REGISTRY_MINIMUM_RELEASE_AGE = 604800;
+export const EXACT_BUN_REGISTRY_MAX_SOURCE_BYTES = 1_048_576;
+export const LEGACY_BUN_REGISTRY_SOURCE_SHA256 = "4aad0a5c76e89c9532cb308d65ab0693465bf97519fb47d4ea6d4106c4e2ddf6";
+
+const SHA256_PATTERN = /^[a-f0-9]{64}$/;
+const EXACT_SEMVER_PATTERN = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+const REGISTRY_INTEGRITY_PATTERN = /^sha512-[A-Za-z0-9+/]+={0,2}$/;
+
+const exactBunRegistrySchema = z.object({
+  schema: z.literal("machines.exact_bun_registry.v1"),
+  order: z.number().int().positive(),
+  mode: z.literal("live-global"),
+  source: z.object({
+    provider: z.enum(["files", "task-attachment"]),
+    ref: z.string().trim().min(1).max(512),
+    sha256: z.string().regex(SHA256_PATTERN, "source.sha256 must be a lowercase SHA-256 digest"),
+    sizeBytes: z.number().int().positive().max(EXACT_BUN_REGISTRY_MAX_SOURCE_BYTES),
+  }).strict(),
+  archiveSha256: z.string().regex(SHA256_PATTERN, "archiveSha256 must be a lowercase SHA-256 digest"),
+  registryIntegrity: z.string().regex(REGISTRY_INTEGRITY_PATTERN, "registryIntegrity must be an npm sha512 integrity"),
+  secretRefs: z.tuple([
+    z.literal(EXACT_BUN_REGISTRY_SECRET_REFS[0]),
+    z.literal(EXACT_BUN_REGISTRY_SECRET_REFS[1]),
+  ]),
+  quarantine: z.object({
+    minimumReleaseAge: z.literal(EXACT_BUN_REGISTRY_MINIMUM_RELEASE_AGE),
+    exactExclusions: z.tuple([
+      z.literal(EXACT_BUN_REGISTRY_EXCLUSIONS[0]),
+      z.literal(EXACT_BUN_REGISTRY_EXCLUSIONS[1]),
+      z.literal(EXACT_BUN_REGISTRY_EXCLUSIONS[2]),
+      z.literal(EXACT_BUN_REGISTRY_EXCLUSIONS[3]),
+    ]),
+  }).strict(),
+  probe: z.object({
+    sdkImport: z.string().trim().min(1).max(256),
+    cli: z.object({
+      bin: z.string().trim().min(1).max(128),
+      args: z.tuple([z.literal("--help")]),
+    }).strict(),
+  }).strict(),
+  rollback: z.literal("byte-preimage"),
+}).strict().superRefine((delivery, context) => {
+  if (delivery.source.sha256 === LEGACY_BUN_REGISTRY_SOURCE_SHA256) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["source", "sha256"],
+      message: "the legacy isolated installer source is not compatible with live-global exact delivery",
+    });
+  }
+});
+
 const packageSchema = z.object({
   name: z.string(),
   manager: z.enum(["bun", "brew", "apt", "custom"]).optional(),
@@ -30,6 +93,24 @@ const packageSchema = z.object({
   bin: z.string().min(1).optional(),
   verify: z.boolean().optional(),
   mcpHealthUrl: z.string().min(1).optional(),
+  exactBunRegistry: exactBunRegistrySchema.optional(),
+}).strict().superRefine((pkg, context) => {
+  if (!pkg.exactBunRegistry) return;
+  if (pkg.manager !== "bun") {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["manager"], message: "exactBunRegistry requires manager bun" });
+  }
+  if (!pkg.version || !EXACT_SEMVER_PATTERN.test(pkg.version)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["version"], message: "exactBunRegistry requires one exact semantic version" });
+  }
+  if (pkg.name.includes("@", 1) || /[~^*<>|\s]/.test(pkg.name)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["name"], message: "package name must not contain a version, range, tag, or protocol" });
+  }
+  if (!pkg.bin || pkg.bin !== pkg.exactBunRegistry.probe.cli.bin) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["bin"], message: "package bin must exactly match exactBunRegistry.probe.cli.bin" });
+  }
+  if (pkg.exactBunRegistry.probe.sdkImport !== pkg.name) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["exactBunRegistry", "probe", "sdkImport"], message: "probe.sdkImport must exactly match package name" });
+  }
 });
 
 const freezeEntrySchema = z.object({
@@ -98,6 +179,28 @@ export const machineSchema = z.object({
   packages: z.array(packageSchema).optional(),
   apps: z.array(appSchema).optional(),
   files: z.array(fileSchema).optional(),
+}).strict().superRefine((machine, context) => {
+  const deliveries = (machine.packages ?? []).filter((pkg) => pkg.exactBunRegistry);
+  if (deliveries.length === 0) return;
+  if (machine.platform !== "linux" && machine.platform !== "macos") {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["platform"], message: "exact Bun registry delivery supports linux and macos targets only" });
+  }
+  if (!machine.bunPath || !machine.bunPath.startsWith("/") || !machine.bunPath.endsWith("/bin/bun")) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["bunPath"], message: "exact Bun registry delivery requires an absolute Bun path ending in /bin/bun" });
+  }
+  const seenNames = new Set<string>();
+  const seenOrders = new Set<number>();
+  for (const [index, pkg] of deliveries.entries()) {
+    if (seenNames.has(pkg.name)) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["packages", index, "name"], message: `duplicate exact package ${pkg.name}` });
+    }
+    seenNames.add(pkg.name);
+    const order = pkg.exactBunRegistry!.order;
+    if (seenOrders.has(order)) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["packages", index, "exactBunRegistry", "order"], message: `duplicate exact package order ${order}` });
+    }
+    seenOrders.add(order);
+  }
 });
 
 export const fleetSchema = z.object({
@@ -106,6 +209,22 @@ export const fleetSchema = z.object({
   packages: z.array(packageSchema).optional(),
   freeze: z.array(freezeEntrySchema).optional(),
   machines: z.array(machineSchema),
+}).strict().superRefine((fleet, context) => {
+  const fleetExactPackage = (fleet.packages ?? []).find((pkg) => pkg.exactBunRegistry);
+  if (fleetExactPackage) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["packages"],
+      message: "exactBunRegistry is target-only and must not appear in fleet-wide packages",
+    });
+  }
+  const seenMachines = new Set<string>();
+  fleet.machines.forEach((machine, index) => {
+    if (seenMachines.has(machine.id)) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["machines", index, "id"], message: `duplicate machine id ${machine.id}` });
+    }
+    seenMachines.add(machine.id);
+  });
 });
 
 function detectWorkspacePath(): string {

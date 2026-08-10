@@ -27,6 +27,7 @@ import {
   removeProjectAssignmentMutationArgs,
 } from "../src/projects.js";
 import { validateMachinesConsumerEnvelope } from "../src/consumer-schema.js";
+import { writeExactBunCandidate } from "./fixtures/exact-bun.js";
 
 const repoRoot = resolve(import.meta.dir, "..");
 const cliPath = join(repoRoot, "src", "cli", "index.ts");
@@ -984,6 +985,99 @@ describe("cli command handling", () => {
       expect(denied.stderr).toContain("requires operator approval");
       expect(denied.stderr).not.toContain(token);
       expect(denied.stdout).not.toContain("cli-plan-drift-executed");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("apps validates and plans one exact target without exposing private target metadata", () => {
+    const dir = mkdtempSync(join(tmpdir(), "machines-cli-exact-apps-"));
+    try {
+      const manifestPath = join(dir, "candidate.json");
+      const otherManifestPath = join(dir, "other.json");
+      writeExactBunCandidate(manifestPath);
+      writeExactBunCandidate(otherManifestPath);
+      const env = {
+        ...process.env,
+        HASNA_MACHINES_MANIFEST_PATH: manifestPath,
+        HASNA_MACHINES_DB_PATH: join(dir, "machines.db"),
+        HASNA_MACHINES_MACHINE_ID: "control",
+      };
+
+      const validated = runCli(["apps", "validate", "--manifest", manifestPath, "--machine", "station-exact", "--json"], env);
+      expect(validated.stderr).toBe("");
+      expect(validated.status).toBe(0);
+      expect(JSON.parse(validated.stdout)).toEqual({
+        schema: "machines.apps.validation.v1",
+        valid: true,
+        machineId: "station-exact",
+        platform: "linux",
+        packageCount: 2,
+        errors: [],
+        warnings: [],
+      });
+
+      const planned = runCli(["apps", "plan", "--manifest", manifestPath, "--machine", "station-exact", "--json"], env);
+      expect(planned.stderr).toBe("");
+      expect(planned.status).toBe(0);
+      const plan = JSON.parse(planned.stdout);
+      expect(plan).toMatchObject({ schema: "machines.apps.plan.v2", machineId: "station-exact", mode: "plan" });
+      expect(plan.steps.map((step: { package: { selector: string } }) => step.package.selector)).toEqual([
+        "@hasnaxyz/infinity@1.0.12",
+        "@hasnaxyz/factory@0.6.9",
+      ]);
+      for (const privateValue of [
+        "/private/home/.bun/bin/bun",
+        "/private/workspace",
+        "private-user@private-host",
+        "private name",
+        "must-not-escape",
+      ]) expect(planned.stdout).not.toContain(privateValue);
+
+      const installedStatePath = join(dir, "installed-state.json");
+      writeFileSync(installedStatePath, `${JSON.stringify({
+        schema: "machines.apps.status.v2",
+        machineId: plan.machineId,
+        platform: plan.platform,
+        source: "ssh",
+        packages: plan.steps.map((step: {
+          package: { name: string; version: string; bin: string; registryIntegrity: string };
+        }) => ({
+          schema: "machines.bun_package_probe.v1",
+          package: step.package.name,
+          expectedVersion: step.package.version,
+          observedVersion: step.package.version,
+          installed: true,
+          checks: {
+            packageJson: { ok: true, version: step.package.version },
+            registryProvenance: { ok: true, integrity: step.package.registryIntegrity, lockSource: "registry" },
+            sdkImport: { ok: true },
+            cliHelp: { ok: true, bin: step.package.bin, exitCode: 0 },
+          },
+          status: "pass",
+          reasonCodes: [],
+        })),
+        status: "pass",
+        reasonCodes: [],
+      }, null, 2)}\n`);
+      const replanned = runCli([
+        "apps", "plan",
+        "--manifest", manifestPath,
+        "--machine", "station-exact",
+        "--installed-state", installedStatePath,
+        "--json",
+      ], env);
+      expect(replanned.stderr).toBe("");
+      expect(replanned.status).toBe(0);
+      const noOp = JSON.parse(replanned.stdout);
+      expect(noOp.steps).toEqual([]);
+      expect(noOp.probes).toHaveLength(2);
+      expect(replanned.stdout).not.toContain("must-not-escape");
+
+      const conflicted = runCli(["apps", "validate", "--manifest", otherManifestPath, "--machine", "station-exact", "--json"], env);
+      expect(conflicted.status).not.toBe(0);
+      expect(conflicted.stdout).not.toContain("private-user");
+      expect(conflicted.stderr).not.toContain("private-user");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

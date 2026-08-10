@@ -1,15 +1,40 @@
-import { detectCurrentMachineManifest, getManifestMachine } from "../manifests.js";
+import { detectCurrentMachineManifest, getManifestMachine, readManifest } from "../manifests.js";
+import { resolveExactManifestPath } from "../paths.js";
 import { assertMutationPlanDigest, attachMutationPlanDigest } from "./mutation-approval.js";
 import { requireMachineCommandSuccess, runMachineCommand, type MachineCommandRunner } from "../remote.js";
+import {
+  buildExactBunAppsPlan,
+  defaultExactBunSourceLoader,
+  exactBunPackages,
+  runExactBunControllerStatus,
+  runExactBunControllerTransaction,
+  validateExactBunMachine,
+  type ExactBunBootstrapSourceLoader,
+  type ExactBunSourceLoader,
+} from "./bun-registry-installer.js";
 import type {
   AppsDiffResult,
+  AppsPlanResult,
   AppsStatusResult,
+  AppsValidationResult,
+  ExactBunAppsPlan,
+  ExactBunAppsStatusResult,
   InstalledAppStatus,
   MachineManifest,
   ManifestAppSpec,
-  SetupResult,
   SetupStep,
 } from "../types.js";
+
+export interface AppsManifestOptions {
+  manifestPath?: string;
+  env?: NodeJS.ProcessEnv;
+  installedState?: ExactBunAppsStatusResult;
+  bootstrapSourceLoader?: ExactBunBootstrapSourceLoader;
+}
+
+function isExactAppsPlan(plan: AppsPlanResult): plan is ExactBunAppsPlan {
+  return "schema" in plan && plan.schema === "machines.apps.plan.v2";
+}
 
 function getPackageName(app: ManifestAppSpec): string {
   return app.packageName || app.name;
@@ -96,9 +121,27 @@ function buildAppSteps(machine: MachineManifest): SetupStep[] {
   });
 }
 
-function resolveMachine(machineId?: string): MachineManifest {
-  if (!machineId) return detectCurrentMachineManifest();
-  return getManifestMachine(machineId) || {
+function resolveMachine(machineId?: string, options: AppsManifestOptions = {}, requireExactTarget = false): MachineManifest {
+  const manifestPath = options.manifestPath === undefined && options.env === undefined
+    ? undefined
+    : resolveExactManifestPath(options.manifestPath, options.env);
+  if (!machineId) {
+    if (requireExactTarget) throw new Error("Exact app candidate operations require --machine <id>.");
+    return detectCurrentMachineManifest();
+  }
+  if (manifestPath) {
+    const manifest = readManifest(manifestPath);
+    const machine = manifest.machines.find((entry) => entry.id === machineId) ?? null;
+    if (machine && exactBunPackages(machine).length > 0 && manifest.machines.length !== 1) {
+      throw new Error("Exact app candidate manifest must contain exactly one target machine.");
+    }
+    if (machine) return machine;
+  } else {
+    const machine = getManifestMachine(machineId);
+    if (machine) return machine;
+  }
+  if (requireExactTarget) throw new Error("Exact app candidate target is missing from the selected manifest.");
+  return {
     id: machineId,
     platform: "linux",
     workspacePath: "",
@@ -149,16 +192,17 @@ function parseProbeOutput(app: ManifestAppSpec, machine: MachineManifest, stdout
   };
 }
 
-export function listApps(machineId?: string): { machineId: string; apps: ManifestAppSpec[] } {
-  const machine = resolveMachine(machineId);
+export function listApps(machineId?: string, options: AppsManifestOptions = {}): { machineId: string; apps: ManifestAppSpec[] } {
+  const machine = resolveMachine(machineId, options);
   return {
     machineId: machine.id,
     apps: machine.apps || [],
   };
 }
 
-export function buildAppsPlan(machineId?: string): SetupResult {
-  const machine = resolveMachine(machineId);
+export function buildAppsPlan(machineId?: string, options: AppsManifestOptions = {}): AppsPlanResult {
+  const machine = resolveMachine(machineId, options, options.manifestPath !== undefined);
+  if (exactBunPackages(machine).length > 0) return buildExactBunAppsPlan(machine, options.installedState);
   return attachMutationPlanDigest({
     machineId: machine.id,
     mode: "plan",
@@ -171,10 +215,57 @@ export interface RunAppsInstallOptions {
   apply?: boolean;
   yes?: boolean;
   expectedPlanDigest?: string;
+  manifestPath?: string;
+  env?: NodeJS.ProcessEnv;
+  sourceLoader?: ExactBunSourceLoader;
+  installedState?: ExactBunAppsStatusResult;
+  bootstrapSourceLoader?: ExactBunBootstrapSourceLoader;
 }
 
-export function getAppsStatus(machineId?: string, runner: MachineCommandRunner = runMachineCommand): AppsStatusResult {
-  const machine = resolveMachine(machineId);
+export function validateAppsCandidate(machineId: string, options: AppsManifestOptions = {}): AppsValidationResult {
+  const errors: string[] = [];
+  let machine: MachineManifest | null = null;
+  try {
+    const manifestPath = resolveExactManifestPath(options.manifestPath, options.env);
+    const manifest = readManifest(manifestPath);
+    if (manifest.machines.length !== 1) errors.push("candidate_manifest_not_target_only");
+    machine = manifest.machines.find((entry) => entry.id === machineId) ?? null;
+    if (!machine) errors.push("target_missing");
+    else errors.push(...validateExactBunMachine(machine));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "manifest_invalid";
+    errors.push(message.startsWith("Explicit --manifest") ? "manifest_authority_conflict" : "manifest_invalid");
+  }
+  return {
+    schema: "machines.apps.validation.v1",
+    valid: errors.length === 0,
+    machineId,
+    platform: machine?.platform ?? null,
+    packageCount: machine ? exactBunPackages(machine).length : 0,
+    errors,
+    warnings: [],
+  };
+}
+
+export function getAppsStatus(
+  machineId?: string,
+  runner: MachineCommandRunner = runMachineCommand,
+  options: AppsManifestOptions = {},
+): AppsStatusResult | ExactBunAppsStatusResult {
+  const machine = resolveMachine(machineId, options, options.manifestPath !== undefined);
+  if (exactBunPackages(machine).length > 0) {
+    const plan = buildExactBunAppsPlan(machine);
+    const status = runExactBunControllerStatus(machine, plan, runner, options.bootstrapSourceLoader);
+    return {
+      schema: "machines.apps.status.v2",
+      machineId: machine.id,
+      platform: plan.platform,
+      source: status.source,
+      packages: status.result.probes,
+      status: status.result.probes.every((probe) => probe.status === "pass") ? "pass" : "unmanaged",
+      reasonCodes: [],
+    };
+  }
   const readiness = requireMachineCommandSuccess("Apps status readiness check", runner(machine.id, "true"));
   const apps = (machine.apps || []).map((app) => {
     const probe = requireMachineCommandSuccess(`App probe ${app.name}`, runner(machine.id, buildAppProbeCommand(machine, app)));
@@ -187,8 +278,9 @@ export function getAppsStatus(machineId?: string, runner: MachineCommandRunner =
   };
 }
 
-export function diffApps(machineId?: string, runner: MachineCommandRunner = runMachineCommand): AppsDiffResult {
-  const status = getAppsStatus(machineId, runner);
+export function diffApps(machineId?: string, runner: MachineCommandRunner = runMachineCommand, options: AppsManifestOptions = {}): AppsDiffResult {
+  const status = getAppsStatus(machineId, runner, options);
+  if ("packages" in status) throw new Error("Exact Bun registry candidates use apps status instead of legacy apps diff.");
   return {
     ...status,
     missing: status.apps.filter((app) => !app.installed).map((app) => app.name),
@@ -200,20 +292,52 @@ export function runAppsInstall(
   machineId?: string,
   options: RunAppsInstallOptions = {},
   runner: MachineCommandRunner = runMachineCommand
-): SetupResult {
-  const plan = buildAppsPlan(machineId);
+): AppsPlanResult {
+  const plan = buildAppsPlan(machineId, options);
   return runAppsPlan(plan, options, runner);
 }
 
 export function runAppsPlan(
-  plan: SetupResult,
+  plan: AppsPlanResult,
   options: RunAppsInstallOptions = {},
   runner: MachineCommandRunner = runMachineCommand
-): SetupResult {
+): AppsPlanResult {
   assertMutationPlanDigest(plan, options.expectedPlanDigest);
   if (!options.apply) return attachMutationPlanDigest({ ...plan, mode: "plan", executed: 0 });
   if (!options.yes) {
     throw new Error("App installation requires --yes.");
+  }
+
+  if (isExactAppsPlan(plan)) {
+    if (!options.expectedPlanDigest) throw new Error("Exact Bun app installation requires --expected-plan-digest.");
+    const machine = resolveMachine(plan.machineId, options, true);
+    const currentPlan = buildExactBunAppsPlan(machine, options.installedState);
+    assertMutationPlanDigest(currentPlan, options.expectedPlanDigest);
+    if (currentPlan.steps.length === 0) {
+      return {
+        ...currentPlan,
+        mode: "apply",
+        executed: 0,
+        probes: currentPlan.probes ?? [],
+        state: "COMMITTED",
+        reasonCodes: [],
+      };
+    }
+    const parsed = runExactBunControllerTransaction(
+      machine,
+      currentPlan,
+      options.sourceLoader ?? defaultExactBunSourceLoader,
+      runner,
+      options.bootstrapSourceLoader,
+    );
+    return {
+      ...currentPlan,
+      mode: "apply",
+      executed: parsed.executed,
+      probes: parsed.probes,
+      state: parsed.state,
+      reasonCodes: parsed.reasonCodes,
+    };
   }
 
   let executed = 0;

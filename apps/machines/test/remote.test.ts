@@ -84,6 +84,24 @@ describe("machine command routing", () => {
     expect(result.stderrChars).toBe(200_000);
   });
 
+  test("forwards bounded opaque stdin in direct and timeout-helper paths", () => {
+    const payload = Buffer.from("opaque-source-bytes\u0000with-binary", "utf8");
+    const direct = runMachineCommand("local", "cat", { stdin: payload, maxInputBytes: payload.byteLength });
+    expect(direct.exitCode).toBe(0);
+    expect(Buffer.from(direct.stdout, "utf8")).toEqual(payload);
+
+    const timed = runMachineCommand("local", "cat", {
+      stdin: payload,
+      maxInputBytes: payload.byteLength,
+      timeoutMs: 2_000,
+      killGraceMs: 20,
+    });
+    expect(timed.exitCode).toBe(0);
+    expect(Buffer.from(timed.stdout, "utf8")).toEqual(payload);
+    expect(() => runMachineCommand("local", "cat", { stdin: payload, maxInputBytes: payload.byteLength - 1 }))
+      .toThrow("stdin exceeds");
+  });
+
   test("kills TERM-ignoring descendant processes on timeout", () => {
     const dir = mkdtempSync(join(tmpdir(), "machines-timeout-"));
     const marker = join(dir, "alive.log");

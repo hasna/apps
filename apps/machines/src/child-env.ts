@@ -12,6 +12,9 @@ function shellSingleQuote(value: string): string {
  * into the outer script.
  */
 export function buildSecretsExecShell(secretKey: string, envName: string, command: string): string {
+  if (!secretKey.trim()) {
+    throw new Error("secret_reference_missing");
+  }
   if (!SHELL_ENV_NAME.test(envName)) {
     throw new Error(`Invalid shell environment variable name: ${envName}`);
   }

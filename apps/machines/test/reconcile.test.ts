@@ -22,6 +22,7 @@ import {
   type RolloutEmitInput,
 } from "../src/commands/reconcile.js";
 import type { FleetManifest } from "../src/types.js";
+import { exactBunCandidate, exactBunFixtureSource } from "./fixtures/exact-bun.js";
 
 const repoRoot = resolve(import.meta.dir, "..");
 const cliPath = join(repoRoot, "src", "cli", "index.ts");
@@ -162,6 +163,29 @@ describe("desired state and installed parsing", () => {
 });
 
 describe("reconcile plan", () => {
+  test("keeps exact Bun packages in contract order and builds one atomic plan", () => {
+    const manifest = exactBunCandidate("demo-node-01") as unknown as FleetManifest;
+    manifest.machines[0]!.packages!.reverse();
+    expect(resolveDesiredPackages(manifest, "demo-node-01").map((entry) => entry.name)).toEqual([
+      "@hasnaxyz/infinity",
+      "@hasnaxyz/factory",
+    ]);
+    const plan = buildReconcilePlan({
+      manifest,
+      machineId: "demo-node-01",
+      freezePath: emptyFreezePath,
+      installed: [
+        { name: "@hasnaxyz/infinity", version: "1.0.11" },
+        { name: "@hasnaxyz/factory", version: "0.6.8" },
+      ],
+    });
+    expect(plan.exactBunPlan?.steps.map((step) => step.package.selector)).toEqual([
+      "@hasnaxyz/infinity@1.0.12",
+      "@hasnaxyz/factory@0.6.9",
+    ]);
+    expect(plan.actions.map((action) => action.action)).toEqual(["update", "update"]);
+  });
+
   test("plans install, update, skip, and freeze-blocked actions", () => {
     const manifest = manifestFixture();
     manifest.packages!.push({ name: "@hasna/frozen-pkg", version: "9.9.9" });
@@ -240,6 +264,115 @@ describe("reconcile plan", () => {
 });
 
 describe("reconcile execution", () => {
+  test("executes only the remaining exact step through one bootstrap transaction without legacy Bun installs", async () => {
+    const manifest = exactBunCandidate("demo-node-01") as unknown as FleetManifest;
+    const desired = buildReconcilePlan({
+      manifest,
+      machineId: "demo-node-01",
+      freezePath: emptyFreezePath,
+      installed: [],
+    }).exactBunPlan!;
+    const exactInstalledState = {
+      schema: "machines.apps.status.v2" as const,
+      machineId: "demo-node-01",
+      platform: "linux" as const,
+      source: "ssh" as const,
+      packages: desired.steps.map((step, index) => ({
+        schema: "machines.bun_package_probe.v1" as const,
+        package: step.package.name,
+        expectedVersion: step.package.version,
+        observedVersion: index === 0 ? step.package.version : "0.6.8",
+        installed: true,
+        checks: {
+          packageJson: { ok: index === 0, version: index === 0 ? step.package.version : "0.6.8" },
+          registryProvenance: {
+            ok: index === 0,
+            integrity: index === 0 ? step.package.registryIntegrity : "",
+            lockSource: "registry" as const,
+          },
+          sdkImport: { ok: true },
+          cliHelp: { ok: true, bin: step.package.bin, exitCode: 0 },
+        },
+        status: index === 0 ? "pass" as const : "fail" as const,
+        reasonCodes: index === 0 ? [] : ["installed_version_mismatch", "registry_lock_mismatch"],
+      })),
+      status: "unmanaged" as const,
+      reasonCodes: [],
+    };
+    const plan = buildReconcilePlan({
+      manifest,
+      machineId: "demo-node-01",
+      freezePath: emptyFreezePath,
+      installed: [
+        { name: "@hasnaxyz/infinity", version: "1.0.12" },
+        { name: "@hasnaxyz/factory", version: "0.6.8" },
+      ],
+      exactInstalledState,
+    });
+    expect(plan.exactBunPlan?.steps).toEqual([desired.steps[1]]);
+    const { exec, calls } = mockExec(() => ({ status: 1 }));
+    let sourceLoads = 0;
+    let runnerCalls = 0;
+    const result = await executeReconcilePlan(plan, {
+      dryRun: false,
+      exec,
+      manifest,
+      recordsPath: null,
+      exactSourceLoader(source) {
+        sourceLoads += 1;
+        expect(source.ref).toBe("asset_exact_apps_fixture");
+        return exactBunFixtureSource;
+      },
+      exactBootstrapSourceLoader: () => Buffer.from("// reviewed bootstrap fixture\n"),
+      exactInstalledState,
+      exactRunner(machineId, command, options) {
+        runnerCalls += 1;
+        expect(machineId).toBe("demo-node-01");
+        expect(command).toEndWith("/bin/bun' run -");
+        expect(command).not.toContain("apps exact-bun-");
+        expect(options?.stdin).toBeInstanceOf(Buffer);
+        expect(String(options?.stdin)).toContain(exactBunFixtureSource.toString("base64"));
+        const steps = plan.exactBunPlan!.steps;
+        return {
+          machineId,
+          source: "local",
+          exitCode: 0,
+          stderr: "",
+          stdout: JSON.stringify({
+            schema: "machines.exact_bun_transaction_result.v1",
+            machineId,
+            platform: "linux",
+            state: "COMMITTED",
+            executed: steps.length,
+            probes: steps.map((step) => ({
+              schema: "machines.bun_package_probe.v1",
+              package: step.package.name,
+              expectedVersion: step.package.version,
+              observedVersion: step.package.version,
+              installed: true,
+              checks: {
+                packageJson: { ok: true, version: step.package.version },
+                registryProvenance: { ok: true, integrity: step.package.registryIntegrity, lockSource: "registry" },
+                sdkImport: { ok: true },
+                cliHelp: { ok: true, bin: step.package.bin, exitCode: 0 },
+              },
+              status: "pass",
+              reasonCodes: [],
+            })),
+            reasonCodes: [],
+          }),
+        };
+      },
+    });
+    expect(sourceLoads).toBe(1);
+    expect(runnerCalls).toBe(1);
+    expect(calls).toEqual([]);
+    expect(result.results.map((entry) => [entry.package, entry.status])).toEqual([
+      ["@hasnaxyz/infinity", "succeeded"],
+      ["@hasnaxyz/factory", "succeeded"],
+    ]);
+  });
+
   test("dry-run never executes commands and reports pending statuses", async () => {
     const { exec, calls } = mockExec(() => ({ status: 1 }));
     const plan = buildReconcilePlan({

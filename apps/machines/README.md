@@ -132,6 +132,41 @@ manifest versions stay authoritative; packages tracked without a pin adopt the
 released version. Programmatic consumers can call `reconcileFromReleaseEvent`
 from the package root exports.
 
+### Exact Bun registry candidate
+
+A machine-scoped package can opt into `exactBunRegistry` for an atomic
+live-global Bun update. The candidate manifest must contain exactly one target
+machine and exactly two ordered packages: `@hasnaxyz/infinity@1.0.12` at order
+10 and `@hasnaxyz/factory@0.6.9` at order 20. Each package names its exact
+archive digest, registry integrity, probe, rollback mode, and the same immutable
+source reference. Fleet-wide exact delivery is rejected.
+
+```bash
+machines apps validate --manifest ./candidate.json --machine station01 --json
+machines apps plan --manifest ./candidate.json --machine station01 --json
+machines apps apply --manifest ./candidate.json --machine station01 \
+  --expected-plan-digest <sha256> --yes --approval-token <scoped-token>
+machines apps status --manifest ./candidate.json --machine station01 --json
+```
+
+The default source provider is Hasna Files. Callers may supply another bounded
+source loader for a task attachment, but missing or mismatched references,
+sizes, and SHA-256 digests fail before target execution. Source bytes are sent
+once through the Machines executor's bounded stdin and are not included in the
+plan, status, command, or logs. The target writes them to a mode-0600 temporary
+file inside a mode-0700 directory, verifies them again, then executes one exact
+`package@version` selector per step.
+
+The target requires the configured Bun executable path, the npm registry,
+seven-day release-age quarantine, and the exact package exclusion list to
+match before mutation. The two npm credential reference names remain
+station-local and are consumed only by `secrets exec`; credential values are
+never serialized by Machines. Each step must prove package JSON, Bun lock
+registry integrity, SDK import, and CLI help with one structured
+`machines.bun_package_probe.v1` object. A preimage of the Bun global tree, bin
+directory, and Bun configuration is taken before step one. Any step or probe
+failure restores that complete preimage and reports only bounded reason codes.
+
 ### Supply-chain freeze gate (`machines freeze`)
 
 Frozen packages are never installed or updated by reconcile; they surface as

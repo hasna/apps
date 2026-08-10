@@ -27,6 +27,9 @@ export interface MachineCommandOptions {
   killGraceMs?: number;
   maxOutputChars?: number;
   redactOutput?: boolean;
+  /** Bounded opaque stdin forwarded to the resolved local or remote command. */
+  stdin?: string | Buffer;
+  maxInputBytes?: number;
 }
 
 export interface ResolvedMachineCommand {
@@ -38,6 +41,8 @@ export interface ResolvedMachineCommand {
 }
 
 export type MachineCommandRunner = (machineId: string, command: string, options?: MachineCommandOptions) => MachineCommandResult;
+
+export const DEFAULT_MACHINE_COMMAND_MAX_INPUT_BYTES = 1_048_576;
 
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`;
@@ -90,12 +95,14 @@ export function runResolvedMachineCommand(
   resolved: ResolvedMachineCommand,
   options: MachineCommandOptions = {},
 ): MachineCommandResult {
+  const stdin = machineCommandInput(options);
   if (options.timeoutMs && options.timeoutMs > 0 && process.platform !== "win32") {
-    return runMachineCommandWithProcessGroupTimeout(machineId, resolved, options);
+    return runMachineCommandWithProcessGroupTimeout(machineId, resolved, options, stdin);
   }
   const result = spawnSync(resolved.command, resolved.args, {
     encoding: "utf8",
     env: process.env,
+    input: stdin,
     timeout: options.timeoutMs,
     killSignal: "SIGTERM",
   });
@@ -114,10 +121,23 @@ export function runResolvedMachineCommand(
   };
 }
 
+function machineCommandInput(options: MachineCommandOptions): Buffer | undefined {
+  if (options.stdin === undefined) return undefined;
+  const input = Buffer.isBuffer(options.stdin) ? options.stdin : Buffer.from(options.stdin, "utf8");
+  const maxInputBytes = Number.isFinite(options.maxInputBytes) && (options.maxInputBytes ?? 0) > 0
+    ? Math.floor(options.maxInputBytes!)
+    : DEFAULT_MACHINE_COMMAND_MAX_INPUT_BYTES;
+  if (input.byteLength > maxInputBytes) {
+    throw new Error(`Machine command stdin exceeds ${maxInputBytes} bytes.`);
+  }
+  return input;
+}
+
 function runMachineCommandWithProcessGroupTimeout(
   machineId: string,
   resolved: ResolvedMachineCommand,
   options: MachineCommandOptions,
+  stdin: Buffer | undefined,
 ): MachineCommandResult {
   const timeoutMs = Math.max(1, options.timeoutMs ?? 1);
   const killGraceMs = Math.max(1, options.killGraceMs ?? 1_000);
@@ -126,8 +146,9 @@ function runMachineCommandWithProcessGroupTimeout(
     : null;
   const helperDir = mkdtempSync(join(tmpdir(), "machines-timeout-helper-"));
   const pgidFile = join(helperDir, "pgid");
+  const helperHeader = Buffer.from(`${JSON.stringify({ command: resolved.command, args: resolved.args, inputBytes: stdin?.byteLength ?? 0 })}\n`, "utf8");
   const helper = spawnSync(process.execPath, ["--eval", PROCESS_GROUP_TIMEOUT_HELPER], {
-    input: JSON.stringify({ command: resolved.command, args: resolved.args }),
+    input: stdin ? Buffer.concat([helperHeader, stdin]) : helperHeader,
     encoding: "utf8",
     env: {
       ...process.env,
@@ -227,9 +248,15 @@ const PROCESS_GROUP_TIMEOUT_HELPER = `
 	const { readFileSync, writeFileSync } = require("node:fs");
 	${createIncrementalCredentialRedactor.toString()}
 
-	const plan = JSON.parse(readFileSync(0, "utf8"));
+	const input = readFileSync(0);
+	const headerEnd = input.indexOf(10);
+	if (headerEnd < 0) throw new Error("timeout helper input header is missing");
+	const plan = JSON.parse(input.subarray(0, headerEnd).toString("utf8"));
 	const command = String(plan.command || "");
 	const args = Array.isArray(plan.args) ? plan.args.map(String) : [];
+	const inputBytes = Math.max(0, Number.parseInt(String(plan.inputBytes || "0"), 10));
+	const childInput = input.subarray(headerEnd + 1);
+	if (childInput.byteLength !== inputBytes) throw new Error("timeout helper input length mismatch");
 	const timeoutMs = Math.max(1, Number.parseInt(process.env.HASNA_MACHINES_COMMAND_TIMEOUT_MS || "1", 10));
 	const killGraceMs = Math.max(1, Number.parseInt(process.env.HASNA_MACHINES_COMMAND_KILL_GRACE_MS || "1000", 10));
 	const parsedMaxOutputChars = Number.parseInt(process.env.HASNA_MACHINES_COMMAND_MAX_OUTPUT_CHARS || "", 10);
@@ -253,9 +280,11 @@ let pendingExit = null;
 
 const child = spawn(command, args, {
   detached: true,
-  stdio: ["ignore", "pipe", "pipe"],
+  stdio: ["pipe", "pipe", "pipe"],
 	  env: process.env,
 	});
+	child.stdin.on("error", () => {});
+	child.stdin.end(childInput);
 
 	if (pgidFile && child.pid) {
 	  try {

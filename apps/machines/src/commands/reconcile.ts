@@ -12,7 +12,17 @@ import {
 import { findFreeze, listActiveFreezes } from "./freeze.js";
 import { readManifest } from "../manifests.js";
 import { ensureParentDir, getManifestPath, getRolloutRecordsPath } from "../paths.js";
-import type { FleetManifest, FreezeEntry, ManifestPackageSpec } from "../types.js";
+import {
+  buildExactBunAppsPlan,
+  defaultExactBunSourceLoader,
+  exactBunPackages,
+  exactBunPlanStep,
+  runExactBunControllerTransaction,
+  type ExactBunBootstrapSourceLoader,
+  type ExactBunSourceLoader,
+} from "./bun-registry-installer.js";
+import { runMachineCommand, type MachineCommandRunner } from "../remote.js";
+import type { ExactBunAppsPlan, ExactBunAppsStatusResult, ExactBunRegistryPlanStep, FleetManifest, FreezeEntry, ManifestPackageSpec } from "../types.js";
 
 // Desired-state package reconcile loop for machines-agent.
 //
@@ -89,6 +99,7 @@ export interface DesiredPackage {
   /** False for library-only packages: skip `<bin> --version` verification. */
   verify: boolean;
   mcpHealthUrl?: string;
+  exactBunRegistry?: ExactBunRegistryPlanStep;
 }
 
 export function defaultBinForPackage(packageName: string): string {
@@ -103,6 +114,7 @@ function toDesired(spec: ManifestPackageSpec): DesiredPackage {
     bin: spec.bin ?? defaultBinForPackage(spec.name),
     verify: spec.verify !== false,
     mcpHealthUrl: spec.mcpHealthUrl,
+    exactBunRegistry: spec.exactBunRegistry ? exactBunPlanStep(spec) : undefined,
   };
 }
 
@@ -120,7 +132,14 @@ export function resolveDesiredPackages(manifest: FleetManifest, machineId: strin
   for (const spec of machine?.packages ?? []) {
     if (isBunManaged(spec)) merged.set(spec.name, { ...merged.get(spec.name), ...spec });
   }
-  return [...merged.values()].map(toDesired).sort((left, right) => left.name.localeCompare(right.name));
+  return [...merged.values()].map(toDesired).sort((left, right) => {
+    const leftOrder = left.exactBunRegistry?.order;
+    const rightOrder = right.exactBunRegistry?.order;
+    if (leftOrder !== undefined && rightOrder !== undefined) return leftOrder - rightOrder;
+    if (leftOrder !== undefined) return -1;
+    if (rightOrder !== undefined) return 1;
+    return left.name.localeCompare(right.name);
+  });
 }
 
 export type ReconcileActionKind = "install" | "update" | "skip" | "freeze-blocked";
@@ -136,6 +155,7 @@ export interface ReconcilePlanAction {
   desiredVersion: string | null;
   installedVersion: string | null;
   reason: string;
+  exactBunRegistry?: ExactBunRegistryPlanStep;
 }
 
 export interface ReconcilePlan {
@@ -143,6 +163,7 @@ export interface ReconcilePlan {
   generatedAt: string;
   actions: ReconcilePlanAction[];
   warnings: string[];
+  exactBunPlan?: ExactBunAppsPlan;
 }
 
 export interface BuildReconcilePlanOptions {
@@ -157,6 +178,7 @@ export interface BuildReconcilePlanOptions {
   eventVersions?: Record<string, string>;
   exec?: ExecFn;
   now?: Date;
+  exactInstalledState?: ExactBunAppsStatusResult;
 }
 
 export function buildReconcilePlan(options: BuildReconcilePlanOptions = {}): ReconcilePlan {
@@ -183,8 +205,16 @@ export function buildReconcilePlan(options: BuildReconcilePlanOptions = {}): Rec
     now,
   });
 
+  const machine = manifest.machines.find((entry) => entry.id === machineId);
+  const machineExactPackages = machine ? exactBunPackages(machine) : [];
+  const exactBunPlan = machineExactPackages.length > 0 && machine
+    ? buildExactBunAppsPlan(machine, options.exactInstalledState)
+    : undefined;
+  const filterTargetsExact = options.packageFilter
+    ? machineExactPackages.some((pkg) => pkg.name === options.packageFilter)
+    : false;
   const desired = resolveDesiredPackages(manifest, machineId)
-    .filter((spec) => !options.packageFilter || spec.name === options.packageFilter);
+    .filter((spec) => !options.packageFilter || (filterTargetsExact ? spec.exactBunRegistry !== undefined : spec.name === options.packageFilter));
 
   const actions: ReconcilePlanAction[] = desired.map((spec) => {
     const installedVersion = installedByName.get(spec.name) ?? null;
@@ -195,6 +225,7 @@ export function buildReconcilePlan(options: BuildReconcilePlanOptions = {}): Rec
       bin: spec.bin,
       verify: spec.verify,
       mcpHealthUrl: spec.mcpHealthUrl,
+      exactBunRegistry: spec.exactBunRegistry,
       desiredVersion: target,
       installedVersion,
     };
@@ -223,6 +254,7 @@ export function buildReconcilePlan(options: BuildReconcilePlanOptions = {}): Rec
     generatedAt: now.toISOString(),
     actions,
     warnings,
+    exactBunPlan,
   };
 }
 
@@ -262,6 +294,12 @@ export interface ExecuteReconcileOptions {
   recordsPath?: string | null;
   healthCheck?: (url: string) => Promise<McpHealth>;
   now?: () => Date;
+  manifest?: FleetManifest;
+  manifestPath?: string;
+  exactSourceLoader?: ExactBunSourceLoader;
+  exactBootstrapSourceLoader?: ExactBunBootstrapSourceLoader;
+  exactInstalledState?: ExactBunAppsStatusResult;
+  exactRunner?: MachineCommandRunner;
 }
 
 export interface ReconcileActionResult extends ReconcilePlanAction {
@@ -416,7 +454,100 @@ export async function executeReconcilePlan(plan: ReconcilePlan, options: Execute
     return record;
   };
 
+  const exactProcessed = new Set<string>();
+  const exactActions = plan.actions.filter((action) => action.exactBunRegistry !== undefined);
+  const exactNeedsApply = exactActions.some((action) => action.action === "install" || action.action === "update");
+  if (plan.exactBunPlan && exactNeedsApply) {
+    for (const action of exactActions) {
+      exactProcessed.add(action.package);
+    }
+    const blocked = exactActions.find((action) => action.action === "freeze-blocked");
+    if (blocked) {
+      for (const action of exactActions) {
+        const reason = action.action === "freeze-blocked" ? action.reason : `atomic peer frozen: ${blocked.package}`;
+        const record = keepRecord(buildRolloutRecord({
+          appId: action.appId,
+          package: action.package,
+          version: action.desiredVersion ?? action.installedVersion ?? "0.0.0",
+          machine: plan.machineId,
+          action: "freeze-blocked",
+          result: "blocked",
+          at: now().toISOString(),
+        }));
+        await emitRolloutEvent(context, DISTRIBUTION_EVENT_TYPES.rolloutFailed, record, `Atomic exact Bun rollout blocked: ${action.package}`);
+        results.push({ ...action, status: "blocked", error: reason });
+      }
+    } else {
+      for (const action of exactActions) {
+        const startedRecord = buildRolloutRecord({
+          appId: action.appId,
+          package: action.package,
+          version: action.desiredVersion!,
+          machine: plan.machineId,
+          action: action.action === "skip" ? "update" : action.action,
+          result: "running",
+          at: now().toISOString(),
+        });
+        await emitRolloutEvent(context, DISTRIBUTION_EVENT_TYPES.rolloutStarted, startedRecord, `Atomic exact Bun rollout started: ${action.package}`);
+      }
+
+      let exactState: "COMMITTED" | "ROLLED_BACK" | "ROLLBACK_FAILED" = "ROLLBACK_FAILED";
+      let exactReasonCodes: string[] = ["exact_bun_transaction_failed"];
+      try {
+        const manifest = options.manifest ?? readManifest(options.manifestPath ?? getManifestPath());
+        const machine = manifest.machines.find((entry) => entry.id === plan.machineId);
+        if (!machine) throw new Error("exact_target_missing");
+        const currentPlan = buildExactBunAppsPlan(machine, options.exactInstalledState);
+        if (currentPlan.planDigest !== plan.exactBunPlan.planDigest) throw new Error("exact_plan_digest_changed");
+        const transaction = runExactBunControllerTransaction(
+          machine,
+          currentPlan,
+          options.exactSourceLoader ?? defaultExactBunSourceLoader,
+          options.exactRunner ?? runMachineCommand,
+          options.exactBootstrapSourceLoader,
+        );
+        exactState = transaction.state;
+        exactReasonCodes = transaction.reasonCodes;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "";
+        exactReasonCodes = /^[a-z0-9_:,-]+$/.test(message) ? [message] : ["exact_bun_transaction_failed"];
+      }
+
+      const succeeded = exactState === "COMMITTED";
+      for (const action of exactActions) {
+        const verification: RolloutVerification = succeeded
+          ? { cliVersion: action.desiredVersion ?? undefined, mcpHealth: "not_checked" }
+          : { mcpHealth: "not_checked" };
+        const record = keepRecord(buildRolloutRecord({
+          appId: action.appId,
+          package: action.package,
+          version: action.desiredVersion!,
+          machine: plan.machineId,
+          action: action.action === "skip" ? "update" : action.action,
+          result: succeeded ? "succeeded" : "failed",
+          verifiedBy: verification,
+          at: now().toISOString(),
+        }));
+        await emitRolloutEvent(
+          context,
+          succeeded ? DISTRIBUTION_EVENT_TYPES.rolloutCompleted : DISTRIBUTION_EVENT_TYPES.rolloutFailed,
+          record,
+          `Atomic exact Bun rollout ${succeeded ? "completed" : "failed"}: ${action.package}`,
+        );
+        results.push({
+          ...action,
+          status: succeeded ? "succeeded" : "failed",
+          error: succeeded ? undefined : exactReasonCodes.join(","),
+          verifiedBy: verification,
+          rolledBackTo: succeeded ? undefined : action.installedVersion,
+        });
+      }
+      if (exactState === "ROLLBACK_FAILED") warnings.push("exact_bun_rollback_failed");
+    }
+  }
+
   for (const action of plan.actions) {
+    if (exactProcessed.has(action.package)) continue;
     if (action.action === "skip") {
       results.push({ ...action, status: "skipped" });
       continue;

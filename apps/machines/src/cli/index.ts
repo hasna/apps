@@ -47,7 +47,13 @@ import { buildCertPlan, runCertPlan } from "../commands/cert.js";
 import { addDomainMapping, listDomainMappings, renderDomainMapping } from "../commands/dns.js";
 import { applyFleetHosts, planFleetHosts } from "../commands/hosts.js";
 import { diffMachines } from "../commands/diff.js";
-import { buildAppsPlan, diffApps, getAppsStatus, listApps, runAppsPlan } from "../commands/apps.js";
+import { buildAppsPlan, diffApps, getAppsStatus, listApps, runAppsPlan, validateAppsCandidate } from "../commands/apps.js";
+import {
+  decodeExactBunTargetPayload,
+  executeExactBunTargetStatus,
+  executeExactBunTargetTransaction,
+  readBoundedExactBunSource,
+} from "../commands/bun-registry-installer.js";
 import { readManifest } from "../manifests.js";
 import { runMachineCommand } from "../remote.js";
 import {
@@ -204,6 +210,7 @@ import type {
   ClaudeCliStatusResult,
   DoctorReport,
   FleetStatus,
+  ExactBunAppsStatusResult,
   MachineManifest,
   NotificationConfig,
   NotificationDispatchSummary,
@@ -220,6 +227,17 @@ function printJsonOrText(data: unknown, text: string, json = false): void {
     return;
   }
   console.log(text);
+}
+
+function readExactBunInstalledState(path: string | undefined): ExactBunAppsStatusResult | undefined {
+  if (!path) return undefined;
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw new Error("invalid");
+    return parsed as ExactBunAppsStatusResult;
+  } catch {
+    throw new Error("installed_state_invalid");
+  }
 }
 
 function renderReconcileResult(result: import("../commands/reconcile.js").ReconcileResult): string {
@@ -1629,29 +1647,45 @@ appsCommand
   .command("list")
   .description("List manifest-managed apps for a machine")
   .option("--machine <id>", "Machine identifier")
+  .option("--manifest <path>", "Exact candidate manifest path")
   .option("-j, --json", "Print JSON output", false)
-  .action((options: { machine?: string; json?: boolean }) => {
-    const result = listApps(options.machine);
+  .action((options: { machine?: string; manifest?: string; json?: boolean }) => {
+    const result = listApps(options.machine, { manifestPath: options.manifest });
     printJsonOrText(result, renderAppsListResult(result), options.json);
+  });
+
+appsCommand
+  .command("validate")
+  .description("Validate one target-only exact app candidate manifest")
+  .requiredOption("--manifest <path>", "Exact candidate manifest path")
+  .requiredOption("--machine <id>", "Machine identifier")
+  .option("-j, --json", "Print JSON output", false)
+  .action((options: { machine: string; manifest: string; json?: boolean }) => {
+    const result = validateAppsCandidate(options.machine, { manifestPath: options.manifest });
+    console.log(JSON.stringify(result, null, 2));
+    if (!result.valid) process.exitCode = 1;
   });
 
 appsCommand
   .command("status")
   .description("Check installed state for manifest-managed apps")
   .option("--machine <id>", "Machine identifier")
+  .option("--manifest <path>", "Exact candidate manifest path")
   .option("-j, --json", "Print JSON output", false)
-  .action((options: { machine?: string; json?: boolean }) => {
-    const result = getAppsStatus(options.machine);
-    printJsonOrText(result, renderAppsStatusResult(result), options.json);
+  .action((options: { machine?: string; manifest?: string; json?: boolean }) => {
+    const result = getAppsStatus(options.machine, undefined, { manifestPath: options.manifest });
+    if ("schema" in result) console.log(JSON.stringify(result, null, 2));
+    else printJsonOrText(result, renderAppsStatusResult(result), options.json);
   });
 
 appsCommand
   .command("diff")
   .description("Show missing and installed manifest-managed apps")
   .option("--machine <id>", "Machine identifier")
+  .option("--manifest <path>", "Exact candidate manifest path")
   .option("-j, --json", "Print JSON output", false)
-  .action((options: { machine?: string; json?: boolean }) => {
-    const result = diffApps(options.machine);
+  .action((options: { machine?: string; manifest?: string; json?: boolean }) => {
+    const result = diffApps(options.machine, undefined, { manifestPath: options.manifest });
     printJsonOrText(result, renderAppsDiffResult(result), options.json);
   });
 
@@ -1659,8 +1693,14 @@ appsCommand
   .command("plan")
   .description("Preview app install steps for a machine")
   .option("--machine <id>", "Machine identifier")
-  .action((options: { machine?: string }) => {
-    const result = buildAppsPlan(options.machine);
+  .option("--manifest <path>", "Exact candidate manifest path")
+  .option("--installed-state <path>", "Exact status proof JSON used to derive remaining steps")
+  .option("-j, --json", "Print JSON output", false)
+  .action((options: { machine?: string; manifest?: string; installedState?: string; json?: boolean }) => {
+    const result = buildAppsPlan(options.machine, {
+      manifestPath: options.manifest,
+      installedState: readExactBunInstalledState(options.installedState),
+    });
     console.log(JSON.stringify(result, null, 2));
   });
 
@@ -1668,18 +1708,47 @@ appsCommand
   .command("apply")
   .description("Install manifest-managed apps for a machine")
   .option("--machine <id>", "Machine identifier")
+  .option("--manifest <path>", "Exact candidate manifest path")
+  .option("--installed-state <path>", "Exact status proof JSON used to derive remaining steps")
+  .option("--expected-plan-digest <sha256>", "Required digest of the validated exact plan")
   .option("--yes", "Confirm execution", false)
   .option("--approval-token <token>", "Scoped mutation approval token")
-  .action((options: { machine?: string; yes?: boolean; approvalToken?: string }) => {
+  .action((options: { machine?: string; manifest?: string; installedState?: string; expectedPlanDigest?: string; yes?: boolean; approvalToken?: string }) => {
     const resolvedMachineId = cliMachineId(options.machine);
-    const plan = buildAppsPlan(options.machine);
+    const installedState = readExactBunInstalledState(options.installedState);
+    const plan = buildAppsPlan(options.machine, { manifestPath: options.manifest, installedState });
     requireCliMutation("apps_apply", options.approvalToken, {
       machineId: resolvedMachineId,
       resourceId: cliPlanResourceId("apps_apply", resolvedMachineId, plan),
       args: cliPlanApprovalArgs({ machine_id: resolvedMachineId, yes: options.yes }, plan),
     });
-    const result = runAppsPlan(plan, { apply: true, yes: options.yes });
+    const result = runAppsPlan(plan, {
+      apply: true,
+      yes: options.yes,
+      expectedPlanDigest: options.expectedPlanDigest,
+      manifestPath: options.manifest,
+      installedState,
+    });
     console.log(JSON.stringify(result, null, 2));
+  });
+
+appsCommand
+  .command("exact-bun-transaction")
+  .requiredOption("--payload <base64url>")
+  .action((options: { payload: string }) => {
+    const payload = decodeExactBunTargetPayload(options.payload);
+    const expectedBytes = payload.steps[0]?.source.sizeBytes ?? 0;
+    const source = readBoundedExactBunSource(expectedBytes);
+    const result = executeExactBunTargetTransaction(payload, source);
+    console.log(JSON.stringify(result));
+  });
+
+appsCommand
+  .command("exact-bun-status")
+  .requiredOption("--payload <base64url>")
+  .action((options: { payload: string }) => {
+    const payload = decodeExactBunTargetPayload(options.payload);
+    console.log(JSON.stringify(executeExactBunTargetStatus(payload)));
   });
 
 program

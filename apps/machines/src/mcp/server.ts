@@ -272,8 +272,13 @@ export function createMcpServer(version: string, options: McpServerOptions = {})
   server.tool(
     "machines_apps_apply",
     "Install manifest-managed apps for a machine.",
-    { machine_id: z.string().optional().describe("Machine identifier"), yes: z.boolean().describe("Confirmation flag for execution"), approval_token: approvalTokenSchema },
-    async ({ machine_id, yes, approval_token }) => {
+    {
+      machine_id: z.string().optional().describe("Machine identifier"),
+      yes: z.boolean().describe("Confirmation flag for execution"),
+      expected_plan_digest: z.string().regex(/^[a-f0-9]{64}$/).optional().describe("Required exact candidate plan digest"),
+      approval_token: approvalTokenSchema,
+    },
+    async ({ machine_id, yes, expected_plan_digest, approval_token }) => {
       const resolvedMachineId = mutationMachineId(machine_id);
       const plan = buildAppsPlan(machine_id);
       requireMcpMutation("machines_apps_apply", approval_token, {
@@ -281,7 +286,7 @@ export function createMcpServer(version: string, options: McpServerOptions = {})
         resourceId: mcpPlanResourceId("machines_apps_apply", resolvedMachineId, plan),
         args: mcpPlanApprovalArgs({ machine_id: resolvedMachineId, yes }, plan),
       });
-      return { content: [{ type: "text", text: JSON.stringify(runAppsPlan(plan, { apply: true, yes }), null, 2) }] };
+      return { content: [{ type: "text", text: JSON.stringify(runAppsPlan(plan, { apply: true, yes, expectedPlanDigest: expected_plan_digest }), null, 2) }] };
     }
   );
 

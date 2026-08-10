@@ -17,6 +17,21 @@ export function getManifestPath(): string {
   return process.env["HASNA_MACHINES_MANIFEST_PATH"] || join(getDataDir(), "machines.json");
 }
 
+/**
+ * Resolve one exact manifest authority for candidate operations.
+ * An explicit CLI path may not silently override a different environment path.
+ */
+export function resolveExactManifestPath(explicitPath?: string, env: NodeJS.ProcessEnv = process.env): string {
+  const explicit = explicitPath?.trim() ? resolve(explicitPath) : null;
+  const configured = env["HASNA_MACHINES_MANIFEST_PATH"]?.trim()
+    ? resolve(env["HASNA_MACHINES_MANIFEST_PATH"]!)
+    : null;
+  if (explicit && configured && explicit !== configured) {
+    throw new Error("Explicit --manifest and HASNA_MACHINES_MANIFEST_PATH resolve to different files.");
+  }
+  return explicit ?? configured ?? resolve(getManifestPath());
+}
+
 export function getNotificationsPath(): string {
   return process.env["HASNA_MACHINES_NOTIFICATIONS_PATH"] || join(getDataDir(), "notifications.json");
 }
