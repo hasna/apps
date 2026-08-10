@@ -253,7 +253,7 @@ function errorResult(
   );
 }
 
-async function withDeadline<T>(
+async function withLoadDeadline<T>(
   operation: () => Promise<T>,
   controller: AbortController,
   timeoutMs: number,
@@ -264,6 +264,36 @@ async function withDeadline<T>(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      callback();
+    };
+    const timer = setTimeout(() => {
+      const error = new TodosAiContractError(
+        "timeout",
+        `AI run timed out after ${timeoutMs}ms`,
+        TODOS_AI_EXIT_CODES.timeout,
+      );
+      controller.abort(error);
+      settle(() => reject(error));
+    }, timeoutMs);
+
+    Promise.resolve()
+      .then(operation)
+      .then(
+        (value) => settle(() => resolve(value)),
+        (error: unknown) => settle(() => reject(error)),
+      );
+  });
+}
+
+async function withInterrupt<T>(
+  operation: () => Promise<T>,
+  controller: AbortController,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const settle = (callback: () => void): void => {
+      if (settled) return;
+      settled = true;
       process.removeListener("SIGINT", onInterrupt);
       callback();
     };
@@ -276,15 +306,6 @@ async function withDeadline<T>(
       controller.abort(error);
       settle(() => reject(error));
     };
-    const timer = setTimeout(() => {
-      const error = new TodosAiContractError(
-        "timeout",
-        `AI run timed out after ${timeoutMs}ms`,
-        TODOS_AI_EXIT_CODES.timeout,
-      );
-      controller.abort(error);
-      settle(() => reject(error));
-    }, timeoutMs);
     process.once("SIGINT", onInterrupt);
 
     Promise.resolve()
@@ -515,17 +536,21 @@ async function runTodosAi(
     const controller = new AbortController();
     const sink = createRuntimeEventSink(format, controller, resumeRunId);
     eventSink = sink;
-    const runtimeResult = await withDeadline(
+    const runtimeResult = await withInterrupt(
       async () => {
-        const runtime = await loadTodosAiRuntime({
-          package_name: "@hasna/todos",
-          package_version: getPackageVersion(),
-          protocol_version: TODOS_AI_RUNTIME_PROTOCOL_VERSION,
-          tool_source: createTodosAiToolSource({
-            env: process.env,
-            workspacePath: process.cwd(),
+        const runtime = await withLoadDeadline(
+          () => loadTodosAiRuntime({
+            package_name: "@hasna/todos",
+            package_version: getPackageVersion(),
+            protocol_version: TODOS_AI_RUNTIME_PROTOCOL_VERSION,
+            tool_source: createTodosAiToolSource({
+              env: process.env,
+              workspacePath: process.cwd(),
+            }),
           }),
-        });
+          controller,
+          resolved.timeout_ms,
+        );
         throwIfAborted(controller.signal);
         const runtimeOperation = Promise.resolve().then(() => {
           throwIfAborted(controller.signal);
@@ -537,7 +562,6 @@ async function runTodosAi(
         return sink.raceWithFailure(runtimeOperation);
       },
       controller,
-      resolved.timeout_ms,
     );
     const result = assertTodosAiRunResult(runtimeResult);
     eventSink.assertResult(result, resolved.max_steps);

@@ -114,6 +114,17 @@ function terminal(status, runId = "fixture-run") {
   return value;
 }
 
+function timeoutTerminal(runId) {
+  const value = terminal("failed", runId);
+  value.error = {
+    code: "timeout",
+    message: "The Todos AI run timed out.",
+    retryable: true,
+    details: null,
+  };
+  return value;
+}
+
 function fakeRuntimeModule() {
   return {
     TODOS_AI_RUNTIME_PROTOCOL_VERSION:
@@ -142,7 +153,12 @@ function fakeRuntimeModule() {
             throw new Error("fixture internal details must not escape");
           }
           if (scenario === "timeout") {
-            return await new Promise(() => {});
+            await Bun.sleep(request.limits.timeout_ms);
+            return timeoutTerminal(runId);
+          }
+          if (scenario === "provider-stall-after-write") {
+            await Bun.sleep(request.limits.timeout_ms + 100);
+            return terminal("completed", runId);
           }
           if (scenario === "wait-interrupt") {
             return await new Promise((resolve, reject) => {
@@ -998,9 +1014,51 @@ describe("todos ai stable failure mapping", () => {
     expect(run.exitCode).toBe(TODOS_AI_EXIT_CODES.timeout);
     expect(jsonResult(run)).toMatchObject({
       status: "failed",
-      error: { code: "timeout", retryable: false },
+      error: { code: "timeout", retryable: true },
     });
   }, 5_000);
+
+  test("runtime deadline preserves verified completion and pre-write timeout", async () => {
+    const approvalRef = `todos-ai:update_task:${"a".repeat(64)}`;
+    const completed = await runAi([
+      "ai",
+      "apply",
+      "one",
+      "change",
+      "--format",
+      "json",
+      "--timeout-ms",
+      "1000",
+      "--write-mode",
+      "execute",
+      "--approval-mode",
+      "existing",
+      "--approval",
+      approvalRef,
+      "--non-interactive",
+    ], { scenario: "provider-stall-after-write" });
+    expect(completed.exitCode).toBe(0);
+    expect(jsonResult(completed)).toMatchObject({
+      status: "completed",
+      data: {
+        operation: "update_task",
+        applied: true,
+        readback_verified: true,
+        approval_ref: approvalRef,
+      },
+      error: null,
+    });
+
+    const timedOut = await runAi(
+      ["ai", "wait", "--format", "json", "--timeout-ms", "1000"],
+      { scenario: "timeout" },
+    );
+    expect(timedOut.exitCode).toBe(TODOS_AI_EXIT_CODES.timeout);
+    expect(jsonResult(timedOut)).toMatchObject({
+      status: "failed",
+      error: { code: "timeout", retryable: true },
+    });
+  }, 8_000);
 
   test("maps SIGINT to interrupted", async () => {
     const run = await runAi(
