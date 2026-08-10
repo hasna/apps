@@ -161,6 +161,7 @@ const [
   { registerPlanTemplateCommands },
   { registerProjectCommands },
   { registerAgentCommands },
+  { registerAiCommands },
   { registerConfigServeCommands },
   { registerQueryCommands },
   { registerMcpHooksCommands },
@@ -193,6 +194,7 @@ const [
   import("./commands/plan-template-commands.js"),
   import("./commands/project-commands.js"),
   import("./commands/agent-commands.js"),
+  import("./commands/ai-commands.js"),
   import("./commands/config-serve-commands.js"),
   import("./commands/query-commands.js"),
   import("./commands/mcp-hooks-commands.js"),
@@ -228,6 +230,7 @@ registerTaskCommands(program);
 registerPlanTemplateCommands(program);
 registerProjectCommands(program);
 registerAgentCommands(program);
+registerAiCommands(program);
 registerConfigServeCommands(program);
 registerQueryCommands(program);
 registerMcpHooksCommands(program);

@@ -1,5 +1,6 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import type { TodosAiStoredConfig } from "../ai.js";
 import { ensureDir, getTodosGlobalDir, readJsonFile, writeJsonFile } from "./sync-utils.js";
 
 export interface AgentConfig {
@@ -391,6 +392,8 @@ export interface TodosConfig {
   encryption_profiles?: Record<string, LocalEncryptionProfileConfig>;
   /** Local secret safety settings for offline redaction and export scanning. */
   secret_safety?: SecretSafetyConfig;
+  /** Provider-neutral defaults for the optional @hasna/todos-ai runtime. */
+  ai?: TodosAiStoredConfig;
 }
 
 export function getConfigPath(): string {
@@ -430,6 +433,21 @@ export function saveConfig(config: TodosConfig): TodosConfig {
 
 export function updateConfig(patch: Partial<TodosConfig>): TodosConfig {
   return saveConfig({ ...loadConfig(), ...patch });
+}
+
+export function getTodosAiConfig(): TodosAiStoredConfig {
+  const configPath = getConfigPath();
+  if (!existsSync(configPath)) return {};
+  const parsed = JSON.parse(readFileSync(configPath, "utf8")) as unknown;
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Todos config must be a JSON object");
+  }
+  const ai = (parsed as Record<string, unknown>)["ai"];
+  if (ai === undefined) return {};
+  if (ai === null || typeof ai !== "object" || Array.isArray(ai)) {
+    throw new Error("Todos AI configuration must be an object");
+  }
+  return { ...(ai as TodosAiStoredConfig) };
 }
 
 export function normalizeApiUrl(value: string | null | undefined): string | null {

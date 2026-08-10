@@ -19,7 +19,15 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      - name: Install AI companion dependencies
+        working-directory: ai
+        run: bun install --frozen-lockfile
+
       - name: Type check
+        run: bun run typecheck
+
+      - name: Type check AI companion
+        working-directory: ai
         run: bun run typecheck
 
       - name: No-cloud release guards
@@ -33,7 +41,15 @@ jobs:
         # transient failures so genuine (deterministic) failures still surface.
         run: bun test --retry=2
 
+      - name: Test AI companion
+        working-directory: ai
+        run: bun test
+
       - name: Build
+        run: bun run build
+
+      - name: Build AI companion
+        working-directory: ai
         run: bun run build
 
   dashboard:

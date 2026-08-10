@@ -83,6 +83,8 @@ export type {
 } from "./capabilities.js";
 
 // Stable integration contracts
+export * from "./ai.js";
+export * from "./ai-tools.js";
 export { TODOS_CONTRACTS, TODOS_API_ROUTES, TODOS_ERROR_CODES, createContractsManifest } from "./contracts.js";
 export type {
   CreateContractsManifestOptions,
@@ -1809,6 +1811,7 @@ export type {
 
 // Config
 export {
+  getTodosAiConfig,
   loadConfig,
   updateConfig,
   getCompletionGuardConfig,
