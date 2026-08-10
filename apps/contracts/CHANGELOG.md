@@ -2,6 +2,15 @@
 
 All notable changes to `@hasna/contracts` are documented here.
 
+## [0.10.5] - 2026-08-10
+
+- Generated SDK request builders serialize array-valued OpenAPI query
+  parameters as repeated keys, preserving individual values and unchanged
+  scalar serialization.
+
+PATCH, not minor. This corrects generated request encoding without changing
+public signatures or contract shapes.
+
 ## [0.10.4] - 2026-08-09
 
 - Fails closed when a deployment approval is not authorized by the required
