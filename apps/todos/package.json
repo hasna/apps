@@ -72,6 +72,8 @@
     "dev:serve": "bun run src/server/index.ts",
     "verify:release": "bun run scripts/verify-public-release.ts --mode=review",
     "verify:release-review": "bun run scripts/verify-npm-release-agent-review.ts",
+    "verify:attested-container-candidate": "bun run scripts/attested-container-candidate.ts verify",
+    "test:attested-container-candidate": "bun test scripts/attested-container-candidate.test.ts",
     "issue:release-review": "bun run scripts/issue-npm-release-agent-review.ts",
     "prepublishOnly": "bun run scripts/verify-public-release.ts --mode=publish",
     "postinstall": "mkdir -p $HOME/.hasna/todos $HOME/.hasna/todos/training 2>/dev/null || true"
@@ -124,6 +126,7 @@
     "@types/bun": "^1.2.4",
     "@types/react": "^18.3.18",
     "bun-types": "1.3.9",
+    "hasna-deployment-contracts": "npm:@hasna/contracts@0.10.4",
     "typescript": "^5.7.3"
   }
 }
