@@ -200,10 +200,19 @@ function resolveAdapter(options: CreateTodosAiReadToolSourceOptions): TodosAiRea
 
 function resolvePermission(
   options: CreateTodosAiReadToolSourceOptions,
+  profile: AccessProfile,
 ): (permission: ToolPermission, tool: TodosAiToolName) => boolean {
   if (options.workspacePermission) return options.workspacePermission;
   const path = options.workspacePath ?? process.cwd();
-  return (permission) => checkWorkspacePermission({ path, tool: permission }).allowed;
+  return (permission, tool) => {
+    const check = checkWorkspacePermission({ path, tool: permission });
+    return check.allowed ||
+      (profile === "minimal" &&
+        tool === "get_task" &&
+        permission === "read" &&
+        check.status.matched_root === null &&
+        check.status.profile.preset === "restricted");
+  };
 }
 
 function configuredProfileIsKnown(value: string | undefined): boolean {
@@ -223,7 +232,7 @@ export function createTodosAiToolSource(
     : process.env["TODOS_PROFILE"];
   const profile = options.accessProfile ??
     resolveAccessProfile(configuredProfile ?? "minimal");
-  const permission = resolvePermission(options);
+  const permission = resolvePermission(options, profile);
   const enabled = new Set<TodosAiReadToolName>(
     TODOS_AI_READ_TOOL_NAMES.filter((name) =>
       shouldRegisterToolForProfile(name, profile) &&
