@@ -669,7 +669,10 @@ export function listProjectChannelMessagePage(
       m.created_at
     FROM messages m
     JOIN channels c ON c.name = m.channel
-    LEFT JOIN messages parent ON parent.id = m.reply_to
+    LEFT JOIN messages parent
+      ON parent.id = m.reply_to
+     AND parent.channel = m.channel
+     AND parent.session_id = m.session_id
     WHERE c.id = ? AND m.project_id = ? AND m.id > ?
     ORDER BY m.id ASC
     LIMIT ?

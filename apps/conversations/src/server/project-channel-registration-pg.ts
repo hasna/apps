@@ -467,7 +467,10 @@ export async function listProjectChannelMessagePagePg(
       m.created_at
     FROM messages m
     JOIN channels c ON c.name = m.channel
-    LEFT JOIN messages parent ON parent.id = m.reply_to
+    LEFT JOIN messages parent
+      ON parent.id = m.reply_to
+     AND parent.channel = m.channel
+     AND parent.session_id = m.session_id
     WHERE c.id = $1 AND m.project_id = $2 AND m.id > $3
     ORDER BY m.id ASC
     LIMIT $4

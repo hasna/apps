@@ -1766,6 +1766,13 @@ async function handleV1(
       requestedProjectId: string | null;
       projectParamIndex: number;
     }> = [];
+    const replyReferences: Array<{
+      itemIndex: number;
+      uuid: string;
+      replyTo: number;
+      channel: string | null;
+      sessionId: string;
+    }> = [];
     const projectIdx = cols.indexOf("project_id");
     for (let i = 0; i < items.length; i++) {
       const raw = items[i];
@@ -1785,6 +1792,7 @@ async function handleV1(
       const sessionId = str(m.session_id) ?? `api:${from}`;
       const channel = str(m.channel);
       const projectId = str(m.project_id);
+      const replyTo = typeof m.reply_to === "number" ? m.reply_to : null;
       assertNoSensitiveContent(content, "Message content");
       assertNoSensitiveContent(from, "Message sender");
       assertNoSensitiveContent(to, "Message recipient");
@@ -1808,7 +1816,7 @@ async function handleV1(
         str(m.pinned_at) ?? null,
         m.blocking === true || m.blocking === 1,
         str(m.attachments) ?? null,
-        typeof m.reply_to === "number" ? m.reply_to : null,
+        replyTo,
         str(m.created_at) ?? null,
         str(m.read_at) ?? null,
       ];
@@ -1823,6 +1831,15 @@ async function handleV1(
           channel,
           requestedProjectId: projectId ?? null,
           projectParamIndex: base + projectIdx,
+        });
+      }
+      if (replyTo !== null) {
+        replyReferences.push({
+          itemIndex: i,
+          uuid,
+          replyTo,
+          channel: channel ?? null,
+          sessionId,
         });
       }
     }
@@ -1851,6 +1868,39 @@ async function handleV1(
           );
         }
         params[entry.projectParamIndex] = channelProjectId;
+      }
+
+      if (replyReferences.length > 0) {
+        const existingRows = await tx.many<{ uuid: string }>(
+          "SELECT uuid FROM messages WHERE uuid = ANY($1::text[]) FOR SHARE",
+          [[...new Set(replyReferences.map((entry) => entry.uuid))]],
+        );
+        const existingUuids = new Set(existingRows.map((row) => row.uuid));
+        const newReplyReferences = replyReferences.filter(
+          (reference) => !existingUuids.has(reference.uuid),
+        );
+        const replyIds = [...new Set(newReplyReferences.map((entry) => entry.replyTo))];
+        const parents = await tx.many<{
+          id: number;
+          channel: string | null;
+          session_id: string;
+        }>(
+          "SELECT id, channel, session_id FROM messages WHERE id = ANY($1::bigint[]) FOR SHARE",
+          [replyIds],
+        );
+        const parentsById = new Map(parents.map((parent) => [Number(parent.id), parent]));
+        for (const reference of newReplyReferences) {
+          const parent = parentsById.get(reference.replyTo);
+          if (!parent) {
+            throw new Error(`messages[${reference.itemIndex}].reply_to parent not found.`);
+          }
+          if ((parent.channel ?? null) !== reference.channel) {
+            throw new Error(`messages[${reference.itemIndex}].reply_to does not match parent channel.`);
+          }
+          if (parent.session_id !== reference.sessionId) {
+            throw new Error(`messages[${reference.itemIndex}].reply_to does not match parent session.`);
+          }
+        }
       }
 
       return tx.query<{ id: number; from_agent: string; channel: string | null; content: string }>(

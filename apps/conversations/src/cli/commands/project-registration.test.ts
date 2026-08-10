@@ -3,7 +3,7 @@ import { Command } from "commander";
 import { registerProjectRegistrationCommands } from "./project-registration.js";
 
 describe("registerProjectRegistrationCommands", () => {
-  test("registers create, capability, paged channel, paged message, and exact read commands", () => {
+  test("registers create, terminal receipt, inverse, producer page, and exact read commands", () => {
     const program = new Command();
     registerProjectRegistrationCommands(program);
 
@@ -13,6 +13,9 @@ describe("registerProjectRegistrationCommands", () => {
     expect(names).toEqual(expect.arrayContaining([
       "capability",
       "create",
+      "lookup-receipt",
+      "compensate",
+      "verify-inverse",
       "channels",
       "messages",
       "read-channel",

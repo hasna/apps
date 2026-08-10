@@ -8,6 +8,9 @@ import { isolatedStoreChildEnv } from "../lib/store/isolated-test-env.js";
 const TEST_DIR = mkdtempSync(join(tmpdir(), "conversations-project-registration-cli-"));
 const TEST_DB = join(TEST_DIR, "conversations.db");
 const REQUEST_FILE = join(TEST_DIR, "registration.json");
+const LOOKUP_FILE = join(TEST_DIR, "registration-lookup.json");
+const INVERSE_FORWARD_FILE = join(TEST_DIR, "registration-inverse-forward.json");
+const INVERSE_FILE = join(TEST_DIR, "registration-inverse.json");
 const PROJECT_ID = "wks_ys8tzpsZJMNtx0ORZtLsA";
 const CLI = ["bun", "run", "./src/cli/index.tsx"];
 
@@ -83,8 +86,42 @@ describe("project-registration CLI producer contract", () => {
       "--json",
     ]);
     expect(createdResult.exitCode, createdResult.stderr).toBe(0);
-    const created = JSON.parse(createdResult.stdout) as { target_id: string };
+    const created = JSON.parse(createdResult.stdout) as Record<string, any> & { target_id: string };
     expect(created.target_id).toMatch(/^chn_[0-9a-f]{32}$/);
+
+    writeFileSync(LOOKUP_FILE, JSON.stringify({
+      operation_id: created.operation_id,
+      step_id: created.step_id,
+      resource_kind: created.resource_kind,
+      direction: created.direction,
+      authority: created.authority,
+      authority_route: created.route,
+      package_version: created.package_version,
+      authority_id: created.authority_id,
+      tenant_id: created.tenant_id,
+      corpus_id: created.corpus_id,
+      target_selector: "cli-project-feed",
+      idempotency_key: created.idempotency_key,
+      request_digest: created.request_digest,
+      precondition_digest: created.precondition_digest,
+      max_items: 1,
+      response_byte_limit: 32_768,
+      time_budget_ms: 5_000,
+      call_limit: 1,
+    }));
+    const lookupResult = runCli([
+      "project-registration",
+      "lookup-receipt",
+      "--request",
+      LOOKUP_FILE,
+      "--json",
+    ]);
+    expect(lookupResult.exitCode, lookupResult.stderr).toBe(0);
+    expect(JSON.parse(lookupResult.stdout).receipt).toMatchObject({
+      receipt_id: created.receipt_id,
+      outcome: "accepted",
+      target_id: created.target_id,
+    });
 
     const unboundResult = runCli([
       "channel",
@@ -200,5 +237,121 @@ describe("project-registration CLI producer contract", () => {
     ]);
     expect(secondMessages.complete).toBe(true);
     expect(secondMessages.truncated).toBe(false);
+
+    const inverseTargetDesired = {
+      channel: "cli-inverse-target",
+      project_id: PROJECT_ID,
+      project_slug: "cli-inverse-target",
+      project_kind: "work",
+    };
+    writeFileSync(INVERSE_FORWARD_FILE, JSON.stringify({
+      operation_id: "cli-inverse-operation",
+      step_id: "conversations-channel",
+      resource_kind: "channel",
+      direction: "forward",
+      authority_route: capability.route,
+      package_version: capability.package_version,
+      authority_id: capability.authority_id,
+      tenant_id: capability.tenant_id,
+      corpus_id: capability.corpus_id,
+      target_selector: "cli-inverse-target",
+      idempotency_key: "cli-inverse-operation:conversations-channel:forward",
+      request_digest: projectChannelRegistrationDigest(inverseTargetDesired),
+      precondition_digest: projectChannelRegistrationDigest({
+        target_selector: "cli-inverse-target",
+        expected: "absent",
+      }),
+      project_id: PROJECT_ID,
+      project_slug: "cli-inverse-target",
+      project_name: "CLI Inverse Target",
+      desired: inverseTargetDesired,
+      target_digest: "cli-target-digest",
+      response_byte_limit: 32_768,
+      time_budget_ms: 5_000,
+      call_limit: 1,
+    }));
+    const inverseCreatedResult = runCli([
+      "project-registration",
+      "create",
+      "--request",
+      INVERSE_FORWARD_FILE,
+      "--json",
+    ]);
+    expect(inverseCreatedResult.exitCode, inverseCreatedResult.stderr).toBe(0);
+    const inverseCreated = JSON.parse(inverseCreatedResult.stdout) as Record<string, any> & { target_id: string };
+    const inverseDesired = {
+      accepted_receipt_id: inverseCreated.receipt_id,
+      target_id: inverseCreated.target_id,
+    };
+    writeFileSync(INVERSE_FILE, JSON.stringify({
+      operation_id: inverseCreated.operation_id,
+      step_id: inverseCreated.step_id,
+      resource_kind: "channel",
+      direction: "inverse",
+      authority_route: inverseCreated.route,
+      package_version: inverseCreated.package_version,
+      authority_id: inverseCreated.authority_id,
+      tenant_id: inverseCreated.tenant_id,
+      corpus_id: inverseCreated.corpus_id,
+      target_selector: inverseCreated.target_id,
+      idempotency_key: `${inverseCreated.operation_id}:${inverseCreated.step_id}:inverse`,
+      request_digest: projectChannelRegistrationDigest(inverseDesired),
+      precondition_digest: projectChannelRegistrationDigest({
+        target_id: inverseCreated.target_id,
+        expected_revision: inverseCreated.result_revision,
+        expected_digest: inverseCreated.result_digest,
+      }),
+      project_id: PROJECT_ID,
+      project_slug: "cli-inverse-target",
+      project_name: "CLI Inverse Target",
+      desired: inverseDesired,
+      accepted_receipt: inverseCreated,
+      target_digest: "cli-target-digest",
+      response_byte_limit: 32_768,
+      time_budget_ms: 5_000,
+      call_limit: 1,
+    }));
+    const compensatedResult = runCli([
+      "project-registration",
+      "compensate",
+      "--request",
+      INVERSE_FILE,
+      "--json",
+    ]);
+    expect(compensatedResult.exitCode, compensatedResult.stderr).toBe(0);
+    const compensated = JSON.parse(compensatedResult.stdout) as Record<string, unknown>;
+    expect(compensated).toMatchObject({
+      direction: "inverse",
+      outcome: "accepted",
+      target_id: inverseCreated.target_id,
+      accepted_receipt_id: inverseCreated.receipt_id,
+    });
+
+    const verifiedResult = runCli([
+      "project-registration",
+      "verify-inverse",
+      "--request",
+      INVERSE_FILE,
+      "--json",
+    ]);
+    expect(verifiedResult.exitCode, verifiedResult.stderr).toBe(0);
+    expect(JSON.parse(verifiedResult.stdout)).toEqual({
+      target_id: inverseCreated.target_id,
+      accepted_receipt_id: inverseCreated.receipt_id,
+      absent: true,
+      digest: compensated.result_digest,
+    });
+
+    const channelsAfterInverse = runCli([
+      "project-registration",
+      "channels",
+      "--project",
+      PROJECT_ID,
+      "--json",
+    ]);
+    expect(channelsAfterInverse.exitCode, channelsAfterInverse.stderr).toBe(0);
+    expect(JSON.parse(channelsAfterInverse.stdout).items).toEqual([
+      expect.objectContaining({ target_id: created.target_id, channel: "cli-project-feed" }),
+    ]);
   });
 });

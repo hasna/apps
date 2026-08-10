@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import type { Command } from "commander";
 import { closeDb } from "../../lib/db.js";
 import type {
+  ProjectChannelRegistrationLookupRequest,
   ProjectChannelRegistrationRequest,
   ProjectChannelRegistrationReadRequest,
 } from "../../lib/project-channel-registration.js";
@@ -45,6 +46,29 @@ function remoteTarget(digest: string) {
   };
 }
 
+function requestObject(path: string, opts: OutputOptions): Record<string, unknown> {
+  const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    emitCliError("The request file must contain one JSON object.", opts);
+  }
+  return parsed as Record<string, unknown>;
+}
+
+function registrationRequest(path: string, opts: OutputOptions): ProjectChannelRegistrationRequest {
+  const parsed = requestObject(path, opts);
+  const targetDigest = typeof parsed.target_digest === "string"
+    ? parsed.target_digest.trim()
+    : "";
+  if (!targetDigest) {
+    emitCliError("The request file must include target_digest.", opts);
+  }
+  const { target_digest: _targetDigest, target: _target, ...request } = parsed;
+  return {
+    ...request,
+    target: remoteTarget(targetDigest),
+  } as unknown as ProjectChannelRegistrationRequest;
+}
+
 function collectionBounds(opts: {
   responseByteLimit: unknown;
   timeBudgetMs: unknown;
@@ -85,18 +109,54 @@ export function registerProjectRegistrationCommands(program: Command): void {
     .option("-j, --json", "Output as JSON")
     .action(async (opts) => {
       try {
-        const parsed = JSON.parse(readFileSync(opts.request, "utf8")) as Record<string, unknown>;
-        const targetDigest = typeof parsed.target_digest === "string"
-          ? parsed.target_digest.trim()
-          : "";
-        if (!targetDigest) {
-          emitCliError("The request file must include target_digest.", opts);
-        }
-        const { target_digest: _targetDigest, target: _target, ...request } = parsed;
-        printJson(await getStore().registerProjectChannel({
-          ...request,
-          target: remoteTarget(targetDigest),
-        } as unknown as ProjectChannelRegistrationRequest));
+        printJson(await getStore().registerProjectChannel(
+          registrationRequest(opts.request, opts),
+        ));
+      } finally {
+        closeDb();
+      }
+    });
+
+  registration
+    .command("lookup-receipt")
+    .description("Look up one exact terminal project channel registration receipt")
+    .requiredOption("--request <path>", "Terminal receipt lookup request JSON file")
+    .option("-j, --json", "Output as JSON")
+    .action(async (opts) => {
+      try {
+        printJson(await getStore().lookupProjectChannelRegistrationReceipt(
+          requestObject(opts.request, opts) as unknown as ProjectChannelRegistrationLookupRequest,
+        ));
+      } finally {
+        closeDb();
+      }
+    });
+
+  registration
+    .command("compensate")
+    .description("Conditionally inverse an accepted project channel registration")
+    .requiredOption("--request <path>", "Inverse contract request JSON file")
+    .option("-j, --json", "Output as JSON")
+    .action(async (opts) => {
+      try {
+        printJson(await getStore().compensateProjectChannelRegistration(
+          registrationRequest(opts.request, opts),
+        ));
+      } finally {
+        closeDb();
+      }
+    });
+
+  registration
+    .command("verify-inverse")
+    .description("Verify accepted inverse receipt and target absence")
+    .requiredOption("--request <path>", "Inverse contract request JSON file")
+    .option("-j, --json", "Output as JSON")
+    .action(async (opts) => {
+      try {
+        printJson(await getStore().verifyProjectChannelRegistrationInverse(
+          registrationRequest(opts.request, opts),
+        ));
       } finally {
         closeDb();
       }

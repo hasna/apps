@@ -288,7 +288,11 @@ class FakeProjectRegistrationClient implements PoolQueryClient {
           project_id: message.project_id,
           reply_to_target_id: message.reply_to === null
             ? null
-            : this.state.messages.find((candidate) => candidate.id === message.reply_to)?.uuid ?? null,
+            : this.state.messages.find((candidate) =>
+              candidate.id === message.reply_to
+              && (!query.includes("parent.channel = m.channel") || candidate.channel === message.channel)
+              && (!query.includes("parent.session_id = m.session_id") || candidate.session_id === message.session_id)
+            )?.uuid ?? null,
           session_id: message.session_id,
           from_agent: message.from_agent,
           to_agent: message.to_agent,
@@ -622,6 +626,104 @@ describe("PostgreSQL project channel registration authority", () => {
       call_limit: 1,
     });
     expect(laterMessages.items.map((item) => item.target_id)).toEqual(["msg-later"]);
+  });
+
+  test("does not expose reply targets from another channel or session", async () => {
+    const client = new FakeProjectRegistrationClient();
+    const projectId = "wks_ys8tzpsZJMNtx0ORZtLsA";
+    const rightId = "chn_00000000000000000000000000000072";
+    client.state.channels.set("left", {
+      id: "chn_00000000000000000000000000000071",
+      name: "left",
+      description: null,
+      topic: null,
+      project_id: projectId,
+      created_by: "tester",
+      created_at: "2026-08-08T09:00:00.000Z",
+      archived_at: null,
+      metadata: null,
+      tags: null,
+    });
+    client.state.channels.set("right", {
+      id: rightId,
+      name: "right",
+      description: null,
+      topic: null,
+      project_id: projectId,
+      created_by: "tester",
+      created_at: "2026-08-08T09:00:00.000Z",
+      archived_at: null,
+      metadata: null,
+      tags: null,
+    });
+    client.state.messages.push(
+      {
+        id: 71,
+        uuid: "msg-left-parent",
+        session_id: "channel:left",
+        from_agent: "alice",
+        to_agent: "left",
+        channel: "left",
+        project_id: projectId,
+        content: "left parent",
+        priority: "normal",
+        reply_to: null,
+        created_at: "2026-08-08T09:01:00.000Z",
+      },
+      {
+        id: 72,
+        uuid: "msg-right-parent",
+        session_id: "channel:right",
+        from_agent: "alice",
+        to_agent: "right",
+        channel: "right",
+        project_id: projectId,
+        content: "right parent",
+        priority: "normal",
+        reply_to: null,
+        created_at: "2026-08-08T09:02:00.000Z",
+      },
+      {
+        id: 73,
+        uuid: "msg-cross-channel-child",
+        session_id: "channel:left",
+        from_agent: "bob",
+        to_agent: "right",
+        channel: "right",
+        project_id: projectId,
+        content: "cross-channel child",
+        priority: "normal",
+        reply_to: 71,
+        created_at: "2026-08-08T09:03:00.000Z",
+      },
+      {
+        id: 74,
+        uuid: "msg-cross-session-child",
+        session_id: "channel:other",
+        from_agent: "carol",
+        to_agent: "right",
+        channel: "right",
+        project_id: projectId,
+        content: "cross-session child",
+        priority: "normal",
+        reply_to: 72,
+        created_at: "2026-08-08T09:04:00.000Z",
+      },
+    );
+
+    const page = await listProjectChannelMessagePagePg(client, {
+      project_id: projectId,
+      target_id: rightId,
+      max_items: 10,
+      response_byte_limit: 32_768,
+      time_budget_ms: 5_000,
+      call_limit: 1,
+    });
+
+    expect(page.items.find((item) => item.target_id === "msg-cross-channel-child")?.reply_to_target_id)
+      .toBeNull();
+    expect(page.items.find((item) => item.target_id === "msg-cross-session-child")?.reply_to_target_id)
+      .toBeNull();
   });
 
   test("locks the stable step identity before the selector for changed requests", async () => {
