@@ -186,6 +186,17 @@ export const HOOKS: HookMeta[] = [
     matcher: "Bash",
     tags: ["codewith", "bash", "secrets", "gitleaks", "risky-ops"],
   },
+  {
+    name: "scanoutput",
+    displayName: "Scan Output",
+    description:
+      "Scans tool output for credential shapes and warns. Detection only — the output is already persisted when this runs; it cannot redact or prevent",
+    version: "0.1.0",
+    category: "Security",
+    event: "PostToolUse",
+    matcher: "Bash",
+    tags: ["security", "credentials", "secrets", "detection", "audit"],
+  },
 
   // Notifications
   {
