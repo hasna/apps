@@ -8,6 +8,12 @@ All notable changes to this project will be documented in this file.
 
 - **Channel creation is atomic across validation, insertion, and creator membership.** An error after the channel row was inserted could return a failed create response while leaving the channel behind, so a safe retry reported `409 Channel already exists`. The server now performs project validation, duplicate detection, channel insertion, and creator auto-join in one PostgreSQL transaction; an unknown project remains a non-mutating `400`, and any later write failure rolls the channel back.
 
+## 0.5.44 - 2026-08-10
+
+### Added
+
+- **Projects can safely adopt an existing Conversations channel and its message history.** Guarded create and bind-existing surfaces now enforce operation-specific request intent while preserving legacy create callers, atomically move exact legacy channel and message ownership into a workspace, emit immutable receipts, and provide conditional inverse rollback across SQLite, PostgreSQL, CLI, API, OpenAPI, and generated SDK surfaces (#150).
+
 ## 0.5.43 - 2026-08-10
 
 ### Added
