@@ -154,7 +154,10 @@ describe('generated artifact verification', () => {
   });
 
   test('the cross-platform matrix does not cancel Windows when another OS fails', () => {
-    const workflow = readFileSync(join(repoRoot, '.github', 'workflows', 'ci.yml'), 'utf8');
+    const workflow = readFileSync(join(repoRoot, '.github', 'workflows', 'ci.yml'), 'utf8').replace(
+      /\r\n/g,
+      '\n',
+    );
     expect(workflow).toContain(
       [
         '  test-matrix:',
