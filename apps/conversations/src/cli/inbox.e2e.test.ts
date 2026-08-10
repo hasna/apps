@@ -35,6 +35,7 @@ type InboxRun = {
 
 type RunFixtures = {
   backfillMessages?: Array<Record<string, unknown>>;
+  paginateBackfill?: boolean;
   seedMessages?: Array<Record<string, unknown>>;
   tasks?: Array<Record<string, unknown>>;
   todosFail?: boolean;
@@ -78,7 +79,24 @@ if [ "\${1:-}" = "since" ]; then
 fi
 if [ "\${1:-}" = "read" ]; then
   case " $* " in
-    *" --since-id "*) printf '%s\n' "\${STUB_BACKFILL_MESSAGES:-[]}" ;;
+    *" --since-id "*)
+      if [ "\${STUB_BACKFILL_PAGINATE:-0}" = "1" ]; then
+        since_id=0
+        read_limit=500
+        while [ "$#" -gt 0 ]; do
+          case "$1" in
+            --since-id) since_id="\${2:-0}"; shift 2 ;;
+            --limit) read_limit="\${2:-500}"; shift 2 ;;
+            *) shift ;;
+          esac
+        done
+        jq -c --argjson since "$since_id" --argjson cap "$read_limit" \
+          '[.[]? | select((.id // 0) > $since)] | sort_by(.id) | .[:$cap]' \
+          <<< "\${STUB_BACKFILL_MESSAGES:-[]}"
+      else
+        printf '%s\n' "\${STUB_BACKFILL_MESSAGES:-[]}"
+      fi
+      ;;
     *) printf '%s\n' "\${STUB_SEED_MESSAGES:-[]}" ;;
   esac
   exit 0
@@ -147,6 +165,7 @@ function runInbox(
       INBOX_STATE_DIR: harness.stateRoot,
       PATH: `${harness.binDir}:${process.env.PATH ?? ""}`,
       STUB_BACKFILL_MESSAGES: JSON.stringify(fixtures.backfillMessages ?? []),
+      STUB_BACKFILL_PAGINATE: fixtures.paginateBackfill ? "1" : "0",
       STUB_LOG: harness.stubLog,
       STUB_SEED_MESSAGES: JSON.stringify(fixtures.seedMessages ?? []),
       STUB_TASKS: JSON.stringify(fixtures.tasks ?? []),
@@ -392,6 +411,108 @@ describe("inbox bounded cursor recovery", () => {
     expect(result.stdout).not.toContain("message-4");
     expect(await readCursor(stateDir)).toBe("2");
     expect(await readFile(harness.stubLog, "utf8")).toContain("read --since-id 1 --limit 1 --json");
+  });
+
+  test("recovers multiple bounded pages in one check before the next clean poll", async () => {
+    const harness = await createHarness();
+    const stateDir = join(harness.stateRoot, "seat");
+    await seedState(stateDir, "1");
+    const fixtures = {
+      backfillMessages: Array.from({ length: 8 }, (_, index) => message(index + 2)),
+      paginateBackfill: true,
+      windowMessages: [message(10), message(11)],
+    };
+
+    const gap = runInbox(
+      harness,
+      ["check", "--as", "seat", "--limit", "3", "--no-todos"],
+      fixtures,
+    );
+
+    expect(gap.exitCode).toBe(3);
+    expect(gap.stderr).toContain("GAP");
+    for (let id = 2; id <= 9; id += 1) {
+      expect(gap.stdout).toContain(`message-${id}`);
+    }
+    expect(gap.stdout).not.toContain("message-10");
+    expect(await readCursor(stateDir)).toBe("9");
+
+    const log = await readFile(harness.stubLog, "utf8");
+    expect(log).toContain("read --since-id 1 --limit 3 --json");
+    expect(log).toContain("read --since-id 4 --limit 3 --json");
+    expect(log).toContain("read --since-id 7 --limit 3 --json");
+
+    const clean = runInbox(
+      harness,
+      ["check", "--as", "seat", "--limit", "3", "--no-todos"],
+      fixtures,
+    );
+
+    expect(clean.exitCode).toBe(0);
+    expect(clean.stderr).toBe("");
+    expect(clean.stdout).toContain("message-10");
+    expect(clean.stdout).toContain("message-11");
+    expect(await readCursor(stateDir)).toBe("11");
+  });
+
+  test("recovers materially more than the 500-row store page in one check", async () => {
+    const harness = await createHarness();
+    const stateDir = join(harness.stateRoot, "seat");
+    await seedState(stateDir, "1");
+    const fixtures = {
+      backfillMessages: Array.from({ length: 600 }, (_, index) => message(index + 2)),
+      paginateBackfill: true,
+      windowMessages: [message(602), message(603)],
+    };
+
+    const result = runInbox(
+      harness,
+      ["check", "--as", "seat", "--limit", "500", "--no-todos"],
+      fixtures,
+    );
+
+    expect(result.exitCode).toBe(3);
+    expect(result.stdout).toContain("message-2");
+    expect(result.stdout).toContain("message-501");
+    expect(result.stdout).toContain("message-601");
+    expect(result.stdout).not.toContain("message-602");
+    expect(await readCursor(stateDir)).toBe("601");
+
+    const log = await readFile(harness.stubLog, "utf8");
+    expect(log).toContain("read --since-id 1 --limit 500 --json");
+    expect(log).toContain("read --since-id 501 --limit 500 --json");
+  });
+
+  test("honors the per-invocation row cap across multiple recovery pages", async () => {
+    const harness = await createHarness();
+    const stateDir = join(harness.stateRoot, "seat");
+    await seedState(stateDir, "1");
+    const fixtures = {
+      backfillMessages: Array.from({ length: 7 }, (_, index) => message(index + 2)),
+      paginateBackfill: true,
+      windowMessages: [message(9), message(10)],
+    };
+
+    const result = runInbox(
+      harness,
+      ["check", "--as", "seat", "--limit", "3", "--no-todos"],
+      fixtures,
+      { INBOX_BACKFILL_MAX: "5", INBOX_BACKFILL_CHUNK: "3" },
+    );
+
+    expect(result.exitCode).toBe(3);
+    expect(result.stderr).toContain("per-invocation row cap 5 reached at cursor 6");
+    for (let id = 2; id <= 6; id += 1) {
+      expect(result.stdout).toContain(`message-${id}`);
+    }
+    expect(result.stdout).not.toContain("message-7");
+    expect(result.stdout).not.toContain("message-8");
+    expect(await readCursor(stateDir)).toBe("6");
+
+    const log = await readFile(harness.stubLog, "utf8");
+    expect(log).toContain("read --since-id 1 --limit 3 --json");
+    expect(log).toContain("read --since-id 4 --limit 2 --json");
+    expect(log).not.toContain("read --since-id 6");
   });
 
   test("uses one order-independent state directory and conservatively migrates aliases", async () => {
