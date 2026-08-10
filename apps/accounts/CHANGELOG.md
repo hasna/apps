@@ -6,6 +6,39 @@ All notable changes to `@hasna/accounts` are documented here. The format is base
 
 ## [Unreleased]
 
+## [0.2.43] - 2026-08-10
+
+Release span measured from the published `0.2.42` release to the head being
+prepared (`npm/accounts/v0.2.42` = `0cf1716` .. `635166f`): five commits, four
+product fixes (#150-#153) and one release-infrastructure change (#154).
+
+### Fixed
+
+- **One Claude account identity can no longer occupy multiple live-default
+  profile directories (#153).** The duplicate-account guard covers the normal
+  live-default destination, an explicitly selected `--dir`, and a destination
+  selected through `CLAUDE_CONFIG_DIR`. The only bypass is the deliberate
+  `--allow-duplicate-account-dir` override; automated usage hooks never set it.
+- **Claude launchability fails closed after an explicitly requested credential
+  refresh is rejected (#150).** Cache-only renewable credentials and successful
+  refreshes remain launchable, while a rejected requested refresh no longer
+  reports the profile as ready.
+- **Required instruction overlays are scoped to the active configs provider
+  (#151).** Global instruction sources remain required without forcing
+  provider-specific overlays into unrelated provider homes.
+- **Usage and repair routes distinguish a Claude directory's current account
+  occupant from its registered profile owner (#152).** Live-default and orphan
+  credentials are no longer attributed to the wrong profile during account
+  health and repair decisions.
+
+### Changed
+
+- **Release-review trust rotates to generation 2 under the fixed Fable reviewer
+  (#154).** The prior Rawls key authorizes the new public trust only through the
+  signed rotation envelope anchored to the exact published `0.2.42` trust
+  bytes. This is release infrastructure and does not change product runtime
+  behavior.
+
 ## [0.2.42] - 2026-08-09
 
 `npm/accounts/v0.2.41` is immutable and remains unpublished at its old
