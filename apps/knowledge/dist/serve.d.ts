@@ -2,6 +2,7 @@ import { ApiKeyStore, type ApiKeyVerifier } from '@hasna/contracts/auth';
 import { type KnowledgeItem, type KnowledgeItemVersion, type KnowledgeItemVersionList } from './store.js';
 import { type KnowledgeAuthorityBinding } from './guarded-write-contract.js';
 import type { PoolQueryClient } from './generated/storage-kit/index.js';
+import { type KnowledgeProjectLinksAuthority } from './project-links.js';
 export declare const KNOWLEDGE_SERVE_APP = "knowledge";
 /**
  * Restore the vendored storage kit's intended `sslmode=require` semantics
@@ -144,6 +145,12 @@ export interface ServeDeps {
      * routes keep working and guarded routes fail closed with 503.
      */
     guardedAuthority?: KnowledgeServeGuardedAuthority;
+    /**
+     * Optional test/host override for the package-owned project-link authority.
+     * Production uses the same Postgres client as notes and scopes every
+     * authority instance to the authenticated tenant.
+     */
+    projectLinksAuthority?: (tenantId: string) => KnowledgeProjectLinksAuthority;
 }
 export declare function createServeHandler(deps: ServeDeps): (req: Request) => Promise<Response>;
 export interface StartServeOptions {

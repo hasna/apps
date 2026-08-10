@@ -92,6 +92,17 @@ import {
 } from './guarded-write-contract.js';
 import type { PoolQueryClient, TypedQueryClient } from './generated/storage-kit/index.js';
 import { KNOWLEDGE_BOUNDED_QUERY_CAPABILITY } from './query-contract.js';
+import {
+  KnowledgeProjectLinksError,
+  createPostgresKnowledgeProjectLinksAuthority,
+  knowledgeProjectLinksErrorResponse,
+  type KnowledgeProjectItemBindingRequest,
+  type KnowledgeProjectInverseRequest,
+  type KnowledgeProjectLinksAuthority,
+  type KnowledgeProjectReceiptLookupRequest,
+  type KnowledgeProjectRegistrationRequest,
+  type KnowledgeProjectResourceKind,
+} from './project-links.js';
 
 export const KNOWLEDGE_SERVE_APP = 'knowledge';
 
@@ -2613,6 +2624,168 @@ export function knowledgeOpenApi(version: string): Record<string, unknown> {
           ],
           additionalProperties: true,
         },
+        ProjectRegistrationCapability: {
+          type: 'object',
+          required: [
+            'authority',
+            'route',
+            'resource_route',
+            'package_version',
+            'authority_id',
+            'tenant_id',
+            'corpus_id',
+            'supported_resources',
+            'membership_rule',
+          ],
+          additionalProperties: true,
+        },
+        ProjectRegistrationReceipt: {
+          type: 'object',
+          required: [
+            'receipt_id',
+            'authority',
+            'route',
+            'package_version',
+            'authority_id',
+            'tenant_id',
+            'corpus_id',
+            'operation_id',
+            'step_id',
+            'action',
+            'resource_kind',
+            'direction',
+            'idempotency_key',
+            'request_digest',
+            'precondition_digest',
+            'outcome',
+            'created_by_operation',
+            'created_at',
+          ],
+          additionalProperties: true,
+        },
+        ProjectCollectionRecord: {
+          type: 'object',
+          required: [
+            'source_project_id',
+            'project_id',
+            'project_slug',
+            'project_name',
+            'collection_id',
+            'collection_slug',
+            'collection_name',
+            'membership_rule',
+            'revision',
+            'digest',
+            'created_at',
+            'updated_at',
+          ],
+          properties: {
+            source_project_id: { type: 'string' },
+            project_id: { type: 'string' },
+            project_slug: { type: 'string' },
+            project_name: { type: 'string' },
+            collection_id: { type: 'string' },
+            collection_slug: { type: 'string' },
+            collection_name: { type: 'string' },
+            membership_rule: {
+              type: 'string',
+              enum: ['explicit_collection_binding'],
+            },
+            revision: { type: 'string' },
+            digest: { type: 'string' },
+            created_at: { type: 'string', format: 'date-time' },
+            updated_at: { type: 'string', format: 'date-time' },
+          },
+          additionalProperties: false,
+        },
+        ProjectResource: {
+          type: 'object',
+          required: [
+            'key',
+            'kind',
+            'id',
+            'project_id',
+            'source_project_id',
+            'collection_id',
+            'revision',
+            'digest',
+            'title',
+            'locator',
+            'metadata',
+          ],
+          properties: {
+            key: { type: 'string' },
+            kind: {
+              type: 'string',
+              enum: ['project', 'collection', 'item', 'taxonomy'],
+            },
+            id: { type: 'string' },
+            project_id: { type: 'string' },
+            source_project_id: { type: 'string' },
+            collection_id: { type: 'string' },
+            revision: { type: 'string' },
+            digest: { type: 'string' },
+            title: { type: 'string' },
+            locator: {
+              type: 'object',
+              required: ['kind', 'value'],
+              properties: {
+                kind: {
+                  type: 'string',
+                  enum: ['external_uuid', 'canonical_uri'],
+                },
+                value: { type: 'string' },
+              },
+              additionalProperties: false,
+            },
+            metadata: {
+              type: 'object',
+              additionalProperties: true,
+            },
+          },
+          additionalProperties: false,
+        },
+        ProjectResourcePage: {
+          type: 'object',
+          required: [
+            'schema',
+            'authority',
+            'route',
+            'authority_id',
+            'tenant_id',
+            'corpus_id',
+            'project_id',
+            'source_project_id',
+            'collection_id',
+            'collection_revision',
+            'population_digest',
+            'resource_kinds',
+            'resources',
+            'count',
+            'total',
+            'limit',
+            'cursor',
+            'next_cursor',
+            'has_more',
+            'complete',
+            'truncated',
+          ],
+          properties: {
+            collection_revision: { type: 'string' },
+            population_digest: { type: 'string' },
+            resources: {
+              type: 'array',
+              items: { $ref: '#/components/schemas/ProjectResource' },
+            },
+            count: { type: 'integer' },
+            total: { type: 'integer' },
+            limit: { type: 'integer', minimum: 1, maximum: 200 },
+            has_more: { type: 'boolean' },
+            complete: { type: 'boolean' },
+            truncated: { type: 'boolean', enum: [false] },
+          },
+          additionalProperties: true,
+        },
         NoteList: {
           type: 'object',
           properties: {
@@ -2661,6 +2834,230 @@ export function knowledgeOpenApi(version: string): Record<string, unknown> {
     },
     security: [{ apiKey: [] }],
     paths: {
+      '/v1/project-registration/capability': {
+        get: {
+          operationId: 'getKnowledgeProjectRegistrationCapability',
+          summary: 'Read the exact Knowledge project-registration capability identity',
+          responses: {
+            '200': {
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      capability: { $ref: '#/components/schemas/ProjectRegistrationCapability' },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      '/v1/project-registration/create': {
+        post: {
+          operationId: 'registerKnowledgeProjectCollection',
+          summary: 'Create or exactly adopt one project-owned Knowledge collection',
+          responses: {
+            '201': {
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      receipt: { $ref: '#/components/schemas/ProjectRegistrationReceipt' },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      '/v1/project-registration/read-exact': {
+        post: {
+          operationId: 'readKnowledgeProjectCollection',
+          summary: 'Read one project collection by exact stable collection id',
+          responses: {
+            '200': {
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      record: { $ref: '#/components/schemas/ProjectCollectionRecord' },
+                    },
+                  },
+                },
+              },
+            },
+            '404': { description: 'No exact collection id.' },
+          },
+        },
+      },
+      '/v1/project-registration/receipts/lookup': {
+        post: {
+          operationId: 'lookupKnowledgeProjectRegistrationReceipt',
+          summary: 'Look up exactly one immutable registration or membership receipt',
+          responses: {
+            '200': {
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      receipt: { $ref: '#/components/schemas/ProjectRegistrationReceipt' },
+                    },
+                  },
+                },
+              },
+            },
+            '404': { description: 'No exact terminal receipt.' },
+          },
+        },
+      },
+      '/v1/project-registration/compensate': {
+        post: {
+          operationId: 'compensateKnowledgeProjectCollection',
+          summary: 'Conditionally remove an operation-created empty collection aggregate',
+          responses: {
+            '201': {
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      receipt: { $ref: '#/components/schemas/ProjectRegistrationReceipt' },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      '/v1/project-registration/verify-inverse': {
+        post: {
+          operationId: 'verifyKnowledgeProjectCollectionInverse',
+          summary: 'Verify an accepted collection inverse by exact receipt and absence',
+          responses: { '200': { description: 'Exact absence verification.' } },
+        },
+      },
+      '/v1/project-registration/items/bind': {
+        post: {
+          operationId: 'bindKnowledgeItemToProjectCollection',
+          summary: 'Explicitly bind one exact existing item to a project collection',
+          responses: {
+            '201': {
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      receipt: { $ref: '#/components/schemas/ProjectRegistrationReceipt' },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      '/v1/project-registration/items/read-exact': {
+        post: {
+          operationId: 'readKnowledgeProjectItemBinding',
+          summary: 'Read one exact collection/item membership',
+          responses: {
+            '200': { description: 'Exact membership readback.' },
+            '404': { description: 'No exact membership.' },
+          },
+        },
+      },
+      '/v1/project-registration/items/compensate': {
+        post: {
+          operationId: 'compensateKnowledgeProjectItemBinding',
+          summary: 'Conditionally remove a membership owned by the accepted binding receipt',
+          responses: {
+            '201': {
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      receipt: { $ref: '#/components/schemas/ProjectRegistrationReceipt' },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      '/v1/project-registration/items/verify-inverse': {
+        post: {
+          operationId: 'verifyKnowledgeProjectItemBindingInverse',
+          summary: 'Verify an accepted membership inverse by exact receipt and absence',
+          responses: { '200': { description: 'Exact membership absence verification.' } },
+        },
+      },
+      '/v1/projects/{projectId}/resources': {
+        get: {
+          operationId: 'listKnowledgeProjectResources',
+          summary: 'Enumerate the complete stable project/collection/item/taxonomy population',
+          parameters: [
+            { name: 'projectId', in: 'path', required: true, schema: { type: 'string' } },
+            { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 200 } },
+            { name: 'cursor', in: 'query', schema: { type: 'string' } },
+            {
+              name: 'kind',
+              in: 'query',
+              style: 'form',
+              explode: true,
+              schema: {
+                type: 'array',
+                items: { type: 'string', enum: ['project', 'collection', 'item', 'taxonomy'] },
+              },
+            },
+          ],
+          responses: {
+            '200': {
+              content: {
+                'application/json': { schema: { $ref: '#/components/schemas/ProjectResourcePage' } },
+              },
+            },
+            '409': { description: 'Cursor is stale or belongs to another population.' },
+          },
+        },
+      },
+      '/v1/projects/{projectId}/resources/{kind}/{resourceId}': {
+        get: {
+          operationId: 'getKnowledgeProjectResource',
+          summary: 'Read one project resource by exact stable kind and id',
+          parameters: [
+            { name: 'projectId', in: 'path', required: true, schema: { type: 'string' } },
+            {
+              name: 'kind',
+              in: 'path',
+              required: true,
+              schema: { type: 'string', enum: ['project', 'collection', 'item', 'taxonomy'] },
+            },
+            { name: 'resourceId', in: 'path', required: true, schema: { type: 'string' } },
+          ],
+          responses: {
+            '200': {
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: { resource: { $ref: '#/components/schemas/ProjectResource' } },
+                  },
+                },
+              },
+            },
+            '404': { description: 'No exact resource kind and id.' },
+          },
+        },
+      },
       '/v1/notes': {
         get: {
           operationId: 'listNotes',
@@ -3639,6 +4036,12 @@ export interface ServeDeps {
    * routes keep working and guarded routes fail closed with 503.
    */
   guardedAuthority?: KnowledgeServeGuardedAuthority;
+  /**
+   * Optional test/host override for the package-owned project-link authority.
+   * Production uses the same Postgres client as notes and scopes every
+   * authority instance to the authenticated tenant.
+   */
+  projectLinksAuthority?: (tenantId: string) => KnowledgeProjectLinksAuthority;
 }
 
 export function createServeHandler(deps: ServeDeps): (req: Request) => Promise<Response> {
@@ -3646,6 +4049,19 @@ export function createServeHandler(deps: ServeDeps): (req: Request) => Promise<R
   const guardedRepo = deps.guardedAuthority
     ? new GuardedWriteRepo(deps.client, deps.guardedAuthority)
     : null;
+  const projectLinksForTenant = (tenantId: string): KnowledgeProjectLinksAuthority => (
+    deps.projectLinksAuthority?.(tenantId)
+    ?? createPostgresKnowledgeProjectLinksAuthority({
+      client: deps.client,
+      itemResolver: (id) => repo.get(id, tenantId),
+      options: {
+        packageVersion: deps.version,
+        authorityId: process.env.HASNA_KNOWLEDGE_PROJECT_AUTHORITY_ID ?? KNOWLEDGE_SERVE_APP,
+        tenantId,
+        corpusId: process.env.HASNA_KNOWLEDGE_PROJECT_CORPUS_ID ?? 'knowledge',
+      },
+    })
+  );
   const mode = 'postgres';
 
   const authOrThrow = async (
@@ -4017,6 +4433,121 @@ export function createServeHandler(deps: ServeDeps): (req: Request) => Promise<R
           : boundedJson({ error: 'not_found' }, 404, bounds, startedAt);
       }
 
+      // ---- Projects resource-link producer ----
+      if (path === '/v1/project-registration/capability') {
+        if (method !== 'GET') return json({ error: 'method_not_allowed' }, 405);
+        const principal = await authOrThrow(req, ['knowledge:read']);
+        return json({ capability: await projectLinksForTenant(principal.tid).capability() });
+      }
+
+      if (path === '/v1/project-registration/create') {
+        if (method !== 'POST') return json({ error: 'method_not_allowed' }, 405);
+        const principal = await authOrThrow(req, ['knowledge:write']);
+        const body = await req.json().catch(() => ({})) as KnowledgeProjectRegistrationRequest;
+        return json({ receipt: await projectLinksForTenant(principal.tid).registerCollection(body) }, 201);
+      }
+
+      if (path === '/v1/project-registration/read-exact') {
+        if (method !== 'POST') return json({ error: 'method_not_allowed' }, 405);
+        const principal = await authOrThrow(req, ['knowledge:read']);
+        const body = await req.json().catch(() => ({})) as { collection_id?: string };
+        return json({
+          record: await projectLinksForTenant(principal.tid).readCollection(
+            String(body.collection_id ?? ''),
+          ),
+        });
+      }
+
+      if (path === '/v1/project-registration/receipts/lookup') {
+        if (method !== 'POST') return json({ error: 'method_not_allowed' }, 405);
+        const principal = await authOrThrow(req, ['knowledge:read']);
+        const body = await req.json().catch(() => ({})) as KnowledgeProjectReceiptLookupRequest;
+        return json({ receipt: await projectLinksForTenant(principal.tid).lookupReceipt(body) });
+      }
+
+      if (path === '/v1/project-registration/compensate') {
+        if (method !== 'POST') return json({ error: 'method_not_allowed' }, 405);
+        const principal = await authOrThrow(req, ['knowledge:write']);
+        const body = await req.json().catch(() => ({})) as KnowledgeProjectInverseRequest;
+        return json({ receipt: await projectLinksForTenant(principal.tid).compensateRegistration(body) }, 201);
+      }
+
+      if (path === '/v1/project-registration/verify-inverse') {
+        if (method !== 'POST') return json({ error: 'method_not_allowed' }, 405);
+        const principal = await authOrThrow(req, ['knowledge:read']);
+        const body = await req.json().catch(() => ({})) as KnowledgeProjectInverseRequest;
+        return json({
+          verification: await projectLinksForTenant(principal.tid).verifyRegistrationInverse(body),
+        });
+      }
+
+      if (path === '/v1/project-registration/items/bind') {
+        if (method !== 'POST') return json({ error: 'method_not_allowed' }, 405);
+        const principal = await authOrThrow(req, ['knowledge:write']);
+        const body = await req.json().catch(() => ({})) as KnowledgeProjectItemBindingRequest;
+        return json({ receipt: await projectLinksForTenant(principal.tid).bindItem(body) }, 201);
+      }
+
+      if (path === '/v1/project-registration/items/read-exact') {
+        if (method !== 'POST') return json({ error: 'method_not_allowed' }, 405);
+        const principal = await authOrThrow(req, ['knowledge:read']);
+        const body = await req.json().catch(() => ({})) as {
+          collection_id?: string;
+          item_id?: string;
+        };
+        return json({
+          record: await projectLinksForTenant(principal.tid).readItemBinding(
+            String(body.collection_id ?? ''),
+            String(body.item_id ?? ''),
+          ),
+        });
+      }
+
+      if (path === '/v1/project-registration/items/compensate') {
+        if (method !== 'POST') return json({ error: 'method_not_allowed' }, 405);
+        const principal = await authOrThrow(req, ['knowledge:write']);
+        const body = await req.json().catch(() => ({})) as KnowledgeProjectInverseRequest;
+        return json({ receipt: await projectLinksForTenant(principal.tid).compensateItemBinding(body) }, 201);
+      }
+
+      if (path === '/v1/project-registration/items/verify-inverse') {
+        if (method !== 'POST') return json({ error: 'method_not_allowed' }, 405);
+        const principal = await authOrThrow(req, ['knowledge:read']);
+        const body = await req.json().catch(() => ({})) as KnowledgeProjectInverseRequest;
+        return json({
+          verification: await projectLinksForTenant(principal.tid).verifyItemBindingInverse(body),
+        });
+      }
+
+      const exactProjectResourceMatch = path.match(
+        /^\/v1\/projects\/([^/]+)\/resources\/(project|collection|item|taxonomy)\/([^/]+)$/,
+      );
+      if (exactProjectResourceMatch) {
+        if (method !== 'GET') return json({ error: 'method_not_allowed' }, 405);
+        const principal = await authOrThrow(req, ['knowledge:read']);
+        const resource = await projectLinksForTenant(principal.tid).readProjectResource(
+          decodeURIComponent(exactProjectResourceMatch[1]!),
+          exactProjectResourceMatch[2] as KnowledgeProjectResourceKind,
+          decodeURIComponent(exactProjectResourceMatch[3]!),
+        );
+        return json({ resource });
+      }
+
+      const projectResourcesMatch = path.match(/^\/v1\/projects\/([^/]+)\/resources$/);
+      if (projectResourcesMatch) {
+        if (method !== 'GET') return json({ error: 'method_not_allowed' }, 405);
+        const principal = await authOrThrow(req, ['knowledge:read']);
+        const page = await projectLinksForTenant(principal.tid).listProjectResources(
+          decodeURIComponent(projectResourcesMatch[1]!),
+          {
+            limit: url.searchParams.has('limit') ? Number(url.searchParams.get('limit')) : undefined,
+            cursor: url.searchParams.get('cursor'),
+            kinds: url.searchParams.getAll('kind') as KnowledgeProjectResourceKind[],
+          },
+        );
+        return json(page);
+      }
+
       // ---- Notes bounded queries and CRUD ----
       if (path === '/v1/notes/search') {
         if (method !== 'GET') return json({ error: 'method_not_allowed' }, 405);
@@ -4139,6 +4670,9 @@ export function createServeHandler(deps: ServeDeps): (req: Request) => Promise<R
 
       return json({ error: 'not_found', path }, 404);
     } catch (error) {
+      if (error instanceof KnowledgeProjectLinksError) {
+        return knowledgeProjectLinksErrorResponse(error);
+      }
       if (error instanceof HttpError) {
         const reason = error.status === 401 || error.status === 403 ? 'unauthorized' : 'error';
         return json({ error: reason, message: error.message }, error.status);

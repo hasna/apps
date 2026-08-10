@@ -1,6 +1,7 @@
 import { KnowledgeService, type KnowledgeServiceOptions } from './service.js';
 import type { KnowledgeItem } from './store.js';
 import type { ItemStore, ItemCreateInput, ItemPatch, ItemListOptions, ItemListResult } from './item-store.js';
+import type { KnowledgeProjectInverseRequest, KnowledgeProjectItemBindingRequest, KnowledgeProjectReceiptLookupRequest, KnowledgeProjectRegistrationRequest, KnowledgeProjectResourceKind, KnowledgeProjectResourceListOptions } from './project-links.js';
 /**
  * The unified knowledge-item Store surface, mirrored on the SDK so app code
  * routes item CRUD through the SAME Store as the CLI and MCP: sqlite uses the
@@ -17,6 +18,21 @@ export interface KnowledgeItemsSdk {
     readonly update: (idOrShort: string, patch: ItemPatch) => Promise<KnowledgeItem | null>;
     readonly delete: (idOrShort: string) => Promise<boolean>;
     readonly deleteMany: (idsOrShorts: string[]) => Promise<number>;
+}
+export interface KnowledgeProjectLinksSdk {
+    readonly capability: () => ReturnType<ReturnType<KnowledgeService['projectLinksAuthority']>['capability']>;
+    readonly registerCollection: (request: KnowledgeProjectRegistrationRequest) => ReturnType<ReturnType<KnowledgeService['projectLinksAuthority']>['registerCollection']>;
+    readonly readCollection: (collectionId: string) => ReturnType<ReturnType<KnowledgeService['projectLinksAuthority']>['readCollection']>;
+    readonly lookupReceipt: (request: KnowledgeProjectReceiptLookupRequest) => ReturnType<ReturnType<KnowledgeService['projectLinksAuthority']>['lookupReceipt']>;
+    readonly compensateRegistration: (request: KnowledgeProjectInverseRequest) => ReturnType<ReturnType<KnowledgeService['projectLinksAuthority']>['compensateRegistration']>;
+    readonly verifyRegistrationInverse: (request: KnowledgeProjectInverseRequest) => ReturnType<ReturnType<KnowledgeService['projectLinksAuthority']>['verifyRegistrationInverse']>;
+    readonly bindItem: (request: KnowledgeProjectItemBindingRequest) => ReturnType<ReturnType<KnowledgeService['projectLinksAuthority']>['bindItem']>;
+    readonly readItemBinding: (collectionId: string, itemId: string) => ReturnType<ReturnType<KnowledgeService['projectLinksAuthority']>['readItemBinding']>;
+    readonly compensateItemBinding: (request: KnowledgeProjectInverseRequest) => ReturnType<ReturnType<KnowledgeService['projectLinksAuthority']>['compensateItemBinding']>;
+    readonly verifyItemBindingInverse: (request: KnowledgeProjectInverseRequest) => ReturnType<ReturnType<KnowledgeService['projectLinksAuthority']>['verifyItemBindingInverse']>;
+    readonly listResources: (projectId: string, options?: KnowledgeProjectResourceListOptions) => ReturnType<ReturnType<KnowledgeService['projectLinksAuthority']>['listProjectResources']>;
+    readonly readResource: (projectId: string, kind: KnowledgeProjectResourceKind, resourceId: string) => ReturnType<ReturnType<KnowledgeService['projectLinksAuthority']>['readProjectResource']>;
+    readonly readAllResources: (projectId: string, options?: Omit<KnowledgeProjectResourceListOptions, 'cursor'>) => ReturnType<ReturnType<KnowledgeService['projectLinksAuthority']>['readAllProjectResources']>;
 }
 export type KnowledgeClientOptions = KnowledgeServiceOptions;
 export type KnowledgeSetupOptions = Parameters<KnowledgeService['setup']>[0];
@@ -96,6 +112,8 @@ export interface KnowledgeClient {
      * the `knowledge add/list/get/update/delete` CLI commands in every mode.
      */
     readonly items: KnowledgeItemsSdk;
+    /** Project collection registration, explicit membership, receipts, and complete resource enumeration. */
+    readonly projectLinks: KnowledgeProjectLinksSdk;
     /**
      * Inventory of the knowledge corpus. Routes to the shared API item corpus in
      * postgres mode and the local sqlite/JSON catalog otherwise, so the SDK never

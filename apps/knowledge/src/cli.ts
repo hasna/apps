@@ -19,12 +19,21 @@ import {
 import { openKnowledgeDb } from './knowledge-db';
 import { createKnowledgeService } from './service';
 import { createKnowledgeProjectPanel, formatKnowledgeProjectPanel } from './project-panel';
+import {
+  KNOWLEDGE_PROJECT_REGISTRATION_ROUTE,
+  createLocalKnowledgeProjectLinksAuthority,
+  digestKnowledgeProjectLinksValue,
+  type KnowledgeProjectLinksAuthority,
+  type KnowledgeProjectReceiptAction,
+  type KnowledgeProjectRegistrationDirection,
+  type KnowledgeProjectResourceKind,
+} from './project-links';
 import { getStorageStatus as getDatabaseStorageStatus } from './storage';
 import { assertProviderCredentials, parseModelRef, resolveModelRef, type AiProviderId } from './providers';
 import { approvalStatus, assertS3ReadAllowed, assertWebSearchAllowed, createApprovalGate, recordAuditEvent, recordRedactionFindings, redactSecrets } from './safety';
 import { Command } from 'commander';
 import { registerEventsCommands } from '@hasna/events/commander';
-import { basename } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import pkg from '../package.json' with { type: 'json' };
 
 type LogLevel = 'debug' | 'info' | 'warn' | 'error';
@@ -132,6 +141,19 @@ interface Flags {
   contract?: boolean;
   sourceRef?: string[];
   allowGlobal?: boolean;
+  operationId?: string;
+  stepId?: string;
+  idempotencyKey?: string;
+  collectionId?: string;
+  itemId?: string;
+  receiptId?: string;
+  cursor?: string;
+  kind?: string[];
+  all?: boolean;
+  slug?: string;
+  name?: string;
+  collectionSlug?: string;
+  collectionName?: string;
 }
 
 interface ParseResult {
@@ -140,7 +162,7 @@ interface ParseResult {
 }
 
 const EVENTS_COMMANDS = ['events', 'webhooks'];
-const COMMANDS = ['add', 'list', 'get', 'delete', 'update', 'archive', 'restore', 'upsert', 'untag', 'versions', 'diff', 'export', 'prune', 'dedupe', 'stats', 'inventory', 'project-panel', 'paths', 'mode', 'guarded', 'setup', 'auth', 'storage', 'machines', 'sync', 'db', 'wiki', 'app-wiki', 'source', 'ingest', 'reindex', 'search', 'context', 'proposals', 'web', 'ask', 'build', 'embeddings', 'providers', 'safety', 'help', ...EVENTS_COMMANDS];
+const COMMANDS = ['add', 'list', 'get', 'delete', 'update', 'archive', 'restore', 'upsert', 'untag', 'versions', 'diff', 'export', 'prune', 'dedupe', 'stats', 'inventory', 'project-panel', 'project-registration', 'project-membership', 'project-resources', 'project-resource', 'paths', 'mode', 'guarded', 'setup', 'auth', 'storage', 'machines', 'sync', 'db', 'wiki', 'app-wiki', 'source', 'ingest', 'reindex', 'search', 'context', 'proposals', 'web', 'ask', 'build', 'embeddings', 'providers', 'safety', 'help', ...EVENTS_COMMANDS];
 const COMMAND_ALIASES: Record<string, string> = {
   ls: 'list',
   rm: 'delete',
@@ -317,6 +339,19 @@ function parseArgs(argv: string[]): ParseResult {
       case '--contract': flags.contract = true; break;
       case '--source-ref': flags.sourceRef = [...(flags.sourceRef ?? []), argv[i + 1]]; i += 1; break;
       case '--allow-global': flags.allowGlobal = true; break;
+      case '--operation-id': flags.operationId = argv[i + 1]; i += 1; break;
+      case '--step-id': flags.stepId = argv[i + 1]; i += 1; break;
+      case '--idempotency-key': flags.idempotencyKey = argv[i + 1]; i += 1; break;
+      case '--collection-id': flags.collectionId = argv[i + 1]; i += 1; break;
+      case '--item-id': flags.itemId = argv[i + 1]; i += 1; break;
+      case '--receipt-id': flags.receiptId = argv[i + 1]; i += 1; break;
+      case '--cursor': flags.cursor = argv[i + 1]; i += 1; break;
+      case '--kind': flags.kind = [...(flags.kind ?? []), argv[i + 1] as string]; i += 1; break;
+      case '--all': flags.all = true; break;
+      case '--slug': flags.slug = argv[i + 1]; i += 1; break;
+      case '--name': flags.name = argv[i + 1]; i += 1; break;
+      case '--collection-slug': flags.collectionSlug = argv[i + 1]; i += 1; break;
+      case '--collection-name': flags.collectionName = argv[i + 1]; i += 1; break;
       default: throw new Error(`Unknown flag: ${token}. Run 'knowledge --help' for valid options.`);
     }
   }
@@ -395,6 +430,10 @@ Commands:
   stats                        Show knowledge base statistics
   inventory                    Show all local knowledge layers and previews
   project-panel                Emit Projects dashboard project-panel contract
+  project-registration         Register/read/compensate a project collection with immutable receipts
+  project-membership           Bind/read/compensate exact item membership
+  project-resources            Enumerate complete project/collection/item/taxonomy resources
+  project-resource             Read one exact project resource
   paths                        Show resolved workspace/store paths
   mode                         Report the resolved backend (local or cloud) and why
   guarded capabilities         Report FCAME-1 private transport capability
@@ -469,6 +508,15 @@ Global Options:
   --tables <names>             Comma-separated knowledge.db sync tables
   --peer-workspace <path>      Peer repo root or .hasna/knowledge path for local sync or remote override
   --project <id>               Project id/name/slug for project-panel output
+  --operation-id <id>          Stable Projects registration operation id
+  --step-id <id>               Stable Projects registration step id
+  --idempotency-key <key>      Caller-owned idempotency key
+  --collection-id <uuid>       Exact Knowledge collection id
+  --item-id <id>               Exact existing Knowledge item id
+  --receipt-id <uuid>          Exact accepted receipt id for compensation
+  --cursor <cursor>            Revision-bound project-resource cursor
+  --kind <kind>                Resource kind filter; repeatable
+  --all                        Read project resources to complete exhaustion
   --contract                   Emit contract JSON for project-panel output
   --source-ref <uri>           Attach a source ref to an app-wiki note
   --allow-global               Explicitly allow app-wiki writes to global scope
@@ -529,6 +577,10 @@ function printCommandHelp(command: string): void {
   if (command === 'stats') { console.log('Usage: knowledge stats [--json]'); return; }
   if (command === 'inventory') { console.log('Usage: knowledge inventory [--scope local|global|project] [--limit <n>] [--include-archived] [--verbose] [--json]'); return; }
   if (command === 'project-panel') { console.log('Usage: knowledge project-panel --project <id|name|slug> [--scope project|local|global] [--limit <n>] [--include-archived] [--json|--contract]'); return; }
+  if (command === 'project-registration') { console.log('Usage: knowledge project-registration capability|create|read-exact|receipt|compensate|verify-inverse [--operation-id <id>] [--step-id <id>] [--idempotency-key <key>] [--project <id>] [--slug <slug>] [--name <name>] [--collection-id <uuid>] [--collection-slug <slug>] [--collection-name <name>] [--receipt-id <uuid>] [--json]'); return; }
+  if (command === 'project-membership') { console.log('Usage: knowledge project-membership bind|read-exact|compensate|verify-inverse [--operation-id <id>] [--step-id <id>] [--idempotency-key <key>] [--collection-id <uuid>] [--item-id <id>] [--receipt-id <uuid>] [--json]'); return; }
+  if (command === 'project-resources') { console.log('Usage: knowledge project-resources <project-id> [--kind <project|collection|item|taxonomy>]... [--limit <n>] [--cursor <cursor>] [--all] [--json]'); return; }
+  if (command === 'project-resource') { console.log('Usage: knowledge project-resource <project-id> <project|collection|item|taxonomy> <resource-id> [--json]'); return; }
   if (command === 'paths') { console.log('Usage: knowledge paths [--scope local|global|project] [--verbose] [--json]'); return; }
   if (command === 'mode') { console.log(`Usage: knowledge mode [--json]\n  Reports which backend this process would use — sqlite (on-box store) or postgres (HTTP /v1) — and\n  which env var selected it. Reads the environment only: no store is opened, no config file is read,\n  and no request is made, so it is safe on a machine with no config and no network.\n  Selection is EXPLICIT-ONLY: set ${KNOWLEDGE_MODE_ENV_KEYS[0]}=sqlite|postgres. Setting only\n  ${KNOWLEDGE_API_URL_ENV_KEYS[0]} / ${KNOWLEDGE_API_KEY_ENV_KEYS[0]} does NOT switch backends;\n  those are reported as present-but-ignored pointers. Env var NAMES are printed, never values.`); return; }
   if (command === 'guarded') { console.log('Usage: knowledge guarded capabilities [--json]\n  Reports metadata-only FCAME-1 private input, private result, and exact-title lookup support.'); return; }
@@ -903,11 +955,11 @@ async function run(argv: string[]): Promise<void> {
   if (flags.completions) {
     const shell = flags.completions;
     if (shell === 'bash') {
-    console.log(`_knowledge() { local cur; cur="${"$"}{COMP_WORDS[COMP_CWORD]}"; COMPREPLY=($(compgen -W "add list get update archive restore upsert untag versions diff delete export prune dedupe stats inventory project-panel paths mode guarded setup auth storage machines sync db wiki app-wiki source ingest reindex search context proposals web ask build embeddings providers safety events webhooks help ls rm edit unarchive --json --verbose --yes --help --version --desc --page --limit --search --sort --id --store --title --content --url --tag --rev --to --format --completions --purpose --model --dimensions --semantic --context --max-tokens --max-items --from --since --topic --dedupe --generate --approve-write --provider --mode --machine --workspace --peer-workspace --api-url --canonical-example --api-key --email --org --org-id --user-id --owner --domain --file-results --full --dry-run --fake --no-tailscale --no-artifact-content --no-color --scope --tables --archived --include-archived --project --contract --source-ref --allow-global" -- "$cur")); }; complete -F _knowledge knowledge`);
+    console.log(`_knowledge() { local cur; cur="${"$"}{COMP_WORDS[COMP_CWORD]}"; COMPREPLY=($(compgen -W "add list get update archive restore upsert untag versions diff delete export prune dedupe stats inventory project-panel project-registration project-membership project-resources project-resource paths mode guarded setup auth storage machines sync db wiki app-wiki source ingest reindex search context proposals web ask build embeddings providers safety events webhooks help ls rm edit unarchive --json --verbose --yes --help --version --desc --page --limit --search --sort --id --store --title --content --url --tag --rev --to --format --completions --purpose --model --dimensions --semantic --context --max-tokens --max-items --from --since --topic --dedupe --generate --approve-write --provider --mode --machine --workspace --peer-workspace --api-url --canonical-example --api-key --email --org --org-id --user-id --owner --domain --file-results --full --dry-run --fake --no-tailscale --no-artifact-content --no-color --scope --tables --archived --include-archived --project --operation-id --step-id --idempotency-key --slug --name --collection-id --collection-slug --collection-name --item-id --receipt-id --cursor --kind --all --contract --source-ref --allow-global" -- "$cur")); }; complete -F _knowledge knowledge`);
     } else if (shell === 'zsh') {
-      console.log(`#compdef knowledge\n_knowledge() { _arguments -C "1: :(add list get update archive restore upsert untag versions diff delete export prune dedupe stats inventory project-panel paths mode guarded setup auth storage machines sync db wiki app-wiki source ingest reindex search context proposals web ask build embeddings providers safety events webhooks help ls rm edit unarchive)" "(--json)--json" "(--verbose)--verbose" "(--yes)-y" "(--help)--help" "(--version)--version" "(--desc)--desc" "(--archived)--archived" "(--include-archived)--include-archived" "(--semantic)--semantic" "(--context)--context" "(--dedupe)--dedupe" "(--generate)--generate" "(--approve-write)--approve-write" "(--canonical-example)--canonical-example" "(--file-results)--file-results" "(--full)--full" "(--dry-run)--dry-run" "(--fake)--fake" "(--no-tailscale)--no-tailscale" "(--no-artifact-content)--no-artifact-content" "(--contract)--contract" "(--allow-global)--allow-global" "(-p --page)"{-p,--page}"[page number]:number:" "(-l --limit)"{-l,--limit}"[items per page]:number:" "(-s --search)"{-s,--search}"[search text]:text:" "(--sort)--sort"\{created,title\}:" "(--id)--id[item id]:id:" "(--store)--store[store path]:path:" "(--title)--title[new title]:" "(--content)--content[new content]:" "(--url)--url[source url]:" "(-t --tag)"{-t,--tag}"[tag]:tag:" "(--format)--format[json|jsonl]:" "(--completions)--completions[output completions]:shell:(bash zsh fish):" "(--purpose)--purpose[purpose]:" "(--model)--model[model ref]:" "(--dimensions)--dimensions[embedding dimensions]:number:" "(--max-tokens)--max-tokens[token budget]:number:" "(--max-items)--max-items[item budget]:number:" "(--from)--from"\{search,loops,runs\}:" "(--to)--to[diff target: version number or current]:" "(--rev)--rev[entry version for diff]:number:" "(--since)--since[duration or ISO time]:" "(--topic)--topic[topic text]:" "(--provider)--provider[provider]:" "(--mode)--mode"\{local,hosted\}:" "(--machine)--machine[machine id or SSH alias]:" "(--workspace)--workspace[repo workspace path]:path:" "(--peer-workspace)--peer-workspace[peer repo or knowledge home path]:path:" "(--api-url)--api-url[hosted API URL]:" "(--api-key)--api-key[hosted API key]:" "(--email)--email[email]:" "(--org)--org[org slug]:" "(--org-id)--org-id[org id]:" "(--user-id)--user-id[user id]:" "(--owner)--owner[provenance owner]:" "(--domain)--domain[domain]:" "(--project)--project[project id/name/slug]:" "(--source-ref)--source-ref[source ref]:" "(--no-color)--no-color[disable color]" "(--scope)--scope"\{local,global,project\}:" "(--tables)--tables[comma-separated DB sync tables]:" }; _knowledge`);
+      console.log(`#compdef knowledge\n_knowledge() { _arguments -C "1: :(add list get update archive restore upsert untag versions diff delete export prune dedupe stats inventory project-panel project-registration project-membership project-resources project-resource paths mode guarded setup auth storage machines sync db wiki app-wiki source ingest reindex search context proposals web ask build embeddings providers safety events webhooks help ls rm edit unarchive)" "(--json)--json" "(--verbose)--verbose" "(--yes)-y" "(--help)--help" "(--version)--version" "(--desc)--desc" "(--archived)--archived" "(--include-archived)--include-archived" "(--semantic)--semantic" "(--context)--context" "(--dedupe)--dedupe" "(--generate)--generate" "(--approve-write)--approve-write" "(--canonical-example)--canonical-example" "(--file-results)--file-results" "(--full)--full" "(--dry-run)--dry-run" "(--fake)--fake" "(--no-tailscale)--no-tailscale" "(--no-artifact-content)--no-artifact-content" "(--all)--all" "(--contract)--contract" "(--allow-global)--allow-global" "(-p --page)"{-p,--page}"[page number]:number:" "(-l --limit)"{-l,--limit}"[items per page]:number:" "(--search)--search[search text]:text:" "(--sort)--sort"\{created,title\}:" "(--id)--id[item id]:id:" "(--store)--store[store path]:path:" "(--title)--title[new title]:" "(--content)--content[new content]:" "(--url)--url[source url]:" "(-t --tag)"{-t,--tag}"[tag]:tag:" "(--format)--format[json|jsonl]:" "(--completions)--completions[output completions]:shell:(bash zsh fish):" "(--purpose)--purpose[purpose]:" "(--model)--model[model ref]:" "(--dimensions)--dimensions[embedding dimensions]:number:" "(--max-tokens)--max-tokens[token budget]:number:" "(--max-items)--max-items[item budget]:number:" "(--from)--from"\{search,loops,runs\}:" "(--to)--to[diff target: version number or current]:" "(--rev)--rev[entry version for diff]:number:" "(--since)--since[duration or ISO time]:" "(--topic)--topic[topic text]:" "(--provider)--provider[provider]:" "(--mode)--mode"\{local,hosted\}:" "(--machine)--machine[machine id or SSH alias]:" "(--workspace)--workspace[repo workspace path]:path:" "(--peer-workspace)--peer-workspace[peer repo or knowledge home path]:path:" "(--api-url)--api-url[hosted API URL]:" "(--api-key)--api-key[hosted API key]:" "(--email)--email[email]:" "(--org)--org[org slug]:" "(--org-id)--org-id[org id]:" "(--user-id)--user-id[user id]:" "(--owner)--owner[provenance owner]:" "(--domain)--domain[domain]:" "(--project)--project[project id/name/slug]:" "(--operation-id)--operation-id[registration operation id]:" "(--step-id)--step-id[registration step id]:" "(--idempotency-key)--idempotency-key[caller idempotency key]:" "(--slug)--slug[project slug]:" "(--name)--name[project name]:" "(--collection-id)--collection-id[exact collection id]:" "(--collection-slug)--collection-slug[collection slug]:" "(--collection-name)--collection-name[collection name]:" "(--item-id)--item-id[exact item id]:" "(--receipt-id)--receipt-id[exact receipt id]:" "(--cursor)--cursor[resource cursor]:" "(--kind)--kind[resource kind]:(project collection item taxonomy):" "(--source-ref)--source-ref[source ref]:" "(--no-color)--no-color[disable color]" "(--scope)--scope"\{local,global,project\}:" "(--tables)--tables[comma-separated DB sync tables]:" }; _knowledge`);
     } else if (shell === 'fish') {
-      console.log(`complete -c knowledge -f; complete -c knowledge -a "add list get update archive restore upsert untag versions diff delete export prune dedupe stats inventory project-panel paths mode guarded setup auth storage machines sync db wiki app-wiki source ingest reindex search context proposals web ask build embeddings providers safety events webhooks help ls rm edit unarchive"; complete -c knowledge -l json; complete -c knowledge -l verbose; complete -c knowledge -l yes -s y; complete -c knowledge -l help -s h; complete -c knowledge -l version -s v; complete -c knowledge -l desc; complete -c knowledge -l archived; complete -c knowledge -l include-archived; complete -c knowledge -l semantic; complete -c knowledge -l context; complete -c knowledge -l max-tokens; complete -c knowledge -l max-items; complete -c knowledge -l from -a "search loops runs"; complete -c knowledge -l to; complete -c knowledge -l rev; complete -c knowledge -l since; complete -c knowledge -l topic; complete -c knowledge -l dedupe; complete -c knowledge -l generate; complete -c knowledge -l approve-write; complete -c knowledge -l allow-global; complete -c knowledge -l canonical-example; complete -c knowledge -l provider; complete -c knowledge -l mode; complete -c knowledge -l machine; complete -c knowledge -l workspace; complete -c knowledge -l peer-workspace; complete -c knowledge -l api-url; complete -c knowledge -l api-key; complete -c knowledge -l email; complete -c knowledge -l org; complete -c knowledge -l org-id; complete -c knowledge -l user-id; complete -c knowledge -l owner; complete -c knowledge -l domain; complete -c knowledge -l project; complete -c knowledge -l contract; complete -c knowledge -l source-ref; complete -c knowledge -l file-results; complete -c knowledge -l full; complete -c knowledge -l dry-run; complete -c knowledge -l fake; complete -c knowledge -l no-tailscale; complete -c knowledge -l no-artifact-content; complete -c knowledge -s p -l page; complete -c knowledge -s l -l limit; complete -c knowledge -s s -l search; complete -c knowledge -l sort; complete -c knowledge -l id; complete -c knowledge -l store; complete -c knowledge -l title; complete -c knowledge -l content; complete -c knowledge -l url; complete -c knowledge -s t -l tag; complete -c knowledge -l format; complete -c knowledge -l completions; complete -c knowledge -l purpose; complete -c knowledge -l model; complete -c knowledge -l dimensions; complete -c knowledge -l no-color; complete -c knowledge -l scope -a "local global project"; complete -c knowledge -l tables`);
+      console.log(`complete -c knowledge -f; complete -c knowledge -a "add list get update archive restore upsert untag versions diff delete export prune dedupe stats inventory project-panel project-registration project-membership project-resources project-resource paths mode guarded setup auth storage machines sync db wiki app-wiki source ingest reindex search context proposals web ask build embeddings providers safety events webhooks help ls rm edit unarchive"; complete -c knowledge -l json; complete -c knowledge -l verbose; complete -c knowledge -l yes -s y; complete -c knowledge -l help -s h; complete -c knowledge -l version -s v; complete -c knowledge -l desc; complete -c knowledge -l archived; complete -c knowledge -l include-archived; complete -c knowledge -l semantic; complete -c knowledge -l context; complete -c knowledge -l max-tokens; complete -c knowledge -l max-items; complete -c knowledge -l from -a "search loops runs"; complete -c knowledge -l to; complete -c knowledge -l rev; complete -c knowledge -l since; complete -c knowledge -l topic; complete -c knowledge -l dedupe; complete -c knowledge -l generate; complete -c knowledge -l approve-write; complete -c knowledge -l allow-global; complete -c knowledge -l canonical-example; complete -c knowledge -l provider; complete -c knowledge -l mode; complete -c knowledge -l machine; complete -c knowledge -l workspace; complete -c knowledge -l peer-workspace; complete -c knowledge -l api-url; complete -c knowledge -l api-key; complete -c knowledge -l email; complete -c knowledge -l org; complete -c knowledge -l org-id; complete -c knowledge -l user-id; complete -c knowledge -l owner; complete -c knowledge -l domain; complete -c knowledge -l project; complete -c knowledge -l operation-id; complete -c knowledge -l step-id; complete -c knowledge -l idempotency-key; complete -c knowledge -l slug; complete -c knowledge -l name; complete -c knowledge -l collection-id; complete -c knowledge -l collection-slug; complete -c knowledge -l collection-name; complete -c knowledge -l item-id; complete -c knowledge -l receipt-id; complete -c knowledge -l cursor; complete -c knowledge -l kind -a "project collection item taxonomy"; complete -c knowledge -l all; complete -c knowledge -l contract; complete -c knowledge -l source-ref; complete -c knowledge -l file-results; complete -c knowledge -l full; complete -c knowledge -l dry-run; complete -c knowledge -l fake; complete -c knowledge -l no-tailscale; complete -c knowledge -l no-artifact-content; complete -c knowledge -s p -l page; complete -c knowledge -s l -l limit; complete -c knowledge -s s -l search; complete -c knowledge -l sort; complete -c knowledge -l id; complete -c knowledge -l store; complete -c knowledge -l title; complete -c knowledge -l content; complete -c knowledge -l url; complete -c knowledge -s t -l tag; complete -c knowledge -l format; complete -c knowledge -l completions; complete -c knowledge -l purpose; complete -c knowledge -l model; complete -c knowledge -l dimensions; complete -c knowledge -l no-color; complete -c knowledge -l scope -a "local global project"; complete -c knowledge -l tables`);
     } else {
       throw new Error("Invalid --completions value. Use 'bash', 'zsh', or 'fish'.");
     }
@@ -971,6 +1023,8 @@ async function run(argv: string[]): Promise<void> {
 
   const serviceScope = command === 'project-panel' || command === 'app-wiki' ? (flags.scope ?? 'project') : flags.scope;
   const service = createKnowledgeService({ scope: serviceScope });
+  let standaloneProjectLinksAuthority: KnowledgeProjectLinksAuthority | undefined;
+  try {
   if (command === 'storage') {
     const storageAction = positional[1] ?? 'status';
     if (storageAction === 'import-legacy') {
@@ -1036,6 +1090,265 @@ async function run(argv: string[]): Promise<void> {
   // creates a store while deciding whether an unknown command should fail.
   if (!storePathOverridden && (command === 'ask' || command === 'build') && !isKnowledgeApiMode()) {
     ensureStore(storePath);
+  }
+
+  const projectLinksAuthority = () => {
+    if (!storePathOverridden || isKnowledgeApiMode()) return service.projectLinksAuthority();
+    standaloneProjectLinksAuthority ??= createLocalKnowledgeProjectLinksAuthority({
+      databasePath: join(dirname(storePath), 'knowledge.db'),
+      itemStore,
+      options: {
+        packageVersion: pkg.version,
+        authorityId: process.env.HASNA_KNOWLEDGE_PROJECT_AUTHORITY_ID ?? 'knowledge',
+        tenantId: process.env.HASNA_KNOWLEDGE_PROJECT_TENANT_ID ?? 'local',
+        corpusId: process.env.HASNA_KNOWLEDGE_PROJECT_CORPUS_ID ?? 'knowledge',
+      },
+    });
+    return standaloneProjectLinksAuthority;
+  };
+
+  if (command === 'project-registration') {
+    const action = positional[1] ?? 'capability';
+    const authority = projectLinksAuthority();
+    if (action === 'capability') {
+      output({ ok: true, capability: await authority.capability() }, flags.json, flags);
+      return;
+    }
+    if (action === 'create') {
+      const capability = await authority.capability();
+      const projectId = flags.project;
+      const projectSlug = flags.slug;
+      const projectName = flags.name;
+      if (!flags.operationId || !flags.stepId || !flags.idempotencyKey || !projectId || !projectSlug || !projectName) {
+        throw new Error(
+          'Usage: knowledge project-registration create --operation-id <id> --step-id <id> '
+          + '--idempotency-key <key> --project <id> --slug <slug> --name <name> '
+          + '[--collection-slug <slug>] [--collection-name <name>] [--json]',
+        );
+      }
+      const desired = {
+        collection_slug: flags.collectionSlug ?? `${projectSlug}-knowledge`,
+        collection_name: flags.collectionName ?? `${projectName} Knowledge`,
+      };
+      const requestDigest = digestKnowledgeProjectLinksValue({
+        action: 'register_collection',
+        source_project_id: projectId,
+        project_slug: projectSlug,
+        project_name: projectName,
+        collection_slug: desired.collection_slug,
+        collection_name: desired.collection_name,
+        membership_rule: 'explicit_collection_binding',
+      });
+      const receipt = await authority.registerCollection({
+        operation_id: flags.operationId,
+        step_id: flags.stepId,
+        resource_kind: 'collection',
+        direction: 'forward',
+        authority_route: KNOWLEDGE_PROJECT_REGISTRATION_ROUTE,
+        package_version: capability.package_version,
+        authority_id: capability.authority_id,
+        tenant_id: capability.tenant_id,
+        corpus_id: capability.corpus_id,
+        target_selector: projectId,
+        idempotency_key: flags.idempotencyKey,
+        request_digest: requestDigest,
+        precondition_digest: digestKnowledgeProjectLinksValue({
+          source_project_id: projectId,
+          expected: 'absent_or_exact_match',
+        }),
+        project_id: projectId,
+        project_slug: projectSlug,
+        project_name: projectName,
+        desired,
+      });
+      output({ ok: receipt.outcome === 'accepted', receipt }, flags.json, flags);
+      return;
+    }
+    if (action === 'read-exact') {
+      if (!flags.collectionId) {
+        throw new Error('Usage: knowledge project-registration read-exact --collection-id <uuid> [--json]');
+      }
+      output({ ok: true, record: await authority.readCollection(flags.collectionId) }, flags.json, flags);
+      return;
+    }
+    if (action === 'receipt') {
+      const receiptAction = positional[2] as KnowledgeProjectReceiptAction | undefined;
+      const direction = positional[3] as KnowledgeProjectRegistrationDirection | undefined;
+      if (
+        !flags.operationId
+        || !flags.stepId
+        || !flags.idempotencyKey
+        || !receiptAction
+        || !direction
+      ) {
+        throw new Error(
+          'Usage: knowledge project-registration receipt <register_collection|bind_item> <forward|inverse> '
+          + '--operation-id <id> --step-id <id> --idempotency-key <key> [--json]',
+        );
+      }
+      const capability = await authority.capability();
+      const receipt = await authority.lookupReceipt({
+        authority_id: capability.authority_id,
+        tenant_id: capability.tenant_id,
+        corpus_id: capability.corpus_id,
+        operation_id: flags.operationId,
+        step_id: flags.stepId,
+        action: receiptAction,
+        direction,
+        idempotency_key: flags.idempotencyKey,
+        max_items: 1,
+      });
+      output({ ok: true, receipt }, flags.json, flags);
+      return;
+    }
+    if (action === 'compensate' || action === 'verify-inverse') {
+      if (!flags.operationId || !flags.stepId || !flags.idempotencyKey || !flags.receiptId) {
+        throw new Error(
+          `Usage: knowledge project-registration ${action} --operation-id <id> --step-id <id> `
+          + '--idempotency-key <key> --receipt-id <accepted-receipt-id> [--json]',
+        );
+      }
+      const capability = await authority.capability();
+      const request = {
+        operation_id: flags.operationId,
+        step_id: flags.stepId,
+        authority_route: KNOWLEDGE_PROJECT_REGISTRATION_ROUTE,
+        package_version: capability.package_version,
+        authority_id: capability.authority_id,
+        tenant_id: capability.tenant_id,
+        corpus_id: capability.corpus_id,
+        idempotency_key: flags.idempotencyKey,
+        accepted_receipt_id: flags.receiptId,
+      };
+      const result = action === 'compensate'
+        ? { receipt: await authority.compensateRegistration(request) }
+        : { verification: await authority.verifyRegistrationInverse(request) };
+      output({ ok: true, ...result }, flags.json, flags);
+      return;
+    }
+    throw new Error(
+      'Invalid project-registration action. Use capability, create, read-exact, receipt, compensate, or verify-inverse.',
+    );
+  }
+
+  if (command === 'project-membership') {
+    const action = positional[1] ?? 'read-exact';
+    const authority = projectLinksAuthority();
+    if (action === 'bind') {
+      if (!flags.operationId || !flags.stepId || !flags.idempotencyKey || !flags.collectionId || !flags.itemId) {
+        throw new Error(
+          'Usage: knowledge project-membership bind --operation-id <id> --step-id <id> '
+          + '--idempotency-key <key> --collection-id <uuid> --item-id <id> [--json]',
+        );
+      }
+      const capability = await authority.capability();
+      const receipt = await authority.bindItem({
+        operation_id: flags.operationId,
+        step_id: flags.stepId,
+        direction: 'forward',
+        authority_route: KNOWLEDGE_PROJECT_REGISTRATION_ROUTE,
+        package_version: capability.package_version,
+        authority_id: capability.authority_id,
+        tenant_id: capability.tenant_id,
+        corpus_id: capability.corpus_id,
+        idempotency_key: flags.idempotencyKey,
+        request_digest: digestKnowledgeProjectLinksValue({
+          action: 'bind_item',
+          collection_id: flags.collectionId,
+          item_id: flags.itemId,
+        }),
+        precondition_digest: digestKnowledgeProjectLinksValue({
+          collection_id: flags.collectionId,
+          item_id: flags.itemId,
+          expected: 'unbound_or_exact_membership',
+        }),
+        collection_id: flags.collectionId,
+        item_id: flags.itemId,
+      });
+      output({ ok: receipt.outcome === 'accepted', receipt }, flags.json, flags);
+      return;
+    }
+    if (action === 'read-exact') {
+      if (!flags.collectionId || !flags.itemId) {
+        throw new Error(
+          'Usage: knowledge project-membership read-exact --collection-id <uuid> --item-id <id> [--json]',
+        );
+      }
+      output({
+        ok: true,
+        record: await authority.readItemBinding(flags.collectionId, flags.itemId),
+      }, flags.json, flags);
+      return;
+    }
+    if (action === 'compensate' || action === 'verify-inverse') {
+      if (!flags.operationId || !flags.stepId || !flags.idempotencyKey || !flags.receiptId) {
+        throw new Error(
+          `Usage: knowledge project-membership ${action} --operation-id <id> --step-id <id> `
+          + '--idempotency-key <key> --receipt-id <accepted-receipt-id> [--json]',
+        );
+      }
+      const capability = await authority.capability();
+      const request = {
+        operation_id: flags.operationId,
+        step_id: flags.stepId,
+        authority_route: KNOWLEDGE_PROJECT_REGISTRATION_ROUTE,
+        package_version: capability.package_version,
+        authority_id: capability.authority_id,
+        tenant_id: capability.tenant_id,
+        corpus_id: capability.corpus_id,
+        idempotency_key: flags.idempotencyKey,
+        accepted_receipt_id: flags.receiptId,
+      };
+      const result = action === 'compensate'
+        ? { receipt: await authority.compensateItemBinding(request) }
+        : { verification: await authority.verifyItemBindingInverse(request) };
+      output({ ok: true, ...result }, flags.json, flags);
+      return;
+    }
+    throw new Error(
+      'Invalid project-membership action. Use bind, read-exact, compensate, or verify-inverse.',
+    );
+  }
+
+  if (command === 'project-resources') {
+    const projectId = flags.project ?? positional[1];
+    if (!projectId) {
+      throw new Error(
+        'Usage: knowledge project-resources <project-id> [--kind <kind>]... [--limit <n>] [--cursor <cursor>] [--all] [--json]',
+      );
+    }
+    const authority = projectLinksAuthority();
+    const kinds = flags.kind as KnowledgeProjectResourceKind[] | undefined;
+    const result = flags.all
+      ? {
+        resources: await authority.readAllProjectResources(projectId, {
+          limit: flags.limit,
+          kinds,
+        }),
+      }
+      : await authority.listProjectResources(projectId, {
+        limit: flags.limit,
+        cursor: flags.cursor,
+        kinds,
+      });
+    output({ ok: true, ...result }, flags.json, flags);
+    return;
+  }
+
+  if (command === 'project-resource') {
+    const projectId = flags.project ?? positional[1];
+    const kind = positional[2] as KnowledgeProjectResourceKind | undefined;
+    const resourceId = positional[3];
+    if (!projectId || !kind || !resourceId) {
+      throw new Error(
+        'Usage: knowledge project-resource <project-id> <project|collection|item|taxonomy> <resource-id> [--json]',
+      );
+    }
+    output({
+      ok: true,
+      resource: await projectLinksAuthority().readProjectResource(projectId, kind, resourceId),
+    }, flags.json, flags);
+    return;
   }
 
   if (command === 'inventory') {
@@ -2411,6 +2724,10 @@ async function run(argv: string[]): Promise<void> {
   const hint = suggestion ? ` Did you mean '${suggestion}'?` : '';
   log('warn', 'Unknown command', { input: positional[0], suggestion });
   throw new Error(`Unknown command: ${positional[0]}.${hint} Run 'knowledge --help' for available commands.`);
+  } finally {
+    await standaloneProjectLinksAuthority?.close();
+    await service.close();
+  }
 }
 
 /**

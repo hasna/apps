@@ -2369,6 +2369,1579 @@ function hasKnowledgeBoundedQueryCapability(value) {
   return Boolean(value && typeof value === "object" && value.query_capability === KNOWLEDGE_BOUNDED_QUERY_CAPABILITY);
 }
 
+// src/project-links.ts
+import { createHash as createHash4 } from "crypto";
+import { Database } from "bun:sqlite";
+
+// src/net-guard.ts
+var NETWORK_GUARD_ENV = "NODE_ENV";
+
+class KnowledgeNetworkGuardError extends Error {
+  scheme;
+  port;
+  constructor(message, details) {
+    super(message);
+    this.name = "KnowledgeNetworkGuardError";
+    this.scheme = details.scheme;
+    this.port = details.port;
+  }
+}
+function isNetworkGuardActive(env = process.env) {
+  return (env[NETWORK_GUARD_ENV] ?? "").trim().toLowerCase() === "test";
+}
+function isIpv4Loopback(hostname) {
+  const parts = hostname.split(".");
+  if (parts.length !== 4)
+    return false;
+  if (!parts.every((part) => /^\d{1,3}$/.test(part) && Number(part) <= 255))
+    return false;
+  return parts[0] === "127";
+}
+function isLoopbackHostname(hostname) {
+  const host = hostname.trim().toLowerCase();
+  if (host.length === 0)
+    return false;
+  if (host === "localhost" || host.endsWith(".localhost"))
+    return true;
+  if (isIpv4Loopback(host))
+    return true;
+  if (!host.startsWith("[") || !host.endsWith("]"))
+    return false;
+  const v6 = host.slice(1, -1);
+  if (v6 === "::1" || /^(0:){7}1$/.test(v6))
+    return true;
+  const tail = v6.split(":").pop() ?? "";
+  if (/^(::ffff:|::)/.test(v6) && isIpv4Loopback(tail))
+    return true;
+  return /^::(ffff:)?7f[0-9a-f]{2}:[0-9a-f]{1,4}$/.test(v6);
+}
+function targetUrl(input) {
+  if (typeof input === "string")
+    return input;
+  if (input instanceof URL)
+    return input.href;
+  return input.url;
+}
+function assertOutboundRequestAllowed(input, env = process.env) {
+  if (!isNetworkGuardActive(env))
+    return;
+  const raw = targetUrl(input);
+  let url;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new KnowledgeNetworkGuardError(`knowledge: refused an outbound request with an unparseable target while ${NETWORK_GUARD_ENV}=test. ` + "Under test, only loopback requests are permitted.", { scheme: "unknown", port: "" });
+  }
+  if (isLoopbackHostname(url.hostname))
+    return;
+  throw new KnowledgeNetworkGuardError(`knowledge: refused a non-loopback ${url.protocol.replace(":", "")} request while ${NETWORK_GUARD_ENV}=test ` + "(target host withheld on purpose). This process resolved to the cloud backend under test, which means a " + "read or write was about to leave the machine and reach the live store. Select the mode explicitly " + `(${"HASNA_KNOWLEDGE_STORAGE_MODE"}=sqlite) or point the API URL at 127.0.0.1 for a hermetic test.`, { scheme: url.protocol.replace(":", ""), port: url.port });
+}
+var REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+var MAX_GUARDED_REDIRECTS = 5;
+function requestMethod(input, init) {
+  if (init?.method)
+    return init.method.toUpperCase();
+  if (typeof input !== "string" && !(input instanceof URL))
+    return input.method.toUpperCase();
+  return "GET";
+}
+async function guardedFetch(input, init) {
+  assertOutboundRequestAllowed(input);
+  if (!isNetworkGuardActive() || init?.redirect !== undefined) {
+    return fetch(input, init);
+  }
+  let from = targetUrl(input);
+  let method = requestMethod(input, init);
+  let body = init?.body;
+  let response = await fetch(input, { ...init ?? {}, redirect: "manual" });
+  for (let hop = 0;REDIRECT_STATUSES.has(response.status); hop++) {
+    const location = response.headers.get("location");
+    if (!location)
+      return response;
+    const next = new URL(location, from).href;
+    assertOutboundRequestAllowed(next);
+    if (hop >= MAX_GUARDED_REDIRECTS) {
+      const url = new URL(next);
+      throw new KnowledgeNetworkGuardError(`knowledge: refused to follow more than ${MAX_GUARDED_REDIRECTS} redirects while ${NETWORK_GUARD_ENV}=test ` + "(target host withheld on purpose). Under test the guard follows redirects itself so every hop is " + "checked, and a chain this long is a loop, not a route.", { scheme: url.protocol.replace(":", ""), port: url.port });
+    }
+    if (response.status === 303 || (response.status === 301 || response.status === 302) && method !== "GET" && method !== "HEAD") {
+      method = "GET";
+      body = undefined;
+    }
+    const hopInit = { ...init ?? {}, method, redirect: "manual" };
+    if (body === undefined)
+      delete hopInit.body;
+    else
+      hopInit.body = body;
+    response = await fetch(next, hopInit);
+    from = next;
+  }
+  return response;
+}
+
+// src/project-links.ts
+var KNOWLEDGE_PROJECT_REGISTRATION_ROUTE = "knowledge.project-registration.v1";
+var KNOWLEDGE_PROJECT_RESOURCES_ROUTE = "knowledge.project-resources.v1";
+var KNOWLEDGE_PROJECT_REGISTRATION_SCHEMA_VERSION = 1;
+var KNOWLEDGE_PROJECT_MEMBERSHIP_RULE = "explicit_collection_binding";
+
+class KnowledgeProjectLinksError extends Error {
+  code;
+  details;
+  constructor(code, message, details = {}) {
+    super(message);
+    this.code = code;
+    this.details = details;
+    this.name = "KnowledgeProjectLinksError";
+  }
+}
+function postgresSql(sql) {
+  let index = 0;
+  return sql.replace(/\?/g, () => `$${++index}`);
+}
+
+class PostgresProjectLinksSql {
+  client;
+  transactionClient;
+  constructor(client, transactionClient) {
+    this.client = client;
+    this.transactionClient = transactionClient;
+  }
+  async close() {}
+  async get(sql, params = []) {
+    return this.client.get(postgresSql(sql), params);
+  }
+  async many(sql, params = []) {
+    return this.client.many(postgresSql(sql), params);
+  }
+  async run(sql, params = []) {
+    const result = await this.client.query(postgresSql(sql), params);
+    return { changes: result.rowCount };
+  }
+  async transaction(fn) {
+    if (!this.transactionClient)
+      return fn(this);
+    return this.transactionClient.transaction((tx) => fn(new PostgresProjectLinksSql(tx)));
+  }
+}
+
+class SqliteProjectLinksSql {
+  db;
+  tail = Promise.resolve();
+  closed = false;
+  constructor(db) {
+    this.db = db;
+  }
+  async close() {
+    await this.tail;
+    if (this.closed)
+      return;
+    this.closed = true;
+    this.db.close();
+  }
+  async get(sql, params = []) {
+    return this.db.query(sql).get(...params) ?? null;
+  }
+  async many(sql, params = []) {
+    return this.db.query(sql).all(...params);
+  }
+  async run(sql, params = []) {
+    const result = this.db.query(sql).run(...params);
+    return { changes: Number(result.changes) };
+  }
+  transaction(fn) {
+    const run = this.tail.then(async () => {
+      this.db.exec("BEGIN IMMEDIATE");
+      try {
+        const result = await fn(this);
+        this.db.exec("COMMIT");
+        return result;
+      } catch (error) {
+        this.db.exec("ROLLBACK");
+        throw error;
+      }
+    });
+    this.tail = run.then(() => {
+      return;
+    }, () => {
+      return;
+    });
+    return run;
+  }
+}
+function sqliteKnowledgeProjectLinksSchemaSql() {
+  return `
+    PRAGMA foreign_keys = ON;
+    CREATE TABLE IF NOT EXISTS knowledge_projects (
+      authority_id TEXT NOT NULL,
+      tenant_id TEXT NOT NULL,
+      corpus_id TEXT NOT NULL,
+      source_project_id TEXT NOT NULL,
+      project_id TEXT NOT NULL,
+      project_slug TEXT NOT NULL,
+      project_name TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY(authority_id, tenant_id, corpus_id, project_id),
+      UNIQUE(authority_id, tenant_id, corpus_id, source_project_id)
+    );
+    CREATE TABLE IF NOT EXISTS knowledge_project_collections (
+      authority_id TEXT NOT NULL,
+      tenant_id TEXT NOT NULL,
+      corpus_id TEXT NOT NULL,
+      collection_id TEXT NOT NULL,
+      project_id TEXT NOT NULL,
+      collection_slug TEXT NOT NULL,
+      collection_name TEXT NOT NULL,
+      membership_rule TEXT NOT NULL CHECK(membership_rule = 'explicit_collection_binding'),
+      revision INTEGER NOT NULL DEFAULT 1 CHECK(revision > 0),
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY(authority_id, tenant_id, corpus_id, collection_id),
+      UNIQUE(authority_id, tenant_id, corpus_id, project_id, collection_slug),
+      FOREIGN KEY(authority_id, tenant_id, corpus_id, project_id)
+        REFERENCES knowledge_projects(authority_id, tenant_id, corpus_id, project_id)
+        ON DELETE CASCADE
+    );
+    CREATE TABLE IF NOT EXISTS knowledge_project_collection_memberships (
+      authority_id TEXT NOT NULL,
+      tenant_id TEXT NOT NULL,
+      corpus_id TEXT NOT NULL,
+      collection_id TEXT NOT NULL,
+      item_id TEXT NOT NULL,
+      bound_receipt_id TEXT NOT NULL,
+      created_by_operation INTEGER NOT NULL CHECK(created_by_operation IN (0, 1)),
+      bound_at TEXT NOT NULL,
+      PRIMARY KEY(authority_id, tenant_id, corpus_id, collection_id, item_id),
+      FOREIGN KEY(authority_id, tenant_id, corpus_id, collection_id)
+        REFERENCES knowledge_project_collections(authority_id, tenant_id, corpus_id, collection_id)
+        ON DELETE CASCADE
+    );
+    CREATE TABLE IF NOT EXISTS knowledge_project_link_receipts (
+      receipt_id TEXT PRIMARY KEY,
+      authority TEXT NOT NULL CHECK(authority = 'knowledge'),
+      route TEXT NOT NULL CHECK(route = 'knowledge.project-registration.v1'),
+      package_version TEXT NOT NULL,
+      authority_id TEXT NOT NULL,
+      tenant_id TEXT NOT NULL,
+      corpus_id TEXT NOT NULL,
+      operation_id TEXT NOT NULL,
+      step_id TEXT NOT NULL,
+      action TEXT NOT NULL CHECK(action IN ('register_collection', 'bind_item')),
+      resource_kind TEXT NOT NULL CHECK(resource_kind IN ('collection', 'item')),
+      direction TEXT NOT NULL CHECK(direction IN ('forward', 'inverse')),
+      idempotency_key TEXT NOT NULL,
+      request_digest TEXT NOT NULL,
+      precondition_digest TEXT NOT NULL,
+      outcome TEXT NOT NULL CHECK(outcome IN ('accepted', 'terminal_nonacceptance')),
+      reason TEXT,
+      source_project_id TEXT,
+      project_id TEXT,
+      collection_id TEXT,
+      item_id TEXT,
+      result_revision TEXT,
+      result_digest TEXT,
+      accepted_receipt_id TEXT,
+      created_by_operation INTEGER NOT NULL CHECK(created_by_operation IN (0, 1)),
+      created_at TEXT NOT NULL,
+      UNIQUE(authority_id, tenant_id, corpus_id, operation_id, step_id, action, direction)
+    );
+    CREATE INDEX IF NOT EXISTS idx_knowledge_project_link_receipts_lookup
+      ON knowledge_project_link_receipts (
+        authority_id, tenant_id, corpus_id, operation_id, step_id,
+        action, direction, idempotency_key
+      );
+    CREATE TRIGGER IF NOT EXISTS knowledge_project_link_receipts_immutable_update
+      BEFORE UPDATE ON knowledge_project_link_receipts
+      BEGIN
+        SELECT RAISE(ABORT, 'knowledge project link receipts are immutable');
+      END;
+    CREATE TRIGGER IF NOT EXISTS knowledge_project_link_receipts_immutable_delete
+      BEFORE DELETE ON knowledge_project_link_receipts
+      BEGIN
+        SELECT RAISE(ABORT, 'knowledge project link receipts are immutable');
+      END;
+  `;
+}
+function postgresKnowledgeProjectLinksSchemaStatements() {
+  return [
+    `CREATE TABLE IF NOT EXISTS knowledge_projects (
+      authority_id TEXT NOT NULL,
+      tenant_id TEXT NOT NULL,
+      corpus_id TEXT NOT NULL,
+      source_project_id TEXT NOT NULL,
+      project_id TEXT NOT NULL,
+      project_slug TEXT NOT NULL,
+      project_name TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY(authority_id, tenant_id, corpus_id, project_id),
+      UNIQUE(authority_id, tenant_id, corpus_id, source_project_id)
+    )`,
+    `CREATE TABLE IF NOT EXISTS knowledge_project_collections (
+      authority_id TEXT NOT NULL,
+      tenant_id TEXT NOT NULL,
+      corpus_id TEXT NOT NULL,
+      collection_id TEXT NOT NULL,
+      project_id TEXT NOT NULL,
+      collection_slug TEXT NOT NULL,
+      collection_name TEXT NOT NULL,
+      membership_rule TEXT NOT NULL CHECK(membership_rule = 'explicit_collection_binding'),
+      revision INTEGER NOT NULL DEFAULT 1 CHECK(revision > 0),
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY(authority_id, tenant_id, corpus_id, collection_id),
+      UNIQUE(authority_id, tenant_id, corpus_id, project_id, collection_slug),
+      FOREIGN KEY(authority_id, tenant_id, corpus_id, project_id)
+        REFERENCES knowledge_projects(authority_id, tenant_id, corpus_id, project_id)
+        ON DELETE CASCADE
+    )`,
+    `CREATE TABLE IF NOT EXISTS knowledge_project_collection_memberships (
+      authority_id TEXT NOT NULL,
+      tenant_id TEXT NOT NULL,
+      corpus_id TEXT NOT NULL,
+      collection_id TEXT NOT NULL,
+      item_id TEXT NOT NULL,
+      bound_receipt_id TEXT NOT NULL,
+      created_by_operation INTEGER NOT NULL CHECK(created_by_operation IN (0, 1)),
+      bound_at TEXT NOT NULL,
+      PRIMARY KEY(authority_id, tenant_id, corpus_id, collection_id, item_id),
+      FOREIGN KEY(authority_id, tenant_id, corpus_id, collection_id)
+        REFERENCES knowledge_project_collections(authority_id, tenant_id, corpus_id, collection_id)
+        ON DELETE CASCADE
+    )`,
+    `CREATE TABLE IF NOT EXISTS knowledge_project_link_receipts (
+      receipt_id TEXT PRIMARY KEY,
+      authority TEXT NOT NULL CHECK(authority = 'knowledge'),
+      route TEXT NOT NULL CHECK(route = 'knowledge.project-registration.v1'),
+      package_version TEXT NOT NULL,
+      authority_id TEXT NOT NULL,
+      tenant_id TEXT NOT NULL,
+      corpus_id TEXT NOT NULL,
+      operation_id TEXT NOT NULL,
+      step_id TEXT NOT NULL,
+      action TEXT NOT NULL CHECK(action IN ('register_collection', 'bind_item')),
+      resource_kind TEXT NOT NULL CHECK(resource_kind IN ('collection', 'item')),
+      direction TEXT NOT NULL CHECK(direction IN ('forward', 'inverse')),
+      idempotency_key TEXT NOT NULL,
+      request_digest TEXT NOT NULL,
+      precondition_digest TEXT NOT NULL,
+      outcome TEXT NOT NULL CHECK(outcome IN ('accepted', 'terminal_nonacceptance')),
+      reason TEXT,
+      source_project_id TEXT,
+      project_id TEXT,
+      collection_id TEXT,
+      item_id TEXT,
+      result_revision TEXT,
+      result_digest TEXT,
+      accepted_receipt_id TEXT,
+      created_by_operation INTEGER NOT NULL CHECK(created_by_operation IN (0, 1)),
+      created_at TEXT NOT NULL,
+      UNIQUE(authority_id, tenant_id, corpus_id, operation_id, step_id, action, direction)
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_knowledge_project_link_receipts_lookup
+      ON knowledge_project_link_receipts (
+        authority_id, tenant_id, corpus_id, operation_id, step_id,
+        action, direction, idempotency_key
+      )`,
+    `CREATE OR REPLACE FUNCTION knowledge_project_link_receipts_immutable()
+      RETURNS trigger
+      LANGUAGE plpgsql
+      AS $$
+      BEGIN
+        RAISE EXCEPTION 'knowledge project link receipts are immutable';
+      END;
+      $$`,
+    `DROP TRIGGER IF EXISTS knowledge_project_link_receipts_immutable
+      ON knowledge_project_link_receipts`,
+    `CREATE TRIGGER knowledge_project_link_receipts_immutable
+      BEFORE UPDATE OR DELETE ON knowledge_project_link_receipts
+      FOR EACH ROW EXECUTE FUNCTION knowledge_project_link_receipts_immutable()`
+  ];
+}
+function canonicalize(value) {
+  if (Array.isArray(value))
+    return value.map(canonicalize);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined).sort(([left], [right]) => left.localeCompare(right)).map(([key, item]) => [key, canonicalize(item)]));
+  }
+  return value;
+}
+function canonicalKnowledgeProjectLinksJson(value) {
+  return JSON.stringify(canonicalize(value));
+}
+function digestKnowledgeProjectLinksValue(value) {
+  return createHash4("sha256").update(canonicalKnowledgeProjectLinksJson(value)).digest("hex");
+}
+function stableUuid(namespace) {
+  const hex = createHash4("sha256").update(namespace).digest("hex").slice(0, 32).split("");
+  hex[12] = "5";
+  hex[16] = (Number.parseInt(hex[16], 16) & 3 | 8).toString(16);
+  const value = hex.join("");
+  return `${value.slice(0, 8)}-${value.slice(8, 12)}-${value.slice(12, 16)}-${value.slice(16, 20)}-${value.slice(20)}`;
+}
+function requiredString(value, field) {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_INVALID_INPUT", `${field} must be a non-empty string.`);
+  }
+  return value.trim();
+}
+function boundedLimit(value) {
+  const resolved = value ?? 100;
+  if (!Number.isInteger(resolved) || resolved < 1 || resolved > 200) {
+    throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_INVALID_INPUT", "limit must be an integer between 1 and 200.");
+  }
+  return resolved;
+}
+function normalizeKinds(kinds) {
+  const supported = ["project", "collection", "item", "taxonomy"];
+  if (!kinds || kinds.length === 0)
+    return supported;
+  const unique = [...new Set(kinds)];
+  for (const kind of unique) {
+    if (!supported.includes(kind)) {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_INVALID_INPUT", `unsupported project resource kind: ${kind}`);
+    }
+  }
+  return unique.sort((left, right) => supported.indexOf(left) - supported.indexOf(right));
+}
+function toReceipt(row) {
+  return {
+    receipt_id: row.receipt_id,
+    authority: "knowledge",
+    route: KNOWLEDGE_PROJECT_REGISTRATION_ROUTE,
+    package_version: row.package_version,
+    authority_id: row.authority_id,
+    tenant_id: row.tenant_id,
+    corpus_id: row.corpus_id,
+    operation_id: row.operation_id,
+    step_id: row.step_id,
+    action: row.action,
+    resource_kind: row.resource_kind,
+    direction: row.direction,
+    idempotency_key: row.idempotency_key,
+    request_digest: row.request_digest,
+    precondition_digest: row.precondition_digest,
+    outcome: row.outcome,
+    reason: row.reason,
+    source_project_id: row.source_project_id,
+    project_id: row.project_id,
+    collection_id: row.collection_id,
+    item_id: row.item_id,
+    result_revision: row.result_revision,
+    result_digest: row.result_digest,
+    accepted_receipt_id: row.accepted_receipt_id,
+    created_by_operation: Number(row.created_by_operation) === 1,
+    created_at: row.created_at
+  };
+}
+function aggregateRecord(row) {
+  const record = {
+    source_project_id: row.source_project_id,
+    project_id: row.project_id,
+    project_slug: row.project_slug,
+    project_name: row.project_name,
+    collection_id: row.collection_id,
+    collection_slug: row.collection_slug,
+    collection_name: row.collection_name,
+    membership_rule: KNOWLEDGE_PROJECT_MEMBERSHIP_RULE,
+    revision: `r${Number(row.revision)}`,
+    created_at: row.created_at,
+    updated_at: row.updated_at
+  };
+  return { ...record, digest: digestKnowledgeProjectLinksValue(record) };
+}
+function receiptInsertParams(receipt) {
+  return [
+    receipt.receipt_id,
+    receipt.authority,
+    receipt.route,
+    receipt.package_version,
+    receipt.authority_id,
+    receipt.tenant_id,
+    receipt.corpus_id,
+    receipt.operation_id,
+    receipt.step_id,
+    receipt.action,
+    receipt.resource_kind,
+    receipt.direction,
+    receipt.idempotency_key,
+    receipt.request_digest,
+    receipt.precondition_digest,
+    receipt.outcome,
+    receipt.reason,
+    receipt.source_project_id,
+    receipt.project_id,
+    receipt.collection_id,
+    receipt.item_id,
+    receipt.result_revision,
+    receipt.result_digest,
+    receipt.accepted_receipt_id,
+    receipt.created_by_operation ? 1 : 0,
+    receipt.created_at
+  ];
+}
+var RECEIPT_INSERT_SQL = `INSERT INTO knowledge_project_link_receipts (
+  receipt_id, authority, route, package_version, authority_id, tenant_id, corpus_id,
+  operation_id, step_id, action, resource_kind, direction, idempotency_key,
+  request_digest, precondition_digest, outcome, reason, source_project_id,
+  project_id, collection_id, item_id, result_revision, result_digest,
+  accepted_receipt_id, created_by_operation, created_at
+) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`;
+
+class PackageOwnedKnowledgeProjectLinksAuthority {
+  sql;
+  itemResolver;
+  options;
+  identity;
+  now;
+  constructor(sql, itemResolver, options) {
+    this.sql = sql;
+    this.itemResolver = itemResolver;
+    this.options = options;
+    this.identity = {
+      authority_id: requiredString(options.authorityId, "authority_id"),
+      tenant_id: requiredString(options.tenantId, "tenant_id"),
+      corpus_id: requiredString(options.corpusId, "corpus_id")
+    };
+    this.now = options.now ?? (() => new Date().toISOString());
+  }
+  async close() {
+    await this.sql.close();
+  }
+  capabilityValue() {
+    return {
+      authority: "knowledge",
+      route: KNOWLEDGE_PROJECT_REGISTRATION_ROUTE,
+      resource_route: KNOWLEDGE_PROJECT_RESOURCES_ROUTE,
+      package_version: this.options.packageVersion,
+      schema_version: KNOWLEDGE_PROJECT_REGISTRATION_SCHEMA_VERSION,
+      ...this.identity,
+      registration_resource: "collection",
+      supported_resources: ["project", "collection", "item", "taxonomy"],
+      stable_project_ids: true,
+      stable_collection_ids: true,
+      explicit_membership: true,
+      membership_rule: KNOWLEDGE_PROJECT_MEMBERSHIP_RULE,
+      later_child_binding_required: true,
+      bind_existing_items: true,
+      immutable_receipts: true,
+      exact_terminal_lookup: true,
+      exact_readback: true,
+      conditional_inverse: true,
+      complete_keyset_pagination: true,
+      revision_bound_cursors: true
+    };
+  }
+  async capability() {
+    return this.capabilityValue();
+  }
+  assertIdentity(request) {
+    const capability = this.capabilityValue();
+    if (request.authority_route !== capability.route || request.package_version !== capability.package_version || request.authority_id !== capability.authority_id || request.tenant_id !== capability.tenant_id || request.corpus_id !== capability.corpus_id) {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_CAPABILITY_MISMATCH", "request does not match the current Knowledge project-registration capability identity.");
+    }
+  }
+  stableProjectId(sourceProjectId) {
+    return stableUuid(`${this.identity.authority_id}\x00${this.identity.tenant_id}\x00${this.identity.corpus_id}\x00project\x00${sourceProjectId}`);
+  }
+  stableCollectionId(sourceProjectId, collectionSlug) {
+    return stableUuid(`${this.identity.authority_id}\x00${this.identity.tenant_id}\x00${this.identity.corpus_id}\x00collection\x00${sourceProjectId}\x00${collectionSlug}`);
+  }
+  stableReceiptId(operationId, stepId, action, direction) {
+    return stableUuid(`${this.identity.authority_id}\x00${this.identity.tenant_id}\x00${this.identity.corpus_id}\x00receipt\x00${operationId}\x00${stepId}\x00${action}\x00${direction}`);
+  }
+  async getAggregateBySource(sql, sourceProjectId) {
+    return sql.get(`SELECT p.source_project_id, p.project_id, p.project_slug, p.project_name,
+              c.collection_id, c.collection_slug, c.collection_name,
+              c.membership_rule, c.revision, c.created_at, c.updated_at
+         FROM knowledge_projects p
+         JOIN knowledge_project_collections c
+           ON c.authority_id = p.authority_id
+          AND c.tenant_id = p.tenant_id
+          AND c.corpus_id = p.corpus_id
+          AND c.project_id = p.project_id
+        WHERE p.authority_id = ? AND p.tenant_id = ? AND p.corpus_id = ?
+          AND p.source_project_id = ?`, [this.identity.authority_id, this.identity.tenant_id, this.identity.corpus_id, sourceProjectId]);
+  }
+  async getAggregateByCollection(sql, collectionId) {
+    return sql.get(`SELECT p.source_project_id, p.project_id, p.project_slug, p.project_name,
+              c.collection_id, c.collection_slug, c.collection_name,
+              c.membership_rule, c.revision, c.created_at, c.updated_at
+         FROM knowledge_projects p
+         JOIN knowledge_project_collections c
+           ON c.authority_id = p.authority_id
+          AND c.tenant_id = p.tenant_id
+          AND c.corpus_id = p.corpus_id
+          AND c.project_id = p.project_id
+        WHERE c.authority_id = ? AND c.tenant_id = ? AND c.corpus_id = ?
+          AND c.collection_id = ?`, [this.identity.authority_id, this.identity.tenant_id, this.identity.corpus_id, collectionId]);
+  }
+  async getAggregateByProject(sql, projectId) {
+    return sql.get(`SELECT p.source_project_id, p.project_id, p.project_slug, p.project_name,
+              c.collection_id, c.collection_slug, c.collection_name,
+              c.membership_rule, c.revision, c.created_at, c.updated_at
+         FROM knowledge_projects p
+         JOIN knowledge_project_collections c
+           ON c.authority_id = p.authority_id
+          AND c.tenant_id = p.tenant_id
+          AND c.corpus_id = p.corpus_id
+          AND c.project_id = p.project_id
+        WHERE p.authority_id = ? AND p.tenant_id = ? AND p.corpus_id = ?
+          AND (p.source_project_id = ? OR p.project_id = ?)`, [
+      this.identity.authority_id,
+      this.identity.tenant_id,
+      this.identity.corpus_id,
+      projectId,
+      projectId
+    ]);
+  }
+  async getReceiptByAttempt(sql, input) {
+    const row = await sql.get(`SELECT * FROM knowledge_project_link_receipts
+        WHERE authority_id = ? AND tenant_id = ? AND corpus_id = ?
+          AND operation_id = ? AND step_id = ? AND action = ? AND direction = ?`, [
+      this.identity.authority_id,
+      this.identity.tenant_id,
+      this.identity.corpus_id,
+      input.operation_id,
+      input.step_id,
+      input.action,
+      input.direction
+    ]);
+    return row ? toReceipt(row) : null;
+  }
+  assertIdempotent(existing, input) {
+    if (existing.idempotency_key !== input.idempotency_key || input.request_digest !== undefined && existing.request_digest !== input.request_digest || input.precondition_digest !== undefined && existing.precondition_digest !== input.precondition_digest || input.accepted_receipt_id !== undefined && existing.accepted_receipt_id !== input.accepted_receipt_id) {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_IDEMPOTENCY_MISMATCH", "operation and step identity are already bound to a different Knowledge project-link request.", { receipt_id: existing.receipt_id });
+    }
+  }
+  async registerCollection(request) {
+    this.assertIdentity(request);
+    if (request.resource_kind !== "collection" || request.direction !== "forward") {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_INVALID_INPUT", "collection registration requires resource_kind=collection and direction=forward.");
+    }
+    const sourceProjectId = requiredString(request.project_id, "project_id");
+    const projectSlug = requiredString(request.project_slug, "project_slug");
+    const projectName = requiredString(request.project_name, "project_name");
+    const targetSelector = requiredString(request.target_selector, "target_selector");
+    if (targetSelector !== sourceProjectId) {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_INVALID_INPUT", "target_selector must equal the exact source project id.");
+    }
+    const collectionSlug = requiredString(request.desired.collection_slug ?? `${projectSlug}-knowledge`, "desired.collection_slug");
+    const collectionName = requiredString(request.desired.collection_name ?? `${projectName} Knowledge`, "desired.collection_name");
+    const expectedRequestDigest = digestKnowledgeProjectLinksValue({
+      action: "register_collection",
+      source_project_id: sourceProjectId,
+      project_slug: projectSlug,
+      project_name: projectName,
+      collection_slug: collectionSlug,
+      collection_name: collectionName,
+      membership_rule: KNOWLEDGE_PROJECT_MEMBERSHIP_RULE
+    });
+    if (request.request_digest !== expectedRequestDigest) {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_DIGEST_MISMATCH", "request_digest does not bind the normalized collection-registration request.", { expected_request_digest: expectedRequestDigest });
+    }
+    return this.sql.transaction(async (tx) => {
+      const duplicate = await this.getReceiptByAttempt(tx, {
+        operation_id: request.operation_id,
+        step_id: request.step_id,
+        action: "register_collection",
+        direction: "forward"
+      });
+      if (duplicate) {
+        this.assertIdempotent(duplicate, request);
+        return duplicate;
+      }
+      let aggregate = await this.getAggregateBySource(tx, sourceProjectId);
+      const createdByOperation = aggregate === null;
+      if (!aggregate) {
+        const now = this.now();
+        const projectId = this.stableProjectId(sourceProjectId);
+        const collectionId = this.stableCollectionId(sourceProjectId, collectionSlug);
+        await tx.run(`INSERT INTO knowledge_projects (
+            authority_id, tenant_id, corpus_id, source_project_id, project_id,
+            project_slug, project_name, created_at, updated_at
+          ) VALUES (?,?,?,?,?,?,?,?,?)`, [
+          this.identity.authority_id,
+          this.identity.tenant_id,
+          this.identity.corpus_id,
+          sourceProjectId,
+          projectId,
+          projectSlug,
+          projectName,
+          now,
+          now
+        ]);
+        await tx.run(`INSERT INTO knowledge_project_collections (
+            authority_id, tenant_id, corpus_id, collection_id, project_id,
+            collection_slug, collection_name, membership_rule, revision,
+            created_at, updated_at
+          ) VALUES (?,?,?,?,?,?,?,?,?,?,?)`, [
+          this.identity.authority_id,
+          this.identity.tenant_id,
+          this.identity.corpus_id,
+          collectionId,
+          projectId,
+          collectionSlug,
+          collectionName,
+          KNOWLEDGE_PROJECT_MEMBERSHIP_RULE,
+          1,
+          now,
+          now
+        ]);
+        aggregate = await this.getAggregateByCollection(tx, collectionId);
+      } else if (aggregate.project_slug !== projectSlug || aggregate.project_name !== projectName || aggregate.collection_slug !== collectionSlug || aggregate.collection_name !== collectionName || aggregate.membership_rule !== KNOWLEDGE_PROJECT_MEMBERSHIP_RULE) {
+        throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_CONFLICT", "the source project is already bound to a different Knowledge collection aggregate.", {
+          source_project_id: sourceProjectId,
+          collection_id: aggregate.collection_id
+        });
+      }
+      if (!aggregate) {
+        throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_INCOMPLETE_POPULATION", "collection registration committed but exact aggregate readback was unavailable.");
+      }
+      const record = aggregateRecord(aggregate);
+      const receipt = {
+        receipt_id: this.stableReceiptId(request.operation_id, request.step_id, "register_collection", "forward"),
+        authority: "knowledge",
+        route: KNOWLEDGE_PROJECT_REGISTRATION_ROUTE,
+        package_version: this.options.packageVersion,
+        ...this.identity,
+        operation_id: request.operation_id,
+        step_id: request.step_id,
+        action: "register_collection",
+        resource_kind: "collection",
+        direction: "forward",
+        idempotency_key: requiredString(request.idempotency_key, "idempotency_key"),
+        request_digest: request.request_digest,
+        precondition_digest: requiredString(request.precondition_digest, "precondition_digest"),
+        outcome: "accepted",
+        reason: createdByOperation ? null : "adopted_existing_collection",
+        source_project_id: record.source_project_id,
+        project_id: record.project_id,
+        collection_id: record.collection_id,
+        item_id: null,
+        result_revision: record.revision,
+        result_digest: record.digest,
+        accepted_receipt_id: null,
+        created_by_operation: createdByOperation,
+        created_at: this.now()
+      };
+      await tx.run(RECEIPT_INSERT_SQL, receiptInsertParams(receipt));
+      return receipt;
+    });
+  }
+  async readCollection(collectionId) {
+    const aggregate = await this.getAggregateByCollection(this.sql, requiredString(collectionId, "collection_id"));
+    if (!aggregate) {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_NOT_FOUND", "Knowledge collection was not found by exact id.");
+    }
+    return aggregateRecord(aggregate);
+  }
+  async lookupReceipt(request) {
+    if (request.max_items !== 1) {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_INVALID_INPUT", "exact terminal receipt lookup requires max_items=1.");
+    }
+    if (request.authority_id !== this.identity.authority_id || request.tenant_id !== this.identity.tenant_id || request.corpus_id !== this.identity.corpus_id) {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_CAPABILITY_MISMATCH", "receipt lookup does not match this authority identity.");
+    }
+    const receipt = await this.getReceiptByAttempt(this.sql, request);
+    if (!receipt || receipt.idempotency_key !== request.idempotency_key) {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_NOT_FOUND", "exact Knowledge project-link receipt was not found.");
+    }
+    return receipt;
+  }
+  async receiptById(sql, receiptId) {
+    const row = await sql.get(`SELECT * FROM knowledge_project_link_receipts
+        WHERE receipt_id = ? AND authority_id = ? AND tenant_id = ? AND corpus_id = ?`, [
+      receiptId,
+      this.identity.authority_id,
+      this.identity.tenant_id,
+      this.identity.corpus_id
+    ]);
+    return row ? toReceipt(row) : null;
+  }
+  async hasOtherAcceptedForwardReceipt(sql, accepted) {
+    const itemPredicate = accepted.action === "bind_item" ? "AND item_id = ?" : "AND item_id IS NULL";
+    const row = await sql.get(`SELECT receipt_id
+         FROM knowledge_project_link_receipts
+        WHERE authority_id = ? AND tenant_id = ? AND corpus_id = ?
+          AND action = ? AND direction = 'forward' AND outcome = 'accepted'
+          AND collection_id = ? AND receipt_id <> ?
+          ${itemPredicate}
+        LIMIT 1`, [
+      this.identity.authority_id,
+      this.identity.tenant_id,
+      this.identity.corpus_id,
+      accepted.action,
+      accepted.collection_id,
+      accepted.receipt_id,
+      ...accepted.action === "bind_item" ? [accepted.item_id] : []
+    ]);
+    return row !== null;
+  }
+  assertInverseIdentity(request) {
+    this.assertIdentity(request);
+    requiredString(request.accepted_receipt_id, "accepted_receipt_id");
+    requiredString(request.idempotency_key, "idempotency_key");
+  }
+  async compensateRegistration(request) {
+    this.assertInverseIdentity(request);
+    return this.sql.transaction(async (tx) => {
+      const duplicate = await this.getReceiptByAttempt(tx, {
+        operation_id: request.operation_id,
+        step_id: request.step_id,
+        action: "register_collection",
+        direction: "inverse"
+      });
+      if (duplicate) {
+        this.assertIdempotent(duplicate, request);
+        return duplicate;
+      }
+      const accepted = await this.receiptById(tx, request.accepted_receipt_id);
+      if (!accepted || accepted.action !== "register_collection" || accepted.direction !== "forward" || accepted.outcome !== "accepted") {
+        throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_NOT_FOUND", "accepted collection-registration receipt was not found.");
+      }
+      const aggregate = accepted.collection_id ? await this.getAggregateByCollection(tx, accepted.collection_id) : null;
+      let outcome = "accepted";
+      let reason = null;
+      if (!accepted.created_by_operation) {
+        outcome = "terminal_nonacceptance";
+        reason = "adopted_collection_is_not_inverse_owned";
+      } else if (!aggregate) {
+        outcome = "terminal_nonacceptance";
+        reason = "accepted_collection_is_already_absent";
+      } else if (await this.hasOtherAcceptedForwardReceipt(tx, accepted)) {
+        outcome = "terminal_nonacceptance";
+        reason = "collection_has_later_accepted_adopter";
+      } else {
+        const membership = await tx.get(`SELECT COUNT(*) AS count
+             FROM knowledge_project_collection_memberships
+            WHERE authority_id = ? AND tenant_id = ? AND corpus_id = ? AND collection_id = ?`, [
+          this.identity.authority_id,
+          this.identity.tenant_id,
+          this.identity.corpus_id,
+          aggregate.collection_id
+        ]);
+        if (Number(membership?.count ?? 0) > 0) {
+          outcome = "terminal_nonacceptance";
+          reason = "collection_has_bound_items";
+        } else {
+          await tx.run(`DELETE FROM knowledge_project_collections
+              WHERE authority_id = ? AND tenant_id = ? AND corpus_id = ? AND collection_id = ?`, [
+            this.identity.authority_id,
+            this.identity.tenant_id,
+            this.identity.corpus_id,
+            aggregate.collection_id
+          ]);
+          await tx.run(`DELETE FROM knowledge_projects
+              WHERE authority_id = ? AND tenant_id = ? AND corpus_id = ? AND project_id = ?
+                AND NOT EXISTS (
+                  SELECT 1 FROM knowledge_project_collections c
+                   WHERE c.authority_id = knowledge_projects.authority_id
+                     AND c.tenant_id = knowledge_projects.tenant_id
+                     AND c.corpus_id = knowledge_projects.corpus_id
+                     AND c.project_id = knowledge_projects.project_id
+                )`, [
+            this.identity.authority_id,
+            this.identity.tenant_id,
+            this.identity.corpus_id,
+            aggregate.project_id
+          ]);
+        }
+      }
+      const absent = {
+        accepted_receipt_id: accepted.receipt_id,
+        collection_id: accepted.collection_id,
+        absent: outcome === "accepted"
+      };
+      const receipt = {
+        receipt_id: this.stableReceiptId(request.operation_id, request.step_id, "register_collection", "inverse"),
+        authority: "knowledge",
+        route: KNOWLEDGE_PROJECT_REGISTRATION_ROUTE,
+        package_version: this.options.packageVersion,
+        ...this.identity,
+        operation_id: request.operation_id,
+        step_id: request.step_id,
+        action: "register_collection",
+        resource_kind: "collection",
+        direction: "inverse",
+        idempotency_key: request.idempotency_key,
+        request_digest: digestKnowledgeProjectLinksValue({
+          accepted_receipt_id: accepted.receipt_id,
+          collection_id: accepted.collection_id
+        }),
+        precondition_digest: accepted.result_digest ?? "",
+        outcome,
+        reason,
+        source_project_id: accepted.source_project_id,
+        project_id: accepted.project_id,
+        collection_id: accepted.collection_id,
+        item_id: null,
+        result_revision: outcome === "accepted" ? "absent" : accepted.result_revision,
+        result_digest: digestKnowledgeProjectLinksValue(absent),
+        accepted_receipt_id: accepted.receipt_id,
+        created_by_operation: false,
+        created_at: this.now()
+      };
+      await tx.run(RECEIPT_INSERT_SQL, receiptInsertParams(receipt));
+      return receipt;
+    });
+  }
+  async verifyRegistrationInverse(request) {
+    this.assertInverseIdentity(request);
+    const inverse = await this.getReceiptByAttempt(this.sql, {
+      operation_id: request.operation_id,
+      step_id: request.step_id,
+      action: "register_collection",
+      direction: "inverse"
+    });
+    if (!inverse || inverse.outcome !== "accepted" || inverse.accepted_receipt_id !== request.accepted_receipt_id) {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_NOT_FOUND", "accepted collection inverse receipt was not found.");
+    }
+    const aggregate = inverse.collection_id ? await this.getAggregateByCollection(this.sql, inverse.collection_id) : null;
+    if (aggregate) {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_CONFLICT", "collection inverse verification found the target still present.");
+    }
+    const verification = {
+      accepted_receipt_id: request.accepted_receipt_id,
+      target_id: inverse.collection_id,
+      absent: true,
+      digest: inverse.result_digest
+    };
+    return verification;
+  }
+  async bindItem(request) {
+    this.assertIdentity(request);
+    if (request.direction !== "forward") {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_INVALID_INPUT", "item binding requires direction=forward.");
+    }
+    const collectionId = requiredString(request.collection_id, "collection_id");
+    const itemId = requiredString(request.item_id, "item_id");
+    const item = await this.itemResolver(itemId);
+    if (!item || item.id !== itemId) {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_NOT_FOUND", "bind-existing requires an exact existing Knowledge item id.", { item_id: itemId });
+    }
+    const expectedRequestDigest = digestKnowledgeProjectLinksValue({
+      action: "bind_item",
+      collection_id: collectionId,
+      item_id: itemId
+    });
+    if (request.request_digest !== expectedRequestDigest) {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_DIGEST_MISMATCH", "request_digest does not bind the normalized item-membership request.", { expected_request_digest: expectedRequestDigest });
+    }
+    return this.sql.transaction(async (tx) => {
+      const duplicate = await this.getReceiptByAttempt(tx, {
+        operation_id: request.operation_id,
+        step_id: request.step_id,
+        action: "bind_item",
+        direction: "forward"
+      });
+      if (duplicate) {
+        this.assertIdempotent(duplicate, request);
+        return duplicate;
+      }
+      const aggregate = await this.getAggregateByCollection(tx, collectionId);
+      if (!aggregate) {
+        throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_NOT_FOUND", "Knowledge collection was not found by exact id.");
+      }
+      const existing = await tx.get(`SELECT * FROM knowledge_project_collection_memberships
+          WHERE authority_id = ? AND tenant_id = ? AND corpus_id = ?
+            AND collection_id = ? AND item_id = ?`, [
+        this.identity.authority_id,
+        this.identity.tenant_id,
+        this.identity.corpus_id,
+        collectionId,
+        itemId
+      ]);
+      const createdByOperation = existing === null;
+      const now = this.now();
+      const receiptId = this.stableReceiptId(request.operation_id, request.step_id, "bind_item", "forward");
+      if (!existing) {
+        await tx.run(`INSERT INTO knowledge_project_collection_memberships (
+            authority_id, tenant_id, corpus_id, collection_id, item_id,
+            bound_receipt_id, created_by_operation, bound_at
+          ) VALUES (?,?,?,?,?,?,?,?)`, [
+          this.identity.authority_id,
+          this.identity.tenant_id,
+          this.identity.corpus_id,
+          collectionId,
+          itemId,
+          receiptId,
+          1,
+          now
+        ]);
+        await tx.run(`UPDATE knowledge_project_collections
+              SET revision = revision + 1, updated_at = ?
+            WHERE authority_id = ? AND tenant_id = ? AND corpus_id = ? AND collection_id = ?`, [
+          now,
+          this.identity.authority_id,
+          this.identity.tenant_id,
+          this.identity.corpus_id,
+          collectionId
+        ]);
+      }
+      const current = await this.getAggregateByCollection(tx, collectionId);
+      if (!current) {
+        throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_INCOMPLETE_POPULATION", "item binding committed but collection readback was unavailable.");
+      }
+      const binding = {
+        collection_id: collectionId,
+        item_id: itemId,
+        collection_revision: `r${Number(current.revision)}`,
+        item_revision: `v${item.version ?? 1}`
+      };
+      const receipt = {
+        receipt_id: receiptId,
+        authority: "knowledge",
+        route: KNOWLEDGE_PROJECT_REGISTRATION_ROUTE,
+        package_version: this.options.packageVersion,
+        ...this.identity,
+        operation_id: request.operation_id,
+        step_id: request.step_id,
+        action: "bind_item",
+        resource_kind: "item",
+        direction: "forward",
+        idempotency_key: requiredString(request.idempotency_key, "idempotency_key"),
+        request_digest: request.request_digest,
+        precondition_digest: requiredString(request.precondition_digest, "precondition_digest"),
+        outcome: "accepted",
+        reason: createdByOperation ? null : "adopted_existing_membership",
+        source_project_id: current.source_project_id,
+        project_id: current.project_id,
+        collection_id: collectionId,
+        item_id: itemId,
+        result_revision: binding.collection_revision,
+        result_digest: digestKnowledgeProjectLinksValue(binding),
+        accepted_receipt_id: null,
+        created_by_operation: createdByOperation,
+        created_at: now
+      };
+      await tx.run(RECEIPT_INSERT_SQL, receiptInsertParams(receipt));
+      return receipt;
+    });
+  }
+  async readItemBinding(collectionId, itemId) {
+    const membership = await this.sql.get(`SELECT * FROM knowledge_project_collection_memberships
+        WHERE authority_id = ? AND tenant_id = ? AND corpus_id = ?
+          AND collection_id = ? AND item_id = ?`, [
+      this.identity.authority_id,
+      this.identity.tenant_id,
+      this.identity.corpus_id,
+      requiredString(collectionId, "collection_id"),
+      requiredString(itemId, "item_id")
+    ]);
+    if (!membership) {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_NOT_FOUND", "Knowledge collection membership was not found by exact ids.");
+    }
+    const aggregate = await this.getAggregateByCollection(this.sql, collectionId);
+    if (!aggregate) {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_INCOMPLETE_POPULATION", "membership exists without its collection aggregate.");
+    }
+    const record = {
+      collection_id: collectionId,
+      item_id: itemId,
+      revision: `r${Number(aggregate.revision)}`,
+      bound_at: membership.bound_at
+    };
+    return { ...record, digest: digestKnowledgeProjectLinksValue(record) };
+  }
+  async compensateItemBinding(request) {
+    this.assertInverseIdentity(request);
+    return this.sql.transaction(async (tx) => {
+      const duplicate = await this.getReceiptByAttempt(tx, {
+        operation_id: request.operation_id,
+        step_id: request.step_id,
+        action: "bind_item",
+        direction: "inverse"
+      });
+      if (duplicate) {
+        this.assertIdempotent(duplicate, request);
+        return duplicate;
+      }
+      const accepted = await this.receiptById(tx, request.accepted_receipt_id);
+      if (!accepted || accepted.action !== "bind_item" || accepted.direction !== "forward" || accepted.outcome !== "accepted") {
+        throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_NOT_FOUND", "accepted item-binding receipt was not found.");
+      }
+      let outcome = "accepted";
+      let reason = null;
+      const membership = await tx.get(`SELECT * FROM knowledge_project_collection_memberships
+          WHERE authority_id = ? AND tenant_id = ? AND corpus_id = ?
+            AND collection_id = ? AND item_id = ?`, [
+        this.identity.authority_id,
+        this.identity.tenant_id,
+        this.identity.corpus_id,
+        accepted.collection_id,
+        accepted.item_id
+      ]);
+      if (!accepted.created_by_operation) {
+        outcome = "terminal_nonacceptance";
+        reason = "adopted_membership_is_not_inverse_owned";
+      } else if (!membership) {
+        outcome = "terminal_nonacceptance";
+        reason = "accepted_membership_is_already_absent";
+      } else if (await this.hasOtherAcceptedForwardReceipt(tx, accepted)) {
+        outcome = "terminal_nonacceptance";
+        reason = "membership_has_later_accepted_adopter";
+      } else if (membership.bound_receipt_id !== accepted.receipt_id || Number(membership.created_by_operation) !== 1) {
+        outcome = "terminal_nonacceptance";
+        reason = "membership_is_owned_by_a_different_receipt";
+      } else {
+        await tx.run(`DELETE FROM knowledge_project_collection_memberships
+            WHERE authority_id = ? AND tenant_id = ? AND corpus_id = ?
+              AND collection_id = ? AND item_id = ? AND bound_receipt_id = ?`, [
+          this.identity.authority_id,
+          this.identity.tenant_id,
+          this.identity.corpus_id,
+          accepted.collection_id,
+          accepted.item_id,
+          accepted.receipt_id
+        ]);
+        await tx.run(`UPDATE knowledge_project_collections
+              SET revision = revision + 1, updated_at = ?
+            WHERE authority_id = ? AND tenant_id = ? AND corpus_id = ? AND collection_id = ?`, [
+          this.now(),
+          this.identity.authority_id,
+          this.identity.tenant_id,
+          this.identity.corpus_id,
+          accepted.collection_id
+        ]);
+      }
+      const aggregate = accepted.collection_id ? await this.getAggregateByCollection(tx, accepted.collection_id) : null;
+      const absent = {
+        accepted_receipt_id: accepted.receipt_id,
+        collection_id: accepted.collection_id,
+        item_id: accepted.item_id,
+        absent: outcome === "accepted"
+      };
+      const receipt = {
+        receipt_id: this.stableReceiptId(request.operation_id, request.step_id, "bind_item", "inverse"),
+        authority: "knowledge",
+        route: KNOWLEDGE_PROJECT_REGISTRATION_ROUTE,
+        package_version: this.options.packageVersion,
+        ...this.identity,
+        operation_id: request.operation_id,
+        step_id: request.step_id,
+        action: "bind_item",
+        resource_kind: "item",
+        direction: "inverse",
+        idempotency_key: request.idempotency_key,
+        request_digest: digestKnowledgeProjectLinksValue({
+          accepted_receipt_id: accepted.receipt_id,
+          collection_id: accepted.collection_id,
+          item_id: accepted.item_id
+        }),
+        precondition_digest: accepted.result_digest ?? "",
+        outcome,
+        reason,
+        source_project_id: accepted.source_project_id,
+        project_id: accepted.project_id,
+        collection_id: accepted.collection_id,
+        item_id: accepted.item_id,
+        result_revision: outcome === "accepted" && aggregate ? `r${Number(aggregate.revision)}` : accepted.result_revision,
+        result_digest: digestKnowledgeProjectLinksValue(absent),
+        accepted_receipt_id: accepted.receipt_id,
+        created_by_operation: false,
+        created_at: this.now()
+      };
+      await tx.run(RECEIPT_INSERT_SQL, receiptInsertParams(receipt));
+      return receipt;
+    });
+  }
+  async verifyItemBindingInverse(request) {
+    this.assertInverseIdentity(request);
+    const inverse = await this.getReceiptByAttempt(this.sql, {
+      operation_id: request.operation_id,
+      step_id: request.step_id,
+      action: "bind_item",
+      direction: "inverse"
+    });
+    if (!inverse || inverse.outcome !== "accepted" || inverse.accepted_receipt_id !== request.accepted_receipt_id) {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_NOT_FOUND", "accepted item-binding inverse receipt was not found.");
+    }
+    const membership = await this.sql.get(`SELECT item_id FROM knowledge_project_collection_memberships
+        WHERE authority_id = ? AND tenant_id = ? AND corpus_id = ?
+          AND collection_id = ? AND item_id = ?`, [
+      this.identity.authority_id,
+      this.identity.tenant_id,
+      this.identity.corpus_id,
+      inverse.collection_id,
+      inverse.item_id
+    ]);
+    if (membership) {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_CONFLICT", "item-binding inverse verification found the membership still present.");
+    }
+    return {
+      accepted_receipt_id: request.accepted_receipt_id,
+      target_id: inverse.item_id,
+      absent: true,
+      digest: inverse.result_digest
+    };
+  }
+  async buildResources(projectId) {
+    const aggregate = await this.getAggregateByProject(this.sql, requiredString(projectId, "project_id"));
+    if (!aggregate) {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_NOT_FOUND", "Knowledge project aggregate was not found by source or stable project id.");
+    }
+    const memberships = await this.sql.many(`SELECT * FROM knowledge_project_collection_memberships
+        WHERE authority_id = ? AND tenant_id = ? AND corpus_id = ? AND collection_id = ?
+        ORDER BY item_id ASC`, [
+      this.identity.authority_id,
+      this.identity.tenant_id,
+      this.identity.corpus_id,
+      aggregate.collection_id
+    ]);
+    const items = await Promise.all(memberships.map(async (membership) => {
+      const item = await this.itemResolver(membership.item_id);
+      if (!item || item.id !== membership.item_id) {
+        throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_INCOMPLETE_POPULATION", "collection membership points at a missing Knowledge item; refusing a partial resource population.", { collection_id: aggregate.collection_id, item_id: membership.item_id });
+      }
+      return item;
+    }));
+    const revision = `r${Number(aggregate.revision)}`;
+    const base = {
+      project_id: aggregate.project_id,
+      source_project_id: aggregate.source_project_id,
+      collection_id: aggregate.collection_id,
+      revision
+    };
+    const resources = [];
+    const projectBody = {
+      ...base,
+      kind: "project",
+      id: aggregate.project_id,
+      title: aggregate.project_name,
+      locator: { kind: "canonical_uri", value: `knowledge:project:${aggregate.project_id}` },
+      metadata: {
+        source_project_id: aggregate.source_project_id,
+        slug: aggregate.project_slug,
+        collection_count: 1
+      }
+    };
+    resources.push({
+      ...projectBody,
+      key: `project:${aggregate.project_id}`,
+      digest: digestKnowledgeProjectLinksValue(projectBody)
+    });
+    const collectionBody = {
+      ...base,
+      kind: "collection",
+      id: aggregate.collection_id,
+      title: aggregate.collection_name,
+      locator: { kind: "external_uuid", value: aggregate.collection_id },
+      metadata: {
+        slug: aggregate.collection_slug,
+        membership_rule: KNOWLEDGE_PROJECT_MEMBERSHIP_RULE,
+        member_count: items.length
+      }
+    };
+    resources.push({
+      ...collectionBody,
+      key: `collection:${aggregate.collection_id}`,
+      digest: digestKnowledgeProjectLinksValue(collectionBody)
+    });
+    for (const item of items) {
+      const itemBody = {
+        ...base,
+        kind: "item",
+        id: item.id,
+        revision: `v${item.version ?? 1}`,
+        title: item.title,
+        locator: { kind: "canonical_uri", value: `knowledge:item:${encodeURIComponent(item.id)}` },
+        metadata: {
+          tags: [...item.tags ?? []],
+          archived: item.archived === true,
+          updated_at: item.updated_at
+        }
+      };
+      resources.push({
+        ...itemBody,
+        key: `item:${item.id}`,
+        digest: digestKnowledgeProjectLinksValue(itemBody)
+      });
+    }
+    const taxonomy = new Map;
+    for (const item of items) {
+      for (const rawTag of item.tags ?? []) {
+        const normalized = rawTag.trim().toLowerCase();
+        if (!normalized)
+          continue;
+        const entry = taxonomy.get(normalized) ?? { label: rawTag.trim(), itemIds: [] };
+        entry.itemIds.push(item.id);
+        taxonomy.set(normalized, entry);
+      }
+    }
+    for (const [normalized, entry] of [...taxonomy.entries()].sort(([left], [right]) => left.localeCompare(right))) {
+      const taxonomyId = stableUuid(`${aggregate.collection_id}\x00taxonomy\x00${normalized}`);
+      const taxonomyBody = {
+        ...base,
+        kind: "taxonomy",
+        id: taxonomyId,
+        title: entry.label,
+        locator: { kind: "external_uuid", value: taxonomyId },
+        metadata: {
+          tag: entry.label,
+          normalized_tag: normalized,
+          item_count: entry.itemIds.length,
+          member_digest: digestKnowledgeProjectLinksValue([...entry.itemIds].sort())
+        }
+      };
+      resources.push({
+        ...taxonomyBody,
+        key: `taxonomy:${taxonomyId}`,
+        digest: digestKnowledgeProjectLinksValue(taxonomyBody)
+      });
+    }
+    resources.sort((left, right) => left.key.localeCompare(right.key));
+    return { aggregate, resources };
+  }
+  async listProjectResources(projectId, options = {}) {
+    const limit = boundedLimit(options.limit);
+    const kinds = normalizeKinds(options.kinds);
+    const { aggregate, resources } = await this.buildResources(projectId);
+    const revision = `r${Number(aggregate.revision)}`;
+    const population = resources.filter((resource) => kinds.includes(resource.kind));
+    const populationDigest = digestKnowledgeProjectLinksValue(population.map((resource) => ({ key: resource.key, digest: resource.digest })));
+    let after = "";
+    if (options.cursor) {
+      let decoded;
+      try {
+        decoded = JSON.parse(Buffer.from(options.cursor, "base64url").toString("utf8"));
+      } catch {
+        throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_INVALID_INPUT", "cursor is not a valid Knowledge project-resources cursor.");
+      }
+      if (decoded.version !== 1 || decoded.project_id !== aggregate.project_id || decoded.collection_id !== aggregate.collection_id || decoded.collection_revision !== revision || decoded.population_digest !== populationDigest || canonicalKnowledgeProjectLinksJson(decoded.kinds) !== canonicalKnowledgeProjectLinksJson(kinds) || typeof decoded.after !== "string") {
+        throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_CURSOR_STALE", "project resources changed or the cursor belongs to a different project/kind selection; restart from the first page.");
+      }
+      after = decoded.after;
+    }
+    const remaining = after ? population.filter((resource) => resource.key > after) : population;
+    const pageResources = remaining.slice(0, limit);
+    const hasMore = remaining.length > pageResources.length;
+    const nextCursor = hasMore && pageResources.length > 0 ? Buffer.from(JSON.stringify({
+      version: 1,
+      project_id: aggregate.project_id,
+      collection_id: aggregate.collection_id,
+      collection_revision: revision,
+      population_digest: populationDigest,
+      kinds,
+      after: pageResources.at(-1).key
+    })).toString("base64url") : null;
+    return {
+      schema: "knowledge.project-resources.page.v1",
+      authority: "knowledge",
+      route: KNOWLEDGE_PROJECT_RESOURCES_ROUTE,
+      ...this.identity,
+      project_id: aggregate.project_id,
+      source_project_id: aggregate.source_project_id,
+      collection_id: aggregate.collection_id,
+      collection_revision: revision,
+      population_digest: populationDigest,
+      resource_kinds: kinds,
+      resources: pageResources,
+      count: pageResources.length,
+      total: population.length,
+      limit,
+      cursor: options.cursor ?? null,
+      next_cursor: nextCursor,
+      has_more: hasMore,
+      complete: !hasMore,
+      truncated: false
+    };
+  }
+  async readProjectResource(projectId, kind, resourceId) {
+    const { resources } = await this.buildResources(projectId);
+    const resource = resources.find((candidate) => candidate.kind === kind && candidate.id === resourceId);
+    if (!resource) {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_NOT_FOUND", "Knowledge project resource was not found by exact kind and id.");
+    }
+    return resource;
+  }
+  async readAllProjectResources(projectId, options = {}) {
+    const resources = [];
+    const seen = new Set;
+    let cursor = null;
+    let expected = null;
+    do {
+      const page = await this.listProjectResources(projectId, { ...options, cursor });
+      const identity = {
+        project_id: page.project_id,
+        collection_id: page.collection_id,
+        collection_revision: page.collection_revision,
+        population_digest: page.population_digest,
+        total: page.total,
+        kinds: canonicalKnowledgeProjectLinksJson(page.resource_kinds)
+      };
+      if (expected && canonicalKnowledgeProjectLinksJson(expected) !== canonicalKnowledgeProjectLinksJson(identity)) {
+        throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_CURSOR_STALE", "project resources changed while the complete population was being read.");
+      }
+      expected ??= identity;
+      for (const resource of page.resources) {
+        if (seen.has(resource.key)) {
+          throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_INCOMPLETE_POPULATION", "project resource pagination returned a duplicate stable resource key.", { key: resource.key });
+        }
+        seen.add(resource.key);
+        resources.push(resource);
+      }
+      if (page.has_more && !page.next_cursor) {
+        throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_INCOMPLETE_POPULATION", "project resource page claims more data without a continuation cursor.");
+      }
+      cursor = page.next_cursor;
+    } while (cursor);
+    if (!expected || resources.length !== expected.total) {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_INCOMPLETE_POPULATION", "complete project resource enumeration did not match the producer total.", { expected_total: expected?.total ?? null, received: resources.length });
+    }
+    return resources;
+  }
+}
+function createLocalKnowledgeProjectLinksAuthority(input) {
+  if (input.databasePath !== ":memory:") {
+    ensureParentDir(input.databasePath);
+  }
+  const db = new Database(input.databasePath, { create: true });
+  db.exec(sqliteKnowledgeProjectLinksSchemaSql());
+  return new PackageOwnedKnowledgeProjectLinksAuthority(new SqliteProjectLinksSql(db), (id) => input.itemStore.get(id), input.options);
+}
+function createPostgresKnowledgeProjectLinksAuthority(input) {
+  return new PackageOwnedKnowledgeProjectLinksAuthority(new PostgresProjectLinksSql(input.client, input.client), input.itemResolver, input.options);
+}
+function wireErrorStatus(error) {
+  if (error.code === "KNOWLEDGE_PROJECT_LINKS_NOT_FOUND")
+    return 404;
+  if (error.code === "KNOWLEDGE_PROJECT_LINKS_CONFLICT" || error.code === "KNOWLEDGE_PROJECT_LINKS_CURSOR_STALE" || error.code === "KNOWLEDGE_PROJECT_LINKS_IDEMPOTENCY_MISMATCH")
+    return 409;
+  if (error.code === "KNOWLEDGE_PROJECT_LINKS_INCOMPLETE_POPULATION")
+    return 503;
+  return 400;
+}
+function knowledgeProjectLinksErrorResponse(error) {
+  if (error instanceof KnowledgeProjectLinksError) {
+    return Response.json({ error: error.code, message: error.message, details: error.details }, { status: wireErrorStatus(error) });
+  }
+  throw error;
+}
+
+class KnowledgeProjectLinksHttpClient {
+  options;
+  fetchImpl;
+  root;
+  constructor(options) {
+    this.options = options;
+    this.fetchImpl = options.fetch ?? guardedFetch;
+    this.root = options.baseUrl.replace(/\/+$/, "");
+  }
+  async close() {}
+  headers(extra = {}) {
+    const headers = new Headers(this.options.headers);
+    headers.set("accept", "application/json");
+    if (this.options.apiKey)
+      headers.set("x-api-key", this.options.apiKey);
+    for (const [key, value] of Object.entries(extra))
+      headers.set(key, value);
+    return headers;
+  }
+  async request(path, init = {}) {
+    const response = await this.fetchImpl(`${this.root}${path}`, {
+      ...init,
+      headers: this.headers(init.body ? { "content-type": "application/json" } : {})
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new KnowledgeProjectLinksError(typeof body.error === "string" ? body.error : "KNOWLEDGE_PROJECT_LINKS_CONFLICT", typeof body.message === "string" ? body.message : `Knowledge project-links HTTP ${response.status}`, body.details && typeof body.details === "object" ? body.details : {});
+    }
+    return body;
+  }
+  async capability() {
+    const body = await this.request("/v1/project-registration/capability");
+    return body.capability;
+  }
+  async registerCollection(request) {
+    const body = await this.request("/v1/project-registration/create", { method: "POST", body: JSON.stringify(request) });
+    return body.receipt;
+  }
+  async readCollection(collectionId) {
+    const body = await this.request("/v1/project-registration/read-exact", { method: "POST", body: JSON.stringify({ collection_id: collectionId }) });
+    return body.record;
+  }
+  async lookupReceipt(request) {
+    const body = await this.request("/v1/project-registration/receipts/lookup", { method: "POST", body: JSON.stringify(request) });
+    return body.receipt;
+  }
+  async compensateRegistration(request) {
+    const body = await this.request("/v1/project-registration/compensate", { method: "POST", body: JSON.stringify(request) });
+    return body.receipt;
+  }
+  async verifyRegistrationInverse(request) {
+    const body = await this.request("/v1/project-registration/verify-inverse", { method: "POST", body: JSON.stringify(request) });
+    return body.verification;
+  }
+  async bindItem(request) {
+    const body = await this.request("/v1/project-registration/items/bind", { method: "POST", body: JSON.stringify(request) });
+    return body.receipt;
+  }
+  async readItemBinding(collectionId, itemId) {
+    const body = await this.request("/v1/project-registration/items/read-exact", { method: "POST", body: JSON.stringify({ collection_id: collectionId, item_id: itemId }) });
+    return body.record;
+  }
+  async compensateItemBinding(request) {
+    const body = await this.request("/v1/project-registration/items/compensate", { method: "POST", body: JSON.stringify(request) });
+    return body.receipt;
+  }
+  async verifyItemBindingInverse(request) {
+    const body = await this.request("/v1/project-registration/items/verify-inverse", { method: "POST", body: JSON.stringify(request) });
+    return body.verification;
+  }
+  async listProjectResources(projectId, options = {}) {
+    const query2 = new URLSearchParams;
+    if (options.limit !== undefined)
+      query2.set("limit", String(options.limit));
+    if (options.cursor)
+      query2.set("cursor", options.cursor);
+    for (const kind of options.kinds ?? [])
+      query2.append("kind", kind);
+    const suffix = query2.size > 0 ? `?${query2.toString()}` : "";
+    return this.request(`/v1/projects/${encodeURIComponent(projectId)}/resources${suffix}`);
+  }
+  async readProjectResource(projectId, kind, resourceId) {
+    const body = await this.request(`/v1/projects/${encodeURIComponent(projectId)}/resources/${kind}/${encodeURIComponent(resourceId)}`);
+    return body.resource;
+  }
+  async readAllProjectResources(projectId, options = {}) {
+    const resources = [];
+    const seen = new Set;
+    let cursor = null;
+    let expectedTotal = null;
+    let expectedRevision = null;
+    let expectedPopulationDigest = null;
+    do {
+      const page = await this.listProjectResources(projectId, { ...options, cursor });
+      expectedTotal ??= page.total;
+      expectedRevision ??= page.collection_revision;
+      expectedPopulationDigest ??= page.population_digest;
+      if (page.total !== expectedTotal || page.collection_revision !== expectedRevision || page.population_digest !== expectedPopulationDigest) {
+        throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_CURSOR_STALE", "project resources changed while the complete HTTP population was being read.");
+      }
+      for (const resource of page.resources) {
+        if (seen.has(resource.key)) {
+          throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_INCOMPLETE_POPULATION", "project resources HTTP pagination returned a duplicate stable key.");
+        }
+        seen.add(resource.key);
+        resources.push(resource);
+      }
+      if (page.has_more && !page.next_cursor) {
+        throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_INCOMPLETE_POPULATION", "project resources HTTP page claims more data without a cursor.");
+      }
+      cursor = page.next_cursor;
+    } while (cursor);
+    if (expectedTotal === null || resources.length !== expectedTotal) {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_INCOMPLETE_POPULATION", "complete HTTP resource enumeration did not match the producer total.");
+    }
+    return resources;
+  }
+}
+function createKnowledgeProjectLinksHttpClient(options) {
+  return new KnowledgeProjectLinksHttpClient(options);
+}
+
 // src/serve.ts
 var KNOWLEDGE_SERVE_APP = "knowledge";
 function normalizeCloudDatabaseUrl(env = process.env) {
@@ -4275,6 +5848,168 @@ function knowledgeOpenApi(version) {
           ],
           additionalProperties: true
         },
+        ProjectRegistrationCapability: {
+          type: "object",
+          required: [
+            "authority",
+            "route",
+            "resource_route",
+            "package_version",
+            "authority_id",
+            "tenant_id",
+            "corpus_id",
+            "supported_resources",
+            "membership_rule"
+          ],
+          additionalProperties: true
+        },
+        ProjectRegistrationReceipt: {
+          type: "object",
+          required: [
+            "receipt_id",
+            "authority",
+            "route",
+            "package_version",
+            "authority_id",
+            "tenant_id",
+            "corpus_id",
+            "operation_id",
+            "step_id",
+            "action",
+            "resource_kind",
+            "direction",
+            "idempotency_key",
+            "request_digest",
+            "precondition_digest",
+            "outcome",
+            "created_by_operation",
+            "created_at"
+          ],
+          additionalProperties: true
+        },
+        ProjectCollectionRecord: {
+          type: "object",
+          required: [
+            "source_project_id",
+            "project_id",
+            "project_slug",
+            "project_name",
+            "collection_id",
+            "collection_slug",
+            "collection_name",
+            "membership_rule",
+            "revision",
+            "digest",
+            "created_at",
+            "updated_at"
+          ],
+          properties: {
+            source_project_id: { type: "string" },
+            project_id: { type: "string" },
+            project_slug: { type: "string" },
+            project_name: { type: "string" },
+            collection_id: { type: "string" },
+            collection_slug: { type: "string" },
+            collection_name: { type: "string" },
+            membership_rule: {
+              type: "string",
+              enum: ["explicit_collection_binding"]
+            },
+            revision: { type: "string" },
+            digest: { type: "string" },
+            created_at: { type: "string", format: "date-time" },
+            updated_at: { type: "string", format: "date-time" }
+          },
+          additionalProperties: false
+        },
+        ProjectResource: {
+          type: "object",
+          required: [
+            "key",
+            "kind",
+            "id",
+            "project_id",
+            "source_project_id",
+            "collection_id",
+            "revision",
+            "digest",
+            "title",
+            "locator",
+            "metadata"
+          ],
+          properties: {
+            key: { type: "string" },
+            kind: {
+              type: "string",
+              enum: ["project", "collection", "item", "taxonomy"]
+            },
+            id: { type: "string" },
+            project_id: { type: "string" },
+            source_project_id: { type: "string" },
+            collection_id: { type: "string" },
+            revision: { type: "string" },
+            digest: { type: "string" },
+            title: { type: "string" },
+            locator: {
+              type: "object",
+              required: ["kind", "value"],
+              properties: {
+                kind: {
+                  type: "string",
+                  enum: ["external_uuid", "canonical_uri"]
+                },
+                value: { type: "string" }
+              },
+              additionalProperties: false
+            },
+            metadata: {
+              type: "object",
+              additionalProperties: true
+            }
+          },
+          additionalProperties: false
+        },
+        ProjectResourcePage: {
+          type: "object",
+          required: [
+            "schema",
+            "authority",
+            "route",
+            "authority_id",
+            "tenant_id",
+            "corpus_id",
+            "project_id",
+            "source_project_id",
+            "collection_id",
+            "collection_revision",
+            "population_digest",
+            "resource_kinds",
+            "resources",
+            "count",
+            "total",
+            "limit",
+            "cursor",
+            "next_cursor",
+            "has_more",
+            "complete",
+            "truncated"
+          ],
+          properties: {
+            collection_revision: { type: "string" },
+            population_digest: { type: "string" },
+            resources: {
+              type: "array",
+              items: { $ref: "#/components/schemas/ProjectResource" }
+            },
+            count: { type: "integer" },
+            total: { type: "integer" },
+            limit: { type: "integer", minimum: 1, maximum: 200 },
+            has_more: { type: "boolean" },
+            complete: { type: "boolean" },
+            truncated: { type: "boolean", enum: [false] }
+          },
+          additionalProperties: true
+        },
         NoteList: {
           type: "object",
           properties: {
@@ -4323,6 +6058,230 @@ function knowledgeOpenApi(version) {
     },
     security: [{ apiKey: [] }],
     paths: {
+      "/v1/project-registration/capability": {
+        get: {
+          operationId: "getKnowledgeProjectRegistrationCapability",
+          summary: "Read the exact Knowledge project-registration capability identity",
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      capability: { $ref: "#/components/schemas/ProjectRegistrationCapability" }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "/v1/project-registration/create": {
+        post: {
+          operationId: "registerKnowledgeProjectCollection",
+          summary: "Create or exactly adopt one project-owned Knowledge collection",
+          responses: {
+            "201": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      receipt: { $ref: "#/components/schemas/ProjectRegistrationReceipt" }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "/v1/project-registration/read-exact": {
+        post: {
+          operationId: "readKnowledgeProjectCollection",
+          summary: "Read one project collection by exact stable collection id",
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      record: { $ref: "#/components/schemas/ProjectCollectionRecord" }
+                    }
+                  }
+                }
+              }
+            },
+            "404": { description: "No exact collection id." }
+          }
+        }
+      },
+      "/v1/project-registration/receipts/lookup": {
+        post: {
+          operationId: "lookupKnowledgeProjectRegistrationReceipt",
+          summary: "Look up exactly one immutable registration or membership receipt",
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      receipt: { $ref: "#/components/schemas/ProjectRegistrationReceipt" }
+                    }
+                  }
+                }
+              }
+            },
+            "404": { description: "No exact terminal receipt." }
+          }
+        }
+      },
+      "/v1/project-registration/compensate": {
+        post: {
+          operationId: "compensateKnowledgeProjectCollection",
+          summary: "Conditionally remove an operation-created empty collection aggregate",
+          responses: {
+            "201": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      receipt: { $ref: "#/components/schemas/ProjectRegistrationReceipt" }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "/v1/project-registration/verify-inverse": {
+        post: {
+          operationId: "verifyKnowledgeProjectCollectionInverse",
+          summary: "Verify an accepted collection inverse by exact receipt and absence",
+          responses: { "200": { description: "Exact absence verification." } }
+        }
+      },
+      "/v1/project-registration/items/bind": {
+        post: {
+          operationId: "bindKnowledgeItemToProjectCollection",
+          summary: "Explicitly bind one exact existing item to a project collection",
+          responses: {
+            "201": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      receipt: { $ref: "#/components/schemas/ProjectRegistrationReceipt" }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "/v1/project-registration/items/read-exact": {
+        post: {
+          operationId: "readKnowledgeProjectItemBinding",
+          summary: "Read one exact collection/item membership",
+          responses: {
+            "200": { description: "Exact membership readback." },
+            "404": { description: "No exact membership." }
+          }
+        }
+      },
+      "/v1/project-registration/items/compensate": {
+        post: {
+          operationId: "compensateKnowledgeProjectItemBinding",
+          summary: "Conditionally remove a membership owned by the accepted binding receipt",
+          responses: {
+            "201": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      receipt: { $ref: "#/components/schemas/ProjectRegistrationReceipt" }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "/v1/project-registration/items/verify-inverse": {
+        post: {
+          operationId: "verifyKnowledgeProjectItemBindingInverse",
+          summary: "Verify an accepted membership inverse by exact receipt and absence",
+          responses: { "200": { description: "Exact membership absence verification." } }
+        }
+      },
+      "/v1/projects/{projectId}/resources": {
+        get: {
+          operationId: "listKnowledgeProjectResources",
+          summary: "Enumerate the complete stable project/collection/item/taxonomy population",
+          parameters: [
+            { name: "projectId", in: "path", required: true, schema: { type: "string" } },
+            { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 200 } },
+            { name: "cursor", in: "query", schema: { type: "string" } },
+            {
+              name: "kind",
+              in: "query",
+              style: "form",
+              explode: true,
+              schema: {
+                type: "array",
+                items: { type: "string", enum: ["project", "collection", "item", "taxonomy"] }
+              }
+            }
+          ],
+          responses: {
+            "200": {
+              content: {
+                "application/json": { schema: { $ref: "#/components/schemas/ProjectResourcePage" } }
+              }
+            },
+            "409": { description: "Cursor is stale or belongs to another population." }
+          }
+        }
+      },
+      "/v1/projects/{projectId}/resources/{kind}/{resourceId}": {
+        get: {
+          operationId: "getKnowledgeProjectResource",
+          summary: "Read one project resource by exact stable kind and id",
+          parameters: [
+            { name: "projectId", in: "path", required: true, schema: { type: "string" } },
+            {
+              name: "kind",
+              in: "path",
+              required: true,
+              schema: { type: "string", enum: ["project", "collection", "item", "taxonomy"] }
+            },
+            { name: "resourceId", in: "path", required: true, schema: { type: "string" } }
+          ],
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: { resource: { $ref: "#/components/schemas/ProjectResource" } }
+                  }
+                }
+              }
+            },
+            "404": { description: "No exact resource kind and id." }
+          }
+        }
+      },
       "/v1/notes": {
         get: {
           operationId: "listNotes",
@@ -5129,6 +7088,16 @@ function parseExpectedVersion(req, body) {
 function createServeHandler(deps) {
   const repo = new NoteRepo(deps.client);
   const guardedRepo = deps.guardedAuthority ? new GuardedWriteRepo(deps.client, deps.guardedAuthority) : null;
+  const projectLinksForTenant = (tenantId) => deps.projectLinksAuthority?.(tenantId) ?? createPostgresKnowledgeProjectLinksAuthority({
+    client: deps.client,
+    itemResolver: (id) => repo.get(id, tenantId),
+    options: {
+      packageVersion: deps.version,
+      authorityId: process.env.HASNA_KNOWLEDGE_PROJECT_AUTHORITY_ID ?? KNOWLEDGE_SERVE_APP,
+      tenantId,
+      corpusId: process.env.HASNA_KNOWLEDGE_PROJECT_CORPUS_ID ?? "knowledge"
+    }
+  });
   const mode2 = "postgres";
   const authOrThrow = async (req, requiredScopes, expectedTid) => {
     const url = new URL(req.url);
@@ -5391,6 +7360,103 @@ function createServeHandler(deps) {
         const readback = await guardedRepo.readback(decodeURIComponent(guardedItemMatch[1]), binding, bounds);
         return readback ? boundedJson(readback, 200, bounds, startedAt) : boundedJson({ error: "not_found" }, 404, bounds, startedAt);
       }
+      if (path === "/v1/project-registration/capability") {
+        if (method !== "GET")
+          return json({ error: "method_not_allowed" }, 405);
+        const principal = await authOrThrow(req, ["knowledge:read"]);
+        return json({ capability: await projectLinksForTenant(principal.tid).capability() });
+      }
+      if (path === "/v1/project-registration/create") {
+        if (method !== "POST")
+          return json({ error: "method_not_allowed" }, 405);
+        const principal = await authOrThrow(req, ["knowledge:write"]);
+        const body = await req.json().catch(() => ({}));
+        return json({ receipt: await projectLinksForTenant(principal.tid).registerCollection(body) }, 201);
+      }
+      if (path === "/v1/project-registration/read-exact") {
+        if (method !== "POST")
+          return json({ error: "method_not_allowed" }, 405);
+        const principal = await authOrThrow(req, ["knowledge:read"]);
+        const body = await req.json().catch(() => ({}));
+        return json({
+          record: await projectLinksForTenant(principal.tid).readCollection(String(body.collection_id ?? ""))
+        });
+      }
+      if (path === "/v1/project-registration/receipts/lookup") {
+        if (method !== "POST")
+          return json({ error: "method_not_allowed" }, 405);
+        const principal = await authOrThrow(req, ["knowledge:read"]);
+        const body = await req.json().catch(() => ({}));
+        return json({ receipt: await projectLinksForTenant(principal.tid).lookupReceipt(body) });
+      }
+      if (path === "/v1/project-registration/compensate") {
+        if (method !== "POST")
+          return json({ error: "method_not_allowed" }, 405);
+        const principal = await authOrThrow(req, ["knowledge:write"]);
+        const body = await req.json().catch(() => ({}));
+        return json({ receipt: await projectLinksForTenant(principal.tid).compensateRegistration(body) }, 201);
+      }
+      if (path === "/v1/project-registration/verify-inverse") {
+        if (method !== "POST")
+          return json({ error: "method_not_allowed" }, 405);
+        const principal = await authOrThrow(req, ["knowledge:read"]);
+        const body = await req.json().catch(() => ({}));
+        return json({
+          verification: await projectLinksForTenant(principal.tid).verifyRegistrationInverse(body)
+        });
+      }
+      if (path === "/v1/project-registration/items/bind") {
+        if (method !== "POST")
+          return json({ error: "method_not_allowed" }, 405);
+        const principal = await authOrThrow(req, ["knowledge:write"]);
+        const body = await req.json().catch(() => ({}));
+        return json({ receipt: await projectLinksForTenant(principal.tid).bindItem(body) }, 201);
+      }
+      if (path === "/v1/project-registration/items/read-exact") {
+        if (method !== "POST")
+          return json({ error: "method_not_allowed" }, 405);
+        const principal = await authOrThrow(req, ["knowledge:read"]);
+        const body = await req.json().catch(() => ({}));
+        return json({
+          record: await projectLinksForTenant(principal.tid).readItemBinding(String(body.collection_id ?? ""), String(body.item_id ?? ""))
+        });
+      }
+      if (path === "/v1/project-registration/items/compensate") {
+        if (method !== "POST")
+          return json({ error: "method_not_allowed" }, 405);
+        const principal = await authOrThrow(req, ["knowledge:write"]);
+        const body = await req.json().catch(() => ({}));
+        return json({ receipt: await projectLinksForTenant(principal.tid).compensateItemBinding(body) }, 201);
+      }
+      if (path === "/v1/project-registration/items/verify-inverse") {
+        if (method !== "POST")
+          return json({ error: "method_not_allowed" }, 405);
+        const principal = await authOrThrow(req, ["knowledge:read"]);
+        const body = await req.json().catch(() => ({}));
+        return json({
+          verification: await projectLinksForTenant(principal.tid).verifyItemBindingInverse(body)
+        });
+      }
+      const exactProjectResourceMatch = path.match(/^\/v1\/projects\/([^/]+)\/resources\/(project|collection|item|taxonomy)\/([^/]+)$/);
+      if (exactProjectResourceMatch) {
+        if (method !== "GET")
+          return json({ error: "method_not_allowed" }, 405);
+        const principal = await authOrThrow(req, ["knowledge:read"]);
+        const resource = await projectLinksForTenant(principal.tid).readProjectResource(decodeURIComponent(exactProjectResourceMatch[1]), exactProjectResourceMatch[2], decodeURIComponent(exactProjectResourceMatch[3]));
+        return json({ resource });
+      }
+      const projectResourcesMatch = path.match(/^\/v1\/projects\/([^/]+)\/resources$/);
+      if (projectResourcesMatch) {
+        if (method !== "GET")
+          return json({ error: "method_not_allowed" }, 405);
+        const principal = await authOrThrow(req, ["knowledge:read"]);
+        const page = await projectLinksForTenant(principal.tid).listProjectResources(decodeURIComponent(projectResourcesMatch[1]), {
+          limit: url.searchParams.has("limit") ? Number(url.searchParams.get("limit")) : undefined,
+          cursor: url.searchParams.get("cursor"),
+          kinds: url.searchParams.getAll("kind")
+        });
+        return json(page);
+      }
       if (path === "/v1/notes/search") {
         if (method !== "GET")
           return json({ error: "method_not_allowed" }, 405);
@@ -5498,6 +7564,9 @@ function createServeHandler(deps) {
       }
       return json({ error: "not_found", path }, 404);
     } catch (error) {
+      if (error instanceof KnowledgeProjectLinksError) {
+        return knowledgeProjectLinksErrorResponse(error);
+      }
       if (error instanceof HttpError) {
         const reason = error.status === 401 || error.status === 403 ? "unauthorized" : "error";
         return json({ error: reason, message: error.message }, error.status);

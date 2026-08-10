@@ -1,3 +1,5 @@
+import { postgresKnowledgeProjectLinksSchemaStatements } from '../project-links.js';
+
 export const PG_MIGRATIONS: string[] = [
   `CREATE TABLE IF NOT EXISTS sources (
     id TEXT PRIMARY KEY,
@@ -1480,4 +1482,5 @@ export const PG_MIGRATIONS: string[] = [
      )
      WHERE metadata #>> '{hasna_knowledge_relations,schema}'
        = 'hasna.knowledge.relations.v1'`,
+  ...postgresKnowledgeProjectLinksSchemaStatements(),
 ];
