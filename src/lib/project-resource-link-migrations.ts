@@ -7,8 +7,11 @@ import type {
   ProjectResourceLinkMigrationState,
   ProjectResourceLinkProducerEvidence,
   ProjectResourceLinkProjectsReferenceProof,
+  Workspace,
+  WorkspaceKind,
 } from "../types/workspace.js";
 import { canonicalJson, sha256 } from "./guarded-project-mutation.js";
+import { deriveProjectChannel } from "./project-channel.js";
 import {
   normalizeProjectResourceLinks,
   projectResourceLinkId,
@@ -40,10 +43,34 @@ export interface ProjectResourceLinkProducerAttestation {
   verified_at: string;
 }
 
+export interface ProjectResourceLinkProducerProjectSubject {
+  id: string;
+  slug: string;
+  name: string;
+  kind: WorkspaceKind;
+  conversations_channel: string;
+}
+
+export function projectResourceLinkProducerProjectSubject(
+  project: Pick<Workspace, "id" | "slug" | "name" | "kind" | "integrations">,
+): ProjectResourceLinkProducerProjectSubject {
+  return {
+    id: project.id,
+    slug: project.slug,
+    name: project.name,
+    kind: project.kind,
+    conversations_channel: deriveProjectChannel(project).channel,
+  };
+}
+
 export interface ProjectResourceLinkProducerVerificationInput {
   manifest: ProjectResourceLinkMigrationManifestV1;
+  trusted_project: ProjectResourceLinkProducerProjectSubject;
   phase: ProjectResourceLinkProducerAttestationPhase;
   producer_evidence: ProjectResourceLinkProducerEvidence[];
+  transition_evidence: JsonObject;
+  response_byte_limit: number;
+  time_budget_ms: number;
 }
 
 /**

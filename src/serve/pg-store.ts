@@ -45,6 +45,7 @@ import {
   buildProjectResourceLinkMigrationPlan,
   migrationEvent,
   migrationEvidenceWithProducerAttestation,
+  projectResourceLinkProducerProjectSubject,
   reconcileProjectResourceLinkProducerProof,
   rowToProjectResourceLinkMigrationManifest,
   type AsyncProjectResourceLinkProducerEvidenceVerifier,
@@ -1663,14 +1664,20 @@ export class ProjectsPgStore {
     if (input.next_state === "verified") {
       try {
         producerEvidence = reconcileProjectResourceLinkProducerProof(before, input.producer_evidence, "readback");
+        const trustedProject = await this.getWorkspace(input.project_id);
+        if (!trustedProject) throw new Error(`Project not found: ${input.project_id}`);
         producerAttestation = assertProjectResourceLinkProducerAttestation(
           before,
           "readback",
           producerEvidence,
           await this.producerEvidenceVerifier?.({
             manifest: before,
+            trusted_project: projectResourceLinkProducerProjectSubject(trustedProject),
             phase: "readback",
             producer_evidence: producerEvidence,
+            transition_evidence: input.evidence,
+            response_byte_limit: input.response_byte_limit,
+            time_budget_ms: input.time_budget_ms,
           }),
         );
       } catch (error) {
@@ -1841,14 +1848,20 @@ export class ProjectsPgStore {
           nextState === "rolled_back" ? "complete" : "retained_target",
         );
         const phase = nextState === "rolled_back" ? "inverse_complete" : "inverse_retained_target";
+        const trustedProject = await this.getWorkspace(input.project_id);
+        if (!trustedProject) throw new Error(`Project not found: ${input.project_id}`);
         producerAttestation = assertProjectResourceLinkProducerAttestation(
           before,
           phase,
           terminalProducerEvidence,
           await this.producerEvidenceVerifier?.({
             manifest: before,
+            trusted_project: projectResourceLinkProducerProjectSubject(trustedProject),
             phase,
             producer_evidence: terminalProducerEvidence,
+            transition_evidence: input.evidence,
+            response_byte_limit: input.response_byte_limit,
+            time_budget_ms: input.time_budget_ms,
           }),
         );
       } catch (error) {

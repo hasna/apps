@@ -40,6 +40,7 @@ import {
   buildProjectResourceLinkMigrationPlan,
   migrationEvent,
   migrationEvidenceWithProducerAttestation,
+  projectResourceLinkProducerProjectSubject,
   reconcileProjectResourceLinkProducerProof,
   rowToProjectResourceLinkMigrationManifest,
   type ProjectResourceLinkProducerAttestation,
@@ -2017,14 +2018,20 @@ export function advanceProjectResourceLinkMigration(
   }
   if (input.next_state === "verified") {
     producerEvidence = reconcileProjectResourceLinkProducerProof(before, input.producer_evidence, "readback");
+    const trustedProject = getWorkspace(input.project_id, d);
+    if (!trustedProject) throw new Error(`Project not found: ${input.project_id}`);
     producerAttestation = assertProjectResourceLinkProducerAttestation(
       before,
       "readback",
       producerEvidence,
       producerEvidenceVerifier?.({
         manifest: before,
+        trusted_project: projectResourceLinkProducerProjectSubject(trustedProject),
         phase: "readback",
         producer_evidence: producerEvidence,
+        transition_evidence: input.evidence,
+        response_byte_limit: input.response_byte_limit,
+        time_budget_ms: input.time_budget_ms,
       }),
     );
     const read = readProjectResourceLinks({
@@ -2192,16 +2199,25 @@ export function rollbackProjectResourceLinkMigration(
     )
     : undefined;
   const producerAttestation = terminalProducerEvidence
-    ? assertProjectResourceLinkProducerAttestation(
-      before,
-      nextState === "rolled_back" ? "inverse_complete" : "inverse_retained_target",
-      terminalProducerEvidence,
-      producerEvidenceVerifier?.({
-        manifest: before,
-        phase: nextState === "rolled_back" ? "inverse_complete" : "inverse_retained_target",
-        producer_evidence: terminalProducerEvidence,
-      }),
-    )
+    ? (() => {
+        const trustedProject = getWorkspace(input.project_id, d);
+        if (!trustedProject) throw new Error(`Project not found: ${input.project_id}`);
+        const phase = nextState === "rolled_back" ? "inverse_complete" : "inverse_retained_target";
+        return assertProjectResourceLinkProducerAttestation(
+          before,
+          phase,
+          terminalProducerEvidence,
+          producerEvidenceVerifier?.({
+            manifest: before,
+            trusted_project: projectResourceLinkProducerProjectSubject(trustedProject),
+            phase,
+            producer_evidence: terminalProducerEvidence,
+            transition_evidence: input.evidence,
+            response_byte_limit: input.response_byte_limit,
+            time_budget_ms: input.time_budget_ms,
+          }),
+        );
+      })()
     : undefined;
   const after = applyProjectResourceLinkMigrationTransition(before, nextState, now(), {
     producer_evidence: terminalProducerEvidence,
