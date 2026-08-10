@@ -531,6 +531,56 @@ async function computeCloudReparent(
   return patch;
 }
 
+/**
+ * Apply a remote task update and prove that its re-parent fields persisted.
+ *
+ * A PATCH response is an acknowledgement, not authoritative storage evidence:
+ * an older/mismatched authority can return 200 while retaining the previous
+ * task_list_id. Both `move` and `update` use this gate so neither JSON nor human
+ * output reports success from that stale response. Verification is deliberately
+ * limited to the relationship fields this command owns.
+ */
+async function cloudUpdateTaskWithVerifiedReparent(
+  cloud: NonNullable<ReturnType<typeof getTodosCloudClient>>,
+  taskId: string,
+  updatePatch: Record<string, unknown>,
+  reparent: ReparentPatch,
+): Promise<Task> {
+  const acknowledged = await cloudUpdateTask(cloud, taskId, updatePatch);
+  if (reparent.project_id === undefined && reparent.task_list_id === undefined) {
+    return acknowledged;
+  }
+
+  const persisted = await cloudGetTask(cloud, taskId);
+  if (!persisted) {
+    throw new Error(
+      `TASK_REPARENT_PERSISTENCE_UNVERIFIED: PATCH /v1/tasks/${taskId} was acknowledged, ` +
+      "but the authoritative read-back did not return the task.",
+    );
+  }
+
+  const mismatches: string[] = [];
+  if (reparent.project_id !== undefined && persisted.project_id !== reparent.project_id) {
+    mismatches.push(`project_id expected ${reparent.project_id}, received ${persisted.project_id ?? "null"}`);
+  }
+  if (
+    reparent.task_list_id !== undefined &&
+    (persisted.task_list_id ?? null) !== reparent.task_list_id
+  ) {
+    mismatches.push(
+      `task_list_id expected ${reparent.task_list_id ?? "null"}, received ${persisted.task_list_id ?? "null"}`,
+    );
+  }
+  if (mismatches.length > 0) {
+    throw new Error(
+      `TASK_REPARENT_PERSISTENCE_UNVERIFIED: PATCH /v1/tasks/${taskId} was acknowledged, ` +
+      `but authoritative read-back disagreed (${mismatches.join("; ")}).`,
+    );
+  }
+
+  return persisted;
+}
+
 /** Local-SQLite equivalent of {@link computeCloudReparent}. */
 function computeLocalReparent(current: { project_id: string | null }, opts: ReparentOptions): ReparentPatch {
   const targetProjectId = opts.projectRef ? resolveProjectIdOrSlug(opts.projectRef) : undefined;
@@ -1890,7 +1940,7 @@ export function registerTaskCommands(program: Command) {
             listRef: opts.list,
             clearList: opts.clearList,
           });
-          task = await cloudUpdateTask(cloud, currentId, {
+          const updatePatch = {
             title: opts.title,
             description: opts.description,
             status: parseStatus(opts.status),
@@ -1906,7 +1956,8 @@ export function registerTaskCommands(program: Command) {
             due_at: opts.due !== undefined ? (opts.due === "" ? null : opts.due.length === 10 ? opts.due + "T00:00:00.000Z" : opts.due) : undefined,
             recurrence_rule: opts.recurrence !== undefined ? (opts.recurrence === "" ? null : opts.recurrence) : undefined,
             requires_approval: opts.clearApproval ? false : (opts.approval !== undefined ? true : undefined),
-          });
+          };
+          task = await cloudUpdateTaskWithVerifiedReparent(cloud, currentId, updatePatch, reparent);
         } catch (e) {
           handleError(e);
         }
@@ -1998,7 +2049,12 @@ export function registerTaskCommands(program: Command) {
           if (reparent.project_id === undefined && reparent.task_list_id === undefined) {
             throw new Error("Nothing to move: the task is already in the requested project/list.");
           }
-          task = await cloudUpdateTask(cloud, currentId, reparent as Record<string, unknown>);
+          task = await cloudUpdateTaskWithVerifiedReparent(
+            cloud,
+            currentId,
+            reparent as Record<string, unknown>,
+            reparent,
+          );
         } catch (e) {
           handleError(e);
         }
