@@ -8,6 +8,12 @@ All notable changes to this project will be documented in this file.
 
 - **Channel creation is atomic across validation, insertion, and creator membership.** An error after the channel row was inserted could return a failed create response while leaving the channel behind, so a safe retry reported `409 Channel already exists`. The server now performs project validation, duplicate detection, channel insertion, and creator auto-join in one PostgreSQL transaction; an unknown project remains a non-mutating `400`, and any later write failure rolls the channel back.
 
+## 0.5.43 - 2026-08-10
+
+### Added
+
+- **Projects can enumerate and register their Conversations resource links through stable public surfaces.** SQLite and PostgreSQL/API clients, the generated SDK, and `conversations project-resources` now expose bounded complete project, channel, and message identifiers plus deterministic registration receipts, terminal lookup, compensation, and inverse verification. Reply-parent resolution and authenticated bulk ingestion enforce the same channel and session boundaries (#148).
+
 ## 0.5.42 - 2026-08-10
 
 ### Fixed
