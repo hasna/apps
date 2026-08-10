@@ -128,6 +128,79 @@ export interface ProjectChannelRegistrationReadRequest extends ProjectChannelReg
   target: ProjectChannelRegistrationPathHandle;
 }
 
+export interface ProjectChannelCollectionRequest extends ProjectChannelRegistrationBounds {
+  project_id: string;
+  cursor?: string;
+  max_items: number;
+}
+
+export interface ProjectChannelCollectionItem extends ProjectChannelRegistrationRecord {
+  authority: "conversations";
+  resource_kind: "channel";
+  scope: "collection";
+  project_id: string;
+  channel: string;
+}
+
+export interface ProjectChannelCollectionPage {
+  authority: "conversations";
+  resource_kind: "channel";
+  scope: "collection";
+  project_id: string;
+  items: ProjectChannelCollectionItem[];
+  cursor: string | null;
+  next_cursor: string | null;
+  cursor_semantics: "exclusive_stable_id";
+  max_items: number;
+  item_count: number;
+  has_more: boolean;
+  complete: boolean;
+  truncated: boolean;
+  response_bytes: number;
+  elapsed_ms: number;
+}
+
+export interface ProjectChannelMessageCollectionRequest extends ProjectChannelRegistrationBounds {
+  project_id: string;
+  target_id: string;
+  cursor?: number;
+  max_items: number;
+}
+
+export interface ProjectChannelMessageCollectionItem {
+  authority: "conversations";
+  resource_kind: "message";
+  scope: "resource";
+  target_id: string;
+  local_id: number;
+  channel_id: string;
+  channel: string;
+  project_id: string;
+  reply_to_target_id: string | null;
+  revision: string;
+  digest: string;
+}
+
+export interface ProjectChannelMessageCollectionPage {
+  authority: "conversations";
+  resource_kind: "message";
+  scope: "collection";
+  project_id: string;
+  channel_id: string;
+  channel: string;
+  items: ProjectChannelMessageCollectionItem[];
+  cursor: number | null;
+  next_cursor: number | null;
+  cursor_semantics: "exclusive_local_id";
+  max_items: number;
+  item_count: number;
+  has_more: boolean;
+  complete: boolean;
+  truncated: boolean;
+  response_bytes: number;
+  elapsed_ms: number;
+}
+
 export interface ProjectChannelRegistrationLookupRequest extends ProjectChannelRegistrationBounds {
   operation_id: string;
   step_id: string;
@@ -199,6 +272,21 @@ type ChannelRow = Record<string, unknown> & {
   tags: string | null;
 };
 
+export type ProjectChannelMessageCollectionRow = Record<string, unknown> & {
+  local_id: number;
+  target_id: string;
+  channel_id: string;
+  channel: string;
+  project_id: string;
+  reply_to_target_id: string | null;
+  session_id: string;
+  from_agent: string;
+  to_agent: string;
+  content: string;
+  priority: string;
+  created_at: string;
+};
+
 function canonicalize(value: unknown): unknown {
   if (value instanceof Date) return value.toISOString();
   if (Array.isArray(value)) return value.map(canonicalize);
@@ -236,6 +324,68 @@ function assertBounds(bounds: ProjectChannelRegistrationBounds): void {
   if (bounds.call_limit !== undefined && bounds.call_limit !== 1) {
     throw new Error("call_limit must be exactly 1.");
   }
+}
+
+function assertCollectionBounds(
+  input: ProjectChannelCollectionRequest | ProjectChannelMessageCollectionRequest,
+): void {
+  assertBounds(input);
+  assertRequiredText("project_id", input.project_id);
+  if (!/^wks_[A-Za-z0-9_-]{8,}$/.test(input.project_id)) {
+    throw new Error("project_id must be the full immutable Projects workspace id.");
+  }
+  if (!Number.isInteger(input.max_items) || input.max_items <= 0 || input.max_items > 1000) {
+    throw new Error("max_items must be an integer between 1 and 1000.");
+  }
+}
+
+export function validateProjectChannelCollectionRequest(
+  input: ProjectChannelCollectionRequest,
+): void {
+  assertCollectionBounds(input);
+  if (input.cursor !== undefined && !/^chn_[0-9a-f]{32}$/.test(input.cursor)) {
+    throw new Error("cursor must be a stable chn_ channel id.");
+  }
+}
+
+export function validateProjectChannelMessageCollectionRequest(
+  input: ProjectChannelMessageCollectionRequest,
+): void {
+  assertCollectionBounds(input);
+  if (!/^chn_[0-9a-f]{32}$/.test(input.target_id)) {
+    throw new Error("target_id must be a stable chn_ channel id.");
+  }
+  if (input.cursor !== undefined && (!Number.isInteger(input.cursor) || input.cursor < 0)) {
+    throw new Error("cursor must be a non-negative integer message id.");
+  }
+}
+
+function finalizeCollectionPage<T extends { response_bytes: number; elapsed_ms: number }>(
+  page: T,
+  bounds: ProjectChannelRegistrationBounds,
+  startedAt: number,
+): T {
+  page.elapsed_ms = elapsedMs(startedAt);
+  for (let index = 0; index < 16; index++) {
+    const actualBytes = Buffer.byteLength(JSON.stringify(page), "utf8");
+    if (page.response_bytes === actualBytes) break;
+    page.response_bytes = actualBytes;
+  }
+  const exactBytes = Buffer.byteLength(JSON.stringify(page), "utf8");
+  if (page.response_bytes !== exactBytes) {
+    throw new Error("project channel collection response_bytes did not converge.");
+  }
+  if (page.response_bytes > bounds.response_byte_limit) {
+    throw new Error(
+      `project channel collection exceeded response_byte_limit (${page.response_bytes} > ${bounds.response_byte_limit}).`,
+    );
+  }
+  if (page.elapsed_ms > bounds.time_budget_ms) {
+    throw new Error(
+      `project channel collection exceeded time_budget_ms (${page.elapsed_ms} > ${bounds.time_budget_ms}).`,
+    );
+  }
+  return page;
 }
 
 function assertTimeBudget(startedAt: number, budget: number): void {
@@ -327,6 +477,212 @@ export function projectChannelRegistrationChannelRecord(row: ChannelRow): Projec
     }),
     digest: projectChannelRegistrationDigest(snapshot),
   };
+}
+
+export function buildProjectChannelCollectionPage(
+  request: ProjectChannelCollectionRequest,
+  rows: ChannelRow[],
+  startedAt: number,
+): ProjectChannelCollectionPage {
+  validateProjectChannelCollectionRequest(request);
+  for (const row of rows) {
+    if (!/^chn_[0-9a-f]{32}$/.test(row.id)) {
+      throw new Error(`channel ${row.name} does not have a stable chn_ id.`);
+    }
+    if (row.project_id !== request.project_id) {
+      throw new Error(`channel ${row.name} conflicts with requested project ${request.project_id}.`);
+    }
+  }
+  const hasMore = rows.length > request.max_items;
+  const pageRows = hasMore ? rows.slice(0, request.max_items) : rows;
+  const items = pageRows.map((row): ProjectChannelCollectionItem => ({
+    authority: "conversations",
+    resource_kind: "channel",
+    scope: "collection",
+    project_id: request.project_id,
+    channel: row.name,
+    ...projectChannelRegistrationChannelRecord(row),
+  }));
+  return finalizeCollectionPage({
+    authority: "conversations",
+    resource_kind: "channel",
+    scope: "collection",
+    project_id: request.project_id,
+    items,
+    cursor: request.cursor ?? null,
+    next_cursor: hasMore ? items[items.length - 1]?.target_id ?? null : null,
+    cursor_semantics: "exclusive_stable_id",
+    max_items: request.max_items,
+    item_count: items.length,
+    has_more: hasMore,
+    complete: !hasMore,
+    truncated: hasMore,
+    response_bytes: 0,
+    elapsed_ms: 0,
+  }, request, startedAt);
+}
+
+export function projectChannelMessageCollectionItem(
+  row: ProjectChannelMessageCollectionRow,
+): ProjectChannelMessageCollectionItem {
+  const snapshot = {
+    target_id: row.target_id,
+    local_id: Number(row.local_id),
+    channel_id: row.channel_id,
+    channel: row.channel,
+    project_id: row.project_id,
+    reply_to_target_id: row.reply_to_target_id ?? null,
+    session_id: row.session_id,
+    from_agent: row.from_agent,
+    to_agent: row.to_agent,
+    content: row.content,
+    priority: row.priority,
+    created_at: row.created_at,
+  };
+  return {
+    authority: "conversations",
+    resource_kind: "message",
+    scope: "resource",
+    target_id: row.target_id,
+    local_id: Number(row.local_id),
+    channel_id: row.channel_id,
+    channel: row.channel,
+    project_id: row.project_id,
+    reply_to_target_id: row.reply_to_target_id ?? null,
+    revision: projectChannelRegistrationDigest({
+      target_id: row.target_id,
+      local_id: Number(row.local_id),
+      channel_id: row.channel_id,
+      project_id: row.project_id,
+    }),
+    digest: projectChannelRegistrationDigest(snapshot),
+  };
+}
+
+export function buildProjectChannelMessageCollectionPage(
+  request: ProjectChannelMessageCollectionRequest,
+  channel: Pick<ChannelRow, "id" | "name" | "project_id">,
+  rows: ProjectChannelMessageCollectionRow[],
+  startedAt: number,
+): ProjectChannelMessageCollectionPage {
+  validateProjectChannelMessageCollectionRequest(request);
+  if (channel.id !== request.target_id) {
+    throw new Error("project channel collection target id mismatch.");
+  }
+  if (channel.project_id !== request.project_id) {
+    throw new Error(
+      `Project ${request.project_id} conflicts with channel project ${channel.project_id ?? "(unlinked)"}.`,
+    );
+  }
+  for (const row of rows) {
+    if (
+      row.channel_id !== channel.id
+      || row.channel !== channel.name
+      || row.project_id !== request.project_id
+    ) {
+      throw new Error(`message ${row.target_id} conflicts with channel collection membership.`);
+    }
+  }
+  const hasMore = rows.length > request.max_items;
+  const pageRows = hasMore ? rows.slice(0, request.max_items) : rows;
+  const items = pageRows.map(projectChannelMessageCollectionItem);
+  return finalizeCollectionPage({
+    authority: "conversations",
+    resource_kind: "message",
+    scope: "collection",
+    project_id: request.project_id,
+    channel_id: channel.id,
+    channel: channel.name,
+    items,
+    cursor: request.cursor ?? null,
+    next_cursor: hasMore ? items[items.length - 1]?.local_id ?? null : null,
+    cursor_semantics: "exclusive_local_id",
+    max_items: request.max_items,
+    item_count: items.length,
+    has_more: hasMore,
+    complete: !hasMore,
+    truncated: hasMore,
+    response_bytes: 0,
+    elapsed_ms: 0,
+  }, request, startedAt);
+}
+
+export function listProjectChannelRegistrationPage(
+  request: ProjectChannelCollectionRequest,
+  db: ConversationsDatabase = getDb(),
+): ProjectChannelCollectionPage {
+  const startedAt = performance.now();
+  validateProjectChannelCollectionRequest(request);
+  const rows = db.prepare(`
+    SELECT *
+    FROM channels
+    WHERE project_id = ? AND (? IS NULL OR id > ?)
+    ORDER BY id ASC
+    LIMIT ?
+  `).all(
+    request.project_id,
+    request.cursor ?? null,
+    request.cursor ?? null,
+    request.max_items + 1,
+  ) as ChannelRow[];
+  return buildProjectChannelCollectionPage(request, rows, startedAt);
+}
+
+export function listProjectChannelMessagePage(
+  request: ProjectChannelMessageCollectionRequest,
+  db: ConversationsDatabase = getDb(),
+): ProjectChannelMessageCollectionPage {
+  const startedAt = performance.now();
+  validateProjectChannelMessageCollectionRequest(request);
+  const channel = readChannelById(db, request.target_id);
+  if (!channel) {
+    throw new Error(`project channel registration target not found: ${request.target_id}`);
+  }
+  if (channel.project_id !== request.project_id) {
+    throw new Error(
+      `Project ${request.project_id} conflicts with channel project ${channel.project_id ?? "(unlinked)"}.`,
+    );
+  }
+  const inconsistent = db.prepare(`
+    SELECT COUNT(*) AS count
+    FROM messages
+    WHERE channel = ? AND (project_id IS NULL OR project_id <> ?)
+  `).get(channel.name, request.project_id) as { count: number };
+  if (Number(inconsistent.count) > 0) {
+    throw new Error(
+      `Channel ${channel.name} has ${inconsistent.count} message(s) outside project ${request.project_id}; apply guarded project-message linkage before collection readback.`,
+    );
+  }
+  const rows = db.prepare(`
+    SELECT
+      m.id AS local_id,
+      m.uuid AS target_id,
+      c.id AS channel_id,
+      m.channel AS channel,
+      m.project_id AS project_id,
+      parent.uuid AS reply_to_target_id,
+      m.session_id,
+      m.from_agent,
+      m.to_agent,
+      m.content,
+      m.priority,
+      m.created_at
+    FROM messages m
+    JOIN channels c ON c.name = m.channel
+    LEFT JOIN messages parent
+      ON parent.id = m.reply_to
+     AND parent.channel = m.channel
+     AND parent.session_id = m.session_id
+    WHERE c.id = ? AND m.project_id = ? AND m.id > ?
+    ORDER BY m.id ASC
+    LIMIT ?
+  `).all(
+    request.target_id,
+    request.project_id,
+    request.cursor ?? 0,
+    request.max_items + 1,
+  ) as ProjectChannelMessageCollectionRow[];
+  return buildProjectChannelMessageCollectionPage(request, channel, rows, startedAt);
 }
 
 function parseReceipt(row: ReceiptRow): ProjectChannelRegistrationReceipt {

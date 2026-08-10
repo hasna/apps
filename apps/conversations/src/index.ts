@@ -42,9 +42,17 @@ export {
 export {
   PROJECT_CHANNEL_REGISTRATION_ROUTE,
   createProjectChannelRegistrationAuthority,
+  listProjectChannelMessagePage,
+  listProjectChannelRegistrationPage,
   projectChannelRegistrationDigest,
 } from "./lib/project-channel-registration.js";
 export type {
+  ProjectChannelCollectionItem,
+  ProjectChannelCollectionPage,
+  ProjectChannelCollectionRequest,
+  ProjectChannelMessageCollectionItem,
+  ProjectChannelMessageCollectionPage,
+  ProjectChannelMessageCollectionRequest,
   ProjectChannelRegistrationAuthority,
   ProjectChannelRegistrationAuthorityName,
   ProjectChannelRegistrationAuthorityStore,

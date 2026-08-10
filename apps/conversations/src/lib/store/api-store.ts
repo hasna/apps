@@ -298,6 +298,29 @@ export class ApiStore implements ConversationsStore {
       this.projectChannelRegistrationBody(request),
     ) as never;
   };
+  listProjectChannelRegistrationPage: ConversationsStore["listProjectChannelRegistrationPage"] = async (request) => {
+    return this.get("/project-registration/channels", {
+      project_id: request.project_id,
+      cursor: request.cursor,
+      max_items: request.max_items,
+      response_byte_limit: request.response_byte_limit,
+      time_budget_ms: request.time_budget_ms,
+      call_limit: request.call_limit ?? 1,
+    }) as never;
+  };
+  listProjectChannelMessagePage: ConversationsStore["listProjectChannelMessagePage"] = async (request) => {
+    return this.get(
+      `/project-registration/channels/${encodeURIComponent(request.target_id)}/messages`,
+      {
+        project_id: request.project_id,
+        cursor: request.cursor,
+        max_items: request.max_items,
+        response_byte_limit: request.response_byte_limit,
+        time_budget_ms: request.time_budget_ms,
+        call_limit: request.call_limit ?? 1,
+      },
+    ) as never;
+  };
   readProjectChannelRegistrationExact: ConversationsStore["readProjectChannelRegistrationExact"] = async (request) => {
     return this.get(
       `/project-registration/channels/${encodeURIComponent(request.target_id)}`,

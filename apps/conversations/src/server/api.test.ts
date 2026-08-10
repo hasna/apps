@@ -47,6 +47,22 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
   const client = {
     async many(sql: string, _p: readonly unknown[] = []): Promise<any[]> {
       manyCalls.push({ sql, params: [..._p] });
+      if (/SELECT uuid FROM messages WHERE uuid = ANY/i.test(sql)) {
+        const uuids = new Set((_p[0] as string[] | undefined) ?? []);
+        return messages
+          .filter((message) => uuids.has(String(message.uuid)))
+          .map((message) => ({ uuid: message.uuid }));
+      }
+      if (/SELECT id, channel, session_id FROM messages WHERE id = ANY/i.test(sql)) {
+        const ids = new Set((_p[0] as number[] | undefined) ?? []);
+        return messages
+          .filter((message) => ids.has(Number(message.id)))
+          .map((message) => ({
+            id: message.id,
+            channel: message.channel ?? null,
+            session_id: message.session_id,
+          }));
+      }
       if (/FROM resource_locks(?:\s+l)?/i.test(sql)) {
         let rows = resourceLocks.slice();
         const resourceTypeParam = sql.match(/(?:l\.)?resource_type = \$(\d+)/i);
@@ -1767,6 +1783,58 @@ describe("conversations-serve", () => {
     expect((await reply.json()).message.reply_to).toBe(rootMessage.id);
   });
 
+  test("POST /v1/messages rejects cross-channel and cross-session reply parents", async () => {
+    for (const name of ["reply-left", "reply-right"]) {
+      const created = await fetch(`${base}/v1/channels`, {
+        method: "POST",
+        headers: { "authorization": `Bearer ${rwKey}`, "content-type": "application/json" },
+        body: JSON.stringify({ name, created_by: "test" }),
+      });
+      expect(created.status).toBe(201);
+    }
+    const sendParent = async (channel: string) => {
+      const response = await fetch(`${base}/v1/messages`, {
+        method: "POST",
+        headers: { "authorization": `Bearer ${rwKey}`, "content-type": "application/json" },
+        body: JSON.stringify({ from: "alice", channel, content: `${channel} parent` }),
+      });
+      expect(response.status).toBe(201);
+      return (await response.json()).message as { id: number; uuid: string };
+    };
+    const leftParent = await sendParent("reply-left");
+    const rightParent = await sendParent("reply-right");
+    const before = activeFakeClient!.__debug.messages.length;
+
+    const crossChannel = await fetch(`${base}/v1/messages`, {
+      method: "POST",
+      headers: { "authorization": `Bearer ${rwKey}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        from: "bob",
+        channel: "reply-right",
+        content: "cross-channel reply",
+        reply_to_uuid: leftParent.uuid,
+      }),
+    });
+    const crossSession = await fetch(`${base}/v1/messages`, {
+      method: "POST",
+      headers: { "authorization": `Bearer ${rwKey}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        from: "bob",
+        channel: "reply-right",
+        session_id: "channel:another-session",
+        content: "cross-session reply",
+        reply_to: rightParent.id,
+        reply_to_uuid: rightParent.uuid,
+      }),
+    });
+
+    expect(crossChannel.status).toBe(409);
+    expect((await crossChannel.json()).error).toContain("does not match parent channel");
+    expect(crossSession.status).toBe(409);
+    expect((await crossSession.json()).error).toContain("does not match parent session");
+    expect(activeFakeClient!.__debug.messages).toHaveLength(before);
+  });
+
   test("POST /v1/messages rejects numeric-only and mismatched reply identities before writing", async () => {
     const root = await fetch(`${base}/v1/messages`, {
       method: "POST",
@@ -2229,6 +2297,107 @@ describe("conversations-serve", () => {
       echoed: text.includes(blocked),
       inserted: activeFakeClient!.__debug.messages.length - before,
     }).toEqual({ status: 400, generic: true, echoed: false, inserted: 0 });
+  });
+
+  test("authenticated bulk ingest accepts same-thread replies and rejects cross-channel or cross-session parents", async () => {
+    const fake = activeFakeClient!;
+    fake.__debug.seedChannel({
+      id: "chn_00000000000000000000000000000081",
+      name: "bulk-left",
+      project_id: "proj-valid",
+      created_by: "tester",
+      created_at: "2026-08-09T00:00:00.000Z",
+    }, [], [{
+      id: 8101,
+      uuid: "81000000-0000-4000-8000-000000000001",
+      session_id: "channel:bulk-left",
+      from_agent: "alice",
+      to_agent: "bulk-left",
+      channel: "bulk-left",
+      project_id: "proj-valid",
+      content: "left parent",
+      priority: "normal",
+      reply_to: null,
+      created_at: "2026-08-09T00:01:00.000Z",
+    }]);
+    fake.__debug.seedChannel({
+      id: "chn_00000000000000000000000000000082",
+      name: "bulk-right",
+      project_id: "proj-valid",
+      created_by: "tester",
+      created_at: "2026-08-09T00:00:00.000Z",
+    }, [], [{
+      id: 8201,
+      uuid: "82000000-0000-4000-8000-000000000001",
+      session_id: "channel:bulk-right",
+      from_agent: "alice",
+      to_agent: "bulk-right",
+      channel: "bulk-right",
+      project_id: "proj-valid",
+      content: "right parent",
+      priority: "normal",
+      reply_to: null,
+      created_at: "2026-08-09T00:02:00.000Z",
+    }]);
+
+    const ingest = (message: Record<string, unknown>) => fetch(`${base}/v1/messages/bulk`, {
+      method: "POST",
+      headers: { "authorization": `Bearer ${rwKey}`, "content-type": "application/json" },
+      body: JSON.stringify({ messages: [message] }),
+    });
+    const sameThread = await ingest({
+      uuid: "82000000-0000-4000-8000-000000000002",
+      from: "bob",
+      to: "bulk-right",
+      channel: "bulk-right",
+      project_id: "proj-valid",
+      session_id: "channel:bulk-right",
+      content: "same-thread child",
+      reply_to: 8201,
+    });
+    const crossChannel = await ingest({
+      uuid: "82000000-0000-4000-8000-000000000003",
+      from: "bob",
+      to: "bulk-right",
+      channel: "bulk-right",
+      project_id: "proj-valid",
+      session_id: "channel:bulk-left",
+      content: "cross-channel child",
+      reply_to: 8101,
+    });
+    const crossSession = await ingest({
+      uuid: "82000000-0000-4000-8000-000000000004",
+      from: "bob",
+      to: "bulk-right",
+      channel: "bulk-right",
+      project_id: "proj-valid",
+      session_id: "channel:another-session",
+      content: "cross-session child",
+      reply_to: 8201,
+    });
+
+    expect(sameThread.status).toBe(200);
+    expect((await sameThread.json()).inserted).toBe(1);
+    const duplicate = await ingest({
+      uuid: "82000000-0000-4000-8000-000000000002",
+      from: "bob",
+      to: "bulk-right",
+      channel: "bulk-right",
+      project_id: "proj-valid",
+      session_id: "channel:bulk-left",
+      content: "duplicate payload is skipped",
+      reply_to: 8101,
+    });
+    expect(duplicate.status).toBe(200);
+    expect(await duplicate.json()).toMatchObject({ inserted: 0, skipped: 1 });
+    expect(crossChannel.status).toBe(400);
+    expect((await crossChannel.json()).error).toContain("does not match parent channel");
+    expect(crossSession.status).toBe(400);
+    expect((await crossSession.json()).error).toContain("does not match parent session");
+    expect(fake.__debug.messages.some((message) => message.uuid === "82000000-0000-4000-8000-000000000003"))
+      .toBe(false);
+    expect(fake.__debug.messages.some((message) => message.uuid === "82000000-0000-4000-8000-000000000004"))
+      .toBe(false);
   });
 
   test("bulk channel inserts create case-insensitive deduped mentions and notification DMs", async () => {

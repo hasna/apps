@@ -48,6 +48,8 @@ import type {
   ProjectMessageLinkageRollbackResult,
 } from "../types.js";
 import type {
+  ProjectChannelCollectionRequest,
+  ProjectChannelMessageCollectionRequest,
   ProjectChannelRegistrationLookupRequest,
   ProjectChannelRegistrationReadRequest,
   ProjectChannelRegistrationRequest,
@@ -55,6 +57,8 @@ import type {
 import {
   compensateProjectChannelRegistrationPg,
   lookupProjectChannelRegistrationReceiptPg,
+  listProjectChannelMessagePagePg,
+  listProjectChannelRegistrationPagePg,
   projectChannelRegistrationPgCapability,
   readProjectChannelRegistrationExactPg,
   registerProjectChannelPg,
@@ -158,6 +162,13 @@ function positiveInteger(v: unknown): number | undefined {
   if (typeof v !== "string" || !v.trim()) return undefined;
   const parsed = Number(v);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function nonNegativeInteger(v: unknown): number | undefined {
+  if (typeof v === "number" && Number.isInteger(v) && v >= 0) return v;
+  if (typeof v !== "string" || !v.trim()) return undefined;
+  const parsed = Number(v);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : undefined;
 }
 
 function remoteProjectRegistrationTarget(digest: string) {
@@ -827,6 +838,18 @@ async function handleV1(
     return json(await projectChannelRegistrationPgCapability(client));
   }
 
+  if (sub === "project-registration/channels" && method === "GET") {
+    const request = {
+      project_id: str(url.searchParams.get("project_id")),
+      cursor: str(url.searchParams.get("cursor")),
+      max_items: positiveInteger(url.searchParams.get("max_items")),
+      response_byte_limit: positiveInteger(url.searchParams.get("response_byte_limit")),
+      time_budget_ms: positiveInteger(url.searchParams.get("time_budget_ms")),
+      call_limit: positiveInteger(url.searchParams.get("call_limit")),
+    } as unknown as ProjectChannelCollectionRequest;
+    return json(await listProjectChannelRegistrationPagePg(client, request));
+  }
+
   if (sub === "project-registration/channels" && method === "POST") {
     const receipt = await registerProjectChannelPg(
       client,
@@ -878,6 +901,22 @@ async function handleV1(
       call_limit: positiveInteger(url.searchParams.get("call_limit")),
     } as unknown as ProjectChannelRegistrationReadRequest;
     return json(await readProjectChannelRegistrationExactPg(client, request));
+  }
+
+  const projectRegistrationMessagesMatch = sub.match(
+    /^project-registration\/channels\/(chn_[0-9a-f]{32})\/messages$/,
+  );
+  if (projectRegistrationMessagesMatch && method === "GET") {
+    const request = {
+      project_id: str(url.searchParams.get("project_id")),
+      target_id: projectRegistrationMessagesMatch[1],
+      cursor: nonNegativeInteger(url.searchParams.get("cursor")),
+      max_items: positiveInteger(url.searchParams.get("max_items")),
+      response_byte_limit: positiveInteger(url.searchParams.get("response_byte_limit")),
+      time_budget_ms: positiveInteger(url.searchParams.get("time_budget_ms")),
+      call_limit: positiveInteger(url.searchParams.get("call_limit")),
+    } as unknown as ProjectChannelMessageCollectionRequest;
+    return json(await listProjectChannelMessagePagePg(client, request));
   }
 
   if (sub === "project-registration/channels/inverse" && method === "POST") {
@@ -1727,6 +1766,13 @@ async function handleV1(
       requestedProjectId: string | null;
       projectParamIndex: number;
     }> = [];
+    const replyReferences: Array<{
+      itemIndex: number;
+      uuid: string;
+      replyTo: number;
+      channel: string | null;
+      sessionId: string;
+    }> = [];
     const projectIdx = cols.indexOf("project_id");
     for (let i = 0; i < items.length; i++) {
       const raw = items[i];
@@ -1746,6 +1792,7 @@ async function handleV1(
       const sessionId = str(m.session_id) ?? `api:${from}`;
       const channel = str(m.channel);
       const projectId = str(m.project_id);
+      const replyTo = typeof m.reply_to === "number" ? m.reply_to : null;
       assertNoSensitiveContent(content, "Message content");
       assertNoSensitiveContent(from, "Message sender");
       assertNoSensitiveContent(to, "Message recipient");
@@ -1769,7 +1816,7 @@ async function handleV1(
         str(m.pinned_at) ?? null,
         m.blocking === true || m.blocking === 1,
         str(m.attachments) ?? null,
-        typeof m.reply_to === "number" ? m.reply_to : null,
+        replyTo,
         str(m.created_at) ?? null,
         str(m.read_at) ?? null,
       ];
@@ -1784,6 +1831,15 @@ async function handleV1(
           channel,
           requestedProjectId: projectId ?? null,
           projectParamIndex: base + projectIdx,
+        });
+      }
+      if (replyTo !== null) {
+        replyReferences.push({
+          itemIndex: i,
+          uuid,
+          replyTo,
+          channel: channel ?? null,
+          sessionId,
         });
       }
     }
@@ -1812,6 +1868,39 @@ async function handleV1(
           );
         }
         params[entry.projectParamIndex] = channelProjectId;
+      }
+
+      if (replyReferences.length > 0) {
+        const existingRows = await tx.many<{ uuid: string }>(
+          "SELECT uuid FROM messages WHERE uuid = ANY($1::text[]) FOR SHARE",
+          [[...new Set(replyReferences.map((entry) => entry.uuid))]],
+        );
+        const existingUuids = new Set(existingRows.map((row) => row.uuid));
+        const newReplyReferences = replyReferences.filter(
+          (reference) => !existingUuids.has(reference.uuid),
+        );
+        const replyIds = [...new Set(newReplyReferences.map((entry) => entry.replyTo))];
+        const parents = await tx.many<{
+          id: number;
+          channel: string | null;
+          session_id: string;
+        }>(
+          "SELECT id, channel, session_id FROM messages WHERE id = ANY($1::bigint[]) FOR SHARE",
+          [replyIds],
+        );
+        const parentsById = new Map(parents.map((parent) => [Number(parent.id), parent]));
+        for (const reference of newReplyReferences) {
+          const parent = parentsById.get(reference.replyTo);
+          if (!parent) {
+            throw new Error(`messages[${reference.itemIndex}].reply_to parent not found.`);
+          }
+          if ((parent.channel ?? null) !== reference.channel) {
+            throw new Error(`messages[${reference.itemIndex}].reply_to does not match parent channel.`);
+          }
+          if (parent.session_id !== reference.sessionId) {
+            throw new Error(`messages[${reference.itemIndex}].reply_to does not match parent session.`);
+          }
+        }
       }
 
       return tx.query<{ id: number; from_agent: string; channel: string | null; content: string }>(

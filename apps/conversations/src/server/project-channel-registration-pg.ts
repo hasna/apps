@@ -4,6 +4,8 @@ import {
   PROJECT_CHANNEL_REGISTRATION_CREATOR,
   assertProjectChannelRegistrationIdentity,
   buildProjectChannelRegistrationCapability,
+  buildProjectChannelCollectionPage,
+  buildProjectChannelMessageCollectionPage,
   buildProjectChannelRegistrationReceipt,
   exactProjectChannelRegistrationReplay,
   projectChannelRegistrationChannelRecord,
@@ -14,7 +16,11 @@ import {
   validateProjectChannelRegistrationInverse,
   validateProjectChannelRegistrationInverseEnvelope,
   validateProjectChannelRegistrationLookup,
+  validateProjectChannelCollectionRequest,
+  validateProjectChannelMessageCollectionRequest,
   type ProjectChannelRegistrationCapability,
+  type ProjectChannelCollectionPage,
+  type ProjectChannelCollectionRequest,
   type ProjectChannelRegistrationFaultOptions,
   type ProjectChannelRegistrationInverseVerification,
   type ProjectChannelRegistrationLookupRequest,
@@ -23,6 +29,9 @@ import {
   type ProjectChannelRegistrationReceipt,
   type ProjectChannelRegistrationRecord,
   type ProjectChannelRegistrationRequest,
+  type ProjectChannelMessageCollectionPage,
+  type ProjectChannelMessageCollectionRequest,
+  type ProjectChannelMessageCollectionRow,
 } from "../lib/project-channel-registration.js";
 
 type PgReceiptRow = Omit<ProjectChannelRegistrationReceipt, "created_at"> & {
@@ -386,6 +395,97 @@ export async function readProjectChannelRegistrationExactPg(
   const record = projectChannelRegistrationChannelRecord(parsed);
   projectChannelRegistrationResponseControl(record, request, startedAt);
   return record;
+}
+
+export async function listProjectChannelRegistrationPagePg(
+  client: TypedQueryClient,
+  request: ProjectChannelCollectionRequest,
+): Promise<ProjectChannelCollectionPage> {
+  const startedAt = performance.now();
+  validateProjectChannelCollectionRequest(request);
+  const rows = await client.many<PgChannelRow>(`
+    SELECT *
+    FROM channels
+    WHERE project_id = $1 AND ($2::text IS NULL OR id > $2)
+    ORDER BY id ASC
+    LIMIT $3
+  `, [
+    request.project_id,
+    request.cursor ?? null,
+    request.max_items + 1,
+  ]);
+  return buildProjectChannelCollectionPage(
+    request,
+    rows.map(parseChannel),
+    startedAt,
+  );
+}
+
+export async function listProjectChannelMessagePagePg(
+  client: TypedQueryClient,
+  request: ProjectChannelMessageCollectionRequest,
+): Promise<ProjectChannelMessageCollectionPage> {
+  const startedAt = performance.now();
+  validateProjectChannelMessageCollectionRequest(request);
+  const rawChannel = await client.get<PgChannelRow>(
+    "SELECT * FROM channels WHERE id = $1",
+    [request.target_id],
+  );
+  if (!rawChannel) {
+    throw new Error(`project channel registration target not found: ${request.target_id}`);
+  }
+  const channel = parseChannel(rawChannel);
+  if (channel.project_id !== request.project_id) {
+    throw new Error(
+      `Project ${request.project_id} conflicts with channel project ${channel.project_id ?? "(unlinked)"}.`,
+    );
+  }
+  const inconsistent = await client.get<{ count: string | number }>(`
+    SELECT COUNT(*)::bigint AS count
+    FROM messages
+    WHERE channel = $1 AND (project_id IS NULL OR project_id <> $2)
+  `, [channel.name, request.project_id]);
+  const inconsistentCount = Number(inconsistent?.count ?? 0);
+  if (inconsistentCount > 0) {
+    throw new Error(
+      `Channel ${channel.name} has ${inconsistentCount} message(s) outside project ${request.project_id}; apply guarded project-message linkage before collection readback.`,
+    );
+  }
+  const rows = await client.many<ProjectChannelMessageCollectionRow & { created_at: string | Date }>(`
+    SELECT
+      m.id AS local_id,
+      m.uuid AS target_id,
+      c.id AS channel_id,
+      m.channel AS channel,
+      m.project_id AS project_id,
+      parent.uuid AS reply_to_target_id,
+      m.session_id,
+      m.from_agent,
+      m.to_agent,
+      m.content,
+      m.priority,
+      m.created_at
+    FROM messages m
+    JOIN channels c ON c.name = m.channel
+    LEFT JOIN messages parent
+      ON parent.id = m.reply_to
+     AND parent.channel = m.channel
+     AND parent.session_id = m.session_id
+    WHERE c.id = $1 AND m.project_id = $2 AND m.id > $3
+    ORDER BY m.id ASC
+    LIMIT $4
+  `, [
+    request.target_id,
+    request.project_id,
+    request.cursor ?? 0,
+    request.max_items + 1,
+  ]);
+  return buildProjectChannelMessageCollectionPage(
+    request,
+    channel,
+    rows.map((row) => ({ ...row, created_at: timestamp(row.created_at) })),
+    startedAt,
+  );
 }
 
 export async function lookupProjectChannelRegistrationReceiptPg(
