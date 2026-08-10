@@ -48,6 +48,8 @@ import type {
   ProjectMessageLinkageRollbackResult,
 } from "../types.js";
 import type {
+  ProjectChannelCollectionRequest,
+  ProjectChannelMessageCollectionRequest,
   ProjectChannelRegistrationLookupRequest,
   ProjectChannelRegistrationReadRequest,
   ProjectChannelRegistrationRequest,
@@ -55,6 +57,8 @@ import type {
 import {
   compensateProjectChannelRegistrationPg,
   lookupProjectChannelRegistrationReceiptPg,
+  listProjectChannelMessagePagePg,
+  listProjectChannelRegistrationPagePg,
   projectChannelRegistrationPgCapability,
   readProjectChannelRegistrationExactPg,
   registerProjectChannelPg,
@@ -158,6 +162,13 @@ function positiveInteger(v: unknown): number | undefined {
   if (typeof v !== "string" || !v.trim()) return undefined;
   const parsed = Number(v);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function nonNegativeInteger(v: unknown): number | undefined {
+  if (typeof v === "number" && Number.isInteger(v) && v >= 0) return v;
+  if (typeof v !== "string" || !v.trim()) return undefined;
+  const parsed = Number(v);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : undefined;
 }
 
 function remoteProjectRegistrationTarget(digest: string) {
@@ -827,6 +838,18 @@ async function handleV1(
     return json(await projectChannelRegistrationPgCapability(client));
   }
 
+  if (sub === "project-registration/channels" && method === "GET") {
+    const request = {
+      project_id: str(url.searchParams.get("project_id")),
+      cursor: str(url.searchParams.get("cursor")),
+      max_items: positiveInteger(url.searchParams.get("max_items")),
+      response_byte_limit: positiveInteger(url.searchParams.get("response_byte_limit")),
+      time_budget_ms: positiveInteger(url.searchParams.get("time_budget_ms")),
+      call_limit: positiveInteger(url.searchParams.get("call_limit")),
+    } as unknown as ProjectChannelCollectionRequest;
+    return json(await listProjectChannelRegistrationPagePg(client, request));
+  }
+
   if (sub === "project-registration/channels" && method === "POST") {
     const receipt = await registerProjectChannelPg(
       client,
@@ -878,6 +901,22 @@ async function handleV1(
       call_limit: positiveInteger(url.searchParams.get("call_limit")),
     } as unknown as ProjectChannelRegistrationReadRequest;
     return json(await readProjectChannelRegistrationExactPg(client, request));
+  }
+
+  const projectRegistrationMessagesMatch = sub.match(
+    /^project-registration\/channels\/(chn_[0-9a-f]{32})\/messages$/,
+  );
+  if (projectRegistrationMessagesMatch && method === "GET") {
+    const request = {
+      project_id: str(url.searchParams.get("project_id")),
+      target_id: projectRegistrationMessagesMatch[1],
+      cursor: nonNegativeInteger(url.searchParams.get("cursor")),
+      max_items: positiveInteger(url.searchParams.get("max_items")),
+      response_byte_limit: positiveInteger(url.searchParams.get("response_byte_limit")),
+      time_budget_ms: positiveInteger(url.searchParams.get("time_budget_ms")),
+      call_limit: positiveInteger(url.searchParams.get("call_limit")),
+    } as unknown as ProjectChannelMessageCollectionRequest;
+    return json(await listProjectChannelMessagePagePg(client, request));
   }
 
   if (sub === "project-registration/channels/inverse" && method === "POST") {

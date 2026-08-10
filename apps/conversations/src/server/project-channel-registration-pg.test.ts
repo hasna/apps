@@ -18,6 +18,8 @@ import {
 } from "../lib/project-channel-registration.js";
 import {
   compensateProjectChannelRegistrationPg,
+  listProjectChannelMessagePagePg,
+  listProjectChannelRegistrationPagePg,
   lookupProjectChannelRegistrationReceiptPg,
   projectChannelRegistrationPgCapability,
   readProjectChannelRegistrationExactPg,
@@ -65,9 +67,24 @@ type ChannelRow = Record<string, unknown> & {
   tags: string | null;
 };
 
+type MessageRow = Record<string, unknown> & {
+  id: number;
+  uuid: string;
+  session_id: string;
+  from_agent: string;
+  to_agent: string;
+  channel: string;
+  project_id: string | null;
+  content: string;
+  priority: string;
+  reply_to: number | null;
+  created_at: string;
+};
+
 interface FakeState {
   corpusId: string;
   channels: Map<string, ChannelRow>;
+  messages: MessageRow[];
   receipts: Map<string, ReceiptRow>;
   members: Set<string>;
   references: Set<string>;
@@ -83,6 +100,7 @@ class FakeProjectRegistrationClient implements PoolQueryClient {
   state: FakeState = {
     corpusId: "cor_11111111111111111111111111111111",
     channels: new Map(),
+    messages: [],
     receipts: new Map(),
     members: new Set(),
     references: new Set(),
@@ -194,6 +212,17 @@ class FakeProjectRegistrationClient implements PoolQueryClient {
       const row = this.state.channels.get(String(params[0]));
       return row ? [row] : [];
     }
+    if (query.startsWith("SELECT * FROM channels WHERE project_id = $1")) {
+      const projectId = String(params[0]);
+      const cursor = params[1] == null ? null : String(params[1]);
+      const limit = Number(params[2]);
+      return [...this.state.channels.values()]
+        .filter((channel) =>
+          channel.project_id === projectId
+          && (cursor === null || channel.id > cursor))
+        .sort((left, right) => left.id.localeCompare(right.id))
+        .slice(0, limit);
+    }
     if (query.startsWith("SELECT * FROM channels WHERE id = $1")) {
       const row = [...this.state.channels.values()].find(
         (channel) => channel.id === String(params[0]),
@@ -222,6 +251,51 @@ class FakeProjectRegistrationClient implements PoolQueryClient {
       if (this.state.channels.has(row.name)) throw new Error("duplicate channel");
       this.state.channels.set(row.name, row);
       return [row];
+    }
+    if (
+      query.startsWith("SELECT COUNT(*)::bigint AS count FROM messages")
+    ) {
+      const channel = String(params[0]);
+      const projectId = String(params[1]);
+      return [{
+        count: this.state.messages.filter((message) =>
+          message.channel === channel
+          && (message.project_id === null || message.project_id !== projectId)).length,
+      }];
+    }
+    if (
+      query.includes("FROM messages m JOIN channels c ON c.name = m.channel")
+      && query.includes("LEFT JOIN messages parent ON parent.id = m.reply_to")
+    ) {
+      const channelId = String(params[0]);
+      const projectId = String(params[1]);
+      const cursor = Number(params[2]);
+      const limit = Number(params[3]);
+      const channel = [...this.state.channels.values()].find((row) => row.id === channelId);
+      if (!channel) return [];
+      return this.state.messages
+        .filter((message) =>
+          message.channel === channel.name
+          && message.project_id === projectId
+          && message.id > cursor)
+        .sort((left, right) => left.id - right.id)
+        .slice(0, limit)
+        .map((message) => ({
+          local_id: message.id,
+          target_id: message.uuid,
+          channel_id: channel.id,
+          channel: channel.name,
+          project_id: message.project_id,
+          reply_to_target_id: message.reply_to === null
+            ? null
+            : this.state.messages.find((candidate) => candidate.id === message.reply_to)?.uuid ?? null,
+          session_id: message.session_id,
+          from_agent: message.from_agent,
+          to_agent: message.to_agent,
+          content: message.content,
+          priority: message.priority,
+          created_at: message.created_at,
+        }));
     }
     if (query.startsWith("INSERT INTO channel_members")) {
       this.state.members.add(`${String(params[0])}:${String(params[1])}`);
@@ -394,6 +468,162 @@ afterEach(() => {
 });
 
 describe("PostgreSQL project channel registration authority", () => {
+  test("pages project channels and inherited messages with stable exclusive cursors", async () => {
+    const client = new FakeProjectRegistrationClient();
+    const projectId = "wks_ys8tzpsZJMNtx0ORZtLsA";
+    const channelIds = [
+      "chn_00000000000000000000000000000001",
+      "chn_00000000000000000000000000000002",
+      "chn_00000000000000000000000000000003",
+    ];
+    channelIds.forEach((id, index) => {
+      client.state.channels.set(`project-${index + 1}`, {
+        id,
+        name: `project-${index + 1}`,
+        description: null,
+        topic: null,
+        project_id: projectId,
+        created_by: "project-registration",
+        created_at: `2026-08-08T09:00:0${index}.000Z`,
+        archived_at: null,
+        metadata: null,
+        tags: null,
+      });
+    });
+    client.state.channels.set("unbound", {
+      id: "chn_ffffffffffffffffffffffffffffffff",
+      name: "unbound",
+      description: null,
+      topic: null,
+      project_id: null,
+      created_by: "tester",
+      created_at: "2026-08-08T09:00:10.000Z",
+      archived_at: null,
+      metadata: null,
+      tags: null,
+    });
+
+    const firstChannels = await listProjectChannelRegistrationPagePg(client, {
+      project_id: projectId,
+      max_items: 2,
+      response_byte_limit: 32_768,
+      time_budget_ms: 5_000,
+      call_limit: 1,
+    });
+    const secondChannels = await listProjectChannelRegistrationPagePg(client, {
+      project_id: projectId,
+      cursor: firstChannels.next_cursor!,
+      max_items: 2,
+      response_byte_limit: 32_768,
+      time_budget_ms: 5_000,
+      call_limit: 1,
+    });
+    expect([
+      ...firstChannels.items,
+      ...secondChannels.items,
+    ].map((item) => item.target_id)).toEqual(channelIds);
+    expect(firstChannels).toMatchObject({
+      has_more: true,
+      complete: false,
+      truncated: true,
+    });
+    expect(secondChannels).toMatchObject({
+      has_more: false,
+      complete: true,
+      truncated: false,
+    });
+    expect(firstChannels.response_bytes).toBe(
+      Buffer.byteLength(JSON.stringify(firstChannels), "utf8"),
+    );
+    expect(secondChannels.response_bytes).toBe(
+      Buffer.byteLength(JSON.stringify(secondChannels), "utf8"),
+    );
+
+    client.state.messages.push(
+      {
+        id: 41,
+        uuid: "msg-parent",
+        session_id: "session-1",
+        from_agent: "alice",
+        to_agent: "project-1",
+        channel: "project-1",
+        project_id: projectId,
+        content: "parent",
+        priority: "normal",
+        reply_to: null,
+        created_at: "2026-08-08T09:01:00.000Z",
+      },
+      {
+        id: 42,
+        uuid: "msg-reply",
+        session_id: "session-1",
+        from_agent: "bob",
+        to_agent: "project-1",
+        channel: "project-1",
+        project_id: projectId,
+        content: "reply",
+        priority: "normal",
+        reply_to: 41,
+        created_at: "2026-08-08T09:02:00.000Z",
+      },
+    );
+    const firstMessages = await listProjectChannelMessagePagePg(client, {
+      project_id: projectId,
+      target_id: channelIds[0],
+      max_items: 1,
+      response_byte_limit: 32_768,
+      time_budget_ms: 5_000,
+      call_limit: 1,
+    });
+    const secondMessages = await listProjectChannelMessagePagePg(client, {
+      project_id: projectId,
+      target_id: channelIds[0],
+      cursor: firstMessages.next_cursor!,
+      max_items: 1,
+      response_byte_limit: 32_768,
+      time_budget_ms: 5_000,
+      call_limit: 1,
+    });
+    expect(firstMessages.items[0]).toMatchObject({
+      target_id: "msg-parent",
+      reply_to_target_id: null,
+    });
+    expect(secondMessages.items[0]).toMatchObject({
+      target_id: "msg-reply",
+      reply_to_target_id: "msg-parent",
+    });
+    expect(firstMessages.response_bytes).toBe(
+      Buffer.byteLength(JSON.stringify(firstMessages), "utf8"),
+    );
+    expect(secondMessages.response_bytes).toBe(
+      Buffer.byteLength(JSON.stringify(secondMessages), "utf8"),
+    );
+
+    client.state.messages.push({
+      id: 43,
+      uuid: "msg-later",
+      session_id: "session-1",
+      from_agent: "carol",
+      to_agent: "project-1",
+      channel: "project-1",
+      project_id: projectId,
+      content: "later",
+      priority: "normal",
+      reply_to: null,
+      created_at: "2026-08-08T09:03:00.000Z",
+    });
+    const laterMessages = await listProjectChannelMessagePagePg(client, {
+      project_id: projectId,
+      target_id: channelIds[0],
+      cursor: 42,
+      max_items: 2,
+      response_byte_limit: 32_768,
+      time_budget_ms: 5_000,
+      call_limit: 1,
+    });
+    expect(laterMessages.items.map((item) => item.target_id)).toEqual(["msg-later"]);
+  });
+
   test("locks the stable step identity before the selector for changed requests", async () => {
     const client = new FakeProjectRegistrationClient();
     const firstRequest = await forwardRequest(client);
@@ -701,6 +931,42 @@ describe("PostgreSQL project channel registration authority", () => {
     });
     expect(receipt.target_id).toMatch(/^chn_[0-9a-f]{32}$/);
     expect(client.state.channels.get("iapp-sms")?.id).toBe(receipt.target_id!);
+    const channelPage = await apiStore.listProjectChannelRegistrationPage({
+      project_id: "wks_ys8tzpsZJMNtx0ORZtLsA",
+      max_items: 10,
+      response_byte_limit: 32_768,
+      time_budget_ms: 5_000,
+      call_limit: 1,
+    });
+    expect(channelPage.items.map((item) => item.target_id)).toEqual([receipt.target_id!]);
+    client.state.messages.push({
+      id: 1,
+      uuid: "msg-api-project-link",
+      session_id: "session-api",
+      from_agent: "projects-adapter",
+      to_agent: "iapp-sms",
+      channel: "iapp-sms",
+      project_id: "wks_ys8tzpsZJMNtx0ORZtLsA",
+      content: "linked",
+      priority: "normal",
+      reply_to: null,
+      created_at: "2026-08-08T09:05:00.000Z",
+    });
+    const messagePage = await apiStore.listProjectChannelMessagePage({
+      project_id: "wks_ys8tzpsZJMNtx0ORZtLsA",
+      target_id: receipt.target_id!,
+      max_items: 10,
+      response_byte_limit: 32_768,
+      time_budget_ms: 5_000,
+      call_limit: 1,
+    });
+    expect(messagePage.items).toEqual([
+      expect.objectContaining({
+        target_id: "msg-api-project-link",
+        channel_id: receipt.target_id,
+        project_id: "wks_ys8tzpsZJMNtx0ORZtLsA",
+      }),
+    ]);
     client.state.corpusId = "cor_33333333333333333333333333333333";
     expect((await authority.capability()).corpus_id).toBe(client.state.corpusId);
     const lookupRequest = {

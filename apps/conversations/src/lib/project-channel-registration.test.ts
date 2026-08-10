@@ -6,11 +6,14 @@ import { createChannel } from "./channels.js";
 import { closeDb, getDb } from "./db.js";
 import {
   createProjectChannelRegistrationAuthority,
+  listProjectChannelMessagePage,
+  listProjectChannelRegistrationPage,
   projectChannelRegistrationDigest,
   registerProjectChannel,
   type ProjectChannelRegistrationRequest,
   validateProjectChannelRegistrationLookup,
 } from "./project-channel-registration.js";
+import { sendMessage } from "./messages.js";
 import { pinStoreToDb, restoreStoreEnv } from "./store/isolated-test-env.js";
 
 const TEST_DB = join(tmpdir(), `conversations-project-channel-registration-${Date.now()}.db`);
@@ -117,7 +120,180 @@ function inverseRequest(
   };
 }
 
+function createLocalProject(projectId = PROJECT_ID): void {
+  getDb().prepare(
+    "INSERT INTO projects (id, name, created_by) VALUES (?, ?, ?)",
+  ).run(projectId, `Project ${projectId}`, "tester");
+}
+
 describe("project channel registration authority", () => {
+  test("pages stable project channel ids without duplicates or unbound rows", () => {
+    createLocalProject();
+    const first = createChannel("alpha", "tester", { project_id: PROJECT_ID });
+    const second = createChannel("bravo", "tester", { project_id: PROJECT_ID });
+    const third = createChannel("charlie", "tester", { project_id: PROJECT_ID });
+    createChannel("unbound", "tester");
+
+    const expectedIds = [first.id, second.id, third.id].sort();
+    const firstPage = listProjectChannelRegistrationPage({
+      project_id: PROJECT_ID,
+      max_items: 2,
+      response_byte_limit: 32_768,
+      time_budget_ms: 5_000,
+      call_limit: 1,
+    });
+    const secondPage = listProjectChannelRegistrationPage({
+      project_id: PROJECT_ID,
+      cursor: firstPage.next_cursor!,
+      max_items: 2,
+      response_byte_limit: 32_768,
+      time_budget_ms: 5_000,
+      call_limit: 1,
+    });
+
+    expect(firstPage.items.map((item) => item.target_id)).toEqual(expectedIds.slice(0, 2));
+    expect(firstPage).toMatchObject({
+      authority: "conversations",
+      resource_kind: "channel",
+      scope: "collection",
+      project_id: PROJECT_ID,
+      cursor: null,
+      cursor_semantics: "exclusive_stable_id",
+      item_count: 2,
+      has_more: true,
+      complete: false,
+      truncated: true,
+    });
+    expect(secondPage.items.map((item) => item.target_id)).toEqual(expectedIds.slice(2));
+    expect(secondPage).toMatchObject({
+      cursor: firstPage.next_cursor,
+      next_cursor: null,
+      item_count: 1,
+      has_more: false,
+      complete: true,
+      truncated: false,
+    });
+    expect(firstPage.response_bytes).toBe(
+      Buffer.byteLength(JSON.stringify(firstPage), "utf8"),
+    );
+    expect(secondPage.response_bytes).toBe(
+      Buffer.byteLength(JSON.stringify(secondPage), "utf8"),
+    );
+    expect(new Set([...firstPage.items, ...secondPage.items].map((item) => item.target_id)).size).toBe(3);
+    expect([...firstPage.items, ...secondPage.items].every((item) =>
+      item.project_id === PROJECT_ID
+      && item.scope === "collection"
+      && item.target_id.startsWith("chn_")
+      && item.revision
+      && item.digest)).toBe(true);
+  });
+
+  test("pages immutable message uuids for one channel and continues to a later child", () => {
+    createLocalProject();
+    const channel = createChannel("project-feed", "tester", { project_id: PROJECT_ID });
+    const parent = sendMessage({
+      from: "alice",
+      to: channel.name,
+      channel: channel.name,
+      content: "parent",
+    });
+    const reply = sendMessage({
+      from: "bob",
+      to: channel.name,
+      channel: channel.name,
+      content: "reply",
+      reply_to: parent.id,
+      reply_to_uuid: parent.uuid,
+    });
+
+    const firstPage = listProjectChannelMessagePage({
+      project_id: PROJECT_ID,
+      target_id: channel.id,
+      max_items: 1,
+      response_byte_limit: 32_768,
+      time_budget_ms: 5_000,
+      call_limit: 1,
+    });
+    const secondPage = listProjectChannelMessagePage({
+      project_id: PROJECT_ID,
+      target_id: channel.id,
+      cursor: firstPage.next_cursor!,
+      max_items: 1,
+      response_byte_limit: 32_768,
+      time_budget_ms: 5_000,
+      call_limit: 1,
+    });
+
+    expect(firstPage.items).toEqual([expect.objectContaining({
+      target_id: parent.uuid,
+      local_id: parent.id,
+      channel_id: channel.id,
+      channel: channel.name,
+      project_id: PROJECT_ID,
+      reply_to_target_id: null,
+    })]);
+    expect(secondPage.items).toEqual([expect.objectContaining({
+      target_id: reply.uuid,
+      local_id: reply.id,
+      channel_id: channel.id,
+      channel: channel.name,
+      project_id: PROJECT_ID,
+      reply_to_target_id: parent.uuid,
+    })]);
+    expect(firstPage).toMatchObject({
+      cursor: null,
+      cursor_semantics: "exclusive_local_id",
+      has_more: true,
+      complete: false,
+      truncated: true,
+    });
+    expect(secondPage).toMatchObject({
+      cursor: parent.id,
+      next_cursor: null,
+      has_more: false,
+      complete: true,
+      truncated: false,
+    });
+    expect(firstPage.response_bytes).toBe(
+      Buffer.byteLength(JSON.stringify(firstPage), "utf8"),
+    );
+    expect(secondPage.response_bytes).toBe(
+      Buffer.byteLength(JSON.stringify(secondPage), "utf8"),
+    );
+
+    const later = sendMessage({
+      from: "carol",
+      to: channel.name,
+      channel: channel.name,
+      content: "later",
+    });
+    const laterPage = listProjectChannelMessagePage({
+      project_id: PROJECT_ID,
+      target_id: channel.id,
+      cursor: reply.id,
+      max_items: 2,
+      response_byte_limit: 32_768,
+      time_budget_ms: 5_000,
+      call_limit: 1,
+    });
+    expect(laterPage.items.map((item) => item.target_id)).toEqual([later.uuid]);
+    expect(laterPage.next_cursor).toBeNull();
+    expect(laterPage.complete).toBe(true);
+  });
+
+  test("refuses a message collection read through a conflicting project", () => {
+    createLocalProject();
+    const channel = createChannel("project-feed", "tester", { project_id: PROJECT_ID });
+    expect(() => listProjectChannelMessagePage({
+      project_id: "wks_otherProject12345678",
+      target_id: channel.id,
+      max_items: 10,
+      response_byte_limit: 32_768,
+      time_budget_ms: 5_000,
+      call_limit: 1,
+    })).toThrow("conflicts with channel project");
+  });
+
   test("advertises the package-owned conditional authority with stable identity", async () => {
     const authority = createProjectChannelRegistrationAuthority();
     const first = await authority.capability();

@@ -418,6 +418,8 @@ export interface ConversationsStore {
   // package-owned project channel registration authority
   projectChannelRegistrationCapability: Async<typeof projectChannelRegistrationLib.getProjectChannelRegistrationCapability>;
   registerProjectChannel: Async<typeof projectChannelRegistrationLib.registerProjectChannel>;
+  listProjectChannelRegistrationPage: Async<typeof projectChannelRegistrationLib.listProjectChannelRegistrationPage>;
+  listProjectChannelMessagePage: Async<typeof projectChannelRegistrationLib.listProjectChannelMessagePage>;
   readProjectChannelRegistrationExact: Async<typeof projectChannelRegistrationLib.readProjectChannelRegistrationExact>;
   lookupProjectChannelRegistrationReceipt: Async<typeof projectChannelRegistrationLib.lookupProjectChannelRegistrationReceipt>;
   compensateProjectChannelRegistration: Async<typeof projectChannelRegistrationLib.compensateProjectChannelRegistration>;
@@ -594,6 +596,8 @@ export class LocalStore implements ConversationsStore {
   // package-owned project channel registration authority
   projectChannelRegistrationCapability: ConversationsStore["projectChannelRegistrationCapability"] = async () => projectChannelRegistrationLib.getProjectChannelRegistrationCapability();
   registerProjectChannel: ConversationsStore["registerProjectChannel"] = async (request) => projectChannelRegistrationLib.registerProjectChannel(request);
+  listProjectChannelRegistrationPage: ConversationsStore["listProjectChannelRegistrationPage"] = async (request) => projectChannelRegistrationLib.listProjectChannelRegistrationPage(request);
+  listProjectChannelMessagePage: ConversationsStore["listProjectChannelMessagePage"] = async (request) => projectChannelRegistrationLib.listProjectChannelMessagePage(request);
   readProjectChannelRegistrationExact: ConversationsStore["readProjectChannelRegistrationExact"] = async (request) => projectChannelRegistrationLib.readProjectChannelRegistrationExact(request);
   lookupProjectChannelRegistrationReceipt: ConversationsStore["lookupProjectChannelRegistrationReceipt"] = async (request) => projectChannelRegistrationLib.lookupProjectChannelRegistrationReceipt(request);
   compensateProjectChannelRegistration: ConversationsStore["compensateProjectChannelRegistration"] = async (request) => projectChannelRegistrationLib.compensateProjectChannelRegistration(request);

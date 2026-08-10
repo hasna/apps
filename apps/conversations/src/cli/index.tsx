@@ -18,6 +18,7 @@ import { registerReceiptCommands } from "./commands/receipts.js";
 import { registerLockCommands } from "./commands/locks.js";
 import { registerTmuxCommands } from "./commands/tmux.js";
 import { registerAdminCommands } from "./commands/admin.js";
+import { registerProjectRegistrationCommands } from "./commands/project-registration.js";
 import pkg from "../../package.json";
 import { printErrorLine, printJsonLine } from "../lib/stdout.js";
 
@@ -39,6 +40,7 @@ registerReceiptCommands(program);
 registerLockCommands(program);
 registerTmuxCommands(program);
 registerAdminCommands(program);
+registerProjectRegistrationCommands(program);
 
 // ---- mcp ----
 program
