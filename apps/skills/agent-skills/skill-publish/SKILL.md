@@ -90,7 +90,7 @@ If tests fail → fix them before continuing. Never publish broken tests.
 ```bash
 git add package.json bun.lock
 SECRET_PATTERN='sk-(ant|proj)-|npm_[[:alpha:]]|gh[op]_|AKIA[[:upper:][:digit:]]|xai[-]|AI[z]a'
-if git diff --cached --diff-filter=ACM --unified=0 | grep -iE "^\\+[^+].*($SECRET_PATTERN)"; then
+if git diff --cached --diff-filter=ACM --unified=0 | grep -iE "^\\+([^+].*)?($SECRET_PATTERN)"; then
   echo "SECRETS - STOP"
   exit 1
 fi
@@ -121,7 +121,7 @@ test "$(cat package.json | python3 -c "import sys,json; print(json.load(sys.stdi
 ### 7. Post publish intent to git-publishing (BEFORE publishing)
 
 Fleet rule: publish intent goes to the `git-publishing` channel BEFORE any
-`bun publish`/`npm publish`, and the result is confirmed in the same thread
+`npm publish`, and the result is confirmed in the same thread
 after. Re-check blockers first — an unread `[FREEZE]` means stop and escalate
 to `help`.
 
@@ -136,17 +136,62 @@ echo "Intent posted: message $INTENT_ID"
 
 ### 8. Publish
 
+Npm 10.9.8 and 11.16.0 both omit `gitHead` when they publish directly from a
+linked Git worktree, because their package normalizer treats `.git` as a
+directory and silently ignores the worktree's `.git` file. Publish through the
+deterministic helper beside this SKILL.md. It packs the prepared package, stages
+those files in a disposable normal clone at the exact source HEAD/tree, preserves
+the package's repository-relative subdirectory, and never mutates the source
+worktree's Git metadata.
+
+Resolve `PUBLISH_HELPER` to `scripts/publish_with_git_head.sh` beside this
+SKILL.md in the installed skill directory. Do not copy the helper into the
+package repo or replace it with raw `npm publish`.
+
 ```bash
 ACCESS=public
 [ "$ORG" = "hasnaxyz" ] && ACCESS=restricted
-if command -v bun >/dev/null 2>&1; then
-  bun publish --access "$ACCESS"
-elif command -v npm >/dev/null 2>&1; then
-  npm publish --access "$ACCESS"
-else
-  echo "BLOCKED: neither bun nor npm publish is available"
+TOKEN_PATH="$ORG/npm/live/publish-token"
+EXPECTED_GIT_HEAD=$(git rev-parse HEAD)
+PUBLISH_HELPER="<directory containing this SKILL.md>/scripts/publish_with_git_head.sh"
+test -f "$PUBLISH_HELPER"
+
+(
+  NPMRC=$(mktemp)
+  trap 'rm -f "$NPMRC"' EXIT
+  chmod 600 "$NPMRC"
+  printf '//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}\n' > "$NPMRC"
+  secrets exec "$TOKEN_PATH" --as NODE_AUTH_TOKEN -- \
+    bash "$PUBLISH_HELPER" --userconfig "$NPMRC" --access "$ACCESS"
+)
+
+VERIFY_DIR=$(mktemp -d)
+PUBLISHED_GIT_HEAD=""
+for attempt in 1 2 3 4 5; do
+  if npm view "$PKG@$NEW_VERSION" gitHead --json \
+    > "$VERIFY_DIR/githead.out" \
+    2> "$VERIFY_DIR/githead.err"; then
+    if [ -s "$VERIFY_DIR/githead.out" ]; then
+      if PUBLISHED_GIT_HEAD=$(node -e '
+        const fs = require("node:fs");
+        const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+        if (typeof value !== "string") process.exit(2);
+        process.stdout.write(value);
+      ' "$VERIFY_DIR/githead.out"); then
+        break
+      fi
+    fi
+  fi
+  sleep 2
+done
+rm -rf "$VERIFY_DIR"
+
+if [ "$PUBLISHED_GIT_HEAD" != "$EXPECTED_GIT_HEAD" ]; then
+  printf 'GITHEAD_OUTPUT: %s\n' "${PUBLISHED_GIT_HEAD:-ABSENT}"
+  printf 'GITHEAD_EXPECTED: %s\n' "$EXPECTED_GIT_HEAD"
   exit 1
 fi
+printf 'GITHEAD_VERIFIED: %s\n' "$PUBLISHED_GIT_HEAD"
 ```
 
 ### 9. Install locally via bun (NOT npm)
@@ -199,6 +244,8 @@ Repo releases (GitHub tags/releases) are announced on `git-releases`, not
 - NEVER publish without running tests and build first
 - NEVER publish with secrets in the staged diff
 - NEVER publish without posting intent to `git-publishing` first (step 7)
+- NEVER publish through raw `bun publish` or `npm publish`; use the worktree-safe helper
+- NEVER report success until registry `gitHead` equals the exact source HEAD
 - ALWAYS confirm in the intent thread after — published or aborted, no silent exits
 - NEVER bump minor or major — patch only unless user explicitly says otherwise
 - NEVER skip the CLI verification step

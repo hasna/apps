@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.1.62] - 2026-08-10
+
+### Fixed
+- Worktree-originated npm releases now publish from a disposable normal clone
+  at the exact source HEAD and verify the registry `gitHead`, preserving source
+  worktree metadata on success, publish failure, and forced termination.
+
 ## [0.1.61] - 2026-08-09
 
 ### Removed

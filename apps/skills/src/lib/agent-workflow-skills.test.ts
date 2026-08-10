@@ -56,6 +56,38 @@ describe("repository-managed agent workflow skills", () => {
     ]);
   });
 
+  test("skill-publish carries the worktree-safe npm provenance helper and regression", () => {
+    expect(filesBelow(join(AGENT_SKILLS_DIR, "skill-publish")).sort()).toEqual([
+      "SKILL.md",
+      "scripts/capture_registry.js",
+      "scripts/publish_with_git_head.sh",
+      "scripts/test_publish_with_git_head.sh",
+    ]);
+  });
+
+  test("skill-publish routes npm through the helper and verifies registry gitHead", () => {
+    const skill = readFileSync(join(AGENT_SKILLS_DIR, "skill-publish", "SKILL.md"), "utf8");
+    expect(skill).toContain("scripts/publish_with_git_head.sh");
+    expect(skill).toContain('secrets exec "$TOKEN_PATH" --as NODE_AUTH_TOKEN');
+    expect(skill).toContain('--userconfig "$NPMRC"');
+    expect(skill).toContain("GITHEAD_VERIFIED:");
+    expect(skill).toContain('grep -iE "^\\\\+([^+].*)?($SECRET_PATTERN)"');
+    expect(skill).not.toContain('grep -iE "^\\\\+[^+].*($SECRET_PATTERN)"');
+    expect(skill).not.toContain("bun publish --access");
+  });
+
+  test("skill-publish preserves npm gitHead and restores linked worktrees", () => {
+    const result = spawnSync(
+      "bash",
+      ["agent-skills/skill-publish/scripts/test_publish_with_git_head.sh"],
+      {
+        cwd: ROOT,
+        encoding: "utf8",
+      },
+    );
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+  });
+
   test("inbox-monitor handles rotating machine identity without hiding same-name traffic", () => {
     const result = spawnSync("bash", ["agent-skills/inbox-monitor/scripts/test_inbox_monitor.sh"], {
       cwd: ROOT,
