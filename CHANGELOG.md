@@ -6,6 +6,21 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.124]
+
+### Fixed
+
+- Local and PostgreSQL project-resource-link migrations now use the trusted
+  production producer verifier by default, binding receipt lookup, exact
+  readback, and inverse verification to Projects-owned authority, tenant,
+  corpus, capability, and target state.
+- Producer receipts are isolated by canonical project subject and manifest
+  target, so a valid receipt from one project cannot authorize another
+  project's migration.
+- Canonical forward and inverse authority requests remain compatible with the
+  shipped `@hasna/conversations` producer contract, while unsupported producer
+  authorities fail closed.
+
 ## [0.1.123]
 
 ### Fixed
