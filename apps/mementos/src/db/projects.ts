@@ -331,6 +331,7 @@ function makeProjectUpdateReceipt(input: {
   target_id: string;
   before_project: Project;
   after_project: Project;
+  result_digest?: string;
   accepted_receipt_id?: string | null;
 }): ProjectUpdateReceipt {
   const createdAt = now();
@@ -350,7 +351,7 @@ function makeProjectUpdateReceipt(input: {
     target_id: input.target_id,
     expected_revision: input.request.expected_revision,
     result_revision: input.after_project.updated_at,
-    result_digest: digestProjectUpdateValue(input.after_project),
+    result_digest: input.result_digest ?? digestProjectUpdateValue(input.after_project),
     accepted_receipt_id: input.accepted_receipt_id ?? null,
     before_project: input.before_project,
     after_project: input.after_project,
@@ -491,6 +492,7 @@ export function applyProjectUpdate(
   request: ProjectGuardedUpdateRequest,
   db?: Database,
   expectedIdentity: ProjectAuthorityIdentity = PROJECT_UPDATE_AUTHORITY,
+  resultDigestForProject?: (project: Project) => string,
 ): ProjectGuardedUpdateResult {
   assertProjectUpdateRequest(request, expectedIdentity);
   const normalized = normalizeProjectUpdateInput(request.updates);
@@ -578,6 +580,7 @@ export function applyProjectUpdate(
       target_id: id,
       before_project: before,
       after_project: readback,
+      result_digest: resultDigestForProject?.(readback),
     });
     insertProjectUpdateReceipt(d, receipt);
     return { dry_run: false, applied: true, project: readback, receipt };
@@ -589,6 +592,7 @@ export function rollbackProjectUpdate(
   request: ProjectGuardedRollbackRequest,
   db?: Database,
   expectedIdentity: ProjectAuthorityIdentity = PROJECT_UPDATE_AUTHORITY,
+  resultDigestForProject?: (project: Project) => string,
 ): ProjectGuardedUpdateResult {
   assertProjectUpdateRequest(request, expectedIdentity);
   assertBoundedIdentifier(request.accepted_receipt_id, "accepted_receipt_id");
@@ -686,6 +690,7 @@ export function rollbackProjectUpdate(
       target_id: id,
       before_project: current,
       after_project: readback,
+      result_digest: resultDigestForProject?.(readback),
       accepted_receipt_id: accepted.receipt_id,
     });
     insertProjectUpdateReceipt(d, receipt);

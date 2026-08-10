@@ -1186,13 +1186,17 @@ implements MementosProjectRegistrationAuthority {
         "guarded project operation did not return its exact immutable receipt",
       );
     }
-    const record = projectRecord(this.db, project);
-    if (record.revision !== receipt.result_revision) {
+    if (project.updated_at !== receipt.result_revision) {
       throw new MementosProjectRegistrationError(
         "MEMENTOS_PROJECT_REGISTRATION_ATOMICITY_UNAVAILABLE",
         "guarded project result revision did not match its immutable receipt",
       );
     }
+    const record: MementosProjectRegistrationRecord = {
+      target_id: targetId,
+      revision: receipt.result_revision,
+      digest: receipt.result_digest,
+    };
     return withBoundedResponseControl({
       dry_run: false as const,
       applied: true as const,
@@ -1219,7 +1223,7 @@ implements MementosProjectRegistrationAuthority {
         idempotency_key: request.idempotency_key,
         expected_revision: request.expected_revision,
         updates: { path },
-      }, this.db as SqliteAdapter, identity);
+      }, this.db as SqliteAdapter, identity, (project) => projectRecord(this.db, project).digest);
       return this.boundedGuardedUpdateResult(
         targetId,
         result.project,
@@ -1317,7 +1321,7 @@ implements MementosProjectRegistrationAuthority {
         idempotency_key: request.idempotency_key,
         expected_revision: request.expected_revision,
         accepted_receipt_id: accepted.receipt_id,
-      }, this.db as SqliteAdapter, identity);
+      }, this.db as SqliteAdapter, identity, (project) => projectRecord(this.db, project).digest);
       return this.boundedGuardedUpdateResult(
         targetId,
         result.project,

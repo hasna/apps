@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { getDatabase, resetDatabase } from "../db/database.js";
 import { getProject, registerProject } from "../db/projects.js";
+import { createSessionJob, getSessionJob } from "../db/session-jobs.js";
 import {
   MEMENTOS_PROJECT_GUARDED_UPDATE_ROUTE,
   createLocalMementosProjectRegistrationAuthority,
@@ -11,6 +12,7 @@ import {
   deriveMementosProjectRegistrationIdempotencyKey,
   digestMementosProjectRegistrationValue,
   handleMementosProjectRegistrationHttpRequest,
+  type MementosProjectGuardedUpdateResult,
   type MementosProjectRegistrationPathHandle,
   type MementosProjectRegistrationRequest,
 } from "./index.js";
@@ -24,6 +26,11 @@ class OwnedPathHandle implements MementosProjectRegistrationPathHandle {
   withOwnedPath<T>(consumer: (absolutePath: string) => T): T {
     return consumer(this.value);
   }
+}
+
+function acceptedGuardedResult(result: MementosProjectGuardedUpdateResult) {
+  const { response_control: _responseControl, ...accepted } = result;
+  return accepted;
 }
 
 beforeEach(() => {
@@ -81,9 +88,14 @@ describe("Mementos project registration HTTP authority", () => {
     };
 
     const accepted = await guardedClient.guardedUpdateProject(original.id, updateRequest);
+    const forwardReference = createSessionJob({
+      session_id: "http-guarded-forward-replay-reference",
+      transcript: "supported HTTP forward replay reference",
+      project_id: original.id,
+    }, db);
+    expect(getSessionJob(forwardReference.id, db)?.project_id).toBe(original.id);
+    expect(getProject(original.id, db)?.updated_at).toBe(accepted.record.revision);
     const duplicate = await guardedClient.guardedUpdateProject(original.id, updateRequest);
-    expect(duplicate.receipt).toEqual(accepted.receipt);
-    expect(duplicate.record).toEqual(accepted.record);
 
     const lookupRequest = {
       authority: "mementos",
@@ -129,6 +141,39 @@ describe("Mementos project registration HTTP authority", () => {
       },
     });
     expect(getProject(original.id, db)).toEqual(original);
+    const rollbackReadback = await guardedClient.readExact({
+      resource_kind: "project",
+      target_id: original.id,
+      target: new OwnedPathHandle(originalPath),
+      response_byte_limit: 65_536,
+      time_budget_ms: 5_000,
+    });
+    expect(rollbackReadback).toEqual(rolledBack.record);
+    const rollbackReference = createSessionJob({
+      session_id: "http-guarded-rollback-replay-reference",
+      transcript: "supported HTTP rollback replay reference",
+      project_id: original.id,
+    }, db);
+    expect(getSessionJob(rollbackReference.id, db)?.project_id).toBe(original.id);
+    expect(getProject(original.id, db)?.updated_at).toBe(rolledBack.record.revision);
+    const rollbackDuplicate = await guardedClient.rollbackGuardedProjectUpdate(original.id, {
+      ...lookupRequest,
+      operation_id: "http-guarded-update-v1",
+      step_id: "mementos_project_path_rollback",
+      idempotency_key: "http-guarded-rollback-key-0001",
+      expected_revision: accepted.receipt.result_revision,
+      accepted_receipt: accepted.receipt,
+    });
+    const replayedPublicResults = [
+      acceptedGuardedResult(duplicate),
+      acceptedGuardedResult(rollbackDuplicate),
+    ];
+    const acceptedPublicResults = [
+      acceptedGuardedResult(accepted),
+      acceptedGuardedResult(rolledBack),
+    ];
+    expect(replayedPublicResults).toEqual(acceptedPublicResults);
+    expect(JSON.stringify(replayedPublicResults)).toBe(JSON.stringify(acceptedPublicResults));
     expect(requestBodies.some((body) => body.includes(updatedPath))).toBe(true);
     expect(responseBodies.every((body) => !body.includes(originalPath))).toBe(true);
     expect(responseBodies.every((body) => !body.includes(updatedPath))).toBe(true);
@@ -137,6 +182,8 @@ describe("Mementos project registration HTTP authority", () => {
       .not.toContain(originalPath);
     expect(JSON.stringify({ capability, accepted, duplicate, lookup, rolledBack }))
       .not.toContain(updatedPath);
+    expect(JSON.stringify(replayedPublicResults)).not.toContain(originalPath);
+    expect(JSON.stringify(replayedPublicResults)).not.toContain(updatedPath);
   });
 
   test("round-trips the private path through the public client without returning it", async () => {

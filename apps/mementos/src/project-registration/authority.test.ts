@@ -12,6 +12,7 @@ import {
   createLocalMementosProjectRegistrationAuthority,
   deriveMementosProjectRegistrationIdempotencyKey,
   digestMementosProjectRegistrationValue,
+  type MementosProjectGuardedUpdateResult,
   type MementosProjectRegistrationAuthority,
   type MementosProjectRegistrationFaultPoint,
   type MementosProjectRegistrationReceipt,
@@ -29,6 +30,11 @@ class OwnedPathHandle {
   withOwnedPath<T>(consumer: (absolutePath: string) => T): T {
     return consumer(this.value);
   }
+}
+
+function acceptedGuardedResult(result: MementosProjectGuardedUpdateResult) {
+  const { response_control: _responseControl, ...accepted } = result;
+  return accepted;
 }
 
 function authority(
@@ -252,9 +258,14 @@ describe("package-owned Mementos project registration authority", () => {
     });
     expect(readback).toEqual(accepted.record);
 
+    const forwardReference = createSessionJob({
+      session_id: "guarded-forward-replay-reference",
+      transcript: "supported forward replay reference",
+      project_id: original.id,
+    }, db);
+    expect(getSessionJob(forwardReference.id, db)?.project_id).toBe(original.id);
+    expect(getProject(original.id, db)?.updated_at).toBe(accepted.record.revision);
     const duplicate = await guardedAuthority.guardedUpdateProject(original.id, updateRequest);
-    expect(duplicate.receipt).toEqual(accepted.receipt);
-    expect(duplicate.record).toEqual(accepted.record);
 
     const lookupRequest = {
       authority: "mementos",
@@ -319,12 +330,37 @@ describe("package-owned Mementos project registration authority", () => {
     expect(getProject(original.id, db)).toEqual(original);
     expect(JSON.stringify(rolledBack)).not.toContain(originalPath);
     expect(JSON.stringify(rolledBack)).not.toContain(updatedPath);
+    const rollbackReadback = await registrationAuthority.readExact({
+      resource_kind: "project",
+      target_id: original.id,
+      target: new OwnedPathHandle(originalPath),
+      response_byte_limit: 65_536,
+      time_budget_ms: 5_000,
+    });
+    expect(rollbackReadback).toEqual(rolledBack.record);
+    const rollbackReference = createSessionJob({
+      session_id: "guarded-rollback-replay-reference",
+      transcript: "supported rollback replay reference",
+      project_id: original.id,
+    }, db);
+    expect(getSessionJob(rollbackReference.id, db)?.project_id).toBe(original.id);
+    expect(getProject(original.id, db)?.updated_at).toBe(rolledBack.record.revision);
     const rollbackDuplicate = await guardedAuthority.rollbackGuardedProjectUpdate(
       original.id,
       rollbackRequest,
     );
-    expect(rollbackDuplicate.receipt).toEqual(rolledBack.receipt);
-    expect(rollbackDuplicate.record).toEqual(rolledBack.record);
+    const replayedPublicResults = [
+      acceptedGuardedResult(duplicate),
+      acceptedGuardedResult(rollbackDuplicate),
+    ];
+    const acceptedPublicResults = [
+      acceptedGuardedResult(accepted),
+      acceptedGuardedResult(rolledBack),
+    ];
+    expect(replayedPublicResults).toEqual(acceptedPublicResults);
+    expect(JSON.stringify(replayedPublicResults)).toBe(JSON.stringify(acceptedPublicResults));
+    expect(JSON.stringify(replayedPublicResults)).not.toContain(originalPath);
+    expect(JSON.stringify(replayedPublicResults)).not.toContain(updatedPath);
   });
 
   test("creates once, reads back by full id, and returns duplicate-of-accepted on byte-identical retry", async () => {
