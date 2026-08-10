@@ -214,6 +214,8 @@ function runUsageCli(args: string[]) {
   });
 }
 
+const CLI_TIMEOUT_MS = 60_000;
+
 beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), "accounts-usage-profiles-home-"));
   root = mkdtempSync(join(tmpdir(), "accounts-usage-profiles-root-"));
@@ -313,6 +315,11 @@ test("default profile usage covers every registered tool, stays cache-only, and 
   expect(byTool.get("codewith")?.active).toBe(true);
   expect(byTool.get("codewith")?.applied).toBe(false);
   expect(byTool.get("claude")?.launchable.status).toBe("yes");
+  expect((byTool.get("claude") as any)?.identity).toMatchObject({
+    owner: { accountUuid: ACCOUNT_UUID, email: "claude@example.test", status: "ok" },
+    occupant: { accountUuid: ACCOUNT_UUID, email: "claude@example.test", status: "ok" },
+    occupiedByAnotherAccount: false,
+  });
   expect(byTool.get("opencode")?.launchable).toEqual({
     status: "unknown",
     reason: "auth-not-locally-verifiable",
@@ -531,9 +538,18 @@ test("missing and foreign-occupied Claude directories remain non-launchable", as
     { env: fixtureEnv(), processScanner: () => [] },
     resolveStore(fixtureEnv()),
   );
-  expect(occupied.profiles.find((profile) => profile.tool === "claude")?.launchable).toEqual({
+  const occupiedProfile = occupied.profiles.find((profile) => profile.tool === "claude");
+  expect(occupiedProfile?.launchable).toEqual({
     status: "no",
     reason: "profile-directory-occupied",
+  });
+  expect((occupiedProfile as any)?.identity).toMatchObject({
+    owner: { accountUuid: ACCOUNT_UUID, email: "claude@example.test" },
+    occupant: {
+      accountUuid: "22222222-2222-4222-8222-222222222222",
+      email: "occupant@example.test",
+    },
+    occupiedByAnotherAccount: true,
   });
 });
 
@@ -572,4 +588,4 @@ test("usage CLI emits versioned backwards-compatible JSON and safe cross-tool hu
       expect(rendered).not.toContain(forbidden);
     }
   }
-});
+}, CLI_TIMEOUT_MS);

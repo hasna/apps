@@ -802,6 +802,23 @@ export function planParkedRecovery(
   }
 
   const layers = profileCredentialLayers(profileDir, tool);
+  const own = readOAuthSnapshot(profileDir) ?? centralOAuthRecordForProfile(profileDir, tool);
+  const ownUuid = typeof own?.accountUuid === "string" ? own.accountUuid.toLowerCase() : undefined;
+  const liveUuidRaw = readOAuthFromPaths(profileAccountJsonPaths(profileDir, tool))?.accountUuid;
+  const liveUuid = typeof liveUuidRaw === "string" ? liveUuidRaw.toLowerCase() : undefined;
+  if (isRestorableState(layers.live.state) && ownUuid && liveUuid && ownUuid !== liveUuid) {
+    const attached = listDirLiveSessions(profileDir).filter((s) => s.alive).length;
+    return {
+      outcome: "identity-would-change",
+      detail:
+        `the dir currently carries a different account after an in-place switch or login, and its credential is ` +
+        `${describeCredentialState(layers.live.state)}. Restoring "${profileName ?? "this profile"}"'s own parked ` +
+        `credential would change which account the dir presents` +
+        `${attached > 0 ? `, with ${attached} live session(s) attached` : ""}, so it is left to an explicit ` +
+        `\`accounts switch-account\`.`,
+      layers,
+    };
+  }
   if (isRestorableState(layers.live.state)) {
     return {
       outcome: "live-credential-usable",
@@ -835,10 +852,6 @@ export function planParkedRecovery(
   // pairing one account's identity with another account's token, which is the
   // precise failure the identity-index layering exists to prevent. Unknown
   // identity is a refusal, not a free pass.
-  const own = readOAuthSnapshot(profileDir) ?? centralOAuthRecordForProfile(profileDir, tool);
-  const ownUuid = typeof own?.accountUuid === "string" ? own.accountUuid.toLowerCase() : undefined;
-  const liveUuidRaw = readOAuthFromPaths(profileAccountJsonPaths(profileDir, tool))?.accountUuid;
-  const liveUuid = typeof liveUuidRaw === "string" ? liveUuidRaw.toLowerCase() : undefined;
   if (!ownUuid) {
     return {
       outcome: "identity-unknown",
@@ -855,7 +868,7 @@ export function planParkedRecovery(
     return {
       outcome: "identity-would-change",
       detail:
-        `the dir currently carries a different account after an in-place switch, and its credential is ` +
+        `the dir currently carries a different account after an in-place switch or login, and its credential is ` +
         `${describeCredentialState(layers.live.state)}. Restoring "${profileName ?? "this profile"}"'s own parked ` +
         `credential would change which account the dir presents` +
         `${attached > 0 ? `, with ${attached} live session(s) attached` : ""}, so it is left to an explicit ` +
@@ -863,7 +876,6 @@ export function planParkedRecovery(
       layers,
     };
   }
-
   // CROSS-DIRECTORY GATE (defect bb267228). Everything above reasons about THIS
   // directory only, and the destructive case does not live in this directory:
   // the parked copy can be a SUPERSEDED PREDECESSOR of an account whose current

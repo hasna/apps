@@ -8,6 +8,8 @@ import {
   type AccountStatus,
 } from "./identity-index.js";
 import {
+  DEFAULT_CLAIM_WINDOW_MS,
+  readRecentTargetClaims,
   readUsageCache,
   selectHealthiestAccount,
   writeUsageCache,
@@ -232,6 +234,20 @@ export type ProfileLaunchability = {
     | "profile-readiness-unavailable";
 };
 
+export interface ProfileAccountIdentity {
+  accountUuid: string;
+  email?: string;
+  status: AccountStatus;
+}
+
+export interface ProfileIdentityUsage {
+  /** The account this profile is labelled/snapshotted to own. */
+  owner?: ProfileAccountIdentity;
+  /** The account currently occupying the profile's live config dir. */
+  occupant?: ProfileAccountIdentity;
+  occupiedByAnotherAccount: boolean;
+}
+
 /**
  * Safe, operator-facing row for the cross-tool usage view. Deliberately omits
  * config paths, process commands, auth payloads, and provider responses: the
@@ -244,6 +260,7 @@ export interface ProfileUsageEntry {
   lastSwitchAt: string | null;
   lastSwitchSource: "profile-selection" | "in-place-switch" | "unknown";
   occupancy: ProfileOccupancy;
+  identity: ProfileIdentityUsage;
   active: boolean;
   applied: boolean;
   launchable: ProfileLaunchability;
@@ -382,6 +399,30 @@ function profileOccupancy(
   };
 }
 
+function profileAccountIdentity(account: AccountUsageEntry | undefined): ProfileAccountIdentity | undefined {
+  if (!account) return undefined;
+  return {
+    accountUuid: account.accountUuid,
+    ...(account.email ? { email: account.email } : {}),
+    status: account.status,
+  };
+}
+
+function profileIdentityUsage(
+  owner: AccountUsageEntry | undefined,
+  occupant: AccountUsageEntry | undefined,
+): ProfileIdentityUsage {
+  const ownerIdentity = profileAccountIdentity(owner);
+  const occupantIdentity = profileAccountIdentity(occupant);
+  return {
+    ...(ownerIdentity ? { owner: ownerIdentity } : {}),
+    ...(occupantIdentity ? { occupant: occupantIdentity } : {}),
+    occupiedByAnotherAccount: Boolean(
+      ownerIdentity && occupantIdentity && ownerIdentity.accountUuid !== occupantIdentity.accountUuid,
+    ),
+  };
+}
+
 /**
  * Build one fast cross-tool view. The default path is cache-only for provider
  * usage and runs one generic process scan per represented tool; it never
@@ -418,8 +459,10 @@ export async function collectProfilesUsage(
     readiness.providers.map((provider) => [provider.id, provider.available]),
   );
   const claudeAccountByProfile = new Map<string, AccountUsageEntry>();
+  const claudeOccupantByProfile = new Map<string, AccountUsageEntry>();
   for (const account of accounts) {
     for (const name of account.profiles) claudeAccountByProfile.set(name, account);
+    for (const name of account.occupies) claudeOccupantByProfile.set(name, account);
   }
 
   const profilesByTool = new Map<string, Profile[]>();
@@ -453,13 +496,16 @@ export async function collectProfilesUsage(
       .sort((a, b) => a.tool.localeCompare(b.tool) || a.name.localeCompare(b.name))
       .map((profile) => {
         const profileReadiness = readinessByProfile.get(readinessKey(profile.tool, profile.name));
+        const ownerAccount = profile.tool === "claude" ? claudeAccountByProfile.get(profile.name) : undefined;
+        const occupantAccount =
+          profile.tool === "claude" ? claudeOccupantByProfile.get(profile.name) : undefined;
         return {
           name: profile.name,
           tool: profile.tool,
           usage: profileUsageAvailability(
             profile,
             profileReadiness,
-            profile.tool === "claude" ? claudeAccountByProfile.get(profile.name) : undefined,
+            ownerAccount,
             now,
           ),
           ...latestSwitch(profile),
@@ -469,12 +515,13 @@ export async function collectProfilesUsage(
             profilesByTool.get(profile.tool) ?? [],
             !scanFailedTools.has(profile.tool),
           ),
+          identity: profileIdentityUsage(ownerAccount, occupantAccount),
           active: profileReadiness?.active ?? false,
           applied: profileReadiness?.applied ?? false,
           launchable: profileLaunchability(
             profileReadiness,
             providerAvailableByTool.get(profile.tool),
-            profile.tool === "claude" ? claudeAccountByProfile.get(profile.name) : undefined,
+            ownerAccount,
             opts.refresh === true,
           ),
         };
@@ -590,6 +637,7 @@ export async function pickHealthiestAccount(
       // `accounts pick --healthiest` happily recommends the account the hook
       // just fled, and the CLI and the hook disagree about the same pool.
       cooldowns: opts.cooldowns ?? activeCooldowns(readExhaustionLedger(), now),
+      recentClaims: opts.recentClaims ?? readRecentTargetClaims(DEFAULT_CLAIM_WINDOW_MS, now),
     },
   );
 

@@ -1310,6 +1310,13 @@ function formatProfileUsage(entry: ProfileUsageEntry): string {
   const state = [entry.active ? "active" : "", entry.applied ? "applied" : ""]
     .filter(Boolean)
     .join(", ") || "inactive";
+  const identity =
+    entry.identity.owner &&
+    entry.identity.occupant &&
+    entry.identity.owner.accountUuid !== entry.identity.occupant.accountUuid
+      ? ` · owner ${entry.identity.owner.email ?? entry.identity.owner.accountUuid}` +
+        ` · occupant ${entry.identity.occupant.email ?? entry.identity.occupant.accountUuid}`
+      : "";
   const launch =
     entry.launchable.status === "yes"
       ? chalk.green(`yes (${entry.launchable.reason})`)
@@ -1318,7 +1325,7 @@ function formatProfileUsage(entry: ProfileUsageEntry): string {
         : chalk.yellow(`unknown (${entry.launchable.reason})`);
   return (
     `${chalk.cyan(entry.tool)}/${chalk.bold(entry.name)}  ${usage}\n` +
-    chalk.dim(`    last switch ${last} · ${occupancy} · ${state} · launchable `) +
+    chalk.dim(`    last switch ${last} · ${occupancy}${identity} · ${state} · launchable `) +
     launch
   );
 }

@@ -360,6 +360,7 @@ const SHAPE_UUID = {
   recoverable: "d0000000-0002-4002-8002-000000000002",
   nothingParked: "d0000000-0003-4003-8003-000000000003",
   switchedAway: "d0000000-0004-4004-8004-000000000004",
+  healthyForeign: "d0000000-0005-4005-8005-000000000005",
 } as const;
 
 /**
@@ -446,6 +447,21 @@ test("the planner can reach every outcome — the agreement matrix is discrimina
   }
   expect(seen.size).toBe(shapes().length);
 }, MATRIX_TIMEOUT_MS);
+
+test("a healthy foreign live occupant reaches identity-would-change before live-credential-usable", () => {
+  const dir = makeProfile("occupiedhealthy", SHAPE_UUID.healthyForeign, "lance");
+  writeFileSync(join(dir, ".claude.json"), identityJson(UUID_Y, "lara"));
+  writeFileSync(join(dir, ".credentials.json"), credentialJson("lara"));
+
+  const plan = planParkedRecovery(dir, tool(), "occupiedhealthy");
+  const executed = recoverParkedCredential(dir, tool(), "occupiedhealthy");
+
+  expect(plan.outcome).toBe("identity-would-change");
+  expect(plan.detail).toContain("different account");
+  expect(plan.detail).toContain("accounts switch-account");
+  expect(executed.outcome).toBe("identity-would-change");
+  expect(executed.detail).toBe(plan.detail);
+});
 
 test("dry-run and the real run reach the SAME verdict for every shape", () => {
   // The defect: the dry-run branch computed `parkedCredentialVerdict` and never

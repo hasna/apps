@@ -220,6 +220,30 @@ test(
 );
 
 test(
+  "a healthy foreign live occupant is shown as an identity/occupancy block, not hidden as usable",
+  () => {
+    const dir = addProfileDir("account037", UUID_OWN, "lance");
+    parkAll();
+    writeFileSync(join(dir, ".claude.json"), identityJson(UUID_GUEST, "lara"));
+    writeFileSync(join(dir, ".credentials.json"), credentialJson("lara"));
+
+    const dry = rowFor(repairRows("--dry-run"), "account037");
+    const real = rowFor(repairRows(), "account037");
+
+    expect(dry.outcome).toBe(real.outcome);
+    expect(dry.outcome).toBe("identity-would-change");
+    expect(dry.detail).toContain("different account");
+    expect(dry.detail).toContain("accounts switch-account");
+
+    const human = runCli("repair-auth", "--dry-run");
+    expect(human.status, human.stderr).toBe(0);
+    expect(human.stdout).toContain("identity-would-change");
+    expect(human.stdout).toContain("account037");
+  },
+  CLI_TIMEOUT_MS,
+);
+
+test(
   "a refusal is reported to the operator, not filtered out of the human output",
   () => {
     // `account-live-elsewhere` is the outcome that stops a destructive blanket

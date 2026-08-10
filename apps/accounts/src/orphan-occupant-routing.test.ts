@@ -5,6 +5,8 @@ import { loadStore, profilesDir, saveStore } from "./storage.js";
 import { getTool } from "./lib/tools.js";
 import { resolveStore } from "./lib/store.js";
 import { collectAccountsUsage, pickHealthiestAccount } from "./lib/usage-report.js";
+import { writeAutoSwitchState, writeUsageCache } from "./lib/auto-switch.js";
+import { parseUsageResponse } from "./lib/usage.js";
 import {
   dirCredentialsFile,
   profileAuthDir,
@@ -102,6 +104,21 @@ function usageFetch(percentUsedByToken: Record<string, number>): typeof fetch {
   }) as unknown as typeof fetch;
 }
 
+function seedUsage(uuid: string, percentUsed: number): void {
+  const fetchedAt = new Date().toISOString();
+  const resets = new Date(Date.now() + 3_600_000).toISOString();
+  writeUsageCache({
+    accountUuid: uuid,
+    fetchedAt,
+    usage: parseUsageResponse({
+      limits: [
+        { kind: "session", group: "session", percent: percentUsed, resets_at: resets },
+        { kind: "weekly_all", group: "weekly", percent: percentUsed, resets_at: resets },
+      ],
+    }),
+  });
+}
+
 /**
  * account006: own identity HOST, live files GUEST (the in-session `/login`
  * residue). spare: a plain, wholly self-consistent profile.
@@ -186,6 +203,45 @@ test("POSITIVE CONTROL: a healthiest account that DOES have a door is still chos
   expect(picked.candidate?.accountUuid).toBe(UUID_GUEST);
   expect(picked.profileName).toBe("guestowned");
   expect(picked.doorless).toBe(0);
+});
+
+test("pickHealthiestAccount applies the recent-claim damper when distinct reachable targets exist", async () => {
+  const now = new Date("2026-08-10T05:12:00Z");
+  const first = profileDir("account101");
+  const second = profileDir("account102");
+  park(first, "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa", "first@example.test", "first");
+  occupy(first, "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa", "first@example.test", "first");
+  park(second, "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb", "second@example.test", "second");
+  occupy(second, "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb", "second@example.test", "second");
+  seedUsage("aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa", 1); // 99% headroom, but just claimed
+  seedUsage("bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb", 5); // 95% headroom, still eligible
+  writeAutoSwitchState(
+    {
+      lastSwitchAt: now.toISOString(),
+      fromUuid: "exhausted",
+      toUuid: "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+      outcome: "switched",
+    },
+    profileDir("already-switched"),
+  );
+
+  const picked = await pickHealthiestAccount(
+    {
+      tool: "claude",
+      currentUuid: "exhausted",
+      cachedOnly: true,
+      maxAgeMs: 60_000,
+      now,
+    },
+    resolveStore(),
+  );
+
+  expect(picked.profileName).toBe("account102");
+  expect(picked.candidate?.accountUuid).toBe("bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb");
+  expect(picked.selection.ranked.map((candidate) => candidate.accountUuid)).toEqual([
+    "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb",
+    "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+  ]);
 });
 
 test("POSITIVE CONTROL: when NO ranked candidate has a door, none is invented", async () => {
