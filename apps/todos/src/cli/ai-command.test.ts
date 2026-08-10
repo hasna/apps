@@ -722,6 +722,17 @@ describe("todos ai input and configuration contract", () => {
 });
 
 describe("todos ai authority contract", () => {
+  test("CLI default minimal host keeps safe get_task without configured workspace trust", async () => {
+    const run = await runAi(["ai", "inspect", "--format", "json"]);
+
+    expect(run.captured?.tool_names).toEqual([
+      "get_task",
+      "request_input",
+    ]);
+    expect(run.captured?.tool_names).not.toContain("update_task");
+    expect(run.exitCode).toBe(0);
+  });
+
   test("CLI host policy exposes only fixed reads and clarification regardless of provider prompt", async () => {
     const timestamp = "2026-08-09T00:00:00.000Z";
     storedConfig({}, {

@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.25] - 2026-08-10
+
+### Fixed
+
+- **Default Todos AI sessions retain their safe task read tool.** An
+  unconfigured workspace now keeps the minimal profile's bounded `get_task`
+  tool while list and mutation tools remain subject to explicit workspace
+  trust.
+
 ## [0.15.24] - 2026-08-10
 
 ### Fixed
