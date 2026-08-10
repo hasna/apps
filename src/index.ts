@@ -481,6 +481,7 @@ export type {
   ProjectRegistrationExistingAuthorityReconciliation,
   ProjectRegistrationExistingConversationsChannelReconciliation,
   ProjectRegistrationExistingMementosProjectReconciliation,
+  ProjectRegistrationHistoricalAuthorityIdentity,
   ProjectRegistrationArtifact,
   ProjectRegistrationAuthorities,
   ProjectRegistrationAuthorityAdapter,

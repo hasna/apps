@@ -156,6 +156,7 @@ class FakeAuthority implements ProjectRegistrationAuthorityAdapter {
   readonly receiptByKey = new Map<string, ProjectRegistrationAuthorityReceipt>();
   readonly acceptedReceiptByTarget = new Map<string, ProjectRegistrationAuthorityReceipt>();
   readonly requests: ProjectRegistrationAuthorityRequest[] = [];
+  readonly lookupRequests: ProjectRegistrationAuthorityLookupRequest[] = [];
   readonly readbackRequests: Array<{
     resource_kind: ProjectRegistrationResourceKind;
     target_id: string;
@@ -176,7 +177,15 @@ class FakeAuthority implements ProjectRegistrationAuthorityAdapter {
   beforeCreate: ((request: ProjectRegistrationAuthorityRequest) => void | Promise<void>) | null = null;
   channelTargetIdFactory: ((selectorDigest: string) => string) | null = null;
   targetIdFactory: ((request: ProjectRegistrationAuthorityRequest, selectorDigest: string) => string) | null = null;
+  lookupReceiptTransform: ((
+    receipt: ProjectRegistrationAuthorityReceipt,
+    request: ProjectRegistrationAuthorityLookupRequest,
+  ) => ProjectRegistrationAuthorityReceipt) | null = null;
+  route: string;
   packageVersion = "test-1.0.0";
+  authorityId: string;
+  tenantId = "tenant-test";
+  corpusId: string;
   capabilityCalls = 0;
 
   constructor(
@@ -188,17 +197,21 @@ class FakeAuthority implements ProjectRegistrationAuthorityAdapter {
     readonly disconnectAfterCreateSteps: Set<string> = new Set(),
     readonly failLookupSteps: Set<string> = new Set(),
     readonly driftDirectoryOnFailSteps: Set<string> = new Set(),
-  ) {}
+  ) {
+    this.route = `${this.authority}.project-registration.v1`;
+    this.authorityId = `${this.authority}-authority`;
+    this.corpusId = `${this.authority}-test-corpus`;
+  }
 
   async capability(): Promise<ProjectRegistrationAuthorityCapability> {
     this.capabilityCalls += 1;
     return {
       authority: this.authority,
-      route: `${this.authority}.project-registration.v1`,
+      route: this.route,
       package_version: this.packageVersion,
-      authority_id: `${this.authority}-authority`,
-      tenant_id: "tenant-test",
-      corpus_id: `${this.authority}-test-corpus`,
+      authority_id: this.authorityId,
+      tenant_id: this.tenantId,
+      corpus_id: this.corpusId,
       supported_resources: this.resources,
       conditional_create: true,
       immutable_receipts: true,
@@ -322,14 +335,11 @@ class FakeAuthority implements ProjectRegistrationAuthorityAdapter {
   async lookupReceipt(
     request: ProjectRegistrationAuthorityLookupRequest,
   ): Promise<ProjectRegistrationAuthorityLookupResult> {
+    this.lookupRequests.push(request);
     if (request.max_items !== 1) throw new Error("max_items must be one");
     if (
       request.authority !== this.authority
-      || request.authority_route !== `${this.authority}.project-registration.v1`
-      || request.package_version !== this.packageVersion
-      || request.authority_id !== `${this.authority}-authority`
-      || request.tenant_id !== "tenant-test"
-      || request.corpus_id !== `${this.authority}-test-corpus`
+      || request.tenant_id !== this.tenantId
       || !request.target_selector
     ) {
       throw new Error("lookup identity selector mismatch");
@@ -337,12 +347,31 @@ class FakeAuthority implements ProjectRegistrationAuthorityAdapter {
     if (this.failLookupSteps.has(request.step_id)) throw new Error("injected terminal lookup failure");
     const receipt = this.receiptByKey.get(request.idempotency_key);
     if (!receipt) throw new Error("receipt not found");
+    if (
+      receipt.authority !== request.authority
+      || receipt.route !== request.authority_route
+      || receipt.package_version !== request.package_version
+      || receipt.authority_id !== request.authority_id
+      || receipt.tenant_id !== request.tenant_id
+      || receipt.corpus_id !== request.corpus_id
+      || receipt.operation_id !== request.operation_id
+      || receipt.step_id !== request.step_id
+      || receipt.resource_kind !== request.resource_kind
+      || receipt.direction !== request.direction
+      || receipt.idempotency_key !== request.idempotency_key
+      || receipt.request_digest !== request.request_digest
+      || receipt.precondition_digest !== request.precondition_digest
+      || (request.target_id !== undefined && receipt.target_id !== request.target_id)
+    ) {
+      throw new Error("lookup immutable selector mismatch");
+    }
+    const responseReceipt = this.lookupReceiptTransform?.(receipt, request) ?? receipt;
     return {
-      receipt,
+      receipt: responseReceipt,
       response_control: {
         response_byte_limit: request.response_byte_limit,
         time_budget_ms: request.time_budget_ms,
-        response_bytes: Buffer.byteLength(JSON.stringify(receipt)),
+        response_bytes: Buffer.byteLength(JSON.stringify(responseReceipt)),
         elapsed_ms: 0,
         complete: true,
         truncated: false,
@@ -463,11 +492,11 @@ class FakeAuthority implements ProjectRegistrationAuthorityAdapter {
         outcome: result.outcome,
       })).slice(0, 20)}`,
       authority: this.authority,
-      route: `${this.authority}.project-registration.v1`,
+      route: this.route,
       package_version: this.packageVersion,
-      authority_id: `${this.authority}-authority`,
-      tenant_id: "tenant-test",
-      corpus_id: `${this.authority}-test-corpus`,
+      authority_id: this.authorityId,
+      tenant_id: this.tenantId,
+      corpus_id: this.corpusId,
       operation_id: request.operation_id,
       step_id: request.step_id,
       resource_kind: request.resource_kind,
@@ -1399,6 +1428,269 @@ describe("full project registration transaction", () => {
       expect(getWorkspace(projectId, db)?.integrations.conversations_channel).toBe("fleet-resources");
     } finally {
       sourceDb.close();
+      db.close();
+    }
+  });
+
+  test("reconciles an authentic historical receipt without rewriting its authority tuple", async () => {
+    const sourceDb = makeDb();
+    const db = makeDb();
+    const sourceTarget = tempTarget("historical-receipt-source");
+    const target = tempTarget("historical-receipt-recovery");
+    const sourceFakes = fakeAuthorities();
+    const recoveryFakes = fakeAuthorities();
+    const sourceOperationId = "op-historical-receipt-source";
+    const recoveryOperationId = "op-historical-receipt-recovery";
+    const projectId = "wks_historicalreceipt01";
+    const historicalIdentity = {
+      route: "conversations.project-registration.v1",
+      package_version: "0.5.36",
+      authority_id: "conversations-authority-v1",
+      corpus_id: "conversations-corpus-v1",
+    };
+    const currentIdentity = {
+      route: "conversations.project-registration.v2",
+      package_version: "0.5.41",
+      authority_id: "conversations-authority-v2",
+      corpus_id: "conversations-corpus-v2",
+    };
+    Object.assign(sourceFakes.conversations, {
+      route: historicalIdentity.route,
+      packageVersion: historicalIdentity.package_version,
+      authorityId: historicalIdentity.authority_id,
+      corpusId: historicalIdentity.corpus_id,
+    });
+    try {
+      const source = await registerFullProject(
+        input(sourceOperationId, sourceTarget.target, { id: projectId }),
+        { db: sourceDb, authorities: sourceFakes.authorities },
+      );
+      const sourceReceipt = source.receipts.find(
+        (receipt) => receipt.step_id === "conversations_channel" && receipt.direction === "forward",
+      )!.authority_receipt!;
+      const channelId = sourceReceipt.target_id!;
+      expect(sourceReceipt).toMatchObject({
+        authority: "conversations",
+        route: historicalIdentity.route,
+        package_version: historicalIdentity.package_version,
+        authority_id: historicalIdentity.authority_id,
+        tenant_id: "tenant-test",
+        corpus_id: historicalIdentity.corpus_id,
+        operation_id: sourceOperationId,
+        step_id: "conversations_channel",
+        target_id: channelId,
+        outcome: "accepted",
+        created_by_operation: true,
+      });
+
+      Object.assign(sourceFakes.conversations, {
+        route: currentIdentity.route,
+        packageVersion: currentIdentity.package_version,
+        authorityId: currentIdentity.authority_id,
+        corpusId: currentIdentity.corpus_id,
+      });
+      sourceFakes.conversations.preexistingTerminalReasons.set(channelId, "preexisting_equivalent");
+      const authorities: ProjectRegistrationAuthorities = {
+        todos: recoveryFakes.todos,
+        mementos: recoveryFakes.mementos,
+        conversations: sourceFakes.conversations,
+      };
+      const request = {
+        ...input(recoveryOperationId, target.target, { id: projectId }),
+        reconcile_existing: {
+          conversations_channel: {
+            source_operation_id: sourceOperationId,
+            source_authority_identity: historicalIdentity,
+            target_id: channelId,
+          },
+        },
+      } as unknown as FullProjectRegistrationInput;
+
+      const result = await registerFullProject(request, { db, authorities });
+
+      expect(result).toMatchObject({ ok: true, outcome: "accepted" });
+      const currentLookup = sourceFakes.conversations.lookupRequests.find(
+        (lookup) => lookup.operation_id === recoveryOperationId,
+      );
+      expect(currentLookup).toMatchObject({
+        authority: "conversations",
+        authority_route: currentIdentity.route,
+        package_version: currentIdentity.package_version,
+        authority_id: currentIdentity.authority_id,
+        tenant_id: "tenant-test",
+        corpus_id: currentIdentity.corpus_id,
+        target_id: channelId,
+      });
+      const historicalLookup = sourceFakes.conversations.lookupRequests.find(
+        (lookup) => lookup.operation_id === sourceOperationId,
+      );
+      expect(historicalLookup).toMatchObject({
+        authority: sourceReceipt.authority,
+        authority_route: sourceReceipt.route,
+        package_version: sourceReceipt.package_version,
+        authority_id: sourceReceipt.authority_id,
+        tenant_id: sourceReceipt.tenant_id,
+        corpus_id: sourceReceipt.corpus_id,
+        operation_id: sourceReceipt.operation_id,
+        step_id: sourceReceipt.step_id,
+        resource_kind: sourceReceipt.resource_kind,
+        direction: sourceReceipt.direction,
+        idempotency_key: sourceReceipt.idempotency_key,
+        request_digest: sourceReceipt.request_digest,
+        precondition_digest: sourceReceipt.precondition_digest,
+        target_id: sourceReceipt.target_id,
+      });
+      expect(result.receipts.find(
+        (receipt) => receipt.step_id === "conversations_channel",
+      )).toMatchObject({
+        outcome: "accepted",
+        reason: "adopted_preexisting",
+        target_id: channelId,
+        preconditions: [expect.objectContaining({
+          predicate: "prior_registration_receipt",
+          source_operation_id: sourceOperationId,
+          source_receipt_id: sourceReceipt.receipt_id,
+          source_authority_route: historicalIdentity.route,
+          source_package_version: historicalIdentity.package_version,
+          source_authority_id: historicalIdentity.authority_id,
+          source_tenant_id: "tenant-test",
+          source_corpus_id: historicalIdentity.corpus_id,
+        })],
+      });
+      expect(sourceFakes.conversations.records.has(channelId)).toBe(true);
+      expect(sourceFakes.conversations.compensated).toEqual([]);
+    } finally {
+      sourceDb.close();
+      db.close();
+    }
+  });
+
+  test("rejects substituted historical receipt identity, request, target, and result evidence", async () => {
+    const substitutions: Array<{
+      name: string;
+      change: Partial<ProjectRegistrationAuthorityReceipt>;
+    }> = [
+      { name: "authority", change: { authority: "todos" } },
+      { name: "route", change: { route: "conversations.project-registration.forged" } },
+      { name: "package_version", change: { package_version: "999.0.0" } },
+      { name: "authority_id", change: { authority_id: "forged-conversations-authority" } },
+      { name: "tenant_id", change: { tenant_id: "tenant-other" } },
+      { name: "corpus_id", change: { corpus_id: "conversations-corpus-forged" } },
+      { name: "operation_id", change: { operation_id: "op-historical-receipt-forged" } },
+      { name: "step_id", change: { step_id: "conversations_channel_forged" } },
+      { name: "resource_kind", change: { resource_kind: "project" } },
+      { name: "direction", change: { direction: "inverse" } },
+      { name: "idempotency_key", change: { idempotency_key: "prk_forged" } },
+      { name: "request_digest", change: { request_digest: sha256("forged-request") } },
+      { name: "precondition_digest", change: { precondition_digest: sha256("forged-precondition") } },
+      { name: "target_id", change: { target_id: "chn_33333333333333333333333333333333" } },
+      { name: "result_revision", change: { result_revision: "rev_forged" } },
+      { name: "result_digest", change: { result_digest: sha256("forged-result") } },
+    ];
+
+    for (const [index, substitution] of substitutions.entries()) {
+      const sourceDb = makeDb();
+      const db = makeDb();
+      const sourceTarget = tempTarget(`historical-negative-source-${index}`);
+      const target = tempTarget(`historical-negative-recovery-${index}`);
+      const sourceFakes = fakeAuthorities();
+      const recoveryFakes = fakeAuthorities();
+      const sourceOperationId = `op-historical-negative-source-${index}`;
+      const recoveryOperationId = `op-historical-negative-recovery-${index}`;
+      const projectId = `wks_historicalnegative${String(index).padStart(2, "0")}`;
+      const historicalIdentity = {
+        route: "conversations.project-registration.v1",
+        package_version: "0.5.36",
+        authority_id: "conversations-authority-v1",
+        corpus_id: "conversations-corpus-v1",
+      };
+      Object.assign(sourceFakes.conversations, {
+        route: historicalIdentity.route,
+        packageVersion: historicalIdentity.package_version,
+        authorityId: historicalIdentity.authority_id,
+        corpusId: historicalIdentity.corpus_id,
+      });
+      try {
+        const source = await registerFullProject(
+          input(sourceOperationId, sourceTarget.target, { id: projectId }),
+          { db: sourceDb, authorities: sourceFakes.authorities },
+        );
+        const sourceReceipt = source.receipts.find(
+          (receipt) => receipt.step_id === "conversations_channel" && receipt.direction === "forward",
+        )!.authority_receipt!;
+        const channelId = sourceReceipt.target_id!;
+        Object.assign(sourceFakes.conversations, {
+          route: "conversations.project-registration.v2",
+          packageVersion: "0.5.41",
+          authorityId: "conversations-authority-v2",
+          corpusId: "conversations-corpus-v2",
+        });
+        sourceFakes.conversations.preexistingTerminalReasons.set(channelId, "preexisting_equivalent");
+        sourceFakes.conversations.lookupReceiptTransform = (receipt, lookup) =>
+          lookup.operation_id === sourceOperationId
+            ? { ...receipt, ...substitution.change }
+            : receipt;
+        const authorities: ProjectRegistrationAuthorities = {
+          todos: recoveryFakes.todos,
+          mementos: recoveryFakes.mementos,
+          conversations: sourceFakes.conversations,
+        };
+        const request = {
+          ...input(recoveryOperationId, target.target, { id: projectId }),
+          reconcile_existing: {
+            conversations_channel: {
+              source_operation_id: sourceOperationId,
+              source_authority_identity: historicalIdentity,
+              target_id: channelId,
+            },
+          },
+        } as unknown as FullProjectRegistrationInput;
+
+        const result = await registerFullProject(request, { db, authorities });
+
+        expect({
+          substitution: substitution.name,
+          ok: result.ok,
+          outcome: result.outcome,
+          failed_step: result.failed_step,
+          reason_code: result.reason_code,
+        }).toEqual({
+          substitution: substitution.name,
+          ok: false,
+          outcome: "rolled_back",
+          failed_step: "conversations_channel",
+          reason_code: "registration_reconciliation_receipt_unverified",
+        });
+        expect(sourceFakes.conversations.records.has(channelId)).toBe(true);
+        expect(sourceFakes.conversations.compensated).toEqual([]);
+      } finally {
+        sourceDb.close();
+        db.close();
+      }
+    }
+  });
+
+  test("keeps normal current-mutation receipt identity validation strict", async () => {
+    const db = makeDb();
+    const target = tempTarget("current-receipt-identity-strict");
+    const fakes = fakeAuthorities();
+    fakes.conversations.lookupReceiptTransform = (receipt, request) =>
+      request.step_id === "conversations_channel"
+        ? { ...receipt, route: "conversations.project-registration.historical" }
+        : receipt;
+    try {
+      const result = await registerFullProject(
+        input("op-current-receipt-identity-strict", target.target),
+        { db, authorities: fakes.authorities },
+      );
+
+      expect(result).toMatchObject({
+        ok: false,
+        outcome: "split_state",
+        failed_step: "conversations_channel",
+        reason_code: "authority_terminal_outcome_unresolved",
+      });
+    } finally {
       db.close();
     }
   });

@@ -361,6 +361,12 @@ describe("project-first CLI surface", () => {
       reconcile_existing: {
         conversations_channel: {
           source_operation_id: "op-cli-register-full",
+          source_authority_identity: {
+            route: "/v1/project-registration/channels",
+            package_version: "0.5.36",
+            authority_id: "conversations",
+            corpus_id: "cor_historical",
+          },
           target_id: "2bc0bf57-c08c-4c97-8d7b-631baf54c30a",
         },
         todos_project: {
@@ -443,6 +449,57 @@ describe("project-first CLI surface", () => {
         outcome: "no_go",
         reason_code: "invalid_bounded_stdin_request",
         error: "register-full reconcile_existing.conversations_channel.target_id must be a string",
+      });
+      expect(existsSync(dbPath)).toBe(false);
+      expect(existsSync(targetPath)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("register-full refuses a caller-supplied tenant in historical authority identity", async () => {
+    const root = mkdtempSync(join(tmpdir(), "projects-cli-register-full-historical-tenant-"));
+    const dbPath = join(root, "projects.db");
+    const targetPath = join(root, "fleet-resources");
+    const payload = JSON.stringify({
+      operation_id: "op-cli-register-full-historical-tenant",
+      project: {
+        id: "wks_005285827590a93b70e5",
+        name: "Fleet Resources",
+        slug: "fleet-resources",
+        kind: "project",
+      },
+      target_path: targetPath,
+      goals_markdown: "# Goals\n\n- Reconcile safely.\n",
+      reconcile_existing: {
+        conversations_channel: {
+          source_operation_id: "op-cli-register-full",
+          source_authority_identity: {
+            route: "/v1/project-registration/channels",
+            package_version: "0.5.36",
+            authority_id: "conversations",
+            tenant_id: "tenant-other",
+            corpus_id: "cor_historical",
+          },
+          target_id: "2bc0bf57-c08c-4c97-8d7b-631baf54c30a",
+        },
+      },
+      response_byte_limit: 512_000,
+      time_budget_ms: 10_000,
+    });
+    try {
+      const result = await runProjectsWithStdin(
+        ["register-full", "--json"],
+        payload,
+        { HASNA_PROJECTS_DB_PATH: dbPath },
+      );
+      expect(result.exitCode).toBe(1);
+      expect(text(result.stderr)).toBe("");
+      expect(JSON.parse(text(result.stdout))).toMatchObject({
+        ok: false,
+        outcome: "no_go",
+        reason_code: "invalid_bounded_stdin_request",
+        error: "register-full reconcile_existing.conversations_channel.source_authority_identity requires only route, package_version, authority_id, and corpus_id",
       });
       expect(existsSync(dbPath)).toBe(false);
       expect(existsSync(targetPath)).toBe(false);

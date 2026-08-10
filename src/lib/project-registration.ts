@@ -292,8 +292,16 @@ export interface FullProjectRegistrationProjectInput {
   command?: string;
 }
 
+export interface ProjectRegistrationHistoricalAuthorityIdentity {
+  route: string;
+  package_version: string;
+  authority_id: string;
+  corpus_id: string;
+}
+
 export interface ProjectRegistrationExistingConversationsChannelReconciliation {
   source_operation_id: string;
+  source_authority_identity?: ProjectRegistrationHistoricalAuthorityIdentity;
   target_id: string;
 }
 
@@ -467,6 +475,7 @@ type ExistingAuthorityAdoption =
   | {
       evidence: "prior_registration_receipt";
       source_operation_id: string;
+      source_authority_identity?: ProjectRegistrationHistoricalAuthorityIdentity;
       expected_target_id: string;
       allowed_terminal_reasons: readonly string[];
       source_desired?: JsonObject;
@@ -822,6 +831,34 @@ function assertRegistrationOperationId(operationId: string): void {
   }
 }
 
+function validateHistoricalAuthorityIdentity(
+  value: unknown,
+  label: string,
+): ProjectRegistrationHistoricalAuthorityIdentity {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${label} must be an object`);
+  }
+  const identity = value as Record<string, unknown>;
+  const expectedKeys = ["authority_id", "corpus_id", "package_version", "route"];
+  if (canonicalJson(Object.keys(identity).sort()) !== canonicalJson(expectedKeys)) {
+    throw new Error(
+      `${label} requires only route, package_version, authority_id, and corpus_id`,
+    );
+  }
+  for (const field of expectedKeys) {
+    const fieldValue = identity[field];
+    if (typeof fieldValue !== "string" || !fieldValue.trim()) {
+      throw new Error(`${label}.${field} must be a non-empty string`);
+    }
+  }
+  return {
+    route: identity.route as string,
+    package_version: identity.package_version as string,
+    authority_id: identity.authority_id as string,
+    corpus_id: identity.corpus_id as string,
+  };
+}
+
 function validateReconcileExisting(
   input: FullProjectRegistrationInput,
   mode: "create" | "retrofit",
@@ -866,9 +903,18 @@ function validateReconcileExisting(
     const expectedKeys = key === "mementos_project"
       ? ["source_operation_id", "source_target", "target_id"]
       : ["source_operation_id", "target_id"];
-    if (canonicalJson(Object.keys(entry).sort()) !== canonicalJson(expectedKeys)) {
+    const actualKeys = Object.keys(entry).sort();
+    const conversationsKeys = [...expectedKeys, "source_authority_identity"].sort();
+    const keysValid = canonicalJson(actualKeys) === canonicalJson(expectedKeys)
+      || (
+        key === "conversations_channel"
+        && canonicalJson(actualKeys) === canonicalJson(conversationsKeys)
+      );
+    if (!keysValid) {
       throw new Error(
-        `project registration reconcile_existing.${key} requires only ${expectedKeys.join(" and ")}`,
+        key === "conversations_channel"
+          ? "project registration reconcile_existing.conversations_channel requires source_operation_id and target_id, with optional source_authority_identity"
+          : `project registration reconcile_existing.${key} requires only ${expectedKeys.join(" and ")}`,
       );
     }
     if (typeof entry.source_operation_id !== "string") {
@@ -907,6 +953,19 @@ function validateReconcileExisting(
         source_operation_id: entry.source_operation_id,
         target_id: targetId as string,
         source_target_path_digest: entry.source_target.digest,
+      };
+    } else if (key === "conversations_channel") {
+      value.conversations_channel = {
+        source_operation_id: entry.source_operation_id,
+        target_id: targetId as string,
+        ...(entry.source_authority_identity === undefined
+          ? {}
+          : {
+              source_authority_identity: validateHistoricalAuthorityIdentity(
+                entry.source_authority_identity,
+                "project registration reconcile_existing.conversations_channel.source_authority_identity",
+              ),
+            }),
       };
     } else {
       value[key] = {
@@ -1384,27 +1443,10 @@ function createOrReadManifest(input: {
   })();
 }
 
-function validateAuthorityReceipt(
+function validateAuthorityReceiptResult(
   receipt: ProjectRegistrationAuthorityReceipt,
   request: ProjectRegistrationAuthorityRequest,
-  capability: ProjectRegistrationAuthorityCapability,
 ): void {
-  const mismatch = (
-    receipt.authority !== capability.authority
-    || receipt.route !== capability.route
-    || receipt.package_version !== capability.package_version
-    || receipt.authority_id !== capability.authority_id
-    || receipt.tenant_id !== capability.tenant_id
-    || receipt.corpus_id !== capability.corpus_id
-    || receipt.operation_id !== request.operation_id
-    || receipt.step_id !== request.step_id
-    || receipt.resource_kind !== request.resource_kind
-    || receipt.direction !== request.direction
-    || receipt.idempotency_key !== request.idempotency_key
-    || receipt.request_digest !== request.request_digest
-    || receipt.precondition_digest !== request.precondition_digest
-  );
-  if (mismatch) throw new ProjectRegistrationStepError(request.step_id, "authority_receipt_mismatch");
   if (!receipt.receipt_id || !receipt.route || !receipt.package_version) {
     throw new ProjectRegistrationStepError(request.step_id, "authority_receipt_incomplete");
   }
@@ -1439,6 +1481,55 @@ function validateAuthorityReceipt(
       throw new ProjectRegistrationStepError(request.step_id, "authority_inverse_duplicate_missing_link");
     }
   }
+}
+
+function validateAuthorityReceipt(
+  receipt: ProjectRegistrationAuthorityReceipt,
+  request: ProjectRegistrationAuthorityRequest,
+  capability: ProjectRegistrationAuthorityCapability,
+): void {
+  const mismatch = (
+    receipt.authority !== capability.authority
+    || receipt.route !== capability.route
+    || receipt.package_version !== capability.package_version
+    || receipt.authority_id !== capability.authority_id
+    || receipt.tenant_id !== capability.tenant_id
+    || receipt.corpus_id !== capability.corpus_id
+    || receipt.operation_id !== request.operation_id
+    || receipt.step_id !== request.step_id
+    || receipt.resource_kind !== request.resource_kind
+    || receipt.direction !== request.direction
+    || receipt.idempotency_key !== request.idempotency_key
+    || receipt.request_digest !== request.request_digest
+    || receipt.precondition_digest !== request.precondition_digest
+  );
+  if (mismatch) throw new ProjectRegistrationStepError(request.step_id, "authority_receipt_mismatch");
+  validateAuthorityReceiptResult(receipt, request);
+}
+
+function validatePriorAuthorityReceipt(
+  receipt: ProjectRegistrationAuthorityReceipt,
+  request: ProjectRegistrationAuthorityRequest,
+  currentCapability: ProjectRegistrationAuthorityCapability,
+): void {
+  const mismatch = (
+    receipt.authority !== currentCapability.authority
+    || receipt.route !== request.authority_route
+    || receipt.package_version !== request.package_version
+    || receipt.authority_id !== request.authority_id
+    || receipt.tenant_id !== currentCapability.tenant_id
+    || receipt.tenant_id !== request.tenant_id
+    || receipt.corpus_id !== request.corpus_id
+    || receipt.operation_id !== request.operation_id
+    || receipt.step_id !== request.step_id
+    || receipt.resource_kind !== request.resource_kind
+    || receipt.direction !== request.direction
+    || receipt.idempotency_key !== request.idempotency_key
+    || receipt.request_digest !== request.request_digest
+    || receipt.precondition_digest !== request.precondition_digest
+  );
+  if (mismatch) throw new ProjectRegistrationStepError(request.step_id, "authority_receipt_mismatch");
+  validateAuthorityReceiptResult(receipt, request);
 }
 
 function validateAuthorityLookup(
@@ -1517,6 +1608,7 @@ async function lookupPriorRegistrationReceipt(input: {
   adoption: Extract<ExistingAuthorityAdoption, { evidence: "prior_registration_receipt" }>;
 }): Promise<ProjectRegistrationAuthorityReceipt> {
   const sourceDesired = input.adoption.source_desired ?? input.request.desired;
+  const sourceAuthorityIdentity = input.adoption.source_authority_identity;
   const sourceRequestDigest = sha256(canonicalJson(sourceDesired));
   const sourceIdempotencyKey = deriveProjectRegistrationIdempotencyKey({
     operation_id: input.adoption.source_operation_id,
@@ -1529,6 +1621,11 @@ async function lookupPriorRegistrationReceipt(input: {
   const sourceRequest: ProjectRegistrationAuthorityRequest = {
     ...input.request,
     operation_id: input.adoption.source_operation_id,
+    authority_route: sourceAuthorityIdentity?.route ?? input.request.authority_route,
+    package_version: sourceAuthorityIdentity?.package_version ?? input.request.package_version,
+    authority_id: sourceAuthorityIdentity?.authority_id ?? input.request.authority_id,
+    tenant_id: input.capability.tenant_id,
+    corpus_id: sourceAuthorityIdentity?.corpus_id ?? input.request.corpus_id,
     idempotency_key: sourceIdempotencyKey,
     request_digest: sourceRequestDigest,
     desired: sourceDesired,
@@ -1557,7 +1654,7 @@ async function lookupPriorRegistrationReceipt(input: {
   try {
     const lookup = await input.adapter.lookupReceipt(lookupRequest);
     validateAuthorityLookup(lookup, lookupRequest);
-    validateAuthorityReceipt(lookup.receipt, sourceRequest, input.capability);
+    validatePriorAuthorityReceipt(lookup.receipt, sourceRequest, input.capability);
     const sourceReceipt = lookup.receipt;
     const acceptedProof = sourceReceipt.outcome === "accepted"
       ? sourceReceipt.created_by_operation === true
@@ -1666,6 +1763,12 @@ function appendAdoptedAuthorityReceipt(input: {
         source_accepted_receipt_id: input.source_receipt?.outcome === "accepted"
           ? input.source_receipt.receipt_id
           : input.source_receipt?.duplicate_of_receipt_id ?? null,
+        source_authority: input.source_receipt?.authority ?? null,
+        source_authority_route: input.source_receipt?.route ?? null,
+        source_package_version: input.source_receipt?.package_version ?? null,
+        source_authority_id: input.source_receipt?.authority_id ?? null,
+        source_tenant_id: input.source_receipt?.tenant_id ?? null,
+        source_corpus_id: input.source_receipt?.corpus_id ?? null,
         expected_target_id: input.adoption.expected_target_id,
         authority_receipt_id: input.authority_receipt.receipt_id,
         exact_authority_lookup: true,
@@ -3823,6 +3926,7 @@ export async function registerFullProject(
         ? {
             evidence: "prior_registration_receipt",
             source_operation_id: channelReconciliation.source_operation_id,
+            source_authority_identity: channelReconciliation.source_authority_identity,
             expected_target_id: channelReconciliation.target_id,
             allowed_terminal_reasons: ["preexisting_equivalent"],
           }

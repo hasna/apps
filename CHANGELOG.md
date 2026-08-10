@@ -6,6 +6,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.123]
+
+### Fixed
+
+- Receipt-backed Conversations reconciliation can now query an explicit
+  historical route, package version, authority ID, and corpus ID while keeping
+  the current tenant and authority name as authorization boundaries. Projects
+  validates the returned immutable receipt against that exact historical
+  request and current target readback without weakening normal mutation
+  receipt validation or rewriting provenance.
+
 ## [0.1.122]
 
 ### Fixed

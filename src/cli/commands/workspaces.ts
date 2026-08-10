@@ -35,6 +35,7 @@ import {
   registerFullProject,
   type FullProjectRegistrationProjectInput,
   type FullProjectRegistrationReconciliationInput,
+  type ProjectRegistrationHistoricalAuthorityIdentity,
 } from "../../lib/project-registration.js";
 import { productionProjectRegistrationAuthorities } from "../../lib/production-project-registration-authorities.js";
 import { doctorWorkspace } from "../../lib/workspace-doctor.js";
@@ -264,6 +265,32 @@ async function readBoundedStdinJson(maxBytes = FULL_REGISTRATION_STDIN_LIMIT): P
   return JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
 }
 
+function parseHistoricalAuthorityIdentity(
+  value: unknown,
+  label: string,
+): ProjectRegistrationHistoricalAuthorityIdentity {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${label} must be an object`);
+  }
+  const identity = value as Record<string, unknown>;
+  const expectedKeys = ["authority_id", "corpus_id", "package_version", "route"];
+  if (JSON.stringify(Object.keys(identity).sort()) !== JSON.stringify(expectedKeys)) {
+    throw new Error(`${label} requires only route, package_version, authority_id, and corpus_id`);
+  }
+  for (const field of expectedKeys) {
+    const fieldValue = identity[field];
+    if (typeof fieldValue !== "string" || !fieldValue.trim()) {
+      throw new Error(`${label}.${field} must be a non-empty string`);
+    }
+  }
+  return {
+    route: identity.route as string,
+    package_version: identity.package_version as string,
+    authority_id: identity.authority_id as string,
+    corpus_id: identity.corpus_id as string,
+  };
+}
+
 function parseFullRegistrationReconciliation(
   value: unknown,
 ): FullProjectRegistrationReconciliationInput | undefined {
@@ -295,9 +322,18 @@ function parseFullRegistrationReconciliation(
     const expectedKeys = key === "mementos_project"
       ? ["source_operation_id", "source_target_path", "target_id"]
       : ["source_operation_id", "target_id"];
-    if (JSON.stringify(Object.keys(entry).sort()) !== JSON.stringify(expectedKeys)) {
+    const actualKeys = Object.keys(entry).sort();
+    const conversationsKeys = [...expectedKeys, "source_authority_identity"].sort();
+    const keysValid = JSON.stringify(actualKeys) === JSON.stringify(expectedKeys)
+      || (
+        key === "conversations_channel"
+        && JSON.stringify(actualKeys) === JSON.stringify(conversationsKeys)
+      );
+    if (!keysValid) {
       throw new Error(
-        `register-full reconcile_existing.${key} requires only ${expectedKeys.join(" and ")}`,
+        key === "conversations_channel"
+          ? "register-full reconcile_existing.conversations_channel requires source_operation_id and target_id, with optional source_authority_identity"
+          : `register-full reconcile_existing.${key} requires only ${expectedKeys.join(" and ")}`,
       );
     }
     if (typeof entry.source_operation_id !== "string") {
@@ -316,6 +352,19 @@ function parseFullRegistrationReconciliation(
         source_operation_id: entry.source_operation_id,
         target_id: entry.target_id,
         source_target: ProjectRegistrationPathHandle.fromPath(entry.source_target_path),
+      };
+    } else if (key === "conversations_channel") {
+      parsed.conversations_channel = {
+        source_operation_id: entry.source_operation_id,
+        target_id: entry.target_id,
+        ...(entry.source_authority_identity === undefined
+          ? {}
+          : {
+              source_authority_identity: parseHistoricalAuthorityIdentity(
+                entry.source_authority_identity,
+                "register-full reconcile_existing.conversations_channel.source_authority_identity",
+              ),
+            }),
       };
     } else {
       parsed[key] = {
