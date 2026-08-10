@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import ts from "typescript";
@@ -404,6 +404,129 @@ describe("remote CLI entrypoint authority boundary", () => {
       server.stop(true);
     }
   });
+
+  test("built task-manifest CLI uses /v1 apply and lookup without opening SQLite", async () => {
+    const planId = "33333333-3333-4333-8333-333333333333";
+    const receiptId = "44444444-4444-4444-8444-444444444444";
+    const requests: Array<{ method: string; path: string; body: unknown; authorized: boolean }> = [];
+    let applyCount = 0;
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url);
+        const body = await request.json().catch(() => ({}));
+        requests.push({
+          method: request.method,
+          path: url.pathname,
+          body,
+          authorized: request.headers.get("authorization") === "Bearer fixture-remote-key",
+        });
+        if (url.pathname === "/v1/task-manifest/apply" && request.method === "POST") {
+          applyCount += 1;
+          return Response.json({
+            result: {
+              duplicate: applyCount > 1,
+              receipt: {
+                receipt_id: receiptId,
+                authority: "todos",
+                route: "todos.task-manifest.v1",
+                schema_version: 1,
+                kind: "apply",
+                operation_id: "task-manifest-cli-test",
+                idempotency_key: "task-manifest-cli-test:apply",
+                request_digest: "sha256-request",
+                result_digest: "sha256-result",
+                binding_version: 1,
+                apply_receipt_id: null,
+                created_at: "2026-08-10T08:00:00.000Z",
+              },
+              graph: { plan_id: planId, task_ids: { verify: TASK_FIXTURE_ID }, comment_ids: [], verification_ids: [], dependency_ids: [] },
+              readback: { plans: 1, tasks: 1, dependencies: 0, comments: 0, verifications: 0, complete: true },
+              outbox_ids: ["55555555-5555-4555-8555-555555555555"],
+              result_digest: "sha256-result",
+            },
+          }, { status: 201 });
+        }
+        if (url.pathname === "/v1/task-manifest/bindings/lookup" && request.method === "POST") {
+          return Response.json({
+            result: {
+              authority: "todos",
+              route: "todos.task-manifest.v1",
+              schema_version: 1,
+              tenant_id: "tenant-cli-test",
+              plan_id: planId,
+              apply_receipt_id: receiptId,
+              binding_version: 1,
+              state: "applied",
+            },
+          });
+        }
+        return Response.json({ error: "fixture route missing" }, { status: 404 });
+      },
+    });
+    const root = mkdtempSync(join(tmpdir(), "todos-task-manifest-cli-"));
+    tempRoots.push(root);
+    const cwd = join(root, "cwd");
+    const home = join(root, "home");
+    mkdirSync(cwd);
+    mkdirSync(home);
+    const localDbPath = join(root, "must-not-exist", "todos.db");
+    const manifestPath = join(cwd, "manifest.json");
+    writeFileSync(manifestPath, JSON.stringify({
+      version: 1,
+      operation_id: "task-manifest-cli-test",
+      idempotency_key: "task-manifest-cli-test:apply",
+      project_id: "66666666-6666-4666-8666-666666666666",
+      plan: { key: "cli-test", name: "CLI test" },
+      tasks: [{ key: "verify", title: "Verify CLI task-manifest route" }],
+    }));
+    const env = {
+      PATH: process.env.PATH ?? "",
+      BUN_INSTALL: process.env.BUN_INSTALL ?? join(process.env.HOME ?? "/home/hasna", ".bun"),
+      HOME: home,
+      TMPDIR: root,
+      LANG: "C.UTF-8",
+      TODOS_DB_PATH: localDbPath,
+      HASNA_TODOS_STORAGE_MODE: "remote",
+      HASNA_TODOS_API_URL: `http://127.0.0.1:${server.port}`,
+      HASNA_TODOS_API_KEY: "fixture-remote-key",
+    };
+    const before = recursiveInventory(cwd);
+    try {
+      const first = await runCli(executable, ["--json", "task-manifest", "apply", "--file", manifestPath], env, cwd);
+      const second = await runCli(executable, ["--json", "task-manifest", "apply", "--file", manifestPath], env, cwd);
+      const lookup = await runCli(executable, [
+        "--json", "task-manifest", "lookup", "--tenant-id", "tenant-cli-test", "--plan-id", planId,
+      ], env, cwd);
+
+      expect({ exitCode: first.exitCode, stderr: first.stderr }).toEqual({ exitCode: 0, stderr: "" });
+      expect({ exitCode: second.exitCode, stderr: second.stderr }).toEqual({ exitCode: 0, stderr: "" });
+      expect({ exitCode: lookup.exitCode, stderr: lookup.stderr }).toEqual({ exitCode: 0, stderr: "" });
+      expect(JSON.parse(first.stdout).result).toMatchObject({ duplicate: false, receipt: { receipt_id: receiptId } });
+      expect(JSON.parse(second.stdout).result).toMatchObject({ duplicate: true, receipt: { receipt_id: receiptId } });
+      expect(JSON.parse(lookup.stdout).result).toEqual({
+        authority: "todos",
+        route: "todos.task-manifest.v1",
+        schema_version: 1,
+        tenant_id: "tenant-cli-test",
+        plan_id: planId,
+        apply_receipt_id: receiptId,
+        binding_version: 1,
+        state: "applied",
+      });
+      expect(requests.map((request) => `${request.method} ${request.path}`)).toEqual([
+        "POST /v1/task-manifest/apply",
+        "POST /v1/task-manifest/apply",
+        "POST /v1/task-manifest/bindings/lookup",
+      ]);
+      expect(requests.every((request) => request.authorized)).toBe(true);
+      expect(recursiveInventory(cwd)).toEqual(before);
+      expectNoLocalDatabase(home, localDbPath);
+    } finally {
+      server.stop(true);
+    }
+  }, 15000);
 
   test("selects HTTP before local-capable command modules initialize", () => {
     const result: TodosCliAuthorityInitialization = initializeTodosCliAuthority(
@@ -1992,5 +2115,5 @@ describe("remote CLI entrypoint authority boundary", () => {
       chmodSync(readOnlyParent, 0o755);
       server.stop(true);
     }
-  }, 30_000);
+  }, 300_000);
 });

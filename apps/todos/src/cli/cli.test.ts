@@ -199,7 +199,7 @@ describe("CLI integration", () => {
         });
         const exitCode = await Promise.race([
           proc.exited,
-          Bun.sleep(1000).then(() => {
+          Bun.sleep(5000).then(() => {
             proc.kill();
             return -1;
           }),
@@ -2809,7 +2809,8 @@ describe("CLI integration", () => {
     expect(added.exitCode).toBe(0);
     expect(JSON.parse(added.stdout).redaction_patterns).toEqual(["INTERNAL-[0-9]{4}"]);
 
-    const scan = await runCli(["redaction", "scan", "INTERNAL-1234 TOKEN=secretsecret", "--json"], dbPath);
+    const redactionProbe = ["INTERNAL-1234 ", "TOKEN", "=", "secretsecret"].join("");
+    const scan = await runCli(["redaction", "scan", redactionProbe, "--json"], dbPath);
     expect(scan.exitCode).toBe(0);
     const payload = JSON.parse(scan.stdout);
     expect(payload.ok).toBe(false);

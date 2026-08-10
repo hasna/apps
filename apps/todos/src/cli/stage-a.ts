@@ -48,7 +48,7 @@ const REGISTERED_CANONICAL_COMMANDS = [
   "retrospectives", "reviews", "risks", "roadmaps", "runs", "sandbox", "scale", "sdk-fixtures",
   "search", "serve", "show", "sla", "snapshots", "sprint", "stale", "standup",
   "stale-lock-handoff", "start", "status", "steal", "storage", "stream", "summary", "sync", "tag",
-  "task", "template-export", "template-history", "template-import", "template-init", "template-library", "template-preview", "templates",
+  "task", "task-manifest", "template-export", "template-history", "template-import", "template-init", "template-library", "template-preview", "templates",
   "terminal-notifications", "time", "timeline", "today", "todos-md-import", "trace", "trust", "unassign",
   "unlock", "untag", "update", "upgrade", "usage", "verify-providers", "views", "watch",
   "webhooks", "week", "workflow", "workflows", "yesterday",
@@ -143,7 +143,7 @@ const REMOTE_COMMANDS = new Set([
   "doctor", "done", "find-commit", "find-ref", "health", "heartbeat", "history", "init", "inspect", "link-commit",
   "link-ref", "list", "lists", "lock", "log-progress", "move", "next", "plans", "project-rename", "projects", "recap",
   "record-verification", "release", "remove", "show", "standup", "start", "status", "tag", "task", "task-lists",
-  "stale-lock-handoff", "template-export", "template-import", "template-preview", "templates", "timeline", "tl", "unlock", "unassign", "untag", "update",
+  "stale-lock-handoff", "task-manifest", "template-export", "template-import", "template-preview", "templates", "timeline", "tl", "unlock", "unassign", "untag", "update",
 ]);
 const REMOTE_COMMAND_CAPABILITIES =
   new Map<string, TodosRemoteCommandCapability>([
