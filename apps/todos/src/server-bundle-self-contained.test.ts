@@ -1,8 +1,11 @@
-import { describe, expect, test } from "bun:test";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { afterEach, describe, expect, test } from "bun:test";
+import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import packageJson from "../package.json";
+import {
+  createBunPackageIsolatedTempDir,
+  projectExternalBunDuplicatePackageWarning,
+} from "./test/bun-fixture-isolation.js";
 
 const root = join(import.meta.dir, "..");
 
@@ -33,6 +36,19 @@ const root = join(import.meta.dir, "..");
 
 const SERVER_ENTRY = "src/server/index.ts";
 const EXTERNALIZE_CONTRACTS = "--external '@hasna/contracts' --external '@hasna/contracts/*'";
+const serverFixtureRoots: string[] = [];
+
+afterEach(() => {
+  for (const path of serverFixtureRoots.splice(0)) {
+    rmSync(path, { recursive: true, force: true });
+  }
+});
+
+function serverFixtureRoot(prefix: string): string {
+  const path = createBunPackageIsolatedTempDir(prefix);
+  serverFixtureRoots.push(path);
+  return path;
+}
 
 /**
  * The literal `bun build` invocation for the server bundle, taken from the
@@ -65,7 +81,7 @@ function build(outDir: string, extraFlags = ""): void {
  * agree on whether auto-install may rescue a missing module.
  */
 function runnerRoot(bundle: string): { app: string; cache: string; home: string } {
-  const base = mkdtempSync(join(tmpdir(), "todos-runner-"));
+  const base = serverFixtureRoot("todos-runner-");
   const app = join(base, "app");
   const cache = join(base, "cache");
   const home = join(base, "home");
@@ -156,7 +172,8 @@ function unresolvableSpecifiers(app: string, cache: string, home: string): strin
     stderr: "pipe",
   });
 
-  expect(probed.stderr.toString()).toBe("");
+  const projectedStderr = projectExternalBunDuplicatePackageWarning(probed.stderr.toString());
+  expect(projectedStderr.stderr).toBe("");
   expect(probed.exitCode).toBe(0);
 
   return JSON.parse(probed.stdout.toString().trim());
@@ -210,7 +227,7 @@ const KNOWN_UNRESOLVED_IN_RUNNER = [
 
 describe("server bundle is self-contained in the runner image", () => {
   test("no bare specifier survives that the image cannot resolve on its own", () => {
-    const outDir = mkdtempSync(join(tmpdir(), "todos-bundle-"));
+    const outDir = serverFixtureRoot("todos-bundle-");
     build(outDir);
     const { app, cache, home } = runnerRoot(join(outDir, "index.js"));
 
@@ -224,7 +241,7 @@ describe("server bundle is self-contained in the runner image", () => {
   test("POSITIVE CONTROL: the same harness rejects an externalized bundle", () => {
     // If this ever passes an externalized build, the check above is vacuous and
     // proves nothing about the shipped image.
-    const outDir = mkdtempSync(join(tmpdir(), "todos-bundle-external-"));
+    const outDir = serverFixtureRoot("todos-bundle-external-");
     build(outDir, EXTERNALIZE_CONTRACTS);
     const { app, cache, home } = runnerRoot(join(outDir, "index.js"));
 
@@ -234,7 +251,7 @@ describe("server bundle is self-contained in the runner image", () => {
   });
 
   test("the bundle boots past module resolution in a runner-shaped filesystem", () => {
-    const outDir = mkdtempSync(join(tmpdir(), "todos-boot-"));
+    const outDir = serverFixtureRoot("todos-boot-");
     build(outDir);
     const { app, cache, home } = runnerRoot(join(outDir, "index.js"));
 
@@ -246,7 +263,7 @@ describe("server bundle is self-contained in the runner image", () => {
   });
 
   test("POSITIVE CONTROL: an externalized bundle cannot boot in that filesystem", () => {
-    const outDir = mkdtempSync(join(tmpdir(), "todos-boot-external-"));
+    const outDir = serverFixtureRoot("todos-boot-external-");
     build(outDir, EXTERNALIZE_CONTRACTS);
     const { app, cache, home } = runnerRoot(join(outDir, "index.js"));
 
@@ -261,7 +278,7 @@ describe("server bundle is self-contained in the runner image", () => {
     // been fetching its dependency tree from npm on every task start, which is
     // why a package another team published at 11:23Z could break a todos deploy
     // at 15:38Z with no todos commit in between.
-    const outDir = mkdtempSync(join(tmpdir(), "todos-offline-"));
+    const outDir = serverFixtureRoot("todos-offline-");
     build(outDir);
     const { app, cache, home } = runnerRoot(join(outDir, "index.js"));
 
@@ -273,7 +290,7 @@ describe("server bundle is self-contained in the runner image", () => {
   test("POSITIVE CONTROL: an externalized bundle cannot boot without the registry", () => {
     // Proves the case above is a statement about the bundle and not about the
     // harness quietly resolving everything from somewhere else.
-    const outDir = mkdtempSync(join(tmpdir(), "todos-offline-external-"));
+    const outDir = serverFixtureRoot("todos-offline-external-");
     build(outDir, EXTERNALIZE_CONTRACTS);
     const { app, cache, home } = runnerRoot(join(outDir, "index.js"));
 

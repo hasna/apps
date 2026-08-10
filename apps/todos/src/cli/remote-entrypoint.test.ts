@@ -1,6 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import ts from "typescript";
 import {
@@ -10,6 +9,10 @@ import {
   type TodosCliAuthorityInitialization,
 } from "./stage-a.js";
 import { getTodosCloudClient, resetTodosCloudClient } from "./cloud-router.js";
+import {
+  createBunPackageIsolatedTempDir,
+  projectExternalBunDuplicatePackageWarning,
+} from "../test/bun-fixture-isolation.js";
 
 /** `todos add` warns on stderr when a task ends up both unassigned and unattributed —
  *  that warning is the point of the fix, not incidental noise, so it is stripped here
@@ -21,7 +24,6 @@ function stderrWithoutAttributionWarning(stderr: string): string {
     .join("\n")
     .trim();
 }
-
 
 const REPO_ROOT = join(import.meta.dir, "../..");
 
@@ -44,7 +46,7 @@ const STALE_LOCK_HELP_INVOCATIONS: string[][] = [
   ["help", "stale-lock-handoff"],
 ];
 
-type CliResult = { exitCode: number; stdout: string; stderr: string };
+type CliResult = { exitCode: number; stdout: string; stderr: string; removedExternalBunWarnings: string[] };
 
 async function buildCli(): Promise<string> {
   const ignoredBuildParent = join(REPO_ROOT, ".tmp");
@@ -70,11 +72,12 @@ async function runCli(executable: string, args: string[], env: Record<string, st
   });
   const stdout = await new Response(proc.stdout).text();
   const stderr = await new Response(proc.stderr).text();
-  return { exitCode: await proc.exited, stdout, stderr };
+  const projected = projectExternalBunDuplicatePackageWarning(stderr);
+  return { exitCode: await proc.exited, stdout, stderr: projected.stderr, removedExternalBunWarnings: projected.removed };
 }
 
 function staleLockCapabilityEnv(authorityUrl: string): Record<string, string> {
-  const root = mkdtempSync(join(tmpdir(), "todos-stale-lock-capability-"));
+  const root = createBunPackageIsolatedTempDir("todos-stale-lock-capability-");
   tempRoots.push(root);
   const home = join(root, "home");
   mkdirSync(home);
@@ -276,7 +279,7 @@ describe("remote CLI entrypoint authority boundary", () => {
         return Response.json({ error: "fixture route missing" }, { status: 404 });
       },
     });
-    const root = mkdtempSync(join(tmpdir(), "todos-fail-route-"));
+    const root = createBunPackageIsolatedTempDir("todos-fail-route-");
     tempRoots.push(root);
     const cwd = join(root, "cwd");
     const home = join(root, "home");
@@ -369,7 +372,7 @@ describe("remote CLI entrypoint authority boundary", () => {
         return Response.json({ error: "fixture route missing" }, { status: 404 });
       },
     });
-    const root = mkdtempSync(join(tmpdir(), "todos-fail-route-incompatible-"));
+    const root = createBunPackageIsolatedTempDir("todos-fail-route-incompatible-");
     tempRoots.push(root);
     const cwd = join(root, "cwd");
     const home = join(root, "home");
@@ -404,6 +407,233 @@ describe("remote CLI entrypoint authority boundary", () => {
       server.stop(true);
     }
   });
+
+  test("built task-manifest CLI uses /v1 task-manifest routes without opening SQLite", async () => {
+    const planId = "33333333-3333-4333-8333-333333333333";
+    const receiptId = "44444444-4444-4444-8444-444444444444";
+    const compensationReceiptId = "77777777-7777-4777-8777-777777777777";
+    const outboxId = "55555555-5555-4555-8555-555555555555";
+    const remoteKey = "fixture-remote-key";
+    const expectedAuthorization = `${"Bear"}er ${remoteKey}`;
+    const requests: Array<{ method: string; path: string; body: unknown; authorized: boolean }> = [];
+    let applyCount = 0;
+    const applyResult = (duplicate: boolean) => ({
+      duplicate,
+      receipt: {
+        receipt_id: receiptId,
+        authority: "todos",
+        route: "todos.task-manifest.v1",
+        schema_version: 1,
+        kind: "apply",
+        operation_id: "task-manifest-cli-test",
+        idempotency_key: "task-manifest-cli-test:apply",
+        request_digest: "sha256-request",
+        result_digest: "sha256-result",
+        binding_version: 1,
+        apply_receipt_id: null,
+        created_at: "2026-08-10T08:00:00.000Z",
+      },
+      graph: { plan_id: planId, task_ids: { verify: TASK_FIXTURE_ID }, comment_ids: [], verification_ids: [], dependency_ids: [] },
+      readback: { plans: 1, tasks: 1, dependencies: 0, comments: 0, verifications: 0, complete: true },
+      outbox_ids: [outboxId],
+      result_digest: "sha256-result",
+    });
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url);
+        const body = await request.json().catch(() => ({}));
+        requests.push({
+          method: request.method,
+          path: url.pathname,
+          body,
+          authorized: request.headers.get("authorization") === expectedAuthorization,
+        });
+        if (url.pathname === "/v1/task-manifest/capability" && request.method === "GET") {
+          return Response.json({
+            capability: {
+              authority: "todos",
+              route: "todos.task-manifest.v1",
+              schema_version: 1,
+              tenant_id: "tenant-cli-test",
+              backend: "http",
+              deterministic_ids: true,
+              immutable_receipts: true,
+              transactional_outbox: true,
+              idempotent_outbox_delivery: true,
+              exact_bounded_readback: true,
+              conditional_compensation: true,
+              transcript_safe: false,
+              bounds: {
+                tasks: 100,
+                dependencies: 200,
+                comments: 200,
+                verifications: 200,
+                effects: 50,
+                metadata_fields: 100,
+                effect_payload_fields: 100,
+                request_bytes: 262144,
+                response_bytes: 262144,
+              },
+            },
+          });
+        }
+        if (url.pathname === "/v1/task-manifest/apply" && request.method === "POST") {
+          applyCount += 1;
+          return Response.json({ result: applyResult(applyCount > 1) }, { status: 201 });
+        }
+        if (url.pathname === "/v1/task-manifest/read-exact" && request.method === "POST") {
+          return Response.json({ result: applyResult(false) });
+        }
+        if (url.pathname === "/v1/task-manifest/bindings/lookup" && request.method === "POST") {
+          return Response.json({
+            result: {
+              authority: "todos",
+              route: "todos.task-manifest.v1",
+              schema_version: 1,
+              tenant_id: "tenant-cli-test",
+              plan_id: planId,
+              apply_receipt_id: receiptId,
+              binding_version: 1,
+              state: "applied",
+            },
+          });
+        }
+        if (url.pathname === "/v1/task-manifest/compensate" && request.method === "POST") {
+          return Response.json({
+            result: {
+              duplicate: false,
+              receipt: {
+                receipt_id: compensationReceiptId,
+                authority: "todos",
+                route: "todos.task-manifest.v1",
+                schema_version: 1,
+                kind: "compensate",
+                operation_id: "task-manifest-cli-test",
+                idempotency_key: "task-manifest-cli-test:compensate",
+                request_digest: "sha256-compensate-request",
+                result_digest: "sha256-compensate-result",
+                binding_version: 2,
+                apply_receipt_id: receiptId,
+                created_at: "2026-08-10T08:05:00.000Z",
+              },
+              absent: true,
+              readback: { plans: 0, tasks: 0, dependencies: 0, comments: 0, verifications: 0, complete: true },
+            },
+          }, { status: 201 });
+        }
+        if (url.pathname === "/v1/task-manifest/outbox/delivered" && request.method === "POST") {
+          return Response.json({ delivered: true });
+        }
+        return Response.json({ error: "fixture route missing" }, { status: 404 });
+      },
+    });
+    const root = createBunPackageIsolatedTempDir("todos-task-manifest-cli-");
+    tempRoots.push(root);
+    const cwd = join(root, "cwd");
+    const home = join(root, "home");
+    mkdirSync(cwd);
+    mkdirSync(home);
+    const localDbPath = join(root, "must-not-exist", "todos.db");
+    const manifestPath = join(cwd, "manifest.json");
+    writeFileSync(manifestPath, JSON.stringify({
+      version: 1,
+      operation_id: "task-manifest-cli-test",
+      idempotency_key: "task-manifest-cli-test:apply",
+      project_id: "66666666-6666-4666-8666-666666666666",
+      plan: { key: "cli-test", name: "CLI test" },
+      tasks: [{ key: "verify", title: "Verify CLI task-manifest route" }],
+    }));
+    const env = {
+      PATH: process.env.PATH ?? "",
+      BUN_INSTALL: process.env.BUN_INSTALL ?? join(process.env.HOME ?? "/home/hasna", ".bun"),
+      HOME: home,
+      TMPDIR: root,
+      LANG: "C.UTF-8",
+      TODOS_DB_PATH: localDbPath,
+      HASNA_TODOS_STORAGE_MODE: "remote",
+      HASNA_TODOS_API_URL: `http://127.0.0.1:${server.port}`,
+      HASNA_TODOS_API_KEY: remoteKey,
+    };
+    const before = recursiveInventory(cwd);
+    try {
+      const capability = await runCli(executable, ["--json", "task-manifest", "capability"], env, cwd);
+      const first = await runCli(executable, ["--json", "task-manifest", "apply", "--file", manifestPath], env, cwd);
+      const second = await runCli(executable, ["--json", "task-manifest", "apply", "--file", manifestPath], env, cwd);
+      const readExact = await runCli(executable, ["--json", "task-manifest", "read-exact", receiptId], env, cwd);
+      const lookup = await runCli(executable, [
+        "--json", "task-manifest", "lookup", "--tenant-id", "tenant-cli-test", "--plan-id", planId,
+      ], env, cwd);
+      const compensated = await runCli(executable, [
+        "--json", "task-manifest", "compensate", "--receipt-id", receiptId,
+        "--idempotency-key", "task-manifest-cli-test:compensate", "--if-binding-version", "1",
+      ], env, cwd);
+      const delivered = await runCli(executable, ["--json", "task-manifest", "outbox-delivered", outboxId], env, cwd);
+
+      expect({ exitCode: capability.exitCode, stderr: capability.stderr }).toEqual({ exitCode: 0, stderr: "" });
+      expect({ exitCode: first.exitCode, stderr: first.stderr }).toEqual({ exitCode: 0, stderr: "" });
+      expect({ exitCode: second.exitCode, stderr: second.stderr }).toEqual({ exitCode: 0, stderr: "" });
+      expect({ exitCode: readExact.exitCode, stderr: readExact.stderr }).toEqual({ exitCode: 0, stderr: "" });
+      expect({ exitCode: lookup.exitCode, stderr: lookup.stderr }).toEqual({ exitCode: 0, stderr: "" });
+      expect({ exitCode: compensated.exitCode, stderr: compensated.stderr }).toEqual({ exitCode: 0, stderr: "" });
+      expect({ exitCode: delivered.exitCode, stderr: delivered.stderr }).toEqual({ exitCode: 0, stderr: "" });
+      expect(JSON.parse(capability.stdout).capability).toMatchObject({
+        authority: "todos",
+        route: "todos.task-manifest.v1",
+        tenant_id: "tenant-cli-test",
+        backend: "http",
+      });
+      expect(JSON.parse(first.stdout).result).toMatchObject({ duplicate: false, receipt: { receipt_id: receiptId } });
+      expect(JSON.parse(second.stdout).result).toMatchObject({ duplicate: true, receipt: { receipt_id: receiptId } });
+      expect(JSON.parse(readExact.stdout).result).toMatchObject({ duplicate: false, receipt: { receipt_id: receiptId } });
+      expect(JSON.parse(lookup.stdout).result).toEqual({
+        authority: "todos",
+        route: "todos.task-manifest.v1",
+        schema_version: 1,
+        tenant_id: "tenant-cli-test",
+        plan_id: planId,
+        apply_receipt_id: receiptId,
+        binding_version: 1,
+        state: "applied",
+      });
+      expect(JSON.parse(compensated.stdout).result).toMatchObject({
+        duplicate: false,
+        receipt: { receipt_id: compensationReceiptId, apply_receipt_id: receiptId, binding_version: 2 },
+        absent: true,
+      });
+      expect(JSON.parse(delivered.stdout)).toEqual({ delivered: true });
+      expect(requests.map((request) => `${request.method} ${request.path}`)).toEqual([
+        "GET /v1/task-manifest/capability",
+        "POST /v1/task-manifest/apply",
+        "POST /v1/task-manifest/apply",
+        "POST /v1/task-manifest/read-exact",
+        "POST /v1/task-manifest/bindings/lookup",
+        "POST /v1/task-manifest/compensate",
+        "POST /v1/task-manifest/outbox/delivered",
+      ]);
+      expect(requests[3]!.body).toEqual({ receipt_id: receiptId });
+      expect(requests[4]!.body).toEqual({
+        authority: "todos",
+        route: "todos.task-manifest.v1",
+        schema_version: 1,
+        tenant_id: "tenant-cli-test",
+        plan_id: planId,
+        max_items: 1,
+      });
+      expect(requests[5]!.body).toEqual({
+        receipt_id: receiptId,
+        idempotency_key: "task-manifest-cli-test:compensate",
+        if_binding_version: 1,
+      });
+      expect(requests[6]!.body).toEqual({ outbox_id: outboxId });
+      expect(requests.every((request) => request.authorized)).toBe(true);
+      expect(recursiveInventory(cwd)).toEqual(before);
+      expectNoLocalDatabase(home, localDbPath);
+    } finally {
+      server.stop(true);
+    }
+  }, 30000);
 
   test("selects HTTP before local-capable command modules initialize", () => {
     const result: TodosCliAuthorityInitialization = initializeTodosCliAuthority(
@@ -578,7 +808,7 @@ describe("remote CLI entrypoint authority boundary", () => {
         return Response.json({ error: "Stage A should have rejected before HTTP" }, { status: 500 });
       },
     });
-    const root = mkdtempSync(join(tmpdir(), "todos-stage-a-adversarial-"));
+    const root = createBunPackageIsolatedTempDir("todos-stage-a-adversarial-");
     tempRoots.push(root);
     const cwd = join(root, "cwd");
     const home = join(root, "home");
@@ -664,7 +894,7 @@ describe("remote CLI entrypoint authority boundary", () => {
         return Response.json({ error: "fixture route missing" }, { status: 404 });
       },
     });
-    const root = mkdtempSync(join(tmpdir(), "todos-remote-deregister-"));
+    const root = createBunPackageIsolatedTempDir("todos-remote-deregister-");
     tempRoots.push(root);
     const cwd = join(root, "cwd");
     mkdirSync(cwd);
@@ -774,7 +1004,7 @@ describe("remote CLI entrypoint authority boundary", () => {
     const env = {
       PATH: process.env.PATH ?? "",
       BUN_INSTALL: process.env.BUN_INSTALL ?? join(process.env.HOME ?? "/home/hasna", ".bun"),
-      HOME: mkdtempSync(join(tmpdir(), "todos-remote-help-")),
+      HOME: createBunPackageIsolatedTempDir("todos-remote-help-"),
       LANG: "C.UTF-8",
       HASNA_TODOS_STORAGE_MODE: "remote",
       HASNA_TODOS_API_URL: "https://authority.invalid",
@@ -904,7 +1134,7 @@ describe("remote CLI entrypoint authority boundary", () => {
         return Response.json({ error: "route not present in fixture" }, { status: 404 });
       },
     });
-    const root = mkdtempSync(join(tmpdir(), "todos-remote-entrypoint-"));
+    const root = createBunPackageIsolatedTempDir("todos-remote-entrypoint-");
     tempRoots.push(root);
     const localDbPath = join(root, "local-adapter-must-not-open", "todos.db");
 
@@ -1048,7 +1278,7 @@ describe("remote CLI entrypoint authority boundary", () => {
         return Response.json({ error: `fixture route missing: ${request.method} ${url.pathname}` }, { status: 404 });
       },
     });
-    const root = mkdtempSync(join(tmpdir(), "todos-safe-coordination-"));
+    const root = createBunPackageIsolatedTempDir("todos-safe-coordination-");
     tempRoots.push(root);
     const cwd = join(root, "cwd");
     const home = join(root, "home");
@@ -1259,7 +1489,7 @@ describe("remote CLI entrypoint authority boundary", () => {
         return Response.json({ error: `fixture route missing: ${request.method} ${url.pathname}` }, { status: 404 });
       },
     });
-    const root = mkdtempSync(join(tmpdir(), "todos-unassign-parity-"));
+    const root = createBunPackageIsolatedTempDir("todos-unassign-parity-");
     tempRoots.push(root);
     const cwd = join(root, "cwd");
     const home = join(root, "home");
@@ -1367,7 +1597,7 @@ describe("remote CLI entrypoint authority boundary", () => {
         return Response.json({ error: `fixture route missing: ${request.method} ${url.pathname}` }, { status: 404 });
       },
     });
-    const root = mkdtempSync(join(tmpdir(), "todos-deps-graph-"));
+    const root = createBunPackageIsolatedTempDir("todos-deps-graph-");
     tempRoots.push(root);
     const cwd = join(root, "cwd");
     const home = join(root, "home");
@@ -1478,7 +1708,7 @@ describe("remote CLI entrypoint authority boundary", () => {
         return Response.json({ error: "fixture route missing" }, { status: 404 });
       },
     });
-    const root = mkdtempSync(join(tmpdir(), "todos-done-evidence-"));
+    const root = createBunPackageIsolatedTempDir("todos-done-evidence-");
     tempRoots.push(root);
     const cwd = join(root, "cwd");
     const home = join(root, "home");
@@ -1789,7 +2019,7 @@ describe("remote CLI entrypoint authority boundary", () => {
       },
     });
 
-    const root = mkdtempSync(join(tmpdir(), "todos-remote-lifecycle-"));
+    const root = createBunPackageIsolatedTempDir("todos-remote-lifecycle-");
     tempRoots.push(root);
     const cwd = join(root, "cwd");
     mkdirSync(cwd);
@@ -1992,5 +2222,5 @@ describe("remote CLI entrypoint authority boundary", () => {
       chmodSync(readOnlyParent, 0o755);
       server.stop(true);
     }
-  }, 30_000);
+  }, 300_000);
 });

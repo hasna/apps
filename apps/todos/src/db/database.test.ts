@@ -33,6 +33,7 @@ describe("global database path", () => {
     const home = join(tmp, "home");
     const cwd = join(tmp, "workspace");
     mkdirSync(cwd, { recursive: true });
+    mkdirSync(join(cwd, ".git"), { recursive: true });
 
     try {
       process.env["HOME"] = home;
@@ -65,6 +66,7 @@ describe("global database path", () => {
     const cwd = join(tmp, "workspace");
     const legacyDir = join(home, ".todos");
     mkdirSync(cwd, { recursive: true });
+    mkdirSync(join(cwd, ".git"), { recursive: true });
     mkdirSync(legacyDir, { recursive: true });
     writeFileSync(join(legacyDir, "todos.db"), "");
 

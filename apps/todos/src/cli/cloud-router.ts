@@ -25,6 +25,14 @@ import {
 } from "../lib/plan-project-link-contract.js";
 import type { PrGroupEventListOptions, PrGroupEventPage, PrGroupStateView } from "../pr-groups/types.js";
 import { parsePrGroupEventPage, parsePrGroupStateView } from "../pr-groups/http-client.js";
+import type {
+  TodosTaskManifestApplyResult,
+  TodosTaskManifestBindingLookupRequest,
+  TodosTaskManifestBindingLookupResult,
+  TodosTaskManifestCapability,
+  TodosTaskManifestCompensateRequest,
+  TodosTaskManifestCompensationResult,
+} from "../task-manifest/index.js";
 
 type Env = Record<string, string | undefined>;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -589,6 +597,103 @@ export async function cloudPrGroupEvents(
       `REMOTE_API_INCOMPATIBLE: ${route} did not return a complete closed authoritative remote event page; ` +
         "local SQLite fallback is disabled",
       { cause: error },
+    );
+  }
+}
+
+function unwrapTaskManifestEnvelope<T>(
+  raw: unknown,
+  key: "capability" | "result" | "delivered",
+  route: string,
+): T {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw) || !(key in raw)) {
+    throw new Error(
+      `REMOTE_API_INCOMPATIBLE: ${route} returned a non-authoritative task-manifest response envelope; ` +
+        "local SQLite fallback is disabled",
+    );
+  }
+  return (raw as Record<typeof key, T>)[key];
+}
+
+export async function cloudTaskManifestCapability(
+  client: HasnaStorageClient,
+): Promise<TodosTaskManifestCapability> {
+  const route = "/v1/task-manifest/capability";
+  return unwrapTaskManifestEnvelope(
+    await requiredRemoteRoute(client, route, () =>
+      client.transport.get<unknown>("/task-manifest/capability")),
+    "capability",
+    route,
+  );
+}
+
+export async function cloudApplyTaskManifest(
+  client: HasnaStorageClient,
+  input: unknown,
+): Promise<TodosTaskManifestApplyResult> {
+  const route = "/v1/task-manifest/apply";
+  return unwrapTaskManifestEnvelope(
+    await requiredRemoteRoute(client, route, () =>
+      client.transport.post<unknown>("/task-manifest/apply", input)),
+    "result",
+    route,
+  );
+}
+
+export async function cloudReadExactTaskManifest(
+  client: HasnaStorageClient,
+  receiptId: string,
+): Promise<TodosTaskManifestApplyResult> {
+  const route = "/v1/task-manifest/read-exact";
+  return unwrapTaskManifestEnvelope(
+    await requiredRemoteRoute(client, route, () =>
+      client.transport.post<unknown>("/task-manifest/read-exact", { receipt_id: receiptId })),
+    "result",
+    route,
+  );
+}
+
+export async function cloudLookupTaskManifestBinding(
+  client: HasnaStorageClient,
+  input: TodosTaskManifestBindingLookupRequest,
+): Promise<TodosTaskManifestBindingLookupResult> {
+  const route = "/v1/task-manifest/bindings/lookup";
+  return unwrapTaskManifestEnvelope(
+    await requiredRemoteRoute(client, route, () =>
+      client.transport.post<unknown>("/task-manifest/bindings/lookup", input)),
+    "result",
+    route,
+  );
+}
+
+export async function cloudCompensateTaskManifest(
+  client: HasnaStorageClient,
+  input: TodosTaskManifestCompensateRequest,
+): Promise<TodosTaskManifestCompensationResult> {
+  const route = "/v1/task-manifest/compensate";
+  return unwrapTaskManifestEnvelope(
+    await requiredRemoteRoute(client, route, () =>
+      client.transport.post<unknown>("/task-manifest/compensate", input)),
+    "result",
+    route,
+  );
+}
+
+export async function cloudMarkTaskManifestOutboxDelivered(
+  client: HasnaStorageClient,
+  outboxId: string,
+): Promise<void> {
+  const route = "/v1/task-manifest/outbox/delivered";
+  const delivered = unwrapTaskManifestEnvelope(
+    await requiredRemoteRoute(client, route, () =>
+      client.transport.post<unknown>("/task-manifest/outbox/delivered", { outbox_id: outboxId })),
+    "delivered",
+    route,
+  );
+  if (delivered !== true) {
+    throw new Error(
+      `REMOTE_API_INCOMPATIBLE: ${route} did not confirm task-manifest outbox delivery; ` +
+        "local SQLite fallback is disabled",
     );
   }
 }
