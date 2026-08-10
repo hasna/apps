@@ -78,8 +78,31 @@ export interface ItemUpdateOptions {
   expectedVersion?: number;
 }
 
+export type ItemArchiveFilter = 'active' | 'archived' | 'all';
+export type ItemListSort = 'created' | 'title';
+export type ItemListDirection = 'asc' | 'desc';
+
+/**
+ * Bounded list query shared by the local and hosted transports.
+ *
+ * `search` is deliberately a literal case-insensitive match over full id,
+ * title, and content. Ranked full-text/semantic retrieval is a separate
+ * producer query and must not change the long-standing `knowledge list`
+ * compatibility contract.
+ */
+export interface ItemListOptions {
+  search?: string;
+  tags?: string[];
+  archive?: ItemArchiveFilter;
+  sort?: ItemListSort;
+  direction?: ItemListDirection;
+  limit?: number;
+  offset?: number;
+}
+
 export interface ItemListResult {
   items: KnowledgeItem[];
+  total: number;
   /** Whether the backing store exists (always true for the API transport). */
   exists: boolean;
 }
@@ -115,7 +138,9 @@ export interface ItemStore {
   readonly exists: boolean;
   /** Whether this transport retains entry history at all. */
   readonly supportsVersions: boolean;
-  /** Every item including archived; callers filter/sort/paginate. */
+  /** Bounded, producer-side list query. */
+  list(options?: ItemListOptions): Promise<ItemListResult>;
+  /** Every item including archived; retained only for genuine bulk operations. */
   listAll(): Promise<ItemListResult>;
   get(idOrShort: string): Promise<KnowledgeItem | null>;
   create(input: ItemCreateInput): Promise<KnowledgeItem>;
@@ -140,6 +165,83 @@ function matchesId(item: KnowledgeItem, idOrShort: string): boolean {
   return item.id === idOrShort || item.short_id === idOrShort;
 }
 
+function itemMatchesLiteralSearch(item: KnowledgeItem, search: string): boolean {
+  const query = search.trim().toLowerCase();
+  if (!query) return true;
+  return (
+    item.id.toLowerCase().includes(query)
+    || item.title.toLowerCase().includes(query)
+    || item.content.toLowerCase().includes(query)
+  );
+}
+
+function itemMatchesTagFilters(item: KnowledgeItem, rawFilters: readonly string[]): boolean {
+  if (rawFilters.length === 0) return true;
+  const itemTags = new Set((item.tags ?? []).map((tag) => tag.toLowerCase()));
+  return rawFilters.every((raw) => {
+    const whole = raw.trim().toLowerCase();
+    const parts = raw
+      .split(',')
+      .map((tag) => tag.trim().toLowerCase())
+      .filter(Boolean);
+    return (whole.length > 0 && itemTags.has(whole))
+      || (parts.length > 0 && parts.every((tag) => itemTags.has(tag)));
+  });
+}
+
+function compareItems(
+  left: KnowledgeItem,
+  right: KnowledgeItem,
+  sort: ItemListSort,
+  direction: ItemListDirection,
+): number {
+  const primary = sort === 'title'
+    ? left.title.localeCompare(right.title)
+    : left.created_at.localeCompare(right.created_at);
+  const deterministic = primary === 0 ? left.id.localeCompare(right.id) : primary;
+  return direction === 'desc' ? -deterministic : deterministic;
+}
+
+function boundedListInteger(
+  value: number | undefined,
+  fallback: number,
+  field: string,
+  minimum: number,
+  maximum: number,
+): number {
+  const resolved = value ?? fallback;
+  if (!Number.isFinite(resolved) || !Number.isInteger(resolved) || resolved < minimum || resolved > maximum) {
+    throw new Error(`${field} must be an integer between ${minimum} and ${maximum}.`);
+  }
+  return resolved;
+}
+
+function boundedLocalList(items: readonly KnowledgeItem[], options: ItemListOptions): {
+  items: KnowledgeItem[];
+  total: number;
+} {
+  const archive = options.archive ?? 'active';
+  const sort = options.sort ?? 'created';
+  const direction = options.direction ?? 'asc';
+  const limit = boundedListInteger(options.limit, 50, 'limit', 1, 200);
+  const offset = boundedListInteger(options.offset, 0, 'offset', 0, 10_000);
+  let filtered = items.filter((item) => (
+    archive === 'all'
+    || (archive === 'archived' ? item.archived === true : item.archived !== true)
+  ));
+  if (options.search) {
+    filtered = filtered.filter((item) => itemMatchesLiteralSearch(item, options.search!));
+  }
+  if (options.tags?.length) {
+    filtered = filtered.filter((item) => itemMatchesTagFilters(item, options.tags!));
+  }
+  filtered.sort((left, right) => compareItems(left, right, sort, direction));
+  return {
+    total: filtered.length,
+    items: filtered.slice(offset, offset + limit),
+  };
+}
+
 class LocalItemStore implements ItemStore {
   readonly kind = 'local' as const;
   readonly supportsVersions = false;
@@ -161,9 +263,15 @@ class LocalItemStore implements ItemStore {
     return existsSync(this.storePath);
   }
 
+  async list(options: ItemListOptions = {}): Promise<ItemListResult> {
+    const store = loadStoreIfExists(this.storePath);
+    const result = boundedLocalList(store.items, options);
+    return { ...result, exists: store.exists };
+  }
+
   async listAll(): Promise<ItemListResult> {
     const store = loadStoreIfExists(this.storePath);
-    return { items: store.items, exists: store.exists };
+    return { items: store.items, total: store.items.length, exists: store.exists };
   }
 
   async get(idOrShort: string): Promise<KnowledgeItem | null> {
@@ -272,8 +380,26 @@ class ApiItemStore implements ItemStore {
     return this.cloud.baseUrl;
   }
 
+  async list(options: ItemListOptions = {}): Promise<ItemListResult> {
+    const result = await this.cloud.list({
+      search: options.search,
+      tags: options.tags,
+      archive: options.archive,
+      sort: options.sort,
+      direction: options.direction,
+      limit: options.limit,
+      offset: options.offset,
+    });
+    return {
+      items: result.items,
+      total: result.total,
+      exists: true,
+    };
+  }
+
   async listAll(): Promise<ItemListResult> {
-    return { items: await fetchAllCloudItems(this.cloud), exists: true };
+    const items = await fetchAllCloudItems(this.cloud);
+    return { items, total: items.length, exists: true };
   }
 
   async get(idOrShort: string): Promise<KnowledgeItem | null> {

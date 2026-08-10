@@ -1939,9 +1939,20 @@ async function run(argv: string[]): Promise<void> {
     if (flags.format !== undefined && flags.format !== 'table' && flags.format !== 'json') {
       throw new Error("Invalid --format value for list. Use 'table' or 'json'.");
     }
-    const db = await itemStore.listAll();
-    const page = Number.isFinite(flags.page) && (flags.page as number) > 0 ? flags.page as number : 1;
-    const limit = Number.isFinite(flags.limit) && (flags.limit as number) > 0 ? flags.limit as number : 20;
+    if (
+      flags.page !== undefined
+      && (!Number.isFinite(flags.page) || !Number.isInteger(flags.page) || flags.page < 1)
+    ) {
+      throw new Error('--page must be a positive integer.');
+    }
+    if (
+      flags.limit !== undefined
+      && (!Number.isFinite(flags.limit) || !Number.isInteger(flags.limit) || flags.limit < 1 || flags.limit > 200)
+    ) {
+      throw new Error('--limit must be an integer between 1 and 200.');
+    }
+    const page = flags.page ?? 1;
+    const limit = flags.limit ?? 20;
     const search = flags.search ? String(flags.search).toLowerCase() : '';
     // Repeated -t narrows: an item must match EVERY requested value, matching the
     // `ok_list` MCP tool ("item must match all tags").
@@ -1968,37 +1979,31 @@ async function run(argv: string[]): Promise<void> {
     //
     // So do not "align" the two: making this an exclusive match would break `list`, and
     // dropping `untag`'s `continue` would break its re-run contract.
-    const tagFilters = (flags.tagRaw ?? flags.tag ?? []).map((raw) => ({
-      whole: raw.trim().toLowerCase(),
-      parts: raw.split(',').map((tag) => tag.trim().toLowerCase()).filter((tag) => tag.length > 0),
-    }));
+    const tagFilters = flags.tagRaw ?? flags.tag ?? [];
     const tagLabel = flags.tag?.length ? flags.tag.map((entry) => entry.toLowerCase()).join(',') : 'none';
     const useTable = flags.format === 'table' || (!flags.json && !flags.format && useColor(flags));
     const useJson = flags.json || flags.format === 'json';
-
-    let filtered = db.items;
     // Flag precedence, documented because it is not the intuitive one: --archived WINS over
     // --include-archived when both are passed (the `else if` never reaches the wider flag),
     // in either argument order. `--archived --include-archived` therefore returns archived
     // items ONLY, not a widened sweep. A reader would reasonably expect the wider flag to
     // win, so this is documented rather than changed — flipping it would alter behaviour.
-    if (flags.archived) filtered = filtered.filter((x) => x.archived === true);
-    else if (!flags.includeArchived) filtered = filtered.filter((x) => !x.archived);
-    // Matches id, title and content — see itemMatchesSearch in store.ts for why the id is
-    // in there. Keep this delegating rather than inlining the predicate again: the id was
-    // missing here and in the two mcp.js copies simultaneously, which is what a duplicated
-    // one-liner buys you.
-    if (search) filtered = filtered.filter((x) => itemMatchesSearch(x, search));
-    if (tagFilters.length > 0) filtered = filtered.filter((x) => {
-      const itemTags = new Set((x.tags ?? []).map((t) => t.toLowerCase()));
-      return tagFilters.every(({ whole, parts }) => (whole.length > 0 && itemTags.has(whole)) || parts.every((wanted) => itemTags.has(wanted)));
-    });
-
-    const { sorted, sort, direction } = sortItems(filtered, flags);
+    const archive = flags.archived ? 'archived' : (flags.includeArchived ? 'all' : 'active');
+    const { sort, direction } = sortItems([], flags);
     const start = (page - 1) * limit;
-    const rows = sorted.slice(start, start + limit);
-    const totalPages = Math.max(1, Math.ceil(sorted.length / limit));
-    const result = { ok: true, page, limit, total: sorted.length, total_pages: totalPages, sort, direction, items: rows, store_exists: db.exists };
+    if (start > 10_000) throw new Error('The requested page exceeds the maximum bounded offset of 10000.');
+    const db = await itemStore.list({
+      search,
+      tags: tagFilters,
+      archive,
+      sort,
+      direction,
+      limit,
+      offset: start,
+    });
+    const rows = db.items;
+    const totalPages = Math.max(1, Math.ceil(db.total / limit));
+    const result = { ok: true, page, limit, total: db.total, total_pages: totalPages, sort, direction, items: rows, store_exists: db.exists };
 
     if (useJson) { output(result, true); return; }
     if (flags.verbose) { output(result, false, flags); return; }
@@ -2010,13 +2015,13 @@ async function run(argv: string[]): Promise<void> {
       for (const row of rows) {
         console.log(`${row.id}\t${col(truncate(row.title, 80))}\t${row.created_at}\t${row.url ? col(truncate(row.url, 90)) : ''}\t${row.tags?.length ? col(truncate(`[${row.tags.join(', ')}]`, 80)) : ''}`);
       }
-      console.log(`Page ${page}/${totalPages} | showing ${rows.length} of ${sorted.length} | sort=${sort} ${direction} | search=${search || 'none'} | tag=${tagLabel}`);
+      console.log(`Page ${page}/${totalPages} | showing ${rows.length} of ${db.total} | sort=${sort} ${direction} | search=${search || 'none'} | tag=${tagLabel}`);
       console.log('Hint: use `knowledge get --id <id> --json` for full item content.');
     } else {
       for (const row of rows) {
         console.log(`${row.id}\t${truncate(row.title, 80)}\t${row.created_at}${row.url ? `\t${truncate(row.url, 90)}` : ''}${row.tags?.length ? `\t${truncate(`[${row.tags.join(', ')}]`, 80)}` : ''}`);
       }
-      console.log(`Page ${page}/${totalPages} | showing ${rows.length} of ${sorted.length} | sort=${sort} ${direction} | search=${search || 'none'} | tag=${tagLabel}`);
+      console.log(`Page ${page}/${totalPages} | showing ${rows.length} of ${db.total} | sort=${sort} ${direction} | search=${search || 'none'} | tag=${tagLabel}`);
       console.log('Hint: use `knowledge get --id <id> --json` for full item content.');
     }
     return;

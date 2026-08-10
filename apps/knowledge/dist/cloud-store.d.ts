@@ -26,16 +26,30 @@
 import { type HasnaStorageClient } from '@hasna/contracts/client/storage';
 import type { KnowledgeItem, KnowledgeItemVersion, KnowledgeItemVersionList } from './store';
 import { KNOWLEDGE_APP_SLUG } from './knowledge-mode.js';
-export { KNOWLEDGE_APP_SLUG };
+import { KNOWLEDGE_BOUNDED_QUERY_CAPABILITY } from './query-contract.js';
+export { KNOWLEDGE_APP_SLUG, KNOWLEDGE_BOUNDED_QUERY_CAPABILITY };
 /** Cloud resource path served under /v1 by knowledge-serve. */
 export declare const KNOWLEDGE_RESOURCE = "notes";
 export interface KnowledgeCloudListOptions {
+    /** Literal id/title/content filter used by `knowledge list`. */
     search?: string;
-    tag?: string;
-    includeArchived?: boolean;
-    archivedOnly?: boolean;
+    tags?: string[];
+    archive?: 'active' | 'archived' | 'all';
+    sort?: 'created' | 'title';
+    direction?: 'asc' | 'desc';
     limit?: number;
     offset?: number;
+}
+export interface KnowledgeCloudSearchOptions {
+    query: string;
+    archive?: 'active' | 'archived' | 'all';
+    limit?: number;
+    offset?: number;
+}
+export interface KnowledgeCloudSearchHit {
+    item: KnowledgeItem;
+    /** Producer-computed PostgreSQL ts_rank_cd score. */
+    rank: number;
 }
 export interface KnowledgeCloudCreateInput {
     /** Optional caller-supplied stable id. Forwarded to the server, which upserts
@@ -77,6 +91,16 @@ export declare class KnowledgeVersionConflictError extends Error {
     constructor(expected: number, current: number);
 }
 /**
+ * Raised when the server response cannot prove that it applied a bounded query
+ * field that older servers silently ignored.
+ */
+export declare class KnowledgeBoundedQueryCapabilityError extends Error {
+    readonly operation: 'list' | 'search';
+    readonly fields: readonly string[];
+    readonly code = "bounded_query_capability_required";
+    constructor(operation: 'list' | 'search', fields: readonly string[]);
+}
+/**
  * The knowledge-item storage surface, cloud edition. Mirrors the operations the
  * local db.json store supports so the CLI can call either behind one shape.
  */
@@ -85,7 +109,12 @@ export interface KnowledgeCloudStore {
     readonly baseUrl: string;
     list(options?: KnowledgeCloudListOptions): Promise<{
         items: KnowledgeItem[];
-        total: number | null;
+        total: number;
+    }>;
+    /** Ranked producer-side PostgreSQL full-text query. */
+    search(options: KnowledgeCloudSearchOptions): Promise<{
+        items: KnowledgeCloudSearchHit[];
+        total: number;
     }>;
     get(idOrShort: string): Promise<KnowledgeItem | null>;
     create(input: KnowledgeCloudCreateInput): Promise<KnowledgeItem>;

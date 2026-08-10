@@ -1,6 +1,6 @@
 import { KnowledgeService, type KnowledgeServiceOptions } from './service.js';
 import type { KnowledgeItem } from './store.js';
-import type { ItemStore, ItemCreateInput, ItemPatch, ItemListResult } from './item-store.js';
+import type { ItemStore, ItemCreateInput, ItemPatch, ItemListOptions, ItemListResult } from './item-store.js';
 /**
  * The unified knowledge-item Store surface, mirrored on the SDK so app code
  * routes item CRUD through the SAME Store as the CLI and MCP: sqlite uses the
@@ -11,7 +11,7 @@ import type { ItemStore, ItemCreateInput, ItemPatch, ItemListResult } from './it
 export interface KnowledgeItemsSdk {
     /** The resolved Store for this scope (`kind: 'local' | 'api'`). */
     readonly store: () => ItemStore;
-    readonly list: () => Promise<ItemListResult>;
+    readonly list: (options?: ItemListOptions) => Promise<ItemListResult>;
     readonly get: (idOrShort: string) => Promise<KnowledgeItem | null>;
     readonly create: (input: ItemCreateInput) => Promise<KnowledgeItem>;
     readonly update: (idOrShort: string, patch: ItemPatch) => Promise<KnowledgeItem | null>;

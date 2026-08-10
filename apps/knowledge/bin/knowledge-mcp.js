@@ -15025,6 +15025,7 @@ var package_default = {
     "bin",
     "dist",
     "scripts/apply-cloud-migrations.mjs",
+    "scripts/live-private-query.mjs",
     "scripts/lib/remote-temp-dir.mjs",
     "scripts/smoke-machine-sync-release.mjs",
     "scripts/smoke-machines-adapter.mjs",
@@ -15051,6 +15052,7 @@ var package_default = {
     "smoke:machine-sync-release": "bun scripts/smoke-machine-sync-release.mjs",
     "smoke:open-files-installed-boundary": "bun scripts/smoke-open-files-installed-boundary.mjs",
     "migrate:cloud": "bun scripts/apply-cloud-migrations.mjs",
+    "live:private-query": "bun scripts/live-private-query.mjs",
     serve: "bun src/serve-entry.ts",
     "verify:generated": "bun scripts/verify-generated-artifacts.mjs",
     "contracts:conformance": "contracts conformance fixtures",
@@ -16442,6 +16444,12 @@ function assertKnowledgeModeSelected(env = process.env, options = {}) {
   throw new HalfConfiguredKnowledgeClientError(urlKeysPresent);
 }
 
+// src/query-contract.ts
+var KNOWLEDGE_BOUNDED_QUERY_CAPABILITY = "hasna.knowledge.bounded-query.v1";
+function hasKnowledgeBoundedQueryCapability(value) {
+  return Boolean(value && typeof value === "object" && value.query_capability === KNOWLEDGE_BOUNDED_QUERY_CAPABILITY);
+}
+
 // src/cloud-store.ts
 function transportOverrides(env) {
   return {
@@ -16462,33 +16470,95 @@ class KnowledgeVersionConflictError extends Error {
     this.name = "KnowledgeVersionConflictError";
   }
 }
+
+class KnowledgeBoundedQueryCapabilityError extends Error {
+  operation;
+  fields;
+  code = "bounded_query_capability_required";
+  constructor(operation, fields) {
+    super(`bounded_query_capability_required: the Knowledge server did not prove support for ${operation} field(s): ` + `${fields.join(", ")}. Refusing to accept a possibly unfiltered response; update the server and retry.`);
+    this.operation = operation;
+    this.fields = fields;
+    this.name = "KnowledgeBoundedQueryCapabilityError";
+  }
+}
 function toQuery(options) {
   const q = {};
-  if (options.search)
+  if (options.search) {
+    q.filter = options.search;
     q.search = options.search;
+  }
+  if (options.tags?.length)
+    q.tags = options.tags;
+  if (options.archive) {
+    q.archive = options.archive;
+    if (options.archive === "all")
+      q.includeArchived = true;
+  }
+  if (options.sort)
+    q.sort = options.sort;
+  if (options.direction)
+    q.direction = options.direction;
   if (options.limit !== undefined)
     q.limit = options.limit;
   if (options.offset !== undefined)
     q.offset = options.offset;
-  if (options.includeArchived || options.archivedOnly)
-    q.includeArchived = true;
   return q;
+}
+function listFieldsRequiringCapability(options) {
+  const fields = [];
+  if (options.tags?.length)
+    fields.push("tags");
+  if (options.sort !== undefined)
+    fields.push("sort");
+  if (options.direction !== undefined)
+    fields.push("direction");
+  if (options.archive === "archived")
+    fields.push("archive=archived");
+  return fields;
+}
+function boundedQueryInteger(value, fallback, field, minimum, maximum) {
+  const resolved = value ?? fallback;
+  if (!Number.isFinite(resolved) || !Number.isInteger(resolved) || resolved < minimum || resolved > maximum) {
+    throw new Error(`${field} must be an integer between ${minimum} and ${maximum}.`);
+  }
+  return resolved;
 }
 function wrap(client) {
   return {
     baseUrl: client.baseUrl,
     async list(options = {}) {
-      const wantLimit = options.limit ?? 200;
-      const query2 = toQuery({ ...options, limit: Math.min(Math.max(wantLimit, 1), 200) });
+      const limit = boundedQueryInteger(options.limit, 200, "limit", 1, 200);
+      const offset = boundedQueryInteger(options.offset, 0, "offset", 0, 1e4);
+      const query2 = toQuery({ ...options, limit, offset });
       const res = await client.list(KNOWLEDGE_RESOURCE, { query: query2 });
-      let items = res.items;
-      if (options.archivedOnly)
-        items = items.filter((x) => x.archived === true);
-      if (options.tag) {
-        const t = options.tag.toLowerCase();
-        items = items.filter((x) => (x.tags ?? []).some((tag) => tag.toLowerCase() === t));
+      if (!Number.isInteger(res.total) || Number(res.total) < 0) {
+        throw new Error("knowledge cloud list response is missing a valid producer total.");
       }
-      return { items, total: res.total };
+      const requiredFields = listFieldsRequiringCapability(options);
+      if (requiredFields.length > 0 && !hasKnowledgeBoundedQueryCapability(res.raw)) {
+        throw new KnowledgeBoundedQueryCapabilityError("list", requiredFields);
+      }
+      return { items: res.items, total: Number(res.total) };
+    },
+    async search(options) {
+      const limit = boundedQueryInteger(options.limit, 20, "limit", 1, 200);
+      const offset = boundedQueryInteger(options.offset, 0, "offset", 0, 1e4);
+      const response = await client.transport.get(`/${KNOWLEDGE_RESOURCE}/search`, {
+        query: {
+          q: options.query,
+          archive: options.archive ?? "active",
+          limit,
+          offset
+        }
+      });
+      if (!Number.isInteger(response.total) || response.total < 0 || !Array.isArray(response.items) || response.items.some((hit) => !hit || typeof hit !== "object" || !hit.item || typeof hit.rank !== "number" || !Number.isFinite(hit.rank))) {
+        throw new Error("knowledge cloud search response is missing producer rank or total evidence.");
+      }
+      if (!hasKnowledgeBoundedQueryCapability(response)) {
+        throw new KnowledgeBoundedQueryCapabilityError("search", ["q", "rank", "total"]);
+      }
+      return { items: response.items, total: response.total };
     },
     async get(idOrShort) {
       return client.get(KNOWLEDGE_RESOURCE, idOrShort);
@@ -16596,7 +16666,7 @@ async function fetchAllCloudItems(store) {
   const pageSize = 200;
   const all = [];
   for (let offset = 0;; offset += pageSize) {
-    const { items } = await store.list({ includeArchived: true, limit: pageSize, offset });
+    const { items } = await store.list({ archive: "all", limit: pageSize, offset });
     all.push(...items);
     if (items.length < pageSize)
       break;
@@ -17265,12 +17335,6 @@ import {
 } from "fs";
 import { randomUUID } from "crypto";
 import { basename, dirname as dirname2, join as join3 } from "path";
-function itemMatchesSearch(item, needle) {
-  if (!needle)
-    return true;
-  const q = needle.toLowerCase();
-  return item.id.toLowerCase().includes(q) || item.title.toLowerCase().includes(q) || item.content.toLowerCase().includes(q);
-}
 function defaultStorePath() {
   return workspaceForHome(globalKnowledgeHome()).jsonStorePath;
 }
@@ -17642,6 +17706,53 @@ class VersionHistoryUnsupportedError extends Error {
 function matchesId(item, idOrShort) {
   return item.id === idOrShort || item.short_id === idOrShort;
 }
+function itemMatchesLiteralSearch(item, search) {
+  const query2 = search.trim().toLowerCase();
+  if (!query2)
+    return true;
+  return item.id.toLowerCase().includes(query2) || item.title.toLowerCase().includes(query2) || item.content.toLowerCase().includes(query2);
+}
+function itemMatchesTagFilters(item, rawFilters) {
+  if (rawFilters.length === 0)
+    return true;
+  const itemTags = new Set((item.tags ?? []).map((tag) => tag.toLowerCase()));
+  return rawFilters.every((raw) => {
+    const whole = raw.trim().toLowerCase();
+    const parts = raw.split(",").map((tag) => tag.trim().toLowerCase()).filter(Boolean);
+    return whole.length > 0 && itemTags.has(whole) || parts.length > 0 && parts.every((tag) => itemTags.has(tag));
+  });
+}
+function compareItems(left, right, sort, direction) {
+  const primary = sort === "title" ? left.title.localeCompare(right.title) : left.created_at.localeCompare(right.created_at);
+  const deterministic = primary === 0 ? left.id.localeCompare(right.id) : primary;
+  return direction === "desc" ? -deterministic : deterministic;
+}
+function boundedListInteger(value, fallback, field, minimum, maximum) {
+  const resolved = value ?? fallback;
+  if (!Number.isFinite(resolved) || !Number.isInteger(resolved) || resolved < minimum || resolved > maximum) {
+    throw new Error(`${field} must be an integer between ${minimum} and ${maximum}.`);
+  }
+  return resolved;
+}
+function boundedLocalList(items, options) {
+  const archive = options.archive ?? "active";
+  const sort = options.sort ?? "created";
+  const direction = options.direction ?? "asc";
+  const limit = boundedListInteger(options.limit, 50, "limit", 1, 200);
+  const offset = boundedListInteger(options.offset, 0, "offset", 0, 1e4);
+  let filtered = items.filter((item) => archive === "all" || (archive === "archived" ? item.archived === true : item.archived !== true));
+  if (options.search) {
+    filtered = filtered.filter((item) => itemMatchesLiteralSearch(item, options.search));
+  }
+  if (options.tags?.length) {
+    filtered = filtered.filter((item) => itemMatchesTagFilters(item, options.tags));
+  }
+  filtered.sort((left, right) => compareItems(left, right, sort, direction));
+  return {
+    total: filtered.length,
+    items: filtered.slice(offset, offset + limit)
+  };
+}
 
 class LocalItemStore {
   storePath;
@@ -17662,9 +17773,14 @@ class LocalItemStore {
   get exists() {
     return existsSync3(this.storePath);
   }
+  async list(options = {}) {
+    const store = loadStoreIfExists(this.storePath);
+    const result = boundedLocalList(store.items, options);
+    return { ...result, exists: store.exists };
+  }
   async listAll() {
     const store = loadStoreIfExists(this.storePath);
-    return { items: store.items, exists: store.exists };
+    return { items: store.items, total: store.items.length, exists: store.exists };
   }
   async get(idOrShort) {
     const store = loadStoreIfExists(this.storePath);
@@ -17767,8 +17883,25 @@ class ApiItemStore {
   get location() {
     return this.cloud.baseUrl;
   }
+  async list(options = {}) {
+    const result = await this.cloud.list({
+      search: options.search,
+      tags: options.tags,
+      archive: options.archive,
+      sort: options.sort,
+      direction: options.direction,
+      limit: options.limit,
+      offset: options.offset
+    });
+    return {
+      items: result.items,
+      total: result.total,
+      exists: true
+    };
+  }
   async listAll() {
-    return { items: await fetchAllCloudItems(this.cloud), exists: true };
+    const items = await fetchAllCloudItems(this.cloud);
+    return { items, total: items.length, exists: true };
   }
   async get(idOrShort) {
     return this.cloud.get(idOrShort);
@@ -21399,6 +21532,35 @@ async function hybridSearchItems(items, options, baseWarnings = []) {
     results
   };
 }
+function hybridSearchFromProducerPage(hits, options, warnings = [], producerTotal = hits.length) {
+  const query2 = options.query.trim();
+  if (!query2)
+    throw new Error("Search query is required.");
+  const limit = Math.max(1, Math.min(options.limit ?? 10, 100));
+  const offset = Math.max(0, Math.floor(options.offset ?? 0));
+  const results = hits.map(({ item, rank }) => legacyItemResult(item, rank));
+  return {
+    query: query2,
+    limit,
+    offset,
+    mode: {
+      keyword: true,
+      catalog: true,
+      semantic: options.semantic === true
+    },
+    semantic_provider: null,
+    semantic_model: null,
+    semantic_dimensions: null,
+    counts: {
+      keyword_results: producerTotal,
+      catalog_results: 0,
+      semantic_results: 0,
+      merged_results: results.length
+    },
+    warnings,
+    results
+  };
+}
 
 // src/retrieval.ts
 function stableId4(prefix, value) {
@@ -21916,7 +22078,7 @@ ${answer}`;
     warnings
   };
 }
-async function runKnowledgePromptOverItems(items, options) {
+async function runKnowledgePromptOverItems(items, options, producerSearch) {
   const prompt = options.prompt.trim();
   if (!prompt)
     throw new Error("Knowledge prompt is required.");
@@ -21924,7 +22086,7 @@ async function runKnowledgePromptOverItems(items, options) {
   const modelRef = resolveModelRef(options.modelRef ?? "default", options.config);
   const parsed = parseModelRef(modelRef);
   const { prompt: _p, generate: _g, approveWrite: _a3, now: _n, ...retrievalOptions } = options;
-  const context = await retrieveKnowledgeContextFromItems(items, {
+  const context = producerSearch ? retrieveKnowledgeContextFromSearch(producerSearch, { contextChars: options.contextChars }) : await retrieveKnowledgeContextFromItems(items, {
     ...retrievalOptions,
     query: prompt
   });
@@ -30067,6 +30229,14 @@ function normalizeMode(value) {
   throw new Error("Invalid setup mode. Use hosted or local.");
 }
 
+class KnowledgeSemanticSearchUnavailableError extends Error {
+  code = "semantic_query_unavailable";
+  constructor() {
+    super("semantic_query_unavailable: the hosted Knowledge item store has no configured vector index.");
+    this.name = "KnowledgeSemanticSearchUnavailableError";
+  }
+}
+
 class KnowledgeService {
   options;
   ensuredWorkspace;
@@ -30095,8 +30265,8 @@ class KnowledgeService {
       storePathOverridden: false
     });
   }
-  async listItems() {
-    return this.itemStore().listAll();
+  async listItems(options = {}) {
+    return this.itemStore().list(options);
   }
   async getItem(idOrShort) {
     return this.itemStore().get(idOrShort);
@@ -30889,24 +31059,20 @@ class KnowledgeService {
   isApiMode() {
     return isKnowledgeApiMode();
   }
-  async fetchCloudItems() {
+  cloudStore() {
     const cloud = resolveKnowledgeCloudStore();
-    if (!cloud)
-      throw new Error("knowledge: cloud store requested but not resolvable (check HASNA_KNOWLEDGE_API_URL + HASNA_KNOWLEDGE_API_KEY).");
-    return fetchAllCloudItems(cloud);
+    if (!cloud) {
+      throw new Error("knowledge: cloud store requested but not resolvable " + "(check HASNA_KNOWLEDGE_API_URL + HASNA_KNOWLEDGE_API_KEY).");
+    }
+    return cloud;
+  }
+  async fetchCloudItems() {
+    return fetchAllCloudItems(this.cloudStore());
   }
   async semanticSearch(options) {
     const workspace = this.workspace;
     if (this.isApiMode()) {
-      const items = await this.fetchCloudItems();
-      const search = await hybridSearchItems(items, { ...options }, ["semantic_search_requires_local_catalog"]);
-      return {
-        provider: "openai",
-        model: "text-embedding-3-small",
-        dimensions: options.dimensions ?? 1536,
-        query: options.query,
-        results: search.results
-      };
+      throw new KnowledgeSemanticSearchUnavailableError;
     }
     if (!existsSync14(workspace.knowledgeDbPath)) {
       return {
@@ -30926,8 +31092,16 @@ class KnowledgeService {
   async search(options) {
     const workspace = this.workspace;
     if (this.isApiMode()) {
-      const items = await this.fetchCloudItems();
-      return hybridSearchItems(items, options);
+      if (options.semantic === true || options.fake === true || Boolean(options.modelRef)) {
+        throw new KnowledgeSemanticSearchUnavailableError;
+      }
+      const producer = await this.cloudStore().search({
+        query: options.query,
+        archive: "active",
+        limit: options.limit,
+        offset: options.offset
+      });
+      return hybridSearchFromProducerPage(producer.items, options, [], producer.total);
     }
     const legacyStorePath = legacyStorePathForRead(this.scope, workspace, options.legacyStorePath);
     if (!existsSync14(workspace.knowledgeDbPath)) {
@@ -30950,8 +31124,10 @@ class KnowledgeService {
   async retrieveContext(options) {
     const workspace = this.workspace;
     if (this.isApiMode()) {
-      const items = await this.fetchCloudItems();
-      return retrieveKnowledgeContextFromItems(items, options);
+      const search = await this.search(options);
+      return retrieveKnowledgeContextFromSearch(search, {
+        contextChars: options.contextChars
+      });
     }
     const legacyStorePath = legacyStorePathForRead(this.scope, workspace, options.legacyStorePath);
     if (!existsSync14(workspace.knowledgeDbPath)) {
@@ -30979,8 +31155,7 @@ class KnowledgeService {
     if (this.isApiMode()) {
       const query2 = (options.query ?? options.topic ?? "").trim();
       if (query2 && options.source !== "loops" && options.source !== "runs") {
-        const items = await this.fetchCloudItems();
-        const search = await hybridSearchItems(items, { ...options, query: query2 });
+        const search = await this.search({ ...options, query: query2 });
         const context = retrieveKnowledgeContextFromSearch(search, { contextChars: options.contextChars });
         return legacyAgentContextPack(options, context, this.safetyPolicy());
       }
@@ -31013,8 +31188,22 @@ class KnowledgeService {
   }
   async runPrompt(options) {
     if (this.isApiMode()) {
-      const items = await this.fetchCloudItems();
-      return runKnowledgePromptOverItems(items, { ...options, config: this.config() });
+      if (options.semantic === true || options.fake === true || Boolean(options.modelRef)) {
+        throw new KnowledgeSemanticSearchUnavailableError;
+      }
+      const producer = await this.cloudStore().search({
+        query: options.prompt,
+        archive: "active",
+        limit: options.limit,
+        offset: options.offset
+      });
+      const producerSearch = hybridSearchFromProducerPage(producer.items, {
+        query: options.prompt,
+        limit: options.limit,
+        offset: options.offset,
+        semantic: false
+      }, [], producer.total);
+      return runKnowledgePromptOverItems(producer.items.map((hit) => hit.item), { ...options, config: this.config() }, producerSearch);
     }
     const workspace = this.ensureWorkspace();
     const legacyStorePath = options.legacyStorePath ?? workspace.jsonStorePath;
@@ -31685,16 +31874,6 @@ function itemStoreFor(storePath, scope) {
   const resolved = resolveStorePath(storePath, scope);
   return resolveItemStore({ storePath: resolved, storePathOverridden: Boolean(storePath) });
 }
-function sortItems(items, sort = "created", desc = false) {
-  const sorted = [...items].sort((a, b) => {
-    if (sort === "title")
-      return a.title.localeCompare(b.title);
-    return a.created_at.localeCompare(b.created_at);
-  });
-  if (desc)
-    sorted.reverse();
-  return sorted;
-}
 function activeItems(items, includeArchived) {
   return includeArchived ? items : items.filter((item) => !item.archived);
 }
@@ -31780,8 +31959,8 @@ function openProjectDb(service = projectService()) {
 }
 async function itemResources(storePath, scope = "project") {
   const store = itemStoreFor(storePath, scope);
-  const { items } = await store.listAll();
-  return activeItems(items, false).slice(0, 100).map((item) => ({
+  const { items } = await store.list({ archive: "active", limit: 100, offset: 0 });
+  return items.map((item) => ({
     uri: `knowledge://project/items/${encodeURIComponent(item.id)}`,
     name: item.title,
     description: `Knowledge item ${item.id}`,
@@ -32958,31 +33137,27 @@ function buildServer() {
     include_archived: exports_external.boolean().optional().describe("Include archived items"),
     include_content: exports_external.boolean().optional().describe("Include full item content in each list row; default false to keep agent output compact"),
     include_metadata: exports_external.boolean().optional().describe("Include full item metadata in each list row; default false to keep agent output compact"),
-    page: exports_external.number().optional().describe("Page number"),
-    limit: exports_external.number().optional().describe("Items per page"),
+    page: exports_external.number().int().min(1).optional().describe("Page number"),
+    limit: exports_external.number().int().min(1).max(200).optional().describe("Items per page"),
     sort: exports_external.enum(["created", "title"]).optional().describe("Sort field"),
     desc: exports_external.boolean().optional().describe("Sort descending"),
     store_path: storePathField,
     scope: scopeField
   }, async ({ search, tag, include_archived, include_content, include_metadata, page, limit, sort, desc, store_path, scope }) => {
     const store = itemStoreFor(store_path, scope);
-    const { items: all } = await store.listAll();
-    const q = search ? search.toLowerCase() : "";
-    const requiredTags = (tag ?? []).map((entry) => entry.toLowerCase());
-    let items = activeItems(all, include_archived);
-    if (q)
-      items = items.filter((item) => itemMatchesSearch(item, q));
-    if (requiredTags.length > 0) {
-      items = items.filter((item) => {
-        const itemTags = (item.tags ?? []).map((entry) => entry.toLowerCase());
-        return requiredTags.every((entry) => itemTags.includes(entry));
-      });
-    }
-    const p = page && page > 0 ? page : 1;
-    const l = limit && limit > 0 ? limit : 20;
-    const sorted = sortItems(items, sort ?? "created", desc ?? false);
+    const p = page ?? 1;
+    const l = limit ?? 20;
     const start = (p - 1) * l;
-    const rows = sorted.slice(start, start + l);
+    const result = await store.list({
+      search,
+      tags: tag ?? [],
+      archive: include_archived ? "all" : "active",
+      sort: sort ?? "created",
+      direction: desc ? "desc" : "asc",
+      limit: l,
+      offset: start
+    });
+    const rows = result.items;
     const compactRows = rows.map((item) => compactItem(item, {
       includeContent: include_content === true,
       includeMetadata: include_metadata === true
@@ -32991,8 +33166,8 @@ function buildServer() {
       ok: true,
       page: p,
       limit: l,
-      total: sorted.length,
-      total_pages: Math.max(1, Math.ceil(sorted.length / l)),
+      total: result.total,
+      total_pages: Math.max(1, Math.ceil(result.total / l)),
       items: compactRows,
       detail_hint: "Use ok_get with an id for full item details, or set include_content/include_metadata for expanded list rows."
     });

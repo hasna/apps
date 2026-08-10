@@ -1,8 +1,11 @@
-import type { KnowledgeItem } from './store.js';
+import type { KnowledgeItem, KnowledgeItemVersion } from './store.js';
 export declare const KNOWLEDGE_GUARDED_WRITE_CONTRACT: 'FCAME-1';
 export declare const KNOWLEDGE_PRIVATE_INPUT_SCHEMA: 'hasna.knowledge.private-input.v1';
 export declare const KNOWLEDGE_PRIVATE_TITLE_LOOKUP_SCHEMA: 'hasna.knowledge.private-title-lookup.v1';
+export declare const KNOWLEDGE_PRIVATE_QUERY_SCHEMA: 'hasna.knowledge.private-query.v1';
 export declare const KNOWLEDGE_PRIVATE_RESULT_SCHEMA: 'hasna.knowledge.private-result.v1';
+export declare const KNOWLEDGE_RELATIONS_SCHEMA: 'hasna.knowledge.relations.v1';
+export declare const KNOWLEDGE_RELATIONS_METADATA_KEY: 'hasna_knowledge_relations';
 export type KnowledgeAuthorityClassification = 'user_hosted' | 'hasna_saas';
 export type KnowledgeGuardedWriteVerb = 'create' | 'update';
 export interface KnowledgeAuthorityBinding {
@@ -208,6 +211,76 @@ export interface CreateKnowledgePrivateTitleLookupDescriptorOptions {
     /** Defaults to five minutes; bounded to one hour. */
     expires_in_ms?: number;
 }
+export type KnowledgePrivateQueryKind = 'exact_title' | 'lexical_overlap' | 'semantic_overlap' | 'supersession' | 'current_version' | 'historical_version' | 'canonical_pointer';
+export type KnowledgePrivateQuerySelector = {
+    kind: 'exact_title';
+    title: string;
+} | {
+    kind: 'lexical_overlap';
+    query: string;
+} | {
+    kind: 'semantic_overlap';
+    query: string;
+} | {
+    kind: 'supersession';
+    supersedes_item_id: string;
+} | {
+    kind: 'current_version';
+    item_id: string;
+} | {
+    kind: 'historical_version';
+    item_id: string;
+    version: number;
+} | {
+    kind: 'canonical_pointer';
+    canonical_item_id: string;
+};
+export interface KnowledgeRelationsMetadata {
+    schema: typeof KNOWLEDGE_RELATIONS_SCHEMA;
+    supersedes_item_id?: string;
+    canonical_item_id?: string;
+}
+export type KnowledgePrivateQueryArchive = 'active' | 'archived' | 'all';
+export interface KnowledgePrivateQueryPage {
+    limit: number;
+    offset: number;
+}
+export interface KnowledgePrivateQueryBounds extends KnowledgeGuardedBounds {
+    max_items: number;
+}
+export interface KnowledgePrivateQueryDescriptor {
+    readonly contract: typeof KNOWLEDGE_GUARDED_WRITE_CONTRACT;
+    readonly schema: typeof KNOWLEDGE_PRIVATE_QUERY_SCHEMA;
+    /** Process-private handle. Deliberately non-enumerable and omitted by toJSON. */
+    readonly descriptor_id: string;
+    readonly operation_id: string;
+    readonly step_id: string;
+    readonly query_kind: KnowledgePrivateQueryKind;
+    readonly selector_digest: string;
+    readonly binding_digest: string;
+    readonly binding: KnowledgeGuardedBinding;
+    readonly archive: KnowledgePrivateQueryArchive;
+    readonly page: KnowledgePrivateQueryPage;
+    readonly expires_at: string;
+    toJSON(): Omit<KnowledgePrivateQueryDescriptor, 'descriptor_id' | 'toJSON'>;
+}
+export interface CreateKnowledgePrivateQueryDescriptorOptions {
+    operation_id: string;
+    step_id: string;
+    binding: KnowledgeGuardedBinding;
+    selector: KnowledgePrivateQuerySelector;
+    archive?: KnowledgePrivateQueryArchive;
+    limit?: number;
+    offset?: number;
+    /** Defaults to five minutes; bounded to one hour. */
+    expires_in_ms?: number;
+}
+export interface KnowledgePrivateQueryEnvelope {
+    contract: typeof KNOWLEDGE_GUARDED_WRITE_CONTRACT;
+    descriptor: Omit<KnowledgePrivateQueryDescriptor, 'descriptor_id' | 'toJSON'>;
+    selector: KnowledgePrivateQuerySelector;
+    limits: KnowledgePrivateQueryBounds;
+}
 export interface KnowledgeGuardedTitleLookupEnvelope {
     contract: typeof KNOWLEDGE_GUARDED_WRITE_CONTRACT;
     descriptor: Omit<KnowledgePrivateTitleLookupDescriptor, 'descriptor_id' | 'toJSON'>;
@@ -373,6 +446,40 @@ export interface KnowledgePrivateItemProof {
     metadata_sha256: string;
     archived: boolean;
 }
+export interface KnowledgePrivateQueryItemProof {
+    /** The producer record id is private; only its digest crosses the result boundary. */
+    id_sha256: string;
+    version: number;
+    title_sha256: string;
+    content_sha256: string;
+    url_sha256: string | null;
+    tags_sha256: string;
+    metadata_sha256: string;
+    archived: boolean;
+    record_kind: 'current' | 'historical';
+    matched_value_sha256: string | null;
+}
+export interface KnowledgePrivateQueryResult {
+    contract: typeof KNOWLEDGE_GUARDED_WRITE_CONTRACT;
+    exact: true;
+    bounded: true;
+    private: true;
+    query_kind: KnowledgePrivateQueryKind;
+    status: 'available' | 'unavailable';
+    code: null | 'semantic_query_unavailable';
+    binding: KnowledgeGuardedBinding;
+    selector_digest: string;
+    total: number;
+    item_count: number;
+    page: {
+        limit: number;
+        offset: number;
+        returned: number;
+        has_more: boolean;
+    };
+    items: readonly KnowledgePrivateQueryItemProof[];
+    limits: KnowledgePrivateQueryBounds;
+}
 export interface KnowledgeGuardedTitleLookup {
     contract: typeof KNOWLEDGE_GUARDED_WRITE_CONTRACT;
     exact: true;
@@ -383,7 +490,7 @@ export interface KnowledgeGuardedTitleLookup {
     items: readonly KnowledgePrivateItemProof[];
     limits: KnowledgeGuardedBounds;
 }
-export type KnowledgePrivateResultKind = 'write' | 'readback' | 'title_lookup';
+export type KnowledgePrivateResultKind = 'write' | 'readback' | 'title_lookup' | 'query';
 export interface KnowledgePrivateResultDescriptor {
     readonly contract: typeof KNOWLEDGE_GUARDED_WRITE_CONTRACT;
     readonly schema: typeof KNOWLEDGE_PRIVATE_RESULT_SCHEMA;
@@ -398,16 +505,25 @@ export interface KnowledgePrivateResultDescriptor {
 export interface KnowledgePrivateResultProof {
     kind: KnowledgePrivateResultKind;
     item_count: number;
-    items: readonly KnowledgePrivateItemProof[];
+    items: readonly (KnowledgePrivateItemProof | KnowledgePrivateQueryItemProof)[];
     deterministic_key?: string;
     receipt_id?: string;
     duplicate?: boolean;
+    query_kind?: KnowledgePrivateQueryKind;
+    status?: KnowledgePrivateQueryResult['status'];
+    code?: KnowledgePrivateQueryResult['code'];
+    total?: number;
+    page?: KnowledgePrivateQueryResult['page'];
 }
 export declare const DEFAULT_KNOWLEDGE_GUARDED_LIMITS: KnowledgeGuardedLimits;
 export declare function assertKnowledgeGuardedBinding(binding: KnowledgeGuardedBinding): void;
 export declare function assertKnowledgeGuardedPrecondition(verb: KnowledgeGuardedWriteVerb, precondition: KnowledgeGuardedPrecondition): void;
 export declare function assertKnowledgeGuardedManifestBinding(manifest: KnowledgeGuardedManifestBinding): void;
 export declare function assertKnowledgeGuardedBounds(bounds: KnowledgeGuardedBounds, field?: string): void;
+export declare function assertKnowledgePrivateQueryBounds(bounds: KnowledgePrivateQueryBounds, field?: string): void;
+export declare function assertKnowledgePrivateQueryPage(page: KnowledgePrivateQueryPage, bounds: KnowledgePrivateQueryBounds): void;
+export declare function assertKnowledgePrivateQuerySelector(selector: KnowledgePrivateQuerySelector): void;
+export declare function assertKnowledgeRelationsMetadata(metadata: Record<string, unknown>, itemId?: string): void;
 export declare function normalizeKnowledgeGuardedLimits(limits?: Partial<KnowledgeGuardedLimits>): KnowledgeGuardedLimits;
 export declare function canonicalKnowledgeGuardedJson(value: unknown): string;
 export declare function knowledgeGuardedDigest(value: unknown): string;
@@ -471,7 +587,11 @@ export declare function createKnowledgePrivateInputDescriptor(options: CreateKno
 export declare function revokeKnowledgePrivateInputDescriptor(descriptor: KnowledgePrivateInputDescriptor): void;
 export declare function createKnowledgePrivateTitleLookupDescriptor(options: CreateKnowledgePrivateTitleLookupDescriptorOptions): KnowledgePrivateTitleLookupDescriptor;
 export declare function revokeKnowledgePrivateTitleLookupDescriptor(descriptor: KnowledgePrivateTitleLookupDescriptor): void;
+export declare function createKnowledgePrivateQueryDescriptor(options: CreateKnowledgePrivateQueryDescriptorOptions): KnowledgePrivateQueryDescriptor;
+export declare function revokeKnowledgePrivateQueryDescriptor(descriptor: KnowledgePrivateQueryDescriptor): void;
 export declare function knowledgePrivateItemProof(item: KnowledgeItem): KnowledgePrivateItemProof;
+export declare function knowledgePrivateQueryItemProof(item: KnowledgeItem, matchedValue?: string | null): KnowledgePrivateQueryItemProof;
+export declare function knowledgePrivateHistoricalQueryItemProof(item: KnowledgeItemVersion, matchedValue?: string | null): KnowledgePrivateQueryItemProof;
 export declare function revokeKnowledgePrivateResultDescriptor(descriptor: KnowledgePrivateResultDescriptor): void;
 export declare function inspectKnowledgePrivateResult(descriptor: KnowledgePrivateResultDescriptor): KnowledgePrivateResultProof;
 export declare function assertKnowledgeTerminalCompleteness(reconciliation: KnowledgeTerminalReconciliation, expected: {

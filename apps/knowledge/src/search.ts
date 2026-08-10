@@ -777,3 +777,41 @@ export async function hybridSearchItems(
     results,
   };
 }
+
+/**
+ * Adapt an already-ranked, bounded producer page into the public hybrid-search
+ * result shape without fetching or re-ranking the collection in the client.
+ */
+export function hybridSearchFromProducerPage(
+  hits: readonly { item: KnowledgeItem; rank: number }[],
+  options: Pick<HybridSearchOptions, 'query' | 'limit' | 'offset' | 'semantic'>,
+  warnings: string[] = [],
+  producerTotal: number = hits.length,
+): HybridSearchResult {
+  const query = options.query.trim();
+  if (!query) throw new Error('Search query is required.');
+  const limit = Math.max(1, Math.min(options.limit ?? 10, 100));
+  const offset = Math.max(0, Math.floor(options.offset ?? 0));
+  const results = hits.map(({ item, rank }) => legacyItemResult(item, rank));
+  return {
+    query,
+    limit,
+    offset,
+    mode: {
+      keyword: true,
+      catalog: true,
+      semantic: options.semantic === true,
+    },
+    semantic_provider: null,
+    semantic_model: null,
+    semantic_dimensions: null,
+    counts: {
+      keyword_results: producerTotal,
+      catalog_results: 0,
+      semantic_results: 0,
+      merged_results: results.length,
+    },
+    warnings,
+    results,
+  };
+}

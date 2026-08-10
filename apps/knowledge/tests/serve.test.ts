@@ -3,6 +3,7 @@ import { mintApiKey } from '@hasna/contracts/auth';
 import { verifyApiKey } from '@hasna/contracts/auth';
 import { ApiKeyStore } from '@hasna/contracts/auth';
 import { createServeHandler, knowledgeOpenApi, normalizeCloudDatabaseUrl } from '../src/serve.ts';
+import { KNOWLEDGE_BOUNDED_QUERY_CAPABILITY } from '../src/query-contract.ts';
 
 const SIGNING = 'test-signing-secret-not-a-real-key';
 
@@ -15,7 +16,12 @@ const SIGNING = 'test-signing-secret-not-a-real-key';
 // nothing more. The versioning behaviour is pinned in
 // tests/entry-versioning.test.ts against a real in-process Postgres, which is
 // the only input that can produce both the pass and the fail.
-function makeMemoryClient() {
+interface SqlTraceEntry {
+  sql: string;
+  params: unknown[];
+}
+
+function makeMemoryClient(trace: SqlTraceEntry[] = []) {
   const rows: Record<string, Record<string, unknown>>[] = [] as any;
   const items = new Map<string, Record<string, unknown>>();
   const apiKeys = new Map<string, Record<string, unknown>>();
@@ -51,6 +57,7 @@ function makeMemoryClient() {
   };
 
   async function runSql(sql: string, params: unknown[] = []) {
+    trace.push({ sql, params: [...params] });
     const s = sql.trim().toLowerCase();
     // health/ready probe
     if (s.startsWith('select 1')) return { rows: [{ '?column?': 1 }], rowCount: 1 };
@@ -115,8 +122,8 @@ function keyFor(scopes: string[]): string {
   return mintApiKey({ app: 'knowledge', scopes, signingSecret: SIGNING }).token;
 }
 
-function buildHandler() {
-  const client = makeMemoryClient();
+function buildHandler(trace: SqlTraceEntry[] = []) {
+  const client = makeMemoryClient(trace);
   const store = new ApiKeyStore(client);
   const verifier = verifyApiKey({ app: 'knowledge', signingSecret: SIGNING, isRevoked: store.isRevoked });
   return createServeHandler({ client, verifier, store, version: '9.9.9' });
@@ -139,9 +146,49 @@ describe('knowledge-serve', () => {
     const h = buildHandler();
     const res = await h(new Request('http://x/openapi.json'));
     expect(res.status).toBe(200);
-    const spec = (await res.json()) as { paths: Record<string, unknown> };
+    const spec = (await res.json()) as {
+      paths: Record<string, any>;
+    };
     expect(Object.keys(spec.paths)).toContain('/v1/notes');
+    expect(Object.keys(spec.paths)).toContain('/v1/notes/search');
     expect(Object.keys(spec.paths)).toContain('/v1/notes/{id}');
+    expect(Object.keys(spec.paths)).toContain('/v1/guarded-writes/queries');
+    expect(
+      spec.paths['/v1/notes'].get.responses['200'].content['application/json'].schema.$ref,
+    ).toBe('#/components/schemas/NoteList');
+    expect(
+      spec.paths['/v1/notes/search'].get.responses['200'].content['application/json'].schema.$ref,
+    ).toBe('#/components/schemas/NoteSearchList');
+    expect((spec as any).components.schemas.NoteList.required).toContain('query_capability');
+    expect((spec as any).components.schemas.NoteSearchList.required).toContain('query_capability');
+    expect((spec as any).components.schemas.NoteList.properties.query_capability.enum).toEqual([
+      KNOWLEDGE_BOUNDED_QUERY_CAPABILITY,
+    ]);
+    const listParameters = spec.paths['/v1/notes'].get.parameters as Array<Record<string, unknown>>;
+    expect(listParameters.find((entry) => entry.name === 'search')).toMatchObject({ deprecated: true });
+    expect(listParameters.find((entry) => entry.name === 'includeArchived')).toMatchObject({ deprecated: true });
+  });
+
+  test('new server honors legacy search and includeArchived query aliases', async () => {
+    const trace: SqlTraceEntry[] = [];
+    const h = buildHandler(trace);
+    const key = keyFor(['knowledge:read']);
+    const res = await h(new Request(
+      'http://x/v1/notes?search=Needle&includeArchived=true&limit=5&offset=0',
+      { headers: { 'x-api-key': key } },
+    ));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      items: [],
+      total: 0,
+      query_capability: KNOWLEDGE_BOUNDED_QUERY_CAPABILITY,
+    });
+
+    const noteQueries = trace.filter((entry) => entry.sql.includes('knowledge_items'));
+    expect(noteQueries).toHaveLength(2);
+    expect(noteQueries.every((entry) => entry.sql.includes('strpos(LOWER'))).toBe(true);
+    expect(noteQueries.every((entry) => !entry.sql.includes('archived = FALSE'))).toBe(true);
+    expect(noteQueries.every((entry) => entry.params.includes('Needle'))).toBe(true);
   });
 
   test('unauthenticated /v1 requests are rejected', async () => {

@@ -8,6 +8,7 @@ import type {
   ItemStore,
   ItemCreateInput,
   ItemPatch,
+  ItemListOptions,
   ItemListResult,
 } from './item-store.js';
 
@@ -21,7 +22,7 @@ import type {
 export interface KnowledgeItemsSdk {
   /** The resolved Store for this scope (`kind: 'local' | 'api'`). */
   readonly store: () => ItemStore;
-  readonly list: () => Promise<ItemListResult>;
+  readonly list: (options?: ItemListOptions) => Promise<ItemListResult>;
   readonly get: (idOrShort: string) => Promise<KnowledgeItem | null>;
   readonly create: (input: ItemCreateInput) => Promise<KnowledgeItem>;
   readonly update: (idOrShort: string, patch: ItemPatch) => Promise<KnowledgeItem | null>;
@@ -210,7 +211,7 @@ export function createKnowledgeClient(options: KnowledgeClientOptions = {}): Kno
     },
     items: {
       store: () => service.itemStore(),
-      list: () => service.listItems(),
+      list: (options = {}) => service.listItems(options),
       get: (idOrShort) => service.getItem(idOrShort),
       create: (input) => service.createItem(input),
       update: (idOrShort, patch) => service.updateItem(idOrShort, patch),

@@ -12,15 +12,19 @@ import {
   KNOWLEDGE_GUARDED_WRITE_CONTRACT,
   assertKnowledgeGuardedBinding,
   assertKnowledgeGuardedBounds,
+  assertKnowledgePrivateQueryBounds,
+  assertKnowledgePrivateQueryPage,
   assertKnowledgeTerminalCompleteness,
   canonicalKnowledgeGuardedJson,
   computeKnowledgeGuardedAdoptionDeterministicKey,
   computeKnowledgeGuardedDeterministicKey,
   computeKnowledgeGuardedManifestDeterministicKey,
   createKnowledgePrivateResultDescriptor,
+  knowledgeGuardedContentSha256,
   knowledgeGuardedDigest,
   knowledgeGuardedUtf8Bytes,
   materializeKnowledgePrivateInput,
+  materializeKnowledgePrivateQuery,
   materializeKnowledgePrivateTitleLookup,
   normalizeKnowledgeGuardedLimits,
   type CreateKnowledgeGuardedManifestOptions,
@@ -46,6 +50,11 @@ import {
   type KnowledgeGuardedWriteEnvelope,
   type KnowledgeGuardedWriteResult,
   type KnowledgePrivateInputDescriptor,
+  type KnowledgePrivateQueryBounds,
+  type KnowledgePrivateQueryDescriptor,
+  type KnowledgePrivateQueryEnvelope,
+  type KnowledgePrivateQueryResult,
+  type KnowledgePrivateQuerySelector,
   type KnowledgePrivateResultDescriptor,
   type KnowledgePrivateTitleLookupDescriptor,
   type KnowledgeTerminalReconciliation,
@@ -77,6 +86,10 @@ export interface KnowledgeGuardedWriter {
   execute(descriptor: KnowledgePrivateInputDescriptor): Promise<KnowledgeGuardedWriteResult>;
   executePrivate(descriptor: KnowledgePrivateInputDescriptor): Promise<KnowledgePrivateResultDescriptor>;
   lookupTitle(descriptor: KnowledgePrivateTitleLookupDescriptor): Promise<KnowledgePrivateResultDescriptor>;
+  query(
+    descriptor: KnowledgePrivateQueryDescriptor,
+    bounds?: KnowledgePrivateQueryBounds,
+  ): Promise<KnowledgePrivateResultDescriptor>;
   reconcile(
     deterministicKey: string,
     operationId: string,
@@ -136,6 +149,22 @@ export class KnowledgePrivateTitleLookupAmbiguousError extends Error {
   constructor() {
     super('private_title_lookup_ambiguous: more than one exact title exists in the frozen binding.');
     this.name = 'KnowledgePrivateTitleLookupAmbiguousError';
+  }
+}
+
+export class KnowledgePrivateQueryResponseError extends Error {
+  readonly code = 'private_query_response_invalid';
+  constructor() {
+    super('private_query_response_invalid: the bounded private query response was unavailable or malformed.');
+    this.name = 'KnowledgePrivateQueryResponseError';
+  }
+}
+
+export class KnowledgeGuardedReadbackError extends Error {
+  readonly code = 'guarded_readback_response_invalid';
+  constructor() {
+    super('guarded_readback_response_invalid: the exact guarded readback was unavailable or malformed.');
+    this.name = 'KnowledgeGuardedReadbackError';
   }
 }
 
@@ -237,6 +266,18 @@ function bindingQuery(binding: KnowledgeGuardedBinding): Record<string, string> 
 
 function sameBinding(left: KnowledgeGuardedBinding, right: KnowledgeGuardedBinding): boolean {
   return canonicalKnowledgeGuardedJson(left) === canonicalKnowledgeGuardedJson(right);
+}
+
+function selectorMatchedValue(selector: KnowledgePrivateQuerySelector): string {
+  switch (selector.kind) {
+    case 'exact_title': return selector.title;
+    case 'lexical_overlap':
+    case 'semantic_overlap': return selector.query;
+    case 'supersession': return selector.supersedes_item_id;
+    case 'current_version':
+    case 'historical_version': return selector.item_id;
+    case 'canonical_pointer': return selector.canonical_item_id;
+  }
 }
 
 function parseErrorBody(error: unknown): Record<string, unknown> | null {
@@ -508,6 +549,111 @@ class GuardedWriter implements KnowledgeGuardedWriter {
       throw new Error('private_title_lookup_exact_bounded_readback_failed.');
     }
     return createKnowledgePrivateResultDescriptor({ kind: 'title_lookup', value: response });
+  }
+
+  async query(
+    descriptor: KnowledgePrivateQueryDescriptor,
+    bounds: KnowledgePrivateQueryBounds = {
+      max_calls: 1,
+      max_items: descriptor.page.limit,
+      max_bytes: this.limits.readback.max_bytes,
+      wall_time_ms: this.limits.readback.wall_time_ms,
+    },
+  ): Promise<KnowledgePrivateResultDescriptor> {
+    assertKnowledgePrivateQueryBounds(bounds);
+    assertKnowledgePrivateQueryPage(descriptor.page, bounds);
+    if (!sameBinding(descriptor.binding, this.binding)) {
+      throw new Error('private query descriptor binding does not match this guarded writer.');
+    }
+    const selector = materializeKnowledgePrivateQuery(descriptor);
+    if (selector.kind !== descriptor.query_kind) {
+      throw new Error('private query descriptor kind changed after freeze.');
+    }
+    const bindingDigest = knowledgeGuardedDigest({
+      binding: descriptor.binding,
+      operation_id: descriptor.operation_id,
+      step_id: descriptor.step_id,
+      query_kind: descriptor.query_kind,
+      selector_digest: descriptor.selector_digest,
+      archive: descriptor.archive,
+      page: descriptor.page,
+    });
+    if (bindingDigest !== descriptor.binding_digest) {
+      throw new Error('private query descriptor binding digest changed after freeze.');
+    }
+    const envelope: KnowledgePrivateQueryEnvelope = {
+      contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+      descriptor: descriptor.toJSON(),
+      selector,
+      limits: bounds,
+    };
+    if (knowledgeGuardedUtf8Bytes(envelope) > bounds.max_bytes) {
+      throw new Error('private_query_request_exceeds_byte_cap.');
+    }
+    let response: KnowledgePrivateQueryResult;
+    try {
+      const candidate = await this.transport.post<KnowledgePrivateQueryResult>(
+        '/guarded-writes/queries',
+        envelope,
+        {
+          headers: {
+            ...boundHeaders(bounds),
+            'x-knowledge-tenant-id': this.binding.tenant_id,
+          },
+          timeoutMs: bounds.wall_time_ms,
+          retry: false,
+        },
+      );
+      if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) {
+        throw new KnowledgePrivateQueryResponseError();
+      }
+      response = candidate;
+    } catch (error) {
+      if (error instanceof KnowledgePrivateQueryResponseError) throw error;
+      throw new KnowledgePrivateQueryResponseError();
+    }
+    const expectedMatchedDigest = knowledgeGuardedContentSha256(selectorMatchedValue(selector));
+    if (
+      knowledgeGuardedUtf8Bytes(response) > bounds.max_bytes
+      || response.contract !== KNOWLEDGE_GUARDED_WRITE_CONTRACT
+      || response.exact !== true
+      || response.bounded !== true
+      || response.private !== true
+      || response.query_kind !== descriptor.query_kind
+      || response.selector_digest !== descriptor.selector_digest
+      || !sameBinding(response.binding, this.binding)
+      || response.item_count !== response.items.length
+      || response.item_count !== response.page.returned
+      || response.item_count > descriptor.page.limit
+      || response.page.limit !== descriptor.page.limit
+      || response.page.offset !== descriptor.page.offset
+      || response.total < response.item_count
+      || response.page.has_more !== (
+        descriptor.page.offset + response.item_count < response.total
+      )
+      || canonicalKnowledgeGuardedJson(response.limits) !== canonicalKnowledgeGuardedJson(bounds)
+      || response.items.some((item) => item.matched_value_sha256 !== expectedMatchedDigest)
+    ) {
+      throw new KnowledgePrivateQueryResponseError();
+    }
+    if (
+      descriptor.query_kind === 'semantic_overlap'
+      && (
+        response.status !== 'unavailable'
+        || response.code !== 'semantic_query_unavailable'
+        || response.item_count !== 0
+        || response.total !== 0
+      )
+    ) {
+      throw new KnowledgePrivateQueryResponseError();
+    }
+    if (
+      descriptor.query_kind !== 'semantic_overlap'
+      && (response.status !== 'available' || response.code !== null)
+    ) {
+      throw new KnowledgePrivateQueryResponseError();
+    }
+    return createKnowledgePrivateResultDescriptor({ kind: 'query', value: response });
   }
 
   async createManifest(
@@ -870,23 +1016,50 @@ class GuardedWriter implements KnowledgeGuardedWriter {
     bounds: KnowledgeGuardedBounds = this.limits.readback,
   ): Promise<KnowledgeGuardedReadback> {
     assertKnowledgeGuardedBounds(bounds, 'readback bounds');
-    const response = await this.transport.get<KnowledgeGuardedReadback>(
-      `/guarded-writes/items/${encodeURIComponent(fullId)}`,
-      {
-        query: {
-          ...bindingQuery(this.binding),
-          max_calls: bounds.max_calls,
-          max_items: bounds.max_items,
-          max_bytes: bounds.max_bytes,
-          wall_time_ms: bounds.wall_time_ms,
+    let response: KnowledgeGuardedReadback;
+    try {
+      const candidate = await this.transport.get<KnowledgeGuardedReadback>(
+        `/guarded-writes/items/${encodeURIComponent(fullId)}`,
+        {
+          query: {
+            ...bindingQuery(this.binding),
+            max_calls: bounds.max_calls,
+            max_items: bounds.max_items,
+            max_bytes: bounds.max_bytes,
+            wall_time_ms: bounds.wall_time_ms,
+          },
+          headers: boundHeaders(bounds),
+          timeoutMs: bounds.wall_time_ms,
+          retry: false,
         },
-        headers: boundHeaders(bounds),
-        timeoutMs: bounds.wall_time_ms,
-        retry: false,
-      },
-    );
-    if (knowledgeGuardedUtf8Bytes(response) > bounds.max_bytes) {
-      throw new Error('guarded_readback_response_exceeds_byte_cap.');
+      );
+      if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) {
+        throw new KnowledgeGuardedReadbackError();
+      }
+      response = candidate;
+    } catch (error) {
+      if (error instanceof KnowledgeGuardedReadbackError) throw error;
+      if (
+        error
+        && typeof error === 'object'
+        && typeof (error as { status?: unknown }).status === 'number'
+      ) {
+        throw error;
+      }
+      throw new KnowledgeGuardedReadbackError();
+    }
+    if (
+      knowledgeGuardedUtf8Bytes(response) > bounds.max_bytes
+      || response.contract !== KNOWLEDGE_GUARDED_WRITE_CONTRACT
+      || response.exact !== true
+      || response.bounded !== true
+      || response.item_count !== 1
+      || !response.item
+      || response.item.id !== fullId
+      || !sameBinding(response.binding, this.binding)
+      || canonicalKnowledgeGuardedJson(response.limits) !== canonicalKnowledgeGuardedJson(bounds)
+    ) {
+      throw new KnowledgeGuardedReadbackError();
     }
     return response;
   }

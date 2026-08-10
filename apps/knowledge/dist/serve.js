@@ -1400,7 +1400,10 @@ import { createHash as createHash3, randomUUID as randomUUID2 } from "crypto";
 var KNOWLEDGE_GUARDED_WRITE_CONTRACT = "FCAME-1";
 var KNOWLEDGE_PRIVATE_INPUT_SCHEMA = "hasna.knowledge.private-input.v1";
 var KNOWLEDGE_PRIVATE_TITLE_LOOKUP_SCHEMA = "hasna.knowledge.private-title-lookup.v1";
+var KNOWLEDGE_PRIVATE_QUERY_SCHEMA = "hasna.knowledge.private-query.v1";
 var KNOWLEDGE_PRIVATE_RESULT_SCHEMA = "hasna.knowledge.private-result.v1";
+var KNOWLEDGE_RELATIONS_SCHEMA = "hasna.knowledge.relations.v1";
+var KNOWLEDGE_RELATIONS_METADATA_KEY = "hasna_knowledge_relations";
 var DEFAULT_KNOWLEDGE_GUARDED_LIMITS = Object.freeze({
   submission: Object.freeze({
     max_calls: 1,
@@ -1426,6 +1429,7 @@ var MAX_GUARDED_WALL_TIME_MS = 30000;
 var MAX_DESCRIPTOR_LIFETIME_MS = 60 * 60 * 1000;
 var PRIVATE_PAYLOADS = new WeakMap;
 var PRIVATE_TITLE_LOOKUPS = new WeakMap;
+var PRIVATE_QUERIES = new WeakMap;
 var PRIVATE_RESULTS = new WeakMap;
 function assertObjectKeys(value, field, allowed, required = allowed) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -1497,6 +1501,92 @@ function assertKnowledgeGuardedBounds(bounds, field = "limits") {
   }
   if (!Number.isInteger(bounds.wall_time_ms) || bounds.wall_time_ms < 1 || bounds.wall_time_ms > MAX_GUARDED_WALL_TIME_MS) {
     throw new Error(`${field}.wall_time_ms must be a positive integer no greater than ${MAX_GUARDED_WALL_TIME_MS}.`);
+  }
+}
+function assertKnowledgePrivateQueryBounds(bounds, field = "query limits") {
+  assertObjectKeys(bounds, field, ["max_calls", "max_items", "max_bytes", "wall_time_ms"]);
+  if (bounds.max_calls !== 1)
+    throw new Error(`${field}.max_calls must be exactly 1.`);
+  if (!Number.isInteger(bounds.max_items) || bounds.max_items < 1 || bounds.max_items > 50) {
+    throw new Error(`${field}.max_items must be an integer between 1 and 50.`);
+  }
+  if (!Number.isInteger(bounds.max_bytes) || bounds.max_bytes < 1 || bounds.max_bytes > MAX_GUARDED_BYTES) {
+    throw new Error(`${field}.max_bytes must be a positive integer no greater than ${MAX_GUARDED_BYTES}.`);
+  }
+  if (!Number.isInteger(bounds.wall_time_ms) || bounds.wall_time_ms < 1 || bounds.wall_time_ms > MAX_GUARDED_WALL_TIME_MS) {
+    throw new Error(`${field}.wall_time_ms must be a positive integer no greater than ${MAX_GUARDED_WALL_TIME_MS}.`);
+  }
+}
+function assertKnowledgePrivateQueryPage(page, bounds) {
+  assertObjectKeys(page, "query page", ["limit", "offset"]);
+  if (!Number.isInteger(page.limit) || page.limit < 1 || page.limit > bounds.max_items) {
+    throw new Error("query page.limit must be a positive integer no greater than limits.max_items.");
+  }
+  if (!Number.isInteger(page.offset) || page.offset < 0 || page.offset > 1e4) {
+    throw new Error("query page.offset must be an integer between 0 and 10000.");
+  }
+}
+function assertKnowledgePrivateQuerySelector(selector) {
+  if (!selector || typeof selector !== "object" || Array.isArray(selector)) {
+    throw new Error("private query selector must be an object.");
+  }
+  switch (selector.kind) {
+    case "exact_title":
+      assertObjectKeys(selector, "private query selector", ["kind", "title"]);
+      assertBoundText(selector.title, "private query selector.title", 2048);
+      return;
+    case "lexical_overlap":
+    case "semantic_overlap":
+      assertObjectKeys(selector, "private query selector", ["kind", "query"]);
+      assertBoundText(selector.query, "private query selector.query", 4096);
+      return;
+    case "supersession":
+      assertObjectKeys(selector, "private query selector", ["kind", "supersedes_item_id"]);
+      assertBoundText(selector.supersedes_item_id, "private query selector.supersedes_item_id");
+      return;
+    case "current_version":
+      assertObjectKeys(selector, "private query selector", ["kind", "item_id"]);
+      assertBoundText(selector.item_id, "private query selector.item_id");
+      return;
+    case "historical_version":
+      assertObjectKeys(selector, "private query selector", ["kind", "item_id", "version"]);
+      assertBoundText(selector.item_id, "private query selector.item_id");
+      if (!Number.isInteger(selector.version) || selector.version < 1) {
+        throw new Error("private query selector.version must be a positive integer.");
+      }
+      return;
+    case "canonical_pointer":
+      assertObjectKeys(selector, "private query selector", ["kind", "canonical_item_id"]);
+      assertBoundText(selector.canonical_item_id, "private query selector.canonical_item_id");
+      return;
+    default:
+      throw new Error("private query selector.kind is unsupported.");
+  }
+}
+function assertKnowledgeRelationsMetadata(metadata, itemId) {
+  const raw = metadata[KNOWLEDGE_RELATIONS_METADATA_KEY];
+  if (raw === undefined)
+    return;
+  assertObjectKeys(raw, `metadata.${KNOWLEDGE_RELATIONS_METADATA_KEY}`, ["schema", "supersedes_item_id", "canonical_item_id"], ["schema"]);
+  if (raw.schema !== KNOWLEDGE_RELATIONS_SCHEMA) {
+    throw new Error(`metadata.${KNOWLEDGE_RELATIONS_METADATA_KEY}.schema is unsupported.`);
+  }
+  const supersedes = raw.supersedes_item_id;
+  const canonical = raw.canonical_item_id;
+  if (supersedes === undefined && canonical === undefined) {
+    throw new Error(`metadata.${KNOWLEDGE_RELATIONS_METADATA_KEY} must contain at least one pointer.`);
+  }
+  if (supersedes !== undefined) {
+    assertBoundText(supersedes, `metadata.${KNOWLEDGE_RELATIONS_METADATA_KEY}.supersedes_item_id`);
+    if (itemId && supersedes === itemId) {
+      throw new Error("an item cannot supersede itself.");
+    }
+  }
+  if (canonical !== undefined) {
+    assertBoundText(canonical, `metadata.${KNOWLEDGE_RELATIONS_METADATA_KEY}.canonical_item_id`);
+    if (itemId && canonical === itemId) {
+      throw new Error(`metadata.${KNOWLEDGE_RELATIONS_METADATA_KEY}.canonical_item_id cannot reference itself.`);
+    }
   }
 }
 function normalizeKnowledgeGuardedLimits(limits = {}) {
@@ -2011,6 +2101,93 @@ function materializeKnowledgePrivateTitleLookup(descriptor) {
   }
   return state.title;
 }
+function createKnowledgePrivateQueryDescriptor(options) {
+  assertBoundText(options.operation_id, "operation_id");
+  assertBoundText(options.step_id, "step_id");
+  assertKnowledgeGuardedBinding(options.binding);
+  assertKnowledgePrivateQuerySelector(options.selector);
+  const archive = options.archive ?? "active";
+  if (!["active", "archived", "all"].includes(archive)) {
+    throw new Error("archive must be active, archived, or all.");
+  }
+  const limit = options.limit ?? 10;
+  const offset = options.offset ?? 0;
+  const bounds = {
+    max_calls: 1,
+    max_items: 50,
+    max_bytes: 1048576,
+    wall_time_ms: 1e4
+  };
+  assertKnowledgePrivateQueryPage({ limit, offset }, bounds);
+  const expiresIn = options.expires_in_ms ?? 5 * 60 * 1000;
+  if (!Number.isInteger(expiresIn) || expiresIn < 1 || expiresIn > MAX_DESCRIPTOR_LIFETIME_MS) {
+    throw new Error(`expires_in_ms must be between 1 and ${MAX_DESCRIPTOR_LIFETIME_MS}.`);
+  }
+  const selector = deepFreezeJson(JSON.parse(canonicalKnowledgeGuardedJson(options.selector)));
+  const selectorDigest = knowledgeGuardedDigest(selector);
+  const page = Object.freeze({ limit, offset });
+  const binding = Object.freeze({
+    authority: Object.freeze({ ...options.binding.authority }),
+    tenant_id: options.binding.tenant_id,
+    scope: options.binding.scope,
+    parent_id: options.binding.parent_id
+  });
+  const bindingDigest = knowledgeGuardedDigest({
+    binding,
+    operation_id: options.operation_id,
+    step_id: options.step_id,
+    query_kind: selector.kind,
+    selector_digest: selectorDigest,
+    archive,
+    page
+  });
+  const metadata = Object.freeze({
+    contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+    schema: KNOWLEDGE_PRIVATE_QUERY_SCHEMA,
+    operation_id: options.operation_id,
+    step_id: options.step_id,
+    query_kind: selector.kind,
+    selector_digest: selectorDigest,
+    binding_digest: bindingDigest,
+    binding,
+    archive,
+    page,
+    expires_at: new Date(Date.now() + expiresIn).toISOString()
+  });
+  const descriptor = {
+    ...metadata,
+    toJSON: () => metadata
+  };
+  Object.defineProperty(descriptor, "descriptor_id", {
+    value: `kpq_${randomUUID2()}`,
+    enumerable: false,
+    configurable: false,
+    writable: false
+  });
+  Object.freeze(descriptor);
+  PRIVATE_QUERIES.set(descriptor, { selector, revoked: false });
+  return descriptor;
+}
+function revokeKnowledgePrivateQueryDescriptor(descriptor) {
+  const state = PRIVATE_QUERIES.get(descriptor);
+  if (!state)
+    throw new Error("private query descriptor was not created by @hasna/knowledge.");
+  state.revoked = true;
+}
+function materializeKnowledgePrivateQuery(descriptor) {
+  const state = PRIVATE_QUERIES.get(descriptor);
+  if (!state)
+    throw new Error("private query descriptor was not created by @hasna/knowledge.");
+  if (state.revoked)
+    throw new Error("private query descriptor has been revoked.");
+  if (Date.parse(descriptor.expires_at) <= Date.now()) {
+    throw new Error("private query descriptor has expired.");
+  }
+  if (knowledgeGuardedDigest(state.selector) !== descriptor.selector_digest) {
+    throw new Error("private query descriptor selector digest changed after freeze.");
+  }
+  return state.selector;
+}
 function knowledgePrivateItemProof(item) {
   return Object.freeze({
     id: item.id,
@@ -2023,11 +2200,39 @@ function knowledgePrivateItemProof(item) {
     archived: item.archived === true
   });
 }
+function knowledgePrivateQueryItemProof(item, matchedValue = null) {
+  return Object.freeze({
+    id_sha256: knowledgeGuardedContentSha256(item.id),
+    version: Number(item.version ?? 1),
+    title_sha256: knowledgeGuardedContentSha256(item.title),
+    content_sha256: knowledgeGuardedContentSha256(item.content),
+    url_sha256: item.url === null || item.url === undefined ? null : knowledgeGuardedContentSha256(item.url),
+    tags_sha256: knowledgeGuardedDigest(item.tags ?? []),
+    metadata_sha256: knowledgeGuardedDigest(item.metadata ?? {}),
+    archived: item.archived === true,
+    record_kind: "current",
+    matched_value_sha256: matchedValue === null ? null : knowledgeGuardedContentSha256(matchedValue)
+  });
+}
+function knowledgePrivateHistoricalQueryItemProof(item, matchedValue = null) {
+  return Object.freeze({
+    id_sha256: knowledgeGuardedContentSha256(item.item_id),
+    version: item.version,
+    title_sha256: knowledgeGuardedContentSha256(item.title),
+    content_sha256: item.content_hash,
+    url_sha256: item.url === null ? null : knowledgeGuardedContentSha256(item.url),
+    tags_sha256: knowledgeGuardedDigest(item.tags),
+    metadata_sha256: knowledgeGuardedDigest(item.metadata),
+    archived: item.archived,
+    record_kind: "historical",
+    matched_value_sha256: matchedValue === null ? null : knowledgeGuardedContentSha256(matchedValue)
+  });
+}
 function createKnowledgePrivateResultDescriptor(result, expiresInMs = 5 * 60 * 1000) {
   if (!Number.isInteger(expiresInMs) || expiresInMs < 1 || expiresInMs > MAX_DESCRIPTOR_LIFETIME_MS) {
     throw new Error(`expires_in_ms must be between 1 and ${MAX_DESCRIPTOR_LIFETIME_MS}.`);
   }
-  const itemCount = result.kind === "title_lookup" ? result.value.item_count : 1;
+  const itemCount = result.kind === "title_lookup" || result.kind === "query" ? result.value.item_count : 1;
   const metadata = Object.freeze({
     contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
     schema: KNOWLEDGE_PRIVATE_RESULT_SCHEMA,
@@ -2083,6 +2288,18 @@ function inspectKnowledgePrivateResult(descriptor) {
       kind: "readback",
       item_count: 1,
       items: Object.freeze([knowledgePrivateItemProof(state.result.value.item)])
+    });
+  }
+  if (state.result.kind === "query") {
+    return Object.freeze({
+      kind: "query",
+      item_count: state.result.value.item_count,
+      items: Object.freeze([...state.result.value.items]),
+      query_kind: state.result.value.query_kind,
+      status: state.result.value.status,
+      code: state.result.value.code,
+      total: state.result.value.total,
+      page: Object.freeze({ ...state.result.value.page })
     });
   }
   return Object.freeze({
@@ -2146,6 +2363,12 @@ function knowledgeGuardedUtf8Bytes(value) {
   return Buffer.byteLength(JSON.stringify(value), "utf8");
 }
 
+// src/query-contract.ts
+var KNOWLEDGE_BOUNDED_QUERY_CAPABILITY = "hasna.knowledge.bounded-query.v1";
+function hasKnowledgeBoundedQueryCapability(value) {
+  return Boolean(value && typeof value === "object" && value.query_capability === KNOWLEDGE_BOUNDED_QUERY_CAPABILITY);
+}
+
 // src/serve.ts
 var KNOWLEDGE_SERVE_APP = "knowledge";
 function normalizeCloudDatabaseUrl(env = process.env) {
@@ -2169,7 +2392,7 @@ function resolveVersion() {
     const pkg = JSON.parse(readFileSync4(url, "utf8"));
     return pkg.version ?? "0.0.0";
   } catch {
-    return process.env.npm_package_version ?? "0.0.0";
+    return "0.0.0";
   }
 }
 function resolveSigningSecret(env = process.env) {
@@ -2202,6 +2425,13 @@ function parseJsonColumn(value, fallback) {
     }
   }
   return value;
+}
+function boundedInteger(value, fallback, field, minimum, maximum) {
+  const resolved = value ?? fallback;
+  if (!Number.isFinite(resolved) || !Number.isInteger(resolved) || resolved < minimum || resolved > maximum) {
+    throw new HttpError(400, `${field} must be an integer between ${minimum} and ${maximum}.`);
+  }
+  return resolved;
 }
 function rowToVersion(row) {
   return {
@@ -2272,6 +2502,13 @@ class NoteRepo {
     }
     const now = new Date().toISOString();
     const suppliedId = typeof input.id === "string" ? input.id.trim() : "";
+    if (input.metadata) {
+      try {
+        assertKnowledgeRelationsMetadata(input.metadata, suppliedId || undefined);
+      } catch (error) {
+        throw new HttpError(400, error instanceof Error ? error.message : "invalid relation metadata.");
+      }
+    }
     if (suppliedId) {
       const guarded = await this.client.get(`SELECT TRUE AS guarded FROM knowledge_items
           WHERE id = $1 AND authority_classification IS NOT NULL
@@ -2317,8 +2554,8 @@ class NoteRepo {
     return rowToItem(row);
   }
   async list(options = {}, guardedTenantId) {
-    const limit = Math.min(Math.max(options.limit ?? 50, 1), 200);
-    const offset = Math.max(options.offset ?? 0, 0);
+    const limit = boundedInteger(options.limit, 50, "limit", 1, 200);
+    const offset = boundedInteger(options.offset, 0, "offset", 0, 1e4);
     const params = [];
     const where = [];
     if (guardedTenantId) {
@@ -2327,20 +2564,87 @@ class NoteRepo {
     } else {
       where.push("authority_classification IS NULL");
     }
-    if (!options.includeArchived)
+    const archive = options.archive ?? "active";
+    if (archive === "active")
       where.push("archived = FALSE");
-    const search = options.search?.trim();
-    let tsQueryExpr = null;
-    if (search) {
-      params.push(search);
-      tsQueryExpr = `websearch_to_tsquery('english', $${params.length})`;
-      where.push(`search_vector @@ ${tsQueryExpr}`);
+    else if (archive === "archived")
+      where.push("archived = TRUE");
+    const filter = options.filter?.trim();
+    if (filter) {
+      params.push(filter);
+      const position = params.length;
+      where.push(`(strpos(LOWER(id), LOWER($${position})) > 0
+          OR strpos(LOWER(title), LOWER($${position})) > 0
+          OR strpos(LOWER(content), LOWER($${position})) > 0)`);
+    }
+    for (const raw of options.tags ?? []) {
+      const whole = raw.trim().toLowerCase();
+      const parts = raw.split(",").map((tag) => tag.trim().toLowerCase()).filter(Boolean);
+      const tagPredicates = [];
+      if (whole) {
+        params.push(whole);
+        tagPredicates.push(`EXISTS (
+          SELECT 1 FROM jsonb_array_elements_text(tags) AS item_tag
+          WHERE LOWER(item_tag) = $${params.length}
+        )`);
+      }
+      if (parts.length > 0) {
+        const partPredicates = parts.map((part) => {
+          params.push(part);
+          return `EXISTS (
+            SELECT 1 FROM jsonb_array_elements_text(tags) AS item_tag
+            WHERE LOWER(item_tag) = $${params.length}
+          )`;
+        });
+        tagPredicates.push(`(${partPredicates.join(" AND ")})`);
+      }
+      if (tagPredicates.length > 0)
+        where.push(`(${tagPredicates.join(" OR ")})`);
     }
     const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
-    const orderSql = tsQueryExpr ? `ORDER BY ts_rank_cd(search_vector, ${tsQueryExpr}) DESC, created_at DESC` : "ORDER BY created_at DESC";
+    const sortColumn = options.sort === "title" ? "title" : "created_at";
+    const direction = options.direction === "desc" ? "DESC" : "ASC";
+    const orderSql = `ORDER BY ${sortColumn} ${direction}, id ${direction}`;
     const totalRow = await this.client.get(`SELECT count(*)::text AS count FROM knowledge_items ${whereSql}`, params);
     const rows = await this.client.many(`SELECT * FROM knowledge_items ${whereSql} ${orderSql} LIMIT ${limit} OFFSET ${offset}`, params);
     return { items: rows.map(rowToItem), total: Number(totalRow?.count ?? 0) };
+  }
+  async search(options, guardedTenantId) {
+    const query2 = options.query.trim();
+    if (!query2)
+      throw new HttpError(400, "q is required");
+    const limit = boundedInteger(options.limit, 20, "limit", 1, 200);
+    const offset = boundedInteger(options.offset, 0, "offset", 0, 1e4);
+    const params = [];
+    const where = [];
+    if (guardedTenantId) {
+      params.push(guardedTenantId);
+      where.push(`(authority_classification IS NULL OR tenant_id = $${params.length})`);
+    } else {
+      where.push("authority_classification IS NULL");
+    }
+    const archive = options.archive ?? "active";
+    if (archive === "active")
+      where.push("archived = FALSE");
+    else if (archive === "archived")
+      where.push("archived = TRUE");
+    params.push(query2);
+    const tsQueryExpr = `websearch_to_tsquery('english', $${params.length})`;
+    where.push(`search_vector @@ ${tsQueryExpr}`);
+    const whereSql = `WHERE ${where.join(" AND ")}`;
+    const totalRow = await this.client.get(`SELECT count(*)::text AS count FROM knowledge_items ${whereSql}`, params);
+    const rows = await this.client.many(`SELECT *, ts_rank_cd(search_vector, ${tsQueryExpr}) AS search_rank
+        FROM knowledge_items
+        ${whereSql}
+        ORDER BY search_rank DESC, created_at DESC, id ASC
+        LIMIT ${limit} OFFSET ${offset}`, params);
+    return {
+      items: rows.map((row) => ({
+        item: rowToItem(row),
+        rank: Number(row.search_rank ?? 0)
+      })),
+      total: Number(totalRow?.count ?? 0)
+    };
   }
   async get(idOrShort, guardedTenantId) {
     const guardedVisibility = guardedTenantId ? "AND (authority_classification IS NULL OR tenant_id = $2)" : "AND authority_classification IS NULL";
@@ -2354,6 +2658,13 @@ class NoteRepo {
     const existing = await this.get(idOrShort);
     if (!existing)
       return null;
+    if (patch.metadata !== undefined) {
+      try {
+        assertKnowledgeRelationsMetadata(patch.metadata, existing.id);
+      } catch (error) {
+        throw new HttpError(400, error instanceof Error ? error.message : "invalid relation metadata.");
+      }
+    }
     const sets = [];
     const params = [];
     const push = (col, val, cast = "") => {
@@ -2515,6 +2826,15 @@ function rowToGuardedReceipt(row) {
 }
 function rowMatchesGuardedBinding(row, binding) {
   return row.authority_classification === binding.authority.classification && row.authority_id === binding.authority.authority_id && row.tenant_id === binding.tenant_id && row.scope === binding.scope && row.parent_id === binding.parent_id;
+}
+function guardedRelationTargets(payload) {
+  if (!("metadata" in payload) || !payload.metadata)
+    return [];
+  const relation = payload.metadata[KNOWLEDGE_RELATIONS_METADATA_KEY];
+  if (!relation || typeof relation !== "object" || Array.isArray(relation))
+    return [];
+  const value = relation;
+  return [value.supersedes_item_id, value.canonical_item_id].filter((target) => typeof target === "string");
 }
 function rowToManifestStep(row) {
   return {
@@ -3274,6 +3594,32 @@ class GuardedWriteRepo {
           duplicate: true
         };
       }
+      for (const targetId of guardedRelationTargets(envelope.payload)) {
+        const target = await tx.get(`SELECT id FROM knowledge_items
+            WHERE id = $1
+              AND authority_classification = $2
+              AND authority_id = $3
+              AND tenant_id = $4
+              AND scope = $5
+              AND parent_id = $6
+            LIMIT 1`, [
+          targetId,
+          binding.authority.classification,
+          binding.authority.authority_id,
+          binding.tenant_id,
+          binding.scope,
+          binding.parent_id
+        ]);
+        if (!target) {
+          const receipt2 = await this.finish(tx, envelope, "rejected", "relation_binding_mismatch", null);
+          return {
+            contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+            deterministic_key: envelope.deterministic_key,
+            receipt: receipt2,
+            duplicate: false
+          };
+        }
+      }
       if (descriptor.verb === "create") {
         const payload = envelope.payload;
         const now = new Date().toISOString();
@@ -3513,6 +3859,162 @@ class GuardedWriteRepo {
       item_count: items.length,
       binding,
       title_digest: knowledgeGuardedContentSha256(title),
+      items,
+      limits
+    };
+  }
+  async query(selector, selectorDigest, archive, page, binding, limits) {
+    if (selector.kind === "semantic_overlap") {
+      return {
+        contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+        exact: true,
+        bounded: true,
+        private: true,
+        query_kind: selector.kind,
+        status: "unavailable",
+        code: "semantic_query_unavailable",
+        binding,
+        selector_digest: selectorDigest,
+        total: 0,
+        item_count: 0,
+        page: {
+          limit: page.limit,
+          offset: page.offset,
+          returned: 0,
+          has_more: false
+        },
+        items: [],
+        limits
+      };
+    }
+    const bindingParams = [
+      binding.authority.classification,
+      binding.authority.authority_id,
+      binding.tenant_id,
+      binding.scope,
+      binding.parent_id
+    ];
+    const currentWhere = [
+      "authority_classification = $1",
+      "authority_id = $2",
+      "tenant_id = $3",
+      "scope = $4",
+      "parent_id = $5"
+    ];
+    if (archive === "active")
+      currentWhere.push("archived = FALSE");
+    else if (archive === "archived")
+      currentWhere.push("archived = TRUE");
+    let currentOrder = "ORDER BY id ASC";
+    let matchedValue;
+    if (selector.kind === "historical_version") {
+      const params = [...bindingParams, selector.item_id, selector.version];
+      const historyWhere = [
+        "i.authority_classification = $1",
+        "i.authority_id = $2",
+        "i.tenant_id = $3",
+        "i.scope = $4",
+        "i.parent_id = $5",
+        "v.item_id = $6",
+        "v.version = $7"
+      ];
+      if (archive === "active")
+        historyWhere.push("v.archived = FALSE");
+      else if (archive === "archived")
+        historyWhere.push("v.archived = TRUE");
+      const whereSql2 = `WHERE ${historyWhere.join(" AND ")}`;
+      const totalRow2 = await this.client.get(`SELECT count(*)::text AS count
+          FROM knowledge_item_versions v
+          JOIN knowledge_items i ON i.id = v.item_id
+          ${whereSql2}`, params);
+      const rows2 = await this.client.many(`SELECT v.*
+          FROM knowledge_item_versions v
+          JOIN knowledge_items i ON i.id = v.item_id
+          ${whereSql2}
+          ORDER BY v.version ASC
+          LIMIT ${page.limit} OFFSET ${page.offset}`, params);
+      const total2 = Number(totalRow2?.count ?? 0);
+      const items2 = rows2.map((row) => knowledgePrivateHistoricalQueryItemProof(rowToVersion(row), selector.item_id));
+      return {
+        contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+        exact: true,
+        bounded: true,
+        private: true,
+        query_kind: selector.kind,
+        status: "available",
+        code: null,
+        binding,
+        selector_digest: selectorDigest,
+        total: total2,
+        item_count: items2.length,
+        page: {
+          limit: page.limit,
+          offset: page.offset,
+          returned: items2.length,
+          has_more: page.offset + items2.length < total2
+        },
+        items: items2,
+        limits
+      };
+    }
+    switch (selector.kind) {
+      case "exact_title":
+        bindingParams.push(selector.title);
+        currentWhere.push(`title = $${bindingParams.length}`);
+        matchedValue = selector.title;
+        break;
+      case "lexical_overlap": {
+        bindingParams.push(selector.query);
+        const tsQuery = `websearch_to_tsquery('english', $${bindingParams.length})`;
+        currentWhere.push(`search_vector @@ ${tsQuery}`);
+        currentOrder = `ORDER BY ts_rank_cd(search_vector, ${tsQuery}) DESC, id ASC`;
+        matchedValue = selector.query;
+        break;
+      }
+      case "supersession":
+        bindingParams.push(KNOWLEDGE_RELATIONS_SCHEMA, selector.supersedes_item_id);
+        currentWhere.push(`metadata #>> '{${KNOWLEDGE_RELATIONS_METADATA_KEY},schema}' = $${bindingParams.length - 1}`, `metadata #>> '{${KNOWLEDGE_RELATIONS_METADATA_KEY},supersedes_item_id}' = $${bindingParams.length}`);
+        matchedValue = selector.supersedes_item_id;
+        break;
+      case "current_version":
+        bindingParams.push(selector.item_id);
+        currentWhere.push(`id = $${bindingParams.length}`);
+        matchedValue = selector.item_id;
+        break;
+      case "canonical_pointer":
+        bindingParams.push(KNOWLEDGE_RELATIONS_SCHEMA, selector.canonical_item_id);
+        currentWhere.push(`metadata #>> '{${KNOWLEDGE_RELATIONS_METADATA_KEY},schema}' = $${bindingParams.length - 1}`, `metadata #>> '{${KNOWLEDGE_RELATIONS_METADATA_KEY},canonical_item_id}' = $${bindingParams.length}`);
+        matchedValue = selector.canonical_item_id;
+        break;
+      default:
+        throw new HttpError(400, "private query selector kind is unsupported.");
+    }
+    const whereSql = `WHERE ${currentWhere.join(" AND ")}`;
+    const totalRow = await this.client.get(`SELECT count(*)::text AS count FROM knowledge_items ${whereSql}`, bindingParams);
+    const rows = await this.client.many(`SELECT * FROM knowledge_items
+        ${whereSql}
+        ${currentOrder}
+        LIMIT ${page.limit} OFFSET ${page.offset}`, bindingParams);
+    const total = Number(totalRow?.count ?? 0);
+    const items = rows.map((row) => knowledgePrivateQueryItemProof(rowToItem(row), matchedValue));
+    return {
+      contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+      exact: true,
+      bounded: true,
+      private: true,
+      query_kind: selector.kind,
+      status: "available",
+      code: null,
+      binding,
+      selector_digest: selectorDigest,
+      total,
+      item_count: items.length,
+      page: {
+        limit: page.limit,
+        offset: page.offset,
+        returned: items.length,
+        has_more: page.offset + items.length < total
+      },
       items,
       limits
     };
@@ -3777,9 +4279,35 @@ function knowledgeOpenApi(version) {
           type: "object",
           properties: {
             items: { type: "array", items: { $ref: "#/components/schemas/Note" } },
-            total: { type: "integer" }
+            total: { type: "integer" },
+            query_capability: {
+              type: "string",
+              enum: [KNOWLEDGE_BOUNDED_QUERY_CAPABILITY]
+            }
           },
-          required: ["items", "total"]
+          required: ["items", "total", "query_capability"]
+        },
+        NoteSearchList: {
+          type: "object",
+          properties: {
+            items: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  item: { $ref: "#/components/schemas/Note" },
+                  rank: { type: "number" }
+                },
+                required: ["item", "rank"]
+              }
+            },
+            total: { type: "integer" },
+            query_capability: {
+              type: "string",
+              enum: [KNOWLEDGE_BOUNDED_QUERY_CAPABILITY]
+            }
+          },
+          required: ["items", "total", "query_capability"]
         },
         NoteVersionList: {
           type: "object",
@@ -3798,14 +4326,42 @@ function knowledgeOpenApi(version) {
       "/v1/notes": {
         get: {
           operationId: "listNotes",
-          summary: "List knowledge items",
+          summary: "List knowledge items with literal filters and bounded paging",
           parameters: [
             { name: "limit", in: "query", schema: { type: "integer" } },
             { name: "offset", in: "query", schema: { type: "integer" } },
-            { name: "search", in: "query", schema: { type: "string" } }
+            { name: "filter", in: "query", schema: { type: "string" } },
+            {
+              name: "search",
+              in: "query",
+              deprecated: true,
+              description: "Legacy alias for filter.",
+              schema: { type: "string" }
+            },
+            {
+              name: "tags",
+              in: "query",
+              style: "form",
+              explode: true,
+              schema: { type: "array", items: { type: "string" } }
+            },
+            { name: "archive", in: "query", schema: { type: "string", enum: ["active", "archived", "all"] } },
+            {
+              name: "includeArchived",
+              in: "query",
+              deprecated: true,
+              description: "Legacy alias: true maps to archive=all.",
+              schema: { type: "boolean" }
+            },
+            { name: "sort", in: "query", schema: { type: "string", enum: ["created", "title"] } },
+            { name: "direction", in: "query", schema: { type: "string", enum: ["asc", "desc"] } }
           ],
           responses: {
-            "200": { content: { "application/json": { schema: { $ref: "#/components/schemas/NoteList" } } } }
+            "200": {
+              content: {
+                "application/json": { schema: { $ref: "#/components/schemas/NoteList" } }
+              }
+            }
           }
         },
         post: {
@@ -3817,6 +4373,25 @@ function knowledgeOpenApi(version) {
           },
           responses: {
             "201": { content: { "application/json": { schema: { $ref: "#/components/schemas/Note" } } } }
+          }
+        }
+      },
+      "/v1/notes/search": {
+        get: {
+          operationId: "searchNotes",
+          summary: "Ranked PostgreSQL full-text query with bounded paging",
+          parameters: [
+            { name: "q", in: "query", required: true, schema: { type: "string" } },
+            { name: "limit", in: "query", schema: { type: "integer" } },
+            { name: "offset", in: "query", schema: { type: "integer" } },
+            { name: "archive", in: "query", schema: { type: "string", enum: ["active", "archived", "all"] } }
+          ],
+          responses: {
+            "200": {
+              content: {
+                "application/json": { schema: { $ref: "#/components/schemas/NoteSearchList" } }
+              }
+            }
           }
         }
       },
@@ -3978,6 +4553,29 @@ function knowledgeOpenApi(version) {
           }
         }
       },
+      "/v1/guarded-writes/queries": {
+        post: {
+          operationId: "queryGuardedKnowledge",
+          summary: "Bounded private Knowledge query under one frozen FCAME-1 binding",
+          description: "The raw selector exists only in this authenticated request body. " + "The response contains hashes, versions, page evidence, and no raw selector or item id.",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["contract", "descriptor", "selector", "limits"],
+                  additionalProperties: false
+                }
+              }
+            }
+          },
+          responses: {
+            "200": { description: "Exact bounded private result or typed semantic unavailability." },
+            "400": { description: "Descriptor, selector, binding digest, page, or bounds mismatch." }
+          }
+        }
+      },
       "/v1/guarded-writes/receipts/{deterministicKey}": {
         get: {
           operationId: "reconcileGuardedKnowledgeWrite",
@@ -4100,6 +4698,20 @@ function guardedBoundsFromHeaders(req) {
     assertKnowledgeGuardedBounds(bounds);
   } catch (error) {
     throw new HttpError(400, error instanceof Error ? error.message : "invalid guarded bounds.");
+  }
+  return bounds;
+}
+function privateQueryBoundsFromHeaders(req) {
+  const bounds = {
+    max_calls: parsePositiveInteger(req.headers.get("x-knowledge-max-calls"), "x-knowledge-max-calls"),
+    max_items: parsePositiveInteger(req.headers.get("x-knowledge-max-items"), "x-knowledge-max-items"),
+    max_bytes: parsePositiveInteger(req.headers.get("x-knowledge-max-bytes"), "x-knowledge-max-bytes"),
+    wall_time_ms: parsePositiveInteger(req.headers.get("x-knowledge-wall-time-ms"), "x-knowledge-wall-time-ms")
+  };
+  try {
+    assertKnowledgePrivateQueryBounds(bounds);
+  } catch (error) {
+    throw new HttpError(400, error instanceof Error ? error.message : "invalid private query bounds.");
   }
   return bounds;
 }
@@ -4229,6 +4841,9 @@ function validateGuardedEnvelope(value, headerBounds, authority, idempotencyKey)
     assertConfiguredAuthority(descriptor.binding, authority);
     assertKnowledgeGuardedPrecondition(descriptor.verb, descriptor.precondition);
     assertKnowledgeGuardedPayload(descriptor.verb, envelope.payload);
+    if ("metadata" in envelope.payload && envelope.payload.metadata) {
+      assertKnowledgeRelationsMetadata(envelope.payload.metadata, descriptor.target_id);
+    }
     const limits = normalizeKnowledgeGuardedLimits(envelope.limits);
     if (canonicalKnowledgeGuardedJson(limits) !== canonicalKnowledgeGuardedJson(envelope.limits)) {
       throw new Error("guarded-write limits must be explicit and complete.");
@@ -4335,6 +4950,78 @@ function validatePrivateTitleLookupEnvelope(value, headerBounds, authority) {
     if (error instanceof HttpError)
       throw error;
     throw new HttpError(400, error instanceof Error ? error.message : "invalid private title lookup envelope.");
+  }
+}
+function validatePrivateQueryEnvelope(value, headerBounds, authority) {
+  try {
+    if (!value || typeof value !== "object") {
+      throw new Error("private query envelope is required.");
+    }
+    const envelope = value;
+    assertExactRequestKeys(value, "private query envelope", ["contract", "descriptor", "selector", "limits"]);
+    if (envelope.contract !== KNOWLEDGE_GUARDED_WRITE_CONTRACT) {
+      throw new Error("unsupported guarded-write contract.");
+    }
+    const descriptor = envelope.descriptor;
+    if (!descriptor || descriptor.contract !== KNOWLEDGE_GUARDED_WRITE_CONTRACT || descriptor.schema !== KNOWLEDGE_PRIVATE_QUERY_SCHEMA) {
+      throw new Error("invalid private query descriptor schema.");
+    }
+    assertExactRequestKeys(descriptor, "private query descriptor", [
+      "contract",
+      "schema",
+      "operation_id",
+      "step_id",
+      "query_kind",
+      "selector_digest",
+      "binding_digest",
+      "binding",
+      "archive",
+      "page",
+      "expires_at"
+    ]);
+    if (typeof descriptor.operation_id !== "string" || descriptor.operation_id.length === 0 || typeof descriptor.step_id !== "string" || descriptor.step_id.length === 0 || !["active", "archived", "all"].includes(descriptor.archive)) {
+      throw new Error("private query operation, step, and archive mode are required.");
+    }
+    const descriptorExpiresAt = Date.parse(descriptor.expires_at);
+    const descriptorNow = Date.now();
+    if (!Number.isFinite(descriptorExpiresAt) || descriptorExpiresAt <= descriptorNow || descriptorExpiresAt > descriptorNow + 60 * 60 * 1000) {
+      throw new Error("private query descriptor is expired or malformed.");
+    }
+    assertKnowledgeGuardedBinding(descriptor.binding);
+    assertConfiguredAuthority(descriptor.binding, authority);
+    assertKnowledgePrivateQueryBounds(envelope.limits);
+    assertKnowledgePrivateQueryPage(descriptor.page, envelope.limits);
+    if (canonicalKnowledgeGuardedJson(envelope.limits) !== canonicalKnowledgeGuardedJson(headerBounds)) {
+      throw new Error("private query limits must exactly match the producer bound headers.");
+    }
+    assertKnowledgePrivateQuerySelector(envelope.selector);
+    if (envelope.selector.kind !== descriptor.query_kind) {
+      throw new Error("private query selector kind does not match the frozen descriptor.");
+    }
+    const selectorDigest = knowledgeGuardedDigest(envelope.selector);
+    if (selectorDigest !== descriptor.selector_digest) {
+      throw new Error("private query selector digest does not match the frozen descriptor.");
+    }
+    const bindingDigest = knowledgeGuardedDigest({
+      binding: descriptor.binding,
+      operation_id: descriptor.operation_id,
+      step_id: descriptor.step_id,
+      query_kind: descriptor.query_kind,
+      selector_digest: descriptor.selector_digest,
+      archive: descriptor.archive,
+      page: descriptor.page
+    });
+    if (bindingDigest !== descriptor.binding_digest) {
+      throw new Error("private query binding digest does not match.");
+    }
+    if (knowledgeGuardedUtf8Bytes(envelope) > headerBounds.max_bytes) {
+      throw new Error("private query envelope exceeds the producer byte cap.");
+    }
+    return envelope;
+  } catch (error) {
+    if (error instanceof HttpError)
+      throw error;
+    throw new HttpError(400, error instanceof Error ? error.message : "invalid private query envelope.");
   }
 }
 function validateGuardedAdoptionEnvelope(value, headerBounds, authority, idempotencyKey) {
@@ -4653,6 +5340,24 @@ function createServeHandler(deps) {
           throw error;
         }
       }
+      if (path === "/v1/guarded-writes/queries" && method === "POST") {
+        if (!guardedRepo) {
+          return json({ error: "guarded_authority_unconfigured" }, 503);
+        }
+        const startedAt = Date.now();
+        const tenantId = req.headers.get("x-knowledge-tenant-id");
+        if (!tenantId)
+          throw new HttpError(400, "x-knowledge-tenant-id is required.");
+        await authOrThrow(req, ["knowledge:read"], tenantId);
+        const bounds = privateQueryBoundsFromHeaders(req);
+        const raw = await readBoundedJson(req, bounds, startedAt);
+        const envelope = validatePrivateQueryEnvelope(raw, bounds, guardedRepo.authority);
+        if (envelope.descriptor.binding.tenant_id !== tenantId) {
+          throw new HttpError(403, "descriptor tenant does not match the authenticated request tenant.");
+        }
+        const result = await guardedRepo.query(envelope.selector, envelope.descriptor.selector_digest, envelope.descriptor.archive, envelope.descriptor.page, envelope.descriptor.binding, bounds);
+        return boundedJson(result, 200, bounds, startedAt);
+      }
       const guardedReceiptMatch = path.match(/^\/v1\/guarded-writes\/receipts\/([^/]+)$/);
       if (guardedReceiptMatch) {
         if (method !== "GET")
@@ -4686,16 +5391,50 @@ function createServeHandler(deps) {
         const readback = await guardedRepo.readback(decodeURIComponent(guardedItemMatch[1]), binding, bounds);
         return readback ? boundedJson(readback, 200, bounds, startedAt) : boundedJson({ error: "not_found" }, 404, bounds, startedAt);
       }
+      if (path === "/v1/notes/search") {
+        if (method !== "GET")
+          return json({ error: "method_not_allowed" }, 405);
+        const principal = await authOrThrow(req, ["knowledge:read"]);
+        const query2 = url.searchParams.get("q") ?? "";
+        const archiveRaw = url.searchParams.get("archive") ?? "active";
+        if (!["active", "archived", "all"].includes(archiveRaw)) {
+          throw new HttpError(400, "archive must be active, archived, or all.");
+        }
+        const result = await repo.search({
+          query: query2,
+          archive: archiveRaw,
+          limit: url.searchParams.has("limit") ? Number(url.searchParams.get("limit")) : undefined,
+          offset: url.searchParams.has("offset") ? Number(url.searchParams.get("offset")) : undefined
+        }, principal.tid);
+        return json({ ...result, query_capability: KNOWLEDGE_BOUNDED_QUERY_CAPABILITY });
+      }
       if (path === "/v1/notes") {
         if (method === "GET") {
           const principal = await authOrThrow(req, ["knowledge:read"]);
+          const includeArchived = url.searchParams.get("includeArchived") === "true";
+          const archiveRaw = url.searchParams.get("archive") ?? (includeArchived ? "all" : "active");
+          const sortRaw = url.searchParams.get("sort") ?? "created";
+          const directionRaw = url.searchParams.get("direction") ?? "asc";
+          if (!["active", "archived", "all"].includes(archiveRaw)) {
+            throw new HttpError(400, "archive must be active, archived, or all.");
+          }
+          if (!["created", "title"].includes(sortRaw)) {
+            throw new HttpError(400, "sort must be created or title.");
+          }
+          if (!["asc", "desc"].includes(directionRaw)) {
+            throw new HttpError(400, "direction must be asc or desc.");
+          }
+          const tags = url.searchParams.getAll("tags");
           const result = await repo.list({
             limit: url.searchParams.has("limit") ? Number(url.searchParams.get("limit")) : undefined,
             offset: url.searchParams.has("offset") ? Number(url.searchParams.get("offset")) : undefined,
-            search: url.searchParams.get("search") ?? undefined,
-            includeArchived: url.searchParams.get("includeArchived") === "true"
+            filter: url.searchParams.get("filter") ?? url.searchParams.get("search") ?? undefined,
+            tags: tags.length > 0 ? tags : undefined,
+            archive: archiveRaw,
+            sort: sortRaw,
+            direction: directionRaw
           }, principal.tid);
-          return json(result);
+          return json({ ...result, query_capability: KNOWLEDGE_BOUNDED_QUERY_CAPABILITY });
         }
         if (method === "POST") {
           const principal = await authOrThrow(req, ["knowledge:write"]);

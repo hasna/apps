@@ -1659,6 +1659,12 @@ function knowledgeModeReport(env = process.env) {
   };
 }
 
+// src/query-contract.ts
+var KNOWLEDGE_BOUNDED_QUERY_CAPABILITY = "hasna.knowledge.bounded-query.v1";
+function hasKnowledgeBoundedQueryCapability(value) {
+  return Boolean(value && typeof value === "object" && value.query_capability === KNOWLEDGE_BOUNDED_QUERY_CAPABILITY);
+}
+
 // src/cloud-store.ts
 function transportOverrides(env) {
   return {
@@ -1679,33 +1685,95 @@ class KnowledgeVersionConflictError extends Error {
     this.name = "KnowledgeVersionConflictError";
   }
 }
+
+class KnowledgeBoundedQueryCapabilityError extends Error {
+  operation;
+  fields;
+  code = "bounded_query_capability_required";
+  constructor(operation, fields) {
+    super(`bounded_query_capability_required: the Knowledge server did not prove support for ${operation} field(s): ` + `${fields.join(", ")}. Refusing to accept a possibly unfiltered response; update the server and retry.`);
+    this.operation = operation;
+    this.fields = fields;
+    this.name = "KnowledgeBoundedQueryCapabilityError";
+  }
+}
 function toQuery(options) {
   const q = {};
-  if (options.search)
+  if (options.search) {
+    q.filter = options.search;
     q.search = options.search;
+  }
+  if (options.tags?.length)
+    q.tags = options.tags;
+  if (options.archive) {
+    q.archive = options.archive;
+    if (options.archive === "all")
+      q.includeArchived = true;
+  }
+  if (options.sort)
+    q.sort = options.sort;
+  if (options.direction)
+    q.direction = options.direction;
   if (options.limit !== undefined)
     q.limit = options.limit;
   if (options.offset !== undefined)
     q.offset = options.offset;
-  if (options.includeArchived || options.archivedOnly)
-    q.includeArchived = true;
   return q;
+}
+function listFieldsRequiringCapability(options) {
+  const fields = [];
+  if (options.tags?.length)
+    fields.push("tags");
+  if (options.sort !== undefined)
+    fields.push("sort");
+  if (options.direction !== undefined)
+    fields.push("direction");
+  if (options.archive === "archived")
+    fields.push("archive=archived");
+  return fields;
+}
+function boundedQueryInteger(value, fallback, field, minimum, maximum) {
+  const resolved = value ?? fallback;
+  if (!Number.isFinite(resolved) || !Number.isInteger(resolved) || resolved < minimum || resolved > maximum) {
+    throw new Error(`${field} must be an integer between ${minimum} and ${maximum}.`);
+  }
+  return resolved;
 }
 function wrap(client) {
   return {
     baseUrl: client.baseUrl,
     async list(options = {}) {
-      const wantLimit = options.limit ?? 200;
-      const query2 = toQuery({ ...options, limit: Math.min(Math.max(wantLimit, 1), 200) });
+      const limit = boundedQueryInteger(options.limit, 200, "limit", 1, 200);
+      const offset = boundedQueryInteger(options.offset, 0, "offset", 0, 1e4);
+      const query2 = toQuery({ ...options, limit, offset });
       const res = await client.list(KNOWLEDGE_RESOURCE, { query: query2 });
-      let items = res.items;
-      if (options.archivedOnly)
-        items = items.filter((x) => x.archived === true);
-      if (options.tag) {
-        const t = options.tag.toLowerCase();
-        items = items.filter((x) => (x.tags ?? []).some((tag) => tag.toLowerCase() === t));
+      if (!Number.isInteger(res.total) || Number(res.total) < 0) {
+        throw new Error("knowledge cloud list response is missing a valid producer total.");
       }
-      return { items, total: res.total };
+      const requiredFields = listFieldsRequiringCapability(options);
+      if (requiredFields.length > 0 && !hasKnowledgeBoundedQueryCapability(res.raw)) {
+        throw new KnowledgeBoundedQueryCapabilityError("list", requiredFields);
+      }
+      return { items: res.items, total: Number(res.total) };
+    },
+    async search(options) {
+      const limit = boundedQueryInteger(options.limit, 20, "limit", 1, 200);
+      const offset = boundedQueryInteger(options.offset, 0, "offset", 0, 1e4);
+      const response = await client.transport.get(`/${KNOWLEDGE_RESOURCE}/search`, {
+        query: {
+          q: options.query,
+          archive: options.archive ?? "active",
+          limit,
+          offset
+        }
+      });
+      if (!Number.isInteger(response.total) || response.total < 0 || !Array.isArray(response.items) || response.items.some((hit) => !hit || typeof hit !== "object" || !hit.item || typeof hit.rank !== "number" || !Number.isFinite(hit.rank))) {
+        throw new Error("knowledge cloud search response is missing producer rank or total evidence.");
+      }
+      if (!hasKnowledgeBoundedQueryCapability(response)) {
+        throw new KnowledgeBoundedQueryCapabilityError("search", ["q", "rank", "total"]);
+      }
+      return { items: response.items, total: response.total };
     },
     async get(idOrShort) {
       return client.get(KNOWLEDGE_RESOURCE, idOrShort);
@@ -1816,7 +1884,7 @@ async function fetchAllCloudItems(store) {
   const pageSize = 200;
   const all = [];
   for (let offset = 0;; offset += pageSize) {
-    const { items } = await store.list({ includeArchived: true, limit: pageSize, offset });
+    const { items } = await store.list({ archive: "all", limit: pageSize, offset });
     all.push(...items);
     if (items.length < pageSize)
       break;
@@ -3816,7 +3884,60 @@ var PG_MIGRATIONS = [
      BEFORE UPDATE OF id ON knowledge_items
      FOR EACH ROW EXECUTE FUNCTION knowledge_guarded_item_id_immutable()`,
   `ALTER TABLE knowledge_items
-     ENABLE ALWAYS TRIGGER trg_knowledge_guarded_00_item_id_immutable`
+     ENABLE ALWAYS TRIGGER trg_knowledge_guarded_00_item_id_immutable`,
+  `ALTER TABLE knowledge_items
+     DROP CONSTRAINT IF EXISTS knowledge_items_relation_metadata_contract`,
+  `ALTER TABLE knowledge_items
+     ADD CONSTRAINT knowledge_items_relation_metadata_contract CHECK (
+       metadata -> 'hasna_knowledge_relations' IS NULL
+       OR (
+         jsonb_typeof(metadata -> 'hasna_knowledge_relations') = 'object'
+         AND metadata #>> '{hasna_knowledge_relations,schema}' = 'hasna.knowledge.relations.v1'
+         AND (
+           metadata #>> '{hasna_knowledge_relations,supersedes_item_id}' IS NOT NULL
+           OR metadata #>> '{hasna_knowledge_relations,canonical_item_id}' IS NOT NULL
+         )
+         AND (
+           (metadata -> 'hasna_knowledge_relations')
+           - ARRAY['schema', 'supersedes_item_id', 'canonical_item_id']
+         ) = '{}'::jsonb
+         AND (
+           metadata #>> '{hasna_knowledge_relations,supersedes_item_id}' IS NULL
+           OR (
+             btrim(metadata #>> '{hasna_knowledge_relations,supersedes_item_id}') <> ''
+             AND metadata #>> '{hasna_knowledge_relations,supersedes_item_id}' <> id
+           )
+         )
+         AND (
+           metadata #>> '{hasna_knowledge_relations,canonical_item_id}' IS NULL
+           OR (
+             btrim(metadata #>> '{hasna_knowledge_relations,canonical_item_id}') <> ''
+             AND metadata #>> '{hasna_knowledge_relations,canonical_item_id}' <> id
+           )
+         )
+       )
+     )`,
+  `CREATE INDEX IF NOT EXISTS idx_knowledge_items_guarded_title
+     ON knowledge_items (
+       authority_classification, authority_id, tenant_id, scope, parent_id,
+       title, archived, id
+     )`,
+  `CREATE INDEX IF NOT EXISTS idx_knowledge_items_guarded_supersedes
+     ON knowledge_items (
+       authority_classification, authority_id, tenant_id, scope, parent_id,
+       (metadata #>> '{hasna_knowledge_relations,supersedes_item_id}'),
+       archived, id
+     )
+     WHERE metadata #>> '{hasna_knowledge_relations,schema}'
+       = 'hasna.knowledge.relations.v1'`,
+  `CREATE INDEX IF NOT EXISTS idx_knowledge_items_guarded_canonical
+     ON knowledge_items (
+       authority_classification, authority_id, tenant_id, scope, parent_id,
+       (metadata #>> '{hasna_knowledge_relations,canonical_item_id}'),
+       archived, id
+     )
+     WHERE metadata #>> '{hasna_knowledge_relations,schema}'
+       = 'hasna.knowledge.relations.v1'`
 ];
 export {
   wrapExecutor,

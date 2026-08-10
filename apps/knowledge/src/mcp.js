@@ -154,8 +154,8 @@ function openProjectDb(service = projectService()) {
 
 async function itemResources(storePath, scope = 'project') {
   const store = itemStoreFor(storePath, scope);
-  const { items } = await store.listAll();
-  return activeItems(items, false).slice(0, 100).map((item) => ({
+  const { items } = await store.list({ archive: 'active', limit: 100, offset: 0 });
+  return items.map((item) => ({
     uri: `knowledge://project/items/${encodeURIComponent(item.id)}`,
     name: item.title,
     description: `Knowledge item ${item.id}`,
@@ -1542,30 +1542,27 @@ export function buildServer() {
     include_archived: z.boolean().optional().describe('Include archived items'),
     include_content: z.boolean().optional().describe('Include full item content in each list row; default false to keep agent output compact'),
     include_metadata: z.boolean().optional().describe('Include full item metadata in each list row; default false to keep agent output compact'),
-    page: z.number().optional().describe('Page number'),
-    limit: z.number().optional().describe('Items per page'),
+    page: z.number().int().min(1).optional().describe('Page number'),
+    limit: z.number().int().min(1).max(200).optional().describe('Items per page'),
     sort: z.enum(['created', 'title']).optional().describe('Sort field'),
     desc: z.boolean().optional().describe('Sort descending'),
     store_path: storePathField,
     scope: scopeField,
   }, async ({ search, tag, include_archived, include_content, include_metadata, page, limit, sort, desc, store_path, scope }) => {
     const store = itemStoreFor(store_path, scope);
-    const { items: all } = await store.listAll();
-    const q = search ? search.toLowerCase() : '';
-    const requiredTags = (tag ?? []).map((entry) => entry.toLowerCase());
-    let items = activeItems(all, include_archived);
-    if (q) items = items.filter((item) => itemMatchesSearch(item, q));
-    if (requiredTags.length > 0) {
-      items = items.filter((item) => {
-        const itemTags = (item.tags ?? []).map((entry) => entry.toLowerCase());
-        return requiredTags.every((entry) => itemTags.includes(entry));
-      });
-    }
-    const p = page && page > 0 ? page : 1;
-    const l = limit && limit > 0 ? limit : 20;
-    const sorted = sortItems(items, sort ?? 'created', desc ?? false);
+    const p = page ?? 1;
+    const l = limit ?? 20;
     const start = (p - 1) * l;
-    const rows = sorted.slice(start, start + l);
+    const result = await store.list({
+      search,
+      tags: tag ?? [],
+      archive: include_archived ? 'all' : 'active',
+      sort: sort ?? 'created',
+      direction: desc ? 'desc' : 'asc',
+      limit: l,
+      offset: start,
+    });
+    const rows = result.items;
     const compactRows = rows.map((item) => compactItem(item, {
       includeContent: include_content === true,
       includeMetadata: include_metadata === true,
@@ -1574,8 +1571,8 @@ export function buildServer() {
       ok: true,
       page: p,
       limit: l,
-      total: sorted.length,
-      total_pages: Math.max(1, Math.ceil(sorted.length / l)),
+      total: result.total,
+      total_pages: Math.max(1, Math.ceil(result.total / l)),
       items: compactRows,
       detail_hint: 'Use ok_get with an id for full item details, or set include_content/include_metadata for expanded list rows.',
     });

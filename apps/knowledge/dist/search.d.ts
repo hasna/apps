@@ -90,3 +90,11 @@ export declare function hybridSearchLegacyStore(options: Omit<HybridSearchOption
  * is reported as skipped rather than silently ignored.
  */
 export declare function hybridSearchItems(items: KnowledgeItem[], options: Omit<HybridSearchOptions, 'dbPath' | 'legacyStorePath'>, baseWarnings?: string[]): Promise<HybridSearchResult>;
+/**
+ * Adapt an already-ranked, bounded producer page into the public hybrid-search
+ * result shape without fetching or re-ranking the collection in the client.
+ */
+export declare function hybridSearchFromProducerPage(hits: readonly {
+    item: KnowledgeItem;
+    rank: number;
+}[], options: Pick<HybridSearchOptions, 'query' | 'limit' | 'offset' | 'semantic'>, warnings?: string[], producerTotal?: number): HybridSearchResult;

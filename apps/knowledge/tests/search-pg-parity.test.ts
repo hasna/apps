@@ -49,6 +49,60 @@ beforeAll(async () => {
       [doc.id, doc.id.slice(0, 8), doc.title, doc.text, createdAt],
     );
   }
+  const listFixtures = [
+    {
+      id: 'list_id_literal_needle',
+      shortId: 'short-no-match',
+      title: 'Literal alpha title',
+      content: 'plain list body',
+      tags: ['red', 'blue'],
+      archived: false,
+      createdAt: '2026-02-01T00:00:00.000Z',
+    },
+    {
+      id: 'list_title_match',
+      shortId: 'short-title',
+      title: 'Needle in title',
+      content: 'plain body',
+      tags: ['red,blue'],
+      archived: false,
+      createdAt: '2026-02-02T00:00:00.000Z',
+    },
+    {
+      id: 'list_content_match',
+      shortId: 'short-content',
+      title: 'Other title',
+      content: 'Needle in content',
+      tags: ['red', 'blue', 'green'],
+      archived: true,
+      createdAt: '2026-02-03T00:00:00.000Z',
+    },
+    {
+      id: 'list_short_excluded',
+      shortId: 'needle-short-only',
+      title: 'No literal here',
+      content: 'No literal here either',
+      tags: ['red'],
+      archived: false,
+      createdAt: '2026-02-04T00:00:00.000Z',
+    },
+  ] as const;
+  for (const fixture of listFixtures) {
+    await db.query(
+      `INSERT INTO knowledge_items
+         (id, short_id, title, content, tags, metadata, archived, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5::jsonb,'{}'::jsonb,$6,$7,$7)`,
+      [
+        fixture.id,
+        fixture.shortId,
+        fixture.title,
+        fixture.content,
+        JSON.stringify(fixture.tags),
+        fixture.archived,
+        fixture.createdAt,
+      ],
+    );
+  }
   repo = new NoteRepo(pgliteClient(db));
 });
 
@@ -57,8 +111,8 @@ afterAll(async () => {
 });
 
 async function listIds(search: string): Promise<string[]> {
-  const result = await repo.list({ search, limit: 50 });
-  return result.items.map((item) => item.id);
+  const result = await repo.search({ query: search, limit: 50 });
+  return result.items.map((hit) => hit.item.id);
 }
 
 describe('search parity — Stage 2 Postgres full-text', () => {
@@ -90,7 +144,7 @@ describe('search parity — Stage 2 Postgres full-text', () => {
   });
 
   test('total reflects the full-text predicate, not the whole table', async () => {
-    const result = await repo.list({ search: 'kubernetes', limit: 50 });
+    const result = await repo.search({ query: 'kubernetes', limit: 50 });
     expect(result.total).toBe(2); // c_title_term + c_body_term only
     expect(result.items).toHaveLength(2);
   });
@@ -110,5 +164,84 @@ describe('search parity — Stage 2 Postgres full-text', () => {
     expect(pgIds).toEqual(['c_alpha_beta']);
     expect(sqliteIds).toEqual(['c_alpha_beta']);
     expect(pgIds).toEqual(sqliteIds);
+  });
+
+  test('ranked search preserves OR, negation, limit, and offset producer semantics', async () => {
+    const orResult = await repo.search({ query: 'alpha OR kubernetes', limit: 50 });
+    const orIds = orResult.items.map((hit) => hit.item.id);
+    expect(orIds).toContain('c_alpha_beta');
+    expect(orIds).toContain('c_title_term');
+
+    const negated = await repo.search({ query: 'alpha -beta', limit: 50 });
+    const negatedIds = negated.items.map((hit) => hit.item.id);
+    expect(negatedIds).toContain('c_alpha_only');
+    expect(negatedIds).not.toContain('c_alpha_beta');
+
+    const first = await repo.search({ query: 'kubernetes', limit: 1, offset: 0 });
+    const second = await repo.search({ query: 'kubernetes', limit: 1, offset: 1 });
+    expect(first.total).toBe(2);
+    expect(second.total).toBe(2);
+    expect(first.items).toHaveLength(1);
+    expect(second.items).toHaveLength(1);
+    expect(first.items[0]!.item.id).not.toBe(second.items[0]!.item.id);
+  });
+});
+
+describe('bounded public list compatibility — producer-side PGlite', () => {
+  test('literal matching covers full id, title, and content but excludes short id', async () => {
+    const result = await repo.list({ filter: 'needle', archive: 'all', limit: 50 });
+    expect(result.items.map((item) => item.id).sort()).toEqual([
+      'list_content_match',
+      'list_id_literal_needle',
+      'list_title_match',
+    ]);
+  });
+
+  test('repeated tags narrow and comma-containing filters preserve whole-or-split semantics', async () => {
+    const repeated = await repo.list({
+      tags: ['red', 'green'],
+      archive: 'all',
+      limit: 50,
+    });
+    expect(repeated.items.map((item) => item.id)).toEqual(['list_content_match']);
+
+    const glued = await repo.list({
+      tags: ['red,blue'],
+      archive: 'all',
+      limit: 50,
+    });
+    expect(glued.items.map((item) => item.id).sort()).toEqual([
+      'list_content_match',
+      'list_id_literal_needle',
+      'list_title_match',
+    ]);
+  });
+
+  test('archive modes, total-before-page, deterministic ordering, and bounds are exact', async () => {
+    const active = await repo.list({ filter: 'list_', archive: 'active', limit: 50 });
+    expect(active.items.map((item) => item.id)).toEqual([
+      'list_id_literal_needle',
+      'list_title_match',
+      'list_short_excluded',
+    ]);
+    const archived = await repo.list({ filter: 'list_', archive: 'archived', limit: 50 });
+    expect(archived.items.map((item) => item.id)).toEqual(['list_content_match']);
+
+    const page = await repo.list({
+      filter: 'list_',
+      archive: 'all',
+      sort: 'title',
+      direction: 'desc',
+      limit: 2,
+      offset: 1,
+    });
+    expect(page.total).toBe(4);
+    expect(page.items).toHaveLength(2);
+    expect(page.items.map((item) => item.title)).toEqual(['No literal here', 'Needle in title']);
+
+    await expect(repo.list({ limit: 0 })).rejects.toThrow(/limit/);
+    await expect(repo.list({ limit: 201 })).rejects.toThrow(/limit/);
+    await expect(repo.list({ offset: -1 })).rejects.toThrow(/offset/);
+    await expect(repo.list({ offset: 10_001 })).rejects.toThrow(/offset/);
   });
 });

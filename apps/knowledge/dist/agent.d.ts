@@ -1,4 +1,5 @@
 import { type KnowledgeContextPack, type RetrievalOptions } from './retrieval';
+import type { HybridSearchResult } from './search';
 import type { KnowledgeItem } from './store';
 export interface KnowledgePromptOptions extends Omit<RetrievalOptions, 'query'> {
     prompt: string;
@@ -43,4 +44,4 @@ export interface KnowledgePromptOverItemsOptions extends Omit<KnowledgePromptOpt
  * key. There is no local sqlite catalog, so run telemetry is not persisted to a
  * local db (it would be split-brain); the run id is still returned for the shape.
  */
-export declare function runKnowledgePromptOverItems(items: KnowledgeItem[], options: KnowledgePromptOverItemsOptions): Promise<KnowledgePromptResult>;
+export declare function runKnowledgePromptOverItems(items: KnowledgeItem[], options: KnowledgePromptOverItemsOptions, producerSearch?: HybridSearchResult): Promise<KnowledgePromptResult>;
