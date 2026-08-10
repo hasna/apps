@@ -3,9 +3,12 @@ process.env["MEMENTOS_DB_PATH"] = ":memory:";
 import { beforeEach, describe, expect, test } from "bun:test";
 import { getProject, registerProject } from "../db/projects.js";
 import { resetDatabase } from "../db/database.js";
+import { configureProjectAuthorityTestIdentity } from "../test-support/project-authority-identity.js";
 import { buildOpenApiDocument } from "./openapi.js";
 import { matchRoute } from "./router.js";
 import "./routes/projects.js";
+
+configureProjectAuthorityTestIdentity();
 
 async function request(path: string, body: Record<string, unknown>): Promise<Response> {
   const matched = matchRoute("POST", path);

@@ -14,6 +14,13 @@ import type {
   ProjectGuardedUpdateRequest,
 } from "../../types/index.js";
 import { listAgentsByProject } from "../../db/agents.js";
+import {
+  MEMENTOS_PROJECT_RESOURCE_KINDS,
+  MementosProjectResourceError,
+  getMementosProjectResourceExact,
+  readMementosProjectResourcePage,
+  type MementosProjectResourceKind,
+} from "../../project-registration/index.js";
 import { addRoute } from "../router.js";
 import { json, errorResponse, readJson, getSearchParams } from "../helpers.js";
 
@@ -50,6 +57,60 @@ addRoute("GET", "/api/projects/:id", (_req, _url, params) => {
   const project = getProject(params["id"]!);
   if (!project) return errorResponse("Project not found", 404);
   return json(project);
+});
+
+function projectResourceError(error: MementosProjectResourceError): Response {
+  const status = error.code === "MEMENTOS_PROJECT_RESOURCE_PROJECT_NOT_FOUND"
+    || error.code === "MEMENTOS_PROJECT_RESOURCE_NOT_FOUND"
+    ? 404
+    : error.code === "MEMENTOS_PROJECT_RESOURCE_INVALID_INPUT"
+      ? 400
+      : 409;
+  return errorResponse(error.message, status, { code: error.code, ...error.details });
+}
+
+function parseResourceKinds(raw: string | undefined): MementosProjectResourceKind[] | undefined {
+  if (raw === undefined) return undefined;
+  const values = raw.split(",").map((value) => value.trim()).filter(Boolean);
+  for (const value of values) {
+    if (!MEMENTOS_PROJECT_RESOURCE_KINDS.includes(value as MementosProjectResourceKind)) {
+      throw new MementosProjectResourceError(
+        "MEMENTOS_PROJECT_RESOURCE_INVALID_INPUT",
+        `Unsupported Mementos project resource kind: ${value}`,
+      );
+    }
+  }
+  return values as MementosProjectResourceKind[];
+}
+
+// GET /api/projects/:id/resources — stable-ID, revision-bound producer page
+addRoute("GET", "/api/projects/:id/resources", (_req, url, params) => {
+  const q = getSearchParams(url);
+  try {
+    const parsedLimit = q["limit"] === undefined ? undefined : Number(q["limit"]);
+    return json(readMementosProjectResourcePage(params["id"]!, {
+      limit: parsedLimit,
+      cursor: q["cursor"],
+      resource_kinds: parseResourceKinds(q["resource_kinds"]),
+    }));
+  } catch (error) {
+    if (error instanceof MementosProjectResourceError) return projectResourceError(error);
+    throw error;
+  }
+});
+
+// GET /api/projects/:id/resources/:kind/:resource_id — exact membership readback
+addRoute("GET", "/api/projects/:id/resources/:kind/:resource_id", (_req, _url, params) => {
+  try {
+    return json(getMementosProjectResourceExact(
+      params["id"]!,
+      params["kind"]! as MementosProjectResourceKind,
+      params["resource_id"]!,
+    ));
+  } catch (error) {
+    if (error instanceof MementosProjectResourceError) return projectResourceError(error);
+    throw error;
+  }
 });
 
 function guardedUpdateError(error: ProjectGuardedUpdateError): Response {

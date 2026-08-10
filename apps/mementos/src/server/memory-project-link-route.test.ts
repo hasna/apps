@@ -4,9 +4,12 @@ import { beforeEach, describe, expect, test } from "bun:test";
 import { resetDatabase } from "../db/database.js";
 import { createMemory, getMemory } from "../db/memories.js";
 import { registerProject } from "../db/projects.js";
+import { configureProjectAuthorityTestIdentity } from "../test-support/project-authority-identity.js";
 import { buildOpenApiDocument } from "./openapi.js";
 import { matchRoute } from "./router.js";
 import "./routes/memories.js";
+
+configureProjectAuthorityTestIdentity();
 
 async function post(path: string, body: Record<string, unknown>): Promise<Response> {
   const matched = matchRoute("POST", path);

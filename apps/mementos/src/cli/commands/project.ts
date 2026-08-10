@@ -19,6 +19,14 @@ import type {
   MemoryCategory,
 } from "../../types/index.js";
 import {
+  MEMENTOS_PROJECT_RESOURCE_KINDS,
+  getMementosProjectResourceExact,
+  readAllMementosProjectResources,
+  readMementosProjectResourcePage,
+  resolveMementosProjectAuthorityIdentity,
+  type MementosProjectResourceKind,
+} from "../../project-registration/index.js";
+import {
   DEFAULT_COMPACT_LIMIT,
   outputJson,
   makeHandleError,
@@ -134,9 +142,7 @@ export function registerProjectCommands(program: Command): void {
             process.exit(1);
           }
           const common = {
-            authority_id: "mementos",
-            tenant_id: "default",
-            corpus_id: "default",
+            ...resolveMementosProjectAuthorityIdentity(),
             operation_id: (opts.operationId as string | undefined) ?? idempotencyKey,
             step_id: (opts.stepId as string | undefined)
               ?? (rollbackReceipt ? "mementos_project_rollback" : "mementos_project_update"),
@@ -214,6 +220,91 @@ export function registerProjectCommands(program: Command): void {
         });
       } catch (e) {
         handleError(e);
+      }
+    });
+
+  program
+    .command("project-resources <project-id>")
+    .description("Enumerate the complete project-owned Mementos resource population")
+    .option("--limit <n>", "Bounded page size (1-1000)", parseInt)
+    .option("--cursor <cursor>", "Opaque revision-bound continuation cursor")
+    .option(
+      "--kinds <kinds>",
+      "Comma-separated resource kinds: project,knowledge,memory,session",
+    )
+    .option("--all", "Traverse every page and verify complete unique coverage")
+    .option("--resource-kind <kind>", "Read one exact resource kind")
+    .option("--resource-id <id>", "Read one exact stable resource ID")
+    .action((projectId: string, opts) => {
+      try {
+        const globalOpts = program.opts<GlobalOpts>();
+        const resourceKind = opts.resourceKind as string | undefined;
+        const resourceId = opts.resourceId as string | undefined;
+        if (Boolean(resourceKind) !== Boolean(resourceId)) {
+          throw new Error("--resource-kind and --resource-id must be provided together");
+        }
+        const resourceKinds = opts.kinds === undefined
+          ? undefined
+          : String(opts.kinds)
+            .split(",")
+            .map((value) => value.trim())
+            .filter(Boolean) as MementosProjectResourceKind[];
+        if (resourceKinds) {
+          for (const kind of resourceKinds) {
+            if (!MEMENTOS_PROJECT_RESOURCE_KINDS.includes(kind)) {
+              throw new Error(`Unsupported project resource kind: ${kind}`);
+            }
+          }
+        }
+
+        const result = resourceKind && resourceId
+          ? getMementosProjectResourceExact(
+            projectId,
+            resourceKind as MementosProjectResourceKind,
+            resourceId,
+          )
+          : opts.all
+            ? readAllMementosProjectResources(projectId, {
+              page_size: opts.limit as number | undefined,
+              resource_kinds: resourceKinds,
+            })
+            : readMementosProjectResourcePage(projectId, {
+              limit: opts.limit as number | undefined,
+              cursor: opts.cursor as string | undefined,
+              resource_kinds: resourceKinds,
+            });
+
+        if (globalOpts.json) {
+          outputJson(result);
+          return;
+        }
+        if ("resource" in result) {
+          console.log(chalk.green("Project resource:"));
+          console.log(`  ${chalk.bold("Project:")}    ${result.project_id}`);
+          console.log(`  ${chalk.bold("Kind:")}       ${result.resource.resource_kind}`);
+          console.log(`  ${chalk.bold("Stable ID:")}  ${result.resource.stable_id}`);
+          console.log(`  ${chalk.bold("Revision:")}   ${result.resource.revision}`);
+          return;
+        }
+        console.log(chalk.bold(
+          `${result.count} of ${result.total} project resource${result.total === 1 ? "" : "s"}:`,
+        ));
+        for (const resource of result.resources) {
+          console.log(
+            `  ${chalk.dim(resource.resource_kind.padEnd(9))} ${resource.stable_id}`,
+          );
+        }
+        console.log(
+          `  ${chalk.bold("Complete:")} ${result.complete}  `
+          + `${chalk.bold("Has more:")} ${result.has_more}`,
+        );
+        if (result.next_cursor) {
+          console.log(
+            chalk.dim(`Next: mementos project-resources ${projectId} --cursor ${result.next_cursor}`),
+          );
+        }
+      } catch (error) {
+        handleError(error);
       }
     });
 

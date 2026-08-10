@@ -8,11 +8,16 @@ import {
   blankLlmProviderEnv,
   isolatedStoreEnv,
 } from "../test-support/store-isolation.js";
+import { projectAuthorityTestEnv } from "../test-support/project-authority-identity.js";
 import { RECALL_EXIT_FUZZY, RECALL_EXIT_NOT_FOUND } from "./commands/memory-cmd-recall-exit.js";
 
 // Use a temp file DB so all subprocess calls share the same database
 const DB_PATH = join(tmpdir(), `mementos-cli-test-${Date.now()}.db`);
 const CLI_PATH = new URL("./index.tsx", import.meta.url).pathname;
+const PROJECT_AUTHORITY_ENV = projectAuthorityTestEnv();
+const UNCONFIGURED_PROJECT_AUTHORITY_ENV = Object.fromEntries(
+  Object.keys(PROJECT_AUTHORITY_ENV).map((key) => [key, ""]),
+);
 
 // This suite drives the real CLI and WRITES. The child env must be pinned to
 // DB_PATH — see src/test-support/store-isolation.ts for why blanking the vars
@@ -57,6 +62,12 @@ async function runCliWithEnv(
   ]);
   const exitCode = await proc.exited;
   return { stdout: stdout.trim(), stderr: stderr.trim(), exitCode };
+}
+
+async function runGuardedProjectCli(
+  ...args: string[]
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  return runCliWithEnv(PROJECT_AUTHORITY_ENV, ...args);
 }
 
 describe("store isolation", () => {
@@ -583,7 +594,8 @@ describe("cli memory commands (continued)", () => {
     const newName = `CLI Project ${suffix}`;
     const newPath = join(tmpdir(), `cli-project-${suffix}`);
 
-    const createdResult = await runCli(
+    const createdResult = await runCliWithEnv(
+      UNCONFIGURED_PROJECT_AUTHORITY_ENV,
       "--json",
       "projects",
       "--add",
@@ -595,7 +607,28 @@ describe("cli memory commands (continued)", () => {
     expect(createdResult.exitCode).toBe(0);
     const created = JSON.parse(createdResult.stdout);
 
-    const previewResult = await runCli(
+    const unconfiguredPreview = await runCliWithEnv(
+      UNCONFIGURED_PROJECT_AUTHORITY_ENV,
+      "--json",
+      "projects",
+      "--update",
+      created.id,
+      "--expected-revision",
+      created.updated_at,
+      "--idempotency-key",
+      `cli-project-unconfigured-${suffix}`,
+      "--dry-run",
+      "--name",
+      newName,
+      "--path",
+      newPath
+    );
+    expect(unconfiguredPreview.exitCode).toBe(1);
+    expect(JSON.parse(unconfiguredPreview.stdout)).toMatchObject({
+      error: expect.stringMatching(/project authority identity is not configured/i),
+    });
+
+    const previewResult = await runGuardedProjectCli(
       "--json",
       "projects",
       "--update",
@@ -617,10 +650,16 @@ describe("cli memory commands (continued)", () => {
       receipt: null,
       project: { id: created.id, name: newName, path: newPath },
     });
-    const afterPreview = JSON.parse((await runCli("--json", "projects")).stdout);
+    const afterPreview = JSON.parse((
+      await runCliWithEnv(
+        UNCONFIGURED_PROJECT_AUTHORITY_ENV,
+        "--json",
+        "projects",
+      )
+    ).stdout);
     expect(afterPreview).toContainEqual(created);
 
-    const updatedResult = await runCli(
+    const updatedResult = await runGuardedProjectCli(
       "--json",
       "projects",
       "--update",
@@ -643,7 +682,7 @@ describe("cli memory commands (continued)", () => {
       receipt: { direction: "forward", target_id: created.id },
     });
 
-    const duplicateResult = await runCli(
+    const duplicateResult = await runGuardedProjectCli(
       "--json",
       "projects",
       "--update",
@@ -660,7 +699,7 @@ describe("cli memory commands (continued)", () => {
     expect(duplicateResult.exitCode).toBe(0);
     expect(JSON.parse(duplicateResult.stdout)).toEqual(updated);
 
-    const inconsistentRetry = await runCli(
+    const inconsistentRetry = await runGuardedProjectCli(
       "projects",
       "--update",
       created.id,
@@ -675,7 +714,13 @@ describe("cli memory commands (continued)", () => {
     expect(inconsistentRetry.stderr).toMatch(/idempotency key.*different request/i);
 
     const projectBeforeRollbackPreview = JSON.parse(
-      (await runCli("--json", "projects")).stdout,
+      (
+        await runCliWithEnv(
+          UNCONFIGURED_PROJECT_AUTHORITY_ENV,
+          "--json",
+          "projects",
+        )
+      ).stdout,
     ).find((project: { id: string }) => project.id === created.id);
     const { Database } = await import("bun:sqlite");
     const receiptDbBeforeRollbackPreview = new Database(DB_PATH, { readonly: true });
@@ -684,7 +729,7 @@ describe("cli memory commands (continued)", () => {
       .get() as { count: number };
     receiptDbBeforeRollbackPreview.close();
 
-    const rollbackPreviewResult = await runCli(
+    const rollbackPreviewResult = await runGuardedProjectCli(
       "--json",
       "projects",
       "--update",
@@ -701,7 +746,13 @@ describe("cli memory commands (continued)", () => {
     expect(rollbackPreviewResult.stderr).toMatch(/dry-run.*rollback.*not supported/i);
 
     const projectAfterRollbackPreview = JSON.parse(
-      (await runCli("--json", "projects")).stdout,
+      (
+        await runCliWithEnv(
+          UNCONFIGURED_PROJECT_AUTHORITY_ENV,
+          "--json",
+          "projects",
+        )
+      ).stdout,
     ).find((project: { id: string }) => project.id === created.id);
     const receiptDbAfterRollbackPreview = new Database(DB_PATH, { readonly: true });
     const receiptCountAfterRollbackPreview = receiptDbAfterRollbackPreview
@@ -711,7 +762,7 @@ describe("cli memory commands (continued)", () => {
     expect(projectAfterRollbackPreview).toEqual(projectBeforeRollbackPreview);
     expect(receiptCountAfterRollbackPreview).toEqual(receiptCountBeforeRollbackPreview);
 
-    const rollbackResult = await runCli(
+    const rollbackResult = await runGuardedProjectCli(
       "--json",
       "projects",
       "--update",
@@ -732,7 +783,7 @@ describe("cli memory commands (continued)", () => {
       },
     });
 
-    const staleLocator = await runCli(
+    const staleLocator = await runGuardedProjectCli(
       "projects",
       "--update",
       oldName,

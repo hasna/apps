@@ -7,11 +7,14 @@ import { applyMemoryProjectLink } from "../db/memory-project-link.js";
 import { MIGRATIONS } from "../db/migrations.js";
 import { PG_MIGRATIONS } from "../db/pg-migrations.js";
 import { registerProject } from "../db/projects.js";
+import { configureProjectAuthorityTestIdentity } from "../test-support/project-authority-identity.js";
 import {
   MEMORY_PROJECT_LINK_RECEIPT_COLUMNS,
   postgresMementosMemoryProjectLinkSchemaSql,
   sqliteMementosMemoryProjectLinkSchemaSql,
 } from "./schema.js";
+
+configureProjectAuthorityTestIdentity();
 
 beforeEach(() => {
   resetDatabase();

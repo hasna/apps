@@ -2,8 +2,11 @@ process.env["MEMENTOS_DB_PATH"] = ":memory:";
 
 import { beforeEach, describe, expect, test } from "bun:test";
 import { resetDatabase } from "../db/database.js";
+import { configureProjectAuthorityTestIdentity } from "../test-support/project-authority-identity.js";
 import { matchRoute } from "./router.js";
 import "./routes/project-registration.js";
+
+configureProjectAuthorityTestIdentity();
 
 beforeEach(() => {
   resetDatabase();
