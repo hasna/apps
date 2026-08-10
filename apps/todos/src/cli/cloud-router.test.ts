@@ -93,6 +93,26 @@ function installFetch(handler: (call: Call) => { status?: number; body?: unknown
   return calls;
 }
 
+function createdByOpenApi(supported: boolean): Record<string, unknown> {
+  return {
+    openapi: "3.1.0",
+    components: {
+      schemas: {
+        CreateTaskInput: {
+          type: "object",
+          properties: supported ? { created_by: { type: "string" } } : {},
+        },
+        Task: {
+          type: "object",
+          properties: supported
+            ? { created_by: { type: "string", nullable: true } }
+            : {},
+        },
+      },
+    },
+  };
+}
+
 function planProjectLinkPlanFixture(overrides: Partial<Plan> = {}): Plan {
   return {
     id: "plan-1",
@@ -633,6 +653,54 @@ describe("cloud task CRUD maps /v1 envelopes and carries the bearer key", () => 
     expect(calls[0]!.headers["idempotency-key"]).toBeTruthy();
     expect(calls[1]!.method).toBe("GET");
     expect(calls[1]!.url).toBe("https://todos.example.com/v1/tasks/new1");
+  });
+
+  test("explicit created_by refuses an authority that does not advertise the creator contract", async () => {
+    const calls = installFetch((call) => {
+      if (call.url.endsWith("/v1/openapi.json")) {
+        return { body: createdByOpenApi(false) };
+      }
+      throw new Error(`task mutation must not be sent: ${call.method} ${call.url}`);
+    });
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    await expect(cloudCreateTask(client, {
+      title: "made",
+      created_by: "theophrastus",
+    }, {
+      expectedCreatedBy: "theophrastus",
+    })).rejects.toThrow("REMOTE_CREATED_BY_UNSUPPORTED");
+    expect(calls.map((call) => `${call.method} ${call.url}`)).toEqual([
+      "GET https://todos.example.com/v1/openapi.json",
+    ]);
+  });
+
+  test("explicit created_by rejects an authoritative readback that overwrites the creator", async () => {
+    const calls = installFetch((call) => {
+      if (call.url.endsWith("/v1/openapi.json")) {
+        return { body: createdByOpenApi(true) };
+      }
+      if (call.method === "POST") {
+        return {
+          status: 201,
+          body: { task: { id: "new1", title: "made", created_by: "fleet" } },
+        };
+      }
+      return { body: { task: { id: "new1", title: "made", created_by: "fleet" } } };
+    });
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    await expect(cloudCreateTask(client, {
+      title: "made",
+      created_by: "theophrastus",
+    }, {
+      expectedCreatedBy: "theophrastus",
+    })).rejects.toThrow("TASK_CREATE_PERSISTENCE_UNVERIFIED");
+    expect(calls.map((call) => `${call.method} ${call.url}`)).toEqual([
+      "GET https://todos.example.com/v1/openapi.json",
+      "POST https://todos.example.com/v1/tasks",
+      "GET https://todos.example.com/v1/tasks/new1",
+    ]);
   });
 
   test("create refuses a POST task that is absent from authoritative GET readback", async () => {

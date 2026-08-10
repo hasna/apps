@@ -95,6 +95,13 @@ describe("task list and completion OpenAPI contract", () => {
       type: "string",
       nullable: true,
     });
+    expect(document.components.schemas.CreateTaskInput.properties.created_by).toEqual({
+      type: "string",
+    });
+    expect(document.components.schemas.Task.properties.created_by).toEqual({
+      type: "string",
+      nullable: true,
+    });
 
     const complete = document.paths["/v1/tasks/{id}/complete"].post;
     expect(complete.requestBody.content["application/json"].schema.$ref).toBe("#/components/schemas/CompleteTaskInput");

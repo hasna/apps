@@ -707,7 +707,7 @@ export function registerTaskCommands(program: Command) {
           if (opts.plan && !cloudPlan) {
             throw new Error(`Could not resolve plan ID or slug: ${opts.plan}`);
           }
-          task = await cloudCreateTask(cloud, {
+          const taskInput = {
             title,
             description: opts.description,
             priority: parsePriority(opts.priority),
@@ -734,7 +734,14 @@ export function registerTaskCommands(program: Command) {
             recurrence_rule: opts.recurrence,
             due_at: opts.due ? (opts.due.length === 10 ? opts.due + "T00:00:00.000Z" : opts.due) : undefined,
             reason: opts.reason,
-          });
+          };
+          task = await cloudCreateTask(
+            cloud,
+            taskInput,
+            opts.createdBy && router.agent_id
+              ? { expectedCreatedBy: router.agent_id }
+              : undefined,
+          );
         } catch (e) {
           handleError(e);
         }
