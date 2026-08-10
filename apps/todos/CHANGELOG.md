@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.23] - 2026-08-10
+
+### Added
+
+- **Todos gains an optional provider-neutral AI companion.** `@hasna/todos-ai`
+  adds the `todos ai` CLI contract, a Groq adapter, typed and streaming output,
+  bounded read/write tools with guarded mutations, and deterministic evaluation
+  and redaction without placing provider dependencies in the root package.
+
+### Changed
+
+- **CI validates the independently locked AI companion.** Pull requests install
+  `ai/bun.lock` with Bun 1.3.14 and run its typecheck, full test suite, and build
+  in addition to the existing root and dashboard gates.
+
 ## [0.15.22] - 2026-08-10
 
 ### Fixed
@@ -23,21 +38,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cutoff, so missing helper functions, ISO year zero, and malformed stored
   timestamps fail closed without mutation
   ([#261](https://github.com/hasna/todos/pull/261)).
-
-## [0.15.22] - 2026-08-10
-
-### Added
-
-- **Todos gains an optional provider-neutral AI companion.** `@hasna/todos-ai`
-  adds the `todos ai` CLI contract, a Groq adapter, typed and streaming output,
-  bounded read/write tools with guarded mutations, and deterministic evaluation
-  and redaction without placing provider dependencies in the root package.
-
-### Changed
-
-- **CI validates the independently locked AI companion.** Pull requests install
-  `ai/bun.lock` with Bun 1.3.14 and run its typecheck, full test suite, and build
-  in addition to the existing root and dashboard gates.
 
 ## [0.15.20] - 2026-08-09
 
