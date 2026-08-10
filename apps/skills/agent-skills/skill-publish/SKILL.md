@@ -163,14 +163,15 @@ test -f "$PUBLISH_HELPER"
   printf '//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}\n' > "$NPMRC"
   secrets exec "$TOKEN_PATH" --as NODE_AUTH_TOKEN -- \
     bash "$PUBLISH_HELPER" --userconfig "$NPMRC" --access "$ACCESS"
-)
 
 VERIFY_DIR=$(mktemp -d)
 PUBLISHED_GIT_HEAD=""
 for attempt in 1 2 3 4 5; do
-  if npm view "$PKG@$NEW_VERSION" gitHead --json \
-    > "$VERIFY_DIR/githead.out" \
-    2> "$VERIFY_DIR/githead.err"; then
+  if secrets exec "$TOKEN_PATH" --as NODE_AUTH_TOKEN -- \
+    npm view "$PKG@$NEW_VERSION" gitHead --json \
+      --userconfig "$NPMRC" \
+      > "$VERIFY_DIR/githead.out" \
+      2> "$VERIFY_DIR/githead.err"; then
     if [ -s "$VERIFY_DIR/githead.out" ]; then
       if PUBLISHED_GIT_HEAD=$(node -e '
         const fs = require("node:fs");
@@ -192,6 +193,7 @@ if [ "$PUBLISHED_GIT_HEAD" != "$EXPECTED_GIT_HEAD" ]; then
   exit 1
 fi
 printf 'GITHEAD_VERIFIED: %s\n' "$PUBLISHED_GIT_HEAD"
+)
 ```
 
 ### 9. Install locally via bun (NOT npm)

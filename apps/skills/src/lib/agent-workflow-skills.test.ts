@@ -69,11 +69,20 @@ describe("repository-managed agent workflow skills", () => {
     const skill = readFileSync(join(AGENT_SKILLS_DIR, "skill-publish", "SKILL.md"), "utf8");
     expect(skill).toContain("scripts/publish_with_git_head.sh");
     expect(skill).toContain('secrets exec "$TOKEN_PATH" --as NODE_AUTH_TOKEN');
+    expect(skill).toContain(
+      "printf '//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}\\n' > \"$NPMRC\"",
+    );
+    expect(skill.match(/secrets exec "\$TOKEN_PATH" --as NODE_AUTH_TOKEN/g) ?? []).toHaveLength(2);
+    expect(skill).toContain(
+      String.raw`npm view "$PKG@$NEW_VERSION" gitHead --json \
+      --userconfig "$NPMRC"`,
+    );
     expect(skill).toContain('--userconfig "$NPMRC"');
     expect(skill).toContain("GITHEAD_VERIFIED:");
     expect(skill).toContain('grep -iE "^\\\\+([^+].*)?($SECRET_PATTERN)"');
     expect(skill).not.toContain('grep -iE "^\\\\+[^+].*($SECRET_PATTERN)"');
     expect(skill).not.toContain("bun publish --access");
+    expect(skill).not.toContain("_authToken=[REDACTED_SECRET]");
   });
 
   test("skill-publish preserves npm gitHead and restores linked worktrees", () => {
