@@ -20,9 +20,16 @@ import { type KnowledgeItem } from './store';
 import { type ItemStore, type ItemCreateInput, type ItemPatch, type ItemListOptions, type ItemListResult } from './item-store';
 import { type KnowledgeConfig, type KnowledgeWorkspace } from './workspace';
 import { type KnowledgeLegacyWorkspaceMergeResult, type KnowledgeLegacyWorkspaceMigrationResult } from './workspace-migration';
+import { type KnowledgeProjectLinksAuthority } from './project-links';
 export interface KnowledgeServiceOptions {
     scope?: string;
     cwd?: string;
+    projectLinksAuthority?: KnowledgeProjectLinksAuthority;
+    projectLinksIdentity?: {
+        authorityId?: string;
+        tenantId?: string;
+        corpusId?: string;
+    };
 }
 export interface KnowledgePathsResult {
     ok: true;
@@ -362,6 +369,7 @@ export declare class KnowledgeService {
     private readonly options;
     private ensuredWorkspace?;
     private cachedConfig?;
+    private cachedProjectLinksAuthority?;
     constructor(options?: KnowledgeServiceOptions);
     get scope(): string;
     get workspace(): KnowledgeWorkspace;
@@ -375,6 +383,15 @@ export declare class KnowledgeService {
      * surface, so no path touches sqlite or the raw HTTP client directly.
      */
     itemStore(): ItemStore;
+    /**
+     * Package-owned Projects resource-link producer.
+     *
+     * Local mode keeps aggregate membership and immutable receipts in the
+     * existing knowledge.db SQLite catalog while resolving item bodies through
+     * the same JSON ItemStore used by CLI/MCP/SDK. Postgres mode routes through
+     * the authenticated HTTP producer, never a local mirror.
+     */
+    projectLinksAuthority(): KnowledgeProjectLinksAuthority;
     /** Bounded list query via the unified Store. */
     listItems(options?: ItemListOptions): Promise<ItemListResult>;
     /** Fetch one knowledge item by id or short id via the unified Store. */

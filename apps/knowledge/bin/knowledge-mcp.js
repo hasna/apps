@@ -18167,7 +18167,7 @@ function createArtifactStore(config2, workspace) {
 }
 
 // src/service.ts
-import { createHash as createHash19 } from "crypto";
+import { createHash as createHash20 } from "crypto";
 import { spawnSync as spawnSync2 } from "child_process";
 import { existsSync as existsSync14, readFileSync as readFileSync13 } from "fs";
 import { hostname as hostname5 } from "os";
@@ -29231,6 +29231,1385 @@ function migrateLegacyKnowledgeWorkspace(options) {
   };
 }
 
+// src/project-links.ts
+import { createHash as createHash19 } from "crypto";
+import { Database as Database2 } from "bun:sqlite";
+var KNOWLEDGE_PROJECT_REGISTRATION_ROUTE = "knowledge.project-registration.v1";
+var KNOWLEDGE_PROJECT_RESOURCES_ROUTE = "knowledge.project-resources.v1";
+var KNOWLEDGE_PROJECT_REGISTRATION_SCHEMA_VERSION = 1;
+var KNOWLEDGE_PROJECT_MEMBERSHIP_RULE = "explicit_collection_binding";
+
+class KnowledgeProjectLinksError extends Error {
+  code;
+  details;
+  constructor(code, message, details = {}) {
+    super(message);
+    this.code = code;
+    this.details = details;
+    this.name = "KnowledgeProjectLinksError";
+  }
+}
+class SqliteProjectLinksSql {
+  db;
+  tail = Promise.resolve();
+  constructor(db) {
+    this.db = db;
+  }
+  async get(sql, params = []) {
+    return this.db.query(sql).get(...params) ?? null;
+  }
+  async many(sql, params = []) {
+    return this.db.query(sql).all(...params);
+  }
+  async run(sql, params = []) {
+    const result = this.db.query(sql).run(...params);
+    return { changes: Number(result.changes) };
+  }
+  transaction(fn) {
+    const run = this.tail.then(async () => {
+      this.db.exec("BEGIN IMMEDIATE");
+      try {
+        const result = await fn(this);
+        this.db.exec("COMMIT");
+        return result;
+      } catch (error51) {
+        this.db.exec("ROLLBACK");
+        throw error51;
+      }
+    });
+    this.tail = run.then(() => {
+      return;
+    }, () => {
+      return;
+    });
+    return run;
+  }
+}
+function sqliteKnowledgeProjectLinksSchemaSql() {
+  return `
+    PRAGMA foreign_keys = ON;
+    CREATE TABLE IF NOT EXISTS knowledge_projects (
+      authority_id TEXT NOT NULL,
+      tenant_id TEXT NOT NULL,
+      corpus_id TEXT NOT NULL,
+      source_project_id TEXT NOT NULL,
+      project_id TEXT NOT NULL,
+      project_slug TEXT NOT NULL,
+      project_name TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY(authority_id, tenant_id, corpus_id, project_id),
+      UNIQUE(authority_id, tenant_id, corpus_id, source_project_id)
+    );
+    CREATE TABLE IF NOT EXISTS knowledge_project_collections (
+      authority_id TEXT NOT NULL,
+      tenant_id TEXT NOT NULL,
+      corpus_id TEXT NOT NULL,
+      collection_id TEXT NOT NULL,
+      project_id TEXT NOT NULL,
+      collection_slug TEXT NOT NULL,
+      collection_name TEXT NOT NULL,
+      membership_rule TEXT NOT NULL CHECK(membership_rule = 'explicit_collection_binding'),
+      revision INTEGER NOT NULL DEFAULT 1 CHECK(revision > 0),
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY(authority_id, tenant_id, corpus_id, collection_id),
+      UNIQUE(authority_id, tenant_id, corpus_id, project_id, collection_slug),
+      FOREIGN KEY(authority_id, tenant_id, corpus_id, project_id)
+        REFERENCES knowledge_projects(authority_id, tenant_id, corpus_id, project_id)
+        ON DELETE CASCADE
+    );
+    CREATE TABLE IF NOT EXISTS knowledge_project_collection_memberships (
+      authority_id TEXT NOT NULL,
+      tenant_id TEXT NOT NULL,
+      corpus_id TEXT NOT NULL,
+      collection_id TEXT NOT NULL,
+      item_id TEXT NOT NULL,
+      bound_receipt_id TEXT NOT NULL,
+      created_by_operation INTEGER NOT NULL CHECK(created_by_operation IN (0, 1)),
+      bound_at TEXT NOT NULL,
+      PRIMARY KEY(authority_id, tenant_id, corpus_id, collection_id, item_id),
+      FOREIGN KEY(authority_id, tenant_id, corpus_id, collection_id)
+        REFERENCES knowledge_project_collections(authority_id, tenant_id, corpus_id, collection_id)
+        ON DELETE CASCADE
+    );
+    CREATE TABLE IF NOT EXISTS knowledge_project_link_receipts (
+      receipt_id TEXT PRIMARY KEY,
+      authority TEXT NOT NULL CHECK(authority = 'knowledge'),
+      route TEXT NOT NULL CHECK(route = 'knowledge.project-registration.v1'),
+      package_version TEXT NOT NULL,
+      authority_id TEXT NOT NULL,
+      tenant_id TEXT NOT NULL,
+      corpus_id TEXT NOT NULL,
+      operation_id TEXT NOT NULL,
+      step_id TEXT NOT NULL,
+      action TEXT NOT NULL CHECK(action IN ('register_collection', 'bind_item')),
+      resource_kind TEXT NOT NULL CHECK(resource_kind IN ('collection', 'item')),
+      direction TEXT NOT NULL CHECK(direction IN ('forward', 'inverse')),
+      idempotency_key TEXT NOT NULL,
+      request_digest TEXT NOT NULL,
+      precondition_digest TEXT NOT NULL,
+      outcome TEXT NOT NULL CHECK(outcome IN ('accepted', 'terminal_nonacceptance')),
+      reason TEXT,
+      source_project_id TEXT,
+      project_id TEXT,
+      collection_id TEXT,
+      item_id TEXT,
+      result_revision TEXT,
+      result_digest TEXT,
+      accepted_receipt_id TEXT,
+      created_by_operation INTEGER NOT NULL CHECK(created_by_operation IN (0, 1)),
+      created_at TEXT NOT NULL,
+      UNIQUE(authority_id, tenant_id, corpus_id, operation_id, step_id, action, direction)
+    );
+    CREATE INDEX IF NOT EXISTS idx_knowledge_project_link_receipts_lookup
+      ON knowledge_project_link_receipts (
+        authority_id, tenant_id, corpus_id, operation_id, step_id,
+        action, direction, idempotency_key
+      );
+    CREATE TRIGGER IF NOT EXISTS knowledge_project_link_receipts_immutable_update
+      BEFORE UPDATE ON knowledge_project_link_receipts
+      BEGIN
+        SELECT RAISE(ABORT, 'knowledge project link receipts are immutable');
+      END;
+    CREATE TRIGGER IF NOT EXISTS knowledge_project_link_receipts_immutable_delete
+      BEFORE DELETE ON knowledge_project_link_receipts
+      BEGIN
+        SELECT RAISE(ABORT, 'knowledge project link receipts are immutable');
+      END;
+  `;
+}
+function postgresKnowledgeProjectLinksSchemaStatements() {
+  return [
+    `CREATE TABLE IF NOT EXISTS knowledge_projects (
+      authority_id TEXT NOT NULL,
+      tenant_id TEXT NOT NULL,
+      corpus_id TEXT NOT NULL,
+      source_project_id TEXT NOT NULL,
+      project_id TEXT NOT NULL,
+      project_slug TEXT NOT NULL,
+      project_name TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY(authority_id, tenant_id, corpus_id, project_id),
+      UNIQUE(authority_id, tenant_id, corpus_id, source_project_id)
+    )`,
+    `CREATE TABLE IF NOT EXISTS knowledge_project_collections (
+      authority_id TEXT NOT NULL,
+      tenant_id TEXT NOT NULL,
+      corpus_id TEXT NOT NULL,
+      collection_id TEXT NOT NULL,
+      project_id TEXT NOT NULL,
+      collection_slug TEXT NOT NULL,
+      collection_name TEXT NOT NULL,
+      membership_rule TEXT NOT NULL CHECK(membership_rule = 'explicit_collection_binding'),
+      revision INTEGER NOT NULL DEFAULT 1 CHECK(revision > 0),
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY(authority_id, tenant_id, corpus_id, collection_id),
+      UNIQUE(authority_id, tenant_id, corpus_id, project_id, collection_slug),
+      FOREIGN KEY(authority_id, tenant_id, corpus_id, project_id)
+        REFERENCES knowledge_projects(authority_id, tenant_id, corpus_id, project_id)
+        ON DELETE CASCADE
+    )`,
+    `CREATE TABLE IF NOT EXISTS knowledge_project_collection_memberships (
+      authority_id TEXT NOT NULL,
+      tenant_id TEXT NOT NULL,
+      corpus_id TEXT NOT NULL,
+      collection_id TEXT NOT NULL,
+      item_id TEXT NOT NULL,
+      bound_receipt_id TEXT NOT NULL,
+      created_by_operation INTEGER NOT NULL CHECK(created_by_operation IN (0, 1)),
+      bound_at TEXT NOT NULL,
+      PRIMARY KEY(authority_id, tenant_id, corpus_id, collection_id, item_id),
+      FOREIGN KEY(authority_id, tenant_id, corpus_id, collection_id)
+        REFERENCES knowledge_project_collections(authority_id, tenant_id, corpus_id, collection_id)
+        ON DELETE CASCADE
+    )`,
+    `CREATE TABLE IF NOT EXISTS knowledge_project_link_receipts (
+      receipt_id TEXT PRIMARY KEY,
+      authority TEXT NOT NULL CHECK(authority = 'knowledge'),
+      route TEXT NOT NULL CHECK(route = 'knowledge.project-registration.v1'),
+      package_version TEXT NOT NULL,
+      authority_id TEXT NOT NULL,
+      tenant_id TEXT NOT NULL,
+      corpus_id TEXT NOT NULL,
+      operation_id TEXT NOT NULL,
+      step_id TEXT NOT NULL,
+      action TEXT NOT NULL CHECK(action IN ('register_collection', 'bind_item')),
+      resource_kind TEXT NOT NULL CHECK(resource_kind IN ('collection', 'item')),
+      direction TEXT NOT NULL CHECK(direction IN ('forward', 'inverse')),
+      idempotency_key TEXT NOT NULL,
+      request_digest TEXT NOT NULL,
+      precondition_digest TEXT NOT NULL,
+      outcome TEXT NOT NULL CHECK(outcome IN ('accepted', 'terminal_nonacceptance')),
+      reason TEXT,
+      source_project_id TEXT,
+      project_id TEXT,
+      collection_id TEXT,
+      item_id TEXT,
+      result_revision TEXT,
+      result_digest TEXT,
+      accepted_receipt_id TEXT,
+      created_by_operation INTEGER NOT NULL CHECK(created_by_operation IN (0, 1)),
+      created_at TEXT NOT NULL,
+      UNIQUE(authority_id, tenant_id, corpus_id, operation_id, step_id, action, direction)
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_knowledge_project_link_receipts_lookup
+      ON knowledge_project_link_receipts (
+        authority_id, tenant_id, corpus_id, operation_id, step_id,
+        action, direction, idempotency_key
+      )`,
+    `CREATE OR REPLACE FUNCTION knowledge_project_link_receipts_immutable()
+      RETURNS trigger
+      LANGUAGE plpgsql
+      AS $$
+      BEGIN
+        RAISE EXCEPTION 'knowledge project link receipts are immutable';
+      END;
+      $$`,
+    `DROP TRIGGER IF EXISTS knowledge_project_link_receipts_immutable
+      ON knowledge_project_link_receipts`,
+    `CREATE TRIGGER knowledge_project_link_receipts_immutable
+      BEFORE UPDATE OR DELETE ON knowledge_project_link_receipts
+      FOR EACH ROW EXECUTE FUNCTION knowledge_project_link_receipts_immutable()`
+  ];
+}
+function canonicalize(value) {
+  if (Array.isArray(value))
+    return value.map(canonicalize);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined).sort(([left], [right]) => left.localeCompare(right)).map(([key, item]) => [key, canonicalize(item)]));
+  }
+  return value;
+}
+function canonicalKnowledgeProjectLinksJson(value) {
+  return JSON.stringify(canonicalize(value));
+}
+function digestKnowledgeProjectLinksValue(value) {
+  return createHash19("sha256").update(canonicalKnowledgeProjectLinksJson(value)).digest("hex");
+}
+function stableUuid(namespace) {
+  const hex3 = createHash19("sha256").update(namespace).digest("hex").slice(0, 32).split("");
+  hex3[12] = "5";
+  hex3[16] = (Number.parseInt(hex3[16], 16) & 3 | 8).toString(16);
+  const value = hex3.join("");
+  return `${value.slice(0, 8)}-${value.slice(8, 12)}-${value.slice(12, 16)}-${value.slice(16, 20)}-${value.slice(20)}`;
+}
+function requiredString(value, field) {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_INVALID_INPUT", `${field} must be a non-empty string.`);
+  }
+  return value.trim();
+}
+function boundedLimit(value) {
+  const resolved = value ?? 100;
+  if (!Number.isInteger(resolved) || resolved < 1 || resolved > 200) {
+    throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_INVALID_INPUT", "limit must be an integer between 1 and 200.");
+  }
+  return resolved;
+}
+function normalizeKinds(kinds) {
+  const supported = ["project", "collection", "item", "taxonomy"];
+  if (!kinds || kinds.length === 0)
+    return supported;
+  const unique2 = [...new Set(kinds)];
+  for (const kind of unique2) {
+    if (!supported.includes(kind)) {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_INVALID_INPUT", `unsupported project resource kind: ${kind}`);
+    }
+  }
+  return unique2.sort((left, right) => supported.indexOf(left) - supported.indexOf(right));
+}
+function toReceipt(row) {
+  return {
+    receipt_id: row.receipt_id,
+    authority: "knowledge",
+    route: KNOWLEDGE_PROJECT_REGISTRATION_ROUTE,
+    package_version: row.package_version,
+    authority_id: row.authority_id,
+    tenant_id: row.tenant_id,
+    corpus_id: row.corpus_id,
+    operation_id: row.operation_id,
+    step_id: row.step_id,
+    action: row.action,
+    resource_kind: row.resource_kind,
+    direction: row.direction,
+    idempotency_key: row.idempotency_key,
+    request_digest: row.request_digest,
+    precondition_digest: row.precondition_digest,
+    outcome: row.outcome,
+    reason: row.reason,
+    source_project_id: row.source_project_id,
+    project_id: row.project_id,
+    collection_id: row.collection_id,
+    item_id: row.item_id,
+    result_revision: row.result_revision,
+    result_digest: row.result_digest,
+    accepted_receipt_id: row.accepted_receipt_id,
+    created_by_operation: Number(row.created_by_operation) === 1,
+    created_at: row.created_at
+  };
+}
+function aggregateRecord(row) {
+  const record2 = {
+    source_project_id: row.source_project_id,
+    project_id: row.project_id,
+    project_slug: row.project_slug,
+    project_name: row.project_name,
+    collection_id: row.collection_id,
+    collection_slug: row.collection_slug,
+    collection_name: row.collection_name,
+    membership_rule: KNOWLEDGE_PROJECT_MEMBERSHIP_RULE,
+    revision: `r${Number(row.revision)}`,
+    created_at: row.created_at,
+    updated_at: row.updated_at
+  };
+  return { ...record2, digest: digestKnowledgeProjectLinksValue(record2) };
+}
+function receiptInsertParams(receipt) {
+  return [
+    receipt.receipt_id,
+    receipt.authority,
+    receipt.route,
+    receipt.package_version,
+    receipt.authority_id,
+    receipt.tenant_id,
+    receipt.corpus_id,
+    receipt.operation_id,
+    receipt.step_id,
+    receipt.action,
+    receipt.resource_kind,
+    receipt.direction,
+    receipt.idempotency_key,
+    receipt.request_digest,
+    receipt.precondition_digest,
+    receipt.outcome,
+    receipt.reason,
+    receipt.source_project_id,
+    receipt.project_id,
+    receipt.collection_id,
+    receipt.item_id,
+    receipt.result_revision,
+    receipt.result_digest,
+    receipt.accepted_receipt_id,
+    receipt.created_by_operation ? 1 : 0,
+    receipt.created_at
+  ];
+}
+var RECEIPT_INSERT_SQL = `INSERT INTO knowledge_project_link_receipts (
+  receipt_id, authority, route, package_version, authority_id, tenant_id, corpus_id,
+  operation_id, step_id, action, resource_kind, direction, idempotency_key,
+  request_digest, precondition_digest, outcome, reason, source_project_id,
+  project_id, collection_id, item_id, result_revision, result_digest,
+  accepted_receipt_id, created_by_operation, created_at
+) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`;
+
+class PackageOwnedKnowledgeProjectLinksAuthority {
+  sql;
+  itemResolver;
+  options;
+  identity;
+  now;
+  constructor(sql, itemResolver, options) {
+    this.sql = sql;
+    this.itemResolver = itemResolver;
+    this.options = options;
+    this.identity = {
+      authority_id: requiredString(options.authorityId, "authority_id"),
+      tenant_id: requiredString(options.tenantId, "tenant_id"),
+      corpus_id: requiredString(options.corpusId, "corpus_id")
+    };
+    this.now = options.now ?? (() => new Date().toISOString());
+  }
+  capabilityValue() {
+    return {
+      authority: "knowledge",
+      route: KNOWLEDGE_PROJECT_REGISTRATION_ROUTE,
+      resource_route: KNOWLEDGE_PROJECT_RESOURCES_ROUTE,
+      package_version: this.options.packageVersion,
+      schema_version: KNOWLEDGE_PROJECT_REGISTRATION_SCHEMA_VERSION,
+      ...this.identity,
+      registration_resource: "collection",
+      supported_resources: ["project", "collection", "item", "taxonomy"],
+      stable_project_ids: true,
+      stable_collection_ids: true,
+      explicit_membership: true,
+      membership_rule: KNOWLEDGE_PROJECT_MEMBERSHIP_RULE,
+      later_child_binding_required: true,
+      bind_existing_items: true,
+      immutable_receipts: true,
+      exact_terminal_lookup: true,
+      exact_readback: true,
+      conditional_inverse: true,
+      complete_keyset_pagination: true,
+      revision_bound_cursors: true
+    };
+  }
+  async capability() {
+    return this.capabilityValue();
+  }
+  assertIdentity(request) {
+    const capability = this.capabilityValue();
+    if (request.authority_route !== capability.route || request.package_version !== capability.package_version || request.authority_id !== capability.authority_id || request.tenant_id !== capability.tenant_id || request.corpus_id !== capability.corpus_id) {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_CAPABILITY_MISMATCH", "request does not match the current Knowledge project-registration capability identity.");
+    }
+  }
+  stableProjectId(sourceProjectId) {
+    return stableUuid(`${this.identity.authority_id}\x00${this.identity.tenant_id}\x00${this.identity.corpus_id}\x00project\x00${sourceProjectId}`);
+  }
+  stableCollectionId(sourceProjectId, collectionSlug) {
+    return stableUuid(`${this.identity.authority_id}\x00${this.identity.tenant_id}\x00${this.identity.corpus_id}\x00collection\x00${sourceProjectId}\x00${collectionSlug}`);
+  }
+  stableReceiptId(operationId, stepId, action, direction) {
+    return stableUuid(`${this.identity.authority_id}\x00${this.identity.tenant_id}\x00${this.identity.corpus_id}\x00receipt\x00${operationId}\x00${stepId}\x00${action}\x00${direction}`);
+  }
+  async getAggregateBySource(sql, sourceProjectId) {
+    return sql.get(`SELECT p.source_project_id, p.project_id, p.project_slug, p.project_name,
+              c.collection_id, c.collection_slug, c.collection_name,
+              c.membership_rule, c.revision, c.created_at, c.updated_at
+         FROM knowledge_projects p
+         JOIN knowledge_project_collections c
+           ON c.authority_id = p.authority_id
+          AND c.tenant_id = p.tenant_id
+          AND c.corpus_id = p.corpus_id
+          AND c.project_id = p.project_id
+        WHERE p.authority_id = ? AND p.tenant_id = ? AND p.corpus_id = ?
+          AND p.source_project_id = ?`, [this.identity.authority_id, this.identity.tenant_id, this.identity.corpus_id, sourceProjectId]);
+  }
+  async getAggregateByCollection(sql, collectionId) {
+    return sql.get(`SELECT p.source_project_id, p.project_id, p.project_slug, p.project_name,
+              c.collection_id, c.collection_slug, c.collection_name,
+              c.membership_rule, c.revision, c.created_at, c.updated_at
+         FROM knowledge_projects p
+         JOIN knowledge_project_collections c
+           ON c.authority_id = p.authority_id
+          AND c.tenant_id = p.tenant_id
+          AND c.corpus_id = p.corpus_id
+          AND c.project_id = p.project_id
+        WHERE c.authority_id = ? AND c.tenant_id = ? AND c.corpus_id = ?
+          AND c.collection_id = ?`, [this.identity.authority_id, this.identity.tenant_id, this.identity.corpus_id, collectionId]);
+  }
+  async getAggregateByProject(sql, projectId) {
+    return sql.get(`SELECT p.source_project_id, p.project_id, p.project_slug, p.project_name,
+              c.collection_id, c.collection_slug, c.collection_name,
+              c.membership_rule, c.revision, c.created_at, c.updated_at
+         FROM knowledge_projects p
+         JOIN knowledge_project_collections c
+           ON c.authority_id = p.authority_id
+          AND c.tenant_id = p.tenant_id
+          AND c.corpus_id = p.corpus_id
+          AND c.project_id = p.project_id
+        WHERE p.authority_id = ? AND p.tenant_id = ? AND p.corpus_id = ?
+          AND (p.source_project_id = ? OR p.project_id = ?)`, [
+      this.identity.authority_id,
+      this.identity.tenant_id,
+      this.identity.corpus_id,
+      projectId,
+      projectId
+    ]);
+  }
+  async getReceiptByAttempt(sql, input) {
+    const row = await sql.get(`SELECT * FROM knowledge_project_link_receipts
+        WHERE authority_id = ? AND tenant_id = ? AND corpus_id = ?
+          AND operation_id = ? AND step_id = ? AND action = ? AND direction = ?`, [
+      this.identity.authority_id,
+      this.identity.tenant_id,
+      this.identity.corpus_id,
+      input.operation_id,
+      input.step_id,
+      input.action,
+      input.direction
+    ]);
+    return row ? toReceipt(row) : null;
+  }
+  assertIdempotent(existing, input) {
+    if (existing.idempotency_key !== input.idempotency_key || input.request_digest !== undefined && existing.request_digest !== input.request_digest || input.precondition_digest !== undefined && existing.precondition_digest !== input.precondition_digest) {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_IDEMPOTENCY_MISMATCH", "operation and step identity are already bound to a different Knowledge project-link request.", { receipt_id: existing.receipt_id });
+    }
+  }
+  async registerCollection(request) {
+    this.assertIdentity(request);
+    if (request.resource_kind !== "collection" || request.direction !== "forward") {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_INVALID_INPUT", "collection registration requires resource_kind=collection and direction=forward.");
+    }
+    const sourceProjectId = requiredString(request.project_id, "project_id");
+    const projectSlug = requiredString(request.project_slug, "project_slug");
+    const projectName = requiredString(request.project_name, "project_name");
+    const targetSelector = requiredString(request.target_selector, "target_selector");
+    if (targetSelector !== sourceProjectId) {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_INVALID_INPUT", "target_selector must equal the exact source project id.");
+    }
+    const collectionSlug = requiredString(request.desired.collection_slug ?? `${projectSlug}-knowledge`, "desired.collection_slug");
+    const collectionName = requiredString(request.desired.collection_name ?? `${projectName} Knowledge`, "desired.collection_name");
+    const expectedRequestDigest = digestKnowledgeProjectLinksValue({
+      action: "register_collection",
+      source_project_id: sourceProjectId,
+      project_slug: projectSlug,
+      project_name: projectName,
+      collection_slug: collectionSlug,
+      collection_name: collectionName,
+      membership_rule: KNOWLEDGE_PROJECT_MEMBERSHIP_RULE
+    });
+    if (request.request_digest !== expectedRequestDigest) {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_DIGEST_MISMATCH", "request_digest does not bind the normalized collection-registration request.", { expected_request_digest: expectedRequestDigest });
+    }
+    return this.sql.transaction(async (tx) => {
+      const duplicate = await this.getReceiptByAttempt(tx, {
+        operation_id: request.operation_id,
+        step_id: request.step_id,
+        action: "register_collection",
+        direction: "forward"
+      });
+      if (duplicate) {
+        this.assertIdempotent(duplicate, request);
+        return duplicate;
+      }
+      let aggregate = await this.getAggregateBySource(tx, sourceProjectId);
+      const createdByOperation = aggregate === null;
+      if (!aggregate) {
+        const now = this.now();
+        const projectId = this.stableProjectId(sourceProjectId);
+        const collectionId = this.stableCollectionId(sourceProjectId, collectionSlug);
+        await tx.run(`INSERT INTO knowledge_projects (
+            authority_id, tenant_id, corpus_id, source_project_id, project_id,
+            project_slug, project_name, created_at, updated_at
+          ) VALUES (?,?,?,?,?,?,?,?,?)`, [
+          this.identity.authority_id,
+          this.identity.tenant_id,
+          this.identity.corpus_id,
+          sourceProjectId,
+          projectId,
+          projectSlug,
+          projectName,
+          now,
+          now
+        ]);
+        await tx.run(`INSERT INTO knowledge_project_collections (
+            authority_id, tenant_id, corpus_id, collection_id, project_id,
+            collection_slug, collection_name, membership_rule, revision,
+            created_at, updated_at
+          ) VALUES (?,?,?,?,?,?,?,?,?,?,?)`, [
+          this.identity.authority_id,
+          this.identity.tenant_id,
+          this.identity.corpus_id,
+          collectionId,
+          projectId,
+          collectionSlug,
+          collectionName,
+          KNOWLEDGE_PROJECT_MEMBERSHIP_RULE,
+          1,
+          now,
+          now
+        ]);
+        aggregate = await this.getAggregateByCollection(tx, collectionId);
+      } else if (aggregate.project_slug !== projectSlug || aggregate.project_name !== projectName || aggregate.collection_slug !== collectionSlug || aggregate.collection_name !== collectionName || aggregate.membership_rule !== KNOWLEDGE_PROJECT_MEMBERSHIP_RULE) {
+        throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_CONFLICT", "the source project is already bound to a different Knowledge collection aggregate.", {
+          source_project_id: sourceProjectId,
+          collection_id: aggregate.collection_id
+        });
+      }
+      if (!aggregate) {
+        throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_INCOMPLETE_POPULATION", "collection registration committed but exact aggregate readback was unavailable.");
+      }
+      const record2 = aggregateRecord(aggregate);
+      const receipt = {
+        receipt_id: this.stableReceiptId(request.operation_id, request.step_id, "register_collection", "forward"),
+        authority: "knowledge",
+        route: KNOWLEDGE_PROJECT_REGISTRATION_ROUTE,
+        package_version: this.options.packageVersion,
+        ...this.identity,
+        operation_id: request.operation_id,
+        step_id: request.step_id,
+        action: "register_collection",
+        resource_kind: "collection",
+        direction: "forward",
+        idempotency_key: requiredString(request.idempotency_key, "idempotency_key"),
+        request_digest: request.request_digest,
+        precondition_digest: requiredString(request.precondition_digest, "precondition_digest"),
+        outcome: "accepted",
+        reason: createdByOperation ? null : "adopted_existing_collection",
+        source_project_id: record2.source_project_id,
+        project_id: record2.project_id,
+        collection_id: record2.collection_id,
+        item_id: null,
+        result_revision: record2.revision,
+        result_digest: record2.digest,
+        accepted_receipt_id: null,
+        created_by_operation: createdByOperation,
+        created_at: this.now()
+      };
+      await tx.run(RECEIPT_INSERT_SQL, receiptInsertParams(receipt));
+      return receipt;
+    });
+  }
+  async readCollection(collectionId) {
+    const aggregate = await this.getAggregateByCollection(this.sql, requiredString(collectionId, "collection_id"));
+    if (!aggregate) {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_NOT_FOUND", "Knowledge collection was not found by exact id.");
+    }
+    return aggregateRecord(aggregate);
+  }
+  async lookupReceipt(request) {
+    if (request.max_items !== 1) {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_INVALID_INPUT", "exact terminal receipt lookup requires max_items=1.");
+    }
+    if (request.authority_id !== this.identity.authority_id || request.tenant_id !== this.identity.tenant_id || request.corpus_id !== this.identity.corpus_id) {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_CAPABILITY_MISMATCH", "receipt lookup does not match this authority identity.");
+    }
+    const receipt = await this.getReceiptByAttempt(this.sql, request);
+    if (!receipt || receipt.idempotency_key !== request.idempotency_key) {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_NOT_FOUND", "exact Knowledge project-link receipt was not found.");
+    }
+    return receipt;
+  }
+  async receiptById(sql, receiptId) {
+    const row = await sql.get(`SELECT * FROM knowledge_project_link_receipts
+        WHERE receipt_id = ? AND authority_id = ? AND tenant_id = ? AND corpus_id = ?`, [
+      receiptId,
+      this.identity.authority_id,
+      this.identity.tenant_id,
+      this.identity.corpus_id
+    ]);
+    return row ? toReceipt(row) : null;
+  }
+  assertInverseIdentity(request) {
+    this.assertIdentity(request);
+    requiredString(request.accepted_receipt_id, "accepted_receipt_id");
+    requiredString(request.idempotency_key, "idempotency_key");
+  }
+  async compensateRegistration(request) {
+    this.assertInverseIdentity(request);
+    return this.sql.transaction(async (tx) => {
+      const duplicate = await this.getReceiptByAttempt(tx, {
+        operation_id: request.operation_id,
+        step_id: request.step_id,
+        action: "register_collection",
+        direction: "inverse"
+      });
+      if (duplicate) {
+        this.assertIdempotent(duplicate, request);
+        return duplicate;
+      }
+      const accepted = await this.receiptById(tx, request.accepted_receipt_id);
+      if (!accepted || accepted.action !== "register_collection" || accepted.direction !== "forward" || accepted.outcome !== "accepted") {
+        throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_NOT_FOUND", "accepted collection-registration receipt was not found.");
+      }
+      const aggregate = accepted.collection_id ? await this.getAggregateByCollection(tx, accepted.collection_id) : null;
+      let outcome = "accepted";
+      let reason = null;
+      if (!accepted.created_by_operation) {
+        outcome = "terminal_nonacceptance";
+        reason = "adopted_collection_is_not_inverse_owned";
+      } else if (!aggregate) {
+        outcome = "terminal_nonacceptance";
+        reason = "accepted_collection_is_already_absent";
+      } else {
+        const membership = await tx.get(`SELECT COUNT(*) AS count
+             FROM knowledge_project_collection_memberships
+            WHERE authority_id = ? AND tenant_id = ? AND corpus_id = ? AND collection_id = ?`, [
+          this.identity.authority_id,
+          this.identity.tenant_id,
+          this.identity.corpus_id,
+          aggregate.collection_id
+        ]);
+        if (Number(membership?.count ?? 0) > 0) {
+          outcome = "terminal_nonacceptance";
+          reason = "collection_has_bound_items";
+        } else {
+          await tx.run(`DELETE FROM knowledge_project_collections
+              WHERE authority_id = ? AND tenant_id = ? AND corpus_id = ? AND collection_id = ?`, [
+            this.identity.authority_id,
+            this.identity.tenant_id,
+            this.identity.corpus_id,
+            aggregate.collection_id
+          ]);
+          await tx.run(`DELETE FROM knowledge_projects
+              WHERE authority_id = ? AND tenant_id = ? AND corpus_id = ? AND project_id = ?
+                AND NOT EXISTS (
+                  SELECT 1 FROM knowledge_project_collections c
+                   WHERE c.authority_id = knowledge_projects.authority_id
+                     AND c.tenant_id = knowledge_projects.tenant_id
+                     AND c.corpus_id = knowledge_projects.corpus_id
+                     AND c.project_id = knowledge_projects.project_id
+                )`, [
+            this.identity.authority_id,
+            this.identity.tenant_id,
+            this.identity.corpus_id,
+            aggregate.project_id
+          ]);
+        }
+      }
+      const absent = {
+        accepted_receipt_id: accepted.receipt_id,
+        collection_id: accepted.collection_id,
+        absent: outcome === "accepted"
+      };
+      const receipt = {
+        receipt_id: this.stableReceiptId(request.operation_id, request.step_id, "register_collection", "inverse"),
+        authority: "knowledge",
+        route: KNOWLEDGE_PROJECT_REGISTRATION_ROUTE,
+        package_version: this.options.packageVersion,
+        ...this.identity,
+        operation_id: request.operation_id,
+        step_id: request.step_id,
+        action: "register_collection",
+        resource_kind: "collection",
+        direction: "inverse",
+        idempotency_key: request.idempotency_key,
+        request_digest: digestKnowledgeProjectLinksValue({
+          accepted_receipt_id: accepted.receipt_id,
+          collection_id: accepted.collection_id
+        }),
+        precondition_digest: accepted.result_digest ?? "",
+        outcome,
+        reason,
+        source_project_id: accepted.source_project_id,
+        project_id: accepted.project_id,
+        collection_id: accepted.collection_id,
+        item_id: null,
+        result_revision: outcome === "accepted" ? "absent" : accepted.result_revision,
+        result_digest: digestKnowledgeProjectLinksValue(absent),
+        accepted_receipt_id: accepted.receipt_id,
+        created_by_operation: false,
+        created_at: this.now()
+      };
+      await tx.run(RECEIPT_INSERT_SQL, receiptInsertParams(receipt));
+      return receipt;
+    });
+  }
+  async verifyRegistrationInverse(request) {
+    this.assertInverseIdentity(request);
+    const inverse = await this.getReceiptByAttempt(this.sql, {
+      operation_id: request.operation_id,
+      step_id: request.step_id,
+      action: "register_collection",
+      direction: "inverse"
+    });
+    if (!inverse || inverse.outcome !== "accepted" || inverse.accepted_receipt_id !== request.accepted_receipt_id) {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_NOT_FOUND", "accepted collection inverse receipt was not found.");
+    }
+    const aggregate = inverse.collection_id ? await this.getAggregateByCollection(this.sql, inverse.collection_id) : null;
+    if (aggregate) {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_CONFLICT", "collection inverse verification found the target still present.");
+    }
+    const verification = {
+      accepted_receipt_id: request.accepted_receipt_id,
+      target_id: inverse.collection_id,
+      absent: true,
+      digest: inverse.result_digest
+    };
+    return verification;
+  }
+  async bindItem(request) {
+    this.assertIdentity(request);
+    if (request.direction !== "forward") {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_INVALID_INPUT", "item binding requires direction=forward.");
+    }
+    const collectionId = requiredString(request.collection_id, "collection_id");
+    const itemId = requiredString(request.item_id, "item_id");
+    const item = await this.itemResolver(itemId);
+    if (!item || item.id !== itemId) {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_NOT_FOUND", "bind-existing requires an exact existing Knowledge item id.", { item_id: itemId });
+    }
+    const expectedRequestDigest = digestKnowledgeProjectLinksValue({
+      action: "bind_item",
+      collection_id: collectionId,
+      item_id: itemId
+    });
+    if (request.request_digest !== expectedRequestDigest) {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_DIGEST_MISMATCH", "request_digest does not bind the normalized item-membership request.", { expected_request_digest: expectedRequestDigest });
+    }
+    return this.sql.transaction(async (tx) => {
+      const duplicate = await this.getReceiptByAttempt(tx, {
+        operation_id: request.operation_id,
+        step_id: request.step_id,
+        action: "bind_item",
+        direction: "forward"
+      });
+      if (duplicate) {
+        this.assertIdempotent(duplicate, request);
+        return duplicate;
+      }
+      const aggregate = await this.getAggregateByCollection(tx, collectionId);
+      if (!aggregate) {
+        throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_NOT_FOUND", "Knowledge collection was not found by exact id.");
+      }
+      const existing = await tx.get(`SELECT * FROM knowledge_project_collection_memberships
+          WHERE authority_id = ? AND tenant_id = ? AND corpus_id = ?
+            AND collection_id = ? AND item_id = ?`, [
+        this.identity.authority_id,
+        this.identity.tenant_id,
+        this.identity.corpus_id,
+        collectionId,
+        itemId
+      ]);
+      const createdByOperation = existing === null;
+      const now = this.now();
+      const receiptId = this.stableReceiptId(request.operation_id, request.step_id, "bind_item", "forward");
+      if (!existing) {
+        await tx.run(`INSERT INTO knowledge_project_collection_memberships (
+            authority_id, tenant_id, corpus_id, collection_id, item_id,
+            bound_receipt_id, created_by_operation, bound_at
+          ) VALUES (?,?,?,?,?,?,?,?)`, [
+          this.identity.authority_id,
+          this.identity.tenant_id,
+          this.identity.corpus_id,
+          collectionId,
+          itemId,
+          receiptId,
+          1,
+          now
+        ]);
+        await tx.run(`UPDATE knowledge_project_collections
+              SET revision = revision + 1, updated_at = ?
+            WHERE authority_id = ? AND tenant_id = ? AND corpus_id = ? AND collection_id = ?`, [
+          now,
+          this.identity.authority_id,
+          this.identity.tenant_id,
+          this.identity.corpus_id,
+          collectionId
+        ]);
+      }
+      const current = await this.getAggregateByCollection(tx, collectionId);
+      if (!current) {
+        throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_INCOMPLETE_POPULATION", "item binding committed but collection readback was unavailable.");
+      }
+      const binding = {
+        collection_id: collectionId,
+        item_id: itemId,
+        collection_revision: `r${Number(current.revision)}`,
+        item_revision: `v${item.version ?? 1}`
+      };
+      const receipt = {
+        receipt_id: receiptId,
+        authority: "knowledge",
+        route: KNOWLEDGE_PROJECT_REGISTRATION_ROUTE,
+        package_version: this.options.packageVersion,
+        ...this.identity,
+        operation_id: request.operation_id,
+        step_id: request.step_id,
+        action: "bind_item",
+        resource_kind: "item",
+        direction: "forward",
+        idempotency_key: requiredString(request.idempotency_key, "idempotency_key"),
+        request_digest: request.request_digest,
+        precondition_digest: requiredString(request.precondition_digest, "precondition_digest"),
+        outcome: "accepted",
+        reason: createdByOperation ? null : "adopted_existing_membership",
+        source_project_id: current.source_project_id,
+        project_id: current.project_id,
+        collection_id: collectionId,
+        item_id: itemId,
+        result_revision: binding.collection_revision,
+        result_digest: digestKnowledgeProjectLinksValue(binding),
+        accepted_receipt_id: null,
+        created_by_operation: createdByOperation,
+        created_at: now
+      };
+      await tx.run(RECEIPT_INSERT_SQL, receiptInsertParams(receipt));
+      return receipt;
+    });
+  }
+  async readItemBinding(collectionId, itemId) {
+    const membership = await this.sql.get(`SELECT * FROM knowledge_project_collection_memberships
+        WHERE authority_id = ? AND tenant_id = ? AND corpus_id = ?
+          AND collection_id = ? AND item_id = ?`, [
+      this.identity.authority_id,
+      this.identity.tenant_id,
+      this.identity.corpus_id,
+      requiredString(collectionId, "collection_id"),
+      requiredString(itemId, "item_id")
+    ]);
+    if (!membership) {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_NOT_FOUND", "Knowledge collection membership was not found by exact ids.");
+    }
+    const aggregate = await this.getAggregateByCollection(this.sql, collectionId);
+    if (!aggregate) {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_INCOMPLETE_POPULATION", "membership exists without its collection aggregate.");
+    }
+    const record2 = {
+      collection_id: collectionId,
+      item_id: itemId,
+      revision: `r${Number(aggregate.revision)}`,
+      bound_at: membership.bound_at
+    };
+    return { ...record2, digest: digestKnowledgeProjectLinksValue(record2) };
+  }
+  async compensateItemBinding(request) {
+    this.assertInverseIdentity(request);
+    return this.sql.transaction(async (tx) => {
+      const duplicate = await this.getReceiptByAttempt(tx, {
+        operation_id: request.operation_id,
+        step_id: request.step_id,
+        action: "bind_item",
+        direction: "inverse"
+      });
+      if (duplicate) {
+        this.assertIdempotent(duplicate, request);
+        return duplicate;
+      }
+      const accepted = await this.receiptById(tx, request.accepted_receipt_id);
+      if (!accepted || accepted.action !== "bind_item" || accepted.direction !== "forward" || accepted.outcome !== "accepted") {
+        throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_NOT_FOUND", "accepted item-binding receipt was not found.");
+      }
+      let outcome = "accepted";
+      let reason = null;
+      const membership = await tx.get(`SELECT * FROM knowledge_project_collection_memberships
+          WHERE authority_id = ? AND tenant_id = ? AND corpus_id = ?
+            AND collection_id = ? AND item_id = ?`, [
+        this.identity.authority_id,
+        this.identity.tenant_id,
+        this.identity.corpus_id,
+        accepted.collection_id,
+        accepted.item_id
+      ]);
+      if (!accepted.created_by_operation) {
+        outcome = "terminal_nonacceptance";
+        reason = "adopted_membership_is_not_inverse_owned";
+      } else if (!membership) {
+        outcome = "terminal_nonacceptance";
+        reason = "accepted_membership_is_already_absent";
+      } else if (membership.bound_receipt_id !== accepted.receipt_id || Number(membership.created_by_operation) !== 1) {
+        outcome = "terminal_nonacceptance";
+        reason = "membership_is_owned_by_a_different_receipt";
+      } else {
+        await tx.run(`DELETE FROM knowledge_project_collection_memberships
+            WHERE authority_id = ? AND tenant_id = ? AND corpus_id = ?
+              AND collection_id = ? AND item_id = ? AND bound_receipt_id = ?`, [
+          this.identity.authority_id,
+          this.identity.tenant_id,
+          this.identity.corpus_id,
+          accepted.collection_id,
+          accepted.item_id,
+          accepted.receipt_id
+        ]);
+        await tx.run(`UPDATE knowledge_project_collections
+              SET revision = revision + 1, updated_at = ?
+            WHERE authority_id = ? AND tenant_id = ? AND corpus_id = ? AND collection_id = ?`, [
+          this.now(),
+          this.identity.authority_id,
+          this.identity.tenant_id,
+          this.identity.corpus_id,
+          accepted.collection_id
+        ]);
+      }
+      const aggregate = accepted.collection_id ? await this.getAggregateByCollection(tx, accepted.collection_id) : null;
+      const absent = {
+        accepted_receipt_id: accepted.receipt_id,
+        collection_id: accepted.collection_id,
+        item_id: accepted.item_id,
+        absent: outcome === "accepted"
+      };
+      const receipt = {
+        receipt_id: this.stableReceiptId(request.operation_id, request.step_id, "bind_item", "inverse"),
+        authority: "knowledge",
+        route: KNOWLEDGE_PROJECT_REGISTRATION_ROUTE,
+        package_version: this.options.packageVersion,
+        ...this.identity,
+        operation_id: request.operation_id,
+        step_id: request.step_id,
+        action: "bind_item",
+        resource_kind: "item",
+        direction: "inverse",
+        idempotency_key: request.idempotency_key,
+        request_digest: digestKnowledgeProjectLinksValue({
+          accepted_receipt_id: accepted.receipt_id,
+          collection_id: accepted.collection_id,
+          item_id: accepted.item_id
+        }),
+        precondition_digest: accepted.result_digest ?? "",
+        outcome,
+        reason,
+        source_project_id: accepted.source_project_id,
+        project_id: accepted.project_id,
+        collection_id: accepted.collection_id,
+        item_id: accepted.item_id,
+        result_revision: outcome === "accepted" && aggregate ? `r${Number(aggregate.revision)}` : accepted.result_revision,
+        result_digest: digestKnowledgeProjectLinksValue(absent),
+        accepted_receipt_id: accepted.receipt_id,
+        created_by_operation: false,
+        created_at: this.now()
+      };
+      await tx.run(RECEIPT_INSERT_SQL, receiptInsertParams(receipt));
+      return receipt;
+    });
+  }
+  async verifyItemBindingInverse(request) {
+    this.assertInverseIdentity(request);
+    const inverse = await this.getReceiptByAttempt(this.sql, {
+      operation_id: request.operation_id,
+      step_id: request.step_id,
+      action: "bind_item",
+      direction: "inverse"
+    });
+    if (!inverse || inverse.outcome !== "accepted" || inverse.accepted_receipt_id !== request.accepted_receipt_id) {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_NOT_FOUND", "accepted item-binding inverse receipt was not found.");
+    }
+    const membership = await this.sql.get(`SELECT item_id FROM knowledge_project_collection_memberships
+        WHERE authority_id = ? AND tenant_id = ? AND corpus_id = ?
+          AND collection_id = ? AND item_id = ?`, [
+      this.identity.authority_id,
+      this.identity.tenant_id,
+      this.identity.corpus_id,
+      inverse.collection_id,
+      inverse.item_id
+    ]);
+    if (membership) {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_CONFLICT", "item-binding inverse verification found the membership still present.");
+    }
+    return {
+      accepted_receipt_id: request.accepted_receipt_id,
+      target_id: inverse.item_id,
+      absent: true,
+      digest: inverse.result_digest
+    };
+  }
+  async buildResources(projectId) {
+    const aggregate = await this.getAggregateByProject(this.sql, requiredString(projectId, "project_id"));
+    if (!aggregate) {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_NOT_FOUND", "Knowledge project aggregate was not found by source or stable project id.");
+    }
+    const memberships = await this.sql.many(`SELECT * FROM knowledge_project_collection_memberships
+        WHERE authority_id = ? AND tenant_id = ? AND corpus_id = ? AND collection_id = ?
+        ORDER BY item_id ASC`, [
+      this.identity.authority_id,
+      this.identity.tenant_id,
+      this.identity.corpus_id,
+      aggregate.collection_id
+    ]);
+    const items = await Promise.all(memberships.map(async (membership) => {
+      const item = await this.itemResolver(membership.item_id);
+      if (!item || item.id !== membership.item_id) {
+        throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_INCOMPLETE_POPULATION", "collection membership points at a missing Knowledge item; refusing a partial resource population.", { collection_id: aggregate.collection_id, item_id: membership.item_id });
+      }
+      return item;
+    }));
+    const revision = `r${Number(aggregate.revision)}`;
+    const base = {
+      project_id: aggregate.project_id,
+      source_project_id: aggregate.source_project_id,
+      collection_id: aggregate.collection_id,
+      revision
+    };
+    const resources = [];
+    const projectBody = {
+      ...base,
+      kind: "project",
+      id: aggregate.project_id,
+      title: aggregate.project_name,
+      locator: { kind: "canonical_uri", value: `knowledge:project:${aggregate.project_id}` },
+      metadata: {
+        source_project_id: aggregate.source_project_id,
+        slug: aggregate.project_slug,
+        collection_count: 1
+      }
+    };
+    resources.push({
+      ...projectBody,
+      key: `project:${aggregate.project_id}`,
+      digest: digestKnowledgeProjectLinksValue(projectBody)
+    });
+    const collectionBody = {
+      ...base,
+      kind: "collection",
+      id: aggregate.collection_id,
+      title: aggregate.collection_name,
+      locator: { kind: "external_uuid", value: aggregate.collection_id },
+      metadata: {
+        slug: aggregate.collection_slug,
+        membership_rule: KNOWLEDGE_PROJECT_MEMBERSHIP_RULE,
+        member_count: items.length
+      }
+    };
+    resources.push({
+      ...collectionBody,
+      key: `collection:${aggregate.collection_id}`,
+      digest: digestKnowledgeProjectLinksValue(collectionBody)
+    });
+    for (const item of items) {
+      const itemBody = {
+        ...base,
+        kind: "item",
+        id: item.id,
+        revision: `v${item.version ?? 1}`,
+        title: item.title,
+        locator: { kind: "canonical_uri", value: `knowledge:item:${encodeURIComponent(item.id)}` },
+        metadata: {
+          tags: [...item.tags ?? []],
+          archived: item.archived === true,
+          updated_at: item.updated_at
+        }
+      };
+      resources.push({
+        ...itemBody,
+        key: `item:${item.id}`,
+        digest: digestKnowledgeProjectLinksValue(itemBody)
+      });
+    }
+    const taxonomy = new Map;
+    for (const item of items) {
+      for (const rawTag of item.tags ?? []) {
+        const normalized = rawTag.trim().toLowerCase();
+        if (!normalized)
+          continue;
+        const entry = taxonomy.get(normalized) ?? { label: rawTag.trim(), itemIds: [] };
+        entry.itemIds.push(item.id);
+        taxonomy.set(normalized, entry);
+      }
+    }
+    for (const [normalized, entry] of [...taxonomy.entries()].sort(([left], [right]) => left.localeCompare(right))) {
+      const taxonomyId = stableUuid(`${aggregate.collection_id}\x00taxonomy\x00${normalized}`);
+      const taxonomyBody = {
+        ...base,
+        kind: "taxonomy",
+        id: taxonomyId,
+        title: entry.label,
+        locator: { kind: "external_uuid", value: taxonomyId },
+        metadata: {
+          tag: entry.label,
+          normalized_tag: normalized,
+          item_count: entry.itemIds.length,
+          member_digest: digestKnowledgeProjectLinksValue([...entry.itemIds].sort())
+        }
+      };
+      resources.push({
+        ...taxonomyBody,
+        key: `taxonomy:${taxonomyId}`,
+        digest: digestKnowledgeProjectLinksValue(taxonomyBody)
+      });
+    }
+    resources.sort((left, right) => left.key.localeCompare(right.key));
+    return { aggregate, resources };
+  }
+  async listProjectResources(projectId, options = {}) {
+    const limit = boundedLimit(options.limit);
+    const kinds = normalizeKinds(options.kinds);
+    const { aggregate, resources } = await this.buildResources(projectId);
+    const revision = `r${Number(aggregate.revision)}`;
+    const population = resources.filter((resource) => kinds.includes(resource.kind));
+    const populationDigest = digestKnowledgeProjectLinksValue(population.map((resource) => ({ key: resource.key, digest: resource.digest })));
+    let after = "";
+    if (options.cursor) {
+      let decoded;
+      try {
+        decoded = JSON.parse(Buffer.from(options.cursor, "base64url").toString("utf8"));
+      } catch {
+        throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_INVALID_INPUT", "cursor is not a valid Knowledge project-resources cursor.");
+      }
+      if (decoded.version !== 1 || decoded.project_id !== aggregate.project_id || decoded.collection_id !== aggregate.collection_id || decoded.collection_revision !== revision || decoded.population_digest !== populationDigest || canonicalKnowledgeProjectLinksJson(decoded.kinds) !== canonicalKnowledgeProjectLinksJson(kinds) || typeof decoded.after !== "string") {
+        throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_CURSOR_STALE", "project resources changed or the cursor belongs to a different project/kind selection; restart from the first page.");
+      }
+      after = decoded.after;
+    }
+    const remaining = after ? population.filter((resource) => resource.key > after) : population;
+    const pageResources = remaining.slice(0, limit);
+    const hasMore = remaining.length > pageResources.length;
+    const nextCursor = hasMore && pageResources.length > 0 ? Buffer.from(JSON.stringify({
+      version: 1,
+      project_id: aggregate.project_id,
+      collection_id: aggregate.collection_id,
+      collection_revision: revision,
+      population_digest: populationDigest,
+      kinds,
+      after: pageResources.at(-1).key
+    })).toString("base64url") : null;
+    return {
+      schema: "knowledge.project-resources.page.v1",
+      authority: "knowledge",
+      route: KNOWLEDGE_PROJECT_RESOURCES_ROUTE,
+      ...this.identity,
+      project_id: aggregate.project_id,
+      source_project_id: aggregate.source_project_id,
+      collection_id: aggregate.collection_id,
+      collection_revision: revision,
+      population_digest: populationDigest,
+      resource_kinds: kinds,
+      resources: pageResources,
+      count: pageResources.length,
+      total: population.length,
+      limit,
+      cursor: options.cursor ?? null,
+      next_cursor: nextCursor,
+      has_more: hasMore,
+      complete: !hasMore,
+      truncated: false
+    };
+  }
+  async readProjectResource(projectId, kind, resourceId) {
+    const { resources } = await this.buildResources(projectId);
+    const resource = resources.find((candidate) => candidate.kind === kind && candidate.id === resourceId);
+    if (!resource) {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_NOT_FOUND", "Knowledge project resource was not found by exact kind and id.");
+    }
+    return resource;
+  }
+  async readAllProjectResources(projectId, options = {}) {
+    const resources = [];
+    const seen = new Set;
+    let cursor = null;
+    let expected = null;
+    do {
+      const page = await this.listProjectResources(projectId, { ...options, cursor });
+      const identity = {
+        project_id: page.project_id,
+        collection_id: page.collection_id,
+        collection_revision: page.collection_revision,
+        population_digest: page.population_digest,
+        total: page.total,
+        kinds: canonicalKnowledgeProjectLinksJson(page.resource_kinds)
+      };
+      if (expected && canonicalKnowledgeProjectLinksJson(expected) !== canonicalKnowledgeProjectLinksJson(identity)) {
+        throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_CURSOR_STALE", "project resources changed while the complete population was being read.");
+      }
+      expected ??= identity;
+      for (const resource of page.resources) {
+        if (seen.has(resource.key)) {
+          throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_INCOMPLETE_POPULATION", "project resource pagination returned a duplicate stable resource key.", { key: resource.key });
+        }
+        seen.add(resource.key);
+        resources.push(resource);
+      }
+      if (page.has_more && !page.next_cursor) {
+        throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_INCOMPLETE_POPULATION", "project resource page claims more data without a continuation cursor.");
+      }
+      cursor = page.next_cursor;
+    } while (cursor);
+    if (!expected || resources.length !== expected.total) {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_INCOMPLETE_POPULATION", "complete project resource enumeration did not match the producer total.", { expected_total: expected?.total ?? null, received: resources.length });
+    }
+    return resources;
+  }
+}
+function createLocalKnowledgeProjectLinksAuthority(input) {
+  if (input.databasePath !== ":memory:") {
+    ensureParentDir(input.databasePath);
+  }
+  const db = new Database2(input.databasePath, { create: true });
+  db.exec(sqliteKnowledgeProjectLinksSchemaSql());
+  return new PackageOwnedKnowledgeProjectLinksAuthority(new SqliteProjectLinksSql(db), (id) => input.itemStore.get(id), input.options);
+}
+class KnowledgeProjectLinksHttpClient {
+  options;
+  fetchImpl;
+  root;
+  constructor(options) {
+    this.options = options;
+    this.fetchImpl = options.fetch ?? guardedFetch;
+    this.root = options.baseUrl.replace(/\/+$/, "");
+  }
+  headers(extra = {}) {
+    const headers = new Headers(this.options.headers);
+    headers.set("accept", "application/json");
+    if (this.options.apiKey)
+      headers.set("x-api-key", this.options.apiKey);
+    for (const [key, value] of Object.entries(extra))
+      headers.set(key, value);
+    return headers;
+  }
+  async request(path, init = {}) {
+    const response = await this.fetchImpl(`${this.root}${path}`, {
+      ...init,
+      headers: this.headers(init.body ? { "content-type": "application/json" } : {})
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new KnowledgeProjectLinksError(typeof body.error === "string" ? body.error : "KNOWLEDGE_PROJECT_LINKS_CONFLICT", typeof body.message === "string" ? body.message : `Knowledge project-links HTTP ${response.status}`, body.details && typeof body.details === "object" ? body.details : {});
+    }
+    return body;
+  }
+  async capability() {
+    const body = await this.request("/v1/project-registration/capability");
+    return body.capability;
+  }
+  async registerCollection(request) {
+    const body = await this.request("/v1/project-registration/create", { method: "POST", body: JSON.stringify(request) });
+    return body.receipt;
+  }
+  async readCollection(collectionId) {
+    const body = await this.request("/v1/project-registration/read-exact", { method: "POST", body: JSON.stringify({ collection_id: collectionId }) });
+    return body.record;
+  }
+  async lookupReceipt(request) {
+    const body = await this.request("/v1/project-registration/receipts/lookup", { method: "POST", body: JSON.stringify(request) });
+    return body.receipt;
+  }
+  async compensateRegistration(request) {
+    const body = await this.request("/v1/project-registration/compensate", { method: "POST", body: JSON.stringify(request) });
+    return body.receipt;
+  }
+  async verifyRegistrationInverse(request) {
+    const body = await this.request("/v1/project-registration/verify-inverse", { method: "POST", body: JSON.stringify(request) });
+    return body.verification;
+  }
+  async bindItem(request) {
+    const body = await this.request("/v1/project-registration/items/bind", { method: "POST", body: JSON.stringify(request) });
+    return body.receipt;
+  }
+  async readItemBinding(collectionId, itemId) {
+    const body = await this.request("/v1/project-registration/items/read-exact", { method: "POST", body: JSON.stringify({ collection_id: collectionId, item_id: itemId }) });
+    return body.record;
+  }
+  async compensateItemBinding(request) {
+    const body = await this.request("/v1/project-registration/items/compensate", { method: "POST", body: JSON.stringify(request) });
+    return body.receipt;
+  }
+  async verifyItemBindingInverse(request) {
+    const body = await this.request("/v1/project-registration/items/verify-inverse", { method: "POST", body: JSON.stringify(request) });
+    return body.verification;
+  }
+  async listProjectResources(projectId, options = {}) {
+    const query2 = new URLSearchParams;
+    if (options.limit !== undefined)
+      query2.set("limit", String(options.limit));
+    if (options.cursor)
+      query2.set("cursor", options.cursor);
+    for (const kind of options.kinds ?? [])
+      query2.append("kind", kind);
+    const suffix = query2.size > 0 ? `?${query2.toString()}` : "";
+    return this.request(`/v1/projects/${encodeURIComponent(projectId)}/resources${suffix}`);
+  }
+  async readProjectResource(projectId, kind, resourceId) {
+    const body = await this.request(`/v1/projects/${encodeURIComponent(projectId)}/resources/${kind}/${encodeURIComponent(resourceId)}`);
+    return body.resource;
+  }
+  async readAllProjectResources(projectId, options = {}) {
+    const resources = [];
+    const seen = new Set;
+    let cursor = null;
+    let expectedTotal = null;
+    let expectedRevision = null;
+    let expectedPopulationDigest = null;
+    do {
+      const page = await this.listProjectResources(projectId, { ...options, cursor });
+      expectedTotal ??= page.total;
+      expectedRevision ??= page.collection_revision;
+      expectedPopulationDigest ??= page.population_digest;
+      if (page.total !== expectedTotal || page.collection_revision !== expectedRevision || page.population_digest !== expectedPopulationDigest) {
+        throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_CURSOR_STALE", "project resources changed while the complete HTTP population was being read.");
+      }
+      for (const resource of page.resources) {
+        if (seen.has(resource.key)) {
+          throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_INCOMPLETE_POPULATION", "project resources HTTP pagination returned a duplicate stable key.");
+        }
+        seen.add(resource.key);
+        resources.push(resource);
+      }
+      if (page.has_more && !page.next_cursor) {
+        throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_INCOMPLETE_POPULATION", "project resources HTTP page claims more data without a cursor.");
+      }
+      cursor = page.next_cursor;
+    } while (cursor);
+    if (expectedTotal === null || resources.length !== expectedTotal) {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_INCOMPLETE_POPULATION", "complete HTTP resource enumeration did not match the producer total.");
+    }
+    return resources;
+  }
+}
+function createKnowledgeProjectLinksHttpClient(options) {
+  return new KnowledgeProjectLinksHttpClient(options);
+}
+
 // src/service.ts
 function resolvePeerWorkspace(input) {
   const target = resolve5(input);
@@ -29240,7 +30619,7 @@ function resolvePeerWorkspace(input) {
   return ensureKnowledgeWorkspace(workspaceForHome(projectKnowledgeHome(target)).home);
 }
 function workspaceMachineId(workspace) {
-  return `${hostname5()}:${createHash19("sha256").update(workspace.home).digest("hex").slice(0, 12)}`;
+  return `${hostname5()}:${createHash20("sha256").update(workspace.home).digest("hex").slice(0, 12)}`;
 }
 function shellQuote2(value) {
   return `'${value.replace(/'/g, "'\\''")}'`;
@@ -29716,7 +31095,7 @@ function legacyAgentContextPack(options, context, policy) {
     redactions += quote.redactions;
     const ref = citation.source_ref ?? citation.source_uri ?? citation.artifact_path ?? citation.artifact_uri ?? citation.id;
     return {
-      id: `cite_${createHash19("sha256").update(`${citation.id}\x00${ref}`).digest("hex").slice(0, 12)}`,
+      id: `cite_${createHash20("sha256").update(`${citation.id}\x00${ref}`).digest("hex").slice(0, 12)}`,
       kind: citation.artifact_uri || citation.artifact_path ? "artifact" : "source",
       ref,
       source_ref: citation.source_ref,
@@ -29742,7 +31121,7 @@ function legacyAgentContextPack(options, context, policy) {
     const preview2 = redactPreviewForPack(excerpt2.text, policy, 520);
     redactions += preview2.redactions;
     return {
-      id: `ev_${createHash19("sha256").update(`${excerpt2.kind}\x00${excerpt2.result_id}\x00${excerpt2.citation_id ?? ""}`).digest("hex").slice(0, 14)}`,
+      id: `ev_${createHash20("sha256").update(`${excerpt2.kind}\x00${excerpt2.result_id}\x00${excerpt2.citation_id ?? ""}`).digest("hex").slice(0, 14)}`,
       kind: excerpt2.kind,
       title: compactText(result?.title ?? citation?.ref ?? excerpt2.kind, 100),
       text_preview: preview2.text,
@@ -29760,7 +31139,7 @@ function legacyAgentContextPack(options, context, policy) {
   const usedCitationIds = new Set(evidence.flatMap((entry) => entry.citation_ids));
   const usedCitations = citations.filter((citation) => usedCitationIds.has(citation.id));
   const warnings = Array.from(new Set(context.warnings));
-  const idempotencyKey = `ctx_${createHash19("sha256").update([source, purpose, query2, warnings.join(","), evidence.map((entry) => entry.id).join(",")].join("\x00")).digest("hex").slice(0, 20)}`;
+  const idempotencyKey = `ctx_${createHash20("sha256").update([source, purpose, query2, warnings.join(","), evidence.map((entry) => entry.id).join(",")].join("\x00")).digest("hex").slice(0, 20)}`;
   const pack = {
     ok: true,
     format: "knowledge-agent-context-pack",
@@ -29873,7 +31252,7 @@ function emptyAgentContextPack(options) {
   const query2 = (options.query ?? options.topic ?? "").normalize("NFKC").trim().replace(/\s+/g, " ");
   const maxItems = Math.max(1, Math.min(options.maxItems ?? options.limit ?? 8, 50));
   const maxTokens = Math.max(500, Math.min(options.maxTokens ?? 6000, 1e5));
-  const idempotencyKey = `ctx_${createHash19("sha256").update(["empty", source, purpose, query2, options.topic ?? "", options.since ?? ""].join("\x00")).digest("hex").slice(0, 20)}`;
+  const idempotencyKey = `ctx_${createHash20("sha256").update(["empty", source, purpose, query2, options.topic ?? "", options.since ?? ""].join("\x00")).digest("hex").slice(0, 20)}`;
   return {
     ok: true,
     format: "knowledge-agent-context-pack",
@@ -30241,6 +31620,7 @@ class KnowledgeService {
   options;
   ensuredWorkspace;
   cachedConfig;
+  cachedProjectLinksAuthority;
   constructor(options = {}) {
     this.options = options;
   }
@@ -30264,6 +31644,35 @@ class KnowledgeService {
       storePath: workspace.jsonStorePath,
       storePathOverridden: false
     });
+  }
+  projectLinksAuthority() {
+    if (this.options.projectLinksAuthority)
+      return this.options.projectLinksAuthority;
+    if (this.cachedProjectLinksAuthority)
+      return this.cachedProjectLinksAuthority;
+    if (isKnowledgeApiMode()) {
+      const { apiKey } = getKnowledgeApiKey(process.env);
+      if (!apiKey) {
+        throw new Error("Knowledge project links require the configured API credential in postgres mode.");
+      }
+      this.cachedProjectLinksAuthority = createKnowledgeProjectLinksHttpClient({
+        baseUrl: resolveKnowledgeApiUrl(this.config(), process.env),
+        apiKey
+      });
+      return this.cachedProjectLinksAuthority;
+    }
+    const workspace = this.ensureWorkspace();
+    this.cachedProjectLinksAuthority = createLocalKnowledgeProjectLinksAuthority({
+      databasePath: workspace.knowledgeDbPath,
+      itemStore: this.itemStore(),
+      options: {
+        packageVersion: package_default.version,
+        authorityId: this.options.projectLinksIdentity?.authorityId ?? process.env.HASNA_KNOWLEDGE_PROJECT_AUTHORITY_ID ?? "knowledge",
+        tenantId: this.options.projectLinksIdentity?.tenantId ?? process.env.HASNA_KNOWLEDGE_PROJECT_TENANT_ID ?? "local",
+        corpusId: this.options.projectLinksIdentity?.corpusId ?? process.env.HASNA_KNOWLEDGE_PROJECT_CORPUS_ID ?? "knowledge"
+      }
+    });
+    return this.cachedProjectLinksAuthority;
   }
   async listItems(options = {}) {
     return this.itemStore().list(options);
@@ -31849,6 +33258,1294 @@ function ensureSyncMetaTable(db) {
     )
   `);
 }
+// src/db/pg-migrations.ts
+var PG_MIGRATIONS = [
+  `CREATE TABLE IF NOT EXISTS sources (
+    id TEXT PRIMARY KEY,
+    uri TEXT NOT NULL UNIQUE,
+    kind TEXT NOT NULL,
+    title TEXT,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    acl_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT NOW()::text,
+    updated_at TEXT NOT NULL DEFAULT NOW()::text
+  )`,
+  `CREATE TABLE IF NOT EXISTS wiki_pages (
+    id TEXT PRIMARY KEY,
+    path TEXT NOT NULL UNIQUE,
+    title TEXT NOT NULL,
+    artifact_uri TEXT,
+    content_hash TEXT,
+    status TEXT NOT NULL DEFAULT 'active',
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT NOW()::text,
+    updated_at TEXT NOT NULL DEFAULT NOW()::text
+  )`,
+  `CREATE TABLE IF NOT EXISTS source_revisions (
+    id TEXT PRIMARY KEY,
+    source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+    revision TEXT NOT NULL,
+    hash TEXT,
+    extracted_text_uri TEXT,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT NOW()::text,
+    UNIQUE(source_id, revision)
+  )`,
+  `CREATE TABLE IF NOT EXISTS chunks (
+    id TEXT PRIMARY KEY,
+    source_revision_id TEXT REFERENCES source_revisions(id) ON DELETE CASCADE,
+    wiki_page_id TEXT REFERENCES wiki_pages(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    ordinal INTEGER NOT NULL,
+    text TEXT NOT NULL,
+    token_count INTEGER,
+    start_offset INTEGER,
+    end_offset INTEGER,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT NOW()::text
+  )`,
+  `CREATE TABLE IF NOT EXISTS chunk_embeddings (
+    id TEXT PRIMARY KEY,
+    chunk_id TEXT NOT NULL REFERENCES chunks(id) ON DELETE CASCADE,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    dimensions INTEGER NOT NULL,
+    vector_json TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT NOW()::text,
+    UNIQUE(chunk_id, provider, model)
+  )`,
+  `CREATE TABLE IF NOT EXISTS wiki_backlinks (
+    from_page_id TEXT NOT NULL REFERENCES wiki_pages(id) ON DELETE CASCADE,
+    to_page_id TEXT NOT NULL REFERENCES wiki_pages(id) ON DELETE CASCADE,
+    label TEXT,
+    created_at TEXT NOT NULL DEFAULT NOW()::text,
+    PRIMARY KEY(from_page_id, to_page_id)
+  )`,
+  `CREATE TABLE IF NOT EXISTS citations (
+    id TEXT PRIMARY KEY,
+    wiki_page_id TEXT REFERENCES wiki_pages(id) ON DELETE CASCADE,
+    chunk_id TEXT REFERENCES chunks(id) ON DELETE SET NULL,
+    source_uri TEXT NOT NULL,
+    quote TEXT,
+    start_offset INTEGER,
+    end_offset INTEGER,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT NOW()::text
+  )`,
+  `CREATE TABLE IF NOT EXISTS knowledge_indexes (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    name TEXT NOT NULL,
+    artifact_uri TEXT,
+    shard_key TEXT,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT NOW()::text,
+    updated_at TEXT NOT NULL DEFAULT NOW()::text,
+    UNIQUE(kind, name, shard_key)
+  )`,
+  `CREATE TABLE IF NOT EXISTS runs (
+    id TEXT PRIMARY KEY,
+    type TEXT NOT NULL,
+    prompt TEXT,
+    status TEXT NOT NULL,
+    provider TEXT,
+    model TEXT,
+    cost_tokens INTEGER NOT NULL DEFAULT 0,
+    cost_usd DOUBLE PRECISION NOT NULL DEFAULT 0,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT NOW()::text,
+    updated_at TEXT NOT NULL DEFAULT NOW()::text
+  )`,
+  `CREATE TABLE IF NOT EXISTS run_events (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+    level TEXT NOT NULL,
+    event TEXT NOT NULL,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT NOW()::text
+  )`,
+  `CREATE TABLE IF NOT EXISTS provider_usage (
+    id TEXT PRIMARY KEY,
+    run_id TEXT REFERENCES runs(id) ON DELETE SET NULL,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    cost_usd DOUBLE PRECISION NOT NULL DEFAULT 0,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT NOW()::text
+  )`,
+  `CREATE TABLE IF NOT EXISTS redaction_findings (
+    id TEXT PRIMARY KEY,
+    source_uri TEXT,
+    run_id TEXT REFERENCES runs(id) ON DELETE SET NULL,
+    severity TEXT NOT NULL,
+    finding_type TEXT NOT NULL,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT NOW()::text
+  )`,
+  `CREATE TABLE IF NOT EXISTS storage_objects (
+    id TEXT PRIMARY KEY,
+    artifact_uri TEXT NOT NULL UNIQUE,
+    kind TEXT NOT NULL,
+    content_type TEXT,
+    hash TEXT,
+    size_bytes INTEGER,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT NOW()::text,
+    updated_at TEXT NOT NULL DEFAULT NOW()::text
+  )`,
+  `CREATE TABLE IF NOT EXISTS audit_events (
+    id TEXT PRIMARY KEY,
+    event_type TEXT NOT NULL,
+    action TEXT NOT NULL,
+    target_uri TEXT,
+    decision TEXT NOT NULL,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT NOW()::text
+  )`,
+  `CREATE TABLE IF NOT EXISTS approval_gates (
+    id TEXT PRIMARY KEY,
+    action TEXT NOT NULL,
+    target_uri TEXT,
+    status TEXT NOT NULL,
+    reason TEXT,
+    approved_by TEXT,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT NOW()::text,
+    updated_at TEXT NOT NULL DEFAULT NOW()::text
+  )`,
+  `CREATE TABLE IF NOT EXISTS vector_index_entries (
+    id TEXT PRIMARY KEY,
+    chunk_id TEXT NOT NULL REFERENCES chunks(id) ON DELETE CASCADE,
+    source_revision_id TEXT REFERENCES source_revisions(id) ON DELETE CASCADE,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    dimensions INTEGER NOT NULL,
+    vector_json TEXT NOT NULL,
+    vector_norm DOUBLE PRECISION NOT NULL,
+    source_uri TEXT,
+    source_ref TEXT,
+    revision TEXT,
+    hash TEXT,
+    start_offset INTEGER,
+    end_offset INTEGER,
+    token_count INTEGER,
+    status TEXT NOT NULL DEFAULT 'active',
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT NOW()::text,
+    updated_at TEXT NOT NULL DEFAULT NOW()::text,
+    UNIQUE(chunk_id, provider, model)
+  )`,
+  `CREATE TABLE IF NOT EXISTS reindex_queue (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    target_id TEXT NOT NULL,
+    source_uri TEXT,
+    reason TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    attempts INTEGER NOT NULL DEFAULT 0,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT NOW()::text,
+    updated_at TEXT NOT NULL DEFAULT NOW()::text,
+    UNIQUE(kind, target_id, reason)
+  )`,
+  `CREATE TABLE IF NOT EXISTS knowledge_machines (
+    machine_id TEXT PRIMARY KEY,
+    hostname TEXT,
+    platform TEXT,
+    user_label TEXT,
+    workspace_home TEXT,
+    tailscale_dns TEXT,
+    tailscale_ips_json TEXT NOT NULL DEFAULT '[]',
+    ssh_target TEXT,
+    last_seen_at TEXT,
+    capabilities_json TEXT NOT NULL DEFAULT '{}',
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT NOW()::text,
+    updated_at TEXT NOT NULL DEFAULT NOW()::text
+  )`,
+  `CREATE TABLE IF NOT EXISTS knowledge_sync_snapshots (
+    id TEXT PRIMARY KEY,
+    machine_id TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    workspace_home TEXT NOT NULL,
+    sqlite_schema_version INTEGER NOT NULL,
+    artifact_root_uri TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    tables_json TEXT NOT NULL,
+    artifact_hashes_json TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT NOW()::text
+  )`,
+  `CREATE TABLE IF NOT EXISTS knowledge_sync_changes (
+    id TEXT PRIMARY KEY,
+    origin_machine_id TEXT NOT NULL,
+    updated_by_machine_id TEXT NOT NULL,
+    entity_kind TEXT NOT NULL,
+    entity_id TEXT NOT NULL,
+    operation TEXT NOT NULL,
+    base_hash TEXT,
+    next_hash TEXT,
+    source_ref TEXT,
+    source_revision_id TEXT,
+    artifact_uri TEXT,
+    logical_clock INTEGER NOT NULL DEFAULT 0,
+    bundle_id TEXT,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT NOW()::text
+  )`,
+  `ALTER TABLE knowledge_sync_changes ADD COLUMN IF NOT EXISTS logical_clock INTEGER NOT NULL DEFAULT 0`,
+  `ALTER TABLE knowledge_sync_changes ADD COLUMN IF NOT EXISTS bundle_id TEXT`,
+  `CREATE TABLE IF NOT EXISTS knowledge_sync_conflicts (
+    id TEXT PRIMARY KEY,
+    entity_kind TEXT NOT NULL,
+    entity_id TEXT NOT NULL,
+    local_machine_id TEXT NOT NULL,
+    remote_machine_id TEXT NOT NULL,
+    local_hash TEXT,
+    remote_hash TEXT,
+    base_hash TEXT,
+    status TEXT NOT NULL,
+    resolution_strategy TEXT,
+    proposed_patch_uri TEXT,
+    approved_by TEXT,
+    resolved_at TEXT,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT NOW()::text
+  )`,
+  `CREATE TABLE IF NOT EXISTS knowledge_sync_table_clocks (
+    table_name TEXT NOT NULL,
+    machine_id TEXT NOT NULL,
+    logical_clock INTEGER NOT NULL DEFAULT 0,
+    high_water_hash TEXT,
+    high_water_bundle_id TEXT,
+    origin_machine_id TEXT,
+    updated_by_machine_id TEXT,
+    last_applied_at TEXT,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT NOW()::text,
+    updated_at TEXT NOT NULL DEFAULT NOW()::text,
+    PRIMARY KEY(table_name, machine_id)
+  )`,
+  `CREATE TABLE IF NOT EXISTS knowledge_sync_imports (
+    bundle_id TEXT PRIMARY KEY,
+    source_machine_id TEXT NOT NULL,
+    target_machine_id TEXT NOT NULL,
+    direction TEXT NOT NULL,
+    status TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    table_clocks_json TEXT NOT NULL,
+    tables_json TEXT NOT NULL,
+    generated_at TEXT NOT NULL,
+    applied_at TEXT NOT NULL,
+    metadata_json TEXT NOT NULL DEFAULT '{}'
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_source_revisions_source ON source_revisions(source_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_chunks_source_revision ON chunks(source_revision_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_chunks_wiki_page ON chunks(wiki_page_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_citations_wiki_page ON citations(wiki_page_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_citations_chunk ON citations(chunk_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_run_events_run ON run_events(run_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_provider_usage_run ON provider_usage(run_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_audit_events_action ON audit_events(action)`,
+  `CREATE INDEX IF NOT EXISTS idx_audit_events_target ON audit_events(target_uri)`,
+  `CREATE INDEX IF NOT EXISTS idx_audit_events_created ON audit_events(created_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_approval_gates_action ON approval_gates(action)`,
+  `CREATE INDEX IF NOT EXISTS idx_approval_gates_status ON approval_gates(status)`,
+  `CREATE INDEX IF NOT EXISTS idx_vector_index_provider_model ON vector_index_entries(provider, model)`,
+  `CREATE INDEX IF NOT EXISTS idx_vector_index_source_revision ON vector_index_entries(source_revision_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_vector_index_source_uri ON vector_index_entries(source_uri)`,
+  `CREATE INDEX IF NOT EXISTS idx_vector_index_status ON vector_index_entries(status)`,
+  `CREATE INDEX IF NOT EXISTS idx_reindex_queue_status ON reindex_queue(status)`,
+  `CREATE INDEX IF NOT EXISTS idx_reindex_queue_kind_target ON reindex_queue(kind, target_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_reindex_queue_source_uri ON reindex_queue(source_uri)`,
+  `CREATE INDEX IF NOT EXISTS idx_knowledge_machines_last_seen ON knowledge_machines(last_seen_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_sync_snapshots_machine_created ON knowledge_sync_snapshots(machine_id, created_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_sync_snapshots_hash ON knowledge_sync_snapshots(content_hash)`,
+  `CREATE INDEX IF NOT EXISTS idx_sync_changes_entity ON knowledge_sync_changes(entity_kind, entity_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_sync_changes_origin ON knowledge_sync_changes(origin_machine_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_sync_changes_created ON knowledge_sync_changes(created_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_sync_changes_bundle ON knowledge_sync_changes(bundle_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_sync_changes_clock ON knowledge_sync_changes(entity_kind, logical_clock)`,
+  `CREATE INDEX IF NOT EXISTS idx_sync_conflicts_status ON knowledge_sync_conflicts(status)`,
+  `CREATE INDEX IF NOT EXISTS idx_sync_conflicts_entity ON knowledge_sync_conflicts(entity_kind, entity_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_sync_table_clocks_machine ON knowledge_sync_table_clocks(machine_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_sync_table_clocks_updated ON knowledge_sync_table_clocks(updated_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_sync_imports_source ON knowledge_sync_imports(source_machine_id, applied_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_sync_imports_target ON knowledge_sync_imports(target_machine_id, applied_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_sync_imports_status ON knowledge_sync_imports(status)`,
+  `CREATE TABLE IF NOT EXISTS knowledge_items (
+    id TEXT PRIMARY KEY,
+    short_id TEXT,
+    title TEXT NOT NULL,
+    content TEXT NOT NULL DEFAULT '',
+    url TEXT,
+    tags JSONB NOT NULL DEFAULT '[]'::jsonb,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    archived BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TEXT NOT NULL DEFAULT NOW()::text,
+    updated_at TEXT NOT NULL DEFAULT NOW()::text
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_knowledge_items_short_id ON knowledge_items(short_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_knowledge_items_archived ON knowledge_items(archived)`,
+  `CREATE INDEX IF NOT EXISTS idx_knowledge_items_created ON knowledge_items(created_at)`,
+  `ALTER TABLE knowledge_items
+     ADD COLUMN IF NOT EXISTS search_vector tsvector
+     GENERATED ALWAYS AS (
+       setweight(to_tsvector('english', coalesce(title, '')), 'A') ||
+       setweight(to_tsvector('english', coalesce(content, '')), 'B')
+     ) STORED`,
+  `CREATE INDEX IF NOT EXISTS idx_knowledge_items_search_vector
+     ON knowledge_items USING GIN (search_vector)`,
+  `ALTER TABLE knowledge_items ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1`,
+  `CREATE TABLE IF NOT EXISTS knowledge_item_versions (
+    id TEXT PRIMARY KEY,
+    item_id TEXT NOT NULL REFERENCES knowledge_items(id) ON DELETE CASCADE,
+    tenant_id TEXT,
+    version INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    content TEXT,
+    body_uri TEXT,
+    content_hash TEXT NOT NULL,
+    content_bytes INTEGER NOT NULL,
+    url TEXT,
+    tags JSONB NOT NULL DEFAULT '[]'::jsonb,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    archived BOOLEAN NOT NULL DEFAULT FALSE,
+    actor TEXT,
+    reason TEXT,
+    valid_from TEXT,
+    valid_to TEXT NOT NULL DEFAULT to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    UNIQUE(item_id, version)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_knowledge_item_versions_item
+     ON knowledge_item_versions(item_id, version DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_knowledge_item_versions_hash
+     ON knowledge_item_versions(content_hash)`,
+  `CREATE OR REPLACE FUNCTION knowledge_items_version_snapshot()
+   RETURNS TRIGGER AS $knowledge_item_version$
+   BEGIN
+     IF (OLD.title, OLD.content, OLD.url, OLD.tags, OLD.metadata, OLD.archived)
+        IS NOT DISTINCT FROM
+        (NEW.title, NEW.content, NEW.url, NEW.tags, NEW.metadata, NEW.archived) THEN
+       -- No content-bearing change: no version, no snapshot. Pin the counter so
+       -- a caller cannot move it on a write the trigger otherwise ignores.
+       NEW.version := OLD.version;
+       RETURN NEW;
+     END IF;
+
+     INSERT INTO knowledge_item_versions
+       (id, item_id, tenant_id, version, title, content, content_hash, content_bytes,
+        url, tags, metadata, archived, actor, reason, valid_from, valid_to)
+     VALUES
+       (gen_random_uuid()::text,
+        OLD.id,
+        to_jsonb(OLD)->>'tenant_id',
+        OLD.version,
+        OLD.title,
+        OLD.content,
+        encode(sha256(convert_to(coalesce(OLD.content, ''), 'UTF8')), 'hex'),
+        octet_length(coalesce(OLD.content, '')),
+        OLD.url,
+        OLD.tags,
+        OLD.metadata,
+        OLD.archived,
+        NULLIF(current_setting('hasna.actor', true), ''),
+        NULLIF(current_setting('hasna.reason', true), ''),
+        OLD.updated_at,
+        to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'));
+
+     -- The bump and the snapshot are ONE write. The counter advances by exactly
+     -- one and only here, so a caller can neither skip it nor forge it.
+     NEW.version := OLD.version + 1;
+
+     -- updated_at is TEXT and the application fills it with toISOString(), so
+     -- the trigger must write the SAME shape. NOW()::text renders as
+     -- '2026-07-28 21:29:56.01+00'; space (0x20) sorts below 'T' (0x54), so a
+     -- column carrying both formats orders every trigger-written row before
+     -- every application-written one regardless of actual time, and valid_from
+     -- (copied verbatim from the row below) would stop being comparable with
+     -- valid_to. One format, no casts needed at read time.
+     --
+     -- Only stamped when the caller did NOT set it. Import, sync replay, and
+     -- backfill carry a SOURCE timestamp and kept it before this trigger
+     -- existed; silently replacing it would be a regression. A writer that says
+     -- nothing still gets a truthful advance.
+     IF NEW.updated_at IS NOT DISTINCT FROM OLD.updated_at THEN
+       NEW.updated_at := to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"');
+     END IF;
+     RETURN NEW;
+   END
+   $knowledge_item_version$ LANGUAGE plpgsql`,
+  `DO $knowledge_item_version_trigger$
+   BEGIN
+     IF NOT EXISTS (
+       SELECT 1 FROM pg_trigger
+        WHERE tgname = 'trg_knowledge_items_version'
+          AND tgrelid = 'knowledge_items'::regclass
+     ) THEN
+       CREATE TRIGGER trg_knowledge_items_version
+         BEFORE UPDATE ON knowledge_items
+         FOR EACH ROW EXECUTE FUNCTION knowledge_items_version_snapshot();
+     END IF;
+   END
+   $knowledge_item_version_trigger$`,
+  `ALTER TABLE knowledge_items ENABLE ALWAYS TRIGGER trg_knowledge_items_version`,
+  `CREATE OR REPLACE FUNCTION knowledge_item_versions_append_only()
+   RETURNS TRIGGER AS $knowledge_item_versions_append_only$
+   BEGIN
+     RAISE EXCEPTION 'knowledge_item_versions is append-only: version % of item % cannot be rewritten',
+       OLD.version, OLD.item_id
+       USING ERRCODE = 'restrict_violation';
+   END
+   $knowledge_item_versions_append_only$ LANGUAGE plpgsql`,
+  `DO $knowledge_item_versions_guard$
+   BEGIN
+     IF NOT EXISTS (
+       SELECT 1 FROM pg_trigger
+        WHERE tgname = 'trg_knowledge_item_versions_append_only'
+          AND tgrelid = 'knowledge_item_versions'::regclass
+     ) THEN
+       CREATE TRIGGER trg_knowledge_item_versions_append_only
+         BEFORE UPDATE ON knowledge_item_versions
+         FOR EACH ROW EXECUTE FUNCTION knowledge_item_versions_append_only();
+     END IF;
+   END
+   $knowledge_item_versions_guard$`,
+  `ALTER TABLE knowledge_item_versions ENABLE ALWAYS TRIGGER trg_knowledge_item_versions_append_only`,
+  `ALTER TABLE knowledge_items
+     ADD COLUMN IF NOT EXISTS authority_classification TEXT,
+     ADD COLUMN IF NOT EXISTS authority_id TEXT,
+     ADD COLUMN IF NOT EXISTS tenant_id TEXT,
+     ADD COLUMN IF NOT EXISTS scope TEXT,
+     ADD COLUMN IF NOT EXISTS parent_id TEXT`,
+  `CREATE INDEX IF NOT EXISTS idx_knowledge_items_guarded_binding
+     ON knowledge_items(authority_classification, authority_id, tenant_id, scope, parent_id, id)`,
+  `CREATE TABLE IF NOT EXISTS knowledge_guarded_write_manifests (
+    manifest_id TEXT PRIMARY KEY,
+    manifest_receipt_id TEXT NOT NULL UNIQUE,
+    deterministic_key TEXT NOT NULL UNIQUE,
+    operation_id TEXT NOT NULL,
+    manifest_digest TEXT NOT NULL,
+    maintainer_authority_classification TEXT NOT NULL,
+    maintainer_authority_id TEXT NOT NULL,
+    maintainer_tenant_id TEXT NOT NULL,
+    maintainer_scope TEXT NOT NULL,
+    maintainer_parent_id TEXT NOT NULL,
+    step_count INTEGER NOT NULL,
+    created_at TEXT NOT NULL DEFAULT to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    CHECK (maintainer_authority_classification IN ('user_hosted', 'hasna_saas')),
+    CHECK (step_count BETWEEN 2 AND 64)
+  )`,
+  `CREATE TABLE IF NOT EXISTS knowledge_guarded_write_manifest_steps (
+    manifest_id TEXT NOT NULL REFERENCES knowledge_guarded_write_manifests(manifest_id),
+    ordinal INTEGER NOT NULL,
+    operation_id TEXT NOT NULL,
+    step_id TEXT NOT NULL,
+    deterministic_key TEXT NOT NULL,
+    verb TEXT NOT NULL,
+    target_id TEXT NOT NULL,
+    semantic_digest TEXT NOT NULL,
+    precondition_kind TEXT NOT NULL,
+    expected_version INTEGER,
+    dependencies JSONB NOT NULL,
+    limits JSONB NOT NULL,
+    authority_classification TEXT NOT NULL,
+    authority_id TEXT NOT NULL,
+    tenant_id TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    parent_id TEXT NOT NULL,
+    recovery_strategy TEXT NOT NULL,
+    recovery_operation_id TEXT NOT NULL,
+    recovery_step_id TEXT NOT NULL,
+    recovery_deterministic_key TEXT NOT NULL,
+    recovery_verb TEXT NOT NULL,
+    recovery_target_id TEXT NOT NULL,
+    recovery_semantic_digest TEXT NOT NULL,
+    recovery_precondition_kind TEXT NOT NULL,
+    recovery_expected_version INTEGER,
+    recovery_authority_classification TEXT NOT NULL,
+    recovery_authority_id TEXT NOT NULL,
+    recovery_tenant_id TEXT NOT NULL,
+    recovery_scope TEXT NOT NULL,
+    recovery_parent_id TEXT NOT NULL,
+    recovery_limits JSONB NOT NULL,
+    recovery_receipt_scope TEXT,
+    recovery_compensates_receipt_id TEXT,
+    PRIMARY KEY (manifest_id, ordinal),
+    UNIQUE (manifest_id, deterministic_key),
+    CHECK (ordinal >= 0),
+    CHECK (authority_classification IN ('user_hosted', 'hasna_saas')),
+    CHECK (recovery_authority_classification IN ('user_hosted', 'hasna_saas')),
+    CHECK (verb IN ('create', 'update')),
+    CHECK (recovery_verb IN ('create', 'update')),
+    CHECK (
+      (verb = 'create' AND precondition_kind = 'absent' AND expected_version IS NULL)
+      OR
+      (verb = 'update' AND precondition_kind = 'version' AND expected_version >= 1)
+    ),
+    CHECK (
+      (
+        recovery_verb = 'create'
+        AND recovery_precondition_kind = 'absent'
+        AND recovery_expected_version IS NULL
+      )
+      OR
+      (
+        recovery_verb = 'update'
+        AND recovery_precondition_kind = 'version'
+        AND recovery_expected_version >= 1
+      )
+    ),
+    CHECK (recovery_strategy IN ('forward_repair', 'receipt_scoped_compensation')),
+    CHECK (
+      (recovery_strategy = 'forward_repair' AND recovery_receipt_scope IS NULL)
+      OR
+      (
+        recovery_strategy = 'receipt_scoped_compensation'
+        AND recovery_receipt_scope = 'accepted_step_receipt'
+        AND recovery_compensates_receipt_id IS NOT NULL
+      )
+    ),
+    CHECK (
+      recovery_strategy = 'receipt_scoped_compensation'
+      OR recovery_compensates_receipt_id IS NULL
+    )
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_knowledge_guarded_manifest_step_operation
+     ON knowledge_guarded_write_manifest_steps(
+       authority_classification, authority_id, tenant_id, scope, parent_id, operation_id, step_id
+     )`,
+  `CREATE OR REPLACE FUNCTION knowledge_guarded_manifest_immutable()
+   RETURNS TRIGGER AS $knowledge_guarded_manifest_immutable$
+   BEGIN
+     RAISE EXCEPTION 'knowledge guarded workflow manifests are immutable'
+       USING ERRCODE = 'restrict_violation';
+   END
+   $knowledge_guarded_manifest_immutable$ LANGUAGE plpgsql`,
+  `DROP TRIGGER IF EXISTS trg_knowledge_guarded_manifest_immutable ON knowledge_guarded_write_manifests`,
+  `CREATE TRIGGER trg_knowledge_guarded_manifest_immutable
+     BEFORE UPDATE OR DELETE ON knowledge_guarded_write_manifests
+     FOR EACH ROW EXECUTE FUNCTION knowledge_guarded_manifest_immutable()`,
+  `ALTER TABLE knowledge_guarded_write_manifests ENABLE ALWAYS TRIGGER trg_knowledge_guarded_manifest_immutable`,
+  `DROP TRIGGER IF EXISTS trg_knowledge_guarded_manifest_steps_immutable
+     ON knowledge_guarded_write_manifest_steps`,
+  `CREATE TRIGGER trg_knowledge_guarded_manifest_steps_immutable
+     BEFORE UPDATE OR DELETE ON knowledge_guarded_write_manifest_steps
+     FOR EACH ROW EXECUTE FUNCTION knowledge_guarded_manifest_immutable()`,
+  `ALTER TABLE knowledge_guarded_write_manifest_steps
+     ENABLE ALWAYS TRIGGER trg_knowledge_guarded_manifest_steps_immutable`,
+  `CREATE TABLE IF NOT EXISTS knowledge_guarded_write_claims (
+    deterministic_key TEXT PRIMARY KEY,
+    operation_id TEXT NOT NULL,
+    step_id TEXT NOT NULL,
+    authority_classification TEXT NOT NULL,
+    authority_id TEXT NOT NULL,
+    tenant_id TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    parent_id TEXT NOT NULL,
+    verb TEXT NOT NULL,
+    target_id TEXT NOT NULL,
+    payload_digest TEXT NOT NULL,
+    precondition_kind TEXT NOT NULL,
+    expected_version INTEGER,
+    manifest_id TEXT,
+    manifest_ordinal INTEGER,
+    manifest_phase TEXT,
+    compensates_receipt_id TEXT,
+    receipt_id TEXT,
+    created_at TEXT NOT NULL DEFAULT to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    FOREIGN KEY (manifest_id, manifest_ordinal)
+      REFERENCES knowledge_guarded_write_manifest_steps(manifest_id, ordinal),
+    CHECK (authority_classification IN ('user_hosted', 'hasna_saas')),
+    CHECK (verb IN ('create', 'update')),
+    CHECK (
+      (verb = 'create' AND precondition_kind = 'absent' AND expected_version IS NULL)
+      OR
+      (verb = 'update' AND precondition_kind = 'version' AND expected_version >= 1)
+    ),
+    CHECK (
+      (
+        manifest_id IS NULL AND manifest_ordinal IS NULL
+        AND manifest_phase IS NULL AND compensates_receipt_id IS NULL
+      )
+      OR (
+        manifest_id IS NOT NULL AND manifest_ordinal IS NOT NULL
+        AND manifest_phase IN ('primary', 'recovery')
+        AND (
+          (manifest_phase = 'primary' AND compensates_receipt_id IS NULL)
+          OR manifest_phase = 'recovery'
+        )
+      )
+    ),
+    UNIQUE(authority_classification, authority_id, tenant_id, scope, parent_id, operation_id, step_id)
+  )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_knowledge_guarded_claim_receipt
+     ON knowledge_guarded_write_claims(receipt_id) WHERE receipt_id IS NOT NULL`,
+  `CREATE TABLE IF NOT EXISTS knowledge_guarded_write_receipts (
+    receipt_id TEXT PRIMARY KEY,
+    deterministic_key TEXT NOT NULL UNIQUE,
+    operation_id TEXT NOT NULL,
+    step_id TEXT NOT NULL,
+    verb TEXT NOT NULL,
+    target_id TEXT NOT NULL,
+    authority_classification TEXT NOT NULL,
+    authority_id TEXT NOT NULL,
+    tenant_id TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    parent_id TEXT NOT NULL,
+    payload_digest TEXT NOT NULL,
+    precondition_kind TEXT NOT NULL,
+    expected_version INTEGER,
+    manifest_id TEXT,
+    manifest_ordinal INTEGER,
+    manifest_phase TEXT,
+    compensates_receipt_id TEXT,
+    status TEXT NOT NULL,
+    code TEXT NOT NULL,
+    effect_count INTEGER NOT NULL,
+    result_id TEXT,
+    result_version INTEGER,
+    created_at TEXT NOT NULL DEFAULT to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    FOREIGN KEY (manifest_id, manifest_ordinal)
+      REFERENCES knowledge_guarded_write_manifest_steps(manifest_id, ordinal),
+    CHECK (authority_classification IN ('user_hosted', 'hasna_saas')),
+    CHECK (verb IN ('create', 'update')),
+    CHECK (
+      (verb = 'create' AND precondition_kind = 'absent' AND expected_version IS NULL)
+      OR
+      (verb = 'update' AND precondition_kind = 'version' AND expected_version >= 1)
+    ),
+    CHECK (
+      (
+        manifest_id IS NULL AND manifest_ordinal IS NULL
+        AND manifest_phase IS NULL AND compensates_receipt_id IS NULL
+      )
+      OR (
+        manifest_id IS NOT NULL AND manifest_ordinal IS NOT NULL
+        AND manifest_phase IN ('primary', 'recovery')
+        AND (
+          (manifest_phase = 'primary' AND compensates_receipt_id IS NULL)
+          OR manifest_phase = 'recovery'
+        )
+      )
+    ),
+    CHECK (status IN ('accepted', 'rejected')),
+    CHECK (effect_count IN (0, 1)),
+    CHECK (
+      (status = 'accepted' AND effect_count = 1 AND result_id IS NOT NULL AND result_version IS NOT NULL)
+      OR
+      (status = 'rejected' AND effect_count = 0 AND result_id IS NULL AND result_version IS NULL)
+    )
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_knowledge_guarded_receipt_operation
+     ON knowledge_guarded_write_receipts(
+       authority_classification, authority_id, tenant_id, scope, parent_id, operation_id, step_id
+     )`,
+  `CREATE OR REPLACE FUNCTION knowledge_guarded_claim_once()
+   RETURNS TRIGGER AS $knowledge_guarded_claim_once$
+   BEGIN
+     IF TG_OP = 'DELETE' THEN
+       RAISE EXCEPTION 'knowledge guarded write claims are immutable'
+         USING ERRCODE = 'restrict_violation';
+     END IF;
+     IF (OLD.deterministic_key, OLD.operation_id, OLD.step_id,
+         OLD.authority_classification, OLD.authority_id, OLD.tenant_id,
+         OLD.scope, OLD.parent_id, OLD.verb, OLD.target_id,
+         OLD.payload_digest, OLD.precondition_kind, OLD.expected_version,
+         OLD.manifest_id, OLD.manifest_ordinal, OLD.manifest_phase,
+         OLD.compensates_receipt_id, OLD.created_at)
+        IS DISTINCT FROM
+        (NEW.deterministic_key, NEW.operation_id, NEW.step_id,
+         NEW.authority_classification, NEW.authority_id, NEW.tenant_id,
+         NEW.scope, NEW.parent_id, NEW.verb, NEW.target_id,
+         NEW.payload_digest, NEW.precondition_kind, NEW.expected_version,
+         NEW.manifest_id, NEW.manifest_ordinal, NEW.manifest_phase,
+         NEW.compensates_receipt_id, NEW.created_at)
+        OR OLD.receipt_id IS NOT NULL
+        OR NEW.receipt_id IS NULL THEN
+       RAISE EXCEPTION 'knowledge guarded write claim may only bind one terminal receipt'
+         USING ERRCODE = 'restrict_violation';
+     END IF;
+     RETURN NEW;
+   END
+   $knowledge_guarded_claim_once$ LANGUAGE plpgsql`,
+  `DROP TRIGGER IF EXISTS trg_knowledge_guarded_claim_once ON knowledge_guarded_write_claims`,
+  `CREATE TRIGGER trg_knowledge_guarded_claim_once
+     BEFORE UPDATE OR DELETE ON knowledge_guarded_write_claims
+     FOR EACH ROW EXECUTE FUNCTION knowledge_guarded_claim_once()`,
+  `ALTER TABLE knowledge_guarded_write_claims ENABLE ALWAYS TRIGGER trg_knowledge_guarded_claim_once`,
+  `CREATE OR REPLACE FUNCTION knowledge_guarded_receipts_immutable()
+   RETURNS TRIGGER AS $knowledge_guarded_receipts_immutable$
+   BEGIN
+     RAISE EXCEPTION 'knowledge guarded write receipts are immutable'
+       USING ERRCODE = 'restrict_violation';
+   END
+   $knowledge_guarded_receipts_immutable$ LANGUAGE plpgsql`,
+  `DROP TRIGGER IF EXISTS trg_knowledge_guarded_receipts_immutable ON knowledge_guarded_write_receipts`,
+  `CREATE TRIGGER trg_knowledge_guarded_receipts_immutable
+     BEFORE UPDATE OR DELETE ON knowledge_guarded_write_receipts
+     FOR EACH ROW EXECUTE FUNCTION knowledge_guarded_receipts_immutable()`,
+  `ALTER TABLE knowledge_guarded_write_receipts ENABLE ALWAYS TRIGGER trg_knowledge_guarded_receipts_immutable`,
+  `CREATE OR REPLACE FUNCTION knowledge_guarded_item_authority()
+   RETURNS TRIGGER AS $knowledge_guarded_item_authority$
+   DECLARE
+     claim_key TEXT;
+     claim_matches BOOLEAN;
+   BEGIN
+     IF TG_OP = 'DELETE' THEN
+       IF OLD.authority_classification IS NULL THEN
+         RETURN OLD;
+       END IF;
+       RAISE EXCEPTION 'guarded knowledge items cannot be deleted outside a declared FCAME-1 action'
+         USING ERRCODE = 'restrict_violation';
+     END IF;
+
+     IF TG_OP = 'INSERT' AND NEW.authority_classification IS NULL THEN
+       RETURN NEW;
+     END IF;
+
+     IF TG_OP = 'UPDATE'
+        AND OLD.authority_classification IS NULL
+        AND NEW.authority_classification IS NULL THEN
+       RETURN NEW;
+     END IF;
+
+     IF NEW.authority_classification IS NULL OR NEW.authority_id IS NULL
+        OR NEW.tenant_id IS NULL OR NEW.scope IS NULL OR NEW.parent_id IS NULL THEN
+       RAISE EXCEPTION 'guarded knowledge item binding must be complete'
+         USING ERRCODE = 'check_violation';
+     END IF;
+
+     IF TG_OP = 'UPDATE' AND (
+       OLD.id IS DISTINCT FROM NEW.id
+       OR OLD.authority_classification IS DISTINCT FROM NEW.authority_classification
+       OR OLD.authority_id IS DISTINCT FROM NEW.authority_id
+       OR OLD.tenant_id IS DISTINCT FROM NEW.tenant_id
+       OR OLD.scope IS DISTINCT FROM NEW.scope
+       OR OLD.parent_id IS DISTINCT FROM NEW.parent_id
+     ) THEN
+       RAISE EXCEPTION 'guarded knowledge item identity and binding are immutable'
+         USING ERRCODE = 'restrict_violation';
+     END IF;
+
+     claim_key := NULLIF(
+       current_setting('hasna.knowledge_guarded_deterministic_key', true),
+       ''
+     );
+     IF claim_key IS NULL THEN
+       RAISE EXCEPTION 'guarded knowledge item mutation requires an FCAME-1 operation claim'
+         USING ERRCODE = 'insufficient_privilege';
+     END IF;
+
+     SELECT EXISTS (
+       SELECT 1
+         FROM knowledge_guarded_write_claims AS claim
+        WHERE claim.deterministic_key = claim_key
+          AND claim.receipt_id IS NULL
+          AND claim.target_id = NEW.id
+          AND claim.authority_classification = NEW.authority_classification
+          AND claim.authority_id = NEW.authority_id
+          AND claim.tenant_id = NEW.tenant_id
+          AND claim.scope = NEW.scope
+          AND claim.parent_id = NEW.parent_id
+          AND (
+            (
+              TG_OP = 'INSERT'
+              AND claim.verb = 'create'
+              AND claim.precondition_kind = 'absent'
+            )
+            OR (
+              TG_OP = 'UPDATE'
+              AND claim.verb = 'update'
+              AND claim.precondition_kind = 'version'
+              AND claim.expected_version = OLD.version
+            )
+          )
+     ) INTO claim_matches;
+     IF NOT claim_matches THEN
+       RAISE EXCEPTION 'guarded knowledge item mutation does not match its live FCAME-1 operation claim'
+         USING ERRCODE = 'insufficient_privilege';
+     END IF;
+     RETURN NEW;
+   END
+   $knowledge_guarded_item_authority$ LANGUAGE plpgsql`,
+  `DROP TRIGGER IF EXISTS trg_knowledge_items_00_guarded_authority ON knowledge_items`,
+  `CREATE TRIGGER trg_knowledge_items_00_guarded_authority
+     BEFORE INSERT OR UPDATE OR DELETE ON knowledge_items
+     FOR EACH ROW EXECUTE FUNCTION knowledge_guarded_item_authority()`,
+  `ALTER TABLE knowledge_items ENABLE ALWAYS TRIGGER trg_knowledge_items_00_guarded_authority`,
+  `CREATE OR REPLACE FUNCTION knowledge_guarded_item_authority()
+   RETURNS TRIGGER AS $knowledge_guarded_item_authority$
+   DECLARE
+     claim_key TEXT;
+     claim_matches BOOLEAN;
+   BEGIN
+     IF TG_OP = 'DELETE' THEN
+       IF OLD.authority_classification IS NULL THEN
+         RETURN OLD;
+       END IF;
+       RAISE EXCEPTION 'guarded knowledge items cannot be deleted outside a declared FCAME-1 action'
+         USING ERRCODE = 'restrict_violation';
+     END IF;
+
+     IF TG_OP = 'INSERT' AND NEW.authority_classification IS NULL THEN
+       RETURN NEW;
+     END IF;
+
+     IF TG_OP = 'UPDATE'
+        AND OLD.authority_classification IS NULL
+        AND NEW.authority_classification IS NULL THEN
+       RETURN NEW;
+     END IF;
+
+     IF NEW.authority_classification IS NULL OR NEW.authority_id IS NULL
+        OR NEW.tenant_id IS NULL OR NEW.scope IS NULL OR NEW.parent_id IS NULL THEN
+       RAISE EXCEPTION 'guarded knowledge item binding must be complete'
+         USING ERRCODE = 'check_violation';
+     END IF;
+
+     IF TG_OP = 'UPDATE' AND (
+       OLD.id IS DISTINCT FROM NEW.id
+       OR OLD.authority_classification IS DISTINCT FROM NEW.authority_classification
+       OR OLD.authority_id IS DISTINCT FROM NEW.authority_id
+       OR OLD.tenant_id IS DISTINCT FROM NEW.tenant_id
+       OR OLD.scope IS DISTINCT FROM NEW.scope
+       OR OLD.parent_id IS DISTINCT FROM NEW.parent_id
+     ) THEN
+       RAISE EXCEPTION 'guarded knowledge item identity and binding are immutable'
+         USING ERRCODE = 'restrict_violation';
+     END IF;
+
+     claim_key := NULLIF(
+       current_setting('hasna.knowledge_guarded_deterministic_key', true),
+       ''
+     );
+     IF claim_key IS NULL THEN
+       RAISE EXCEPTION 'guarded knowledge item mutation requires an FCAME-1 operation claim'
+         USING ERRCODE = 'insufficient_privilege';
+     END IF;
+
+     SELECT EXISTS (
+       SELECT 1
+         FROM knowledge_guarded_write_claims AS claim
+        WHERE claim.deterministic_key = claim_key
+          AND claim.receipt_id IS NULL
+          AND claim.target_id = NEW.id
+          AND claim.authority_classification = NEW.authority_classification
+          AND claim.authority_id = NEW.authority_id
+          AND claim.tenant_id = NEW.tenant_id::text
+          AND claim.scope = NEW.scope
+          AND claim.parent_id = NEW.parent_id
+          AND (
+            (
+              TG_OP = 'INSERT'
+              AND claim.verb = 'create'
+              AND claim.precondition_kind = 'absent'
+            )
+            OR (
+              TG_OP = 'UPDATE'
+              AND claim.verb = 'update'
+              AND claim.precondition_kind = 'version'
+              AND claim.expected_version = OLD.version
+            )
+          )
+     ) INTO claim_matches;
+     IF NOT claim_matches THEN
+       RAISE EXCEPTION 'guarded knowledge item mutation does not match its live FCAME-1 operation claim'
+         USING ERRCODE = 'insufficient_privilege';
+     END IF;
+     RETURN NEW;
+   END
+   $knowledge_guarded_item_authority$ LANGUAGE plpgsql`,
+  `ALTER TABLE knowledge_items
+     ADD COLUMN IF NOT EXISTS guarded_adoption_receipt_id TEXT`,
+  `CREATE TABLE IF NOT EXISTS knowledge_guarded_adoption_claims (
+    deterministic_key TEXT PRIMARY KEY,
+    planned_receipt_id TEXT NOT NULL UNIQUE,
+    operation_id TEXT NOT NULL,
+    step_id TEXT NOT NULL,
+    action TEXT NOT NULL,
+    target_id TEXT NOT NULL,
+    authority_classification TEXT NOT NULL,
+    authority_id TEXT NOT NULL,
+    tenant_id TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    parent_id TEXT NOT NULL,
+    expected_version INTEGER NOT NULL,
+    expected_content_sha256 TEXT NOT NULL,
+    adoption_receipt_id TEXT,
+    receipt_id TEXT,
+    created_at TEXT NOT NULL DEFAULT to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    CHECK (action IN ('adopt', 'rollback')),
+    CHECK (authority_classification IN ('user_hosted', 'hasna_saas')),
+    CHECK (expected_version >= 1),
+    CHECK (expected_content_sha256 ~ '^[0-9a-f]{64}$'),
+    CHECK (
+      (action = 'adopt' AND adoption_receipt_id IS NULL)
+      OR (action = 'rollback' AND adoption_receipt_id IS NOT NULL)
+    ),
+    UNIQUE(authority_classification, authority_id, tenant_id, scope, parent_id, operation_id, step_id)
+  )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_knowledge_guarded_adoption_claim_receipt
+     ON knowledge_guarded_adoption_claims(receipt_id) WHERE receipt_id IS NOT NULL`,
+  `CREATE TABLE IF NOT EXISTS knowledge_guarded_adoption_receipts (
+    receipt_id TEXT PRIMARY KEY,
+    deterministic_key TEXT NOT NULL UNIQUE,
+    operation_id TEXT NOT NULL,
+    step_id TEXT NOT NULL,
+    action TEXT NOT NULL,
+    target_id TEXT NOT NULL,
+    authority_classification TEXT NOT NULL,
+    authority_id TEXT NOT NULL,
+    tenant_id TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    parent_id TEXT NOT NULL,
+    expected_version INTEGER NOT NULL,
+    expected_content_sha256 TEXT NOT NULL,
+    adoption_receipt_id TEXT,
+    prior_tenant_id TEXT,
+    status TEXT NOT NULL,
+    code TEXT NOT NULL,
+    effect_count INTEGER NOT NULL,
+    result_version INTEGER,
+    result_content_sha256 TEXT,
+    created_at TEXT NOT NULL DEFAULT to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    CHECK (action IN ('adopt', 'rollback')),
+    CHECK (authority_classification IN ('user_hosted', 'hasna_saas')),
+    CHECK (expected_version >= 1),
+    CHECK (expected_content_sha256 ~ '^[0-9a-f]{64}$'),
+    CHECK (
+      (action = 'adopt' AND adoption_receipt_id IS NULL)
+      OR (action = 'rollback' AND adoption_receipt_id IS NOT NULL)
+    ),
+    CHECK (status IN ('accepted', 'rejected')),
+    CHECK (effect_count IN (0, 1)),
+    CHECK (
+      (
+        status = 'accepted' AND effect_count = 1
+        AND result_version IS NOT NULL AND result_content_sha256 IS NOT NULL
+      )
+      OR (
+        status = 'rejected' AND effect_count = 0
+        AND result_version IS NULL AND result_content_sha256 IS NULL
+      )
+    )
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_knowledge_guarded_adoption_receipt_operation
+     ON knowledge_guarded_adoption_receipts(
+       authority_classification, authority_id, tenant_id, scope, parent_id, operation_id, step_id
+     )`,
+  `CREATE OR REPLACE FUNCTION knowledge_guarded_adoption_claim_once()
+   RETURNS TRIGGER AS $knowledge_guarded_adoption_claim_once$
+   BEGIN
+     IF TG_OP = 'DELETE' THEN
+       RAISE EXCEPTION 'knowledge guarded adoption claims are immutable'
+         USING ERRCODE = 'restrict_violation';
+     END IF;
+    IF (OLD.deterministic_key, OLD.planned_receipt_id,
+         OLD.operation_id, OLD.step_id, OLD.action,
+         OLD.target_id, OLD.authority_classification, OLD.authority_id,
+         OLD.tenant_id, OLD.scope, OLD.parent_id, OLD.expected_version,
+         OLD.expected_content_sha256, OLD.adoption_receipt_id, OLD.created_at)
+        IS DISTINCT FROM
+        (NEW.deterministic_key, NEW.planned_receipt_id,
+         NEW.operation_id, NEW.step_id, NEW.action,
+         NEW.target_id, NEW.authority_classification, NEW.authority_id,
+         NEW.tenant_id, NEW.scope, NEW.parent_id, NEW.expected_version,
+         NEW.expected_content_sha256, NEW.adoption_receipt_id, NEW.created_at)
+        OR OLD.receipt_id IS NOT NULL
+        OR NEW.receipt_id IS NULL THEN
+       RAISE EXCEPTION 'knowledge guarded adoption claim may only bind one terminal receipt'
+         USING ERRCODE = 'restrict_violation';
+     END IF;
+     RETURN NEW;
+   END
+   $knowledge_guarded_adoption_claim_once$ LANGUAGE plpgsql`,
+  `DROP TRIGGER IF EXISTS trg_knowledge_guarded_adoption_claim_once
+     ON knowledge_guarded_adoption_claims`,
+  `CREATE TRIGGER trg_knowledge_guarded_adoption_claim_once
+     BEFORE UPDATE OR DELETE ON knowledge_guarded_adoption_claims
+     FOR EACH ROW EXECUTE FUNCTION knowledge_guarded_adoption_claim_once()`,
+  `ALTER TABLE knowledge_guarded_adoption_claims
+     ENABLE ALWAYS TRIGGER trg_knowledge_guarded_adoption_claim_once`,
+  `CREATE OR REPLACE FUNCTION knowledge_guarded_adoption_receipts_immutable()
+   RETURNS TRIGGER AS $knowledge_guarded_adoption_receipts_immutable$
+   BEGIN
+     RAISE EXCEPTION 'knowledge guarded adoption receipts are immutable'
+       USING ERRCODE = 'restrict_violation';
+   END
+   $knowledge_guarded_adoption_receipts_immutable$ LANGUAGE plpgsql`,
+  `DROP TRIGGER IF EXISTS trg_knowledge_guarded_adoption_receipts_immutable
+     ON knowledge_guarded_adoption_receipts`,
+  `CREATE TRIGGER trg_knowledge_guarded_adoption_receipts_immutable
+     BEFORE UPDATE OR DELETE ON knowledge_guarded_adoption_receipts
+     FOR EACH ROW EXECUTE FUNCTION knowledge_guarded_adoption_receipts_immutable()`,
+  `ALTER TABLE knowledge_guarded_adoption_receipts
+     ENABLE ALWAYS TRIGGER trg_knowledge_guarded_adoption_receipts_immutable`,
+  `CREATE OR REPLACE FUNCTION knowledge_guarded_item_authority()
+   RETURNS TRIGGER AS $knowledge_guarded_item_authority$
+   DECLARE
+     claim_key TEXT;
+     adoption_key TEXT;
+     claim_matches BOOLEAN;
+     binding_changed BOOLEAN;
+   BEGIN
+     IF TG_OP = 'DELETE' THEN
+       IF OLD.authority_classification IS NULL THEN
+         RETURN OLD;
+       END IF;
+       RAISE EXCEPTION 'guarded knowledge items cannot be deleted outside a declared FCAME-1 action'
+         USING ERRCODE = 'restrict_violation';
+     END IF;
+
+     IF TG_OP = 'INSERT' AND NEW.authority_classification IS NULL THEN
+       RETURN NEW;
+     END IF;
+
+     IF TG_OP = 'UPDATE'
+        AND OLD.authority_classification IS NULL
+        AND NEW.authority_classification IS NULL THEN
+       RETURN NEW;
+     END IF;
+
+     binding_changed := TG_OP = 'UPDATE' AND (
+       OLD.id IS DISTINCT FROM NEW.id
+       OR OLD.authority_classification IS DISTINCT FROM NEW.authority_classification
+       OR OLD.authority_id IS DISTINCT FROM NEW.authority_id
+       OR OLD.tenant_id IS DISTINCT FROM NEW.tenant_id
+       OR OLD.scope IS DISTINCT FROM NEW.scope
+       OR OLD.parent_id IS DISTINCT FROM NEW.parent_id
+     );
+
+     IF binding_changed THEN
+       adoption_key := NULLIF(
+         current_setting('hasna.knowledge_guarded_adoption_key', true),
+         ''
+       );
+       IF adoption_key IS NULL THEN
+         RAISE EXCEPTION 'guarded knowledge item identity and binding are immutable'
+           USING ERRCODE = 'restrict_violation';
+       END IF;
+       SELECT EXISTS (
+         SELECT 1
+           FROM knowledge_guarded_adoption_claims AS claim
+          WHERE claim.deterministic_key = adoption_key
+            AND claim.receipt_id IS NULL
+            AND claim.target_id = OLD.id
+            AND claim.expected_version = OLD.version
+            AND claim.expected_content_sha256 =
+              encode(sha256(convert_to(coalesce(OLD.content, ''), 'UTF8')), 'hex')
+            AND (
+              OLD.short_id, OLD.title, OLD.content, OLD.url, OLD.tags,
+              OLD.metadata, OLD.archived, OLD.created_at, OLD.updated_at, OLD.version
+            ) IS NOT DISTINCT FROM (
+              NEW.short_id, NEW.title, NEW.content, NEW.url, NEW.tags,
+              NEW.metadata, NEW.archived, NEW.created_at, NEW.updated_at, NEW.version
+            )
+            AND (
+              (
+                claim.action = 'adopt'
+                AND OLD.authority_classification IS NULL
+                AND OLD.authority_id IS NULL
+                AND OLD.scope IS NULL
+                AND OLD.parent_id IS NULL
+                AND (
+                  OLD.tenant_id IS NULL
+                  OR OLD.tenant_id::text = claim.tenant_id
+                )
+                AND NEW.authority_classification = claim.authority_classification
+                AND NEW.authority_id = claim.authority_id
+                AND NEW.tenant_id::text = claim.tenant_id
+                AND NEW.scope = claim.scope
+                AND NEW.parent_id = claim.parent_id
+                AND NEW.guarded_adoption_receipt_id = claim.planned_receipt_id
+              )
+              OR (
+                claim.action = 'rollback'
+                AND claim.adoption_receipt_id IS NOT NULL
+                AND OLD.authority_classification = claim.authority_classification
+                AND OLD.authority_id = claim.authority_id
+                AND OLD.tenant_id::text = claim.tenant_id
+                AND OLD.scope = claim.scope
+                AND OLD.parent_id = claim.parent_id
+                AND OLD.guarded_adoption_receipt_id = claim.adoption_receipt_id
+                AND NEW.authority_classification IS NULL
+                AND NEW.authority_id IS NULL
+                AND NEW.scope IS NULL
+                AND NEW.parent_id IS NULL
+                AND NEW.guarded_adoption_receipt_id IS NULL
+                AND NEW.tenant_id::text IS NOT DISTINCT FROM (
+                  SELECT receipt.prior_tenant_id
+                    FROM knowledge_guarded_adoption_receipts AS receipt
+                   WHERE receipt.receipt_id = claim.adoption_receipt_id
+                     AND receipt.action = 'adopt'
+                     AND receipt.status = 'accepted'
+                     AND receipt.effect_count = 1
+                )
+              )
+            )
+       ) INTO claim_matches;
+       IF NOT claim_matches THEN
+         RAISE EXCEPTION 'guarded knowledge item binding transition does not match its live adoption claim'
+           USING ERRCODE = 'insufficient_privilege';
+       END IF;
+       RETURN NEW;
+     END IF;
+
+     IF NEW.authority_classification IS NULL OR NEW.authority_id IS NULL
+        OR NEW.tenant_id IS NULL OR NEW.scope IS NULL OR NEW.parent_id IS NULL THEN
+       RAISE EXCEPTION 'guarded knowledge item binding must be complete'
+         USING ERRCODE = 'check_violation';
+     END IF;
+
+     claim_key := NULLIF(
+       current_setting('hasna.knowledge_guarded_deterministic_key', true),
+       ''
+     );
+     IF claim_key IS NULL THEN
+       RAISE EXCEPTION 'guarded knowledge item mutation requires an FCAME-1 operation claim'
+         USING ERRCODE = 'insufficient_privilege';
+     END IF;
+
+     SELECT EXISTS (
+       SELECT 1
+         FROM knowledge_guarded_write_claims AS claim
+        WHERE claim.deterministic_key = claim_key
+          AND claim.receipt_id IS NULL
+          AND claim.target_id = NEW.id
+          AND claim.authority_classification = NEW.authority_classification
+          AND claim.authority_id = NEW.authority_id
+          AND claim.tenant_id = NEW.tenant_id::text
+          AND claim.scope = NEW.scope
+          AND claim.parent_id = NEW.parent_id
+          AND (
+            (
+              TG_OP = 'INSERT'
+              AND claim.verb = 'create'
+              AND claim.precondition_kind = 'absent'
+            )
+            OR (
+              TG_OP = 'UPDATE'
+              AND claim.verb = 'update'
+              AND claim.precondition_kind = 'version'
+              AND claim.expected_version = OLD.version
+            )
+          )
+     ) INTO claim_matches;
+     IF NOT claim_matches THEN
+       RAISE EXCEPTION 'guarded knowledge item mutation does not match its live FCAME-1 operation claim'
+         USING ERRCODE = 'insufficient_privilege';
+     END IF;
+     RETURN NEW;
+   END
+   $knowledge_guarded_item_authority$ LANGUAGE plpgsql`,
+  `CREATE OR REPLACE FUNCTION knowledge_guarded_adoption_claim_once()
+   RETURNS TRIGGER AS $knowledge_guarded_adoption_claim_once$
+   BEGIN
+     IF TG_OP = 'DELETE' THEN
+       RAISE EXCEPTION 'knowledge guarded adoption claims are immutable'
+         USING ERRCODE = 'restrict_violation';
+     END IF;
+     IF (OLD.deterministic_key, OLD.planned_receipt_id,
+         OLD.operation_id, OLD.step_id, OLD.action,
+         OLD.target_id, OLD.authority_classification, OLD.authority_id,
+         OLD.tenant_id, OLD.scope, OLD.parent_id, OLD.expected_version,
+         OLD.expected_content_sha256, OLD.adoption_receipt_id, OLD.created_at)
+        IS DISTINCT FROM
+        (NEW.deterministic_key, NEW.planned_receipt_id,
+         NEW.operation_id, NEW.step_id, NEW.action,
+         NEW.target_id, NEW.authority_classification, NEW.authority_id,
+         NEW.tenant_id, NEW.scope, NEW.parent_id, NEW.expected_version,
+         NEW.expected_content_sha256, NEW.adoption_receipt_id, NEW.created_at)
+        OR OLD.receipt_id IS NOT NULL
+        OR NEW.receipt_id IS NULL THEN
+       RAISE EXCEPTION 'knowledge guarded adoption claim may only bind one terminal receipt'
+         USING ERRCODE = 'restrict_violation';
+     END IF;
+     IF NEW.receipt_id IS DISTINCT FROM OLD.planned_receipt_id THEN
+       RAISE EXCEPTION 'knowledge guarded adoption claim receipt must match its planned terminal receipt'
+         USING ERRCODE = 'restrict_violation';
+     END IF;
+     RETURN NEW;
+   END
+   $knowledge_guarded_adoption_claim_once$ LANGUAGE plpgsql`,
+  `CREATE OR REPLACE FUNCTION knowledge_guarded_item_id_immutable()
+   RETURNS TRIGGER AS $knowledge_guarded_item_id_immutable$
+   BEGIN
+     IF OLD.id IS DISTINCT FROM NEW.id
+        AND NULLIF(
+          current_setting('hasna.knowledge_guarded_adoption_key', true),
+          ''
+        ) IS NOT NULL THEN
+       RAISE EXCEPTION 'guarded knowledge item identity and binding are immutable'
+         USING ERRCODE = 'restrict_violation';
+     END IF;
+     RETURN NEW;
+   END
+   $knowledge_guarded_item_id_immutable$ LANGUAGE plpgsql`,
+  `DROP TRIGGER IF EXISTS trg_knowledge_guarded_00_item_id_immutable
+     ON knowledge_items`,
+  `CREATE TRIGGER trg_knowledge_guarded_00_item_id_immutable
+     BEFORE UPDATE OF id ON knowledge_items
+     FOR EACH ROW EXECUTE FUNCTION knowledge_guarded_item_id_immutable()`,
+  `ALTER TABLE knowledge_items
+     ENABLE ALWAYS TRIGGER trg_knowledge_guarded_00_item_id_immutable`,
+  `ALTER TABLE knowledge_items
+     DROP CONSTRAINT IF EXISTS knowledge_items_relation_metadata_contract`,
+  `ALTER TABLE knowledge_items
+     ADD CONSTRAINT knowledge_items_relation_metadata_contract CHECK (
+       metadata -> 'hasna_knowledge_relations' IS NULL
+       OR (
+         jsonb_typeof(metadata -> 'hasna_knowledge_relations') = 'object'
+         AND metadata #>> '{hasna_knowledge_relations,schema}' = 'hasna.knowledge.relations.v1'
+         AND (
+           metadata #>> '{hasna_knowledge_relations,supersedes_item_id}' IS NOT NULL
+           OR metadata #>> '{hasna_knowledge_relations,canonical_item_id}' IS NOT NULL
+         )
+         AND (
+           (metadata -> 'hasna_knowledge_relations')
+           - ARRAY['schema', 'supersedes_item_id', 'canonical_item_id']
+         ) = '{}'::jsonb
+         AND (
+           metadata #>> '{hasna_knowledge_relations,supersedes_item_id}' IS NULL
+           OR (
+             btrim(metadata #>> '{hasna_knowledge_relations,supersedes_item_id}') <> ''
+             AND metadata #>> '{hasna_knowledge_relations,supersedes_item_id}' <> id
+           )
+         )
+         AND (
+           metadata #>> '{hasna_knowledge_relations,canonical_item_id}' IS NULL
+           OR (
+             btrim(metadata #>> '{hasna_knowledge_relations,canonical_item_id}') <> ''
+             AND metadata #>> '{hasna_knowledge_relations,canonical_item_id}' <> id
+           )
+         )
+       )
+     )`,
+  `CREATE INDEX IF NOT EXISTS idx_knowledge_items_guarded_title
+     ON knowledge_items (
+       authority_classification, authority_id, tenant_id, scope, parent_id,
+       title, archived, id
+     )`,
+  `CREATE INDEX IF NOT EXISTS idx_knowledge_items_guarded_supersedes
+     ON knowledge_items (
+       authority_classification, authority_id, tenant_id, scope, parent_id,
+       (metadata #>> '{hasna_knowledge_relations,supersedes_item_id}'),
+       archived, id
+     )
+     WHERE metadata #>> '{hasna_knowledge_relations,schema}'
+       = 'hasna.knowledge.relations.v1'`,
+  `CREATE INDEX IF NOT EXISTS idx_knowledge_items_guarded_canonical
+     ON knowledge_items (
+       authority_classification, authority_id, tenant_id, scope, parent_id,
+       (metadata #>> '{hasna_knowledge_relations,canonical_item_id}'),
+       archived, id
+     )
+     WHERE metadata #>> '{hasna_knowledge_relations,schema}'
+       = 'hasna.knowledge.relations.v1'`,
+  ...postgresKnowledgeProjectLinksSchemaStatements()
+];
 // src/mcp.js
 var storePathField = exports_external.string().optional().describe("Path to the JSON store file");
 var scopeField = exports_external.enum(["local", "global", "project"]).optional().describe("Workspace scope");

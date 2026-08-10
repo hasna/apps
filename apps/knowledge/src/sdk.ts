@@ -11,6 +11,14 @@ import type {
   ItemListOptions,
   ItemListResult,
 } from './item-store.js';
+import type {
+  KnowledgeProjectInverseRequest,
+  KnowledgeProjectItemBindingRequest,
+  KnowledgeProjectReceiptLookupRequest,
+  KnowledgeProjectRegistrationRequest,
+  KnowledgeProjectResourceKind,
+  KnowledgeProjectResourceListOptions,
+} from './project-links.js';
 
 /**
  * The unified knowledge-item Store surface, mirrored on the SDK so app code
@@ -28,6 +36,51 @@ export interface KnowledgeItemsSdk {
   readonly update: (idOrShort: string, patch: ItemPatch) => Promise<KnowledgeItem | null>;
   readonly delete: (idOrShort: string) => Promise<boolean>;
   readonly deleteMany: (idsOrShorts: string[]) => Promise<number>;
+}
+
+export interface KnowledgeProjectLinksSdk {
+  readonly capability: () => ReturnType<ReturnType<KnowledgeService['projectLinksAuthority']>['capability']>;
+  readonly registerCollection: (
+    request: KnowledgeProjectRegistrationRequest,
+  ) => ReturnType<ReturnType<KnowledgeService['projectLinksAuthority']>['registerCollection']>;
+  readonly readCollection: (
+    collectionId: string,
+  ) => ReturnType<ReturnType<KnowledgeService['projectLinksAuthority']>['readCollection']>;
+  readonly lookupReceipt: (
+    request: KnowledgeProjectReceiptLookupRequest,
+  ) => ReturnType<ReturnType<KnowledgeService['projectLinksAuthority']>['lookupReceipt']>;
+  readonly compensateRegistration: (
+    request: KnowledgeProjectInverseRequest,
+  ) => ReturnType<ReturnType<KnowledgeService['projectLinksAuthority']>['compensateRegistration']>;
+  readonly verifyRegistrationInverse: (
+    request: KnowledgeProjectInverseRequest,
+  ) => ReturnType<ReturnType<KnowledgeService['projectLinksAuthority']>['verifyRegistrationInverse']>;
+  readonly bindItem: (
+    request: KnowledgeProjectItemBindingRequest,
+  ) => ReturnType<ReturnType<KnowledgeService['projectLinksAuthority']>['bindItem']>;
+  readonly readItemBinding: (
+    collectionId: string,
+    itemId: string,
+  ) => ReturnType<ReturnType<KnowledgeService['projectLinksAuthority']>['readItemBinding']>;
+  readonly compensateItemBinding: (
+    request: KnowledgeProjectInverseRequest,
+  ) => ReturnType<ReturnType<KnowledgeService['projectLinksAuthority']>['compensateItemBinding']>;
+  readonly verifyItemBindingInverse: (
+    request: KnowledgeProjectInverseRequest,
+  ) => ReturnType<ReturnType<KnowledgeService['projectLinksAuthority']>['verifyItemBindingInverse']>;
+  readonly listResources: (
+    projectId: string,
+    options?: KnowledgeProjectResourceListOptions,
+  ) => ReturnType<ReturnType<KnowledgeService['projectLinksAuthority']>['listProjectResources']>;
+  readonly readResource: (
+    projectId: string,
+    kind: KnowledgeProjectResourceKind,
+    resourceId: string,
+  ) => ReturnType<ReturnType<KnowledgeService['projectLinksAuthority']>['readProjectResource']>;
+  readonly readAllResources: (
+    projectId: string,
+    options?: Omit<KnowledgeProjectResourceListOptions, 'cursor'>,
+  ) => ReturnType<ReturnType<KnowledgeService['projectLinksAuthority']>['readAllProjectResources']>;
 }
 
 export type KnowledgeClientOptions = KnowledgeServiceOptions;
@@ -117,6 +170,8 @@ export interface KnowledgeClient {
    * the `knowledge add/list/get/update/delete` CLI commands in every mode.
    */
   readonly items: KnowledgeItemsSdk;
+  /** Project collection registration, explicit membership, receipts, and complete resource enumeration. */
+  readonly projectLinks: KnowledgeProjectLinksSdk;
   /**
    * Inventory of the knowledge corpus. Routes to the shared API item corpus in
    * postgres mode and the local sqlite/JSON catalog otherwise, so the SDK never
@@ -217,6 +272,28 @@ export function createKnowledgeClient(options: KnowledgeClientOptions = {}): Kno
       update: (idOrShort, patch) => service.updateItem(idOrShort, patch),
       delete: (idOrShort) => service.deleteItem(idOrShort),
       deleteMany: (idsOrShorts) => service.deleteItems(idsOrShorts),
+    },
+    projectLinks: {
+      capability: () => service.projectLinksAuthority().capability(),
+      registerCollection: (request) => service.projectLinksAuthority().registerCollection(request),
+      readCollection: (collectionId) => service.projectLinksAuthority().readCollection(collectionId),
+      lookupReceipt: (request) => service.projectLinksAuthority().lookupReceipt(request),
+      compensateRegistration: (request) => service.projectLinksAuthority().compensateRegistration(request),
+      verifyRegistrationInverse: (request) => service.projectLinksAuthority().verifyRegistrationInverse(request),
+      bindItem: (request) => service.projectLinksAuthority().bindItem(request),
+      readItemBinding: (collectionId, itemId) => service.projectLinksAuthority().readItemBinding(collectionId, itemId),
+      compensateItemBinding: (request) => service.projectLinksAuthority().compensateItemBinding(request),
+      verifyItemBindingInverse: (request) => service.projectLinksAuthority().verifyItemBindingInverse(request),
+      listResources: (projectId, input = {}) => service.projectLinksAuthority().listProjectResources(projectId, input),
+      readResource: (projectId, kind, resourceId) => service.projectLinksAuthority().readProjectResource(
+        projectId,
+        kind,
+        resourceId,
+      ),
+      readAllResources: (projectId, input = {}) => service.projectLinksAuthority().readAllProjectResources(
+        projectId,
+        input,
+      ),
     },
     inventory: (input = {}) => service.resolveInventory(input),
     db: {

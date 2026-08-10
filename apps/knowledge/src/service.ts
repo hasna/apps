@@ -18,8 +18,10 @@ import {
 } from './app-wiki';
 import {
   clearKnowledgeAuth,
+  getKnowledgeApiKey,
   knowledgeAuthStatus,
   normalizeKnowledgeApiOrigin,
+  resolveKnowledgeApiUrl,
   saveKnowledgeAuth,
   type KnowledgeAuthStatus,
 } from './auth';
@@ -148,10 +150,22 @@ import {
   type KnowledgeLegacyWorkspaceMergeResult,
   type KnowledgeLegacyWorkspaceMigrationResult,
 } from './workspace-migration';
+import {
+  createKnowledgeProjectLinksHttpClient,
+  createLocalKnowledgeProjectLinksAuthority,
+  type KnowledgeProjectLinksAuthority,
+} from './project-links';
+import pkg from '../package.json' with { type: 'json' };
 
 export interface KnowledgeServiceOptions {
   scope?: string;
   cwd?: string;
+  projectLinksAuthority?: KnowledgeProjectLinksAuthority;
+  projectLinksIdentity?: {
+    authorityId?: string;
+    tenantId?: string;
+    corpusId?: string;
+  };
 }
 
 export interface KnowledgePathsResult {
@@ -1650,6 +1664,7 @@ export class KnowledgeSemanticSearchUnavailableError extends Error {
 export class KnowledgeService {
   private ensuredWorkspace?: KnowledgeWorkspace;
   private cachedConfig?: KnowledgeConfig;
+  private cachedProjectLinksAuthority?: KnowledgeProjectLinksAuthority;
 
   constructor(private readonly options: KnowledgeServiceOptions = {}) {}
 
@@ -1683,6 +1698,50 @@ export class KnowledgeService {
       storePath: workspace.jsonStorePath,
       storePathOverridden: false,
     });
+  }
+
+  /**
+   * Package-owned Projects resource-link producer.
+   *
+   * Local mode keeps aggregate membership and immutable receipts in the
+   * existing knowledge.db SQLite catalog while resolving item bodies through
+   * the same JSON ItemStore used by CLI/MCP/SDK. Postgres mode routes through
+   * the authenticated HTTP producer, never a local mirror.
+   */
+  projectLinksAuthority(): KnowledgeProjectLinksAuthority {
+    if (this.options.projectLinksAuthority) return this.options.projectLinksAuthority;
+    if (this.cachedProjectLinksAuthority) return this.cachedProjectLinksAuthority;
+    if (isKnowledgeApiMode()) {
+      const { apiKey } = getKnowledgeApiKey(process.env);
+      if (!apiKey) {
+        throw new Error(
+          'Knowledge project links require the configured API credential in postgres mode.',
+        );
+      }
+      this.cachedProjectLinksAuthority = createKnowledgeProjectLinksHttpClient({
+        baseUrl: resolveKnowledgeApiUrl(this.config(), process.env),
+        apiKey,
+      });
+      return this.cachedProjectLinksAuthority;
+    }
+    const workspace = this.ensureWorkspace();
+    this.cachedProjectLinksAuthority = createLocalKnowledgeProjectLinksAuthority({
+      databasePath: workspace.knowledgeDbPath,
+      itemStore: this.itemStore(),
+      options: {
+        packageVersion: pkg.version,
+        authorityId: this.options.projectLinksIdentity?.authorityId
+          ?? process.env.HASNA_KNOWLEDGE_PROJECT_AUTHORITY_ID
+          ?? 'knowledge',
+        tenantId: this.options.projectLinksIdentity?.tenantId
+          ?? process.env.HASNA_KNOWLEDGE_PROJECT_TENANT_ID
+          ?? 'local',
+        corpusId: this.options.projectLinksIdentity?.corpusId
+          ?? process.env.HASNA_KNOWLEDGE_PROJECT_CORPUS_ID
+          ?? 'knowledge',
+      },
+    });
+    return this.cachedProjectLinksAuthority;
   }
 
   /** Bounded list query via the unified Store. */
