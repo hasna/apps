@@ -32,6 +32,7 @@ const SAME_HOLDER_TASK_ID = "d1000000-0000-4000-8000-000000000006";
 const MALFORMED_STORED_TASK_ID = "d1000000-0000-4000-8000-000000000007";
 const MALFORMED_EXPECTED_TASK_ID = "d1000000-0000-4000-8000-000000000008";
 const IDENTITY_GUARD_TASK_ID = "d1000000-0000-4000-8000-000000000009";
+const YEAR_ZERO_EXPECTED_TASK_ID = "d1000000-0000-4000-8000-00000000000a";
 
 function taskPayload(id: string, lockedAt: string, overrides: Partial<Task> = {}): Task {
   return {
@@ -317,6 +318,23 @@ describe.skipIf(!PG_URL)("PostgreSQL exact stale-lock handoff", () => {
     });
     expect(await taskRecord(MALFORMED_EXPECTED_TASK_ID)).toEqual(malformedExpectedBefore);
     expect(await taskAudit(MALFORMED_EXPECTED_TASK_ID)).toHaveLength(0);
+  });
+
+  test("a year-zero expected timestamp fails before PostgreSQL with unchanged task and audit", async () => {
+    const staleVersion = new Date(Date.now() - 2 * STALE_AFTER_SECONDS * 1000).toISOString();
+    await seedTask(taskPayload(YEAR_ZERO_EXPECTED_TASK_ID, staleVersion));
+    const rowBefore = await taskRecord(YEAR_ZERO_EXPECTED_TASK_ID);
+    const auditBefore = await taskAudit(YEAR_ZERO_EXPECTED_TASK_ID);
+
+    await expect(handoff(
+      YEAR_ZERO_EXPECTED_TASK_ID,
+      "0000-01-01T00:00:00.000Z",
+    )).rejects.toMatchObject({
+      code: "STALE_LOCK_HANDOFF_INVALID_INPUT",
+    });
+
+    expect(await taskRecord(YEAR_ZERO_EXPECTED_TASK_ID)).toEqual(rowBefore);
+    expect(await taskAudit(YEAR_ZERO_EXPECTED_TASK_ID)).toEqual(auditBefore);
   });
 
   test("missing actor, actor/new-holder mismatch, and empty reason produce zero mutation", async () => {

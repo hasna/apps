@@ -17,8 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   receipt.
 - **PostgreSQL stale-lock recovery no longer depends on a schema helper.** The
   exact stored `locked_at` token is compared as text before PostgreSQL casts only
-  the already-validated request token for the stale cutoff, so missing helper
-  functions and malformed stored timestamps fail closed without mutation.
+  the already-validated, PostgreSQL-compatible request token for the stale
+  cutoff, so missing helper functions, ISO year zero, and malformed stored
+  timestamps fail closed without mutation.
 
 ## [0.15.20] - 2026-08-09
 
