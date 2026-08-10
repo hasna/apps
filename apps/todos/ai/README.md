@@ -8,7 +8,7 @@ adapter.
 ## Requirements
 
 - Node.js 22 or newer
-- `@hasna/todos` `>=0.15.21 <1`
+- `@hasna/todos` `>=0.15.22 <1`
 - `GROQ_API_KEY` for live Groq requests
 
 ```bash

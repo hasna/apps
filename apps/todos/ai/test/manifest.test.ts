@@ -22,7 +22,8 @@ describe("package compatibility", () => {
     }
 
     expect(Bun.semver.satisfies("0.15.20", range)).toBe(false);
-    expect(Bun.semver.satisfies("0.15.21", range)).toBe(true);
+    expect(Bun.semver.satisfies("0.15.21", range)).toBe(false);
+    expect(Bun.semver.satisfies("0.15.22", range)).toBe(true);
     expect(Bun.semver.satisfies("1.0.0", range)).toBe(false);
     expect(Bun.semver.satisfies(rootManifest.version, range)).toBe(true);
   });
