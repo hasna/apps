@@ -843,6 +843,26 @@ export class ApiStore implements ConversationsStore {
       );
       return (body ? parseMessage(body.message) : null) as never;
     } catch (e) {
+      if (!isHttpStatus(e, 404)) throw e;
+    }
+
+    // Compatibility with server generations before `/messages/by-uuid/:uuid`.
+    // Those servers already expose an exact `uuid` filter on the collection
+    // route. Treat the returned rows as untrusted because an even older server
+    // may ignore an unknown query parameter while still returning 200.
+    try {
+      const body = await this.get<{ messages?: Record<string, unknown>[] }>(
+        "/messages",
+        { uuid: normalized, limit: 2, order: "asc" },
+      );
+      const matches = (body.messages ?? [])
+        .map(parseMessage)
+        .filter((message) => message.uuid === normalized);
+      if (matches.length > 1) {
+        throw new Error(`Message UUID ${normalized} resolved to more than one row.`);
+      }
+      return (matches[0] ?? null) as never;
+    } catch (e) {
       if (isHttpStatus(e, 404)) return null as never;
       throw e;
     }
