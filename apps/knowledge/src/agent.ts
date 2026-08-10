@@ -1,7 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import { migrateKnowledgeDb, openKnowledgeDb } from './knowledge-db';
 import { languageModelFor, normalizeAiSdkUsage, parseModelRef, recordProviderUsage, resolveModelRef } from './providers';
-import { retrieveKnowledgeContext, retrieveKnowledgeContextFromItems, type KnowledgeContextPack, type RetrievalOptions } from './retrieval';
+import {
+  retrieveKnowledgeContext,
+  retrieveKnowledgeContextFromItems,
+  retrieveKnowledgeContextFromSearch,
+  type KnowledgeContextPack,
+  type RetrievalOptions,
+} from './retrieval';
+import type { HybridSearchResult } from './search';
 import type { KnowledgeItem } from './store';
 import type { KnowledgeConfig } from './workspace';
 
@@ -380,6 +387,7 @@ export interface KnowledgePromptOverItemsOptions
 export async function runKnowledgePromptOverItems(
   items: KnowledgeItem[],
   options: KnowledgePromptOverItemsOptions,
+  producerSearch?: HybridSearchResult,
 ): Promise<KnowledgePromptResult> {
   const prompt = options.prompt.trim();
   if (!prompt) throw new Error('Knowledge prompt is required.');
@@ -388,10 +396,12 @@ export async function runKnowledgePromptOverItems(
   const parsed = parseModelRef(modelRef);
 
   const { prompt: _p, generate: _g, approveWrite: _a, now: _n, ...retrievalOptions } = options;
-  const context = await retrieveKnowledgeContextFromItems(items, {
-    ...retrievalOptions,
-    query: prompt,
-  });
+  const context = producerSearch
+    ? retrieveKnowledgeContextFromSearch(producerSearch, { contextChars: options.contextChars })
+    : await retrieveKnowledgeContextFromItems(items, {
+      ...retrievalOptions,
+      query: prompt,
+    });
 
   let answer = localAnswer(prompt, context);
   let generated = false;

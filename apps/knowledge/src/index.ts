@@ -43,7 +43,9 @@ export {
 } from './store.js';
 export {
   KNOWLEDGE_APP_SLUG,
+  KNOWLEDGE_BOUNDED_QUERY_CAPABILITY,
   KNOWLEDGE_RESOURCE,
+  KnowledgeBoundedQueryCapabilityError,
   isKnowledgeApiMode,
   resolveKnowledgeCloudStore,
   type KnowledgeCloudStore,

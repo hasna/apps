@@ -16529,6 +16529,12 @@ function knowledgeModeReport(env = process.env) {
   };
 }
 
+// src/query-contract.ts
+var KNOWLEDGE_BOUNDED_QUERY_CAPABILITY = "hasna.knowledge.bounded-query.v1";
+function hasKnowledgeBoundedQueryCapability(value) {
+  return Boolean(value && typeof value === "object" && value.query_capability === KNOWLEDGE_BOUNDED_QUERY_CAPABILITY);
+}
+
 // src/cloud-store.ts
 function transportOverrides(env) {
   return {
@@ -16549,14 +16555,31 @@ class KnowledgeVersionConflictError extends Error {
     this.name = "KnowledgeVersionConflictError";
   }
 }
+
+class KnowledgeBoundedQueryCapabilityError extends Error {
+  operation;
+  fields;
+  code = "bounded_query_capability_required";
+  constructor(operation, fields) {
+    super(`bounded_query_capability_required: the Knowledge server did not prove support for ${operation} field(s): ` + `${fields.join(", ")}. Refusing to accept a possibly unfiltered response; update the server and retry.`);
+    this.operation = operation;
+    this.fields = fields;
+    this.name = "KnowledgeBoundedQueryCapabilityError";
+  }
+}
 function toQuery(options) {
   const q = {};
-  if (options.search)
+  if (options.search) {
     q.filter = options.search;
+    q.search = options.search;
+  }
   if (options.tags?.length)
     q.tags = options.tags;
-  if (options.archive)
+  if (options.archive) {
     q.archive = options.archive;
+    if (options.archive === "all")
+      q.includeArchived = true;
+  }
   if (options.sort)
     q.sort = options.sort;
   if (options.direction)
@@ -16566,6 +16589,18 @@ function toQuery(options) {
   if (options.offset !== undefined)
     q.offset = options.offset;
   return q;
+}
+function listFieldsRequiringCapability(options) {
+  const fields = [];
+  if (options.tags?.length)
+    fields.push("tags");
+  if (options.sort !== undefined)
+    fields.push("sort");
+  if (options.direction !== undefined)
+    fields.push("direction");
+  if (options.archive === "archived")
+    fields.push("archive=archived");
+  return fields;
 }
 function boundedQueryInteger(value, fallback, field, minimum, maximum) {
   const resolved = value ?? fallback;
@@ -16585,6 +16620,10 @@ function wrap(client) {
       if (!Number.isInteger(res.total) || Number(res.total) < 0) {
         throw new Error("knowledge cloud list response is missing a valid producer total.");
       }
+      const requiredFields = listFieldsRequiringCapability(options);
+      if (requiredFields.length > 0 && !hasKnowledgeBoundedQueryCapability(res.raw)) {
+        throw new KnowledgeBoundedQueryCapabilityError("list", requiredFields);
+      }
       return { items: res.items, total: Number(res.total) };
     },
     async search(options) {
@@ -16601,7 +16640,10 @@ function wrap(client) {
       if (!Number.isInteger(response.total) || response.total < 0 || !Array.isArray(response.items) || response.items.some((hit) => !hit || typeof hit !== "object" || !hit.item || typeof hit.rank !== "number" || !Number.isFinite(hit.rank))) {
         throw new Error("knowledge cloud search response is missing producer rank or total evidence.");
       }
-      return response;
+      if (!hasKnowledgeBoundedQueryCapability(response)) {
+        throw new KnowledgeBoundedQueryCapabilityError("search", ["q", "rank", "total"]);
+      }
+      return { items: response.items, total: response.total };
     },
     async get(idOrShort) {
       return client.get(KNOWLEDGE_RESOURCE, idOrShort);
@@ -22509,9 +22551,13 @@ function knowledgeOpenApi(version) {
           type: "object",
           properties: {
             items: { type: "array", items: { $ref: "#/components/schemas/Note" } },
-            total: { type: "integer" }
+            total: { type: "integer" },
+            query_capability: {
+              type: "string",
+              enum: [KNOWLEDGE_BOUNDED_QUERY_CAPABILITY]
+            }
           },
-          required: ["items", "total"]
+          required: ["items", "total", "query_capability"]
         },
         NoteSearchList: {
           type: "object",
@@ -22527,9 +22573,13 @@ function knowledgeOpenApi(version) {
                 required: ["item", "rank"]
               }
             },
-            total: { type: "integer" }
+            total: { type: "integer" },
+            query_capability: {
+              type: "string",
+              enum: [KNOWLEDGE_BOUNDED_QUERY_CAPABILITY]
+            }
           },
-          required: ["items", "total"]
+          required: ["items", "total", "query_capability"]
         },
         NoteVersionList: {
           type: "object",
@@ -22554,6 +22604,13 @@ function knowledgeOpenApi(version) {
             { name: "offset", in: "query", schema: { type: "integer" } },
             { name: "filter", in: "query", schema: { type: "string" } },
             {
+              name: "search",
+              in: "query",
+              deprecated: true,
+              description: "Legacy alias for filter.",
+              schema: { type: "string" }
+            },
+            {
               name: "tags",
               in: "query",
               style: "form",
@@ -22561,6 +22618,13 @@ function knowledgeOpenApi(version) {
               schema: { type: "array", items: { type: "string" } }
             },
             { name: "archive", in: "query", schema: { type: "string", enum: ["active", "archived", "all"] } },
+            {
+              name: "includeArchived",
+              in: "query",
+              deprecated: true,
+              description: "Legacy alias: true maps to archive=all.",
+              schema: { type: "boolean" }
+            },
             { name: "sort", in: "query", schema: { type: "string", enum: ["created", "title"] } },
             { name: "direction", in: "query", schema: { type: "string", enum: ["asc", "desc"] } }
           ],
@@ -23614,12 +23678,13 @@ function createServeHandler(deps) {
           limit: url.searchParams.has("limit") ? Number(url.searchParams.get("limit")) : undefined,
           offset: url.searchParams.has("offset") ? Number(url.searchParams.get("offset")) : undefined
         }, principal.tid);
-        return json(result);
+        return json({ ...result, query_capability: KNOWLEDGE_BOUNDED_QUERY_CAPABILITY });
       }
       if (path === "/v1/notes") {
         if (method === "GET") {
           const principal = await authOrThrow(req, ["knowledge:read"]);
-          const archiveRaw = url.searchParams.get("archive") ?? "active";
+          const includeArchived = url.searchParams.get("includeArchived") === "true";
+          const archiveRaw = url.searchParams.get("archive") ?? (includeArchived ? "all" : "active");
           const sortRaw = url.searchParams.get("sort") ?? "created";
           const directionRaw = url.searchParams.get("direction") ?? "asc";
           if (!["active", "archived", "all"].includes(archiveRaw)) {
@@ -23635,13 +23700,13 @@ function createServeHandler(deps) {
           const result = await repo.list({
             limit: url.searchParams.has("limit") ? Number(url.searchParams.get("limit")) : undefined,
             offset: url.searchParams.has("offset") ? Number(url.searchParams.get("offset")) : undefined,
-            filter: url.searchParams.get("filter") ?? undefined,
+            filter: url.searchParams.get("filter") ?? url.searchParams.get("search") ?? undefined,
             tags: tags.length > 0 ? tags : undefined,
             archive: archiveRaw,
             sort: sortRaw,
             direction: directionRaw
           }, principal.tid);
-          return json(result);
+          return json({ ...result, query_capability: KNOWLEDGE_BOUNDED_QUERY_CAPABILITY });
         }
         if (method === "POST") {
           const principal = await authOrThrow(req, ["knowledge:write"]);
@@ -27374,7 +27439,7 @@ async function hybridSearchItems(items, options, baseWarnings = []) {
     results
   };
 }
-function hybridSearchFromProducerPage(hits, options, warnings = []) {
+function hybridSearchFromProducerPage(hits, options, warnings = [], producerTotal = hits.length) {
   const query2 = options.query.trim();
   if (!query2)
     throw new Error("Search query is required.");
@@ -27394,7 +27459,7 @@ function hybridSearchFromProducerPage(hits, options, warnings = []) {
     semantic_model: null,
     semantic_dimensions: null,
     counts: {
-      keyword_results: results.length,
+      keyword_results: producerTotal,
       catalog_results: 0,
       semantic_results: 0,
       merged_results: results.length
@@ -27920,7 +27985,7 @@ ${answer}`;
     warnings
   };
 }
-async function runKnowledgePromptOverItems(items, options) {
+async function runKnowledgePromptOverItems(items, options, producerSearch) {
   const prompt = options.prompt.trim();
   if (!prompt)
     throw new Error("Knowledge prompt is required.");
@@ -27928,7 +27993,7 @@ async function runKnowledgePromptOverItems(items, options) {
   const modelRef = resolveModelRef(options.modelRef ?? "default", options.config);
   const parsed = parseModelRef(modelRef);
   const { prompt: _p, generate: _g, approveWrite: _a, now: _n, ...retrievalOptions } = options;
-  const context = await retrieveKnowledgeContextFromItems(items, {
+  const context = producerSearch ? retrieveKnowledgeContextFromSearch(producerSearch, { contextChars: options.contextChars }) : await retrieveKnowledgeContextFromItems(items, {
     ...retrievalOptions,
     query: prompt
   });
@@ -37309,7 +37374,7 @@ class KnowledgeService {
         limit: options.limit,
         offset: options.offset
       });
-      return hybridSearchFromProducerPage(producer.items, options);
+      return hybridSearchFromProducerPage(producer.items, options, [], producer.total);
     }
     const legacyStorePath = legacyStorePathForRead(this.scope, workspace, options.legacyStorePath);
     if (!existsSync14(workspace.knowledgeDbPath)) {
@@ -37405,7 +37470,13 @@ class KnowledgeService {
         limit: options.limit,
         offset: options.offset
       });
-      return runKnowledgePromptOverItems(producer.items.map((hit) => hit.item), { ...options, config: this.config() });
+      const producerSearch = hybridSearchFromProducerPage(producer.items, {
+        query: options.prompt,
+        limit: options.limit,
+        offset: options.offset,
+        semantic: false
+      }, [], producer.total);
+      return runKnowledgePromptOverItems(producer.items.map((hit) => hit.item), { ...options, config: this.config() }, producerSearch);
     }
     const workspace = this.ensureWorkspace();
     const legacyStorePath = options.legacyStorePath ?? workspace.jsonStorePath;
@@ -47992,6 +48063,7 @@ export {
   KnowledgeGuardedAdoptionUncertainError,
   KnowledgeGuardedAdoptionRejectedError,
   KnowledgeGuardedAdoptionOperationConflictError,
+  KnowledgeBoundedQueryCapabilityError,
   KNOWLEDGE_SYNC_TABLES,
   CURRENT_SCHEMA_VERSION as KNOWLEDGE_SYNC_SCHEMA_VERSION,
   KNOWLEDGE_SYNC_PROTOCOL_VERSION,
@@ -48012,6 +48084,7 @@ export {
   KNOWLEDGE_MACHINES_ADAPTER_ENTRYPOINT,
   KNOWLEDGE_MACHINES_ADAPTER_CONTRACT_VERSION,
   KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+  KNOWLEDGE_BOUNDED_QUERY_CAPABILITY,
   KNOWLEDGE_APP_SLUG,
   KNOWLEDGE_API_URL_ENV_KEYS,
   KNOWLEDGE_API_KEY_ENV_KEYS,

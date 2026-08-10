@@ -91,6 +91,7 @@ import {
   type KnowledgeTerminalReconciliation,
 } from './guarded-write-contract.js';
 import type { PoolQueryClient, TypedQueryClient } from './generated/storage-kit/index.js';
+import { KNOWLEDGE_BOUNDED_QUERY_CAPABILITY } from './query-contract.js';
 
 export const KNOWLEDGE_SERVE_APP = 'knowledge';
 
@@ -2617,8 +2618,12 @@ export function knowledgeOpenApi(version: string): Record<string, unknown> {
           properties: {
             items: { type: 'array', items: { $ref: '#/components/schemas/Note' } },
             total: { type: 'integer' },
+            query_capability: {
+              type: 'string',
+              enum: [KNOWLEDGE_BOUNDED_QUERY_CAPABILITY],
+            },
           },
-          required: ['items', 'total'],
+          required: ['items', 'total', 'query_capability'],
         },
         NoteSearchList: {
           type: 'object',
@@ -2635,8 +2640,12 @@ export function knowledgeOpenApi(version: string): Record<string, unknown> {
               },
             },
             total: { type: 'integer' },
+            query_capability: {
+              type: 'string',
+              enum: [KNOWLEDGE_BOUNDED_QUERY_CAPABILITY],
+            },
           },
-          required: ['items', 'total'],
+          required: ['items', 'total', 'query_capability'],
         },
         NoteVersionList: {
           type: 'object',
@@ -2661,6 +2670,13 @@ export function knowledgeOpenApi(version: string): Record<string, unknown> {
             { name: 'offset', in: 'query', schema: { type: 'integer' } },
             { name: 'filter', in: 'query', schema: { type: 'string' } },
             {
+              name: 'search',
+              in: 'query',
+              deprecated: true,
+              description: 'Legacy alias for filter.',
+              schema: { type: 'string' },
+            },
+            {
               name: 'tags',
               in: 'query',
               style: 'form',
@@ -2668,6 +2684,13 @@ export function knowledgeOpenApi(version: string): Record<string, unknown> {
               schema: { type: 'array', items: { type: 'string' } },
             },
             { name: 'archive', in: 'query', schema: { type: 'string', enum: ['active', 'archived', 'all'] } },
+            {
+              name: 'includeArchived',
+              in: 'query',
+              deprecated: true,
+              description: 'Legacy alias: true maps to archive=all.',
+              schema: { type: 'boolean' },
+            },
             { name: 'sort', in: 'query', schema: { type: 'string', enum: ['created', 'title'] } },
             { name: 'direction', in: 'query', schema: { type: 'string', enum: ['asc', 'desc'] } },
           ],
@@ -4009,13 +4032,14 @@ export function createServeHandler(deps: ServeDeps): (req: Request) => Promise<R
           limit: url.searchParams.has('limit') ? Number(url.searchParams.get('limit')) : undefined,
           offset: url.searchParams.has('offset') ? Number(url.searchParams.get('offset')) : undefined,
         }, principal.tid);
-        return json(result);
+        return json({ ...result, query_capability: KNOWLEDGE_BOUNDED_QUERY_CAPABILITY });
       }
 
       if (path === '/v1/notes') {
         if (method === 'GET') {
           const principal = await authOrThrow(req, ['knowledge:read']);
-          const archiveRaw = url.searchParams.get('archive') ?? 'active';
+          const includeArchived = url.searchParams.get('includeArchived') === 'true';
+          const archiveRaw = url.searchParams.get('archive') ?? (includeArchived ? 'all' : 'active');
           const sortRaw = url.searchParams.get('sort') ?? 'created';
           const directionRaw = url.searchParams.get('direction') ?? 'asc';
           if (!['active', 'archived', 'all'].includes(archiveRaw)) {
@@ -4031,13 +4055,13 @@ export function createServeHandler(deps: ServeDeps): (req: Request) => Promise<R
           const result = await repo.list({
             limit: url.searchParams.has('limit') ? Number(url.searchParams.get('limit')) : undefined,
             offset: url.searchParams.has('offset') ? Number(url.searchParams.get('offset')) : undefined,
-            filter: url.searchParams.get('filter') ?? undefined,
+            filter: url.searchParams.get('filter') ?? url.searchParams.get('search') ?? undefined,
             tags: tags.length > 0 ? tags : undefined,
             archive: archiveRaw as NoteListOptions['archive'],
             sort: sortRaw as NoteListOptions['sort'],
             direction: directionRaw as NoteListOptions['direction'],
           }, principal.tid);
-          return json(result);
+          return json({ ...result, query_capability: KNOWLEDGE_BOUNDED_QUERY_CAPABILITY });
         }
         if (method === 'POST') {
           const principal = await authOrThrow(req, ['knowledge:write']);

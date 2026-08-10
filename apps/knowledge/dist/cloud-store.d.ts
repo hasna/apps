@@ -26,7 +26,8 @@
 import { type HasnaStorageClient } from '@hasna/contracts/client/storage';
 import type { KnowledgeItem, KnowledgeItemVersion, KnowledgeItemVersionList } from './store';
 import { KNOWLEDGE_APP_SLUG } from './knowledge-mode.js';
-export { KNOWLEDGE_APP_SLUG };
+import { KNOWLEDGE_BOUNDED_QUERY_CAPABILITY } from './query-contract.js';
+export { KNOWLEDGE_APP_SLUG, KNOWLEDGE_BOUNDED_QUERY_CAPABILITY };
 /** Cloud resource path served under /v1 by knowledge-serve. */
 export declare const KNOWLEDGE_RESOURCE = "notes";
 export interface KnowledgeCloudListOptions {
@@ -88,6 +89,16 @@ export declare class KnowledgeVersionConflictError extends Error {
     readonly current: number;
     readonly code = "version_conflict";
     constructor(expected: number, current: number);
+}
+/**
+ * Raised when the server response cannot prove that it applied a bounded query
+ * field that older servers silently ignored.
+ */
+export declare class KnowledgeBoundedQueryCapabilityError extends Error {
+    readonly operation: 'list' | 'search';
+    readonly fields: readonly string[];
+    readonly code = "bounded_query_capability_required";
+    constructor(operation: 'list' | 'search', fields: readonly string[]);
 }
 /**
  * The knowledge-item storage surface, cloud edition. Mirrors the operations the

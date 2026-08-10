@@ -97,4 +97,4 @@ export declare function hybridSearchItems(items: KnowledgeItem[], options: Omit<
 export declare function hybridSearchFromProducerPage(hits: readonly {
     item: KnowledgeItem;
     rank: number;
-}[], options: Pick<HybridSearchOptions, 'query' | 'limit' | 'offset' | 'semantic'>, warnings?: string[]): HybridSearchResult;
+}[], options: Pick<HybridSearchOptions, 'query' | 'limit' | 'offset' | 'semantic'>, warnings?: string[], producerTotal?: number): HybridSearchResult;

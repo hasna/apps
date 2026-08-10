@@ -1,11 +1,27 @@
 import { describe, expect, test } from 'bun:test';
 import {
   KNOWLEDGE_APP_SLUG,
+  KNOWLEDGE_BOUNDED_QUERY_CAPABILITY,
   KNOWLEDGE_RESOURCE,
+  KnowledgeBoundedQueryCapabilityError,
   resolveKnowledgeCloudStore,
 } from '../src/cloud-store';
+import type { KnowledgeItem } from '../src/store';
 
 const CLEAN_ENV = {} as NodeJS.ProcessEnv;
+const NOW = '2026-08-10T00:00:00.000Z';
+const OLD_SERVER_ITEM: KnowledgeItem = {
+  id: 'k_old_server',
+  short_id: 'old',
+  title: 'Plausible old-server result',
+  content: 'This row is deliberately plausible even when the old server ignored a query field.',
+  url: null,
+  tags: ['other'],
+  metadata: {},
+  archived: false,
+  created_at: NOW,
+  updated_at: NOW,
+};
 
 describe('knowledge cloud-store resolver (postgres client flip)', () => {
   test('resource + slug are the contract-stable values', () => {
@@ -110,7 +126,11 @@ describe('knowledge cloud-store resolver (postgres client flip)', () => {
       hostname: '127.0.0.1',
       fetch(request) {
         requests.push(new URL(request.url));
-        return Response.json({ items: [], total: 7 });
+        return Response.json({
+          items: [],
+          total: 7,
+          query_capability: KNOWLEDGE_BOUNDED_QUERY_CAPABILITY,
+        });
       },
     });
     try {
@@ -133,8 +153,10 @@ describe('knowledge cloud-store resolver (postgres client flip)', () => {
       expect(requests).toHaveLength(1);
       expect(requests[0]!.pathname).toBe('/v1/notes');
       expect(requests[0]!.searchParams.get('filter')).toBe('literal % query');
+      expect(requests[0]!.searchParams.get('search')).toBe('literal % query');
       expect(requests[0]!.searchParams.getAll('tags')).toEqual(['red', 'blue,green']);
       expect(requests[0]!.searchParams.get('archive')).toBe('all');
+      expect(requests[0]!.searchParams.get('includeArchived')).toBe('true');
       expect(requests[0]!.searchParams.get('sort')).toBe('title');
       expect(requests[0]!.searchParams.get('direction')).toBe('desc');
       expect(requests[0]!.searchParams.get('limit')).toBe('2');
@@ -151,7 +173,11 @@ describe('knowledge cloud-store resolver (postgres client flip)', () => {
       hostname: '127.0.0.1',
       fetch(request) {
         requests.push(new URL(request.url));
-        return Response.json({ items: [], total: 0 });
+        return Response.json({
+          items: [],
+          total: 0,
+          query_capability: KNOWLEDGE_BOUNDED_QUERY_CAPABILITY,
+        });
       },
     });
     try {
@@ -172,6 +198,99 @@ describe('knowledge cloud-store resolver (postgres client flip)', () => {
       expect(requests[0]!.searchParams.get('q')).toBe('alpha OR beta');
       expect(requests[0]!.searchParams.get('limit')).toBe('3');
       expect(requests[0]!.searchParams.get('offset')).toBe('6');
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test('new client dual-sends safe aliases and accepts a plausible old-server list response', async () => {
+    const requests: URL[] = [];
+    const server = Bun.serve({
+      port: 0,
+      hostname: '127.0.0.1',
+      fetch(request) {
+        requests.push(new URL(request.url));
+        // Deliberately no query_capability: this simulates the prior server.
+        return Response.json({ items: [OLD_SERVER_ITEM], total: 1 });
+      },
+    });
+    try {
+      const store = resolveKnowledgeCloudStore({
+        NODE_ENV: 'test',
+        HASNA_KNOWLEDGE_STORAGE_MODE: 'postgres',
+        HASNA_KNOWLEDGE_API_URL: `http://127.0.0.1:${server.port}`,
+        HASNA_KNOWLEDGE_API_KEY: 'k_fake_test_key',
+      } as NodeJS.ProcessEnv)!;
+      const result = await store.list({
+        search: 'plausible',
+        archive: 'all',
+        limit: 1,
+        offset: 0,
+      });
+      expect(result).toEqual({ items: [OLD_SERVER_ITEM], total: 1 });
+      expect(requests).toHaveLength(1);
+      expect(requests[0]!.searchParams.get('filter')).toBe('plausible');
+      expect(requests[0]!.searchParams.get('search')).toBe('plausible');
+      expect(requests[0]!.searchParams.get('archive')).toBe('all');
+      expect(requests[0]!.searchParams.get('includeArchived')).toBe('true');
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  const unsupportedOldServerCases: Array<{
+    name: string;
+    options: Parameters<NonNullable<ReturnType<typeof resolveKnowledgeCloudStore>>['list']>[0];
+    field: string;
+  }> = [
+    { name: 'tags', options: { tags: ['required'] }, field: 'tags' },
+    { name: 'sort', options: { sort: 'title' }, field: 'sort' },
+    { name: 'direction', options: { direction: 'desc' }, field: 'direction' },
+    { name: 'archived-only', options: { archive: 'archived' }, field: 'archive=archived' },
+  ];
+
+  for (const scenario of unsupportedOldServerCases) {
+    test(`new client fails loudly when an old server ignores ${scenario.name}`, async () => {
+      const server = Bun.serve({
+        port: 0,
+        hostname: '127.0.0.1',
+        fetch() {
+          // Plausible success envelope, but no marker proving the field was applied.
+          return Response.json({ items: [OLD_SERVER_ITEM], total: 1 });
+        },
+      });
+      try {
+        const store = resolveKnowledgeCloudStore({
+          NODE_ENV: 'test',
+          HASNA_KNOWLEDGE_STORAGE_MODE: 'postgres',
+          HASNA_KNOWLEDGE_API_URL: `http://127.0.0.1:${server.port}`,
+          HASNA_KNOWLEDGE_API_KEY: 'k_fake_test_key',
+        } as NodeJS.ProcessEnv)!;
+        const request = store.list(scenario.options);
+        await expect(request).rejects.toBeInstanceOf(KnowledgeBoundedQueryCapabilityError);
+        await expect(request).rejects.toThrow(scenario.field);
+      } finally {
+        server.stop(true);
+      }
+    });
+  }
+
+  test('new client rejects a plausible old-server ranked response without capability evidence', async () => {
+    const server = Bun.serve({
+      port: 0,
+      hostname: '127.0.0.1',
+      fetch() {
+        return Response.json({ items: [{ item: OLD_SERVER_ITEM, rank: 0.8 }], total: 5 });
+      },
+    });
+    try {
+      const store = resolveKnowledgeCloudStore({
+        NODE_ENV: 'test',
+        HASNA_KNOWLEDGE_STORAGE_MODE: 'postgres',
+        HASNA_KNOWLEDGE_API_URL: `http://127.0.0.1:${server.port}`,
+        HASNA_KNOWLEDGE_API_KEY: 'k_fake_test_key',
+      } as NodeJS.ProcessEnv)!;
+      await expect(store.search({ query: 'old response' })).rejects.toThrow('bounded_query_capability_required');
     } finally {
       server.stop(true);
     }

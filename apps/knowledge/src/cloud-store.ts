@@ -38,8 +38,12 @@ import {
   resolveKnowledgeModeSelection,
 } from './knowledge-mode.js';
 import { guardedFetch, isNetworkGuardActive } from './net-guard.js';
+import {
+  KNOWLEDGE_BOUNDED_QUERY_CAPABILITY,
+  hasKnowledgeBoundedQueryCapability,
+} from './query-contract.js';
 
-export { KNOWLEDGE_APP_SLUG };
+export { KNOWLEDGE_APP_SLUG, KNOWLEDGE_BOUNDED_QUERY_CAPABILITY };
 
 /**
  * Transport overrides applied to every cloud client this module builds.
@@ -133,6 +137,22 @@ export class KnowledgeVersionConflictError extends Error {
 }
 
 /**
+ * Raised when the server response cannot prove that it applied a bounded query
+ * field that older servers silently ignored.
+ */
+export class KnowledgeBoundedQueryCapabilityError extends Error {
+  readonly code = 'bounded_query_capability_required';
+
+  constructor(readonly operation: 'list' | 'search', readonly fields: readonly string[]) {
+    super(
+      `bounded_query_capability_required: the Knowledge server did not prove support for ${operation} field(s): `
+        + `${fields.join(', ')}. Refusing to accept a possibly unfiltered response; update the server and retry.`,
+    );
+    this.name = 'KnowledgeBoundedQueryCapabilityError';
+  }
+}
+
+/**
  * The knowledge-item storage surface, cloud edition. Mirrors the operations the
  * local db.json store supports so the CLI can call either behind one shape.
  */
@@ -167,14 +187,32 @@ function toQuery(options: KnowledgeCloudListOptions): Record<
     string,
     string | number | boolean | undefined | ReadonlyArray<string | number | boolean>
   > = {};
-  if (options.search) q.filter = options.search;
+  if (options.search) {
+    q.filter = options.search;
+    // Safe overlap for an older server: old clients called this `search`.
+    q.search = options.search;
+  }
   if (options.tags?.length) q.tags = options.tags;
-  if (options.archive) q.archive = options.archive;
+  if (options.archive) {
+    q.archive = options.archive;
+    // `includeArchived=true` is the old spelling of archive=all. There is no
+    // safe alias for archived-only, so that case requires the capability marker.
+    if (options.archive === 'all') q.includeArchived = true;
+  }
   if (options.sort) q.sort = options.sort;
   if (options.direction) q.direction = options.direction;
   if (options.limit !== undefined) q.limit = options.limit;
   if (options.offset !== undefined) q.offset = options.offset;
   return q;
+}
+
+function listFieldsRequiringCapability(options: KnowledgeCloudListOptions): string[] {
+  const fields: string[] = [];
+  if (options.tags?.length) fields.push('tags');
+  if (options.sort !== undefined) fields.push('sort');
+  if (options.direction !== undefined) fields.push('direction');
+  if (options.archive === 'archived') fields.push('archive=archived');
+  return fields;
 }
 
 function boundedQueryInteger(
@@ -203,13 +241,21 @@ function wrap(client: HasnaStorageClient): KnowledgeCloudStore {
       if (!Number.isInteger(res.total) || Number(res.total) < 0) {
         throw new Error('knowledge cloud list response is missing a valid producer total.');
       }
+      const requiredFields = listFieldsRequiringCapability(options);
+      if (requiredFields.length > 0 && !hasKnowledgeBoundedQueryCapability(res.raw)) {
+        throw new KnowledgeBoundedQueryCapabilityError('list', requiredFields);
+      }
       return { items: res.items, total: Number(res.total) };
     },
 
     async search(options: KnowledgeCloudSearchOptions) {
       const limit = boundedQueryInteger(options.limit, 20, 'limit', 1, 200);
       const offset = boundedQueryInteger(options.offset, 0, 'offset', 0, 10_000);
-      const response = await client.transport.get<{ items: KnowledgeCloudSearchHit[]; total: number }>(
+      const response = await client.transport.get<{
+        items: KnowledgeCloudSearchHit[];
+        total: number;
+        query_capability?: string;
+      }>(
         `/${KNOWLEDGE_RESOURCE}/search`,
         {
           query: {
@@ -234,7 +280,10 @@ function wrap(client: HasnaStorageClient): KnowledgeCloudStore {
       ) {
         throw new Error('knowledge cloud search response is missing producer rank or total evidence.');
       }
-      return response;
+      if (!hasKnowledgeBoundedQueryCapability(response)) {
+        throw new KnowledgeBoundedQueryCapabilityError('search', ['q', 'rank', 'total']);
+      }
+      return { items: response.items, total: response.total };
     },
 
     async get(idOrShort: string) {

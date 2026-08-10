@@ -2668,7 +2668,7 @@ export class KnowledgeService {
         limit: options.limit,
         offset: options.offset,
       });
-      return hybridSearchFromProducerPage(producer.items, options);
+      return hybridSearchFromProducerPage(producer.items, options, [], producer.total);
     }
     const legacyStorePath = legacyStorePathForRead(this.scope, workspace, options.legacyStorePath);
     if (!existsSync(workspace.knowledgeDbPath)) {
@@ -2775,9 +2775,21 @@ export class KnowledgeService {
         limit: options.limit,
         offset: options.offset,
       });
+      const producerSearch = hybridSearchFromProducerPage(
+        producer.items,
+        {
+          query: options.prompt,
+          limit: options.limit,
+          offset: options.offset,
+          semantic: false,
+        },
+        [],
+        producer.total,
+      );
       return runKnowledgePromptOverItems(
         producer.items.map((hit) => hit.item),
         { ...options, config: this.config() },
+        producerSearch,
       );
     }
     const workspace = this.ensureWorkspace();

@@ -1659,6 +1659,12 @@ function knowledgeModeReport(env = process.env) {
   };
 }
 
+// src/query-contract.ts
+var KNOWLEDGE_BOUNDED_QUERY_CAPABILITY = "hasna.knowledge.bounded-query.v1";
+function hasKnowledgeBoundedQueryCapability(value) {
+  return Boolean(value && typeof value === "object" && value.query_capability === KNOWLEDGE_BOUNDED_QUERY_CAPABILITY);
+}
+
 // src/cloud-store.ts
 function transportOverrides(env) {
   return {
@@ -1679,14 +1685,31 @@ class KnowledgeVersionConflictError extends Error {
     this.name = "KnowledgeVersionConflictError";
   }
 }
+
+class KnowledgeBoundedQueryCapabilityError extends Error {
+  operation;
+  fields;
+  code = "bounded_query_capability_required";
+  constructor(operation, fields) {
+    super(`bounded_query_capability_required: the Knowledge server did not prove support for ${operation} field(s): ` + `${fields.join(", ")}. Refusing to accept a possibly unfiltered response; update the server and retry.`);
+    this.operation = operation;
+    this.fields = fields;
+    this.name = "KnowledgeBoundedQueryCapabilityError";
+  }
+}
 function toQuery(options) {
   const q = {};
-  if (options.search)
+  if (options.search) {
     q.filter = options.search;
+    q.search = options.search;
+  }
   if (options.tags?.length)
     q.tags = options.tags;
-  if (options.archive)
+  if (options.archive) {
     q.archive = options.archive;
+    if (options.archive === "all")
+      q.includeArchived = true;
+  }
   if (options.sort)
     q.sort = options.sort;
   if (options.direction)
@@ -1696,6 +1719,18 @@ function toQuery(options) {
   if (options.offset !== undefined)
     q.offset = options.offset;
   return q;
+}
+function listFieldsRequiringCapability(options) {
+  const fields = [];
+  if (options.tags?.length)
+    fields.push("tags");
+  if (options.sort !== undefined)
+    fields.push("sort");
+  if (options.direction !== undefined)
+    fields.push("direction");
+  if (options.archive === "archived")
+    fields.push("archive=archived");
+  return fields;
 }
 function boundedQueryInteger(value, fallback, field, minimum, maximum) {
   const resolved = value ?? fallback;
@@ -1715,6 +1750,10 @@ function wrap(client) {
       if (!Number.isInteger(res.total) || Number(res.total) < 0) {
         throw new Error("knowledge cloud list response is missing a valid producer total.");
       }
+      const requiredFields = listFieldsRequiringCapability(options);
+      if (requiredFields.length > 0 && !hasKnowledgeBoundedQueryCapability(res.raw)) {
+        throw new KnowledgeBoundedQueryCapabilityError("list", requiredFields);
+      }
       return { items: res.items, total: Number(res.total) };
     },
     async search(options) {
@@ -1731,7 +1770,10 @@ function wrap(client) {
       if (!Number.isInteger(response.total) || response.total < 0 || !Array.isArray(response.items) || response.items.some((hit) => !hit || typeof hit !== "object" || !hit.item || typeof hit.rank !== "number" || !Number.isFinite(hit.rank))) {
         throw new Error("knowledge cloud search response is missing producer rank or total evidence.");
       }
-      return response;
+      if (!hasKnowledgeBoundedQueryCapability(response)) {
+        throw new KnowledgeBoundedQueryCapabilityError("search", ["q", "rank", "total"]);
+      }
+      return { items: response.items, total: response.total };
     },
     async get(idOrShort) {
       return client.get(KNOWLEDGE_RESOURCE, idOrShort);

@@ -786,6 +786,7 @@ export function hybridSearchFromProducerPage(
   hits: readonly { item: KnowledgeItem; rank: number }[],
   options: Pick<HybridSearchOptions, 'query' | 'limit' | 'offset' | 'semantic'>,
   warnings: string[] = [],
+  producerTotal: number = hits.length,
 ): HybridSearchResult {
   const query = options.query.trim();
   if (!query) throw new Error('Search query is required.');
@@ -805,7 +806,7 @@ export function hybridSearchFromProducerPage(
     semantic_model: null,
     semantic_dimensions: null,
     counts: {
-      keyword_results: results.length,
+      keyword_results: producerTotal,
       catalog_results: 0,
       semantic_results: 0,
       merged_results: results.length,
