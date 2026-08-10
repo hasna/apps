@@ -127,4 +127,6 @@ export const PG_MIGRATIONS: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_domain_history_email ON domain_history(registrant_email)`,
   `CREATE INDEX IF NOT EXISTS idx_domain_reputation_domain ON domain_reputation(domain_id)`,
   `CREATE INDEX IF NOT EXISTS idx_domain_reputation_blacklisted ON domain_reputation(is_blacklisted)`,
+  `ALTER TABLE domains ADD COLUMN IF NOT EXISTS expiry_synced_at TEXT`,
+  `CREATE INDEX IF NOT EXISTS idx_domains_expiry_synced_at ON domains(expiry_synced_at)`,
 ];

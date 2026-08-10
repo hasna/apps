@@ -168,6 +168,9 @@ describe("DomainsRepo domains", () => {
     expect(await repo.getStats()).toEqual({
       total: 7, active: 5, expired: 1, transferring: 0, redemption: 0,
       auto_renew_enabled: 4, expiring_30_days: 0, ssl_expiring_30_days: 0,
+      // Past-expiry is counted separately from the forward window so that
+      // `expiring_30_days` keeps meaning exactly what it always meant.
+      past_expiry: 0, ssl_past_expiry: 0, never_synced: 0,
     });
   });
 });

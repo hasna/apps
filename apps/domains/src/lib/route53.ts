@@ -977,6 +977,7 @@ export function createRoute53Provider(config?: Route53Config): FullProvider {
 
     async syncToLocalDb(dbFns: DbFunctions): Promise<ProviderSyncResult> {
       const domains = await listDomainInventory();
+      const syncedAt = new Date().toISOString();
       let synced = 0;
       let created = 0;
       let updated = 0;
@@ -993,6 +994,7 @@ export function createRoute53Provider(config?: Route53Config): FullProvider {
             await dbFns.updateDomain(existing.id, {
               ...(d.registrar === "AWS Route 53" ? { registrar: "AWS Route 53" } : {}),
               ...(staleDnsOnlyRegistrar ? { registrar: null } : {}),
+              ...(d.registrar === "AWS Route 53" ? { expiry_synced_at: syncedAt } : {}),
               expires_at: d.expires || undefined,
               auto_renew: d.auto_renew,
               nameservers: d.nameservers.length > 0 ? d.nameservers : existing.nameservers,
@@ -1000,7 +1002,7 @@ export function createRoute53Provider(config?: Route53Config): FullProvider {
                 ...existing.metadata,
                 route53: {
                   source: d.registrar === "AWS Route 53" ? "route53domains+hosted_zones" : "route53:hosted_zones",
-                  synced_at: new Date().toISOString(),
+                  synced_at: syncedAt,
                 },
               },
               status: "active",
@@ -1010,6 +1012,7 @@ export function createRoute53Provider(config?: Route53Config): FullProvider {
             await dbFns.createDomain({
               name: d.domain,
               ...(d.registrar === "AWS Route 53" ? { registrar: "AWS Route 53" } : {}),
+              ...(d.registrar === "AWS Route 53" ? { expiry_synced_at: syncedAt } : {}),
               expires_at: d.expires || undefined,
               auto_renew: d.auto_renew,
               nameservers: d.nameservers,
@@ -1018,7 +1021,7 @@ export function createRoute53Provider(config?: Route53Config): FullProvider {
               metadata: {
                 route53: {
                   source: d.registrar === "AWS Route 53" ? "route53domains+hosted_zones" : "route53:hosted_zones",
-                  synced_at: new Date().toISOString(),
+                  synced_at: syncedAt,
                 },
               },
             });

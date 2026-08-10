@@ -55,6 +55,7 @@ interface DomainRowPg {
   metadata: string;
   created_at: string;
   updated_at: string;
+  expiry_synced_at: string | null;
   [key: string]: unknown;
 }
 
@@ -89,6 +90,7 @@ function rowToDomain(row: DomainRowPg): Domain {
     metadata: parseJson<Record<string, unknown>>(row.metadata, {}),
     created_at: row.created_at,
     updated_at: row.updated_at,
+    expiry_synced_at: row.expiry_synced_at ?? null,
   };
 }
 
@@ -148,8 +150,8 @@ export class DomainsRepo {
            id, name, registrar, status, registered_at, expires_at, auto_renew,
            is_premium, premium_price, standard_price, purchase_price, purchase_date,
            nameservers, whois, ssl_expires_at, ssl_issuer, notes, metadata,
-           created_at, updated_at
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+           created_at, updated_at, expiry_synced_at
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
          RETURNING *`,
         [
           id,
@@ -172,6 +174,7 @@ export class DomainsRepo {
           JSON.stringify(input.metadata ?? {}),
           nowIso,
           nowIso,
+          input.expiry_synced_at ?? null,
         ],
       );
       return rowToDomain(row!);
@@ -258,6 +261,7 @@ export class DomainsRepo {
     if ("ssl_issuer" in p) setCol("ssl_issuer", p["ssl_issuer"] ?? null);
     if ("notes" in p) setCol("notes", p["notes"] ?? null);
     if ("metadata" in p) setCol("metadata", JSON.stringify(p["metadata"] ?? {}));
+    if ("expiry_synced_at" in p) setCol("expiry_synced_at", p["expiry_synced_at"] ?? null);
 
     if (sets.length === 0) return existing;
     setCol("updated_at", new Date().toISOString());
@@ -295,7 +299,15 @@ export class DomainsRepo {
          count(*) FILTER (
            WHERE NULLIF(ssl_expires_at, '')::timestamptz
              BETWEEN now() AND now() + interval '30 days'
-         )::text AS ssl_expiring_30_days
+         )::text AS ssl_expiring_30_days,
+         count(*) FILTER (
+           WHERE status = 'active'
+             AND NULLIF(expires_at, '')::timestamptz < now()
+         )::text AS past_expiry,
+         count(*) FILTER (
+           WHERE NULLIF(ssl_expires_at, '')::timestamptz < now()
+         )::text AS ssl_past_expiry,
+         count(*) FILTER (WHERE expiry_synced_at IS NULL)::text AS never_synced
        FROM domains`,
     );
     const n = (k: string) => (row && row[k] ? parseInt(row[k]!, 10) : 0);
@@ -308,6 +320,9 @@ export class DomainsRepo {
       auto_renew_enabled: n("auto_renew_enabled"),
       expiring_30_days: n("expiring_30_days"),
       ssl_expiring_30_days: n("ssl_expiring_30_days"),
+      past_expiry: n("past_expiry"),
+      ssl_past_expiry: n("ssl_past_expiry"),
+      never_synced: n("never_synced"),
     };
   }
 

@@ -103,8 +103,15 @@ export interface DomainsStore {
   countDomains(): Promise<number>;
   searchDomains(query: string): Promise<Domain[]>;
   getByRegistrar(registrar: string): Promise<Domain[]>;
-  listExpiring(days: number): Promise<Domain[]>;
-  listSslExpiring(days: number): Promise<Domain[]>;
+  /**
+   * Two-sided by default: already-lapsed names PLUS those due within `days`.
+   * Pass `includeLapsed: false` for the forward-only window.
+   */
+  listExpiring(days: number, options?: { includeLapsed?: boolean }): Promise<Domain[]>;
+  listSslExpiring(days: number, options?: { includeLapsed?: boolean }): Promise<Domain[]>;
+  /** Past recorded expiry while still status=active. */
+  listPastExpiry(): Promise<Domain[]>;
+  listSslPastExpiry(): Promise<Domain[]>;
   getDomainStats(): Promise<DomainStats>;
   markDomainPremium(identifier: string, premiumPrice: number, standardPrice?: number): Promise<Domain | null>;
   updateDomainLifecycleStatus(identifier: string, status: DomainStatus, notes?: string): Promise<Domain | null>;
@@ -181,8 +188,10 @@ export class LocalStore implements DomainsStore {
   async countDomains() { return records.countDomains(); }
   async searchDomains(query: string) { return records.searchDomains(query); }
   async getByRegistrar(registrar: string) { return records.getByRegistrar(registrar); }
-  async listExpiring(days: number) { return records.listExpiring(days); }
-  async listSslExpiring(days: number) { return records.listSslExpiring(days); }
+  async listExpiring(days: number, options?: { includeLapsed?: boolean }) { return records.listExpiring(days, options); }
+  async listSslExpiring(days: number, options?: { includeLapsed?: boolean }) { return records.listSslExpiring(days, options); }
+  async listPastExpiry() { return records.listPastExpiry(); }
+  async listSslPastExpiry() { return records.listSslPastExpiry(); }
   async getDomainStats() { return records.getDomainStats(); }
   async markDomainPremium(identifier: string, premiumPrice: number, standardPrice?: number) { return records.markDomainPremium(identifier, premiumPrice, standardPrice); }
   async updateDomainLifecycleStatus(identifier: string, status: DomainStatus, notes?: string) { return records.updateDomainLifecycleStatus(identifier, status, notes); }
@@ -376,7 +385,10 @@ export class ApiStore implements DomainsStore {
     return this.listDomains({ registrar });
   }
 
-  async listExpiring(days: number): Promise<Domain[]> {
+  async listExpiring(days: number, options: { includeLapsed?: boolean } = {}): Promise<Domain[]> {
+    // The lower bound is the whole defect: floored at `now`, this filter could
+    // never return a name already over the line.
+    const includeLapsed = options.includeLapsed ?? true;
     const now = Date.now();
     const horizon = now + days * 24 * 60 * 60 * 1000;
     const domains = await this.listDomains({ status: "active" });
@@ -384,12 +396,15 @@ export class ApiStore implements DomainsStore {
       .filter((d) => {
         if (!d.expires_at) return false;
         const exp = Date.parse(d.expires_at);
-        return Number.isFinite(exp) && exp >= now && exp <= horizon;
+        if (!Number.isFinite(exp)) return false;
+        if (exp > horizon) return false;
+        return includeLapsed ? true : exp >= now;
       })
       .sort((a, b) => Date.parse(a.expires_at ?? "") - Date.parse(b.expires_at ?? ""));
   }
 
-  async listSslExpiring(days: number): Promise<Domain[]> {
+  async listSslExpiring(days: number, options: { includeLapsed?: boolean } = {}): Promise<Domain[]> {
+    const includeLapsed = options.includeLapsed ?? true;
     const now = Date.now();
     const horizon = now + days * 24 * 60 * 60 * 1000;
     const domains = await this.listDomains({});
@@ -397,7 +412,33 @@ export class ApiStore implements DomainsStore {
       .filter((d) => {
         if (!d.ssl_expires_at) return false;
         const exp = Date.parse(d.ssl_expires_at);
-        return Number.isFinite(exp) && exp >= now && exp <= horizon;
+        if (!Number.isFinite(exp)) return false;
+        if (exp > horizon) return false;
+        return includeLapsed ? true : exp >= now;
+      })
+      .sort((a, b) => Date.parse(a.ssl_expires_at ?? "") - Date.parse(b.ssl_expires_at ?? ""));
+  }
+
+  async listPastExpiry(): Promise<Domain[]> {
+    const now = Date.now();
+    const domains = await this.listDomains({ status: "active" });
+    return domains
+      .filter((d) => {
+        if (!d.expires_at) return false;
+        const exp = Date.parse(d.expires_at);
+        return Number.isFinite(exp) && exp < now;
+      })
+      .sort((a, b) => Date.parse(a.expires_at ?? "") - Date.parse(b.expires_at ?? ""));
+  }
+
+  async listSslPastExpiry(): Promise<Domain[]> {
+    const now = Date.now();
+    const domains = await this.listDomains({});
+    return domains
+      .filter((d) => {
+        if (!d.ssl_expires_at) return false;
+        const exp = Date.parse(d.ssl_expires_at);
+        return Number.isFinite(exp) && exp < now;
       })
       .sort((a, b) => Date.parse(a.ssl_expires_at ?? "") - Date.parse(b.ssl_expires_at ?? ""));
   }

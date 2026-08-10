@@ -178,8 +178,22 @@ describe("ApiStore domains", () => {
     ];
     const store = apiStore({ list: async () => ({ items: records, raw: undefined }) });
 
-    expect((await store.listExpiring(1)).map(({ id }) => id)).toEqual(["soon", "later"]);
-    expect((await store.listSslExpiring(1)).map(({ id }) => id)).toEqual(["soon", "later"]);
+    // Two-sided by default: "past" is already over the line and IS reported.
+    // This assertion previously read ["soon", "later"], which encoded the very
+    // blind spot being fixed — the ApiStore filter was floored at `now`, so a
+    // lapsed name could never be returned. Invalid and absent dates are still
+    // filtered out, and ordering is still by date.
+    expect((await store.listExpiring(1)).map(({ id }) => id)).toEqual(["past", "soon", "later"]);
+    expect((await store.listSslExpiring(1)).map(({ id }) => id)).toEqual(["past", "soon", "later"]);
+
+    // Negative control: the forward-only window still excludes the lapsed name,
+    // so the two code paths remain distinguishable.
+    expect((await store.listExpiring(1, { includeLapsed: false })).map(({ id }) => id)).toEqual(["soon", "later"]);
+    expect((await store.listSslExpiring(1, { includeLapsed: false })).map(({ id }) => id)).toEqual(["soon", "later"]);
+
+    // And the lapsed-only view returns exactly the lapsed name.
+    expect((await store.listPastExpiry()).map(({ id }) => id)).toEqual(["past"]);
+    expect((await store.listSslPastExpiry()).map(({ id }) => id)).toEqual(["past"]);
   });
 
   test("applies acquisition defaults and returns null for unknown domains", async () => {

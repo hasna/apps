@@ -259,4 +259,13 @@ export const MIGRATIONS: MigrationEntry[] = [
       CREATE INDEX idx_domain_reputation_blacklisted ON domain_reputation(is_blacklisted);
     `,
   },
+  {
+    id: 6,
+    name: "domain_expiry_freshness",
+    sql: `
+      ALTER TABLE domains ADD COLUMN expiry_synced_at TEXT;
+
+      CREATE INDEX IF NOT EXISTS idx_domains_expiry_synced_at ON domains(expiry_synced_at);
+    `,
+  },
 ];

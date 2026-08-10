@@ -375,6 +375,7 @@ export async function syncToLocalDb(dbFunctions: {
     expires_at?: string;
     auto_renew?: boolean;
     nameservers?: string[];
+    expiry_synced_at?: string | null;
   }) => Promise<{ id: string; name: string }>;
   updateDomain: (
     id: string,
@@ -385,11 +386,15 @@ export async function syncToLocalDb(dbFunctions: {
       expires_at?: string;
       auto_renew?: boolean;
       nameservers?: string[];
+      expiry_synced_at?: string | null;
     }
   ) => Promise<unknown>;
 }, config?: NamecheapConfig): Promise<NamecheapSyncResult> {
   const cfg = config || getConfig();
   const result: NamecheapSyncResult = { synced: 0, errors: [], domains: [] };
+  // See the note in brandsight.syncToLocalDb: one instant for the whole pass,
+  // stamped only on rows this sync actually read from the registrar.
+  const syncedAt = new Date().toISOString();
 
   let ncDomains: NamecheapDomain[];
   try {
@@ -425,6 +430,7 @@ export async function syncToLocalDb(dbFunctions: {
           expires_at: expiresAt || undefined,
           auto_renew: ncDomain.autoRenew,
           nameservers: info.nameservers.length > 0 ? info.nameservers : undefined,
+          expiry_synced_at: syncedAt,
         });
       } else {
         await dbFunctions.createDomain({
@@ -435,6 +441,7 @@ export async function syncToLocalDb(dbFunctions: {
           expires_at: expiresAt || undefined,
           auto_renew: ncDomain.autoRenew,
           nameservers: info.nameservers,
+          expiry_synced_at: syncedAt,
         });
       }
 

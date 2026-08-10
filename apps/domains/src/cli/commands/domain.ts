@@ -28,6 +28,7 @@ import { createZone as cfCreateZone, ensureZone as cfEnsureZone } from "../../li
 import { delegateDomainToCloudflare } from "../../lib/delegate.js";
 import { getCapability } from "../../lib/capability.js";
 import { compactHint, formatDate, pageItemsOrExit, parseLimit, parseOffset, truncateText } from "../../lib/compact-output.js";
+import { freshnessSuffix, isLapsed as isLapsedAt, lapsedSplit } from "../../lib/freshness.js";
 
 import { printLine, printErrorLine, writeStdout } from "../../lib/stdout.js";
 const DOMAIN_STATUS_HELP = DOMAIN_STATUSES.join("/");
@@ -158,10 +159,12 @@ export function registerDomainCommand(program: Command): void {
       const d = details.domain;
       printLine(`\n${d.name} [${d.status}]`);
       if (d.registrar) printLine(`  Registrar:      ${d.registrar}`);
-      if (d.expires_at) printLine(`  Expires:        ${formatDate(d.expires_at)}`);
+      if (d.expires_at) printLine(`  Expires:        ${formatDate(d.expires_at)} ${freshnessSuffix(d.expiry_synced_at)}`);
       if (d.purchase_date) printLine(`  Purchased:      ${formatDate(d.purchase_date)}`);
       if (d.purchase_price !== null) printLine(`  Purchase price: ${d.purchase_price}`);
-      printLine(`  Auto-renew:     ${d.auto_renew ? "yes" : "no"}`);
+      // Rendered with its provenance: read from a registrar sync, or never confirmed.
+      printLine(`  Auto-renew:     ${d.auto_renew ? "yes" : "no"} ${freshnessSuffix(d.expiry_synced_at)}`);
+      printLine(`  Registrar sync: ${d.expiry_synced_at ?? "never"}`);
       if (d.is_premium) {
         printLine(`  Premium:        yes`);
         if (d.premium_price !== null) printLine(`  Premium ask:    ${d.premium_price}`);
@@ -358,18 +361,65 @@ export function registerDomainCommand(program: Command): void {
 
   domain
     .command("expiring")
-    .description("List domains expiring soon")
+    .description("List domains already past expiry, plus those expiring soon")
     .option("--days <n>", "Days threshold", "30")
+    .option("--forward-only", "Exclude already-lapsed names (the pre-fix behaviour)")
     .option("--limit <n>", "Limit number of displayed domains")
     .option("--all", "Show all matching domains")
     .option("-j, --json", "Output JSON")
-    .action(async (opts: { days: string; limit?: string; all?: boolean; json?: boolean }) => {
-      const domains = await listExpiring(parseInt(opts.days));
+    .action(async (opts: { days: string; limit?: string; all?: boolean; json?: boolean; forwardOnly?: boolean }) => {
+      const includeLapsed = !opts.forwardOnly;
+      const domains = await listExpiring(parseInt(opts.days), { includeLapsed });
       if (opts.json) { printLine(JSON.stringify(domains, null, 2)); return; }
+
       const page = pageItemsOrExit(domains, { limit: opts.limit, all: opts.all });
-      if (page.items.length === 0) { printLine(`No domains expiring within ${opts.days} days.`); return; }
-      printLine(`\nExpiring within ${opts.days} days:`);
-      for (const d of page.items) printLine(`  ${d.name.padEnd(40)} expires ${formatDate(d.expires_at)}`);
+      if (page.items.length === 0) {
+        printLine(
+          includeLapsed
+            ? `No domains past expiry, and none expiring within ${opts.days} days.`
+            : `No domains expiring within ${opts.days} days.`
+        );
+        return;
+      }
+
+      // Counts come from the FULL result, never from the page. The default page
+      // is 20 rows, so counting the page would print a bounded read as though it
+      // were a population — the same class of defect this command was fixed for.
+      // Display still comes from the page.
+      const split = lapsedSplit(domains, page.items);
+      const lapsedTotal = split.lapsedTotal;
+      const lapsed = page.items.filter((d) => isLapsedAt(d.expires_at));
+      const upcoming = page.items.filter((d) => !isLapsedAt(d.expires_at));
+
+      // Lapsed names lead. They were invisible to this command before, and they
+      // are the ones already costing something.
+      if (lapsed.length > 0) {
+        printLine(`\nALREADY PAST EXPIRY (${split.label}) — still recorded as active:`);
+        for (const d of lapsed) {
+          printLine(
+            `  ${d.name.padEnd(40)} expired ${formatDate(d.expires_at)} ${freshnessSuffix(d.expiry_synced_at)}`
+          );
+        }
+      }
+
+      if (upcoming.length > 0) {
+        printLine(`\nExpiring within ${opts.days} days:`);
+        for (const d of upcoming) {
+          printLine(
+            `  ${d.name.padEnd(40)} expires ${formatDate(d.expires_at)} ${freshnessSuffix(d.expiry_synced_at)}`
+          );
+        }
+      }
+
+      // Lapsed names sort first, so a default-limited page can push every
+      // upcoming name off the listing. Say so rather than letting the absence
+      // read as "nothing is due".
+      if (lapsedTotal > 0 && upcoming.length === 0 && page.hasMore) {
+        printLine(
+          `\n(${lapsedTotal} past-expiry names fill this page; upcoming expiries are not shown — use --all)`
+        );
+      }
+
       printLine(`\n${compactHint(page, "domain(s)", "Use --all to display every expiring domain.", { paging: "limit" })}`);
     });
 

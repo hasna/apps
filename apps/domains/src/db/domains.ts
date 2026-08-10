@@ -122,11 +122,17 @@ export function searchDomains(query: string): Promise<Domain[]> {
 export function getByRegistrar(registrar: string): Promise<Domain[]> {
   return getStore().getByRegistrar(registrar);
 }
-export function listExpiring(days: number): Promise<Domain[]> {
-  return getStore().listExpiring(days);
+export function listExpiring(days: number, options?: { includeLapsed?: boolean }): Promise<Domain[]> {
+  return getStore().listExpiring(days, options);
 }
-export function listSslExpiring(days: number): Promise<Domain[]> {
-  return getStore().listSslExpiring(days);
+export function listSslExpiring(days: number, options?: { includeLapsed?: boolean }): Promise<Domain[]> {
+  return getStore().listSslExpiring(days, options);
+}
+export function listPastExpiry(): Promise<Domain[]> {
+  return getStore().listPastExpiry();
+}
+export function listSslPastExpiry(): Promise<Domain[]> {
+  return getStore().listSslPastExpiry();
 }
 export function getDomainStats(): Promise<DomainStats> {
   return getStore().getDomainStats();

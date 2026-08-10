@@ -228,6 +228,9 @@ export async function syncToLocalDb(dbFns: {
     return result;
   }
 
+  // One instant for every row confirmed by this registrar inventory pass.
+  const syncedAt = new Date().toISOString();
+
   for (const gd of gdDomains) {
     try {
       let detail: GoDaddyDomainDetail;
@@ -247,6 +250,7 @@ export async function syncToLocalDb(dbFns: {
         auto_renew: gd.renewAuto,
         nameservers: gd.nameServers || [],
         registered_at: detail.createdAt ? new Date(detail.createdAt).toISOString() : undefined,
+        expiry_synced_at: syncedAt,
         metadata: {
           godaddy_domain_id: detail.domainId,
           provider: "godaddy",

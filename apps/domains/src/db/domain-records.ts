@@ -28,6 +28,12 @@ export interface Domain {
   metadata: Record<string, unknown>;
   created_at: string;
   updated_at: string;
+  /**
+   * When the registrar facts on this row (expiry, status, auto_renew) were last
+   * confirmed against the registrar. NOT `updated_at`, which moves on any edit
+   * and stays still when a sync re-confirms an unchanged value.
+   */
+  expiry_synced_at: string | null;
 }
 
 interface DomainRow {
@@ -51,6 +57,7 @@ interface DomainRow {
   metadata: string;
   created_at: string;
   updated_at: string;
+  expiry_synced_at: string | null;
 }
 
 export const DOMAIN_STATUSES = [
@@ -94,6 +101,10 @@ export function rowToDomain(row: DomainRow): Domain {
     nameservers: JSON.parse(row.nameservers || "[]"),
     whois: JSON.parse(row.whois || "{}"),
     metadata: JSON.parse(row.metadata || "{}"),
+    // Normalised so a row written before migration 6 reads as "never synced"
+    // rather than undefined; the freshness helper treats both pessimistically,
+    // but a caller reading the field directly should see an explicit null.
+    expiry_synced_at: row.expiry_synced_at ?? null,
   };
 }
 
@@ -119,6 +130,8 @@ export interface CreateDomainInput {
   ssl_issuer?: string;
   notes?: string;
   metadata?: Record<string, unknown>;
+  /** Set only by a path that actually read the registrar. */
+  expiry_synced_at?: string | null;
 }
 
 export function createDomain(input: CreateDomainInput): Domain {
@@ -132,9 +145,10 @@ export function createDomain(input: CreateDomainInput): Domain {
     `INSERT INTO domains (
       id, name, registrar, status, registered_at, expires_at, auto_renew,
       is_premium, premium_price, standard_price, purchase_price, purchase_date,
-      nameservers, whois, ssl_expires_at, ssl_issuer, notes, metadata
+      nameservers, whois, ssl_expires_at, ssl_issuer, notes, metadata,
+      expiry_synced_at
     )
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     id,
     input.name,
@@ -153,7 +167,8 @@ export function createDomain(input: CreateDomainInput): Domain {
     input.ssl_expires_at || null,
     input.ssl_issuer || null,
     input.notes || null,
-    metadata
+    metadata,
+    input.expiry_synced_at ?? null
   );
 
   return getDomain(id)!;
@@ -247,6 +262,8 @@ export interface UpdateDomainInput {
   ssl_issuer?: string;
   notes?: string;
   metadata?: Record<string, unknown>;
+  /** Set only by a path that actually read the registrar. */
+  expiry_synced_at?: string | null;
 }
 
 export function updateDomain(id: string, input: UpdateDomainInput): Domain | null {
@@ -321,6 +338,10 @@ export function updateDomain(id: string, input: UpdateDomainInput): Domain | nul
     sets.push("notes = ?");
     params.push(input.notes);
   }
+  if (input.expiry_synced_at !== undefined) {
+    sets.push("expiry_synced_at = ?");
+    params.push(input.expiry_synced_at);
+  }
   if (input.metadata !== undefined) {
     sets.push("metadata = ?");
     params.push(JSON.stringify(input.metadata));
@@ -358,7 +379,41 @@ export function getByRegistrar(registrar: string): Domain[] {
   return listDomains({ registrar });
 }
 
-export function listExpiring(days: number): Domain[] {
+/**
+ * Domains ALREADY PAST their recorded expiry while still claiming to be active.
+ *
+ * This is the set the forward-only window could never return: `expiring --days N`
+ * floored its comparison at `now`, so a name one day over the line was invisible
+ * to the exact command built to surface it. A countdown that stops at zero is not
+ * an early warning.
+ *
+ * The status filter mirrors `listExpiringWindow` exactly, so the two halves differ
+ * only in the direction of the date comparison. A row already labelled `expired`
+ * is a known state, not a surprise, and is deliberately not reported here.
+ */
+export function listPastExpiry(): Domain[] {
+  const db = getDatabase();
+  const rows = db
+    .prepare(
+      `SELECT * FROM domains
+       WHERE expires_at IS NOT NULL
+         AND expires_at < datetime('now')
+         AND status = 'active'
+       ORDER BY expires_at`
+    )
+    .all() as DomainRow[];
+  return rows.map(rowToDomain);
+}
+
+/**
+ * Domains expiring within the next `days`, EXCLUDING those already lapsed.
+ *
+ * This is the original forward-only behaviour, kept under an explicit name so
+ * the `expiring_30_days` statistic keeps meaning exactly what it always meant.
+ * Changing that number's meaning silently would trade one wrong reading for
+ * another.
+ */
+export function listExpiringWindow(days: number): Domain[] {
   const db = getDatabase();
   const rows = db
     .prepare(
@@ -373,7 +428,35 @@ export function listExpiring(days: number): Domain[] {
   return rows.map(rowToDomain);
 }
 
-export function listSslExpiring(days: number): Domain[] {
+/**
+ * Two-sided expiry: everything already lapsed, plus everything due within
+ * `days`. Lapsed names sort first because their dates are earliest.
+ *
+ * `includeLapsed: false` recovers the old forward-only set for a caller that
+ * genuinely wants a forward window.
+ */
+export function listExpiring(days: number, options: { includeLapsed?: boolean } = {}): Domain[] {
+  const includeLapsed = options.includeLapsed ?? true;
+  if (!includeLapsed) return listExpiringWindow(days);
+  return [...listPastExpiry(), ...listExpiringWindow(days)];
+}
+
+/** SSL certificates already past their recorded expiry. Mirror of `listPastExpiry`. */
+export function listSslPastExpiry(): Domain[] {
+  const db = getDatabase();
+  const rows = db
+    .prepare(
+      `SELECT * FROM domains
+       WHERE ssl_expires_at IS NOT NULL
+         AND ssl_expires_at < datetime('now')
+       ORDER BY ssl_expires_at`
+    )
+    .all() as DomainRow[];
+  return rows.map(rowToDomain);
+}
+
+/** SSL certificates expiring within `days`, excluding those already lapsed. */
+export function listSslExpiringWindow(days: number): Domain[] {
   const db = getDatabase();
   const rows = db
     .prepare(
@@ -387,6 +470,16 @@ export function listSslExpiring(days: number): Domain[] {
   return rows.map(rowToDomain);
 }
 
+/**
+ * Two-sided SSL expiry. The same blind spot existed here and would have been
+ * left behind by a fix that only touched the domain-expiry path.
+ */
+export function listSslExpiring(days: number, options: { includeLapsed?: boolean } = {}): Domain[] {
+  const includeLapsed = options.includeLapsed ?? true;
+  if (!includeLapsed) return listSslExpiringWindow(days);
+  return [...listSslPastExpiry(), ...listSslExpiringWindow(days)];
+}
+
 export interface DomainStats {
   total: number;
   active: number;
@@ -394,8 +487,15 @@ export interface DomainStats {
   transferring: number;
   redemption: number;
   auto_renew_enabled: number;
+  /** Forward window only, excluding lapsed names. Meaning unchanged. */
   expiring_30_days: number;
   ssl_expiring_30_days: number;
+  /** Past recorded expiry while still status=active — invisible before this fix. */
+  past_expiry: number;
+  /** Past recorded SSL expiry. */
+  ssl_past_expiry: number;
+  /** Rows whose registrar facts have never been confirmed against a registrar. */
+  never_synced: number;
 }
 
 export function getDomainStats(): DomainStats {
@@ -425,8 +525,20 @@ export function getDomainStats(): DomainStats {
     db.prepare("SELECT COUNT(*) as count FROM domains WHERE auto_renew = 1").get() as { count: number }
   ).count;
 
-  const expiring_30_days = listExpiring(30).length;
-  const ssl_expiring_30_days = listSslExpiring(30).length;
+  // Explicitly the forward-only window: this statistic has always meant
+  // "due in the next 30 days" and keeps meaning that. The lapsed set is
+  // reported separately rather than folded in, so no existing consumer's
+  // number changes meaning underneath it.
+  const expiring_30_days = listExpiringWindow(30).length;
+  const ssl_expiring_30_days = listSslExpiringWindow(30).length;
+  const past_expiry = listPastExpiry().length;
+  const ssl_past_expiry = listSslPastExpiry().length;
+
+  const never_synced = (
+    db
+      .prepare("SELECT COUNT(*) as count FROM domains WHERE expiry_synced_at IS NULL")
+      .get() as { count: number }
+  ).count;
 
   return {
     total,
@@ -437,6 +549,9 @@ export function getDomainStats(): DomainStats {
     auto_renew_enabled,
     expiring_30_days,
     ssl_expiring_30_days,
+    past_expiry,
+    ssl_past_expiry,
+    never_synced,
   };
 }
 

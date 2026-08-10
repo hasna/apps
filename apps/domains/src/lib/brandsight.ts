@@ -760,6 +760,13 @@ export async function syncToLocalDb(
   let synced = 0, created = 0, updated = 0;
   const errors: string[] = [];
 
+  // One timestamp for the whole sync: every row written by this pass carries the
+  // same instant, which is what makes "how fresh is this expiry date" answerable
+  // per row afterwards. Stamped ONLY here, on the path that actually read the
+  // registrar — a row this sync never saw keeps its old value and stays visibly
+  // stale, which is the correct reading.
+  const syncedAt = new Date().toISOString();
+
   for (const d of domains) {
     try {
       const existing = await dbFns.getDomainByName(d.domain);
@@ -770,6 +777,7 @@ export async function syncToLocalDb(
           auto_renew: d.auto_renew,
           status: "active",
           nameservers: d.nameservers,
+          expiry_synced_at: syncedAt,
         });
         updated++;
       } else {
@@ -780,6 +788,7 @@ export async function syncToLocalDb(
           auto_renew: d.auto_renew,
           status: "active",
           nameservers: d.nameservers,
+          expiry_synced_at: syncedAt,
         });
         created++;
       }
