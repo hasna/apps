@@ -37,7 +37,13 @@ const spec: OpenApiDocument = {
     "/tasks": {
       get: {
         operationId: "listTasks",
-        parameters: [{ name: "limit", in: "query", required: false, schema: { type: "integer" } }],
+        parameters: [
+          { name: "limit", in: "query", required: false, schema: { type: "integer" } },
+          { name: "tags", in: "query", required: false, schema: { type: "array", items: { type: "string" } } },
+          { name: "emptyTags", in: "query", required: false, schema: { type: "array", items: { type: "string" } } },
+          { name: "nullable", in: "query", required: false, schema: { type: "string", nullable: true } },
+          { name: "omitted", in: "query", required: false, schema: { type: "string" } },
+        ],
         responses: { "200": { content: { "application/json": { schema: { type: "array", items: { $ref: "#/components/schemas/Task" } } } } } },
       },
       post: {
@@ -94,7 +100,13 @@ describe("SDK from OpenAPI generator", () => {
     const task = await client.getTask("t 1");
     expect(task.id).toBe("t1");
 
-    await client.listTasks({ limit: 5 });
+    await client.listTasks({
+      limit: 5,
+      tags: ["red", "blue,green"],
+      emptyTags: [],
+      nullable: null,
+      omitted: undefined,
+    });
     await client.createTask({ id: "t2", title: "new" });
 
     // API key header sent on every call.
@@ -102,7 +114,12 @@ describe("SDK from OpenAPI generator", () => {
     // Path templating with encoding.
     expect(calls.find((c) => c.url.includes("/tasks/"))!.url).toContain("t%201");
     // Query serialization.
-    expect(calls.find((c) => c.url.includes("limit="))!.url).toContain("limit=5");
+    const listUrl = new URL(calls.find((c) => c.url.includes("limit="))!.url);
+    expect(listUrl.searchParams.getAll("limit")).toEqual(["5"]);
+    expect(listUrl.searchParams.getAll("tags")).toEqual(["red", "blue,green"]);
+    expect(listUrl.searchParams.has("emptyTags")).toBe(false);
+    expect(listUrl.searchParams.has("nullable")).toBe(false);
+    expect(listUrl.searchParams.has("omitted")).toBe(false);
     // POST body.
     const post = calls.find((c) => c.method === "POST")!;
     expect(post.body).toEqual({ id: "t2", title: "new" });
