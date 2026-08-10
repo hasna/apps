@@ -471,6 +471,69 @@ describe('knowledge cli', () => {
     expect(new TextDecoder().decode(typo.stderr)).toContain("Did you mean 'list'");
   }, budget(20000));
 
+  test('knowledge bin rejects unsupported show command with a knowledge item id', () => {
+    // Regression: the single-token guard above is bypassed as soon as an unknown
+    // command has an operand. `knowledge show <id> --json` was therefore treated as
+    // the free-form prompt "show <id>", returning an ask result at exit 0 instead of
+    // rejecting the unsupported command. Keep this local and non-generating: the
+    // assertion is about dispatch, not provider behavior or the contents of a live item.
+    const dir = mkdtempSync(join(tmpdir(), 'reject-unknown-show-'));
+    const home = mkdtempSync(join(tmpdir(), 'reject-unknown-show-home-'));
+    const syntheticItemId = 'k_dispatch_guard_control';
+    const result = runKnowledgeBin(
+      ['show', syntheticItemId, '--scope', 'project', '--json'],
+      dir,
+      isolatedHomeEnv(home),
+    );
+
+    expect(result.exitCode).toBe(1);
+    const stdout = new TextDecoder().decode(result.stdout).trim();
+    const stderr = new TextDecoder().decode(result.stderr);
+    const out = JSON.parse(stdout) as Record<string, unknown>;
+    expect(out.ok).toBe(false);
+    expect(out.error).toContain('Unknown command: show');
+    expect(out).not.toHaveProperty('answer');
+    expect(out).not.toHaveProperty('citations');
+    expect(out).not.toHaveProperty('model');
+    expect(out).not.toHaveProperty('usage');
+    expect(stderr).toContain('Unknown command: show');
+
+    // The same text is still valid when the caller selects the ask path
+    // explicitly, and ordinary free-form shorthand still routes to ask.
+    const explicitAsk = runKnowledgeBin(
+      ['ask', 'show', syntheticItemId, '--scope', 'project', '--json'],
+      dir,
+      isolatedHomeEnv(home),
+    );
+    expect(explicitAsk.exitCode).toBe(0);
+    expect(JSON.parse(new TextDecoder().decode(explicitAsk.stdout)).prompt).toBe(`show ${syntheticItemId}`);
+
+    const extraOperand = runKnowledgeBin(
+      ['show', syntheticItemId, 'unexpected', '--scope', 'project', '--json'],
+      dir,
+      isolatedHomeEnv(home),
+    );
+    expect(extraOperand.exitCode).toBe(1);
+    expect(JSON.parse(new TextDecoder().decode(extraOperand.stdout)).error).toContain('Unknown command: show');
+
+    const freeForm = runKnowledgeBin(
+      ['show', 'me', 'the', 'handbook', '--scope', 'project', '--json'],
+      dir,
+      isolatedHomeEnv(home),
+    );
+    expect(freeForm.exitCode).toBe(0);
+    expect(JSON.parse(new TextDecoder().decode(freeForm.stdout)).prompt).toBe('show me the handbook');
+
+    // Supported item lookup remains the explicit `get --id` command.
+    const store = join(dir, 'items.json');
+    const added = runKnowledgeBin(['add', 'Control item', 'Control body', '--store', store, '--json'], dir, isolatedHomeEnv(home));
+    expect(added.exitCode).toBe(0);
+    const itemId = JSON.parse(new TextDecoder().decode(added.stdout)).item.id as string;
+    const get = runKnowledgeBin(['get', '--id', itemId, '--store', store, '--json'], dir, isolatedHomeEnv(home));
+    expect(get.exitCode).toBe(0);
+    expect(JSON.parse(new TextDecoder().decode(get.stdout)).item.id).toBe(itemId);
+  }, budget(20000));
+
   test('knowledge bin keeps multi-word natural-language ask shorthand', () => {
     // The documented `knowledge <prompt>` shorthand for multi-word prompts must still
     // route to ask/build so genuine natural-language queries keep working. Use an

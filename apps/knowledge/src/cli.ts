@@ -147,6 +147,25 @@ const COMMAND_ALIASES: Record<string, string> = {
   edit: 'update',
   unarchive: 'restore',
 };
+const KNOWLEDGE_ITEM_ID_PATTERN = /^k_[A-Za-z0-9][A-Za-z0-9_-]*$/;
+
+/**
+ * Decide whether an unknown top-level token is the documented free-form prompt
+ * shorthand or a command-shaped invocation that must fail closed.
+ *
+ * Quoted prompts are one positional containing whitespace, while ordinary
+ * free-form prompts contain multiple word-like positionals. An unknown token
+ * followed by a full knowledge item id as its first operand is materially
+ * different: it has the shape of a CLI command plus operand (`show k_...`).
+ * Treating that as prose can run the ask path and spend model tokens. Callers
+ * that intentionally want to ask about an id can use the unambiguous
+ * `knowledge ask ...` command or quote the whole prompt.
+ */
+function looksLikeNaturalLanguagePrompt(positional: string[], rawCommand: string): boolean {
+  if (/\s/.test(rawCommand)) return true;
+  if (positional.length <= 1) return false;
+  return !KNOWLEDGE_ITEM_ID_PATTERN.test(positional[1] ?? '');
+}
 
 /** Case-insensitive dedupe that preserves first-seen casing and order. */
 function dedupeTags(tags: string[]): string[] {
@@ -889,15 +908,10 @@ async function run(argv: string[]): Promise<void> {
 
   let command = resolveCommand(positional[0]);
   let commandArgOffset = 1;
-  // Natural-language shorthand: when invoked as the `knowledge` bin, a multi-word prompt
-  // is treated as `knowledge ask <prompt>` — whether passed as separate words
-  // (`knowledge how do I cite the handbook`, multiple positionals) or as a single quoted
-  // string (`knowledge "How do we cite the handbook?"`, one positional containing spaces;
-  // the canonical documented form). A single bare token with no whitespace is almost always
-  // a mistyped command (`knowledge lst`, `knowledge boguscmd`), so it is NOT remapped — it
-  // falls through to the unknown-command handler below and exits non-zero, instead of
-  // silently running an ask/build search and returning false success to scripts.
-  const looksLikeNaturalLanguage = positional.length > 1 || /\s/.test(command);
+  // Natural-language shorthand: when invoked as the `knowledge` bin, a prompt is
+  // treated as `knowledge ask <prompt>`. Command-shaped unknown input remains on
+  // the unknown-command path so it cannot silently trigger AI-backed behavior.
+  const looksLikeNaturalLanguage = looksLikeNaturalLanguagePrompt(positional, command);
   if (invokedAsKnowledge() && command && !COMMANDS.includes(command) && looksLikeNaturalLanguage) {
     command = 'ask';
     commandArgOffset = 0;
