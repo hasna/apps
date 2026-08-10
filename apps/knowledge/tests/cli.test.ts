@@ -471,67 +471,112 @@ describe('knowledge cli', () => {
     expect(new TextDecoder().decode(typo.stderr)).toContain("Did you mean 'list'");
   }, budget(20000));
 
-  test('knowledge bin rejects unsupported show command with a knowledge item id', () => {
-    // Regression: the single-token guard above is bypassed as soon as an unknown
-    // command has an operand. `knowledge show <id> --json` was therefore treated as
-    // the free-form prompt "show <id>", returning an ask result at exit 0 instead of
-    // rejecting the unsupported command. Keep this local and non-generating: the
-    // assertion is about dispatch, not provider behavior or the contents of a live item.
+  test('knowledge bin rejects unsupported show command for every supported item identifier', () => {
+    // Regression: the dispatcher originally recognized only generated `k_...` ids.
+    // ItemStore.get accepts an item's full `id` or its `short_id`, and upsert permits
+    // caller-supplied ids, so dispatch must use that same identity contract. Otherwise
+    // a valid short/custom identifier is silently treated as prompt text and
+    // `--fake --generate` proves the generation path is reachable at exit 0.
     const dir = mkdtempSync(join(tmpdir(), 'reject-unknown-show-'));
     const home = mkdtempSync(join(tmpdir(), 'reject-unknown-show-home-'));
-    const syntheticItemId = 'k_dispatch_guard_control';
-    const result = runKnowledgeBin(
-      ['show', syntheticItemId, '--scope', 'project', '--json'],
-      dir,
-      isolatedHomeEnv(home),
-    );
+    const env = isolatedHomeEnv(home);
+    const store = join(dir, 'items.json');
+    const generatedId = 'k_review_get_control';
+    const customId = 'review-custom-id';
 
-    expect(result.exitCode).toBe(1);
-    const stdout = new TextDecoder().decode(result.stdout).trim();
-    const stderr = new TextDecoder().decode(result.stderr);
-    const out = JSON.parse(stdout) as Record<string, unknown>;
-    expect(out.ok).toBe(false);
-    expect(out.error).toContain('Unknown command: show');
-    expect(out).not.toHaveProperty('answer');
-    expect(out).not.toHaveProperty('citations');
-    expect(out).not.toHaveProperty('model');
-    expect(out).not.toHaveProperty('usage');
-    expect(stderr).toContain('Unknown command: show');
+    const generated = runKnowledgeBin(
+      ['upsert', 'Generated id item', 'Generated id body', '--id', generatedId, '--store', store, '--json'],
+      dir,
+      env,
+    );
+    expect(generated.exitCode).toBe(0);
+    const generatedItem = JSON.parse(new TextDecoder().decode(generated.stdout)).item as {
+      id: string;
+      short_id: string;
+    };
+    expect(generatedItem).toMatchObject({ id: generatedId, short_id: 'review_get_c' });
+
+    const custom = runKnowledgeBin(
+      ['upsert', 'Custom id item', 'Custom id body', '--id', customId, '--store', store, '--json'],
+      dir,
+      env,
+    );
+    expect(custom.exitCode).toBe(0);
+    const customItem = JSON.parse(new TextDecoder().decode(custom.stdout)).item as {
+      id: string;
+      short_id: string;
+    };
+    expect(customItem.id).toBe(customId);
+
+    const references = [generatedItem.id, generatedItem.short_id, customItem.id];
+    for (const reference of references) {
+      for (const generationFlags of [[], ['--fake', '--generate']]) {
+        const result = runKnowledgeBin(
+          ['show', reference, ...generationFlags, '--store', store, '--json'],
+          dir,
+          env,
+        );
+
+        expect(result.exitCode).toBe(1);
+        const stdout = new TextDecoder().decode(result.stdout).trim();
+        const stderr = new TextDecoder().decode(result.stderr);
+        const out = JSON.parse(stdout) as Record<string, unknown>;
+        expect(out.ok).toBe(false);
+        expect(out.error).toContain('Unknown command: show');
+        for (const promptField of ['prompt', 'generated', 'answer', 'citations', 'provider', 'model', 'usage']) {
+          expect(out).not.toHaveProperty(promptField);
+        }
+        expect(stderr).toContain('Unknown command: show');
+      }
+
+      // The supported lookup command must keep accepting every identity form
+      // that the fail-closed dispatcher recognizes.
+      const get = runKnowledgeBin(['get', '--id', reference, '--store', store, '--json'], dir, env);
+      expect(get.exitCode).toBe(0);
+      expect(JSON.parse(new TextDecoder().decode(get.stdout)).item.id).toBe(
+        reference === customItem.id ? customItem.id : generatedItem.id,
+      );
+    }
 
     // The same text is still valid when the caller selects the ask path
-    // explicitly, and ordinary free-form shorthand still routes to ask.
+    // explicitly, and both documented free-form shorthand forms still route to ask.
     const explicitAsk = runKnowledgeBin(
-      ['ask', 'show', syntheticItemId, '--scope', 'project', '--json'],
+      ['ask', 'show', generatedItem.short_id, '--store', store, '--json'],
       dir,
-      isolatedHomeEnv(home),
+      env,
     );
     expect(explicitAsk.exitCode).toBe(0);
-    expect(JSON.parse(new TextDecoder().decode(explicitAsk.stdout)).prompt).toBe(`show ${syntheticItemId}`);
+    expect(JSON.parse(new TextDecoder().decode(explicitAsk.stdout)).prompt).toBe(`show ${generatedItem.short_id}`);
 
-    const extraOperand = runKnowledgeBin(
-      ['show', syntheticItemId, 'unexpected', '--scope', 'project', '--json'],
+    const explicitFakeGeneration = runKnowledgeBin(
+      ['ask', 'show', customItem.id, '--fake', '--generate', '--store', store, '--json'],
       dir,
-      isolatedHomeEnv(home),
+      env,
     );
-    expect(extraOperand.exitCode).toBe(1);
-    expect(JSON.parse(new TextDecoder().decode(extraOperand.stdout)).error).toContain('Unknown command: show');
+    expect(explicitFakeGeneration.exitCode).toBe(0);
+    const explicitFakeOut = JSON.parse(new TextDecoder().decode(explicitFakeGeneration.stdout));
+    expect(explicitFakeOut).toMatchObject({
+      prompt: `show ${customItem.id}`,
+      generated: true,
+      usage: { cost_usd: 0 },
+    });
+    expect(explicitFakeOut.answer).toContain('Fake generated answer');
 
     const freeForm = runKnowledgeBin(
-      ['show', 'me', 'the', 'handbook', '--scope', 'project', '--json'],
+      ['show', 'me', 'the', 'handbook', '--store', store, '--json'],
       dir,
-      isolatedHomeEnv(home),
+      env,
     );
     expect(freeForm.exitCode).toBe(0);
     expect(JSON.parse(new TextDecoder().decode(freeForm.stdout)).prompt).toBe('show me the handbook');
 
-    // Supported item lookup remains the explicit `get --id` command.
-    const store = join(dir, 'items.json');
-    const added = runKnowledgeBin(['add', 'Control item', 'Control body', '--store', store, '--json'], dir, isolatedHomeEnv(home));
-    expect(added.exitCode).toBe(0);
-    const itemId = JSON.parse(new TextDecoder().decode(added.stdout)).item.id as string;
-    const get = runKnowledgeBin(['get', '--id', itemId, '--store', store, '--json'], dir, isolatedHomeEnv(home));
-    expect(get.exitCode).toBe(0);
-    expect(JSON.parse(new TextDecoder().decode(get.stdout)).item.id).toBe(itemId);
+    const quotedFreeForm = runKnowledgeBin(
+      ['show me the handbook', '--store', store, '--json'],
+      dir,
+      env,
+    );
+    expect(quotedFreeForm.exitCode).toBe(0);
+    expect(JSON.parse(new TextDecoder().decode(quotedFreeForm.stdout)).prompt).toBe('show me the handbook');
   }, budget(20000));
 
   test('knowledge bin keeps multi-word natural-language ask shorthand', () => {

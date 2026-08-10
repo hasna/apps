@@ -155,16 +155,24 @@ const KNOWLEDGE_ITEM_ID_PATTERN = /^k_[A-Za-z0-9][A-Za-z0-9_-]*$/;
  *
  * Quoted prompts are one positional containing whitespace, while ordinary
  * free-form prompts contain multiple word-like positionals. An unknown token
- * followed by a full knowledge item id as its first operand is materially
- * different: it has the shape of a CLI command plus operand (`show k_...`).
- * Treating that as prose can run the ask path and spend model tokens. Callers
- * that intentionally want to ask about an id can use the unambiguous
+ * followed by any stored item reference as its first operand is materially
+ * different: it has the shape of a CLI command plus operand (`show <id>`).
+ * ItemStore — not an id regex — owns that identity contract because callers
+ * can read by a generated full id, a short id, or a caller-supplied custom id.
+ * Treating any of those as prose can run the ask path and spend model tokens.
+ * Callers that intentionally want to ask about an id can use the unambiguous
  * `knowledge ask ...` command or quote the whole prompt.
  */
-function looksLikeNaturalLanguagePrompt(positional: string[], rawCommand: string): boolean {
+async function looksLikeNaturalLanguagePrompt(
+  positional: string[],
+  rawCommand: string,
+  itemStore: ItemStore,
+): Promise<boolean> {
   if (/\s/.test(rawCommand)) return true;
   if (positional.length <= 1) return false;
-  return !KNOWLEDGE_ITEM_ID_PATTERN.test(positional[1] ?? '');
+  const firstOperand = positional[1] ?? '';
+  if (KNOWLEDGE_ITEM_ID_PATTERN.test(firstOperand)) return false;
+  return (await itemStore.get(firstOperand)) === null;
 }
 
 /** Case-insensitive dedupe that preserves first-seen casing and order. */
@@ -908,14 +916,9 @@ async function run(argv: string[]): Promise<void> {
 
   let command = resolveCommand(positional[0]);
   let commandArgOffset = 1;
-  // Natural-language shorthand: when invoked as the `knowledge` bin, a prompt is
-  // treated as `knowledge ask <prompt>`. Command-shaped unknown input remains on
-  // the unknown-command path so it cannot silently trigger AI-backed behavior.
-  const looksLikeNaturalLanguage = looksLikeNaturalLanguagePrompt(positional, command);
-  if (invokedAsKnowledge() && command && !COMMANDS.includes(command) && looksLikeNaturalLanguage) {
-    command = 'ask';
-    commandArgOffset = 0;
-  }
+  // Defer the shorthand decision until the unified item Store is available.
+  // Regex-only dispatch cannot recognize short ids or caller-supplied ids.
+  const promptShorthandCandidate = invokedAsKnowledge() && command && !COMMANDS.includes(command);
 
   if (!command || flags.help || command === 'help') {
     // `help <sub>` names its target as positional[1]; `<sub> --help` / `<sub> -h`
@@ -1007,13 +1010,6 @@ async function run(argv: string[]): Promise<void> {
       storePath = defaultStorePath();
     }
   }
-  // ask/build seed a local JSON store only in local mode. In cloud/api mode the
-  // prompt flow runs over the shared cloud item corpus, so touching a local file
-  // here would be an unnecessary local-side write while the flip is active.
-  if (!storePathOverridden && (command === 'ask' || command === 'build') && !isKnowledgeApiMode()) {
-    ensureStore(storePath);
-  }
-
   // Single knowledge-item Store abstraction. When the mode is EXPLICITLY cloud
   // (HASNA_KNOWLEDGE_STORAGE_MODE and its aliases — the API URL and key are
   // pointers and never a selection, see knowledge-mode.ts) ALL item reads/writes
@@ -1023,6 +1019,24 @@ async function run(argv: string[]): Promise<void> {
   // command below routes through `itemStore` — never the JSON file or HTTP
   // client directly.
   const itemStore: ItemStore = resolveItemStore({ storePath, storePathOverridden });
+
+  // Natural-language shorthand: when invoked as the `knowledge` bin, a prompt is
+  // treated as `knowledge ask <prompt>`. A first operand that resolves through the
+  // same Store contract as `get --id` keeps the unknown command on its fail-closed
+  // path, including short ids and custom ids that no syntax-only regex can identify.
+  if (promptShorthandCandidate && await looksLikeNaturalLanguagePrompt(positional, command, itemStore)) {
+    command = 'ask';
+    commandArgOffset = 0;
+  }
+
+  // ask/build seed a local JSON store only in local mode. In cloud/api mode the
+  // prompt flow runs over the shared cloud item corpus, so touching a local file
+  // here would be an unnecessary local-side write while the flip is active. This
+  // follows shorthand resolution so the read-only item identity check itself never
+  // creates a store while deciding whether an unknown command should fail.
+  if (!storePathOverridden && (command === 'ask' || command === 'build') && !isKnowledgeApiMode()) {
+    ensureStore(storePath);
+  }
 
   if (command === 'inventory') {
     // Single dispatch shared with the MCP + SDK: the shared cloud item corpus in
