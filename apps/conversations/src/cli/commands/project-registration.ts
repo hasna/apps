@@ -104,8 +104,23 @@ export function registerProjectRegistrationCommands(program: Command): void {
 
   registration
     .command("create")
-    .description("Conditionally register a project channel from one contract request JSON file")
+    .description("Conditionally create an absent project channel from one contract request JSON file")
     .requiredOption("--request <path>", "Contract request JSON file")
+    .option("-j, --json", "Output as JSON")
+    .action(async (opts) => {
+      try {
+        printJson(await getStore().registerProjectChannel(
+          registrationRequest(opts.request, opts),
+        ));
+      } finally {
+        closeDb();
+      }
+    });
+
+  registration
+    .command("bind-existing")
+    .description("Conditionally bind one existing channel to a Projects workspace without recreating it")
+    .requiredOption("--request <path>", "Bind-existing contract request JSON file")
     .option("-j, --json", "Output as JSON")
     .action(async (opts) => {
       try {
@@ -149,7 +164,7 @@ export function registerProjectRegistrationCommands(program: Command): void {
 
   registration
     .command("verify-inverse")
-    .description("Verify accepted inverse receipt and target absence")
+    .description("Verify accepted inverse receipt and target absence or restored ownership")
     .requiredOption("--request <path>", "Inverse contract request JSON file")
     .option("-j, --json", "Output as JSON")
     .action(async (opts) => {

@@ -141,4 +141,9 @@ describe("PG_MIGRATIONS", () => {
     expect(sql).toContain("idx_message_attachments_message");
     expect(sql).toContain("insert into _migrations (id) values (6)");
   });
+
+  test("project channel bind receipts retain prior ownership state", () => {
+    const sql = PG_MIGRATIONS.join("\n").toLowerCase();
+    expect(sql).toContain("add column if not exists prior_state jsonb");
+  });
 });

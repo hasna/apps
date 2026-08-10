@@ -797,9 +797,16 @@ export function getDb(): Database {
       duplicate_of_receipt_id TEXT,
       accepted_receipt_id TEXT,
       created_by_operation INTEGER NOT NULL CHECK (created_by_operation IN (0, 1)),
+      prior_state TEXT,
       created_at TEXT NOT NULL
     )
   `);
+  const projectChannelReceiptColumns = db.prepare(
+    "PRAGMA table_info(project_channel_registration_receipts)",
+  ).all() as Array<{ name: string }>;
+  if (!projectChannelReceiptColumns.some((column) => column.name === "prior_state")) {
+    db.exec("ALTER TABLE project_channel_registration_receipts ADD COLUMN prior_state TEXT");
+  }
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_project_channel_registration_receipt_lookup
     ON project_channel_registration_receipts (

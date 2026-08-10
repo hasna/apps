@@ -5,9 +5,11 @@ import { tmpdir } from "os";
 import { createChannel } from "./channels.js";
 import { closeDb, getDb } from "./db.js";
 import {
+  compensateProjectChannelRegistration,
   createProjectChannelRegistrationAuthority,
   listProjectChannelMessagePage,
   listProjectChannelRegistrationPage,
+  projectChannelRegistrationChannelRecord,
   projectChannelRegistrationDigest,
   registerProjectChannel,
   type ProjectChannelRegistrationRequest,
@@ -18,6 +20,7 @@ import { pinStoreToDb, restoreStoreEnv } from "./store/isolated-test-env.js";
 
 const TEST_DB = join(tmpdir(), `conversations-project-channel-registration-${Date.now()}.db`);
 const PROJECT_ID = "wks_ys8tzpsZJMNtx0ORZtLsA";
+const LEGACY_PROJECT_ID = "1217f372-08e4-4217-aaf0-1ace5232982f";
 
 beforeEach(() => {
   pinStoreToDb(TEST_DB);
@@ -370,6 +373,7 @@ describe("project channel registration authority", () => {
       tenant_id: "default",
       supported_resources: ["channel"],
       conditional_create: true,
+      conditional_bind_existing: true,
       immutable_receipts: true,
       exact_terminal_lookup: true,
       exact_readback: true,
@@ -654,6 +658,246 @@ describe("project channel registration authority", () => {
     }
   }, 15_000);
 
+  test("conditionally binds an existing rich channel and inverses only its project ownership", async () => {
+    createLocalProject(LEGACY_PROJECT_ID);
+    const channel = createChannel("dubai-fraud", "human", {
+      project_id: LEGACY_PROJECT_ID,
+      description: "Existing description",
+      topic: "Existing topic",
+      metadata: { source: "legacy", retained: true },
+      tags: ["fraud", "dubai"],
+    });
+    getDb().prepare(
+      "INSERT INTO channel_members (channel, agent) VALUES (?, ?)",
+    ).run(channel.name, "second-member");
+    sendMessage({
+      from: "human",
+      to: channel.name,
+      channel: channel.name,
+      project_id: LEGACY_PROJECT_ID,
+      content: "existing history",
+    });
+
+    const beforeChannel = getDb().prepare(
+      "SELECT * FROM channels WHERE id = ?",
+    ).get(channel.id) as Record<string, unknown>;
+    const beforeMembers = getDb().prepare(
+      "SELECT agent, joined_at FROM channel_members WHERE channel = ? ORDER BY agent",
+    ).all(channel.name);
+    const beforeMessages = getDb().prepare(
+      "SELECT * FROM messages WHERE channel = ? ORDER BY id",
+    ).all(channel.name);
+    const beforeRecord = projectChannelRegistrationChannelRecord(beforeChannel as never);
+    const desired = {
+      channel: channel.name,
+      project_id: PROJECT_ID,
+      project_slug: channel.name,
+      project_kind: "work",
+      registration_mode: "bind_existing",
+      target_id: channel.id,
+      expected_project_id: LEGACY_PROJECT_ID,
+    };
+    const request = await forwardRequest({
+      operation_id: "operation-bind-existing",
+      idempotency_key: "operation-bind-existing:conversations-channel:forward",
+      project_slug: channel.name,
+      target_selector: channel.name,
+      desired,
+      request_digest: projectChannelRegistrationDigest(desired),
+      precondition_digest: projectChannelRegistrationDigest({
+        target_id: channel.id,
+        target_selector: channel.name,
+        expected_project_id: LEGACY_PROJECT_ID,
+        expected_revision: beforeRecord.revision,
+        expected_digest: beforeRecord.digest,
+        desired_project_id: PROJECT_ID,
+      }),
+      bind_existing: {
+        target_id: channel.id,
+        expected_project_id: LEGACY_PROJECT_ID,
+        expected_revision: beforeRecord.revision,
+        expected_digest: beforeRecord.digest,
+      },
+    } as Partial<ProjectChannelRegistrationRequest>);
+
+    expect(() => registerProjectChannel({
+      ...request,
+      bind_existing: undefined,
+      precondition_digest: projectChannelRegistrationDigest({
+        target_selector: channel.name,
+        expected: "absent",
+      }),
+    })).toThrow("requires bind_existing preconditions");
+
+    expect(() => registerProjectChannel(request, {
+      faultInjector(point) {
+        if (point === "after_channel_bind") throw new Error("injected bind failure");
+      },
+    })).toThrow("injected bind failure");
+    expect(getDb().prepare(
+      "SELECT * FROM channels WHERE id = ?",
+    ).get(channel.id)).toEqual(beforeChannel);
+    expect(getDb().prepare(
+      "SELECT count(*) AS n FROM project_channel_registration_receipts",
+    ).get()).toEqual({ n: 0 });
+
+    const accepted = await registerProjectChannel(request);
+    expect(accepted).toMatchObject({
+      outcome: "accepted",
+      reason: null,
+      target_id: channel.id,
+      created_by_operation: false,
+      prior_state: {
+        target_id: channel.id,
+        project_id: LEGACY_PROJECT_ID,
+        revision: beforeRecord.revision,
+        digest: beforeRecord.digest,
+      },
+    });
+    expect(await createProjectChannelRegistrationAuthority().readExact({
+      resource_kind: "channel",
+      target_id: channel.id,
+      target_selector: channel.name,
+      target: targetHandle,
+      response_byte_limit: 32_768,
+      time_budget_ms: 5_000,
+      call_limit: 1,
+    })).toEqual({
+      target_id: accepted.target_id!,
+      revision: accepted.result_revision!,
+      digest: accepted.result_digest!,
+    });
+    const lookupRequest = {
+      operation_id: request.operation_id,
+      step_id: request.step_id,
+      resource_kind: "channel" as const,
+      direction: "forward" as const,
+      authority: "conversations" as const,
+      authority_route: request.authority_route,
+      package_version: request.package_version,
+      authority_id: request.authority_id,
+      tenant_id: request.tenant_id,
+      corpus_id: request.corpus_id,
+      target_selector: request.target_selector,
+      idempotency_key: request.idempotency_key,
+      request_digest: request.request_digest,
+      precondition_digest: request.precondition_digest,
+      precondition_kind: "bind_existing" as const,
+      target_id: channel.id,
+      max_items: 1 as const,
+      response_byte_limit: 32_768,
+      time_budget_ms: 5_000,
+      call_limit: 1 as const,
+    };
+    expect((await createProjectChannelRegistrationAuthority().lookupReceipt(
+      lookupRequest,
+    )).receipt.receipt_id).toBe(accepted.receipt_id);
+
+    const afterChannel = getDb().prepare(
+      "SELECT * FROM channels WHERE id = ?",
+    ).get(channel.id) as Record<string, unknown>;
+    expect(afterChannel).toEqual({
+      ...beforeChannel,
+      project_id: PROJECT_ID,
+    });
+    expect(getDb().prepare(
+      "SELECT agent, joined_at FROM channel_members WHERE channel = ? ORDER BY agent",
+    ).all(channel.name)).toEqual(beforeMembers);
+    expect(getDb().prepare(
+      "SELECT * FROM messages WHERE channel = ? ORDER BY id",
+    ).all(channel.name)).toEqual(beforeMessages);
+
+    const page = listProjectChannelRegistrationPage({
+      project_id: PROJECT_ID,
+      max_items: 1,
+      response_byte_limit: 32_768,
+      time_budget_ms: 5_000,
+      call_limit: 1,
+    });
+    expect(page).toMatchObject({
+      item_count: 1,
+      has_more: false,
+      complete: true,
+      truncated: false,
+      items: [expect.objectContaining({
+        target_id: channel.id,
+        channel: channel.name,
+        project_id: PROJECT_ID,
+      })],
+    });
+
+    const duplicate = await registerProjectChannel(request);
+    expect(duplicate).toMatchObject({
+      outcome: "duplicate_of_accepted",
+      duplicate_of_receipt_id: accepted.receipt_id,
+      target_id: channel.id,
+      prior_state: accepted.prior_state,
+    });
+    expect((await createProjectChannelRegistrationAuthority().lookupReceipt(
+      lookupRequest,
+    )).receipt.receipt_id).toBe(duplicate.receipt_id);
+
+    const conflicting = await registerProjectChannel(await forwardRequest({
+      ...request,
+      operation_id: "operation-bind-existing-conflict",
+      step_id: "conversations-channel-conflict",
+      idempotency_key: "operation-bind-existing-conflict:forward",
+    }));
+    expect(conflicting).toMatchObject({
+      outcome: "terminal_nonacceptance",
+      reason: "bind_precondition_conflict",
+      target_id: channel.id,
+    });
+
+    const inverse = inverseRequest(accepted, {
+      operation_id: "operation-bind-existing",
+      project_slug: channel.name,
+      project_name: "Dubai Fraud",
+      idempotency_key: "operation-bind-existing:conversations-channel:inverse",
+    });
+    expect(() => compensateProjectChannelRegistration(inverse, {
+      faultInjector(point) {
+        if (point === "after_channel_restore") throw new Error("injected restore failure");
+      },
+    })).toThrow("injected restore failure");
+    expect(getDb().prepare(
+      "SELECT project_id FROM channels WHERE id = ?",
+    ).get(channel.id)).toEqual({ project_id: PROJECT_ID });
+    expect(getDb().prepare(
+      "SELECT count(*) AS n FROM project_channel_registration_receipts",
+    ).get()).toEqual({ n: 3 });
+
+    const restored = await createProjectChannelRegistrationAuthority().compensate(inverse);
+    expect(restored).toMatchObject({
+      outcome: "accepted",
+      direction: "inverse",
+      target_id: channel.id,
+      accepted_receipt_id: accepted.receipt_id,
+      created_by_operation: false,
+      result_revision: beforeRecord.revision,
+      result_digest: beforeRecord.digest,
+      prior_state: accepted.prior_state,
+    });
+    expect(getDb().prepare(
+      "SELECT * FROM channels WHERE id = ?",
+    ).get(channel.id)).toEqual(beforeChannel);
+    expect(getDb().prepare(
+      "SELECT agent, joined_at FROM channel_members WHERE channel = ? ORDER BY agent",
+    ).all(channel.name)).toEqual(beforeMembers);
+    expect(getDb().prepare(
+      "SELECT * FROM messages WHERE channel = ? ORDER BY id",
+    ).all(channel.name)).toEqual(beforeMessages);
+    expect(await createProjectChannelRegistrationAuthority().verifyInverse(inverse)).toEqual({
+      target_id: channel.id,
+      accepted_receipt_id: accepted.receipt_id,
+      absent: false,
+      restored: true,
+      project_id: LEGACY_PROJECT_ID,
+      revision: beforeRecord.revision,
+      digest: beforeRecord.digest,
+    });
+  });
+
   test("rolls back an injected failure without leaving a channel or receipt", async () => {
     const request = await forwardRequest();
     expect(() => registerProjectChannel(request, {
@@ -669,7 +913,12 @@ describe("project channel registration authority", () => {
   test("conditionally inverses only the accepted attempt-created channel", async () => {
     const authority = createProjectChannelRegistrationAuthority();
     const accepted = await authority.create(await forwardRequest());
-    const inverse = inverseRequest(accepted);
+    const legacyAccepted = { ...accepted } as Partial<typeof accepted>;
+    delete legacyAccepted.prior_state;
+    const inverse = {
+      ...inverseRequest(accepted),
+      accepted_receipt: legacyAccepted as typeof accepted,
+    };
     const removed = await authority.compensate(inverse);
 
     expect(removed).toMatchObject({

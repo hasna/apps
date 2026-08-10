@@ -519,7 +519,7 @@ export const openapiSpec = {
       },
       post: {
         operationId: "registerProjectChannel",
-        summary: "Conditionally register one absent canonical project channel",
+        summary: "Conditionally create one absent canonical project channel",
         requestBody: {
           required: true,
           content: { "application/json": { schema: okObject } },
@@ -531,6 +531,29 @@ export const openapiSpec = {
           },
           "201": {
             description: "immutable accepted receipt",
+            content: { "application/json": { schema: okObject } },
+          },
+        },
+      },
+    },
+    "/v1/project-registration/channels/bind-existing": {
+      post: {
+        operationId: "bindExistingProjectChannel",
+        summary: "Conditionally bind one exact existing channel to a Projects workspace",
+        description:
+          "Requires the stable channel id, exact prior project ownership, and exact prior revision/digest. " +
+          "The accepted immutable receipt retains the prior ownership state for a conditional inverse.",
+        requestBody: {
+          required: true,
+          content: { "application/json": { schema: okObject } },
+        },
+        responses: {
+          "200": {
+            description: "deterministic duplicate or terminal nonacceptance receipt",
+            content: { "application/json": { schema: okObject } },
+          },
+          "201": {
+            description: "immutable accepted bind-existing receipt",
             content: { "application/json": { schema: okObject } },
           },
         },
@@ -555,6 +578,7 @@ export const openapiSpec = {
           { name: "idempotency_key", in: "query", required: true, schema: { type: "string" } },
           { name: "request_digest", in: "query", required: true, schema: { type: "string" } },
           { name: "precondition_digest", in: "query", required: true, schema: { type: "string" } },
+          { name: "precondition_kind", in: "query", schema: { type: "string", enum: ["absent", "bind_existing"] } },
           { name: "target_id", in: "query", schema: { type: "string" } },
           { name: "max_items", in: "query", required: true, schema: { type: "integer", const: 1 } },
           { name: "response_byte_limit", in: "query", required: true, schema: { type: "integer", minimum: 1 } },
@@ -623,7 +647,7 @@ export const openapiSpec = {
     "/v1/project-registration/channels/inverse": {
       post: {
         operationId: "compensateProjectChannelRegistration",
-        summary: "Conditionally remove only the channel created by one accepted receipt",
+        summary: "Conditionally remove an operation-created channel or restore prior ownership",
         requestBody: {
           required: true,
           content: { "application/json": { schema: okObject } },
@@ -643,14 +667,14 @@ export const openapiSpec = {
     "/v1/project-registration/channels/inverse/verify": {
       post: {
         operationId: "verifyProjectChannelRegistrationInverse",
-        summary: "Verify exact target absence against the accepted forward receipt",
+        summary: "Verify exact target absence or restored ownership against the accepted receipt",
         requestBody: {
           required: true,
           content: { "application/json": { schema: okObject } },
         },
         responses: {
           "200": {
-            description: "receipt-bound exact absence verification",
+            description: "receipt-bound exact absence or ownership restoration verification",
             content: { "application/json": { schema: okObject } },
           },
         },

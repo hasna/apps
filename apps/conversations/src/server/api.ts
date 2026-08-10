@@ -858,6 +858,14 @@ async function handleV1(
     return json(receipt, receipt.outcome === "accepted" ? 201 : 200);
   }
 
+  if (sub === "project-registration/channels/bind-existing" && method === "POST") {
+    const receipt = await registerProjectChannelPg(
+      client,
+      projectChannelRegistrationRequest(await readJson(req)),
+    );
+    return json(receipt, receipt.outcome === "accepted" ? 201 : 200);
+  }
+
   if (sub === "project-registration/channels/receipts/terminal" && method === "GET") {
     const maxItems = positiveInteger(url.searchParams.get("max_items"));
     const responseByteLimit = positiveInteger(url.searchParams.get("response_byte_limit"));
@@ -878,6 +886,7 @@ async function handleV1(
       idempotency_key: str(url.searchParams.get("idempotency_key")),
       request_digest: str(url.searchParams.get("request_digest")),
       precondition_digest: str(url.searchParams.get("precondition_digest")),
+      precondition_kind: str(url.searchParams.get("precondition_kind")),
       target_id: str(url.searchParams.get("target_id")),
       max_items: maxItems,
       response_byte_limit: responseByteLimit,
