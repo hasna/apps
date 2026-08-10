@@ -636,10 +636,16 @@ function defaultSourceRun(command: string, env: NodeJS.ProcessEnv): TargetSource
   return { status: result.status, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
 }
 
-function runQuiet(command: string, args: string[], env: NodeJS.ProcessEnv = process.env): TargetSourceRunResult {
+function runQuiet(
+  command: string,
+  args: string[],
+  env: NodeJS.ProcessEnv = process.env,
+  cwd?: string,
+): TargetSourceRunResult {
   const result = spawnSync(command, args, {
     encoding: "utf8",
     env,
+    cwd,
     timeout: 30_000,
     maxBuffer: 65_536,
   });
@@ -687,7 +693,7 @@ function statusProbeForStep(payload: ExactBunTargetTransactionPayload, step: Exa
     ? runQuiet(payload.bunPath, ["-e", `import(${JSON.stringify(step.probe.sdkImport)})`], {
         ...process.env,
         BUN_INSTALL_GLOBAL_DIR: globalRoot,
-      })
+      }, globalRoot)
     : { status: 1, stdout: "", stderr: "" };
   const sdkOk = sdk.status === 0;
   const cliPath = join(bunRoot, "bin", step.package.bin);

@@ -48,12 +48,6 @@ import { addDomainMapping, listDomainMappings, renderDomainMapping } from "../co
 import { applyFleetHosts, planFleetHosts } from "../commands/hosts.js";
 import { diffMachines } from "../commands/diff.js";
 import { buildAppsPlan, diffApps, getAppsStatus, listApps, runAppsPlan, validateAppsCandidate } from "../commands/apps.js";
-import {
-  decodeExactBunTargetPayload,
-  executeExactBunTargetStatus,
-  executeExactBunTargetTransaction,
-  readBoundedExactBunSource,
-} from "../commands/bun-registry-installer.js";
 import { readManifest } from "../manifests.js";
 import { runMachineCommand } from "../remote.js";
 import {
@@ -1730,25 +1724,6 @@ appsCommand
       installedState,
     });
     console.log(JSON.stringify(result, null, 2));
-  });
-
-appsCommand
-  .command("exact-bun-transaction")
-  .requiredOption("--payload <base64url>")
-  .action((options: { payload: string }) => {
-    const payload = decodeExactBunTargetPayload(options.payload);
-    const expectedBytes = payload.steps[0]?.source.sizeBytes ?? 0;
-    const source = readBoundedExactBunSource(expectedBytes);
-    const result = executeExactBunTargetTransaction(payload, source);
-    console.log(JSON.stringify(result));
-  });
-
-appsCommand
-  .command("exact-bun-status")
-  .requiredOption("--payload <base64url>")
-  .action((options: { payload: string }) => {
-    const payload = decodeExactBunTargetPayload(options.payload);
-    console.log(JSON.stringify(executeExactBunTargetStatus(payload)));
   });
 
 program

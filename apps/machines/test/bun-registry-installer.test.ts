@@ -1,11 +1,13 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   buildExactBunAppsPlan,
   exactBunTargetPayload,
+  executeExactBunTargetStatus,
   executeExactBunTargetTransaction,
   parseExactBunPackageProbe,
   resolveExactSourceOnce,
@@ -302,6 +304,27 @@ describe("exact Bun registry plan", () => {
 });
 
 describe("exact Bun target transaction", () => {
+  test("runs SDK probes from the global install root", () => {
+    const machine = machineFixture();
+    const plan = buildExactBunAppsPlan(machine);
+    const root = globalRoot(machine);
+    for (const step of plan.steps) {
+      writePackage(root, step.package.name, step.package.version);
+      writeFileSync(join(dirname(machine.bunPath!), step.package.bin), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    }
+    writeRegistryLock(root, plan.steps);
+    writeFileSync(machine.bunPath!, `#!/bin/sh\n[ "$PWD" = ${JSON.stringify(root)} ] || exit 88\nexit 0\n`, { mode: 0o755 });
+
+    const wrongCwd = spawnSync(machine.bunPath!, ["-e", "import('@hasnaxyz/infinity')"], {
+      cwd: dirname(root),
+    });
+    expect(wrongCwd.status).toBe(88);
+
+    const result = executeExactBunTargetStatus(exactBunTargetPayload(machine, plan));
+    expect(result.probes).toHaveLength(2);
+    expect(result.probes.every((entry) => entry.status === "pass")).toBe(true);
+  });
+
   test("runs one selector per ordered step through nested Secrets references", () => {
     const machine = machineFixture();
     const plan = buildExactBunAppsPlan(machine);

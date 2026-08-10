@@ -537,7 +537,7 @@ describe("apps", () => {
     expect(JSON.stringify(applied)).not.toContain("/private/home");
   });
 
-  test("applies a proven installed-state replan as a zero-step no-op", () => {
+  test("live-revalidates installed state before a zero-step no-op", () => {
     const dir = mkdtempSync(join(tmpdir(), "machines-apps-exact-installed-state-"));
     const manifestPath = join(dir, "candidate.json");
     process.env["HASNA_MACHINES_MANIFEST_PATH"] = manifestPath;
@@ -583,14 +583,64 @@ describe("apps", () => {
       installedState,
       expectedPlanDigest: noOp.planDigest,
       sourceLoader: () => { sourceLoads += 1; return exactBunFixtureSource; },
+      bootstrapSourceLoader: () => Buffer.from("// reviewed bootstrap fixture\n"),
     }, (machineId) => {
       targetCalls += 1;
-      return { machineId, source: "ssh", stdout: "", stderr: "", exitCode: 0 };
+      return {
+        machineId,
+        source: "ssh",
+        stdout: JSON.stringify({
+          schema: "machines.exact_bun_transaction_result.v1",
+          machineId,
+          platform: initial.platform,
+          state: "COMMITTED",
+          executed: 2,
+          probes: installedState.packages,
+          reasonCodes: [],
+        }),
+        stderr: "",
+        exitCode: 0,
+      };
     });
     expect("state" in applied && applied.state).toBe("COMMITTED");
     expect(applied.executed).toBe(0);
     expect(sourceLoads).toBe(0);
-    expect(targetCalls).toBe(0);
+    expect(targetCalls).toBe(1);
+
+    const staleProbes = structuredClone(installedState.packages);
+    staleProbes[1]!.observedVersion = "0.6.8";
+    staleProbes[1]!.checks.packageJson = { ok: false, version: "0.6.8" };
+    staleProbes[1]!.status = "fail";
+    staleProbes[1]!.reasonCodes = ["installed_version_mismatch"];
+    let staleTargetCalls = 0;
+    expect(() => runAppsPlan(noOp, {
+      apply: true,
+      yes: true,
+      manifestPath,
+      installedState,
+      expectedPlanDigest: noOp.planDigest,
+      sourceLoader: () => { sourceLoads += 1; return exactBunFixtureSource; },
+      bootstrapSourceLoader: () => Buffer.from("// reviewed bootstrap fixture\n"),
+    }, (machineId) => {
+      staleTargetCalls += 1;
+      return {
+        machineId,
+        source: "ssh",
+        stdout: JSON.stringify({
+          schema: "machines.exact_bun_transaction_result.v1",
+          machineId,
+          platform: initial.platform,
+          state: "COMMITTED",
+          executed: 2,
+          probes: staleProbes,
+          reasonCodes: [],
+        }),
+        stderr: "",
+        exitCode: 0,
+      };
+    })).toThrow("installed_state_stale");
+    expect(staleTargetCalls).toBe(1);
+    expect(sourceLoads).toBe(0);
   });
 
   test("derives and applies one exact Factory step on Linux 0.2.18 and macOS 0.2.17 fixtures", () => {
@@ -699,6 +749,7 @@ describe("apps", () => {
       expect(oneStep.steps).toEqual([initial.steps[1]]);
 
       let sourceLoads = 0;
+      let applyStatusCalls = 0;
       let transactionCalls = 0;
       const applied = runAppsPlan(oneStep, {
         apply: true,
@@ -709,8 +760,26 @@ describe("apps", () => {
         sourceLoader: () => { sourceLoads += 1; return exactBunFixtureSource; },
         bootstrapSourceLoader: () => Buffer.from("// reviewed bootstrap fixture\n"),
       }, (machineId, command) => {
-        transactionCalls += 1;
         expect(command).not.toContain("apps exact-bun-");
+        if (applyStatusCalls === 0) {
+          applyStatusCalls += 1;
+          return {
+            machineId,
+            source: "ssh",
+            stdout: JSON.stringify({
+              schema: "machines.exact_bun_transaction_result.v1",
+              machineId,
+              platform: fixture.platform,
+              state: "COMMITTED",
+              executed: 2,
+              probes,
+              reasonCodes: [],
+            }),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+        transactionCalls += 1;
         const step = oneStep.steps[0]!;
         return {
           machineId,
@@ -744,6 +813,7 @@ describe("apps", () => {
       });
       expect(applied.executed).toBe(1);
       expect(sourceLoads).toBe(1);
+      expect(applyStatusCalls).toBe(1);
       expect(transactionCalls).toBe(1);
 
       const satisfiedState = structuredClone(installedState);

@@ -1034,6 +1034,11 @@ describe("cli command handling", () => {
         "must-not-escape",
       ]) expect(planned.stdout).not.toContain(privateValue);
 
+      const appsHelp = runCli(["apps", "--help"], env);
+      expect(appsHelp.status).toBe(0);
+      expect(appsHelp.stdout).not.toContain("exact-bun-transaction");
+      expect(appsHelp.stdout).not.toContain("exact-bun-status");
+
       const installedStatePath = join(dir, "installed-state.json");
       writeFileSync(installedStatePath, `${JSON.stringify({
         schema: "machines.apps.status.v2",

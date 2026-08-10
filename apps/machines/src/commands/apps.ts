@@ -36,6 +36,24 @@ function isExactAppsPlan(plan: AppsPlanResult): plan is ExactBunAppsPlan {
   return "schema" in plan && plan.schema === "machines.apps.plan.v2";
 }
 
+function readExactBunAppsStatus(
+  machine: MachineManifest,
+  runner: MachineCommandRunner,
+  bootstrapSourceLoader?: ExactBunBootstrapSourceLoader,
+): ExactBunAppsStatusResult {
+  const desiredPlan = buildExactBunAppsPlan(machine);
+  const status = runExactBunControllerStatus(machine, desiredPlan, runner, bootstrapSourceLoader);
+  return {
+    schema: "machines.apps.status.v2",
+    machineId: machine.id,
+    platform: desiredPlan.platform,
+    source: status.source,
+    packages: status.result.probes,
+    status: status.result.probes.every((probe) => probe.status === "pass") ? "pass" : "unmanaged",
+    reasonCodes: [],
+  };
+}
+
 function getPackageName(app: ManifestAppSpec): string {
   return app.packageName || app.name;
 }
@@ -254,17 +272,7 @@ export function getAppsStatus(
 ): AppsStatusResult | ExactBunAppsStatusResult {
   const machine = resolveMachine(machineId, options, options.manifestPath !== undefined);
   if (exactBunPackages(machine).length > 0) {
-    const plan = buildExactBunAppsPlan(machine);
-    const status = runExactBunControllerStatus(machine, plan, runner, options.bootstrapSourceLoader);
-    return {
-      schema: "machines.apps.status.v2",
-      machineId: machine.id,
-      platform: plan.platform,
-      source: status.source,
-      packages: status.result.probes,
-      status: status.result.probes.every((probe) => probe.status === "pass") ? "pass" : "unmanaged",
-      reasonCodes: [],
-    };
+    return readExactBunAppsStatus(machine, runner, options.bootstrapSourceLoader);
   }
   const readiness = requireMachineCommandSuccess("Apps status readiness check", runner(machine.id, "true"));
   const apps = (machine.apps || []).map((app) => {
@@ -313,6 +321,11 @@ export function runAppsPlan(
     const machine = resolveMachine(plan.machineId, options, true);
     const currentPlan = buildExactBunAppsPlan(machine, options.installedState);
     assertMutationPlanDigest(currentPlan, options.expectedPlanDigest);
+    if (options.installedState) {
+      const liveStatus = readExactBunAppsStatus(machine, runner, options.bootstrapSourceLoader);
+      const livePlan = buildExactBunAppsPlan(machine, liveStatus);
+      if (livePlan.planDigest !== currentPlan.planDigest) throw new Error("installed_state_stale");
+    }
     if (currentPlan.steps.length === 0) {
       return {
         ...currentPlan,
