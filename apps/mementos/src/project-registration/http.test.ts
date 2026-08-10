@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import { getDatabase, resetDatabase } from "../db/database.js";
 import { getProject, registerProject } from "../db/projects.js";
 import { createSessionJob, getSessionJob } from "../db/session-jobs.js";
+import { configureProjectAuthorityTestIdentity } from "../test-support/project-authority-identity.js";
 import {
   MEMENTOS_PROJECT_GUARDED_UPDATE_ROUTE,
   createLocalMementosProjectRegistrationAuthority,
@@ -16,6 +17,8 @@ import {
   type MementosProjectRegistrationPathHandle,
   type MementosProjectRegistrationRequest,
 } from "./index.js";
+
+configureProjectAuthorityTestIdentity();
 
 const PROJECT_ID = "wks_httpregistrationv1";
 const PROJECT_PATH = "/tmp/http-registration";

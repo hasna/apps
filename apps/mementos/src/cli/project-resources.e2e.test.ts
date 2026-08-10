@@ -6,6 +6,7 @@ import { getDatabase, resetDatabase } from "../db/database.js";
 import { createMemory } from "../db/memories.js";
 import { registerProject } from "../db/projects.js";
 import { createSessionJob } from "../db/session-jobs.js";
+import { projectAuthorityTestEnv } from "../test-support/project-authority-identity.js";
 import {
   assertLocalStoreBackend,
   blankLlmProviderEnv,
@@ -14,7 +15,9 @@ import {
 
 const DB_PATH = join(tmpdir(), `mementos-project-resources-${Date.now()}.db`);
 const CLI_PATH = new URL("./index.tsx", import.meta.url).pathname;
-const CLI_ENV = isolatedStoreEnv(DB_PATH, { extra: blankLlmProviderEnv() });
+const CLI_ENV = isolatedStoreEnv(DB_PATH, {
+  extra: { ...blankLlmProviderEnv(), ...projectAuthorityTestEnv() },
+});
 const TEST_TIMEOUT_MS = 60_000;
 
 async function runCli(

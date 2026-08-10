@@ -6,6 +6,7 @@ import type { DbAdapter } from "../storage.js";
 import { getDatabase, resetDatabase } from "../db/database.js";
 import { getProject, registerProject } from "../db/projects.js";
 import { createSessionJob, getSessionJob } from "../db/session-jobs.js";
+import { configureProjectAuthorityTestIdentity } from "../test-support/project-authority-identity.js";
 import {
   MEMENTOS_PROJECT_GUARDED_UPDATE_ROUTE,
   MementosProjectRegistrationError,
@@ -18,6 +19,8 @@ import {
   type MementosProjectRegistrationReceipt,
   type MementosProjectRegistrationRequest,
 } from "./index.js";
+
+configureProjectAuthorityTestIdentity();
 
 const PROJECT_ID = "wks_fleetresourcesv1";
 const PROJECT_SLUG = "fleet-resources";

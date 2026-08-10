@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { projectAuthorityTestEnv } from "../test-support/project-authority-identity.js";
 import {
   assertLocalStoreBackend,
   blankLlmProviderEnv,
@@ -13,7 +14,9 @@ const CLI_PATH = new URL("./index.tsx", import.meta.url).pathname;
 const TEST_TIMEOUT_MS = 60_000;
 
 function testEnv(): Record<string, string> {
-  return isolatedStoreEnv(DB_PATH, { extra: blankLlmProviderEnv() });
+  return isolatedStoreEnv(DB_PATH, {
+    extra: { ...blankLlmProviderEnv(), ...projectAuthorityTestEnv() },
+  });
 }
 
 async function runCli(

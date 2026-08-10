@@ -18,7 +18,10 @@ import { getDatabase, now } from "./database.js";
 import { parseMemoryRow } from "./memories.js";
 import { getMementosPackageVersion } from "../lib/package-version.js";
 import { MEMENTOS_MEMORY_PROJECT_LINK_ROUTE } from "../memory-project-link/schema.js";
-import { resolveMementosProjectAuthorityIdentity } from "../project-registration/identity.js";
+import {
+  MementosProjectAuthorityIdentityError,
+  resolveMementosProjectAuthorityIdentity,
+} from "../project-registration/identity.js";
 
 export type MemoryProjectLinkErrorCode =
   | "MEMORY_PROJECT_LINK_INVALID_INPUT"
@@ -44,9 +47,22 @@ export class MemoryProjectLinkError extends Error {
   }
 }
 
-const LINK_AUTHORITY: ProjectAuthorityIdentity =
-  resolveMementosProjectAuthorityIdentity();
 const BOUNDED_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/;
+
+function linkAuthority(): ProjectAuthorityIdentity {
+  try {
+    return resolveMementosProjectAuthorityIdentity();
+  } catch (error) {
+    if (error instanceof MementosProjectAuthorityIdentityError) {
+      throw new MemoryProjectLinkError(
+        "MEMORY_PROJECT_LINK_AUTHORITY_MISMATCH",
+        error.message,
+        { authority_code: error.code, missing_env: error.missing_env },
+      );
+    }
+    throw error;
+  }
+}
 
 function canonicalize(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonicalize);
@@ -176,10 +192,11 @@ function receiptFromRow(row: Record<string, unknown>): MemoryProjectLinkReceipt 
 }
 
 function assertIdentity(identity: ProjectAuthorityIdentity): void {
+  const expectedIdentity = linkAuthority();
   if (
-    identity.authority_id !== LINK_AUTHORITY.authority_id
-    || identity.tenant_id !== LINK_AUTHORITY.tenant_id
-    || identity.corpus_id !== LINK_AUTHORITY.corpus_id
+    identity.authority_id !== expectedIdentity.authority_id
+    || identity.tenant_id !== expectedIdentity.tenant_id
+    || identity.corpus_id !== expectedIdentity.corpus_id
   ) {
     throw new MemoryProjectLinkError(
       "MEMORY_PROJECT_LINK_AUTHORITY_MISMATCH",
@@ -894,7 +911,7 @@ export function rollbackMemoryProjectLink(
 export function getMemoryProjectLinkReceipt(
   memoryId: string,
   receiptId: string,
-  identity: ProjectAuthorityIdentity = LINK_AUTHORITY,
+  identity: ProjectAuthorityIdentity = linkAuthority(),
   db?: Database,
 ): MemoryProjectLinkReceipt {
   assertIdentity(identity);

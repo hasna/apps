@@ -4,9 +4,12 @@ import { beforeEach, describe, expect, test } from "bun:test";
 import { resetDatabase } from "../db/database.js";
 import { createMemory } from "../db/memories.js";
 import { registerProject } from "../db/projects.js";
+import { configureProjectAuthorityTestIdentity } from "../test-support/project-authority-identity.js";
 import { matchRoute } from "./router.js";
 import { buildOpenApiDocument } from "./openapi.js";
 import "./routes/projects.js";
+
+configureProjectAuthorityTestIdentity();
 
 beforeEach(() => {
   resetDatabase();

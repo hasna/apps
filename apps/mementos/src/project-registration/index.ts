@@ -24,6 +24,7 @@ export {
 } from "./project-references.js";
 export {
   buildMementosProjectRegistrationCapability,
+  MementosProjectAuthorityIdentityError,
   MEMENTOS_PROJECT_AUTHORITY_ENV,
   resolveMementosProjectAuthorityIdentity,
 } from "./identity.js";

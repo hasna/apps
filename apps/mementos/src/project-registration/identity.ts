@@ -17,11 +17,22 @@ export const MEMENTOS_PROJECT_AUTHORITY_ENV = {
 function configuredValue(
   override: string | undefined,
   envKey: string,
-  packageOwnedFallback: string,
-): string {
+): string | null {
   return override?.trim()
     || process.env[envKey]?.trim()
-    || packageOwnedFallback;
+    || null;
+}
+
+export class MementosProjectAuthorityIdentityError extends Error {
+  readonly code = "MEMENTOS_PROJECT_AUTHORITY_UNCONFIGURED" as const;
+
+  constructor(public readonly missing_env: string[]) {
+    super(
+      "Mementos project authority identity is not configured; set " +
+      missing_env.join(", "),
+    );
+    this.name = "MementosProjectAuthorityIdentityError";
+  }
 }
 
 /**
@@ -35,22 +46,29 @@ export function resolveMementosProjectAuthorityIdentity(
     "authorityId" | "tenantId" | "corpusId"
   > = {},
 ): ProjectAuthorityIdentity {
+  const authorityId = configuredValue(
+    options.authorityId,
+    MEMENTOS_PROJECT_AUTHORITY_ENV.authorityId,
+  );
+  const tenantId = configuredValue(
+    options.tenantId,
+    MEMENTOS_PROJECT_AUTHORITY_ENV.tenantId,
+  );
+  const corpusId = configuredValue(
+    options.corpusId,
+    MEMENTOS_PROJECT_AUTHORITY_ENV.corpusId,
+  );
+  if (!authorityId || !tenantId || !corpusId) {
+    const missingEnv: string[] = [];
+    if (!authorityId) missingEnv.push(MEMENTOS_PROJECT_AUTHORITY_ENV.authorityId);
+    if (!tenantId) missingEnv.push(MEMENTOS_PROJECT_AUTHORITY_ENV.tenantId);
+    if (!corpusId) missingEnv.push(MEMENTOS_PROJECT_AUTHORITY_ENV.corpusId);
+    throw new MementosProjectAuthorityIdentityError(missingEnv);
+  }
   return {
-    authority_id: configuredValue(
-      options.authorityId,
-      MEMENTOS_PROJECT_AUTHORITY_ENV.authorityId,
-      "mementos",
-    ),
-    tenant_id: configuredValue(
-      options.tenantId,
-      MEMENTOS_PROJECT_AUTHORITY_ENV.tenantId,
-      "default",
-    ),
-    corpus_id: configuredValue(
-      options.corpusId,
-      MEMENTOS_PROJECT_AUTHORITY_ENV.corpusId,
-      "default",
-    ),
+    authority_id: authorityId,
+    tenant_id: tenantId,
+    corpus_id: corpusId,
   };
 }
 

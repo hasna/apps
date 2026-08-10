@@ -13,7 +13,10 @@ import { getDatabase, now, uuid } from "./database.js";
 import { isApiMode, apiJson } from "./api-mode.js";
 import { getMementosPackageVersion } from "../lib/package-version.js";
 import { MEMENTOS_PROJECT_GUARDED_UPDATE_ROUTE } from "../project-registration/types.js";
-import { resolveMementosProjectAuthorityIdentity } from "../project-registration/identity.js";
+import {
+  MementosProjectAuthorityIdentityError,
+  resolveMementosProjectAuthorityIdentity,
+} from "../project-registration/identity.js";
 
 function parseProjectRow(row: Record<string, unknown>): Project {
   return {
@@ -58,9 +61,22 @@ export class ProjectGuardedUpdateError extends Error {
   }
 }
 
-const PROJECT_UPDATE_AUTHORITY: ProjectAuthorityIdentity =
-  resolveMementosProjectAuthorityIdentity();
 const BOUNDED_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/;
+
+function projectUpdateAuthority(): ProjectAuthorityIdentity {
+  try {
+    return resolveMementosProjectAuthorityIdentity();
+  } catch (error) {
+    if (error instanceof MementosProjectAuthorityIdentityError) {
+      throw new ProjectGuardedUpdateError(
+        "PROJECT_UPDATE_AUTHORITY_MISMATCH",
+        error.message,
+        { authority_code: error.code, missing_env: error.missing_env },
+      );
+    }
+    throw error;
+  }
+}
 
 function canonicalizeProjectUpdateValue(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonicalizeProjectUpdateValue);
@@ -147,7 +163,7 @@ function normalizeProjectUpdateInput(input: UpdateProjectInput): UpdateProjectIn
 
 function assertProjectUpdateIdentity(
   identity: ProjectAuthorityIdentity,
-  expectedIdentity: ProjectAuthorityIdentity = PROJECT_UPDATE_AUTHORITY,
+  expectedIdentity: ProjectAuthorityIdentity = projectUpdateAuthority(),
 ): void {
   if (
     identity.authority_id !== expectedIdentity.authority_id
@@ -172,7 +188,7 @@ function assertBoundedIdentifier(value: string, field: string): void {
 
 function assertProjectUpdateRequest(
   request: ProjectGuardedUpdateRequest | ProjectGuardedRollbackRequest,
-  expectedIdentity: ProjectAuthorityIdentity = PROJECT_UPDATE_AUTHORITY,
+  expectedIdentity: ProjectAuthorityIdentity = projectUpdateAuthority(),
 ): void {
   assertProjectUpdateIdentity(request, expectedIdentity);
   assertBoundedIdentifier(request.operation_id, "operation_id");
@@ -449,7 +465,7 @@ export function previewProjectUpdate(
   id: string,
   request: ProjectGuardedUpdateRequest,
   db?: Database,
-  expectedIdentity: ProjectAuthorityIdentity = PROJECT_UPDATE_AUTHORITY,
+  expectedIdentity: ProjectAuthorityIdentity = projectUpdateAuthority(),
 ): ProjectGuardedUpdateResult {
   assertProjectUpdateRequest(request, expectedIdentity);
   const normalized = normalizeProjectUpdateInput(request.updates);
@@ -489,7 +505,7 @@ export function applyProjectUpdate(
   id: string,
   request: ProjectGuardedUpdateRequest,
   db?: Database,
-  expectedIdentity: ProjectAuthorityIdentity = PROJECT_UPDATE_AUTHORITY,
+  expectedIdentity: ProjectAuthorityIdentity = projectUpdateAuthority(),
   resultDigestForProject?: (project: Project) => string,
 ): ProjectGuardedUpdateResult {
   assertProjectUpdateRequest(request, expectedIdentity);
@@ -589,7 +605,7 @@ export function rollbackProjectUpdate(
   id: string,
   request: ProjectGuardedRollbackRequest,
   db?: Database,
-  expectedIdentity: ProjectAuthorityIdentity = PROJECT_UPDATE_AUTHORITY,
+  expectedIdentity: ProjectAuthorityIdentity = projectUpdateAuthority(),
   resultDigestForProject?: (project: Project) => string,
 ): ProjectGuardedUpdateResult {
   assertProjectUpdateRequest(request, expectedIdentity);
@@ -699,9 +715,9 @@ export function rollbackProjectUpdate(
 export function getProjectUpdateReceipt(
   id: string,
   receiptId: string,
-  identity: ProjectAuthorityIdentity = PROJECT_UPDATE_AUTHORITY,
+  identity: ProjectAuthorityIdentity = projectUpdateAuthority(),
   db?: Database,
-  expectedIdentity: ProjectAuthorityIdentity = PROJECT_UPDATE_AUTHORITY,
+  expectedIdentity: ProjectAuthorityIdentity = projectUpdateAuthority(),
 ): ProjectUpdateReceipt {
   assertProjectUpdateIdentity(identity, expectedIdentity);
   if (!db && isApiMode()) {

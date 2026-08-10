@@ -2,6 +2,7 @@
 process.env["MEMENTOS_DB_PATH"] = ":memory:";
 
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
+import { projectAuthorityTestEnv } from "../test-support/project-authority-identity.js";
 import { isolatedStoreEnv } from "../test-support/store-isolation.js";
 
 const PORT = 19400 + Math.floor(Math.random() * 100);
@@ -13,7 +14,7 @@ beforeAll(async () => {
   serverProc = Bun.spawn(
     ["bun", "run", "src/server/index.ts", "--port", String(PORT)],
     {
-      env: isolatedStoreEnv(":memory:"),
+      env: isolatedStoreEnv(":memory:", { extra: projectAuthorityTestEnv() }),
       stdout: "pipe",
       stderr: "pipe",
       cwd: new URL("../../", import.meta.url).pathname.replace(/\/$/, ""),

@@ -1,6 +1,7 @@
 process.env["MEMENTOS_DB_PATH"] = ":memory:";
 
 import { beforeEach, describe, expect, test } from "bun:test";
+import { configureProjectAuthorityTestIdentity } from "../test-support/project-authority-identity.js";
 import { resetDatabase } from "./database.js";
 import {
   createMemory,
@@ -16,6 +17,8 @@ import {
   previewMemoryProjectLink,
   rollbackMemoryProjectLink,
 } from "./memory-project-link.js";
+
+configureProjectAuthorityTestIdentity();
 
 const IDENTITY = {
   authority_id: "mementos",
