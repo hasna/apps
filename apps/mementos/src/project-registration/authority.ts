@@ -1,8 +1,18 @@
 import { createHash } from "node:crypto";
 import { resolve } from "node:path";
-import type { DbAdapter } from "../storage.js";
+import type { DbAdapter, SqliteAdapter } from "../storage.js";
 import { getMementosPackageVersion } from "../lib/package-version.js";
-import type { Project } from "../types/index.js";
+import type {
+  Project,
+  ProjectAuthorityIdentity,
+  ProjectUpdateReceipt,
+} from "../types/index.js";
+import {
+  applyProjectUpdate,
+  getProjectUpdateReceipt,
+  ProjectGuardedUpdateError,
+  rollbackProjectUpdate,
+} from "../db/projects.js";
 import {
   deleteMementosProjectIfUnreferenced,
   hasMementosProjectReferences,
@@ -12,7 +22,14 @@ import {
 import {
   MEMENTOS_PROJECT_REGISTRATION_CALLER_ROUTE,
   MEMENTOS_PROJECT_REGISTRATION_ROUTE,
+  MEMENTOS_PROJECT_GUARDED_UPDATE_ROUTE,
   MementosProjectRegistrationError,
+  type MementosProjectGuardedRollbackRequest,
+  type MementosProjectGuardedUpdateReceipt,
+  type MementosProjectGuardedUpdateReceiptLookupRequest,
+  type MementosProjectGuardedUpdateReceiptLookupResult,
+  type MementosProjectGuardedUpdateRequest,
+  type MementosProjectGuardedUpdateResult,
   type MementosProjectRegistrationAuthority,
   type MementosProjectRegistrationAuthorityOptions,
   type MementosProjectRegistrationBounds,
@@ -159,13 +176,13 @@ function assertWithinBounds(
   return { response_bytes: bytes, elapsed_ms: elapsed };
 }
 
-function withResponseControl(
-  receipt: MementosProjectRegistrationReceipt,
+function withBoundedResponseControl<T extends Record<string, unknown>>(
+  payload: T,
   bounds: MementosProjectRegistrationBounds,
   startedAt: number,
-): MementosProjectRegistrationLookupResult {
-  const result: MementosProjectRegistrationLookupResult = {
-    receipt,
+): T & { response_control: MementosProjectRegistrationLookupResult["response_control"] } {
+  const result = {
+    ...payload,
     response_control: {
       response_byte_limit: bounds.response_byte_limit,
       time_budget_ms: bounds.time_budget_ms,
@@ -174,7 +191,7 @@ function withResponseControl(
       complete: true,
       truncated: false,
     },
-  };
+  } as T & { response_control: MementosProjectRegistrationLookupResult["response_control"] };
   for (let attempt = 0; attempt < 8; attempt += 1) {
     const measured = assertWithinBounds(result, bounds, startedAt);
     const stable = result.response_control.response_bytes === measured.response_bytes
@@ -187,6 +204,14 @@ function withResponseControl(
   result.response_control.response_bytes = measured.response_bytes;
   result.response_control.elapsed_ms = measured.elapsed_ms;
   return result;
+}
+
+function withResponseControl(
+  receipt: MementosProjectRegistrationReceipt,
+  bounds: MementosProjectRegistrationBounds,
+  startedAt: number,
+): MementosProjectRegistrationLookupResult {
+  return withBoundedResponseControl({ receipt }, bounds, startedAt);
 }
 
 function requireString(
@@ -242,6 +267,131 @@ function ownedPath(target: MementosProjectRegistrationPathHandle): string {
     );
   }
   return path;
+}
+
+function guardedAuthorityIdentity(
+  capability: MementosProjectRegistrationCapability,
+): ProjectAuthorityIdentity {
+  return {
+    authority_id: capability.authority_id,
+    tenant_id: capability.tenant_id,
+    corpus_id: capability.corpus_id,
+  };
+}
+
+function assertGuardedAuthorityRequest(
+  targetId: string,
+  request: MementosProjectGuardedUpdateReceiptLookupRequest,
+  capability: MementosProjectRegistrationCapability,
+): ProjectAuthorityIdentity {
+  assertBounds(request);
+  requireString(targetId, "target_id", { min: 8, max: 128, pattern: OPERATION_PATTERN });
+  if (
+    request.authority !== "mementos"
+    || request.authority_route !== MEMENTOS_PROJECT_GUARDED_UPDATE_ROUTE
+    || request.package_version !== capability.package_version
+    || request.authority_id !== capability.authority_id
+    || request.tenant_id !== capability.tenant_id
+    || request.corpus_id !== capability.corpus_id
+  ) {
+    throw new MementosProjectRegistrationError(
+      "MEMENTOS_PROJECT_REGISTRATION_CAPABILITY_MISMATCH",
+      "guarded project request does not match this authority capability identity",
+    );
+  }
+  return guardedAuthorityIdentity(capability);
+}
+
+function assertGuardedOperationFields(request: {
+  operation_id: string;
+  step_id: string;
+  idempotency_key: string;
+  expected_revision: string;
+}): void {
+  requireString(request.operation_id, "operation_id", {
+    min: 8,
+    max: 128,
+    pattern: OPERATION_PATTERN,
+  });
+  requireString(request.step_id, "step_id", {
+    min: 8,
+    max: 128,
+    pattern: OPERATION_PATTERN,
+  });
+  requireString(request.idempotency_key, "idempotency_key", {
+    min: 8,
+    max: 128,
+    pattern: OPERATION_PATTERN,
+  });
+  requireString(request.expected_revision, "expected_revision", { max: 128 });
+}
+
+function assertGuardedUpdateRequest(
+  targetId: string,
+  request: MementosProjectGuardedUpdateRequest,
+  capability: MementosProjectRegistrationCapability,
+): { identity: ProjectAuthorityIdentity; path: string } {
+  const identity = assertGuardedAuthorityRequest(targetId, request, capability);
+  assertGuardedOperationFields(request);
+  if (!request.updates || typeof request.updates !== "object") {
+    throw new MementosProjectRegistrationError(
+      "MEMENTOS_PROJECT_REGISTRATION_INVALID_INPUT",
+      "guarded project updates must contain exactly one private path handle",
+    );
+  }
+  exactKeys(request.updates as unknown as Record<string, unknown>, ["path"], "updates");
+  return { identity, path: ownedPath(request.updates.path) };
+}
+
+function publicGuardedUpdateReceipt(
+  receipt: ProjectUpdateReceipt,
+  capability: MementosProjectRegistrationCapability,
+): MementosProjectGuardedUpdateReceipt {
+  return {
+    receipt_id: receipt.receipt_id,
+    authority: "mementos",
+    route: MEMENTOS_PROJECT_GUARDED_UPDATE_ROUTE,
+    package_version: capability.package_version,
+    authority_id: capability.authority_id,
+    tenant_id: capability.tenant_id,
+    corpus_id: capability.corpus_id,
+    operation_id: receipt.operation_id,
+    step_id: receipt.step_id,
+    direction: receipt.direction,
+    idempotency_key: receipt.idempotency_key,
+    request_digest: receipt.request_digest,
+    outcome: "accepted",
+    target_id: receipt.target_id,
+    expected_revision: receipt.expected_revision,
+    result_revision: receipt.result_revision,
+    result_digest: receipt.result_digest,
+    accepted_receipt_id: receipt.accepted_receipt_id,
+    created_at: receipt.created_at,
+  };
+}
+
+function guardedProjectError(cause: unknown): never {
+  if (cause instanceof MementosProjectRegistrationError) throw cause;
+  if (cause instanceof ProjectGuardedUpdateError) {
+    const code = cause.code === "PROJECT_UPDATE_INVALID_INPUT"
+      ? "MEMENTOS_PROJECT_REGISTRATION_INVALID_INPUT"
+      : cause.code === "PROJECT_UPDATE_AUTHORITY_MISMATCH"
+        ? "MEMENTOS_PROJECT_REGISTRATION_CAPABILITY_MISMATCH"
+        : cause.code === "PROJECT_UPDATE_NOT_FOUND"
+          ? "MEMENTOS_PROJECT_REGISTRATION_RECORD_NOT_FOUND"
+          : cause.code === "PROJECT_UPDATE_RECEIPT_NOT_FOUND"
+            ? "MEMENTOS_PROJECT_REGISTRATION_RECEIPT_NOT_FOUND"
+            : "MEMENTOS_PROJECT_REGISTRATION_CONFLICT";
+    throw new MementosProjectRegistrationError(
+      code,
+      "guarded project operation was rejected without exposing private project data",
+      { project_update_code: cause.code },
+    );
+  }
+  throw new MementosProjectRegistrationError(
+    "MEMENTOS_PROJECT_REGISTRATION_ATOMICITY_UNAVAILABLE",
+    "guarded project operation failed before a bounded public result was available",
+  );
 }
 
 function normalizedCallDigest(request: MementosProjectRegistrationRequest): string {
@@ -915,6 +1065,7 @@ implements MementosProjectRegistrationAuthority {
       conditional_inverse: true,
       ambiguous_outcome_reconciliation: true,
       guarded_update: true,
+      guarded_update_route: MEMENTOS_PROJECT_GUARDED_UPDATE_ROUTE,
       no_write_dry_run: true,
       expected_revision_compare_and_swap: true,
       caller_idempotency: true,
@@ -1020,6 +1171,163 @@ implements MementosProjectRegistrationAuthority {
       ...this.capabilityValue,
       supported_resources: ["project"],
     };
+  }
+
+  private boundedGuardedUpdateResult(
+    targetId: string,
+    project: Project,
+    receipt: ProjectUpdateReceipt | null,
+    bounds: MementosProjectRegistrationBounds,
+    startedAt: number,
+  ): MementosProjectGuardedUpdateResult {
+    if (!receipt || project.id !== targetId || receipt.target_id !== targetId) {
+      throw new MementosProjectRegistrationError(
+        "MEMENTOS_PROJECT_REGISTRATION_ATOMICITY_UNAVAILABLE",
+        "guarded project operation did not return its exact immutable receipt",
+      );
+    }
+    const record = projectRecord(this.db, project);
+    if (record.revision !== receipt.result_revision) {
+      throw new MementosProjectRegistrationError(
+        "MEMENTOS_PROJECT_REGISTRATION_ATOMICITY_UNAVAILABLE",
+        "guarded project result revision did not match its immutable receipt",
+      );
+    }
+    return withBoundedResponseControl({
+      dry_run: false as const,
+      applied: true as const,
+      record,
+      receipt: publicGuardedUpdateReceipt(receipt, this.capabilityValue),
+    }, bounds, startedAt);
+  }
+
+  async guardedUpdateProject(
+    targetId: string,
+    request: MementosProjectGuardedUpdateRequest,
+  ): Promise<MementosProjectGuardedUpdateResult> {
+    const startedAt = Date.now();
+    const { identity, path } = assertGuardedUpdateRequest(
+      targetId,
+      request,
+      this.capabilityValue,
+    );
+    try {
+      const result = applyProjectUpdate(targetId, {
+        ...identity,
+        operation_id: request.operation_id,
+        step_id: request.step_id,
+        idempotency_key: request.idempotency_key,
+        expected_revision: request.expected_revision,
+        updates: { path },
+      }, this.db as SqliteAdapter, identity);
+      return this.boundedGuardedUpdateResult(
+        targetId,
+        result.project,
+        result.receipt,
+        request,
+        startedAt,
+      );
+    } catch (cause) {
+      return guardedProjectError(cause);
+    }
+  }
+
+  async getGuardedProjectUpdateReceipt(
+    targetId: string,
+    receiptId: string,
+    request: MementosProjectGuardedUpdateReceiptLookupRequest,
+  ): Promise<MementosProjectGuardedUpdateReceiptLookupResult> {
+    const startedAt = Date.now();
+    const identity = assertGuardedAuthorityRequest(
+      targetId,
+      request,
+      this.capabilityValue,
+    );
+    requireString(receiptId, "receipt_id", {
+      min: 8,
+      max: 128,
+      pattern: OPERATION_PATTERN,
+    });
+    try {
+      const receipt = getProjectUpdateReceipt(
+        targetId,
+        receiptId,
+        identity,
+        this.db as SqliteAdapter,
+        identity,
+      );
+      return withBoundedResponseControl({
+        receipt: publicGuardedUpdateReceipt(receipt, this.capabilityValue),
+      }, request, startedAt);
+    } catch (cause) {
+      return guardedProjectError(cause);
+    }
+  }
+
+  async rollbackGuardedProjectUpdate(
+    targetId: string,
+    request: MementosProjectGuardedRollbackRequest,
+  ): Promise<MementosProjectGuardedUpdateResult> {
+    const startedAt = Date.now();
+    const identity = assertGuardedAuthorityRequest(
+      targetId,
+      request,
+      this.capabilityValue,
+    );
+    assertGuardedOperationFields(request);
+    if (!request.accepted_receipt || typeof request.accepted_receipt !== "object") {
+      throw new MementosProjectRegistrationError(
+        "MEMENTOS_PROJECT_REGISTRATION_INVALID_INPUT",
+        "conditional rollback requires the exact sanitized accepted receipt",
+      );
+    }
+    requireString(request.accepted_receipt.receipt_id, "accepted_receipt.receipt_id", {
+      min: 8,
+      max: 128,
+      pattern: OPERATION_PATTERN,
+    });
+    try {
+      const internalAccepted = getProjectUpdateReceipt(
+        targetId,
+        request.accepted_receipt.receipt_id,
+        identity,
+        this.db as SqliteAdapter,
+        identity,
+      );
+      const accepted = publicGuardedUpdateReceipt(
+        internalAccepted,
+        this.capabilityValue,
+      );
+      if (
+        accepted.direction !== "forward"
+        || accepted.target_id !== targetId
+        || request.expected_revision !== accepted.result_revision
+        || canonicalMementosProjectRegistrationJson(request.accepted_receipt)
+          !== canonicalMementosProjectRegistrationJson(accepted)
+      ) {
+        throw new MementosProjectRegistrationError(
+          "MEMENTOS_PROJECT_REGISTRATION_INVALID_INPUT",
+          "conditional rollback receipt does not exactly match the accepted forward update",
+        );
+      }
+      const result = rollbackProjectUpdate(targetId, {
+        ...identity,
+        operation_id: request.operation_id,
+        step_id: request.step_id,
+        idempotency_key: request.idempotency_key,
+        expected_revision: request.expected_revision,
+        accepted_receipt_id: accepted.receipt_id,
+      }, this.db as SqliteAdapter, identity);
+      return this.boundedGuardedUpdateResult(
+        targetId,
+        result.project,
+        result.receipt,
+        request,
+        startedAt,
+      );
+    } catch (cause) {
+      return guardedProjectError(cause);
+    }
   }
 
   async create(
@@ -1154,9 +1462,9 @@ implements MementosProjectRegistrationAuthority {
       );
     }
     requireString(request.target_id, "target_id", {
-      min: 51,
-      max: 51,
-      pattern: PROJECT_ID_PATTERN,
+      min: 8,
+      max: 128,
+      pattern: OPERATION_PATTERN,
     });
     const path = ownedPath(request.target);
     const project = getProjectByExactId(this.db, request.target_id);

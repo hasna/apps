@@ -10,6 +10,15 @@ beforeEach(() => {
 });
 
 describe("project registration server routes", () => {
+  test("the advertised guarded update semantics have callable authenticated routes", () => {
+    expect(matchRoute("POST", "/api/project-registration/projects/guarded-update"))
+      .not.toBeNull();
+    expect(matchRoute("POST", "/api/project-registration/projects/update-receipts/lookup"))
+      .not.toBeNull();
+    expect(matchRoute("POST", "/api/project-registration/projects/guarded-rollback"))
+      .not.toBeNull();
+  });
+
   test("the canonical v1 capability request reaches the authenticated API route table", async () => {
     const matched = matchRoute("GET", "/api/project-registration/capability");
     expect(matched).not.toBeNull();

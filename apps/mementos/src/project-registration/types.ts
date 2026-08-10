@@ -39,6 +39,7 @@ export interface MementosProjectRegistrationCapability {
   conditional_inverse: true;
   ambiguous_outcome_reconciliation: true;
   guarded_update: true;
+  guarded_update_route: typeof MEMENTOS_PROJECT_GUARDED_UPDATE_ROUTE;
   no_write_dry_run: true;
   expected_revision_compare_and_swap: true;
   caller_idempotency: true;
@@ -77,6 +78,28 @@ export interface MementosProjectRegistrationRecord {
   digest: string;
 }
 
+export interface MementosProjectGuardedUpdateReceipt {
+  receipt_id: string;
+  authority: "mementos";
+  route: typeof MEMENTOS_PROJECT_GUARDED_UPDATE_ROUTE;
+  package_version: string;
+  authority_id: string;
+  tenant_id: string;
+  corpus_id: string;
+  operation_id: string;
+  step_id: string;
+  direction: "forward" | "rollback";
+  idempotency_key: string;
+  request_digest: string;
+  outcome: "accepted";
+  target_id: string;
+  expected_revision: string;
+  result_revision: string;
+  result_digest: string;
+  accepted_receipt_id: string | null;
+  created_at: string;
+}
+
 /**
  * Structural handle implemented by @hasna/projects. The absolute path can be
  * consumed by this authority but is never returned in a capability, receipt,
@@ -84,6 +107,55 @@ export interface MementosProjectRegistrationRecord {
  */
 export interface MementosProjectRegistrationPathHandle {
   withOwnedPath<T>(consumer: (absolutePath: string) => T): T;
+}
+
+export interface MementosProjectGuardedUpdateRequest
+extends MementosProjectRegistrationBounds {
+  authority: "mementos";
+  authority_route: typeof MEMENTOS_PROJECT_GUARDED_UPDATE_ROUTE;
+  package_version: string;
+  authority_id: string;
+  tenant_id: string;
+  corpus_id: string;
+  operation_id: string;
+  step_id: string;
+  idempotency_key: string;
+  expected_revision: string;
+  updates: {
+    path: MementosProjectRegistrationPathHandle;
+  };
+}
+
+export interface MementosProjectGuardedUpdateReceiptLookupRequest
+extends MementosProjectRegistrationBounds {
+  authority: "mementos";
+  authority_route: typeof MEMENTOS_PROJECT_GUARDED_UPDATE_ROUTE;
+  package_version: string;
+  authority_id: string;
+  tenant_id: string;
+  corpus_id: string;
+}
+
+export interface MementosProjectGuardedRollbackRequest
+extends MementosProjectGuardedUpdateReceiptLookupRequest {
+  operation_id: string;
+  step_id: string;
+  idempotency_key: string;
+  expected_revision: string;
+  accepted_receipt: MementosProjectGuardedUpdateReceipt;
+}
+
+export interface MementosProjectGuardedUpdateResult {
+  dry_run: false;
+  applied: true;
+  record: MementosProjectRegistrationRecord;
+  receipt: MementosProjectGuardedUpdateReceipt;
+  response_control: MementosProjectRegistrationResponseControl;
+}
+
+export interface MementosProjectGuardedUpdateReceiptLookupResult {
+  receipt: MementosProjectGuardedUpdateReceipt;
+  response_control: MementosProjectRegistrationResponseControl;
 }
 
 export interface MementosProjectRegistrationRequest
@@ -161,6 +233,19 @@ export interface MementosProjectRegistrationAuthority {
   verifyInverse(
     request: MementosProjectRegistrationRequest,
   ): Promise<MementosProjectRegistrationInverseVerification>;
+  guardedUpdateProject(
+    targetId: string,
+    request: MementosProjectGuardedUpdateRequest,
+  ): Promise<MementosProjectGuardedUpdateResult>;
+  getGuardedProjectUpdateReceipt(
+    targetId: string,
+    receiptId: string,
+    request: MementosProjectGuardedUpdateReceiptLookupRequest,
+  ): Promise<MementosProjectGuardedUpdateReceiptLookupResult>;
+  rollbackGuardedProjectUpdate(
+    targetId: string,
+    request: MementosProjectGuardedRollbackRequest,
+  ): Promise<MementosProjectGuardedUpdateResult>;
 }
 
 export type MementosProjectRegistrationFaultPoint =
@@ -224,4 +309,13 @@ export interface MementosProjectRegistrationHttpClientOptions {
 export interface MementosProjectRegistrationWireRequest
 extends Omit<MementosProjectRegistrationRequest, "target"> {
   canonical_path: string;
+}
+
+/** Private guarded-update wire request; the raw path is request-only. */
+export interface MementosProjectGuardedUpdateWireRequest
+extends Omit<MementosProjectGuardedUpdateRequest, "updates"> {
+  target_id: string;
+  updates: {
+    path: string;
+  };
 }

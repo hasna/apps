@@ -28,3 +28,6 @@ addRoute("POST", "/api/project-registration/receipts/lookup", handle);
 addRoute("POST", "/api/project-registration/read-exact", handle);
 addRoute("POST", "/api/project-registration/compensate", handle);
 addRoute("POST", "/api/project-registration/verify-inverse", handle);
+addRoute("POST", "/api/project-registration/projects/guarded-update", handle);
+addRoute("POST", "/api/project-registration/projects/update-receipts/lookup", handle);
+addRoute("POST", "/api/project-registration/projects/guarded-rollback", handle);

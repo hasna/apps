@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.14.81 — Make guarded project repair callable
+
+- Expose bounded guarded path update, exact sanitized receipt lookup, and
+  receipt-scoped rollback through the package-owned project-registration
+  authority on both local and authenticated HTTP transports.
+- Preserve private canonical paths as request-only material: public results
+  carry stable IDs, revisions, digests, operation lineage, and response bounds,
+  while the snapshot-bearing generic receipts remain internal to Mementos.
+- Keep caller-key replay deterministic, reject stale revisions without
+  clobbering, restore the exact prior project row on rollback, and allow exact
+  owned-path readback for existing bounded stable project IDs.
+
 ## 0.14.80 — Honor project pagination flags
 
 - Apply explicit `--limit`, `--cursor`, and `--offset` windows to both JSON and

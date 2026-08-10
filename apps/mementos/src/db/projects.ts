@@ -147,11 +147,14 @@ function normalizeProjectUpdateInput(input: UpdateProjectInput): UpdateProjectIn
   return normalized;
 }
 
-function assertProjectUpdateIdentity(identity: ProjectAuthorityIdentity): void {
+function assertProjectUpdateIdentity(
+  identity: ProjectAuthorityIdentity,
+  expectedIdentity: ProjectAuthorityIdentity = PROJECT_UPDATE_AUTHORITY,
+): void {
   if (
-    identity.authority_id !== PROJECT_UPDATE_AUTHORITY.authority_id
-    || identity.tenant_id !== PROJECT_UPDATE_AUTHORITY.tenant_id
-    || identity.corpus_id !== PROJECT_UPDATE_AUTHORITY.corpus_id
+    identity.authority_id !== expectedIdentity.authority_id
+    || identity.tenant_id !== expectedIdentity.tenant_id
+    || identity.corpus_id !== expectedIdentity.corpus_id
   ) {
     throw new ProjectGuardedUpdateError(
       "PROJECT_UPDATE_AUTHORITY_MISMATCH",
@@ -171,8 +174,9 @@ function assertBoundedIdentifier(value: string, field: string): void {
 
 function assertProjectUpdateRequest(
   request: ProjectGuardedUpdateRequest | ProjectGuardedRollbackRequest,
+  expectedIdentity: ProjectAuthorityIdentity = PROJECT_UPDATE_AUTHORITY,
 ): void {
-  assertProjectUpdateIdentity(request);
+  assertProjectUpdateIdentity(request, expectedIdentity);
   assertBoundedIdentifier(request.operation_id, "operation_id");
   assertBoundedIdentifier(request.step_id, "step_id");
   assertBoundedIdentifier(request.idempotency_key, "idempotency_key");
@@ -446,8 +450,9 @@ export function previewProjectUpdate(
   id: string,
   request: ProjectGuardedUpdateRequest,
   db?: Database,
+  expectedIdentity: ProjectAuthorityIdentity = PROJECT_UPDATE_AUTHORITY,
 ): ProjectGuardedUpdateResult {
-  assertProjectUpdateRequest(request);
+  assertProjectUpdateRequest(request, expectedIdentity);
   const normalized = normalizeProjectUpdateInput(request.updates);
   if (!db && isApiMode()) {
     const { data } = apiJson<ProjectGuardedUpdateResult>(
@@ -485,8 +490,9 @@ export function applyProjectUpdate(
   id: string,
   request: ProjectGuardedUpdateRequest,
   db?: Database,
+  expectedIdentity: ProjectAuthorityIdentity = PROJECT_UPDATE_AUTHORITY,
 ): ProjectGuardedUpdateResult {
-  assertProjectUpdateRequest(request);
+  assertProjectUpdateRequest(request, expectedIdentity);
   const normalized = normalizeProjectUpdateInput(request.updates);
   if (!db && isApiMode()) {
     const { data } = apiJson<ProjectGuardedUpdateResult>(
@@ -582,8 +588,9 @@ export function rollbackProjectUpdate(
   id: string,
   request: ProjectGuardedRollbackRequest,
   db?: Database,
+  expectedIdentity: ProjectAuthorityIdentity = PROJECT_UPDATE_AUTHORITY,
 ): ProjectGuardedUpdateResult {
-  assertProjectUpdateRequest(request);
+  assertProjectUpdateRequest(request, expectedIdentity);
   assertBoundedIdentifier(request.accepted_receipt_id, "accepted_receipt_id");
   if (!db && isApiMode()) {
     const { data } = apiJson<ProjectGuardedUpdateResult>(
@@ -691,8 +698,9 @@ export function getProjectUpdateReceipt(
   receiptId: string,
   identity: ProjectAuthorityIdentity = PROJECT_UPDATE_AUTHORITY,
   db?: Database,
+  expectedIdentity: ProjectAuthorityIdentity = PROJECT_UPDATE_AUTHORITY,
 ): ProjectUpdateReceipt {
-  assertProjectUpdateIdentity(identity);
+  assertProjectUpdateIdentity(identity, expectedIdentity);
   if (!db && isApiMode()) {
     const { data } = apiJson<ProjectUpdateReceipt>(
       "POST",

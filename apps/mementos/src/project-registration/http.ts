@@ -1,5 +1,11 @@
 import {
   MementosProjectRegistrationError,
+  type MementosProjectGuardedRollbackRequest,
+  type MementosProjectGuardedUpdateReceiptLookupRequest,
+  type MementosProjectGuardedUpdateReceiptLookupResult,
+  type MementosProjectGuardedUpdateRequest,
+  type MementosProjectGuardedUpdateResult,
+  type MementosProjectGuardedUpdateWireRequest,
   type MementosProjectRegistrationAuthority,
   type MementosProjectRegistrationCapability,
   type MementosProjectRegistrationHttpClientOptions,
@@ -102,6 +108,50 @@ function fromWireReadRequest(body: Record<string, unknown>): {
   };
 }
 
+function fromWireGuardedUpdateRequest(body: Record<string, unknown>): {
+  targetId: string;
+  request: MementosProjectGuardedUpdateRequest;
+} {
+  const { target_id: targetId, updates, ...request } = body;
+  if (typeof targetId !== "string") {
+    throw new MementosProjectRegistrationError(
+      "MEMENTOS_PROJECT_REGISTRATION_INVALID_INPUT",
+      "target_id is required on the private guarded-update transport",
+    );
+  }
+  if (
+    !updates
+    || typeof updates !== "object"
+    || Array.isArray(updates)
+    || typeof (updates as Record<string, unknown>)["path"] !== "string"
+  ) {
+    throw new MementosProjectRegistrationError(
+      "MEMENTOS_PROJECT_REGISTRATION_INVALID_INPUT",
+      "updates.path is required on the private guarded-update transport",
+    );
+  }
+  return {
+    targetId,
+    request: {
+      ...request,
+      updates: {
+        path: new WirePathHandle(String((updates as Record<string, unknown>)["path"])),
+      },
+    } as unknown as MementosProjectGuardedUpdateRequest,
+  };
+}
+
+function exactWireIdentifier(body: Record<string, unknown>, field: string): string {
+  const value = body[field];
+  if (typeof value !== "string") {
+    throw new MementosProjectRegistrationError(
+      "MEMENTOS_PROJECT_REGISTRATION_INVALID_INPUT",
+      `${field} is required on the guarded-update transport`,
+    );
+  }
+  return value;
+}
+
 /**
  * Handle one package-owned registration request. The canonical path is private
  * request material and is converted back to a structural handle before the
@@ -148,6 +198,28 @@ export async function handleMementosProjectRegistrationHttpRequest(
     if (action === "verify-inverse") {
       return json({ verification: await authority.verifyInverse(fromWireRequest(body)) });
     }
+    if (action === "projects/guarded-update") {
+      const guarded = fromWireGuardedUpdateRequest(body);
+      return json(await authority.guardedUpdateProject(guarded.targetId, guarded.request));
+    }
+    if (action === "projects/update-receipts/lookup") {
+      const targetId = exactWireIdentifier(body, "target_id");
+      const receiptId = exactWireIdentifier(body, "receipt_id");
+      const { target_id: _targetId, receipt_id: _receiptId, ...lookup } = body;
+      return json(await authority.getGuardedProjectUpdateReceipt(
+        targetId,
+        receiptId,
+        lookup as unknown as MementosProjectGuardedUpdateReceiptLookupRequest,
+      ));
+    }
+    if (action === "projects/guarded-rollback") {
+      const targetId = exactWireIdentifier(body, "target_id");
+      const { target_id: _targetId, ...rollback } = body;
+      return json(await authority.rollbackGuardedProjectUpdate(
+        targetId,
+        rollback as unknown as MementosProjectGuardedRollbackRequest,
+      ));
+    }
     return json({
       error: "unknown Mementos project-registration route",
       code: "MEMENTOS_PROJECT_REGISTRATION_RECEIPT_NOT_FOUND",
@@ -185,6 +257,19 @@ function toWireRequest(
   return {
     ...serializable,
     canonical_path: extractPath(target),
+  };
+}
+
+function toWireGuardedUpdateRequest(
+  targetId: string,
+  request: MementosProjectGuardedUpdateRequest,
+): MementosProjectGuardedUpdateWireRequest {
+  return {
+    ...request,
+    target_id: targetId,
+    updates: {
+      path: extractPath(request.updates.path),
+    },
   };
 }
 
@@ -302,6 +387,46 @@ implements MementosProjectRegistrationAuthority {
       body: JSON.stringify(toWireRequest(request)),
     });
     return body.verification;
+  }
+
+  async guardedUpdateProject(
+    targetId: string,
+    request: MementosProjectGuardedUpdateRequest,
+  ): Promise<MementosProjectGuardedUpdateResult> {
+    return this.request<MementosProjectGuardedUpdateResult>(
+      "/projects/guarded-update",
+      {
+        method: "POST",
+        body: JSON.stringify(toWireGuardedUpdateRequest(targetId, request)),
+      },
+    );
+  }
+
+  async getGuardedProjectUpdateReceipt(
+    targetId: string,
+    receiptId: string,
+    request: MementosProjectGuardedUpdateReceiptLookupRequest,
+  ): Promise<MementosProjectGuardedUpdateReceiptLookupResult> {
+    return this.request<MementosProjectGuardedUpdateReceiptLookupResult>(
+      "/projects/update-receipts/lookup",
+      {
+        method: "POST",
+        body: JSON.stringify({ ...request, target_id: targetId, receipt_id: receiptId }),
+      },
+    );
+  }
+
+  async rollbackGuardedProjectUpdate(
+    targetId: string,
+    request: MementosProjectGuardedRollbackRequest,
+  ): Promise<MementosProjectGuardedUpdateResult> {
+    return this.request<MementosProjectGuardedUpdateResult>(
+      "/projects/guarded-rollback",
+      {
+        method: "POST",
+        body: JSON.stringify({ ...request, target_id: targetId }),
+      },
+    );
   }
 }
 

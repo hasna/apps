@@ -7,6 +7,7 @@ import { getDatabase, resetDatabase } from "../db/database.js";
 import { getProject, registerProject } from "../db/projects.js";
 import { createSessionJob, getSessionJob } from "../db/session-jobs.js";
 import {
+  MEMENTOS_PROJECT_GUARDED_UPDATE_ROUTE,
   MementosProjectRegistrationError,
   createLocalMementosProjectRegistrationAuthority,
   deriveMementosProjectRegistrationIdempotencyKey,
@@ -157,6 +158,175 @@ beforeEach(() => {
 });
 
 describe("package-owned Mementos project registration authority", () => {
+  test("guarded path update is callable, bounded, replay-safe, stale-safe, private, and exactly reversible", async () => {
+    const db = getDatabase();
+    const registrationAuthority = createLocalMementosProjectRegistrationAuthority(db, {
+      packageVersion: "0.14.81-guarded-test",
+    });
+    const capability = await registrationAuthority.capability();
+    const originalPath = "/private/projects/guarded-original";
+    const updatedPath = "/private/projects/guarded-updated";
+    const original = registerProject(
+      "Guarded original",
+      originalPath,
+      "must survive rollback",
+      "guarded_original",
+      db,
+    );
+    const guardedAuthority = registrationAuthority;
+
+    expect(capability).toMatchObject({
+      guarded_update: true,
+      guarded_update_route: MEMENTOS_PROJECT_GUARDED_UPDATE_ROUTE,
+      expected_revision_compare_and_swap: true,
+      caller_idempotency: true,
+      exact_inverse_rollback: true,
+    });
+    expect(typeof guardedAuthority.guardedUpdateProject).toBe("function");
+    expect(typeof guardedAuthority.getGuardedProjectUpdateReceipt).toBe("function");
+    expect(typeof guardedAuthority.rollbackGuardedProjectUpdate).toBe("function");
+
+    const updateRequest = {
+      authority: "mementos",
+      authority_route: MEMENTOS_PROJECT_GUARDED_UPDATE_ROUTE,
+      package_version: capability.package_version,
+      authority_id: capability.authority_id,
+      tenant_id: capability.tenant_id,
+      corpus_id: capability.corpus_id,
+      operation_id: "registration-guarded-update-v1",
+      step_id: "mementos_project_path_repair",
+      idempotency_key: "registration-guarded-update-key-0001",
+      expected_revision: original.updated_at,
+      updates: { path: new OwnedPathHandle(updatedPath) },
+      response_byte_limit: 65_536,
+      time_budget_ms: 5_000,
+    };
+    await expect(registrationAuthority.guardedUpdateProject(original.id, {
+      ...updateRequest,
+      time_budget_ms: 0,
+    })).rejects.toMatchObject({
+      code: "MEMENTOS_PROJECT_REGISTRATION_INVALID_BOUNDS",
+    });
+    expect(getProject(original.id, db)).toEqual(original);
+
+    const accepted = await guardedAuthority.guardedUpdateProject(original.id, updateRequest);
+    expect(accepted).toMatchObject({
+      dry_run: false,
+      applied: true,
+      record: { target_id: original.id },
+      receipt: {
+        authority: "mementos",
+        route: MEMENTOS_PROJECT_GUARDED_UPDATE_ROUTE,
+        direction: "forward",
+        operation_id: updateRequest.operation_id,
+        step_id: updateRequest.step_id,
+        idempotency_key: updateRequest.idempotency_key,
+        target_id: original.id,
+        expected_revision: original.updated_at,
+      },
+      response_control: {
+        complete: true,
+        truncated: false,
+        response_byte_limit: 65_536,
+        time_budget_ms: 5_000,
+      },
+    });
+    expect(accepted.record.revision).toBe(accepted.receipt.result_revision);
+    expect(accepted.response_control.response_bytes).toBe(
+      Buffer.byteLength(JSON.stringify(accepted), "utf8"),
+    );
+    expect(accepted.response_control.elapsed_ms).toBeLessThanOrEqual(
+      accepted.response_control.time_budget_ms,
+    );
+    expect(accepted.receipt).not.toHaveProperty("before_project");
+    expect(accepted.receipt).not.toHaveProperty("after_project");
+    expect(JSON.stringify({ capability, accepted })).not.toContain(originalPath);
+    expect(JSON.stringify({ capability, accepted })).not.toContain(updatedPath);
+
+    const readback = await registrationAuthority.readExact({
+      resource_kind: "project",
+      target_id: original.id,
+      target: updateRequest.updates.path,
+      response_byte_limit: 65_536,
+      time_budget_ms: 5_000,
+    });
+    expect(readback).toEqual(accepted.record);
+
+    const duplicate = await guardedAuthority.guardedUpdateProject(original.id, updateRequest);
+    expect(duplicate.receipt).toEqual(accepted.receipt);
+    expect(duplicate.record).toEqual(accepted.record);
+
+    const lookupRequest = {
+      authority: "mementos",
+      authority_route: MEMENTOS_PROJECT_GUARDED_UPDATE_ROUTE,
+      package_version: capability.package_version,
+      authority_id: capability.authority_id,
+      tenant_id: capability.tenant_id,
+      corpus_id: capability.corpus_id,
+      response_byte_limit: 65_536,
+      time_budget_ms: 5_000,
+    };
+    const lookup = await guardedAuthority.getGuardedProjectUpdateReceipt(
+      original.id,
+      accepted.receipt.receipt_id,
+      lookupRequest,
+    );
+    expect(lookup.receipt).toEqual(accepted.receipt);
+    expect(lookup.response_control.response_bytes).toBe(
+      Buffer.byteLength(JSON.stringify(lookup), "utf8"),
+    );
+    expect(JSON.stringify(lookup)).not.toContain(originalPath);
+    expect(JSON.stringify(lookup)).not.toContain(updatedPath);
+
+    await expect(guardedAuthority.guardedUpdateProject(original.id, {
+      ...updateRequest,
+      idempotency_key: "registration-guarded-stale-key-0001",
+      updates: { path: new OwnedPathHandle("/private/projects/stale-clobber") },
+    })).rejects.toMatchObject({
+      code: "MEMENTOS_PROJECT_REGISTRATION_CONFLICT",
+      details: { project_update_code: "PROJECT_UPDATE_STALE_REVISION" },
+    });
+    expect(getProject(original.id, db)?.path).toBe(updatedPath);
+
+    await expect(guardedAuthority.getGuardedProjectUpdateReceipt(
+      original.id,
+      accepted.receipt.receipt_id,
+      { ...lookupRequest, response_byte_limit: 1 },
+    )).rejects.toMatchObject({
+      code: "MEMENTOS_PROJECT_REGISTRATION_RESPONSE_TOO_LARGE",
+    });
+
+    const rollbackRequest = {
+      ...lookupRequest,
+      operation_id: "registration-guarded-update-v1",
+      step_id: "mementos_project_path_rollback",
+      idempotency_key: "registration-guarded-rollback-key-0001",
+      expected_revision: accepted.receipt.result_revision,
+      accepted_receipt: accepted.receipt,
+    };
+    const rolledBack = await guardedAuthority.rollbackGuardedProjectUpdate(
+      original.id,
+      rollbackRequest,
+    );
+    expect(rolledBack).toMatchObject({
+      applied: true,
+      record: { target_id: original.id, revision: original.updated_at },
+      receipt: {
+        direction: "rollback",
+        accepted_receipt_id: accepted.receipt.receipt_id,
+      },
+    });
+    expect(getProject(original.id, db)).toEqual(original);
+    expect(JSON.stringify(rolledBack)).not.toContain(originalPath);
+    expect(JSON.stringify(rolledBack)).not.toContain(updatedPath);
+    const rollbackDuplicate = await guardedAuthority.rollbackGuardedProjectUpdate(
+      original.id,
+      rollbackRequest,
+    );
+    expect(rollbackDuplicate.receipt).toEqual(rolledBack.receipt);
+    expect(rollbackDuplicate.record).toEqual(rolledBack.record);
+  });
+
   test("creates once, reads back by full id, and returns duplicate-of-accepted on byte-identical retry", async () => {
     const db = getDatabase();
     const { authority: registrationAuthority, request } = await forwardRequest(

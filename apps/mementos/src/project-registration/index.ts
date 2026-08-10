@@ -34,6 +34,12 @@ export {
   MementosProjectRegistrationError,
 } from "./types.js";
 export type {
+  MementosProjectGuardedRollbackRequest,
+  MementosProjectGuardedUpdateReceipt,
+  MementosProjectGuardedUpdateReceiptLookupRequest,
+  MementosProjectGuardedUpdateReceiptLookupResult,
+  MementosProjectGuardedUpdateRequest,
+  MementosProjectGuardedUpdateResult,
   MementosProjectRegistrationAuthority,
   MementosProjectRegistrationAuthorityOptions,
   MementosProjectRegistrationBounds,
