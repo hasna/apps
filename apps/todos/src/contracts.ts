@@ -1,5 +1,6 @@
 import { getPackageVersion } from "./lib/package-version.js";
 import { createJsonContractsManifest } from "./json-contracts.js";
+export * from "./ai.js";
 export {
   TODOS_JSON_CONTRACTS,
   TODOS_JSON_CONTRACTS_MANIFEST,
