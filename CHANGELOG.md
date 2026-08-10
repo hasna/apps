@@ -6,6 +6,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.126]
+
+### Fixed
+
+- API-backed project resolution now accepts only verified package-owned
+  canonical workspace paths, resolves them to their exact stable project IDs,
+  and keeps absent, noncanonical, or mismatched paths fail-closed.
+- `projects why` now reports truthful tried and matched diagnostics for verified
+  canonical path resolution in API-backed contexts.
+
 ## [0.1.125]
 
 ### Changed
