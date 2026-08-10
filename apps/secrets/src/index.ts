@@ -41,6 +41,8 @@ Commands:
   export [--show|--plaintext] [--pretty]  export redacted compact JSON by default
   scan workspace [path] [--limit <n>] [--cursor <cursor>] [--max-bytes <n>] [--max-files <n>] [--max-scan-bytes <n>] [--timeout-ms <n>] [--pretty]
   scan history [path] [--limit <n>] [--cursor <cursor>] [--max-commits <n>] [--timeout-ms <n>] [--pretty]
+  scan staged [path] [--limit <n>] [--max-bytes <n>] [--max-files <n>] [--subtree] [--json]   commit gate; exit 0 clean / 1 finding / 2 could not scan
+  scan input [path|-] [--limit <n>] [--max-bytes <n>] [--timeout-ms <n>] [--json]   scan stdin or a file before the text is persisted; same exit codes (aliases: stdin, text)
   security permissions [--roots <paths>] [--fix-permissions] [--report-dir <dir>] [--upsert-tasks] [--todos-project <path>] [--task-list <slug>] [--max-task-actions <n>] [--json|--pretty]
   security exposure [--mode workspace|history] [--roots <paths>] [--limit <n>] [--json|--pretty]
   security supply-chain [--roots <paths>] [--max-files <n>] [--max-findings <n>] [--json|--pretty]
@@ -681,13 +683,19 @@ switch (command) {
   }
 
   case "scan": {
-    const [target = "workspace", root] = positional;
+    const [rawTarget = "workspace", root] = positional;
+    // `stdin` and `text` are the two names an agent reaches for when it wants
+    // to scan a stream. Both previously exited 1 on a usage error while the
+    // capability was simply absent, so they resolve to the input mode rather
+    // than teaching a second name for it.
+    const target = rawTarget === "stdin" || rawTarget === "text" ? "input" : rawTarget;
     const scanUsage =
-      "Usage: secrets scan workspace|history|staged [path] [--limit <n>] [--cursor <cursor>] [--max-bytes <n>] [--max-files <n>] [--max-scan-bytes <n>] [--max-commits <n>] [--timeout-ms <n>] [--subtree] [--pretty] [--json]";
+      "Usage: secrets scan workspace|history|staged|input [path] [--limit <n>] [--cursor <cursor>] [--max-bytes <n>] [--max-files <n>] [--max-scan-bytes <n>] [--max-commits <n>] [--timeout-ms <n>] [--subtree] [--pretty] [--json]";
     const allowedFlags = {
       workspace: new Set(["cursor", "limit", "max-bytes", "max-files", "max-scan-bytes", "timeout-ms", "pretty", "json"]),
       history: new Set(["cursor", "limit", "max-commits", "timeout-ms", "pretty", "json"]),
       staged: new Set(["limit", "max-bytes", "max-files", "max-scan-bytes", "timeout-ms", "subtree", "pretty", "json"]),
+      input: new Set(["limit", "max-bytes", "timeout-ms", "pretty", "json"]),
     }[target];
     if (allowedFlags) {
       const unsupportedFlags = Object.keys(flags).filter((flag) => !allowedFlags.has(flag));
@@ -697,8 +705,13 @@ switch (command) {
         process.exit(1);
       }
     }
-    const { scanWorkspaceExposures, scanHistoryExposures, scanStagedExposures, stagedScanExitCode } =
-      await import("./scanner.js");
+    const {
+      scanWorkspaceExposures,
+      scanHistoryExposures,
+      scanStagedExposures,
+      scanInputExposures,
+      stagedScanExitCode,
+    } = await import("./scanner.js");
     const common = {
       root,
       cursor: flags.cursor,
@@ -740,6 +753,31 @@ switch (command) {
           maxFileBytes: positiveIntegerFlag(flags, "max-bytes"),
           maxFiles: positiveIntegerFlag(flags, "max-files"),
           maxBytesScanned: positiveIntegerFlag(flags, "max-scan-bytes"),
+          timeoutMs: positiveIntegerFlag(flags, "timeout-ms"),
+        });
+        console.log(formatJson(result, flags.pretty === "true" || flags.json === "true"));
+        process.exitCode = stagedScanExitCode(result);
+        break;
+      }
+      case "input": {
+        // Output-gate mode: scan text before it is persisted. Same three-way
+        // verdict as the staged gate — the exit code is the answer and 2 means
+        // "could not look", never "looked and it was clean".
+        //
+        // With no path and a terminal on stdin there is nothing to read, and a
+        // blocking read would hang. That is the refusal code rather than the
+        // usage code on purpose: a caller keying on 2 to mean "unverified" is
+        // then correct without having to parse the message.
+        const readsStdin = root === undefined || root === "-";
+        if (readsStdin && process.stdin.isTTY) {
+          console.error("secrets scan input reads stdin: pipe the text in, or name a file.");
+          console.error(scanUsage);
+          process.exit(2);
+        }
+        const result = scanInputExposures({
+          path: root,
+          limit: common.limit,
+          maxBytes: positiveIntegerFlag(flags, "max-bytes"),
           timeoutMs: positiveIntegerFlag(flags, "timeout-ms"),
         });
         console.log(formatJson(result, flags.pretty === "true" || flags.json === "true"));

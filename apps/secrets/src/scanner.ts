@@ -1,9 +1,9 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, readSync, statSync } from "node:fs";
 import { relative, resolve, sep } from "node:path";
 
-export type ExposureScanKind = "workspace" | "history" | "staged";
+export type ExposureScanKind = "workspace" | "history" | "staged" | "input";
 export type ExposureSeverity = "high" | "medium";
 export type ExposureRemediationPriority = "critical" | "high";
 export type ExposureRemediationStep =
@@ -175,6 +175,15 @@ const MAX_STAGED_MAX_FILE_BYTES = 200_000_000;
 const DEFAULT_STAGED_MAX_FILES = 10_000;
 const MAX_STAGED_MAX_FILES = 100_000;
 const DEFAULT_STAGED_MAX_BYTES_SCANNED = 200_000_000;
+// Input bounds sit far below the staged ones. The population is one command's
+// output rather than a commit's worth of blobs, and the caller is typically a
+// synchronous guard in front of something else — so the default is small enough
+// that scanning is cheap, and exceeding it is a REFUSAL rather than a quiet
+// truncation.
+const DEFAULT_INPUT_MAX_BYTES = 5_000_000;
+const MAX_INPUT_MAX_BYTES = 200_000_000;
+const STDIN_READ_CHUNK_BYTES = 65_536;
+const STDIN_LABEL = "<stdin>";
 // Bytes 0x20..0x7e plus tab. Shortest detector match is 12+ characters, so an
 // 8-byte floor cannot drop a run that could have carried one.
 const MIN_PRINTABLE_RUN = 8;
@@ -346,11 +355,34 @@ export interface StagedExposureScanOptions {
 }
 
 /**
- * Exit code for a staged scan used as a commit gate.
+ * Text or bytes handed in directly, rather than discovered by walking a tree.
  *
- *   0  scanned every staged blob, found nothing      -> safe to commit
+ * Exactly one source is used, in this order: `buffer`, `text`, `path`, stdin.
+ * `path` of "-" means stdin, matching the CLI convention.
+ */
+export interface InputExposureScanOptions {
+  /** Raw bytes. Scanned binary-aware, exactly as a staged blob would be. */
+  buffer?: Buffer;
+  /** Text to scan. */
+  text?: string;
+  /** File to read, or "-" for stdin. Omit both this and text/buffer to read stdin. */
+  path?: string;
+  limit?: number;
+  /**
+   * Ceiling on the input. Exceeding it records a skip and drives exit 2 — the
+   * input is never scanned in part and reported as if it were scanned whole.
+   */
+  maxBytes?: number;
+  timeoutMs?: number;
+}
+
+/**
+ * Exit code for a scan used as a gate — staged blobs before a commit, or
+ * arbitrary input before it is persisted.
+ *
+ *   0  read the whole input, found nothing           -> safe to proceed
  *   1  found at least one exposure                   -> block
- *   2  could not scan everything, found nothing      -> block
+ *   2  could not read everything, found nothing      -> block
  *
  * 2 exists because "I looked at everything and it was clean" and "I could not
  * look" must not share an exit code. A gate that inspects nothing and a gate
@@ -701,6 +733,152 @@ export function scanStagedExposures(options: StagedExposureScanOptions = {}): Ex
   }
 
   return finalizeResult(result);
+}
+
+/**
+ * Scan text or bytes that were handed in, rather than found on disk or in git.
+ *
+ * This exists so the detector set can be pointed at output BEFORE that output
+ * is persisted. The tree and history modes can only ever find a credential that
+ * has already been written down; a caller holding a command's stdout has the
+ * one opportunity to catch it while it is still in memory.
+ *
+ * It deliberately knows nothing about where the text came from. No tool name,
+ * no verb, no allowlist — the input side of that question is unknowable, since
+ * a tool can print a credential from a verb the caller never invoked. Keying on
+ * the OUTPUT is what makes this a fix rather than another list to fall behind.
+ */
+export function scanInputExposures(options: InputExposureScanOptions = {}): ExposureScanResult {
+  const limit = normalizeLimit(options.limit);
+  const maxBytes = normalizePositiveInteger(options.maxBytes, DEFAULT_INPUT_MAX_BYTES, MAX_INPUT_MAX_BYTES);
+  const timeoutMs = normalizePositiveInteger(options.timeoutMs, DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS);
+  const deadline = Date.now() + timeoutMs;
+
+  const inlined = options.buffer !== undefined || options.text !== undefined;
+  const usesFile = !inlined && options.path !== undefined && options.path !== "-";
+  const label = usesFile ? resolve(options.path as string) : STDIN_LABEL;
+
+  const result = createResult("input", label, limit, { maxFileBytes: maxBytes, timeoutMs });
+  result.stats.skipped = [];
+
+  let payload: Buffer;
+  if (options.buffer !== undefined) {
+    payload = options.buffer;
+  } else if (options.text !== undefined) {
+    payload = Buffer.from(options.text, "utf8");
+  } else if (usesFile) {
+    let size: number;
+    try {
+      const stats = statSync(label);
+      if (!stats.isFile()) {
+        pushError(result, `Not a readable file: ${label}`);
+        return finalizeResult(result);
+      }
+      size = stats.size;
+    } catch (error) {
+      pushError(result, `Unable to stat ${label}: ${(error as Error).message}`);
+      return finalizeResult(result);
+    }
+    if (size > maxBytes) {
+      recordSkip(result, label, "max_file_bytes", size);
+      return finalizeResult(result);
+    }
+    try {
+      payload = readFileSync(label);
+    } catch (error) {
+      pushError(result, `Unable to read ${label}: ${(error as Error).message}`);
+      return finalizeResult(result);
+    }
+  } else {
+    const read = readBoundedStdin(maxBytes, deadline);
+    if (read.timedOut) {
+      markTruncated(result, "timeout");
+      pushError(result, "Timed out while reading standard input.");
+      return finalizeResult(result);
+    }
+    if (read.error) {
+      pushError(result, `Unable to read standard input: ${read.error}`);
+      return finalizeResult(result);
+    }
+    if (read.oversize) {
+      recordSkip(result, STDIN_LABEL, "max_file_bytes", read.bytes);
+      return finalizeResult(result);
+    }
+    payload = read.buffer as Buffer;
+  }
+
+  // An inlined buffer/text can also exceed the bound; the same refusal applies
+  // however the payload arrived.
+  if (payload.length > maxBytes) {
+    recordSkip(result, label, "max_file_bytes", payload.length);
+    return finalizeResult(result);
+  }
+
+  result.stats.filesScanned = 1;
+  result.stats.bytesScanned = payload.length;
+
+  if (!isLikelyBinary(payload)) {
+    scanText(payload.toString("utf8"), { source: "input", path: label }, result, deadline);
+    return finalizeResult(result);
+  }
+
+  // Same three-way handling the staged mode uses: a UTF-16 payload is "binary"
+  // to the heuristic but is text and must be decoded, or no detector can span
+  // an ASCII run that is one byte wide.
+  const decoded = decodeUtf16(payload);
+  if (decoded !== undefined) {
+    scanText(decoded, { source: "input", path: label }, result, deadline);
+  } else {
+    scanBinaryBuffer(payload, { source: "input", path: label, binary: true }, result, deadline);
+  }
+
+  return finalizeResult(result);
+}
+
+/**
+ * Read stdin to EOF, stopping one byte past the ceiling.
+ *
+ * Bounded rather than a single slurp so the ceiling is real: a caller that asks
+ * for a 64-byte bound must not first buffer a gigabyte to discover it was
+ * exceeded. Going over returns `oversize` and the remainder is left unread —
+ * the gate is refusing anyway, so draining it would only spend time.
+ *
+ * The deadline is checked BETWEEN reads. That covers a slow producer, not a
+ * wedged one: `readSync` blocks, so a writer that opens the pipe and never
+ * writes cannot be timed out from here. A caller that cannot tolerate that
+ * bounds the whole process from outside.
+ */
+function readBoundedStdin(
+  maxBytes: number,
+  deadline: number,
+): { buffer?: Buffer; bytes: number; oversize?: boolean; timedOut?: boolean; error?: string } {
+  const chunks: Buffer[] = [];
+  const scratch = Buffer.allocUnsafe(STDIN_READ_CHUNK_BYTES);
+  let total = 0;
+
+  for (;;) {
+    if (Date.now() > deadline) return { bytes: total, timedOut: true };
+
+    let read: number;
+    try {
+      read = readSync(0, scratch, 0, STDIN_READ_CHUNK_BYTES, null);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      // EOF is reported as an exception on some platforms rather than a 0 read.
+      if (code === "EOF") break;
+      // A non-blocking stdin yields EAGAIN before data is ready. Retry, but the
+      // deadline check at the top of the loop keeps that from spinning forever.
+      if (code === "EAGAIN") continue;
+      return { bytes: total, error: (error as Error).message };
+    }
+
+    if (read <= 0) break;
+    total += read;
+    if (total > maxBytes) return { bytes: total, oversize: true };
+    chunks.push(Buffer.from(scratch.subarray(0, read)));
+  }
+
+  return { buffer: Buffer.concat(chunks), bytes: total };
 }
 
 /**
