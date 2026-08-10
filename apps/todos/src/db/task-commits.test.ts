@@ -160,18 +160,44 @@ describe("task git refs", () => {
     expect(refs.map(ref => ref.name).sort()).toEqual(["5", "task/git-traceability"]);
   });
 
-  it("upserts refs on task type and name", () => {
+  it("upserts refs on task type and name without changing the stable ref identity", () => {
     const task = setupTask();
-    linkTaskGitRef({ task_id: task.id, ref_type: "branch", name: "task/a" });
+    const original = linkTaskGitRef({
+      task_id: task.id,
+      ref_type: "pull_request",
+      name: "hasna/codewith#488",
+      url: "https://github.com/hasna/codewith/pull/488",
+      provider: "github",
+      metadata: { state: "open" },
+    });
     const updated = linkTaskGitRef({
       task_id: task.id,
-      ref_type: "branch",
-      name: "task/a",
-      url: "https://github.com/hasna/todos/tree/task/a",
+      ref_type: "pull_request",
+      name: "hasna/codewith#488",
+      metadata: { state: "merged", merged_at: "2026-08-10T00:00:00.000Z" },
     });
 
-    expect(updated.url).toBe("https://github.com/hasna/todos/tree/task/a");
-    expect(getTaskGitRefs(task.id)).toHaveLength(1);
+    expect(updated).toMatchObject({
+      id: original.id,
+      created_at: original.created_at,
+      url: "https://github.com/hasna/codewith/pull/488",
+      provider: "github",
+      metadata: { state: "merged", merged_at: "2026-08-10T00:00:00.000Z" },
+    });
+    expect(getTaskGitRefs(task.id)).toEqual([expect.objectContaining({ id: original.id })]);
+  });
+
+  it("keeps different task, type, or name keys as distinct refs", () => {
+    const task = setupTask();
+    const otherTask = setupTask("Other task");
+    const base = linkTaskGitRef({ task_id: task.id, ref_type: "pull_request", name: "hasna/codewith#488" });
+    const otherName = linkTaskGitRef({ task_id: task.id, ref_type: "pull_request", name: "hasna/codewith#489" });
+    const otherType = linkTaskGitRef({ task_id: task.id, ref_type: "branch", name: "hasna/codewith#488" });
+    const otherTaskRef = linkTaskGitRef({ task_id: otherTask.id, ref_type: "pull_request", name: "hasna/codewith#488" });
+
+    expect(new Set([base.id, otherName.id, otherType.id, otherTaskRef.id]).size).toBe(4);
+    expect(getTaskGitRefs(task.id)).toHaveLength(3);
+    expect(getTaskGitRefs(otherTask.id)).toEqual([expect.objectContaining({ id: otherTaskRef.id })]);
   });
 
   it("finds tasks by branch or PR URL", () => {

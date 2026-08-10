@@ -102,6 +102,7 @@ import {
   divergentAuditHistoryReplayError,
   forbiddenAuditHistoryTombstoneError,
 } from "./audit-history-import.js";
+import { deterministicUuid } from "../task-manifest/canonical.js";
 
 type RemoteObjectType = TodosPostgresSyncRecordType | "comments" | "dependencies" | "verifications" | "commits" | "refs" | "template_tasks" | "plan_project_link_receipts" | "plan_project_link_rollback_receipts";
 
@@ -2371,6 +2372,8 @@ async function findCommit(sha: string, store: PostgresJsonRecordStore): Promise<
  * Link a git branch or pull request to a task in the shared cloud dataset. The
  * task must exist (parity with the local FK) so a ref link on a missing cloud
  * task 404s loudly instead of tripping a FOREIGN KEY constraint on local sqlite.
+ * Re-linking the stable task+type+name key updates the original record in place,
+ * matching linkTaskGitRef's local SQLite contract instead of minting duplicates.
  */
 async function addGitRef(
   input: CreateTodosGitRefInput,
@@ -2378,16 +2381,28 @@ async function addGitRef(
   context?: TodosStorageContext,
 ): Promise<TodosTaskGitRefRecord> {
   if (!(await store.get<Task>("tasks", input.task_id))) throw new Error(`Task not found: ${input.task_id}`);
+  const existing = (await store.list<TodosTaskGitRefRecord>("refs"))
+    .filter((ref) =>
+      ref.task_id === input.task_id &&
+      ref.ref_type === input.ref_type &&
+      ref.name === input.name)
+    // Legacy datasets can already contain duplicates. Preserve the oldest
+    // identity deterministically; cleanup is a separate, explicit data repair.
+    .sort((left, right) =>
+      left.created_at.localeCompare(right.created_at) || left.id.localeCompare(right.id))[0];
   const timestamp = new Date().toISOString();
   const gitRef: TodosTaskGitRefRecord = {
-    id: randomUUID(),
+    // Concurrent writers can both observe no existing stable-key row. Derive
+    // the same fallback identity so the store's primary-key ON CONFLICT is the
+    // atomic convergence point instead of allowing two random object IDs.
+    id: existing?.id ?? deterministicUuid("todos:git-ref:v1", input.task_id, input.ref_type, input.name),
     task_id: input.task_id,
     ref_type: input.ref_type,
     name: input.name,
-    url: input.url ?? null,
-    provider: input.provider ?? null,
+    url: input.url ?? existing?.url ?? null,
+    provider: input.provider ?? existing?.provider ?? null,
     metadata: input.metadata ?? {},
-    created_at: timestamp,
+    created_at: existing?.created_at ?? timestamp,
     updated_at: timestamp,
   };
   await store.upsert("refs", gitRef, context);

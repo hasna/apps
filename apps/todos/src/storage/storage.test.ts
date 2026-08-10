@@ -1902,6 +1902,90 @@ describe("storage adapter contracts", () => {
     await expect(Promise.resolve(adapter.gitRefs!.add({ task_id: "nope", ref_type: "branch", name: "b" }))).rejects.toThrow(/not found/);
   });
 
+  test("REGRESSION: cloud git refs upsert the stable task+type+name key in place", async () => {
+    const postgres = createMemoryPostgresClient();
+    const adapter = createPostgresTodosStorageAdapter({ client: postgres.client, sourceMachineId: "station02" });
+    const task = await adapter.tasks.create({ title: "Stable cloud ref" });
+    const otherTask = await adapter.tasks.create({ title: "Distinct cloud ref task" });
+
+    const original = await adapter.gitRefs!.add({
+      task_id: task.id,
+      ref_type: "pull_request",
+      name: "hasna/codewith#488",
+      url: "https://github.com/hasna/codewith/pull/488",
+      provider: "github",
+      metadata: { state: "open" },
+    });
+    const updated = await adapter.gitRefs!.add({
+      task_id: task.id,
+      ref_type: "pull_request",
+      name: "hasna/codewith#488",
+      metadata: { state: "merged", merged_at: "2026-08-10T00:00:00.000Z" },
+    });
+
+    expect(updated).toMatchObject({
+      id: original.id,
+      created_at: original.created_at,
+      url: "https://github.com/hasna/codewith/pull/488",
+      provider: "github",
+      metadata: { state: "merged", merged_at: "2026-08-10T00:00:00.000Z" },
+    });
+    expect(await adapter.gitRefs!.list(task.id)).toEqual([expect.objectContaining({ id: original.id })]);
+    expect(await adapter.gitRefs!.find("hasna/codewith#488")).toEqual([
+      expect.objectContaining({ id: original.id, task_id: task.id }),
+    ]);
+
+    const otherName = await adapter.gitRefs!.add({
+      task_id: task.id,
+      ref_type: "pull_request",
+      name: "hasna/codewith#489",
+    });
+    const otherType = await adapter.gitRefs!.add({
+      task_id: task.id,
+      ref_type: "branch",
+      name: "hasna/codewith#488",
+    });
+    const otherTaskRef = await adapter.gitRefs!.add({
+      task_id: otherTask.id,
+      ref_type: "pull_request",
+      name: "hasna/codewith#488",
+    });
+
+    expect(new Set([original.id, otherName.id, otherType.id, otherTaskRef.id]).size).toBe(4);
+    expect(await adapter.gitRefs!.list(task.id)).toHaveLength(3);
+    expect(await adapter.gitRefs!.list(otherTask.id)).toEqual([expect.objectContaining({ id: otherTaskRef.id })]);
+  });
+
+  test("REGRESSION: concurrent cloud git ref upserts converge on one stable record", async () => {
+    const postgres = createMemoryPostgresClient();
+    const adapter = createPostgresTodosStorageAdapter({ client: postgres.client, sourceMachineId: "station02" });
+    const task = await adapter.tasks.create({ title: "Concurrent stable cloud ref" });
+    const input = {
+      task_id: task.id,
+      ref_type: "pull_request" as const,
+      name: "hasna/codewith#488",
+      url: "https://github.com/hasna/codewith/pull/488",
+      provider: "github",
+      metadata: { state: "merged" },
+    };
+
+    const [left, right] = await Promise.all([
+      adapter.gitRefs!.add(input),
+      adapter.gitRefs!.add(input),
+    ]);
+    const persisted = await adapter.gitRefs!.list(task.id);
+
+    expect(left.id).toBe(right.id);
+    expect(persisted).toEqual([
+      expect.objectContaining({
+        id: left.id,
+        task_id: task.id,
+        ref_type: input.ref_type,
+        name: input.name,
+      }),
+    ]);
+  });
+
   test("pushes task filtering, count and pagination down to SQL (no whole-table load)", async () => {
     const postgres = createMemoryPostgresClient();
     const adapter = createPostgresTodosStorageAdapter({
