@@ -30,6 +30,8 @@ describe("project resolver", () => {
     writeFileSync(join(marked, ".project.json"), JSON.stringify({ id: project.id, slug: project.slug }), "utf-8");
 
     expect(resolveRegisteredProjectTarget("Resolver Project", { db })?.source).toBe("name");
+    expect(resolveRegisteredProjectTarget(primary, { db })?.project.id).toBe(project.id);
+    expect(resolveRegisteredProjectTarget(primary, { db })?.source).toBe("path");
     expect(resolveRegisteredProjectTarget(secondary, { db })?.project.id).toBe(project.id);
     expect(resolveRegisteredProjectTarget(secondary, { db })?.source).toBe("path");
     expect(resolveRegisteredProjectTarget(marked, { db })?.source).toBe("marker");

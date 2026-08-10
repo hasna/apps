@@ -82,7 +82,17 @@ import {
   type StorageClient,
   type QueryParams,
 } from "../http/client.js";
-import { resolveRegisteredProjectTargetOrThrow, type ProjectResolverOptions } from "../lib/project-resolver.js";
+import { basename } from "node:path";
+import {
+  isProjectDirectory,
+  normalizeProjectPath,
+  resolveRegisteredProjectTargetOrThrow,
+  type ProjectResolverOptions,
+} from "../lib/project-resolver.js";
+import {
+  isProjectWorkspaceStorePath,
+  PROJECT_WORKSPACE_ID_PATTERN,
+} from "../lib/project-store-paths.js";
 import { collectCompletePages, collectPages, type CompletePage } from "./paginate.js";
 import {
   createProjectDataModel as dbCreateProjectDataModel,
@@ -1007,6 +1017,23 @@ function isCloudResolvableId(idOrSlug: string): boolean {
 }
 
 /**
+ * A canonical work-project path carries a stable Projects id in its final
+ * segment. Resolve that id only when the directory exists on this machine and
+ * the complete path is the package-owned `workspaces/<wks_id>` location.
+ *
+ * This is deliberately narrower than general path or marker resolution: the
+ * server row must still be fetched by the derived stable id and independently
+ * attest the same canonical primary path before the target is accepted.
+ */
+function canonicalProjectIdFromExistingPath(target: string): string | null {
+  const path = normalizeProjectPath(target);
+  if (!isProjectDirectory(path)) return null;
+  const projectId = basename(path);
+  if (!PROJECT_WORKSPACE_ID_PATTERN.test(projectId)) return null;
+  return isProjectWorkspaceStorePath(projectId, path) ? projectId : null;
+}
+
+/**
  * Guarantee the shape the LocalStore always produces: `metadata`/`integrations`
  * are objects and `tags` is an array. The projects API returns these
  * populated, but normalizing at the transport boundary keeps every downstream
@@ -1163,9 +1190,22 @@ class ApiProjectStore implements ProjectStore {
     return normalizeApiWorkspace(await this.client.get<Workspace>(RESOURCE, idOrSlug));
   }
 
-  async resolveTarget(target: string | undefined): Promise<Workspace> {
+  async resolveTarget(target: string | undefined, options?: ProjectResolverOptions): Promise<Workspace> {
     const idOrSlug = target?.trim();
     if (!idOrSlug) throw new Error("Project not found: (no target provided)");
+    const canonicalProjectId = options?.allowPath === false
+      ? null
+      : canonicalProjectIdFromExistingPath(idOrSlug);
+    if (canonicalProjectId) {
+      const project = await this.getProject(canonicalProjectId);
+      if (
+        project?.id === canonicalProjectId
+        && isProjectWorkspaceStorePath(canonicalProjectId, project.primary_path)
+      ) {
+        return project;
+      }
+      throw new Error(`Project not found: ${idOrSlug}`);
+    }
     const project = await this.getProject(idOrSlug);
     if (!project) throw new Error(`Project not found: ${idOrSlug}`);
     return project;

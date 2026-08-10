@@ -86,11 +86,19 @@ async function safeResolveProjectTarget(
       return { project: res.project, source: res.source, marker: res.marker ?? null, resolution: res };
     }
     const project = await store.resolveTarget(target, { allowPath: true, allowMarker: true });
+    const normalizedTarget = target?.trim() || ".";
+    const source: ProjectResolverSource = isProjectPathLike(normalizedTarget) ? "path" : "id-or-slug";
     return {
       project,
-      source: "id-or-slug",
+      source,
       marker: null,
-      resolution: { target: target?.trim() || ".", source: "id-or-slug", registered: true, project },
+      resolution: {
+        target: normalizedTarget,
+        source,
+        registered: true,
+        project,
+        ...(source === "path" ? { path: normalizeProjectPath(normalizedTarget) } : {}),
+      },
     };
   } catch {
     return null;

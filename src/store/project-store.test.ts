@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDatabase } from "../db/database.js";
@@ -684,6 +684,76 @@ describe("projects store api transport (roots/agents/recipes)", () => {
     expect(calls).toHaveLength(0);
     // resolveTarget surfaces a clean not-found rather than a masquerading list.
     await expect(store.resolveTarget(".")).rejects.toThrow(/Project not found/);
+  });
+
+  test("resolveTarget verifies an existing canonical workspace path against its stable cloud project id", async () => {
+    const root = mkdtempSync(join(tmpdir(), "projects-api-context-path-"));
+    const previousHome = process.env[PROJECTS_HOME_ENV];
+    process.env[PROJECTS_HOME_ENV] = root;
+    const projectId = "wks_contextcanonical";
+    const canonicalPath = join(root, "workspaces", projectId);
+    const wrongPrimaryId = "wks_contextwrongprimary";
+    const wrongPrimaryPath = join(root, "workspaces", wrongPrimaryId);
+    const wrongIdentityId = "wks_contextwrongidentity";
+    const wrongIdentityPath = join(root, "workspaces", wrongIdentityId);
+    const noncanonicalPath = join(root, "repos", "context-canonical");
+    mkdirSync(canonicalPath, { recursive: true });
+    mkdirSync(wrongPrimaryPath, { recursive: true });
+    mkdirSync(wrongIdentityPath, { recursive: true });
+    mkdirSync(noncanonicalPath, { recursive: true });
+    try {
+      const cloudProject = {
+        id: projectId,
+        slug: "context-canonical",
+        name: "Context Canonical",
+        kind: "project",
+        status: "active",
+        primary_path: canonicalPath,
+        root_id: null,
+        recipe_id: null,
+        tags: [],
+        integrations: {},
+        metadata: {},
+        last_opened_at: null,
+        updated_at: "2026-08-10T00:00:00.000Z",
+      };
+      const { store, calls } = stubStore((_method, path) => {
+        if (path === `/v1/projects/${projectId}`) return cloudProject;
+        if (path === `/v1/projects/${wrongPrimaryId}`) {
+          return { ...cloudProject, id: wrongPrimaryId, primary_path: noncanonicalPath };
+        }
+        if (path === `/v1/projects/${wrongIdentityId}`) {
+          return { ...cloudProject, primary_path: wrongIdentityPath };
+        }
+        return {};
+      });
+
+      expect(await store.resolveTarget(canonicalPath)).toMatchObject({
+        id: projectId,
+        slug: "context-canonical",
+        primary_path: canonicalPath,
+      });
+      expect(calls).toEqual([{
+        method: "GET",
+        path: `/v1/projects/${projectId}`,
+        auth: "Bearer secret-key",
+      }]);
+
+      await expect(store.resolveTarget(noncanonicalPath)).rejects.toThrow(/Project not found/);
+      await expect(store.resolveTarget(join(root, "workspaces", "wks_absentcanonical"))).rejects.toThrow(/Project not found/);
+      await expect(store.resolveTarget(canonicalPath, { allowPath: false })).rejects.toThrow(/Project not found/);
+      await expect(store.resolveTarget(wrongPrimaryPath)).rejects.toThrow(/Project not found/);
+      await expect(store.resolveTarget(wrongIdentityPath)).rejects.toThrow(/Project not found/);
+      expect(calls.map((call) => call.path)).toEqual([
+        `/v1/projects/${projectId}`,
+        `/v1/projects/${wrongPrimaryId}`,
+        `/v1/projects/${wrongIdentityId}`,
+      ]);
+    } finally {
+      if (previousHome === undefined) delete process.env[PROJECTS_HOME_ENV];
+      else process.env[PROJECTS_HOME_ENV] = previousHome;
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   test("getProject normalizes null metadata/integrations/tags into safe shapes", async () => {
