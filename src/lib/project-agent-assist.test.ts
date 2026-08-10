@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -12,6 +12,7 @@ import {
 import type { JsonObject, Workspace } from "../types/workspace.js";
 import { closeDatabase, getDatabase, PROJECTS_DB_PATH_ENV } from "../db/database.js";
 import { resolveProjectStore, __resetProjectStore, type ProjectStore } from "../store/project-store.js";
+import { PROJECTS_HOME_ENV } from "./project-store-paths.js";
 import {
   buildProjectAgentContext,
   buildProjectHandoff,
@@ -347,6 +348,41 @@ describe("project-agent-assist: api mode routes through the Store (no split-brai
     expect(ctx.target.resolved).toBe(true);
     expect(ctx.project?.["id"]).toBe("cloud-1"); // cloud row, not the local one
     expect(calls.some((c) => c.includes("GET /v1/projects/agent-project"))).toBe(true);
+  });
+
+  test("context resolves an existing canonical workspace path through its verified cloud id", async () => {
+    const root = mkdtempSync(join(tmpdir(), "projects-agent-context-path-"));
+    const previousHome = process.env[PROJECTS_HOME_ENV];
+    process.env[PROJECTS_HOME_ENV] = root;
+    const projectId = "wks_agentcontextpath";
+    const projectPath = join(root, "workspaces", projectId);
+    mkdirSync(projectPath, { recursive: true });
+    try {
+      const { store, calls } = apiStore((method, path) => {
+        if (method === "GET" && path === `/v1/projects/${projectId}`) {
+          return {
+            ...cloudProject,
+            id: projectId,
+            slug: "agent-context-path",
+            primary_path: projectPath,
+          };
+        }
+        if (method === "GET" && path.startsWith(`/v1/projects/${projectId}/events`)) return { events: [] };
+        return {};
+      });
+      const ctx = await buildProjectAgentContext(store, { target: projectPath });
+      expect(ctx.target).toMatchObject({ input: projectPath, resolved: true, source: "path" });
+      expect(ctx.project).toMatchObject({
+        id: projectId,
+        slug: "agent-context-path",
+        primary_path: projectPath,
+      });
+      expect(calls.some((call) => call === `GET /v1/projects/${projectId}`)).toBe(true);
+    } finally {
+      if (previousHome === undefined) delete process.env[PROJECTS_HOME_ENV];
+      else process.env[PROJECTS_HOME_ENV] = previousHome;
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   test("next reads events over HTTP and skips machine-local doctor in api mode", async () => {
