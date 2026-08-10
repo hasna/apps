@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   authorities, and permits a new authenticated session with the same agent name
   to refresh an exact stale lock through holder/version CAS plus an audit
   receipt.
+- **PostgreSQL stale-lock recovery no longer depends on a schema helper.** The
+  exact stored `locked_at` token is compared as text before PostgreSQL casts only
+  the already-validated request token for the stale cutoff, so missing helper
+  functions and malformed stored timestamps fail closed without mutation.
 
 ## [0.15.20] - 2026-08-09
 

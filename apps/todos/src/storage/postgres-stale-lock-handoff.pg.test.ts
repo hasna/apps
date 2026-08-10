@@ -2,8 +2,10 @@
  * REAL PostgreSQL coverage for the exact stale-lock handoff CAS.
  *
  * The mutation and task-history receipt must commit from one PostgreSQL
- * statement; application-side prechecks are not sufficient. Point
- * TODOS_TEST_PG_URL only at a disposable test database:
+ * statement; application-side prechecks are not sufficient. The suite uses a
+ * unique schema, primes the adapter, and removes `todos_try_timestamptz` before
+ * the handoffs so the exact production failure cannot hide behind test setup.
+ * Point TODOS_TEST_PG_URL only at a disposable test database:
  *
  *   TODOS_TEST_PG_URL=postgres://localhost:5432/todos_reftest \
  *     bun test src/storage/postgres-stale-lock-handoff.pg.test.ts
@@ -12,11 +14,11 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { StaleLockHandoffError, type Task, type TaskHistory } from "../types/index.js";
 import { createTodosCloudQueryClient, type TodosCloudQueryClient } from "./cloud-client.js";
 import { createPostgresTodosStorageAdapter } from "./postgres-adapter.js";
-import { postgresTodosSyncSchemaSql } from "./postgres-sync.js";
 import type { TodosStorageAdapter } from "./interfaces.js";
 
 const PG_URL = process.env["TODOS_TEST_PG_URL"];
 const SERVICE = `todos-stale-lock-handoff-${process.pid}-${Date.now()}`;
+const SCHEMA = `todos_handoff_${process.pid}_${Date.now()}`;
 const HOLDER = "holder-a";
 const NEW_HOLDER = "nausicaa";
 const STALE_AFTER_SECONDS = 3600;
@@ -26,6 +28,10 @@ const SIBLING_TASK_ID = "d1000000-0000-4000-8000-000000000002";
 const LIVE_TASK_ID = "d1000000-0000-4000-8000-000000000003";
 const HOLDER_MISMATCH_TASK_ID = "d1000000-0000-4000-8000-000000000004";
 const VERSION_MISMATCH_TASK_ID = "d1000000-0000-4000-8000-000000000005";
+const SAME_HOLDER_TASK_ID = "d1000000-0000-4000-8000-000000000006";
+const MALFORMED_STORED_TASK_ID = "d1000000-0000-4000-8000-000000000007";
+const MALFORMED_EXPECTED_TASK_ID = "d1000000-0000-4000-8000-000000000008";
+const IDENTITY_GUARD_TASK_ID = "d1000000-0000-4000-8000-000000000009";
 
 function taskPayload(id: string, lockedAt: string, overrides: Partial<Task> = {}): Task {
   return {
@@ -133,26 +139,39 @@ describe.skipIf(!PG_URL)("PostgreSQL exact stale-lock handoff", () => {
     return result.rows.map((row) => row.payload);
   };
 
-  const handoff = (taskId: string, expectedLockVersion: string, expectedHolder = HOLDER) =>
+  const handoff = (
+    taskId: string,
+    expectedLockVersion: string,
+    options: {
+      actor?: string;
+      expectedHolder?: string;
+      newHolder?: string;
+      reason?: string;
+    } = {},
+  ) =>
     store.tasks.handoffStaleLock!({
       task_id: taskId,
-      actor: NEW_HOLDER,
-      expected_holder: expectedHolder,
+      actor: options.actor ?? NEW_HOLDER,
+      expected_holder: options.expectedHolder ?? HOLDER,
       expected_lock_version: expectedLockVersion,
       stale_after_seconds: STALE_AFTER_SECONDS,
-      new_holder: NEW_HOLDER,
-      reason: "Recover an abandoned exact PostgreSQL lock",
+      new_holder: options.newHolder ?? NEW_HOLDER,
+      reason: options.reason ?? "Recover an abandoned exact PostgreSQL lock",
     });
 
   beforeAll(async () => {
-    client = createTodosCloudQueryClient(PG_URL!);
-    for (const sql of postgresTodosSyncSchemaSql()) await client.query(sql);
+    client = createTodosCloudQueryClient(PG_URL!, { max: 1 });
+    await client.query(`CREATE SCHEMA ${SCHEMA}`);
+    await client.query(`SET search_path TO ${SCHEMA}, public`);
     store = createPostgresTodosStorageAdapter({ client, service: SERVICE });
+    await store.tasks.get(STALE_TASK_ID);
+    await client.query("DROP FUNCTION todos_try_timestamptz(text) CASCADE");
   });
 
   afterAll(async () => {
     if (!PG_URL) return;
-    await client.query("DELETE FROM todos_sync_records WHERE service = $1", [SERVICE]);
+    await client.query("SET search_path TO public");
+    await client.query(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE`);
     await client.close();
   });
 
@@ -202,6 +221,32 @@ describe.skipIf(!PG_URL)("PostgreSQL exact stale-lock handoff", () => {
     expect(await taskAudit(STALE_TASK_ID)).toHaveLength(1);
   });
 
+  test("same-holder recovery refreshes one exact stale lock for a new session", async () => {
+    const staleVersion = new Date(Date.now() - 2 * STALE_AFTER_SECONDS * 1000).toISOString();
+    await seedTask(taskPayload(SAME_HOLDER_TASK_ID, staleVersion, {
+      locked_by: NEW_HOLDER,
+    }));
+
+    const receipt = await handoff(SAME_HOLDER_TASK_ID, staleVersion, {
+      expectedHolder: NEW_HOLDER,
+    });
+
+    expect(receipt).toMatchObject({
+      task_id: SAME_HOLDER_TASK_ID,
+      actor: NEW_HOLDER,
+      previous_holder: NEW_HOLDER,
+      previous_lock_version: staleVersion,
+      new_holder: NEW_HOLDER,
+    });
+    expect(receipt.new_lock_version).not.toBe(staleVersion);
+    expect(await store.tasks.get(SAME_HOLDER_TASK_ID)).toMatchObject({
+      locked_by: NEW_HOLDER,
+      locked_at: receipt.new_lock_version,
+      version: 2,
+    });
+    expect(await taskAudit(SAME_HOLDER_TASK_ID)).toHaveLength(1);
+  });
+
   test("a live current lock fails closed with unchanged task and audit population", async () => {
     const liveVersion = new Date(Date.now() - 30_000).toISOString();
     await seedTask(taskPayload(LIVE_TASK_ID, liveVersion));
@@ -226,20 +271,20 @@ describe.skipIf(!PG_URL)("PostgreSQL exact stale-lock handoff", () => {
       {
         taskId: HOLDER_MISMATCH_TASK_ID,
         expectedVersion: staleVersion,
-        expectedHolder: "wrong-holder",
+        options: { expectedHolder: "wrong-holder" },
         code: "STALE_LOCK_HANDOFF_HOLDER_MISMATCH",
       },
       {
         taskId: VERSION_MISMATCH_TASK_ID,
         expectedVersion: wrongVersion,
-        expectedHolder: HOLDER,
+        options: {},
         code: "STALE_LOCK_HANDOFF_VERSION_MISMATCH",
       },
     ] as const) {
       const rowBefore = await taskRecord(control.taskId);
       const auditBefore = await taskAudit(control.taskId);
       try {
-        await handoff(control.taskId, control.expectedVersion, control.expectedHolder);
+        await handoff(control.taskId, control.expectedVersion, control.options);
         throw new Error("expected PostgreSQL stale-lock handoff conflict");
       } catch (error) {
         expect(error).toBeInstanceOf(StaleLockHandoffError);
@@ -248,5 +293,59 @@ describe.skipIf(!PG_URL)("PostgreSQL exact stale-lock handoff", () => {
       expect(await taskRecord(control.taskId)).toEqual(rowBefore);
       expect(await taskAudit(control.taskId)).toEqual(auditBefore);
     }
+  });
+
+  test("malformed stored and expected timestamps fail closed without casting stored JSON", async () => {
+    const staleVersion = new Date(Date.now() - 2 * STALE_AFTER_SECONDS * 1000).toISOString();
+    await seedTask(taskPayload(MALFORMED_STORED_TASK_ID, "not-a-timestamp", {
+      created_at: staleVersion,
+      updated_at: staleVersion,
+      started_at: staleVersion,
+    }));
+    await seedTask(taskPayload(MALFORMED_EXPECTED_TASK_ID, staleVersion));
+
+    const malformedStoredBefore = await taskRecord(MALFORMED_STORED_TASK_ID);
+    await expect(handoff(MALFORMED_STORED_TASK_ID, staleVersion)).rejects.toMatchObject({
+      code: "STALE_LOCK_HANDOFF_VERSION_MISMATCH",
+    });
+    expect(await taskRecord(MALFORMED_STORED_TASK_ID)).toEqual(malformedStoredBefore);
+    expect(await taskAudit(MALFORMED_STORED_TASK_ID)).toHaveLength(0);
+
+    const malformedExpectedBefore = await taskRecord(MALFORMED_EXPECTED_TASK_ID);
+    await expect(handoff(MALFORMED_EXPECTED_TASK_ID, "not-a-timestamp")).rejects.toMatchObject({
+      code: "STALE_LOCK_HANDOFF_INVALID_INPUT",
+    });
+    expect(await taskRecord(MALFORMED_EXPECTED_TASK_ID)).toEqual(malformedExpectedBefore);
+    expect(await taskAudit(MALFORMED_EXPECTED_TASK_ID)).toHaveLength(0);
+  });
+
+  test("missing actor, actor/new-holder mismatch, and empty reason produce zero mutation", async () => {
+    const staleVersion = new Date(Date.now() - 2 * STALE_AFTER_SECONDS * 1000).toISOString();
+    await seedTask(taskPayload(IDENTITY_GUARD_TASK_ID, staleVersion));
+    const rowBefore = await taskRecord(IDENTITY_GUARD_TASK_ID);
+
+    for (const control of [
+      {
+        options: { actor: "" },
+        code: "STALE_LOCK_HANDOFF_INVALID_INPUT",
+      },
+      {
+        options: { actor: "different-actor" },
+        code: "STALE_LOCK_HANDOFF_ACTOR_MISMATCH",
+      },
+      {
+        options: { reason: " " },
+        code: "STALE_LOCK_HANDOFF_INVALID_INPUT",
+      },
+    ] as const) {
+      await expect(handoff(
+        IDENTITY_GUARD_TASK_ID,
+        staleVersion,
+        control.options,
+      )).rejects.toMatchObject({ code: control.code });
+    }
+
+    expect(await taskRecord(IDENTITY_GUARD_TASK_ID)).toEqual(rowBefore);
+    expect(await taskAudit(IDENTITY_GUARD_TASK_ID)).toHaveLength(0);
   });
 });
