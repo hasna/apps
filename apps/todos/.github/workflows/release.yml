@@ -82,6 +82,10 @@ jobs:
       - name: Install locked dependencies
         run: bun install --frozen-lockfile
 
+      - name: Install AI companion locked dependencies
+        working-directory: ai
+        run: bun install --frozen-lockfile
+
       - name: Bind the tag to the package version
         id: version
         run: |
