@@ -128,11 +128,31 @@ function captureOutput() {
   };
 }
 
+function useApiConnectionEnv(): void {
+  process.env["HASNA_ATTACHMENTS_API_URL"] = "https://attachments.example.test";
+  process.env["HASNA_ATTACHMENTS_API_KEY"] = "test-only";
+  delete process.env["HASNA_ATTACHMENTS_STORAGE_MODE"];
+  delete process.env["HASNA_ATTACHMENTS_MODE"];
+}
+
+function expectApiConnectionWording(output: string): void {
+  const connectionLine = output.split("\n")[0];
+  expect(connectionLine).toBe("Connection: HTTP API (/v1)");
+  expect(connectionLine).not.toMatch(/mode|self_hosted|cloud/i);
+  expect(output).toContain("API: https://attachments.example.test/v1");
+  expect(output).not.toContain("Mode:");
+  expect(output).not.toContain("self_hosted");
+}
+
 // ─── tests ───────────────────────────────────────────────────────────────────
 
 describe("status command", () => {
   beforeEach(() => {
     delete process.env["HASNA_ATTACHMENTS_DB_PATH"];
+    delete process.env["HASNA_ATTACHMENTS_API_URL"];
+    delete process.env["HASNA_ATTACHMENTS_API_KEY"];
+    delete process.env["ATTACHMENTS_API_URL"];
+    delete process.env["ATTACHMENTS_API_KEY"];
     mockFindAll.mockReset();
     mockFindAll.mockImplementation(() => []);
     mockDbClose.mockReset();
@@ -192,6 +212,47 @@ describe("status command", () => {
       capture.restore();
       // Restore config path
       setConfigPath(testConfigPath);
+    }
+  });
+
+  it("describes a reachable API connection without deployment-mode vocabulary", async () => {
+    useApiConnectionEnv();
+    const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(
+      mock(async () => new Response("[]", {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })),
+    );
+    const capture = captureOutput();
+    try {
+      const program = buildStatusCmd();
+      await program.parseAsync(["status"], { from: "user" });
+      const output = capture.out.join("");
+      expectApiConnectionWording(output);
+      expect(output).toContain("Health: reachable");
+    } finally {
+      capture.restore();
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it("describes a failed API connection without deployment-mode vocabulary", async () => {
+    useApiConnectionEnv();
+    const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(
+      mock(async () => {
+        throw new Error("Network error");
+      }),
+    );
+    const capture = captureOutput();
+    try {
+      const program = buildStatusCmd();
+      await program.parseAsync(["status"], { from: "user" });
+      const output = capture.out.join("");
+      expectApiConnectionWording(output);
+      expect(output).toContain("Health: connection failed (Network error)");
+    } finally {
+      capture.restore();
+      fetchSpy.mockRestore();
     }
   });
 

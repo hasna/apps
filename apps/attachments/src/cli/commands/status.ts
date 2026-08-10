@@ -67,12 +67,12 @@ export function registerStatus(program: Command): void {
       if (store.transport === "cloud-http") {
         try {
           const rows = await store.list({ limit: 1 });
-          process.stdout.write(`Mode: self_hosted/cloud (/v1)\n`);
+          process.stdout.write(`Connection: HTTP API (/v1)\n`);
           process.stdout.write(`API: ${store.baseUrl}\n`);
           process.stdout.write(`Health: reachable (list ok, ${rows.length >= 0 ? "authorized" : "unknown"})\n`);
           process.stdout.write(`Config: ${CONFIG_PATH}\n`);
         } catch (error) {
-          process.stdout.write(`Mode: self_hosted/cloud (/v1)\n`);
+          process.stdout.write(`Connection: HTTP API (/v1)\n`);
           process.stdout.write(`API: ${store.baseUrl}\n`);
           process.stdout.write(`Health: connection failed (${error instanceof Error ? error.message : String(error)})\n`);
           process.stdout.write(`Config: ${CONFIG_PATH}\n`);
