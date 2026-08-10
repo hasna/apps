@@ -143,6 +143,86 @@ describe("ApiStore heartbeat partial updates", () => {
   });
 });
 
+describe("ApiStore immutable message lookup compatibility", () => {
+  test("falls back to the collection UUID filter when the dedicated route is absent", async () => {
+    const uuid = "5307e936-efb7-4eeb-b7e2-0fe354b7ac35";
+    const calls: Array<{ path: string; query: unknown }> = [];
+    const notFound = Object.assign(new Error("Not Found"), {
+      name: "HasnaHttpError",
+      status: 404,
+    });
+    const client = {
+      name: "conversations",
+      baseUrl: "https://conversations.hasna.xyz/v1",
+      transport: {
+        get: async (path: string, options?: { query?: Record<string, unknown> }) => {
+          calls.push({ path, query: options?.query ?? null });
+          if (path.startsWith("/messages/by-uuid/")) throw notFound;
+          if (path === "/messages") {
+            return {
+              messages: [{
+                id: "695033",
+                uuid,
+                session_id: "channel:git-publishing",
+                from_agent: "alice",
+                to_agent: "git-publishing",
+                channel: "git-publishing",
+                content: "synthetic parent",
+              }],
+            };
+          }
+          return null;
+        },
+      },
+    } as unknown as HasnaStorageClient;
+
+    const message = await new ApiStore(client).getMessageByUuid(uuid);
+
+    expect(message).toMatchObject({
+      id: 695033,
+      uuid,
+      channel: "git-publishing",
+    });
+    expect(calls).toEqual([
+      { path: `/messages/by-uuid/${uuid}`, query: null },
+      {
+        path: "/messages",
+        query: { uuid, limit: 2, order: "asc" },
+      },
+    ]);
+  });
+
+  test("does not accept collection noise when an old server ignores the UUID filter", async () => {
+    const requested = "5307e936-efb7-4eeb-b7e2-0fe354b7ac35";
+    const notFound = Object.assign(new Error("Not Found"), {
+      name: "HasnaHttpError",
+      status: 404,
+    });
+    const client = {
+      name: "conversations",
+      baseUrl: "https://conversations.hasna.xyz/v1",
+      transport: {
+        get: async (path: string) => {
+          if (path.startsWith("/messages/by-uuid/")) throw notFound;
+          return {
+            messages: [{
+              id: 695033,
+              uuid: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+              session_id: "channel:mementos",
+              from_agent: "other",
+              to_agent: "mementos",
+              channel: "mementos",
+              content: "unrelated synthetic row",
+            }],
+          };
+        },
+      },
+    } as unknown as HasnaStorageClient;
+
+    expect(await new ApiStore(client).getMessageByUuid(requested)).toBeNull();
+  });
+});
+
 describe("ApiStore channel notification cursor", () => {
   test("arm-time baseline uses the atomic remote endpoint for one identity", async () => {
     const posts: Array<{ path: string; body: unknown }> = [];

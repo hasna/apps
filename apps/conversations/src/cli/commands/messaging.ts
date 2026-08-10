@@ -21,7 +21,11 @@ import { warnIfRedacted } from "../redaction-notice.js";
 import type { DigestResult } from "../../lib/messages.js";
 import { printErrorLine, printJson, printJsonLine, printLine } from "../../lib/stdout.js";
 import { normalizeChannelName } from "../../lib/channel-names.js";
-import { parseMessageReference } from "../../lib/message-reference.js";
+import {
+  messageChannel,
+  parseMessageReference,
+  resolveMessageReference,
+} from "../../lib/message-reference.js";
 import {
   discloseEmptyResult,
   FROM_ALIAS_HELP,
@@ -129,9 +133,11 @@ export function registerMessagingCommands(program: Command): void {
           );
         }
 
-        const parent = ref.kind === "id"
-          ? await getStore().getMessageById(ref.id)
-          : await getStore().getMessageByUuid(ref.uuid);
+        const expectedChannel = channel ? normalizeChannelName(channel) : undefined;
+        const parent = await resolveMessageReference(getStore(), ref, {
+          channel: expectedChannel,
+          session_id: session,
+        });
         if (!parent) {
           emitCliError(`Message ${String(opts.replyTo)} not found.`, opts);
         }
@@ -139,10 +145,7 @@ export function registerMessagingCommands(program: Command): void {
           emitCliError("Parent message has no immutable UUID; refusing to write a numeric-only reply.", opts);
         }
 
-        const parentChannel =
-          parent.channel ||
-          (parent.session_id?.startsWith("channel:") ? parent.session_id.slice(8) : undefined);
-        const expectedChannel = channel ? normalizeChannelName(channel) : undefined;
+        const parentChannel = messageChannel(parent);
         if (expectedChannel && expectedChannel !== parentChannel) {
           emitCliError(
             `Expected parent channel ${expectedChannel} does not match resolved channel ${parentChannel ?? "(direct message)"}.`,
@@ -621,9 +624,11 @@ used for — auditing a sender or a channel, which is an ABSENCE claim.
         );
       }
 
-      const original = ref.kind === "id"
-        ? await getStore().getMessageById(ref.id)
-        : await getStore().getMessageByUuid(ref.uuid);
+      const expectedChannel = opts.channel ? normalizeChannelName(opts.channel) : undefined;
+      const original = await resolveMessageReference(getStore(), ref, {
+        channel: expectedChannel,
+        session_id: opts.session,
+      });
       if (!original) {
         emitCliError(`Message ${String(opts.to)} not found.`, opts);
       }
@@ -639,10 +644,7 @@ used for — auditing a sender or a channel, which is an ABSENCE claim.
       if (!content.trim()) {
         emitCliError("Reply content cannot be empty.", opts);
       }
-      const channel =
-        original.channel ||
-        (original.session_id?.startsWith("channel:") ? original.session_id.slice(6) : undefined);
-      const expectedChannel = opts.channel ? normalizeChannelName(opts.channel) : undefined;
+      const channel = messageChannel(original);
       if (expectedChannel && expectedChannel !== channel) {
         emitCliError(
           `Expected parent channel ${expectedChannel} does not match resolved channel ${channel ?? "(direct message)"}.`,
