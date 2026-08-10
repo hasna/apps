@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.103
+
+- Add package-owned Knowledge project and collection aggregates with
+  deterministic stable IDs, explicit item membership, immutable forward and
+  inverse receipts, and exact readback.
+- Add bounded complete project, collection, item, and taxonomy enumeration
+  across SQLite, PostgreSQL, REST/OpenAPI, SDK, CLI, and generated packages.
+
 ## 0.2.102
 
 - Republish the same reviewed bounded-query product code through the isolated
