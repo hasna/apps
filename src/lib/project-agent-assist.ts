@@ -520,12 +520,26 @@ export async function explainProjectResolution(
           : `ambiguous: ${nameMatches.map((w) => w.slug).join(", ")}`,
   });
 
+  const resolution = await safeResolveProjectTarget(store, normalizedTarget);
+
   // path + marker are on-disk (machine-local) resolution steps; in api/cloud
-  // mode the client does not resolve cloud projects by this machine's paths.
+  // mode only verified canonical workspace paths resolve through their stable
+  // cloud project id; marker resolution remains machine-local.
   let pathMatched: Workspace[] = [];
   let marker: ProjectMarkerReference | null = null;
   if (!local) {
-    steps.push({ source: "path", tried: false, matched: false, detail: "path resolution is machine-local (not used in api/cloud mode)" });
+    const pathLike = isProjectPathLike(normalizedTarget);
+    const resolvedByPath = pathLike && resolution?.source === "path" ? resolution : null;
+    steps.push({
+      source: "path",
+      tried: pathLike,
+      matched: Boolean(resolvedByPath),
+      detail: resolvedByPath
+        ? `matched ${resolvedByPath.project.slug} (${resolvedByPath.project.id}) by verified canonical path ${resolvedByPath.resolution.path}`
+        : pathLike
+          ? "no verified canonical workspace path match in api/cloud mode"
+          : "target is not path-like",
+    });
     steps.push({ source: "marker", tried: false, matched: false, detail: "marker resolution is machine-local (not used in api/cloud mode)" });
   } else {
     if (isProjectPathLike(normalizedTarget)) {
@@ -577,8 +591,6 @@ export async function explainProjectResolution(
       steps.push({ source: "marker", tried: false, matched: false, detail: "target is not path-like" });
     }
   }
-
-  const resolution = await safeResolveProjectTarget(store, normalizedTarget);
 
   if (!resolution) {
     if (nameMatches.length > 1) suggestions.push("Disambiguate by slug or id instead of name.");

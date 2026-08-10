@@ -3117,6 +3117,111 @@ describe("project-first CLI surface", () => {
     }
   }, 30000);
 
+  test("why reports verified API path diagnostics and keeps an absent path unresolved", async () => {
+    const root = mkdtempSync(join(tmpdir(), "projects-api-why-path-"));
+    const projectsHome = join(root, "home");
+    const projectId = "wks_apiwhypath000001";
+    const projectPath = join(projectsHome, "workspaces", projectId);
+    const absentPath = join(projectsHome, "workspaces", "wks_apiwhyabsent001");
+    mkdirSync(projectPath, { recursive: true });
+    const project = {
+      id: projectId,
+      slug: "api-why-path",
+      name: "API Why Path",
+      description: null,
+      kind: "generic",
+      status: "active",
+      root_id: null,
+      recipe_id: null,
+      canonical_machine: null,
+      primary_path: projectPath,
+      git_remote: null,
+      s3_bucket: null,
+      s3_prefix: null,
+      tags: [],
+      integrations: {},
+      metadata: {},
+      last_opened_at: null,
+      created_at: "2026-08-10 00:00:00",
+      updated_at: "2026-08-10 00:00:01",
+      synced_at: null,
+    };
+    const port = reserveFreePort();
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port,
+      fetch(req) {
+        const url = new URL(req.url);
+        if (req.method === "GET" && url.pathname === `/v1/projects/${projectId}`) {
+          return Response.json(project);
+        }
+        if (req.method === "GET" && url.pathname === "/v1/projects") {
+          return Response.json({ workspaces: [] });
+        }
+        return Response.json({ error: "Not found" }, { status: 404 });
+      },
+    });
+    const env = {
+      HASNA_PROJECTS_DB_PATH: join(root, "projects.db"),
+      HASNA_PROJECTS_HOME: projectsHome,
+      HASNA_PROJECTS_API_URL: `http://127.0.0.1:${port}`,
+      HASNA_PROJECTS_API_KEY: "test-key",
+    };
+    const runWhy = async (target: string) => {
+      const proc = Bun.spawn({
+        cmd: ["bun", "run", CLI_PATH, "why", target, "--json"],
+        stdout: "pipe",
+        stderr: "pipe",
+        env: testSpawnEnv(env),
+      });
+      const [stdout, stderr] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+      ]);
+      await proc.exited;
+      return { exitCode: proc.exitCode, stdout, stderr };
+    };
+
+    try {
+      const present = await runWhy(projectPath);
+      expect(present.exitCode).toBe(0);
+      expect(present.stderr).toBe("");
+      const presentPayload = JSON.parse(present.stdout) as {
+        resolved: boolean;
+        resolution?: { source: string };
+        steps: Array<{ source: string; tried: boolean; matched: boolean; detail: string }>;
+      };
+      expect(presentPayload.resolved).toBe(true);
+      expect(presentPayload.resolution?.source).toBe("path");
+      const presentPathStep = presentPayload.steps.find((step) => step.source === "path");
+      expect(presentPathStep).toMatchObject({
+        tried: true,
+        matched: true,
+      });
+      expect(presentPathStep?.detail).toContain(`matched ${project.slug} (${project.id}) by verified canonical path ${projectPath}`);
+
+      const absent = await runWhy(absentPath);
+      expect(absent.exitCode).toBe(0);
+      expect(absent.stderr).toBe("");
+      const absentPayload = JSON.parse(absent.stdout) as {
+        resolved: boolean;
+        resolution?: unknown;
+        steps: Array<{ source: string; tried: boolean; matched: boolean; detail: string }>;
+      };
+      expect(absentPayload.resolved).toBe(false);
+      expect(absentPayload.resolution).toBeUndefined();
+      const absentPathStep = absentPayload.steps.find((step) => step.source === "path");
+      expect(absentPathStep).toMatchObject({
+        tried: true,
+        matched: false,
+      });
+      expect(absentPathStep?.detail).toBe("no verified canonical workspace path match in api/cloud mode");
+    } finally {
+      server.stop(true);
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30000);
+
   test("store ensure provisions an exact API-backed project locally, stays idempotent, and fails closed on invalid targets", async () => {
     const root = mkdtempSync(join(tmpdir(), "projects-api-store-ensure-"));
     const projectsHome = join(root, "home");
