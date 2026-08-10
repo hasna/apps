@@ -1,4 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,6 +12,9 @@ const REQUEST_FILE = join(TEST_DIR, "registration.json");
 const LOOKUP_FILE = join(TEST_DIR, "registration-lookup.json");
 const INVERSE_FORWARD_FILE = join(TEST_DIR, "registration-inverse-forward.json");
 const INVERSE_FILE = join(TEST_DIR, "registration-inverse.json");
+const BIND_FILE = join(TEST_DIR, "registration-bind-existing.json");
+const BIND_NO_INTENT_FILE = join(TEST_DIR, "registration-bind-existing-no-intent.json");
+const BIND_INVERSE_FILE = join(TEST_DIR, "registration-bind-existing-inverse.json");
 const PROJECT_ID = "wks_ys8tzpsZJMNtx0ORZtLsA";
 const CLI = ["bun", "run", "./src/cli/index.tsx"];
 
@@ -88,6 +92,17 @@ describe("project-registration CLI producer contract", () => {
     expect(createdResult.exitCode, createdResult.stderr).toBe(0);
     const created = JSON.parse(createdResult.stdout) as Record<string, any> & { target_id: string };
     expect(created.target_id).toMatch(/^chn_[0-9a-f]{32}$/);
+    const bindWithCreateShape = runCli([
+      "project-registration",
+      "bind-existing",
+      "--request",
+      REQUEST_FILE,
+      "--json",
+    ]);
+    expect(bindWithCreateShape.exitCode).toBe(1);
+    expect(bindWithCreateShape.stderr).toContain(
+      "bind_existing surface requires operation_intent=bind_existing",
+    );
 
     writeFileSync(LOOKUP_FILE, JSON.stringify({
       operation_id: created.operation_id,
@@ -245,6 +260,7 @@ describe("project-registration CLI producer contract", () => {
       project_kind: "work",
     };
     writeFileSync(INVERSE_FORWARD_FILE, JSON.stringify({
+      operation_intent: "create",
       operation_id: "cli-inverse-operation",
       step_id: "conversations-channel",
       resource_kind: "channel",
@@ -284,6 +300,7 @@ describe("project-registration CLI producer contract", () => {
       target_id: inverseCreated.target_id,
     };
     writeFileSync(INVERSE_FILE, JSON.stringify({
+      operation_intent: "create",
       operation_id: inverseCreated.operation_id,
       step_id: inverseCreated.step_id,
       resource_kind: "channel",
@@ -340,6 +357,252 @@ describe("project-registration CLI producer contract", () => {
       accepted_receipt_id: inverseCreated.receipt_id,
       absent: true,
       digest: compensated.result_digest,
+    });
+
+    const existingResult = runCli([
+      "channel",
+      "create",
+      "cli-bind-existing",
+      "--from",
+      "human",
+      "--json",
+    ]);
+    expect(existingResult.exitCode, existingResult.stderr).toBe(0);
+    const existing = JSON.parse(existingResult.stdout) as { id: string; name: string };
+    const existingMessageResult = runCli([
+      "channel",
+      "send",
+      existing.name,
+      "legacy message ownership",
+      "--from",
+      "human",
+      "--json",
+    ]);
+    expect(existingMessageResult.exitCode, existingMessageResult.stderr).toBe(0);
+    const existingMessage = JSON.parse(existingMessageResult.stdout) as { uuid: string };
+    const priorReadResult = runCli([
+      "project-registration",
+      "read-channel",
+      existing.id,
+      "--channel",
+      existing.name,
+      "--target-digest",
+      "cli-target-digest",
+      "--json",
+    ]);
+    expect(priorReadResult.exitCode, priorReadResult.stderr).toBe(0);
+    const priorRead = JSON.parse(priorReadResult.stdout) as {
+      target_id: string;
+      revision: string;
+      digest: string;
+    };
+    const bindDesired = {
+      channel: existing.name,
+      project_id: PROJECT_ID,
+      project_slug: existing.name,
+      project_kind: "work",
+      registration_mode: "bind_existing",
+      target_id: existing.id,
+      expected_project_id: null,
+    };
+    const bindRequest = {
+      operation_intent: "bind_existing",
+      operation_id: "cli-bind-existing-operation",
+      step_id: "conversations-channel",
+      resource_kind: "channel",
+      direction: "forward",
+      authority_route: capability.route,
+      package_version: capability.package_version,
+      authority_id: capability.authority_id,
+      tenant_id: capability.tenant_id,
+      corpus_id: capability.corpus_id,
+      target_selector: existing.name,
+      idempotency_key: "cli-bind-existing-operation:conversations-channel:forward",
+      request_digest: projectChannelRegistrationDigest(bindDesired),
+      precondition_digest: projectChannelRegistrationDigest({
+        target_id: existing.id,
+        target_selector: existing.name,
+        expected_project_id: null,
+        expected_revision: priorRead.revision,
+        expected_digest: priorRead.digest,
+        desired_project_id: PROJECT_ID,
+      }),
+      project_id: PROJECT_ID,
+      project_slug: existing.name,
+      project_name: "CLI Bind Existing",
+      desired: bindDesired,
+      bind_existing: {
+        target_id: existing.id,
+        expected_project_id: null,
+        expected_revision: priorRead.revision,
+        expected_digest: priorRead.digest,
+      },
+      target_digest: "cli-target-digest",
+      response_byte_limit: 32_768,
+      time_budget_ms: 5_000,
+      call_limit: 1,
+    };
+    writeFileSync(BIND_FILE, JSON.stringify(bindRequest));
+    const { operation_intent: _operationIntent, ...bindWithoutIntent } = bindRequest;
+    writeFileSync(BIND_NO_INTENT_FILE, JSON.stringify(bindWithoutIntent));
+    const createWithBindShape = runCli([
+      "project-registration",
+      "create",
+      "--request",
+      BIND_FILE,
+      "--json",
+    ]);
+    expect(createWithBindShape.exitCode).toBe(1);
+    expect(createWithBindShape.stderr).toContain(
+      "create surface requires operation_intent=create",
+    );
+    const createWithBindShapeWithoutIntent = runCli([
+      "project-registration",
+      "create",
+      "--request",
+      BIND_NO_INTENT_FILE,
+      "--json",
+    ]);
+    expect(createWithBindShapeWithoutIntent.exitCode).toBe(1);
+    expect(createWithBindShapeWithoutIntent.stderr).toContain(
+      "create surface rejects bind-existing intent",
+    );
+    const bindWithoutIntentResult = runCli([
+      "project-registration",
+      "bind-existing",
+      "--request",
+      BIND_NO_INTENT_FILE,
+      "--json",
+    ]);
+    expect(bindWithoutIntentResult.exitCode).toBe(1);
+    expect(bindWithoutIntentResult.stderr).toContain(
+      "bind_existing surface requires operation_intent=bind_existing",
+    );
+    const boundResult = runCli([
+      "project-registration",
+      "bind-existing",
+      "--request",
+      BIND_FILE,
+      "--json",
+    ]);
+    expect(boundResult.exitCode, boundResult.stderr).toBe(0);
+    const bound = JSON.parse(boundResult.stdout) as Record<string, any>;
+    expect(bound).toMatchObject({
+      outcome: "accepted",
+      target_id: existing.id,
+      created_by_operation: false,
+      prior_state: {
+        target_id: existing.id,
+        project_id: null,
+        bound_project_id: PROJECT_ID,
+        revision: priorRead.revision,
+        digest: priorRead.digest,
+        message_transition: {
+          source_project_id: null,
+          target_project_id: PROJECT_ID,
+          message_count: 1,
+        },
+      },
+    });
+    const boundMessagesResult = runCli([
+      "project-registration",
+      "messages",
+      existing.id,
+      "--project",
+      PROJECT_ID,
+      "--json",
+    ]);
+    expect(boundMessagesResult.exitCode, boundMessagesResult.stderr).toBe(0);
+    expect(JSON.parse(boundMessagesResult.stdout)).toMatchObject({
+      item_count: 1,
+      items: [{
+        target_id: existingMessage.uuid,
+        project_id: PROJECT_ID,
+      }],
+    });
+    const boundDb = new Database(TEST_DB, { readonly: true });
+    const boundMessage = boundDb.query(
+      "SELECT project_id, content FROM messages WHERE uuid = ?",
+    ).get(existingMessage.uuid);
+    boundDb.close();
+    expect(boundMessage).toEqual({
+      project_id: PROJECT_ID,
+      content: "legacy message ownership",
+    });
+
+    const bindInverseDesired = {
+      accepted_receipt_id: bound.receipt_id,
+      target_id: bound.target_id,
+    };
+    writeFileSync(BIND_INVERSE_FILE, JSON.stringify({
+      operation_intent: "bind_existing",
+      operation_id: bound.operation_id,
+      step_id: bound.step_id,
+      resource_kind: "channel",
+      direction: "inverse",
+      authority_route: bound.route,
+      package_version: bound.package_version,
+      authority_id: bound.authority_id,
+      tenant_id: bound.tenant_id,
+      corpus_id: bound.corpus_id,
+      target_selector: bound.target_id,
+      idempotency_key: `${bound.operation_id}:${bound.step_id}:inverse`,
+      request_digest: projectChannelRegistrationDigest(bindInverseDesired),
+      precondition_digest: projectChannelRegistrationDigest({
+        target_id: bound.target_id,
+        expected_revision: bound.result_revision,
+        expected_digest: bound.result_digest,
+      }),
+      project_id: PROJECT_ID,
+      project_slug: existing.name,
+      project_name: "CLI Bind Existing",
+      desired: bindInverseDesired,
+      accepted_receipt: bound,
+      target_digest: "cli-target-digest",
+      response_byte_limit: 32_768,
+      time_budget_ms: 5_000,
+      call_limit: 1,
+    }));
+    const bindRestoredResult = runCli([
+      "project-registration",
+      "compensate",
+      "--request",
+      BIND_INVERSE_FILE,
+      "--json",
+    ]);
+    expect(bindRestoredResult.exitCode, bindRestoredResult.stderr).toBe(0);
+    expect(JSON.parse(bindRestoredResult.stdout)).toMatchObject({
+      outcome: "accepted",
+      target_id: existing.id,
+      created_by_operation: false,
+      result_revision: priorRead.revision,
+      result_digest: priorRead.digest,
+    });
+    const bindVerifiedResult = runCli([
+      "project-registration",
+      "verify-inverse",
+      "--request",
+      BIND_INVERSE_FILE,
+      "--json",
+    ]);
+    expect(bindVerifiedResult.exitCode, bindVerifiedResult.stderr).toBe(0);
+    expect(JSON.parse(bindVerifiedResult.stdout)).toEqual({
+      target_id: existing.id,
+      accepted_receipt_id: bound.receipt_id,
+      absent: false,
+      restored: true,
+      project_id: null,
+      revision: priorRead.revision,
+      digest: priorRead.digest,
+    });
+    const restoredDb = new Database(TEST_DB, { readonly: true });
+    const restoredMessage = restoredDb.query(
+      "SELECT project_id, content FROM messages WHERE uuid = ?",
+    ).get(existingMessage.uuid);
+    restoredDb.close();
+    expect(restoredMessage).toEqual({
+      project_id: null,
+      content: "legacy message ownership",
     });
 
     const channelsAfterInverse = runCli([

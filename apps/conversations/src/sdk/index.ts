@@ -2,7 +2,7 @@
 // Regenerate: bun run sdk:generate
 
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
-// Source: ConversationsClient 0.5.42
+// Source: ConversationsClient 0.5.43
 
 export interface Message { "id"?: number; "uuid"?: string; "session_id"?: string; "from_agent"?: string; "to_agent"?: string; "channel"?: string | null; "project_id"?: string | null; "content"?: string; "priority"?: string; "blocking"?: boolean; "reply_to"?: number | null; "created_at"?: string }
 
@@ -260,9 +260,18 @@ export class ConversationsClient {
       });
     }
 
-    /** Conditionally register one absent canonical project channel */
-    async registerProjectChannel(body: Record<string, unknown>, init?: RequestInit): Promise<Record<string, unknown>> {
+    /** Conditionally create one absent canonical project channel */
+    async registerProjectChannel(body: { "operation_intent"?: "create" } & Record<string, unknown>, init?: RequestInit): Promise<Record<string, unknown>> {
       return this.request("POST", `/v1/project-registration/channels`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Conditionally bind one exact existing channel to a Projects workspace */
+    async bindExistingProjectChannel(body: { "operation_intent": "bind_existing"; "bind_existing": Record<string, unknown> } & Record<string, unknown>, init?: RequestInit): Promise<Record<string, unknown>> {
+      return this.request("POST", `/v1/project-registration/channels/bind-existing`, {
         body,
         query: undefined,
         init,
@@ -278,7 +287,7 @@ export class ConversationsClient {
       });
     }
 
-    /** Conditionally remove only the channel created by one accepted receipt */
+    /** Conditionally remove an operation-created channel or restore prior ownership */
     async compensateProjectChannelRegistration(body: Record<string, unknown>, init?: RequestInit): Promise<Record<string, unknown>> {
       return this.request("POST", `/v1/project-registration/channels/inverse`, {
         body,
@@ -287,7 +296,7 @@ export class ConversationsClient {
       });
     }
 
-    /** Verify exact target absence against the accepted forward receipt */
+    /** Verify exact target absence or restored ownership against the accepted receipt */
     async verifyProjectChannelRegistrationInverse(body: Record<string, unknown>, init?: RequestInit): Promise<Record<string, unknown>> {
       return this.request("POST", `/v1/project-registration/channels/inverse/verify`, {
         body,
@@ -297,7 +306,7 @@ export class ConversationsClient {
     }
 
     /** Bounded exact terminal receipt lookup */
-    async lookupProjectChannelRegistrationReceipt(query?: { "operation_id": string; "step_id": string; "resource_kind": "channel"; "direction": "forward" | "inverse"; "authority": "conversations"; "authority_route": string; "package_version": string; "authority_id": string; "tenant_id": string; "corpus_id": string; "target_selector": string; "idempotency_key": string; "request_digest": string; "precondition_digest": string; "target_id"?: string; "max_items": number; "response_byte_limit": number; "time_budget_ms": number; "call_limit": number }, init?: RequestInit): Promise<Record<string, unknown>> {
+    async lookupProjectChannelRegistrationReceipt(query?: { "operation_id": string; "step_id": string; "resource_kind": "channel"; "direction": "forward" | "inverse"; "authority": "conversations"; "authority_route": string; "package_version": string; "authority_id": string; "tenant_id": string; "corpus_id": string; "target_selector": string; "idempotency_key": string; "request_digest": string; "precondition_digest": string; "precondition_kind"?: "absent" | "bind_existing"; "target_id"?: string; "max_items": number; "response_byte_limit": number; "time_budget_ms": number; "call_limit": number }, init?: RequestInit): Promise<Record<string, unknown>> {
       return this.request("GET", `/v1/project-registration/channels/receipts/terminal`, {
         body: undefined,
         query,

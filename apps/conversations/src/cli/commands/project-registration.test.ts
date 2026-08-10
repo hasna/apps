@@ -13,6 +13,7 @@ describe("registerProjectRegistrationCommands", () => {
     expect(names).toEqual(expect.arrayContaining([
       "capability",
       "create",
+      "bind-existing",
       "lookup-receipt",
       "compensate",
       "verify-inverse",

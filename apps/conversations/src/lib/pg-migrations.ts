@@ -854,4 +854,12 @@ export const PG_MIGRATIONS: string[] = [
 
   INSERT INTO _migrations (id) VALUES (7) ON CONFLICT DO NOTHING;
   `,
+  // Migration 8: accepted project-channel binding receipts retain the exact
+  // prior ownership snapshot needed for a conditional inverse.
+  `
+  ALTER TABLE project_channel_registration_receipts
+    ADD COLUMN IF NOT EXISTS prior_state JSONB;
+
+  INSERT INTO _migrations (id) VALUES (8) ON CONFLICT DO NOTHING;
+  `,
 ];

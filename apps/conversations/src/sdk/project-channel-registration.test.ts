@@ -18,6 +18,15 @@ describe("generated SDK project-channel registration contract", () => {
         });
       }) as typeof fetch,
     });
+    if (false) {
+      // @ts-expect-error create surface statically rejects bind-existing intent
+      void client.registerProjectChannel({ operation_intent: "bind_existing" });
+      void client.bindExistingProjectChannel({
+        // @ts-expect-error bind-existing surface statically rejects create intent
+        operation_intent: "create",
+        bind_existing: {},
+      });
+    }
 
     const body = {
       operation_id: "operation-one",
@@ -47,6 +56,16 @@ describe("generated SDK project-channel registration contract", () => {
       },
     );
     await client.registerProjectChannel(body);
+    await client.bindExistingProjectChannel({
+      ...body,
+      operation_intent: "bind_existing",
+      bind_existing: {
+        target_id: "chn_11111111111111111111111111111111",
+        expected_project_id: "legacy-project",
+        expected_revision: "prior-revision",
+        expected_digest: "prior-digest",
+      },
+    });
     await client.lookupProjectChannelRegistrationReceipt({
       operation_id: "operation-one",
       step_id: "conversations-channel",
@@ -62,6 +81,7 @@ describe("generated SDK project-channel registration contract", () => {
       idempotency_key: "operation-one:conversations-channel:forward",
       request_digest: "request-digest",
       precondition_digest: "precondition-digest",
+      precondition_kind: "bind_existing",
       target_id: "chn_11111111111111111111111111111111",
       max_items: 1,
       response_byte_limit: 32_768,
@@ -96,6 +116,7 @@ describe("generated SDK project-channel registration contract", () => {
       { method: "GET", path: "/v1/project-registration/channels" },
       { method: "GET", path: "/v1/project-registration/channels/chn_11111111111111111111111111111111/messages" },
       { method: "POST", path: "/v1/project-registration/channels" },
+      { method: "POST", path: "/v1/project-registration/channels/bind-existing" },
       { method: "GET", path: "/v1/project-registration/channels/receipts/terminal" },
       { method: "GET", path: "/v1/project-registration/channels/chn_11111111111111111111111111111111" },
       { method: "POST", path: "/v1/project-registration/channels/inverse" },
@@ -109,13 +130,21 @@ describe("generated SDK project-channel registration contract", () => {
     expect(messagePageUrl.searchParams.get("project_id")).toBe("wks_ys8tzpsZJMNtx0ORZtLsA");
     expect(messagePageUrl.searchParams.get("cursor")).toBe("42");
     expect(calls[3].body).toEqual(body);
-    const lookupUrl = new URL(calls[4].url);
+    expect(calls[4].body).toMatchObject({
+      operation_intent: "bind_existing",
+      bind_existing: {
+        target_id: "chn_11111111111111111111111111111111",
+        expected_project_id: "legacy-project",
+      },
+    });
+    const lookupUrl = new URL(calls[5].url);
     expect(lookupUrl.searchParams.get("max_items")).toBe("1");
     expect(lookupUrl.searchParams.get("call_limit")).toBe("1");
     expect(lookupUrl.searchParams.get("target_id")).toBe("chn_11111111111111111111111111111111");
+    expect(lookupUrl.searchParams.get("precondition_kind")).toBe("bind_existing");
     expect(lookupUrl.searchParams.get("request_digest")).toBe("request-digest");
     expect(lookupUrl.searchParams.get("precondition_digest")).toBe("precondition-digest");
-    const readUrl = new URL(calls[5].url);
+    const readUrl = new URL(calls[6].url);
     expect(readUrl.searchParams.get("target_selector")).toBe("fleet-resources");
     expect(readUrl.searchParams.get("target_digest")).toBe("path-digest");
   });

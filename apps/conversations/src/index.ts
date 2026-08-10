@@ -65,6 +65,7 @@ export type {
   ProjectChannelRegistrationLookupResult,
   ProjectChannelRegistrationOutcome,
   ProjectChannelRegistrationPathHandle,
+  ProjectChannelRegistrationPriorState,
   ProjectChannelRegistrationReadRequest,
   ProjectChannelRegistrationReceipt,
   ProjectChannelRegistrationRecord,

@@ -7,9 +7,11 @@ import {
   buildProjectChannelCollectionPage,
   buildProjectChannelMessageCollectionPage,
   buildProjectChannelRegistrationReceipt,
+  buildProjectChannelRegistrationMessageTransition,
   exactProjectChannelRegistrationReplay,
   projectChannelRegistrationChannelRecord,
   projectChannelRegistrationDigest,
+  projectChannelRegistrationMessageOwnershipMatches,
   projectChannelRegistrationResponseControl,
   sameProjectChannelRegistrationReceipt,
   validateProjectChannelRegistrationForward,
@@ -25,6 +27,7 @@ import {
   type ProjectChannelRegistrationInverseVerification,
   type ProjectChannelRegistrationLookupRequest,
   type ProjectChannelRegistrationLookupResult,
+  type ProjectChannelRegistrationPriorState,
   type ProjectChannelRegistrationReadRequest,
   type ProjectChannelRegistrationReceipt,
   type ProjectChannelRegistrationRecord,
@@ -33,9 +36,14 @@ import {
   type ProjectChannelMessageCollectionRequest,
   type ProjectChannelMessageCollectionRow,
 } from "../lib/project-channel-registration.js";
+import {
+  MESSAGE_SNAPSHOT_COLUMNS,
+  type ProjectMessageLinkageRow,
+} from "../lib/project-message-linkage.js";
 
-type PgReceiptRow = Omit<ProjectChannelRegistrationReceipt, "created_at"> & {
+type PgReceiptRow = Omit<ProjectChannelRegistrationReceipt, "created_at" | "prior_state"> & {
   created_at: string | Date;
+  prior_state: ProjectChannelRegistrationPriorState | string | null;
 };
 
 type PgChannelRow = Record<string, unknown> & {
@@ -58,11 +66,15 @@ function timestamp(value: string | Date): string {
 }
 
 function parseReceipt(row: PgReceiptRow): ProjectChannelRegistrationReceipt {
+  const priorState = typeof row.prior_state === "string"
+    ? JSON.parse(row.prior_state) as ProjectChannelRegistrationPriorState
+    : row.prior_state;
   return {
     ...row,
     authority: "conversations",
     resource_kind: "channel",
     created_by_operation: row.created_by_operation === true,
+    prior_state: priorState ?? null,
     created_at: timestamp(row.created_at),
   };
 }
@@ -126,10 +138,10 @@ async function insertReceipt(
       corpus_id, operation_id, step_id, resource_kind, direction,
       idempotency_key, request_digest, precondition_digest, outcome, reason,
       target_id, result_revision, result_digest, duplicate_of_receipt_id,
-      accepted_receipt_id, created_by_operation, created_at
+      accepted_receipt_id, created_by_operation, prior_state, created_at
     ) VALUES (
       $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,
-      $20,$21,$22,$23
+      $20,$21,$22,$23,$24
     )
     ON CONFLICT (receipt_id) DO NOTHING
     RETURNING *
@@ -156,6 +168,7 @@ async function insertReceipt(
     receipt.duplicate_of_receipt_id,
     receipt.accepted_receipt_id,
     receipt.created_by_operation,
+    receipt.prior_state,
     receipt.created_at,
   ]);
   if (inserted) return parseReceipt(inserted);
@@ -218,6 +231,7 @@ async function duplicateReceipt(
     duplicateOf: accepted.receipt_id,
     acceptedReceiptId: accepted.accepted_receipt_id,
     createdByOperation: accepted.created_by_operation,
+    priorState: accepted.prior_state,
   }));
 }
 
@@ -237,6 +251,7 @@ async function changedReceipt(
     resultDigest: accepted.result_digest,
     acceptedReceiptId: accepted.accepted_receipt_id,
     createdByOperation: false,
+    priorState: accepted.prior_state,
   }));
 }
 
@@ -288,6 +303,41 @@ function preexistingEquivalent(
     && tags.length === 0;
 }
 
+async function messageProjectDigest(
+  client: TypedQueryClient,
+  channel: string,
+): Promise<string> {
+  const rows = await client.many<{
+    id: number;
+    uuid: string;
+    project_id: string | null;
+  }>(`
+    SELECT id, uuid, project_id
+    FROM messages
+    WHERE channel = $1
+    ORDER BY id ASC
+  `, [channel]);
+  return projectChannelRegistrationDigest(rows.map((row) => ({
+    id: Number(row.id),
+    uuid: row.uuid,
+    project_id: row.project_id ?? null,
+  })));
+}
+
+async function readMessageOwnershipRows(
+  client: TypedQueryClient,
+  channel: string,
+  lock = false,
+): Promise<ProjectMessageLinkageRow[]> {
+  return client.many<ProjectMessageLinkageRow>(
+    `SELECT ${MESSAGE_SNAPSHOT_COLUMNS.join(", ")}
+     FROM messages
+     WHERE channel = $1
+     ORDER BY id ASC${lock ? " FOR UPDATE" : ""}`,
+    [channel],
+  );
+}
+
 export async function registerProjectChannelPg(
   client: PoolQueryClient,
   request: ProjectChannelRegistrationRequest,
@@ -326,6 +376,116 @@ export async function registerProjectChannelPg(
       "SELECT * FROM channels WHERE name = $1 FOR UPDATE",
       [validated.channel],
     );
+    if (validated.binding) {
+      if (!preexistingRaw) {
+        const receipt = await insertReceipt(tx, buildProjectChannelRegistrationReceipt({
+          capability: cap,
+          request,
+          outcome: "terminal_nonacceptance",
+          reason: "bind_target_missing",
+        }));
+        assertTime(startedAt, request.time_budget_ms);
+        return receipt;
+      }
+      const preexisting = parseChannel(preexistingRaw);
+      const priorRecord = projectChannelRegistrationChannelRecord(preexisting);
+      if (
+        preexisting.id !== validated.binding.target_id
+        || preexisting.project_id !== validated.binding.expected_project_id
+        || priorRecord.revision !== validated.binding.expected_revision
+        || priorRecord.digest !== validated.binding.expected_digest
+      ) {
+        const receipt = await insertReceipt(tx, buildProjectChannelRegistrationReceipt({
+          capability: cap,
+          request,
+          outcome: "terminal_nonacceptance",
+          reason: "bind_precondition_conflict",
+          targetId: preexisting.id,
+          resultRevision: priorRecord.revision,
+          resultDigest: priorRecord.digest,
+          createdByOperation: false,
+        }));
+        assertTime(startedAt, request.time_budget_ms);
+        return receipt;
+      }
+      const beforeMessages = await readMessageOwnershipRows(tx, preexisting.name, true);
+      if (beforeMessages.some(
+        (message) => (message.project_id ?? null) !== validated.binding!.expected_project_id,
+      )) {
+        const receipt = await insertReceipt(tx, buildProjectChannelRegistrationReceipt({
+          capability: cap,
+          request,
+          outcome: "terminal_nonacceptance",
+          reason: "bind_message_owner_conflict",
+          targetId: preexisting.id,
+          resultRevision: priorRecord.revision,
+          resultDigest: priorRecord.digest,
+          createdByOperation: false,
+        }));
+        assertTime(startedAt, request.time_budget_ms);
+        return receipt;
+      }
+      const beforeMessageProjectDigest = await messageProjectDigest(tx, preexisting.name);
+      const boundRaw = await tx.get<PgChannelRow>(`
+        UPDATE channels
+        SET project_id = $1
+        WHERE id = $2 AND name = $3 AND project_id IS NOT DISTINCT FROM $4
+        RETURNING *
+      `, [
+        request.project_id,
+        preexisting.id,
+        preexisting.name,
+        validated.binding.expected_project_id,
+      ]);
+      if (!boundRaw) {
+        throw new Error("project channel registration bind target changed during update.");
+      }
+      options.faultInjector?.("after_channel_bind");
+      const messageUpdate = await tx.query<{ id: number }>(`
+        UPDATE messages
+        SET project_id = $1
+        WHERE channel = $2 AND project_id IS NOT DISTINCT FROM $3
+        RETURNING id
+      `, [
+        request.project_id,
+        preexisting.name,
+        validated.binding.expected_project_id,
+      ]);
+      if (messageUpdate.rowCount !== beforeMessages.length) {
+        throw new Error("project channel registration messages changed during ownership transition.");
+      }
+      const afterMessages = await readMessageOwnershipRows(tx, preexisting.name, true);
+      const messageTransition = buildProjectChannelRegistrationMessageTransition(
+        beforeMessages,
+        afterMessages,
+        validated.binding.expected_project_id,
+        request.project_id,
+      );
+      options.faultInjector?.("after_message_bind");
+      const priorState: ProjectChannelRegistrationPriorState = {
+        target_id: preexisting.id,
+        project_id: preexisting.project_id,
+        bound_project_id: request.project_id,
+        revision: priorRecord.revision,
+        digest: priorRecord.digest,
+        message_project_digest: beforeMessageProjectDigest,
+        message_transition: messageTransition,
+      };
+      const bound = parseChannel(boundRaw);
+      const record = projectChannelRegistrationChannelRecord(bound);
+      const receipt = buildProjectChannelRegistrationReceipt({
+        capability: cap,
+        request,
+        outcome: "accepted",
+        targetId: bound.id,
+        resultRevision: record.revision,
+        resultDigest: record.digest,
+        createdByOperation: false,
+        priorState,
+      });
+      assertTime(startedAt, request.time_budget_ms);
+      return insertReceipt(tx, receipt);
+    }
     if (preexistingRaw) {
       const preexisting = parseChannel(preexistingRaw);
       const record = projectChannelRegistrationChannelRecord(preexisting);
@@ -561,11 +721,15 @@ async function sourceReceipt(
   request: ProjectChannelRegistrationRequest,
 ): Promise<ProjectChannelRegistrationReceipt | null> {
   const supplied = request.accepted_receipt;
+  const acceptedCreate = supplied?.created_by_operation === true
+    && supplied.prior_state == null;
+  const acceptedBinding = supplied?.created_by_operation === false
+    && supplied.prior_state != null;
   if (
     !supplied
     || supplied.outcome !== "accepted"
     || supplied.direction !== "forward"
-    || !supplied.created_by_operation
+    || (!acceptedCreate && !acceptedBinding)
     || !supplied.target_id
     || !supplied.result_revision
     || !supplied.result_digest
@@ -599,6 +763,7 @@ async function terminalInverse(
     resultDigest: current?.digest ?? accepted?.result_digest ?? null,
     acceptedReceiptId: accepted?.receipt_id ?? null,
     createdByOperation: false,
+    priorState: accepted?.prior_state ?? null,
   }));
 }
 
@@ -701,6 +866,86 @@ export async function compensateProjectChannelRegistrationPg(
       assertTime(startedAt, request.time_budget_ms);
       return receipt;
     }
+    if (accepted.prior_state) {
+      const prior = accepted.prior_state;
+      const currentMessages = await readMessageOwnershipRows(tx, row.name, true);
+      if (
+        row.project_id !== prior.bound_project_id
+        || !projectChannelRegistrationMessageOwnershipMatches(
+          currentMessages,
+          prior.message_transition,
+          "after",
+        )
+      ) {
+        const receipt = await terminalInverse(
+          tx,
+          cap,
+          request,
+          "message_ownership_drifted",
+          accepted,
+          current,
+        );
+        assertTime(startedAt, request.time_budget_ms);
+        return receipt;
+      }
+      const messageRestore = await tx.query<{ id: number }>(`
+        UPDATE messages
+        SET project_id = $1
+        WHERE channel = $2 AND project_id = $3
+        RETURNING id
+      `, [
+        prior.project_id,
+        row.name,
+        prior.bound_project_id,
+      ]);
+      if (messageRestore.rowCount !== prior.message_transition.message_count) {
+        throw new Error("project channel registration messages changed during inverse.");
+      }
+      const restoredMessages = await readMessageOwnershipRows(tx, row.name, true);
+      if (!projectChannelRegistrationMessageOwnershipMatches(
+        restoredMessages,
+        prior.message_transition,
+        "before",
+      )) {
+        throw new Error("project channel registration message ownership inverse did not restore the prior state.");
+      }
+      options.faultInjector?.("after_message_restore");
+      const restoredRaw = await tx.get<PgChannelRow>(`
+        UPDATE channels
+        SET project_id = $1
+        WHERE id = $2 AND name = $3 AND project_id = $4
+        RETURNING *
+      `, [
+        prior.project_id,
+        row.id,
+        row.name,
+        prior.bound_project_id,
+      ]);
+      if (!restoredRaw) {
+        throw new Error("project channel registration bind target changed during inverse.");
+      }
+      options.faultInjector?.("after_channel_restore");
+      const restored = projectChannelRegistrationChannelRecord(parseChannel(restoredRaw));
+      if (
+        restored.revision !== prior.revision
+        || restored.digest !== prior.digest
+      ) {
+        throw new Error("project channel registration bind inverse did not restore the prior state.");
+      }
+      const receipt = buildProjectChannelRegistrationReceipt({
+        capability: cap,
+        request,
+        outcome: "accepted",
+        targetId: accepted.target_id,
+        resultRevision: restored.revision,
+        resultDigest: restored.digest,
+        acceptedReceiptId: accepted.receipt_id,
+        createdByOperation: false,
+        priorState: prior,
+      });
+      assertTime(startedAt, request.time_budget_ms);
+      return insertReceipt(tx, receipt);
+    }
     if (await hasReferences(tx, row)) {
       const receipt = await terminalInverse(
         tx,
@@ -757,11 +1002,31 @@ export async function verifyProjectChannelRegistrationInversePg(
   const accepted = await sourceReceipt(client, request);
   if (!accepted) throw new Error("accepted project channel registration receipt is required.");
   validateProjectChannelRegistrationInverse(request, cap, accepted);
-  const target = await client.get<{ id: string }>(
-    "SELECT id FROM channels WHERE id = $1",
+  const target = await client.get<PgChannelRow>(
+    "SELECT * FROM channels WHERE id = $1",
     [accepted.target_id],
   );
-  if (target) throw new Error("project channel registration inverse verification found the target.");
+  if (accepted.prior_state) {
+    if (!target) {
+      throw new Error("project channel registration inverse verification did not find the restored target.");
+    }
+    const parsed = parseChannel(target);
+    const record = projectChannelRegistrationChannelRecord(parsed);
+    if (
+      parsed.project_id !== accepted.prior_state.project_id
+      || record.revision !== accepted.prior_state.revision
+      || record.digest !== accepted.prior_state.digest
+      || !projectChannelRegistrationMessageOwnershipMatches(
+        await readMessageOwnershipRows(client, parsed.name),
+        accepted.prior_state.message_transition,
+        "before",
+      )
+    ) {
+      throw new Error("project channel registration inverse verification found a non-restored target.");
+    }
+  } else if (target) {
+    throw new Error("project channel registration inverse verification found the target.");
+  }
   const inverse = await acceptedForStep(client, cap, request);
   if (
     !inverse
@@ -770,15 +1035,25 @@ export async function verifyProjectChannelRegistrationInversePg(
   ) {
     throw new Error("accepted project channel registration inverse receipt is missing.");
   }
-  const verification: ProjectChannelRegistrationInverseVerification = {
-    target_id: accepted.target_id!,
-    accepted_receipt_id: accepted.receipt_id,
-    absent: true,
-    digest: projectChannelRegistrationDigest({
-      target_id: accepted.target_id,
-      absent: true,
-    }),
-  };
+  const verification: ProjectChannelRegistrationInverseVerification = accepted.prior_state
+    ? {
+        target_id: accepted.target_id!,
+        accepted_receipt_id: accepted.receipt_id,
+        absent: false,
+        restored: true,
+        project_id: accepted.prior_state.project_id,
+        revision: accepted.prior_state.revision,
+        digest: accepted.prior_state.digest,
+      }
+    : {
+        target_id: accepted.target_id!,
+        accepted_receipt_id: accepted.receipt_id,
+        absent: true,
+        digest: projectChannelRegistrationDigest({
+          target_id: accepted.target_id,
+          absent: true,
+        }),
+      };
   projectChannelRegistrationResponseControl(verification, request, startedAt);
   return verification;
 }

@@ -2,10 +2,12 @@ import { readFileSync } from "node:fs";
 import type { Command } from "commander";
 import { closeDb } from "../../lib/db.js";
 import type {
+  ProjectChannelRegistrationOperationIntent,
   ProjectChannelRegistrationLookupRequest,
   ProjectChannelRegistrationRequest,
   ProjectChannelRegistrationReadRequest,
 } from "../../lib/project-channel-registration.js";
+import { assertProjectChannelRegistrationOperationIntent } from "../../lib/project-channel-registration.js";
 import { getStore } from "../../lib/store/index.js";
 import { printJson } from "../../lib/stdout.js";
 import { emitCliError } from "../cli-error.js";
@@ -54,7 +56,11 @@ function requestObject(path: string, opts: OutputOptions): Record<string, unknow
   return parsed as Record<string, unknown>;
 }
 
-function registrationRequest(path: string, opts: OutputOptions): ProjectChannelRegistrationRequest {
+function registrationRequest(
+  path: string,
+  opts: OutputOptions,
+  expectedIntent?: ProjectChannelRegistrationOperationIntent,
+): ProjectChannelRegistrationRequest {
   const parsed = requestObject(path, opts);
   const targetDigest = typeof parsed.target_digest === "string"
     ? parsed.target_digest.trim()
@@ -63,10 +69,14 @@ function registrationRequest(path: string, opts: OutputOptions): ProjectChannelR
     emitCliError("The request file must include target_digest.", opts);
   }
   const { target_digest: _targetDigest, target: _target, ...request } = parsed;
-  return {
+  const parsedRequest = {
     ...request,
     target: remoteTarget(targetDigest),
   } as unknown as ProjectChannelRegistrationRequest;
+  if (expectedIntent) {
+    assertProjectChannelRegistrationOperationIntent(parsedRequest, expectedIntent);
+  }
+  return parsedRequest;
 }
 
 function collectionBounds(opts: {
@@ -104,13 +114,28 @@ export function registerProjectRegistrationCommands(program: Command): void {
 
   registration
     .command("create")
-    .description("Conditionally register a project channel from one contract request JSON file")
+    .description("Conditionally create an absent project channel from one contract request JSON file")
     .requiredOption("--request <path>", "Contract request JSON file")
     .option("-j, --json", "Output as JSON")
     .action(async (opts) => {
       try {
         printJson(await getStore().registerProjectChannel(
-          registrationRequest(opts.request, opts),
+          registrationRequest(opts.request, opts, "create"),
+        ));
+      } finally {
+        closeDb();
+      }
+    });
+
+  registration
+    .command("bind-existing")
+    .description("Conditionally bind one existing channel to a Projects workspace without recreating it")
+    .requiredOption("--request <path>", "Bind-existing contract request JSON file")
+    .option("-j, --json", "Output as JSON")
+    .action(async (opts) => {
+      try {
+        printJson(await getStore().registerProjectChannel(
+          registrationRequest(opts.request, opts, "bind_existing"),
         ));
       } finally {
         closeDb();
@@ -149,7 +174,7 @@ export function registerProjectRegistrationCommands(program: Command): void {
 
   registration
     .command("verify-inverse")
-    .description("Verify accepted inverse receipt and target absence")
+    .description("Verify accepted inverse receipt and target absence or restored ownership")
     .requiredOption("--request <path>", "Inverse contract request JSON file")
     .option("-j, --json", "Output as JSON")
     .action(async (opts) => {
