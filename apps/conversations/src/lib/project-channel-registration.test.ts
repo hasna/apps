@@ -387,7 +387,13 @@ describe("project channel registration authority", () => {
 
   test("atomically creates an absent channel and returns exact immutable readback", async () => {
     const authority = createProjectChannelRegistrationAuthority();
-    const request = await forwardRequest();
+    const request = await forwardRequest({ operation_intent: undefined });
+    expect(() => registerProjectChannel({
+      ...request,
+      precondition_digest: "not-an-expected-absent-precondition",
+    })).toThrow(
+      "project channel registration create surface requires operation_intent=create",
+    );
     const receipt = await authority.create(request);
 
     expect(receipt).toMatchObject({

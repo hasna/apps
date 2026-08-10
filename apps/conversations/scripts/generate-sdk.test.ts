@@ -102,6 +102,12 @@ test("imports the generator without writing the tracked SDK", async () => {
 
 test("rewrites the current binary return shape without changing JSON operations", async () => {
   const { generateSdkSource } = await loadGeneratorModule();
+  const createSchema = openapiSpec.paths["/v1/project-registration/channels"]
+    .post.requestBody.content["application/json"].schema;
+  const bindSchema = openapiSpec.paths["/v1/project-registration/channels/bind-existing"]
+    .post.requestBody.content["application/json"].schema;
+  expect(createSchema.required).toEqual([]);
+  expect(bindSchema.required).toEqual(["operation_intent", "bind_existing"]);
   const raw = generateSdkFromOpenApi(openapiSpec as any, {
     className: "ConversationsClient",
     apiKeyHeader: "x-api-key",
@@ -117,6 +123,7 @@ test("rewrites the current binary return shape without changing JSON operations"
   const generated = generateSdkSource().code;
   const generatedDownload = methodSource(generated, "downloadMessageAttachment");
   const generatedGetMessage = methodSource(generated, "getMessage");
+  const generatedRegisterProjectChannel = methodSource(generated, "registerProjectChannel");
 
   expect(generatedDownload).toContain(
     'query: { "encoding": "base64" }, init?: RequestInit): Promise<{ "name": string; "mime_type": string; "size": number; "content_base64": string }>',
@@ -130,6 +137,9 @@ test("rewrites the current binary return shape without changing JSON operations"
   expect(generatedDownload).toContain('responseType: "arrayBuffer"');
   expect(generated).toContain(
     'opts.responseType === "arrayBuffer" && !response.headers.get("content-type")?.toLowerCase().includes("application/json")',
+  );
+  expect(generatedRegisterProjectChannel).toContain(
+    'body: { "operation_intent"?: "create" } & Record<string, unknown>',
   );
   expect(generatedGetMessage).toBe(rawGetMessage);
 });

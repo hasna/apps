@@ -261,7 +261,7 @@ export class ConversationsClient {
     }
 
     /** Conditionally create one absent canonical project channel */
-    async registerProjectChannel(body: { "operation_intent": "create" } & Record<string, unknown>, init?: RequestInit): Promise<Record<string, unknown>> {
+    async registerProjectChannel(body: { "operation_intent"?: "create" } & Record<string, unknown>, init?: RequestInit): Promise<Record<string, unknown>> {
       return this.request("POST", `/v1/project-registration/channels`, {
         body,
         query: undefined,

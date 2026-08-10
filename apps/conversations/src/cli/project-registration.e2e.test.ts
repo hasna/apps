@@ -13,6 +13,7 @@ const LOOKUP_FILE = join(TEST_DIR, "registration-lookup.json");
 const INVERSE_FORWARD_FILE = join(TEST_DIR, "registration-inverse-forward.json");
 const INVERSE_FILE = join(TEST_DIR, "registration-inverse.json");
 const BIND_FILE = join(TEST_DIR, "registration-bind-existing.json");
+const BIND_NO_INTENT_FILE = join(TEST_DIR, "registration-bind-existing-no-intent.json");
 const BIND_INVERSE_FILE = join(TEST_DIR, "registration-bind-existing-inverse.json");
 const PROJECT_ID = "wks_ys8tzpsZJMNtx0ORZtLsA";
 const CLI = ["bun", "run", "./src/cli/index.tsx"];
@@ -55,7 +56,6 @@ describe("project-registration CLI producer contract", () => {
       project_kind: "work",
     };
     writeFileSync(REQUEST_FILE, JSON.stringify({
-      operation_intent: "create",
       operation_id: "cli-operation",
       step_id: "conversations-channel",
       resource_kind: "channel",
@@ -405,7 +405,7 @@ describe("project-registration CLI producer contract", () => {
       target_id: existing.id,
       expected_project_id: null,
     };
-    writeFileSync(BIND_FILE, JSON.stringify({
+    const bindRequest = {
       operation_intent: "bind_existing",
       operation_id: "cli-bind-existing-operation",
       step_id: "conversations-channel",
@@ -441,7 +441,10 @@ describe("project-registration CLI producer contract", () => {
       response_byte_limit: 32_768,
       time_budget_ms: 5_000,
       call_limit: 1,
-    }));
+    };
+    writeFileSync(BIND_FILE, JSON.stringify(bindRequest));
+    const { operation_intent: _operationIntent, ...bindWithoutIntent } = bindRequest;
+    writeFileSync(BIND_NO_INTENT_FILE, JSON.stringify(bindWithoutIntent));
     const createWithBindShape = runCli([
       "project-registration",
       "create",
@@ -452,6 +455,28 @@ describe("project-registration CLI producer contract", () => {
     expect(createWithBindShape.exitCode).toBe(1);
     expect(createWithBindShape.stderr).toContain(
       "create surface requires operation_intent=create",
+    );
+    const createWithBindShapeWithoutIntent = runCli([
+      "project-registration",
+      "create",
+      "--request",
+      BIND_NO_INTENT_FILE,
+      "--json",
+    ]);
+    expect(createWithBindShapeWithoutIntent.exitCode).toBe(1);
+    expect(createWithBindShapeWithoutIntent.stderr).toContain(
+      "create surface rejects bind-existing intent",
+    );
+    const bindWithoutIntentResult = runCli([
+      "project-registration",
+      "bind-existing",
+      "--request",
+      BIND_NO_INTENT_FILE,
+      "--json",
+    ]);
+    expect(bindWithoutIntentResult.exitCode).toBe(1);
+    expect(bindWithoutIntentResult.stderr).toContain(
+      "bind_existing surface requires operation_intent=bind_existing",
     );
     const boundResult = runCli([
       "project-registration",

@@ -10,7 +10,7 @@ const okObject = { type: "object", additionalProperties: true } as const;
 const projectChannelCreateRequest = {
   type: "object",
   additionalProperties: {},
-  required: ["operation_intent"],
+  required: [],
   properties: {
     operation_intent: { type: "string", enum: ["create"] },
   },

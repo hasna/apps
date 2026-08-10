@@ -819,16 +819,38 @@ function retiredPrefix(slug: string): boolean {
 }
 
 export function assertProjectChannelRegistrationOperationIntent(
-  request: Pick<ProjectChannelRegistrationRequest, "operation_intent" | "bind_existing" | "desired">,
+  request: Pick<
+    ProjectChannelRegistrationRequest,
+    | "operation_intent"
+    | "bind_existing"
+    | "desired"
+    | "precondition_digest"
+    | "target_selector"
+  >,
   expected: ProjectChannelRegistrationOperationIntent,
 ): void {
-  if (request.operation_intent !== expected) {
+  const desiredBind = request.desired.registration_mode === "bind_existing";
+  const bindShape = request.bind_existing !== undefined || desiredBind;
+  if (
+    expected === "create"
+    && request.operation_intent === undefined
+    && bindShape
+  ) {
+    throw new Error("project channel registration create surface rejects bind-existing intent.");
+  }
+  const legacyExpectedAbsentCreate = expected === "create"
+    && request.operation_intent === undefined
+    && !bindShape
+    && request.precondition_digest === projectChannelRegistrationDigest({
+      target_selector: request.target_selector,
+      expected: "absent",
+    });
+  if (request.operation_intent !== expected && !legacyExpectedAbsentCreate) {
     throw new Error(
       `project channel registration ${expected} surface requires operation_intent=${expected}.`,
     );
   }
-  const desiredBind = request.desired.registration_mode === "bind_existing";
-  if (expected === "create" && (request.bind_existing !== undefined || desiredBind)) {
+  if (expected === "create" && bindShape) {
     throw new Error("project channel registration create surface rejects bind-existing intent.");
   }
   if (expected === "bind_existing" && (!request.bind_existing || !desiredBind)) {
@@ -878,12 +900,16 @@ export function validateProjectChannelRegistrationForward(
   }
   const binding = request.bind_existing ?? null;
   if (
-    request.operation_intent !== "create"
+    request.operation_intent !== undefined
+    && request.operation_intent !== "create"
     && request.operation_intent !== "bind_existing"
   ) {
     throw new Error("operation_intent must be create or bind_existing.");
   }
-  assertProjectChannelRegistrationOperationIntent(request, request.operation_intent);
+  assertProjectChannelRegistrationOperationIntent(
+    request,
+    request.operation_intent ?? "create",
+  );
   if (!binding && request.desired.registration_mode === "bind_existing") {
     throw new Error("bind-existing registration requires bind_existing preconditions.");
   }

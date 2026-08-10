@@ -1165,7 +1165,13 @@ describe("PostgreSQL project channel registration authority", () => {
     const foreignProjectId = "wks_foreign_project_00000001";
 
     const createClient = new FakeProjectRegistrationClient();
-    const ordinaryCreate = await forwardRequest(createClient);
+    const ordinaryCreate = await forwardRequest(createClient, {
+      operation_intent: undefined,
+    });
+    expect(await registerProjectChannelPg(createClient, ordinaryCreate)).toMatchObject({
+      outcome: "accepted",
+      created_by_operation: true,
+    });
     await expect(registerProjectChannelPg(createClient, {
       ...ordinaryCreate,
       operation_intent: "bind_existing",
@@ -1500,6 +1506,15 @@ describe("PostgreSQL project channel registration authority", () => {
       "project-registration/channels",
       bindBody,
     )).rejects.toMatchObject({ status: 400 });
+    const { operation_intent: _bindIntent, ...bindBodyWithoutIntent } = bindBody;
+    await expect(transport.post(
+      "project-registration/channels",
+      bindBodyWithoutIntent,
+    )).rejects.toMatchObject({ status: 400 });
+    await expect(transport.post(
+      "project-registration/channels/bind-existing",
+      bindBodyWithoutIntent,
+    )).rejects.toMatchObject({ status: 400 });
     const desired = {
       channel: "iapp-sms",
       project_id: "wks_ys8tzpsZJMNtx0ORZtLsA",
@@ -1507,7 +1522,6 @@ describe("PostgreSQL project channel registration authority", () => {
       project_kind: "repo",
     };
     const receipt = await authority.create({
-      operation_intent: "create",
       operation_id: "api-operation",
       step_id: "conversations-channel",
       resource_kind: "channel",

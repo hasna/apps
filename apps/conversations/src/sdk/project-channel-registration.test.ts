@@ -29,7 +29,6 @@ describe("generated SDK project-channel registration contract", () => {
     }
 
     const body = {
-      operation_intent: "create" as const,
       operation_id: "operation-one",
       step_id: "conversations-channel",
       resource_kind: "channel",
