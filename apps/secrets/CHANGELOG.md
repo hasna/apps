@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.21 — 2026-08-10
+
+- Add `secrets scan input [path|-]`, a bounded input/stdin scan mode so tool
+  output can be scanned for credential exposures before it is persisted. Reuses
+  the existing redacting detector engine and the staged gate's three-way exit
+  contract: 0 read it all and found nothing, 1 found something, 2 could not read
+  it all. `stdin` and `text` resolve to it as aliases. Over-bound input records a
+  skip and returns 2 rather than a false clean.
+
 ## 0.2.20 — 2026-08-09
 
 - Resolve account-scoped `--env` selectors through paged AWS metadata using
