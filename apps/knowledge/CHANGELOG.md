@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.101
+
+- Reject command-shaped unknown lookups before they can fall through to the
+  AI-backed prompt path, while preserving the explicit documented prompt forms.
+- Prevent unsupported `knowledge show` lookups by stored full ID, short ID, or
+  custom item ID from entering prompt or generation paths.
+- Add producer-bounded list and ranked-search semantics, private guarded query
+  descriptors, mixed-version compatibility, and the live private-query
+  acceptance command.
+
 ## 0.2.99
 
 - Add bounded exact binding-state readback and receipt-backed guarded adoption
