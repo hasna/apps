@@ -43,20 +43,18 @@
 
 set -uo pipefail
 
-VERSION="1.4.1"
+VERSION="1.4.2"
 PROG="inbox"
 
 # Tunables (all overridable by env; all documented in --help)
 LIMIT="${INBOX_LIMIT:-500}"            # rows per bounded message read (hard max 500)
-# Bounded recovery. The ceiling is DERIVED FROM $LIMIT deliberately, and it is
-# named here rather than left implicit in the page size of a single fetch. One
-# invocation reads at most min(LIMIT, BACKFILL_MAX, BACKFILL_CHUNK) ascending
-# rows, then STOPS. A wider hole is closed across successive polls, never in one
-# unbounded sweep.
-# Left empty here and defaulted from $LIMIT after --limit is parsed and clamped,
-# so the ceiling always tracks the limit actually in force.
+# Bounded recovery separates the store's page limit from the work allowed in
+# one inbox check. A gap may span many 500-row store pages, so one invocation
+# walks several pages while remaining capped by BOTH a row budget and a hard
+# page-call budget. The defaults are derived after --limit is parsed.
 BACKFILL_MAX="${INBOX_BACKFILL_MAX:-}"     # hard cap on recovered rows per invocation
 BACKFILL_CHUNK="${INBOX_BACKFILL_CHUNK:-}" # rows per bounded recovery page
+BACKFILL_PAGE_BUDGET=20                    # hard cap on backing reads per invocation
 TODO_LIMIT="${INBOX_TODO_LIMIT:-1000}" # rows per todos poll
 TODO_EVERY="${INBOX_TODO_EVERY:-4}"    # poll todos every Nth cycle
 CALL_TIMEOUT="${INBOX_TIMEOUT:-30}"    # hard cap per backing CLI call, seconds
@@ -670,67 +668,100 @@ window_scan() {
 }
 
 # Read and commit only the contiguous ascending-id prefix after a cursor. An
-# optional stop is exclusive and comes from the time-window gap detector. The
-# read itself is capped by the effective configured recovery bound, and the
-# response is sliced defensively in case a backend ignores its limit argument.
+# optional stop is exclusive and comes from the time-window gap detector. Each
+# backing read stays within the store page maximum; the loop is independently
+# capped by BACKFILL_MAX rows and BACKFILL_PAGE_BUDGET calls. Every committed
+# page contains only rows already rendered in this invocation, so a later page
+# failure preserves restartable progress without stepping over unseen rows.
 recover_id_prefix() {
   local last="$1" requested_stop="${2:-0}" reason="${3:-window-gap}"
+  local current="$last" recovered=0 pages=0 announced=0
   local backfill page stop="$requested_stop" range range_meta
   local range_cnt range_max next_id frontier rendered line
+  local page_limit remaining
 
-  if ! backfill="$(run_json backfill conversations read --since-id "$last" --limit "$BACKFILL_LIMIT" --json)"; then
-    return 1
-  fi
-  if ! page="$(printf '%s' "$backfill" | jq -c --argjson cap "$BACKFILL_LIMIT" '.[:$cap]' 2>/dev/null)"; then
-    degrade_add "backfill: could not enforce the configured page bound"
-    return 1
-  fi
-  if ! window_scan "$page" "$last"; then
-    degrade_add "backfill: could not derive a numeric page frontier"
-    return 1
-  fi
+  while [ "$recovered" -lt "$BACKFILL_MAX" ] &&
+        [ "$pages" -lt "$BACKFILL_PAGE_BUDGET" ]; do
+    remaining=$((BACKFILL_MAX - recovered))
+    page_limit="$BACKFILL_LIMIT"
+    [ "$page_limit" -gt "$remaining" ] && page_limit="$remaining"
+    pages=$((pages + 1))
 
-  if [ "$reason" = "window-quiet" ] && [ "$WIN_MAX" -gt "$last" ] 2>/dev/null; then
-    degrade_add "since: GAP — time window omitted stored ids above cursor $last; running bounded id backfill"
-  fi
-  if [ "$WIN_GAP" -gt 0 ] 2>/dev/null &&
-     { [ "$stop" -eq 0 ] 2>/dev/null || [ "$WIN_GAP" -lt "$stop" ] 2>/dev/null; }; then
-    stop="$WIN_GAP"
-  fi
+    if ! backfill="$(run_json backfill conversations read --since-id "$current" --limit "$page_limit" --json)"; then
+      return 1
+    fi
+    if ! page="$(printf '%s' "$backfill" | jq -c --argjson cap "$page_limit" '.[:$cap]' 2>/dev/null)"; then
+      degrade_add "backfill: could not enforce the configured page bound"
+      return 1
+    fi
+    if ! window_scan "$page" "$current"; then
+      degrade_add "backfill: could not derive a numeric page frontier"
+      return 1
+    fi
 
-  if [ "$stop" -gt 0 ] 2>/dev/null; then
-    range="$(printf '%s' "$page" | jq -c --argjson last "$last" --argjson stop "$stop" \
-      '[.[]? | select((.id // 0) > $last and (.id // 0) < $stop)] | sort_by(.id)' 2>/dev/null)"
-  else
-    range="$(printf '%s' "$page" | jq -c --argjson last "$last" \
-      '[.[]? | select((.id // 0) > $last)] | sort_by(.id)' 2>/dev/null)"
-  fi
-  range_meta="$(printf '%s' "$range" | jq -r '[length, ([.[]?.id // 0] | max // 0)] | @tsv' 2>/dev/null)"
-  IFS=$'\t' read -r range_cnt range_max <<< "$range_meta"
-  case "$range_cnt$range_max" in
-    ''|*[!0-9]*)
-      degrade_add "backfill: could not derive a numeric contiguous frontier"
-      return 1 ;;
-  esac
+    if [ "$reason" = "window-quiet" ] && [ "$announced" -eq 0 ] &&
+       [ "$WIN_MAX" -gt "$current" ] 2>/dev/null; then
+      degrade_add "since: GAP — time window omitted stored ids above cursor $current; running bounded id backfill"
+      announced=1
+    fi
+    if [ "$WIN_GAP" -gt 0 ] 2>/dev/null &&
+       { [ "$stop" -eq 0 ] 2>/dev/null || [ "$WIN_GAP" -lt "$stop" ] 2>/dev/null; }; then
+      stop="$WIN_GAP"
+    fi
 
-  if [ "$range_cnt" -gt 0 ]; then
-    rendered="$(render_messages "$range" "$last")"
-    while IFS= read -r line; do [ -n "$line" ] && out "$line"; done <<< "$rendered"
-    cursor_set last-msg "$range_max" || degrade_add "backfill: cursor commit failed"
+    if [ "$stop" -gt 0 ] 2>/dev/null; then
+      range="$(printf '%s' "$page" | jq -c --argjson last "$current" --argjson stop "$stop" \
+        '[.[]? | select((.id // 0) > $last and (.id // 0) < $stop)] | sort_by(.id)' 2>/dev/null)"
+    else
+      range="$(printf '%s' "$page" | jq -c --argjson last "$current" \
+        '[.[]? | select((.id // 0) > $last)] | sort_by(.id)' 2>/dev/null)"
+    fi
+    range_meta="$(printf '%s' "$range" | jq -r '[length, ([.[]?.id // 0] | max // 0)] | @tsv' 2>/dev/null)"
+    IFS=$'\t' read -r range_cnt range_max <<< "$range_meta"
+    case "$range_cnt$range_max" in
+      ''|*[!0-9]*)
+        degrade_add "backfill: could not derive a numeric contiguous frontier"
+        return 1 ;;
+    esac
+
+    if [ "$range_cnt" -gt 0 ]; then
+      rendered="$(render_messages "$range" "$current")"
+      while IFS= read -r line; do [ -n "$line" ] && out "$line"; done <<< "$rendered"
+      if ! cursor_set last-msg "$range_max"; then
+        degrade_add "backfill: cursor commit failed"
+        return 1
+      fi
+      recovered=$((recovered + range_cnt))
+      current="$range_max"
+      if [ "$stop" -gt 0 ] 2>/dev/null &&
+         [ "$current" -ge $((stop - 1)) ] 2>/dev/null; then
+        return 0
+      fi
+      continue
+    fi
+
+    next_id="$(printf '%s' "$page" | jq -r --argjson last "$current" '[.[]? | (.id // 0) | select(. > $last)] | min // 0' 2>/dev/null || echo 0)"
+    case "$next_id" in ''|*[!0-9]*) next_id=0 ;; esac
+    if [ "$stop" -gt 0 ] 2>/dev/null && [ "$next_id" -ge "$stop" ] 2>/dev/null; then
+      # The ordered cursor read proved no stored row exists in the numeric hole.
+      # Stop before the first post-gap row so the next poll still emits it.
+      frontier=$((stop - 1))
+      if ! cursor_set last-msg "$frontier"; then
+        degrade_add "backfill: empty-range frontier commit failed"
+        return 1
+      fi
+    elif [ "$next_id" -ne 0 ]; then
+      degrade_add "backfill: returned no usable contiguous row above cursor $current; cursor unchanged"
+    elif [ "$requested_stop" -gt 0 ] 2>/dev/null; then
+      degrade_add "backfill: returned no usable row below $requested_stop; cursor unchanged"
+    fi
     return 0
-  fi
+  done
 
-  next_id="$(printf '%s' "$page" | jq -r --argjson last "$last" '[.[]? | (.id // 0) | select(. > $last)] | min // 0' 2>/dev/null || echo 0)"
-  case "$next_id" in ''|*[!0-9]*) next_id=0 ;; esac
-  if [ "$stop" -gt 0 ] 2>/dev/null && [ "$next_id" -ge "$stop" ] 2>/dev/null; then
-    # The ordered cursor read proved no stored row exists in the numeric hole.
-    # Stop before the first post-gap row so the next poll still emits it.
-    frontier=$((stop - 1))
-    cursor_set last-msg "$frontier" || degrade_add "backfill: empty-range frontier commit failed"
-  elif [ "$next_id" -ne 0 ]; then
-    degrade_add "backfill: returned no usable contiguous row above cursor $last; cursor unchanged"
-  elif [ "$requested_stop" -gt 0 ] 2>/dev/null; then
-    degrade_add "backfill: returned no usable row below $requested_stop; cursor unchanged"
+  if [ "$recovered" -ge "$BACKFILL_MAX" ]; then
+    degrade_add "backfill: per-invocation row cap $BACKFILL_MAX reached at cursor $current"
+  elif [ "$pages" -ge "$BACKFILL_PAGE_BUDGET" ]; then
+    degrade_add "backfill: per-invocation page cap $BACKFILL_PAGE_BUDGET reached at cursor $current"
   fi
   return 0
 }
@@ -1139,15 +1170,17 @@ if [ "$LIMIT" -gt 500 ]; then
   err "WARNING: requested message limit $LIMIT exceeds the store page maximum; clamped to 500."
   LIMIT=500
 fi
-# Derive the recovery ceiling from the limit ACTUALLY in force (post --limit,
-# post clamp). Stated as its own number so an operator can read the bound off
-# `--help` and off the degrade line instead of inferring it from a page size.
-: "${BACKFILL_MAX:=$LIMIT}"
+# By default a gap may consume twenty store-sized pages in one check. This is
+# enough to clear the measured fleet gap while keeping the worst case finite.
+# Operators may lower the row cap; the non-configurable page budget remains the
+# final guard against an accidental enormous value or a tiny chunk size.
+: "${BACKFILL_MAX:=$((LIMIT * BACKFILL_PAGE_BUDGET))}"
 : "${BACKFILL_CHUNK:=$LIMIT}"
 case "$BACKFILL_MAX"   in ''|*[!0-9]*|0) err "INBOX_BACKFILL_MAX must be a positive integer";   exit $EX_USAGE ;; esac
 case "$BACKFILL_CHUNK" in ''|*[!0-9]*|0) err "INBOX_BACKFILL_CHUNK must be a positive integer"; exit $EX_USAGE ;; esac
-# One recovery page can never exceed one store page, and never overshoot the
-# per-invocation ceiling it is meant to respect.
+# One recovery page can never exceed one store page or the remaining row
+# ceiling. recover_id_prefix applies the latter to each page as the budget
+# shrinks.
 [ "$BACKFILL_CHUNK" -gt "$LIMIT" ] && BACKFILL_CHUNK="$LIMIT"
 [ "$BACKFILL_CHUNK" -gt "$BACKFILL_MAX" ] && BACKFILL_CHUNK="$BACKFILL_MAX"
 BACKFILL_LIMIT="$BACKFILL_CHUNK"
