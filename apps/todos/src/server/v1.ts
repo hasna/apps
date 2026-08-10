@@ -786,10 +786,11 @@ export async function handleV1Request(
             !persisted
             || persisted.id !== created.id
             || (persisted.parent_id ?? null) !== (body.parent_id ?? null)
+            || (persisted.plan_id ?? null) !== (body.plan_id ?? null)
           ) {
             return error(
               500,
-              "TASK_CREATE_PERSISTENCE_UNVERIFIED: task create was acknowledged but authoritative readback did not return the same stored task id and parent_id",
+              "TASK_CREATE_PERSISTENCE_UNVERIFIED: task create was acknowledged but authoritative readback did not return the same stored task id, parent_id, and plan_id",
               { code: "TASK_CREATE_PERSISTENCE_UNVERIFIED" },
             );
           }

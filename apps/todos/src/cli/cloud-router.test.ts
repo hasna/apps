@@ -801,6 +801,18 @@ describe("cloud task CRUD maps /v1 envelopes and carries the bearer key", () => 
     expect(calls.map((call) => call.method)).toEqual(["POST", "GET"]);
   });
 
+  test("plan-linked create rejects an authoritative readback that dropped the requested plan", async () => {
+    const calls = installFetch(() => ({
+      status: 201,
+      body: { task: { id: "new1", title: "made", plan_id: null } },
+    }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    await expect(cloudCreateTask(client, { title: "made", plan_id: "plan-1" }))
+      .rejects.toThrow("TASK_CREATE_PERSISTENCE_UNVERIFIED");
+    expect(calls.map((call) => call.method)).toEqual(["POST", "GET"]);
+  });
+
   test("create never replays a task POST when the authority rejects acceptance", async () => {
     const calls = installFetch(() => ({
       status: 500,
@@ -831,7 +843,7 @@ describe("cloud task CRUD maps /v1 envelopes and carries the bearer key", () => 
           return { task: { id: "updated-task", title: "updated" } };
         },
       },
-      get: async () => ({ task: { id: "created-task", title: "created" } }),
+      get: async () => ({ task: { id: "created-task", title: "created", plan_id: "plan-1" } }),
       create: async () => {
         throw new Error("generic task create must not be used");
       },

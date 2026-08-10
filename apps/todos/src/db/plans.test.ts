@@ -242,6 +242,9 @@ describe("deletePlan", () => {
     const plan = createPlan({ name: "Plan" }, db);
     const task = createTask({ title: "My Task", plan_id: plan.id }, db);
     expect(task.plan_id).toBe(plan.id);
+    expect(
+      db.query("SELECT id, plan_id FROM tasks WHERE id = ?").get(task.id),
+    ).toEqual({ id: task.id, plan_id: plan.id });
 
     deletePlan(plan.id, db);
 

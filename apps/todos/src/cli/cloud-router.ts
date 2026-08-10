@@ -1303,6 +1303,7 @@ export async function cloudCreateTask(
   verification: CloudTaskCreateVerification = {},
 ): Promise<Task> {
   const expectedParentId = typeof input["parent_id"] === "string" ? input["parent_id"] : null;
+  const expectedPlanId = typeof input["plan_id"] === "string" ? input["plan_id"] : null;
   const expectedCreatedBy = typeof verification.expectedCreatedBy === "string"
     && verification.expectedCreatedBy.trim()
     ? verification.expectedCreatedBy
@@ -1341,6 +1342,7 @@ export async function cloudCreateTask(
     !persisted
     || persisted.id !== created.id
     || (persisted.parent_id ?? null) !== expectedParentId
+    || (persisted.plan_id ?? null) !== expectedPlanId
     || (expectedCreatedBy !== null && persisted.created_by !== expectedCreatedBy)
   ) {
     const creatorDetail = expectedCreatedBy === null
@@ -1350,7 +1352,9 @@ export async function cloudCreateTask(
     throw new Error(
       `TASK_CREATE_PERSISTENCE_UNVERIFIED: configured Todos authority ${remoteAuthorityBase(client)} accepted ` +
         `POST /v1/tasks but authoritative GET /v1/tasks/${encodeURIComponent(created.id)} did not return the same ` +
-        `stored task id and parent_id${creatorDetail}; no success row or local SQLite fallback is permitted`,
+        `stored task id, parent_id, and plan_id ` +
+        `(requested plan_id=${JSON.stringify(expectedPlanId)}, readback=${JSON.stringify(persisted?.plan_id ?? null)})` +
+        `${creatorDetail}; no success row or local SQLite fallback is permitted`,
     );
   }
   return persisted;

@@ -2298,6 +2298,11 @@ describe("storage adapter contracts", () => {
     expect(applied.tasks.map((task) => task.project_id)).toEqual([project.id, project.id]);
     const future = await adapter.tasks.create({ title: "Future member", plan_id: plan.id });
     expect(future.project_id).toBe(project.id);
+    expect(await adapter.tasks.get(future.id)).toMatchObject({
+      id: future.id,
+      plan_id: plan.id,
+      project_id: project.id,
+    });
     await expect(adapter.tasks.create({
       title: "Conflicting member",
       plan_id: plan.id,

@@ -56,6 +56,11 @@ describe.skipIf(!PG_URL)("postgres guarded plan/project linkage", () => {
 
     const future = await store.tasks.create({ title: "Future member", plan_id: plan.id });
     expect(future.project_id).toBe(project.id);
+    expect(await store.tasks.get(future.id)).toMatchObject({
+      id: future.id,
+      plan_id: plan.id,
+      project_id: project.id,
+    });
     await expect(store.tasks.create({
       title: "Conflicting future member",
       plan_id: plan.id,

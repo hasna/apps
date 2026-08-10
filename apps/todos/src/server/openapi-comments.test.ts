@@ -476,6 +476,16 @@ describe("plan mutation OpenAPI contract", () => {
           const body = JSON.parse(String(init?.body)) as { title: string; plan_id: string };
           return Response.json({ task: { id: "task-one", ...body, project_id: project.id } }, { status: 201 });
         }
+        if (url.endsWith("/tasks/task-one")) {
+          return Response.json({
+            task: {
+              id: "task-one",
+              title: "Future member",
+              plan_id: plan.id,
+              project_id: project.id,
+            },
+          });
+        }
         const applied = method === "POST";
         return Response.json({
           mode: applied ? "apply" : "plan",
@@ -514,7 +524,17 @@ describe("plan mutation OpenAPI contract", () => {
       receipt_id: "ppl_fixture",
       expected_plan_revision: plan.updated_at,
     })).action).toBe("restored");
-    expect((await client.createTask({ title: "Future member", plan_id: plan.id })).task?.project_id).toBe(project.id);
+    const created = await client.createTask({ title: "Future member", plan_id: plan.id });
+    expect(created.task).toMatchObject({
+      id: "task-one",
+      plan_id: plan.id,
+      project_id: project.id,
+    });
+    expect((await client.getTask(created.task!.id)).task).toMatchObject({
+      id: "task-one",
+      plan_id: plan.id,
+      project_id: project.id,
+    });
 
     expect(calls.map((call) => ({
       method: call.method,
@@ -549,6 +569,11 @@ describe("plan mutation OpenAPI contract", () => {
         method: "POST",
         path: "/v1/tasks",
         body: JSON.stringify({ title: "Future member", plan_id: plan.id }),
+      },
+      {
+        method: "GET",
+        path: "/v1/tasks/task-one",
+        body: undefined,
       },
     ]);
   });
