@@ -3,6 +3,7 @@ import { Command } from "commander";
 import { createCliManual, generateCompletionScript } from "../lib/cli-help.js";
 import {
   applyTodosCliHelpVisibility,
+  getUnavailableTodosCliRemoteMetadataCommand,
   getTodosCliCommandCapabilityMatrix,
   isTodosCliCommandVisibleForRoute,
 } from "./stage-a.js";
@@ -90,6 +91,19 @@ describe("remote help/runtime command gap", () => {
     const localProgram = buildProgramFromMatrix();
     applyTodosCliHelpVisibility(localProgram, "local");
     expect(localProgram.helpInformation()).toMatch(/\bburndown\b/);
+  });
+
+  test("named remote metadata follows version-gated capabilities", () => {
+    expect(getUnavailableTodosCliRemoteMetadataCommand(
+      "remote-http",
+      new Set(),
+      ["stale-lock-handoff", "--help"],
+    )).toBe("stale-lock-handoff");
+    expect(getUnavailableTodosCliRemoteMetadataCommand(
+      "remote-http",
+      new Set(["stale-lock-handoff"]),
+      ["help", "stale-lock-handoff"],
+    )).toBeNull();
   });
 
   test("remote shell completions only suggest authority-served commands", () => {

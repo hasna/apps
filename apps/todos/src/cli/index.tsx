@@ -4,6 +4,7 @@ import { getPackageVersion } from "../lib/package-version.js";
 import {
   applyTodosCliAuthorityEnvironment,
   applyTodosCliHelpVisibility,
+  getUnavailableTodosCliRemoteMetadataCommand,
   initializeTodosCliAuthority,
   type TodosCliAuthorityInitialization,
 } from "./stage-a.js";
@@ -14,16 +15,6 @@ import {
 } from "./cloud-router.js";
 
 const program = new Command();
-
-function remoteMetadataRequested(args: readonly string[] = process.argv.slice(2)): boolean {
-  return args.some((arg) =>
-    arg === "--help" ||
-    arg === "-h" ||
-    arg === "help" ||
-    arg === "manual" ||
-    arg === "completions" ||
-    arg === "completion");
-}
 
 type RegisterEventsCommands = (
   program: Command,
@@ -150,7 +141,8 @@ try {
 }
 
 let remoteCommandCapabilities: ReadonlySet<TodosRemoteCommandCapability> = new Set();
-if (authority.route !== "local" && remoteMetadataRequested()) {
+const metadataRequested = authority.route === "remote-diagnostic";
+if (authority.route !== "local" && metadataRequested) {
   try {
     const client = getTodosCloudClient();
     if (client) {
@@ -274,6 +266,19 @@ applyTodosCliHelpVisibility(program, authority.route, remoteCommandCapabilities)
 // mirror) surfaces as a clean red message + exit(1) instead of an unhandled
 // promise-rejection stack trace.
 try {
+  if (metadataRequested) {
+    const unavailableCommand = getUnavailableTodosCliRemoteMetadataCommand(
+      authority.route,
+      remoteCommandCapabilities,
+      process.argv.slice(2),
+    );
+    if (unavailableCommand) {
+      throw new Error(
+        `REMOTE_COMMAND_UNAVAILABLE: configured Todos authority does not advertise ${unavailableCommand}; ` +
+          "help is unavailable for this command",
+      );
+    }
+  }
   await program.parseAsync();
 } catch (err) {
   handleError(err);

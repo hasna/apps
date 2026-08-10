@@ -760,7 +760,7 @@ describe("remote CLI entrypoint authority boundary", () => {
     expect(help.stdout).toMatch(/\bstatus\b/);
   });
 
-  test("remote help and stale-lock handoff fail closed when the authority omits the route", async () => {
+  test("every remote help form gates stale-lock handoff on the authority contract", async () => {
     const TASK_ID = "11111111-1111-4111-8111-111111111111";
     const requests: string[] = [];
     let advertiseHandoff = false;
@@ -805,10 +805,23 @@ describe("remote CLI entrypoint authority boundary", () => {
     };
     mkdirSync(env.HOME);
 
+    let serverRunning = true;
     try {
       const help = await runCli(executable, ["--help"], env);
       expect(help.exitCode).toBe(0);
       expect(help.stdout).not.toMatch(/\bstale-lock-handoff\b/);
+
+      for (const args of [
+        ["stale-lock-handoff", "--help"],
+        ["help", "stale-lock-handoff"],
+      ]) {
+        const directHelp = await runCli(executable, args, env);
+        expect(directHelp.exitCode).not.toBe(0);
+        expect(directHelp.stderr).toContain("REMOTE_COMMAND_UNAVAILABLE");
+        expect(`${directHelp.stdout}\n${directHelp.stderr}`).not.toContain(
+          "Usage: todos stale-lock-handoff",
+        );
+      }
 
       const result = await runCli(executable, [
         "--agent", "fixture-agent",
@@ -824,6 +837,8 @@ describe("remote CLI entrypoint authority boundary", () => {
       expect(requests).toEqual([
         "GET /v1/openapi.json",
         "GET /v1/openapi.json",
+        "GET /v1/openapi.json",
+        "GET /v1/openapi.json",
       ]);
 
       advertiseHandoff = true;
@@ -832,8 +847,31 @@ describe("remote CLI entrypoint authority boundary", () => {
       expect(compatibleHelp.exitCode).toBe(0);
       expect(compatibleHelp.stdout).toMatch(/\bstale-lock-handoff\b/);
       expect(requests).toEqual(["GET /v1/openapi.json"]);
-    } finally {
+
+      for (const args of [
+        ["stale-lock-handoff", "--help"],
+        ["help", "stale-lock-handoff"],
+      ]) {
+        const directHelp = await runCli(executable, args, env);
+        expect(directHelp.exitCode).toBe(0);
+        expect(directHelp.stdout).toContain("Usage: todos stale-lock-handoff");
+      }
+
       server.stop(true);
+      serverRunning = false;
+      for (const args of [
+        ["stale-lock-handoff", "--help"],
+        ["help", "stale-lock-handoff"],
+      ]) {
+        const unreachableHelp = await runCli(executable, args, env);
+        expect(unreachableHelp.exitCode).not.toBe(0);
+        expect(unreachableHelp.stderr).toContain("REMOTE_COMMAND_UNAVAILABLE");
+        expect(`${unreachableHelp.stdout}\n${unreachableHelp.stderr}`).not.toContain(
+          "Usage: todos stale-lock-handoff",
+        );
+      }
+    } finally {
+      if (serverRunning) server.stop(true);
     }
   });
 

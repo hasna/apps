@@ -149,6 +149,11 @@ const REMOTE_COMMAND_CAPABILITIES =
   new Map<string, TodosRemoteCommandCapability>([
     ["stale-lock-handoff", "stale-lock-handoff"],
   ]);
+for (const [canonical, aliases] of Object.entries(TODOS_CLI_COMMAND_ALIASES)) {
+  const requiredCapability = REMOTE_COMMAND_CAPABILITIES.get(canonical);
+  if (!requiredCapability) continue;
+  for (const alias of aliases) REMOTE_COMMAND_CAPABILITIES.set(alias, requiredCapability);
+}
 
 const COMMAND_CAPABILITY_MATRIX = new Map<string, TodosCliCommandOwner>();
 for (const command of REGISTERED_CANONICAL_COMMANDS) COMMAND_CAPABILITY_MATRIX.set(command, "local-only");
@@ -206,6 +211,33 @@ export function applyTodosCliHelpVisibility(
           isTodosCliCommandVisibleForRoute(subcommand.name(), route, remoteCapabilities));
     },
   });
+}
+
+/**
+ * Return the explicitly requested remote metadata command when its deployed-
+ * authority capability is absent. Commander help filtering controls only the
+ * parent command list; a still-registered command remains resolvable through
+ * both `<command> --help` and `help <command>`. This guard gives named help the
+ * same generic capability decision already used by aggregate help, manuals,
+ * and completions. Ordinary command execution stays registered so its action
+ * can return the specific compatibility error.
+ */
+export function getUnavailableTodosCliRemoteMetadataCommand(
+  route: TodosCliAuthorityInitialization["route"],
+  remoteCapabilities: ReadonlySet<TodosRemoteCommandCapability> = new Set(),
+  args: readonly string[] = [],
+): string | null {
+  if (route === "local") return null;
+  const invocation = parseInvocation([...args]);
+  if (!isMetadataInvocation([...args], invocation)) return null;
+  const requestedCommand = invocation.command === "help"
+    ? positionalArgs(invocation.commandArgs)[0]
+    : invocation.command;
+  if (!requestedCommand) return null;
+  const requiredCapability = REMOTE_COMMAND_CAPABILITIES.get(requestedCommand);
+  return requiredCapability && !remoteCapabilities.has(requiredCapability)
+    ? requestedCommand
+    : null;
 }
 
 const GLOBAL_OPTIONS_WITH_VALUES = new Set(["--project", "--agent", "--session"]);
