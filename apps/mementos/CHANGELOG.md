@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.14.82 — Enumerate complete project resources
+
+- Add `mementos project-resources <project-id>` plus local authority, REST,
+  OpenAPI, and SDK surfaces to page, completely traverse, and exactly read
+  project, knowledge, memory, and session resources by stable ID.
+- Keep membership explicit to the project aggregate or an explicit project ID
+  or active-project focus: unrelated memories stay outside, while later
+  eligible children appear in the collection.
+- Bind opaque cursors to the collection revision, reject stale cursors, and
+  make CLI `--all` and SDK traversal fail closed on duplicate or incomplete
+  stable-ID coverage across SQLite and authenticated HTTP/PostgreSQL.
+- Resolve project authority from live package-owned configuration and withhold
+  project-resource advertisement and guarded mutations when no explicit
+  authority identity exists, rather than falling back to a synthetic tuple.
+
 ## 0.14.81 — Make guarded project repair callable
 
 - Expose bounded guarded path update, exact sanitized receipt lookup, and
