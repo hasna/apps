@@ -152,6 +152,19 @@ describe('generated artifact verification', () => {
     // minifier change under the gate without any commit in this repo.
     expect(pins[0]).toMatch(/^\d+\.\d+\.\d+$/);
   });
+
+  test('the cross-platform matrix does not cancel Windows when another OS fails', () => {
+    const workflow = readFileSync(join(repoRoot, '.github', 'workflows', 'ci.yml'), 'utf8');
+    expect(workflow).toContain(
+      [
+        '  test-matrix:',
+        '    strategy:',
+        '      fail-fast: false',
+        '      matrix:',
+        '        os: [ubuntu-latest, macos-latest, windows-latest]',
+      ].join('\n'),
+    );
+  });
 });
 
 // DELIBERATELY NOT TESTED HERE: end-to-end behaviour of the script itself — that it exits 1 on a
