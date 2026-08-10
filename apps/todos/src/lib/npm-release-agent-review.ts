@@ -88,6 +88,15 @@ const PAYLOAD_KEYS = [
   "openReachableInScopeBlockers",
 ];
 
+export function isNativeCodewithSubagentLineage(value: string): boolean {
+  if (value.length > 1024) return false;
+  const segments = value.split("/");
+  return segments.length >= 3
+    && segments[0] === ""
+    && segments[1] === "root"
+    && segments.slice(2).every((segment) => /^[a-z0-9][a-z0-9_]{0,127}$/.test(segment));
+}
+
 export function validateNpmReleaseAgentReviewReceipt(
   rawReceipt: string | undefined,
   expected: ExpectedNpmReleaseAgentReview,
@@ -232,9 +241,21 @@ export function validateNpmReleaseAgentReviewReceipt(
   );
   addIf(
     failures,
+    !isNativeCodewithSubagentLineage(expected.reviewerAgentId),
+    "release-agent-review-reviewer-config",
+    "RELEASE_REVIEWER_AGENT must name the exact native Codewith sub-agent lineage fixed for this release candidate",
+  );
+  addIf(
+    failures,
+    !isNativeCodewithSubagentLineage(payload.reviewer.agent),
+    "release-agent-review-reviewer-runtime",
+    "reviewer.agent must name the native Codewith sub-agent lineage that performed the review",
+  );
+  addIf(
+    failures,
     payload.reviewer.agent.trim().toLowerCase() === payload.publisher.agent.trim().toLowerCase(),
     "release-agent-review-independence",
-    "the fixed reviewer agent must differ from the publisher agent",
+    "the native Codewith reviewer lineage must differ from the publisher agent",
   );
   addIf(
     failures,

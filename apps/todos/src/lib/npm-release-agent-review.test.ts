@@ -26,7 +26,7 @@ const expected: ExpectedNpmReleaseAgentReview = {
   workflowPath: ".github/workflows/release.yml",
   workflowRevision: "2".repeat(40),
   registry: "https://registry.npmjs.org",
-  reviewerAgentId: "independent-reviewer",
+  reviewerAgentId: "/root/review_todos_release_01522",
   reviewerKeyId,
   reviewerPublicKey,
   publisherAgentId: "nausicaa",
@@ -177,6 +177,29 @@ describe("npm release independent-agent review receipt", () => {
       ...acceptedPayload,
       publisher: { type: "coding-agent", agent: "different-publisher" },
     })).failures.map((failure) => failure.check)).toContain("release-agent-review-publisher");
+  });
+
+  test("rejects Fable-attributed and malformed reviewer identities even when configuration matches", () => {
+    for (const reviewerAgentId of [
+      "Anscombe",
+      "independent-reviewer",
+      "/root",
+      "/root/Review_todos_release_01522",
+      "/root/review.todos.release",
+      "/other/review_todos_release_01522",
+    ]) {
+      const payload = {
+        ...acceptedPayload,
+        reviewer: { type: "coding-agent" as const, agent: reviewerAgentId },
+      };
+      const result = validateNpmReleaseAgentReviewReceipt(
+        JSON.stringify(signedReceipt(payload)),
+        { ...expected, reviewerAgentId },
+      );
+      expect(result.failures.map((failure) => failure.check)).toContain(
+        "release-agent-review-reviewer-runtime",
+      );
+    }
   });
 
   test("rejects every exact release binding mismatch", () => {

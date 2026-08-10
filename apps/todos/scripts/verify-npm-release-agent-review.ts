@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import {
+  isNativeCodewithSubagentLineage,
   parsePublisherAgentTrailer,
   validateNpmReleaseAgentReviewReceipt,
   type ExpectedNpmReleaseAgentReview,
@@ -38,7 +39,12 @@ function main(): void {
   addContextFailure(failures, packageJson.name !== "@hasna/todos", "release-agent-review-package", "package.json must declare @hasna/todos");
   addContextFailure(failures, !packageJson.version, "release-agent-review-version", "package.json must declare a release version");
   addContextFailure(failures, packageJson.publishConfig?.registry !== "https://registry.npmjs.org", "release-agent-review-registry", "package.json must target the public npm registry");
-  addContextFailure(failures, !reviewerAgentId, "release-agent-review-reviewer-config", "RELEASE_REVIEWER_AGENT must name the one fixed independent reviewer");
+  addContextFailure(
+    failures,
+    !isNativeCodewithSubagentLineage(reviewerAgentId),
+    "release-agent-review-reviewer-config",
+    "RELEASE_REVIEWER_AGENT must name the exact native Codewith sub-agent lineage fixed for this release candidate",
+  );
   addContextFailure(failures, !reviewerKeyId, "release-agent-review-key-id-config", "RELEASE_REVIEW_KEY_ID must identify the fixed reviewer public key");
   addContextFailure(failures, !reviewerPublicKey, "release-agent-review-public-key", "RELEASE_REVIEW_PUBLIC_KEY must contain the fixed reviewer public key");
 

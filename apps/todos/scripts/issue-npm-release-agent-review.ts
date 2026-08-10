@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import {
   NPM_RELEASE_AGENT_REVIEW_SCHEMA,
   deriveNpmReleaseAgentReviewKeyId,
+  isNativeCodewithSubagentLineage,
   issueSignedNpmReleaseAgentReviewReceipt,
   parsePublisherAgentTrailer,
   type NpmReleaseAgentReviewPayload,
@@ -48,8 +49,8 @@ function main(): void {
   if (options.verdict === "NO_GO" && options.openP0 === 0 && options.openP1 === 0) {
     fail("a NO_GO receipt must name at least one open P0 or P1 blocker");
   }
-  if (parsePublisherAgentTrailer(`Agent: ${reviewerAgent}`).failures.length > 0) {
-    fail("RELEASE_REVIEWER_AGENT must be a registered agent identifier");
+  if (!isNativeCodewithSubagentLineage(reviewerAgent)) {
+    fail("RELEASE_REVIEWER_AGENT must name the exact native Codewith sub-agent lineage fixed for this release candidate");
   }
   if (parsePublisherAgentTrailer(`Agent: ${options.publisherAgent}`).failures.length > 0) {
     fail("--publisher-agent must be a registered agent identifier");
