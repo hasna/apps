@@ -205,6 +205,8 @@ function searchTaskEntities(filters: SavedSearchFilters, db: Database): Task[] {
 }
 
 function searchProjects(filters: SavedSearchFilters, db: Database): Project[] {
+  if (filters.agent_id) return [];
+
   const params: SQLQueryBindings[] = [];
   let sql = "SELECT * FROM projects WHERE 1=1";
   if (filters.project_id) {
