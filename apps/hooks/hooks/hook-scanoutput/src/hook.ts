@@ -33,7 +33,7 @@
 import { readFileSync } from "fs";
 
 /** The scanner surface this hook uses: `scanInputExposures` from @hasna/secrets. */
-export type ScanFn = (options: { text?: string; maxBytes?: number }) => {
+export type ScanFn = (options: { text?: string; maxBytes?: number; timeoutMs?: number }) => {
   schema: string;
   version: number;
   source: string;
@@ -118,6 +118,18 @@ export interface ScanOutcome {
 /** Ceiling on what we hand the scanner. Above it the outcome is `unscanned`, never `clean`. */
 export const MAX_SCAN_BYTES = 4_000_000;
 
+/**
+ * Wall-clock bound on the scan, well under the scanner's own 10s default.
+ *
+ * This sits on a tool call's critical path, and the Claude installer target
+ * writes no `timeout` into settings.json (only the Codewith target does), so
+ * the wiring supplies no outer bound. Measured cost is 1.4-7.3ms for 11 KB and
+ * 64-90ms for 2.2 MB, so 2s is generous by more than an order of magnitude and
+ * still bounds a pathological input. Exceeding it marks the scan truncated,
+ * which this hook reports as `unscanned` rather than clean.
+ */
+export const SCAN_TIMEOUT_MS = 2_000;
+
 const OUTPUT_FIELDS = ["stdout", "stderr", "output", "content", "text", "error", "result"] as const;
 
 /**
@@ -167,7 +179,7 @@ export function analyzeToolOutput(text: string, scan: ScanFn): ScanOutcome {
 
   let result: ReturnType<ScanFn>;
   try {
-    result = scan({ text, maxBytes: MAX_SCAN_BYTES });
+    result = scan({ text, maxBytes: MAX_SCAN_BYTES, timeoutMs: SCAN_TIMEOUT_MS });
   } catch (err) {
     return {
       status: "error",
