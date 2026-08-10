@@ -6,7 +6,7 @@ import {
 import { z } from "zod";
 
 export const CONTRACTS_PACKAGE_NAME = "@hasna/contracts";
-export const CONTRACTS_PACKAGE_VERSION = "0.10.4";
+export const CONTRACTS_PACKAGE_VERSION = "0.10.5";
 
 export const SCHEMA_IDS = {
   actorRef: "hasna.actor_ref.v1",
