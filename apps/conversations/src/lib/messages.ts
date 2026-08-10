@@ -36,9 +36,9 @@ import {
 } from "./attachment-retrieval.js";
 import {
   BLOCKERS_LIST_ORDER,
-  PINNED_LIST_ORDER,
   SEARCH_RECENT_ORDER,
   SEARCH_RELEVANCE_ORDER,
+  pinnedOrderByClause,
   simpleOrderByClause,
   type SortDescriptor,
 } from "./list-order.js";
@@ -1310,7 +1310,7 @@ export function getPinnedMessages(opts?: { channel?: string; session_id?: string
   const offsetClause = safeOffset > 0 ? `OFFSET ${safeOffset}` : "";
 
   const rows = db.prepare(
-    `SELECT * FROM messages ${where} ${simpleOrderByClause(PINNED_LIST_ORDER)}, id DESC ${limitClause} ${offsetClause}`
+    `SELECT * FROM messages ${where} ${pinnedOrderByClause()} ${limitClause} ${offsetClause}`
   ).all(...params) as Record<string, unknown>[];
 
   return rows.map(parseMessage);

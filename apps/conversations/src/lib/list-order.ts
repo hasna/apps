@@ -98,6 +98,16 @@ export const SEARCH_RECENT_ORDER: SortDescriptor = { sort: MESSAGE_SORT_FIELD, d
 
 /** `pinned` — most recently pinned first. */
 export const PINNED_LIST_ORDER: SortDescriptor = { sort: "pinned_at", direction: "desc" };
+
+/**
+ * Pinned timestamps have finite precision, so the primary field can tie.
+ * Keep the id tie-breaker here with the disclosed descriptor so SQLite and
+ * PostgreSQL cannot silently return different orders for the same records.
+ */
+export function pinnedOrderByClause(prefix = ""): string {
+  return `${simpleOrderByClause(PINNED_LIST_ORDER, prefix)}, ${prefix}id DESC`;
+}
+
 /** `blockers` — oldest unanswered blocker first; a backlog, not a recency window. */
 export const BLOCKERS_LIST_ORDER: SortDescriptor = { sort: "created_at", direction: "asc" };
 /** `locks list` — longest-held lock first. */

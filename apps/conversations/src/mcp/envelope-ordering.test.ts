@@ -196,30 +196,43 @@ describe("MCP envelopes disclose the ordering they actually returned", () => {
    * queries a different table order — pinned_at DESC. The pre-fix code
    * disclosed the message descriptor, wrong in FIELD and DIRECTION.
    */
-  test("get_pinned_messages discloses pinned_at desc AND returns pin order reversed", async () => {
+  test("get_pinned_messages discloses pinned_at desc with a deterministic id tie-break", async () => {
     const dms = await call("read_messages", { to: "envelope-reader", limit: 6, mark_read: false });
     const ids = (dms.messages as Array<{ id: number }>).map((m) => m.id);
 
-    // Pin in an order that is NEITHER created_at ascending nor descending, so
-    // the expected result can be confused with no other ordering. Pinning
-    // simply "backwards" is not enough: pinned_at DESC over reverse-pinned rows
-    // reproduces created_at ASC exactly, and the test would then pass against
-    // the very descriptor it is meant to reject.
+    // The list contract is the persisted field order, not the wall-clock call
+    // order. Seed a shape that is NEITHER id ascending nor descending and
+    // contains a real equal-millisecond tie, so both the primary direction and
+    // the deterministic tie-breaker are observable without sleeps.
     const pinOrder = [ids[2], ids[0], ids[1]];
     for (const id of pinOrder) {
       await call("pin_message", { id });
     }
 
+    const { getDb } = await import("../lib/db.js");
+    const pinnedAt = new Map<number, string>([
+      [pinOrder[0], "2026-08-10T00:00:01.000"],
+      [pinOrder[1], "2026-08-10T00:00:01.000"],
+      [pinOrder[2], "2026-08-10T00:00:00.000"],
+    ]);
+    const setPinnedAt = getDb().prepare("UPDATE messages SET pinned_at = ? WHERE id = ?");
+    for (const [id, timestamp] of pinnedAt) setPinnedAt.run(timestamp, id);
+
     const envelope = await call("get_pinned_messages", {});
     const returned = (envelope.messages as Array<{ id: number }>).map((m) => m.id);
+    const expected = [...pinOrder].sort((left, right) =>
+      pinnedAt.get(right)!.localeCompare(pinnedAt.get(left)!) || right - left
+    );
+    const wrongDirection = [...pinOrder].sort((left, right) =>
+      pinnedAt.get(left)!.localeCompare(pinnedAt.get(right)!) || left - right
+    );
 
     expect(envelope.sort).toBe("pinned_at");
     expect(envelope.direction).toBe("desc");
-
-    // Most recently pinned first — the reverse of the order they were pinned in.
-    expect(returned).toEqual([...pinOrder].reverse());
-    // And distinguishable from BOTH message orderings, so neither the old
-    // wrong descriptor nor its opposite could satisfy this assertion.
+    expect(pinnedAt.get(pinOrder[0])).toBe(pinnedAt.get(pinOrder[1]));
+    expectOrderedAs(envelope, returned.map((id) => pinnedAt.get(id)!));
+    expect(returned).toEqual(expected);
+    expect(returned).not.toEqual(wrongDirection);
     expect(returned).not.toEqual([...returned].sort((a, b) => a - b));
     expect(returned).not.toEqual([...returned].sort((a, b) => b - a));
   });

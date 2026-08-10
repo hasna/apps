@@ -30,7 +30,7 @@ import { assertNoSensitiveContent, assertNoSensitiveValue, redactSensitiveText, 
 import { resolveSelfSenderId } from "../lib/sender-identity.js";
 import { normalizeMessageUuid, parseMessageReference } from "../lib/message-reference.js";
 import { normalizeExactIsoTimestamp } from "../lib/since.js";
-import { PROJECT_LIST_ORDER, simpleOrderByClause } from "../lib/list-order.js";
+import { PROJECT_LIST_ORDER, pinnedOrderByClause, simpleOrderByClause } from "../lib/list-order.js";
 import { decodeAttachmentUploads } from "../lib/attachments.js";
 import { BAKED_BUILD_SHA } from "./build-sha.generated.js";
 import {
@@ -1150,7 +1150,7 @@ async function handleV1(
       `SELECT id, uuid, session_id, from_agent, to_agent, channel, project_id, content, priority,
               blocking, reply_to, working_dir, repository, branch, metadata, edited_at, pinned_at,
               attachments, created_at, read_at
-       FROM messages WHERE ${clauses.join(" AND ")} ORDER BY pinned_at DESC LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
+       FROM messages WHERE ${clauses.join(" AND ")} ${pinnedOrderByClause()} LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
       params,
     );
     return json({ messages: rows });

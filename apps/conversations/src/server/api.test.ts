@@ -2378,6 +2378,17 @@ describe("conversations-serve", () => {
     expect(typeof b.count).toBe("number");
   });
 
+  test("GET /v1/messages/pinned uses the deterministic id tie-breaker", async () => {
+    const response = await fetch(`${base}/v1/messages/pinned`, {
+      headers: { "x-api-key": rwKey },
+    });
+    expect(response.status).toBe(200);
+
+    const query = activeFakeClient!.__debug.manyCalls.at(-1)!;
+    expect(query.sql).toContain("ORDER BY pinned_at DESC, id DESC");
+    expect(query.sql).not.toContain("ORDER BY pinned_at DESC LIMIT");
+  });
+
   test("GET /v1/messages with since_id selects the oldest unseen ids", async () => {
     const response = await fetch(`${base}/v1/messages?since_id=42&limit=2&order=desc`, {
       headers: { "x-api-key": rwKey },

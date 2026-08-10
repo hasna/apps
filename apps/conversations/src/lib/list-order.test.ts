@@ -7,6 +7,7 @@ import {
   describeMessageOrder,
   formatSortDescriptor,
   messageOrderByClause,
+  pinnedOrderByClause,
   simpleOrderByClause,
 } from "./list-order.js";
 
@@ -35,6 +36,10 @@ describe("list order descriptors", () => {
 
     expect(AGENT_LIST_ORDER).toEqual({ sort: "last_seen_at", direction: "desc" });
     expect(simpleOrderByClause(AGENT_LIST_ORDER)).toBe("ORDER BY last_seen_at DESC");
+
+    expect(pinnedOrderByClause()).toBe("ORDER BY pinned_at DESC, id DESC");
+    expect(pinnedOrderByClause("m.")).toBe("ORDER BY m.pinned_at DESC, m.id DESC");
+    expect(pinnedOrderByClause()).not.toBe("ORDER BY pinned_at DESC");
   });
 
   test("search has two orderings and they are not the same descriptor", () => {
