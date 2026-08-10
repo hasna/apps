@@ -65,8 +65,33 @@ export type ScanFn = (options: { text?: string; maxBytes?: number }) => {
 export interface HookInput {
   session_id?: string;
   cwd?: string;
+  hook_event_name?: string;
   tool_name?: string;
   tool_input?: Record<string, unknown>;
+  /**
+   * THE FIELD CLAUDE CODE ACTUALLY SENDS. Verified against the Claude Code
+   * 2.1.226 binary on 2026-08-10, in both its embedded documentation and its
+   * implementation:
+   *
+   *   "tool_input": { ... },
+   *   "tool_response": { "success": true }  // PostToolUse only
+   *
+   *   hook_event_name:"PostToolUse", tool_name:e, tool_input:r,
+   *   tool_response:n, tool_use_id:t, duration_ms:l
+   *
+   * Counted in the same binary: `tool_response` 21 occurrences,
+   * `tool_output` 2 — and both of those are the telemetry event name
+   * `tengu_dead_probe_hook_updated_mcp_tool_output`, neither adjacent to
+   * `PostToolUse`. Control: a deliberately absent string returns 0.
+   *
+   * Read this before "simplifying" the two fields below into one. Every other
+   * hook in this catalog reads `tool_output` only, so on Claude Code they
+   * receive `undefined` and silently observe nothing — which for a scanner
+   * means a clean verdict over an empty string. That is the vacuous-gate
+   * defect this hook exists to notice, and it nearly shipped inside it.
+   */
+  tool_response?: Record<string, unknown> | string;
+  /** Compatibility only: the pre-existing catalog convention, and some runtimes may use it. */
   tool_output?: Record<string, unknown> | string;
 }
 
@@ -95,9 +120,16 @@ export const MAX_SCAN_BYTES = 4_000_000;
 
 const OUTPUT_FIELDS = ["stdout", "stderr", "output", "content", "text", "error", "result"] as const;
 
-/** Pull the text out of a tool result, whether it arrived as a string or a record. */
+/**
+ * Pull the text out of a tool result, whether it arrived as a string or a record.
+ *
+ * `tool_response` is what Claude Code sends (see HookInput above); `tool_output`
+ * is accepted as a fallback so this also works on any runtime using the older
+ * catalog convention. Reading only one of them is how a scanner ends up
+ * reporting a confident clean over an empty string.
+ */
 export function extractToolOutputText(input: HookInput): string {
-  const output = input.tool_output;
+  const output = input.tool_response ?? input.tool_output;
   if (output === undefined || output === null) return "";
   if (typeof output === "string") return output;
   if (typeof output !== "object") return String(output);

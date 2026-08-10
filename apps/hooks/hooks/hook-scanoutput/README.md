@@ -27,6 +27,42 @@ A guard advertised as preventing a leak it only reports afterwards retires the
 worry without retiring the exposure. That is worse than no guard, which is why the
 wording above is load-bearing rather than modesty.
 
+## The field name is `tool_response`, and reading the wrong one makes this silent
+
+This hook reads `tool_response`, falling back to `tool_output`. That is not defensive
+padding — it is the difference between a working guard and one that reports clean
+forever.
+
+Verified against the Claude Code 2.1.226 binary on 2026-08-10. Its embedded schema:
+
+```json
+"tool_input": { "file_path": "/path/to/file.txt", "content": "..." },
+"tool_response": { "success": true }  // PostToolUse only
+```
+
+and its implementation builds the hook input as:
+
+```js
+hook_event_name:"PostToolUse", tool_name:e, tool_input:r, tool_response:n, tool_use_id:t, duration_ms:l
+```
+
+Counted in the same binary: `tool_response` 21 occurrences, `tool_output` 2 — and both
+of those are the telemetry event name `tengu_dead_probe_hook_updated_mcp_tool_output`,
+neither adjacent to `PostToolUse`. Control: a deliberately absent string returns 0.
+
+**Every other hook in this catalog reads `tool_output` only.** On Claude Code they
+receive `undefined`. For a scanner that means an empty input, and an empty input scores
+as clean — a guard that has never looked at anything and says so in the voice of a
+guard that has. This hook was written that way first and the self-review caught it
+before merge; the demonstration is one line:
+
+```
+PRE-FIX  reads tool_output   -> undefined  => scans NOTHING, reports clean
+POST-FIX reads tool_response -> got 131 chars => scans it
+```
+
+Tests lock both field names and the preference order.
+
 ## Install
 
 ```bash

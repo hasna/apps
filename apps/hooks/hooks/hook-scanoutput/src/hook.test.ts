@@ -46,7 +46,29 @@ const finding = (over: Record<string, unknown> = {}) => ({
 });
 
 describe("hook-scanoutput / extractToolOutputText", () => {
-  test("reads a plain string tool_output", () => {
+  /**
+   * The field name is the whole ballgame. Verified against the Claude Code 2.1.226
+   * binary on 2026-08-10: its embedded schema reads
+   *   "tool_response": { "success": true }  // PostToolUse only
+   * and its implementation builds
+   *   hook_event_name:"PostToolUse", tool_name:e, tool_input:r, tool_response:n
+   * `tool_response` 21 occurrences, `tool_output` 2 — both of those the telemetry
+   * name tengu_dead_probe_hook_updated_mcp_tool_output, neither near PostToolUse.
+   *
+   * Reading only `tool_output` yields undefined on Claude Code, which this hook
+   * would score as an empty input and report clean. These tests lock the field.
+   */
+  test("reads tool_response, the field Claude Code actually sends", () => {
+    expect(extractToolOutputText({ tool_response: "hello" })).toBe("hello");
+  });
+
+  test("reads a structured tool_response", () => {
+    const text = extractToolOutputText({ tool_response: { stdout: "out-part", stderr: "err-part" } });
+    expect(text).toContain("out-part");
+    expect(text).toContain("err-part");
+  });
+
+  test("still reads tool_output, the older catalog convention", () => {
     expect(extractToolOutputText({ tool_output: "hello" })).toBe("hello");
   });
 
@@ -56,9 +78,20 @@ describe("hook-scanoutput / extractToolOutputText", () => {
     expect(text).toContain("err-part");
   });
 
+  test("prefers tool_response when both are present", () => {
+    expect(extractToolOutputText({ tool_response: "from-response", tool_output: "from-output" })).toBe("from-response");
+  });
+
+  test("falls back to serialising an unrecognised output shape rather than skipping it", () => {
+    // An output shape this hook does not know must not read as 'no output'.
+    const text = extractToolOutputText({ tool_response: { unexpectedField: "SOMETHING-IN-HERE" } });
+    expect(text).toContain("SOMETHING-IN-HERE");
+  });
+
   test("returns empty string when there is no output at all", () => {
     expect(extractToolOutputText({})).toBe("");
     expect(extractToolOutputText({ tool_output: undefined })).toBe("");
+    expect(extractToolOutputText({ tool_response: undefined })).toBe("");
   });
 });
 
