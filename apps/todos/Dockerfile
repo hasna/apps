@@ -30,10 +30,11 @@ RUN ! apk info -e openssl
 
 FROM base AS deps
 WORKDIR /app
-# Root manifest + the dashboard workspace member's manifest (needed for the
-# workspace to resolve; the dashboard itself is not built in the server image).
+# Root manifest + workspace member manifests (needed for the workspace to
+# resolve; the workspaces themselves are not built in the server image).
 COPY package.json bun.lock ./
 COPY dashboard/package.json ./dashboard/package.json
+COPY ai/package.json ./ai/package.json
 RUN bun install --frozen-lockfile --ignore-scripts
 
 FROM base AS build
