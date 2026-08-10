@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.24] - 2026-08-10
+
+### Fixed
+
+- **Release CI installs the independently locked AI companion before recursive
+  tests.** The npm workflow now installs `ai/bun.lock` dependencies before the
+  root `bun test`, retaining the Todos AI content from the unpublished
+  `0.15.23` release while advancing the package to `0.15.24`.
+
 ## [0.15.23] - 2026-08-10
 
 ### Added

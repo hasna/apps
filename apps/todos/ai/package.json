@@ -70,7 +70,7 @@
   "license": "Apache-2.0",
   "sideEffects": false,
   "peerDependencies": {
-    "@hasna/todos": ">=0.15.23 <1"
+    "@hasna/todos": ">=0.15.24 <1"
   },
   "dependencies": {
     "@ai-sdk/groq": "^4.0.0",
