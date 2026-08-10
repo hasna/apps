@@ -1011,6 +1011,10 @@ program
     "write credentials into a dir that is neither the live config dir nor a registered profile dir",
   )
   .option(
+    "--allow-duplicate-account-dir",
+    "deliberately allow one Claude account to occupy more than one account dir",
+  )
+  .option(
     "--live-default",
     "target the live default config dir deliberately when neither --dir nor the tool env var chose it (required while profile-dir sessions are live on this machine)",
   )
@@ -1024,6 +1028,7 @@ program
           dir?: string;
           yes?: boolean;
           allowUnregisteredDir?: boolean;
+          allowDuplicateAccountDir?: boolean;
           liveDefault?: boolean;
           json?: boolean;
         },
@@ -1040,6 +1045,7 @@ program
           yes: opts.yes,
           // Deliberate, human-typed override only. `usage-hook` never sets it.
           allowUnregisteredDir: opts.allowUnregisteredDir,
+          allowDuplicateAccountDir: opts.allowDuplicateAccountDir,
           liveDefault: opts.liveDefault,
         });
         const output = publicSwitchResult(result);

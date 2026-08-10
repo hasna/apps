@@ -49,6 +49,7 @@ afterEach(() => {
 
 interface CredentialFixture {
   email: string;
+  accountUuid?: string;
   expiresInMs?: number;
   refreshToken?: string | null;
 }
@@ -66,7 +67,15 @@ function credentialJson(fixture: CredentialFixture): string {
 
 function writeIdentity(dir: string, fixture: CredentialFixture): void {
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, ".claude.json"), JSON.stringify({ oauthAccount: { emailAddress: fixture.email } }));
+  writeFileSync(
+    join(dir, ".claude.json"),
+    JSON.stringify({
+      oauthAccount: {
+        ...(fixture.accountUuid ? { accountUuid: fixture.accountUuid } : {}),
+        emailAddress: fixture.email,
+      },
+    }),
+  );
   writeFileSync(join(dir, ".credentials.json"), credentialJson(fixture));
 }
 
@@ -91,6 +100,123 @@ function dirAccessToken(dir: string): string {
   const data = readJson(join(dir, ".credentials.json")) as { claudeAiOauth?: { accessToken?: string } };
   return data.claudeAiOauth?.accessToken ?? "";
 }
+
+function seedLiveDefault(email: string): { credFile: string; bytes: Buffer } {
+  const liveConfigDir = join(liveBase, ".claude");
+  mkdirSync(liveConfigDir, { recursive: true });
+  writeFileSync(join(liveBase, ".claude.json"), JSON.stringify({ oauthAccount: { emailAddress: email } }));
+  const credFile = join(liveConfigDir, ".credentials.json");
+  writeFileSync(credFile, credentialJson({ email }));
+  return { credFile, bytes: readFileSync(credFile) };
+}
+
+const OWNER_UUID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const DEST_OWNER_UUID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+const DEST_OCCUPANT_UUID = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+
+// --- b1bf2b66: cross-directory duplicate account guard ----------------------
+
+test("switchAccount refuses by default to put one Claude account into a second registered profile dir", async () => {
+  makeProfile("target-owner", { email: "target@example.com", accountUuid: OWNER_UUID });
+  const destination = makeProfile("destination-owner", {
+    email: "destination-owner@example.com",
+    accountUuid: DEST_OWNER_UUID,
+  });
+  // The destination dir's owner and current occupant are intentionally
+  // different. The refusal must report them as different facts rather than
+  // treating the directory owner as the live account in the dir.
+  writeIdentity(destination, { email: "current-occupant@example.com", accountUuid: DEST_OCCUPANT_UUID });
+  const beforeEmail = dirEmail(destination);
+  const beforeToken = dirAccessToken(destination);
+
+  await expect(switchAccount("target-owner", { dir: destination, env: {} })).rejects.toThrow(
+    /already lives in registered Claude profile dir/,
+  );
+  await expect(switchAccount("target-owner", { dir: destination, env: {} })).rejects.toThrow(
+    /Destination owner "destination-owner" destination-owner@example\.com/,
+  );
+  await expect(switchAccount("target-owner", { dir: destination, env: {} })).rejects.toThrow(
+    /current occupant current-occupant@example\.com/,
+  );
+
+  // Refusal happens before the destination auth files are written.
+  expect(dirEmail(destination)).toBe(beforeEmail);
+  expect(dirAccessToken(destination)).toBe(beforeToken);
+});
+
+test("switchAccount duplicate guard is not bypassed by --yes", async () => {
+  makeProfile("target-owner", { email: "target@example.com", accountUuid: OWNER_UUID });
+  const destination = makeProfile("destination-owner", {
+    email: "destination-owner@example.com",
+    accountUuid: DEST_OWNER_UUID,
+  });
+
+  await expect(switchAccount("target-owner", { dir: destination, env: {}, yes: true })).rejects.toThrow(
+    /--yes does not override/,
+  );
+});
+
+test("switchAccount duplicate guard also protects live-default apply", async () => {
+  makeProfile("target-owner", { email: "target@example.com", accountUuid: OWNER_UUID });
+  const live = seedLiveDefault("victim@example.com");
+
+  await expect(switchAccount("target-owner", { env: {}, liveDefault: true })).rejects.toThrow(
+    /already lives in registered Claude profile dir/,
+  );
+
+  expect(readFileSync(live.credFile).equals(live.bytes)).toBe(true);
+});
+
+test("switchAccount duplicate guard protects an explicitly selected live-default dir", async () => {
+  makeProfile("target-owner", { email: "target@example.com", accountUuid: OWNER_UUID });
+  const live = seedLiveDefault("victim@example.com");
+
+  await expect(
+    switchAccount("target-owner", { dir: join(liveBase, ".claude"), env: {} }),
+  ).rejects.toThrow(/already lives in registered Claude profile dir/);
+
+  expect(readFileSync(live.credFile).equals(live.bytes)).toBe(true);
+});
+
+test("switchAccount duplicate guard protects an env-selected live-default dir", async () => {
+  makeProfile("target-owner", { email: "target@example.com", accountUuid: OWNER_UUID });
+  const live = seedLiveDefault("victim@example.com");
+
+  await expect(
+    switchAccount("target-owner", {
+      env: { CLAUDE_CONFIG_DIR: join(liveBase, ".claude") },
+    }),
+  ).rejects.toThrow(/already lives in registered Claude profile dir/);
+
+  expect(readFileSync(live.credFile).equals(live.bytes)).toBe(true);
+});
+
+test("switchAccount allows an explicit duplicate-account-dir override", async () => {
+  makeProfile("target-owner", { email: "target@example.com", accountUuid: OWNER_UUID });
+  const destination = makeProfile("destination-owner", {
+    email: "destination-owner@example.com",
+    accountUuid: DEST_OWNER_UUID,
+  });
+
+  const result = await switchAccount("target-owner", {
+    dir: destination,
+    env: {},
+    allowDuplicateAccountDir: true,
+  });
+
+  expect(result.alreadyActive).toBe(false);
+  expect(dirEmail(destination)).toBe("target@example.com");
+});
+
+test("switchAccount keeps same-destination current-account no-op allowed even if another registered dir matches", async () => {
+  const targetDir = makeProfile("target-owner", { email: "target@example.com", accountUuid: OWNER_UUID });
+  makeProfile("other-door", { email: "target@example.com", accountUuid: OWNER_UUID });
+
+  const result = await switchAccount("target-owner", { dir: targetDir, env: {} });
+
+  expect(result.alreadyActive).toBe(true);
+  expect(dirEmail(targetDir)).toBe("target@example.com");
+});
 
 // --- resolveSessionConfigDir -------------------------------------------------
 
@@ -244,16 +370,14 @@ test("POSITIVE CONTROL: the same call with the override DOES write the credentia
   rmSync(planted, { recursive: true, force: true });
 });
 
-test("a registered profile dir needs no override — the allowlist refuses nothing in use", async () => {
-  // Every live CLAUDE_CONFIG_DIR on this fleet is a registered managed profile
-  // dir, so this is the shape production actually runs in.
-  makeProfile("alpha", { email: "alpha@example.com" });
-  const betaDir = makeProfile("beta", { email: "beta@example.com" });
+test("a registered profile dir refuses a second live copy of another registered account", async () => {
+  makeProfile("alpha", { email: "alpha@example.com", accountUuid: OWNER_UUID });
+  const betaDir = makeProfile("beta", { email: "beta@example.com", accountUuid: DEST_OWNER_UUID });
 
-  const result = await switchAccount("alpha", { dir: betaDir, env: {} });
-
-  expect(result.dirKind).toBe("profile-dir");
-  expect(dirEmail(betaDir)).toBe("alpha@example.com");
+  await expect(switchAccount("alpha", { dir: betaDir, env: {} })).rejects.toThrow(
+    /Destination owner "beta" beta@example.com/,
+  );
+  expect(dirEmail(betaDir)).toBe("beta@example.com");
 });
 
 test("switchAccount rejects non-claude tools", async () => {

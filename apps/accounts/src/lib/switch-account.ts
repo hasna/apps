@@ -22,7 +22,7 @@ import {
 import { listDirLiveSessions, liveClaudeBase, liveClaudePaths, type DirSessionInfo } from "./claude-layout.js";
 import { credentialHealth, isAccountUuid, profileAccountUuid } from "./auth-store.js";
 import { convergeIdentityCredential } from "./credential-broker.js";
-import { dirAccountUuid } from "./identity-index.js";
+import { accountLiveDoorsElsewhere, buildIdentityIndex, dirAccountUuid } from "./identity-index.js";
 import {
   centralCredentialsPath,
   inspectDirCredential,
@@ -53,6 +53,12 @@ export interface SwitchAccountOptions {
    * `accounts usage-hook` must never set it.
    */
   allowUnregisteredDir?: boolean;
+  /**
+   * Deliberately allow one Claude OAuth account to occupy more than one
+   * registered account directory. Off by default: the normal switch path must
+   * not create the refresh-token race that husks duplicate credential copies.
+   */
+  allowDuplicateAccountDir?: boolean;
   /**
    * Target the live default config dir DELIBERATELY when neither --dir nor the
    * tool's env var chose it. Without this, a switch whose dir resolution FELL
@@ -149,6 +155,30 @@ function detectDirOwner(
       : `multiple profiles share ${dirEmail}; outgoing credentials were not snapshotted`,
   );
   return undefined;
+}
+
+function accountLabel(uuid: string | undefined, email: string | undefined): string {
+  if (email && uuid) return `${email} (${uuid})`;
+  if (email) return email;
+  if (uuid) return uuid;
+  return "unknown";
+}
+
+function profileAccountLabel(profile: Profile | undefined, tool: ToolDef): string {
+  if (!profile) return "no registered profile owner";
+  return `"${profile.name}" ${accountLabel(profileAccountUuid(profile.dir, tool), profileOAuthEmail(profile.dir, tool) ?? profile.email)}`;
+}
+
+function occupantLabel(dir: string, tool: ToolDef): string {
+  return accountLabel(dirAccountUuid(dir, tool), dirOAuthEmail(dir, tool));
+}
+
+function registeredProfileForDir(
+  profiles: ReadonlyArray<Profile>,
+  dir: string,
+): Profile | undefined {
+  const resolved = resolve(dir);
+  return profiles.find((profile) => resolve(profile.dir) === resolved);
 }
 
 type LockedOutcome =
@@ -251,6 +281,46 @@ export async function switchAccount(
   }
 
   const warnings: string[] = [];
+  const targetUuid = profileAccountUuid(profile.dir, tool);
+
+  // DUPLICATE-ACCOUNT-DIR GUARD (task b1bf2b66). One Claude OAuth account in
+  // two config dirs creates two refresh sessions for one refresh token. The
+  // first refresh rotates it; the loser presents the revoked predecessor and
+  // Claude blanks that dir's credential into the measured husk. Refuse before
+  // every credential-writing path: broker repoint, legacy restore, and
+  // live-default apply.
+  if (targetUuid && isAccountUuid(targetUuid)) {
+    const currentUuid = dirAccountUuid(configDir, tool);
+    const alreadyThisDir =
+      currentUuid !== undefined && currentUuid.toLowerCase() === targetUuid.toLowerCase();
+    const destinationProfile = registeredProfileForDir(profiles, configDir);
+    const duplicateGuardRequired = destinationProfile !== undefined || dirKind === "live-default";
+    if (!alreadyThisDir && duplicateGuardRequired) {
+      const liveElsewhere = accountLiveDoorsElsewhere(buildIdentityIndex(profiles, tool), targetUuid, configDir);
+      if (liveElsewhere.length > 0 && !opts.allowDuplicateAccountDir) {
+        const where = liveElsewhere
+          .map((door) => `${door.profileName ? `"${door.profileName}" (${door.dir})` : door.dir} state=${door.state}`)
+          .join(", ");
+        const destinationOwner = profileAccountLabel(destinationProfile, tool);
+        const destinationOccupant = occupantLabel(configDir, tool);
+        throw new AccountsError(
+          `refusing to switch "${profile.name}" into ${configDir}: Claude account ` +
+            `${accountLabel(targetUuid, profileOAuthEmail(profile.dir, tool) ?? profile.email)} already lives in ` +
+            `registered Claude profile dir(s): ${where}. Destination owner ${destinationOwner}; current occupant ` +
+            `${destinationOccupant}. This would create or preserve one OAuth identity across multiple account dirs, ` +
+            `whose refresh sessions can race and husk the losers. --yes does not override this; pass ` +
+            `--allow-duplicate-account-dir only for a deliberate custody repair.`,
+        );
+      }
+      if (liveElsewhere.length > 0) {
+        warnings.push(
+          `duplicate-account-dir override used: "${profile.name}" also lives in ${liveElsewhere
+            .map((door) => (door.profileName ? `"${door.profileName}"` : door.dir))
+            .join(", ")}`,
+        );
+      }
+    }
+  }
 
   // === SINGLE-INODE BROKER: ATOMIC SYMLINK REPOINT (owner directive 2026-08-06) ===
   //
@@ -281,7 +351,6 @@ export async function switchAccount(
   // The `HASNA_ACCOUNTS_SYMLINK_BROKER=1` opt-in is retained as an explicit
   // force (it can only reach the repoint when a central exists, so it never
   // links to a missing central), but it is no longer the primary trigger.
-  const targetUuid = profileAccountUuid(profile.dir, tool);
   const targetHasCentral =
     !!targetUuid && isAccountUuid(targetUuid) && existsSync(centralCredentialsPath(targetUuid));
   if (dirKind !== "live-default") {

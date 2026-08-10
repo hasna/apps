@@ -371,11 +371,16 @@ test("a MIGRATED dir repoints even with the opt-in OFF (a symlink can only be sw
   rmSync(session, { recursive: true, force: true });
 });
 
-test("registered profile dir needs no override — repoint runs for it too", async () => {
+test("registered profile dir repoints when intentional duplicate occupancy is explicit", async () => {
   makeAccount("alpha", UUID_A, "alpha@e.com");
   const betaDir = makeAccount("beta", UUID_B, "beta@e.com");
-  // Switch beta's OWN dir to alpha: profile-dir kind, no allowUnregisteredDir.
-  const result = await switchAccount("alpha", { dir: betaDir, env: {} });
+  // This broker compatibility case deliberately puts alpha in beta's registered
+  // dir, so it must opt into the duplicate-account custody repair path.
+  const result = await switchAccount("alpha", {
+    dir: betaDir,
+    env: {},
+    allowDuplicateAccountDir: true,
+  });
   expect(result.dirKind).toBe("profile-dir");
   expect(lstatSync(join(betaDir, ".credentials.json")).isSymbolicLink()).toBe(true);
   expect(accessThroughDir(betaDir)).toBe("alpha@e.com-access");
