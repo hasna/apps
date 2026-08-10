@@ -86,6 +86,43 @@ Inspect audit history:
 secrets audit example/anthropic/test/api_key
 ```
 
+#### What the `agent` column attributes
+
+`agent` is the **issued-to subject of the credential that made the call**, not
+the process, session, host, or person behind it.
+
+In cloud mode the server derives it once per request from the verified API-key
+claims, and never from request input:
+
+```ts
+const actor = decision.principal.agent ?? decision.principal.kid;
+```
+
+That subject is fixed at issuance — `issue-key --agent <name>`, see
+[Cloud service](#cloud-service-self_hosted) — and is covered by the token
+signature, so a caller can neither assert nor override it. No endpoint accepts an
+agent *identity* parameter: `/v1/secrets/get` takes `key` and nothing else, and
+an unknown `agent` query parameter or header is ignored rather than rejected.
+(`POST /v1/users` does take a `type` of `human` or `agent`; that is a user record
+kind, not the identity of the caller.) In local mode the same column is instead
+filled from `AGENT_ID ?? USER ?? hostname()`, which *is* self-asserted. The two
+modes populate one column from two sources with different trust properties; read
+the mode before reading the value.
+
+The consequence that matters when interpreting a row: **every caller sharing one
+key collapses to one `agent` value.** A deployment in which many callers share a
+single API key records a single constant, and each row then attributes the access
+to that key rather than to whoever used it. Such a row is *key-attributed* — and
+where the key is shared, key-attributed means **unattributed**. It does not
+narrow the access to a machine either, so it must not be described as
+machine-attributed; that claims a narrowing the record does not contain.
+
+Distinct per-caller attribution therefore comes from distinct credentials, each
+issued with its own `--agent`. In cloud mode it is not reachable by any
+client-side change, because the client does not supply this value at all; in
+local mode the value is whatever the calling process asserts, which is a
+different property and not a substitute for it.
+
 Inspect metadata-only secret reference health:
 
 ```bash
@@ -229,6 +266,15 @@ All six actions use the following output contract. It extends the current flat
 `AuditEntry` shape so old readers can continue to display `id`, `action`, `key`,
 `agent`, and `timestamp`. Optional fields are omitted rather than filled with
 values copied from request context.
+
+The `agent` field below describes the intended contract for these grant-aware
+events. On the existing `get` / `set` / `delete` rows it is not a per-caller
+identity but the identity resolved for the caller by the active mode — the
+credential's issued-to subject in cloud mode, the process environment in local
+mode — and it carries exactly the attribution that source carries; see
+[What the `agent` column attributes](#what-the-agent-column-attributes).
+A resolver implementing these events inherits that limit: it cannot narrow an
+access below the granularity of the identity available to it.
 
 ```ts
 interface SecretAccessAuditEventV1 {
@@ -757,7 +803,7 @@ injected via `HASNA_SECRETS_MASTER_KEY` — the service fails closed without it.
 ```bash
 # migrate the cloud database (one-shot), then serve
 export HASNA_SECRETS_STORAGE_MODE=cloud
-export HASNA_SECRETS_DATABASE_URL=postgres://…            # or DATABASE_URL
+export HASNA_SECRETS_DATABASE_URL=postgres://...          # or DATABASE_URL
 export HASNA_SECRETS_API_SIGNING_KEY=$(openssl rand -hex 32)
 export HASNA_SECRETS_MASTER_KEY=$(openssl rand -base64 32)
 secrets-serve db migrate
@@ -766,6 +812,12 @@ secrets-serve                                             # listens on $PORT (de
 # issue an API key (@hasna/contracts issuer), then call the SDK
 bunx @hasna/contracts issue-key --app secrets --agent my-agent --scopes 'secrets:read,secrets:write'
 ```
+
+`--agent` is the sole input that populates the `agent` column of every audit row
+written under that key, so issue one key per caller you intend to tell apart. A
+key shared between callers makes their accesses indistinguishable in the audit
+log, and no client-side setting recovers the difference — see
+[What the `agent` column attributes](#what-the-agent-column-attributes).
 
 ```ts
 import { createSecretsClientFromEnv, type SecretInput } from "@hasna/secrets";
