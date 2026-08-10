@@ -16,8 +16,13 @@ import {
   projectResourceLinkProducerEvidenceDigest,
   type AsyncProjectResourceLinkProducerEvidenceVerifier,
 } from "../lib/project-resource-link-migrations.js";
+import {
+  TEST_PRODUCER_VERIFIER_NOW,
+  testConversationsProducerFixture,
+} from "../lib/project-resource-link-producer-verifier.test-support.js";
 import { runProjectsMigrations } from "./migrations.js";
 import { ProjectsPgStore, generateWorkspaceId, generateRootId, slugify } from "./pg-store.js";
+import { createProjectsPgStore } from "./index.js";
 
 const trustedProducerEvidenceVerifier: AsyncProjectResourceLinkProducerEvidenceVerifier = (input) => {
   const evidenceDigest = projectResourceLinkProducerEvidenceDigest(
@@ -978,20 +983,25 @@ describe("pg-store typed resource-link transaction model", () => {
   test("requires exact producer proof for terminal migration states and bounds event reads", async () => {
     const harness = resourceLinkMutationClient();
     const store = new ProjectsPgStore(harness.client);
-    const trustedStore = new ProjectsPgStore(harness.client, trustedProducerEvidenceVerifier);
+    const fixture = testConversationsProducerFixture({
+      operationId: "pg-migration-proof",
+      stepId: "channel-link",
+      targetId: channelLink.locator.value,
+      projectId: harness.workspace().id,
+      projectSlug: harness.workspace().slug,
+      projectName: harness.workspace().name,
+      projectKind: "project",
+    });
+    const trustedStore = createProjectsPgStore(harness.client, {
+      producerAuthorityOptions: fixture.authorityOptions,
+      producerVerifierNow: () => TEST_PRODUCER_VERIFIER_NOW,
+    });
+    const defaultStore = createProjectsPgStore(harness.client);
     const bounds = {
       response_byte_limit: 100_000,
       time_budget_ms: 5_000,
     };
-    const producerEvidence = [{
-      created_by_operation: true,
-      forward_receipt_id: "conversations-forward-receipt",
-      child_link_receipt_ids: [],
-      target_revision: "conversations-revision-1",
-      target_digest: "sha256:conversations-target-1",
-      inverse_verified: null,
-      inverse_outcome: null,
-    }];
+    const producerEvidence = fixture.producerEvidence("forward");
     const planned = await store.planProjectResourceLinkMigration({
       project_id: harness.workspace().id,
       operation_id: "pg-migration-proof",
@@ -1003,8 +1013,8 @@ describe("pg-store typed resource-link transaction model", () => {
         producer_binding: {
           authority_id: "conversations",
           tenant_id: "tenant-primary",
-          corpus_id: null,
-          capability_digest: "sha256:conversations-capability",
+          corpus_id: fixture.capability.corpus_id,
+          capability_digest: fixture.capabilityDigest,
         },
       }],
       max_items: 10,
@@ -1049,7 +1059,7 @@ describe("pg-store typed resource-link transaction model", () => {
       evidence: { verification: "exact-readback" },
       ...bounds,
     };
-    await expect(store.advanceProjectResourceLinkMigration(verifiedInput))
+    await expect(defaultStore.advanceProjectResourceLinkMigration(verifiedInput))
       .rejects.toThrow(/producer readback proof/i);
     await expect(store.advanceProjectResourceLinkMigration({
       ...verifiedInput,
@@ -1070,13 +1080,25 @@ describe("pg-store typed resource-link transaction model", () => {
         target_digest: "sha256:conversations-target-2",
       }],
     })).rejects.toThrow(/trusted producer receipt\/readback attestation/i);
+    await expect(defaultStore.advanceProjectResourceLinkMigration({
+      ...verifiedInput,
+      producer_evidence: fixture.producerEvidence("readback"),
+      evidence: {},
+    })).rejects.toThrow(/producer verification evidence must be an object/i);
+    await expect(trustedStore.advanceProjectResourceLinkMigration({
+      ...verifiedInput,
+      evidence: fixture.verificationEvidence(planned.manifest.links[0]!.link_id, {
+        forwardReceipt: {
+          ...fixture.forwardReceipt,
+          created_at: "2026-08-10T11:00:01.000Z",
+        },
+      }),
+      producer_evidence: fixture.producerEvidence("readback"),
+    })).rejects.toThrow(/stored producer receipt/i);
     const verified = await trustedStore.advanceProjectResourceLinkMigration({
       ...verifiedInput,
-      producer_evidence: [{
-        ...producerEvidence[0]!,
-        target_revision: "conversations-revision-2",
-        target_digest: "sha256:conversations-target-2",
-      }],
+      evidence: fixture.verificationEvidence(planned.manifest.links[0]!.link_id),
+      producer_evidence: fixture.producerEvidence("readback"),
     });
     expect(verified.manifest.state).toBe("verified");
     expect(verified.manifest.links[0]?.producer_evidence).toMatchObject({
@@ -1085,7 +1107,7 @@ describe("pg-store typed resource-link transaction model", () => {
     });
     expect(verified.events.at(-1)?.evidence.producer_attestation).toEqual(expect.objectContaining({
       phase: "readback",
-      verifier: "test-producer-authority-readback",
+      verifier: "projects.production-producer-authority-readback.v1",
     }));
 
     const bounded = await store.readProjectResourceLinkMigration({
@@ -1142,13 +1164,10 @@ describe("pg-store typed resource-link transaction model", () => {
     })).rejects.toThrow(/trusted producer receipt\/readback attestation/i);
     const rolledBack = await trustedStore.rollbackProjectResourceLinkMigration({
       ...rollbackInput,
-      producer_evidence: [{
-        ...producerEvidence[0]!,
-        target_revision: "conversations-revision-3",
-        target_digest: "sha256:conversations-target-3",
-        inverse_verified: true,
-        inverse_outcome: "complete",
-      }],
+      evidence: fixture.verificationEvidence(planned.manifest.links[0]!.link_id, {
+        inverse: true,
+      }),
+      producer_evidence: fixture.producerEvidence("inverse"),
     });
     expect(rolledBack.manifest.state).toBe("rolled_back");
     expect(rolledBack.manifest.links[0]?.producer_evidence).toMatchObject({
@@ -1157,8 +1176,99 @@ describe("pg-store typed resource-link transaction model", () => {
     });
     expect(rolledBack.events.at(-1)?.evidence.producer_attestation).toEqual(expect.objectContaining({
       phase: "inverse_complete",
-      verifier: "test-producer-authority-readback",
+      verifier: "projects.production-producer-authority-readback.v1",
     }));
+    expect(fixture.calls).toEqual([
+      "capability",
+      "lookup:forward",
+      "capability",
+      "lookup:forward",
+      "readExact",
+      "capability",
+      "lookup:forward",
+      "lookup:inverse",
+      "verifyInverse",
+    ]);
+  });
+
+  test("public PostgreSQL construction rejects a project-A receipt replayed into project B", async () => {
+    const harness = resourceLinkMutationClient();
+    const rawStore = new ProjectsPgStore(harness.client);
+    const projectAReceipt = testConversationsProducerFixture({
+      operationId: "pg-cross-project-producer-replay",
+      stepId: "channel-link",
+      targetId: channelLink.locator.value,
+      projectId: "wks_pg_producer_project_a",
+      projectSlug: "pg-producer-project-a",
+      projectName: "Postgres Producer Project A",
+      projectKind: "project",
+    });
+    const trustedStore = createProjectsPgStore(harness.client, {
+      producerAuthorityOptions: projectAReceipt.authorityOptions,
+      producerVerifierNow: () => TEST_PRODUCER_VERIFIER_NOW,
+    });
+    const bounds = {
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+    };
+    const planned = await rawStore.planProjectResourceLinkMigration({
+      project_id: harness.workspace().id,
+      operation_id: "pg-cross-project-producer-replay",
+      step_id: "channel-link",
+      expected_project_revision: harness.workspace().updated_at,
+      links: [{
+        link: channelLink,
+        producer_resource_kind: "conversations_channel",
+        producer_binding: {
+          authority_id: projectAReceipt.capability.authority_id,
+          tenant_id: projectAReceipt.capability.tenant_id,
+          corpus_id: projectAReceipt.capability.corpus_id,
+          capability_digest: projectAReceipt.capabilityDigest,
+        },
+      }],
+      max_items: 10,
+      ...bounds,
+    });
+    const producerApplied = await rawStore.advanceProjectResourceLinkMigration({
+      project_id: harness.workspace().id,
+      manifest_id: planned.manifest.manifest_id,
+      expected_transition_version: planned.manifest.transition_version,
+      next_state: "producer_applied",
+      producer_evidence: projectAReceipt.producerEvidence("forward"),
+      evidence: { producer: "accepted" },
+      ...bounds,
+    });
+    const projectsWrite = await rawStore.mutateProjectResourceLinks({
+      project_id: harness.workspace().id,
+      operation_id: "pg-cross-project-producer-replay:projects",
+      step_id: "channel-link",
+      mode: "add",
+      expected_revision: harness.workspace().updated_at,
+      links: [channelLink],
+      max_items: 10,
+      ...bounds,
+    });
+    const projectsApplied = await rawStore.advanceProjectResourceLinkMigration({
+      project_id: harness.workspace().id,
+      manifest_id: planned.manifest.manifest_id,
+      expected_transition_version: producerApplied.manifest.transition_version,
+      next_state: "projects_applied",
+      projects_forward_receipt_id: projectsWrite.receipt!.receipt_id,
+      evidence: { projects: "accepted" },
+      ...bounds,
+    });
+
+    await expect(trustedStore.advanceProjectResourceLinkMigration({
+      project_id: harness.workspace().id,
+      manifest_id: planned.manifest.manifest_id,
+      expected_transition_version: projectsApplied.manifest.transition_version,
+      next_state: "verified",
+      producer_evidence: projectAReceipt.producerEvidence("readback"),
+      last_verified_projects_revision: harness.workspace().updated_at,
+      last_verified_projects_digest: projectsWrite.after!.collection_digest,
+      evidence: projectAReceipt.verificationEvidence(planned.manifest.links[0]!.link_id),
+      ...bounds,
+    })).rejects.toThrow(/trusted project subject/i);
   });
 });
 

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import { resolveContactsAuthority } from "./index.js";
 
 describe("projects-serve Contacts authority construction", () => {
@@ -23,5 +24,13 @@ describe("projects-serve Contacts authority construction", () => {
     });
     expect(authority).toBeDefined();
     expect(authority?.service_instance).toBe("urn:hasna:contacts:production-test");
+  });
+});
+
+describe("projects-serve production store construction", () => {
+  test("server startup uses the verifier-wired ProjectsPgStore factory", () => {
+    const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
+    expect(source).toContain("const store = createProjectsPgStore(client);");
+    expect(source).not.toContain("const store = new ProjectsPgStore(client);");
   });
 });

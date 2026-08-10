@@ -136,6 +136,21 @@ import {
   assertProjectResourceLinkReadContractEquality,
   normalizeProjectResourceLinks,
 } from "../lib/project-resource-links.js";
+import {
+  projectResourceLinkProducerProjectSubject,
+  reconcileProjectResourceLinkProducerProof,
+  type AsyncProjectResourceLinkProducerEvidenceVerifier,
+  type ProjectResourceLinkProducerAttestationPhase,
+  type ProjectResourceLinkProducerEvidenceVerifier,
+  type ProjectResourceLinkProducerVerificationInput,
+} from "../lib/project-resource-link-migrations.js";
+import {
+  createProductionProjectResourceLinkProducerEvidenceVerifier,
+} from "../lib/project-resource-link-producer-verifier.js";
+import {
+  productionProjectRegistrationAuthorities,
+  type ProductionProjectRegistrationAuthorityOptions,
+} from "../lib/production-project-registration-authorities.js";
 import { normalizeProjectMetadata } from "../lib/project-management.js";
 import type {
   Agent,
@@ -536,9 +551,60 @@ function mutationFields(ctx?: MutationContext): Pick<UpdateWorkspaceInput, "agen
   };
 }
 
+async function prepareLocalProducerEvidenceVerifier(
+  verifier: AsyncProjectResourceLinkProducerEvidenceVerifier,
+  input: ProjectResourceLinkMigrationAdvanceRequest | ProjectResourceLinkMigrationRollbackRequest,
+  phase: ProjectResourceLinkProducerAttestationPhase,
+): Promise<ProjectResourceLinkProducerEvidenceVerifier> {
+  const manifest = dbReadProjectResourceLinkMigration({
+    project_id: input.project_id,
+    manifest_id: input.manifest_id,
+    max_items: 1,
+    response_byte_limit: input.response_byte_limit,
+    time_budget_ms: input.time_budget_ms,
+  }).manifest;
+  const trustedProject = dbGetWorkspace(input.project_id);
+  if (!trustedProject) {
+    throw new Error(`Project not found: ${input.project_id}`);
+  }
+  const producerEvidence = phase === "readback"
+    ? reconcileProjectResourceLinkProducerProof(
+      manifest,
+      input.producer_evidence,
+      "readback",
+    )
+    : reconcileProjectResourceLinkProducerProof(
+      manifest,
+      input.producer_evidence,
+      "inverse",
+      phase === "inverse_complete" ? "complete" : "retained_target",
+    );
+  const verificationInput: ProjectResourceLinkProducerVerificationInput = {
+    manifest,
+    trusted_project: projectResourceLinkProducerProjectSubject(trustedProject),
+    phase,
+    producer_evidence: producerEvidence,
+    transition_evidence: input.evidence,
+    response_byte_limit: input.response_byte_limit,
+    time_budget_ms: input.time_budget_ms,
+  };
+  const attestation = await verifier(verificationInput);
+  const expectedInput = canonicalJson(verificationInput);
+  return (actualInput) => {
+    if (canonicalJson(actualInput) !== expectedInput) {
+      throw new Error("local producer attestation does not match the transition under lock");
+    }
+    return attestation;
+  };
+}
+
 class LocalProjectStore implements ProjectStore {
   readonly mode = "local" as const;
   readonly baseUrl = null;
+
+  constructor(
+    private readonly producerEvidenceVerifier: AsyncProjectResourceLinkProducerEvidenceVerifier,
+  ) {}
 
   async listProjects(filter?: WorkspaceFilter): Promise<Workspace[]> {
     if (filter?.limit === undefined && filter?.offset === undefined) {
@@ -630,14 +696,33 @@ class LocalProjectStore implements ProjectStore {
   }
 
   async advanceProjectResourceLinkMigration(input: ProjectResourceLinkMigrationAdvanceRequest): Promise<ProjectResourceLinkMigrationResult> {
+    const verifier = input.next_state === "verified"
+      ? await prepareLocalProducerEvidenceVerifier(
+        this.producerEvidenceVerifier,
+        input,
+        "readback",
+      )
+      : undefined;
     return withLock(input.project_id, undefined, "project resource link migration advance", () =>
-      dbAdvanceProjectResourceLinkMigration(input),
+      dbAdvanceProjectResourceLinkMigration(input, undefined, verifier),
     );
   }
 
   async rollbackProjectResourceLinkMigration(input: ProjectResourceLinkMigrationRollbackRequest): Promise<ProjectResourceLinkMigrationResult> {
+    const phase = input.producer_outcome === "complete"
+      ? "inverse_complete"
+      : input.producer_outcome === "retained_target"
+        ? "inverse_retained_target"
+        : undefined;
+    const verifier = phase
+      ? await prepareLocalProducerEvidenceVerifier(
+        this.producerEvidenceVerifier,
+        input,
+        phase,
+      )
+      : undefined;
     return withLock(input.project_id, undefined, "project resource link migration rollback", () =>
-      dbRollbackProjectResourceLinkMigration(input),
+      dbRollbackProjectResourceLinkMigration(input, undefined, verifier),
     );
   }
 
@@ -1447,6 +1532,11 @@ class ApiProjectStore implements ProjectStore {
 
 let cached: ProjectStore | null = null;
 
+export interface ResolveProjectStoreOptions {
+  producerAuthorityOptions?: ProductionProjectRegistrationAuthorityOptions;
+  producerVerifierNow?: () => string;
+}
+
 /**
  * Resolve the active projects Store from the environment. Returns an
  * ApiProjectStore when the flip resolves to cloud (mode=self_hosted/cloud +
@@ -1456,12 +1546,28 @@ let cached: ProjectStore | null = null;
 export function resolveProjectStore(
   env: Env = process.env,
   fetchImpl?: (input: string, init?: RequestInit) => Promise<Response>,
+  options: ResolveProjectStoreOptions = {},
 ): ProjectStore {
-  if (env === process.env && cached) return cached;
+  const cacheable = env === process.env
+    && options.producerAuthorityOptions === undefined
+    && options.producerVerifierNow === undefined;
+  if (cacheable && cached) return cached;
   const resolved = resolveStorageClient(APP, env, fetchImpl);
   const store: ProjectStore =
-    resolved.transport === "cloud-http" ? new ApiProjectStore(resolved.client) : new LocalProjectStore();
-  if (env === process.env) cached = store;
+    resolved.transport === "cloud-http"
+      ? new ApiProjectStore(resolved.client)
+      : new LocalProjectStore(
+        createProductionProjectResourceLinkProducerEvidenceVerifier({
+          authorities: productionProjectRegistrationAuthorities({
+            ...options.producerAuthorityOptions,
+            env: options.producerAuthorityOptions?.env ?? env,
+            fetch: options.producerAuthorityOptions?.fetch
+              ?? fetchImpl as typeof globalThis.fetch | undefined,
+          }),
+          now: options.producerVerifierNow,
+        }),
+      );
+  if (cacheable) cached = store;
   return store;
 }
 

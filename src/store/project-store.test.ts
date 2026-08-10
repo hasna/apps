@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { closeDatabase } from "../db/database.js";
 import {
   PROJECTS_HOME_ENV,
   ensureProjectStore,
@@ -10,6 +11,10 @@ import {
   type ProjectStoreProject,
 } from "../db/project-store.js";
 import { getWorkspace } from "../db/workspaces.js";
+import {
+  TEST_PRODUCER_VERIFIER_NOW,
+  testConversationsProducerFixture,
+} from "../lib/project-resource-link-producer-verifier.test-support.js";
 import { resolveProjectStore, __resetProjectStore } from "./project-store.js";
 
 describe("projects store resolution (client-flip)", () => {
@@ -65,6 +70,314 @@ describe("projects store resolution (client-flip)", () => {
       HASNA_PROJECTS_API_KEY: "super-secret-key",
     });
     expect(store.baseUrl).not.toContain("super-secret-key");
+  });
+});
+
+describe("local Projects production producer verifier", () => {
+  test("rejects a real project-A producer receipt replayed into project B", async () => {
+    const root = mkdtempSync(join(tmpdir(), "projects-producer-replay-"));
+    const previousHome = process.env[PROJECTS_HOME_ENV];
+    process.env[PROJECTS_HOME_ENV] = root;
+    closeDatabase();
+    __resetProjectStore();
+    try {
+      const operationId = "local-cross-project-producer-replay";
+      const stepId = "channel-link";
+      const projectBName = "Local Producer Project B";
+      const projectBSlug = "local-producer-project-b";
+      const targetId = "chn_79fa9c68937a1d020d6031dcaa3dd8d7";
+      const bootstrapStore = resolveProjectStore({});
+      const projectB = await bootstrapStore.createProject({
+        name: projectBName,
+        slug: projectBSlug,
+      });
+      __resetProjectStore();
+      const projectAReceipt = testConversationsProducerFixture({
+        operationId,
+        stepId,
+        targetId,
+        projectId: "wks_local_producer_project_a",
+        projectSlug: "local-producer-project-a",
+        projectName: "Local Producer Project A",
+        projectKind: "generic",
+      });
+      const store = resolveProjectStore({}, undefined, {
+        producerAuthorityOptions: projectAReceipt.authorityOptions,
+        producerVerifierNow: () => TEST_PRODUCER_VERIFIER_NOW,
+      });
+      const link = {
+        authority: "conversations" as const,
+        service_instance: "urn:hasna:conversations:local-production-verifier",
+        source_package: "@hasna/conversations" as const,
+        target_kind: "channel" as const,
+        locator: {
+          kind: "conversations_channel_id" as const,
+          value: targetId,
+        },
+        scope: "resource" as const,
+        labels: { channel_name: projectB.slug },
+      };
+      const bounds = { response_byte_limit: 100_000, time_budget_ms: 5_000 };
+      const planned = await store.planProjectResourceLinkMigration({
+        project_id: projectB.id,
+        operation_id: operationId,
+        step_id: stepId,
+        expected_project_revision: projectB.updated_at,
+        links: [{
+          link,
+          producer_resource_kind: "conversations_channel",
+          producer_binding: {
+            authority_id: projectAReceipt.capability.authority_id,
+            tenant_id: projectAReceipt.capability.tenant_id,
+            corpus_id: projectAReceipt.capability.corpus_id,
+            capability_digest: projectAReceipt.capabilityDigest,
+          },
+        }],
+        max_items: 10,
+        ...bounds,
+      });
+      const producerApplied = await store.advanceProjectResourceLinkMigration({
+        project_id: projectB.id,
+        manifest_id: planned.manifest.manifest_id,
+        expected_transition_version: planned.manifest.transition_version,
+        next_state: "producer_applied",
+        producer_evidence: projectAReceipt.producerEvidence("forward"),
+        evidence: { producer: "accepted" },
+        ...bounds,
+      });
+      const projectsWrite = await store.mutateProjectResourceLinks({
+        project_id: projectB.id,
+        operation_id: `${operationId}:projects`,
+        step_id: stepId,
+        mode: "add",
+        expected_revision: projectB.updated_at,
+        links: [link],
+        max_items: 10,
+        ...bounds,
+      });
+      const projectsApplied = await store.advanceProjectResourceLinkMigration({
+        project_id: projectB.id,
+        manifest_id: planned.manifest.manifest_id,
+        expected_transition_version: producerApplied.manifest.transition_version,
+        next_state: "projects_applied",
+        projects_forward_receipt_id: projectsWrite.receipt!.receipt_id,
+        evidence: { projects: "accepted" },
+        ...bounds,
+      });
+      const current = await store.readProjectResourceLinks({
+        project_id: projectB.id,
+        max_items: 10,
+        ...bounds,
+      });
+
+      await expect(store.advanceProjectResourceLinkMigration({
+        project_id: projectB.id,
+        manifest_id: planned.manifest.manifest_id,
+        expected_transition_version: projectsApplied.manifest.transition_version,
+        next_state: "verified",
+        producer_evidence: projectAReceipt.producerEvidence("readback"),
+        last_verified_projects_revision: current.current_revision,
+        last_verified_projects_digest: current.collection_digest,
+        evidence: projectAReceipt.verificationEvidence(planned.manifest.links[0]!.link_id),
+        ...bounds,
+      })).rejects.toThrow(/trusted project subject/i);
+    } finally {
+      closeDatabase();
+      __resetProjectStore();
+      if (previousHome === undefined) delete process.env[PROJECTS_HOME_ENV];
+      else process.env[PROJECTS_HOME_ENV] = previousHome;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("public resolver verifies live producer receipts/readback and inverse before terminal migration states", async () => {
+    const root = mkdtempSync(join(tmpdir(), "projects-producer-verifier-"));
+    const previousHome = process.env[PROJECTS_HOME_ENV];
+    process.env[PROJECTS_HOME_ENV] = root;
+    closeDatabase();
+    __resetProjectStore();
+    try {
+      const operationId = "local-production-producer-verifier";
+      const stepId = "channel-link";
+      const projectName = "Local Producer Verifier";
+      const projectSlug = "local-producer-verifier";
+      const targetId = "chn_79fa9c68937a1d020d6031dcaa3dd8d7";
+      const bootstrapStore = resolveProjectStore({});
+      const project = await bootstrapStore.createProject({ name: projectName, slug: projectSlug });
+      __resetProjectStore();
+      const fixture = testConversationsProducerFixture({
+        operationId,
+        stepId,
+        targetId,
+        projectId: project.id,
+        projectSlug: project.slug,
+        projectName: project.name,
+        projectKind: project.kind,
+      });
+      const store = resolveProjectStore({}, undefined, {
+        producerAuthorityOptions: fixture.authorityOptions,
+        producerVerifierNow: () => TEST_PRODUCER_VERIFIER_NOW,
+      });
+      const link = {
+        authority: "conversations" as const,
+        service_instance: "urn:hasna:conversations:local-production-verifier",
+        source_package: "@hasna/conversations" as const,
+        target_kind: "channel" as const,
+        locator: {
+          kind: "conversations_channel_id" as const,
+          value: targetId,
+        },
+        scope: "resource" as const,
+        labels: { channel_name: project.slug },
+      };
+      const bounds = { response_byte_limit: 100_000, time_budget_ms: 5_000 };
+      const planned = await store.planProjectResourceLinkMigration({
+        project_id: project.id,
+        operation_id: operationId,
+        step_id: stepId,
+        expected_project_revision: project.updated_at,
+        links: [{
+          link,
+          producer_resource_kind: "conversations_channel",
+          producer_binding: {
+            authority_id: fixture.capability.authority_id,
+            tenant_id: fixture.capability.tenant_id,
+            corpus_id: fixture.capability.corpus_id,
+            capability_digest: fixture.capabilityDigest,
+          },
+        }],
+        max_items: 10,
+        ...bounds,
+      });
+      const producerApplied = await store.advanceProjectResourceLinkMigration({
+        project_id: project.id,
+        manifest_id: planned.manifest.manifest_id,
+        expected_transition_version: planned.manifest.transition_version,
+        next_state: "producer_applied",
+        producer_evidence: fixture.producerEvidence("forward"),
+        evidence: { producer: "accepted" },
+        ...bounds,
+      });
+      const projectsWrite = await store.mutateProjectResourceLinks({
+        project_id: project.id,
+        operation_id: `${operationId}:projects`,
+        step_id: stepId,
+        mode: "add",
+        expected_revision: project.updated_at,
+        links: [link],
+        max_items: 10,
+        ...bounds,
+      });
+      const projectsApplied = await store.advanceProjectResourceLinkMigration({
+        project_id: project.id,
+        manifest_id: planned.manifest.manifest_id,
+        expected_transition_version: producerApplied.manifest.transition_version,
+        next_state: "projects_applied",
+        projects_forward_receipt_id: projectsWrite.receipt!.receipt_id,
+        evidence: { projects: "accepted" },
+        ...bounds,
+      });
+      const current = await store.readProjectResourceLinks({
+        project_id: project.id,
+        max_items: 10,
+        ...bounds,
+      });
+      const defaultStore = resolveProjectStore({});
+      await expect(defaultStore.advanceProjectResourceLinkMigration({
+        project_id: project.id,
+        manifest_id: planned.manifest.manifest_id,
+        expected_transition_version: projectsApplied.manifest.transition_version,
+        next_state: "verified",
+        producer_evidence: fixture.producerEvidence("readback"),
+        last_verified_projects_revision: current.current_revision,
+        last_verified_projects_digest: current.collection_digest,
+        evidence: {},
+        ...bounds,
+      })).rejects.toThrow(/producer verification evidence must be an object/i);
+      await expect(defaultStore.advanceProjectResourceLinkMigration({
+        project_id: project.id,
+        manifest_id: planned.manifest.manifest_id,
+        expected_transition_version: projectsApplied.manifest.transition_version,
+        next_state: "verified",
+        producer_evidence: fixture.producerEvidence("readback"),
+        last_verified_projects_revision: current.current_revision,
+        last_verified_projects_digest: current.collection_digest,
+        evidence: fixture.verificationEvidence(planned.manifest.links[0]!.link_id),
+        ...bounds,
+      })).rejects.toThrow(/conversations project registration requires/i);
+      const forgedReceipt = {
+        ...fixture.forwardReceipt,
+        created_at: "2026-08-10T11:00:01.000Z",
+      };
+      await expect(store.advanceProjectResourceLinkMigration({
+        project_id: project.id,
+        manifest_id: planned.manifest.manifest_id,
+        expected_transition_version: projectsApplied.manifest.transition_version,
+        next_state: "verified",
+        producer_evidence: fixture.producerEvidence("readback"),
+        last_verified_projects_revision: current.current_revision,
+        last_verified_projects_digest: current.collection_digest,
+        evidence: fixture.verificationEvidence(planned.manifest.links[0]!.link_id, {
+          forwardReceipt: forgedReceipt,
+        }),
+        ...bounds,
+      })).rejects.toThrow(/stored producer receipt/i);
+      const verified = await store.advanceProjectResourceLinkMigration({
+        project_id: project.id,
+        manifest_id: planned.manifest.manifest_id,
+        expected_transition_version: projectsApplied.manifest.transition_version,
+        next_state: "verified",
+        producer_evidence: fixture.producerEvidence("readback"),
+        last_verified_projects_revision: current.current_revision,
+        last_verified_projects_digest: current.collection_digest,
+        evidence: fixture.verificationEvidence(planned.manifest.links[0]!.link_id),
+        ...bounds,
+      });
+      expect(verified.manifest.state).toBe("verified");
+      expect(verified.events.at(-1)?.evidence.producer_attestation).toEqual(expect.objectContaining({
+        verifier: "projects.production-producer-authority-readback.v1",
+        verified_at: TEST_PRODUCER_VERIFIER_NOW,
+      }));
+      const rollbackInProgress = await store.rollbackProjectResourceLinkMigration({
+        project_id: project.id,
+        manifest_id: planned.manifest.manifest_id,
+        expected_transition_version: verified.manifest.transition_version,
+        producer_outcome: "pending",
+        evidence: { projects_reference_proof: "persisted" },
+        max_items: 10,
+        ...bounds,
+      });
+      const rolledBack = await store.rollbackProjectResourceLinkMigration({
+        project_id: project.id,
+        manifest_id: planned.manifest.manifest_id,
+        expected_transition_version: rollbackInProgress.manifest.transition_version,
+        producer_outcome: "complete",
+        producer_evidence: fixture.producerEvidence("inverse"),
+        evidence: fixture.verificationEvidence(planned.manifest.links[0]!.link_id, {
+          inverse: true,
+        }),
+        max_items: 10,
+        ...bounds,
+      });
+      expect(rolledBack.manifest.state).toBe("rolled_back");
+      expect(fixture.calls).toEqual([
+        "capability",
+        "lookup:forward",
+        "capability",
+        "lookup:forward",
+        "readExact",
+        "capability",
+        "lookup:forward",
+        "lookup:inverse",
+        "verifyInverse",
+      ]);
+    } finally {
+      closeDatabase();
+      __resetProjectStore();
+      if (previousHome === undefined) delete process.env[PROJECTS_HOME_ENV];
+      else process.env[PROJECTS_HOME_ENV] = previousHome;
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

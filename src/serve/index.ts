@@ -11,6 +11,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ApiKeyStore } from "@hasna/contracts/auth";
 import { createPgPool, createQueryClient } from "../generated/storage-kit/index.js";
+import type { TypedQueryClient } from "../generated/storage-kit/query.js";
 import { ProjectsPgStore } from "./pg-store.js";
 import { createFetchHandler } from "./app.js";
 import { runProjectsMigrations } from "./migrations.js";
@@ -18,6 +19,13 @@ import {
   createContactsProjectMembershipAuthorityFromEnv,
   type ContactsHttpProjectMembershipAuthority,
 } from "../lib/contacts-authority-adapter.js";
+import {
+  createProductionProjectResourceLinkProducerEvidenceVerifier,
+} from "../lib/project-resource-link-producer-verifier.js";
+import {
+  productionProjectRegistrationAuthorities,
+  type ProductionProjectRegistrationAuthorityOptions,
+} from "../lib/production-project-registration-authorities.js";
 
 const APP = "projects";
 
@@ -76,6 +84,26 @@ export function resolveContactsAuthority(
   return createContactsProjectMembershipAuthorityFromEnv(env);
 }
 
+export interface CreateProjectsPgStoreOptions {
+  producerAuthorityOptions?: ProductionProjectRegistrationAuthorityOptions;
+  producerVerifierNow?: () => string;
+}
+
+export function createProjectsPgStore(
+  client: TypedQueryClient,
+  options: CreateProjectsPgStoreOptions = {},
+): ProjectsPgStore {
+  return new ProjectsPgStore(
+    client,
+    createProductionProjectResourceLinkProducerEvidenceVerifier({
+      authorities: productionProjectRegistrationAuthorities(
+        options.producerAuthorityOptions,
+      ),
+      now: options.producerVerifierNow,
+    }),
+  );
+}
+
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const version = getPackageVersion();
@@ -99,7 +127,7 @@ async function main(): Promise<void> {
   // --- server ---
   const signingSecret = resolveSigningSecret();
   const keyStore = new ApiKeyStore(client);
-  const store = new ProjectsPgStore(client);
+  const store = createProjectsPgStore(client);
   const contacts = resolveContactsAuthority();
   const port = resolvePort(argv);
   const hostname = process.env.HOST || "0.0.0.0";
