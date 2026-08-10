@@ -320,7 +320,14 @@ export function generateSdkFromOpenApi(spec: OpenApiDocument, options: GenerateS
     `    const url = new URL(this.baseUrl + path);\n` +
     `    if (opts.query) {\n` +
     `      for (const [key, value] of Object.entries(opts.query)) {\n` +
-    `        if (value !== undefined && value !== null) url.searchParams.set(key, String(value));\n` +
+    `        if (value === undefined || value === null) continue;\n` +
+    `        if (Array.isArray(value)) {\n` +
+    `          for (const item of value) {\n` +
+    `            if (item !== undefined && item !== null) url.searchParams.append(key, String(item));\n` +
+    `          }\n` +
+    `        } else {\n` +
+    `          url.searchParams.set(key, String(value));\n` +
+    `        }\n` +
     `      }\n` +
     `    }\n` +
     `    const headers: Record<string, string> = { Accept: "application/json", ...this.baseHeaders, ...(opts.init?.headers as Record<string, string> | undefined) };\n` +
