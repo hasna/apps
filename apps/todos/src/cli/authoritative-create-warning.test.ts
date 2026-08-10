@@ -17,15 +17,43 @@ interface ReturnedRouting {
   agentId: string | null;
 }
 
-function startAuthority(returned: ReturnedRouting) {
+function createdByOpenApi(supported: boolean): Record<string, unknown> {
+  return {
+    openapi: "3.1.0",
+    components: {
+      schemas: {
+        CreateTaskInput: {
+          type: "object",
+          properties: supported ? { created_by: { type: "string" } } : {},
+        },
+        Task: {
+          type: "object",
+          properties: supported
+            ? { created_by: { type: "string", nullable: true } }
+            : {},
+        },
+      },
+    },
+  };
+}
+
+function startAuthority(
+  returned: ReturnedRouting,
+  options: { advertiseCreatedBy?: boolean } = {},
+) {
   const creates: Array<Record<string, unknown>> = [];
   let persistedTask: Record<string, unknown> | null = null;
   let readCalls = 0;
+  let openApiCalls = 0;
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
     async fetch(request) {
       const url = new URL(request.url);
+      if (url.pathname === "/v1/openapi.json" && request.method === "GET") {
+        openApiCalls += 1;
+        return Response.json(createdByOpenApi(options.advertiseCreatedBy ?? true));
+      }
       if (url.pathname === "/v1/tasks" && request.method === "POST") {
         const body = (await request.json()) as Record<string, unknown>;
         creates.push(body);
@@ -96,6 +124,7 @@ function startAuthority(returned: ReturnedRouting) {
   servers.push(server);
   return {
     creates,
+    openApiCalls: () => openApiCalls,
     readCalls: () => readCalls,
     server,
   };
@@ -219,5 +248,90 @@ describe("todos add warnings use the authoritative returned task", () => {
     expect(result.stderr).toContain("Warning: task is ownerless");
     expect(result.stderr).not.toContain("unattributable");
     expect(result.stderr).not.toContain("created_by will be recorded as null");
+  }, cliSpawnBudgetMs(1));
+
+  test("refuses explicit creator before POST when the authority cannot preserve created_by", async () => {
+    const authority = startAuthority({
+      createdBy: "fleet",
+      assignedTo: "theophrastus",
+      agentId: "theophrastus",
+    }, { advertiseCreatedBy: false });
+    const result = await runCli(
+      [
+        "--json",
+        "add",
+        "--no-project",
+        "--created-by",
+        "theophrastus",
+        "hosted explicit creator unsupported",
+      ],
+      makeRoot("explicit-unsupported"),
+      `http://127.0.0.1:${authority.server.port}`,
+    );
+
+    expect(result.exitCode).toBe(1);
+    expect(authority.openApiCalls()).toBe(1);
+    expect(authority.creates).toHaveLength(0);
+    expect(result.stderr).toContain("REMOTE_CREATED_BY_UNSUPPORTED");
+  }, cliSpawnBudgetMs(1));
+
+  test("persists and returns an explicit creator through a compatible authority", async () => {
+    const authority = startAuthority({
+      createdBy: "theophrastus",
+      assignedTo: "theophrastus",
+      agentId: "theophrastus",
+    });
+    const result = await runCli(
+      [
+        "--json",
+        "add",
+        "--no-project",
+        "--created-by",
+        "theophrastus",
+        "hosted explicit creator preserved",
+      ],
+      makeRoot("explicit-preserved"),
+      `http://127.0.0.1:${authority.server.port}`,
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(authority.openApiCalls()).toBe(1);
+    expect(authority.creates).toHaveLength(1);
+    expect(authority.creates[0]!["created_by"]).toBe("theophrastus");
+    expect(authority.readCalls()).toBe(1);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      id: CREATED_TASK_ID,
+      created_by: "theophrastus",
+      assigned_to: "theophrastus",
+      agent_id: "theophrastus",
+    });
+    expect(result.stderr).toBe("");
+  }, cliSpawnBudgetMs(1));
+
+  test("rejects success when the authority advertises created_by but overwrites it", async () => {
+    const authority = startAuthority({
+      createdBy: "fleet",
+      assignedTo: "theophrastus",
+      agentId: "theophrastus",
+    });
+    const result = await runCli(
+      [
+        "--json",
+        "add",
+        "--no-project",
+        "--created-by",
+        "theophrastus",
+        "hosted explicit creator overwritten",
+      ],
+      makeRoot("explicit-overwritten"),
+      `http://127.0.0.1:${authority.server.port}`,
+    );
+
+    expect(result.exitCode).toBe(1);
+    expect(authority.openApiCalls()).toBe(1);
+    expect(authority.creates).toHaveLength(1);
+    expect(authority.creates[0]!["created_by"]).toBe("theophrastus");
+    expect(authority.readCalls()).toBe(1);
+    expect(result.stderr).toContain("TASK_CREATE_PERSISTENCE_UNVERIFIED");
   }, cliSpawnBudgetMs(1));
 });

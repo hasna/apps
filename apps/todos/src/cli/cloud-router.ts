@@ -69,8 +69,13 @@ export interface CloudTaskCompletionInput {
   confidence?: number;
 }
 
+export interface CloudTaskCreateVerification {
+  expectedCreatedBy?: string;
+}
+
 const completionCapabilityCache = new Map<string, Promise<ReadonlySet<string>>>();
 const retryCapabilityCache = new Map<string, Promise<boolean>>();
+const taskCreatorCapabilityCache = new Map<string, Promise<boolean>>();
 const gitRefCapabilityCache = new Map<string, Promise<ReadonlySet<RemoteGitRefCapability>>>();
 const remoteCommandCapabilityCache =
   new Map<string, Promise<ReadonlySet<TodosRemoteCommandCapability>>>();
@@ -515,6 +520,7 @@ export function resetTodosCloudClient(): void {
   // Only protocol capabilities are cached, keyed by authority rather than credentials.
   completionCapabilityCache.clear();
   retryCapabilityCache.clear();
+  taskCreatorCapabilityCache.clear();
   listTagsCapabilityCache.clear();
   gitRefCapabilityCache.clear();
   remoteCommandCapabilityCache.clear();
@@ -984,8 +990,19 @@ export async function cloudGetTask(client: HasnaStorageClient, id: string): Prom
 }
 
 /** Create a task (`POST /v1/tasks`). */
-export async function cloudCreateTask(client: HasnaStorageClient, input: Record<string, unknown>): Promise<Task> {
+export async function cloudCreateTask(
+  client: HasnaStorageClient,
+  input: Record<string, unknown>,
+  verification: CloudTaskCreateVerification = {},
+): Promise<Task> {
   const expectedParentId = typeof input["parent_id"] === "string" ? input["parent_id"] : null;
+  const expectedCreatedBy = typeof verification.expectedCreatedBy === "string"
+    && verification.expectedCreatedBy.trim()
+    ? verification.expectedCreatedBy
+    : null;
+  if (expectedCreatedBy !== null) {
+    await requireTaskCreatorCapability(client);
+  }
   const created = unwrapTask(await requiredRemoteRoute(
     client,
     "/v1/tasks",
@@ -1017,11 +1034,16 @@ export async function cloudCreateTask(client: HasnaStorageClient, input: Record<
     !persisted
     || persisted.id !== created.id
     || (persisted.parent_id ?? null) !== expectedParentId
+    || (expectedCreatedBy !== null && persisted.created_by !== expectedCreatedBy)
   ) {
+    const creatorDetail = expectedCreatedBy === null
+      ? ""
+      : ` and explicit created_by=${JSON.stringify(expectedCreatedBy)} ` +
+        `(readback ${JSON.stringify(persisted?.created_by ?? null)})`;
     throw new Error(
       `TASK_CREATE_PERSISTENCE_UNVERIFIED: configured Todos authority ${remoteAuthorityBase(client)} accepted ` +
         `POST /v1/tasks but authoritative GET /v1/tasks/${encodeURIComponent(created.id)} did not return the same ` +
-        "stored task id and parent_id; no success row or local SQLite fallback is permitted",
+        `stored task id and parent_id${creatorDetail}; no success row or local SQLite fallback is permitted`,
     );
   }
   return persisted;
@@ -1164,6 +1186,48 @@ function resolveOpenApiSchema(document: unknown, schema: unknown): Record<string
   return current && typeof current === "object" && !Array.isArray(current)
     ? current as Record<string, unknown>
     : null;
+}
+
+function openApiSchemaProperty(
+  document: unknown,
+  schemaName: string,
+  propertyName: string,
+): Record<string, unknown> | null {
+  const schema = resolveOpenApiSchema(document, {
+    $ref: `#/components/schemas/${schemaName}`,
+  });
+  const properties = schema?.["properties"];
+  if (!properties || typeof properties !== "object" || Array.isArray(properties)) return null;
+  const property = (properties as Record<string, unknown>)[propertyName];
+  return property && typeof property === "object" && !Array.isArray(property)
+    ? property as Record<string, unknown>
+    : null;
+}
+
+async function fetchTaskCreatorCapability(client: HasnaStorageClient): Promise<boolean> {
+  const document = await requiredRemoteRoute(client, "/v1/openapi.json", () =>
+    client.transport.get<unknown>("/openapi.json"));
+  const inputProperty = openApiSchemaProperty(document, "CreateTaskInput", "created_by");
+  const outputProperty = openApiSchemaProperty(document, "Task", "created_by");
+  return inputProperty?.["type"] === "string"
+    && outputProperty?.["type"] === "string"
+    && outputProperty?.["nullable"] === true;
+}
+
+async function requireTaskCreatorCapability(client: HasnaStorageClient): Promise<void> {
+  const authority = remoteAuthorityBase(client);
+  let capability = taskCreatorCapabilityCache.get(authority);
+  if (!capability) {
+    capability = fetchTaskCreatorCapability(client);
+    taskCreatorCapabilityCache.set(authority, capability);
+  }
+  if (!(await capability)) {
+    throw new Error(
+      `REMOTE_CREATED_BY_UNSUPPORTED: configured Todos authority ${authority} does not advertise created_by ` +
+        "on both CreateTaskInput and Task in /v1/openapi.json; no task mutation was sent; deploy a compatible " +
+        "@hasna/todos /v1 server before retrying; local SQLite fallback is disabled",
+    );
+  }
 }
 
 async function fetchRetryCapability(client: HasnaStorageClient): Promise<boolean> {
