@@ -55,6 +55,7 @@ import {
   verifyDistTags,
   verifyDownloadedTarball,
   verifyReleaseEnvironment,
+  verifyReleaseReviewArtifact,
   verifyReleaseReviewReceipt,
   verifyRegistryMetadata,
   verifyRegistryReleaseAttempt,
@@ -103,8 +104,8 @@ const reviewTrust = parseReleaseReviewTrust({
   repository: candidate.repository,
   reviewer: {
     type: "coding-agent",
-    agent: "rawls-npm-release-reviewer",
-    id: "019fe5d3-a6dc-71a0-b6cc-243ea32513b6",
+    agent: "Sagan Accounts Release Reviewer 2026-08-10",
+    id: "019feba2-ca72-7301-97e1-9fd609b0bb50",
   },
   publicKey: {
     algorithm: "ed25519",
@@ -117,6 +118,16 @@ const reviewTrust = parseReleaseReviewTrust({
   signer: { secretRef: RELEASE_REVIEW_SIGNING_SECRET_REF },
   rotation: null,
 });
+const reviewArtifactBody = [
+  "[REVIEW] GO",
+  "",
+  "Independent reviewer: Codewith sub-agent `019feba2-ca72-7301-97e1-9fd609b0bb50` (`Sagan`, explorer, read-only).",
+  "",
+  `Verdict returned verbatim: \`GO ${candidate.commit}\``,
+  "",
+  "Zero reachable in-scope P0/P1 defects were reported.",
+].join("\n");
+
 const reviewExpectation: ReleaseReviewExpectation = {
   commentId: 98_765_432,
   repository: candidate.repository,
@@ -129,10 +140,28 @@ const reviewExpectation: ReleaseReviewExpectation = {
   trustPath: RELEASE_REVIEW_TRUST_PATH,
   trustRevision: "fedcba9876543210fedcba9876543210fedcba98",
   registry: "https://registry.npmjs.org",
-  reviewerAgent: "rawls-npm-release-reviewer",
-  reviewerAgentId: "019fe5d3-a6dc-71a0-b6cc-243ea32513b6",
+  reviewerAgent: "Sagan Accounts Release Reviewer 2026-08-10",
+  reviewerAgentId: "019feba2-ca72-7301-97e1-9fd609b0bb50",
   publisherAgent: "cato-npm-release-publisher",
+  reviewArtifact: {
+    type: "github-pull-request-comment",
+    pullRequest: 155,
+    commentId: 5_240_299_387,
+    commit: candidate.commit,
+    bodySha256: createHash("sha256").update(reviewArtifactBody).digest("hex"),
+  },
 };
+
+function releaseReviewArtifact(overrides: Record<string, unknown> = {}) {
+  return {
+    id: reviewExpectation.reviewArtifact.commentId,
+    issue_url: `https://api.github.com/repos/hasna/accounts/issues/${reviewExpectation.reviewArtifact.pullRequest}`,
+    created_at: "2026-08-10T12:33:08Z",
+    updated_at: "2026-08-10T12:33:08Z",
+    body: reviewArtifactBody,
+    ...overrides,
+  };
+}
 
 function releaseReviewPayload(overrides: Record<string, unknown> = {}) {
   return {
@@ -152,6 +181,7 @@ function releaseReviewPayload(overrides: Record<string, unknown> = {}) {
       path: reviewExpectation.trustPath,
       revision: reviewExpectation.trustRevision,
     },
+    reviewArtifact: reviewExpectation.reviewArtifact,
     registry: reviewExpectation.registry,
     reviewer: {
       type: "coding-agent",
@@ -750,6 +780,12 @@ test("requires an exact immutable signed independent-agent release review receip
         revision: "1111111111111111111111111111111111111111",
       },
     }),
+    releaseReviewPayload({
+      reviewArtifact: {
+        ...reviewExpectation.reviewArtifact,
+        commentId: reviewExpectation.reviewArtifact.commentId + 1,
+      },
+    }),
     releaseReviewPayload({ registry: "https://registry.example.invalid" }),
   ]) {
     expect(() => verifyReleaseReviewReceipt(
@@ -784,6 +820,34 @@ test("requires an exact immutable signed independent-agent release review receip
   )).toThrow("reviewer agent disagrees");
 
   expect(() => verifyReleaseReviewReceipt(
+    releaseReviewComment(releaseReviewPayload({
+      reviewer: {
+        type: "coding-agent",
+        agent: "Fable Accounts Release Reviewer 2026-08-10",
+        id: "4e38a26f-cb70-4418-8bd8-84ef440fa334",
+      },
+    })),
+    reviewExpectation,
+    reviewTrust,
+  )).toThrow("reviewer agent disagrees");
+
+  expect(() => verifyReleaseReviewReceipt(
+    releaseReviewComment(releaseReviewPayload({
+      publisher: { type: "coding-agent", agent: "another-publisher" },
+    })),
+    reviewExpectation,
+    reviewTrust,
+  )).toThrow("publisher agent disagrees");
+
+  expect(() => verifyReleaseReviewReceipt(
+    releaseReviewComment(releaseReviewPayload(), {
+      commentId: reviewExpectation.commentId + 1,
+    }),
+    reviewExpectation,
+    reviewTrust,
+  )).toThrow("comment id disagrees with the tag");
+
+  expect(() => verifyReleaseReviewReceipt(
     releaseReviewComment(releaseReviewPayload({ verdict: "NO_GO" })),
     reviewExpectation,
     reviewTrust,
@@ -815,24 +879,90 @@ test("requires an exact immutable signed independent-agent release review receip
   )).toThrow("must not be edited");
 });
 
+test("binds the receipt to the exact unedited Sagan pull-request review artifact", () => {
+  expect(() => verifyReleaseReviewArtifact(
+    releaseReviewArtifact(),
+    reviewExpectation.repository,
+    reviewExpectation.reviewArtifact,
+    reviewExpectation.reviewerAgentId,
+  )).not.toThrow();
+
+  for (const artifact of [
+    releaseReviewArtifact({ id: reviewExpectation.reviewArtifact.commentId + 1 }),
+    releaseReviewArtifact({
+      issue_url: "https://api.github.com/repos/hasna/accounts/issues/154",
+    }),
+    releaseReviewArtifact({ updated_at: "2026-08-10T12:34:08Z" }),
+  ]) {
+    expect(() => verifyReleaseReviewArtifact(
+      artifact,
+      reviewExpectation.repository,
+      reviewExpectation.reviewArtifact,
+      reviewExpectation.reviewerAgentId,
+    )).toThrow("release review artifact");
+  }
+
+  const expectSemanticRejection = (body: string, message: string) => {
+    expect(() => verifyReleaseReviewArtifact(
+      releaseReviewArtifact({ body }),
+      reviewExpectation.repository,
+      {
+        ...reviewExpectation.reviewArtifact,
+        bodySha256: createHash("sha256").update(body).digest("hex"),
+      },
+      reviewExpectation.reviewerAgentId,
+    )).toThrow(message);
+  };
+  expectSemanticRejection(
+    reviewArtifactBody.replace(
+      reviewExpectation.reviewerAgentId,
+      "019fe5d3-a6dc-71a0-b6cc-243ea32513b6",
+    ),
+    "stable reviewer id disagrees",
+  );
+  expectSemanticRejection(
+    reviewArtifactBody.replace("`Sagan`, explorer", "`Fable`, explorer"),
+    "must not attribute a Codewith sub-agent review to Fable",
+  );
+  expectSemanticRejection(
+    reviewArtifactBody.replace(
+      candidate.commit,
+      "fedcba9876543210fedcba9876543210fedcba98",
+    ),
+    "commit verdict disagrees",
+  );
+  expectSemanticRejection(
+    reviewArtifactBody.replace("[REVIEW] GO", "[REVIEW] NO_GO"),
+    "must record a GO verdict",
+  );
+  expectSemanticRejection(
+    reviewArtifactBody.replace("Zero reachable in-scope P0/P1 defects were reported.", ""),
+    "must report zero reachable in-scope P0/P1 defects",
+  );
+});
+
 test("release tag metadata binds one publisher agent and one exact review comment", () => {
   expect(parseReleaseTagAuthorization(
-    "Release @hasna/accounts 0.3.0\n\nRelease-Review-Comment: 98765432\nAgent: cato-npm-release-publisher",
+    "Release @hasna/accounts 0.3.0\n\nRelease-Review-Comment: 98765432\nRelease-Review-Artifact: 155#5240299387\nAgent: cato-npm-release-publisher",
   )).toEqual({
     reviewCommentId: 98_765_432,
+    reviewArtifact: { pullRequest: 155, commentId: 5_240_299_387 },
     publisherAgent: "cato-npm-release-publisher",
   });
   expect(() => parseReleaseTagAuthorization("Release @hasna/accounts 0.3.0"))
     .toThrow("Release-Review-Comment");
   expect(() => parseReleaseTagAuthorization(
-    "Release @hasna/accounts 0.3.0\n\nRelease-Review-Comment: 98765432",
+    "Release @hasna/accounts 0.3.0\n\nRelease-Review-Comment: 98765432\nRelease-Review-Artifact: 155#5240299387",
   )).toThrow("Agent");
   expect(() => parseReleaseTagAuthorization(
-    "Release-Review-Comment: 98765432\nRelease-Review-Comment: 98765433\nAgent: cato",
+    "Release-Review-Comment: 98765432\nRelease-Review-Comment: 98765433\nRelease-Review-Artifact: 155#5240299387\nAgent: cato",
   )).toThrow("exactly one Release-Review-Comment");
   expect(() => parseReleaseTagAuthorization(
-    "Release-Review-Comment: 98765432\nAgent: cato\nAgent: other",
+    "Release-Review-Comment: 98765432\nRelease-Review-Artifact: 155#5240299387\nAgent: cato\nAgent: other",
   )).toThrow("exactly one Agent");
+  expect(() => parseReleaseTagAuthorization(
+    "Release-Review-Comment: 98765432\nRelease-Review-Artifact: 155#5240299387\nRelease-Review-Artifact: 155#5240299388\nAgent: cato",
+  )).toThrow("exactly one Release-Review-Artifact");
 });
 
 test("allows only advancing or exact-idempotent semantic promotion", () => {

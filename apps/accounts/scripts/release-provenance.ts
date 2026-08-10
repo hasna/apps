@@ -37,6 +37,10 @@ export const RELEASE_REVIEW_TRUST_PATH = "config/release-review-trust.json";
 export const RELEASE_REVIEW_TRUST_SCHEMA = "hasna.release-review-trust/v1";
 export const RELEASE_REVIEW_TRUST_ROTATION_SCHEMA =
   "hasna.release-review-trust-rotation/v1";
+export const RELEASE_REVIEW_TRUST_PREDECESSOR_ROTATION_SCHEMA =
+  "hasna.release-review-trust-rotation/v2";
+export const RELEASE_REVIEW_TRUST_HISTORY_DIRECTORY =
+  "config/release-review-trust-history";
 export const RELEASE_REVIEW_RECEIPT_SCHEMA =
   "hasna.signed-release-review-receipt/v1";
 export const RELEASE_REVIEW_PAYLOAD_SCHEMA = "hasna.release-review/v1";
@@ -194,6 +198,10 @@ export interface GitEvidence {
 
 export interface ReleaseTagAuthorization {
   reviewCommentId: number;
+  reviewArtifact: {
+    pullRequest: number;
+    commentId: number;
+  };
   publisherAgent: string;
 }
 
@@ -216,6 +224,15 @@ export interface ReleaseReviewExpectation {
   reviewerAgent: string;
   reviewerAgentId: string;
   publisherAgent: string;
+  reviewArtifact: ReleaseReviewArtifactBinding;
+}
+
+export interface ReleaseReviewArtifactBinding {
+  type: "github-pull-request-comment";
+  pullRequest: number;
+  commentId: number;
+  commit: string;
+  bodySha256: string;
 }
 
 export interface ReleaseReviewTrust {
@@ -247,6 +264,11 @@ export interface ReleaseReviewTrust {
 
 export interface PriorReleaseReviewTrust {
   version: string;
+  trustBytes: Uint8Array;
+}
+
+export interface IntermediateReleaseReviewTrust {
+  path: string;
   trustBytes: Uint8Array;
 }
 
@@ -425,6 +447,12 @@ export function parseReleaseTagAuthorization(message: string): ReleaseTagAuthori
     const match = line.match(/^Release-Review-Comment: ([1-9]\d*)$/);
     return match?.[1] ? [match[1]] : [];
   });
+  const reviewArtifacts = lines.flatMap((line) => {
+    const match = line.match(/^Release-Review-Artifact: ([1-9]\d*)#([1-9]\d*)$/);
+    return match?.[1] && match[2]
+      ? [{ pullRequest: Number(match[1]), commentId: Number(match[2]) }]
+      : [];
+  });
   const publisherAgents = lines.flatMap((line) => {
     const match = line.match(/^Agent: ([A-Za-z0-9][A-Za-z0-9._-]{0,127})$/);
     return match?.[1] ? [match[1]] : [];
@@ -432,6 +460,10 @@ export function parseReleaseTagAuthorization(message: string): ReleaseTagAuthori
   check(
     commentIds.length === 1,
     "tag annotation must contain exactly one Release-Review-Comment: <id> trailer",
+  );
+  check(
+    reviewArtifacts.length === 1,
+    "tag annotation must contain exactly one Release-Review-Artifact: <pr>#<comment-id> trailer",
   );
   check(
     publisherAgents.length === 1,
@@ -442,8 +474,15 @@ export function parseReleaseTagAuthorization(message: string): ReleaseTagAuthori
     Number.isSafeInteger(reviewCommentId) && reviewCommentId > 0,
     "Release-Review-Comment must be a positive safe integer",
   );
+  const reviewArtifact = reviewArtifacts[0]!;
+  check(
+    Number.isSafeInteger(reviewArtifact.pullRequest) && reviewArtifact.pullRequest > 0 &&
+      Number.isSafeInteger(reviewArtifact.commentId) && reviewArtifact.commentId > 0,
+    "Release-Review-Artifact values must be positive safe integers",
+  );
   return {
     reviewCommentId,
+    reviewArtifact,
     publisherAgent: publisherAgents[0]!,
   };
 }
@@ -1290,10 +1329,126 @@ export function buildReleaseReviewTrustRotationPayload(
   };
 }
 
+export function releaseReviewTrustHistoryPath(generation: number): string {
+  check(
+    Number.isSafeInteger(generation) && generation > 1,
+    "release review trust history generation must be an integer greater than one",
+  );
+  return `${RELEASE_REVIEW_TRUST_HISTORY_DIRECTORY}/generation-${generation}.json`;
+}
+
+export function buildReleaseReviewTrustPredecessorRotationPayload(
+  nextTrustInput: unknown,
+  previousTrustInput: unknown,
+) {
+  const nextTrust = parseReleaseReviewTrust({
+    ...record(nextTrustInput, "next release review trust"),
+    rotation: null,
+  });
+  const previousTrust = record(previousTrustInput, "previous release review trust anchor");
+  exactObjectKeys(
+    previousTrust,
+    ["repository", "path", "generation", "trustSha256"],
+    "previous release review trust anchor",
+  );
+  const generation = integer(
+    previousTrust.generation,
+    "previous release review trust generation",
+  );
+  const path = text(previousTrust.path, "previous release review trust path");
+  const trustSha256 = text(
+    previousTrust.trustSha256,
+    "previous release review trust SHA-256",
+  );
+  check(
+    trustSha256.match(/^[0-9a-f]{64}$/),
+    "previous release review trust SHA-256 must be lowercase hex",
+  );
+  check(
+    path === releaseReviewTrustHistoryPath(generation),
+    "previous release review trust path disagrees with its generation",
+  );
+  check(
+    generation + 1 === nextTrust.generation,
+    "predecessor rotation must increment the release review trust generation exactly once",
+  );
+  const repository = text(
+    previousTrust.repository,
+    "previous release review trust repository",
+  );
+  check(
+    repository === nextTrust.repository,
+    "previous release review trust repository disagrees with next trust",
+  );
+  return {
+    schema: RELEASE_REVIEW_TRUST_PREDECESSOR_ROTATION_SCHEMA,
+    previousTrust: {
+      repository,
+      path,
+      generation,
+      trustSha256,
+    },
+    nextTrust: releaseReviewTrustCore(nextTrust),
+  };
+}
+
+type ReleaseReviewTrustTransitionAnchor =
+  | { type: "published-release"; version: string }
+  | { type: "predecessor-history"; path: string };
+
+function verifyReleaseReviewTrustTransition(
+  currentTrustBytes: Buffer,
+  previousTrustBytes: Buffer,
+  anchor: ReleaseReviewTrustTransitionAnchor,
+): ReleaseReviewTrust {
+  const current = parseReleaseReviewTrust(currentTrustBytes);
+  const previous = parseReleaseReviewTrust(previousTrustBytes);
+  check(
+    current.generation === previous.generation + 1,
+    "release review trust rotation must increment generation exactly once",
+  );
+  check(current.rotation, "changed release review trust requires rotation authorization");
+  const expectedPayload = anchor.type === "published-release"
+    ? buildReleaseReviewTrustRotationPayload(releaseReviewTrustCore(current), {
+        package: "@hasna/accounts",
+        version: anchor.version,
+        registry: REGISTRY,
+        trustSha256: createHash("sha256").update(previousTrustBytes).digest("hex"),
+      })
+    : buildReleaseReviewTrustPredecessorRotationPayload(
+        releaseReviewTrustCore(current),
+        {
+          repository: previous.repository,
+          path: anchor.path,
+          generation: previous.generation,
+          trustSha256: createHash("sha256").update(previousTrustBytes).digest("hex"),
+        },
+      );
+  const payloadBytes = decodeBase64(
+    current.rotation.payload,
+    "release review trust rotation payload",
+  );
+  check(
+    payloadBytes.toString("utf8") === JSON.stringify(expectedPayload),
+    "release review rotation payload disagrees with its exact predecessor trust bytes",
+  );
+  const signatureBytes = decodeBase64(
+    current.rotation.signature.value,
+    "release review trust rotation signature",
+  );
+  check(signatureBytes.length === 64, "release review trust rotation signature must be 64 bytes");
+  check(
+    verifySignature(null, payloadBytes, releaseReviewPublicKey(previous), signatureBytes),
+    "release review trust rotation is not authorized by the prior trust root",
+  );
+  return current;
+}
+
 export function verifyReleaseReviewTrustChain(
   currentTrustBytesInput: Uint8Array,
   currentVersion: string,
   prior?: PriorReleaseReviewTrust,
+  history: readonly IntermediateReleaseReviewTrust[] = [],
 ): ReleaseReviewTrust {
   const currentTrustBytes = Buffer.from(currentTrustBytesInput);
   const current = parseReleaseReviewTrust(currentTrustBytes);
@@ -1323,46 +1478,45 @@ export function verifyReleaseReviewTrustChain(
 
   check(prior, "release review trust rotation requires immutable prior release trust bytes");
   const priorBytes = Buffer.from(prior.trustBytes);
-  const previous = parseReleaseReviewTrust(priorBytes);
+  let previousBytes = priorBytes;
+  let previous = parseReleaseReviewTrust(previousBytes);
   if (currentTrustBytes.equals(priorBytes)) {
+    check(history.length === 0, "byte-identical trust must not add intermediate history");
     check(
       current.generation === previous.generation,
       "byte-identical prior release trust generation disagrees",
     );
     return current;
   }
-  check(
-    current.generation === previous.generation + 1,
-    "release review trust rotation must increment generation exactly once",
-  );
-  check(current.rotation, "changed release review trust requires rotation authorization");
-  const expectedPayload = buildReleaseReviewTrustRotationPayload(
-    releaseReviewTrustCore(current),
-    {
-      package: "@hasna/accounts",
-      version: prior.version,
-      registry: REGISTRY,
-      trustSha256: createHash("sha256").update(priorBytes).digest("hex"),
-    },
-  );
-  const payloadBytes = decodeBase64(
-    current.rotation.payload,
-    "release review trust rotation payload",
-  );
-  check(
-    payloadBytes.toString("utf8") === JSON.stringify(expectedPayload),
-    "release review rotation payload disagrees with immutable prior release trust bytes",
-  );
-  const signatureBytes = decodeBase64(
-    current.rotation.signature.value,
-    "release review trust rotation signature",
-  );
-  check(signatureBytes.length === 64, "release review trust rotation signature must be 64 bytes");
-  check(
-    verifySignature(null, payloadBytes, releaseReviewPublicKey(previous), signatureBytes),
-    "release review trust rotation is not authorized by the prior trust root",
-  );
-  return current;
+  if (current.generation > previous.generation + 1 && history.length === 0) {
+    throw new Error(
+      `release review trust rotation requires generation-${previous.generation + 1} history`,
+    );
+  }
+  let anchor: ReleaseReviewTrustTransitionAnchor = {
+    type: "published-release",
+    version: prior.version,
+  };
+  history.forEach((entry, index) => {
+    const entryBytes = Buffer.from(entry.trustBytes);
+    const entryTrust = parseReleaseReviewTrust(entryBytes);
+    check(
+      entry.path === releaseReviewTrustHistoryPath(entryTrust.generation),
+      "release review trust history path disagrees with its generation",
+    );
+    if (entryTrust.generation === previous.generation) {
+      check(
+        index === 0 && previous.generation > 1 && entryBytes.equals(previousBytes),
+        "release review trust history may copy only the exact prior published trust",
+      );
+    } else {
+      verifyReleaseReviewTrustTransition(entryBytes, previousBytes, anchor);
+    }
+    previousBytes = entryBytes;
+    previous = entryTrust;
+    anchor = { type: "predecessor-history", path: entry.path };
+  });
+  return verifyReleaseReviewTrustTransition(currentTrustBytes, previousBytes, anchor);
 }
 
 export function buildReleaseReviewPayload(expected: ReleaseReviewExpectation) {
@@ -1383,6 +1537,7 @@ export function buildReleaseReviewPayload(expected: ReleaseReviewExpectation) {
       path: expected.trustPath,
       revision: expected.trustRevision,
     },
+    reviewArtifact: expected.reviewArtifact,
     registry: expected.registry,
     reviewer: {
       type: "coding-agent",
@@ -1399,6 +1554,73 @@ export function buildReleaseReviewPayload(expected: ReleaseReviewExpectation) {
       p1: 0,
     },
   };
+}
+
+export function releaseReviewArtifactBodySha256(commentInput: unknown): string {
+  const comment = record(commentInput, "release review artifact comment");
+  return createHash("sha256")
+    .update(text(comment.body, "release review artifact body"), "utf8")
+    .digest("hex");
+}
+
+export function verifyReleaseReviewArtifact(
+  commentInput: unknown,
+  repository: string,
+  expected: ReleaseReviewArtifactBinding,
+  reviewerAgentId: string,
+): void {
+  check(
+    expected.type === "github-pull-request-comment",
+    "release review artifact must be a GitHub pull request comment",
+  );
+  check(
+    Number.isSafeInteger(expected.pullRequest) && expected.pullRequest > 0 &&
+      Number.isSafeInteger(expected.commentId) && expected.commentId > 0,
+    "release review artifact identifiers must be positive safe integers",
+  );
+  exactCommit(expected.commit, "release review artifact commit");
+  check(
+    expected.bodySha256.match(/^[0-9a-f]{64}$/),
+    "release review artifact body SHA-256 must be lowercase hex",
+  );
+  const comment = record(commentInput, "release review artifact comment");
+  check(
+    integer(comment.id, "release review artifact comment id") === expected.commentId,
+    "release review artifact comment id disagrees",
+  );
+  check(
+    text(comment.issue_url, "release review artifact issue URL") ===
+      githubUrl(`/repos/${repository}/issues/${expected.pullRequest}`).toString(),
+    "release review artifact pull request disagrees",
+  );
+  const createdAt = text(comment.created_at, "release review artifact created_at");
+  const updatedAt = text(comment.updated_at, "release review artifact updated_at");
+  check(createdAt === updatedAt, "release review artifact comment must not be edited");
+  const body = text(comment.body, "release review artifact body");
+  check(
+    releaseReviewArtifactBodySha256(comment) === expected.bodySha256,
+    "release review artifact body SHA-256 disagrees",
+  );
+  check(
+    body.split("\n", 1)[0] === "[REVIEW] GO",
+    "release review artifact must record a GO verdict",
+  );
+  check(
+    body.includes(`Independent reviewer: Codewith sub-agent \`${reviewerAgentId}\``),
+    "release review artifact stable reviewer id disagrees",
+  );
+  check(
+    !body.match(/\bFable\b/),
+    "release review artifact must not attribute a Codewith sub-agent review to Fable",
+  );
+  check(
+    body.includes(`Verdict returned verbatim: \`GO ${expected.commit}\``),
+    "release review artifact commit verdict disagrees",
+  );
+  check(
+    body.includes("Zero reachable in-scope P0/P1 defects were reported."),
+    "release review artifact must report zero reachable in-scope P0/P1 defects",
+  );
 }
 
 export function verifyReleaseReviewReceipt(
@@ -1472,6 +1694,7 @@ export function verifyReleaseReviewReceipt(
     "tag",
     "workflow",
     "trust",
+    "reviewArtifact",
     "registry",
     "reviewer",
     "publisher",
@@ -1518,6 +1741,40 @@ export function verifyReleaseReviewReceipt(
       "release review trust revision",
     ) === expected.trustRevision,
     "release review trust revision disagrees",
+  );
+  const reviewArtifact = record(payload.reviewArtifact, "release review artifact binding");
+  exactObjectKeys(
+    reviewArtifact,
+    ["type", "pullRequest", "commentId", "commit", "bodySha256"],
+    "release review artifact binding",
+  );
+  check(
+    reviewArtifact.type === expected.reviewArtifact.type,
+    "release review artifact type disagrees",
+  );
+  check(
+    integer(reviewArtifact.pullRequest, "release review artifact pull request") ===
+      expected.reviewArtifact.pullRequest,
+    "release review artifact pull request disagrees",
+  );
+  check(
+    integer(reviewArtifact.commentId, "release review artifact comment id") ===
+      expected.reviewArtifact.commentId,
+    "release review artifact comment id disagrees",
+  );
+  check(
+    exactCommit(
+      text(reviewArtifact.commit, "release review artifact commit"),
+      "release review artifact commit",
+    ) === expected.reviewArtifact.commit &&
+      expected.reviewArtifact.commit === expected.commit,
+    "release review artifact commit disagrees",
+  );
+  check(
+    text(reviewArtifact.bodySha256, "release review artifact body SHA-256") ===
+      expected.reviewArtifact.bodySha256 &&
+      expected.reviewArtifact.bodySha256.match(/^[0-9a-f]{64}$/),
+    "release review artifact body SHA-256 disagrees",
   );
   check(payload.registry === expected.registry, "release review registry disagrees");
   const reviewer = record(payload.reviewer, "release reviewer");
@@ -1698,8 +1955,23 @@ export async function resolveReleaseReviewTrust(
   const prior = parsed.generation === 1 && manifest.version === RELEASE_REVIEW_BOOTSTRAP_VERSION
     ? undefined
     : await readPriorPublishedReleaseTrust(manifest, fetcher);
+  const history: IntermediateReleaseReviewTrust[] = [];
+  if (prior) {
+    const priorGeneration = parseReleaseReviewTrust(prior.trustBytes).generation;
+    const firstHistoryGeneration = priorGeneration === 1
+      ? priorGeneration + 1
+      : priorGeneration;
+    for (
+      let generation = firstHistoryGeneration;
+      generation < parsed.generation;
+      generation++
+    ) {
+      const path = releaseReviewTrustHistoryPath(generation);
+      history.push({ path, trustBytes: committedFile(root, commit, path) });
+    }
+  }
   return {
-    trust: verifyReleaseReviewTrustChain(trustBytes, manifest.version, prior),
+    trust: verifyReleaseReviewTrustChain(trustBytes, manifest.version, prior, history),
     trustRevision: committedBlob(root, commit, RELEASE_REVIEW_TRUST_PATH),
   };
 }
@@ -1736,6 +2008,7 @@ async function assertLiveReleaseControls(
     actorPermission,
     administrationScope,
     releaseReviewComment,
+    releaseReviewArtifactComment,
   ] = await Promise.all([
     fetchJson(
       githubUrl(`/repos/${repository}/rulesets?includes_parents=true&targets=tag&per_page=100`),
@@ -1769,6 +2042,11 @@ async function assertLiveReleaseControls(
       MAX_JSON_BYTES,
       headers,
     ),
+    fetchJson(
+      githubUrl(`/repos/${repository}/issues/comments/${authorization.reviewArtifact.commentId}`),
+      MAX_JSON_BYTES,
+      headers,
+    ),
   ]);
   check(Array.isArray(summaries), "GitHub rulesets response must be an array");
   const details = await Promise.all(summaries.map(async (entry, index) => {
@@ -1788,6 +2066,19 @@ async function assertLiveReleaseControls(
     administrationScope,
     repository,
   );
+  const reviewArtifact = {
+    type: "github-pull-request-comment" as const,
+    pullRequest: authorization.reviewArtifact.pullRequest,
+    commentId: authorization.reviewArtifact.commentId,
+    commit,
+    bodySha256: releaseReviewArtifactBodySha256(releaseReviewArtifactComment),
+  };
+  verifyReleaseReviewArtifact(
+    releaseReviewArtifactComment,
+    repository,
+    reviewArtifact,
+    resolvedTrust.trust.reviewer.id,
+  );
   verifyReleaseReviewReceipt(
     releaseReviewComment,
     {
@@ -1805,6 +2096,7 @@ async function assertLiveReleaseControls(
       reviewerAgent: resolvedTrust.trust.reviewer.agent,
       reviewerAgentId: resolvedTrust.trust.reviewer.id,
       publisherAgent: authorization.publisherAgent,
+      reviewArtifact,
     },
     resolvedTrust.trust,
   );
@@ -1813,6 +2105,9 @@ async function assertLiveReleaseControls(
   console.log(`verified protected ${RELEASE_ENVIRONMENT} environment with zero human reviewers`);
   console.log(
     `verified independent agent release review receipt comment ${authorization.reviewCommentId}`,
+  );
+  console.log(
+    `verified independent Codewith sub-agent review artifact PR #${reviewArtifact.pullRequest} comment ${reviewArtifact.commentId}`,
   );
 }
 

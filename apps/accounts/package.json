@@ -37,6 +37,7 @@
     "docker-compose.yml",
     "examples",
     "config/release-review-trust.json",
+    "config/release-review-trust-history",
     "CHANGELOG.md",
     "LICENSE",
     "README.md"
