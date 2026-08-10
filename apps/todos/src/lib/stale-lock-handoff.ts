@@ -73,7 +73,10 @@ function requireCanonicalLockVersion(value: unknown): string {
     );
   }
   const parsed = Date.parse(value);
-  if (Number.isNaN(parsed) || new Date(parsed).toISOString() !== value) {
+  // PostgreSQL timestamptz has no year zero, although JavaScript Date accepts it.
+  if (value.startsWith("0000-")
+      || Number.isNaN(parsed)
+      || new Date(parsed).toISOString() !== value) {
     throw new StaleLockHandoffError(
       "STALE_LOCK_HANDOFF_INVALID_INPUT",
       "expected_lock_version must name a real canonical UTC instant",

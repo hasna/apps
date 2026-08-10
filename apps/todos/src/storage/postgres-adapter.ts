@@ -396,7 +396,7 @@ class PostgresJsonRecordStore {
            AND task_record.deleted_at IS NULL
            AND target.payload->>'locked_by' = $3
            AND target.payload->>'locked_at' = $4
-           AND todos_try_timestamptz(target.payload->>'locked_at') < $5::timestamptz
+           AND $4::timestamptz < $5::timestamptz
            AND COALESCE(target.payload->>'status', '') NOT IN ('completed', 'failed', 'cancelled')
          RETURNING task_record.payload
        ),

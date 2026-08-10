@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { prepareStaleLockHandoff } from "../lib/stale-lock-handoff.js";
 import { StaleLockHandoffError, type Task, type TaskHistory } from "../types/index.js";
 import { createPostgresTodosStorageAdapter } from "./postgres-adapter.js";
 import type { TodosStorageSnapshot } from "./interfaces.js";
@@ -283,7 +284,11 @@ describe("PostgreSQL stale-lock handoff SQL", () => {
     expect(sql).toContain("object_id = $2");
     expect(sql).toContain("target.payload->>'locked_by' = $3");
     expect(sql).toContain("target.payload->>'locked_at' = $4");
-    expect(sql).toContain("todos_try_timestamptz(target.payload->>'locked_at') < $5::timestamptz");
+    expect(sql).toContain("$4::timestamptz < $5::timestamptz");
+    expect(sql).not.toContain("todos_try_timestamptz");
+    expect(sql).not.toContain("(target.payload->>'locked_at')::timestamptz");
+    expect(sql.indexOf("target.payload->>'locked_at' = $4"))
+      .toBeLessThan(sql.indexOf("$4::timestamptz < $5::timestamptz"));
     expect(sql).toContain("to_jsonb($6::text)");
     expect(sql).toContain("FROM updated");
     expect(sql).not.toContain("DELETE FROM");
@@ -296,6 +301,74 @@ describe("PostgreSQL stale-lock handoff SQL", () => {
       receipt.stale_cutoff,
       "nausicaa",
     ]);
+  });
+
+  test("rejects a malformed expected lock version before issuing PostgreSQL SQL", async () => {
+    const calls: string[] = [];
+    const client: TodosPostgresQueryClient = {
+      async query<T>(sql: string) {
+        calls.push(sql);
+        return { rows: [] as T[] };
+      },
+    };
+    const adapter = createPostgresTodosStorageAdapter({ client, service: "pg-invalid-version" });
+
+    await expect(adapter.tasks.handoffStaleLock!({
+      task_id: TASK_ID,
+      actor: "nausicaa",
+      expected_holder: "holder-a",
+      expected_lock_version: "not-a-timestamp",
+      stale_after_seconds: 3600,
+      new_holder: "nausicaa",
+      reason: "Reject malformed expected version before PostgreSQL",
+    })).rejects.toMatchObject({
+      code: "STALE_LOCK_HANDOFF_INVALID_INPUT",
+    });
+    expect(calls).toEqual([]);
+  });
+
+  test("rejects a year-zero expected lock version before issuing PostgreSQL SQL", async () => {
+    const calls: string[] = [];
+    const client: TodosPostgresQueryClient = {
+      async query<T>(sql: string) {
+        calls.push(sql);
+        return { rows: [] as T[] };
+      },
+    };
+    const adapter = createPostgresTodosStorageAdapter({ client, service: "pg-year-zero-version" });
+
+    await expect(adapter.tasks.handoffStaleLock!({
+      task_id: TASK_ID,
+      actor: "nausicaa",
+      expected_holder: "holder-a",
+      expected_lock_version: "0000-01-01T00:00:00.000Z",
+      stale_after_seconds: 3600,
+      new_holder: "nausicaa",
+      reason: "Reject PostgreSQL-incompatible expected version before SQL",
+    })).rejects.toMatchObject({
+      code: "STALE_LOCK_HANDOFF_INVALID_INPUT",
+    });
+    expect(calls).toEqual([]);
+  });
+
+  test("shared validation preserves ordinary canonical years 0001 through 9999", () => {
+    for (const expectedLockVersion of [
+      "0001-01-01T00:00:00.000Z",
+      "9999-12-31T23:59:59.999Z",
+    ]) {
+      expect(prepareStaleLockHandoff({
+        task_id: TASK_ID,
+        actor: "nausicaa",
+        expected_holder: "holder-a",
+        expected_lock_version: expectedLockVersion,
+        stale_after_seconds: 3600,
+        new_holder: "nausicaa",
+        reason: "Preserve an ordinary canonical PostgreSQL year",
+      }, {
+        now: HANDOFF_VERSION,
+        receiptId: RECEIPT_ID,
+      }).expected_lock_version).toBe(expectedLockVersion);
+    }
   });
 
   test("same-name recovery still refreshes locked_at through the exact PostgreSQL CAS", async () => {
