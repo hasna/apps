@@ -7,9 +7,11 @@ import {
   buildProjectChannelCollectionPage,
   buildProjectChannelMessageCollectionPage,
   buildProjectChannelRegistrationReceipt,
+  buildProjectChannelRegistrationMessageTransition,
   exactProjectChannelRegistrationReplay,
   projectChannelRegistrationChannelRecord,
   projectChannelRegistrationDigest,
+  projectChannelRegistrationMessageOwnershipMatches,
   projectChannelRegistrationResponseControl,
   sameProjectChannelRegistrationReceipt,
   validateProjectChannelRegistrationForward,
@@ -34,6 +36,10 @@ import {
   type ProjectChannelMessageCollectionRequest,
   type ProjectChannelMessageCollectionRow,
 } from "../lib/project-channel-registration.js";
+import {
+  MESSAGE_SNAPSHOT_COLUMNS,
+  type ProjectMessageLinkageRow,
+} from "../lib/project-message-linkage.js";
 
 type PgReceiptRow = Omit<ProjectChannelRegistrationReceipt, "created_at" | "prior_state"> & {
   created_at: string | Date;
@@ -318,6 +324,20 @@ async function messageProjectDigest(
   })));
 }
 
+async function readMessageOwnershipRows(
+  client: TypedQueryClient,
+  channel: string,
+  lock = false,
+): Promise<ProjectMessageLinkageRow[]> {
+  return client.many<ProjectMessageLinkageRow>(
+    `SELECT ${MESSAGE_SNAPSHOT_COLUMNS.join(", ")}
+     FROM messages
+     WHERE channel = $1
+     ORDER BY id ASC${lock ? " FOR UPDATE" : ""}`,
+    [channel],
+  );
+}
+
 export async function registerProjectChannelPg(
   client: PoolQueryClient,
   request: ProjectChannelRegistrationRequest,
@@ -388,14 +408,24 @@ export async function registerProjectChannelPg(
         assertTime(startedAt, request.time_budget_ms);
         return receipt;
       }
-      const priorState: ProjectChannelRegistrationPriorState = {
-        target_id: preexisting.id,
-        project_id: preexisting.project_id,
-        bound_project_id: request.project_id,
-        revision: priorRecord.revision,
-        digest: priorRecord.digest,
-        message_project_digest: await messageProjectDigest(tx, preexisting.name),
-      };
+      const beforeMessages = await readMessageOwnershipRows(tx, preexisting.name, true);
+      if (beforeMessages.some(
+        (message) => (message.project_id ?? null) !== validated.binding!.expected_project_id,
+      )) {
+        const receipt = await insertReceipt(tx, buildProjectChannelRegistrationReceipt({
+          capability: cap,
+          request,
+          outcome: "terminal_nonacceptance",
+          reason: "bind_message_owner_conflict",
+          targetId: preexisting.id,
+          resultRevision: priorRecord.revision,
+          resultDigest: priorRecord.digest,
+          createdByOperation: false,
+        }));
+        assertTime(startedAt, request.time_budget_ms);
+        return receipt;
+      }
+      const beforeMessageProjectDigest = await messageProjectDigest(tx, preexisting.name);
       const boundRaw = await tx.get<PgChannelRow>(`
         UPDATE channels
         SET project_id = $1
@@ -411,6 +441,36 @@ export async function registerProjectChannelPg(
         throw new Error("project channel registration bind target changed during update.");
       }
       options.faultInjector?.("after_channel_bind");
+      const messageUpdate = await tx.query<{ id: number }>(`
+        UPDATE messages
+        SET project_id = $1
+        WHERE channel = $2 AND project_id IS NOT DISTINCT FROM $3
+        RETURNING id
+      `, [
+        request.project_id,
+        preexisting.name,
+        validated.binding.expected_project_id,
+      ]);
+      if (messageUpdate.rowCount !== beforeMessages.length) {
+        throw new Error("project channel registration messages changed during ownership transition.");
+      }
+      const afterMessages = await readMessageOwnershipRows(tx, preexisting.name, true);
+      const messageTransition = buildProjectChannelRegistrationMessageTransition(
+        beforeMessages,
+        afterMessages,
+        validated.binding.expected_project_id,
+        request.project_id,
+      );
+      options.faultInjector?.("after_message_bind");
+      const priorState: ProjectChannelRegistrationPriorState = {
+        target_id: preexisting.id,
+        project_id: preexisting.project_id,
+        bound_project_id: request.project_id,
+        revision: priorRecord.revision,
+        digest: priorRecord.digest,
+        message_project_digest: beforeMessageProjectDigest,
+        message_transition: messageTransition,
+      };
       const bound = parseChannel(boundRaw);
       const record = projectChannelRegistrationChannelRecord(bound);
       const receipt = buildProjectChannelRegistrationReceipt({
@@ -808,21 +868,48 @@ export async function compensateProjectChannelRegistrationPg(
     }
     if (accepted.prior_state) {
       const prior = accepted.prior_state;
+      const currentMessages = await readMessageOwnershipRows(tx, row.name, true);
       if (
         row.project_id !== prior.bound_project_id
-        || await messageProjectDigest(tx, row.name) !== prior.message_project_digest
+        || !projectChannelRegistrationMessageOwnershipMatches(
+          currentMessages,
+          prior.message_transition,
+          "after",
+        )
       ) {
         const receipt = await terminalInverse(
           tx,
           cap,
           request,
-          "target_referenced",
+          "message_ownership_drifted",
           accepted,
           current,
         );
         assertTime(startedAt, request.time_budget_ms);
         return receipt;
       }
+      const messageRestore = await tx.query<{ id: number }>(`
+        UPDATE messages
+        SET project_id = $1
+        WHERE channel = $2 AND project_id = $3
+        RETURNING id
+      `, [
+        prior.project_id,
+        row.name,
+        prior.bound_project_id,
+      ]);
+      if (messageRestore.rowCount !== prior.message_transition.message_count) {
+        throw new Error("project channel registration messages changed during inverse.");
+      }
+      const restoredMessages = await readMessageOwnershipRows(tx, row.name, true);
+      if (!projectChannelRegistrationMessageOwnershipMatches(
+        restoredMessages,
+        prior.message_transition,
+        "before",
+      )) {
+        throw new Error("project channel registration message ownership inverse did not restore the prior state.");
+      }
+      options.faultInjector?.("after_message_restore");
       const restoredRaw = await tx.get<PgChannelRow>(`
         UPDATE channels
         SET project_id = $1
@@ -929,7 +1016,11 @@ export async function verifyProjectChannelRegistrationInversePg(
       parsed.project_id !== accepted.prior_state.project_id
       || record.revision !== accepted.prior_state.revision
       || record.digest !== accepted.prior_state.digest
-      || await messageProjectDigest(client, parsed.name) !== accepted.prior_state.message_project_digest
+      || !projectChannelRegistrationMessageOwnershipMatches(
+        await readMessageOwnershipRows(client, parsed.name),
+        accepted.prior_state.message_transition,
+        "before",
+      )
     ) {
       throw new Error("project channel registration inverse verification found a non-restored target.");
     }

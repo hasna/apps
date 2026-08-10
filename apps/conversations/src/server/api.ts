@@ -47,12 +47,13 @@ import type {
   ProjectMessageLinkageReceipt,
   ProjectMessageLinkageRollbackResult,
 } from "../types.js";
-import type {
-  ProjectChannelCollectionRequest,
-  ProjectChannelMessageCollectionRequest,
-  ProjectChannelRegistrationLookupRequest,
-  ProjectChannelRegistrationReadRequest,
-  ProjectChannelRegistrationRequest,
+import {
+  assertProjectChannelRegistrationOperationIntent,
+  type ProjectChannelCollectionRequest,
+  type ProjectChannelMessageCollectionRequest,
+  type ProjectChannelRegistrationLookupRequest,
+  type ProjectChannelRegistrationReadRequest,
+  type ProjectChannelRegistrationRequest,
 } from "../lib/project-channel-registration.js";
 import {
   compensateProjectChannelRegistrationPg,
@@ -851,17 +852,21 @@ async function handleV1(
   }
 
   if (sub === "project-registration/channels" && method === "POST") {
+    const request = projectChannelRegistrationRequest(await readJson(req));
+    assertProjectChannelRegistrationOperationIntent(request, "create");
     const receipt = await registerProjectChannelPg(
       client,
-      projectChannelRegistrationRequest(await readJson(req)),
+      request,
     );
     return json(receipt, receipt.outcome === "accepted" ? 201 : 200);
   }
 
   if (sub === "project-registration/channels/bind-existing" && method === "POST") {
+    const request = projectChannelRegistrationRequest(await readJson(req));
+    assertProjectChannelRegistrationOperationIntent(request, "bind_existing");
     const receipt = await registerProjectChannelPg(
       client,
-      projectChannelRegistrationRequest(await readJson(req)),
+      request,
     );
     return json(receipt, receipt.outcome === "accepted" ? 201 : 200);
   }

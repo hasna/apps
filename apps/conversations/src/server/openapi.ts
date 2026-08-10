@@ -7,6 +7,23 @@
 import { version as pkgVersion } from "../../package.json";
 
 const okObject = { type: "object", additionalProperties: true } as const;
+const projectChannelCreateRequest = {
+  type: "object",
+  additionalProperties: {},
+  required: ["operation_intent"],
+  properties: {
+    operation_intent: { type: "string", enum: ["create"] },
+  },
+} as const;
+const projectChannelBindRequest = {
+  type: "object",
+  additionalProperties: {},
+  required: ["operation_intent", "bind_existing"],
+  properties: {
+    operation_intent: { type: "string", enum: ["bind_existing"] },
+    bind_existing: { type: "object", additionalProperties: true },
+  },
+} as const;
 const errorObject = {
   type: "object",
   additionalProperties: true,
@@ -522,7 +539,7 @@ export const openapiSpec = {
         summary: "Conditionally create one absent canonical project channel",
         requestBody: {
           required: true,
-          content: { "application/json": { schema: okObject } },
+          content: { "application/json": { schema: projectChannelCreateRequest } },
         },
         responses: {
           "200": {
@@ -542,10 +559,10 @@ export const openapiSpec = {
         summary: "Conditionally bind one exact existing channel to a Projects workspace",
         description:
           "Requires the stable channel id, exact prior project ownership, and exact prior revision/digest. " +
-          "The accepted immutable receipt retains the prior ownership state for a conditional inverse.",
+          "The accepted immutable receipt retains the prior channel and message ownership state for a conditional inverse.",
         requestBody: {
           required: true,
-          content: { "application/json": { schema: okObject } },
+          content: { "application/json": { schema: projectChannelBindRequest } },
         },
         responses: {
           "200": {

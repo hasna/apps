@@ -261,7 +261,7 @@ export class ConversationsClient {
     }
 
     /** Conditionally create one absent canonical project channel */
-    async registerProjectChannel(body: Record<string, unknown>, init?: RequestInit): Promise<Record<string, unknown>> {
+    async registerProjectChannel(body: { "operation_intent": "create" } & Record<string, unknown>, init?: RequestInit): Promise<Record<string, unknown>> {
       return this.request("POST", `/v1/project-registration/channels`, {
         body,
         query: undefined,
@@ -270,7 +270,7 @@ export class ConversationsClient {
     }
 
     /** Conditionally bind one exact existing channel to a Projects workspace */
-    async bindExistingProjectChannel(body: Record<string, unknown>, init?: RequestInit): Promise<Record<string, unknown>> {
+    async bindExistingProjectChannel(body: { "operation_intent": "bind_existing"; "bind_existing": Record<string, unknown> } & Record<string, unknown>, init?: RequestInit): Promise<Record<string, unknown>> {
       return this.request("POST", `/v1/project-registration/channels/bind-existing`, {
         body,
         query: undefined,

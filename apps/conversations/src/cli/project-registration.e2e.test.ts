@@ -1,4 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -54,6 +55,7 @@ describe("project-registration CLI producer contract", () => {
       project_kind: "work",
     };
     writeFileSync(REQUEST_FILE, JSON.stringify({
+      operation_intent: "create",
       operation_id: "cli-operation",
       step_id: "conversations-channel",
       resource_kind: "channel",
@@ -90,6 +92,17 @@ describe("project-registration CLI producer contract", () => {
     expect(createdResult.exitCode, createdResult.stderr).toBe(0);
     const created = JSON.parse(createdResult.stdout) as Record<string, any> & { target_id: string };
     expect(created.target_id).toMatch(/^chn_[0-9a-f]{32}$/);
+    const bindWithCreateShape = runCli([
+      "project-registration",
+      "bind-existing",
+      "--request",
+      REQUEST_FILE,
+      "--json",
+    ]);
+    expect(bindWithCreateShape.exitCode).toBe(1);
+    expect(bindWithCreateShape.stderr).toContain(
+      "bind_existing surface requires operation_intent=bind_existing",
+    );
 
     writeFileSync(LOOKUP_FILE, JSON.stringify({
       operation_id: created.operation_id,
@@ -247,6 +260,7 @@ describe("project-registration CLI producer contract", () => {
       project_kind: "work",
     };
     writeFileSync(INVERSE_FORWARD_FILE, JSON.stringify({
+      operation_intent: "create",
       operation_id: "cli-inverse-operation",
       step_id: "conversations-channel",
       resource_kind: "channel",
@@ -286,6 +300,7 @@ describe("project-registration CLI producer contract", () => {
       target_id: inverseCreated.target_id,
     };
     writeFileSync(INVERSE_FILE, JSON.stringify({
+      operation_intent: "create",
       operation_id: inverseCreated.operation_id,
       step_id: inverseCreated.step_id,
       resource_kind: "channel",
@@ -354,6 +369,17 @@ describe("project-registration CLI producer contract", () => {
     ]);
     expect(existingResult.exitCode, existingResult.stderr).toBe(0);
     const existing = JSON.parse(existingResult.stdout) as { id: string; name: string };
+    const existingMessageResult = runCli([
+      "channel",
+      "send",
+      existing.name,
+      "legacy message ownership",
+      "--from",
+      "human",
+      "--json",
+    ]);
+    expect(existingMessageResult.exitCode, existingMessageResult.stderr).toBe(0);
+    const existingMessage = JSON.parse(existingMessageResult.stdout) as { uuid: string };
     const priorReadResult = runCli([
       "project-registration",
       "read-channel",
@@ -380,6 +406,7 @@ describe("project-registration CLI producer contract", () => {
       expected_project_id: null,
     };
     writeFileSync(BIND_FILE, JSON.stringify({
+      operation_intent: "bind_existing",
       operation_id: "cli-bind-existing-operation",
       step_id: "conversations-channel",
       resource_kind: "channel",
@@ -415,6 +442,17 @@ describe("project-registration CLI producer contract", () => {
       time_budget_ms: 5_000,
       call_limit: 1,
     }));
+    const createWithBindShape = runCli([
+      "project-registration",
+      "create",
+      "--request",
+      BIND_FILE,
+      "--json",
+    ]);
+    expect(createWithBindShape.exitCode).toBe(1);
+    expect(createWithBindShape.stderr).toContain(
+      "create surface requires operation_intent=create",
+    );
     const boundResult = runCli([
       "project-registration",
       "bind-existing",
@@ -434,7 +472,37 @@ describe("project-registration CLI producer contract", () => {
         bound_project_id: PROJECT_ID,
         revision: priorRead.revision,
         digest: priorRead.digest,
+        message_transition: {
+          source_project_id: null,
+          target_project_id: PROJECT_ID,
+          message_count: 1,
+        },
       },
+    });
+    const boundMessagesResult = runCli([
+      "project-registration",
+      "messages",
+      existing.id,
+      "--project",
+      PROJECT_ID,
+      "--json",
+    ]);
+    expect(boundMessagesResult.exitCode, boundMessagesResult.stderr).toBe(0);
+    expect(JSON.parse(boundMessagesResult.stdout)).toMatchObject({
+      item_count: 1,
+      items: [{
+        target_id: existingMessage.uuid,
+        project_id: PROJECT_ID,
+      }],
+    });
+    const boundDb = new Database(TEST_DB, { readonly: true });
+    const boundMessage = boundDb.query(
+      "SELECT project_id, content FROM messages WHERE uuid = ?",
+    ).get(existingMessage.uuid);
+    boundDb.close();
+    expect(boundMessage).toEqual({
+      project_id: PROJECT_ID,
+      content: "legacy message ownership",
     });
 
     const bindInverseDesired = {
@@ -442,6 +510,7 @@ describe("project-registration CLI producer contract", () => {
       target_id: bound.target_id,
     };
     writeFileSync(BIND_INVERSE_FILE, JSON.stringify({
+      operation_intent: "bind_existing",
       operation_id: bound.operation_id,
       step_id: bound.step_id,
       resource_kind: "channel",
@@ -500,6 +569,15 @@ describe("project-registration CLI producer contract", () => {
       project_id: null,
       revision: priorRead.revision,
       digest: priorRead.digest,
+    });
+    const restoredDb = new Database(TEST_DB, { readonly: true });
+    const restoredMessage = restoredDb.query(
+      "SELECT project_id, content FROM messages WHERE uuid = ?",
+    ).get(existingMessage.uuid);
+    restoredDb.close();
+    expect(restoredMessage).toEqual({
+      project_id: null,
+      content: "legacy message ownership",
     });
 
     const channelsAfterInverse = runCli([

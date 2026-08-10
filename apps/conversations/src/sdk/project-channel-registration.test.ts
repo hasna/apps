@@ -18,8 +18,18 @@ describe("generated SDK project-channel registration contract", () => {
         });
       }) as typeof fetch,
     });
+    if (false) {
+      // @ts-expect-error create surface statically rejects bind-existing intent
+      void client.registerProjectChannel({ operation_intent: "bind_existing" });
+      void client.bindExistingProjectChannel({
+        // @ts-expect-error bind-existing surface statically rejects create intent
+        operation_intent: "create",
+        bind_existing: {},
+      });
+    }
 
     const body = {
+      operation_intent: "create" as const,
       operation_id: "operation-one",
       step_id: "conversations-channel",
       resource_kind: "channel",
@@ -49,6 +59,7 @@ describe("generated SDK project-channel registration contract", () => {
     await client.registerProjectChannel(body);
     await client.bindExistingProjectChannel({
       ...body,
+      operation_intent: "bind_existing",
       bind_existing: {
         target_id: "chn_11111111111111111111111111111111",
         expected_project_id: "legacy-project",
@@ -121,6 +132,7 @@ describe("generated SDK project-channel registration contract", () => {
     expect(messagePageUrl.searchParams.get("cursor")).toBe("42");
     expect(calls[3].body).toEqual(body);
     expect(calls[4].body).toMatchObject({
+      operation_intent: "bind_existing",
       bind_existing: {
         target_id: "chn_11111111111111111111111111111111",
         expected_project_id: "legacy-project",

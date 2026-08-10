@@ -47,7 +47,7 @@ type StoredReceipt = {
   created_at: string;
 };
 
-const MESSAGE_SNAPSHOT_COLUMNS = [
+export const MESSAGE_SNAPSHOT_COLUMNS = [
   "id", "uuid", "session_id", "from_agent", "to_agent", "channel", "project_id",
   "content", "priority", "working_dir", "repository", "branch", "metadata",
   "edited_at", "pinned_at", "blocking", "attachments", "reply_to", "created_at", "read_at",

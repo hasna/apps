@@ -56,6 +56,7 @@ async function forwardRequest(
   };
   const targetSelector = String(overrides.target_selector ?? projectSlug);
   return {
+    operation_intent: "create",
     operation_id: "operation-1",
     step_id: "conversations-channel",
     resource_kind: "channel",
@@ -93,6 +94,7 @@ function inverseRequest(
     target_id: forward.target_id,
   };
   return {
+    operation_intent: forward.prior_state ? "bind_existing" : "create",
     operation_id: forward.operation_id,
     step_id: forward.step_id,
     resource_kind: "channel",
@@ -698,6 +700,7 @@ describe("project channel registration authority", () => {
       expected_project_id: LEGACY_PROJECT_ID,
     };
     const request = await forwardRequest({
+      operation_intent: "bind_existing",
       operation_id: "operation-bind-existing",
       idempotency_key: "operation-bind-existing:conversations-channel:forward",
       project_slug: channel.name,
@@ -722,16 +725,23 @@ describe("project channel registration authority", () => {
 
     expect(() => registerProjectChannel({
       ...request,
+      operation_intent: "create",
       bind_existing: undefined,
       precondition_digest: projectChannelRegistrationDigest({
         target_selector: channel.name,
         expected: "absent",
       }),
-    })).toThrow("requires bind_existing preconditions");
+    })).toThrow("create surface rejects bind-existing intent");
+
+    const ordinaryCreate = await forwardRequest();
+    expect(() => registerProjectChannel({
+      ...ordinaryCreate,
+      operation_intent: "bind_existing",
+    })).toThrow("bind-existing surface requires bind-existing intent");
 
     expect(() => registerProjectChannel(request, {
       faultInjector(point) {
-        if (point === "after_channel_bind") throw new Error("injected bind failure");
+        if (point === "after_message_bind") throw new Error("injected bind failure");
       },
     })).toThrow("injected bind failure");
     expect(getDb().prepare(
@@ -750,10 +760,23 @@ describe("project channel registration authority", () => {
       prior_state: {
         target_id: channel.id,
         project_id: LEGACY_PROJECT_ID,
+        bound_project_id: PROJECT_ID,
         revision: beforeRecord.revision,
         digest: beforeRecord.digest,
+        message_transition: {
+          source_project_id: LEGACY_PROJECT_ID,
+          target_project_id: PROJECT_ID,
+          message_count: 1,
+        },
       },
     });
+    const transition = accepted.prior_state!.message_transition;
+    expect(transition.first_message_id).toBeNumber();
+    expect(transition.last_message_id).toBeNumber();
+    expect(transition.message_ids_digest).toBeString();
+    expect(transition.before_digest).toBeString();
+    expect(transition.after_digest).toBeString();
+    expect(transition.preserved_digest).toBeString();
     expect(await createProjectChannelRegistrationAuthority().readExact({
       resource_kind: "channel",
       target_id: channel.id,
@@ -803,9 +826,26 @@ describe("project channel registration authority", () => {
     expect(getDb().prepare(
       "SELECT agent, joined_at FROM channel_members WHERE channel = ? ORDER BY agent",
     ).all(channel.name)).toEqual(beforeMembers);
-    expect(getDb().prepare(
+    const afterMessages = getDb().prepare(
       "SELECT * FROM messages WHERE channel = ? ORDER BY id",
-    ).all(channel.name)).toEqual(beforeMessages);
+    ).all(channel.name) as Record<string, unknown>[];
+    expect(afterMessages.map((message) => message.project_id)).toEqual([PROJECT_ID]);
+    expect(afterMessages.map(({ project_id: _projectId, ...message }) => message)).toEqual(
+      (beforeMessages as Record<string, unknown>[]).map(({ project_id: _projectId, ...message }) => message),
+    );
+    expect(listProjectChannelMessagePage({
+      project_id: PROJECT_ID,
+      target_id: channel.id,
+      max_items: 10,
+      response_byte_limit: 32_768,
+      time_budget_ms: 5_000,
+      call_limit: 1,
+    }).items).toEqual([
+      expect.objectContaining({
+        target_id: afterMessages[0].uuid,
+        project_id: PROJECT_ID,
+      }),
+    ]);
 
     const page = listProjectChannelRegistrationPage({
       project_id: PROJECT_ID,
@@ -833,6 +873,10 @@ describe("project channel registration authority", () => {
       target_id: channel.id,
       prior_state: accepted.prior_state,
     });
+    const storedAccepted = getDb().prepare(
+      "SELECT prior_state FROM project_channel_registration_receipts WHERE receipt_id = ?",
+    ).get(accepted.receipt_id) as { prior_state: string };
+    expect(JSON.parse(storedAccepted.prior_state)).toEqual(accepted.prior_state);
     expect((await createProjectChannelRegistrationAuthority().lookupReceipt(
       lookupRequest,
     )).receipt.receipt_id).toBe(duplicate.receipt_id);
@@ -857,12 +901,15 @@ describe("project channel registration authority", () => {
     });
     expect(() => compensateProjectChannelRegistration(inverse, {
       faultInjector(point) {
-        if (point === "after_channel_restore") throw new Error("injected restore failure");
+        if (point === "after_message_restore") throw new Error("injected restore failure");
       },
     })).toThrow("injected restore failure");
     expect(getDb().prepare(
       "SELECT project_id FROM channels WHERE id = ?",
     ).get(channel.id)).toEqual({ project_id: PROJECT_ID });
+    expect(getDb().prepare(
+      "SELECT project_id FROM messages WHERE channel = ?",
+    ).all(channel.name)).toEqual([{ project_id: PROJECT_ID }]);
     expect(getDb().prepare(
       "SELECT count(*) AS n FROM project_channel_registration_receipts",
     ).get()).toEqual({ n: 3 });
@@ -896,6 +943,112 @@ describe("project channel registration authority", () => {
       revision: beforeRecord.revision,
       digest: beforeRecord.digest,
     });
+  });
+
+  test("refuses conflicting legacy message owners and inverse drift without partial ownership changes", async () => {
+    const foreignProjectId = "wks_foreign_project_00000001";
+    createLocalProject(LEGACY_PROJECT_ID);
+    createLocalProject(foreignProjectId);
+
+    const bindRequest = async (
+      channelName: string,
+      operationId: string,
+    ): Promise<{
+      channel: ReturnType<typeof createChannel>;
+      request: ProjectChannelRegistrationRequest;
+    }> => {
+      const channel = createChannel(channelName, "human", {
+        project_id: LEGACY_PROJECT_ID,
+      });
+      sendMessage({
+        from: "human",
+        to: channel.name,
+        channel: channel.name,
+        project_id: LEGACY_PROJECT_ID,
+        content: `${channelName} history`,
+      });
+      const record = projectChannelRegistrationChannelRecord(
+        getDb().prepare("SELECT * FROM channels WHERE id = ?").get(channel.id) as never,
+      );
+      const desired = {
+        channel: channel.name,
+        project_id: PROJECT_ID,
+        project_slug: channel.name,
+        project_kind: "work",
+        registration_mode: "bind_existing",
+        target_id: channel.id,
+        expected_project_id: LEGACY_PROJECT_ID,
+      };
+      return {
+        channel,
+        request: await forwardRequest({
+          operation_intent: "bind_existing",
+          operation_id: operationId,
+          step_id: "conversations-channel",
+          idempotency_key: `${operationId}:forward`,
+          project_slug: channel.name,
+          target_selector: channel.name,
+          desired,
+          request_digest: projectChannelRegistrationDigest(desired),
+          precondition_digest: projectChannelRegistrationDigest({
+            target_id: channel.id,
+            target_selector: channel.name,
+            expected_project_id: LEGACY_PROJECT_ID,
+            expected_revision: record.revision,
+            expected_digest: record.digest,
+            desired_project_id: PROJECT_ID,
+          }),
+          bind_existing: {
+            target_id: channel.id,
+            expected_project_id: LEGACY_PROJECT_ID,
+            expected_revision: record.revision,
+            expected_digest: record.digest,
+          },
+        }),
+      };
+    };
+
+    const conflict = await bindRequest("legacy-owner-conflict", "bind-owner-conflict");
+    getDb().prepare(
+      "UPDATE messages SET project_id = ? WHERE channel = ?",
+    ).run(foreignProjectId, conflict.channel.name);
+    expect(registerProjectChannel(conflict.request)).toMatchObject({
+      outcome: "terminal_nonacceptance",
+      reason: "bind_message_owner_conflict",
+      target_id: conflict.channel.id,
+    });
+    expect(getDb().prepare(
+      "SELECT project_id FROM channels WHERE id = ?",
+    ).get(conflict.channel.id)).toEqual({ project_id: LEGACY_PROJECT_ID });
+    expect(getDb().prepare(
+      "SELECT project_id FROM messages WHERE channel = ?",
+    ).all(conflict.channel.name)).toEqual([{ project_id: foreignProjectId }]);
+
+    const drift = await bindRequest("legacy-owner-drift", "bind-owner-drift");
+    const accepted = registerProjectChannel(drift.request);
+    expect(accepted.outcome).toBe("accepted");
+    getDb().prepare(
+      "UPDATE messages SET content = ? WHERE channel = ?",
+    ).run("drifted after bind", drift.channel.name);
+    const inverse = inverseRequest(accepted, {
+      project_slug: drift.channel.name,
+      project_name: "Legacy Owner Drift",
+    });
+    expect(compensateProjectChannelRegistration(inverse)).toMatchObject({
+      outcome: "terminal_nonacceptance",
+      reason: "message_ownership_drifted",
+      target_id: drift.channel.id,
+      accepted_receipt_id: accepted.receipt_id,
+    });
+    expect(getDb().prepare(
+      "SELECT project_id FROM channels WHERE id = ?",
+    ).get(drift.channel.id)).toEqual({ project_id: PROJECT_ID });
+    expect(getDb().prepare(
+      "SELECT project_id, content FROM messages WHERE channel = ?",
+    ).all(drift.channel.name)).toEqual([{
+      project_id: PROJECT_ID,
+      content: "drifted after bind",
+    }]);
   });
 
   test("rolls back an injected failure without leaving a channel or receipt", async () => {

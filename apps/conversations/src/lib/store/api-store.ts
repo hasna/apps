@@ -294,7 +294,9 @@ export class ApiStore implements ConversationsStore {
   };
   registerProjectChannel: ConversationsStore["registerProjectChannel"] = async (request) => {
     return this.post(
-      "/project-registration/channels",
+      request.operation_intent === "bind_existing"
+        ? "/project-registration/channels/bind-existing"
+        : "/project-registration/channels",
       this.projectChannelRegistrationBody(request),
     ) as never;
   };

@@ -2,10 +2,12 @@ import { readFileSync } from "node:fs";
 import type { Command } from "commander";
 import { closeDb } from "../../lib/db.js";
 import type {
+  ProjectChannelRegistrationOperationIntent,
   ProjectChannelRegistrationLookupRequest,
   ProjectChannelRegistrationRequest,
   ProjectChannelRegistrationReadRequest,
 } from "../../lib/project-channel-registration.js";
+import { assertProjectChannelRegistrationOperationIntent } from "../../lib/project-channel-registration.js";
 import { getStore } from "../../lib/store/index.js";
 import { printJson } from "../../lib/stdout.js";
 import { emitCliError } from "../cli-error.js";
@@ -54,7 +56,11 @@ function requestObject(path: string, opts: OutputOptions): Record<string, unknow
   return parsed as Record<string, unknown>;
 }
 
-function registrationRequest(path: string, opts: OutputOptions): ProjectChannelRegistrationRequest {
+function registrationRequest(
+  path: string,
+  opts: OutputOptions,
+  expectedIntent?: ProjectChannelRegistrationOperationIntent,
+): ProjectChannelRegistrationRequest {
   const parsed = requestObject(path, opts);
   const targetDigest = typeof parsed.target_digest === "string"
     ? parsed.target_digest.trim()
@@ -63,10 +69,14 @@ function registrationRequest(path: string, opts: OutputOptions): ProjectChannelR
     emitCliError("The request file must include target_digest.", opts);
   }
   const { target_digest: _targetDigest, target: _target, ...request } = parsed;
-  return {
+  const parsedRequest = {
     ...request,
     target: remoteTarget(targetDigest),
   } as unknown as ProjectChannelRegistrationRequest;
+  if (expectedIntent) {
+    assertProjectChannelRegistrationOperationIntent(parsedRequest, expectedIntent);
+  }
+  return parsedRequest;
 }
 
 function collectionBounds(opts: {
@@ -110,7 +120,7 @@ export function registerProjectRegistrationCommands(program: Command): void {
     .action(async (opts) => {
       try {
         printJson(await getStore().registerProjectChannel(
-          registrationRequest(opts.request, opts),
+          registrationRequest(opts.request, opts, "create"),
         ));
       } finally {
         closeDb();
@@ -125,7 +135,7 @@ export function registerProjectRegistrationCommands(program: Command): void {
     .action(async (opts) => {
       try {
         printJson(await getStore().registerProjectChannel(
-          registrationRequest(opts.request, opts),
+          registrationRequest(opts.request, opts, "bind_existing"),
         ));
       } finally {
         closeDb();
