@@ -2,9 +2,15 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  BuildArtifactSchema,
+  VerifiedSourceCandidateSchema,
+  withDeploymentRecordDigest,
+} from "hasna-deployment-contracts/deployment";
+import {
   CandidateManifestSchema,
   createArtifactAttestation,
   createBuildArtifact,
+  createSourceRecords,
   verifyCandidateChain,
   type CandidateManifest,
 } from "./attested-container-candidate";
@@ -63,33 +69,63 @@ function fixtureManifest(): CandidateManifest {
   });
 }
 
+function fixtureChain() {
+  const manifest = fixtureManifest();
+  const bundleSha256 = digest("sigstore-bundle");
+  const machineManifestSha256 = digest(JSON.stringify(manifest));
+  const verificationSha256 = digest("verification");
+  const finishedAt = "2026-08-10T15:05:00.000Z";
+  const sourceRecords = createSourceRecords({
+    manifest,
+    machineManifestSha256,
+    verificationSha256,
+    finishedAt,
+  });
+  const buildArtifact = createBuildArtifact({
+    manifest,
+    sourceCandidate: sourceRecords.sourceCandidate,
+    machineManifestSha256,
+    bundleSha256,
+    verificationSha256,
+    finishedAt,
+  });
+  const attestation = createArtifactAttestation({
+    manifest,
+    buildArtifact,
+    machineManifestSha256,
+    bundleSha256,
+    verificationSha256,
+    attestationId: "artifact-attestation-123",
+    attestationUrl: "https://github.com/hasna/todos/attestations/123",
+    createdAt: finishedAt,
+  });
+  return {
+    manifest,
+    machineManifestSha256,
+    bundleSha256,
+    sourceRecords,
+    buildArtifact,
+    attestation,
+  };
+}
+
 describe("attested no-push container candidate", () => {
   test("accepts a target-bound ArtifactAttestation for the exact OCI digest", () => {
-    const manifest = fixtureManifest();
-    const bundleSha256 = digest("sigstore-bundle");
-    const machineManifestSha256 = digest(JSON.stringify(manifest));
-    const verificationSha256 = digest("verification");
-    const buildArtifact = createBuildArtifact({
+    const {
       manifest,
       machineManifestSha256,
       bundleSha256,
-      verificationSha256,
-      finishedAt: "2026-08-10T15:05:00.000Z",
-    });
-    const attestation = createArtifactAttestation({
-      manifest,
+      sourceRecords,
       buildArtifact,
-      machineManifestSha256,
-      bundleSha256,
-      verificationSha256,
-      attestationId: "artifact-attestation-123",
-      attestationUrl: "https://github.com/hasna/todos/attestations/123",
-      createdAt: "2026-08-10T15:05:00.000Z",
-    });
+      attestation,
+    } = fixtureChain();
 
     expect(
       verifyCandidateChain({
         manifest,
+        productProjection: sourceRecords.productProjection,
+        intentSnapshot: sourceRecords.intentSnapshot,
+        sourceCandidate: sourceRecords.sourceCandidate,
         buildArtifact,
         attestation,
         machineManifestSha256,
@@ -99,27 +135,14 @@ describe("attested no-push container candidate", () => {
   });
 
   test("rejects a tampered OCI digest and a tampered signature bundle", () => {
-    const manifest = fixtureManifest();
-    const machineManifestSha256 = digest(JSON.stringify(manifest));
-    const bundleSha256 = digest("sigstore-bundle");
-    const verificationSha256 = digest("verification");
-    const buildArtifact = createBuildArtifact({
+    const {
       manifest,
       machineManifestSha256,
       bundleSha256,
-      verificationSha256,
-      finishedAt: "2026-08-10T15:05:00.000Z",
-    });
-    const attestation = createArtifactAttestation({
-      manifest,
+      sourceRecords,
       buildArtifact,
-      machineManifestSha256,
-      bundleSha256,
-      verificationSha256,
-      attestationId: "artifact-attestation-123",
-      attestationUrl: "https://github.com/hasna/todos/attestations/123",
-      createdAt: "2026-08-10T15:05:00.000Z",
-    });
+      attestation,
+    } = fixtureChain();
 
     expect(() =>
       verifyCandidateChain({
@@ -130,6 +153,9 @@ describe("attested no-push container candidate", () => {
             ociManifestDigest: digest("tampered-oci-manifest"),
           },
         },
+        productProjection: sourceRecords.productProjection,
+        intentSnapshot: sourceRecords.intentSnapshot,
+        sourceCandidate: sourceRecords.sourceCandidate,
         buildArtifact,
         attestation,
         machineManifestSha256,
@@ -140,12 +166,71 @@ describe("attested no-push container candidate", () => {
     expect(() =>
       verifyCandidateChain({
         manifest,
+        productProjection: sourceRecords.productProjection,
+        intentSnapshot: sourceRecords.intentSnapshot,
+        sourceCandidate: sourceRecords.sourceCandidate,
         buildArtifact,
         attestation,
         machineManifestSha256,
         bundleSha256: digest("tampered-bundle"),
       }),
     ).toThrow("signature bundle");
+  });
+
+  test("rejects a missing or digest-mismatched VerifiedSourceCandidate link", () => {
+    const {
+      manifest,
+      machineManifestSha256,
+      bundleSha256,
+      sourceRecords,
+      buildArtifact,
+      attestation,
+    } = fixtureChain();
+    const { digest: _sourceDigest, ...sourceCandidateWithoutDigest } =
+      sourceRecords.sourceCandidate;
+    const alternativeSourceCandidate = VerifiedSourceCandidateSchema.parse(
+      withDeploymentRecordDigest({
+        ...sourceCandidateWithoutDigest,
+        id: "todos-source-other",
+      }),
+    );
+
+    expect(() =>
+      verifyCandidateChain({
+        manifest,
+        productProjection: sourceRecords.productProjection,
+        intentSnapshot: sourceRecords.intentSnapshot,
+        sourceCandidate: alternativeSourceCandidate,
+        buildArtifact,
+        attestation,
+        machineManifestSha256,
+        bundleSha256,
+      }),
+    ).toThrow(`buildArtifacts.${buildArtifact.id}.sourceCandidate: missing linked record`);
+
+    const { digest: _artifactDigest, ...buildArtifactWithoutDigest } = buildArtifact;
+    const mismatchedBuildArtifact = BuildArtifactSchema.parse(
+      withDeploymentRecordDigest({
+        ...buildArtifactWithoutDigest,
+        sourceCandidate: {
+          ...buildArtifact.sourceCandidate,
+          digest: digest("different-source-candidate"),
+        },
+      }),
+    );
+
+    expect(() =>
+      verifyCandidateChain({
+        manifest,
+        productProjection: sourceRecords.productProjection,
+        intentSnapshot: sourceRecords.intentSnapshot,
+        sourceCandidate: sourceRecords.sourceCandidate,
+        buildArtifact: mismatchedBuildArtifact,
+        attestation,
+        machineManifestSha256,
+        bundleSha256,
+      }),
+    ).toThrow(`buildArtifacts.${buildArtifact.id}.sourceCandidate: digest mismatch`);
   });
 
   test("defines an exact-main, immutable-pinned, finite, no-push hosted workflow", () => {
@@ -167,6 +252,8 @@ describe("attested no-push container candidate", () => {
     expect(workflow).toContain('test "$(git rev-parse refs/remotes/origin/main)" = "${SOURCE_SHA}"');
     expect(workflow).toContain("gh attestation verify");
     expect(workflow).toContain("tampered");
+    expect(workflow).toContain("todos-candidate.verified-source-candidate.json");
+    expect(workflow).toContain('--source "${SOURCE_CANDIDATE_RECORD}"');
     expect(workflow).toContain("retention-days: 7");
     expect(workflow).not.toMatch(/\baws\b/i);
     expect(workflow).not.toMatch(/\becr\b/i);

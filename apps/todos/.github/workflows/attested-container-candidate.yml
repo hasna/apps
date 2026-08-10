@@ -23,6 +23,9 @@ env:
   OCI_LAYOUT: todos-candidate.oci-layout
   MACHINE_MANIFEST: todos-candidate.manifest.json
   TRIVY_REPORT: todos-candidate.trivy.json
+  PRODUCT_PROJECTION_RECORD: todos-candidate.product-projection.json
+  INTENT_SNAPSHOT_RECORD: todos-candidate.intent-snapshot.json
+  SOURCE_CANDIDATE_RECORD: todos-candidate.verified-source-candidate.json
   ATTESTATION_RECORD: todos-candidate.artifact-attestation.json
   BUILD_ARTIFACT_RECORD: todos-candidate.build-artifact.json
   ATTESTATION_BUNDLE: todos-candidate.slsa-bundle.jsonl
@@ -203,6 +206,9 @@ jobs:
             --manifest "${MACHINE_MANIFEST}" \
             --bundle "${ATTESTATION_BUNDLE}" \
             --verification todos-candidate.signature-verification.json \
+            --product-output "${PRODUCT_PROJECTION_RECORD}" \
+            --intent-output "${INTENT_SNAPSHOT_RECORD}" \
+            --source-output "${SOURCE_CANDIDATE_RECORD}" \
             --artifact-output "${BUILD_ARTIFACT_RECORD}" \
             --attestation-id "${{ steps.provenance.outputs.attestation-id }}" \
             --attestation-url "${{ steps.provenance.outputs.attestation-url }}" \
@@ -210,6 +216,9 @@ jobs:
             --output "${ATTESTATION_RECORD}"
           bun run scripts/attested-container-candidate.ts verify \
             --manifest "${MACHINE_MANIFEST}" \
+            --product "${PRODUCT_PROJECTION_RECORD}" \
+            --intent "${INTENT_SNAPSHOT_RECORD}" \
+            --source "${SOURCE_CANDIDATE_RECORD}" \
             --artifact "${BUILD_ARTIFACT_RECORD}" \
             --attestation "${ATTESTATION_RECORD}" \
             --bundle "${ATTESTATION_BUNDLE}"
@@ -225,6 +234,9 @@ jobs:
             todos-candidate.subject-checksums.txt
             todos-candidate.slsa-bundle.jsonl
             todos-candidate.signature-verification.json
+            todos-candidate.product-projection.json
+            todos-candidate.intent-snapshot.json
+            todos-candidate.verified-source-candidate.json
             todos-candidate.build-artifact.json
             todos-candidate.artifact-attestation.json
           if-no-files-found: error

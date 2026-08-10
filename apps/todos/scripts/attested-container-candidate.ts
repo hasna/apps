@@ -4,10 +4,24 @@ import { join } from "node:path";
 import {
   ArtifactAttestationSchema,
   BuildArtifactSchema,
-  sha256DeploymentValue,
+  DeploymentApprovalDecisionSchema,
+  DeploymentAttemptSchema,
+  DeploymentPlanSchema,
+  DeploymentReceiptSchema,
+  DeploymentRequestSchema,
+  EnvironmentBindingSchema,
+  IntentSnapshotSchema,
+  LaunchEvidenceSchema,
+  ProductProjectionSchema,
+  ProviderReceiptSchema,
+  VerifiedSourceCandidateSchema,
+  validateDeploymentContractSet,
   withDeploymentRecordDigest,
   type ArtifactAttestation,
   type BuildArtifact,
+  type IntentSnapshot,
+  type ProductProjection,
+  type VerifiedSourceCandidate,
 } from "hasna-deployment-contracts/deployment";
 import { z } from "zod";
 
@@ -124,10 +138,40 @@ type CreateArtifactAttestationInput = {
 
 type CreateBuildArtifactInput = {
   manifest: CandidateManifest;
+  sourceCandidate: VerifiedSourceCandidate;
   machineManifestSha256: string;
   bundleSha256: string;
   verificationSha256: string;
   finishedAt: string;
+};
+
+type CreateSourceRecordsInput = {
+  manifest: CandidateManifest;
+  machineManifestSha256: string;
+  verificationSha256: string;
+  finishedAt: string;
+};
+
+type SourceRecords = {
+  productProjection: ProductProjection;
+  intentSnapshot: IntentSnapshot;
+  sourceCandidate: VerifiedSourceCandidate;
+};
+
+const DeploymentContractSchemas = {
+  ProductProjectionSchema,
+  IntentSnapshotSchema,
+  VerifiedSourceCandidateSchema,
+  BuildArtifactSchema,
+  ArtifactAttestationSchema,
+  EnvironmentBindingSchema,
+  DeploymentRequestSchema,
+  DeploymentPlanSchema,
+  DeploymentApprovalDecisionSchema,
+  DeploymentAttemptSchema,
+  ProviderReceiptSchema,
+  DeploymentReceiptSchema,
+  LaunchEvidenceSchema,
 };
 
 function workflowProducer(manifest: CandidateManifest) {
@@ -139,31 +183,223 @@ function workflowProducer(manifest: CandidateManifest) {
   };
 }
 
-function sourceCandidateReferenceDigest(
-  manifest: CandidateManifest,
-  machineManifestSha256: string,
-): string {
-  return sha256DeploymentValue({
-    repository: manifest.source.repository,
-    commitSha: manifest.source.commitSha,
-    treeSha: manifest.source.treeSha,
-    machineManifestSha256,
-  });
+function repositoryReference(manifest: CandidateManifest) {
+  return {
+    kind: "repo" as const,
+    id: `repo-${manifest.source.repository.replace("/", "-")}`,
+    uri: `repo://${manifest.source.repository}`,
+    tags: ["comparison-only", "exact-main"],
+  };
 }
 
-export function createBuildArtifact(input: CreateBuildArtifactInput): BuildArtifact {
-  const manifest = CandidateManifestSchema.parse(input.manifest);
-  const machineManifestSha256 = Sha256Schema.parse(input.machineManifestSha256);
-  const bundleSha256 = Sha256Schema.parse(input.bundleSha256);
-  const verificationSha256 = Sha256Schema.parse(input.verificationSha256);
-  const producer = workflowProducer(manifest);
-  const manifestEvidence = {
+function machineManifestEvidence(machineManifestSha256: string) {
+  return {
     kind: "artifact" as const,
     id: "todos-candidate-machine-manifest",
     uri: "artifact://attested-container-candidate/todos-candidate.manifest.json",
     sha256: machineManifestSha256,
     summary: "Exact-main no-push candidate manifest",
   };
+}
+
+function sourceValidationPlan(manifest: CandidateManifest) {
+  return {
+    schema: "hasna.validation_plan.v1" as const,
+    id: `validate-todos-source-${manifest.source.commitSha}`,
+    createdAt: manifest.createdAt,
+    objective: "Verify the exact-main source, required gates, and signed no-push candidate",
+    checks: [
+      {
+        id: "exact-source-integrity",
+        kind: "test" as const,
+        required: true,
+        expected: "Repository commit and tree match the immutable workflow input",
+        resourceRefs: [],
+      },
+      {
+        id: "candidate-gates",
+        kind: "test" as const,
+        required: true,
+        expected: "Install, typecheck, tests, build, no-cloud, and scan gates pass",
+        resourceRefs: [],
+      },
+    ],
+    verifier: workflowProducer(manifest),
+    requiredEvidenceKinds: ["test_result" as const],
+  };
+}
+
+export function createSourceRecords(input: CreateSourceRecordsInput): SourceRecords {
+  const manifest = CandidateManifestSchema.parse(input.manifest);
+  const machineManifestSha256 = Sha256Schema.parse(input.machineManifestSha256);
+  const verificationSha256 = Sha256Schema.parse(input.verificationSha256);
+  const producer = workflowProducer(manifest);
+  const repositoryRef = repositoryReference(manifest);
+  const manifestEvidence = machineManifestEvidence(machineManifestSha256);
+  const verificationEvidence = {
+    kind: "test_result" as const,
+    id: "github-attestation-verification",
+    uri: "artifact://attested-container-candidate/todos-candidate.signature-verification.json",
+    sha256: verificationSha256,
+    summary: "Positive and tampered-negative GitHub attestation verification",
+  };
+  const productProjection = ProductProjectionSchema.parse(
+    withDeploymentRecordDigest({
+      schema: "hasna.product_projection.v1",
+      id: "product-todos",
+      createdAt: manifest.createdAt,
+      producer,
+      revision: 1,
+      sourceProjectRef: {
+        kind: "project",
+        id: "todos-source-project",
+        uri: "project://todos-source",
+        tags: ["comparison-only"],
+      },
+      sourceRevision: 1,
+      slug: "todos",
+      displayName: "Open Todos",
+      repositoryRef,
+      workspaceRef: {
+        kind: "project",
+        id: "todos-source-project",
+        uri: "project://todos-source",
+        tags: ["comparison-only"],
+      },
+      lifecycle: "active",
+      ownerRefs: [producer],
+      projectedAt: manifest.createdAt,
+      sourceEvidenceRefs: [manifestEvidence],
+    }),
+  );
+  const intentSnapshot = IntentSnapshotSchema.parse(
+    withDeploymentRecordDigest({
+      schema: "hasna.intent_snapshot.v1",
+      id: `intent-todos-${manifest.source.commitSha}`,
+      createdAt: manifest.createdAt,
+      producer,
+      product: {
+        schema: "hasna.product_projection.v1",
+        id: productProjection.id,
+        revision: productProjection.revision,
+        digest: productProjection.digest,
+      },
+      repositoryRef,
+      commitSha: manifest.source.commitSha,
+      treeSha: manifest.source.treeSha,
+      intentDocument: {
+        path: "todos-candidate.manifest.json",
+        digest: machineManifestSha256,
+      },
+      processes: [
+        {
+          id: "todos-api",
+          role: "web",
+          ports: [19427],
+          liveness: { path: "/health", protocol: "https", expectedStatuses: [200] },
+          readiness: { path: "/ready", protocol: "https", expectedStatuses: [200] },
+          version: { path: "/version", protocol: "https", expectedStatuses: [200] },
+          resources: {
+            cpuMillicores: 1,
+            memoryMiB: 1,
+            minReplicas: 0,
+            maxReplicas: 1,
+          },
+        },
+      ],
+      serviceRequirements: [],
+      migration: {
+        compatibility: "none",
+        order: "independent",
+        rollbackClass: "comparison-only",
+      },
+      accessClass: "api-key",
+      networkClass: "comparison-only",
+      backupClass: "comparison-only",
+      restoreClass: "comparison-only",
+      alarmClass: "comparison-only",
+      rollbackClass: "comparison-only",
+      configurationRequirements: [],
+      validationPlan: sourceValidationPlan(manifest),
+      evidenceRefs: [manifestEvidence],
+    }),
+  );
+  const sourceCandidate = VerifiedSourceCandidateSchema.parse(
+    withDeploymentRecordDigest({
+      schema: "hasna.verified_source_candidate.v1",
+      id: `todos-source-${manifest.source.commitSha}`,
+      createdAt: manifest.createdAt,
+      producer,
+      status: "verified",
+      repositoryRef,
+      commitSha: manifest.source.commitSha,
+      treeSha: manifest.source.treeSha,
+      branchRef: {
+        kind: "branch",
+        id: "main",
+        uri: `repo://${manifest.source.repository}/refs/heads/main`,
+        tags: ["exact-main"],
+      },
+      intent: {
+        schema: "hasna.intent_snapshot.v1",
+        id: intentSnapshot.id,
+        digest: intentSnapshot.digest,
+      },
+      validationPlan: sourceValidationPlan(manifest),
+      verificationRun: {
+        schema: "hasna.work_run.v1",
+        id: `verify-todos-source-${manifest.run.runId}-${manifest.run.runAttempt}`,
+        objective: "Verify the exact-main source and signed no-push candidate evidence",
+        status: "succeeded",
+        actor: producer,
+        createdAt: manifest.createdAt,
+        startedAt: manifest.createdAt,
+        finishedAt: input.finishedAt,
+        decisions: [],
+        constraints: ["comparison-only", "no registry push", "no deployment"],
+        costEstimates: [],
+        validationPlanRefs: [],
+        proofBundleRefs: [],
+        resourceRefs: [repositoryRef],
+        evidenceRefs: [manifestEvidence, verificationEvidence],
+      },
+      results: [
+        {
+          id: "source-integrity",
+          kind: "source_integrity",
+          status: "passed",
+          evidenceRefs: [manifestEvidence],
+        },
+        {
+          id: "candidate-gates",
+          kind: "test",
+          status: "passed",
+          evidenceRefs: [verificationEvidence],
+        },
+      ],
+      verifiers: [producer],
+      verifiedAt: input.finishedAt,
+      evidenceRefs: [manifestEvidence, verificationEvidence],
+    }),
+  );
+  return { productProjection, intentSnapshot, sourceCandidate };
+}
+
+export function createBuildArtifact(input: CreateBuildArtifactInput): BuildArtifact {
+  const manifest = CandidateManifestSchema.parse(input.manifest);
+  const sourceCandidate = VerifiedSourceCandidateSchema.parse(input.sourceCandidate);
+  const machineManifestSha256 = Sha256Schema.parse(input.machineManifestSha256);
+  const bundleSha256 = Sha256Schema.parse(input.bundleSha256);
+  const verificationSha256 = Sha256Schema.parse(input.verificationSha256);
+  const producer = workflowProducer(manifest);
+  if (
+    sourceCandidate.status !== "verified" ||
+    sourceCandidate.commitSha !== manifest.source.commitSha ||
+    sourceCandidate.treeSha !== manifest.source.treeSha
+  ) {
+    throw new Error("source candidate is not verified for the exact candidate source");
+  }
+  const manifestEvidence = machineManifestEvidence(machineManifestSha256);
   const bundleEvidence = {
     kind: "artifact" as const,
     id: "github-oidc-slsa-bundle",
@@ -191,8 +427,8 @@ export function createBuildArtifact(input: CreateBuildArtifactInput): BuildArtif
       artifactDigest: manifest.artifact.ociManifestDigest,
       sourceCandidate: {
         schema: "hasna.verified_source_candidate.v1",
-        id: `todos-source-${manifest.source.commitSha}`,
-        digest: sourceCandidateReferenceDigest(manifest, machineManifestSha256),
+        id: sourceCandidate.id,
+        digest: sourceCandidate.digest,
       },
       repositoryCommitSha: manifest.source.commitSha,
       repositoryTreeSha: manifest.source.treeSha,
@@ -309,6 +545,9 @@ export function createArtifactAttestation(
 
 type VerifyCandidateChainInput = {
   manifest: CandidateManifest;
+  productProjection: unknown;
+  intentSnapshot: unknown;
+  sourceCandidate: unknown;
   buildArtifact: unknown;
   attestation: unknown;
   machineManifestSha256: string;
@@ -317,10 +556,31 @@ type VerifyCandidateChainInput = {
 
 export function verifyCandidateChain(input: VerifyCandidateChainInput): ArtifactAttestation {
   const manifest = CandidateManifestSchema.parse(input.manifest);
+  const productProjection = ProductProjectionSchema.parse(input.productProjection);
+  const intentSnapshot = IntentSnapshotSchema.parse(input.intentSnapshot);
+  const sourceCandidate = VerifiedSourceCandidateSchema.parse(input.sourceCandidate);
   const buildArtifact = BuildArtifactSchema.parse(input.buildArtifact);
   const attestation = ArtifactAttestationSchema.parse(input.attestation);
   const machineManifestSha256 = Sha256Schema.parse(input.machineManifestSha256);
   const bundleSha256 = Sha256Schema.parse(input.bundleSha256);
+  const contractValidation = validateDeploymentContractSet(DeploymentContractSchemas, {
+    productProjections: [productProjection],
+    intentSnapshots: [intentSnapshot],
+    verifiedSourceCandidates: [sourceCandidate],
+    buildArtifacts: [buildArtifact],
+    artifactAttestations: [attestation],
+    environmentBindings: [],
+    deploymentRequests: [],
+    deploymentPlans: [],
+    deploymentApprovalDecisions: [],
+    deploymentAttempts: [],
+    providerReceipts: [],
+    deploymentReceipts: [],
+    launchEvidence: [],
+  });
+  if (!contractValidation.success) {
+    throw new Error(`deployment contract set is invalid: ${contractValidation.issues.join("; ")}`);
+  }
 
   if (attestation.artifactDigest !== manifest.artifact.ociManifestDigest) {
     throw new Error("artifact digest does not match the exact OCI manifest digest");
@@ -339,10 +599,17 @@ export function verifyCandidateChain(input: VerifyCandidateChainInput): Artifact
     throw new Error("build artifact is not bound to the candidate source and artifact digest");
   }
   if (
-    buildArtifact.sourceCandidate.digest !==
-    sourceCandidateReferenceDigest(manifest, machineManifestSha256)
+    buildArtifact.sourceCandidate.digest !== sourceCandidate.digest ||
+    buildArtifact.sourceCandidate.id !== sourceCandidate.id
   ) {
-    throw new Error("build artifact source reference is not bound to the exact source evidence");
+    throw new Error("build artifact source reference does not match the verified source candidate");
+  }
+  if (
+    sourceCandidate.commitSha !== manifest.source.commitSha ||
+    sourceCandidate.treeSha !== manifest.source.treeSha ||
+    sourceCandidate.status !== "verified"
+  ) {
+    throw new Error("source candidate is not verified for the exact candidate source");
   }
   if (
     !buildArtifact.buildRun.evidenceRefs.some(
@@ -508,6 +775,9 @@ async function finalizeAttestation(flags: Map<string, string>): Promise<void> {
   const manifestPath = requiredFlag(flags, "manifest");
   const bundlePath = requiredFlag(flags, "bundle");
   const verificationPath = requiredFlag(flags, "verification");
+  const productOutput = requiredFlag(flags, "product-output");
+  const intentOutput = requiredFlag(flags, "intent-output");
+  const sourceOutput = requiredFlag(flags, "source-output");
   const artifactOutput = requiredFlag(flags, "artifact-output");
   const output = requiredFlag(flags, "output");
   const manifest = CandidateManifestSchema.parse(readJson(manifestPath));
@@ -515,8 +785,15 @@ async function finalizeAttestation(flags: Map<string, string>): Promise<void> {
   const bundleSha256 = await sha256File(bundlePath);
   const finishedAt = requiredFlag(flags, "created-at");
   const verificationSha256 = await sha256File(verificationPath);
+  const sourceRecords = createSourceRecords({
+    manifest,
+    machineManifestSha256,
+    verificationSha256,
+    finishedAt,
+  });
   const buildArtifact = createBuildArtifact({
     manifest,
+    sourceCandidate: sourceRecords.sourceCandidate,
     machineManifestSha256,
     bundleSha256,
     verificationSha256,
@@ -532,18 +809,27 @@ async function finalizeAttestation(flags: Map<string, string>): Promise<void> {
     attestationUrl: requiredFlag(flags, "attestation-url"),
     createdAt: finishedAt,
   });
+  writeFileSync(productOutput, `${JSON.stringify(sourceRecords.productProjection, null, 2)}\n`);
+  writeFileSync(intentOutput, `${JSON.stringify(sourceRecords.intentSnapshot, null, 2)}\n`);
+  writeFileSync(sourceOutput, `${JSON.stringify(sourceRecords.sourceCandidate, null, 2)}\n`);
   writeFileSync(artifactOutput, `${JSON.stringify(buildArtifact, null, 2)}\n`);
   writeFileSync(output, `${JSON.stringify(attestation, null, 2)}\n`);
 }
 
 async function verifyFiles(flags: Map<string, string>): Promise<void> {
   const manifestPath = requiredFlag(flags, "manifest");
+  const productPath = requiredFlag(flags, "product");
+  const intentPath = requiredFlag(flags, "intent");
+  const sourcePath = requiredFlag(flags, "source");
   const attestationPath = requiredFlag(flags, "attestation");
   const artifactPath = requiredFlag(flags, "artifact");
   const bundlePath = requiredFlag(flags, "bundle");
   const manifest = CandidateManifestSchema.parse(readJson(manifestPath));
   const attestation = verifyCandidateChain({
     manifest,
+    productProjection: readJson(productPath),
+    intentSnapshot: readJson(intentPath),
+    sourceCandidate: readJson(sourcePath),
     buildArtifact: readJson(artifactPath),
     attestation: readJson(attestationPath),
     machineManifestSha256: await sha256File(manifestPath),
