@@ -39,6 +39,11 @@ const tempRoots: string[] = [];
 let buildRoot: string | undefined;
 let executable: string;
 
+const STALE_LOCK_HELP_INVOCATIONS: string[][] = [
+  ["stale-lock-handoff", "--help"],
+  ["help", "stale-lock-handoff"],
+];
+
 type CliResult = { exitCode: number; stdout: string; stderr: string };
 
 async function buildCli(): Promise<string> {
@@ -66,6 +71,51 @@ async function runCli(executable: string, args: string[], env: Record<string, st
   const stdout = await new Response(proc.stdout).text();
   const stderr = await new Response(proc.stderr).text();
   return { exitCode: await proc.exited, stdout, stderr };
+}
+
+function staleLockCapabilityEnv(authorityUrl: string): Record<string, string> {
+  const root = mkdtempSync(join(tmpdir(), "todos-stale-lock-capability-"));
+  tempRoots.push(root);
+  const home = join(root, "home");
+  mkdirSync(home);
+  return {
+    PATH: process.env.PATH ?? "",
+    BUN_INSTALL: process.env.BUN_INSTALL ?? join(process.env.HOME ?? "/home/hasna", ".bun"),
+    HOME: home,
+    LANG: "C.UTF-8",
+    TODOS_AUTO_PROJECT: "false",
+    HASNA_TODOS_STORAGE_MODE: "remote",
+    HASNA_TODOS_API_URL: authorityUrl,
+    HASNA_TODOS_API_KEY: "fixture-remote-key",
+  };
+}
+
+function staleLockCapabilityAuthority(advertiseHandoff: boolean) {
+  const requests: string[] = [];
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch(request) {
+      const url = new URL(request.url);
+      requests.push(`${request.method} ${url.pathname}`);
+      if (url.pathname === "/v1/openapi.json" && request.method === "GET") {
+        return Response.json({
+          openapi: "3.1.0",
+          paths: advertiseHandoff
+            ? { "/v1/tasks/{id}/stale-lock-handoff": { post: {} } }
+            : {},
+        });
+      }
+      if (url.pathname === `/v1/tasks/${TASK_FIXTURE_ID}/stale-lock-handoff`) {
+        return Response.json(
+          { error: "unknown task action: stale-lock-handoff" },
+          { status: 404 },
+        );
+      }
+      return Response.json({ error: "fixture route missing" }, { status: 404 });
+    },
+  });
+  return { requests, server };
 }
 
 function recursiveInventory(root: string, relative = ""): string[] {
@@ -760,61 +810,15 @@ describe("remote CLI entrypoint authority boundary", () => {
     expect(help.stdout).toMatch(/\bstatus\b/);
   });
 
-  test("every remote help form gates stale-lock handoff on the authority contract", async () => {
-    const TASK_ID = "11111111-1111-4111-8111-111111111111";
-    const requests: string[] = [];
-    let advertiseHandoff = false;
-    const server = Bun.serve({
-      hostname: "127.0.0.1",
-      port: 0,
-      async fetch(request) {
-        const url = new URL(request.url);
-        requests.push(`${request.method} ${url.pathname}`);
-        if (url.pathname === "/v1/openapi.json" && request.method === "GET") {
-          return Response.json({
-            openapi: "3.1.0",
-            paths: advertiseHandoff
-              ? {
-                  "/v1/tasks/{id}/stale-lock-handoff": {
-                    post: {},
-                  },
-                }
-              : {},
-          });
-        }
-        if (url.pathname === `/v1/tasks/${TASK_ID}/stale-lock-handoff`) {
-          return Response.json(
-            { error: "unknown task action: stale-lock-handoff" },
-            { status: 404 },
-          );
-        }
-        return Response.json({ error: "fixture route missing" }, { status: 404 });
-      },
-    });
-    const root = mkdtempSync(join(tmpdir(), "todos-stale-lock-capability-"));
-    tempRoots.push(root);
-    const env = {
-      PATH: process.env.PATH ?? "",
-      BUN_INSTALL: process.env.BUN_INSTALL ?? join(process.env.HOME ?? "/home/hasna", ".bun"),
-      HOME: join(root, "home"),
-      LANG: "C.UTF-8",
-      TODOS_AUTO_PROJECT: "false",
-      HASNA_TODOS_STORAGE_MODE: "remote",
-      HASNA_TODOS_API_URL: `http://127.0.0.1:${server.port}`,
-      HASNA_TODOS_API_KEY: "fixture-remote-key",
-    };
-    mkdirSync(env.HOME);
-
-    let serverRunning = true;
+  test("unsupported authorities hide stale-lock handoff from every help form", async () => {
+    const { requests, server } = staleLockCapabilityAuthority(false);
+    const env = staleLockCapabilityEnv(`http://127.0.0.1:${server.port}`);
     try {
       const help = await runCli(executable, ["--help"], env);
       expect(help.exitCode).toBe(0);
       expect(help.stdout).not.toMatch(/\bstale-lock-handoff\b/);
 
-      for (const args of [
-        ["stale-lock-handoff", "--help"],
-        ["help", "stale-lock-handoff"],
-      ]) {
+      for (const args of STALE_LOCK_HELP_INVOCATIONS) {
         const directHelp = await runCli(executable, args, env);
         expect(directHelp.exitCode).not.toBe(0);
         expect(directHelp.stderr).toContain("REMOTE_COMMAND_UNAVAILABLE");
@@ -825,7 +829,7 @@ describe("remote CLI entrypoint authority boundary", () => {
 
       const result = await runCli(executable, [
         "--agent", "fixture-agent",
-        "stale-lock-handoff", TASK_ID,
+        "stale-lock-handoff", TASK_FIXTURE_ID,
         "--expected-holder", "previous-agent",
         "--expected-lock-version", "2020-01-01T00:00:00.000Z",
         "--stale-after-seconds", "3600",
@@ -840,38 +844,42 @@ describe("remote CLI entrypoint authority boundary", () => {
         "GET /v1/openapi.json",
         "GET /v1/openapi.json",
       ]);
+    } finally {
+      server.stop(true);
+    }
+  });
 
-      advertiseHandoff = true;
-      requests.length = 0;
+  test("compatible authorities expose stale-lock handoff in every help form", async () => {
+    const { requests, server } = staleLockCapabilityAuthority(true);
+    const env = staleLockCapabilityEnv(`http://127.0.0.1:${server.port}`);
+    try {
       const compatibleHelp = await runCli(executable, ["--help"], env);
       expect(compatibleHelp.exitCode).toBe(0);
       expect(compatibleHelp.stdout).toMatch(/\bstale-lock-handoff\b/);
       expect(requests).toEqual(["GET /v1/openapi.json"]);
 
-      for (const args of [
-        ["stale-lock-handoff", "--help"],
-        ["help", "stale-lock-handoff"],
-      ]) {
+      for (const args of STALE_LOCK_HELP_INVOCATIONS) {
         const directHelp = await runCli(executable, args, env);
         expect(directHelp.exitCode).toBe(0);
         expect(directHelp.stdout).toContain("Usage: todos stale-lock-handoff");
       }
-
-      server.stop(true);
-      serverRunning = false;
-      for (const args of [
-        ["stale-lock-handoff", "--help"],
-        ["help", "stale-lock-handoff"],
-      ]) {
-        const unreachableHelp = await runCli(executable, args, env);
-        expect(unreachableHelp.exitCode).not.toBe(0);
-        expect(unreachableHelp.stderr).toContain("REMOTE_COMMAND_UNAVAILABLE");
-        expect(`${unreachableHelp.stdout}\n${unreachableHelp.stderr}`).not.toContain(
-          "Usage: todos stale-lock-handoff",
-        );
-      }
     } finally {
-      if (serverRunning) server.stop(true);
+      server.stop(true);
+    }
+  });
+
+  test("unreachable authorities hide stale-lock handoff from named help", async () => {
+    const { server } = staleLockCapabilityAuthority(true);
+    const authorityUrl = `http://127.0.0.1:${server.port}`;
+    server.stop(true);
+    const env = staleLockCapabilityEnv(authorityUrl);
+    for (const args of STALE_LOCK_HELP_INVOCATIONS) {
+      const unreachableHelp = await runCli(executable, args, env);
+      expect(unreachableHelp.exitCode).not.toBe(0);
+      expect(unreachableHelp.stderr).toContain("REMOTE_COMMAND_UNAVAILABLE");
+      expect(`${unreachableHelp.stdout}\n${unreachableHelp.stderr}`).not.toContain(
+        "Usage: todos stale-lock-handoff",
+      );
     }
   });
 
