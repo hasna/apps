@@ -63,6 +63,7 @@ describe("OSS no-cloud boundary", () => {
     expect(packageJson.publishConfig).toMatchObject({ access: "public" });
     expect(packageJson.repository.url).toBe("https://github.com/hasna/todos.git");
     expect(packageJson.workspaces).toContain("dashboard");
+    expect(packageJson.workspaces).toContain("ai");
     expect(packageJson.bin).not.toHaveProperty("todos-remote");
     expect(packageJson.exports).not.toHaveProperty("./remote");
     expect(sdkPackageJson.repository.url).toBe("https://github.com/hasna/todos.git");
