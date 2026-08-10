@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.22] - 2026-08-10
+
 ### Fixed
 
 - **Remote stale-lock recovery follows the deployed authority contract.** The
@@ -14,12 +16,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   OpenAPI document exposes the exact route, sends no mutation to older
   authorities, and permits a new authenticated session with the same agent name
   to refresh an exact stale lock through holder/version CAS plus an audit
-  receipt.
+  receipt ([#258](https://github.com/hasna/todos/pull/258)).
 - **PostgreSQL stale-lock recovery no longer depends on a schema helper.** The
   exact stored `locked_at` token is compared as text before PostgreSQL casts only
   the already-validated, PostgreSQL-compatible request token for the stale
   cutoff, so missing helper functions, ISO year zero, and malformed stored
-  timestamps fail closed without mutation.
+  timestamps fail closed without mutation
+  ([#261](https://github.com/hasna/todos/pull/261)).
 
 ## [0.15.20] - 2026-08-09
 
