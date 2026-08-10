@@ -12,13 +12,7 @@ import { generateSdkFromOpenApi } from "@hasna/contracts/sdk";
 import { openapiSpec } from "../src/server/openapi.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const outDir = join(root, "src", "sdk");
-mkdirSync(outDir, { recursive: true });
-
-const result = generateSdkFromOpenApi(openapiSpec as any, {
-  className: "ConversationsClient",
-  apiKeyHeader: "x-api-key",
-});
+const defaultOutputPath = join(root, "src", "sdk", "index.ts");
 
 function withActionableErrors(code: string): string {
   const marker = "export class ConversationsClient {";
@@ -160,15 +154,49 @@ const header =
   "// @generated from src/server/openapi.ts by scripts/generate-sdk.ts — DO NOT EDIT.\n" +
   "// Regenerate: bun run sdk:generate\n\n";
 
-const generated = withBinaryResponses(
-  withActionableErrors(result.code),
-  binaryOperationNames(openapiSpec),
-  result.operations,
-).trimEnd();
 const identityExport = 'export { IdentityError } from "../lib/identity.js";';
-writeFileSync(join(outDir, "index.ts"), `${header}${generated}\n\n${identityExport}\n`);
 
-console.log(`ok generated SDK -> src/sdk/index.ts (${result.operations.length} operations)`);
-if (result.warnings.length) {
-  console.log("warnings:\n  " + result.warnings.join("\n  "));
+export function generateSdkSource(spec: typeof openapiSpec = openapiSpec): {
+  code: string;
+  operations: number;
+  warnings: string[];
+} {
+  const result = generateSdkFromOpenApi(spec as any, {
+    className: "ConversationsClient",
+    apiKeyHeader: "x-api-key",
+  });
+  const generated = withBinaryResponses(
+    withActionableErrors(result.code),
+    binaryOperationNames(spec),
+    result.operations,
+  ).trimEnd();
+  return {
+    code: `${header}${generated}\n\n${identityExport}\n`,
+    operations: result.operations.length,
+    warnings: [...result.warnings],
+  };
+}
+
+export function writeGeneratedSdk(options: {
+  spec?: typeof openapiSpec;
+  outputPath?: string;
+} = {}): {
+  code: string;
+  operations: number;
+  warnings: string[];
+  outputPath: string;
+} {
+  const outputPath = options.outputPath ?? defaultOutputPath;
+  const generated = generateSdkSource(options.spec);
+  mkdirSync(dirname(outputPath), { recursive: true });
+  writeFileSync(outputPath, generated.code);
+  return { ...generated, outputPath };
+}
+
+if (import.meta.main) {
+  const result = writeGeneratedSdk();
+  console.log(`ok generated SDK -> src/sdk/index.ts (${result.operations} operations)`);
+  if (result.warnings.length) {
+    console.log("warnings:\n  " + result.warnings.join("\n  "));
+  }
 }

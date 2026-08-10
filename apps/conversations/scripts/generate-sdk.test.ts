@@ -1,10 +1,88 @@
 import { expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { createHash } from "node:crypto";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join, relative } from "node:path";
 import { generateSdkFromOpenApi } from "@hasna/contracts/sdk";
 import { openapiSpec } from "../src/server/openapi.js";
 
+type GeneratorModule = typeof import("./generate-sdk.js");
+
 const root = join(import.meta.dir, "..");
+const trackedSdkPath = join(root, "src", "sdk", "index.ts");
+const trackedSdkRelativePath = relative(root, trackedSdkPath);
+const decoder = new TextDecoder();
+let generatorModulePromise: Promise<GeneratorModule> | undefined;
+
+interface TrackedSdkSnapshot {
+  path: string;
+  size: number;
+  modifiedAtNs: string;
+  changedAtNs: string;
+  sha256: string;
+  gitDiffExitCode: number;
+  gitDiff: string;
+}
+
+function runGit(args: string[]): { exitCode: number; stdout: string; stderr: string } {
+  const result = Bun.spawnSync({
+    cmd: ["git", ...args],
+    cwd: root,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  return {
+    exitCode: result.exitCode,
+    stdout: decoder.decode(result.stdout),
+    stderr: decoder.decode(result.stderr),
+  };
+}
+
+function snapshotTrackedSdk(): TrackedSdkSnapshot {
+  const bytes = readFileSync(trackedSdkPath);
+  const metadata = statSync(trackedSdkPath, { bigint: true });
+  const quiet = runGit(["diff", "--quiet", "HEAD", "--", trackedSdkRelativePath]);
+  if (quiet.exitCode !== 0 && quiet.exitCode !== 1) {
+    throw new Error(`Unable to inspect tracked SDK diff state: ${quiet.stderr}`);
+  }
+  const diff = runGit(["diff", "--no-ext-diff", "HEAD", "--", trackedSdkRelativePath]);
+  if (diff.exitCode !== 0) {
+    throw new Error(`Unable to inspect tracked SDK diff: ${diff.stderr}`);
+  }
+  return {
+    path: realpathSync(trackedSdkPath),
+    size: Number(metadata.size),
+    modifiedAtNs: metadata.mtimeNs.toString(),
+    changedAtNs: metadata.ctimeNs.toString(),
+    sha256: createHash("sha256").update(bytes).digest("hex"),
+    gitDiffExitCode: quiet.exitCode,
+    gitDiff: diff.stdout,
+  };
+}
+
+function expectTrackedSdkUnchanged(before: TrackedSdkSnapshot): void {
+  expect(snapshotTrackedSdk()).toEqual(before);
+}
+
+function loadGeneratorModule(): Promise<GeneratorModule> {
+  generatorModulePromise ??= (async () => {
+    const before = snapshotTrackedSdk();
+    await Bun.sleep(25);
+    const moduleUrl = new URL("./generate-sdk.ts?test-import-safety", import.meta.url).href;
+    const generatorModule = (await import(moduleUrl)) as GeneratorModule;
+    expectTrackedSdkUnchanged(before);
+    return generatorModule;
+  })();
+  return generatorModulePromise;
+}
 
 function methodSource(code: string, functionName: string): string {
   const marker = `    async ${functionName}(`;
@@ -15,7 +93,15 @@ function methodSource(code: string, functionName: string): string {
   return code.slice(start, end + "\n    }".length);
 }
 
-test("rewrites the current binary return shape without changing JSON operations", () => {
+test("imports the generator without writing the tracked SDK", async () => {
+  const generatorModule = await loadGeneratorModule();
+
+  expect(typeof generatorModule.generateSdkSource).toBe("function");
+  expect(typeof generatorModule.writeGeneratedSdk).toBe("function");
+});
+
+test("rewrites the current binary return shape without changing JSON operations", async () => {
+  const { generateSdkSource } = await loadGeneratorModule();
   const raw = generateSdkFromOpenApi(openapiSpec as any, {
     className: "ConversationsClient",
     apiKeyHeader: "x-api-key",
@@ -28,18 +114,7 @@ test("rewrites the current binary return shape without changing JSON operations"
     'Promise<{ "name": string; "mime_type": string; "size": number; "content_base64": string }>',
   );
 
-  const result = Bun.spawnSync({
-    cmd: ["bun", "run", "./scripts/generate-sdk.ts"],
-    cwd: root,
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  const output =
-    new TextDecoder().decode(result.stdout) +
-    new TextDecoder().decode(result.stderr);
-  expect(result.exitCode, output).toBe(0);
-
-  const generated = readFileSync(join(root, "src", "sdk", "index.ts"), "utf8");
+  const generated = generateSdkSource().code;
   const generatedDownload = methodSource(generated, "downloadMessageAttachment");
   const generatedGetMessage = methodSource(generated, "getMessage");
 
@@ -57,4 +132,51 @@ test("rewrites the current binary return shape without changing JSON operations"
     'opts.responseType === "arrayBuffer" && !response.headers.get("content-type")?.toLowerCase().includes("application/json")',
   );
   expect(generatedGetMessage).toBe(rawGetMessage);
+});
+
+test("keeps tracked SDK bytes unchanged for isolated changed-version generation and write failure", async () => {
+  const { writeGeneratedSdk } = await loadGeneratorModule();
+  const before = snapshotTrackedSdk();
+  const tempRoot = mkdtempSync(join(tmpdir(), "conversations-sdk-generate-"));
+
+  try {
+    const changedVersionSpec = structuredClone(openapiSpec);
+    changedVersionSpec.info.version = "9.9.9-test";
+
+    const outputPath = join(tempRoot, "success", "index.ts");
+    const written = writeGeneratedSdk({
+      spec: changedVersionSpec,
+      outputPath,
+    });
+    const outputBytes = readFileSync(outputPath);
+    const output = outputBytes.toString("utf8");
+
+    expect(written.outputPath).toBe(outputPath);
+    expect(realpathSync(outputPath)).toBe(outputPath);
+    expect(statSync(outputPath).size).toBe(outputBytes.byteLength);
+    expect(written.operations).toBeGreaterThan(0);
+    expect(output).toContain("// Source: ConversationsClient 9.9.9-test");
+    expectTrackedSdkUnchanged(before);
+
+    const failurePath = join(tempRoot, "write-failure");
+    mkdirSync(failurePath);
+    let writeError: unknown;
+    try {
+      writeGeneratedSdk({
+        spec: changedVersionSpec,
+        outputPath: failurePath,
+      });
+    } catch (error) {
+      writeError = error;
+    }
+
+    expect(writeError).toBeInstanceOf(Error);
+    expect((writeError as NodeJS.ErrnoException).code).toBe("EISDIR");
+    expectTrackedSdkUnchanged(before);
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+
+  expect(existsSync(tempRoot)).toBe(false);
+  expectTrackedSdkUnchanged(before);
 });
