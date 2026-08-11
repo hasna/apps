@@ -34,9 +34,14 @@ For an actual merge:
    PR, exact head SHA, frozen scope, the same reviewer descriptor, timestamp,
    verdict, checked risks, and blocking findings. Missing, surplus, duplicate,
    or substitute reviewers fail closed even when their artifact says GO.
-4. Immediately before execution, re-read the PR, exact head, checks, reviews,
-   draft/conflict state, base/protection policy, and queue behavior. Do not use
-   stale preflight as merge authority.
+4. Immediately before execution, re-read the PR, exact head, checks, the
+   authenticated provider principal, PR author, provider review state,
+   draft/conflict state, base/protection policy, and queue behavior. The exact
+   fixed independent artifact is the review authority; provider review fields
+   may be empty only when the freshly captured `provider_principal` exactly
+   matches `pr_author`. Never fabricate provider review metadata. Explicit
+   provider blocking states still fail closed. Do not use stale preflight as
+   merge authority.
 5. Generate the command with
    `scripts/merge_pr_guard.py build --preflight <fresh.json>
    --fixed-reviewers <task-owned-fixed-reviewers.json>

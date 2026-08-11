@@ -8,6 +8,7 @@ Capture a fresh JSON snapshot with:
 - explicit risk tier and frozen acceptance scope;
 - cumulative repair-cycle count and cap;
 - checks, reviews, draft/conflict/merge state, and branch/queue policy;
+- the authenticated provider principal and exact PR author;
 - the task-owned fixed reviewer identity/run-ID descriptor set established
   before review begins;
 - exactly one independent reviewer artifact at every risk tier;
@@ -17,6 +18,15 @@ Capture a fresh JSON snapshot with:
 Preflight may use read-only `gh pr view`, `gh pr checks`, and repository-rule
 queries. It must not mutate local git or GitHub. `mergeable` is advisory until
 the executor repeats the checks immediately before merge.
+
+The provider review fields must be captured, but they are not the independent
+review receipt. A null or empty provider review decision and an empty reviews
+list are valid only when the freshly captured `provider_principal` exactly
+matches `pr_author`, proving the authenticated principal owns the PR and cannot
+submit a provider self-approval. The exact fixed reviewer artifact remains
+mandatory. `CHANGES_REQUESTED`, `REVIEW_REQUIRED`, a pending review, malformed
+review evidence, or an unknown provider state still fails closed; never
+synthesize provider approval metadata.
 
 ## Bounded review
 

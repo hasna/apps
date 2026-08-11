@@ -344,8 +344,13 @@ def validate_preflight(
         raise GuardError("preflight merge state is not clean")
     if verdict == "pending" and merge_status not in {"BEHIND", "HAS_HOOKS", "UNSTABLE"}:
         raise GuardError("pending preflight merge state is not queue-compatible")
-    if merge_state.get("review_decision") != "APPROVED":
-        raise GuardError("preflight review decision is not approved")
+    if "review_decision" not in merge_state:
+        raise GuardError("preflight review decision evidence is missing")
+    review_decision = merge_state.get("review_decision")
+    if review_decision in {"CHANGES_REQUESTED", "REVIEW_REQUIRED"}:
+        raise GuardError("preflight review decision blocks merge")
+    if review_decision not in {None, "", "APPROVED"}:
+        raise GuardError("preflight review decision evidence is invalid")
 
     checks = snapshot.get("checks")
     if not isinstance(checks, list) or not checks:
@@ -404,7 +409,7 @@ def validate_preflight(
     if not isinstance(snapshot.get("head"), str) or not snapshot["head"].strip():
         raise GuardError("preflight head branch is missing")
     reviews = snapshot.get("reviews")
-    if not isinstance(reviews, list) or not reviews:
+    if not isinstance(reviews, list):
         raise GuardError("preflight review evidence is missing")
     allowed_review_states = {"APPROVED", "COMMENTED", "DISMISSED"}
     for review in reviews:
@@ -417,6 +422,18 @@ def validate_preflight(
             raise GuardError("preflight review evidence blocks merge")
         if state not in allowed_review_states:
             raise GuardError("preflight review state evidence is invalid")
+    provider_review_metadata_empty = review_decision in {None, ""} and not reviews
+    if provider_review_metadata_empty:
+        provider_principal = normalize_identity(snapshot.get("provider_principal"))
+        pr_author = normalize_identity(snapshot.get("pr_author"))
+        if not provider_principal or not pr_author:
+            raise GuardError(
+                "preflight provider principal or pull request author evidence is missing"
+            )
+        if provider_principal != pr_author:
+            raise GuardError("preflight provider principal does not own the pull request")
+    elif review_decision != "APPROVED" or not reviews:
+        raise GuardError("preflight review decision is not approved")
     warnings = snapshot.get("warnings")
     if not isinstance(warnings, list) or any(not isinstance(warning, str) for warning in warnings):
         raise GuardError("preflight warnings evidence is missing")

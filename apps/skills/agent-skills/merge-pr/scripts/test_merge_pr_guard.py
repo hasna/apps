@@ -64,6 +64,8 @@ def preflight(mode: str = "immediate-merge", verdict: str = "mergeable") -> dict
         "base": "main",
         "head": "hasna:ci/provider-native-validation",
         "head_sha": HEAD_SHA,
+        "provider_principal": "andrei-hasna",
+        "pr_author": "andrei-hasna",
         "merge_state": {
             "state": "OPEN",
             "is_draft": False,
@@ -233,6 +235,47 @@ class GuardCliTests(unittest.TestCase):
         self.assertEqual(plan["fixed_reviewer_count"], 1)
         self.assertEqual(snapshot["repair_cycles"]["count"], 2)
         self.assertEqual(snapshot["repair_cycles"]["cap"], 2)
+
+    def test_fixed_reviewer_artifact_authorizes_without_provider_self_approval(self) -> None:
+        for review_decision in (None, ""):
+            with self.subTest(review_decision=review_decision):
+                snapshot = preflight()
+                snapshot["merge_state"]["review_decision"] = review_decision
+                snapshot["reviews"] = []
+
+                with tempfile.TemporaryDirectory() as temporary:
+                    result, plan = self.build(
+                        Path(temporary),
+                        "--strategy",
+                        "squash",
+                        "--subject",
+                        "fix: safe",
+                        snapshot=snapshot,
+                    )
+
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(plan["head_sha"], HEAD_SHA)
+                self.assertEqual(plan["fixed_reviewer_count"], 1)
+
+    def test_empty_provider_review_metadata_rejects_non_owner_principal(self) -> None:
+        snapshot = preflight()
+        snapshot["merge_state"]["review_decision"] = None
+        snapshot["reviews"] = []
+        snapshot["provider_principal"] = "release-executor"
+        snapshot["pr_author"] = "pull-request-author"
+
+        with tempfile.TemporaryDirectory() as temporary:
+            result, _ = self.build(
+                Path(temporary),
+                "--strategy",
+                "squash",
+                "--subject",
+                "fix: safe",
+                snapshot=snapshot,
+            )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("provider principal does not own the pull request", result.stderr)
 
     def test_fixed_reviewer_set_rejects_missing_surplus_duplicate_and_substitute(self) -> None:
         cases = {
@@ -418,18 +461,21 @@ class GuardCliTests(unittest.TestCase):
     def test_missing_review_decision_and_stateless_check_fail_closed(self) -> None:
         missing_decision = preflight()
         del missing_decision["merge_state"]["review_decision"]
-        blank_decision = preflight()
-        blank_decision["merge_state"]["review_decision"] = ""
         invented_decision = preflight()
         invented_decision["merge_state"]["review_decision"] = "INVENTED"
+        changes_requested = preflight()
+        changes_requested["merge_state"]["review_decision"] = "CHANGES_REQUESTED"
+        review_required = preflight()
+        review_required["merge_state"]["review_decision"] = "REVIEW_REQUIRED"
         stateless_check = preflight()
         stateless_check["checks"] = [{}]
         completed_without_conclusion = preflight()
         completed_without_conclusion["checks"] = [{"state": "COMPLETED"}]
         for snapshot in (
             missing_decision,
-            blank_decision,
             invented_decision,
+            changes_requested,
+            review_required,
             stateless_check,
             completed_without_conclusion,
         ):
@@ -444,25 +490,30 @@ class GuardCliTests(unittest.TestCase):
                 )
             self.assertEqual(result.returncode, 2)
 
-    def test_empty_or_conflicting_check_and_review_evidence_fails_closed(self) -> None:
+    def test_missing_or_conflicting_check_and_review_evidence_fails_closed(self) -> None:
         empty_checks = preflight()
         empty_checks["checks"] = []
         conflicting_check = preflight()
         conflicting_check["checks"] = [{"bucket": "pass", "state": "invented"}]
-        empty_reviews = preflight()
-        empty_reviews["reviews"] = []
+        missing_reviews = preflight()
+        del missing_reviews["reviews"]
         malformed_review = preflight()
         malformed_review["reviews"] = [{"state": "APPROVED"}]
         blocking_review = preflight()
         blocking_review["reviews"] = [
             {"author": {"login": "reviewer-a"}, "state": "CHANGES_REQUESTED"}
         ]
+        pending_review = preflight()
+        pending_review["reviews"] = [
+            {"author": {"login": "reviewer-a"}, "state": "PENDING"}
+        ]
         for snapshot in (
             empty_checks,
             conflicting_check,
-            empty_reviews,
+            missing_reviews,
             malformed_review,
             blocking_review,
+            pending_review,
         ):
             with tempfile.TemporaryDirectory() as temporary:
                 result, _ = self.build(
