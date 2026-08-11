@@ -2,7 +2,15 @@
 
 Reusable feedback collection for Hasna-coded apps.
 
-Open Feedback provides a small HTTP API, TypeScript SDK, CLI, MCP server, and local SQLite storage so apps can collect product feedback without standing up a database server first. Production deployments can inject a cloud-backed `FeedbackStore` adapter while keeping local operation unchanged. The local project slug is `open-feedback`; the GitHub repository is `hasna/feedback`.
+Open Feedback provides a small HTTP API, TypeScript SDK, CLI, MCP server, and
+SQLite storage so apps can collect product feedback without standing up a
+database server first. It has two product stories: **user-hosted**, where a user
+runs the package in their own environment, and **Hasna SaaS** ("cloud"), where
+Hasna operates a private platform wrapper for outside users. Both use the same
+package behavior. The server backend contract is `sqlite | postgresql`; this
+package ships SQLite and accepts a host-injected `FeedbackStore` adapter for
+PostgreSQL. The project slug is `open-feedback`; the GitHub repository is
+`hasna/feedback`.
 
 ## Install
 
@@ -25,9 +33,9 @@ feedback serve --port 8787
 ## HTTP API
 
 The HTTP API is a **local development server**. It serves the append-only JSONL
-store at `~/.hasna/feedback/feedback.jsonl` and has no PostgreSQL support:
-`createFeedbackStore()` throws in cloud mode unless the host injects a
-`FeedbackStore` adapter. To run feedback as a real service, mount
+store at `~/.hasna/feedback/feedback.jsonl` and has no PostgreSQL support. A
+PostgreSQL selection is rejected unless the host injects a `FeedbackStore`
+adapter. To run feedback as a real service, mount
 `createFeedbackHandler()` from `@hasna/feedback/api` inside your own app and pass
 it a store you control — which is what the Hasna platform apps do.
 
@@ -38,7 +46,7 @@ feedback serve --host 127.0.0.1 --port 8787
 ```
 
 Set `FEEDBACK_API_TOKEN` to require bearer-token auth for every API request.
-Shared deployments should use scoped tokens instead of one broad token:
+Multi-user server endpoints should use scoped tokens instead of one broad token:
 
 - submit: accepts browser or app-server submissions.
 - read: lists feedback, reads one item, and reads stats.
@@ -46,9 +54,9 @@ Shared deployments should use scoped tokens instead of one broad token:
 - export: streams JSONL exports.
 
 For public collection, enable public submit only at the app backend or feedback
-service boundary and keep read, triage, and export scoped. In shared deployment
-mode, non-local read, triage, and export routes fail closed when their scoped
-token is missing. Submit requests are still checked for spam-like payloads,
+service boundary and keep read, triage, and export scoped. On a server API,
+read, triage, and export routes fail closed when their scoped token is missing.
+Submit requests are still checked for spam-like payloads,
 duplicate recent submissions, and per-client rate limits before storage writes.
 
 Submit feedback:
@@ -134,7 +142,12 @@ feedback stats
 feedback export --format jsonl --until 2026-12-31
 ```
 
-Use `--api-url` and `--token` to target a remote Open Feedback API instead of local JSONL storage, or set `FEEDBACK_API_URL` / `FEEDBACK_API_TOKEN` once so every command uses the shared deployment without retyping the flags. An explicit flag always beats the environment. The CLI does not open database connections or create cloud resources itself.
+Use `--api-url` and `--token` to target an Open Feedback server API instead of
+the on-box store, or set `FEEDBACK_API_URL` / `FEEDBACK_API_TOKEN` once so every
+command uses that server without retyping the flags. An explicit flag always
+beats the environment. The CLI connects either to its local SQLite-backed
+package store or to the server HTTP API; it never opens PostgreSQL directly or
+creates infrastructure.
 
 `feedback shipped <id> --changelog-ref <ref>` marks feedback as shipped, records the changelog-entry linkage (`changelogRef`, `shippedAt`), and emits the `feedback.triaged` notification event with disposition `shipped`. It works against both the local store and a remote API (`--api-url`/`--token`, or `FEEDBACK_API_URL`). `feedback status <id> shipped` also moves the status but records no `changelogRef` — prefer `shipped` so the link between a report and the thing that resolved it survives.
 
@@ -205,7 +218,12 @@ A patch is small, but an untriaged store still carries roughly one extra record 
 
 Feedback stores emit `feedback.created` and `feedback.triaged` event envelopes (distribution event catalog, contract `hasna.feedback.v1`) through `@hasna/events` on the create/triage paths. Pass `eventSink: null` to `LocalFeedbackStore` to disable emission, or provide your own `FeedbackEventSink`. The default sink respects `HASNA_EVENTS_DIR`.
 
-`feedback doctor` checks the package version, selected storage runtime, local data file path and permissions when local mode is active, the resolved task sink, the configured remote URL, token configuration, cloud configuration presence, and whether the expected binaries are on `PATH`. Diagnostics only report whether sensitive settings are configured; they do not print token, DSN, ARN, or secret values. It exits non-zero when `ok` is false.
+`feedback doctor` checks the package version, selected storage runtime, local
+data file path and permissions when on-box storage is active, the resolved task
+sink, the configured server URL, token configuration, host-adapter readiness,
+and whether the expected binaries are on `PATH`. Diagnostics only report
+whether sensitive settings are configured; they do not print token, DSN, ARN,
+or secret values. It exits non-zero when `ok` is false.
 
 ### Terminal Slash Commands
 
@@ -219,7 +237,7 @@ feedback submit "Add an activity filter to the inbox view" --app my-app --kind i
 feedback submit "Export fails after picking a date range" --app my-app --kind bug --severity high
 ```
 
-The slash-command wrapper should provide `--api-url` and `--token` when feedback belongs in a shared deployment.
+The slash-command wrapper should provide `--api-url` and `--token` when feedback belongs on a server API.
 
 ## MCP
 
@@ -254,13 +272,14 @@ file outright with `HASNA_FEEDBACK_SQLITE_PATH`. Configuration is read from
 `HASNA_FEEDBACK_*` first and falls back to the historical unprefixed
 `FEEDBACK_*` names, so existing setups keep working.
 
-Select the engine with `HASNA_FEEDBACK_STORE`:
+At a server boundary, the backend contract remains `sqlite | postgresql`.
+Select this package's storage implementation with `HASNA_FEEDBACK_STORE`:
 
 | value | backend |
 | --- | --- |
 | unset, `sqlite`, `db` | SQLite at `~/.hasna/feedback/feedback.db` (default) |
-| `jsonl`, `file`, `local` | the append-only JSONL log at `~/.hasna/feedback/feedback.jsonl` |
-| `postgres`, `postgresql`, `cloud`, `rds` | a host-injected `FeedbackStore` adapter |
+| `postgres`, `postgresql` | a host-injected PostgreSQL `FeedbackStore` adapter |
+| `jsonl`, `file`, `local` | legacy migration and rollback access to `~/.hasna/feedback/feedback.jsonl`, not a third server backend |
 
 ### Migrating from `feedback.jsonl`
 
@@ -294,14 +313,19 @@ Set `HASNA_FEEDBACK_STORE=postgres` only in a host runtime that injects a
 ```ts
 import { createFeedbackHandler, type FeedbackStore } from "@hasna/feedback";
 
-const cloudStore: FeedbackStore = createYourFeedbackStoreAdapter();
+const postgresStore: FeedbackStore = createYourFeedbackStoreAdapter();
 const handler = createFeedbackHandler({
-  store: cloudStore,
+  store: postgresStore,
   apiToken: process.env.FEEDBACK_API_TOKEN,
 });
 ```
 
-`@hasna/feedback` does not create databases, run migrations, provision AWS/RDS resources, create secrets, or send notifications. Without an injected adapter, cloud mode fails closed with a clear diagnostic blocker. Optional readiness settings such as `FEEDBACK_CLOUD_PROVIDER`, `FEEDBACK_CLOUD_DATABASE_URL`, `FEEDBACK_CLOUD_RESOURCE_ARN`, `FEEDBACK_CLOUD_SECRET_ARN`, and `FEEDBACK_CLOUD_TABLE` are reported as configured/not configured only.
+`@hasna/feedback` does not create databases, run PostgreSQL migrations,
+provision infrastructure, create secrets, or send notifications. Selecting
+PostgreSQL without an injected adapter fails closed with a clear diagnostic.
+`HASNA_FEEDBACK_DATABASE_URL` belongs to the user-hosted server or Hasna SaaS
+wrapper that constructs the adapter; the feedback CLI and client never read it
+or connect to PostgreSQL directly.
 
 ## App Integration
 
