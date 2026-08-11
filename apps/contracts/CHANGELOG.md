@@ -2,6 +2,16 @@
 
 All notable changes to `@hasna/contracts` are documented here.
 
+## [0.10.6] - 2026-08-11
+
+- Adds the fail-closed `safe-read` collection helper, including complete
+  pagination across numeric cursors.
+- Adds the metadata-only `verify-write` command for checking stored writes
+  without rendering capability-bearing content.
+
+PATCH, not minor. This ships additive operational verification helpers without
+changing existing contract shapes.
+
 ## [0.10.5] - 2026-08-10
 
 - Generated SDK request builders serialize array-valued OpenAPI query
