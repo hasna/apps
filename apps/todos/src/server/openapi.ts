@@ -435,7 +435,7 @@ const createTemplateTaskInputSchema = {
 } as const;
 
 export function buildV1OpenApiDocument(version = getPackageVersion()) {
-  return {
+  return structuredClone({
     openapi: "3.1.0",
     info: {
       title: "Todos V1 API",
@@ -2101,5 +2101,5 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
         },
       },
     },
-  };
+  });
 }
