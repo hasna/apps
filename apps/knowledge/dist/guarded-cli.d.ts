@@ -1,6 +1,6 @@
 import { KNOWLEDGE_GUARDED_WRITE_CONTRACT, type KnowledgePrivateInputDescriptor, type KnowledgePrivateQueryDescriptor, type KnowledgePrivateResultProof } from './guarded-write-contract.js';
-export declare const KNOWLEDGE_GUARDED_CLI_REQUEST_SCHEMA: 'knowledge.guarded-cli-request.v1';
-export declare const KNOWLEDGE_GUARDED_CLI_RESULT_SCHEMA: 'knowledge.guarded-cli-result.v1';
+export declare const KNOWLEDGE_GUARDED_CLI_REQUEST_SCHEMA: "knowledge.guarded-cli-request.v1";
+export declare const KNOWLEDGE_GUARDED_CLI_RESULT_SCHEMA: "knowledge.guarded-cli-result.v1";
 type KnowledgeGuardedCliAction = 'write' | 'query' | 'readback';
 type KnowledgeGuardedCliTransport = 'process_ipc' | 'anonymous_fd';
 export interface KnowledgeGuardedCliPrivateResult {

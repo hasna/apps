@@ -58,9 +58,9 @@ export declare function resolveKnowledgeModeSelection(env?: NodeJS.ProcessEnv): 
  * Server-side tokens, in probe order. Kept as a small derivation seam so a
  * future contracts enum change fails loudly instead of guessing a backend.
  */
-export declare const SERVER_MODE_CANDIDATES: readonly ['postgres'];
+export declare const SERVER_MODE_CANDIDATES: readonly ["postgres"];
 /** On-box tokens. */
-export declare const LOCAL_MODE_CANDIDATES: readonly ['sqlite'];
+export declare const LOCAL_MODE_CANDIDATES: readonly ["sqlite"];
 /** Accepts a mode token or throws. Injectable so both enum generations are testable. */
 export type ModeNormalizer = (value: string) => unknown;
 /** The live-contracts token meaning "the app server". */
