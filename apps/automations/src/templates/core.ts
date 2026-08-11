@@ -101,8 +101,8 @@ export interface AutomationTemplateResult {
 }
 
 export interface AutomationTemplateInstaller {
-  listAutomations(): AutomationRecord[];
-  createAutomation(spec: AutomationSpec): AutomationRecord;
+  /** Atomically insert exact content, return identical content, or reject a conflict without mutation. */
+  ensureAutomation(spec: AutomationSpec): AutomationRecord;
 }
 
 const SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -202,10 +202,8 @@ export function compileAutomationTemplate(
       currentStepId: stepId,
       dependencies,
     };
-    const actionId = renderRequiredString(action.actionId, context, `automation action ${stepId} actionId`, false);
-    const manifestVersion = action.manifestVersion === undefined
-      ? undefined
-      : renderRequiredString(action.manifestVersion, context, `automation action ${stepId} manifestVersion`, false);
+    const actionId = action.actionId;
+    const manifestVersion = action.manifestVersion;
     const input = action.input === undefined
       ? undefined
       : renderJsonValue(action.input, context, `automation action ${stepId} input`);
@@ -272,15 +270,7 @@ export function installAutomationTemplate(
 ): AutomationTemplateResult {
   const result = createTemplateResult(registry, request, "install");
   const expectedDigest = result.receipt.automation.specDigest;
-  const existing = installer.listAutomations().find((record) => record.id === result.spec.id);
-  if (existing) {
-    const existingDigest = sha256(canonicalStringify(existing.spec));
-    if (existingDigest !== expectedDigest) {
-      throw new Error(`installed automation ${result.spec.id} has different content; immutable template installs cannot overwrite it`);
-    }
-    return result;
-  }
-  const installed = installer.createAutomation(canonicalClone(result.spec));
+  const installed = installer.ensureAutomation(canonicalClone(result.spec));
   if (installed.id !== result.spec.id || sha256(canonicalStringify(installed.spec)) !== expectedDigest) {
     throw new Error(`automation installer did not persist the exact compiled template: ${result.spec.id}`);
   }
@@ -383,9 +373,9 @@ function validateTemplateStructure(template: AutomationTemplateDefinition): Temp
     inspectValueReferences(action.input, template, actionsById, action.id, stepDependencies, `automation action ${action.id} input`);
     inspectValueReferences(action.when, template, actionsById, action.id, stepDependencies, `automation action ${action.id} when`);
     inspectValueReferences(action.metadata, template, actionsById, action.id, stepDependencies, `automation action ${action.id} metadata`);
-    inspectInputOnlyString(action.actionId, template, `automation action ${action.id} actionId`);
+    assertStaticDeclaredString(action.actionId, `automation action ${action.id} actionId`);
     if (action.manifestVersion !== undefined) {
-      inspectInputOnlyString(action.manifestVersion, template, `automation action ${action.id} manifestVersion`);
+      assertStaticDeclaredString(action.manifestVersion, `automation action ${action.id} manifestVersion`);
     }
     dependencies.set(action.id, stepDependencies);
   }
@@ -569,6 +559,12 @@ function inspectValueReferences(
 
 function inspectInputOnlyString(value: string, template: AutomationTemplateDefinition, path: string): void {
   inspectStringReferences(value, template, actionMap(template), undefined, undefined, path, false);
+}
+
+function assertStaticDeclaredString(value: unknown, path: string): asserts value is string {
+  if (typeof value !== "string" || value.trim() === "" || value.includes("${{") || value.includes("}}")) {
+    throw new Error(`${path} must be a static declared string`);
+  }
 }
 
 function inspectStringReferences(

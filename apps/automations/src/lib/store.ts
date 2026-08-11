@@ -209,6 +209,7 @@ export class AutomationsStore {
     validateAutomationSpec(spec);
     const timestamp = nowIso();
     const status = spec.status ?? "active";
+    const persistedSpec = automationSpecForPersistence(spec, status);
     this.db.query(`
       INSERT INTO automations (id, spec_json, status, created_at, updated_at)
       VALUES ($id, $specJson, $status, $createdAt, $updatedAt)
@@ -218,12 +219,48 @@ export class AutomationsStore {
         updated_at = excluded.updated_at
     `).run({
       $id: spec.id,
-      $specJson: JSON.stringify({ ...spec, status }),
+      $specJson: JSON.stringify(persistedSpec),
       $status: status,
       $createdAt: timestamp,
       $updatedAt: timestamp,
     });
     return this.requireAutomation(spec.id);
+  }
+
+  /**
+   * Atomically installs an immutable automation identity.
+   * Identical content is idempotent; conflicting content never mutates the row.
+   */
+  ensureAutomation(spec: AutomationSpec): AutomationRecord {
+    validateAutomationSpec(spec);
+    const status = spec.status ?? "active";
+    const persistedSpec = automationSpecForPersistence(spec, status);
+    return withImmediateTransaction(this.db, () => {
+      const existingRow = this.db.query("SELECT * FROM automations WHERE id = $id").get({ $id: spec.id }) as AutomationRow | null;
+      if (existingRow) {
+        const existing = automationFromRow(existingRow);
+        if (!jsonValuesEqual(
+          existing.spec as unknown as JsonValue,
+          persistedSpec as unknown as JsonValue,
+        )) {
+          throw new Error(`installed automation ${spec.id} has different content; immutable template installs cannot overwrite it`);
+        }
+        return existing;
+      }
+
+      const timestamp = nowIso();
+      this.db.query(`
+        INSERT INTO automations (id, spec_json, status, created_at, updated_at)
+        VALUES ($id, $specJson, $status, $createdAt, $updatedAt)
+      `).run({
+        $id: spec.id,
+        $specJson: JSON.stringify(persistedSpec),
+        $status: status,
+        $createdAt: timestamp,
+        $updatedAt: timestamp,
+      });
+      return this.requireAutomation(spec.id);
+    });
   }
 
   listAutomations(): AutomationRecord[] {
@@ -1733,6 +1770,10 @@ function resolveMappedData(value: JsonValue | undefined, path: string): JsonObje
 
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+function automationSpecForPersistence(spec: AutomationSpec, status: AutomationStatus): AutomationSpec {
+  return JSON.parse(JSON.stringify({ ...spec, status })) as AutomationSpec;
 }
 
 function normalizeIso(value?: string | Date): string {

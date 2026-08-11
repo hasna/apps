@@ -45,6 +45,7 @@ function validTemplate(version = "1.0.0"): AutomationTemplateDefinition {
         {
           id: "send",
           actionId: "emails.send",
+          manifestVersion: "1.2.3",
           input: {
             contactId: "${{ steps.lookup.outputs.contactId }}",
             subject: "Follow up with ${{ inputs.recipient }}",
@@ -87,6 +88,95 @@ class MemoryInstaller implements AutomationTemplateInstaller {
     this.records.set(record.id, record);
     return structuredClone(record);
   }
+
+  ensureAutomation(spec: AutomationSpec): AutomationRecord {
+    const existing = this.records.get(spec.id);
+    if (existing) {
+      if (JSON.stringify(existing.spec) !== JSON.stringify(spec)) {
+        throw new Error(`installed automation ${spec.id} has different content; immutable template installs cannot overwrite it`);
+      }
+      return structuredClone(existing);
+    }
+    return this.createAutomation(spec);
+  }
+}
+
+interface CollisionWorkerResult {
+  label: string;
+  outcome: "success" | "error";
+  message?: string;
+  result?: ReturnType<typeof installAutomationTemplate>;
+}
+
+async function runCollisionWorker(options: {
+  dbPath: string;
+  label: string;
+  peerReadyPath: string;
+  readyPath: string;
+  recipient: string;
+}): Promise<CollisionWorkerResult> {
+  const storeModuleUrl = new URL("../lib/store.ts", import.meta.url).href;
+  const coreModuleUrl = new URL("./core.ts", import.meta.url).href;
+  const script = `
+    import { existsSync, writeFileSync } from "node:fs";
+    const { AutomationsStore } = await import(${JSON.stringify(storeModuleUrl)});
+    const { AutomationTemplateRegistry, installAutomationTemplate } = await import(${JSON.stringify(coreModuleUrl)});
+    const options = ${JSON.stringify(options)};
+    const template = ${JSON.stringify(validTemplate())};
+    const store = new AutomationsStore({ dbPath: options.dbPath });
+    const installer = {
+      listAutomations() {
+        const observed = store.listAutomations();
+        writeFileSync(options.readyPath, "ready", { mode: 0o600 });
+        const deadline = Date.now() + 5000;
+        while (!existsSync(options.peerReadyPath)) {
+          if (Date.now() >= deadline) throw new Error("collision barrier timed out");
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+        }
+        return observed;
+      },
+      createAutomation(spec) {
+        return store.createAutomation(spec);
+      },
+      ensureAutomation(spec) {
+        return typeof store.ensureAutomation === "function"
+          ? store.ensureAutomation(spec)
+          : store.createAutomation(spec);
+      },
+    };
+    try {
+      const registry = new AutomationTemplateRegistry();
+      registry.register(template);
+      const result = installAutomationTemplate(registry, {
+        slug: template.slug,
+        version: template.version,
+        inputs: { recipient: options.recipient, settings: { locale: "en" } },
+      }, installer);
+      console.log(JSON.stringify({ label: options.label, outcome: "success", result }));
+    } catch (error) {
+      console.log(JSON.stringify({
+        label: options.label,
+        outcome: "error",
+        message: error instanceof Error ? error.message : String(error),
+      }));
+    } finally {
+      store.close();
+    }
+  `;
+  const worker = Bun.spawn(["bun", "-e", script], {
+    cwd: import.meta.dir,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [exitCode, stdout, stderr] = await Promise.all([
+    worker.exited,
+    new Response(worker.stdout).text(),
+    new Response(worker.stderr).text(),
+  ]);
+  if (exitCode !== 0) {
+    throw new Error(`collision worker ${options.label} exited ${exitCode}: ${stderr.trim()}`);
+  }
+  return JSON.parse(stdout.trim()) as CollisionWorkerResult;
 }
 
 describe("automation template compiler", () => {
@@ -111,6 +201,8 @@ describe("automation template compiler", () => {
     });
     expect(first.actions[1]).toMatchObject({
       id: "send",
+      actionId: "emails.send",
+      manifestVersion: "1.2.3",
       dependsOn: ["lookup"],
       input: {
         contactId: "${{ steps.lookup.outputs.contactId }}",
@@ -118,6 +210,7 @@ describe("automation template compiler", () => {
         urgent: false,
       },
     });
+    expect(first.triggers[0]?.metadata).toEqual({ requestedFor: "owner@example.test" });
     expect(first.metadata?.template).toEqual({
       publicOutputs: { contactId: "${{ steps.lookup.outputs.contactId }}" },
       schemaVersion: "1.0",
@@ -170,6 +263,18 @@ describe("automation template compiler", () => {
     const unresolved = validTemplate();
     unresolved.automation.actions[0]!.input = { value: "${{ inputs. }}" };
     expect(() => validateAutomationTemplate(unresolved)).toThrow("unresolved automation template reference");
+  });
+
+  test("rejects caller interpolation in static actionId", () => {
+    const dynamicActionId = validTemplate();
+    dynamicActionId.automation.actions[0]!.actionId = "${{ inputs.recipient }}";
+    expect(() => validateAutomationTemplate(dynamicActionId)).toThrow("automation action send actionId must be a static declared string");
+  });
+
+  test("rejects caller interpolation in static manifestVersion", () => {
+    const dynamicManifestVersion = validTemplate();
+    dynamicManifestVersion.automation.actions[0]!.manifestVersion = "${{ inputs.recipient }}";
+    expect(() => validateAutomationTemplate(dynamicManifestVersion)).toThrow("automation action send manifestVersion must be a static declared string");
   });
 
   test("rejects undeclared inputs, unknown output steps, and undeclared step outputs", () => {
@@ -336,6 +441,72 @@ describe("automation template registry and installation", () => {
       expect(store.requireAutomation(v1.spec.id).spec).toEqual(v1.spec);
     } finally {
       store.close();
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("atomically rejects conflicting installs across two real store connections and preserves the winner digest", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "hasna-automation-template-collision-"));
+    const dbPath = join(dataDir, "automations.db");
+    const readyA = join(dataDir, "worker-a.ready");
+    const readyB = join(dataDir, "worker-b.ready");
+    try {
+      const [left, right] = await Promise.all([
+        runCollisionWorker({
+          dbPath,
+          label: "left",
+          readyPath: readyA,
+          peerReadyPath: readyB,
+          recipient: "left@example.test",
+        }),
+        runCollisionWorker({
+          dbPath,
+          label: "right",
+          readyPath: readyB,
+          peerReadyPath: readyA,
+          recipient: "right@example.test",
+        }),
+      ]);
+      const results = [left, right];
+      const successes = results.filter((result) => result.outcome === "success");
+      const conflicts = results.filter((result) => result.outcome === "error");
+
+      expect(successes).toHaveLength(1);
+      expect(conflicts).toHaveLength(1);
+      expect(conflicts[0]?.message).toContain("immutable template installs cannot overwrite it");
+
+      const winner = successes[0]!;
+      const loser = conflicts[0]!;
+      const expectedRegistry = new AutomationTemplateRegistry();
+      expectedRegistry.register(validTemplate());
+      const expectedByLabel = {
+        left: previewAutomationTemplate(expectedRegistry, {
+          slug: "contact-followup",
+          version: "1.0.0",
+          inputs: { recipient: "left@example.test", settings: { locale: "en" } },
+        }),
+        right: previewAutomationTemplate(expectedRegistry, {
+          slug: "contact-followup",
+          version: "1.0.0",
+          inputs: { recipient: "right@example.test", settings: { locale: "en" } },
+        }),
+      };
+      const expectedWinner = expectedByLabel[winner.label as "left" | "right"];
+      const expectedLoser = expectedByLabel[loser.label as "left" | "right"];
+      const persistedStore = new AutomationsStore({ dbPath });
+      try {
+        const persisted = persistedStore.requireAutomation("template:contact-followup:1.0.0");
+        expect(winner.result!.spec).toEqual(expectedWinner.spec);
+        expect(persisted.spec).toEqual(expectedWinner.spec);
+        expect(winner.result!.receipt.automation.specDigest).toBe(
+          expectedWinner.receipt.automation.specDigest,
+        );
+        expect(expectedLoser.receipt.automation.specDigest).not.toBe(expectedWinner.receipt.automation.specDigest);
+        expect(persistedStore.listAutomations()).toHaveLength(1);
+      } finally {
+        persistedStore.close();
+      }
+    } finally {
       rmSync(dataDir, { recursive: true, force: true });
     }
   });
