@@ -8,6 +8,12 @@ All notable changes to this project will be documented in this file.
 
 - **Channel creation is atomic across validation, insertion, and creator membership.** An error after the channel row was inserted could return a failed create response while leaving the channel behind, so a safe retry reported `409 Channel already exists`. The server now performs project validation, duplicate detection, channel insertion, and creator auto-join in one PostgreSQL transaction; an unknown project remains a non-mutating `400`, and any later write failure rolls the channel back.
 
+## 0.5.45 - 2026-08-11
+
+### Fixed
+
+- **Inbox self-suppression now requires both a declared seat identity and its per-seat content signature.** Signed own channel posts across the seat's identity union are suppressed, while unsigned same-name peer traffic, direct messages, blocker delivery, and cursor advancement remain visible (#152).
+
 ## 0.5.44 - 2026-08-10
 
 ### Added
