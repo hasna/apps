@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.14.83 — Bound complete project-resource traversal
+
+- Bound complete traversal in both the internal producer and public SDK from
+  the first page's declared total and effective page size, so endlessly
+  changing cursor chains cannot run without limit.
+- Reject repeated or missing continuation cursors and contradictory
+  `has_more: false` pages that still provide a cursor, while preserving
+  collection-revision, project, resource-kind, duplicate-ID, and final-count
+  integrity checks.
+- Reject non-positive SDK page sizes before fetching and keep the local,
+  authenticated HTTP, CLI `--all`, and exact stable-ID readback paths aligned.
+
 ## 0.14.82 — Enumerate complete project resources
 
 - Add `mementos project-resources <project-id>` plus local authority, REST,
