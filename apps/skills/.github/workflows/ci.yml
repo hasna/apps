@@ -157,7 +157,6 @@ jobs:
           "$RUNNER_TEMP/gitleaks-bin/gitleaks" dir "$head_tree" \
             --redact \
             --no-banner \
-            --platform github \
             --exit-code 1
 
   ci:

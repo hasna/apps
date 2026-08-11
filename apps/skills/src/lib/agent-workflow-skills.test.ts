@@ -71,6 +71,11 @@ function secretScanContractFailures(workflow: string): string[] {
   if (/actions\/checkout@(v\d+|main|master)\b/.test(secretScan)) {
     failures.push("floating checkout");
   }
+  if (
+    /gitleaks" dir "\$head_tree"[\s\S]*?--platform github[\s\S]*?--exit-code 1/.test(secretScan)
+  ) {
+    failures.push("unsupported tree platform flag");
+  }
   if (secretScan.includes("--no-redact")) failures.push("disabled redaction");
   return failures;
 }
@@ -278,6 +283,14 @@ describe("repository-managed agent workflow skills", () => {
           '          "$RUNNER_TEMP/gitleaks-bin/gitleaks" git "$head_tree" \\\n',
         ),
         "gitleaks checked-out tree scan",
+      ],
+      [
+        "unsupported tree platform flag",
+        workflow.replace(
+          '          "$RUNNER_TEMP/gitleaks-bin/gitleaks" dir "$head_tree" \\\n            --redact',
+          '          "$RUNNER_TEMP/gitleaks-bin/gitleaks" dir "$head_tree" \\\n            --platform github \\\n            --redact',
+        ),
+        "unsupported tree platform flag",
       ],
       [
         "disabled redaction",
