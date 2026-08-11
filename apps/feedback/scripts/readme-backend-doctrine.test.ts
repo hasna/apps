@@ -28,6 +28,14 @@ describe("README backend doctrine", () => {
     expect(readme).toContain("HASNA_FEEDBACK_DATABASE_URL");
   });
 
+  test("makes multi-user server APIs fail closed with scoped tokens", () => {
+    expect(readme).toContain("sharedDeployment: true");
+    expect(readme).toContain("FEEDBACK_SUBMIT_TOKEN");
+    expect(readme).toContain("FEEDBACK_READ_TOKEN");
+    expect(readme).toContain("FEEDBACK_TRIAGE_TOKEN");
+    expect(readme).toContain("FEEDBACK_EXPORT_TOKEN");
+  });
+
   test("does not teach retired placement modes", () => {
     expect(retiredModeViolations(readme)).toEqual([]);
   });

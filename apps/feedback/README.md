@@ -46,7 +46,8 @@ feedback serve --host 127.0.0.1 --port 8787
 ```
 
 Set `FEEDBACK_API_TOKEN` to require bearer-token auth for every API request.
-Multi-user server endpoints should use scoped tokens instead of one broad token:
+Multi-user server endpoints should set `sharedDeployment: true` on
+`createFeedbackHandler()` and use scoped tokens instead of one broad token:
 
 - submit: accepts browser or app-server submissions.
 - read: lists feedback, reads one item, and reads stats.
@@ -54,10 +55,11 @@ Multi-user server endpoints should use scoped tokens instead of one broad token:
 - export: streams JSONL exports.
 
 For public collection, enable public submit only at the app backend or feedback
-service boundary and keep read, triage, and export scoped. On a server API,
-read, triage, and export routes fail closed when their scoped token is missing.
-Submit requests are still checked for spam-like payloads,
-duplicate recent submissions, and per-client rate limits before storage writes.
+service boundary and keep read, triage, and export scoped. When
+`sharedDeployment: true` is set, read, triage, and export routes fail closed
+when their scoped token is missing. Submit requests are still checked for
+spam-like payloads, duplicate recent submissions, and per-client rate limits
+before storage writes.
 
 Submit feedback:
 
@@ -316,7 +318,13 @@ import { createFeedbackHandler, type FeedbackStore } from "@hasna/feedback";
 const postgresStore: FeedbackStore = createYourFeedbackStoreAdapter();
 const handler = createFeedbackHandler({
   store: postgresStore,
-  apiToken: process.env.FEEDBACK_API_TOKEN,
+  sharedDeployment: true,
+  tokens: {
+    submit: process.env.FEEDBACK_SUBMIT_TOKEN,
+    read: process.env.FEEDBACK_READ_TOKEN,
+    triage: process.env.FEEDBACK_TRIAGE_TOKEN,
+    export: process.env.FEEDBACK_EXPORT_TOKEN,
+  },
 });
 ```
 
