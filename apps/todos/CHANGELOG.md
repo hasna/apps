@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **npm release review receipts stay out of GitHub Actions step preambles.**
+  Both receipt-consuming steps now source the capability-bearing receipt from
+  the `npm-release` environment secret surface while preserving the existing
+  exact package, version, tag, commit, workflow, reviewer, and signature gates.
+- **The next optional AI companion candidate is `@hasna/todos-ai@0.1.2`.** The
+  unpublished candidate carries the masked receipt-delivery regression needed
+  for the real negative/positive release-workflow verification.
+
 ## [0.15.29] - 2026-08-11
 
 ### Fixed
