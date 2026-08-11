@@ -46,6 +46,41 @@ describe("dns desired-state planning", () => {
     ]).unchanged).toBe(1);
   });
 
+  it("classifies proxy-state create, update, and unchanged records during post-apply verification", () => {
+    const desired = [
+      { type: "A", name: "new", value: "192.0.2.20", ttl: 300, proxied: true },
+      { type: "CNAME", name: "preview", value: "origin.example.com", ttl: 300, proxied: true },
+      { type: "CNAME", name: "direct", value: "origin.example.com", ttl: 300, proxied: false },
+    ];
+    const beforeApply = [
+      { ...desired[1]!, proxied: false },
+      desired[2]!,
+    ];
+
+    const plan = createDnsPlan("example.com", beforeApply, desired);
+    expect(plan).toMatchObject({ creates: 1, updates: 1, deletes: 0, unchanged: 1 });
+    expect(plan.operations).toMatchObject([
+      { op: "create", record: { name: "new", proxied: true } },
+      { op: "update", record: { name: "preview", proxied: true }, current: { proxied: false } },
+      { op: "unchanged", record: { name: "direct", proxied: false }, current: { proxied: false } },
+    ]);
+
+    const wrongProxyState = [desired[0]!, { ...desired[1]!, proxied: false }, desired[2]!];
+    const failedVerification = createDnsPlan("example.com", wrongProxyState, desired);
+    expect(failedVerification).toMatchObject({ creates: 0, updates: 1, deletes: 0, unchanged: 2 });
+    expect(failedVerification.operations.find((operation) => operation.op === "update")).toMatchObject({
+      record: { name: "preview", proxied: true },
+      current: { name: "preview", proxied: false },
+    });
+
+    expect(createDnsPlan("example.com", desired, desired)).toMatchObject({
+      creates: 0,
+      updates: 0,
+      deletes: 0,
+      unchanged: 3,
+    });
+  });
+
   it("creates create/update/delete/unchanged operations", () => {
     const plan = createDnsPlan("example.com", [
       { type: "A", name: "@", value: "192.0.2.1", ttl: 300 },
