@@ -1208,11 +1208,11 @@ describe("readDigest", () => {
     subscribeToChannelNotifications("digest-notify", "reader");
     const msg = sendMessage({ from: "alice", to: "digest-notify", channel: "digest-notify", content: "notify me" });
 
-    expect(readChannelNotifications({ agent: "reader", channel: "digest-notify", unread_only: true })).toHaveLength(1);
+    expect(readChannelNotifications({ agent: "reader", channel: "digest-notify", unread_only: true }).notifications).toHaveLength(1);
     const result = readDigest({ channel: "digest-notify", mark_read: true, reader: "reader" });
 
     expect(result.message_ids).toEqual([msg.id]);
-    expect(readChannelNotifications({ agent: "reader", channel: "digest-notify", unread_only: true })).toHaveLength(0);
+    expect(readChannelNotifications({ agent: "reader", channel: "digest-notify", unread_only: true }).notifications).toHaveLength(0);
   });
 
   test("supports unread-only mode explicitly", () => {

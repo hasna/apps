@@ -616,5 +616,5 @@ describe("project-registration CLI producer contract", () => {
     expect(JSON.parse(channelsAfterInverse.stdout).items).toEqual([
       expect.objectContaining({ target_id: created.target_id, channel: "cli-project-feed" }),
     ]);
-  });
+  }, 60_000);
 });

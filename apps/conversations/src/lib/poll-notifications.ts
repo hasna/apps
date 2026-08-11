@@ -6,7 +6,7 @@
 // to learn two vocabularies for the same outage.
 
 import { createPollHealth, type PollHealthReporter } from "./poll-health.js";
-import type { ChannelNotification } from "../types.js";
+import type { ChannelNotification, ChannelNotificationPage } from "../types.js";
 
 /** The slice of the store this loop needs; narrow so tests can supply a double. */
 export interface NotificationPollStore {
@@ -16,7 +16,7 @@ export interface NotificationPollStore {
     limit?: number;
     mark_read?: boolean;
     include_content?: boolean;
-  }): Promise<ChannelNotification[]>;
+  }): Promise<ChannelNotification[] | ChannelNotificationPage>;
   markChannelNotificationsRead(agent: string, messageIds: number[]): Promise<number>;
 }
 
@@ -111,12 +111,13 @@ export async function readChannelNotificationsUnion(
   const idsByAgent: Array<{ agent: string; messageIds: number[] }> = [];
 
   for (const agent of opts.agents) {
-    const rows = await store.readChannelNotifications({
+    const result = await store.readChannelNotifications({
       agent,
       unread_only: opts.unread_only,
       limit: opts.limit,
       include_content: opts.include_content,
     });
+    const rows = Array.isArray(result) ? result : result.notifications;
     idsByAgent.push({ agent, messageIds: rows.map((row) => row.message_id) });
     for (const row of rows) {
       if (!byId.has(row.message_id)) byId.set(row.message_id, row);

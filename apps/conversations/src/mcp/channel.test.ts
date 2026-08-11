@@ -86,7 +86,7 @@ describe("channel bridge delivery", () => {
       });
 
       await waitFor(() => attempts >= 1);
-      expect(readChannelNotifications({ agent: "watcher", unread_only: true })).toHaveLength(1);
+      expect(readChannelNotifications({ agent: "watcher", unread_only: true }).notifications).toHaveLength(1);
       expect(delivered).toHaveLength(0);
 
       allowDelivery = true;
@@ -97,7 +97,7 @@ describe("channel bridge delivery", () => {
       expect(delivered[0].params.meta.channel).toBe("notify-bridge");
       expect(delivered[0].params.content).toContain("alice posted in #notify-bridge");
       expect(delivered[0].params.content).toContain("Preview only for channel message");
-      expect(readChannelNotifications({ agent: "watcher", unread_only: true })).toHaveLength(0);
+      expect(readChannelNotifications({ agent: "watcher", unread_only: true }).notifications).toHaveLength(0);
     } finally {
       stop();
     }
@@ -130,7 +130,7 @@ describe("channel bridge delivery", () => {
       insertLegacyChannelMessage("notify-bridge-redact", `legacy ${blocked}`);
       await waitFor(() => delivered.length === 1);
 
-      expect(delivered[0].params.content).toContain("[REDACTED:DATABASE URL]");
+      expect(delivered[0].params.content).toContain("[REDACTED:DATABASE_URL]");
       expect(delivered[0].params.content).not.toContain(blocked);
     } finally {
       stop();

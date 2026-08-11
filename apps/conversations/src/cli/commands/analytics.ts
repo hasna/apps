@@ -220,11 +220,12 @@ export function registerAnalyticsCommands(program: Command): void {
       const myChannels = await store.getMemberChannels(agent);
 
       const subscriptions = await store.listChannelNotificationSubscriptions(agent);
-      const channelNotifications = await store.readChannelNotifications({
+      const channelNotificationPage = await store.readChannelNotifications({
         agent,
         unread_only: true,
         limit: 5,
       });
+      const channelNotifications = channelNotificationPage.notifications;
 
       // Recent DMs (last 3 messages to me) — "recent" means newest N. Requested
       // explicitly (desc, then reversed to a chronological transcript) instead
@@ -240,7 +241,7 @@ export function registerAnalyticsCommands(program: Command): void {
         unread_dms: unreadDMs,
         channels: myChannels,
         channel_subscriptions: subscriptions,
-        channel_notifications: channelNotifications,
+        channel_notifications: channelNotificationPage,
         recent_dms: recentDMs,
       };
 

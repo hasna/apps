@@ -39,6 +39,22 @@ import {
   assembleDigest,
   type DigestNorm,
 } from "../messages.js";
+import {
+  COLLECTION_DEFAULT_LIMIT,
+  COLLECTION_MAX_TIMEOUT_MS,
+  COLLECTION_MAX_MAX_BYTES,
+  resolveCollectionLimit,
+  resolveCollectionMaxBytes,
+  resolveCollectionOffset,
+  resolveCollectionPreviewBytes,
+  resolveCollectionTimeoutMs,
+  previewAsCompatibilityMessage,
+} from "../message-previews.js";
+import type {
+  ChannelNotificationPage,
+  IncidentProjectionRecord,
+  MessagePreviewPage,
+} from "../../types.js";
 
 /**
  * The row ceiling the hosted `/messages` route clamps every read to.
@@ -173,6 +189,9 @@ export class ApiStore implements ConversationsStore {
 
   private async get<T>(path: string, query?: Q): Promise<T> {
     return this.t.get<T>(path, query ? { query: prune(query) } : undefined);
+  }
+  private async getBounded<T>(path: string, query: Q, timeoutMs: number): Promise<T> {
+    return this.t.get<T>(path, { query: prune(query), timeoutMs, retry: false });
   }
   private async post<T>(path: string, body?: unknown, query?: Q): Promise<T> {
     return this.t.post<T>(path, body, query ? { query: prune(query) } : undefined);
@@ -396,20 +415,32 @@ export class ApiStore implements ConversationsStore {
     return (body.channels ?? []) as never;
   };
   readChannelNotifications: ConversationsStore["readChannelNotifications"] = async (opts) => {
-    const body = await this.get<{ notifications?: unknown[] }>("/channel-notifications/inbox", {
+    const limit = resolveCollectionLimit(opts.limit);
+    const cursor = resolveCollectionOffset(opts.cursor);
+    const maxBytes = resolveCollectionMaxBytes(opts.max_bytes);
+    const previewBytes = resolveCollectionPreviewBytes(opts.preview_bytes);
+    const timeoutMs = resolveCollectionTimeoutMs(opts.timeout_ms);
+    const page = await this.getBounded<ChannelNotificationPage>("/channel-notifications/inbox", {
       agent: opts.agent,
       channel: opts.channel ? normalizeChannelName(opts.channel) : undefined,
       unread_only: opts.unread_only ? true : undefined,
-      limit: opts.limit,
+      limit,
+      cursor,
+      max_bytes: maxBytes,
+      preview_bytes: previewBytes,
+      timeout_ms: timeoutMs,
       since: normalizeSince(opts.since),
       include_content: opts.include_content ? true : undefined,
-    });
-    const notifications = (body.notifications ?? []) as Awaited<ReturnType<ConversationsStore["readChannelNotifications"]>>;
-    if (opts.mark_read && notifications.length > 0) {
-      await this.markChannelNotificationsRead(opts.agent, notifications.map((row) => row.message_id));
-      for (const row of notifications) row.unread = false;
+    }, timeoutMs);
+    if (opts.mark_read && page.notifications.length > 0) {
+      const markedRead = await this.markChannelNotificationsRead(opts.agent, page.notifications.map((row) => row.message_id));
+      return {
+        ...page,
+        marked_read: markedRead,
+        notifications: page.notifications.map((row) => ({ ...row, unread: false })),
+      } as never;
     }
-    return notifications as never;
+    return page as never;
   };
   markChannelNotificationsRead: ConversationsStore["markChannelNotificationsRead"] = async (agent, messageIds) => {
     const body = await this.post<{ marked?: number }>("/channel-notifications/read", { agent, message_ids: messageIds });
@@ -942,36 +973,90 @@ export class ApiStore implements ConversationsStore {
   };
   readMessages: ConversationsStore["readMessages"] = async (opts) => {
     const o = opts ?? {};
-    const since = normalizeSince(o.since);
-    const limit = resolveReadLimit(o);
-    // A bare `limit` — and a bare `since`, which falls back to the same default
-    // cap — is a recency window: the server must SELECT the newest N. Asking for
-    // `asc` returned the oldest N and no client-side sort could have repaired it:
-    // the newest rows never left the server (todos 2c25973b).
-    // Resolved against the NORMALIZED since, so the ordering decision matches the
-    // filter the server actually receives ("7d" → an ISO stamp, blank → no filter).
-    const window = resolveReadWindow({ ...o, since });
-    const order = window.select;
-    const res = await this.get<{ messages?: Record<string, unknown>[] }>("/messages", {
-      limit, order, offset: o.offset, session: o.session_id, from: o.from, to: o.to,
-      channel: o.channel ? normalizeChannelName(o.channel) : undefined, project_id: o.project_id,
-      since, since_id: o.since_id, unread_only: o.unread_only ? true : undefined,
+    const window = resolveReadWindow({ ...o, since: normalizeSince(o.since) });
+    // Keep the legacy request shape intact: the server owns its collection
+    // ceiling, while the response remains preview-only. This preserves the
+    // current newest-window contract for callers that deliberately ask above
+    // the server ceiling without weakening the bounded server implementation.
+    const page = await this.getBounded<MessagePreviewPage>("/messages", {
+      limit: o.latest ?? o.limit ?? COLLECTION_DEFAULT_LIMIT,
+      cursor: resolveCollectionOffset(o.offset),
+      order: window.select,
+      session: o.session_id,
+      from: o.from,
+      to: o.to,
+      channel: o.channel ? normalizeChannelName(o.channel) : undefined,
+      project_id: o.project_id,
+      since: normalizeSince(o.since),
+      since_id: o.since_id,
+      unread_only: o.unread_only ? true : undefined,
       threads_only: o.threads_only ? true : undefined,
-      include_reply_counts: o.include_reply_counts ? true : undefined, mentions_only: o.mentions_only,
-    });
-    const rows = res?.messages ?? [];
-    if (window.reverse) rows.reverse();
-    let messages = rows.map(parseMessage);
-    if (o.max_content_length && o.max_content_length > 0) {
-      const max = o.max_content_length;
-      messages = messages.map((m) => (m.content.length > max ? { ...m, content: m.content.slice(0, max) + "…", truncated: true } : m));
-    }
-    if (o.compact) return messages.map(compactMessage) as never;
-    return messages as never;
+      include_reply_counts: o.include_reply_counts ? true : undefined,
+      mentions_only: o.mentions_only,
+      max_bytes: COLLECTION_MAX_MAX_BYTES,
+      preview_bytes: resolveCollectionPreviewBytes(o.max_content_length),
+      timeout_ms: COLLECTION_MAX_TIMEOUT_MS,
+      detail: "preview",
+    }, COLLECTION_MAX_TIMEOUT_MS);
+    const previews = window.reverse ? [...page.messages].reverse() : page.messages;
+    return previews.map(previewAsCompatibilityMessage) as never;
+  };
+  readMessagePreviews: ConversationsStore["readMessagePreviews"] = async (opts = {}) => {
+    const limit = resolveCollectionLimit(opts.limit);
+    const cursor = resolveCollectionOffset(opts.offset);
+    const maxBytes = resolveCollectionMaxBytes(opts.max_bytes);
+    const previewBytes = resolveCollectionPreviewBytes(opts.preview_bytes ?? opts.max_content_length);
+    const timeoutMs = resolveCollectionTimeoutMs(opts.timeout_ms);
+    return await this.getBounded<MessagePreviewPage>("/messages", {
+      limit,
+      cursor,
+      order: resolveReadWindow({ ...opts, since: normalizeSince(opts.since) }).select,
+      session: opts.session_id,
+      from: opts.from,
+      to: opts.to,
+      channel: opts.channel ? normalizeChannelName(opts.channel) : undefined,
+      project_id: opts.project_id,
+      since: normalizeSince(opts.since),
+      since_id: opts.since_id,
+      unread_only: opts.unread_only ? true : undefined,
+      threads_only: opts.threads_only ? true : undefined,
+      include_reply_counts: opts.include_reply_counts ? true : undefined,
+      mentions_only: opts.mentions_only,
+      max_bytes: maxBytes,
+      preview_bytes: previewBytes,
+      timeout_ms: timeoutMs,
+      detail: "preview",
+    }, timeoutMs) as never;
   };
   searchMessages: ConversationsStore["searchMessages"] = async (opts) => {
-    const page = await this.searchMessagesPage(opts);
-    return page.items as never;
+    const page = await this.searchMessagePreviews({ ...opts, max_bytes: COLLECTION_MAX_MAX_BYTES });
+    return page.messages.map((preview) => ({
+      ...previewAsCompatibilityMessage(preview),
+      snippet: null,
+      relevance_score: preview.relevance_score ?? 0,
+    })) as never;
+  };
+  searchMessagePreviews: ConversationsStore["searchMessagePreviews"] = async (opts) => {
+    const limit = resolveCollectionLimit(opts.limit);
+    const cursor = resolveCollectionOffset(opts.offset);
+    const maxBytes = resolveCollectionMaxBytes(opts.max_bytes);
+    const previewBytes = resolveCollectionPreviewBytes(opts.preview_bytes ?? opts.snippet_length);
+    const timeoutMs = resolveCollectionTimeoutMs(opts.timeout_ms);
+    return await this.getBounded<MessagePreviewPage>("/messages", {
+      q: opts.query,
+      limit,
+      cursor,
+      order: "desc",
+      channel: opts.channel ? normalizeChannelName(opts.channel) : undefined,
+      from: opts.from,
+      to: opts.to,
+      since: opts.since === undefined ? undefined : normalizeExactIsoTimestamp(opts.since, "search since timestamp"),
+      until: opts.until === undefined ? undefined : normalizeExactIsoTimestamp(opts.until, "search until timestamp"),
+      max_bytes: maxBytes,
+      preview_bytes: previewBytes,
+      timeout_ms: timeoutMs,
+      detail: "preview",
+    }, timeoutMs) as never;
   };
   searchMessagesPage: ConversationsStore["searchMessagesPage"] = async (opts) => {
     const since = opts.since === undefined ? undefined : normalizeExactIsoTimestamp(opts.since, "search since timestamp");
@@ -983,13 +1068,18 @@ export class ApiStore implements ConversationsStore {
       : 0;
     // Over-fetch one row so an exhausted page is distinguishable from a full
     // one. The server may clamp this back down; that case is handled below.
-    const res = await this.get<{ messages?: Record<string, unknown>[]; has_more?: boolean; next_offset?: number | null }>("/messages", {
-      q: opts.query,
+    const previewPage = await this.searchMessagePreviews({
+      ...opts,
+      since,
       limit: requested + 1,
-      offset: offset > 0 ? offset : undefined,
-      order: "desc", channel: opts.channel ? normalizeChannelName(opts.channel) : undefined, from: opts.from, to: opts.to, since,
+      offset,
+      max_bytes: COLLECTION_MAX_MAX_BYTES,
     });
-    const rows = (res?.messages ?? []).map((row) => ({ ...parseMessage(row), snippet: null, relevance_score: 0 }));
+    const rows = previewPage.messages.map((preview) => ({
+      ...previewAsCompatibilityMessage(preview),
+      snippet: null,
+      relevance_score: preview.relevance_score ?? 0,
+    }));
 
     // A server new enough to report truncation is authoritative — it can see
     // the population beyond its WIRE page, and the heuristic below cannot.
@@ -999,10 +1089,10 @@ export class ApiStore implements ConversationsStore {
     // wire page exhausted the population. Likewise, the server's next_offset
     // advances past every wire row, so use the number actually handed to the
     // caller or the trimmed probe row would be skipped forever.
-    if (typeof res?.has_more === "boolean") {
+    if (typeof previewPage.has_more === "boolean") {
       const clientHasProbeRow = rows.length > requested;
       const items = clientHasProbeRow ? rows.slice(0, requested) : rows;
-      const hasMore = clientHasProbeRow || res.has_more;
+      const hasMore = clientHasProbeRow || previewPage.has_more;
       return {
         items,
         has_more: hasMore,
@@ -1076,22 +1166,63 @@ export class ApiStore implements ConversationsStore {
     })) as never;
   };
   exportMessages: ConversationsStore["exportMessages"] = async (opts) => {
-    const body = await this.get<{ export?: string }>("/messages/export", opts as Q);
-    return String(body?.export ?? "") as never;
+    const body = await this.post<{ artifact?: unknown }>("/messages/exports", opts ?? {});
+    if (!body?.artifact) throw new Error("Message export response did not include an artifact");
+    return body.artifact as never;
   };
   getThreadReplies: ConversationsStore["getThreadReplies"] = async (messageId) => {
-    const body = await this.get<{ messages?: Record<string, unknown>[] }>(`/messages/${encodeURIComponent(String(messageId))}/replies`);
-    return (body?.messages ?? []).map(parseMessage) as never;
+    const timeoutMs = resolveCollectionTimeoutMs(undefined);
+    const body = await this.getBounded<MessagePreviewPage>(
+      `/messages/${encodeURIComponent(String(messageId))}/replies`,
+      { detail: "preview", timeout_ms: timeoutMs },
+      timeoutMs,
+    );
+    return body.messages.map(previewAsCompatibilityMessage) as never;
   };
   getUnreadBlockers: ConversationsStore["getUnreadBlockers"] = async (agent, opts) => {
-    const body = await this.get<{ messages?: Record<string, unknown>[] }>("/messages", { to: agent, unread_only: true, blocking_only: true, ...(opts as Q) });
-    return (body?.messages ?? []).map(parseMessage) as never;
+    const page = await this.getUnreadBlockerPreviews(agent, { ...opts, max_bytes: COLLECTION_MAX_MAX_BYTES });
+    return page.messages.map(previewAsCompatibilityMessage) as never;
+  };
+  getUnreadBlockerPreviews: ConversationsStore["getUnreadBlockerPreviews"] = async (agent, opts = {}) => {
+    const limit = resolveCollectionLimit(opts.limit);
+    const cursor = resolveCollectionOffset(opts.offset);
+    const maxBytes = resolveCollectionMaxBytes(opts.max_bytes);
+    const previewBytes = resolveCollectionPreviewBytes(opts.preview_bytes);
+    const timeoutMs = resolveCollectionTimeoutMs(opts.timeout_ms);
+    return await this.getBounded<MessagePreviewPage>("/messages/blockers", {
+      agent,
+      limit,
+      cursor,
+      max_bytes: maxBytes,
+      preview_bytes: previewBytes,
+      timeout_ms: timeoutMs,
+      detail: "preview",
+    }, timeoutMs) as never;
+  };
+  readMentionPreviews: ConversationsStore["readMentionPreviews"] = async (agent, opts = {}) => {
+    const limit = resolveCollectionLimit(opts.limit);
+    const cursor = resolveCollectionOffset(opts.offset);
+    const maxBytes = resolveCollectionMaxBytes(opts.max_bytes);
+    const previewBytes = resolveCollectionPreviewBytes(opts.preview_bytes);
+    const timeoutMs = resolveCollectionTimeoutMs(opts.timeout_ms);
+    return await this.getBounded<MessagePreviewPage>("/messages/for-agent", {
+      agent,
+      channel: opts.channel ? normalizeChannelName(opts.channel) : undefined,
+      unread_only: opts.unread_only ? true : undefined,
+      limit,
+      cursor,
+      max_bytes: maxBytes,
+      preview_bytes: previewBytes,
+      timeout_ms: timeoutMs,
+      detail: "preview",
+    }, timeoutMs) as never;
   };
   getMessagesForAgent: ConversationsStore["getMessagesForAgent"] = async (agent, opts) => {
-    const body = await this.get<{ items?: Array<{ message: Record<string, unknown>; mention_id: number }> }>("/messages/for-agent", {
-      agent, channel: opts?.channel, unread_only: opts?.unread_only ? true : undefined, limit: opts?.limit,
-    });
-    return (body?.items ?? []).map((r) => ({ message: parseMessage(r.message), mention_id: r.mention_id })) as never;
+    const page = await this.readMentionPreviews(agent, { ...opts, max_bytes: COLLECTION_MAX_MAX_BYTES });
+    return page.messages.map((preview) => ({
+      message: previewAsCompatibilityMessage(preview),
+      mention_id: preview.mention_id ?? 0,
+    })) as never;
   };
   getMessageReadStatus: ConversationsStore["getMessageReadStatus"] = async (messageId, channel) => {
     const body = await this.get<{ receipts?: unknown[]; unread_by?: string[] }>(`/messages/${encodeURIComponent(String(messageId))}/read-status`, { channel });
@@ -1117,6 +1248,11 @@ export class ApiStore implements ConversationsStore {
   };
   markMentionsRead: ConversationsStore["markMentionsRead"] = async (agent, channel) => {
     const res = await this.post<{ marked?: number }>("/messages/read", { reader: agent, mentions_only: true, channel: channel ? normalizeChannelName(channel) : undefined });
+    return Number(res?.marked ?? 0) as never;
+  };
+  markMentionsReadByIds: ConversationsStore["markMentionsReadByIds"] = async (mentionIds, agent) => {
+    if (mentionIds.length === 0) return 0 as never;
+    const res = await this.post<{ marked?: number }>("/messages/read", { reader: agent, mention_ids: mentionIds });
     return Number(res?.marked ?? 0) as never;
   };
   listUnreadCounts: ConversationsStore["listUnreadCounts"] = async (agent) => {
@@ -1146,10 +1282,17 @@ export class ApiStore implements ConversationsStore {
     }
   };
   getPinnedMessages: ConversationsStore["getPinnedMessages"] = async (opts) => {
-    const res = await this.get<{ messages?: Record<string, unknown>[] }>("/messages/pinned", {
-      channel: opts?.channel ? normalizeChannelName(opts.channel) : undefined, session: opts?.session_id, limit: opts?.limit, offset: opts?.offset,
-    });
-    return (res?.messages ?? []).map(parseMessage) as never;
+    const timeoutMs = resolveCollectionTimeoutMs(undefined);
+    const res = await this.getBounded<MessagePreviewPage>("/messages/pinned", {
+      channel: opts?.channel ? normalizeChannelName(opts.channel) : undefined,
+      session: opts?.session_id,
+      limit: resolveCollectionLimit(opts?.limit),
+      cursor: resolveCollectionOffset(opts?.offset),
+      max_bytes: COLLECTION_MAX_MAX_BYTES,
+      timeout_ms: timeoutMs,
+      detail: "preview",
+    }, timeoutMs);
+    return res.messages.map(previewAsCompatibilityMessage) as never;
   };
   recordReadReceipt: ConversationsStore["recordReadReceipt"] = async (messageId, agent) => {
     await this.markReadCall({ ids: [messageId], reader: agent });
@@ -1162,5 +1305,21 @@ export class ApiStore implements ConversationsStore {
   getReadReceipts: ConversationsStore["getReadReceipts"] = async (messageId) => {
     const res = await this.get<{ receipts?: unknown[] }>(`/messages/${encodeURIComponent(String(messageId))}/receipts`);
     return (res?.receipts ?? []) as never;
+  };
+  appendIncidentProjection: ConversationsStore["appendIncidentProjection"] = async (request) => {
+    const body = await this.post<{ projection?: IncidentProjectionRecord }>("/incident-projections", request);
+    if (!body?.projection) throw new Error("Incident projection response did not include a projection");
+    return body.projection as never;
+  };
+  getIncidentProjection: ConversationsStore["getIncidentProjection"] = async (eventId) => {
+    try {
+      const body = await this.get<{ projection?: IncidentProjectionRecord }>(
+        `/incident-projections/${encodeURIComponent(eventId)}`,
+      );
+      return (body?.projection ?? null) as never;
+    } catch (error) {
+      if (isHttpStatus(error, 404)) return null as never;
+      throw error;
+    }
   };
 }

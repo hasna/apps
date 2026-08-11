@@ -300,7 +300,7 @@ export function registerChannelTools(server: McpServer): void {
       since: args.since,
       mark_read: args.mark_read,
     });
-    return { content: [{ type: "text", text: JSON.stringify({ notifications, count: notifications.length }) }] };
+    return { content: [{ type: "text", text: JSON.stringify(notifications) }] };
   });
 
   registerMcpTool(server, "mark_channel_notifications_read", {

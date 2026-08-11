@@ -220,12 +220,15 @@ export function registerChannelBridge(
       }
 
       if (agent) {
-        const notifications = (await resolveStore().readChannelNotifications({
+        const notificationPage = await resolveStore().readChannelNotifications({
           agent,
           unread_only: true,
           limit: 20,
           mark_read: false,
-        })).sort((left, right) => left.created_at.localeCompare(right.created_at) || left.message_id - right.message_id);
+        });
+        const notifications = notificationPage.notifications.sort(
+          (left, right) => left.created_at.localeCompare(right.created_at) || left.message_id - right.message_id,
+        );
 
         for (const notification of notifications) {
           const delivered = await pushNotification({

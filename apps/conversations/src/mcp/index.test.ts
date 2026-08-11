@@ -369,7 +369,7 @@ describe("channel notification tools", () => {
     }) as any) as any;
     const serialized = JSON.stringify(result);
 
-    expect(serialized).toContain("[REDACTED:DATABASE URL]");
+    expect(serialized).toContain("[REDACTED:DATABASE_URL]");
     expect(serialized).not.toContain(blocked);
   });
 });

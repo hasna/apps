@@ -1601,7 +1601,7 @@ describe("conversations-serve", () => {
         expect.objectContaining({ channel: target, agent: "belisarius" }),
       ]);
 
-      const messages = await fetch(`${renameBase}/v1/messages?channel=${target}`, {
+      const messages = await fetch(`${renameBase}/v1/messages?channel=${target}&limit=100`, {
         headers: { "x-api-key": rwKey },
       });
       expect(messages.status).toBe(200);

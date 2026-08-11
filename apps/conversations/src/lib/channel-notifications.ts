@@ -1,6 +1,18 @@
 import { getDb } from "./db.js";
-import type { ChannelNotification, ChannelNotificationSubscription } from "../types.js";
+import type { ChannelNotification, ChannelNotificationPage, ChannelNotificationSubscription } from "../types.js";
 import { normalizeChannelName } from "./channel-names.js";
+import {
+  COLLECTION_MAX_LIMIT,
+  COLLECTION_MAX_PREVIEW_BYTES,
+  COLLECTION_PREVIEW_SCAN_CHARS,
+  RESTRICTED_CHANNEL_PREVIEW,
+  resolveCollectionLimit,
+  resolveCollectionMaxBytes,
+  resolveCollectionOffset,
+  resolveCollectionPreviewBytes,
+  resolveCollectionTimeoutMs,
+  truncateUtf8,
+} from "./message-previews.js";
 import { redactSensitiveText } from "./content-safety.js";
 import { CHANNEL_SUBSCRIPTION_AGENT_ORDER, CHANNEL_SUBSCRIPTION_ALL_ORDER, simpleOrderByClause } from "./list-order.js";
 import { getPresence } from "./presence.js";
@@ -19,12 +31,27 @@ import { resolveSelfSenderId } from "./sender-identity.js";
 export const DEFAULT_PREVIEW_CHARS = 140;
 
 export function buildMessagePreview(content: string, maxChars = DEFAULT_PREVIEW_CHARS): string {
-  const normalized = redactSensitiveText(content)
+  if (content === RESTRICTED_CHANNEL_PREVIEW) return content;
+  const markers: string[] = [];
+  const protectedContent = redactSensitiveText(content).replace(/\[REDACTED:[A-Z_]+\]/g, (marker) => {
+    const placeholder = `REDACTIONMARKER${markers.length}TOKEN`;
+    markers.push(marker);
+    return placeholder;
+  });
+  const normalized = protectedContent
     .replace(/[*#`~_>\-]/g, " ")
     .replace(/\s+/g, " ")
-    .trim();
-  if (normalized.length <= maxChars) return normalized;
-  return normalized.slice(0, Math.max(1, maxChars)).trimEnd() + "…";
+    .trim()
+    .replace(/REDACTIONMARKER(\d+)TOKEN/g, (_match, index) => markers[Number(index)] ?? "[REDACTED]");
+  const boundedMaxChars = Math.min(Math.max(1, maxChars), COLLECTION_MAX_PREVIEW_BYTES);
+  if (normalized.length <= boundedMaxChars) return normalized;
+  return normalized.slice(0, boundedMaxChars).trimEnd() + "…";
+}
+
+export function buildByteBoundedMessagePreview(content: string, maxChars: number, maxBytes: number): string {
+  const preview = buildMessagePreview(content, maxChars);
+  if (preview === RESTRICTED_CHANNEL_PREVIEW) return preview;
+  return truncateUtf8(preview, resolveCollectionPreviewBytes(maxBytes)).text;
 }
 
 export function subscribeToChannelNotifications(
@@ -90,17 +117,76 @@ export interface ReadChannelNotificationsOptions {
   limit?: number;
   since?: string;
   mark_read?: boolean;
-  /**
-   * Also return the full, un-stripped message body as `content`.
-   *
-   * Opt-in, because `preview` is a display string that several callers already
-   * render as-is and adding a second field to every one of them would be a cost
-   * they did not ask for. `preview` is unaffected either way.
-   */
+  cursor?: number;
+  max_bytes?: number;
+  preview_bytes?: number;
+  timeout_ms?: number;
+  /** Legacy explicit detail request; safe page readers never include it. */
   include_content?: boolean;
 }
 
-export function readChannelNotifications(opts: ReadChannelNotificationsOptions): ChannelNotification[] {
+export function finalizeChannelNotificationPage(page: ChannelNotificationPage): ChannelNotificationPage {
+  let finalized = page;
+  for (let index = 0; index < 3; index++) {
+    finalized = { ...finalized, byte_length: Buffer.byteLength(JSON.stringify(finalized), "utf8") };
+  }
+  return finalized;
+}
+
+export function packChannelNotificationPage(
+  candidates: ChannelNotification[],
+  options: { limit?: unknown; cursor?: unknown; max_bytes?: unknown; timeout_ms?: unknown; marked_read?: number } = {},
+): ChannelNotificationPage {
+  const limit = resolveCollectionLimit(options.limit);
+  const cursor = resolveCollectionOffset(options.cursor);
+  const maxBytes = resolveCollectionMaxBytes(options.max_bytes);
+  const timeoutMs = resolveCollectionTimeoutMs(options.timeout_ms);
+  const windowed = candidates.slice(0, limit + 1);
+  const available = windowed.slice(0, limit);
+
+  const build = (notifications: ChannelNotification[], skippedCount: number): ChannelNotificationPage => {
+    const consumed = notifications.length + skippedCount;
+    const hasMore = windowed.length > consumed;
+    return finalizeChannelNotificationPage({
+      notifications,
+      count: notifications.length,
+      limit,
+      cursor,
+      next_cursor: hasMore || skippedCount > 0 ? cursor + consumed : null,
+      has_more: hasMore,
+      skipped_count: skippedCount,
+      byte_length: 0,
+      max_bytes: maxBytes,
+      timeout_ms: timeoutMs,
+      marked_read: Math.max(0, Math.floor(options.marked_read ?? 0)),
+      compact: true,
+      detail_path: "messages/{id}",
+    });
+  };
+
+  let notifications: ChannelNotification[] = [];
+  let skippedCount = 0;
+  for (const candidate of available) {
+    const next = build([...notifications, candidate], skippedCount);
+    if (next.byte_length > maxBytes) {
+      if (notifications.length === 0) skippedCount = 1;
+      break;
+    }
+    notifications = [...notifications, candidate];
+  }
+  const page = build(notifications, skippedCount);
+  if (page.byte_length > maxBytes) {
+    throw new Error(`channel notification envelope exceeds max_bytes (${page.byte_length} > ${maxBytes})`);
+  }
+  return page;
+}
+
+export function readChannelNotifications(opts: ReadChannelNotificationsOptions): ChannelNotificationPage {
+  if (!opts.agent?.trim()) throw new Error("agent must be a non-empty string");
+  if (opts.channel !== undefined && !opts.channel.trim()) throw new Error("channel must be a non-empty string");
+  if (opts.since !== undefined && !Number.isFinite(Date.parse(opts.since))) {
+    throw new Error("since must be a valid ISO 8601 date");
+  }
   const db = getDb();
   const selfSenderId = resolveSelfSenderId(opts.agent, getPresence(opts.agent));
   const conditions: string[] = [
@@ -123,10 +209,13 @@ export function readChannelNotifications(opts: ReadChannelNotificationsOptions):
     conditions.push("snr.message_id IS NULL");
   }
 
-  const limit = Number.isFinite(opts.limit) && (opts.limit as number) > 0
-    ? Math.floor(opts.limit as number)
-    : 20;
+  const limit = resolveCollectionLimit(opts.limit);
+  const cursor = resolveCollectionOffset(opts.cursor);
+  const maxBytes = resolveCollectionMaxBytes(opts.max_bytes);
+  const previewBytes = resolveCollectionPreviewBytes(opts.preview_bytes);
+  const timeoutMs = resolveCollectionTimeoutMs(opts.timeout_ms);
 
+  const restricted = `(lower(COALESCE(m.channel, '')) LIKE '%incident%' OR lower(COALESCE(m.channel, '')) LIKE '%security%' OR lower(COALESCE(m.to_agent, '')) LIKE '%incident%' OR lower(COALESCE(m.to_agent, '')) LIKE '%security%' OR lower(COALESCE(m.session_id, '')) LIKE '%incident%' OR lower(COALESCE(m.session_id, '')) LIKE '%security%')`;
   const rows = db.prepare(`
     SELECT
       m.id AS message_id,
@@ -134,8 +223,8 @@ export function readChannelNotifications(opts: ReadChannelNotificationsOptions):
       m.from_agent,
       m.created_at,
       m.priority,
-      m.content,
-      m.attachments,
+      CASE WHEN ${restricted} THEN '${RESTRICTED_CHANNEL_PREVIEW}' ELSE substr(m.content, 1, ${COLLECTION_PREVIEW_SCAN_CHARS}) END AS preview_source,
+      CASE WHEN json_valid(m.attachments) THEN json_array_length(m.attachments) ELSE 0 END AS attachment_count,
       s.preview_chars,
       snr.message_id AS read_message_id
     FROM messages m
@@ -145,41 +234,58 @@ export function readChannelNotifications(opts: ReadChannelNotificationsOptions):
       ON snr.message_id = m.id AND snr.agent = s.agent
     WHERE ${conditions.join(" AND ")}
     ORDER BY m.created_at DESC, m.id DESC
-    LIMIT ${Math.max(1, Math.min(limit, 500))}
+    LIMIT ${Math.max(1, Math.min(limit + 1, COLLECTION_MAX_LIMIT + 1))}
+    OFFSET ${cursor}
   `).all(...params) as Array<{
     message_id: number;
     channel: string;
     from_agent: string;
     created_at: string;
     priority: "low" | "normal" | "high" | "urgent";
-    content: string;
-    attachments: string | null;
+    preview_source: string;
+    attachment_count: number;
     preview_chars: number;
     read_message_id: number | null;
   }>;
 
-  const notifications = rows.map((row) => ({
+  const candidates = rows.map((row) => ({
     message_id: row.message_id,
     channel: row.channel,
     from_agent: row.from_agent,
     created_at: row.created_at,
     priority: row.priority,
-    preview: buildMessagePreview(row.content, row.preview_chars),
+    preview: buildByteBoundedMessagePreview(row.preview_source, row.preview_chars, previewBytes),
     unread: row.read_message_id == null,
-    has_attachments: !!row.attachments && row.attachments !== "[]",
-    // Redacted on exactly the same terms as the preview. Widening what a
-    // notification carries must not widen what a credential can ride out on:
-    // the preview's redaction is the reason a legacy DSN in the store does not
-    // reach a watcher's terminal, and full content has to clear the same bar.
-    ...(opts.include_content ? { content: redactSensitiveText(row.content) } : {}),
+    has_attachments: row.attachment_count > 0,
   })) satisfies ChannelNotification[];
 
-  if (opts.mark_read && notifications.length > 0) {
-    markChannelNotificationsRead(opts.agent, notifications.map((row) => row.message_id));
-    for (const row of notifications) row.unread = false;
+  let page = packChannelNotificationPage(candidates, { limit, cursor, max_bytes: maxBytes, timeout_ms: timeoutMs });
+  if (opts.include_content && page.notifications.length > 0) {
+    const readContent = db.prepare("SELECT content FROM messages WHERE id = ?");
+    page = finalizeChannelNotificationPage({
+      ...page,
+      notifications: page.notifications.map((notification) => {
+        const row = readContent.get(notification.message_id) as { content: string } | null;
+        return row ? { ...notification, content: redactSensitiveText(row.content) } : notification;
+      }),
+    });
+    if (page.byte_length > maxBytes) {
+      throw new Error(`channel notification envelope exceeds max_bytes (${page.byte_length} > ${maxBytes})`);
+    }
   }
-
-  return notifications;
+  if (opts.mark_read && page.notifications.length > 0) {
+    const projected = finalizeChannelNotificationPage({
+      ...page,
+      marked_read: page.notifications.length,
+      notifications: page.notifications.map((row) => ({ ...row, unread: false })),
+    });
+    if (projected.byte_length > maxBytes) {
+      throw new Error(`channel notification envelope exceeds max_bytes (${projected.byte_length} > ${maxBytes})`);
+    }
+    const markedRead = markChannelNotificationsRead(opts.agent, page.notifications.map((row) => row.message_id));
+    page = finalizeChannelNotificationPage({ ...projected, marked_read: markedRead });
+  }
+  return page;
 }
 
 export function markChannelNotificationsRead(agent: string, messageIds: number[]): number {
@@ -224,6 +330,13 @@ export function baselineChannelNotifications(agent: string): number {
 }
 
 export function markAllChannelNotificationsRead(agent: string, channel?: string): number {
-  const unread = readChannelNotifications({ agent, channel, unread_only: true, limit: 10000 });
-  return markChannelNotificationsRead(agent, unread.map((row) => row.message_id));
+  let cursor = 0;
+  let total = 0;
+  for (;;) {
+    const page = readChannelNotifications({ agent, channel, unread_only: true, limit: 100, cursor, max_bytes: 65_536 });
+    if (page.notifications.length === 0 && page.next_cursor === null) return total;
+    total += markChannelNotificationsRead(agent, page.notifications.map((row) => row.message_id));
+    if (page.next_cursor === null) return total;
+    cursor = page.next_cursor;
+  }
 }

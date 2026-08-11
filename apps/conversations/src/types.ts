@@ -32,6 +32,54 @@ export interface Message {
   redaction?: SendRedactionNotice;
 }
 
+/** Safe collection projection; full bodies remain available only by exact id. */
+export interface MessagePreview {
+  id: number;
+  mention_id?: number;
+  uuid?: string;
+  session_id: string;
+  from_agent: string;
+  to_agent: string;
+  channel: string | null;
+  project_id: string | null;
+  priority: Priority;
+  working_dir: string | null;
+  repository: string | null;
+  branch: string | null;
+  created_at: string;
+  edited_at: string | null;
+  pinned_at: string | null;
+  unread: boolean;
+  blocking: boolean;
+  reply_to: number | null;
+  reply_count?: number;
+  attachment_count: number;
+  has_attachments: boolean;
+  has_metadata: boolean;
+  preview: string;
+  preview_bytes: number;
+  content_bytes: number;
+  truncated: boolean;
+  redacted: boolean;
+  relevance_score?: number;
+}
+
+export interface MessagePreviewPage {
+  messages: MessagePreview[];
+  count: number;
+  limit: number;
+  cursor: number;
+  next_cursor: number | null;
+  has_more: boolean;
+  skipped_count: number;
+  byte_length: number;
+  max_bytes: number;
+  timeout_ms: number;
+  compact: true;
+  detail_path: "messages/{id}";
+  query?: string;
+}
+
 /** Re-exported from content-safety so `Message` stays self-describing. */
 export type { SendRedactionNotice } from "./lib/content-safety.js";
 import type { SendRedactionNotice } from "./lib/content-safety.js";
@@ -105,6 +153,22 @@ export interface ChannelNotification {
    * `preview` is unchanged for every existing consumer.
    */
   content?: string;
+}
+
+export interface ChannelNotificationPage {
+  notifications: ChannelNotification[];
+  count: number;
+  limit: number;
+  cursor: number;
+  next_cursor: number | null;
+  has_more: boolean;
+  skipped_count: number;
+  byte_length: number;
+  max_bytes: number;
+  timeout_ms: number;
+  marked_read: number;
+  compact: true;
+  detail_path: "messages/{id}";
 }
 
 export interface ChannelInfo extends Channel {
@@ -215,7 +279,100 @@ export interface ProjectMessageLinkageRollbackResult {
   replayed?: boolean;
 }
 
+// Canonical append-only Todos incident projections.
+export type IncidentSeverity = "info" | "low" | "medium" | "high" | "critical";
+export type IncidentStatus = "open" | "investigating" | "contained" | "monitoring" | "resolved" | "superseded";
+
+export interface IncidentSnapshotV1 {
+  id: string;
+  title: string;
+  severity: IncidentSeverity;
+  status: IncidentStatus;
+  owner: string;
+  affected_scopes: string[];
+  blocked_scopes: string[];
+  containment: string | null;
+  next_action: string | null;
+  deadline: string | null;
+  closure_evidence: string[];
+  supersedes_id: string | null;
+  superseded_by_id: string | null;
+  resolved_at: string | null;
+  version: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface IncidentProjectionDisplay {
+  from: string;
+  to: string;
+  content: string;
+  channel?: string;
+  project_id?: string;
+  session_id?: string;
+  priority?: Priority;
+  working_dir?: string;
+  repository?: string;
+  branch?: string;
+}
+
+export interface IncidentProjectionRouting {
+  from?: string;
+  to?: string;
+  channel?: string;
+  project_id?: string;
+  session_id?: string;
+}
+
+export interface IncidentProjectionRequestV1 {
+  schema_version: 1;
+  source: "todos";
+  authority_id: string;
+  incident_id: string;
+  transition_id: string;
+  incident_version: number;
+  occurred_at: string;
+  event_id: string;
+  projection_key: string;
+  incident: IncidentSnapshotV1;
+}
+
+export type IncidentProjectionEventV1 = IncidentProjectionRequestV1;
+
+export interface IncidentProjectorContext {
+  tenant_id: string;
+  authority_id: string;
+  routing?: IncidentProjectionRouting;
+}
+
+export interface IncidentProjectionRecord {
+  id: number;
+  event_id: string;
+  projection_key: string;
+  message_id: number;
+  schema_version: 1;
+  source: "todos";
+  tenant_id: string;
+  authority_id: string;
+  incident_id: string;
+  transition_id: string;
+  incident_version: number;
+  occurred_at: string;
+  status: IncidentStatus;
+  severity: IncidentSeverity;
+  blocking: boolean;
+  supersedes_transition_id: string | null;
+  supersedes_incident_id: string | null;
+  superseded_by_incident_id: string | null;
+  canonical_payload: string;
+  payload_hash: string;
+  created_at: string;
+  message: Message;
+  replayed: boolean;
+}
+
 export interface ReadMessagesOptions {
+  id?: number;
   session_id?: string;
   from?: string;
   to?: string;
@@ -231,8 +388,57 @@ export interface ReadMessagesOptions {
   threads_only?: boolean;
   include_reply_counts?: boolean;
   mentions_only?: string;
+  reply_to?: number;
+  pinned_only?: boolean;
   latest?: number;
   offset?: number;
+}
+
+export interface ReadMessagePreviewsOptions extends ReadMessagesOptions {
+  max_bytes?: number;
+  preview_bytes?: number;
+  timeout_ms?: number;
+}
+
+export interface ReadMentionPreviewsOptions {
+  channel?: string;
+  unread_only?: boolean;
+  limit?: number;
+  offset?: number;
+  max_bytes?: number;
+  preview_bytes?: number;
+  timeout_ms?: number;
+}
+
+export type ExportFormat = "json" | "csv";
+export interface ExportMessagesOptions {
+  channel?: string;
+  session_id?: string;
+  from?: string;
+  since?: string;
+  until?: string;
+  format?: ExportFormat;
+  limit?: number;
+  max_bytes?: number;
+  preview_bytes?: number;
+  timeout_ms?: number;
+}
+
+export interface MessageExportArtifact {
+  artifact_id: string;
+  filename: string;
+  path: string | null;
+  download_path: string | null;
+  sha256: string;
+  format: ExportFormat;
+  detail: "preview";
+  count: number;
+  has_more: boolean;
+  skipped_count: number;
+  byte_length: number;
+  max_bytes: number;
+  timeout_ms: number;
+  created_at: string;
 }
 
 export interface SearchMessagesOptions {
@@ -246,6 +452,12 @@ export interface SearchMessagesOptions {
   sort?: "relevance" | "recent";
   snippet_length?: number;
   offset?: number;
+}
+
+export interface SearchMessagePreviewsOptions extends SearchMessagesOptions {
+  max_bytes?: number;
+  preview_bytes?: number;
+  timeout_ms?: number;
 }
 
 export interface SearchResult extends Message {

@@ -347,17 +347,7 @@ export function startDashboardServer(port = 0, host?: string) {
         const format = url.searchParams.get("format") === "csv" ? "csv" : "json";
         const result = await getStore().exportMessages({ channel, session_id: session, from, since, until, format });
 
-        if (format === "csv") {
-          return new Response(result, {
-            status: 200,
-            headers: securityHeaders({
-              "Content-Type": "text/csv; charset=utf-8",
-              "Content-Disposition": "attachment; filename=\"messages.csv\"",
-              "Cache-Control": "no-store",
-            }),
-          });
-        }
-        return jsonResponse(JSON.parse(result));
+        return jsonResponse({ artifact: result });
       }
 
       if (path === "/api/messages/pinned" && req.method === "GET") {
