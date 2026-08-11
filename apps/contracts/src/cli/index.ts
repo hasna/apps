@@ -16,6 +16,7 @@ import { runVendorKit } from "./kit-runner";
 import { runIssueKey } from "./issue-key";
 import { formatArtifactScanReport, resolveAssetInventoryWaivers, scanPublishedArtifact } from "../artifact-scan";
 import { runSafeReadCli } from "./read";
+import { runVerifyWriteCli } from "./verify-write";
 
 function collectJsonFiles(root: string): string[] {
   const stat = statSync(root);
@@ -68,7 +69,7 @@ function preflightJsonUsageErrors(argv: string[]) {
     return false;
   }
 
-  if (!["schemas", "validate", "conformance", "no-cloud-scan", "repo-conformance", "vendor-kit", "issue-key", "artifact-scan", "secure-local-store", "read"].includes(command)) {
+  if (!["schemas", "validate", "conformance", "no-cloud-scan", "repo-conformance", "vendor-kit", "issue-key", "artifact-scan", "secure-local-store", "read", "verify-write"].includes(command)) {
     return reportParserJsonError("commander.unknownCommand", `unknown command '${command}'`);
   }
 
@@ -82,7 +83,7 @@ function preflightJsonUsageErrors(argv: string[]) {
   // command's own flags. Preflighting those against this program's option set
   // would reject `contracts read -- todos list --limit 5` for an option that is
   // not ours to validate. Commander handles it.
-  if (command === "read") {
+  if (command === "read" || command === "verify-write") {
     return false;
   }
 
@@ -507,6 +508,21 @@ export function createContractsProgram() {
     .option("-j, --json", "Output JSON")
     .action((command: string[], options: Record<string, unknown>) => {
       process.exitCode = runSafeReadCli(command ?? [], options as never);
+    });
+
+  program
+    .command("verify-write")
+    .description(
+      "Cheaper than rendering a stored body: compare byte length and SHA-256; prevents appended capability content from reaching output"
+    )
+    .argument("<target>", "Exact object ID requested from the fetch command")
+    .argument("[command...]", "The fetch command to run after --; it must return one JSON object")
+    .requiredOption("--authored <file>", "File containing the exact payload the caller authored")
+    .option("--id-path <path>", "Dotted path to the fetched object's ID", "id")
+    .option("--content-path <path>", "Dotted path to the fetched stored content", "body")
+    .option("-j, --json", "Output metadata-only JSON")
+    .action((target: string, command: string[], options: Record<string, unknown>) => {
+      process.exitCode = runVerifyWriteCli(target, command ?? [], options as never);
     });
 
   program
