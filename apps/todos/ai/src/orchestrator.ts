@@ -36,6 +36,7 @@ import {
   type TodosAiTracePhase,
   type TodosAiTraceRecord,
 } from "./types";
+import { normalizeTodosAiControlSignal } from "./control-signals";
 import { compileTodosAiOutputSchema } from "./schema-validation";
 
 const encoder = new TextEncoder();
@@ -660,13 +661,9 @@ function wrapTools(
             traces.emit("tool.completed", toolName, 0, null);
           }
           if (signal.aborted) throw error;
-          if (
-            error instanceof TodosAiToolError ||
-            error instanceof TodosAiNeedsInputSignal ||
-            error instanceof TodosAiNeedsApprovalSignal
-          ) {
-            throw error;
-          }
+          const controlSignal = normalizeTodosAiControlSignal(error);
+          if (controlSignal !== null) throw controlSignal;
+          if (error instanceof TodosAiToolError) throw error;
           throw new TodosAiToolError({ cause: error });
         }
       },
@@ -893,31 +890,32 @@ export function createTodosAiOrchestrator(
             usage,
           ));
         }
+        const controlSignal = normalizeTodosAiControlSignal(error);
         if (
           !abortScope.didTimeout() &&
           !options.signal.aborted &&
-          error instanceof TodosAiNeedsInputSignal
+          controlSignal instanceof TodosAiNeedsInputSignal
         ) {
           events.emit("input.required", {
-            prompt: error.pending_input.prompt,
-            fields: error.pending_input.fields,
+            prompt: controlSignal.pending_input.prompt,
+            fields: controlSignal.pending_input.fields,
           });
           return finish(
-            pendingInputResult(runId, error, completedSteps, usage),
+            pendingInputResult(runId, controlSignal, completedSteps, usage),
           );
         }
         if (
           !abortScope.didTimeout() &&
           !options.signal.aborted &&
-          error instanceof TodosAiNeedsApprovalSignal
+          controlSignal instanceof TodosAiNeedsApprovalSignal
         ) {
           events.emit("approval.required", {
-            id: error.pending_approval.id,
-            summary: error.pending_approval.summary,
-            operations: error.pending_approval.operations,
+            id: controlSignal.pending_approval.id,
+            summary: controlSignal.pending_approval.summary,
+            operations: controlSignal.pending_approval.operations,
           });
           return finish(
-            pendingApprovalResult(runId, error, completedSteps, usage),
+            pendingApprovalResult(runId, controlSignal, completedSteps, usage),
           );
         }
         return finish(mapFailure(
