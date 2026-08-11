@@ -200,7 +200,7 @@ export interface KnowledgeProjectLinksAuthority {
     readProjectResource(projectId: string, kind: KnowledgeProjectResourceKind, resourceId: string): Promise<KnowledgeProjectResource>;
     readAllProjectResources(projectId: string, options?: Omit<KnowledgeProjectResourceListOptions, 'cursor'>): Promise<KnowledgeProjectResource[]>;
 }
-export type KnowledgeProjectLinksErrorCode = 'KNOWLEDGE_PROJECT_LINKS_INVALID_INPUT' | 'KNOWLEDGE_PROJECT_LINKS_CAPABILITY_MISMATCH' | 'KNOWLEDGE_PROJECT_LINKS_DIGEST_MISMATCH' | 'KNOWLEDGE_PROJECT_LINKS_IDEMPOTENCY_MISMATCH' | 'KNOWLEDGE_PROJECT_LINKS_CONFLICT' | 'KNOWLEDGE_PROJECT_LINKS_NOT_FOUND' | 'KNOWLEDGE_PROJECT_LINKS_CURSOR_STALE' | 'KNOWLEDGE_PROJECT_LINKS_INCOMPLETE_POPULATION';
+export type KnowledgeProjectLinksErrorCode = 'KNOWLEDGE_PROJECT_LINKS_INVALID_INPUT' | 'KNOWLEDGE_PROJECT_LINKS_CAPABILITY_MISMATCH' | 'KNOWLEDGE_PROJECT_LINKS_DIGEST_MISMATCH' | 'KNOWLEDGE_PROJECT_LINKS_IDEMPOTENCY_MISMATCH' | 'KNOWLEDGE_PROJECT_LINKS_CONFLICT' | 'KNOWLEDGE_PROJECT_LINKS_NOT_FOUND' | 'KNOWLEDGE_PROJECT_LINKS_CURSOR_STALE' | 'KNOWLEDGE_PROJECT_LINKS_INCOMPLETE_POPULATION' | 'KNOWLEDGE_PROJECT_LINKS_INVALID_RESPONSE';
 export declare class KnowledgeProjectLinksError extends Error {
     readonly code: KnowledgeProjectLinksErrorCode;
     readonly details: Record<string, unknown>;
