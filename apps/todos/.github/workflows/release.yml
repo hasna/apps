@@ -2,8 +2,9 @@ name: Release npm package
 
 # npm trusted publishing is bound to this workflow by FILENAME (release.yml)
 # and to the `npm-release` environment declared on the job below. Both strings
-# are already recorded on npm's side as the trusted-publisher configuration for
-# @hasna/todos. They are NOT free choices: renaming either one silently
+# are the fixed trusted-publisher configuration for @hasna/todos and the
+# required matching configuration for @hasna/todos-ai. They are NOT free choices:
+# renaming either one silently
 # de-authorises publishing, because the binding stops matching, and the failure
 # surfaces as an auth error that never mentions the rename. Change them only
 # together with `npm trust`.
@@ -18,6 +19,7 @@ on:
   push:
     tags:
       - "npm/todos/v*"
+      - "npm/todos-ai/v*"
   # A manual run exercises the repository gates without publishing. npm only
   # exchanges the OIDC token during a publish or stage operation, so this does
   # not claim to validate the npm-side trusted-publisher binding.
@@ -90,26 +92,11 @@ jobs:
         id: version
         run: |
           set -euo pipefail
-          pkg_name="$(node -p "require('./package.json').name")"
-          pkg_version="$(node -p "require('./package.json').version")"
-          echo "name=${pkg_name}" >> "$GITHUB_OUTPUT"
-          echo "version=${pkg_version}" >> "$GITHUB_OUTPUT"
-          if [ "${GITHUB_REF_TYPE}" != "tag" ]; then
-            echo "manual run: ${pkg_name}@${pkg_version} from ${GITHUB_REF_NAME}"
-            exit 0
-          fi
-          case "${GITHUB_REF_NAME}" in
-            npm/todos/v*)
-              tag_version="${GITHUB_REF_NAME#npm/todos/v}" ;;
-            *)
-              echo "::error::tag ${GITHUB_REF_NAME} does not match a recognised release tag prefix"
-              exit 1 ;;
-          esac
-          if [ "${tag_version}" != "${pkg_version}" ]; then
-            echo "::error::tag ${GITHUB_REF_NAME} carries version ${tag_version} but package.json declares ${pkg_version}"
-            exit 1
-          fi
-          echo "tag ${GITHUB_REF_NAME} agrees with package.json ${pkg_version}"
+          bun run scripts/resolve-npm-release-package.ts \
+            --release-commit "${GITHUB_SHA}" \
+            --ref-type "${GITHUB_REF_TYPE}" \
+            --ref-name "${GITHUB_REF_NAME}" \
+            --output "${GITHUB_OUTPUT}"
 
       # Tags are not protected by this repository's main-branch ruleset. Bind
       # the release to reviewed history in the workflow itself so a tag on an
@@ -133,6 +120,7 @@ jobs:
       - name: Require independent agent release review
         if: github.event_name == 'push'
         env:
+          HASNA_TODOS_RELEASE_PACKAGE_PATH: ${{ steps.version.outputs.path }}
           NPM_RELEASE_AGENT_REVIEW_RECEIPT: ${{ vars.NPM_RELEASE_AGENT_REVIEW_RECEIPT }}
           RELEASE_REVIEWER_AGENT: ${{ vars.RELEASE_REVIEWER_AGENT }}
           RELEASE_REVIEW_KEY_ID: ${{ vars.RELEASE_REVIEW_KEY_ID }}
@@ -157,18 +145,23 @@ jobs:
       # `bun test` does not invoke tsc in this repository, so typecheck is its
       # own step rather than something the suite implies.
       - name: Typecheck
+        if: steps.version.outputs.path == '.'
         run: bun run typecheck
 
       - name: No-cloud release guards
+        if: steps.version.outputs.path == '.'
         run: bun run test:no-cloud
 
       - name: Test
+        if: steps.version.outputs.path == '.'
         run: bun test
 
       - name: Build
+        if: steps.version.outputs.path == '.'
         run: bun run build
 
       - name: Require a clean release input before npm lifecycle hooks
+        if: steps.version.outputs.path == '.'
         run: |
           set -euo pipefail
           status_file="${RUNNER_TEMP}/todos-release-status.txt"
@@ -180,6 +173,40 @@ jobs:
           fi
           echo "release input is clean before npm publish"
 
+      - name: Typecheck AI companion
+        if: steps.version.outputs.path == 'ai'
+        working-directory: ai
+        run: bun run typecheck
+
+      - name: Test AI companion
+        if: steps.version.outputs.path == 'ai'
+        working-directory: ai
+        run: bun test
+
+      - name: Build AI companion
+        if: steps.version.outputs.path == 'ai'
+        working-directory: ai
+        run: bun run build
+
+      - name: Verify AI companion pack
+        if: steps.version.outputs.path == 'ai'
+        working-directory: ai
+        run: npm pack --dry-run --ignore-scripts --json > "${RUNNER_TEMP}/todos-ai-pack.json"
+
+      - name: Require a clean AI companion release input
+        if: steps.version.outputs.path == 'ai'
+        working-directory: ai
+        run: |
+          set -euo pipefail
+          status_file="${RUNNER_TEMP}/todos-ai-release-status.txt"
+          git status --porcelain=v1 --untracked-files=all > "${status_file}"
+          if [ -s "${status_file}" ]; then
+            echo "::error::AI companion release input became dirty before npm publish"
+            sed -n '1,80p' "${status_file}"
+            exit 1
+          fi
+          echo "AI companion release input is clean before npm publish"
+
       # No NODE_AUTH_TOKEN, and no token of any kind. npm detects the Actions
       # OIDC environment and exchanges the id-token for a short-lived,
       # publish-scoped credential. --provenance is passed explicitly: npm
@@ -188,8 +215,10 @@ jobs:
       # no-op when it is already automatic.
       - name: Publish to npm via OIDC trusted publishing
         if: github.event_name == 'push'
+        working-directory: ${{ steps.version.outputs.path }}
         env:
           HASNA_TODOS_EXPECTED_COMMIT: ${{ github.sha }}
+          HASNA_TODOS_RELEASE_PACKAGE_PATH: ${{ steps.version.outputs.path }}
           # prepublishOnly re-runs the package-owned receipt verifier against
           # the same tag and commit immediately before npm receives the pack.
           NPM_RELEASE_AGENT_REVIEW_RECEIPT: ${{ vars.NPM_RELEASE_AGENT_REVIEW_RECEIPT }}
@@ -205,12 +234,13 @@ jobs:
           name="${{ steps.version.outputs.name }}"
           version="${{ steps.version.outputs.version }}"
           for attempt in 1 2 3 4 5; do
-            if resolved="$(npm view "${name}@${version}" version 2>/dev/null)"; then
-              if [ "${resolved}" = "${version}" ]; then
-                echo "registry serves ${name}@${resolved}"
+            if resolved_version="$(npm view "${name}@${version}" version 2>/dev/null)"; then
+              resolved_git_head="$(npm view "${name}@${version}" gitHead 2>/dev/null)"
+              if [ "${resolved_version}" = "${version}" ] && [ "${resolved_git_head}" = "${GITHUB_SHA}" ]; then
+                echo "registry serves ${name}@${resolved_version} from ${resolved_git_head}"
                 exit 0
               fi
-              echo "::error::registry resolved ${name}@${version} to ${resolved}"
+              echo "::error::registry resolved ${name}@${version} to version=${resolved_version} gitHead=${resolved_git_head}"
               exit 1
             fi
             echo "attempt ${attempt}: ${name}@${version} not visible yet, waiting"

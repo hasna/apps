@@ -5,6 +5,7 @@ import {
   sign,
   verify as verifySignature,
 } from "node:crypto";
+import { validateNpmReleasePackageBinding } from "./npm-release-package";
 
 export const NPM_RELEASE_AGENT_REVIEW_SCHEMA = "hasna.npm-release-agent-review.v1" as const;
 
@@ -50,6 +51,7 @@ export type SignedNpmReleaseAgentReviewReceipt = {
 export type ExpectedNpmReleaseAgentReview = {
   repository: string;
   releaseCommit: string;
+  packagePath: "." | "ai";
   packageName: string;
   packageVersion: string;
   tag: string;
@@ -274,6 +276,17 @@ export function validateNpmReleaseAgentReviewReceipt(
     payload.commit !== expected.releaseCommit,
     "release-agent-review-commit",
     "commit must equal the exact release commit",
+  );
+  addIf(
+    failures,
+    validateNpmReleasePackageBinding({
+      packagePath: expected.packagePath,
+      packageName: payload.package.name,
+      packageVersion: payload.package.version,
+      tag: payload.tag,
+    }).some((failure) => failure.check === "release-package-path"),
+    "release-agent-review-package-path",
+    `the signed package name and tag must bind package path ${expected.packagePath}`,
   );
   addIf(
     failures,

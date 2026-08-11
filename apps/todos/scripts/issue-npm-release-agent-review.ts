@@ -9,6 +9,7 @@ import {
   parsePublisherAgentTrailer,
   type NpmReleaseAgentReviewPayload,
 } from "../src/lib/npm-release-agent-review";
+import { resolveNpmReleasePackageByPath } from "../src/lib/npm-release-package";
 
 type ReleasePackage = {
   name?: string;
@@ -18,6 +19,7 @@ type ReleasePackage = {
 
 type Options = {
   releaseCommit?: string;
+  packagePath?: string;
   publisherAgent?: string;
   verdict?: "GO" | "NO_GO";
   openP0: number;
@@ -63,10 +65,19 @@ function main(): void {
     fail("RELEASE_REVIEW_KEY_ID does not derive from RELEASE_REVIEW_PUBLIC_KEY");
   }
 
-  const packageJson = JSON.parse(runGit(["show", `${options.releaseCommit}:package.json`])) as ReleasePackage;
-  if (packageJson.name !== "@hasna/todos") fail("the release commit package.json must declare @hasna/todos");
-  if (!packageJson.version) fail("the release commit package.json must declare a version");
+  let releasePackage;
+  try {
+    releasePackage = resolveNpmReleasePackageByPath(options.packagePath);
+  } catch (error) {
+    fail(error instanceof Error ? error.message : "package path must be . or ai");
+  }
+  const packageJson = JSON.parse(runGit(["show", `${options.releaseCommit}:${releasePackage.manifestPath}`])) as ReleasePackage;
+  if (packageJson.name !== releasePackage.packageName) {
+    fail(`the release commit ${releasePackage.manifestPath} must declare ${releasePackage.packageName}`);
+  }
+  if (!packageJson.version) fail(`the release commit ${releasePackage.manifestPath} must declare a version`);
   if (packageJson.publishConfig?.registry !== "https://registry.npmjs.org") fail("the release commit must target the public npm registry");
+  requireProtectedMainAncestry(options.releaseCommit);
   const workflowRevision = runGit(["rev-parse", `${options.releaseCommit}:${WORKFLOW_PATH}`]).trim();
 
   const payload: NpmReleaseAgentReviewPayload = {
@@ -74,7 +85,7 @@ function main(): void {
     repository: REPOSITORY,
     commit: options.releaseCommit,
     package: { name: packageJson.name, version: packageJson.version },
-    tag: `npm/todos/v${packageJson.version}`,
+    tag: `${releasePackage.tagPrefix}${packageJson.version}`,
     workflow: { path: WORKFLOW_PATH, revision: workflowRevision },
     registry: packageJson.publishConfig.registry,
     reviewer: { type: "coding-agent", agent: reviewerAgent },
@@ -105,6 +116,7 @@ function parseOptions(args: string[]): Options {
     if (!flag?.startsWith("--") || value === undefined) fail(`missing value for ${flag ?? "argument"}`);
     switch (flag) {
       case "--release-commit": options.releaseCommit = value; break;
+      case "--package-path": options.packagePath = value; break;
       case "--publisher-agent": options.publisherAgent = value; break;
       case "--verdict":
         if (value !== "GO" && value !== "NO_GO") fail("--verdict must be GO or NO_GO");
@@ -128,6 +140,15 @@ function runGit(args: string[]): string {
   const result = spawnSync("git", args, { cwd: root, encoding: "utf8" });
   if (result.status !== 0) fail(result.stderr.trim() || `git ${args[0]} failed`);
   return result.stdout;
+}
+
+function requireProtectedMainAncestry(releaseCommit: string): void {
+  const result = spawnSync(
+    "git",
+    ["merge-base", "--is-ancestor", releaseCommit, "refs/remotes/origin/main"],
+    { cwd: root, encoding: "utf8" },
+  );
+  if (result.status !== 0) fail("the release commit must be contained in protected main");
 }
 
 function fail(message: string): never {

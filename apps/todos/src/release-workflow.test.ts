@@ -4,6 +4,11 @@ import { resolve } from "node:path";
 
 const releaseWorkflow = readFileSync(resolve(import.meta.dir, "../.github/workflows/release.yml"), "utf8");
 const publicReleaseVerifier = readFileSync(resolve(import.meta.dir, "../scripts/verify-public-release.ts"), "utf8");
+const rootPackage = JSON.parse(readFileSync(resolve(import.meta.dir, "../package.json"), "utf8")) as { version: string };
+const companionPackage = JSON.parse(readFileSync(resolve(import.meta.dir, "../ai/package.json"), "utf8")) as {
+  version: string;
+  scripts: Record<string, string>;
+};
 
 describe("npm release workflow", () => {
   test("binds strict prepublish verification to the checked-out Actions commit", () => {
@@ -29,5 +34,35 @@ describe("npm release workflow", () => {
     expect(releaseWorkflow).toContain("run: bun test");
     expect(releaseWorkflow).toContain("run: bun run build");
     expect(publicReleaseVerifier).toContain('runOrExit("bun", ["run", "scripts/verify-npm-release-agent-review.ts"])');
+  });
+
+  test("routes root and companion tags to only their fixed package directories", () => {
+    expect(releaseWorkflow).toContain('- "npm/todos/v*"');
+    expect(releaseWorkflow).toContain('- "npm/todos-ai/v*"');
+    expect(releaseWorkflow).toContain("scripts/resolve-npm-release-package.ts");
+    expect(releaseWorkflow).toContain("working-directory: ${{ steps.version.outputs.path }}");
+    expect(releaseWorkflow).toContain("HASNA_TODOS_RELEASE_PACKAGE_PATH: ${{ steps.version.outputs.path }}");
+    expect(rootPackage.version).toBe("0.15.29");
+    expect(companionPackage.version).toBe("0.1.1");
+    expect(companionPackage.scripts["verify:release-review"]).toBe("bun run ../scripts/verify-npm-release-agent-review.ts");
+    expect(companionPackage.scripts.prepublishOnly).toBe("bun run verify:release-review");
+    expect(releaseWorkflow).not.toMatch(/^\s+NODE_AUTH_TOKEN:/m);
+    expect(releaseWorkflow).not.toMatch(/^\s+NPM_TOKEN:/m);
+  });
+
+  test("keeps root gates and adds companion install, typecheck, test, build, pack, and release-input gates", () => {
+    for (const step of [
+      "Install AI companion locked dependencies",
+      "Typecheck AI companion",
+      "Test AI companion",
+      "Build AI companion",
+      "Verify AI companion pack",
+      "Require a clean AI companion release input",
+    ]) {
+      expect(releaseWorkflow).toContain(`- name: ${step}`);
+    }
+    expect(releaseWorkflow).toContain("if: steps.version.outputs.path == '.'");
+    expect(releaseWorkflow).toContain("if: steps.version.outputs.path == 'ai'");
+    expect(releaseWorkflow).toContain("gitHead");
   });
 });
