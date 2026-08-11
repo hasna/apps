@@ -43,7 +43,7 @@
 
 set -uo pipefail
 
-VERSION="1.4.2"
+VERSION="1.4.3"
 PROG="inbox"
 
 # Tunables (all overridable by env; all documented in --help)
@@ -69,6 +69,7 @@ EX_OK=0; EX_USAGE=2; EX_DEGRADED=3; EX_FAILED=4; EX_INT=130; EX_TERM=143
 # ----------------------------------------------------------------------------
 AGENT=""; AGENT_SOURCE=""; INHERITED=0
 SEAT_KEY="${INBOX_SEAT:-}"
+SIGNATURE="${INBOX_SIGNATURE:-}"
 INSTALL_TARGET="${INBOX_INSTALL_TARGET:-$HOME/.hasna/bin/inbox}"
 
 resolve_agent() {
@@ -613,14 +614,19 @@ seed_if_new() {
 
 render_messages() {
   local json="$1" last="$2"
-  printf '%s' "$json" | jq -r --arg me "$AGENT" --argjson lmes "$AGENTS_LC_JSON" --argjson subs "$SUBS_JSON" --argjson last "$last" '
+  printf '%s' "$json" | jq -r --arg me "$AGENT" --arg signature "$SIGNATURE" --argjson lmes "$AGENTS_LC_JSON" --argjson subs "$SUBS_JSON" --argjson last "$last" '
     [ .[]?
       | select((.id // 0) > $last)
-      # A display name is not a sender identity. Another session can write with
-      # the same name while this seat writes with its registered sender id, so
-      # filtering names here silently discarded real peer traffic. This read
-      # surface has no proven session sender id; tolerate surplus self traffic
-      # rather than advancing the cursor past an ambiguous same-name message.
+      # A display name alone is not a sender identity: another session can use
+      # the same name. A signature alone is not identity either: a peer can
+      # quote it. Suppress only when BOTH match the declared seat identity
+      # union and its unique content signature. With no signature configured,
+      # retain the safe legacy behavior and tolerate surplus self traffic.
+      | select((
+          ($signature != "")
+          and ((((.from_agent // "") | ascii_downcase) as $f | $lmes | index($f)) != null)
+          and (((.content // .message // .body // "") | tostring) | contains($signature))
+        ) | not)
       | select( ((.channel // "") != "" and (((.channel // "") as $c | $subs | index($c)) != null))
                 or ((((.to_agent // "") | ascii_downcase) as $t | $lmes | index($t)) != null) )
     ] | sort_by(.id) | .[]
@@ -984,7 +990,9 @@ cmd_watch() {
   local interval="${INTERVAL:-45}"
   seed_if_new || return $?
   WATCHING=1
-  out "[$PROG] armed — identities=[$AGENTS_TXT] interval=${interval}s (todos every ${TODO_EVERY} polls)"
+  local self_filter="off"
+  [ -z "$SIGNATURE" ] || self_filter="signature"
+  out "[$PROG] armed — identities=[$AGENTS_TXT] interval=${interval}s self-filter=${self_filter} (todos every ${TODO_EVERY} polls)"
   local fails=0 secs span
   while true; do
     do_check          # check FIRST, so arming is not followed by silent dead air
@@ -1091,7 +1099,8 @@ Options
   -h, --help         this text        --version
 
 Environment
-  INBOX_AGENT  INBOX_SEAT  INBOX_STATE_DIR  INBOX_LIMIT  INBOX_TODO_LIMIT
+  INBOX_AGENT  INBOX_SEAT  INBOX_SIGNATURE  INBOX_STATE_DIR  INBOX_LIMIT
+  INBOX_TODO_LIMIT
   INBOX_TODO_EVERY  INBOX_BACKFILL_MAX  INBOX_BACKFILL_CHUNK
   INBOX_WINDOW  INBOX_TIMEOUT
 
@@ -1105,6 +1114,7 @@ Exit codes
 
 Examples
   export INBOX_AGENT=augustus
+  export INBOX_SIGNATURE="[inbox:station:seat:unique]"
   $PROG subscribe announcements incidents agent-ceo
   $PROG
   $PROG watch --interval 60
