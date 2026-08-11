@@ -176,15 +176,18 @@ bulk send results include detection metadata when available:
 }
 ```
 
-Normal prompt delivery uses `Enter` and refuses active agents unless `--force-active`
-is explicitly passed. `--queue` is the safe active-agent path: when detection proves
-the target supports queued-message behavior, dispatch types the prompt and presses
-the agent's queue key (`Tab` for Codewith, `Enter` for Claude Code); otherwise it
-refuses. Prompt sends wait until the delivered text is visibly
+Normal single-target prompt delivery uses `Enter`. Idle agents start the prompt
+immediately; recognized active Codewith panes accept it as steering input at the next
+safe model/tool boundary. Other active or unknown targets remain refused unless
+`--force-active` is explicitly passed. `--if-idle` retains idle-only delivery.
+`--queue` remains the explicit queued-message path: when detection proves the target
+supports queued-message behavior, dispatch types the prompt and presses the agent's
+queue key (`Tab` for Codewith, `Enter` for Claude Code); otherwise it refuses.
+Prompt sends wait until the delivered text is visibly
 parked in the composer before pressing Enter/Tab; if it never parks within
 `DISPATCH_SETTLE_TIMEOUT_MS`, dispatch refuses the submit key. Queued delivery
 is single-shot to avoid duplicate queued follow-up inputs; `--retries` applies to
-idle Enter submission. Detection supports
+Enter submission. Detection supports
 direct binaries and compatible `node`/`bun`/`npx`/`bunx`/`pnpm`/`yarn`/`npm exec`
 launchers, but wrapper panes still need live composer UI proof so arbitrary `node`
 output and copied transcripts stay fail-closed.
@@ -263,9 +266,9 @@ the dispatch data directory's `artifacts/` folder.
 `dispatch recover` uses the same triage result to plan a safe route for a recovery
 prompt. It defaults to dry-run and does not type anything unless `--apply` is passed.
 When applied, it calls the normal guarded prompt-send path: idle agents use `Enter`;
-active Codewith/Claude panes are queued with `Tab` only when detection proves queued
-prompt support; shells, arbitrary `node`/`bun`, stale transcripts, and unknown panes are
-refused.
+active Codewith/Claude panes use their proven queue key (`Tab` for Codewith, `Enter`
+for Claude Code) only when detection proves queued prompt support; shells, arbitrary
+`node`/`bun`, stale transcripts, and unknown panes are refused.
 
 ```bash
 dispatch recover --to open-dispatch:1.1 --prompt "Summarize status and continue safely" --json
@@ -638,10 +641,11 @@ URL/key variables are present.
    marker with a positive count, and that count exactly matches the complete prompt's
    Unicode scalar count. Literal delivery, partial or invalid counts, embedded or
    ambiguous marker text, and stale placeholders all fail closed.
-5. Press **Enter**, then re-press until the **delivery probe** confirms submission
-   (working indicator appeared / composer cleared) or the submit timeout/retries are exhausted.
-   Queued Tab delivery is not retried because duplicate Tabs can create duplicate
-   queued follow-up inputs.
+5. Press the resolved submit key. Non-queued **Enter** delivery is re-pressed until
+   the **delivery probe** confirms submission (working indicator appeared / composer
+   cleared) or the submit timeout/retries are exhausted. Explicit queued delivery is
+   single-shot regardless of whether the proven queue key is Tab or Enter, because
+   retrying it can create duplicate queued follow-up inputs.
 6. Record a **delivered / not-delivered** verdict with a reason. If a Codewith
    pane queues input while an auth profile/account switch is visible, the verdict
    is **not delivered** with `actionNeeded=true` rather than a false success.

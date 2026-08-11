@@ -147,7 +147,7 @@ export interface DispatchOptions {
   goal?: boolean;
   /** Optional machine id (local when omitted). Resolved via @hasna/machines. */
   machine?: string;
-  /** Submit key for prompt sends. Enter is default; Tab is only for proven queue support. */
+  /** Submit key for prompt sends. Enter starts idle work or steers active Codewith; Tab is only for proven queue support. */
   submitKey?: SubmitKey;
   /** Refuse delivery unless the target looks idle. */
   ifIdle?: boolean;

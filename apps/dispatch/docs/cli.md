@@ -12,8 +12,10 @@
   `--goal`, `--machine`, `--backend`, `--if-idle`, `--queue`, `--submit-key`,
   `--force-active`, `--capture-before`, `--dry-run`, `--max-concurrency`,
   `--jitter`, `--per-machine-limit`, `--no-submit`, `--no-confirm`, `--delay`,
-  `--retries`, `--mode`, and `--json`. Bulk defaults to the idle guard and is
-  tmux-only; Mosaic supports single-target send, dry-run, queue, and no-submit.
+  `--retries`, `--mode`, and `--json`. A plain single-target send steers a
+  recognized active Codewith pane with Enter; `--queue` explicitly queues and
+  `--if-idle` preserves idle-only delivery. Bulk defaults to the idle guard and
+  is tmux-only; Mosaic supports single-target send, dry-run, queue, and no-submit.
 - `exec` sends a policy-filtered command only to a detected shell pane. It accepts
   `--policy`, repeatable `--allow-prefix`, `--no-filter`, `--dry-run`,
   `--interrupt`, the submit controls above, `--machine`, and `--json`. Dry-run

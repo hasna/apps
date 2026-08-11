@@ -52,13 +52,15 @@ dispatch refuses to press Enter/Tab and records a failed delivery instead of ris
 swallowed submit.
 
 Once parked, `dispatch` presses **Enter**, then confirms and re-presses Enter idempotently
-until the delivery probe says it submitted. Defaults are a 10s submit budget with a 2s
-retry interval (`DISPATCH_SUBMIT_TIMEOUT_MS`, `DISPATCH_SUBMIT_RETRY_INTERVAL_MS`).
-`--retries` still overrides the retry count when a caller needs a fixed policy.
+until the delivery probe says it submitted. On a recognized active Codewith pane, this is
+steering input accepted at the next safe model/tool boundary; `--if-idle` still refuses
+that active target. Defaults are a 10s submit budget with a 2s retry interval
+(`DISPATCH_SUBMIT_TIMEOUT_MS`, `DISPATCH_SUBMIT_RETRY_INTERVAL_MS`). `--retries` still
+overrides the retry count when a caller needs a fixed policy.
 
-Queued active-agent delivery uses **Tab** only when target detection proves queue
-support. Tab delivery is single-shot: dispatch does not retry Tab because repeated
-Tabs can create duplicate queued follow-up inputs.
+Queued active-agent delivery uses only the queue key proven by target detection:
+**Tab** for Codewith and **Enter** for Claude Code. Queued delivery is single-shot
+because retrying the queue key can create duplicate follow-up inputs.
 
 ## 3. Smart delivery confirmation
 
@@ -89,6 +91,6 @@ success when follow-up input is parked during a profile switch and may never dra
 | `DISPATCH_MS_PER_WORD` / `DISPATCH_MS_PER_CHAR` | Auto-delay growth |
 | `DISPATCH_SETTLE_TIMEOUT_MS` | Prompt-parked settle budget before the first submit key; default 2000ms |
 | `DISPATCH_SUBMIT_TIMEOUT_MS` / `DISPATCH_SUBMIT_RETRY_INTERVAL_MS` | Submit confirmation/retry budget; defaults 10000ms / 2000ms |
-| `--retries <n>` | Fixed Enter retry count before giving up; queued Tab delivery is single-shot |
+| `--retries <n>` | Fixed non-queued Enter retry count before giving up; explicit queued delivery is single-shot |
 | `--no-confirm` | Skip the confirmation probe |
 | `--mode auto\|paste\|literal` | Force the delivery method |

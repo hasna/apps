@@ -586,18 +586,34 @@ describe("performDispatch", () => {
     expect(r.argvs().some((a) => a.includes("Enter"))).toBe(false);
   });
 
-  test("refuses active wrapped Codewith panes before Enter delivery by default", async () => {
+  test("steers active wrapped Codewith panes with Enter by default", async () => {
     const r = composerRunner("node", activeCodewithCapture, "✶ Working… (esc to interrupt)", codewithProcessTree);
 
     const rec = await performDispatch(
-      { target: "open-dispatch:1.1", prompt: "Do not send Enter to a busy pane" },
+      { target: "open-dispatch:1.1", prompt: "Steer this at the next safe boundary", submitDelayMs: 0 },
+      { tmux: new Tmux(r), sleep: noSleep },
+    );
+
+    expect(rec.status).toBe("delivered");
+    expect(rec.targetState).toBe("active");
+    expect(rec.detection).toMatchObject({ agentKind: "codewith", canReceivePrompt: false, canQueuePrompt: true });
+    expect(r.argvs().some((a) => a[1] === "send-keys" && a.includes("-l"))).toBe(true);
+    expect(r.argvs().some((a) => a[1] === "send-keys" && a.includes("Enter"))).toBe(true);
+    expect(r.argvs().some((a) => a[1] === "send-keys" && a.includes("Tab"))).toBe(false);
+  });
+
+  test("refuses active wrapped Codewith panes when idle-only delivery is requested", async () => {
+    const r = composerRunner("node", activeCodewithCapture, "✶ Working… (esc to interrupt)", codewithProcessTree);
+
+    const rec = await performDispatch(
+      { target: "open-dispatch:1.1", prompt: "Do not send Enter to a busy pane", ifIdle: true },
       { tmux: new Tmux(r), sleep: noSleep },
     );
 
     expect(rec.status).toBe("skipped");
     expect(rec.targetState).toBe("active");
     expect(rec.detection).toMatchObject({ agentKind: "codewith", canReceivePrompt: false, canQueuePrompt: true });
-    expect(rec.detail).toMatch(/cannot receive an Enter prompt safely/);
+    expect(rec.detail).toMatch(/--if-idle was requested/);
     expect(r.argvs().some((a) => a[1] === "send-keys" || a[1] === "paste-buffer")).toBe(false);
   });
 

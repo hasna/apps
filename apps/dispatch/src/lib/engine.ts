@@ -126,6 +126,17 @@ export async function performDispatch(options: DispatchOptions, deps: DispatchDe
     targetState === "active" &&
     detection?.canQueuePrompt === true &&
     submitKey === detection.recommendedSubmitKey;
+  // Codewith treats Enter during active work as steering input that is accepted
+  // at the next safe model/tool boundary. Keep that distinct from explicit
+  // queued delivery (Tab) and from the caller's idle-only guard.
+  const steeringDelivery =
+    submitEnabled &&
+    options.queue !== true &&
+    options.ifIdle !== true &&
+    targetState === "active" &&
+    detection?.agentKind === "codewith" &&
+    detection.canQueuePrompt === true &&
+    submitKey === "Enter";
   let captureBefore = target.visible && options.captureBeforeLines
     ? await performCapture({ target: options.target, lines: options.captureBeforeLines }, { tmux })
     : undefined;
@@ -154,6 +165,8 @@ export async function performDispatch(options: DispatchOptions, deps: DispatchDe
     submitKey === "Enter" &&
     detection?.canReceivePrompt !== true &&
     !queuedDelivery &&
+    !steeringDelivery &&
+    options.ifIdle !== true &&
     options.forceActive !== true
   ) {
     return finish({
