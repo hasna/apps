@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 const repoRoot = resolve(import.meta.dir, "..");
 const sourceRoot = join(repoRoot, "src");
@@ -24,6 +24,21 @@ const forbiddenConsumerModules = [
 
 function relativeSourcePath(path: string): string {
   return relative(repoRoot, path).replace(/\\/g, "/");
+}
+
+function fixtureOwnedStderr(stderr: string, fixtureRoot: string): string {
+  return stderr
+    .split(/\n\s*\n/)
+    .filter((block) => {
+      if (!block.includes("warn: Duplicate key")) return block.trim().length > 0;
+      const warningSource = block.match(/\bat (.+\.json):\d+:\d+\s*$/)?.[1];
+      if (!warningSource) return true;
+      const warningPath = relative(fixtureRoot, resolve(warningSource));
+      return warningPath === ""
+        || (warningPath !== ".." && !warningPath.startsWith(`..${sep}`) && !isAbsolute(warningPath));
+    })
+    .join("\n\n")
+    .trim();
 }
 
 function parseRelativeImports(path: string): string[] {
@@ -65,8 +80,15 @@ function consumerSourceGraph(): string[] {
 
 describe("consumer entrypoint boundary", () => {
   test("imports @hasna/machines/consumer from a temp app", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "machines-consumer-app-"));
+    const fixtureRoot = mkdtempSync(join(tmpdir(), "machines-consumer-boundary-parent-"));
+    const dir = join(fixtureRoot, "app");
     try {
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(
+        join(fixtureRoot, "package.json"),
+        '{"dependencies":{"@hasna/todos":"0.1.0","@hasna/todos":"0.2.0"}}\n',
+        "utf8",
+      );
       const packageRoot = join(dir, "node_modules", "@hasna", "machines");
       mkdirSync(join(packageRoot, "dist"), { recursive: true });
       const build = await Bun.build({
@@ -137,7 +159,8 @@ describe("consumer entrypoint boundary", () => {
         encoding: "utf8",
       });
 
-      expect(result.stderr).toBe("");
+      expect(result.stderr).toContain(join(fixtureRoot, "package.json"));
+      expect(fixtureOwnedStderr(result.stderr, dir)).toBe("");
       expect(result.status).toBe(0);
       const output = JSON.parse(result.stdout);
       expect(output).toEqual({
@@ -182,8 +205,24 @@ describe("consumer entrypoint boundary", () => {
         },
       });
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      rmSync(fixtureRoot, { recursive: true, force: true });
     }
+  });
+
+  test("filters only duplicate-key warnings from package manifests outside the temp app", () => {
+    const appRoot = join(tmpdir(), "machines-consumer-boundary-filter", "app");
+    const warning = (path: string) => [
+      '1 | {"dependencies":{"duplicate":"one","duplicate":"two"}}',
+      "                                      ^",
+      'warn: Duplicate key "duplicate" in object literal',
+      `    at ${path}:1:39`,
+      "",
+    ].join("\n");
+
+    expect(fixtureOwnedStderr(warning(join(dirname(appRoot), "package.json")), appRoot)).toBe("");
+    expect(fixtureOwnedStderr(warning(join(appRoot, "package.json")), appRoot))
+      .toContain(join(appRoot, "package.json"));
+    expect(fixtureOwnedStderr("consumer runtime failure\n", appRoot)).toBe("consumer runtime failure");
   });
 
   test("does not import CLI, MCP, agent, install, or storage-heavy modules", () => {
