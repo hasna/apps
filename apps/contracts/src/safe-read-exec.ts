@@ -31,6 +31,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   classifyRead,
+  isUsableCursor,
   locateRows,
   readDottedPath,
   type CapturedRead,
@@ -189,7 +190,7 @@ export interface SafeReadResult {
   evidence: string[];
 }
 
-/** Spawn with both streams captured to memory, separately, with no shell. */
+/** Spawn with both streams captured to separate files, with no shell. */
 export function runCaptured(argv: string[]): CapturedRead {
   const [bin, ...args] = argv;
   if (!bin) throw new Error("empty argv");
@@ -198,17 +199,14 @@ export function runCaptured(argv: string[]): CapturedRead {
   // written out literally: `cmd > out 2> err`, then read the files.
   //
   // AN IN-MEMORY CAPTURE WAS TRIED FIRST AND TRUNCATED, WHICH IS WHY THIS IS NOT A
-  // STYLE CHOICE. Measured on bun 1.3.14, arm64, against a 1.23 MB payload
-  // (`mementos list --scope global --json --limit 2000`):
+  // STYLE CHOICE. Measured on bun 1.3.14, arm64, against the same 1.23 MB payload:
   //
   //   shell redirect to a file                    1227488 B   parses, 684 rows
-  //   spawnSync(encoding:"utf8", maxBuffer:256MiB) 1079970 B   UNPARSEABLE, status 0, error undefined
+  //   spawnSync(encoding:"utf8", maxBuffer:256MiB) partial output, UNPARSEABLE
   //
-  // The 1079970 figure is exactly what an explicit 1 MiB maxBuffer produces, so the
-  // option did not reach the call — and the ENOBUFS that a 1 MiB run does surface
-  // was NOT raised, so the truncation arrived as a clean exit-0 short read. That is
-  // precisely the failure this module exists to refuse, inside its own capture path.
-  // File descriptors have no such ceiling.
+  // The truncation point varied across reproductions; the 256 MiB option does take
+  // effect and the default limit raises ENOBUFS. File descriptors avoid both the
+  // bounded in-memory path and dependence on producer timing.
   const dir = mkdtempSync(join(tmpdir(), "hasna-safe-read-"));
   const outPath = join(dir, "stdout.bin");
   const errPath = join(dir, "stderr.bin");
@@ -332,7 +330,9 @@ function safeReadInner(request: SafeReadRequest): SafeReadResult {
   if (!verdict.ok && verdict.code === "unfollowed_cursor" && request.cursorFlag) {
     const accumulated: unknown[] = [];
     let cursor = verdict.nextCursor;
-    if (typeof cursor !== "string" || cursor.trim().length === 0) {
+    let declaredTotal = verdict.declaredTotal;
+    let declaredTotalShape: "population" | "remaining" | undefined;
+    if (!isUsableCursor(cursor)) {
       return fail(
         "unfollowed_cursor",
         "the surface indicates another page but supplied no usable cursor; refusing rather than treating the first page as exhausted",
@@ -345,7 +345,7 @@ function safeReadInner(request: SafeReadRequest): SafeReadResult {
     const first = locateRows(safeParse(captured.stdout), request.rowsKey);
     if (first.ok) accumulated.push(...first.rows);
 
-    while (cursor && pages < maxPages) {
+    while (isUsableCursor(cursor) && pages < maxPages) {
       const paged = withFlag(argv, request.cursorFlag, cursor);
       captured = run(paged);
       pages += 1;
@@ -355,14 +355,60 @@ function safeReadInner(request: SafeReadRequest): SafeReadResult {
         allowEmpty: true,
         limit: request.limit
       });
+      if (verdict.declaredTotal !== undefined) {
+        if (declaredTotal === undefined) {
+          return fail(
+            "declared_total_mismatch",
+            `paging introduced a declared total of ${verdict.declaredTotal} after page 1; ` +
+              `its population-relative semantics cannot be established from the later page alone`,
+            evidence,
+            pages
+          );
+        }
+        const samePopulation = verdict.declaredTotal === declaredTotal;
+        const remainingPopulation = accumulated.length + verdict.declaredTotal === declaredTotal;
+        if (!samePopulation && !remainingPopulation) {
+          return fail(
+            "declared_total_mismatch",
+            `paging changed its declared total from ${declaredTotal} to ${verdict.declaredTotal} ` +
+              `after ${accumulated.length} accumulated row(s); it matches neither a stable population total ` +
+              `nor a cursor-relative remaining total`,
+            evidence,
+            pages
+          );
+        }
+        const observedShape = samePopulation ? "population" : "remaining";
+        if (declaredTotalShape !== undefined && declaredTotalShape !== observedShape) {
+          return fail(
+            "declared_total_mismatch",
+            `paging changed declared-total semantics from ${declaredTotalShape} to ${observedShape}`,
+            evidence,
+            pages
+          );
+        }
+        declaredTotalShape = observedShape;
+        evidence.push(
+          `page ${pages} declared total ${verdict.declaredTotal} as a ${observedShape} count ` +
+            `after ${accumulated.length} accumulated row(s)`
+        );
+      }
       const located = locateRows(safeParse(captured.stdout), request.rowsKey);
       if (located.ok) accumulated.push(...located.rows);
-      if (verdict.ok) break;
+      if (
+        verdict.ok ||
+        (verdict.code === "declared_total_mismatch" &&
+          (verdict.hasMore === false || verdict.nextCursor === null))
+      ) {
+        // A page-level declared total describes the whole population, not this
+        // page. Reconcile it against accumulated rows after explicit exhaustion.
+        cursor = null;
+        break;
+      }
       if (verdict.code !== "unfollowed_cursor") {
         return fail(verdict.code!, `paging stopped at page ${pages}: ${verdict.reason}`, evidence, pages);
       }
       cursor = verdict.nextCursor;
-      if (typeof cursor !== "string" || cursor.trim().length === 0) {
+      if (!isUsableCursor(cursor)) {
         return fail(
           "unfollowed_cursor",
           `paging stopped at page ${pages}: the surface indicates another page but supplied no usable cursor`,
@@ -371,8 +417,19 @@ function safeReadInner(request: SafeReadRequest): SafeReadResult {
         );
       }
     }
-    if (cursor && pages >= maxPages) {
+    if (isUsableCursor(cursor) && pages >= maxPages) {
       return fail("unfollowed_cursor", `still paging after ${maxPages} pages; refusing rather than reporting a partial set`, evidence, pages);
+    }
+    if (declaredTotal !== undefined && accumulated.length !== declaredTotal) {
+      return fail(
+        "declared_total_mismatch",
+        `paged to exhaustion with ${accumulated.length} row(s) against a declared total of ${declaredTotal}`,
+        evidence,
+        pages
+      );
+    }
+    if (declaredTotal !== undefined) {
+      evidence.push(`accumulated rowCount ${accumulated.length} equals declared total ${declaredTotal}`);
     }
     evidence.push(`paged to exhaustion over ${pages} page(s), ${accumulated.length} row(s)`);
     return {

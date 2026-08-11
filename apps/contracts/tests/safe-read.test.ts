@@ -101,6 +101,45 @@ describe("mechanism 1: cut short", () => {
     expect(good.ok).toBe(true);
     expect(good.proofs).toContain("cursor_exhausted");
   });
+
+  test("KNOWN-BAD: has_more=true without a usable string or safe-integer cursor is refused", () => {
+    for (const nextCursor of [undefined, null, "", "   ", 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+      const verdict = classifyRead(
+        ok(JSON.stringify({ rows: [1, 2], has_more: true, next_cursor: nextCursor }))
+      );
+      expect(verdict.ok).toBe(false);
+      expect(verdict.code).toBe("unfollowed_cursor");
+      expect(verdict.nextCursor).toBe(nextCursor === null ? null : undefined);
+    }
+  });
+
+  test("snake_case null is explicit, while an absent snake key falls back to camelCase", () => {
+    const explicitNull = classifyRead(
+      ok(JSON.stringify({ rows: [1, 2], has_more: false, next_cursor: null, nextCursor: "wrong-page" }))
+    );
+    expect(explicitNull.ok).toBe(true);
+    expect(explicitNull.nextCursor).toBeNull();
+    expect(explicitNull.proofs).toContain("cursor_exhausted");
+
+    const snakeAbsent = classifyRead(
+      ok(JSON.stringify({ rows: [1, 2], has_more: true, nextCursor: "camel-page" }))
+    );
+    expect(snakeAbsent.ok).toBe(false);
+    expect(snakeAbsent.code).toBe("unfollowed_cursor");
+    expect(snakeAbsent.nextCursor).toBe("camel-page");
+  });
+
+  test("total_available is a declared population total with both mismatch and satisfaction arms", () => {
+    const mismatch = classifyRead(ok(JSON.stringify({ total_available: 3, rows: [1, 2] })));
+    expect(mismatch.ok).toBe(false);
+    expect(mismatch.code).toBe("declared_total_mismatch");
+    expect(mismatch.declaredTotal).toBe(3);
+
+    const satisfied = classifyRead(ok(JSON.stringify({ total_available: 2, rows: [1, 2] })));
+    expect(satisfied.ok).toBe(true);
+    expect(satisfied.declaredTotal).toBe(2);
+    expect(satisfied.proofs).toContain("declared_total_satisfied");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -248,6 +287,44 @@ describe("mechanism 3: unpaginated", () => {
     expect(result.proofs).toContain("cursor_exhausted");
     expect(result.rows).toEqual([1, 2, 3, 4, 5]);
     expect(result.pages).toBe(3);
+  });
+
+  test("KNOWN-GOOD: safe-integer cursors are opaque, stringified into argv, and reconciled against total_available", () => {
+    const s = surface((argv) => {
+      const at = argv.indexOf("--cursor");
+      const cursor = at >= 0 ? argv[at + 1] : undefined;
+      if (cursor === undefined) {
+        return ok(JSON.stringify({ messages: [1, 2], has_more: true, next_cursor: 0, total_available: 3 }));
+      }
+      expect(cursor).toBe("0");
+      // conversations digest applies the cursor before counting total_available,
+      // so later pages declare the rows remaining at that cursor, not the first
+      // page's original population size.
+      return ok(JSON.stringify({ messages: [3], has_more: false, next_cursor: null, total_available: 1 }));
+    });
+
+    const result = safeRead({ argv: ["fake", "digest"], cursorFlag: "--cursor", run: s.run });
+    expect(result.ok).toBe(true);
+    expect(result.proofs).toContain("cursor_exhausted");
+    expect(result.rows).toEqual([1, 2, 3]);
+    expect(result.rowCount).toBe(3);
+    expect(result.pages).toBe(2);
+    expect(s.calls).toHaveLength(2);
+  });
+
+  test("KNOWN-BAD: exhausted numeric-cursor paging refuses an accumulated total_available mismatch", () => {
+    const s = surface((argv) =>
+      argv.includes("7")
+        ? ok(JSON.stringify({ messages: [3], has_more: false, next_cursor: null, total_available: 4 }))
+        : ok(JSON.stringify({ messages: [1, 2], has_more: true, next_cursor: 7, total_available: 4 }))
+    );
+
+    const result = safeRead({ argv: ["fake", "digest"], cursorFlag: "--cursor", run: s.run });
+    expect(result.ok).toBe(false);
+    expect(result.code).toBe("declared_total_mismatch");
+    expect(result.reason).toContain("3 row(s)");
+    expect(result.reason).toContain("declared total of 4");
+    expect(result.pages).toBe(2);
   });
 
   test("KNOWN-BAD: has_more without a usable cursor is refused, never treated as exhausted", () => {
@@ -458,12 +535,10 @@ describe("capture path and CLI", () => {
   });
 
   test("REGRESSION: a payload well past 1 MiB survives the capture path intact", () => {
-    // The first implementation used spawnSync(encoding:"utf8", maxBuffer:256MiB) and
-    // truncated a 1.23 MB read to 1079970 bytes at status 0 with error undefined —
-    // the exact 1 MiB-default figure, so the option never reached the call, and the
-    // ENOBUFS a 1 MiB run does raise was not surfaced either. A clean exit-0 short
-    // read, produced by the tool that exists to refuse clean exit-0 short reads.
-    // File descriptors have no such ceiling; this asserts the payload round-trips.
+    // The first implementation used in-memory spawnSync capture and returned a
+    // partial, unparseable live payload. The truncation point varied; the 256 MiB
+    // option does take effect and the default limit raises ENOBUFS. File descriptors
+    // avoid dependence on that bounded, producer-timing-sensitive path.
     const rows = Array.from({ length: 40000 }, (_, i) => ({ id: i, pad: "0123456789abcdef" }));
     const payload = JSON.stringify(rows);
     expect(payload.length).toBeGreaterThan(1024 * 1024);
@@ -484,6 +559,46 @@ describe("capture path and CLI", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  test("REGRESSION: a paced multi-megabyte producer is captured byte-for-byte", () => {
+    // A fast `cat` did not kill the in-memory spawnSync mutant. Pacing adds a
+    // sustained-output arm, but the producer-timing-sensitive mutant can still
+    // pass it; the structural fixture below pins the selected mechanism. The
+    // interpreter is the current runtime, not a script in the temporary directory.
+    const chunks = 96;
+    const chunkBytes = 32 * 1024;
+    const producer = [
+      'const { writeSync } = require("node:fs");',
+      `const chunk = "z".repeat(${chunkBytes});`,
+      `for (let i = 0; i < ${chunks}; i += 1) {`,
+      "  writeSync(1, chunk);",
+      "  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2);",
+      "}"
+    ].join("\n");
+
+    const captured = runCaptured([process.execPath, "-e", producer]);
+    expect(captured.code).toBe(0);
+    expect(captured.stderr).toBe("");
+    expect(captured.stdout.length).toBe(chunks * chunkBytes);
+    expect(captured.stdout.startsWith("z".repeat(64))).toBe(true);
+    expect(captured.stdout.endsWith("z".repeat(64))).toBe(true);
+  });
+
+  test("REGRESSION: capture stays file-descriptor based even when memory capture happens to pass", () => {
+    // The observed in-memory truncation is producer-timing-sensitive, so a payload
+    // fixture alone can let the exact old implementation survive. Pin the selected
+    // mechanism as well: the captured streams must be child file descriptors, not
+    // spawnSync-managed strings with a maxBuffer ceiling.
+    const source = readFileSync(join(import.meta.dir, "../src/safe-read-exec.ts"), "utf8");
+    const start = source.indexOf("export function runCaptured");
+    const end = source.indexOf("\nfunction withFlag", start);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const body = source.slice(start, end);
+    expect(body).toContain('stdio: ["ignore", outFd, errFd]');
+    expect(body).not.toContain('\n    encoding: "utf8",');
+    expect(body).not.toContain("\n    maxBuffer:");
   });
 
   test("stdout and stderr are captured separately and never merged", () => {

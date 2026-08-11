@@ -118,7 +118,7 @@ export interface ReadVerdict {
   /** The population the surface declared, when it declared one. */
   declaredTotal?: number | undefined;
   /** Opaque cursor for the next page, when the surface offered one. */
-  nextCursor?: string | null | undefined;
+  nextCursor?: string | number | null | undefined;
   hasMore?: boolean | undefined;
   /** Everything the classifier observed, for pasting into a record. */
   evidence: string[];
@@ -142,7 +142,7 @@ const ROWS_KEY_CANDIDATES = [
  * is the size of the page in hand, not of the population, so auto-detecting it would
  * manufacture `declared_total_satisfied` on exactly the reads that are truncated.
  */
-const TOTAL_KEY_CANDIDATES = ["total", "total_count", "totalCount", "totalItems"] as const;
+const TOTAL_KEY_CANDIDATES = ["total", "total_count", "totalCount", "totalItems", "total_available"] as const;
 
 /**
  * Truncation notices that Hasna CLIs write to STDERR while exiting 0.
@@ -162,6 +162,14 @@ const STDERR_TRUNCATION_PATTERNS: Array<{ re: RegExp; note: string }> = [
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** A cursor is opaque; only argv-safe scalar shape matters. */
+export function isUsableCursor(value: unknown): value is string | number {
+  return (
+    (typeof value === "string" && value.trim().length > 0) ||
+    (typeof value === "number" && Number.isSafeInteger(value))
+  );
 }
 
 /** Locate the row array without ever letting a miss become an empty list. */
@@ -308,7 +316,7 @@ export function classifyRead(captured: CapturedRead, options: ClassifyOptions = 
 
   let declaredTotal: number | undefined;
   let hasMore: boolean | undefined;
-  let nextCursor: string | null | undefined;
+  let nextCursor: string | number | null | undefined;
 
   if (isPlainObject(parsed)) {
     const totalKeys = options.totalKey ? [options.totalKey] : TOTAL_KEY_CANDIDATES;
@@ -330,11 +338,15 @@ export function classifyRead(captured: CapturedRead, options: ClassifyOptions = 
     }
     if (typeof parsed.has_more === "boolean") hasMore = parsed.has_more;
     else if (typeof parsed.hasMore === "boolean") hasMore = parsed.hasMore;
-    const cursor = parsed.next_cursor ?? parsed.nextCursor;
-    if (typeof cursor === "string" || cursor === null) nextCursor = cursor as string | null;
+    // An explicit snake_case null means exhausted. Nullish coalescing loses that
+    // distinction and incorrectly falls through to a stale camelCase value.
+    const cursor = Object.prototype.hasOwnProperty.call(parsed, "next_cursor")
+      ? parsed.next_cursor
+      : parsed.nextCursor;
+    if (isUsableCursor(cursor) || cursor === null) nextCursor = cursor;
   }
 
-  const usableCursor = typeof nextCursor === "string" && nextCursor.trim().length > 0;
+  const usableCursor = isUsableCursor(nextCursor);
   if (hasMore === true || usableCursor) {
     // This refusal MUST carry the cursor. It is the one refusal a caller can act on
     // automatically, and an executor that cannot see next_cursor here silently
@@ -354,11 +366,17 @@ export function classifyRead(captured: CapturedRead, options: ClassifyOptions = 
   }
 
   if (declaredTotal !== undefined && rowCount !== declaredTotal) {
-    return refuse(
-      "declared_total_mismatch",
-      `holding ${rowCount} row(s) against a declared total of ${declaredTotal}. ` +
-        `The surface's count and payload disagree, so completeness is not established.`
-    );
+    return {
+      ...refuse(
+        "declared_total_mismatch",
+        `holding ${rowCount} row(s) against a declared total of ${declaredTotal}. ` +
+          `The surface's count and payload disagree, so completeness is not established.`
+      ),
+      rowCount,
+      declaredTotal,
+      nextCursor,
+      hasMore
+    };
   }
 
   // --- proofs ------------------------------------------------------------------
