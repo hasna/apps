@@ -122,6 +122,7 @@ export const openapiSpec = {
           "resource_kind",
           "scope",
           "project_id",
+          "collection_revision",
           "items",
           "cursor",
           "next_cursor",
@@ -139,6 +140,7 @@ export const openapiSpec = {
           resource_kind: { type: "string", const: "channel" },
           scope: { type: "string", const: "collection" },
           project_id: { type: "string" },
+          collection_revision: { type: "string", pattern: "^[0-9a-f]{64}$" },
           items: {
             type: "array",
             items: { $ref: "#/components/schemas/ProjectChannelCollectionItem" },
@@ -518,6 +520,12 @@ export const openapiSpec = {
         parameters: [
           { name: "project_id", in: "query", required: true, schema: { type: "string" } },
           { name: "cursor", in: "query", schema: { type: "string", pattern: "^chn_[0-9a-f]{32}$" } },
+          {
+            name: "collection_revision",
+            in: "query",
+            description: "Required with cursor; the collection revision returned by the first page",
+            schema: { type: "string", pattern: "^[0-9a-f]{64}$" },
+          },
           { name: "max_items", in: "query", required: true, schema: { type: "integer", minimum: 1, maximum: 1000 } },
           { name: "response_byte_limit", in: "query", required: true, schema: { type: "integer", minimum: 1 } },
           { name: "time_budget_ms", in: "query", required: true, schema: { type: "integer", minimum: 1 } },
@@ -531,6 +539,10 @@ export const openapiSpec = {
                 schema: { $ref: "#/components/schemas/ProjectChannelCollectionPage" },
               },
             },
+          },
+          "409": {
+            description: "project channel collection changed; restart from the first page",
+            content: { "application/json": { schema: errorObject } },
           },
         },
       },
