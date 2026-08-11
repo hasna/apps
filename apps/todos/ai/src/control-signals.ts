@@ -22,10 +22,36 @@ function ownDataValue(value: object, key: string): { found: true; value: unknown
   return { found: true, value: descriptor.value };
 }
 
+function isObjectValue(value: unknown): value is object {
+  return value !== null && typeof value === "object";
+}
+
+function containsProxy(value: unknown, ancestors: Set<object>, depth: number): boolean {
+  if (!isObjectValue(value)) return false;
+  if (utilTypes.isProxy(value)) return true;
+  if (depth > 64 || ancestors.has(value)) return false;
+
+  ancestors.add(value);
+  try {
+    for (const key of Reflect.ownKeys(value)) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (descriptor !== undefined && "value" in descriptor) {
+        if (containsProxy(descriptor.value, ancestors, depth + 1)) return true;
+      }
+    }
+  } catch {
+    return false;
+  } finally {
+    ancestors.delete(value);
+  }
+  return false;
+}
+
 function crossBundlePayload(
   value: unknown,
   shape: CrossBundleSignalShape,
 ): unknown | null {
+  if (!isObjectValue(value) || utilTypes.isProxy(value)) return null;
   if (!(value instanceof Error)) return null;
   try {
     const name = ownDataValue(value, "name");
@@ -35,7 +61,7 @@ function crossBundlePayload(
       name?.value !== shape.name ||
       message?.value !== shape.message ||
       payload === null ||
-      utilTypes.isProxy(payload.value)
+      containsProxy(payload.value, new Set<object>(), 0)
     ) {
       return null;
     }
@@ -48,6 +74,8 @@ function crossBundlePayload(
 export function normalizeTodosAiControlSignal(
   value: unknown,
 ): TodosAiControlSignal | null {
+  if (isObjectValue(value) && utilTypes.isProxy(value)) return null;
+
   if (
     value instanceof TodosAiNeedsInputSignal ||
     value instanceof TodosAiNeedsApprovalSignal

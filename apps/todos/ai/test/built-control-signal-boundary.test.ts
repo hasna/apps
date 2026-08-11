@@ -12,6 +12,7 @@ import type {
   CreateGroqAdapterOptions,
   GroqSdkDependencies,
 } from "../src/providers/groq";
+import { normalizeTodosAiControlSignal } from "../src/control-signals";
 import type { TodosAiRuntimeDependencies } from "../src/types";
 
 const packageRoot = join(import.meta.dir, "..");
@@ -153,7 +154,48 @@ async function runAcrossBuiltBoundary(signal: Error) {
   return { events, result };
 }
 
+function trappingProxy<T extends object>(target: T, onTrap: () => void): T {
+  return new Proxy(target, {
+    getPrototypeOf(wrapped) {
+      onTrap();
+      return Reflect.getPrototypeOf(wrapped);
+    },
+    ownKeys(wrapped) {
+      onTrap();
+      return Reflect.ownKeys(wrapped);
+    },
+    getOwnPropertyDescriptor(wrapped, property) {
+      onTrap();
+      return Reflect.getOwnPropertyDescriptor(wrapped, property);
+    },
+    get(wrapped, property, receiver) {
+      onTrap();
+      return Reflect.get(wrapped, property, receiver);
+    },
+  });
+}
+
 describe("built companion control-signal boundary", () => {
+  test("normalizer rejects Proxy-wrapped outer errors before trap-triggering checks", () => {
+    let traps = 0;
+    const outer = new Error("Todos AI input required");
+    outer.name = "TodosAiNeedsInputSignal";
+    Object.defineProperty(outer, "pending_input", {
+      value: { prompt: "Must not be read.", fields: ["task_id"] },
+    });
+
+    const signal = normalizeTodosAiControlSignal(
+      trappingProxy(outer, () => {
+        traps += 1;
+      }),
+    );
+
+    expect({ traps, signal }).toEqual({
+      traps: 0,
+      signal: null,
+    });
+  });
+
   test("recognizes host clarification and approval signals across bundled constructors", async () => {
     const cases = [
       {
@@ -245,5 +287,56 @@ describe("built companion control-signal boundary", () => {
         pending_approval: null,
       },
     });
+  }, 30_000);
+
+  test("rejects nested Proxy control payloads before invoking constructors", async () => {
+    const cases = [
+      {
+        key: "pending_input",
+        signalName: "TodosAiNeedsInputSignal",
+        signalMessage: "Todos AI input required",
+        payload: (onTrap: () => void) => ({
+          prompt: "Which exact task?",
+          fields: trappingProxy(["task_id"], onTrap),
+        }),
+      },
+      {
+        key: "pending_approval",
+        signalName: "TodosAiNeedsApprovalSignal",
+        signalMessage: "Todos AI approval required",
+        payload: (onTrap: () => void) => ({
+          id: "approval-nested-proxy",
+          summary: "Approve one exact task update.",
+          operations: [
+            trappingProxy({
+              operation: "update_task",
+              task_id: "10000000-0000-4000-8000-000000000001",
+            }, onTrap),
+          ],
+        }),
+      },
+    ] as const;
+
+    for (const item of cases) {
+      let traps = 0;
+      const signal = new Error(item.signalMessage);
+      signal.name = item.signalName;
+      Object.defineProperty(signal, item.key, {
+        value: item.payload(() => {
+          traps += 1;
+        }),
+      });
+
+      const { result } = await runAcrossBuiltBoundary(signal);
+
+      expect({ traps, result }).toMatchObject({
+        traps: 0,
+        result: {
+          status: "answered",
+          pending_input: null,
+          pending_approval: null,
+        },
+      });
+    }
   }, 30_000);
 });
