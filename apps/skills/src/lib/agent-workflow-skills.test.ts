@@ -18,6 +18,11 @@ function secretScanContractFailures(workflow: string): string[] {
   if (start < 0 || end <= start) return ["secret-scan job"];
 
   const secretScan = workflow.slice(start, end);
+  const exactHeadScanStart = secretScan.indexOf(
+    "      - name: Scan the exact range and checked-out head tree",
+  );
+  const exactHeadScan =
+    exactHeadScanStart >= 0 ? secretScan.slice(exactHeadScanStart) : "";
   const required: Array<[string, string]> = [
     ["job name", "name: Secret scan (gitleaks)"],
     [
@@ -45,8 +50,10 @@ function secretScanContractFailures(workflow: string): string[] {
     ["validated SHA range", "sha_pattern='^[0-9a-f]{40}$'"],
     ["merge-result regression control", "Verify merge-result-only secret coverage"],
     ["runtime-generated control credential", "openssl genpkey -algorithm RSA"],
+    ["export-ignore negative control", "merge-only-private-key.pem export-ignore"],
     ["history negative control", "HISTORY_CONTROL_RC=%s"],
-    ["tree positive control", "TREE_CONTROL_RC=%s"],
+    ["archive negative control", "ARCHIVE_CONTROL_RC=%s"],
+    ["blob-tree positive control", "BLOB_TREE_CONTROL_RC=%s"],
     ["exact candidate checkout", 'git checkout --detach --quiet "$head_sha"'],
     ["checked-out head verification", 'actual_head="$(git rev-parse HEAD)"'],
     ["checked-out head equality", 'if [[ "$actual_head" != "$head_sha" ]]'],
@@ -54,10 +61,6 @@ function secretScanContractFailures(workflow: string): string[] {
     ["bounded commit range", 'GITLEAKS_LOG_OPTS="$base_sha..$head_sha"'],
     ["gitleaks git scan", '"$RUNNER_TEMP/gitleaks-bin/gitleaks" git .'],
     ["gitleaks log options", '--log-opts="$GITLEAKS_LOG_OPTS"'],
-    [
-      "exact head tree archive",
-      'git archive --format=tar --output="$tree_archive" "$actual_head"',
-    ],
     ["gitleaks checked-out tree scan", '"$RUNNER_TEMP/gitleaks-bin/gitleaks" dir "$head_tree"'],
     ["redaction", "--redact"],
     ["quiet banner", "--no-banner"],
@@ -67,6 +70,27 @@ function secretScanContractFailures(workflow: string): string[] {
   const failures = required
     .filter(([, expected]) => !secretScan.includes(expected))
     .map(([label]) => label);
+
+  const exactHeadRequired: Array<[string, string]> = [
+    [
+      "exact head blob listing",
+      'git ls-tree -rz --full-tree "$actual_head" > "$tree_listing"',
+    ],
+    ["exact head blob extraction", 'git cat-file blob "$object_id" > "$destination"'],
+    ["exact head blob count guard", 'if [[ "$blob_count" -eq 0 ]]'],
+  ];
+  if (!exactHeadScan) {
+    failures.push("exact head scan step");
+  } else {
+    failures.push(
+      ...exactHeadRequired
+        .filter(([, expected]) => !exactHeadScan.includes(expected))
+        .map(([label]) => label),
+    );
+    if (exactHeadScan.includes("git archive")) {
+      failures.push("attribute-sensitive exact head archive");
+    }
+  }
 
   if (/actions\/checkout@(v\d+|main|master)\b/.test(secretScan)) {
     failures.push("floating checkout");
@@ -272,9 +296,27 @@ describe("repository-managed agent workflow skills", () => {
         "merge-result regression control",
       ],
       [
+        "missing export-ignore negative control",
+        workflow.replace("          printf 'merge-only-private-key.pem export-ignore\\n' > \"$control_repo/.gitattributes\"\n", ""),
+        "export-ignore negative control",
+      ],
+      [
         "missing exact head checkout",
         workflow.replace('          git checkout --detach --quiet "$head_sha"\n', ""),
         "exact candidate checkout",
+      ],
+      [
+        "attribute-sensitive exact head archive",
+        workflow.replace(
+          '          git ls-tree -rz --full-tree "$actual_head" > "$tree_listing"\n',
+          '          git archive --format=tar --output="$tree_listing" "$actual_head"\n',
+        ),
+        "exact head blob listing",
+      ],
+      [
+        "missing exact head blob extraction",
+        workflow.replace('            git cat-file blob "$object_id" > "$destination"\n', ""),
+        "exact head blob extraction",
       ],
       [
         "history-only scan",

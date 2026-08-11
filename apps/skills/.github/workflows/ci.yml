@@ -40,9 +40,11 @@ jobs:
           control_root="$(mktemp -d "$RUNNER_TEMP/gitleaks-merge-control.XXXXXX")"
           trap 'rm -rf "$control_root"' EXIT
           control_repo="$control_root/repo"
-          control_tree="$control_root/tree"
+          archive_tree="$control_root/archive-tree"
+          blob_tree="$control_root/blob-tree"
           control_archive="$control_root/tree.tar"
-          mkdir -p "$control_repo" "$control_tree"
+          tree_listing="$control_root/tree.lst"
+          mkdir -p "$control_repo" "$archive_tree" "$blob_tree"
 
           git -C "$control_repo" init --quiet
           git -C "$control_repo" config user.name "Gitleaks control"
@@ -67,7 +69,8 @@ jobs:
           git -C "$control_repo" merge --quiet --no-ff --no-commit left
           openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 \
             -out "$control_repo/merge-only-private-key.pem" 2>/dev/null
-          git -C "$control_repo" add merge-only-private-key.pem
+          printf 'merge-only-private-key.pem export-ignore\n' > "$control_repo/.gitattributes"
+          git -C "$control_repo" add .gitattributes merge-only-private-key.pem
           merge_tree="$(git -C "$control_repo" write-tree)"
           printf 'merge result\n' > "$control_root/commit-message"
           merge_sha="$(
@@ -95,18 +98,51 @@ jobs:
           history_control_rc=$?
 
           git -C "$control_repo" archive --format=tar --output="$control_archive" "$merge_sha"
-          tar -xf "$control_archive" -C "$control_tree"
-          "$RUNNER_TEMP/gitleaks-bin/gitleaks" dir "$control_tree" \
+          tar -xf "$control_archive" -C "$archive_tree"
+          "$RUNNER_TEMP/gitleaks-bin/gitleaks" dir "$archive_tree" \
             --redact \
             --no-banner \
             --exit-code 1 \
-            > "$control_root/tree.out" 2> "$control_root/tree.err"
-          tree_control_rc=$?
+            > "$control_root/archive.out" 2> "$control_root/archive.err"
+          archive_control_rc=$?
+
+          set -e
+          git -C "$control_repo" ls-tree -rz --full-tree "$merge_sha" > "$tree_listing"
+          blob_count=0
+          while IFS= read -r -d '' tree_entry; do
+            metadata="${tree_entry%%$'\t'*}"
+            path="${tree_entry#*$'\t'}"
+            read -r object_mode object_type object_id <<< "$metadata"
+            if [[ "$object_type" != "blob" ]]; then
+              continue
+            fi
+            destination="$blob_tree/$path"
+            if [[ "$path" == */* ]]; then
+              mkdir -p "$blob_tree/${path%/*}"
+            fi
+            git -C "$control_repo" cat-file blob "$object_id" > "$destination"
+            if [[ "$object_mode" == "100755" ]]; then
+              chmod 0755 "$destination"
+            fi
+            blob_count=$((blob_count + 1))
+          done < "$tree_listing"
+          if [[ "$blob_count" -eq 0 ]]; then
+            echo "Gitleaks blob-tree control materialized no blobs" >&2
+            exit 2
+          fi
+          set +e
+          "$RUNNER_TEMP/gitleaks-bin/gitleaks" dir "$blob_tree" \
+            --redact \
+            --no-banner \
+            --exit-code 1 \
+            > "$control_root/blob-tree.out" 2> "$control_root/blob-tree.err"
+          blob_tree_control_rc=$?
           set -e
 
           printf 'HISTORY_CONTROL_RC=%s\n' "$history_control_rc"
-          printf 'TREE_CONTROL_RC=%s\n' "$tree_control_rc"
-          if [[ "$history_control_rc" -ne 0 || "$tree_control_rc" -ne 1 ]]; then
+          printf 'ARCHIVE_CONTROL_RC=%s\n' "$archive_control_rc"
+          printf 'BLOB_TREE_CONTROL_RC=%s\n' "$blob_tree_control_rc"
+          if [[ "$history_control_rc" -ne 0 || "$archive_control_rc" -ne 0 || "$blob_tree_control_rc" -ne 1 ]]; then
             echo "Gitleaks merge-result coverage control failed" >&2
             exit 2
           fi
@@ -150,10 +186,31 @@ jobs:
             --exit-code 1
 
           head_tree="$RUNNER_TEMP/gitleaks-head-tree"
-          tree_archive="$RUNNER_TEMP/gitleaks-head-tree.tar"
+          tree_listing="$RUNNER_TEMP/gitleaks-head-tree.lst"
           mkdir -p "$head_tree"
-          git archive --format=tar --output="$tree_archive" "$actual_head"
-          tar -xf "$tree_archive" -C "$head_tree"
+          git ls-tree -rz --full-tree "$actual_head" > "$tree_listing"
+          blob_count=0
+          while IFS= read -r -d '' tree_entry; do
+            metadata="${tree_entry%%$'\t'*}"
+            path="${tree_entry#*$'\t'}"
+            read -r object_mode object_type object_id <<< "$metadata"
+            if [[ "$object_type" != "blob" ]]; then
+              continue
+            fi
+            destination="$head_tree/$path"
+            if [[ "$path" == */* ]]; then
+              mkdir -p "$head_tree/${path%/*}"
+            fi
+            git cat-file blob "$object_id" > "$destination"
+            if [[ "$object_mode" == "100755" ]]; then
+              chmod 0755 "$destination"
+            fi
+            blob_count=$((blob_count + 1))
+          done < "$tree_listing"
+          if [[ "$blob_count" -eq 0 ]]; then
+            echo "Gitleaks exact-head materialization produced no blobs" >&2
+            exit 2
+          fi
           "$RUNNER_TEMP/gitleaks-bin/gitleaks" dir "$head_tree" \
             --redact \
             --no-banner \
