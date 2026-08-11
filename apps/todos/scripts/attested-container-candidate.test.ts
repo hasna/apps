@@ -249,6 +249,8 @@ describe("attested no-push container candidate", () => {
     );
     expect(workflow).toContain("push-to-registry: false");
     expect(workflow).toContain("--output type=oci");
+    expect(workflow).toContain("input: ${{ env.OCI_LAYOUT }}");
+    expect(workflow).not.toContain("input: ${{ env.OCI_ARCHIVE }}");
     const scanReportConsumers = [
       "SCAN_REPORT: todos-candidate.trivy.json",
       "output: ${{ env.SCAN_REPORT }}",
