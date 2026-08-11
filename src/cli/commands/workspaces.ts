@@ -1,6 +1,6 @@
 import chalk from "chalk";
 import type { Command } from "commander";
-import { readFileSync } from "node:fs";
+import { closeSync, constants, fstatSync, openSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import {
   ensureCliAgent,
@@ -265,6 +265,84 @@ async function readBoundedStdinJson(maxBytes = FULL_REGISTRATION_STDIN_LIMIT): P
   return JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
 }
 
+function stdinHasExplicitInputSource(): boolean {
+  try {
+    const stdin = fstatSync(0);
+    return !stdin.isCharacterDevice();
+  } catch {
+    return false;
+  }
+}
+
+function readBoundedInputFileJson(
+  inputPath: string,
+  maxBytes = FULL_REGISTRATION_STDIN_LIMIT,
+): unknown {
+  let descriptor: number;
+  try {
+    descriptor = openSync(
+      inputPath,
+      constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0),
+    );
+  } catch {
+    throw new Error("register-full --input must reference a regular file");
+  }
+
+  try {
+    const before = fstatSync(descriptor);
+    if (!before.isFile()) {
+      throw new Error("register-full --input must reference a regular file");
+    }
+    if (typeof process.getuid !== "function") {
+      throw new Error("register-full --input file ownership cannot be verified on this platform");
+    }
+    if (before.uid !== process.getuid()) {
+      throw new Error("register-full --input file must be owned by the current caller");
+    }
+    if ((before.mode & 0o7777) !== 0o600) {
+      throw new Error("register-full --input file mode must be 0600");
+    }
+    if (before.size === 0) {
+      throw new Error("register-full --input file must contain one JSON object");
+    }
+    if (before.size > maxBytes) {
+      throw new Error(`register-full --input file exceeds ${maxBytes} bytes`);
+    }
+
+    const contents = readFileSync(descriptor);
+    const after = fstatSync(descriptor);
+    if (
+      after.dev !== before.dev
+      || after.ino !== before.ino
+      || after.size !== before.size
+      || after.mtimeMs !== before.mtimeMs
+      || after.ctimeMs !== before.ctimeMs
+      || after.uid !== before.uid
+      || (after.mode & 0o7777) !== (before.mode & 0o7777)
+    ) {
+      throw new Error("register-full --input file changed while it was being read");
+    }
+    if (contents.length > maxBytes) {
+      throw new Error(`register-full --input file exceeds ${maxBytes} bytes`);
+    }
+    try {
+      return JSON.parse(contents.toString("utf8")) as unknown;
+    } catch {
+      throw new Error("register-full --input file must contain valid JSON");
+    }
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+async function readFullRegistrationJson(inputPath?: string): Promise<unknown> {
+  if (!inputPath) return readBoundedStdinJson();
+  if (stdinHasExplicitInputSource()) {
+    throw new Error("register-full accepts exactly one input source: stdin or --input");
+  }
+  return readBoundedInputFileJson(inputPath);
+}
+
 function parseHistoricalAuthorityIdentity(
   value: unknown,
   label: string,
@@ -323,17 +401,12 @@ function parseFullRegistrationReconciliation(
       ? ["source_operation_id", "source_target_path", "target_id"]
       : ["source_operation_id", "target_id"];
     const actualKeys = Object.keys(entry).sort();
-    const conversationsKeys = [...expectedKeys, "source_authority_identity"].sort();
+    const historicalIdentityKeys = [...expectedKeys, "source_authority_identity"].sort();
     const keysValid = JSON.stringify(actualKeys) === JSON.stringify(expectedKeys)
-      || (
-        key === "conversations_channel"
-        && JSON.stringify(actualKeys) === JSON.stringify(conversationsKeys)
-      );
+      || JSON.stringify(actualKeys) === JSON.stringify(historicalIdentityKeys);
     if (!keysValid) {
       throw new Error(
-        key === "conversations_channel"
-          ? "register-full reconcile_existing.conversations_channel requires source_operation_id and target_id, with optional source_authority_identity"
-          : `register-full reconcile_existing.${key} requires only ${expectedKeys.join(" and ")}`,
+        `register-full reconcile_existing.${key} requires ${expectedKeys.join(" and ")}, with optional source_authority_identity`,
       );
     }
     if (typeof entry.source_operation_id !== "string") {
@@ -342,6 +415,12 @@ function parseFullRegistrationReconciliation(
     if (typeof entry.target_id !== "string") {
       throw new Error(`register-full reconcile_existing.${key}.target_id must be a string`);
     }
+    const sourceAuthorityIdentity = entry.source_authority_identity === undefined
+      ? undefined
+      : parseHistoricalAuthorityIdentity(
+          entry.source_authority_identity,
+          `register-full reconcile_existing.${key}.source_authority_identity`,
+        );
     if (key === "mementos_project") {
       if (typeof entry.source_target_path !== "string") {
         throw new Error(
@@ -352,24 +431,19 @@ function parseFullRegistrationReconciliation(
         source_operation_id: entry.source_operation_id,
         target_id: entry.target_id,
         source_target: ProjectRegistrationPathHandle.fromPath(entry.source_target_path),
+        ...(sourceAuthorityIdentity ? { source_authority_identity: sourceAuthorityIdentity } : {}),
       };
     } else if (key === "conversations_channel") {
       parsed.conversations_channel = {
         source_operation_id: entry.source_operation_id,
         target_id: entry.target_id,
-        ...(entry.source_authority_identity === undefined
-          ? {}
-          : {
-              source_authority_identity: parseHistoricalAuthorityIdentity(
-                entry.source_authority_identity,
-                "register-full reconcile_existing.conversations_channel.source_authority_identity",
-              ),
-            }),
+        ...(sourceAuthorityIdentity ? { source_authority_identity: sourceAuthorityIdentity } : {}),
       };
     } else {
       parsed[key] = {
         source_operation_id: entry.source_operation_id,
         target_id: entry.target_id,
+        ...(sourceAuthorityIdentity ? { source_authority_identity: sourceAuthorityIdentity } : {}),
       };
     }
   }
@@ -388,7 +462,7 @@ function parseFullRegistrationPayload(value: unknown): {
   time_budget_ms: number;
 } {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("register-full stdin must be a JSON object");
+    throw new Error("register-full input must be a JSON object");
   }
   const payload = value as Record<string, unknown>;
   if (typeof payload.operation_id !== "string") throw new Error("register-full operation_id must be a string");
@@ -1753,11 +1827,12 @@ function registerProjectStartCommand(program: Command): void {
 function registerProjectCommands(program: Command): void {
   program
     .command("register-full")
-    .description("Run bounded all-or-nothing project registration from one JSON object on stdin")
+    .description("Run bounded all-or-nothing project registration from stdin or a caller-owned mode-0600 file")
+    .option("--input <path>", "Read one JSON object from a caller-owned regular mode-0600 file")
     .option("-j, --json", "Output JSON")
     .action(async (opts) => {
       try {
-        const payload = parseFullRegistrationPayload(await readBoundedStdinJson());
+        const payload = parseFullRegistrationPayload(await readFullRegistrationJson(opts.input));
         const result = await registerFullProject({
           operation_id: payload.operation_id,
           mode: payload.mode,

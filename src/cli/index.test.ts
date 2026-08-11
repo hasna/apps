@@ -1,7 +1,7 @@
 import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { Command } from "commander";
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
@@ -27,6 +27,17 @@ function cliProcessTest(name: string, fn: () => void | Promise<void>): void {
 function runProjects(args: string[], env: Record<string, string> = {}, cwd = process.cwd()) {
   return Bun.spawnSync({
     cmd: ["bun", "run", CLI_PATH, ...args],
+    stdout: "pipe",
+    stderr: "pipe",
+    env: testSpawnEnv(env),
+    cwd,
+  });
+}
+
+function runProjectsWithoutStdin(args: string[], env: Record<string, string> = {}, cwd = process.cwd()) {
+  return Bun.spawnSync({
+    cmd: ["bun", "run", CLI_PATH, ...args],
+    stdin: "ignore",
     stdout: "pipe",
     stderr: "pipe",
     env: testSpawnEnv(env),
@@ -343,6 +354,220 @@ describe("project-first CLI surface", () => {
     }
   });
 
+  test("register-full consumes a caller-owned mode-0600 input file through the same transaction path", () => {
+    const root = mkdtempSync(join(tmpdir(), "projects-cli-register-full-input-file-"));
+    const dbPath = join(root, "projects.db");
+    const targetPath = join(root, "fleet-resources");
+    const inputPath = join(root, "register-full.json");
+    const privatePayloadMarker = "private-input-file-marker-must-not-be-echoed";
+    const payload = JSON.stringify({
+      operation_id: "op-cli-register-full-input-file",
+      project: {
+        name: "Fleet Resources",
+        slug: "fleet-resources",
+        kind: "project",
+        metadata: { private_payload_marker: privatePayloadMarker },
+      },
+      target_path: targetPath,
+      goals_markdown: "# Goals\n\n- Register safely from one file.\n",
+      response_byte_limit: 512_000,
+      time_budget_ms: 10_000,
+    });
+    writeFileSync(inputPath, payload, { mode: 0o600 });
+    chmodSync(inputPath, 0o600);
+    try {
+      const result = runProjectsWithoutStdin(
+        ["register-full", "--input", inputPath, "--json"],
+        { HASNA_PROJECTS_DB_PATH: dbPath },
+      );
+      expect(result.exitCode).toBe(1);
+      expect(text(result.stderr)).toBe("");
+      const body = JSON.parse(text(result.stdout)) as {
+        ok: boolean;
+        outcome: string;
+        dependencies: Array<{ dependency_task_id: string }>;
+      };
+      expect(body.ok).toBe(false);
+      expect(body.outcome).toBe("no_go");
+      expect(body.dependencies.map((item) => item.dependency_task_id).sort()).toEqual(
+        Object.values(PROJECT_REGISTRATION_DEPENDENCY_TASKS).sort(),
+      );
+      expect(existsSync(dbPath)).toBe(false);
+      expect(existsSync(targetPath)).toBe(false);
+      expect(text(result.stdout)).not.toContain(targetPath);
+      expect(text(result.stdout)).not.toContain(privatePayloadMarker);
+      expect(text(result.stderr)).not.toContain(privatePayloadMarker);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("register-full rejects simultaneous stdin and --input without echoing either payload", async () => {
+    const root = mkdtempSync(join(tmpdir(), "projects-cli-register-full-dual-input-"));
+    const dbPath = join(root, "projects.db");
+    const targetPath = join(root, "fleet-resources");
+    const inputPath = join(root, "register-full.json");
+    const filePayloadMarker = "private-file-payload-must-not-be-echoed";
+    const stdinPayloadMarker = "private-stdin-payload-must-not-be-echoed";
+    const makePayload = (operationId: string, marker: string) => JSON.stringify({
+      operation_id: operationId,
+      project: {
+        name: "Fleet Resources",
+        slug: "fleet-resources",
+        kind: "project",
+        metadata: { private_payload_marker: marker },
+      },
+      target_path: targetPath,
+      goals_markdown: "# Goals\n\n- Refuse ambiguous input.\n",
+    });
+    writeFileSync(inputPath, makePayload("op-cli-register-full-file", filePayloadMarker), { mode: 0o600 });
+    chmodSync(inputPath, 0o600);
+    try {
+      const result = await runProjectsWithStdin(
+        ["register-full", "--input", inputPath, "--json"],
+        makePayload("op-cli-register-full-stdin", stdinPayloadMarker),
+        { HASNA_PROJECTS_DB_PATH: dbPath },
+      );
+      expect(result.exitCode).toBe(1);
+      expect(text(result.stderr)).toBe("");
+      expect(JSON.parse(text(result.stdout))).toMatchObject({
+        ok: false,
+        outcome: "no_go",
+        reason_code: "invalid_bounded_stdin_request",
+        error: "register-full accepts exactly one input source: stdin or --input",
+      });
+      expect(text(result.stdout)).not.toContain(filePayloadMarker);
+      expect(text(result.stdout)).not.toContain(stdinPayloadMarker);
+      expect(text(result.stderr)).not.toContain(filePayloadMarker);
+      expect(text(result.stderr)).not.toContain(stdinPayloadMarker);
+      expect(existsSync(dbPath)).toBe(false);
+      expect(existsSync(targetPath)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("register-full rejects non-regular and non-0600 input files before reading payload bytes", () => {
+    const root = mkdtempSync(join(tmpdir(), "projects-cli-register-full-file-guards-"));
+    const dbPath = join(root, "projects.db");
+    const targetPath = join(root, "fleet-resources");
+    const insecurePath = join(root, "insecure.json");
+    const missingPath = join(root, "missing.json");
+    const directoryPath = join(root, "directory-input");
+    const secureTargetPath = join(root, "secure-target.json");
+    const symlinkPath = join(root, "symlink-input.json");
+    const privatePayloadMarker = "guarded-file-payload-must-not-be-echoed";
+    writeFileSync(insecurePath, JSON.stringify({
+      operation_id: privatePayloadMarker,
+      target_path: targetPath,
+    }), { mode: 0o644 });
+    chmodSync(insecurePath, 0o644);
+    mkdirSync(directoryPath);
+    chmodSync(directoryPath, 0o600);
+    writeFileSync(secureTargetPath, JSON.stringify({ operation_id: privatePayloadMarker }), { mode: 0o600 });
+    chmodSync(secureTargetPath, 0o600);
+    symlinkSync(secureTargetPath, symlinkPath);
+    try {
+      for (const [inputPath, expectedError] of [
+        [missingPath, "register-full --input must reference a regular file"],
+        [insecurePath, "register-full --input file mode must be 0600"],
+        [directoryPath, "register-full --input must reference a regular file"],
+        [symlinkPath, "register-full --input must reference a regular file"],
+      ] as const) {
+        const result = runProjectsWithoutStdin(
+          ["register-full", "--input", inputPath, "--json"],
+          { HASNA_PROJECTS_DB_PATH: dbPath },
+        );
+        expect(result.exitCode).toBe(1);
+        expect(text(result.stderr)).toBe("");
+        expect(JSON.parse(text(result.stdout))).toMatchObject({
+          ok: false,
+          outcome: "no_go",
+          reason_code: "invalid_bounded_stdin_request",
+          error: expectedError,
+        });
+        expect(text(result.stdout)).not.toContain(privatePayloadMarker);
+        expect(text(result.stderr)).not.toContain(privatePayloadMarker);
+      }
+      expect(existsSync(dbPath)).toBe(false);
+      expect(existsSync(targetPath)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("register-full rejects a mode-0600 FIFO without waiting for a writer", async () => {
+    const root = mkdtempSync(join(tmpdir(), "projects-cli-register-full-fifo-guard-"));
+    const dbPath = join(root, "projects.db");
+    const fifoPath = join(root, "register-full.fifo");
+    const created = Bun.spawnSync({
+      cmd: ["mkfifo", "--", fifoPath],
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(created.exitCode).toBe(0);
+    chmodSync(fifoPath, 0o600);
+    const proc = Bun.spawn({
+      cmd: ["bun", "run", CLI_PATH, "register-full", "--input", fifoPath, "--json"],
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+      env: testSpawnEnv({ HASNA_PROJECTS_DB_PATH: dbPath }),
+    });
+    try {
+      const terminal = await Promise.race([
+        proc.exited.then((exitCode) => ({ state: "exited" as const, exitCode })),
+        Bun.sleep(750).then(() => ({ state: "blocked" as const, exitCode: null })),
+      ]);
+      if (terminal.state === "blocked") proc.kill();
+      const [stdout, stderr] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+        proc.exited,
+      ]);
+      expect(terminal).toEqual({ state: "exited", exitCode: 1 });
+      expect(stderr).toBe("");
+      expect(JSON.parse(stdout)).toMatchObject({
+        ok: false,
+        outcome: "no_go",
+        reason_code: "invalid_bounded_stdin_request",
+        error: "register-full --input must reference a regular file",
+      });
+      expect(existsSync(dbPath)).toBe(false);
+    } finally {
+      if (proc.exitCode === null) proc.kill();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("register-full sanitizes malformed input-file JSON errors", () => {
+    const root = mkdtempSync(join(tmpdir(), "projects-cli-register-full-malformed-file-"));
+    const dbPath = join(root, "projects.db");
+    const inputPath = join(root, "register-full.json");
+    const privatePayloadMarker = "malformed-private-payload-must-not-be-echoed";
+    writeFileSync(inputPath, `{"operation_id":"${privatePayloadMarker}",`, { mode: 0o600 });
+    chmodSync(inputPath, 0o600);
+    try {
+      const result = runProjectsWithoutStdin(
+        ["register-full", "--input", inputPath, "--json"],
+        { HASNA_PROJECTS_DB_PATH: dbPath },
+      );
+      expect(result.exitCode).toBe(1);
+      expect(text(result.stderr)).toBe("");
+      expect(JSON.parse(text(result.stdout))).toMatchObject({
+        ok: false,
+        outcome: "no_go",
+        reason_code: "invalid_bounded_stdin_request",
+        error: "register-full --input file must contain valid JSON",
+      });
+      expect(text(result.stdout)).not.toContain(privatePayloadMarker);
+      expect(text(result.stderr)).not.toContain(privatePayloadMarker);
+      expect(existsSync(dbPath)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("register-full accepts the closed orphan-authority reconciliation schema without serializing either path", async () => {
     const root = mkdtempSync(join(tmpdir(), "projects-cli-register-full-authority-reconcile-"));
     const dbPath = join(root, "projects.db");
@@ -371,14 +596,32 @@ describe("project-first CLI surface", () => {
         },
         todos_project: {
           source_operation_id: "op-cli-register-full",
+          source_authority_identity: {
+            route: "/v1/project-registration/todos",
+            package_version: "1.0.0-rc.3",
+            authority_id: "todos",
+            corpus_id: "cor_todos_historical",
+          },
           target_id: "d736e48e-8267-4d91-b76d-9ab1d4015db8",
         },
         todos_task_list: {
           source_operation_id: "op-cli-register-full",
+          source_authority_identity: {
+            route: "/v1/project-registration/todos",
+            package_version: "1.0.0-rc.3",
+            authority_id: "todos",
+            corpus_id: "cor_todos_historical",
+          },
           target_id: "98a4f2df-1f4f-45d7-a85e-8c670f70daac",
         },
         mementos_project: {
           source_operation_id: "op-cli-register-full",
+          source_authority_identity: {
+            route: "/v1/project-registration/mementos",
+            package_version: "0.14.79",
+            authority_id: "mementos",
+            corpus_id: "cor_mementos_historical",
+          },
           target_id: "mm_project_f75606ef14e51fb577a15882ba0ab8ed333b2c29",
           source_target_path: sourceTargetPath,
         },
@@ -500,6 +743,64 @@ describe("project-first CLI surface", () => {
         outcome: "no_go",
         reason_code: "invalid_bounded_stdin_request",
         error: "register-full reconcile_existing.conversations_channel.source_authority_identity requires only route, package_version, authority_id, and corpus_id",
+      });
+      expect(existsSync(dbPath)).toBe(false);
+      expect(existsSync(targetPath)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("register-full passes both historical Todos identities to the shared-tuple validator", async () => {
+    const root = mkdtempSync(join(tmpdir(), "projects-cli-register-full-historical-todos-pair-"));
+    const dbPath = join(root, "projects.db");
+    const targetPath = join(root, "fleet-resources");
+    const payload = JSON.stringify({
+      operation_id: "op-cli-register-full-historical-todos-pair",
+      project: {
+        id: "wks_historicaltodospair01",
+        name: "Fleet Resources",
+        slug: "fleet-resources",
+        kind: "project",
+      },
+      target_path: targetPath,
+      goals_markdown: "# Goals\n\n- Reconcile safely.\n",
+      reconcile_existing: {
+        todos_project: {
+          source_operation_id: "op-cli-register-full-source",
+          source_authority_identity: {
+            route: "/v1/project-registration/todos",
+            package_version: "1.0.0-rc.3",
+            authority_id: "todos",
+            corpus_id: "cor_todos_historical",
+          },
+          target_id: "d736e48e-8267-4d91-b76d-9ab1d4015db8",
+        },
+        todos_task_list: {
+          source_operation_id: "op-cli-register-full-source",
+          source_authority_identity: {
+            route: "/v1/project-registration/todos",
+            package_version: "1.0.0-rc.4",
+            authority_id: "todos",
+            corpus_id: "cor_todos_historical",
+          },
+          target_id: "98a4f2df-1f4f-45d7-a85e-8c670f70daac",
+        },
+      },
+    });
+    try {
+      const result = await runProjectsWithStdin(
+        ["register-full", "--json"],
+        payload,
+        { HASNA_PROJECTS_DB_PATH: dbPath },
+      );
+      expect(result.exitCode).toBe(1);
+      expect(text(result.stderr)).toBe("");
+      expect(JSON.parse(text(result.stdout))).toMatchObject({
+        ok: false,
+        outcome: "no_go",
+        reason_code: "invalid_bounded_stdin_request",
+        error: "project registration reconcile_existing Todos entries must share one source_authority_identity",
       });
       expect(existsSync(dbPath)).toBe(false);
       expect(existsSync(targetPath)).toBe(false);
