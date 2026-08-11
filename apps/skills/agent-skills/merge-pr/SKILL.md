@@ -23,13 +23,14 @@ For an actual merge:
 1. Reuse the owning native goal/plan and exact Todo. Freeze one nonblank
    `acceptance_scope`; record the cumulative repair-cycle count.
 2. Declare `routine` or `elevated`. Unknown is elevated and cannot authorize a
-   merge. Routine requires one independent exact-head artifact and permits one
-   repair cycle; elevated requires two and permits two. A head change
-   invalidates artifacts without resetting the cap.
+   merge. Every risk tier requires exactly one independent exact-head artifact.
+   Review depth scales with risk, while the cumulative repair-cycle cap remains
+   one for routine and two for elevated. A head change invalidates the artifact
+   without resetting the cap.
 3. Before review starts, write the task-owned fixed reviewer set as JSON with
-   one descriptor per required reviewer. Each descriptor contains a
+   exactly one reviewer descriptor. The descriptor contains a
    `reviewer_identity`, a `reviewer_run_id`, or both. Keep worker, fixed
-   reviewers, and executor distinct. Every artifact must name the repository,
+   reviewer, and executor distinct. The artifact must name the repository,
    PR, exact head SHA, frozen scope, the same reviewer descriptor, timestamp,
    verdict, checked risks, and blocking findings. Missing, surplus, duplicate,
    or substitute reviewers fail closed even when their artifact says GO.

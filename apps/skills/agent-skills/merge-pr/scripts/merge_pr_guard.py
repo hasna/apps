@@ -18,7 +18,9 @@ from urllib.parse import urlparse
 
 
 ACTUAL_MODES = {"immediate-merge", "auto-merge", "merge-queue"}
-RISK_TIERS = {"routine": (1, 1), "elevated": (2, 2)}
+REQUIRED_REVIEWER_ARTIFACTS = 1
+REPAIR_CYCLE_CAPS = {"routine": 1, "elevated": 2}
+RISK_TIERS = set(REPAIR_CYCLE_CAPS)
 MAX_PREFLIGHT_AGE_SECONDS = 300
 REPO_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 SHA_PATTERN = re.compile(r"^[0-9a-fA-F]{40}$")
@@ -197,7 +199,7 @@ def validate_artifacts(
     risk_tier: str,
     fixed_reviewers: set[ReviewerDescriptor],
 ) -> None:
-    required, _ = RISK_TIERS[risk_tier]
+    required = REQUIRED_REVIEWER_ARTIFACTS
     if len(fixed_reviewers) != required:
         raise GuardError(
             f"{risk_tier} preflight requires exactly {required} fixed reviewer(s)"
@@ -305,7 +307,7 @@ def validate_preflight(
         raise GuardError("preflight risk tier must be explicit routine or elevated")
 
     cycles = snapshot.get("repair_cycles")
-    _, expected_cap = RISK_TIERS[risk_tier]
+    expected_cap = REPAIR_CYCLE_CAPS[risk_tier]
     if not isinstance(cycles, dict):
         raise GuardError("preflight repair cycle evidence is missing")
     count = cycles.get("count")
@@ -662,7 +664,9 @@ def postverify(args: argparse.Namespace) -> int:
             raise GuardError("postverify task ID is invalid")
         if not args.acceptance_scope.strip():
             raise GuardError("postverify acceptance scope is blank")
-        if args.repair_cycle_count < 0 or args.repair_cycle_count > max(cap for _, cap in RISK_TIERS.values()):
+        if args.repair_cycle_count < 0 or args.repair_cycle_count > max(
+            REPAIR_CYCLE_CAPS.values()
+        ):
             raise GuardError("postverify repair cycle count is outside the global cap")
         if not args.expected_base.strip():
             raise GuardError("postverify expected base is blank")
