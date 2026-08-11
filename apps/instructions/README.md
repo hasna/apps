@@ -249,7 +249,8 @@ never silently become "overwrite renderer-owned instruction files".
 ### Managed project context
 
 `instructions project-context plan|apply` is the sole writer for the strict
-`hasna.projects.project_context_bundle.v1` contract emitted by Projects. It
+`hasna.projects.project_context_bundle.v1` and schema-compatible
+`hasna.projects.project_context_bundle.v2` contracts emitted by Projects. It
 accepts bounded structured JSON from a regular file or stdin and never invokes
 Projects, Todos, Conversations, or Mementos while rendering:
 

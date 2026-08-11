@@ -1467,6 +1467,73 @@ describe("cache, revision, crash, and race safety", () => {
     }), "PROJECT_CONTEXT_CACHE_INVALID");
   });
 
+  test("accepts current Projects v2 bundles without losing reserved project-context bytes", () => {
+    const original = applyProjectContext({
+      workspace_root: tmpRoot,
+      runtime: "codewith",
+      bundle_json: bundleJson(),
+      source_path: join(tmpRoot, "bundle.json"),
+      now: new Date("2026-07-22T10:00:30.000Z"),
+    });
+    expect(original.applied).toBe(true);
+
+    const v2 = {
+      ...makeBundle({
+        revision: "rev-8",
+        project: { ...makeBundle().project, name: "Chief of Planning" },
+        links: {
+          ...makeBundle().links,
+          mementos: { state: "unlinked", project_id: null, scope: null },
+        },
+        commands: [
+          { name: "show", argv: ["projects", "show", "wks_ZXg7liK4CFJ1KZjC_Fg_b", "--json"] },
+          { name: "context", argv: ["projects", "context", "wks_ZXg7liK4CFJ1KZjC_Fg_b", "--json"] },
+          { name: "why", argv: ["projects", "why", "wks_ZXg7liK4CFJ1KZjC_Fg_b", "--json"] },
+          { name: "context-bundle", argv: ["projects", "context-bundle", "wks_ZXg7liK4CFJ1KZjC_Fg_b", "--json"] },
+        ],
+      }),
+      schema: "hasna.projects.project_context_bundle.v2",
+      hash: "",
+    };
+    v2.hash = computeProjectContextSourceHash(v2);
+
+    const updated = applyProjectContext({
+      workspace_root: tmpRoot,
+      runtime: "codewith",
+      bundle_json: `${JSON.stringify(v2)}\n`,
+      source_path: join(tmpRoot, "v2.json"),
+      now: new Date("2026-08-11T17:33:00.000Z"),
+    });
+    expect(updated.applied).toBe(true);
+    expect(updated.revision).toBe("rev-8");
+    expect(updated.hash).toBe(v2.hash);
+
+    const targetHome = join(tmpRoot, ".codewith");
+    const plan = planSessionRender({
+      tool: "codewith",
+      profile: "live-codewith",
+      targetHome,
+      sources: [{ id: "global-rules", layer: "global", content: "Session rules after v2." }],
+    });
+    expect(applySessionRender(plan).applied).toBe(true);
+    const rendered = readFileSync(join(targetHome, "CODEWITH.md"), "utf8");
+    expect(rendered).toContain("Session rules after v2.");
+    expect(rendered).toContain("Chief of Planning");
+    expect(rendered).toContain("revision=rev-8");
+
+    const manifest = JSON.parse(readFileSync(join(targetHome, ".hasna", "session-render-manifest.json"), "utf8")) as {
+      sources: Array<{ id: string; provenance?: { schema?: string } }>;
+      projectContext: { schema: string; hash: string };
+      files: Array<{ relativePath: string; sourceIds: string[] }>;
+    };
+    expect(manifest.projectContext.schema).toBe("hasna.projects.project_context_bundle.v2");
+    expect(manifest.projectContext.hash).toBe(v2.hash);
+    expect(manifest.sources.find((source) => source.id === "project-context-bundle")?.provenance?.schema)
+      .toBe("hasna.projects.project_context_bundle.v2");
+    expect(manifest.files.find((file) => file.relativePath === "CODEWITH.md")?.sourceIds)
+      .toContain("project-context-bundle");
+  });
+
   test("fails unknown majors by default and can fall back only to an explicit same-ID cache", () => {
     applyProjectContext({
       workspace_root: tmpRoot,
@@ -1475,7 +1542,7 @@ describe("cache, revision, crash, and race safety", () => {
       source_path: join(tmpRoot, "bundle.json"),
       now: new Date("2026-07-22T10:00:30.000Z"),
     });
-    const future = { ...makeBundle(), schema: "hasna.projects.project_context_bundle.v2" };
+    const future = { ...makeBundle(), schema: "hasna.projects.project_context_bundle.v3" };
 
     expectCode(() => applyProjectContext({
       workspace_root: tmpRoot,

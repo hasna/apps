@@ -29,6 +29,9 @@ import {
 } from "./session-render-contract.js";
 
 export const PROJECT_CONTEXT_SCHEMA = "hasna.projects.project_context_bundle.v1" as const;
+export const PROJECT_CONTEXT_SCHEMA_V2 = "hasna.projects.project_context_bundle.v2" as const;
+const PROJECT_CONTEXT_SUPPORTED_SCHEMAS = [PROJECT_CONTEXT_SCHEMA, PROJECT_CONTEXT_SCHEMA_V2] as const;
+const projectContextSchema = z.enum(PROJECT_CONTEXT_SUPPORTED_SCHEMAS);
 export const PROJECT_CONTEXT_MAX_INPUT_BYTES = 8 * 1024;
 export const PROJECT_CONTEXT_MAX_RENDERED_BYTES = 4 * 1024;
 export const PROJECT_CONTEXT_MAX_APPROX_TOKENS = 1_000;
@@ -148,7 +151,7 @@ const commandSchema = z.object({
 }).strict();
 
 const projectContextBundleSchema = z.object({
-  schema: z.literal(PROJECT_CONTEXT_SCHEMA),
+  schema: projectContextSchema,
   generated_at: isoTimestamp,
   hash: hashSchema,
   revision: revisionSchema,
@@ -197,7 +200,7 @@ const projectContextBundleSchema = z.object({
 }).strict();
 
 const storedManifestProjectContextSchema = z.object({
-  schema: z.literal(PROJECT_CONTEXT_SCHEMA),
+  schema: projectContextSchema,
   projectId: safeId,
   revision: revisionSchema,
   hash: hashSchema,
@@ -270,6 +273,7 @@ const projectContextCacheSchema = z.object({
 }).strict();
 
 export type ProjectContextBundleV1 = z.infer<typeof projectContextBundleSchema>;
+type ProjectContextSchema = ProjectContextBundleV1["schema"];
 export type ProjectContextRuntime = "claude" | "codewith" | "agents";
 export type ProjectContextStatus = "fresh" | "stale-source" | "stale-cache";
 export type ProjectContextPhase = "before-compare" | "after-fragment" | "after-target" | "before-manifest";
@@ -459,7 +463,7 @@ interface ProjectContextManifest {
     rules: [];
     renderedPayloadSha256: string;
     provenance: {
-      schema: typeof PROJECT_CONTEXT_SCHEMA;
+      schema: ProjectContextSchema;
       projectId: string;
       revision: string;
       hash: string;
@@ -475,7 +479,7 @@ interface ProjectContextManifest {
   }>;
   warnings: string[];
   projectContext: {
-    schema: typeof PROJECT_CONTEXT_SCHEMA;
+    schema: ProjectContextSchema;
     projectId: string;
     revision: string;
     hash: string;
@@ -542,7 +546,10 @@ function parseProjectContextBundleInternal(
     throw new ProjectContextError("PROJECT_CONTEXT_INVALID", "bundle is not valid JSON");
   }
   const candidateSchema = isRecord(value) ? value["schema"] : undefined;
-  if (typeof candidateSchema === "string" && candidateSchema !== PROJECT_CONTEXT_SCHEMA) {
+  if (
+    typeof candidateSchema === "string" &&
+    !(PROJECT_CONTEXT_SUPPORTED_SCHEMAS as readonly string[]).includes(candidateSchema)
+  ) {
     if (/^hasna\.projects\.project_context_bundle\.v[0-9]+$/.test(candidateSchema)) {
       throw new ProjectContextError("PROJECT_CONTEXT_UNSUPPORTED_VERSION", `unsupported bundle schema ${candidateSchema}`);
     }
@@ -1763,7 +1770,7 @@ function projectContextManifestSource(
     rules: [],
     renderedPayloadSha256: sha256(JSON.stringify(bundle)),
     provenance: {
-      schema: PROJECT_CONTEXT_SCHEMA,
+      schema: bundle.schema,
       projectId: bundle.project.id,
       revision: bundle.revision,
       hash: bundle.hash,
@@ -1773,7 +1780,7 @@ function projectContextManifestSource(
 
 function manifestProjectContext(plan: ProjectContextPlan): ProjectContextManifest["projectContext"] {
   return {
-    schema: PROJECT_CONTEXT_SCHEMA,
+    schema: plan.bundle.schema,
     projectId: plan.bundle.project.id,
     revision: plan.bundle.revision,
     hash: plan.bundle.hash,

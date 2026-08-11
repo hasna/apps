@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.27
+
+Accepts the current Projects `hasna.projects.project_context_bundle.v2`
+contract as a schema-compatible reserved project-context input while keeping
+v1 accepted and future major versions rejected. Session manifests now preserve
+the accepted bundle schema in project-context provenance so managed rerenders
+retain the v2 context instead of dropping reserved bytes.
+
 ## 0.4.26
 
 Publishes `ff7ac72` (#78), the project-context compatibility bridge.
