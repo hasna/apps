@@ -49,6 +49,7 @@ import type {
 } from "../types.js";
 import {
   assertProjectChannelRegistrationOperationIntent,
+  isProjectChannelCollectionChangedError,
   type ProjectChannelCollectionRequest,
   type ProjectChannelMessageCollectionRequest,
   type ProjectChannelRegistrationLookupRequest,
@@ -996,6 +997,13 @@ export function startApiServer(options: StartApiServerOptions = {}) {
 
         return json({ error: "Not found" }, 404);
       } catch (e) {
+        if (isProjectChannelCollectionChangedError(e)) {
+          return json({
+            error: e.message,
+            code: e.code,
+            details: e.details,
+          }, 409);
+        }
         return json({ error: (e as Error).message }, 400);
       }
     },
@@ -1031,6 +1039,7 @@ async function handleV1(
     const request = {
       project_id: str(url.searchParams.get("project_id")),
       cursor: str(url.searchParams.get("cursor")),
+      collection_revision: str(url.searchParams.get("collection_revision")),
       max_items: positiveInteger(url.searchParams.get("max_items")),
       response_byte_limit: positiveInteger(url.searchParams.get("response_byte_limit")),
       time_budget_ms: positiveInteger(url.searchParams.get("time_budget_ms")),

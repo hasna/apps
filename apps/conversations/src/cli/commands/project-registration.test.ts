@@ -25,6 +25,8 @@ describe("registerProjectRegistrationCommands", () => {
     const channels = registration?.commands.find((command) => command.name() === "channels");
     expect(channels?.options.some((option) => option.long === "--project")).toBe(true);
     expect(channels?.options.some((option) => option.long === "--cursor")).toBe(true);
+    expect(channels?.options.some((option) => option.long === "--collection-revision")).toBe(true);
+    expect(channels?.options.some((option) => option.long === "--all")).toBe(true);
     expect(channels?.options.some((option) => option.long === "--limit")).toBe(true);
 
     const messages = registration?.commands.find((command) => command.name() === "messages");

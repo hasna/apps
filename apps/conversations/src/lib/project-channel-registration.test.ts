@@ -150,6 +150,7 @@ describe("project channel registration authority", () => {
     const secondPage = listProjectChannelRegistrationPage({
       project_id: PROJECT_ID,
       cursor: firstPage.next_cursor!,
+      collection_revision: firstPage.collection_revision,
       max_items: 2,
       response_byte_limit: 32_768,
       time_budget_ms: 5_000,
@@ -157,6 +158,13 @@ describe("project channel registration authority", () => {
     });
 
     expect(firstPage.items.map((item) => item.target_id)).toEqual(expectedIds.slice(0, 2));
+    expect(firstPage.response_bytes).toBe(
+      Buffer.byteLength(JSON.stringify(firstPage), "utf8"),
+    );
+    expect(secondPage.response_bytes).toBe(
+      Buffer.byteLength(JSON.stringify(secondPage), "utf8"),
+    );
+    expect(firstPage.collection_revision).toMatch(/^[0-9a-f]{64}$/);
     expect(firstPage).toMatchObject({
       authority: "conversations",
       resource_kind: "channel",
@@ -171,6 +179,7 @@ describe("project channel registration authority", () => {
     });
     expect(secondPage.items.map((item) => item.target_id)).toEqual(expectedIds.slice(2));
     expect(secondPage).toMatchObject({
+      collection_revision: firstPage.collection_revision,
       cursor: firstPage.next_cursor,
       next_cursor: null,
       item_count: 1,
@@ -178,12 +187,6 @@ describe("project channel registration authority", () => {
       complete: true,
       truncated: false,
     });
-    expect(firstPage.response_bytes).toBe(
-      Buffer.byteLength(JSON.stringify(firstPage), "utf8"),
-    );
-    expect(secondPage.response_bytes).toBe(
-      Buffer.byteLength(JSON.stringify(secondPage), "utf8"),
-    );
     expect(new Set([...firstPage.items, ...secondPage.items].map((item) => item.target_id)).size).toBe(3);
     expect([...firstPage.items, ...secondPage.items].every((item) =>
       item.project_id === PROJECT_ID
@@ -191,6 +194,63 @@ describe("project channel registration authority", () => {
       && item.target_id.startsWith("chn_")
       && item.revision
       && item.digest)).toBe(true);
+
+    expect(() => listProjectChannelRegistrationPage({
+      project_id: PROJECT_ID,
+      cursor: firstPage.next_cursor!,
+      max_items: 2,
+      response_byte_limit: 32_768,
+      time_budget_ms: 5_000,
+      call_limit: 1,
+    })).toThrow(/collection_revision is required when cursor is set/);
+  });
+
+  test("fails closed when a lower stable channel id joins the project between pages", () => {
+    createLocalProject();
+    const db = getDb();
+    const insert = db.prepare(
+      "INSERT INTO channels (id, name, project_id, created_by) VALUES (?, ?, ?, ?)",
+    );
+    insert.run(
+      "chn_20000000000000000000000000000000",
+      "collection-middle",
+      PROJECT_ID,
+      "tester",
+    );
+    insert.run(
+      "chn_30000000000000000000000000000000",
+      "collection-last",
+      PROJECT_ID,
+      "tester",
+    );
+
+    const firstPage = listProjectChannelRegistrationPage({
+      project_id: PROJECT_ID,
+      max_items: 1,
+      response_byte_limit: 32_768,
+      time_budget_ms: 5_000,
+      call_limit: 1,
+    });
+    expect(firstPage.items.map((item) => item.target_id)).toEqual([
+      "chn_20000000000000000000000000000000",
+    ]);
+
+    insert.run(
+      "chn_10000000000000000000000000000000",
+      "collection-first-late",
+      PROJECT_ID,
+      "tester",
+    );
+
+    expect(() => listProjectChannelRegistrationPage({
+      project_id: PROJECT_ID,
+      cursor: firstPage.next_cursor!,
+      collection_revision: firstPage.collection_revision,
+      max_items: 1,
+      response_byte_limit: 32_768,
+      time_budget_ms: 5_000,
+      call_limit: 1,
+    })).toThrow(/collection changed/i);
   });
 
   test("pages immutable message uuids for one channel and continues to a later child", () => {

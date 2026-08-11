@@ -217,6 +217,11 @@ class FakeProjectRegistrationClient implements PoolQueryClient {
     }
     if (query.startsWith("SELECT * FROM channels WHERE project_id = $1")) {
       const projectId = String(params[0]);
+      if (params.length === 1) {
+        return [...this.state.channels.values()]
+          .filter((channel) => channel.project_id === projectId)
+          .sort((left, right) => left.id.localeCompare(right.id));
+      }
       const cursor = params[1] == null ? null : String(params[1]);
       const limit = Number(params[2]);
       return [...this.state.channels.values()]
@@ -642,6 +647,7 @@ describe("PostgreSQL project channel registration authority", () => {
     const secondChannels = await listProjectChannelRegistrationPagePg(client, {
       project_id: projectId,
       cursor: firstChannels.next_cursor!,
+      collection_revision: firstChannels.collection_revision,
       max_items: 2,
       response_byte_limit: 32_768,
       time_budget_ms: 5_000,
@@ -651,22 +657,32 @@ describe("PostgreSQL project channel registration authority", () => {
       ...firstChannels.items,
       ...secondChannels.items,
     ].map((item) => item.target_id)).toEqual(channelIds);
-    expect(firstChannels).toMatchObject({
-      has_more: true,
-      complete: false,
-      truncated: true,
-    });
-    expect(secondChannels).toMatchObject({
-      has_more: false,
-      complete: true,
-      truncated: false,
-    });
     expect(firstChannels.response_bytes).toBe(
       Buffer.byteLength(JSON.stringify(firstChannels), "utf8"),
     );
     expect(secondChannels.response_bytes).toBe(
       Buffer.byteLength(JSON.stringify(secondChannels), "utf8"),
     );
+    expect(firstChannels.collection_revision).toMatch(/^[0-9a-f]{64}$/);
+    expect(firstChannels).toMatchObject({
+      has_more: true,
+      complete: false,
+      truncated: true,
+    });
+    expect(secondChannels).toMatchObject({
+      collection_revision: firstChannels.collection_revision,
+      has_more: false,
+      complete: true,
+      truncated: false,
+    });
+    await expect(listProjectChannelRegistrationPagePg(client, {
+      project_id: projectId,
+      cursor: firstChannels.next_cursor!,
+      max_items: 2,
+      response_byte_limit: 32_768,
+      time_budget_ms: 5_000,
+      call_limit: 1,
+    })).rejects.toThrow(/collection_revision is required when cursor is set/);
 
     client.state.messages.push(
       {
@@ -751,6 +767,48 @@ describe("PostgreSQL project channel registration authority", () => {
       call_limit: 1,
     });
     expect(laterMessages.items.map((item) => item.target_id)).toEqual(["msg-later"]);
+  });
+
+  test("fails closed when a lower stable channel id joins the project between pages", async () => {
+    const client = new FakeProjectRegistrationClient();
+    const projectId = "wks_ys8tzpsZJMNtx0ORZtLsA";
+    const put = (id: string, name: string) => client.state.channels.set(name, {
+      id,
+      name,
+      description: null,
+      topic: null,
+      project_id: projectId,
+      created_by: "tester",
+      created_at: "2026-08-11T18:00:00.000Z",
+      archived_at: null,
+      metadata: null,
+      tags: null,
+    });
+    put("chn_20000000000000000000000000000000", "collection-middle");
+    put("chn_30000000000000000000000000000000", "collection-last");
+
+    const firstPage = await listProjectChannelRegistrationPagePg(client, {
+      project_id: projectId,
+      max_items: 1,
+      response_byte_limit: 32_768,
+      time_budget_ms: 5_000,
+      call_limit: 1,
+    });
+    expect(firstPage.items.map((item) => item.target_id)).toEqual([
+      "chn_20000000000000000000000000000000",
+    ]);
+
+    put("chn_10000000000000000000000000000000", "collection-first-late");
+
+    await expect(listProjectChannelRegistrationPagePg(client, {
+      project_id: projectId,
+      cursor: firstPage.next_cursor!,
+      collection_revision: firstPage.collection_revision,
+      max_items: 1,
+      response_byte_limit: 32_768,
+      time_budget_ms: 5_000,
+      call_limit: 1,
+    })).rejects.toThrow(/collection changed/i);
   });
 
   test("does not expose reply targets from another channel or session", async () => {
@@ -1573,6 +1631,34 @@ describe("PostgreSQL project channel registration authority", () => {
       receipt.target_id!,
       existingChannel.id,
     ].sort());
+    const firstApiPage = await apiStore.listProjectChannelRegistrationPage({
+      project_id: "wks_ys8tzpsZJMNtx0ORZtLsA",
+      max_items: 1,
+      response_byte_limit: 32_768,
+      time_budget_ms: 5_000,
+      call_limit: 1,
+    });
+    client.state.channels.set("api-late-first", {
+      id: "chn_00000000000000000000000000000000",
+      name: "api-late-first",
+      description: null,
+      topic: null,
+      project_id: "wks_ys8tzpsZJMNtx0ORZtLsA",
+      created_by: "tester",
+      created_at: "2026-08-11T18:00:00.000Z",
+      archived_at: null,
+      metadata: null,
+      tags: null,
+    });
+    await expect(apiStore.listProjectChannelRegistrationPage({
+      project_id: "wks_ys8tzpsZJMNtx0ORZtLsA",
+      cursor: firstApiPage.next_cursor!,
+      collection_revision: firstApiPage.collection_revision,
+      max_items: 1,
+      response_byte_limit: 32_768,
+      time_budget_ms: 5_000,
+      call_limit: 1,
+    })).rejects.toMatchObject({ status: 409 });
     client.state.messages.push({
       id: 1,
       uuid: "msg-api-project-link",

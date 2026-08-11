@@ -12,6 +12,7 @@ import {
   projectChannelRegistrationChannelRecord,
   projectChannelRegistrationDigest,
   projectChannelRegistrationMessageOwnershipMatches,
+  ProjectChannelCollectionChangedError,
   projectChannelRegistrationResponseControl,
   sameProjectChannelRegistrationReceipt,
   validateProjectChannelRegistrationForward,
@@ -58,6 +59,31 @@ type PgChannelRow = Record<string, unknown> & {
   metadata: string | null;
   tags: string | null;
 };
+
+function projectChannelCollectionRevision(
+  projectId: string,
+  rows: PgChannelRow[],
+): string {
+  return projectChannelRegistrationDigest({
+    project_id: projectId,
+    members: rows
+      .map(parseChannel)
+      .map(projectChannelRegistrationChannelRecord)
+      .sort((left, right) => left.target_id.localeCompare(right.target_id)),
+  });
+}
+
+async function readProjectChannelCollectionRows(
+  client: TypedQueryClient,
+  projectId: string,
+): Promise<PgChannelRow[]> {
+  return client.many<PgChannelRow>(`
+    SELECT *
+    FROM channels
+    WHERE project_id = $1
+    ORDER BY id ASC
+  `, [projectId]);
+}
 
 function timestamp(value: string | Date): string {
   if (value instanceof Date) return value.toISOString();
@@ -563,6 +589,22 @@ export async function listProjectChannelRegistrationPagePg(
 ): Promise<ProjectChannelCollectionPage> {
   const startedAt = performance.now();
   validateProjectChannelCollectionRequest(request);
+  const collectionRevision = projectChannelCollectionRevision(
+    request.project_id,
+    await readProjectChannelCollectionRows(client, request.project_id),
+  );
+  if (
+    request.collection_revision !== undefined
+    && request.collection_revision !== collectionRevision
+  ) {
+    throw new ProjectChannelCollectionChangedError(
+      "project channel collection changed during pagination; restart from the first page",
+      {
+        expected_collection_revision: request.collection_revision,
+        current_collection_revision: collectionRevision,
+      },
+    );
+  }
   const rows = await client.many<PgChannelRow>(`
     SELECT *
     FROM channels
@@ -574,9 +616,23 @@ export async function listProjectChannelRegistrationPagePg(
     request.cursor ?? null,
     request.max_items + 1,
   ]);
+  const verifiedCollectionRevision = projectChannelCollectionRevision(
+    request.project_id,
+    await readProjectChannelCollectionRows(client, request.project_id),
+  );
+  if (verifiedCollectionRevision !== collectionRevision) {
+    throw new ProjectChannelCollectionChangedError(
+      "project channel collection changed while producing a page; restart from the first page",
+      {
+        expected_collection_revision: collectionRevision,
+        current_collection_revision: verifiedCollectionRevision,
+      },
+    );
+  }
   return buildProjectChannelCollectionPage(
     request,
     rows.map(parseChannel),
+    collectionRevision,
     startedAt,
   );
 }

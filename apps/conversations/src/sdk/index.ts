@@ -2,7 +2,7 @@
 // Regenerate: bun run sdk:generate
 
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
-// Source: ConversationsClient 0.5.44
+// Source: ConversationsClient 0.5.45
 
 export interface Message { "id"?: number; "uuid"?: string; "session_id"?: string; "from_agent"?: string; "to_agent"?: string; "channel"?: string | null; "project_id"?: string | null; "content"?: string; "priority"?: string; "blocking"?: boolean; "reply_to"?: number | null; "created_at"?: string }
 
@@ -28,7 +28,7 @@ export interface Channel { "id"?: string; "name"?: string; "description"?: strin
 
 export interface ProjectChannelCollectionItem { "authority": string; "resource_kind": string; "scope": string; "project_id": string; "channel": string; "target_id": string; "revision": string; "digest": string }
 
-export interface ProjectChannelCollectionPage { "authority": string; "resource_kind": string; "scope": string; "project_id": string; "items": Array<ProjectChannelCollectionItem>; "cursor": string | null; "next_cursor": string | null; "cursor_semantics": string; "max_items": number; "item_count": number; "has_more": boolean; "complete": boolean; "truncated": boolean; "response_bytes": number; "elapsed_ms": number }
+export interface ProjectChannelCollectionPage { "authority": string; "resource_kind": string; "scope": string; "project_id": string; "collection_revision": string; "items": Array<ProjectChannelCollectionItem>; "cursor": string | null; "next_cursor": string | null; "cursor_semantics": string; "max_items": number; "item_count": number; "has_more": boolean; "complete": boolean; "truncated": boolean; "response_bytes": number; "elapsed_ms": number }
 
 export interface ProjectChannelMessageCollectionItem { "authority": string; "resource_kind": string; "scope": string; "target_id": string; "local_id": number; "channel_id": string; "channel": string; "project_id": string; "reply_to_target_id": string | null; "revision": string; "digest": string }
 
@@ -332,7 +332,7 @@ export class ConversationsClient {
     }
 
     /** List one bounded page of project-owned channel registrations */
-    async listProjectChannelRegistrations(query?: { "project_id": string; "cursor"?: string; "max_items": number; "response_byte_limit": number; "time_budget_ms": number; "call_limit": number }, init?: RequestInit): Promise<ProjectChannelCollectionPage> {
+    async listProjectChannelRegistrations(query?: { "project_id": string; "cursor"?: string; "collection_revision"?: string; "max_items": number; "response_byte_limit": number; "time_budget_ms": number; "call_limit": number }, init?: RequestInit): Promise<ProjectChannelCollectionPage> {
       return this.request("GET", `/v1/project-registration/channels`, {
         body: undefined,
         query,

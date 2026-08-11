@@ -1,7 +1,25 @@
 import { describe, expect, test } from "bun:test";
+import { openapiSpec } from "../server/openapi.js";
 import { ConversationsClient } from "./index.js";
 
 describe("generated SDK project-channel registration contract", () => {
+  test("publishes the fail-closed collection revision contract in OpenAPI", () => {
+    const schema = openapiSpec.components.schemas.ProjectChannelCollectionPage;
+    const operation = openapiSpec.paths["/v1/project-registration/channels"].get;
+
+    expect(schema.required).toContain("collection_revision");
+    expect(schema.properties.collection_revision).toEqual({
+      type: "string",
+      pattern: "^[0-9a-f]{64}$",
+    });
+    expect(operation.parameters).toContainEqual(expect.objectContaining({
+      name: "collection_revision",
+      in: "query",
+      description: expect.stringContaining("Required with cursor"),
+    }));
+    expect(operation.responses["409"]).toBeDefined();
+  });
+
   test("exposes capability, paged collections, create, bounded lookup, exact readback, inverse, and verification routes", async () => {
     const calls: Array<{ url: string; method: string; body: unknown }> = [];
     const client = new ConversationsClient({
@@ -39,6 +57,7 @@ describe("generated SDK project-channel registration contract", () => {
     await client.listProjectChannelRegistrations({
       project_id: "wks_ys8tzpsZJMNtx0ORZtLsA",
       cursor: "chn_00000000000000000000000000000001",
+      collection_revision: "a".repeat(64),
       max_items: 100,
       response_byte_limit: 32_768,
       time_budget_ms: 5_000,
@@ -125,6 +144,7 @@ describe("generated SDK project-channel registration contract", () => {
     const channelPageUrl = new URL(calls[1].url);
     expect(channelPageUrl.searchParams.get("project_id")).toBe("wks_ys8tzpsZJMNtx0ORZtLsA");
     expect(channelPageUrl.searchParams.get("cursor")).toBe("chn_00000000000000000000000000000001");
+    expect(channelPageUrl.searchParams.get("collection_revision")).toBe("a".repeat(64));
     expect(channelPageUrl.searchParams.get("max_items")).toBe("100");
     const messagePageUrl = new URL(calls[2].url);
     expect(messagePageUrl.searchParams.get("project_id")).toBe("wks_ys8tzpsZJMNtx0ORZtLsA");
