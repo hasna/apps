@@ -361,8 +361,11 @@ export function readAllMementosProjectResources(
   const pageSize = normalizeLimit(options.page_size);
   let cursor: string | null = null;
   let first: MementosProjectResourcePage | null = null;
+  let pageCount = 0;
+  let maxPageCount = 1;
   const resources: MementosProjectResource[] = [];
   const seen = new Set<string>();
+  const seenCursors = new Set<string>();
 
   do {
     const page = readMementosProjectResourcePage(
@@ -375,9 +378,20 @@ export function readAllMementosProjectResources(
       db,
       authorityOptions,
     );
-    if (!first) first = page;
+    pageCount += 1;
+    if (!first) {
+      first = page;
+      if (!Number.isSafeInteger(first.total) || first.total < 0) {
+        throw new MementosProjectResourceError(
+          "MEMENTOS_PROJECT_RESOURCE_INCOMPLETE",
+          "Mementos project resource traversal returned an invalid total",
+        );
+      }
+      maxPageCount = Math.max(1, Math.ceil(first.total / pageSize));
+    }
     if (
-      page.collection_revision !== first.collection_revision
+      page.project_id !== projectId
+      || page.collection_revision !== first.collection_revision
       || page.total !== first.total
       || JSON.stringify(page.resource_kinds) !== JSON.stringify(first.resource_kinds)
     ) {
@@ -403,6 +417,25 @@ export function readAllMementosProjectResources(
         "Mementos project resource page claimed more results without a continuation cursor",
       );
     }
+    if (!page.has_more && page.next_cursor) {
+      throw new MementosProjectResourceError(
+        "MEMENTOS_PROJECT_RESOURCE_INCOMPLETE",
+        "Mementos project resource page returned a continuation cursor while claiming no more results",
+      );
+    }
+    if (page.next_cursor && seenCursors.has(page.next_cursor)) {
+      throw new MementosProjectResourceError(
+        "MEMENTOS_PROJECT_RESOURCE_INCOMPLETE",
+        "Mementos project resource traversal repeated a continuation cursor",
+      );
+    }
+    if (page.has_more && pageCount >= maxPageCount) {
+      throw new MementosProjectResourceError(
+        "MEMENTOS_PROJECT_RESOURCE_INCOMPLETE",
+        `Mementos project resource traversal exceeded its bounded ${maxPageCount}-page population`,
+      );
+    }
+    if (page.next_cursor) seenCursors.add(page.next_cursor);
     cursor = page.next_cursor;
   } while (cursor);
 

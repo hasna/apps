@@ -902,10 +902,19 @@ export class MementosClient {
     options: ListAllMementosProjectResourcesOptions = {},
   ): Promise<MementosProjectResourcePage> {
     const pageSize = options.page_size ?? 100;
+    if (!Number.isSafeInteger(pageSize) || pageSize < 1 || pageSize > 1_000) {
+      throw new MementosError(
+        "Project resource page_size must be an integer between 1 and 1000",
+        400,
+      );
+    }
     let cursor: string | undefined;
     let first: MementosProjectResourcePage | undefined;
+    let pageCount = 0;
+    let maxPageCount = 1;
     const resources: MementosProjectResource[] = [];
     const seen = new Set<string>();
+    const seenCursors = new Set<string>();
 
     do {
       const page = await this.listProjectResources(projectId, {
@@ -913,7 +922,17 @@ export class MementosClient {
         cursor,
         resource_kinds: options.resource_kinds,
       });
-      if (!first) first = page;
+      pageCount += 1;
+      if (!first) {
+        first = page;
+        if (!Number.isSafeInteger(first.total) || first.total < 0) {
+          throw new MementosError(
+            `Project resource traversal for ${projectId} returned an invalid total`,
+            502,
+          );
+        }
+        maxPageCount = Math.max(1, Math.ceil(first.total / pageSize));
+      }
       if (
         page.project_id !== projectId
         || page.collection_revision !== first.collection_revision
@@ -942,6 +961,25 @@ export class MementosClient {
           502,
         );
       }
+      if (!page.has_more && page.next_cursor) {
+        throw new MementosError(
+          `Project resource page for ${projectId} returned a continuation cursor while claiming no more results`,
+          502,
+        );
+      }
+      if (page.next_cursor && seenCursors.has(page.next_cursor)) {
+        throw new MementosError(
+          `Project resource traversal for ${projectId} repeated a continuation cursor`,
+          502,
+        );
+      }
+      if (page.has_more && pageCount >= maxPageCount) {
+        throw new MementosError(
+          `Project resource traversal for ${projectId} exceeded its bounded ${maxPageCount}-page population`,
+          502,
+        );
+      }
+      if (page.next_cursor) seenCursors.add(page.next_cursor);
       cursor = page.next_cursor ?? undefined;
     } while (cursor);
 
