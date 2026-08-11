@@ -4,6 +4,7 @@ import { getConfig } from "./config.js";
 
 type ActiveDbEnv = "HASNA_REPOS_DB_PATH" | "REPOS_DB_PATH" | null;
 type ContractStatus = "ok" | "warn";
+const CREDENTIAL_QUERY_KEY = /(^|[_-])(token|password|passwd|secret|credential|api[_-]?key)([_-]|$)/i;
 
 export interface ReposStatusContract {
   service: "repos";
@@ -80,6 +81,37 @@ function activeDatabaseEnv(): ActiveDbEnv {
 function scalar(sql: string): number {
   const row = getDb().query<{ count: number }, []>(sql).get();
   return Number(row?.count ?? 0);
+}
+
+function hasCredentialLikeQueryParameter(value: string): boolean {
+  const queryStart = value.indexOf("?");
+  if (queryStart < 0) return false;
+  const fragmentStart = value.indexOf("#", queryStart);
+  const query = value.slice(queryStart + 1, fragmentStart < 0 ? undefined : fragmentStart);
+  const params = new URLSearchParams(query);
+  for (const [key, paramValue] of params) {
+    const segmentedKey = key
+      .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+      .replace(/([A-Z])([A-Z][a-z])/g, "$1_$2");
+    if (CREDENTIAL_QUERY_KEY.test(segmentedKey) && paramValue.trim() !== "") return true;
+  }
+  return false;
+}
+
+export function hasCredentialLikeRemoteSemantics(value: unknown): boolean {
+  if (typeof value !== "string" || value === "") return false;
+
+  const scheme = value.match(/^([A-Za-z][A-Za-z0-9+.-]*):\/\//)?.[1]?.toLowerCase();
+  if (scheme) {
+    try {
+      const parsed = new URL(value);
+      if (parsed.username !== "" || parsed.password !== "") return true;
+    } catch {
+      return hasCredentialLikeQueryParameter(value);
+    }
+  }
+
+  return hasCredentialLikeQueryParameter(value);
 }
 
 function baseStatus(databaseReachable: boolean, packageVersion = getCliVersion()): ReposStatusContract {
@@ -169,13 +201,10 @@ export function getReposStatus(packageVersion = getCliVersion()): ReposStatusCon
     const totalRepos = scalar("SELECT COUNT(*) AS count FROM repos");
     const unscanned = scalar("SELECT COUNT(*) AS count FROM repos WHERE last_scanned IS NULL");
     const withRemote = scalar("SELECT COUNT(*) AS count FROM repos WHERE remote_url IS NOT NULL AND remote_url != ''");
-    const credentialLikeRemote = scalar(`
-      SELECT COUNT(*) AS count
-      FROM repos
-      WHERE remote_url LIKE '%://%@%'
-         OR lower(remote_url) LIKE '%token%'
-         OR lower(remote_url) LIKE '%password%'
-    `);
+    const remoteRows = getDb()
+      .query<{ remote_url: string | null }, []>("SELECT remote_url FROM repos WHERE remote_url IS NOT NULL AND remote_url != ''")
+      .all();
+    const credentialLikeRemote = remoteRows.filter((row) => hasCredentialLikeRemoteSemantics(row.remote_url)).length;
     const branchTotal = scalar("SELECT COUNT(*) AS count FROM branches");
     const remoteBranches = scalar("SELECT COUNT(*) AS count FROM branches WHERE is_remote = 1");
     const staleRepos = scalar(`

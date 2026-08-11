@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.46
+
+Fixes `repos status` credential-like remote counts treating repository names
+that contain words such as `token` as credential-bearing remotes (todos
+1764bc22-e701-4d77-9d68-6f06301bbce3).
+
+- The status health count now detects credential-bearing remote semantics from
+  URL userinfo and non-empty credential-named query parameters instead of
+  substring-matching the whole remote identity.
+- A regression keeps a clean token-named repository out of the count while
+  preserving a userinfo positive control and a safe-url negative control.
+- Status output remains metadata-only and does not include repo names, paths, or
+  remote URLs.
+
 ## 0.1.45
 
 Fixes `repos worktree add <repo>` rejecting an exact numeric registry ID even

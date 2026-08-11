@@ -38,6 +38,63 @@ afterEach(() => {
 });
 
 describe("getReposStatus", () => {
+  it("counts credential-like remotes by URL credential semantics, not repository-name substrings", () => {
+    const db = getDb();
+    db.query(
+      "INSERT INTO repos (path, name, org, remote_url, last_scanned) VALUES (?, ?, ?, ?, ?)",
+    ).run(
+      join(tempDir, "private-workspace-root", "clean-token-name"),
+      "platform-musictokens",
+      "hasnatools",
+      "https://github.com/hasnatools/platform-musictokens.git",
+      "2026-01-01T00:00:00Z",
+    );
+    db.query(
+      "INSERT INTO repos (path, name, org, remote_url, last_scanned) VALUES (?, ?, ?, ?, ?)",
+    ).run(
+      join(tempDir, "private-workspace-root", "positive-userinfo"),
+      "positive-userinfo",
+      "private-org",
+      `https://${["member", "phrase"].join(":")}@git.example.test/team/tool.git`,
+      "2026-01-01T00:00:00Z",
+    );
+    db.query(
+      "INSERT INTO repos (path, name, org, remote_url, last_scanned) VALUES (?, ?, ?, ?, ?)",
+    ).run(
+      join(tempDir, "private-workspace-root", "positive-camel-query"),
+      "positive-camel-query",
+      "private-org",
+      "https://git.example.test/team/tool.git?authToken=marker",
+      "2026-01-01T00:00:00Z",
+    );
+    db.query(
+      "INSERT INTO repos (path, name, org, remote_url, last_scanned) VALUES (?, ?, ?, ?, ?)",
+    ).run(
+      join(tempDir, "private-workspace-root", "negative-tokenizer-query"),
+      "negative-tokenizer-query",
+      "hasna",
+      "https://git.example.test/team/tool.git?tokenizer=enabled",
+      "2026-01-01T00:00:00Z",
+    );
+    db.query(
+      "INSERT INTO repos (path, name, org, remote_url, last_scanned) VALUES (?, ?, ?, ?, ?)",
+    ).run(
+      join(tempDir, "private-workspace-root", "negative-safe"),
+      "negative-safe",
+      "hasna",
+      "https://github.com/hasna/repos.git",
+      "2026-01-01T00:00:00Z",
+    );
+
+    const status = getReposStatus("0.0.0-test");
+
+    expect(status.counts.repos.withCredentialLikeRemote).toBe(2);
+    expect(status.health.hasCredentialLikeRemoteUrls).toBe(true);
+    expect(JSON.stringify(status)).not.toContain("platform-musictokens");
+    expect(JSON.stringify(status)).not.toContain("phrase");
+    expect(JSON.stringify(status)).not.toContain("github.com/hasnatools");
+  });
+
   it("reports inventory counts without repo names, paths, branch names, commits, or remote URLs", () => {
     const repo = upsertRepo({
       path: join(tempDir, "private-workspace-root", "secret-repo"),
