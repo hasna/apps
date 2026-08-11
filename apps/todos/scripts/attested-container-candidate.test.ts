@@ -16,15 +16,26 @@ import {
 } from "./attested-container-candidate";
 
 const root = join(import.meta.dir, "..");
+const CANONICAL_PROJECT_ID = "wks_wdq8kp9rd8bq";
+const CANONICAL_PROJECT_URI = "project://hasna-todos";
+const CANONICAL_PROJECT_SLUG = "hasna-todos";
+const CANONICAL_PROJECT_NAME = "@hasna/todos";
+const CANONICAL_REPOSITORY = "hasna/todos";
 
 const digest = (value: string) => Bun.CryptoHasher.hash("sha256", value, "hex");
 
 function fixtureManifest(): CandidateManifest {
   return CandidateManifestSchema.parse({
-    schema: "hasna.todos.attested_container_candidate.v1",
+    schema: "hasna.todos.attested_container_candidate.v2",
     candidateKind: "comparison_only",
+    project: {
+      id: CANONICAL_PROJECT_ID,
+      slug: CANONICAL_PROJECT_SLUG,
+      displayName: CANONICAL_PROJECT_NAME,
+      repository: CANONICAL_REPOSITORY,
+    },
     source: {
-      repository: "hasna/todos",
+      repository: CANONICAL_REPOSITORY,
       commitSha: "0123456789abcdef0123456789abcdef01234567",
       treeSha: "89abcdef0123456789abcdef0123456789abcdef",
     },
@@ -43,7 +54,7 @@ function fixtureManifest(): CandidateManifest {
       deployed: false,
     },
     run: {
-      repository: "hasna/todos",
+      repository: CANONICAL_REPOSITORY,
       workflow: ".github/workflows/attested-container-candidate.yml",
       runId: "123456789",
       runAttempt: "1",
@@ -110,6 +121,23 @@ function fixtureChain() {
 }
 
 describe("attested no-push container candidate", () => {
+  test("signs the canonical Projects identity and repository locator", () => {
+    const { sourceRecords } = fixtureChain();
+    const product = sourceRecords.productProjection;
+
+    expect(product.id).toBe("product-todos");
+    expect(product.sourceProjectRef).toEqual({
+      kind: "project",
+      id: CANONICAL_PROJECT_ID,
+      uri: CANONICAL_PROJECT_URI,
+      tags: ["comparison-only"],
+    });
+    expect(product.workspaceRef).toEqual(product.sourceProjectRef);
+    expect(product.slug).toBe(CANONICAL_PROJECT_SLUG);
+    expect(product.displayName).toBe(CANONICAL_PROJECT_NAME);
+    expect(product.repositoryRef.uri).toBe(`repo://${CANONICAL_REPOSITORY}`);
+  });
+
   test("accepts a target-bound ArtifactAttestation for the exact OCI digest", () => {
     const {
       manifest,
@@ -206,9 +234,12 @@ describe("attested no-push container candidate", () => {
         machineManifestSha256,
         bundleSha256,
       }),
-    ).toThrow(`buildArtifacts.${buildArtifact.id}.sourceCandidate: missing linked record`);
+    ).toThrow(
+      `buildArtifacts.${buildArtifact.id}.sourceCandidate: missing linked record`,
+    );
 
-    const { digest: _artifactDigest, ...buildArtifactWithoutDigest } = buildArtifact;
+    const { digest: _artifactDigest, ...buildArtifactWithoutDigest } =
+      buildArtifact;
     const mismatchedBuildArtifact = BuildArtifactSchema.parse(
       withDeploymentRecordDigest({
         ...buildArtifactWithoutDigest,
@@ -230,7 +261,9 @@ describe("attested no-push container candidate", () => {
         machineManifestSha256,
         bundleSha256,
       }),
-    ).toThrow(`buildArtifacts.${buildArtifact.id}.sourceCandidate: digest mismatch`);
+    ).toThrow(
+      `buildArtifacts.${buildArtifact.id}.sourceCandidate: digest mismatch`,
+    );
   });
 
   test("defines an exact-main, immutable-pinned, finite, no-push hosted workflow", () => {
@@ -244,6 +277,14 @@ describe("attested no-push container candidate", () => {
     expect(workflow).toContain("id-token: write");
     expect(workflow).toContain("attestations: write");
     expect(workflow).not.toContain("packages: write");
+    expect(workflow).toContain("project_id:");
+    expect(workflow).toContain("project_slug:");
+    expect(workflow).toContain("project_name:");
+    expect(workflow).toContain("project_repository:");
+    expect(workflow).toContain('--project-id "${PROJECT_ID}"');
+    expect(workflow).toContain('--project-slug "${PROJECT_SLUG}"');
+    expect(workflow).toContain('--project-name "${PROJECT_NAME}"');
+    expect(workflow).toContain('--project-repository "${PROJECT_REPOSITORY}"');
     expect(workflow).toContain(
       "actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a",
     );
@@ -265,22 +306,28 @@ describe("attested no-push container candidate", () => {
       scanReportConsumers.length,
     );
     expect(workflow).not.toContain("TRIVY_REPORT:");
-    expect(workflow).toContain('test "$(git rev-parse refs/remotes/origin/main)" = "${SOURCE_SHA}"');
+    expect(workflow).toContain(
+      'test "$(git rev-parse refs/remotes/origin/main)" = "${SOURCE_SHA}"',
+    );
     expect(workflow).toContain("gh attestation verify");
     expect(workflow).toContain("tampered");
-    expect(workflow).toContain("todos-candidate.verified-source-candidate.json");
+    expect(workflow).toContain(
+      "todos-candidate.verified-source-candidate.json",
+    );
     expect(workflow).toContain('--source "${SOURCE_CANDIDATE_RECORD}"');
     expect(workflow).toContain("retention-days: 7");
     expect(workflow).not.toMatch(/\baws\b/i);
     expect(workflow).not.toMatch(/\becr\b/i);
     expect(workflow).not.toContain("docker push");
     expect(workflow).not.toContain("npm publish");
-    const actionRefs = [...workflow.matchAll(/^\s+uses:\s+([^\s#]+)(?:\s+#.*)?$/gm)].map(
-      (match) => match[1]!,
-    );
-    expect(actionRefs.length).toBe(6);
+    const actionRefs = [
+      ...workflow.matchAll(/^\s+uses:\s+([^\s#]+)(?:\s+#.*)?$/gm),
+    ].map((match) => match[1]!);
+    expect(actionRefs).toHaveLength(6);
     for (const actionRef of actionRefs) {
-      expect(actionRef).toMatch(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+@[a-f0-9]{40}$/);
+      expect(actionRef).toMatch(
+        /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+@[a-f0-9]{40}$/,
+      );
     }
   });
 });

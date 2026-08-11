@@ -74,7 +74,9 @@
     "verify:release": "bun run scripts/verify-public-release.ts --mode=review",
     "verify:release-review": "bun run scripts/verify-npm-release-agent-review.ts",
     "verify:attested-container-candidate": "bun run scripts/attested-container-candidate.ts verify",
-    "test:attested-container-candidate": "bun test scripts/attested-container-candidate.test.ts",
+    "test:attested-container-candidate": "bun test scripts/attested-container-candidate.test.ts scripts/attested-container-compatibility-vector.test.ts",
+    "emit:iapp-deployment-compatibility-vector": "bun run scripts/attested-container-compatibility-vector.ts emit",
+    "verify:iapp-deployment-compatibility-vector": "bun run scripts/attested-container-compatibility-vector.ts verify",
     "issue:release-review": "bun run scripts/issue-npm-release-agent-review.ts",
     "prepublishOnly": "bun run scripts/verify-public-release.ts --mode=publish",
     "postinstall": "mkdir -p $HOME/.hasna/todos $HOME/.hasna/todos/training 2>/dev/null || true"
