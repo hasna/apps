@@ -568,12 +568,16 @@ function sourceFingerprint(source: OrderedSessionInstructionSource): Record<stri
   };
 }
 
-function slug(value: string): string {
+export function normalizeSessionInstructionSourceId(value: string): string {
   const s = value
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
   return s || "instruction";
+}
+
+function slug(value: string): string {
+  return normalizeSessionInstructionSourceId(value);
 }
 
 function yamlQuote(value: string): string {
@@ -796,16 +800,22 @@ function normalizeSources(
       }
       return normalized;
     });
+  const originalOrder = [...normalized].sort(compareSessionInstructionSources);
   const deduplicated = deduplicateSemanticPolicySources(normalized);
-  const ordered = deduplicated.selected
-    .sort((a, b) =>
-      SESSION_LAYER_RANK[a.resolvedLayer] - SESSION_LAYER_RANK[b.resolvedLayer] ||
-      a.resolvedOrder - b.resolvedOrder ||
-      a.id.localeCompare(b.id)
-    );
+  const ordered = deduplicated.selected.sort(compareSessionInstructionSources);
+  validateTargetedReplacementSources(originalOrder, ordered, deduplicated.skipped);
   rejectDuplicateSourceSlugs(ordered);
   rejectDuplicateRulePaths(ordered);
   return { sources: ordered, skipped: deduplicated.skipped };
+}
+
+function compareSessionInstructionSources(
+  a: OrderedSessionInstructionSource,
+  b: OrderedSessionInstructionSource,
+): number {
+  return SESSION_LAYER_RANK[a.resolvedLayer] - SESSION_LAYER_RANK[b.resolvedLayer]
+    || a.resolvedOrder - b.resolvedOrder
+    || a.id.localeCompare(b.id);
 }
 
 /**
@@ -1074,7 +1084,90 @@ function filterProviderOnlyBlocks(content: string, tool: SessionRenderTool): str
   return output.join("\n");
 }
 
-function composeSources(
+function targetedReplacementTarget(source: OrderedSessionInstructionSource): string | null {
+  if (source.replacementScope == null) return null;
+  if (source.resolvedMerge !== "replace") {
+    throw new Error(
+      `Session instruction source "${source.id}" uses replacement scope "${source.replacementScope}" `
+      + `with merge=${source.resolvedMerge}; replacement scopes require merge=replace, not append.`,
+    );
+  }
+  const scope = source.replacementScope.trim();
+  if (!scope.startsWith("source:")) {
+    throw new Error(
+      `Invalid replacement scope "${source.replacementScope}" for source "${source.id}"; `
+      + 'expected "source:<normalized-source-id>".',
+    );
+  }
+  const target = scope.slice("source:".length);
+  if (!target || target !== slug(target)) {
+    throw new Error(
+      `Invalid replacement scope "${source.replacementScope}" for source "${source.id}"; `
+      + "the target must be a non-empty normalized source id.",
+    );
+  }
+  return target;
+}
+
+/**
+ * Validate scoped replacement against the graph before semantic-policy deduplication can
+ * make the requested target disappear.
+ *
+ * Deduplication remains intentionally before composition. A targeted replacement is a
+ * claim about one exact earlier source, though, so a dedupe loser cannot be reported as
+ * if the scoped replacer removed it.
+ */
+function validateTargetedReplacementSources(
+  originalSources: OrderedSessionInstructionSource[],
+  selectedSources: OrderedSessionInstructionSource[],
+  deduplicatedSources: SessionSkippedSource[],
+): void {
+  for (let replacerIndex = 0; replacerIndex < originalSources.length; replacerIndex++) {
+    const replacer = originalSources[replacerIndex]!;
+    const targetNormalizedId = targetedReplacementTarget(replacer);
+    if (targetNormalizedId === null) continue;
+
+    const matches = originalSources.filter((source) => source.normalizedId === targetNormalizedId);
+    if (matches.length === 0) {
+      throw new Error(
+        `Targeted replacement source "${replacer.id}" names missing source "${targetNormalizedId}".`,
+      );
+    }
+    if (matches.length > 1) {
+      throw new Error(
+        `Targeted replacement source "${replacer.id}" is ambiguous after normalization: `
+        + `"${targetNormalizedId}" matches ${matches.map((source) => `"${source.id}"`).join(", ")}.`,
+      );
+    }
+
+    const target = matches[0]!;
+    const targetIndex = originalSources.indexOf(target);
+    if (targetIndex >= replacerIndex) {
+      throw new Error(
+        `Targeted replacement source "${replacer.id}" must name an earlier source; `
+        + `"${target.id}" is later than or identical to the replacer.`,
+      );
+    }
+    if (target.nonOverridable) {
+      throw new Error(
+        `Targeted replacement source "${replacer.id}" cannot replace non-overridable source "${target.id}".`,
+      );
+    }
+    if (!selectedSources.some((source) => source.id === replacer.id)) {
+      throw new Error(
+        `Targeted replacement source "${replacer.id}" was removed by semantic-policy deduplication before composition.`,
+      );
+    }
+    if (deduplicatedSources.some((source) => source.id === target.id)) {
+      throw new Error(
+        `Targeted replacement source "${replacer.id}" cannot claim success because target "${target.id}" `
+        + "was removed by semantic-policy deduplication before composition.",
+      );
+    }
+  }
+}
+
+function composeBroadReplaceSources(
   sources: OrderedSessionInstructionSource[],
 ): { sources: OrderedSessionInstructionSource[]; skipped: SessionSkippedSource[] } {
   let start = -1;
@@ -1096,6 +1189,69 @@ function composeSources(
       `superseded by "${replacer.id}": a replace-merge source discards earlier overridable instruction layers`,
     ));
   return { sources: [...protectedSources, ...sources.slice(start)], skipped };
+}
+
+function composeSources(
+  sources: OrderedSessionInstructionSource[],
+): { sources: OrderedSessionInstructionSource[]; skipped: SessionSkippedSource[] } {
+  const hasTargetedReplacement = sources.some((source) => source.replacementScope !== undefined);
+  if (!hasTargetedReplacement) return composeBroadReplaceSources(sources);
+
+  const selected: OrderedSessionInstructionSource[] = [];
+  const skipped: SessionSkippedSource[] = [];
+  for (const source of sources) {
+    const targetNormalizedId = targetedReplacementTarget(source);
+    if (targetNormalizedId !== null) {
+      const targetIndex = selected.findIndex((candidate) => candidate.normalizedId === targetNormalizedId);
+      if (targetIndex < 0) {
+        throw new Error(
+          `Targeted replacement source "${source.id}" cannot replace "${targetNormalizedId}": `
+          + "the earlier target was already removed.",
+        );
+      }
+      const target = selected[targetIndex]!;
+      if (target.nonOverridable) {
+        throw new Error(
+          `Targeted replacement source "${source.id}" cannot replace non-overridable source "${target.id}".`,
+        );
+      }
+      selected.splice(targetIndex, 1);
+      skipped.push(skippedSource(
+        target,
+        `superseded by "${source.id}": targeted replacement ${source.replacementScope} `
+        + `removed exactly source "${target.id}"`,
+      ));
+      selected.push({
+        ...source,
+        provenance: {
+          ...(source.provenance ?? {}),
+          targetedReplacement: {
+            scope: source.replacementScope,
+            targetSourceId: target.id,
+            targetNormalizedSourceId: target.normalizedId,
+          },
+        },
+      });
+      continue;
+    }
+
+    if (source.resolvedMerge === "replace") {
+      const retained = selected.filter((candidate) => candidate.nonOverridable);
+      for (const candidate of selected) {
+        if (candidate.nonOverridable) continue;
+        skipped.push(skippedSource(
+          candidate,
+          `superseded by "${source.id}": a replace-merge source discards earlier overridable instruction layers`,
+        ));
+      }
+      selected.length = 0;
+      selected.push(...retained, source);
+      continue;
+    }
+
+    selected.push(source);
+  }
+  return { sources: selected, skipped };
 }
 
 function sectionForSource(source: OrderedSessionInstructionSource): string {

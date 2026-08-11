@@ -15,7 +15,7 @@ import { importConfigs } from "../lib/import.js";
 import { extractTemplateVars } from "../lib/template.js";
 import { detectMachineContext, resolveProfileVariables } from "../lib/machine.js";
 import { applySessionRender, restoreSessionRenderSnapshot } from "../lib/session-apply.js";
-import { planSessionRender, resolveSessionPath, sourceFromConfig, sourceFromFilePath, sourcesFromIdentityExport, SESSION_INSTRUCTION_LAYERS, SESSION_RENDER_TOOLS, type SessionInstructionLayer, type SessionInstructionSource, type SessionRenderFile, type SessionRenderPlan, type SessionRenderTool } from "../lib/session-render.js";
+import { normalizeSessionInstructionSourceId, planSessionRender, resolveSessionPath, sourceFromConfig, sourceFromFilePath, sourcesFromIdentityExport, SESSION_INSTRUCTION_LAYERS, SESSION_RENDER_TOOLS, type SessionInstructionLayer, type SessionInstructionSource, type SessionRenderFile, type SessionRenderPlan, type SessionRenderTool } from "../lib/session-render.js";
 import { accountedGlobalSourceSlugs, computeGlobalSourceCoverage, formatGlobalSourceCoverageWarnings, type GlobalSourceCoverageResult } from "../lib/global-source-coverage.js";
 import { ensurePlatformProfiles } from "../lib/platform-profiles.js";
 import { ensureProjectDashboardStandardConfig } from "../lib/project-dashboard-standard.js";
@@ -127,7 +127,7 @@ function parseSessionLayer(value: string): SessionInstructionLayer {
   throw new Error(`Invalid source layer "${value}"`);
 }
 
-function parseSessionSource(value: string, order: number, replaceIds: Set<string>): SessionInstructionSource {
+function parseSessionSource(value: string, order: number): SessionInstructionSource {
   const idx = value.indexOf("=");
   let id = idx > 0 ? value.slice(0, idx).trim() : "";
   const path = idx > 0 ? value.slice(idx + 1).trim() : value.trim();
@@ -148,8 +148,47 @@ function parseSessionSource(value: string, order: number, replaceIds: Set<string
     id: resolvedId,
     label: id ? resolvedId : source.label ?? resolvedId,
     layer,
-    merge: replaceIds.has(resolvedId) ? "replace" : "append",
+    merge: "append",
   };
+}
+
+interface SessionSourceReplacement {
+  replacerId: string;
+  replacementScope?: string;
+}
+
+function parseSessionSourceReplacement(value: string): SessionSourceReplacement {
+  const trimmed = value.trim();
+  const separator = trimmed.indexOf("=");
+  const replacerId = (separator >= 0 ? trimmed.slice(0, separator) : trimmed).trim();
+  if (!replacerId) {
+    throw new Error(`Invalid --replace-source "${value}" (expected replacer-id or replacer-id=target-source-id)`);
+  }
+  if (separator < 0) return { replacerId };
+  const targetId = trimmed.slice(separator + 1).trim();
+  if (!targetId) {
+    throw new Error(`Invalid --replace-source "${value}" (target source id is required after "=")`);
+  }
+  return {
+    replacerId,
+    replacementScope: `source:${normalizeSessionInstructionSourceId(targetId)}`,
+  };
+}
+
+function sessionSourceReplacements(values: string[]): Map<string, SessionSourceReplacement> {
+  const replacements = new Map<string, SessionSourceReplacement>();
+  for (const value of values) {
+    const replacement = parseSessionSourceReplacement(value);
+    const existing = replacements.get(replacement.replacerId);
+    if (existing && existing.replacementScope !== replacement.replacementScope) {
+      throw new Error(
+        `Conflicting --replace-source values for "${replacement.replacerId}": `
+        + `${existing.replacementScope ?? "broad"} and ${replacement.replacementScope ?? "broad"}.`,
+      );
+    }
+    replacements.set(replacement.replacerId, replacement);
+  }
+  return replacements;
 }
 
 function readSessionInstructionSourceFile(path: string): string {
@@ -191,8 +230,8 @@ async function collectSessionSources(
   tool: SessionRenderTool,
   store: ConfigStore,
 ): Promise<SessionInstructionSource[]> {
-  const replaceIds = new Set<string>(opts.replaceSource ?? []);
-  const sources = (opts.source ?? []).map((value, index) => parseSessionSource(value, index, replaceIds));
+  const replacements = sessionSourceReplacements(opts.replaceSource ?? []);
+  const sources = (opts.source ?? []).map((value, index) => parseSessionSource(value, index));
 
   for (const value of opts.config ?? []) {
     const { layer, id } = parseLayeredReference(value);
@@ -206,7 +245,15 @@ async function collectSessionSources(
     sources.push(...sourcesFromIdentityExport(parsed, { path, tool, orderOffset: sources.length }));
   }
 
-  return sources.map((source) => replaceIds.has(source.id) ? { ...source, merge: "replace" } : source);
+  return sources.map((source) => {
+    const replacement = replacements.get(source.id);
+    if (!replacement) return source;
+    return {
+      ...source,
+      merge: "replace",
+      replacementScope: replacement.replacementScope,
+    };
+  });
 }
 
 // Reconcile-and-warn for todos 102d6d0a/5dcd60ec: `--config global:<slug>` entries
@@ -1158,7 +1205,7 @@ sessionCmd.command("plan")
   .option("--source <layer:id=path>", `instruction source file; layers: ${SESSION_SOURCE_LAYER_HELP}`, collectOption, [])
   .option("--config <layer:id-or-slug>", "stored config source by id/slug; repeatable; layer aliases match --source", collectOption, [])
   .option("--identity-export <path>", "OpenIdentities configs instruction export JSON; repeatable", collectOption, [])
-  .option("--replace-source <id>", "source id that replaces earlier layers instead of appending", collectOption, [])
+  .option("--replace-source <replacer-id>[=<target-source-id>]", "source id that broadly replaces earlier layers, or targets one earlier source", collectOption, [])
   .option("--codewith-native-imports", "select the gated Codewith native @ import adapter")
   .option("--allow-empty-sources", "allow an explicit empty render plan")
   .option("--check-global-coverage", "warn (non-fatal) when a registered, non-retired global-* source is absent from this render's --config list; expected is read fresh from the registry, independent of this plan (todos 102d6d0a)")
@@ -1226,7 +1273,7 @@ sessionCmd.command("apply")
   .option("--source <layer:id=path>", `instruction source file; layers: ${SESSION_SOURCE_LAYER_HELP}`, collectOption, [])
   .option("--config <layer:id-or-slug>", "stored config source by id/slug; repeatable; layer aliases match --source", collectOption, [])
   .option("--identity-export <path>", "OpenIdentities configs instruction export JSON; repeatable", collectOption, [])
-  .option("--replace-source <id>", "source id that replaces earlier layers instead of appending", collectOption, [])
+  .option("--replace-source <replacer-id>[=<target-source-id>]", "source id that broadly replaces earlier layers, or targets one earlier source", collectOption, [])
   .option("--codewith-native-imports", "select the gated Codewith native @ import adapter")
   .option("--allow-empty-sources", "allow an explicit empty render")
   .option("--check-global-coverage", "warn (non-fatal) when a registered, non-retired global-* source is absent from this render's --config list; expected is read fresh from the registry, independent of this plan (todos 102d6d0a)")
