@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.28] - 2026-08-11
+
+### Fixed
+
+- **Todos AI preserves host-created clarification and approval control signals
+  across the bundled companion boundary.** This includes zero-trap containment
+  for outer and nested `Proxy` payloads.
+
 ## [0.15.27] - 2026-08-11
 
 ### Fixed
