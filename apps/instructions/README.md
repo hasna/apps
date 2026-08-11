@@ -293,6 +293,12 @@ compatible last-known-good cache can be selected explicitly with
 `--allow-stale-cache --expected-project-id <id>`; its bounded age/status is
 visible in the rendered context.
 
+Projects v2 bundles may carry the strict optional
+`hasna.projects.finance_project_metadata.v1` object. Instructions validates
+that object and preserves every accepted finance field through the bundle
+cache and session-manifest provenance path; malformed finance metadata and
+finance attached to a legacy v1 bundle fail closed.
+
 Compatibility remains additive: project-context manifests keep
 `hasna.configs.session-render/v1`, `Managed by @hasna/configs`, and
 `ownedBy: open-configs`, while recording `canonicalOwner: instructions`. The

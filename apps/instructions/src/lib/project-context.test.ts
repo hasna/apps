@@ -1477,10 +1477,37 @@ describe("cache, revision, crash, and race safety", () => {
     });
     expect(original.applied).toBe(true);
 
+    const v2WithoutFinance = {
+      ...makeBundle(),
+      schema: "hasna.projects.project_context_bundle.v2" as const,
+      hash: "",
+    };
+    v2WithoutFinance.hash = computeProjectContextSourceHash(v2WithoutFinance);
+    expect(parseProjectContextBundle(v2WithoutFinance).project.finance).toBeUndefined();
+
+    const v2WithLegacyHash = {
+      ...v2WithoutFinance,
+      hash: legacyProjectContextHash(v2WithoutFinance),
+    };
+    expectCode(() => parseProjectContextBundle(v2WithLegacyHash), "PROJECT_CONTEXT_HASH_MISMATCH");
+
+    const finance = {
+      schema: "hasna.projects.finance_project_metadata.v1" as const,
+      business_area: "finance" as const,
+      jurisdiction: "RO",
+      legal_entities: ["Example Alpha SRL"],
+      fiscal_cycle: "monthly" as const,
+      data_classification: "restricted" as const,
+      retention_policy: "knowledge:finance-retention-v1\nowner:finance",
+      ledger_authority: "@hasna/accounting",
+      evidence_store: "@hasna/files",
+      approver: "role:finance-controller",
+      external_recipient_policy: "@hasna/invoices:approved-recipient-only",
+    };
     const v2 = {
       ...makeBundle({
         revision: "rev-8",
-        project: { ...makeBundle().project, name: "Chief of Planning" },
+        project: { ...makeBundle().project, name: "Chief of Finance", finance },
         links: {
           ...makeBundle().links,
           mementos: { state: "unlinked", project_id: null, scope: null },
@@ -1497,6 +1524,8 @@ describe("cache, revision, crash, and race safety", () => {
     };
     v2.hash = computeProjectContextSourceHash(v2);
 
+    expect(parseProjectContextBundle(v2).project.finance).toEqual(finance);
+
     const updated = applyProjectContext({
       workspace_root: tmpRoot,
       runtime: "codewith",
@@ -1508,6 +1537,14 @@ describe("cache, revision, crash, and race safety", () => {
     expect(updated.revision).toBe("rev-8");
     expect(updated.hash).toBe(v2.hash);
 
+    const cache = JSON.parse(readFileSync(join(tmpRoot, ".hasna", "project-context-cache.json"), "utf8")) as {
+      hash: string;
+      bundle: ProjectContextBundleV1;
+    };
+    expect(cache.hash).toBe(v2.hash);
+    expect(cache.bundle.schema).toBe("hasna.projects.project_context_bundle.v2");
+    expect(cache.bundle.project.finance).toEqual(finance);
+
     const targetHome = join(tmpRoot, ".codewith");
     const plan = planSessionRender({
       tool: "codewith",
@@ -1518,7 +1555,7 @@ describe("cache, revision, crash, and race safety", () => {
     expect(applySessionRender(plan).applied).toBe(true);
     const rendered = readFileSync(join(targetHome, "CODEWITH.md"), "utf8");
     expect(rendered).toContain("Session rules after v2.");
-    expect(rendered).toContain("Chief of Planning");
+    expect(rendered).toContain("Chief of Finance");
     expect(rendered).toContain("revision=rev-8");
 
     const manifest = JSON.parse(readFileSync(join(targetHome, ".hasna", "session-render-manifest.json"), "utf8")) as {
@@ -1532,6 +1569,53 @@ describe("cache, revision, crash, and race safety", () => {
       .toBe("hasna.projects.project_context_bundle.v2");
     expect(manifest.files.find((file) => file.relativePath === "CODEWITH.md")?.sourceIds)
       .toContain("project-context-bundle");
+  });
+
+  test("rejects malformed finance metadata and finance metadata attached to v1", () => {
+    const finance = {
+      schema: "hasna.projects.finance_project_metadata.v1" as const,
+      business_area: "finance" as const,
+      jurisdiction: "RO",
+      legal_entities: ["Example Alpha SRL"],
+      fiscal_cycle: "monthly" as const,
+      data_classification: "restricted" as const,
+      retention_policy: "knowledge:finance-retention-v1",
+      ledger_authority: "@hasna/accounting",
+      evidence_store: "@hasna/files",
+      approver: "role:finance-controller",
+      external_recipient_policy: "@hasna/invoices:approved-recipient-only",
+    };
+    const malformed = {
+      ...makeBundle(),
+      schema: "hasna.projects.project_context_bundle.v2" as const,
+      project: {
+        ...makeBundle().project,
+        finance: { ...finance, fiscal_cycle: "weekly" },
+      },
+      hash: "",
+    };
+    malformed.hash = computeProjectContextSourceHash(malformed);
+    expectCode(() => parseProjectContextBundle(malformed), "PROJECT_CONTEXT_INVALID");
+
+    const duplicateLegalEntity = {
+      ...makeBundle(),
+      schema: "hasna.projects.project_context_bundle.v2" as const,
+      project: {
+        ...makeBundle().project,
+        finance: { ...finance, legal_entities: ["Example Alpha SRL", "Example Alpha SRL"] },
+      },
+      hash: "",
+    };
+    duplicateLegalEntity.hash = computeProjectContextSourceHash(duplicateLegalEntity);
+    expectCode(() => parseProjectContextBundle(duplicateLegalEntity), "PROJECT_CONTEXT_INVALID");
+
+    const v1WithFinance = {
+      ...makeBundle(),
+      project: { ...makeBundle().project, finance },
+      hash: "",
+    };
+    v1WithFinance.hash = computeProjectContextSourceHash(v1WithFinance);
+    expectCode(() => parseProjectContextBundle(v1WithFinance), "PROJECT_CONTEXT_INVALID");
   });
 
   test("fails unknown majors by default and can fall back only to an explicit same-ID cache", () => {

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.28
+
+Corrects the unpublished 0.4.27 project-context v2 bridge by validating and
+preserving Projects' optional strict finance metadata. Finance-bearing v2
+bundles now survive the cache and session-manifest provenance chain, while
+malformed finance metadata and finance attached to legacy v1 bundles fail
+closed.
+
 ## 0.4.27
 
 Accepts the current Projects `hasna.projects.project_context_bundle.v2`

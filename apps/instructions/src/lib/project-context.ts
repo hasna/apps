@@ -144,6 +144,36 @@ const revisionSchema = z.string().min(1).max(512).refine((value) => revisionKey(
 const hashSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 const absolutePath = z.string().min(1).max(4_096).refine((value) => isAbsolute(value), "must be absolute").refine(isSafeSingleLine, "must be safe").nullable();
 const commandArg = z.string().min(1).max(1_024).refine((value) => isSafeCommandArgument(value), "unsafe argv item");
+const financeText = z.string()
+  .min(1)
+  .max(512)
+  .refine((value) => value === value.trim(), "must be normalized");
+const financeLegalEntity = z.string()
+  .min(1)
+  .max(256)
+  .refine((value) => value === value.trim(), "must be normalized");
+
+const financeProjectMetadataSchema = z.object({
+  schema: z.literal("hasna.projects.finance_project_metadata.v1"),
+  business_area: z.literal("finance"),
+  jurisdiction: z.string().min(2).max(64).regex(/^[A-Z0-9][A-Z0-9._:-]{1,63}$/),
+  legal_entities: z.array(financeLegalEntity).min(1).max(100)
+    .refine((values) => new Set(values).size === values.length, "must not contain duplicate legal entities"),
+  fiscal_cycle: z.enum(["monthly", "quarterly", "annual", "event-driven"]),
+  data_classification: z.enum(["public", "internal", "confidential", "restricted"]),
+  retention_policy: financeText,
+  ledger_authority: financeText,
+  evidence_store: financeText,
+  approver: financeText,
+  external_recipient_policy: financeText,
+}).strict().superRefine((value, context) => {
+  if (Buffer.byteLength(JSON.stringify(value), "utf8") > 4 * 1024) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "finance project metadata exceeds the 4 KiB producer context budget",
+    });
+  }
+});
 
 const commandSchema = z.object({
   name: z.enum(["show", "context", "why", "context-bundle"]),
@@ -175,6 +205,7 @@ const projectContextBundleSchema = z.object({
     status: z.enum(PROJECT_STATUSES),
     path: absolutePath,
     updated_at: isoTimestamp,
+    finance: financeProjectMetadataSchema.optional(),
   }).strict(),
   links: z.object({
     todos: z.object({
@@ -197,7 +228,15 @@ const projectContextBundleSchema = z.object({
     machine_id: nullableId,
   }).strict().nullable(),
   commands: z.array(commandSchema).max(PROJECT_CONTEXT_MAX_COMMANDS),
-}).strict();
+}).strict().superRefine((bundle, context) => {
+  if (bundle.schema === PROJECT_CONTEXT_SCHEMA && bundle.project.finance !== undefined) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["project", "finance"],
+      message: "finance project metadata requires project-context bundle v2",
+    });
+  }
+});
 
 const storedManifestProjectContextSchema = z.object({
   schema: projectContextSchema,
@@ -557,7 +596,7 @@ function parseProjectContextBundleInternal(
 
   const result = projectContextBundleSchema.safeParse(value);
   if (!result.success) {
-    throw new ProjectContextError("PROJECT_CONTEXT_INVALID", "bundle does not match the strict v1 schema", {
+    throw new ProjectContextError("PROJECT_CONTEXT_INVALID", "bundle does not match a strict supported schema", {
       issues: result.error.issues.map((issue) => ({ path: issue.path.join("."), code: issue.code, message: issue.message })),
     });
   }
@@ -569,6 +608,7 @@ function parseProjectContextBundleInternal(
   const expected = computeProjectContextSourceHash(bundle);
   const matchesLegacyHash = bundle.hash !== expected
     && allowLegacyHash
+    && bundle.schema === PROJECT_CONTEXT_SCHEMA
     && bundle.hash === computeLegacyProjectContextSourceHash(bundle);
   if (bundle.hash !== expected && !matchesLegacyHash) {
     throw new ProjectContextError("PROJECT_CONTEXT_HASH_MISMATCH", "bundle hash does not match its canonical allowlisted payload");
