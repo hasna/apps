@@ -239,15 +239,14 @@ describe("renameChannel", () => {
     expect(getChannel("new-name")?.name).toBe("new-name");
   });
 
-  test("allows the vacated name to identify a different future channel", () => {
+  test("reserves the vacated name as a historical alias", () => {
     const original = createChannel("old-name", "alice");
     renameChannel("old-name", "new-name");
 
-    const replacement = createChannel("old-name", "bob");
+    expect(() => createChannel("old-name", "bob")).toThrow("reserved historical alias");
 
-    expect(replacement.id).not.toBe(original.id);
     expect(getChannel("new-name")?.id).toBe(original.id);
-    expect(getChannel("old-name")?.id).toBe(replacement.id);
+    expect(getChannel("old-name")).toBeNull();
   });
 
   test("normalizes the new name", () => {

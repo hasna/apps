@@ -24,6 +24,10 @@ import { getStore } from "../lib/store/index.js";
 const DEFAULT_POLL_INTERVAL_MS = 1000;
 const DEFAULT_START_DELAY_MS = 2000;
 
+function unrefTimer(timer: ReturnType<typeof setInterval> | ReturnType<typeof setTimeout>): void {
+  (timer as { unref?: () => void }).unref?.();
+}
+
 type SessionState = {
   agentId: string | null;
   claudeSessionId: string | null; // agent-claude session UUID
@@ -271,12 +275,14 @@ export function registerChannelBridge(
     // to stderr via createPollHealth — stdout is the JSON-RPC channel and a
     // stray line there would corrupt the protocol stream.
     pollTimer = setInterval(runPoll, pollIntervalMs);
+    unrefTimer(pollTimer);
 
     runPoll();
   }
 
   // Start polling after connection established
   startTimer = setTimeout(() => startPolling(), startDelayMs);
+  unrefTimer(startTimer);
 
   /**
    * Dispose the bridge AND wait until it is quiescent.

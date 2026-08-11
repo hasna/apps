@@ -415,7 +415,7 @@ export function registerMessagingTools(
     const result = await getStore().exportMessages({ channel, session_id, from, since, until, format });
 
     return {
-      content: [{ type: "text", text: result }],
+      content: [{ type: "text", text: jsonText({ artifact: result }) }],
     };
   });
 

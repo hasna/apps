@@ -16,6 +16,10 @@ import { registerMcpTool } from "./tool-compat.js";
 
 const POLL_INTERVAL_MS = 2000;
 
+function unrefTimer(timer: ReturnType<typeof setInterval> | ReturnType<typeof setTimeout>): void {
+  (timer as { unref?: () => void }).unref?.();
+}
+
 interface TelegramUpdate {
   update_id: number;
   message?: {
@@ -121,8 +125,10 @@ export function registerTelegramChannel(server: McpServer): void {
   }
 
   // Start polling after connection
-  setTimeout(() => {
+  const startTimer = setTimeout(() => {
     pollTimer = setInterval(() => poll(), POLL_INTERVAL_MS);
+    unrefTimer(pollTimer);
     console.error("[telegram-channel] polling started");
   }, 2000);
+  unrefTimer(startTimer);
 }

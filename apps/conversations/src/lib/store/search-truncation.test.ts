@@ -37,16 +37,23 @@ function recordingClient(body: unknown) {
   return { client, seen };
 }
 
-/** `n` rows shaped enough for parseMessage to accept them. */
+/** `n` rows shaped enough for the preview search response. */
 function rows(n: number, startId = 1) {
   return Array.from({ length: n }, (_, i) => ({
     id: startId + i,
+    session_id: "session",
     from_agent: "fabricius",
     to_agent: null,
     channel: "board",
-    content: `row ${startId + i} the`,
+    preview: `row ${startId + i} the`,
+    preview_bytes: Buffer.byteLength(`row ${startId + i} the`),
+    content_bytes: Buffer.byteLength(`row ${startId + i} the`),
     priority: "normal",
     created_at: "2026-08-02T10:00:00.000Z",
+    unread: false,
+    blocking: false,
+    truncated: false,
+    redacted: false,
   }));
 }
 
@@ -141,8 +148,9 @@ describe("ApiStore.searchMessagesPage — truncation is disclosed, both states",
 
   test("search rows keep the fields that make this verb worth using", async () => {
     // Named explicitly because the fix must not regress them: created_at,
-    // channel, content and from_agent travelling together is what makes search
-    // better than walking channels with digest for a sender audit.
+    // channel, bounded compatibility content and from_agent travelling together
+    // is what makes search better than walking channels with digest for a
+    // sender audit.
     const { client } = recordingClient({ messages: rows(1) });
     const page = await new ApiStore(client).searchMessagesPage({ query: "the", limit: 10 });
 

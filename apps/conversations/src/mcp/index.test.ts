@@ -7,9 +7,11 @@ import { sendMessage, readMessages } from "../lib/messages.js";
 import { createChannel } from "../lib/channels.js";
 import { setSessionAgent } from "./channel.js";
 import { heartbeat } from "../lib/presence.js";
+import { resetStoreForTests } from "../lib/store/index.js";
 import { unlinkSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
+import { createDisposableStore, hermeticSpawnEnv } from "../test/hermetic.js";
 
 const TEST_DB = join(tmpdir(), `conversations-test-mcp-${Date.now()}.db`);
 let client: Client;
@@ -34,6 +36,7 @@ beforeAll(async () => {
   // failures that read like a real regression.
   delete process.env.CONVERSATIONS_USE_MACHINE_IDENTITY;
   closeDb();
+  resetStoreForTests();
 
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
 
@@ -58,6 +61,77 @@ function parseResult(result: { content: unknown[] }): unknown {
     return text;
   }
 }
+
+describe("MCP module lifecycle", () => {
+  async function expectIndexImportTerminates(options: {
+    marker: string;
+    script?: string;
+    env?: Record<string, string>;
+  }): Promise<void> {
+    const disposable = createDisposableStore("mcp-index-import");
+    const script = options.script
+      ?? `await import("./src/mcp/index.ts"); console.log(${JSON.stringify(options.marker)});`;
+    const proc = Bun.spawn({
+      cmd: [
+        process.execPath,
+        "--eval",
+        script,
+      ],
+      cwd: process.cwd(),
+      env: hermeticSpawnEnv({
+        CONVERSATIONS_DB_PATH: disposable.dbPath,
+        HASNA_CONVERSATIONS_DB_PATH: disposable.dbPath,
+        FORCE_COLOR: "0",
+        NO_COLOR: "1",
+        ...options.env,
+      }),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    try {
+      const exited = await Promise.race([
+        proc.exited,
+        Bun.sleep(4_000).then(() => null),
+      ]);
+      if (exited === null) {
+        proc.kill();
+      }
+      const [stdout, stderr] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+      ]);
+
+      if (exited === null) {
+        await proc.exited.catch(() => {});
+        throw new Error(
+          `MCP index import did not terminate; stdout=${JSON.stringify(stdout)} stderr=${JSON.stringify(stderr)}`,
+        );
+      }
+
+      expect(exited, stderr).toBe(0);
+      expect(stdout).toContain(options.marker);
+    } finally {
+      disposable.cleanup();
+    }
+  }
+
+  test("top-level server import does not keep a utility process alive", async () => {
+    await expectIndexImportTerminates({ marker: "MCP_INDEX_IMPORTED" });
+  }, 10_000);
+
+  test("top-level server import exits when the optional Telegram bridge is enabled", async () => {
+    await expectIndexImportTerminates({
+      marker: "MCP_INDEX_IMPORTED_WITH_TELEGRAM",
+      env: { TELEGRAM_BOT_TOKEN: "not-a-real-test-token" },
+      script: `
+        globalThis.fetch = async () => Response.json({ ok: true, result: { username: "testbot" } });
+        await import("./src/mcp/index.ts");
+        console.log("MCP_INDEX_IMPORTED_WITH_TELEGRAM");
+      `,
+    });
+  }, 10_000);
+});
 
 // ---- send_message ----
 
