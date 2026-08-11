@@ -328,6 +328,11 @@ export interface ProjectRegistrationAuthorityAdapter {
     request: ProjectRegistrationAuthorityRequest,
     receipt: ProjectRegistrationAuthorityReceipt,
   ): Promise<boolean>;
+  validatePriorRegistrationAdoption?(
+    sourceRequest: ProjectRegistrationAuthorityRequest,
+    sourceReceipt: ProjectRegistrationAuthorityReceipt,
+    currentRecord: ProjectRegistrationAuthorityRecord,
+  ): Promise<boolean>;
   compensate(request: ProjectRegistrationAuthorityRequest): Promise<ProjectRegistrationAuthorityReceipt>;
   verifyInverse(request: ProjectRegistrationAuthorityRequest): Promise<ProjectRegistrationAuthorityInverseVerification>;
   guardedUpdateProject?(
@@ -2284,10 +2289,20 @@ async function lookupPriorRegistrationReceipt(input: {
       !acceptedProof
       || sourceReceipt.target_id !== input.adoption.expected_target_id
       || sourceReceipt.target_id !== input.current_record.target_id
-      || sourceReceipt.result_revision !== input.current_record.revision
-      || sourceReceipt.result_digest !== input.current_record.digest
     ) {
       throw new Error("prior registration receipt does not prove the current exact target");
+    }
+    const exactResultMatches = sourceReceipt.result_revision === input.current_record.revision
+      && sourceReceipt.result_digest === input.current_record.digest;
+    if (
+      !exactResultMatches
+      && await input.adapter.validatePriorRegistrationAdoption?.(
+        sourceRequest,
+        sourceReceipt,
+        input.current_record,
+      ) !== true
+    ) {
+      throw new Error("prior registration receipt does not prove the current authority record");
     }
     return sourceReceipt;
   } catch {
