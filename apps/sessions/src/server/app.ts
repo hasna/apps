@@ -17,6 +17,8 @@ const jsonHeaders = {
 
 export const MAX_REQUEST_BODY_SIZE_ENV = "HASNA_SESSIONS_MAX_REQUEST_BODY_SIZE";
 export const SELF_HOSTED_DEFAULT_MAX_REQUEST_BODY_SIZE = 512 * 1024 * 1024;
+export const SERVER_IDLE_TIMEOUT_ENV = "HASNA_SESSIONS_IDLE_TIMEOUT_SECONDS";
+export const DEFAULT_SERVER_IDLE_TIMEOUT_SECONDS = 60;
 
 function json(payload: Record<string, unknown>, status = 200): Response {
   return new Response(JSON.stringify(payload, null, 2), { status, headers: jsonHeaders });
@@ -115,6 +117,21 @@ export function resolveMaxRequestBodySize(env: NodeJS.ProcessEnv = process.env):
   }
 
   return isCloudMode(env) ? SELF_HOSTED_DEFAULT_MAX_REQUEST_BODY_SIZE : undefined;
+}
+
+export function resolveServerIdleTimeoutSeconds(
+  env: NodeJS.ProcessEnv = process.env,
+): number {
+  const configured = env[SERVER_IDLE_TIMEOUT_ENV]?.trim();
+  if (!configured) return DEFAULT_SERVER_IDLE_TIMEOUT_SECONDS;
+
+  const seconds = Number(configured);
+  if (!Number.isInteger(seconds) || seconds < 0 || seconds > 255) {
+    throw new Error(
+      `${SERVER_IDLE_TIMEOUT_ENV} must be an integer from 0 through 255 seconds.`,
+    );
+  }
+  return seconds;
 }
 
 /** Serve mode string for the health/version contract. */
@@ -373,6 +390,7 @@ export function createSessionsServer(options: {
   hostname?: string;
   enableMcp?: boolean;
   maxRequestBodySize?: number;
+  idleTimeout?: number;
 } = {}) {
   const pkg = getPackageInfo();
   const hostname = options.hostname ?? process.env.HOST ?? "127.0.0.1";
@@ -380,10 +398,12 @@ export function createSessionsServer(options: {
     ? options.port
     : Number.parseInt(process.env.PORT || "3456", 10);
   const maxRequestBodySize = options.maxRequestBodySize ?? resolveMaxRequestBodySize();
+  const idleTimeout = options.idleTimeout ?? resolveServerIdleTimeoutSeconds();
 
   return Bun.serve({
     hostname,
     port: Number.isFinite(port) ? port : 3456,
+    idleTimeout,
     ...(maxRequestBodySize === undefined ? {} : { maxRequestBodySize }),
     async fetch(request) {
       if (options.enableMcp) {

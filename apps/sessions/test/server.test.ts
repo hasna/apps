@@ -1,11 +1,14 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   createSessionsServer,
+  DEFAULT_SERVER_IDLE_TIMEOUT_SECONDS,
   MAX_REQUEST_BODY_SIZE_ENV,
+  resolveServerIdleTimeoutSeconds,
   resolveMaxRequestBodySize,
+  SERVER_IDLE_TIMEOUT_ENV,
   SELF_HOSTED_DEFAULT_MAX_REQUEST_BODY_SIZE,
 } from "../src/server/app";
 import { getPackageInfo } from "../src/lib/package";
@@ -13,6 +16,32 @@ import { getDatabase, resetDatabase, closeDatabase } from "../src/db/database";
 import { saveParsedSession } from "../src/db/sessions";
 
 describe("createSessionsServer", () => {
+  it("keeps slow in-flight requests alive past Bun's 10-second default", () => {
+    let serveOptions: Record<string, unknown> | undefined;
+    const serveSpy = spyOn(Bun, "serve").mockImplementation((options: Record<string, unknown>) => {
+      serveOptions = options;
+      return { port: 0, stop() {} } as never;
+    });
+
+    try {
+      createSessionsServer({ hostname: "127.0.0.1", port: 0 });
+      expect(serveOptions?.idleTimeout).toBe(DEFAULT_SERVER_IDLE_TIMEOUT_SECONDS);
+    } finally {
+      serveSpy.mockRestore();
+    }
+  });
+
+  it("accepts explicit idle-timeout overrides and rejects values Bun cannot serve", () => {
+    expect(resolveServerIdleTimeoutSeconds({ [SERVER_IDLE_TIMEOUT_ENV]: "0" })).toBe(0);
+    expect(resolveServerIdleTimeoutSeconds({ [SERVER_IDLE_TIMEOUT_ENV]: "255" })).toBe(255);
+    expect(() =>
+      resolveServerIdleTimeoutSeconds({ [SERVER_IDLE_TIMEOUT_ENV]: "256" }),
+    ).toThrow(SERVER_IDLE_TIMEOUT_ENV);
+    expect(() =>
+      resolveServerIdleTimeoutSeconds({ [SERVER_IDLE_TIMEOUT_ENV]: "10.5" }),
+    ).toThrow(SERVER_IDLE_TIMEOUT_ENV);
+  });
+
   it("preserves Bun's default body limit in local mode unless configured", () => {
     expect(resolveMaxRequestBodySize({ HASNA_SESSIONS_STORAGE_MODE: "local" })).toBeUndefined();
   });
