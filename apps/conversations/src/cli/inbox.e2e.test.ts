@@ -260,6 +260,49 @@ describe("inbox bounded cursor recovery", () => {
     expect(await readCursor(stateDir)).toBe("2");
   });
 
+  test("suppresses signed self traffic across the identity union without hiding an unsigned same-name peer", async () => {
+    const harness = await createHarness();
+    const stateDir = join(harness.stateRoot, "seat-seat+seat-alias");
+    await seedState(stateDir, "1");
+    await writeFile(join(stateDir, ".identity-migrated-v1"), "", { mode: 0o600 });
+    const signature = "[inbox:seat:regression]";
+    const signedPrimary = {
+      ...channelMessage(2, "alpha"),
+      from_agent: "seat",
+      content: `primary self message ${signature}`,
+    };
+    const sameNamePeer = {
+      ...channelMessage(3, "alpha"),
+      from_agent: "seat",
+      content: "unsigned same-name peer message",
+    };
+    const signedAlias = {
+      ...channelMessage(4, "alpha"),
+      from_agent: "seat-alias",
+      content: `alias self message ${signature}`,
+    };
+    const signedPeerBlocker = {
+      ...message(5),
+      from_agent: "peer",
+      content: `peer blocker quoting ${signature}`,
+      blocking: true,
+    };
+
+    const result = runInbox(
+      harness,
+      ["check", "--as", "seat,seat-alias", "--limit", "5", "--no-todos"],
+      { windowMessages: [signedPrimary, sameNamePeer, signedAlias, signedPeerBlocker] },
+      { INBOX_SIGNATURE: signature },
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).not.toContain("primary self message");
+    expect(result.stdout).toContain("unsigned same-name peer message");
+    expect(result.stdout).not.toContain("alias self message");
+    expect(result.stdout).toContain("[BLOCKING] [dm] peer: peer blocker quoting");
+    expect(await readCursor(stateDir)).toBe("5");
+  });
+
   test("backfills only the bounded skipped range before a later clean poll", async () => {
     const harness = await createHarness();
     const stateDir = join(harness.stateRoot, "seat");
