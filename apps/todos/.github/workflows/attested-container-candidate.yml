@@ -7,6 +7,22 @@ on:
         description: Exact lowercase commit SHA currently at refs/heads/main
         required: true
         type: string
+      project_id:
+        description: Stable Projects id from the authenticated Projects read
+        required: true
+        type: string
+      project_slug:
+        description: Canonical Projects slug from the authenticated Projects read
+        required: true
+        type: string
+      project_name:
+        description: Canonical Projects display name from the authenticated Projects read
+        required: true
+        type: string
+      project_repository:
+        description: Canonical Projects repository locator from the authenticated Projects read
+        required: true
+        type: string
 
 concurrency:
   group: attested-container-candidate-${{ inputs.source_sha }}
@@ -19,6 +35,10 @@ permissions:
 
 env:
   SOURCE_SHA: ${{ inputs.source_sha }}
+  PROJECT_ID: ${{ inputs.project_id }}
+  PROJECT_SLUG: ${{ inputs.project_slug }}
+  PROJECT_NAME: ${{ inputs.project_name }}
+  PROJECT_REPOSITORY: ${{ inputs.project_repository }}
   OCI_ARCHIVE: todos-candidate.oci.tar
   OCI_LAYOUT: todos-candidate.oci-layout
   MACHINE_MANIFEST: todos-candidate.manifest.json
@@ -45,6 +65,16 @@ jobs:
             echo "source_sha must be a full lowercase commit SHA" >&2
             exit 1
           fi
+          if [[ ! "${PROJECT_ID}" =~ ^wks_[A-Za-z0-9_-]{8,}$ ]]; then
+            echo "project_id must be a complete stable Projects id" >&2
+            exit 1
+          fi
+          if [[ ! "${PROJECT_SLUG}" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]]; then
+            echo "project_slug must be a canonical prefixless Projects slug" >&2
+            exit 1
+          fi
+          test -n "${PROJECT_NAME}"
+          test "${PROJECT_REPOSITORY}" = "${GITHUB_REPOSITORY}"
 
       - name: Checkout exact source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -127,6 +157,10 @@ jobs:
             --trivy-report "${SCAN_REPORT}" \
             --output "${MACHINE_MANIFEST}" \
             --repository "${GITHUB_REPOSITORY}" \
+            --project-id "${PROJECT_ID}" \
+            --project-slug "${PROJECT_SLUG}" \
+            --project-name "${PROJECT_NAME}" \
+            --project-repository "${PROJECT_REPOSITORY}" \
             --source-sha "${SOURCE_SHA}" \
             --tree-sha "${SOURCE_TREE_SHA}" \
             --run-id "${GITHUB_RUN_ID}" \

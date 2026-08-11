@@ -31,8 +31,16 @@ const PassedSchema = z.literal("passed");
 
 export const CandidateManifestSchema = z
   .object({
-    schema: z.literal("hasna.todos.attested_container_candidate.v1"),
+    schema: z.literal("hasna.todos.attested_container_candidate.v2"),
     candidateKind: z.literal("comparison_only"),
+    project: z
+      .object({
+        id: z.string().regex(/^wks_[A-Za-z0-9_-]{8,}$/),
+        slug: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
+        displayName: z.string().min(1),
+        repository: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/),
+      })
+      .strict(),
     source: z
       .object({
         repository: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/),
@@ -112,6 +120,13 @@ export const CandidateManifestSchema = z
         code: z.ZodIssueCode.custom,
         path: ["run", "repository"],
         message: "run repository must match the exact source repository",
+      });
+    }
+    if (manifest.project.repository !== manifest.source.repository) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["project", "repository"],
+        message: "Projects repository locator must match the exact source repository",
       });
     }
     if (manifest.scan.critical !== 0 || manifest.scan.high !== 0) {
@@ -252,18 +267,18 @@ export function createSourceRecords(input: CreateSourceRecordsInput): SourceReco
       revision: 1,
       sourceProjectRef: {
         kind: "project",
-        id: "todos-source-project",
-        uri: "project://todos-source",
+        id: manifest.project.id,
+        uri: `project://${manifest.project.slug}`,
         tags: ["comparison-only"],
       },
       sourceRevision: 1,
-      slug: "todos",
-      displayName: "Open Todos",
+      slug: manifest.project.slug,
+      displayName: manifest.project.displayName,
       repositoryRef,
       workspaceRef: {
         kind: "project",
-        id: "todos-source-project",
-        uri: "project://todos-source",
+        id: manifest.project.id,
+        uri: `project://${manifest.project.slug}`,
         tags: ["comparison-only"],
       },
       lifecycle: "active",
@@ -721,8 +736,14 @@ async function generateManifest(flags: Map<string, string>): Promise<void> {
   const high = vulnerabilities.filter((finding) => finding.Severity === "HIGH").length;
 
   const manifest = CandidateManifestSchema.parse({
-    schema: "hasna.todos.attested_container_candidate.v1",
+    schema: "hasna.todos.attested_container_candidate.v2",
     candidateKind: "comparison_only",
+    project: {
+      id: requiredFlag(flags, "project-id"),
+      slug: requiredFlag(flags, "project-slug"),
+      displayName: requiredFlag(flags, "project-name"),
+      repository: requiredFlag(flags, "project-repository"),
+    },
     source: {
       repository: requiredFlag(flags, "repository"),
       commitSha: requiredFlag(flags, "source-sha"),
