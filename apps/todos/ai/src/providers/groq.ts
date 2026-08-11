@@ -12,10 +12,11 @@ import {
   type ToolSet,
 } from "ai";
 import {
-  TodosAiNeedsApprovalSignal,
-  TodosAiNeedsInputSignal,
+  type TodosAiNeedsApprovalSignal,
+  type TodosAiNeedsInputSignal,
   type TodosAiJsonValue,
 } from "@hasna/todos";
+import { normalizeTodosAiControlSignal } from "../control-signals";
 import {
   TODOS_AI_RUNTIME_LIMITS,
   TodosAiProviderError,
@@ -68,12 +69,12 @@ function isAbortError(error: unknown, signal: AbortSignal): boolean {
 }
 
 function mapProviderError(error: unknown, signal: AbortSignal): never {
+  const controlSignal = normalizeTodosAiControlSignal(error);
+  if (controlSignal !== null) throw controlSignal;
   if (
     error instanceof TodosAiProviderError ||
     error instanceof TodosAiToolError ||
-    error instanceof TodosAiSchemaError ||
-    error instanceof TodosAiNeedsInputSignal ||
-    error instanceof TodosAiNeedsApprovalSignal
+    error instanceof TodosAiSchemaError
   ) {
     throw error;
   }
@@ -110,12 +111,10 @@ function sdkTools(
             toolCallId: options.toolCallId,
           });
         } catch (error) {
-          if (
-            error instanceof TodosAiNeedsInputSignal ||
-            error instanceof TodosAiNeedsApprovalSignal
-          ) {
-            onControlSignal(error);
-            throw error;
+          const controlSignal = normalizeTodosAiControlSignal(error);
+          if (controlSignal !== null) {
+            onControlSignal(controlSignal);
+            throw controlSignal;
           }
           if (isAbortError(error, signal)) throw error;
           if (error instanceof TodosAiToolError) throw error;
