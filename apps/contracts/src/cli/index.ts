@@ -15,6 +15,7 @@ import { secureLocalStorePolicy } from "../secure-local-store";
 import { runVendorKit } from "./kit-runner";
 import { runIssueKey } from "./issue-key";
 import { formatArtifactScanReport, resolveAssetInventoryWaivers, scanPublishedArtifact } from "../artifact-scan";
+import { runSafeReadCli } from "./read";
 
 function collectJsonFiles(root: string): string[] {
   const stat = statSync(root);
@@ -67,13 +68,21 @@ function preflightJsonUsageErrors(argv: string[]) {
     return false;
   }
 
-  if (!["schemas", "validate", "conformance", "no-cloud-scan", "repo-conformance", "vendor-kit", "issue-key", "artifact-scan", "secure-local-store"].includes(command)) {
+  if (!["schemas", "validate", "conformance", "no-cloud-scan", "repo-conformance", "vendor-kit", "issue-key", "artifact-scan", "secure-local-store", "read"].includes(command)) {
     return reportParserJsonError("commander.unknownCommand", `unknown command '${command}'`);
   }
 
   // issue-key has rich value-taking options; let commander parse it (its
   // CommanderError is already rendered as JSON by main()).
   if (command === "issue-key") {
+    return false;
+  }
+
+  // `read` carries an entire foreign command line after `--`, including that
+  // command's own flags. Preflighting those against this program's option set
+  // would reject `contracts read -- todos list --limit 5` for an option that is
+  // not ours to validate. Commander handles it.
+  if (command === "read") {
     return false;
   }
 
@@ -474,6 +483,30 @@ export function createContractsProgram() {
         const message = error instanceof Error ? error.message : String(error);
         reportCliError(options, `artifact-scan failed for ${target}: ${message}`, { path: target, code: "artifact_scan_error" });
       }
+    });
+
+  program
+    .command("read")
+    .description("Run a Hasna collection read and either prove it complete or REFUSE (exit 2)")
+    .argument("[command...]", "The command to run, after --. e.g. contracts read -- todos list --json")
+    .option("--rows-key <key>", "Key holding the row array (auto-detected when omitted)")
+    .option("--total-key <key>", "Key holding a self-declared population size")
+    .option("--limit-flag <flag>", "Flag the target uses to bound rows (default --limit)")
+    .option("--limit <n>", "Bound to pass on the first read; enables the widening proof")
+    .option("--widen-to <n>", "Bound for the widening probe (default limit * 4)")
+    .option("--known-clamp <n>", "The server cap this surface really imposes, if you have established it")
+    .option("--cursor-flag <flag>", "Flag the target uses to page, e.g. --cursor")
+    .option("--max-pages <n>", "Refuse rather than page beyond this many pages (default 200)")
+    .option("--sibling-arg <arg>", "Repeatable: argv of a sibling verb carrying an aggregate", collectOption)
+    .option("--sibling-path <path>", "Dotted path to the aggregate, e.g. by_scope.global")
+    .option("--probe-positive-arg <arg>", "Repeatable: tokens forming a query that MUST match something", collectOption)
+    .option("--probe-negative-arg <arg>", "Repeatable: tokens forming a query that MUST match nothing", collectOption)
+    .option("--allow-empty", "An empty result is a legitimate answer here")
+    .option("--assume-complete", "Waive proof; recorded in the evidence and never silent")
+    .option("--scope-ack <why>", "Record the narrower default scope as a deliberate choice, and say why")
+    .option("-j, --json", "Output JSON")
+    .action((command: string[], options: Record<string, unknown>) => {
+      process.exitCode = runSafeReadCli(command ?? [], options as never);
     });
 
   program
