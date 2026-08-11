@@ -82,4 +82,115 @@ describe("MementosClient project resources", () => {
       `https://mementos.example.test/v1/projects/${projectId}/resources/project/${projectId}`,
     ]);
   });
+
+  test("complete traversal rejects a repeated cursor on empty pages", async () => {
+    let calls = 0;
+    const repeated = {
+      ...page,
+      resources: [],
+      count: 0,
+      total: 2,
+      limit: 1,
+      has_more: true,
+      next_cursor: "repeat",
+    };
+    const client = new MementosClient({
+      baseUrl: "https://mementos.example.test",
+      fetch: (async () => {
+        calls += 1;
+        if (calls > 2) {
+          throw new Error("sentinel: repeated-cursor traversal attempted a third page");
+        }
+        return new Response(JSON.stringify({
+          ...repeated,
+          cursor: calls === 1 ? null : "repeat",
+        }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }) as typeof fetch,
+    });
+
+    await expect(client.listAllProjectResources(projectId, { page_size: 1 }))
+      .rejects.toThrow(/repeated a continuation cursor/i);
+    expect(calls).toBe(2);
+  });
+
+  test("complete traversal stops a changing cursor chain at the total-derived page bound", async () => {
+    let calls = 0;
+    const client = new MementosClient({
+      baseUrl: "https://mementos.example.test",
+      fetch: (async () => {
+        calls += 1;
+        if (calls > 2) {
+          throw new Error("sentinel: changing-cursor traversal exceeded two pages");
+        }
+        return new Response(JSON.stringify({
+          ...page,
+          resources: [],
+          count: 0,
+          total: 2,
+          limit: 1,
+          cursor: calls === 1 ? null : `cursor-${calls - 1}`,
+          next_cursor: `cursor-${calls}`,
+          has_more: true,
+        }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }) as typeof fetch,
+    });
+
+    await expect(client.listAllProjectResources(projectId, { page_size: 1 }))
+      .rejects.toThrow(/exceeded its bounded 2-page population/i);
+    expect(calls).toBe(2);
+  });
+
+  test("complete traversal rejects a non-positive page size before fetching", async () => {
+    let calls = 0;
+    const client = new MementosClient({
+      baseUrl: "https://mementos.example.test",
+      fetch: (async () => {
+        calls += 1;
+        return new Response(JSON.stringify(page), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }) as typeof fetch,
+    });
+
+    await expect(client.listAllProjectResources(projectId, { page_size: 0 }))
+      .rejects.toMatchObject({ status: 400 });
+    expect(calls).toBe(0);
+  });
+
+  test("complete traversal rejects a cursor when the page claims no more results", async () => {
+    let calls = 0;
+    const client = new MementosClient({
+      baseUrl: "https://mementos.example.test",
+      fetch: (async () => {
+        calls += 1;
+        if (calls > 2) {
+          throw new Error("sentinel: false-has-more traversal exceeded two pages");
+        }
+        return new Response(JSON.stringify({
+          ...page,
+          resources: [],
+          count: 0,
+          total: 2,
+          limit: 1,
+          cursor: calls === 1 ? null : `cursor-${calls - 1}`,
+          next_cursor: `cursor-${calls}`,
+          has_more: false,
+        }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }) as typeof fetch,
+    });
+
+    await expect(client.listAllProjectResources(projectId, { page_size: 1 }))
+      .rejects.toThrow(/continuation cursor while claiming no more results/i);
+    expect(calls).toBe(1);
+  });
 });
