@@ -220,6 +220,18 @@ class FakeAuthority implements ProjectRegistrationAuthorityAdapter {
     accepted_receipt_id: string;
   }> = [];
   readonly validatedAdoptionTargets = new Set<string>();
+  readonly priorRegistrationAdoptionValidations: Array<{
+    request: ProjectRegistrationAuthorityRequest;
+    receipt: ProjectRegistrationAuthorityReceipt;
+    current_record: ProjectRegistrationAuthorityRecord;
+  }> = [];
+  priorRegistrationAdoptionValidation:
+    | boolean
+    | ((
+      request: ProjectRegistrationAuthorityRequest,
+      receipt: ProjectRegistrationAuthorityReceipt,
+      currentRecord: ProjectRegistrationAuthorityRecord,
+    ) => boolean | Promise<boolean>) = false;
   strictInverseDesired = false;
   allowExistingAdoption = false;
   beforeCreate: ((request: ProjectRegistrationAuthorityRequest) => void | Promise<void>) | null = null;
@@ -453,6 +465,21 @@ class FakeAuthority implements ProjectRegistrationAuthorityAdapter {
     receipt: ProjectRegistrationAuthorityReceipt,
   ): Promise<boolean> {
     return receipt.target_id !== null && this.validatedAdoptionTargets.has(receipt.target_id);
+  }
+
+  async validatePriorRegistrationAdoption(
+    request: ProjectRegistrationAuthorityRequest,
+    receipt: ProjectRegistrationAuthorityReceipt,
+    currentRecord: ProjectRegistrationAuthorityRecord,
+  ): Promise<boolean> {
+    this.priorRegistrationAdoptionValidations.push({
+      request,
+      receipt,
+      current_record: currentRecord,
+    });
+    return typeof this.priorRegistrationAdoptionValidation === "function"
+      ? this.priorRegistrationAdoptionValidation(request, receipt, currentRecord)
+      : this.priorRegistrationAdoptionValidation;
   }
 
   async compensate(request: ProjectRegistrationAuthorityRequest): Promise<ProjectRegistrationAuthorityReceipt> {
@@ -1990,9 +2017,191 @@ describe("full project registration transaction", () => {
       });
       expect(sourceFakes.conversations.records.has(channelId)).toBe(true);
       expect(sourceFakes.conversations.compensated).toEqual([]);
+      expect(sourceFakes.conversations.priorRegistrationAdoptionValidations).toEqual([]);
     } finally {
       sourceDb.close();
       db.close();
+    }
+  });
+
+  test("accepts historical receipt drift only when the authority validates the current record", async () => {
+    const sourceDb = makeDb();
+    const db = makeDb();
+    const sourceTarget = tempTarget("historical-drift-source");
+    const target = tempTarget("historical-drift-recovery");
+    const sourceFakes = fakeAuthorities();
+    const recoveryFakes = fakeAuthorities();
+    const sourceOperationId = "op-historical-drift-source";
+    const recoveryOperationId = "op-historical-drift-recovery";
+    const projectId = "wks_historicaldrift01";
+    configureStableOrphanAuthorityIds(sourceFakes, projectId);
+    const historicalIdentity = {
+      route: sourceFakes.todos.route,
+      package_version: sourceFakes.todos.packageVersion,
+      authority_id: sourceFakes.todos.authorityId,
+      corpus_id: sourceFakes.todos.corpusId,
+    };
+    try {
+      const source = await registerFullProject(
+        input(sourceOperationId, sourceTarget.target, { id: projectId }),
+        { db: sourceDb, authorities: sourceFakes.authorities },
+      );
+      const sourceProjectReceipt = requireRegistrationAuthorityReceipt(source.receipts.find(
+        (receipt) => receipt.step_id === "todos_project" && receipt.direction === "forward",
+      )!.authority_receipt);
+      const sourceTaskListReceipt = requireRegistrationAuthorityReceipt(source.receipts.find(
+        (receipt) => receipt.step_id === "todos_task_list" && receipt.direction === "forward",
+      )!.authority_receipt);
+      const todosProjectId = sourceProjectReceipt.target_id!;
+      const todosTaskListId = sourceTaskListReceipt.target_id!;
+      const currentRecord: ProjectRegistrationAuthorityRecord = {
+        target_id: todosProjectId,
+        revision: "revision:after-ordinary-task-activity",
+        digest: sha256("todos-project-after-ordinary-task-activity"),
+      };
+      sourceFakes.todos.records.set(todosProjectId, currentRecord);
+      sourceFakes.todos.preexistingTerminalReasons.set(todosProjectId, "target_already_registered");
+      sourceFakes.todos.preexistingTerminalReasons.set(todosTaskListId, "target_already_registered");
+      sourceFakes.todos.priorRegistrationAdoptionValidation = true;
+      const authorities: ProjectRegistrationAuthorities = {
+        todos: sourceFakes.todos,
+        mementos: recoveryFakes.mementos,
+        conversations: recoveryFakes.conversations,
+      };
+      const request = {
+        ...input(recoveryOperationId, target.target, { id: projectId }),
+        reconcile_existing: {
+          todos_project: {
+            source_operation_id: sourceOperationId,
+            source_authority_identity: historicalIdentity,
+            target_id: todosProjectId,
+          },
+          todos_task_list: {
+            source_operation_id: sourceOperationId,
+            source_authority_identity: historicalIdentity,
+            target_id: todosTaskListId,
+          },
+        },
+      } as unknown as FullProjectRegistrationInput;
+
+      const result = await registerFullProject(request, { db, authorities });
+
+      expect(result).toMatchObject({ ok: true, outcome: "accepted" });
+      expect(sourceFakes.todos.priorRegistrationAdoptionValidations).toHaveLength(1);
+      expect(sourceFakes.todos.priorRegistrationAdoptionValidations[0]).toMatchObject({
+        request: {
+          operation_id: sourceOperationId,
+          step_id: "todos_project",
+          authority_route: historicalIdentity.route,
+          package_version: historicalIdentity.package_version,
+          authority_id: historicalIdentity.authority_id,
+          tenant_id: sourceProjectReceipt.tenant_id,
+          corpus_id: historicalIdentity.corpus_id,
+        },
+        receipt: {
+          receipt_id: sourceProjectReceipt.receipt_id,
+          target_id: todosProjectId,
+          result_revision: sourceProjectReceipt.result_revision,
+          result_digest: sourceProjectReceipt.result_digest,
+        },
+        current_record: currentRecord,
+      });
+      expect(sourceFakes.todos.records.get(todosProjectId)).toEqual(currentRecord);
+      expect(sourceFakes.todos.compensated).toEqual([]);
+    } finally {
+      sourceDb.close();
+      db.close();
+    }
+  });
+
+  test("fails closed when historical receipt drift is unvalidated", async () => {
+    for (const mode of ["absent", "false", "throw"] as const) {
+      const sourceDb = makeDb();
+      const db = makeDb();
+      const sourceTarget = tempTarget(`historical-drift-${mode}-source`);
+      const target = tempTarget(`historical-drift-${mode}-recovery`);
+      const sourceFakes = fakeAuthorities();
+      const recoveryFakes = fakeAuthorities();
+      const sourceOperationId = `op-historical-drift-${mode}-source`;
+      const projectId = `wks_historicaldrift${mode}`;
+      configureStableOrphanAuthorityIds(sourceFakes, projectId);
+      const historicalIdentity = {
+        route: sourceFakes.todos.route,
+        package_version: sourceFakes.todos.packageVersion,
+        authority_id: sourceFakes.todos.authorityId,
+        corpus_id: sourceFakes.todos.corpusId,
+      };
+      try {
+        const source = await registerFullProject(
+          input(sourceOperationId, sourceTarget.target, { id: projectId }),
+          { db: sourceDb, authorities: sourceFakes.authorities },
+        );
+        const sourceProjectReceipt = requireRegistrationAuthorityReceipt(source.receipts.find(
+          (receipt) => receipt.step_id === "todos_project" && receipt.direction === "forward",
+        )!.authority_receipt);
+        const sourceTaskListReceipt = requireRegistrationAuthorityReceipt(source.receipts.find(
+          (receipt) => receipt.step_id === "todos_task_list" && receipt.direction === "forward",
+        )!.authority_receipt);
+        const todosProjectId = sourceProjectReceipt.target_id!;
+        const todosTaskListId = sourceTaskListReceipt.target_id!;
+        sourceFakes.todos.records.set(todosProjectId, {
+          target_id: todosProjectId,
+          revision: `revision:drift-${mode}`,
+          digest: sha256(`todos-project-drift-${mode}`),
+        });
+        sourceFakes.todos.preexistingTerminalReasons.set(todosProjectId, "target_already_registered");
+        sourceFakes.todos.preexistingTerminalReasons.set(todosTaskListId, "target_already_registered");
+        if (mode === "absent") {
+          Object.defineProperty(sourceFakes.todos, "validatePriorRegistrationAdoption", {
+            value: undefined,
+          });
+        } else if (mode === "throw") {
+          sourceFakes.todos.priorRegistrationAdoptionValidation = () => {
+            throw new Error("injected prior-adoption validation failure");
+          };
+        }
+        const authorities: ProjectRegistrationAuthorities = {
+          todos: sourceFakes.todos,
+          mementos: recoveryFakes.mementos,
+          conversations: recoveryFakes.conversations,
+        };
+        const request = {
+          ...input(`op-historical-drift-${mode}-recovery`, target.target, { id: projectId }),
+          reconcile_existing: {
+            todos_project: {
+              source_operation_id: sourceOperationId,
+              source_authority_identity: historicalIdentity,
+              target_id: todosProjectId,
+            },
+            todos_task_list: {
+              source_operation_id: sourceOperationId,
+              source_authority_identity: historicalIdentity,
+              target_id: todosTaskListId,
+            },
+          },
+        } as unknown as FullProjectRegistrationInput;
+
+        const result = await registerFullProject(request, { db, authorities });
+
+        expect({
+          mode,
+          ok: result.ok,
+          outcome: result.outcome,
+          failed_step: result.failed_step,
+          reason_code: result.reason_code,
+        }).toEqual({
+          mode,
+          ok: false,
+          outcome: "rolled_back",
+          failed_step: "todos_project",
+          reason_code: "registration_reconciliation_receipt_unverified",
+        });
+        expect(sourceFakes.todos.records.has(todosProjectId)).toBe(true);
+        expect(sourceFakes.todos.compensated).toEqual([]);
+      } finally {
+        sourceDb.close();
+        db.close();
+      }
     }
   });
 

@@ -48,6 +48,12 @@ class MemoryAuthority implements ProjectRegistrationAuthorityAdapter {
   readonly receipts = new Map<string, ProjectRegistrationAuthorityReceipt>();
   readonly createRequests: ProjectRegistrationAuthorityRequest[] = [];
   readonly inverseRequests: ProjectRegistrationAuthorityRequest[] = [];
+  readonly priorRegistrationAdoptionValidations: Array<{
+    request: ProjectRegistrationAuthorityRequest;
+    receipt: ProjectRegistrationAuthorityReceipt;
+    current_record: ProjectRegistrationAuthorityRecord;
+  }> = [];
+  priorRegistrationAdoptionValidation = false;
   terminalStep: string | null = null;
   ambiguousStep: string | null = null;
   duplicateForward = false;
@@ -152,6 +158,19 @@ class MemoryAuthority implements ProjectRegistrationAuthorityAdapter {
       throw new Error("fixture transport failed after commit");
     }
     return accepted;
+  }
+
+  async validatePriorRegistrationAdoption(
+    request: ProjectRegistrationAuthorityRequest,
+    receipt: ProjectRegistrationAuthorityReceipt,
+    currentRecord: ProjectRegistrationAuthorityRecord,
+  ): Promise<boolean> {
+    this.priorRegistrationAdoptionValidations.push({
+      request,
+      receipt,
+      current_record: currentRecord,
+    });
+    return this.priorRegistrationAdoptionValidation;
   }
 
   async readExact(request: {
@@ -850,6 +869,62 @@ describe("production project registration authorities", () => {
       expect(externalIds(duplicate)).toEqual(externalIds(accepted));
     } finally {
       db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("forwards prior registration adoption validation through the production lazy authority", async () => {
+    const root = mkdtempSync(join(tmpdir(), "projects-authority-prior-adoption-"));
+    const fakes = memorySet();
+    fakes.todos.priorRegistrationAdoptionValidation = true;
+    const authority = productionProjectRegistrationAuthorities({
+      env: {
+        HASNA_TODOS_DB_PATH: join(root, "todos.db"),
+      },
+      importModule: localImporter(fakes),
+    }).todos;
+    const request: ProjectRegistrationAuthorityRequest = {
+      operation_id: "op-prior-adoption-source",
+      step_id: "todos_project",
+      resource_kind: "project",
+      direction: "forward",
+      authority_route: "todos.project-registration.v1",
+      package_version: "fixture-1.0.0",
+      authority_id: "todos-fixture",
+      tenant_id: "tenant-fixture",
+      corpus_id: "todos-corpus",
+      target_selector: "wks_prioradoption01",
+      idempotency_key: "fixture-prior-adoption-key",
+      request_digest: digest("prior-adoption-request"),
+      precondition_digest: digest("prior-adoption-precondition"),
+      project_id: "wks_prioradoption01",
+      project_slug: "prior-adoption",
+      project_name: "Prior Adoption",
+      desired: {
+        source_project_id: "wks_prioradoption01",
+        source_project_slug: "prior-adoption",
+        name: "Prior Adoption",
+      },
+      target: ProjectRegistrationPathHandle.fromPath(join(root, "project")),
+      response_byte_limit: 65_536,
+      time_budget_ms: 5_000,
+    };
+    const receipt = await fakes.todos.create(request);
+    const currentRecord: ProjectRegistrationAuthorityRecord = {
+      target_id: receipt.target_id!,
+      revision: "revision:current",
+      digest: digest("current-record"),
+    };
+    try {
+      expect(
+        await authority.validatePriorRegistrationAdoption?.(request, receipt, currentRecord),
+      ).toBe(true);
+      expect(fakes.todos.priorRegistrationAdoptionValidations).toEqual([{
+        request,
+        receipt,
+        current_record: currentRecord,
+      }]);
+    } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });

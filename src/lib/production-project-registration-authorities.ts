@@ -397,6 +397,19 @@ class LazyProjectRegistrationAuthority implements ProjectRegistrationAuthorityAd
     return delegate.validateExistingAdoption?.(request, receipt) ?? false;
   }
 
+  async validatePriorRegistrationAdoption(
+    sourceRequest: ProjectRegistrationAuthorityRequest,
+    sourceReceipt: ProjectRegistrationAuthorityReceipt,
+    currentRecord: ProjectRegistrationAuthorityRecord,
+  ): Promise<boolean> {
+    const delegate = await this.resolve();
+    return delegate.validatePriorRegistrationAdoption?.(
+      sourceRequest,
+      sourceReceipt,
+      currentRecord,
+    ) ?? false;
+  }
+
   async compensate(request: ProjectRegistrationAuthorityRequest): Promise<ProjectRegistrationAuthorityReceipt> {
     return (await this.resolve()).compensate(request);
   }
