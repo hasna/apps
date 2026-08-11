@@ -214,6 +214,7 @@ class GuardCliTests(unittest.TestCase):
     def test_elevated_uses_one_exact_fixed_reviewer_with_two_cycle_cap(self) -> None:
         snapshot = preflight()
         snapshot["reviewer_artifacts"] = [artifact("Reviewer-A", "RUN-A")]
+        snapshot["repair_cycles"]["count"] = 2
         expected = {
             "reviewers": [{"reviewer_identity": "reviewer-a", "reviewer_run_id": "run-a"}]
         }
@@ -226,9 +227,11 @@ class GuardCliTests(unittest.TestCase):
                 "fix: safe",
                 snapshot=snapshot,
                 fixed_reviewer_set=expected,
+                expected_repair_cycle_count=2,
             )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(plan["fixed_reviewer_count"], 1)
+        self.assertEqual(snapshot["repair_cycles"]["count"], 2)
         self.assertEqual(snapshot["repair_cycles"]["cap"], 2)
 
     def test_fixed_reviewer_set_rejects_missing_surplus_duplicate_and_substitute(self) -> None:
@@ -504,7 +507,7 @@ class GuardCliTests(unittest.TestCase):
                 )
             self.assertEqual(result.returncode, 2)
 
-    def test_boolean_counts_and_unicode_equivalent_reviewers_fail_closed(self) -> None:
+    def test_boolean_counts_fail_closed(self) -> None:
         boolean_count = preflight()
         boolean_count["risk_tier"] = {"declared": "routine", "effective": "routine", "source": "explicit"}
         boolean_count["required_reviewer_artifacts"] = True

@@ -12,6 +12,57 @@ useDefaultTestTimeout();
 const ROOT = process.cwd();
 const AGENT_SKILLS_DIR = join(ROOT, "agent-skills");
 
+function secretScanContractFailures(workflow: string): string[] {
+  const start = workflow.indexOf("  secret-scan:\n");
+  const end = workflow.indexOf("\n  ci:\n", start);
+  if (start < 0 || end <= start) return ["secret-scan job"];
+
+  const secretScan = workflow.slice(start, end);
+  const required: Array<[string, string]> = [
+    ["job name", "name: Secret scan (gitleaks)"],
+    [
+      "pinned checkout",
+      "uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+    ],
+    ["full history checkout", "fetch-depth: 0"],
+    ["credential-free checkout", "persist-credentials: false"],
+    ["pinned gitleaks version", "GITLEAKS_VERSION: 8.30.1"],
+    [
+      "pinned gitleaks checksum",
+      "GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb",
+    ],
+    ["checksum verification", "sha256sum --check -"],
+    [
+      "PR base range from event",
+      "GITLEAKS_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}",
+    ],
+    [
+      "PR head range from event",
+      "GITLEAKS_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}",
+    ],
+    ["push base range from event", "GITLEAKS_PUSH_BASE_SHA: ${{ github.event.before }}"],
+    ["push head range from event", "GITLEAKS_PUSH_HEAD_SHA: ${{ github.sha }}"],
+    ["validated SHA range", "sha_pattern='^[0-9a-f]{40}$'"],
+    ["initial-push range", 'GITLEAKS_LOG_OPTS="$head_sha"'],
+    ["bounded commit range", 'GITLEAKS_LOG_OPTS="$base_sha..$head_sha"'],
+    ["gitleaks git scan", '"$RUNNER_TEMP/gitleaks-bin/gitleaks" git .'],
+    ["gitleaks log options", '--log-opts="$GITLEAKS_LOG_OPTS"'],
+    ["redaction", "--redact"],
+    ["quiet banner", "--no-banner"],
+    ["GitHub platform", "--platform github"],
+    ["blocking exit code", "--exit-code 1"],
+  ];
+  const failures = required
+    .filter(([, expected]) => !secretScan.includes(expected))
+    .map(([label]) => label);
+
+  if (/actions\/checkout@(v\d+|main|master)\b/.test(secretScan)) {
+    failures.push("floating checkout");
+  }
+  if (secretScan.includes("--no-redact")) failures.push("disabled redaction");
+  return failures;
+}
+
 function filesBelow(directory: string, prefix = ""): string[] {
   return readdirSync(directory).flatMap((entry) => {
     const absolute = join(directory, entry);
@@ -148,5 +199,66 @@ describe("repository-managed agent workflow skills", () => {
       },
     );
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+  });
+
+  test("CI secret scan pins gitleaks and scans the exact PR or push range", () => {
+    const workflow = readFileSync(join(ROOT, ".github", "workflows", "ci.yml"), "utf8");
+    expect(secretScanContractFailures(workflow)).toEqual([]);
+  });
+
+  test("CI secret scan structural guard rejects missing and unsafe variants", () => {
+    const workflow = readFileSync(join(ROOT, ".github", "workflows", "ci.yml"), "utf8");
+    const start = workflow.indexOf("  secret-scan:\n");
+    const end = workflow.indexOf("\n  ci:\n", start);
+    const job = workflow.slice(start, end);
+    const cases: Array<[string, string, string]> = [
+      ["missing job", workflow.slice(0, start) + workflow.slice(end), "secret-scan job"],
+      [
+        "floating checkout",
+        workflow.replace(
+          "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "actions/checkout@v6",
+        ),
+        "floating checkout",
+      ],
+      [
+        "shallow checkout",
+        workflow.replace("fetch-depth: 0", "fetch-depth: 1"),
+        "full history checkout",
+      ],
+      [
+        "credential-persisting checkout",
+        workflow.replace("persist-credentials: false", "persist-credentials: true"),
+        "credential-free checkout",
+      ],
+      [
+        "missing checksum verification",
+        workflow.replace("          printf '%s  %s\\n' \"$GITLEAKS_SHA256\" \"$archive\" | sha256sum --check -\n", ""),
+        "checksum verification",
+      ],
+      [
+        "hard-coded PR base",
+        workflow.replace(
+          "GITLEAKS_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}",
+          "GITLEAKS_PR_BASE_SHA: 0000000000000000000000000000000000000000",
+        ),
+        "PR base range from event",
+      ],
+      [
+        "missing blocking exit code",
+        workflow.replace("            --exit-code 1", ""),
+        "blocking exit code",
+      ],
+      [
+        "disabled redaction",
+        workflow.replace("            --redact", "            --redact\n            --no-redact"),
+        "disabled redaction",
+      ],
+    ];
+
+    expect(job.length).toBeGreaterThan(0);
+    for (const [label, candidate, expectedFailure] of cases) {
+      expect(secretScanContractFailures(candidate), label).toContain(expectedFailure);
+    }
   });
 });
