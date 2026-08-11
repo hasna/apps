@@ -253,9 +253,8 @@ export function classifyRead(captured: CapturedRead, options: ClassifyOptions = 
   if (captured.code !== 0) {
     return refuse(
       "nonzero_exit",
-      `the command exited ${captured.code}. A failed read is not an empty set. stderr: ${
-        captured.stderr.trim().slice(0, 300) || "(empty)"
-      }`
+      `the command exited ${captured.code}. A failed read is not an empty set. ` +
+        `Captured stderr was ${captured.stderr.length} byte(s); content was not rendered.`
     );
   }
 
@@ -266,21 +265,19 @@ export function classifyRead(captured: CapturedRead, options: ClassifyOptions = 
   let parsed: unknown;
   try {
     parsed = JSON.parse(captured.stdout);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+  } catch {
     return refuse(
       "unparseable_stdout",
-      `stdout is not JSON (${message}). A parse failure is a refusal, never an empty list.`
+      "stdout was not valid JSON; parse details were not rendered. A parse failure is a refusal, never an empty list."
     );
   }
 
   if (isPlainObject(parsed)) {
     if (parsed.ok === false) {
-      const err = typeof parsed.error === "string" ? parsed.error : JSON.stringify(parsed).slice(0, 200);
-      return refuse("error_object", `the surface returned an error object at exit 0: ${err}`);
+      return refuse("error_object", "the surface returned an error object at exit 0; payload content was not rendered");
     }
     if (typeof parsed.error === "string" && parsed.error.length > 0) {
-      return refuse("error_object", `the surface returned an error object at exit 0: ${parsed.error}`);
+      return refuse("error_object", "the surface returned an error object at exit 0; payload content was not rendered");
     }
     if (parsed.store_exists === false) {
       return refuse(
@@ -309,7 +306,8 @@ export function classifyRead(captured: CapturedRead, options: ClassifyOptions = 
     if (hit) {
       return refuse(
         "stderr_truncation_notice",
-        `stderr carries a truncation notice (${note}): "${hit[0]}". The body parsed cleanly at exit 0; only stderr says the read was bounded.`
+        `stderr carries a truncation notice (${note}); content was not rendered. ` +
+          "The body parsed cleanly at exit 0; only stderr says the read was bounded."
       );
     }
   }

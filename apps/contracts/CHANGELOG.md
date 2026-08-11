@@ -8,6 +8,8 @@ All notable changes to `@hasna/contracts` are documented here.
   pagination across numeric cursors.
 - Adds the metadata-only `verify-write` command for checking stored writes
   without rendering capability-bearing content.
+- Keeps `safe-read` refusals metadata-only so child stderr and error-object
+  payloads cannot be reproduced in terminal output or durable transcripts.
 
 PATCH, not minor. This ships additive operational verification helpers without
 changing existing contract shapes.

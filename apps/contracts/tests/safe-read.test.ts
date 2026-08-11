@@ -27,6 +27,7 @@ import { KNOWN_CLAMPS, lookupClamp, runCaptured, safeRead } from "../src/safe-re
 import { runSafeReadCli } from "../src/cli/read";
 
 const ok = (stdout: string, stderr = ""): CapturedRead => ({ stdout, stderr, code: 0 });
+const SENSITIVE_OUTPUT_SENTINEL = "FAKE-SENSITIVE-STDERR-SENTINEL";
 
 /** A fake surface: maps an argv to a captured read. Spawns nothing, writes nothing. */
 function surface(handler: (argv: string[]) => CapturedRead) {
@@ -155,11 +156,27 @@ describe("mechanism 2: failed-as-empty", () => {
     expect(verdict.rowCount).toBe(0);
   });
 
+  test("REGRESSION: a nonzero child exit reports metadata without reproducing stderr", () => {
+    const verdict = classifyRead({ stdout: "", stderr: SENSITIVE_OUTPUT_SENTINEL, code: 1 });
+    expect(verdict.ok).toBe(false);
+    expect(verdict.code).toBe("nonzero_exit");
+    expect(verdict.reason).toContain("exited 1");
+    expect(verdict.reason).toContain(`Captured stderr was ${SENSITIVE_OUTPUT_SENTINEL.length} byte(s)`);
+    expect(`${verdict.reason}\n${verdict.evidence.join("\n")}`).not.toContain(SENSITIVE_OUTPUT_SENTINEL);
+  });
+
   test("KNOWN-BAD: an error object at rc=0 is still refused", () => {
     const verdict = classifyRead(ok(JSON.stringify({ ok: false, error: 'Project not found: "iproj-ads-ops"' })));
     expect(verdict.ok).toBe(false);
     expect(verdict.code).toBe("error_object");
-    expect(verdict.reason).toContain("iproj-ads-ops");
+    expect(verdict.reason).not.toContain("iproj-ads-ops");
+  });
+
+  test("REGRESSION: an error-object payload is never copied into refusal output", () => {
+    const verdict = classifyRead(ok(JSON.stringify({ ok: false, error: SENSITIVE_OUTPUT_SENTINEL })));
+    expect(verdict.ok).toBe(false);
+    expect(verdict.code).toBe("error_object");
+    expect(`${verdict.reason}\n${verdict.evidence.join("\n")}`).not.toContain(SENSITIVE_OUTPUT_SENTINEL);
   });
 
   test("KNOWN-BAD: store_exists=false is refused even with a well-formed empty list", () => {
@@ -365,6 +382,27 @@ describe("mechanism 3: unpaginated", () => {
     expect(result.ok).toBe(false);
     expect(result.code).toBe("store_unavailable");
     expect(result.rows).toEqual([]);
+  });
+
+  test("REGRESSION: a failed widening probe reports metadata without reproducing stderr", () => {
+    let calls = 0;
+    const s = surface(() =>
+      ++calls === 1
+        ? ok(JSON.stringify(Array.from({ length: 20 }, (_, i) => i)))
+        : { stdout: "", stderr: SENSITIVE_OUTPUT_SENTINEL, code: 1 }
+    );
+    const result = safeRead({
+      argv: ["fake", "list"],
+      limit: 20,
+      limitFlag: "--limit",
+      widenTo: 80,
+      run: s.run
+    });
+    expect(result.ok).toBe(false);
+    expect(result.code).toBe("completeness_unproven");
+    expect(result.reason).toContain("exited 1");
+    expect(result.reason).toContain(`Captured stderr was ${SENSITIVE_OUTPUT_SENTINEL.length} byte(s)`);
+    expect(`${result.reason}\n${result.evidence.join("\n")}`).not.toContain(SENSITIVE_OUTPUT_SENTINEL);
   });
 });
 
@@ -637,6 +675,65 @@ describe("capture path and CLI", () => {
     expect(parsed.ok).toBe(false);
     expect(parsed.rows).toBeUndefined();
     expect(parsed.scope).toBe("default");
+  });
+
+  test("REGRESSION: human and JSON refusal output never reproduces child stderr or error payloads", () => {
+    const dir = mkdtempSync(join(tmpdir(), "safe-read-redaction-"));
+    const stderrFixture = join(dir, "stderr-fixture.js");
+    const errorObjectFixture = join(dir, "error-object-fixture.js");
+    const wideningFixture = join(dir, "widening-fixture.js");
+    writeFileSync(stderrFixture, `console.error(${JSON.stringify(SENSITIVE_OUTPUT_SENTINEL)}); process.exit(1);\n`);
+    writeFileSync(
+      errorObjectFixture,
+      `process.stdout.write(JSON.stringify({ok:false,error:${JSON.stringify(SENSITIVE_OUTPUT_SENTINEL)}}));\n`
+    );
+    writeFileSync(
+      wideningFixture,
+      `const limitAt = process.argv.indexOf("--limit"); const limit = limitAt >= 0 ? process.argv[limitAt + 1] : undefined;\n` +
+        `if (limit === "80") { console.error(${JSON.stringify(SENSITIVE_OUTPUT_SENTINEL)}); process.exit(7); }\n` +
+        `process.stdout.write(JSON.stringify(Array.from({length:20},(_,i)=>i)));\n`
+    );
+    const commands = [
+      [process.execPath, stderrFixture],
+      [process.execPath, errorObjectFixture]
+    ];
+
+    try {
+      for (const json of [false, true]) {
+        for (const command of commands) {
+          const out: string[] = [];
+          const err: string[] = [];
+          const code = runSafeReadCli(command, { json }, { log: (s) => out.push(s), err: (s) => err.push(s) });
+          const rendered = `${out.join("\n")}\n${err.join("\n")}`;
+          expect(code).toBe(2);
+          expect(rendered).not.toContain(SENSITIVE_OUTPUT_SENTINEL);
+          if (command === commands[0]) {
+            expect(rendered).toContain("nonzero_exit");
+            expect(rendered).toContain("exited 1");
+            expect(rendered).toContain(`Captured stderr was ${SENSITIVE_OUTPUT_SENTINEL.length + 1} byte(s)`);
+          } else {
+            expect(rendered).toContain("error_object");
+            expect(rendered).toContain("payload content was not rendered");
+          }
+        }
+
+        const wideningOut: string[] = [];
+        const wideningErr: string[] = [];
+        const wideningCode = runSafeReadCli(
+          [process.execPath, wideningFixture],
+          { json, limit: "20", limitFlag: "--limit", widenTo: "80" },
+          { log: (s) => wideningOut.push(s), err: (s) => wideningErr.push(s) }
+        );
+        const wideningRendered = `${wideningOut.join("\n")}\n${wideningErr.join("\n")}`;
+        expect(wideningCode).toBe(2);
+        expect(wideningRendered).not.toContain(SENSITIVE_OUTPUT_SENTINEL);
+        expect(wideningRendered).toContain("completeness_unproven");
+        expect(wideningRendered).toContain("widening probe to --limit 80 exited 7");
+        expect(wideningRendered).toContain(`Captured stderr was ${SENSITIVE_OUTPUT_SENTINEL.length + 1} byte(s)`);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test("CLI --json carries scope on success", () => {

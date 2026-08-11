@@ -505,7 +505,7 @@ function safeReadInner(request: SafeReadRequest): SafeReadResult {
       return fail(
         "completeness_unproven",
         `widening probe to ${flag} ${wider} exited ${widened.code}, so completeness is still unproven. ` +
-          `stderr: ${widened.stderr.trim().slice(0, 200)}`,
+          `Captured stderr was ${widened.stderr.length} byte(s); content was not rendered.`,
         evidence,
         pages
       );
