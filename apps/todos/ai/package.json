@@ -39,6 +39,8 @@
     "build": "rm -rf dist .tmp/types && bun build src/index.ts src/runtime.ts src/evaluation.ts src/providers/groq.ts src/smoke.ts --outdir dist --target node --format esm --packages external && tsc -p tsconfig.build.json && cp -R .tmp/types/ai/src/. dist/ && rm -rf .tmp/types",
     "test": "bun test",
     "typecheck": "tsc --noEmit -p tsconfig.json",
+    "verify:release-review": "bun run ../scripts/verify-npm-release-agent-review.ts",
+    "prepublishOnly": "bun run verify:release-review",
     "smoke:groq": "bun run src/smoke.ts"
   },
   "keywords": [

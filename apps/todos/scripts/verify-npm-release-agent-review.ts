@@ -1,5 +1,4 @@
 #!/usr/bin/env bun
-import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import {
@@ -9,6 +8,7 @@ import {
   type ExpectedNpmReleaseAgentReview,
   type NpmReleaseAgentReviewFailure,
 } from "../src/lib/npm-release-agent-review";
+import { resolveNpmReleasePackageByTag } from "../src/lib/npm-release-package";
 
 type ReleasePackage = {
   name?: string;
@@ -24,9 +24,15 @@ main();
 
 function main(): void {
   const failures: NpmReleaseAgentReviewFailure[] = [];
-  const packageJson = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8")) as ReleasePackage;
   const releaseCommit = process.env["GITHUB_SHA"] ?? "";
-  const tag = `npm/todos/v${packageJson.version ?? ""}`;
+  const tag = process.env["GITHUB_REF_NAME"] ?? "";
+  let releasePackage;
+  try {
+    releasePackage = resolveNpmReleasePackageByTag(tag);
+  } catch {
+    fail([{ check: "release-agent-review-ref-name", message: "GITHUB_REF_NAME must use an allowed npm release tag prefix" }]);
+  }
+  const packageJson = JSON.parse(runGit(["show", `${releaseCommit}:${releasePackage.manifestPath}`], "release-agent-review-package-manifest", false)) as ReleasePackage;
   const reviewerAgentId = process.env["RELEASE_REVIEWER_AGENT"] ?? "";
   const reviewerKeyId = process.env["RELEASE_REVIEW_KEY_ID"] ?? "";
   const reviewerPublicKey = process.env["RELEASE_REVIEW_PUBLIC_KEY"] ?? "";
@@ -35,10 +41,14 @@ function main(): void {
   addContextFailure(failures, process.env["GITHUB_REPOSITORY"] !== REPOSITORY, "release-agent-review-context-repository", `GITHUB_REPOSITORY must be ${REPOSITORY}`);
   addContextFailure(failures, !/^[0-9a-f]{40}$/.test(releaseCommit), "release-agent-review-context-commit", "GITHUB_SHA must identify the exact 40-hex release commit");
   addContextFailure(failures, process.env["GITHUB_REF_TYPE"] !== "tag", "release-agent-review-ref-type", "the release ref must be a tag");
-  addContextFailure(failures, process.env["GITHUB_REF_NAME"] !== tag, "release-agent-review-ref-name", `GITHUB_REF_NAME must be ${tag}`);
-  addContextFailure(failures, packageJson.name !== "@hasna/todos", "release-agent-review-package", "package.json must declare @hasna/todos");
+  addContextFailure(failures, packageJson.name !== releasePackage.packageName, "release-agent-review-package", `${releasePackage.manifestPath} must declare ${releasePackage.packageName}`);
   addContextFailure(failures, !packageJson.version, "release-agent-review-version", "package.json must declare a release version");
+  addContextFailure(failures, packageJson.version !== releasePackage.version, "release-agent-review-ref-name", `GITHUB_REF_NAME must carry ${releasePackage.manifestPath} version ${packageJson.version ?? ""}`);
   addContextFailure(failures, packageJson.publishConfig?.registry !== "https://registry.npmjs.org", "release-agent-review-registry", "package.json must target the public npm registry");
+  const selectedPackagePath = process.env["HASNA_TODOS_RELEASE_PACKAGE_PATH"];
+  if (selectedPackagePath !== undefined) {
+    addContextFailure(failures, selectedPackagePath !== releasePackage.packagePath, "release-agent-review-package-path", `HASNA_TODOS_RELEASE_PACKAGE_PATH must equal ${releasePackage.packagePath}`);
+  }
   addContextFailure(
     failures,
     !isNativeCodewithSubagentLineage(reviewerAgentId),
@@ -55,6 +65,10 @@ function main(): void {
 
   if (failures.length > 0) fail(failures);
 
+  const ancestry = spawnSync("git", ["merge-base", "--is-ancestor", releaseCommit, "refs/remotes/origin/main"], { cwd: root, encoding: "utf8" });
+  if (ancestry.status !== 0) {
+    fail([{ check: "release-agent-review-protected-main", message: "the release commit must be contained in protected main" }]);
+  }
   const workflowRevision = runGit(["rev-parse", `${releaseCommit}:${WORKFLOW_PATH}`], "release-agent-review-workflow-revision");
   const tagRef = `refs/tags/${tag}`;
   const tagType = runGit(["cat-file", "-t", tagRef], "release-agent-review-tag-type");
@@ -72,6 +86,7 @@ function main(): void {
   const expected: ExpectedNpmReleaseAgentReview = {
     repository: REPOSITORY,
     releaseCommit,
+    packagePath: releasePackage.packagePath,
     packageName: packageJson.name!,
     packageVersion: packageJson.version!,
     tag,
@@ -97,6 +112,7 @@ function main(): void {
     repository: result.payload.repository,
     release_commit: result.payload.commit,
     package: `${result.payload.package.name}@${result.payload.package.version}`,
+    package_path: releasePackage.packagePath,
     tag: result.payload.tag,
     workflow_path: result.payload.workflow.path,
     workflow_revision: result.payload.workflow.revision,

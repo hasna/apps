@@ -1,6 +1,6 @@
 # Signed independent-agent review for npm releases
 
-The `@hasna/todos` release workflow will not publish from a tag unless the
+The `@hasna/todos` and `@hasna/todos-ai` release workflow will not publish from a tag unless the
 `npm-release` environment contains a valid Ed25519-signed receipt using schema
 `hasna.npm-release-agent-review.v1`. The matching private key is the fixed
 package release-review authority and is supplied only to the one independent
@@ -39,6 +39,13 @@ The environment receipt is an exact JSON object with no additional fields:
   }
 }
 ```
+
+The v1 payload remains byte-compatible with existing root receipts. Its signed
+package name and tag bind the package path through one closed mapping:
+`@hasna/todos` plus `npm/todos/v*` selects `.`, while `@hasna/todos-ai` plus
+`npm/todos-ai/v*` selects `ai`. The issuer and verifier reject every other
+package path, package name, tag prefix, or cross-package combination; no path is
+accepted from receipt data or arbitrary workflow input.
 
 The decoded, signed payload is also exact and has no additional fields:
 
@@ -133,6 +140,7 @@ secrets exec <fixed-reviewer-private-key-vault-item> \
   --as RELEASE_REVIEW_PRIVATE_KEY -- \
   bun run issue:release-review -- \
     --release-commit <exact-release-commit-sha> \
+    --package-path <dot-for-root-or-ai-for-companion> \
     --publisher-agent <intended-publisher-agent> \
     --verdict GO \
     --open-p0 0 \
@@ -149,7 +157,8 @@ sha256sum "${receipt_file}" > "${evidence_dir}/npm-release-agent-review.sha256"
 The issuer refuses a private key that does not derive the configured public key
 and key id. It derives the package version, tag, workflow blob revision, and
 registry from the exact release commit rather than accepting those values as
-free-form arguments.
+free-form arguments. `--package-path` defaults to `.` for root receipt
+compatibility and accepts only `.` or `ai`.
 
 The reviewer records the command result, receipt digest, readback result, exact
 release SHA, native Codewith lineage, review-run id, verdict, and blocker counts
@@ -162,6 +171,6 @@ Its message must end with exactly one registered agent trailer:
 Agent: <intended-publisher-agent>
 ```
 
-Any change to the commit, package version, workflow blob, registry, fixed
+Any change to the commit, selected package path/name/version, workflow blob, registry, fixed
 reviewer/key, or intended publisher makes the receipt stale. The fixed reviewer
 must issue a replacement only after verification of the affected lane.

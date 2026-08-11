@@ -20,6 +20,7 @@ const reviewerKeyId = deriveNpmReleaseAgentReviewKeyId(reviewerPublicKey);
 const expected: ExpectedNpmReleaseAgentReview = {
   repository: "hasna/todos",
   releaseCommit: "1".repeat(40),
+  packagePath: ".",
   packageName: "@hasna/todos",
   packageVersion: "0.15.20",
   tag: "npm/todos/v0.15.20",
@@ -30,6 +31,14 @@ const expected: ExpectedNpmReleaseAgentReview = {
   reviewerKeyId,
   reviewerPublicKey,
   publisherAgentId: "nausicaa",
+};
+
+const companionExpected: ExpectedNpmReleaseAgentReview = {
+  ...expected,
+  packagePath: "ai",
+  packageName: "@hasna/todos-ai",
+  packageVersion: "0.1.1",
+  tag: "npm/todos-ai/v0.1.1",
 };
 
 const acceptedPayload: NpmReleaseAgentReviewPayload = {
@@ -61,6 +70,15 @@ const acceptedPayload: NpmReleaseAgentReviewPayload = {
   },
 };
 
+const companionPayload: NpmReleaseAgentReviewPayload = {
+  ...acceptedPayload,
+  package: {
+    name: companionExpected.packageName,
+    version: companionExpected.packageVersion,
+  },
+  tag: companionExpected.tag,
+};
+
 function signedReceipt(
   payload: unknown = acceptedPayload,
   privateKey: typeof keyPair.privateKey = keyPair.privateKey,
@@ -84,6 +102,13 @@ function validate(receipt: unknown) {
   );
 }
 
+function validateCompanion(receipt: unknown) {
+  return validateNpmReleaseAgentReviewReceipt(
+    receipt === undefined ? undefined : JSON.stringify(receipt),
+    companionExpected,
+  );
+}
+
 describe("npm release independent-agent review receipt", () => {
   test("accepts an exact reviewer-signed independent GO receipt", () => {
     const receipt = signedReceipt();
@@ -91,6 +116,13 @@ describe("npm release independent-agent review receipt", () => {
     expect(result.failures).toEqual([]);
     expect(result.receipt).toEqual(receipt);
     expect(result.payload).toEqual(acceptedPayload);
+  });
+
+  test("accepts exact root and companion receipts under the shared workflow contract", () => {
+    expect(validate(signedReceipt(acceptedPayload)).failures).toEqual([]);
+    const companionReceipt = signedReceipt(companionPayload);
+    expect(validateCompanion(companionReceipt).failures).toEqual([]);
+    expect(validateCompanion(companionReceipt).payload).toEqual(companionPayload);
   });
 
   test("package issuer signs with the configured reviewer key and rejects a wrong private key", () => {
@@ -203,9 +235,10 @@ describe("npm release independent-agent review receipt", () => {
   });
 
   test("rejects every exact release binding mismatch", () => {
-    const mismatches: Array<[unknown, string]> = [
+    const mismatches: Array<[unknown, string, ExpectedNpmReleaseAgentReview?]> = [
       [{ ...acceptedPayload, repository: "hasna/accounts" }, "release-agent-review-repository"],
       [{ ...acceptedPayload, commit: "3".repeat(40) }, "release-agent-review-commit"],
+      [{ ...acceptedPayload }, "release-agent-review-package-path", { ...expected, packagePath: "ai" }],
       [{ ...acceptedPayload, package: { ...acceptedPayload.package, name: "@hasna/accounts" } }, "release-agent-review-package"],
       [{ ...acceptedPayload, package: { ...acceptedPayload.package, version: "0.15.21" } }, "release-agent-review-version"],
       [{ ...acceptedPayload, tag: "npm/todos/v0.15.21" }, "release-agent-review-tag"],
@@ -214,9 +247,25 @@ describe("npm release independent-agent review receipt", () => {
       [{ ...acceptedPayload, registry: "https://registry.example.invalid" }, "release-agent-review-registry"],
     ];
 
-    for (const [payload, check] of mismatches) {
-      expect(validate(signedReceipt(payload)).failures.map((failure) => failure.check)).toContain(check);
+    for (const mismatch of mismatches) {
+      const [payload, check, mismatchExpected] = mismatch as [unknown, string, ExpectedNpmReleaseAgentReview?];
+      const result = mismatchExpected
+        ? validateNpmReleaseAgentReviewReceipt(JSON.stringify(signedReceipt(payload)), mismatchExpected)
+        : validate(signedReceipt(payload));
+      expect(result.failures.map((failure) => failure.check)).toContain(check);
     }
+  });
+
+  test("rejects cross-package and replayed receipts", () => {
+    const rootChecks = validate(signedReceipt(companionPayload)).failures.map((failure) => failure.check);
+    expect(rootChecks).toContain("release-agent-review-package-path");
+    expect(rootChecks).toContain("release-agent-review-package");
+    expect(rootChecks).toContain("release-agent-review-tag");
+
+    const companionChecks = validateCompanion(signedReceipt(acceptedPayload)).failures.map((failure) => failure.check);
+    expect(companionChecks).toContain("release-agent-review-package-path");
+    expect(companionChecks).toContain("release-agent-review-package");
+    expect(companionChecks).toContain("release-agent-review-tag");
   });
 
   test("rejects replay of a valid prior-candidate receipt", () => {
