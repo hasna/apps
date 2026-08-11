@@ -1060,6 +1060,12 @@ export function getDb(): Database {
       )
     BEGIN SELECT RAISE(ABORT, 'reply parent scope is immutable while replies exist'); END
   `);
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS messages_reply_parent_scope_no_delete
+    BEFORE DELETE ON messages
+    WHEN EXISTS (SELECT 1 FROM messages child WHERE child.reply_to = OLD.id)
+    BEGIN SELECT RAISE(ABORT, 'reply parent scope is immutable while replies exist'); END
+  `);
   if (!colNames2.includes("uuid")) {
     db.exec("ALTER TABLE messages ADD COLUMN uuid TEXT");
     // Backfill existing rows with unique UUIDs

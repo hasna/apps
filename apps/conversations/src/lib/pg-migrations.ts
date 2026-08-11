@@ -968,6 +968,18 @@ export const PG_MIGRATIONS: string[] = [
     BEFORE UPDATE OF session_id, channel, project_id ON messages
     FOR EACH ROW EXECUTE FUNCTION reject_reply_parent_scope_mutation();
 
+  CREATE OR REPLACE FUNCTION reject_reply_parent_scope_delete() RETURNS trigger AS $$
+  BEGIN
+    IF EXISTS (SELECT 1 FROM messages child WHERE child.reply_to = OLD.id) THEN
+      RAISE EXCEPTION 'reply parent scope is immutable while replies exist';
+    END IF;
+    RETURN OLD;
+  END;
+  $$ LANGUAGE plpgsql;
+  DROP TRIGGER IF EXISTS messages_reply_parent_scope_no_delete ON messages;
+  CREATE TRIGGER messages_reply_parent_scope_no_delete
+    BEFORE DELETE ON messages FOR EACH ROW EXECUTE FUNCTION reject_reply_parent_scope_delete();
+
   CREATE TABLE IF NOT EXISTS incident_projections (
     id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     event_id TEXT NOT NULL,
