@@ -14,6 +14,8 @@ import { budget } from './support/budget';
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const packageJson = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8')) as {
   files: string[];
+  scripts: Record<string, string>;
+  devDependencies?: Record<string, string>;
 };
 
 const publicDocs = [
@@ -53,6 +55,18 @@ function declarationExportsIdentifier(source: string, identifier: string): boole
 }
 
 describe('public package release safety', () => {
+  test('declaration generation uses the exact package-local TypeScript compiler', () => {
+    const typescriptVersion = packageJson.devDependencies?.typescript;
+    expect(typescriptVersion).toMatch(/^\d+\.\d+\.\d+$/);
+
+    const lockfile = readFileSync(join(repoRoot, 'bun.lock'), 'utf8');
+    expect(lockfile).toContain(`\"typescript\": \"${typescriptVersion}\"`);
+    expect(lockfile).toContain(`typescript@${typescriptVersion}`);
+
+    expect(packageJson.scripts.build).toContain('bun run tsc -p tsconfig.build.json');
+    expect(packageJson.scripts.build).not.toContain('bunx tsc');
+  });
+
   // Node's builtin list, hardcoded on purpose. `builtinModules` under `bun test` returns BUN's
   // list, which includes `ws`, `undici` and `bun` - real npm package names that are NOT Node
   // builtins, so using it would bless imports that throw for every node installer.

@@ -1,11 +1,11 @@
 import type { KnowledgeItem, KnowledgeItemVersion } from './store.js';
-export declare const KNOWLEDGE_GUARDED_WRITE_CONTRACT: 'FCAME-1';
-export declare const KNOWLEDGE_PRIVATE_INPUT_SCHEMA: 'hasna.knowledge.private-input.v1';
-export declare const KNOWLEDGE_PRIVATE_TITLE_LOOKUP_SCHEMA: 'hasna.knowledge.private-title-lookup.v1';
-export declare const KNOWLEDGE_PRIVATE_QUERY_SCHEMA: 'hasna.knowledge.private-query.v1';
-export declare const KNOWLEDGE_PRIVATE_RESULT_SCHEMA: 'hasna.knowledge.private-result.v1';
-export declare const KNOWLEDGE_RELATIONS_SCHEMA: 'hasna.knowledge.relations.v1';
-export declare const KNOWLEDGE_RELATIONS_METADATA_KEY: 'hasna_knowledge_relations';
+export declare const KNOWLEDGE_GUARDED_WRITE_CONTRACT: "FCAME-1";
+export declare const KNOWLEDGE_PRIVATE_INPUT_SCHEMA: "hasna.knowledge.private-input.v1";
+export declare const KNOWLEDGE_PRIVATE_TITLE_LOOKUP_SCHEMA: "hasna.knowledge.private-title-lookup.v1";
+export declare const KNOWLEDGE_PRIVATE_QUERY_SCHEMA: "hasna.knowledge.private-query.v1";
+export declare const KNOWLEDGE_PRIVATE_RESULT_SCHEMA: "hasna.knowledge.private-result.v1";
+export declare const KNOWLEDGE_RELATIONS_SCHEMA: "hasna.knowledge.relations.v1";
+export declare const KNOWLEDGE_RELATIONS_METADATA_KEY: "hasna_knowledge_relations";
 export type KnowledgeAuthorityClassification = 'user_hosted' | 'hasna_saas';
 export type KnowledgeGuardedWriteVerb = 'create' | 'update';
 export interface KnowledgeAuthorityBinding {

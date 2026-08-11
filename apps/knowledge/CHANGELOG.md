@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.105
+
+- Honor the canonical Knowledge API URL and fail closed with typed errors when
+  paged or exact project-resource responses omit or malform their envelopes,
+  preventing false `ok: true` results and undefined-resource crashes.
+
 ## 0.2.104
 
 - Add package-owned guarded CLI helpers for create, update, bounded query, and
