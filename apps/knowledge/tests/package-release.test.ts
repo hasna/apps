@@ -320,6 +320,32 @@ describe('public package release safety', () => {
     }
   });
 
+  test('the published serve entry imports under Node', () => {
+    const result = spawnSync(
+      'node',
+      ['--input-type=module', '--eval', "await import('./dist/serve.js')"],
+      {
+        cwd: repoRoot,
+        encoding: 'utf8',
+        maxBuffer: 4 * 1024 * 1024,
+      },
+    );
+
+    expect(
+      {
+        status: result.status,
+        signal: result.signal,
+        stdout: result.stdout,
+        stderr: result.stderr,
+      },
+    ).toEqual({
+      status: 0,
+      signal: null,
+      stdout: '',
+      stderr: '',
+    });
+  });
+
   test('npm pack dry-run includes only public docs', () => {
     const result = spawnSync('node', ['scripts/validate-public-package.mjs', '--json'], {
       cwd: repoRoot,

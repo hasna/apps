@@ -576,6 +576,23 @@ describe('Knowledge Projects resource-link producer', () => {
   test('Postgres executes the same aggregate, membership, receipt, and resource semantics', async () => {
     const { db, client } = await createMigratedPglite();
     const pgItem = item('k_pg', 'Postgres Item', ['Postgres']);
+    await db.query(
+      `INSERT INTO knowledge_items (
+         id, short_id, title, content, url, tags, metadata, archived, created_at, updated_at
+       ) VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8,$9,$10)`,
+      [
+        pgItem.id,
+        pgItem.short_id,
+        pgItem.title,
+        pgItem.content,
+        pgItem.url,
+        JSON.stringify(pgItem.tags),
+        JSON.stringify(pgItem.metadata),
+        pgItem.archived,
+        pgItem.created_at,
+        pgItem.updated_at,
+      ],
+    );
     const authority = createPostgresKnowledgeProjectLinksAuthority({
       client,
       itemResolver: async (id) => id === pgItem.id ? pgItem : null,

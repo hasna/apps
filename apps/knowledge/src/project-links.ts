@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { Database, type SQLQueryBindings } from 'bun:sqlite';
+import type { Database, SQLQueryBindings } from 'bun:sqlite';
 import { ensureParentDir } from './workspace.js';
 import type { ItemStore } from './item-store.js';
 import type { KnowledgeItem } from './store.js';
@@ -10,6 +10,12 @@ export const KNOWLEDGE_PROJECT_REGISTRATION_ROUTE = 'knowledge.project-registrat
 export const KNOWLEDGE_PROJECT_RESOURCES_ROUTE = 'knowledge.project-resources.v1' as const;
 export const KNOWLEDGE_PROJECT_REGISTRATION_SCHEMA_VERSION = 1 as const;
 export const KNOWLEDGE_PROJECT_MEMBERSHIP_RULE = 'explicit_collection_binding' as const;
+/**
+ * Keyset pages fetch exactly one extra producer row to decide whether a
+ * continuation cursor is required. Scalar snapshot/count queries are separate
+ * and never materialize the resource population.
+ */
+export const KNOWLEDGE_PROJECT_RESOURCE_PAGE_LOOKAHEAD = 1 as const;
 
 export type KnowledgeProjectResourceKind = 'project' | 'collection' | 'item' | 'taxonomy';
 export type KnowledgeProjectRegistrationDirection = 'forward' | 'inverse';
@@ -276,6 +282,23 @@ interface MembershipRow {
   bound_at: string;
 }
 
+interface ProjectResourcePopulationRow {
+  membership_count: number | string;
+  visible_item_count: number | string;
+  item_snapshot_digest: string;
+}
+
+interface ProjectResourceTaxonomyCountRow {
+  taxonomy_count: number | string;
+}
+
+interface ProjectResourceTaxonomyRow {
+  normalized_tag: string;
+  label: string;
+  item_count: number | string;
+  member_digest: string;
+}
+
 interface ReceiptRow {
   receipt_id: string;
   authority_id: string;
@@ -308,10 +331,12 @@ interface SqlRunResult {
 }
 
 interface ProjectLinksSql {
+  readonly kind: 'sqlite' | 'postgres';
   close(): Promise<void>;
   get<T extends Record<string, unknown>>(sql: string, params?: readonly unknown[]): Promise<T | null>;
   many<T extends Record<string, unknown>>(sql: string, params?: readonly unknown[]): Promise<T[]>;
   run(sql: string, params?: readonly unknown[]): Promise<SqlRunResult>;
+  lock(key: string): Promise<void>;
   transaction<T>(fn: (tx: ProjectLinksSql) => Promise<T>): Promise<T>;
 }
 
@@ -321,6 +346,8 @@ function postgresSql(sql: string): string {
 }
 
 class PostgresProjectLinksSql implements ProjectLinksSql {
+  readonly kind = 'postgres' as const;
+
   constructor(
     private readonly client: TypedQueryClient,
     private readonly transactionClient?: PoolQueryClient,
@@ -341,6 +368,13 @@ class PostgresProjectLinksSql implements ProjectLinksSql {
     return { changes: result.rowCount };
   }
 
+  async lock(key: string): Promise<void> {
+    await this.client.query(
+      'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+      [key],
+    );
+  }
+
   async transaction<T>(fn: (tx: ProjectLinksSql) => Promise<T>): Promise<T> {
     if (!this.transactionClient) return fn(this);
     return this.transactionClient.transaction(
@@ -350,6 +384,7 @@ class PostgresProjectLinksSql implements ProjectLinksSql {
 }
 
 class SqliteProjectLinksSql implements ProjectLinksSql {
+  readonly kind = 'sqlite' as const;
   private tail: Promise<void> = Promise.resolve();
   private closed = false;
 
@@ -374,6 +409,8 @@ class SqliteProjectLinksSql implements ProjectLinksSql {
     const result = this.db.query(sql).run(...params as SQLQueryBindings[]);
     return { changes: Number(result.changes) };
   }
+
+  async lock(_key: string): Promise<void> {}
 
   transaction<T>(fn: (tx: ProjectLinksSql) => Promise<T>): Promise<T> {
     const run = this.tail.then(async () => {
@@ -817,6 +854,29 @@ class PackageOwnedKnowledgeProjectLinksAuthority implements KnowledgeProjectLink
     );
   }
 
+  private collectionFence(collectionId: string): string {
+    return [
+      'knowledge-project-links',
+      this.identity.authority_id,
+      this.identity.tenant_id,
+      this.identity.corpus_id,
+      'collection',
+      collectionId,
+    ].join('\u001f');
+  }
+
+  private membershipFence(collectionId: string, itemId: string): string {
+    return [
+      'knowledge-project-links',
+      this.identity.authority_id,
+      this.identity.tenant_id,
+      this.identity.corpus_id,
+      'membership',
+      collectionId,
+      itemId,
+    ].join('\u001f');
+  }
+
   private stableReceiptId(
     operationId: string,
     stepId: string,
@@ -978,6 +1038,7 @@ class PackageOwnedKnowledgeProjectLinksAuthority implements KnowledgeProjectLink
         { expected_request_digest: expectedRequestDigest },
       );
     }
+    const stableCollectionId = this.stableCollectionId(sourceProjectId, collectionSlug);
 
     return this.sql.transaction(async (tx) => {
       const duplicate = await this.getReceiptByAttempt(tx, {
@@ -991,12 +1052,13 @@ class PackageOwnedKnowledgeProjectLinksAuthority implements KnowledgeProjectLink
         return duplicate;
       }
 
+      await tx.lock(this.collectionFence(stableCollectionId));
       let aggregate = await this.getAggregateBySource(tx, sourceProjectId);
       const createdByOperation = aggregate === null;
       if (!aggregate) {
         const now = this.now();
         const projectId = this.stableProjectId(sourceProjectId);
-        const collectionId = this.stableCollectionId(sourceProjectId, collectionSlug);
+        const collectionId = stableCollectionId;
         await tx.run(
           `INSERT INTO knowledge_projects (
             authority_id, tenant_id, corpus_id, source_project_id, project_id,
@@ -1204,6 +1266,9 @@ class PackageOwnedKnowledgeProjectLinksAuthority implements KnowledgeProjectLink
           'accepted collection-registration receipt was not found.',
         );
       }
+      if (accepted.collection_id) {
+        await tx.lock(this.collectionFence(accepted.collection_id));
+      }
       const aggregate = accepted.collection_id
         ? await this.getAggregateByCollection(tx, accepted.collection_id)
         : null;
@@ -1385,6 +1450,8 @@ class PackageOwnedKnowledgeProjectLinksAuthority implements KnowledgeProjectLink
         this.assertIdempotent(duplicate, request);
         return duplicate;
       }
+      await tx.lock(this.collectionFence(collectionId));
+      await tx.lock(this.membershipFence(collectionId, itemId));
       const aggregate = await this.getAggregateByCollection(tx, collectionId);
       if (!aggregate) {
         throw new KnowledgeProjectLinksError(
@@ -1543,6 +1610,12 @@ class PackageOwnedKnowledgeProjectLinksAuthority implements KnowledgeProjectLink
           'accepted item-binding receipt was not found.',
         );
       }
+      if (accepted.collection_id) {
+        await tx.lock(this.collectionFence(accepted.collection_id));
+      }
+      if (accepted.collection_id && accepted.item_id) {
+        await tx.lock(this.membershipFence(accepted.collection_id, accepted.item_id));
+      }
       let outcome: KnowledgeProjectReceiptOutcome = 'accepted';
       let reason: string | null = null;
       const membership = await tx.get<MembershipRow & Record<string, unknown>>(
@@ -1690,6 +1763,422 @@ class PackageOwnedKnowledgeProjectLinksAuthority implements KnowledgeProjectLink
     };
   }
 
+  private resourceBase(aggregate: AggregateRow) {
+    return {
+      project_id: aggregate.project_id,
+      source_project_id: aggregate.source_project_id,
+      collection_id: aggregate.collection_id,
+      revision: `r${Number(aggregate.revision)}`,
+    };
+  }
+
+  private projectResource(aggregate: AggregateRow): KnowledgeProjectResource {
+    const body = {
+      ...this.resourceBase(aggregate),
+      kind: 'project' as const,
+      id: aggregate.project_id,
+      title: aggregate.project_name,
+      locator: { kind: 'canonical_uri' as const, value: `knowledge:project:${aggregate.project_id}` },
+      metadata: {
+        source_project_id: aggregate.source_project_id,
+        slug: aggregate.project_slug,
+        collection_count: 1,
+      },
+    };
+    return {
+      ...body,
+      key: `project:${aggregate.project_id}`,
+      digest: digestKnowledgeProjectLinksValue(body),
+    };
+  }
+
+  private collectionResource(aggregate: AggregateRow, memberCount: number): KnowledgeProjectResource {
+    const body = {
+      ...this.resourceBase(aggregate),
+      kind: 'collection' as const,
+      id: aggregate.collection_id,
+      title: aggregate.collection_name,
+      locator: { kind: 'external_uuid' as const, value: aggregate.collection_id },
+      metadata: {
+        slug: aggregate.collection_slug,
+        membership_rule: KNOWLEDGE_PROJECT_MEMBERSHIP_RULE,
+        member_count: memberCount,
+      },
+    };
+    return {
+      ...body,
+      key: `collection:${aggregate.collection_id}`,
+      digest: digestKnowledgeProjectLinksValue(body),
+    };
+  }
+
+  private itemResource(aggregate: AggregateRow, item: KnowledgeItem): KnowledgeProjectResource {
+    const body = {
+      ...this.resourceBase(aggregate),
+      kind: 'item' as const,
+      id: item.id,
+      revision: `v${item.version ?? 1}`,
+      title: item.title,
+      locator: { kind: 'canonical_uri' as const, value: `knowledge:item:${encodeURIComponent(item.id)}` },
+      metadata: {
+        tags: [...(item.tags ?? [])],
+        archived: item.archived === true,
+        updated_at: item.updated_at,
+      },
+    };
+    return {
+      ...body,
+      key: `item:${item.id}`,
+      digest: digestKnowledgeProjectLinksValue(body),
+    };
+  }
+
+  private taxonomyResource(
+    aggregate: AggregateRow,
+    normalized: string,
+    input: {
+      label: string;
+      itemCount: number;
+      memberDigest: string;
+    },
+  ): KnowledgeProjectResource {
+    const taxonomyId = stableUuid(`${aggregate.collection_id}\0taxonomy\0${normalized}`);
+    const body = {
+      ...this.resourceBase(aggregate),
+      kind: 'taxonomy' as const,
+      id: taxonomyId,
+      title: input.label,
+      locator: { kind: 'external_uuid' as const, value: taxonomyId },
+      metadata: {
+        tag: input.label,
+        normalized_tag: normalized,
+        item_count: input.itemCount,
+        member_digest: input.memberDigest,
+      },
+    };
+    return {
+      ...body,
+      key: `taxonomy:${taxonomyId}`,
+      digest: digestKnowledgeProjectLinksValue(body),
+    };
+  }
+
+  private postgresItem(row: Record<string, unknown>): KnowledgeItem {
+    const parseJson = <T>(value: unknown, fallback: T): T => {
+      if (value == null) return fallback;
+      if (typeof value === 'string') {
+        try {
+          return JSON.parse(value) as T;
+        } catch {
+          return fallback;
+        }
+      }
+      return value as T;
+    };
+    return {
+      id: String(row.id),
+      short_id: (row.short_id as string | null) ?? null,
+      title: String(row.title ?? ''),
+      content: String(row.content ?? ''),
+      url: (row.url as string | null) ?? null,
+      tags: parseJson<string[]>(row.tags, []),
+      metadata: parseJson<Record<string, unknown>>(row.metadata, {}),
+      archived: Boolean(row.archived),
+      created_at: String(row.created_at),
+      updated_at: String(row.updated_at),
+      version: row.version == null ? 1 : Number(row.version),
+    };
+  }
+
+  private resourceCursorAfter(input: {
+    cursor?: string | null;
+    aggregate: AggregateRow;
+    revision: string;
+    populationDigest: string;
+    kinds: KnowledgeProjectResourceKind[];
+  }): string {
+    if (!input.cursor) return '';
+    let decoded: {
+      version?: number;
+      project_id?: string;
+      collection_id?: string;
+      collection_revision?: string;
+      population_digest?: string;
+      kinds?: KnowledgeProjectResourceKind[];
+      after?: string;
+    };
+    try {
+      decoded = JSON.parse(Buffer.from(input.cursor, 'base64url').toString('utf8')) as typeof decoded;
+    } catch {
+      throw new KnowledgeProjectLinksError(
+        'KNOWLEDGE_PROJECT_LINKS_INVALID_INPUT',
+        'cursor is not a valid Knowledge project-resources cursor.',
+      );
+    }
+    if (
+      decoded.version !== 1
+      || decoded.project_id !== input.aggregate.project_id
+      || decoded.collection_id !== input.aggregate.collection_id
+      || decoded.collection_revision !== input.revision
+      || decoded.population_digest !== input.populationDigest
+      || canonicalKnowledgeProjectLinksJson(decoded.kinds) !== canonicalKnowledgeProjectLinksJson(input.kinds)
+      || typeof decoded.after !== 'string'
+    ) {
+      throw new KnowledgeProjectLinksError(
+        'KNOWLEDGE_PROJECT_LINKS_CURSOR_STALE',
+        'project resources changed or the cursor belongs to a different project/kind selection; restart from the first page.',
+      );
+    }
+    return decoded.after;
+  }
+
+  private async listPostgresProjectResources(
+    projectId: string,
+    options: KnowledgeProjectResourceListOptions,
+    limit: number,
+    kinds: KnowledgeProjectResourceKind[],
+  ): Promise<KnowledgeProjectResourcePage> {
+    const aggregate = await this.getAggregateByProject(this.sql, requiredString(projectId, 'project_id'));
+    if (!aggregate) {
+      throw new KnowledgeProjectLinksError(
+        'KNOWLEDGE_PROJECT_LINKS_NOT_FOUND',
+        'Knowledge project aggregate was not found by source or stable project id.',
+      );
+    }
+    const identityParams = [
+      this.identity.tenant_id,
+      this.identity.authority_id,
+      this.identity.tenant_id,
+      this.identity.corpus_id,
+      aggregate.collection_id,
+    ];
+    const population = await this.sql.get<ProjectResourcePopulationRow & Record<string, unknown>>(
+      `SELECT
+         COUNT(*)::text AS membership_count,
+         COUNT(i.id)::text AS visible_item_count,
+         encode(sha256(convert_to(COALESCE(string_agg(
+             m.item_id || E'\\x1f'
+             || COALESCE(i.title, '') || E'\\x1f'
+             || COALESCE(i.updated_at, '') || E'\\x1f'
+             || COALESCE(i.version::text, '1') || E'\\x1f'
+             || COALESCE(i.tags::text, '[]') || E'\\x1f'
+             || COALESCE(i.archived::text, 'false'),
+             E'\\x1e' ORDER BY m.item_id
+           ), ''), 'UTF8')), 'hex') AS item_snapshot_digest
+       FROM knowledge_project_collection_memberships m
+       LEFT JOIN knowledge_items i
+         ON i.id = m.item_id
+        AND (i.authority_classification IS NULL OR i.tenant_id::text = ?)
+      WHERE m.authority_id = ? AND m.tenant_id = ? AND m.corpus_id = ?
+        AND m.collection_id = ?`,
+      [
+        this.identity.tenant_id,
+        this.identity.authority_id,
+        this.identity.tenant_id,
+        this.identity.corpus_id,
+        aggregate.collection_id,
+      ],
+    );
+    const membershipCount = Number(population?.membership_count ?? 0);
+    const visibleItemCount = Number(population?.visible_item_count ?? 0);
+    if (membershipCount !== visibleItemCount) {
+      throw new KnowledgeProjectLinksError(
+        'KNOWLEDGE_PROJECT_LINKS_INCOMPLETE_POPULATION',
+        'collection membership points at a missing or inaccessible Knowledge item; refusing a partial resource population.',
+        {
+          collection_id: aggregate.collection_id,
+          membership_count: membershipCount,
+          visible_item_count: visibleItemCount,
+        },
+      );
+    }
+    const taxonomyCountRow = await this.sql.get<ProjectResourceTaxonomyCountRow & Record<string, unknown>>(
+      `SELECT COUNT(*)::text AS taxonomy_count
+         FROM (
+           SELECT LOWER(BTRIM(tag.value)) AS normalized_tag
+             FROM knowledge_project_collection_memberships m
+             JOIN knowledge_items i
+               ON i.id = m.item_id
+              AND (i.authority_classification IS NULL OR i.tenant_id::text = ?)
+             CROSS JOIN LATERAL jsonb_array_elements_text(i.tags) AS tag(value)
+            WHERE m.authority_id = ? AND m.tenant_id = ? AND m.corpus_id = ?
+              AND m.collection_id = ?
+              AND BTRIM(tag.value) <> ''
+            GROUP BY LOWER(BTRIM(tag.value))
+         ) taxonomy`,
+      identityParams,
+    );
+    const taxonomyCount = Number(taxonomyCountRow?.taxonomy_count ?? 0);
+    const revision = `r${Number(aggregate.revision)}`;
+    const populationDigest = digestKnowledgeProjectLinksValue({
+      collection_revision: revision,
+      kinds,
+      item_snapshot_digest: kinds.includes('item') || kinds.includes('taxonomy')
+        ? population?.item_snapshot_digest ?? ''
+        : null,
+      taxonomy_count: kinds.includes('taxonomy') ? taxonomyCount : null,
+    });
+    const after = this.resourceCursorAfter({
+      cursor: options.cursor,
+      aggregate,
+      revision,
+      populationDigest,
+      kinds,
+    });
+    const targetCount = limit + KNOWLEDGE_PROJECT_RESOURCE_PAGE_LOOKAHEAD;
+    const candidates: KnowledgeProjectResource[] = [];
+    const append = (resource: KnowledgeProjectResource) => {
+      if (
+        candidates.length < targetCount
+        && kinds.includes(resource.kind)
+        && resource.key > after
+      ) {
+        candidates.push(resource);
+      }
+    };
+
+    append(this.collectionResource(aggregate, membershipCount));
+    if (kinds.includes('item') && candidates.length < targetCount && after < 'project:') {
+      const itemAfter = after.startsWith('item:') ? after.slice('item:'.length) : '';
+      const rows = await this.sql.many<Record<string, unknown>>(
+        `SELECT i.*
+           FROM knowledge_project_collection_memberships m
+           JOIN knowledge_items i
+             ON i.id = m.item_id
+            AND (i.authority_classification IS NULL OR i.tenant_id::text = ?)
+          WHERE m.authority_id = ? AND m.tenant_id = ? AND m.corpus_id = ?
+            AND m.collection_id = ? AND m.item_id > ?
+          ORDER BY m.item_id ASC
+          LIMIT ${targetCount - candidates.length}`,
+        [...identityParams, itemAfter],
+      );
+      for (const row of rows) append(this.itemResource(aggregate, this.postgresItem(row)));
+    }
+    append(this.projectResource(aggregate));
+    if (kinds.includes('taxonomy') && candidates.length < targetCount) {
+      const taxonomyAfter = after.startsWith('taxonomy:') ? after : 'taxonomy:';
+      const rows = await this.sql.many<ProjectResourceTaxonomyRow & Record<string, unknown>>(
+        `WITH tagged AS (
+           SELECT
+             m.item_id,
+             BTRIM(tag.value) AS label,
+             LOWER(BTRIM(tag.value)) AS normalized_tag,
+             tag.ordinality
+           FROM knowledge_project_collection_memberships m
+           JOIN knowledge_items i
+             ON i.id = m.item_id
+            AND (i.authority_classification IS NULL OR i.tenant_id::text = ?)
+           CROSS JOIN LATERAL jsonb_array_elements_text(i.tags)
+             WITH ORDINALITY AS tag(value, ordinality)
+           WHERE m.authority_id = ? AND m.tenant_id = ? AND m.corpus_id = ?
+             AND m.collection_id = ?
+             AND BTRIM(tag.value) <> ''
+         ),
+         grouped AS (
+           SELECT
+             normalized_tag,
+             (array_agg(label ORDER BY item_id, ordinality))[1] AS label,
+             COUNT(*)::text AS item_count,
+             encode(sha256(convert_to(
+               '[' || string_agg(
+                 to_json(item_id)::text,
+                 ',' ORDER BY item_id, ordinality
+               ) || ']',
+               'UTF8'
+             )), 'hex') AS member_digest,
+             encode(sha256(
+               convert_to(?, 'UTF8')
+               || decode('00', 'hex')
+               || convert_to('taxonomy', 'UTF8')
+               || decode('00', 'hex')
+               || convert_to(normalized_tag, 'UTF8')
+             ), 'hex') AS stable_hex
+           FROM tagged
+           GROUP BY normalized_tag
+         ),
+         mutated AS (
+           SELECT
+             *,
+             overlay(
+               overlay(substr(stable_hex, 1, 32) placing '5' from 13 for 1)
+               placing substr(
+                 '89ab',
+                 ((strpos('0123456789abcdef', substr(stable_hex, 17, 1)) - 1) % 4) + 1,
+                 1
+               )
+               from 17 for 1
+             ) AS stable_uuid_hex
+           FROM grouped
+         ),
+         keyed AS (
+           SELECT
+             normalized_tag,
+             label,
+             item_count,
+             member_digest,
+             substr(stable_uuid_hex, 1, 8)
+               || '-' || substr(stable_uuid_hex, 9, 4)
+               || '-' || substr(stable_uuid_hex, 13, 4)
+               || '-' || substr(stable_uuid_hex, 17, 4)
+               || '-' || substr(stable_uuid_hex, 21, 12) AS taxonomy_id
+           FROM mutated
+         )
+         SELECT normalized_tag, label, item_count, member_digest
+           FROM keyed
+          WHERE 'taxonomy:' || taxonomy_id > ?
+          ORDER BY taxonomy_id ASC
+         LIMIT ${targetCount - candidates.length}`,
+        [...identityParams, aggregate.collection_id, taxonomyAfter],
+      );
+      for (const row of rows) {
+        append(this.taxonomyResource(aggregate, row.normalized_tag, {
+          label: row.label,
+          itemCount: Number(row.item_count),
+          memberDigest: row.member_digest,
+        }));
+      }
+    }
+
+    const total = (kinds.includes('collection') ? 1 : 0)
+      + (kinds.includes('item') ? membershipCount : 0)
+      + (kinds.includes('project') ? 1 : 0)
+      + (kinds.includes('taxonomy') ? taxonomyCount : 0);
+    const pageResources = candidates.slice(0, limit);
+    const hasMore = candidates.length > pageResources.length;
+    const nextCursor = hasMore && pageResources.length > 0
+      ? Buffer.from(JSON.stringify({
+        version: 1,
+        project_id: aggregate.project_id,
+        collection_id: aggregate.collection_id,
+        collection_revision: revision,
+        population_digest: populationDigest,
+        kinds,
+        after: pageResources.at(-1)!.key,
+      })).toString('base64url')
+      : null;
+    return {
+      schema: 'knowledge.project-resources.page.v1',
+      authority: 'knowledge',
+      route: KNOWLEDGE_PROJECT_RESOURCES_ROUTE,
+      ...this.identity,
+      project_id: aggregate.project_id,
+      source_project_id: aggregate.source_project_id,
+      collection_id: aggregate.collection_id,
+      collection_revision: revision,
+      population_digest: populationDigest,
+      resource_kinds: kinds,
+      resources: pageResources,
+      count: pageResources.length,
+      total,
+      limit,
+      cursor: options.cursor ?? null,
+      next_cursor: nextCursor,
+      has_more: hasMore,
+      complete: !hasMore,
+      truncated: false,
+    };
+  }
+
   private async buildResources(projectId: string): Promise<{
     aggregate: AggregateRow;
     resources: KnowledgeProjectResource[];
@@ -1826,6 +2315,9 @@ class PackageOwnedKnowledgeProjectLinksAuthority implements KnowledgeProjectLink
   ): Promise<KnowledgeProjectResourcePage> {
     const limit = boundedLimit(options.limit);
     const kinds = normalizeKinds(options.kinds);
+    if (this.sql.kind === 'postgres') {
+      return this.listPostgresProjectResources(projectId, options, limit, kinds);
+    }
     const { aggregate, resources } = await this.buildResources(projectId);
     const revision = `r${Number(aggregate.revision)}`;
     const population = resources.filter((resource) => kinds.includes(resource.kind));
@@ -1990,7 +2482,17 @@ export function createLocalKnowledgeProjectLinksAuthority(input: {
   if (input.databasePath !== ':memory:') {
     ensureParentDir(input.databasePath);
   }
-  const db = new Database(input.databasePath, { create: true });
+  const require = (import.meta as ImportMeta & {
+    require?: (specifier: string) => unknown;
+  }).require;
+  if (typeof require !== 'function') {
+    throw new KnowledgeProjectLinksError(
+      'KNOWLEDGE_PROJECT_LINKS_CONFLICT',
+      'the local Knowledge project-links authority requires the Bun runtime.',
+    );
+  }
+  const { Database: BunDatabase } = require('bun:sqlite') as typeof import('bun:sqlite');
+  const db = new BunDatabase(input.databasePath, { create: true });
   db.exec(sqliteKnowledgeProjectLinksSchemaSql());
   return new PackageOwnedKnowledgeProjectLinksAuthority(
     new SqliteProjectLinksSql(db),

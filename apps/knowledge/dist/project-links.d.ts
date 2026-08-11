@@ -5,6 +5,12 @@ export declare const KNOWLEDGE_PROJECT_REGISTRATION_ROUTE: 'knowledge.project-re
 export declare const KNOWLEDGE_PROJECT_RESOURCES_ROUTE: 'knowledge.project-resources.v1';
 export declare const KNOWLEDGE_PROJECT_REGISTRATION_SCHEMA_VERSION: 1;
 export declare const KNOWLEDGE_PROJECT_MEMBERSHIP_RULE: 'explicit_collection_binding';
+/**
+ * Keyset pages fetch exactly one extra producer row to decide whether a
+ * continuation cursor is required. Scalar snapshot/count queries are separate
+ * and never materialize the resource population.
+ */
+export declare const KNOWLEDGE_PROJECT_RESOURCE_PAGE_LOOKAHEAD: 1;
 export type KnowledgeProjectResourceKind = 'project' | 'collection' | 'item' | 'taxonomy';
 export type KnowledgeProjectRegistrationDirection = 'forward' | 'inverse';
 export type KnowledgeProjectReceiptAction = 'register_collection' | 'bind_item';
