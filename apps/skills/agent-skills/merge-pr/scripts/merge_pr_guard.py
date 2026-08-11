@@ -97,6 +97,65 @@ def normalize_identity(value: Any) -> str | None:
     return normalized or None
 
 
+ReviewerDescriptor = tuple[str | None, str | None]
+
+
+def normalize_reviewer_descriptor(
+    value: Any, label: str, *, fixed_input: bool = False
+) -> ReviewerDescriptor:
+    if not isinstance(value, dict):
+        raise GuardError(f"{label} must be an object")
+    if fixed_input and set(value) - {"reviewer_identity", "reviewer_run_id"}:
+        raise GuardError(f"{label} contains unsupported fields")
+    reviewer_identity = normalize_identity(value.get("reviewer_identity"))
+    reviewer_run_id = normalize_identity(value.get("reviewer_run_id"))
+    if not reviewer_identity and not reviewer_run_id:
+        raise GuardError(f"{label} has no reviewer identity or run ID")
+    return reviewer_identity, reviewer_run_id
+
+
+def canonical_fixed_reviewer_set(reviewers: set[ReviewerDescriptor]) -> dict[str, Any]:
+    values = []
+    for reviewer_identity, reviewer_run_id in sorted(
+        reviewers, key=lambda value: (value[0] or "", value[1] or "")
+    ):
+        reviewer: dict[str, str] = {}
+        if reviewer_identity:
+            reviewer["reviewer_identity"] = reviewer_identity
+        if reviewer_run_id:
+            reviewer["reviewer_run_id"] = reviewer_run_id
+        values.append(reviewer)
+    return {"reviewers": values}
+
+
+def load_fixed_reviewer_set(path: str) -> set[ReviewerDescriptor]:
+    value = load_object(path)
+    if set(value) != {"reviewers"}:
+        raise GuardError("fixed reviewer set must contain only reviewers")
+    reviewers = value.get("reviewers")
+    if not isinstance(reviewers, list) or not reviewers:
+        raise GuardError("fixed reviewer set must contain at least one reviewer")
+
+    normalized: set[ReviewerDescriptor] = set()
+    reviewer_tokens: set[str] = set()
+    for index, reviewer in enumerate(reviewers, start=1):
+        descriptor = normalize_reviewer_descriptor(
+            reviewer, f"fixed reviewer {index}", fixed_input=True
+        )
+        if descriptor in normalized:
+            raise GuardError("fixed reviewer set contains duplicate reviewers")
+        tokens = {token for token in descriptor if token}
+        if reviewer_tokens.intersection(tokens):
+            raise GuardError("fixed reviewer set contains overlapping reviewer identities")
+        normalized.add(descriptor)
+        reviewer_tokens.update(tokens)
+    return normalized
+
+
+def fixed_reviewer_set_sha256(reviewers: set[ReviewerDescriptor]) -> str:
+    return object_sha256(canonical_fixed_reviewer_set(reviewers))
+
+
 def parse_timestamp(value: Any) -> datetime | None:
     if not isinstance(value, str) or not value.strip():
         return None
@@ -133,8 +192,16 @@ def validate_pr_url(value: Any, repo: str, pr_number: int) -> str:
     return value
 
 
-def validate_artifacts(snapshot: dict[str, Any], risk_tier: str) -> None:
+def validate_artifacts(
+    snapshot: dict[str, Any],
+    risk_tier: str,
+    fixed_reviewers: set[ReviewerDescriptor],
+) -> None:
     required, _ = RISK_TIERS[risk_tier]
+    if len(fixed_reviewers) != required:
+        raise GuardError(
+            f"{risk_tier} preflight requires exactly {required} fixed reviewer(s)"
+        )
     artifacts = snapshot.get("reviewer_artifacts")
     if not isinstance(artifacts, list) or len(artifacts) != required:
         raise GuardError(f"{risk_tier} preflight requires exactly {required} reviewer artifact(s)")
@@ -162,6 +229,7 @@ def validate_artifacts(snapshot: dict[str, Any], risk_tier: str) -> None:
         raise GuardError("worker and executor identities must be distinct")
 
     reviewers: set[str] = set()
+    observed_reviewers: set[ReviewerDescriptor] = set()
     for index, artifact in enumerate(artifacts, start=1):
         if not isinstance(artifact, dict):
             raise GuardError(f"reviewer artifact {index} must be an object")
@@ -172,16 +240,14 @@ def validate_artifacts(snapshot: dict[str, Any], risk_tier: str) -> None:
             raise GuardError(f"reviewer artifact {index} head mismatch")
         if artifact.get("acceptance_scope") != scope:
             raise GuardError(f"reviewer artifact {index} acceptance scope mismatch")
-        reviewer_identity = normalize_identity(artifact.get("reviewer_identity"))
-        reviewer_run_id = normalize_identity(artifact.get("reviewer_run_id"))
-        reviewer_tokens = {token for token in (reviewer_identity, reviewer_run_id) if token}
-        if not reviewer_tokens:
-            raise GuardError(f"reviewer artifact {index} has no reviewer identity")
+        descriptor = normalize_reviewer_descriptor(artifact, f"reviewer artifact {index}")
+        reviewer_tokens = {token for token in descriptor if token}
         if reviewers.intersection(reviewer_tokens):
             raise GuardError("reviewer artifacts are not independent")
         if {executor, worker}.intersection(reviewer_tokens):
             raise GuardError(f"reviewer artifact {index} conflicts with worker or executor")
         reviewers.update(reviewer_tokens)
+        observed_reviewers.add(descriptor)
         timestamp = parse_timestamp(artifact.get("timestamp"))
         if timestamp is None:
             raise GuardError(f"reviewer artifact {index} has an invalid timestamp")
@@ -197,10 +263,13 @@ def validate_artifacts(snapshot: dict[str, Any], risk_tier: str) -> None:
             raise GuardError(f"reviewer artifact {index} lacks checked risks")
         if artifact.get("blocking_findings") != []:
             raise GuardError(f"reviewer artifact {index} has blocking findings")
+    if observed_reviewers != fixed_reviewers:
+        raise GuardError("reviewer artifacts do not match the fixed reviewer set")
 
 
 def validate_preflight(
     snapshot: dict[str, Any],
+    fixed_reviewers: set[ReviewerDescriptor],
     delayed_intent: bool,
     expected_task_id: str,
     expected_acceptance_scope: str,
@@ -323,7 +392,7 @@ def validate_preflight(
     if verdict == "mergeable" and saw_pending:
         raise GuardError("mergeable preflight still has pending checks")
 
-    validate_artifacts(snapshot, risk_tier)
+    validate_artifacts(snapshot, risk_tier, fixed_reviewers)
     repo, pr_number, head_sha = validate_target(
         snapshot.get("repo"), snapshot.get("pr_number"), snapshot.get("head_sha")
     )
@@ -373,8 +442,10 @@ def read_body(args: argparse.Namespace) -> str:
 
 def build_command(args: argparse.Namespace) -> dict[str, Any]:
     snapshot = load_object(args.preflight)
+    fixed_reviewers = load_fixed_reviewer_set(args.fixed_reviewers)
     repo, pr_number, head_sha = validate_preflight(
         snapshot,
+        fixed_reviewers,
         args.delayed_intent,
         args.task_id,
         args.acceptance_scope,
@@ -425,6 +496,8 @@ def build_command(args: argparse.Namespace) -> dict[str, Any]:
         "acceptance_scope": snapshot["acceptance_scope"],
         "repair_cycle_count": args.repair_cycle_count,
         "preflight_sha256": object_sha256(snapshot),
+        "fixed_reviewer_set_sha256": fixed_reviewer_set_sha256(fixed_reviewers),
+        "fixed_reviewer_count": len(fixed_reviewers),
         "command_argv_sha256": argv_sha256(argv),
         "mode": mode,
         "argv": argv,
@@ -474,8 +547,12 @@ def validate_postverify_provenance(args: argparse.Namespace) -> None:
     snapshot = load_object(args.preflight)
     plan = load_object(args.command_plan)
     digest = object_sha256(snapshot)
+    fixed_reviewers = load_fixed_reviewer_set(args.fixed_reviewers)
+    fixed_reviewer_digest = fixed_reviewer_set_sha256(fixed_reviewers)
     if args.preflight_sha256.lower() != digest:
         raise GuardError("postverify preflight digest does not match the preflight")
+    if args.fixed_reviewer_set_sha256.lower() != fixed_reviewer_digest:
+        raise GuardError("postverify fixed reviewer set digest mismatch")
     if plan.get("kind") != "merge-pr-command" or plan.get("outcome") != "ready":
         raise GuardError("postverify command plan is not a ready merge command")
 
@@ -489,6 +566,8 @@ def validate_postverify_provenance(args: argparse.Namespace) -> None:
         "acceptance_scope": args.acceptance_scope,
         "repair_cycle_count": args.repair_cycle_count,
         "preflight_sha256": digest,
+        "fixed_reviewer_set_sha256": fixed_reviewer_digest,
+        "fixed_reviewer_count": len(fixed_reviewers),
         "command_argv_sha256": args.command_argv_sha256.lower(),
     }
     for field, expected in expected_plan_fields.items():
@@ -567,6 +646,7 @@ def postverify(args: argparse.Namespace) -> int:
         "acceptance_scope": args.acceptance_scope,
         "repair_cycle_count": args.repair_cycle_count,
         "preflight_sha256": args.preflight_sha256.lower(),
+        "fixed_reviewer_set_sha256": args.fixed_reviewer_set_sha256.lower(),
         "command_argv_sha256": args.command_argv_sha256.lower(),
         "expected_base": args.expected_base,
         "expected_head_sha": args.expected_head_sha.lower(),
@@ -588,6 +668,8 @@ def postverify(args: argparse.Namespace) -> int:
             raise GuardError("postverify expected base is blank")
         if not SHA256_PATTERN.fullmatch(args.preflight_sha256):
             raise GuardError("postverify preflight digest is invalid")
+        if not SHA256_PATTERN.fullmatch(args.fixed_reviewer_set_sha256):
+            raise GuardError("postverify fixed reviewer set digest is invalid")
         if not SHA256_PATTERN.fullmatch(args.command_argv_sha256):
             raise GuardError("postverify command argv digest is invalid")
         validate_postverify_provenance(args)
@@ -651,6 +733,7 @@ def parser() -> argparse.ArgumentParser:
 
     build = subparsers.add_parser("build", help="Build a guarded gh pr merge argv")
     build.add_argument("--preflight", required=True)
+    build.add_argument("--fixed-reviewers", required=True)
     build.add_argument("--task-id", required=True)
     build.add_argument("--acceptance-scope", required=True)
     build.add_argument("--repair-cycle-count", required=True, type=int)
@@ -670,8 +753,10 @@ def parser() -> argparse.ArgumentParser:
     verify.add_argument("--expected-base", required=True)
     verify.add_argument("--expected-head-sha", required=True)
     verify.add_argument("--preflight-sha256", required=True)
+    verify.add_argument("--fixed-reviewer-set-sha256", required=True)
     verify.add_argument("--command-argv-sha256", required=True)
     verify.add_argument("--preflight", required=True)
+    verify.add_argument("--fixed-reviewers", required=True)
     verify.add_argument("--command-plan", required=True)
     verify.add_argument("--receipt", required=True)
     verify.add_argument("--fixture")

@@ -27,17 +27,30 @@ ACCEPTANCE_SCOPE = "skills-merge-trailer-hardening-v1"
 TASK_ID = "fae9ac3b-5af9-4f15-aaca-748e2a5da394"
 
 
-def artifact(identity: str) -> dict[str, object]:
-    return {
+def artifact(identity: str | None, run_id: str | None = None) -> dict[str, object]:
+    value: dict[str, object] = {
         "repository": REPO,
         "pr_number": PR_NUMBER,
         "head_sha": HEAD_SHA,
         "acceptance_scope": ACCEPTANCE_SCOPE,
-        "reviewer_identity": identity,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "verdict": "approved",
         "checked_risks_summary": "Checked exact-head merge and message provenance.",
         "blocking_findings": [],
+    }
+    if identity is not None:
+        value["reviewer_identity"] = identity
+    if run_id is not None:
+        value["reviewer_run_id"] = run_id
+    return value
+
+
+def fixed_reviewers() -> dict[str, object]:
+    return {
+        "reviewers": [
+            {"reviewer_identity": "reviewer-a"},
+            {"reviewer_identity": "reviewer-b"},
+        ]
     }
 
 
@@ -94,15 +107,22 @@ class GuardCliTests(unittest.TestCase):
         directory: Path,
         *args: str,
         snapshot: dict[str, object] | None = None,
+        fixed_reviewer_set: dict[str, object] | None = None,
         expected_scope: str = ACCEPTANCE_SCOPE,
         expected_repair_cycle_count: int = 0,
     ):
         snapshot_path = directory / "preflight.json"
+        fixed_reviewers_path = directory / "fixed-reviewers.json"
         snapshot_path.write_text(json.dumps(snapshot or preflight()), encoding="utf-8")
+        fixed_reviewers_path.write_text(
+            json.dumps(fixed_reviewer_set or fixed_reviewers()), encoding="utf-8"
+        )
         result = self.run_cli(
             "build",
             "--preflight",
             str(snapshot_path),
+            "--fixed-reviewers",
+            str(fixed_reviewers_path),
             "--task-id",
             TASK_ID,
             "--acceptance-scope",
@@ -159,6 +179,10 @@ class GuardCliTests(unittest.TestCase):
             str(plan["preflight_sha256"]),
             "--command-argv-sha256",
             str(plan["command_argv_sha256"]),
+            "--fixed-reviewers",
+            str(preflight_path.with_name("fixed-reviewers.json")),
+            "--fixed-reviewer-set-sha256",
+            str(plan["fixed_reviewer_set_sha256"]),
             "--preflight",
             str(preflight_path),
             "--command-plan",
@@ -187,8 +211,106 @@ class GuardCliTests(unittest.TestCase):
         self.assertEqual(plan["base"], "main")
         self.assertEqual(len(plan["preflight_sha256"]), 64)
         self.assertEqual(len(plan["command_argv_sha256"]), 64)
+        self.assertEqual(len(plan["fixed_reviewer_set_sha256"]), 64)
+        self.assertEqual(plan["fixed_reviewer_count"], 2)
         self.assertTrue({"--admin", "--force", "--delete-branch"}.isdisjoint(argv))
         self.assertNotIn("push", argv)
+
+    def test_fixed_reviewer_set_is_exact_and_order_independent(self) -> None:
+        snapshot = preflight()
+        snapshot["reviewer_artifacts"] = [
+            artifact("Reviewer-A", "RUN-A"),
+            artifact("reviewer-b"),
+        ]
+        expected = {
+            "reviewers": [
+                {"reviewer_identity": "reviewer-b"},
+                {"reviewer_identity": "reviewer-a", "reviewer_run_id": "run-a"},
+            ]
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            result, plan = self.build(
+                Path(temporary),
+                "--strategy",
+                "squash",
+                "--subject",
+                "fix: safe",
+                snapshot=snapshot,
+                fixed_reviewer_set=expected,
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(plan["fixed_reviewer_count"], 2)
+
+    def test_fixed_reviewer_set_rejects_missing_surplus_duplicate_and_substitute(self) -> None:
+        cases = {
+            "missing": {"reviewers": [{"reviewer_identity": "reviewer-a"}]},
+            "surplus": {
+                "reviewers": [
+                    {"reviewer_identity": "reviewer-a"},
+                    {"reviewer_identity": "reviewer-b"},
+                    {"reviewer_identity": "reviewer-c"},
+                ]
+            },
+            "duplicate": {
+                "reviewers": [
+                    {"reviewer_identity": "reviewer-\u212a"},
+                    {"reviewer_identity": "reviewer-K"},
+                ]
+            },
+            "substitute": {
+                "reviewers": [
+                    {"reviewer_identity": "reviewer-a"},
+                    {"reviewer_identity": "reviewer-fixed"},
+                ]
+            },
+        }
+        for name, expected in cases.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as temporary:
+                result, _ = self.build(
+                    Path(temporary),
+                    "--strategy",
+                    "squash",
+                    "--subject",
+                    "fix: safe",
+                    fixed_reviewer_set=expected,
+                )
+            self.assertEqual(result.returncode, 2)
+
+    def test_parallel_go_cannot_replace_fixed_pending_or_no_go_reviewer(self) -> None:
+        parallel_go = preflight()
+        parallel_go["risk_tier"] = {
+            "declared": "routine",
+            "effective": "routine",
+            "source": "explicit",
+        }
+        parallel_go["required_reviewer_artifacts"] = 1
+        parallel_go["repair_cycles"]["cap"] = 1
+        parallel_go["reviewer_artifacts"] = [artifact("Servius")]
+        fixed_dirac = {"reviewers": [{"reviewer_identity": "Dirac"}]}
+
+        fixed_no_go = preflight()
+        fixed_no_go["risk_tier"] = {
+            "declared": "routine",
+            "effective": "routine",
+            "source": "explicit",
+        }
+        fixed_no_go["required_reviewer_artifacts"] = 1
+        fixed_no_go["repair_cycles"]["cap"] = 1
+        fixed_no_go["reviewer_artifacts"] = [artifact("Dirac")]
+        fixed_no_go["reviewer_artifacts"][0]["verdict"] = "NO_GO"
+
+        for snapshot in (parallel_go, fixed_no_go):
+            with tempfile.TemporaryDirectory() as temporary:
+                result, _ = self.build(
+                    Path(temporary),
+                    "--strategy",
+                    "squash",
+                    "--subject",
+                    "fix: safe",
+                    snapshot=snapshot,
+                    fixed_reviewer_set=fixed_dirac,
+                )
+            self.assertEqual(result.returncode, 2)
 
     def test_omitted_and_explicit_empty_body_are_identical(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -509,6 +631,9 @@ class GuardCliTests(unittest.TestCase):
         self.assertEqual(durable["repair_cycle_count"], 0)
         self.assertEqual(durable["preflight_sha256"], plan["preflight_sha256"])
         self.assertEqual(durable["command_argv_sha256"], plan["command_argv_sha256"])
+        self.assertEqual(
+            durable["fixed_reviewer_set_sha256"], plan["fixed_reviewer_set_sha256"]
+        )
         self.assertEqual(durable["provider_url"], "https://github.com/hasna/tai/pull/4")
         self.assertEqual(durable["provider_base"], "main")
         self.assertEqual(durable["evidence_source"], "fixture")
@@ -602,6 +727,41 @@ class GuardCliTests(unittest.TestCase):
                 any("command argv digest mismatch" in reason for reason in durable["failure_reasons"])
             )
             self.assertIs(durable["authoritative"], False)
+
+    def test_postverify_rejects_fixed_reviewer_set_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            preflight_path, plan_path, plan = self.provenance(directory)
+            directory.joinpath("fixed-reviewers.json").write_text(
+                json.dumps(
+                    {
+                        "reviewers": [
+                            {"reviewer_identity": "reviewer-a"},
+                            {"reviewer_identity": "substitute"},
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            receipt = directory / "postverify.json"
+            result = self.run_cli(
+                "postverify",
+                *self.postverify_contract_args(preflight_path, plan_path, plan),
+                "--fixture",
+                str(FIXTURES / "trailer-free-provider.json"),
+                "--receipt",
+                str(receipt),
+            )
+            durable = json.loads(receipt.read_text(encoding="utf-8"))
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(durable["outcome"], "failed")
+        self.assertTrue(
+            any(
+                "fixed reviewer set digest mismatch" in reason
+                for reason in durable["failure_reasons"]
+            )
+        )
+        self.assertIs(durable["authoritative"], False)
 
     def test_postverify_persists_failed_receipt_for_non_utf8_plan(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

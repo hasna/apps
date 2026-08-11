@@ -26,14 +26,19 @@ For an actual merge:
    merge. Routine requires one independent exact-head artifact and permits one
    repair cycle; elevated requires two and permits two. A head change
    invalidates artifacts without resetting the cap.
-3. Keep worker, reviewers, and executor distinct. Every artifact must name the
-   repository, PR, exact head SHA, frozen scope, reviewer identity or run ID,
-   timestamp, verdict, checked risks, and blocking findings.
+3. Before review starts, write the task-owned fixed reviewer set as JSON with
+   one descriptor per required reviewer. Each descriptor contains a
+   `reviewer_identity`, a `reviewer_run_id`, or both. Keep worker, fixed
+   reviewers, and executor distinct. Every artifact must name the repository,
+   PR, exact head SHA, frozen scope, the same reviewer descriptor, timestamp,
+   verdict, checked risks, and blocking findings. Missing, surplus, duplicate,
+   or substitute reviewers fail closed even when their artifact says GO.
 4. Immediately before execution, re-read the PR, exact head, checks, reviews,
    draft/conflict state, base/protection policy, and queue behavior. Do not use
    stale preflight as merge authority.
 5. Generate the command with
    `scripts/merge_pr_guard.py build --preflight <fresh.json>
+   --fixed-reviewers <task-owned-fixed-reviewers.json>
    --task-id <todo-id> --acceptance-scope <frozen-scope>
    --repair-cycle-count <cumulative-count> ...`. Never hand compose a squash
    command.
@@ -54,8 +59,13 @@ line-ending normalization. Subject or body input containing a
 merge; never strip and continue.
 
 ```bash
+printf '%s\n' \
+  '{"reviewers":[{"reviewer_identity":"fixed-reviewer","reviewer_run_id":"run-123"}]}' \
+  > /path/to/task-owned-fixed-reviewers.json
+
 python3 agent-skills/merge-pr/scripts/merge_pr_guard.py build \
   --preflight /path/to/fresh-preflight.json \
+  --fixed-reviewers /path/to/task-owned-fixed-reviewers.json \
   --task-id "00000000-0000-4000-8000-000000000000" \
   --acceptance-scope "task-owned-frozen-scope" \
   --repair-cycle-count 0 \
@@ -77,9 +87,11 @@ message. Here `clean` means trailer-clean, not byte-for-byte equality with the
 requested message. A synthesized trailer is a failed result. Fixture mode is
 test-only, marks receipts non-authoritative, and can never complete a live
 merge. Pass the build result's task, mode, scope, cycle count, base, exact head,
-preflight digest, and command-argv digest to postverify. Postverify must also
-read the exact preflight and saved command-plan JSON; it recomputes both digests
-and rejects any field, message, or argv mismatch before querying the provider.
+preflight digest, fixed-reviewer-set digest, and command-argv digest to
+postverify. Postverify must also read the exact preflight, task-owned fixed
+reviewer set, and saved command-plan JSON; it recomputes their digests and
+rejects any field, reviewer-set, message, or argv mismatch before querying the
+provider.
 
 Never rewrite protected-main history, revert, force push, or delete the branch
 in response. Record the failure and escalate through the owning task.

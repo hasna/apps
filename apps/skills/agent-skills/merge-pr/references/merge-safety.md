@@ -8,6 +8,8 @@ Capture a fresh JSON snapshot with:
 - explicit risk tier and frozen acceptance scope;
 - cumulative repair-cycle count and cap;
 - checks, reviews, draft/conflict/merge state, and branch/queue policy;
+- the task-owned fixed reviewer identity/run-ID descriptor set established
+  before review begins;
 - exactly the tier-required independent reviewer artifacts;
 - worker and executor identities;
 - blocking reasons, warnings, verdict, and observation time.
@@ -24,6 +26,9 @@ the executor repeats the checks immediately before merge.
   cycles.
 - Worker and executor cannot review. Reviewer identities and run IDs must be
   distinct.
+- The artifact reviewer descriptors must equal the task-owned fixed reviewer
+  set exactly. A missing, surplus, duplicate, or substitute reviewer blocks,
+  including a parallel GO from a reviewer outside the fixed set.
 - Every artifact must match repository, PR, exact head, and frozen scope. A
   stale, future, malformed, blocking, duplicate, worker-authored,
   executor-authored, or scope-mismatched artifact blocks.
@@ -43,6 +48,23 @@ separately; all must match the fresh snapshot. This guard permits squash and
 policy-owned queues only. It rejects merge and rebase strategies because their
 multi-commit results require a wider provenance check.
 
+The fixed reviewer set is a separate task-owned JSON object:
+
+```json
+{
+  "reviewers": [
+    {
+      "reviewer_identity": "fixed-reviewer",
+      "reviewer_run_id": "run-123"
+    }
+  ]
+}
+```
+
+Pass it with `--fixed-reviewers`. The guard normalizes the descriptors, requires
+the tier-exact reviewer count, and binds the resulting set digest into the
+command plan.
+
 ## Provider postverify
 
 After provider mutation:
@@ -50,15 +72,16 @@ After provider mutation:
 For auto and queue modes, start these checks only after the provider reports
 `MERGED`; an enabled or queued PR is still pending.
 
-1. Recompute the preflight and complete command-argv digests, then match the
-   saved command plan.
+1. Recompute the preflight, fixed-reviewer-set, and complete command-argv
+   digests, then match the saved command plan.
 2. Re-read the PR and require `MERGED`.
 3. Match the provider-reported source head to the reviewed head.
 4. Resolve the provider merge-commit SHA.
 5. Fetch that commit's actual message.
 6. Scan it for forbidden trailers.
 7. Bind the receipt to the task, mode, scope, cycle count, preflight digest,
-   provider URL, base, source head, and merge commit.
+   fixed-reviewer-set digest, provider URL, base, source head, and merge
+   commit.
 8. Persist the receipt before interpreting success.
 
 A forbidden trailer or provider mismatch produces a durable failed receipt and
