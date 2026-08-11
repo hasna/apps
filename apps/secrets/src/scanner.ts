@@ -30,6 +30,20 @@ export interface ExposureFinding {
   path: string;
   line: number;
   column: number;
+  /**
+   * A constant redaction marker. It carries NO bytes from the scanned line —
+   * not the matched value, and not the surrounding context either.
+   *
+   * This field used to be the line with only the detected spans masked. That
+   * leaked two ways while `redacted: true` said otherwise. A detector whose
+   * value group stops early (`credential_assignment` cannot cross `#`) left the
+   * tail of the matched credential in the clear; and any secret on the line that
+   * no detector recognised — a bare high-entropy value — was emitted verbatim.
+   *
+   * `detector`, `line` and `column` are the load-bearing outputs and locate the
+   * finding without reproducing it. Read those; open the file only when you have
+   * decided it is safe to.
+   */
   preview: string;
   /** Copy/paste-ready location for task bodies and evidence metadata. */
   evidencePath: string;
@@ -191,7 +205,6 @@ const BINARY_DEADLINE_CHECK_STRIDE = 65_536;
 const DEFAULT_TIMEOUT_MS = 10_000;
 const MAX_TIMEOUT_MS = 60_000;
 const GIT_BUFFER_BYTES = 512 * 1024;
-const PREVIEW_MAX_LENGTH = 220;
 const ERROR_MAX_LENGTH = 500;
 const MAX_CURSOR_LENGTH = 4_096;
 const REDACTED = "***REDACTED***";
@@ -907,10 +920,10 @@ function readBoundedStdin(
  * Walk the printable-ASCII runs of a non-text blob.
  *
  * A credential is by construction an ASCII run, so extracting runs finds every
- * shape the detectors know while keeping previews readable and bounded — where
- * splitting a PNG on newlines would hand the detectors megabyte-long lines of
- * binary noise. `column` is the run's byte offset, which for a binary is the
- * only coordinate that means anything.
+ * shape the detectors know and keeps the matching bounded — where splitting a
+ * PNG on newlines would hand the detectors megabyte-long lines of binary noise.
+ * `column` is the run's byte offset, which for a binary is the only coordinate
+ * that means anything.
  */
 function scanBinaryBuffer(
   buffer: Buffer,
@@ -1224,7 +1237,10 @@ function scanTextLine(
   const spans = collectMatchSpans(line);
   if (!spans.length) return;
 
-  const preview = truncatePreview(redactSpans(line, spans));
+  // Constant, and deliberately not derived from `line`. Masking only the spans
+  // the detectors matched is not redaction: it publishes everything they did
+  // not match. See the note on ExposureFinding.preview.
+  const preview = REDACTED;
   for (const span of spans) {
     const column = span.start + 1 + columnOffset;
     const position: FindingPosition = {
@@ -1298,32 +1314,6 @@ function collectMatchSpans(line: string): MatchSpan[] {
     }
   }
   return spans.sort((a, b) => a.start - b.start || a.detector.id.localeCompare(b.detector.id));
-}
-
-function redactSpans(line: string, spans: MatchSpan[]): string {
-  let output = "";
-  let cursor = 0;
-  for (const span of mergeSpans(spans)) {
-    output += line.slice(cursor, span.start);
-    output += REDACTED;
-    cursor = span.end;
-  }
-  output += line.slice(cursor);
-  return output;
-}
-
-function mergeSpans(spans: MatchSpan[]): Array<{ start: number; end: number }> {
-  const sorted = spans.map(({ start, end }) => ({ start, end })).sort((a, b) => a.start - b.start);
-  const merged: Array<{ start: number; end: number }> = [];
-  for (const span of sorted) {
-    const last = merged[merged.length - 1];
-    if (!last || span.start > last.end) {
-      merged.push({ ...span });
-    } else {
-      last.end = Math.max(last.end, span.end);
-    }
-  }
-  return merged;
 }
 
 function parseGitGrepLine(line: string): { path: string; line: number; content: string } | undefined {
@@ -1532,11 +1522,6 @@ function isPlaceholder(value: string, options: { lexical?: boolean } = {}): bool
 
 function rangesOverlap(aStart: number, aEnd: number, bStart: number, bEnd: number): boolean {
   return aStart < bEnd && bStart < aEnd;
-}
-
-function truncatePreview(value: string): string {
-  if (value.length <= PREVIEW_MAX_LENGTH) return value;
-  return `${value.slice(0, PREVIEW_MAX_LENGTH - 3)}...`;
 }
 
 function trimError(value: string): string {

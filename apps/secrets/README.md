@@ -413,9 +413,12 @@ secrets scan history --max-commits 200 --limit 50
 secrets scan history --cursor "$NEXT_CURSOR" --limit 50
 ```
 
-Findings contain deterministic `secret-exposure:` IDs, redacted previews,
-remediation metadata, and `evidencePath` locations suitable for task bodies;
-matched credential values are never returned.
+Findings contain deterministic `secret-exposure:` IDs, remediation metadata, and
+`evidencePath` locations suitable for task bodies. `detector`, `line` and
+`column` locate the finding; `preview` is a constant `***REDACTED***` marker and
+carries no bytes from the scanned line — not the matched value, and not the
+surrounding context. Read the coordinates rather than the content: a scan result
+is safe to paste into a transcript, a task, or a channel.
 
 Create secure loop evidence and deduped Todos tasks for unsafe sensitive-file
 permissions:
