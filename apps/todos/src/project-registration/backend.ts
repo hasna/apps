@@ -5,10 +5,24 @@ import type {
   TaskList,
 } from "../types/index.js";
 import type {
+  TodosProjectResourceKind,
   TodosProjectRegistrationDirection,
   TodosProjectRegistrationReceipt,
   TodosProjectRegistrationResourceKind,
 } from "./types.js";
+
+export interface TodosProjectResourceCursor {
+  kind_rank: number;
+  target_id: string;
+}
+
+export interface TodosProjectResourceCandidate {
+  kind: TodosProjectResourceKind;
+  kind_rank: number;
+  target_id: string;
+  parent_id: string | null;
+  revision: string;
+}
 
 export interface TodosProjectRegistrationReceiptRow
   extends TodosProjectRegistrationReceipt {
@@ -147,4 +161,16 @@ export interface TodosProjectRegistrationBackend {
   ): Promise<TodosProjectRegistrationBindingRow | null>;
   getProject(id: string): Promise<Project | null>;
   getTaskList(id: string): Promise<TaskList | null>;
+  getProjectResourceCollectionRevision(input: {
+    todos_project_id: string;
+    task_list_id: string;
+    include_anchors: boolean;
+  }): Promise<string>;
+  listProjectResourceCandidates(input: {
+    todos_project_id: string;
+    task_list_id: string;
+    include_anchors: boolean;
+    after: TodosProjectResourceCursor | null;
+    limit: number;
+  }): Promise<TodosProjectResourceCandidate[]>;
 }

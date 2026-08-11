@@ -505,6 +505,200 @@ const createTemplateTaskInputSchema = {
   },
 } as const;
 
+const projectRegistrationBoundsProperties = {
+  response_byte_limit: { type: "integer", minimum: 1 },
+  time_budget_ms: { type: "integer", minimum: 1 },
+} as const;
+
+const projectRegistrationReceiptSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "receipt_id", "authority", "route", "package_version", "authority_id",
+    "tenant_id", "corpus_id", "operation_id", "step_id", "resource_kind",
+    "direction", "idempotency_key", "request_digest", "precondition_digest",
+    "outcome", "reason", "target_id", "result_revision", "result_digest",
+    "duplicate_of_receipt_id", "accepted_receipt_id", "created_by_operation",
+    "created_at",
+  ],
+  properties: {
+    receipt_id: { type: "string" },
+    authority: { type: "string", enum: ["todos"] },
+    route: { type: "string", enum: ["todos.project-registration.v1"] },
+    package_version: { type: "string" },
+    authority_id: { type: "string" },
+    tenant_id: { type: "string" },
+    corpus_id: { type: "string" },
+    operation_id: { type: "string" },
+    step_id: { type: "string" },
+    resource_kind: { type: "string", enum: ["project", "task_list"] },
+    direction: { type: "string", enum: ["forward", "inverse"] },
+    idempotency_key: { type: "string" },
+    request_digest: { type: "string" },
+    precondition_digest: { type: "string" },
+    outcome: {
+      type: "string",
+      enum: ["accepted", "duplicate_of_accepted", "terminal_nonacceptance"],
+    },
+    reason: { type: "string", nullable: true },
+    target_id: { type: "string", format: "uuid", nullable: true },
+    result_revision: { type: "string", nullable: true },
+    result_digest: { type: "string", nullable: true },
+    duplicate_of_receipt_id: { type: "string", nullable: true },
+    accepted_receipt_id: { type: "string", nullable: true },
+    created_by_operation: { type: "boolean" },
+    created_at: { type: "string", format: "date-time" },
+  },
+} as const;
+
+const projectRegistrationCapabilitySchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "authority", "route", "package_version", "authority_id", "tenant_id",
+    "corpus_id", "supported_resources", "conditional_create",
+    "immutable_receipts", "exact_terminal_lookup", "exact_readback",
+    "bind_existing_adoption", "project_resource_enumeration",
+    "project_resource_page_limit", "conditional_inverse",
+    "ambiguous_outcome_reconciliation",
+  ],
+  properties: {
+    authority: { type: "string", enum: ["todos"] },
+    route: { type: "string", enum: ["todos.project-registration.v1"] },
+    package_version: { type: "string" },
+    authority_id: { type: "string" },
+    tenant_id: { type: "string" },
+    corpus_id: { type: "string" },
+    supported_resources: {
+      type: "array",
+      items: { type: "string", enum: ["project", "task_list"] },
+    },
+    conditional_create: { type: "boolean", enum: [true] },
+    immutable_receipts: { type: "boolean", enum: [true] },
+    exact_terminal_lookup: { type: "boolean", enum: [true] },
+    exact_readback: { type: "boolean", enum: [true] },
+    bind_existing_adoption: { type: "boolean", enum: [true] },
+    project_resource_enumeration: { type: "boolean", enum: [true] },
+    project_resource_page_limit: { type: "integer", minimum: 1 },
+    conditional_inverse: { type: "boolean", enum: [true] },
+    ambiguous_outcome_reconciliation: { type: "boolean", enum: [true] },
+  },
+} as const;
+
+const projectRegistrationRequestSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "operation_id", "step_id", "resource_kind", "direction",
+    "authority_route", "package_version", "authority_id", "tenant_id",
+    "corpus_id", "target_selector", "idempotency_key", "request_digest",
+    "precondition_digest", "project_id", "project_slug", "project_name",
+    "desired", "response_byte_limit", "time_budget_ms",
+  ],
+  properties: {
+    operation_id: { type: "string" },
+    step_id: { type: "string" },
+    resource_kind: { type: "string", enum: ["project", "task_list"] },
+    direction: { type: "string", enum: ["forward", "inverse"] },
+    authority_route: { type: "string" },
+    package_version: { type: "string" },
+    authority_id: { type: "string" },
+    tenant_id: { type: "string" },
+    corpus_id: { type: "string" },
+    target_selector: { type: "string" },
+    idempotency_key: { type: "string" },
+    request_digest: { type: "string" },
+    precondition_digest: { type: "string" },
+    project_id: { type: "string" },
+    project_slug: { type: "string" },
+    project_name: { type: "string" },
+    desired: { type: "object", additionalProperties: true },
+    bind_existing: { type: "boolean" },
+    accepted_receipt: { $ref: "#/components/schemas/ProjectRegistrationReceipt" },
+    ...projectRegistrationBoundsProperties,
+  },
+} as const;
+
+const projectRegistrationLookupRequestSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "operation_id", "step_id", "resource_kind", "direction", "authority",
+    "authority_route", "package_version", "authority_id", "tenant_id",
+    "corpus_id", "target_selector", "idempotency_key", "max_items",
+    "response_byte_limit", "time_budget_ms",
+  ],
+  properties: {
+    operation_id: { type: "string" },
+    step_id: { type: "string" },
+    resource_kind: { type: "string", enum: ["project", "task_list"] },
+    direction: { type: "string", enum: ["forward", "inverse"] },
+    authority: { type: "string", enum: ["todos"] },
+    authority_route: { type: "string" },
+    package_version: { type: "string" },
+    authority_id: { type: "string" },
+    tenant_id: { type: "string" },
+    corpus_id: { type: "string" },
+    target_selector: { type: "string" },
+    idempotency_key: { type: "string" },
+    target_id: { type: "string", format: "uuid" },
+    max_items: { type: "integer", enum: [1] },
+    ...projectRegistrationBoundsProperties,
+  },
+} as const;
+
+const projectResourceSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "source_project_id", "kind", "scope", "target_id", "parent_id",
+    "revision", "digest",
+  ],
+  properties: {
+    source_project_id: { type: "string" },
+    kind: { type: "string", enum: ["project", "task_list", "plan", "task"] },
+    scope: { type: "string", enum: ["collection", "resource"] },
+    target_id: { type: "string", format: "uuid" },
+    parent_id: { type: "string", format: "uuid", nullable: true },
+    revision: { type: "string" },
+    digest: { type: "string" },
+  },
+} as const;
+
+const projectResourcePageSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "authority", "route", "package_version", "authority_id", "tenant_id",
+    "corpus_id", "source_project_id", "todos_project_id", "task_list_id",
+    "include_anchors", "collection_revision", "limit", "count", "resources", "has_more",
+    "next_cursor", "complete", "truncated",
+  ],
+  properties: {
+    authority: { type: "string", enum: ["todos"] },
+    route: { type: "string", enum: ["todos.project-registration.v1"] },
+    package_version: { type: "string" },
+    authority_id: { type: "string" },
+    tenant_id: { type: "string" },
+    corpus_id: { type: "string" },
+    source_project_id: { type: "string" },
+    todos_project_id: { type: "string", format: "uuid" },
+    task_list_id: { type: "string", format: "uuid" },
+    include_anchors: { type: "boolean" },
+    collection_revision: { type: "string" },
+    limit: { type: "integer", minimum: 1, maximum: 500 },
+    count: { type: "integer", minimum: 0 },
+    resources: {
+      type: "array",
+      items: { $ref: "#/components/schemas/ProjectResource" },
+    },
+    has_more: { type: "boolean" },
+    next_cursor: { type: "string", nullable: true },
+    complete: { type: "boolean" },
+    truncated: { type: "boolean", enum: [false] },
+  },
+} as const;
+
 export function buildV1OpenApiDocument(version = getPackageVersion()) {
   return structuredClone({
     openapi: "3.1.0",
@@ -528,6 +722,12 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
         TaskManifestBindingLookupRequest: taskManifestBindingLookupRequestSchema,
         TaskManifestBindingLookupResult: taskManifestBindingLookupResultSchema,
         TaskManifestBindingLookupResponse: taskManifestBindingLookupResponseSchema,
+        ProjectRegistrationCapability: projectRegistrationCapabilitySchema,
+        ProjectRegistrationReceipt: projectRegistrationReceiptSchema,
+        ProjectRegistrationRequest: projectRegistrationRequestSchema,
+        ProjectRegistrationLookupRequest: projectRegistrationLookupRequestSchema,
+        ProjectResource: projectResourceSchema,
+        ProjectResourcePage: projectResourcePageSchema,
         TaskList: taskListSchema,
         ProjectTaskListEnsureReceipt: projectTaskListEnsureReceiptSchema,
         ProjectTaskListEnsureResult: projectTaskListEnsureResultSchema,
@@ -1305,6 +1505,286 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
     },
     security: [{ apiKey: [] }],
     paths: {
+      "/v1/project-registration/capability": {
+        get: {
+          operationId: "getProjectRegistrationCapability",
+          summary: "Read the live package-owned Projects to Todos registration capability",
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["capability"],
+                    properties: {
+                      capability: {
+                        $ref: "#/components/schemas/ProjectRegistrationCapability",
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      "/v1/project-registration/resources": {
+        get: {
+          operationId: "listProjectRegistrationResources",
+          summary: "List one bounded page of stable Todos identities for an exact Projects workspace id",
+          parameters: [
+            {
+              name: "source_project_id",
+              in: "query",
+              required: true,
+              schema: { type: "string" },
+            },
+            {
+              name: "include_anchors",
+              in: "query",
+              schema: { type: "boolean", default: false },
+            },
+            {
+              name: "limit",
+              in: "query",
+              schema: { type: "integer", minimum: 1, maximum: 500, default: 100 },
+            },
+            {
+              name: "cursor",
+              in: "query",
+              schema: { type: "string" },
+            },
+          ],
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["page"],
+                    properties: {
+                      page: { $ref: "#/components/schemas/ProjectResourcePage" },
+                    },
+                  },
+                },
+              },
+            },
+            "400": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "404": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "409": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
+        },
+      },
+      "/v1/project-registration/create": {
+        post: {
+          operationId: "createProjectRegistrationResource",
+          summary: "Create or deterministically bind one Projects to Todos resource",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/ProjectRegistrationRequest" },
+              },
+            },
+          },
+          responses: {
+            "201": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["receipt"],
+                    properties: {
+                      receipt: { $ref: "#/components/schemas/ProjectRegistrationReceipt" },
+                    },
+                  },
+                },
+              },
+            },
+            "400": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "409": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
+        },
+      },
+      "/v1/project-registration/read-exact": {
+        post: {
+          operationId: "readExactProjectRegistrationResource",
+          summary: "Read one registered project or task list by exact full UUID",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  additionalProperties: false,
+                  required: [
+                    "resource_kind", "target_id", "response_byte_limit",
+                    "time_budget_ms",
+                  ],
+                  properties: {
+                    resource_kind: { type: "string", enum: ["project", "task_list"] },
+                    target_id: { type: "string", format: "uuid" },
+                    ...projectRegistrationBoundsProperties,
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["record"],
+                    properties: {
+                      record: {
+                        type: "object",
+                        additionalProperties: false,
+                        required: ["target_id", "revision", "digest"],
+                        properties: {
+                          target_id: { type: "string", format: "uuid" },
+                          revision: { type: "string" },
+                          digest: { type: "string" },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            "400": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "404": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
+        },
+      },
+      "/v1/project-registration/receipts/lookup": {
+        post: {
+          operationId: "lookupProjectRegistrationReceipt",
+          summary: "Recover one exact immutable terminal registration receipt",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/ProjectRegistrationLookupRequest" },
+              },
+            },
+          },
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["receipt", "response_control"],
+                    properties: {
+                      receipt: { $ref: "#/components/schemas/ProjectRegistrationReceipt" },
+                      response_control: {
+                        type: "object",
+                        additionalProperties: false,
+                        required: [
+                          "response_byte_limit", "time_budget_ms", "response_bytes",
+                          "elapsed_ms", "complete", "truncated",
+                        ],
+                        properties: {
+                          ...projectRegistrationBoundsProperties,
+                          response_bytes: { type: "integer", minimum: 0 },
+                          elapsed_ms: { type: "integer", minimum: 0 },
+                          complete: { type: "boolean", enum: [true] },
+                          truncated: { type: "boolean", enum: [false] },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            "400": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "404": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
+        },
+      },
+      "/v1/project-registration/compensate": {
+        post: {
+          operationId: "compensateProjectRegistrationResource",
+          summary: "Conditionally remove an unchanged receipt-owned registration resource",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/ProjectRegistrationRequest" },
+              },
+            },
+          },
+          responses: {
+            "201": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["receipt"],
+                    properties: {
+                      receipt: { $ref: "#/components/schemas/ProjectRegistrationReceipt" },
+                    },
+                  },
+                },
+              },
+            },
+            "400": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "404": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "409": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
+        },
+      },
+      "/v1/project-registration/verify-inverse": {
+        post: {
+          operationId: "verifyInverseProjectRegistrationResource",
+          summary: "Verify exact absence after conditional registration compensation",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/ProjectRegistrationRequest" },
+              },
+            },
+          },
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["verification"],
+                    properties: {
+                      verification: {
+                        type: "object",
+                        additionalProperties: false,
+                        required: ["target_id", "accepted_receipt_id", "absent", "digest"],
+                        properties: {
+                          target_id: { type: "string", format: "uuid" },
+                          accepted_receipt_id: { type: "string" },
+                          absent: { type: "boolean", enum: [true] },
+                          digest: { type: "string" },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            "400": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "404": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "409": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
+        },
+      },
       "/v1/task-manifest/capability": {
         get: {
           operationId: "getTaskManifestCapability",

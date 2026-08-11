@@ -12,6 +12,8 @@ import type {
   TodosProjectRegistrationCallIdentity,
   TodosProjectRegistrationReceiptRow,
   TodosProjectRegistrationStepIdentity,
+  TodosProjectResourceCandidate,
+  TodosProjectResourceCursor,
 } from "./backend.js";
 import { postgresTodosProjectRegistrationSchemaSql } from "./schema.js";
 import {
@@ -528,5 +530,110 @@ implements TodosProjectRegistrationBackend {
 
   async getTaskList(id: string): Promise<TaskList | null> {
     return (await this.direct()).getTaskList(id);
+  }
+
+  async getProjectResourceCollectionRevision(input: {
+    todos_project_id: string;
+    task_list_id: string;
+    include_anchors: boolean;
+  }): Promise<string> {
+    await this.ensureSchema();
+    const result = await this.client.query<{ revision: string }>(`
+      WITH resources(kind_rank, target_id, revision) AS (
+        SELECT 0, object_id, COALESCE(payload->>'updated_at', updated_at::text)
+        FROM ${this.tableName}
+        WHERE service = $1 AND object_type = 'projects'
+          AND deleted_at IS NULL AND object_id = $2
+        UNION ALL
+        SELECT 1, object_id, COALESCE(payload->>'updated_at', updated_at::text)
+        FROM ${this.tableName}
+        WHERE service = $1 AND object_type = 'task_lists'
+          AND deleted_at IS NULL AND object_id = $3
+          AND payload->>'project_id' = $2
+        UNION ALL
+        SELECT 2, object_id, COALESCE(payload->>'updated_at', updated_at::text)
+        FROM ${this.tableName}
+        WHERE $4::boolean AND service = $1 AND object_type = 'plans'
+          AND deleted_at IS NULL AND payload->>'project_id' = $2
+        UNION ALL
+        SELECT 3, object_id, COALESCE(payload->>'updated_at', updated_at::text)
+        FROM ${this.tableName}
+        WHERE $4::boolean AND service = $1 AND object_type = 'tasks'
+          AND deleted_at IS NULL AND payload->>'project_id' = $2
+      )
+      SELECT 'md5:' || md5(COALESCE(string_agg(
+        kind_rank::text || chr(31) || target_id || chr(31) || revision,
+        chr(30) ORDER BY kind_rank ASC, target_id ASC
+      ), '')) AS revision
+      FROM resources
+    `, [
+      this.service,
+      input.todos_project_id,
+      input.task_list_id,
+      input.include_anchors,
+    ]);
+    const revision = result.rows[0]?.revision;
+    if (!revision) {
+      throw new TodosProjectRegistrationError(
+        "TODOS_PROJECT_REGISTRATION_RECORD_NOT_FOUND",
+        "could not derive the hosted project-resource collection revision",
+      );
+    }
+    return revision;
+  }
+
+  async listProjectResourceCandidates(input: {
+    todos_project_id: string;
+    task_list_id: string;
+    include_anchors: boolean;
+    after: TodosProjectResourceCursor | null;
+    limit: number;
+  }): Promise<TodosProjectResourceCandidate[]> {
+    await this.ensureSchema();
+    const afterRank = input.after?.kind_rank ?? -1;
+    const afterId = input.after?.target_id ?? "";
+    const result = await this.client.query<TodosProjectResourceCandidate>(`
+      WITH resources(kind, kind_rank, target_id, parent_id, revision) AS (
+        SELECT 'project'::text, 0, object_id, NULL::text,
+          COALESCE(payload->>'updated_at', updated_at::text)
+        FROM ${this.tableName}
+        WHERE service = $1 AND object_type = 'projects'
+          AND deleted_at IS NULL AND object_id = $2
+        UNION ALL
+        SELECT 'task_list'::text, 1, object_id, payload->>'project_id',
+          COALESCE(payload->>'updated_at', updated_at::text)
+        FROM ${this.tableName}
+        WHERE service = $1 AND object_type = 'task_lists'
+          AND deleted_at IS NULL AND object_id = $3
+          AND payload->>'project_id' = $2
+        UNION ALL
+        SELECT 'plan'::text, 2, object_id, payload->>'project_id',
+          COALESCE(payload->>'updated_at', updated_at::text)
+        FROM ${this.tableName}
+        WHERE $4::boolean AND service = $1 AND object_type = 'plans'
+          AND deleted_at IS NULL AND payload->>'project_id' = $2
+        UNION ALL
+        SELECT 'task'::text, 3, object_id,
+          COALESCE(payload->>'plan_id', payload->>'project_id'),
+          COALESCE(payload->>'updated_at', updated_at::text)
+        FROM ${this.tableName}
+        WHERE $4::boolean AND service = $1 AND object_type = 'tasks'
+          AND deleted_at IS NULL AND payload->>'project_id' = $2
+      )
+      SELECT kind, kind_rank, target_id, parent_id, revision
+      FROM resources
+      WHERE kind_rank > $5 OR (kind_rank = $5 AND target_id > $6)
+      ORDER BY kind_rank ASC, target_id ASC
+      LIMIT $7
+    `, [
+      this.service,
+      input.todos_project_id,
+      input.task_list_id,
+      input.include_anchors,
+      afterRank,
+      afterId,
+      input.limit,
+    ]);
+    return result.rows;
   }
 }

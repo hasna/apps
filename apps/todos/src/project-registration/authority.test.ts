@@ -7,7 +7,9 @@ import { createTaskList, getTaskList, updateTaskList } from "../db/task-lists.js
 import { createTask, getTask } from "../db/tasks.js";
 import {
   TodosProjectRegistrationError,
+  PackageOwnedTodosProjectRegistrationAuthority,
   PostgresTodosProjectRegistrationBackend,
+  SqliteTodosProjectRegistrationBackend,
   canonicalProjectRegistrationJson,
   createLocalTodosProjectRegistrationAuthority,
   createTodosProjectRegistrationHttpClient,
@@ -20,6 +22,7 @@ import {
   type TodosProjectRegistrationLookupRequest,
   type TodosProjectRegistrationRequest,
 } from "./index.js";
+import type { TodosProjectRegistrationBackend } from "./backend.js";
 
 const OPERATION_ID = "fleet-resources-registration-0001";
 const HISTORICAL_OPERATION_ID = "fleet-resources-historical-registration-0001";
@@ -75,7 +78,9 @@ function projectRequest(
   const preconditionDigest = overrides.precondition_digest
     ?? digestProjectRegistrationValue({
       target_selector: targetSelector,
-      expected: "absent",
+      expected: overrides.bind_existing === true
+        ? "absent_or_matching_existing"
+        : "absent",
     });
   return {
     operation_id: operationId,
@@ -127,7 +132,9 @@ function taskListRequest(
   const preconditionDigest = overrides.precondition_digest
     ?? digestProjectRegistrationValue({
       target_selector: targetSelector,
-      expected: "absent",
+      expected: overrides.bind_existing === true
+        ? "absent_or_matching_existing"
+        : "absent",
     });
   return {
     operation_id: operationId,
@@ -295,6 +302,9 @@ describe("Todos package-owned project registration authority", () => {
       immutable_receipts: true,
       exact_terminal_lookup: true,
       exact_readback: true,
+      bind_existing_adoption: true,
+      project_resource_enumeration: true,
+      project_resource_page_limit: 500,
       conditional_inverse: true,
       ambiguous_outcome_reconciliation: true,
     });
@@ -373,6 +383,243 @@ describe("Todos package-owned project registration authority", () => {
     });
   });
 
+  test("binds deterministic existing project and task-list UUIDs without taking delete ownership", async () => {
+    const existingProject = createProject({
+      name: "Existing Fleet Resources",
+      path: "hasna-project://wks_fleetresources01",
+      task_list_id: "todos-fleet-resources",
+    }, db);
+    const projectCall = projectRequest({ bind_existing: true });
+    const projectReceipt = await authority.create(projectCall);
+    expect(projectReceipt).toMatchObject({
+      outcome: "accepted",
+      target_id: existingProject.id,
+      created_by_operation: false,
+    });
+
+    const existingTaskList = createTaskList({
+      name: "Existing Fleet Resources",
+      slug: "todos-fleet-resources",
+      project_id: existingProject.id,
+    }, db);
+    const taskListCall = taskListRequest(existingProject.id, {
+      bind_existing: true,
+    });
+    const taskListReceipt = await authority.create(taskListCall);
+    expect(taskListReceipt).toMatchObject({
+      outcome: "accepted",
+      target_id: existingTaskList.id,
+      created_by_operation: false,
+    });
+
+    expect(await authority.listProjectResources({
+      source_project_id: "wks_fleetresources01",
+      limit: 10,
+    })).toMatchObject({
+      todos_project_id: existingProject.id,
+      task_list_id: existingTaskList.id,
+      count: 2,
+      complete: true,
+      resources: [
+        { kind: "project", scope: "collection", target_id: existingProject.id },
+        { kind: "task_list", scope: "collection", target_id: existingTaskList.id },
+      ],
+    });
+    await expect(authority.compensate(inverseRequest(projectReceipt, projectCall)))
+      .rejects.toMatchObject({ code: "TODOS_PROJECT_REGISTRATION_INVALID_INPUT" });
+    expect(getProject(existingProject.id, db)).not.toBeNull();
+  });
+
+  test("producer-pages canonical identities and optional plan/task anchors without duplicates or unrelated rows", async () => {
+    const projectReceipt = await authority.create(projectRequest());
+    const taskListReceipt = await authority.create(taskListRequest(projectReceipt.target_id!));
+    const plans = Array.from({ length: 3 }, (_, index) => createPlan({
+      name: `Bound plan ${index}`,
+      project_id: projectReceipt.target_id!,
+    }, db));
+    const tasks = Array.from({ length: 4 }, (_, index) => createTask({
+      title: `Bound task ${index}`,
+      project_id: projectReceipt.target_id!,
+      plan_id: plans[index % plans.length]!.id,
+    }, db));
+    const inherited = createTask({
+      title: "Later child inherits the linked plan project",
+      plan_id: plans[0]!.id,
+    }, db);
+    expect(inherited.project_id).toBe(projectReceipt.target_id);
+
+    const unrelated = createProject({
+      name: "Unrelated",
+      path: "/unrelated",
+      task_list_id: "unrelated",
+    }, db);
+    const unrelatedPlan = createPlan({
+      name: "Unrelated plan",
+      project_id: unrelated.id,
+    }, db);
+    const unrelatedTask = createTask({
+      title: "Unrelated task",
+      project_id: unrelated.id,
+      plan_id: unrelatedPlan.id,
+    }, db);
+
+    const first = await authority.listProjectResources({
+      source_project_id: "wks_fleetresources01",
+      include_anchors: true,
+      limit: 2,
+    });
+    expect(first).toMatchObject({
+      count: 2,
+      has_more: true,
+      complete: false,
+      truncated: false,
+      collection_revision: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
+      resources: [
+        { kind: "project", target_id: projectReceipt.target_id },
+        { kind: "task_list", target_id: taskListReceipt.target_id },
+      ],
+    });
+    expect(first.next_cursor).toBeTruthy();
+
+    const resources = [...first.resources];
+    let cursor = first.next_cursor;
+    while (cursor) {
+      const page = await authority.listProjectResources({
+        source_project_id: "wks_fleetresources01",
+        include_anchors: true,
+        limit: 2,
+        cursor,
+      });
+      resources.push(...page.resources);
+      cursor = page.next_cursor;
+    }
+    const keys = resources.map((resource) => `${resource.kind}:${resource.target_id}`);
+    expect(new Set(keys).size).toBe(keys.length);
+    expect(resources.map((resource) => resource.kind)).toEqual([
+      "project",
+      "task_list",
+      "plan",
+      "plan",
+      "plan",
+      "task",
+      "task",
+      "task",
+      "task",
+      "task",
+    ]);
+    expect(new Set(resources.map((resource) => resource.target_id))).toEqual(new Set([
+      projectReceipt.target_id!,
+      taskListReceipt.target_id!,
+      ...plans.map((plan) => plan.id),
+      ...tasks.map((task) => task.id),
+      inherited.id,
+    ]));
+    expect(resources.some((resource) =>
+      resource.target_id === unrelated.id
+      || resource.target_id === unrelatedPlan.id
+      || resource.target_id === unrelatedTask.id
+    )).toBe(false);
+
+    await expect(authority.listProjectResources({
+      source_project_id: "wks_fleetresources01",
+      include_anchors: false,
+      limit: 2,
+      cursor: first.next_cursor!,
+    })).rejects.toMatchObject({ code: "TODOS_PROJECT_REGISTRATION_INVALID_INPUT" });
+    expect(await authority.listProjectResources({
+      source_project_id: "wks_fleetresources01",
+      include_anchors: false,
+      limit: 10,
+    })).toMatchObject({ count: 2, complete: true });
+  });
+
+  test("rejects a stale project-resource cursor instead of silently losing a later child", async () => {
+    const projectReceipt = await authority.create(projectRequest());
+    await authority.create(taskListRequest(projectReceipt.target_id!));
+    const originalPlan = createPlan({
+      name: "Original paged plan",
+      project_id: projectReceipt.target_id!,
+    }, db);
+    const first = await authority.listProjectResources({
+      source_project_id: "wks_fleetresources01",
+      include_anchors: true,
+      limit: 2,
+    });
+    expect(first.next_cursor).toBeTruthy();
+
+    const laterChild = createTask({
+      title: "Later child added between resource pages",
+      project_id: projectReceipt.target_id!,
+      plan_id: originalPlan.id,
+    }, db);
+    expect(laterChild.project_id).toBe(projectReceipt.target_id);
+
+    await expect(authority.listProjectResources({
+      source_project_id: "wks_fleetresources01",
+      include_anchors: true,
+      limit: 2,
+      cursor: first.next_cursor!,
+    })).rejects.toMatchObject({
+      code: "TODOS_PROJECT_REGISTRATION_COLLECTION_CHANGED",
+      details: {
+        expected_collection_revision: first.collection_revision,
+        current_collection_revision: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
+      },
+    });
+    expect((await authority.listProjectResources({
+      source_project_id: "wks_fleetresources01",
+      include_anchors: true,
+      limit: 10,
+    })).resources.some((resource) => resource.target_id === laterChild.id)).toBe(true);
+  });
+
+  test("detects a SQLite child mutation during page production before returning a cursor", async () => {
+    const projectReceipt = await authority.create(projectRequest());
+    await authority.create(taskListRequest(projectReceipt.target_id!));
+    const plan = createPlan({
+      name: "Mutation-during-page plan",
+      project_id: projectReceipt.target_id!,
+    }, db);
+    const delegate = new SqliteTodosProjectRegistrationBackend(db);
+    let mutated = false;
+    const backend: TodosProjectRegistrationBackend = {
+      kind: delegate.kind,
+      transaction: delegate.transaction.bind(delegate),
+      getReceiptForLookup: delegate.getReceiptForLookup.bind(delegate),
+      getReceiptById: delegate.getReceiptById.bind(delegate),
+      getBinding: delegate.getBinding.bind(delegate),
+      getProject: delegate.getProject.bind(delegate),
+      getTaskList: delegate.getTaskList.bind(delegate),
+      getProjectResourceCollectionRevision:
+        delegate.getProjectResourceCollectionRevision.bind(delegate),
+      listProjectResourceCandidates: async (input) => {
+        const candidates = await delegate.listProjectResourceCandidates(input);
+        if (!mutated) {
+          mutated = true;
+          createTask({
+            title: "Mutation inserted during page production",
+            project_id: projectReceipt.target_id!,
+            plan_id: plan.id,
+          }, db);
+        }
+        return candidates;
+      },
+    };
+    const guardedAuthority = new PackageOwnedTodosProjectRegistrationAuthority(backend, {
+      packageVersion: "0.15.6-test",
+      authorityId: "todos-test-authority",
+      tenantId: "tenant-test",
+      corpusId: "corpus-test",
+    });
+    await expect(guardedAuthority.listProjectResources({
+      source_project_id: "wks_fleetresources01",
+      include_anchors: true,
+      limit: 2,
+    })).rejects.toMatchObject({
+      code: "TODOS_PROJECT_REGISTRATION_COLLECTION_CHANGED",
+    });
+  });
+
   test("uses the authenticated HTTP adapter without serializing the opaque target handle", async () => {
     const client = createTodosProjectRegistrationHttpClient({
       baseUrl: "https://todos.test",
@@ -420,10 +667,46 @@ describe("Todos package-owned project registration authority", () => {
       revision: receipt.result_revision,
       digest: receipt.result_digest,
     });
+    const listRequest = taskListRequest(receipt.target_id!, {
+      operation_id: "fleet-resources-http-list-0001",
+      project_id: request.project_id,
+      project_slug: request.project_slug,
+      project_name: request.project_name,
+      desired: {
+        todos_project_id: receipt.target_id,
+        source_project_id: request.project_id,
+        name: request.project_name,
+      },
+    });
+    const listReceipt = await client.create(listRequest);
     const plan = createPlan({
       name: "HTTP foreign plan",
       project_id: receipt.target_id!,
     }, db);
+    const firstPage = await client.listProjectResources({
+      source_project_id: request.project_id,
+      include_anchors: true,
+      limit: 2,
+    });
+    expect(firstPage).toMatchObject({
+      todos_project_id: receipt.target_id,
+      task_list_id: listReceipt.target_id,
+      has_more: true,
+      collection_revision: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
+    });
+    createTask({
+      title: "HTTP later child",
+      project_id: receipt.target_id!,
+      plan_id: plan.id,
+    }, db);
+    await expect(client.listProjectResources({
+      source_project_id: request.project_id,
+      include_anchors: true,
+      limit: 2,
+      cursor: firstPage.next_cursor!,
+    })).rejects.toMatchObject({
+      code: "TODOS_PROJECT_REGISTRATION_COLLECTION_CHANGED",
+    });
     const rejected = await client.compensate(inverseRequest(receipt, request));
     expect(rejected).toMatchObject({
       outcome: "terminal_nonacceptance",
@@ -1413,6 +1696,116 @@ describe("Todos package-owned project registration authority", () => {
       .rejects.toMatchObject({
         code: "TODOS_PROJECT_REGISTRATION_ATOMICITY_UNAVAILABLE",
       });
+  });
+
+  test("hosted PostgreSQL collection revisions change across child mutations and candidate pages stay bounded", async () => {
+    const statements: Array<{ text: string; params: unknown[] | undefined }> = [];
+    const revisions = [
+      "md5:11111111111111111111111111111111",
+      "md5:22222222222222222222222222222222",
+    ];
+    const query = async (text: string, params?: unknown[]) => {
+      statements.push({ text, params });
+      if (text.includes("string_agg(")) {
+        return { rows: [{ revision: revisions.shift()! }] };
+      }
+      if (text.includes("WITH resources(kind, kind_rank")) {
+        return { rows: [] };
+      }
+      return { rows: [] };
+    };
+    const client = {
+      query,
+      async transaction<T>(fn: (transaction: { query: typeof query }) => Promise<T>) {
+        return await fn({ query });
+      },
+    };
+    const backend = new PostgresTodosProjectRegistrationBackend(client, {
+      service: "todos_registration_test",
+      tableName: "todos_sync_records_registration_test",
+      cursorTableName: "todos_sync_cursors_registration_test",
+    });
+    const input = {
+      todos_project_id: "11111111-1111-4111-8111-111111111111",
+      task_list_id: "22222222-2222-4222-8222-222222222222",
+      include_anchors: true,
+    };
+    const before = await backend.getProjectResourceCollectionRevision(input);
+    const after = await backend.getProjectResourceCollectionRevision(input);
+    expect({ before, after }).toEqual({
+      before: "md5:11111111111111111111111111111111",
+      after: "md5:22222222222222222222222222222222",
+    });
+    expect(before).not.toBe(after);
+    await backend.listProjectResourceCandidates({
+      ...input,
+      after: { kind_rank: 2, target_id: "33333333-3333-4333-8333-333333333333" },
+      limit: 51,
+    });
+    const revisionSql = statements.find(({ text }) => text.includes("string_agg("))!;
+    expect(revisionSql.text).toContain("ORDER BY kind_rank ASC, target_id ASC");
+    expect(revisionSql.text).toContain("payload->>'project_id' = $2");
+    const pageSql = statements.find(({ text }) =>
+      text.includes("WITH resources(kind, kind_rank"))!;
+    expect(pageSql.text).toContain("LIMIT $7");
+    expect(pageSql.params?.at(-1)).toBe(51);
+  });
+
+  test("detects a hosted PostgreSQL revision change during page production", async () => {
+    const backend = new PostgresTodosProjectRegistrationBackend({
+      async query() {
+        return { rows: [] };
+      },
+      async transaction<T>(fn: (client: { query: () => Promise<{ rows: never[] }> }) => Promise<T>) {
+        return await fn({ query: async () => ({ rows: [] }) });
+      },
+    });
+    const projectId = "11111111-1111-4111-8111-111111111111";
+    const taskListId = "22222222-2222-4222-8222-222222222222";
+    backend.getBinding = async (_scope, resourceKind) => ({
+      authority_id: "todos",
+      tenant_id: "postgresql",
+      corpus_id: "todos:postgresql",
+      resource_kind: resourceKind,
+      target_selector: resourceKind === "project"
+        ? "wks_postgresmutation01"
+        : `${projectId}:default`,
+      operation_id: "postgres-mutation-operation",
+      step_id: resourceKind,
+      direction: "forward",
+      idempotency_key: `prk_${resourceKind.padEnd(48, "0").slice(0, 48)}`,
+      request_digest: "a".repeat(64),
+      precondition_digest: "b".repeat(64),
+      normalized_call_digest: "c".repeat(64),
+      state: "accepted",
+      target_id: resourceKind === "project" ? projectId : taskListId,
+      accepted_receipt_id: `tpr_${resourceKind}`,
+      result_revision: "2026-08-11T00:00:00.000Z",
+      result_digest: "d".repeat(64),
+      removed_receipt_id: null,
+      created_at: "2026-08-11T00:00:00.000Z",
+      updated_at: "2026-08-11T00:00:00.000Z",
+    });
+    let revisionRead = 0;
+    backend.getProjectResourceCollectionRevision = async () =>
+      revisionRead++ === 0
+        ? "md5:11111111111111111111111111111111"
+        : "md5:22222222222222222222222222222222";
+    backend.listProjectResourceCandidates = async () => [{
+      kind: "project",
+      kind_rank: 0,
+      target_id: projectId,
+      parent_id: null,
+      revision: "2026-08-11T00:00:00.000Z",
+    }];
+    const guardedAuthority = new PackageOwnedTodosProjectRegistrationAuthority(backend);
+    await expect(guardedAuthority.listProjectResources({
+      source_project_id: "wks_postgresmutation01",
+      include_anchors: true,
+      limit: 1,
+    })).rejects.toMatchObject({
+      code: "TODOS_PROJECT_REGISTRATION_COLLECTION_CHANGED",
+    });
   });
 
   test("checks hosted PostgreSQL dependents through every canonical project and task-list reference", async () => {

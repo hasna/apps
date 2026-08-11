@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { Database } from "bun:sqlite";
 import { now, uuid } from "../db/database.js";
 import {
@@ -21,6 +22,8 @@ import type {
   TodosProjectRegistrationCallIdentity,
   TodosProjectRegistrationReceiptRow,
   TodosProjectRegistrationStepIdentity,
+  TodosProjectResourceCandidate,
+  TodosProjectResourceCursor,
 } from "./backend.js";
 import { sqliteTodosProjectRegistrationSchemaSql } from "./schema.js";
 import type { TodosProjectRegistrationResourceKind } from "./types.js";
@@ -1119,5 +1122,94 @@ implements TodosProjectRegistrationBackend {
 
   getTaskList(id: string): Promise<TaskList | null> {
     return this.direct.getTaskList(id);
+  }
+
+  async getProjectResourceCollectionRevision(input: {
+    todos_project_id: string;
+    task_list_id: string;
+    include_anchors: boolean;
+  }): Promise<string> {
+    const digest = createHash("sha256");
+    const rows = this.db.query(`
+      WITH resources(kind_rank, target_id, revision) AS (
+        SELECT 0, id, updated_at
+        FROM projects
+        WHERE id = ?
+        UNION ALL
+        SELECT 1, id, updated_at
+        FROM task_lists
+        WHERE id = ? AND project_id = ?
+        UNION ALL
+        SELECT 2, id, updated_at
+        FROM plans
+        WHERE ? = 1 AND project_id = ?
+        UNION ALL
+        SELECT 3, id, updated_at
+        FROM tasks
+        WHERE ? = 1 AND project_id = ?
+      )
+      SELECT kind_rank, target_id, revision
+      FROM resources
+      ORDER BY kind_rank ASC, target_id ASC
+    `).iterate(
+      input.todos_project_id,
+      input.task_list_id,
+      input.todos_project_id,
+      input.include_anchors ? 1 : 0,
+      input.todos_project_id,
+      input.include_anchors ? 1 : 0,
+      input.todos_project_id,
+    ) as Iterable<{ kind_rank: number; target_id: string; revision: string }>;
+    for (const row of rows) {
+      digest.update(`${row.kind_rank}\u0000${row.target_id}\u0000${row.revision}\n`);
+    }
+    return `sha256:${digest.digest("hex")}`;
+  }
+
+  async listProjectResourceCandidates(input: {
+    todos_project_id: string;
+    task_list_id: string;
+    include_anchors: boolean;
+    after: TodosProjectResourceCursor | null;
+    limit: number;
+  }): Promise<TodosProjectResourceCandidate[]> {
+    const afterRank = input.after?.kind_rank ?? -1;
+    const afterId = input.after?.target_id ?? "";
+    return this.db.query(`
+      WITH resources(kind, kind_rank, target_id, parent_id, revision) AS (
+        SELECT 'project', 0, id, NULL, updated_at
+        FROM projects
+        WHERE id = ?
+        UNION ALL
+        SELECT 'task_list', 1, id, project_id, updated_at
+        FROM task_lists
+        WHERE id = ? AND project_id = ?
+        UNION ALL
+        SELECT 'plan', 2, id, project_id, updated_at
+        FROM plans
+        WHERE ? = 1 AND project_id = ?
+        UNION ALL
+        SELECT 'task', 3, id, COALESCE(plan_id, project_id), updated_at
+        FROM tasks
+        WHERE ? = 1 AND project_id = ?
+      )
+      SELECT kind, kind_rank, target_id, parent_id, revision
+      FROM resources
+      WHERE kind_rank > ? OR (kind_rank = ? AND target_id > ?)
+      ORDER BY kind_rank ASC, target_id ASC
+      LIMIT ?
+    `).all(
+      input.todos_project_id,
+      input.task_list_id,
+      input.todos_project_id,
+      input.include_anchors ? 1 : 0,
+      input.todos_project_id,
+      input.include_anchors ? 1 : 0,
+      input.todos_project_id,
+      afterRank,
+      afterRank,
+      afterId,
+      input.limit,
+    ) as TodosProjectResourceCandidate[];
   }
 }

@@ -45,4 +45,9 @@ export type {
   TodosProjectRegistrationRequest,
   TodosProjectRegistrationResourceKind,
   TodosProjectRegistrationResponseControl,
+  TodosProjectResource,
+  TodosProjectResourceKind,
+  TodosProjectResourcePage,
+  TodosProjectResourcePageRequest,
+  TodosProjectResourceScope,
 } from "./types.js";

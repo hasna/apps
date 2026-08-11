@@ -2,7 +2,7 @@
 // Regenerate: bun run scripts/generate-sdk.ts
 
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
-// Source: Todos V1 API 0.15.27
+// Source: Todos V1 API 0.15.29
 
 export interface Task { "id"?: string; "title"?: string; "description"?: string; "status"?: "pending" | "in_progress" | "completed" | "failed" | "cancelled"; "priority"?: "low" | "medium" | "high" | "critical"; "project_id"?: string | null; "parent_id"?: string | null; "assigned_to"?: string | null; "agent_id"?: string | null; "created_by"?: string | null; "reason"?: string | null; "tags"?: Array<string>; "version"?: number; "locked_by"?: string | null; "locked_at"?: string | null; "created_at"?: string; "updated_at"?: string }
 
@@ -19,6 +19,18 @@ export interface TaskManifestBindingLookupRequest { "authority": "todos"; "route
 export interface TaskManifestBindingLookupResult { "authority": "todos"; "route": "todos.task-manifest.v1"; "schema_version": 1; "tenant_id": string; "plan_id": string; "apply_receipt_id": string; "binding_version": number; "state": "applied" | "compensated" }
 
 export interface TaskManifestBindingLookupResponse { "result": TaskManifestBindingLookupResult }
+
+export interface ProjectRegistrationCapability { "authority": "todos"; "route": "todos.project-registration.v1"; "package_version": string; "authority_id": string; "tenant_id": string; "corpus_id": string; "supported_resources": Array<"project" | "task_list">; "conditional_create": true; "immutable_receipts": true; "exact_terminal_lookup": true; "exact_readback": true; "bind_existing_adoption": true; "project_resource_enumeration": true; "project_resource_page_limit": number; "conditional_inverse": true; "ambiguous_outcome_reconciliation": true }
+
+export interface ProjectRegistrationReceipt { "receipt_id": string; "authority": "todos"; "route": "todos.project-registration.v1"; "package_version": string; "authority_id": string; "tenant_id": string; "corpus_id": string; "operation_id": string; "step_id": string; "resource_kind": "project" | "task_list"; "direction": "forward" | "inverse"; "idempotency_key": string; "request_digest": string; "precondition_digest": string; "outcome": "accepted" | "duplicate_of_accepted" | "terminal_nonacceptance"; "reason": string | null; "target_id": string | null; "result_revision": string | null; "result_digest": string | null; "duplicate_of_receipt_id": string | null; "accepted_receipt_id": string | null; "created_by_operation": boolean; "created_at": string }
+
+export interface ProjectRegistrationRequest { "operation_id": string; "step_id": string; "resource_kind": "project" | "task_list"; "direction": "forward" | "inverse"; "authority_route": string; "package_version": string; "authority_id": string; "tenant_id": string; "corpus_id": string; "target_selector": string; "idempotency_key": string; "request_digest": string; "precondition_digest": string; "project_id": string; "project_slug": string; "project_name": string; "desired": Record<string, unknown>; "bind_existing"?: boolean; "accepted_receipt"?: ProjectRegistrationReceipt; "response_byte_limit": number; "time_budget_ms": number }
+
+export interface ProjectRegistrationLookupRequest { "operation_id": string; "step_id": string; "resource_kind": "project" | "task_list"; "direction": "forward" | "inverse"; "authority": "todos"; "authority_route": string; "package_version": string; "authority_id": string; "tenant_id": string; "corpus_id": string; "target_selector": string; "idempotency_key": string; "target_id"?: string; "max_items": 1; "response_byte_limit": number; "time_budget_ms": number }
+
+export interface ProjectResource { "source_project_id": string; "kind": "project" | "task_list" | "plan" | "task"; "scope": "collection" | "resource"; "target_id": string; "parent_id": string | null; "revision": string; "digest": string }
+
+export interface ProjectResourcePage { "authority": "todos"; "route": "todos.project-registration.v1"; "package_version": string; "authority_id": string; "tenant_id": string; "corpus_id": string; "source_project_id": string; "todos_project_id": string; "task_list_id": string; "include_anchors": boolean; "collection_revision": string; "limit": number; "count": number; "resources": Array<ProjectResource>; "has_more": boolean; "next_cursor": string | null; "complete": boolean; "truncated": false }
 
 export interface TaskList { "id"?: string; "project_id"?: string | null; "slug"?: string; "name"?: string; "description"?: string | null; "metadata"?: Record<string, unknown>; "created_at"?: string; "updated_at"?: string }
 
@@ -301,6 +313,69 @@ export class TodosV1Client {
     /** Fence the prior attempt and create or adopt a recovery generation */
     async recoverPrGroup(id: string, body: RecoverPrGroupInput, init?: RequestInit): Promise<PrGroupMutationResult> {
       return this.request("POST", `/v1/pr-groups/${encodeURIComponent(String(id))}/recover`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Read the live package-owned Projects to Todos registration capability */
+    async getProjectRegistrationCapability(init?: RequestInit): Promise<{ "capability": ProjectRegistrationCapability }> {
+      return this.request("GET", `/v1/project-registration/capability`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Conditionally remove an unchanged receipt-owned registration resource */
+    async compensateProjectRegistrationResource(body: ProjectRegistrationRequest, init?: RequestInit): Promise<{ "receipt": ProjectRegistrationReceipt }> {
+      return this.request("POST", `/v1/project-registration/compensate`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Create or deterministically bind one Projects to Todos resource */
+    async createProjectRegistrationResource(body: ProjectRegistrationRequest, init?: RequestInit): Promise<{ "receipt": ProjectRegistrationReceipt }> {
+      return this.request("POST", `/v1/project-registration/create`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Read one registered project or task list by exact full UUID */
+    async readExactProjectRegistrationResource(body: { "resource_kind": "project" | "task_list"; "target_id": string; "response_byte_limit": number; "time_budget_ms": number }, init?: RequestInit): Promise<{ "record": { "target_id": string; "revision": string; "digest": string } }> {
+      return this.request("POST", `/v1/project-registration/read-exact`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Recover one exact immutable terminal registration receipt */
+    async lookupProjectRegistrationReceipt(body: ProjectRegistrationLookupRequest, init?: RequestInit): Promise<{ "receipt": ProjectRegistrationReceipt; "response_control": { "response_byte_limit": number; "time_budget_ms": number; "response_bytes": number; "elapsed_ms": number; "complete": true; "truncated": false } }> {
+      return this.request("POST", `/v1/project-registration/receipts/lookup`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** List one bounded page of stable Todos identities for an exact Projects workspace id */
+    async listProjectRegistrationResources(query?: { "source_project_id": string; "include_anchors"?: boolean; "limit"?: number; "cursor"?: string }, init?: RequestInit): Promise<{ "page": ProjectResourcePage }> {
+      return this.request("GET", `/v1/project-registration/resources`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
+    /** Verify exact absence after conditional registration compensation */
+    async verifyInverseProjectRegistrationResource(body: ProjectRegistrationRequest, init?: RequestInit): Promise<{ "verification": { "target_id": string; "accepted_receipt_id": string; "absent": true; "digest": string } }> {
+      return this.request("POST", `/v1/project-registration/verify-inverse`, {
         body,
         query: undefined,
         init,

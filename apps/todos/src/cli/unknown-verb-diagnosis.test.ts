@@ -79,6 +79,19 @@ describe("stage-a routing and rejection diagnosis distinguish invocation ownersh
     expect(message).toContain("todos --help");
   });
 
+  test("project-registration commands are known while a near-miss remains the UNKNOWN_COMMAND red control", () => {
+    const matrix = getTodosCliCommandCapabilityMatrix();
+    expect(matrix.get("project-registration")).toBe("remote-http");
+    expect(matrix.get("project-resources")).toBe("remote-http");
+    expect(() => initializeTodosCliAuthority(
+      ["project-resources", "wks_projectresources1", "--all"],
+      REMOTE_ENV,
+    )).not.toThrow();
+    const redControl = initFailure(["project-resourcess", "wks_projectresources1"]);
+    expect(redControl).toContain("UNKNOWN_COMMAND");
+    expect(redControl).toContain("project-resources");
+  });
+
   test("a near-miss unknown verb names the closest real verb", () => {
     expect(initFailure(["dnoe", "abcd1234"])).toContain("done");
     expect(initFailure(["lsit"])).toContain("list");
