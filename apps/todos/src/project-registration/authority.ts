@@ -9,6 +9,8 @@ import type {
   TodosProjectRegistrationBackendTransaction,
   TodosProjectRegistrationBindingRow,
   TodosProjectRegistrationReceiptRow,
+  TodosProjectResourceCandidate,
+  TodosProjectResourceCursor,
 } from "./backend.js";
 import {
   PostgresTodosProjectRegistrationBackend,
@@ -33,6 +35,9 @@ import {
   type TodosProjectRegistrationRecord,
   type TodosProjectRegistrationRequest,
   type TodosProjectRegistrationResourceKind,
+  type TodosProjectResource,
+  type TodosProjectResourcePage,
+  type TodosProjectResourcePageRequest,
 } from "./types.js";
 
 const UUID_PATTERN =
@@ -44,6 +49,8 @@ const AUTHORITY_ROUTE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{2,127}$/;
 const PACKAGE_VERSION_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$/;
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
 const IDEMPOTENCY_PATTERN = /^prk_[0-9a-f]{48}$/;
+const PROJECT_RESOURCE_PAGE_LIMIT = 500;
+const PROJECT_RESOURCE_CURSOR_VERSION = 1;
 
 class WriteBoundaryError extends Error {
   constructor(
@@ -355,6 +362,7 @@ function normalizedCallDigest(request: TodosProjectRegistrationRequest): string 
     project_slug: request.project_slug,
     project_name: request.project_name,
     desired: request.desired,
+    bind_existing: request.bind_existing === true,
     accepted_receipt_id: request.accepted_receipt?.receipt_id ?? null,
   });
 }
@@ -406,6 +414,12 @@ function assertCommonRequest(
       "desired must be a JSON object",
     );
   }
+  if (request.bind_existing !== undefined && typeof request.bind_existing !== "boolean") {
+    throw new TodosProjectRegistrationError(
+      "TODOS_PROJECT_REGISTRATION_INVALID_INPUT",
+      "bind_existing must be boolean when supplied",
+    );
+  }
   const expectedKey = deriveTodosProjectRegistrationIdempotencyKey({
     operation_id: request.operation_id,
     step_id: request.step_id,
@@ -438,7 +452,7 @@ function assertForwardRequest(
   const expectedRequestDigest = digestProjectRegistrationValue(request.desired);
   const expectedPreconditionDigest = digestProjectRegistrationValue({
     target_selector: request.target_selector,
-    expected: "absent",
+    expected: request.bind_existing === true ? "absent_or_matching_existing" : "absent",
   });
   if (
     request.request_digest !== expectedRequestDigest
@@ -629,6 +643,7 @@ function makeAcceptedReceipt(
   capability: TodosProjectRegistrationCapability,
   record: TodosProjectRegistrationRecord,
   createdAt: string,
+  createdByOperation = true,
 ): TodosProjectRegistrationReceiptRow {
   return makeReceipt({
     ...receiptBase(request, callDigest, capability),
@@ -641,7 +656,7 @@ function makeAcceptedReceipt(
     accepted_receipt_id: request.direction === "inverse"
       ? request.accepted_receipt!.receipt_id
       : null,
-    created_by_operation: true,
+    created_by_operation: createdByOperation,
   }, createdAt);
 }
 
@@ -739,6 +754,97 @@ function bindingFor(
   };
 }
 
+interface ProjectResourceCursorPayload extends TodosProjectResourceCursor {
+  version: typeof PROJECT_RESOURCE_CURSOR_VERSION;
+  source_project_id: string;
+  include_anchors: boolean;
+  collection_revision: string;
+}
+
+function encodeProjectResourceCursor(
+  input: Omit<ProjectResourceCursorPayload, "version">,
+): string {
+  return Buffer.from(JSON.stringify({
+    version: PROJECT_RESOURCE_CURSOR_VERSION,
+    ...input,
+  }), "utf8").toString("base64url");
+}
+
+function decodeProjectResourceCursor(
+  cursor: string | undefined,
+  expected: Pick<ProjectResourceCursorPayload, "source_project_id" | "include_anchors">,
+): Pick<ProjectResourceCursorPayload, "kind_rank" | "target_id" | "collection_revision"> | null {
+  if (!cursor) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8"));
+  } catch {
+    throw new TodosProjectRegistrationError(
+      "TODOS_PROJECT_REGISTRATION_INVALID_INPUT",
+      "cursor is not a valid project-resource cursor",
+    );
+  }
+  if (
+    !parsed
+    || typeof parsed !== "object"
+    || Array.isArray(parsed)
+  ) {
+    throw new TodosProjectRegistrationError(
+      "TODOS_PROJECT_REGISTRATION_INVALID_INPUT",
+      "cursor is not a valid project-resource cursor",
+    );
+  }
+  const value = parsed as Record<string, unknown>;
+  if (
+    value["version"] !== PROJECT_RESOURCE_CURSOR_VERSION
+    || value["source_project_id"] !== expected.source_project_id
+    || value["include_anchors"] !== expected.include_anchors
+    || !Number.isSafeInteger(value["kind_rank"])
+    || Number(value["kind_rank"]) < 0
+    || Number(value["kind_rank"]) > 3
+    || typeof value["target_id"] !== "string"
+    || !UUID_PATTERN.test(value["target_id"])
+    || typeof value["collection_revision"] !== "string"
+    || value["collection_revision"].length < 16
+    || value["collection_revision"].length > 128
+  ) {
+    throw new TodosProjectRegistrationError(
+      "TODOS_PROJECT_REGISTRATION_INVALID_INPUT",
+      "cursor does not match this project-resource query",
+    );
+  }
+  return {
+    kind_rank: Number(value["kind_rank"]),
+    target_id: value["target_id"],
+    collection_revision: value["collection_revision"],
+  };
+}
+
+function projectResourceFromCandidate(
+  sourceProjectId: string,
+  candidate: TodosProjectResourceCandidate,
+): TodosProjectResource {
+  const scope = candidate.kind === "project" || candidate.kind === "task_list"
+    ? "collection"
+    : "resource";
+  return {
+    source_project_id: sourceProjectId,
+    kind: candidate.kind,
+    scope,
+    target_id: candidate.target_id,
+    parent_id: candidate.parent_id,
+    revision: candidate.revision,
+    digest: digestProjectRegistrationValue({
+      source_project_id: sourceProjectId,
+      kind: candidate.kind,
+      scope,
+      target_id: candidate.target_id,
+      parent_id: candidate.parent_id,
+      revision: candidate.revision,
+    }),
+  };
+}
+
 export class PackageOwnedTodosProjectRegistrationAuthority
 implements TodosProjectRegistrationAuthority {
   readonly authority = "todos" as const;
@@ -762,6 +868,9 @@ implements TodosProjectRegistrationAuthority {
       immutable_receipts: true,
       exact_terminal_lookup: true,
       exact_readback: true,
+      bind_existing_adoption: true,
+      project_resource_enumeration: true,
+      project_resource_page_limit: PROJECT_RESOURCE_PAGE_LIMIT,
       conditional_inverse: true,
       ambiguous_outcome_reconciliation: true,
     };
@@ -903,12 +1012,25 @@ implements TodosProjectRegistrationAuthority {
   private async createObject(
     transaction: TodosProjectRegistrationBackendTransaction,
     request: TodosProjectRegistrationRequest,
-  ): Promise<TodosProjectRegistrationRecord | TodosProjectRegistrationReceiptRow> {
+  ): Promise<
+    | { record: TodosProjectRegistrationRecord; created_by_operation: boolean }
+    | TodosProjectRegistrationReceiptRow
+  > {
     if (request.resource_kind === "project") {
       const path = projectRegistrationPath(request.project_id);
       const slug = taskListSlug(request.project_slug);
       const conflict = await transaction.findProjectConflict(path, slug);
       if (conflict) {
+        if (
+          request.bind_existing === true
+          && conflict.path === path
+          && conflict.task_list_id === slug
+        ) {
+          return {
+            record: projectRecord(conflict),
+            created_by_operation: false,
+          };
+        }
         return this.terminalFor(
           transaction,
           request,
@@ -926,7 +1048,10 @@ implements TodosProjectRegistrationAuthority {
         task_prefix: deterministicTaskPrefix(request.project_slug),
       });
       await this.fault("after_object_write", request);
-      return projectRecord(project);
+      return {
+        record: projectRecord(project),
+        created_by_operation: true,
+      };
     }
 
     const todosProjectId = String(request.desired["todos_project_id"]);
@@ -961,6 +1086,16 @@ implements TodosProjectRegistrationAuthority {
     const slug = taskListSlug(request.project_slug);
     const conflict = await transaction.findTaskListConflict(todosProjectId, slug);
     if (conflict) {
+      if (
+        request.bind_existing === true
+        && conflict.project_id === todosProjectId
+        && conflict.slug === slug
+      ) {
+        return {
+          record: taskListRecord(conflict),
+          created_by_operation: false,
+        };
+      }
       return this.terminalFor(
         transaction,
         request,
@@ -986,7 +1121,10 @@ implements TodosProjectRegistrationAuthority {
         "task-list create did not preserve the exact full Todos project id",
       );
     }
-    return taskListRecord(taskList);
+    return {
+      record: taskListRecord(taskList),
+      created_by_operation: true,
+    };
   }
 
   async create(
@@ -1056,8 +1194,9 @@ implements TodosProjectRegistrationAuthority {
           request,
           callDigest,
           this.capabilityValue,
-          recordOrTerminal,
+          recordOrTerminal.record,
           this.now(),
+          recordOrTerminal.created_by_operation,
         );
         await this.fault("before_receipt_write", request);
         const stored = await insertDeterministicReceipt(transaction, accepted);
@@ -1067,10 +1206,10 @@ implements TodosProjectRegistrationAuthority {
           request.resource_kind,
           request.target_selector,
           {
-            target_id: recordOrTerminal.target_id,
+            target_id: recordOrTerminal.record.target_id,
             accepted_receipt_id: stored.receipt_id,
-            result_revision: recordOrTerminal.revision,
-            result_digest: recordOrTerminal.digest,
+            result_revision: recordOrTerminal.record.revision,
+            result_digest: recordOrTerminal.record.digest,
             updated_at: this.now(),
           },
         );
@@ -1263,6 +1402,147 @@ implements TodosProjectRegistrationAuthority {
       request,
       startedAt,
     );
+  }
+
+  async listProjectResources(
+    request: TodosProjectResourcePageRequest,
+  ): Promise<TodosProjectResourcePage> {
+    const sourceProjectId = requireString(
+      request.source_project_id,
+      "source_project_id",
+      { min: 16, max: 128, pattern: WORKSPACE_ID_PATTERN },
+    );
+    if (
+      !Number.isSafeInteger(request.limit)
+      || request.limit <= 0
+      || request.limit > PROJECT_RESOURCE_PAGE_LIMIT
+    ) {
+      throw new TodosProjectRegistrationError(
+        "TODOS_PROJECT_REGISTRATION_INVALID_BOUNDS",
+        `limit must be an integer from 1 to ${PROJECT_RESOURCE_PAGE_LIMIT}`,
+      );
+    }
+    if (
+      request.include_anchors !== undefined
+      && typeof request.include_anchors !== "boolean"
+    ) {
+      throw new TodosProjectRegistrationError(
+        "TODOS_PROJECT_REGISTRATION_INVALID_INPUT",
+        "include_anchors must be boolean when supplied",
+      );
+    }
+    const includeAnchors = request.include_anchors === true;
+    const projectBinding = await this.backend.getBinding(
+      authorityScope(this.capabilityValue),
+      "project",
+      sourceProjectId,
+    );
+    if (
+      !projectBinding
+      || projectBinding.state !== "accepted"
+      || !projectBinding.target_id
+    ) {
+      throw new TodosProjectRegistrationError(
+        "TODOS_PROJECT_REGISTRATION_RECORD_NOT_FOUND",
+        "no accepted Todos project binding exists for this exact Projects workspace id",
+        { source_project_id: sourceProjectId },
+      );
+    }
+    const taskListBinding = await this.backend.getBinding(
+      authorityScope(this.capabilityValue),
+      "task_list",
+      `${projectBinding.target_id}:default`,
+    );
+    if (
+      !taskListBinding
+      || taskListBinding.state !== "accepted"
+      || !taskListBinding.target_id
+    ) {
+      throw new TodosProjectRegistrationError(
+        "TODOS_PROJECT_REGISTRATION_RECORD_NOT_FOUND",
+        "no accepted canonical task-list binding exists for this exact Todos project id",
+        {
+          source_project_id: sourceProjectId,
+          todos_project_id: projectBinding.target_id,
+        },
+      );
+    }
+    const cursor = decodeProjectResourceCursor(request.cursor, {
+      source_project_id: sourceProjectId,
+      include_anchors: includeAnchors,
+    });
+    const collectionInput = {
+      todos_project_id: projectBinding.target_id,
+      task_list_id: taskListBinding.target_id,
+      include_anchors: includeAnchors,
+    };
+    const collectionRevision = await this.backend.getProjectResourceCollectionRevision(
+      collectionInput,
+    );
+    if (cursor && cursor.collection_revision !== collectionRevision) {
+      throw new TodosProjectRegistrationError(
+        "TODOS_PROJECT_REGISTRATION_COLLECTION_CHANGED",
+        "project-resource collection changed during pagination; restart from the first page",
+        {
+          source_project_id: sourceProjectId,
+          expected_collection_revision: cursor.collection_revision,
+          current_collection_revision: collectionRevision,
+        },
+      );
+    }
+    const candidates = await this.backend.listProjectResourceCandidates({
+      ...collectionInput,
+      after: cursor
+        ? { kind_rank: cursor.kind_rank, target_id: cursor.target_id }
+        : null,
+      limit: request.limit + 1,
+    });
+    const verifiedCollectionRevision =
+      await this.backend.getProjectResourceCollectionRevision(collectionInput);
+    if (verifiedCollectionRevision !== collectionRevision) {
+      throw new TodosProjectRegistrationError(
+        "TODOS_PROJECT_REGISTRATION_COLLECTION_CHANGED",
+        "project-resource collection changed while producing a page; restart from the first page",
+        {
+          source_project_id: sourceProjectId,
+          expected_collection_revision: collectionRevision,
+          current_collection_revision: verifiedCollectionRevision,
+        },
+      );
+    }
+    const hasMore = candidates.length > request.limit;
+    const pageCandidates = candidates.slice(0, request.limit);
+    const resources = pageCandidates.map((candidate) =>
+      projectResourceFromCandidate(sourceProjectId, candidate));
+    const last = pageCandidates.at(-1);
+    return {
+      authority: "todos",
+      route: this.capabilityValue.route,
+      package_version: this.capabilityValue.package_version,
+      authority_id: this.capabilityValue.authority_id,
+      tenant_id: this.capabilityValue.tenant_id,
+      corpus_id: this.capabilityValue.corpus_id,
+      source_project_id: sourceProjectId,
+      todos_project_id: projectBinding.target_id,
+      task_list_id: taskListBinding.target_id,
+      include_anchors: includeAnchors,
+      collection_revision: collectionRevision,
+      limit: request.limit,
+      count: resources.length,
+      resources,
+      has_more: hasMore,
+      next_cursor: hasMore && last
+        ? encodeProjectResourceCursor({
+          source_project_id: sourceProjectId,
+          include_anchors: includeAnchors,
+          collection_revision: collectionRevision,
+          kind_rank: last.kind_rank,
+          target_id: last.target_id,
+        })
+        : null,
+      complete: !hasMore,
+      truncated: false,
+    };
   }
 
   private async storedAcceptedReceipt(

@@ -26,10 +26,6 @@ import {
 import type { PrGroupEventListOptions, PrGroupEventPage, PrGroupStateView } from "../pr-groups/types.js";
 import { parsePrGroupEventPage, parsePrGroupStateView } from "../pr-groups/http-client.js";
 import type {
-  TodosProjectRegistrationLookupRequest,
-  TodosProjectRegistrationLookupResult,
-} from "../project-registration/types.js";
-import type {
   TodosTaskManifestApplyResult,
   TodosTaskManifestBindingLookupRequest,
   TodosTaskManifestBindingLookupResult,
@@ -37,6 +33,19 @@ import type {
   TodosTaskManifestCompensateRequest,
   TodosTaskManifestCompensationResult,
 } from "../task-manifest/index.js";
+import type {
+  TodosProjectRegistrationCapability,
+  TodosProjectRegistrationInverseVerification,
+  TodosProjectRegistrationLookupRequest,
+  TodosProjectRegistrationLookupResult,
+  TodosProjectRegistrationReceipt,
+  TodosProjectRegistrationRecord,
+  TodosProjectRegistrationRequest,
+  TodosProjectRegistrationResourceKind,
+  TodosProjectResourcePage,
+  TodosProjectResourcePageRequest,
+} from "../project-registration/index.js";
+import { assertTodosProjectResourcePage } from "../project-registration/page-validation.js";
 
 type Env = Record<string, string | undefined>;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -694,6 +703,118 @@ function unwrapTaskManifestEnvelope<T>(
     );
   }
   return (raw as Record<typeof key, T>)[key];
+}
+
+function unwrapProjectRegistrationEnvelope<T>(
+  raw: unknown,
+  key: "capability" | "receipt" | "record" | "verification" | "page",
+  route: string,
+): T {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw) || !(key in raw)) {
+    throw new Error(
+      `REMOTE_API_INCOMPATIBLE: ${route} returned a non-authoritative project-registration response envelope; ` +
+        "local SQLite fallback is disabled",
+    );
+  }
+  return (raw as Record<typeof key, T>)[key];
+}
+
+export async function cloudProjectRegistrationCapability(
+  client: HasnaStorageClient,
+): Promise<TodosProjectRegistrationCapability> {
+  const route = "/v1/project-registration/capability";
+  return unwrapProjectRegistrationEnvelope(
+    await requiredRemoteRoute(client, route, () =>
+      client.transport.get<unknown>("/project-registration/capability")),
+    "capability",
+    route,
+  );
+}
+
+export async function cloudCreateProjectRegistration(
+  client: HasnaStorageClient,
+  input: TodosProjectRegistrationRequest,
+): Promise<TodosProjectRegistrationReceipt> {
+  const route = "/v1/project-registration/create";
+  return unwrapProjectRegistrationEnvelope(
+    await requiredRemoteRoute(client, route, () =>
+      client.transport.post<unknown>("/project-registration/create", input)),
+    "receipt",
+    route,
+  );
+}
+
+export async function cloudReadExactProjectRegistration(
+  client: HasnaStorageClient,
+  input: {
+    resource_kind: TodosProjectRegistrationResourceKind;
+    target_id: string;
+    response_byte_limit: number;
+    time_budget_ms: number;
+  },
+): Promise<TodosProjectRegistrationRecord> {
+  const route = "/v1/project-registration/read-exact";
+  return unwrapProjectRegistrationEnvelope(
+    await requiredRemoteRoute(client, route, () =>
+      client.transport.post<unknown>("/project-registration/read-exact", input)),
+    "record",
+    route,
+  );
+}
+
+export async function cloudCompensateProjectRegistration(
+  client: HasnaStorageClient,
+  input: TodosProjectRegistrationRequest,
+): Promise<TodosProjectRegistrationReceipt> {
+  const route = "/v1/project-registration/compensate";
+  return unwrapProjectRegistrationEnvelope(
+    await requiredRemoteRoute(client, route, () =>
+      client.transport.post<unknown>("/project-registration/compensate", input)),
+    "receipt",
+    route,
+  );
+}
+
+export async function cloudVerifyInverseProjectRegistration(
+  client: HasnaStorageClient,
+  input: TodosProjectRegistrationRequest,
+): Promise<TodosProjectRegistrationInverseVerification> {
+  const route = "/v1/project-registration/verify-inverse";
+  return unwrapProjectRegistrationEnvelope(
+    await requiredRemoteRoute(client, route, () =>
+      client.transport.post<unknown>("/project-registration/verify-inverse", input)),
+    "verification",
+    route,
+  );
+}
+
+export async function cloudListProjectResources(
+  client: HasnaStorageClient,
+  input: TodosProjectResourcePageRequest,
+): Promise<TodosProjectResourcePage> {
+  const route = "/v1/project-registration/resources";
+  const page = unwrapProjectRegistrationEnvelope<unknown>(
+    await requiredRemoteRoute(client, route, () =>
+      client.transport.get<unknown>("/project-registration/resources", {
+        query: {
+          source_project_id: input.source_project_id,
+          limit: input.limit,
+          include_anchors: input.include_anchors === true ? "true" : "false",
+          ...(input.cursor ? { cursor: input.cursor } : {}),
+        },
+      })),
+    "page",
+    route,
+  );
+  try {
+    return assertTodosProjectResourcePage(page, input);
+  } catch (error) {
+    throw new Error(
+      `REMOTE_API_INCOMPATIBLE: ${route} returned an invalid project-resource page for the requested identity; ` +
+        "local SQLite fallback is disabled",
+      { cause: error },
+    );
+  }
 }
 
 export async function cloudTaskManifestCapability(

@@ -10,6 +10,8 @@ import {
   type TodosProjectRegistrationRecord,
   type TodosProjectRegistrationRequest,
   type TodosProjectRegistrationResourceKind,
+  type TodosProjectResourcePage,
+  type TodosProjectResourcePageRequest,
 } from "./types.js";
 
 const JSON_HEADERS = { "Content-Type": "application/json" } as const;
@@ -68,6 +70,26 @@ export async function handleTodosProjectRegistrationHttpRequest(
   try {
     if ((action === "" || action === "capability") && method === "GET") {
       return json({ capability: await authority.capability() });
+    }
+    if (action === "resources" && method === "GET") {
+      const sourceProjectId = url.searchParams.get("source_project_id");
+      const limit = Number(url.searchParams.get("limit") ?? "100");
+      const includeAnchorsRaw = url.searchParams.get("include_anchors");
+      const includeAnchors = includeAnchorsRaw === null
+        ? false
+        : includeAnchorsRaw === "true"
+          ? true
+          : includeAnchorsRaw === "false"
+            ? false
+            : includeAnchorsRaw;
+      return json({
+        page: await authority.listProjectResources({
+          source_project_id: sourceProjectId,
+          limit,
+          include_anchors: includeAnchors,
+          cursor: url.searchParams.get("cursor") ?? undefined,
+        } as unknown as TodosProjectResourcePageRequest),
+      });
     }
     if (method !== "POST") return json({ error: "method not allowed" }, 405);
     const body = await readJson(req);
@@ -220,6 +242,21 @@ implements TodosProjectRegistrationAuthority {
       "/receipts/lookup",
       { method: "POST", body: JSON.stringify(request) },
     );
+  }
+
+  async listProjectResources(
+    request: TodosProjectResourcePageRequest,
+  ): Promise<TodosProjectResourcePage> {
+    const query = new URLSearchParams({
+      source_project_id: request.source_project_id,
+      limit: String(request.limit),
+      include_anchors: String(request.include_anchors === true),
+      ...(request.cursor ? { cursor: request.cursor } : {}),
+    });
+    const body = await this.request<{ page: TodosProjectResourcePage }>(
+      `/resources?${query.toString()}`,
+    );
+    return body.page;
   }
 
   async compensate(
