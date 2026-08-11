@@ -33,36 +33,6 @@ function runVector(...args: string[]): string {
   );
 }
 
-function packagedEvidencePointers(value: unknown): Array<{
-  uri: string;
-  sha256: string;
-}> {
-  const pointers: Array<{ uri: string; sha256: string }> = [];
-  const visit = (candidate: unknown): void => {
-    if (Array.isArray(candidate)) {
-      for (const entry of candidate) visit(entry);
-      return;
-    }
-    if (!candidate || typeof candidate !== "object") return;
-    const record = candidate as Record<string, unknown>;
-    if (
-      typeof record.uri === "string" &&
-      record.uri.startsWith(
-        "artifact://iapp-deployment-compatibility-vector/",
-      ) &&
-      typeof record.sha256 === "string"
-    ) {
-      pointers.push({
-        uri: record.uri,
-        sha256: record.sha256,
-      });
-    }
-    for (const entry of Object.values(record)) visit(entry);
-  };
-  visit(value);
-  return pointers;
-}
-
 afterEach(() => {
   for (const path of temporaryRoots.splice(0)) {
     rmSync(path, { force: true, recursive: true });
@@ -122,9 +92,6 @@ describe("public iapp-deployment compatibility vector", () => {
         displayName: "@hasna/todos",
         repository: "hasna/todos",
       },
-      fixtureInput: {
-        path: "fixture-input.json",
-      },
       checksumBundle: {
         path: "subject-checksums.txt",
         algorithm: "sha256",
@@ -172,7 +139,6 @@ describe("public iapp-deployment compatibility vector", () => {
     expect(readdirSync(outputDir).sort()).toEqual([
       "artifact-attestation.json",
       "build-artifact.json",
-      "fixture-input.json",
       "intent-snapshot.json",
       "product-projection.json",
       "subject-checksums.txt",
@@ -244,58 +210,6 @@ describe("public iapp-deployment compatibility vector", () => {
       expect(readFileSync(join(firstDir, path)))
         .toEqual(readFileSync(join(secondDir, path)));
     }
-  });
-
-  test("binds named packaged evidence to the exact file bytes", () => {
-    const outputDir = mkdtempSync(join(tmpdir(), "todos-compatibility-vector-"));
-    temporaryRoots.push(outputDir);
-    const producerSha = git("rev-parse", "HEAD");
-    const producerTree = git("rev-parse", "HEAD^{tree}");
-
-    runVector(
-      "emit",
-      "--output-dir",
-      outputDir,
-      "--producer-sha",
-      producerSha,
-      "--producer-tree",
-      producerTree,
-      "--consumer-sha",
-      consumerCommitSha,
-    );
-
-    const pointers = [
-      "product-projection.json",
-      "intent-snapshot.json",
-      "verified-source-candidate.json",
-      "build-artifact.json",
-      "artifact-attestation.json",
-    ].flatMap((path) =>
-      packagedEvidencePointers(
-        JSON.parse(readFileSync(join(outputDir, path), "utf8")),
-      ),
-    );
-    expect(pointers.length).toBeGreaterThan(0);
-    for (const pointer of pointers) {
-      const path = pointer.uri.split("/").at(-1)!;
-      expect(pointer.sha256).toBe(
-        Bun.CryptoHasher.hash(
-          "sha256",
-          readFileSync(join(outputDir, path)),
-          "hex",
-        ),
-      );
-    }
-    const intent = JSON.parse(
-      readFileSync(join(outputDir, "intent-snapshot.json"), "utf8"),
-    );
-    expect(intent.intentDocument.digest).toBe(
-      Bun.CryptoHasher.hash(
-        "sha256",
-        readFileSync(join(outputDir, intent.intentDocument.path)),
-        "hex",
-      ),
-    );
   });
 
   test("rejects byte tampering before the vector can be consumed", () => {

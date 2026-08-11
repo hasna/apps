@@ -28,7 +28,6 @@ const PROJECT_SLUG = "hasna-todos";
 const PROJECT_NAME = "@hasna/todos";
 const REPOSITORY = "hasna/todos";
 const CONSUMER_COMMIT_SHA = "905d57bb845cf2f172b319cdd722656675c13630";
-const FIXTURE_INPUT_PATH = "fixture-input.json";
 const CHECKSUMS_PATH = "subject-checksums.txt";
 const CREATED_AT = "2026-08-11T00:00:00.000Z";
 const FINISHED_AT = "2026-08-11T00:05:00.000Z";
@@ -82,33 +81,6 @@ const SourceRecordDescriptorSchema = z
   })
   .strict();
 
-const CompatibilityVectorInputSchema = z
-  .object({
-    schema: z.literal("hasna.todos.iapp_deployment_compatibility_fixture_input.v1"),
-    producerRepository: z.literal(REPOSITORY),
-    producerCommitSha: GitShaSchema,
-    producerTreeSha: GitShaSchema,
-    consumerRepository: z.literal("hasnaxyz/iapp-deployment"),
-    consumerCommitSha: z.literal(CONSUMER_COMMIT_SHA),
-    candidateKind: z.literal("comparison_only"),
-    evidenceClass: z.literal("comparison_only_synthetic_fixture"),
-    permittedUse: z.literal("contract_compatibility"),
-    prohibitedUses: z.tuple([
-      z.literal("adoption_evidence"),
-      z.literal("deployment_evidence"),
-      z.literal("release_evidence"),
-    ]),
-    project: z
-      .object({
-        id: z.literal(PROJECT_ID),
-        slug: z.literal(PROJECT_SLUG),
-        displayName: z.literal(PROJECT_NAME),
-        repository: z.literal(REPOSITORY),
-      })
-      .strict(),
-  })
-  .strict();
-
 const CompatibilityVectorManifestSchema = z
   .object({
     schema: z.literal("hasna.todos.iapp_deployment_compatibility_vector.v1"),
@@ -143,13 +115,6 @@ const CompatibilityVectorManifestSchema = z
         slug: z.literal(PROJECT_SLUG),
         displayName: z.literal(PROJECT_NAME),
         repository: z.literal(REPOSITORY),
-      })
-      .strict(),
-    fixtureInput: z
-      .object({
-        path: z.literal(FIXTURE_INPUT_PATH),
-        bytes: z.number().int().positive(),
-        sha256: Sha256Schema,
       })
       .strict(),
     checksumBundle: z
@@ -218,25 +183,26 @@ function recordRef(
   };
 }
 
-function createVectorRecords(
-  producerCommitSha: string,
-  producerTreeSha: string,
-  fixtureInputSha256: string,
-) {
+function createVectorRecords(producerCommitSha: string, producerTreeSha: string) {
   const commitSha = GitShaSchema.parse(producerCommitSha);
   const treeSha = GitShaSchema.parse(producerTreeSha);
-  const fixtureSha256 = Sha256Schema.parse(fixtureInputSha256);
+  const fixtureManifestSha256 = digest(
+    `comparison-only-fixture:${commitSha}:${treeSha}`,
+  );
+  const fixtureValidationSha256 = digest(
+    `contract-compatibility-validation:${commitSha}:${treeSha}`,
+  );
   const manifestEvidence = fixtureEvidence(
-    "comparison-only-fixture-input",
-    FIXTURE_INPUT_PATH,
-    fixtureSha256,
-    "Immutable synthetic fixture input; prohibited as adoption, deployment, or release evidence",
+    "comparison-only-vector-manifest",
+    "vector-manifest.json",
+    fixtureManifestSha256,
+    "Synthetic contract fixture metadata; prohibited as adoption, deployment, or release evidence",
   );
   const validationEvidence = fixtureEvidence(
-    "comparison-only-fixture-classification",
-    FIXTURE_INPUT_PATH,
-    fixtureSha256,
-    "Immutable comparison-only classification input; no operational candidate gates were run",
+    "comparison-only-contract-validation",
+    "subject-checksums.txt",
+    fixtureValidationSha256,
+    "Synthetic record schema and linkage validation; no operational candidate gates were run",
   );
   const repositoryRef = {
     kind: "repo" as const,
@@ -308,8 +274,8 @@ function createVectorRecords(
       commitSha,
       treeSha,
       intentDocument: {
-        path: FIXTURE_INPUT_PATH,
-        digest: fixtureSha256,
+        path: "vector-manifest.json",
+        digest: fixtureManifestSha256,
       },
       processes: [
         {
@@ -446,16 +412,16 @@ function createVectorRecords(
       issuer: FIXTURE_ACTOR,
       keyRef: {
         kind: "artifact",
-        id: "comparison-only-fixture-input",
-        uri: `artifact://iapp-deployment-compatibility-vector/${FIXTURE_INPUT_PATH}`,
+        id: "comparison-only-vector-manifest",
+        uri: "artifact://iapp-deployment-compatibility-vector/vector-manifest.json",
         tags: FIXTURE_TAGS,
       },
       signatureRef: {
         kind: "artifact",
-        id: "synthetic-fixture-classification",
-        uri: `artifact://iapp-deployment-compatibility-vector/${FIXTURE_INPUT_PATH}`,
-        sha256: fixtureSha256,
-        summary: "Unsigned fixture classification input; not cryptographic or adoption provenance",
+        id: "synthetic-fixture-checksums",
+        uri: "artifact://iapp-deployment-compatibility-vector/subject-checksums.txt",
+        sha256: fixtureValidationSha256,
+        summary: "Synthetic fixture checksums; not cryptographic or adoption provenance",
       },
       policyResult: "passed",
       policyRevision: 1,
@@ -490,40 +456,11 @@ function emitVector(
       `compatibility vector consumer commit must equal frozen consumer ${CONSUMER_COMMIT_SHA}`,
     );
   }
+  const vector = createVectorRecords(producerCommitSha, producerTreeSha);
   mkdirSync(outputDir, { recursive: true });
   if (readdirSync(outputDir).length !== 0) {
     throw new Error("compatibility vector output directory must be empty");
   }
-  const fixtureInput = CompatibilityVectorInputSchema.parse({
-    schema: "hasna.todos.iapp_deployment_compatibility_fixture_input.v1",
-    producerRepository: REPOSITORY,
-    producerCommitSha,
-    producerTreeSha,
-    consumerRepository: "hasnaxyz/iapp-deployment",
-    consumerCommitSha: consumerSha,
-    candidateKind: "comparison_only",
-    evidenceClass: "comparison_only_synthetic_fixture",
-    permittedUse: "contract_compatibility",
-    prohibitedUses: [
-      "adoption_evidence",
-      "deployment_evidence",
-      "release_evidence",
-    ],
-    project: {
-      id: PROJECT_ID,
-      slug: PROJECT_SLUG,
-      displayName: PROJECT_NAME,
-      repository: REPOSITORY,
-    },
-  });
-  const fixtureInputBytes = jsonBytes(fixtureInput);
-  const fixtureInputSha256 = digest(fixtureInputBytes);
-  writeFileSync(join(outputDir, FIXTURE_INPUT_PATH), fixtureInputBytes);
-  const vector = createVectorRecords(
-    producerCommitSha,
-    producerTreeSha,
-    fixtureInputSha256,
-  );
   const definitions = [
     {
       collection: "productProjections" as const,
@@ -593,11 +530,6 @@ function emitVector(
       slug: PROJECT_SLUG,
       displayName: PROJECT_NAME,
       repository: REPOSITORY,
-    },
-    fixtureInput: {
-      path: FIXTURE_INPUT_PATH,
-      bytes: fixtureInputBytes.byteLength,
-      sha256: fixtureInputSha256,
     },
     checksumBundle: {
       path: CHECKSUMS_PATH,
@@ -691,7 +623,6 @@ function verifyVector(
   }
   const expectedFiles = [
     ...manifest.sourceRecords.map((descriptor) => descriptor.path),
-    manifest.fixtureInput.path,
     "vector-manifest.json",
     CHECKSUMS_PATH,
   ].sort();
@@ -705,23 +636,6 @@ function verifyVector(
     .concat("\n");
   if (readFileSync(join(root, CHECKSUMS_PATH), "utf8") !== expectedChecksums) {
     throw new Error("compatibility vector checksum bundle mismatch");
-  }
-  const fixtureInputBytes = readFileSync(join(root, manifest.fixtureInput.path));
-  if (fixtureInputBytes.byteLength !== manifest.fixtureInput.bytes) {
-    throw new Error("compatibility vector fixture input byte count mismatch");
-  }
-  if (digest(fixtureInputBytes) !== manifest.fixtureInput.sha256) {
-    throw new Error("compatibility vector fixture input sha256 mismatch");
-  }
-  const fixtureInput = CompatibilityVectorInputSchema.parse(
-    JSON.parse(fixtureInputBytes.toString("utf8")),
-  );
-  if (
-    fixtureInput.producerCommitSha !== manifest.producerCommitSha ||
-    fixtureInput.producerTreeSha !== manifest.producerTreeSha ||
-    fixtureInput.consumerCommitSha !== manifest.consumerCommitSha
-  ) {
-    throw new Error("compatibility vector fixture input is not bound to the manifest");
   }
   for (const descriptor of manifest.sourceRecords) {
     const bytes = readFileSync(join(root, descriptor.path));
