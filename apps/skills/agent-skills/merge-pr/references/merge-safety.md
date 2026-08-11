@@ -10,7 +10,7 @@ Capture a fresh JSON snapshot with:
 - checks, reviews, draft/conflict/merge state, and branch/queue policy;
 - the task-owned fixed reviewer identity/run-ID descriptor set established
   before review begins;
-- exactly the tier-required independent reviewer artifacts;
+- exactly one independent reviewer artifact at every risk tier;
 - worker and executor identities;
 - blocking reasons, warnings, verdict, and observation time.
 
@@ -20,10 +20,10 @@ the executor repeats the checks immediately before merge.
 
 ## Bounded review
 
-- Routine: one exact-head artifact and at most one cumulative repair/re-review
-  cycle.
-- Elevated: two independent exact-head artifacts and at most two cumulative
-  cycles.
+- Every risk tier: exactly one independent exact-head artifact.
+- Routine: review to routine depth and allow at most one cumulative
+  repair/re-review cycle.
+- Elevated: review to elevated depth and allow at most two cumulative cycles.
 - Worker and executor cannot review. Reviewer identities and run IDs must be
   distinct.
 - The artifact reviewer descriptors must equal the task-owned fixed reviewer
@@ -62,8 +62,8 @@ The fixed reviewer set is a separate task-owned JSON object:
 ```
 
 Pass it with `--fixed-reviewers`. The guard normalizes the descriptors, requires
-the tier-exact reviewer count, and binds the resulting set digest into the
-command plan.
+exactly one fixed reviewer at every risk tier, and binds the resulting set
+digest into the command plan.
 
 ## Provider postverify
 

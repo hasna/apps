@@ -46,12 +46,7 @@ def artifact(identity: str | None, run_id: str | None = None) -> dict[str, objec
 
 
 def fixed_reviewers() -> dict[str, object]:
-    return {
-        "reviewers": [
-            {"reviewer_identity": "reviewer-a"},
-            {"reviewer_identity": "reviewer-b"},
-        ]
-    }
+    return {"reviewers": [{"reviewer_identity": "reviewer-a"}]}
 
 
 def preflight(mode: str = "immediate-merge", verdict: str = "mergeable") -> dict[str, object]:
@@ -60,7 +55,7 @@ def preflight(mode: str = "immediate-merge", verdict: str = "mergeable") -> dict
         "mode": mode,
         "risk_tier": {"declared": "elevated", "effective": "elevated", "source": "explicit"},
         "acceptance_scope": ACCEPTANCE_SCOPE,
-        "required_reviewer_artifacts": 2,
+        "required_reviewer_artifacts": 1,
         "repair_cycles": {"count": 0, "cap": 2},
         "verdict": verdict,
         "repo": REPO,
@@ -78,7 +73,7 @@ def preflight(mode: str = "immediate-merge", verdict: str = "mergeable") -> dict
         },
         "checks": [{"name": "ci", "bucket": "pass", "state": "SUCCESS"}],
         "reviews": [{"author": {"login": "reviewer-a"}, "state": "APPROVED"}],
-        "reviewer_artifacts": [artifact("reviewer-a"), artifact("reviewer-b")],
+        "reviewer_artifacts": [artifact("reviewer-a")],
         "worker_identity": "worker",
         "executor_identity": "executor",
         "branch_policy": {"protected": True, "queue_required": mode == "merge-queue"},
@@ -212,21 +207,16 @@ class GuardCliTests(unittest.TestCase):
         self.assertEqual(len(plan["preflight_sha256"]), 64)
         self.assertEqual(len(plan["command_argv_sha256"]), 64)
         self.assertEqual(len(plan["fixed_reviewer_set_sha256"]), 64)
-        self.assertEqual(plan["fixed_reviewer_count"], 2)
+        self.assertEqual(plan["fixed_reviewer_count"], 1)
         self.assertTrue({"--admin", "--force", "--delete-branch"}.isdisjoint(argv))
         self.assertNotIn("push", argv)
 
-    def test_fixed_reviewer_set_is_exact_and_order_independent(self) -> None:
+    def test_elevated_uses_one_exact_fixed_reviewer_with_two_cycle_cap(self) -> None:
         snapshot = preflight()
-        snapshot["reviewer_artifacts"] = [
-            artifact("Reviewer-A", "RUN-A"),
-            artifact("reviewer-b"),
-        ]
+        snapshot["reviewer_artifacts"] = [artifact("Reviewer-A", "RUN-A")]
+        snapshot["repair_cycles"]["count"] = 2
         expected = {
-            "reviewers": [
-                {"reviewer_identity": "reviewer-b"},
-                {"reviewer_identity": "reviewer-a", "reviewer_run_id": "run-a"},
-            ]
+            "reviewers": [{"reviewer_identity": "reviewer-a", "reviewer_run_id": "run-a"}]
         }
         with tempfile.TemporaryDirectory() as temporary:
             result, plan = self.build(
@@ -237,18 +227,20 @@ class GuardCliTests(unittest.TestCase):
                 "fix: safe",
                 snapshot=snapshot,
                 fixed_reviewer_set=expected,
+                expected_repair_cycle_count=2,
             )
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(plan["fixed_reviewer_count"], 2)
+        self.assertEqual(plan["fixed_reviewer_count"], 1)
+        self.assertEqual(snapshot["repair_cycles"]["count"], 2)
+        self.assertEqual(snapshot["repair_cycles"]["cap"], 2)
 
     def test_fixed_reviewer_set_rejects_missing_surplus_duplicate_and_substitute(self) -> None:
         cases = {
-            "missing": {"reviewers": [{"reviewer_identity": "reviewer-a"}]},
+            "missing": {"reviewers": []},
             "surplus": {
                 "reviewers": [
                     {"reviewer_identity": "reviewer-a"},
                     {"reviewer_identity": "reviewer-b"},
-                    {"reviewer_identity": "reviewer-c"},
                 ]
             },
             "duplicate": {
@@ -257,12 +249,7 @@ class GuardCliTests(unittest.TestCase):
                     {"reviewer_identity": "reviewer-K"},
                 ]
             },
-            "substitute": {
-                "reviewers": [
-                    {"reviewer_identity": "reviewer-a"},
-                    {"reviewer_identity": "reviewer-fixed"},
-                ]
-            },
+            "substitute": {"reviewers": [{"reviewer_identity": "reviewer-fixed"}]},
         }
         for name, expected in cases.items():
             with self.subTest(name=name), tempfile.TemporaryDirectory() as temporary:
@@ -504,7 +491,6 @@ class GuardCliTests(unittest.TestCase):
         changed_scope = preflight()
         changed_scope["acceptance_scope"] = "changed-scope"
         changed_scope["reviewer_artifacts"][0]["acceptance_scope"] = "changed-scope"
-        changed_scope["reviewer_artifacts"][1]["acceptance_scope"] = "changed-scope"
         changed_cycle = preflight()
         changed_cycle["repair_cycles"]["count"] = 1
         stale = preflight()
@@ -521,7 +507,7 @@ class GuardCliTests(unittest.TestCase):
                 )
             self.assertEqual(result.returncode, 2)
 
-    def test_boolean_counts_and_unicode_equivalent_reviewers_fail_closed(self) -> None:
+    def test_boolean_counts_fail_closed(self) -> None:
         boolean_count = preflight()
         boolean_count["risk_tier"] = {"declared": "routine", "effective": "routine", "source": "explicit"}
         boolean_count["required_reviewer_artifacts"] = True
@@ -532,10 +518,7 @@ class GuardCliTests(unittest.TestCase):
         boolean_cap["required_reviewer_artifacts"] = 1
         boolean_cap["repair_cycles"]["cap"] = True
         boolean_cap["reviewer_artifacts"] = boolean_cap["reviewer_artifacts"][:1]
-        duplicate_reviewer = preflight()
-        duplicate_reviewer["reviewer_artifacts"][0]["reviewer_identity"] = "reviewer-\u212a"
-        duplicate_reviewer["reviewer_artifacts"][1]["reviewer_identity"] = "reviewer-K"
-        for snapshot in (boolean_count, boolean_cap, duplicate_reviewer):
+        for snapshot in (boolean_count, boolean_cap):
             with tempfile.TemporaryDirectory() as temporary:
                 result, _ = self.build(
                     Path(temporary),
@@ -736,7 +719,6 @@ class GuardCliTests(unittest.TestCase):
                 json.dumps(
                     {
                         "reviewers": [
-                            {"reviewer_identity": "reviewer-a"},
                             {"reviewer_identity": "substitute"},
                         ]
                     }
