@@ -37854,7 +37854,7 @@ function migrateLegacyKnowledgeWorkspace(options) {
 // package.json
 var package_default = {
   name: "@hasna/knowledge",
-  version: "0.2.102",
+  version: "0.2.104",
   description: "Agent-friendly local knowledge CLI with JSON output, pagination, and safe destructive actions",
   type: "module",
   exports: {
@@ -41431,6 +41431,208 @@ function createKnowledgeGuardedWriter(options) {
     throw new Error("FCAME-1 guarded writes require the authenticated postgres/API transport; " + "local JSON, SQLite, and raw-store fallbacks are refused.");
   }
   return new GuardedWriter(transport, options.binding, normalizeKnowledgeGuardedLimits(options.limits), options.require_manifest === true);
+}
+// src/guarded-cli.ts
+import { spawn } from "child_process";
+import { fileURLToPath as fileURLToPath3 } from "url";
+var KNOWLEDGE_GUARDED_CLI_REQUEST_SCHEMA = "knowledge.guarded-cli-request.v1";
+var KNOWLEDGE_GUARDED_CLI_RESULT_SCHEMA = "knowledge.guarded-cli-result.v1";
+var PRIVATE_FD_MAX_BYTES = 1048576;
+
+class KnowledgeGuardedCliDescriptorError extends Error {
+  code;
+  constructor(code) {
+    super(code);
+    this.code = code;
+    this.name = "KnowledgeGuardedCliDescriptorError";
+  }
+}
+function assertExactKeys(value, expected, label) {
+  const actual = Object.keys(value).sort();
+  const wanted = [...expected].sort();
+  if (actual.length !== wanted.length || actual.some((key, index) => key !== wanted[index])) {
+    throw new KnowledgeGuardedCliDescriptorError(`${label}_shape_invalid`);
+  }
+}
+function writeFrame(descriptor) {
+  return {
+    schema: KNOWLEDGE_GUARDED_CLI_REQUEST_SCHEMA,
+    action: "write",
+    operation_id: descriptor.operation_id,
+    step_id: descriptor.step_id,
+    verb: descriptor.verb,
+    target_id: descriptor.target_id,
+    precondition: descriptor.precondition,
+    binding: descriptor.binding,
+    manifest: descriptor.manifest,
+    payload: materializeKnowledgePrivateInput(descriptor),
+    expires_at: descriptor.expires_at
+  };
+}
+function queryFrame(descriptor, action) {
+  return {
+    schema: KNOWLEDGE_GUARDED_CLI_REQUEST_SCHEMA,
+    action,
+    operation_id: descriptor.operation_id,
+    step_id: descriptor.step_id,
+    binding: descriptor.binding,
+    selector: materializeKnowledgePrivateQuery(descriptor),
+    archive: descriptor.archive,
+    page: descriptor.page,
+    expires_at: descriptor.expires_at
+  };
+}
+function collectBounded(stream, maxBytes = 64 * 1024) {
+  return new Promise((resolve6, reject) => {
+    const chunks = [];
+    let total = 0;
+    stream.on("data", (chunk) => {
+      const encoded = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      total += encoded.byteLength;
+      if (total > maxBytes) {
+        stream.destroy();
+        reject(new KnowledgeGuardedCliDescriptorError("guarded_cli_public_output_cap_exceeded"));
+        return;
+      }
+      chunks.push(encoded);
+    });
+    stream.on("end", () => resolve6(Buffer.concat(chunks, total).toString("utf8")));
+    stream.on("error", () => reject(new KnowledgeGuardedCliDescriptorError("guarded_cli_stream_failed")));
+  });
+}
+function collectPrivateIpc(child) {
+  return new Promise((resolve6, reject) => {
+    const cleanup = () => {
+      child.off("message", onMessage);
+      child.off("disconnect", onDisconnect);
+    };
+    const onMessage = (message) => {
+      cleanup();
+      if (typeof message !== "string") {
+        reject(new KnowledgeGuardedCliDescriptorError("guarded_cli_private_result_invalid"));
+        return;
+      }
+      if (Buffer.byteLength(message, "utf8") > PRIVATE_FD_MAX_BYTES) {
+        reject(new KnowledgeGuardedCliDescriptorError("guarded_cli_private_result_cap_exceeded"));
+        return;
+      }
+      resolve6(message);
+    };
+    const onDisconnect = () => {
+      cleanup();
+      reject(new KnowledgeGuardedCliDescriptorError("guarded_cli_private_ipc_disconnected"));
+    };
+    child.once("message", onMessage);
+    child.once("disconnect", onDisconnect);
+  });
+}
+function sendPrivateIpc(child, value, didTimeout) {
+  if (typeof child.send !== "function" || !child.connected) {
+    return Promise.reject(new KnowledgeGuardedCliDescriptorError("guarded_cli_private_ipc_unavailable"));
+  }
+  if (Buffer.byteLength(value, "utf8") > PRIVATE_FD_MAX_BYTES) {
+    return Promise.reject(new KnowledgeGuardedCliDescriptorError("private_request_byte_cap_exceeded"));
+  }
+  return new Promise((resolve6, reject) => {
+    child.send(value, (error51) => {
+      if (error51 && !didTimeout()) {
+        reject(new KnowledgeGuardedCliDescriptorError("guarded_cli_private_request_failed"));
+        return;
+      }
+      resolve6();
+    });
+  });
+}
+function parseWorkerResult(raw) {
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new KnowledgeGuardedCliDescriptorError("guarded_cli_private_result_invalid");
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new KnowledgeGuardedCliDescriptorError("guarded_cli_private_result_invalid");
+  }
+  return parsed;
+}
+async function executeDescriptorFrame(frame, options) {
+  const entrypoint = fileURLToPath3(new URL("../bin/knowledge.js", import.meta.url));
+  const runtime = typeof Bun !== "undefined" ? process.execPath : "bun";
+  const timeoutMs = Math.min(Math.max(options.timeoutMs ?? 65000, 1), 300000);
+  const child = spawn(runtime, [
+    entrypoint,
+    "guarded",
+    "execute-descriptor",
+    "--ipc",
+    "--json"
+  ], {
+    env: options.env ?? process.env,
+    stdio: ["ignore", "pipe", "ignore", "ipc"]
+  });
+  const stdout = collectBounded(child.stdout);
+  const resultText = collectPrivateIpc(child);
+  let timeoutExpired = false;
+  const requestFinished = sendPrivateIpc(child, canonicalKnowledgeGuardedJson(frame), () => timeoutExpired);
+  const exited = new Promise((resolve6, reject) => {
+    child.once("error", () => reject(new KnowledgeGuardedCliDescriptorError("guarded_cli_spawn_failed")));
+    child.once("close", (code) => resolve6(code ?? 1));
+  });
+  let timeout;
+  const timedOut = new Promise((_resolve, reject) => {
+    timeout = setTimeout(() => {
+      timeoutExpired = true;
+      child.kill("SIGKILL");
+      child.stdout?.destroy();
+      reject(new KnowledgeGuardedCliDescriptorError("guarded_cli_timeout"));
+    }, timeoutMs);
+  });
+  let completed;
+  try {
+    completed = await Promise.race([
+      Promise.all([exited, requestFinished, stdout, resultText]),
+      timedOut
+    ]);
+  } finally {
+    if (timeout)
+      clearTimeout(timeout);
+  }
+  const [exitCode, _requestComplete, publicOut, privateOut] = completed;
+  const result = parseWorkerResult(privateOut);
+  if (exitCode !== 0 || result.schema !== KNOWLEDGE_GUARDED_CLI_RESULT_SCHEMA || result.ok !== true || result.transport !== "process_ipc") {
+    const code = result && result.ok === false ? result.code : "guarded_cli_worker_failed";
+    throw new KnowledgeGuardedCliDescriptorError(code);
+  }
+  let publicAck;
+  try {
+    const parsed = JSON.parse(publicOut);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+      throw new Error;
+    publicAck = parsed;
+  } catch {
+    throw new KnowledgeGuardedCliDescriptorError("guarded_cli_public_ack_invalid");
+  }
+  assertExactKeys(publicAck, [
+    "ok",
+    "schema",
+    "contract",
+    "action",
+    "transport",
+    "request_digest",
+    "result_digest"
+  ], "guarded_cli_public_ack");
+  if (publicAck.ok !== true || publicAck.schema !== result.schema || publicAck.contract !== result.contract || publicAck.action !== result.action || publicAck.transport !== result.transport || publicAck.request_digest !== result.request_digest || publicAck.result_digest !== result.result_digest || result.request_digest !== knowledgeGuardedDigest(frame) || result.result_digest !== knowledgeGuardedDigest(result.proof)) {
+    throw new KnowledgeGuardedCliDescriptorError("guarded_cli_boundary_verification_failed");
+  }
+  return result;
+}
+function executeKnowledgeGuardedCliWrite(descriptor, options = {}) {
+  return executeDescriptorFrame(writeFrame(descriptor), options);
+}
+function executeKnowledgeGuardedCliQuery(descriptor, options = {}) {
+  return executeDescriptorFrame(queryFrame(descriptor, "query"), options);
+}
+function executeKnowledgeGuardedCliReadback(descriptor, options = {}) {
+  return executeDescriptorFrame(queryFrame(descriptor, "readback"), options);
 }
 // node_modules/@hasna/contracts/dist/index.js
 import { createHash as createHash24 } from "crypto";
@@ -50498,6 +50700,9 @@ export {
   getAppWikiNote,
   formatKnowledgeProjectPanel,
   fileAnswerToWiki,
+  executeKnowledgeGuardedCliWrite,
+  executeKnowledgeGuardedCliReadback,
+  executeKnowledgeGuardedCliQuery,
   evaluateKnowledgeGuardedManifestCompletion,
   ensureKnowledgeWorkspace,
   enqueueMissingEmbeddings,
@@ -50579,6 +50784,7 @@ export {
   KnowledgeGuardedManifestUncertainError,
   KnowledgeGuardedManifestStepRefusedError,
   KnowledgeGuardedManifestConflictError,
+  KnowledgeGuardedCliDescriptorError,
   KnowledgeGuardedAdoptionUncertainError,
   KnowledgeGuardedAdoptionRejectedError,
   KnowledgeGuardedAdoptionOperationConflictError,
@@ -50607,6 +50813,8 @@ export {
   KNOWLEDGE_MACHINES_ADAPTER_ENTRYPOINT,
   KNOWLEDGE_MACHINES_ADAPTER_CONTRACT_VERSION,
   KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+  KNOWLEDGE_GUARDED_CLI_RESULT_SCHEMA,
+  KNOWLEDGE_GUARDED_CLI_REQUEST_SCHEMA,
   KNOWLEDGE_BOUNDED_QUERY_CAPABILITY,
   KNOWLEDGE_APP_SLUG,
   KNOWLEDGE_API_URL_ENV_KEYS,

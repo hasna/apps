@@ -26,6 +26,9 @@ import {
   computeKnowledgeGuardedReceiptId,
   computeKnowledgeGuardedRecoveryKey,
   createKnowledgeGuardedWriter,
+  executeKnowledgeGuardedCliQuery,
+  executeKnowledgeGuardedCliReadback,
+  executeKnowledgeGuardedCliWrite,
   createKnowledgePrivateInputDescriptor,
   createKnowledgePrivateQueryDescriptor,
   createKnowledgePrivateTitleLookupDescriptor,
@@ -288,6 +291,133 @@ test('private query transport failures are controlled and never disclose selecto
     globalThis.fetch = originalFetch;
   }
 });
+
+test('guarded CLI accepts only opaque descriptors and proves create, update, query, readback, and replay', async () => {
+  const targetId = 'k_fcame_private_cli_descriptor';
+  const privateTitle = 'Private CLI descriptor title';
+  const privateBody = 'private CLI descriptor body must stay off process surfaces';
+  const privateTags = ['private-cli', 'fcame'];
+  const create = descriptor({
+    operation: 'op-private-cli-create',
+    step: 'step-create',
+    target: targetId,
+    payload: { title: privateTitle, content: privateBody, tags: privateTags },
+  });
+
+  const created = await executeKnowledgeGuardedCliWrite(create, { env });
+  expect(created.transport).toBe('process_ipc');
+  expect(created.proof).toMatchObject({
+    kind: 'write',
+    item_count: 1,
+    duplicate: false,
+  });
+  expect(created.proof.items[0]).toMatchObject({
+    id: targetId,
+    version: 1,
+    title_sha256: createHash('sha256').update(privateTitle).digest('hex'),
+    content_sha256: createHash('sha256').update(privateBody).digest('hex'),
+  });
+  expect(JSON.stringify(created)).not.toContain(privateTitle);
+  expect(JSON.stringify(created)).not.toContain(privateBody);
+  expect(JSON.stringify(created)).not.toContain(privateTags.join(','));
+
+  const replay = await executeKnowledgeGuardedCliWrite(create, { env });
+  expect(replay.proof.duplicate).toBe(true);
+  expect(replay.proof.receipt_id).toBe(created.proof.receipt_id);
+  expect(replay.proof.items).toEqual(created.proof.items);
+
+  const exactTitle = createKnowledgePrivateQueryDescriptor({
+    operation_id: 'op-private-cli-query',
+    step_id: 'step-query',
+    binding: BINDING,
+    selector: { kind: 'exact_title', title: privateTitle },
+    limit: 1,
+  });
+  const queried = await executeKnowledgeGuardedCliQuery(exactTitle, { env });
+  expect(queried.proof).toMatchObject({
+    kind: 'query',
+    query_kind: 'exact_title',
+    item_count: 1,
+    total: 1,
+  });
+  expect(JSON.stringify(queried)).not.toContain(privateTitle);
+  expect(JSON.stringify(queried)).not.toContain(privateBody);
+
+  const currentVersion = createKnowledgePrivateQueryDescriptor({
+    operation_id: 'op-private-cli-readback',
+    step_id: 'step-readback',
+    binding: BINDING,
+    selector: { kind: 'current_version', item_id: targetId },
+    limit: 1,
+  });
+  const readback = await executeKnowledgeGuardedCliReadback(currentVersion, { env });
+  expect(readback.proof).toMatchObject({ kind: 'readback', item_count: 1 });
+  expect(readback.proof.items).toEqual(created.proof.items);
+
+  const updatedBody = 'private CLI updated body';
+  const update = descriptor({
+    operation: 'op-private-cli-update',
+    step: 'step-update',
+    target: targetId,
+    verb: 'update',
+    version: 1,
+    payload: { content: updatedBody },
+  });
+  const updated = await executeKnowledgeGuardedCliWrite(update, { env });
+  expect(updated.proof.items[0]).toMatchObject({
+    id: targetId,
+    version: 2,
+    content_sha256: createHash('sha256').update(updatedBody).digest('hex'),
+  });
+  expect(JSON.stringify(updated)).not.toContain(updatedBody);
+
+  const conflictingBody = 'private conflicting body must not leak';
+  const conflict = descriptor({
+    operation: 'op-private-cli-update',
+    step: 'step-update',
+    target: targetId,
+    verb: 'update',
+    version: 1,
+    payload: { content: conflictingBody },
+  });
+  let caught: unknown;
+  try {
+    await executeKnowledgeGuardedCliWrite(conflict, { env });
+  } catch (error) {
+    caught = error;
+  }
+  expect(caught).toMatchObject({ code: 'guarded_operation_conflict' });
+  expect(String(caught)).not.toContain(conflictingBody);
+  expect(JSON.stringify(caught)).not.toContain(conflictingBody);
+
+  const fixedMetadataContent = 'anonymous_fd';
+  const fixedMetadataUpdate = descriptor({
+    operation: 'op-private-cli-fixed-metadata-content',
+    step: 'step-fixed-metadata-content',
+    target: targetId,
+    verb: 'update',
+    version: 2,
+    payload: { content: fixedMetadataContent },
+  });
+  const fixedMetadataResult = await executeKnowledgeGuardedCliWrite(fixedMetadataUpdate, { env });
+  expect(fixedMetadataResult.proof.items[0]).toMatchObject({
+    id: targetId,
+    version: 3,
+    content_sha256: createHash('sha256').update(fixedMetadataContent).digest('hex'),
+  });
+
+  let timeoutCaught: unknown;
+  try {
+    await executeKnowledgeGuardedCliWrite(create, {
+      env,
+      timeoutMs: 1,
+    });
+  } catch (error) {
+    timeoutCaught = error;
+  }
+  expect(timeoutCaught).toMatchObject({ code: 'guarded_cli_timeout' });
+  expect(String(timeoutCaught)).not.toContain(privateBody);
+}, budget(20_000));
 
 function deterministicManifestId(
   operationId: string,

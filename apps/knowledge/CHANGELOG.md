@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.2.104
+
+- Add package-owned guarded CLI helpers for create, update, bounded query, and
+  exact readback. Opaque descriptors cross the child-process boundary only
+  through the runtime-owned anonymous process IPC channel; private titles,
+  bodies, tags, selectors, and result proofs stay out of argv, stdin,
+  environment variables, files, stdout, and stderr. The IPC transport works
+  across Bun and Node parents on Linux, macOS, and Windows without Linux
+  `/proc` assumptions or a write-before-connection race.
+- Reject public/body-bearing guarded CLI input, regular-file descriptors,
+  malformed or oversized private frames, replay conflicts, and expired
+  descriptors without echoing private content. Preserve FCAME-1 authority
+  binding, compare-and-swap/create-if-absent semantics, immutable receipts,
+  digest-only proof, exact readback, and same-operation duplicate evidence.
+
 ## 0.2.102
 
 - Republish the same reviewed bounded-query product code through the isolated

@@ -28,6 +28,10 @@ import {
   type KnowledgeProjectRegistrationDirection,
   type KnowledgeProjectResourceKind,
 } from './project-links';
+import {
+  runKnowledgeGuardedCliDescriptorWorker,
+  runKnowledgeGuardedCliIpcWorker,
+} from './guarded-cli';
 import { getStorageStatus as getDatabaseStorageStatus } from './storage';
 import { assertProviderCredentials, parseModelRef, resolveModelRef, type AiProviderId } from './providers';
 import { approvalStatus, assertS3ReadAllowed, assertWebSearchAllowed, createApprovalGate, recordAuditEvent, recordRedactionFindings, redactSecrets } from './safety';
@@ -154,6 +158,9 @@ interface Flags {
   name?: string;
   collectionSlug?: string;
   collectionName?: string;
+  requestFd?: number;
+  resultFd?: number;
+  ipc?: boolean;
 }
 
 interface ParseResult {
@@ -248,6 +255,9 @@ function collectTagFlag(current: string[] | undefined, raw: string | undefined):
 function parseArgs(argv: string[]): ParseResult {
   const positional: string[] = [];
   const flags: Flags = {};
+  const guardedIndex = argv.indexOf('guarded');
+  const guardedDescriptorInvocation = guardedIndex >= 0
+    && argv.indexOf('execute-descriptor', guardedIndex + 1) >= 0;
   let optionsTerminated = false;
   for (let i = 0; i < argv.length; i += 1) {
     const token = argv[i];
@@ -352,7 +362,14 @@ function parseArgs(argv: string[]): ParseResult {
       case '--name': flags.name = argv[i + 1]; i += 1; break;
       case '--collection-slug': flags.collectionSlug = argv[i + 1]; i += 1; break;
       case '--collection-name': flags.collectionName = argv[i + 1]; i += 1; break;
-      default: throw new Error(`Unknown flag: ${token}. Run 'knowledge --help' for valid options.`);
+      case '--request-fd': flags.requestFd = Number(argv[i + 1]); i += 1; break;
+      case '--result-fd': flags.resultFd = Number(argv[i + 1]); i += 1; break;
+      case '--ipc': flags.ipc = true; break;
+      default:
+        if (guardedDescriptorInvocation) {
+          throw new Error('guarded_descriptor_public_input_refused');
+        }
+        throw new Error(`Unknown flag: ${token}. Run 'knowledge --help' for valid options.`);
     }
   }
   return { positional, flags };
@@ -437,6 +454,7 @@ Commands:
   paths                        Show resolved workspace/store paths
   mode                         Report the resolved backend (local or cloud) and why
   guarded capabilities         Report FCAME-1 private transport capability
+  guarded execute-descriptor   Execute an opaque descriptor over inherited process IPC
   setup                        Configure local, hosted, or canonical example S3 mode
   auth login|whoami|logout     Manage hosted API credentials
   storage status|validate|repair-artifact-keys|migrate-legacy-path|merge-legacy-path|import-legacy
@@ -583,7 +601,7 @@ function printCommandHelp(command: string): void {
   if (command === 'project-resource') { console.log('Usage: knowledge project-resource <project-id> <project|collection|item|taxonomy> <resource-id> [--json]'); return; }
   if (command === 'paths') { console.log('Usage: knowledge paths [--scope local|global|project] [--verbose] [--json]'); return; }
   if (command === 'mode') { console.log(`Usage: knowledge mode [--json]\n  Reports which backend this process would use — sqlite (on-box store) or postgres (HTTP /v1) — and\n  which env var selected it. Reads the environment only: no store is opened, no config file is read,\n  and no request is made, so it is safe on a machine with no config and no network.\n  Selection is EXPLICIT-ONLY: set ${KNOWLEDGE_MODE_ENV_KEYS[0]}=sqlite|postgres. Setting only\n  ${KNOWLEDGE_API_URL_ENV_KEYS[0]} / ${KNOWLEDGE_API_KEY_ENV_KEYS[0]} does NOT switch backends;\n  those are reported as present-but-ignored pointers. Env var NAMES are printed, never values.`); return; }
-  if (command === 'guarded') { console.log('Usage: knowledge guarded capabilities [--json]\n  Reports metadata-only FCAME-1 private input, private result, and exact-title lookup support.'); return; }
+  if (command === 'guarded') { console.log('Usage:\n  knowledge guarded capabilities [--json]\n  knowledge guarded execute-descriptor --ipc [--json]\n\n  execute-descriptor is an internal package-owned worker. Private requests and results use the\n  runtime-owned child-process IPC channel, never argv, stdin, environment variables, files, stdout,\n  or stderr. Direct shell invocation has no IPC channel and fails closed. Use the exported opaque-\n  descriptor helpers rather than invoking this worker directly from a shell.'); return; }
   if (command === 'setup') { console.log('Usage: knowledge setup --mode local|hosted [--api-url https://...] [--canonical-example] [--scope local|global|project] [--json]'); return; }
   if (command === 'auth') { console.log('Usage: knowledge auth login|whoami|logout [--api-key <key>] [--email <email>] [--org <slug>] [--api-url https://...] [--scope local|global|project] [--json]'); return; }
   if (command === 'storage') { console.log('Usage: knowledge storage status|validate|repair-artifact-keys|migrate-legacy-path|merge-legacy-path [--approve-write --approved-by <name>] [--scope local|global|project] [--json]\n       knowledge storage import-legacy [--dry-run] [--scope global] [--json]'); return; }
@@ -997,16 +1015,70 @@ async function run(argv: string[]): Promise<void> {
 
   if (command === 'guarded') {
     const action = positional[1] ?? 'capabilities';
-    if (action !== 'capabilities') {
-      throw new Error('Usage: knowledge guarded capabilities [--json]');
+    if (action === 'capabilities') {
+      output({
+        ok: true,
+        contract: 'FCAME-1',
+        private_input: true,
+        private_result: true,
+        exact_title_lookup: true,
+        private_transport_body_output: false,
+        private_cli_descriptor_transport: true,
+        private_cli_transport: 'process_ipc',
+        guarded_actions: ['create', 'update', 'query', 'readback'],
+      }, flags.json, flags);
+      return;
+    }
+    if (action !== 'execute-descriptor') {
+      throw new Error('Usage: knowledge guarded capabilities|execute-descriptor [--json]');
+    }
+    const publicBodyFlagsPresent = [
+      flags.title,
+      flags.content,
+      flags.url,
+      flags.tag,
+      flags.tagRaw,
+      flags.id,
+      flags.itemId,
+      flags.operationId,
+      flags.stepId,
+      flags.idempotencyKey,
+      flags.sourceRef,
+      flags.search,
+      flags.topic,
+      flags.project,
+      flags.collectionId,
+      flags.collectionSlug,
+      flags.collectionName,
+    ].some((value) => value !== undefined);
+    if (positional.length !== 2 || publicBodyFlagsPresent) {
+      throw new Error('guarded_descriptor_public_input_refused');
+    }
+    if (flags.ipc) {
+      if (flags.requestFd !== undefined || flags.resultFd !== undefined) {
+        throw new Error('guarded_descriptor_private_transport_ambiguous');
+      }
+      output({
+        ok: true,
+        ...(await runKnowledgeGuardedCliIpcWorker(process.env)),
+      }, flags.json, flags);
+      return;
+    }
+    if (
+      !Number.isInteger(flags.requestFd)
+      || !Number.isInteger(flags.resultFd)
+      || (flags.requestFd as number) < 3
+      || (flags.resultFd as number) < 3
+    ) {
+      throw new Error('guarded_descriptor_private_fds_required');
     }
     output({
       ok: true,
-      contract: 'FCAME-1',
-      private_input: true,
-      private_result: true,
-      exact_title_lookup: true,
-      private_transport_body_output: false,
+      ...(await runKnowledgeGuardedCliDescriptorWorker(
+        flags.requestFd as number,
+        flags.resultFd as number,
+        process.env,
+      )),
     }, flags.json, flags);
     return;
   }

@@ -209,6 +209,47 @@ endpoint never falls back to a collection scan and never returns item bodies or
 titles. `knowledge guarded capabilities --json` reports this private transport
 support without reading configuration, opening a store, or making a request.
 
+When an agent or workflow must cross a process boundary, use the package-owned
+guarded CLI helpers. The caller keeps the private data inside the opaque
+descriptor; the helper creates two anonymous inherited pipes, invokes the
+package CLI with fixed descriptor numbers, and returns only the private
+digest-proof object to the calling process:
+
+```ts
+import {
+  createKnowledgePrivateInputDescriptor,
+  executeKnowledgeGuardedCliWrite,
+} from '@hasna/knowledge';
+
+const privateInput = createKnowledgePrivateInputDescriptor({
+  operation_id: 'doctrine-rollout-2026-08',
+  step_id: 'knowledge-item-one',
+  verb: 'create',
+  target_id: 'hasna-doctrine-one',
+  precondition: { kind: 'absent' },
+  binding,
+  payload: {
+    title: privateReviewedTitle,
+    content: privateReviewedBody,
+    tags: privateReviewedTags,
+  },
+});
+
+const result = await executeKnowledgeGuardedCliWrite(privateInput);
+// result.proof contains IDs, versions, digests, and immutable receipt/replay
+// evidence. It never contains the private title, body, tags, or selector.
+```
+
+Use `executeKnowledgeGuardedCliQuery(...)` for producer-bounded private queries
+and `executeKnowledgeGuardedCliReadback(...)` with a `current_version`
+descriptor for exact readback. The internal
+`knowledge guarded execute-descriptor --ipc` worker accepts private requests and
+results only through the runtime-owned child-process IPC channel. The channel is
+anonymous and cross-platform; no Knowledge value crosses argv, stdin,
+environment variables, files, stdout, or stderr. Direct shell invocation has
+no inherited IPC channel and fails closed. Do not invoke the worker directly or
+hand-roll descriptor materialization.
+
 The deterministic key is:
 
 ```text

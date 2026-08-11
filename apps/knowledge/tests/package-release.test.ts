@@ -126,6 +126,16 @@ describe('public package release safety', () => {
     expect(rootRuntimeExports.inspectKnowledgePrivateResult).toBeFunction();
     expect(declarationExportsIdentifier(rootDeclaration, 'inspectKnowledgePrivateResult')).toBe(true);
     expect(declarationExportsIdentifier(guardedContractDeclaration, 'inspectKnowledgePrivateResult')).toBe(true);
+    expect(rootRuntimeExports.executeKnowledgeGuardedCliWrite).toBeFunction();
+    expect(declarationExportsIdentifier(rootDeclaration, 'executeKnowledgeGuardedCliWrite')).toBe(true);
+    expect(rootRuntimeExports.executeKnowledgeGuardedCliQuery).toBeFunction();
+    expect(declarationExportsIdentifier(rootDeclaration, 'executeKnowledgeGuardedCliQuery')).toBe(true);
+    expect(rootRuntimeExports.executeKnowledgeGuardedCliReadback).toBeFunction();
+    expect(declarationExportsIdentifier(rootDeclaration, 'executeKnowledgeGuardedCliReadback')).toBe(true);
+    expect(rootRuntimeExports.runKnowledgeGuardedCliDescriptorWorker).toBeUndefined();
+    expect(declarationExportsIdentifier(rootDeclaration, 'runKnowledgeGuardedCliDescriptorWorker')).toBe(false);
+    expect(rootRuntimeExports.runKnowledgeGuardedCliIpcWorker).toBeUndefined();
+    expect(declarationExportsIdentifier(rootDeclaration, 'runKnowledgeGuardedCliIpcWorker')).toBe(false);
 
     expect(rootRuntimeExports.materializeKnowledgePrivateInput).toBeUndefined();
     expect(declarationExportsIdentifier(rootDeclaration, 'materializeKnowledgePrivateInput')).toBe(false);

@@ -4,7 +4,7 @@
  * Licensed under the Apache License, Version 2.0
  */
 import { describe, expect, test } from 'bun:test';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { delimiter, join, dirname, resolve } from 'node:path';
@@ -361,6 +361,7 @@ describe('knowledge cli', () => {
     expect(out).toContain('context pack <query>');
     expect(out).toContain('proposals context');
     expect(out).toContain('guarded capabilities');
+    expect(out).toContain('guarded execute-descriptor');
 
     const sub = runCli(['help', 'list']);
     expect(sub.exitCode).toBe(0);
@@ -385,6 +386,124 @@ describe('knowledge cli', () => {
       private_result: true,
       exact_title_lookup: true,
       private_transport_body_output: false,
+      private_cli_transport: 'process_ipc',
+    });
+
+    const directIpc = runCli(['guarded', 'execute-descriptor', '--ipc']);
+    expect(directIpc.exitCode).toBe(1);
+    expect(new TextDecoder().decode(directIpc.stdout)).toBe('');
+    expect(new TextDecoder().decode(directIpc.stderr)).toContain('guarded_descriptor_private_ipc_required');
+  });
+
+  test('guarded descriptor worker refuses argv, stdin, and ordinary file descriptors without leaking private input', () => {
+    const privateBody = 'private guarded CLI body must not cross public process surfaces';
+    const privateFlag = 'private-guarded-cli-title-sentinel-7f8e1b';
+
+    for (const args of [
+      ['guarded', 'execute-descriptor', privateBody],
+      ['guarded', 'execute-descriptor', '--content', privateBody],
+      ['guarded', 'execute-descriptor', '--title', privateBody],
+      ['guarded', 'execute-descriptor', `--${privateFlag}`],
+      ['guarded', `--${privateFlag}`, 'execute-descriptor'],
+      [`--${privateFlag}`, 'guarded', 'execute-descriptor'],
+    ]) {
+      const result = runCli(args);
+      expect(result.exitCode).toBe(1);
+      expect(new TextDecoder().decode(result.stdout)).not.toContain(privateBody);
+      expect(new TextDecoder().decode(result.stderr)).not.toContain(privateBody);
+      expect(new TextDecoder().decode(result.stderr)).not.toContain(privateFlag);
+    }
+
+    const stdin = runCliWithInput(
+      ['guarded', 'execute-descriptor', '--request-fd', '0', '--result-fd', '4'],
+      privateBody,
+    );
+    expect(stdin.exitCode).toBe(1);
+    expect(stdin.stdout.toString()).not.toContain(privateBody);
+    expect(stdin.stderr.toString()).not.toContain(privateBody);
+
+    const dir = mkdtempSync(join(tmpdir(), 'knowledge-private-cli-regular-file-'));
+    const request = join(dir, 'request.json');
+    const result = join(dir, 'result.json');
+    writeFileSync(request, privateBody);
+    writeFileSync(result, '');
+    const requestFd = openSync(request, 'r');
+    const resultFd = openSync(result, 'w');
+    const regular = spawnSync('bun', [
+      CLI,
+      'guarded',
+      'execute-descriptor',
+      '--request-fd',
+      '3',
+      '--result-fd',
+      '4',
+    ], {
+      env: childEnv(),
+      stdio: ['ignore', 'pipe', 'pipe', requestFd, resultFd],
+    });
+    closeSync(requestFd);
+    closeSync(resultFd);
+    expect(regular.status).toBe(1);
+    expect(regular.stdout.toString()).not.toContain(privateBody);
+    expect(regular.stderr.toString()).not.toContain(privateBody);
+    expect(readFileSync(result, 'utf8')).not.toContain(privateBody);
+
+    if (process.platform !== 'win32') {
+      const fifo = join(dir, 'request.fifo');
+      const fifoResult = join(dir, 'fifo-result.json');
+      const createdFifo = spawnSync('mkfifo', [fifo]);
+      expect(createdFifo.status).toBe(0);
+      writeFileSync(fifoResult, '');
+      const fifoFd = openSync(fifo, 'r+');
+      const fifoResultFd = openSync(fifoResult, 'w');
+      const namedFifo = spawnSync('bun', [
+        CLI,
+        'guarded',
+        'execute-descriptor',
+        '--request-fd',
+        '3',
+        '--result-fd',
+        '4',
+      ], {
+        env: childEnv(),
+        stdio: ['ignore', 'pipe', 'pipe', fifoFd, fifoResultFd],
+      });
+      closeSync(fifoFd);
+      closeSync(fifoResultFd);
+      expect(namedFifo.status).toBe(1);
+      expect(namedFifo.stderr.toString()).toContain('request_fd_must_be_anonymous_pipe_or_socket');
+      expect(namedFifo.stderr.toString()).not.toContain('anonymous_pipe_identity_unverified');
+      expect(namedFifo.stderr.toString()).not.toContain('private_request_schema_invalid');
+    }
+  });
+
+  test('guarded descriptor IPC establishes from a Node parent before request delivery', () => {
+    const builtCli = join(__dirname, '..', packageJson.bin.knowledge);
+    const probe = [
+      'const { spawn } = require("node:child_process");',
+      'const child = spawn(process.argv[1], [process.argv[2], "guarded", "execute-descriptor", "--ipc", "--json"], { stdio: ["ignore", "ignore", "ignore", "ipc"] });',
+      'let privateFailure = false;',
+      'const timer = setTimeout(() => { child.kill(); process.exit(3); }, 10000);',
+      'child.on("message", (raw) => {',
+      '  const result = JSON.parse(String(raw));',
+      '  privateFailure = result.ok === false && result.transport === "process_ipc" && result.code === "private_request_schema_invalid";',
+      '});',
+      'child.on("error", () => process.exit(4));',
+      'child.on("close", (code) => {',
+      '  clearTimeout(timer);',
+      '  process.stdout.write(JSON.stringify({ private_failure: privateFailure, exit_code: code }));',
+      '});',
+      'child.send("{}");',
+    ].join('\n');
+    const result = spawnSync('node', ['-e', probe, process.execPath, builtCli], {
+      env: childEnv(),
+      maxBuffer: 64 * 1024,
+    });
+    expect(result.status).toBe(0);
+    expect(result.stderr.toString()).toBe('');
+    expect(JSON.parse(result.stdout.toString())).toEqual({
+      private_failure: true,
+      exit_code: 1,
     });
   });
 

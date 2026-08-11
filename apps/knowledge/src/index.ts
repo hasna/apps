@@ -200,6 +200,16 @@ export {
 } from './guarded-write-contract.js';
 export * from './guarded-writer.js';
 export {
+  KNOWLEDGE_GUARDED_CLI_REQUEST_SCHEMA,
+  KNOWLEDGE_GUARDED_CLI_RESULT_SCHEMA,
+  KnowledgeGuardedCliDescriptorError,
+  executeKnowledgeGuardedCliQuery,
+  executeKnowledgeGuardedCliReadback,
+  executeKnowledgeGuardedCliWrite,
+  type KnowledgeGuardedCliDescriptorOptions,
+  type KnowledgeGuardedCliPrivateResult,
+} from './guarded-cli.js';
+export {
   KNOWLEDGE_API_KEY_ENV_KEYS,
   KNOWLEDGE_API_URL_ENV_KEYS,
   KNOWLEDGE_MODE_ENV_KEYS,
