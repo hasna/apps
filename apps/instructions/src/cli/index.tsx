@@ -2045,7 +2045,7 @@ program
   .description("Summary of stored configs, drift, and ecosystem health")
   .option("--json", "output as JSON")
   .option("--markdown", "output as markdown")
-  .action(async () => {
+  .action(async (opts) => {
     const store = resolveConfigStore();
     const stats = await store.getConfigStats();
     const allConfigs = await store.listConfigs();
@@ -2071,6 +2071,37 @@ program
 
     // Project configs
     const projectConfigs = allConfigs.filter((c) => c.target_path && !c.target_path.startsWith("~/."));
+
+    if (opts.json) {
+      printJson({
+        schema_version: 1,
+        configs: {
+          total: allConfigs.length,
+          files: fileConfigs.length,
+          references: refConfigs.length,
+          templates: templates.length,
+          project: projectConfigs.length,
+        },
+        profiles: {
+          total: profiles.length,
+        },
+        drift: {
+          drifted,
+          missing,
+        },
+        secrets: {
+          findings: 0,
+          policy: "redacted_on_ingest",
+        },
+        by_agent: byAgent,
+        by_category: Object.fromEntries(
+          Object.entries(stats)
+            .filter(([key]) => key !== "total")
+            .map(([key, value]) => [key, Number(value)]),
+        ),
+      });
+      return;
+    }
 
     console.log(chalk.bold("configs report\n"));
     console.log(`  Total:       ${allConfigs.length} configs (${fileConfigs.length} files, ${refConfigs.length} references)`);

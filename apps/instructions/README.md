@@ -52,6 +52,12 @@ small. Human output is capped at 20 rows unless you pass `--limit`; use
 - `--json` preserves full machine-readable records for automation.
 - `show`/`inspect` and `snapshot show` print full config or snapshot content.
 
+`instructions report --json` emits the stable `schema_version: 1` report
+envelope. Its top-level fields are `configs`, `profiles`, `drift`, `secrets`,
+`by_agent`, and `by_category`. The nested count fields are numeric, and
+`secrets.policy` is `redacted_on_ingest`. Run `instructions report` without
+`--json` for the human-readable report.
+
 ## Package-Manager Secret Guard
 
 `instructions package-manager-scan` blocks package-manager credential ingress without

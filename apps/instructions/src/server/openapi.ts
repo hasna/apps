@@ -97,6 +97,27 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
             variables: { type: "object" },
           },
         },
+        AddProfileConfigInput: {
+          type: "object",
+          required: ["config_id"],
+          properties: {
+            config_id: { type: "string" },
+          },
+        },
+        ProfileConfigAddedResponse: {
+          type: "object",
+          required: ["added"],
+          properties: {
+            added: { type: "boolean", const: true },
+          },
+        },
+        ProfileConfigRemovedResponse: {
+          type: "object",
+          required: ["removed"],
+          properties: {
+            removed: { type: "boolean", const: true },
+          },
+        },
         ProfileWithConfigs: {
           type: "object",
           properties: {
@@ -332,6 +353,55 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
           summary: "Delete a profile",
           parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
           responses: { "200": { content: { "application/json": { schema: { type: "object", properties: { deleted: { type: "boolean" }, id: { type: "string" } } } } } } },
+        },
+      },
+      "/v1/profiles/{id}/configs": {
+        post: {
+          operationId: "addConfigToProfile",
+          summary: "Add a config to a profile",
+          description: "Requires an API key with the `instructions:write` scope.",
+          security: [{ apiKey: [] }],
+          parameters: [
+            { name: "id", in: "path", required: true, schema: { type: "string" } },
+          ],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/AddProfileConfigInput" },
+              },
+            },
+          },
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/ProfileConfigAddedResponse" },
+                },
+              },
+            },
+          },
+        },
+      },
+      "/v1/profiles/{id}/configs/{configId}": {
+        delete: {
+          operationId: "removeConfigFromProfile",
+          summary: "Remove a config from a profile",
+          description: "Requires an API key with the `instructions:write` scope.",
+          security: [{ apiKey: [] }],
+          parameters: [
+            { name: "id", in: "path", required: true, schema: { type: "string" } },
+            { name: "configId", in: "path", required: true, schema: { type: "string" } },
+          ],
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/ProfileConfigRemovedResponse" },
+                },
+              },
+            },
+          },
         },
       },
       "/v1/stats": {

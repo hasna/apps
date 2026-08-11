@@ -14,6 +14,12 @@ export interface UpdateConfigInput { "name"?: string; "category"?: string; "agen
 
 export interface CreateProfileInput { "name": string; "description"?: string; "selectors"?: Record<string, unknown>; "variables"?: Record<string, unknown> }
 
+export interface AddProfileConfigInput { "config_id": string }
+
+export interface ProfileConfigAddedResponse { "added": boolean }
+
+export interface ProfileConfigRemovedResponse { "removed": boolean }
+
 export interface ProfileWithConfigs { "id"?: string; "name"?: string; "slug"?: string; "description"?: string | null; "selectors"?: Record<string, unknown>; "variables"?: Record<string, unknown>; "created_at"?: string; "updated_at"?: string; "configs"?: Array<Config> }
 
 export interface BoundedProfilePage { "profiles"?: Array<Profile>; "items": Array<Profile>; "count"?: number; "total": number; "limit": number; "cursor": number; "next_cursor": number | null; "has_more": boolean; "complete": boolean; "truncated": boolean; "source_bounded": boolean }
@@ -181,6 +187,24 @@ export class InstructionsV1Client {
     /** Delete a profile */
     async deleteProfile(id: string, init?: RequestInit): Promise<{ "deleted"?: boolean; "id"?: string }> {
       return this.request("DELETE", `/v1/profiles/${encodeURIComponent(String(id))}`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Add a config to a profile */
+    async addConfigToProfile(id: string, body: AddProfileConfigInput, init?: RequestInit): Promise<ProfileConfigAddedResponse> {
+      return this.request("POST", `/v1/profiles/${encodeURIComponent(String(id))}/configs`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Remove a config from a profile */
+    async removeConfigFromProfile(id: string, configId: string, init?: RequestInit): Promise<ProfileConfigRemovedResponse> {
+      return this.request("DELETE", `/v1/profiles/${encodeURIComponent(String(id))}/configs/${encodeURIComponent(String(configId))}`, {
         body: undefined,
         query: undefined,
         init,
