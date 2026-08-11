@@ -10,14 +10,20 @@ to a standing Fable persona.
 
 This is not a human approval gate. The `npm-release` environment has no required
 reviewers or wait timer. Its non-secret variables provide the fixed reviewer
-identity, deterministic key id, Ed25519 public key, and signed receipt consumed
-by the package-owned verifier:
+identity, deterministic key id, and Ed25519 public key consumed by the
+package-owned verifier:
 
 - `RELEASE_REVIEWER_AGENT`, set to the candidate's exact native Codewith
   sub-agent lineage such as `/root/review_todos_release_01522`;
 - `RELEASE_REVIEW_KEY_ID`;
-- `RELEASE_REVIEW_PUBLIC_KEY`; and
-- `NPM_RELEASE_AGENT_REVIEW_RECEIPT`.
+- `RELEASE_REVIEW_PUBLIC_KEY`.
+
+The capability-bearing `NPM_RELEASE_AGENT_REVIEW_RECEIPT` is an environment
+secret. GitHub masks secrets before rendering a run-step environment preamble;
+an Actions variable would expose the complete receipt before the shell body
+could register a mask. The verifier still receives the exact secret value in
+process and applies the same package, version, tag, commit, workflow, reviewer,
+and signature checks.
 
 The public key is canonical base64 SPKI DER. Its key id is
 `ed25519:sha256:<base64url SHA-256 of the SPKI DER bytes>`. The verifier rejects
@@ -121,7 +127,6 @@ reviewer_agent_file="$(mktemp)"
 reviewer_key_id_file="$(mktemp)"
 reviewer_public_key_file="$(mktemp)"
 receipt_file="$(mktemp)"
-receipt_readback_file="$(mktemp)"
 
 printf '%s\n' "${reviewer_lineage}" | gh variable set RELEASE_REVIEWER_AGENT \
   --repo hasna/todos --env npm-release
@@ -146,13 +151,17 @@ secrets exec <fixed-reviewer-private-key-vault-item> \
     --open-p0 0 \
     --open-p1 0 > "${receipt_file}"
 
-gh variable set NPM_RELEASE_AGENT_REVIEW_RECEIPT \
+gh secret set NPM_RELEASE_AGENT_REVIEW_RECEIPT \
   --repo hasna/todos --env npm-release < "${receipt_file}"
-gh variable get NPM_RELEASE_AGENT_REVIEW_RECEIPT \
-  --repo hasna/todos --env npm-release > "${receipt_readback_file}"
-cmp --silent "${receipt_file}" "${receipt_readback_file}"
+test "$(gh secret list --repo hasna/todos --env npm-release --json name \
+  --jq '[.[] | select(.name == "NPM_RELEASE_AGENT_REVIEW_RECEIPT")] | length')" = "1"
 sha256sum "${receipt_file}" > "${evidence_dir}/npm-release-agent-review.sha256"
 ```
+
+GitHub does not permit secret-value readback. The metadata check proves the
+named environment secret exists; the real negative/positive workflow test is
+the acceptance proof that the exact value reaches the verifier while the log
+contains only GitHub's masked placeholder.
 
 The issuer refuses a private key that does not derive the configured public key
 and key id. It derives the package version, tag, workflow blob revision, and

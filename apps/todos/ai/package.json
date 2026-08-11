@@ -1,6 +1,6 @@
 {
   "name": "@hasna/todos-ai",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Optional provider-neutral AI runtime companion for @hasna/todos",
   "type": "module",
   "main": "dist/index.js",

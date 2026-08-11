@@ -9,6 +9,15 @@ const companionPackage = JSON.parse(readFileSync(resolve(import.meta.dir, "../ai
   version: string;
   scripts: Record<string, string>;
 };
+const receiptSecretExpression = "${{ secrets.NPM_RELEASE_AGENT_REVIEW_RECEIPT }}";
+
+function syntheticActionsEnvPreamble(expressions: string[], receipt: string): string {
+  return expressions
+    .map((expression) =>
+      `NPM_RELEASE_AGENT_REVIEW_RECEIPT: ${expression === receiptSecretExpression ? "***" : receipt}`,
+    )
+    .join("\n");
+}
 
 describe("npm release workflow", () => {
   test("binds strict prepublish verification to the checked-out Actions commit", () => {
@@ -22,7 +31,6 @@ describe("npm release workflow", () => {
     expect(reviewStep).toBeGreaterThan(-1);
     expect(publishStep).toBeGreaterThan(reviewStep);
     expect(releaseWorkflow.slice(reviewStep, publishStep)).toContain("run: bun run verify:release-review");
-    expect(releaseWorkflow.match(/NPM_RELEASE_AGENT_REVIEW_RECEIPT: \$\{\{ vars\.NPM_RELEASE_AGENT_REVIEW_RECEIPT \}\}/g)?.length).toBe(2);
     expect(releaseWorkflow.match(/RELEASE_REVIEWER_AGENT: \$\{\{ vars\.RELEASE_REVIEWER_AGENT \}\}/g)?.length).toBe(2);
     expect(releaseWorkflow.match(/RELEASE_REVIEW_KEY_ID: \$\{\{ vars\.RELEASE_REVIEW_KEY_ID \}\}/g)?.length).toBe(2);
     expect(releaseWorkflow.match(/RELEASE_REVIEW_PUBLIC_KEY: \$\{\{ vars\.RELEASE_REVIEW_PUBLIC_KEY \}\}/g)?.length).toBe(2);
@@ -36,6 +44,29 @@ describe("npm release workflow", () => {
     expect(publicReleaseVerifier).toContain('runOrExit("bun", ["run", "scripts/verify-npm-release-agent-review.ts"])');
   });
 
+  test("delivers every review receipt through a masked Actions secret", () => {
+    const receiptExpressions = Array.from(
+      releaseWorkflow.matchAll(/^\s+NPM_RELEASE_AGENT_REVIEW_RECEIPT:\s*(.+)$/gm),
+      (match) => match[1].trim(),
+    );
+
+    expect(receiptExpressions).toHaveLength(2);
+    expect(releaseWorkflow).not.toContain("vars.NPM_RELEASE_AGENT_REVIEW_RECEIPT");
+    expect(receiptExpressions).toEqual([receiptSecretExpression, receiptSecretExpression]);
+
+    const syntheticReceipt = "synthetic.release.review.receipt.fixture";
+    const unsafePreamble = syntheticActionsEnvPreamble(
+      ["${{ vars.NPM_RELEASE_AGENT_REVIEW_RECEIPT }}"],
+      syntheticReceipt,
+    );
+    expect(unsafePreamble).toContain(syntheticReceipt);
+    expect(unsafePreamble).not.toContain("***");
+
+    const preamble = syntheticActionsEnvPreamble(receiptExpressions, syntheticReceipt);
+    expect(preamble).not.toContain(syntheticReceipt);
+    expect(preamble.match(/NPM_RELEASE_AGENT_REVIEW_RECEIPT: \*\*\*/g)?.length).toBe(2);
+  });
+
   test("routes root and companion tags to only their fixed package directories", () => {
     expect(releaseWorkflow).toContain('- "npm/todos/v*"');
     expect(releaseWorkflow).toContain('- "npm/todos-ai/v*"');
@@ -43,7 +74,7 @@ describe("npm release workflow", () => {
     expect(releaseWorkflow).toContain("working-directory: ${{ steps.version.outputs.path }}");
     expect(releaseWorkflow).toContain("HASNA_TODOS_RELEASE_PACKAGE_PATH: ${{ steps.version.outputs.path }}");
     expect(rootPackage.version).toBe("0.15.29");
-    expect(companionPackage.version).toBe("0.1.1");
+    expect(companionPackage.version).toBe("0.1.2");
     expect(companionPackage.scripts["verify:release-review"]).toBe("bun run ../scripts/verify-npm-release-agent-review.ts");
     expect(companionPackage.scripts.prepublishOnly).toBe("bun run verify:release-review");
     expect(releaseWorkflow).not.toMatch(/^\s+NODE_AUTH_TOKEN:/m);
