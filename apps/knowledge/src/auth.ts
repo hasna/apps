@@ -1,6 +1,10 @@
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
+import {
+  KNOWLEDGE_API_KEY_ENV_KEYS,
+  KNOWLEDGE_API_URL_ENV_KEYS,
+} from './knowledge-mode';
 import type { KnowledgeConfig } from './workspace';
 
 export interface KnowledgeAuthConfig {
@@ -53,7 +57,10 @@ export function resolveKnowledgeApiUrl(
   config?: KnowledgeConfig,
   env: Record<string, string | undefined> = process.env,
 ): string {
-  return normalizeKnowledgeApiOrigin(env.KNOWLEDGE_API_URL ?? config?.hosted?.api_url ?? DEFAULT_KNOWLEDGE_API_URL);
+  const envApiUrl = KNOWLEDGE_API_URL_ENV_KEYS
+    .map((key) => env[key]?.trim())
+    .find((value): value is string => Boolean(value));
+  return normalizeKnowledgeApiOrigin(envApiUrl ?? config?.hosted?.api_url ?? DEFAULT_KNOWLEDGE_API_URL);
 }
 
 export function getKnowledgeAuth(env: Record<string, string | undefined> = process.env): KnowledgeAuthConfig | null {
@@ -92,8 +99,10 @@ export function clearKnowledgeAuth(env: Record<string, string | undefined> = pro
 }
 
 export function getKnowledgeApiKey(env: Record<string, string | undefined> = process.env): { apiKey: string | null; source: KnowledgeAuthStatus['source'] } {
-  if (env.KNOWLEDGE_API_KEY) return { apiKey: env.KNOWLEDGE_API_KEY, source: 'env' };
-  if (env.HASNA_KNOWLEDGE_API_KEY) return { apiKey: env.HASNA_KNOWLEDGE_API_KEY, source: 'env' };
+  const envApiKey = KNOWLEDGE_API_KEY_ENV_KEYS
+    .map((key) => env[key])
+    .find((value): value is string => Boolean(value));
+  if (envApiKey) return { apiKey: envApiKey, source: 'env' };
   const auth = getKnowledgeAuth(env);
   return auth?.api_key ? { apiKey: auth.api_key, source: 'file' } : { apiKey: null, source: 'none' };
 }
@@ -104,7 +113,8 @@ export function knowledgeAuthStatus(
 ): KnowledgeAuthStatus {
   const auth = getKnowledgeAuth(env);
   const key = getKnowledgeApiKey(env);
-  const apiUrl = env.KNOWLEDGE_API_URL
+  const hasEnvApiUrl = KNOWLEDGE_API_URL_ENV_KEYS.some((name) => Boolean(env[name]?.trim()));
+  const apiUrl = hasEnvApiUrl
     ? resolveKnowledgeApiUrl(config, env)
     : auth?.api_url
       ? normalizeKnowledgeApiOrigin(auth.api_url)

@@ -2,7 +2,12 @@ import { describe, expect, test } from 'bun:test';
 import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { clearKnowledgeAuth, knowledgeAuthStatus, normalizeKnowledgeApiOrigin } from '../src/auth';
+import {
+  clearKnowledgeAuth,
+  knowledgeAuthStatus,
+  normalizeKnowledgeApiOrigin,
+  resolveKnowledgeApiUrl,
+} from '../src/auth';
 import { createKnowledgeService } from '../src/service';
 
 describe('hosted-aware config and remote contracts', () => {
@@ -113,5 +118,25 @@ describe('hosted-aware config and remote contracts', () => {
   test('normalizes hosted api origins to the bare https origin', () => {
     expect(normalizeKnowledgeApiOrigin('https://knowledge.example.com/api/v1')).toBe('https://knowledge.example.com');
     expect(() => normalizeKnowledgeApiOrigin('ftp://knowledge.example.com')).toThrow('http or https');
+  });
+
+  test('canonical HASNA API URL wins over the compatibility alias and config', () => {
+    expect(resolveKnowledgeApiUrl(
+      { hosted: { api_url: 'https://config.example.com' } } as never,
+      {
+        HASNA_KNOWLEDGE_API_URL: 'https://canonical.example.com/api/v1',
+        KNOWLEDGE_API_URL: 'https://alias.example.com/api/v1',
+      },
+    )).toBe('https://canonical.example.com');
+
+    expect(knowledgeAuthStatus(undefined, {
+      HASNA_KNOWLEDGE_API_URL: 'https://canonical.example.com/api',
+      HASNA_KNOWLEDGE_API_KEY: 'present-but-never-emitted',
+      HASNA_KNOWLEDGE_AUTH_DIR: join(mkdtempSync(join(tmpdir(), 'ok-hosted-env-')), 'auth'),
+    })).toMatchObject({
+      authenticated: true,
+      source: 'env',
+      api_url: 'https://canonical.example.com',
+    });
   });
 });

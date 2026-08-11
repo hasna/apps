@@ -710,6 +710,154 @@ describe('Knowledge Projects resource-link producer', () => {
     expectSchemaAccepts(schemas, schemas.ProjectResource!, exactResource);
   });
 
+  test('HTTP client accepts a valid two-resource page and exact readback envelope', async () => {
+    const project = {
+      key: 'project:wks_http',
+      kind: 'project' as const,
+      id: 'wks_http',
+      project_id: 'wks_http',
+      source_project_id: 'wks_http',
+      collection_id: 'col_http',
+      revision: '1',
+      digest: 'digest-project',
+      title: 'HTTP Project',
+      locator: { kind: 'external_uuid' as const, value: 'wks_http' },
+      metadata: {},
+    };
+    const itemResource = {
+      key: 'item:k_http',
+      kind: 'item' as const,
+      id: 'k_http',
+      project_id: 'wks_http',
+      source_project_id: 'wks_http',
+      collection_id: 'col_http',
+      revision: '1',
+      digest: 'digest-item',
+      title: 'HTTP Item',
+      locator: { kind: 'external_uuid' as const, value: 'k_http' },
+      metadata: {},
+    };
+    const responses = [
+      Response.json({
+        schema: 'knowledge.project-resources.page.v1',
+        authority: 'knowledge',
+        route: 'knowledge.project-resources.v1',
+        authority_id: 'knowledge',
+        tenant_id: 'tenant-http',
+        corpus_id: 'knowledge',
+        project_id: 'wks_http',
+        source_project_id: 'wks_http',
+        collection_id: 'col_http',
+        collection_revision: '1',
+        population_digest: 'population-digest',
+        resource_kinds: ['project', 'item'],
+        resources: [project, itemResource],
+        count: 2,
+        total: 2,
+        limit: 2,
+        cursor: null,
+        next_cursor: null,
+        has_more: false,
+        complete: true,
+        truncated: false,
+      }),
+      Response.json({ resource: itemResource }),
+    ];
+    const client = createKnowledgeProjectLinksHttpClient({
+      baseUrl: 'https://knowledge.example.com',
+      fetch: async () => responses.shift()!,
+    });
+
+    const page = await client.listProjectResources('wks_http', { limit: 2 });
+    expect(page.resources).toHaveLength(2);
+    expect(page.resources.map((resource) => resource.key)).toEqual([
+      'project:wks_http',
+      'item:k_http',
+    ]);
+    expect(await client.readProjectResource('wks_http', 'item', 'k_http'))
+      .toEqual(itemResource);
+  });
+
+  test('HTTP client rejects malformed success envelopes and maps generic hosted 404s', async () => {
+    const malformedPage = createKnowledgeProjectLinksHttpClient({
+      baseUrl: 'https://knowledge.example.com',
+      fetch: async () => Response.json({ ok: true }),
+    });
+    await expect(malformedPage.listProjectResources('wks_http')).rejects.toMatchObject({
+      code: 'KNOWLEDGE_PROJECT_LINKS_INVALID_RESPONSE',
+    });
+
+    const malformedExact = createKnowledgeProjectLinksHttpClient({
+      baseUrl: 'https://knowledge.example.com',
+      fetch: async () => Response.json({}),
+    });
+    await expect(
+      malformedExact.readProjectResource('wks_http', 'item', 'k_http'),
+    ).rejects.toMatchObject({
+      code: 'KNOWLEDGE_PROJECT_LINKS_INVALID_RESPONSE',
+    });
+
+    const missingRoute = createKnowledgeProjectLinksHttpClient({
+      baseUrl: 'https://knowledge.example.com',
+      fetch: async () => Response.json(
+        { error: 'not_found', path: '/v1/projects/wks_http/resources' },
+        { status: 404 },
+      ),
+    });
+    await expect(missingRoute.listProjectResources('wks_http')).rejects.toMatchObject({
+      code: 'KNOWLEDGE_PROJECT_LINKS_NOT_FOUND',
+    });
+  });
+
+  test('hosted CLI fails closed with a structured code on a malformed success envelope', async () => {
+    const server = Bun.serve({
+      hostname: '127.0.0.1',
+      port: 0,
+      fetch: () => Response.json({ ok: true }),
+    });
+    const env = { ...process.env } as Record<string, string>;
+    for (const name of [
+      'HASNA_KNOWLEDGE_STORAGE_MODE',
+      'KNOWLEDGE_STORAGE_MODE',
+      'HASNA_KNOWLEDGE_API_URL',
+      'KNOWLEDGE_API_URL',
+      'HASNA_KNOWLEDGE_API_KEY',
+      'KNOWLEDGE_API_KEY',
+    ]) {
+      delete env[name];
+    }
+    Object.assign(env, {
+      HASNA_KNOWLEDGE_STORAGE_MODE: 'postgres',
+      HASNA_KNOWLEDGE_API_URL: `http://127.0.0.1:${server.port}`,
+      HASNA_KNOWLEDGE_API_KEY: 'test-key-not-a-credential',
+    });
+    const child = Bun.spawn({
+      cmd: [
+        'bun',
+        'src/cli.ts',
+        'project-resources',
+        'wks_http',
+        '--json',
+      ],
+      cwd: repoRoot,
+      env,
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    const [exitCode, stdout, stderr] = await Promise.all([
+      child.exited,
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+    ]);
+    server.stop(true);
+
+    expect(exitCode, stderr).toBe(1);
+    expect(JSON.parse(stdout)).toMatchObject({
+      ok: false,
+      code: 'KNOWLEDGE_PROJECT_LINKS_INVALID_RESPONSE',
+    });
+  });
+
   test('CLI registers, binds, exhausts, and exactly reads the same local producer', () => {
     const root = tempRoot();
     const storePath = join(root, 'db.json');

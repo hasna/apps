@@ -21,6 +21,7 @@ import { createKnowledgeService } from './service';
 import { createKnowledgeProjectPanel, formatKnowledgeProjectPanel } from './project-panel';
 import {
   KNOWLEDGE_PROJECT_REGISTRATION_ROUTE,
+  KnowledgeProjectLinksError,
   createLocalKnowledgeProjectLinksAuthority,
   digestKnowledgeProjectLinksValue,
   type KnowledgeProjectLinksAuthority,
@@ -2829,12 +2830,17 @@ function emitCliError(error: unknown, argv: string[]): void {
   log('debug', 'CLI error', { message, stack: error instanceof Error ? error.stack : undefined });
   console.error(`Error: ${message}`);
   const conflict = error instanceof KnowledgeVersionConflictError ? error : null;
+  const projectLinksError = error instanceof KnowledgeProjectLinksError ? error : null;
   if (argv.includes('--json')) {
     output({
       ok: false,
       error: message,
       message,
-      ...(conflict ? { code: 'version_conflict', expected: conflict.expected, current: conflict.current } : {}),
+      ...(conflict
+        ? { code: 'version_conflict', expected: conflict.expected, current: conflict.current }
+        : projectLinksError
+          ? { code: projectLinksError.code, details: projectLinksError.details }
+          : {}),
     }, true);
   }
   process.exitCode = conflict ? 2 : 1;

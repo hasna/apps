@@ -239,7 +239,8 @@ export type KnowledgeProjectLinksErrorCode =
   | 'KNOWLEDGE_PROJECT_LINKS_CONFLICT'
   | 'KNOWLEDGE_PROJECT_LINKS_NOT_FOUND'
   | 'KNOWLEDGE_PROJECT_LINKS_CURSOR_STALE'
-  | 'KNOWLEDGE_PROJECT_LINKS_INCOMPLETE_POPULATION';
+  | 'KNOWLEDGE_PROJECT_LINKS_INCOMPLETE_POPULATION'
+  | 'KNOWLEDGE_PROJECT_LINKS_INVALID_RESPONSE';
 
 export class KnowledgeProjectLinksError extends Error {
   constructor(
@@ -2541,6 +2542,134 @@ export interface KnowledgeProjectLinksHttpClientOptions {
   headers?: Record<string, string>;
 }
 
+const KNOWLEDGE_PROJECT_LINKS_ERROR_CODES = new Set<KnowledgeProjectLinksErrorCode>([
+  'KNOWLEDGE_PROJECT_LINKS_INVALID_INPUT',
+  'KNOWLEDGE_PROJECT_LINKS_CAPABILITY_MISMATCH',
+  'KNOWLEDGE_PROJECT_LINKS_DIGEST_MISMATCH',
+  'KNOWLEDGE_PROJECT_LINKS_IDEMPOTENCY_MISMATCH',
+  'KNOWLEDGE_PROJECT_LINKS_CONFLICT',
+  'KNOWLEDGE_PROJECT_LINKS_NOT_FOUND',
+  'KNOWLEDGE_PROJECT_LINKS_CURSOR_STALE',
+  'KNOWLEDGE_PROJECT_LINKS_INCOMPLETE_POPULATION',
+  'KNOWLEDGE_PROJECT_LINKS_INVALID_RESPONSE',
+]);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isResourceKind(value: unknown): value is KnowledgeProjectResourceKind {
+  return value === 'project' || value === 'collection' || value === 'item' || value === 'taxonomy';
+}
+
+function invalidProjectLinksResponse(
+  message: string,
+  details: Record<string, unknown> = {},
+): never {
+  throw new KnowledgeProjectLinksError(
+    'KNOWLEDGE_PROJECT_LINKS_INVALID_RESPONSE',
+    message,
+    details,
+  );
+}
+
+function assertProjectResource(value: unknown, context: string): KnowledgeProjectResource {
+  if (!isRecord(value)) {
+    invalidProjectLinksResponse(`${context} is not an object.`);
+  }
+  const requiredStrings = [
+    'key',
+    'id',
+    'project_id',
+    'source_project_id',
+    'collection_id',
+    'revision',
+    'digest',
+    'title',
+  ] as const;
+  for (const field of requiredStrings) {
+    if (typeof value[field] !== 'string') {
+      invalidProjectLinksResponse(`${context}.${field} is not a string.`);
+    }
+  }
+  if (!isResourceKind(value.kind)) {
+    invalidProjectLinksResponse(`${context}.kind is not a supported resource kind.`);
+  }
+  if (
+    !isRecord(value.locator)
+    || (value.locator.kind !== 'external_uuid' && value.locator.kind !== 'canonical_uri')
+    || typeof value.locator.value !== 'string'
+  ) {
+    invalidProjectLinksResponse(`${context}.locator is not a valid stable locator.`);
+  }
+  if (!isRecord(value.metadata)) {
+    invalidProjectLinksResponse(`${context}.metadata is not an object.`);
+  }
+  return value as unknown as KnowledgeProjectResource;
+}
+
+function assertProjectResourcePage(value: unknown): KnowledgeProjectResourcePage {
+  if (!isRecord(value)) {
+    invalidProjectLinksResponse('Knowledge project-resources response is not an object.');
+  }
+  if (
+    value.schema !== 'knowledge.project-resources.page.v1'
+    || value.authority !== 'knowledge'
+    || value.route !== KNOWLEDGE_PROJECT_RESOURCES_ROUTE
+  ) {
+    invalidProjectLinksResponse(
+      'Knowledge project-resources response does not carry the expected producer contract.',
+    );
+  }
+  for (const field of [
+    'authority_id',
+    'tenant_id',
+    'corpus_id',
+    'project_id',
+    'source_project_id',
+    'collection_id',
+    'collection_revision',
+    'population_digest',
+  ] as const) {
+    if (typeof value[field] !== 'string') {
+      invalidProjectLinksResponse(`Knowledge project-resources response.${field} is not a string.`);
+    }
+  }
+  if (!Array.isArray(value.resource_kinds) || !value.resource_kinds.every(isResourceKind)) {
+    invalidProjectLinksResponse('Knowledge project-resources response.resource_kinds is invalid.');
+  }
+  if (!Array.isArray(value.resources)) {
+    invalidProjectLinksResponse('Knowledge project-resources response.resources is not an array.');
+  }
+  const resources = value.resources.map((resource, index) =>
+    assertProjectResource(resource, `Knowledge project-resources response.resources[${index}]`));
+  if (
+    !Number.isInteger(value.count)
+    || value.count !== resources.length
+    || !Number.isInteger(value.total)
+    || Number(value.total) < resources.length
+    || !Number.isInteger(value.limit)
+    || Number(value.limit) < 1
+  ) {
+    invalidProjectLinksResponse('Knowledge project-resources response pagination counts are invalid.');
+  }
+  if (
+    (value.cursor !== null && typeof value.cursor !== 'string')
+    || (value.next_cursor !== null && typeof value.next_cursor !== 'string')
+    || typeof value.has_more !== 'boolean'
+    || typeof value.complete !== 'boolean'
+    || value.truncated !== false
+  ) {
+    invalidProjectLinksResponse('Knowledge project-resources response pagination state is invalid.');
+  }
+  if (value.has_more && (typeof value.next_cursor !== 'string' || value.next_cursor.length === 0)) {
+    invalidProjectLinksResponse(
+      'Knowledge project-resources response claims more data without a continuation cursor.',
+    );
+  }
+  return { ...value, resources } as unknown as KnowledgeProjectResourcePage;
+}
+
 export class KnowledgeProjectLinksHttpClient implements KnowledgeProjectLinksAuthority {
   private readonly fetchImpl: (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
   private readonly root: string;
@@ -2567,12 +2696,22 @@ export class KnowledgeProjectLinksHttpClient implements KnowledgeProjectLinksAut
     });
     const body = await response.json().catch(() => ({})) as Record<string, unknown>;
     if (!response.ok) {
+      const upstreamError = typeof body.error === 'string' ? body.error : null;
+      const code = upstreamError && KNOWLEDGE_PROJECT_LINKS_ERROR_CODES.has(
+        upstreamError as KnowledgeProjectLinksErrorCode,
+      )
+        ? upstreamError as KnowledgeProjectLinksErrorCode
+        : response.status === 404
+          ? 'KNOWLEDGE_PROJECT_LINKS_NOT_FOUND'
+          : 'KNOWLEDGE_PROJECT_LINKS_CONFLICT';
       throw new KnowledgeProjectLinksError(
-        typeof body.error === 'string'
-          ? body.error as KnowledgeProjectLinksErrorCode
-          : 'KNOWLEDGE_PROJECT_LINKS_CONFLICT',
+        code,
         typeof body.message === 'string' ? body.message : `Knowledge project-links HTTP ${response.status}`,
-        body.details && typeof body.details === 'object' ? body.details as Record<string, unknown> : {},
+        {
+          ...(isRecord(body.details) ? body.details : {}),
+          http_status: response.status,
+          ...(upstreamError && upstreamError !== code ? { upstream_error: upstreamError } : {}),
+        },
       );
     }
     return body as T;
@@ -2666,9 +2805,9 @@ export class KnowledgeProjectLinksHttpClient implements KnowledgeProjectLinksAut
     if (options.cursor) query.set('cursor', options.cursor);
     for (const kind of options.kinds ?? []) query.append('kind', kind);
     const suffix = query.size > 0 ? `?${query.toString()}` : '';
-    return this.request<KnowledgeProjectResourcePage>(
+    return assertProjectResourcePage(await this.request<unknown>(
       `/v1/projects/${encodeURIComponent(projectId)}/resources${suffix}`,
-    );
+    ));
   }
 
   async readProjectResource(
@@ -2676,10 +2815,15 @@ export class KnowledgeProjectLinksHttpClient implements KnowledgeProjectLinksAut
     kind: KnowledgeProjectResourceKind,
     resourceId: string,
   ): Promise<KnowledgeProjectResource> {
-    const body = await this.request<{ resource: KnowledgeProjectResource }>(
+    const body = await this.request<unknown>(
       `/v1/projects/${encodeURIComponent(projectId)}/resources/${kind}/${encodeURIComponent(resourceId)}`,
     );
-    return body.resource;
+    if (!isRecord(body) || !Object.hasOwn(body, 'resource')) {
+      invalidProjectLinksResponse(
+        'Knowledge project-resource response does not contain a resource envelope.',
+      );
+    }
+    return assertProjectResource(body.resource, 'Knowledge project-resource response.resource');
   }
 
   async readAllProjectResources(
