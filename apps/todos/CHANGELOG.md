@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.29] - 2026-08-11
+
+### Fixed
+
+- **Historical project-registration receipts remain addressable after package upgrades.**
+  Exact source identity now includes the stored authority route and package
+  version across SQLite, PostgreSQL, authenticated HTTP, and the
+  `project-registration receipt-lookup` CLI without weakening current-version
+  checks on create or inverse operations.
+
 ## [0.15.28] - 2026-08-11
 
 ### Fixed

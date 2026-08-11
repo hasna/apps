@@ -26,6 +26,10 @@ import {
 import type { PrGroupEventListOptions, PrGroupEventPage, PrGroupStateView } from "../pr-groups/types.js";
 import { parsePrGroupEventPage, parsePrGroupStateView } from "../pr-groups/http-client.js";
 import type {
+  TodosProjectRegistrationLookupRequest,
+  TodosProjectRegistrationLookupResult,
+} from "../project-registration/types.js";
+import type {
   TodosTaskManifestApplyResult,
   TodosTaskManifestBindingLookupRequest,
   TodosTaskManifestBindingLookupResult,
@@ -544,6 +548,83 @@ function assertRemotePrGroupView(value: unknown, route: string): PrGroupStateVie
       { cause: error },
     );
   }
+}
+
+function assertRemoteProjectRegistrationLookup(
+  value: unknown,
+  request: TodosProjectRegistrationLookupRequest,
+  route: string,
+): TodosProjectRegistrationLookupResult {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(
+      `REMOTE_API_INCOMPATIBLE: ${route} returned a non-object receipt lookup envelope; ` +
+        "local SQLite fallback is disabled",
+    );
+  }
+  const envelope = value as Record<string, unknown>;
+  const receipt = envelope["receipt"];
+  const control = envelope["response_control"];
+  if (!receipt || typeof receipt !== "object" || Array.isArray(receipt)
+      || !control || typeof control !== "object" || Array.isArray(control)) {
+    throw new Error(
+      `REMOTE_API_INCOMPATIBLE: ${route} returned an incomplete receipt lookup envelope; ` +
+        "local SQLite fallback is disabled",
+    );
+  }
+  const receiptRecord = receipt as Record<string, unknown>;
+  const controlRecord = control as Record<string, unknown>;
+  const identityMatches =
+    typeof receiptRecord["receipt_id"] === "string"
+    && receiptRecord["authority"] === request.authority
+    && receiptRecord["route"] === request.authority_route
+    && receiptRecord["package_version"] === request.package_version
+    && receiptRecord["authority_id"] === request.authority_id
+    && receiptRecord["tenant_id"] === request.tenant_id
+    && receiptRecord["corpus_id"] === request.corpus_id
+    && receiptRecord["operation_id"] === request.operation_id
+    && receiptRecord["step_id"] === request.step_id
+    && receiptRecord["resource_kind"] === request.resource_kind
+    && receiptRecord["direction"] === request.direction
+    && receiptRecord["idempotency_key"] === request.idempotency_key
+    && (request.target_id === undefined || receiptRecord["target_id"] === request.target_id);
+  const responseBytes = controlRecord["response_bytes"];
+  const elapsedMs = controlRecord["elapsed_ms"];
+  const boundsMatch =
+    controlRecord["complete"] === true
+    && controlRecord["truncated"] === false
+    && controlRecord["response_byte_limit"] === request.response_byte_limit
+    && controlRecord["time_budget_ms"] === request.time_budget_ms
+    && Number.isSafeInteger(responseBytes)
+    && Number(responseBytes) >= 0
+    && Number(responseBytes) <= request.response_byte_limit
+    && Number.isSafeInteger(elapsedMs)
+    && Number(elapsedMs) >= 0
+    && Number(elapsedMs) <= request.time_budget_ms;
+  if (!identityMatches || !boundsMatch) {
+    throw new Error(
+      `REMOTE_API_INCOMPATIBLE: ${route} returned a receipt or response bound for a different identity; ` +
+        "local SQLite fallback is disabled",
+    );
+  }
+  return value as TodosProjectRegistrationLookupResult;
+}
+
+/** Read one immutable historical registration receipt through authenticated `/v1`. */
+export async function cloudLookupProjectRegistrationReceipt(
+  client: HasnaStorageClient,
+  request: TodosProjectRegistrationLookupRequest,
+): Promise<TodosProjectRegistrationLookupResult> {
+  const route = "/v1/project-registration/receipts/lookup";
+  const raw = await requiredRemoteRoute(
+    client,
+    route,
+    () => client.transport.post<unknown>(
+      "/project-registration/receipts/lookup",
+      request as unknown as Record<string, unknown>,
+    ),
+    ["TODOS_PROJECT_REGISTRATION_RECEIPT_NOT_FOUND"],
+  );
+  return assertRemoteProjectRegistrationLookup(raw, request, route);
 }
 
 /** Read an authoritative remote PR-group projection without local fallback. */

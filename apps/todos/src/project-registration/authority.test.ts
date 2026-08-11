@@ -17,10 +17,19 @@ import {
   postgresTodosProjectRegistrationSchemaSql,
   type TodosProjectRegistrationAuthority,
   type TodosProjectRegistrationFaultPoint,
+  type TodosProjectRegistrationLookupRequest,
   type TodosProjectRegistrationRequest,
 } from "./index.js";
 
 const OPERATION_ID = "fleet-resources-registration-0001";
+const HISTORICAL_OPERATION_ID = "fleet-resources-historical-registration-0001";
+const HISTORICAL_ROUTE = "todos.project-registration.v1";
+const HISTORICAL_PACKAGE_VERSION = "1.0.0-rc.3";
+const FABRICATED_PACKAGE_VERSION = "1.0.0-rc.7";
+const HISTORICAL_PROJECT_RECEIPT_ID =
+  "tpr_f3f2fdc82fc4a7a4f4ffb97c42e90ada20cff6b5";
+const HISTORICAL_LIST_RECEIPT_ID =
+  "tpr_a7e555c2c1f2ad855bca2cfcdde67ff2b6149cf7";
 const BOUNDS = {
   response_byte_limit: 65_536,
   time_budget_ms: 5_000,
@@ -203,6 +212,73 @@ async function exactLookup(request: TodosProjectRegistrationRequest) {
     max_items: 1,
     ...BOUNDS,
   });
+}
+
+type HistoricalReceiptFixture = {
+  receiptId: string;
+  stepId: string;
+  resourceKind: "project" | "task_list";
+  targetSelector: string;
+  idempotencyKey: string;
+  targetId: string;
+  createdAt: string;
+};
+
+function insertHistoricalReceipt(fixture: HistoricalReceiptFixture): void {
+  db.run(`
+    INSERT INTO todos_project_registration_receipts (
+      receipt_id, authority, route, package_version, authority_id, tenant_id,
+      corpus_id, operation_id, step_id, resource_kind, direction,
+      target_selector, idempotency_key, request_digest, precondition_digest,
+      normalized_call_digest, outcome, reason, target_id, result_revision,
+      result_digest, duplicate_of_receipt_id, accepted_receipt_id,
+      created_by_operation, created_at
+    ) VALUES (
+      ?, 'todos', ?, ?, 'todos-test-authority', 'tenant-test', 'corpus-test',
+      ?, ?, ?, 'forward', ?, ?, ?, ?, ?, 'accepted', NULL, ?, ?, ?,
+      NULL, NULL, 1, ?
+    )
+  `, [
+    fixture.receiptId,
+    HISTORICAL_ROUTE,
+    HISTORICAL_PACKAGE_VERSION,
+    HISTORICAL_OPERATION_ID,
+    fixture.stepId,
+    fixture.resourceKind,
+    fixture.targetSelector,
+    fixture.idempotencyKey,
+    "1".repeat(64),
+    "2".repeat(64),
+    "3".repeat(64),
+    fixture.targetId,
+    fixture.createdAt,
+    "4".repeat(64),
+    fixture.createdAt,
+  ]);
+}
+
+function historicalLookup(
+  fixture: HistoricalReceiptFixture,
+  overrides: Partial<TodosProjectRegistrationLookupRequest> = {},
+): TodosProjectRegistrationLookupRequest {
+  return {
+    operation_id: HISTORICAL_OPERATION_ID,
+    step_id: fixture.stepId,
+    resource_kind: fixture.resourceKind,
+    direction: "forward",
+    authority: "todos",
+    authority_route: HISTORICAL_ROUTE,
+    package_version: HISTORICAL_PACKAGE_VERSION,
+    authority_id: "todos-test-authority",
+    tenant_id: "tenant-test",
+    corpus_id: "corpus-test",
+    target_selector: fixture.targetSelector,
+    idempotency_key: fixture.idempotencyKey,
+    target_id: fixture.targetId,
+    max_items: 1,
+    ...BOUNDS,
+    ...overrides,
+  };
 }
 
 describe("Todos package-owned project registration authority", () => {
@@ -403,6 +479,87 @@ describe("Todos package-owned project registration authority", () => {
       "DELETE FROM todos_project_registration_receipts WHERE receipt_id = ?",
       [accepted.receipt_id],
     )).toThrow(/immutable/i);
+  });
+
+  test("recovers the exact Fleet Resources project and list receipts by historical source identity", async () => {
+    const projectFixture: HistoricalReceiptFixture = {
+      receiptId: HISTORICAL_PROJECT_RECEIPT_ID,
+      stepId: "todos_project",
+      resourceKind: "project",
+      targetSelector: "wks_fleetresourceshistorical01",
+      idempotencyKey: `prk_${"5".repeat(48)}`,
+      targetId: "11111111-1111-4111-8111-111111111111",
+      createdAt: "2026-08-07T10:00:00.000Z",
+    };
+    const listFixture: HistoricalReceiptFixture = {
+      receiptId: HISTORICAL_LIST_RECEIPT_ID,
+      stepId: "todos_task_list",
+      resourceKind: "task_list",
+      targetSelector: `${projectFixture.targetId}:default`,
+      idempotencyKey: `prk_${"6".repeat(48)}`,
+      targetId: "22222222-2222-4222-8222-222222222222",
+      createdAt: "2026-08-07T10:00:01.000Z",
+    };
+    insertHistoricalReceipt(projectFixture);
+    insertHistoricalReceipt(listFixture);
+
+    for (const fixture of [projectFixture, listFixture]) {
+      const result = await authority.lookupReceipt(historicalLookup(fixture));
+      expect(result.receipt).toMatchObject({
+        receipt_id: fixture.receiptId,
+        route: HISTORICAL_ROUTE,
+        package_version: HISTORICAL_PACKAGE_VERSION,
+        authority_id: "todos-test-authority",
+        tenant_id: "tenant-test",
+        corpus_id: "corpus-test",
+        target_id: fixture.targetId,
+      });
+      expect(result.response_control).toMatchObject({
+        complete: true,
+        truncated: false,
+      });
+      await expect(authority.lookupReceipt(historicalLookup(fixture, {
+        package_version: FABRICATED_PACKAGE_VERSION,
+      }))).rejects.toMatchObject({
+        code: "TODOS_PROJECT_REGISTRATION_RECEIPT_NOT_FOUND",
+      });
+    }
+
+    await expect(authority.lookupReceipt(historicalLookup(projectFixture, {
+      authority_route: "todos.project-registration.v2",
+    }))).rejects.toMatchObject({ code: "TODOS_PROJECT_REGISTRATION_RECEIPT_NOT_FOUND" });
+    await expect(authority.lookupReceipt(historicalLookup(projectFixture, {
+      tenant_id: "tenant-other",
+    }))).rejects.toMatchObject({ code: "TODOS_PROJECT_REGISTRATION_CAPABILITY_MISMATCH" });
+    await expect(authority.lookupReceipt(historicalLookup(projectFixture, {
+      corpus_id: "corpus-other",
+    }))).rejects.toMatchObject({ code: "TODOS_PROJECT_REGISTRATION_CAPABILITY_MISMATCH" });
+    await expect(authority.lookupReceipt(historicalLookup(projectFixture, {
+      authority: "projects" as "todos",
+    }))).rejects.toMatchObject({ code: "TODOS_PROJECT_REGISTRATION_CAPABILITY_MISMATCH" });
+    await expect(authority.lookupReceipt(historicalLookup(projectFixture, {
+      target_id: "33333333-3333-4333-8333-333333333333",
+    }))).rejects.toMatchObject({ code: "TODOS_PROJECT_REGISTRATION_RECEIPT_NOT_FOUND" });
+
+    expect(() => db.run(
+      "UPDATE todos_project_registration_receipts SET package_version = 'changed' WHERE receipt_id = ?",
+      [HISTORICAL_PROJECT_RECEIPT_ID],
+    )).toThrow(/immutable/i);
+  });
+
+  test("keeps current create and inverse operations strict to the installed package identity", async () => {
+    await expect(authority.create(projectRequest({
+      package_version: HISTORICAL_PACKAGE_VERSION,
+    }))).rejects.toMatchObject({ code: "TODOS_PROJECT_REGISTRATION_CAPABILITY_MISMATCH" });
+
+    const forward = projectRequest({
+      operation_id: "fleet-resources-current-package-inverse-0001",
+    });
+    const accepted = await authority.create(forward);
+    await expect(authority.compensate({
+      ...inverseRequest(accepted, forward),
+      package_version: HISTORICAL_PACKAGE_VERSION,
+    })).rejects.toMatchObject({ code: "TODOS_PROJECT_REGISTRATION_CAPABILITY_MISMATCH" });
   });
 
   test("enforces positive byte/time bounds and max_items exactly one at the producer", async () => {
@@ -1130,6 +1287,84 @@ describe("Todos package-owned project registration authority", () => {
     expect(sql).toContain("BEFORE UPDATE OR DELETE");
     expect(sql).toContain("RAISE EXCEPTION");
     expect(sql).toContain("UNIQUE");
+    expect(sql).toContain("todos_project_registration_receipts_source_identity_idx");
+    expect(sql).toContain("route, package_version");
+  });
+
+  test("selects PostgreSQL receipts by the complete stored route and package identity", async () => {
+    const statements: Array<{ text: string; params: readonly unknown[] | undefined }> = [];
+    const row = {
+      receipt_id: HISTORICAL_PROJECT_RECEIPT_ID,
+      authority: "todos",
+      route: HISTORICAL_ROUTE,
+      package_version: HISTORICAL_PACKAGE_VERSION,
+      authority_id: "todos-test-authority",
+      tenant_id: "tenant-test",
+      corpus_id: "corpus-test",
+      operation_id: HISTORICAL_OPERATION_ID,
+      step_id: "todos_project",
+      resource_kind: "project",
+      direction: "forward",
+      target_selector: "wks_fleetresourceshistorical01",
+      idempotency_key: `prk_${"5".repeat(48)}`,
+      request_digest: "1".repeat(64),
+      precondition_digest: "2".repeat(64),
+      normalized_call_digest: "3".repeat(64),
+      outcome: "accepted",
+      reason: null,
+      target_id: "11111111-1111-4111-8111-111111111111",
+      result_revision: "2026-08-07T10:00:00.000Z",
+      result_digest: "4".repeat(64),
+      duplicate_of_receipt_id: null,
+      accepted_receipt_id: null,
+      created_by_operation: true,
+      created_at: "2026-08-07T10:00:00.000Z",
+    };
+    const query = async (text: string, params?: readonly unknown[]) => {
+      statements.push({ text, params });
+      return text.includes("SELECT * FROM todos_project_registration_receipts")
+        ? { rows: [row] }
+        : { rows: [] };
+    };
+    const client = {
+      query,
+      async transaction<T>(fn: (transaction: { query: typeof query }) => Promise<T>) {
+        return await fn({ query });
+      },
+    };
+    const backend = new PostgresTodosProjectRegistrationBackend(client);
+
+    const receipt = await backend.getReceiptForLookup({
+      authority_id: row.authority_id,
+      tenant_id: row.tenant_id,
+      corpus_id: row.corpus_id,
+      route: row.route,
+      package_version: row.package_version,
+      operation_id: row.operation_id,
+      step_id: row.step_id,
+      resource_kind: row.resource_kind,
+      direction: row.direction,
+      idempotency_key: row.idempotency_key,
+      target_selector: row.target_selector,
+    });
+
+    expect(receipt?.receipt_id).toBe(HISTORICAL_PROJECT_RECEIPT_ID);
+    const lookup = statements.find(({ text }) =>
+      text.includes("SELECT * FROM todos_project_registration_receipts"));
+    expect(lookup?.text).toContain("route = $4 AND package_version = $5");
+    expect(lookup?.params).toEqual([
+      row.authority_id,
+      row.tenant_id,
+      row.corpus_id,
+      row.route,
+      row.package_version,
+      row.operation_id,
+      row.step_id,
+      row.resource_kind,
+      row.direction,
+      row.idempotency_key,
+      row.target_selector,
+    ]);
   });
 
   test("bootstraps the hosted PostgreSQL schema and requires real transactions", async () => {

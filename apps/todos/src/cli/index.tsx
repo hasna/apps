@@ -160,6 +160,7 @@ const [
   { registerTaskCommands },
   { registerPlanTemplateCommands },
   { registerProjectCommands },
+  { registerProjectRegistrationCommands },
   { registerAgentCommands },
   { registerAiCommands },
   { registerConfigServeCommands },
@@ -194,6 +195,7 @@ const [
   import("./commands/task-commands.js"),
   import("./commands/plan-template-commands.js"),
   import("./commands/project-commands.js"),
+  import("./commands/project-registration-commands.js"),
   import("./commands/agent-commands.js"),
   import("./commands/ai-commands.js"),
   import("./commands/config-serve-commands.js"),
@@ -231,6 +233,7 @@ const [
 registerTaskCommands(program);
 registerPlanTemplateCommands(program);
 registerProjectCommands(program);
+registerProjectRegistrationCommands(program);
 registerAgentCommands(program);
 registerAiCommands(program);
 registerConfigServeCommands(program);

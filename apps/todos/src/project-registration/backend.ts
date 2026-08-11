@@ -51,6 +51,8 @@ export interface TodosProjectRegistrationBindingRow
 
 export interface TodosProjectRegistrationCallIdentity
   extends TodosProjectRegistrationAuthorityScope {
+  route: string;
+  package_version: string;
   operation_id: string;
   step_id: string;
   resource_kind: TodosProjectRegistrationResourceKind;

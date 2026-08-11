@@ -110,8 +110,9 @@ implements TodosProjectRegistrationBackendTransaction {
     const result = await this.client.query<Record<string, unknown>>(`
       SELECT * FROM todos_project_registration_receipts
       WHERE authority_id = $1 AND tenant_id = $2 AND corpus_id = $3
-        AND operation_id = $4 AND step_id = $5 AND resource_kind = $6
-        AND direction = $7 AND idempotency_key = $8 AND target_selector = $9
+        AND route = $4 AND package_version = $5
+        AND operation_id = $6 AND step_id = $7 AND resource_kind = $8
+        AND direction = $9 AND idempotency_key = $10 AND target_selector = $11
       ORDER BY CASE outcome
         WHEN 'terminal_nonacceptance' THEN 0
         WHEN 'duplicate_of_accepted' THEN 1
@@ -122,6 +123,8 @@ implements TodosProjectRegistrationBackendTransaction {
       identity.authority_id,
       identity.tenant_id,
       identity.corpus_id,
+      identity.route,
+      identity.package_version,
       identity.operation_id,
       identity.step_id,
       identity.resource_kind,

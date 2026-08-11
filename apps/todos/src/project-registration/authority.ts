@@ -40,6 +40,8 @@ const UUID_PATTERN =
 const WORKSPACE_ID_PATTERN = /^wks_[A-Za-z0-9][A-Za-z0-9_-]{11,}$/;
 const OPERATION_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/;
 const STEP_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{2,127}$/;
+const AUTHORITY_ROUTE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{2,127}$/;
+const PACKAGE_VERSION_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$/;
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
 const IDEMPOTENCY_PATTERN = /^prk_[0-9a-f]{48}$/;
 
@@ -846,6 +848,8 @@ implements TodosProjectRegistrationAuthority {
   ): Promise<TodosProjectRegistrationReceiptRow | null> {
     const exact = await transaction.getReceiptForLookup({
       ...authorityScope(this.capabilityValue),
+      route: this.capabilityValue.route,
+      package_version: this.capabilityValue.package_version,
       operation_id: request.operation_id,
       step_id: request.step_id,
       resource_kind: request.resource_kind,
@@ -1100,6 +1104,8 @@ implements TodosProjectRegistrationAuthority {
       });
       const exact = await transaction.getReceiptForLookup({
         ...authorityScope(this.capabilityValue),
+        route: this.capabilityValue.route,
+        package_version: this.capabilityValue.package_version,
         operation_id: request.operation_id,
         step_id: request.step_id,
         resource_kind: request.resource_kind,
@@ -1195,8 +1201,6 @@ implements TodosProjectRegistrationAuthority {
     }
     if (
       request.authority !== "todos"
-      || request.authority_route !== this.capabilityValue.route
-      || request.package_version !== this.capabilityValue.package_version
       || request.authority_id !== this.capabilityValue.authority_id
       || request.tenant_id !== this.capabilityValue.tenant_id
       || request.corpus_id !== this.capabilityValue.corpus_id
@@ -1206,6 +1210,15 @@ implements TodosProjectRegistrationAuthority {
         "receipt lookup does not match this authority capability identity",
       );
     }
+    requireString(request.authority_route, "authority_route", {
+      min: 3,
+      max: 128,
+      pattern: AUTHORITY_ROUTE_PATTERN,
+    });
+    requireString(request.package_version, "package_version", {
+      max: 128,
+      pattern: PACKAGE_VERSION_PATTERN,
+    });
     requireString(request.operation_id, "operation_id", {
       min: 8,
       max: 128,
@@ -1230,6 +1243,8 @@ implements TodosProjectRegistrationAuthority {
     }
     const receipt = await this.backend.getReceiptForLookup({
       ...authorityScope(this.capabilityValue),
+      route: request.authority_route,
+      package_version: request.package_version,
       operation_id: request.operation_id,
       step_id: request.step_id,
       resource_kind: request.resource_kind,
@@ -1300,6 +1315,8 @@ implements TodosProjectRegistrationAuthority {
         });
         const exact = await transaction.getReceiptForLookup({
           ...authorityScope(this.capabilityValue),
+          route: this.capabilityValue.route,
+          package_version: this.capabilityValue.package_version,
           operation_id: request.operation_id,
           step_id: request.step_id,
           resource_kind: request.resource_kind,
@@ -1471,6 +1488,8 @@ implements TodosProjectRegistrationAuthority {
     await this.storedAcceptedReceipt(request, accepted);
     const receipt = await this.backend.getReceiptForLookup({
       ...authorityScope(this.capabilityValue),
+      route: this.capabilityValue.route,
+      package_version: this.capabilityValue.package_version,
       operation_id: request.operation_id,
       step_id: request.step_id,
       resource_kind: request.resource_kind,

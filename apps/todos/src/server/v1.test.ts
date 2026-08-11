@@ -600,6 +600,150 @@ describe("/v1 task-list cloud parity", () => {
     expect(await store.projects.get(targetId)).toBeNull();
   });
 
+  test("routes exact historical registration receipt identity through authenticated v1", async () => {
+    const historicalPackageVersion = "1.0.0-rc.3";
+    const historicalAuthority = createLocalTodosProjectRegistrationAuthority(db, {
+      packageVersion: historicalPackageVersion,
+      authorityId: "todos-v1-test",
+      tenantId: "tenant-v1-test",
+      corpusId: "corpus-v1-test",
+    });
+    const desired = {
+      source_project_id: "wks_fleetresourceshistoryv1",
+      source_project_slug: "fleet-resources-history",
+      name: "Fleet Resources History",
+    };
+    const targetSelector = desired.source_project_id;
+    const operationId = "fleet-resources-v1-historical-registration-0001";
+    const requestDigest = digestProjectRegistrationValue(desired);
+    const preconditionDigest = digestProjectRegistrationValue({
+      target_selector: targetSelector,
+      expected: "absent",
+    });
+    const idempotencyKey = deriveTodosProjectRegistrationIdempotencyKey({
+      operation_id: operationId,
+      step_id: "todos_project",
+      direction: "forward",
+      target_selector: targetSelector,
+      request_digest: requestDigest,
+      precondition_digest: preconditionDigest,
+    });
+    const receipt = await historicalAuthority.create({
+      operation_id: operationId,
+      step_id: "todos_project",
+      resource_kind: "project",
+      direction: "forward",
+      authority_route: "todos.project-registration.v1",
+      package_version: historicalPackageVersion,
+      authority_id: "todos-v1-test",
+      tenant_id: "tenant-v1-test",
+      corpus_id: "corpus-v1-test",
+      target_selector: targetSelector,
+      idempotency_key: idempotencyKey,
+      request_digest: requestDigest,
+      precondition_digest: preconditionDigest,
+      project_id: targetSelector,
+      project_slug: desired.source_project_slug,
+      project_name: desired.name,
+      desired,
+      target: null,
+      response_byte_limit: 65_536,
+      time_budget_ms: 5_000,
+    });
+    const lookupRequest = {
+      operation_id: operationId,
+      step_id: "todos_project",
+      resource_kind: "project",
+      direction: "forward",
+      authority: "todos",
+      authority_route: "todos.project-registration.v1",
+      package_version: historicalPackageVersion,
+      authority_id: "todos-v1-test",
+      tenant_id: "tenant-v1-test",
+      corpus_id: "corpus-v1-test",
+      target_selector: targetSelector,
+      idempotency_key: idempotencyKey,
+      target_id: receipt.target_id,
+      max_items: 1,
+      response_byte_limit: 65_536,
+      time_budget_ms: 5_000,
+    };
+
+    const historical = await request(
+      "/v1/project-registration/receipts/lookup",
+      "POST",
+      lookupRequest,
+    );
+    expect({ status: historical?.status, body: await historical!.json() }).toMatchObject({
+      status: 200,
+      body: {
+        receipt: {
+          receipt_id: receipt.receipt_id,
+          route: "todos.project-registration.v1",
+          package_version: historicalPackageVersion,
+        },
+        response_control: { complete: true, truncated: false },
+      },
+    });
+
+    const wrongVersion = await request(
+      "/v1/project-registration/receipts/lookup",
+      "POST",
+      { ...lookupRequest, package_version: "1.0.0-rc.7" },
+    );
+    expect({ status: wrongVersion?.status, body: await wrongVersion!.json() }).toMatchObject({
+      status: 404,
+      body: { code: "TODOS_PROJECT_REGISTRATION_RECEIPT_NOT_FOUND" },
+    });
+
+    const wrongRoute = await request(
+      "/v1/project-registration/receipts/lookup",
+      "POST",
+      { ...lookupRequest, authority_route: "todos.project-registration.v2" },
+    );
+    expect({ status: wrongRoute?.status, body: await wrongRoute!.json() }).toMatchObject({
+      status: 404,
+      body: { code: "TODOS_PROJECT_REGISTRATION_RECEIPT_NOT_FOUND" },
+    });
+
+    const wrongTenant = await request(
+      "/v1/project-registration/receipts/lookup",
+      "POST",
+      { ...lookupRequest, tenant_id: "tenant-other" },
+    );
+    expect({ status: wrongTenant?.status, body: await wrongTenant!.json() }).toMatchObject({
+      status: 400,
+      body: { code: "TODOS_PROJECT_REGISTRATION_CAPABILITY_MISMATCH" },
+    });
+  });
+
+  test("authenticates registration receipt lookup before reaching the authority", async () => {
+    let authorityReached = false;
+    dependencies = {
+      ...dependencies,
+      getProjectRegistrationAuthority: () => {
+        authorityReached = true;
+        return createLocalTodosProjectRegistrationAuthority(db);
+      },
+      getVerifier: () => ({
+        authenticate: async () => ({
+          ok: false,
+          status: 403,
+          reason: "insufficient_scope",
+          message: "missing todos:write scope",
+        }),
+      }) as ReturnType<NonNullable<V1RequestDependencies["getVerifier"]>>,
+    };
+
+    const response = await request(
+      "/v1/project-registration/receipts/lookup",
+      "POST",
+      {},
+    );
+    expect(response?.status).toBe(403);
+    expect(authorityReached).toBe(false);
+  });
+
   test("routes authenticated PR-group state and history through the injected authority", async () => {
     const admitted = await request("/v1/pr-groups/admit", "POST", {
       root_request_id: "request-root",

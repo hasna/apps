@@ -42,7 +42,7 @@ const REGISTERED_CANONICAL_COMMANDS = [
   "hook", "hooks", "import", "inbox", "init", "inspect", "interactive", "issues",
   "knowledge", "link-commit", "link-ref", "list", "lists", "lock", "log", "machines",
   "manual", "mcp", "mine", "move", "next", "notifications", "onboarding", "org", "overdue",
-  "pin", "plans", "policies", "priorities", "project-bootstrap", "project-panel", "project-rename", "projects",
+  "pin", "plans", "policies", "priorities", "project-bootstrap", "project-panel", "project-registration", "project-rename", "projects",
   "projects-path", "ready", "recap", "record-verification", "redaction", "redistribute", "references", "release",
   "release-compat", "release-notes", "reliability", "remove", "report", "report-failure", "reports", "retention",
   "retrospectives", "reviews", "risks", "roadmaps", "runs", "sandbox", "scale", "sdk-fixtures",
@@ -141,7 +141,7 @@ const REMOTE_COMMANDS = new Set([
   // dead on exactly the fleet it was built for. Covered by delegate-routing.test.ts.
   "active", "add", "agent", "agents", "ai", "approve", "assign", "bulk", "claim", "comment", "count", "delegate", "delete", "deps", "fail",
   "doctor", "done", "find-commit", "find-ref", "health", "heartbeat", "history", "init", "inspect", "link-commit",
-  "link-ref", "list", "lists", "lock", "log-progress", "move", "next", "plans", "project-rename", "projects", "recap",
+  "link-ref", "list", "lists", "lock", "log-progress", "move", "next", "plans", "project-registration", "project-rename", "projects", "recap",
   "record-verification", "release", "remove", "show", "standup", "start", "status", "tag", "task", "task-lists",
   "stale-lock-handoff", "task-manifest", "template-export", "template-import", "template-preview", "templates", "timeline", "tl", "unlock", "unassign", "untag", "update",
 ]);

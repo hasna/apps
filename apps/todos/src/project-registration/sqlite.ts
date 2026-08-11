@@ -166,6 +166,7 @@ implements TodosProjectRegistrationBackendTransaction {
     const row = this.db.query(`
       SELECT * FROM todos_project_registration_receipts
       WHERE authority_id = ? AND tenant_id = ? AND corpus_id = ?
+        AND route = ? AND package_version = ?
         AND operation_id = ? AND step_id = ? AND resource_kind = ?
         AND direction = ? AND idempotency_key = ? AND target_selector = ?
       ORDER BY CASE outcome
@@ -178,6 +179,8 @@ implements TodosProjectRegistrationBackendTransaction {
       identity.authority_id,
       identity.tenant_id,
       identity.corpus_id,
+      identity.route,
+      identity.package_version,
       identity.operation_id,
       identity.step_id,
       identity.resource_kind,
@@ -501,6 +504,8 @@ implements TodosProjectRegistrationBackendTransaction {
         receipt.authority_id === identity.authority_id
         && receipt.tenant_id === identity.tenant_id
         && receipt.corpus_id === identity.corpus_id
+        && receipt.route === identity.route
+        && receipt.package_version === identity.package_version
         && receipt.operation_id === identity.operation_id
         && receipt.step_id === identity.step_id
         && receipt.resource_kind === identity.resource_kind

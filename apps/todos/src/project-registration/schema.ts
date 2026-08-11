@@ -35,6 +35,12 @@ export function sqliteTodosProjectRegistrationSchemaSql(): string {
         authority_id, tenant_id, corpus_id, operation_id, step_id,
         resource_kind, direction, idempotency_key
       );
+    CREATE INDEX IF NOT EXISTS idx_todos_project_registration_receipts_source_identity
+      ON todos_project_registration_receipts (
+        authority_id, tenant_id, corpus_id, route, package_version,
+        operation_id, step_id, resource_kind, direction, idempotency_key,
+        target_selector
+      );
     CREATE INDEX IF NOT EXISTS idx_todos_project_registration_receipts_step
       ON todos_project_registration_receipts (
         authority_id, tenant_id, corpus_id, operation_id, step_id,
@@ -134,6 +140,12 @@ export function postgresTodosProjectRegistrationSchemaSql(): string[] {
       ON todos_project_registration_receipts (
         authority_id, tenant_id, corpus_id, operation_id, step_id,
         resource_kind, direction, idempotency_key
+      )`,
+    `CREATE INDEX IF NOT EXISTS todos_project_registration_receipts_source_identity_idx
+      ON todos_project_registration_receipts (
+        authority_id, tenant_id, corpus_id, route, package_version,
+        operation_id, step_id, resource_kind, direction, idempotency_key,
+        target_selector
       )`,
     `CREATE INDEX IF NOT EXISTS todos_project_registration_receipts_step_idx
       ON todos_project_registration_receipts (
