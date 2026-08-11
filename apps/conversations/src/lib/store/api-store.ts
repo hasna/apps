@@ -304,6 +304,7 @@ export class ApiStore implements ConversationsStore {
     return this.get("/project-registration/channels", {
       project_id: request.project_id,
       cursor: request.cursor,
+      collection_revision: request.collection_revision,
       max_items: request.max_items,
       response_byte_limit: request.response_byte_limit,
       time_budget_ms: request.time_budget_ms,

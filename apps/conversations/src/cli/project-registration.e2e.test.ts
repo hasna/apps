@@ -199,6 +199,66 @@ describe("project-registration CLI producer contract", () => {
     expect(channels.complete).toBe(true);
     expect(channels.truncated).toBe(false);
 
+    const db = new Database(TEST_DB);
+    db.prepare(
+      "INSERT INTO channels (id, name, project_id, created_by) VALUES (?, ?, ?, ?)",
+    ).run(
+      "chn_10000000000000000000000000000000",
+      "cli-project-first",
+      PROJECT_ID,
+      "tester",
+    );
+    db.prepare(
+      "INSERT INTO channels (id, name, project_id, created_by) VALUES (?, ?, ?, ?)",
+    ).run(
+      "chn_f0000000000000000000000000000000",
+      "cli-project-last",
+      PROJECT_ID,
+      "tester",
+    );
+    db.close();
+
+    const allChannelsResult = runCli([
+      "project-registration",
+      "channels",
+      "--project",
+      PROJECT_ID,
+      "--limit",
+      "1",
+      "--all",
+      "--json",
+    ]);
+    expect(allChannelsResult.exitCode, allChannelsResult.stderr).toBe(0);
+    const allChannels = JSON.parse(allChannelsResult.stdout) as {
+      collection_revision: string;
+      items: Array<{ target_id: string }>;
+      item_count: number;
+      next_cursor: string | null;
+      complete: boolean;
+      truncated: boolean;
+    };
+    expect(allChannels.collection_revision).toMatch(/^[0-9a-f]{64}$/);
+    expect(allChannels.items.map((item) => item.target_id).sort()).toEqual([
+      "chn_10000000000000000000000000000000",
+      created.target_id,
+      "chn_f0000000000000000000000000000000",
+    ].sort());
+    expect(new Set(allChannels.items.map((item) => item.target_id)).size).toBe(3);
+    expect(allChannels).toMatchObject({
+      item_count: 3,
+      next_cursor: null,
+      complete: true,
+      truncated: false,
+    });
+    const cleanupDb = new Database(TEST_DB);
+    cleanupDb.prepare(
+      "DELETE FROM channels WHERE id IN (?, ?)",
+    ).run(
+      "chn_10000000000000000000000000000000",
+      "chn_f0000000000000000000000000000000",
+    );
+    cleanupDb.close();
+
     const firstMessagesResult = runCli([
       "project-registration",
       "messages",

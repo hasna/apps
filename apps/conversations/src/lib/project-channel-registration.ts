@@ -168,6 +168,7 @@ export interface ProjectChannelRegistrationReadRequest extends ProjectChannelReg
 export interface ProjectChannelCollectionRequest extends ProjectChannelRegistrationBounds {
   project_id: string;
   cursor?: string;
+  collection_revision?: string;
   max_items: number;
 }
 
@@ -184,6 +185,7 @@ export interface ProjectChannelCollectionPage {
   resource_kind: "channel";
   scope: "collection";
   project_id: string;
+  collection_revision: string;
   items: ProjectChannelCollectionItem[];
   cursor: string | null;
   next_cursor: string | null;
@@ -314,6 +316,31 @@ export interface ProjectChannelRegistrationFaultOptions {
   ) => void;
 }
 
+export const PROJECT_CHANNEL_COLLECTION_CHANGED =
+  "CONVERSATIONS_PROJECT_CHANNEL_COLLECTION_CHANGED" as const;
+
+export class ProjectChannelCollectionChangedError extends Error {
+  readonly code = PROJECT_CHANNEL_COLLECTION_CHANGED;
+
+  constructor(
+    message: string,
+    readonly details: Record<string, unknown> = {},
+  ) {
+    super(message);
+    this.name = "ProjectChannelCollectionChangedError";
+  }
+}
+
+export function isProjectChannelCollectionChangedError(
+  error: unknown,
+): error is ProjectChannelCollectionChangedError {
+  return Boolean(
+    error
+      && typeof error === "object"
+      && (error as { code?: unknown }).code === PROJECT_CHANNEL_COLLECTION_CHANGED,
+  );
+}
+
 type ReceiptRow = Omit<ProjectChannelRegistrationReceipt, "created_by_operation" | "prior_state"> & {
   created_by_operation: number | boolean;
   prior_state: string | ProjectChannelRegistrationPriorState | null;
@@ -405,6 +432,15 @@ export function validateProjectChannelCollectionRequest(
   assertCollectionBounds(input);
   if (input.cursor !== undefined && !/^chn_[0-9a-f]{32}$/.test(input.cursor)) {
     throw new Error("cursor must be a stable chn_ channel id.");
+  }
+  if (input.cursor !== undefined && input.collection_revision === undefined) {
+    throw new Error("collection_revision is required when cursor is set.");
+  }
+  if (
+    input.collection_revision !== undefined
+    && !/^[0-9a-f]{64}$/.test(input.collection_revision)
+  ) {
+    throw new Error("collection_revision must be a 64-character lowercase SHA-256 digest.");
   }
 }
 
@@ -542,6 +578,7 @@ export function projectChannelRegistrationChannelRecord(row: ChannelRow): Projec
 export function buildProjectChannelCollectionPage(
   request: ProjectChannelCollectionRequest,
   rows: ChannelRow[],
+  collectionRevision: string,
   startedAt: number,
 ): ProjectChannelCollectionPage {
   validateProjectChannelCollectionRequest(request);
@@ -568,6 +605,7 @@ export function buildProjectChannelCollectionPage(
     resource_kind: "channel",
     scope: "collection",
     project_id: request.project_id,
+    collection_revision: collectionRevision,
     items,
     cursor: request.cursor ?? null,
     next_cursor: hasMore ? items[items.length - 1]?.target_id ?? null : null,
@@ -580,6 +618,30 @@ export function buildProjectChannelCollectionPage(
     response_bytes: 0,
     elapsed_ms: 0,
   }, request, startedAt);
+}
+
+function projectChannelCollectionRevision(
+  projectId: string,
+  rows: ChannelRow[],
+): string {
+  return projectChannelRegistrationDigest({
+    project_id: projectId,
+    members: rows
+      .map((row) => projectChannelRegistrationChannelRecord(row))
+      .sort((left, right) => left.target_id.localeCompare(right.target_id)),
+  });
+}
+
+function readProjectChannelCollectionRows(
+  db: ConversationsDatabase,
+  projectId: string,
+): ChannelRow[] {
+  return db.prepare(`
+    SELECT *
+    FROM channels
+    WHERE project_id = ?
+    ORDER BY id ASC
+  `).all(projectId) as ChannelRow[];
 }
 
 export function projectChannelMessageCollectionItem(
@@ -673,6 +735,22 @@ export function listProjectChannelRegistrationPage(
 ): ProjectChannelCollectionPage {
   const startedAt = performance.now();
   validateProjectChannelCollectionRequest(request);
+  const collectionRevision = projectChannelCollectionRevision(
+    request.project_id,
+    readProjectChannelCollectionRows(db, request.project_id),
+  );
+  if (
+    request.collection_revision !== undefined
+    && request.collection_revision !== collectionRevision
+  ) {
+    throw new ProjectChannelCollectionChangedError(
+      "project channel collection changed during pagination; restart from the first page",
+      {
+        expected_collection_revision: request.collection_revision,
+        current_collection_revision: collectionRevision,
+      },
+    );
+  }
   const rows = db.prepare(`
     SELECT *
     FROM channels
@@ -685,7 +763,25 @@ export function listProjectChannelRegistrationPage(
     request.cursor ?? null,
     request.max_items + 1,
   ) as ChannelRow[];
-  return buildProjectChannelCollectionPage(request, rows, startedAt);
+  const verifiedCollectionRevision = projectChannelCollectionRevision(
+    request.project_id,
+    readProjectChannelCollectionRows(db, request.project_id),
+  );
+  if (verifiedCollectionRevision !== collectionRevision) {
+    throw new ProjectChannelCollectionChangedError(
+      "project channel collection changed while producing a page; restart from the first page",
+      {
+        expected_collection_revision: collectionRevision,
+        current_collection_revision: verifiedCollectionRevision,
+      },
+    );
+  }
+  return buildProjectChannelCollectionPage(
+    request,
+    rows,
+    collectionRevision,
+    startedAt,
+  );
 }
 
 export function listProjectChannelMessagePage(
