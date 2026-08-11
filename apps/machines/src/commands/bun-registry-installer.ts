@@ -726,6 +726,17 @@ function assertRegistryLock(globalRoot: string, step: ExactBunRegistryPlanStep):
   if (!registryLockMatches(globalRoot, step)) throw new Error(`registry_lock_mismatch:${step.order}`);
 }
 
+function sdkProbeEnvironment(globalRoot: string): NodeJS.ProcessEnv {
+  return { BUN_INSTALL_GLOBAL_DIR: globalRoot };
+}
+
+function cliProbeEnvironment(bunPath: string, globalRoot: string): NodeJS.ProcessEnv {
+  return {
+    BUN_INSTALL_GLOBAL_DIR: globalRoot,
+    PATH: dirname(bunPath),
+  };
+}
+
 function statusProbeForStep(payload: ExactBunTargetTransactionPayload, step: ExactBunRegistryPlanStep): ExactBunPackageProbe {
   const bunRoot = dirname(dirname(payload.bunPath));
   const globalRoot = join(bunRoot, "install", "global");
@@ -739,16 +750,21 @@ function statusProbeForStep(payload: ExactBunTargetTransactionPayload, step: Exa
   } catch {}
   const packageJsonOk = installed && observedVersion === step.package.version;
   const registryOk = registryLockMatches(globalRoot, step);
-  const sdk = installed
-    ? runQuiet(payload.bunPath, ["-e", `import(${JSON.stringify(step.probe.sdkImport)})`], {
-        ...process.env,
-        BUN_INSTALL_GLOBAL_DIR: globalRoot,
-      }, globalRoot)
+  const provenanceOk = packageJsonOk && registryOk;
+  const sdk = provenanceOk
+    ? runQuiet(
+        payload.bunPath,
+        ["-e", `import(${JSON.stringify(step.probe.sdkImport)})`],
+        sdkProbeEnvironment(globalRoot),
+        globalRoot,
+      )
     : { status: 1, stdout: "", stderr: "" };
   const sdkOk = sdk.status === 0;
   const cliPath = join(bunRoot, "bin", step.package.bin);
   const cliPresent = existsSync(cliPath) && statSync(cliPath).isFile() && (statSync(cliPath).mode & 0o111) !== 0;
-  const cli = cliPresent ? runQuiet(cliPath, step.probe.cliArgs) : { status: 1, stdout: "", stderr: "" };
+  const cli = provenanceOk && cliPresent
+    ? runQuiet(cliPath, step.probe.cliArgs, cliProbeEnvironment(payload.bunPath, globalRoot))
+    : { status: 1, stdout: "", stderr: "" };
   const cliExitCode = Number.isInteger(cli.status) ? cli.status! : 1;
   const cliOk = cliPresent && cliExitCode === 0;
   const reasonCodes = [

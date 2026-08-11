@@ -391,19 +391,75 @@ describe("exact Bun target transaction", () => {
     const root = globalRoot(machine);
     for (const step of plan.steps) {
       writePackage(root, step.package.name, step.package.version);
-      writeFileSync(join(dirname(machine.bunPath!), step.package.bin), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+      writeFileSync(join(dirname(machine.bunPath!), step.package.bin), [
+        "#!/bin/sh",
+        '[ -z "${HASNA_TEST_API_KEY+x}" ] || exit 90',
+        `[ "$PATH" = ${JSON.stringify(dirname(machine.bunPath!))} ] || exit 91`,
+        "exit 0",
+        "",
+      ].join("\n"), { mode: 0o755 });
     }
     writeRegistryLock(root, plan.steps);
-    writeFileSync(machine.bunPath!, `#!/bin/sh\n[ "$PWD" = ${JSON.stringify(root)} ] || exit 88\nexit 0\n`, { mode: 0o755 });
+    writeFileSync(machine.bunPath!, [
+      "#!/bin/sh",
+      `[ "$PWD" = ${JSON.stringify(root)} ] || exit 88`,
+      '[ -z "${HASNA_TEST_API_KEY+x}" ] || exit 89',
+      "exit 0",
+      "",
+    ].join("\n"), { mode: 0o755 });
 
     const wrongCwd = spawnSync(machine.bunPath!, ["-e", "import('@hasnaxyz/infinity')"], {
       cwd: dirname(root),
     });
     expect(wrongCwd.status).toBe(88);
 
-    const result = executeExactBunTargetStatus(exactBunTargetPayload(machine, plan));
-    expect(result.probes).toHaveLength(2);
-    expect(result.probes.every((entry) => entry.status === "pass")).toBe(true);
+    const previousSentinel = process.env["HASNA_TEST_API_KEY"];
+    process.env["HASNA_TEST_API_KEY"] = "non-secret-test-sentinel";
+    try {
+      const result = executeExactBunTargetStatus(exactBunTargetPayload(machine, plan));
+      expect(result.probes).toHaveLength(2);
+      expect(result.probes.every((entry) => entry.status === "pass")).toBe(true);
+    } finally {
+      if (previousSentinel === undefined) delete process.env["HASNA_TEST_API_KEY"];
+      else process.env["HASNA_TEST_API_KEY"] = previousSentinel;
+    }
+  });
+
+  test("does not execute SDK code before package and registry provenance are proven", () => {
+    const machine = machineFixture();
+    const plan = buildExactBunAppsPlan(machine);
+    const step = plan.steps[0]!;
+    const payload = exactBunTargetPayload(machine, plan);
+    payload.steps = [step];
+    const root = globalRoot(machine);
+    const sdkMarker = join(roots[roots.length - 1]!, "sdk-import-executed");
+    const cliMarker = join(roots[roots.length - 1]!, "cli-help-executed");
+    writeFileSync(
+      join(dirname(machine.bunPath!), step.package.bin),
+      `#!/bin/sh\n: > ${JSON.stringify(cliMarker)}\nexit 0\n`,
+      { mode: 0o755 },
+    );
+    writeFileSync(machine.bunPath!, `#!/bin/sh\n: > ${JSON.stringify(sdkMarker)}\nexit 0\n`, { mode: 0o755 });
+
+    writePackage(root, step.package.name, "0.0.0");
+    writeRegistryLock(root, [step]);
+    const wrongPackage = executeExactBunTargetStatus(payload).probes[0]!;
+    expect(wrongPackage.checks.packageJson.ok).toBe(false);
+    expect(wrongPackage.checks.registryProvenance.ok).toBe(true);
+    expect(wrongPackage.checks.sdkImport.ok).toBe(false);
+    expect(wrongPackage.checks.cliHelp.ok).toBe(false);
+    expect(existsSync(sdkMarker)).toBe(false);
+    expect(existsSync(cliMarker)).toBe(false);
+
+    writePackage(root, step.package.name, step.package.version);
+    writeFileSync(join(root, "bun.lock"), "unproven-registry-lock\n");
+    const wrongRegistry = executeExactBunTargetStatus(payload).probes[0]!;
+    expect(wrongRegistry.checks.packageJson.ok).toBe(true);
+    expect(wrongRegistry.checks.registryProvenance.ok).toBe(false);
+    expect(wrongRegistry.checks.sdkImport.ok).toBe(false);
+    expect(wrongRegistry.checks.cliHelp.ok).toBe(false);
+    expect(existsSync(sdkMarker)).toBe(false);
+    expect(existsSync(cliMarker)).toBe(false);
   });
 
   test("accepts a quarantine exclusion superset and rejects any missing required entry", () => {
