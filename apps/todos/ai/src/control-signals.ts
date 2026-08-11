@@ -4,6 +4,7 @@ import {
   type TodosAiPendingApproval,
   type TodosAiPendingInput,
 } from "@hasna/todos";
+import { types as utilTypes } from "node:util";
 
 export type TodosAiControlSignal =
   | TodosAiNeedsInputSignal
@@ -33,7 +34,8 @@ function crossBundlePayload(
     if (
       name?.value !== shape.name ||
       message?.value !== shape.message ||
-      payload === null
+      payload === null ||
+      utilTypes.isProxy(payload.value)
     ) {
       return null;
     }

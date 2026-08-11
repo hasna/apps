@@ -218,4 +218,32 @@ describe("built companion control-signal boundary", () => {
     });
     expect(accessorCalls).toBe(0);
   }, 30_000);
+
+  test("does not inspect Proxy-backed payloads on ordinary errors", async () => {
+    let payloadGets = 0;
+    const pendingInput = new Proxy(
+      { prompt: "Must not be read.", fields: ["task_id"] },
+      {
+        get(target, property, receiver) {
+          payloadGets += 1;
+          return Reflect.get(target, property, receiver);
+        },
+      },
+    );
+    const proxyBacked = new Error("Todos AI input required");
+    proxyBacked.name = "TodosAiNeedsInputSignal";
+    Object.defineProperty(proxyBacked, "pending_input", {
+      value: pendingInput,
+    });
+
+    const { result } = await runAcrossBuiltBoundary(proxyBacked);
+    expect({ payloadGets, result }).toMatchObject({
+      payloadGets: 0,
+      result: {
+        status: "answered",
+        pending_input: null,
+        pending_approval: null,
+      },
+    });
+  }, 30_000);
 });
