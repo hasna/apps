@@ -45,6 +45,7 @@ import type {
   TodosProjectResourcePage,
   TodosProjectResourcePageRequest,
 } from "../project-registration/index.js";
+import { assertTodosProjectResourcePage } from "../project-registration/page-validation.js";
 
 type Env = Record<string, string | undefined>;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -792,7 +793,7 @@ export async function cloudListProjectResources(
   input: TodosProjectResourcePageRequest,
 ): Promise<TodosProjectResourcePage> {
   const route = "/v1/project-registration/resources";
-  return unwrapProjectRegistrationEnvelope(
+  const page = unwrapProjectRegistrationEnvelope<unknown>(
     await requiredRemoteRoute(client, route, () =>
       client.transport.get<unknown>("/project-registration/resources", {
         query: {
@@ -805,6 +806,15 @@ export async function cloudListProjectResources(
     "page",
     route,
   );
+  try {
+    return assertTodosProjectResourcePage(page, input);
+  } catch (error) {
+    throw new Error(
+      `REMOTE_API_INCOMPATIBLE: ${route} returned an invalid project-resource page for the requested identity; ` +
+        "local SQLite fallback is disabled",
+      { cause: error },
+    );
+  }
 }
 
 export async function cloudTaskManifestCapability(

@@ -4,6 +4,7 @@ import {
   planProjectLinkResultDigest,
   planProjectLinkRollbackReceiptId,
 } from "../lib/plan-project-link-contract.js";
+import type { TodosProjectResourcePage } from "../project-registration/index.js";
 import type { Plan, PlanProjectLinkReceipt, Project, Task } from "../types/index.js";
 import {
   getTodosCloudClient,
@@ -55,6 +56,7 @@ import {
   cloudResolvePlan,
   cloudResolveTaskListRef,
   cloudResolveTaskRef,
+  cloudListProjectResources,
   requireTodosRemoteAuthorityEnv,
   serverStorageMode,
 } from "./cloud-router.js";
@@ -226,6 +228,41 @@ function planProjectLinkReceiptFixture(
   };
 }
 
+function projectResourcePageFixture(
+  overrides: Partial<TodosProjectResourcePage> = {},
+): TodosProjectResourcePage {
+  const sourceProjectId = "wks_cloudresources0001";
+  return {
+    authority: "todos",
+    route: "todos.project-registration.v1",
+    package_version: "0.15.30-test",
+    authority_id: "todos",
+    tenant_id: "tenant-test",
+    corpus_id: "todos:tenant-test",
+    source_project_id: sourceProjectId,
+    todos_project_id: "11111111-1111-4111-8111-111111111111",
+    task_list_id: "22222222-2222-4222-8222-222222222222",
+    include_anchors: true,
+    collection_revision: "sha256:" + "a".repeat(64),
+    limit: 1,
+    count: 1,
+    resources: [{
+      source_project_id: sourceProjectId,
+      kind: "project",
+      scope: "collection",
+      target_id: "11111111-1111-4111-8111-111111111111",
+      parent_id: null,
+      revision: "2026-08-11T00:00:00.000Z",
+      digest: "b".repeat(64),
+    }],
+    has_more: false,
+    next_cursor: null,
+    complete: true,
+    truncated: false,
+    ...overrides,
+  };
+}
+
 afterEach(() => {
   if (previousFetch) {
     globalThis.fetch = previousFetch;
@@ -361,6 +398,54 @@ describe("todos client self_hosted resolver", () => {
 });
 
 describe("remote authority compatibility diagnostics", () => {
+  test("accepts an honest project-resource page bound to the request", async () => {
+    const page = projectResourcePageFixture();
+    const calls = installFetch(() => ({ body: { page } }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    await expect(cloudListProjectResources(client, {
+      source_project_id: page.source_project_id,
+      include_anchors: true,
+      limit: 1,
+    })).resolves.toEqual(page);
+    expect(calls.map((call) => `${call.method} ${call.url}`)).toEqual([
+      "GET https://todos.example.com/v1/project-registration/resources?source_project_id=wks_cloudresources0001&limit=1&include_anchors=true",
+    ]);
+  });
+
+  test("rejects wrong-identity and truncated project-resource pages at the HTTP boundary", async () => {
+    const request = {
+      source_project_id: "wks_cloudresources0001",
+      include_anchors: true,
+      limit: 1,
+    };
+    installFetch(() => ({
+      body: {
+        page: projectResourcePageFixture({
+          source_project_id: "wks_differentproject01",
+        }),
+      },
+    }));
+    const wrongIdentityClient = getTodosCloudClient(CLOUD_ENV)!;
+    await expect(cloudListProjectResources(wrongIdentityClient, request)).rejects.toThrow(
+      "REMOTE_API_INCOMPATIBLE: /v1/project-registration/resources returned an invalid project-resource page",
+    );
+
+    installFetch(() => ({
+      body: {
+        page: {
+          ...projectResourcePageFixture(),
+          complete: false,
+          truncated: true,
+        },
+      },
+    }));
+    const truncatedClient = getTodosCloudClient(CLOUD_ENV)!;
+    await expect(cloudListProjectResources(truncatedClient, request)).rejects.toThrow(
+      "REMOTE_API_INCOMPATIBLE: /v1/project-registration/resources returned an invalid project-resource page",
+    );
+  });
+
   test("does not treat a health-only platform host as a Todos /v1 CRUD authority", async () => {
     const calls = installFetch((call) => {
       if (call.url === "https://todos.md/v1/projects") {

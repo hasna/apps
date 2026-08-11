@@ -176,6 +176,105 @@ describe("project-registration CLI", () => {
     expect(calls).toBe(4);
   });
 
+  test("accepts an honest page and rejects wrong source or producer completion claims", async () => {
+    const request = {
+      source_project_id: "wks_clivalidation0001",
+      include_anchors: true,
+      limit: 1,
+    };
+    const resource = {
+      source_project_id: request.source_project_id,
+      kind: "project" as const,
+      scope: "collection" as const,
+      target_id: "11111111-1111-4111-8111-111111111111",
+      parent_id: null,
+      revision: "2026-08-11T00:00:00.000Z",
+      digest: "a".repeat(64),
+    };
+    const page: TodosProjectResourcePage = {
+      authority: "todos",
+      route: "todos.project-registration.v1",
+      package_version: "test",
+      authority_id: "todos",
+      tenant_id: "sqlite",
+      corpus_id: "todos:sqlite",
+      source_project_id: request.source_project_id,
+      todos_project_id: resource.target_id,
+      task_list_id: "22222222-2222-4222-8222-222222222222",
+      include_anchors: true,
+      collection_revision: "sha256:" + "1".repeat(64),
+      limit: 1,
+      count: 1,
+      resources: [resource],
+      has_more: false,
+      next_cursor: null,
+      complete: true,
+      truncated: false,
+    };
+
+    await expect(collectAllProjectResources(async () => page, request)).resolves.toMatchObject({
+      source_project_id: request.source_project_id,
+      count: 1,
+      pages: 1,
+      complete: true,
+      truncated: false,
+    });
+    await expect(collectAllProjectResources(
+      async () => ({ ...page, source_project_id: "wks_wrongidentity0001" }),
+      request,
+    )).rejects.toThrow("a page bound to a different request or authority identity");
+    await expect(collectAllProjectResources(
+      async () => ({
+        ...page,
+        resources: [{ ...resource, source_project_id: "wks_wrongresource0001" }],
+      }),
+      request,
+    )).rejects.toThrow("a resource bound to a different source");
+    await expect(collectAllProjectResources(
+      async () => ({ ...page, count: 0 }),
+      request,
+    )).rejects.toThrow("an inconsistent resource count");
+    await expect(collectAllProjectResources(
+      async () => ({
+        ...page,
+        complete: false,
+        truncated: true,
+      } as unknown as TodosProjectResourcePage),
+      request,
+    )).rejects.toThrow("inconsistent completion or cursor flags");
+    await expect(collectAllProjectResources(
+      async () => ({
+        ...page,
+        has_more: true,
+        next_cursor: null,
+        complete: false,
+      }),
+      request,
+    )).rejects.toThrow("inconsistent completion or cursor flags");
+
+    let pageNumber = 0;
+    await expect(collectAllProjectResources(async () => {
+      pageNumber += 1;
+      if (pageNumber === 1) {
+        return {
+          ...page,
+          has_more: true,
+          next_cursor: "cursor-1",
+          complete: false,
+        };
+      }
+      return {
+        ...page,
+        tenant_id: "different-tenant",
+        resources: [{
+          ...resource,
+          kind: "task" as const,
+          target_id: "33333333-3333-4333-8333-333333333333",
+        }],
+      };
+    }, request)).rejects.toThrow("an authority identity change during pagination");
+  });
+
   test("binds existing UUIDs and exhausts producer pages without duplicates", async () => {
     const root = mkdtempSync(join(tmpdir(), "todos-project-registration-cli-"));
     roots.push(root);

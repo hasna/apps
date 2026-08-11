@@ -12,6 +12,11 @@ import {
   type TodosProjectResourcePageRequest,
 } from "../../project-registration/index.js";
 import {
+  assertTodosProjectResourcePage,
+  projectResourcePageIdentity,
+  type TodosProjectResourcePageIdentity,
+} from "../../project-registration/page-validation.js";
+import {
   cloudCompensateProjectRegistration,
   cloudCreateProjectRegistration,
   cloudListProjectResources,
@@ -111,45 +116,20 @@ export async function collectAllProjectResources(
     const resourceKeys = new Set<string>();
     const cursors = new Set<string>();
     let request = firstRequest;
-    let identity: Pick<
-      TodosProjectResourcePage,
-      | "authority"
-      | "route"
-      | "package_version"
-      | "authority_id"
-      | "tenant_id"
-      | "corpus_id"
-      | "source_project_id"
-      | "todos_project_id"
-      | "task_list_id"
-      | "include_anchors"
-      | "collection_revision"
-    > | null = null;
+    let identity: TodosProjectResourcePageIdentity | null = null;
     let pages = 0;
     try {
       for (;;) {
         if (pages >= 10_000) {
           throw new Error("project-resources exceeded the 10000-page safety bound");
         }
-        const page = await readPage(request);
+        const page = assertTodosProjectResourcePage(
+          await readPage(request),
+          request,
+          identity,
+        );
         pages += 1;
-        const nextIdentity = {
-          authority: page.authority,
-          route: page.route,
-          package_version: page.package_version,
-          authority_id: page.authority_id,
-          tenant_id: page.tenant_id,
-          corpus_id: page.corpus_id,
-          source_project_id: page.source_project_id,
-          todos_project_id: page.todos_project_id,
-          task_list_id: page.task_list_id,
-          include_anchors: page.include_anchors,
-          collection_revision: page.collection_revision,
-        };
-        if (identity && JSON.stringify(identity) !== JSON.stringify(nextIdentity)) {
-          throw new Error("project-resources authority identity changed during pagination");
-        }
-        identity ??= nextIdentity;
+        identity ??= projectResourcePageIdentity(page);
         for (const resource of page.resources) {
           const key = `${resource.kind}:${resource.target_id}`;
           if (resourceKeys.has(key)) {
