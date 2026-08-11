@@ -117,6 +117,26 @@ function machineFixture(): MachineManifest {
   };
 }
 
+function machinesSelfUpgradeFixture(): MachineManifest {
+  const machine = machineFixture();
+  machine.packages = [
+    {
+      name: "@hasna/machines",
+      manager: "bun",
+      version: "0.2.20",
+      bin: "machines",
+      exactBunRegistry: delivery(
+        10,
+        "@hasna/machines",
+        "machines",
+        "6".repeat(64),
+        "sha512-OjF8N2Y5ZThmZTc2NzA4MjU0N2M1NWI2NzUxY2UwM2I3YTY5OTM4MDIxODQ2ZDUwNzg2ZTQ5NzE3Zg==",
+      ),
+    },
+  ];
+  return machine;
+}
+
 function globalRoot(machine: MachineManifest): string {
   return join(machine.bunPath!, "..", "..", "install", "global");
 }
@@ -180,6 +200,67 @@ describe("exact Bun registry plan", () => {
     expect(serialized).not.toContain('"command"');
     expect(serialized).not.toContain("publish-token");
     expect(JSON.stringify(exactBunTargetPayload(machine, plan))).not.toContain("publish-token");
+  });
+
+  test("builds and executes one exact Machines self-upgrade step", () => {
+    const machine = machinesSelfUpgradeFixture();
+    const plan = buildExactBunAppsPlan(machine);
+    expect(plan.steps.map((step) => [step.order, step.package.selector])).toEqual([
+      [10, "@hasna/machines@0.2.20"],
+    ]);
+
+    const payload = exactBunTargetPayload(machine, plan);
+    expect(() => executeExactBunTargetStatus(payload)).toThrow("quarantine_exclusions_mismatch");
+
+    const bunfig = join(machine.bunPath!, "..", "..", "..", ".bunfig.toml");
+    writeFileSync(bunfig, [
+      "[install]",
+      'registry = "https://registry.npmjs.org"',
+      "minimumReleaseAge = 604800",
+      'minimumReleaseAgeExcludes = ["@hasnaxyz/infinity", "@hasnaxyz/factory", "@hasna/secrets", "@hasna/events", "@hasna/machines"]',
+      "",
+    ].join("\n"));
+
+    const selectors: string[] = [];
+    const result = executeExactBunTargetTransaction(payload, sourceBytes, {
+      temporaryRoot: roots[roots.length - 1],
+      runSource(_command, env) {
+        selectors.push(env["HASNA_MACHINES_EXACT_BUN_SELECTOR"]!);
+        const step = plan.steps[0]!;
+        writePackage(globalRoot(machine), step.package.name, step.package.version);
+        writeRegistryLock(globalRoot(machine), [step]);
+        return { status: 0, stdout: JSON.stringify(probe(step)), stderr: "" };
+      },
+    });
+
+    expect(result.state).toBe("COMMITTED");
+    expect(result.executed).toBe(1);
+    expect(selectors).toEqual(["@hasna/machines@0.2.20"]);
+
+    const wrongOrder = exactBunTargetPayload(machine, plan);
+    wrongOrder.steps[0]!.order = 20;
+    expect(() => executeExactBunTargetStatus(wrongOrder)).toThrow("transaction_step_mismatch");
+
+    const mixedTransaction = exactBunTargetPayload(machine, plan);
+    mixedTransaction.steps.push(buildExactBunAppsPlan(machineFixture()).steps[1]!);
+    expect(() => executeExactBunTargetStatus(mixedTransaction)).toThrow("transaction_step_mismatch");
+  });
+
+  test("keeps Infinity before Factory when the target step contract is generalized", () => {
+    const machine = machineFixture();
+    const plan = buildExactBunAppsPlan(machine);
+    expect(plan.steps.map((step) => [step.order, step.package.name])).toEqual([
+      [10, "@hasnaxyz/infinity"],
+      [20, "@hasnaxyz/factory"],
+    ]);
+
+    const reversed = exactBunTargetPayload(machine, plan);
+    reversed.steps.reverse();
+    expect(() => executeExactBunTargetStatus(reversed)).toThrow("transaction_step_mismatch");
+
+    const factoryOnly = exactBunTargetPayload(machine, plan);
+    factoryOnly.steps = [plan.steps[1]!];
+    expect(() => executeExactBunTargetStatus(factoryOnly)).not.toThrow();
   });
 
   test("uses a bounded controller bootstrap without candidate target commands and fails before source when unavailable", () => {
@@ -323,6 +404,61 @@ describe("exact Bun target transaction", () => {
     const result = executeExactBunTargetStatus(exactBunTargetPayload(machine, plan));
     expect(result.probes).toHaveLength(2);
     expect(result.probes.every((entry) => entry.status === "pass")).toBe(true);
+  });
+
+  test("accepts a quarantine exclusion superset and rejects any missing required entry", () => {
+    const machine = machineFixture();
+    const plan = buildExactBunAppsPlan(machine);
+    const bunfig = join(machine.bunPath!, "..", "..", "..", ".bunfig.toml");
+    writeFileSync(bunfig, [
+      "[install]",
+      'registry = "https://registry.npmjs.org"',
+      "minimumReleaseAge = 604800",
+      'minimumReleaseAgeExcludes = ["@hasnaxyz/infinity", "@hasnaxyz/factory", "@hasna/secrets", "@hasna/events", "@hasna/machines", "@hasna/contracts"]',
+      "",
+    ].join("\n"));
+    expect(() => executeExactBunTargetStatus(exactBunTargetPayload(machine, plan))).not.toThrow();
+
+    writeFileSync(bunfig, [
+      "[install]",
+      'registry = "https://registry.npmjs.org"',
+      "minimumReleaseAge = 604800",
+      'minimumReleaseAgeExcludes = ["@hasnaxyz/infinity", "@hasnaxyz/factory", "@hasna/secrets", "@hasna/machines", "@hasna/contracts"]',
+      "",
+    ].join("\n"));
+    expect(() => executeExactBunTargetStatus(exactBunTargetPayload(machine, plan))).toThrow("quarantine_exclusions_mismatch");
+  });
+
+  test("accepts the omitted default registry and rejects an explicit alternate registry", () => {
+    const machine = machineFixture();
+    const plan = buildExactBunAppsPlan(machine);
+    const bunfig = join(machine.bunPath!, "..", "..", "..", ".bunfig.toml");
+    writeFileSync(bunfig, [
+      "[install]",
+      "minimumReleaseAge = 604800",
+      'minimumReleaseAgeExcludes = ["@hasnaxyz/infinity", "@hasnaxyz/factory", "@hasna/secrets", "@hasna/events"]',
+      "",
+    ].join("\n"));
+    expect(() => executeExactBunTargetStatus(exactBunTargetPayload(machine, plan))).not.toThrow();
+
+    writeFileSync(bunfig, [
+      "[install]",
+      'registry = "https://registry.example.invalid"',
+      "minimumReleaseAge = 604800",
+      'minimumReleaseAgeExcludes = ["@hasnaxyz/infinity", "@hasnaxyz/factory", "@hasna/secrets", "@hasna/events"]',
+      "",
+    ].join("\n"));
+    expect(() => executeExactBunTargetStatus(exactBunTargetPayload(machine, plan))).toThrow("registry_mismatch");
+
+    writeFileSync(bunfig, [
+      "[install]",
+      "minimumReleaseAge = 604800",
+      'minimumReleaseAgeExcludes = ["@hasnaxyz/infinity", "@hasnaxyz/factory", "@hasna/secrets", "@hasna/events"]',
+      "[install.scopes]",
+      'hasnaxyz = "https://registry.example.invalid"',
+      "",
+    ].join("\n"));
+    expect(() => executeExactBunTargetStatus(exactBunTargetPayload(machine, plan))).toThrow("registry_mismatch");
   });
 
   test("runs one selector per ordered step through nested Secrets references", () => {

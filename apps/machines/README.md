@@ -136,10 +136,12 @@ from the package root exports.
 
 A machine-scoped package can opt into `exactBunRegistry` for an atomic
 live-global Bun update. The candidate manifest must contain exactly one target
-machine and exactly two ordered packages: `@hasnaxyz/infinity@1.0.12` at order
-10 and `@hasnaxyz/factory@0.6.9` at order 20. Each package names its exact
-archive digest, registry integrity, probe, rollback mode, and the same immutable
-source reference. Fleet-wide exact delivery is rejected.
+machine and either one `@hasna/machines` self-upgrade step at order 10 or the
+two ordered platform packages: `@hasnaxyz/infinity@1.0.12` at order 10 followed
+by `@hasnaxyz/factory@0.6.9` at order 20. The two transaction shapes cannot be
+mixed. Each package names its exact archive digest, registry integrity, probe,
+rollback mode, and the same immutable source reference. Fleet-wide exact
+delivery is rejected.
 
 ```bash
 machines apps validate --manifest ./candidate.json --machine station01 --json
@@ -157,12 +159,14 @@ plan, status, command, or logs. The target writes them to a mode-0600 temporary
 file inside a mode-0700 directory, verifies them again, then executes one exact
 `package@version` selector per step.
 
-The target requires the configured Bun executable path, the npm registry,
-seven-day release-age quarantine, and the exact package exclusion list to
-match before mutation. The two npm credential reference names remain
-station-local and are consumed only by `secrets exec`; credential values are
-never serialized by Machines. Each step must prove package JSON, Bun lock
-registry integrity, SDK import, and CLI help with one structured
+The target requires the configured Bun executable path, the canonical npm
+registry (explicitly configured or Bun's omitted default), and the seven-day
+release-age quarantine before mutation. Its exclusion policy may contain
+additional exact package names only when every required exclusion remains.
+The two npm credential reference names remain station-local and are consumed
+only by `secrets exec`; credential values are never serialized by Machines.
+Each step must prove package JSON, Bun lock registry integrity, SDK import, and
+CLI help with one structured
 `machines.bun_package_probe.v1` object. A preimage of the Bun global tree, bin
 directory, and Bun configuration is taken before step one. Any step or probe
 failure restores that complete preimage and reports only bounded reason codes.

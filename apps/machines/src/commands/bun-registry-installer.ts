@@ -38,6 +38,8 @@ import type {
 
 export const EXACT_BUN_PACKAGE_NAMES = ["@hasnaxyz/infinity", "@hasnaxyz/factory"] as const;
 export const EXACT_BUN_PACKAGE_ORDERS = [10, 20] as const;
+export const EXACT_BUN_MACHINES_PACKAGE_NAME = "@hasna/machines" as const;
+export const EXACT_BUN_MACHINES_PACKAGE_ORDER = 10 as const;
 export const EXACT_BUN_REGISTRY_URL = "https://registry.npmjs.org";
 export const EXACT_BUN_TARGET_TIMEOUT_MS = 10 * 60 * 1_000;
 
@@ -299,15 +301,22 @@ export function exactBunPackages(machine: MachineManifest): ManifestPackageSpec[
 export function validateExactBunMachine(machine: MachineManifest): string[] {
   const errors: string[] = [];
   const packages = exactBunPackages(machine);
-  if (packages.length !== EXACT_BUN_PACKAGE_NAMES.length) {
+  const machinesOnly = packages.length === 1 && packages[0]!.name === EXACT_BUN_MACHINES_PACKAGE_NAME;
+  if (!machinesOnly && packages.length !== EXACT_BUN_PACKAGE_NAMES.length) {
     errors.push(`exact_package_count:${packages.length}`);
     return errors;
   }
+  const expectedNames: readonly string[] = machinesOnly
+    ? [EXACT_BUN_MACHINES_PACKAGE_NAME]
+    : EXACT_BUN_PACKAGE_NAMES;
+  const expectedOrders: readonly number[] = machinesOnly
+    ? [EXACT_BUN_MACHINES_PACKAGE_ORDER]
+    : EXACT_BUN_PACKAGE_ORDERS;
   if (machine.platform !== "linux" && machine.platform !== "macos") errors.push("unsupported_platform");
   if (!machine.bunPath || !machine.bunPath.startsWith("/") || !machine.bunPath.endsWith("/bin/bun")) errors.push("bun_path_invalid");
   packages.forEach((pkg, index) => {
-    if (pkg.name !== EXACT_BUN_PACKAGE_NAMES[index]) errors.push(`package_order_mismatch:${index}`);
-    if (pkg.exactBunRegistry!.order !== EXACT_BUN_PACKAGE_ORDERS[index]) errors.push(`step_order_mismatch:${index}`);
+    if (pkg.name !== expectedNames[index]) errors.push(`package_order_mismatch:${index}`);
+    if (pkg.exactBunRegistry!.order !== expectedOrders[index]) errors.push(`step_order_mismatch:${index}`);
     if (!pkg.version) errors.push(`version_missing:${index}`);
     if (pkg.manager !== "bun") errors.push(`manager_mismatch:${index}`);
     if (pkg.bin !== pkg.exactBunRegistry!.probe.cli.bin) errors.push(`bin_mismatch:${index}`);
@@ -318,20 +327,28 @@ export function validateExactBunMachine(machine: MachineManifest): string[] {
   return errors;
 }
 
+function exactBunPackageOrder(name: string): number | undefined {
+  if (name === EXACT_BUN_MACHINES_PACKAGE_NAME) return EXACT_BUN_MACHINES_PACKAGE_ORDER;
+  const desiredIndex = (EXACT_BUN_PACKAGE_NAMES as readonly string[]).indexOf(name);
+  return desiredIndex >= 0 ? EXACT_BUN_PACKAGE_ORDERS[desiredIndex] : undefined;
+}
+
 function validateTargetSteps(steps: ExactBunRegistryPlanStep[]): void {
   if (steps.length < 1 || steps.length > EXACT_BUN_PACKAGE_NAMES.length) throw new Error("exact_package_count_mismatch");
+  if (steps.some((step) => step.package.name === EXACT_BUN_MACHINES_PACKAGE_NAME) && steps.length !== 1) {
+    throw new Error("transaction_step_mismatch");
+  }
   const seen = new Set<string>();
   let previousOrder = -1;
   steps.forEach((step) => {
-    const desiredIndex = EXACT_BUN_PACKAGE_NAMES.indexOf(step.package.name as (typeof EXACT_BUN_PACKAGE_NAMES)[number]);
-    if (desiredIndex < 0 || seen.has(step.package.name) || step.order <= previousOrder) {
+    const expectedOrder = exactBunPackageOrder(step.package.name);
+    if (expectedOrder === undefined || seen.has(step.package.name) || step.order <= previousOrder) {
       throw new Error("transaction_step_mismatch");
     }
     seen.add(step.package.name);
     previousOrder = step.order;
     if (step.kind !== "bun-registry-exact"
-      || step.package.name !== EXACT_BUN_PACKAGE_NAMES[desiredIndex]
-      || step.order !== EXACT_BUN_PACKAGE_ORDERS[desiredIndex]
+      || step.order !== expectedOrder
       || step.package.selector !== `${step.package.name}@${step.package.version}`
       || step.probe.schema !== "machines.bun_package_probe.v1"
       || step.probe.sdkImport !== step.package.name
@@ -592,20 +609,53 @@ function parseBunPolicy(path: string): Record<string, unknown> {
   return parsed;
 }
 
-function validateBunPolicy(path: string): void {
+function configuredRegistryUrl(value: unknown): unknown {
+  return isRecord(value) ? value["url"] : value;
+}
+
+function exactBunPackageScope(name: string): string | undefined {
+  const match = /^@([^/]+)\//.exec(name);
+  return match?.[1];
+}
+
+function validateBunPolicy(path: string, steps: ExactBunRegistryPlanStep[]): void {
   const parsed = parseBunPolicy(path);
   const install = isRecord(parsed["install"]) ? parsed["install"] : parsed;
   if (install["minimumReleaseAge"] !== EXACT_BUN_REGISTRY_MINIMUM_RELEASE_AGE) throw new Error("quarantine_age_mismatch");
   const exclusions = install["minimumReleaseAgeExcludes"];
+  const requiredExclusions = new Set<string>([
+    ...EXACT_BUN_REGISTRY_EXCLUSIONS,
+    ...steps.map((step) => step.package.name),
+  ]);
   if (!Array.isArray(exclusions)
-    || exclusions.length !== EXACT_BUN_REGISTRY_EXCLUSIONS.length
-    || exclusions.some((value, index) => value !== EXACT_BUN_REGISTRY_EXCLUSIONS[index])) {
+    || exclusions.some((value) => typeof value !== "string")
+    || [...requiredExclusions].some((required) => !exclusions.includes(required))) {
     throw new Error("quarantine_exclusions_mismatch");
   }
-  const registry = isRecord(install["registry"])
-    ? install["registry"]["url"]
-    : install["registry"] ?? parsed["registry"];
+  const hasInstallRegistry = Object.prototype.hasOwnProperty.call(install, "registry");
+  const hasRootRegistry = install !== parsed && Object.prototype.hasOwnProperty.call(parsed, "registry");
+  const configuredRegistry = hasInstallRegistry
+    ? install["registry"]
+    : hasRootRegistry
+      ? parsed["registry"]
+      : undefined;
+  const registry = configuredRegistry === undefined
+    ? EXACT_BUN_REGISTRY_URL
+    : configuredRegistryUrl(configuredRegistry);
   if (registry !== EXACT_BUN_REGISTRY_URL) throw new Error("registry_mismatch");
+
+  const scopes = install["scopes"];
+  if (scopes !== undefined && !isRecord(scopes)) throw new Error("registry_mismatch");
+  if (isRecord(scopes)) {
+    for (const step of steps) {
+      const scope = exactBunPackageScope(step.package.name);
+      if (scope
+        && Object.prototype.hasOwnProperty.call(scopes, scope)
+        && configuredRegistryUrl(scopes[scope]) !== EXACT_BUN_REGISTRY_URL) {
+        throw new Error("registry_mismatch");
+      }
+    }
+  }
 }
 
 function safeSourceEnvironment(base: NodeJS.ProcessEnv, step: ExactBunRegistryPlanStep, sourcePath: string, globalRoot: string): NodeJS.ProcessEnv {
@@ -730,7 +780,7 @@ export function executeExactBunTargetStatus(payload: ExactBunTargetTransactionPa
   if (payload.schema !== "machines.exact_bun_transaction.v1") throw new Error("transaction_schema_mismatch");
   validateTargetSteps(payload.steps);
   assertExactBunPath(payload.bunPath);
-  validateBunPolicy(join(dirname(dirname(dirname(payload.bunPath))), ".bunfig.toml"));
+  validateBunPolicy(join(dirname(dirname(dirname(payload.bunPath))), ".bunfig.toml"), payload.steps);
   const probes = payload.steps.map((step) => statusProbeForStep(payload, step));
   return {
     schema: "machines.exact_bun_transaction_result.v1",
@@ -766,7 +816,7 @@ export function executeExactBunTargetTransaction(
   const globalRoot = join(bunRoot, "install", "global");
   const binRoot = join(bunRoot, "bin");
   const bunfigPath = join(dirname(bunRoot), ".bunfig.toml");
-  validateBunPolicy(bunfigPath);
+  validateBunPolicy(bunfigPath, payload.steps);
 
   const transactionRoot = mkdtempSync(join(dependencies.temporaryRoot ?? tmpdir(), "machines-exact-bun-"));
   chmodSync(transactionRoot, 0o700);

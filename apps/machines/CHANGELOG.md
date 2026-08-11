@@ -74,6 +74,19 @@ reported success about things it had not actually established.
   than reached by deleting a check. Physical classes are untouched: `dgx-spark`
   keeps `tailscale:join` and gets no absence item.
 
+## [0.2.20] - 2026-08-10
+
+### Fixed
+
+- Permit the package-built exact Bun bootstrap to execute one exact
+  `@hasna/machines` self-upgrade transaction while retaining the existing
+  `@hasnaxyz/infinity` then `@hasnaxyz/factory` transaction order, package and
+  selector identity checks, immutable source verification, byte-preimage
+  rollback, and structured probes. Target Bun policies may contain additional
+  quarantine exclusions only when all required exact exclusions remain and
+  `minimumReleaseAge` is still 604800; an omitted registry resolves to Bun's
+  canonical npm default, while explicit alternate registries still fail.
+
 ## [0.2.19] - 2026-08-10
 
 ### Added
