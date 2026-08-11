@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.27] - 2026-08-11
+
+### Fixed
+
+- **Hosted task-manifest lookup derives the authenticated authority tenant.**
+  The package-owned OpenAPI now advertises the tenant-bearing capability route,
+  the generated SDK exposes that contract, and the built CLI verifies both
+  omitted capability-derived and explicit tenant lookup without local fallback.
+- **Hosted task creation advertises explicit creator compatibility.** The same
+  generated server contract continues to expose `created_by` on both
+  `CreateTaskInput` and `Task`, so compatible clients can prove the field before
+  mutation and verify it on authoritative readback.
+
 ## [0.15.26] - 2026-08-10
 
 ### Fixed

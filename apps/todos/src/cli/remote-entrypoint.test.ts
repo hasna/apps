@@ -563,7 +563,10 @@ describe("remote CLI entrypoint authority boundary", () => {
       const second = await runCli(executable, ["--json", "task-manifest", "apply", "--file", manifestPath], env, cwd);
       const readExact = await runCli(executable, ["--json", "task-manifest", "read-exact", receiptId], env, cwd);
       const lookup = await runCli(executable, [
-        "--json", "task-manifest", "lookup", "--tenant-id", "tenant-cli-test", "--plan-id", planId,
+        "--json", "task-manifest", "lookup", "--plan-id", planId,
+      ], env, cwd);
+      const explicitLookup = await runCli(executable, [
+        "--json", "task-manifest", "lookup", "--tenant-id", "tenant-cli-explicit", "--plan-id", planId,
       ], env, cwd);
       const compensated = await runCli(executable, [
         "--json", "task-manifest", "compensate", "--receipt-id", receiptId,
@@ -576,6 +579,7 @@ describe("remote CLI entrypoint authority boundary", () => {
       expect({ exitCode: second.exitCode, stderr: second.stderr }).toEqual({ exitCode: 0, stderr: "" });
       expect({ exitCode: readExact.exitCode, stderr: readExact.stderr }).toEqual({ exitCode: 0, stderr: "" });
       expect({ exitCode: lookup.exitCode, stderr: lookup.stderr }).toEqual({ exitCode: 0, stderr: "" });
+      expect({ exitCode: explicitLookup.exitCode, stderr: explicitLookup.stderr }).toEqual({ exitCode: 0, stderr: "" });
       expect({ exitCode: compensated.exitCode, stderr: compensated.stderr }).toEqual({ exitCode: 0, stderr: "" });
       expect({ exitCode: delivered.exitCode, stderr: delivered.stderr }).toEqual({ exitCode: 0, stderr: "" });
       expect(JSON.parse(capability.stdout).capability).toMatchObject({
@@ -597,6 +601,7 @@ describe("remote CLI entrypoint authority boundary", () => {
         binding_version: 1,
         state: "applied",
       });
+      expect(JSON.parse(explicitLookup.stdout).result).toEqual(JSON.parse(lookup.stdout).result);
       expect(JSON.parse(compensated.stdout).result).toMatchObject({
         duplicate: false,
         receipt: { receipt_id: compensationReceiptId, apply_receipt_id: receiptId, binding_version: 2 },
@@ -608,12 +613,14 @@ describe("remote CLI entrypoint authority boundary", () => {
         "POST /v1/task-manifest/apply",
         "POST /v1/task-manifest/apply",
         "POST /v1/task-manifest/read-exact",
+        "GET /v1/task-manifest/capability",
+        "POST /v1/task-manifest/bindings/lookup",
         "POST /v1/task-manifest/bindings/lookup",
         "POST /v1/task-manifest/compensate",
         "POST /v1/task-manifest/outbox/delivered",
       ]);
       expect(requests[3]!.body).toEqual({ receipt_id: receiptId });
-      expect(requests[4]!.body).toEqual({
+      expect(requests[5]!.body).toEqual({
         authority: "todos",
         route: "todos.task-manifest.v1",
         schema_version: 1,
@@ -621,12 +628,20 @@ describe("remote CLI entrypoint authority boundary", () => {
         plan_id: planId,
         max_items: 1,
       });
-      expect(requests[5]!.body).toEqual({
+      expect(requests[6]!.body).toEqual({
+        authority: "todos",
+        route: "todos.task-manifest.v1",
+        schema_version: 1,
+        tenant_id: "tenant-cli-explicit",
+        plan_id: planId,
+        max_items: 1,
+      });
+      expect(requests[7]!.body).toEqual({
         receipt_id: receiptId,
         idempotency_key: "task-manifest-cli-test:compensate",
         if_binding_version: 1,
       });
-      expect(requests[6]!.body).toEqual({ outbox_id: outboxId });
+      expect(requests[8]!.body).toEqual({ outbox_id: outboxId });
       expect(requests.every((request) => request.authorized)).toBe(true);
       expect(recursiveInventory(cwd)).toEqual(before);
       expectNoLocalDatabase(home, localDbPath);

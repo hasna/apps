@@ -3,6 +3,35 @@ import { TodosV1Client } from "../sdk/v1.generated.js";
 import { buildV1OpenApiDocument } from "./openapi.js";
 
 describe("task-manifest binding lookup OpenAPI and generated SDK", () => {
+  test("publishes the tenant-bearing capability and explicit creator contracts", () => {
+    const document = buildV1OpenApiDocument() as Record<string, any>;
+    const capability = document.paths["/v1/task-manifest/capability"].get;
+
+    expect(capability.operationId).toBe("getTaskManifestCapability");
+    expect(capability.responses["200"].content["application/json"].schema)
+      .toEqual({ $ref: "#/components/schemas/TaskManifestCapabilityResponse" });
+    expect(document.components.schemas.TaskManifestCapability).toMatchObject({
+      additionalProperties: false,
+      required: expect.arrayContaining(["authority", "route", "schema_version", "tenant_id", "backend", "bounds"]),
+      properties: {
+        tenant_id: { type: "string", minLength: 1, maxLength: 200 },
+      },
+    });
+    expect(document.components.schemas.TaskManifestCapabilityResponse).toEqual({
+      type: "object",
+      additionalProperties: false,
+      required: ["capability"],
+      properties: {
+        capability: { $ref: "#/components/schemas/TaskManifestCapability" },
+      },
+    });
+
+    expect(document.components.schemas.CreateTaskInput.properties.created_by)
+      .toEqual({ type: "string" });
+    expect(document.components.schemas.Task.properties.created_by)
+      .toEqual({ type: "string", nullable: true });
+  });
+
   test("publishes one exact bounded lookup contract with safe response fields only", () => {
     const document = buildV1OpenApiDocument() as Record<string, any>;
     const operation = document.paths["/v1/task-manifest/bindings/lookup"].post;
@@ -37,6 +66,35 @@ describe("task-manifest binding lookup OpenAPI and generated SDK", () => {
       fetch: async (input, init) => {
         const request = new Request(input, init);
         requests.push(request);
+        if (new URL(request.url).pathname === "/v1/task-manifest/capability") {
+          return Response.json({
+            capability: {
+              authority: "todos",
+              route: "todos.task-manifest.v1",
+              schema_version: 1,
+              tenant_id: "tenant-sdk-lookup",
+              backend: "http",
+              deterministic_ids: true,
+              immutable_receipts: true,
+              transactional_outbox: true,
+              idempotent_outbox_delivery: true,
+              exact_bounded_readback: true,
+              conditional_compensation: true,
+              transcript_safe: false,
+              bounds: {
+                tasks: 100,
+                dependencies: 200,
+                comments: 200,
+                verifications: 200,
+                effects: 50,
+                metadata_fields: 100,
+                effect_payload_fields: 100,
+                request_bytes: 262144,
+                response_bytes: 262144,
+              },
+            },
+          });
+        }
         return Response.json({
           result: {
             authority: "todos",
@@ -51,6 +109,8 @@ describe("task-manifest binding lookup OpenAPI and generated SDK", () => {
         });
       },
     });
+    const capability = await client.getTaskManifestCapability();
+    expect(capability.capability.tenant_id).toBe("tenant-sdk-lookup");
     await client.lookupTaskManifestBinding({
       authority: "todos",
       route: "todos.task-manifest.v1",
@@ -59,7 +119,9 @@ describe("task-manifest binding lookup OpenAPI and generated SDK", () => {
       plan_id: "a0000000-0000-4000-8000-000000000099",
       max_items: 1,
     });
-    expect(requests[0]?.method).toBe("POST");
-    expect(new URL(requests[0]!.url).pathname).toBe("/v1/task-manifest/bindings/lookup");
+    expect(requests.map((request) => `${request.method} ${new URL(request.url).pathname}`)).toEqual([
+      "GET /v1/task-manifest/capability",
+      "POST /v1/task-manifest/bindings/lookup",
+    ]);
   });
 });

@@ -29,6 +29,77 @@ const taskSchema = {
   },
 } as const;
 
+const taskManifestBoundsSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "tasks",
+    "dependencies",
+    "comments",
+    "verifications",
+    "effects",
+    "metadata_fields",
+    "effect_payload_fields",
+    "request_bytes",
+    "response_bytes",
+  ],
+  properties: {
+    tasks: { type: "integer", minimum: 1 },
+    dependencies: { type: "integer", minimum: 1 },
+    comments: { type: "integer", minimum: 1 },
+    verifications: { type: "integer", minimum: 1 },
+    effects: { type: "integer", minimum: 1 },
+    metadata_fields: { type: "integer", minimum: 1 },
+    effect_payload_fields: { type: "integer", minimum: 1 },
+    request_bytes: { type: "integer", minimum: 1 },
+    response_bytes: { type: "integer", minimum: 1 },
+  },
+} as const;
+
+const taskManifestCapabilitySchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "authority",
+    "route",
+    "schema_version",
+    "tenant_id",
+    "backend",
+    "deterministic_ids",
+    "immutable_receipts",
+    "transactional_outbox",
+    "idempotent_outbox_delivery",
+    "exact_bounded_readback",
+    "conditional_compensation",
+    "transcript_safe",
+    "bounds",
+  ],
+  properties: {
+    authority: { type: "string", enum: ["todos"] },
+    route: { type: "string", enum: ["todos.task-manifest.v1"] },
+    schema_version: { type: "integer", enum: [1] },
+    tenant_id: { type: "string", minLength: 1, maxLength: 200 },
+    backend: { type: "string", enum: ["sqlite", "postgresql", "http"] },
+    deterministic_ids: { type: "boolean", enum: [true] },
+    immutable_receipts: { type: "boolean", enum: [true] },
+    transactional_outbox: { type: "boolean", enum: [true] },
+    idempotent_outbox_delivery: { type: "boolean", enum: [true] },
+    exact_bounded_readback: { type: "boolean", enum: [true] },
+    conditional_compensation: { type: "boolean", enum: [true] },
+    transcript_safe: { type: "boolean", enum: [false] },
+    bounds: { $ref: "#/components/schemas/TaskManifestBounds" },
+  },
+} as const;
+
+const taskManifestCapabilityResponseSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["capability"],
+  properties: {
+    capability: { $ref: "#/components/schemas/TaskManifestCapability" },
+  },
+} as const;
+
 const projectSchema = {
   type: "object",
   properties: {
@@ -451,6 +522,9 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
       schemas: {
         Task: taskSchema,
         Project: projectSchema,
+        TaskManifestBounds: taskManifestBoundsSchema,
+        TaskManifestCapability: taskManifestCapabilitySchema,
+        TaskManifestCapabilityResponse: taskManifestCapabilityResponseSchema,
         TaskManifestBindingLookupRequest: taskManifestBindingLookupRequestSchema,
         TaskManifestBindingLookupResult: taskManifestBindingLookupResultSchema,
         TaskManifestBindingLookupResponse: taskManifestBindingLookupResponseSchema,
@@ -1231,6 +1305,23 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
     },
     security: [{ apiKey: [] }],
     paths: {
+      "/v1/task-manifest/capability": {
+        get: {
+          operationId: "getTaskManifestCapability",
+          summary: "Read the current task-manifest authority capability and tenant",
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/TaskManifestCapabilityResponse" },
+                },
+              },
+            },
+            "401": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "503": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
+        },
+      },
       "/v1/task-manifest/bindings/lookup": {
         post: {
           operationId: "lookupTaskManifestBinding",

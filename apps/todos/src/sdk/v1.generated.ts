@@ -2,11 +2,17 @@
 // Regenerate: bun run scripts/generate-sdk.ts
 
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
-// Source: Todos V1 API 0.15.21
+// Source: Todos V1 API 0.15.27
 
 export interface Task { "id"?: string; "title"?: string; "description"?: string; "status"?: "pending" | "in_progress" | "completed" | "failed" | "cancelled"; "priority"?: "low" | "medium" | "high" | "critical"; "project_id"?: string | null; "parent_id"?: string | null; "assigned_to"?: string | null; "agent_id"?: string | null; "created_by"?: string | null; "reason"?: string | null; "tags"?: Array<string>; "version"?: number; "locked_by"?: string | null; "locked_at"?: string | null; "created_at"?: string; "updated_at"?: string }
 
 export interface Project { "id"?: string; "name"?: string; "path"?: string; "description"?: string | null; "task_list_id"?: string | null; "task_prefix"?: string | null; "task_counter"?: number; "created_at"?: string; "updated_at"?: string }
+
+export interface TaskManifestBounds { "tasks": number; "dependencies": number; "comments": number; "verifications": number; "effects": number; "metadata_fields": number; "effect_payload_fields": number; "request_bytes": number; "response_bytes": number }
+
+export interface TaskManifestCapability { "authority": "todos"; "route": "todos.task-manifest.v1"; "schema_version": 1; "tenant_id": string; "backend": "sqlite" | "postgresql" | "http"; "deterministic_ids": true; "immutable_receipts": true; "transactional_outbox": true; "idempotent_outbox_delivery": true; "exact_bounded_readback": true; "conditional_compensation": true; "transcript_safe": false; "bounds": TaskManifestBounds }
+
+export interface TaskManifestCapabilityResponse { "capability": TaskManifestCapability }
 
 export interface TaskManifestBindingLookupRequest { "authority": "todos"; "route": "todos.task-manifest.v1"; "schema_version": 1; "tenant_id": string; "plan_id": string; "max_items": 1 }
 
@@ -449,6 +455,15 @@ export class TodosV1Client {
     async lookupTaskManifestBinding(body: TaskManifestBindingLookupRequest, init?: RequestInit): Promise<TaskManifestBindingLookupResponse> {
       return this.request("POST", `/v1/task-manifest/bindings/lookup`, {
         body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Read the current task-manifest authority capability and tenant */
+    async getTaskManifestCapability(init?: RequestInit): Promise<TaskManifestCapabilityResponse> {
+      return this.request("GET", `/v1/task-manifest/capability`, {
+        body: undefined,
         query: undefined,
         init,
       });
