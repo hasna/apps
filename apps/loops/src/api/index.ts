@@ -27,6 +27,7 @@ import {
   LegacyWorkflowRunProvenanceError,
   LoopAdvancementConflictError,
   LoopArchivedError,
+  LoopMutationConflictError,
   LoopNotFoundError,
   RunFinalizationConflictError,
   ValidationError,
@@ -79,6 +80,8 @@ import {
   operationAdmissionReceipt,
   parseOperationTerminalReceipt,
   parsePrivateOperationDescriptor,
+  publicLoopMutationResult,
+  type LoopMutationEnvelope,
   type PrivateOperationDescriptor,
 } from "../lib/operation-contract.js";
 import openApiSpec from "../../openapi/loops.json" with { type: "json" };
@@ -332,6 +335,7 @@ async function handleV1Request(ctx: V1RequestContext): Promise<Response> {
   if (ctx.request.method === "GET" && segments[1] === "status") return Response.json(apiStatus());
   if (segments[1] === "import") return await handleImportRequest(ctx, segments.slice(2));
   if (segments[1] === "loops") return await handleLoopsRequest(ctx, segments.slice(2));
+  if (segments[1] === "loop-mutations") return await handleLoopMutationsRequest(ctx, segments.slice(2));
   if (segments[1] === "runs") return await handleRunsRequest(ctx, segments.slice(2));
   if (segments[1] === "receipts") return await handleReceiptsRequest(ctx, segments.slice(2));
   if (segments[1] === "workflows") return await handleWorkflowsRequest(ctx, segments.slice(2));
@@ -736,7 +740,53 @@ async function handleLoopsRequest(ctx: V1RequestContext, segments: string[]): Pr
     const name = requiredString(body.name, "name");
     return ok({ loop: publicLoop(await storage.renameLoop(id, name)) });
   }
+  if (segments.length === 2 && segments[1] === "mutations" && ctx.request.method === "POST") {
+    const body = await readJsonBody<LoopMutationEnvelope>(ctx.request, ctx.bodyLimitBytes);
+    if (body.targetId !== id) throw apiError("loop_mutation_target_mismatch", 422);
+    const mutation = await storage.mutateLoop(body, {
+      authorityId: "loops-control-plane",
+      tenantId: ctx.auth.tenantId,
+    }, { now: ctx.now() });
+    const publicMutation = publicLoopMutationResult(mutation);
+    return ok({
+      mutation: {
+        binding: publicMutation.binding,
+        admission: publicMutation.admission,
+        terminal: publicMutation.terminal,
+        loop: publicLoop(mutation.loop),
+        replayed: mutation.replayed,
+      },
+    });
+  }
   return fail("not_found", 404);
+}
+
+async function handleLoopMutationsRequest(ctx: V1RequestContext, segments: string[]): Promise<Response> {
+  if (ctx.request.method !== "GET" || segments.length !== 2) return fail("not_found", 404);
+  const [operationId, stepId] = segments;
+  if (!operationId || !stepId) return fail("not_found", 404);
+  const mutation = await requireStorage(ctx.storage).getLoopMutationResult(
+    { authorityId: "loops-control-plane", tenantId: ctx.auth.tenantId },
+    operationId,
+    stepId,
+    {
+      maxCalls: optionalPositiveInteger(ctx.url.searchParams.get("maxCalls"), 1, 8) ?? 2,
+      maxRecords: optionalPositiveInteger(ctx.url.searchParams.get("maxRecords"), 1, 2) ?? 2,
+      maxBytes: optionalPositiveInteger(ctx.url.searchParams.get("maxBytes"), 1, 1024 * 1024) ?? 64 * 1024,
+      maxWallMs: optionalPositiveInteger(ctx.url.searchParams.get("maxWallMs"), 1, 5_000) ?? 250,
+    },
+  );
+  if (!mutation) return fail("loop_mutation_not_found", 404);
+  const publicMutation = publicLoopMutationResult(mutation);
+  return ok({
+    mutation: {
+      binding: publicMutation.binding,
+      admission: publicMutation.admission,
+      terminal: publicMutation.terminal,
+      loop: publicLoop(mutation.loop),
+      replayed: true,
+    },
+  });
 }
 
 async function handleWorkflowsRequest(ctx: V1RequestContext, segments: string[]): Promise<Response> {
@@ -2217,6 +2267,7 @@ function errorResponse(error: unknown): Response {
   if (error instanceof LoopNotFoundError) return fail("loop_not_found", 404);
   if (error instanceof LoopArchivedError) return fail("loop_archived", 409);
   if (error instanceof LoopAdvancementConflictError) return fail("loop_advancement_conflict", 409);
+  if (error instanceof LoopMutationConflictError) return fail(error.reason, 409);
   if (error instanceof AmbiguousNameError) return fail("ambiguous_name", 409);
   if (error instanceof RunFinalizationConflictError) return fail(error.reason, 409);
   if (error instanceof ValidationError) {

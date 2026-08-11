@@ -34,6 +34,12 @@ export class LoopAdvancementConflictError extends CodedError {
   }
 }
 
+export class LoopMutationConflictError extends CodedError {
+  constructor(readonly reason: "revision_mismatch" | "binding_mismatch" | "lease_conflict", targetId: string) {
+    super("LOOP_MUTATION_CONFLICT", `loop mutation conflict: ${targetId} (${reason})`);
+  }
+}
+
 export type RunFinalizationConflictReason = "stale_claim" | "run_not_running";
 
 export class RunFinalizationConflictError extends CodedError {

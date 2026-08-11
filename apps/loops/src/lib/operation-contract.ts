@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { ExecutableTarget, ExecutorResult, StoredWorkflowEvent, WorkflowSpec, WorkflowStep } from "../types.js";
+import type { ExecutorResult, Loop, StoredWorkflowEvent, WorkflowSpec, WorkflowStep } from "../types.js";
 import { ValidationError } from "./errors.js";
 import { workflowDefinitionHash } from "./workflow-provenance.js";
 
@@ -29,7 +29,8 @@ export interface PrivateOperationDescriptor {
   attempt: number;
   idempotencyKey: string;
   authority: OperationAuthorityBinding;
-  target: ExecutableTarget;
+  descriptorRef: string;
+  descriptorDigest: string;
 }
 
 export interface OperationAdmissionReceipt {
@@ -61,6 +62,7 @@ export interface OperationTerminalReceipt {
 }
 
 export interface OperationReceiptLookupCaps {
+  maxCalls: number;
   maxRecords: number;
   maxBytes: number;
   maxWallMs: number;
@@ -73,9 +75,97 @@ export interface OperationReceiptState {
 }
 
 export const DEFAULT_OPERATION_LOOKUP_CAPS: Readonly<OperationReceiptLookupCaps> = Object.freeze({
+  maxCalls: 1,
   maxRecords: 512,
   maxBytes: 512 * 1024,
   maxWallMs: 100,
+});
+
+export type LoopMutationAction = "pause" | "resume" | "stop";
+export type LoopMutationTerminalState = "succeeded" | "dry_run";
+
+export interface LoopMutationEnvelope {
+  schema: "openloops.loop_mutation.v1";
+  operationId: string;
+  stepId: string;
+  targetId: string;
+  action: LoopMutationAction;
+  expectedRevision: string;
+  approvedPlanDigest: string;
+  manifestDigest: string;
+  descriptorRef: string;
+  descriptorDigest: string;
+  dryRun?: boolean;
+}
+
+export interface LoopMutationBinding extends LoopMutationEnvelope {
+  authority: OperationAuthorityBinding;
+  bindingDigest: string;
+  leaseId: string;
+}
+
+export interface PublicLoopMutationBinding extends Omit<LoopMutationBinding, "descriptorRef"> {
+  descriptorCommitment: string;
+}
+
+export interface LoopMutationAdmissionReceipt {
+  schema: "openloops.loop_mutation_receipt.v1";
+  receiptId: string;
+  receiptKind: "admission";
+  operationId: string;
+  stepId: string;
+  targetId: string;
+  action: LoopMutationAction;
+  expectedRevision: string;
+  authority: OperationAuthorityBinding;
+  bindingDigest: string;
+  descriptorCommitment: string;
+  descriptorDigest: string;
+  state: "admitted";
+  createdAt: string;
+}
+
+export interface LoopMutationTerminalReceipt {
+  schema: "openloops.loop_mutation_receipt.v1";
+  receiptId: string;
+  receiptKind: "terminal";
+  operationId: string;
+  stepId: string;
+  targetId: string;
+  action: LoopMutationAction;
+  expectedRevision: string;
+  authority: OperationAuthorityBinding;
+  bindingDigest: string;
+  state: LoopMutationTerminalState;
+  resultRevision: string;
+  resultStatus: Loop["status"];
+  createdAt: string;
+}
+
+export interface LoopMutationResult {
+  binding: LoopMutationBinding;
+  admission: LoopMutationAdmissionReceipt;
+  terminal: LoopMutationTerminalReceipt;
+  loop: Loop;
+  replayed: boolean;
+}
+
+export interface PublicLoopMutationResult extends Omit<LoopMutationResult, "binding"> {
+  binding: PublicLoopMutationBinding;
+}
+
+export interface LoopMutationLookupCaps {
+  maxCalls: number;
+  maxRecords: number;
+  maxBytes: number;
+  maxWallMs: number;
+}
+
+export const DEFAULT_LOOP_MUTATION_LOOKUP_CAPS: Readonly<LoopMutationLookupCaps> = Object.freeze({
+  maxCalls: 2,
+  maxRecords: 2,
+  maxBytes: 64 * 1024,
+  maxWallMs: 250,
 });
 
 function canonicalize(value: unknown): unknown {
@@ -96,6 +186,10 @@ function stableHash(namespace: string, value: unknown): string {
     .update(JSON.stringify(canonicalize(value)))
     .digest("hex");
   return `${namespace}:sha256:${digest}`;
+}
+
+export function privateOperationDescriptorDigest(target: WorkflowStep["target"]): string {
+  return stableHash("descriptor", target).replace("descriptor:", "");
 }
 
 function requiredText(value: unknown, field: string): string {
@@ -124,11 +218,44 @@ function authorityBinding(value: unknown): OperationAuthorityBinding {
   };
 }
 
-function target(value: unknown): ExecutableTarget {
-  if (!isRecord(value) || (value.type !== "agent" && value.type !== "command")) {
-    throw new ValidationError("invalid private operation target");
+function digest(value: unknown, field: string): string {
+  const text = requiredText(value, field);
+  if (!/^(?:sha256:)?[a-f0-9]{64}$/.test(text)) {
+    throw new ValidationError(`invalid private operation ${field}`);
   }
-  return JSON.parse(JSON.stringify(value)) as ExecutableTarget;
+  return text;
+}
+
+function loopId(value: unknown): string {
+  const text = requiredText(value, "targetId");
+  if (!/^[a-f0-9]{32}$/.test(text)) throw new ValidationError("loop mutation requires a full stable target id");
+  return text;
+}
+
+const LOOP_MUTATION_DESCRIPTOR_REF_PREFIX = "owner-operation-target:";
+const LOOP_MUTATION_DESCRIPTOR_ID_MAX_LENGTH = 96;
+
+function loopMutationDescriptorRef(value: unknown): string {
+  const text = requiredText(value, "descriptorRef");
+  if (!text.startsWith(LOOP_MUTATION_DESCRIPTOR_REF_PREFIX)) {
+    throw new ValidationError("invalid private operation descriptorRef");
+  }
+  const id = text.slice(LOOP_MUTATION_DESCRIPTOR_REF_PREFIX.length);
+  if (
+    id.length === 0 ||
+    id.length > LOOP_MUTATION_DESCRIPTOR_ID_MAX_LENGTH ||
+    !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id) ||
+    /(?:^|[-_.])(?:bearer|token|secret|credential|api[-_]?key)(?:$|[-_.])/i.test(id) ||
+    /^(?:gh[pousr]_|sk-(?:proj-)?|xox[a-z]-|(?:AKIA|ASIA)[A-Z0-9]|BEGIN[-_.]PRIVATE[-_.]KEY|PRIVATE[-_.]KEY)/i.test(id) ||
+    /^[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}$/.test(id)
+  ) {
+    throw new ValidationError("invalid private operation descriptorRef");
+  }
+  return text;
+}
+
+export function loopMutationDescriptorCommitment(descriptorRef: string): string {
+  return stableHash("loop-mutation-descriptor-ref", descriptorRef);
 }
 
 export function isPrivateOperationEventType(value: string): value is PrivateOperationEventType {
@@ -166,12 +293,13 @@ export function createPrivateOperationDescriptor(input: {
     attempt: positiveInteger(input.attempt ?? 1, "attempt"),
     idempotencyKey: requiredText(input.idempotencyKey, "idempotencyKey"),
     authority: authorityBinding(input.authority),
+    descriptorRef: `owner-operation-target:${requiredText(input.step.id, "stepId")}`,
+    descriptorDigest: privateOperationDescriptorDigest(input.step.target),
   };
   return {
     schema: "openloops.private_operation_descriptor.v1",
     operationId: stableHash("operation", descriptorBase),
     ...descriptorBase,
-    target: JSON.parse(JSON.stringify(input.step.target)) as ExecutableTarget,
   };
 }
 
@@ -247,7 +375,8 @@ export function parsePrivateOperationDescriptor(value: unknown): PrivateOperatio
     attempt: positiveInteger(value.attempt, "attempt"),
     idempotencyKey: requiredText(value.idempotencyKey, "idempotencyKey"),
     authority: authorityBinding(value.authority),
-    target: target(value.target),
+    descriptorRef: requiredText(value.descriptorRef, "descriptorRef"),
+    descriptorDigest: digest(value.descriptorDigest, "descriptorDigest"),
   };
   const expectedId = stableHash("operation", {
     operationTemplateId: parsed.operationTemplateId,
@@ -259,6 +388,8 @@ export function parsePrivateOperationDescriptor(value: unknown): PrivateOperatio
     attempt: parsed.attempt,
     idempotencyKey: parsed.idempotencyKey,
     authority: parsed.authority,
+    descriptorRef: parsed.descriptorRef,
+    descriptorDigest: parsed.descriptorDigest,
   });
   if (parsed.operationId !== expectedId) throw new ValidationError("private operation id mismatch");
   return parsed;
@@ -291,7 +422,8 @@ function parseOperationReceipt(value: unknown): OperationAdmissionReceipt | Oper
       entityRevision: "receipt-validation",
       attempt: 1,
       idempotencyKey: "receipt-validation",
-      target: { type: "command", command: "receipt-validation" },
+      descriptorRef: "owner-operation-target:receipt-validation",
+      descriptorDigest: "0".repeat(64),
     }).receiptId;
     if (receipt.receiptId !== expected) throw new ValidationError("operation admission receipt id mismatch");
     return receipt;
@@ -338,6 +470,9 @@ export function lookupOperationReceiptState(
   caps: OperationReceiptLookupCaps = DEFAULT_OPERATION_LOOKUP_CAPS,
 ): OperationReceiptState {
   const startedAt = Date.now();
+  if (!Number.isInteger(caps.maxCalls) || caps.maxCalls < 1) {
+    throw new ValidationError("operation receipt lookup call cap exceeded");
+  }
   if (events.length > caps.maxRecords) throw new ValidationError("operation receipt lookup record cap exceeded");
   let bytes = 0;
   let descriptor: PrivateOperationDescriptor | undefined;
@@ -389,6 +524,118 @@ export function lookupOperationReceiptState(
     }
   }
   return { descriptor, admission, terminal };
+}
+
+export function normalizeLoopMutationEnvelope(
+  value: unknown,
+  authority: OperationAuthorityBinding,
+): LoopMutationBinding {
+  if (!isRecord(value) || value.schema !== "openloops.loop_mutation.v1") {
+    throw new ValidationError("invalid loop mutation envelope");
+  }
+  const action = value.action;
+  if (action !== "pause" && action !== "resume" && action !== "stop") {
+    throw new ValidationError("invalid loop mutation action");
+  }
+  const normalized: LoopMutationEnvelope = {
+    schema: "openloops.loop_mutation.v1",
+    operationId: requiredText(value.operationId, "operationId"),
+    stepId: requiredText(value.stepId, "stepId"),
+    targetId: loopId(value.targetId),
+    action,
+    expectedRevision: requiredText(value.expectedRevision, "expectedRevision"),
+    approvedPlanDigest: digest(value.approvedPlanDigest, "approvedPlanDigest"),
+    manifestDigest: digest(value.manifestDigest, "manifestDigest"),
+    descriptorRef: loopMutationDescriptorRef(value.descriptorRef),
+    descriptorDigest: digest(value.descriptorDigest, "descriptorDigest"),
+    ...(value.dryRun === true ? { dryRun: true } : {}),
+  };
+  const normalizedAuthority = authorityBinding(authority);
+  const bindingDigest = stableHash("loop-mutation-binding", {
+    ...normalized,
+    dryRun: normalized.dryRun === true,
+    authority: normalizedAuthority,
+  });
+  return {
+    ...normalized,
+    authority: normalizedAuthority,
+    bindingDigest,
+    leaseId: stableHash("loop-mutation-lease", {
+      tenantId: normalizedAuthority.tenantId,
+      targetId: normalized.targetId,
+      operationId: normalized.operationId,
+      stepId: normalized.stepId,
+    }),
+  };
+}
+
+export function loopMutationAdmissionReceipt(
+  binding: LoopMutationBinding,
+  createdAt: string,
+): LoopMutationAdmissionReceipt {
+  return {
+    schema: "openloops.loop_mutation_receipt.v1",
+    receiptId: stableHash("loop-mutation-receipt", {
+      bindingDigest: binding.bindingDigest,
+      receiptKind: "admission",
+    }),
+    receiptKind: "admission",
+    operationId: binding.operationId,
+    stepId: binding.stepId,
+    targetId: binding.targetId,
+    action: binding.action,
+    expectedRevision: binding.expectedRevision,
+    authority: binding.authority,
+    bindingDigest: binding.bindingDigest,
+    descriptorCommitment: loopMutationDescriptorCommitment(binding.descriptorRef),
+    descriptorDigest: binding.descriptorDigest,
+    state: "admitted",
+    createdAt,
+  };
+}
+
+export function publicLoopMutationResult(result: LoopMutationResult): PublicLoopMutationResult {
+  const { descriptorRef, ...binding } = result.binding;
+  return {
+    binding: {
+      ...binding,
+      descriptorCommitment: loopMutationDescriptorCommitment(descriptorRef),
+    },
+    admission: result.admission,
+    terminal: result.terminal,
+    loop: result.loop,
+    replayed: result.replayed,
+  };
+}
+
+export function loopMutationTerminalReceipt(
+  binding: LoopMutationBinding,
+  loop: Loop,
+  createdAt: string,
+): LoopMutationTerminalReceipt {
+  const state: LoopMutationTerminalState = binding.dryRun ? "dry_run" : "succeeded";
+  return {
+    schema: "openloops.loop_mutation_receipt.v1",
+    receiptId: stableHash("loop-mutation-receipt", {
+      bindingDigest: binding.bindingDigest,
+      receiptKind: "terminal",
+      state,
+      resultRevision: loop.updatedAt,
+      resultStatus: loop.status,
+    }),
+    receiptKind: "terminal",
+    operationId: binding.operationId,
+    stepId: binding.stepId,
+    targetId: binding.targetId,
+    action: binding.action,
+    expectedRevision: binding.expectedRevision,
+    authority: binding.authority,
+    bindingDigest: binding.bindingDigest,
+    state,
+    resultRevision: loop.updatedAt,
+    resultStatus: loop.status,
+    createdAt,
+  };
 }
 
 export function privateOperationEventsForWorkflowRun(input: {

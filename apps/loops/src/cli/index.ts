@@ -50,6 +50,7 @@ import { runDoctor } from "../lib/doctor.js";
 import { buildHealthReport, buildHealthScan, expectationForLoop, writeHealthScanReports } from "../lib/health.js";
 import { buildHostedDoctorReport, buildHostedHealthReport, buildHostedHealthScan } from "../lib/hosted-diagnostics.js";
 import { isPrivateOperationEventType } from "../lib/operation-contract.js";
+import type { LoopMutationEnvelope } from "../lib/operation-contract.js";
 import { runLoopsUiApp } from "./ui.js";
 import {
   applyImportMigrationBundle,
@@ -2686,9 +2687,35 @@ hygiene
     }
   }));
 
-program.command("pause <idOrName>").description("pause an active loop without losing its schedule").action(runAction((idOrName) => updateStatus(idOrName, "paused")));
-program.command("resume <idOrName>").description("resume a paused or stopped loop").action(runAction((idOrName) => updateStatus(idOrName, "active")));
-program.command("stop <idOrName>").description("stop a loop and clear its next scheduled run").action(runAction((idOrName) => updateStatus(idOrName, "stopped")));
+interface LoopMutationCliOptions {
+  operationId?: string;
+  stepId?: string;
+  expectedRevision?: string;
+  approvedPlanDigest?: string;
+  manifestDigest?: string;
+  descriptorRef?: string;
+  descriptorDigest?: string;
+  dryRun?: boolean;
+}
+
+function addLoopMutationOptions(command: Command): Command {
+  return command
+    .option("--operation-id <id>", "caller-stable mutation operation id")
+    .option("--step-id <id>", "caller-stable mutation step id")
+    .option("--expected-revision <revision>", "exact loop updatedAt revision read before mutation")
+    .option("--approved-plan-digest <sha256>", "approved plan sha256 digest")
+    .option("--manifest-digest <sha256>", "immutable mutation manifest sha256 digest")
+    .option("--descriptor-ref <ref>", "opaque owner-only target descriptor reference")
+    .option("--descriptor-digest <sha256>", "target descriptor sha256 digest")
+    .option("--dry-run", "validate and receipt the mutation without changing the loop");
+}
+
+addLoopMutationOptions(program.command("pause <id>").description("pause a loop by full id using the hosted mutation contract"))
+  .action(runAction((id, opts) => updateStatus(id, "paused", opts)));
+addLoopMutationOptions(program.command("resume <id>").description("resume a loop by full id using the hosted mutation contract"))
+  .action(runAction((id, opts) => updateStatus(id, "active", opts)));
+addLoopMutationOptions(program.command("stop <id>").description("stop a loop by full id using the hosted mutation contract"))
+  .action(runAction((id, opts) => updateStatus(id, "stopped", opts)));
 
 program
   .command("rename <idOrName> <newName>")
@@ -2771,8 +2798,52 @@ program
     );
   })));
 
-function updateStatus(idOrName: string, status: "paused" | "active" | "stopped"): Promise<void> {
+function updateStatus(
+  idOrName: string,
+  status: "paused" | "active" | "stopped",
+  opts: LoopMutationCliOptions = {},
+): Promise<void> {
   return withStore(async (store) => {
+    const supplied = [
+      opts.operationId,
+      opts.stepId,
+      opts.expectedRevision,
+      opts.approvedPlanDigest,
+      opts.manifestDigest,
+      opts.descriptorRef,
+      opts.descriptorDigest,
+    ];
+    const usesContract = supplied.some((value) => value !== undefined) || opts.dryRun === true;
+    if (store.transport === "cloud-http" || usesContract) {
+      if (supplied.some((value) => typeof value !== "string" || value.trim() === "")) {
+        throw new ValidationError(
+          "hosted pause/resume/stop require --operation-id, --step-id, --expected-revision, " +
+          "--approved-plan-digest, --manifest-digest, --descriptor-ref, and --descriptor-digest",
+        );
+      }
+      const envelope: LoopMutationEnvelope = {
+        schema: "openloops.loop_mutation.v1",
+        operationId: opts.operationId!,
+        stepId: opts.stepId!,
+        targetId: idOrName,
+        action: status === "active" ? "resume" : status === "paused" ? "pause" : "stop",
+        expectedRevision: opts.expectedRevision!,
+        approvedPlanDigest: opts.approvedPlanDigest!,
+        manifestDigest: opts.manifestDigest!,
+        descriptorRef: opts.descriptorRef!,
+        descriptorDigest: opts.descriptorDigest!,
+        ...(opts.dryRun ? { dryRun: true } : {}),
+      };
+      const mutation = await store.mutateLoop(envelope);
+      print(
+        {
+          ...mutation,
+          loop: publicLoop(mutation.loop),
+        },
+        `${mutation.loop.id} ${mutation.terminal.state} (${mutation.loop.status}) replayed=${mutation.replayed}`,
+      );
+      return;
+    }
     // requireUniqueLoop so an ambiguous name errors instead of mutating the
     // newest same-named loop.
     const loop = await store.requireUniqueLoop(idOrName);

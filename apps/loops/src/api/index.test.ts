@@ -16,6 +16,7 @@ import { packageVersion } from "../lib/version.js";
 import {
   operationAdmissionReceipt,
   operationTerminalReceipt,
+  privateOperationDescriptorDigest,
   type OperationReceiptState,
   type PrivateOperationDescriptor,
 } from "../lib/operation-contract.js";
@@ -3090,11 +3091,11 @@ describe("loops-api foundation", () => {
       expect(created.operationStates).toHaveLength(workflow.steps.length);
       expect(created.operationStates.every((state) => !state.admission && !state.terminal)).toBe(true);
       const privateAgentDescriptor = created.operationDescriptors.find((descriptor) => descriptor.stepId === "contract-agent")!;
-      expect(privateAgentDescriptor.target).toMatchObject({
-        type: "agent",
-        provider: "codewith",
-        prompt: "perform scoped work",
-      });
+      expect(privateAgentDescriptor.descriptorRef).toBe("owner-operation-target:contract-agent");
+      expect(privateAgentDescriptor.descriptorDigest).toBe(
+        privateOperationDescriptorDigest(workflow.steps.find((step) => step.id === "contract-agent")!.target),
+      );
+      expect(JSON.stringify(privateAgentDescriptor)).not.toContain("perform scoped work");
       expect(privateAgentDescriptor.authority).toEqual({
         authorityId: "loops-control-plane",
         tenantId: testPrincipal.tenantId,

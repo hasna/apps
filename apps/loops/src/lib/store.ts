@@ -40,6 +40,7 @@ import {
   DuplicateWorkflowEventError,
   LegacyWorkflowRunProvenanceError,
   LoopArchivedError,
+  LoopMutationConflictError,
   LoopNotFoundError,
   RunFinalizationConflictError,
   ValidationError,
@@ -71,8 +72,15 @@ import { assertLoopStatus, assertMaxAttempts } from "./loop-status.js";
 import { normalizeRunCompletion } from "./run-completion.js";
 import { runLocalCommand, todosCliArgs, todosMutationSummary } from "./route/todos-cli.js";
 import {
+  DEFAULT_LOOP_MUTATION_LOOKUP_CAPS,
   isPrivateOperationEventType,
+  loopMutationAdmissionReceipt,
+  loopMutationTerminalReceipt,
+  normalizeLoopMutationEnvelope,
   privateOperationEventsForWorkflowRun,
+  type LoopMutationEnvelope,
+  type LoopMutationLookupCaps,
+  type LoopMutationResult,
   type OperationAuthorityBinding,
 } from "./operation-contract.js";
 
@@ -1277,6 +1285,10 @@ export class Store {
           this.addColumnIfMissing("workflow_step_runs", "process_started_at", "TEXT");
         },
       },
+      {
+        id: "0015_loop_mutation_contract",
+        apply: () => this.createLoopMutationSchema(),
+      },
     ];
   }
 
@@ -1361,6 +1373,43 @@ export class Store {
       CREATE INDEX IF NOT EXISTS idx_run_receipts_repo ON run_receipts(repo, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_run_receipts_digest ON run_receipts(digest_id);
       CREATE INDEX IF NOT EXISTS idx_run_receipts_status ON run_receipts(status, created_at DESC);
+
+      CREATE TABLE IF NOT EXISTS loop_mutation_operations (
+        tenant_id TEXT NOT NULL,
+        operation_id TEXT NOT NULL,
+        step_id TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        binding_digest TEXT NOT NULL,
+        binding_json TEXT NOT NULL,
+        admission_json TEXT NOT NULL,
+        terminal_json TEXT NOT NULL,
+        result_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (tenant_id, operation_id, step_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_loop_mutation_target ON loop_mutation_operations(tenant_id, target_id, created_at DESC);
+      CREATE TRIGGER IF NOT EXISTS loop_mutation_operations_no_update
+      BEFORE UPDATE ON loop_mutation_operations
+      BEGIN
+        SELECT RAISE(ABORT, 'loop mutation receipts are immutable');
+      END;
+      CREATE TRIGGER IF NOT EXISTS loop_mutation_operations_no_delete
+      BEFORE DELETE ON loop_mutation_operations
+      BEGIN
+        SELECT RAISE(ABORT, 'loop mutation receipts are immutable');
+      END;
+
+      CREATE TABLE IF NOT EXISTS loop_mutation_leases (
+        tenant_id TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        lease_id TEXT NOT NULL,
+        operation_id TEXT NOT NULL,
+        step_id TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (tenant_id, target_id),
+        UNIQUE (tenant_id, lease_id)
+      );
 
       CREATE TABLE IF NOT EXISTS daemon_lease (
         id TEXT PRIMARY KEY,
@@ -1606,6 +1655,46 @@ export class Store {
       CREATE INDEX IF NOT EXISTS idx_run_receipts_repo ON run_receipts(repo, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_run_receipts_digest ON run_receipts(digest_id);
       CREATE INDEX IF NOT EXISTS idx_run_receipts_status ON run_receipts(status, created_at DESC);
+    `);
+  }
+
+  private createLoopMutationSchema(): void {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS loop_mutation_operations (
+        tenant_id TEXT NOT NULL,
+        operation_id TEXT NOT NULL,
+        step_id TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        binding_digest TEXT NOT NULL,
+        binding_json TEXT NOT NULL,
+        admission_json TEXT NOT NULL,
+        terminal_json TEXT NOT NULL,
+        result_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (tenant_id, operation_id, step_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_loop_mutation_target ON loop_mutation_operations(tenant_id, target_id, created_at DESC);
+      CREATE TRIGGER IF NOT EXISTS loop_mutation_operations_no_update
+      BEFORE UPDATE ON loop_mutation_operations
+      BEGIN
+        SELECT RAISE(ABORT, 'loop mutation receipts are immutable');
+      END;
+      CREATE TRIGGER IF NOT EXISTS loop_mutation_operations_no_delete
+      BEFORE DELETE ON loop_mutation_operations
+      BEGIN
+        SELECT RAISE(ABORT, 'loop mutation receipts are immutable');
+      END;
+      CREATE TABLE IF NOT EXISTS loop_mutation_leases (
+        tenant_id TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        lease_id TEXT NOT NULL,
+        operation_id TEXT NOT NULL,
+        step_id TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (tenant_id, target_id),
+        UNIQUE (tenant_id, lease_id)
+      );
     `);
   }
 
@@ -1915,6 +2004,174 @@ export class Store {
     const after = this.getLoop(id);
     if (!after) throw new Error(`loop not found after update: ${id}`);
     return after;
+  }
+
+  mutateLoop(
+    envelope: LoopMutationEnvelope,
+    authority: OperationAuthorityBinding,
+    opts: { now?: Date; leaseMs?: number } = {},
+  ): LoopMutationResult {
+    const binding = normalizeLoopMutationEnvelope(envelope, authority);
+    const now = opts.now ?? new Date();
+    const createdAt = now.toISOString();
+    const leaseExpiresAt = new Date(now.getTime() + (opts.leaseMs ?? 30_000)).toISOString();
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const existing = this.db.query<{
+        binding_digest: string;
+        binding_json: string;
+        admission_json: string;
+        terminal_json: string;
+        result_json: string;
+      }, [string, string, string]>(
+        `SELECT binding_digest, binding_json, admission_json, terminal_json, result_json
+         FROM loop_mutation_operations
+         WHERE tenant_id=? AND operation_id=? AND step_id=?`,
+      ).get(binding.authority.tenantId, binding.operationId, binding.stepId);
+      if (existing) {
+        if (existing.binding_digest !== binding.bindingDigest) {
+          throw new LoopMutationConflictError("binding_mismatch", binding.targetId);
+        }
+        this.db.exec("COMMIT");
+        return {
+          binding,
+          admission: JSON.parse(existing.admission_json),
+          terminal: JSON.parse(existing.terminal_json),
+          loop: JSON.parse(existing.result_json),
+          replayed: true,
+        } as LoopMutationResult;
+      }
+
+      const current = this.getLoop(binding.targetId);
+      if (!current) throw new LoopNotFoundError(binding.targetId);
+      if (current.archivedAt) throw new LoopArchivedError(current.name || current.id);
+      if (current.updatedAt !== binding.expectedRevision) {
+        throw new LoopMutationConflictError("revision_mismatch", binding.targetId);
+      }
+
+      this.db.query("DELETE FROM loop_mutation_leases WHERE tenant_id=? AND target_id=? AND expires_at <= ?")
+        .run(binding.authority.tenantId, binding.targetId, createdAt);
+      try {
+        this.db.query(
+          `INSERT INTO loop_mutation_leases
+           (tenant_id,target_id,lease_id,operation_id,step_id,expires_at,created_at)
+           VALUES (?,?,?,?,?,?,?)`,
+        ).run(
+          binding.authority.tenantId,
+          binding.targetId,
+          binding.leaseId,
+          binding.operationId,
+          binding.stepId,
+          leaseExpiresAt,
+          createdAt,
+        );
+      } catch {
+        throw new LoopMutationConflictError("lease_conflict", binding.targetId);
+      }
+
+      let result = current;
+      if (!binding.dryRun) {
+        const status: LoopStatus = binding.action === "pause"
+          ? "paused"
+          : binding.action === "stop"
+            ? "stopped"
+            : "active";
+        const nextRunAt = binding.action === "stop"
+          ? undefined
+          : binding.action === "resume" && !current.nextRunAt
+            ? initialNextRun(current.schedule, now)
+            : current.nextRunAt;
+        const updatedAt = new Date(Math.max(now.getTime(), Date.parse(current.updatedAt) + 1)).toISOString();
+        const update = this.db.query(
+          `UPDATE loops SET status=?, next_run_at=?, updated_at=?
+           WHERE id=? AND updated_at=? AND archived_at IS NULL`,
+        ).run(status, nextRunAt ?? null, updatedAt, current.id, binding.expectedRevision);
+        if (update.changes !== 1) throw new LoopMutationConflictError("revision_mismatch", binding.targetId);
+        if (status !== "active") {
+          this.setWorkflowWorkItemsForLoop(
+            current.id,
+            status === "paused" ? "deferred" : "cancelled",
+            `loop ${status}`,
+            updatedAt,
+          );
+        }
+        result = { ...current, status, nextRunAt, updatedAt };
+      }
+      const admission = loopMutationAdmissionReceipt(binding, createdAt);
+      const terminal = loopMutationTerminalReceipt(binding, result, createdAt);
+      this.db.query(
+        `INSERT INTO loop_mutation_operations
+         (tenant_id,operation_id,step_id,target_id,binding_digest,binding_json,admission_json,terminal_json,result_json,created_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?)`,
+      ).run(
+        binding.authority.tenantId,
+        binding.operationId,
+        binding.stepId,
+        binding.targetId,
+        binding.bindingDigest,
+        JSON.stringify(binding),
+        JSON.stringify(admission),
+        JSON.stringify(terminal),
+        JSON.stringify(result),
+        createdAt,
+      );
+      this.db.query("DELETE FROM loop_mutation_leases WHERE tenant_id=? AND target_id=? AND lease_id=?")
+        .run(binding.authority.tenantId, binding.targetId, binding.leaseId);
+      this.db.exec("COMMIT");
+      return { binding, admission, terminal, loop: result, replayed: false };
+    } catch (error) {
+      try {
+        this.db.exec("ROLLBACK");
+      } catch {
+        /* transaction may already be closed */
+      }
+      throw error;
+    }
+  }
+
+  getLoopMutationResult(
+    authority: OperationAuthorityBinding,
+    operationId: string,
+    stepId: string,
+    caps: LoopMutationLookupCaps = DEFAULT_LOOP_MUTATION_LOOKUP_CAPS,
+  ): LoopMutationResult | undefined {
+    const startedAt = Date.now();
+    if (!Number.isInteger(caps.maxCalls) || caps.maxCalls < 1) throw new ValidationError("loop mutation lookup call cap exceeded");
+    if (!Number.isInteger(caps.maxRecords) || caps.maxRecords < 1) throw new ValidationError("loop mutation lookup record cap exceeded");
+    if (!Number.isInteger(caps.maxBytes) || caps.maxBytes < 1) throw new ValidationError("loop mutation lookup byte cap exceeded");
+    if (!Number.isInteger(caps.maxWallMs) || caps.maxWallMs < 1) throw new ValidationError("loop mutation lookup wall-time cap exceeded");
+    const rows = this.db.query<{
+      binding_digest: string;
+      binding_json: string;
+      admission_json: string;
+      terminal_json: string;
+      result_json: string;
+    }, [string, string, string]>(
+      `SELECT binding_digest, binding_json, admission_json, terminal_json, result_json
+       FROM loop_mutation_operations
+       WHERE tenant_id=? AND operation_id=? AND step_id=?
+       LIMIT 2`,
+    ).all(authority.tenantId, operationId, stepId);
+    if (rows.length > caps.maxRecords) throw new ValidationError("loop mutation lookup record cap exceeded");
+    if (Date.now() - startedAt > caps.maxWallMs) throw new ValidationError("loop mutation lookup wall-time cap exceeded");
+    if (rows.length === 0) return undefined;
+    if (rows.length !== 1) throw new ValidationError("duplicate loop mutation result");
+    const row = rows[0]!;
+    const bytes = Buffer.byteLength(row.binding_json) + Buffer.byteLength(row.admission_json) +
+      Buffer.byteLength(row.terminal_json) + Buffer.byteLength(row.result_json);
+    if (bytes > caps.maxBytes) throw new ValidationError("loop mutation lookup byte cap exceeded");
+    const binding = JSON.parse(row.binding_json);
+    const admission = JSON.parse(row.admission_json);
+    const terminal = JSON.parse(row.terminal_json);
+    const loop = JSON.parse(row.result_json);
+    if (
+      binding.bindingDigest !== row.binding_digest ||
+      admission.bindingDigest !== row.binding_digest ||
+      terminal.bindingDigest !== row.binding_digest
+    ) {
+      throw new LoopMutationConflictError("binding_mismatch", admission.targetId);
+    }
+    return { binding, admission, terminal, loop, replayed: true };
   }
 
   advanceLoopIfCurrent(

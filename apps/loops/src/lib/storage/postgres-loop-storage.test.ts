@@ -670,6 +670,22 @@ suite("PostgresLoopStorage (live)", () => {
     expect(await isSafeServiceConnection(runtimeExecutor.queryClient, "open_loops_runtime")).toBe(false);
     await executor.queryClient.execute(`REVOKE ALL ON evil.loops FROM open_loops_runtime; REVOKE ALL ON SCHEMA evil FROM open_loops_runtime`);
     expect(await isSafeServiceConnection(runtimeExecutor.queryClient, "open_loops_runtime")).toBe(true);
+    await executor.queryClient.execute("REVOKE INSERT ON loop_mutation_operations FROM open_loops_runtime");
+    expect(await isSafeServiceConnection(runtimeExecutor.queryClient, "open_loops_runtime")).toBe(false);
+    await executor.queryClient.execute("GRANT INSERT ON loop_mutation_operations TO open_loops_runtime");
+    expect(await isSafeServiceConnection(runtimeExecutor.queryClient, "open_loops_runtime")).toBe(true);
+    await executor.queryClient.execute("GRANT UPDATE ON loop_mutation_operations TO open_loops_runtime");
+    expect(await isSafeServiceConnection(runtimeExecutor.queryClient, "open_loops_runtime")).toBe(false);
+    await executor.queryClient.execute("REVOKE UPDATE ON loop_mutation_operations FROM open_loops_runtime");
+    expect(await isSafeServiceConnection(runtimeExecutor.queryClient, "open_loops_runtime")).toBe(true);
+    await executor.queryClient.execute("REVOKE DELETE ON loop_mutation_leases FROM open_loops_runtime");
+    expect(await isSafeServiceConnection(runtimeExecutor.queryClient, "open_loops_runtime")).toBe(false);
+    await executor.queryClient.execute("GRANT DELETE ON loop_mutation_leases TO open_loops_runtime");
+    expect(await isSafeServiceConnection(runtimeExecutor.queryClient, "open_loops_runtime")).toBe(true);
+    await executor.queryClient.execute("ALTER TABLE loop_mutation_operations DISABLE ROW LEVEL SECURITY");
+    expect(await isSafeServiceConnection(runtimeExecutor.queryClient, "open_loops_runtime")).toBe(false);
+    await executor.queryClient.execute("ALTER TABLE loop_mutation_operations ENABLE ROW LEVEL SECURITY; ALTER TABLE loop_mutation_operations FORCE ROW LEVEL SECURITY");
+    expect(await isSafeServiceConnection(runtimeExecutor.queryClient, "open_loops_runtime")).toBe(true);
     await executor.queryClient.execute("GRANT TRUNCATE ON loops TO open_loops_runtime");
     expect(await isSafeServiceConnection(runtimeExecutor.queryClient, "open_loops_runtime")).toBe(false);
     await executor.queryClient.execute("REVOKE TRUNCATE ON loops FROM open_loops_runtime");
@@ -852,7 +868,7 @@ suite("PostgresLoopStorage (live)", () => {
   beforeEach(async () => {
     // Disposable DB: wipe between tests. CASCADE clears child rows.
     await executor.queryClient.execute(
-      "TRUNCATE loops, loop_runs, workflow_specs, workflow_runs, workflow_step_runs, workflow_events, workflow_invocations, workflow_work_items, goals, goal_plan_nodes, goal_runs, daemon_lease, runner_machines, runner_leases, audit_events RESTART IDENTITY CASCADE",
+      "TRUNCATE loops, loop_runs, workflow_specs, workflow_runs, workflow_step_runs, workflow_events, workflow_invocations, workflow_work_items, goals, goal_plan_nodes, goal_runs, daemon_lease, runner_machines, runner_leases, audit_events, loop_mutation_operations, loop_mutation_leases RESTART IDENTITY CASCADE",
     );
   });
 

@@ -75,6 +75,7 @@ import {
   DuplicateWorkflowEventError,
   LegacyWorkflowRunProvenanceError,
   LoopArchivedError,
+  LoopMutationConflictError,
   LoopNotFoundError,
   RunFinalizationConflictError,
   ValidationError,
@@ -114,8 +115,16 @@ import { normalizeRunCompletion } from "../run-completion.js";
 import type { PoolQueryClient, TypedQueryClient } from "../../generated/storage-kit/query.js";
 import type { LoopStorageContract, LoopStorageMethodName } from "./contract.js";
 import {
+  DEFAULT_LOOP_MUTATION_LOOKUP_CAPS,
   isPrivateOperationEventType,
+  loopMutationAdmissionReceipt,
+  loopMutationTerminalReceipt,
+  normalizeLoopMutationEnvelope,
   privateOperationEventsForWorkflowRun,
+  type LoopMutationEnvelope,
+  type LoopMutationLookupCaps,
+  type LoopMutationResult,
+  type OperationAuthorityBinding,
 } from "../operation-contract.js";
 
 // --- pg type parsers: keep row shapes byte-compatible with the sqlite mappers.
@@ -661,6 +670,199 @@ export class PostgresLoopStorage implements LoopStorageContract {
       if (!after) throw new Error(`loop not found after update: ${id}`);
       return after;
     });
+  }
+
+  async mutateLoop(
+    envelope: LoopMutationEnvelope,
+    authority: OperationAuthorityBinding,
+    opts: { now?: Date; leaseMs?: number } = {},
+  ): Promise<LoopMutationResult> {
+    if (authority.tenantId !== this.tenantId) {
+      throw new LoopMutationConflictError("binding_mismatch", envelope.targetId);
+    }
+    const binding = normalizeLoopMutationEnvelope(envelope, {
+      authorityId: authority.authorityId,
+      tenantId: this.tenantId,
+    });
+    const now = opts.now ?? new Date();
+    const createdAt = now.toISOString();
+    const leaseExpiresAt = new Date(now.getTime() + (opts.leaseMs ?? 30_000)).toISOString();
+    return this.client.transaction(async (c) => {
+      await c.query(
+        `SELECT pg_advisory_xact_lock(
+           hashtextextended(open_loops_current_tenant_id() || E'\\000' || $1 || E'\\000' || $2, 0)
+         )`,
+        [binding.operationId, binding.stepId],
+      );
+      const existing = await c.get<{
+        binding_digest: string;
+        binding_json: string;
+        admission_json: string;
+        terminal_json: string;
+        result_json: string;
+      }>(
+        `SELECT binding_digest, binding_json, admission_json, terminal_json, result_json
+         FROM loop_mutation_operations
+         WHERE tenant_id = open_loops_current_tenant_id() AND operation_id=$1 AND step_id=$2`,
+        [binding.operationId, binding.stepId],
+      );
+      if (existing) {
+        if (existing.binding_digest !== binding.bindingDigest) {
+          throw new LoopMutationConflictError("binding_mismatch", binding.targetId);
+        }
+        return {
+          binding: JSON.parse(existing.binding_json),
+          admission: JSON.parse(existing.admission_json),
+          terminal: JSON.parse(existing.terminal_json),
+          loop: JSON.parse(existing.result_json),
+          replayed: true,
+        } as LoopMutationResult;
+      }
+
+      const currentRow = await c.get<LoopRow>(
+        `SELECT * FROM loops
+         WHERE tenant_id = open_loops_current_tenant_id() AND id=$1
+         FOR UPDATE`,
+        [binding.targetId],
+      );
+      if (!currentRow) throw new LoopNotFoundError(binding.targetId);
+      const current = rowToLoop(currentRow);
+      if (current.archivedAt) throw new LoopArchivedError(current.name || current.id);
+      if (current.updatedAt !== binding.expectedRevision) {
+        throw new LoopMutationConflictError("revision_mismatch", binding.targetId);
+      }
+
+      await c.execute(
+        `DELETE FROM loop_mutation_leases
+         WHERE tenant_id = open_loops_current_tenant_id() AND target_id=$1 AND expires_at <= $2`,
+        [binding.targetId, createdAt],
+      );
+      try {
+        await c.execute(
+          `INSERT INTO loop_mutation_leases
+           (tenant_id,target_id,lease_id,operation_id,step_id,expires_at,created_at)
+           VALUES (open_loops_current_tenant_id(),$1,$2,$3,$4,$5,$6)`,
+          [
+            binding.targetId,
+            binding.leaseId,
+            binding.operationId,
+            binding.stepId,
+            leaseExpiresAt,
+            createdAt,
+          ],
+        );
+      } catch (error) {
+        if (isUniqueViolation(error)) throw new LoopMutationConflictError("lease_conflict", binding.targetId);
+        throw error;
+      }
+
+      let result = current;
+      if (!binding.dryRun) {
+        const status: LoopStatus = binding.action === "pause"
+          ? "paused"
+          : binding.action === "stop"
+            ? "stopped"
+            : "active";
+        const nextRunAt = binding.action === "stop"
+          ? undefined
+          : binding.action === "resume" && !current.nextRunAt
+            ? initialNextRun(current.schedule, now)
+            : current.nextRunAt;
+        const updatedAt = new Date(Math.max(now.getTime(), Date.parse(current.updatedAt) + 1)).toISOString();
+        const update = await c.query(
+          `UPDATE loops SET status=$1, next_run_at=$2, updated_at=$3
+           WHERE tenant_id = open_loops_current_tenant_id() AND id=$4 AND updated_at=$5 AND archived_at IS NULL`,
+          [status, nextRunAt ?? null, updatedAt, current.id, binding.expectedRevision],
+        );
+        if (update.rowCount !== 1) throw new LoopMutationConflictError("revision_mismatch", binding.targetId);
+        if (status !== "active") {
+          await this.setWorkItemsForLoop(
+            c,
+            current.id,
+            status === "paused" ? "deferred" : "cancelled",
+            `loop ${status}`,
+            updatedAt,
+          );
+        }
+        result = { ...current, status, nextRunAt, updatedAt };
+      }
+      const admission = loopMutationAdmissionReceipt(binding, createdAt);
+      const terminal = loopMutationTerminalReceipt(binding, result, createdAt);
+      await c.execute(
+        `INSERT INTO loop_mutation_operations
+         (tenant_id,operation_id,step_id,target_id,binding_digest,binding_json,admission_json,terminal_json,result_json,created_at)
+         VALUES (open_loops_current_tenant_id(),$1,$2,$3,$4,$5::jsonb,$6::jsonb,$7::jsonb,$8::jsonb,$9)`,
+        [
+          binding.operationId,
+          binding.stepId,
+          binding.targetId,
+          binding.bindingDigest,
+          JSON.stringify(binding),
+          JSON.stringify(admission),
+          JSON.stringify(terminal),
+          JSON.stringify(result),
+          createdAt,
+        ],
+      );
+      await c.execute(
+        `DELETE FROM loop_mutation_leases
+         WHERE tenant_id = open_loops_current_tenant_id() AND target_id=$1 AND lease_id=$2`,
+        [binding.targetId, binding.leaseId],
+      );
+      return { binding, admission, terminal, loop: result, replayed: false };
+    });
+  }
+
+  async getLoopMutationResult(
+    authority: OperationAuthorityBinding,
+    operationId: string,
+    stepId: string,
+    caps: LoopMutationLookupCaps = DEFAULT_LOOP_MUTATION_LOOKUP_CAPS,
+  ): Promise<LoopMutationResult | undefined> {
+    if (authority.tenantId !== this.tenantId) return undefined;
+    const startedAt = Date.now();
+    if (!Number.isInteger(caps.maxCalls) || caps.maxCalls < 1) throw new ValidationError("loop mutation lookup call cap exceeded");
+    if (!Number.isInteger(caps.maxRecords) || caps.maxRecords < 1) throw new ValidationError("loop mutation lookup record cap exceeded");
+    if (!Number.isInteger(caps.maxBytes) || caps.maxBytes < 1) throw new ValidationError("loop mutation lookup byte cap exceeded");
+    if (!Number.isInteger(caps.maxWallMs) || caps.maxWallMs < 1) throw new ValidationError("loop mutation lookup wall-time cap exceeded");
+    const rows = await this.client.many<{
+      binding_digest: string;
+      binding_json: string;
+      admission_json: string;
+      terminal_json: string;
+      result_json: string;
+    }>(
+      `SELECT binding_digest, binding_json, admission_json, terminal_json, result_json
+       FROM loop_mutation_operations
+       WHERE tenant_id = open_loops_current_tenant_id() AND operation_id=$1 AND step_id=$2
+       LIMIT 2`,
+      [operationId, stepId],
+    );
+    if (rows.length > caps.maxRecords) throw new ValidationError("loop mutation lookup record cap exceeded");
+    if (Date.now() - startedAt > caps.maxWallMs) throw new ValidationError("loop mutation lookup wall-time cap exceeded");
+    if (rows.length === 0) return undefined;
+    if (rows.length !== 1) throw new ValidationError("duplicate loop mutation result");
+    const row = rows[0]!;
+    const bytes = Buffer.byteLength(row.binding_json) + Buffer.byteLength(row.admission_json) +
+      Buffer.byteLength(row.terminal_json) + Buffer.byteLength(row.result_json);
+    if (bytes > caps.maxBytes) throw new ValidationError("loop mutation lookup byte cap exceeded");
+    const binding = JSON.parse(row.binding_json);
+    const admission = JSON.parse(row.admission_json);
+    const terminal = JSON.parse(row.terminal_json);
+    if (
+      binding.bindingDigest !== row.binding_digest ||
+      admission.bindingDigest !== row.binding_digest ||
+      terminal.bindingDigest !== row.binding_digest
+    ) {
+      throw new LoopMutationConflictError("binding_mismatch", admission.targetId);
+    }
+    return {
+      binding,
+      admission,
+      terminal,
+      loop: JSON.parse(row.result_json),
+      replayed: true,
+    };
   }
 
   async advanceLoopIfCurrent(...args: M<"advanceLoopIfCurrent">["args"]): Promise<M<"advanceLoopIfCurrent">["result"]> {

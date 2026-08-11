@@ -41,6 +41,16 @@ export interface CreateLoopInput { "name": string; "description"?: string; "labe
 
 export interface UpdateLoopInput { "status"?: "active" | "paused" | "stopped" | "expired"; "nextRunAt"?: string | null; "retryScheduledFor"?: string | null; "expiresAt"?: string | null; "maxAttempts"?: number; "labels"?: Array<string> }
 
+export interface LoopMutationEnvelope { "schema": string; "operationId": string; "stepId": string; "targetId": string; "action": "pause" | "resume" | "stop"; "expectedRevision": string; "approvedPlanDigest": string; "manifestDigest": string; "descriptorRef": string; "descriptorDigest": string; "dryRun"?: boolean }
+
+export interface LoopMutationBinding { "schema": string; "operationId": string; "stepId": string; "targetId": string; "action": "pause" | "resume" | "stop"; "expectedRevision": string; "approvedPlanDigest": string; "manifestDigest": string; "descriptorCommitment": string; "descriptorDigest": string; "dryRun"?: boolean; "authority": { "authorityId": string; "tenantId": string }; "bindingDigest": string; "leaseId": string }
+
+export interface LoopMutationAdmissionReceipt { "schema": string; "receiptId": string; "receiptKind": string; "state": string; "bindingDigest": string; "operationId": string; "stepId": string; "targetId": string; "action": "pause" | "resume" | "stop"; "expectedRevision": string; "authority": { "authorityId": string; "tenantId": string }; "descriptorCommitment": string; "descriptorDigest": string; "createdAt": string }
+
+export interface LoopMutationTerminalReceipt { "schema": string; "receiptId": string; "receiptKind": string; "state": "succeeded" | "dry_run"; "bindingDigest": string; "resultRevision": string; "resultStatus": "active" | "paused" | "stopped" | "expired" }
+
+export interface LoopMutationResponse { "ok": boolean; "mutation": { "binding": LoopMutationBinding; "admission": LoopMutationAdmissionReceipt; "terminal": LoopMutationTerminalReceipt; "loop": Loop; "replayed": boolean } }
+
 export interface Run { "id": string; "loopId": string; "status": string; "attempt"?: number; "scheduledFor"?: string; "startedAt"?: string | null; "finishedAt"?: string | null }
 
 export interface LoopResponse { "ok": boolean; "loop": Loop }
@@ -334,6 +344,15 @@ export class LoopsClient {
       });
     }
 
+    /** Reconcile one exact tenant-bound loop mutation result under explicit lookup caps */
+    async getLoopMutation(operationId: string, stepId: string, query?: { "maxCalls"?: number; "maxRecords"?: number; "maxBytes"?: number; "maxWallMs"?: number }, init?: RequestInit): Promise<LoopMutationResponse> {
+      return this.request("GET", `/v1/loop-mutations/${encodeURIComponent(String(operationId))}/${encodeURIComponent(String(stepId))}`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
     /** List loops */
     async listLoops(query?: { "status"?: "active" | "paused" | "stopped" | "expired"; "limit"?: number; "offset"?: number; "includeArchived"?: boolean; "archived"?: boolean; "labels"?: Array<string> }, init?: RequestInit): Promise<LoopListResponse> {
       return this.request("GET", `/v1/loops`, {
@@ -392,6 +411,15 @@ export class LoopsClient {
     async archiveLoop(id: string, init?: RequestInit): Promise<LoopResponse> {
       return this.request("POST", `/v1/loops/${encodeURIComponent(String(id))}/archive`, {
         body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Apply a full-id, tenant-bound loop mutation with CAS and exactly-once receipts */
+    async mutateLoop(id: string, body: LoopMutationEnvelope, init?: RequestInit): Promise<LoopMutationResponse> {
+      return this.request("POST", `/v1/loops/${encodeURIComponent(String(id))}/mutations`, {
+        body,
         query: undefined,
         init,
       });

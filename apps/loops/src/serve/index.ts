@@ -232,7 +232,8 @@ export async function isSafeServiceConnection(
                     'public.workflow_specs', 'public.workflow_runs', 'public.workflow_invocations',
                     'public.workflow_work_items', 'public.workflow_step_runs', 'public.workflow_events',
                     'public.goals', 'public.goal_plan_nodes', 'public.goal_runs',
-                    'public.runner_machines', 'public.runner_leases', 'public.run_receipts'
+                    'public.runner_machines', 'public.runner_leases', 'public.run_receipts',
+                    'public.loop_mutation_leases'
                   ]) AS required_table(name)
                   CROSS JOIN unnest(ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE']) AS required_privilege(name)
                  WHERE NOT has_table_privilege(session_user, required_table.name, required_privilege.name)
@@ -241,6 +242,8 @@ export async function isSafeServiceConnection(
                 AND has_table_privilege(session_user, 'public.tenants', 'REFERENCES')
                 AND has_column_privilege(session_user, 'public.tenants', 'id', 'UPDATE')
                 AND has_table_privilege(session_user, 'public.open_loops_schema_migrations', 'SELECT')
+                AND has_table_privilege(session_user, 'public.loop_mutation_operations', 'SELECT')
+                AND has_table_privilege(session_user, 'public.loop_mutation_operations', 'INSERT')
             ELSE true END AS required_table_privileges,
             CASE WHEN $1 = 'open_loops_runtime' THEN
               NOT EXISTS (
@@ -259,7 +262,8 @@ export async function isSafeServiceConnection(
                        'workflow_invocations', 'workflow_work_items', 'workflow_step_runs',
                        'workflow_events', 'goals', 'goal_plan_nodes', 'goal_runs',
                        'runner_machines', 'runner_leases', 'run_receipts',
-                       'open_loops_schema_migrations'
+                       'open_loops_schema_migrations',
+                       'loop_mutation_operations', 'loop_mutation_leases'
                      ])
                    )
                    AND NOT (
@@ -279,11 +283,14 @@ export async function isSafeServiceConnection(
                     'public.workflow_work_items', 'public.workflow_step_runs', 'public.workflow_events',
                     'public.goals', 'public.goal_plan_nodes', 'public.goal_runs',
                     'public.runner_machines', 'public.runner_leases', 'public.run_receipts',
-                    'public.open_loops_schema_migrations'
+                    'public.open_loops_schema_migrations',
+                    'public.loop_mutation_operations', 'public.loop_mutation_leases'
                   ]) AS protected_table(name)
                   CROSS JOIN unnest(ARRAY['TRUNCATE', 'REFERENCES', 'TRIGGER']) AS forbidden_privilege(name)
                  WHERE has_table_privilege(session_user, protected_table.name, forbidden_privilege.name)
               )
+              AND NOT has_table_privilege(session_user, 'public.loop_mutation_operations', 'UPDATE')
+              AND NOT has_table_privilege(session_user, 'public.loop_mutation_operations', 'DELETE')
               AND NOT has_table_privilege(session_user, 'public.open_loops_schema_migrations', 'INSERT')
               AND NOT has_table_privilege(session_user, 'public.open_loops_schema_migrations', 'UPDATE')
               AND NOT has_table_privilege(session_user, 'public.open_loops_schema_migrations', 'DELETE')
@@ -410,7 +417,8 @@ export async function isSafeServiceConnection(
                     'public.workflow_specs', 'public.workflow_runs', 'public.workflow_invocations',
                     'public.workflow_work_items', 'public.workflow_step_runs', 'public.workflow_events',
                     'public.goals', 'public.goal_plan_nodes', 'public.goal_runs',
-                    'public.runner_machines', 'public.runner_leases', 'public.run_receipts'
+                    'public.runner_machines', 'public.runner_leases', 'public.run_receipts',
+                    'public.loop_mutation_leases'
                   ]) AS allowed_table(name)
                   CROSS JOIN unnest(ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE']) AS allowed_privilege(name)
                  WHERE has_table_privilege(
@@ -418,6 +426,16 @@ export async function isSafeServiceConnection(
                    allowed_table.name,
                    allowed_privilege.name || ' WITH GRANT OPTION'
                  )
+              )
+              AND NOT has_table_privilege(
+                session_user,
+                'public.loop_mutation_operations',
+                'SELECT WITH GRANT OPTION'
+              )
+              AND NOT has_table_privilege(
+                session_user,
+                'public.loop_mutation_operations',
+                'INSERT WITH GRANT OPTION'
               )
               AND NOT has_table_privilege(
                 session_user,
@@ -505,7 +523,9 @@ export async function isTenantRlsInvariantSafe(client: TypedQueryClient): Promis
         ('runner_machines', 'tenant_id'),
         ('runner_leases', 'tenant_id'),
         ('audit_events', 'tenant_id'),
-        ('run_receipts', 'tenant_id')
+        ('run_receipts', 'tenant_id'),
+        ('loop_mutation_operations', 'tenant_id'),
+        ('loop_mutation_leases', 'tenant_id')
     ),
     expected(table_name, policy_name, command, roles, qualifier, check_expr) AS (
       SELECT table_name, 'tenant_isolation', '*', ARRAY['public'], discriminator, discriminator FROM protected

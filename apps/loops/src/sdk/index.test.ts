@@ -47,6 +47,24 @@ describe("loops sdk", () => {
     await client.workflowRunsRecover("workflow-1", { reason: "operator retry" });
     await client.workflowRunsRecover("workflow-2");
     await client.runsWorkflowRunsRecover("run-1", "workflow-1", { claimToken: "claim-token" });
+    await client.mutateLoop("a".repeat(32), {
+      schema: "openloops.loop_mutation.v1",
+      operationId: "sdk-operation",
+      stepId: "sdk-step",
+      targetId: "a".repeat(32),
+      action: "pause",
+      expectedRevision: "2026-08-10T00:00:00.000Z",
+      approvedPlanDigest: "1".repeat(64),
+      manifestDigest: "2".repeat(64),
+      descriptorRef: "owner-operation-target:sdk-step",
+      descriptorDigest: "3".repeat(64),
+    });
+    await client.getLoopMutation("sdk-operation", "sdk-step", {
+      maxCalls: 1,
+      maxRecords: 1,
+      maxBytes: 65536,
+      maxWallMs: 250,
+    });
 
     expect(urls[0]).toBe(
       "http://127.0.0.1:8787/v1/loops?limit=10&offset=20&includeArchived=true&labels=browserplan%2Cnightly",
@@ -60,6 +78,14 @@ describe("loops sdk", () => {
     expect(requests[4]?.body).toBeUndefined();
     expect(new Headers(requests[4]?.headers).has("content-type")).toBe(false);
     expect(urls[5]).toBe("http://127.0.0.1:8787/v1/runs/run-1/workflow-runs/workflow-1/recover");
+    expect(urls[6]).toBe(`http://127.0.0.1:8787/v1/loops/${"a".repeat(32)}/mutations`);
+    expect(JSON.parse(String(requests[6]?.body))).toMatchObject({
+      operationId: "sdk-operation",
+      targetId: "a".repeat(32),
+    });
+    expect(urls[7]).toBe(
+      "http://127.0.0.1:8787/v1/loop-mutations/sdk-operation/sdk-step?maxCalls=1&maxRecords=1&maxBytes=65536&maxWallMs=250",
+    );
   });
 
   test("describes the OpenAutomations runtime handoff without claiming product ownership", () => {

@@ -429,6 +429,169 @@
         "x-risk": "destructive"
       }
     },
+    "/v1/loops/{id}/mutations": {
+      "post": {
+        "operationId": "mutateLoop",
+        "summary": "Apply a full-id, tenant-bound loop mutation with CAS and exactly-once receipts",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Exact 32-character loop id. Names are rejected.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{32}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoopMutationEnvelope"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Immutable admission and terminal receipts plus the public loop result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoopMutationResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Revision, immutable binding, or lease conflict"
+          },
+          "422": {
+            "description": "Invalid, partial, or path-mismatched mutation envelope"
+          }
+        },
+        "x-authorization-operation": "loops.mutate",
+        "x-required-scopes": [
+          "loops:write"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "write"
+      }
+    },
+    "/v1/loop-mutations/{operationId}/{stepId}": {
+      "get": {
+        "operationId": "getLoopMutation",
+        "summary": "Reconcile one exact tenant-bound loop mutation result under explicit lookup caps",
+        "parameters": [
+          {
+            "name": "operationId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "stepId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "maxCalls",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 8,
+              "default": 2
+            }
+          },
+          {
+            "name": "maxRecords",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2,
+              "default": 2
+            }
+          },
+          {
+            "name": "maxBytes",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1048576,
+              "default": 65536
+            }
+          },
+          {
+            "name": "maxWallMs",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 5000,
+              "default": 250
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Previously committed immutable mutation receipts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoopMutationResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No mutation exists for this exact tenant, operation id, and step id"
+          },
+          "422": {
+            "description": "A reconciliation cap is invalid or exceeded"
+          }
+        },
+        "x-authorization-operation": "loopMutations.get",
+        "x-required-scopes": [
+          "loops:read"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "readonly",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "read"
+      }
+    },
     "/v1/loops/{id}/archive": {
       "post": {
         "operationId": "archiveLoop",
@@ -4087,6 +4250,335 @@
             "maxItems": 32
           }
         }
+      },
+      "LoopMutationEnvelope": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "schema": {
+            "type": "string",
+            "const": "openloops.loop_mutation.v1"
+          },
+          "operationId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "stepId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "targetId": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{32}$"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "pause",
+              "resume",
+              "stop"
+            ]
+          },
+          "expectedRevision": {
+            "type": "string",
+            "minLength": 1
+          },
+          "approvedPlanDigest": {
+            "type": "string",
+            "pattern": "^(sha256:)?[a-f0-9]{64}$"
+          },
+          "manifestDigest": {
+            "type": "string",
+            "pattern": "^(sha256:)?[a-f0-9]{64}$"
+          },
+          "descriptorRef": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 119,
+            "pattern": "^owner-operation-target:[A-Za-z0-9][A-Za-z0-9._-]{0,95}$",
+            "description": "Private request-only owner-operation-target reference. It is validated before mutation and never serialized in a response."
+          },
+          "descriptorDigest": {
+            "type": "string",
+            "pattern": "^(sha256:)?[a-f0-9]{64}$"
+          },
+          "dryRun": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": [
+          "schema",
+          "operationId",
+          "stepId",
+          "targetId",
+          "action",
+          "expectedRevision",
+          "approvedPlanDigest",
+          "manifestDigest",
+          "descriptorRef",
+          "descriptorDigest"
+        ]
+      },
+      "LoopMutationBinding": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Public mutation binding projection. The private descriptorRef is replaced by a SHA-256 commitment.",
+        "properties": {
+          "schema": {
+            "type": "string",
+            "const": "openloops.loop_mutation.v1"
+          },
+          "operationId": {
+            "type": "string"
+          },
+          "stepId": {
+            "type": "string"
+          },
+          "targetId": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{32}$"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "pause",
+              "resume",
+              "stop"
+            ]
+          },
+          "expectedRevision": {
+            "type": "string"
+          },
+          "approvedPlanDigest": {
+            "type": "string"
+          },
+          "manifestDigest": {
+            "type": "string"
+          },
+          "descriptorCommitment": {
+            "type": "string",
+            "pattern": "^loop-mutation-descriptor-ref:sha256:[a-f0-9]{64}$"
+          },
+          "descriptorDigest": {
+            "type": "string"
+          },
+          "dryRun": {
+            "type": "boolean"
+          },
+          "authority": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "authorityId": {
+                "type": "string"
+              },
+              "tenantId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "authorityId",
+              "tenantId"
+            ]
+          },
+          "bindingDigest": {
+            "type": "string"
+          },
+          "leaseId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema",
+          "operationId",
+          "stepId",
+          "targetId",
+          "action",
+          "expectedRevision",
+          "approvedPlanDigest",
+          "manifestDigest",
+          "descriptorCommitment",
+          "descriptorDigest",
+          "authority",
+          "bindingDigest",
+          "leaseId"
+        ]
+      },
+      "LoopMutationAdmissionReceipt": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "schema": {
+            "type": "string",
+            "const": "openloops.loop_mutation_receipt.v1"
+          },
+          "receiptId": {
+            "type": "string"
+          },
+          "receiptKind": {
+            "type": "string",
+            "const": "admission"
+          },
+          "state": {
+            "type": "string",
+            "const": "admitted"
+          },
+          "bindingDigest": {
+            "type": "string"
+          },
+          "operationId": {
+            "type": "string"
+          },
+          "stepId": {
+            "type": "string"
+          },
+          "targetId": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{32}$"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "pause",
+              "resume",
+              "stop"
+            ]
+          },
+          "expectedRevision": {
+            "type": "string"
+          },
+          "authority": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "authorityId": {
+                "type": "string"
+              },
+              "tenantId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "authorityId",
+              "tenantId"
+            ]
+          },
+          "descriptorCommitment": {
+            "type": "string",
+            "pattern": "^loop-mutation-descriptor-ref:sha256:[a-f0-9]{64}$"
+          },
+          "descriptorDigest": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "schema",
+          "receiptId",
+          "receiptKind",
+          "operationId",
+          "stepId",
+          "targetId",
+          "action",
+          "expectedRevision",
+          "authority",
+          "state",
+          "bindingDigest",
+          "descriptorCommitment",
+          "descriptorDigest",
+          "createdAt"
+        ]
+      },
+      "LoopMutationTerminalReceipt": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "schema": {
+            "type": "string",
+            "const": "openloops.loop_mutation_receipt.v1"
+          },
+          "receiptId": {
+            "type": "string"
+          },
+          "receiptKind": {
+            "type": "string",
+            "const": "terminal"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "succeeded",
+              "dry_run"
+            ]
+          },
+          "bindingDigest": {
+            "type": "string"
+          },
+          "resultRevision": {
+            "type": "string"
+          },
+          "resultStatus": {
+            "type": "string",
+            "enum": [
+              "active",
+              "paused",
+              "stopped",
+              "expired"
+            ]
+          }
+        },
+        "required": [
+          "schema",
+          "receiptId",
+          "receiptKind",
+          "state",
+          "bindingDigest",
+          "resultRevision",
+          "resultStatus"
+        ]
+      },
+      "LoopMutationResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "mutation": {
+            "type": "object",
+            "properties": {
+              "binding": {
+                "$ref": "#/components/schemas/LoopMutationBinding"
+              },
+              "admission": {
+                "$ref": "#/components/schemas/LoopMutationAdmissionReceipt"
+              },
+              "terminal": {
+                "$ref": "#/components/schemas/LoopMutationTerminalReceipt"
+              },
+              "loop": {
+                "$ref": "#/components/schemas/Loop"
+              },
+              "replayed": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "binding",
+              "admission",
+              "terminal",
+              "loop",
+              "replayed"
+            ]
+          }
+        },
+        "required": [
+          "ok",
+          "mutation"
+        ]
       },
       "Run": {
         "type": "object",

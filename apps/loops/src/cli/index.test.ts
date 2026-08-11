@@ -1029,6 +1029,81 @@ describe("loops CLI", () => {
     expect(JSON.parse(pausedById.stdout).status).toBe("paused");
   });
 
+  test("mutation commands expose the full hosted contract, reject names, and support receipt-only dry runs", () => {
+    const dataDir = freshDataDir("loops-cli-mutation-contract-");
+    let loop: ReturnType<Store["createLoop"]>;
+    const store = new Store(join(dataDir, "loops.db"));
+    try {
+      loop = store.createLoop({
+        name: "contract-target",
+        schedule: { type: "interval", everyMs: 60_000 },
+        target: { type: "command", command: "true" },
+      });
+    } finally {
+      store.close();
+    }
+    const contractArgs = [
+      "--step-id", "pause-step",
+      "--expected-revision", loop.updatedAt,
+      "--approved-plan-digest", "1".repeat(64),
+      "--manifest-digest", "2".repeat(64),
+      "--descriptor-ref", "owner-operation-target:pause-step",
+      "--descriptor-digest", "3".repeat(64),
+    ];
+
+    const nameRejected = runCli(dataDir, [
+      "pause",
+      loop.name,
+      "--operation-id", "name-rejected",
+      ...contractArgs,
+    ]);
+    expect(nameRejected.status).not.toBe(0);
+    expect(nameRejected.stderr).toContain("full stable target id");
+
+    const missingPrecondition = runCli(dataDir, [
+      "pause",
+      loop.id,
+      "--operation-id", "missing-revision",
+      "--step-id", "pause-step",
+    ]);
+    expect(missingPrecondition.status).not.toBe(0);
+    expect(missingPrecondition.stderr).toContain("--expected-revision");
+
+    const dryRun = runCli(dataDir, [
+      "--json",
+      "pause",
+      loop.id,
+      "--operation-id", "dry-run-pause",
+      ...contractArgs,
+      "--dry-run",
+    ]);
+    expect(dryRun.status).toBe(0);
+    const dryRunBody = JSON.parse(dryRun.stdout) as {
+      binding: Record<string, unknown>;
+      terminal: { state: string; resultStatus: string };
+      loop: { status: string };
+    };
+    expect(dryRunBody.terminal).toMatchObject({ state: "dry_run", resultStatus: "active" });
+    expect(dryRunBody.loop.status).toBe("active");
+    expect(JSON.stringify(dryRunBody.binding)).not.toContain("\"command\"");
+    expect(JSON.stringify(dryRunBody)).not.toContain("owner-operation-target:pause-step");
+    expect(dryRunBody.binding).not.toHaveProperty("descriptorRef");
+
+    const humanDryRun = runCli(dataDir, [
+      "pause",
+      loop.id,
+      "--operation-id", "human-dry-run-pause",
+      ...contractArgs,
+      "--dry-run",
+    ]);
+    expect(humanDryRun.status).toBe(0);
+    expect(humanDryRun.stdout).not.toContain("owner-operation-target:pause-step");
+
+    const after = runCli(dataDir, ["--json", "show", loop.id]);
+    expect(after.status).toBe(0);
+    expect(JSON.parse(after.stdout).status).toBe("active");
+  });
+
   test("hygiene names reports canonical machine/repo loop names without applying by default", () => {
     const dataDir = freshDataDir("loops-cli-hygiene-names-");
     const create = runCli(dataDir, [

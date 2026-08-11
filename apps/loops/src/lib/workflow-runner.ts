@@ -14,6 +14,7 @@ import {
   operationAdmissionReceipt,
   operationTerminalReceipt,
   parsePrivateOperationDescriptor,
+  privateOperationDescriptorDigest,
   type OperationReceiptState,
   type PrivateOperationDescriptor,
 } from "./operation-contract.js";
@@ -429,8 +430,11 @@ export async function executeWorkflow(
       }, opts.cancelPollMs ?? 500);
       cancelTimer.unref();
       try {
+        if (operationDescriptor.descriptorDigest !== privateOperationDescriptorDigest(step.target)) {
+          throw new ValidationError(`private operation descriptor target mismatch for step ${step.id}`);
+        }
         const executionTarget = targetWithStepAccount(
-          { ...step, target: operationDescriptor.target },
+          step,
           step.goal ? undefined : opts.goalNodePrompt,
         );
         if (step.goal) {

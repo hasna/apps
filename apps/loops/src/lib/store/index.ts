@@ -41,6 +41,12 @@ import type {
   WorkflowWorkItemStatus,
   WriteRunReceiptInput,
 } from "../../types.js";
+import {
+  publicLoopMutationResult,
+  type PublicLoopMutationResult,
+  LoopMutationEnvelope,
+  LoopMutationLookupCaps,
+} from "../operation-contract.js";
 import type { Goal, GoalPlanNode, GoalRun, GoalStatus } from "../goal/types.js";
 import { AmbiguousNameError, LoopNotFoundError } from "../errors.js";
 import { publicWorkflowEvents } from "../workflow-events.js";
@@ -135,6 +141,8 @@ export interface LoopStore {
   }): Promise<Loop[]>;
   countLoops(status?: LoopStatus, opts?: { archived?: boolean; includeArchived?: boolean }): Promise<number>;
   updateLoop(id: string, patch: Partial<Pick<Loop, "status" | "nextRunAt" | "retryScheduledFor" | "expiresAt" | "labels" | "maxAttempts">>): Promise<Loop>;
+  mutateLoop(envelope: LoopMutationEnvelope): Promise<PublicLoopMutationResult>;
+  getLoopMutationResult(operationId: string, stepId: string, caps: LoopMutationLookupCaps): Promise<PublicLoopMutationResult | undefined>;
   renameLoop(id: string, name: string): Promise<Loop>;
   archiveLoop(idOrName: string): Promise<Loop>;
   unarchiveLoop(idOrName: string): Promise<Loop>;
@@ -249,6 +257,24 @@ export class LocalStore implements LoopStore {
     patch: Partial<Pick<Loop, "status" | "nextRunAt" | "retryScheduledFor" | "expiresAt" | "labels" | "maxAttempts">>,
   ): Promise<Loop> {
     return this.store.updateLoop(id, patch);
+  }
+  async mutateLoop(envelope: LoopMutationEnvelope): Promise<PublicLoopMutationResult> {
+    return publicLoopMutationResult(
+      this.store.mutateLoop(envelope, { authorityId: "loops-local", tenantId: "local" }),
+    );
+  }
+  async getLoopMutationResult(
+    operationId: string,
+    stepId: string,
+    caps: LoopMutationLookupCaps,
+  ): Promise<PublicLoopMutationResult | undefined> {
+    const result = this.store.getLoopMutationResult(
+      { authorityId: "loops-local", tenantId: "local" },
+      operationId,
+      stepId,
+      caps,
+    );
+    return result ? publicLoopMutationResult(result) : undefined;
   }
   async renameLoop(id: string, name: string): Promise<Loop> {
     return this.store.renameLoop(id, name);
@@ -547,6 +573,48 @@ export class ApiStore implements LoopStore {
       body[key] = value === undefined && NULLABLE_FIELDS.has(key) ? null : value;
     }
     return pickObject<Loop>(await this.t.patch(`/loops/${encodeURIComponent(id)}`, body), "loop")!;
+  }
+  async mutateLoop(envelope: LoopMutationEnvelope): Promise<PublicLoopMutationResult> {
+    try {
+      return pickObject<PublicLoopMutationResult>(
+        await this.t.post(`/loops/${encodeURIComponent(envelope.targetId)}/mutations`, envelope),
+        "mutation",
+      )!;
+    } catch (error) {
+      if (error instanceof HasnaHttpError && error.status < 500) throw error;
+      const reconciled = await this.getLoopMutationResult(
+        envelope.operationId,
+        envelope.stepId,
+        { maxCalls: 2, maxRecords: 2, maxBytes: 64 * 1024, maxWallMs: 250 },
+      ).catch(() => undefined);
+      if (reconciled) return reconciled;
+      throw error;
+    }
+  }
+  async getLoopMutationResult(
+    operationId: string,
+    stepId: string,
+    caps: LoopMutationLookupCaps,
+  ): Promise<PublicLoopMutationResult | undefined> {
+    try {
+      return pickObject<PublicLoopMutationResult>(
+        await this.t.get(
+          `/loop-mutations/${encodeURIComponent(operationId)}/${encodeURIComponent(stepId)}`,
+          {
+            query: clean({
+              maxCalls: caps.maxCalls,
+              maxRecords: caps.maxRecords,
+              maxBytes: caps.maxBytes,
+              maxWallMs: caps.maxWallMs,
+            }),
+          },
+        ),
+        "mutation",
+      );
+    } catch (error) {
+      if (error instanceof HasnaHttpError && error.status === 404) return undefined;
+      throw error;
+    }
   }
   async renameLoop(id: string, name: string): Promise<Loop> {
     return pickObject<Loop>(await this.t.post(`/loops/${encodeURIComponent(id)}/rename`, { name }), "loop")!;

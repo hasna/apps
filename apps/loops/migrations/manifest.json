@@ -60,6 +60,11 @@
       "id": "0010_tenant_enforce",
       "file": "0010_tenant_enforce.sql",
       "checksum": "sha256:f923c70c2960e0372b4c01c5f01d9432fa0c76b24921c616dc149fa191409053"
+    },
+    {
+      "id": "0013_loop_mutation_contract",
+      "file": "0013_loop_mutation_contract.sql",
+      "checksum": "sha256:eb35e8d593628f2d7a2449dddf60b28e6ffc42f87ff694441262aa2794e78913"
     }
   ]
 }

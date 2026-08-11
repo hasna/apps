@@ -39,6 +39,8 @@ export const ROUTE_POLICIES: readonly RoutePolicy[] = Object.freeze([
   policy("loops.count", "GET", "/v1/loops/count", /^\/v1\/loops\/count$/, ["loops:read"], READ_ROLES, ["api_key", "service"], "read"),
   policy("loops.get", "GET", "/v1/loops/{id}", /^\/v1\/loops\/[^/]+$/, ["loops:read"], READ_ROLES, ["api_key", "service"], "read"),
   policy("loops.update", "PATCH", "/v1/loops/{id}", /^\/v1\/loops\/[^/]+$/, ["loops:write"], WRITE_ROLES, ["api_key", "service"], "write"),
+  policy("loops.mutate", "POST", "/v1/loops/{id}/mutations", /^\/v1\/loops\/[^/]+\/mutations$/, ["loops:write"], WRITE_ROLES, ["api_key", "service"], "write"),
+  policy("loopMutations.get", "GET", "/v1/loop-mutations/{operationId}/{stepId}", /^\/v1\/loop-mutations\/[^/]+\/[^/]+$/, ["loops:read"], READ_ROLES, ["api_key", "service"], "read"),
   policy("loops.delete", "DELETE", "/v1/loops/{id}", /^\/v1\/loops\/[^/]+$/, ["loops:delete"], ADMIN_ROLES, ["api_key", "service"], "destructive"),
   policy("loops.archive", "POST", "/v1/loops/{id}/archive", /^\/v1\/loops\/[^/]+\/archive$/, ["loops:write"], WRITE_ROLES, ["api_key", "service"], "write"),
   policy("loops.unarchive", "POST", "/v1/loops/{id}/unarchive", /^\/v1\/loops\/[^/]+\/unarchive$/, ["loops:write"], WRITE_ROLES, ["api_key", "service"], "write"),

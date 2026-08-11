@@ -12,7 +12,8 @@ import type {
 } from "../types.js";
 import { daemonStatus } from "../daemon/control.js";
 import { runDoctor, type DoctorReport } from "../lib/doctor.js";
-import { LoopNotFoundError } from "../lib/errors.js";
+import { LoopNotFoundError, ValidationError } from "../lib/errors.js";
+import type { LoopMutationAction, LoopMutationEnvelope, PublicLoopMutationResult } from "../lib/operation-contract.js";
 import { buildHealthReport, buildHealthScan, type BuildHealthScanOptions, type LoopsHealthReport, type LoopsHealthScan } from "../lib/health.js";
 import {
   applyImportMigrationBundle,
@@ -98,6 +99,17 @@ export interface ListRunReceiptsFilters {
   limit?: number;
 }
 
+export interface LoopMutationOptions {
+  operationId: string;
+  stepId: string;
+  expectedRevision: string;
+  approvedPlanDigest: string;
+  manifestDigest: string;
+  descriptorRef: string;
+  descriptorDigest: string;
+  dryRun?: boolean;
+}
+
 export class LoopsClient {
   /**
    * The resolved data store: an on-box {@link LocalStore} (sqlite) or the hosted
@@ -153,27 +165,47 @@ export class LoopsClient {
   // throws a coded LoopArchivedError, so all surfaces share one behavior.
   // These mutation paths use requireUniqueLoop so an ambiguous name errors
   // instead of silently mutating the newest same-named loop.
-  async pause(idOrName: string): Promise<Loop> {
-    const loop = await this.store.requireUniqueLoop(idOrName);
-    return this.store.updateLoop(loop.id, { status: "paused" });
-  }
-
-  async resume(idOrName: string): Promise<Loop> {
-    const loop = await this.store.requireUniqueLoop(idOrName);
-    // A stopped loop has next_run_at NULL; dueLoops requires it IS NOT NULL, so
-    // resuming without recomputing leaves the loop active but permanently
-    // dormant. Recompute the next slot from now when it is missing.
-    let nextRunAt = loop.nextRunAt;
-    if (!nextRunAt) {
-      const now = new Date();
-      nextRunAt = computeNextAfter(loop.schedule, now, now);
+  private async mutateStatus(
+    targetId: string,
+    action: LoopMutationAction,
+    options?: LoopMutationOptions,
+  ): Promise<PublicLoopMutationResult | Loop> {
+    if (!options) {
+      if (this.store.transport !== "local") {
+        throw new ValidationError("hosted loop mutation options are required");
+      }
+      const loop = await this.store.requireUniqueLoop(targetId);
+      if (action === "pause") return this.store.updateLoop(loop.id, { status: "paused" });
+      if (action === "stop") return this.store.updateLoop(loop.id, { status: "stopped", nextRunAt: undefined });
+      let nextRunAt = loop.nextRunAt;
+      if (!nextRunAt) {
+        const now = new Date();
+        nextRunAt = computeNextAfter(loop.schedule, now, now);
+      }
+      return this.store.updateLoop(loop.id, { status: "active", nextRunAt });
     }
-    return this.store.updateLoop(loop.id, { status: "active", nextRunAt });
+    const envelope: LoopMutationEnvelope = {
+      schema: "openloops.loop_mutation.v1",
+      targetId,
+      action,
+      ...options,
+    };
+    return this.store.mutateLoop(envelope);
   }
 
-  async stop(idOrName: string): Promise<Loop> {
-    const loop = await this.store.requireUniqueLoop(idOrName);
-    return this.store.updateLoop(loop.id, { status: "stopped", nextRunAt: undefined });
+  async pause(idOrName: string, options?: LoopMutationOptions): Promise<Loop> {
+    const result = await this.mutateStatus(idOrName, "pause", options);
+    return "loop" in result ? result.loop : result;
+  }
+
+  async resume(idOrName: string, options?: LoopMutationOptions): Promise<Loop> {
+    const result = await this.mutateStatus(idOrName, "resume", options);
+    return "loop" in result ? result.loop : result;
+  }
+
+  async stop(idOrName: string, options?: LoopMutationOptions): Promise<Loop> {
+    const result = await this.mutateStatus(idOrName, "stop", options);
+    return "loop" in result ? result.loop : result;
   }
 
   async setLabels(idOrName: string, labels: string[]): Promise<Loop> {

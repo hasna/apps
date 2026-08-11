@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { createLoopsApiServer } from "../../api/index.js";
 import { createSqliteLoopStorage } from "../storage/sqlite.js";
 import { createHasnaStorageClient, type HasnaStorageClient } from "../cloud/storage.js";
-import { createHasnaHttpTransport } from "../cloud/transport.js";
+import { createHasnaHttpTransport, HasnaHttpError } from "../cloud/transport.js";
 import { ApiStore, CloudUnsupportedError, getStore, isCloudStore, LocalStore } from "./index.js";
 import { Store } from "../store.js";
 import type { CreateLoopInput, CreateWorkflowInput } from "../../types.js";
@@ -259,6 +259,179 @@ describe("ApiStore end-to-end against the real /v1 server", () => {
       server.stop?.(true);
       await storage.close();
     }
+  });
+
+  test("ApiStore applies hosted mutation envelopes exactly once and reconciles immutable receipts", async () => {
+    const storage = createSqliteLoopStorage(":memory:");
+    const principal = {
+      tenantId: "tenant-test", principalId: "principal-test", requestId: "request-test",
+      kid: "kid-test", agent: "principal-test", scopes: ["loops:*"],
+      roles: ["admin" as const], tokenKind: "api_key" as const,
+      claims: { v: 1, kid: "kid-test", app: "loops", agent: "principal-test", scopes: ["loops:*"], iat: 1, exp: null },
+    };
+    const server = createLoopsApiServer({
+      host: "127.0.0.1", port: 0,
+      authenticator: { authenticate: async () => ({ ok: true as const, status: 200 as const, principal }) },
+      withTenantStorage: (_principal, fn) => fn(storage),
+    });
+    try {
+      const store = apiStoreForServer((server as { port: number }).port);
+      const loop = await store.createLoop({ ...LOOP_INPUT, name: "hosted-contract-pause" });
+      const envelope = {
+        schema: "openloops.loop_mutation.v1" as const,
+        operationId: "pause-operation-1",
+        stepId: "pause-step-1",
+        targetId: loop.id,
+        action: "pause" as const,
+        expectedRevision: loop.updatedAt,
+        approvedPlanDigest: "1".repeat(64),
+        manifestDigest: "2".repeat(64),
+        descriptorRef: "owner-operation-target:pause-step-1",
+        descriptorDigest: "3".repeat(64),
+      };
+
+      const first = await store.mutateLoop(envelope);
+      expect(first.loop.status).toBe("paused");
+      expect(first.replayed).toBe(false);
+      expect(JSON.stringify(first.binding)).not.toContain("echo");
+      expect(JSON.stringify(first.admission)).not.toContain("hi");
+      expect(JSON.stringify(first)).not.toContain(envelope.descriptorRef);
+      expect(first.binding).not.toHaveProperty("descriptorRef");
+      expect(first.admission).not.toHaveProperty("descriptorRef");
+
+      await expect(store.mutateLoop({
+        ...envelope,
+        operationId: "unsafe-descriptor-operation",
+        descriptorRef: "https://example.test/private",
+      })).rejects.toMatchObject({ status: 422 });
+      expect((await storage.getLoop(loop.id))?.updatedAt).toBe(first.loop.updatedAt);
+
+      const retry = await store.mutateLoop(envelope);
+      expect(retry.replayed).toBe(true);
+      expect(retry.admission).toEqual(first.admission);
+      expect(retry.terminal).toEqual(first.terminal);
+      expect((await storage.getLoop(loop.id))?.updatedAt).toBe(first.loop.updatedAt);
+
+      const reconciled = await store.getLoopMutationResult(
+        envelope.operationId,
+        envelope.stepId,
+        { maxCalls: 1, maxRecords: 1, maxBytes: 64 * 1024, maxWallMs: 250 },
+      );
+      expect(reconciled?.terminal).toEqual(first.terminal);
+      await store.close();
+    } finally {
+      server.stop?.(true);
+      await storage.close();
+    }
+  });
+
+  test("ApiStore recovers an ambiguous mutation timeout through bounded reconciliation", async () => {
+    const envelope = {
+      schema: "openloops.loop_mutation.v1" as const,
+      operationId: "ambiguous-operation",
+      stepId: "ambiguous-step",
+      targetId: "a".repeat(32),
+      action: "stop" as const,
+      expectedRevision: "2026-08-10T00:00:00.000Z",
+      approvedPlanDigest: "1".repeat(64),
+      manifestDigest: "2".repeat(64),
+      descriptorRef: "owner-operation-target:ambiguous-step",
+      descriptorDigest: "3".repeat(64),
+    };
+    const { descriptorRef: _privateDescriptorRef, ...publicEnvelope } = envelope;
+    const mutation = {
+      binding: {
+        ...publicEnvelope,
+        descriptorCommitment: "loop-mutation-descriptor-ref:sha256:" + "6".repeat(64),
+        authority: { authorityId: "loops-control-plane", tenantId: "tenant-test" },
+        bindingDigest: "loop-mutation-binding:sha256:" + "4".repeat(64),
+        leaseId: "loop-mutation-lease:sha256:" + "5".repeat(64),
+      },
+      admission: { receiptId: "admission" },
+      terminal: { receiptId: "terminal" },
+      loop: { id: envelope.targetId, status: "stopped" },
+      replayed: true,
+    };
+    const calls: string[] = [];
+    const transport = {
+      post: async (path: string) => {
+        calls.push(`POST ${path}`);
+        throw new Error("connection closed after commit");
+      },
+      get: async (path: string, opts?: { query?: Record<string, unknown> }) => {
+        calls.push(`GET ${path} ${JSON.stringify(opts?.query)}`);
+        return { mutation };
+      },
+    } as unknown as HasnaStorageClient["transport"];
+    const store = new ApiStore({ transport } as HasnaStorageClient, "https://loops.example.test/v1");
+
+    const result = await store.mutateLoop(envelope);
+    expect(result.binding).toEqual(mutation.binding);
+    expect(result.admission.receiptId).toBe("admission");
+    expect(result.terminal.receiptId).toBe("terminal");
+    expect(result.loop).toMatchObject({ id: envelope.targetId, status: "stopped" });
+    expect(result.replayed).toBe(true);
+    expect(calls).toEqual([
+      `POST /loops/${envelope.targetId}/mutations`,
+      `GET /loop-mutations/${envelope.operationId}/${envelope.stepId} {"maxCalls":2,"maxRecords":2,"maxBytes":65536,"maxWallMs":250}`,
+    ]);
+  });
+
+  test("ApiStore preserves deterministic mutation conflicts instead of returning an older binding", async () => {
+    const envelope = {
+      schema: "openloops.loop_mutation.v1" as const,
+      operationId: "reused-operation",
+      stepId: "reused-step",
+      targetId: "b".repeat(32),
+      action: "stop" as const,
+      expectedRevision: "2026-08-10T00:00:00.000Z",
+      approvedPlanDigest: "1".repeat(64),
+      manifestDigest: "2".repeat(64),
+      descriptorRef: "owner-operation-target:changed-binding",
+      descriptorDigest: "3".repeat(64),
+    };
+    const priorMutation = {
+      binding: {
+        schema: envelope.schema,
+        operationId: envelope.operationId,
+        stepId: envelope.stepId,
+        targetId: "a".repeat(32),
+        action: "pause",
+        expectedRevision: envelope.expectedRevision,
+        approvedPlanDigest: envelope.approvedPlanDigest,
+        manifestDigest: envelope.manifestDigest,
+        descriptorCommitment: "loop-mutation-descriptor-ref:sha256:" + "6".repeat(64),
+        descriptorDigest: envelope.descriptorDigest,
+        authority: { authorityId: "loops-control-plane", tenantId: "tenant-test" },
+        bindingDigest: "loop-mutation-binding:sha256:" + "4".repeat(64),
+        leaseId: "loop-mutation-lease:sha256:" + "5".repeat(64),
+      },
+      admission: { receiptId: "prior-admission" },
+      terminal: { receiptId: "prior-terminal" },
+      loop: { id: "a".repeat(32), status: "paused" },
+      replayed: true,
+    };
+    const conflict = new HasnaHttpError(
+      "POST",
+      `/loops/${envelope.targetId}/mutations`,
+      409,
+      { error: "binding_mismatch" },
+    );
+    const calls: string[] = [];
+    const transport = {
+      post: async (path: string) => {
+        calls.push(`POST ${path}`);
+        throw conflict;
+      },
+      get: async (path: string) => {
+        calls.push(`GET ${path}`);
+        return { mutation: priorMutation };
+      },
+    } as unknown as HasnaStorageClient["transport"];
+    const store = new ApiStore({ transport } as HasnaStorageClient, "https://loops.example.test/v1");
+
+    await expect(store.mutateLoop(envelope)).rejects.toBe(conflict);
+    expect(calls).toEqual([`POST /loops/${envelope.targetId}/mutations`]);
   });
 
   test("ApiStore archive and unarchive preserve unique-name semantics over HTTP", async () => {
