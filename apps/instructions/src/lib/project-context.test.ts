@@ -114,6 +114,23 @@ function bundleJson(bundle = makeBundle()): string {
   return `${JSON.stringify(bundle)}\n`;
 }
 
+function makeFinanceMetadata(overrides: Record<string, unknown> = {}) {
+  return {
+    schema: "hasna.projects.finance_project_metadata.v1" as const,
+    business_area: "finance" as const,
+    jurisdiction: "RO",
+    legal_entities: ["Example Alpha SRL"],
+    fiscal_cycle: "monthly" as const,
+    data_classification: "restricted" as const,
+    retention_policy: "knowledge:finance-retention-v1",
+    ledger_authority: "@hasna/accounting",
+    evidence_store: "@hasna/files",
+    approver: "role:finance-controller",
+    external_recipient_policy: "@hasna/invoices:approved-recipient-only",
+    ...overrides,
+  };
+}
+
 function stableStringifyForTest(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stableStringifyForTest).join(",")}]`;
   if (value && typeof value === "object") {
@@ -1491,19 +1508,7 @@ describe("cache, revision, crash, and race safety", () => {
     };
     expectCode(() => parseProjectContextBundle(v2WithLegacyHash), "PROJECT_CONTEXT_HASH_MISMATCH");
 
-    const finance = {
-      schema: "hasna.projects.finance_project_metadata.v1" as const,
-      business_area: "finance" as const,
-      jurisdiction: "RO",
-      legal_entities: ["Example Alpha SRL"],
-      fiscal_cycle: "monthly" as const,
-      data_classification: "restricted" as const,
-      retention_policy: "knowledge:finance-retention-v1\nowner:finance",
-      ledger_authority: "@hasna/accounting",
-      evidence_store: "@hasna/files",
-      approver: "role:finance-controller",
-      external_recipient_policy: "@hasna/invoices:approved-recipient-only",
-    };
+    const finance = makeFinanceMetadata();
     const v2 = {
       ...makeBundle({
         revision: "rev-8",
@@ -1572,19 +1577,7 @@ describe("cache, revision, crash, and race safety", () => {
   });
 
   test("rejects malformed finance metadata and finance metadata attached to v1", () => {
-    const finance = {
-      schema: "hasna.projects.finance_project_metadata.v1" as const,
-      business_area: "finance" as const,
-      jurisdiction: "RO",
-      legal_entities: ["Example Alpha SRL"],
-      fiscal_cycle: "monthly" as const,
-      data_classification: "restricted" as const,
-      retention_policy: "knowledge:finance-retention-v1",
-      ledger_authority: "@hasna/accounting",
-      evidence_store: "@hasna/files",
-      approver: "role:finance-controller",
-      external_recipient_policy: "@hasna/invoices:approved-recipient-only",
-    };
+    const finance = makeFinanceMetadata();
     const malformed = {
       ...makeBundle(),
       schema: "hasna.projects.project_context_bundle.v2" as const,
@@ -1597,17 +1590,29 @@ describe("cache, revision, crash, and race safety", () => {
     malformed.hash = computeProjectContextSourceHash(malformed);
     expectCode(() => parseProjectContextBundle(malformed), "PROJECT_CONTEXT_INVALID");
 
-    const duplicateLegalEntity = {
+    const invalidLegalEntities = {
       ...makeBundle(),
       schema: "hasna.projects.project_context_bundle.v2" as const,
       project: {
         ...makeBundle().project,
-        finance: { ...finance, legal_entities: ["Example Alpha SRL", "Example Alpha SRL"] },
+        finance: { ...finance, legal_entities: "Example Alpha SRL" },
       },
       hash: "",
     };
-    duplicateLegalEntity.hash = computeProjectContextSourceHash(duplicateLegalEntity);
-    expectCode(() => parseProjectContextBundle(duplicateLegalEntity), "PROJECT_CONTEXT_INVALID");
+    invalidLegalEntities.hash = computeProjectContextSourceHash(invalidLegalEntities);
+    expectCode(() => parseProjectContextBundle(invalidLegalEntities), "PROJECT_CONTEXT_INVALID");
+
+    const emptyLegalEntities = {
+      ...makeBundle(),
+      schema: "hasna.projects.project_context_bundle.v2" as const,
+      project: {
+        ...makeBundle().project,
+        finance: { ...finance, legal_entities: [] },
+      },
+      hash: "",
+    };
+    emptyLegalEntities.hash = computeProjectContextSourceHash(emptyLegalEntities);
+    expectCode(() => parseProjectContextBundle(emptyLegalEntities), "PROJECT_CONTEXT_INVALID");
 
     const v1WithFinance = {
       ...makeBundle(),
@@ -1687,6 +1692,132 @@ describe("cache, revision, crash, and race safety", () => {
     });
     expect(result.revision).toBe("rev-8");
     expect(readFileSync(join(tmpRoot, "AGENTS.md"), "utf8")).toContain("Rollback Target Identity");
+  });
+
+  test("migrates only a proven same-revision v1 payload to v2 and keeps CAS strict", () => {
+    const v1 = makeBundle();
+    applyProjectContext({
+      workspace_root: tmpRoot,
+      runtime: "agents",
+      bundle_json: bundleJson(v1),
+      source_path: join(tmpRoot, "v1.json"),
+    });
+
+    const finance = makeFinanceMetadata();
+    const v2: ProjectContextBundleV1 = {
+      ...v1,
+      schema: "hasna.projects.project_context_bundle.v2",
+      generated_at: "2026-07-22T10:01:00.000Z",
+      hash: "",
+    };
+    v2.hash = computeProjectContextSourceHash(v2);
+
+    const sameRevisionWithFinance: ProjectContextBundleV1 = {
+      ...v2,
+      project: { ...v2.project, finance },
+      hash: "",
+    };
+    sameRevisionWithFinance.hash = computeProjectContextSourceHash(sameRevisionWithFinance);
+    const repeatNow = new Date("2026-07-22T10:02:00.000Z");
+    const financeMigration = applyProjectContext({
+      workspace_root: tmpRoot,
+      runtime: "agents",
+      bundle_json: bundleJson(sameRevisionWithFinance),
+      source_path: join(tmpRoot, "same-revision-finance-v2.json"),
+      now: repeatNow,
+    });
+    expect(financeMigration.revision).toBe(v1.revision);
+    const financeCache = JSON.parse(
+      readFileSync(join(tmpRoot, ".hasna", "project-context-cache.json"), "utf8"),
+    ) as { bundle: ProjectContextBundleV1 };
+    expect(financeCache.bundle.schema).toBe("hasna.projects.project_context_bundle.v2");
+    expect(financeCache.bundle.project.finance).toEqual(finance);
+
+    const repeated = applyProjectContext({
+      workspace_root: tmpRoot,
+      runtime: "agents",
+      bundle_json: bundleJson(sameRevisionWithFinance),
+      source_path: join(tmpRoot, "same-revision-finance-v2-repeat.json"),
+      now: repeatNow,
+    });
+    expect(repeated.hash).toBe(financeMigration.hash);
+    expect(readFileSync(join(tmpRoot, ".hasna", "project-context-cache.json"), "utf8"))
+      .toBe(`${JSON.stringify(financeCache, null, 2)}\n`);
+
+    expectCode(() => applyProjectContext({
+      workspace_root: tmpRoot,
+      runtime: "agents",
+      bundle_json: bundleJson(v1),
+      source_path: join(tmpRoot, "v1-rollback.json"),
+    }), "PROJECT_CONTEXT_REVISION_CONFLICT");
+
+    rmSync(tmpRoot, { recursive: true, force: true });
+    mkdirSync(tmpRoot, { recursive: true });
+    applyProjectContext({
+      workspace_root: tmpRoot,
+      runtime: "agents",
+      bundle_json: bundleJson(v1),
+      source_path: join(tmpRoot, "v1.json"),
+    });
+
+    const migrated = applyProjectContext({
+      workspace_root: tmpRoot,
+      runtime: "agents",
+      bundle_json: bundleJson(v2),
+      source_path: join(tmpRoot, "v2.json"),
+    });
+    expect(migrated.revision).toBe(v1.revision);
+    const migratedCache = JSON.parse(
+      readFileSync(join(tmpRoot, ".hasna", "project-context-cache.json"), "utf8"),
+    ) as { bundle: ProjectContextBundleV1 };
+    expect(migratedCache.bundle.schema).toBe("hasna.projects.project_context_bundle.v2");
+    expect(migratedCache.bundle.project.finance).toBeUndefined();
+
+    const tampered: ProjectContextBundleV1 = {
+      ...v2,
+      project: { ...v2.project, name: "Unproven Same-Revision Name" },
+      hash: "",
+    };
+    tampered.hash = computeProjectContextSourceHash(tampered);
+    expectCode(() => applyProjectContext({
+      workspace_root: tmpRoot,
+      runtime: "agents",
+      bundle_json: bundleJson(tampered),
+      source_path: join(tmpRoot, "tampered-v2.json"),
+    }), "PROJECT_CONTEXT_REVISION_CONFLICT");
+    expectCode(() => applyProjectContext({
+      workspace_root: tmpRoot,
+      runtime: "agents",
+      bundle_json: bundleJson(tampered),
+      source_path: join(tmpRoot, "tampered-v2-force.json"),
+      force: true,
+    }), "PROJECT_CONTEXT_REVISION_CONFLICT");
+
+    const future = { ...v2, schema: "hasna.projects.project_context_bundle.v3" };
+    expectCode(() => applyProjectContext({
+      workspace_root: tmpRoot,
+      runtime: "agents",
+      bundle_json: JSON.stringify(future),
+      source_path: join(tmpRoot, "future-v3.json"),
+    }), "PROJECT_CONTEXT_UNSUPPORTED_VERSION");
+
+    const newer: ProjectContextBundleV1 = {
+      ...tampered,
+      revision: "rev-8",
+      project: { ...tampered.project, finance },
+      hash: "",
+    };
+    newer.hash = computeProjectContextSourceHash(newer);
+    expect(applyProjectContext({
+      workspace_root: tmpRoot,
+      runtime: "agents",
+      bundle_json: bundleJson(newer),
+      source_path: join(tmpRoot, "newer-v2.json"),
+    }).revision).toBe("rev-8");
+    const newerCache = JSON.parse(
+      readFileSync(join(tmpRoot, ".hasna", "project-context-cache.json"), "utf8"),
+    ) as { bundle: ProjectContextBundleV1 };
+    expect(newerCache.bundle.project.finance).toEqual(finance);
   });
 
   test("orders producer-default timestamp revisions and encodes them safely in markers", () => {

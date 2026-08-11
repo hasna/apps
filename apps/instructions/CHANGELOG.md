@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.29
+
+Allows a same-revision Projects v1-to-v2 project-context migration only when a
+strict durable v1 cache proves every shared field is unchanged. The migration
+may carry producer-valid v2 finance metadata, while reverse migrations,
+shared-field drift, malformed finance, unsupported majors, and unproven
+conflicts still fail.
+
 ## 0.4.28
 
 Corrects the unpublished 0.4.27 project-context v2 bridge by validating and

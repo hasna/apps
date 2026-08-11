@@ -1368,10 +1368,38 @@ function findLegacyCodewithWorkspaceSection(
   return { start: section.index, end };
 }
 
+function isCanonicalV1ToV2RevisionUpgrade(
+  incoming: ProjectContextBundleV1,
+  cache: ProjectContextCache | null,
+): boolean {
+  if (
+    cache === null ||
+    cache.bundle.schema !== PROJECT_CONTEXT_SCHEMA ||
+    incoming.schema !== PROJECT_CONTEXT_SCHEMA_V2 ||
+    cache.project_id !== incoming.project.id ||
+    cache.bundle.project.id !== incoming.project.id ||
+    cache.revision !== incoming.revision
+  ) {
+    return false;
+  }
+
+  const { finance: _finance, ...incomingSharedProject } = incoming.project;
+  // A v1 -> v2 transition with an unchanged shared payload describes the same
+  // CAS state. Finance is the only accepted v2-only field in this comparison.
+  const projectedV1: ProjectContextBundleV1 = {
+    ...incoming,
+    schema: PROJECT_CONTEXT_SCHEMA,
+    project: incomingSharedProject,
+    hash: "",
+  };
+  return computeProjectContextSourceHash(projectedV1) === computeProjectContextSourceHash(cache.bundle);
+}
+
 function assertRevisionOrdering(plan: ProjectContextPlan, force: boolean): void {
   const observations: Array<{ source: string; id: string; revision: string; hash: string }> = [];
   const cache = readProjectContextCache(plan.cache_path, plan.workspace_root);
   const canonicalCacheHash = cache === null ? null : computeProjectContextSourceHash(cache.bundle);
+  const canonicalV1ToV2Upgrade = isCanonicalV1ToV2RevisionUpgrade(plan.bundle, cache);
   const normalizePersistedHash = (revision: string, hash: string): string => (
     cache !== null &&
     canonicalCacheHash !== null &&
@@ -1431,7 +1459,8 @@ function assertRevisionOrdering(plan: ProjectContextPlan, force: boolean): void 
     if (ordering < 0) {
       throw new ProjectContextError("PROJECT_CONTEXT_REVISION_STALE", `incoming revision ${plan.bundle.revision} is older than ${observation.source} revision ${observation.revision}`);
     }
-    if (ordering === 0 && plan.bundle.hash !== observation.hash) {
+    const isProvenV1Observation = canonicalV1ToV2Upgrade && observation.hash === canonicalCacheHash;
+    if (ordering === 0 && plan.bundle.hash !== observation.hash && !isProvenV1Observation) {
       throw new ProjectContextError("PROJECT_CONTEXT_REVISION_CONFLICT", `revision ${plan.bundle.revision} has a different hash than ${observation.source}`);
     }
   }
