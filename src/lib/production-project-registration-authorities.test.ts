@@ -16,9 +16,15 @@ import {
   type ProjectRegistrationAuthorityLookupRequest,
   type ProjectRegistrationAuthorityLookupResult,
   type ProjectRegistrationAuthorityName,
+  type ProjectRegistrationAuthorityPathRepairReceipt,
   type ProjectRegistrationAuthorityReceipt,
   type ProjectRegistrationAuthorityRecord,
   type ProjectRegistrationAuthorityRequest,
+  type ProjectRegistrationGuardedProjectReceiptLookupRequest,
+  type ProjectRegistrationGuardedProjectReceiptLookupResult,
+  type ProjectRegistrationGuardedProjectRollbackRequest,
+  type ProjectRegistrationGuardedProjectUpdateRequest,
+  type ProjectRegistrationGuardedProjectUpdateResult,
   type ProjectRegistrationResourceKind,
 } from "./project-registration.js";
 import { productionProjectRegistrationAuthorities } from "./production-project-registration-authorities.js";
@@ -355,6 +361,156 @@ describe("production project registration authorities", () => {
     expect(authorities.todos.transport).toBe("api");
     expect(authorities.mementos.transport).toBe("api");
     expect(authorities.conversations.transport).toBe("api");
+  });
+
+  test("forwards the package-owned guarded update, exact receipt lookup, and rollback methods", async () => {
+    const root = mkdtempSync(join(tmpdir(), "projects-authority-guarded-forwarding-"));
+    const fakes = memorySet();
+    const requestedPath = join(root, "requested");
+    const forwardRequest: ProjectRegistrationGuardedProjectUpdateRequest = {
+      authority: "mementos",
+      authority_route: "mementos.project-guarded-update.v1",
+      package_version: "fixture-1.0.0",
+      operation_id: "op-guarded-forwarding",
+      step_id: "mementos_project_path_repair",
+      authority_id: "mementos-fixture",
+      tenant_id: "tenant-fixture",
+      corpus_id: "mementos-corpus",
+      idempotency_key: "forward-idempotency",
+      expected_revision: "revision-before",
+      updates: { path: ProjectRegistrationPathHandle.fromPath(requestedPath) },
+      response_byte_limit: 65_536,
+      time_budget_ms: 5_000,
+    };
+    const lookupRequest: ProjectRegistrationGuardedProjectReceiptLookupRequest = {
+      authority: "mementos",
+      authority_route: forwardRequest.authority_route,
+      package_version: forwardRequest.package_version,
+      authority_id: forwardRequest.authority_id,
+      tenant_id: forwardRequest.tenant_id,
+      corpus_id: forwardRequest.corpus_id,
+      response_byte_limit: forwardRequest.response_byte_limit,
+      time_budget_ms: forwardRequest.time_budget_ms,
+    };
+    const rollbackIdempotencyKey = "rollback-idempotency";
+    const receipt = (
+      direction: "forward" | "rollback",
+      id: string,
+      acceptedReceiptId: string | null,
+    ): ProjectRegistrationAuthorityPathRepairReceipt => ({
+      receipt_id: id,
+      authority: "mementos",
+      route: "mementos.project-guarded-update.v1",
+      package_version: "fixture-1.0.0",
+      authority_id: forwardRequest.authority_id,
+      tenant_id: forwardRequest.tenant_id,
+      corpus_id: forwardRequest.corpus_id,
+      operation_id: forwardRequest.operation_id,
+      step_id: forwardRequest.step_id,
+      direction,
+      idempotency_key: direction === "forward"
+        ? forwardRequest.idempotency_key
+        : rollbackIdempotencyKey,
+      request_digest: digest(`${direction}:request`),
+      outcome: "accepted",
+      target_id: "mm_project_guarded",
+      expected_revision: direction === "forward" ? "revision-before" : "revision-after",
+      result_revision: direction === "forward" ? "revision-after" : "revision-restored",
+      result_digest: digest(`${direction}:result`),
+      accepted_receipt_id: acceptedReceiptId,
+      created_at: "2026-08-10T00:00:00.000Z",
+    });
+    const forwardReceipt = receipt("forward", "receipt-forward", null);
+    const rollbackReceipt = receipt("rollback", "receipt-rollback", forwardReceipt.receipt_id);
+    const rollbackRequest: ProjectRegistrationGuardedProjectRollbackRequest = {
+      authority: "mementos",
+      authority_route: forwardRequest.authority_route,
+      package_version: forwardRequest.package_version,
+      operation_id: forwardRequest.operation_id,
+      step_id: forwardRequest.step_id,
+      authority_id: forwardRequest.authority_id,
+      tenant_id: forwardRequest.tenant_id,
+      corpus_id: forwardRequest.corpus_id,
+      idempotency_key: rollbackIdempotencyKey,
+      expected_revision: "revision-after",
+      accepted_receipt: forwardReceipt,
+      response_byte_limit: forwardRequest.response_byte_limit,
+      time_budget_ms: forwardRequest.time_budget_ms,
+    };
+    const responseControl = {
+      response_byte_limit: forwardRequest.response_byte_limit,
+      time_budget_ms: forwardRequest.time_budget_ms,
+      response_bytes: 512,
+      elapsed_ms: 1,
+      complete: true as const,
+      truncated: false as const,
+    };
+    const forwardResult: ProjectRegistrationGuardedProjectUpdateResult = {
+      dry_run: false,
+      applied: true,
+      record: {
+        target_id: forwardReceipt.target_id,
+        revision: forwardReceipt.result_revision,
+        digest: forwardReceipt.result_digest,
+      },
+      receipt: forwardReceipt,
+      response_control: responseControl,
+    };
+    const rollbackResult: ProjectRegistrationGuardedProjectUpdateResult = {
+      ...forwardResult,
+      record: {
+        target_id: rollbackReceipt.target_id,
+        revision: rollbackReceipt.result_revision,
+        digest: rollbackReceipt.result_digest,
+      },
+      receipt: rollbackReceipt,
+    };
+    const forwardLookup: ProjectRegistrationGuardedProjectReceiptLookupResult = {
+      receipt: forwardReceipt,
+      response_control: responseControl,
+    };
+    const rollbackLookup: ProjectRegistrationGuardedProjectReceiptLookupResult = {
+      receipt: rollbackReceipt,
+      response_control: responseControl,
+    };
+    const calls: unknown[][] = [];
+    Object.assign(fakes.mementos, {
+      guardedUpdateProject: async (...args: unknown[]) => {
+        calls.push(["forward", ...args]);
+        return forwardResult;
+      },
+      getGuardedProjectUpdateReceipt: async (...args: unknown[]) => {
+        calls.push(["lookup", ...args]);
+        return args[1] === rollbackReceipt.receipt_id ? rollbackLookup : forwardLookup;
+      },
+      rollbackGuardedProjectUpdate: async (...args: unknown[]) => {
+        calls.push(["rollback", ...args]);
+        return rollbackResult;
+      },
+    });
+    const authority = productionProjectRegistrationAuthorities({
+      env: { HASNA_MEMENTOS_DB_PATH: join(root, "mementos.db") },
+      importModule: localImporter(fakes),
+    }).mementos;
+    try {
+      expect(await authority.guardedUpdateProject?.(forwardReceipt.target_id, forwardRequest)).toBe(forwardResult);
+      expect(await authority.getGuardedProjectUpdateReceipt?.(
+        forwardReceipt.target_id,
+        forwardReceipt.receipt_id,
+        lookupRequest,
+      )).toBe(forwardLookup);
+      expect(await authority.rollbackGuardedProjectUpdate?.(
+        forwardReceipt.target_id,
+        rollbackRequest,
+      )).toBe(rollbackResult);
+      expect(calls).toEqual([
+        ["forward", forwardReceipt.target_id, forwardRequest],
+        ["lookup", forwardReceipt.target_id, forwardReceipt.receipt_id, lookupRequest],
+        ["rollback", forwardReceipt.target_id, rollbackRequest],
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   test("hosted Projects refuses local external authorities before imports or mutation", async () => {

@@ -10,6 +10,10 @@ import type {
   ProjectRegistrationAuthorityRecord,
   ProjectRegistrationAuthorityRequest,
   ProjectRegistrationAuthorityTransport,
+  ProjectRegistrationGuardedProjectReceiptLookupRequest,
+  ProjectRegistrationGuardedProjectRollbackRequest,
+  ProjectRegistrationGuardedProjectUpdateRequest,
+  ProjectRegistrationGuardedProjectUpdateResult,
   ProjectRegistrationResourceKind,
 } from "./project-registration.js";
 
@@ -401,6 +405,40 @@ class LazyProjectRegistrationAuthority implements ProjectRegistrationAuthorityAd
     request: ProjectRegistrationAuthorityRequest,
   ): Promise<ProjectRegistrationAuthorityInverseVerification> {
     return (await this.resolve()).verifyInverse(request);
+  }
+
+  async guardedUpdateProject(
+    targetId: string,
+    request: ProjectRegistrationGuardedProjectUpdateRequest,
+  ): Promise<ProjectRegistrationGuardedProjectUpdateResult> {
+    const delegate = await this.resolve();
+    if (!delegate.guardedUpdateProject) {
+      throw new Error(`${this.authority} package does not expose guardedUpdateProject`);
+    }
+    return delegate.guardedUpdateProject(targetId, request);
+  }
+
+  async getGuardedProjectUpdateReceipt(
+    targetId: string,
+    receiptId: string,
+    request: ProjectRegistrationGuardedProjectReceiptLookupRequest,
+  ) {
+    const delegate = await this.resolve();
+    if (!delegate.getGuardedProjectUpdateReceipt) {
+      throw new Error(`${this.authority} package does not expose getGuardedProjectUpdateReceipt`);
+    }
+    return delegate.getGuardedProjectUpdateReceipt(targetId, receiptId, request);
+  }
+
+  async rollbackGuardedProjectUpdate(
+    targetId: string,
+    request: ProjectRegistrationGuardedProjectRollbackRequest,
+  ): Promise<ProjectRegistrationGuardedProjectUpdateResult> {
+    const delegate = await this.resolve();
+    if (!delegate.rollbackGuardedProjectUpdate) {
+      throw new Error(`${this.authority} package does not expose rollbackGuardedProjectUpdate`);
+    }
+    return delegate.rollbackGuardedProjectUpdate(targetId, request);
   }
 }
 

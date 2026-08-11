@@ -42,10 +42,17 @@ import {
   type ProjectRegistrationAuthorityLookupRequest,
   type ProjectRegistrationAuthorityLookupResult,
   type ProjectRegistrationAuthorityName,
+  type ProjectRegistrationAuthorityPathRepairReceipt,
   type ProjectRegistrationAuthorityReceipt,
   type ProjectRegistrationAuthorityRecord,
   type ProjectRegistrationAuthorityRequest,
   type ProjectRegistrationAuthorityTransport,
+  type ProjectRegistrationGuardedProjectReceiptLookupRequest,
+  type ProjectRegistrationGuardedProjectReceiptLookupResult,
+  type ProjectRegistrationGuardedProjectRollbackRequest,
+  type ProjectRegistrationGuardedProjectUpdateRequest,
+  type ProjectRegistrationGuardedProjectUpdateResult,
+  type ProjectRegistrationHistoricalAuthorityIdentity,
   type ProjectRegistrationResourceKind,
 } from "./project-registration.js";
 import { PROJECT_MARKER_FILENAME } from "./workspace-runtime.js";
@@ -101,6 +108,15 @@ function input(
     response_byte_limit: 1_000_000,
     time_budget_ms: 10_000,
   };
+}
+
+function requireRegistrationAuthorityReceipt(
+  receipt: ProjectRegistrationAuthorityReceipt | ProjectRegistrationAuthorityPathRepairReceipt | null,
+): ProjectRegistrationAuthorityReceipt {
+  if (!receipt || !("resource_kind" in receipt)) {
+    throw new Error("expected a project-registration authority receipt");
+  }
+  return receipt;
 }
 
 function authorityPrefix(authority: ProjectRegistrationAuthorityName): string {
@@ -171,10 +187,50 @@ class FakeAuthority implements ProjectRegistrationAuthorityAdapter {
   readonly preexistingTerminalReasons = new Map<string, string>();
   readonly preexistingTerminalOmitsRecord = new Set<string>();
   readonly requiredReadbackTargetDigests = new Map<string, string>();
+  readonly projectPathDigests = new Map<string, string>();
+  readonly projectPaths = new Map<string, string>();
+  readonly pathRepairReceiptById = new Map<string, ProjectRegistrationAuthorityPathRepairReceipt>();
+  readonly pathRepairResultByKey = new Map<string, ProjectRegistrationGuardedProjectUpdateResult>();
+  readonly pathRepairFingerprintByKey = new Map<string, string>();
+  readonly pathRepairSourceByReceiptId = new Map<string, {
+    record: ProjectRegistrationAuthorityRecord;
+    path: string;
+    path_digest: string;
+  }>();
+  readonly pathRepairRequests: Array<{
+    operation_id: string;
+    step_id: string;
+    target_id: string;
+    expected_revision: string;
+    source_target_path_digest: string;
+    requested_target_path_digest: string;
+    target: ProjectRegistrationPathHandle;
+  }> = [];
+  readonly pathRepairRollbackRequests: Array<{
+    operation_id: string;
+    step_id: string;
+    target_id: string;
+    expected_revision: string;
+    accepted_receipt_id: string;
+    accepted_receipt: ProjectRegistrationAuthorityPathRepairReceipt;
+  }> = [];
+  readonly pathRepairRollbackAttempts: Array<{
+    target_id: string;
+    expected_revision: string;
+    accepted_receipt_id: string;
+  }> = [];
   readonly validatedAdoptionTargets = new Set<string>();
   strictInverseDesired = false;
   allowExistingAdoption = false;
   beforeCreate: ((request: ProjectRegistrationAuthorityRequest) => void | Promise<void>) | null = null;
+  beforeGuardedProjectUpdate: ((
+    targetId: string,
+    request: ProjectRegistrationGuardedProjectUpdateRequest,
+  ) => void | Promise<void>) | null = null;
+  beforeGuardedProjectRollback: ((
+    targetId: string,
+    request: ProjectRegistrationGuardedProjectRollbackRequest,
+  ) => void | Promise<void>) | null = null;
   channelTargetIdFactory: ((selectorDigest: string) => string) | null = null;
   targetIdFactory: ((request: ProjectRegistrationAuthorityRequest, selectorDigest: string) => string) | null = null;
   lookupReceiptTransform: ((
@@ -219,6 +275,15 @@ class FakeAuthority implements ProjectRegistrationAuthorityAdapter {
       exact_readback: true,
       conditional_inverse: true,
       ambiguous_outcome_reconciliation: true,
+      ...(this.authority === "mementos"
+          ? {
+            guarded_update: true as const,
+            guarded_update_route: "mementos.project-guarded-update.v1",
+            expected_revision_compare_and_swap: true as const,
+            caller_idempotency: true as const,
+            exact_inverse_rollback: true as const,
+          }
+        : {}),
     };
   }
 
@@ -298,6 +363,10 @@ class FakeAuthority implements ProjectRegistrationAuthorityAdapter {
       desired: request.desired,
     }));
     this.records.set(targetId, { target_id: targetId, revision, digest });
+    if (this.authority === "mementos" && typeof request.desired.target_path_digest === "string") {
+      this.projectPathDigests.set(targetId, request.desired.target_path_digest);
+      request.target.withOwnedPath((path) => this.projectPaths.set(targetId, path));
+    }
     const receipt = this.makeReceipt(request, {
       outcome: "accepted",
       target_id: targetId,
@@ -470,6 +539,321 @@ class FakeAuthority implements ProjectRegistrationAuthorityAdapter {
       absent: true,
       digest,
     };
+  }
+
+  async guardedUpdateProject(
+    targetId: string,
+    request: ProjectRegistrationGuardedProjectUpdateRequest,
+  ): Promise<ProjectRegistrationGuardedProjectUpdateResult> {
+    if (this.authority !== "mementos") throw new Error("guarded project update is mementos-only");
+    await this.beforeGuardedProjectUpdate?.(targetId, request);
+    this.assertGuardedIdentity(request);
+    const exactRequest = request as unknown as ProjectRegistrationGuardedProjectUpdateRequest & {
+      authority?: unknown;
+      authority_route?: unknown;
+      package_version?: unknown;
+      updates: { path: unknown };
+    };
+    if (
+      exactRequest.authority !== "mementos"
+      || exactRequest.authority_route !== "mementos.project-guarded-update.v1"
+      || exactRequest.package_version !== this.packageVersion
+      || !exactRequest.updates.path
+      || typeof (exactRequest.updates.path as { withOwnedPath?: unknown }).withOwnedPath !== "function"
+    ) {
+      throw this.guardedError("PROJECT_UPDATE_INVALID_INPUT");
+    }
+    const requestedPath = (exactRequest.updates.path as ProjectRegistrationPathHandle)
+      .withOwnedPath((path) => path);
+    const target = ProjectRegistrationPathHandle.fromPath(requestedPath);
+    const sourceTargetPathDigest = this.projectPathDigests.get(targetId);
+    if (!sourceTargetPathDigest) throw this.guardedError("PROJECT_UPDATE_NOT_FOUND");
+    const fingerprint = sha256(canonicalJson({
+      authority_id: request.authority_id,
+      tenant_id: request.tenant_id,
+      corpus_id: request.corpus_id,
+      operation_id: request.operation_id,
+      step_id: request.step_id,
+      idempotency_key: request.idempotency_key,
+      expected_revision: request.expected_revision,
+      updates: { path: requestedPath },
+      target_id: targetId,
+      direction: "forward",
+    }));
+    const priorFingerprint = this.pathRepairFingerprintByKey.get(request.idempotency_key);
+    if (priorFingerprint && priorFingerprint !== fingerprint) {
+      throw this.guardedError("PROJECT_UPDATE_IDEMPOTENCY_MISMATCH");
+    }
+    const prior = this.pathRepairResultByKey.get(request.idempotency_key);
+    if (prior) {
+      const current = this.records.get(targetId);
+      if (
+        !current
+        || current.revision !== prior.receipt.result_revision
+        || current.digest !== prior.receipt.result_digest
+      ) {
+        throw this.guardedError("PROJECT_UPDATE_ACCEPTED_TARGET_DRIFTED");
+      }
+      return prior;
+    }
+    const current = this.records.get(targetId);
+    if (!current) throw this.guardedError("PROJECT_UPDATE_NOT_FOUND");
+    if (current.revision !== request.expected_revision) {
+      throw this.guardedError("PROJECT_UPDATE_STALE_REVISION");
+    }
+    const sourcePath = this.projectPaths.get(targetId);
+    if (!sourcePath) throw this.guardedError("PROJECT_UPDATE_NOT_FOUND");
+    this.pathRepairRequests.push({
+      operation_id: request.operation_id,
+      step_id: request.step_id,
+      target_id: targetId,
+      expected_revision: request.expected_revision,
+      source_target_path_digest: sourceTargetPathDigest,
+      requested_target_path_digest: target.digest,
+      target,
+    });
+    const revision = `rev_${sha256(`${request.idempotency_key}:forward`).slice(0, 20)}`;
+    const digest = sha256(canonicalJson({
+      target_id: targetId,
+      revision,
+      target_path_digest: target.digest,
+    }));
+    const repairedRecord = { target_id: targetId, revision, digest };
+    const receipt: ProjectRegistrationAuthorityPathRepairReceipt = {
+      receipt_id: `mmu_${sha256(`${request.idempotency_key}:forward`).slice(0, 20)}`,
+      authority: "mementos",
+      route: "mementos.project-guarded-update.v1",
+      package_version: this.packageVersion,
+      authority_id: this.authorityId,
+      tenant_id: this.tenantId,
+      corpus_id: this.corpusId,
+      operation_id: request.operation_id,
+      step_id: request.step_id,
+      direction: "forward",
+      idempotency_key: request.idempotency_key,
+      request_digest: fingerprint,
+      outcome: "accepted",
+      target_id: targetId,
+      expected_revision: request.expected_revision,
+      result_revision: revision,
+      result_digest: digest,
+      accepted_receipt_id: null,
+      created_at: "2026-08-10T00:00:00.000Z",
+    };
+    const result = {
+      dry_run: false,
+      applied: true,
+      record: repairedRecord,
+      receipt,
+      response_control: {
+        response_byte_limit: request.response_byte_limit,
+        time_budget_ms: request.time_budget_ms,
+        response_bytes: 1,
+        elapsed_ms: 0,
+        complete: true,
+        truncated: false,
+      },
+    } as unknown as ProjectRegistrationGuardedProjectUpdateResult;
+    this.pathRepairFingerprintByKey.set(request.idempotency_key, fingerprint);
+    this.pathRepairResultByKey.set(request.idempotency_key, result);
+    this.pathRepairReceiptById.set(receipt.receipt_id, receipt);
+    this.pathRepairSourceByReceiptId.set(receipt.receipt_id, {
+      record: current,
+      path: sourcePath,
+      path_digest: sourceTargetPathDigest,
+    });
+    this.records.set(targetId, repairedRecord);
+    this.projectPaths.set(targetId, requestedPath);
+    this.projectPathDigests.set(targetId, target.digest);
+    this.requiredReadbackTargetDigests.set(targetId, target.digest);
+    return result;
+  }
+
+  async getGuardedProjectUpdateReceipt(
+    targetId: string,
+    receiptId: string,
+    request: ProjectRegistrationGuardedProjectReceiptLookupRequest,
+  ): Promise<ProjectRegistrationGuardedProjectReceiptLookupResult> {
+    this.assertGuardedIdentity(request);
+    const receipt = this.pathRepairReceiptById.get(receiptId);
+    if (!receipt || receipt.target_id !== targetId) {
+      throw this.guardedError("PROJECT_UPDATE_RECEIPT_NOT_FOUND");
+    }
+    return {
+      receipt,
+      response_control: {
+        response_byte_limit: request.response_byte_limit,
+        time_budget_ms: request.time_budget_ms,
+        response_bytes: 1,
+        elapsed_ms: 0,
+        complete: true,
+        truncated: false,
+      },
+    };
+  }
+
+  async rollbackGuardedProjectUpdate(
+    targetId: string,
+    request: ProjectRegistrationGuardedProjectRollbackRequest,
+  ): Promise<ProjectRegistrationGuardedProjectUpdateResult> {
+    if (this.authority !== "mementos") throw new Error("guarded project rollback is mementos-only");
+    const exactRequest = request as unknown as ProjectRegistrationGuardedProjectRollbackRequest & {
+      authority?: unknown;
+      authority_route?: unknown;
+      package_version?: unknown;
+      accepted_receipt?: ProjectRegistrationAuthorityPathRepairReceipt;
+    };
+    const acceptedReceipt = exactRequest.accepted_receipt;
+    if (
+      exactRequest.authority !== "mementos"
+      || exactRequest.authority_route !== "mementos.project-guarded-update.v1"
+      || exactRequest.package_version !== this.packageVersion
+      || !acceptedReceipt
+    ) {
+      throw this.guardedError("PROJECT_UPDATE_INVALID_INPUT");
+    }
+    this.pathRepairRollbackAttempts.push({
+      target_id: targetId,
+      expected_revision: request.expected_revision,
+      accepted_receipt_id: acceptedReceipt.receipt_id,
+    });
+    await this.beforeGuardedProjectRollback?.(targetId, request);
+    this.assertGuardedIdentity(request);
+    const fingerprint = sha256(canonicalJson({
+      authority_id: request.authority_id,
+      tenant_id: request.tenant_id,
+      corpus_id: request.corpus_id,
+      operation_id: request.operation_id,
+      step_id: request.step_id,
+      idempotency_key: request.idempotency_key,
+      expected_revision: request.expected_revision,
+      accepted_receipt_id: acceptedReceipt.receipt_id,
+      target_id: targetId,
+      direction: "rollback",
+    }));
+    const priorFingerprint = this.pathRepairFingerprintByKey.get(request.idempotency_key);
+    if (priorFingerprint && priorFingerprint !== fingerprint) {
+      throw this.guardedError("PROJECT_UPDATE_IDEMPOTENCY_MISMATCH");
+    }
+    const prior = this.pathRepairResultByKey.get(request.idempotency_key);
+    if (prior) {
+      const current = this.records.get(targetId);
+      if (
+        !current
+        || current.revision !== prior.receipt.result_revision
+        || current.digest !== prior.receipt.result_digest
+      ) {
+        throw this.guardedError("PROJECT_UPDATE_ACCEPTED_TARGET_DRIFTED");
+      }
+      return prior;
+    }
+    const accepted = this.pathRepairReceiptById.get(acceptedReceipt.receipt_id);
+    const source = this.pathRepairSourceByReceiptId.get(acceptedReceipt.receipt_id);
+    const current = this.records.get(targetId);
+    if (
+      !accepted
+      || !source
+      || !current
+      || accepted.target_id !== targetId
+      || canonicalJson(acceptedReceipt) !== canonicalJson(accepted)
+    ) {
+      throw this.guardedError("PROJECT_UPDATE_RECEIPT_NOT_FOUND");
+    }
+    if (
+      request.expected_revision !== accepted.result_revision
+      || current.revision !== request.expected_revision
+      || current.digest !== accepted.result_digest
+    ) {
+      throw this.guardedError("PROJECT_UPDATE_ACCEPTED_TARGET_DRIFTED");
+    }
+    this.pathRepairRollbackRequests.push({
+      operation_id: request.operation_id,
+      step_id: request.step_id,
+      target_id: targetId,
+      expected_revision: request.expected_revision,
+      accepted_receipt_id: acceptedReceipt.receipt_id,
+      accepted_receipt: acceptedReceipt,
+    });
+    const revision = `rev_${sha256(`${request.idempotency_key}:rollback`).slice(0, 20)}`;
+    const digest = sha256(canonicalJson({
+      target_id: targetId,
+      revision,
+      target_path_digest: source.path_digest,
+    }));
+    const restoredRecord = { target_id: targetId, revision, digest };
+    const receipt: ProjectRegistrationAuthorityPathRepairReceipt = {
+      receipt_id: `mmu_${sha256(`${request.idempotency_key}:rollback`).slice(0, 20)}`,
+      authority: "mementos",
+      route: accepted.route,
+      package_version: this.packageVersion,
+      authority_id: this.authorityId,
+      tenant_id: this.tenantId,
+      corpus_id: this.corpusId,
+      operation_id: request.operation_id,
+      step_id: request.step_id,
+      direction: "rollback",
+      idempotency_key: request.idempotency_key,
+      request_digest: fingerprint,
+      outcome: "accepted",
+      target_id: targetId,
+      expected_revision: request.expected_revision,
+      result_revision: revision,
+      result_digest: digest,
+      accepted_receipt_id: acceptedReceipt.receipt_id,
+      created_at: "2026-08-10T00:00:01.000Z",
+    };
+    const result = {
+      dry_run: false,
+      applied: true,
+      record: restoredRecord,
+      receipt,
+      response_control: {
+        response_byte_limit: request.response_byte_limit,
+        time_budget_ms: request.time_budget_ms,
+        response_bytes: 1,
+        elapsed_ms: 0,
+        complete: true,
+        truncated: false,
+      },
+    } as unknown as ProjectRegistrationGuardedProjectUpdateResult;
+    this.pathRepairFingerprintByKey.set(request.idempotency_key, fingerprint);
+    this.pathRepairResultByKey.set(request.idempotency_key, result);
+    this.pathRepairReceiptById.set(receipt.receipt_id, receipt);
+    this.records.set(targetId, restoredRecord);
+    this.projectPaths.set(targetId, source.path);
+    this.projectPathDigests.set(targetId, source.path_digest);
+    this.requiredReadbackTargetDigests.set(targetId, source.path_digest);
+    return result;
+  }
+
+  private assertGuardedIdentity(request: {
+    authority_id: string;
+    tenant_id: string;
+    corpus_id: string;
+  }): void {
+    if (
+      request.authority_id !== this.authorityId
+      || request.tenant_id !== this.tenantId
+      || request.corpus_id !== this.corpusId
+    ) {
+      throw this.guardedError("PROJECT_UPDATE_AUTHORITY_MISMATCH");
+    }
+  }
+
+  private guardedProject(targetId: string, path: string, revision: string) {
+    return {
+      id: targetId,
+      name: "Fleet Resources",
+      path,
+      description: null,
+      memory_prefix: null,
+      created_at: "2026-08-07T00:00:00.000Z",
+      updated_at: revision,
+    };
+  }
+
+  private guardedError(code: string): Error {
+    return Object.assign(new Error(code), { code });
   }
 
   private makeReceipt(
@@ -798,6 +1182,53 @@ describe("full project registration capability gate", () => {
       )).rejects.toThrow(/missing required fields/i);
       expect(db.query("SELECT COUNT(*) AS n FROM workspaces").get()).toEqual({ n: 0 });
       expect(db.query("SELECT COUNT(*) AS n FROM project_registration_manifests").get()).toEqual({ n: 0 });
+      expect(existsSync(target.path)).toBe(false);
+    } finally {
+      db.close();
+    }
+  });
+
+  test("rejects mismatched historical Todos identities before authority preflight", async () => {
+    const db = makeDb();
+    const target = tempTarget("mismatched-historical-todos-identities");
+    const fakes = fakeAuthorities();
+    const historicalTodosIdentity = {
+      route: fakes.todos.route,
+      package_version: fakes.todos.packageVersion,
+      authority_id: fakes.todos.authorityId,
+      corpus_id: fakes.todos.corpusId,
+    };
+    try {
+      await expect(registerFullProject({
+        ...input(
+          "op-mismatched-historical-todos-identities",
+          target.target,
+          { id: "wks_mismatchedtodos01" },
+        ),
+        reconcile_existing: {
+          todos_project: {
+            source_operation_id: "op-historical-todos-source",
+            source_authority_identity: historicalTodosIdentity,
+            target_id: "d736e48e-8267-4d91-b76d-9ab1d4015db8",
+          },
+          todos_task_list: {
+            source_operation_id: "op-historical-todos-source",
+            source_authority_identity: {
+              ...historicalTodosIdentity,
+              package_version: `${historicalTodosIdentity.package_version}-different`,
+            },
+            target_id: "98a4f2df-1f4f-45d7-a85e-8c670f70daac",
+          },
+        },
+      }, { db, authorities: fakes.authorities })).rejects.toThrow(
+        "project registration reconcile_existing Todos entries must share one source_authority_identity",
+      );
+      expect(
+        fakes.todos.capabilityCalls
+          + fakes.mementos.capabilityCalls
+          + fakes.conversations.capabilityCalls,
+      ).toBe(0);
+      expect(db.query("SELECT COUNT(*) AS n FROM workspaces").get()).toEqual({ n: 0 });
       expect(existsSync(target.path)).toBe(false);
     } finally {
       db.close();
@@ -1465,9 +1896,9 @@ describe("full project registration transaction", () => {
         input(sourceOperationId, sourceTarget.target, { id: projectId }),
         { db: sourceDb, authorities: sourceFakes.authorities },
       );
-      const sourceReceipt = source.receipts.find(
+      const sourceReceipt = requireRegistrationAuthorityReceipt(source.receipts.find(
         (receipt) => receipt.step_id === "conversations_channel" && receipt.direction === "forward",
-      )!.authority_receipt!;
+      )!.authority_receipt);
       const channelId = sourceReceipt.target_id!;
       expect(sourceReceipt).toMatchObject({
         authority: "conversations",
@@ -1559,6 +1990,241 @@ describe("full project registration transaction", () => {
       });
       expect(sourceFakes.conversations.records.has(channelId)).toBe(true);
       expect(sourceFakes.conversations.compensated).toEqual([]);
+    } finally {
+      sourceDb.close();
+      db.close();
+    }
+  });
+
+  test("reconciles every exact authority receipt under its historical authority identity", async () => {
+    const sourceDb = makeDb();
+    const db = makeDb();
+    const sourceTarget = tempTarget("all-historical-authorities-source");
+    const target = tempTarget("all-historical-authorities-recovery");
+    const fakes = fakeAuthorities();
+    const sourceOperationId = "op-all-historical-authorities-source";
+    const recoveryOperationId = "op-all-historical-authorities-recovery";
+    const projectId = "wks_allhistorical001";
+    configureStableOrphanAuthorityIds(fakes, projectId);
+    const historical = {
+      conversations: {
+        route: "conversations.project-registration.v1",
+        package_version: "0.5.36",
+        authority_id: "conversations-authority-v1",
+        corpus_id: "conversations-corpus-v1",
+      },
+      todos: {
+        route: "todos.project-registration.v1",
+        package_version: "1.0.0-rc.3",
+        authority_id: "todos-authority-v1",
+        corpus_id: "todos-corpus-v1",
+      },
+      mementos: {
+        route: "mementos.project-registration.v1",
+        package_version: "0.14.79",
+        authority_id: "mementos-authority-v1",
+        corpus_id: "mementos-corpus-v1",
+      },
+    };
+    const current = {
+      conversations: {
+        route: "conversations.project-registration.v2",
+        package_version: "0.5.41",
+        authority_id: "conversations-authority-v2",
+        corpus_id: "conversations-corpus-v2",
+      },
+      todos: {
+        route: "todos.project-registration.v1",
+        package_version: "1.0.0-rc.7",
+        authority_id: "todos-authority-v2",
+        corpus_id: "todos-corpus-v2",
+      },
+      mementos: {
+        route: "mementos.project-registration.v1",
+        package_version: "0.14.81",
+        authority_id: "mementos-authority-v2",
+        corpus_id: "mementos-corpus-v2",
+      },
+    };
+    const assignIdentity = (
+      authority: FakeAuthority,
+      identity: ProjectRegistrationHistoricalAuthorityIdentity,
+    ) => Object.assign(authority, {
+      route: identity.route,
+      packageVersion: identity.package_version,
+      authorityId: identity.authority_id,
+      corpusId: identity.corpus_id,
+    });
+    assignIdentity(fakes.conversations, historical.conversations);
+    assignIdentity(fakes.todos, historical.todos);
+    assignIdentity(fakes.mementos, historical.mementos);
+    try {
+      const source = await registerFullProject(
+        input(sourceOperationId, sourceTarget.target, { id: projectId }),
+        { db: sourceDb, authorities: fakes.authorities },
+      );
+      expect(source).toMatchObject({ ok: true, outcome: "accepted" });
+      const targetByStep = Object.fromEntries([
+        "conversations_channel",
+        "todos_project",
+        "todos_task_list",
+        "mementos_project",
+      ].map((stepId) => [stepId, source.receipts.find(
+        (receipt) => receipt.step_id === stepId && receipt.direction === "forward",
+      )!.target_id!]));
+      assignIdentity(fakes.conversations, current.conversations);
+      assignIdentity(fakes.todos, current.todos);
+      assignIdentity(fakes.mementos, current.mementos);
+      fakes.conversations.preexistingTerminalReasons.set(
+        targetByStep.conversations_channel!,
+        "preexisting_equivalent",
+      );
+      fakes.todos.preexistingTerminalReasons.set(targetByStep.todos_project!, "target_already_registered");
+      fakes.todos.preexistingTerminalReasons.set(targetByStep.todos_task_list!, "target_already_registered");
+      fakes.mementos.preexistingTerminalReasons.set(targetByStep.mementos_project!, "target_preexists");
+      fakes.mementos.requiredReadbackTargetDigests.set(
+        targetByStep.mementos_project!,
+        sourceTarget.target.digest,
+      );
+      const request = {
+        ...input(recoveryOperationId, target.target, { id: projectId }),
+        reconcile_existing: {
+          conversations_channel: {
+            source_operation_id: sourceOperationId,
+            source_authority_identity: historical.conversations,
+            target_id: targetByStep.conversations_channel,
+          },
+          todos_project: {
+            source_operation_id: sourceOperationId,
+            source_authority_identity: historical.todos,
+            target_id: targetByStep.todos_project,
+          },
+          todos_task_list: {
+            source_operation_id: sourceOperationId,
+            source_authority_identity: historical.todos,
+            target_id: targetByStep.todos_task_list,
+          },
+          mementos_project: {
+            source_operation_id: sourceOperationId,
+            source_authority_identity: historical.mementos,
+            target_id: targetByStep.mementos_project,
+            source_target: sourceTarget.target,
+          },
+        },
+      } as unknown as FullProjectRegistrationInput;
+
+      const result = await registerFullProject(request, { db, authorities: fakes.authorities });
+
+      expect(result).toMatchObject({ ok: true, outcome: "accepted" });
+      for (const [stepId, identity] of [
+        ["conversations_channel", historical.conversations],
+        ["todos_project", historical.todos],
+        ["todos_task_list", historical.todos],
+        ["mementos_project", historical.mementos],
+      ] as const) {
+        expect(fakes[stepId === "conversations_channel"
+          ? "conversations"
+          : stepId === "mementos_project"
+            ? "mementos"
+            : "todos"].lookupRequests.find(
+          (lookup) => lookup.operation_id === sourceOperationId && lookup.step_id === stepId,
+        )).toMatchObject({
+          authority_route: identity.route,
+          package_version: identity.package_version,
+          authority_id: identity.authority_id,
+          corpus_id: identity.corpus_id,
+          target_id: targetByStep[stepId],
+        });
+        expect(result.receipts.find((receipt) => receipt.step_id === stepId)).toMatchObject({
+          outcome: "accepted",
+          reason: "adopted_preexisting",
+          target_id: targetByStep[stepId],
+          preconditions: [expect.objectContaining({
+            source_authority_route: identity.route,
+            source_package_version: identity.package_version,
+            source_authority_id: identity.authority_id,
+            source_corpus_id: identity.corpus_id,
+          })],
+        });
+      }
+      expect(JSON.stringify(result)).not.toContain(sourceTarget.path);
+      expect(JSON.stringify(result)).not.toContain(target.path);
+    } finally {
+      sourceDb.close();
+      db.close();
+    }
+  });
+
+  test("fails closed on a wrong historical Todos authority tuple", async () => {
+    const sourceDb = makeDb();
+    const db = makeDb();
+    const sourceTarget = tempTarget("wrong-historical-todos-source");
+    const target = tempTarget("wrong-historical-todos-recovery");
+    const fakes = fakeAuthorities();
+    const sourceOperationId = "op-wrong-historical-todos-source";
+    const projectId = "wks_wronghistorical01";
+    configureStableOrphanAuthorityIds(fakes, projectId);
+    const conversationsIdentity = {
+      route: fakes.conversations.route,
+      package_version: fakes.conversations.packageVersion,
+      authority_id: fakes.conversations.authorityId,
+      corpus_id: fakes.conversations.corpusId,
+    };
+    const todosIdentity = {
+      route: fakes.todos.route,
+      package_version: fakes.todos.packageVersion,
+      authority_id: fakes.todos.authorityId,
+      corpus_id: fakes.todos.corpusId,
+    };
+    try {
+      const source = await registerFullProject(
+        input(sourceOperationId, sourceTarget.target, { id: projectId }),
+        { db: sourceDb, authorities: fakes.authorities },
+      );
+      const channelId = source.receipts.find(
+        (receipt) => receipt.step_id === "conversations_channel" && receipt.direction === "forward",
+      )!.target_id!;
+      const todosProjectId = source.receipts.find(
+        (receipt) => receipt.step_id === "todos_project" && receipt.direction === "forward",
+      )!.target_id!;
+      fakes.conversations.preexistingTerminalReasons.set(channelId, "preexisting_equivalent");
+      fakes.todos.preexistingTerminalReasons.set(todosProjectId, "target_already_registered");
+      const request = {
+        ...input("op-wrong-historical-todos-recovery", target.target, { id: projectId }),
+        reconcile_existing: {
+          conversations_channel: {
+            source_operation_id: sourceOperationId,
+            source_authority_identity: conversationsIdentity,
+            target_id: channelId,
+          },
+          todos_project: {
+            source_operation_id: sourceOperationId,
+            source_authority_identity: {
+              ...todosIdentity,
+              package_version: `${todosIdentity.package_version}-wrong`,
+            },
+            target_id: todosProjectId,
+          },
+        },
+      } as unknown as FullProjectRegistrationInput;
+
+      const result = await registerFullProject(request, { db, authorities: fakes.authorities });
+
+      expect(result).toMatchObject({
+        ok: false,
+        outcome: "rolled_back",
+        failed_step: "todos_project",
+        reason_code: "registration_reconciliation_receipt_unverified",
+      });
+      expect(fakes.todos.lookupRequests.find(
+        (lookup) => lookup.operation_id === sourceOperationId
+          && lookup.step_id === "todos_project"
+          && lookup.package_version.endsWith("-wrong"),
+      )).toMatchObject({
+        package_version: `${todosIdentity.package_version}-wrong`,
+        target_id: todosProjectId,
+      });
+      expect(fakes.todos.records.has(todosProjectId)).toBe(true);
     } finally {
       sourceDb.close();
       db.close();
@@ -1695,7 +2361,7 @@ describe("full project registration transaction", () => {
     }
   });
 
-  test("reconciles the exact orphan authority set from accepted and linked duplicate receipts", async () => {
+  test("reconciles the exact orphan authority set and repairs adopted Mementos path drift in-operation", async () => {
     const sourceDb = makeDb();
     const db = makeDb();
     const sourceTarget = tempTarget("orphan-authority-set-source");
@@ -1728,7 +2394,9 @@ describe("full project registration transaction", () => {
       fakes.mementos.preexistingTerminalOmitsRecord.add(ids.mementosProjectId);
       fakes.mementos.requiredReadbackTargetDigests.set(ids.mementosProjectId, sourceTarget.target.digest);
 
-      const acceptedTaskListAuthorityReceipt = todosTaskListReceipt.authority_receipt!;
+      const acceptedTaskListAuthorityReceipt = requireRegistrationAuthorityReceipt(
+        todosTaskListReceipt.authority_receipt,
+      );
       const linkedTaskListReceipt: ProjectRegistrationAuthorityReceipt = {
         ...acceptedTaskListAuthorityReceipt,
         receipt_id: `tdr_${sha256(`${acceptedTaskListAuthorityReceipt.receipt_id}:linked`).slice(0, 20)}`,
@@ -1767,6 +2435,16 @@ describe("full project registration transaction", () => {
       const result = await registerFullProject(request, { db, authorities: fakes.authorities });
 
       expect(result).toMatchObject({ ok: true, outcome: "accepted" });
+      expect(fakes.mementos.pathRepairRequests).toHaveLength(1);
+      expect(fakes.mementos.pathRepairRequests[0]).toMatchObject({
+        operation_id: request.operation_id,
+        step_id: "mementos_project_path_repair",
+        target_id: ids.mementosProjectId,
+        expected_revision: mementosProjectReceipt.result_revision,
+        source_target_path_digest: sourceTarget.target.digest,
+        requested_target_path_digest: target.target.digest,
+      });
+      expect(fakes.mementos.projectPathDigests.get(ids.mementosProjectId)).toBe(target.target.digest);
       const expectedTargets: Record<string, string> = {
         conversations_channel: channelId,
         todos_project: ids.todosProjectId,
@@ -1804,20 +2482,45 @@ describe("full project registration transaction", () => {
         })],
       });
       expect(result.receipts.find((receipt) => receipt.step_id === "mementos_project")).toMatchObject({
-        result_revision: mementosProjectReceipt.result_revision,
-        result_digest: mementosProjectReceipt.result_digest,
         preconditions: [expect.objectContaining({
           source_receipt_id: mementosProjectReceipt.authority_receipt!.receipt_id,
           path_drift: expect.objectContaining({
             detected: true,
+            repaired: true,
             source_target_path_digest: sourceTarget.target.digest,
             requested_target_path_digest: target.target.digest,
-            required_follow_up: "mementos_projects_update_path",
             expected_revision: mementosProjectReceipt.result_revision,
             expected_digest: mementosProjectReceipt.result_digest,
-            requires_idempotency_key: true,
-            requires_receipt_cas: true,
+            repair_receipt_id: expect.any(String),
           }),
+        })],
+      });
+      expect(result.receipts.find(
+        (receipt) => receipt.step_id === "mementos_project_path_repair" && receipt.direction === "forward",
+      )).toMatchObject({
+        authority: "mementos",
+        resource_kind: "project_path",
+        target_id: ids.mementosProjectId,
+        outcome: "accepted",
+        authority_receipt: expect.objectContaining({
+          authority: "mementos",
+          route: "mementos.project-guarded-update.v1",
+          operation_id: request.operation_id,
+          step_id: "mementos_project_path_repair",
+          direction: "forward",
+          target_id: ids.mementosProjectId,
+        }),
+        artifacts: [expect.objectContaining({
+          authority: "mementos",
+          kind: "project_path_repair",
+          target_id: ids.mementosProjectId,
+          source_target_path_digest: sourceTarget.target.digest,
+          requested_target_path_digest: target.target.digest,
+        })],
+        rollback: [expect.objectContaining({
+          action: "receipt_scoped_conditional_path_restore",
+          target_id: ids.mementosProjectId,
+          accepted_receipt_id: expect.any(String),
         })],
       });
       expect(getWorkspace(projectId, db)?.integrations).toMatchObject({
@@ -1851,8 +2554,28 @@ describe("full project registration transaction", () => {
         (item) => item.target_id === ids.mementosProjectId
           && item.target.digest === sourceTarget.target.digest,
       )).toHaveLength(2);
+      expect(fakes.mementos.readbackRequests.filter(
+        (item) => item.target_id === ids.mementosProjectId
+          && item.target.digest === target.target.digest,
+      )).toHaveLength(1);
+      const replay = await registerFullProject(request, { db, authorities: fakes.authorities });
+      expect(replay).toMatchObject({ ok: true, outcome: "duplicate_of_accepted" });
+      expect(fakes.mementos.pathRepairRequests).toHaveLength(1);
+      expect(replay.artifacts).toEqual(result.artifacts);
+      const replayTerminal = replay.receipts.find(
+        (receipt) => receipt.step_id === "registration_terminal" && receipt.outcome === "duplicate_of_accepted",
+      );
+      expect(replayTerminal).toMatchObject({
+        duplicate_of_receipt_id: expect.any(String),
+      });
+      expect(replay.receipts.filter(
+        (receipt) => receipt.step_id === "mementos_project_path_repair" && receipt.direction === "forward",
+      )).toHaveLength(1);
+      expect(JSON.stringify(result)).not.toContain("mementos_projects_update_path");
       expect(JSON.stringify(result)).not.toContain(sourceTarget.path);
       expect(JSON.stringify(result)).not.toContain(target.path);
+      expect(JSON.stringify(replay)).not.toContain(sourceTarget.path);
+      expect(JSON.stringify(replay)).not.toContain(target.path);
     } finally {
       sourceDb.close();
       db.close();
@@ -1916,6 +2639,42 @@ describe("full project registration transaction", () => {
         outcome: "rolled_back",
         failed_step: "projects_integrations",
       });
+      expect(fakes.mementos.pathRepairRequests).toHaveLength(1);
+      expect(fakes.mementos.pathRepairRollbackRequests).toHaveLength(1);
+      expect(fakes.mementos.pathRepairRollbackRequests[0]).toMatchObject({
+        operation_id: request.operation_id,
+        step_id: "mementos_project_path_repair",
+        target_id: ids.mementosProjectId,
+        accepted_receipt_id: expect.any(String),
+        accepted_receipt: expect.objectContaining({
+          direction: "forward",
+          target_id: ids.mementosProjectId,
+          accepted_receipt_id: null,
+        }),
+      });
+      expect(fakes.mementos.projectPathDigests.get(ids.mementosProjectId)).toBe(sourceTarget.target.digest);
+      expect(result.rollback).toContainEqual(expect.objectContaining({
+        step_id: "mementos_project_path_repair",
+        status: "completed",
+        inverse_receipt_id: expect.any(String),
+        accepted_receipt_id: expect.any(String),
+        target_id: ids.mementosProjectId,
+      }));
+      expect(result.receipts.find(
+        (receipt) => receipt.step_id === "mementos_project_path_repair" && receipt.direction === "inverse",
+      )).toMatchObject({
+        outcome: "accepted",
+        target_id: ids.mementosProjectId,
+        authority_receipt: expect.objectContaining({
+          direction: "rollback",
+          accepted_receipt_id: expect.any(String),
+        }),
+        artifacts: [expect.objectContaining({
+          kind: "project_path_restore",
+          source_target_path_digest: sourceTarget.target.digest,
+          requested_target_path_digest: target.target.digest,
+        })],
+      });
       for (const [stepId, targetId] of Object.entries({
         conversations_channel: channelId,
         todos_project: ids.todosProjectId,
@@ -1940,6 +2699,181 @@ describe("full project registration transaction", () => {
       expect(fakes.todos.records.has(ids.todosTaskListId)).toBe(true);
       expect(fakes.mementos.records.has(ids.mementosProjectId)).toBe(true);
       expect(projects.project).toBeNull();
+      expect(JSON.stringify(result)).not.toContain(sourceTarget.path);
+      expect(JSON.stringify(result)).not.toContain(target.path);
+    } finally {
+      sourceDb.close();
+      db.close();
+    }
+  });
+
+  test("fails closed when the adopted Mementos revision drifts before path repair", async () => {
+    const sourceDb = makeDb();
+    const db = makeDb();
+    const sourceTarget = tempTarget("orphan-path-forward-drift-source");
+    const target = tempTarget("orphan-path-forward-drift-recovery");
+    const fakes = fakeAuthorities();
+    const sourceOperationId = "op-orphan-path-forward-drift-source";
+    const projectId = "wks_orphanpathdrift001";
+    const ids = configureStableOrphanAuthorityIds(fakes, projectId);
+    try {
+      const source = await registerFullProject(
+        input(sourceOperationId, sourceTarget.target, { id: projectId }),
+        { db: sourceDb, authorities: fakes.authorities },
+      );
+      const channelId = source.receipts.find(
+        (receipt) => receipt.step_id === "conversations_channel" && receipt.direction === "forward",
+      )!.target_id!;
+      fakes.conversations.preexistingTerminalReasons.set(channelId, "preexisting_equivalent");
+      fakes.todos.preexistingTerminalReasons.set(ids.todosProjectId, "target_already_registered");
+      fakes.todos.preexistingTerminalReasons.set(ids.todosTaskListId, "target_already_registered");
+      fakes.todos.preexistingTerminalOmitsRecord.add(ids.todosProjectId);
+      fakes.todos.preexistingTerminalOmitsRecord.add(ids.todosTaskListId);
+      fakes.mementos.preexistingTerminalReasons.set(ids.mementosProjectId, "target_preexists");
+      fakes.mementos.preexistingTerminalOmitsRecord.add(ids.mementosProjectId);
+      fakes.mementos.requiredReadbackTargetDigests.set(ids.mementosProjectId, sourceTarget.target.digest);
+      const foreignRecord = {
+        target_id: ids.mementosProjectId,
+        revision: "rev_foreign_forward_drift",
+        digest: sha256("foreign-forward-drift"),
+      };
+      let drifted = false;
+      fakes.mementos.beforeGuardedProjectUpdate = (targetId) => {
+        if (drifted) return;
+        drifted = true;
+        fakes.mementos.records.set(targetId, foreignRecord);
+      };
+      const request = {
+        ...input("op-orphan-path-forward-drift-recovery", target.target, { id: projectId }),
+        reconcile_existing: {
+          conversations_channel: { source_operation_id: sourceOperationId, target_id: channelId },
+          todos_project: { source_operation_id: sourceOperationId, target_id: ids.todosProjectId },
+          todos_task_list: { source_operation_id: sourceOperationId, target_id: ids.todosTaskListId },
+          mementos_project: {
+            source_operation_id: sourceOperationId,
+            target_id: ids.mementosProjectId,
+            source_target: sourceTarget.target,
+          },
+        },
+      } as unknown as FullProjectRegistrationInput;
+
+      const result = await registerFullProject(request, { db, authorities: fakes.authorities });
+
+      expect(result).toMatchObject({
+        ok: false,
+        outcome: "rolled_back",
+        failed_step: "mementos_project_path_repair",
+        reason_code: "mementos_path_repair_conflict",
+      });
+      expect(fakes.mementos.pathRepairRequests).toHaveLength(0);
+      expect(fakes.mementos.pathRepairReceiptById.size).toBe(0);
+      expect(fakes.mementos.records.get(ids.mementosProjectId)).toEqual(foreignRecord);
+      expect(fakes.mementos.projectPathDigests.get(ids.mementosProjectId)).toBe(sourceTarget.target.digest);
+      expect(fakes.mementos.compensated).toEqual([]);
+      expect(fakes.mementos.inverseRequests).toEqual([]);
+      expect(JSON.stringify(result)).not.toContain(sourceTarget.path);
+      expect(JSON.stringify(result)).not.toContain(target.path);
+    } finally {
+      sourceDb.close();
+      db.close();
+    }
+  });
+
+  test("refuses conditional path rollback after concurrent Mementos drift", async () => {
+    const sourceDb = makeDb();
+    const db = makeDb();
+    const sourceTarget = tempTarget("orphan-path-rollback-drift-source");
+    const target = tempTarget("orphan-path-rollback-drift-recovery");
+    const foreignTarget = tempTarget("orphan-path-rollback-drift-foreign");
+    const fakes = fakeAuthoritiesWithTransports({
+      todos: "api",
+      mementos: "api",
+      conversations: "api",
+    });
+    const sourceProjects = new FakeCloudProjectAuthority();
+    const projects = new FakeCloudProjectAuthority();
+    projects.failResourceLinkMutation = true;
+    const sourceOperationId = "op-orphan-path-rollback-drift-source";
+    const projectId = "wks_orphanpathdrift002";
+    const ids = configureStableOrphanAuthorityIds(fakes, projectId);
+    try {
+      const source = await registerFullProject(
+        input(sourceOperationId, sourceTarget.target, { id: projectId }),
+        { db: sourceDb, authorities: fakes.authorities, projectStore: sourceProjects.asStore() },
+      );
+      const channelId = source.receipts.find(
+        (receipt) => receipt.step_id === "conversations_channel" && receipt.direction === "forward",
+      )!.target_id!;
+      fakes.conversations.preexistingTerminalReasons.set(channelId, "preexisting_equivalent");
+      fakes.todos.preexistingTerminalReasons.set(ids.todosProjectId, "target_already_registered");
+      fakes.todos.preexistingTerminalReasons.set(ids.todosTaskListId, "target_already_registered");
+      fakes.todos.preexistingTerminalOmitsRecord.add(ids.todosProjectId);
+      fakes.todos.preexistingTerminalOmitsRecord.add(ids.todosTaskListId);
+      fakes.mementos.preexistingTerminalReasons.set(ids.mementosProjectId, "target_preexists");
+      fakes.mementos.preexistingTerminalOmitsRecord.add(ids.mementosProjectId);
+      fakes.mementos.requiredReadbackTargetDigests.set(ids.mementosProjectId, sourceTarget.target.digest);
+      const foreignRecord = {
+        target_id: ids.mementosProjectId,
+        revision: "rev_foreign_rollback_drift",
+        digest: sha256("foreign-rollback-drift"),
+      };
+      let drifted = false;
+      fakes.mementos.beforeGuardedProjectRollback = (targetId) => {
+        if (drifted) return;
+        drifted = true;
+        fakes.mementos.records.set(targetId, foreignRecord);
+        fakes.mementos.projectPaths.set(targetId, foreignTarget.path);
+        fakes.mementos.projectPathDigests.set(targetId, foreignTarget.target.digest);
+        fakes.mementos.requiredReadbackTargetDigests.set(targetId, foreignTarget.target.digest);
+      };
+      const request = {
+        ...input("op-orphan-path-rollback-drift-recovery", target.target, { id: projectId }),
+        reconcile_existing: {
+          conversations_channel: { source_operation_id: sourceOperationId, target_id: channelId },
+          todos_project: { source_operation_id: sourceOperationId, target_id: ids.todosProjectId },
+          todos_task_list: { source_operation_id: sourceOperationId, target_id: ids.todosTaskListId },
+          mementos_project: {
+            source_operation_id: sourceOperationId,
+            target_id: ids.mementosProjectId,
+            source_target: sourceTarget.target,
+          },
+        },
+      } as unknown as FullProjectRegistrationInput;
+
+      const result = await registerFullProject(
+        request,
+        { db, authorities: fakes.authorities, projectStore: projects.asStore() },
+      );
+
+      expect(result).toMatchObject({
+        ok: false,
+        outcome: "split_state",
+        failed_step: "projects_integrations",
+      });
+      expect(fakes.mementos.pathRepairRequests).toHaveLength(1);
+      expect(fakes.mementos.pathRepairRollbackAttempts).toHaveLength(1);
+      expect(fakes.mementos.pathRepairRollbackRequests).toHaveLength(0);
+      expect(result.rollback).toContainEqual(expect.objectContaining({
+        step_id: "mementos_project_path_repair",
+        status: "failed",
+        reason_code: "mementos_path_repair_rollback_conflict",
+        accepted_receipt_id: expect.any(String),
+        target_id: ids.mementosProjectId,
+      }));
+      expect(fakes.mementos.records.get(ids.mementosProjectId)).toEqual(foreignRecord);
+      expect(fakes.mementos.projectPathDigests.get(ids.mementosProjectId)).toBe(foreignTarget.target.digest);
+      expect(fakes.mementos.records.has(ids.mementosProjectId)).toBe(true);
+      expect(fakes.mementos.compensated).toEqual([]);
+      expect(fakes.mementos.inverseRequests).toEqual([]);
+      expect(result.artifacts).toContainEqual(expect.objectContaining({
+        kind: "project_path_repair",
+        authority: "mementos",
+        target_id: ids.mementosProjectId,
+        authority_receipt_id: expect.any(String),
+      }));
+      expect(JSON.stringify(result)).not.toContain(sourceTarget.path);
+      expect(JSON.stringify(result)).not.toContain(target.path);
+      expect(JSON.stringify(result)).not.toContain(foreignTarget.path);
     } finally {
       sourceDb.close();
       db.close();
@@ -2610,6 +3544,14 @@ describe("full project registration transaction", () => {
           tenant_id: "tenant-test",
           corpus_id: "todos-test-corpus",
           ambiguous_outcome_reconciliation: true,
+        }),
+        expect.objectContaining({
+          authority: "mementos",
+          guarded_update: true,
+          guarded_update_route: "mementos.project-guarded-update.v1",
+          expected_revision_compare_and_swap: true,
+          caller_idempotency: true,
+          exact_inverse_rollback: true,
         }),
       ]));
       expect(manifest.steps).toEqual(expect.arrayContaining([
