@@ -6,6 +6,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.127]
+
+### Fixed
+
+- Trusted npm releases now run contracts conformance and the no-cloud scan as
+  explicit workflow gates, then publish with package scripts disabled so npm
+  cannot rerun the full flaky suite after the reviewed gates have passed.
+
 ## [0.1.126]
 
 ### Fixed

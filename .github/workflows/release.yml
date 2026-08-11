@@ -145,6 +145,12 @@ jobs:
       - name: Test
         run: bun run test
 
+      - name: Contracts conformance
+        run: bun run contracts:conformance
+
+      - name: No-cloud scan
+        run: ./node_modules/.bin/contracts no-cloud-scan .
+
       - name: Build
         run: bun run build
 
@@ -153,9 +159,13 @@ jobs:
       # publish-scoped credential. --provenance is passed explicitly: npm
       # documents provenance as automatic under trusted publishing, but that
       # has been reported not to hold in practice, and passing the flag is a
-      # no-op when it is already automatic.
+      # no-op when it is already automatic. The dedicated release gates above
+      # have already run typecheck, tests, contracts conformance, no-cloud scan,
+      # and build. --ignore-scripts prevents npm from re-entering prepublishOnly
+      # and prepack after those exact gates pass, while normal/manual package
+      # publishes still retain the package lifecycle scripts in package.json.
       - name: Publish to npm via OIDC trusted publishing
-        run: npm publish --provenance --access public
+        run: npm publish --provenance --access public --ignore-scripts
 
       - name: Verify the published version from the registry
         run: |
