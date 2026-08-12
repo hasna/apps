@@ -35,6 +35,8 @@ import {
   type TodosProjectRegistrationRecord,
   type TodosProjectRegistrationRequest,
   type TodosProjectRegistrationResourceKind,
+  type TodosPriorRegistrationAdoptionCurrentRecord,
+  type TodosPriorRegistrationAdoptionValidation,
   type TodosProjectResource,
   type TodosProjectResourcePage,
   type TodosProjectResourcePageRequest,
@@ -269,17 +271,7 @@ function projectRecord(project: Project): TodosProjectRegistrationRecord {
   return {
     target_id: project.id,
     revision: project.updated_at,
-    digest: digestProjectRegistrationValue({
-      id: project.id,
-      name: project.name,
-      path: project.path,
-      description: project.description,
-      task_list_id: project.task_list_id,
-      task_prefix: project.task_prefix,
-      task_counter: project.task_counter,
-      created_at: project.created_at,
-      updated_at: project.updated_at,
-    }),
+    digest: projectRegistrationDigest(project),
   };
 }
 
@@ -287,17 +279,44 @@ function taskListRecord(taskList: TaskList): TodosProjectRegistrationRecord {
   return {
     target_id: taskList.id,
     revision: taskList.updated_at,
-    digest: digestProjectRegistrationValue({
-      id: taskList.id,
-      project_id: taskList.project_id,
-      slug: taskList.slug,
-      name: taskList.name,
-      description: taskList.description,
-      metadata: taskList.metadata,
-      created_at: taskList.created_at,
-      updated_at: taskList.updated_at,
-    }),
+    digest: taskListRegistrationDigest(taskList),
   };
+}
+
+function projectRegistrationDigest(project: Project): string {
+  return digestProjectRegistrationValue({
+    id: project.id,
+    name: project.name,
+    path: project.path,
+    description: project.description,
+    task_list_id: project.task_list_id,
+    task_prefix: project.task_prefix,
+    task_counter: project.task_counter,
+    created_at: project.created_at,
+    updated_at: project.updated_at,
+  });
+}
+
+function taskListRegistrationDigest(taskList: TaskList): string {
+  return digestProjectRegistrationValue({
+    id: taskList.id,
+    project_id: taskList.project_id,
+    slug: taskList.slug,
+    name: taskList.name,
+    description: taskList.description,
+    metadata: taskList.metadata,
+    created_at: taskList.created_at,
+    updated_at: taskList.updated_at,
+  });
+}
+
+function canonicalValuesEqual(left: unknown, right: unknown): boolean {
+  try {
+    return canonicalProjectRegistrationJson(left)
+      === canonicalProjectRegistrationJson(right);
+  } catch {
+    return false;
+  }
 }
 
 function receiptId(input: Omit<TodosProjectRegistrationReceiptRow, "receipt_id" | "created_at">): string {
@@ -365,6 +384,42 @@ function normalizedCallDigest(request: TodosProjectRegistrationRequest): string 
     bind_existing: request.bind_existing === true,
     accepted_receipt_id: request.accepted_receipt?.receipt_id ?? null,
   });
+}
+
+function legacyNormalizedCallDigestBeforeBindExisting(
+  request: TodosProjectRegistrationRequest,
+): string {
+  return digestProjectRegistrationValue({
+    authority_route: request.authority_route,
+    package_version: request.package_version,
+    authority_id: request.authority_id,
+    tenant_id: request.tenant_id,
+    corpus_id: request.corpus_id,
+    operation_id: request.operation_id,
+    step_id: request.step_id,
+    resource_kind: request.resource_kind,
+    direction: request.direction,
+    target_selector: request.target_selector,
+    idempotency_key: request.idempotency_key,
+    request_digest: request.request_digest,
+    precondition_digest: request.precondition_digest,
+    project_id: request.project_id,
+    project_slug: request.project_slug,
+    project_name: request.project_name,
+    desired: request.desired,
+    accepted_receipt_id: request.accepted_receipt?.receipt_id ?? null,
+  });
+}
+
+function acceptedCallMatches(
+  request: TodosProjectRegistrationRequest,
+  accepted: TodosProjectRegistrationReceiptRow,
+  callDigest = normalizedCallDigest(request),
+): boolean {
+  if (accepted.normalized_call_digest === callDigest) return true;
+  return request.bind_existing !== true
+    && accepted.normalized_call_digest
+      === legacyNormalizedCallDigestBeforeBindExisting(request);
 }
 
 function assertCommonRequest(
@@ -869,6 +924,7 @@ implements TodosProjectRegistrationAuthority {
       exact_terminal_lookup: true,
       exact_readback: true,
       bind_existing_adoption: true,
+      prior_registration_adoption_validation: true,
       project_resource_enumeration: true,
       project_resource_page_limit: PROJECT_RESOURCE_PAGE_LIMIT,
       conditional_inverse: true,
@@ -977,7 +1033,7 @@ implements TodosProjectRegistrationAuthority {
           "duplicate receipt points to a missing accepted receipt",
         );
       }
-      if (accepted.normalized_call_digest !== callDigest) {
+      if (!acceptedCallMatches(request, accepted, callDigest)) {
         return this.terminalFor(
           transaction,
           request,
@@ -997,7 +1053,7 @@ implements TodosProjectRegistrationAuthority {
       direction: "forward",
     });
     if (!accepted) return null;
-    if (accepted.normalized_call_digest === callDigest) {
+    if (acceptedCallMatches(request, accepted, callDigest)) {
       return this.duplicateFor(transaction, request, callDigest, accepted);
     }
     return this.terminalFor(
@@ -1161,11 +1217,14 @@ implements TodosProjectRegistrationAuthority {
           );
           if (
             binding?.state === "accepted"
-            && binding.normalized_call_digest === callDigest
             && binding.accepted_receipt_id
           ) {
             const accepted = await transaction.getReceiptById(binding.accepted_receipt_id);
-            if (accepted) {
+            if (
+              accepted
+              && binding.normalized_call_digest === accepted.normalized_call_digest
+              && acceptedCallMatches(request, accepted, callDigest)
+            ) {
               return this.duplicateFor(transaction, request, callDigest, accepted);
             }
           }
@@ -1261,7 +1320,7 @@ implements TodosProjectRegistrationAuthority {
         direction: request.direction,
       });
       if (accepted) {
-        return accepted.normalized_call_digest === callDigest
+        return acceptedCallMatches(request, accepted, callDigest)
           ? this.duplicateFor(transaction, request, callDigest, accepted)
           : this.terminalFor(
             transaction,
@@ -1543,6 +1602,200 @@ implements TodosProjectRegistrationAuthority {
       complete: !hasMore,
       truncated: false,
     };
+  }
+
+  async validatePriorRegistrationAdoption(
+    sourceRequest: TodosProjectRegistrationRequest,
+    sourceReceipt: TodosProjectRegistrationReceipt,
+    currentRecord: TodosPriorRegistrationAdoptionCurrentRecord,
+  ): Promise<TodosPriorRegistrationAdoptionValidation> {
+    const startedAt = Date.now();
+    if (
+      !sourceRequest
+      || typeof sourceRequest !== "object"
+      || Array.isArray(sourceRequest)
+      || !sourceReceipt
+      || typeof sourceReceipt !== "object"
+      || Array.isArray(sourceReceipt)
+      || !currentRecord
+      || typeof currentRecord !== "object"
+      || Array.isArray(currentRecord)
+    ) {
+      throw new TodosProjectRegistrationError(
+        "TODOS_PROJECT_REGISTRATION_ADOPTION_REJECTED",
+        "source request, source receipt, and current record must be present objects",
+      );
+    }
+    requireString(sourceRequest.package_version, "package_version", {
+      max: 128,
+      pattern: PACKAGE_VERSION_PATTERN,
+    });
+    assertForwardRequest(sourceRequest, {
+      ...this.capabilityValue,
+      package_version: sourceRequest.package_version,
+    });
+    const validation = await this.backend.transaction(async (transaction) => {
+      const storedSource = await transaction.getReceiptById(sourceReceipt.receipt_id);
+      if (
+        !storedSource
+        || !canonicalValuesEqual(publicReceipt(storedSource), sourceReceipt)
+        || (storedSource.outcome !== "accepted"
+          && storedSource.outcome !== "duplicate_of_accepted")
+      ) {
+        throw new TodosProjectRegistrationError(
+          "TODOS_PROJECT_REGISTRATION_ADOPTION_REJECTED",
+          "source receipt is not an exact immutable accepted or duplicate receipt",
+          { receipt_id: sourceReceipt.receipt_id },
+        );
+      }
+      const accepted = storedSource.outcome === "accepted"
+        ? storedSource
+        : storedSource.duplicate_of_receipt_id
+          ? await transaction.getReceiptById(storedSource.duplicate_of_receipt_id)
+          : null;
+      if (
+        !accepted
+        || accepted.outcome !== "accepted"
+        || !accepted.target_id
+        || !accepted.result_revision
+        || !accepted.result_digest
+      ) {
+        throw new TodosProjectRegistrationError(
+          "TODOS_PROJECT_REGISTRATION_ADOPTION_REJECTED",
+          "source receipt does not resolve to one complete accepted receipt",
+          { receipt_id: sourceReceipt.receipt_id },
+        );
+      }
+      const receiptLineageMatches = (
+        receipt: TodosProjectRegistrationReceiptRow,
+      ): boolean =>
+        receipt.authority === "todos"
+        && receipt.route === sourceRequest.authority_route
+        && receipt.package_version === sourceRequest.package_version
+        && receipt.authority_id === sourceRequest.authority_id
+        && receipt.tenant_id === sourceRequest.tenant_id
+        && receipt.corpus_id === sourceRequest.corpus_id
+        && receipt.operation_id === sourceRequest.operation_id
+        && receipt.step_id === sourceRequest.step_id
+        && receipt.resource_kind === sourceRequest.resource_kind
+        && receipt.direction === "forward"
+        && receipt.target_selector === sourceRequest.target_selector
+        && receipt.idempotency_key === sourceRequest.idempotency_key
+        && receipt.request_digest === sourceRequest.request_digest
+        && receipt.precondition_digest === sourceRequest.precondition_digest
+        && acceptedCallMatches(sourceRequest, receipt);
+      if (
+        !receiptLineageMatches(storedSource)
+        || !receiptLineageMatches(accepted)
+        || (storedSource.outcome === "duplicate_of_accepted"
+          && (
+            storedSource.duplicate_of_receipt_id !== accepted.receipt_id
+            || storedSource.target_id !== accepted.target_id
+            || storedSource.result_revision !== accepted.result_revision
+            || storedSource.result_digest !== accepted.result_digest
+          ))
+      ) {
+        throw new TodosProjectRegistrationError(
+          "TODOS_PROJECT_REGISTRATION_ADOPTION_REJECTED",
+          "receipt authority, operation, request, precondition, or normalized-call lineage changed",
+        );
+      }
+
+      const binding = await transaction.getBinding(
+        authorityScope(this.capabilityValue),
+        sourceRequest.resource_kind,
+        sourceRequest.target_selector,
+      );
+      if (
+        !binding
+        || binding.state !== "accepted"
+        || binding.operation_id !== sourceRequest.operation_id
+        || binding.step_id !== sourceRequest.step_id
+        || binding.direction !== "forward"
+        || binding.idempotency_key !== sourceRequest.idempotency_key
+        || binding.request_digest !== sourceRequest.request_digest
+        || binding.precondition_digest !== sourceRequest.precondition_digest
+        || binding.normalized_call_digest !== accepted.normalized_call_digest
+        || binding.target_id !== accepted.target_id
+        || binding.accepted_receipt_id !== accepted.receipt_id
+        || binding.result_revision !== accepted.result_revision
+        || binding.result_digest !== accepted.result_digest
+      ) {
+        throw new TodosProjectRegistrationError(
+          "TODOS_PROJECT_REGISTRATION_ADOPTION_REJECTED",
+          "accepted binding does not match the exact accepted receipt and source lineage",
+        );
+      }
+
+      const current = sourceRequest.resource_kind === "project"
+        ? await transaction.getProject(accepted.target_id)
+        : await transaction.getTaskList(accepted.target_id);
+      if (
+        !current
+        || !canonicalValuesEqual(current, currentRecord)
+        || current.id !== accepted.target_id
+        || current.created_at !== accepted.result_revision
+      ) {
+        throw new TodosProjectRegistrationError(
+          "TODOS_PROJECT_REGISTRATION_ADOPTION_REJECTED",
+          "current record does not match the accepted target incarnation",
+          { target_id: accepted.target_id },
+        );
+      }
+
+      let stableMatch = false;
+      if (sourceRequest.resource_kind === "task_list") {
+        stableMatch = taskListRegistrationDigest({
+          ...(current as TaskList),
+          updated_at: accepted.result_revision,
+        }) === accepted.result_digest;
+      } else {
+        const project = current as Project;
+        if (!Number.isSafeInteger(project.task_counter) || project.task_counter < 0) {
+          throw new TodosProjectRegistrationError(
+            "TODOS_PROJECT_REGISTRATION_ADOPTION_REJECTED",
+            "current project task counter is not a valid monotonic registration field",
+          );
+        }
+        for (let priorTaskCounter = 0; priorTaskCounter <= project.task_counter; priorTaskCounter += 1) {
+          if (Date.now() - startedAt > sourceRequest.time_budget_ms) {
+            throw new TodosProjectRegistrationError(
+              "TODOS_PROJECT_REGISTRATION_TIME_BUDGET_EXCEEDED",
+              "prior registration adoption validation exceeded its time budget",
+            );
+          }
+          if (projectRegistrationDigest({
+            ...project,
+            task_counter: priorTaskCounter,
+            updated_at: accepted.result_revision,
+          }) === accepted.result_digest) {
+            stableMatch = true;
+            break;
+          }
+        }
+      }
+      if (!stableMatch) {
+        throw new TodosProjectRegistrationError(
+          "TODOS_PROJECT_REGISTRATION_ADOPTION_REJECTED",
+          "stable project-registration fields changed after the accepted receipt",
+          { target_id: accepted.target_id },
+        );
+      }
+
+      return {
+        valid: true as const,
+        resource_kind: sourceRequest.resource_kind,
+        target_id: accepted.target_id,
+        source_receipt_id: storedSource.receipt_id,
+        accepted_receipt_id: accepted.receipt_id,
+        source_outcome: storedSource.outcome,
+        created_at: current.created_at,
+        current_revision: current.updated_at,
+        accepted_result_digest: accepted.result_digest,
+      };
+    });
+    assertWithinBounds(validation, sourceRequest, startedAt);
+    return validation;
   }
 
   private async storedAcceptedReceipt(

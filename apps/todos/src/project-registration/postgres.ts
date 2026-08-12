@@ -366,6 +366,7 @@ implements TodosProjectRegistrationBackendTransaction {
         AND (payload->>'path' = $2 OR payload->>'task_list_id' = $3)
       ORDER BY payload->>'created_at' ASC, object_id ASC
       LIMIT 1
+      FOR UPDATE
     `, [this.service, path, taskListSlug]);
     return result.rows[0] ? parsePayload<Project>(result.rows[0].payload) : null;
   }
@@ -377,6 +378,7 @@ implements TodosProjectRegistrationBackendTransaction {
         AND payload->>'project_id' = $2 AND payload->>'slug' = $3
       ORDER BY payload->>'created_at' ASC, object_id ASC
       LIMIT 1
+      FOR UPDATE
     `, [this.service, projectId, slug]);
     return result.rows[0] ? parsePayload<TaskList>(result.rows[0].payload) : null;
   }
@@ -394,11 +396,25 @@ implements TodosProjectRegistrationBackendTransaction {
   }
 
   async getProject(id: string): Promise<Project | null> {
-    return await this.storage.projects.get(id);
+    const result = await this.client.query<{ payload: unknown }>(`
+      SELECT payload FROM ${this.tableName}
+      WHERE service = $1 AND object_type = 'projects' AND object_id = $2
+        AND deleted_at IS NULL
+      LIMIT 1
+      FOR SHARE
+    `, [this.service, id]);
+    return result.rows[0] ? parsePayload<Project>(result.rows[0].payload) : null;
   }
 
   async getTaskList(id: string): Promise<TaskList | null> {
-    return await this.storage.taskLists.get(id);
+    const result = await this.client.query<{ payload: unknown }>(`
+      SELECT payload FROM ${this.tableName}
+      WHERE service = $1 AND object_type = 'task_lists' AND object_id = $2
+        AND deleted_at IS NULL
+      LIMIT 1
+      FOR SHARE
+    `, [this.service, id]);
+    return result.rows[0] ? parsePayload<TaskList>(result.rows[0].payload) : null;
   }
 
   async lockCompensationWrites(): Promise<void> {

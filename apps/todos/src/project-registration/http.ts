@@ -10,6 +10,8 @@ import {
   type TodosProjectRegistrationRecord,
   type TodosProjectRegistrationRequest,
   type TodosProjectRegistrationResourceKind,
+  type TodosPriorRegistrationAdoptionValidation,
+  type TodosPriorRegistrationAdoptionValidationRequest,
   type TodosProjectResourcePage,
   type TodosProjectResourcePageRequest,
 } from "./types.js";
@@ -118,6 +120,16 @@ export async function handleTodosProjectRegistrationHttpRequest(
           response_byte_limit: number;
           time_budget_ms: number;
         }),
+      });
+    }
+    if (action === "validate-prior-adoption") {
+      const input = body as unknown as TodosPriorRegistrationAdoptionValidationRequest;
+      return json({
+        validation: await authority.validatePriorRegistrationAdoption(
+          input.source_request,
+          input.source_receipt,
+          input.current_record,
+        ),
       });
     }
     if (action === "compensate") {
@@ -257,6 +269,24 @@ implements TodosProjectRegistrationAuthority {
       `/resources?${query.toString()}`,
     );
     return body.page;
+  }
+
+  async validatePriorRegistrationAdoption(
+    sourceRequest: TodosPriorRegistrationAdoptionValidationRequest["source_request"],
+    sourceReceipt: TodosPriorRegistrationAdoptionValidationRequest["source_receipt"],
+    currentRecord: TodosPriorRegistrationAdoptionValidationRequest["current_record"],
+  ): Promise<TodosPriorRegistrationAdoptionValidation> {
+    const body = await this.request<{
+      validation: TodosPriorRegistrationAdoptionValidation;
+    }>("/validate-prior-adoption", {
+      method: "POST",
+      body: JSON.stringify({
+        source_request: withoutTarget(sourceRequest),
+        source_receipt: sourceReceipt,
+        current_record: currentRecord,
+      }),
+    });
+    return body.validation;
   }
 
   async compensate(

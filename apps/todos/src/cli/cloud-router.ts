@@ -42,6 +42,8 @@ import type {
   TodosProjectRegistrationRecord,
   TodosProjectRegistrationRequest,
   TodosProjectRegistrationResourceKind,
+  TodosPriorRegistrationAdoptionValidation,
+  TodosPriorRegistrationAdoptionValidationRequest,
   TodosProjectResourcePage,
   TodosProjectResourcePageRequest,
 } from "../project-registration/index.js";
@@ -707,7 +709,7 @@ function unwrapTaskManifestEnvelope<T>(
 
 function unwrapProjectRegistrationEnvelope<T>(
   raw: unknown,
-  key: "capability" | "receipt" | "record" | "verification" | "page",
+  key: "capability" | "receipt" | "record" | "verification" | "page" | "validation",
   route: string,
 ): T {
   if (!raw || typeof raw !== "object" || Array.isArray(raw) || !(key in raw)) {
@@ -758,6 +760,19 @@ export async function cloudReadExactProjectRegistration(
     await requiredRemoteRoute(client, route, () =>
       client.transport.post<unknown>("/project-registration/read-exact", input)),
     "record",
+    route,
+  );
+}
+
+export async function cloudValidatePriorRegistrationAdoption(
+  client: HasnaStorageClient,
+  input: TodosPriorRegistrationAdoptionValidationRequest,
+): Promise<TodosPriorRegistrationAdoptionValidation> {
+  const route = "/v1/project-registration/validate-prior-adoption";
+  return unwrapProjectRegistrationEnvelope(
+    await requiredRemoteRoute(client, route, () =>
+      client.transport.post<unknown>("/project-registration/validate-prior-adoption", input)),
+    "validation",
     route,
   );
 }

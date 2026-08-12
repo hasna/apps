@@ -3,13 +3,14 @@ import { Database } from "bun:sqlite";
 import {
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createPlan } from "../db/plans.js";
-import { createProject } from "../db/projects.js";
+import { createProject, getProject } from "../db/projects.js";
 import { runMigrations } from "../db/schema.js";
 import { createTaskList } from "../db/task-lists.js";
 import { createTask } from "../db/tasks.js";
@@ -317,6 +318,7 @@ describe("project-registration CLI", () => {
       .capability as TodosProjectRegistrationCapability;
     expect(capability).toMatchObject({
       bind_existing_adoption: true,
+      prior_registration_adoption_validation: true,
       project_resource_enumeration: true,
       project_resource_page_limit: 500,
     });
@@ -345,10 +347,40 @@ describe("project-registration CLI", () => {
       exitCode: projectBind.exitCode,
       stderr: projectBind.stderr,
     }).toEqual({ exitCode: 0, stderr: "" });
-    expect(JSON.parse(projectBind.stdout).receipt).toMatchObject({
+    const projectBindingReceipt = JSON.parse(projectBind.stdout).receipt;
+    expect(projectBindingReceipt).toMatchObject({
       outcome: "accepted",
       target_id: project.id,
       created_by_operation: false,
+    });
+    const validationDb = new Database(dbPath);
+    const validationPath = join(root, "prior-adoption-validation.json");
+    writeFileSync(validationPath, JSON.stringify({
+      source_request: JSON.parse(readFileSync(projectRequestPath, "utf8")),
+      source_receipt: projectBindingReceipt,
+      current_record: getProject(project.id, validationDb),
+    }));
+    validationDb.close();
+    const validationResult = await runCli(
+      root,
+      dbPath,
+      [
+        "--json",
+        "project-registration",
+        "validate-prior-adoption",
+        "--file",
+        validationPath,
+      ],
+    );
+    expect({
+      exitCode: validationResult.exitCode,
+      stderr: validationResult.stderr,
+    }).toEqual({ exitCode: 0, stderr: "" });
+    expect(JSON.parse(validationResult.stdout).validation).toMatchObject({
+      valid: true,
+      source_receipt_id: projectBindingReceipt.receipt_id,
+      accepted_receipt_id: projectBindingReceipt.receipt_id,
+      target_id: project.id,
     });
 
     const taskListRequestPath = join(root, "task-list-request.json");

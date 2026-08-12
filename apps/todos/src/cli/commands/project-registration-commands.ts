@@ -8,6 +8,7 @@ import {
   type TodosProjectRegistrationLookupRequest,
   type TodosProjectRegistrationRequest,
   type TodosProjectRegistrationResourceKind,
+  type TodosPriorRegistrationAdoptionValidationRequest,
   type TodosProjectResourcePage,
   type TodosProjectResourcePageRequest,
 } from "../../project-registration/index.js";
@@ -23,6 +24,7 @@ import {
   cloudLookupProjectRegistrationReceipt,
   cloudProjectRegistrationCapability,
   cloudReadExactProjectRegistration,
+  cloudValidatePriorRegistrationAdoption,
   cloudVerifyInverseProjectRegistration,
   getTodosCloudClient,
 } from "../cloud-router.js";
@@ -274,6 +276,31 @@ export function registerProjectRegistrationCommands(program: Command): void {
       try {
         const result = await lookupRegistrationReceipt(parseLookupRequest(requestFile));
         output(result, jsonRequested(program, opts));
+      } catch (error) {
+        handleError(error);
+      }
+    });
+
+  registration
+    .command("validate-prior-adoption")
+    .description("Fail closed unless a prior accepted registration still matches its exact current resource")
+    .requiredOption("--file <path>", "Prior-adoption validation JSON file")
+    .option("-j, --json", "Output as JSON")
+    .action(async (opts: { file: string; json?: boolean }) => {
+      try {
+        const input = parseJsonFile<TodosPriorRegistrationAdoptionValidationRequest>(
+          opts.file,
+          "project-registration prior-adoption validation",
+        );
+        const remote = getTodosCloudClient();
+        const validation = remote
+          ? await cloudValidatePriorRegistrationAdoption(remote, input)
+          : await localAuthority().validatePriorRegistrationAdoption(
+            input.source_request,
+            input.source_receipt,
+            input.current_record,
+          );
+        output({ validation }, jsonRequested(program, opts));
       } catch (error) {
         handleError(error);
       }

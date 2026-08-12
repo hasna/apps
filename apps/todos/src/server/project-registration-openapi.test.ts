@@ -12,6 +12,8 @@ describe("project-registration OpenAPI and generated SDK", () => {
       .toBe("getProjectRegistrationCapability");
     expect(document.paths["/v1/project-registration/resources"].get.operationId)
       .toBe("listProjectRegistrationResources");
+    expect(document.paths["/v1/project-registration/validate-prior-adoption"].post.operationId)
+      .toBe("validatePriorRegistrationAdoption");
     expect(document.paths["/v1/project-registration/resources"].get.responses["409"])
       .toMatchObject({
         content: {
@@ -24,11 +26,13 @@ describe("project-registration OpenAPI and generated SDK", () => {
       additionalProperties: false,
       required: expect.arrayContaining([
         "bind_existing_adoption",
+        "prior_registration_adoption_validation",
         "project_resource_enumeration",
         "project_resource_page_limit",
       ]),
       properties: {
         bind_existing_adoption: { type: "boolean", enum: [true] },
+        prior_registration_adoption_validation: { type: "boolean", enum: [true] },
         project_resource_enumeration: { type: "boolean", enum: [true] },
         project_resource_page_limit: { type: "integer", minimum: 1 },
       },
@@ -101,6 +105,7 @@ describe("project-registration OpenAPI and generated SDK", () => {
               exact_terminal_lookup: true,
               exact_readback: true,
               bind_existing_adoption: true,
+              prior_registration_adoption_validation: true,
               project_resource_enumeration: true,
               project_resource_page_limit: 500,
               conditional_inverse: true,
@@ -154,6 +159,21 @@ describe("project-registration OpenAPI and generated SDK", () => {
             },
           });
         }
+        if (path.endsWith("/validate-prior-adoption")) {
+          return Response.json({
+            validation: {
+              valid: true,
+              resource_kind: "project",
+              target_id: receipt.target_id,
+              source_receipt_id: receipt.receipt_id,
+              accepted_receipt_id: receipt.receipt_id,
+              source_outcome: "accepted",
+              created_at: receipt.created_at,
+              current_revision: receipt.result_revision,
+              accepted_result_digest: receipt.result_digest,
+            },
+          });
+        }
         if (path.endsWith("/verify-inverse")) {
           return Response.json({
             verification: {
@@ -189,6 +209,18 @@ describe("project-registration OpenAPI and generated SDK", () => {
       response_byte_limit: 65536,
       time_budget_ms: 5000,
     } satisfies ProjectRegistrationRequest;
+    const currentRecord = {
+      id: receipt.target_id,
+      name: "SDK fixture",
+      path: "hasna-project://wks_sdkfixture0001",
+      description: null,
+      task_list_id: "todos-sdk-fixture",
+      task_prefix: "SDK",
+      task_counter: 0,
+      created_at: receipt.created_at,
+      updated_at: receipt.result_revision!,
+      machine_id: null,
+    };
 
     await client.getProjectRegistrationCapability();
     await client.createProjectRegistrationResource(request);
@@ -221,6 +253,11 @@ describe("project-registration OpenAPI and generated SDK", () => {
       limit: 2,
       cursor: "cursor-fixture",
     });
+    await client.validatePriorRegistrationAdoption({
+      source_request: request,
+      source_receipt: receipt,
+      current_record: currentRecord,
+    });
     await client.compensateProjectRegistrationResource(request);
     await client.verifyInverseProjectRegistrationResource(request);
 
@@ -230,6 +267,7 @@ describe("project-registration OpenAPI and generated SDK", () => {
       "POST /v1/project-registration/read-exact",
       "POST /v1/project-registration/receipts/lookup",
       "GET /v1/project-registration/resources",
+      "POST /v1/project-registration/validate-prior-adoption",
       "POST /v1/project-registration/compensate",
       "POST /v1/project-registration/verify-inverse",
     ]);
@@ -239,5 +277,10 @@ describe("project-registration OpenAPI and generated SDK", () => {
     expect(new URL(requests[4]!.url).searchParams.get("limit")).toBe("2");
     expect(new URL(requests[4]!.url).searchParams.get("cursor")).toBe("cursor-fixture");
     expect(await requests[1]!.json()).toMatchObject({ bind_existing: true });
+    expect(await requests[5]!.json()).toEqual({
+      source_request: request,
+      source_receipt: receipt,
+      current_record: currentRecord,
+    });
   });
 });
