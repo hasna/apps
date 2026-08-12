@@ -117,6 +117,7 @@ export class TypedActionWorker {
       throw new Error("typed worker timeout must be a non-negative number");
     }
     const { slug, version } = parseAutomationReference(reference);
+    assertConfiguredActor(this.#authority.actor, options.actor);
     const automation = requireAutomationForReference(this.store, slug, version);
     if (automation.spec.version !== version) {
       throw new Error(`automation version not found: ${slug}@${version}`);
@@ -410,9 +411,21 @@ function assertAuthority(manifest: ActionManifest, actor: ActorRef | undefined, 
   if (actor && manifest.actor.types.length && !manifest.actor.types.includes(actor.type)) {
     throw typedActionError("ACTION_ACTOR_FORBIDDEN", `actor type is not authorized for ${manifest.id}: ${actor.type}`, false);
   }
+  assertConfiguredActor(authority.actor, actor);
   const permissions = new Set(authority.permissions ?? []);
   for (const permission of manifest.scope.permissions ?? []) {
     if (!permissions.has(permission)) throw typedActionError("ACTION_AUTHORITY_DENIED", `authority lacks permission: ${permission}`, false);
+  }
+}
+
+function assertConfiguredActor(configured: ActorRef | undefined, supplied: ActorRef | undefined): void {
+  if (!configured || !supplied) return;
+  if (configured.id !== supplied.id || configured.type !== supplied.type) {
+    throw typedActionError(
+      "ACTION_ACTOR_MISMATCH",
+      `supplied actor does not match configured authority actor: ${configured.id}/${configured.type}`,
+      false,
+    );
   }
 }
 

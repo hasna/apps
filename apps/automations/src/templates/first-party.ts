@@ -73,11 +73,20 @@ export interface WorkLifecycleAdapter {
 }
 
 export interface ProjectSnapshotAdapter {
-  readProjects(projectId: string, limit: number, context: FirstPartyAdapterContext): JsonValue | Promise<JsonValue>;
-  readTodos(projectId: string, limit: number, context: FirstPartyAdapterContext): JsonValue | Promise<JsonValue>;
-  readConversations(projectId: string, limit: number, context: FirstPartyAdapterContext): JsonValue | Promise<JsonValue>;
-  readMementos(projectId: string, limit: number, context: FirstPartyAdapterContext): JsonValue | Promise<JsonValue>;
-  readRepository(projectId: string, limit: number, context: FirstPartyAdapterContext): JsonValue | Promise<JsonValue>;
+  readonly authority: "cloud";
+  readProjects(projectId: string, limit: number, context: FirstPartyAdapterContext): ProjectSnapshotReadResult | Promise<ProjectSnapshotReadResult>;
+  readTodos(projectId: string, limit: number, context: FirstPartyAdapterContext): ProjectSnapshotReadResult | Promise<ProjectSnapshotReadResult>;
+  readConversations(projectId: string, limit: number, context: FirstPartyAdapterContext): ProjectSnapshotReadResult | Promise<ProjectSnapshotReadResult>;
+  readMementos(projectId: string, limit: number, context: FirstPartyAdapterContext): ProjectSnapshotReadResult | Promise<ProjectSnapshotReadResult>;
+  readRepository(projectId: string, limit: number, context: FirstPartyAdapterContext): ProjectSnapshotReadResult | Promise<ProjectSnapshotReadResult>;
+}
+
+export interface ProjectSnapshotReadResult {
+  readonly authority: "cloud";
+  readonly complete: boolean;
+  readonly verified: boolean;
+  readonly value: JsonValue;
+  readonly receipt?: JsonObject;
 }
 
 export interface SessionBootstrapScope {
@@ -335,6 +344,9 @@ export function createProjectSnapshotAction(
 ): TypedActionDefinition {
   const maxItems = positiveInteger(options.maxItems ?? 100, "project snapshot maxItems");
   const maxBytes = positiveInteger(options.maxBytes ?? 65_536, "project snapshot maxBytes");
+  if (adapter.authority !== "cloud") {
+    throw new Error("project snapshot requires a cloud-authoritative adapter");
+  }
   return {
     manifest: manifest({
       id: FIRST_PARTY_ACTION_IDS.projectSnapshot,
@@ -352,25 +364,37 @@ export function createProjectSnapshotAction(
       const projectId = requireNonEmptyString(input.projectId, "projectId");
       const requestedLimit = input.limit === undefined ? 50 : requirePositiveNumber(input.limit, "limit");
       const limit = Math.min(requestedLimit, maxItems);
-      const snapshot: JsonObject = {};
+      const snapshot: JsonObject = priorSnapshot(context);
       return executeIndependentSinks(
         context,
         PROJECT_SNAPSHOT_SOURCES,
         async (source) => {
           const adapterContext = firstPartyContext(context);
-          let value: JsonValue;
-          if (source === "projects") value = await adapter.readProjects(projectId, limit, adapterContext);
-          else if (source === "todos") value = await adapter.readTodos(projectId, limit, adapterContext);
-          else if (source === "conversations") value = await adapter.readConversations(projectId, limit, adapterContext);
-          else if (source === "mementos") value = await adapter.readMementos(projectId, limit, adapterContext);
-          else value = await adapter.readRepository(projectId, limit, adapterContext);
-          const bounded = boundedSnapshotValue(value, limit, maxBytes, source);
+          const rawResult = source === "projects"
+            ? await adapter.readProjects(projectId, limit, adapterContext)
+            : source === "todos"
+              ? await adapter.readTodos(projectId, limit, adapterContext)
+              : source === "conversations"
+                ? await adapter.readConversations(projectId, limit, adapterContext)
+                : source === "mementos"
+                ? await adapter.readMementos(projectId, limit, adapterContext)
+                : await adapter.readRepository(projectId, limit, adapterContext);
+          const readResult = requireProjectSnapshotReadResult(rawResult, source);
+          if (readResult.authority !== "cloud" || !readResult.complete || !readResult.verified) {
+            throw actionError(
+              "SOURCE_UNVERIFIED",
+              `${source} source must be cloud-authoritative, complete, and verified`,
+            );
+          }
+          const bounded = boundedSnapshotValue(readResult.value, limit, maxBytes, source);
           snapshot[source] = bounded;
           return {
             verified: true,
+            complete: true,
             count: snapshotCount(bounded),
             bytes: new TextEncoder().encode(JSON.stringify(bounded)).byteLength,
-            authority: "injected-cloud-adapter",
+            authority: readResult.authority,
+            sourceReceipt: readResult.receipt ?? null,
           };
         },
         "project snapshot",
@@ -432,6 +456,72 @@ export function createSessionBootstrapAction(
       const selected = selectedSinks(context, SESSION_BOOTSTRAP_BINDINGS);
       const receipts: TypedActionDeliveryReceipt[] = [];
       for (const binding of selected) {
+        const prior = context.priorReceipts.find((receipt) => receipt.sink === binding);
+        const priorCompensation = isObject(prior?.receipt)
+          && isObject(prior.receipt.compensation)
+          && prior.receipt.compensation.kind === "failed"
+          ? prior.receipt.compensation
+          : undefined;
+        let compensationRetry: JsonObject | undefined;
+        if (priorCompensation) {
+          const priorBindingId = prior?.receipt?.bindingId;
+          if (typeof priorBindingId !== "string" || priorBindingId.trim() === "") {
+            receipts.push({
+              sink: binding,
+              status: "failed",
+              receipt: {
+                ...(prior?.receipt ?? {}),
+                compensation: {
+                  ...priorCompensation,
+                  retry: {
+                    attempted: false,
+                    error: "prior compensation receipt has no exact binding id",
+                  },
+                },
+              },
+              error: {
+                code: "SESSION_COMPENSATION_BINDING_ID_MISSING",
+                message: `${binding} compensation cannot retry without the exact prior binding id`,
+                retryable: false,
+              },
+            });
+            continue;
+          }
+          try {
+            const compensation = await adapter.compensateBinding(
+              binding,
+              priorBindingId,
+              adapterContext,
+            );
+            compensationRetry = {
+              bindingId: priorBindingId,
+              receipt: compensation.receipt,
+            };
+          } catch (error) {
+            const compensationError = toActionError(error, "SESSION_COMPENSATION_FAILED");
+            receipts.push({
+              sink: binding,
+              status: "failed",
+              receipt: {
+                ...(prior?.receipt ?? {}),
+                compensation: {
+                  ...priorCompensation,
+                  retry: {
+                    attempted: true,
+                    error: compensationError as unknown as JsonValue,
+                  },
+                },
+              },
+              error: {
+                code: "SESSION_COMPENSATION_FAILED",
+                message: `compensation failed for ${binding}; no replacement binding was created`,
+                retryable: true,
+                details: compensationError as unknown as JsonValue,
+              },
+            });
+            continue;
+          }
+        }
         try {
           const bindingInput = requireObject(input[binding], `${binding} binding input`);
           const result = await adapter.createBinding(binding, bindingInput, scope, adapterContext);
@@ -443,6 +533,12 @@ export function createSessionBootstrapAction(
             receipt: {
               ...result.receipt,
               bindingId,
+              ...(compensationRetry ? {
+                compensationRetry: {
+                  bindingId: compensationRetry.bindingId,
+                  receipt: compensationRetry.receipt,
+                },
+              } : {}),
               compensation: {
                 kind: "available",
                 actionId: FIRST_PARTY_ACTION_IDS.sessionBootstrapCompensate,
@@ -529,7 +625,44 @@ export function createFirstPartyActionDefinitions(options: {
     createWorkLifecycleAction(options.workLifecycle),
     createProjectSnapshotAction(options.projectSnapshot),
     createSessionBootstrapAction(options.sessionBootstrap),
+    createSessionBootstrapCompensateAction(options.sessionBootstrap),
   ];
+}
+
+export function createSessionBootstrapCompensateAction(
+  adapter: SessionBootstrapAdapter,
+): TypedActionDefinition {
+  return {
+    manifest: manifest({
+      id: FIRST_PARTY_ACTION_IDS.sessionBootstrapCompensate,
+      name: "Session bootstrap compensator",
+      description: "Compensate one previously created session binding by exact binding id.",
+      permissions: SESSION_BOOTSTRAP_TEMPLATE.authority.writePermissions,
+      readOnly: false,
+      rollback: {
+        strategy: "none",
+        notes: "Compensation is terminal for the named binding.",
+      },
+    }),
+    execute: async (context) => {
+      const input = requireObject(context.input, "session-bootstrap compensation input");
+      const binding = requireNonEmptyString(input.binding, "binding") as SessionBootstrapBinding;
+      if (!(SESSION_BOOTSTRAP_BINDINGS as readonly string[]).includes(binding)) {
+        throw actionError("SESSION_BINDING_UNKNOWN", `unknown session binding: ${binding}`);
+      }
+      const bindingId = requireNonEmptyString(input.bindingId, "bindingId");
+      const result = await adapter.compensateBinding(binding, bindingId, firstPartyContext(context));
+      return {
+        status: "succeeded",
+        summary: `compensated ${binding} binding`,
+        output: {
+          binding,
+          bindingId,
+          receipt: result.receipt,
+        },
+      };
+    },
+  };
 }
 
 async function executeIndependentSinks<TSink extends string>(
@@ -697,7 +830,9 @@ function boundedSnapshotValue(
   source: string,
 ): JsonValue {
   const bounded = Array.isArray(value) ? value.slice(0, limit) : value;
-  if ((Array.isArray(bounded) && bounded.length === 0)
+  if (bounded === null
+    || bounded === ""
+    || (Array.isArray(bounded) && bounded.length === 0)
     || (bounded !== null && typeof bounded === "object" && !Array.isArray(bounded) && Object.keys(bounded).length === 0)) {
     throw actionError("SOURCE_UNVERIFIED", `${source} source returned no verifiable records`);
   }
@@ -708,10 +843,46 @@ function boundedSnapshotValue(
   return structuredClone(bounded);
 }
 
+function requireProjectSnapshotReadResult(
+  value: unknown,
+  source: string,
+): ProjectSnapshotReadResult {
+  if (!isObject(value)
+    || value.authority !== "cloud"
+    || typeof value.complete !== "boolean"
+    || typeof value.verified !== "boolean"
+    || !("value" in value)) {
+    throw actionError(
+      "SOURCE_UNVERIFIED",
+      `${source} source must return a cloud-authoritative completeness envelope`,
+    );
+  }
+  return value as unknown as ProjectSnapshotReadResult;
+}
+
+function priorSnapshot(context: TypedActionContext): JsonObject {
+  const output = context.action.result?.output;
+  if (!isObject(output) || !isObject(output.snapshot)) return {};
+  const successfulSources = new Set(
+    context.priorReceipts
+      .filter((receipt) => receipt.status === "succeeded")
+      .map((receipt) => receipt.sink),
+  );
+  return Object.fromEntries(
+    Object.entries(output.snapshot)
+      .filter(([source]) => successfulSources.has(source))
+      .map(([source, value]) => [source, structuredClone(value as JsonValue)]),
+  );
+}
+
 function snapshotCount(value: JsonValue): number {
   if (Array.isArray(value)) return value.length;
   if (value !== null && typeof value === "object") return Object.keys(value).length;
   return 1;
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 function actionError(code: string, message: string): ActionError {

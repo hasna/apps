@@ -8,11 +8,13 @@ import {
   TypedActionWorker,
   createFirstPartyActionDefinitions,
   createFirstPartyTemplateRegistry,
+  FIRST_PARTY_ACTION_IDS,
   FIRST_PARTY_TEMPLATE_SLUGS,
   FIRST_PARTY_TEMPLATE_VERSION,
   installAutomationTemplate,
   previewAutomationTemplateExecution,
   type ProjectSnapshotAdapter,
+  type ProjectSnapshotReadResult,
   type SessionBootstrapAdapter,
   type WorkLifecycleAdapter,
 } from "../index.js";
@@ -147,16 +149,66 @@ describe("first-party automation templates", () => {
     }
   });
 
+  test("rejects caller actor identity mismatches before creating a run or writing", async () => {
+    const store = new AutomationsStore();
+    try {
+      let writes = 0;
+      install(store, FIRST_PARTY_TEMPLATE_SLUGS.workLifecycle, {
+        todos: {},
+        mementos: {},
+        conversations: {},
+      });
+      const actionWorker = worker(store, {
+        workLifecycle: {
+          updateTodos: async () => {
+            writes += 1;
+            return {};
+          },
+          updateMementos: async () => {
+            writes += 1;
+            return {};
+          },
+          updateConversations: async () => {
+            writes += 1;
+            return {};
+          },
+        },
+        projectSnapshot: emptySnapshotAdapter(),
+        sessionBootstrap: noOpSessionAdapter(),
+      });
+      const reference = `${FIRST_PARTY_TEMPLATE_SLUGS.workLifecycle}@${FIRST_PARTY_TEMPLATE_VERSION}`;
+
+      await expect(actionWorker.run(reference, {
+        actor: { id: "different-agent", type: "agent" },
+      })).rejects.toThrow("supplied actor does not match configured authority actor");
+      await expect(actionWorker.run(reference, {
+        actor: { id: actor.id, type: "service" },
+      })).rejects.toThrow("supplied actor does not match configured authority actor");
+
+      expect(writes).toBe(0);
+      expect(store.listRuns()).toHaveLength(0);
+    } finally {
+      store.close();
+    }
+  });
+
   test("project-snapshot is read-only, bounded, and leaves an empty source unverified until failed-only replay", async () => {
     const store = new AutomationsStore();
     try {
       let mementos: JsonValue = [];
       const calls: Record<string, number> = {};
-      const read = (source: string, value: () => JsonValue) => async (): Promise<JsonValue> => {
+      const read = (source: string, value: () => JsonValue) => async (): Promise<ProjectSnapshotReadResult> => {
         calls[source] = (calls[source] ?? 0) + 1;
-        return value();
+        return {
+          authority: "cloud",
+          complete: true,
+          verified: true,
+          value: value(),
+          receipt: { source },
+        };
       };
       const adapters: ProjectSnapshotAdapter = {
+        authority: "cloud",
         readProjects: read("projects", () => [{ id: "project-1" }]),
         readTodos: read("todos", () => [{ id: "task-1" }]),
         readConversations: read("conversations", () => [{ id: "message-1" }]),
@@ -195,6 +247,58 @@ describe("first-party automation templates", () => {
         repository: 1,
       });
       expect(store.requireQueuedAction(`${first.actions![0]!.id}:partial-replay`).metadata?.replayOnlySinks).toEqual(["mementos"]);
+      expect(replayed.actions?.find((action) => action.id.endsWith(":partial-replay"))?.result?.output).toMatchObject({
+        snapshot: {
+          projects: [{ id: "project-1" }],
+          todos: [{ id: "task-1" }],
+          conversations: [{ id: "message-1" }],
+          mementos: [{ id: "memento-1" }],
+          repository: { head: "abc123" },
+        },
+      });
+    } finally {
+      store.close();
+    }
+  });
+
+  test("project-snapshot rejects non-empty but incomplete cloud source data", async () => {
+    const store = new AutomationsStore();
+    try {
+      const valid = (value: JsonValue): ProjectSnapshotReadResult => ({
+        authority: "cloud",
+        complete: true,
+        verified: true,
+        value,
+      });
+      const adapters: ProjectSnapshotAdapter = {
+        authority: "cloud",
+        readProjects: async () => ({
+          authority: "cloud",
+          complete: false,
+          verified: true,
+          value: [{ id: "project-1" }],
+        }),
+        readTodos: async () => valid([{ id: "task-1" }]),
+        readConversations: async () => valid([{ id: "message-1" }]),
+        readMementos: async () => valid([{ id: "memento-1" }]),
+        readRepository: async () => valid({ head: "abc123" }),
+      };
+      install(store, FIRST_PARTY_TEMPLATE_SLUGS.projectSnapshot, {
+        projectId: "project-1",
+      });
+      const actionWorker = worker(store, {
+        workLifecycle: noOpWorkAdapter(),
+        projectSnapshot: adapters,
+        sessionBootstrap: noOpSessionAdapter(),
+      });
+
+      const receipt = await actionWorker.run(
+        `${FIRST_PARTY_TEMPLATE_SLUGS.projectSnapshot}@${FIRST_PARTY_TEMPLATE_VERSION}`,
+      );
+      const projects = receipt.partial?.find((entry) => entry.sink === "projects");
+      expect(receipt.status).toBe("failed");
+      expect(projects?.status).toBe("failed");
+      expect(projects?.error?.code).toBe("SOURCE_UNVERIFIED");
     } finally {
       store.close();
     }
@@ -261,12 +365,15 @@ describe("first-party automation templates", () => {
     const store = new AutomationsStore();
     try {
       let remainingProjectFailures = 2;
+      let remainingIdentityCompensationFailures = 2;
       const liveBindings = new Set<string>();
       const bindingByIdempotencyKey = new Map<string, string>();
       const identityActionIds: string[] = [];
+      const events: string[] = [];
       const adapters: SessionBootstrapAdapter = {
         verifyExactScope: async () => ({ exact: true }),
         createBinding: async (binding, _input, _scope, context) => {
+          events.push(`create:${binding}`);
           if (binding === "identity") identityActionIds.push(context.actionId);
           if (binding === "project" && remainingProjectFailures > 0) {
             remainingProjectFailures -= 1;
@@ -282,7 +389,11 @@ describe("first-party automation templates", () => {
           return { bindingId, receipt: { binding, created: true } };
         },
         compensateBinding: async (binding, bindingId) => {
-          if (binding === "identity") throw new Error("identity compensation failed");
+          events.push(`compensate:${binding}:${bindingId}`);
+          if (binding === "identity" && remainingIdentityCompensationFailures > 0) {
+            remainingIdentityCompensationFailures -= 1;
+            throw new Error("identity compensation failed");
+          }
           liveBindings.delete(bindingId);
           for (const [key, value] of bindingByIdempotencyKey) {
             if (value === bindingId) bindingByIdempotencyKey.delete(key);
@@ -306,13 +417,17 @@ describe("first-party automation templates", () => {
 
       const first = await actionWorker.run(`${FIRST_PARTY_TEMPLATE_SLUGS.sessionBootstrap}@${FIRST_PARTY_TEMPLATE_VERSION}`);
       expect(first.status).toBe("failed");
+      const firstEventCount = events.length;
       const second = await actionWorker.replayPartial(first.actions![0]!.id);
       expect(second.status).toBe("failed");
+      const secondEvents = events.slice(firstEventCount);
+      expect(secondEvents[0]).toBe("compensate:identity:identity-1");
+      expect(secondEvents.some((event) => event === "create:identity")).toBe(false);
       const secondAction = second.actions!.find((action) => action.id.endsWith(":partial-replay"))!;
       const third = await actionWorker.replayPartial(secondAction.id);
 
       expect(third.status).toBe("succeeded");
-      expect(identityActionIds).toHaveLength(3);
+      expect(identityActionIds).toHaveLength(2);
       expect(new Set(identityActionIds).size).toBe(1);
       expect([...liveBindings].filter((bindingId) => bindingId.startsWith("identity-"))).toHaveLength(1);
       expect(store.requireQueuedAction(secondAction.id).metadata?.partialReplayRootActionId).toBe(first.actions![0]!.id);
@@ -361,6 +476,17 @@ describe("first-party automation templates", () => {
       expect(preview.authority.mode).toBe(template === FIRST_PARTY_TEMPLATE_SLUGS.projectSnapshot ? "read-only" : "write");
     }
   });
+
+  test("registers the declared session-bootstrap compensation action", () => {
+    const definitions = createFirstPartyActionDefinitions({
+      workLifecycle: noOpWorkAdapter(),
+      projectSnapshot: emptySnapshotAdapter(),
+      sessionBootstrap: noOpSessionAdapter(),
+    });
+    expect(definitions.map((definition) => definition.manifest.id)).toContain(
+      FIRST_PARTY_ACTION_IDS.sessionBootstrapCompensate,
+    );
+  });
 });
 
 function noOpWorkAdapter(): WorkLifecycleAdapter {
@@ -372,11 +498,18 @@ function noOpWorkAdapter(): WorkLifecycleAdapter {
 }
 
 function emptySnapshotAdapter(): ProjectSnapshotAdapter {
+  const read = (value: JsonValue): ProjectSnapshotReadResult => ({
+    authority: "cloud",
+    complete: true,
+    verified: true,
+    value,
+  });
   return {
-    readProjects: async () => [{ id: "project-1" }],
-    readTodos: async () => [{ id: "task-1" }],
-    readConversations: async () => [{ id: "message-1" }],
-    readMementos: async () => [{ id: "memento-1" }],
-    readRepository: async () => ({ head: "abc123" }),
+    authority: "cloud",
+    readProjects: async () => read([{ id: "project-1" }]),
+    readTodos: async () => read([{ id: "task-1" }]),
+    readConversations: async () => read([{ id: "message-1" }]),
+    readMementos: async () => read([{ id: "memento-1" }]),
+    readRepository: async () => read({ head: "abc123" }),
   };
 }
