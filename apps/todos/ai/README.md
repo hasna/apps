@@ -47,7 +47,9 @@ stable `invalid_configuration` result.
 The default runtime checks only whether `GROQ_API_KEY` is present before
 creating the Groq adapter. A missing key returns a bounded `provider_error`
 without creating a provider or fetch call. Credential values and raw provider
-response bodies are never included in results or events.
+response bodies are never included in results or events. Provider
+authentication rejections return a bounded `credentials_rejected` detail rather
+than being reported as an undifferentiated provider failure.
 
 ## Structured output
 

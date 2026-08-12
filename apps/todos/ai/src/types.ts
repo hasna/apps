@@ -161,6 +161,7 @@ export type TodosAiRuntimeFactory = (
 
 export type TodosAiProviderErrorKind =
   | "missing_credentials"
+  | "credentials_rejected"
   | "rate_limit"
   | "provider";
 
@@ -175,6 +176,8 @@ export class TodosAiProviderError extends Error {
         ? "AI provider rate limit"
         : kind === "missing_credentials"
           ? "AI provider credentials unavailable"
+          : kind === "credentials_rejected"
+            ? "AI provider credentials rejected"
           : "AI provider failure",
       options,
     );

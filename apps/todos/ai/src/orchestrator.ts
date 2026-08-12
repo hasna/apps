@@ -561,6 +561,17 @@ function mapFailure(
           kind: "missing_credentials",
           provider,
         },
+        }, steps, usage);
+    }
+    if (error.kind === "credentials_rejected") {
+      return failedResult(runId, {
+        code: "provider_error",
+        message: "The AI provider rejected the configured credentials.",
+        retryable: false,
+        details: {
+          kind: "credentials_rejected",
+          provider,
+        },
       }, steps, usage);
     }
     return failedResult(runId, {

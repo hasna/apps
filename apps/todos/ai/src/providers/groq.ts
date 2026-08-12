@@ -82,9 +82,14 @@ function mapProviderError(error: unknown, signal: AbortSignal): never {
     throw new DOMException("Aborted", "AbortError");
   }
   if (APICallError.isInstance(error)) {
+    const credentialsRejected = error.statusCode === 401 || error.statusCode === 403;
     throw new TodosAiProviderError(
-      error.statusCode === 429 ? "rate_limit" : "provider",
-      error.statusCode === 429 || error.isRetryable,
+      credentialsRejected
+        ? "credentials_rejected"
+        : error.statusCode === 429
+          ? "rate_limit"
+          : "provider",
+      credentialsRejected ? false : error.statusCode === 429 || error.isRetryable,
     );
   }
   throw new TodosAiProviderError("provider", false);
