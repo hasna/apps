@@ -232,7 +232,7 @@ export class PostgresTodosTaskManifestBackend implements TodosTaskManifestBacken
       binding_version, apply_receipt_id, manifest_json, result_json, created_at
     ) VALUES ($1, $2, 'todos', 'todos.task-manifest.v1', 1, 'apply', $3, $4, $5, $6, $7, $8,
       'terminal_nonacceptance', $9, 0, NULL, $10::jsonb, $11::jsonb, $12)
-      ON CONFLICT (receipt_id) DO NOTHING`, [
+      ON CONFLICT (tenant_id, kind, operation_id, step_id) DO NOTHING`, [
       result.receipt.receipt_id,
       this.tenantId,
       input.manifest.operation_id,
@@ -247,10 +247,17 @@ export class PostgresTodosTaskManifestBackend implements TodosTaskManifestBacken
       input.now,
     ]);
     const stored = await tx.query<JsonRecord>(
-      "SELECT result_json FROM todos_task_manifest_terminal_receipts WHERE tenant_id = $1 AND receipt_id = $2 LIMIT 1",
-      [this.tenantId, result.receipt.receipt_id],
+      `SELECT receipt_id, result_json
+       FROM todos_task_manifest_terminal_receipts
+       WHERE tenant_id = $1 AND kind = 'apply'
+         AND (receipt_id = $2 OR (operation_id = $3 AND step_id = $4))
+       ORDER BY created_at ASC, receipt_id ASC
+       LIMIT 1`,
+      [this.tenantId, result.receipt.receipt_id, input.manifest.operation_id, input.manifest.step_id],
     );
-    return stored.rows[0] ? parseApplyResult(stored.rows[0]["result_json"], true) : result;
+    return stored.rows[0]
+      ? parseApplyResult(stored.rows[0]["result_json"], stored.rows[0]["receipt_id"] !== result.receipt.receipt_id)
+      : result;
   }
 
   async apply(input: NormalizedTaskManifest, faults: PreparedTaskManifestFaults): Promise<TodosTaskManifestApplyResult> {
@@ -262,6 +269,7 @@ export class PostgresTodosTaskManifestBackend implements TodosTaskManifestBacken
       const terminal = await tx.query<JsonRecord>(
         `SELECT result_json FROM todos_task_manifest_terminal_receipts
          WHERE tenant_id = $1
+           AND kind = 'apply'
            AND (receipt_id = $2 OR (operation_id = $3 AND step_id = $4))
          ORDER BY created_at ASC, receipt_id ASC
          LIMIT 1`,

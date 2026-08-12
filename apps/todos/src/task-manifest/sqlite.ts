@@ -173,6 +173,7 @@ export class SqliteTodosTaskManifestBackend implements TodosTaskManifestBackend 
         `SELECT result_json
          FROM todos_task_manifest_terminal_receipts
          WHERE tenant_id = ?
+           AND kind = 'apply'
            AND (receipt_id = ? OR (operation_id = ? AND step_id = ?))
          ORDER BY created_at ASC, receipt_id ASC
          LIMIT 1`,
@@ -352,9 +353,21 @@ export class SqliteTodosTaskManifestBackend implements TodosTaskManifestBackend 
       input.now,
     );
     const stored = this.db.query(
-      "SELECT result_json FROM todos_task_manifest_terminal_receipts WHERE tenant_id = ? AND receipt_id = ? LIMIT 1",
-    ).get(this.tenantId, result.receipt.receipt_id) as { result_json: string } | null;
-    return stored ? parseApplyResult(stored.result_json, false) : result;
+      `SELECT receipt_id, result_json
+       FROM todos_task_manifest_terminal_receipts
+       WHERE tenant_id = ? AND kind = 'apply'
+         AND (receipt_id = ? OR (operation_id = ? AND step_id = ?))
+       ORDER BY created_at ASC, receipt_id ASC
+       LIMIT 1`,
+    ).get(
+      this.tenantId,
+      result.receipt.receipt_id,
+      input.manifest.operation_id,
+      input.manifest.step_id,
+    ) as { receipt_id: string; result_json: string } | null;
+    return stored
+      ? parseApplyResult(stored.result_json, stored.receipt_id !== result.receipt.receipt_id)
+      : result;
   }
 
   async readExact(receiptId: string): Promise<TodosTaskManifestApplyResult> {

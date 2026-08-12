@@ -146,10 +146,12 @@ export function ensureSqliteTodosTaskManifestSchema(db: Database, tenantId: stri
         tenant_id,
         json_extract(result_json, '$.graph.plan_id')
       );
+    DROP INDEX IF EXISTS idx_todos_task_manifest_terminal_receipts_lookup;
+    DROP INDEX IF EXISTS idx_todos_task_manifest_terminal_receipts_identity;
     CREATE INDEX IF NOT EXISTS idx_todos_task_manifest_terminal_receipts_lookup
-      ON todos_task_manifest_terminal_receipts(tenant_id, kind, operation_id, step_id, idempotency_key);
+      ON todos_task_manifest_terminal_receipts(tenant_id, kind, operation_id, step_id);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_todos_task_manifest_terminal_receipts_identity
-      ON todos_task_manifest_terminal_receipts(tenant_id, kind, operation_id, step_id, idempotency_key);
+      ON todos_task_manifest_terminal_receipts(tenant_id, kind, operation_id, step_id);
   `);
 }
 
@@ -263,10 +265,12 @@ export function postgresTodosTaskManifestSchemaSql(tenantId = "default"): string
       ON todos_task_manifest_outbox(apply_receipt_id, status)`,
     `CREATE INDEX IF NOT EXISTS todos_task_manifest_receipts_tenant_idx
       ON todos_task_manifest_receipts(tenant_id, receipt_id, kind)`,
+    `DROP INDEX IF EXISTS todos_task_manifest_terminal_receipts_lookup_idx`,
+    `DROP INDEX IF EXISTS todos_task_manifest_terminal_receipts_identity_idx`,
     `CREATE INDEX IF NOT EXISTS todos_task_manifest_terminal_receipts_lookup_idx
-      ON todos_task_manifest_terminal_receipts(tenant_id, kind, operation_id, step_id, idempotency_key)`,
+      ON todos_task_manifest_terminal_receipts(tenant_id, kind, operation_id, step_id)`,
     `CREATE UNIQUE INDEX IF NOT EXISTS todos_task_manifest_terminal_receipts_identity_idx
-      ON todos_task_manifest_terminal_receipts(tenant_id, kind, operation_id, step_id, idempotency_key)`,
+      ON todos_task_manifest_terminal_receipts(tenant_id, kind, operation_id, step_id)`,
     `CREATE INDEX IF NOT EXISTS todos_task_manifest_bindings_tenant_plan_idx
       ON todos_task_manifest_bindings(
         tenant_id,

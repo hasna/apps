@@ -284,6 +284,50 @@ describe("task-manifest SQLite authority", () => {
     ).get(arbitrary.operation_id)).toEqual({ count: 1 });
   });
 
+  test("closes one terminal operation step while allowing a distinct step", async () => {
+    const authority = createSqliteTodosTaskManifestAuthority({ database: db });
+    const operation = manifest("terminal-step-closure");
+    operation.if_binding_version = 1;
+    operation.precondition_digest = deriveTodosTaskManifestApplyPreconditionDigest(operation);
+    refreshManifestIdentity(operation);
+    let terminalReceiptId: string | undefined;
+    await expect(authority.apply(operation)).rejects.toEqual(expect.objectContaining<TodosTaskManifestError>({
+      code: "TODOS_TASK_MANIFEST_CAS_CONFLICT",
+      details: expect.objectContaining({
+        receipt: expect.objectContaining({
+          outcome: "terminal_nonacceptance",
+          reason: "TODOS_TASK_MANIFEST_CAS_CONFLICT",
+        }),
+      }),
+    }));
+    try {
+      await authority.apply(operation);
+    } catch (error) {
+      terminalReceiptId = (error as TodosTaskManifestError).details?.["receipt"]?.["receipt_id"] as string | undefined;
+    }
+    expect(terminalReceiptId).toBeTruthy();
+
+    const sameStep = manifest("terminal-step-closure");
+    await expect(authority.apply(sameStep)).rejects.toEqual(expect.objectContaining<TodosTaskManifestError>({
+      code: "TODOS_TASK_MANIFEST_CAS_CONFLICT",
+      details: expect.objectContaining({
+        receipt: expect.objectContaining({ receipt_id: terminalReceiptId }),
+      }),
+    }));
+    expect(db.query("SELECT count(*) AS count FROM plans").get()).toEqual({ count: 0 });
+    expect(db.query("SELECT count(*) AS count FROM todos_task_manifest_terminal_receipts WHERE operation_id = ?")
+      .get(operation.operation_id)).toEqual({ count: 1 });
+
+    const nextStep = manifest("terminal-step-closure");
+    nextStep.step_id = "next";
+    nextStep.precondition_digest = deriveTodosTaskManifestApplyPreconditionDigest(nextStep);
+    refreshManifestIdentity(nextStep);
+    const accepted = await authority.apply(nextStep);
+    expect(accepted.receipt.outcome).toBe("accepted");
+    expect(accepted.receipt.operation_id).toBe(operation.operation_id);
+    expect(accepted.receipt.step_id).toBe("next");
+  });
+
   test("requires fresh operation, step, key, and precondition after terminal nonacceptance", async () => {
     const authority = createSqliteTodosTaskManifestAuthority({ database: db });
     const rejected = manifest("terminal-retry-identity");
