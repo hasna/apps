@@ -36,7 +36,7 @@ const CLI = ["bun", "run", "./src/cli/index.tsx"];
 
 /** The measured scenario: a coordinator probing for a sub-agent's post. */
 const CHANNEL = "senderfilter-probe";
-const TOKEN = "subagenttoken807";
+const TOKEN = "placeholder-private-marker-807";
 const SUBAGENT = "subagent-807";
 const COORDINATOR = "coordinator-807";
 
@@ -238,7 +238,8 @@ describe("sender filter is never silent", () => {
       COORDINATOR,
     );
     expect(res.exitCode).toBe(0);
-    expect(res.stdout.trim()).toBe("[]");
+    expect(JSON.parse(res.stdout).count).toBe(0);
+    expect(JSON.parse(res.stdout).detail).toBe("preview");
     expect(res.stderr).toContain("ghostsender");
     expect(res.stderr).toContain("--sender");
   });
@@ -249,7 +250,8 @@ describe("sender filter is never silent", () => {
       COORDINATOR,
     );
     expect(res.exitCode).toBe(0);
-    expect(res.stdout).toContain(SUBAGENT);
+    expect(JSON.parse(res.stdout).count).toBe(1);
+    expect(JSON.parse(res.stdout).detail).toBe("preview");
     expect(res.stderr).toBe("");
   });
 

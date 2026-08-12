@@ -66,10 +66,50 @@ import {
   registerProjectChannelPg,
   verifyProjectChannelRegistrationInversePg,
 } from "./project-channel-registration-pg.js";
+import {
+  IncidentProjectionConflictError,
+  IncidentProjectionValidationError,
+  IncidentProjectorConfigurationError,
+  metadataSpoofsIncidentProjection,
+  validateIncidentProjectorBinding,
+} from "../lib/incident-projection-contract.js";
+import {
+  appendIncidentProjectionPg,
+  CHANNEL_IDENTITY_ADVISORY_LOCK,
+  getIncidentProjectionPg,
+} from "./incident-projections.js";
+import type {
+  ExportMessagesOptions,
+  IncidentProjectionRequestV1,
+  IncidentProjectorContext,
+} from "../types.js";
+import {
+  COLLECTION_PREVIEW_SCAN_CHARS,
+  RESTRICTED_CHANNEL_PREVIEW,
+  buildMessagePreview as buildCollectionMessagePreview,
+  packMessagePreviewPage,
+} from "../lib/message-previews.js";
+import {
+  resolveCollectionQueryOptions,
+  resolveIso8601Date,
+  resolvePresentString,
+} from "../lib/strict-query-values.js";
+import {
+  loadMessageExportArtifact,
+  resolveMessageExportOptions,
+  serializeMessageExport,
+  writeMessageExportArtifact,
+} from "../lib/message-exports.js";
+import {
+  buildByteBoundedMessagePreview,
+  packChannelNotificationPage,
+} from "../lib/channel-notifications.js";
+import type { ChannelNotification } from "../types.js";
 
 export const APP = "conversations";
 const SCOPE_READ = `${APP}:read`;
 const SCOPE_WRITE = `${APP}:write`;
+export const SCOPE_INCIDENT_PROJECT = `${APP}:incident-project`;
 
 const SECURITY_HEADERS: Record<string, string> = {
   "X-Content-Type-Options": "nosniff",
@@ -113,6 +153,29 @@ export interface ApiServerDeps {
   client: PoolQueryClient;
   keys: ApiKeyStore;
   verifier: ApiKeyVerifier;
+  incidentProjector?: IncidentProjectorContext | null;
+}
+
+function incidentProjectorContextFromEnv(): IncidentProjectorContext | null {
+  const tenantId = process.env.HASNA_CONVERSATIONS_TENANT_ID?.trim();
+  const authorityId = process.env.HASNA_CONVERSATIONS_INCIDENT_AUTHORITY_ID?.trim();
+  if (!tenantId && !authorityId) return null;
+  if (!tenantId || !authorityId) {
+    throw new IncidentProjectorConfigurationError(
+      "Incident projector configuration requires both tenant and authority identifiers.",
+    );
+  }
+  const binding = validateIncidentProjectorBinding(tenantId, authorityId);
+  return {
+    ...binding,
+    routing: {
+      from: process.env.HASNA_CONVERSATIONS_INCIDENT_FROM,
+      to: process.env.HASNA_CONVERSATIONS_INCIDENT_TO,
+      channel: process.env.HASNA_CONVERSATIONS_INCIDENT_CHANNEL,
+      project_id: process.env.HASNA_CONVERSATIONS_INCIDENT_PROJECT_ID,
+      session_id: process.env.HASNA_CONVERSATIONS_INCIDENT_SESSION_ID,
+    },
+  };
 }
 
 /** Build the request-handling deps from the environment (cloud Postgres). */
@@ -129,7 +192,7 @@ export function buildDeps(): ApiServerDeps {
       }
     },
   });
-  return { client, keys, verifier };
+  return { client, keys, verifier, incidentProjector: incidentProjectorContextFromEnv() };
 }
 
 // ---- helpers ----------------------------------------------------------------
@@ -157,6 +220,98 @@ async function readJson(req: Request): Promise<Record<string, unknown>> {
 
 function str(v: unknown): string | undefined {
   return typeof v === "string" && v.trim() ? v.trim() : undefined;
+}
+
+function messagePreviewProjectionPg(alias = ""): string {
+  const c = alias ? `${alias}.` : "";
+  const restricted = `(lower(COALESCE(${c}channel, '')) LIKE '%incident%' OR lower(COALESCE(${c}channel, '')) LIKE '%security%' OR lower(COALESCE(${c}to_agent, '')) LIKE '%incident%' OR lower(COALESCE(${c}to_agent, '')) LIKE '%security%' OR lower(COALESCE(${c}session_id, '')) LIKE '%incident%' OR lower(COALESCE(${c}session_id, '')) LIKE '%security%')`;
+  return `${c}id, ${c}uuid, ${c}session_id, ${c}from_agent, ${c}to_agent, ${c}channel, ${c}project_id,
+          ${c}priority, ${c}blocking, ${c}reply_to, ${c}working_dir, ${c}repository, ${c}branch,
+          ${c}created_at, ${c}read_at, ${c}edited_at, ${c}pinned_at,
+          CASE WHEN ${c}metadata IS NULL OR ${c}metadata = '' THEN FALSE ELSE TRUE END AS has_metadata,
+          CASE WHEN ${c}attachments IS NULL OR ${c}attachments = '' THEN 0 ELSE jsonb_array_length(${c}attachments::jsonb) END AS attachment_count,
+          CASE WHEN ${restricted} THEN '' ELSE left(${c}content, ${COLLECTION_PREVIEW_SCAN_CHARS}) END AS preview_source,
+          octet_length(${c}content) AS content_bytes`;
+}
+
+function collectionReadOptions(url: URL) {
+  try {
+    return resolveCollectionQueryOptions(url.searchParams);
+  } catch (error) {
+    throw new Error(error instanceof Error ? error.message : String(error));
+  }
+}
+
+async function boundedCollectionQuery<T>(
+  client: PoolQueryClient,
+  timeoutMs: number,
+  query: (tx: TypedQueryClient) => Promise<T>,
+): Promise<T> {
+  return client.transaction(async (tx) => {
+    await tx.execute(`SET LOCAL statement_timeout = ${Math.max(1, Math.floor(timeoutMs))}`);
+    return query(tx);
+  });
+}
+
+async function visibleIncidentProjectionIds(
+  client: TypedQueryClient,
+  context: IncidentProjectorContext | null | undefined,
+  reader: string,
+  filters: { ids?: number[]; channel?: string; session?: string } = {},
+): Promise<number[]> {
+  if (!context) return [];
+  const params: unknown[] = [context.tenant_id, context.authority_id, reader];
+  const clauses: string[] = [];
+  if (filters.ids?.length) {
+    params.push(filters.ids);
+    clauses.push(`m.id = ANY($${params.length}::bigint[])`);
+  }
+  if (filters.channel) {
+    params.push(filters.channel);
+    clauses.push(`m.channel = $${params.length}`);
+  }
+  if (filters.session) {
+    params.push(filters.session);
+    clauses.push(`m.session_id = $${params.length}`);
+  }
+  const extra = clauses.length ? `AND ${clauses.join(" AND ")}` : "";
+  const rows = await client.many<{ id: string | number }>(
+    `WITH latest AS (
+       SELECT p.* FROM incident_projections p
+       JOIN (
+         SELECT tenant_id, authority_id, incident_id, MAX(incident_version) AS incident_version
+         FROM incident_projections WHERE tenant_id = $1 AND authority_id = $2
+         GROUP BY tenant_id, authority_id, incident_id
+       ) current USING (tenant_id, authority_id, incident_id, incident_version)
+     )
+     SELECT DISTINCT m.id FROM latest p
+     JOIN messages m ON m.id = p.message_id
+     JOIN incident_projection_scopes scope ON scope.projection_id = p.id AND scope.scope_type = 'blocked'
+     WHERE p.status IN ('open','investigating','contained','monitoring') AND p.blocking = TRUE
+       AND (
+         lower(scope.scope) = 'agent:' || lower($3)
+         OR lower(scope.scope) IN (
+           SELECT 'channel:' || lower(channel) FROM channel_members WHERE lower(agent) = lower($3)
+         )
+         OR scope.scope IN (
+           SELECT 'project:' || project_id FROM agent_presence
+           WHERE lower(agent) = lower($3) AND project_id <> ''
+         )
+       ) ${extra}`,
+    params,
+  );
+  return rows.map((row) => Number(row.id));
+}
+
+async function insertReadReceipts(client: TypedQueryClient, ids: number[], reader: string): Promise<number> {
+  if (!ids.length) return 0;
+  const result = await client.query(
+    `INSERT INTO message_read_receipts (message_id, agent, read_at)
+     SELECT message_id, $2, NOW() FROM unnest($1::bigint[]) AS message_id
+     ON CONFLICT (message_id, agent) DO UPDATE SET read_at = EXCLUDED.read_at`,
+    [ids, reader.toLowerCase()],
+  );
+  return result.rowCount;
 }
 
 function positiveInteger(v: unknown): number | undefined {
@@ -503,12 +658,34 @@ async function renameChannelServer(
 ): Promise<{ ok: true; name: string } | { ok: false; error: string; status: number }> {
   const from = normalizeChannelName(oldName);
   const to = normalizeChannelName(newName);
-  const existing = await client.get(`SELECT name FROM channels WHERE name = $1`, [from]);
-  if (!existing) return { ok: false, error: `Channel not found: ${from}`, status: 404 };
-  if (from === to) return { ok: true, name: from };
-  const conflict = await client.get(`SELECT name FROM channels WHERE name = $1`, [to]);
-  if (conflict) return { ok: false, error: `Channel #${to} already exists.`, status: 409 };
-  await client.transaction(async (tx) => {
+  return client.transaction(async (tx) => {
+    await tx.get(
+      "SELECT pg_advisory_xact_lock($1::bigint) AS channel_identity_locked",
+      [CHANNEL_IDENTITY_ADVISORY_LOCK],
+    );
+    const existing = await tx.get(`SELECT name FROM channels WHERE name = $1 FOR UPDATE`, [from]);
+    if (!existing) return { ok: false as const, error: `Channel not found: ${from}`, status: 404 };
+    if (from === to) return { ok: true as const, name: from };
+    const conflict = await tx.get(`SELECT name FROM channels WHERE name = $1 FOR UPDATE`, [to]);
+    if (conflict) return { ok: false as const, error: `Channel #${to} already exists.`, status: 409 };
+    const reserved = await tx.get<{ current_channel: string }>(
+      "SELECT current_channel FROM channel_rename_aliases WHERE old_channel = $1 FOR UPDATE",
+      [to],
+    );
+    if (reserved && reserved.current_channel !== from) {
+      return { ok: false as const, error: `Channel #${to} is a reserved historical alias.`, status: 409 };
+    }
+    await tx.get(
+      "SELECT set_config('hasna.conversations.channel_scope_rewrite', $1, TRUE) AS configured",
+      [JSON.stringify({
+        old_session_id: `channel:${from}`,
+        new_session_id: `channel:${to}`,
+        old_channel: from,
+        new_channel: to,
+        old_to_agent: from,
+        new_to_agent: to,
+      })],
+    );
     // The source and replacement rows briefly share the same immutable id.
     // Migration 4 makes this constraint deferrable so uniqueness is checked
     // after the source row is deleted at transaction commit.
@@ -517,6 +694,16 @@ async function renameChannelServer(
       `INSERT INTO channels (id, name, description, topic, project_id, created_by, created_at, archived_at, metadata, tags)
        SELECT id, $1, description, topic, project_id, created_by, created_at, archived_at, metadata, tags FROM channels WHERE name = $2`,
       [to, from],
+    );
+    await tx.query(`DELETE FROM channel_rename_aliases WHERE old_channel = $1`, [to]);
+    await tx.query(
+      "UPDATE channel_rename_aliases SET current_channel = $1, renamed_at = NOW() WHERE current_channel = $2",
+      [to, from],
+    );
+    await tx.query(
+      `INSERT INTO channel_rename_aliases (old_channel, current_channel) VALUES ($1,$2)
+       ON CONFLICT (old_channel) DO UPDATE SET current_channel = EXCLUDED.current_channel, renamed_at = NOW()`,
+      [from, to],
     );
     await tx.query(`UPDATE channel_members SET channel = $1 WHERE channel = $2`, [to, from]);
     await tx.query(`UPDATE channel_subscriptions SET channel = $1 WHERE channel = $2`, [to, from]);
@@ -584,8 +771,8 @@ async function renameChannelServer(
     );
     await tx.query(`UPDATE resource_locks SET resource_id = $1 WHERE resource_type = 'channel' AND resource_id = $2`, [to, from]);
     await tx.query(`DELETE FROM channels WHERE name = $1`, [from]);
+    return { ok: true as const, name: to };
   });
-  return { ok: true, name: to };
 }
 
 // ---- task helpers ------------------------------------------------------------
@@ -794,10 +981,11 @@ export function startApiServer(options: StartApiServerOptions = {}) {
         // ---- versioned API (authenticated) ----
         if (path === "/v1" || path.startsWith("/v1/")) {
           const writing = method !== "GET" && method !== "HEAD";
+          const incidentProjectionWrite = path === "/v1/incident-projections" && method === "POST";
           const decision = await verifier.authenticate(req.headers, {
             method,
             path,
-            requiredScopes: [writing ? SCOPE_WRITE : SCOPE_READ],
+            requiredScopes: [incidentProjectionWrite ? SCOPE_INCIDENT_PROJECT : writing ? SCOPE_WRITE : SCOPE_READ],
           });
           if (!decision.ok) {
             return json({ error: decision.message, reason: decision.reason }, decision.status, {
@@ -957,6 +1145,103 @@ async function handleV1(
     ));
   }
 
+  // ---- canonical Todos incident projections ----
+  if (sub === "incident-projections" && method === "POST") {
+    if (!deps.incidentProjector) return json({ error: "Incident projector authority is not configured" }, 503);
+    try {
+      const projection = await appendIncidentProjectionPg(
+        client,
+        await readJson(req) as unknown as IncidentProjectionRequestV1,
+        deps.incidentProjector,
+      );
+      return json({ projection }, projection.replayed ? 200 : 201);
+    } catch (error) {
+      if (error instanceof IncidentProjectionConflictError) {
+        return json({ error: error.message, code: error.code }, 409);
+      }
+      if (error instanceof IncidentProjectionValidationError) {
+        return json({ error: error.message, code: error.code }, 400);
+      }
+      throw error;
+    }
+  }
+
+  const projectionMatch = sub.match(/^incident-projections\/(iev_[0-9a-f]{32})$/);
+  if (projectionMatch && method === "GET") {
+    if (!deps.incidentProjector) return json({ error: "Incident projector authority is not configured" }, 503);
+    const projection = await getIncidentProjectionPg(client, projectionMatch[1], deps.incidentProjector);
+    return projection ? json({ projection }) : json({ error: "Incident projection not found" }, 404);
+  }
+
+  if (sub === "messages/blockers" && method === "GET") {
+    if (!agent) return json({ error: "authenticated agent is required" }, 401);
+    const requestedAgent = str(url.searchParams.get("agent"));
+    if (requestedAgent && requestedAgent.toLowerCase() !== agent.toLowerCase()) {
+      return json({ error: "blocker agent must match the authenticated agent" }, 403);
+    }
+    const collection = collectionReadOptions(url);
+    const context = deps.incidentProjector ?? null;
+    if (!context) {
+      const canonicalCount = await client.get<{ n: string | number }>(
+        "SELECT COUNT(*)::bigint AS n FROM incident_projections",
+      );
+      if (Number(canonicalCount?.n ?? 0) > 0) {
+        return json({ error: "Canonical blocker reads require configured incident authority" }, 503);
+      }
+    }
+    const rows = await boundedCollectionQuery(client, collection.timeoutMs, (tx) => tx.many<Record<string, unknown>>(
+      `WITH latest AS (
+         SELECT p.* FROM incident_projections p
+         JOIN (
+           SELECT tenant_id, authority_id, incident_id, MAX(incident_version) AS incident_version
+           FROM incident_projections
+           WHERE $1::text IS NOT NULL AND $2::text IS NOT NULL
+             AND tenant_id = $1 AND authority_id = $2
+           GROUP BY tenant_id, authority_id, incident_id
+         ) current USING (tenant_id, authority_id, incident_id, incident_version)
+       ), canonical_ids AS (
+         SELECT DISTINCT m.id
+         FROM latest p
+         JOIN messages m ON m.id = p.message_id
+         JOIN incident_projection_scopes scope ON scope.projection_id = p.id AND scope.scope_type = 'blocked'
+         WHERE p.status IN ('open','investigating','contained','monitoring') AND p.blocking = TRUE
+           AND NOT EXISTS (
+             SELECT 1 FROM message_read_receipts receipt
+             WHERE receipt.message_id = m.id AND lower(receipt.agent) = lower($3)
+           )
+           AND (
+             lower(scope.scope) = 'agent:' || lower($3)
+             OR lower(scope.scope) IN (
+               SELECT 'channel:' || lower(channel) FROM channel_members WHERE lower(agent) = lower($3)
+             )
+             OR scope.scope IN (
+               SELECT 'project:' || project_id FROM agent_presence
+               WHERE lower(agent) = lower($3) AND project_id <> ''
+             )
+           )
+       ), legacy_ids AS (
+         SELECT m.id FROM messages m
+         LEFT JOIN incident_projections p ON p.message_id = m.id
+         WHERE p.id IS NULL AND m.blocking = TRUE AND m.read_at IS NULL
+           AND (lower(m.to_agent) = lower($3) OR m.channel IN (
+             SELECT channel FROM channel_members WHERE lower(agent) = lower($3)
+           ))
+       ), eligible AS (
+         SELECT id FROM canonical_ids UNION SELECT id FROM legacy_ids
+       )
+       SELECT ${messagePreviewProjectionPg("m")}
+       FROM messages m JOIN eligible ON eligible.id = m.id
+       ORDER BY m.created_at ASC, m.id ASC LIMIT $4 OFFSET $5`,
+      [context?.tenant_id ?? null, context?.authority_id ?? null, agent, collection.limit + 1, collection.offset],
+    ));
+    return json(packMessagePreviewPage(rows.map((row) => buildCollectionMessagePreview(row, collection.previewBytes)), {
+      limit: collection.limit,
+      cursor: collection.offset,
+      max_bytes: collection.maxBytes,
+      timeout_ms: collection.timeoutMs,
+    }));
+  }
+
   // ---- messages ----
   if (sub === "messages" && method === "GET") {
     const to = str(url.searchParams.get("to"));
@@ -965,12 +1250,16 @@ async function handleV1(
     const session = str(url.searchParams.get("session")) ?? str(url.searchParams.get("session_id"));
     const projectId = str(url.searchParams.get("project_id"));
     const since = str(url.searchParams.get("since"));
+    const until = str(url.searchParams.get("until"));
     const sinceIdRaw = str(url.searchParams.get("since_id"));
+    const idRaw = str(url.searchParams.get("id"));
+    const replyToRaw = str(url.searchParams.get("reply_to"));
     const q = str(url.searchParams.get("q"));
     const uuid = str(url.searchParams.get("uuid"));
     const mentionsOnly = str(url.searchParams.get("mentions_only"));
     const unreadOnly = isTrue(url.searchParams.get("unread_only"));
     const threadsOnly = isTrue(url.searchParams.get("threads_only"));
+    const pinnedOnly = isTrue(url.searchParams.get("pinned_only"));
     const includeReplyCounts = isTrue(url.searchParams.get("include_reply_counts"));
     const idCursor = sinceIdRaw !== undefined && Number.isFinite(Number(sinceIdRaw));
     // An id cursor is a prefix walk, so its bounded page must be selected by id
@@ -980,11 +1269,12 @@ async function handleV1(
     const order = idCursor
       ? "ASC"
       : (str(url.searchParams.get("order"))?.toLowerCase() === "asc" ? "ASC" : "DESC");
-    const limit = clampLimit(url.searchParams.get("limit"));
-    const offsetRaw = parseInt(url.searchParams.get("offset") || url.searchParams.get("cursor") || "0", 10);
-    const offset = Number.isFinite(offsetRaw) && offsetRaw > 0 ? offsetRaw : 0;
+    const collection = collectionReadOptions(url);
     const clauses: string[] = [];
     const params: unknown[] = [];
+    if (idRaw && Number.isSafeInteger(Number(idRaw)) && Number(idRaw) > 0) {
+      params.push(Number(idRaw)); clauses.push(`id = $${params.length}`);
+    }
     if (to) { params.push(to); clauses.push(`to_agent = $${params.length}`); }
     if (from) { params.push(from); clauses.push(`from_agent = $${params.length}`); }
     if (channel) { params.push(channel); clauses.push(`channel = $${params.length}`); }
@@ -1003,6 +1293,7 @@ async function handleV1(
       params.push(normalizedSince);
       clauses.push(`created_at ${q ? ">=" : ">"} $${params.length}`);
     }
+    if (until) { params.push(until); clauses.push(`created_at <= $${params.length}`); }
     if (idCursor) { params.push(Number(sinceIdRaw)); clauses.push(`id > $${params.length}`); }
     if (q) { params.push(`%${q}%`); clauses.push(`content ILIKE $${params.length}`); }
     if (mentionsOnly) {
@@ -1011,6 +1302,10 @@ async function handleV1(
     }
     if (unreadOnly) clauses.push(`read_at IS NULL`);
     if (threadsOnly) clauses.push(`reply_to IS NULL`);
+    if (replyToRaw && Number.isSafeInteger(Number(replyToRaw)) && Number(replyToRaw) > 0) {
+      params.push(Number(replyToRaw)); clauses.push(`reply_to = $${params.length}`);
+    }
+    if (pinnedOnly) clauses.push(`pinned_at IS NOT NULL`);
     if (isTrue(url.searchParams.get("blocking_only"))) clauses.push(`blocking = true`);
     const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
     // count=1 → authoritative total (honours the same filters). Lets callers
@@ -1025,37 +1320,26 @@ async function handleV1(
     const replyCountSelect = includeReplyCounts
       ? `, (SELECT count(*) FROM messages r WHERE r.reply_to = messages.id)::int AS reply_count`
       : "";
-    // Search reads over-fetch one row so the response can say whether the
-    // population outruns the page. `clampLimit` silently caps every read at 500,
-    // and a clamped answer returns FEWER rows than were asked for — the shape
-    // that normally means "exhausted" — so a caller auditing a sender read a
-    // truncated page as a complete one and published false absences
-    // (todos 83852845). Plain (non-`q`) reads keep their exact previous
-    // behaviour and cost: no extra row, no extra work.
-    const probeForMore = !!q;
-    params.push(probeForMore ? limit + 1 : limit);
+    params.push(collection.limit + 1);
     const limitIdx = params.length;
-    params.push(offset);
+    params.push(collection.offset);
     const offsetIdx = params.length;
     const orderBy = idCursor ? "id ASC" : `created_at ${order}, id ${order}`;
-    const fetched = await client.many(
-      `SELECT id, uuid, session_id, from_agent, to_agent, channel, project_id, content, priority,
-              blocking, reply_to, working_dir, repository, branch, metadata, edited_at, pinned_at,
-              attachments, created_at, read_at${replyCountSelect}
+    const fetched = await boundedCollectionQuery(client, collection.timeoutMs, (tx) => tx.many<Record<string, unknown>>(
+      `SELECT ${messagePreviewProjectionPg()}${replyCountSelect}
        FROM messages ${where} ORDER BY ${orderBy} LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
       params,
-    );
-    if (!probeForMore) return json({ messages: redactResponse(fetched) });
-    const hasMore = fetched.length > limit;
-    const rows = hasMore ? fetched.slice(0, limit) : fetched;
-    // Additive fields only — `messages` keeps its exact shape and position, so
-    // a client that has never heard of `has_more` is unaffected.
-    return json({
-      messages: redactResponse(rows),
-      has_more: hasMore,
-      next_offset: hasMore ? offset + rows.length : null,
-      limit,
-    });
+    ));
+    return json(packMessagePreviewPage(
+      fetched.map((row) => buildCollectionMessagePreview(row, collection.previewBytes)),
+      {
+        limit: collection.limit,
+        cursor: collection.offset,
+        max_bytes: collection.maxBytes,
+        timeout_ms: collection.timeoutMs,
+        query: q,
+      },
+    ));
   }
 
   // ---- mark messages read (per-agent receipts + global read_at) ----
@@ -1063,7 +1347,12 @@ async function handleV1(
   // semantics so read state routes to the cloud identically.
   if (sub === "messages/read" && method === "POST") {
     const body = await readJson(req);
-    const reader = str(body.reader) ?? str(body.agent) ?? agent ?? undefined;
+    if (!agent) return json({ error: "authenticated agent is required" }, 401);
+    const requestedReader = str(body.reader) ?? str(body.agent);
+    if (requestedReader && requestedReader.toLowerCase() !== agent.toLowerCase()) {
+      return json({ error: "reader must match the authenticated agent" }, 403);
+    }
+    const reader = agent;
     const ids = Array.isArray(body.ids)
       ? (body.ids as unknown[]).map(Number).filter((n) => Number.isFinite(n))
       : [];
@@ -1073,8 +1362,17 @@ async function handleV1(
     // markMentionsRead: stamp notified_at on the agent's @mentions (optionally
     // scoped to one channel). Routed here because the client posts it to
     // /messages/read with mentions_only=true.
-    if (body.mentions_only && reader) {
-      const res = channel
+    if (body.mentions_only) {
+      const mentionIds = Array.isArray(body.mention_ids)
+        ? (body.mention_ids as unknown[]).map(Number).filter((n) => Number.isSafeInteger(n) && n > 0)
+        : [];
+      const res = mentionIds.length
+        ? await client.query(
+            `UPDATE message_mentions SET notified_at = NOW()::text
+             WHERE mentioned_agent = $1 AND id = ANY($2::bigint[]) AND notified_at IS NULL`,
+            [reader, mentionIds],
+          )
+        : channel
         ? await client.query(
             `UPDATE message_mentions SET notified_at = NOW()::text WHERE mentioned_agent = $1 AND channel = $2 AND notified_at IS NULL`,
             [reader, normalizeChannelName(channel)],
@@ -1087,43 +1385,50 @@ async function handleV1(
     }
     let marked = 0;
     if (ids.length) {
-      if (reader) {
-        const rParams: unknown[] = [];
-        const rowsSql: string[] = [];
-        const lower = reader.toLowerCase();
-        for (const id of ids) {
-          rParams.push(id, lower);
-          rowsSql.push(`($${rParams.length - 1}, $${rParams.length}, NOW())`);
-        }
-        await client.query(
-          `INSERT INTO message_read_receipts (message_id, agent, read_at) VALUES ${rowsSql.join(", ")}
-           ON CONFLICT (message_id, agent) DO UPDATE SET read_at = EXCLUDED.read_at`,
-          rParams,
-        );
-      }
-      const res = await client.query(
-        `UPDATE messages SET read_at = NOW()::text WHERE id = ANY($1::bigint[]) AND read_at IS NULL`,
+      const projectedRows = await client.many<{ message_id: string | number }>(
+        "SELECT message_id FROM incident_projections WHERE message_id = ANY($1::bigint[])",
         [ids],
       );
-      marked = res.rowCount;
-    } else if (all && reader) {
+      const projected = new Set(projectedRows.map((row) => Number(row.message_id)));
+      const visible = new Set(await visibleIncidentProjectionIds(client, deps.incidentProjector, reader, { ids }));
+      if ([...projected].some((id) => !visible.has(id))) {
+        return json({ error: "one or more incident blockers are not visible to the authenticated agent" }, 403);
+      }
+      await insertReadReceipts(client, ids, reader);
+      const ordinaryIds = ids.filter((id) => !projected.has(id));
       const res = await client.query(
-        `UPDATE messages SET read_at = NOW()::text WHERE to_agent = $1 AND read_at IS NULL`,
+        `UPDATE messages SET read_at = NOW()::text WHERE id = ANY($1::bigint[]) AND read_at IS NULL`,
+        [ordinaryIds],
+      );
+      marked = projected.size + res.rowCount;
+    } else if (all) {
+      const projected = await visibleIncidentProjectionIds(client, deps.incidentProjector, reader);
+      const receipts = await insertReadReceipts(client, projected, reader);
+      const res = await client.query(
+        `UPDATE messages SET read_at = NOW()::text WHERE to_agent = $1 AND read_at IS NULL
+         AND NOT EXISTS (SELECT 1 FROM incident_projections p WHERE p.message_id = messages.id)`,
         [reader],
       );
-      marked = res.rowCount;
-    } else if (channel && reader) {
+      marked = receipts + res.rowCount;
+    } else if (channel) {
+      const normalized = normalizeChannelName(channel);
+      const projected = await visibleIncidentProjectionIds(client, deps.incidentProjector, reader, { channel: normalized });
+      const receipts = await insertReadReceipts(client, projected, reader);
       const res = await client.query(
-        `UPDATE messages SET read_at = NOW()::text WHERE channel = $1 AND from_agent <> $2 AND read_at IS NULL`,
-        [channel, reader],
+        `UPDATE messages SET read_at = NOW()::text WHERE channel = $1 AND from_agent <> $2 AND read_at IS NULL
+         AND NOT EXISTS (SELECT 1 FROM incident_projections p WHERE p.message_id = messages.id)`,
+        [normalized, reader],
       );
-      marked = res.rowCount;
-    } else if (session && reader) {
+      marked = receipts + res.rowCount;
+    } else if (session) {
+      const projected = await visibleIncidentProjectionIds(client, deps.incidentProjector, reader, { session });
+      const receipts = await insertReadReceipts(client, projected, reader);
       const res = await client.query(
-        `UPDATE messages SET read_at = NOW()::text WHERE session_id = $1 AND to_agent = $2 AND read_at IS NULL`,
+        `UPDATE messages SET read_at = NOW()::text WHERE session_id = $1 AND to_agent = $2 AND read_at IS NULL
+         AND NOT EXISTS (SELECT 1 FROM incident_projections p WHERE p.message_id = messages.id)`,
         [session, reader],
       );
-      marked = res.rowCount;
+      marked = receipts + res.rowCount;
     } else {
       return json({ error: "provide ids, or all/channel/session with reader" }, 400);
     }
@@ -1197,60 +1502,98 @@ async function handleV1(
   if (sub === "messages/pinned" && method === "GET") {
     const channel = str(url.searchParams.get("channel"));
     const session = str(url.searchParams.get("session")) ?? str(url.searchParams.get("session_id"));
-    const limit = clampLimit(url.searchParams.get("limit"));
-    const offsetRaw = parseInt(url.searchParams.get("offset") || "0", 10);
-    const offset = Number.isFinite(offsetRaw) && offsetRaw > 0 ? offsetRaw : 0;
+    const collection = collectionReadOptions(url);
     const clauses = ["pinned_at IS NOT NULL"];
     const params: unknown[] = [];
     if (channel) { params.push(channel); clauses.push(`channel = $${params.length}`); }
     if (session) { params.push(session); clauses.push(`session_id = $${params.length}`); }
-    params.push(limit);
+    params.push(collection.limit + 1);
     const limitIdx = params.length;
-    params.push(offset);
+    params.push(collection.offset);
     const offsetIdx = params.length;
-    const rows = await client.many(
-      `SELECT id, uuid, session_id, from_agent, to_agent, channel, project_id, content, priority,
-              blocking, reply_to, working_dir, repository, branch, metadata, edited_at, pinned_at,
-              attachments, created_at, read_at
+    const rows = await boundedCollectionQuery(client, collection.timeoutMs, (tx) => tx.many<Record<string, unknown>>(
+      `SELECT ${messagePreviewProjectionPg()}
        FROM messages WHERE ${clauses.join(" AND ")} ${pinnedOrderByClause()} LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
       params,
-    );
-    return json({ messages: rows });
+    ));
+    return json(packMessagePreviewPage(rows.map((row) => buildCollectionMessagePreview(row, collection.previewBytes)), {
+      limit: collection.limit,
+      cursor: collection.offset,
+      max_bytes: collection.maxBytes,
+      timeout_ms: collection.timeoutMs,
+    }));
   }
 
-  // ---- export messages (json|csv) ----
-  if (sub === "messages/export" && method === "GET") {
+  const exportArtifactMatch = sub.match(/^messages\/exports\/([0-9a-f-]+)$/i);
+  if (exportArtifactMatch && method === "GET") {
+    if (!agent) return json({ error: "authenticated agent is required" }, 401);
+    const loaded = loadMessageExportArtifact(exportArtifactMatch[1], agent);
+    if (!loaded) return json({ error: "Export artifact not found" }, 404);
+    return new Response(new Uint8Array(loaded.payload).buffer, {
+      status: 200,
+      headers: {
+        ...SECURITY_HEADERS,
+        "Content-Type": loaded.contentType,
+        "Content-Length": String(loaded.artifact.byte_length),
+        "Content-Disposition": `attachment; filename="${loaded.artifact.filename}"`,
+        "X-Content-SHA256": loaded.artifact.sha256,
+      },
+    });
+  }
+
+  // ---- bounded preview-only export artifacts ----
+  if ((sub === "messages/exports" && method === "POST") || (sub === "messages/export" && method === "GET")) {
+    if (!agent) return json({ error: "authenticated agent is required" }, 401);
+    const body = method === "POST" ? await readJson(req) : {};
+    const value = (name: string): unknown => method === "POST" ? body[name] : url.searchParams.get(name) ?? undefined;
+    const optionalString = (name: string): string | undefined => resolvePresentString(value(name), name);
+    const optionalNumber = (name: string): number | undefined => {
+      const raw = value(name);
+      if (raw === undefined || raw === null) return undefined;
+      const parsed = Number(raw);
+      if (!Number.isSafeInteger(parsed) || parsed <= 0) throw new Error(`${name} must be a positive integer`);
+      return parsed;
+    };
+    const requestedDetail = optionalString("detail");
+    if (requestedDetail !== undefined && requestedDetail !== "preview") {
+      return json({ error: "detail must be preview; full-body collection exports are not supported" }, 400);
+    }
+    const opts: ExportMessagesOptions = {
+      channel: optionalString("channel"),
+      session_id: optionalString("session_id") ?? optionalString("session"),
+      from: optionalString("from"),
+      since: optionalString("since"),
+      until: optionalString("until"),
+      format: optionalString("format") as ExportMessagesOptions["format"],
+      limit: optionalNumber("limit"),
+      max_bytes: optionalNumber("max_bytes"),
+      preview_bytes: optionalNumber("preview_bytes"),
+      timeout_ms: optionalNumber("timeout_ms"),
+    };
+    const resolved = resolveMessageExportOptions(opts);
     const clauses: string[] = [];
     const params: unknown[] = [];
-    const channel = str(url.searchParams.get("channel"));
-    const session = str(url.searchParams.get("session_id")) ?? str(url.searchParams.get("session"));
-    const from = str(url.searchParams.get("from"));
-    const since = str(url.searchParams.get("since"));
-    const until = str(url.searchParams.get("until"));
-    if (channel) { params.push(normalizeChannelName(channel)); clauses.push(`channel = $${params.length}`); }
-    if (session) { params.push(session); clauses.push(`session_id = $${params.length}`); }
-    if (from) { params.push(from); clauses.push(`from_agent = $${params.length}`); }
-    if (since) { params.push(since); clauses.push(`created_at >= $${params.length}`); }
-    if (until) { params.push(until); clauses.push(`created_at <= $${params.length}`); }
+    if (opts.channel) { params.push(normalizeChannelName(opts.channel)); clauses.push(`channel = $${params.length}`); }
+    if (opts.session_id) { params.push(opts.session_id); clauses.push(`session_id = $${params.length}`); }
+    if (opts.from) { params.push(opts.from); clauses.push(`from_agent = $${params.length}`); }
+    if (opts.since) { params.push(resolveIso8601Date(opts.since, "since")); clauses.push(`created_at >= $${params.length}`); }
+    if (opts.until) { params.push(resolveIso8601Date(opts.until, "until")); clauses.push(`created_at <= $${params.length}`); }
     const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
-    const rows = await client.many<Record<string, unknown>>(
-      `SELECT id, uuid, session_id, from_agent, to_agent, channel, project_id, content, priority,
-              blocking, reply_to, working_dir, repository, branch, metadata, edited_at, pinned_at,
-              attachments, created_at, read_at
-       FROM messages ${where} ORDER BY created_at ASC, id ASC`,
+    params.push(resolved.limit + 1);
+    const rows = await boundedCollectionQuery(client, resolved.timeoutMs, (tx) => tx.many<Record<string, unknown>>(
+      `SELECT ${messagePreviewProjectionPg()}
+       FROM messages ${where} ORDER BY created_at ASC, id ASC LIMIT $${params.length}`,
       params,
-    );
-    const messages = rows.map(parseServerMessage);
-    const format = str(url.searchParams.get("format")) === "csv" ? "csv" : "json";
-    if (format === "csv") {
-      const headers = "id,session_id,from_agent,to_agent,channel,content,priority,created_at,read_at";
-      const lines = messages.map((m) => [
-        String(m.id), csv(m.session_id), csv(m.from_agent), csv(m.to_agent), csv(m.channel),
-        csv(m.content), csv(m.priority), csv(m.created_at), csv(m.read_at),
-      ].join(","));
-      return json({ export: [headers, ...lines].join("\n") });
-    }
-    return json({ export: JSON.stringify(messages, null, 2) });
+    ));
+    const records = rows.slice(0, resolved.limit)
+      .map((row) => buildCollectionMessagePreview(row, resolved.previewBytes) as unknown as Record<string, unknown>);
+    const serialized = serializeMessageExport(records, {
+      format: resolved.format,
+      detail: "preview",
+      maxBytes: resolved.maxBytes,
+      hasMore: rows.length > resolved.limit,
+    });
+    return json({ artifact: writeMessageExportArtifact(serialized, resolved, agent, "remote") }, 201);
   }
 
   // ---- messages that @mention an agent ----
@@ -1262,20 +1605,25 @@ async function handleV1(
     const channel = str(url.searchParams.get("channel"));
     if (channel) { params.push(normalizeChannelName(channel)); clauses.push(`m.channel = $${params.length}`); }
     if (isTrue(url.searchParams.get("unread_only"))) clauses.push(`mm.notified_at IS NULL`);
-    const limit = clampLimit(url.searchParams.get("limit"), 50, 1000);
-    params.push(limit);
-    const rows = await client.many<Record<string, unknown>>(
-      `SELECT m.*, mm.id AS mention_id FROM messages m
+    const collection = collectionReadOptions(url);
+    params.push(collection.limit + 1);
+    const limitIdx = params.length;
+    params.push(collection.offset);
+    const offsetIdx = params.length;
+    const rows = await boundedCollectionQuery(client, collection.timeoutMs, (tx) => tx.many<Record<string, unknown>>(
+      `SELECT ${messagePreviewProjectionPg("m")}, mm.id AS mention_id,
+              (mm.notified_at IS NULL) AS unread FROM messages m
        JOIN message_mentions mm ON mm.message_id = m.id
        WHERE ${clauses.join(" AND ")}
-       ORDER BY m.created_at DESC LIMIT $${params.length}`,
+       ORDER BY m.created_at DESC, m.id DESC LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
       params,
-    );
-    const items = rows.map((r) => {
-      const { mention_id, ...rest } = r as Record<string, unknown> & { mention_id: number };
-      return { message: parseServerMessage(rest), mention_id: Number(mention_id) };
-    });
-    return json({ items });
+    ));
+    return json(packMessagePreviewPage(rows.map((row) => buildCollectionMessagePreview(row, collection.previewBytes)), {
+      limit: collection.limit,
+      cursor: collection.offset,
+      max_bytes: collection.maxBytes,
+      timeout_ms: collection.timeoutMs,
+    }));
   }
 
   const projectLinkageMatch = sub.match(/^channels\/([^/]+)\/project-message-linkage$/);
@@ -1506,6 +1854,9 @@ async function handleV1(
         "metadata must be a JSON object.",
         "Pass an object such as {\"goal_id\":\"goal-123\"}.",
       );
+    }
+    if (metadataSpoofsIncidentProjection(metadataObject)) {
+      return json({ error: "Canonical incident projection metadata is reserved for the dedicated projector" }, 409);
     }
     const metadata = metadataObject ? JSON.stringify(metadataObject) : null;
     const messageUuid = body.uuid === undefined ? randomUUID() : normalizeMessageUuid(body.uuid);
@@ -2015,11 +2366,18 @@ async function handleV1(
   const replyMatch = sub.match(/^messages\/(\d+)\/replies$/);
   if (replyMatch && method === "GET") {
     const id = Number(replyMatch[1]);
-    const rows = await client.many(
-      `SELECT * FROM messages WHERE reply_to = $1 ORDER BY created_at ASC, id ASC`,
-      [id],
-    );
-    return json({ messages: rows });
+    const collection = collectionReadOptions(url);
+    const rows = await boundedCollectionQuery(client, collection.timeoutMs, (tx) => tx.many<Record<string, unknown>>(
+      `SELECT ${messagePreviewProjectionPg()} FROM messages
+       WHERE reply_to = $1 ORDER BY created_at ASC, id ASC LIMIT $2 OFFSET $3`,
+      [id, collection.limit + 1, collection.offset],
+    ));
+    return json(packMessagePreviewPage(rows.map((row) => buildCollectionMessagePreview(row, collection.previewBytes)), {
+      limit: collection.limit,
+      cursor: collection.offset,
+      max_bytes: collection.maxBytes,
+      timeout_ms: collection.timeoutMs,
+    }));
   }
 
   // ---- per-message read status (channel members who have/haven't read) ----
@@ -2136,6 +2494,10 @@ async function handleV1(
     const tags = tagsArr.length ? JSON.stringify(tagsArr) : null;
     const metadata = metadataObj ? JSON.stringify(metadataObj) : null;
     const result = await client.transaction(async (tx) => {
+      await tx.get(
+        "SELECT pg_advisory_xact_lock($1::bigint) AS channel_identity_locked",
+        [CHANNEL_IDENTITY_ADVISORY_LOCK],
+      );
       if (projectId) {
         const project = await tx.get(`SELECT id FROM projects WHERE id = $1 FOR SHARE`, [projectId]);
         if (!project) {
@@ -2146,6 +2508,13 @@ async function handleV1(
             "Create or resolve the conversations project first with POST/GET /v1/projects, then retry with the returned project.id. If you only need the Projects canonical channel, create or send to that channel name without --project.",
           );
         }
+      }
+      const reserved = await tx.get<{ current_channel: string }>(
+        "SELECT current_channel FROM channel_rename_aliases WHERE old_channel = $1 FOR UPDATE",
+        [name],
+      );
+      if (reserved) {
+        return json({ error: `Channel #${name} is a reserved historical alias for #${reserved.current_channel}.` }, 409);
       }
       const existing = await tx.get(`SELECT name FROM channels WHERE name = $1`, [name]);
       if (existing) return json({ error: "Channel already exists" }, 409);
@@ -2554,12 +2923,6 @@ async function handleV1(
 
 // ---- channel notifications router -------------------------------------------
 
-function buildMessagePreview(content: string, maxChars = 140): string {
-  const normalized = content.replace(/[*#`~_>\-]/g, " ").replace(/\s+/g, " ").trim();
-  if (normalized.length <= maxChars) return normalized;
-  return normalized.slice(0, Math.max(1, maxChars)).trimEnd() + "…";
-}
-
 async function handleChannelNotifications(
   sub: string,
   method: string,
@@ -2618,6 +2981,10 @@ async function handleChannelNotifications(
   if (sub === "channel-notifications/inbox" && method === "GET") {
     const who = str(url.searchParams.get("agent"));
     if (!who) return json({ error: "agent is required" }, 400);
+    if (!agent || who.toLowerCase() !== agent.toLowerCase()) {
+      return json({ error: "notification agent must match the authenticated agent" }, 403);
+    }
+    const collection = collectionReadOptions(url);
     const presence = await client.get<{ id: string }>(
       `SELECT id FROM agent_presence WHERE LOWER(agent) = LOWER($1) ORDER BY last_seen_at DESC LIMIT 1`,
       [who],
@@ -2631,36 +2998,60 @@ async function handleChannelNotifications(
     if (since) { params.push(since); clauses.push(`m.created_at > $${params.length}`); }
     // Default filters to unread unless explicitly unread_only=false (matches local).
     if (url.searchParams.get("unread_only") !== "false") clauses.push("snr.message_id IS NULL");
-    const limit = clampLimit(url.searchParams.get("limit"), 20, 500);
+    params.push(collection.limit + 1);
+    const limitIdx = params.length;
+    params.push(collection.offset);
+    const offsetIdx = params.length;
     const rows = await client.many<{
       message_id: number; channel: string; from_agent: string; created_at: string;
-      priority: string; content: string; attachments: string | null; preview_chars: number; read_message_id: number | null;
+      priority: string; preview_source: string; attachment_count: number; preview_chars: number; read_message_id: number | null;
     }>(
-      `SELECT m.id AS message_id, m.channel, m.from_agent, m.created_at, m.priority, m.content, m.attachments,
+      `SELECT m.id AS message_id, m.channel, m.from_agent, m.created_at, m.priority,
+              CASE WHEN lower(COALESCE(m.channel, '')) LIKE '%incident%'
+                     OR lower(COALESCE(m.channel, '')) LIKE '%security%'
+                   THEN '${RESTRICTED_CHANNEL_PREVIEW}' ELSE left(m.content, ${COLLECTION_PREVIEW_SCAN_CHARS}) END AS preview_source,
+              CASE WHEN m.attachments IS NULL OR m.attachments = '' THEN 0
+                   ELSE jsonb_array_length(m.attachments::jsonb) END AS attachment_count,
               s.preview_chars, snr.message_id AS read_message_id
        FROM messages m
        INNER JOIN channel_subscriptions s ON s.channel = m.channel
        LEFT JOIN channel_notification_reads snr ON snr.message_id = m.id AND snr.agent = s.agent
        WHERE ${clauses.join(" AND ")}
-       ORDER BY m.created_at DESC, m.id DESC LIMIT ${limit}`,
+       ORDER BY m.created_at DESC, m.id DESC LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
       params,
     );
-    // Opt-in full body. `preview` strips `[*#`~_>-]`, which destroys every
-    // identifier a monitor acts on, so a reader that needs `agent-chief-staff`
-    // or `repo#92` intact asks for this instead of parsing the preview.
-    const includeContent = url.searchParams.get("include_content") === "true";
-    const notifications = rows.map((r) => ({
+    const candidates = rows.map((r) => ({
       message_id: Number(r.message_id),
       channel: r.channel,
       from_agent: r.from_agent,
       created_at: r.created_at,
-      priority: r.priority,
-      preview: buildMessagePreview(r.content, Number(r.preview_chars ?? 140)),
+      priority: r.priority as ChannelNotification["priority"],
+      preview: buildByteBoundedMessagePreview(r.preview_source, Number(r.preview_chars ?? 140), collection.previewBytes),
       unread: r.read_message_id == null,
-      has_attachments: !!r.attachments && r.attachments !== "[]",
-      ...(includeContent ? { content: redactSensitiveText(r.content) } : {}),
-    }));
-    return json({ notifications });
+      has_attachments: Number(r.attachment_count) > 0,
+    })) satisfies ChannelNotification[];
+    let page = packChannelNotificationPage(candidates, {
+      limit: collection.limit,
+      cursor: collection.offset,
+      max_bytes: collection.maxBytes,
+      timeout_ms: collection.timeoutMs,
+    });
+    if (isTrue(url.searchParams.get("mark_read")) && page.notifications.length) {
+      const ids = page.notifications.map((notification) => notification.message_id);
+      const marked = await client.query(
+        `INSERT INTO channel_notification_reads (agent, message_id)
+         SELECT $1, x FROM unnest($2::bigint[]) AS x ON CONFLICT DO NOTHING`,
+        [who, ids],
+      );
+      page = packChannelNotificationPage(candidates, {
+        limit: collection.limit,
+        cursor: collection.offset,
+        max_bytes: collection.maxBytes,
+        timeout_ms: collection.timeoutMs,
+        marked_read: marked.rowCount,
+      });
+    }
+    return json(page);
   }
 
   if (sub === "channel-notifications/read" && method === "POST") {

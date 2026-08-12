@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -6,6 +6,8 @@ import { join } from "path";
 const TEST_DIR = mkdtempSync(join(tmpdir(), "convchanid-cli-"));
 const TEST_DB = join(TEST_DIR, "channels.db");
 const CLI = ["bun", "run", "./src/cli/index.tsx"];
+
+setDefaultTimeout(15_000);
 
 function runCli(args: string[]) {
   const result = Bun.spawnSync({

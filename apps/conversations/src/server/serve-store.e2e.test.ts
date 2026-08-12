@@ -121,6 +121,15 @@ beforeAll(async () => {
         }
         if (p === "/channels") return Response.json({ channel: { id: 902, name: "cloud-written-channel" } });
         if (p === "/projects") return Response.json({ project: { id: 903, name: "cloud-written-project" } });
+        if (p === "/messages/exports") {
+          return Response.json({
+            artifact: {
+              artifact_id: "00000000-0000-4000-8000-000000000001",
+              count: CLOUD.exported,
+              detail: "preview",
+            },
+          }, { status: 201 });
+        }
         if (/^\/channels\/[^/]+\/(un)?archive$/.test(p)) {
           return Response.json({ channel: { id: 902, name: "cloud-written-channel" } });
         }
@@ -136,10 +145,6 @@ beforeAll(async () => {
       if (p === "/messages") {
         if (url.searchParams.get("count")) return Response.json({ count: CLOUD.messages });
         return Response.json({ messages: rows(CLOUD.messages, "cloud-message") });
-      }
-      if (p === "/messages/export") {
-        // serve.ts JSON.parses the export payload, so it must be parseable JSON.
-        return Response.json({ export: JSON.stringify(rows(CLOUD.exported, "cloud-export")) });
       }
       if (p === "/messages/pinned") return Response.json({ messages: rows(CLOUD.pinned, "cloud-pinned") });
       if (/^\/messages\/\d+\/reactions$/.test(p)) {

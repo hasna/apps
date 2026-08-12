@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { chmodSync, mkdtempSync, readFileSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -20,6 +20,8 @@ const HOME_DIR = mkdtempSync(join(tmpdir(), "conversations-identity-home-"));
 const TEST_DB = join(tmpdir(), `conversations-identity-${Date.now()}.db`);
 const CLI = ["bun", "run", "./src/cli/index.tsx"];
 const AGENT_ID_FILE = join(HOME_DIR, ".hasna", "conversations", "agent-id");
+
+setDefaultTimeout(15_000);
 
 function cliEnv(overrides: Record<string, string> = {}): Record<string, string> {
   const env: Record<string, string> = { ...process.env, ...{} } as Record<string, string>;

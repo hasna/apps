@@ -346,7 +346,7 @@ describe("project channel registration authority", () => {
     expect(laterPage.complete).toBe(true);
   });
 
-  test("does not expose reply targets from another channel or session", () => {
+  test("rejects reply targets from another channel or session before persistence", () => {
     createLocalProject();
     const left = createChannel("project-left", "tester", { project_id: PROJECT_ID });
     const right = createChannel("project-right", "tester", { project_id: PROJECT_ID });
@@ -369,7 +369,7 @@ describe("project channel registration authority", () => {
       ) VALUES (?, ?, ?, ?, ?, ?, ?, 'normal', 0, ?)
       RETURNING id, uuid
     `);
-    const crossChannel = insertMalformed.get(
+    expect(() => insertMalformed.get(
       "11111111-1111-4111-8111-111111111111",
       leftParent.session_id,
       "bob",
@@ -378,8 +378,8 @@ describe("project channel registration authority", () => {
       PROJECT_ID,
       "cross-channel child",
       leftParent.id,
-    ) as { id: number; uuid: string };
-    const crossSession = insertMalformed.get(
+    )).toThrow("reply parent is missing or outside the message scope");
+    expect(() => insertMalformed.get(
       "22222222-2222-4222-8222-222222222222",
       "channel:another-session",
       "carol",
@@ -388,7 +388,7 @@ describe("project channel registration authority", () => {
       PROJECT_ID,
       "cross-session child",
       rightParent.id,
-    ) as { id: number; uuid: string };
+    )).toThrow("reply parent is missing or outside the message scope");
 
     const page = listProjectChannelMessagePage({
       project_id: PROJECT_ID,
@@ -398,15 +398,7 @@ describe("project channel registration authority", () => {
       time_budget_ms: 5_000,
       call_limit: 1,
     });
-
-    expect(page.items.find((item) => item.target_id === crossChannel.uuid)).toMatchObject({
-      local_id: crossChannel.id,
-      reply_to_target_id: null,
-    });
-    expect(page.items.find((item) => item.target_id === crossSession.uuid)).toMatchObject({
-      local_id: crossSession.id,
-      reply_to_target_id: null,
-    });
+    expect(page.items.map((item) => item.local_id)).toEqual([rightParent.id]);
   });
 
   test("refuses a message collection read through a conflicting project", () => {

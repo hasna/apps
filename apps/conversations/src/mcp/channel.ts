@@ -24,6 +24,22 @@ import { getStore } from "../lib/store/index.js";
 const DEFAULT_POLL_INTERVAL_MS = 1000;
 const DEFAULT_START_DELAY_MS = 2000;
 
+function unrefTimer(timer: ReturnType<typeof setInterval> | ReturnType<typeof setTimeout>): void {
+  (timer as { unref?: () => void }).unref?.();
+}
+
+/**
+ * Bridges registered and not yet disposed. A bridge that outlives the test that
+ * made it keeps polling into later files (todos 890b269e), and this counter is
+ * what lets a test assert the disposer actually ran rather than trusting that
+ * it was reachable.
+ */
+let liveBridges = 0;
+
+export function liveChannelBridgeCountForTests(): number {
+  return liveBridges;
+}
+
 type SessionState = {
   agentId: string | null;
   claudeSessionId: string | null; // agent-claude session UUID
@@ -220,12 +236,15 @@ export function registerChannelBridge(
       }
 
       if (agent) {
-        const notifications = (await resolveStore().readChannelNotifications({
+        const notificationPage = await resolveStore().readChannelNotifications({
           agent,
           unread_only: true,
           limit: 20,
           mark_read: false,
-        })).sort((left, right) => left.created_at.localeCompare(right.created_at) || left.message_id - right.message_id);
+        });
+        const notifications = notificationPage.notifications.sort(
+          (left, right) => left.created_at.localeCompare(right.created_at) || left.message_id - right.message_id,
+        );
 
         for (const notification of notifications) {
           const delivered = await pushNotification({
@@ -268,12 +287,16 @@ export function registerChannelBridge(
     // to stderr via createPollHealth — stdout is the JSON-RPC channel and a
     // stray line there would corrupt the protocol stream.
     pollTimer = setInterval(runPoll, pollIntervalMs);
+    unrefTimer(pollTimer);
 
     runPoll();
   }
 
   // Start polling after connection established
   startTimer = setTimeout(() => startPolling(), startDelayMs);
+  unrefTimer(startTimer);
+  liveBridges += 1;
+  let disposed = false;
 
   /**
    * Dispose the bridge AND wait until it is quiescent.
@@ -291,6 +314,12 @@ export function registerChannelBridge(
     if (pollTimer) clearInterval(pollTimer);
     startTimer = null;
     pollTimer = null;
+    // Disposing twice is allowed and must not double-count: callers that own a
+    // server may dispose it explicitly and again in a teardown hook.
+    if (!disposed) {
+      disposed = true;
+      liveBridges -= 1;
+    }
     await Promise.allSettled([inFlightPoll]);
   };
 }

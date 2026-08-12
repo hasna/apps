@@ -6,11 +6,13 @@ import { registerMessagingTools } from "./messaging";
 import { createChannel } from "../../lib/channels";
 import { sendMessage } from "../../lib/messages";
 import { closeDb } from "../../lib/db";
-import { unlinkSync } from "fs";
+import { resetStoreForTests } from "../../lib/store/index";
+import { mkdtempSync, rmSync, unlinkSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
 const TEST_DB = join(tmpdir(), `conversations-test-messaging-mcp-${Date.now()}.db`);
+const TEST_EXPORT_DIR = mkdtempSync(join(tmpdir(), "conversations-test-messaging-export-"));
 
 async function resolveProjectId(explicit: string | undefined, _agent: string): Promise<string | undefined> {
   return explicit;
@@ -21,8 +23,11 @@ describe("messaging MCP tools", () => {
 
   beforeAll(async () => {
     process.env.CONVERSATIONS_DB_PATH = TEST_DB;
+    process.env.HASNA_CONVERSATIONS_EXPORT_DIR = TEST_EXPORT_DIR;
+    process.env.CONVERSATIONS_EXPORT_DIR = TEST_EXPORT_DIR;
     process.env.CONVERSATIONS_AGENT_ID = "messaging-test-agent";
     closeDb();
+    resetStoreForTests();
 
     const server = new McpServer({ name: "test-messaging-mcp", version: "0.0.1" });
     registerMessagingTools(server, resolveProjectId);
@@ -35,11 +40,15 @@ describe("messaging MCP tools", () => {
 
   afterAll(async () => {
     delete process.env.CONVERSATIONS_DB_PATH;
+    delete process.env.HASNA_CONVERSATIONS_EXPORT_DIR;
+    delete process.env.CONVERSATIONS_EXPORT_DIR;
     delete process.env.CONVERSATIONS_AGENT_ID;
     closeDb();
+    resetStoreForTests();
     try { unlinkSync(TEST_DB); } catch {}
     try { unlinkSync(TEST_DB + "-wal"); } catch {}
     try { unlinkSync(TEST_DB + "-shm"); } catch {}
+    try { rmSync(TEST_EXPORT_DIR, { recursive: true, force: true }); } catch {}
     await client.close();
   });
 
@@ -268,12 +277,14 @@ describe("messaging MCP tools", () => {
   });
 
   describe("export_messages", () => {
-    test("exports as JSON by default", async () => {
+    test("returns preview artifact metadata by default", async () => {
       const result = parseResult(await client.callTool({
         name: "export_messages",
         arguments: {},
       }) as any) as any;
-      expect(Array.isArray(result)).toBe(true);
+      expect(result.artifact.detail).toBe("preview");
+      expect(result.artifact.format).toBe("json");
+      expect(result.artifact.artifact_id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
     });
   });
 

@@ -9,12 +9,13 @@ import {
 import { formatSortDescriptor, type SortDescriptor } from "../lib/list-order.js";
 import { printErrorLine, printLine } from "../lib/stdout.js";
 import { DEFAULT_READ_LIMIT, takeWindow } from "../lib/message-window.js";
+import { COLLECTION_MAX_LIMIT } from "../lib/message-previews.js";
 
 /**
  * The row cap `conversations since <duration> --json` falls back to. Larger than
  * a single-channel read because the command spans every DM and channel at once.
  */
-export const SINCE_JSON_LIMIT = 200;
+export const SINCE_JSON_LIMIT = COLLECTION_MAX_LIMIT;
 
 /**
  * Warn — on STDERR — when a `--json` read came back exactly full, because a full

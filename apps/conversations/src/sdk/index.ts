@@ -6,6 +6,22 @@
 
 export interface Message { "id"?: number; "uuid"?: string; "session_id"?: string; "from_agent"?: string; "to_agent"?: string; "channel"?: string | null; "project_id"?: string | null; "content"?: string; "priority"?: string; "blocking"?: boolean; "reply_to"?: number | null; "created_at"?: string }
 
+export interface MessagePreview { "id": number; "mention_id"?: number; "uuid"?: string; "session_id": string; "from_agent": string; "to_agent": string; "channel": string | null; "project_id": string | null; "priority": "low" | "normal" | "high" | "urgent"; "working_dir": string | null; "repository": string | null; "branch": string | null; "created_at": string; "edited_at": string | null; "pinned_at": string | null; "unread": boolean; "blocking": boolean; "reply_to": number | null; "reply_count"?: number; "attachment_count": number; "has_attachments": boolean; "has_metadata": boolean; "preview": string; "preview_bytes": number; "content_bytes": number; "truncated": boolean; "redacted": boolean; "relevance_score"?: number }
+
+export interface MessagePreviewPage { "messages": Array<MessagePreview>; "count": number; "limit": number; "cursor": number; "next_cursor": number | null; "has_more": boolean; "skipped_count": number; "byte_length": number; "max_bytes": number; "timeout_ms": number; "compact": true; "detail_path": "messages/{id}"; "query"?: string }
+
+export interface MessageResponse { "message": Message }
+
+export interface ChannelNotification { "message_id": number; "channel": string; "from_agent": string; "created_at": string; "priority": "low" | "normal" | "high" | "urgent"; "preview": string; "unread": boolean; "has_attachments": boolean }
+
+export interface ChannelNotificationPage { "notifications": Array<ChannelNotification>; "count": number; "limit": number; "cursor": number; "next_cursor": number | null; "has_more": boolean; "skipped_count": number; "byte_length": number; "max_bytes": number; "timeout_ms": number; "marked_read": number; "compact": true; "detail_path": "messages/{id}" }
+
+export interface MessageExportRequest { "channel"?: string; "session_id"?: string; "from"?: string; "since"?: string; "until"?: string; "format"?: "json" | "csv"; "detail"?: "preview"; "limit"?: number; "max_bytes"?: number; "preview_bytes"?: number; "timeout_ms"?: number }
+
+export interface MessageExportArtifact { "artifact_id": string; "filename": string; "path": string | null; "download_path": string | null; "sha256": string; "format": "json" | "csv"; "detail": "preview"; "count": number; "has_more": boolean; "skipped_count": number; "byte_length": number; "max_bytes": number; "timeout_ms": number; "created_at": string }
+
+export interface MessageExportArtifactResponse { "artifact": MessageExportArtifact }
+
 export interface ProjectMessageLinkageHash { "id": number; "uuid": string; "hash": string; "preserved_hash": string }
 
 export interface Channel { "id"?: string; "name"?: string; "description"?: string | null; "topic"?: string | null; "project_id"?: string | null; "created_by"?: string; "created_at"?: string; "archived_at"?: string | null; "metadata"?: Record<string, unknown> | null; "tags"?: Array<string> }
@@ -23,6 +39,16 @@ export interface Project { "id"?: string; "name"?: string; "description"?: strin
 export interface ProjectPage { "projects": Array<Project>; "count": number; "cursor": number; "limit"?: number | null; "has_more": boolean; "next_cursor": number | null }
 
 export interface Agent { "agent"?: string; "session_id"?: string | null; "role"?: string; "project_id"?: string; "status"?: string; "last_seen_at"?: string }
+
+export interface IncidentSnapshotV1 { "id": string; "title": string; "severity": "info" | "low" | "medium" | "high" | "critical"; "status": "open" | "investigating" | "contained" | "monitoring" | "resolved" | "superseded"; "owner": string; "affected_scopes": Array<string>; "blocked_scopes": Array<string>; "containment": string | null; "next_action": string | null; "deadline": string | null; "closure_evidence": Array<string>; "supersedes_id": string | null; "superseded_by_id": string | null; "resolved_at": string | null; "version": number; "created_at": string; "updated_at": string }
+
+export interface IncidentProjectionEventV1 { "schema_version": 1; "source": "todos"; "authority_id": string; "incident_id": string; "transition_id": string; "incident_version": number; "occurred_at": string; "event_id": string; "projection_key": string; "incident": IncidentSnapshotV1 }
+
+export interface IncidentProjectionRecord { "id": number; "event_id": string; "projection_key": string; "message_id": number; "schema_version": 1; "source": "todos"; "tenant_id": string; "authority_id": string; "incident_id": string; "transition_id": string; "incident_version": number; "occurred_at": string; "status": "open" | "investigating" | "contained" | "monitoring" | "resolved" | "superseded"; "severity": "info" | "low" | "medium" | "high" | "critical"; "blocking": boolean; "supersedes_transition_id": string | null; "supersedes_incident_id": string | null; "superseded_by_incident_id": string | null; "canonical_payload": string; "payload_hash": string; "created_at": string; "message": Message; "replayed": boolean }
+
+export interface IncidentProjectionResponse { "projection": IncidentProjectionRecord }
+
+export interface IncidentProjectionError { "error": string; "code"?: string | null }
 
 export interface ConversationsClientOptions {
   /** Base URL, e.g. process.env.APP_API_URL. */
@@ -130,6 +156,15 @@ export class ConversationsClient {
       });
     }
 
+    /** Read a bounded, cursored page of notifications for the authenticated principal */
+    async readChannelNotifications(query?: { "agent"?: string; "channel"?: string; "since"?: string; "unread_only"?: boolean; "mark_read"?: boolean; "limit"?: number; "cursor"?: number; "max_bytes"?: number; "preview_bytes"?: number; "timeout_ms"?: number }, init?: RequestInit): Promise<ChannelNotificationPage> {
+      return this.request("GET", `/v1/channel-notifications/inbox`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
     async listChannels(query?: { "include_archived"?: boolean; "project_id"?: string }, init?: RequestInit): Promise<Record<string, unknown>> {
       return this.request("GET", `/v1/channels`, {
         body: undefined,
@@ -188,8 +223,26 @@ export class ConversationsClient {
       });
     }
 
-    /** List messages */
-    async listMessages(query?: { "to"?: string; "from"?: string; "channel"?: string; "session"?: string; "limit"?: number; "count"?: boolean }, init?: RequestInit): Promise<Record<string, unknown>> {
+    /** Append a canonical Todos incident projection */
+    async appendIncidentProjection(body: IncidentProjectionEventV1, init?: RequestInit): Promise<IncidentProjectionResponse> {
+      return this.request("POST", `/v1/incident-projections`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Read one canonical incident projection */
+    async getIncidentProjection(eventId: string, init?: RequestInit): Promise<IncidentProjectionResponse> {
+      return this.request("GET", `/v1/incident-projections/${encodeURIComponent(String(eventId))}`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** List bounded, redacted message previews */
+    async listMessages(query?: { "to"?: string; "from"?: string; "channel"?: string; "session"?: string; "project_id"?: string; "id"?: number; "uuid"?: string; "since_id"?: number; "since"?: string; "until"?: string; "limit"?: number; "offset"?: number; "order"?: "asc" | "desc"; "q"?: string; "mentions_only"?: string; "unread_only"?: boolean; "threads_only"?: boolean; "pinned_only"?: boolean; "blocking_only"?: boolean; "reply_to"?: number; "include_reply_counts"?: boolean; "max_bytes"?: number; "preview_bytes"?: number; "timeout_ms"?: number; "count"?: boolean }, init?: RequestInit): Promise<MessagePreviewPage> {
       return this.request("GET", `/v1/messages`, {
         body: undefined,
         query,
@@ -202,6 +255,15 @@ export class ConversationsClient {
       return this.request("POST", `/v1/messages`, {
         body,
         query: undefined,
+        init,
+      });
+    }
+
+    /** List bounded, redacted current-blocker previews visible to one agent */
+    async listUnreadBlockers(query?: { "agent": string; "limit"?: number; "offset"?: number; "max_bytes"?: number; "preview_bytes"?: number; "timeout_ms"?: number }, init?: RequestInit): Promise<MessagePreviewPage> {
+      return this.request("GET", `/v1/messages/blockers`, {
+        body: undefined,
+        query,
         init,
       });
     }
@@ -223,7 +285,25 @@ export class ConversationsClient {
       });
     }
 
-    async getMessage(id: number, init?: RequestInit): Promise<Record<string, unknown>> {
+    /** Create a bounded preview-only message export artifact */
+    async createMessageExport(body?: MessageExportRequest, init?: RequestInit): Promise<MessageExportArtifactResponse> {
+      return this.request("POST", `/v1/messages/exports`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Download one bounded preview artifact owned by the authenticated principal */
+    async downloadMessageExport(artifactId: string, init?: RequestInit): Promise<Array<MessagePreview> | string> {
+      return this.request("GET", `/v1/messages/exports/${encodeURIComponent(String(artifactId))}`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    async getMessage(id: number, init?: RequestInit): Promise<MessageResponse> {
       return this.request("GET", `/v1/messages/${encodeURIComponent(String(id))}`, {
         body: undefined,
         query: undefined,

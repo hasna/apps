@@ -6,7 +6,11 @@ import { closeDb, getDb } from "./db";
 import { sendMessage } from "./messages";
 import { createChannel } from "./channels";
 import { registerAgent } from "./presence";
-import { baselineChannelNotifications, buildMessagePreview, listChannelNotificationSubscriptions, markAllChannelNotificationsRead, markChannelNotificationsRead, readChannelNotifications, subscribeToChannelNotifications, unsubscribeFromChannelNotifications } from "./channel-notifications";
+import { baselineChannelNotifications, buildMessagePreview, listChannelNotificationSubscriptions, markAllChannelNotificationsRead, markChannelNotificationsRead, readChannelNotifications as readChannelNotificationPage, subscribeToChannelNotifications, unsubscribeFromChannelNotifications } from "./channel-notifications";
+import type { ReadChannelNotificationsOptions } from "./channel-notifications";
+
+const readChannelNotifications = (opts: ReadChannelNotificationsOptions) =>
+  readChannelNotificationPage(opts).notifications;
 import { pinStoreToDb, restoreStoreEnv } from "./store/isolated-test-env.js";
 
 const TEST_DB = join(tmpdir(), `conversations-test-channel-notifications-${Date.now()}.db`);
@@ -150,7 +154,7 @@ describe("channel notifications", () => {
 
     expect(notifications).toHaveLength(1);
     expect(notifications[0].message_id).toBe(id);
-    expect(notifications[0].preview).toContain("[REDACTED:DATABASE URL]");
+    expect(notifications[0].preview).toContain("[REDACTED:DATABASE_URL]");
     expect(notifications[0].preview).not.toContain(blocked);
   });
 
@@ -289,11 +293,9 @@ describe("readChannelNotifications include_content", () => {
     insertLegacyChannelMessage("ops", `legacy DSN ${blocked}`);
     const [notification] = readChannelNotifications({ agent: "agent-a", include_content: true });
 
-    // The marker keeps its underscore here and loses it in the preview
-    // (`[REDACTED:DATABASE URL]`), which is the strip this option exists to
-    // avoid, demonstrated on the redactor's own output.
+    // The marker remains identical in both bounded representations.
     expect(notification.content).toContain("[REDACTED:DATABASE_URL]");
     expect(notification.content).not.toContain(blocked);
-    expect(notification.preview).toContain("[REDACTED:DATABASE URL]");
+    expect(notification.preview).toContain("[REDACTED:DATABASE_URL]");
   });
 });

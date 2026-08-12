@@ -562,8 +562,10 @@ describe("exportMessages", () => {
     const parsed = JSON.parse(result);
     expect(Array.isArray(parsed)).toBe(true);
     expect(parsed).toHaveLength(2);
-    expect(parsed[0].content).toBe("hello");
-    expect(parsed[1].content).toBe("world");
+    expect(parsed[0].content).toBeUndefined();
+    expect(parsed[0].preview).toBe("hello");
+    expect(parsed[1].content).toBeUndefined();
+    expect(parsed[1].preview).toBe("world");
   });
 
   test("redacts sensitive content in JSON exports", () => {
@@ -575,9 +577,9 @@ describe("exportMessages", () => {
     const parsed = JSON.parse(result);
     const serialized = JSON.stringify(parsed);
 
-    expect(parsed[0].content).toContain("[REDACTED:DATABASE_URL]");
-    expect(serialized).toContain("[REDACTED:BEARER_TOKEN]");
-    expect(serialized).toContain("[REDACTED:CLOUD_KEY]");
+    expect(parsed[0].preview).toContain("[REDACTED:DATABASE_URL]");
+    expect(parsed[0].content).toBeUndefined();
+    expect(parsed[0].has_metadata).toBe(true);
     expect(serialized).not.toContain(syntheticDatabaseUrl());
     expect(serialized).not.toContain(syntheticBearerToken());
     expect(serialized).not.toContain(syntheticCloudSecretValue());
@@ -600,7 +602,7 @@ describe("exportMessages", () => {
     sendMessage({ from: "alice", to: "bob", content: "hello" });
     const result = exportMessages({ format: "csv" });
     const lines = result.split("\n");
-    expect(lines[0]).toBe("id,session_id,from_agent,to_agent,channel,content,priority,created_at,read_at");
+    expect(lines[0]).toBe("id,session_id,from_agent,to_agent,channel,project_id,preview,priority,created_at,unread,blocking,truncated,redacted");
     expect(lines).toHaveLength(2);
     expect(lines[1]).toContain("alice");
     expect(lines[1]).toContain("bob");
@@ -622,7 +624,8 @@ describe("exportMessages", () => {
     const result = exportMessages({ channel: "general" });
     const parsed = JSON.parse(result);
     expect(parsed).toHaveLength(1);
-    expect(parsed[0].content).toBe("in-channel");
+    expect(parsed[0].content).toBeUndefined();
+    expect(parsed[0].preview).toBe("in-channel");
   });
 
   test("filters by date range (since/until)", () => {
@@ -652,7 +655,8 @@ describe("exportMessages", () => {
     const result = exportMessages({ session_id: "s1" });
     const parsed = JSON.parse(result);
     expect(parsed).toHaveLength(1);
-    expect(parsed[0].content).toBe("1");
+    expect(parsed[0].content).toBeUndefined();
+    expect(parsed[0].preview).toBe("1");
   });
 
   test("filters by from", () => {
@@ -1208,11 +1212,11 @@ describe("readDigest", () => {
     subscribeToChannelNotifications("digest-notify", "reader");
     const msg = sendMessage({ from: "alice", to: "digest-notify", channel: "digest-notify", content: "notify me" });
 
-    expect(readChannelNotifications({ agent: "reader", channel: "digest-notify", unread_only: true })).toHaveLength(1);
+    expect(readChannelNotifications({ agent: "reader", channel: "digest-notify", unread_only: true }).notifications).toHaveLength(1);
     const result = readDigest({ channel: "digest-notify", mark_read: true, reader: "reader" });
 
     expect(result.message_ids).toEqual([msg.id]);
-    expect(readChannelNotifications({ agent: "reader", channel: "digest-notify", unread_only: true })).toHaveLength(0);
+    expect(readChannelNotifications({ agent: "reader", channel: "digest-notify", unread_only: true }).notifications).toHaveLength(0);
   });
 
   test("supports unread-only mode explicitly", () => {

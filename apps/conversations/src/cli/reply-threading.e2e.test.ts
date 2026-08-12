@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { unlinkSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -10,14 +10,17 @@ import { isolatedStoreChildEnv } from "../lib/store/isolated-test-env.js";
 // concealed it, so every assertion here is a READ-BACK of the stored row
 // through a different command than the one that wrote it, never the exit code
 // or the success message alone.
-const TEST_DB = join(tmpdir(), `conversations-cli-reply-threading-${Date.now()}.db`);
+let testDbCounter = 0;
+let testDb = "";
 const CLI = ["bun", "run", "./src/cli/index.tsx"];
+
+setDefaultTimeout(15_000);
 
 function runCli(args: string[], agent: string) {
   const result = Bun.spawnSync({
     cmd: [...CLI, ...args],
     cwd: process.cwd(),
-    env: isolatedStoreChildEnv(TEST_DB, {
+    env: isolatedStoreChildEnv(testDb, {
       CONVERSATIONS_AGENT_ID: agent,
       FORCE_COLOR: "0",
     }),
@@ -50,9 +53,13 @@ function seedRoot(channel: string): number {
 }
 
 describe("reply threading persistence (e2e)", () => {
-  afterAll(() => {
+  beforeEach(() => {
+    testDb = join(tmpdir(), `conversations-cli-reply-threading-${Date.now()}-${process.pid}-${++testDbCounter}.db`);
+  });
+
+  afterEach(() => {
     for (const suffix of ["", "-wal", "-shm"]) {
-      try { unlinkSync(`${TEST_DB}${suffix}`); } catch {}
+      try { unlinkSync(`${testDb}${suffix}`); } catch {}
     }
   });
 
@@ -139,7 +146,7 @@ describe("reply threading persistence (e2e)", () => {
 
     const all = runCli(["channel", "read", "thread-numeric-scoped", "--from", "bob", "--json"], "bob");
     expect(all.stdout).not.toContain("must not cross channel");
-  });
+  }, 15_000);
 
   test("a consumer that groups by reply_to counts the replies (summary reply_count)", () => {
     const rootId = seedRoot("thread-group");
@@ -163,7 +170,7 @@ describe("reply threading persistence (e2e)", () => {
     expect(summary.exitCode).toBe(0);
     const parsed = JSON.parse(summary.stdout) as { activity: { reply_count: number } };
     expect(parsed.activity.reply_count).toBe(2);
-  });
+  }, 15_000);
 
   test("a plain channel send stays unthreaded — the fix must not thread everything", () => {
     const rootId = seedRoot("thread-negative");

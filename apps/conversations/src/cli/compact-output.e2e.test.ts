@@ -37,7 +37,7 @@ describe("compact CLI output", () => {
     try { unlinkSync(`${TEST_DB}-shm`); } catch {}
   });
 
-  test("read is compact by default but verbose and json keep full content", () => {
+  test("collection reads stay bounded and exact show keeps full content", () => {
     const content = `Compact output starts here ${"x ".repeat(140)}TAIL_ONLY_IN_VERBOSE`;
     const send = runCli(["send", content, "--to", "bob"], "alice");
     expect(send.exitCode).toBe(0);
@@ -51,12 +51,16 @@ describe("compact CLI output", () => {
 
     const verbose = runCli(["read", "--to", "bob", "--limit", "1", "--verbose"], "bob");
     expect(verbose.exitCode).toBe(0);
-    expect(verbose.stdout).toContain("TAIL_ONLY_IN_VERBOSE");
+    expect(verbose.stdout).not.toContain("TAIL_ONLY_IN_VERBOSE");
 
     const json = runCli(["read", "--to", "bob", "--limit", "1", "--json"], "bob");
     expect(json.exitCode).toBe(0);
-    expect(JSON.parse(json.stdout)[0].content).toContain("TAIL_ONLY_IN_VERBOSE");
-  });
+    const preview = JSON.parse(json.stdout)[0] as { id: number; content: string };
+    expect(preview.content).not.toContain("TAIL_ONLY_IN_VERBOSE");
+    const exact = runCli(["show", String(preview.id), "--json"], "bob");
+    expect(exact.exitCode).toBe(0);
+    expect(JSON.parse(exact.stdout).content).toContain("TAIL_ONLY_IN_VERBOSE");
+  }, 15_000);
 
   // `--limit 1` is a recency window, so the displayed page is the NEWEST message
   // and that is the one marked. This test previously asserted the opposite —
@@ -92,7 +96,7 @@ describe("compact CLI output", () => {
     const unread = runCli(["read", "--to", agent, "--unread-only", "--json"], agent);
     expect(unread.exitCode).toBe(0);
     expect(JSON.parse(unread.stdout).map((message: { content: string }) => message.content)).toEqual(["still unread"]);
-  });
+  }, 15_000);
 
   test("send exits nonzero for sensitive content without echoing the value", () => {
     const blocked = syntheticDatabaseUrl();

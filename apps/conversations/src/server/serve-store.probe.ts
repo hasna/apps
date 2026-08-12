@@ -121,6 +121,10 @@ function sizeOf(path: string, body: unknown): number | null {
     if (Array.isArray(rec.related)) return rec.related.length;
     if (Array.isArray(rec.messages)) return rec.messages.length;
     if (Array.isArray(rec.nodes)) return rec.nodes.length;
+    if (rec.artifact && typeof rec.artifact === "object") {
+      const count = (rec.artifact as Record<string, unknown>).count;
+      if (typeof count === "number") return count;
+    }
   }
   return null;
 }

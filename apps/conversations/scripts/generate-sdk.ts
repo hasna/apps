@@ -69,6 +69,33 @@ function binaryOperationNames(spec: typeof openapiSpec): Set<string> {
   return names;
 }
 
+function textOperationNames(spec: typeof openapiSpec): Set<string> {
+  const names = new Set<string>();
+  for (const pathItem of Object.values(spec.paths)) {
+    for (const operation of Object.values(pathItem)) {
+      if (!operation || typeof operation !== "object" || !("operationId" in operation)) continue;
+      const responses = "responses" in operation ? operation.responses : undefined;
+      if (!responses || typeof responses !== "object") continue;
+      const hasTextSuccess = Object.entries(responses).some(([status, response]) => {
+        if (!status.startsWith("2") || !response || typeof response !== "object" || !("content" in response)) {
+          return false;
+        }
+        const content = response.content;
+        if (!content || typeof content !== "object") return false;
+        return Object.entries(content).some(([mediaType, media]) => {
+          if (!mediaType.startsWith("text/") || !media || typeof media !== "object" || !("schema" in media)) {
+            return false;
+          }
+          const schema = media.schema;
+          return !!schema && typeof schema === "object" && "type" in schema && schema.type === "string";
+        });
+      });
+      if (hasTextSuccess && typeof operation.operationId === "string") names.add(operation.operationId);
+    }
+  }
+  return names;
+}
+
 function withBinaryResponses(
   code: string,
   binaryNames: Set<string>,
@@ -150,6 +177,32 @@ function withBinaryResponses(
   return transformed;
 }
 
+function withTextResponses(
+  code: string,
+  textNames: Set<string>,
+  operations: Array<{ operationId: string; functionName: string }>,
+): string {
+  let transformed = code;
+  for (const operation of operations) {
+    if (!textNames.has(operation.operationId)) continue;
+    const marker = `    async ${operation.functionName}(`;
+    const start = transformed.indexOf(marker);
+    if (start < 0) throw new Error(`Generated SDK is missing text operation ${operation.operationId}.`);
+    const signatureEnd = transformed.indexOf("\n", start);
+    const returnStart = transformed.lastIndexOf("): Promise<", signatureEnd);
+    const returnEnd = transformed.lastIndexOf("> {", signatureEnd);
+    if (returnStart < start || returnEnd < returnStart) {
+      throw new Error(`Generated SDK text operation ${operation.operationId} has no safe return boundary.`);
+    }
+    const generatedReturn = transformed.slice(returnStart + "): Promise<".length, returnEnd);
+    if (generatedReturn.split(" | ").includes("string")) continue;
+    transformed = transformed.slice(0, returnStart) +
+      `): Promise<${generatedReturn} | string` +
+      transformed.slice(returnEnd);
+  }
+  return transformed;
+}
+
 const header =
   "// @generated from src/server/openapi.ts by scripts/generate-sdk.ts — DO NOT EDIT.\n" +
   "// Regenerate: bun run sdk:generate\n\n";
@@ -165,9 +218,13 @@ export function generateSdkSource(spec: typeof openapiSpec = openapiSpec): {
     className: "ConversationsClient",
     apiKeyHeader: "x-api-key",
   });
-  const generated = withBinaryResponses(
-    withActionableErrors(result.code),
-    binaryOperationNames(spec),
+  const generated = withTextResponses(
+    withBinaryResponses(
+      withActionableErrors(result.code),
+      binaryOperationNames(spec),
+      result.operations,
+    ),
+    textOperationNames(spec),
     result.operations,
   ).trimEnd();
   return {

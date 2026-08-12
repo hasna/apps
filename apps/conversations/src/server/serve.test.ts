@@ -588,25 +588,27 @@ describe("API /api/agents", () => {
 });
 
 describe("API /api/export", () => {
-  test("GET exports messages as JSON by default", async () => {
+  test("GET creates a bounded preview-only JSON artifact by default", async () => {
     sendMessage({ from: "export-user", to: "other", content: "export-test-msg" });
     const res = await fetch(`${base()}/api/export`);
     expect(res.status).toBe(200);
     const ct = res.headers.get("content-type") || "";
     expect(ct).toContain("application/json");
-    const data = await res.json() as any[];
-    expect(Array.isArray(data)).toBe(true);
-    expect(data.length).toBeGreaterThanOrEqual(1);
+    const data = await res.json() as { artifact: Record<string, unknown> };
+    expect(data.artifact.detail).toBe("preview");
+    expect(Number(data.artifact.count)).toBeGreaterThanOrEqual(1);
+    expect(data.artifact.sha256).toMatch(/^[0-9a-f]{64}$/);
   });
 
-  test("GET exports messages as CSV", async () => {
+  test("GET creates CSV artifact metadata without streaming bodies", async () => {
     sendMessage({ from: "csv-user", to: "other", content: "csv-export-msg" });
     const res = await fetch(`${base()}/api/export?format=csv`);
     expect(res.status).toBe(200);
     const ct = res.headers.get("content-type") || "";
-    expect(ct).toContain("text/csv");
-    const text = await res.text();
-    expect(text.length).toBeGreaterThan(0);
+    expect(ct).toContain("application/json");
+    const data = await res.json() as { artifact: Record<string, unknown> };
+    expect(data.artifact.format).toBe("csv");
+    expect(data.artifact.detail).toBe("preview");
   });
 
   test("GET filters by channel", async () => {
@@ -614,16 +616,18 @@ describe("API /api/export", () => {
     sendMessage({ from: "a", to: "export-sp", content: "export-sp-msg", channel: "export-sp" });
     const res = await fetch(`${base()}/api/export?channel=export-sp`);
     expect(res.status).toBe(200);
-    const data = await res.json() as any[];
-    expect(data.every((m: any) => m.channel === "export-sp")).toBe(true);
+    const data = await res.json() as { artifact: Record<string, unknown> };
+    expect(data.artifact.detail).toBe("preview");
+    expect(data.artifact.count).toBe(1);
   });
 
   test("GET filters by from", async () => {
     sendMessage({ from: "export-sender", to: "b", content: "export-from-msg" });
     const res = await fetch(`${base()}/api/export?from=export-sender`);
     expect(res.status).toBe(200);
-    const data = await res.json() as any[];
-    expect(data.every((m: any) => m.from_agent === "export-sender")).toBe(true);
+    const data = await res.json() as { artifact: Record<string, unknown> };
+    expect(data.artifact.detail).toBe("preview");
+    expect(data.artifact.count).toBe(1);
   });
 });
 

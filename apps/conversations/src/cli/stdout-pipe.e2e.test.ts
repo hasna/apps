@@ -173,7 +173,7 @@ describe("conversations --json over a pipe", () => {
     }
   }, SPAWN_TIMEOUT_MS);
 
-  test("human-readable output is not truncated through a pipe either", () => {
+  test("human-readable collection output stays bounded and identical through a pipe", () => {
     // `channel read <name>` returns rc=0 and "No messages in #<name>." for a
     // channel that does NOT exist, identically to one that exists and is empty,
     // so an operator reading channels in plain text is exactly as exposed as
@@ -189,8 +189,8 @@ describe("conversations --json over a pipe", () => {
       const redirected = pipeline(`${read} > ${JSON.stringify(outFile)}`, dbPath);
       expect(redirected.exitCode).toBe(0);
       const expected = readFileSync(outFile);
-      // Positive control on the input: below one pipe buffer this proves nothing.
-      expect(expected.byteLength).toBeGreaterThan(PIPE_BUFFER_BYTES * 4);
+      // Safe collection reads are bounded previews; exact bodies require show.
+      expect(expected.byteLength).toBeLessThan(PIPE_BUFFER_BYTES);
 
       const piped = pipeline(`${read} | cat`, dbPath);
       expect(piped.exitCode).toBe(0);

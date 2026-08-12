@@ -1,7 +1,9 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import { Box, Text, useInput } from "ink";
 import TextInput from "ink-text-input";
-import { readMessages, sendMessage, markSessionRead, markChannelRead } from "../../lib/messages.js";
+import { sendMessage } from "../../lib/messages.js";
+import { previewAsCompatibilityMessage } from "../../lib/message-previews.js";
+import { getStore } from "../../lib/store/index.js";
 import { SensitiveContentError } from "../../lib/content-safety.js";
 import { startPolling } from "../../lib/poll.js";
 import { MessageBubble } from "./MessageBubble.js";
@@ -71,7 +73,9 @@ export function submitChatViewMessage(
 }
 
 export function ChatView({ agent, onBack, sessionId: initialSessionId, recipient, channelName }: ChatViewProps) {
+  const store = useMemo(() => getStore(), []);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [detail, setDetail] = useState<Message | null>(null);
   const [input, setInput] = useState("");
   const [sendError, setSendError] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState(initialSessionId);
@@ -80,6 +84,7 @@ export function ChatView({ agent, onBack, sessionId: initialSessionId, recipient
 
   // Load existing messages + poll for new ones
   useEffect(() => {
+    let cancelled = false;
     seenIds.current = new Set();
     const opts = isChannel
       ? { channel: channelName }
@@ -89,11 +94,12 @@ export function ChatView({ agent, onBack, sessionId: initialSessionId, recipient
 
     // Only load if we have something to query
     if (isChannel || sessionId) {
-      const existing = readMessages(opts);
-      for (const msg of existing) {
-        seenIds.current.add(msg.id);
-      }
-      setMessages(existing);
+      void store.readMessagePreviews(opts).then((page) => {
+        if (cancelled) return;
+        const existing = page.messages.map(previewAsCompatibilityMessage);
+        for (const msg of existing) seenIds.current.add(msg.id);
+        setMessages(existing);
+      });
     } else {
       setMessages([]);
     }
@@ -122,21 +128,30 @@ export function ChatView({ agent, onBack, sessionId: initialSessionId, recipient
     // `stop()` now resolves once the loop is quiescent, but a React effect
     // destructor must return void — not a promise — so the wait is discarded
     // here deliberately. Unmounting does not need to block on a final read.
-    return () => { void stop(); };
-  }, [sessionId, channelName]);
+    return () => {
+      cancelled = true;
+      void stop();
+    };
+  }, [store, sessionId, channelName, isChannel]);
 
-  // Mark as read
-  useEffect(() => {
-    if (messages.length === 0) return;
-    if (isChannel && channelName) {
-      markChannelRead(channelName, agent);
-    } else if (sessionId) {
-      markSessionRead(sessionId, agent);
+  useInput((keyInput, key) => {
+    if (key.escape) {
+      if (detail) setDetail(null);
+      else onBack();
+      return;
     }
-  }, [messages.length, isChannel, channelName, sessionId, agent]);
-
-  useInput((_, key) => {
-    if (key.escape) onBack();
+    const selected = messages[messages.length - 1];
+    if (!selected || input.length > 0) return;
+    if (keyInput === "v") {
+      void store.getMessageById(selected.id).then(setDetail);
+    }
+    if (keyInput === "m") {
+      void store.markReadByIds([selected.id], agent).then(() => {
+        setMessages((current) => current.map((message) => (
+          message.id === selected.id ? { ...message, read_at: new Date().toISOString() } : message
+        )));
+      });
+    }
   });
 
   const handleSubmit = (value: string) => {
@@ -173,11 +188,16 @@ export function ChatView({ agent, onBack, sessionId: initialSessionId, recipient
     <Box flexDirection="column" padding={1}>
       <Box marginBottom={1}>
         <Text bold color={isChannel ? "magenta" : "cyan"}>{title}</Text>
-        <Text dimColor>  (Esc: back)</Text>
+        <Text dimColor>  (v: exact detail, m: mark latest, Esc: back)</Text>
       </Box>
 
       <Box flexDirection="column" flexGrow={1}>
-        {messages.length === 0 ? (
+        {detail ? (
+          <Box flexDirection="column">
+            <Text bold>Exact message #{detail.id}</Text>
+            <Text>{detail.content}</Text>
+          </Box>
+        ) : messages.length === 0 ? (
           <Text dimColor>No messages yet. Type below and press Enter.</Text>
         ) : (
           messages.map((msg) => (

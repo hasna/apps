@@ -309,9 +309,9 @@ describe("ApiStore channel notification cursor", () => {
       mark_read: true,
     });
 
-    expect(firstPoll.map((row) => row.message_id)).toEqual([620874, 620878]);
-    expect(firstPoll.every((row) => row.unread === false)).toBe(true);
-    expect(secondPoll).toEqual([]);
+    expect(firstPoll.notifications.map((row) => row.message_id)).toEqual([620874, 620878]);
+    expect(firstPoll.notifications.every((row) => row.unread === false)).toBe(true);
+    expect(secondPoll.notifications).toEqual([]);
     expect(posts).toEqual([
       {
         path: "/channel-notifications/read",

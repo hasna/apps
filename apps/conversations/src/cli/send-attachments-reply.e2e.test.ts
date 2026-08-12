@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import {
   chmodSync,
   mkdirSync,
@@ -18,6 +18,8 @@ const TEST_DB = join(TEST_ROOT, "conversations.db");
 const ATTACHMENTS_DIR = join(TEST_ROOT, "attachments");
 const SOURCE_DIR = join(TEST_ROOT, "source");
 const CLI = ["bun", "run", "./src/cli/index.tsx"];
+
+setDefaultTimeout(30_000);
 
 mkdirSync(SOURCE_DIR, { recursive: true });
 

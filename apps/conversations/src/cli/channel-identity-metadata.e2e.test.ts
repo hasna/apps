@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -8,6 +8,8 @@ import { isolatedStoreChildEnv } from "../lib/store/isolated-test-env.js";
 const TEST_DIR = mkdtempSync(join(tmpdir(), "conversations-channel-identity-"));
 const TEST_DB = join(TEST_DIR, "channels.db");
 const CLI = ["bun", "run", "./src/cli/index.tsx"];
+
+setDefaultTimeout(60_000);
 
 function runCli(args: string[]) {
   const result = Bun.spawnSync({

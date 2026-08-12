@@ -762,17 +762,7 @@ used for — auditing a sender or a channel, which is an ABSENCE claim.
         format,
       });
 
-      // An export emptied by the caller's own filter is the same silent false
-      // absence this change exists to remove, and it reached review as a live
-      // defect: `export --sender <nobody>` printed "[]" with 0 bytes on stderr
-      // at rc=0, which made --sender on this verb strictly MORE silent than the
-      // --from it is offered as an improvement on. Emptiness is read off the
-      // rendered payload rather than re-querying: "[]" for json, headers with no
-      // data row for csv.
-      const exportedNothing = format === "csv"
-        ? !result.includes("\n")
-        : result.trim() === "[]";
-      if (exportedNothing) {
+      if (result.count === 0) {
         discloseEmptyResult({
           channel: opts.channel,
           sender: senderFilter.sender,
@@ -781,7 +771,7 @@ used for — auditing a sender or a channel, which is an ABSENCE claim.
         }, { senderFlag: senderFilter.flag });
       }
 
-      printLine(result);
+      printJson(result);
       closeDb();
     });
 
@@ -1007,7 +997,7 @@ used for — auditing a sender or a channel, which is an ABSENCE claim.
         return;
       }
 
-      const notifications = await getStore().readChannelNotifications({
+      const page = await getStore().readChannelNotifications({
         agent,
         channel: opts.channel,
         since: normalizeSince(opts.since),
@@ -1017,11 +1007,11 @@ used for — auditing a sender or a channel, which is an ABSENCE claim.
       });
 
       if (opts.json) {
-        printJson(notifications);
-      } else if (notifications.length === 0) {
+        printJson(page);
+      } else if (page.notifications.length === 0) {
         printLine(chalk.dim("No channel notifications."));
       } else {
-        for (const item of notifications) {
+        for (const item of page.notifications) {
           const time = chalk.dim(item.created_at.slice(11, 19));
           const priority = item.priority !== "normal" ? chalk.red(` [${item.priority}]`) : "";
           const unread = item.unread ? chalk.yellow(" [unread]") : "";

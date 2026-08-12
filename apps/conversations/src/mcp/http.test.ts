@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { buildServer } from "./index.js";
+import { buildServer, disposeServer } from "./index.js";
 import { handleMcpRequest, resolveMcpHttpPort, DEFAULT_MCP_HTTP_PORT } from "./http.js";
 import { closeDb } from "../lib/db.js";
 import { readPersistedIdentity, _resetAutoName } from "../lib/identity.js";
@@ -220,8 +220,12 @@ describe("conversations MCP HTTP transport — two agents, one daemon", () => {
 });
 
 describe("conversations buildServer", () => {
-  test("registers tools for stdio and HTTP modes", () => {
-    expect(buildServer()).toBeDefined();
+  test("registers tools for stdio and HTTP modes", async () => {
+    // The stdio server owns a channel bridge; close it here or it polls on
+    // through every later file in the run (todos 890b269e).
+    const stdioServer = buildServer();
+    expect(stdioServer).toBeDefined();
     expect(buildServer(true)).toBeDefined();
+    await disposeServer(stdioServer);
   });
 });
