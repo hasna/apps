@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { ApiStore } from "./api-store.js";
 import { DEFAULT_READ_LIMIT } from "../message-window.js";
 import type { HasnaStorageClient } from "../contracts-client/storage.js";
+import type { MessagePreview } from "../../types.js";
 
 // A minimal fake HasnaStorageClient whose transport returns whatever the test
 // queues, so we can assert ApiStore normalizes raw API rows into the client
@@ -94,6 +95,104 @@ describe("ApiStore project normalization", () => {
     // store returns null.
     const store = new ApiStore(throwing404Client());
     expect(await store.getChannel("nope")).toBeNull();
+  });
+});
+
+describe("ApiStore bounded message reads", () => {
+  const preview: MessagePreview = {
+    id: 702001,
+    uuid: "11111111-2222-4333-8444-555555555555",
+    session_id: "session-digest-regression",
+    from_agent: "sender",
+    to_agent: "announcements",
+    channel: "announcements",
+    project_id: null,
+    priority: "normal",
+    working_dir: null,
+    repository: null,
+    branch: null,
+    created_at: "2026-08-12T07:00:00.000Z",
+    edited_at: null,
+    pinned_at: null,
+    unread: true,
+    blocking: false,
+    reply_to: null,
+    attachment_count: 0,
+    has_attachments: false,
+    has_metadata: false,
+    preview: "bounded announcement",
+    preview_bytes: Buffer.byteLength("bounded announcement"),
+    content_bytes: Buffer.byteLength("bounded announcement"),
+    truncated: false,
+    redacted: false,
+  };
+
+  test("readDigest converts bounded preview rows before building snippets", async () => {
+    const calls: Array<{ path: string; query: unknown }> = [];
+    const client = {
+      name: "conversations",
+      baseUrl: "https://conversations.hasna.xyz/v1",
+      transport: {
+        get: async (path: string, options?: { query?: Record<string, unknown> }) => {
+          calls.push({ path, query: options?.query ?? null });
+          return options?.query && "count" in options.query
+            ? { count: 1 }
+            : { messages: [preview], has_more: false, next_cursor: null };
+        },
+      },
+    } as unknown as HasnaStorageClient;
+
+    const result = await new ApiStore(client).readDigest({
+      channel: "announcements",
+      since: "2026-08-05T00:00:00Z",
+    });
+
+    expect(result.messages).toHaveLength(1);
+    expect(result.messages[0]?.snippet).toBe("bounded announcement");
+    expect(calls.map((call) => call.path)).toEqual(["/messages", "/messages", "/messages"]);
+  });
+
+  test("getUnreadBlockers relies on the authenticated principal instead of a local agent query", async () => {
+    const queries: Array<Record<string, unknown>> = [];
+    const client = {
+      name: "conversations",
+      baseUrl: "https://conversations.hasna.xyz/v1",
+      transport: {
+        get: async (path: string, options?: { query?: Record<string, unknown> }) => {
+          expect(path).toBe("/messages/blockers");
+          const query = options?.query ?? {};
+          queries.push(query);
+          if ("agent" in query) throw new Error("agent query must be omitted");
+          return {
+            messages: [preview],
+            count: 1,
+            limit: 20,
+            cursor: 0,
+            next_cursor: null,
+            has_more: false,
+            skipped_count: 0,
+            byte_length: 0,
+            max_bytes: 65_536,
+            timeout_ms: 3_000,
+            compact: true,
+            detail_path: "messages/{id}",
+          };
+        },
+      },
+    } as unknown as HasnaStorageClient;
+
+    const result = await new ApiStore(client).getUnreadBlockers("codewith-iapp-news");
+
+    expect(result).toHaveLength(1);
+    expect(result[0]?.content).toBe("bounded announcement");
+    expect(queries).toEqual([{
+      limit: 20,
+      cursor: 0,
+      max_bytes: 65_536,
+      preview_bytes: 320,
+      timeout_ms: 3_000,
+      detail: "preview",
+    }]);
   });
 });
 

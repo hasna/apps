@@ -59,6 +59,7 @@ import {
 import type {
   ChannelNotificationPage,
   IncidentProjectionRecord,
+  MessagePreview,
   MessagePreviewPage,
 } from "../../types.js";
 
@@ -1189,7 +1190,11 @@ export class ApiStore implements ConversationsStore {
       this.messageCount({ ...baseFilter, unread_only: true }),
     ]);
     const listRes = await this.get<{ messages?: Record<string, unknown>[] }>("/messages", { ...baseFilter, order: "asc", limit, unread_only: o.unread_only ? true : undefined });
-    const messages = (listRes?.messages ?? []).map(parseMessage);
+    // The hosted `/messages` endpoint is preview-only. Convert its bounded
+    // rows back to the legacy Message shape before digest assembly; parsing a
+    // preview as a full row leaves `content` undefined and crashes snippet
+    // normalization.
+    const messages = (listRes?.messages ?? []).map((row) => previewAsCompatibilityMessage(row as unknown as MessagePreview));
     const norm: DigestNorm = { channel, session_id: o.session_id, to: o.to, since, cursor, maxBytes, limit };
     const assembly = assembleDigest(norm, { total_available: totalAvailable, total_unread: totalUnread }, messages, !!o.mark_read);
     let markedRead = 0;
@@ -1243,14 +1248,16 @@ export class ApiStore implements ConversationsStore {
     const page = await this.getUnreadBlockerPreviews(agent, { ...opts, max_bytes: COLLECTION_MAX_MAX_BYTES });
     return page.messages.map(previewAsCompatibilityMessage) as never;
   };
-  getUnreadBlockerPreviews: ConversationsStore["getUnreadBlockerPreviews"] = async (agent, opts = {}) => {
+  getUnreadBlockerPreviews: ConversationsStore["getUnreadBlockerPreviews"] = async (_agent, opts = {}) => {
     const limit = resolveCollectionLimit(opts.limit);
     const cursor = resolveCollectionOffset(opts.offset);
     const maxBytes = resolveCollectionMaxBytes(opts.max_bytes);
     const previewBytes = resolveCollectionPreviewBytes(opts.preview_bytes);
     const timeoutMs = resolveCollectionTimeoutMs(opts.timeout_ms);
     return await this.getBounded<MessagePreviewPage>("/messages/blockers", {
-      agent,
+      // Blocker reads are scoped by the authenticated API principal. Sending
+      // the CLI's local identity as a query filter makes the server reject a
+      // valid request when the two identity surfaces have drifted.
       limit,
       cursor,
       max_bytes: maxBytes,
