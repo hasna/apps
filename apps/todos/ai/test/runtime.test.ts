@@ -1280,6 +1280,7 @@ describe("provider-neutral runtime", () => {
     const failures = [
       new TodosAiProviderError("rate_limit", true),
       new TodosAiProviderError("provider", true),
+      new TodosAiProviderError("credentials_rejected", false),
     ];
     let call = 0;
     const runtime = createTodosAiRuntimeWithDependencies(HOST_CONTEXT, {
@@ -1295,6 +1296,7 @@ describe("provider-neutral runtime", () => {
 
     const rate = await run(runtime, request());
     const provider = await run(runtime, request());
+    const credentials = await run(runtime, request());
 
     expect(rate.result.error).toEqual({
       code: "provider_error",
@@ -1307,6 +1309,12 @@ describe("provider-neutral runtime", () => {
       message: "The AI provider request failed.",
       retryable: true,
       details: { kind: "provider" },
+    });
+    expect(credentials.result.error).toEqual({
+      code: "provider_error",
+      message: "The AI provider rejected the configured credentials.",
+      retryable: false,
+      details: { kind: "credentials_rejected", provider: "groq" },
     });
   });
 
