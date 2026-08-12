@@ -57,6 +57,8 @@ export interface TypedActionRunOptions {
   timeoutMs?: number;
   actor?: ActorRef;
   signal?: AbortSignal;
+  /** Lease duration for each supervised action claim. */
+  leaseMs?: number;
   /** Called once after a non-detached execution reaches a terminal receipt. */
   onSettled?: () => void;
 }
@@ -168,17 +170,51 @@ export class TypedActionWorker {
     return { status: "running", ...baseReceipt, run: this.store.requireRun(run.id) };
   }
 
+  /** Re-execute one persisted partial typed receipt, preserving its source audit. */
+  async replayPartial(actionId: string, options: Omit<TypedActionRunOptions, "detach"> = {}): Promise<TypedActionRunReceipt> {
+    const source = this.store.requireQueuedAction(actionId);
+    if (source.status !== "succeeded" || source.result?.metadata?.deliveryStatus !== "partial") {
+      throw new Error(`queued action is not a typed partial receipt: ${actionId}`);
+    }
+    const replay = this.store.requeuePartialAction(actionId);
+    const run = this.store.requireRun(replay.automationRunId);
+    const automation = this.store.requireAutomation(run.automationId);
+    try {
+      return await this.executeRun(run.id, automation, options);
+    } finally {
+      options.onSettled?.();
+    }
+  }
+
   private async executeRun(
     runId: string,
     automation: AutomationRecord,
     options: TypedActionRunOptions,
   ): Promise<TypedActionRunReceipt> {
-    const signal = options.signal ?? new AbortController().signal;
     this.store.startRun(runId);
     while (true) {
       const action = this.store.claimNextActionForRun(runId, { runnerId: this.runnerId });
       if (!action) break;
       const definition = this.#definitions.get(actionKey(action.actionId, action.invocation.manifestVersion ?? "1.0.0"));
+      const fenceToken = action.fenceToken;
+      if (fenceToken === undefined) throw new Error(`typed action claim has no fence token: ${action.id}`);
+      const leaseMs = options.leaseMs ?? 30_000;
+      const renewalMs = Math.max(10, Math.floor(leaseMs / 3));
+      const executionController = new AbortController();
+      const abortOnExternal = (): void => executionController.abort(options.signal?.reason);
+      if (options.signal) {
+        if (options.signal.aborted) abortOnExternal();
+        else options.signal.addEventListener("abort", abortOnExternal, { once: true });
+      }
+      let leaseLost: unknown;
+      const renewal = setInterval(() => {
+        try {
+          this.store.renewActionLease({ actionId: action.id, runnerId: this.runnerId, fenceToken, leaseMs, now: new Date() });
+        } catch (error) {
+          leaseLost = error;
+          executionController.abort(error);
+        }
+      }, renewalMs);
       try {
         if (!definition) throw typedActionError("TYPED_ACTION_NOT_REGISTERED", `typed action is not registered: ${action.actionId}@${action.invocation.manifestVersion ?? "1.0.0"}`);
         const context: TypedActionContext = {
@@ -188,7 +224,7 @@ export class TypedActionWorker {
           manifest: definition.manifest,
           input: action.invocation.input,
           actor: options.actor ?? this.#authority.actor ?? action.invocation.actor,
-          signal,
+          signal: executionController.signal,
         };
         assertAuthority(definition.manifest, context.actor, this.#authority);
         if (definition.authorize) {
@@ -196,25 +232,29 @@ export class TypedActionWorker {
           if (!decision.allowed) throw typedActionError("ACTION_POLICY_DENIED", decision.reason ?? "typed action policy denied execution", false);
         }
         const raw = await definition.execute(context);
-        const normalized = normalizeResult(raw);
+        if (leaseLost) throw leaseLost;
+        const normalized = mergePriorDelivery(action, normalizeResult(raw));
         const settled = normalized.status === "failed" && normalized.receipts?.length
           ? { ...normalized, status: "partial" as const }
           : normalized;
         const result = resultForQueue(settled);
         if (settled.status === "failed" && !settled.receipts?.length) {
-          await this.store.failAction({ actionId: action.id, runnerId: this.runnerId, error: settled.error ?? typedActionError("TYPED_ACTION_FAILED", settled.summary ?? "typed action failed", false) });
+          await this.store.failAction({ actionId: action.id, runnerId: this.runnerId, fenceToken, error: settled.error ?? typedActionError("TYPED_ACTION_FAILED", settled.summary ?? "typed action failed", false) });
         } else {
-          await this.store.completeAction({ actionId: action.id, runnerId: this.runnerId, result });
+          await this.store.completeActionFenced({ actionId: action.id, runnerId: this.runnerId, fenceToken, result });
         }
       } catch (error) {
         const actionError = isActionError(error)
           ? error
           : typedActionError("TYPED_ACTION_FAILED", error instanceof Error ? error.message : String(error), false);
         try {
-          await this.store.failAction({ actionId: action.id, runnerId: this.runnerId, error: actionError });
+          await this.store.failAction({ actionId: action.id, runnerId: this.runnerId, fenceToken, error: actionError });
         } catch (settlementError) {
           throw settlementError;
         }
+      } finally {
+        clearInterval(renewal);
+        options.signal?.removeEventListener("abort", abortOnExternal);
       }
     }
     const run = this.store.settleRun(runId);
@@ -339,6 +379,17 @@ function normalizeResult(value: unknown): TypedActionExecutionResult {
     return { status: "succeeded", ...(value as ActionResult) };
   }
   return { status: "succeeded", output: value as JsonValue };
+}
+
+function mergePriorDelivery(action: QueuedAction, result: TypedActionExecutionResult): TypedActionExecutionResult {
+  const prior = action.result?.metadata?.deliveryReceipts;
+  if (!Array.isArray(prior) || !result.receipts?.length) return result;
+  const bySink = new Map<string, TypedActionDeliveryReceipt>();
+  for (const receipt of prior as unknown as TypedActionDeliveryReceipt[]) bySink.set(receipt.sink, receipt);
+  for (const receipt of result.receipts) bySink.set(receipt.sink, receipt);
+  const receipts = [...bySink.values()];
+  const hasFailure = receipts.some((receipt) => receipt.status === "failed");
+  return { ...result, status: hasFailure ? "partial" : "succeeded", receipts };
 }
 
 function resultForQueue(result: TypedActionExecutionResult): ActionResult {

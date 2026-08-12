@@ -203,6 +203,8 @@ export interface QueuedAction {
   claimedBy?: string;
   claimedAt?: string;
   leaseExpiresAt?: string;
+  /** Current claim fence used by supervised workers for renewal/settlement. */
+  fenceToken?: number;
   approvalGate?: ActionQueueApprovalGate;
   result?: ActionResult;
   error?: ActionError;
@@ -253,9 +255,18 @@ export interface QueueClaimOptions {
 export interface ActionFailureOptions {
   actionId: string;
   runnerId: string;
+  fenceToken?: number;
   error: ActionError;
   now?: string | Date;
   retryBackoffMs?: number;
+}
+
+export interface ActionLeaseRenewalOptions {
+  actionId: string;
+  runnerId: string;
+  fenceToken: number;
+  leaseMs?: number;
+  now?: string | Date;
 }
 
 export interface ActionCompletionOptions {

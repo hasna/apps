@@ -144,13 +144,20 @@ describe("TypedActionWorker", () => {
         { sink: "primary", status: "succeeded" as const, receipt: { id: "primary-1" } },
         { sink: "secondary", status: "failed" as const, error: { code: "SECONDARY_DOWN", message: "secondary unavailable" } },
       ];
+      let primaryEffects = 0;
+      let secondaryEffects = 0;
       const worker = new TypedActionWorker({
         store,
-        definitions: [definition("typed.partial", () => ({
-          status: "partial",
-          summary: "primary delivered; secondary failed",
-          receipts,
-        }))],
+        definitions: [definition("typed.partial", ({ action }) => {
+          const prior = action.result?.metadata?.deliveryReceipts as unknown as TypedActionDeliveryReceipt[] | undefined;
+          if (!prior) primaryEffects += 1;
+          secondaryEffects += 1;
+          return prior ? { status: "succeeded", receipts: [{ sink: "secondary", status: "succeeded" as const, receipt: { id: "secondary-2" } }] } : {
+            status: "partial",
+            summary: "primary delivered; secondary failed",
+            receipts,
+          };
+        })],
       });
 
       const receipt = await worker.run("typed.worker.demo@1.0.0");
@@ -161,6 +168,16 @@ describe("TypedActionWorker", () => {
       expect(receipt.actions?.[0]?.status).toBe("succeeded");
       expect(receipt.actions?.[0]?.result?.metadata?.deliveryStatus).toBe("partial");
       expect(receipt.actions?.[0]?.result?.metadata?.deliveryReceipts).toEqual(receipts as unknown as JsonValue);
+      const sourceAction = receipt.actions![0]!;
+      const replay = store.requeuePartialAction(sourceAction.id);
+      expect(replay).toMatchObject({ status: "queued", metadata: { partialReplayOf: sourceAction.id } });
+      expect(store.requeuePartialAction(sourceAction.id).id).toBe(replay.id);
+      const replayed = await worker.replayPartial(sourceAction.id);
+      expect(replayed.status).toBe("succeeded");
+      expect(replayed.run?.status).toBe("succeeded");
+      expect(primaryEffects).toBe(1);
+      expect(secondaryEffects).toBe(2);
+      expect(store.requireQueuedAction(sourceAction.id).result?.metadata?.deliveryReceipts).toEqual(receipts as unknown as JsonValue);
     } finally {
       store.close();
     }
@@ -184,12 +201,48 @@ describe("TypedActionWorker", () => {
       expect(detached.run).toBeUndefined();
       expect(store.requireRun(detached.runId).status).toBe("materialized");
 
-      const timed = await worker.run("typed.worker.demo@1.0.0", { timeoutMs: 1, onSettled: () => { settled = true; } });
+      const timed = await worker.run("typed.worker.demo@1.0.0", { timeoutMs: 1, leaseMs: 15, onSettled: () => { settled = true; } });
       expect(timed.status).toBe("running");
       expect(store.requireRun(timed.runId).status).toBe("running");
       await Bun.sleep(70);
       expect(store.requireRun(timed.runId).status).toBe("succeeded");
       expect(settled).toBe(true);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("renews a short typed lease and fences stale settlement", async () => {
+    const store = new AutomationsStore();
+    try {
+      store.createAutomation(spec("typed.lease"));
+      const worker = new TypedActionWorker({
+        store,
+        definitions: [definition("typed.lease", async () => {
+          await Bun.sleep(70);
+          return { output: { renewed: true } };
+        })],
+      });
+      const receipt = await worker.run("typed.worker.demo@1.0.0", { leaseMs: 15 });
+      expect(receipt.status).toBe("succeeded");
+      expect(receipt.actions?.[0]?.status).toBe("succeeded");
+
+      store.createAutomation(spec("typed.stale"));
+      const staleWorker = new TypedActionWorker({
+        store,
+        runnerId: "stale-worker",
+        definitions: [definition("typed.stale", async () => {
+          await Bun.sleep(40);
+          return { output: { stale: true } };
+        })],
+      });
+      const staleRun = staleWorker.run("typed.worker.demo@1.0.0", { leaseMs: 10 });
+      await Bun.sleep(20);
+      const claimed = store.listQueuedActions().find((action) => action.status === "claimed" && action.claimedBy === "stale-worker");
+      expect(claimed).toBeDefined();
+      store.db.query("UPDATE automation_actions SET claimed_by = 'replacement', claim_version = claim_version + 1 WHERE id = $id").run({ $id: claimed!.id });
+      await expect(staleRun).rejects.toThrow();
+      expect(store.requireQueuedAction(claimed!.id).status).toBe("claimed");
     } finally {
       store.close();
     }

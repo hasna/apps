@@ -88,7 +88,7 @@ export async function runAutomationsCli(argv = Bun.argv.slice(2), options: RunAu
       return await runTypedRunCommand(parsed, options);
     }
     if (command === "dlq") {
-      return runDlqCommand(parsed, options);
+      return await runDlqCommand(parsed, options);
     }
     if (command === "queue") {
       return runQueueCommand(parsed, options);
@@ -444,7 +444,7 @@ function runSimulateCommand(parsed: ParsedArgs): number {
   return 0;
 }
 
-function runDlqCommand(parsed: ParsedArgs, options: RunAutomationsCliOptions): number {
+async function runDlqCommand(parsed: ParsedArgs, options: RunAutomationsCliOptions): Promise<number> {
   const subcommand = parsed.rest[1];
   if (!subcommand || subcommand === "--help" || subcommand === "-h") {
     printDlqHelp(options);
@@ -460,8 +460,15 @@ function runDlqCommand(parsed: ParsedArgs, options: RunAutomationsCliOptions): n
     if (subcommand === "replay") {
       const id = parsed.rest[2];
       if (!id) throw new Error("dlq replay requires an action id");
-      const action = store.requeueDeadAction(id);
-      output(parsed, action, () => console.log(JSON.stringify(action, null, 2)));
+      const existing = store.requireQueuedAction(id);
+      if (existing.status === "succeeded" && existing.result?.metadata?.deliveryStatus === "partial") {
+        const worker = options.worker ?? createTypedActionWorker({ store, definitions: options.typedActions, authority: options.authority });
+        const receipt = await worker.replayPartial(id);
+        output(parsed, receipt, () => console.log(JSON.stringify(receipt, null, 2)));
+      } else {
+        const action = store.requeueDeadAction(id);
+        output(parsed, action, () => console.log(JSON.stringify(action, null, 2)));
+      }
       return 0;
     }
     throw new Error(`Unknown dlq command: ${subcommand}`);
