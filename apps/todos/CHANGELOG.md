@@ -7,8 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.30] - 2026-08-12
+
+### Added
+
+- **The Todos project-resource producer exposes stable, complete project and
+  task-list bindings.** `project-registration project-resources` now enumerates
+  deterministic resources for a canonical source project across SQLite,
+  PostgreSQL, authenticated HTTP, OpenAPI, and the generated SDK, with bounded
+  paging, mutation restarts, duplicate and cursor guards, and exact UUID
+  readback.
+- **Prior Projects registration adoption is explicitly verifiable.**
+  `validatePriorRegistrationAdoption` and the matching CLI, HTTP, OpenAPI, and
+  generated-SDK surfaces validate the stored authority, target identity, and
+  receipt digest before a caller adopts an existing project or task list.
+
 ### Fixed
 
+- **Historical pre-adoption receipts remain compatible without weakening
+  integrity.** Bind-existing digests are anchored to the immutable resource
+  incarnation, PostgreSQL serializes adoption against concurrent renames, and
+  hosted validation rejects false, malformed, or forged response envelopes.
 - **npm release review receipts stay out of GitHub Actions step preambles.**
   Both receipt-consuming steps now source the capability-bearing receipt from
   the `npm-release` environment secret surface while preserving the existing
