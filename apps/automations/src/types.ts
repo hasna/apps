@@ -203,6 +203,8 @@ export interface QueuedAction {
   claimedBy?: string;
   claimedAt?: string;
   leaseExpiresAt?: string;
+  /** Current claim fence used by supervised workers for renewal/settlement. */
+  fenceToken?: number;
   approvalGate?: ActionQueueApprovalGate;
   result?: ActionResult;
   error?: ActionError;
@@ -253,9 +255,18 @@ export interface QueueClaimOptions {
 export interface ActionFailureOptions {
   actionId: string;
   runnerId: string;
+  fenceToken?: number;
   error: ActionError;
   now?: string | Date;
   retryBackoffMs?: number;
+}
+
+export interface ActionLeaseRenewalOptions {
+  actionId: string;
+  runnerId: string;
+  fenceToken: number;
+  leaseMs?: number;
+  now?: string | Date;
 }
 
 export interface ActionCompletionOptions {
@@ -277,4 +288,28 @@ export interface AutomationRuntimeBinding {
   description?: string;
   handoff: "claim-queue" | "webhook" | "sdk";
   metadata?: JsonObject;
+}
+
+/**
+ * A typed action receipt is deliberately separate from the queue status.  A
+ * delivery may have persisted some sink receipts while still requiring a
+ * retry or operator attention; callers must not collapse that state into a
+ * successful run.
+ */
+export type TypedActionReceiptStatus = "succeeded" | "partial" | "failed";
+
+export interface TypedActionDeliveryReceipt {
+  sink: string;
+  status: "succeeded" | "failed";
+  receipt?: JsonObject;
+  error?: ActionError;
+}
+
+export interface TypedActionExecutionResult {
+  status?: TypedActionReceiptStatus;
+  summary?: string;
+  output?: JsonValue;
+  receipts?: TypedActionDeliveryReceipt[];
+  metadata?: JsonObject;
+  error?: ActionError;
 }

@@ -14,6 +14,7 @@ import type {
 import type {
   ActionCompletionOptions,
   ActionFailureOptions,
+  ActionLeaseRenewalOptions,
   AutomationActionStep,
   AutomationRecord,
   AutomationReplayRequest,
@@ -362,6 +363,64 @@ export class AutomationsStore {
     return this.db.query("SELECT * FROM automation_runs ORDER BY created_at ASC").all().map((row) => runFromRow(row as RunRow));
   }
 
+  startRun(id: string, now?: string | Date): AutomationRun {
+    const run = this.requireRun(id);
+    const timestamp = normalizeIso(now);
+    this.db.query(`
+      UPDATE automation_runs
+      SET status = 'running',
+          started_at = COALESCE(started_at, $startedAt),
+          updated_at = $updatedAt
+      WHERE id = $id AND status IN ('pending', 'materialized', 'running')
+    `).run({ $id: id, $startedAt: timestamp, $updatedAt: timestamp });
+    return this.requireRun(run.id);
+  }
+
+  /**
+   * Reconcile the run receipt from its durable action receipts.  A partial
+   * delivery is terminally failed at the run level, while its action result
+   * retains the partial sink receipts for replay and audit.
+   */
+  settleRun(id: string, now?: string | Date): AutomationRun {
+    const run = this.requireRun(id);
+    const actions = this.listQueuedActions().filter((action) => action.automationRunId === id);
+    const timestamp = normalizeIso(now);
+    const active = actions.some((action) => ["queued", "waiting_approval", "claimed", "retrying"].includes(action.status));
+    const replayedPartialActions = new Set(actions
+      .filter((action) => action.status === "succeeded")
+      .map((action) => action.metadata?.partialReplayOf)
+      .filter((id): id is string => typeof id === "string"));
+    const partial = actions.some((action) => action.result?.metadata?.deliveryStatus === "partial" && !replayedPartialActions.has(action.id));
+    const failed = actions.some((action) => action.status === "dead" || action.status === "failed");
+    if (active && !failed && !partial) {
+      return this.startRun(id, timestamp);
+    }
+    if (!actions.length || (!failed && !partial && actions.every((action) => action.status === "succeeded"))) {
+      this.db.query(`
+        UPDATE automation_runs
+        SET status = 'succeeded', completed_at = $completedAt, updated_at = $updatedAt, error = NULL
+        WHERE id = $id
+      `).run({ $id: id, $completedAt: timestamp, $updatedAt: timestamp });
+    } else {
+      this.db.query(`
+        UPDATE automation_runs
+        SET status = 'failed',
+            completed_at = $completedAt,
+            updated_at = $updatedAt,
+            error = $error
+        WHERE id = $id
+      `).run({
+        $id: id,
+        $completedAt: timestamp,
+        $updatedAt: timestamp,
+        $error: partial
+          ? "partial delivery receipt requires replay"
+          : actions.find((action) => action.error?.message)?.error?.message ?? "one or more typed actions failed",
+      });
+    }
+    return this.requireRun(run.id);
+  }
+
   enqueueAction(input: EnqueueActionInput): QueuedAction {
     return withImmediateTransaction(this.db, () => {
       const run = this.requireRun(input.automationRunId);
@@ -478,7 +537,78 @@ export class AutomationsStore {
       }
       return undefined;
     });
-    return claimedId ? this.requireQueuedAction(claimedId) : undefined;
+    return claimedId ? this.withFenceToken(this.requireQueuedAction(claimedId)) : undefined;
+  }
+
+  /**
+   * Claim only an action belonging to one run.  The generic queue claim is
+   * intentionally global for the daemon; supervised manual execution needs
+   * this narrower boundary so a run cannot accidentally consume another
+   * automation's work.
+   */
+  claimNextActionForRun(runId: string, options: QueueClaimOptions): QueuedAction | undefined {
+    this.requireRun(runId);
+    const now = normalizeIso(options.now);
+    const leaseExpiresAt = new Date(new Date(now).getTime() + (options.leaseMs ?? 30000)).toISOString();
+    const claimedId = withImmediateTransaction(this.db, () => {
+      const rows = this.db.query(`
+        SELECT id, available_at AS claimable_at, available_at, created_at
+        FROM automation_actions
+        WHERE automation_run_id = $runId
+          AND status IN ('queued', 'retrying')
+          AND available_at <= $now
+          AND unmet_dependencies = 0
+        UNION ALL
+        SELECT id, lease_expires_at AS claimable_at, available_at, created_at
+        FROM automation_actions
+        WHERE automation_run_id = $runId
+          AND status = 'claimed'
+          AND lease_expires_at IS NOT NULL
+          AND lease_expires_at <= $now
+          AND available_at <= $now
+          AND unmet_dependencies = 0
+        ORDER BY 2, 3, 4, 1
+        LIMIT $limit
+      `).all({ $runId: runId, $now: now, $limit: CLAIM_CANDIDATE_BUDGET }) as ClaimCandidateRow[];
+      for (const { id } of rows) {
+        const row = this.db.query("SELECT * FROM automation_actions WHERE id = $id").get({ $id: id }) as ActionRow | null;
+        if (!row) continue;
+        if (!approvalGateAllowsClaim(row.approval_gate_json)) {
+          this.db.query(`
+            UPDATE automation_actions
+            SET status = 'waiting_approval', updated_at = $updatedAt
+            WHERE id = $id AND status != 'waiting_approval'
+          `).run({ $id: row.id, $updatedAt: now });
+          continue;
+        }
+        const update = this.db.query(`
+          UPDATE automation_actions
+          SET status = 'claimed',
+              claimed_by = $claimedBy,
+              claimed_at = $claimedAt,
+              lease_expires_at = $leaseExpiresAt,
+              claim_version = claim_version + 1,
+              updated_at = $updatedAt
+          WHERE id = $id
+            AND automation_run_id = $runId
+            AND (
+              status IN ('queued', 'retrying')
+              OR (status = 'claimed' AND lease_expires_at IS NOT NULL AND lease_expires_at <= $now)
+            )
+        `).run({
+          $claimedBy: options.runnerId,
+          $claimedAt: now,
+          $leaseExpiresAt: leaseExpiresAt,
+          $updatedAt: now,
+          $id: row.id,
+          $runId: runId,
+          $now: now,
+        });
+        if (update.changes > 0) return row.id;
+      }
+      return undefined;
+    });
+    return claimedId ? this.withFenceToken(this.requireQueuedAction(claimedId)) : undefined;
   }
 
   completeAction(options: ActionCompletionOptions): QueuedAction {
@@ -574,11 +704,13 @@ export class AutomationsStore {
           WHERE id = $id
             AND status = 'claimed'
             AND claimed_by = $runnerId
+            AND ($fenceToken IS NULL OR claim_version = $fenceToken)
             AND lease_expires_at IS NOT NULL
             AND lease_expires_at > $now
         `).run({
           $id: options.actionId,
           $runnerId: options.runnerId,
+          $fenceToken: options.fenceToken ?? null,
           $now: now,
           $attempt: nextAttempt,
           $availableAt: availableAt,
@@ -605,11 +737,13 @@ export class AutomationsStore {
           WHERE id = $id
             AND status = 'claimed'
             AND claimed_by = $runnerId
+            AND ($fenceToken IS NULL OR claim_version = $fenceToken)
             AND lease_expires_at IS NOT NULL
             AND lease_expires_at > $now
         `).run({
           $id: options.actionId,
           $runnerId: options.runnerId,
+          $fenceToken: options.fenceToken ?? null,
           $now: now,
           $attempt: nextAttempt,
           $errorJson: JSON.stringify(options.error),
@@ -650,6 +784,73 @@ export class AutomationsStore {
       WHERE id = $id
     `).run({ $id: id, $availableAt: now, $updatedAt: now });
     return this.requireQueuedAction(id);
+  }
+
+  /** Requeue a typed partial receipt as a deterministic child action.
+   * The source action and its sink receipts stay untouched for audit; repeated
+   * calls return the same child and cannot create a second successful effect.
+   */
+  requeuePartialAction(id: string, options: { now?: string | Date; requestedBy?: string; reason?: string } = {}): QueuedAction {
+    const source = this.requireQueuedAction(id);
+    if (source.status !== "succeeded" || source.result?.metadata?.deliveryStatus !== "partial") {
+      throw new Error(`queued action is not a typed partial receipt: ${id}`);
+    }
+    const replayActionId = `${id}:partial-replay`;
+    if (this.db.query("SELECT id FROM automation_actions WHERE id = $id").get({ $id: replayActionId })) {
+      return this.requireQueuedAction(replayActionId);
+    }
+    const now = normalizeIso(options.now);
+    this.db.query(`
+      UPDATE automation_runs
+      SET status = 'materialized', completed_at = NULL, error = NULL, updated_at = $updatedAt
+      WHERE id = $id AND status = 'failed'
+    `).run({ $id: source.automationRunId, $updatedAt: now });
+    try {
+      return this.enqueueAction({
+        id: replayActionId,
+        automationRunId: source.automationRunId,
+        stepId: `${source.stepId}:partial-replay`,
+        actionId: source.actionId,
+        maxAttempts: 1,
+        invocation: {
+          ...source.invocation,
+          id: `${source.invocation.id}:partial-replay`,
+          idempotencyKey: `${source.invocation.idempotencyKey}:partial-replay`,
+        },
+        result: source.result,
+        availableAt: options.now,
+        metadata: {
+          partialReplayOf: id,
+          ...(options.requestedBy ? { replayRequestedBy: options.requestedBy } : {}),
+          ...(options.reason ? { replayReason: options.reason } : {}),
+        },
+      });
+    } catch (error) {
+      if (error instanceof Error && error.message.includes("UNIQUE constraint failed")) return this.requireQueuedAction(replayActionId);
+      throw error;
+    }
+  }
+
+  renewActionLease(options: ActionLeaseRenewalOptions): QueuedAction {
+    const now = normalizeIso(options.now);
+    const leaseMs = options.leaseMs ?? 30000;
+    if (!Number.isFinite(leaseMs) || leaseMs <= 0) throw new Error("action lease must be a positive number");
+    const leaseExpiresAt = new Date(new Date(now).getTime() + leaseMs).toISOString();
+    const update = this.db.query(`
+      UPDATE automation_actions
+      SET lease_expires_at = $leaseExpiresAt, updated_at = $updatedAt
+      WHERE id = $id AND status = 'claimed' AND claimed_by = $runnerId
+        AND claim_version = $fenceToken AND lease_expires_at IS NOT NULL AND lease_expires_at > $now
+    `).run({
+      $id: options.actionId,
+      $runnerId: options.runnerId,
+      $fenceToken: options.fenceToken,
+      $leaseExpiresAt: leaseExpiresAt,
+      $updatedAt: now,
+      $now: now,
+    });
+    assertClaimedActionUpdated(update.changes, options.actionId, options.runnerId);
+    return this.withFenceToken(this.requireQueuedAction(options.actionId));
   }
 
   approveAction(id: string, options: { now?: string | Date; decidedBy?: string; reason?: string } = {}): QueuedAction {
@@ -1092,6 +1293,11 @@ export class AutomationsStore {
     const rows = this.db.query(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
     if (rows.some((row) => row.name === column)) return;
     this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition};`);
+  }
+
+  private withFenceToken(action: QueuedAction): QueuedAction {
+    const row = this.db.query("SELECT claim_version FROM automation_actions WHERE id = $id").get({ $id: action.id }) as { claim_version: number };
+    return { ...action, fenceToken: row.claim_version };
   }
 }
 

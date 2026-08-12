@@ -16,6 +16,13 @@ import {
   type WebhookSignatureConfig,
 } from "../index.js";
 import {
+  createTypedActionWorker,
+  type TypedActionDefinitionInput,
+  type TypedActionAuthority,
+  type TypedActionWorker,
+} from "../worker/index.js";
+import type { ActorRef, JsonValue } from "@hasna/actions";
+import {
   LAUNCH_FOLLOWUP_RECIPE_PACK,
   launchFollowupRecipePack,
   listLaunchFollowupRecipes,
@@ -31,6 +38,9 @@ interface ParsedArgs {
 
 export interface RunAutomationsCliOptions {
   programName?: string;
+  worker?: TypedActionWorker;
+  typedActions?: TypedActionDefinitionInput[];
+  authority?: TypedActionAuthority;
 }
 
 export async function runAutomationsCli(argv = Bun.argv.slice(2), options: RunAutomationsCliOptions = {}): Promise<number> {
@@ -74,8 +84,11 @@ export async function runAutomationsCli(argv = Bun.argv.slice(2), options: RunAu
     if (command === "runs") {
       return runRunsCommand(parsed, options);
     }
+    if (command === "run") {
+      return await runTypedRunCommand(parsed, options);
+    }
     if (command === "dlq") {
-      return runDlqCommand(parsed, options);
+      return await runDlqCommand(parsed, options);
     }
     if (command === "queue") {
       return runQueueCommand(parsed, options);
@@ -99,6 +112,52 @@ export async function runAutomationsCli(argv = Bun.argv.slice(2), options: RunAu
       console.error(`automations: ${message}`);
     }
     return 1;
+  }
+}
+
+async function runTypedRunCommand(parsed: ParsedArgs, options: RunAutomationsCliOptions): Promise<number> {
+  const args = parsed.rest.slice(1);
+  const reference = args.shift();
+  if (!reference || reference === "--help" || reference === "-h") {
+    printRunHelp(options);
+    return reference ? 0 : 1;
+  }
+  const detach = takeFlag(args, "--detach");
+  const timeoutValue = takeOption(args, "--timeout-ms");
+  const inputJson = takeOption(args, "--input-json");
+  const actorId = takeOption(args, "--actor-id");
+  const actorType = takeOption(args, "--actor-type") as ActorRef["type"] | undefined;
+  if (args.length) throw new Error(`unknown run option: ${args[0]}`);
+  const timeoutMs = timeoutValue === undefined ? undefined : numberOption(timeoutValue);
+  const input = inputJson === undefined ? undefined : JSON.parse(inputJson) as JsonValue;
+  const actor = actorId || actorType ? {
+    id: actorId ?? "",
+    type: actorType ?? "agent",
+  } satisfies ActorRef : undefined;
+  if (actor && !actor.id) throw new Error("--actor-id is required when --actor-type is provided");
+
+  const suppliedWorker = options.worker;
+  const store = suppliedWorker?.store ?? new AutomationsStore();
+  const worker = suppliedWorker ?? createTypedActionWorker({
+    store,
+    definitions: options.typedActions,
+    authority: options.authority,
+  });
+  let backgroundExecution = false;
+  let closed = false;
+  const closeStore = () => {
+    if (!suppliedWorker && !closed) {
+      closed = true;
+      store.close();
+    }
+  };
+  try {
+    const receipt = await worker.run(reference, { detach, timeoutMs, input, actor, onSettled: closeStore });
+    backgroundExecution = receipt.status === "running" && timeoutMs !== 0;
+    output(parsed, receipt, () => console.log(JSON.stringify(receipt, null, 2)));
+    return 0;
+  } finally {
+    if (!backgroundExecution) closeStore();
   }
 }
 
@@ -385,7 +444,7 @@ function runSimulateCommand(parsed: ParsedArgs): number {
   return 0;
 }
 
-function runDlqCommand(parsed: ParsedArgs, options: RunAutomationsCliOptions): number {
+async function runDlqCommand(parsed: ParsedArgs, options: RunAutomationsCliOptions): Promise<number> {
   const subcommand = parsed.rest[1];
   if (!subcommand || subcommand === "--help" || subcommand === "-h") {
     printDlqHelp(options);
@@ -401,8 +460,15 @@ function runDlqCommand(parsed: ParsedArgs, options: RunAutomationsCliOptions): n
     if (subcommand === "replay") {
       const id = parsed.rest[2];
       if (!id) throw new Error("dlq replay requires an action id");
-      const action = store.requeueDeadAction(id);
-      output(parsed, action, () => console.log(JSON.stringify(action, null, 2)));
+      const existing = store.requireQueuedAction(id);
+      if (existing.status === "succeeded" && existing.result?.metadata?.deliveryStatus === "partial") {
+        const worker = options.worker ?? createTypedActionWorker({ store, definitions: options.typedActions, authority: options.authority });
+        const receipt = await worker.replayPartial(id);
+        output(parsed, receipt, () => console.log(JSON.stringify(receipt, null, 2)));
+      } else {
+        const action = store.requeueDeadAction(id);
+        output(parsed, action, () => console.log(JSON.stringify(action, null, 2)));
+      }
       return 0;
     }
     throw new Error(`Unknown dlq command: ${subcommand}`);
@@ -657,6 +723,7 @@ Usage:
   ${name} [--dir <path>] [--json] create <automation.json>
   ${name} [--dir <path>] [--json] list
   ${name} [--dir <path>] [--json] simulate <automation.json> [--event-json <json>] [--persist]
+  ${name} [--dir <path>] [--json] run <slug>@<version> [--input-json <json>] [--timeout-ms <ms>] [--detach]
   ${name} [--dir <path>] [--json] runs list [--contract]
   ${name} [--dir <path>] [--json] runs show <run-id> [--contract]
   ${name} [--dir <path>] [--json] dlq list
@@ -738,6 +805,19 @@ function printRunsHelp(options: RunAutomationsCliOptions = {}): void {
 Usage:
   ${name} [--dir <path>] [--json] runs list [--contract]
   ${name} [--dir <path>] [--json] runs show <run-id> [--contract]`);
+}
+
+function printRunHelp(options: RunAutomationsCliOptions = {}): void {
+  const name = programName(options);
+  console.log(`${name} run
+
+Usage:
+  ${name} [--dir <path>] [--json] run <slug>@<version> [--input-json <json>] [--timeout-ms <ms>] [--detach]
+  ${name} [--dir <path>] [--json] run <slug>@<version> [--actor-id <id>] [--actor-type <type>]
+
+The run command executes only registered TypeScript action definitions.
+--detach returns an enqueued receipt without waiting. A timeout returns a
+running receipt while the supervised worker continues its durable run.`);
 }
 
 function printQueueHelp(options: RunAutomationsCliOptions = {}): void {

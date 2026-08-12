@@ -20,6 +20,20 @@ export {
   listDefaultRuntimeBindings,
 } from "./lib/runtime.js";
 export {
+  assertTypedManifest,
+  createTypedActionWorker,
+  parseAutomationReference,
+  TypedActionWorker,
+  type TypedActionAuthority,
+  type TypedActionContext,
+  type TypedActionDefinition,
+  type TypedActionDefinitionInput,
+  type TypedActionRunOptions,
+  type TypedActionRunReceipt,
+  type TypedActionWorkerOptions,
+  type TypedActionWorkerRunStatus,
+} from "./worker/index.js";
+export {
   AUTOMATION_RUN_STATUS_TO_CONTRACT_STATUS,
   approvalDecisionToDecisionEnvelope,
   automationRunStatusToContractStatus,
