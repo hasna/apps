@@ -176,6 +176,15 @@ function foundationMode(): string {
   return buildDeploymentStatus({}).activeDeploymentMode;
 }
 
+/**
+ * Capabilities an already-deployed control plane advertises on the open
+ * `/version` probe, so a runner can tell an enforcing server from one that will
+ * accept its claim body and ignore half of it. There is no unclaim endpoint, so
+ * a runner that needs enforcement has to establish it BEFORE its first claim —
+ * discovering non-enforcement from the response is already too late.
+ */
+const API_CAPABILITIES = ["runner.claimScope"] as const;
+
 /** Shared { status, version, mode } envelope for /health, /ready, /version. */
 function foundationEnvelope(
   status: string,
@@ -240,7 +249,7 @@ export function createLoopsApiServer(opts: LoopsApiServerOptions = {}) {
         return Response.json(contractHealthResponse());
       }
       if (request.method === "GET" && (url.pathname === "/version" || url.pathname === "/v1/version")) {
-        return Response.json(foundationEnvelope("ok"));
+        return Response.json(foundationEnvelope("ok", { capabilities: [...API_CAPABILITIES] }));
       }
       if (request.method === "GET" && (url.pathname === "/ready" || url.pathname === "/readyz")) {
         const result = await readyCheck();
@@ -1632,13 +1641,36 @@ function requireBoundRunner(auth: TenantAuthContext, runner: RunnerRecord): void
   }
 }
 
+const RUNNER_CLAIM_SCOPES = ["fleet", "bound"] as const;
+type RunnerClaimScope = (typeof RUNNER_CLAIM_SCOPES)[number];
+
 interface RunnerRecord {
   id: string;
   machineId?: string;
   hostname?: string;
+  /**
+   * `fleet` (the default, and what every runner predating this field sends)
+   * claims machine-unbound loops as well as loops pinned to this runner.
+   * `bound` claims only pinned loops. Absent means `fleet`.
+   */
+  claimScope?: RunnerClaimScope;
   labels: Record<string, string>;
   capabilities: Record<string, unknown>;
   lastSeenAt: string;
+}
+
+/**
+ * An unrecognised value is a 422, never a silent fall-through to the permissive
+ * default: a typo'd `--claim-scope` that answered 200 and drained the fleet
+ * anyway is the precise failure this field exists to prevent.
+ */
+function runnerClaimScope(value: unknown): RunnerClaimScope | undefined {
+  const raw = optionalString(value);
+  if (raw === undefined) return undefined;
+  if (!(RUNNER_CLAIM_SCOPES as readonly string[]).includes(raw)) {
+    throw apiError("invalid_claim_scope", 422);
+  }
+  return raw as RunnerClaimScope;
 }
 
 function runnerRecord(body: Record<string, unknown>): RunnerRecord {
@@ -1650,6 +1682,7 @@ function runnerRecord(body: Record<string, unknown>): RunnerRecord {
     id,
     machineId,
     hostname,
+    claimScope: runnerClaimScope(body.claimScope),
     labels: stringRecord(body.labels),
     capabilities: objectRecord(body.capabilities),
     lastSeenAt: new Date().toISOString(),
@@ -1776,7 +1809,10 @@ async function claimRuns(
 }
 
 function runnerMatchesLoop(machine: { id?: string; requestedId?: string } | undefined, runner: RunnerRecord): boolean {
-  if (!machine) return true;
+  // A machine-unbound loop is claimable by any runner that has not opted out.
+  // Only this branch is gated: loops pinned to a machine are matched exactly as
+  // before, so narrowing a runner's scope can never widen what it claims.
+  if (!machine) return runner.claimScope !== "bound";
   return machine.id === runner.id;
 }
 

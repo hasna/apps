@@ -1156,6 +1156,39 @@ On Linux this writes a user systemd service. On macOS it writes a LaunchAgent pl
 - Failed ad-hoc manual `run-now` slots are single attempts and do not schedule retries. Due-slot and retry-slot manual runs use normal retry behavior.
 - Running rows have leases. If a daemon dies, a later daemon marks expired running rows as `abandoned`.
 
+## Runner Claim Scope
+
+A loop that names no machine is claimable by any runner. That is the default and
+it is what makes a single carrier able to run the fleet's unpinned work — but it
+also means a second runner started anywhere will drain that same work onto
+itself. `--claim-scope` lets a runner opt out.
+
+```bash
+loops-runner run-once --claim-scope bound     # only loops pinned to this runner
+loops-runner run       --claim-scope bound
+LOOPS_RUNNER_CLAIM_SCOPE=bound loops-runner run
+```
+
+- `fleet` (default) claims machine-unbound loops as well as loops pinned to this
+  runner. Sending nothing is identical to sending `fleet`, so every runner
+  predating this option keeps its exact behaviour.
+- `bound` claims only loops pinned to this runner. Loops pinned elsewhere and
+  machine-unbound loops are both left alone.
+
+Enforcement is entirely server-side: the runner executes whatever the claim
+response hands it, so upgrading a runner against an older control plane changes
+nothing about what it claims. A `bound` runner therefore checks the open
+`/version` probe for the `runner.claimScope` capability **before** its first
+claim and refuses to claim at all if the control plane does not advertise it,
+because there is no unclaim endpoint — a run claimed by mistake is held until
+its lease expires. It also asserts that the server echoes the scope back on
+every claim response, since a capability list can drift from what the server
+actually parses.
+
+An unrecognised value is rejected (`invalid_claim_scope`, HTTP 422) rather than
+falling back to the permissive default: a typo that answered 200 and drained the
+fleet anyway is the failure this option exists to prevent.
+
 ## Agent Adapter Notes
 
 The adapters intentionally use provider command surfaces instead of pretending every agent has one SDK:
