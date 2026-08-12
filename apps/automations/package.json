@@ -41,6 +41,10 @@
     "./daemon": {
       "types": "./dist/daemon/index.d.ts",
       "import": "./dist/daemon/index.js"
+    },
+    "./server": {
+      "types": "./dist/server/index.d.ts",
+      "import": "./dist/server/index.js"
     }
   },
   "files": [
@@ -53,10 +57,11 @@
     "CONTRIBUTING.md"
   ],
   "scripts": {
-    "build": "rm -rf dist && bun build src/cli/index.ts src/daemon/index.ts src/index.ts src/types.ts src/lib/store.ts src/lib/paths.ts src/lib/runtime.ts src/lib/contracts.ts src/recipes/launch-followup.ts --root src --outdir dist --target bun --packages external && chmod +x dist/cli/index.js dist/daemon/index.js && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist",
+    "build": "rm -rf dist && bun build src/cli/index.ts src/daemon/index.ts src/index.ts src/types.ts src/server/index.ts src/lib/store.ts src/lib/paths.ts src/lib/runtime.ts src/lib/contracts.ts src/recipes/launch-followup.ts --root src --outdir dist --target bun --packages external && chmod +x dist/cli/index.js dist/daemon/index.js && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist",
     "smoke:webhook-release": "bun run scripts/release-webhook-smoke.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
+    "test:postgres": "HASNA_AUTOMATIONS_REQUIRE_POSTGRES_TEST=1 bun test src/server/postgresql/store.integration.test.ts",
     "contracts:conformance": "contracts conformance examples && contracts repo-conformance .",
     "conformance": "bun run contracts:conformance",
     "scan:artifact": "bun scripts/scan-artifact.ts",
@@ -88,7 +93,8 @@
   "author": "Hasna",
   "license": "Apache-2.0",
   "dependencies": {
-    "@hasna/contracts": "^0.8.1"
+    "@hasna/contracts": "^0.8.1",
+    "postgres": "^3.4.7"
   },
   "peerDependencies": {
     "@hasna/actions": "^0.1.4"

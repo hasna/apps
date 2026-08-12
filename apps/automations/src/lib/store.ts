@@ -41,7 +41,7 @@ import type {
 import { assertActionQueueStatus, isTerminalActionQueueStatus } from "./action-queue.js";
 import { automationsDataDir, automationsDbPath, ensureAutomationsDataDir } from "./paths.js";
 
-const STORE_SCHEMA_VERSION = 3;
+const STORE_SCHEMA_VERSION = 4;
 
 interface CountRow {
   count: number;
@@ -86,6 +86,7 @@ interface ActionRow {
   claimed_by: string | null;
   claimed_at: string | null;
   lease_expires_at: string | null;
+  claim_version: number;
   approval_gate_json: string | null;
   result_json: string | null;
   error_json: string | null;
@@ -439,6 +440,7 @@ export class AutomationsStore {
                 claimed_by = $claimedBy,
                 claimed_at = $claimedAt,
                 lease_expires_at = $leaseExpiresAt,
+                claim_version = claim_version + 1,
                 updated_at = $updatedAt
             WHERE id = $id
               AND (
@@ -872,6 +874,7 @@ export class AutomationsStore {
         claimed_by TEXT,
         claimed_at TEXT,
         lease_expires_at TEXT,
+        claim_version INTEGER NOT NULL DEFAULT 0,
         approval_gate_json TEXT,
         result_json TEXT,
         error_json TEXT,
@@ -919,6 +922,7 @@ export class AutomationsStore {
     this.ensureColumn("automation_actions", "idempotency_key", "TEXT");
     this.ensureColumn("automation_actions", "result_json", "TEXT");
     this.ensureColumn("automation_actions", "error_json", "TEXT");
+    this.ensureColumn("automation_actions", "claim_version", "INTEGER NOT NULL DEFAULT 0");
     this.ensureColumn("daemon_leases", "metadata_json", "TEXT");
     this.db.exec(`
       UPDATE automation_actions

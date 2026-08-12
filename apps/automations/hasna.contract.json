@@ -13,58 +13,41 @@
   "hosting": [
     "user-hosted"
   ],
-  "deploymentModes": [
-    "local",
-    "self_hosted"
-  ],
   "serviceSurfaces": [
     {
       "name": "operator-cli",
       "kind": "cli",
       "status": "supported",
       "bin": "automations",
-      "authMode": "local-only",
-      "deploymentModes": [
-        "local",
-        "self_hosted"
-      ]
+      "authMode": "local-only"
     },
     {
       "name": "daemon-cli",
       "kind": "cli",
       "status": "supported",
       "bin": "automations-daemon",
-      "authMode": "local-only",
-      "deploymentModes": [
-        "local",
-        "self_hosted"
-      ]
+      "authMode": "local-only"
     }
   ],
   "storage": {
-    "mode": "local",
+    "backend": "sqlite",
     "engines": [
-      "sqlite"
+      "sqlite",
+      "postgresql"
     ],
     "envPrefix": "HASNA_AUTOMATIONS_",
     "aliasEnvPrefix": "AUTOMATIONS_",
-    "sqlitePath": "~/.hasna/automations/automations.db"
+    "sqlitePath": "~/.hasna/automations/automations.db",
+    "pgTestGate": {
+      "envVar": "HASNA_AUTOMATIONS_TEST_DATABASE_URL",
+      "command": "HASNA_AUTOMATIONS_DATABASE_URL=$HASNA_AUTOMATIONS_TEST_DATABASE_URL bun run test:postgres"
+    }
   },
   "metadata": {
     "release": {
       "artifactScan": {
         "script": "scan:artifact"
       }
-    },
-    "conformance": {
-      "waivedStorageEngines": [
-        {
-          "engine": "postgres",
-          "reason": "Local automation daemon currently ships Bun SQLite only; PostgreSQL storage adoption needs a dedicated storage implementation task.",
-          "reviewedBy": "contracts-alignment",
-          "expiresAt": "2027-01-01T00:00:00.000Z"
-        }
-      ]
     }
   }
 }
