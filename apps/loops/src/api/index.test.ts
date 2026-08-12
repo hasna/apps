@@ -2315,6 +2315,111 @@ describe("loops-api foundation", () => {
     }
   });
 
+  // A machine-UNBOUND loop matched every runner with no opt-out, so any runner
+  // started anywhere drained the whole fleet's unpinned work onto itself. The
+  // runner does no filtering — it executes whatever the claim response hands
+  // back — so this gate is the only place the scope can be enforced.
+  //
+  // Both directions are load-bearing. The default must stay permissive because
+  // the fleet's only live carrier sends no claimScope at all; a default flip
+  // would strand every unbound loop the moment it deployed.
+  describe("runner claim scope", () => {
+    const DUE_AT = "2026-01-01T00:00:00Z";
+    const POLL_AT = "2026-01-01T00:00:01Z";
+
+    async function claimWith(
+      body: Record<string, unknown>,
+    ): Promise<{ status: number; payload: Record<string, unknown> }> {
+      const mod = await import("./index.js");
+      const storage = createSqliteLoopStorage(":memory:");
+      const createdAt = new Date("2025-12-31T00:00:00Z");
+      await storage.createLoop({
+        name: "fleet-unbound",
+        schedule: { type: "once", at: DUE_AT },
+        target: { type: "command", command: "true" },
+      }, createdAt);
+      await storage.createLoop({
+        name: "pinned-spark02",
+        schedule: { type: "once", at: DUE_AT },
+        target: { type: "command", command: "true" },
+        machine: { id: "spark02" },
+      }, createdAt);
+      const server = createTestServer(
+        mod,
+        { host: "127.0.0.1", port: 0, storage, now: () => new Date(POLL_AT) },
+        runnerPrincipal("spark02"),
+      );
+      try {
+        const response = await fetch(apiUrl(server, "/v1/runners/claim"), {
+          method: "POST",
+          headers: jsonHeaders,
+          body: JSON.stringify({ runnerId: "spark02", maxClaims: 10, ...body }),
+        });
+        return { status: response.status, payload: await response.json() as Record<string, unknown> };
+      } finally {
+        server.stop(true);
+        await storage.close();
+      }
+    }
+
+    function claimedLoopNames(payload: Record<string, unknown>): string[] {
+      const claims = payload.claims as Array<{ loop: { name: string } }> | undefined;
+      return (claims ?? []).map((claim) => claim.loop.name).sort();
+    }
+
+    test("a runner that sends no claimScope still claims unbound loops (default preserved)", async () => {
+      const { status, payload } = await claimWith({});
+      expect(status).toBe(200);
+      expect(claimedLoopNames(payload)).toEqual(["fleet-unbound", "pinned-spark02"]);
+    });
+
+    test("claimScope fleet is byte-identical to sending nothing", async () => {
+      const { status, payload } = await claimWith({ claimScope: "fleet" });
+      expect(status).toBe(200);
+      expect(claimedLoopNames(payload)).toEqual(["fleet-unbound", "pinned-spark02"]);
+    });
+
+    test("claimScope bound claims only loops pinned to this runner", async () => {
+      const { status, payload } = await claimWith({ claimScope: "bound" });
+      expect(status).toBe(200);
+      expect(claimedLoopNames(payload)).toEqual(["pinned-spark02"]);
+    });
+
+    // A typo must not silently fall through to the permissive default: that is
+    // the exact shape of "the flag was accepted and did nothing".
+    test("an unrecognised claimScope is rejected rather than coerced", async () => {
+      const { status, payload } = await claimWith({ claimScope: "machine" });
+      expect(status).toBe(422);
+      expect(payload).toMatchObject({ ok: false, error: "invalid_claim_scope" });
+    });
+
+    // The runner asserts this echo on every poll. A server that ignored the
+    // field would answer 200 with a normal claim set and no echo, which is
+    // indistinguishable from enforcement unless the runner checks.
+    test("the parsed claimScope is echoed back on the runner record", async () => {
+      const bound = await claimWith({ claimScope: "bound" });
+      expect(bound.payload.runner).toMatchObject({ id: "spark02", claimScope: "bound" });
+      const fleet = await claimWith({});
+      expect((fleet.payload.runner as Record<string, unknown>).claimScope).toBeUndefined();
+    });
+
+    // Pre-flight: the fix reaches npm long before it reaches the control plane,
+    // so a bound runner must be able to detect a server that cannot enforce it
+    // BEFORE it claims anything it has no way to give back.
+    test("/version advertises the runner.claimScope capability", async () => {
+      const mod = await import("./index.js");
+      const server = createTestServer(mod, { host: "127.0.0.1", port: 0 });
+      try {
+        const response = await fetch(apiUrl(server, "/version"));
+        expect(response.status).toBe(200);
+        const payload = await response.json() as { capabilities?: string[] };
+        expect(payload.capabilities).toContain("runner.claimScope");
+      } finally {
+        server.stop(true);
+      }
+    });
+  });
+
   // Incident 607176. The runner executes the loop it is handed by the claim
   // response; nothing downstream can recover a prompt that was redacted here.
   // `claimRuns` used to push `publicLoop(claim.loop)`, which rewrote

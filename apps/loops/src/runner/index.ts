@@ -90,11 +90,24 @@ export interface RunnerLoopResult extends RunnerOnceResult {
   stopped: boolean;
 }
 
+/**
+ * `fleet` claims machine-unbound loops as well as loops pinned to this runner;
+ * `bound` claims only pinned loops. The wire default is `fleet`, so a runner
+ * that sends nothing behaves exactly as every runner did before this existed.
+ */
+export type RunnerClaimScope = "fleet" | "bound";
+
+export const RUNNER_CLAIM_SCOPES: readonly RunnerClaimScope[] = ["fleet", "bound"];
+
+/** Advertised on the open `/version` probe by a control plane that enforces claimScope. */
+export const RUNNER_CLAIM_SCOPE_CAPABILITY = "runner.claimScope";
+
 export interface RunRunnerOnceOptions {
   apiUrl?: string;
   apiKey?: string;
   runnerId?: string;
   machineId?: string;
+  claimScope?: RunnerClaimScope;
   now?: Date;
   heartbeatIntervalMs?: number;
   fetchImpl?: typeof fetch;
@@ -112,7 +125,26 @@ export interface RunRunnerLoopOptions extends RunRunnerOnceOptions {
   onError?: (error: unknown) => void;
 }
 
-function resolveRunnerConfig(opts: RunRunnerOnceOptions): { apiUrl: string; token?: string; runnerId: string; machineId?: string } {
+function resolveClaimScope(
+  value: string | undefined,
+  source: string,
+): RunnerClaimScope | undefined {
+  if (value === undefined || value === "") return undefined;
+  if (!RUNNER_CLAIM_SCOPES.includes(value as RunnerClaimScope)) {
+    throw new Error(
+      `${source} must be one of: ${RUNNER_CLAIM_SCOPES.join(", ")} (got ${JSON.stringify(value)})`,
+    );
+  }
+  return value as RunnerClaimScope;
+}
+
+function resolveRunnerConfig(opts: RunRunnerOnceOptions): {
+  apiUrl: string;
+  token?: string;
+  runnerId: string;
+  machineId?: string;
+  claimScope?: RunnerClaimScope;
+} {
   const env = opts.env ?? process.env;
   const apiUrl = opts.apiUrl ?? configuredApiUrl(env);
   if (!apiUrl) throw new Error("loops-runner requires HASNA_LOOPS_API_URL");
@@ -123,7 +155,47 @@ function resolveRunnerConfig(opts: RunRunnerOnceOptions): { apiUrl: string; toke
     token,
     runnerId: opts.runnerId ?? env.LOOPS_RUNNER_ID ?? env.LOOPS_RUNNER_MACHINE_ID ?? env.HASNA_MACHINE_ID ?? DEFAULT_RUNNER_ID,
     machineId: opts.machineId ?? env.LOOPS_RUNNER_MACHINE_ID ?? env.HASNA_MACHINE_ID,
+    claimScope: resolveClaimScope(opts.claimScope, "claimScope")
+      ?? resolveClaimScope(env.LOOPS_RUNNER_CLAIM_SCOPE, "LOOPS_RUNNER_CLAIM_SCOPE"),
   };
+}
+
+/**
+ * A `bound` runner establishes that the control plane can actually enforce the
+ * scope BEFORE it claims anything. There is no unclaim endpoint — `finalizeRun`
+ * takes only terminal statuses — so a runner that discovers non-enforcement
+ * from the claim response is already holding runs it cannot cleanly give back,
+ * and the default lease is 30 minutes. The fix reaches npm long before it
+ * reaches the control plane, so a non-enforcing server is the EXPECTED state on
+ * day one, not an edge case. Fail closed: claim nothing.
+ */
+async function assertClaimScopeEnforceable(
+  fetchImpl: typeof fetch,
+  config: { apiUrl: string; token?: string },
+): Promise<void> {
+  let capabilities: unknown;
+  try {
+    const response = await fetchImpl(endpoint(config.apiUrl, "/version"), {
+      method: "GET",
+      headers: config.token ? { authorization: `Bearer ${config.token}` } : {},
+    });
+    if (!response.ok) throw new Error(`status ${response.status}`);
+    capabilities = ((await response.json()) as Record<string, unknown>).capabilities;
+  } catch (error) {
+    throw new Error(
+      `loops-runner --claim-scope bound could not verify control-plane support (${
+        error instanceof Error ? error.message : String(error)
+      }); refusing to claim`,
+    );
+  }
+  const advertised = Array.isArray(capabilities) ? capabilities : [];
+  if (!advertised.includes(RUNNER_CLAIM_SCOPE_CAPABILITY)) {
+    throw new Error(
+      `loops-runner --claim-scope bound requires a control plane advertising ${RUNNER_CLAIM_SCOPE_CAPABILITY}; `
+        + "this one does not, so the scope would be silently ignored and this runner would claim the whole fleet's "
+        + "unbound loops. Refusing to claim.",
+    );
+  }
 }
 
 function endpoint(base: string, path: string): string {
@@ -342,13 +414,26 @@ class RunnerWorkflowApiStore implements WorkflowExecutionStore {
 export async function runRunnerOnce(opts: RunRunnerOnceOptions = {}): Promise<RunnerOnceResult> {
   const config = resolveRunnerConfig(opts);
   const fetchImpl = opts.fetchImpl ?? fetch;
+  if (config.claimScope === "bound") await assertClaimScopeEnforceable(fetchImpl, config);
   const runnerBody = {
     runnerId: config.runnerId,
     machineId: config.machineId,
+    ...(config.claimScope ? { claimScope: config.claimScope } : {}),
     now: (opts.now ?? new Date()).toISOString(),
     maxClaims: 1,
   };
   const claimed = await postJson(fetchImpl, config, "/v1/runners/claim", runnerBody);
+  // The capability list can drift from what the server actually parses; the echo
+  // is generated from the parse itself, so it is the stronger of the two checks.
+  if (config.claimScope === "bound") {
+    const echoed = (claimed.runner as Record<string, unknown> | undefined)?.claimScope;
+    if (echoed !== "bound") {
+      throw new Error(
+        `loops-runner --claim-scope bound was not echoed by the control plane (got ${JSON.stringify(echoed)}); `
+          + "the scope was not applied to this claim",
+      );
+    }
+  }
   const claims = (Array.isArray(claimed.claims) ? claimed.claims : []) as RunnerApiClaim[];
   const completed: LoopRun[] = [];
   for (const claim of claims) {
@@ -550,12 +635,17 @@ program
   .option("--api-url <url>", "control-plane API URL")
   .option("--runner-id <id>", "runner id")
   .option("--machine-id <id>", "machine id")
+  .option(
+    "--claim-scope <scope>",
+    "fleet (default) claims machine-unbound loops too; bound claims only loops pinned to this runner",
+  )
   .option("-j, --json", "print JSON")
   .action(async (opts) => {
     const result = await runRunnerOnce({
       apiUrl: opts.apiUrl,
       runnerId: opts.runnerId,
       machineId: opts.machineId,
+      claimScope: opts.claimScope,
     });
     if (wantsJson(opts)) console.log(JSON.stringify(result, null, 2));
     else console.log(`claimed=${result.claimed} completed=${result.completed.length}`);
@@ -568,6 +658,10 @@ program
   .option("--api-url <url>", "control-plane API URL")
   .option("--runner-id <id>", "runner id")
   .option("--machine-id <id>", "machine id")
+  .option(
+    "--claim-scope <scope>",
+    "fleet (default) claims machine-unbound loops too; bound claims only loops pinned to this runner",
+  )
   .option("--poll-interval-ms <ms>", "idle polling interval", parseIntegerOption("pollIntervalMs", 1))
   .option("--max-iterations <n>", "stop after this many claim iterations", parseIntegerOption("maxIterations", 1))
   .option("--idle-exit-after-ms <ms>", "stop after this many idle milliseconds", parseIntegerOption("idleExitAfterMs", 0))
@@ -577,6 +671,7 @@ program
       apiUrl: opts.apiUrl,
       runnerId: opts.runnerId,
       machineId: opts.machineId,
+      claimScope: opts.claimScope,
       pollIntervalMs: opts.pollIntervalMs,
       maxIterations: opts.maxIterations,
       idleExitAfterMs: opts.idleExitAfterMs,

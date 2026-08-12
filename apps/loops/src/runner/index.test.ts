@@ -459,4 +459,146 @@ describe("loops-runner", () => {
     // One success plus three consecutive failures trips the abort.
     expect(heartbeatCalls).toBeGreaterThanOrEqual(4);
   });
+
+  describe("claim scope", () => {
+    const succeed = async (_loop: unknown, run: { startedAt?: string }) => ({
+      status: "succeeded" as const,
+      startedAt: run.startedAt ?? "2026-01-01T00:00:00.000Z",
+      finishedAt: "2026-01-01T00:00:01.000Z",
+      durationMs: 1_000,
+      stdout: "",
+      stderr: "",
+      exitCode: 0,
+    });
+
+    async function runAgainstServer(
+      loopMachineId: string | undefined,
+      claimScope?: "fleet" | "bound",
+    ): Promise<number> {
+      const storage = createSqliteLoopStorage(":memory:");
+      const server = createRunnerServer(storage, "runner-bound");
+      try {
+        await storage.createLoop(
+          {
+            name: loopMachineId ? "pinned" : "unbound",
+            schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+            target: { type: "command", command: "true" },
+            ...(loopMachineId ? { machine: { id: loopMachineId } } : {}),
+          },
+          new Date("2025-12-31T00:00:00Z"),
+        );
+        const result = await runRunnerOnce({
+          apiUrl: `http://127.0.0.1:${server.port}`,
+          apiKey: "test-token",
+          runnerId: "runner-bound",
+          claimScope,
+          now: new Date("2026-01-01T00:00:00Z"),
+          env: {},
+          execute: succeed,
+        });
+        return result.claimed;
+      } finally {
+        server.stop(true);
+        await storage.close();
+      }
+    }
+
+    // The live carrier passes no --claim-scope. If this ever fails, the fleet's
+    // only runner has stopped claiming the work it exists to run.
+    test("a runner with no claim scope still claims machine-unbound loops", async () => {
+      expect(await runAgainstServer(undefined)).toBe(1);
+    });
+
+    test("a bound runner leaves machine-unbound loops alone", async () => {
+      expect(await runAgainstServer(undefined, "bound")).toBe(0);
+    });
+
+    test("a bound runner still claims loops pinned to it", async () => {
+      expect(await runAgainstServer("runner-bound", "bound")).toBe(1);
+    });
+
+    test("an unrecognised claim scope is refused before any request is made", async () => {
+      let called = false;
+      await expect(runRunnerOnce({
+        apiUrl: "http://127.0.0.1:1",
+        apiKey: "test-token",
+        runnerId: "runner-bound",
+        claimScope: "machine" as never,
+        env: {},
+        fetchImpl: (async () => { called = true; return new Response("{}"); }) as unknown as typeof fetch,
+      })).rejects.toThrow("claimScope must be one of: fleet, bound");
+      expect(called).toBe(false);
+    });
+
+    // The deployed control plane is many versions behind this package, so a
+    // server that accepts claimScope and ignores it is the expected day-one
+    // state. It must claim NOTHING rather than silently drain the fleet.
+    test("a bound runner refuses to claim when the server cannot enforce the scope", async () => {
+      const paths: string[] = [];
+      const fetchImpl = (async (url: string | URL) => {
+        const path = new URL(String(url)).pathname;
+        paths.push(path);
+        if (path.endsWith("/version")) {
+          return new Response(JSON.stringify({ status: "ok", capabilities: [] }), {
+            headers: { "content-type": "application/json" },
+          });
+        }
+        return new Response(JSON.stringify({ ok: true, claims: [] }), {
+          headers: { "content-type": "application/json" },
+        });
+      }) as unknown as typeof fetch;
+
+      await expect(runRunnerOnce({
+        apiUrl: "http://127.0.0.1:1",
+        apiKey: "test-token",
+        runnerId: "runner-bound",
+        claimScope: "bound",
+        env: {},
+        fetchImpl,
+      })).rejects.toThrow("requires a control plane advertising runner.claimScope");
+      expect(paths.some((path) => path.includes("claim"))).toBe(false);
+    });
+
+    test("a bound runner refuses a claim response that does not echo the scope", async () => {
+      const fetchImpl = (async (url: string | URL) => {
+        const path = new URL(String(url)).pathname;
+        if (path.endsWith("/version")) {
+          return new Response(JSON.stringify({ capabilities: ["runner.claimScope"] }), {
+            headers: { "content-type": "application/json" },
+          });
+        }
+        return new Response(JSON.stringify({ ok: true, runner: { id: "runner-bound" }, claims: [] }), {
+          headers: { "content-type": "application/json" },
+        });
+      }) as unknown as typeof fetch;
+
+      await expect(runRunnerOnce({
+        apiUrl: "http://127.0.0.1:1",
+        apiKey: "test-token",
+        runnerId: "runner-bound",
+        claimScope: "bound",
+        env: {},
+        fetchImpl,
+      })).rejects.toThrow("was not echoed by the control plane");
+    });
+
+    test("LOOPS_RUNNER_CLAIM_SCOPE configures the scope without a flag", async () => {
+      const paths: string[] = [];
+      const fetchImpl = (async (url: string | URL) => {
+        paths.push(new URL(String(url)).pathname);
+        return new Response(JSON.stringify({ status: "ok", capabilities: [] }), {
+          headers: { "content-type": "application/json" },
+        });
+      }) as unknown as typeof fetch;
+
+      await expect(runRunnerOnce({
+        apiUrl: "http://127.0.0.1:1",
+        apiKey: "test-token",
+        runnerId: "runner-bound",
+        env: { LOOPS_RUNNER_CLAIM_SCOPE: "bound" } as NodeJS.ProcessEnv,
+        fetchImpl,
+      })).rejects.toThrow("requires a control plane advertising runner.claimScope");
+      expect(paths.some((path) => path.endsWith("/version"))).toBe(true);
+    });
+  });
 });
