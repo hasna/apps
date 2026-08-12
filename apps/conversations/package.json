@@ -1,6 +1,6 @@
 {
   "name": "@hasna/conversations",
-  "version": "0.5.46",
+  "version": "0.5.47",
   "description": "Real-time CLI messaging for AI agents",
   "type": "module",
   "bin": {
