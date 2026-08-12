@@ -2,6 +2,9 @@ import { describe, expect, test } from "bun:test";
 import {
   TODOS_TASK_MANIFEST_ROUTE,
   createPostgresTodosTaskManifestAuthority,
+  deriveTodosTaskManifestApplyPreconditionDigest,
+  deriveTodosTaskManifestIdempotencyKey,
+  taskManifestRequestDigest,
   type TodosTaskManifestPostgresClient,
 } from "./index.js";
 import { taskManifestPlanSlug } from "./plan-slug.js";
@@ -39,13 +42,30 @@ describe("task-manifest PostgreSQL transaction contract", () => {
       service: "manifest-transaction-test",
       faultInjector: (point) => point === "after_verification_write",
     });
-    await expect(authority.apply({
+    const base = {
       version: 1,
       operation_id: "postgres-transaction-callback-test",
-      idempotency_key: "postgres-transaction-callback-test:apply",
+      step_id: "apply",
+      idempotency_key: "",
+      precondition_digest: "",
       project_id: "a0000000-0000-4000-8000-000000000001",
       plan: { key: "callback", name: "Callback" },
       tasks: [{ key: "one", title: "One", verifications: [{ command: "one" }] }],
+    };
+    const precondition_digest = deriveTodosTaskManifestApplyPreconditionDigest(base);
+    const request_digest = taskManifestRequestDigest({ ...base, precondition_digest });
+    const idempotency_key = deriveTodosTaskManifestIdempotencyKey({
+      operation_id: base.operation_id,
+      step_id: base.step_id,
+      direction: "apply",
+      target_selector: base.project_id,
+      request_digest,
+      precondition_digest,
+    });
+    await expect(authority.apply({
+      ...base,
+      precondition_digest,
+      idempotency_key,
     })).rejects.toThrow(/after_verification_write/);
     expect(transactions).toBe(1);
     expect(transactionWrites.length).toBeGreaterThanOrEqual(3);
@@ -157,6 +177,7 @@ describe("task-manifest PostgreSQL transaction contract", () => {
               binding_version: 1,
               binding_tenant_id: "tenant-postgres-lookup",
               binding_operation_id: "postgres-lookup",
+              binding_step_id: "apply",
               binding_plan_id: planId,
               receipt_tenant_id: "tenant-postgres-lookup",
               receipt_authority: "todos",
@@ -164,6 +185,7 @@ describe("task-manifest PostgreSQL transaction contract", () => {
               receipt_schema_version: 1,
               receipt_kind: "apply",
               receipt_operation_id: "postgres-lookup",
+              receipt_step_id: "apply",
               receipt_plan_id: planId,
             }],
           };
@@ -189,6 +211,8 @@ describe("task-manifest PostgreSQL transaction contract", () => {
       schema_version: 1,
       tenant_id: "tenant-postgres-lookup",
       plan_id: planId,
+      operation_id: "postgres-lookup",
+      step_id: "apply",
       apply_receipt_id: receiptId,
       binding_version: 1,
       state: "applied",
@@ -233,6 +257,9 @@ describe("task-manifest PostgreSQL transaction contract", () => {
     const schema = statements.join("\n");
     expect(schema).toMatch(/todos_task_manifest_receipts[\s\S]*tenant_id text NOT NULL/);
     expect(schema).toMatch(/todos_task_manifest_bindings[\s\S]*tenant_id text NOT NULL/);
+    expect(schema).toMatch(/todos_task_manifest_terminal_receipts[\s\S]*outcome text NOT NULL CHECK\(outcome = 'terminal_nonacceptance'\)/);
+    expect(schema).toContain("todos_task_manifest_terminal_receipts_immutable");
+    expect(schema).toContain("todos_task_manifest_terminal_receipts_identity_idx");
     expect(schema).toContain(
       "ADD COLUMN IF NOT EXISTS tenant_id text NOT NULL DEFAULT 'tenant-upgrade'",
     );

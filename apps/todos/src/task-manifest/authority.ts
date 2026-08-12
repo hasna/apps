@@ -10,7 +10,9 @@ import { SqliteTodosTaskManifestBackend } from "./sqlite.js";
 import { PostgresTodosTaskManifestBackend } from "./postgres.js";
 import { sanitizePreWriteText, sanitizePreWriteValue } from "../lib/prewrite-secrets.js";
 import {
+  TODOS_TASK_MANIFEST_CALLER_ROUTE,
   TODOS_TASK_MANIFEST_ROUTE,
+  TODOS_TASK_MANIFEST_PLAN_SLUG_PROVENANCE,
   TODOS_TASK_MANIFEST_SCHEMA_VERSION,
   TodosTaskManifestError,
   type PostgresTodosTaskManifestAuthorityOptions,
@@ -26,6 +28,8 @@ import {
   type TodosTaskManifestFaultPoint,
   type TodosTaskManifestPostgresClient,
   type TodosTaskManifestReceipt,
+  type TodosTaskManifest,
+  type TodosTaskManifestDirection,
 } from "./types.js";
 
 const FAULT_POINTS: readonly TodosTaskManifestFaultPoint[] = [
@@ -45,6 +49,62 @@ function resolveTenantId(value: string | undefined): string {
   return tenantId;
 }
 
+export function taskManifestRequestDigest(
+  manifest: Omit<TodosTaskManifest, "idempotency_key">,
+): string {
+  const { idempotency_key: _idempotencyKey, ...request } = manifest as TodosTaskManifest;
+  return canonicalDigest(request);
+}
+
+export function taskManifestCompensationRequestDigest(
+  request: Omit<TodosTaskManifestCompensateRequest, "idempotency_key">,
+): string {
+  return canonicalDigest(request);
+}
+
+export function deriveTodosTaskManifestApplyPreconditionDigest(input: Pick<
+  TodosTaskManifest,
+  "operation_id" | "step_id" | "project_id" | "task_list_id" | "if_binding_version"
+>): string {
+  return canonicalDigest({
+    route: TODOS_TASK_MANIFEST_CALLER_ROUTE,
+    direction: "apply",
+    operation_id: input.operation_id,
+    step_id: input.step_id,
+    project_id: input.project_id,
+    task_list_id: input.task_list_id ?? null,
+    expected_binding_version: input.if_binding_version ?? 0,
+  });
+}
+
+export function deriveTodosTaskManifestCompensationPreconditionDigest(input: Pick<
+  TodosTaskManifestCompensateRequest,
+  "operation_id" | "step_id" | "receipt_id" | "if_binding_version"
+>): string {
+  return canonicalDigest({
+    route: TODOS_TASK_MANIFEST_CALLER_ROUTE,
+    direction: "compensate",
+    operation_id: input.operation_id,
+    step_id: input.step_id,
+    apply_receipt_id: input.receipt_id,
+    expected_binding_version: input.if_binding_version,
+  });
+}
+
+export function deriveTodosTaskManifestIdempotencyKey(input: {
+  operation_id: string;
+  step_id: string;
+  direction: TodosTaskManifestDirection;
+  target_selector: string;
+  request_digest: string;
+  precondition_digest: string;
+}): string {
+  return `tmk_${canonicalDigest({
+    route: TODOS_TASK_MANIFEST_CALLER_ROUTE,
+    ...input,
+  }).slice(0, 48)}`;
+}
+
 function normalize(input: unknown, now: string): NormalizedTaskManifest {
   const parsed = parseTodosTaskManifest(input);
   const requestBytes = Buffer.byteLength(canonicalJson(parsed), "utf8");
@@ -55,33 +115,50 @@ function normalize(input: unknown, now: string): NormalizedTaskManifest {
       { request_bytes: requestBytes, request_byte_limit: TODOS_TASK_MANIFEST_BOUNDS.request_bytes },
     );
   }
+  const { idempotency_key: _idempotencyKey, ...request } = parsed;
+  const request_digest = taskManifestRequestDigest(request);
   const manifest = sanitizeManifest(parsed);
+  const expectedPreconditionDigest = deriveTodosTaskManifestApplyPreconditionDigest(manifest);
+  if (manifest.precondition_digest !== expectedPreconditionDigest) {
+    throw new TodosTaskManifestError(
+      "TODOS_TASK_MANIFEST_DIGEST_MISMATCH",
+      "precondition_digest does not match the exact apply target and binding version",
+      { expected_precondition_digest: expectedPreconditionDigest },
+    );
+  }
+  const expectedIdempotencyKey = deriveTodosTaskManifestIdempotencyKey({
+    operation_id: manifest.operation_id,
+    step_id: manifest.step_id,
+    direction: "apply",
+    target_selector: manifest.project_id,
+    request_digest,
+    precondition_digest: manifest.precondition_digest,
+  });
   const task_ids = Object.fromEntries(manifest.tasks.map((task) => [
     task.key,
-    deterministicUuid(TODOS_TASK_MANIFEST_ROUTE, manifest.operation_id, "task", task.key),
+    deterministicUuid(TODOS_TASK_MANIFEST_ROUTE, manifest.operation_id, manifest.step_id, "task", task.key),
   ]));
   const graph = {
-    plan_id: deterministicUuid(TODOS_TASK_MANIFEST_ROUTE, manifest.operation_id, "plan", manifest.plan.key),
+    plan_id: deterministicUuid(TODOS_TASK_MANIFEST_ROUTE, manifest.operation_id, manifest.step_id, "plan", manifest.plan.key),
     task_ids,
     comment_ids: manifest.tasks.flatMap((task) => (task.comments ?? []).map((_, index) =>
-      deterministicUuid(TODOS_TASK_MANIFEST_ROUTE, manifest.operation_id, "comment", task.key, String(index)))),
+      deterministicUuid(TODOS_TASK_MANIFEST_ROUTE, manifest.operation_id, manifest.step_id, "comment", task.key, String(index)))),
     verification_ids: manifest.tasks.flatMap((task) => (task.verifications ?? []).map((_, index) =>
-      deterministicUuid(TODOS_TASK_MANIFEST_ROUTE, manifest.operation_id, "verification", task.key, String(index)))),
+      deterministicUuid(TODOS_TASK_MANIFEST_ROUTE, manifest.operation_id, manifest.step_id, "verification", task.key, String(index)))),
     dependency_ids: (manifest.dependencies ?? []).map((edge) =>
       `${task_ids[edge.task]!}::${task_ids[edge.depends_on]!}`),
   };
-  const request_digest = canonicalDigest(parsed);
   const effectInputs = [
     {
       topic: "todos.task-manifest.applied",
-      payload: { operation_id: manifest.operation_id, project_id: manifest.project_id },
+      payload: { operation_id: manifest.operation_id, step_id: manifest.step_id, project_id: manifest.project_id },
     },
     ...(manifest.effects ?? []),
   ];
   const outbox = effectInputs.map((effect, index) => {
     const payload = { ...effect.payload } as Record<string, unknown>;
     return {
-      id: deterministicUuid(TODOS_TASK_MANIFEST_ROUTE, manifest.operation_id, "outbox", String(index)),
+      id: deterministicUuid(TODOS_TASK_MANIFEST_ROUTE, manifest.operation_id, manifest.step_id, "outbox", String(index)),
       topic: effect.topic,
       payload,
       digest: canonicalDigest({ topic: effect.topic, payload }),
@@ -91,17 +168,29 @@ function normalize(input: unknown, now: string): NormalizedTaskManifest {
   return {
     manifest,
     request_digest,
+    expected_idempotency_key: expectedIdempotencyKey,
     result_digest,
     receipt_id: deterministicUuid(
       TODOS_TASK_MANIFEST_ROUTE,
       "apply",
       manifest.operation_id,
+      manifest.step_id,
+      manifest.idempotency_key,
+      request_digest,
+    ),
+    terminal_receipt_id: deterministicUuid(
+      TODOS_TASK_MANIFEST_ROUTE,
+      "terminal",
+      "apply",
+      manifest.operation_id,
+      manifest.step_id,
       manifest.idempotency_key,
       request_digest,
     ),
     graph,
     outbox,
     now,
+    plan_slug_provenance: TODOS_TASK_MANIFEST_PLAN_SLUG_PROVENANCE,
   };
 }
 
@@ -179,6 +268,10 @@ export class PackageOwnedTodosTaskManifestAuthority implements TodosTaskManifest
       tenant_id: this.tenantId,
       backend: this.backend.kind,
       deterministic_ids: true,
+      operation_step_identity: true,
+      deterministic_idempotency_keys: true,
+      terminal_nonacceptance_receipts: true,
+      plan_slug_provenance: TODOS_TASK_MANIFEST_PLAN_SLUG_PROVENANCE,
       immutable_receipts: true,
       transactional_outbox: true,
       idempotent_outbox_delivery: true,
@@ -210,7 +303,15 @@ export class PackageOwnedTodosTaskManifestAuthority implements TodosTaskManifest
   async apply(input: unknown): Promise<TodosTaskManifestApplyResult> {
     const normalized = normalize(input, this.now());
     const faults = await this.prepareFaults();
-    return this.bounded(await this.backend.apply(normalized, faults));
+    const result = this.bounded(await this.backend.apply(normalized, faults));
+    if (result.receipt.outcome === "terminal_nonacceptance") {
+      throw new TodosTaskManifestError(
+        result.receipt.reason ?? "TODOS_TASK_MANIFEST_GRAPH_CONFLICT",
+        "Task-manifest apply reached an immutable terminal nonacceptance",
+        { receipt: result.receipt },
+      );
+    }
+    return result;
   }
 
   readExact(receiptId: string): Promise<TodosTaskManifestApplyResult> {
@@ -261,11 +362,54 @@ export class PackageOwnedTodosTaskManifestAuthority implements TodosTaskManifest
   async compensate(input: TodosTaskManifestCompensateRequest): Promise<TodosTaskManifestCompensationResult> {
     const request = parseTodosTaskManifestCompensation(input);
     const applied = await this.backend.readExact(request.receipt_id);
-    const requestDigest = canonicalDigest(request);
+    if (applied.receipt.outcome !== "accepted") {
+      throw new TodosTaskManifestError(
+        "TODOS_TASK_MANIFEST_COMPENSATION_REFUSED",
+        "Compensation refused: apply receipt is terminal nonacceptance",
+      );
+    }
+    if (request.operation_id !== applied.receipt.operation_id) {
+      throw new TodosTaskManifestError(
+        "TODOS_TASK_MANIFEST_IDEMPOTENCY_CONFLICT",
+        "Compensation operation_id must match the accepted apply operation",
+      );
+    }
+    if (request.step_id === applied.receipt.step_id) {
+      throw new TodosTaskManifestError(
+        "TODOS_TASK_MANIFEST_INVALID_INPUT",
+        "Compensation must use a distinct step_id from apply",
+      );
+    }
+    const expectedPreconditionDigest = deriveTodosTaskManifestCompensationPreconditionDigest(request);
+    if (request.precondition_digest !== expectedPreconditionDigest) {
+      throw new TodosTaskManifestError(
+        "TODOS_TASK_MANIFEST_DIGEST_MISMATCH",
+        "precondition_digest does not match the exact compensation receipt and binding version",
+        { expected_precondition_digest: expectedPreconditionDigest },
+      );
+    }
+    const { idempotency_key: _requestIdempotencyKey, ...compensationRequestWithoutKey } = request;
+    const requestDigest = taskManifestCompensationRequestDigest(compensationRequestWithoutKey);
+    const expectedIdempotencyKey = deriveTodosTaskManifestIdempotencyKey({
+      operation_id: request.operation_id,
+      step_id: request.step_id,
+      direction: "compensate",
+      target_selector: request.receipt_id,
+      request_digest: requestDigest,
+      precondition_digest: request.precondition_digest,
+    });
+    if (request.idempotency_key !== expectedIdempotencyKey) {
+      throw new TodosTaskManifestError(
+        "TODOS_TASK_MANIFEST_IDEMPOTENCY_MISMATCH",
+        "idempotency_key does not match the deterministic operation/step/compensation semantics",
+        { expected_idempotency_key: expectedIdempotencyKey },
+      );
+    }
     const compensationReceiptId = deterministicUuid(
       TODOS_TASK_MANIFEST_ROUTE,
       "compensate",
-      applied.receipt.operation_id,
+      request.operation_id,
+      request.step_id,
       request.idempotency_key,
       requestDigest,
     );
@@ -275,10 +419,15 @@ export class PackageOwnedTodosTaskManifestAuthority implements TodosTaskManifest
       route: TODOS_TASK_MANIFEST_ROUTE,
       schema_version: 1,
       kind: "compensate",
-      operation_id: applied.receipt.operation_id,
+      operation_id: request.operation_id,
+      step_id: request.step_id,
       idempotency_key: request.idempotency_key,
       request_digest: requestDigest,
+      precondition_digest: request.precondition_digest,
       result_digest: canonicalDigest({ absent: true, apply_receipt_id: applied.receipt.receipt_id }),
+      outcome: "accepted",
+      reason: null,
+      duplicate_of_receipt_id: null,
       binding_version: request.if_binding_version + 1,
       apply_receipt_id: applied.receipt.receipt_id,
       created_at: this.now(),

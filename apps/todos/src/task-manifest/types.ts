@@ -3,11 +3,18 @@ import type { TodosPostgresQueryClient } from "../storage/postgres-sync.js";
 import type { TaskPriority, TaskStatus } from "../types/index.js";
 
 export const TODOS_TASK_MANIFEST_ROUTE = "todos.task-manifest.v1" as const;
+export const TODOS_TASK_MANIFEST_CALLER_ROUTE = "accounts.task-manifest.v1" as const;
 export const TODOS_TASK_MANIFEST_SCHEMA_VERSION = 1 as const;
+export const TODOS_TASK_MANIFEST_PLAN_SLUG_PROVENANCE = "deterministic-v1" as const;
 
 export type TodosTaskManifestStatus = TaskStatus;
 export type TodosTaskManifestPriority = TaskPriority;
 export type TodosTaskManifestVerificationStatus = "passed" | "failed" | "unknown";
+export type TodosTaskManifestDirection = "apply" | "compensate";
+export type TodosTaskManifestOutcome =
+  | "accepted"
+  | "duplicate_of_accepted"
+  | "terminal_nonacceptance";
 
 export interface TodosTaskManifestComment {
   content: string;
@@ -52,7 +59,9 @@ export interface TodosTaskManifestEffect {
 export interface TodosTaskManifest {
   version: 1;
   operation_id: string;
+  step_id: string;
   idempotency_key: string;
+  precondition_digest: string;
   project_id: string;
   task_list_id?: string;
   if_binding_version?: number;
@@ -91,9 +100,14 @@ export interface TodosTaskManifestReceipt {
   schema_version: 1;
   kind: "apply" | "compensate";
   operation_id: string;
+  step_id: string;
   idempotency_key: string;
   request_digest: string;
+  precondition_digest: string;
   result_digest: string;
+  outcome: TodosTaskManifestOutcome;
+  reason: TodosTaskManifestErrorCode | null;
+  duplicate_of_receipt_id: string | null;
   binding_version: number;
   apply_receipt_id: string | null;
   created_at: string;
@@ -110,7 +124,10 @@ export interface TodosTaskManifestApplyResult {
 
 export interface TodosTaskManifestCompensateRequest {
   receipt_id: string;
+  operation_id: string;
+  step_id: string;
   idempotency_key: string;
+  precondition_digest: string;
   if_binding_version: number;
 }
 
@@ -128,6 +145,10 @@ export interface TodosTaskManifestCapability {
   tenant_id: string;
   backend: "sqlite" | "postgresql" | "http";
   deterministic_ids: true;
+  operation_step_identity: true;
+  deterministic_idempotency_keys: true;
+  terminal_nonacceptance_receipts: true;
+  plan_slug_provenance: typeof TODOS_TASK_MANIFEST_PLAN_SLUG_PROVENANCE;
   immutable_receipts: true;
   transactional_outbox: true;
   idempotent_outbox_delivery: true;
@@ -170,6 +191,8 @@ export interface TodosTaskManifestBindingLookupResult {
   schema_version: 1;
   tenant_id: string;
   plan_id: string;
+  operation_id: string;
+  step_id: string;
   apply_receipt_id: string;
   binding_version: number;
   state: "applied" | "compensated";
@@ -214,6 +237,8 @@ export interface PostgresTodosTaskManifestAuthorityOptions extends TodosTaskMani
 
 export type TodosTaskManifestErrorCode =
   | "TODOS_TASK_MANIFEST_INVALID_INPUT"
+  | "TODOS_TASK_MANIFEST_DIGEST_MISMATCH"
+  | "TODOS_TASK_MANIFEST_IDEMPOTENCY_MISMATCH"
   | "TODOS_TASK_MANIFEST_BOUNDS_EXCEEDED"
   | "TODOS_TASK_MANIFEST_FOREIGN_REFERENCE"
   | "TODOS_TASK_MANIFEST_IDEMPOTENCY_CONFLICT"

@@ -66,6 +66,10 @@ const taskManifestCapabilitySchema = {
     "tenant_id",
     "backend",
     "deterministic_ids",
+    "operation_step_identity",
+    "deterministic_idempotency_keys",
+    "terminal_nonacceptance_receipts",
+    "plan_slug_provenance",
     "immutable_receipts",
     "transactional_outbox",
     "idempotent_outbox_delivery",
@@ -81,6 +85,10 @@ const taskManifestCapabilitySchema = {
     tenant_id: { type: "string", minLength: 1, maxLength: 200 },
     backend: { type: "string", enum: ["sqlite", "postgresql", "http"] },
     deterministic_ids: { type: "boolean", enum: [true] },
+    operation_step_identity: { type: "boolean", enum: [true] },
+    deterministic_idempotency_keys: { type: "boolean", enum: [true] },
+    terminal_nonacceptance_receipts: { type: "boolean", enum: [true] },
+    plan_slug_provenance: { type: "string", enum: ["deterministic-v1"] },
     immutable_receipts: { type: "boolean", enum: [true] },
     transactional_outbox: { type: "boolean", enum: [true] },
     idempotent_outbox_delivery: { type: "boolean", enum: [true] },
@@ -138,6 +146,8 @@ const taskManifestBindingLookupResultSchema = {
     "schema_version",
     "tenant_id",
     "plan_id",
+    "operation_id",
+    "step_id",
     "apply_receipt_id",
     "binding_version",
     "state",
@@ -148,10 +158,157 @@ const taskManifestBindingLookupResultSchema = {
     schema_version: { type: "integer", enum: [1] },
     tenant_id: { type: "string" },
     plan_id: { type: "string", format: "uuid" },
+    operation_id: { type: "string", minLength: 1, maxLength: 200 },
+    step_id: { type: "string", minLength: 1, maxLength: 200 },
     apply_receipt_id: { type: "string", format: "uuid" },
     binding_version: { type: "integer", minimum: 1 },
     state: { type: "string", enum: ["applied", "compensated"] },
   },
+} as const;
+
+const taskManifestSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "version", "operation_id", "step_id", "idempotency_key", "precondition_digest",
+    "project_id", "plan", "tasks",
+  ],
+  properties: {
+    version: { type: "integer", enum: [1] },
+    operation_id: { type: "string", minLength: 1, maxLength: 200 },
+    step_id: { type: "string", minLength: 1, maxLength: 200 },
+    idempotency_key: { type: "string", pattern: "^tmk_[0-9a-f]{48}$" },
+    precondition_digest: { type: "string", pattern: "^[0-9a-f]{64}$" },
+    project_id: { type: "string", format: "uuid" },
+    task_list_id: { type: "string", format: "uuid" },
+    if_binding_version: { type: "integer", minimum: 0 },
+    plan: {
+      type: "object",
+      additionalProperties: false,
+      required: ["key", "name"],
+      properties: {
+        key: { type: "string", minLength: 1, maxLength: 200 },
+        name: { type: "string", minLength: 1, maxLength: 200 },
+        description: { type: "string" },
+        status: { type: "string", enum: ["active", "completed", "archived"] },
+      },
+    },
+    tasks: {
+      type: "array",
+      minItems: 1,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["key", "title"],
+        properties: {
+          key: { type: "string", minLength: 1, maxLength: 200 },
+          title: { type: "string", minLength: 1, maxLength: 200 },
+          description: { type: "string" },
+          status: { type: "string", enum: ["pending", "in_progress", "completed", "failed", "cancelled"] },
+          priority: { type: "string", enum: ["low", "medium", "high", "critical"] },
+          assigned_to: { type: "string" },
+          created_by: { type: "string" },
+          tags: { type: "array", items: { type: "string" } },
+          metadata: { type: "object", additionalProperties: true },
+          comments: { type: "array", items: { type: "object", additionalProperties: true } },
+          verifications: { type: "array", items: { type: "object", additionalProperties: true } },
+        },
+      },
+    },
+    dependencies: { type: "array", items: { type: "object", additionalProperties: true } },
+    effects: { type: "array", items: { type: "object", additionalProperties: true } },
+  },
+} as const;
+
+const taskManifestReceiptSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "receipt_id", "authority", "route", "schema_version", "kind", "operation_id",
+    "step_id", "idempotency_key", "request_digest", "precondition_digest",
+    "result_digest", "outcome", "reason", "duplicate_of_receipt_id",
+    "binding_version", "apply_receipt_id", "created_at",
+  ],
+  properties: {
+    receipt_id: { type: "string", format: "uuid" },
+    authority: { type: "string", enum: ["todos"] },
+    route: { type: "string", enum: ["todos.task-manifest.v1"] },
+    schema_version: { type: "integer", enum: [1] },
+    kind: { type: "string", enum: ["apply", "compensate"] },
+    operation_id: { type: "string" },
+    step_id: { type: "string" },
+    idempotency_key: { type: "string" },
+    request_digest: { type: "string", pattern: "^[0-9a-f]{64}$" },
+    precondition_digest: { type: "string", pattern: "^[0-9a-f]{64}$" },
+    result_digest: { type: "string", pattern: "^[0-9a-f]{64}$" },
+    outcome: { type: "string", enum: ["accepted", "duplicate_of_accepted", "terminal_nonacceptance"] },
+    reason: { type: "string", nullable: true },
+    duplicate_of_receipt_id: { type: "string", nullable: true },
+    binding_version: { type: "integer", minimum: 0 },
+    apply_receipt_id: { type: "string", nullable: true },
+    created_at: { type: "string", format: "date-time" },
+  },
+} as const;
+
+const taskManifestApplyResultSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["duplicate", "receipt", "graph", "readback", "outbox_ids", "result_digest"],
+  properties: {
+    duplicate: { type: "boolean" },
+    receipt: { $ref: "#/components/schemas/TaskManifestReceipt" },
+    graph: { type: "object", additionalProperties: true },
+    readback: { type: "object", additionalProperties: true },
+    outbox_ids: { type: "array", items: { type: "string", format: "uuid" } },
+    result_digest: { type: "string", pattern: "^[0-9a-f]{64}$" },
+  },
+} as const;
+
+const taskManifestApplyResponseSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["result"],
+  properties: { result: { $ref: "#/components/schemas/TaskManifestApplyResult" } },
+} as const;
+
+const taskManifestCompensateRequestSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["receipt_id", "operation_id", "step_id", "idempotency_key", "precondition_digest", "if_binding_version"],
+  properties: {
+    receipt_id: { type: "string", format: "uuid" },
+    operation_id: { type: "string" },
+    step_id: { type: "string" },
+    idempotency_key: { type: "string", pattern: "^tmk_[0-9a-f]{48}$" },
+    precondition_digest: { type: "string", pattern: "^[0-9a-f]{64}$" },
+    if_binding_version: { type: "integer", minimum: 1 },
+  },
+} as const;
+
+const taskManifestCompensationResultSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["duplicate", "receipt", "absent", "readback"],
+  properties: {
+    duplicate: { type: "boolean" },
+    receipt: { $ref: "#/components/schemas/TaskManifestReceipt" },
+    absent: { type: "boolean", enum: [true] },
+    readback: { type: "object", additionalProperties: true },
+  },
+} as const;
+
+const taskManifestCompensateResponseSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["result"],
+  properties: { result: { $ref: "#/components/schemas/TaskManifestCompensationResult" } },
+} as const;
+
+const taskManifestReadExactRequestSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["receipt_id"],
+  properties: { receipt_id: { type: "string", format: "uuid" } },
 } as const;
 
 const taskManifestBindingLookupResponseSchema = {
@@ -742,6 +899,14 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
         TaskManifestBounds: taskManifestBoundsSchema,
         TaskManifestCapability: taskManifestCapabilitySchema,
         TaskManifestCapabilityResponse: taskManifestCapabilityResponseSchema,
+        TaskManifest: taskManifestSchema,
+        TaskManifestReceipt: taskManifestReceiptSchema,
+        TaskManifestApplyResult: taskManifestApplyResultSchema,
+        TaskManifestApplyResponse: taskManifestApplyResponseSchema,
+        TaskManifestCompensateRequest: taskManifestCompensateRequestSchema,
+        TaskManifestCompensationResult: taskManifestCompensationResultSchema,
+        TaskManifestCompensateResponse: taskManifestCompensateResponseSchema,
+        TaskManifestReadExactRequest: taskManifestReadExactRequestSchema,
         TaskManifestBindingLookupRequest: taskManifestBindingLookupRequestSchema,
         TaskManifestBindingLookupResult: taskManifestBindingLookupResultSchema,
         TaskManifestBindingLookupResponse: taskManifestBindingLookupResponseSchema,
@@ -1873,6 +2038,82 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
             },
             "401": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
             "503": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
+        },
+      },
+      "/v1/task-manifest/apply": {
+        post: {
+          operationId: "applyTaskManifest",
+          summary: "Apply one exact task-manifest graph through the Todos authority",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/TaskManifest" },
+              },
+            },
+          },
+          responses: {
+            "201": {
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/TaskManifestApplyResponse" },
+                },
+              },
+            },
+            "400": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "409": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "503": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
+        },
+      },
+      "/v1/task-manifest/read-exact": {
+        post: {
+          operationId: "readExactTaskManifest",
+          summary: "Read one exact immutable task-manifest apply receipt",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/TaskManifestReadExactRequest" },
+              },
+            },
+          },
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/TaskManifestApplyResponse" },
+                },
+              },
+            },
+            "404": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
+        },
+      },
+      "/v1/task-manifest/compensate": {
+        post: {
+          operationId: "compensateTaskManifest",
+          summary: "Compensate one exact untouched task-manifest graph with CAS protection",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/TaskManifestCompensateRequest" },
+              },
+            },
+          },
+          responses: {
+            "201": {
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/TaskManifestCompensateResponse" },
+                },
+              },
+            },
+            "400": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "404": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "409": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
           },
         },
       },

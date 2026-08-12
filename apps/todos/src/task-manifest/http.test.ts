@@ -7,7 +7,12 @@ import {
   TodosTaskManifestError,
   createSqliteTodosTaskManifestAuthority,
   createTodosTaskManifestHttpClient,
+  deriveTodosTaskManifestApplyPreconditionDigest,
+  deriveTodosTaskManifestCompensationPreconditionDigest,
+  deriveTodosTaskManifestIdempotencyKey,
   handleTodosTaskManifestHttpRequest,
+  taskManifestRequestDigest,
+  taskManifestCompensationRequestDigest,
   supportsIdempotentOutboxDelivery,
   type TodosTaskManifest,
 } from "./index.js";
@@ -16,14 +21,30 @@ const PROJECT_ID = "a0000000-0000-4000-8000-000000000001";
 const TENANT_ID = "tenant-http-receipt-recovery";
 
 function input(): TodosTaskManifest {
-  return {
+  const base = {
     version: 1,
     operation_id: "http-task-manifest-v1",
-    idempotency_key: "http-task-manifest-v1:apply",
+    step_id: "apply",
+    idempotency_key: "",
+    precondition_digest: "",
     project_id: PROJECT_ID,
     plan: { key: "http", name: "HTTP graph" },
     tasks: [{ key: "one", title: "One" }],
     effects: [{ topic: "task-manifest.http-test", payload: { phase: "two-row" } }],
+  };
+  const precondition_digest = deriveTodosTaskManifestApplyPreconditionDigest(base);
+  const request_digest = taskManifestRequestDigest({ ...base, precondition_digest });
+  return {
+    ...base,
+    precondition_digest,
+    idempotency_key: deriveTodosTaskManifestIdempotencyKey({
+      operation_id: base.operation_id,
+      step_id: base.step_id,
+      direction: "apply",
+      target_selector: base.project_id,
+      request_digest,
+      precondition_digest,
+    }),
   };
 }
 
@@ -59,6 +80,19 @@ describe("task-manifest HTTP authority", () => {
     });
     expect(supportsIdempotentOutboxDelivery(capability)).toBe(true);
     const applied = await client.apply(input());
+    const changed = input();
+    changed.plan.name = "Changed HTTP graph";
+    await expect(client.apply(changed)).rejects.toEqual(expect.objectContaining<TodosTaskManifestError>({
+      code: "TODOS_TASK_MANIFEST_IDEMPOTENCY_CONFLICT",
+      details: expect.objectContaining({
+        receipt: expect.objectContaining({
+          outcome: "terminal_nonacceptance",
+          reason: "TODOS_TASK_MANIFEST_IDEMPOTENCY_CONFLICT",
+        }),
+      }),
+    }));
+    expect(db.query("SELECT count(*) AS count FROM plans").get()).toEqual({ count: 1 });
+    expect(db.query("SELECT count(*) AS count FROM todos_task_manifest_outbox").get()).toEqual({ count: 2 });
     expect(await client.lookupBinding({
       authority: "todos",
       route: TODOS_TASK_MANIFEST_ROUTE,
@@ -72,6 +106,8 @@ describe("task-manifest HTTP authority", () => {
       schema_version: 1,
       tenant_id: TENANT_ID,
       plan_id: applied.graph.plan_id,
+      operation_id: applied.receipt.operation_id,
+      step_id: applied.receipt.step_id,
       apply_receipt_id: applied.receipt.receipt_id,
       binding_version: 1,
       state: "applied",
@@ -80,6 +116,20 @@ describe("task-manifest HTTP authority", () => {
     await client.markOutboxDelivered(applied.outbox_ids[0]!);
     await client.markOutboxDelivered(applied.outbox_ids[0]!);
     await client.markOutboxDelivered(applied.outbox_ids[1]!);
+    const compensationStepId = "compensate";
+    const compensationPrecondition = deriveTodosTaskManifestCompensationPreconditionDigest({
+      receipt_id: applied.receipt.receipt_id,
+      operation_id: applied.receipt.operation_id,
+      step_id: compensationStepId,
+      if_binding_version: 1,
+    });
+    const compensationRequestDigest = taskManifestCompensationRequestDigest({
+      receipt_id: applied.receipt.receipt_id,
+      operation_id: applied.receipt.operation_id,
+      step_id: compensationStepId,
+      precondition_digest: compensationPrecondition,
+      if_binding_version: 1,
+    });
     expect(db.query(
       "SELECT status, attempts FROM todos_task_manifest_outbox WHERE id IN (?, ?) ORDER BY id",
     ).all(applied.outbox_ids[0]!, applied.outbox_ids[1]!)).toEqual([
@@ -88,7 +138,17 @@ describe("task-manifest HTTP authority", () => {
     ]);
     await expect(client.compensate({
       receipt_id: applied.receipt.receipt_id,
-      idempotency_key: "http-task-manifest-v1:compensate",
+      operation_id: applied.receipt.operation_id,
+      step_id: compensationStepId,
+      idempotency_key: deriveTodosTaskManifestIdempotencyKey({
+        operation_id: applied.receipt.operation_id,
+        step_id: compensationStepId,
+        direction: "compensate",
+        target_selector: applied.receipt.receipt_id,
+        request_digest: compensationRequestDigest,
+        precondition_digest: compensationPrecondition,
+      }),
+      precondition_digest: compensationPrecondition,
       if_binding_version: 1,
     })).rejects.toEqual(expect.objectContaining<TodosTaskManifestError>({
       code: "TODOS_TASK_MANIFEST_COMPENSATION_REFUSED",

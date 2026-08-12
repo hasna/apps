@@ -2,7 +2,12 @@ export {
   PackageOwnedTodosTaskManifestAuthority,
   createPostgresTodosTaskManifestAuthority,
   createSqliteTodosTaskManifestAuthority,
+  deriveTodosTaskManifestApplyPreconditionDigest,
+  deriveTodosTaskManifestCompensationPreconditionDigest,
+  deriveTodosTaskManifestIdempotencyKey,
   parseTodosTaskManifest,
+  taskManifestCompensationRequestDigest,
+  taskManifestRequestDigest,
 } from "./authority.js";
 export { PostgresTodosTaskManifestBackend } from "./postgres.js";
 export { SqliteTodosTaskManifestBackend } from "./sqlite.js";
@@ -20,6 +25,8 @@ export {
 export { postgresTodosTaskManifestSchemaSql, sqliteTodosTaskManifestSchemaSql } from "./schema-sql.js";
 export {
   TODOS_TASK_MANIFEST_ROUTE,
+  TODOS_TASK_MANIFEST_CALLER_ROUTE,
+  TODOS_TASK_MANIFEST_PLAN_SLUG_PROVENANCE,
   TODOS_TASK_MANIFEST_SCHEMA_VERSION,
   TodosTaskManifestError,
   supportsIdempotentOutboxDelivery,

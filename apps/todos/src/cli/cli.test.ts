@@ -10,6 +10,13 @@ import { createProject } from "../db/projects.js";
 import { runMigrations } from "../db/schema.js";
 import { localRoutingTestEnv } from "../test/local-routing-env.fixture.test.js";
 import { TASK_PRIORITIES } from "../types/index.js";
+import {
+  deriveTodosTaskManifestApplyPreconditionDigest,
+  deriveTodosTaskManifestCompensationPreconditionDigest,
+  deriveTodosTaskManifestIdempotencyKey,
+  taskManifestCompensationRequestDigest,
+  taskManifestRequestDigest,
+} from "../task-manifest/index.js";
 
 // Every test here shells out to the real CLI (a cold `bun run` per call, ~0.5s
 // each), and the heavier flows issue 6-10 subprocesses. The 5s bun-test default
@@ -244,18 +251,38 @@ describe("CLI integration", () => {
 
     const writeManifest = (operationId: string, key: string): string => {
       const manifestPath = join(testRoot, `${key}.json`);
-      writeFileSync(manifestPath, JSON.stringify({
-        version: 1,
+      const manifestBase = {
+        version: 1 as const,
         operation_id: operationId,
-        idempotency_key: `${operationId}:apply`,
+        step_id: "apply",
+        idempotency_key: "",
+        precondition_digest: "",
         project_id: projectId,
-        plan: { key: key, name: `Task manifest ${key}` },
+        plan: { key, name: `Task manifest ${key}` },
         tasks: [{
           key: "verify",
           title: `Verify task-manifest ${key}`,
           comments: [{ content: `comment for ${key}`, agent_id: "codex" }],
           verifications: [{ command: `verify ${key}`, status: "passed", agent_id: "codex" }],
         }],
+      };
+      const precondition_digest = deriveTodosTaskManifestApplyPreconditionDigest(manifestBase);
+      const request_digest = taskManifestRequestDigest({
+        ...manifestBase,
+        precondition_digest,
+      });
+      const idempotency_key = deriveTodosTaskManifestIdempotencyKey({
+        operation_id: operationId,
+        step_id: manifestBase.step_id,
+        direction: "apply",
+        target_selector: projectId,
+        request_digest,
+        precondition_digest,
+      });
+      writeFileSync(manifestPath, JSON.stringify({
+        ...manifestBase,
+        precondition_digest,
+        idempotency_key,
       }));
       return manifestPath;
     };
@@ -279,7 +306,37 @@ describe("CLI integration", () => {
     const compensated = await runCli([
       "--json", "task-manifest", "compensate", "--tenant-id", "tenant-local",
       "--receipt-id", compensateApplyResult.receipt.receipt_id,
-      "--idempotency-key", "task-manifest-cli-local-compensate:compensate",
+      "--operation-id", compensateApplyResult.receipt.operation_id,
+      "--step-id", "compensate",
+      "--idempotency-key", (() => {
+        const preconditionDigest = deriveTodosTaskManifestCompensationPreconditionDigest({
+          receipt_id: compensateApplyResult.receipt.receipt_id,
+          operation_id: compensateApplyResult.receipt.operation_id,
+          step_id: "compensate",
+          if_binding_version: compensateApplyResult.receipt.binding_version,
+        });
+        const requestDigest = taskManifestCompensationRequestDigest({
+          receipt_id: compensateApplyResult.receipt.receipt_id,
+          operation_id: compensateApplyResult.receipt.operation_id,
+          step_id: "compensate",
+          precondition_digest: preconditionDigest,
+          if_binding_version: compensateApplyResult.receipt.binding_version,
+        });
+        return deriveTodosTaskManifestIdempotencyKey({
+          operation_id: compensateApplyResult.receipt.operation_id,
+          step_id: "compensate",
+          direction: "compensate",
+          target_selector: compensateApplyResult.receipt.receipt_id,
+          request_digest: requestDigest,
+          precondition_digest: preconditionDigest,
+        });
+      })(),
+      "--precondition-digest", deriveTodosTaskManifestCompensationPreconditionDigest({
+        receipt_id: compensateApplyResult.receipt.receipt_id,
+        operation_id: compensateApplyResult.receipt.operation_id,
+        step_id: "compensate",
+        if_binding_version: compensateApplyResult.receipt.binding_version,
+      }),
       "--if-binding-version", "1",
     ], dbPath);
 
@@ -309,6 +366,8 @@ describe("CLI integration", () => {
       schema_version: 1,
       tenant_id: "tenant-local",
       plan_id: firstResult.graph.plan_id,
+      operation_id: firstResult.receipt.operation_id,
+      step_id: firstResult.receipt.step_id,
       apply_receipt_id: firstResult.receipt.receipt_id,
       binding_version: 1,
       state: "applied",

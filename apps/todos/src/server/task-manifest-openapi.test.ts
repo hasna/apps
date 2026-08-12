@@ -15,6 +15,10 @@ describe("task-manifest binding lookup OpenAPI and generated SDK", () => {
       required: expect.arrayContaining(["authority", "route", "schema_version", "tenant_id", "backend", "bounds"]),
       properties: {
         tenant_id: { type: "string", minLength: 1, maxLength: 200 },
+        operation_step_identity: { type: "boolean", enum: [true] },
+        deterministic_idempotency_keys: { type: "boolean", enum: [true] },
+        terminal_nonacceptance_receipts: { type: "boolean", enum: [true] },
+        plan_slug_provenance: { type: "string", enum: ["deterministic-v1"] },
       },
     });
     expect(document.components.schemas.TaskManifestCapabilityResponse).toEqual({
@@ -51,12 +55,27 @@ describe("task-manifest binding lookup OpenAPI and generated SDK", () => {
         "apply_receipt_id",
         "authority",
         "binding_version",
+        "operation_id",
         "plan_id",
         "route",
         "schema_version",
         "state",
+        "step_id",
         "tenant_id",
       ]);
+  });
+
+  test("publishes apply, exact readback, and compensation contracts", () => {
+    const document = buildV1OpenApiDocument() as Record<string, any>;
+    expect(document.paths["/v1/task-manifest/apply"].post.operationId).toBe("applyTaskManifest");
+    expect(document.paths["/v1/task-manifest/read-exact"].post.operationId).toBe("readExactTaskManifest");
+    expect(document.paths["/v1/task-manifest/compensate"].post.operationId).toBe("compensateTaskManifest");
+    expect(document.components.schemas.TaskManifest.required).toEqual(expect.arrayContaining([
+      "operation_id", "step_id", "idempotency_key", "precondition_digest",
+    ]));
+    expect(document.components.schemas.TaskManifestCompensateRequest.required).toEqual([
+      "receipt_id", "operation_id", "step_id", "idempotency_key", "precondition_digest", "if_binding_version",
+    ]);
   });
 
   test("generated SDK posts the exact plan lookup request to the package route", async () => {
@@ -75,6 +94,10 @@ describe("task-manifest binding lookup OpenAPI and generated SDK", () => {
               tenant_id: "tenant-sdk-lookup",
               backend: "http",
               deterministic_ids: true,
+              operation_step_identity: true,
+              deterministic_idempotency_keys: true,
+              terminal_nonacceptance_receipts: true,
+              plan_slug_provenance: "deterministic-v1",
               immutable_receipts: true,
               transactional_outbox: true,
               idempotent_outbox_delivery: true,
