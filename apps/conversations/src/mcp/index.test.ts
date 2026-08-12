@@ -498,7 +498,7 @@ describe("channel notification subscription tools", () => {
     expect(list[0].channel).toBe("notify-channel");
   });
 
-  test("reads preview-only notifications and clears them after read_channel", async () => {
+  test("reads preview-only notifications and leaves them unread after default read_channel", async () => {
     createChannel("notify-channel-read", "creator");
     await client.callTool({
       name: "subscribe_channel_notifications",
@@ -532,7 +532,7 @@ describe("channel notification subscription tools", () => {
       arguments: { from: "watcher-agent" },
     });
     const afterReadPayload = parseResult(afterReadResult as any) as any;
-    expect(afterReadPayload.count).toBe(0);
+    expect(afterReadPayload.count).toBe(1);
   });
 });
 

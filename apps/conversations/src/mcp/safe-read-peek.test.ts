@@ -128,7 +128,7 @@ describe("G4 — MCP collection reads do not mutate by default", () => {
     expect(await unreadCount("peek-dm-c")).toBe(2);
   });
 
-  test("read_channel consumes only the matching channel notifications by default", async () => {
+  test("default compact read_channel leaves matching channel notifications unread", async () => {
     await call("create_channel", { name: "peek-chan" });
     await call("create_channel", { name: "peek-chan-other" });
     await call("subscribe_channel_notifications", { from: "peek-watcher", channel: "peek-chan" });
@@ -142,8 +142,26 @@ describe("G4 — MCP collection reads do not mutate by default", () => {
     await call("read_channel", { channel: "peek-chan", from: "peek-watcher", limit: 10 });
 
     const after = await call("read_channel_notifications", { from: "peek-watcher" });
-    expect(after.count).toBe(1);
-    expect((after.notifications as Array<{ channel: string }>)[0]?.channel).toBe("peek-chan-other");
+    expect(after.count).toBe(2);
+    expect((after.notifications as Array<{ channel: string }>).map((n) => n.channel).sort()).toEqual([
+      "peek-chan",
+      "peek-chan-other",
+    ]);
+  });
+
+  test("default verbose read_channel leaves matching channel notifications unread", async () => {
+    await call("create_channel", { name: "peek-chan-verbose" });
+    await call("subscribe_channel_notifications", { from: "peek-watcher-verbose", channel: "peek-chan-verbose" });
+    await call("send_to_channel", { channel: "peek-chan-verbose", from: "peek-writer", content: "channel body verbose" });
+
+    expect((await call("read_channel_notifications", { from: "peek-watcher-verbose" })).count).toBe(1);
+    await call("read_channel", {
+      channel: "peek-chan-verbose",
+      from: "peek-watcher-verbose",
+      limit: 10,
+      verbose: true,
+    });
+    expect((await call("read_channel_notifications", { from: "peek-watcher-verbose" })).count).toBe(1);
   });
 
   test("read_channel with mark_read:true does consume the notification", async () => {

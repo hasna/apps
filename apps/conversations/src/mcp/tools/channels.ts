@@ -44,15 +44,6 @@ async function acknowledgeChannelRead(
   await store.markChannelNotificationsRead(agent, ids);
 }
 
-async function consumeChannelNotifications(
-  store: ReturnType<typeof getStore>,
-  ids: number[],
-  agent: string | undefined,
-): Promise<void> {
-  if (!agent || ids.length === 0) return;
-  await store.markChannelNotificationsRead(agent, ids);
-}
-
 export function registerChannelTools(server: McpServer): void {
   // Bound to this connection: see ../identity.ts.
   const resolveIdentity = identityFor(server);
@@ -169,8 +160,8 @@ export function registerChannelTools(server: McpServer): void {
 
   registerMcpTool(server, "read_channel", {
     description:
-      "Peek at messages in a channel. Reading consumes the matching preview-only channel notifications for this reader, "
-      + "but does not record read receipts or message-read state unless mark_read:true is passed.",
+      "Peek at messages in a channel. NON-MUTATING by default — records no read receipt and consumes no notification. "
+      + "Pass mark_read:true to acknowledge exactly the ids this call returns.",
     inputSchema: {
       channel: z.string(),
       from: z.string().optional().describe("Agent reading the channel — used for per-agent read receipts when mark_read is true"),
@@ -198,7 +189,6 @@ export function registerChannelTools(server: McpServer): void {
         channel, since, limit, offset: args.cursor, max_content_length, threads_only, include_reply_counts, latest,
       });
       const ids = messages.map((m) => m.id);
-      await consumeChannelNotifications(store, ids, agent);
       if (mark_read === true && messages.length > 0) {
         await acknowledgeChannelRead(store, ids, agent);
       }
@@ -212,12 +202,6 @@ export function registerChannelTools(server: McpServer): void {
     });
 
     const ids = page.messages.map((m) => m.id);
-    await consumeChannelNotifications(store, ids, agent);
-
-    // Recording read state stays opt-in. Consuming the matching preview-only
-    // notification queue does not tell the rest of the system this agent has
-    // read the messages; it only prevents the same channel blurb from being
-    // re-delivered after the agent explicitly opened that channel.
     if (mark_read === true && page.messages.length > 0) {
       await acknowledgeChannelRead(store, ids, agent);
     }
