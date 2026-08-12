@@ -549,7 +549,8 @@ sources
       }
       // The LocalStore resolves a partial id against the local db; the ApiStore
       // passes the cloud id straight through to DELETE /v1/sources/:id.
-      await store().deleteSource(id);
+      const ok = await store().deleteSource(id);
+      if (!ok) throw new Error(`Source not found: ${id}`);
       console.log(chalk.green(`✓ Source ${id} removed`));
     } catch (e) { console.error(chalk.red((e as Error).message)); process.exit(1); }
   });
