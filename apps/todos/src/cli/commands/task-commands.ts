@@ -499,12 +499,15 @@ interface ReparentOptions {
   projectRef?: string;
   listRef?: string;
   clearList?: boolean;
+  parentRef?: string;
+  clearParent?: boolean;
 }
 
 /** The subset of an update patch that re-parents a task. */
 interface ReparentPatch {
   project_id?: string;
   task_list_id?: string | null;
+  parent_id?: string | null;
 }
 
 /**
@@ -520,6 +523,11 @@ async function computeCloudReparent(
   opts: ReparentOptions,
 ): Promise<ReparentPatch> {
   const targetProjectId = opts.projectRef ? await cloudResolveProjectRef(cloud, opts.projectRef) : undefined;
+  const parentId = opts.parentRef
+    ? await resolveTaskIdForCommand(opts.parentRef, cloud)
+    : opts.clearParent
+      ? null
+      : undefined;
   const scope = targetProjectId ?? current.project_id ?? undefined;
   let taskListId: string | null | undefined;
   if (opts.listRef) taskListId = await cloudResolveTaskListRef(cloud, opts.listRef, scope);
@@ -528,6 +536,7 @@ async function computeCloudReparent(
   const patch: ReparentPatch = {};
   if (targetProjectId !== undefined) patch.project_id = targetProjectId;
   if (taskListId !== undefined) patch.task_list_id = taskListId;
+  if (parentId !== undefined) patch.parent_id = parentId;
   return patch;
 }
 
@@ -547,7 +556,11 @@ async function cloudUpdateTaskWithVerifiedReparent(
   reparent: ReparentPatch,
 ): Promise<Task> {
   const acknowledged = await cloudUpdateTask(cloud, taskId, updatePatch);
-  if (reparent.project_id === undefined && reparent.task_list_id === undefined) {
+  if (
+    reparent.project_id === undefined
+    && reparent.task_list_id === undefined
+    && reparent.parent_id === undefined
+  ) {
     return acknowledged;
   }
 
@@ -571,6 +584,14 @@ async function cloudUpdateTaskWithVerifiedReparent(
       `task_list_id expected ${reparent.task_list_id ?? "null"}, received ${persisted.task_list_id ?? "null"}`,
     );
   }
+  if (
+    reparent.parent_id !== undefined
+    && (persisted.parent_id ?? null) !== reparent.parent_id
+  ) {
+    mismatches.push(
+      `parent_id expected ${reparent.parent_id ?? "null"}, received ${persisted.parent_id ?? "null"}`,
+    );
+  }
   if (mismatches.length > 0) {
     throw new Error(
       `TASK_REPARENT_PERSISTENCE_UNVERIFIED: PATCH /v1/tasks/${taskId} was acknowledged, ` +
@@ -584,6 +605,11 @@ async function cloudUpdateTaskWithVerifiedReparent(
 /** Local-SQLite equivalent of {@link computeCloudReparent}. */
 function computeLocalReparent(current: { project_id: string | null }, opts: ReparentOptions): ReparentPatch {
   const targetProjectId = opts.projectRef ? resolveProjectIdOrSlug(opts.projectRef) : undefined;
+  const parentId = opts.parentRef
+    ? resolveTaskId(opts.parentRef)
+    : opts.clearParent
+      ? null
+      : undefined;
   const scope = targetProjectId ?? current.project_id ?? null;
   let taskListId: string | null | undefined;
   if (opts.listRef) {
@@ -600,6 +626,7 @@ function computeLocalReparent(current: { project_id: string | null }, opts: Repa
   const patch: ReparentPatch = {};
   if (targetProjectId !== undefined) patch.project_id = targetProjectId;
   if (taskListId !== undefined) patch.task_list_id = taskListId;
+  if (parentId !== undefined) patch.parent_id = parentId;
   return patch;
 }
 
@@ -1891,6 +1918,8 @@ export function registerTaskCommands(program: Command) {
     .option("--list <id>", "Move to a task list (UUID authoritative; project-scoped slug accepted)")
     .option("--task-list <id>", "Move to a task list (alias for --list)")
     .option("--clear-list", "Detach from its task list (reset task_list_id to null)")
+    .option("--parent <id>", "Repair the parent task (existing task ID or unique reference)")
+    .option("--clear-parent", "Detach from its parent (reset parent_id to null)")
     .option("--project <id>", "Re-parent the task to another project (by ID, slug, or path); see also `todos move`")
     .option("--working-dir <path>", "Repair the task's working_dir to a specific path (routing metadata)")
     .option("--clear-working-dir", "Reset the task's working_dir to null (undo path for routing repairs)")
@@ -1916,6 +1945,9 @@ export function registerTaskCommands(program: Command) {
       }
       if (opts.list && opts.clearList) {
         handleError(new Error("Use either --list or --clear-list, not both."));
+      }
+      if (opts.parent && opts.clearParent) {
+        handleError(new Error("Use either --parent or --clear-parent, not both."));
       }
       if (opts.workingDir !== undefined && opts.clearWorkingDir) {
         handleError(new Error("Use either --working-dir or --clear-working-dir, not both."));
@@ -1946,8 +1978,11 @@ export function registerTaskCommands(program: Command) {
             projectRef: opts.project || globalOpts.project,
             listRef: opts.list,
             clearList: opts.clearList,
+            parentRef: opts.parent,
+            clearParent: opts.clearParent,
           });
           const updatePatch = {
+            version: reparent.parent_id !== undefined ? current.version : undefined,
             title: opts.title,
             description: opts.description,
             status: parseStatus(opts.status),
@@ -1986,6 +2021,8 @@ export function registerTaskCommands(program: Command) {
         projectRef: opts.project || globalOpts.project,
         listRef: opts.list,
         clearList: opts.clearList,
+        parentRef: opts.parent,
+        clearParent: opts.clearParent,
       });
       const planId = opts.plan ? resolvePlanId(opts.plan) : opts.clearPlan ? null : undefined;
 

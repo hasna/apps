@@ -7,7 +7,7 @@
  * require `todos:write` (a `todos:*` key satisfies both). This is a real wrapper
  * over the core storage lib — there are NO stubs; unimplemented routes 404.
  */
-import { LockError, PlanNotFoundError, PlanRevisionConflictError, ProjectNotFoundError, ResourceConflictError, StaleLockHandoffError, TaskNotFoundError, TaskNotStartableError, TaskReferenceAmbiguousError, TASK_PRIORITIES, TASK_STATUSES } from "../types/index.js";
+import { LockError, PlanNotFoundError, PlanRevisionConflictError, ProjectNotFoundError, ResourceConflictError, StaleLockHandoffError, TaskNotFoundError, TaskNotStartableError, TaskReferenceAmbiguousError, VersionConflictError, TASK_PRIORITIES, TASK_STATUSES } from "../types/index.js";
 import { collapseEnumValues, resolveEnumVocabulary } from "../lib/enum-vocabulary.js";
 import type { CreatePlanInput, CreateProjectInput, CreateTaskInput, CreateTaskListInput, CreateTemplateInput, RenameProjectInput, TaskComment, TemplateTaskInput, UpdateTaskInput, UpdateTaskListInput } from "../types/index.js";
 import type { TodosStorageContext, TodosStorageSnapshot, TodosTaskCompletionOptions, UpdateTemplateInput } from "../storage/interfaces.js";
@@ -213,6 +213,13 @@ function validateTaskPatchVocabulary(value: unknown):
     if (typeof raw !== "string") return { ok: false, message: `${name} must be a string. Allowed values: ${vocabulary.join(", ")}.` };
     const parsed = resolveEnumVocabulary(raw, { name, vocabulary, allowList: false });
     if (!parsed.ok) return { ok: false, message: parsed.message };
+  }
+  if (
+    body.parent_id !== undefined
+    && body.parent_id !== null
+    && (typeof body.parent_id !== "string" || !body.parent_id.trim())
+  ) {
+    return { ok: false, message: "parent_id must be a non-empty task id or null" };
   }
   return { ok: true, patch: body as Partial<UpdateTaskInput> };
 }
@@ -1762,6 +1769,15 @@ export async function handleV1Request(
     }
     if (e instanceof TaskNotFoundError) {
       return error(404, e.message, { code: TaskNotFoundError.code });
+    }
+    if (e instanceof VersionConflictError) {
+      return error(409, e.message, {
+        code: VersionConflictError.code,
+        conflict: true,
+        task_id: e.taskId,
+        expected_version: e.expectedVersion,
+        current_version: e.actualVersion,
+      });
     }
     if (e instanceof StaleLockHandoffError) {
       const status = e.code === "STALE_LOCK_HANDOFF_INVALID_TASK_ID"

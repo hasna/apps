@@ -66,7 +66,7 @@ export interface CreateTemplateTaskInput { "position"?: number; "title_pattern":
 
 export interface CreateTaskInput { "title": string; "description"?: string | null; "status"?: "pending" | "in_progress" | "completed" | "failed" | "cancelled"; "priority"?: "low" | "medium" | "high" | "critical"; "project_id"?: string; "parent_id"?: string; "plan_id"?: string; "assigned_to"?: string; "agent_id"?: string; "created_by"?: string; "tags"?: Array<string> }
 
-export interface UpdateTaskInput { "title"?: string; "description"?: string; "status"?: "pending" | "in_progress" | "completed" | "failed" | "cancelled"; "priority"?: "low" | "medium" | "high" | "critical"; "assigned_to"?: string; "project_id"?: string | null; "plan_id"?: string | null; "task_list_id"?: string | null; "version"?: number }
+export interface UpdateTaskInput { "title"?: string; "description"?: string; "status"?: "pending" | "in_progress" | "completed" | "failed" | "cancelled"; "priority"?: "low" | "medium" | "high" | "critical"; "assigned_to"?: string; "project_id"?: string | null; "parent_id"?: string | null; "plan_id"?: string | null; "task_list_id"?: string | null; "version"?: number }
 
 export interface CompleteTaskInput { "agent_id"?: string; "attachment_ids"?: Array<string>; "files_changed"?: Array<string>; "test_results"?: string; "commit_hash"?: string; "notes"?: string; "confidence"?: number }
 

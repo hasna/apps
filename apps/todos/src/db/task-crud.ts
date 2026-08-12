@@ -28,6 +28,7 @@ import { getChecklist } from "./checklists.js";
 import { currentStorageMachineId, recordStorageTombstone } from "./storage-tombstones.js";
 import { guardPlanRowsSqlite } from "./plan-row-serialization.js";
 import { sanitizePreWriteText, sanitizePreWriteValue } from "../lib/prewrite-secrets.js";
+import { assertTaskParentIntegrity } from "../lib/task-parent-integrity.js";
 
 // Re-export helpers for use by other modules
 export function rowToTask(row: TaskRow): Task {
@@ -130,6 +131,7 @@ function createTaskStored(input: CreateTaskInput, d: Database): Task {
   let id = uuid();
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
+      assertTaskParentIntegrity(id, input.parent_id, (candidateId) => getTask(candidateId, d));
       d.run(
         `INSERT INTO tasks (id, short_id, project_id, parent_id, plan_id, task_list_id, cycle_id, title, description, status, priority, agent_id, assigned_to, session_id, working_dir, tags, metadata, version, created_at, updated_at, due_at, estimated_minutes, sla_minutes, confidence, retry_count, max_retries, retry_after, requires_approval, approved_by, approved_at, recurrence_rule, recurrence_parent_id, spawns_template_id, reason, spawned_from_session, assigned_by, created_by, assigned_from_project, task_type, machine_id)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -682,6 +684,7 @@ function updateTaskStored(
     throw new VersionConflictError(id, input.version, task.version);
   }
   input = sanitizeUpdateTaskInput(input);
+  assertTaskParentIntegrity(id, input.parent_id, (candidateId) => getTask(candidateId, d));
 
   const effectivePlanId = input.plan_id !== undefined ? input.plan_id : task.plan_id;
   const linkedProjectId = linkedPlanProjectId(effectivePlanId, d);
@@ -753,6 +756,10 @@ function updateTaskStored(
   if (input.project_id !== undefined) {
     sets.push("project_id = ?");
     params.push(input.project_id);
+  }
+  if (input.parent_id !== undefined) {
+    sets.push("parent_id = ?");
+    params.push(input.parent_id);
   }
   if (input.assigned_to !== undefined) {
     sets.push("assigned_to = ?");
@@ -909,6 +916,7 @@ function updateTaskStored(
   if (input.status !== undefined && input.status !== task.status) logTaskChange(id, "update", "status", task.status, input.status, agentId, d);
   if (input.priority !== undefined && input.priority !== task.priority) logTaskChange(id, "update", "priority", task.priority, input.priority, agentId, d);
   if (input.title !== undefined && input.title !== task.title) logTaskChange(id, "update", "title", task.title, input.title, agentId, d);
+  if (input.parent_id !== undefined && input.parent_id !== task.parent_id) logTaskChange(id, "update", "parent_id", task.parent_id, input.parent_id, agentId, d);
   if (input.assigned_to !== undefined && input.assigned_to !== task.assigned_to) logTaskChange(id, "update", "assigned_to", task.assigned_to, input.assigned_to, agentId, d);
   if (input.working_dir !== undefined && input.working_dir !== task.working_dir) logTaskChange(id, "update", "working_dir", task.working_dir, input.working_dir, agentId, d);
   if (input.approved_by !== undefined) logTaskChange(id, "approve", "approved_by", null, input.approved_by, agentId, d);
@@ -977,7 +985,8 @@ export function updateTask(
   const before = getTask(id, d);
   if (!before) throw new TaskNotFoundError(id);
   const guardedPlanIds = [before.plan_id, input.plan_id];
-  if (!guardedPlanIds.some(Boolean)) return updateTaskStored(id, input, d);
+  const needsSerializedWrite = input.parent_id !== undefined || guardedPlanIds.some(Boolean);
+  if (!needsSerializedWrite) return updateTaskStored(id, input, d);
   return d.transaction(() => {
     guardPlanRowsSqlite(guardedPlanIds, d);
     const current = getTask(id, d);

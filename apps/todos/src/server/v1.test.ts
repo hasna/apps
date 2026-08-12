@@ -1427,6 +1427,121 @@ describe("/v1 task hierarchy and lock authorization", () => {
     expect(await store.tasks.count({ include_subtasks: true })).toBe(0);
   });
 
+  test("PATCH repairs and clears a cross-project parent while preserving task identity and routing", async () => {
+    const childProject = await store.projects.create({
+      name: "PATCH child project",
+      path: "/tmp/patch-child-project",
+    });
+    const parentProject = await store.projects.create({
+      name: "PATCH parent project",
+      path: "/tmp/patch-parent-project",
+    });
+    const childList = await store.taskLists.create({
+      name: "PATCH child list",
+      project_id: childProject.id,
+    });
+    const originalParent = await store.tasks.create({
+      title: "PATCH original parent",
+      project_id: childProject.id,
+    });
+    const crossProjectParent = await store.tasks.create({
+      title: "PATCH cross-project parent",
+      project_id: parentProject.id,
+    });
+    const child = await store.tasks.create({
+      title: "PATCH repairable child",
+      project_id: childProject.id,
+      task_list_id: childList.id,
+      parent_id: originalParent.id,
+    });
+    const historyBefore = await store.audit.getTaskHistory(child.id);
+
+    const repairedResponse = await request(`/v1/tasks/${child.id}`, "PATCH", {
+      version: child.version,
+      parent_id: crossProjectParent.id,
+    });
+    expect(repairedResponse?.status).toBe(200);
+    expect(await repairedResponse!.json()).toMatchObject({
+      task: {
+        id: child.id,
+        created_at: child.created_at,
+        project_id: childProject.id,
+        task_list_id: childList.id,
+        parent_id: crossProjectParent.id,
+      },
+    });
+    expect(await store.tasks.get(child.id)).toMatchObject({
+      id: child.id,
+      project_id: childProject.id,
+      task_list_id: childList.id,
+      parent_id: crossProjectParent.id,
+    });
+    expect((await store.audit.getTaskHistory(child.id)).map((entry) => entry.id))
+      .toEqual(expect.arrayContaining(historyBefore.map((entry) => entry.id)));
+
+    const repaired = await store.tasks.get(child.id);
+    const clearedResponse = await request(`/v1/tasks/${child.id}`, "PATCH", {
+      version: repaired!.version,
+      parent_id: null,
+    });
+    expect(clearedResponse?.status).toBe(200);
+    expect(await clearedResponse!.json()).toMatchObject({
+      task: {
+        id: child.id,
+        project_id: childProject.id,
+        task_list_id: childList.id,
+        parent_id: null,
+      },
+    });
+    expect((await store.tasks.get(child.id))?.parent_id).toBeNull();
+  });
+
+  test("PATCH rejects invalid, missing, self, descendant, and stale parent repairs without mutation", async () => {
+    const root = await store.tasks.create({ title: "PATCH root" });
+    const child = await store.tasks.create({ title: "PATCH child", parent_id: root.id });
+    const rootBefore = await store.tasks.get(root.id);
+    const childBefore = await store.tasks.get(child.id);
+
+    const invalid = await request(`/v1/tasks/${root.id}`, "PATCH", { parent_id: "" });
+    expect(invalid?.status).toBe(400);
+    expect(await invalid!.json()).toMatchObject({
+      error: "parent_id must be a non-empty task id or null",
+    });
+
+    const missing = await request(`/v1/tasks/${root.id}`, "PATCH", {
+      version: root.version,
+      parent_id: "ffffffff-ffff-4fff-8fff-ffffffffffff",
+    });
+    expect(missing?.status).toBe(404);
+    expect(await missing!.json()).toMatchObject({ code: "TASK_NOT_FOUND" });
+
+    for (const parent_id of [root.id, child.id]) {
+      const cycle = await request(`/v1/tasks/${root.id}`, "PATCH", {
+        version: root.version,
+        parent_id,
+      });
+      expect(cycle?.status).toBe(409);
+      expect(await cycle!.json()).toMatchObject({ code: "TASK_PARENT_CYCLE" });
+    }
+
+    const stale = await request(`/v1/tasks/${root.id}`, "PATCH", {
+      version: root.version - 1,
+      parent_id: null,
+    });
+    expect(stale?.status).toBe(409);
+    expect(await stale!.json()).toMatchObject({
+      code: "VERSION_CONFLICT",
+      conflict: true,
+      task_id: root.id,
+      expected_version: root.version - 1,
+      current_version: root.version,
+      error: expect.stringContaining("Version conflict"),
+    });
+
+    expect(await store.tasks.get(root.id)).toEqual(rootBefore);
+    expect(await store.tasks.get(child.id)).toEqual(childBefore);
+  });
+
   test("include_subtasks=true returns roots and descendants with an inclusive total", async () => {
     const parent = await store.tasks.create({ title: "parent" });
     const child = await store.tasks.create({ title: "child", parent_id: parent.id });

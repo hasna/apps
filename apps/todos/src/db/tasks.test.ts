@@ -49,6 +49,7 @@ import { createProject } from "./projects.js";
 import { registerAgent } from "./agents.js";
 import { createPlan } from "./plans.js";
 import { ensureSchema } from "./schema.js";
+import { getTaskHistory } from "./audit.js";
 
 let db: Database;
 
@@ -101,6 +102,17 @@ describe("createTask", () => {
     const parent = createTask({ title: "Parent" }, db);
     const child = createTask({ title: "Child", parent_id: parent.id }, db);
     expect(child.parent_id).toBe(parent.id);
+  });
+
+  it("REGRESSION: rejects a nonexistent parent before creating any task", () => {
+    expect(() =>
+      createTask({
+        title: "Must not become a ghost child",
+        parent_id: "ffffffff-ffff-4fff-8fff-ffffffffffff",
+      }, db),
+    ).toThrow(TaskNotFoundError);
+
+    expect(listTasks({ include_subtasks: true }, db)).toEqual([]);
   });
 });
 
@@ -457,6 +469,98 @@ describe("updateTask", () => {
       db,
     );
     expect(updated.completed_at).toBeTruthy();
+  });
+
+  it("REGRESSION: repairs and clears an exact cross-project parent without replacing or rerouting the task", () => {
+    const childProject = createProject({ name: "Child project", path: "/child-project" }, db);
+    const parentProject = createProject({ name: "Parent project", path: "/parent-project" }, db);
+    const childList = createTaskList({
+      name: "Child list",
+      project_id: childProject.id,
+    }, db);
+    const originalParent = createTask({
+      title: "Original parent",
+      project_id: childProject.id,
+    }, db);
+    const crossProjectParent = createTask({
+      title: "Cross-project parent",
+      project_id: parentProject.id,
+    }, db);
+    const child = createTask({
+      title: "Repairable child",
+      project_id: childProject.id,
+      task_list_id: childList.id,
+      parent_id: originalParent.id,
+    }, db);
+    const unrelated = createTask({
+      title: "Unrelated control",
+      project_id: childProject.id,
+    }, db);
+    const historyBefore = getTaskHistory(child.id, db).map((entry) => entry.id);
+    const unrelatedBefore = getTask(unrelated.id, db);
+
+    const repaired = updateTask(child.id, {
+      version: child.version,
+      parent_id: crossProjectParent.id,
+    } as Parameters<typeof updateTask>[1] & { parent_id: string }, db);
+
+    expect(repaired).toMatchObject({
+      id: child.id,
+      created_at: child.created_at,
+      project_id: childProject.id,
+      task_list_id: childList.id,
+      parent_id: crossProjectParent.id,
+    });
+    expect(getTask(child.id, db)?.parent_id).toBe(crossProjectParent.id);
+    expect(getTaskHistory(child.id, db).map((entry) => entry.id))
+      .toEqual(expect.arrayContaining(historyBefore));
+    expect(getTask(unrelated.id, db)).toEqual(unrelatedBefore);
+    expect(getTask(originalParent.id, db)?.version).toBe(originalParent.version);
+    expect(getTask(crossProjectParent.id, db)?.version).toBe(crossProjectParent.version);
+
+    const cleared = updateTask(child.id, {
+      version: repaired.version,
+      parent_id: null,
+    } as Parameters<typeof updateTask>[1] & { parent_id: null }, db);
+
+    expect(cleared).toMatchObject({
+      id: child.id,
+      created_at: child.created_at,
+      project_id: childProject.id,
+      task_list_id: childList.id,
+      parent_id: null,
+    });
+    expect(getTask(child.id, db)?.parent_id).toBeNull();
+    expect(getTask(unrelated.id, db)).toEqual(unrelatedBefore);
+  });
+
+  it("REGRESSION: rejects nonexistent, self, and descendant parents without mutation", () => {
+    const root = createTask({ title: "Root" }, db);
+    const child = createTask({ title: "Child", parent_id: root.id }, db);
+    const rootBefore = getTask(root.id, db);
+    const childBefore = getTask(child.id, db);
+
+    expect(() =>
+      updateTask(root.id, {
+        version: root.version,
+        parent_id: "ffffffff-ffff-4fff-8fff-ffffffffffff",
+      } as Parameters<typeof updateTask>[1] & { parent_id: string }, db),
+    ).toThrow(TaskNotFoundError);
+    expect(() =>
+      updateTask(root.id, {
+        version: root.version,
+        parent_id: root.id,
+      } as Parameters<typeof updateTask>[1] & { parent_id: string }, db),
+    ).toThrow(/TASK_PARENT_CYCLE/);
+    expect(() =>
+      updateTask(root.id, {
+        version: root.version,
+        parent_id: child.id,
+      } as Parameters<typeof updateTask>[1] & { parent_id: string }, db),
+    ).toThrow(/TASK_PARENT_CYCLE/);
+
+    expect(getTask(root.id, db)).toEqual(rootBefore);
+    expect(getTask(child.id, db)).toEqual(childBefore);
   });
 });
 

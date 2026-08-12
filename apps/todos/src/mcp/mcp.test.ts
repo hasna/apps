@@ -1118,6 +1118,71 @@ describe("MCP tool wrappers", () => {
     expect(getTask(task.id, db)!.assigned_to).toBe("novus");
   });
 
+  it("update_task repairs and clears parent_id through the guarded storage path", async () => {
+    const tools = captureTools(registerTaskCrudTools);
+    const childProject = createProject({ name: "MCP child project", path: "/tmp/mcp-child-project" }, db);
+    const parentProject = createProject({ name: "MCP parent project", path: "/tmp/mcp-parent-project" }, db);
+    const originalParent = createTask({ title: "MCP original parent", project_id: childProject.id }, db);
+    const crossProjectParent = createTask({ title: "MCP cross-project parent", project_id: parentProject.id }, db);
+    const child = createTask({
+      title: "MCP repairable child",
+      project_id: childProject.id,
+      parent_id: originalParent.id,
+    }, db);
+
+    const repairedResult = await callCapturedTool(tools, "update_task", {
+      task_id: child.id,
+      parent_id: crossProjectParent.id,
+      version: child.version,
+    });
+    expect(repairedResult.isError).not.toBe(true);
+    expect(JSON.parse(repairedResult.content[0]!.text)).toMatchObject({
+      id: child.id,
+      project_id: childProject.id,
+      parent_id: crossProjectParent.id,
+    });
+    expect(getTask(child.id, db)?.parent_id).toBe(crossProjectParent.id);
+
+    const clearedResult = await callCapturedTool(tools, "update_task", {
+      task_id: child.id,
+      parent_id: null,
+      version: getTask(child.id, db)!.version,
+    });
+    expect(clearedResult.isError).not.toBe(true);
+    expect(JSON.parse(clearedResult.content[0]!.text)).toMatchObject({
+      id: child.id,
+      project_id: childProject.id,
+      parent_id: null,
+    });
+    expect(getTask(child.id, db)?.parent_id).toBeNull();
+  });
+
+  it("update_task rejects missing and cyclic parents without changing either row", async () => {
+    const tools = captureTools(registerTaskCrudTools);
+    const root = createTask({ title: "MCP root" }, db);
+    const child = createTask({ title: "MCP child", parent_id: root.id }, db);
+    const rootBefore = getTask(root.id, db);
+    const childBefore = getTask(child.id, db);
+
+    for (const parent_id of [
+      "ffffffff-ffff-4fff-8fff-ffffffffffff",
+      root.id,
+      child.id,
+    ]) {
+      const tool = tools.get("update_task");
+      expect(tool).toBeDefined();
+      const result = await tool!.handler({
+        task_id: root.id,
+        parent_id,
+        version: root.version,
+      }) as { isError?: boolean; content: { text: string }[] };
+      expect(result.isError).toBe(true);
+    }
+
+    expect(getTask(root.id, db)).toEqual(rootBefore);
+    expect(getTask(child.id, db)).toEqual(childBefore);
+  });
+
   it("create_task returns an id accepted by get_task and update_task in one MCP session", async () => {
     const tools = captureTools(registerTaskCrudTools);
 

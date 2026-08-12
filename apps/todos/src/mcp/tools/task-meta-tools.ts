@@ -56,7 +56,7 @@ export function registerTaskMetaTools(server: McpServer, ctx: TaskMetaContext) {
             create_task: "create_task — Create a new task. Params: title (required), description, status, priority, project_id, task_list_id, assigned_to, depends_on, short_id (null to disable), tags, estimate (minutes), confidence (0.0-1.0), deadline (ISO), retry_count",
             list_tasks: "list_tasks — List tasks with filters. Params: status, priority, project_id, task_list_id, assigned_to, tags[], created_after, created_before, limit, offset",
             get_task: "get_task — Get compact task details by default. Params: task_id, detail=compact|full, max_description_chars, include_metadata",
-            update_task: "update_task — Update task fields (optimistic locking). Params: task_id (required), title, description, status, priority, assigned_to (null to unassign), project_id, task_list_id, depends_on[], tags[], estimate, actual_minutes, confidence, approved_by, completed_at, deadline, retry_count, version",
+            update_task: "update_task — Update task fields (optimistic locking). Params: task_id (required), title, description, status, priority, assigned_to (null to unassign), project_id, parent_id (null to detach), task_list_id, depends_on[], tags[], estimate, actual_minutes, confidence, approved_by, completed_at, deadline, retry_count, version",
             delete_task: "delete_task — Delete a task. Params: task_id, force (skip child check)",
             start_task: "start_task — Mark task in_progress. Params: task_id, version",
             complete_task: "complete_task — Mark task completed. Params: task_id, confidence, completed_at, version",

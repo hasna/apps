@@ -770,6 +770,7 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
             priority: { type: "string", enum: [...TASK_PRIORITIES] },
             assigned_to: { type: "string" },
             project_id: { type: "string", nullable: true },
+            parent_id: { type: "string", nullable: true },
             plan_id: { type: "string", nullable: true },
             task_list_id: { type: "string", nullable: true },
             version: { type: "number" },

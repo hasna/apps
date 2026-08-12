@@ -22,6 +22,7 @@ import {
   cloudUpdateTask,
   cloudDeleteTask,
   cloudResolveProjectRef,
+  cloudResolveTaskRef,
   cloudResolveTaskListRef,
   cloudListAgents,
 } from "../../cli/cloud-router.js";
@@ -65,6 +66,7 @@ export function registerTaskCrudTools(server: McpServer, ctx: TaskCrudContext) {
     compact["version"] = task.version;
     compact["created_at"] = task.created_at;
     compact["task_list_id"] = task.task_list_id;
+    compact["parent_id"] = task.parent_id;
     return compactJson(compact);
   }
 
@@ -354,6 +356,7 @@ export function registerTaskCrudTools(server: McpServer, ctx: TaskCrudContext) {
         priority: z.enum(["low", "medium", "high", "critical"]).optional(),
         assigned_to: z.string().nullable().optional().describe("Agent ID or name, null to unassign"),
         project_id: z.string().nullable().optional(),
+        parent_id: z.string().nullable().optional().describe("Existing parent task ID/reference, null to detach"),
         task_list_id: z.string().nullable().optional(),
         depends_on: z.array(z.string()).optional().describe("Full replacement array of dependency IDs"),
         tags: z.array(z.string()).optional(),
@@ -388,6 +391,9 @@ export function registerTaskCrudTools(server: McpServer, ctx: TaskCrudContext) {
             if (typeof patch.project_id === "string" && patch.project_id) {
               patch.project_id = await cloudResolveProjectRef(cloud, patch.project_id);
             }
+            if (typeof patch.parent_id === "string" && patch.parent_id) {
+              patch.parent_id = await cloudResolveTaskRef(cloud, patch.parent_id);
+            }
             if (typeof patch.task_list_id === "string" && patch.task_list_id) {
               let scope = typeof patch.project_id === "string" ? patch.project_id : undefined;
               if (!scope) {
@@ -396,8 +402,23 @@ export function registerTaskCrudTools(server: McpServer, ctx: TaskCrudContext) {
               }
               patch.task_list_id = await cloudResolveTaskListRef(cloud, patch.task_list_id, scope);
             }
+            if (patch.parent_id !== undefined && version === undefined) {
+              const current = await cloudGetTask(cloud, task_id);
+              if (!current) throw new TaskNotFoundError(task_id);
+              patch.version = current.version;
+            }
             if (version !== undefined) patch.version = version;
-            const updated = await cloudUpdateTask(cloud, task_id, patch);
+            let updated = await cloudUpdateTask(cloud, task_id, patch);
+            if (patch.parent_id !== undefined) {
+              const persisted = await cloudGetTask(cloud, task_id);
+              if (!persisted || (persisted.parent_id ?? null) !== patch.parent_id) {
+                throw new Error(
+                  `TASK_REPARENT_PERSISTENCE_UNVERIFIED: parent_id expected ${patch.parent_id ?? "null"}, ` +
+                  `received ${persisted?.parent_id ?? "missing task"}`,
+                );
+              }
+              updated = persisted;
+            }
             return { content: [{ type: "text" as const, text: mutationTaskResponse(updated) }] };
           }
           const resolvedId = resolveId(params.task_id);
@@ -406,6 +427,7 @@ export function registerTaskCrudTools(server: McpServer, ctx: TaskCrudContext) {
           if (resolved.assigned_to === "") resolved.assigned_to = null;
           if (resolved.assigned_to && typeof resolved.assigned_to === "string") resolved.assigned_to = resolveAssignee(resolved.assigned_to);
           if (resolved.project_id && typeof resolved.project_id === "string") resolved.project_id = resolveId(resolved.project_id, "projects");
+          if (resolved.parent_id && typeof resolved.parent_id === "string") resolved.parent_id = resolveId(resolved.parent_id);
           if (resolved.task_list_id && typeof resolved.task_list_id === "string") resolved.task_list_id = resolveId(resolved.task_list_id, "task_lists");
           if (resolved.depends_on && Array.isArray(resolved.depends_on)) resolved.depends_on = (resolved.depends_on as string[]).map(resolveId);
           if (resolved.estimate !== undefined) {

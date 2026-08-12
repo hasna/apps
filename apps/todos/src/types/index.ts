@@ -688,6 +688,8 @@ export interface UpdateTaskInput {
   status?: TaskStatus;
   priority?: TaskPriority;
   project_id?: string | null;
+  /** Set an existing task as this task's parent, or null to detach it. */
+  parent_id?: string | null;
   assigned_to?: string;
   /** Repair the agent attributed to this row, or null it out as unattributable.
    *  There was previously NO write path for this column after creation, so a row
@@ -1373,7 +1375,7 @@ export class ProjectNotFoundError extends Error {
 
 export class ResourceConflictError extends Error {
   constructor(
-    public readonly code: "PROJECT_SLUG_CONFLICT" | "TASK_LIST_SLUG_CONFLICT" | "PLAN_SLUG_CONFLICT" | "PLAN_PROJECT_LINK_CONFLICT",
+    public readonly code: "PROJECT_SLUG_CONFLICT" | "TASK_LIST_SLUG_CONFLICT" | "PLAN_SLUG_CONFLICT" | "PLAN_PROJECT_LINK_CONFLICT" | "TASK_PARENT_CYCLE",
     message: string,
   ) {
     super(message);

@@ -2328,8 +2328,178 @@ describe("storage adapter contracts", () => {
     expect(linkSql).toContain("EXISTS (SELECT 1 FROM target_plan)");
     expect(membershipSql).toContain("locked_plans AS MATERIALIZED");
     expect(membershipSql).toContain("FOR UPDATE");
+    expect(membershipSql).toContain("todos:task-parent-integrity-guard");
+    expect(membershipSql).not.toContain("pg_advisory_xact_lock");
+    expect(membershipSql).toContain("parent_chain");
     expect(planUpdateSql).toContain("locked_plan AS MATERIALIZED");
     expect(planUpdateSql).toContain("FOR UPDATE");
+  });
+
+  test("guards Postgres parent repair and clear while preserving cross-project routing", async () => {
+    const postgres = createMemoryPostgresClient();
+    const adapter = createPostgresTodosStorageAdapter({
+      client: postgres.client,
+      sourceMachineId: "spark01",
+    });
+    const childProject = await adapter.projects.create({
+      name: "Guarded child project",
+      path: "/guarded-child-project",
+    });
+    const parentProject = await adapter.projects.create({
+      name: "Guarded parent project",
+      path: "/guarded-parent-project",
+    });
+    const originalParent = await adapter.tasks.create({
+      title: "Guarded original parent",
+      project_id: childProject.id,
+    });
+    const crossProjectParent = await adapter.tasks.create({
+      title: "Guarded cross-project parent",
+      project_id: parentProject.id,
+    });
+    const child = await adapter.tasks.create({
+      title: "Guarded repairable child",
+      project_id: childProject.id,
+      parent_id: originalParent.id,
+    });
+
+    const repaired = await adapter.tasks.update(child.id, {
+      version: child.version,
+      parent_id: crossProjectParent.id,
+    });
+    expect(repaired).toMatchObject({
+      id: child.id,
+      created_at: child.created_at,
+      project_id: childProject.id,
+      parent_id: crossProjectParent.id,
+    });
+    expect(await adapter.tasks.get(child.id)).toMatchObject({
+      project_id: childProject.id,
+      parent_id: crossProjectParent.id,
+    });
+
+    await expect(adapter.tasks.update(crossProjectParent.id, {
+      version: crossProjectParent.version,
+      parent_id: child.id,
+    })).rejects.toMatchObject({ code: "TASK_PARENT_CYCLE" });
+    await expect(adapter.tasks.update(child.id, {
+      version: repaired.version,
+      parent_id: "ffffffff-ffff-4fff-8fff-ffffffffffff",
+    })).rejects.toBeInstanceOf(TaskNotFoundError);
+
+    const cleared = await adapter.tasks.update(child.id, {
+      version: repaired.version,
+      parent_id: null,
+    });
+    expect(cleared.parent_id).toBeNull();
+    expect((await adapter.tasks.get(child.id))?.parent_id).toBeNull();
+
+    const descendant = await adapter.tasks.create({
+      title: "Guarded descendant",
+      parent_id: child.id,
+    });
+    expect(await adapter.tasks.delete(child.id)).toBe(true);
+    expect(await adapter.tasks.get(child.id)).toBeNull();
+    expect(await adapter.tasks.get(descendant.id)).toBeNull();
+    await expect(adapter.tasks.create({
+      title: "Guarded late child",
+      parent_id: child.id,
+    })).rejects.toBeInstanceOf(TaskNotFoundError);
+
+    const parentSql = postgres.calls.find((call) =>
+      call.sql.includes("todos:task-parent-integrity-guard") && call.values?.[9] === true
+    )?.sql;
+    expect(parentSql).toContain("WITH RECURSIVE");
+    expect(parentSql).toContain("parent_chain");
+    const deleteSql = postgres.calls.find((call) =>
+      call.sql.includes("todos:task-parent-integrity-delete")
+    )?.sql;
+    expect(deleteSql).toContain("WITH RECURSIVE");
+    expect(deleteSql).toContain("task_tree");
+    expect(deleteSql).toContain("related.object_type = 'dependencies'");
+    expect(deleteSql).toContain("related.payload->>'depends_on'");
+    expect(deleteSql).toContain("related.object_type IN ('comments', 'verifications', 'commits', 'refs')");
+    const firstLock = postgres.calls.findIndex((call) =>
+      call.sql.includes("todos:task-parent-integrity-lock")
+    );
+    const firstParentWrite = postgres.calls.findIndex((call) =>
+      call.sql.includes("todos:task-parent-integrity-guard") && call.values?.[9] === true
+    );
+    const firstDelete = postgres.calls.findIndex((call) =>
+      call.sql.includes("todos:task-parent-integrity-delete")
+    );
+    expect(firstLock).toBeGreaterThanOrEqual(0);
+    expect(firstParentWrite).toBeGreaterThan(firstLock);
+    expect(firstDelete).toBeGreaterThan(firstLock);
+    expect(postgres.calls[firstLock]!.sql).toContain("pg_advisory_xact_lock");
+    expect(parentSql).not.toContain("pg_advisory_xact_lock");
+    expect(deleteSql).not.toContain("pg_advisory_xact_lock");
+  });
+
+  test("cascades Postgres hierarchy deletion to task-owned records", async () => {
+    const postgres = createMemoryPostgresClient();
+    const adapter = createPostgresTodosStorageAdapter({
+      client: postgres.client,
+      sourceMachineId: "spark01",
+    });
+    const parent = await adapter.tasks.create({ title: "Related parent" });
+    const child = await adapter.tasks.create({
+      title: "Related child",
+      parent_id: parent.id,
+    });
+    const dependent = await adapter.tasks.create({ title: "Related dependent" });
+    const externalBlocker = await adapter.tasks.create({ title: "Related external blocker" });
+    const commitSha = "b".repeat(40);
+    const refName = `related-${child.id}`;
+
+    await adapter.dependencies!.add(dependent.id, child.id);
+    await adapter.dependencies!.add(child.id, externalBlocker.id);
+    await adapter.audit.addComment({ task_id: child.id, content: "Related comment" });
+    await adapter.verifications!.add({
+      task_id: child.id,
+      command: "bun run test",
+      status: "passed",
+    });
+    await adapter.commits!.add({ task_id: child.id, sha: commitSha });
+    await adapter.gitRefs!.add({ task_id: child.id, ref_type: "branch", name: refName });
+
+    expect(await adapter.tasks.delete(parent.id)).toBe(true);
+    expect(await adapter.dependencies!.list(dependent.id)).toEqual({
+      dependencies: [],
+      blocks: [],
+      blocked_by: [],
+    });
+    expect(await adapter.audit.getComments(child.id)).toEqual([]);
+    expect(await adapter.verifications!.list(child.id)).toEqual([]);
+    expect(await adapter.commits!.list(child.id)).toEqual([]);
+    expect(await adapter.commits!.find(commitSha)).toBeNull();
+    expect(await adapter.gitRefs!.list(child.id)).toEqual([]);
+    expect(await adapter.gitRefs!.find(refName)).toEqual([]);
+  });
+
+  test("fails parent mutations closed when the Postgres client cannot pin a transaction", async () => {
+    const postgres = createMemoryPostgresClient();
+    const queryOnlyClient: TodosPostgresQueryClient = {
+      query: postgres.client.query.bind(postgres.client),
+    };
+    const adapter = createPostgresTodosStorageAdapter({
+      client: queryOnlyClient,
+      sourceMachineId: "spark01",
+    });
+    const parent = await adapter.tasks.create({ title: "Query-only parent" });
+
+    await expect(adapter.tasks.create({
+      title: "Query-only child",
+      parent_id: parent.id,
+    })).rejects.toThrow("TASK_PARENT_ATOMICITY_UNAVAILABLE");
+    await expect(adapter.tasks.delete(parent.id)).rejects.toThrow(
+      "TASK_PARENT_ATOMICITY_UNAVAILABLE",
+    );
+    await expect(adapter.tasks.update(parent.id, {
+      version: parent.version,
+      title: "Query-only update",
+    })).rejects.toThrow("TASK_PARENT_ATOMICITY_UNAVAILABLE");
+    expect(await adapter.tasks.get(parent.id)).toMatchObject({ id: parent.id });
   });
 
   test("preserves direct Postgres tombstone clocks and rejects stale import records", async () => {
@@ -2915,6 +3085,7 @@ function createMemoryPostgresClient(options: { rejectWritesForObjectType?: strin
     payload: unknown;
     updatedAt: string;
     deletedAt: string | null;
+    sourceMachineId?: string | null;
     version: number | null;
   }
 
@@ -2925,6 +3096,9 @@ function createMemoryPostgresClient(options: { rejectWritesForObjectType?: strin
     `${String(service)}:${String(objectType)}:${String(objectId)}`;
 
   const client: TodosPostgresQueryClient = {
+    async transaction<T>(fn: (transaction: TodosPostgresQueryClient) => Promise<T>): Promise<T> {
+      return fn(client);
+    },
     async query<T = Record<string, unknown>>(sql: string, values: readonly unknown[] = []) {
       calls.push({ sql, values });
 
@@ -3286,9 +3460,27 @@ function createMemoryPostgresClient(options: { rejectWritesForObjectType?: strin
       }
 
       if (sql.includes("todos:task-plan-membership-guard")) {
-        const [service, taskId, rawPayload, updatedAt, , version, rawPlanIds, targetPlanId, explicitProject] = values;
+        const [
+          service,
+          taskId,
+          rawPayload,
+          updatedAt,
+          ,
+          version,
+          rawPlanIds,
+          targetPlanId,
+          explicitProject,
+          guardParent,
+          parentId,
+          expectedVersion,
+          requireExistingTask,
+        ] = values;
         const planIds = parseJsonb(rawPlanIds) as string[];
         const task = parseJsonb(rawPayload) as Record<string, unknown>;
+        const existingTaskRow = rows.get(recordKey(service, "tasks", taskId));
+        const existingTask = existingTaskRow && !existingTaskRow.deletedAt
+          ? existingTaskRow.payload as Record<string, unknown>
+          : null;
         const plans = planIds.map((planId) => rows.get(recordKey(service, "plans", planId)))
           .filter((row): row is Row => Boolean(row && !row.deletedAt));
         const targetPlan = targetPlanId ? rows.get(recordKey(service, "plans", targetPlanId)) : null;
@@ -3300,8 +3492,40 @@ function createMemoryPostgresClient(options: { rejectWritesForObjectType?: strin
         const projectConflict = Boolean(
           explicitProject && targetProjectId && (task["project_id"] ?? null) !== targetProjectId,
         );
+        const taskFound = !guardParent || !requireExistingTask || Boolean(existingTask);
+        const versionMatches = !guardParent
+          || !requireExistingTask
+          || Number(existingTask?.["version"] ?? -1) === Number(expectedVersion);
+        const parentRow = parentId === null || parentId === undefined
+          ? null
+          : rows.get(recordKey(service, "tasks", parentId));
+        const parentFound = !guardParent || parentId === null || parentId === undefined
+          || Boolean(parentRow && !parentRow.deletedAt);
+        let parentAcyclic = true;
+        if (guardParent && parentId !== null && parentId !== undefined && parentFound) {
+          const visited = new Set<string>();
+          let cursor: string | null = String(parentId);
+          while (cursor) {
+            if (cursor === String(taskId) || visited.has(cursor)) {
+              parentAcyclic = false;
+              break;
+            }
+            visited.add(cursor);
+            const ancestorRow = rows.get(recordKey(service, "tasks", cursor));
+            if (!ancestorRow || ancestorRow.deletedAt) break;
+            const ancestor = ancestorRow.payload as Record<string, unknown>;
+            cursor = typeof ancestor["parent_id"] === "string" ? ancestor["parent_id"] : null;
+          }
+        }
         if (targetProjectId) task["project_id"] = targetProjectId;
-        if (allPlansFound && targetPlanFound && !projectConflict) {
+        const canStore = taskFound
+          && versionMatches
+          && parentFound
+          && parentAcyclic
+          && allPlansFound
+          && targetPlanFound
+          && !projectConflict;
+        if (canStore) {
           rows.set(recordKey(service, "tasks", taskId), {
             service: String(service),
             objectType: "tasks",
@@ -3313,11 +3537,66 @@ function createMemoryPostgresClient(options: { rejectWritesForObjectType?: strin
           });
         }
         return { rows: [{
+          task_found: taskFound,
+          version_matches: versionMatches,
+          parent_found: parentFound,
+          parent_acyclic: parentAcyclic,
           all_plans_found: allPlansFound,
           target_plan_found: targetPlanFound,
           project_conflict: projectConflict,
-          payload: allPlansFound && targetPlanFound && !projectConflict ? task : null,
+          payload: canStore ? task : null,
         }] as T[] };
+      }
+
+      if (sql.includes("todos:task-parent-integrity-delete")) {
+        const [service, taskId, deletedAt, sourceMachineId] = values;
+        const root = rows.get(recordKey(service, "tasks", taskId));
+        if (!root || root.deletedAt) {
+          return { rows: [{ found: false, deleted_count: 0 }] as T[] };
+        }
+        const pending = [String(taskId)];
+        const selected = new Set<string>();
+        while (pending.length > 0) {
+          const current = pending.shift()!;
+          if (selected.has(current)) continue;
+          selected.add(current);
+          for (const row of rows.values()) {
+            if (row.service !== service || row.objectType !== "tasks" || row.deletedAt) continue;
+            const payload = row.payload as Record<string, unknown>;
+            if (payload["parent_id"] === current && !selected.has(row.objectId)) {
+              pending.push(row.objectId);
+            }
+          }
+        }
+        for (const objectId of selected) {
+          const row = rows.get(recordKey(service, "tasks", objectId));
+          if (!row || row.deletedAt) continue;
+          row.deletedAt = String(deletedAt);
+          row.updatedAt = String(deletedAt);
+        }
+        let relatedDeletedCount = 0;
+        for (const row of rows.values()) {
+          if (row.service !== service || row.deletedAt) continue;
+          const payload = row.payload as Record<string, unknown>;
+          const related = row.objectType === "dependencies"
+            ? selected.has(String(payload["task_id"])) || selected.has(String(payload["depends_on"]))
+            : ["comments", "verifications", "commits", "refs"].includes(row.objectType)
+              && selected.has(String(payload["task_id"]));
+          if (!related) continue;
+          row.deletedAt = String(deletedAt);
+          row.updatedAt = String(deletedAt);
+          row.sourceMachineId = sourceMachineId === null || sourceMachineId === undefined
+            ? null
+            : String(sourceMachineId);
+          relatedDeletedCount++;
+        }
+        return {
+          rows: [{
+            found: true,
+            deleted_count: selected.size,
+            related_deleted_count: relatedDeletedCount,
+          }] as T[],
+        };
       }
 
       if (sql.includes("todos:plan-update-project-link-guard")) {

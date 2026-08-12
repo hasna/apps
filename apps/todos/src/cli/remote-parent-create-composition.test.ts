@@ -44,6 +44,7 @@ type CliResult = { stdout: string; stderr: string; exitCode: number };
 interface AuthorityOptions {
   dropWriteAfterCreate?: boolean;
   dropParentedWriteAfterCreate?: boolean;
+  ignoreParentUpdate?: boolean;
 }
 
 function createAuthority(options: AuthorityOptions = {}) {
@@ -52,6 +53,7 @@ function createAuthority(options: AuthorityOptions = {}) {
   const store = createLocalSqliteTodosStorageAdapter({ db });
   const originalCreate = store.tasks.create.bind(store.tasks);
   const originalDelete = store.tasks.delete.bind(store.tasks);
+  const originalUpdate = store.tasks.update.bind(store.tasks);
   let createCalls = 0;
 
   store.tasks.create = async (input, context) => {
@@ -61,6 +63,13 @@ function createAuthority(options: AuthorityOptions = {}) {
       await originalDelete(task.id, context);
     }
     return task;
+  };
+  store.tasks.update = async (id, input, context) => {
+    if (options.ignoreParentUpdate && input.parent_id !== undefined) {
+      const { parent_id: _ignoredParentId, ...stalePatch } = input;
+      return originalUpdate(id, stalePatch, context);
+    }
+    return originalUpdate(id, input, context);
   };
   const composedStore: TodosStorageAdapter = {
     ...store,
@@ -280,6 +289,116 @@ describe("remote create persistence composition", () => {
       parent_id: parent.id,
     });
     expect(authority.createCalls(), "show must not replay the create").toBe(1);
+  });
+
+  test("REGRESSION: update repairs and clears an exact cross-project parent without replacing or rerouting the task", async () => {
+    const authority = createAuthority();
+    authorities.push(authority);
+    const childProject = await authority.store.projects.create({
+      name: "Child project",
+      path: "/tmp/child-project",
+    });
+    const parentProject = await authority.store.projects.create({
+      name: "Parent project",
+      path: "/tmp/parent-project",
+    });
+    const childList = await authority.store.taskLists.create({
+      name: "Child list",
+      project_id: childProject.id,
+    });
+    const originalParent = await authority.seedTask({
+      title: "Original parent",
+      project_id: childProject.id,
+    });
+    const crossProjectParent = await authority.seedTask({
+      title: "Cross-project parent",
+      project_id: parentProject.id,
+    });
+    const child = await authority.seedTask({
+      title: "Repairable child",
+      project_id: childProject.id,
+      task_list_id: childList.id,
+      parent_id: originalParent.id,
+    });
+    const unrelated = await authority.seedTask({
+      title: "Unrelated control",
+      project_id: childProject.id,
+    });
+    const unrelatedBefore = await authority.store.tasks.get(unrelated.id);
+    const historyBefore = await authority.store.audit.getTaskHistory(child.id);
+    const root = tempRoot("todos-parent-repair-");
+
+    const repairedResult = await runRemote([
+      "--json",
+      "update",
+      child.id,
+      "--parent",
+      crossProjectParent.id,
+    ], authority.server.port, root);
+
+    expect({ exitCode: repairedResult.exitCode, stderr: repairedResult.stderr }).toEqual({
+      exitCode: 0,
+      stderr: "",
+    });
+    const repaired = JSON.parse(repairedResult.stdout) as Task;
+    expect(repaired).toMatchObject({
+      id: child.id,
+      created_at: child.created_at,
+      project_id: childProject.id,
+      task_list_id: childList.id,
+      parent_id: crossProjectParent.id,
+    });
+    expect((await authority.store.audit.getTaskHistory(child.id)).map((entry) => entry.id))
+      .toEqual(expect.arrayContaining(historyBefore.map((entry) => entry.id)));
+    expect(await authority.store.tasks.get(unrelated.id)).toEqual(unrelatedBefore);
+    expect((await authority.store.tasks.get(originalParent.id))?.version).toBe(originalParent.version);
+    expect((await authority.store.tasks.get(crossProjectParent.id))?.version).toBe(crossProjectParent.version);
+
+    const clearedResult = await runRemote([
+      "--json",
+      "update",
+      child.id,
+      "--clear-parent",
+    ], authority.server.port, root);
+
+    expect({ exitCode: clearedResult.exitCode, stderr: clearedResult.stderr }).toEqual({
+      exitCode: 0,
+      stderr: "",
+    });
+    expect(JSON.parse(clearedResult.stdout)).toMatchObject({
+      id: child.id,
+      created_at: child.created_at,
+      project_id: childProject.id,
+      task_list_id: childList.id,
+      parent_id: null,
+    });
+    expect(await authority.store.tasks.get(unrelated.id)).toEqual(unrelatedBefore);
+  });
+
+  test("REGRESSION: an acknowledged parent repair fails closed when authoritative readback retains the old parent", async () => {
+    const authority = createAuthority({ ignoreParentUpdate: true });
+    authorities.push(authority);
+    const originalParent = await authority.seedTask({ title: "Original parent" });
+    const requestedParent = await authority.seedTask({ title: "Requested parent" });
+    const child = await authority.seedTask({
+      title: "Stale parent repair",
+      parent_id: originalParent.id,
+    });
+
+    const result = await runRemote([
+      "--json",
+      "update",
+      child.id,
+      "--parent",
+      requestedParent.id,
+    ], authority.server.port, tempRoot("todos-parent-repair-stale-"));
+
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain("TASK_REPARENT_PERSISTENCE_UNVERIFIED");
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      error: expect.stringContaining("TASK_REPARENT_PERSISTENCE_UNVERIFIED"),
+    });
+    expect((await authority.store.tasks.get(child.id))?.parent_id).toBe(originalParent.id);
   });
 
   test("a nonexistent parent exits nonzero and emits no human success row", async () => {

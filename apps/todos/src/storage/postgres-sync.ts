@@ -32,6 +32,16 @@ export interface TodosPostgresQueryClient {
     sql: string,
     values?: readonly unknown[],
   ): Promise<TodosPostgresQueryResult<T>>;
+  /**
+   * Optional authoritative same-connection transaction callback.
+   *
+   * Query-only clients remain valid for reads and independent writes. Storage
+   * operations whose correctness depends on a lock followed by a fresh
+   * READ-COMMITTED statement fail closed when this callback is unavailable.
+   */
+  transaction?<T>(
+    fn: (client: TodosPostgresQueryClient) => Promise<T>,
+  ): Promise<T>;
 }
 
 export interface CreatePostgresTodosSyncStoreOptions {
