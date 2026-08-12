@@ -487,6 +487,23 @@ describe("remote authority compatibility diagnostics", () => {
     )).rejects.toThrow(
       "REMOTE_API_INCOMPATIBLE: /v1/project-registration/validate-prior-adoption",
     );
+
+    for (const body of [
+      false,
+      { validation: false },
+      { validation: { valid: false } },
+      { validation: { valid: true } },
+      { validation: { ...validation, target_id: "22222222-2222-4222-8222-222222222222" } },
+      { validation: { ...validation, accepted_result_digest: "0".repeat(64) } },
+    ]) {
+      installFetch(() => ({ body }));
+      await expect(cloudValidatePriorRegistrationAdoption(
+        getTodosCloudClient(CLOUD_ENV)!,
+        input,
+      )).rejects.toThrow(
+        "REMOTE_API_INCOMPATIBLE: /v1/project-registration/validate-prior-adoption",
+      );
+    }
   });
 
   test("accepts an honest project-resource page bound to the request", async () => {

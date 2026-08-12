@@ -39,6 +39,35 @@ describe("project-registration OpenAPI and generated SDK", () => {
     });
     expect(document.components.schemas.ProjectRegistrationRequest.properties.bind_existing)
       .toEqual({ type: "boolean" });
+    expect(document.components.schemas.PriorRegistrationAdoptionValidation).toEqual({
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "valid",
+        "resource_kind",
+        "target_id",
+        "source_receipt_id",
+        "accepted_receipt_id",
+        "source_outcome",
+        "created_at",
+        "current_revision",
+        "accepted_result_digest",
+      ],
+      properties: {
+        valid: { type: "boolean", enum: [true] },
+        resource_kind: { type: "string", enum: ["project", "task_list"] },
+        target_id: { type: "string", format: "uuid" },
+        source_receipt_id: { type: "string" },
+        accepted_receipt_id: { type: "string" },
+        source_outcome: {
+          type: "string",
+          enum: ["accepted", "duplicate_of_accepted"],
+        },
+        created_at: { type: "string", format: "date-time" },
+        current_revision: { type: "string", format: "date-time" },
+        accepted_result_digest: { type: "string" },
+      },
+    });
     expect(document.components.schemas.ProjectResourcePage).toMatchObject({
       additionalProperties: false,
       required: expect.arrayContaining([
@@ -282,5 +311,103 @@ describe("project-registration OpenAPI and generated SDK", () => {
       source_receipt: receipt,
       current_record: currentRecord,
     });
+  });
+
+  test("generated SDK rejects false, negative, malformed, and forged prior-adoption validation proof", async () => {
+    const createdAt = "2026-08-12T09:00:00.000Z";
+    const targetId = "11111111-1111-4111-8111-111111111111";
+    const request = {
+      operation_id: "sdk-prior-adoption-negative-0001",
+      step_id: "todos_project",
+      resource_kind: "project",
+      direction: "forward",
+      authority_route: "todos.project-registration.v1",
+      package_version: "test",
+      authority_id: "todos",
+      tenant_id: "tenant",
+      corpus_id: "corpus",
+      target_selector: "wks_sdknegative0001",
+      idempotency_key: "prk_sdk_negative",
+      request_digest: "a".repeat(64),
+      precondition_digest: "b".repeat(64),
+      project_id: "wks_sdknegative0001",
+      project_slug: "sdk-negative",
+      project_name: "SDK negative",
+      desired: {},
+      bind_existing: true,
+      response_byte_limit: 65_536,
+      time_budget_ms: 5_000,
+    } satisfies ProjectRegistrationRequest;
+    const receipt = {
+      receipt_id: "tpr_sdk_negative",
+      authority: "todos",
+      route: "todos.project-registration.v1",
+      package_version: request.package_version,
+      authority_id: request.authority_id,
+      tenant_id: request.tenant_id,
+      corpus_id: request.corpus_id,
+      operation_id: request.operation_id,
+      step_id: request.step_id,
+      resource_kind: request.resource_kind,
+      direction: request.direction,
+      idempotency_key: request.idempotency_key,
+      request_digest: request.request_digest,
+      precondition_digest: request.precondition_digest,
+      outcome: "accepted",
+      reason: null,
+      target_id: targetId,
+      result_revision: createdAt,
+      result_digest: "c".repeat(64),
+      duplicate_of_receipt_id: null,
+      accepted_receipt_id: null,
+      created_by_operation: false,
+      created_at: createdAt,
+    } as const;
+    const currentRecord = {
+      id: targetId,
+      name: request.project_name,
+      path: `hasna-project://${request.project_id}`,
+      description: null,
+      task_list_id: "todos-sdk-negative",
+      task_prefix: "SDK",
+      task_counter: 0,
+      created_at: createdAt,
+      updated_at: createdAt,
+    };
+    const validation = {
+      valid: true,
+      resource_kind: request.resource_kind,
+      target_id: targetId,
+      source_receipt_id: receipt.receipt_id,
+      accepted_receipt_id: receipt.receipt_id,
+      source_outcome: receipt.outcome,
+      created_at: currentRecord.created_at,
+      current_revision: currentRecord.updated_at,
+      accepted_result_digest: receipt.result_digest,
+    } as const;
+    const input = {
+      source_request: request,
+      source_receipt: receipt,
+      current_record: currentRecord,
+    };
+    let responseBody: unknown = { validation };
+    const client = new TodosV1Client({
+      baseUrl: "https://todos.example.invalid",
+      fetch: async () => Response.json(responseBody),
+    });
+
+    await expect(client.validatePriorRegistrationAdoption(input))
+      .resolves.toEqual({ validation });
+    for (const body of [
+      false,
+      { validation: false },
+      { validation: { valid: false } },
+      { validation: { valid: true } },
+      { validation: { ...validation, current_revision: "2099-01-01T00:00:00.000Z" } },
+    ]) {
+      responseBody = body;
+      await expect(client.validatePriorRegistrationAdoption(input))
+        .rejects.toThrow("TODOS_PROJECT_REGISTRATION_ADOPTION_REJECTED");
+    }
   });
 });

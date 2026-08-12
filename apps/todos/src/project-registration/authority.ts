@@ -283,6 +283,28 @@ function taskListRecord(taskList: TaskList): TodosProjectRegistrationRecord {
   };
 }
 
+function boundExistingProjectRecord(project: Project): TodosProjectRegistrationRecord {
+  return {
+    target_id: project.id,
+    revision: project.created_at,
+    digest: projectRegistrationDigest({
+      ...project,
+      updated_at: project.created_at,
+    }),
+  };
+}
+
+function boundExistingTaskListRecord(taskList: TaskList): TodosProjectRegistrationRecord {
+  return {
+    target_id: taskList.id,
+    revision: taskList.created_at,
+    digest: taskListRegistrationDigest({
+      ...taskList,
+      updated_at: taskList.created_at,
+    }),
+  };
+}
+
 function projectRegistrationDigest(project: Project): string {
   return digestProjectRegistrationValue({
     id: project.id,
@@ -1083,7 +1105,7 @@ implements TodosProjectRegistrationAuthority {
           && conflict.task_list_id === slug
         ) {
           return {
-            record: projectRecord(conflict),
+            record: boundExistingProjectRecord(conflict),
             created_by_operation: false,
           };
         }
@@ -1148,7 +1170,7 @@ implements TodosProjectRegistrationAuthority {
         && conflict.slug === slug
       ) {
         return {
-          record: taskListRecord(conflict),
+          record: boundExistingTaskListRecord(conflict),
           created_by_operation: false,
         };
       }

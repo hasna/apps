@@ -15,6 +15,9 @@ import {
   type TodosProjectResourcePage,
   type TodosProjectResourcePageRequest,
 } from "./types.js";
+import {
+  assertTodosPriorRegistrationAdoptionValidationEnvelope,
+} from "./adoption-validation.js";
 
 const JSON_HEADERS = { "Content-Type": "application/json" } as const;
 
@@ -276,17 +279,16 @@ implements TodosProjectRegistrationAuthority {
     sourceReceipt: TodosPriorRegistrationAdoptionValidationRequest["source_receipt"],
     currentRecord: TodosPriorRegistrationAdoptionValidationRequest["current_record"],
   ): Promise<TodosPriorRegistrationAdoptionValidation> {
-    const body = await this.request<{
-      validation: TodosPriorRegistrationAdoptionValidation;
-    }>("/validate-prior-adoption", {
+    const input = {
+      source_request: withoutTarget(sourceRequest),
+      source_receipt: sourceReceipt,
+      current_record: currentRecord,
+    };
+    const body = await this.request<unknown>("/validate-prior-adoption", {
       method: "POST",
-      body: JSON.stringify({
-        source_request: withoutTarget(sourceRequest),
-        source_receipt: sourceReceipt,
-        current_record: currentRecord,
-      }),
+      body: JSON.stringify(input),
     });
-    return body.validation;
+    return assertTodosPriorRegistrationAdoptionValidationEnvelope(body, input);
   }
 
   async compensate(

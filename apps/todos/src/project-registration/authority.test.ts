@@ -506,6 +506,81 @@ describe("Todos package-owned project registration authority", () => {
     expect(getProject(existingProject.id, db)).not.toBeNull();
   });
 
+  test("bind-existing receipts preserve immutable project and task-list incarnations across pre-bind mutable drift", async () => {
+    const existingProject = createProject({
+      name: "Existing Fleet Resources",
+      path: "hasna-project://wks_fleetresources01",
+      task_list_id: "todos-fleet-resources",
+    }, db);
+    db.run(
+      "UPDATE projects SET task_counter = 3, updated_at = ? WHERE id = ?",
+      ["2099-01-02T03:04:05.000Z", existingProject.id],
+    );
+    const projectCall = projectRequest({
+      operation_id: "fleet-resources-prebind-project-drift-0001",
+      bind_existing: true,
+    });
+    const projectReceipt = await authority.create(projectCall);
+    expect(projectReceipt).toMatchObject({
+      outcome: "accepted",
+      target_id: existingProject.id,
+      result_revision: existingProject.created_at,
+      created_by_operation: false,
+    });
+
+    const existingTaskList = createTaskList({
+      name: "Existing Fleet Resources",
+      slug: "todos-fleet-resources",
+      project_id: existingProject.id,
+    }, db);
+    db.run(
+      "UPDATE task_lists SET updated_at = ? WHERE id = ?",
+      ["2099-01-02T03:04:06.000Z", existingTaskList.id],
+    );
+    const taskListCall = taskListRequest(existingProject.id, {
+      operation_id: "fleet-resources-prebind-list-drift-0001",
+      bind_existing: true,
+    });
+    const taskListReceipt = await authority.create(taskListCall);
+    expect(taskListReceipt).toMatchObject({
+      outcome: "accepted",
+      target_id: existingTaskList.id,
+      result_revision: existingTaskList.created_at,
+      created_by_operation: false,
+    });
+
+    db.run(
+      "UPDATE projects SET task_counter = task_counter + 2, updated_at = ? WHERE id = ?",
+      ["2099-01-02T03:04:07.000Z", existingProject.id],
+    );
+    db.run(
+      "UPDATE task_lists SET updated_at = ? WHERE id = ?",
+      ["2099-01-02T03:04:08.000Z", existingTaskList.id],
+    );
+    expect(await authority.validatePriorRegistrationAdoption(
+      projectCall,
+      projectReceipt,
+      getProject(existingProject.id, db)!,
+    )).toMatchObject({
+      valid: true,
+      resource_kind: "project",
+      target_id: existingProject.id,
+      created_at: existingProject.created_at,
+      current_revision: "2099-01-02T03:04:07.000Z",
+    });
+    expect(await authority.validatePriorRegistrationAdoption(
+      taskListCall,
+      taskListReceipt,
+      getTaskList(existingTaskList.id, db)!,
+    )).toMatchObject({
+      valid: true,
+      resource_kind: "task_list",
+      target_id: existingTaskList.id,
+      created_at: existingTaskList.created_at,
+      current_revision: "2099-01-02T03:04:08.000Z",
+    });
+  });
+
   test("validates accepted and duplicate prior registrations across benign project/task-list drift", async () => {
     const projectCall = projectRequest({
       operation_id: "fleet-resources-prior-adoption-project-0001",
@@ -1052,6 +1127,51 @@ describe("Todos package-owned project registration authority", () => {
       accepted_receipt_id: receipt.receipt_id,
     });
     expect(getPlan(plan.id, db)?.project_id).toBe(receipt.target_id);
+  });
+
+  test("HTTP client rejects false, negative, malformed, and forged prior-adoption validation responses", async () => {
+    const request = projectRequest({
+      operation_id: "fleet-resources-http-validation-negative-0001",
+    });
+    const receipt = await authority.create(request);
+    const current = getProject(receipt.target_id!, db)!;
+    const honest = {
+      valid: true,
+      resource_kind: "project",
+      target_id: receipt.target_id!,
+      source_receipt_id: receipt.receipt_id,
+      accepted_receipt_id: receipt.receipt_id,
+      source_outcome: "accepted",
+      created_at: current.created_at,
+      current_revision: current.updated_at,
+      accepted_result_digest: receipt.result_digest!,
+    } as const;
+    const clientFor = (body: unknown) => createTodosProjectRegistrationHttpClient({
+      baseUrl: "https://todos.test",
+      fetch: async () => Response.json(body),
+    });
+
+    await expect(clientFor({ validation: honest }).validatePriorRegistrationAdoption(
+      request,
+      receipt,
+      current,
+    )).resolves.toEqual(honest);
+    for (const body of [
+      false,
+      { validation: false },
+      { validation: { valid: false } },
+      { validation: { valid: true } },
+      { validation: { ...honest, target_id: "11111111-1111-4111-8111-111111111111" } },
+      { validation: { ...honest, accepted_result_digest: "0".repeat(64) } },
+    ]) {
+      await expect(clientFor(body).validatePriorRegistrationAdoption(
+        request,
+        receipt,
+        current,
+      )).rejects.toMatchObject({
+        code: "TODOS_PROJECT_REGISTRATION_ADOPTION_REJECTED",
+      });
+    }
   });
 
   test("accepts iapp-* project slugs without legacy iproj prefix logic", async () => {
