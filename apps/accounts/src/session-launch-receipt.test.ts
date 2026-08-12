@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
   bindSessionLaunchReceipt,
   prepareSessionLaunchReceipt,
+  sessionLaunchJsonSha256,
   sessionLaunchProfileSha256,
   sessionLaunchSha256,
   type SessionLaunchReceiptRequest,
@@ -36,13 +37,46 @@ function writeFixtureManifest(
         sessionId: `accounts:${target.tool}:${target.profile}`,
         targetHome: target.targetHome,
         targetKind: target.targetKind,
+        targetOwner: {
+          kind: "provider-profile",
+          tool: target.tool,
+          profile: target.profile,
+          targetHome: target.targetHome,
+          projectRoot: null,
+          ownedBy: "open-configs",
+          canonicalOwner: "instructions",
+          writer: {
+            id: "instructions-session-renderer",
+            canonical: true,
+            legacyAliases: ["open-configs"],
+            scope: "managed-provider-files",
+          },
+          reason: "fixture provider profile render",
+        },
         writable: true,
         blocked: false,
         blockers: options.blockers ?? [],
         generatedAt: "2026-08-12T00:00:00.000Z",
         env: {},
         sourceHash: sessionLaunchSha256("source"),
-        sources: [{ id: "global-source" }],
+        sources: [{
+          id: "global-source",
+          label: "Global source",
+          layer: "global",
+          merge: "append",
+          order: 10,
+          path: null,
+          targetProviders: [target.tool],
+          owner: null,
+          sourcePaths: [],
+          hash: null,
+          nonOverridable: false,
+          replacementScope: null,
+          rules: [],
+          renderedPayloadSha256: sessionLaunchSha256("source"),
+          provenance: { source: "fixture" },
+          metadata: { fixture: true },
+        }],
         skippedSources: [],
         files: [
           {
@@ -119,6 +153,12 @@ describe("session launch receipt", () => {
     expect(receipt.mismatches).toEqual([]);
     expect(receipt.instructions.adapter).toBe("native-imports");
     expect(receipt.instructions.sourceIds).toEqual(["global-source"]);
+    expect(receipt.instructions.sources[0]?.provenanceSha256).toBe(
+      sessionLaunchJsonSha256({ source: "fixture" }),
+    );
+    expect(receipt.instructions.sources[0]?.metadataSha256).toBe(
+      sessionLaunchJsonSha256({ fixture: true }),
+    );
     expect(receipt.capabilities).toEqual([
       { name: "durable_launch_receipt_v1", required: true, status: "supported" },
       {
@@ -167,5 +207,24 @@ describe("session launch receipt", () => {
     const { request } = fixture();
     writeFixtureManifest(request.target, { blockers: ["missing canonical source"] });
     expect(() => prepareSessionLaunchReceipt(request)).toThrow(/contains blockers/);
+  });
+
+  test("fails closed on an unrecognized target tool instead of throwing a raw type error", () => {
+    const { request } = fixture();
+    expect(() =>
+      prepareSessionLaunchReceipt({
+        ...request,
+        target: { ...request.target, tool: "unknown" as never },
+      }),
+    ).toThrow(/target tool is unsupported/);
+  });
+
+  test("fails closed when a rendered file is declared outside its target home", () => {
+    const { request } = fixture();
+    const manifestPath = join(request.target.targetHome, ".hasna", "session-render-manifest.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as { files: Array<Record<string, unknown>> };
+    manifest.files[0] = { ...manifest.files[0], path: "/tmp/foreign-instructions.md" };
+    writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
+    expect(() => prepareSessionLaunchReceipt(request)).toThrow(/path differs|cannot be resolved/);
   });
 });

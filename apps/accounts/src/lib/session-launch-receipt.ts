@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 
 import { AccountsError } from "../types.js";
@@ -22,7 +22,9 @@ const MAX_IDENTIFIER_BYTES = 1024;
 const MAX_MANIFEST_BYTES = 2 * 1024 * 1024;
 const MAX_SOURCES = 256;
 const MAX_FILES = 512;
+const MAX_RULES_PER_SOURCE = 256;
 const MAX_CAPABILITIES = 64;
+const SESSION_RENDERER_OWNER_ID = "instructions-session-renderer";
 
 export const SESSION_LAUNCH_ADAPTERS = [
   "native-imports",
@@ -91,6 +93,28 @@ export interface SessionInstructionsFileReceipt {
   sourceIds: string[];
 }
 
+export interface SessionInstructionsRuleReceipt {
+  id: string;
+  label: string;
+  contentSha256: string;
+  flooredFromRulesVersionSha256?: string;
+  flooredFromPayloadSha256?: string;
+  payloadIntegritySha256?: string;
+}
+
+export interface SessionInstructionsSourceReceipt {
+  id: string;
+  label: string;
+  layer: string;
+  merge: string;
+  order: number;
+  renderedPayloadSha256: string;
+  provenanceSha256?: string;
+  metadataSha256?: string;
+  replacementScopeSha256?: string;
+  rules: SessionInstructionsRuleReceipt[];
+}
+
 export interface SessionInstructionsReceipt {
   schema: typeof SESSION_RENDER_MANIFEST_SCHEMA;
   adapter: SessionLaunchAdapter;
@@ -98,7 +122,9 @@ export interface SessionInstructionsReceipt {
   sourceHash: string;
   profileSha256: string;
   targetHomeSha256: string;
+  targetOwnerSha256: string;
   sourceIds: string[];
+  sources: SessionInstructionsSourceReceipt[];
   files: SessionInstructionsFileReceipt[];
 }
 
@@ -179,6 +205,12 @@ function validateSha256(field: string, value: string): void {
 }
 
 function canonicalize(value: unknown): string {
+  if (value === undefined || typeof value === "function" || typeof value === "symbol") {
+    mismatch("cannot canonicalize an unsupported JSON value");
+  }
+  if (typeof value === "number" && !Number.isFinite(value)) {
+    mismatch("cannot canonicalize a non-finite JSON number");
+  }
   if (value === null || typeof value !== "object") return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map(canonicalize).join(",")}]`;
   const record = value as Record<string, unknown>;
@@ -212,7 +244,26 @@ function adapterForManifest(tool: SessionLaunchTool, value: string): SessionLaun
   return adapter;
 }
 
+function isSessionLaunchTool(value: unknown): value is SessionLaunchTool {
+  return [
+    "claude",
+    "codex",
+    "cursor",
+    "opencode",
+    "codewith",
+    "qwen",
+    "aicopilot",
+    "antigravity",
+  ].includes(value as SessionLaunchTool);
+}
+
+function isSessionLaunchTargetKind(value: unknown): value is SessionLaunchTargetKind {
+  return value === "session-home" || value === "project-root";
+}
+
 function validateTarget(target: SessionLaunchTarget): void {
+  if (!isSessionLaunchTool(target.tool)) mismatch("target tool is unsupported");
+  if (!isSessionLaunchTargetKind(target.targetKind)) mismatch("target kind is unsupported");
   validateIdentifier("target tool", target.tool);
   validateIdentifier("target profile", target.profile);
   validateIdentifier("target home", target.targetHome);
@@ -226,6 +277,7 @@ function validateTarget(target: SessionLaunchTarget): void {
 }
 
 function validateRoute(route: SessionLaunchRoute, label: string): void {
+  if (!isSessionLaunchTool(route.tool)) mismatch(`${label} tool is unsupported`);
   for (const [field, value] of [
     ["tool", route.tool],
     ["profile", route.profile],
@@ -261,16 +313,19 @@ function resolveCapabilities(
   }
   const seen = new Set<string>();
   const availableSet = new Set(available);
+  const knownCapabilities = new Set([
+    "durable_launch_receipt_v1",
+    "background_agent_thread",
+    "instructions_manifest_v1",
+    "workflow_route_attestation",
+    "auth_profile_binding",
+    "restart_stable_account_binding",
+  ]);
   return requests.map((request) => {
     validateIdentifier("capability name", request.name);
     if (seen.has(request.name)) mismatch("duplicate launch capability declaration");
     seen.add(request.name);
-    const known = request.name.startsWith("durable_") ||
-      request.name.startsWith("instructions_") ||
-      request.name.startsWith("auth_") ||
-      request.name.startsWith("restart_") ||
-      request.name.startsWith("background_") ||
-      request.name.startsWith("workflow_");
+    const known = knownCapabilities.has(request.name);
     const status: SessionLaunchCapabilityStatus = known
       ? (availableSet.has(request.name) ? "supported" : "unavailable")
       : "unsupported_unknown";
@@ -304,10 +359,149 @@ function safeRelativePath(targetHome: string, value: string): string {
   return rel;
 }
 
+function canonicalPath(field: string, value: string): string {
+  try {
+    return realpathSync(value);
+  } catch {
+    mismatch(`${field} cannot be resolved`);
+  }
+}
+
+function isWithinPath(child: string, parent: string): boolean {
+  return child === parent || child.startsWith(`${parent.endsWith("/") ? parent : `${parent}/`}`);
+}
+
+function validateTargetOwner(
+  manifest: ManifestRecord,
+  target: SessionLaunchTarget,
+  canonicalTargetHome: string,
+): string {
+  const owner = asRecord(manifest.targetOwner);
+  if (!owner) mismatch("Instructions target ownership is absent");
+  const expectedKind = target.targetKind === "project-root" ? "project" : "provider-profile";
+  if (
+    owner.kind !== expectedKind ||
+    owner.tool !== target.tool ||
+    owner.profile !== target.profile ||
+    canonicalPath("Instructions owner target home", requiredString(owner, "targetHome")) !== canonicalTargetHome ||
+    owner.ownedBy !== "open-configs" ||
+    owner.canonicalOwner !== "instructions"
+  ) {
+    mismatch("Instructions target ownership does not match the canonical writer");
+  }
+  const projectRoot = owner.projectRoot;
+  if (
+    target.targetKind === "project-root"
+      ? typeof projectRoot !== "string" ||
+        canonicalPath("Instructions owner project root", projectRoot) !== canonicalTargetHome
+      : projectRoot !== null
+  ) {
+    mismatch("Instructions target ownership project root is inconsistent");
+  }
+  const writer = asRecord(owner.writer);
+  if (
+    !writer ||
+    writer.id !== SESSION_RENDERER_OWNER_ID ||
+    writer.canonical !== true ||
+    !Array.isArray(writer.legacyAliases) ||
+    writer.legacyAliases.length !== 1 ||
+    writer.legacyAliases[0] !== "open-configs" ||
+    writer.scope !==
+      (target.tool === "opencode" ? "managed-instruction-fields" : "managed-provider-files")
+  ) {
+    mismatch("Instructions target ownership writer is not canonical");
+  }
+  validateIdentifier("Instructions target owner reason", requiredString(owner, "reason"));
+  return sessionLaunchJsonSha256(owner);
+}
+
+function parseSourceReceipt(
+  source: ManifestRecord,
+  knownFileSourceIds: Set<string>,
+): SessionInstructionsSourceReceipt {
+  const id = requiredString(source, "id");
+  const label = requiredString(source, "label");
+  const layer = requiredString(source, "layer");
+  const merge = requiredString(source, "merge");
+  const order = source.order;
+  if (typeof order !== "number" || !Number.isSafeInteger(order)) {
+    mismatch(`Instructions source "${id}" has an invalid order`);
+  }
+  const renderedPayloadSha256 = requiredString(source, "renderedPayloadSha256");
+  validateIdentifier("Instructions source id", id);
+  validateIdentifier("Instructions source label", label);
+  validateIdentifier("Instructions source layer", layer);
+  validateIdentifier("Instructions source merge", merge);
+  validateSha256("Instructions rendered payload digest", renderedPayloadSha256);
+  if (!knownFileSourceIds.add(id)) {
+    mismatch("Instructions manifest contains an ambiguous source or rule id");
+  }
+
+  const rules = source.rules;
+  if (!Array.isArray(rules) || rules.length > MAX_RULES_PER_SOURCE) {
+    mismatch(`Instructions source "${id}" rules are missing or exceed their bound`);
+  }
+  const ruleReceipts: SessionInstructionsRuleReceipt[] = [];
+  for (const rawRule of rules) {
+    const rule = asRecord(rawRule) ?? mismatch("invalid Instructions rule entry");
+    const ruleId = requiredString(rule, "id");
+    const ruleLabel = requiredString(rule, "label");
+    const contentSha256 = requiredString(rule, "contentSha256");
+    validateIdentifier("Instructions rule id", ruleId);
+    validateIdentifier("Instructions rule label", ruleLabel);
+    validateSha256("Instructions rule content digest", contentSha256);
+    if (!knownFileSourceIds.add(ruleId)) {
+      mismatch("Instructions manifest contains an ambiguous source or rule id");
+    }
+    const flooredFromRulesVersion = stringValue(rule.flooredFromRulesVersion);
+    const flooredFromPayload = stringValue(rule.flooredFromPayloadSha256);
+    if (flooredFromPayload) validateSha256("Instructions rule floor digest", flooredFromPayload);
+    const payloadIntegrity = rule.payloadIntegrity;
+    ruleReceipts.push({
+      id: ruleId,
+      label: ruleLabel,
+      contentSha256,
+      ...(flooredFromRulesVersion
+        ? { flooredFromRulesVersionSha256: sessionLaunchSha256(flooredFromRulesVersion) }
+        : {}),
+      ...(flooredFromPayload
+        ? { flooredFromPayloadSha256: flooredFromPayload }
+        : {}),
+      ...(payloadIntegrity !== undefined && payloadIntegrity !== null
+        ? { payloadIntegritySha256: sessionLaunchJsonSha256(payloadIntegrity) }
+        : {}),
+    });
+  }
+  const replacementScope = stringValue(source.replacementScope);
+  return {
+    id,
+    label,
+    layer,
+    merge,
+    order,
+    renderedPayloadSha256,
+    ...(source.provenance !== undefined && source.provenance !== null
+      ? { provenanceSha256: sessionLaunchJsonSha256(source.provenance) }
+      : {}),
+    ...(source.metadata !== undefined && source.metadata !== null
+      ? { metadataSha256: sessionLaunchJsonSha256(source.metadata) }
+      : {}),
+    ...(replacementScope
+      ? { replacementScopeSha256: sessionLaunchSha256(replacementScope) }
+      : {}),
+    rules: ruleReceipts,
+  };
+}
+
 function readManifest(target: SessionLaunchTarget): SessionInstructionsReceipt {
   const targetHome = resolve(target.targetHome);
   const manifestPath = join(targetHome, SESSION_RENDER_MANIFEST_RELATIVE_PATH);
   if (!existsSync(manifestPath)) mismatch("Instructions manifest is absent");
+  const canonicalTargetHome = canonicalPath("Instructions target home", targetHome);
+  const canonicalManifestPath = canonicalPath("Instructions manifest", manifestPath);
+  if (!isWithinPath(canonicalManifestPath, canonicalTargetHome)) {
+    mismatch("Instructions manifest escapes target home");
+  }
   const metadata = statSync(manifestPath);
   if (metadata.size > MAX_MANIFEST_BYTES) mismatch("Instructions manifest exceeds the bounded size");
   const raw = readFileSync(manifestPath);
@@ -323,7 +517,7 @@ function readManifest(target: SessionLaunchTarget): SessionInstructionsReceipt {
   }
   if (manifest.tool !== target.tool) mismatch("manifest tool differs from requested target");
   if (manifest.profile !== target.profile) mismatch("manifest profile differs from requested target");
-  if (resolve(requiredString(manifest, "targetHome")) !== targetHome) {
+  if (canonicalPath("Instructions manifest target home", requiredString(manifest, "targetHome")) !== canonicalTargetHome) {
     mismatch("manifest target home differs from requested target");
   }
   if (manifest.targetKind !== target.targetKind) {
@@ -339,6 +533,7 @@ function readManifest(target: SessionLaunchTarget): SessionInstructionsReceipt {
   if (adapter !== target.adapter) mismatch("manifest adapter differs from requested target");
   const sourceHash = requiredString(manifest, "sourceHash");
   validateSha256("Instructions source hash", sourceHash);
+  const targetOwnerSha256 = validateTargetOwner(manifest, target, canonicalTargetHome);
 
   const sources = manifest.sources;
   const files = manifest.files;
@@ -348,40 +543,69 @@ function readManifest(target: SessionLaunchTarget): SessionInstructionsReceipt {
   if (!Array.isArray(files) || files.length > MAX_FILES) {
     mismatch("Instructions manifest files are missing or exceed their bound");
   }
-  const sourceIds = sources.map((source) => {
-    const record = asRecord(source);
-    const id = requiredString(record ?? {}, "id");
-    validateIdentifier("Instructions source id", id);
-    return id;
+  const knownFileSourceIds = new Set<string>();
+  const sourceReceipts = sources.map((source) => {
+    const record = asRecord(source) ?? mismatch("invalid Instructions source entry");
+    return parseSourceReceipt(record, knownFileSourceIds);
   });
-  if (new Set(sourceIds).size !== sourceIds.length) mismatch("duplicate Instructions source id");
+  const sourceIds = sourceReceipts.map((source) => source.id);
+  if (sourceIds.length === 0 || files.length === 0) {
+    mismatch("Instructions manifest contains no managed sources or files");
+  }
 
+  const knownFiles = new Set<string>();
+  const referencedFileSourceIds = new Set<string>();
   const fileReceipts = files.map((file) => {
     const record = asRecord(file) ?? mismatch("invalid Instructions file entry");
     const relativePath = safeRelativePath(targetHome, requiredString(record, "relativePath"));
     const role = requiredString(record, "role");
     const sha256 = requiredString(record, "sha256");
+    if (!knownFiles.add(relativePath)) mismatch("duplicate Instructions rendered file");
     validateIdentifier("Instructions file role", role);
     validateSha256("Instructions file digest", sha256);
+    const declaredPath = requiredString(record, "path");
+    const expectedPath = resolve(canonicalTargetHome, relativePath);
+    if (canonicalPath("Instructions rendered file", declaredPath) !== canonicalPath("Instructions rendered file", expectedPath)) {
+      mismatch("Instructions rendered file path differs from target-relative path");
+    }
+    if (!["index", "fragment", "rule", "config"].includes(role)) {
+      mismatch("Instructions rendered file has an unsupported role");
+    }
     const sourceIdsForFile = record.sourceIds;
     if (
       !Array.isArray(sourceIdsForFile) ||
       sourceIdsForFile.length === 0 ||
-      sourceIdsForFile.some((id) => typeof id !== "string" || !sourceIds.includes(id))
+      new Set(sourceIdsForFile).size !== sourceIdsForFile.length ||
+      sourceIdsForFile.some((id) => typeof id !== "string" || !knownFileSourceIds.has(id))
     ) {
       mismatch("Instructions file references an unknown source");
     }
-    const path = join(targetHome, relativePath);
+    const normalizedSourceIds = sourceIdsForFile.map((id) => {
+      if (typeof id !== "string") mismatch("Instructions file source id is not a string");
+      referencedFileSourceIds.add(id);
+      return id;
+    });
+    const path = join(canonicalTargetHome, relativePath);
     if (!existsSync(path)) mismatch(`managed file is missing: ${relativePath}`);
-    const actual = sessionLaunchSha256(readFileSync(path));
+    const canonicalFile = canonicalPath("Instructions rendered file", path);
+    if (!isWithinPath(canonicalFile, canonicalTargetHome)) {
+      mismatch("Instructions rendered file escapes target home");
+    }
+    const actual = sessionLaunchSha256(readFileSync(canonicalFile));
     if (actual !== sha256) mismatch(`managed file digest does not match disk: ${relativePath}`);
     return {
       relativePath,
       role,
       sha256,
-      sourceIds: [...sourceIdsForFile],
+      sourceIds: normalizedSourceIds,
     };
   });
+  if (
+    referencedFileSourceIds.size !== knownFileSourceIds.size ||
+    [...knownFileSourceIds].some((id) => !referencedFileSourceIds.has(id))
+  ) {
+    mismatch("Instructions manifest contains an unreferenced source or rule id");
+  }
 
   return {
     schema: SESSION_RENDER_MANIFEST_SCHEMA,
@@ -389,8 +613,10 @@ function readManifest(target: SessionLaunchTarget): SessionInstructionsReceipt {
     manifestSha256,
     sourceHash,
     profileSha256: sessionLaunchProfileSha256(target.profile),
-    targetHomeSha256: sessionLaunchSha256(targetHome),
+    targetHomeSha256: sessionLaunchSha256(canonicalTargetHome),
+    targetOwnerSha256,
     sourceIds,
+    sources: sourceReceipts,
     files: fileReceipts,
   };
 }
@@ -468,6 +694,10 @@ export function bindSessionLaunchReceipt(
     instructions: {
       ...prepared.instructions,
       sourceIds: [...prepared.instructions.sourceIds],
+      sources: prepared.instructions.sources.map((source) => ({
+        ...source,
+        rules: source.rules.map((rule) => ({ ...rule })),
+      })),
       files: prepared.instructions.files.map((file) => ({
         ...file,
         sourceIds: [...file.sourceIds],

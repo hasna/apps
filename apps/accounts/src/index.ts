@@ -160,7 +160,9 @@ export {
 export type {
   PreparedSessionLaunchReceipt,
   SessionInstructionsFileReceipt,
+  SessionInstructionsRuleReceipt,
   SessionInstructionsReceipt,
+  SessionInstructionsSourceReceipt,
   SessionLaunchAdapter,
   SessionLaunchCapabilityReceipt,
   SessionLaunchCapabilityRequest,
