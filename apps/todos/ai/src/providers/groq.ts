@@ -82,7 +82,7 @@ function mapProviderError(error: unknown, signal: AbortSignal): never {
     throw new DOMException("Aborted", "AbortError");
   }
   if (APICallError.isInstance(error)) {
-    const credentialsRejected = error.statusCode === 401 || error.statusCode === 403;
+    const credentialsRejected = error.statusCode === 401;
     throw new TodosAiProviderError(
       credentialsRejected
         ? "credentials_rejected"

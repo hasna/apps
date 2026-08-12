@@ -597,7 +597,7 @@ describe("Groq adapter", () => {
 
   test("maps authentication rejections without exposing provider payloads", async () => {
     const marker = "fixture-private-auth-response";
-    for (const statusCode of [401, 403]) {
+    for (const statusCode of [401]) {
       const generateText = (async () => {
         throw new APICallError({
           message: marker,
@@ -630,5 +630,40 @@ describe("Groq adapter", () => {
       });
       expect(JSON.stringify(failure)).not.toContain(marker);
     }
+  });
+
+  test("does not report permission failures as rejected credentials", async () => {
+    const marker = "fixture-private-permission-response";
+    const generateText = (async () => {
+      throw new APICallError({
+        message: marker,
+        url: "https://provider.invalid",
+        requestBodyValues: { prompt: marker },
+        statusCode: 403,
+        responseBody: marker,
+        isRetryable: false,
+      });
+    }) as unknown as GroqSdkDependencies["generateText"];
+    const { sdk } = fixtureSdk({ generateText });
+    const adapter = createGroqAdapter({
+      apiKey: "fixture",
+      model: "openai/gpt-oss-120b",
+      sdk,
+    });
+
+    let failure: unknown;
+    try {
+      await adapter.runWork(providerRequest());
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(TodosAiProviderError);
+    expect(failure).toMatchObject({
+      kind: "provider",
+      retryable: false,
+      message: "AI provider failure",
+    });
+    expect(JSON.stringify(failure)).not.toContain(marker);
   });
 });
