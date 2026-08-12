@@ -569,7 +569,7 @@ used for — auditing a sender or a channel, which is an ABSENCE claim.
       const value = parseInt(match[1]);
       const unit = match[2] as "m" | "h" | "d";
       const msMap = { m: 60_000, h: 3_600_000, d: 86_400_000 };
-      const since = new Date(Date.now() - value * msMap[unit]).toISOString().replace("T", "T").slice(0, 23);
+      const since = new Date(Date.now() - value * msMap[unit]).toISOString();
       const window = getCliWindow({ limit: opts.limit, cursor: opts.cursor });
 
       // `order: "asc"` used to be hardcoded here. The store-layer recency fix
