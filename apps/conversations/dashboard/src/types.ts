@@ -26,6 +26,10 @@ export interface MessagePage {
   next_cursor: number | null;
   limit: number;
   count: number;
+  skipped_count: number;
+  byte_length: number;
+  max_bytes: number;
+  timeout_ms: number;
 }
 
 export interface Session {

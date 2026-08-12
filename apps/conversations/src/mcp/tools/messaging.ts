@@ -13,7 +13,7 @@ import { getStore } from "../../lib/store/index.js";
 // Reads/writes route through getStore(): ApiStore when HASNA_CONVERSATIONS_API_URL
 // + _API_KEY are set (self_hosted/cloud), else LocalStore.
 import { identityFor } from "../identity.js";
-import { compactPreviewPage, compactQueriedMessages, compactQueriedSearchMessages, compactWindowedSessions, jsonText, resolveMcpPageOptions, resolveMcpWindow } from "../compact.js";
+import { compactPreviewPage, compactWindowedSessions, jsonText, resolveMcpPageOptions } from "../compact.js";
 import { resolveReadWindow, takeWindow } from "../../lib/message-window.js";
 import { PINNED_LIST_ORDER, describeReadMessagesOrder } from "../../lib/list-order.js";
 import { normalizeChannelName } from "../../lib/channel-names.js";
@@ -396,23 +396,33 @@ export function registerMessagingTools(
     },
   }, async (args: Record<string, any>) => {
     const { query, channel, from, to, since, until, sort } = args;
-    const window = resolveMcpWindow(args);
     const verbose = args.verbose === true;
-    const results = await await getStore().searchMessages({
-      query,
-      channel,
-      from,
-      to,
-      since,
-      until,
-      sort,
-      limit: verbose ? args.limit : window.limit + 1,
-      offset: verbose ? args.cursor : window.offset,
-    });
-
     const payload = verbose
-      ? { results, count: results.length, query, compact: false }
-      : compactQueriedSearchMessages(results, args);
+      ? await await getStore().searchMessages({
+          query,
+          channel,
+          from,
+          to,
+          since,
+          until,
+          sort,
+          limit: args.limit,
+          offset: args.cursor,
+        }).then((results) => ({ results, count: results.length, query, compact: false }))
+      : compactPreviewPage(await await getStore().searchMessagePreviews({
+          query,
+          channel,
+          from,
+          to,
+          since,
+          until,
+          sort,
+          ...resolveMcpPageOptions(args),
+        }), getStore().describeListOrder("search", { sort }), {
+          key: "results",
+          query,
+          hint: "Preview page. Use get_message with an id for one full message; page with cursor until has_more is false.",
+        });
     return {
       content: [{ type: "text", text: jsonText(payload) }],
     };
@@ -588,19 +598,19 @@ export function registerMessagingTools(
     },
   }, async (args: Record<string, any>) => {
     const { channel, session_id } = args;
-    const window = resolveMcpWindow(args);
     const verbose = args.verbose === true;
-    const messages = await await getStore().getPinnedMessages({
-      channel,
-      session_id,
-      limit: verbose ? args.limit : window.limit + 1,
-      offset: verbose ? args.cursor : window.offset,
-    });
-
-    // `get_pinned_messages` queries getPinnedMessages(), which orders by
-    // pinned_at DESC — a different FIELD and a different DIRECTION from a
-    // message read. Disclosing the message descriptor here was wrong in both.
-    const payload = verbose ? messages : compactQueriedMessages(messages, args, PINNED_LIST_ORDER);
+    const payload = verbose
+      ? await await getStore().getPinnedMessages({
+          channel,
+          session_id,
+          limit: args.limit,
+          offset: args.cursor,
+        })
+      : compactPreviewPage(await await getStore().readPinnedMessagePreviews({
+          channel,
+          session_id,
+          ...resolveMcpPageOptions(args),
+        }), PINNED_LIST_ORDER);
     return {
       content: [{ type: "text", text: jsonText(payload) }],
     };

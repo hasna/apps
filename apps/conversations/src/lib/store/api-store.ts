@@ -53,6 +53,7 @@ import {
 import {
   resolveExportFormat,
   resolveIso8601Date,
+  resolveAnalyticsLimit,
   resolvePresentString,
 } from "../strict-query-values.js";
 import type {
@@ -737,15 +738,24 @@ export class ApiStore implements ConversationsStore {
 
   // ── topics ────────────────────────────────────────────────────────────────────
   getChannelTopics: ConversationsStore["getChannelTopics"] = async (channelName, opts) => {
-    const body = await this.get<{ topics?: unknown[] }>(`/topics/channel/${encodeURIComponent(normalizeChannelName(channelName))}`, { limit: opts?.limit, since: normalizeSince(opts?.since) });
+    const body = await this.get<{ topics?: unknown[] }>(`/topics/channel/${encodeURIComponent(normalizeChannelName(channelName))}`, {
+      limit: opts?.limit === undefined ? undefined : resolveAnalyticsLimit(opts.limit, "limit", 100),
+      since: normalizeSince(opts?.since),
+    });
     return (body.topics ?? []) as never;
   };
   getSessionTopics: ConversationsStore["getSessionTopics"] = async (sessionId, opts) => {
-    const body = await this.get<{ topics?: unknown[] }>(`/topics/session/${encodeURIComponent(sessionId)}`, { limit: opts?.limit });
+    const body = await this.get<{ topics?: unknown[] }>(`/topics/session/${encodeURIComponent(sessionId)}`, {
+      limit: opts?.limit === undefined ? undefined : resolveAnalyticsLimit(opts.limit, "limit", 100),
+    });
     return (body.topics ?? []) as never;
   };
   getTrendingTopics: ConversationsStore["getTrendingTopics"] = async (opts) => {
-    const body = await this.get<{ topics?: unknown[] }>("/topics/trending", { project_id: opts?.project_id, hours: opts?.hours, top_n: opts?.top_n });
+    const body = await this.get<{ topics?: unknown[] }>("/topics/trending", {
+      project_id: opts?.project_id,
+      hours: opts?.hours,
+      top_n: opts?.top_n === undefined ? undefined : resolveAnalyticsLimit(opts.top_n, "top_n", 20),
+    });
     return (body.topics ?? []) as never;
   };
 
@@ -769,7 +779,10 @@ export class ApiStore implements ConversationsStore {
 
   // ── summary ───────────────────────────────────────────────────────────────────
   getConversationSummary: ConversationsStore["getConversationSummary"] = async (sessionOrChannel, opts) => {
-    const body = await this.get<{ summary: unknown } | null>(`/summary/${encodeURIComponent(sessionOrChannel)}`, opts as Q);
+    const body = await this.get<{ summary: unknown } | null>(`/summary/${encodeURIComponent(sessionOrChannel)}`, {
+      ...(opts ?? {}),
+      limit: opts?.limit === undefined ? undefined : resolveAnalyticsLimit(opts.limit, "limit", 50),
+    } as Q);
     return (body?.summary ?? null) as never;
   };
 

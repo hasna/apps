@@ -2764,11 +2764,49 @@ describe("G2 strict collection filters on /v1", () => {
     expect(res.status).toBe(200);
   });
 
+  test("pinned rejects present-but-empty optional filters before any query runs", async () => {
+    for (const name of ["channel", "session", "session_id"]) {
+      const mark = activeFakeClient!.__debug.manyCalls.length;
+      const res = await fetch(`${base}/v1/messages/pinned?${name}=`, { headers: { "x-api-key": rwKey } });
+      expect(res.status).toBe(400);
+      expect(callsSince(mark).filter((call) => /FROM messages/i.test(call.sql))).toHaveLength(0);
+    }
+  });
+
+  test("for-agent rejects present-but-empty optional filters before any query runs", async () => {
+    for (const name of ["agent", "channel"]) {
+      const mark = activeFakeClient!.__debug.manyCalls.length;
+      const res = await fetch(`${base}/v1/messages/for-agent?${name}=`, { headers: { "x-api-key": rwKey } });
+      expect(res.status).toBe(400);
+      expect(callsSince(mark).filter((call) => /FROM messages/i.test(call.sql))).toHaveLength(0);
+    }
+  });
+
+  test("channel-notifications/inbox rejects empty filters and malformed since before any query runs", async () => {
+    for (const suffix of ["agent=", "channel=", "since=not-a-date"]) {
+      const mark = activeFakeClient!.__debug.manyCalls.length;
+      const res = await fetch(`${base}/v1/channel-notifications/inbox?${suffix}`, { headers: { "x-api-key": rwKey } });
+      expect(res.status).toBe(400);
+      expect(callsSince(mark).filter((call) => /FROM messages|FROM agent_presence|FROM channel_subscriptions/i.test(call.sql))).toHaveLength(0);
+    }
+  });
+
   test("analytics routes reject present-but-empty filters too", async () => {
     const trending = await fetch(`${base}/v1/topics/trending?project_id=`, { headers: { "x-api-key": rwKey } });
     expect(trending.status).toBe(400);
     const hot = await fetch(`${base}/v1/hot?channel=`, { headers: { "x-api-key": rwKey } });
     expect(hot.status).toBe(400);
+  });
+
+  test("analytics routes reject negative limits and clamp huge ones before SQL", async () => {
+    const negative = await fetch(`${base}/v1/summary/some-session?limit=-1`, { headers: { "x-api-key": rwKey } });
+    expect(negative.status).toBe(400);
+
+    const hugeMark = activeFakeClient!.__debug.manyCalls.length;
+    const huge = await fetch(`${base}/v1/topics/channel/ops?limit=50000`, { headers: { "x-api-key": rwKey } });
+    expect(huge.status).toBe(200);
+    const sql = callsSince(hugeMark).find((call) => /FROM messages/i.test(call.sql))?.sql ?? "";
+    expect(sql).toContain("LIMIT 1000");
   });
 });
 

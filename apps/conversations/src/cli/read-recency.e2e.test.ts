@@ -83,7 +83,11 @@ function newest(count: number): string[] {
 }
 
 function bodiesOf(stdout: string): string[] {
-  return (JSON.parse(stdout) as Array<{ content: string }>).map((r) => r.content);
+  const parsed = JSON.parse(stdout) as
+    | Array<{ preview?: string; content?: string }>
+    | { messages: Array<{ preview?: string; content?: string }> };
+  const rows = Array.isArray(parsed) ? parsed : parsed.messages;
+  return rows.map((r) => r.preview ?? r.content ?? "<missing-body>");
 }
 
 describe("CLI recency reads return the newest messages", () => {
@@ -124,9 +128,9 @@ describe("CLI recency reads return the newest messages", () => {
   test("read --channel --limit --json returns the newest N, chronologically", () => {
     const res = runCli(["read", "--channel", CHANNEL, "--limit", "3", "--json"], "bob");
     expect(res.exitCode).toBe(0);
-    const rows = JSON.parse(res.stdout) as Array<{ content: string; id: number }>;
-    expect(rows.map((r) => r.content)).toEqual(newest(3));
-    expect(rows[rows.length - 1].content).toBe(NEWEST);
+    const rows = (JSON.parse(res.stdout) as { messages: Array<{ preview: string; id: number }> }).messages;
+    expect(rows.map((r) => r.preview)).toEqual(newest(3));
+    expect(rows[rows.length - 1].preview).toBe(NEWEST);
     // Ascending ids: the transcript must not come back reversed.
     expect(rows.map((r) => r.id)).toEqual([...rows.map((r) => r.id)].sort((a, b) => a - b));
   });
@@ -275,7 +279,7 @@ describe("CLI recency reads return the newest messages", () => {
   test("a full --json page warns on stderr while stdout stays parseable JSON", () => {
     const res = runCli(["read", "--channel", CHANNEL, "--limit", "5", "--json"], "bob");
     expect(res.exitCode).toBe(0);
-    // stdout must remain a clean JSON array — the notice cannot go there.
+    // stdout must remain a clean JSON envelope — the notice cannot go there.
     expect(bodiesOf(res.stdout)).toEqual(newest(5));
     expect(res.stderr).toContain("More may exist");
     expect(res.stderr).toContain("--cursor 5");

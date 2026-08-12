@@ -177,4 +177,19 @@ describe("G6 summary consumes bounded restricted-safe previews", () => {
     for (const key of summary!.key_messages) expect(key.content.length).toBeLessThanOrEqual(200);
     for (const blocker of summary!.unresolved_blockers) expect(blocker.content.length).toBeLessThanOrEqual(200);
   });
+
+  test("negative and non-finite limits are rejected before SQLite can treat them as unbounded", () => {
+    insertLegacyMessage("bounded local summary", { session_id: "negative-limit-summary" });
+    expect(() => getConversationSummary("negative-limit-summary", { limit: -1 })).toThrow();
+    expect(() => getConversationSummary("negative-limit-summary", { limit: Number.POSITIVE_INFINITY })).toThrow();
+  });
+
+  test("huge limits are normalized to the shared 1000-row ceiling", () => {
+    for (let i = 0; i < 1005; i++) {
+      insertLegacyMessage(`summary row ${i}`, { session_id: "huge-limit-summary" });
+    }
+    const summary = getConversationSummary("huge-limit-summary", { limit: 50_000 });
+    expect(summary).toBeTruthy();
+    expect(summary!.message_count).toBe(1000);
+  }, 15_000);
 });

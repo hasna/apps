@@ -155,4 +155,21 @@ describe("G6 topic derivation consumes bounded restricted-safe previews", () => 
     insertLegacy("deployment deployment deployment pipeline", { channel: "topic-ordinary", session_id: "channel:topic-ordinary" });
     expect(getChannelTopics("topic-ordinary").map((t) => t.topic)).toContain("deployment");
   });
+
+  test("negative and non-finite limits are rejected before SQLite can treat them as unbounded", () => {
+    createChannel("topic-limit-reject", "tester");
+    insertLegacy("deploy deploy deploy", { channel: "topic-limit-reject", session_id: "channel:topic-limit-reject" });
+    expect(() => getChannelTopics("topic-limit-reject", { limit: -1 })).toThrow();
+    expect(() => getSessionTopics("channel:topic-limit-reject", { limit: Number.POSITIVE_INFINITY })).toThrow();
+    expect(() => getTrendingTopics({ top_n: Number.POSITIVE_INFINITY })).toThrow();
+  });
+
+  test("huge limits are normalized to the shared 1000-row ceiling", () => {
+    createChannel("topic-limit-clamp", "tester");
+    for (let i = 0; i < 1005; i++) {
+      insertLegacy(`deploy topic row ${i}`, { channel: "topic-limit-clamp", session_id: "channel:topic-limit-clamp" });
+    }
+    const topics = getChannelTopics("topic-limit-clamp", { limit: 50_000 });
+    expect(topics.map((topic) => topic.topic)).toContain("deploy");
+  }, 15_000);
 });

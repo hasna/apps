@@ -90,7 +90,9 @@ import {
   packMessagePreviewPage,
 } from "../lib/message-previews.js";
 import {
+  ANALYTICS_LIMIT_MAX,
   resolveAliasedString,
+  resolveAnalyticsLimit,
   resolveCollectionQueryOptions,
   resolveIso8601Date,
   resolvePresentString,
@@ -1556,8 +1558,14 @@ async function handleV1(
 
   // ---- pinned messages ----
   if (sub === "messages/pinned" && method === "GET") {
-    const channel = str(url.searchParams.get("channel"));
-    const session = str(url.searchParams.get("session")) ?? str(url.searchParams.get("session_id"));
+    let channel: string | undefined;
+    let session: string | undefined;
+    try {
+      channel = strictQueryString(url.searchParams, "channel");
+      session = strictAliasedQueryString(url.searchParams, "session", "session_id");
+    } catch (error) {
+      return json({ error: error instanceof Error ? error.message : String(error) }, 400);
+    }
     const collection = collectionReadOptions(url);
     const clauses = ["pinned_at IS NOT NULL"];
     const params: unknown[] = [];
@@ -1654,11 +1662,17 @@ async function handleV1(
 
   // ---- messages that @mention an agent ----
   if (sub === "messages/for-agent" && method === "GET") {
-    const who = str(url.searchParams.get("agent"));
+    let who: string | undefined;
+    let channel: string | undefined;
+    try {
+      who = strictQueryString(url.searchParams, "agent");
+      channel = strictQueryString(url.searchParams, "channel");
+    } catch (error) {
+      return json({ error: error instanceof Error ? error.message : String(error) }, 400);
+    }
     if (!who) return json({ error: "agent is required" }, 400);
     const clauses = ["mm.mentioned_agent = $1"];
     const params: unknown[] = [who.toLowerCase()];
-    const channel = str(url.searchParams.get("channel"));
     if (channel) { params.push(normalizeChannelName(channel)); clauses.push(`m.channel = $${params.length}`); }
     if (isTrue(url.searchParams.get("unread_only"))) clauses.push(`mm.notified_at IS NULL`);
     const collection = collectionReadOptions(url);
@@ -3035,7 +3049,16 @@ async function handleChannelNotifications(
   }
 
   if (sub === "channel-notifications/inbox" && method === "GET") {
-    const who = str(url.searchParams.get("agent"));
+    let who: string | undefined;
+    let channel: string | undefined;
+    let since: string | undefined;
+    try {
+      who = strictQueryString(url.searchParams, "agent");
+      channel = strictQueryString(url.searchParams, "channel");
+      since = strictIsoDateQuery(url.searchParams, "since");
+    } catch (error) {
+      return json({ error: error instanceof Error ? error.message : String(error) }, 400);
+    }
     if (!who) return json({ error: "agent is required" }, 400);
     if (!agent || who.toLowerCase() !== agent.toLowerCase()) {
       return json({ error: "notification agent must match the authenticated agent" }, 403);
@@ -3048,9 +3071,7 @@ async function handleChannelNotifications(
     const selfSenderId = resolveSelfSenderId(who, presence);
     const clauses = ["s.agent = $1", "m.channel IS NOT NULL", "m.from_agent <> $2", "m.id > s.since_message_id"];
     const params: unknown[] = [who, selfSenderId];
-    const channel = str(url.searchParams.get("channel"));
     if (channel) { params.push(normalizeChannelName(channel)); clauses.push(`m.channel = $${params.length}`); }
-    const since = str(url.searchParams.get("since"));
     if (since) { params.push(since); clauses.push(`m.created_at > $${params.length}`); }
     // Default filters to unread unless explicitly unread_only=false (matches local).
     if (url.searchParams.get("unread_only") !== "false") clauses.push("snr.message_id IS NULL");
@@ -3899,9 +3920,10 @@ async function handleAnalytics(
   const topicChannelMatch = sub.match(/^topics\/channel\/([^/]+)$/);
   if (topicChannelMatch && method === "GET") {
     const channel = normalizeChannelName(decodeURIComponent(topicChannelMatch[1]));
-    const limit = clampLimit(url.searchParams.get("limit"), 100, 1000);
+    let limit: number;
     let since: string | undefined;
     try {
+      limit = resolveAnalyticsLimit(url.searchParams.get("limit"), "limit", 100, ANALYTICS_LIMIT_MAX);
       since = strictIsoDateQuery(url.searchParams, "since");
     } catch (error) {
       return json({ error: error instanceof Error ? error.message : String(error) }, 400);
@@ -3919,7 +3941,12 @@ async function handleAnalytics(
   const topicSessionMatch = sub.match(/^topics\/session\/([^/]+)$/);
   if (topicSessionMatch && method === "GET") {
     const sid = decodeURIComponent(topicSessionMatch[1]);
-    const limit = clampLimit(url.searchParams.get("limit"), 100, 1000);
+    let limit: number;
+    try {
+      limit = resolveAnalyticsLimit(url.searchParams.get("limit"), "limit", 100, ANALYTICS_LIMIT_MAX);
+    } catch (error) {
+      return json({ error: error instanceof Error ? error.message : String(error) }, 400);
+    }
     const rows = await client.many<{ preview_source: string }>(
       `SELECT ${pgBoundedPreviewSourceSql()} FROM messages
        WHERE session_id = $1 ORDER BY created_at DESC LIMIT ${limit}`,
@@ -3929,9 +3956,10 @@ async function handleAnalytics(
   }
   if (sub === "topics/trending" && method === "GET") {
     const hours = Number(str(url.searchParams.get("hours")) ?? "24") || 24;
-    const topN = Number(str(url.searchParams.get("top_n")) ?? "20") || 20;
+    let topN: number;
     let projectId: string | undefined;
     try {
+      topN = resolveAnalyticsLimit(url.searchParams.get("top_n"), "top_n", 20, ANALYTICS_LIMIT_MAX);
       projectId = strictQueryString(url.searchParams, "project_id");
     } catch (error) {
       return json({ error: error instanceof Error ? error.message : String(error) }, 400);
@@ -4025,7 +4053,12 @@ async function handleAnalytics(
   const summaryMatch = sub.match(/^summary\/([^/]+)$/);
   if (summaryMatch && method === "GET") {
     const key = decodeURIComponent(summaryMatch[1]);
-    const limit = clampLimit(url.searchParams.get("limit"), 50, 1000);
+    let limit: number;
+    try {
+      limit = resolveAnalyticsLimit(url.searchParams.get("limit"), "limit", 50, ANALYTICS_LIMIT_MAX);
+    } catch (error) {
+      return json({ error: error instanceof Error ? error.message : String(error) }, 400);
+    }
     const isChannelRow = key.startsWith("channel:") ? true : Boolean(await client.get(`SELECT 1 FROM channels WHERE name = $1`, [key]));
     const filterCol = isChannelRow ? "channel" : "session_id";
     const rows = await client.many<Record<string, unknown>>(

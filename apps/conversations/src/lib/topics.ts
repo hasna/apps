@@ -2,6 +2,7 @@ import { getDb } from "./db.js";
 import { extractTopics, type TopicWeight } from "./topic-extract.js";
 import { boundedPreviewSourceSql, restrictedCollectionSqlPredicate } from "./message-previews.js";
 import { redactSensitiveText } from "./content-safety.js";
+import { resolveAnalyticsLimit } from "./strict-query-values.js";
 
 /**
  * Build the extractor's corpus from bounded, redacted, unrestricted rows only.
@@ -27,7 +28,7 @@ export { extractTopics, type TopicWeight };
  */
 export function getChannelTopics(channelName: string, opts?: { limit?: number; since?: string }): TopicWeight[] {
   const db = getDb();
-  const limit = opts?.limit ?? 100;
+  const limit = resolveAnalyticsLimit(opts?.limit, "limit", 100);
   const sinceClause = opts?.since ? "AND created_at > ?" : "";
   const params: (string | number)[] = [channelName];
   if (opts?.since) params.push(opts.since);
@@ -46,7 +47,7 @@ export function getChannelTopics(channelName: string, opts?: { limit?: number; s
  */
 export function getSessionTopics(sessionId: string, opts?: { limit?: number }): TopicWeight[] {
   const db = getDb();
-  const limit = opts?.limit ?? 100;
+  const limit = resolveAnalyticsLimit(opts?.limit, "limit", 100);
 
   const rows = db.prepare(
     `SELECT ${boundedPreviewSourceSql()} FROM messages
@@ -63,7 +64,7 @@ export function getSessionTopics(sessionId: string, opts?: { limit?: number }): 
 export function getTrendingTopics(opts?: { project_id?: string; hours?: number; top_n?: number }): TopicWeight[] {
   const db = getDb();
   const hours = opts?.hours ?? 24;
-  const topN = opts?.top_n ?? 20;
+  const topN = resolveAnalyticsLimit(opts?.top_n, "top_n", 20);
 
   let where = `WHERE created_at > strftime('%Y-%m-%dT%H:%M:%f', 'now', '-${hours} hours')`;
   const params: string[] = [];

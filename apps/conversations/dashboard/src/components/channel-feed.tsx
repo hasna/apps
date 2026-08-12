@@ -2,7 +2,7 @@ import * as React from "react";
 import { ArrowLeftIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Markdown } from "@/components/markdown";
-import type { Message, MessagePage } from "@/types";
+import type { MessagePage } from "@/types";
 
 interface ChannelFeedProps {
   channelName: string;
@@ -38,7 +38,7 @@ function agentColor(name: string): string {
 }
 
 export function ChannelFeed({ channelName, onBack }: ChannelFeedProps) {
-  const [messages, setMessages] = React.useState<Message[]>([]);
+  const [page, setPage] = React.useState<MessagePage | null>(null);
   const [limit, setLimit] = React.useState(50);
 
   React.useEffect(() => {
@@ -46,8 +46,7 @@ export function ChannelFeed({ channelName, onBack }: ChannelFeedProps) {
       try {
         const res = await fetch(`/api/messages?channel=${encodeURIComponent(channelName)}&limit=${limit}`);
         const data = (await res.json()) as MessagePage;
-        // API returns newest first — keep that order for feed (newest on top)
-        setMessages(data.messages);
+        setPage(data);
       } catch {
         // ignore
       }
@@ -56,6 +55,8 @@ export function ChannelFeed({ channelName, onBack }: ChannelFeedProps) {
     const timer = setInterval(load, 2000);
     return () => clearInterval(timer);
   }, [channelName, limit]);
+
+  const messages = page?.messages ?? [];
 
   return (
     <div>
@@ -100,7 +101,7 @@ export function ChannelFeed({ channelName, onBack }: ChannelFeedProps) {
               </div>
             </article>
           ))}
-          {messages.length >= limit && (
+          {page?.has_more && (
             <div className="flex justify-center pt-2">
               <Button variant="outline" size="sm" onClick={() => setLimit((prev) => prev + 50)}>
                 Load more

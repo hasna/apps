@@ -236,6 +236,23 @@ describe("G3 — MCP envelopes preserve the store's collection contract", () => 
     }
   });
 
+  test("search_messages carries every bound the store page declared", async () => {
+    await call("send_message", { to: "peek-search-envelope", from: "peek-writer", content: "search envelope probe alpha" });
+    const envelope = await call("search_messages", { query: "search envelope probe", limit: 5 });
+    for (const field of CONTRACT_FIELDS) {
+      expect(Object.keys(envelope)).toContain(field);
+    }
+  });
+
+  test("get_pinned_messages carries every bound the store page declared", async () => {
+    const sent = await call("send_message", { to: "peek-pinned-envelope", from: "peek-writer", content: "pinned envelope probe" });
+    await call("pin_message", { id: (sent as { id: number }).id });
+    const envelope = await call("get_pinned_messages", { limit: 5 });
+    for (const field of CONTRACT_FIELDS) {
+      expect(Object.keys(envelope)).toContain(field);
+    }
+  });
+
   /**
    * The one that matters. A byte cap small enough to drop rows must NOT be
    * reported as a complete page: `skipped_count` is non-zero and `has_more` is

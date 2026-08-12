@@ -273,31 +273,41 @@ export function registerMessagingCommands(program: Command): void {
         offset: opts.json ? opts.cursor : window.offset,
         unread_only: opts.unread || opts.unreadOnly,
       };
-      const messages = await getStore().readMessages(query);
-      const page = opts.json
-        ? { items: messages, hasMore: false, nextCursor: null, count: messages.length }
-        : pageFromQuery(messages, window, { newestWindow: resolveReadWindow(query).newestWindow });
-
-      if (opts.markRead) {
-        const reader = resolveIdentity(opts.to);
-        const ids = page.items.filter((m) => !m.read_at).map((m) => m.id);
-        if (ids.length > 0) await await getStore().markReadByIds(ids, reader);
-      }
-
-      if (messages.length === 0) {
-        discloseEmptyResult({
-          channel: opts.channel,
-          sender: senderFilter.sender,
-          to: opts.to,
-          session: opts.session,
-          since: opts.since,
-        }, { senderFlag: senderFilter.flag });
-      }
-
       if (opts.json) {
-        printJson(messages);
-        warnIfPageFull(messages.length, query.limit);
+        const page = await getStore().readMessagePreviews(query);
+        if (opts.markRead) {
+          const reader = resolveIdentity(opts.to);
+          const ids = page.messages.filter((message) => message.unread).map((message) => message.id);
+          if (ids.length > 0) await await getStore().markReadByIds(ids, reader);
+        }
+        if (page.messages.length === 0) {
+          discloseEmptyResult({
+            channel: opts.channel,
+            sender: senderFilter.sender,
+            to: opts.to,
+            session: opts.session,
+            since: opts.since,
+          }, { senderFlag: senderFilter.flag });
+        }
+        printJson(page);
+        warnIfPageFull(page.count + page.skipped_count, query.limit);
       } else {
+        const messages = await getStore().readMessages(query);
+        const page = pageFromQuery(messages, window, { newestWindow: resolveReadWindow(query).newestWindow });
+        if (opts.markRead) {
+          const reader = resolveIdentity(opts.to);
+          const ids = page.items.filter((message) => !message.read_at).map((message) => message.id);
+          if (ids.length > 0) await await getStore().markReadByIds(ids, reader);
+        }
+        if (messages.length === 0) {
+          discloseEmptyResult({
+            channel: opts.channel,
+            sender: senderFilter.sender,
+            to: opts.to,
+            session: opts.session,
+            since: opts.since,
+          }, { senderFlag: senderFilter.flag });
+        }
         if (messages.length === 0) {
           printLine(chalk.dim("No messages found."));
         } else {
@@ -901,18 +911,22 @@ used for — auditing a sender or a channel, which is an ABSENCE claim.
     .option("-j, --json", "Output as JSON")
     .action(async (opts) => {
       const window = getCliWindow({ limit: opts.limit, cursor: opts.cursor });
-      const messages = await await getStore().getPinnedMessages({
-        channel: opts.channel,
-        session_id: opts.session,
-        limit: opts.json ? opts.limit : queryLimitFor(window),
-        offset: opts.json ? opts.cursor : window.offset,
-      });
-      const page = opts.json
-        ? { items: messages, count: messages.length, total: messages.length, hasMore: false, nextCursor: null }
-        : pageFromQuery(messages, window);
       if (opts.json) {
-        printJson(messages);
+        const page = await await getStore().readPinnedMessagePreviews({
+          channel: opts.channel,
+          session_id: opts.session,
+          limit: opts.limit,
+          offset: opts.cursor,
+        });
+        printJson(page);
       } else {
+        const messages = await await getStore().getPinnedMessages({
+          channel: opts.channel,
+          session_id: opts.session,
+          limit: queryLimitFor(window),
+          offset: window.offset,
+        });
+        const page = pageFromQuery(messages, window);
         if (messages.length === 0) {
           printLine(chalk.dim("No pinned messages."));
         } else {

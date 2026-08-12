@@ -14,6 +14,8 @@ export interface CollectionQueryOptions {
   timeoutMs: number;
 }
 
+export const ANALYTICS_LIMIT_MAX = 1000;
+
 const ISO_8601_DATE = /^(\d{4})-(\d{2})-(\d{2})(?:T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,9})?(?:Z|[+-](?:(?:0\d|1[0-3]):[0-5]\d|14:00)))?$/;
 
 export function resolvePresentString(value: unknown, name: string): string | undefined {
@@ -62,6 +64,27 @@ export function resolveExportFormat(value: unknown): "json" | "csv" {
   const format = resolvePresentString(value, "format") ?? "json";
   if (format !== "json" && format !== "csv") throw new Error("format must be json or csv");
   return format;
+}
+
+function parsePositiveFiniteInteger(value: unknown, name: string): number | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value === "string" && value.trim() === "") throw new Error(`${name} must be a positive integer`);
+  const parsed = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`${name} must be a positive integer`);
+  }
+  return parsed;
+}
+
+export function resolveAnalyticsLimit(
+  value: unknown,
+  name: string,
+  defaultValue: number,
+  max = ANALYTICS_LIMIT_MAX,
+): number {
+  const parsed = parsePositiveFiniteInteger(value, name);
+  if (parsed === undefined) return defaultValue;
+  return Math.min(parsed, max);
 }
 
 /**

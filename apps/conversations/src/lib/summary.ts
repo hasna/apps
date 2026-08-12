@@ -5,6 +5,7 @@ import {
   buildMessagePreview,
   restrictedCollectionSqlPredicate,
 } from "./message-previews.js";
+import { resolveAnalyticsLimit } from "./strict-query-values.js";
 
 export interface ConversationSummary {
   session_id: string;
@@ -59,7 +60,7 @@ interface SummaryRow {
  */
 export function getConversationSummary(sessionOrChannel: string, opts?: SummaryOptions): ConversationSummary | null {
   const db = getDb();
-  const limit = opts?.limit ?? 50;
+  const limit = resolveAnalyticsLimit(opts?.limit, "limit", 50);
 
   // Detect if this is a channel or session
   const isChannel = sessionOrChannel.startsWith("channel:") || db.prepare("SELECT 1 FROM channels WHERE name = ?").get(sessionOrChannel);

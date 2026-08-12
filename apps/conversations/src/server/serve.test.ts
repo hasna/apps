@@ -176,9 +176,9 @@ describe("API /api/messages/search", () => {
     sendMessage({ from: "search-agent", to: "other", content: "no match here" });
     const res = await fetch(`${base()}/api/messages/search?q=unique-search-term-xyz`);
     expect(res.status).toBe(200);
-    const data = await res.json() as any[];
-    expect(data).toHaveLength(1);
-    expect(data[0].content).toBe("unique-search-term-xyz");
+    const data = await res.json() as { messages: Array<{ preview: string }> };
+    expect(data.messages).toHaveLength(1);
+    expect(data.messages[0].preview).toBe("unique-search-term-xyz");
   });
 
   test("returns 400 when query is missing", async () => {
@@ -200,17 +200,17 @@ describe("API /api/messages/search", () => {
     sendMessage({ from: "a", to: "b", content: "searchlimit-item-2" });
     sendMessage({ from: "a", to: "b", content: "searchlimit-item-3" });
     const res = await fetch(`${base()}/api/messages/search?q=searchlimit-item&limit=2`);
-    const data = await res.json() as any[];
-    expect(data).toHaveLength(2);
+    const data = await res.json() as { messages: unknown[] };
+    expect(data.messages).toHaveLength(2);
   });
 
   test("filters by from param", async () => {
     sendMessage({ from: "search-sender-a", to: "b", content: "searchfrom-test" });
     sendMessage({ from: "search-sender-b", to: "b", content: "searchfrom-test" });
     const res = await fetch(`${base()}/api/messages/search?q=searchfrom-test&from=search-sender-a`);
-    const data = await res.json() as any[];
-    expect(data).toHaveLength(1);
-    expect(data[0].from_agent).toBe("search-sender-a");
+    const data = await res.json() as { messages: Array<{ from_agent: string }> };
+    expect(data.messages).toHaveLength(1);
+    expect(data.messages[0].from_agent).toBe("search-sender-a");
   });
 
   test("filters by channel param", async () => {
@@ -221,16 +221,18 @@ describe("API /api/messages/search", () => {
     sendMessage({ from: "a", to: "search-sp", content: "searchchannel-test", channel: "search-sp" });
     sendMessage({ from: "a", to: "b", content: "searchchannel-test" });
     const res = await fetch(`${base()}/api/messages/search?q=searchchannel-test&channel=search-sp`);
-    const data = await res.json() as any[];
-    expect(data).toHaveLength(1);
-    expect(data[0].channel).toBe("search-sp");
+    const data = await res.json() as { messages: Array<{ channel: string }> };
+    expect(data.messages).toHaveLength(1);
+    expect(data.messages[0].channel).toBe("search-sp");
   });
 
-  test("returns empty array when no matches", async () => {
+  test("returns an empty preview envelope when no matches", async () => {
     const res = await fetch(`${base()}/api/messages/search?q=absolutely-nothing-matches-this-9876`);
     expect(res.status).toBe(200);
-    const data = await res.json() as any[];
-    expect(data).toEqual([]);
+    const data = await res.json() as { messages: unknown[]; has_more: boolean; next_cursor: number | null };
+    expect(data.messages).toEqual([]);
+    expect(data.has_more).toBe(false);
+    expect(data.next_cursor).toBeNull();
   });
 });
 
@@ -835,6 +837,15 @@ describe("G3 dashboard collection routes preserve the page envelope", () => {
 
   test("GET /api/messages/pinned returns the envelope, not a bare array", async () => {
     const res = await fetch(`${base()}/api/messages/pinned?limit=5`);
+    expect(res.status).toBe(200);
+    const body = await res.json() as Record<string, unknown>;
+    expect(Array.isArray(body)).toBe(false);
+    for (const field of CONTRACT_FIELDS) expect(Object.keys(body)).toContain(field);
+  });
+
+  test("GET /api/messages/search returns the envelope, not a bare array", async () => {
+    sendMessage({ from: "search-env-a", to: "search-env-b", content: "dashboard envelope search probe" });
+    const res = await fetch(`${base()}/api/messages/search?q=envelope&limit=5`);
     expect(res.status).toBe(200);
     const body = await res.json() as Record<string, unknown>;
     expect(Array.isArray(body)).toBe(false);

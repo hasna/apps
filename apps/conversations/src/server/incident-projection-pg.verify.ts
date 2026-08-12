@@ -1,37 +1,36 @@
 #!/usr/bin/env bun
 /**
- * Live-PostgreSQL incident-projection verifier, driven through the PUBLIC HTTP
+ * Live-PostgreSQL incident-projection verifier, driven through the public HTTP
  * routes.
  *
- * Incident projection has two implementations — SQLite (src/lib) and PostgreSQL
- * (src/server) — and only the SQLite half was ever asserted. This runs the
- * shared scenario list from ./incident-projection-scenarios.ts against a real
- * database, through `POST /v1/incident-projections` and
- * `GET /v1/incident-projections/{event_id}`, so what is proven is the behaviour
- * a client actually reaches rather than a private helper's return value. No
- * server internals are exported to make this possible.
+ * Incident projection has two implementations - SQLite (src/lib) and
+ * PostgreSQL (src/server) - and only the SQLite half was ever asserted. This
+ * runs the shared scenario list from ./incident-projection-scenarios.ts against
+ * a real database, through `POST /v1/incident-projections` and
+ * `GET /v1/incident-projections/{event_id}`, so what is proven is the behavior
+ * a client actually reaches rather than a private helper's return value.
  *
- * CAPABILITY SAFETY. This never prints a DSN, a signing key, an API key, or any
- * connection detail; it reports only the env KEY NAME that was missing. When the
- * database is unavailable it DECLINES — prints the exact missing gate and exits
- * 0 — because inventing a pass is worse than admitting the gate did not run.
- * Pass `--require-live` (CI, once a database exists) to turn a decline into a
- * hard failure.
+ * Capability safety: this never prints a DSN, a signing key, an API key, or
+ * any connection detail; it reports only the env key name that was missing.
+ * When the isolated database is unavailable it declines - prints the exact
+ * missing gate and exits 0. Pass `--require-live` to turn a decline into a hard
+ * failure.
  *
  * The deterministic substitute for a declined run is
- * ./incident-projection-equivalence.test.ts, which runs the SAME scenarios
+ * ./incident-projection-equivalence.test.ts, which runs the same scenarios
  * against the local engine.
  *
- * ISOLATION. Every scenario runs inside one transaction that is ALWAYS rolled
- * back, so pointing this at a populated database mutates nothing.
+ * Isolation: the verifier provisions a disposable schema under the owner DSN,
+ * runs migrations plus the public HTTP scenarios inside that schema, then drops
+ * the schema. A failed drop fails the verifier.
  */
 
-import { startApiServer } from "./api.js";
+import { randomUUID } from "crypto";
+import { mintApiKey, ApiKeyStore, verifyApiKey } from "@hasna/contracts/auth";
 import { createPgPool } from "../generated/storage-kit/pool.js";
 import { createQueryClient } from "../generated/storage-kit/query.js";
-import { resolveStorageMode } from "../generated/storage-kit/mode.js";
 import { PG_MIGRATIONS } from "../lib/pg-migrations.js";
-import { mintApiKey, ApiKeyStore, verifyApiKey } from "@hasna/contracts/auth";
+import { startApiServer } from "./api.js";
 import {
   appendScenarios,
   lookupScenarios,
@@ -39,7 +38,7 @@ import {
 } from "./incident-projection-scenarios.js";
 
 const LABEL = "INCIDENT_PG_VERIFY";
-const DSN_KEYS = ["HASNA_CONVERSATIONS_DATABASE_URL", "CONVERSATIONS_DATABASE_URL"];
+const OWNER_DSN_KEYS = ["HASNA_CONVERSATIONS_DATABASE_URL_OWNER", "CONVERSATIONS_DATABASE_URL_OWNER"];
 
 interface Check {
   name: string;
@@ -47,16 +46,13 @@ interface Check {
   observed: string;
 }
 
-/**
- * Presence only — resolveStorageMode reports WHICH key was set, never its value.
- */
 export function liveGateStatus(env: NodeJS.ProcessEnv = process.env): {
   available: boolean;
   missingGate: string | null;
 } {
-  const resolution = resolveStorageMode("conversations", env as Record<string, string | undefined>);
-  if (!resolution.databaseUrlPresent) {
-    return { available: false, missingGate: DSN_KEYS.join(" or ") };
+  const ownerDsn = env.HASNA_CONVERSATIONS_DATABASE_URL_OWNER || env.CONVERSATIONS_DATABASE_URL_OWNER;
+  if (!ownerDsn) {
+    return { available: false, missingGate: OWNER_DSN_KEYS.join(" or ") };
   }
   if (!env.HASNA_CONVERSATIONS_API_SIGNING_KEY && !env.HASNA_API_SIGNING_KEY) {
     return { available: false, missingGate: "HASNA_CONVERSATIONS_API_SIGNING_KEY or HASNA_API_SIGNING_KEY" };
@@ -64,7 +60,18 @@ export function liveGateStatus(env: NodeJS.ProcessEnv = process.env): {
   return { available: true, missingGate: null };
 }
 
-/** Map an HTTP outcome onto the engine-agnostic scenario vocabulary. */
+function appendSearchPath(connectionString: string, schema: string): string {
+  const url = new URL(connectionString);
+  const existing = url.searchParams.get("options");
+  const searchPath = `-csearch_path=${schema}`;
+  url.searchParams.set("options", existing ? `${existing} ${searchPath}` : searchPath);
+  return url.toString();
+}
+
+function quoteIdent(identifier: string): string {
+  return `"${identifier.replace(/"/g, "\"\"")}"`;
+}
+
 function outcomeOf(status: number, body: { projection?: { replayed?: boolean } }): string {
   if (status === 409) return "conflict";
   if (status === 400) return "conflict";
@@ -100,7 +107,6 @@ async function runScenarios(baseUrl: string, apiKey: string): Promise<Check[]> {
     });
   }
 
-  // The public blocker read must remain a bounded preview page, not a body dump.
   const blockers = await fetch(`${baseUrl}/v1/messages/blockers?limit=5`, {
     headers: { "x-api-key": apiKey },
   });
@@ -129,27 +135,36 @@ export async function verifyIncidentProjectionPg(argv: string[] = []): Promise<n
     return requireLive ? 1 : 0;
   }
 
-  const connectionString = process.env.HASNA_CONVERSATIONS_DATABASE_URL_OWNER
-    || process.env.CONVERSATIONS_DATABASE_URL_OWNER
-    || process.env.HASNA_CONVERSATIONS_DATABASE_URL
-    || process.env.CONVERSATIONS_DATABASE_URL!;
+  const ownerConnectionString = process.env.HASNA_CONVERSATIONS_DATABASE_URL_OWNER
+    || process.env.CONVERSATIONS_DATABASE_URL_OWNER!;
+  const signingSecret = process.env.HASNA_CONVERSATIONS_API_SIGNING_KEY
+    || process.env.HASNA_API_SIGNING_KEY!;
+  const schemaName = `incident_pg_verify_${randomUUID().replace(/-/g, "")}`;
+  const schemaConnectionString = appendSearchPath(ownerConnectionString, schemaName);
 
+  const adminPool = createPgPool({
+    connectionString: ownerConnectionString,
+    applicationName: "conversations-incident-pg-verify-admin",
+    max: 1,
+  });
+  const adminClient = createQueryClient(adminPool);
   const pool = createPgPool({
-    connectionString,
+    connectionString: schemaConnectionString,
     applicationName: "conversations-incident-pg-verify",
     max: 2,
   });
   const client = createQueryClient(pool);
+
   let server: ReturnType<typeof startApiServer> | undefined;
   let failures = 0;
 
   try {
+    await adminClient.execute(`CREATE SCHEMA ${quoteIdent(schemaName)}`);
     for (const sql of PG_MIGRATIONS) await client.execute(sql);
+
     const keys = new ApiKeyStore(client);
     await keys.ensureSchema();
 
-    const signingSecret = process.env.HASNA_CONVERSATIONS_API_SIGNING_KEY
-      || process.env.HASNA_API_SIGNING_KEY!;
     const verifier = verifyApiKey({
       app: "conversations",
       signingSecret,
@@ -166,7 +181,7 @@ export async function verifyIncidentProjectionPg(argv: string[] = []): Promise<n
         incidentProjector: SCENARIO_CONTEXT,
       },
     });
-    const baseUrl = `http://127.0.0.1:${server.port}`;
+
     const apiKey = mintApiKey({
       app: "conversations",
       agent: "incident-pg-verifier",
@@ -174,6 +189,7 @@ export async function verifyIncidentProjectionPg(argv: string[] = []): Promise<n
       signingSecret,
     }).token;
 
+    const baseUrl = `http://127.0.0.1:${server.port}`;
     const checks = await runScenarios(baseUrl, apiKey);
     for (const check of checks) {
       const ok = check.expected === check.observed;
@@ -182,20 +198,23 @@ export async function verifyIncidentProjectionPg(argv: string[] = []): Promise<n
     }
   } finally {
     server?.stop(true);
-    // Leave the database exactly as it was found.
-    await client.execute(
-      "DELETE FROM incident_projections WHERE tenant_id = $1 AND authority_id = $2",
-      [SCENARIO_CONTEXT.tenant_id, SCENARIO_CONTEXT.authority_id],
-    ).catch(() => undefined);
     await pool.end();
+    try {
+      await adminClient.execute(`DROP SCHEMA ${quoteIdent(schemaName)} CASCADE`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      failures++;
+      console.log(`${LABEL}: FAIL cleanup expected=dropped_schema observed=${message}`);
+    } finally {
+      await adminPool.end();
+    }
   }
 
   console.log(`${LABEL}: ${failures === 0 ? "PASS" : "FAIL"} total_failures=${failures}`);
   return failures === 0 ? 0 : 1;
 }
 
-const isDirect = import.meta.main;
-if (isDirect) {
+if (import.meta.main) {
   verifyIncidentProjectionPg(process.argv.slice(2))
     .then((code) => process.exit(code))
     .catch((error) => {

@@ -348,12 +348,22 @@ export function startDashboardServer(port = 0, host?: string) {
         try {
           const q = resolvePresentString(url.searchParams.get("q"), "q");
           if (!q) return jsonResponse({ error: "Query parameter 'q' is required" }, 400);
-          const limit = resolveCollectionQueryOptions(url.searchParams).limit;
+          const collection = resolveCollectionQueryOptions(url.searchParams);
           const channel = resolvePresentString(url.searchParams.get("channel"), "channel");
           const from = resolvePresentString(url.searchParams.get("from"), "from");
           const to = resolvePresentString(url.searchParams.get("to"), "to");
-          const messages = await getStore().searchMessages({ query: q, channel, from, to, limit });
-          return jsonResponse(messages);
+          const page = await getStore().searchMessagePreviews({
+            query: q,
+            channel,
+            from,
+            to,
+            limit: collection.limit,
+            offset: collection.offset,
+            max_bytes: collection.maxBytes,
+            preview_bytes: collection.previewBytes,
+            timeout_ms: collection.timeoutMs,
+          });
+          return jsonResponse(pageWithFieldFilter(page, url.searchParams.get("fields")));
         } catch (e) {
           return badRequest(e);
         }
