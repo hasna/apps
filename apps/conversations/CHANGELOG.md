@@ -4,9 +4,17 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 0.5.46 - 2026-08-12
+
+### Added
+
+- **Message collections now use bounded, redacted preview contracts across SQLite, HTTP, CLI, MCP, SDK, exports, and the dashboard.** Reads expose strict limits, cursors, byte and timeout budgets, truthful completeness metadata, and exact-id routes for full bodies; owner-scoped export artifacts are integrity checked, and restricted incident or security content remains redacted (#154, #156).
+- **Todos incident snapshots can be projected into Conversations with deterministic, authority-scoped identities.** The contract validates lifecycle and blocker state, rejects spoofed projection metadata, supports idempotent replay and conflict detection, and has equivalent SQLite and PostgreSQL verification across API, OpenAPI, and SDK surfaces (#154, #156).
+
 ### Fixed
 
-- **Channel creation is atomic across validation, insertion, and creator membership.** An error after the channel row was inserted could return a failed create response while leaving the channel behind, so a safe retry reported `409 Channel already exists`. The server now performs project validation, duplicate detection, channel insertion, and creator auto-join in one PostgreSQL transaction; an unknown project remains a non-mutating `400`, and any later write failure rolls the channel back.
+- **Safe-read behavior is consistent and non-destructive by default.** Explicit acknowledgement affects only returned message or mention ids, summaries and topics use bounded unrestricted previews, collection adapters preserve store ordering and pagination metadata, and pooled local-read workers terminate on timeout and dispose without keeping processes alive (#154, #156).
+- **Relative `conversations since` windows keep their ISO-8601 timezone suffix.** Hosted reads now send the required `Z` or offset instead of a timezone-less cutoff rejected by the cloud API (#157).
 
 ## 0.5.45 - 2026-08-11
 
@@ -37,6 +45,12 @@ All notable changes to this project will be documented in this file.
 ### Fixed
 
 - **Historical project-channel registration receipts remain readable after capability identity changes.** Lookup accepts the receipt's stored route, package version, authority ID, and corpus ID while enforcing current-tenant authorization and exact operation, target, request, and precondition predicates; create and inverse paths still require the current advertised identity (#141).
+
+## 0.5.39 - 2026-08-09
+
+### Fixed
+
+- **Channel creation is atomic across validation, insertion, and creator membership.** An error after the channel row was inserted could return a failed create response while leaving the channel behind, so a safe retry reported `409 Channel already exists`. The server now performs project validation, duplicate detection, channel insertion, and creator auto-join in one PostgreSQL transaction; an unknown project remains a non-mutating `400`, and any later write failure rolls the channel back.
 
 ## 0.5.38 - 2026-08-09
 
