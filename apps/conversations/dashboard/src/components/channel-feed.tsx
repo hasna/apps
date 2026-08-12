@@ -2,7 +2,7 @@ import * as React from "react";
 import { ArrowLeftIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Markdown } from "@/components/markdown";
-import type { Message } from "@/types";
+import type { Message, MessagePage } from "@/types";
 
 interface ChannelFeedProps {
   channelName: string;
@@ -45,9 +45,9 @@ export function ChannelFeed({ channelName, onBack }: ChannelFeedProps) {
     const load = async () => {
       try {
         const res = await fetch(`/api/messages?channel=${encodeURIComponent(channelName)}&limit=${limit}`);
-        const data = (await res.json()) as Message[];
+        const data = (await res.json()) as MessagePage;
         // API returns newest first — keep that order for feed (newest on top)
-        setMessages(data);
+        setMessages(data.messages);
       } catch {
         // ignore
       }
@@ -96,7 +96,7 @@ export function ChannelFeed({ channelName, onBack }: ChannelFeedProps) {
                 )}
               </div>
               <div className="text-sm pl-8">
-                <Markdown>{msg.content}</Markdown>
+                <Markdown>{msg.content ?? msg.preview ?? ""}</Markdown>
               </div>
             </article>
           ))}

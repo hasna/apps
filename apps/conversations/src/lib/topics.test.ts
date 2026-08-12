@@ -2,7 +2,7 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { extractTopics, getChannelTopics, getSessionTopics, getTrendingTopics } from "./topics";
 import { sendMessage } from "./messages";
 import { createChannel, joinChannel } from "./channels";
-import { closeDb } from "./db";
+import { closeDb, getDb } from "./db";
 import { unlinkSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -105,5 +105,54 @@ describe("getTrendingTopics", () => {
     const topics = getTrendingTopics({ hours: 1 });
     const words = topics.map((t) => t.topic);
     expect(words).toContain("kubernetes");
+  });
+});
+
+/**
+ * G6 — topic derivation is bounded and restricted-safe.
+ *
+ * `SELECT content FROM messages` pulled whole bodies into the extractor. A
+ * weighted term list built from a body the caller cannot read is a slow read of
+ * that body, so restricted rows must not contribute at all, and no row may
+ * contribute past the shared preview scan window.
+ */
+describe("G6 topic derivation consumes bounded restricted-safe previews", () => {
+  function insertLegacy(content: string, opts: { channel?: string | null; session_id: string }): void {
+    getDb().prepare(`
+      INSERT INTO messages (session_id, from_agent, to_agent, channel, content)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(opts.session_id, "topic-from", opts.channel ?? "topic-to", opts.channel ?? null, content);
+  }
+
+  test("channel topics ignore content past the preview scan window", () => {
+    const beyond = "zzbeyondscantopic";
+    createChannel("topic-bounded", "tester");
+    insertLegacy(`lead marker ${"filler ".repeat(1200)}${beyond}`, { channel: "topic-bounded", session_id: "channel:topic-bounded" });
+
+    const topics = getChannelTopics("topic-bounded");
+    expect(topics.map((topic) => topic.topic)).not.toContain(beyond);
+  });
+
+  test("restricted channels contribute no topics at all", () => {
+    const secret = "restrictedtopicterm";
+    createChannel("security-bridge", "tester");
+    insertLegacy(`body ${secret} ${secret} ${secret}`, { channel: "security-bridge", session_id: "channel:security-bridge" });
+
+    expect(getChannelTopics("security-bridge").map((t) => t.topic)).not.toContain(secret);
+    expect(getTrendingTopics().map((t) => t.topic)).not.toContain(secret);
+  });
+
+  test("restricted sessions contribute no topics at all", () => {
+    const secret = "restrictedsessionterm";
+    insertLegacy(`body ${secret} ${secret}`, { channel: null, session_id: "incident-review-session" });
+
+    expect(getSessionTopics("incident-review-session").map((t) => t.topic)).not.toContain(secret);
+  });
+
+  // The instrument can pass: ordinary rows still produce ordinary topics.
+  test("unrestricted rows still produce topics", () => {
+    createChannel("topic-ordinary", "tester");
+    insertLegacy("deployment deployment deployment pipeline", { channel: "topic-ordinary", session_id: "channel:topic-ordinary" });
+    expect(getChannelTopics("topic-ordinary").map((t) => t.topic)).toContain("deployment");
   });
 });

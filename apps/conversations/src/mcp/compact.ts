@@ -38,6 +38,7 @@ import type {
   AgentPresence,
   ChannelInfo,
   Message,
+  MessagePreviewPage,
   ProjectInfo,
   SearchResult,
   SearchResultTask,
@@ -95,6 +96,67 @@ export function compactQueriedMessages(
     has_more: page.has_more,
     compact: true,
     hint: "Use verbose:true for full records or get_message with an id for one full message.",
+  };
+}
+
+/**
+ * Emit a store `MessagePreviewPage` as an MCP envelope WITHOUT re-deriving any
+ * of its bounds.
+ *
+ * The adapters used to take a `Message[]`, re-count it, and compute `has_more`
+ * from whether an over-fetch returned one extra row. That silently discarded
+ * four fields the store had already decided — `skipped_count`, `byte_length`,
+ * `max_bytes`, `timeout_ms` — and, worse, got `has_more` WRONG in the one case
+ * it matters: when the store dropped rows to stay under its byte cap, the
+ * over-fetch count said "no more" and the client stopped paging on a page the
+ * store knew was partial. A confident complete answer over a truncated read is
+ * the failure mode; the store is the only layer that knows, so it is the only
+ * layer that gets to say.
+ *
+ * `page.messages` is already the bounded, redacted projection and is a strict
+ * superset of what `summarizeMessage` emitted, so no consumer loses a field.
+ */
+export function compactPreviewPage(
+  page: MessagePreviewPage,
+  sort: SortDescriptor,
+  opts: { key?: string; hint?: string; query?: string } = {},
+) {
+  const key = opts.key ?? "messages";
+  return {
+    [key]: page.messages,
+    ...orderFields(sort),
+    count: page.count,
+    limit: page.limit,
+    cursor: page.cursor,
+    next_cursor: page.next_cursor,
+    has_more: page.has_more,
+    skipped_count: page.skipped_count,
+    byte_length: page.byte_length,
+    max_bytes: page.max_bytes,
+    timeout_ms: page.timeout_ms,
+    ...(opts.query ? { query: opts.query } : {}),
+    compact: true,
+    detail_path: page.detail_path,
+    hint: opts.hint
+      ?? "Preview page. Use get_message with an id for one full message; page with cursor until has_more is false.",
+  };
+}
+
+/** The collection options every preview-page tool accepts, parsed strictly. */
+export function resolveMcpPageOptions(args: Record<string, unknown>): {
+  limit: number;
+  offset: number;
+  max_bytes: number | undefined;
+  preview_bytes: number | undefined;
+  timeout_ms: number | undefined;
+} {
+  const window = resolveMcpWindow(args);
+  return {
+    limit: window.limit,
+    offset: window.offset,
+    max_bytes: typeof args.max_bytes === "number" ? args.max_bytes : undefined,
+    preview_bytes: typeof args.preview_bytes === "number" ? args.preview_bytes : undefined,
+    timeout_ms: typeof args.timeout_ms === "number" ? args.timeout_ms : undefined,
   };
 }
 

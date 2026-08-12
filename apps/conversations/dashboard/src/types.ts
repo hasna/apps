@@ -4,14 +4,28 @@ export interface Message {
   from_agent: string;
   to_agent: string;
   channel: string | null;
-  content: string;
+  content?: string;
+  preview?: string;
   priority: string;
   working_dir: string | null;
   repository: string | null;
   branch: string | null;
-  metadata: Record<string, unknown> | null;
+  metadata?: Record<string, unknown> | null;
   created_at: string;
-  read_at: string | null;
+  read_at?: string | null;
+  unread?: boolean;
+  truncated?: boolean;
+  attachment_count?: number;
+  has_attachments?: boolean;
+  blocking?: boolean;
+}
+
+export interface MessagePage {
+  messages: Message[];
+  has_more: boolean;
+  next_cursor: number | null;
+  limit: number;
+  count: number;
 }
 
 export interface Session {

@@ -14,8 +14,10 @@ jobs:
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
       - run: bun run kit:check
+      - run: bun run sdk:check
       - run: bun run typecheck
       - run: bun test
+      - run: bun run test:incident-pg
 
       # dashboard/ carries its own package.json and its own bun.lock, and the
       # install above does not reach it. Without this step nothing in CI ever

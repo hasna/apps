@@ -21,12 +21,13 @@ import { resolveSelfSenderId } from "./sender-identity.js";
 /**
  * How much of a channel message a notification `preview` carries.
  *
- * Exported because it is load-bearing for callers deciding whether they need
- * `include_content`: together with the character-class strip in
- * {@link buildMessagePreview} it is why a preview cannot be parsed for
- * identifiers. Note this is NOT the DM preview length — that is
- * `DEFAULT_PREVIEW_CHARS` in ./compact-output.ts, which is 160 and strips
- * nothing.
+ * Together with the character-class strip in {@link buildMessagePreview} this is
+ * why a preview cannot be parsed for identifiers — which is the POINT, not a
+ * shortcoming to be opted out of. A caller that needs an identifier reads one
+ * message by its exact id (`getMessageById` / `conversations show <id>`); there
+ * is deliberately no collection-shaped route to a body. Note this is NOT the DM
+ * preview length — that is `DEFAULT_PREVIEW_CHARS` in ./compact-output.ts, which
+ * is 160 and strips nothing.
  */
 export const DEFAULT_PREVIEW_CHARS = 140;
 
@@ -121,8 +122,6 @@ export interface ReadChannelNotificationsOptions {
   max_bytes?: number;
   preview_bytes?: number;
   timeout_ms?: number;
-  /** Legacy explicit detail request; safe page readers never include it. */
-  include_content?: boolean;
 }
 
 export function finalizeChannelNotificationPage(page: ChannelNotificationPage): ChannelNotificationPage {
@@ -182,6 +181,15 @@ export function packChannelNotificationPage(
 }
 
 export function readChannelNotifications(opts: ReadChannelNotificationsOptions): ChannelNotificationPage {
+  // A stale caller must fail loudly. Silently ignoring `include_content` would
+  // return a preview page to code written to parse bodies, which is the quiet
+  // wrong answer; the refusal names the route that still serves a body.
+  if ((opts as unknown as Record<string, unknown>).include_content !== undefined) {
+    throw new Error(
+      "include_content is not supported on channel notification collections. "
+      + "Read one message by its exact id instead (getMessageById / conversations show <id>).",
+    );
+  }
   if (!opts.agent?.trim()) throw new Error("agent must be a non-empty string");
   if (opts.channel !== undefined && !opts.channel.trim()) throw new Error("channel must be a non-empty string");
   if (opts.since !== undefined && !Number.isFinite(Date.parse(opts.since))) {
@@ -260,19 +268,6 @@ export function readChannelNotifications(opts: ReadChannelNotificationsOptions):
   })) satisfies ChannelNotification[];
 
   let page = packChannelNotificationPage(candidates, { limit, cursor, max_bytes: maxBytes, timeout_ms: timeoutMs });
-  if (opts.include_content && page.notifications.length > 0) {
-    const readContent = db.prepare("SELECT content FROM messages WHERE id = ?");
-    page = finalizeChannelNotificationPage({
-      ...page,
-      notifications: page.notifications.map((notification) => {
-        const row = readContent.get(notification.message_id) as { content: string } | null;
-        return row ? { ...notification, content: redactSensitiveText(row.content) } : notification;
-      }),
-    });
-    if (page.byte_length > maxBytes) {
-      throw new Error(`channel notification envelope exceeds max_bytes (${page.byte_length} > ${maxBytes})`);
-    }
-  }
   if (opts.mark_read && page.notifications.length > 0) {
     const projected = finalizeChannelNotificationPage({
       ...page,

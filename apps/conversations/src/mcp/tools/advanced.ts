@@ -12,7 +12,8 @@ import { getStore } from "../../lib/store/index.js";
 // below still read the local store (no cloud endpoint yet) — documented residual.
 import { identityFor } from "../identity.js";
 import { pageQueriedItems, summarizeMessage, windowItems } from "../../lib/compact-output.js";
-import { jsonText, resolveMcpWindow } from "../compact.js";
+import { compactPreviewPage, jsonText, resolveMcpPageOptions, resolveMcpWindow } from "../compact.js";
+import { MENTION_LIST_ORDER } from "../../lib/list-order.js";
 
 export function registerAdvancedTools(server: McpServer, pkgVersion: string): void {
   // Bound to this connection: see ../identity.ts.
@@ -142,41 +143,77 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
       verbose: z.coerce.boolean().optional().describe("Return full raw mention message records"),
     },
   }, async (args: Record<string, any>) => {
-    const window = resolveMcpWindow(args);
     const verbose = args.verbose === true;
-    const results = await getStore().getMessagesForAgent(args.agent as string, {
+    if (verbose) {
+      const results = await getStore().getMessagesForAgent(args.agent as string, {
+        channel: args.channel,
+        unread_only: args.unread_only ?? true,
+        limit: args.limit,
+      });
+      return { content: [{ type: "text", text: jsonText({ mentions: results, count: results.length, compact: false }) }] };
+    }
+
+    // The store's mention page already carries every bound; re-windowing it here
+    // would discard skipped_count and re-derive has_more from a row count.
+    const page = await getStore().readMentionPreviews(args.agent as string, {
       channel: args.channel,
       unread_only: args.unread_only ?? true,
-      limit: verbose ? args.limit : window.offset + window.limit + 1,
+      ...resolveMcpPageOptions(args),
     });
-    if (verbose) return { content: [{ type: "text", text: jsonText({ mentions: results, count: results.length, compact: false }) }] };
-    const page = pageQueriedItems(results.slice(window.offset), window);
-    return {
-      content: [{
-        type: "text",
-        text: jsonText({
-          mentions: page.items.map((item) => ({ mention_id: item.mention_id, message: summarizeMessage(item.message) })),
-          count: page.count,
-          limit: page.limit,
-          cursor: page.cursor,
-          next_cursor: page.next_cursor,
-          has_more: page.has_more,
-          compact: true,
-          hint: "Use verbose:true for full mention messages or get_message with an id.",
-        }),
-      }],
-    };
+    const envelope = compactPreviewPage(page, MENTION_LIST_ORDER, {
+      key: "mentions",
+      hint: "Preview page. Acknowledge with mark_mentions_read{mention_ids:[…]} using the ids returned here.",
+    });
+    return { content: [{ type: "text", text: jsonText(envelope) }] };
   });
 
   registerMcpTool(server, "mark_mentions_read", {
-    description: "Mark @mentions as seen for an agent. Clears unread mention counts.",
+    description:
+      "Acknowledge @mentions by their exact mention ids, as returned by get_mentions. "
+      + "There is no agent-wide or channel-wide clear: a request that names no id acknowledges nothing.",
     inputSchema: {
       agent: z.string().describe("Agent name"),
-      channel: z.string().optional().describe("Clear only mentions in this channel"),
+      mention_ids: z.array(z.coerce.number()).optional()
+        .describe("Exact mention ids from get_mentions. An empty array is a no-op."),
     },
   }, async (args: Record<string, any>) => {
-    const cleared = await getStore().markMentionsRead(args.agent as string, args.channel);
-    return { content: [{ type: "text", text: JSON.stringify({ cleared }) }] };
+    /*
+     * This tool used to take `{agent, channel?}` and clear EVERY unread mention
+     * matching it. A caller that had read one mention could — and did — erase
+     * the unread state of every other mention that agent had never seen, from a
+     * request that named none of them. Unread state is the only record that a
+     * ping went unanswered, so a broad clear destroys exactly the evidence
+     * somebody would need to notice it was dropped.
+     *
+     * An explicitly empty list is a deliberate no-op rather than an error: a
+     * caller looping over "the mentions I just handled" with nothing to hand
+     * should acknowledge nothing, not fail and not acknowledge everything.
+     */
+    if (!Array.isArray(args.mention_ids)) {
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            cleared: 0,
+            error: "mention_ids is required. Read get_mentions first and acknowledge the exact ids it returned.",
+          }),
+        }],
+        isError: true,
+      };
+    }
+    const mentionIds = (args.mention_ids as unknown[]).map(Number);
+    if (mentionIds.length === 0) {
+      return { content: [{ type: "text", text: JSON.stringify({ cleared: 0 }) }] };
+    }
+    try {
+      const cleared = await getStore().markMentionsReadByIds(args.agent as string, mentionIds);
+      return { content: [{ type: "text", text: JSON.stringify({ cleared }) }] };
+    } catch (error) {
+      return {
+        content: [{ type: "text", text: error instanceof Error ? error.message : "Failed to acknowledge mentions." }],
+        isError: true,
+      };
+    }
   });
 
   // ---- Graph Tools ----
@@ -499,7 +536,7 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
     const descriptions: Record<string, string> = {
       // DM tools
       send_message: "Send DM to agent. Required: to, content. Optional: from?, priority?(low|normal|high|urgent), blocking?",
-      read_messages: "Read messages with filters. Optional: session_id?, from?, to?, channel?, since?(ISO), limit?, unread_only?, mark_read?(default true \u2014 auto-marks returned messages as read, pass false to peek without consuming)",
+      read_messages: "Peek at messages with filters. NON-MUTATING by default. Returns a bounded preview page carrying has_more, next_cursor, skipped_count, byte_length, max_bytes and timeout_ms. Optional: session_id?, from?, to?, channel?, since?(ISO), limit?, cursor?, max_bytes?, preview_bytes?, timeout_ms?, unread_only?, mark_read?(default false \u2014 pass true to acknowledge exactly the ids returned)",
       get_message: "Get the full content of a specific message by id. Required: id",
       read_digest: "Cursored byte-capped digest — preview snippets only, no full bodies, non-destructive unless mark_read:true. Returns { digest_id, message_ids, next_cursor, messages, byte_length }. Optional: channel?, session_id?, to?, since?(ISO), cursor?(message id), max_bytes?, limit?, unread_only?, mark_read?, project_id?",
       list_sessions: "List all DM sessions. Optional: agent?(filter by participant)",
@@ -513,7 +550,7 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
       list_unread_counts: "Get unread message counts per channel (no content). Ideal for session start triage. Optional: agent?(filter to agent's channels)",
       list_channels: "List channels with member/message counts. Optional: project_id?, include_archived?",
       send_to_channel: "Post message to channel. Required: channel, content. Optional: from?, priority?(low|normal|high|urgent), blocking?",
-      read_channel: "Read messages in a channel. Required: channel. Optional: since?(ISO), limit?, mark_read?(default true \u2014 auto-marks returned messages as read)",
+      read_channel: "Peek at messages in a channel. NON-MUTATING by default \u2014 records no read receipt and consumes no notification. Required: channel. Optional: since?(ISO), limit?, cursor?, max_bytes?, preview_bytes?, timeout_ms?, mark_read?(default false \u2014 pass true to acknowledge exactly the ids returned)",
       join_channel: "Join a channel. Required: channel. Optional: from?",
       leave_channel: "Leave a channel. Required: channel. Optional: from?",
       update_channel: "Update channel fields. Required: name. Optional: description?, topic?(use 'null' to remove), project_id?(use 'null' to remove)",
@@ -522,7 +559,7 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
       subscribe_channel_notifications: "Subscribe to preview-only notifications for a channel. Required: channel. Optional: from?, preview_chars?",
       unsubscribe_channel_notifications: "Stop preview-only notifications for a channel. Required: channel. Optional: from?",
       list_channel_subscriptions: "List preview-only channel notification subscriptions for the current agent. Optional: from?, channel?",
-      read_channel_notifications: "Read preview-only notifications from subscribed channels. Returns blurbs instead of full message bodies. Optional: from?, channel?, unread_only?, since?, limit?, mark_read?",
+      read_channel_notifications: "Peek at preview-only notifications from subscribed channels. Returns blurbs, never full message bodies \u2014 use get_message with an exact id for one body. NON-MUTATING by default. Optional: from?, channel?, unread_only?, since?, limit?, mark_read?(default false)",
       mark_channel_notifications_read: "Mark preview-only channel notifications as read. Optional: from?, ids?(array), channel?, all?(bool)",
       // Project tools
       create_project: "Create a project. Required: name. Optional: from?, description?, path?, repository?, tags?(JSON array), metadata?(JSON), settings?(JSON)",

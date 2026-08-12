@@ -1030,8 +1030,7 @@ used for — auditing a sender or a channel, which is an ABSENCE claim.
     .option("--channel <name>", "Watch a specific channel")
     .option("--all", "Watch DMs and all subscribed channels")
     .option("--interval <ms>", "Poll interval in milliseconds", parseInt)
-    .option("--verbose", "Show full message bodies")
-    .option("--full-content", "Render full channel message bodies instead of the stripped preview")
+    .option("--verbose", "Show full DM bodies (channel notifications stay preview-only)")
     .action(async (opts) => {
       // A seat answers to more than one name and the queues are disjoint. Reads
       // union across every identity; identities[0] is primary and is the ONLY
@@ -1050,10 +1049,6 @@ used for — auditing a sender or a channel, which is an ABSENCE claim.
 
       const interval = Number.isFinite(opts.interval) && opts.interval > 0 ? opts.interval : 1000;
       const cols = Math.min(process.stdout.columns || 80, 100);
-      // `--verbose` is documented as "show full message bodies" and has only
-      // ever applied to DMs; honouring it for channels too is that promise
-      // being kept, not a new default. Absent both flags, nothing changes.
-      const wantFullContent = !!(opts.fullContent || opts.verbose);
 
       // Resolve subscribed channels across every identity when --all is used
       let agentChannels: string[] = [];
@@ -1130,15 +1125,11 @@ used for — auditing a sender or a channel, which is an ABSENCE claim.
         printLine(`  ${sender}  ${chalk.magenta(`#${notification.channel}`)}  ${time}${priority} ${chalk.dim(`[#${notification.message_id}]`)}`);
 
         // The preview strips `[*#`~_>-]`, so agent names, `repo#pr` refs and
-        // branch names all arrive with their separators replaced by spaces.
-        // With full content requested we print the body as stored.
-        if (notification.content !== undefined) {
-          const rendered = renderContentLocal(notification.content) as string;
-          printLine(rendered.split("\n").map((l: string) => "    " + l).join("\n"));
-        } else {
-          printLine(`    ${notification.preview}`);
-          printLine(chalk.dim(`    Preview only. Inspect with: conversations show ${notification.message_id}`));
-        }
+        // branch names all arrive with their separators replaced by spaces. That
+        // is unrecoverable HERE by design — the continuation line names the
+        // exact-id route that does recover it, one message at a time.
+        printLine(`    ${notification.preview}`);
+        printLine(chalk.dim(`    Preview only. Inspect with: conversations show ${notification.message_id}`));
         printLine(chalk.dim("    " + "·".repeat(Math.min(cols - 8, 60))));
         printLine("");
       };
@@ -1233,7 +1224,6 @@ used for — auditing a sender or a channel, which is an ABSENCE claim.
           agent,
           agents: identities,
           interval_ms: interval,
-          include_content: wantFullContent,
           on_notifications: onNewNotifications,
         }));
       }

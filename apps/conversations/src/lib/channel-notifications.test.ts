@@ -3,7 +3,7 @@ import { unlinkSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { closeDb, getDb } from "./db";
-import { sendMessage } from "./messages";
+import { getMessageById, sendMessage } from "./messages";
 import { createChannel } from "./channels";
 import { registerAgent } from "./presence";
 import { baselineChannelNotifications, buildMessagePreview, listChannelNotificationSubscriptions, markAllChannelNotificationsRead, markChannelNotificationsRead, readChannelNotifications as readChannelNotificationPage, subscribeToChannelNotifications, unsubscribeFromChannelNotifications } from "./channel-notifications";
@@ -229,10 +229,12 @@ describe("buildMessagePreview", () => {
  * reference loses its `#`, and a branch name loses both its hyphens and its
  * underscores — so the only tokens that survive intact are bare hex ids.
  *
- * These assert the OPT-IN full-content path, and equally that the preview is
- * unchanged for every existing consumer of it.
+ * The identifier loss is REAL and is the accepted cost of the boundary. A
+ * collection read is not the place to recover it: the exact-message-ID detail
+ * route (`getMessageById` / `conversations show <id>`) is, and these assert that
+ * no collection option re-opens the body.
  */
-describe("readChannelNotifications include_content", () => {
+describe("readChannelNotifications is preview-only", () => {
   const IDENTIFIERS = "agent-chief-staff hasnaxyz/iapp-infra#92 fix/88605573-identities-oidc-trust test_with_underscores";
 
   test("preview still mangles identifiers — the existing default is untouched", () => {
@@ -247,55 +249,87 @@ describe("readChannelNotifications include_content", () => {
     expect(notification.preview).not.toContain("test_with_underscores");
   });
 
-  test("omits content entirely unless the caller opts in", () => {
+  test("no notification in a page carries a body field", () => {
     createChannel("ops", "creator");
     subscribeToChannelNotifications("ops", "agent-a");
     sendMessage({ from: "alice", to: "ops", channel: "ops", session_id: "channel:ops", content: IDENTIFIERS });
 
-    const [notification] = readChannelNotifications({ agent: "agent-a" });
-    expect(notification.content).toBeUndefined();
+    const page = readChannelNotificationPage({ agent: "agent-a" });
+    for (const notification of page.notifications) {
+      expect(Object.keys(notification)).not.toContain("content");
+    }
   });
 
-  test("include_content returns every identifier intact", () => {
+  /**
+   * The load-bearing one. `include_content` used to make this route return the
+   * stored body for every row in the page. Passing it must now be rejected
+   * rather than silently honoured, so a stale caller fails loudly instead of
+   * quietly receiving bodies it is no longer entitled to.
+   */
+  test("a legacy include_content request is refused, not honoured", () => {
     createChannel("ops", "creator");
     subscribeToChannelNotifications("ops", "agent-a");
     sendMessage({ from: "alice", to: "ops", channel: "ops", session_id: "channel:ops", content: IDENTIFIERS });
 
-    const [notification] = readChannelNotifications({ agent: "agent-a", include_content: true });
-    expect(notification.content).toBe(IDENTIFIERS);
-    expect(notification.content).toContain("agent-chief-staff");
-    expect(notification.content).toContain("hasnaxyz/iapp-infra#92");
-    expect(notification.content).toContain("fix/88605573-identities-oidc-trust");
-    expect(notification.content).toContain("test_with_underscores");
-    // The preview is additive, not replaced: other consumers still get theirs.
-    expect(notification.preview).toContain("agent chief staff");
+    expect(() => readChannelNotificationPage({ agent: "agent-a", include_content: true } as never))
+      .toThrow(/include_content is not supported/);
   });
 
-  test("content is not subject to the preview character cap", () => {
+  test("the preview cap still bounds a long body and never leaks past it", () => {
     createChannel("ops", "creator");
-    // The stored cap that truncates the preview; content must ignore it.
     subscribeToChannelNotifications("ops", "agent-a", { preview_chars: 20 });
     const long = `start-of-body ${"x".repeat(300)} end-of-body`;
     sendMessage({ from: "alice", to: "ops", channel: "ops", session_id: "channel:ops", content: long });
 
-    const [notification] = readChannelNotifications({ agent: "agent-a", include_content: true });
-    expect(notification.content).toBe(long);
-    expect(notification.content!.length).toBeGreaterThan(300);
+    const [notification] = readChannelNotifications({ agent: "agent-a" });
     expect(notification.preview).toContain("…");
     expect(notification.preview.length).toBeLessThan(40);
+    expect(notification.preview).not.toContain("end-of-body");
+    expect(JSON.stringify(notification)).not.toContain("end-of-body");
   });
 
-  test("content is redacted on the same terms as the preview", () => {
+  test("previews for restricted scopes are suppressed entirely", () => {
+    createChannel("incident-response", "creator");
+    subscribeToChannelNotifications("incident-response", "agent-a");
+    const secret = "containment-plan-alpha";
+    sendMessage({
+      from: "alice",
+      to: "incident-response",
+      channel: "incident-response",
+      session_id: "channel:incident-response",
+      content: `restricted ${secret}`,
+    });
+
+    const [notification] = readChannelNotifications({ agent: "agent-a" });
+    expect(notification.preview).toBe("[REDACTED:RESTRICTED_CHANNEL_BODY]");
+    expect(JSON.stringify(notification)).not.toContain(secret);
+  });
+
+  test("the preview redacts on the same terms the detail route does", () => {
     const blocked = syntheticDatabaseUrl();
     createChannel("ops", "creator");
     subscribeToChannelNotifications("ops", "agent-a");
 
     insertLegacyChannelMessage("ops", `legacy DSN ${blocked}`);
-    const [notification] = readChannelNotifications({ agent: "agent-a", include_content: true });
+    const [notification] = readChannelNotifications({ agent: "agent-a" });
 
-    // The marker remains identical in both bounded representations.
-    expect(notification.content).toContain("[REDACTED:DATABASE_URL]");
-    expect(notification.content).not.toContain(blocked);
     expect(notification.preview).toContain("[REDACTED:DATABASE_URL]");
+    expect(JSON.stringify(notification)).not.toContain(blocked);
+  });
+
+  /**
+   * The replacement route. Losing `include_content` must not lose the operator's
+   * ability to recover an identifier — it moves that recovery behind an exact id.
+   */
+  test("the exact-message-ID detail route still returns the intact body", () => {
+    createChannel("ops", "creator");
+    subscribeToChannelNotifications("ops", "agent-a");
+    sendMessage({ from: "alice", to: "ops", channel: "ops", session_id: "channel:ops", content: IDENTIFIERS });
+
+    const [notification] = readChannelNotifications({ agent: "agent-a" });
+    const detail = getMessageById(notification.message_id);
+    expect(detail?.content).toBe(IDENTIFIERS);
+    expect(detail?.content).toContain("agent-chief-staff");
+    expect(detail?.content).toContain("hasnaxyz/iapp-infra#92");
   });
 });

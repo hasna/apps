@@ -11,7 +11,7 @@ import { SendDialog } from "@/components/send-dialog";
 import { HelpPage } from "@/components/help-page";
 import { AgentsPage } from "@/components/agents-page";
 import { Button } from "@/components/ui/button";
-import type { Message, Channel, Project, DashboardStatus } from "@/types";
+import type { Message, MessagePage, Channel, Project, DashboardStatus } from "@/types";
 
 type Page = "dashboard" | "messages" | "channels" | "projects" | "agents" | "help";
 
@@ -58,20 +58,20 @@ export function App() {
     try {
       const [statusRes, messagesRes, channelsRes, projectsRes, allMsgsRes] = await Promise.all([
         fetchJson<DashboardStatus>("/api/status"),
-        fetchJson<Message[]>(`/api/messages?limit=${messageLimit}`),
+        fetchJson<MessagePage>(`/api/messages?limit=${messageLimit}`),
         fetchJson<Channel[]>("/api/channels"),
         fetchJson<Project[]>("/api/projects"),
-        fetchJson<Message[]>("/api/messages?limit=500"),
+        fetchJson<MessagePage>("/api/messages?limit=500"),
       ]);
       setStatus(statusRes);
       // Filter to DMs only for the messages page
-      setMessages(messagesRes.filter((m) => !m.channel));
+      setMessages(messagesRes.messages.filter((m) => !m.channel));
       setChannels(channelsRes);
       setProjects(projectsRes);
       // Compute unread counts per channel
       const counts: Record<string, number> = {};
-      for (const m of allMsgsRes) {
-        if (m.channel && !m.read_at) {
+      for (const m of allMsgsRes.messages) {
+        if (m.channel && (m.unread ?? !m.read_at)) {
           counts[m.channel] = (counts[m.channel] || 0) + 1;
         }
       }
