@@ -140,6 +140,29 @@ export interface SessionInstructionSource {
   metadata?: Record<string, unknown> | null;
 }
 
+const IDENTITY_EXPORT_AUTHORITY = Symbol("hasna.instructions.identity-export-authority");
+
+const CODEWITH_PROTECTED_REPLACEMENT_TARGETS = new Map<string, string>([
+  [
+    "codewith-adversarial-review-proportionality",
+    "global-adversarial-review-proportionality-system-prompt",
+  ],
+  [
+    "codewith-workflow-reviewer-neutralizer",
+    "global-workflow-construction-standard",
+  ],
+]);
+
+interface IdentityExportAuthority {
+  token: object;
+  shape: IdentityExportShape;
+  packageName: string | null;
+}
+
+interface IdentityExportBoundSessionInstructionSource extends SessionInstructionSource {
+  [IDENTITY_EXPORT_AUTHORITY]?: IdentityExportAuthority;
+}
+
 interface OrderedSessionInstructionSource extends SessionInstructionSource {
   normalizedId: string;
   resolvedLabel: string;
@@ -147,6 +170,7 @@ interface OrderedSessionInstructionSource extends SessionInstructionSource {
   resolvedMerge: SessionInstructionMerge;
   resolvedOrder: number;
   resolvedRules: OrderedSessionInstructionRule[];
+  [IDENTITY_EXPORT_AUTHORITY]?: IdentityExportAuthority;
 }
 
 interface OrderedSessionInstructionRule extends SessionInstructionRule {
@@ -184,6 +208,16 @@ export interface SessionSkippedSource {
   label: string;
   targetProviders: string[];
   reason: string;
+  source?: {
+    layer: SessionInstructionLayer;
+    merge: SessionInstructionMerge;
+    order: number;
+    path: string | null;
+    hash: string | null;
+    renderedPayloadSha256: string;
+    nonOverridable: boolean;
+    provenance: Record<string, unknown> | null;
+  };
 }
 
 export interface SessionProfileRenderSelection {
@@ -272,6 +306,16 @@ export interface SessionRenderManifest {
     label: string;
     targetProviders: string[];
     reason: string;
+    source?: {
+      layer: SessionInstructionLayer;
+      merge: SessionInstructionMerge;
+      order: number;
+      path: string | null;
+      hash: string | null;
+      renderedPayloadSha256: string;
+      nonOverridable: boolean;
+      provenance: Record<string, unknown> | null;
+    };
   }>;
   files: Array<{
     path: string;
@@ -772,6 +816,16 @@ function skippedSource(source: OrderedSessionInstructionSource, reason: string):
     label: source.resolvedLabel,
     targetProviders: source.targetProviders ?? [],
     reason,
+    source: {
+      layer: source.resolvedLayer,
+      merge: source.resolvedMerge,
+      order: source.resolvedOrder,
+      path: source.path ?? null,
+      hash: source.hash ?? null,
+      renderedPayloadSha256: sha256(source.content),
+      nonOverridable: source.nonOverridable === true,
+      provenance: source.provenance ?? null,
+    },
   };
 }
 
@@ -809,7 +863,7 @@ function normalizeSources(
   const originalOrder = [...normalized].sort(compareSessionInstructionSources);
   const deduplicated = deduplicateSemanticPolicySources(normalized);
   const ordered = deduplicated.selected.sort(compareSessionInstructionSources);
-  validateTargetedReplacementSources(originalOrder, ordered, deduplicated.skipped);
+  validateTargetedReplacementSources(originalOrder, ordered, deduplicated.skipped, tool);
   rejectDuplicateSourceSlugs(ordered);
   rejectDuplicateRulePaths(ordered);
   return { sources: ordered, skipped: deduplicated.skipped };
@@ -1127,6 +1181,7 @@ function validateTargetedReplacementSources(
   originalSources: OrderedSessionInstructionSource[],
   selectedSources: OrderedSessionInstructionSource[],
   deduplicatedSources: SessionSkippedSource[],
+  tool: SessionRenderTool,
 ): void {
   for (let replacerIndex = 0; replacerIndex < originalSources.length; replacerIndex++) {
     const replacer = originalSources[replacerIndex]!;
@@ -1154,7 +1209,7 @@ function validateTargetedReplacementSources(
         + `"${target.id}" is later than or identical to the replacer.`,
       );
     }
-    if (target.nonOverridable) {
+    if (target.nonOverridable && !authorizedProtectedTargetedReplacement(replacer, target, tool)) {
       throw new Error(
         `Targeted replacement source "${replacer.id}" cannot replace non-overridable source "${target.id}".`,
       );
@@ -1171,6 +1226,26 @@ function validateTargetedReplacementSources(
       );
     }
   }
+}
+
+function authorizedProtectedTargetedReplacement(
+  replacer: OrderedSessionInstructionSource,
+  target: OrderedSessionInstructionSource,
+  tool: SessionRenderTool,
+): boolean {
+  if (tool !== "codewith" || replacer.nonOverridable !== true) return false;
+  if (CODEWITH_PROTECTED_REPLACEMENT_TARGETS.get(replacer.id) !== target.id) return false;
+  const providers = (replacer.targetProviders ?? []).map((provider) => provider.trim().toLowerCase());
+  if (providers.length !== 1 || providers[0] !== "codewith") return false;
+  const replacerAuthority = replacer[IDENTITY_EXPORT_AUTHORITY];
+  const targetAuthority = target[IDENTITY_EXPORT_AUTHORITY];
+  return replacerAuthority !== undefined
+    && targetAuthority !== undefined
+    && replacerAuthority.token === targetAuthority.token
+    && replacerAuthority.shape === "canonical-open-identities"
+    && targetAuthority.shape === "canonical-open-identities"
+    && replacerAuthority.packageName !== null
+    && replacerAuthority.packageName === targetAuthority.packageName;
 }
 
 function composeBroadReplaceSources(
@@ -1199,6 +1274,7 @@ function composeBroadReplaceSources(
 
 function composeSources(
   sources: OrderedSessionInstructionSource[],
+  tool: SessionRenderTool,
 ): { sources: OrderedSessionInstructionSource[]; skipped: SessionSkippedSource[] } {
   const hasTargetedReplacement = sources.some((source) => source.replacementScope !== undefined);
   if (!hasTargetedReplacement) return composeBroadReplaceSources(sources);
@@ -1216,7 +1292,8 @@ function composeSources(
         );
       }
       const target = selected[targetIndex]!;
-      if (target.nonOverridable) {
+      const protectedReplacement = target.nonOverridable === true;
+      if (protectedReplacement && !authorizedProtectedTargetedReplacement(source, target, tool)) {
         throw new Error(
           `Targeted replacement source "${source.id}" cannot replace non-overridable source "${target.id}".`,
         );
@@ -1235,6 +1312,12 @@ function composeSources(
             scope: source.replacementScope,
             targetSourceId: target.id,
             targetNormalizedSourceId: target.normalizedId,
+            targetHash: target.hash ?? null,
+            targetRenderedPayloadSha256: sha256(target.content),
+            targetNonOverridable: protectedReplacement,
+            authority: protectedReplacement
+              ? "canonical-identity-export/codewith-provider/v1"
+              : "overridable-source/v1",
           },
         },
       });
@@ -1714,7 +1797,7 @@ export function planSessionRender(input: SessionRenderInput): SessionRenderPlan 
   const blocked = blockers.length > 0;
   const allowEmptySources = input.allowEmptySources === true;
   const normalized = normalizeSources(input.sources, input.tool, allowEmptySources);
-  const composed = composeSources(normalized.sources);
+  const composed = composeSources(normalized.sources, input.tool);
   const orderedSources = composed.sources;
   // Caller-supplied entries first (provider filtering, done before the render was even
   // asked for), then everything this render discarded itself.
@@ -2066,6 +2149,13 @@ export function sourcesFromIdentityExport(
 ): SessionInstructionSource[] {
   const record = asRecord(value, "identity instruction export");
   const shape = requireIdentityExportShape(record);
+  const authority: IdentityExportAuthority = {
+    token: {},
+    shape,
+    packageName: shape === "canonical-open-identities"
+      ? requireString(record["package"], "canonical identity export package")
+      : null,
+  };
   const validation = asOptionalRecord(record["validation"]);
   if (validation && validation["valid"] === false) {
     const issues = Array.isArray(validation["issues"]) ? validation["issues"] : [];
@@ -2080,6 +2170,7 @@ export function sourcesFromIdentityExport(
       tool: options.tool,
       orderFallback: offset + index,
       exportShape: shape,
+      authority,
     }))
     .filter((source): source is SessionInstructionSource => source !== null);
 }
@@ -2238,7 +2329,13 @@ function normalizeRulePath(path: string): string {
 
 function identitySourceToSessionSource(
   value: unknown,
-  options: { path?: string; tool?: SessionRenderTool; orderFallback: number; exportShape: IdentityExportShape },
+  options: {
+    path?: string;
+    tool?: SessionRenderTool;
+    orderFallback: number;
+    exportShape: IdentityExportShape;
+    authority: IdentityExportAuthority;
+  },
 ): SessionInstructionSource | null {
   const record = asRecord(value, "identity instruction source");
   const providers = asStringArray(record["targetProviders"]);
@@ -2252,7 +2349,7 @@ function identitySourceToSessionSource(
   const resolvedContent = inlineContent && inlineContent.trim()
     ? inlineContent
     : contentFromIdentitySourcePaths(sourcePaths, options.path, id) ?? inlineContent;
-  return {
+  const source: IdentityExportBoundSessionInstructionSource = {
     id,
     label: maybeString(record["label"]) ?? maybeString(record["title"]) ?? id,
     layer,
@@ -2277,7 +2374,9 @@ function identitySourceToSessionSource(
     nonOverridable: record["nonOverridable"] === true,
     replacementScope: maybeString(record["replacementScope"]),
     metadata: asOptionalRecord(record["metadata"]) ?? null,
+    [IDENTITY_EXPORT_AUTHORITY]: options.authority,
   };
+  return source;
 }
 
 function layerFromIdentityKind(kind: string | undefined, exportShape: IdentityExportShape): SessionInstructionLayer {
