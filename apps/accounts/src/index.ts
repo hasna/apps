@@ -145,6 +145,36 @@ export type {
   ConfigsPrelaunchStatus,
   ConfigsPrelaunchSummary,
 } from "./lib/configs-prelaunch-status.js";
+export {
+  bindSessionLaunchReceipt,
+  prepareSessionLaunchReceipt,
+  sessionLaunchJsonSha256,
+  sessionLaunchProfileSha256,
+  sessionLaunchSha256,
+  SESSION_LAUNCH_ADAPTERS,
+  SESSION_LAUNCH_RECEIPT_MISMATCH,
+  SESSION_LAUNCH_RECEIPT_SCHEMA,
+  SESSION_RENDER_MANIFEST_RELATIVE_PATH,
+  SESSION_RENDER_MANIFEST_SCHEMA,
+} from "./lib/session-launch-receipt.js";
+export type {
+  PreparedSessionLaunchReceipt,
+  SessionInstructionsFileReceipt,
+  SessionInstructionsRuleReceipt,
+  SessionInstructionsReceipt,
+  SessionInstructionsSourceReceipt,
+  SessionLaunchAdapter,
+  SessionLaunchCapabilityReceipt,
+  SessionLaunchCapabilityRequest,
+  SessionLaunchCapabilityStatus,
+  SessionLaunchReceipt,
+  SessionLaunchReceiptRequest,
+  SessionLaunchRoute,
+  SessionLaunchRuntimeReceipt,
+  SessionLaunchTarget,
+  SessionLaunchTargetKind,
+  SessionLaunchTool,
+} from "./lib/session-launch-receipt.js";
 export { getAccountsReadiness } from "./lib/readiness.js";
 export type {
   AccountsProviderReadiness,
