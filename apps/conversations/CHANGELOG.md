@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+### Fixed
+
+- **Inbox monitors now accept compact message envelopes and use bounded preview text for rendering and signed self-filtering, preserving cursor and cross-surface safety.**
+
 ## 0.5.46 - 2026-08-12
 
 ### Added
