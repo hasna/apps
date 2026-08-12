@@ -24,6 +24,7 @@ import {
   type SessionRenderPlan,
   type SessionSkippedSource,
 } from "./session-render.js";
+import { detectClaudeAuthorityConflicts } from "./session-authority.js";
 
 export type SessionApplyAction = "create" | "update" | "delete" | "unchanged" | "conflict";
 
@@ -179,6 +180,7 @@ function applySessionRenderUnlocked(
   }
 
   const targetHome = assertSafeTargetHome(plan.targetHome);
+  assertClaudeAuthorityStillClear(plan, targetHome);
   const files = [...plan.files, plan.manifestFile];
   const manifestPath = resolvePlannedFilePath(plan, plan.manifestFile, targetHome);
   const previousManifest = readPreviousManifest(manifestPath);
@@ -215,6 +217,7 @@ function applySessionRenderUnlocked(
     const allowPortableFallback = coordination === null;
     const forcePortableFileOps = options.test_hooks?.force_portable_file_ops ?? false;
     ensureSessionTargetHome(targetHome);
+    assertClaudeAuthorityStillClear(plan, targetHome);
     snapshotPath = writeSessionSnapshot(
       plan,
       targetHome,
@@ -226,6 +229,7 @@ function applySessionRenderUnlocked(
       forcePortableFileOps,
     );
     options.test_hooks?.before_apply_writes?.({ plan, results });
+    assertClaudeAuthorityStillClear(plan, targetHome);
     const resultsByPath = new Map(results.map((result) => [result.path, result]));
     for (const file of plan.files) {
       applyPlannedFile(
@@ -276,6 +280,16 @@ function applySessionRenderUnlocked(
     conflicts,
     drift,
   };
+}
+
+function assertClaudeAuthorityStillClear(plan: SessionRenderPlan, targetHome: string): void {
+  if (plan.tool !== "claude" || plan.targetKind === "blocked") return;
+  const conflicts = detectClaudeAuthorityConflicts(targetHome);
+  if (conflicts.length === 0) return;
+  const summary = conflicts
+    .map((conflict) => `${conflict.relativePath}: ${conflict.reason}`)
+    .join("; ");
+  throw new SessionApplyError(`Claude authority changed after planning; refusing to apply: ${summary}`);
 }
 
 function ensureSessionTargetHome(targetHome: string): void {
