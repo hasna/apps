@@ -277,7 +277,7 @@ export function assertTypedManifest(manifest: ActionManifest): void {
 }
 
 function normalizeDefinition(definition: TypedActionDefinitionInput): TypedActionDefinition {
-  if ("executor" in definition) {
+  if (isActionDefinition(definition)) {
     const executor = definition.executor as ActionExecutor<any, any>;
     const manifest = definition.manifest;
     return {
@@ -293,6 +293,13 @@ function normalizeDefinition(definition: TypedActionDefinitionInput): TypedActio
     };
   }
   return definition;
+}
+
+function isActionDefinition(value: TypedActionDefinitionInput): value is ActionDefinition<any, any> {
+  return isObject(value)
+    && "executor" in value
+    && isObject(value.executor)
+    && typeof value.executor.execute === "function";
 }
 
 function actionRunFor(context: TypedActionContext, manifest: ActionManifest): ActionRun {
