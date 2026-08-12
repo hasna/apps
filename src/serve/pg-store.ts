@@ -277,6 +277,18 @@ export class ValidationError extends Error {
   }
 }
 
+function assertHostedProjectResourceLinkIntegrationMutation(
+  beforeIntegrations: WorkspaceIntegrations,
+  proposedIntegrations: WorkspaceIntegrations,
+  links: readonly ProjectResourceLink[],
+): void {
+  try {
+    assertProjectResourceLinkIntegrationMutation(beforeIntegrations, proposedIntegrations, links);
+  } catch (error) {
+    throw new ValidationError(error instanceof Error ? error.message : String(error));
+  }
+}
+
 /**
  * Server-side bounds on a single `/v1/projects` page. These protect the
  * database from an unbounded scan; they are NOT a statement that the caller may
@@ -715,7 +727,7 @@ export class ProjectsPgStore {
   async updateWorkspace(idOrSlug: string, input: UpdateWorkspaceInput): Promise<Workspace> {
     const before = await this.requireWorkspace(idOrSlug);
     if (input.integrations !== undefined) {
-      assertProjectResourceLinkIntegrationMutation(
+      assertHostedProjectResourceLinkIntegrationMutation(
         before.integrations,
         input.integrations,
         await this.listProjectResourceLinks(before.id, PROJECT_RESOURCE_LINK_DEFAULT_MAX_ITEMS),
@@ -1914,7 +1926,7 @@ export class ProjectsPgStore {
           metadata: normalizeProjectMetadata(input.patch.metadata, before.metadata),
         };
     if (input.patch.integrations !== undefined) {
-      assertProjectResourceLinkIntegrationMutation(
+      assertHostedProjectResourceLinkIntegrationMutation(
         before.integrations,
         input.patch.integrations,
         await this.listProjectResourceLinks(input.project_id, PROJECT_RESOURCE_LINK_DEFAULT_MAX_ITEMS),

@@ -779,6 +779,65 @@ describe("projects store api transport (roots/agents/recipes)", () => {
     expect(await store.getProject("iproj-x")).toBeNull();
   });
 
+  test("updateProject surfaces the typed resource-link validation reason from an HTTP 400", async () => {
+    const calls: Array<{ method: string; path: string }> = [];
+    const fetchImpl = async (input: string, init?: RequestInit): Promise<Response> => {
+      const url = new URL(input);
+      calls.push({
+        method: (init?.method ?? "GET").toUpperCase(),
+        path: url.pathname,
+      });
+      return Response.json({
+        error: "integration 'conversations_channel' is a typed resource-link compatibility projection and must be changed through resource-links",
+      }, { status: 400 });
+    };
+    __resetProjectStore();
+    const store = resolveProjectStore(CLOUD_ENV, fetchImpl);
+
+    await expect(store.updateProject("wks_typedintegration01", {
+      integrations: { conversations_channel: "moved-outside-resource-links" },
+    })).rejects.toThrow(/must be changed through resource-links/);
+
+    expect(calls).toEqual([{
+      method: "PATCH",
+      path: "/v1/projects/wks_typedintegration01",
+    }]);
+  });
+
+  test("guardedUpdateProject surfaces the typed resource-link validation reason from an HTTP 400", async () => {
+    const calls: Array<{ method: string; path: string }> = [];
+    const fetchImpl = async (input: string, init?: RequestInit): Promise<Response> => {
+      const url = new URL(input);
+      calls.push({
+        method: (init?.method ?? "GET").toUpperCase(),
+        path: url.pathname,
+      });
+      return Response.json({
+        error: "integration 'conversations_channel' is a typed resource-link compatibility projection and must be changed through resource-links",
+      }, { status: 400 });
+    };
+    __resetProjectStore();
+    const store = resolveProjectStore(CLOUD_ENV, fetchImpl);
+
+    await expect(store.guardedUpdateProject({
+      project_id: "wks_typedintegration01",
+      operation_id: "typed-integration-update",
+      step_id: "guarded",
+      expected_revision: "2026-08-12 00:00:00.000",
+      patch: {
+        integrations: { conversations_channel: "moved-outside-resource-links" },
+      },
+      dry_run: true,
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+    })).rejects.toThrow(/must be changed through resource-links/);
+
+    expect(calls).toEqual([{
+      method: "POST",
+      path: "/v1/projects/wks_typedintegration01/guarded-metadata",
+    }]);
+  });
+
   test("guardedReadProject uses the bounded exact-id API route and rejects slugs before transport", async () => {
     const projectId = "wks_guardedread0001";
     const project = {
