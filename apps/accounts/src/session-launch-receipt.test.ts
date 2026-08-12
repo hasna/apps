@@ -104,6 +104,9 @@ function fixture(): { target: SessionLaunchTarget; request: SessionLaunchReceipt
     adapter: "native-imports",
   };
   writeFixtureManifest(target);
+  const manifestPath = join(target.targetHome, ".hasna", "session-render-manifest.json");
+  const manifestRaw = readFileSync(manifestPath);
+  const manifest = JSON.parse(manifestRaw.toString("utf8")) as { sourceHash: string };
   const route: SessionLaunchRoute = {
     tool: target.tool,
     profile: target.profile,
@@ -125,6 +128,8 @@ function fixture(): { target: SessionLaunchTarget; request: SessionLaunchReceipt
         packageVersion: "0.2.43",
         runtime: "codewith",
       },
+      expectedManifestSha256: sessionLaunchSha256(manifestRaw),
+      expectedSourceHash: manifest.sourceHash,
       capabilityRequests: [
         { name: "durable_launch_receipt_v1", required: true },
         { name: "restart_stable_account_binding", required: false },
@@ -138,6 +143,16 @@ function fixture(): { target: SessionLaunchTarget; request: SessionLaunchReceipt
 function cleanup(): void {
   if (root) rmSync(root, { recursive: true, force: true });
   root = "";
+}
+
+function requestWithCurrentManifest(
+  request: SessionLaunchReceiptRequest,
+): SessionLaunchReceiptRequest {
+  const manifestPath = join(request.target.targetHome, ".hasna", "session-render-manifest.json");
+  return {
+    ...request,
+    expectedManifestSha256: sessionLaunchSha256(readFileSync(manifestPath)),
+  };
 }
 
 describe("session launch receipt", () => {
@@ -188,7 +203,7 @@ describe("session launch receipt", () => {
   test("fails closed when the manifest adapter is not the requested adapter", () => {
     const { request } = fixture();
     writeFixtureManifest(request.target, { adapter: "flattened-markdown" });
-    expect(() => prepareSessionLaunchReceipt(request)).toThrow(
+    expect(() => prepareSessionLaunchReceipt(requestWithCurrentManifest(request))).toThrow(
       /adapter differs from requested target|not supported/,
     );
   });
@@ -206,7 +221,7 @@ describe("session launch receipt", () => {
   test("fails closed on manifest file drift and blockers", () => {
     const { request } = fixture();
     writeFixtureManifest(request.target, { blockers: ["missing canonical source"] });
-    expect(() => prepareSessionLaunchReceipt(request)).toThrow(/contains blockers/);
+    expect(() => prepareSessionLaunchReceipt(requestWithCurrentManifest(request))).toThrow(/contains blockers/);
   });
 
   test("fails closed on an unrecognized target tool instead of throwing a raw type error", () => {
@@ -225,6 +240,43 @@ describe("session launch receipt", () => {
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as { files: Array<Record<string, unknown>> };
     manifest.files[0] = { ...manifest.files[0], path: "/tmp/foreign-instructions.md" };
     writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
-    expect(() => prepareSessionLaunchReceipt(request)).toThrow(/path differs|cannot be resolved/);
+    expect(() =>
+      prepareSessionLaunchReceipt(requestWithCurrentManifest(request)),
+    ).toThrow(/path differs|cannot be resolved/);
+  });
+
+  test("fails closed when a manifest source is not referenced by any rendered file", () => {
+    const { request } = fixture();
+    const manifestPath = join(request.target.targetHome, ".hasna", "session-render-manifest.json");
+    const manifestRaw = readFileSync(manifestPath);
+    const manifest = JSON.parse(manifestRaw.toString("utf8")) as {
+      sources: Array<Record<string, unknown>>;
+    };
+    manifest.sources.push({
+      id: "orphan-source",
+      label: "Orphan source",
+      layer: "global",
+      merge: "append",
+      order: 20,
+      path: null,
+      targetProviders: ["codewith"],
+      owner: null,
+      sourcePaths: [],
+      hash: null,
+      nonOverridable: false,
+      replacementScope: null,
+      rules: [],
+      renderedPayloadSha256: sessionLaunchSha256("orphan"),
+      provenance: null,
+      metadata: null,
+    });
+    const updatedRaw = Buffer.from(JSON.stringify(manifest, null, 2) + "\n");
+    writeFileSync(manifestPath, updatedRaw);
+    expect(() =>
+      prepareSessionLaunchReceipt({
+        ...request,
+        expectedManifestSha256: sessionLaunchSha256(updatedRaw),
+      }),
+    ).toThrow(/unreferenced source or rule id/);
   });
 });

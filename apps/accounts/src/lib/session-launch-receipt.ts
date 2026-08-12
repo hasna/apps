@@ -143,6 +143,8 @@ export interface SessionLaunchReceiptRequest {
   target: SessionLaunchTarget;
   requested: SessionLaunchRoute;
   runtime: SessionLaunchRuntimeReceipt;
+  expectedManifestSha256: string;
+  expectedSourceHash: string;
   capabilityRequests?: SessionLaunchCapabilityRequest[];
   availableCapabilities?: readonly string[];
 }
@@ -304,6 +306,11 @@ function validateRuntime(runtime: SessionLaunchRuntimeReceipt): void {
   validateIdentifier("runtime", runtime.runtime);
 }
 
+function validateExpectedProvenance(request: SessionLaunchReceiptRequest): void {
+  validateSha256("expected Instructions manifest digest", request.expectedManifestSha256);
+  validateSha256("expected Instructions source digest", request.expectedSourceHash);
+}
+
 function resolveCapabilities(
   requests: readonly SessionLaunchCapabilityRequest[],
   available: readonly string[],
@@ -368,7 +375,8 @@ function canonicalPath(field: string, value: string): string {
 }
 
 function isWithinPath(child: string, parent: string): boolean {
-  return child === parent || child.startsWith(`${parent.endsWith("/") ? parent : `${parent}/`}`);
+  const rel = relative(parent, child);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
 
 function validateTargetOwner(
@@ -493,7 +501,11 @@ function parseSourceReceipt(
   };
 }
 
-function readManifest(target: SessionLaunchTarget): SessionInstructionsReceipt {
+function readManifest(
+  target: SessionLaunchTarget,
+  expectedManifestSha256: string,
+  expectedSourceHash: string,
+): SessionInstructionsReceipt {
   const targetHome = resolve(target.targetHome);
   const manifestPath = join(targetHome, SESSION_RENDER_MANIFEST_RELATIVE_PATH);
   if (!existsSync(manifestPath)) mismatch("Instructions manifest is absent");
@@ -506,6 +518,9 @@ function readManifest(target: SessionLaunchTarget): SessionInstructionsReceipt {
   if (metadata.size > MAX_MANIFEST_BYTES) mismatch("Instructions manifest exceeds the bounded size");
   const raw = readFileSync(manifestPath);
   const manifestSha256 = sessionLaunchSha256(raw);
+  if (manifestSha256 !== expectedManifestSha256) {
+    mismatch("Instructions manifest digest differs from the admitted request");
+  }
   let manifest: ManifestRecord;
   try {
     manifest = JSON.parse(raw.toString("utf8")) as ManifestRecord;
@@ -533,6 +548,9 @@ function readManifest(target: SessionLaunchTarget): SessionInstructionsReceipt {
   if (adapter !== target.adapter) mismatch("manifest adapter differs from requested target");
   const sourceHash = requiredString(manifest, "sourceHash");
   validateSha256("Instructions source hash", sourceHash);
+  if (sourceHash !== expectedSourceHash) {
+    mismatch("Instructions source hash differs from the admitted request");
+  }
   const targetOwnerSha256 = validateTargetOwner(manifest, target, canonicalTargetHome);
 
   const sources = manifest.sources;
@@ -627,6 +645,7 @@ export function prepareSessionLaunchReceipt(
   validateTarget(request.target);
   validateRoute(request.requested, "requested");
   validateRuntime(request.runtime);
+  validateExpectedProvenance(request);
   if (request.requested.tool !== request.target.tool) {
     mismatch("requested route tool differs from target");
   }
@@ -641,10 +660,16 @@ export function prepareSessionLaunchReceipt(
       target: { ...request.target },
       requested: { ...request.requested },
       runtime: { ...request.runtime },
+      expectedManifestSha256: request.expectedManifestSha256,
+      expectedSourceHash: request.expectedSourceHash,
       capabilityRequests: [...(request.capabilityRequests ?? [])],
       availableCapabilities: [...(request.availableCapabilities ?? [])],
     },
-    instructions: readManifest(request.target),
+    instructions: readManifest(
+      request.target,
+      request.expectedManifestSha256,
+      request.expectedSourceHash,
+    ),
     capabilities: resolveCapabilities(
       request.capabilityRequests ?? [],
       request.availableCapabilities ?? [],
