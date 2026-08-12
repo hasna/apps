@@ -154,9 +154,16 @@ jobs:
         if: steps.version.outputs.path == '.'
         run: bun run test:no-cloud
 
+      # Keep the publish gate single-pass: retries can turn a deterministic
+      # failure green. The full 4k-test suite does need a larger finite clock
+      # than Bun's 5s default on a contended release runner, because that clock
+      # includes scheduler delay for tests and hooks. Run 31596177928 produced
+      # nine unrelated timeout-only failures at 5.005s-8.729s while the same
+      # tree passed CI and local controls. Thirty seconds preserves a real hang
+      # boundary without changing assertion behavior or retrying failures.
       - name: Test
         if: steps.version.outputs.path == '.'
-        run: bun test
+        run: bun test --timeout=30000
 
       - name: Build
         if: steps.version.outputs.path == '.'

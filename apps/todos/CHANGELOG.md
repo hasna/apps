@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.31] - 2026-08-12
+
+### Fixed
+
+- **The npm release full suite keeps single-pass failure semantics while
+  allowing finite GitHub-runner scheduling headroom.** The root release gate
+  now uses a 30-second per-test and hook ceiling instead of Bun's inherited
+  five-second default, while continuing to forbid retries so deterministic
+  assertion failures and genuine hangs still stop publication.
+
 ## [0.15.30] - 2026-08-12
 
 ### Added
