@@ -14,6 +14,13 @@ import {
   createBunPackageIsolatedTempDir,
   projectExternalBunDuplicatePackageWarning,
 } from "../test/bun-fixture-isolation.js";
+import {
+  deriveTodosTaskManifestApplyPreconditionDigest,
+  deriveTodosTaskManifestCompensationPreconditionDigest,
+  deriveTodosTaskManifestIdempotencyKey,
+  taskManifestCompensationRequestDigest,
+  taskManifestRequestDigest,
+} from "../task-manifest/index.js";
 
 /** `todos add` warns on stderr when a task ends up both unassigned and unattributed —
  *  that warning is the point of the fix, not incidental noise, so it is stripped here
@@ -414,6 +421,54 @@ describe("remote CLI entrypoint authority boundary", () => {
     const receiptId = "44444444-4444-4444-8444-444444444444";
     const compensationReceiptId = "77777777-7777-4777-8777-777777777777";
     const outboxId = "55555555-5555-4555-8555-555555555555";
+    const projectId = "66666666-6666-4666-8666-666666666666";
+    const operationId = "task-manifest-cli-test";
+    const applyStepId = "apply";
+    const compensationStepId = "compensate";
+    const manifestBase = {
+      version: 1 as const,
+      operation_id: operationId,
+      step_id: applyStepId,
+      idempotency_key: "",
+      precondition_digest: "",
+      project_id: projectId,
+      plan: { key: "cli-test", name: "CLI test" },
+      tasks: [{ key: "verify", title: "Verify CLI task-manifest route" }],
+    };
+    const applyPreconditionDigest = deriveTodosTaskManifestApplyPreconditionDigest(manifestBase);
+    const applyRequestDigest = taskManifestRequestDigest({
+      ...manifestBase,
+      precondition_digest: applyPreconditionDigest,
+    });
+    const applyIdempotencyKey = deriveTodosTaskManifestIdempotencyKey({
+      operation_id: operationId,
+      step_id: applyStepId,
+      direction: "apply",
+      target_selector: projectId,
+      request_digest: applyRequestDigest,
+      precondition_digest: applyPreconditionDigest,
+    });
+    const compensationPreconditionDigest = deriveTodosTaskManifestCompensationPreconditionDigest({
+      receipt_id: receiptId,
+      operation_id: operationId,
+      step_id: compensationStepId,
+      if_binding_version: 1,
+    });
+    const compensationRequestDigest = taskManifestCompensationRequestDigest({
+      receipt_id: receiptId,
+      operation_id: operationId,
+      step_id: compensationStepId,
+      precondition_digest: compensationPreconditionDigest,
+      if_binding_version: 1,
+    });
+    const compensationIdempotencyKey = deriveTodosTaskManifestIdempotencyKey({
+      operation_id: operationId,
+      step_id: compensationStepId,
+      direction: "compensate",
+      target_selector: receiptId,
+      request_digest: compensationRequestDigest,
+      precondition_digest: compensationPreconditionDigest,
+    });
     const remoteKey = "fixture-remote-key";
     const expectedAuthorization = `${"Bear"}er ${remoteKey}`;
     const requests: Array<{ method: string; path: string; body: unknown; authorized: boolean }> = [];
@@ -426,10 +481,15 @@ describe("remote CLI entrypoint authority boundary", () => {
         route: "todos.task-manifest.v1",
         schema_version: 1,
         kind: "apply",
-        operation_id: "task-manifest-cli-test",
-        idempotency_key: "task-manifest-cli-test:apply",
-        request_digest: "sha256-request",
-        result_digest: "sha256-result",
+        operation_id: operationId,
+        step_id: applyStepId,
+        idempotency_key: applyIdempotencyKey,
+        request_digest: applyRequestDigest,
+        precondition_digest: applyPreconditionDigest,
+        result_digest: "a".repeat(64),
+        outcome: "accepted",
+        reason: null,
+        duplicate_of_receipt_id: null,
         binding_version: 1,
         apply_receipt_id: null,
         created_at: "2026-08-10T08:00:00.000Z",
@@ -437,7 +497,7 @@ describe("remote CLI entrypoint authority boundary", () => {
       graph: { plan_id: planId, task_ids: { verify: TASK_FIXTURE_ID }, comment_ids: [], verification_ids: [], dependency_ids: [] },
       readback: { plans: 1, tasks: 1, dependencies: 0, comments: 0, verifications: 0, complete: true },
       outbox_ids: [outboxId],
-      result_digest: "sha256-result",
+      result_digest: "a".repeat(64),
     });
     const server = Bun.serve({
       hostname: "127.0.0.1",
@@ -460,6 +520,10 @@ describe("remote CLI entrypoint authority boundary", () => {
               tenant_id: "tenant-cli-test",
               backend: "http",
               deterministic_ids: true,
+              operation_step_identity: true,
+              deterministic_idempotency_keys: true,
+              terminal_nonacceptance_receipts: true,
+              plan_slug_provenance: "deterministic-v1",
               immutable_receipts: true,
               transactional_outbox: true,
               idempotent_outbox_delivery: true,
@@ -495,6 +559,8 @@ describe("remote CLI entrypoint authority boundary", () => {
               schema_version: 1,
               tenant_id: "tenant-cli-test",
               plan_id: planId,
+              operation_id: operationId,
+              step_id: applyStepId,
               apply_receipt_id: receiptId,
               binding_version: 1,
               state: "applied",
@@ -511,10 +577,15 @@ describe("remote CLI entrypoint authority boundary", () => {
                 route: "todos.task-manifest.v1",
                 schema_version: 1,
                 kind: "compensate",
-                operation_id: "task-manifest-cli-test",
-                idempotency_key: "task-manifest-cli-test:compensate",
-                request_digest: "sha256-compensate-request",
-                result_digest: "sha256-compensate-result",
+                operation_id: operationId,
+                step_id: compensationStepId,
+                idempotency_key: compensationIdempotencyKey,
+                request_digest: compensationRequestDigest,
+                precondition_digest: compensationPreconditionDigest,
+                result_digest: "b".repeat(64),
+                outcome: "accepted",
+                reason: null,
+                duplicate_of_receipt_id: null,
                 binding_version: 2,
                 apply_receipt_id: receiptId,
                 created_at: "2026-08-10T08:05:00.000Z",
@@ -541,10 +612,12 @@ describe("remote CLI entrypoint authority boundary", () => {
     writeFileSync(manifestPath, JSON.stringify({
       version: 1,
       operation_id: "task-manifest-cli-test",
-      idempotency_key: "task-manifest-cli-test:apply",
-      project_id: "66666666-6666-4666-8666-666666666666",
-      plan: { key: "cli-test", name: "CLI test" },
-      tasks: [{ key: "verify", title: "Verify CLI task-manifest route" }],
+      step_id: applyStepId,
+      idempotency_key: applyIdempotencyKey,
+      precondition_digest: applyPreconditionDigest,
+      project_id: projectId,
+      plan: manifestBase.plan,
+      tasks: manifestBase.tasks,
     }));
     const env = {
       PATH: process.env.PATH ?? "",
@@ -571,7 +644,10 @@ describe("remote CLI entrypoint authority boundary", () => {
       ], env, cwd);
       const compensated = await runCli(executable, [
         "--json", "task-manifest", "compensate", "--receipt-id", receiptId,
-        "--idempotency-key", "task-manifest-cli-test:compensate", "--if-binding-version", "1",
+        "--operation-id", operationId, "--step-id", compensationStepId,
+        "--idempotency-key", compensationIdempotencyKey,
+        "--precondition-digest", compensationPreconditionDigest,
+        "--if-binding-version", "1",
       ], env, cwd);
       const delivered = await runCli(executable, ["--json", "task-manifest", "outbox-delivered", outboxId], env, cwd);
 
@@ -592,12 +668,16 @@ describe("remote CLI entrypoint authority boundary", () => {
       expect(JSON.parse(first.stdout).result).toMatchObject({ duplicate: false, receipt: { receipt_id: receiptId } });
       expect(JSON.parse(second.stdout).result).toMatchObject({ duplicate: true, receipt: { receipt_id: receiptId } });
       expect(JSON.parse(readExact.stdout).result).toMatchObject({ duplicate: false, receipt: { receipt_id: receiptId } });
+      expect(first.stdout).not.toContain("AUTH_KEY");
+      expect(first.stdout).not.toContain("TEST_KEY");
       expect(JSON.parse(lookup.stdout).result).toEqual({
         authority: "todos",
         route: "todos.task-manifest.v1",
         schema_version: 1,
         tenant_id: "tenant-cli-test",
         plan_id: planId,
+        operation_id: operationId,
+        step_id: applyStepId,
         apply_receipt_id: receiptId,
         binding_version: 1,
         state: "applied",
@@ -639,7 +719,10 @@ describe("remote CLI entrypoint authority boundary", () => {
       });
       expect(requests[7]!.body).toEqual({
         receipt_id: receiptId,
-        idempotency_key: "task-manifest-cli-test:compensate",
+        operation_id: operationId,
+        step_id: compensationStepId,
+        idempotency_key: compensationIdempotencyKey,
+        precondition_digest: compensationPreconditionDigest,
         if_binding_version: 1,
       });
       expect(requests[8]!.body).toEqual({ outbox_id: outboxId });

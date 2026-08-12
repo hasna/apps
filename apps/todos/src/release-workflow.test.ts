@@ -111,7 +111,7 @@ describe("npm release workflow", () => {
     expect(releaseWorkflow).toContain("scripts/resolve-npm-release-package.ts");
     expect(releaseWorkflow).toContain("working-directory: ${{ steps.version.outputs.path }}");
     expect(releaseWorkflow).toContain("HASNA_TODOS_RELEASE_PACKAGE_PATH: ${{ steps.version.outputs.path }}");
-    expect(rootPackage.version).toBe("0.15.31");
+    expect(rootPackage.version).toBe("0.15.32");
     expect(companionPackage.version).toBe("0.1.3");
     expect(companionPackage.scripts["verify:release-review"]).toBe("bun run ../scripts/verify-npm-release-agent-review.ts");
     expect(companionPackage.scripts.prepublishOnly).toBe("bun run verify:release-review");

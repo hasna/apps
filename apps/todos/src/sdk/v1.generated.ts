@@ -4,7 +4,7 @@
 import { assertTodosPriorRegistrationAdoptionValidationEnvelope } from "../project-registration/adoption-validation.js";
 
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
-// Source: Todos V1 API 0.15.31
+// Source: Todos V1 API 0.15.32
 
 export interface Task { "id"?: string; "title"?: string; "description"?: string; "status"?: "pending" | "in_progress" | "completed" | "failed" | "cancelled"; "priority"?: "low" | "medium" | "high" | "critical"; "project_id"?: string | null; "parent_id"?: string | null; "assigned_to"?: string | null; "agent_id"?: string | null; "created_by"?: string | null; "reason"?: string | null; "tags"?: Array<string>; "version"?: number; "locked_by"?: string | null; "locked_at"?: string | null; "created_at"?: string; "updated_at"?: string }
 
@@ -12,13 +12,29 @@ export interface Project { "id"?: string; "name"?: string; "path"?: string; "des
 
 export interface TaskManifestBounds { "tasks": number; "dependencies": number; "comments": number; "verifications": number; "effects": number; "metadata_fields": number; "effect_payload_fields": number; "request_bytes": number; "response_bytes": number }
 
-export interface TaskManifestCapability { "authority": "todos"; "route": "todos.task-manifest.v1"; "schema_version": 1; "tenant_id": string; "backend": "sqlite" | "postgresql" | "http"; "deterministic_ids": true; "immutable_receipts": true; "transactional_outbox": true; "idempotent_outbox_delivery": true; "exact_bounded_readback": true; "conditional_compensation": true; "transcript_safe": false; "bounds": TaskManifestBounds }
+export interface TaskManifestCapability { "authority": "todos"; "route": "todos.task-manifest.v1"; "schema_version": 1; "tenant_id": string; "backend": "sqlite" | "postgresql" | "http"; "deterministic_ids": true; "operation_step_identity": true; "deterministic_idempotency_keys": true; "terminal_nonacceptance_receipts": true; "plan_slug_provenance": "deterministic-v1"; "immutable_receipts": true; "transactional_outbox": true; "idempotent_outbox_delivery": true; "exact_bounded_readback": true; "conditional_compensation": true; "transcript_safe": false; "bounds": TaskManifestBounds }
 
 export interface TaskManifestCapabilityResponse { "capability": TaskManifestCapability }
 
+export interface TaskManifest { "version": 1; "operation_id": string; "step_id": string; "idempotency_key": string; "precondition_digest": string; "project_id": string; "task_list_id"?: string; "if_binding_version"?: number; "plan": { "key": string; "name": string; "description"?: string; "status"?: "active" | "completed" | "archived" }; "tasks": Array<{ "key": string; "title": string; "description"?: string; "status"?: "pending" | "in_progress" | "completed" | "failed" | "cancelled"; "priority"?: "low" | "medium" | "high" | "critical"; "assigned_to"?: string; "created_by"?: string; "tags"?: Array<string>; "metadata"?: Record<string, unknown>; "comments"?: Array<Record<string, unknown>>; "verifications"?: Array<Record<string, unknown>> }>; "dependencies"?: Array<Record<string, unknown>>; "effects"?: Array<Record<string, unknown>> }
+
+export interface TaskManifestReceipt { "receipt_id": string; "authority": "todos"; "route": "todos.task-manifest.v1"; "schema_version": 1; "kind": "apply" | "compensate"; "operation_id": string; "step_id": string; "idempotency_key": string; "request_digest": string; "precondition_digest": string; "result_digest": string; "outcome": "accepted" | "duplicate_of_accepted" | "terminal_nonacceptance"; "reason": string | null; "duplicate_of_receipt_id": string | null; "binding_version": number; "apply_receipt_id": string | null; "created_at": string }
+
+export interface TaskManifestApplyResult { "duplicate": boolean; "receipt": TaskManifestReceipt; "graph": Record<string, unknown>; "readback": Record<string, unknown>; "outbox_ids": Array<string>; "result_digest": string }
+
+export interface TaskManifestApplyResponse { "result": TaskManifestApplyResult }
+
+export interface TaskManifestCompensateRequest { "receipt_id": string; "operation_id": string; "step_id": string; "idempotency_key": string; "precondition_digest": string; "if_binding_version": number }
+
+export interface TaskManifestCompensationResult { "duplicate": boolean; "receipt": TaskManifestReceipt; "absent": true; "readback": Record<string, unknown> }
+
+export interface TaskManifestCompensateResponse { "result": TaskManifestCompensationResult }
+
+export interface TaskManifestReadExactRequest { "receipt_id": string }
+
 export interface TaskManifestBindingLookupRequest { "authority": "todos"; "route": "todos.task-manifest.v1"; "schema_version": 1; "tenant_id": string; "plan_id": string; "max_items": 1 }
 
-export interface TaskManifestBindingLookupResult { "authority": "todos"; "route": "todos.task-manifest.v1"; "schema_version": 1; "tenant_id": string; "plan_id": string; "apply_receipt_id": string; "binding_version": number; "state": "applied" | "compensated" }
+export interface TaskManifestBindingLookupResult { "authority": "todos"; "route": "todos.task-manifest.v1"; "schema_version": 1; "tenant_id": string; "plan_id": string; "operation_id": string; "step_id": string; "apply_receipt_id": string; "binding_version": number; "state": "applied" | "compensated" }
 
 export interface TaskManifestBindingLookupResponse { "result": TaskManifestBindingLookupResult }
 
@@ -542,6 +558,15 @@ export class TodosV1Client {
       });
     }
 
+    /** Apply one exact task-manifest graph through the Todos authority */
+    async applyTaskManifest(body: TaskManifest, init?: RequestInit): Promise<TaskManifestApplyResponse> {
+      return this.request("POST", `/v1/task-manifest/apply`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
     /** Recover one exact task-manifest apply receipt from its managed plan id */
     async lookupTaskManifestBinding(body: TaskManifestBindingLookupRequest, init?: RequestInit): Promise<TaskManifestBindingLookupResponse> {
       return this.request("POST", `/v1/task-manifest/bindings/lookup`, {
@@ -555,6 +580,24 @@ export class TodosV1Client {
     async getTaskManifestCapability(init?: RequestInit): Promise<TaskManifestCapabilityResponse> {
       return this.request("GET", `/v1/task-manifest/capability`, {
         body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Compensate one exact untouched task-manifest graph with CAS protection */
+    async compensateTaskManifest(body: TaskManifestCompensateRequest, init?: RequestInit): Promise<TaskManifestCompensateResponse> {
+      return this.request("POST", `/v1/task-manifest/compensate`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Read one exact immutable task-manifest apply receipt */
+    async readExactTaskManifest(body: TaskManifestReadExactRequest, init?: RequestInit): Promise<TaskManifestApplyResponse> {
+      return this.request("POST", `/v1/task-manifest/read-exact`, {
+        body,
         query: undefined,
         init,
       });

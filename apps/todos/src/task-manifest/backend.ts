@@ -16,11 +16,14 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3
 export interface NormalizedTaskManifest {
   manifest: TodosTaskManifest;
   request_digest: string;
+  expected_idempotency_key: string;
   result_digest: string;
   receipt_id: string;
+  terminal_receipt_id: string;
   graph: TodosTaskManifestGraph;
   outbox: Array<{ id: string; topic: string; payload: Record<string, unknown>; digest: string }>;
   now: string;
+  plan_slug_provenance: "deterministic-v1";
 }
 
 export interface PreparedTaskManifestFaults {
@@ -51,6 +54,7 @@ export interface TaskManifestBindingLookupRow {
   binding_version: unknown;
   binding_tenant_id: unknown;
   binding_operation_id: unknown;
+  binding_step_id: unknown;
   binding_plan_id: unknown;
   receipt_tenant_id: unknown;
   receipt_authority: unknown;
@@ -58,6 +62,7 @@ export interface TaskManifestBindingLookupRow {
   receipt_schema_version: unknown;
   receipt_kind: unknown;
   receipt_operation_id: unknown;
+  receipt_step_id: unknown;
   receipt_plan_id: unknown;
 }
 
@@ -96,6 +101,9 @@ export function validateTaskManifestBindingLookupRows(
     || Number(row.receipt_schema_version) !== 1
     || row.receipt_kind !== "apply"
     || row.binding_operation_id !== row.receipt_operation_id
+    || row.binding_step_id !== row.receipt_step_id
+    || typeof row.binding_operation_id !== "string"
+    || typeof row.binding_step_id !== "string"
     || typeof row.apply_receipt_id !== "string"
     || !UUID_PATTERN.test(row.apply_receipt_id)
     || !Number.isSafeInteger(bindingVersion)
@@ -110,6 +118,8 @@ export function validateTaskManifestBindingLookupRows(
   }
   return {
     plan_id: planId,
+    operation_id: row.binding_operation_id,
+    step_id: row.binding_step_id,
     apply_receipt_id: row.apply_receipt_id,
     binding_version: bindingVersion,
     state,

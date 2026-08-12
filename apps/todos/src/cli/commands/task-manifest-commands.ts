@@ -175,13 +175,19 @@ export function registerTaskManifestCommands(program: Command): void {
     .command("compensate")
     .description("Compensate an untouched task-manifest graph with CAS protection")
     .requiredOption("--receipt-id <uuid>", "Full apply receipt UUID")
+    .requiredOption("--operation-id <id>", "Apply operation id")
+    .requiredOption("--step-id <id>", "Distinct compensation step id")
     .requiredOption("--idempotency-key <key>", "Stable compensation idempotency key")
+    .requiredOption("--precondition-digest <sha256>", "Exact compensation precondition digest")
     .requiredOption("--if-binding-version <n>", "Expected current binding version")
     .option("-j, --json", "Output as JSON")
     .option("--tenant-id <id>", "Tenant id for local SQLite authority")
     .action(async (opts: {
       receiptId: string;
+      operationId: string;
+      stepId: string;
       idempotencyKey: string;
+      preconditionDigest: string;
       ifBindingVersion: string;
       json?: boolean;
       tenantId?: string;
@@ -189,7 +195,10 @@ export function registerTaskManifestCommands(program: Command): void {
       try {
         const request = {
           receipt_id: opts.receiptId,
+          operation_id: opts.operationId,
+          step_id: opts.stepId,
           idempotency_key: opts.idempotencyKey,
+          precondition_digest: opts.preconditionDigest,
           if_binding_version: parseInteger(opts.ifBindingVersion, "--if-binding-version", 1),
         };
         const remote = getTodosCloudClient();

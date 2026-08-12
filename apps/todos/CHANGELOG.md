@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.32] - 2026-08-12
+
+### Fixed
+
+- **Task-manifest apply and compensation now bind operation steps, deterministic
+  idempotency, terminal nonacceptance receipts, and exact legacy slug
+  compatibility across SQLite, PostgreSQL, HTTP, CLI, and OpenAPI surfaces.**
+
 ## [0.15.31] - 2026-08-12
 
 ### Fixed

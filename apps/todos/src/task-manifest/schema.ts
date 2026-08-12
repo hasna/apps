@@ -21,6 +21,8 @@ export const TODOS_TASK_MANIFEST_BOUNDS = {
 
 const key = z.string().min(1).max(96).regex(/^[a-z][a-z0-9_-]*$/);
 const identifier = z.string().min(1).max(200).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
+const digest = z.string().length(64).regex(/^[0-9a-f]{64}$/);
+const idempotencyKey = z.string().length(52).regex(/^tmk_[0-9a-f]{48}$/);
 const uuid = z.string().uuid();
 const scalar = z.union([z.string().max(4096), z.number().finite(), z.boolean(), z.null()]);
 const boundedScalarRecord = (limit: number, field: string) => z.record(z.string().max(200), scalar)
@@ -69,7 +71,9 @@ const effect = z.object({
 const schema = z.object({
   version: z.literal(1),
   operation_id: identifier,
-  idempotency_key: identifier,
+  step_id: identifier,
+  idempotency_key: idempotencyKey,
+  precondition_digest: digest,
   project_id: uuid,
   task_list_id: uuid.optional(),
   if_binding_version: z.number().int().min(0).optional(),
@@ -86,7 +90,10 @@ const schema = z.object({
 
 const compensationSchema = z.object({
   receipt_id: uuid,
-  idempotency_key: identifier,
+  operation_id: identifier,
+  step_id: identifier,
+  idempotency_key: idempotencyKey,
+  precondition_digest: digest,
   if_binding_version: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
 }).strict();
 

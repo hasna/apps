@@ -11,7 +11,13 @@ import {
   deriveTodosProjectRegistrationIdempotencyKey,
   digestProjectRegistrationValue,
 } from "../project-registration/index.js";
-import { createSqliteTodosTaskManifestAuthority } from "../task-manifest/index.js";
+import {
+  createSqliteTodosTaskManifestAuthority,
+  deriveTodosTaskManifestApplyPreconditionDigest,
+  deriveTodosTaskManifestIdempotencyKey,
+  taskManifestRequestDigest,
+  type TodosTaskManifest,
+} from "../task-manifest/index.js";
 
 let db: Database;
 let store: TodosStorageAdapter;
@@ -80,13 +86,27 @@ describe("/v1 task-manifest routing", () => {
         "2026-08-08T00:00:00.000Z",
       ],
     );
-    const appliedResponse = await request("/v1/task-manifest/apply", "POST", {
+    const manifestBase: Omit<TodosTaskManifest, "idempotency_key" | "precondition_digest"> = {
       version: 1,
       operation_id: "v1-task-manifest-receipt-recovery",
-      idempotency_key: "v1-task-manifest-receipt-recovery:apply",
+      step_id: "apply",
       project_id: projectId,
       plan: { key: "receipt-recovery", name: "Receipt recovery" },
       tasks: [{ key: "verify", title: "Verify v1 route" }],
+    };
+    const precondition_digest = deriveTodosTaskManifestApplyPreconditionDigest(manifestBase);
+    const request_digest = taskManifestRequestDigest({ ...manifestBase, precondition_digest });
+    const appliedResponse = await request("/v1/task-manifest/apply", "POST", {
+      ...manifestBase,
+      precondition_digest,
+      idempotency_key: deriveTodosTaskManifestIdempotencyKey({
+        operation_id: manifestBase.operation_id,
+        step_id: manifestBase.step_id,
+        direction: "apply",
+        target_selector: manifestBase.project_id,
+        request_digest,
+        precondition_digest,
+      }),
     });
     expect(appliedResponse?.status).toBe(201);
     const applied = await appliedResponse!.json() as {
@@ -110,6 +130,8 @@ describe("/v1 task-manifest routing", () => {
         schema_version: 1,
         tenant_id: "tenant-v1-test",
         plan_id: applied.result.graph.plan_id,
+        operation_id: applied.result.receipt.operation_id,
+        step_id: applied.result.receipt.step_id,
         apply_receipt_id: applied.result.receipt.receipt_id,
         binding_version: 1,
         state: "applied",

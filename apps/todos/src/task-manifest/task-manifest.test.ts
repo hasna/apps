@@ -9,21 +9,28 @@ import {
   TODOS_TASK_MANIFEST_ROUTE,
   TodosTaskManifestError,
   createSqliteTodosTaskManifestAuthority,
+  deriveTodosTaskManifestApplyPreconditionDigest,
+  deriveTodosTaskManifestCompensationPreconditionDigest,
+  deriveTodosTaskManifestIdempotencyKey,
   parseTodosTaskManifest,
   parseTodosTaskManifestCompensation,
+  taskManifestCompensationRequestDigest,
+  taskManifestRequestDigest,
   supportsIdempotentOutboxDelivery,
   type TodosTaskManifest,
 } from "./index.js";
-import { taskManifestPlanSlug } from "./plan-slug.js";
+import { sqliteLegacyTaskManifestPlanSlug, taskManifestPlanSlug } from "./plan-slug.js";
 
 const PROJECT_ID = "3583f012-71bb-40e5-997f-05dfdb2c2542";
 const TENANT_ID = "tenant-receipt-recovery";
 
 function manifest(operationId = "email-triage-graph-v1"): TodosTaskManifest {
-  return {
+  const base = {
     version: 1,
     operation_id: operationId,
-    idempotency_key: `${operationId}:apply`,
+    step_id: "apply",
+    idempotency_key: "",
+    precondition_digest: "",
     project_id: PROJECT_ID,
     plan: {
       key: "email-triage",
@@ -50,6 +57,75 @@ function manifest(operationId = "email-triage-graph-v1"): TodosTaskManifest {
     ],
     dependencies: [{ task: "events_emails", depends_on: "design" }],
     effects: [{ topic: "email-triage.graph-created", payload: { graph: operationId } }],
+  };
+  const precondition_digest = deriveTodosTaskManifestApplyPreconditionDigest(base);
+  const request_digest = taskManifestRequestDigest({
+    ...base,
+    precondition_digest,
+  });
+  const idempotency_key = deriveTodosTaskManifestIdempotencyKey({
+    operation_id: operationId,
+    step_id: base.step_id,
+    direction: "apply",
+    target_selector: PROJECT_ID,
+    request_digest,
+    precondition_digest,
+  });
+  return {
+    ...base,
+    precondition_digest,
+    idempotency_key,
+  };
+}
+
+function refreshManifestIdentity(manifestValue: TodosTaskManifest): TodosTaskManifest {
+  const { idempotency_key: _idempotencyKey, ...request } = manifestValue;
+  const request_digest = taskManifestRequestDigest(request);
+  manifestValue.idempotency_key = deriveTodosTaskManifestIdempotencyKey({
+    operation_id: manifestValue.operation_id,
+    step_id: manifestValue.step_id,
+    direction: "apply",
+    target_selector: manifestValue.project_id,
+    request_digest,
+    precondition_digest: manifestValue.precondition_digest,
+  });
+  return manifestValue;
+}
+
+function compensationRequest(
+  applied: { receipt: { receipt_id: string; binding_version: number } },
+  suffix = "compensate",
+) {
+  void suffix;
+  const operation_id = applied.receipt.operation_id;
+  const step_id = "compensate";
+  const precondition_digest = deriveTodosTaskManifestCompensationPreconditionDigest({
+    receipt_id: applied.receipt.receipt_id,
+    operation_id,
+    step_id,
+    if_binding_version: applied.receipt.binding_version,
+  });
+  const request_digest = taskManifestCompensationRequestDigest({
+    receipt_id: applied.receipt.receipt_id,
+    operation_id,
+    step_id,
+    precondition_digest,
+    if_binding_version: applied.receipt.binding_version,
+  });
+  return {
+    receipt_id: applied.receipt.receipt_id,
+    operation_id,
+    step_id,
+    idempotency_key: deriveTodosTaskManifestIdempotencyKey({
+      operation_id,
+      step_id,
+      direction: "compensate",
+      target_selector: applied.receipt.receipt_id,
+      request_digest,
+      precondition_digest,
+    }),
+    precondition_digest,
+    if_binding_version: applied.receipt.binding_version,
   };
 }
 
@@ -111,6 +187,7 @@ describe("task-manifest SQLite authority", () => {
       status: "failed",
       priority: "critical",
     };
+    refreshManifestIdentity(input);
     const parsed = parseTodosTaskManifest(input);
     expect(parsed.tasks[0]?.status).toBe("failed");
     expect(parsed.tasks[0]?.priority).toBe("critical");
@@ -143,6 +220,157 @@ describe("task-manifest SQLite authority", () => {
     expect(db.query("SELECT count(*) AS count FROM todos_task_manifest_outbox").get()).toEqual({ count: 2 });
     expect(() => db.run("UPDATE todos_task_manifest_receipts SET result_digest = 'changed'"))
       .toThrow(/immutable/);
+  });
+
+  test("terminally records a changed replay before rejecting an arbitrary new-operation key", async () => {
+    const authority = createSqliteTodosTaskManifestAuthority({ database: db });
+    const original = manifest("terminal-replay");
+    const accepted = await authority.apply(original);
+    const plansBefore = db.query("SELECT count(*) AS count FROM plans").get();
+    const outboxBefore = db.query("SELECT count(*) AS count FROM todos_task_manifest_outbox").get();
+
+    const changedReplay = { ...original, plan: { ...original.plan, name: "Changed replay" } };
+    let terminalError: TodosTaskManifestError | undefined;
+    try {
+      await authority.apply(changedReplay);
+    } catch (error) {
+      terminalError = error as TodosTaskManifestError;
+    }
+    expect(terminalError).toEqual(expect.objectContaining<TodosTaskManifestError>({
+      code: "TODOS_TASK_MANIFEST_IDEMPOTENCY_CONFLICT",
+      details: expect.objectContaining({
+        receipt: expect.objectContaining({
+          outcome: "terminal_nonacceptance",
+          reason: "TODOS_TASK_MANIFEST_IDEMPOTENCY_CONFLICT",
+        }),
+      }),
+    }));
+    const terminalReceiptId = (terminalError?.details["receipt"] as { receipt_id?: string } | undefined)?.receipt_id;
+    expect(terminalReceiptId).toBeTruthy();
+    expect(await authority.readExact(String(terminalReceiptId))).toMatchObject({
+      receipt: {
+        receipt_id: terminalReceiptId,
+        outcome: "terminal_nonacceptance",
+        reason: "TODOS_TASK_MANIFEST_IDEMPOTENCY_CONFLICT",
+      },
+    });
+    expect(db.query("SELECT count(*) AS count FROM plans").get()).toEqual(plansBefore);
+    expect(db.query("SELECT count(*) AS count FROM todos_task_manifest_outbox").get()).toEqual(outboxBefore);
+    expect(db.query(
+      "SELECT count(*) AS count FROM todos_task_manifest_terminal_receipts WHERE operation_id = ?",
+    ).get(original.operation_id)).toEqual({ count: 1 });
+
+    await expect(authority.apply(changedReplay)).rejects.toEqual(expect.objectContaining<TodosTaskManifestError>({
+      code: "TODOS_TASK_MANIFEST_IDEMPOTENCY_CONFLICT",
+    }));
+    expect(db.query(
+      "SELECT count(*) AS count FROM todos_task_manifest_terminal_receipts WHERE operation_id = ?",
+    ).get(original.operation_id)).toEqual({ count: 1 });
+    expect(accepted.receipt.outcome).toBe("accepted");
+
+    const arbitrary = manifest("arbitrary-new-operation-key");
+    arbitrary.idempotency_key = `tmk_${"f".repeat(48)}`;
+    await expect(authority.apply(arbitrary)).rejects.toEqual(expect.objectContaining<TodosTaskManifestError>({
+      code: "TODOS_TASK_MANIFEST_IDEMPOTENCY_MISMATCH",
+      details: expect.objectContaining({
+        receipt: expect.objectContaining({
+          outcome: "terminal_nonacceptance",
+          reason: "TODOS_TASK_MANIFEST_IDEMPOTENCY_MISMATCH",
+        }),
+      }),
+    }));
+    expect(db.query(
+      "SELECT count(*) AS count FROM todos_task_manifest_terminal_receipts WHERE operation_id = ?",
+    ).get(arbitrary.operation_id)).toEqual({ count: 1 });
+  });
+
+  test("closes one terminal operation step while allowing a distinct step", async () => {
+    const authority = createSqliteTodosTaskManifestAuthority({ database: db });
+    const operation = manifest("terminal-step-closure");
+    operation.if_binding_version = 1;
+    operation.precondition_digest = deriveTodosTaskManifestApplyPreconditionDigest(operation);
+    refreshManifestIdentity(operation);
+    let terminalReceiptId: string | undefined;
+    await expect(authority.apply(operation)).rejects.toEqual(expect.objectContaining<TodosTaskManifestError>({
+      code: "TODOS_TASK_MANIFEST_CAS_CONFLICT",
+      details: expect.objectContaining({
+        receipt: expect.objectContaining({
+          outcome: "terminal_nonacceptance",
+          reason: "TODOS_TASK_MANIFEST_CAS_CONFLICT",
+        }),
+      }),
+    }));
+    try {
+      await authority.apply(operation);
+    } catch (error) {
+      terminalReceiptId = (error as TodosTaskManifestError).details?.["receipt"]?.["receipt_id"] as string | undefined;
+    }
+    expect(terminalReceiptId).toBeTruthy();
+
+    const sameStep = manifest("terminal-step-closure");
+    await expect(authority.apply(sameStep)).rejects.toEqual(expect.objectContaining<TodosTaskManifestError>({
+      code: "TODOS_TASK_MANIFEST_CAS_CONFLICT",
+      details: expect.objectContaining({
+        receipt: expect.objectContaining({ receipt_id: terminalReceiptId }),
+      }),
+    }));
+    expect(db.query("SELECT count(*) AS count FROM plans").get()).toEqual({ count: 0 });
+    expect(db.query("SELECT count(*) AS count FROM todos_task_manifest_terminal_receipts WHERE operation_id = ?")
+      .get(operation.operation_id)).toEqual({ count: 1 });
+
+    const nextStep = manifest("terminal-step-closure");
+    nextStep.step_id = "next";
+    nextStep.precondition_digest = deriveTodosTaskManifestApplyPreconditionDigest(nextStep);
+    refreshManifestIdentity(nextStep);
+    const accepted = await authority.apply(nextStep);
+    expect(accepted.receipt.outcome).toBe("accepted");
+    expect(accepted.receipt.operation_id).toBe(operation.operation_id);
+    expect(accepted.receipt.step_id).toBe("next");
+  });
+
+  test("requires fresh operation, step, key, and precondition after terminal nonacceptance", async () => {
+    const authority = createSqliteTodosTaskManifestAuthority({ database: db });
+    const rejected = manifest("terminal-retry-identity");
+    rejected.idempotency_key = `tmk_${"f".repeat(48)}`;
+
+    await expect(authority.apply(rejected)).rejects.toEqual(expect.objectContaining<TodosTaskManifestError>({
+      code: "TODOS_TASK_MANIFEST_IDEMPOTENCY_MISMATCH",
+      details: expect.objectContaining({
+        receipt: expect.objectContaining({
+          operation_id: rejected.operation_id,
+          step_id: rejected.step_id,
+          idempotency_key: rejected.idempotency_key,
+          outcome: "terminal_nonacceptance",
+        }),
+      }),
+    }));
+
+    const changedKey = { ...rejected };
+    refreshManifestIdentity(changedKey);
+    await expect(authority.apply(changedKey)).rejects.toEqual(expect.objectContaining<TodosTaskManifestError>({
+      code: "TODOS_TASK_MANIFEST_IDEMPOTENCY_MISMATCH",
+      details: expect.objectContaining({
+        receipt: expect.objectContaining({
+          operation_id: rejected.operation_id,
+          step_id: rejected.step_id,
+          idempotency_key: rejected.idempotency_key,
+          outcome: "terminal_nonacceptance",
+        }),
+      }),
+    }));
+    expect(db.query(
+      "SELECT count(*) AS count FROM todos_task_manifest_terminal_receipts WHERE operation_id = ? AND step_id = ?",
+    ).get(rejected.operation_id, rejected.step_id)).toEqual({ count: 1 });
+
+    const fresh = manifest("terminal-retry-fresh-operation");
+    fresh.step_id = "apply-retry";
+    fresh.precondition_digest = deriveTodosTaskManifestApplyPreconditionDigest(fresh);
+    refreshManifestIdentity(fresh);
+    const accepted = await authority.apply(fresh);
+    expect(accepted.receipt.outcome).toBe("accepted");
+    expect(accepted.receipt.operation_id).toBe(fresh.operation_id);
+    expect(accepted.receipt.step_id).toBe(fresh.step_id);
+    expect(accepted.receipt.precondition_digest).toBe(fresh.precondition_digest);
   });
 
   test("advertises retry-safe outbox delivery without changing task-manifest schema v1", async () => {
@@ -216,11 +444,7 @@ describe("task-manifest SQLite authority", () => {
       }));
 
     const cancelled = await authority.apply(manifest("cancelled-delivery-retry"));
-    await authority.compensate({
-      receipt_id: cancelled.receipt.receipt_id,
-      idempotency_key: "cancelled-delivery-retry:compensate",
-      if_binding_version: cancelled.receipt.binding_version,
-    });
+    await authority.compensate(compensationRequest(cancelled, "cancelled-delivery-retry"));
     await expect(authority.markOutboxDelivered(cancelled.outbox_ids[0]!))
       .rejects.toEqual(expect.objectContaining<TodosTaskManifestError>({
         code: "TODOS_TASK_MANIFEST_GRAPH_CONFLICT",
@@ -237,6 +461,7 @@ describe("task-manifest SQLite authority", () => {
     const fakeToken = ["ghp", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"].join("_");
     sensitive.plan.name = `Sensitive plan ${fakeToken}`;
     sensitive.tasks[0]!.title = `Sensitive task ${fakeToken}`;
+    refreshManifestIdentity(sensitive);
     const applied = await authority.apply(sensitive);
 
     const recovered = await authority.lookupBinding({
@@ -256,16 +481,20 @@ describe("task-manifest SQLite authority", () => {
       plan_id: applied.graph.plan_id,
       apply_receipt_id: applied.receipt.receipt_id,
       binding_version: 1,
+      operation_id: "receipt-recovery",
+      step_id: "apply",
       state: "applied",
     });
     expect(Object.keys(recovered).sort()).toEqual([
       "apply_receipt_id",
       "authority",
       "binding_version",
+      "operation_id",
       "plan_id",
       "route",
       "schema_version",
       "state",
+      "step_id",
       "tenant_id",
     ]);
     const serialized = JSON.stringify(recovered);
@@ -274,11 +503,7 @@ describe("task-manifest SQLite authority", () => {
     expect(serialized).not.toContain(sensitive.plan.name);
     expect(serialized).not.toContain(sensitive.tasks[0]!.title);
 
-    await authority.compensate({
-      receipt_id: applied.receipt.receipt_id,
-      idempotency_key: "receipt-recovery:compensate",
-      if_binding_version: applied.receipt.binding_version,
-    });
+    await authority.compensate(compensationRequest(applied, "receipt-recovery"));
     expect(await authority.lookupBinding({
       authority: "todos",
       route: TODOS_TASK_MANIFEST_ROUTE,
@@ -529,37 +754,80 @@ describe("task-manifest SQLite authority", () => {
 
     const delivered = await authority.apply(manifest("delivered"));
     await authority.markOutboxDelivered(delivered.outbox_ids[0]!);
-    await expect(authority.compensate({
-      receipt_id: delivered.receipt.receipt_id,
-      idempotency_key: "delivered:compensate",
-      if_binding_version: delivered.receipt.binding_version,
-    })).rejects.toThrow(/delivered outbox/i);
+    await expect(authority.compensate(compensationRequest(delivered, "delivered")))
+      .rejects.toThrow(/delivered outbox/i);
 
     const referenced = await authority.apply(manifest("foreign-reference"));
     const foreignId = "f0000000-0000-4000-8000-000000000001";
     db.run("INSERT INTO tasks (id, project_id, title) VALUES (?, ?, ?)", [foreignId, PROJECT_ID, "Foreign"]);
     db.run("INSERT INTO task_dependencies (task_id, depends_on) VALUES (?, ?)", [foreignId, referenced.graph.task_ids.design]);
-    await expect(authority.compensate({
-      receipt_id: referenced.receipt.receipt_id,
-      idempotency_key: "foreign-reference:compensate",
-      if_binding_version: referenced.receipt.binding_version,
-    })).rejects.toThrow(/foreign reference/i);
+    await expect(authority.compensate(compensationRequest(referenced, "foreign-reference")))
+      .rejects.toThrow(/foreign reference/i);
 
     const clean = await authority.apply(manifest("clean-compensation"));
-    const result = await authority.compensate({
-      receipt_id: clean.receipt.receipt_id,
-      idempotency_key: "clean-compensation:compensate",
-      if_binding_version: clean.receipt.binding_version,
-    });
+    const cleanCompensation = compensationRequest(clean, "clean-compensation");
+    const result = await authority.compensate(cleanCompensation);
     expect(result.absent).toBe(true);
     expect(result.readback).toEqual({ plans: 0, tasks: 0, dependencies: 0, comments: 0, verifications: 0, complete: true });
     expect(db.query("SELECT count(*) AS count FROM todos_task_manifest_outbox WHERE apply_receipt_id = ? AND status = 'cancelled'").get(clean.receipt.receipt_id)).toEqual({ count: 2 });
-    const duplicate = await authority.compensate({
-      receipt_id: clean.receipt.receipt_id,
-      idempotency_key: "clean-compensation:compensate",
-      if_binding_version: clean.receipt.binding_version,
-    });
+    const duplicate = await authority.compensate(cleanCompensation);
     expect(duplicate.duplicate).toBe(true);
+  });
+
+  test("compensates valid pre-0.15.26 SQLite slug states and refuses unknown legacy slugs", async () => {
+    const markProvenance = (receiptId: string, operationId: string, provenance: string | null): void => {
+      db.exec("DROP TRIGGER todos_task_manifest_receipts_immutable_update");
+      db.run("UPDATE todos_task_manifest_receipts SET slug_provenance = ? WHERE receipt_id = ?", [provenance, receiptId]);
+      db.run("UPDATE todos_task_manifest_bindings SET slug_provenance = ? WHERE operation_id = ?", [provenance, operationId]);
+      db.exec(`
+        CREATE TRIGGER todos_task_manifest_receipts_immutable_update
+          BEFORE UPDATE ON todos_task_manifest_receipts BEGIN
+            SELECT RAISE(ABORT, 'todos task manifest receipts are immutable');
+        END;
+      `);
+    };
+    const markLegacyReceipt = (receiptId: string, operationId: string): void =>
+      markProvenance(receiptId, operationId, null);
+    const legacyNull = await createSqliteTodosTaskManifestAuthority({ database: db }).apply(manifest("legacy-slug-null"));
+    db.run("UPDATE plans SET slug = NULL WHERE id = ?", [legacyNull.graph.plan_id]);
+    markLegacyReceipt(legacyNull.receipt.receipt_id, legacyNull.receipt.operation_id);
+    await expect(createSqliteTodosTaskManifestAuthority({ database: db }).compensate(compensationRequest(legacyNull)))
+      .resolves.toMatchObject({ absent: true });
+
+    const legacyBasePlanId = "f0000000-0000-4000-8000-000000000001";
+    db.run(
+      `INSERT INTO plans (id, project_id, name, slug, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 'active', ?, ?)`,
+      [legacyBasePlanId, PROJECT_ID, "Email Triage", "email-triage", "2026-08-06T00:00:00.000Z", "2026-08-06T00:00:00.000Z"],
+    );
+    const legacyAllocated = await createSqliteTodosTaskManifestAuthority({ database: db }).apply(manifest("legacy-slug-allocated"));
+    const legacyManifest = manifest("legacy-slug-allocated");
+    const allocatedSlug = sqliteLegacyTaskManifestPlanSlug(
+      db.query("SELECT id, project_id, name, slug, created_at FROM plans WHERE project_id IS ? ORDER BY created_at ASC, id ASC")
+        .all(PROJECT_ID) as Array<{ id: string; project_id: string | null; name: string; slug: string | null; created_at: string }>,
+      legacyAllocated.graph.plan_id,
+      legacyManifest.plan.key,
+    );
+    expect(allocatedSlug).toBe("email-triage-2");
+    db.run("UPDATE plans SET slug = ? WHERE id = ?", [allocatedSlug, legacyAllocated.graph.plan_id]);
+    markLegacyReceipt(legacyAllocated.receipt.receipt_id, legacyAllocated.receipt.operation_id);
+    await expect(createSqliteTodosTaskManifestAuthority({ database: db }).compensate(compensationRequest(legacyAllocated)))
+      .resolves.toMatchObject({ absent: true });
+
+    const unknown = await createSqliteTodosTaskManifestAuthority({ database: db }).apply(manifest("legacy-slug-unknown"));
+    db.run("UPDATE plans SET slug = 'not-produced-by-legacy-allocator' WHERE id = ?", [unknown.graph.plan_id]);
+    markLegacyReceipt(unknown.receipt.receipt_id, unknown.receipt.operation_id);
+    await expect(createSqliteTodosTaskManifestAuthority({ database: db }).compensate(compensationRequest(unknown)))
+      .rejects.toEqual(expect.objectContaining<TodosTaskManifestError>({
+        code: "TODOS_TASK_MANIFEST_COMPENSATION_REFUSED",
+      }));
+
+    const conflicting = await createSqliteTodosTaskManifestAuthority({ database: db }).apply(manifest("legacy-slug-conflicting-provenance"));
+    markProvenance(conflicting.receipt.receipt_id, conflicting.receipt.operation_id, "legacy-v0.15.25");
+    await expect(createSqliteTodosTaskManifestAuthority({ database: db }).compensate(compensationRequest(conflicting)))
+      .rejects.toEqual(expect.objectContaining<TodosTaskManifestError>({
+        code: "TODOS_TASK_MANIFEST_COMPENSATION_REFUSED",
+      }));
   });
 
   test("refuses before a supported checklist CASCADE can delete the foreign row", async () => {
@@ -570,11 +838,8 @@ describe("task-manifest SQLite authority", () => {
       text: "Foreign checklist evidence",
     }, db);
 
-    await expect(authority.compensate({
-      receipt_id: applied.receipt.receipt_id,
-      idempotency_key: "foreign-checklist-reference:compensate",
-      if_binding_version: applied.receipt.binding_version,
-    })).rejects.toThrow(/foreign reference at task_checklists\.task_id would be changed by CASCADE/i);
+    await expect(authority.compensate(compensationRequest(applied, "foreign-checklist-reference")))
+      .rejects.toThrow(/foreign reference at task_checklists\.task_id would be changed by CASCADE/i);
 
     expect(db.query("SELECT task_id FROM task_checklists WHERE id = ?").get(checklist.id))
       .toEqual({ task_id: applied.graph.task_ids.design });
@@ -598,20 +863,14 @@ describe("task-manifest SQLite authority", () => {
       [boardId, `foreign-board-${boardId}`, applied.graph.plan_id],
     );
 
-    await expect(authority.compensate({
-      receipt_id: applied.receipt.receipt_id,
-      idempotency_key: "foreign-set-null-references:task-compensate",
-      if_binding_version: applied.receipt.binding_version,
-    })).rejects.toThrow(/foreign reference at context_snapshots\.task_id would be changed by SET NULL/i);
+    await expect(authority.compensate(compensationRequest(applied, "foreign-set-null-task")))
+      .rejects.toThrow(/foreign reference at context_snapshots\.task_id would be changed by SET NULL/i);
     expect(db.query("SELECT task_id FROM context_snapshots WHERE id = ?").get(snapshotId))
       .toEqual({ task_id: applied.graph.task_ids.design });
 
     db.run("DELETE FROM context_snapshots WHERE id = ?", [snapshotId]);
-    await expect(authority.compensate({
-      receipt_id: applied.receipt.receipt_id,
-      idempotency_key: "foreign-set-null-references:plan-compensate",
-      if_binding_version: applied.receipt.binding_version,
-    })).rejects.toThrow(/foreign reference at task_boards\.plan_id would be changed by SET NULL/i);
+    await expect(authority.compensate(compensationRequest(applied, "foreign-set-null-plan")))
+      .rejects.toThrow(/foreign reference at task_boards\.plan_id would be changed by SET NULL/i);
     expect(db.query("SELECT plan_id FROM task_boards WHERE id = ?").get(boardId))
       .toEqual({ plan_id: applied.graph.plan_id });
     expect(db.query("SELECT count(*) AS count FROM tasks WHERE id IN (?, ?)").get(
@@ -624,11 +883,8 @@ describe("task-manifest SQLite authority", () => {
     const authority = createSqliteTodosTaskManifestAuthority({ database: db });
     const applied = await authority.apply(manifest("managed-mutation"));
     db.run("UPDATE task_comments SET content = ? WHERE id = ?", ["changed", applied.graph.comment_ids[0]!]);
-    await expect(authority.compensate({
-      receipt_id: applied.receipt.receipt_id,
-      idempotency_key: "managed-mutation:compensate",
-      if_binding_version: applied.receipt.binding_version,
-    })).rejects.toThrow(/comment changed/);
+    await expect(authority.compensate(compensationRequest(applied, "managed-mutation")))
+      .rejects.toThrow(/comment changed/);
   });
 
   test("applies the package pre-write secret boundary before graph persistence", async () => {
@@ -638,6 +894,7 @@ describe("task-manifest SQLite authority", () => {
     sensitive.tasks[0]!.title = `Investigate ${fakeToken}`;
     sensitive.tasks[0]!.comments = [{ content: `Observed ${fakeToken}` }];
     sensitive.effects = [{ topic: "task-manifest.redaction", payload: { note: fakeToken } }];
+    refreshManifestIdentity(sensitive);
     const applied = await authority.apply(sensitive);
     const persisted = JSON.stringify({
       task: db.query("SELECT title FROM tasks WHERE id = ?").get(applied.graph.task_ids.design),
