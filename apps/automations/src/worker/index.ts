@@ -184,6 +184,7 @@ export class TypedActionWorker {
     if (source.status !== "succeeded" || source.result?.metadata?.deliveryStatus !== "partial") {
       throw new Error(`queued action is not a typed partial receipt: ${actionId}`);
     }
+    assertConfiguredActor(this.#authority.actor, options.actor);
     const replay = this.store.requeuePartialAction(actionId);
     const run = this.store.requireRun(replay.automationRunId);
     const automation = this.store.requireAutomation(run.automationId);

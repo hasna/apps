@@ -135,6 +135,15 @@ describe("first-party automation templates", () => {
       failConversations = false;
       const source = first.actions?.[0];
       expect(source?.metadata?.replayOnlySinks).toBeUndefined();
+      const runsBeforeRejectedReplay = store.listRuns();
+      const actionsBeforeRejectedReplay = store.listQueuedActions();
+      await expect(actionWorker.replayPartial(source!.id, {
+        actor: { id: "agent-replay-mismatch", type: "agent" },
+      })).rejects.toThrow("supplied actor does not match configured authority actor");
+      expect(store.listRuns()).toEqual(runsBeforeRejectedReplay);
+      expect(store.listQueuedActions()).toEqual(actionsBeforeRejectedReplay);
+      expect(conversationsCalls).toBe(1);
+
       const replayed = await actionWorker.replayPartial(source!.id);
       expect(replayed.status).toBe("succeeded");
       expect(todosCalls).toBe(1);
