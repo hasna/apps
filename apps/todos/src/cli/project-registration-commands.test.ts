@@ -3,13 +3,14 @@ import { Database } from "bun:sqlite";
 import {
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createPlan } from "../db/plans.js";
-import { createProject } from "../db/projects.js";
+import { createProject, getProject } from "../db/projects.js";
 import { runMigrations } from "../db/schema.js";
 import { createTaskList } from "../db/task-lists.js";
 import { createTask } from "../db/tasks.js";
@@ -35,6 +36,7 @@ async function runCli(
   cwd: string,
   dbPath: string,
   args: string[],
+  remote?: { apiUrl: string; apiKey: string },
 ): Promise<CliResult> {
   const process = Bun.spawn(["bun", "run", "src/cli/index.tsx", ...args], {
     cwd: import.meta.dir + "/../..",
@@ -42,6 +44,10 @@ async function runCli(
       HOME: join(cwd, "home"),
       TODOS_DB_PATH: dbPath,
       TODOS_AUTO_PROJECT: "false",
+      HASNA_TODOS_STORAGE_MODE: remote ? "http" : "sqlite",
+      TODOS_STORAGE_MODE: remote ? "http" : "sqlite",
+      HASNA_TODOS_API_URL: remote?.apiUrl,
+      HASNA_TODOS_API_KEY: remote?.apiKey,
     }),
     stdout: "pipe",
     stderr: "pipe",
@@ -317,6 +323,7 @@ describe("project-registration CLI", () => {
       .capability as TodosProjectRegistrationCapability;
     expect(capability).toMatchObject({
       bind_existing_adoption: true,
+      prior_registration_adoption_validation: true,
       project_resource_enumeration: true,
       project_resource_page_limit: 500,
     });
@@ -345,10 +352,40 @@ describe("project-registration CLI", () => {
       exitCode: projectBind.exitCode,
       stderr: projectBind.stderr,
     }).toEqual({ exitCode: 0, stderr: "" });
-    expect(JSON.parse(projectBind.stdout).receipt).toMatchObject({
+    const projectBindingReceipt = JSON.parse(projectBind.stdout).receipt;
+    expect(projectBindingReceipt).toMatchObject({
       outcome: "accepted",
       target_id: project.id,
       created_by_operation: false,
+    });
+    const validationDb = new Database(dbPath);
+    const validationPath = join(root, "prior-adoption-validation.json");
+    writeFileSync(validationPath, JSON.stringify({
+      source_request: JSON.parse(readFileSync(projectRequestPath, "utf8")),
+      source_receipt: projectBindingReceipt,
+      current_record: getProject(project.id, validationDb),
+    }));
+    validationDb.close();
+    const validationResult = await runCli(
+      root,
+      dbPath,
+      [
+        "--json",
+        "project-registration",
+        "validate-prior-adoption",
+        "--file",
+        validationPath,
+      ],
+    );
+    expect({
+      exitCode: validationResult.exitCode,
+      stderr: validationResult.stderr,
+    }).toEqual({ exitCode: 0, stderr: "" });
+    expect(JSON.parse(validationResult.stdout).validation).toMatchObject({
+      valid: true,
+      source_receipt_id: projectBindingReceipt.receipt_id,
+      accepted_receipt_id: projectBindingReceipt.receipt_id,
+      target_id: project.id,
     });
 
     const taskListRequestPath = join(root, "task-list-request.json");
@@ -417,5 +454,137 @@ describe("project-registration CLI", () => {
       ...plans.map((plan) => plan.id),
       ...tasks.map((task) => task.id),
     ]));
+  }, 30_000);
+
+  test("remote prior-adoption CLI exits nonzero for false, negative, malformed, and forged validation proof", async () => {
+    const root = mkdtempSync(join(tmpdir(), "todos-project-registration-cli-remote-validation-"));
+    roots.push(root);
+    const inputPath = join(root, "prior-adoption-validation.json");
+    const targetId = "11111111-1111-4111-8111-111111111111";
+    const createdAt = "2026-08-12T09:00:00.000Z";
+    const resultDigest = "c".repeat(64);
+    const sourceRequest = {
+      operation_id: "project-resources-cli-remote-validation-0001",
+      step_id: "todos_project",
+      resource_kind: "project",
+      direction: "forward",
+      authority_route: "todos.project-registration.v1",
+      package_version: "0.15.30-test",
+      authority_id: "todos",
+      tenant_id: "tenant-test",
+      corpus_id: "todos:tenant-test",
+      target_selector: "wks_cliremotevalidation01",
+      idempotency_key: `prk_${"7".repeat(48)}`,
+      request_digest: "a".repeat(64),
+      precondition_digest: "b".repeat(64),
+      project_id: "wks_cliremotevalidation01",
+      project_slug: "cli-remote-validation",
+      project_name: "CLI remote validation",
+      desired: {},
+      bind_existing: true,
+      response_byte_limit: 65_536,
+      time_budget_ms: 5_000,
+    } as const;
+    const sourceReceipt = {
+      receipt_id: "tpr_cli_remote_validation",
+      authority: "todos",
+      route: "todos.project-registration.v1",
+      package_version: sourceRequest.package_version,
+      authority_id: sourceRequest.authority_id,
+      tenant_id: sourceRequest.tenant_id,
+      corpus_id: sourceRequest.corpus_id,
+      operation_id: sourceRequest.operation_id,
+      step_id: sourceRequest.step_id,
+      resource_kind: sourceRequest.resource_kind,
+      direction: sourceRequest.direction,
+      idempotency_key: sourceRequest.idempotency_key,
+      request_digest: sourceRequest.request_digest,
+      precondition_digest: sourceRequest.precondition_digest,
+      outcome: "accepted",
+      reason: null,
+      target_id: targetId,
+      result_revision: createdAt,
+      result_digest: resultDigest,
+      duplicate_of_receipt_id: null,
+      accepted_receipt_id: null,
+      created_by_operation: false,
+      created_at: createdAt,
+    } as const;
+    const currentRecord = {
+      id: targetId,
+      name: sourceRequest.project_name,
+      path: `hasna-project://${sourceRequest.project_id}`,
+      description: null,
+      task_list_id: "todos-cli-remote-validation",
+      task_prefix: "CLI",
+      task_counter: 0,
+      created_at: createdAt,
+      updated_at: createdAt,
+      machine_id: null,
+    };
+    const validation = {
+      valid: true,
+      resource_kind: "project",
+      target_id: targetId,
+      source_receipt_id: sourceReceipt.receipt_id,
+      accepted_receipt_id: sourceReceipt.receipt_id,
+      source_outcome: "accepted",
+      created_at: currentRecord.created_at,
+      current_revision: currentRecord.updated_at,
+      accepted_result_digest: sourceReceipt.result_digest,
+    } as const;
+    writeFileSync(inputPath, JSON.stringify({
+      source_request: sourceRequest,
+      source_receipt: sourceReceipt,
+      current_record: currentRecord,
+    }));
+    let responseBody: unknown = { validation };
+    const server = Bun.serve({
+      port: 0,
+      fetch(request) {
+        expect(new URL(request.url).pathname)
+          .toBe("/v1/project-registration/validate-prior-adoption");
+        return Response.json(responseBody);
+      },
+    });
+    const remote = {
+      apiUrl: `http://127.0.0.1:${server.port}`,
+      apiKey: "[REDACTED_SECRET]",
+    };
+    try {
+      const honest = await runCli(
+        root,
+        join(root, "unused-local.db"),
+        ["--json", "project-registration", "validate-prior-adoption", "--file", inputPath],
+        remote,
+      );
+      expect({ exitCode: honest.exitCode, stderr: honest.stderr }).toEqual({
+        exitCode: 0,
+        stderr: "",
+      });
+      expect(JSON.parse(honest.stdout)).toEqual({ validation });
+
+      for (const body of [
+        false,
+        { validation: false },
+        { validation: { valid: false } },
+        { validation: { valid: true } },
+        { validation: { ...validation, source_receipt_id: "tpr_forged" } },
+      ]) {
+        responseBody = body;
+        const rejected = await runCli(
+          root,
+          join(root, "unused-local.db"),
+          ["--json", "project-registration", "validate-prior-adoption", "--file", inputPath],
+          remote,
+        );
+        expect(rejected.exitCode).not.toBe(0);
+        expect(`${rejected.stdout}\n${rejected.stderr}`).toContain(
+          "REMOTE_API_INCOMPATIBLE",
+        );
+      }
+    } finally {
+      server.stop(true);
+    }
   }, 30_000);
 });

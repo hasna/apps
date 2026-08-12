@@ -42,9 +42,14 @@ import type {
   TodosProjectRegistrationRecord,
   TodosProjectRegistrationRequest,
   TodosProjectRegistrationResourceKind,
+  TodosPriorRegistrationAdoptionValidation,
+  TodosPriorRegistrationAdoptionValidationRequest,
   TodosProjectResourcePage,
   TodosProjectResourcePageRequest,
 } from "../project-registration/index.js";
+import {
+  assertTodosPriorRegistrationAdoptionValidationEnvelope,
+} from "../project-registration/adoption-validation.js";
 import { assertTodosProjectResourcePage } from "../project-registration/page-validation.js";
 
 type Env = Record<string, string | undefined>;
@@ -707,7 +712,7 @@ function unwrapTaskManifestEnvelope<T>(
 
 function unwrapProjectRegistrationEnvelope<T>(
   raw: unknown,
-  key: "capability" | "receipt" | "record" | "verification" | "page",
+  key: "capability" | "receipt" | "record" | "verification" | "page" | "validation",
   route: string,
 ): T {
   if (!raw || typeof raw !== "object" || Array.isArray(raw) || !(key in raw)) {
@@ -760,6 +765,24 @@ export async function cloudReadExactProjectRegistration(
     "record",
     route,
   );
+}
+
+export async function cloudValidatePriorRegistrationAdoption(
+  client: HasnaStorageClient,
+  input: TodosPriorRegistrationAdoptionValidationRequest,
+): Promise<TodosPriorRegistrationAdoptionValidation> {
+  const route = "/v1/project-registration/validate-prior-adoption";
+  const raw = await requiredRemoteRoute(client, route, () =>
+    client.transport.post<unknown>("/project-registration/validate-prior-adoption", input));
+  try {
+    return assertTodosPriorRegistrationAdoptionValidationEnvelope(raw, input);
+  } catch (error) {
+    throw new Error(
+      `REMOTE_API_INCOMPATIBLE: ${route} returned an invalid prior-adoption validation proof; ` +
+        "local SQLite fallback is disabled",
+      { cause: error },
+    );
+  }
 }
 
 export async function cloudCompensateProjectRegistration(

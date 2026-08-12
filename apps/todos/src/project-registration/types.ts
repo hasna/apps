@@ -1,3 +1,5 @@
+import type { Project, TaskList } from "../types/index.js";
+
 export const TODOS_PROJECT_REGISTRATION_ROUTE = "todos.project-registration.v1" as const;
 export const TODOS_PROJECT_REGISTRATION_CALLER_ROUTE = "projects.full-registration.v1" as const;
 export const TODOS_PROJECT_REGISTRATION_SCHEMA_VERSION = 1 as const;
@@ -39,6 +41,7 @@ export interface TodosProjectRegistrationCapability {
   exact_terminal_lookup: true;
   exact_readback: true;
   bind_existing_adoption: true;
+  prior_registration_adoption_validation: true;
   project_resource_enumeration: true;
   project_resource_page_limit: number;
   conditional_inverse: true;
@@ -75,6 +78,26 @@ export interface TodosProjectRegistrationRecord {
   target_id: string;
   revision: string;
   digest: string;
+}
+
+export type TodosPriorRegistrationAdoptionCurrentRecord = Project | TaskList;
+
+export interface TodosPriorRegistrationAdoptionValidation {
+  valid: true;
+  resource_kind: TodosProjectRegistrationResourceKind;
+  target_id: string;
+  source_receipt_id: string;
+  accepted_receipt_id: string;
+  source_outcome: "accepted" | "duplicate_of_accepted";
+  created_at: string;
+  current_revision: string;
+  accepted_result_digest: string;
+}
+
+export interface TodosPriorRegistrationAdoptionValidationRequest {
+  source_request: TodosProjectRegistrationRequest;
+  source_receipt: TodosProjectRegistrationReceipt;
+  current_record: TodosPriorRegistrationAdoptionCurrentRecord;
 }
 
 export interface TodosProjectRegistrationRequest extends TodosProjectRegistrationBounds {
@@ -194,6 +217,11 @@ export interface TodosProjectRegistrationAuthority {
   listProjectResources(
     request: TodosProjectResourcePageRequest,
   ): Promise<TodosProjectResourcePage>;
+  validatePriorRegistrationAdoption(
+    sourceRequest: TodosProjectRegistrationRequest,
+    sourceReceipt: TodosProjectRegistrationReceipt,
+    currentRecord: TodosPriorRegistrationAdoptionCurrentRecord,
+  ): Promise<TodosPriorRegistrationAdoptionValidation>;
   compensate(
     request: TodosProjectRegistrationRequest,
   ): Promise<TodosProjectRegistrationReceipt>;
@@ -239,6 +267,7 @@ export type TodosProjectRegistrationErrorCode =
   | "TODOS_PROJECT_REGISTRATION_RECORD_NOT_FOUND"
   | "TODOS_PROJECT_REGISTRATION_COLLECTION_CHANGED"
   | "TODOS_PROJECT_REGISTRATION_ACCEPTED_RECEIPT_NOT_FOUND"
+  | "TODOS_PROJECT_REGISTRATION_ADOPTION_REJECTED"
   | "TODOS_PROJECT_REGISTRATION_ATOMICITY_UNAVAILABLE"
   | "TODOS_PROJECT_REGISTRATION_CONFLICT";
 

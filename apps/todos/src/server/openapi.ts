@@ -558,7 +558,8 @@ const projectRegistrationCapabilitySchema = {
     "authority", "route", "package_version", "authority_id", "tenant_id",
     "corpus_id", "supported_resources", "conditional_create",
     "immutable_receipts", "exact_terminal_lookup", "exact_readback",
-    "bind_existing_adoption", "project_resource_enumeration",
+    "bind_existing_adoption", "prior_registration_adoption_validation",
+    "project_resource_enumeration",
     "project_resource_page_limit", "conditional_inverse",
     "ambiguous_outcome_reconciliation",
   ],
@@ -578,6 +579,7 @@ const projectRegistrationCapabilitySchema = {
     exact_terminal_lookup: { type: "boolean", enum: [true] },
     exact_readback: { type: "boolean", enum: [true] },
     bind_existing_adoption: { type: "boolean", enum: [true] },
+    prior_registration_adoption_validation: { type: "boolean", enum: [true] },
     project_resource_enumeration: { type: "boolean", enum: [true] },
     project_resource_page_limit: { type: "integer", minimum: 1 },
     conditional_inverse: { type: "boolean", enum: [true] },
@@ -644,6 +646,27 @@ const projectRegistrationLookupRequestSchema = {
     target_id: { type: "string", format: "uuid" },
     max_items: { type: "integer", enum: [1] },
     ...projectRegistrationBoundsProperties,
+  },
+} as const;
+
+const priorRegistrationAdoptionValidationSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "valid", "resource_kind", "target_id", "source_receipt_id",
+    "accepted_receipt_id", "source_outcome", "created_at",
+    "current_revision", "accepted_result_digest",
+  ],
+  properties: {
+    valid: { type: "boolean", enum: [true] },
+    resource_kind: { type: "string", enum: ["project", "task_list"] },
+    target_id: { type: "string", format: "uuid" },
+    source_receipt_id: { type: "string" },
+    accepted_receipt_id: { type: "string" },
+    source_outcome: { type: "string", enum: ["accepted", "duplicate_of_accepted"] },
+    created_at: { type: "string", format: "date-time" },
+    current_revision: { type: "string", format: "date-time" },
+    accepted_result_digest: { type: "string" },
   },
 } as const;
 
@@ -726,6 +749,7 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
         ProjectRegistrationReceipt: projectRegistrationReceiptSchema,
         ProjectRegistrationRequest: projectRegistrationRequestSchema,
         ProjectRegistrationLookupRequest: projectRegistrationLookupRequestSchema,
+        PriorRegistrationAdoptionValidation: priorRegistrationAdoptionValidationSchema,
         ProjectResource: projectResourceSchema,
         ProjectResourcePage: projectResourcePageSchema,
         TaskList: taskListSchema,
@@ -1707,6 +1731,55 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
             },
             "400": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
             "404": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
+        },
+      },
+      "/v1/project-registration/validate-prior-adoption": {
+        post: {
+          operationId: "validatePriorRegistrationAdoption",
+          summary: "Fail closed unless one prior accepted registration still matches its exact current resource",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  additionalProperties: false,
+                  required: ["source_request", "source_receipt", "current_record"],
+                  properties: {
+                    source_request: { $ref: "#/components/schemas/ProjectRegistrationRequest" },
+                    source_receipt: { $ref: "#/components/schemas/ProjectRegistrationReceipt" },
+                    current_record: {
+                      oneOf: [
+                        { $ref: "#/components/schemas/Project" },
+                        { $ref: "#/components/schemas/TaskList" },
+                      ],
+                    },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["validation"],
+                    properties: {
+                      validation: {
+                        $ref: "#/components/schemas/PriorRegistrationAdoptionValidation",
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            "400": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "404": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "409": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
           },
         },
       },

@@ -12,6 +12,9 @@ export {
   handleTodosProjectRegistrationHttpRequest,
 } from "./http.js";
 export {
+  assertTodosPriorRegistrationAdoptionValidationEnvelope,
+} from "./adoption-validation.js";
+export {
   PostgresTodosProjectRegistrationBackend,
   type PostgresTodosProjectRegistrationBackendOptions,
   type TodosProjectRegistrationPostgresClient,
@@ -45,6 +48,9 @@ export type {
   TodosProjectRegistrationRequest,
   TodosProjectRegistrationResourceKind,
   TodosProjectRegistrationResponseControl,
+  TodosPriorRegistrationAdoptionCurrentRecord,
+  TodosPriorRegistrationAdoptionValidation,
+  TodosPriorRegistrationAdoptionValidationRequest,
   TodosProjectResource,
   TodosProjectResourceKind,
   TodosProjectResourcePage,

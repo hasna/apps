@@ -168,6 +168,81 @@ function taskListRequest(
   };
 }
 
+function legacyNormalizedCallDigest(
+  request: TodosProjectRegistrationRequest,
+): string {
+  return digestProjectRegistrationValue({
+    authority_route: request.authority_route,
+    package_version: request.package_version,
+    authority_id: request.authority_id,
+    tenant_id: request.tenant_id,
+    corpus_id: request.corpus_id,
+    operation_id: request.operation_id,
+    step_id: request.step_id,
+    resource_kind: request.resource_kind,
+    direction: request.direction,
+    target_selector: request.target_selector,
+    idempotency_key: request.idempotency_key,
+    request_digest: request.request_digest,
+    precondition_digest: request.precondition_digest,
+    project_id: request.project_id,
+    project_slug: request.project_slug,
+    project_name: request.project_name,
+    desired: request.desired,
+    accepted_receipt_id: request.accepted_receipt?.receipt_id ?? null,
+  });
+}
+
+function insertLegacyAcceptedProjectReceipt(
+  request: TodosProjectRegistrationRequest,
+  project: ReturnType<typeof createProject>,
+): string {
+  const receiptId = `tpr_legacy_${request.operation_id.replace(/[^a-z0-9]/gi, "").slice(0, 28)}`;
+  const resultDigest = digestProjectRegistrationValue({
+    id: project.id,
+    name: project.name,
+    path: project.path,
+    description: project.description,
+    task_list_id: project.task_list_id,
+    task_prefix: project.task_prefix,
+    task_counter: project.task_counter,
+    created_at: project.created_at,
+    updated_at: project.updated_at,
+  });
+  db.run(`
+    INSERT INTO todos_project_registration_receipts (
+      receipt_id, authority, route, package_version, authority_id, tenant_id,
+      corpus_id, operation_id, step_id, resource_kind, direction,
+      target_selector, idempotency_key, request_digest, precondition_digest,
+      normalized_call_digest, outcome, reason, target_id, result_revision,
+      result_digest, duplicate_of_receipt_id, accepted_receipt_id,
+      created_by_operation, created_at
+    ) VALUES (
+      ?, 'todos', ?, ?, ?, ?, ?, ?, ?, 'project', 'forward', ?, ?, ?, ?, ?,
+      'accepted', NULL, ?, ?, ?, NULL, NULL, 1, ?
+    )
+  `, [
+    receiptId,
+    request.authority_route,
+    request.package_version,
+    request.authority_id,
+    request.tenant_id,
+    request.corpus_id,
+    request.operation_id,
+    request.step_id,
+    request.target_selector,
+    request.idempotency_key,
+    request.request_digest,
+    request.precondition_digest,
+    legacyNormalizedCallDigest(request),
+    project.id,
+    project.updated_at,
+    resultDigest,
+    project.created_at,
+  ]);
+  return receiptId;
+}
+
 function inverseRequest(
   accepted: Awaited<ReturnType<TodosProjectRegistrationAuthority["create"]>>,
   forward: TodosProjectRegistrationRequest,
@@ -303,6 +378,7 @@ describe("Todos package-owned project registration authority", () => {
       exact_terminal_lookup: true,
       exact_readback: true,
       bind_existing_adoption: true,
+      prior_registration_adoption_validation: true,
       project_resource_enumeration: true,
       project_resource_page_limit: 500,
       conditional_inverse: true,
@@ -428,6 +504,325 @@ describe("Todos package-owned project registration authority", () => {
     await expect(authority.compensate(inverseRequest(projectReceipt, projectCall)))
       .rejects.toMatchObject({ code: "TODOS_PROJECT_REGISTRATION_INVALID_INPUT" });
     expect(getProject(existingProject.id, db)).not.toBeNull();
+  });
+
+  test("bind-existing receipts preserve immutable project and task-list incarnations across pre-bind mutable drift", async () => {
+    const existingProject = createProject({
+      name: "Existing Fleet Resources",
+      path: "hasna-project://wks_fleetresources01",
+      task_list_id: "todos-fleet-resources",
+    }, db);
+    db.run(
+      "UPDATE projects SET task_counter = 3, updated_at = ? WHERE id = ?",
+      ["2099-01-02T03:04:05.000Z", existingProject.id],
+    );
+    const projectCall = projectRequest({
+      operation_id: "fleet-resources-prebind-project-drift-0001",
+      bind_existing: true,
+    });
+    const projectReceipt = await authority.create(projectCall);
+    expect(projectReceipt).toMatchObject({
+      outcome: "accepted",
+      target_id: existingProject.id,
+      result_revision: existingProject.created_at,
+      created_by_operation: false,
+    });
+
+    const existingTaskList = createTaskList({
+      name: "Existing Fleet Resources",
+      slug: "todos-fleet-resources",
+      project_id: existingProject.id,
+    }, db);
+    db.run(
+      "UPDATE task_lists SET updated_at = ? WHERE id = ?",
+      ["2099-01-02T03:04:06.000Z", existingTaskList.id],
+    );
+    const taskListCall = taskListRequest(existingProject.id, {
+      operation_id: "fleet-resources-prebind-list-drift-0001",
+      bind_existing: true,
+    });
+    const taskListReceipt = await authority.create(taskListCall);
+    expect(taskListReceipt).toMatchObject({
+      outcome: "accepted",
+      target_id: existingTaskList.id,
+      result_revision: existingTaskList.created_at,
+      created_by_operation: false,
+    });
+
+    db.run(
+      "UPDATE projects SET task_counter = task_counter + 2, updated_at = ? WHERE id = ?",
+      ["2099-01-02T03:04:07.000Z", existingProject.id],
+    );
+    db.run(
+      "UPDATE task_lists SET updated_at = ? WHERE id = ?",
+      ["2099-01-02T03:04:08.000Z", existingTaskList.id],
+    );
+    expect(await authority.validatePriorRegistrationAdoption(
+      projectCall,
+      projectReceipt,
+      getProject(existingProject.id, db)!,
+    )).toMatchObject({
+      valid: true,
+      resource_kind: "project",
+      target_id: existingProject.id,
+      created_at: existingProject.created_at,
+      current_revision: "2099-01-02T03:04:07.000Z",
+    });
+    expect(await authority.validatePriorRegistrationAdoption(
+      taskListCall,
+      taskListReceipt,
+      getTaskList(existingTaskList.id, db)!,
+    )).toMatchObject({
+      valid: true,
+      resource_kind: "task_list",
+      target_id: existingTaskList.id,
+      created_at: existingTaskList.created_at,
+      current_revision: "2099-01-02T03:04:08.000Z",
+    });
+  });
+
+  test("validates accepted and duplicate prior registrations across benign project/task-list drift", async () => {
+    const projectCall = projectRequest({
+      operation_id: "fleet-resources-prior-adoption-project-0001",
+    });
+    const projectReceipt = await authority.create(projectCall);
+    const taskListCall = taskListRequest(projectReceipt.target_id!, {
+      operation_id: "fleet-resources-prior-adoption-list-0001",
+    });
+    const taskListReceipt = await authority.create(taskListCall);
+    const duplicateProjectReceipt = await authority.create(structuredClone(projectCall));
+
+    db.run(
+      "UPDATE projects SET task_counter = task_counter + 1, updated_at = ? WHERE id = ?",
+      ["2099-01-02T03:04:04.000Z", projectReceipt.target_id!],
+    );
+    db.run(
+      "UPDATE task_lists SET updated_at = ? WHERE id = ?",
+      ["2099-01-02T03:04:05.000Z", taskListReceipt.target_id!],
+    );
+    const currentProject = getProject(projectReceipt.target_id!, db)!;
+    const currentTaskList = getTaskList(taskListReceipt.target_id!, db)!;
+
+    expect(await authority.validatePriorRegistrationAdoption(
+      projectCall,
+      projectReceipt,
+      currentProject,
+    )).toMatchObject({
+      valid: true,
+      source_outcome: "accepted",
+      target_id: projectReceipt.target_id,
+      accepted_receipt_id: projectReceipt.receipt_id,
+    });
+    expect(await authority.validatePriorRegistrationAdoption(
+      projectCall,
+      duplicateProjectReceipt,
+      currentProject,
+    )).toMatchObject({
+      valid: true,
+      source_outcome: "duplicate_of_accepted",
+      target_id: projectReceipt.target_id,
+      accepted_receipt_id: projectReceipt.receipt_id,
+    });
+    expect(await authority.validatePriorRegistrationAdoption(
+      taskListCall,
+      taskListReceipt,
+      currentTaskList,
+    )).toMatchObject({
+      valid: true,
+      resource_kind: "task_list",
+      target_id: taskListReceipt.target_id,
+    });
+
+    expect(await authority.readExact({
+      resource_kind: "project",
+      target_id: projectReceipt.target_id!,
+      target: null,
+      ...BOUNDS,
+    })).not.toEqual({
+      target_id: projectReceipt.target_id,
+      revision: projectReceipt.result_revision,
+      digest: projectReceipt.result_digest,
+    });
+    expect(await authority.listProjectResources({
+      source_project_id: projectCall.project_id,
+      limit: 10,
+    })).toMatchObject({
+      todos_project_id: projectReceipt.target_id,
+      task_list_id: taskListReceipt.target_id,
+      resources: [
+        {
+          kind: "project",
+          target_id: projectReceipt.target_id,
+          parent_id: null,
+        },
+        {
+          kind: "task_list",
+          target_id: taskListReceipt.target_id,
+          parent_id: projectReceipt.target_id,
+        },
+      ],
+    });
+  });
+
+  test("rejects forged receipt, request lineage, stable mutation, and foreign current records", async () => {
+    const request = projectRequest({
+      operation_id: "fleet-resources-prior-adoption-rejections-0001",
+    });
+    const receipt = await authority.create(request);
+    const current = getProject(receipt.target_id!, db)!;
+    const unrelated = createProject({
+      name: "Foreign current project",
+      path: "hasna-project://wks_foreignadoption01",
+      task_list_id: "todos-foreign-adoption",
+    }, db);
+
+    await expect(authority.validatePriorRegistrationAdoption(
+      request,
+      { ...receipt, result_digest: `sha256:${"0".repeat(64)}` },
+      current,
+    )).rejects.toMatchObject({ code: "TODOS_PROJECT_REGISTRATION_ADOPTION_REJECTED" });
+    for (const changedRequest of [
+      { ...request, authority_id: "foreign-authority" },
+      { ...request, tenant_id: "foreign-tenant" },
+      { ...request, corpus_id: "foreign-corpus" },
+      { ...request, operation_id: "foreign-operation" },
+      { ...request, step_id: "foreign-step" },
+      { ...request, target_selector: "foreign-selector" },
+      { ...request, idempotency_key: `sha256:${"1".repeat(64)}` },
+      { ...request, request_digest: `sha256:${"2".repeat(64)}` },
+      { ...request, precondition_digest: `sha256:${"3".repeat(64)}` },
+      { ...request, desired: { ...request.desired, name: "Foreign desired name" } },
+    ]) {
+      await expect(authority.validatePriorRegistrationAdoption(
+        changedRequest,
+        receipt,
+        current,
+      )).rejects.toBeInstanceOf(TodosProjectRegistrationError);
+    }
+    await expect(authority.validatePriorRegistrationAdoption(
+      request,
+      receipt,
+      unrelated,
+    )).rejects.toMatchObject({ code: "TODOS_PROJECT_REGISTRATION_ADOPTION_REJECTED" });
+    await expect(authority.validatePriorRegistrationAdoption(
+      request,
+      receipt,
+      undefined as never,
+    )).rejects.toMatchObject({ code: "TODOS_PROJECT_REGISTRATION_ADOPTION_REJECTED" });
+    await expect(authority.validatePriorRegistrationAdoption(
+      request,
+      receipt,
+      false as never,
+    )).rejects.toMatchObject({ code: "TODOS_PROJECT_REGISTRATION_ADOPTION_REJECTED" });
+    await expect(authority.validatePriorRegistrationAdoption(
+      false as never,
+      receipt,
+      current,
+    )).rejects.toMatchObject({ code: "TODOS_PROJECT_REGISTRATION_ADOPTION_REJECTED" });
+    await expect(authority.validatePriorRegistrationAdoption(
+      request,
+      undefined as never,
+      current,
+    )).rejects.toMatchObject({ code: "TODOS_PROJECT_REGISTRATION_ADOPTION_REJECTED" });
+    const throwingCurrentRecord = Object.defineProperty({}, "id", {
+      enumerable: true,
+      get() {
+        throw new Error("untrusted current record getter");
+      },
+    });
+    await expect(authority.validatePriorRegistrationAdoption(
+      request,
+      receipt,
+      throwingCurrentRecord as never,
+    )).rejects.toMatchObject({ code: "TODOS_PROJECT_REGISTRATION_ADOPTION_REJECTED" });
+
+    const changed = updateProject(receipt.target_id!, { name: "Mutated stable name" }, db);
+    await expect(authority.validatePriorRegistrationAdoption(
+      request,
+      receipt,
+      changed,
+    )).rejects.toMatchObject({ code: "TODOS_PROJECT_REGISTRATION_ADOPTION_REJECTED" });
+  });
+
+  test("rejects missing or forged accepted bindings and a delete-recreated target incarnation", async () => {
+    const missingBindingRequest = projectRequest({
+      operation_id: "fleet-resources-prior-adoption-missing-binding-0001",
+    });
+    const missingBindingReceipt = await authority.create(missingBindingRequest);
+    const missingBindingCurrent = getProject(missingBindingReceipt.target_id!, db)!;
+    db.run(
+      "DELETE FROM todos_project_registration_bindings WHERE target_selector = ?",
+      [missingBindingRequest.target_selector],
+    );
+    await expect(authority.validatePriorRegistrationAdoption(
+      missingBindingRequest,
+      missingBindingReceipt,
+      missingBindingCurrent,
+    )).rejects.toMatchObject({ code: "TODOS_PROJECT_REGISTRATION_ADOPTION_REJECTED" });
+
+    const forgedBindingRequest = projectRequest({
+      operation_id: "fleet-resources-prior-adoption-forged-binding-0001",
+      project_id: "wks_forgedbinding01",
+      target_selector: "wks_forgedbinding01",
+      project_slug: "forged-binding",
+      project_name: "Forged Binding",
+      desired: {
+        source_project_id: "wks_forgedbinding01",
+        source_project_slug: "forged-binding",
+        name: "Forged Binding",
+      },
+    });
+    const forgedBindingReceipt = await authority.create(forgedBindingRequest);
+    const forgedBindingCurrent = getProject(forgedBindingReceipt.target_id!, db)!;
+    db.run(
+      `UPDATE todos_project_registration_bindings
+       SET accepted_receipt_id = ? WHERE target_selector = ?`,
+      ["tpr_forged_prior_adoption", forgedBindingRequest.target_selector],
+    );
+    await expect(authority.validatePriorRegistrationAdoption(
+      forgedBindingRequest,
+      forgedBindingReceipt,
+      forgedBindingCurrent,
+    )).rejects.toMatchObject({ code: "TODOS_PROJECT_REGISTRATION_ADOPTION_REJECTED" });
+
+    const recreatedRequest = projectRequest({
+      operation_id: "fleet-resources-prior-adoption-recreated-0001",
+      project_id: "wks_recreatedadoption01",
+      target_selector: "wks_recreatedadoption01",
+      project_slug: "recreated-adoption",
+      project_name: "Recreated Adoption",
+      desired: {
+        source_project_id: "wks_recreatedadoption01",
+        source_project_slug: "recreated-adoption",
+        name: "Recreated Adoption",
+      },
+    });
+    const recreatedReceipt = await authority.create(recreatedRequest);
+    const original = getProject(recreatedReceipt.target_id!, db)!;
+    db.run("DELETE FROM projects WHERE id = ?", [original.id]);
+    db.run(
+      `INSERT INTO projects (
+        id, name, path, description, task_list_id, task_prefix, task_counter,
+        created_at, updated_at, machine_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        original.id,
+        original.name,
+        original.path,
+        original.description,
+        original.task_list_id,
+        original.task_prefix,
+        original.task_counter,
+        "2099-02-03T04:05:06.000Z",
+        "2099-02-03T04:05:06.000Z",
+        original.machine_id,
+      ],
+    );
+    await expect(authority.validatePriorRegistrationAdoption(
+      recreatedRequest,
+      recreatedReceipt,
+      getProject(original.id, db)!,
+    )).rejects.toMatchObject({ code: "TODOS_PROJECT_REGISTRATION_ADOPTION_REJECTED" });
   });
 
   test("producer-pages canonical identities and optional plan/task anchors without duplicates or unrelated rows", async () => {
@@ -667,6 +1062,23 @@ describe("Todos package-owned project registration authority", () => {
       revision: receipt.result_revision,
       digest: receipt.result_digest,
     });
+    expect(await client.validatePriorRegistrationAdoption(
+      request,
+      receipt,
+      getProject(receipt.target_id!, db)!,
+    )).toMatchObject({
+      valid: true,
+      source_receipt_id: receipt.receipt_id,
+      accepted_receipt_id: receipt.receipt_id,
+      target_id: receipt.target_id,
+    });
+    await expect(client.validatePriorRegistrationAdoption(
+      request,
+      { ...receipt, target_id: "11111111-1111-4111-8111-111111111111" },
+      getProject(receipt.target_id!, db)!,
+    )).rejects.toMatchObject({
+      code: "TODOS_PROJECT_REGISTRATION_ADOPTION_REJECTED",
+    });
     const listRequest = taskListRequest(receipt.target_id!, {
       operation_id: "fleet-resources-http-list-0001",
       project_id: request.project_id,
@@ -715,6 +1127,51 @@ describe("Todos package-owned project registration authority", () => {
       accepted_receipt_id: receipt.receipt_id,
     });
     expect(getPlan(plan.id, db)?.project_id).toBe(receipt.target_id);
+  });
+
+  test("HTTP client rejects false, negative, malformed, and forged prior-adoption validation responses", async () => {
+    const request = projectRequest({
+      operation_id: "fleet-resources-http-validation-negative-0001",
+    });
+    const receipt = await authority.create(request);
+    const current = getProject(receipt.target_id!, db)!;
+    const honest = {
+      valid: true,
+      resource_kind: "project",
+      target_id: receipt.target_id!,
+      source_receipt_id: receipt.receipt_id,
+      accepted_receipt_id: receipt.receipt_id,
+      source_outcome: "accepted",
+      created_at: current.created_at,
+      current_revision: current.updated_at,
+      accepted_result_digest: receipt.result_digest!,
+    } as const;
+    const clientFor = (body: unknown) => createTodosProjectRegistrationHttpClient({
+      baseUrl: "https://todos.test",
+      fetch: async () => Response.json(body),
+    });
+
+    await expect(clientFor({ validation: honest }).validatePriorRegistrationAdoption(
+      request,
+      receipt,
+      current,
+    )).resolves.toEqual(honest);
+    for (const body of [
+      false,
+      { validation: false },
+      { validation: { valid: false } },
+      { validation: { valid: true } },
+      { validation: { ...honest, target_id: "11111111-1111-4111-8111-111111111111" } },
+      { validation: { ...honest, accepted_result_digest: "0".repeat(64) } },
+    ]) {
+      await expect(clientFor(body).validatePriorRegistrationAdoption(
+        request,
+        receipt,
+        current,
+      )).rejects.toMatchObject({
+        code: "TODOS_PROJECT_REGISTRATION_ADOPTION_REJECTED",
+      });
+    }
   });
 
   test("accepts iapp-* project slugs without legacy iproj prefix logic", async () => {
@@ -997,6 +1454,73 @@ describe("Todos package-owned project registration authority", () => {
     expect((await authority.create(structuredClone(request))).receipt_id).toBe(duplicate.receipt_id);
     expect(db.query("SELECT COUNT(*) AS count FROM projects").get()).toEqual({ count: 1 });
     expect((await exactLookup(request)).receipt).toEqual(duplicate);
+  });
+
+  for (const bindExisting of [undefined, false] as const) {
+    test(`duplicates a pre-bind_existing accepted receipt when bind_existing is ${
+      bindExisting === undefined ? "omitted" : "explicit false"
+    }`, async () => {
+      const suffix = bindExisting === undefined ? "omitted" : "false";
+      const request = projectRequest({
+        operation_id: `fleet-resources-legacy-bind-${suffix}-0001`,
+        project_id: `wks_fleetlegacy${suffix}01`,
+        target_selector: `wks_fleetlegacy${suffix}01`,
+        project_slug: `fleet-legacy-${suffix}`,
+        project_name: `Fleet Legacy ${suffix}`,
+        desired: {
+          source_project_id: `wks_fleetlegacy${suffix}01`,
+          source_project_slug: `fleet-legacy-${suffix}`,
+          name: `Fleet Legacy ${suffix}`,
+        },
+        ...(bindExisting === false ? { bind_existing: false } : {}),
+      });
+      const normalized = projectRequest(request);
+      const project = createProject({
+        name: normalized.project_name,
+        path: `hasna-project://${normalized.project_id}`,
+        description: `Registered from Projects workspace ${normalized.project_id}`,
+        task_list_id: `todos-${normalized.project_slug}`,
+        task_prefix: "FLE",
+      }, db);
+      const acceptedReceiptId = insertLegacyAcceptedProjectReceipt(normalized, project);
+
+      await expect(authority.create(structuredClone(normalized))).resolves.toMatchObject({
+        outcome: "duplicate_of_accepted",
+        duplicate_of_receipt_id: acceptedReceiptId,
+        target_id: project.id,
+        created_by_operation: false,
+      });
+      expect(db.query("SELECT COUNT(*) AS count FROM projects").get()).toEqual({ count: 1 });
+    });
+  }
+
+  test("does not treat legacy digest compatibility as bind_existing=true semantics", async () => {
+    const request = projectRequest({
+      operation_id: "fleet-resources-legacy-bind-true-0001",
+      project_id: "wks_fleetlegacytrue01",
+      target_selector: "wks_fleetlegacytrue01",
+      project_slug: "fleet-legacy-true",
+      project_name: "Fleet Legacy True",
+      desired: {
+        source_project_id: "wks_fleetlegacytrue01",
+        source_project_slug: "fleet-legacy-true",
+        name: "Fleet Legacy True",
+      },
+      bind_existing: true,
+    });
+    const normalized = projectRequest(request);
+    const project = createProject({
+      name: normalized.project_name,
+      path: `hasna-project://${normalized.project_id}`,
+      task_list_id: `todos-${normalized.project_slug}`,
+    }, db);
+    insertLegacyAcceptedProjectReceipt(normalized, project);
+
+    await expect(authority.create(structuredClone(normalized))).resolves.toMatchObject({
+      outcome: "terminal_nonacceptance",
+      reason: "operation_step_semantics_changed",
+      target_id: project.id,
+    });
   });
 
   test("terminally rejects changed request or precondition semantics for an accepted operation step", async () => {
@@ -1696,6 +2220,59 @@ describe("Todos package-owned project registration authority", () => {
       .rejects.toMatchObject({
         code: "TODOS_PROJECT_REGISTRATION_ATOMICITY_UNAVAILABLE",
       });
+  });
+
+  test("locks exact PostgreSQL project and task-list adoption candidates through the transaction", async () => {
+    const statements: string[] = [];
+    const project = createProject({
+      name: "Postgres adoption project",
+      path: "hasna-project://wks_postgresadoption01",
+      task_list_id: "todos-postgres-adoption",
+    }, db);
+    const taskList = createTaskList({
+      name: "Postgres adoption task list",
+      slug: "todos-postgres-adoption",
+      project_id: project.id,
+    }, db);
+    const query = async (text: string) => {
+      statements.push(text);
+      if (text.includes("object_type = 'projects'")) {
+        return { rows: [{ payload: project }] };
+      }
+      if (text.includes("object_type = 'task_lists'")) {
+        return { rows: [{ payload: taskList }] };
+      }
+      return { rows: [] };
+    };
+    const client = {
+      query,
+      async transaction<T>(fn: (transaction: { query: typeof query }) => Promise<T>) {
+        return await fn({ query });
+      },
+    };
+    const backend = new PostgresTodosProjectRegistrationBackend(client, {
+      service: "todos_registration_test",
+      tableName: "todos_sync_records_registration_test",
+      cursorTableName: "todos_sync_cursors_registration_test",
+    });
+
+    await backend.transaction(async (transaction) => {
+      expect(await transaction.findProjectConflict(
+        project.path,
+        project.task_list_id!,
+      )).toMatchObject({ id: project.id });
+      expect(await transaction.findTaskListConflict(
+        project.id,
+        taskList.slug,
+      )).toMatchObject({ id: taskList.id });
+    });
+
+    const projectSelect = statements.find((text) =>
+      text.includes("object_type = 'projects'"));
+    const taskListSelect = statements.find((text) =>
+      text.includes("object_type = 'task_lists'"));
+    expect(projectSelect).toContain("FOR UPDATE");
+    expect(taskListSelect).toContain("FOR UPDATE");
   });
 
   test("hosted PostgreSQL collection revisions change across child mutations and candidate pages stay bounded", async () => {

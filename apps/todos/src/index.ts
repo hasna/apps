@@ -69,6 +69,9 @@ export type {
   TodosProjectRegistrationRequest,
   TodosProjectRegistrationResourceKind,
   TodosProjectRegistrationResponseControl,
+  TodosPriorRegistrationAdoptionCurrentRecord,
+  TodosPriorRegistrationAdoptionValidation,
+  TodosPriorRegistrationAdoptionValidationRequest,
 } from "./project-registration/index.js";
 
 // Package capability manifest

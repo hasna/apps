@@ -4,7 +4,10 @@ import {
   planProjectLinkResultDigest,
   planProjectLinkRollbackReceiptId,
 } from "../lib/plan-project-link-contract.js";
-import type { TodosProjectResourcePage } from "../project-registration/index.js";
+import type {
+  TodosPriorRegistrationAdoptionValidationRequest,
+  TodosProjectResourcePage,
+} from "../project-registration/index.js";
 import type { Plan, PlanProjectLinkReceipt, Project, Task } from "../types/index.js";
 import {
   getTodosCloudClient,
@@ -57,6 +60,7 @@ import {
   cloudResolveTaskListRef,
   cloudResolveTaskRef,
   cloudListProjectResources,
+  cloudValidatePriorRegistrationAdoption,
   requireTodosRemoteAuthorityEnv,
   serverStorageMode,
 } from "./cloud-router.js";
@@ -398,6 +402,110 @@ describe("todos client self_hosted resolver", () => {
 });
 
 describe("remote authority compatibility diagnostics", () => {
+  test("routes prior-registration adoption validation through the exact fail-closed HTTP endpoint", async () => {
+    const input = {
+      source_request: {
+        operation_id: "cloud-prior-adoption-0001",
+        step_id: "todos_project",
+        resource_kind: "project",
+        direction: "forward",
+        authority_route: "todos.project-registration.v1",
+        package_version: "0.15.30-test",
+        authority_id: "todos",
+        tenant_id: "tenant-test",
+        corpus_id: "todos:tenant-test",
+        target_selector: "wks_cloudprioradoption01",
+        idempotency_key: "prk_cloud_prior_adoption",
+        request_digest: "a".repeat(64),
+        precondition_digest: "b".repeat(64),
+        project_id: "wks_cloudprioradoption01",
+        project_slug: "cloud-prior-adoption",
+        project_name: "Cloud prior adoption",
+        desired: {},
+        bind_existing: true,
+        response_byte_limit: 65_536,
+        time_budget_ms: 5_000,
+      },
+      source_receipt: {
+        receipt_id: "tpr_cloud_prior_adoption",
+        authority: "todos",
+        route: "todos.project-registration.v1",
+        package_version: "0.15.30-test",
+        authority_id: "todos",
+        tenant_id: "tenant-test",
+        corpus_id: "todos:tenant-test",
+        operation_id: "cloud-prior-adoption-0001",
+        step_id: "todos_project",
+        resource_kind: "project",
+        direction: "forward",
+        idempotency_key: "prk_cloud_prior_adoption",
+        request_digest: "a".repeat(64),
+        precondition_digest: "b".repeat(64),
+        outcome: "accepted",
+        reason: null,
+        target_id: "11111111-1111-4111-8111-111111111111",
+        result_revision: "2026-08-11T00:00:00.000Z",
+        result_digest: "c".repeat(64),
+        duplicate_of_receipt_id: null,
+        accepted_receipt_id: null,
+        created_by_operation: false,
+        created_at: "2026-08-11T00:00:00.000Z",
+      },
+      current_record: planProjectLinkProjectFixture({
+        id: "11111111-1111-4111-8111-111111111111",
+        created_at: "2026-08-11T00:00:00.000Z",
+        updated_at: "2026-08-11T00:00:00.000Z",
+      }),
+    } satisfies TodosPriorRegistrationAdoptionValidationRequest;
+    const validation = {
+      valid: true,
+      resource_kind: "project",
+      target_id: input.current_record.id,
+      source_receipt_id: input.source_receipt.receipt_id,
+      accepted_receipt_id: input.source_receipt.receipt_id,
+      source_outcome: "accepted",
+      created_at: input.current_record.created_at,
+      current_revision: input.current_record.updated_at,
+      accepted_result_digest: input.source_receipt.result_digest!,
+    } as const;
+    const calls = installFetch(() => ({ body: { validation } }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    await expect(cloudValidatePriorRegistrationAdoption(client, input))
+      .resolves.toEqual(validation);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({
+      method: "POST",
+      url: "https://todos.example.com/v1/project-registration/validate-prior-adoption",
+      body: input,
+    });
+
+    installFetch(() => ({ body: { valid: true } }));
+    await expect(cloudValidatePriorRegistrationAdoption(
+      getTodosCloudClient(CLOUD_ENV)!,
+      input,
+    )).rejects.toThrow(
+      "REMOTE_API_INCOMPATIBLE: /v1/project-registration/validate-prior-adoption",
+    );
+
+    for (const body of [
+      false,
+      { validation: false },
+      { validation: { valid: false } },
+      { validation: { valid: true } },
+      { validation: { ...validation, target_id: "22222222-2222-4222-8222-222222222222" } },
+      { validation: { ...validation, accepted_result_digest: "0".repeat(64) } },
+    ]) {
+      installFetch(() => ({ body }));
+      await expect(cloudValidatePriorRegistrationAdoption(
+        getTodosCloudClient(CLOUD_ENV)!,
+        input,
+      )).rejects.toThrow(
+        "REMOTE_API_INCOMPATIBLE: /v1/project-registration/validate-prior-adoption",
+      );
+    }
+  });
+
   test("accepts an honest project-resource page bound to the request", async () => {
     const page = projectResourcePageFixture();
     const calls = installFetch(() => ({ body: { page } }));

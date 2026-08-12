@@ -420,8 +420,10 @@ describe("/v1 task-list cloud parity", () => {
         authority_id: string;
         tenant_id: string;
         corpus_id: string;
+        prior_registration_adoption_validation: boolean;
       };
     };
+    expect(capability.prior_registration_adoption_validation).toBe(true);
     const desired = {
       source_project_id: "wks_fleetresourcesv1",
       source_project_slug: "fleet-resources",
@@ -533,6 +535,29 @@ describe("/v1 task-list cloud parity", () => {
         target_id: targetId,
         revision: createdBody.receipt.result_revision,
         digest: createdBody.receipt.result_digest,
+      },
+    });
+    const adoptionValidation = await request(
+      "/v1/project-registration/validate-prior-adoption",
+      "POST",
+      {
+        source_request: registration,
+        source_receipt: createdBody.receipt,
+        current_record: await store.projects.get(targetId),
+      },
+    );
+    expect({
+      status: adoptionValidation?.status,
+      body: await adoptionValidation!.json(),
+    }).toMatchObject({
+      status: 200,
+      body: {
+        validation: {
+          valid: true,
+          target_id: targetId,
+          source_receipt_id: receiptId,
+          accepted_receipt_id: receiptId,
+        },
       },
     });
 
