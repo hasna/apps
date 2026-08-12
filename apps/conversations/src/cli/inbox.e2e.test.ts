@@ -35,8 +35,10 @@ type InboxRun = {
 
 type RunFixtures = {
   backfillMessages?: Array<Record<string, unknown>>;
+  messageEnvelope?: "compact" | "malformed";
   paginateBackfill?: boolean;
   seedMessages?: Array<Record<string, unknown>>;
+  subscriptionsJson?: string;
   tasks?: Array<Record<string, unknown>>;
   todosFail?: boolean;
   windowMessages?: Array<Record<string, unknown>>;
@@ -61,11 +63,30 @@ async function createHarness(): Promise<InboxHarness> {
     `#!/usr/bin/env bash
 set -eu
 printf '%s\n' "conversations $*" >> "\${STUB_LOG:?}"
+emit_messages() {
+  payload="$1"
+  case "\${STUB_MESSAGE_ENVELOPE:-array}" in
+    compact)
+      jq -cn --argjson messages "$payload" \
+        '{messages:$messages,count:($messages|length),compact:true,has_more:false,next_cursor:null}'
+      ;;
+    malformed)
+      printf '%s\n' '{"messages":{},"count":1,"compact":true}'
+      ;;
+    *)
+      printf '%s\n' "$payload"
+      ;;
+  esac
+}
 if [ "\${1:-}" = "channel" ] && [ "\${2:-}" = "subscriptions" ]; then
   identity="\${4:-}"
   if [ -n "\${STUB_SUBS_FAIL_FOR:-}" ] && [ "$identity" = "\${STUB_SUBS_FAIL_FOR}" ]; then
     printf '%s\n' "fixture subscription failure for $identity" >&2
     exit 18
+  fi
+  if [ -n "\${STUB_SUBSCRIPTIONS_JSON:-}" ]; then
+    printf '%s\n' "\${STUB_SUBSCRIPTIONS_JSON}"
+    exit 0
   fi
   case "$identity" in
     secondary) printf '%s\n' '[{"channel":"beta"}]' ;;
@@ -74,7 +95,7 @@ if [ "\${1:-}" = "channel" ] && [ "\${2:-}" = "subscriptions" ]; then
   exit 0
 fi
 if [ "\${1:-}" = "since" ]; then
-  printf '%s\n' "\${STUB_WINDOW_MESSAGES:-[]}"
+  emit_messages "\${STUB_WINDOW_MESSAGES:-[]}"
   exit 0
 fi
 if [ "\${1:-}" = "read" ]; then
@@ -90,14 +111,15 @@ if [ "\${1:-}" = "read" ]; then
             *) shift ;;
           esac
         done
-        jq -c --argjson since "$since_id" --argjson cap "$read_limit" \
+        page="$(jq -c --argjson since "$since_id" --argjson cap "$read_limit" \
           '[.[]? | select((.id // 0) > $since)] | sort_by(.id) | .[:$cap]' \
-          <<< "\${STUB_BACKFILL_MESSAGES:-[]}"
+          <<< "\${STUB_BACKFILL_MESSAGES:-[]}")"
+        emit_messages "$page"
       else
-        printf '%s\n' "\${STUB_BACKFILL_MESSAGES:-[]}"
+        emit_messages "\${STUB_BACKFILL_MESSAGES:-[]}"
       fi
       ;;
-    *) printf '%s\n' "\${STUB_SEED_MESSAGES:-[]}" ;;
+    *) emit_messages "\${STUB_SEED_MESSAGES:-[]}" ;;
   esac
   exit 0
 fi
@@ -167,7 +189,9 @@ function runInbox(
       STUB_BACKFILL_MESSAGES: JSON.stringify(fixtures.backfillMessages ?? []),
       STUB_BACKFILL_PAGINATE: fixtures.paginateBackfill ? "1" : "0",
       STUB_LOG: harness.stubLog,
+      STUB_MESSAGE_ENVELOPE: fixtures.messageEnvelope ?? "array",
       STUB_SEED_MESSAGES: JSON.stringify(fixtures.seedMessages ?? []),
+      STUB_SUBSCRIPTIONS_JSON: fixtures.subscriptionsJson ?? "",
       STUB_TASKS: JSON.stringify(fixtures.tasks ?? []),
       STUB_TODOS_FAIL: fixtures.todosFail ? "1" : "0",
       STUB_WINDOW_MESSAGES: JSON.stringify(fixtures.windowMessages ?? []),
@@ -217,6 +241,82 @@ describe("inbox bounded cursor recovery", () => {
 
     expect(result.exitCode).toBe(3);
     expect(result.stderr).toContain("GAP");
+    expect(await readCursor(stateDir)).toBe("1");
+  });
+
+  test("accepts the compact conversations message envelope during bounded backfill", async () => {
+    const harness = await createHarness();
+    const stateDir = join(harness.stateRoot, "seat");
+    await seedState(stateDir, "1");
+
+    const gap = runInbox(
+      harness,
+      ["check", "--as", "seat", "--limit", "3", "--no-todos"],
+      {
+        backfillMessages: [message(2), message(3)],
+        messageEnvelope: "compact",
+        windowMessages: [message(4)],
+      },
+    );
+
+    expect(gap.exitCode).toBe(3);
+    expect(gap.stderr).toContain("GAP");
+    expect(gap.stdout).toContain("message-2");
+    expect(gap.stdout).toContain("message-3");
+    expect(gap.stdout).not.toContain("message-4");
+    expect(await readCursor(stateDir)).toBe("3");
+
+    const clean = runInbox(
+      harness,
+      ["check", "--as", "seat", "--limit", "3", "--no-todos"],
+      {
+        messageEnvelope: "compact",
+        windowMessages: [message(4)],
+      },
+    );
+
+    expect(clean.exitCode).toBe(0);
+    expect(clean.stderr).toBe("");
+    expect(clean.stdout).toContain("message-4");
+    expect(await readCursor(stateDir)).toBe("4");
+  });
+
+  test("keeps malformed message envelopes degraded and leaves the cursor unchanged", async () => {
+    const harness = await createHarness();
+    const stateDir = join(harness.stateRoot, "seat");
+    await seedState(stateDir, "1");
+
+    const result = runInbox(
+      harness,
+      ["check", "--as", "seat", "--limit", "3", "--no-todos"],
+      {
+        messageEnvelope: "malformed",
+        windowMessages: [message(2)],
+      },
+    );
+
+    expect(result.exitCode).toBe(3);
+    expect(result.stderr).toContain("returned no usable JSON array");
+    expect(await readCursor(stateDir)).toBe("1");
+  });
+
+  test("does not accept a message-shaped object from the subscriptions surface", async () => {
+    const harness = await createHarness();
+    const stateDir = join(harness.stateRoot, "seat");
+    await seedState(stateDir, "1");
+
+    const result = runInbox(
+      harness,
+      ["check", "--as", "seat", "--limit", "3", "--no-todos"],
+      {
+        subscriptionsJson: JSON.stringify({ messages: [] }),
+        windowMessages: [message(2)],
+      },
+    );
+
+    expect(result.exitCode).toBe(3);
+    expect(result.stderr).toContain("subscriptions[seat]: conversations returned no usable JSON array");
+    expect(result.stdout).not.toContain("message-2");
     expect(await readCursor(stateDir)).toBe("1");
   });
 
