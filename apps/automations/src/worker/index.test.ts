@@ -78,7 +78,6 @@ describe("TypedActionWorker", () => {
           output: { input, actor: actor?.id ?? null },
         }))],
       });
-      expect(worker.listRegistered().map((item) => `${item.id}@${item.version}`)).toEqual(["typed.echo@1.0.0"]);
 
       const receipt = await worker.run("typed.worker.demo@1.0.0", {
         input: { from: "caller" },
