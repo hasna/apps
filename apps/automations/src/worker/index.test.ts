@@ -219,11 +219,13 @@ describe("TypedActionWorker", () => {
       const worker = new TypedActionWorker({
         store,
         definitions: [definition("typed.lease", async () => {
-          await Bun.sleep(70);
+          // Keep enough scheduler margin for hosted CI while remaining short
+          // relative to the worker's 30-second default lease.
+          await Bun.sleep(800);
           return { output: { renewed: true } };
         })],
       });
-      const receipt = await worker.run("typed.worker.demo@1.0.0", { leaseMs: 15 });
+      const receipt = await worker.run("typed.worker.demo@1.0.0", { leaseMs: 500 });
       expect(receipt.status).toBe("succeeded");
       expect(receipt.actions?.[0]?.status).toBe("succeeded");
 
@@ -232,12 +234,12 @@ describe("TypedActionWorker", () => {
         store,
         runnerId: "stale-worker",
         definitions: [definition("typed.stale", async () => {
-          await Bun.sleep(40);
+          await Bun.sleep(600);
           return { output: { stale: true } };
         })],
       });
-      const staleRun = staleWorker.run("typed.worker.demo@1.0.0", { leaseMs: 10 });
-      await Bun.sleep(20);
+      const staleRun = staleWorker.run("typed.worker.demo@1.0.0", { leaseMs: 300 });
+      await Bun.sleep(450);
       const claimed = store.listQueuedActions().find((action) => action.status === "claimed" && action.claimedBy === "stale-worker");
       expect(claimed).toBeDefined();
       store.db.query("UPDATE automation_actions SET claimed_by = 'replacement', claim_version = claim_version + 1 WHERE id = $id").run({ $id: claimed!.id });
