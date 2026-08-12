@@ -150,6 +150,7 @@ describe("published MCP tool contract", () => {
   let client: Client;
   let tools: PublishedTool[];
   let telegramToken: string | undefined;
+  let disposeBuiltServer: (() => Promise<void>) | undefined;
 
   function schemaOf(name: string): Record<string, any> {
     const tool = tools.find((t) => t.name === name);
@@ -167,8 +168,11 @@ describe("published MCP tool contract", () => {
     telegramToken = process.env.TELEGRAM_BOT_TOKEN;
     delete process.env.TELEGRAM_BOT_TOKEN;
 
-    const { buildServer } = await import("./index.js");
+    const { buildServer, disposeServer } = await import("./index.js");
     const server = buildServer();
+    // This server owns a channel bridge. Close it in afterAll, or it keeps
+    // polling for the rest of the run (todos 890b269e).
+    disposeBuiltServer = () => disposeServer(server);
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     client = new Client({ name: "tool-contract-client", version: "1.0.0" });
     await server.connect(serverTransport);
@@ -180,6 +184,7 @@ describe("published MCP tool contract", () => {
   afterAll(async () => {
     try {
       await client.close();
+      await disposeBuiltServer?.();
     } finally {
       if (telegramToken !== undefined) {
         process.env.TELEGRAM_BOT_TOKEN = telegramToken;

@@ -28,6 +28,18 @@ function unrefTimer(timer: ReturnType<typeof setInterval> | ReturnType<typeof se
   (timer as { unref?: () => void }).unref?.();
 }
 
+/**
+ * Bridges registered and not yet disposed. A bridge that outlives the test that
+ * made it keeps polling into later files (todos 890b269e), and this counter is
+ * what lets a test assert the disposer actually ran rather than trusting that
+ * it was reachable.
+ */
+let liveBridges = 0;
+
+export function liveChannelBridgeCountForTests(): number {
+  return liveBridges;
+}
+
 type SessionState = {
   agentId: string | null;
   claudeSessionId: string | null; // agent-claude session UUID
@@ -283,6 +295,8 @@ export function registerChannelBridge(
   // Start polling after connection established
   startTimer = setTimeout(() => startPolling(), startDelayMs);
   unrefTimer(startTimer);
+  liveBridges += 1;
+  let disposed = false;
 
   /**
    * Dispose the bridge AND wait until it is quiescent.
@@ -300,6 +314,12 @@ export function registerChannelBridge(
     if (pollTimer) clearInterval(pollTimer);
     startTimer = null;
     pollTimer = null;
+    // Disposing twice is allowed and must not double-count: callers that own a
+    // server may dispose it explicitly and again in a teardown hook.
+    if (!disposed) {
+      disposed = true;
+      liveBridges -= 1;
+    }
     await Promise.allSettled([inFlightPoll]);
   };
 }

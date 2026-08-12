@@ -33,6 +33,7 @@ import { join } from "path";
 
 const TEST_DB = join(tmpdir(), `conversations-envelope-order-${Date.now()}.db`);
 let client: Client;
+let disposeBuiltServer: (() => Promise<void>) | undefined;
 
 interface Envelope {
   sort?: string;
@@ -110,8 +111,11 @@ beforeAll(async () => {
 
   // buildServer(), never the exported singleton: session identity is keyed by
   // McpServer instance, so a private instance cannot leak into another file.
-  const { buildServer } = await import("./index.js");
+  const { buildServer, disposeServer } = await import("./index.js");
   const server = buildServer();
+  // This server owns a channel bridge. Close it in afterAll, or it keeps
+  // polling for the rest of the run (todos 890b269e).
+  disposeBuiltServer = () => disposeServer(server);
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   client = new Client({ name: "envelope-order-test", version: "1.0.0" });
   await server.connect(serverTransport);
@@ -132,6 +136,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await client.close();
+  await disposeBuiltServer?.();
   const { closeDb } = await import("../lib/db.js");
   closeDb();
 

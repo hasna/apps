@@ -8,7 +8,7 @@ import { readMessages, sendMessage } from "../lib/messages.js";
 import { createChannel } from "../lib/channels.js";
 import { readChannelNotifications, subscribeToChannelNotifications } from "../lib/channel-notifications.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { registerChannelBridge, setSessionAgent, setClaudeSessionId, getSessionAgent, getClaudeSessionId } from "./channel.js";
+import { registerChannelBridge, setSessionAgent, setClaudeSessionId, getSessionAgent, getClaudeSessionId, liveChannelBridgeCountForTests } from "./channel.js";
 import { ENV_KEYS, getStore } from "../lib/store/index.js";
 
 function createTestDbPath(): string {
@@ -349,17 +349,56 @@ describe("channel bridge — store failure visibility (regression d3c6b65e)", ()
    * probe that points the store at a unique closed host to count only its own
    * traffic has that host adopted by every other live bridge in the process.
    *
-   * There are three such bridges: `buildServer()` (src/mcp/index.ts:62) starts
-   * one and returns only the McpServer, so its disposer is unreachable by
-   * construction, and tool-contract.test.ts:171, http.test.ts:224 and
-   * envelope-ordering.test.ts:114 each leak one for the rest of the run.
+   * There used to be three such bridges: `buildServer()` started one and
+   * returned only the McpServer, so its disposer was unreachable by
+   * construction, and tool-contract.test.ts, http.test.ts and
+   * envelope-ordering.test.ts each leaked one for the rest of the run.
    * Measured on the full suite: a drain probe on its own unique host still
    * counted `Expected: 0 / Received: 8`, with zero foreign URLs logged — all of
    * it from those bridges wearing this test's store URL.
    *
-   * Tracked as todos 890b269e. Once buildServer exposes its disposer this test
-   * becomes writable; the equivalent assertion for the `watch` loop lives in
-   * src/lib/poll.test.ts, which CAN isolate because startPolling resolves its
-   * store once at construction.
+   * That leak is fixed (todos 890b269e): `disposeServer` below reaches the
+   * disposer, and those three callers now close what they create. The store-URL
+   * probe is still not the way to assert it — see the counter-based regression
+   * below, which needs no store isolation at all. The equivalent assertion for
+   * the `watch` loop lives in src/lib/poll.test.ts, which CAN isolate because
+   * startPolling resolves its store once at construction.
    */
+});
+
+/**
+ * Regression for todos 890b269e — the unreachable channel-bridge disposer.
+ *
+ * Two-sided on purpose. Asserting only that `disposeServer` resolves would pass
+ * against a stub that does nothing, and asserting only that a bridge starts
+ * would pass against the leak this replaces. So: the count must RISE when a
+ * stdio server is built, and FALL BACK when that server is disposed.
+ */
+describe("buildServer channel-bridge lifecycle (regression 890b269e)", () => {
+  test("a stdio server exposes and drains the bridge it created", async () => {
+    const { buildServer, disposeServer } = await import("./index.js");
+
+    const before = liveChannelBridgeCountForTests();
+    const server = buildServer();
+    expect(liveChannelBridgeCountForTests()).toBe(before + 1);
+
+    await disposeServer(server);
+    expect(liveChannelBridgeCountForTests()).toBe(before);
+
+    // Disposing again is a no-op, not a double-decrement: callers may dispose
+    // explicitly and again from a teardown hook.
+    await disposeServer(server);
+    expect(liveChannelBridgeCountForTests()).toBe(before);
+  });
+
+  test("an HTTP server owns no bridge to leak", async () => {
+    const { buildServer, disposeServer } = await import("./index.js");
+
+    const before = liveChannelBridgeCountForTests();
+    const server = buildServer(true);
+    expect(liveChannelBridgeCountForTests()).toBe(before);
+
+    await disposeServer(server);
+    expect(liveChannelBridgeCountForTests()).toBe(before);
+  });
 });

@@ -44,6 +44,34 @@ async function resolveProjectId(explicitProjectId: string | undefined, agentId: 
   return focused ?? undefined;
 }
 
+/**
+ * Disposers for the background loops a server owns, keyed by that server.
+ *
+ * `buildServer` returns an `McpServer` — `http.ts` and `serve.ts` both pass it
+ * as `() => McpServer` — so the channel bridge's disposer had nowhere to go and
+ * was unreachable by construction. Every stdio server ever built kept polling
+ * for the life of the process; under `bun test`, where one process runs every
+ * file, the bridges made by tool-contract, http and envelope-ordering polled on
+ * through later files (todos 890b269e). Keeping the disposers beside the server
+ * rather than in its return type lets a caller close what it created without
+ * changing the shape every other caller depends on.
+ */
+const serverDisposers = new WeakMap<McpServer, Array<() => Promise<void>>>();
+
+/**
+ * Stop the background loops owned by a server built here, and wait until they
+ * are quiescent. Safe to call twice, and a no-op for a server with no loops
+ * (an HTTP server registers none). Production stdio keeps the singleton alive
+ * for the life of the process, exactly as before; this is for callers that
+ * build their own server and outlive it.
+ */
+export async function disposeServer(srv: McpServer): Promise<void> {
+  const disposers = serverDisposers.get(srv);
+  if (!disposers) return;
+  serverDisposers.delete(srv);
+  await Promise.allSettled(disposers.map((dispose) => dispose()));
+}
+
 export function buildServer(forHttp = false): McpServer {
   const srv = new McpServer({
     name: "conversations",
@@ -59,7 +87,7 @@ export function buildServer(forHttp = false): McpServer {
   registerTmuxTools(srv);
 
   if (!forHttp) {
-    registerChannelBridge(srv);
+    serverDisposers.set(srv, [registerChannelBridge(srv)]);
     registerTelegramChannel(srv);
   }
 

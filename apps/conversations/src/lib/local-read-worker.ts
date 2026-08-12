@@ -10,6 +10,7 @@ import {
   searchMessagePreviews,
 } from "./messages.js";
 import { readChannelNotifications } from "./channel-notifications.js";
+import { _resetAutoName } from "./identity.js";
 
 type LocalReadOperation =
   | "readMessagePreviews"
@@ -23,6 +24,12 @@ type LocalReadOperation =
   | "__cancellationProbe";
 
 interface WorkerRequest {
+  /**
+   * Echoed on every reply. The parent pools these workers, so a reply has to
+   * name the request it belongs to; anything else is a straggler and is dropped
+   * there rather than answering the request now holding this worker.
+   */
+  id: number;
   operation: LocalReadOperation;
   args: unknown[];
   dbPath: string;
@@ -32,6 +39,10 @@ interface WorkerRequest {
 }
 
 function configure(request: WorkerRequest): void {
+  // A fresh Worker per read used to guarantee this; pooling has to do it
+  // explicitly, or one request's resolved agent name outlives the environment
+  // that produced it and answers for the next.
+  _resetAutoName();
   process.env.CONVERSATIONS_DB_PATH = request.dbPath;
   delete process.env.HASNA_CONVERSATIONS_DB_PATH;
   if (request.exportDir) process.env.CONVERSATIONS_EXPORT_DIR = request.exportDir;
@@ -64,11 +75,19 @@ function cancellationProbe(dbPath: string): never {
   }
 }
 
+/**
+ * One request at a time, start to finish, with no await inside: that is what
+ * lets a pooled worker be reused safely. `configure` rewrites process-wide env
+ * for the request it is about to serve, and because this handler never yields,
+ * no other request can observe another's environment or database handle.
+ */
 self.onmessage = (event: MessageEvent<WorkerRequest>) => {
   const request = event.data;
   configure(request);
-  self.postMessage({ type: "started" });
-  let envelope: { type: "result"; result: unknown } | { type: "error"; error: string; name: string };
+  self.postMessage({ id: request.id, type: "started" });
+  let envelope:
+    | { id: number; type: "result"; result: unknown }
+    | { id: number; type: "error"; error: string; name: string };
   try {
     let result: unknown;
     switch (request.operation) {
@@ -102,15 +121,18 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
       default:
         throw new Error("unknown local collection operation");
     }
-    envelope = { type: "result", result };
+    envelope = { id: request.id, type: "result", result };
   } catch (error) {
     envelope = {
+      id: request.id,
       type: "error",
       error: error instanceof Error ? error.message : String(error),
       name: error instanceof Error ? error.name : "Error",
     };
   }
+  // Close the database but NOT the worker: the connection is per-request state
+  // (each request names its own dbPath), while the worker itself is the thing
+  // being reused. The parent terminates it when the pool is done with it.
   closeDb();
   self.postMessage(envelope);
-  self.close();
 };
