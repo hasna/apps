@@ -21,7 +21,13 @@ import {
   testConversationsProducerFixture,
 } from "../lib/project-resource-link-producer-verifier.test-support.js";
 import { runProjectsMigrations } from "./migrations.js";
-import { ProjectsPgStore, generateWorkspaceId, generateRootId, slugify } from "./pg-store.js";
+import {
+  ProjectsPgStore,
+  ValidationError,
+  generateWorkspaceId,
+  generateRootId,
+  slugify,
+} from "./pg-store.js";
 import { createProjectsPgStore } from "./index.js";
 
 const trustedProducerEvidenceVerifier: AsyncProjectResourceLinkProducerEvidenceVerifier = (input) => {
@@ -711,6 +717,48 @@ describe("pg-store typed resource-link transaction model", () => {
     scope: "resource" as const,
     labels: { name: "Existing contact" },
   };
+
+  test("classifies a direct typed-integration update as validation before any hosted write", async () => {
+    const harness = resourceLinkMutationClient();
+    const before = harness.workspace();
+
+    await expect(new ProjectsPgStore(harness.client).updateWorkspace(
+      harness.workspace().id,
+      {
+        integrations: {
+          conversations_channel: "moved-outside-resource-links",
+        },
+      },
+    )).rejects.toBeInstanceOf(ValidationError);
+
+    expect(harness.workspace()).toEqual(before);
+    expect(harness.receipts()).toEqual([]);
+    expect(harness.events()).toEqual([]);
+  });
+
+  test("classifies a guarded typed-integration dry run as validation before any hosted write", async () => {
+    const harness = resourceLinkMutationClient();
+    const before = harness.workspace();
+
+    await expect(new ProjectsPgStore(harness.client).guardedUpdateWorkspace({
+      project_id: harness.workspace().id,
+      operation_id: "pg-invalid-guarded-integration-update",
+      step_id: "integrations",
+      expected_revision: harness.workspace().updated_at,
+      patch: {
+        integrations: {
+          conversations_channel: "moved-outside-resource-links",
+        },
+      },
+      dry_run: true,
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+    })).rejects.toBeInstanceOf(ValidationError);
+
+    expect(harness.workspace()).toEqual(before);
+    expect(harness.receipts()).toEqual([]);
+    expect(harness.events()).toEqual([]);
+  });
 
   test("rejects non-string integration values before any hosted write", async () => {
     const harness = resourceLinkMutationClient();

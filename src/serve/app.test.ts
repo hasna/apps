@@ -632,6 +632,50 @@ describe("projects-serve auth", () => {
     expect(forbidden.status).toBe(403);
   });
 
+  test("typed resource-link projection updates return an actionable HTTP 400 on direct and guarded routes", async () => {
+    const message = "integration 'conversations_channel' is a typed resource-link compatibility projection and must be changed through resource-links";
+    const store = {
+      async updateWorkspace() {
+        throw new ValidationError(message);
+      },
+      async guardedUpdateWorkspace() {
+        throw new ValidationError(message);
+      },
+    } as unknown as ProjectsPgStore;
+    const h = handler(store);
+    const token = keyWith(["projects:*"]);
+    const requests = [
+      new Request("http://x/v1/projects/wks_httpguarded0001", {
+        method: "PATCH",
+        headers: { "x-api-key": token, "content-type": "application/json" },
+        body: JSON.stringify({
+          integrations: { conversations_channel: "moved-outside-resource-links" },
+        }),
+      }),
+      new Request("http://x/v1/projects/wks_httpguarded0001/guarded-metadata", {
+        method: "POST",
+        headers: { "x-api-key": token, "content-type": "application/json" },
+        body: JSON.stringify({
+          operation_id: "op-http-invalid-integration",
+          step_id: "integrations",
+          expected_revision: "2026-08-12 00:00:00.000",
+          patch: {
+            integrations: { conversations_channel: "moved-outside-resource-links" },
+          },
+          dry_run: true,
+          response_byte_limit: 50_000,
+          time_budget_ms: 2_000,
+        }),
+      }),
+    ];
+
+    for (const request of requests) {
+      const response = await h(request);
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({ error: message });
+    }
+  });
+
   test("POST guarded metadata mutation returns explicit bounded complete JSON envelope", async () => {
     const calls: Array<{ project_id: string; operation_id: string }> = [];
     const store = {

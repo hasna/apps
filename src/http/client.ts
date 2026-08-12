@@ -148,13 +148,23 @@ export class HasnaHttpError extends Error {
   readonly path: string;
   readonly body: unknown;
   constructor(method: string, path: string, status: number, body: unknown) {
-    super(`Hasna request failed: ${method} ${path} -> ${status}`);
+    const detail = httpErrorDetail(body);
+    super(`Hasna request failed: ${method} ${path} -> ${status}${detail === null ? "" : `: ${detail}`}`);
     this.name = "HasnaHttpError";
     this.status = status;
     this.method = method;
     this.path = path;
     this.body = body;
   }
+}
+
+function httpErrorDetail(body: unknown): string | null {
+  if (typeof body !== "object" || body === null || Array.isArray(body)) return null;
+  const error = (body as Record<string, unknown>).error;
+  if (typeof error !== "string") return null;
+  const normalized = error.replace(/\s+/g, " ").trim();
+  if (normalized.length === 0) return null;
+  return normalized.length <= 500 ? normalized : `${normalized.slice(0, 497)}...`;
 }
 
 type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
