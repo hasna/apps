@@ -28,6 +28,10 @@ import {
 import { isRetiredOrUnsupportedConfigAgent } from "./config-agents.js";
 import { applyTransform } from "./transforms.js";
 import {
+  detectClaudeAuthorityConflicts,
+  type ClaudeAuthorityConflict,
+} from "./session-authority.js";
+import {
   CODEWITH_NATIVE_IMPORTS_ENV,
   SESSION_INSTRUCTION_LAYERS,
   SESSION_RENDER_INSTRUCTIONS_MANAGED_DIR,
@@ -223,6 +227,7 @@ export interface SessionRenderManifest {
   writable: boolean;
   blocked: boolean;
   blockers: string[];
+  authorityConflicts: ClaudeAuthorityConflict[];
   generatedAt: string;
   env: Record<string, string>;
   sourceHash: string;
@@ -307,6 +312,7 @@ export interface SessionRenderPlan {
   writable: boolean;
   blocked: boolean;
   blockers: string[];
+  authorityConflicts: ClaudeAuthorityConflict[];
   /**
    * Carries the caller's --allow-empty-sources choice from plan-build time into
    * apply time. Apply-time emptiness (a plan that deletes every previously
@@ -1696,7 +1702,14 @@ export function planSessionRender(input: SessionRenderInput): SessionRenderPlan 
   if (!input.profile.trim()) throw new Error("Session render profile is required.");
 
   const adapter = adapterFor(input);
-  const { targetHome, targetKind, blockers } = resolveRenderTarget(input);
+  const { targetHome, targetKind, blockers: targetBlockers } = resolveRenderTarget(input);
+  const authorityConflicts = input.tool === "claude" && targetKind !== "blocked"
+    ? detectClaudeAuthorityConflicts(targetHome)
+    : [];
+  const blockers = [
+    ...targetBlockers,
+    ...authorityConflicts.map((conflict) => `${conflict.relativePath}: ${conflict.reason}`),
+  ];
   const targetOwner = resolveSessionTargetOwnership(input, { targetHome, targetKind });
   const blocked = blockers.length > 0;
   const allowEmptySources = input.allowEmptySources === true;
@@ -1761,6 +1774,7 @@ export function planSessionRender(input: SessionRenderInput): SessionRenderPlan 
     writable: !blocked,
     blocked,
     blockers,
+    authorityConflicts,
     generatedAt,
     env,
     sourceHash: fingerprint(projectContext
@@ -1858,6 +1872,7 @@ export function planSessionRender(input: SessionRenderInput): SessionRenderPlan 
     writable: !blocked,
     blocked,
     blockers,
+    authorityConflicts,
     allowEmptySources,
     env,
     files,

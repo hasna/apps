@@ -154,6 +154,72 @@ describe("session render planner", () => {
     expect(plan.manifestFile.path).toBe("/tmp/claude-account999/.hasna/session-render-manifest.json");
   });
 
+  test("fails closed when Claude target has unmanaged legacy AGENTS authority", () => {
+    const targetHome = join(tmpRoot, "claude-legacy-authority");
+    mkdirSync(targetHome, { recursive: true });
+    writeFileSync(join(targetHome, "AGENTS.md"), [
+      "# Agent Rules (Claude)",
+      "",
+      "## No Worktrees",
+      "Never use git worktrees.",
+      "",
+    ].join("\n"));
+
+    const plan = planSessionRender({
+      tool: "claude",
+      profile: "account999",
+      targetHome,
+      sources: [globalRulesStandard],
+    });
+
+    expect(plan.blocked).toBe(true);
+    expect(plan.writable).toBe(false);
+    expect(plan.files).toEqual([]);
+    expect(plan.authorityConflicts).toHaveLength(1);
+    expect(plan.authorityConflicts[0]).toMatchObject({
+      relativePath: "AGENTS.md",
+      kind: "known-legacy-no-worktree",
+      provenance: { detection: "known-legacy-markers" },
+    });
+    expect(plan.manifest.authorityConflicts).toEqual(plan.authorityConflicts);
+    expect(plan.manifestFile.content).toContain("known-legacy-no-worktree");
+    expect(plan.manifestFile.content).not.toContain("Never use git worktrees");
+  });
+
+  test("fresh Claude target emits current worktree rule without legacy authority", () => {
+    const plan = planSessionRender({
+      tool: "claude",
+      profile: "account999",
+      targetHome: join(tmpRoot, "claude-fresh"),
+      sources: [globalRulesStandard],
+    });
+
+    expect(plan.blocked).toBe(false);
+    expect(plan.writable).toBe(true);
+    expect(plan.authorityConflicts).toEqual([]);
+    expect(plan.files.find((file) => file.role === "fragment")?.content)
+      .toContain("$HOME/.hasna/repos/worktrees");
+    expect(plan.files.find((file) => file.role === "fragment")?.content)
+      .not.toContain("Never use git worktrees.");
+  });
+
+  test("does not apply Claude authority rules to unrelated adapters", () => {
+    const targetHome = join(tmpRoot, "codex-with-agents");
+    mkdirSync(targetHome, { recursive: true });
+    writeFileSync(join(targetHome, "AGENTS.md"), "Codex-owned content.\n");
+
+    const plan = planSessionRender({
+      tool: "codex",
+      profile: "account999",
+      targetHome,
+      sources: [globalRulesStandard],
+    });
+
+    expect(plan.blocked).toBe(false);
+    expect(plan.authorityConflicts).toEqual([]);
+    expect(plan.files[0]?.relativePath).toBe("AGENTS.md");
+  });
+
   test("plans Codex as one flattened AGENTS.md without native imports", () => {
     const plan = planSessionRender({
       tool: "codex",
