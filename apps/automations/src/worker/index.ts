@@ -32,6 +32,12 @@ export interface TypedActionContext {
   run: AutomationRun;
   manifest: ActionManifest;
   input: JsonValue;
+  priorReceipts: TypedActionDeliveryReceipt[];
+  replayOnlySinks: string[];
+  replayLineage?: {
+    sourceActionId: string;
+    replayActionId: string;
+  };
   actor?: ActorRef;
   signal: AbortSignal;
 }
@@ -110,7 +116,7 @@ export class TypedActionWorker {
       throw new Error("typed worker timeout must be a non-negative number");
     }
     const { slug, version } = parseAutomationReference(reference);
-    const automation = this.store.requireAutomation(slug);
+    const automation = requireAutomationForReference(this.store, slug, version);
     if (automation.spec.version !== version) {
       throw new Error(`automation version not found: ${slug}@${version}`);
     }
@@ -217,12 +223,26 @@ export class TypedActionWorker {
       }, renewalMs);
       try {
         if (!definition) throw typedActionError("TYPED_ACTION_NOT_REGISTERED", `typed action is not registered: ${action.actionId}@${action.invocation.manifestVersion ?? "1.0.0"}`);
+        const priorReceipts = deliveryReceipts(action);
+        const replayOnlySinks = replaySinks(action);
         const context: TypedActionContext = {
           action,
           automation,
           run: this.store.requireRun(runId),
           manifest: definition.manifest,
-          input: action.invocation.input,
+          input: materializeStepOutputs(
+            action.invocation.input,
+            automation,
+            this.store.listQueuedActions().filter((candidate) => candidate.automationRunId === runId),
+          ),
+          priorReceipts,
+          replayOnlySinks,
+          replayLineage: typeof action.metadata?.partialReplayOf === "string"
+            ? {
+              sourceActionId: action.metadata.partialReplayOf,
+              replayActionId: action.id,
+            }
+            : undefined,
           actor: options.actor ?? this.#authority.actor ?? action.invocation.actor,
           signal: executionController.signal,
         };
@@ -309,6 +329,23 @@ export function parseAutomationReference(reference: string): { slug: string; ver
   return { slug: reference.slice(0, separator), version: reference.slice(separator + 1) };
 }
 
+function requireAutomationForReference(
+  store: AutomationsStore,
+  slug: string,
+  version: string,
+): AutomationRecord {
+  const versionedId = `template:${slug}:${version.replaceAll("+", "_")}`;
+  try {
+    return store.requireAutomation(versionedId);
+  } catch (versionedError) {
+    try {
+      return store.requireAutomation(slug);
+    } catch {
+      throw versionedError;
+    }
+  }
+}
+
 export function assertTypedManifest(manifest: ActionManifest): void {
   if (!manifest.id || !manifest.version) throw new Error("typed action manifest requires id and version");
   if (!manifest.executorBindings.length || manifest.executorBindings.some((binding) => binding.kind !== "typescript")) {
@@ -390,6 +427,101 @@ function mergePriorDelivery(action: QueuedAction, result: TypedActionExecutionRe
   const receipts = [...bySink.values()];
   const hasFailure = receipts.some((receipt) => receipt.status === "failed");
   return { ...result, status: hasFailure ? "partial" : "succeeded", receipts };
+}
+
+function deliveryReceipts(action: QueuedAction): TypedActionDeliveryReceipt[] {
+  const receipts = action.result?.metadata?.deliveryReceipts;
+  return Array.isArray(receipts)
+    ? receipts.filter(isDeliveryReceipt).map((receipt) => structuredClone(receipt) as unknown as TypedActionDeliveryReceipt)
+    : [];
+}
+
+function replaySinks(action: QueuedAction): string[] {
+  const sinks = action.metadata?.replayOnlySinks;
+  return Array.isArray(sinks)
+    ? [...new Set(sinks.filter((sink): sink is string => typeof sink === "string" && sink.trim() !== ""))].sort()
+    : [];
+}
+
+function isDeliveryReceipt(value: unknown): value is TypedActionDeliveryReceipt {
+  return isObject(value)
+    && typeof value.sink === "string"
+    && (value.status === "succeeded" || value.status === "failed");
+}
+
+function materializeStepOutputs(
+  value: JsonValue,
+  automation: AutomationRecord,
+  actions: QueuedAction[],
+): JsonValue {
+  const metadata = automation.spec.metadata?.template;
+  const stepOutputs = isObject(metadata) && isObject(metadata.stepOutputs)
+    ? metadata.stepOutputs
+    : {};
+  const byStep = new Map(actions.map((action) => [action.stepId, action]));
+  const fullReference = /^\$\{\{\s*steps\.([a-zA-Z0-9][a-zA-Z0-9._:-]*)\.outputs\.([a-zA-Z][a-zA-Z0-9_-]*)\s*\}\}$/;
+  const reference = /\$\{\{\s*steps\.([a-zA-Z0-9][a-zA-Z0-9._:-]*)\.outputs\.([a-zA-Z][a-zA-Z0-9_-]*)\s*\}\}/g;
+  const resolve = (stepId: string, outputName: string): JsonValue => {
+    const action = byStep.get(stepId);
+    if (!action || action.status !== "succeeded") {
+      throw typedActionError("STEP_OUTPUT_UNAVAILABLE", `step output is not available: ${stepId}.${outputName}`, true);
+    }
+    const outputDefinitions = stepOutputs[stepId];
+    if (!isObject(outputDefinitions) || typeof outputDefinitions[outputName] !== "string") {
+      throw typedActionError("STEP_OUTPUT_UNDECLARED", `step output is not declared: ${stepId}.${outputName}`, false);
+    }
+    const resultOutput = action.result?.output;
+    if (resultOutput === undefined) {
+      throw typedActionError("STEP_OUTPUT_MISSING", `step output result is missing: ${stepId}.${outputName}`, false);
+    }
+    return readJsonPointer(resultOutput, outputDefinitions[outputName]);
+  };
+  const visit = (entry: JsonValue): JsonValue => {
+    if (typeof entry === "string") {
+      const full = fullReference.exec(entry);
+      if (full) return structuredClone(resolve(full[1]!, full[2]!));
+      return entry.replace(reference, (_matched, stepId: string, outputName: string) => {
+        const resolved = resolve(stepId, outputName);
+        if (resolved === null || typeof resolved === "object") {
+          throw typedActionError(
+            "STEP_OUTPUT_NON_SCALAR",
+            `embedded step output must be scalar: ${stepId}.${outputName}`,
+            false,
+          );
+        }
+        return String(resolved);
+      });
+    }
+    if (Array.isArray(entry)) return entry.map(visit);
+    if (isObject(entry)) {
+      return Object.fromEntries(Object.entries(entry).map(([key, child]) => [key, visit(child as JsonValue)]));
+    }
+    return entry;
+  };
+  return visit(value);
+}
+
+function readJsonPointer(value: JsonValue, pointer: string): JsonValue {
+  if (pointer === "") return structuredClone(value);
+  let current: JsonValue | undefined = value;
+  for (const rawSegment of pointer.split("/").slice(1)) {
+    const segment = rawSegment.replaceAll("~1", "/").replaceAll("~0", "~");
+    if (Array.isArray(current)) {
+      const index = Number(segment);
+      if (!Number.isInteger(index) || index < 0 || index >= current.length) {
+        throw typedActionError("STEP_OUTPUT_PATH_MISSING", `step output path does not exist: ${pointer}`, false);
+      }
+      current = current[index];
+    } else if (isObject(current) && Object.hasOwn(current, segment)) {
+      current = current[segment] as JsonValue;
+    } else {
+      throw typedActionError("STEP_OUTPUT_PATH_MISSING", `step output path does not exist: ${pointer}`, false);
+    }
+  }
+  if (current === undefined) {
+    throw typedActionError("STEP_OUTPUT_PATH_MISSING", `step output path does not exist: ${pointer}`, false);
+  }
+  return structuredClone(current);
 }
 
 function resultForQueue(result: TypedActionExecutionResult): ActionResult {

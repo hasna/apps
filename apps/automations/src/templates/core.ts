@@ -42,6 +42,28 @@ export interface AutomationTemplatePublicOutputDefinition {
   description?: string;
 }
 
+export type AutomationTemplateAuthorityMode = "read-only" | "write";
+export type AutomationTemplateEffectKind = "read" | "write";
+
+export interface AutomationTemplateAuthority {
+  mode: AutomationTemplateAuthorityMode;
+  readPermissions: string[];
+  writePermissions: string[];
+}
+
+export type AutomationTemplateCompensationPlan =
+  | { kind: "not-applicable"; reason: string }
+  | { kind: "per-created-binding"; actionId: string };
+
+export interface AutomationTemplateEffect {
+  id: string;
+  stepId: string;
+  sink: string;
+  kind: AutomationTemplateEffectKind;
+  operation: string;
+  compensation: AutomationTemplateCompensationPlan;
+}
+
 export interface AutomationTemplateActionStep
   extends Omit<AutomationActionStep, "dependsOn"> {
   dependsOn?: string[];
@@ -54,6 +76,8 @@ export interface AutomationTemplateDefinition {
   version: string;
   name: string;
   description?: string;
+  authority: AutomationTemplateAuthority;
+  effects: AutomationTemplateEffect[];
   inputs?: Record<string, AutomationTemplateInputDefinition>;
   outputs?: Record<string, AutomationTemplatePublicOutputDefinition>;
   automation: {
@@ -90,6 +114,10 @@ export interface AutomationTemplateReceipt {
     names: string[];
     digest: string;
   };
+  plan: {
+    authority: AutomationTemplateAuthority;
+    effects: AutomationTemplateEffect[];
+  };
   effect:
     | { kind: "none" }
     | { kind: "automation.ensure"; automationId: string };
@@ -98,6 +126,36 @@ export interface AutomationTemplateReceipt {
 export interface AutomationTemplateResult {
   spec: AutomationSpec;
   receipt: AutomationTemplateReceipt;
+}
+
+export interface AutomationTemplateExecutionPreview {
+  schemaVersion: typeof AUTOMATION_TEMPLATE_RECEIPT_SCHEMA_VERSION;
+  id: string;
+  operation: "execution-preview";
+  template: {
+    slug: string;
+    version: string;
+    digest: string;
+  };
+  automation: {
+    id: string;
+    version: string;
+    specDigest: string;
+  };
+  authority: AutomationTemplateAuthority;
+  effects: AutomationTemplateEffect[];
+  actionPlan: Array<{
+    stepId: string;
+    actionId: string;
+    manifestVersion: string;
+    effects: string[];
+  }>;
+  effect: {
+    kind: "none";
+    executorCalls: 0;
+    adapterCalls: 0;
+    writes: 0;
+  };
 }
 
 export interface AutomationTemplateInstaller {
@@ -263,6 +321,47 @@ export function previewAutomationTemplate(
   return createTemplateResult(registry, request, "preview");
 }
 
+/**
+ * Compile and declare the exact runtime effect plan without invoking an
+ * executor, adapter, installer, or persistence surface.
+ */
+export function previewAutomationTemplateExecution(
+  registry: AutomationTemplateRegistry,
+  request: AutomationTemplateCompileRequest,
+): AutomationTemplateExecutionPreview {
+  const result = createTemplateResult(registry, request, "preview");
+  const byStep = new Map<string, string[]>();
+  for (const effect of result.receipt.plan.effects) {
+    const effects = byStep.get(effect.stepId) ?? [];
+    effects.push(effect.id);
+    byStep.set(effect.stepId, effects);
+  }
+  const previewWithoutId = {
+    schemaVersion: AUTOMATION_TEMPLATE_RECEIPT_SCHEMA_VERSION,
+    operation: "execution-preview" as const,
+    template: result.receipt.template,
+    automation: result.receipt.automation,
+    authority: result.receipt.plan.authority,
+    effects: result.receipt.plan.effects,
+    actionPlan: result.spec.actions.map((action) => ({
+      stepId: action.id,
+      actionId: action.actionId,
+      manifestVersion: action.manifestVersion ?? "1.0.0",
+      effects: [...(byStep.get(action.id) ?? [])].sort(),
+    })),
+    effect: {
+      kind: "none" as const,
+      executorCalls: 0 as const,
+      adapterCalls: 0 as const,
+      writes: 0 as const,
+    },
+  };
+  return deepFreeze(canonicalClone({
+    ...previewWithoutId,
+    id: `template_execution_preview_${sha256(canonicalStringify(previewWithoutId)).slice(0, 32)}`,
+  }));
+}
+
 export function installAutomationTemplate(
   registry: AutomationTemplateRegistry,
   request: AutomationTemplateCompileRequest,
@@ -304,6 +403,10 @@ function createTemplateResult(
       names: Object.keys(callerInputs).sort(),
       digest: sha256(canonicalStringify(callerInputs)),
     },
+    plan: {
+      authority: template.authority,
+      effects: template.effects,
+    },
     effect: operation === "preview"
       ? { kind: "none" as const }
       : { kind: "automation.ensure" as const, automationId: spec.id },
@@ -340,6 +443,8 @@ function validateTemplateStructure(template: AutomationTemplateDefinition): Temp
   if (!Array.isArray(template.automation.actions) || template.automation.actions.length === 0) {
     throw new Error("automation template requires at least one action step");
   }
+  validateAuthority(template.authority);
+  validateEffects(template.effects, template.automation.actions);
   validateInputDefinitions(template.inputs ?? {});
 
   const actionsById = new Map<string, AutomationTemplateActionStep>();
@@ -406,6 +511,70 @@ function validateInputDefinitions(definitions: Record<string, AutomationTemplate
       throw new Error(`automation template input ${name} description must be a string`);
     }
     if (definition.default !== undefined) assertInputType(name, definition.type, definition.default);
+  }
+}
+
+function validateAuthority(authority: AutomationTemplateAuthority): void {
+  if (!isPlainObject(authority)) throw new Error("automation template authority must be an object");
+  if (authority.mode !== "read-only" && authority.mode !== "write") {
+    throw new Error("automation template authority mode must be read-only or write");
+  }
+  for (const [label, values] of [
+    ["readPermissions", authority.readPermissions],
+    ["writePermissions", authority.writePermissions],
+  ] as const) {
+    if (!Array.isArray(values) || values.some((value) => typeof value !== "string" || value.trim() === "")) {
+      throw new Error(`automation template authority ${label} must contain non-empty strings`);
+    }
+    if (new Set(values).size !== values.length) {
+      throw new Error(`automation template authority ${label} must not contain duplicates`);
+    }
+  }
+  if (authority.mode === "read-only" && authority.writePermissions.length > 0) {
+    throw new Error("read-only automation template authority cannot declare write permissions");
+  }
+}
+
+function validateEffects(
+  effects: AutomationTemplateEffect[],
+  actions: AutomationTemplateActionStep[],
+): void {
+  if (!Array.isArray(effects)) throw new Error("automation template effects must be an array");
+  const actionIds = new Set(actions.map((action) => action.id));
+  const effectIds = new Set<string>();
+  for (const effect of effects) {
+    if (!isPlainObject(effect)) throw new Error("automation template effect must be an object");
+    if (typeof effect.id !== "string" || !STEP_ID_PATTERN.test(effect.id)) {
+      throw new Error("automation template effect requires a valid id");
+    }
+    if (effectIds.has(effect.id)) throw new Error(`duplicate automation template effect id: ${effect.id}`);
+    effectIds.add(effect.id);
+    if (typeof effect.stepId !== "string" || !actionIds.has(effect.stepId)) {
+      throw new Error(`automation template effect ${effect.id} references unknown step: ${String(effect.stepId)}`);
+    }
+    if (typeof effect.sink !== "string" || effect.sink.trim() === "") {
+      throw new Error(`automation template effect ${effect.id} requires a sink`);
+    }
+    if (effect.kind !== "read" && effect.kind !== "write") {
+      throw new Error(`automation template effect ${effect.id} kind must be read or write`);
+    }
+    if (typeof effect.operation !== "string" || effect.operation.trim() === "") {
+      throw new Error(`automation template effect ${effect.id} requires an operation`);
+    }
+    if (!isPlainObject(effect.compensation)) {
+      throw new Error(`automation template effect ${effect.id} requires compensation semantics`);
+    }
+    if (effect.compensation.kind === "not-applicable") {
+      if (typeof effect.compensation.reason !== "string" || effect.compensation.reason.trim() === "") {
+        throw new Error(`automation template effect ${effect.id} not-applicable compensation requires a reason`);
+      }
+    } else if (effect.compensation.kind === "per-created-binding") {
+      if (typeof effect.compensation.actionId !== "string" || effect.compensation.actionId.trim() === "") {
+        throw new Error(`automation template effect ${effect.id} per-created-binding compensation requires an actionId`);
+      }
+    } else {
+      throw new Error(`automation template effect ${effect.id} has unsupported compensation semantics`);
+    }
   }
 }
 
@@ -637,6 +806,8 @@ function templateCompilationMetadata(template: AutomationTemplateDefinition): Js
     slug: template.slug,
     version: template.version,
     schemaVersion: template.schemaVersion,
+    authority: template.authority as unknown as JsonObject,
+    effects: template.effects as unknown as JsonValue,
     stepOutputs,
     publicOutputs,
   };
@@ -667,7 +838,7 @@ function actionMap(template: AutomationTemplateDefinition): Map<string, Automati
   return new Map(template.automation.actions.map((action) => [action.id, action]));
 }
 
-function compiledAutomationId(slug: string, version: string): string {
+export function compiledAutomationId(slug: string, version: string): string {
   return `template:${slug}:${version.replaceAll("+", "_")}`;
 }
 

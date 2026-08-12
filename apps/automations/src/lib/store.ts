@@ -832,6 +832,16 @@ export class AutomationsStore {
     if (source.status !== "succeeded" || source.result?.metadata?.deliveryStatus !== "partial") {
       throw new Error(`queued action is not a typed partial receipt: ${id}`);
     }
+    const receipts = source.result.metadata?.deliveryReceipts;
+    const replayOnlySinks = Array.isArray(receipts)
+      ? receipts
+        .filter((receipt): receipt is JsonObject => isPlainObject(receipt) && receipt.status === "failed" && typeof receipt.sink === "string")
+        .map((receipt) => receipt.sink as string)
+        .sort()
+      : [];
+    if (replayOnlySinks.length === 0) {
+      throw new Error(`typed partial receipt has no failed sinks to replay: ${id}`);
+    }
     const replayActionId = `${id}:partial-replay`;
     if (this.db.query("SELECT id FROM automation_actions WHERE id = $id").get({ $id: replayActionId })) {
       return this.requireQueuedAction(replayActionId);
@@ -858,6 +868,7 @@ export class AutomationsStore {
         availableAt: options.now,
         metadata: {
           partialReplayOf: id,
+          replayOnlySinks,
           ...(options.requestedBy ? { replayRequestedBy: options.requestedBy } : {}),
           ...(options.reason ? { replayReason: options.reason } : {}),
         },
@@ -1663,6 +1674,22 @@ function objectFilterMatches(filter: JsonObject | undefined, data: JsonObject): 
     }
     return observed === expected;
   });
+}
+
+function jsonValuesEqual(left: JsonValue | undefined, right: JsonValue | undefined): boolean {
+  if (left === right) return true;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
+    return left.every((entry, index) => jsonValuesEqual(entry, right[index]));
+  }
+  if (isPlainObject(left) || isPlainObject(right)) {
+    if (!isPlainObject(left) || !isPlainObject(right)) return false;
+    const leftKeys = Object.keys(left);
+    const rightKeys = Object.keys(right);
+    if (leftKeys.length !== rightKeys.length) return false;
+    return leftKeys.every((key) => Object.hasOwn(right, key) && jsonValuesEqual(left[key], right[key]));
+  }
+  return false;
 }
 
 function isPlainObject(value: unknown): value is JsonObject {

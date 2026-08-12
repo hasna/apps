@@ -10,6 +10,7 @@ import {
   compileAutomationTemplate,
   installAutomationTemplate,
   previewAutomationTemplate,
+  previewAutomationTemplateExecution,
   validateAutomationTemplate,
   type AutomationTemplateDefinition,
   type AutomationTemplateInstaller,
@@ -22,6 +23,35 @@ function validTemplate(version = "1.0.0"): AutomationTemplateDefinition {
     version,
     name: "Contact follow-up for ${{ inputs.recipient }}",
     description: "Resolve a contact and send a deterministic follow-up.",
+    authority: {
+      mode: "write",
+      readPermissions: ["contacts:read"],
+      writePermissions: ["emails:write"],
+    },
+    effects: [
+      {
+        id: "contact-read",
+        stepId: "lookup",
+        sink: "contacts",
+        kind: "read",
+        operation: "contacts.lookup",
+        compensation: {
+          kind: "not-applicable",
+          reason: "The lookup is read-only.",
+        },
+      },
+      {
+        id: "email-write",
+        stepId: "send",
+        sink: "emails",
+        kind: "write",
+        operation: "emails.send",
+        compensation: {
+          kind: "not-applicable",
+          reason: "The template creates no binding that can be rolled back.",
+        },
+      },
+    ],
     inputs: {
       recipient: { type: "string", required: true },
       settings: { type: "object", required: true },
@@ -212,12 +242,18 @@ describe("automation template compiler", () => {
     });
     expect(first.triggers[0]?.metadata).toEqual({ requestedFor: "owner@example.test" });
     expect(first.metadata?.template).toEqual({
+      authority: {
+        mode: "write",
+        readPermissions: ["contacts:read"],
+        writePermissions: ["emails:write"],
+      },
+      effects: validTemplate().effects as unknown as JsonValue,
       publicOutputs: { contactId: "${{ steps.lookup.outputs.contactId }}" },
       schemaVersion: "1.0",
       slug: "contact-followup",
       stepOutputs: { lookup: { contactId: "/contact/id" } },
       version: "1.0.0",
-    });
+    } as unknown as JsonValue);
     expect(Object.isFrozen(first)).toBe(true);
     expect(Object.isFrozen(first.actions)).toBe(true);
   });
@@ -263,6 +299,14 @@ describe("automation template compiler", () => {
     const unresolved = validTemplate();
     unresolved.automation.actions[0]!.input = { value: "${{ inputs. }}" };
     expect(() => validateAutomationTemplate(unresolved)).toThrow("unresolved automation template reference");
+
+    const malformedAutomation = validTemplate() as unknown as {
+      automation: unknown;
+    };
+    malformedAutomation.automation = "invalid";
+    expect(() => validateAutomationTemplate(
+      malformedAutomation as unknown as AutomationTemplateDefinition,
+    )).toThrow("automation template automation must be an object");
   });
 
   test("rejects caller interpolation in static actionId", () => {
@@ -359,9 +403,52 @@ describe("automation template registry and installation", () => {
     expect(JSON.stringify(first.receipt)).not.toContain("private-marker@example.test");
     expect(first.receipt.inputs.names).toEqual(["recipient", "settings"]);
     expect(first.receipt.effect).toEqual({ kind: "none" });
+    expect(first.receipt.plan.authority.mode).toBe("write");
+    expect(first.receipt.plan.effects.map((effect) => effect.id)).toEqual(["contact-read", "email-write"]);
     expect(Object.isFrozen(first.receipt)).toBe(true);
     expect(Object.isFrozen(first.receipt.inputs.names)).toBe(true);
     expect(() => ((first.receipt.effect as { kind: string }).kind = "changed")).toThrow();
+  });
+
+  test("previews runtime effects without invoking an executor, adapter, installer, or write", () => {
+    const registry = new AutomationTemplateRegistry();
+    registry.register(validTemplate());
+
+    const preview = previewAutomationTemplateExecution(registry, {
+      slug: "contact-followup",
+      version: "1.0.0",
+      inputs: {
+        recipient: "preview@example.test",
+        settings: { locale: "en" },
+      },
+    });
+
+    expect(preview.operation).toBe("execution-preview");
+    expect(preview.effect).toEqual({
+      kind: "none",
+      executorCalls: 0,
+      adapterCalls: 0,
+      writes: 0,
+    });
+    expect(preview.authority).toEqual({
+      mode: "write",
+      readPermissions: ["contacts:read"],
+      writePermissions: ["emails:write"],
+    });
+    expect(preview.actionPlan).toEqual([
+      {
+        stepId: "lookup",
+        actionId: "contacts.lookup",
+        manifestVersion: "1.0.0",
+        effects: ["contact-read"],
+      },
+      {
+        stepId: "send",
+        actionId: "emails.send",
+        manifestVersion: "1.2.3",
+        effects: ["email-write"],
+      },
+    ]);
   });
 
   test("installs once, makes identical reinstall a no-op, and refuses different content before upsert", () => {
