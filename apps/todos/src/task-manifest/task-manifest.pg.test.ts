@@ -10,7 +10,12 @@ import { createTodosCloudQueryClient, type TodosCloudQueryClient } from "../stor
 import { postgresTodosSyncSchemaSql } from "../storage/postgres-sync.js";
 import {
   createPostgresTodosTaskManifestAuthority,
+  deriveTodosTaskManifestApplyPreconditionDigest,
+  deriveTodosTaskManifestCompensationPreconditionDigest,
+  deriveTodosTaskManifestIdempotencyKey,
   deterministicTodosTaskManifestId,
+  taskManifestCompensationRequestDigest,
+  taskManifestRequestDigest,
   type TodosTaskManifest,
   type TodosTaskManifestAuthority,
   type TodosTaskManifestPostgresClient,
@@ -24,10 +29,12 @@ const PROJECT_ID = "a0000000-0000-4000-8000-000000000001";
 
 function manifest(suffix: string): TodosTaskManifest {
   const operation = `manifest-pg-${UNIQUE}-${suffix}`;
-  return {
+  const base = {
     version: 1,
     operation_id: operation,
-    idempotency_key: `${operation}:apply`,
+    step_id: "apply",
+    idempotency_key: "",
+    precondition_digest: "",
     project_id: PROJECT_ID,
     plan: { key: "pg-graph", name: "PostgreSQL graph" },
     tasks: [
@@ -36,6 +43,54 @@ function manifest(suffix: string): TodosTaskManifest {
     ],
     dependencies: [{ task: "two", depends_on: "one" }],
     effects: [{ topic: "task-manifest.pg-test", payload: { suffix } }],
+  };
+  const precondition_digest = deriveTodosTaskManifestApplyPreconditionDigest(base);
+  const request_digest = taskManifestRequestDigest({ ...base, precondition_digest });
+  const idempotency_key = deriveTodosTaskManifestIdempotencyKey({
+    operation_id: operation,
+    step_id: base.step_id,
+    direction: "apply",
+    target_selector: PROJECT_ID,
+    request_digest,
+    precondition_digest,
+  });
+  return { ...base, precondition_digest, idempotency_key };
+}
+
+function compensationRequest(
+  applied: { receipt: { receipt_id: string; operation_id: string; binding_version: number } },
+  step_id: string,
+) {
+  const operation_id = applied.receipt.operation_id;
+  const receipt_id = applied.receipt.receipt_id;
+  const if_binding_version = applied.receipt.binding_version;
+  const precondition_digest = deriveTodosTaskManifestCompensationPreconditionDigest({
+    receipt_id,
+    operation_id,
+    step_id,
+    if_binding_version,
+  });
+  const request_digest = taskManifestCompensationRequestDigest({
+    receipt_id,
+    operation_id,
+    step_id,
+    precondition_digest,
+    if_binding_version,
+  });
+  return {
+    receipt_id,
+    operation_id,
+    step_id,
+    idempotency_key: deriveTodosTaskManifestIdempotencyKey({
+      operation_id,
+      step_id,
+      direction: "compensate",
+      target_selector: receipt_id,
+      request_digest,
+      precondition_digest,
+    }),
+    precondition_digest,
+    if_binding_version,
   };
 }
 
@@ -106,18 +161,10 @@ describe.skipIf(!PG_URL)("task-manifest PostgreSQL authority", () => {
       { id: [...first.outbox_ids].sort()[0]!, status: "delivered", attempts: 1 },
       { id: [...first.outbox_ids].sort()[1]!, status: "delivered", attempts: 1 },
     ]);
-    await expect(authority.compensate({
-      receipt_id: first.receipt.receipt_id,
-      idempotency_key: `${first.receipt.operation_id}:compensate`,
-      if_binding_version: 1,
-    })).rejects.toThrow(/delivered outbox/);
+    await expect(authority.compensate(compensationRequest(first, "compensate"))).rejects.toThrow(/delivered outbox/);
 
     const clean = await authority.apply(manifest("compensate"));
-    const compensated = await authority.compensate({
-      receipt_id: clean.receipt.receipt_id,
-      idempotency_key: `${clean.receipt.operation_id}:compensate`,
-      if_binding_version: 1,
-    });
+    const compensated = await authority.compensate(compensationRequest(clean, "compensate"));
     expect(compensated.readback).toEqual({ plans: 0, tasks: 0, dependencies: 0, comments: 0, verifications: 0, complete: true });
     const cancelled = await client!.query<{ count: string }>(
       "SELECT count(*) AS count FROM todos_task_manifest_outbox WHERE apply_receipt_id = $1 AND status = 'cancelled'",
@@ -185,11 +232,7 @@ describe.skipIf(!PG_URL)("task-manifest PostgreSQL authority", () => {
     await compensationAuthority.readExact(applied.receipt.receipt_id);
     await deliveryAuthority.readExact(applied.receipt.receipt_id);
 
-    const compensationPromise = compensationAuthority.compensate({
-      receipt_id: applied.receipt.receipt_id,
-      idempotency_key: `${applied.receipt.operation_id}:compensate`,
-      if_binding_version: applied.receipt.binding_version,
-    });
+    const compensationPromise = compensationAuthority.compensate(compensationRequest(applied, "compensate"));
     await compensationLocked;
     const deliveryPromise = deliveryAuthority.markOutboxDelivered(applied.outbox_ids[0]!);
     await deliveryLockAttempted;
@@ -239,11 +282,8 @@ describe.skipIf(!PG_URL)("task-manifest PostgreSQL authority", () => {
       WHEN (NEW.status = 'cancelled' AND OLD.id = '${suppressedOutboxId}')
       EXECUTE FUNCTION taskmanifest_test_skip_cancel()`);
     try {
-      await expect(authority.compensate({
-        receipt_id: applied.receipt.receipt_id,
-        idempotency_key: `${applied.receipt.operation_id}:compensate`,
-        if_binding_version: applied.receipt.binding_version,
-      })).rejects.toThrow(/failed to cancel every expected outbox row/);
+      await expect(authority.compensate(compensationRequest(applied, "compensate")))
+        .rejects.toThrow(/failed to cancel every expected outbox row/);
       const binding = await client!.query<{ state: string }>(
         "SELECT state FROM todos_task_manifest_bindings WHERE operation_id = $1",
         [applied.receipt.operation_id],
@@ -315,11 +355,8 @@ describe.skipIf(!PG_URL)("task-manifest PostgreSQL authority", () => {
         text: "Foreign checklist evidence",
       },
     ]);
-    await expect(authority.compensate({
-      receipt_id: cascade.receipt.receipt_id,
-      idempotency_key: `${cascade.receipt.operation_id}:compensate`,
-      if_binding_version: cascade.receipt.binding_version,
-    })).rejects.toThrow(/foreign reference in task_checklists/i);
+    await expect(authority.compensate(compensationRequest(cascade, "compensate")))
+      .rejects.toThrow(/foreign reference in task_checklists/i);
     const checklist = await client!.query<{ task_id: string }>(`SELECT payload->>'task_id' AS task_id
       FROM todos_sync_records WHERE service = $1 AND object_type = 'task_checklists' AND object_id = $2`,
     [SERVICE, checklistId]);
@@ -347,11 +384,8 @@ describe.skipIf(!PG_URL)("task-manifest PostgreSQL authority", () => {
         name: "Foreign board",
       },
     ]);
-    await expect(authority.compensate({
-      receipt_id: setNull.receipt.receipt_id,
-      idempotency_key: `${setNull.receipt.operation_id}:task-compensate`,
-      if_binding_version: setNull.receipt.binding_version,
-    })).rejects.toThrow(/foreign reference in context_snapshots/i);
+    await expect(authority.compensate(compensationRequest(setNull, "task-compensate")))
+      .rejects.toThrow(/foreign reference in context_snapshots/i);
     const snapshot = await client!.query<{ task_id: string }>(`SELECT payload->>'task_id' AS task_id
       FROM todos_sync_records WHERE service = $1 AND object_type = 'context_snapshots' AND object_id = $2`,
     [SERVICE, snapshotId]);
@@ -359,11 +393,8 @@ describe.skipIf(!PG_URL)("task-manifest PostgreSQL authority", () => {
 
     await client!.query(`DELETE FROM todos_sync_records
       WHERE service = $1 AND object_type = 'context_snapshots' AND object_id = $2`, [SERVICE, snapshotId]);
-    await expect(authority.compensate({
-      receipt_id: setNull.receipt.receipt_id,
-      idempotency_key: `${setNull.receipt.operation_id}:plan-compensate`,
-      if_binding_version: setNull.receipt.binding_version,
-    })).rejects.toThrow(/foreign reference in task_boards/i);
+    await expect(authority.compensate(compensationRequest(setNull, "plan-compensate")))
+      .rejects.toThrow(/foreign reference in task_boards/i);
     const board = await client!.query<{ plan_id: string }>(`SELECT payload->>'plan_id' AS plan_id
       FROM todos_sync_records WHERE service = $1 AND object_type = 'task_boards' AND object_id = $2`,
     [SERVICE, boardId]);

@@ -385,7 +385,7 @@ export class PostgresTodosTaskManifestBackend implements TodosTaskManifestBacken
         receipt_id, tenant_id, authority, route, schema_version, kind, operation_id, idempotency_key,
         step_id, request_digest, precondition_digest, result_digest, slug_provenance, outcome,
         reason, duplicate_of_receipt_id, binding_version, apply_receipt_id, manifest_json, result_json, created_at
-      ) VALUES ($1, $2, 'todos', 'todos.task-manifest.v1', 1, 'apply', $3, $4, $5, $6, $7, $8, $9, NULL, NULL, 1, NULL, $10::jsonb, $11::jsonb, $12)`, [
+      ) VALUES ($1, $2, 'todos', 'todos.task-manifest.v1', 1, 'apply', $3, $4, $5, $6, $7, $8, $9, 'accepted', NULL, NULL, 1, NULL, $10::jsonb, $11::jsonb, $12)`, [
         input.receipt_id, this.tenantId, manifest.operation_id, manifest.idempotency_key, manifest.step_id,
         input.request_digest, manifest.precondition_digest, input.result_digest, TASK_MANIFEST_DETERMINISTIC_SLUG_PROVENANCE,
         manifestJson, resultJson, input.now,
