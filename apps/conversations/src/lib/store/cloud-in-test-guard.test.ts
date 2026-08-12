@@ -451,10 +451,10 @@ try {
       writeFileSync(asScript, fixture);
       writeFileSync(asTest, fixture);
 
-      const childEnv = { ...process.env, [URL_VAR]: PROD_URL, [KEY_VAR]: FAKE_KEY };
-      delete childEnv.CONVERSATIONS_DB_PATH;
-      delete childEnv.HASNA_CONVERSATIONS_DB_PATH;
-      delete childEnv[ALLOW_CLOUD_IN_TESTS_ENV_KEY];
+      const childEnv = { ...process.env };
+      for (const key of STORE_SELECTING_KEYS) delete childEnv[key];
+      childEnv[URL_VAR] = PROD_URL;
+      childEnv[KEY_VAR] = FAKE_KEY;
       delete childEnv.NODE_ENV;
 
       const run = async (argv: string[]) => {

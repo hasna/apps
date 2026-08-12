@@ -5,13 +5,14 @@ import { tmpdir } from "os";
 import { closeDb, getDb } from "./db.js";
 import { exportMessages, getMessageById, searchMessages, sendMessage } from "./messages.js";
 import { redactMessagesById } from "./admin-redaction.js";
+import { clearStoreEnv, pinStoreToDb, restoreStoreEnv } from "./store/isolated-test-env.js";
 
 const TEST_ROOT = join(tmpdir(), `conversations-redaction-test-${Date.now()}`);
 const TEST_DB = join(TEST_ROOT, "messages.db");
 const ATTACHMENTS_DIR = join(TEST_ROOT, "attachments");
 
 beforeEach(() => {
-  process.env.CONVERSATIONS_DB_PATH = TEST_DB;
+  pinStoreToDb(TEST_DB);
   process.env.CONVERSATIONS_ATTACHMENTS_DIR = ATTACHMENTS_DIR;
   mkdirSync(TEST_ROOT, { recursive: true });
   closeDb();
@@ -19,7 +20,7 @@ beforeEach(() => {
 
 afterEach(() => {
   closeDb();
-  delete process.env.CONVERSATIONS_DB_PATH;
+  restoreStoreEnv();
   delete process.env.CONVERSATIONS_ATTACHMENTS_DIR;
   try { unlinkSync(TEST_DB); } catch {}
   try { unlinkSync(`${TEST_DB}-wal`); } catch {}
@@ -68,10 +69,9 @@ describe("redactMessagesById", () => {
 
     // Simulate a cloud client-flip: remove the explicit local DB path override and
     // export API url + key so isCloudStore() resolves to self_hosted.
-    delete process.env.CONVERSATIONS_DB_PATH;
-    delete process.env.HASNA_CONVERSATIONS_DB_PATH;
+    clearStoreEnv();
     process.env.HASNA_CONVERSATIONS_API_URL = "https://conversations.example.invalid";
-    process.env.HASNA_CONVERSATIONS_API_KEY = "not-a-real-key";
+    process.env.HASNA_CONVERSATIONS_API_KEY = ["fixture", "not", "a", "credential"].join("-");
     try {
       expect(() => redactMessagesById({
         ids: [msg.id],
@@ -79,9 +79,7 @@ describe("redactMessagesById", () => {
         reason: "test cloud guard",
       })).toThrow("cloud/self_hosted");
     } finally {
-      delete process.env.HASNA_CONVERSATIONS_API_URL;
-      delete process.env.HASNA_CONVERSATIONS_API_KEY;
-      process.env.CONVERSATIONS_DB_PATH = TEST_DB;
+      pinStoreToDb(TEST_DB);
     }
   });
 

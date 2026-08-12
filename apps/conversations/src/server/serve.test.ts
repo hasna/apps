@@ -7,13 +7,14 @@ import { closeDb } from "../lib/db";
 import { mkdirSync, rmSync, unlinkSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
+import { pinStoreToDb, restoreStoreEnv } from "../lib/store/isolated-test-env.js";
 
 const TEST_DB = join(tmpdir(), `conversations-test-server-${Date.now()}.db`);
 const TEST_DASHBOARD_DIST = join(tmpdir(), `conversations-test-dashboard-dist-${Date.now()}`);
 let server: ReturnType<typeof startDashboardServer>;
 
 beforeAll(() => {
-  process.env.CONVERSATIONS_DB_PATH = TEST_DB;
+  pinStoreToDb(TEST_DB);
   process.env.CONVERSATIONS_DASHBOARD_DIST = TEST_DASHBOARD_DIST;
   mkdirSync(TEST_DASHBOARD_DIST, { recursive: true });
   writeFileSync(
@@ -29,6 +30,7 @@ afterAll(() => {
   server?.stop();
   delete process.env.CONVERSATIONS_DASHBOARD_DIST;
   closeDb();
+  restoreStoreEnv();
   try { unlinkSync(TEST_DB); } catch {}
   try { unlinkSync(TEST_DB + "-wal"); } catch {}
   try { unlinkSync(TEST_DB + "-shm"); } catch {}

@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { startApiServer, type ApiServerDeps } from "../server/api.js";
 import { mintApiKey, verifyApiKey, ApiKeyStore } from "@hasna/contracts/auth";
+import { STORE_SELECTING_KEYS } from "../lib/store/isolated-test-env.js";
 
 const SIGNING = ["test", "signing", "material", "0123456789"].join("-");
 const CLI = ["bun", "run", "./src/cli/index.tsx"];
@@ -79,16 +80,18 @@ function makeDeps(): ApiServerDeps {
 }
 
 async function runCli(args: string[], env: Record<string, string | undefined>) {
+  const childEnv: Record<string, string> = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value !== undefined && !STORE_SELECTING_KEYS.includes(key)) childEnv[key] = value;
+  }
+  for (const [key, value] of Object.entries(env)) {
+    if (value !== undefined) childEnv[key] = value;
+  }
+  childEnv.FORCE_COLOR = "0";
   const proc = Bun.spawn({
     cmd: [...CLI, ...args],
     cwd: process.cwd(),
-    env: {
-      ...process.env,
-      ...env,
-      CONVERSATIONS_DB_PATH: "",
-      HASNA_CONVERSATIONS_DB_PATH: "",
-      FORCE_COLOR: "0",
-    },
+    env: childEnv,
     stdout: "pipe",
     stderr: "pipe",
   });

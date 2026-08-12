@@ -30,6 +30,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { unlinkSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
+import { pinStoreToDb, restoreStoreEnv } from "../lib/store/isolated-test-env.js";
 
 const TEST_DB = join(tmpdir(), `conversations-envelope-order-${Date.now()}.db`);
 let client: Client;
@@ -102,7 +103,7 @@ function setEnv(key: string, value: string | undefined): void {
 }
 
 beforeAll(async () => {
-  setEnv("CONVERSATIONS_DB_PATH", TEST_DB);
+  pinStoreToDb(TEST_DB);
   setEnv("CONVERSATIONS_AGENT_ID", "envelope-reader");
   setEnv("CONVERSATIONS_USE_MACHINE_IDENTITY", undefined);
 
@@ -146,6 +147,7 @@ afterAll(async () => {
     if (value === undefined) delete process.env[key];
     else process.env[key] = value;
   }
+  restoreStoreEnv();
   for (const suffix of ["", "-wal", "-shm"]) {
     try { unlinkSync(`${TEST_DB}${suffix}`); } catch {}
   }

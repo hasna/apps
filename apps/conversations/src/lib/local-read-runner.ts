@@ -53,6 +53,8 @@ interface PendingRequest {
 interface PooledWorker {
   /** Identity for tests, so "this worker never came back" is assertable. */
   readonly id: number;
+  /** A worker is reusable only for the database it opened. */
+  readonly dbPath: string;
   readonly worker: Worker;
   pending: PendingRequest | null;
 }
@@ -106,9 +108,20 @@ function settle(pooled: PooledWorker, reusable: boolean, outcome: () => void): v
   pooled.pending = null;
   clearTimeout(pending.timer);
   busyWorkers -= 1;
-  if (reusable && idleWorkers.length < MAX_IDLE_WORKERS) {
+  if (reusable) {
     setWorkerRef(pooled.worker, false);
-    idleWorkers.push(pooled);
+    const sameDatabase = idleWorkers.some((candidate) => candidate.dbPath === pooled.dbPath);
+    if (sameDatabase) {
+      // One warm worker per database is enough. Keeping duplicates lets one
+      // busy path occupy every slot and forces every other path to cold-start.
+      pooled.worker.terminate();
+    } else {
+      // Keep the most recently used database paths warm while retaining the
+      // process-wide cap. This makes a path that just completed a request
+      // reusable even when stale workers for other test stores filled the pool.
+      if (idleWorkers.length >= MAX_IDLE_WORKERS) idleWorkers.shift()!.worker.terminate();
+      idleWorkers.push(pooled);
+    }
   } else {
     pooled.worker.terminate();
   }
@@ -121,9 +134,10 @@ function discardIdle(pooled: PooledWorker): void {
   pooled.worker.terminate();
 }
 
-function createWorker(): PooledWorker {
+function createWorker(dbPath: string): PooledWorker {
   const pooled: PooledWorker = {
     id: nextWorkerId++,
+    dbPath,
     worker: new Worker(workerUrl(), { type: "module" }),
     pending: null,
   };
@@ -162,22 +176,30 @@ function createWorker(): PooledWorker {
   return pooled;
 }
 
-function acquireWorker(): PooledWorker {
-  const pooled = idleWorkers.pop() ?? createWorker();
+function acquireWorker(dbPath: string): PooledWorker {
+  let index = -1;
+  for (let candidateIndex = idleWorkers.length - 1; candidateIndex >= 0; candidateIndex -= 1) {
+    if (idleWorkers[candidateIndex]!.dbPath === dbPath) {
+      index = candidateIndex;
+      break;
+    }
+  }
+  const pooled = index >= 0 ? idleWorkers.splice(index, 1)[0]! : createWorker(dbPath);
   setWorkerRef(pooled.worker, true);
   return pooled;
 }
 
-async function executeWorker<T>(
+function dispatchWorker<T>(
   operation: LocalReadOperation | "__cancellationProbe",
   args: unknown[],
   timeoutValue: unknown,
-): Promise<T> {
+): { workerId: number; result: Promise<T> } {
   const timeoutMs = resolveCollectionTimeoutMs(timeoutValue);
-  const pooled = acquireWorker();
+  const dbPath = getDbPath();
+  const pooled = acquireWorker(dbPath);
   const id = nextRequestId++;
 
-  return await new Promise<T>((resolve, reject) => {
+  const result = new Promise<T>((resolve, reject) => {
     const pending: PendingRequest = {
       id,
       queryStarted: false,
@@ -197,12 +219,21 @@ async function executeWorker<T>(
       id,
       operation,
       args,
-      dbPath: getDbPath(),
+      dbPath,
       exportDir: operation === "createMessageExport" ? getMessageExportDir() : undefined,
       tenantId: process.env.HASNA_CONVERSATIONS_TENANT_ID,
       authorityId: process.env.HASNA_CONVERSATIONS_INCIDENT_AUTHORITY_ID,
     });
   });
+  return { workerId: pooled.id, result };
+}
+
+async function executeWorker<T>(
+  operation: LocalReadOperation | "__cancellationProbe",
+  args: unknown[],
+  timeoutValue: unknown,
+): Promise<T> {
+  return await dispatchWorker<T>(operation, args, timeoutValue).result;
 }
 
 export function runLocalReadWorker<T>(operation: LocalReadOperation, args: unknown[], timeoutValue: unknown): Promise<T> {
@@ -212,6 +243,15 @@ export function runLocalReadWorker<T>(operation: LocalReadOperation, args: unkno
 /** Test-only deterministic probe for worker termination and no-late-mutation. */
 export function runLocalCancellationProbeForTests(timeoutMs: number): Promise<never> {
   return executeWorker<never>("__cancellationProbe", [], timeoutMs);
+}
+
+/** Dispatch identity plus result, so a test can measure only its own requests. */
+export function runLocalReadWorkerWithIdentityForTests<T>(
+  operation: LocalReadOperation,
+  args: unknown[],
+  timeoutValue: unknown,
+): { workerId: number; result: Promise<T> } {
+  return dispatchWorker<T>(operation, args, timeoutValue);
 }
 
 export function activeLocalReadWorkerCountForTests(): number {

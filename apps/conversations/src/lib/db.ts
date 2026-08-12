@@ -658,13 +658,23 @@ export function getDb(): Database {
   const dbPath = getDbPath();
   mkdirSync(dirname(dbPath), { recursive: true });
 
-  db = new ConversationsDatabase(dbPath);
+  const freshDatabase = !existsSync(dbPath);
+  const openedDb = new ConversationsDatabase(dbPath);
+  db = openedDb;
   db.exec("PRAGMA busy_timeout = 5000");
   const journalMode = db.prepare("PRAGMA journal_mode").get() as { journal_mode: string };
   if (journalMode.journal_mode.toLowerCase() !== "wal") {
     db.exec("PRAGMA journal_mode = WAL");
   }
 
+  // A fresh schema contains hundreds of DDL statements. Without one outer
+  // transaction SQLite durably commits each statement separately; isolated
+  // tests create a fresh database per case and paid that full fsync sequence
+  // thousands of times. Existing databases retain the migration transaction
+  // boundaries below. A fresh database has no legacy rows, so those conditional
+  // migration transactions are unreachable inside this one.
+  if (freshDatabase) db.exec("BEGIN IMMEDIATE");
+  try {
   // Messages table (new DBs get 'channel' column; existing DBs migrate below)
   db.exec(`
     CREATE TABLE IF NOT EXISTS messages (
@@ -1400,7 +1410,16 @@ export function getDb(): Database {
     `);
   }
 
-  return db;
+    if (freshDatabase) db.exec("COMMIT");
+    return db;
+  } catch (error) {
+    if (freshDatabase) {
+      try { openedDb.exec("ROLLBACK"); } catch {}
+    }
+    openedDb.close();
+    db = null;
+    throw error;
+  }
 }
 
 export function closeDb(): void {

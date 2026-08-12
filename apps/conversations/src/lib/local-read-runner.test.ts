@@ -27,12 +27,12 @@ import { fileURLToPath } from "node:url";
 import { sendMessage } from "./messages.js";
 import { closeDb, getDb } from "./db.js";
 import {
-  createdLocalReadWorkerCountForTests,
   disposeLocalReadWorkersForTests,
   idleLocalReadWorkerIdsForTests,
   LocalCollectionTimeoutError,
   runLocalCancellationProbeForTests,
   runLocalReadWorker,
+  runLocalReadWorkerWithIdentityForTests,
 } from "./local-read-runner.js";
 import { createDisposableStore, enterHermeticTestEnv } from "../test/hermetic.js";
 
@@ -183,29 +183,28 @@ describe("local read worker lifecycle (regression 0ae63bc7)", () => {
     sendMessage({ from: "writer", to: "pool-reader", content: "hello" });
 
     const READS = 10;
-    const workersBefore = createdLocalReadWorkerCountForTests();
+    const workerIds = new Set<number>();
     const startedAt = performance.now();
 
     for (let i = 0; i < READS; i++) {
-      const page = await runLocalReadWorker<{ messages: unknown[] }>(
+      const dispatched = runLocalReadWorkerWithIdentityForTests<{ messages: unknown[] }>(
         "readMessagePreviews",
         [{ agent: "pool-reader", limit: 5 }],
         undefined,
       );
+      workerIds.add(dispatched.workerId);
+      const page = await dispatched.result;
       expect(Array.isArray(page.messages)).toBe(true);
     }
 
-    // The defect: one Worker start per read, so this delta was exactly READS.
-    // Reuse bounds it by the pool instead. The bound is not 1 because this
-    // counter is process-wide and `bun test` shares one process: a channel
-    // bridge polling in another file issues its own local reads, and those can
-    // start a worker while this loop runs. Slack for a few of those still
-    // separates "pooled" from "one per read" by a wide margin.
-    const started = createdLocalReadWorkerCountForTests() - workersBefore;
-    expect(started).toBeLessThanOrEqual(4);
-    expect(started).toBeLessThan(READS);
+    // The defect: one Worker identity per read. Measure only these ten
+    // dispatches; background readers share the process and may evict one warm
+    // worker under the documented four-slot cap. Staying within that cap still
+    // separates pooling from the old ten-for-ten behavior.
+    expect(workerIds.size).toBeLessThanOrEqual(4);
+    expect(workerIds.size).toBeLessThan(READS);
 
-    // A guard against a gross regression, NOT the discriminator: `started`
+    // A guard against a gross regression, NOT the discriminator: identity
     // above is what fails on the defect. Measured on an idle box, these ten
     // reads took 1065-1236ms with a Worker per read and 131-362ms pooled — a
     // real cost at suite scale, but far too small a gap to assert on directly
@@ -248,9 +247,13 @@ describe("local read worker lifecycle (regression 0ae63bc7)", () => {
     expect(idleLocalReadWorkerIdsForTests()).not.toContain(doomed);
   }, 120_000);
 
-  test("a reused worker answers each request from that request's own database", async () => {
-    // Pooled workers outlive the environment that made them, so a second read
-    // pointed at a different db must not be answered from the first one's.
+  test("a pooled worker never answers a request for a different database", async () => {
+    // Pooled workers outlive the environment that made them. Bun Workers keep
+    // the database selected when their module graph first opens, so rewriting
+    // process.env inside a reused worker is not a reliable database switch.
+    // Both stores are populated: the old empty-second-store assertion let a
+    // stale read of an empty first store pass while proving nothing about the
+    // request's dbPath.
     sendMessage({ from: "writer", to: "pool-reader", content: "first-store" });
     const first = await runLocalReadWorker<{ messages: Array<{ preview: string }> }>(
       "readMessagePreviews",
@@ -258,6 +261,8 @@ describe("local read worker lifecycle (regression 0ae63bc7)", () => {
       undefined,
     );
     expect(first.messages).toHaveLength(1);
+    const firstWorkerIds = idleLocalReadWorkerIdsForTests();
+    expect(firstWorkerIds.length).toBeGreaterThan(0);
 
     const second = createDisposableStore("local-read-runner-second");
     const restoreSecond = enterHermeticTestEnv({
@@ -267,12 +272,15 @@ describe("local read worker lifecycle (regression 0ae63bc7)", () => {
     try {
       closeDb();
       getDb();
-      const page = await runLocalReadWorker<{ messages: unknown[] }>(
+      sendMessage({ from: "writer", to: "pool-reader", content: "second-store" });
+      const page = await runLocalReadWorker<{ messages: Array<{ preview: string }> }>(
         "readMessagePreviews",
         [{ agent: "pool-reader", limit: 5 }],
         undefined,
       );
-      expect(page.messages).toHaveLength(0);
+      expect(page.messages).toHaveLength(1);
+      expect(page.messages[0]?.preview).toBe("second-store");
+      expect(idleLocalReadWorkerIdsForTests().some((id) => !firstWorkerIds.includes(id))).toBe(true);
     } finally {
       closeDb();
       restoreSecond();
