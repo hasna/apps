@@ -262,9 +262,10 @@ export class PostgresTodosTaskManifestBackend implements TodosTaskManifestBacken
       const terminal = await tx.query<JsonRecord>(
         `SELECT result_json FROM todos_task_manifest_terminal_receipts
          WHERE tenant_id = $1
-           AND (receipt_id = $2 OR (operation_id = $3 AND step_id = $4 AND idempotency_key = $5))
+           AND (receipt_id = $2 OR (operation_id = $3 AND step_id = $4))
+         ORDER BY created_at ASC, receipt_id ASC
          LIMIT 1`,
-        [this.tenantId, input.terminal_receipt_id, manifest.operation_id, manifest.step_id, manifest.idempotency_key],
+        [this.tenantId, input.terminal_receipt_id, manifest.operation_id, manifest.step_id],
       );
       if (terminal.rows[0]) {
         return parseApplyResult(terminal.rows[0]["result_json"], true);

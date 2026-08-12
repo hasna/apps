@@ -284,6 +284,51 @@ describe("task-manifest SQLite authority", () => {
     ).get(arbitrary.operation_id)).toEqual({ count: 1 });
   });
 
+  test("requires fresh operation, step, key, and precondition after terminal nonacceptance", async () => {
+    const authority = createSqliteTodosTaskManifestAuthority({ database: db });
+    const rejected = manifest("terminal-retry-identity");
+    rejected.idempotency_key = `tmk_${"f".repeat(48)}`;
+
+    await expect(authority.apply(rejected)).rejects.toEqual(expect.objectContaining<TodosTaskManifestError>({
+      code: "TODOS_TASK_MANIFEST_IDEMPOTENCY_MISMATCH",
+      details: expect.objectContaining({
+        receipt: expect.objectContaining({
+          operation_id: rejected.operation_id,
+          step_id: rejected.step_id,
+          idempotency_key: rejected.idempotency_key,
+          outcome: "terminal_nonacceptance",
+        }),
+      }),
+    }));
+
+    const changedKey = { ...rejected };
+    refreshManifestIdentity(changedKey);
+    await expect(authority.apply(changedKey)).rejects.toEqual(expect.objectContaining<TodosTaskManifestError>({
+      code: "TODOS_TASK_MANIFEST_IDEMPOTENCY_MISMATCH",
+      details: expect.objectContaining({
+        receipt: expect.objectContaining({
+          operation_id: rejected.operation_id,
+          step_id: rejected.step_id,
+          idempotency_key: rejected.idempotency_key,
+          outcome: "terminal_nonacceptance",
+        }),
+      }),
+    }));
+    expect(db.query(
+      "SELECT count(*) AS count FROM todos_task_manifest_terminal_receipts WHERE operation_id = ? AND step_id = ?",
+    ).get(rejected.operation_id, rejected.step_id)).toEqual({ count: 1 });
+
+    const fresh = manifest("terminal-retry-fresh-operation");
+    fresh.step_id = "apply-retry";
+    fresh.precondition_digest = deriveTodosTaskManifestApplyPreconditionDigest(fresh);
+    refreshManifestIdentity(fresh);
+    const accepted = await authority.apply(fresh);
+    expect(accepted.receipt.outcome).toBe("accepted");
+    expect(accepted.receipt.operation_id).toBe(fresh.operation_id);
+    expect(accepted.receipt.step_id).toBe(fresh.step_id);
+    expect(accepted.receipt.precondition_digest).toBe(fresh.precondition_digest);
+  });
+
   test("advertises retry-safe outbox delivery without changing task-manifest schema v1", async () => {
     const authority = createSqliteTodosTaskManifestAuthority({ database: db });
     const capability = await authority.capability();

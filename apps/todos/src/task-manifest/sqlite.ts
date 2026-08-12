@@ -170,8 +170,13 @@ export class SqliteTodosTaskManifestBackend implements TodosTaskManifestBackend 
     return this.serialized(() => {
       const { manifest } = input;
       const terminal = this.db.query(
-        "SELECT result_json FROM todos_task_manifest_terminal_receipts WHERE tenant_id = ? AND (receipt_id = ? OR (operation_id = ? AND step_id = ? AND idempotency_key = ?)) LIMIT 1",
-      ).get(this.tenantId, input.terminal_receipt_id, manifest.operation_id, manifest.step_id, manifest.idempotency_key) as { result_json: string } | null;
+        `SELECT result_json
+         FROM todos_task_manifest_terminal_receipts
+         WHERE tenant_id = ?
+           AND (receipt_id = ? OR (operation_id = ? AND step_id = ?))
+         ORDER BY created_at ASC, receipt_id ASC
+         LIMIT 1`,
+      ).get(this.tenantId, input.terminal_receipt_id, manifest.operation_id, manifest.step_id) as { result_json: string } | null;
       if (terminal) return parseApplyResult(terminal.result_json, true);
       const binding = this.db.query(
         "SELECT * FROM todos_task_manifest_bindings WHERE tenant_id = ? AND operation_id = ? LIMIT 1",
