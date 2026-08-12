@@ -1434,9 +1434,21 @@ export function unpinMessage(id: number): Message | null {
   return row ? parseMessage(row) : null;
 }
 
-export function getPinnedMessages(opts?: { channel?: string; session_id?: string; limit?: number; offset?: number }): Message[] {
+export function readPinnedMessagePreviews(opts?: {
+  channel?: string;
+  session_id?: string;
+  limit?: number;
+  offset?: number;
+  max_bytes?: number;
+  preview_bytes?: number;
+  timeout_ms?: number;
+  max_content_length?: number;
+}): MessagePreviewPage {
   assertOptionalFilter("channel", opts?.channel);
   assertOptionalFilter("session_id", opts?.session_id);
+  const startedAt = performance.now();
+  const timeoutMs = resolveCollectionTimeoutMs(opts?.timeout_ms);
+  const previewBytes = resolveCollectionPreviewBytes(opts?.preview_bytes ?? opts?.max_content_length);
   const db = getDb();
   const conditions: string[] = ["pinned_at IS NOT NULL"];
   const params: (string | number)[] = [];
@@ -1456,11 +1468,19 @@ export function getPinnedMessages(opts?: { channel?: string; session_id?: string
     `SELECT ${previewProjectionColumns()} FROM messages WHERE ${conditions.join(" AND ")}
      ${pinnedOrderByClause()} LIMIT ${safeLimit + 1} OFFSET ${safeOffset}`
   ).all(...params) as Record<string, unknown>[];
-  return packMessagePreviewPage(rows.map((row) => buildMessagePreview(row)), {
+  assertCollectionDeadline(startedAt, timeoutMs);
+  const page = packMessagePreviewPage(rows.map((row) => buildMessagePreview(row, previewBytes)), {
     limit: safeLimit,
     cursor: safeOffset,
-    max_bytes: COLLECTION_MAX_MAX_BYTES,
-  }).messages.map(previewAsCompatibilityMessage);
+    max_bytes: opts?.max_bytes ?? COLLECTION_MAX_MAX_BYTES,
+    timeout_ms: timeoutMs,
+  });
+  assertCollectionDeadline(startedAt, timeoutMs);
+  return page;
+}
+
+export function getPinnedMessages(opts?: { channel?: string; session_id?: string; limit?: number; offset?: number }): Message[] {
+  return readPinnedMessagePreviews(opts).messages.map(previewAsCompatibilityMessage);
 }
 
 function queryUnreadBlockerRows(agent: string, opts: { limit: number; offset: number }): Record<string, unknown>[] {

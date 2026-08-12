@@ -534,6 +534,7 @@ export interface ConversationsStore {
   editMessage: Async<typeof messagesLib.editMessage>;
   readMessages: Async<typeof messagesLib.readMessages>;
   readMessagePreviews: Async<typeof messagesLib.readMessagePreviews>;
+  readPinnedMessagePreviews: Async<typeof messagesLib.readPinnedMessagePreviews>;
   countMessages: Async<typeof messagesLib.countMessages>;
   searchMessages: Async<typeof messagesLib.searchMessages>;
   searchMessagePreviews: Async<typeof messagesLib.searchMessagePreviews>;
@@ -738,6 +739,12 @@ export class LocalStore implements ConversationsStore {
   readMessagePreviews: ConversationsStore["readMessagePreviews"] = async (opts = {}) =>
     runLocalReadWorker<ReturnType<typeof messagesLib.readMessagePreviews>>(
       "readMessagePreviews",
+      [opts],
+      opts.timeout_ms,
+    );
+  readPinnedMessagePreviews: ConversationsStore["readPinnedMessagePreviews"] = async (opts = {}) =>
+    runLocalReadWorker<ReturnType<typeof messagesLib.readPinnedMessagePreviews>>(
+      "readPinnedMessagePreviews",
       [opts],
       opts.timeout_ms,
     );

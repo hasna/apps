@@ -44,6 +44,15 @@ async function acknowledgeChannelRead(
   await store.markChannelNotificationsRead(agent, ids);
 }
 
+async function consumeChannelNotifications(
+  store: ReturnType<typeof getStore>,
+  ids: number[],
+  agent: string | undefined,
+): Promise<void> {
+  if (!agent || ids.length === 0) return;
+  await store.markChannelNotificationsRead(agent, ids);
+}
+
 export function registerChannelTools(server: McpServer): void {
   // Bound to this connection: see ../identity.ts.
   const resolveIdentity = identityFor(server);
@@ -160,8 +169,8 @@ export function registerChannelTools(server: McpServer): void {
 
   registerMcpTool(server, "read_channel", {
     description:
-      "Peek at messages in a channel. NON-MUTATING: reading records no receipt, marks nothing read, "
-      + "and consumes no channel notification. Pass mark_read:true to acknowledge exactly what this call returns.",
+      "Peek at messages in a channel. Reading consumes the matching preview-only channel notifications for this reader, "
+      + "but does not record read receipts or message-read state unless mark_read:true is passed.",
     inputSchema: {
       channel: z.string(),
       from: z.string().optional().describe("Agent reading the channel — used for per-agent read receipts when mark_read is true"),
@@ -182,13 +191,16 @@ export function registerChannelTools(server: McpServer): void {
     const store = getStore();
     const { channel, from: fromParam, since, limit, mark_read, max_content_length, threads_only, include_reply_counts, latest } = args;
     const verbose = args.verbose === true;
+    const agent = fromParam ? resolveIdentity(fromParam) : undefined;
 
     if (verbose) {
       const messages = await store.readMessages({
         channel, since, limit, offset: args.cursor, max_content_length, threads_only, include_reply_counts, latest,
       });
+      const ids = messages.map((m) => m.id);
+      await consumeChannelNotifications(store, ids, agent);
       if (mark_read === true && messages.length > 0) {
-        await acknowledgeChannelRead(store, messages.map((m) => m.id), fromParam ? resolveIdentity(fromParam) : undefined);
+        await acknowledgeChannelRead(store, ids, agent);
       }
       return { content: [{ type: "text", text: jsonText(messages) }] };
     }
@@ -199,12 +211,15 @@ export function registerChannelTools(server: McpServer): void {
       preview_bytes: args.preview_bytes ?? max_content_length,
     });
 
-    // Acknowledgement — read receipts AND notification consumption — is opt-in.
-    // Recording a receipt off a bare read is still a mutation: it tells every
-    // other participant this agent has seen a message it may only have glanced
-    // at, and it consumed the notification that would have brought it back.
+    const ids = page.messages.map((m) => m.id);
+    await consumeChannelNotifications(store, ids, agent);
+
+    // Recording read state stays opt-in. Consuming the matching preview-only
+    // notification queue does not tell the rest of the system this agent has
+    // read the messages; it only prevents the same channel blurb from being
+    // re-delivered after the agent explicitly opened that channel.
     if (mark_read === true && page.messages.length > 0) {
-      await acknowledgeChannelRead(store, page.messages.map((m) => m.id), fromParam ? resolveIdentity(fromParam) : undefined);
+      await acknowledgeChannelRead(store, ids, agent);
     }
 
     return {

@@ -379,10 +379,9 @@ export function startDashboardServer(port = 0, host?: string) {
           const collection = resolveCollectionQueryOptions(url.searchParams);
           const channel = resolvePresentString(url.searchParams.get("channel"), "channel");
           const session_id = resolveAliasedString(url.searchParams, "session_id", "session");
-          const page = await getStore().readMessagePreviews({
+          const page = await getStore().readPinnedMessagePreviews({
             channel,
             session_id,
-            pinned_only: true,
             limit: collection.limit,
             offset: collection.offset,
             max_bytes: collection.maxBytes,

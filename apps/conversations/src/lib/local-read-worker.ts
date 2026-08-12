@@ -5,6 +5,7 @@ import {
   getMessagesForAgent,
   getPinnedMessages,
   getUnreadBlockerPreviews,
+  readPinnedMessagePreviews,
   readMentionPreviews,
   readMessagePreviews,
   searchMessagePreviews,
@@ -18,6 +19,7 @@ type LocalReadOperation =
   | "getUnreadBlockerPreviews"
   | "readMentionPreviews"
   | "getMessagesForAgent"
+  | "readPinnedMessagePreviews"
   | "getPinnedMessages"
   | "readChannelNotifications"
   | "createMessageExport"
@@ -105,6 +107,9 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
         break;
       case "getMessagesForAgent":
         result = getMessagesForAgent(request.args[0] as string, request.args[1] as never);
+        break;
+      case "readPinnedMessagePreviews":
+        result = readPinnedMessagePreviews(request.args[0] as never);
         break;
       case "getPinnedMessages":
         result = getPinnedMessages(request.args[0] as never);
