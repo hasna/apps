@@ -476,7 +476,11 @@ degrade_load() {
 
 run_json() {
   local label="$1"; shift
-  local output rc
+  local shape="array" output normalized rc
+  if [ "${1:-}" = "--message-envelope" ]; then
+    shape="message-envelope"
+    shift
+  fi
   # A HANG IS A FAILURE. Without this cap a stalled backing CLI (DB lock, hosted
   # API stall) freezes the whole watch loop inside its first poll: fails never
   # increments, the 3-failure self-report never fires, and the monitor emits
@@ -486,10 +490,19 @@ run_json() {
     degrade_add "$label: $1 TIMED OUT after ${CALL_TIMEOUT}s"; return 1
   fi
   if [ $rc -ne 0 ]; then degrade_add "$label: exit $rc from $1"; return 1; fi
-  if ! printf '%s' "$output" | jq -e 'type == "array"' >/dev/null 2>&1; then
+  if [ "$shape" = "message-envelope" ]; then
+    normalized="$(printf '%s' "$output" | jq -ce '
+      if type == "array" then .
+      elif type == "object" and (.messages | type) == "array" then .messages
+      else error("expected an array or an object with a messages array")
+      end
+    ' 2>/dev/null)" || {
+      degrade_add "$label: $1 returned no usable JSON array"; return 1
+    }
+  elif ! normalized="$(printf '%s' "$output" | jq -ce 'select(type == "array")' 2>/dev/null)"; then
     degrade_add "$label: $1 returned no usable JSON array"; return 1
   fi
-  printf '%s' "$output"; return 0
+  printf '%s' "$normalized"; return 0
 }
 
 channel_exists() {
@@ -575,7 +588,7 @@ seed_if_new() {
   local msgs tasks t=0 n=0 failed=0
   local msg_tmp="$dir/.last-msg.seed.$$.new"
   local tasks_tmp="$dir/.seen-tasks.seed.$$.new"
-  if msgs="$(run_json seed-read conversations read --limit 1 --json)"; then
+  if msgs="$(run_json seed-read --message-envelope conversations read --limit 1 --json)"; then
     n="$(printf '%s' "$msgs" | jq -r '[.[]?.id // 0] | max // 0' 2>/dev/null || echo 0)"
   else failed=1; fi
   if [ "${WANT_TODOS:-1}" = 1 ]; then
@@ -625,7 +638,7 @@ render_messages() {
       | select((
           ($signature != "")
           and ((((.from_agent // "") | ascii_downcase) as $f | $lmes | index($f)) != null)
-          and (((.content // .message // .body // "") | tostring) | contains($signature))
+          and (((.content // .message // .body // .preview // "") | tostring) | contains($signature))
         ) | not)
       | select( ((.channel // "") != "" and (((.channel // "") as $c | $subs | index($c)) != null))
                 or ((((.to_agent // "") | ascii_downcase) as $t | $lmes | index($t)) != null) )
@@ -634,7 +647,7 @@ render_messages() {
       + (if ((.channel // "") == "")
          then (if (((.to_agent // "") | ascii_downcase) == ($me | ascii_downcase)) then "[dm] " else "[dm→\(.to_agent // "?")] " end)
          else "[msg] #\(.channel) " end)
-      + "\(.from_agent // "?"): \((.content // "") | gsub("\\s+"; " ") | .[0:220])  (id \(.id // "?"))"
+      + "\(.from_agent // "?"): \((.content // .message // .body // .preview // "") | tostring | gsub("\\s+"; " ") | .[0:220])  (id \(.id // "?"))"
   ' 2>/dev/null
 }
 
@@ -693,7 +706,7 @@ recover_id_prefix() {
     [ "$page_limit" -gt "$remaining" ] && page_limit="$remaining"
     pages=$((pages + 1))
 
-    if ! backfill="$(run_json backfill conversations read --since-id "$current" --limit "$page_limit" --json)"; then
+    if ! backfill="$(run_json backfill --message-envelope conversations read --since-id "$current" --limit "$page_limit" --json)"; then
       return 1
     fi
     if ! page="$(printf '%s' "$backfill" | jq -c --argjson cap "$page_limit" '.[:$cap]' 2>/dev/null)"; then
@@ -796,7 +809,7 @@ do_check() {
       # widens it: an ascending id-cursor page walks the missing range instead.
       win="${INBOX_WINDOW:-$(( ${INTERVAL:-45} * 3 ))}"; [ "$win" -lt 120 ] && win=120
       winm=$(( (win + 59) / 60 )); [ "$winm" -lt 2 ] && winm=2
-      if msgs="$(run_json since conversations since "${winm}m" --limit "$LIMIT" --json)"; then
+      if msgs="$(run_json since --message-envelope conversations since "${winm}m" --limit "$LIMIT" --json)"; then
         meta="$(printf '%s' "$msgs" | jq -r --argjson last "$last" '
           . as $rows
           | ([$rows[]? | (.id // 0) | select(. > $last)] | unique | sort) as $ids
