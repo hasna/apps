@@ -182,7 +182,7 @@ sources
   .action(async (opts: { json?: boolean }) => {
     const files = store();
     const all = await files.listSources();
-    if (opts.json) { console.log(JSON.stringify(all, null, 2)); return; }
+    if (opts.json) { await writeStdoutLine(JSON.stringify(all, null, 2)); return; }
     if (!all.length) {
       console.log(chalk.dim("No sources configured. Run: files sources add <path>"));
       return;
@@ -2220,9 +2220,33 @@ program
     else { console.error(chalk.red(`Source not found: ${id}`)); process.exit(1); }
   });
 
-program.parseAsync().catch((error: unknown) => {
+await program.parseAsync().catch(async (error: unknown) => {
   // Any command action that rejects (e.g. a HasnaHttpError from the cloud
   // transport) surfaces here as a single clean line — never a raw stack trace.
-  console.error(chalk.red(error instanceof Error ? error.message : String(error)));
+  await writeStderrLine(chalk.red(error instanceof Error ? error.message : String(error)));
   process.exit(1);
 });
+
+async function writeStdoutLine(line: string): Promise<void> {
+  await writeStandardStreamLine(process.stdout, line);
+}
+
+async function writeStderrLine(line: string): Promise<void> {
+  await writeStandardStreamLine(process.stderr, line);
+}
+
+function writeStandardStreamLine(stream: NodeJS.WriteStream, line: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const cleanup = () => stream.off("error", onError);
+    const onError = (error: Error) => {
+      cleanup();
+      reject(error);
+    };
+    stream.once("error", onError);
+    stream.write(`${line}\n`, (error) => {
+      cleanup();
+      if (error) reject(error);
+      else resolve();
+    });
+  });
+}

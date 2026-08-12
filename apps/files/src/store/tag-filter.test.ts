@@ -129,7 +129,7 @@ afterEach(async () => {
 });
 
 describe("local exact tag filtering", () => {
-  test("returns the exact member and makes known-negative tags stay empty", async () => {
+  test("composes source and tag filters without losing the exact member", async () => {
     const { getCurrentMachine } = await import("../db/machines.js");
     const { createSource } = await import("../db/sources.js");
     const { upsertFile } = await import("../db/files.js");
@@ -168,9 +168,14 @@ describe("local exact tag filtering", () => {
     tagFile(unrelated.id, "zz");
 
     const store = new LocalStore();
-    expect((await store.listFiles({ tag: MATCHING_TAG })).map((file) => file.id)).toEqual([member.id]);
+    expect((await store.getFile(member.id))?.tags).toContain(MATCHING_TAG);
+    expect((await store.listFiles({ source_id: source.id })).map((file) => file.id)).toContain(member.id);
+    expect((await store.listFiles({
+      source_id: source.id,
+      tag: MATCHING_TAG,
+    })).map((file) => file.id)).toEqual([member.id]);
     for (const tag of ABSENT_TAGS) {
-      expect(await store.listFiles({ tag })).toEqual([]);
+      expect(await store.listFiles({ source_id: source.id, tag })).toEqual([]);
     }
   });
 });
