@@ -4,8 +4,14 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { JsonObject } from "@hasna/actions";
-import { AutomationsStore, type WebhookRoute } from "../index.js";
 import { daemonPidFilePath, ensureAutomationsDataDir } from "../lib/paths.js";
+import { openServerAutomationsStoreFromEnv } from "../server/index.js";
+import type { ServerAutomationsStore } from "../server/store.js";
+import type {
+  MaterializedWebhookRequest,
+  WebhookRequestInput,
+  WebhookRoute,
+} from "../types.js";
 
 interface ParsedArgs {
   json: boolean;
@@ -27,8 +33,21 @@ interface DaemonServeOptions {
   maxBodyBytes: number;
 }
 
+export type ServerAutomationsStoreOpener = () => Promise<ServerAutomationsStore>;
+
+export interface AutomationsDaemonDependencies {
+  openStore?: ServerAutomationsStoreOpener;
+}
+
+export interface WebhookServerStore {
+  requireWebhookRoute(idOrPath: string): WebhookRoute | Promise<WebhookRoute>;
+  materializeWebhookRequest(
+    input: WebhookRequestInput,
+  ): MaterializedWebhookRequest | Promise<MaterializedWebhookRequest>;
+}
+
 export interface WebhookServerOptions {
-  store: AutomationsStore;
+  store: WebhookServerStore;
   host?: string;
   port?: number;
   maxBodyBytes?: number;
@@ -37,10 +56,14 @@ export interface WebhookServerOptions {
 
 export type WebhookSecretResolver = (route: WebhookRoute) => string | undefined;
 
-export async function runAutomationsDaemonCli(argv = Bun.argv.slice(2)): Promise<number> {
+export async function runAutomationsDaemonCli(
+  argv = Bun.argv.slice(2),
+  dependencies: AutomationsDaemonDependencies = {},
+): Promise<number> {
   const parsed = parseGlobalArgs(argv);
   if (parsed.dir) process.env.HASNA_AUTOMATIONS_DIR = parsed.dir;
   const command = parsed.rest[0];
+  const openStore = dependencies.openStore ?? openServerAutomationsStoreFromEnv;
 
   try {
     if (!command || command === "--help" || command === "-h" || command === "help") {
@@ -52,19 +75,20 @@ export async function runAutomationsDaemonCli(argv = Bun.argv.slice(2)): Promise
       return 0;
     }
     if (command === "status") {
-      const store = new AutomationsStore();
+      const store = await openStore();
       try {
-        output(parsed, store.status(), () => console.log(JSON.stringify(store.status(), null, 2)));
+        const status = await store.status();
+        output(parsed, status, () => console.log(JSON.stringify(status, null, 2)));
       } finally {
-        store.close();
+        await store.close();
       }
       return 0;
     }
     if (command === "run") {
-      return runDaemon(parsed);
+      return runDaemon(parsed, openStore);
     }
     if (command === "serve") {
-      return runWebhookServe(parsed);
+      return runWebhookServe(parsed, openStore);
     }
     throw new Error(`Unknown command: ${command}`);
   } catch (error) {
@@ -78,11 +102,14 @@ export async function runAutomationsDaemonCli(argv = Bun.argv.slice(2)): Promise
   }
 }
 
-export async function runWebhookServe(parsed: ParsedArgs): Promise<number> {
+export async function runWebhookServe(
+  parsed: ParsedArgs,
+  openStore: ServerAutomationsStoreOpener = openServerAutomationsStoreFromEnv,
+): Promise<number> {
   ensureAutomationsDataDir();
   writeFileSync(daemonPidFilePath(), `${process.pid}\n`, { mode: 0o600 });
   const options = parseServeOptions(parsed.rest.slice(1));
-  const store = new AutomationsStore();
+  const store = await openStore();
   let server: ReturnType<typeof Bun.serve> | undefined;
   let stopping = false;
   const stop = () => {
@@ -97,16 +124,17 @@ export async function runWebhookServe(parsed: ParsedArgs): Promise<number> {
       port: options.port,
       maxBodyBytes: options.maxBodyBytes,
     });
+    const routeCount = await store.countWebhookRoutes();
     const leaseMetadata: JsonObject = {
       mode: "serve",
       webhooks: {
         host: server.hostname ?? options.host,
         port: server.port ?? options.port,
         maxBodyBytes: options.maxBodyBytes,
-        routes: store.listWebhookRoutes().length,
+        routes: routeCount,
       },
     };
-    const lease = store.heartbeatDaemon({ ttlMs: options.ttlMs, metadata: leaseMetadata });
+    const lease = await store.heartbeatDaemon({ ttlMs: options.ttlMs, metadata: leaseMetadata });
     output(parsed, {
       ok: true,
       mode: "serve",
@@ -116,12 +144,12 @@ export async function runWebhookServe(parsed: ParsedArgs): Promise<number> {
       host: server.hostname,
       port: server.port,
       maxBodyBytes: options.maxBodyBytes,
-      routes: store.listWebhookRoutes().length,
+      routes: routeCount,
     }, () => {
       console.log(`automations-daemon serving webhooks on http://${server!.hostname}:${server!.port}`);
     });
     while (!stopping) {
-      store.heartbeatDaemon({ leaseId: lease.id, ttlMs: options.ttlMs, metadata: leaseMetadata });
+      await store.heartbeatDaemon({ leaseId: lease.id, ttlMs: options.ttlMs, metadata: leaseMetadata });
       await Bun.sleep(options.intervalMs);
     }
     return 0;
@@ -129,7 +157,7 @@ export async function runWebhookServe(parsed: ParsedArgs): Promise<number> {
     process.removeListener("SIGINT", stop);
     process.removeListener("SIGTERM", stop);
     server?.stop(true);
-    store.close();
+    await store.close();
   }
 }
 
@@ -151,7 +179,7 @@ export async function handleWebhookRequest(request: Request, options: WebhookSer
   }
   let route: WebhookRoute;
   try {
-    route = options.store.requireWebhookRoute(url.pathname);
+    route = await options.store.requireWebhookRoute(url.pathname);
   } catch {
     return jsonResponse(404, { ok: false, error: "webhook_route_not_found" });
   }
@@ -171,7 +199,7 @@ export async function handleWebhookRequest(request: Request, options: WebhookSer
     }
   }
   try {
-    const result = options.store.materializeWebhookRequest({
+    const result = await options.store.materializeWebhookRequest({
       route,
       rawBody,
       headers: Object.fromEntries(request.headers.entries()),
@@ -219,11 +247,14 @@ export function verifyWebhookSignature(
   return { ok: true };
 }
 
-export async function runDaemon(parsed: ParsedArgs): Promise<number> {
+export async function runDaemon(
+  parsed: ParsedArgs,
+  openStore: ServerAutomationsStoreOpener = openServerAutomationsStoreFromEnv,
+): Promise<number> {
   ensureAutomationsDataDir();
   writeFileSync(daemonPidFilePath(), `${process.pid}\n`, { mode: 0o600 });
   const options = parseRunOptions(parsed.rest.slice(1));
-  const store = new AutomationsStore();
+  const store = await openStore();
   let stopping = false;
   const stop = () => {
     stopping = true;
@@ -233,7 +264,7 @@ export async function runDaemon(parsed: ParsedArgs): Promise<number> {
   try {
     let first = true;
     while (!stopping) {
-      const lease = store.heartbeatDaemon({ ttlMs: options.ttlMs, metadata: { mode: "run" } });
+      const lease = await store.heartbeatDaemon({ ttlMs: options.ttlMs, metadata: { mode: "run" } });
       if (first || options.once) {
         output(parsed, { ok: true, leaseId: lease.id, pid: lease.pid, heartbeatAt: lease.heartbeat_at, once: options.once }, () => {
           console.log(`automations-daemon heartbeat ${lease.id}`);
@@ -247,7 +278,7 @@ export async function runDaemon(parsed: ParsedArgs): Promise<number> {
   } finally {
     process.removeListener("SIGINT", stop);
     process.removeListener("SIGTERM", stop);
-    store.close();
+    await store.close();
   }
 }
 

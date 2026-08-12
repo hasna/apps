@@ -110,7 +110,7 @@ describe("AutomationsStore", () => {
 
       const lease = store.heartbeatDaemon({ leaseId: "daemon:test", now: new Date("2026-06-28T00:00:00.000Z") });
       expect(lease.id).toBe("daemon:test");
-      expect((store.db.query("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(3);
+      expect((store.db.query("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(4);
 
       const claimed = store.claimNextAction({ runnerId: "tester", now: "2026-06-28T00:00:01.000Z" });
       expect(claimed).toMatchObject({ id: action.id, status: "claimed", claimedBy: "tester" });
