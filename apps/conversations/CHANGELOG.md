@@ -4,9 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 0.5.47 - 2026-08-12
+
 ### Fixed
 
-- **Inbox monitors now accept compact message envelopes and use bounded preview text for rendering and signed self-filtering, preserving cursor and cross-surface safety.**
+- **Hosted blockers and digest reads now use the corrected bounded preview and authenticated scope paths.** (#160)
+- **Inbox monitors now accept compact message envelopes and use bounded preview text for rendering and signed self-filtering, preserving cursor and cross-surface safety.** (#161)
 
 ## 0.5.46 - 2026-08-12
 
