@@ -61,12 +61,24 @@ export interface SessionApplyResult {
   targetHome: string;
   manifestPath: string;
   snapshotPath: string | null;
+  rollback: SessionRollbackReceipt;
   env: Record<string, string>;
   warnings: string[];
   skippedSources: SessionSkippedSource[];
   files: SessionApplyFileResult[];
   conflicts: SessionApplyFileResult[];
   drift: SessionDriftCheck;
+}
+
+export interface SessionRollbackReceipt {
+  schema: "hasna.configs.session-render-rollback/v1";
+  status: "available" | "not-required" | "unsupported" | "blocked";
+  snapshotPath: string | null;
+  reason:
+    | "snapshot-created"
+    | "dry-run-does-not-write"
+    | "conflicts-prevented-apply"
+    | "new-root-snapshot-not-supported-for-adapter";
 }
 
 export interface SessionApplyOptions {
@@ -201,6 +213,12 @@ function applySessionRenderUnlocked(
       targetHome,
       manifestPath,
       snapshotPath: null,
+      rollback: {
+        schema: "hasna.configs.session-render-rollback/v1",
+        status: "blocked",
+        snapshotPath: null,
+        reason: "conflicts-prevented-apply",
+      },
       env: plan.env,
       warnings: plan.warnings,
       skippedSources: plan.manifest.skippedSources,
@@ -211,11 +229,17 @@ function applySessionRenderUnlocked(
   }
 
   let snapshotPath: string | null = null;
+  let rollback: SessionRollbackReceipt = {
+    schema: "hasna.configs.session-render-rollback/v1",
+    status: "not-required",
+    snapshotPath: null,
+    reason: "dry-run-does-not-write",
+  };
   if (!options.dryRun) {
     const allowPortableFallback = coordination === null;
     const forcePortableFileOps = options.test_hooks?.force_portable_file_ops ?? false;
     ensureSessionTargetHome(targetHome);
-    snapshotPath = writeSessionSnapshot(
+    rollback = writeSessionSnapshot(
       plan,
       targetHome,
       manifestPath,
@@ -225,6 +249,7 @@ function applySessionRenderUnlocked(
       allowPortableFallback,
       forcePortableFileOps,
     );
+    snapshotPath = rollback.snapshotPath;
     options.test_hooks?.before_apply_writes?.({ plan, results });
     const resultsByPath = new Map(results.map((result) => [result.path, result]));
     for (const file of plan.files) {
@@ -269,6 +294,7 @@ function applySessionRenderUnlocked(
     targetHome,
     manifestPath,
     snapshotPath,
+    rollback,
     env: plan.env,
     warnings: plan.warnings,
     skippedSources: plan.manifest.skippedSources,
@@ -1214,7 +1240,7 @@ function writeSessionSnapshot(
   coordination: ProjectContextWriteCoordination | null,
   allowPortableFallback: boolean,
   forcePortableFileOps: boolean,
-): string | null {
+): SessionRollbackReceipt {
   const existingFiles = results
     .filter((result) => result.action === "update" || result.action === "delete")
     .filter((result) => existsSync(result.path))
@@ -1228,7 +1254,14 @@ function writeSessionSnapshot(
         content,
       };
     });
-  if (!previousManifest && existingFiles.length === 0) return null;
+  if (!previousManifest && existingFiles.length === 0 && plan.tool !== "codewith") {
+    return {
+      schema: "hasna.configs.session-render-rollback/v1",
+      status: "unsupported",
+      snapshotPath: null,
+      reason: "new-root-snapshot-not-supported-for-adapter",
+    };
+  }
 
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
   const snapshotPath = resolve(
@@ -1273,7 +1306,12 @@ function writeSessionSnapshot(
     force_portable_file_ops: forcePortableFileOps,
   });
   coordination?.assert_held();
-  return snapshotPath;
+  return {
+    schema: "hasna.configs.session-render-rollback/v1",
+    status: "available",
+    snapshotPath,
+    reason: "snapshot-created",
+  };
 }
 
 function assertSafeTargetHome(targetHome: string): string {
