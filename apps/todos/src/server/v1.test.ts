@@ -1542,6 +1542,45 @@ describe("/v1 task hierarchy and lock authorization", () => {
     expect(await store.tasks.get(child.id)).toEqual(childBefore);
   });
 
+  test("create refuses success when authoritative readback drops the requested plan", async () => {
+    const project = await store.projects.create({
+      name: "Plan durability",
+      path: "/workspace/plan-durability",
+    });
+    const plan = await store.plans.create({
+      name: "Durable plan",
+      project_id: project.id,
+    });
+    const mismatchStore: TodosStorageAdapter = {
+      ...store,
+      tasks: {
+        ...store.tasks,
+        get: async (id, context) => {
+          const task = await store.tasks.get(id, context);
+          return task ? { ...task, plan_id: null } : null;
+        },
+      },
+    };
+    const response = await handleV1Request(
+      new Request("https://todos.example.test/v1/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: "Plan-linked task",
+          project_id: project.id,
+          plan_id: plan.id,
+        }),
+      }),
+      new URL("https://todos.example.test/v1/tasks"),
+      { ...dependencies, getStorageAdapter: () => mismatchStore },
+    );
+
+    expect(response?.status).toBe(500);
+    expect(await response!.json()).toMatchObject({
+      code: "TASK_CREATE_PERSISTENCE_UNVERIFIED",
+    });
+  });
+
   test("include_subtasks=true returns roots and descendants with an inclusive total", async () => {
     const parent = await store.tasks.create({ title: "parent" });
     const child = await store.tasks.create({ title: "child", parent_id: parent.id });

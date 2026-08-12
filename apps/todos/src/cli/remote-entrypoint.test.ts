@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import ts from "typescript";
 import {
@@ -1796,6 +1797,117 @@ describe("remote CLI entrypoint authority boundary", () => {
       server.stop(true);
     }
   });
+
+  test("built add --plan refuses a readable task whose authoritative plan link was dropped", async () => {
+    const PROJECT_ID = "11111111-1111-4111-8111-111111111111";
+    const PLAN_ID = "22222222-2222-4222-8222-222222222222";
+    const TASK_ID = "33333333-3333-4333-8333-333333333333";
+    const requests: string[] = [];
+    const task = {
+      id: TASK_ID,
+      short_id: "REMOTE-1",
+      title: "Plan-linked task",
+      status: "pending",
+      priority: "medium",
+      project_id: PROJECT_ID,
+      task_list_id: null,
+      plan_id: null,
+      parent_id: null,
+      assigned_to: null,
+      created_by: "fixture-agent",
+      tags: [],
+      metadata: {},
+      version: 1,
+      created_at: "2026-08-10T00:00:00.000Z",
+      updated_at: "2026-08-10T00:00:00.000Z",
+    };
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url);
+        requests.push(`${request.method} ${url.pathname}${url.search}`);
+        if (url.pathname === `/v1/projects/${PROJECT_ID}` && request.method === "GET") {
+          return Response.json({
+            project: {
+              id: PROJECT_ID,
+              name: "Dubai Fraud",
+              path: "/workspace/dubai-fraud",
+            },
+          });
+        }
+        if (url.pathname === "/v1/projects" && request.method === "GET") {
+          return Response.json({
+            projects: [{
+              id: PROJECT_ID,
+              name: "Dubai Fraud",
+              path: "/workspace/dubai-fraud",
+            }],
+            count: 1,
+          });
+        }
+        if (url.pathname === "/v1/plans" && request.method === "GET") {
+          return Response.json({
+            plans: [{
+              id: PLAN_ID,
+              name: "Dubai linkage",
+              project_id: PROJECT_ID,
+              status: "active",
+            }],
+            count: 1,
+          });
+        }
+        if (url.pathname === "/v1/tasks" && request.method === "POST") {
+          return Response.json({ task }, { status: 201 });
+        }
+        if (url.pathname === `/v1/tasks/${TASK_ID}` && request.method === "GET") {
+          return Response.json({ task });
+        }
+        return Response.json({ error: "fixture route missing" }, { status: 404 });
+      },
+    });
+    const root = mkdtempSync(join(tmpdir(), "todos-add-plan-durability-"));
+    tempRoots.push(root);
+    const cwd = join(root, "cwd");
+    const home = join(root, "home");
+    mkdirSync(cwd);
+    mkdirSync(home);
+    const localDbPath = join(root, "must-not-exist", "todos.db");
+    const env = {
+      PATH: process.env.PATH ?? "",
+      BUN_INSTALL: process.env.BUN_INSTALL ?? join(process.env.HOME ?? "/home/hasna", ".bun"),
+      HOME: home,
+      TMPDIR: root,
+      LANG: "C.UTF-8",
+      TODOS_AUTO_PROJECT: "false",
+      TODOS_DB_PATH: localDbPath,
+      HASNA_TODOS_STORAGE_MODE: "remote",
+      HASNA_TODOS_API_URL: `http://127.0.0.1:${server.port}`,
+      HASNA_TODOS_API_KEY: "fixture-remote-key",
+    };
+    const before = recursiveInventory(cwd);
+
+    try {
+      const result = await runCli(executable, [
+        "--agent", "fixture-agent",
+        "--json", "add", "Plan-linked task",
+        "--project", PROJECT_ID,
+        "--plan", PLAN_ID,
+        "--unassigned",
+      ], env, cwd);
+
+      expect(result.exitCode).toBe(1);
+      expect(JSON.parse(result.stdout)).toEqual({
+        error: expect.stringContaining("TASK_CREATE_PERSISTENCE_UNVERIFIED"),
+      });
+      expect(result.stderr).toContain("TASK_CREATE_PERSISTENCE_UNVERIFIED");
+      expect(requests).toContain(`GET /v1/tasks/${TASK_ID}`);
+      expect(recursiveInventory(cwd)).toEqual(before);
+      expectNoLocalDatabase(home, localDbPath);
+    } finally {
+      server.stop(true);
+    }
+  }, 45_000);
 
   test("built project/list/plan/task lifecycle stays on HTTP with a read-only TODOS_DB_PATH", async () => {
     const PROJECT_ID = "11111111-1111-4111-8111-111111111111";
