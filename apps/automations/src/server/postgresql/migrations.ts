@@ -106,9 +106,71 @@ CREATE INDEX daemon_leases_updated_id_idx ON daemon_leases(updated_at DESC,id);
 CREATE INDEX automation_concurrency_locks_owner_run_idx ON automation_concurrency_locks(owner_run_id);
 `;
 
+const BOUNDED_CLAIM_CANDIDATES_SQL = `
+ALTER TABLE automation_actions
+  ADD COLUMN IF NOT EXISTS unmet_dependencies integer NOT NULL DEFAULT 0
+  CHECK (unmet_dependencies >= 0);
+CREATE TABLE automation_action_step_dependencies (
+  automation_run_id text NOT NULL REFERENCES automation_runs(id) ON DELETE CASCADE,
+  action_step_id text NOT NULL,
+  dependency_step_id text NOT NULL,
+  PRIMARY KEY(automation_run_id,action_step_id,dependency_step_id),
+  CHECK (action_step_id <> dependency_step_id)
+);
+INSERT INTO automation_action_step_dependencies(
+  automation_run_id,action_step_id,dependency_step_id
+)
+SELECT dependent.automation_run_id,dependent.step_id,prerequisite.step_id
+FROM automation_action_dependencies legacy
+JOIN automation_actions dependent ON dependent.id=legacy.action_id
+JOIN automation_actions prerequisite ON prerequisite.id=legacy.dependency_action_id
+WHERE dependent.automation_run_id=legacy.automation_run_id
+  AND prerequisite.automation_run_id=legacy.automation_run_id
+  AND dependent.id <> prerequisite.id
+ON CONFLICT DO NOTHING;
+INSERT INTO automation_action_step_dependencies(
+  automation_run_id,action_step_id,dependency_step_id
+)
+SELECT action.automation_run_id,action.step_id,dependency.value
+FROM automation_actions action
+JOIN automation_runs run ON run.id=action.automation_run_id
+JOIN automations automation ON automation.id=run.automation_id
+CROSS JOIN LATERAL jsonb_array_elements(automation.spec_json->'actions') step
+CROSS JOIN LATERAL jsonb_array_elements_text(COALESCE(step->'dependsOn','[]'::jsonb)) dependency(value)
+WHERE step->>'id'=action.step_id
+  AND NOT EXISTS (
+    SELECT 1 FROM automation_action_dependencies legacy
+    WHERE legacy.automation_run_id=action.automation_run_id
+      AND legacy.action_id=action.id
+  )
+ON CONFLICT DO NOTHING;
+UPDATE automation_actions action
+SET unmet_dependencies = (
+  SELECT count(*)
+  FROM automation_action_step_dependencies dependency
+  LEFT JOIN automation_actions required
+    ON required.automation_run_id=dependency.automation_run_id
+   AND required.step_id=dependency.dependency_step_id
+  WHERE dependency.automation_run_id=action.automation_run_id
+    AND dependency.action_step_id=action.step_id
+    AND (required.id IS NULL OR required.status <> 'succeeded')
+);
+DROP INDEX automation_actions_ready_order_idx;
+DROP INDEX automation_actions_expired_claim_order_idx;
+CREATE INDEX automation_actions_ready_order_idx
+  ON automation_actions(available_at,available_at,created_at,id,automation_run_id,step_id)
+  WHERE status IN ('queued','retrying') AND unmet_dependencies=0;
+CREATE INDEX automation_actions_expired_claim_order_idx
+  ON automation_actions(lease_expires_at,available_at,created_at,id,automation_run_id,step_id)
+  WHERE status='claimed' AND lease_expires_at IS NOT NULL AND unmet_dependencies=0;
+CREATE INDEX automation_action_step_dependencies_lookup_idx
+  ON automation_action_step_dependencies(automation_run_id,action_step_id,dependency_step_id);
+`;
+
 const migrations: Migration[] = [
   { id: "0001_server_schema", sql: SCHEMA_SQL, checksum: checksum(SCHEMA_SQL) },
   { id: "0002_scale_indexes", sql: SCALE_INDEXES_SQL, checksum: checksum(SCALE_INDEXES_SQL) },
+  { id: "0003_bounded_claim_candidates", sql: BOUNDED_CLAIM_CANDIDATES_SQL, checksum: checksum(BOUNDED_CLAIM_CANDIDATES_SQL) },
 ];
 const LEDGER = "hasna_automations_schema_migrations";
 const LOCK_KEY = 7_104_510_021;

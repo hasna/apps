@@ -30,6 +30,8 @@ import { AUTOMATION_SCHEMA_VERSION, WEBHOOK_ROUTE_STATUSES } from "../../types.j
 import type { ActionQueueApprovalDecision, ActionQueueApprovalGate } from "../../lib/action-queue.js";
 import { isTerminalActionQueueStatus } from "../../lib/action-queue.js";
 import {
+  CLAIM_CANDIDATE_BUDGET,
+  compareClaimCandidates,
   normalizeWebhookRequestToEvent,
   validateAutomationSpec,
   type CreateWebhookRouteInput,
@@ -51,6 +53,22 @@ import { migratePostgreSql, type PostgreSqlExecutor } from "./migrations.js";
 type Row = Record<string, unknown>;
 type JsonSql = Pick<ReturnType<typeof postgres>, "json">;
 type Sql = PostgreSqlExecutor & JsonSql;
+
+export const POSTGRESQL_READY_CLAIM_CANDIDATES_SQL = `
+  SELECT id,automation_run_id,available_at,created_at,available_at AS claimable_at
+  FROM automation_actions
+  WHERE status IN ('queued','retrying') AND available_at <= $1 AND unmet_dependencies=0
+  ORDER BY available_at,available_at,created_at,id
+  LIMIT $2
+`;
+export const POSTGRESQL_EXPIRED_CLAIM_CANDIDATES_SQL = `
+  SELECT id,automation_run_id,available_at,created_at,lease_expires_at AS claimable_at
+  FROM automation_actions
+  WHERE status='claimed' AND lease_expires_at IS NOT NULL
+    AND lease_expires_at <= $1 AND available_at <= $1 AND unmet_dependencies=0
+  ORDER BY lease_expires_at,available_at,created_at,id
+  LIMIT $2
+`;
 
 export class PostgreSqlServerAutomationsStore implements ServerAutomationsStore {
   private readonly sql: ReturnType<typeof postgres>;
@@ -230,23 +248,59 @@ export class PostgreSqlServerAutomationsStore implements ServerAutomationsStore 
   }
 
   async enqueueAction(input: EnqueueActionInput): Promise<QueuedAction> {
-    return this.enqueueActionWith(this.sql as unknown as Sql, input);
+    return this.sql.begin(async (transaction) => this.enqueueActionWith(transaction as unknown as Sql, input));
   }
 
   private async enqueueActionWith(sql: Sql, input: EnqueueActionInput): Promise<QueuedAction> {
+    await sql.unsafe("SELECT id FROM automation_runs WHERE id=$1 FOR UPDATE", [input.automationRunId]);
+    const context = requireRawRow(
+      await sql.unsafe(
+        `SELECT automation.spec_json
+         FROM automation_runs run
+         JOIN automations automation ON automation.id=run.automation_id
+         WHERE run.id=$1`,
+        [input.automationRunId],
+      ),
+      `automation run not found: ${input.automationRunId}`,
+    );
+    const spec = object<AutomationSpec>(context.spec_json);
     const now = new Date();
     const idempotencyKey = input.idempotencyKey ?? input.invocation.idempotencyKey ?? `${input.automationRunId}:${input.stepId}`;
+    await persistPostgreSqlActionDependencies(sql, input.automationRunId, input.stepId, spec);
+    const unmet = await sql.unsafe<{ count: string }>(
+      `SELECT count(*)::text AS count
+       FROM automation_action_step_dependencies dependency
+       LEFT JOIN automation_actions required
+         ON required.automation_run_id=dependency.automation_run_id
+        AND required.step_id=dependency.dependency_step_id
+       WHERE dependency.automation_run_id=$1
+         AND dependency.action_step_id=$2
+         AND (required.id IS NULL OR required.status <> 'succeeded')`,
+      [input.automationRunId, input.stepId],
+    );
+    const existing = await sql.unsafe<{ id: string }>(
+      `SELECT id
+       FROM automation_actions
+       WHERE automation_run_id=$1 AND (step_id=$2 OR idempotency_key=$3)
+       LIMIT 1`,
+      [input.automationRunId, input.stepId, idempotencyKey],
+    );
     const rows = await sql.unsafe(
       `INSERT INTO automation_actions
          (id,automation_run_id,step_id,action_id,idempotency_key,status,invocation_json,attempt,max_attempts,
-          available_at,created_at,updated_at,approval_gate_json,result_json,error_json,dead_letter_json,metadata_json)
-       VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$11,$12::jsonb,$13::jsonb,$14::jsonb,$15::jsonb,$16::jsonb)
-       ON CONFLICT (automation_run_id,step_id) DO UPDATE SET step_id=excluded.step_id
+          available_at,created_at,updated_at,approval_gate_json,result_json,error_json,dead_letter_json,metadata_json,unmet_dependencies)
+       VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$11,$12::jsonb,$13::jsonb,$14::jsonb,$15::jsonb,$16::jsonb,$17)
+       ON CONFLICT (automation_run_id,step_id) DO UPDATE
+         SET step_id=excluded.step_id,unmet_dependencies=excluded.unmet_dependencies
       RETURNING *`,
       [input.id ?? randomUUID(), input.automationRunId, input.stepId, input.actionId, idempotencyKey, input.status ?? "queued",
         json(sql, input.invocation), input.attempt ?? 0, input.maxAttempts ?? 3, toDate(input.availableAt), now,
-        json(sql, input.approvalGate), json(sql, input.result), json(sql, input.error), json(sql, input.deadLetter), json(sql, input.metadata)],
+        json(sql, input.approvalGate), json(sql, input.result), json(sql, input.error), json(sql, input.deadLetter), json(sql, input.metadata),
+        count(unmet[0]?.count ?? "0")],
     );
+    if (existing.length === 0 && (input.status ?? "queued") === "succeeded") {
+      await settleDependentDependencies(sql, input.automationRunId, input.stepId, now);
+    }
     return actionFromRow(rows[0]!);
   }
 
@@ -288,38 +342,21 @@ export class PostgreSqlServerAutomationsStore implements ServerAutomationsStore 
     const expiresAt = new Date(now.getTime() + (options.leaseMs ?? 30_000));
     return this.sql.begin(async (transaction) => {
       const sql = transaction as unknown as Sql;
-      let readyCursor: Row | undefined;
-      let expiredCursor: Row | undefined;
-      while (true) {
-        const ready = await sql.unsafe(
-          `SELECT id,available_at,created_at FROM automation_actions
-           WHERE status IN ('queued','retrying') AND available_at <= $1
-             AND ($2::timestamptz IS NULL OR (available_at,created_at,id)>($2::timestamptz,$3::timestamptz,$4::text))
-           ORDER BY available_at,created_at,id LIMIT $5`,
-          [now, readyCursor?.available_at ?? null, readyCursor?.created_at ?? null, readyCursor?.id ?? "", CLAIM_CANDIDATE_WINDOW],
-        );
-        const expired = await sql.unsafe(
-          `SELECT id,available_at,created_at,lease_expires_at FROM automation_actions
-           WHERE status='claimed' AND available_at <= $1
-             AND lease_expires_at IS NOT NULL AND lease_expires_at <= $1
-             AND ($2::timestamptz IS NULL OR (lease_expires_at,available_at,created_at,id)>($2::timestamptz,$3::timestamptz,$4::timestamptz,$5::text))
-           ORDER BY lease_expires_at,available_at,created_at,id LIMIT $6`,
-          [
-            now,
-            expiredCursor?.lease_expires_at ?? null,
-            expiredCursor?.available_at ?? null,
-            expiredCursor?.created_at ?? null,
-            expiredCursor?.id ?? "",
-            CLAIM_CANDIDATE_WINDOW,
-          ],
-        );
-        if (ready.length === 0 && expired.length === 0) return undefined;
-        readyCursor = ready.at(-1) ?? readyCursor;
-        expiredCursor = expired.at(-1) ?? expiredCursor;
-        const candidateIds = [...ready, ...expired]
-          .sort(compareClaimCandidateRows)
-          .map((candidate) => String(candidate.id));
-        for (const candidateId of candidateIds) {
+      const ready = await sql.unsafe(POSTGRESQL_READY_CLAIM_CANDIDATES_SQL, [now, CLAIM_CANDIDATE_BUDGET]);
+      const expired = await sql.unsafe(POSTGRESQL_EXPIRED_CLAIM_CANDIDATES_SQL, [now, CLAIM_CANDIDATE_BUDGET]);
+      const candidateIds = [...ready, ...expired]
+        .map((candidate) => ({
+          id: String(candidate.id),
+          runId: String(candidate.automation_run_id),
+          available_at: candidate.available_at as string | Date,
+          created_at: candidate.created_at as string | Date,
+          claimable_at: candidate.claimable_at as string | Date,
+        }))
+        .sort(compareClaimCandidates)
+        .slice(0, CLAIM_CANDIDATE_BUDGET)
+        .map(({ id, runId }) => ({ id, runId }));
+        for (const { id: candidateId, runId } of candidateIds) {
+          await sql.unsafe("SELECT id FROM automation_runs WHERE id=$1 FOR UPDATE", [runId]);
           const candidates = await sql.unsafe(
           `SELECT action.*,run.automation_id,automation.spec_json
            FROM automation_actions action
@@ -329,11 +366,7 @@ export class PostgreSqlServerAutomationsStore implements ServerAutomationsStore 
              AND (action.status IN ('queued','retrying')
                OR (action.status='claimed' AND action.lease_expires_at IS NOT NULL AND action.lease_expires_at <= $2))
              AND action.available_at <= $2
-             AND NOT EXISTS (
-               SELECT 1 FROM automation_action_dependencies dependency
-               JOIN automation_actions required ON required.id=dependency.dependency_action_id
-               WHERE dependency.action_id=action.id AND required.status <> 'succeeded'
-             )
+             AND action.unmet_dependencies=0
            FOR UPDATE OF action SKIP LOCKED`,
           [candidateId, now],
         );
@@ -364,7 +397,7 @@ export class PostgreSqlServerAutomationsStore implements ServerAutomationsStore 
         );
           return leasedActionFromRow(rows[0]!);
         }
-      }
+      return undefined;
     });
   }
 
@@ -373,6 +406,12 @@ export class PostgreSqlServerAutomationsStore implements ServerAutomationsStore 
     const expiresAt = new Date(now.getTime() + (options.leaseMs ?? 30_000));
     return this.sql.begin(async (transaction) => {
       const sql = transaction as unknown as Sql;
+      const actionRows = await sql.unsafe<{ automation_run_id: string }>(
+        "SELECT automation_run_id FROM automation_actions WHERE id=$1",
+        [options.actionId],
+      );
+      const runId = String(requireRawRow(actionRows, `queued action not found: ${options.actionId}`).automation_run_id);
+      await sql.unsafe("SELECT id FROM automation_runs WHERE id=$1 FOR UPDATE", [runId]);
       const rows = await sql.unsafe(
         `UPDATE automation_actions SET lease_expires_at=$5,updated_at=$4
          WHERE id=$1 AND status='claimed' AND claimed_by=$2 AND claim_version=$3
@@ -420,6 +459,12 @@ export class PostgreSqlServerAutomationsStore implements ServerAutomationsStore 
     const now = toDate(options.now);
     return this.sql.begin(async (transaction) => {
       const sql = transaction as unknown as Sql;
+      const actionRows = await sql.unsafe<{ automation_run_id: string }>(
+        "SELECT automation_run_id FROM automation_actions WHERE id=$1",
+        [options.actionId],
+      );
+      const runId = String(requireRawRow(actionRows, `queued action not found: ${options.actionId}`).automation_run_id);
+      await sql.unsafe("SELECT id FROM automation_runs WHERE id=$1 FOR UPDATE", [runId]);
       const rows = await sql.unsafe(
         `UPDATE automation_actions SET
            status=$5,result_json=$6::jsonb,error_json=$7::jsonb,dead_letter_json=$8::jsonb,
@@ -441,6 +486,9 @@ export class PostgreSqlServerAutomationsStore implements ServerAutomationsStore 
         ],
       );
       const row = assertFencedRow(rows, options.actionId);
+      if (status === "succeeded") {
+        await settleDependentDependencies(sql, String(row.automation_run_id), String(row.step_id), now);
+      }
       await settleRunAndConcurrencyLock(sql, String(row.automation_run_id), status, now, availableAt);
       return actionFromRow(row);
     });
@@ -544,7 +592,6 @@ export class PostgreSqlServerAutomationsStore implements ServerAutomationsStore 
           metadata: eventRunMetadata(event),
         });
         const actions: QueuedAction[] = [];
-        const byStep = new Map<string, QueuedAction>();
         for (const step of automation.spec.actions) {
           const action = await this.enqueueActionWith(sql, {
             automationRunId: run.id, stepId: step.id, actionId: step.actionId,
@@ -558,16 +605,6 @@ export class PostgreSqlServerAutomationsStore implements ServerAutomationsStore 
             approvalGate: materializeApprovalGate(step, toDate(event.time).toISOString()),
           });
           actions.push(action);
-          byStep.set(step.id, action);
-        }
-        for (const step of automation.spec.actions) {
-          for (const dependency of step.dependsOn ?? []) {
-            await sql.unsafe(
-              `INSERT INTO automation_action_dependencies (automation_run_id,action_id,dependency_action_id)
-               VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`,
-              [run.id, byStep.get(step.id)!.id, byStep.get(dependency)!.id],
-            );
-          }
         }
         materialized.push({ automation, run, actions });
       }
@@ -710,6 +747,24 @@ async function settleRunAndConcurrencyLock(sql: Sql, runId: string, status: stri
   await sql.unsafe("UPDATE automation_concurrency_locks SET expires_at=$2,updated_at=$3 WHERE owner_run_id=$1", [runId, lockExpiresAt, now]);
 }
 
+async function settleDependentDependencies(sql: Sql, runId: string, dependencyStepId: string, now: Date): Promise<void> {
+  await sql.unsafe(
+    `UPDATE automation_actions dependent
+     SET unmet_dependencies=dependent.unmet_dependencies-1,updated_at=$3
+     WHERE dependent.automation_run_id=$1
+       AND dependent.unmet_dependencies>0
+       AND dependent.status IN ('queued','retrying','claimed')
+       AND EXISTS (
+         SELECT 1
+         FROM automation_action_step_dependencies edge
+         WHERE edge.automation_run_id=dependent.automation_run_id
+           AND edge.action_step_id=dependent.step_id
+           AND edge.dependency_step_id=$2
+       )`,
+    [runId, dependencyStepId, now],
+  );
+}
+
 function triggerMatchesEvent(trigger: AutomationTrigger, event: EventEnvelopeLike, automation: AutomationRecord, webhookRoute?: WebhookRoute): boolean {
   if (trigger.kind === "webhook") {
     if (!webhookRoute || webhookRoute.automationId !== automation.id) return false;
@@ -785,7 +840,6 @@ function defaultBackoffMs(attempt: number): number {
 
 const DEFAULT_PAGE_LIMIT = 100;
 const MAX_PAGE_LIMIT = 1_000;
-const CLAIM_CANDIDATE_WINDOW = 50;
 
 function normalizePageOptions(options: ListPageOptions): { limit: number; afterAt: Date | null; afterId: string } {
   const limit = options.limit ?? DEFAULT_PAGE_LIMIT;
@@ -795,13 +849,6 @@ function normalizePageOptions(options: ListPageOptions): { limit: number; afterA
   if (!options.after) return { limit, afterAt: null, afterId: "" };
   if (!options.after.id) throw new Error("list cursor id is required");
   return { limit, afterAt: toDate(options.after.createdAt), afterId: options.after.id };
-}
-
-function compareClaimCandidateRows(left: Row, right: Row): number {
-  const available = toDate(left.available_at as string | Date).getTime() - toDate(right.available_at as string | Date).getTime();
-  if (available !== 0) return available;
-  const created = toDate(left.created_at as string | Date).getTime() - toDate(right.created_at as string | Date).getTime();
-  return created || String(left.id).localeCompare(String(right.id));
 }
 
 const EVENT_SOURCE_WILDCARD_PREDICATE = `spec_json @? '$.triggers[*] ? (@.kind == "event" && !exists(@.source))'::jsonpath`;
@@ -867,6 +914,24 @@ function requireRow<T>(rows: Row[], message: string, convert: (row: Row) => T): 
 function assertFencedRow(rows: Row[], actionId: string): Row {
   if (rows.length !== 1) throw new Error(`stale or expired action lease: ${actionId}`);
   return rows[0]!;
+}
+
+async function persistPostgreSqlActionDependencies(
+  sql: Sql,
+  runId: string,
+  stepId: string,
+  spec: AutomationSpec,
+): Promise<void> {
+  const step = spec.actions.find((candidate) => candidate.id === stepId);
+  for (const dependencyStepId of step?.dependsOn ?? []) {
+    await sql.unsafe(
+      `INSERT INTO automation_action_step_dependencies(
+         automation_run_id,action_step_id,dependency_step_id
+       ) VALUES ($1,$2,$3)
+       ON CONFLICT (automation_run_id,action_step_id,dependency_step_id) DO NOTHING`,
+      [runId, stepId, dependencyStepId],
+    );
+  }
 }
 
 function isPlainObject(value: unknown): value is JsonObject {

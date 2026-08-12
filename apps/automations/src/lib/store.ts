@@ -41,7 +41,32 @@ import type {
 import { assertActionQueueStatus, isTerminalActionQueueStatus } from "./action-queue.js";
 import { automationsDataDir, automationsDbPath, ensureAutomationsDataDir } from "./paths.js";
 
-const STORE_SCHEMA_VERSION = 4;
+const STORE_SCHEMA_VERSION = 6;
+export const CLAIM_CANDIDATE_BUDGET = 100;
+export const SQLITE_CLAIM_CANDIDATES_SQL = `
+  SELECT id, available_at AS claimable_at, available_at, created_at
+  FROM automation_actions INDEXED BY automation_actions_ready_order_idx
+  WHERE status IN ('queued', 'retrying') AND available_at <= $now AND unmet_dependencies = 0
+  UNION ALL
+  SELECT id, lease_expires_at AS claimable_at, available_at, created_at
+  FROM automation_actions INDEXED BY automation_actions_expired_claim_order_idx
+  WHERE status = 'claimed' AND lease_expires_at IS NOT NULL
+    AND lease_expires_at <= $now AND available_at <= $now AND unmet_dependencies = 0
+  ORDER BY 2,3,4,1
+  LIMIT $limit
+`;
+export interface ClaimCandidateRow {
+  id: string;
+  available_at: string | Date;
+  created_at: string | Date;
+  claimable_at: string | Date;
+}
+export function compareClaimCandidates(left: ClaimCandidateRow, right: ClaimCandidateRow): number {
+  return compareClaimDate(left.claimable_at, right.claimable_at)
+    || compareClaimDate(left.available_at, right.available_at)
+    || compareClaimDate(left.created_at, right.created_at)
+    || left.id.localeCompare(right.id);
+}
 
 interface CountRow {
   count: number;
@@ -68,6 +93,7 @@ interface RunRow {
   completed_at: string | null;
   error: string | null;
   metadata_json: string | null;
+  unmet_dependencies: number;
 }
 
 interface ActionRow {
@@ -337,47 +363,63 @@ export class AutomationsStore {
   }
 
   enqueueAction(input: EnqueueActionInput): QueuedAction {
-    this.requireRun(input.automationRunId);
-    const timestamp = nowIso();
-    const id = input.id ?? randomUUID();
-    const idempotencyKey = input.idempotencyKey ?? input.invocation.idempotencyKey ?? `${input.automationRunId}:${input.stepId}`;
-    const status = assertActionQueueStatus(input.status ?? "queued");
-    const existing = this.db.query(`
-      SELECT * FROM automation_actions
-      WHERE automation_run_id = $automationRunId
-        AND (step_id = $stepId OR idempotency_key = $idempotencyKey)
-      LIMIT 1
-    `).get({ $automationRunId: input.automationRunId, $stepId: input.stepId, $idempotencyKey: idempotencyKey }) as ActionRow | null;
-    if (existing) return actionFromRow(existing);
-    this.db.query(`
-      INSERT INTO automation_actions (
-        id, automation_run_id, step_id, action_id, idempotency_key, status, invocation_json, attempt, max_attempts,
-        available_at, created_at, updated_at, approval_gate_json, result_json, error_json, dead_letter_json, metadata_json
-      )
-      VALUES (
-        $id, $automationRunId, $stepId, $actionId, $idempotencyKey, $status, $invocationJson, $attempt, $maxAttempts,
-        $availableAt, $createdAt, $updatedAt, $approvalGateJson, $resultJson, $errorJson, $deadLetterJson, $metadataJson
-      )
-    `).run({
-      $id: id,
-      $automationRunId: input.automationRunId,
-      $stepId: input.stepId,
-      $actionId: input.actionId,
-      $idempotencyKey: idempotencyKey,
-      $status: status,
-      $invocationJson: JSON.stringify(input.invocation),
-      $attempt: input.attempt ?? 0,
-      $maxAttempts: input.maxAttempts ?? 3,
-      $availableAt: normalizeIso(input.availableAt),
-      $createdAt: timestamp,
-      $updatedAt: timestamp,
-      $approvalGateJson: stringifyNullable(input.approvalGate),
-      $resultJson: stringifyNullable(input.result),
-      $errorJson: stringifyNullable(input.error),
-      $deadLetterJson: stringifyNullable(input.deadLetter),
-      $metadataJson: stringifyNullable(input.metadata),
+    return withImmediateTransaction(this.db, () => {
+      const run = this.requireRun(input.automationRunId);
+      const automation = this.requireAutomation(run.automationId);
+      const timestamp = nowIso();
+      const id = input.id ?? randomUUID();
+      const idempotencyKey = input.idempotencyKey ?? input.invocation.idempotencyKey ?? `${input.automationRunId}:${input.stepId}`;
+      const status = assertActionQueueStatus(input.status ?? "queued");
+      const existing = this.db.query(`
+        SELECT * FROM automation_actions
+        WHERE automation_run_id = $automationRunId
+          AND (step_id = $stepId OR idempotency_key = $idempotencyKey)
+        LIMIT 1
+      `).get({ $automationRunId: input.automationRunId, $stepId: input.stepId, $idempotencyKey: idempotencyKey }) as ActionRow | null;
+      this.persistActionDependencies(input.automationRunId, input.stepId, automation);
+      const unmetDependencies = this.countUnmetDependencies(input.automationRunId, input.stepId);
+      if (existing) {
+        this.db.query(`
+          UPDATE automation_actions
+          SET unmet_dependencies = $unmetDependencies, updated_at = $updatedAt
+          WHERE id = $id
+        `).run({ $id: existing.id, $unmetDependencies: unmetDependencies, $updatedAt: timestamp });
+        return this.requireQueuedAction(existing.id);
+      }
+      this.db.query(`
+        INSERT INTO automation_actions (
+          id, automation_run_id, step_id, action_id, idempotency_key, status, invocation_json, attempt, max_attempts,
+          available_at, created_at, updated_at, approval_gate_json, result_json, error_json, dead_letter_json, metadata_json,
+          unmet_dependencies
+        )
+        VALUES (
+          $id, $automationRunId, $stepId, $actionId, $idempotencyKey, $status, $invocationJson, $attempt, $maxAttempts,
+          $availableAt, $createdAt, $updatedAt, $approvalGateJson, $resultJson, $errorJson, $deadLetterJson, $metadataJson,
+          $unmetDependencies
+        )
+      `).run({
+        $id: id,
+        $automationRunId: input.automationRunId,
+        $stepId: input.stepId,
+        $actionId: input.actionId,
+        $idempotencyKey: idempotencyKey,
+        $status: status,
+        $invocationJson: JSON.stringify(input.invocation),
+        $attempt: input.attempt ?? 0,
+        $maxAttempts: input.maxAttempts ?? 3,
+        $availableAt: normalizeIso(input.availableAt),
+        $createdAt: timestamp,
+        $updatedAt: timestamp,
+        $approvalGateJson: stringifyNullable(input.approvalGate),
+        $resultJson: stringifyNullable(input.result),
+        $errorJson: stringifyNullable(input.error),
+        $deadLetterJson: stringifyNullable(input.deadLetter),
+        $metadataJson: stringifyNullable(input.metadata),
+        $unmetDependencies: unmetDependencies,
+      });
+      if (status === "succeeded") this.settleDependentDependencies(input.automationRunId, input.stepId, timestamp);
+      return this.requireQueuedAction(id);
     });
-    return this.requireQueuedAction(id);
   }
 
   requireQueuedAction(id: string): QueuedAction {
@@ -398,33 +440,11 @@ export class AutomationsStore {
     const now = normalizeIso(options.now);
     const leaseExpiresAt = new Date(new Date(now).getTime() + (options.leaseMs ?? 30000)).toISOString();
     const claimedId = withImmediateTransaction(this.db, () => {
-      let cursorAvailableAt: string | undefined;
-      let cursorCreatedAt: string | undefined;
-      let cursorId: string | undefined;
-      while (true) {
-        const rows = this.db.query(`
-          SELECT * FROM automation_actions
-          WHERE (
-              status IN ('queued', 'retrying')
-              OR (status = 'claimed' AND lease_expires_at IS NOT NULL AND lease_expires_at <= $now)
-            )
-            AND available_at <= $now
-            AND (
-              $cursorAvailableAt IS NULL
-              OR available_at > $cursorAvailableAt
-              OR (available_at = $cursorAvailableAt AND created_at > $cursorCreatedAt)
-              OR (available_at = $cursorAvailableAt AND created_at = $cursorCreatedAt AND id > $cursorId)
-            )
-          ORDER BY available_at ASC, created_at ASC, id ASC
-          LIMIT 100
-        `).all({
-          $now: now,
-          $cursorAvailableAt: cursorAvailableAt ?? null,
-          $cursorCreatedAt: cursorCreatedAt ?? null,
-          $cursorId: cursorId ?? null,
-        }) as ActionRow[];
-        if (rows.length === 0) return undefined;
-        for (const row of rows) {
+      const rows = this.db.query(SQLITE_CLAIM_CANDIDATES_SQL)
+        .all({ $now: now, $limit: CLAIM_CANDIDATE_BUDGET }) as ClaimCandidateRow[];
+      for (const { id } of rows) {
+        const row = this.db.query("SELECT * FROM automation_actions WHERE id = $id").get({ $id: id }) as ActionRow | null;
+        if (!row) continue;
           if (!approvalGateAllowsClaim(row.approval_gate_json)) {
             this.db.query(`
               UPDATE automation_actions
@@ -433,7 +453,6 @@ export class AutomationsStore {
             `).run({ $id: row.id, $updatedAt: now });
             continue;
           }
-          if (!this.dependenciesSatisfied(row)) continue;
           const update = this.db.query(`
             UPDATE automation_actions
             SET status = 'claimed',
@@ -456,12 +475,8 @@ export class AutomationsStore {
             $now: now,
           });
           if (update.changes > 0) return row.id;
-        }
-        const last = rows.at(-1)!;
-        cursorAvailableAt = last.available_at;
-        cursorCreatedAt = last.created_at;
-        cursorId = last.id;
       }
+      return undefined;
     });
     return claimedId ? this.requireQueuedAction(claimedId) : undefined;
   }
@@ -495,6 +510,43 @@ export class AutomationsStore {
         $updatedAt: now,
       });
       assertClaimedActionUpdated(update.changes, options.actionId, options.runnerId);
+      this.settleDependentDependencies(action.automationRunId, action.stepId, now);
+      return this.requireQueuedAction(options.actionId);
+    });
+  }
+
+  completeActionFenced(options: ActionCompletionOptions & { fenceToken: number }): QueuedAction {
+    const now = normalizeIso(options.now);
+    return withImmediateTransaction(this.db, () => {
+      const action = this.requireQueuedAction(options.actionId);
+      if (isTerminalActionQueueStatus(action.status)) {
+        throw new Error(`cannot complete terminal queued action: ${options.actionId}`);
+      }
+      assertActiveLease(action, options.runnerId, now);
+      const update = this.db.query(`
+        UPDATE automation_actions
+        SET status = 'succeeded',
+            result_json = $resultJson,
+            error_json = NULL,
+            dead_letter_json = NULL,
+            lease_expires_at = NULL,
+            updated_at = $updatedAt
+        WHERE id = $id
+          AND status = 'claimed'
+          AND claimed_by = $runnerId
+          AND claim_version = $fenceToken
+          AND lease_expires_at IS NOT NULL
+          AND lease_expires_at > $now
+      `).run({
+        $id: options.actionId,
+        $runnerId: options.runnerId,
+        $fenceToken: options.fenceToken,
+        $now: now,
+        $resultJson: stringifyNullable(options.result),
+        $updatedAt: now,
+      });
+      assertClaimedActionUpdated(update.changes, options.actionId, options.runnerId);
+      this.settleDependentDependencies(action.automationRunId, action.stepId, now);
       return this.requireQueuedAction(options.actionId);
     });
   }
@@ -829,6 +881,10 @@ export class AutomationsStore {
   }
 
   private migrate(): void {
+    withImmediateTransaction(this.db, () => this.migrateInTransaction());
+  }
+
+  private migrateInTransaction(): void {
     const version = this.db.query("PRAGMA user_version").get() as { user_version: number };
     if (version.user_version > STORE_SCHEMA_VERSION) {
       throw new Error(`automations store schema ${version.user_version} is newer than supported schema ${STORE_SCHEMA_VERSION}`);
@@ -875,6 +931,7 @@ export class AutomationsStore {
         claimed_at TEXT,
         lease_expires_at TEXT,
         claim_version INTEGER NOT NULL DEFAULT 0,
+        unmet_dependencies INTEGER NOT NULL DEFAULT 0,
         approval_gate_json TEXT,
         result_json TEXT,
         error_json TEXT,
@@ -892,6 +949,14 @@ export class AutomationsStore {
         reason TEXT,
         metadata_json TEXT,
         FOREIGN KEY (source_run_id) REFERENCES automation_runs(id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS automation_action_dependencies (
+        automation_run_id TEXT NOT NULL,
+        action_step_id TEXT NOT NULL,
+        dependency_step_id TEXT NOT NULL,
+        PRIMARY KEY (automation_run_id, action_step_id, dependency_step_id),
+        FOREIGN KEY (automation_run_id) REFERENCES automation_runs(id) ON DELETE CASCADE
       );
 
       CREATE TABLE IF NOT EXISTS daemon_leases (
@@ -923,6 +988,7 @@ export class AutomationsStore {
     this.ensureColumn("automation_actions", "result_json", "TEXT");
     this.ensureColumn("automation_actions", "error_json", "TEXT");
     this.ensureColumn("automation_actions", "claim_version", "INTEGER NOT NULL DEFAULT 0");
+    this.ensureColumn("automation_actions", "unmet_dependencies", "INTEGER NOT NULL DEFAULT 0");
     this.ensureColumn("daemon_leases", "metadata_json", "TEXT");
     this.db.exec(`
       UPDATE automation_actions
@@ -934,12 +1000,43 @@ export class AutomationsStore {
         WHERE idempotency_key IS NOT NULL;
       CREATE INDEX IF NOT EXISTS automation_actions_run_status_idx ON automation_actions(automation_run_id, status);
       CREATE INDEX IF NOT EXISTS automation_actions_available_idx ON automation_actions(status, available_at);
+      CREATE INDEX IF NOT EXISTS automation_actions_ready_order_idx
+        ON automation_actions(available_at, available_at, created_at, id, automation_run_id, step_id)
+        WHERE status IN ('queued', 'retrying') AND unmet_dependencies = 0;
+      CREATE INDEX IF NOT EXISTS automation_actions_expired_claim_order_idx
+        ON automation_actions(lease_expires_at, available_at, created_at, id, automation_run_id, step_id)
+        WHERE status = 'claimed' AND lease_expires_at IS NOT NULL AND unmet_dependencies = 0;
+      CREATE INDEX IF NOT EXISTS automation_action_dependencies_required_idx
+        ON automation_action_dependencies(automation_run_id, action_step_id, dependency_step_id);
       CREATE UNIQUE INDEX IF NOT EXISTS automation_actions_idempotency_idx ON automation_actions(automation_run_id, idempotency_key);
       CREATE UNIQUE INDEX IF NOT EXISTS automation_actions_run_step_idx ON automation_actions(automation_run_id, step_id);
       CREATE INDEX IF NOT EXISTS automation_replay_source_idx ON automation_replay_requests(source_run_id);
       CREATE INDEX IF NOT EXISTS webhook_routes_automation_idx ON webhook_routes(automation_id);
       CREATE INDEX IF NOT EXISTS webhook_routes_status_idx ON webhook_routes(status);
       PRAGMA user_version = ${STORE_SCHEMA_VERSION};
+    `);
+    const automations = this.db.query("SELECT * FROM automations").all().map((row) => automationFromRow(row as AutomationRow));
+    for (const automation of automations) {
+      const runs = this.db.query("SELECT id FROM automation_runs WHERE automation_id = $automationId")
+        .all({ $automationId: automation.id }) as Array<{ id: string }>;
+      for (const run of runs) {
+        for (const step of automation.spec.actions) {
+          this.persistActionDependencies(run.id, step.id, automation);
+        }
+      }
+    }
+    this.db.exec(`
+      UPDATE automation_actions AS action
+      SET unmet_dependencies = (
+        SELECT count(*)
+        FROM automation_action_dependencies dependency
+        LEFT JOIN automation_actions required
+          ON required.automation_run_id = dependency.automation_run_id
+         AND required.step_id = dependency.dependency_step_id
+        WHERE dependency.automation_run_id = action.automation_run_id
+          AND dependency.action_step_id = action.step_id
+          AND (required.id IS NULL OR required.status <> 'succeeded')
+      );
     `);
   }
 
@@ -948,18 +1045,47 @@ export class AutomationsStore {
     return row.count;
   }
 
-  private dependenciesSatisfied(row: ActionRow): boolean {
-    const run = this.requireRun(row.automation_run_id);
-    const automation = this.requireAutomation(run.automationId);
-    const step = automation.spec.actions.find((candidate) => candidate.id === row.step_id);
-    const dependencies = step?.dependsOn ?? [];
-    if (dependencies.length === 0) return true;
-    const satisfied = this.db.query(`
-      SELECT step_id FROM automation_actions
-      WHERE automation_run_id = $runId AND status = 'succeeded'
-    `).all({ $runId: row.automation_run_id }) as Array<{ step_id: string }>;
-    const succeeded = new Set(satisfied.map((candidate) => candidate.step_id));
-    return dependencies.every((dependency) => succeeded.has(dependency));
+  private countUnmetDependencies(runId: string, stepId: string): number {
+    const pending = this.db.query(`
+      SELECT count(*) AS count
+      FROM automation_action_dependencies dependency
+      LEFT JOIN automation_actions required
+        ON required.automation_run_id = dependency.automation_run_id
+       AND required.step_id = dependency.dependency_step_id
+      WHERE dependency.automation_run_id = $runId
+        AND dependency.action_step_id = $stepId
+        AND (required.id IS NULL OR required.status <> 'succeeded')
+    `).get({ $runId: runId, $stepId: stepId }) as CountRow;
+    return pending.count;
+  }
+
+  private settleDependentDependencies(runId: string, dependencyStepId: string, now: string): void {
+    this.db.query(`
+      UPDATE automation_actions AS dependent
+      SET unmet_dependencies = unmet_dependencies - 1,
+          updated_at = $now
+      WHERE dependent.automation_run_id = $runId
+        AND dependent.unmet_dependencies > 0
+        AND dependent.status IN ('queued', 'retrying', 'claimed')
+        AND EXISTS (
+          SELECT 1
+          FROM automation_action_dependencies edge
+          WHERE edge.automation_run_id = dependent.automation_run_id
+            AND edge.action_step_id = dependent.step_id
+            AND edge.dependency_step_id = $dependencyStepId
+        )
+    `).run({ $runId: runId, $dependencyStepId: dependencyStepId, $now: now });
+  }
+
+  private persistActionDependencies(runId: string, stepId: string, automation: AutomationRecord): void {
+    const step = automation.spec.actions.find((candidate) => candidate.id === stepId);
+    for (const dependency of step?.dependsOn ?? []) {
+      this.db.query(`
+        INSERT OR IGNORE INTO automation_action_dependencies(
+          automation_run_id, action_step_id, dependency_step_id
+        ) VALUES ($runId, $stepId, $dependencyStepId)
+      `).run({ $runId: runId, $stepId: stepId, $dependencyStepId: dependency });
+    }
   }
 
   private ensureColumn(table: string, column: string, definition: string): void {
@@ -1261,6 +1387,10 @@ function eventActionMetadata(event: EventEnvelopeLike): JsonObject {
 
 function defaultBackoffMs(attempt: number): number {
   return Math.min(60000, 1000 * 2 ** Math.max(0, attempt - 1));
+}
+
+function compareClaimDate(left: string | Date, right: string | Date): number {
+  return new Date(left).getTime() - new Date(right).getTime();
 }
 
 function triggerMatchesEvent(

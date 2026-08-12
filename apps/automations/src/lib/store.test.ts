@@ -2,7 +2,13 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AutomationsStore, exampleAutomationSpec, validateAutomationSpec } from "./store.js";
+import {
+  AutomationsStore,
+  CLAIM_CANDIDATE_BUDGET,
+  exampleAutomationSpec,
+  SQLITE_CLAIM_CANDIDATES_SQL,
+  validateAutomationSpec,
+} from "./store.js";
 
 let dataDir = "";
 
@@ -110,7 +116,7 @@ describe("AutomationsStore", () => {
 
       const lease = store.heartbeatDaemon({ leaseId: "daemon:test", now: new Date("2026-06-28T00:00:00.000Z") });
       expect(lease.id).toBe("daemon:test");
-      expect((store.db.query("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(4);
+      expect((store.db.query("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(6);
 
       const claimed = store.claimNextAction({ runnerId: "tester", now: "2026-06-28T00:00:01.000Z" });
       expect(claimed).toMatchObject({ id: action.id, status: "claimed", claimedBy: "tester" });
@@ -504,8 +510,8 @@ describe("AutomationsStore", () => {
   test("continues scanning past dependency-blocked actions when claiming", () => {
     const store = new AutomationsStore();
     try {
-      const blockedActions = Array.from({ length: 25 }, (_, index) => ({
-        id: `blocked-${String(index).padStart(2, "0")}`,
+      const blockedActions = Array.from({ length: CLAIM_CANDIDATE_BUDGET + 1 }, (_, index) => ({
+        id: `blocked-${String(index).padStart(3, "0")}`,
         actionId: "actions.blocked",
         dependsOn: ["missing-success"],
       }));
@@ -559,6 +565,120 @@ describe("AutomationsStore", () => {
 
       const claimed = store.claimNextAction({ runnerId: "scanner", now: "2026-06-28T00:00:01.000Z" });
       expect(claimed).toMatchObject({ id: "ready-after-blocked", stepId: "ready-after-blocked", status: "claimed" });
+    } finally {
+      store.close();
+    }
+  });
+
+  test("uses both bounded claim indexes and rejects the legacy unindexed order", () => {
+    const store = new AutomationsStore({ dbPath: ":memory:" });
+    try {
+      const plan = store.db.query(`EXPLAIN QUERY PLAN ${SQLITE_CLAIM_CANDIDATES_SQL}`).all({
+        $now: "2026-08-12T00:00:00.000Z",
+        $limit: CLAIM_CANDIDATE_BUDGET,
+      }) as Array<{ detail: string }>;
+      const details = plan.map(({ detail }) => detail);
+      expect(details).toContain("MERGE (UNION ALL)");
+      expect(details.some((detail) => detail.includes("automation_actions_ready_order_idx"))).toBe(true);
+      expect(details.some((detail) => detail.includes("automation_actions_expired_claim_order_idx"))).toBe(true);
+      expect(details.some((detail) => detail === "SCAN automation_actions")).toBe(false);
+      expect(details.some((detail) => detail.includes("USE TEMP B-TREE"))).toBe(false);
+
+      const legacy = store.db.query(`EXPLAIN QUERY PLAN
+        SELECT id FROM automation_actions
+        WHERE (
+          status IN ('queued','retrying')
+          OR (status='claimed' AND lease_expires_at IS NOT NULL AND lease_expires_at <= $now)
+        ) AND available_at <= $now
+        ORDER BY available_at,created_at,id LIMIT $limit
+      `).all({
+        $now: "2026-08-12T00:00:00.000Z",
+        $limit: CLAIM_CANDIDATE_BUDGET,
+      }) as Array<{ detail: string }>;
+      expect(legacy.some(({ detail }) => detail.includes("USE TEMP B-TREE"))).toBe(true);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("upgrades schema v4 dependency edges and reopens idempotently", () => {
+    const dbPath = join(dataDir, "schema-v4.sqlite");
+    const first = new AutomationsStore({ dbPath });
+    first.createAutomation({
+      schemaVersion: "1.0",
+      id: "schema-v4",
+      name: "schema-v4",
+      version: "1.0.0",
+      triggers: [{ kind: "event", source: "test", type: "created" }],
+      actions: [
+        { id: "required", actionId: "actions.required" },
+        { id: "dependent", actionId: "actions.dependent", dependsOn: ["required"] },
+      ],
+    });
+    const run = first.createRun({ id: "schema-v4-run", automationId: "schema-v4", trigger: { kind: "manual" } });
+    first.enqueueAction({
+      id: "schema-v4-dependent",
+      automationRunId: run.id,
+      stepId: "dependent",
+      actionId: "actions.dependent",
+      invocation: { id: "schema-v4-inv", actionId: "actions.dependent", manifestVersion: "1.0.0", input: {}, requestedAt: "2026-08-12T00:00:00.000Z" },
+    });
+    first.db.exec(`
+      DROP TABLE automation_action_dependencies;
+      DROP INDEX automation_actions_ready_order_idx;
+      DROP INDEX automation_actions_expired_claim_order_idx;
+      PRAGMA user_version = 4;
+    `);
+    first.close();
+
+    for (let reopen = 0; reopen < 2; reopen += 1) {
+      const upgraded = new AutomationsStore({ dbPath });
+      expect((upgraded.db.query("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(6);
+      expect((upgraded.db.query("SELECT count(*) AS count FROM automation_action_dependencies").get() as { count: number }).count).toBe(1);
+      expect(upgraded.claimNextAction({ runnerId: "upgrade", now: "2026-08-12T00:00:01.000Z" })).toBeUndefined();
+      upgraded.close();
+    }
+  });
+
+  test("settles unmet dependency counters when a prerequisite completes", () => {
+    const store = new AutomationsStore({ dbPath: ":memory:" });
+    try {
+      store.createAutomation({
+        schemaVersion: "1.0",
+        id: "counter-settlement",
+        name: "counter-settlement",
+        version: "1.0.0",
+        triggers: [{ kind: "event", source: "test", type: "created" }],
+        actions: [
+          { id: "required", actionId: "actions.required" },
+          { id: "dependent", actionId: "actions.dependent", dependsOn: ["required"] },
+        ],
+      });
+      const run = store.createRun({ id: "counter-run", automationId: "counter-settlement", trigger: { kind: "manual" } });
+      const dependent = store.enqueueAction({
+        id: "counter-dependent",
+        automationRunId: run.id,
+        stepId: "dependent",
+        actionId: "actions.dependent",
+        availableAt: "2026-08-12T00:00:00.000Z",
+        invocation: { id: "counter-dependent-invocation", actionId: "actions.dependent", manifestVersion: "1.0.0", input: {}, requestedAt: "2026-08-12T00:00:00.000Z" },
+      });
+      expect((store.db.query("SELECT unmet_dependencies FROM automation_actions WHERE id=$id").get({ $id: dependent.id }) as { unmet_dependencies: number }).unmet_dependencies).toBe(1);
+      expect(store.claimNextAction({ runnerId: "counter-runner", now: "2026-08-12T00:00:01.000Z" })).toBeUndefined();
+
+      const required = store.enqueueAction({
+        id: "counter-required",
+        automationRunId: run.id,
+        stepId: "required",
+        actionId: "actions.required",
+        availableAt: "2026-08-12T00:00:00.000Z",
+        invocation: { id: "counter-required-invocation", actionId: "actions.required", manifestVersion: "1.0.0", input: {}, requestedAt: "2026-08-12T00:00:00.000Z" },
+      });
+      const claimed = store.claimNextAction({ runnerId: "counter-runner", now: "2026-08-12T00:00:02.000Z" });
+      expect(claimed?.id).toBe(required.id);
+      store.completeAction({ actionId: required.id, runnerId: "counter-runner", now: "2026-08-12T00:00:03.000Z" });
+      expect((store.db.query("SELECT unmet_dependencies FROM automation_actions WHERE id=$id").get({ $id: dependent.id }) as { unmet_dependencies: number }).unmet_dependencies).toBe(0);
+      expect(store.claimNextAction({ runnerId: "counter-runner", now: "2026-08-12T00:00:04.000Z" })?.id).toBe(dependent.id);
     } finally {
       store.close();
     }

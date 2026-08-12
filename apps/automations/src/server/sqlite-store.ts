@@ -41,7 +41,16 @@ export class SqliteServerAutomationsStore implements ServerAutomationsStore {
     assertFencedUpdate(result.changes, options.actionId);
     return this.withFenceToken(this.#store.requireQueuedAction(options.actionId));
   }
-  async completeActionFenced(options: FencedActionCompletionOptions) { return this.writeFencedResult(options, "succeeded", options.result); }
+  async completeActionFenced(options: FencedActionCompletionOptions) {
+    try {
+      return this.#store.completeActionFenced(options);
+    } catch (error) {
+      if (error instanceof Error && error.message.includes("lease is no longer active")) {
+        throw new Error(`stale or expired action lease: ${options.actionId}`);
+      }
+      throw error;
+    }
+  }
   async failActionFenced(options: FencedActionFailureOptions) {
     const action = this.#store.requireQueuedAction(options.actionId);
     const nextAttempt = action.attempt + 1;
