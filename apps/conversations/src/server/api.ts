@@ -90,6 +90,9 @@ import {
   packMessagePreviewPage,
 } from "../lib/message-previews.js";
 import {
+  ANALYTICS_LIMIT_MAX,
+  resolveAliasedString,
+  resolveAnalyticsLimit,
   resolveCollectionQueryOptions,
   resolveIso8601Date,
   resolvePresentString,
@@ -222,15 +225,40 @@ function str(v: unknown): string | undefined {
   return typeof v === "string" && v.trim() ? v.trim() : undefined;
 }
 
+function strictQueryString(searchParams: Pick<URLSearchParams, "get">, name: string): string | undefined {
+  return resolvePresentString(searchParams.get(name), name);
+}
+
+function strictAliasedQueryString(
+  searchParams: Pick<URLSearchParams, "get">,
+  primary: string,
+  alias: string,
+): string | undefined {
+  return resolveAliasedString(searchParams, primary, alias);
+}
+
+function strictIsoDateQuery(searchParams: Pick<URLSearchParams, "get">, name: string): string | undefined {
+  return resolveIso8601Date(searchParams.get(name), name);
+}
+
+function pgRestrictedCollectionPredicate(alias = ""): string {
+  const c = alias ? `${alias}.` : "";
+  return `(lower(COALESCE(${c}channel, '')) LIKE '%incident%' OR lower(COALESCE(${c}channel, '')) LIKE '%security%' OR lower(COALESCE(${c}to_agent, '')) LIKE '%incident%' OR lower(COALESCE(${c}to_agent, '')) LIKE '%security%' OR lower(COALESCE(${c}session_id, '')) LIKE '%incident%' OR lower(COALESCE(${c}session_id, '')) LIKE '%security%')`;
+}
+
+function pgBoundedPreviewSourceSql(alias = ""): string {
+  const c = alias ? `${alias}.` : "";
+  return `CASE WHEN ${pgRestrictedCollectionPredicate(alias)} THEN '' ELSE left(${c}content, ${COLLECTION_PREVIEW_SCAN_CHARS}) END AS preview_source`;
+}
+
 function messagePreviewProjectionPg(alias = ""): string {
   const c = alias ? `${alias}.` : "";
-  const restricted = `(lower(COALESCE(${c}channel, '')) LIKE '%incident%' OR lower(COALESCE(${c}channel, '')) LIKE '%security%' OR lower(COALESCE(${c}to_agent, '')) LIKE '%incident%' OR lower(COALESCE(${c}to_agent, '')) LIKE '%security%' OR lower(COALESCE(${c}session_id, '')) LIKE '%incident%' OR lower(COALESCE(${c}session_id, '')) LIKE '%security%')`;
   return `${c}id, ${c}uuid, ${c}session_id, ${c}from_agent, ${c}to_agent, ${c}channel, ${c}project_id,
           ${c}priority, ${c}blocking, ${c}reply_to, ${c}working_dir, ${c}repository, ${c}branch,
           ${c}created_at, ${c}read_at, ${c}edited_at, ${c}pinned_at,
           CASE WHEN ${c}metadata IS NULL OR ${c}metadata = '' THEN FALSE ELSE TRUE END AS has_metadata,
           CASE WHEN ${c}attachments IS NULL OR ${c}attachments = '' THEN 0 ELSE jsonb_array_length(${c}attachments::jsonb) END AS attachment_count,
-          CASE WHEN ${restricted} THEN '' ELSE left(${c}content, ${COLLECTION_PREVIEW_SCAN_CHARS}) END AS preview_source,
+          ${pgBoundedPreviewSourceSql(alias)},
           octet_length(${c}content) AS content_bytes`;
 }
 
@@ -1244,36 +1272,66 @@ async function handleV1(
 
   // ---- messages ----
   if (sub === "messages" && method === "GET") {
-    const to = str(url.searchParams.get("to"));
-    const from = str(url.searchParams.get("from"));
-    const channel = str(url.searchParams.get("channel"));
-    const session = str(url.searchParams.get("session")) ?? str(url.searchParams.get("session_id"));
-    const projectId = str(url.searchParams.get("project_id"));
-    const since = str(url.searchParams.get("since"));
-    const until = str(url.searchParams.get("until"));
-    const sinceIdRaw = str(url.searchParams.get("since_id"));
-    const idRaw = str(url.searchParams.get("id"));
-    const replyToRaw = str(url.searchParams.get("reply_to"));
-    const q = str(url.searchParams.get("q"));
-    const uuid = str(url.searchParams.get("uuid"));
-    const mentionsOnly = str(url.searchParams.get("mentions_only"));
+    const strictPositiveInteger = (value: string | undefined, name: string): number | undefined => {
+      if (value === undefined) return undefined;
+      const parsed = Number(value);
+      if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+        throw new Error(`${name} must be a positive integer`);
+      }
+      return parsed;
+    };
+
+    let to: string | undefined;
+    let from: string | undefined;
+    let channel: string | undefined;
+    let session: string | undefined;
+    let projectId: string | undefined;
+    let since: string | undefined;
+    let until: string | undefined;
+    let sinceId: number | undefined;
+    let id: number | undefined;
+    let replyTo: number | undefined;
+    let q: string | undefined;
+    let uuid: string | undefined;
+    let mentionsOnly: string | undefined;
+    let orderParam: string | undefined;
+    try {
+      to = strictQueryString(url.searchParams, "to");
+      from = strictQueryString(url.searchParams, "from");
+      channel = strictQueryString(url.searchParams, "channel");
+      session = strictAliasedQueryString(url.searchParams, "session", "session_id");
+      projectId = strictQueryString(url.searchParams, "project_id");
+      since = strictIsoDateQuery(url.searchParams, "since");
+      until = strictIsoDateQuery(url.searchParams, "until");
+      sinceId = strictPositiveInteger(strictQueryString(url.searchParams, "since_id"), "since_id");
+      id = strictPositiveInteger(strictQueryString(url.searchParams, "id"), "id");
+      replyTo = strictPositiveInteger(strictQueryString(url.searchParams, "reply_to"), "reply_to");
+      q = strictQueryString(url.searchParams, "q");
+      uuid = strictQueryString(url.searchParams, "uuid");
+      mentionsOnly = strictQueryString(url.searchParams, "mentions_only");
+      orderParam = strictQueryString(url.searchParams, "order");
+    } catch (error) {
+      return json({ error: error instanceof Error ? error.message : String(error) }, 400);
+    }
+
+    if (channel) channel = normalizeChannelName(channel);
     const unreadOnly = isTrue(url.searchParams.get("unread_only"));
     const threadsOnly = isTrue(url.searchParams.get("threads_only"));
     const pinnedOnly = isTrue(url.searchParams.get("pinned_only"));
     const includeReplyCounts = isTrue(url.searchParams.get("include_reply_counts"));
-    const idCursor = sinceIdRaw !== undefined && Number.isFinite(Number(sinceIdRaw));
+    const idCursor = sinceId !== undefined;
     // An id cursor is a prefix walk, so its bounded page must be selected by id
     // ascending regardless of a caller-supplied presentation order. Otherwise
     // imported timestamps can move a lower unseen id behind a committed cursor.
     // Non-cursor reads retain the existing DESC default and explicit ASC path.
     const order = idCursor
       ? "ASC"
-      : (str(url.searchParams.get("order"))?.toLowerCase() === "asc" ? "ASC" : "DESC");
+      : (orderParam?.toLowerCase() === "asc" ? "ASC" : "DESC");
     const collection = collectionReadOptions(url);
     const clauses: string[] = [];
     const params: unknown[] = [];
-    if (idRaw && Number.isSafeInteger(Number(idRaw)) && Number(idRaw) > 0) {
-      params.push(Number(idRaw)); clauses.push(`id = $${params.length}`);
+    if (id !== undefined) {
+      params.push(id); clauses.push(`id = $${params.length}`);
     }
     if (to) { params.push(to); clauses.push(`to_agent = $${params.length}`); }
     if (from) { params.push(from); clauses.push(`from_agent = $${params.length}`); }
@@ -1294,7 +1352,7 @@ async function handleV1(
       clauses.push(`created_at ${q ? ">=" : ">"} $${params.length}`);
     }
     if (until) { params.push(until); clauses.push(`created_at <= $${params.length}`); }
-    if (idCursor) { params.push(Number(sinceIdRaw)); clauses.push(`id > $${params.length}`); }
+    if (idCursor) { params.push(sinceId); clauses.push(`id > $${params.length}`); }
     if (q) { params.push(`%${q}%`); clauses.push(`content ILIKE $${params.length}`); }
     if (mentionsOnly) {
       params.push(mentionsOnly.toLowerCase());
@@ -1302,8 +1360,8 @@ async function handleV1(
     }
     if (unreadOnly) clauses.push(`read_at IS NULL`);
     if (threadsOnly) clauses.push(`reply_to IS NULL`);
-    if (replyToRaw && Number.isSafeInteger(Number(replyToRaw)) && Number(replyToRaw) > 0) {
-      params.push(Number(replyToRaw)); clauses.push(`reply_to = $${params.length}`);
+    if (replyTo !== undefined) {
+      params.push(replyTo); clauses.push(`reply_to = $${params.length}`);
     }
     if (pinnedOnly) clauses.push(`pinned_at IS NOT NULL`);
     if (isTrue(url.searchParams.get("blocking_only"))) clauses.push(`blocking = true`);
@@ -1500,8 +1558,14 @@ async function handleV1(
 
   // ---- pinned messages ----
   if (sub === "messages/pinned" && method === "GET") {
-    const channel = str(url.searchParams.get("channel"));
-    const session = str(url.searchParams.get("session")) ?? str(url.searchParams.get("session_id"));
+    let channel: string | undefined;
+    let session: string | undefined;
+    try {
+      channel = strictQueryString(url.searchParams, "channel");
+      session = strictAliasedQueryString(url.searchParams, "session", "session_id");
+    } catch (error) {
+      return json({ error: error instanceof Error ? error.message : String(error) }, 400);
+    }
     const collection = collectionReadOptions(url);
     const clauses = ["pinned_at IS NOT NULL"];
     const params: unknown[] = [];
@@ -1598,11 +1662,17 @@ async function handleV1(
 
   // ---- messages that @mention an agent ----
   if (sub === "messages/for-agent" && method === "GET") {
-    const who = str(url.searchParams.get("agent"));
+    let who: string | undefined;
+    let channel: string | undefined;
+    try {
+      who = strictQueryString(url.searchParams, "agent");
+      channel = strictQueryString(url.searchParams, "channel");
+    } catch (error) {
+      return json({ error: error instanceof Error ? error.message : String(error) }, 400);
+    }
     if (!who) return json({ error: "agent is required" }, 400);
     const clauses = ["mm.mentioned_agent = $1"];
     const params: unknown[] = [who.toLowerCase()];
-    const channel = str(url.searchParams.get("channel"));
     if (channel) { params.push(normalizeChannelName(channel)); clauses.push(`m.channel = $${params.length}`); }
     if (isTrue(url.searchParams.get("unread_only"))) clauses.push(`mm.notified_at IS NULL`);
     const collection = collectionReadOptions(url);
@@ -2979,7 +3049,16 @@ async function handleChannelNotifications(
   }
 
   if (sub === "channel-notifications/inbox" && method === "GET") {
-    const who = str(url.searchParams.get("agent"));
+    let who: string | undefined;
+    let channel: string | undefined;
+    let since: string | undefined;
+    try {
+      who = strictQueryString(url.searchParams, "agent");
+      channel = strictQueryString(url.searchParams, "channel");
+      since = strictIsoDateQuery(url.searchParams, "since");
+    } catch (error) {
+      return json({ error: error instanceof Error ? error.message : String(error) }, 400);
+    }
     if (!who) return json({ error: "agent is required" }, 400);
     if (!agent || who.toLowerCase() !== agent.toLowerCase()) {
       return json({ error: "notification agent must match the authenticated agent" }, 403);
@@ -2992,9 +3071,7 @@ async function handleChannelNotifications(
     const selfSenderId = resolveSelfSenderId(who, presence);
     const clauses = ["s.agent = $1", "m.channel IS NOT NULL", "m.from_agent <> $2", "m.id > s.since_message_id"];
     const params: unknown[] = [who, selfSenderId];
-    const channel = str(url.searchParams.get("channel"));
     if (channel) { params.push(normalizeChannelName(channel)); clauses.push(`m.channel = $${params.length}`); }
-    const since = str(url.searchParams.get("since"));
     if (since) { params.push(since); clauses.push(`m.created_at > $${params.length}`); }
     // Default filters to unread unless explicitly unread_only=false (matches local).
     if (url.searchParams.get("unread_only") !== "false") clauses.push("snr.message_id IS NULL");
@@ -3843,39 +3920,58 @@ async function handleAnalytics(
   const topicChannelMatch = sub.match(/^topics\/channel\/([^/]+)$/);
   if (topicChannelMatch && method === "GET") {
     const channel = normalizeChannelName(decodeURIComponent(topicChannelMatch[1]));
-    const limit = clampLimit(url.searchParams.get("limit"), 100, 1000);
-    const since = str(url.searchParams.get("since"));
+    let limit: number;
+    let since: string | undefined;
+    try {
+      limit = resolveAnalyticsLimit(url.searchParams.get("limit"), "limit", 100, ANALYTICS_LIMIT_MAX);
+      since = strictIsoDateQuery(url.searchParams, "since");
+    } catch (error) {
+      return json({ error: error instanceof Error ? error.message : String(error) }, 400);
+    }
     const params: unknown[] = [channel];
     let sinceClause = "";
     if (since) { params.push(since); sinceClause = `AND created_at > $${params.length}`; }
-    const rows = await client.many<{ content: string }>(
-      `SELECT content FROM messages WHERE channel = $1 ${sinceClause} ORDER BY created_at DESC LIMIT ${limit}`,
+    const rows = await client.many<{ preview_source: string }>(
+      `SELECT ${pgBoundedPreviewSourceSql()} FROM messages
+       WHERE channel = $1 ${sinceClause} ORDER BY created_at DESC LIMIT ${limit}`,
       params,
     );
-    return json({ topics: extractTopics(rows.map((r) => r.content).join("\n"), 15) });
+    return json({ topics: extractTopics(rows.map((r) => redactSensitiveText(r.preview_source ?? "")).join("\n"), 15) });
   }
   const topicSessionMatch = sub.match(/^topics\/session\/([^/]+)$/);
   if (topicSessionMatch && method === "GET") {
     const sid = decodeURIComponent(topicSessionMatch[1]);
-    const limit = clampLimit(url.searchParams.get("limit"), 100, 1000);
-    const rows = await client.many<{ content: string }>(
-      `SELECT content FROM messages WHERE session_id = $1 ORDER BY created_at DESC LIMIT ${limit}`,
+    let limit: number;
+    try {
+      limit = resolveAnalyticsLimit(url.searchParams.get("limit"), "limit", 100, ANALYTICS_LIMIT_MAX);
+    } catch (error) {
+      return json({ error: error instanceof Error ? error.message : String(error) }, 400);
+    }
+    const rows = await client.many<{ preview_source: string }>(
+      `SELECT ${pgBoundedPreviewSourceSql()} FROM messages
+       WHERE session_id = $1 ORDER BY created_at DESC LIMIT ${limit}`,
       [sid],
     );
-    return json({ topics: extractTopics(rows.map((r) => r.content).join("\n"), 15) });
+    return json({ topics: extractTopics(rows.map((r) => redactSensitiveText(r.preview_source ?? "")).join("\n"), 15) });
   }
   if (sub === "topics/trending" && method === "GET") {
     const hours = Number(str(url.searchParams.get("hours")) ?? "24") || 24;
-    const topN = Number(str(url.searchParams.get("top_n")) ?? "20") || 20;
-    const projectId = str(url.searchParams.get("project_id"));
+    let topN: number;
+    let projectId: string | undefined;
+    try {
+      topN = resolveAnalyticsLimit(url.searchParams.get("top_n"), "top_n", 20, ANALYTICS_LIMIT_MAX);
+      projectId = strictQueryString(url.searchParams, "project_id");
+    } catch (error) {
+      return json({ error: error instanceof Error ? error.message : String(error) }, 400);
+    }
     const params: unknown[] = [];
     let where = `WHERE created_at > NOW() - interval '${Math.floor(hours)} hours'`;
     if (projectId) { params.push(projectId); where += ` AND project_id = $${params.length}`; }
-    const rows = await client.many<{ content: string }>(
-      `SELECT content FROM messages ${where} ORDER BY created_at DESC LIMIT 500`,
+    const rows = await client.many<{ preview_source: string }>(
+      `SELECT ${pgBoundedPreviewSourceSql()} FROM messages ${where} ORDER BY created_at DESC LIMIT 500`,
       params,
     );
-    return json({ topics: extractTopics(rows.map((r) => r.content).join("\n"), topN) });
+    return json({ topics: extractTopics(rows.map((r) => redactSensitiveText(r.preview_source ?? "")).join("\n"), topN) });
   }
 
   // ---- graph ----
@@ -3957,26 +4053,32 @@ async function handleAnalytics(
   const summaryMatch = sub.match(/^summary\/([^/]+)$/);
   if (summaryMatch && method === "GET") {
     const key = decodeURIComponent(summaryMatch[1]);
-    const limit = clampLimit(url.searchParams.get("limit"), 50, 1000);
+    let limit: number;
+    try {
+      limit = resolveAnalyticsLimit(url.searchParams.get("limit"), "limit", 50, ANALYTICS_LIMIT_MAX);
+    } catch (error) {
+      return json({ error: error instanceof Error ? error.message : String(error) }, 400);
+    }
     const isChannelRow = key.startsWith("channel:") ? true : Boolean(await client.get(`SELECT 1 FROM channels WHERE name = $1`, [key]));
     const filterCol = isChannelRow ? "channel" : "session_id";
     const rows = await client.many<Record<string, unknown>>(
-      `SELECT * FROM messages WHERE ${filterCol} = $1 ORDER BY created_at DESC LIMIT ${limit}`,
+      `SELECT ${messagePreviewProjectionPg()} FROM messages
+       WHERE ${filterCol} = $1 ORDER BY created_at DESC LIMIT ${limit}`,
       [key],
     );
     if (rows.length === 0) return json({ summary: null });
-    const msgs = rows.map(parseServerMessage);
+    const msgs = rows.map((row) => buildCollectionMessagePreview(row, COLLECTION_PREVIEW_SCAN_CHARS));
     const agents = new Set<string>();
     for (const m of msgs) { agents.add(String(m.from_agent)); if (m.to_agent) agents.add(String(m.to_agent)); }
     const dates = msgs.map((m) => String(m.created_at)).sort();
-    const topics = extractTopics(msgs.map((m) => String(m.content)).join("\n"), 10);
+    const topics = extractTopics(msgs.map((m) => redactSensitiveText(m.preview)).join("\n"), 10);
     const keyMessages: Array<{ id: number; from: string; content: string; reason: string }> = [];
     for (const m of msgs) {
       const p = String(m.priority);
-      if (p === "high" || p === "urgent") keyMessages.push({ id: Number(m.id), from: String(m.from_agent), content: String(m.content).slice(0, 200), reason: `${p} priority` });
-      if (m.blocking) keyMessages.push({ id: Number(m.id), from: String(m.from_agent), content: String(m.content).slice(0, 200), reason: "blocking message" });
+      if (p === "high" || p === "urgent") keyMessages.push({ id: Number(m.id), from: String(m.from_agent), content: String(m.preview).slice(0, 200), reason: `${p} priority` });
+      if (m.blocking) keyMessages.push({ id: Number(m.id), from: String(m.from_agent), content: String(m.preview).slice(0, 200), reason: "blocking message" });
     }
-    for (const m of msgs) if (m.pinned_at) keyMessages.push({ id: Number(m.id), from: String(m.from_agent), content: String(m.content).slice(0, 200), reason: "pinned" });
+    for (const m of msgs) if (m.pinned_at) keyMessages.push({ id: Number(m.id), from: String(m.from_agent), content: String(m.preview).slice(0, 200), reason: "pinned" });
     const msgIds = msgs.map((m) => Number(m.id));
     if (msgIds.length > 0) {
       const reacted = await client.many<{ message_id: number; c: number }>(
@@ -3985,12 +4087,12 @@ async function handleAnalytics(
       );
       for (const r of reacted) {
         const m = msgs.find((x) => Number(x.id) === Number(r.message_id));
-        if (m) keyMessages.push({ id: Number(r.message_id), from: String(m.from_agent), content: String(m.content).slice(0, 200), reason: `${r.c} reaction(s)` });
+        if (m) keyMessages.push({ id: Number(r.message_id), from: String(m.from_agent), content: String(m.preview).slice(0, 200), reason: `${r.c} reaction(s)` });
       }
     }
     const seen = new Set<number>();
     const uniqueKey = keyMessages.filter((k) => (seen.has(k.id) ? false : (seen.add(k.id), true))).slice(0, 10);
-    const blockers = msgs.filter((m) => m.blocking && !m.read_at).map((m) => ({ id: Number(m.id), from: String(m.from_agent), content: String(m.content).slice(0, 200), created_at: m.created_at }));
+    const blockers = msgs.filter((m) => m.blocking && m.unread).map((m) => ({ id: Number(m.id), from: String(m.from_agent), content: String(m.preview).slice(0, 200), created_at: m.created_at }));
     const replyCount = msgs.filter((m) => m.reply_to).length;
     let reactionCount = 0;
     if (msgIds.length > 0) {
@@ -4018,8 +4120,14 @@ async function handleAnalytics(
   if (sub === "hot" && method === "GET") {
     const limit = Number(str(url.searchParams.get("limit")) ?? "20") || 20;
     const minScore = Number(str(url.searchParams.get("min_score")) ?? "0") || 0;
-    const channel = str(url.searchParams.get("channel"));
-    const projectId = str(url.searchParams.get("project_id"));
+    let channel: string | undefined;
+    let projectId: string | undefined;
+    try {
+      channel = strictQueryString(url.searchParams, "channel");
+      projectId = strictQueryString(url.searchParams, "project_id");
+    } catch (error) {
+      return json({ error: error instanceof Error ? error.message : String(error) }, 400);
+    }
     const params: unknown[] = [];
     let where = "";
     if (channel) { params.push(normalizeChannelName(channel)); where = `WHERE channel = $${params.length}`; }

@@ -52,28 +52,28 @@ describe("API /api/status", () => {
 });
 
 describe("API /api/messages", () => {
-  test("GET returns messages array", async () => {
+  test("GET returns a preview page envelope", async () => {
     sendMessage({ from: "a", to: "b", content: "test-msg" });
     const res = await fetch(`${base()}/api/messages`);
     expect(res.status).toBe(200);
-    const data = await res.json() as any[];
-    expect(data.length).toBeGreaterThanOrEqual(1);
-    expect(data[0].content).toBe("test-msg"); // reversed order: newest first
+    const data = await res.json() as { messages: Array<{ preview: string }>; count: number };
+    expect(data.count).toBeGreaterThanOrEqual(1);
+    expect(data.messages[0]?.preview).toBe("test-msg"); // newest first
   });
 
   test("GET respects limit param", async () => {
     sendMessage({ from: "a", to: "b", content: "1" });
     sendMessage({ from: "a", to: "b", content: "2" });
     const res = await fetch(`${base()}/api/messages?limit=1`);
-    const data = await res.json() as any[];
-    expect(data).toHaveLength(1);
+    const data = await res.json() as { messages: any[] };
+    expect(data.messages).toHaveLength(1);
   });
 
   test("GET filters by from param", async () => {
     sendMessage({ from: "special-sender", to: "b", content: "from-filter" });
     const res = await fetch(`${base()}/api/messages?from=special-sender`);
-    const data = await res.json() as any[];
-    expect(data.every((m: any) => m.from_agent === "special-sender")).toBe(true);
+    const data = await res.json() as { messages: any[] };
+    expect(data.messages.every((m: any) => m.from_agent === "special-sender")).toBe(true);
   });
 
   test("POST sends a message", async () => {
@@ -176,9 +176,9 @@ describe("API /api/messages/search", () => {
     sendMessage({ from: "search-agent", to: "other", content: "no match here" });
     const res = await fetch(`${base()}/api/messages/search?q=unique-search-term-xyz`);
     expect(res.status).toBe(200);
-    const data = await res.json() as any[];
-    expect(data).toHaveLength(1);
-    expect(data[0].content).toBe("unique-search-term-xyz");
+    const data = await res.json() as { messages: Array<{ preview: string }> };
+    expect(data.messages).toHaveLength(1);
+    expect(data.messages[0].preview).toBe("unique-search-term-xyz");
   });
 
   test("returns 400 when query is missing", async () => {
@@ -200,17 +200,17 @@ describe("API /api/messages/search", () => {
     sendMessage({ from: "a", to: "b", content: "searchlimit-item-2" });
     sendMessage({ from: "a", to: "b", content: "searchlimit-item-3" });
     const res = await fetch(`${base()}/api/messages/search?q=searchlimit-item&limit=2`);
-    const data = await res.json() as any[];
-    expect(data).toHaveLength(2);
+    const data = await res.json() as { messages: unknown[] };
+    expect(data.messages).toHaveLength(2);
   });
 
   test("filters by from param", async () => {
     sendMessage({ from: "search-sender-a", to: "b", content: "searchfrom-test" });
     sendMessage({ from: "search-sender-b", to: "b", content: "searchfrom-test" });
     const res = await fetch(`${base()}/api/messages/search?q=searchfrom-test&from=search-sender-a`);
-    const data = await res.json() as any[];
-    expect(data).toHaveLength(1);
-    expect(data[0].from_agent).toBe("search-sender-a");
+    const data = await res.json() as { messages: Array<{ from_agent: string }> };
+    expect(data.messages).toHaveLength(1);
+    expect(data.messages[0].from_agent).toBe("search-sender-a");
   });
 
   test("filters by channel param", async () => {
@@ -221,16 +221,18 @@ describe("API /api/messages/search", () => {
     sendMessage({ from: "a", to: "search-sp", content: "searchchannel-test", channel: "search-sp" });
     sendMessage({ from: "a", to: "b", content: "searchchannel-test" });
     const res = await fetch(`${base()}/api/messages/search?q=searchchannel-test&channel=search-sp`);
-    const data = await res.json() as any[];
-    expect(data).toHaveLength(1);
-    expect(data[0].channel).toBe("search-sp");
+    const data = await res.json() as { messages: Array<{ channel: string }> };
+    expect(data.messages).toHaveLength(1);
+    expect(data.messages[0].channel).toBe("search-sp");
   });
 
-  test("returns empty array when no matches", async () => {
+  test("returns an empty preview envelope when no matches", async () => {
     const res = await fetch(`${base()}/api/messages/search?q=absolutely-nothing-matches-this-9876`);
     expect(res.status).toBe(200);
-    const data = await res.json() as any[];
-    expect(data).toEqual([]);
+    const data = await res.json() as { messages: unknown[]; has_more: boolean; next_cursor: number | null };
+    expect(data.messages).toEqual([]);
+    expect(data.has_more).toBe(false);
+    expect(data.next_cursor).toBeNull();
   });
 });
 
@@ -241,8 +243,8 @@ describe("API /api/messages/pinned", () => {
     await fetch(`${base()}/api/messages/${msg.id}/pin`, { method: "POST" });
     const res = await fetch(`${base()}/api/messages/pinned`);
     expect(res.status).toBe(200);
-    const data = await res.json() as any[];
-    expect(data.some((m: any) => m.id === msg.id)).toBe(true);
+    const data = await res.json() as { messages: any[] };
+    expect(data.messages.some((m: any) => m.id === msg.id)).toBe(true);
   });
 
   test("GET filters by channel", async () => {
@@ -251,8 +253,8 @@ describe("API /api/messages/pinned", () => {
     await fetch(`${base()}/api/messages/${msg.id}/pin`, { method: "POST" });
     const res = await fetch(`${base()}/api/messages/pinned?channel=pin-sp`);
     expect(res.status).toBe(200);
-    const data = await res.json() as any[];
-    expect(data.every((m: any) => m.channel === "pin-sp")).toBe(true);
+    const data = await res.json() as { messages: any[] };
+    expect(data.messages.every((m: any) => m.channel === "pin-sp")).toBe(true);
   });
 
   test("GET respects limit param", async () => {
@@ -262,8 +264,8 @@ describe("API /api/messages/pinned", () => {
     await fetch(`${base()}/api/messages/${m2.id}/pin`, { method: "POST" });
     const res = await fetch(`${base()}/api/messages/pinned?limit=1`);
     expect(res.status).toBe(200);
-    const data = await res.json() as any[];
-    expect(data).toHaveLength(1);
+    const data = await res.json() as { messages: any[] };
+    expect(data.messages).toHaveLength(1);
   });
 });
 
@@ -757,5 +759,108 @@ describe("Static files", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toContain("text/html");
     await expect(res.text()).resolves.toContain("Conversations Dashboard");
+  });
+});
+
+/**
+ * G2 — the dashboard's own collection routes parse as strictly as /v1 does.
+ *
+ * These routes hand-rolled their parsing: `url.searchParams.get(x) || undefined`
+ * maps a present-but-empty filter onto an absent one, and `parseInt(...)` with a
+ * silent fallback turns `?limit=abc` into `limit=50`. Both answer a question the
+ * caller did not ask, with a 200.
+ */
+describe("G2 dashboard collection filters fail closed", () => {
+  const EMPTY_FILTERS: Array<[string, string]> = [
+    ["/api/messages", "channel"],
+    ["/api/messages", "session"],
+    ["/api/messages", "from"],
+    ["/api/messages", "to"],
+    ["/api/messages/pinned", "channel"],
+    ["/api/messages/pinned", "session_id"],
+    ["/api/export", "channel"],
+    ["/api/export", "session"],
+  ];
+
+  for (const [path, name] of EMPTY_FILTERS) {
+    test(`GET ${path}?${name}= is rejected`, async () => {
+      const res = await fetch(`${base()}${path}?${name}=`);
+      expect(res.status).toBe(400);
+      const body = await res.json() as { error?: string };
+      expect(String(body.error)).toContain(name);
+    });
+  }
+
+  test("a malformed limit is rejected instead of silently defaulted", async () => {
+    const res = await fetch(`${base()}/api/messages?limit=abc`);
+    expect(res.status).toBe(400);
+  });
+
+  test("a malformed since is rejected", async () => {
+    const res = await fetch(`${base()}/api/export?since=not-a-date`);
+    expect(res.status).toBe(400);
+  });
+
+  test("an empty search query stays a 400", async () => {
+    const res = await fetch(`${base()}/api/messages/search?q=`);
+    expect(res.status).toBe(400);
+  });
+
+  // The instrument can pass: well-formed values still return a page.
+  test("well-formed filters are accepted", async () => {
+    sendMessage({ from: "strict-a", to: "strict-b", content: "strict accepted" });
+    const res = await fetch(`${base()}/api/messages?limit=5&from=strict-a`);
+    expect(res.status).toBe(200);
+    const body = await res.json() as { messages: unknown[] };
+    expect(Array.isArray(body.messages)).toBe(true);
+  });
+});
+
+/**
+ * G3 — the dashboard collection routes return the store's page envelope.
+ *
+ * A bare JSON array cannot say "there is more" or "I dropped rows to stay under
+ * a byte cap". Every consumer of a bare array reads it as the complete answer,
+ * which is exactly the confident-complete-result-after-truncation failure.
+ */
+describe("G3 dashboard collection routes preserve the page envelope", () => {
+  const CONTRACT_FIELDS = ["messages", "count", "limit", "cursor", "next_cursor", "has_more", "skipped_count", "byte_length", "max_bytes", "timeout_ms"];
+
+  test("GET /api/messages returns the envelope, not a bare array", async () => {
+    sendMessage({ from: "env-a", to: "env-b", content: "envelope probe" });
+    const res = await fetch(`${base()}/api/messages?limit=5`);
+    expect(res.status).toBe(200);
+    const body = await res.json() as Record<string, unknown>;
+    expect(Array.isArray(body)).toBe(false);
+    for (const field of CONTRACT_FIELDS) expect(Object.keys(body)).toContain(field);
+  });
+
+  test("GET /api/messages/pinned returns the envelope, not a bare array", async () => {
+    const res = await fetch(`${base()}/api/messages/pinned?limit=5`);
+    expect(res.status).toBe(200);
+    const body = await res.json() as Record<string, unknown>;
+    expect(Array.isArray(body)).toBe(false);
+    for (const field of CONTRACT_FIELDS) expect(Object.keys(body)).toContain(field);
+  });
+
+  test("GET /api/messages/search returns the envelope, not a bare array", async () => {
+    sendMessage({ from: "search-env-a", to: "search-env-b", content: "dashboard envelope search probe" });
+    const res = await fetch(`${base()}/api/messages/search?q=envelope&limit=5`);
+    expect(res.status).toBe(200);
+    const body = await res.json() as Record<string, unknown>;
+    expect(Array.isArray(body)).toBe(false);
+    for (const field of CONTRACT_FIELDS) expect(Object.keys(body)).toContain(field);
+  });
+
+  test("a byte-capped page never claims to be complete", async () => {
+    for (let i = 0; i < 8; i++) {
+      sendMessage({ from: "cap-a", to: "cap-b", content: `cap probe ${i} ${"z".repeat(400)}` });
+    }
+    const res = await fetch(`${base()}/api/messages?to=cap-b&limit=8&max_bytes=1024`);
+    expect(res.status).toBe(200);
+    const body = await res.json() as { count: number; has_more: boolean; skipped_count: number; next_cursor: number | null };
+    expect(body.count < 8 || body.skipped_count > 0).toBe(true);
+    expect(body.has_more).toBe(true);
+    expect(body.next_cursor).not.toBeNull();
   });
 });

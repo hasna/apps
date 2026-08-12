@@ -16,7 +16,7 @@ import { sendResult } from "../redaction-result.js";
 import { getStore } from "../../lib/store/index.js";
 import { identityFor } from "../identity.js";
 import { assertNoSensitiveContent, redactSensitiveText } from "../../lib/content-safety.js";
-import { compactQueriedMessages, compactWindowedChannels, jsonText, resolveMcpWindow } from "../compact.js";
+import { compactPreviewPage, compactQueriedMessages, compactWindowedChannels, jsonText, resolveMcpPageOptions, resolveMcpWindow } from "../compact.js";
 import { resolveReadWindow, takeWindow } from "../../lib/message-window.js";
 import { describeReadMessagesOrder } from "../../lib/list-order.js";
 
@@ -25,6 +25,23 @@ function toolError(error: unknown, fallback: string) {
     content: [{ type: "text" as const, text: error instanceof Error ? error.message : fallback }],
     isError: true,
   };
+}
+
+/**
+ * The full acknowledgement a channel read performs when — and only when — the
+ * caller explicitly asked for one. Kept in one place so the peek path and the
+ * verbose path cannot drift into acknowledging different things.
+ */
+async function acknowledgeChannelRead(
+  store: ReturnType<typeof getStore>,
+  ids: number[],
+  agent: string | undefined,
+): Promise<void> {
+  if (ids.length === 0) return;
+  await store.markReadByIds(ids);
+  if (!agent) return;
+  await store.recordReadReceiptsBatch(ids, agent);
+  await store.markChannelNotificationsRead(agent, ids);
 }
 
 export function registerChannelTools(server: McpServer): void {
@@ -142,13 +159,18 @@ export function registerChannelTools(server: McpServer): void {
   });
 
   registerMcpTool(server, "read_channel", {
-    description: "Read messages from a channel.",
+    description:
+      "Peek at messages in a channel. NON-MUTATING by default — records no read receipt and consumes no notification. "
+      + "Pass mark_read:true to acknowledge exactly the ids this call returns.",
     inputSchema: {
       channel: z.string(),
-      from: z.string().optional().describe("Agent reading the channel — used for per-agent read receipts"),
+      from: z.string().optional().describe("Agent reading the channel — used for per-agent read receipts when mark_read is true"),
       since: z.string().optional(),
       limit: z.coerce.number().optional(),
-      mark_read: z.coerce.boolean().optional(),
+      mark_read: z.coerce.boolean().optional().describe("Acknowledge exactly the ids this call returns (default false — reading is a peek)"),
+      max_bytes: z.coerce.number().optional().describe("Cap the response envelope in bytes"),
+      preview_bytes: z.coerce.number().optional().describe("Cap each message preview in bytes"),
+      timeout_ms: z.coerce.number().optional().describe("Bound the collection read"),
       max_content_length: z.coerce.number().optional().describe("Truncate each message content to N chars (adds truncated:true flag)"),
       threads_only: z.coerce.boolean().optional().describe("Only return root messages (hides thread replies)"),
       include_reply_counts: z.coerce.boolean().optional().describe("Include reply_count on each message"),
@@ -159,37 +181,33 @@ export function registerChannelTools(server: McpServer): void {
   }, async (args: Record<string, any>) => {
     const store = getStore();
     const { channel, from: fromParam, since, limit, mark_read, max_content_length, threads_only, include_reply_counts, latest } = args;
-    const window = resolveMcpWindow(args);
     const verbose = args.verbose === true;
-    const query = {
-      channel,
-      since,
-      limit: verbose ? limit : window.limit + 1,
-      offset: verbose ? args.cursor : window.offset,
-      max_content_length: verbose ? max_content_length : undefined,
-      threads_only,
-      include_reply_counts,
-      latest,
-    };
-    const messages = await store.readMessages(query);
-    // A recency window arrives newest-anchored but chronological, so the page is
-    // the tail of the over-fetched rows (todos 2c25973b).
-    const newestWindow = resolveReadWindow(query).newestWindow;
-    const visible = verbose ? messages : takeWindow(messages, window.limit, newestWindow);
+    const agent = fromParam ? resolveIdentity(fromParam) : undefined;
 
-    if (mark_read !== false && visible.length > 0) {
-      await store.markReadByIds(visible.map((m) => m.id));
+    if (verbose) {
+      const messages = await store.readMessages({
+        channel, since, limit, offset: args.cursor, max_content_length, threads_only, include_reply_counts, latest,
+      });
+      const ids = messages.map((m) => m.id);
+      if (mark_read === true && messages.length > 0) {
+        await acknowledgeChannelRead(store, ids, agent);
+      }
+      return { content: [{ type: "text", text: jsonText(messages) }] };
     }
 
-    // Record per-agent read receipts for all channel messages
-    if (fromParam && visible.length > 0) {
-      const agent = resolveIdentity(fromParam);
-      await store.recordReadReceiptsBatch(visible.map((m) => m.id), agent);
-      await store.markChannelNotificationsRead(agent, visible.map((m) => m.id));
+    const page = await store.readMessagePreviews({
+      channel, since, threads_only, include_reply_counts, latest,
+      ...resolveMcpPageOptions(args),
+      preview_bytes: args.preview_bytes ?? max_content_length,
+    });
+
+    const ids = page.messages.map((m) => m.id);
+    if (mark_read === true && page.messages.length > 0) {
+      await acknowledgeChannelRead(store, ids, agent);
     }
 
     return {
-      content: [{ type: "text", text: jsonText(verbose ? messages : compactQueriedMessages(messages, args, describeReadMessagesOrder(args), { newestWindow })) }],
+      content: [{ type: "text", text: jsonText(compactPreviewPage(page, describeReadMessagesOrder(args))) }],
     };
   });
 
@@ -287,7 +305,7 @@ export function registerChannelTools(server: McpServer): void {
       unread_only: z.coerce.boolean().optional(),
       limit: z.coerce.number().optional(),
       since: z.string().optional(),
-      mark_read: z.coerce.boolean().optional(),
+      mark_read: z.coerce.boolean().optional().describe("Acknowledge exactly the ids this call returns (default false — reading is a peek)"),
     },
   }, async (args: Record<string, any>) => {
     const store = getStore();
@@ -298,7 +316,9 @@ export function registerChannelTools(server: McpServer): void {
       unread_only: args.unread_only,
       limit: args.limit,
       since: args.since,
-      mark_read: args.mark_read,
+      // Explicit true only. A truthy coercion here would let `mark_read: "false"`
+      // consume the very notifications the caller asked to look at.
+      mark_read: args.mark_read === true,
     });
     return { content: [{ type: "text", text: JSON.stringify(notifications) }] };
   });

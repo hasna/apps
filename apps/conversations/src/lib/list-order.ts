@@ -110,6 +110,9 @@ export function pinnedOrderByClause(prefix = ""): string {
 
 /** `blockers` — oldest unanswered blocker first; a backlog, not a recency window. */
 export const BLOCKERS_LIST_ORDER: SortDescriptor = { sort: "created_at", direction: "asc" };
+
+/** readMentionPreviews selects `m.created_at DESC, m.id DESC`. */
+export const MENTION_LIST_ORDER: SortDescriptor = { sort: "created_at", direction: "desc" };
 /** `locks list` — longest-held lock first. */
 export const LOCKS_LIST_ORDER: SortDescriptor = { sort: "locked_at", direction: "asc" };
 /** `projects list` — alphabetical. */

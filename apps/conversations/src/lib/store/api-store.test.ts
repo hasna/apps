@@ -1292,3 +1292,69 @@ describe("ApiStore health does not print credentials embedded in the base URL", 
     expect(checks[0]?.message).toContain("https://conversations.hasna.xyz");
   });
 });
+
+/**
+ * G2 — `prune()` must not turn a present-but-empty filter into an absent one.
+ *
+ * prune() dropped every `""`, which is indistinguishable from the caller never
+ * having supplied the key. On a collection read that is a WIDENING: a caller
+ * whose `channel` variable resolved to empty asked the remote API for one
+ * channel and had the request rewritten into "every channel". The remote then
+ * answers a broader question, correctly, for a request it never received.
+ *
+ * A blank filter is a caller bug, so it fails here — before the request leaves.
+ */
+describe("G2 ApiStore rejects present-but-empty collection filters", () => {
+  function recordingClient(): { client: HasnaStorageClient; calls: Array<{ path: string; query: unknown }> } {
+    const calls: Array<{ path: string; query: unknown }> = [];
+    const record = async (path: string, opts?: { query?: unknown }) => {
+      calls.push({ path, query: opts?.query });
+      return { messages: [], count: 0, limit: 20, cursor: 0, next_cursor: null, has_more: false, skipped_count: 0, byte_length: 0, max_bytes: 16384, timeout_ms: 3000, notifications: [] };
+    };
+    const transport = {
+      baseUrl: "https://conversations.hasna.xyz/v1",
+      get: record,
+      post: record,
+      patch: record,
+      del: record,
+    } as unknown as HasnaStorageClient["transport"];
+    return {
+      calls,
+      client: {
+        name: "conversations",
+        baseUrl: "https://conversations.hasna.xyz/v1",
+        transport,
+      } as unknown as HasnaStorageClient,
+    };
+  }
+
+  test("a blank channel filter fails before any request is issued", async () => {
+    const { client, calls } = recordingClient();
+    const store = new ApiStore(client);
+    await expect(store.readMessages({ channel: "" } as never)).rejects.toThrow(/channel/);
+    expect(calls).toHaveLength(0);
+  });
+
+  test("a blank notification channel filter fails before any request is issued", async () => {
+    const { client, calls } = recordingClient();
+    const store = new ApiStore(client);
+    await expect(store.readChannelNotifications({ agent: "watcher", channel: "" } as never)).rejects.toThrow(/channel/);
+    expect(calls).toHaveLength(0);
+  });
+
+  // The instrument can pass: absent stays absent, and a real value is sent.
+  test("an absent filter is still simply omitted", async () => {
+    const { client, calls } = recordingClient();
+    const store = new ApiStore(client);
+    await store.readChannelNotifications({ agent: "watcher" });
+    expect(calls).toHaveLength(1);
+    expect(Object.keys(calls[0].query as Record<string, unknown>)).not.toContain("channel");
+  });
+
+  test("a supplied filter is forwarded", async () => {
+    const { client, calls } = recordingClient();
+    const store = new ApiStore(client);
+    await store.readChannelNotifications({ agent: "watcher", channel: "ops" });
+    expect((calls[0].query as Record<string, unknown>).channel).toBe("ops");
+  });
+});

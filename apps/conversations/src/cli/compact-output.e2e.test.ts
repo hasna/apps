@@ -55,8 +55,9 @@ describe("compact CLI output", () => {
 
     const json = runCli(["read", "--to", "bob", "--limit", "1", "--json"], "bob");
     expect(json.exitCode).toBe(0);
-    const preview = JSON.parse(json.stdout)[0] as { id: number; content: string };
-    expect(preview.content).not.toContain("TAIL_ONLY_IN_VERBOSE");
+    const preview = JSON.parse(json.stdout).messages[0] as { id: number; preview: string };
+    expect(preview.preview).not.toContain("TAIL_ONLY_IN_VERBOSE");
+    expect(preview).not.toHaveProperty("content");
     const exact = runCli(["show", String(preview.id), "--json"], "bob");
     expect(exact.exitCode).toBe(0);
     expect(JSON.parse(exact.stdout).content).toContain("TAIL_ONLY_IN_VERBOSE");
@@ -78,9 +79,9 @@ describe("compact CLI output", () => {
 
     const unread = runCli(["read", "--to", "mark-target", "--unread", "--json"], "mark-target");
     expect(unread.exitCode).toBe(0);
-    const messages = JSON.parse(unread.stdout);
+    const messages = JSON.parse(unread.stdout).messages;
     expect(messages).toHaveLength(1);
-    expect(messages[0].content).toBe("older page message");
+    expect(messages[0].preview).toBe("older page message");
   });
 
   test("read accepts --unread-only after agent registration", () => {
@@ -95,7 +96,7 @@ describe("compact CLI output", () => {
 
     const unread = runCli(["read", "--to", agent, "--unread-only", "--json"], agent);
     expect(unread.exitCode).toBe(0);
-    expect(JSON.parse(unread.stdout).map((message: { content: string }) => message.content)).toEqual(["still unread"]);
+    expect(JSON.parse(unread.stdout).messages.map((message: { preview: string }) => message.preview)).toEqual(["still unread"]);
   }, 15_000);
 
   test("send exits nonzero for sensitive content without echoing the value", () => {
@@ -108,7 +109,7 @@ describe("compact CLI output", () => {
 
     const read = runCli(["read", "--to", "blocked-target", "--json"], "blocked-target");
     expect(read.exitCode).toBe(0);
-    expect(JSON.parse(read.stdout)).toHaveLength(0);
+    expect(JSON.parse(read.stdout).messages).toHaveLength(0);
   });
 
   test("send exits nonzero for sensitive metadata without echoing the value", () => {
@@ -128,7 +129,28 @@ describe("compact CLI output", () => {
 
     const read = runCli(["read", "--to", "metadata-blocked", "--json"], "metadata-blocked");
     expect(read.exitCode).toBe(0);
-    expect(JSON.parse(read.stdout)).toHaveLength(0);
+    expect(JSON.parse(read.stdout).messages).toHaveLength(0);
+  });
+
+  test("pinned --json returns a preview page envelope", () => {
+    const send = runCli(["send", "pin me", "--to", "pin-reader"], "pin-writer");
+    expect(send.exitCode).toBe(0);
+
+    const read = runCli(["read", "--to", "pin-reader", "--limit", "1", "--json"], "pin-reader");
+    expect(read.exitCode).toBe(0);
+    const id = JSON.parse(read.stdout).messages[0].id as number;
+
+    const pin = runCli(["pin", String(id)], "pin-reader");
+    expect(pin.exitCode).toBe(0);
+
+    const pinned = runCli(["pinned", "--json"], "pin-reader");
+    expect(pinned.exitCode).toBe(0);
+    const body = JSON.parse(pinned.stdout) as { messages: Array<{ id: number }>; has_more: boolean; skipped_count: number; byte_length: number };
+    expect(Array.isArray(body.messages)).toBe(true);
+    expect(body.messages[0].id).toBe(id);
+    expect(typeof body.has_more).toBe("boolean");
+    expect(typeof body.skipped_count).toBe("number");
+    expect(typeof body.byte_length).toBe("number");
   });
 
   test("channel send exits nonzero for sensitive channel input without echoing the value", () => {

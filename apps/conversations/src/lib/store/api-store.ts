@@ -50,6 +50,12 @@ import {
   resolveCollectionTimeoutMs,
   previewAsCompatibilityMessage,
 } from "../message-previews.js";
+import {
+  resolveExportFormat,
+  resolveIso8601Date,
+  resolveAnalyticsLimit,
+  resolvePresentString,
+} from "../strict-query-values.js";
 import type {
   ChannelNotificationPage,
   IncidentProjectionRecord,
@@ -70,8 +76,22 @@ type Q = Record<string, string | number | boolean | undefined | null>;
 
 function prune(q: Q): Record<string, string | number | boolean> {
   const out: Record<string, string | number | boolean> = {};
-  for (const [k, v] of Object.entries(q)) if (v !== undefined && v !== null && v !== "") out[k] = v;
+  for (const [k, v] of Object.entries(q)) if (v !== undefined && v !== null) out[k] = v;
   return out;
+}
+
+function strictOptionalString(value: unknown, name: string): string | undefined {
+  return resolvePresentString(value, name);
+}
+
+function strictOptionalChannel(value: unknown, name: string): string | undefined {
+  const normalized = resolvePresentString(value, name);
+  return normalized === undefined ? undefined : normalizeChannelName(normalized);
+}
+
+function strictOptionalSince(value: unknown, name: string): string | undefined {
+  const raw = resolvePresentString(value, name);
+  return raw === undefined ? undefined : normalizeSince(raw);
 }
 
 /**
@@ -422,16 +442,15 @@ export class ApiStore implements ConversationsStore {
     const previewBytes = resolveCollectionPreviewBytes(opts.preview_bytes);
     const timeoutMs = resolveCollectionTimeoutMs(opts.timeout_ms);
     const page = await this.getBounded<ChannelNotificationPage>("/channel-notifications/inbox", {
-      agent: opts.agent,
-      channel: opts.channel ? normalizeChannelName(opts.channel) : undefined,
+      agent: resolvePresentString(opts.agent, "agent")!,
+      channel: strictOptionalChannel(opts.channel, "channel"),
       unread_only: opts.unread_only ? true : undefined,
       limit,
       cursor,
       max_bytes: maxBytes,
       preview_bytes: previewBytes,
       timeout_ms: timeoutMs,
-      since: normalizeSince(opts.since),
-      include_content: opts.include_content ? true : undefined,
+      since: strictOptionalSince(opts.since, "since"),
     }, timeoutMs);
     if (opts.mark_read && page.notifications.length > 0) {
       const markedRead = await this.markChannelNotificationsRead(opts.agent, page.notifications.map((row) => row.message_id));
@@ -719,15 +738,24 @@ export class ApiStore implements ConversationsStore {
 
   // ── topics ────────────────────────────────────────────────────────────────────
   getChannelTopics: ConversationsStore["getChannelTopics"] = async (channelName, opts) => {
-    const body = await this.get<{ topics?: unknown[] }>(`/topics/channel/${encodeURIComponent(normalizeChannelName(channelName))}`, { limit: opts?.limit, since: normalizeSince(opts?.since) });
+    const body = await this.get<{ topics?: unknown[] }>(`/topics/channel/${encodeURIComponent(normalizeChannelName(channelName))}`, {
+      limit: opts?.limit === undefined ? undefined : resolveAnalyticsLimit(opts.limit, "limit", 100),
+      since: normalizeSince(opts?.since),
+    });
     return (body.topics ?? []) as never;
   };
   getSessionTopics: ConversationsStore["getSessionTopics"] = async (sessionId, opts) => {
-    const body = await this.get<{ topics?: unknown[] }>(`/topics/session/${encodeURIComponent(sessionId)}`, { limit: opts?.limit });
+    const body = await this.get<{ topics?: unknown[] }>(`/topics/session/${encodeURIComponent(sessionId)}`, {
+      limit: opts?.limit === undefined ? undefined : resolveAnalyticsLimit(opts.limit, "limit", 100),
+    });
     return (body.topics ?? []) as never;
   };
   getTrendingTopics: ConversationsStore["getTrendingTopics"] = async (opts) => {
-    const body = await this.get<{ topics?: unknown[] }>("/topics/trending", { project_id: opts?.project_id, hours: opts?.hours, top_n: opts?.top_n });
+    const body = await this.get<{ topics?: unknown[] }>("/topics/trending", {
+      project_id: opts?.project_id,
+      hours: opts?.hours,
+      top_n: opts?.top_n === undefined ? undefined : resolveAnalyticsLimit(opts.top_n, "top_n", 20),
+    });
     return (body.topics ?? []) as never;
   };
 
@@ -751,7 +779,10 @@ export class ApiStore implements ConversationsStore {
 
   // ── summary ───────────────────────────────────────────────────────────────────
   getConversationSummary: ConversationsStore["getConversationSummary"] = async (sessionOrChannel, opts) => {
-    const body = await this.get<{ summary: unknown } | null>(`/summary/${encodeURIComponent(sessionOrChannel)}`, opts as Q);
+    const body = await this.get<{ summary: unknown } | null>(`/summary/${encodeURIComponent(sessionOrChannel)}`, {
+      ...(opts ?? {}),
+      limit: opts?.limit === undefined ? undefined : resolveAnalyticsLimit(opts.limit, "limit", 50),
+    } as Q);
     return (body?.summary ?? null) as never;
   };
 
@@ -974,7 +1005,8 @@ export class ApiStore implements ConversationsStore {
   };
   readMessages: ConversationsStore["readMessages"] = async (opts) => {
     const o = opts ?? {};
-    const window = resolveReadWindow({ ...o, since: normalizeSince(o.since) });
+    const since = strictOptionalSince(o.since, "since");
+    const window = resolveReadWindow({ ...o, since });
     // Keep the legacy request shape intact: the server owns its collection
     // ceiling, while the response remains preview-only. This preserves the
     // current newest-window contract for callers that deliberately ask above
@@ -983,17 +1015,17 @@ export class ApiStore implements ConversationsStore {
       limit: o.latest ?? o.limit ?? COLLECTION_DEFAULT_LIMIT,
       cursor: resolveCollectionOffset(o.offset),
       order: window.select,
-      session: o.session_id,
-      from: o.from,
-      to: o.to,
-      channel: o.channel ? normalizeChannelName(o.channel) : undefined,
-      project_id: o.project_id,
-      since: normalizeSince(o.since),
+      session: strictOptionalString(o.session_id, "session_id"),
+      from: strictOptionalString(o.from, "from"),
+      to: strictOptionalString(o.to, "to"),
+      channel: strictOptionalChannel(o.channel, "channel"),
+      project_id: strictOptionalString(o.project_id, "project_id"),
+      since,
       since_id: o.since_id,
       unread_only: o.unread_only ? true : undefined,
       threads_only: o.threads_only ? true : undefined,
       include_reply_counts: o.include_reply_counts ? true : undefined,
-      mentions_only: o.mentions_only,
+      mentions_only: strictOptionalString(o.mentions_only, "mentions_only"),
       max_bytes: COLLECTION_MAX_MAX_BYTES,
       preview_bytes: resolveCollectionPreviewBytes(o.max_content_length),
       timeout_ms: COLLECTION_MAX_TIMEOUT_MS,
@@ -1008,21 +1040,39 @@ export class ApiStore implements ConversationsStore {
     const maxBytes = resolveCollectionMaxBytes(opts.max_bytes);
     const previewBytes = resolveCollectionPreviewBytes(opts.preview_bytes ?? opts.max_content_length);
     const timeoutMs = resolveCollectionTimeoutMs(opts.timeout_ms);
+    const since = strictOptionalSince(opts.since, "since");
     return await this.getBounded<MessagePreviewPage>("/messages", {
       limit,
       cursor,
-      order: resolveReadWindow({ ...opts, since: normalizeSince(opts.since) }).select,
-      session: opts.session_id,
-      from: opts.from,
-      to: opts.to,
-      channel: opts.channel ? normalizeChannelName(opts.channel) : undefined,
-      project_id: opts.project_id,
-      since: normalizeSince(opts.since),
+      order: resolveReadWindow({ ...opts, since }).select,
+      session: strictOptionalString(opts.session_id, "session_id"),
+      from: strictOptionalString(opts.from, "from"),
+      to: strictOptionalString(opts.to, "to"),
+      channel: strictOptionalChannel(opts.channel, "channel"),
+      project_id: strictOptionalString(opts.project_id, "project_id"),
+      since,
       since_id: opts.since_id,
       unread_only: opts.unread_only ? true : undefined,
       threads_only: opts.threads_only ? true : undefined,
       include_reply_counts: opts.include_reply_counts ? true : undefined,
-      mentions_only: opts.mentions_only,
+      mentions_only: strictOptionalString(opts.mentions_only, "mentions_only"),
+      max_bytes: maxBytes,
+      preview_bytes: previewBytes,
+      timeout_ms: timeoutMs,
+      detail: "preview",
+    }, timeoutMs) as never;
+  };
+  readPinnedMessagePreviews: ConversationsStore["readPinnedMessagePreviews"] = async (opts = {}) => {
+    const limit = resolveCollectionLimit(opts.limit);
+    const cursor = resolveCollectionOffset(opts.offset);
+    const maxBytes = resolveCollectionMaxBytes(opts.max_bytes);
+    const previewBytes = resolveCollectionPreviewBytes(opts.preview_bytes ?? opts.max_content_length);
+    const timeoutMs = resolveCollectionTimeoutMs(opts.timeout_ms);
+    return await this.getBounded<MessagePreviewPage>("/messages/pinned", {
+      channel: strictOptionalChannel(opts.channel, "channel"),
+      session: strictOptionalString(opts.session_id, "session_id"),
+      limit,
+      cursor,
       max_bytes: maxBytes,
       preview_bytes: previewBytes,
       timeout_ms: timeoutMs,
@@ -1044,13 +1094,13 @@ export class ApiStore implements ConversationsStore {
     const previewBytes = resolveCollectionPreviewBytes(opts.preview_bytes ?? opts.snippet_length);
     const timeoutMs = resolveCollectionTimeoutMs(opts.timeout_ms);
     return await this.getBounded<MessagePreviewPage>("/messages", {
-      q: opts.query,
+      q: resolvePresentString(opts.query, "q"),
       limit,
       cursor,
       order: "desc",
-      channel: opts.channel ? normalizeChannelName(opts.channel) : undefined,
-      from: opts.from,
-      to: opts.to,
+      channel: strictOptionalChannel(opts.channel, "channel"),
+      from: strictOptionalString(opts.from, "from"),
+      to: strictOptionalString(opts.to, "to"),
       since: opts.since === undefined ? undefined : normalizeExactIsoTimestamp(opts.since, "search since timestamp"),
       until: opts.until === undefined ? undefined : normalizeExactIsoTimestamp(opts.until, "search until timestamp"),
       max_bytes: maxBytes,
@@ -1167,7 +1217,16 @@ export class ApiStore implements ConversationsStore {
     })) as never;
   };
   exportMessages: ConversationsStore["exportMessages"] = async (opts) => {
-    const body = await this.post<{ artifact?: unknown }>("/messages/exports", opts ?? {});
+    const o = opts ?? {};
+    const body = await this.post<{ artifact?: unknown }>("/messages/exports", {
+      ...o,
+      channel: strictOptionalChannel(o.channel, "channel"),
+      session_id: strictOptionalString(o.session_id, "session_id"),
+      from: strictOptionalString(o.from, "from"),
+      since: strictOptionalSince(o.since, "since"),
+      until: o.until === undefined ? undefined : resolveIso8601Date(o.until, "until"),
+      format: resolveExportFormat(o.format),
+    });
     if (!body?.artifact) throw new Error("Message export response did not include an artifact");
     return body.artifact as never;
   };
@@ -1207,8 +1266,8 @@ export class ApiStore implements ConversationsStore {
     const previewBytes = resolveCollectionPreviewBytes(opts.preview_bytes);
     const timeoutMs = resolveCollectionTimeoutMs(opts.timeout_ms);
     return await this.getBounded<MessagePreviewPage>("/messages/for-agent", {
-      agent,
-      channel: opts.channel ? normalizeChannelName(opts.channel) : undefined,
+      agent: resolvePresentString(agent, "agent")!,
+      channel: strictOptionalChannel(opts.channel, "channel"),
       unread_only: opts.unread_only ? true : undefined,
       limit,
       cursor,
@@ -1251,7 +1310,11 @@ export class ApiStore implements ConversationsStore {
     const res = await this.post<{ marked?: number }>("/messages/read", { reader: agent, mentions_only: true, channel: channel ? normalizeChannelName(channel) : undefined });
     return Number(res?.marked ?? 0) as never;
   };
-  markMentionsReadByIds: ConversationsStore["markMentionsReadByIds"] = async (mentionIds, agent) => {
+  // (agent, mentionIds) — matching messagesLib.markMentionsReadByIds. These two
+  // parameters were previously NAMED in the opposite order, so positionally the
+  // request went out as `{reader: <id array>, mention_ids: <agent name>}`: the
+  // remote acknowledged nothing and reported a count for it.
+  markMentionsReadByIds: ConversationsStore["markMentionsReadByIds"] = async (agent, mentionIds) => {
     if (mentionIds.length === 0) return 0 as never;
     const res = await this.post<{ marked?: number }>("/messages/read", { reader: agent, mention_ids: mentionIds });
     return Number(res?.marked ?? 0) as never;
@@ -1283,16 +1346,13 @@ export class ApiStore implements ConversationsStore {
     }
   };
   getPinnedMessages: ConversationsStore["getPinnedMessages"] = async (opts) => {
-    const timeoutMs = resolveCollectionTimeoutMs(undefined);
-    const res = await this.getBounded<MessagePreviewPage>("/messages/pinned", {
+    const res = await this.readPinnedMessagePreviews({
       channel: opts?.channel ? normalizeChannelName(opts.channel) : undefined,
-      session: opts?.session_id,
-      limit: resolveCollectionLimit(opts?.limit),
-      cursor: resolveCollectionOffset(opts?.offset),
+      session_id: opts?.session_id,
+      limit: opts?.limit,
+      offset: opts?.offset,
       max_bytes: COLLECTION_MAX_MAX_BYTES,
-      timeout_ms: timeoutMs,
-      detail: "preview",
-    }, timeoutMs);
+    });
     return res.messages.map(previewAsCompatibilityMessage) as never;
   };
   recordReadReceipt: ConversationsStore["recordReadReceipt"] = async (messageId, agent) => {

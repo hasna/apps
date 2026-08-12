@@ -40,6 +40,8 @@
     "kit:vendor": "bunx @hasna/contracts vendor-kit",
     "kit:check": "bunx @hasna/contracts vendor-kit --check",
     "sdk:generate": "bun run ./scripts/generate-sdk.ts",
+    "sdk:check": "bun run ./scripts/sdk-check.ts",
+    "test:incident-pg": "bun run ./src/server/incident-projection-pg.verify.ts",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "bun run build:dashboard && bun run build",
     "postinstall": "mkdir -p $HOME/.hasna/conversations $HOME/.hasna/conversations/training 2>/dev/null || true"

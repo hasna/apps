@@ -2582,7 +2582,7 @@ describe("conversations-serve", () => {
       headers: { "x-api-key": rwKey },
     });
     expect(invalid.status).toBe(400);
-    expect((await invalid.json()).error).toContain("Invalid search since timestamp");
+    expect((await invalid.json()).error).toContain("since must be a valid ISO 8601 date");
   });
 
   test("POST /v1/messages blocks sensitive content without echoing it", async () => {
@@ -2699,5 +2699,156 @@ describe("conversations-serve", () => {
       expect.objectContaining({ name: "project_id", in: "query" }),
     ]));
     expect(b.components.schemas.Channel.properties.id).toEqual({ type: "string" });
+  });
+});
+
+/**
+ * G2 — a collection filter is either absent or a real value. Never "" .
+ *
+ * `str()` mapped a PRESENT-but-empty query value to `undefined`, which is the
+ * same thing it returns for an absent one — so `?channel=` dropped the channel
+ * clause and widened the read to every channel the key can see. A caller whose
+ * variable interpolated to empty asked for one channel and was answered with
+ * all of them, with a 200 and no indication anything had been relaxed.
+ *
+ * The rejection must land BEFORE the query is issued, so these assert against
+ * the recorded SQL as well as the status code.
+ */
+describe("G2 strict collection filters on /v1", () => {
+  function callsSince(mark: number): Array<{ sql: string }> {
+    return activeFakeClient!.__debug.manyCalls.slice(mark);
+  }
+
+  const PRESENT_BUT_EMPTY = ["channel", "session", "session_id", "from", "to", "project_id", "q", "mentions_only", "uuid"];
+
+  for (const name of PRESENT_BUT_EMPTY) {
+    test(`GET /v1/messages?${name}= is rejected before any query runs`, async () => {
+      const mark = activeFakeClient!.__debug.manyCalls.length;
+      const res = await fetch(`${base}/v1/messages?${name}=`, { headers: { "x-api-key": rwKey } });
+      expect(res.status).toBe(400);
+      const body = await res.json() as { error?: string };
+      expect(String(body.error)).toContain(name);
+      expect(callsSince(mark).filter((call) => /FROM messages/i.test(call.sql))).toHaveLength(0);
+    });
+  }
+
+  test("a malformed since is rejected before any query runs", async () => {
+    const mark = activeFakeClient!.__debug.manyCalls.length;
+    const res = await fetch(`${base}/v1/messages?since=not-a-date`, { headers: { "x-api-key": rwKey } });
+    expect(res.status).toBe(400);
+    expect(callsSince(mark).filter((call) => /FROM messages/i.test(call.sql))).toHaveLength(0);
+  });
+
+  test("a malformed limit is rejected before any query runs", async () => {
+    const mark = activeFakeClient!.__debug.manyCalls.length;
+    const res = await fetch(`${base}/v1/messages?limit=abc`, { headers: { "x-api-key": rwKey } });
+    expect(res.status).toBe(400);
+    expect(callsSince(mark).filter((call) => /FROM messages/i.test(call.sql))).toHaveLength(0);
+  });
+
+  // The instrument must be able to pass, not only to fail: well-formed filters
+  // still reach the store and still return a page.
+  test("well-formed filters are accepted and do reach the store", async () => {
+    const mark = activeFakeClient!.__debug.manyCalls.length;
+    const res = await fetch(`${base}/v1/messages?channel=ops&limit=5&since=2026-01-01T00:00:00Z`, {
+      headers: { "x-api-key": rwKey },
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json() as { messages?: unknown[]; has_more?: boolean };
+    expect(Array.isArray(body.messages)).toBe(true);
+    expect(callsSince(mark).filter((call) => /FROM messages/i.test(call.sql)).length).toBeGreaterThan(0);
+  });
+
+  test("an omitted filter is still absent, not empty", async () => {
+    const res = await fetch(`${base}/v1/messages?limit=5`, { headers: { "x-api-key": rwKey } });
+    expect(res.status).toBe(200);
+  });
+
+  test("pinned rejects present-but-empty optional filters before any query runs", async () => {
+    for (const name of ["channel", "session", "session_id"]) {
+      const mark = activeFakeClient!.__debug.manyCalls.length;
+      const res = await fetch(`${base}/v1/messages/pinned?${name}=`, { headers: { "x-api-key": rwKey } });
+      expect(res.status).toBe(400);
+      expect(callsSince(mark).filter((call) => /FROM messages/i.test(call.sql))).toHaveLength(0);
+    }
+  });
+
+  test("for-agent rejects present-but-empty optional filters before any query runs", async () => {
+    for (const name of ["agent", "channel"]) {
+      const mark = activeFakeClient!.__debug.manyCalls.length;
+      const res = await fetch(`${base}/v1/messages/for-agent?${name}=`, { headers: { "x-api-key": rwKey } });
+      expect(res.status).toBe(400);
+      expect(callsSince(mark).filter((call) => /FROM messages/i.test(call.sql))).toHaveLength(0);
+    }
+  });
+
+  test("channel-notifications/inbox rejects empty filters and malformed since before any query runs", async () => {
+    for (const suffix of ["agent=", "channel=", "since=not-a-date"]) {
+      const mark = activeFakeClient!.__debug.manyCalls.length;
+      const res = await fetch(`${base}/v1/channel-notifications/inbox?${suffix}`, { headers: { "x-api-key": rwKey } });
+      expect(res.status).toBe(400);
+      expect(callsSince(mark).filter((call) => /FROM messages|FROM agent_presence|FROM channel_subscriptions/i.test(call.sql))).toHaveLength(0);
+    }
+  });
+
+  test("analytics routes reject present-but-empty filters too", async () => {
+    const trending = await fetch(`${base}/v1/topics/trending?project_id=`, { headers: { "x-api-key": rwKey } });
+    expect(trending.status).toBe(400);
+    const hot = await fetch(`${base}/v1/hot?channel=`, { headers: { "x-api-key": rwKey } });
+    expect(hot.status).toBe(400);
+  });
+
+  test("analytics routes reject negative limits and clamp huge ones before SQL", async () => {
+    const negative = await fetch(`${base}/v1/summary/some-session?limit=-1`, { headers: { "x-api-key": rwKey } });
+    expect(negative.status).toBe(400);
+
+    const hugeMark = activeFakeClient!.__debug.manyCalls.length;
+    const huge = await fetch(`${base}/v1/topics/channel/ops?limit=50000`, { headers: { "x-api-key": rwKey } });
+    expect(huge.status).toBe(200);
+    const sql = callsSince(hugeMark).find((call) => /FROM messages/i.test(call.sql))?.sql ?? "";
+    expect(sql).toContain("LIMIT 1000");
+  });
+});
+
+/**
+ * G6 — the PostgreSQL analytics paths derive from a BOUNDED, REDACTED preview
+ * projection, never from `SELECT *` or a bare `SELECT content`.
+ *
+ * Summary and topics ran over whole stored bodies: an unbounded number of
+ * unbounded rows, unredacted, and with restricted incident/security rows
+ * included on the same terms as any other. Deriving a "topic" from a body the
+ * caller may not read still leaks that body's contents, one weighted term at a
+ * time.
+ */
+describe("G6 bounded analytics projections on /v1", () => {
+  function analyticsSql(mark: number): string[] {
+    return activeFakeClient!.__debug.manyCalls.slice(mark).map((call) => call.sql);
+  }
+
+  test("summary selects a bounded preview projection, not SELECT *", async () => {
+    const mark = activeFakeClient!.__debug.manyCalls.length;
+    const res = await fetch(`${base}/v1/summary/some-session`, { headers: { "x-api-key": rwKey } });
+    expect(res.status).toBe(200);
+    const messageQueries = analyticsSql(mark).filter((sql) => /FROM messages/i.test(sql));
+    expect(messageQueries.length).toBeGreaterThan(0);
+    for (const sql of messageQueries) {
+      expect(sql).not.toMatch(/SELECT\s+\*\s+FROM messages/i);
+      expect(sql).toMatch(/left\(/i);
+      expect(sql).toMatch(/preview_source/i);
+    }
+  });
+
+  test("topic routes select a bounded preview projection, not raw content", async () => {
+    for (const path of ["topics/channel/ops", "topics/session/some-session", "topics/trending"]) {
+      const mark = activeFakeClient!.__debug.manyCalls.length;
+      const res = await fetch(`${base}/v1/${path}`, { headers: { "x-api-key": rwKey } });
+      expect(res.status).toBe(200);
+      const messageQueries = analyticsSql(mark).filter((sql) => /FROM messages/i.test(sql));
+      expect(messageQueries.length).toBeGreaterThan(0);
+      for (const sql of messageQueries) {
+        expect(sql).not.toMatch(/SELECT\s+content\s+FROM messages/i);
+        expect(sql).toMatch(/left\(/i);
+      }
+    }
   });
 });

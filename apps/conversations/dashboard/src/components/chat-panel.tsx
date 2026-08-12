@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { XIcon, SendIcon } from "lucide-react";
 import { Markdown } from "@/components/markdown";
-import type { Message } from "@/types";
+import type { Message, MessagePage } from "@/types";
 
 interface ChatPanelProps {
   open: boolean;
@@ -27,8 +27,8 @@ export function ChatPanel({ open, onClose, sessionId, title }: ChatPanelProps) {
       params.set("limit", "100");
       try {
         const res = await fetch(`/api/messages?${params}`);
-        const data = (await res.json()) as Message[];
-        setMessages(data.reverse());
+        const data = (await res.json()) as MessagePage;
+        setMessages(data.messages.slice().reverse());
       } catch {}
     };
 
@@ -80,7 +80,7 @@ export function ChatPanel({ open, onClose, sessionId, title }: ChatPanelProps) {
                 <span className="text-xs text-muted-foreground">{msg.created_at.slice(11, 19)}</span>
               </div>
               <div className="mt-0.5 text-sm">
-                <Markdown>{msg.content}</Markdown>
+                <Markdown>{msg.content ?? msg.preview ?? ""}</Markdown>
               </div>
             </div>
           ))

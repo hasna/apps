@@ -15,7 +15,6 @@ export interface NotificationPollStore {
     unread_only?: boolean;
     limit?: number;
     mark_read?: boolean;
-    include_content?: boolean;
   }): Promise<ChannelNotification[] | ChannelNotificationPage>;
   markChannelNotificationsRead(agent: string, messageIds: number[]): Promise<number>;
 }
@@ -37,8 +36,6 @@ export interface NotificationPollOptions {
   agents?: string[];
   interval_ms?: number;
   limit?: number;
-  /** Ask the store for full message bodies alongside the stripped preview. */
-  include_content?: boolean;
   on_notifications: (notifications: ChannelNotification[]) => void;
   /** Where poll failures are reported. Defaults to stderr. */
   on_poll_error?: PollHealthReporter;
@@ -53,7 +50,6 @@ export interface UnionReadOptions {
   unread_only?: boolean;
   limit?: number;
   mark_read?: boolean;
-  include_content?: boolean;
 }
 
 export interface UnionNotificationBatch {
@@ -115,7 +111,6 @@ export async function readChannelNotificationsUnion(
       agent,
       unread_only: opts.unread_only,
       limit: opts.limit,
-      include_content: opts.include_content,
     });
     const rows = Array.isArray(result) ? result : result.notifications;
     idsByAgent.push({ agent, messageIds: rows.map((row) => row.message_id) });
@@ -167,7 +162,6 @@ export function startNotificationPolling(opts: NotificationPollOptions): { stop:
         unread_only: true,
         limit: opts.limit ?? DEFAULT_LIMIT,
         mark_read: true,
-        include_content: opts.include_content,
       });
 
       const { notifications } = batch;

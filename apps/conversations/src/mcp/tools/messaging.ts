@@ -13,7 +13,7 @@ import { getStore } from "../../lib/store/index.js";
 // Reads/writes route through getStore(): ApiStore when HASNA_CONVERSATIONS_API_URL
 // + _API_KEY are set (self_hosted/cloud), else LocalStore.
 import { identityFor } from "../identity.js";
-import { compactQueriedMessages, compactQueriedSearchMessages, compactWindowedSessions, jsonText, resolveMcpWindow } from "../compact.js";
+import { compactPreviewPage, compactWindowedSessions, jsonText, resolveMcpPageOptions } from "../compact.js";
 import { resolveReadWindow, takeWindow } from "../../lib/message-window.js";
 import { PINNED_LIST_ORDER, describeReadMessagesOrder } from "../../lib/list-order.js";
 import { normalizeChannelName } from "../../lib/channel-names.js";
@@ -118,8 +118,13 @@ export function registerMessagingTools(
   });
 
   registerMcpTool(server, "read_messages", {
-    description: "Read DMs with optional filters.",
+    description:
+      "Peek at DMs with optional filters. NON-MUTATING: reading does not mark anything read. "
+      + "Pass mark_read:true to acknowledge exactly the messages this call returns.",
     inputSchema: {
+      max_bytes: z.coerce.number().optional().describe("Cap the response envelope in bytes"),
+      preview_bytes: z.coerce.number().optional().describe("Cap each message preview in bytes"),
+      timeout_ms: z.coerce.number().optional().describe("Bound the collection read"),
       session_id: z.string().optional(),
       from: z.string().optional(),
       to: z.string().optional(),
@@ -128,7 +133,7 @@ export function registerMessagingTools(
       since: z.string().optional(),
       limit: z.coerce.number().optional(),
       unread_only: z.coerce.boolean().optional(),
-      mark_read: z.coerce.boolean().optional(),
+      mark_read: z.coerce.boolean().optional().describe("Acknowledge exactly the ids this call returns (default false — reading is a peek)"),
       max_content_length: z.coerce.number().optional().describe("Truncate each message content to N chars (adds truncated:true flag)"),
       threads_only: z.coerce.boolean().optional().describe("Only return root messages (reply_to IS NULL) — hides thread replies"),
       include_reply_counts: z.coerce.boolean().optional().describe("Include reply_count on each message (adds one extra query)"),
@@ -140,29 +145,42 @@ export function registerMessagingTools(
     },
   }, async (args: Record<string, any>) => {
     const agent = resolveIdentity(args.from);
-    const window = resolveMcpWindow(args);
     const verbose = args.verbose === true;
-    const query = {
-      ...args,
-      limit: verbose ? args.limit : window.limit + 1,
-      offset: verbose ? (args.offset ?? args.cursor) : window.offset,
-      project_id: args.project_id ?? (await resolveProjectId(undefined, agent)),
-    };
-    const messages = await await getStore().readMessages(query);
-    // A recency window arrives newest-anchored but chronological, so the page is
-    // the tail of the over-fetched rows (todos 2c25973b).
-    const newestWindow = resolveReadWindow(query).newestWindow;
+    const projectId = args.project_id ?? (await resolveProjectId(undefined, agent));
 
-    if (args.mark_read !== false && messages.length > 0) {
-      const visible = verbose ? messages : takeWindow(messages, window.limit, newestWindow);
-      await await getStore().markReadByIds(visible.map((m) => m.id), agent);
+    if (verbose) {
+      const messages = await getStore().readMessages({
+        ...args,
+        offset: args.offset ?? args.cursor,
+        project_id: projectId,
+      });
+      // Even the legacy verbose shape must not acknowledge on a bare read.
+      if (args.mark_read === true && messages.length > 0) {
+        await getStore().markReadByIds(messages.map((m) => m.id), agent);
+      }
+      return {
+        content: [{
+          type: "text",
+          text: jsonText({ messages, count: messages.length, offset: args.offset ?? args.cursor ?? 0, compact: false }),
+        }],
+      };
     }
 
-    const payload = verbose
-      ? { messages, count: messages.length, offset: args.offset ?? args.cursor ?? 0, compact: false }
-      : compactQueriedMessages(messages, args, describeReadMessagesOrder(args), { newestWindow });
+    // The store page is authoritative for every bound, including whether rows
+    // were dropped under the byte cap. Nothing here re-derives has_more.
+    const page = await getStore().readMessagePreviews({
+      ...args,
+      ...resolveMcpPageOptions(args),
+      project_id: projectId,
+    });
+
+    // Acknowledgement is opt-in and is restricted to the ids this page returned.
+    if (args.mark_read === true && page.messages.length > 0) {
+      await getStore().markReadByIds(page.messages.map((m) => m.id), agent);
+    }
+
     return {
-      content: [{ type: "text", text: jsonText(payload) }],
+      content: [{ type: "text", text: jsonText(compactPreviewPage(page, describeReadMessagesOrder(args))) }],
     };
   });
 
@@ -378,23 +396,33 @@ export function registerMessagingTools(
     },
   }, async (args: Record<string, any>) => {
     const { query, channel, from, to, since, until, sort } = args;
-    const window = resolveMcpWindow(args);
     const verbose = args.verbose === true;
-    const results = await await getStore().searchMessages({
-      query,
-      channel,
-      from,
-      to,
-      since,
-      until,
-      sort,
-      limit: verbose ? args.limit : window.limit + 1,
-      offset: verbose ? args.cursor : window.offset,
-    });
-
     const payload = verbose
-      ? { results, count: results.length, query, compact: false }
-      : compactQueriedSearchMessages(results, args);
+      ? await await getStore().searchMessages({
+          query,
+          channel,
+          from,
+          to,
+          since,
+          until,
+          sort,
+          limit: args.limit,
+          offset: args.cursor,
+        }).then((results) => ({ results, count: results.length, query, compact: false }))
+      : compactPreviewPage(await await getStore().searchMessagePreviews({
+          query,
+          channel,
+          from,
+          to,
+          since,
+          until,
+          sort,
+          ...resolveMcpPageOptions(args),
+        }), getStore().describeListOrder("search", { sort }), {
+          key: "results",
+          query,
+          hint: "Preview page. Use get_message with an id for one full message; page with cursor until has_more is false.",
+        });
     return {
       content: [{ type: "text", text: jsonText(payload) }],
     };
@@ -570,19 +598,19 @@ export function registerMessagingTools(
     },
   }, async (args: Record<string, any>) => {
     const { channel, session_id } = args;
-    const window = resolveMcpWindow(args);
     const verbose = args.verbose === true;
-    const messages = await await getStore().getPinnedMessages({
-      channel,
-      session_id,
-      limit: verbose ? args.limit : window.limit + 1,
-      offset: verbose ? args.cursor : window.offset,
-    });
-
-    // `get_pinned_messages` queries getPinnedMessages(), which orders by
-    // pinned_at DESC — a different FIELD and a different DIRECTION from a
-    // message read. Disclosing the message descriptor here was wrong in both.
-    const payload = verbose ? messages : compactQueriedMessages(messages, args, PINNED_LIST_ORDER);
+    const payload = verbose
+      ? await await getStore().getPinnedMessages({
+          channel,
+          session_id,
+          limit: args.limit,
+          offset: args.cursor,
+        })
+      : compactPreviewPage(await await getStore().readPinnedMessagePreviews({
+          channel,
+          session_id,
+          ...resolveMcpPageOptions(args),
+        }), PINNED_LIST_ORDER);
     return {
       content: [{ type: "text", text: jsonText(payload) }],
     };

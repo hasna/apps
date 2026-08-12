@@ -7,6 +7,7 @@
 
 import { getStore, type ConversationsStore } from "./store/index.js";
 import { createPollHealth, type PollHealthReporter } from "./poll-health.js";
+import { readMessages as readLocalMessages } from "./messages.js";
 import type { Message } from "../types.js";
 
 export interface PollOptions {
@@ -69,18 +70,30 @@ export function startPolling(opts: PollOptions): PollHandle {
     resolveReady = resolve;
   });
 
+  const readMessages =
+    (args: {
+      session_id?: string;
+      to?: string;
+      channel?: string;
+      since_id?: number;
+      order?: "asc" | "desc";
+      limit?: number;
+    }): Promise<Message[]> =>
+      store.transport === "local" && !opts.store
+        ? Promise.resolve(readLocalMessages(args))
+        : store.readMessages(args);
+
   const ensureSeeded = (): Promise<void> => {
     if (seeded) return Promise.resolve();
     if (seedAttempt) return seedAttempt;
 
-    seedAttempt = store
-      .readMessages({
-        session_id: opts.session_id,
-        to: opts.to_agent,
-        channel: opts.channel,
-        order: "desc",
-        limit: 1,
-      })
+    seedAttempt = readMessages({
+      session_id: opts.session_id,
+      to: opts.to_agent,
+      channel: opts.channel,
+      order: "desc",
+      limit: 1,
+    })
       .then((latest) => {
         if (latest.length > 0 && latest[0].id > lastSeenId) lastSeenId = latest[0].id;
         seeded = true;
@@ -109,7 +122,7 @@ export function startPolling(opts: PollOptions): PollHandle {
       await ensureSeeded();
       if (stopped || !seeded) return;
 
-      const messages = await store.readMessages({
+      const messages = await readMessages({
         session_id: opts.session_id,
         to: opts.to_agent,
         channel: opts.channel,

@@ -232,4 +232,25 @@ export function packMessagePreviewPage(
   return result;
 }
 
-export const RESTRICTED_COLLECTION_SQL_PREDICATE = `(lower(COALESCE(channel, '')) LIKE '%incident%' OR lower(COALESCE(channel, '')) LIKE '%security%' OR lower(COALESCE(to_agent, '')) LIKE '%incident%' OR lower(COALESCE(to_agent, '')) LIKE '%security%' OR lower(COALESCE(session_id, '')) LIKE '%incident%' OR lower(COALESCE(session_id, '')) LIKE '%security%')`;
+export function restrictedCollectionSqlPredicate(alias = ""): string {
+  const c = alias ? `${alias}.` : "";
+  return `(lower(COALESCE(${c}channel, '')) LIKE '%incident%' OR lower(COALESCE(${c}channel, '')) LIKE '%security%' OR lower(COALESCE(${c}to_agent, '')) LIKE '%incident%' OR lower(COALESCE(${c}to_agent, '')) LIKE '%security%' OR lower(COALESCE(${c}session_id, '')) LIKE '%incident%' OR lower(COALESCE(${c}session_id, '')) LIKE '%security%')`;
+}
+
+export const RESTRICTED_COLLECTION_SQL_PREDICATE = restrictedCollectionSqlPredicate();
+
+/**
+ * The bounded `preview_source` column every DERIVED read must select instead of
+ * `content`.
+ *
+ * Summary and topic extraction are derived reads: they never show a body, so it
+ * is easy to assume they need not bound one. They do. A weighted topic list is
+ * the body sampled — a term only appears because it appeared in a message — so
+ * running the extractor over a restricted row leaks that row, and running it
+ * over an unbounded body lets content nobody would ever page to steer the
+ * output. Restricted rows yield the empty string here and contribute nothing.
+ */
+export function boundedPreviewSourceSql(alias = ""): string {
+  const c = alias ? `${alias}.` : "";
+  return `CASE WHEN ${restrictedCollectionSqlPredicate(alias)} THEN '' ELSE substr(${c}content, 1, ${COLLECTION_PREVIEW_SCAN_CHARS}) END AS preview_source`;
+}

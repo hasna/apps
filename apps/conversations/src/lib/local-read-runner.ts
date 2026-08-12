@@ -10,6 +10,7 @@ export type LocalReadOperation =
   | "getUnreadBlockerPreviews"
   | "readMentionPreviews"
   | "getMessagesForAgent"
+  | "readPinnedMessagePreviews"
   | "getPinnedMessages"
   | "readChannelNotifications"
   | "createMessageExport";

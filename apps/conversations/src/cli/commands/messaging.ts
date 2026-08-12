@@ -273,31 +273,41 @@ export function registerMessagingCommands(program: Command): void {
         offset: opts.json ? opts.cursor : window.offset,
         unread_only: opts.unread || opts.unreadOnly,
       };
-      const messages = await getStore().readMessages(query);
-      const page = opts.json
-        ? { items: messages, hasMore: false, nextCursor: null, count: messages.length }
-        : pageFromQuery(messages, window, { newestWindow: resolveReadWindow(query).newestWindow });
-
-      if (opts.markRead) {
-        const reader = resolveIdentity(opts.to);
-        const ids = page.items.filter((m) => !m.read_at).map((m) => m.id);
-        if (ids.length > 0) await await getStore().markReadByIds(ids, reader);
-      }
-
-      if (messages.length === 0) {
-        discloseEmptyResult({
-          channel: opts.channel,
-          sender: senderFilter.sender,
-          to: opts.to,
-          session: opts.session,
-          since: opts.since,
-        }, { senderFlag: senderFilter.flag });
-      }
-
       if (opts.json) {
-        printJson(messages);
-        warnIfPageFull(messages.length, query.limit);
+        const page = await getStore().readMessagePreviews(query);
+        if (opts.markRead) {
+          const reader = resolveIdentity(opts.to);
+          const ids = page.messages.filter((message) => message.unread).map((message) => message.id);
+          if (ids.length > 0) await await getStore().markReadByIds(ids, reader);
+        }
+        if (page.messages.length === 0) {
+          discloseEmptyResult({
+            channel: opts.channel,
+            sender: senderFilter.sender,
+            to: opts.to,
+            session: opts.session,
+            since: opts.since,
+          }, { senderFlag: senderFilter.flag });
+        }
+        printJson(page);
+        warnIfPageFull(page.count + page.skipped_count, query.limit);
       } else {
+        const messages = await getStore().readMessages(query);
+        const page = pageFromQuery(messages, window, { newestWindow: resolveReadWindow(query).newestWindow });
+        if (opts.markRead) {
+          const reader = resolveIdentity(opts.to);
+          const ids = page.items.filter((message) => !message.read_at).map((message) => message.id);
+          if (ids.length > 0) await await getStore().markReadByIds(ids, reader);
+        }
+        if (messages.length === 0) {
+          discloseEmptyResult({
+            channel: opts.channel,
+            sender: senderFilter.sender,
+            to: opts.to,
+            session: opts.session,
+            since: opts.since,
+          }, { senderFlag: senderFilter.flag });
+        }
         if (messages.length === 0) {
           printLine(chalk.dim("No messages found."));
         } else {
@@ -901,18 +911,22 @@ used for — auditing a sender or a channel, which is an ABSENCE claim.
     .option("-j, --json", "Output as JSON")
     .action(async (opts) => {
       const window = getCliWindow({ limit: opts.limit, cursor: opts.cursor });
-      const messages = await await getStore().getPinnedMessages({
-        channel: opts.channel,
-        session_id: opts.session,
-        limit: opts.json ? opts.limit : queryLimitFor(window),
-        offset: opts.json ? opts.cursor : window.offset,
-      });
-      const page = opts.json
-        ? { items: messages, count: messages.length, total: messages.length, hasMore: false, nextCursor: null }
-        : pageFromQuery(messages, window);
       if (opts.json) {
-        printJson(messages);
+        const page = await await getStore().readPinnedMessagePreviews({
+          channel: opts.channel,
+          session_id: opts.session,
+          limit: opts.limit,
+          offset: opts.cursor,
+        });
+        printJson(page);
       } else {
+        const messages = await await getStore().getPinnedMessages({
+          channel: opts.channel,
+          session_id: opts.session,
+          limit: queryLimitFor(window),
+          offset: window.offset,
+        });
+        const page = pageFromQuery(messages, window);
         if (messages.length === 0) {
           printLine(chalk.dim("No pinned messages."));
         } else {
@@ -1030,8 +1044,7 @@ used for — auditing a sender or a channel, which is an ABSENCE claim.
     .option("--channel <name>", "Watch a specific channel")
     .option("--all", "Watch DMs and all subscribed channels")
     .option("--interval <ms>", "Poll interval in milliseconds", parseInt)
-    .option("--verbose", "Show full message bodies")
-    .option("--full-content", "Render full channel message bodies instead of the stripped preview")
+    .option("--verbose", "Show full DM bodies (channel notifications stay preview-only)")
     .action(async (opts) => {
       // A seat answers to more than one name and the queues are disjoint. Reads
       // union across every identity; identities[0] is primary and is the ONLY
@@ -1050,10 +1063,6 @@ used for — auditing a sender or a channel, which is an ABSENCE claim.
 
       const interval = Number.isFinite(opts.interval) && opts.interval > 0 ? opts.interval : 1000;
       const cols = Math.min(process.stdout.columns || 80, 100);
-      // `--verbose` is documented as "show full message bodies" and has only
-      // ever applied to DMs; honouring it for channels too is that promise
-      // being kept, not a new default. Absent both flags, nothing changes.
-      const wantFullContent = !!(opts.fullContent || opts.verbose);
 
       // Resolve subscribed channels across every identity when --all is used
       let agentChannels: string[] = [];
@@ -1130,15 +1139,11 @@ used for — auditing a sender or a channel, which is an ABSENCE claim.
         printLine(`  ${sender}  ${chalk.magenta(`#${notification.channel}`)}  ${time}${priority} ${chalk.dim(`[#${notification.message_id}]`)}`);
 
         // The preview strips `[*#`~_>-]`, so agent names, `repo#pr` refs and
-        // branch names all arrive with their separators replaced by spaces.
-        // With full content requested we print the body as stored.
-        if (notification.content !== undefined) {
-          const rendered = renderContentLocal(notification.content) as string;
-          printLine(rendered.split("\n").map((l: string) => "    " + l).join("\n"));
-        } else {
-          printLine(`    ${notification.preview}`);
-          printLine(chalk.dim(`    Preview only. Inspect with: conversations show ${notification.message_id}`));
-        }
+        // branch names all arrive with their separators replaced by spaces. That
+        // is unrecoverable HERE by design — the continuation line names the
+        // exact-id route that does recover it, one message at a time.
+        printLine(`    ${notification.preview}`);
+        printLine(chalk.dim(`    Preview only. Inspect with: conversations show ${notification.message_id}`));
         printLine(chalk.dim("    " + "·".repeat(Math.min(cols - 8, 60))));
         printLine("");
       };
@@ -1233,7 +1238,6 @@ used for — auditing a sender or a channel, which is an ABSENCE claim.
           agent,
           agents: identities,
           interval_ms: interval,
-          include_content: wantFullContent,
           on_notifications: onNewNotifications,
         }));
       }

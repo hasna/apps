@@ -11,13 +11,13 @@ import { SendDialog } from "@/components/send-dialog";
 import { HelpPage } from "@/components/help-page";
 import { AgentsPage } from "@/components/agents-page";
 import { Button } from "@/components/ui/button";
-import type { Message, Channel, Project, DashboardStatus } from "@/types";
+import type { MessagePage, Channel, Project, DashboardStatus } from "@/types";
 
 type Page = "dashboard" | "messages" | "channels" | "projects" | "agents" | "help";
 
 export function App() {
   const [status, setStatus] = React.useState<DashboardStatus | null>(null);
-  const [messages, setMessages] = React.useState<Message[]>([]);
+  const [messagePage, setMessagePage] = React.useState<MessagePage | null>(null);
   const [channels, setChannels] = React.useState<Channel[]>([]);
   const [projects, setProjects] = React.useState<Project[]>([]);
   const [loading, setLoading] = React.useState(true);
@@ -27,7 +27,7 @@ export function App() {
   const [chatSession, setChatSession] = React.useState<string | undefined>();
   const [chatTitle, setChatTitle] = React.useState("");
   const [searchQuery, setSearchQuery] = React.useState("");
-  const [searchResults, setSearchResults] = React.useState<Message[] | null>(null);
+  const [searchResults, setSearchResults] = React.useState<MessagePage | null>(null);
   const [selectedChannel, setSelectedChannel] = React.useState<string | null>(null);
   const [messageLimit, setMessageLimit] = React.useState(50);
   const [toast, setToast] = React.useState<{ message: string; type: "success" | "error" } | null>(null);
@@ -58,20 +58,22 @@ export function App() {
     try {
       const [statusRes, messagesRes, channelsRes, projectsRes, allMsgsRes] = await Promise.all([
         fetchJson<DashboardStatus>("/api/status"),
-        fetchJson<Message[]>(`/api/messages?limit=${messageLimit}`),
+        fetchJson<MessagePage>(`/api/messages?limit=${messageLimit}`),
         fetchJson<Channel[]>("/api/channels"),
         fetchJson<Project[]>("/api/projects"),
-        fetchJson<Message[]>("/api/messages?limit=500"),
+        fetchJson<MessagePage>("/api/messages?limit=500"),
       ]);
       setStatus(statusRes);
-      // Filter to DMs only for the messages page
-      setMessages(messagesRes.filter((m) => !m.channel));
+      setMessagePage({
+        ...messagesRes,
+        messages: messagesRes.messages.filter((m) => !m.channel),
+      });
       setChannels(channelsRes);
       setProjects(projectsRes);
       // Compute unread counts per channel
       const counts: Record<string, number> = {};
-      for (const m of allMsgsRes) {
-        if (m.channel && !m.read_at) {
+      for (const m of allMsgsRes.messages) {
+        if (m.channel && (m.unread ?? !m.read_at)) {
           counts[m.channel] = (counts[m.channel] || 0) + 1;
         }
       }
@@ -90,12 +92,16 @@ export function App() {
     try {
       const res = await fetch(`/api/messages/search?q=${encodeURIComponent(query)}&limit=50`);
       if (res.ok) {
-        const data = await res.json() as Message[];
-        // Filter to DMs only
-        setSearchResults(data.filter((m) => !m.channel));
+        const data = await res.json() as MessagePage;
+        setSearchResults({
+          ...data,
+          messages: data.messages.filter((m) => !m.channel),
+        });
       }
     } catch { setSearchResults(null); }
   }, []);
+
+  const visibleMessages = searchResults?.messages ?? messagePage?.messages ?? [];
 
   const openChat = React.useCallback((opts: { sessionId?: string; title: string }) => {
     setChatSession(opts.sessionId);
@@ -188,10 +194,10 @@ export function App() {
               )}
             </div>
             <MessagesTable
-              messages={searchResults ?? messages}
+              messages={visibleMessages}
               onSelectMessage={(msg) => openChat({ sessionId: msg.session_id, title: `${msg.from_agent} ↔ ${msg.to_agent}` })}
             />
-            {!searchResults && messages.length >= messageLimit && (
+            {!searchResults && messagePage?.has_more && (
               <div className="flex justify-center pt-2">
                 <Button variant="outline" size="sm" onClick={() => setMessageLimit((prev) => prev + 50)}>
                   Load more

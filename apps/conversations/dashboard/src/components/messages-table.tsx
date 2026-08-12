@@ -65,6 +65,9 @@ export function MessagesTable({ messages, onSelectMessage }: MessagesTableProps)
     );
   }
 
+  const messageText = (message: Message) => message.content ?? message.preview ?? "";
+  const unread = (message: Message) => message.unread ?? !message.read_at;
+
   return (
     <div className="rounded-xl border">
       <Table>
@@ -101,14 +104,14 @@ export function MessagesTable({ messages, onSelectMessage }: MessagesTableProps)
               </TableCell>
               <TableCell className="max-w-xs">
                 <div className="line-clamp-2">
-                  <Markdown>{msg.content}</Markdown>
+                  <Markdown>{messageText(msg)}</Markdown>
                 </div>
               </TableCell>
               <TableCell>
                 <PriorityBadge priority={msg.priority} />
               </TableCell>
               <TableCell>
-                {msg.read_at ? (
+                {!unread(msg) ? (
                   <Badge
                     variant="outline"
                     className="border-green-300 text-green-700 dark:border-green-800 dark:text-green-400"

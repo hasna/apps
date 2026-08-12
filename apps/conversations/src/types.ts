@@ -143,17 +143,23 @@ export interface ChannelNotification {
   preview: string;
   unread: boolean;
   has_attachments: boolean;
-  /**
-   * The full message body, redacted on the same terms as `preview`, and present
-   * ONLY when the caller passed `include_content`.
-   *
-   * `preview` strips `[*#`~_>-]` and caps the result, which destroys every
-   * identifier a monitor acts on — agent names, `repo#pr` references and branch
-   * names all lose their separators. This field is the opt-in escape hatch;
-   * `preview` is unchanged for every existing consumer.
-   */
-  content?: string;
 }
+
+/*
+ * There is deliberately no `content` field on ChannelNotification.
+ *
+ * One used to exist, populated when a caller passed `include_content`, and it
+ * turned every collection read into a bulk body export: one request, N whole
+ * messages, on a surface whose entire purpose is to say "something happened"
+ * without saying what.
+ *
+ * The cost it was added to fix is real — `preview` strips `[*#`~_>-]` and caps
+ * the result, so agent names, `repo#pr` references and branch names all arrive
+ * with their separators gone, and an identifier is genuinely unrecoverable from
+ * a notification. The remedy is `getMessageById` / `conversations show <id>`:
+ * one message per request, against an id the caller already holds, rather than
+ * a flag that widens a whole page.
+ */
 
 export interface ChannelNotificationPage {
   notifications: ChannelNotification[];
