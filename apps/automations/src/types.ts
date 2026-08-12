@@ -278,3 +278,27 @@ export interface AutomationRuntimeBinding {
   handoff: "claim-queue" | "webhook" | "sdk";
   metadata?: JsonObject;
 }
+
+/**
+ * A typed action receipt is deliberately separate from the queue status.  A
+ * delivery may have persisted some sink receipts while still requiring a
+ * retry or operator attention; callers must not collapse that state into a
+ * successful run.
+ */
+export type TypedActionReceiptStatus = "succeeded" | "partial" | "failed";
+
+export interface TypedActionDeliveryReceipt {
+  sink: string;
+  status: "succeeded" | "failed";
+  receipt?: JsonObject;
+  error?: ActionError;
+}
+
+export interface TypedActionExecutionResult {
+  status?: TypedActionReceiptStatus;
+  summary?: string;
+  output?: JsonValue;
+  receipts?: TypedActionDeliveryReceipt[];
+  metadata?: JsonObject;
+  error?: ActionError;
+}

@@ -67,6 +67,7 @@ describe("automations CLI", () => {
     expect(help.stdout).toContain("queue approve <action-id>");
     expect(help.stdout).toContain("webhooks rotate-secret <id-or-path>");
     expect(help.stdout).toContain("webhooks event <id-or-path>");
+    expect(help.stdout).toContain("run <slug>@<version>");
 
     const webhooksHelp = await runCli(["webhooks", "--help"]);
     expect(webhooksHelp.exitCode).toBe(0);
@@ -90,6 +91,33 @@ describe("automations CLI", () => {
     expect(JSON.parse(example.stdout)).toMatchObject({
       id: "tickets.escalate-critical",
       triggers: [{ kind: "event" }],
+    });
+  });
+
+  test("runs an automation by version with detach and refuses unregistered actions", async () => {
+    const specPath = join(dataDir, "typed-run.json");
+    writeFileSync(specPath, JSON.stringify({
+      schemaVersion: "1.0",
+      id: "typed.worker.demo",
+      name: "Typed worker demo",
+      version: "1.0.0",
+      triggers: [{ kind: "manual" }],
+      actions: [{ id: "step-1", actionId: "typed.missing", manifestVersion: "1.0.0" }],
+    }, null, 2));
+
+    const create = await runCli(["create", specPath]);
+    expect(create.exitCode).toBe(0);
+
+    const detached = await runCli(["run", "typed.worker.demo@1.0.0", "--detach"]);
+    expect(detached.exitCode).toBe(0);
+    expect(JSON.parse(detached.stdout)).toMatchObject({ status: "enqueued", version: "1.0.0" });
+
+    const executed = await runCli(["run", "typed.worker.demo@1.0.0"]);
+    expect(executed.exitCode).toBe(0);
+    expect(JSON.parse(executed.stdout)).toMatchObject({
+      status: "failed",
+      run: { status: "failed" },
+      actions: [{ error: { code: "TYPED_ACTION_NOT_REGISTERED" } }],
     });
   });
 
