@@ -842,6 +842,9 @@ export class AutomationsStore {
     if (replayOnlySinks.length === 0) {
       throw new Error(`typed partial receipt has no failed sinks to replay: ${id}`);
     }
+    const replayRootActionId = typeof source.metadata?.partialReplayRootActionId === "string"
+      ? source.metadata.partialReplayRootActionId
+      : id;
     const replayActionId = `${id}:partial-replay`;
     if (this.db.query("SELECT id FROM automation_actions WHERE id = $id").get({ $id: replayActionId })) {
       return this.requireQueuedAction(replayActionId);
@@ -868,6 +871,7 @@ export class AutomationsStore {
         availableAt: options.now,
         metadata: {
           partialReplayOf: id,
+          partialReplayRootActionId: replayRootActionId,
           replayOnlySinks,
           ...(options.requestedBy ? { replayRequestedBy: options.requestedBy } : {}),
           ...(options.reason ? { replayReason: options.reason } : {}),

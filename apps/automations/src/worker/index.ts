@@ -37,6 +37,7 @@ export interface TypedActionContext {
   replayLineage?: {
     sourceActionId: string;
     replayActionId: string;
+    rootActionId: string;
   };
   actor?: ActorRef;
   signal: AbortSignal;
@@ -225,6 +226,12 @@ export class TypedActionWorker {
         if (!definition) throw typedActionError("TYPED_ACTION_NOT_REGISTERED", `typed action is not registered: ${action.actionId}@${action.invocation.manifestVersion ?? "1.0.0"}`);
         const priorReceipts = deliveryReceipts(action);
         const replayOnlySinks = replaySinks(action);
+        const replaySourceActionId = typeof action.metadata?.partialReplayOf === "string"
+          ? action.metadata.partialReplayOf
+          : undefined;
+        const replayRootActionId = typeof action.metadata?.partialReplayRootActionId === "string"
+          ? action.metadata.partialReplayRootActionId
+          : replaySourceActionId;
         const context: TypedActionContext = {
           action,
           automation,
@@ -237,10 +244,11 @@ export class TypedActionWorker {
           ),
           priorReceipts,
           replayOnlySinks,
-          replayLineage: typeof action.metadata?.partialReplayOf === "string"
+          replayLineage: replaySourceActionId
             ? {
-              sourceActionId: action.metadata.partialReplayOf,
+              sourceActionId: replaySourceActionId,
               replayActionId: action.id,
+              rootActionId: replayRootActionId!,
             }
             : undefined,
           actor: options.actor ?? this.#authority.actor ?? action.invocation.actor,

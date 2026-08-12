@@ -257,6 +257,72 @@ describe("first-party automation templates", () => {
     }
   });
 
+  test("keeps one adapter idempotency identity across uncompensated replay generations", async () => {
+    const store = new AutomationsStore();
+    try {
+      let remainingProjectFailures = 2;
+      const liveBindings = new Set<string>();
+      const bindingByIdempotencyKey = new Map<string, string>();
+      const identityActionIds: string[] = [];
+      const adapters: SessionBootstrapAdapter = {
+        verifyExactScope: async () => ({ exact: true }),
+        createBinding: async (binding, _input, _scope, context) => {
+          if (binding === "identity") identityActionIds.push(context.actionId);
+          if (binding === "project" && remainingProjectFailures > 0) {
+            remainingProjectFailures -= 1;
+            throw new Error("project binding failed");
+          }
+          const key = `${context.actionId}:${binding}`;
+          let bindingId = bindingByIdempotencyKey.get(key);
+          if (!bindingId) {
+            bindingId = `${binding}-${bindingByIdempotencyKey.size + 1}`;
+            bindingByIdempotencyKey.set(key, bindingId);
+            liveBindings.add(bindingId);
+          }
+          return { bindingId, receipt: { binding, created: true } };
+        },
+        compensateBinding: async (binding, bindingId) => {
+          if (binding === "identity") throw new Error("identity compensation failed");
+          liveBindings.delete(bindingId);
+          for (const [key, value] of bindingByIdempotencyKey) {
+            if (value === bindingId) bindingByIdempotencyKey.delete(key);
+          }
+          return { receipt: { binding, bindingId, compensated: true } };
+        },
+      };
+      install(store, FIRST_PARTY_TEMPLATE_SLUGS.sessionBootstrap, {
+        identityId: "identity-1",
+        projectId: "project-1",
+        identity: { name: "agent" },
+        project: { slug: "automations" },
+        monitoring: { channels: ["announcements"] },
+        policy: { profile: "live-codewith" },
+      });
+      const actionWorker = worker(store, {
+        workLifecycle: noOpWorkAdapter(),
+        projectSnapshot: emptySnapshotAdapter(),
+        sessionBootstrap: adapters,
+      });
+
+      const first = await actionWorker.run(`${FIRST_PARTY_TEMPLATE_SLUGS.sessionBootstrap}@${FIRST_PARTY_TEMPLATE_VERSION}`);
+      expect(first.status).toBe("failed");
+      const second = await actionWorker.replayPartial(first.actions![0]!.id);
+      expect(second.status).toBe("failed");
+      const secondAction = second.actions!.find((action) => action.id.endsWith(":partial-replay"))!;
+      const third = await actionWorker.replayPartial(secondAction.id);
+
+      expect(third.status).toBe("succeeded");
+      expect(identityActionIds).toHaveLength(3);
+      expect(new Set(identityActionIds).size).toBe(1);
+      expect([...liveBindings].filter((bindingId) => bindingId.startsWith("identity-"))).toHaveLength(1);
+      expect(store.requireQueuedAction(secondAction.id).metadata?.partialReplayRootActionId).toBe(first.actions![0]!.id);
+      const thirdAction = third.actions!.find((action) => action.id.endsWith(":partial-replay:partial-replay"))!;
+      expect(thirdAction.metadata?.partialReplayRootActionId).toBe(first.actions![0]!.id);
+    } finally {
+      store.close();
+    }
+  });
+
   test("runtime preview declares all first-party effects and makes zero adapter calls", () => {
     const registry = createFirstPartyTemplateRegistry();
     for (const template of [

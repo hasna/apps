@@ -605,7 +605,7 @@ function selectedSinks<TSink extends string>(
 function firstPartyContext(context: TypedActionContext): FirstPartyAdapterContext {
   return {
     runId: context.run.id,
-    actionId: context.action.id,
+    actionId: context.replayLineage?.rootActionId ?? context.action.id,
     actorId: context.actor?.id,
     signal: context.signal,
   };
