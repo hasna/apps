@@ -19,9 +19,47 @@ function syntheticActionsEnvPreamble(expressions: string[], receipt: string): st
     .join("\n");
 }
 
+function assertRootReleaseTestPolicy(workflow: string): void {
+  const testStepStart = workflow.indexOf("      - name: Test\n");
+  const buildStepStart = workflow.indexOf("      - name: Build\n", testStepStart);
+  if (testStepStart < 0 || buildStepStart < 0) {
+    throw new Error("root release Test and Build steps must remain present and ordered");
+  }
+
+  const testStep = workflow.slice(testStepStart, buildStepStart);
+  if (!testStep.includes("run: bun test --timeout=30000")) {
+    throw new Error("root release Test must use the finite 30000ms scheduling budget");
+  }
+  if (testStep.includes("--retry")) {
+    throw new Error("root release Test must remain single-pass without retries");
+  }
+}
+
 describe("npm release workflow", () => {
   test("binds strict prepublish verification to the checked-out Actions commit", () => {
     expect(releaseWorkflow).toContain("HASNA_TODOS_EXPECTED_COMMIT: ${{ github.sha }}");
+  });
+
+  test("bounds full-suite scheduling contention without retrying release failures", () => {
+    expect(() => assertRootReleaseTestPolicy(releaseWorkflow)).not.toThrow();
+  });
+
+  test("rejects both Bun's inherited 5-second default and retry-based release gates", () => {
+    const inheritedDefault = releaseWorkflow.replace(
+      "run: bun test --timeout=30000",
+      "run: bun test",
+    );
+    expect(() => assertRootReleaseTestPolicy(inheritedDefault)).toThrow(
+      "root release Test must use the finite 30000ms scheduling budget",
+    );
+
+    const retrying = releaseWorkflow.replace(
+      "run: bun test --timeout=30000",
+      "run: bun test --timeout=30000 --retry=2",
+    );
+    expect(() => assertRootReleaseTestPolicy(retrying)).toThrow(
+      "root release Test must remain single-pass without retries",
+    );
   });
 
   test("requires an exact independent-agent GO before OIDC publish", () => {
@@ -73,7 +111,7 @@ describe("npm release workflow", () => {
     expect(releaseWorkflow).toContain("scripts/resolve-npm-release-package.ts");
     expect(releaseWorkflow).toContain("working-directory: ${{ steps.version.outputs.path }}");
     expect(releaseWorkflow).toContain("HASNA_TODOS_RELEASE_PACKAGE_PATH: ${{ steps.version.outputs.path }}");
-    expect(rootPackage.version).toBe("0.15.30");
+    expect(rootPackage.version).toBe("0.15.31");
     expect(companionPackage.version).toBe("0.1.2");
     expect(companionPackage.scripts["verify:release-review"]).toBe("bun run ../scripts/verify-npm-release-agent-review.ts");
     expect(companionPackage.scripts.prepublishOnly).toBe("bun run verify:release-review");
