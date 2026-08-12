@@ -35,7 +35,7 @@ type InboxRun = {
 
 type RunFixtures = {
   backfillMessages?: Array<Record<string, unknown>>;
-  messageEnvelope?: "compact" | "malformed";
+  messageEnvelope?: "compact" | "compact-preview" | "malformed";
   paginateBackfill?: boolean;
   seedMessages?: Array<Record<string, unknown>>;
   subscriptionsJson?: string;
@@ -69,6 +69,17 @@ emit_messages() {
     compact)
       jq -cn --argjson messages "$payload" \
         '{messages:$messages,count:($messages|length),compact:true,has_more:false,next_cursor:null}'
+      ;;
+    compact-preview)
+      jq -c '[.[]
+        | .preview = (.content // "")
+        | .preview_bytes = ((.content // "") | length)
+        | .content_bytes = ((.content // "") | length)
+        | .truncated = false
+        | .redacted = false
+        | del(.content, .message, .body)
+      ]' <<< "$payload" | jq -c --slurp \
+        '.[0] | {messages:.,count:length,limit:length,cursor:0,next_cursor:null,has_more:false,skipped_count:0,byte_length:0,max_bytes:100000,timeout_ms:1000,compact:true,detail_path:"messages/{id}"}'
       ;;
     malformed)
       printf '%s\n' '{"messages":{},"count":1,"compact":true}'
@@ -401,6 +412,35 @@ describe("inbox bounded cursor recovery", () => {
     expect(result.stdout).not.toContain("alias self message");
     expect(result.stdout).toContain("[BLOCKING] [dm] peer: peer blocker quoting");
     expect(await readCursor(stateDir)).toBe("5");
+  });
+
+  test("renders compact preview text and suppresses signed compact self traffic", async () => {
+    const harness = await createHarness();
+    const stateDir = join(harness.stateRoot, "seat");
+    await seedState(stateDir, "1");
+    const signature = "[inbox:seat:compact-preview]";
+    const signedSelf = {
+      ...message(2),
+      from_agent: "seat",
+      content: `compact self message ${signature}`,
+    };
+    const peer = {
+      ...message(3),
+      from_agent: "peer",
+      content: "compact peer message",
+    };
+
+    const result = runInbox(
+      harness,
+      ["check", "--as", "seat", "--limit", "3", "--no-todos"],
+      { messageEnvelope: "compact-preview", windowMessages: [signedSelf, peer] },
+      { INBOX_SIGNATURE: signature },
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).not.toContain("compact self message");
+    expect(result.stdout).toContain("peer: compact peer message");
+    expect(await readCursor(stateDir)).toBe("3");
   });
 
   test("backfills only the bounded skipped range before a later clean poll", async () => {
