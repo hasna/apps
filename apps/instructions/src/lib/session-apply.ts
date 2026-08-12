@@ -24,6 +24,10 @@ import {
   type SessionRenderPlan,
   type SessionSkippedSource,
 } from "./session-render.js";
+import {
+  detectCursorAuthorityConflicts,
+  observeCursorGlobalAuthorityAtPath,
+} from "./cursor-authority.js";
 
 export type SessionApplyAction = "create" | "update" | "delete" | "unchanged" | "conflict";
 
@@ -189,6 +193,7 @@ function applySessionRenderUnlocked(
   if (plan.blocked || !plan.writable) {
     throw new SessionApplyError(`Session render plan is blocked: ${plan.blockers.join("; ")}`);
   }
+  assertCursorAuthorityUnchanged(plan);
 
   const targetHome = assertSafeTargetHome(plan.targetHome);
   const files = [...plan.files, plan.manifestFile];
@@ -302,6 +307,26 @@ function applySessionRenderUnlocked(
     conflicts,
     drift,
   };
+}
+
+function assertCursorAuthorityUnchanged(plan: SessionRenderPlan): void {
+  if (plan.tool !== "cursor" || plan.targetKind === "blocked") return;
+
+  const planned = plan.authorityObservations[0];
+  if (!planned) {
+    throw new SessionApplyError("Cursor session render plan is missing its fixed global-authority observation.");
+  }
+
+  const current = observeCursorGlobalAuthorityAtPath(planned.path);
+  const conflicts = detectCursorAuthorityConflicts(current);
+  if (conflicts.length > 0) {
+    throw new SessionApplyError(
+      `Cursor fixed global authority changed after planning: ${conflicts.map((conflict) => conflict.reason).join("; ")}`,
+    );
+  }
+  if (JSON.stringify(current) !== JSON.stringify(planned)) {
+    throw new SessionApplyError("Cursor fixed global authority changed after planning; refusing to apply a stale render plan.");
+  }
 }
 
 function ensureSessionTargetHome(targetHome: string): void {

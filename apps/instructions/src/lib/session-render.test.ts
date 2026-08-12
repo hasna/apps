@@ -234,6 +234,7 @@ describe("session render planner", () => {
       tool: "cursor",
       profile: "account999",
       projectRoot,
+      cursorAuthorityHome: join(tmpRoot, "cursor-authority-home"),
       sources: [globalIdentity, agentIdentity],
     });
 
@@ -241,11 +242,62 @@ describe("session render planner", () => {
     expect(plan.targetKind).toBe("project-root");
     expect(plan.targetOwner.kind).toBe("project");
     expect(plan.blocked).toBe(false);
+    expect(plan.authorityObservations).toMatchObject([{
+      relativePath: ".cursor/rules/hasna-global.mdc",
+      status: "absent",
+    }]);
+    expect(plan.authorityConflicts).toEqual([]);
     expect(plan.files.map((file) => file.relativePath)).toEqual([
       ".cursor/rules/01-global-codewith.mdc",
       ".cursor/rules/02-agent-marcus.mdc",
     ]);
     expect(plan.files[0]?.path).toBe(join(projectRoot, ".cursor", "rules", "01-global-codewith.mdc"));
+  });
+
+  test("blocks Cursor project rules when fixed global authority is unmanaged", () => {
+    mkdirSync(join(tmpRoot, "home", ".cursor", "rules"), { recursive: true });
+    writeFileSync(
+      join(tmpRoot, "home", ".cursor", "rules", "hasna-global.mdc"),
+      "---\nalwaysApply: true\n---\n# Legacy global rule\n",
+    );
+
+    const plan = planSessionRender({
+      tool: "cursor",
+      profile: "account999",
+      projectRoot: join(tmpRoot, "repo"),
+      cursorAuthorityHome: join(tmpRoot, "home"),
+      sources: [globalIdentity],
+    });
+
+    expect(plan.blocked).toBe(true);
+    expect(plan.writable).toBe(false);
+    expect(plan.files).toEqual([]);
+    expect(plan.authorityObservations[0]).toMatchObject({
+      relativePath: ".cursor/rules/hasna-global.mdc",
+      status: "unmanaged",
+    });
+    expect(plan.authorityConflicts[0]).toMatchObject({
+      kind: "unknown-unmanaged-authority",
+      provenance: { detection: "unknown-content" },
+    });
+    expect(plan.manifest.authorityObservations).toEqual(plan.authorityObservations);
+    expect(plan.manifest.authorityConflicts).toEqual(plan.authorityConflicts);
+  });
+
+  test("keeps unrelated adapters independent of Cursor fixed global authority", () => {
+    mkdirSync(join(tmpRoot, "home", ".cursor", "rules"), { recursive: true });
+    writeFileSync(join(tmpRoot, "home", ".cursor", "rules", "hasna-global.mdc"), "# Legacy global rule\n");
+
+    const plan = planSessionRender({
+      tool: "claude",
+      profile: "account999",
+      targetHome: join(tmpRoot, "claude-target"),
+      sources: [globalIdentity],
+    });
+
+    expect(plan.blocked).toBe(false);
+    expect(plan.authorityObservations).toEqual([]);
+    expect(plan.authorityConflicts).toEqual([]);
   });
 
   test("plans Antigravity as project-owned .agents rules", () => {
@@ -315,6 +367,7 @@ describe("session render planner", () => {
       tool: "cursor",
       profile: "account999",
       targetHome: join(tmpRoot, "not-a-repo-root"),
+      cursorAuthorityHome: join(tmpRoot, "cursor-authority-home"),
       sources: [globalIdentity],
     });
 

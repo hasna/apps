@@ -178,6 +178,7 @@ describe("agent operating rules managed render integration", () => {
           profile: profileSlug,
           targetHome,
           projectRoot: renderer.tool === "cursor" ? targetHome : undefined,
+          ...(renderer.tool === "cursor" ? { cursorAuthorityHome: join(tmpRoot, "cursor-authority-home") } : {}),
           generatedAt: "2026-07-23T00:00:00.000Z",
           sources: selection.sources,
           skippedSources: selection.skippedSources,
@@ -256,6 +257,7 @@ describe("agent operating rules managed render integration", () => {
         profile: "account999",
         targetHome,
         projectRoot: renderer.tool === "cursor" ? targetHome : undefined,
+        ...(renderer.tool === "cursor" ? { cursorAuthorityHome: join(tmpRoot, "newer-cursor-authority-home") } : {}),
         generatedAt: "2026-07-27T00:00:00.000Z",
         sources: [sourceFromConfig(stored)],
       });

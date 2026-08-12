@@ -28,6 +28,12 @@ import {
 import { isRetiredOrUnsupportedConfigAgent } from "./config-agents.js";
 import { applyTransform } from "./transforms.js";
 import {
+  detectCursorAuthorityConflicts,
+  observeCursorGlobalAuthority,
+  type CursorAuthorityConflict,
+  type CursorAuthorityObservation,
+} from "./cursor-authority.js";
+import {
   CODEWITH_NATIVE_IMPORTS_ENV,
   SESSION_INSTRUCTION_LAYERS,
   SESSION_RENDER_INSTRUCTIONS_MANAGED_DIR,
@@ -229,6 +235,11 @@ export interface SessionRenderInput {
   projectRoot?: string;
   targetHome?: string;
   sessionId?: string;
+  /**
+   * Explicit Cursor authority home for isolated planners/tests. Production
+   * callers omit this and the detector resolves the current user home.
+   */
+  cursorAuthorityHome?: string;
   generatedAt?: string;
   codewithNativeImports?: boolean;
   allowEmptySources?: boolean;
@@ -257,6 +268,8 @@ export interface SessionRenderManifest {
   writable: boolean;
   blocked: boolean;
   blockers: string[];
+  authorityObservations: CursorAuthorityObservation[];
+  authorityConflicts: CursorAuthorityConflict[];
   generatedAt: string;
   env: Record<string, string>;
   sourceHash: string;
@@ -351,6 +364,8 @@ export interface SessionRenderPlan {
   writable: boolean;
   blocked: boolean;
   blockers: string[];
+  authorityObservations: CursorAuthorityObservation[];
+  authorityConflicts: CursorAuthorityConflict[];
   /**
    * Carries the caller's --allow-empty-sources choice from plan-build time into
    * apply time. Apply-time emptiness (a plan that deletes every previously
@@ -1779,7 +1794,21 @@ export function planSessionRender(input: SessionRenderInput): SessionRenderPlan 
   if (!input.profile.trim()) throw new Error("Session render profile is required.");
 
   const adapter = adapterFor(input);
-  const { targetHome, targetKind, blockers } = resolveRenderTarget(input);
+  const {
+    targetHome,
+    targetKind,
+    blockers: targetBlockers,
+  } = resolveRenderTarget(input);
+  const authorityObservations = input.tool === "cursor" && targetKind !== "blocked"
+    ? [observeCursorGlobalAuthority({ home: input.cursorAuthorityHome })]
+    : [];
+  const authorityConflicts = input.tool === "cursor" && targetKind !== "blocked"
+    ? detectCursorAuthorityConflicts(authorityObservations[0])
+    : [];
+  const blockers = [
+    ...targetBlockers,
+    ...authorityConflicts.map((conflict) => `${conflict.relativePath}: ${conflict.reason}`),
+  ];
   const targetOwner = resolveSessionTargetOwnership(input, { targetHome, targetKind });
   const blocked = blockers.length > 0;
   const allowEmptySources = input.allowEmptySources === true;
@@ -1844,6 +1873,8 @@ export function planSessionRender(input: SessionRenderInput): SessionRenderPlan 
     writable: !blocked,
     blocked,
     blockers,
+    authorityObservations,
+    authorityConflicts,
     generatedAt,
     env,
     sourceHash: fingerprint(projectContext
@@ -1941,6 +1972,8 @@ export function planSessionRender(input: SessionRenderInput): SessionRenderPlan 
     writable: !blocked,
     blocked,
     blockers,
+    authorityObservations,
+    authorityConflicts,
     allowEmptySources,
     env,
     files,

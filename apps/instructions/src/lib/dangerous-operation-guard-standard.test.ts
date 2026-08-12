@@ -118,6 +118,7 @@ describe("dangerous operation guard standard", () => {
       tool: "cursor",
       profile: "account999",
       projectRoot: "/tmp/repo",
+      cursorAuthorityHome: "/tmp/open-configs-dangerous-operation-cursor-authority",
       sources: [source],
     });
     expect(cursor.files[0]?.relativePath).toBe(".cursor/rules/01-dangerous-operation-guard-standard.mdc");
