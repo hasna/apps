@@ -461,7 +461,7 @@ describe("apps", () => {
       "remote-linux",
       { apply: true, yes: true, expectedPlanDigest: plan.planDigest },
       runner,
-    )).toThrow("owner/PATH collision");
+    )).toThrow(new RegExp(`owner/PATH collision:.*${managerBinDir}.*${shadowBinDir}`));
   });
 
   test("extracts the version token from a banner with trailing build metadata", () => {

@@ -223,6 +223,9 @@ function parseStepProbeOutput(step: SetupStep, stdout: string): { installed: boo
   if (!version.trim()) {
     throw new Error(`App probe ${step.id} returned malformed output: version must not be blank.`);
   }
+  if (collisionLines.length === 0 && (ownerLines.length > 0 || managerPathLines.length > 0 || activePathLines.length > 0)) {
+    throw new Error(`App probe ${step.id} returned malformed output: owner/PATH metadata requires collision=1.`);
+  }
   if (collisionLines.length > 0) {
     if (ownerLines.length !== 1 || ownerLines[0] !== "owner=bun"
       || managerPathLines.length !== 1 || activePathLines.length !== 1
