@@ -239,6 +239,22 @@ function channelMessage(id: number, channel: string): Record<string, unknown> {
 }
 
 describe("inbox bounded cursor recovery", () => {
+  test("runs a clean check through the top-level since JSON command", async () => {
+    const harness = await createHarness();
+    const stateDir = join(harness.stateRoot, "seat");
+    await seedState(stateDir, "0");
+
+    const result = runInbox(
+      harness,
+      ["check", "--as", "seat", "--limit", "3", "--no-todos"],
+    );
+
+    expect(result.exitCode, result.stderr).toBe(0);
+    expect(await readFile(harness.stubLog, "utf8")).toContain(
+      "conversations since 3m --limit 3 --json",
+    );
+  });
+
   test("does not advance the cursor past a constructed gap when backfill is unavailable", async () => {
     const harness = await createHarness();
     const stateDir = join(harness.stateRoot, "seat");

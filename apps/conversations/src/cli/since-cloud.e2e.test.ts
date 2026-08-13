@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { packMessagePreviewPage } from "../lib/message-previews.js";
 import { STORE_SELECTING_KEYS } from "../lib/store/isolated-test-env.js";
 
@@ -62,11 +62,23 @@ describe("top-level since cloud request (e2e)", () => {
     server?.stop(true);
   });
 
-  test("sends a timezone-bearing absolute ISO cutoff", async () => {
+  beforeEach(() => {
+    capturedSince = null;
+  });
+
+  test("sends a timezone-bearing absolute ISO cutoff in JSON mode", async () => {
     const result = await runCli(["since", "3m", "--limit", "1", "--json"], env);
 
     expect(result.exitCode, result.stderr).toBe(0);
     expect(JSON.parse(result.stdout)).toEqual([]);
+    expect(capturedSince).toMatch(TIMEZONE_BEARING_ISO);
+  });
+
+  test("sends a timezone-bearing absolute ISO cutoff in human mode", async () => {
+    const result = await runCli(["since", "3m", "--limit", "1"], env);
+
+    expect(result.exitCode, result.stderr).toBe(0);
+    expect(result.stdout).toContain("No activity in the last 3m.");
     expect(capturedSince).toMatch(TIMEZONE_BEARING_ISO);
   });
 });
