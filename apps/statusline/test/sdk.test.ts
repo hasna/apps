@@ -1,4 +1,8 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { loadConfig } from "../src/config";
 import {
   defaultConfig,
   disableSegments,
@@ -7,6 +11,10 @@ import {
   orderSegments,
   previewStatusline,
   renderStatusline,
+  requireKnownSegments,
+  resetStatuslineConfig,
+  sampleClaudeInput,
+  saveUpdatedConfig,
   setSeparator,
   statuslineVersion,
 } from "../src/index";
@@ -44,5 +52,43 @@ describe("SDK exports", () => {
   test("preview and version are importable", async () => {
     expect(statuslineVersion).toMatch(/^\d+\.\d+\.\d+/);
     expect(await previewStatusline({ separator: " · ", segments: ["model-context"] })).toBe("fable 5 [1m]");
+  });
+
+  test("requireKnownSegments throws for unknown ids", () => {
+    expect(() => requireKnownSegments(["not-a-segment"])).toThrow(/unknown segment\(s\): not-a-segment/);
+  });
+
+  test("setSeparator rejects empty string", () => {
+    expect(() => setSeparator("")).toThrow(/separator must be a non-empty string/);
+  });
+
+  test("orderSegments rejects empty array", () => {
+    expect(() => orderSegments([])).toThrow(/at least one segment id is required/);
+  });
+
+  test("resetStatuslineConfig returns defaults", () => {
+    expect(resetStatuslineConfig()).toEqual(defaultConfig());
+  });
+
+  test("saveUpdatedConfig persists to STATUSLINE_CONFIG", () => {
+    const dir = mkdtempSync(join(tmpdir(), "statusline-sdk-"));
+    const previous = process.env.STATUSLINE_CONFIG;
+    process.env.STATUSLINE_CONFIG = join(dir, "config.json");
+    try {
+      const result = setSeparator(" | ", defaultConfig());
+      saveUpdatedConfig(result);
+      expect(loadConfig().separator).toBe(" | ");
+      expect(JSON.parse(readFileSync(process.env.STATUSLINE_CONFIG, "utf8")).separator).toBe(" | ");
+    } finally {
+      if (previous === undefined) delete process.env.STATUSLINE_CONFIG;
+      else process.env.STATUSLINE_CONFIG = previous;
+    }
+  });
+
+  test("sampleClaudeInput provides preview payload", () => {
+    const input = sampleClaudeInput("/tmp/example");
+    expect(input.cwd).toBe("/tmp/example");
+    expect(input.model).toEqual({ id: "claude-fable-5[1m]", display_name: "Fable" });
+    expect(input.cost).toBeDefined();
   });
 });
