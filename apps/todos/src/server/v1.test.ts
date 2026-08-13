@@ -1628,6 +1628,62 @@ describe("/v1 task hierarchy and lock authorization", () => {
     });
   });
 
+  test("create preserves explicit created_by over a shared fleet principal", async () => {
+    principal = { agent: "fleet", scopes: ["todos:*"] };
+    const response = await request("/v1/tasks", "POST", {
+      title: "Explicit creator durability control",
+      agent_id: "hortensia-0813",
+      created_by: "hortensia-0813",
+    });
+
+    expect(response?.status).toBe(201);
+    const body = await response!.json() as { task: { id: string; agent_id: string | null; created_by: string | null } };
+    expect(body.task).toMatchObject({
+      agent_id: "hortensia-0813",
+      created_by: "hortensia-0813",
+    });
+    const readback = await request(`/v1/tasks/${body.task.id}`);
+    expect(readback?.status).toBe(200);
+    expect(await readback!.json()).toMatchObject({
+      task: {
+        agent_id: "hortensia-0813",
+        created_by: "hortensia-0813",
+      },
+    });
+  });
+
+  test("create refuses success when authoritative readback rewrites explicit created_by", async () => {
+    principal = { agent: "fleet", scopes: ["todos:*"] };
+    const mismatchStore: TodosStorageAdapter = {
+      ...store,
+      tasks: {
+        ...store.tasks,
+        get: async (id, context) => {
+          const task = await store.tasks.get(id, context);
+          return task ? { ...task, created_by: "fleet" } : null;
+        },
+      },
+    };
+    const response = await handleV1Request(
+      new Request("https://todos.example.test/v1/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: "Explicit creator durability",
+          agent_id: "hortensia-0813",
+          created_by: "hortensia-0813",
+        }),
+      }),
+      new URL("https://todos.example.test/v1/tasks"),
+      { ...dependencies, getStorageAdapter: () => mismatchStore },
+    );
+
+    expect(response?.status).toBe(500);
+    expect(await response!.json()).toMatchObject({
+      code: "TASK_CREATE_PERSISTENCE_UNVERIFIED",
+    });
+  });
+
   test("include_subtasks=true returns roots and descendants with an inclusive total", async () => {
     const parent = await store.tasks.create({ title: "parent" });
     const child = await store.tasks.create({ title: "child", parent_id: parent.id });
