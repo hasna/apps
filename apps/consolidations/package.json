@@ -1,7 +1,7 @@
 {
   "name": "@hasna/consolidations",
   "version": "0.1.0",
-  "description": "Group financial consolidation: pull each entity GL, normalize charts of accounts, translate multi-currency, run intercompany eliminations, produce consolidated P&L/BS/CF — CLI + MCP + serve over a Hasna-contract store.",
+  "description": "Group financial consolidation: pull each entity GL, normalize charts of accounts, translate multi-currency, run intercompany eliminations, produce consolidated P&L/BS/CF \u2014 CLI + MCP + serve over a Hasna-contract store.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -11,9 +11,19 @@
     "consolidations-serve": "dist/server/index.js"
   },
   "exports": {
-    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" }
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
   },
-  "files": ["dist", "hasna.contract.json", "openapi.json", "docker-compose.yml", "LICENSE", "README.md"],
+  "files": [
+    "dist",
+    "hasna.contract.json",
+    "openapi.json",
+    "docker-compose.yml",
+    "LICENSE",
+    "README.md"
+  ],
   "scripts": {
     "build": "bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external @modelcontextprotocol/sdk --external hono --external pg && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk --external pg && bun build src/server/index.ts --outdir dist/server --target bun --external hono --external pg && bun build src/index.ts --outdir dist --target bun --external pg && tsc --emitDeclarationOnly --outDir dist",
     "typecheck": "tsc --noEmit",
@@ -28,11 +38,21 @@
     "dev:serve": "bun run src/server/index.ts",
     "postinstall": "node -e \"try{const os=require('os'),fs=require('fs'),p=require('path');const b=p.join(os.homedir(),'.hasna','consolidations');for(const d of ['','config','data','exports','backups','logs','tmp']) fs.mkdirSync(p.join(b,d),{recursive:true});}catch(e){}\""
   },
-  "publishConfig": { "registry": "https://registry.npmjs.org", "access": "public" },
-  "repository": { "type": "git", "url": "git+https://github.com/hasna/consolidations.git" },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org",
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hasna/consolidations.git"
+  },
   "homepage": "https://github.com/hasna/consolidations#readme",
-  "bugs": { "url": "https://github.com/hasna/consolidations/issues" },
-  "engines": { "bun": ">=1.1.0" },
+  "bugs": {
+    "url": "https://github.com/hasna/consolidations/issues"
+  },
+  "engines": {
+    "bun": ">=1.1.0"
+  },
   "author": "Andrei Hasna <andrei@hasna.com>",
   "license": "Apache-2.0",
   "dependencies": {

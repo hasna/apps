@@ -11,7 +11,7 @@ demand — deterministic and auditable.
 > **Integrator v0 (§1a):** the upstream GL is read through a `src/adapters/`
 > read-adapter interface backed by **fixtures/mocks** for this build. v1 (behind
 > `HASNA_CONSOLIDATIONS_LIVE_UPSTREAM=1`) swaps fixtures for live
-> `iapp-accounting` / `@hasna/entities` calls. The app owns its normalized/derived
+> the live upstream GL (`@hasna/entities`) calls. The app owns its normalized/derived
 > tables (COA maps, FX rates, runs, statements, eliminations); upstream GL is
 > never persisted as source-of-truth.
 

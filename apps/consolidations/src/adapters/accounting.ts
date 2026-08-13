@@ -1,7 +1,7 @@
 import type { GlLine } from "../types/index.js";
 import { FIXTURE_ENTITY_RO, FIXTURE_ENTITY_US } from "./entities.js";
 
-// Read-adapter for the iapp-accounting GL / trial-balance source (§1a v0).
+// Read-adapter for the upstream accounting GL / trial-balance source (§1a v0).
 // MOCKED for the build: fixtures return per-entity, per-period trial balances in
 // each entity's functional currency. v1 swaps this for a live accounting adapter
 // behind HASNA_CONSOLIDATIONS_LIVE_UPSTREAM=1.
@@ -57,5 +57,5 @@ export class FixtureGlSource implements GlSource {
 
 /** The active GL source (fixture in v0). Provenance string recorded on imports. */
 export function glSource(): { source: GlSource; provenance: string } {
-  return { source: new FixtureGlSource(), provenance: "iapp-accounting:fixture" };
+  return { source: new FixtureGlSource(), provenance: "accounting-gl:fixture" };
 }

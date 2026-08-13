@@ -30,7 +30,7 @@ export interface GlImport {
   id: string;
   entity_id: string;
   period: string; // e.g. "2026-Q1" or "2026-03"
-  source: string; // adapter provenance, e.g. "iapp-accounting:fixture"
+  source: string; // adapter provenance, e.g. "accounting-gl:fixture"
   currency: string;
   status: GlImportStatus;
   lines: GlLine[];
