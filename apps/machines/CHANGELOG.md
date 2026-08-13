@@ -74,6 +74,14 @@ reported success about things it had not actually established.
   than reached by deleting a check. Physical classes are untouched: `dgx-spark`
   keeps `tailscale:join` and gets no absence item.
 
+## [0.2.21] - 2026-08-13
+
+### Fixed
+
+- Exact Bun package installs now pin `bun install -g name@version`, and the
+  version probe strips the first semver token from CLI banners and build
+  metadata before verifying the installed package version.
+
 ## [0.2.20] - 2026-08-10
 
 ### Fixed
