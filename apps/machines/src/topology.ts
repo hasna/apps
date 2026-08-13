@@ -662,6 +662,7 @@ function loadTailscalePeers(runner: TopologyCommandRunner, warnings: string[]): 
 function machineKeys(machine: MachineManifest): string[] {
   return [
     machine.id,
+    ...(machine.aliases ?? []),
     machine.hostname,
     machine.tailscaleName?.split(".")[0],
     machine.tailscaleName,
