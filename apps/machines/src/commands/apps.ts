@@ -88,7 +88,9 @@ function packageVersionProbeCommand(spec: DesiredPackage): string {
     `if output=$("$managerPath" --version 2>/dev/null); then`,
     "version=$(printf '%s\\n' \"$output\" | awk 'match($0, /[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?/) { print substr($0, RSTART, RLENGTH); exit }');",
     `activePath=$(command -v ${bin} 2>/dev/null || true);`,
-    `if [ -n "$version" ]; then if [ "$activePath" != "$managerPath" ] && [ -n "$activePath" ]; then printf 'installed=1\\nversion=%s\\nowner=bun\\nmanager_path=%s\\nactive_path=%s\\ncollision=1\\n' \"$version\" \"$managerPath\" \"$activePath\"; else printf 'installed=1\\nversion=%s\\n' \"$version\"; fi; else printf 'installed=0\\n'; fi;`,
+    `managerIdentity=$(readlink -f "$managerPath" 2>/dev/null || realpath "$managerPath" 2>/dev/null || printf '%s' "$managerPath");`,
+    `activeIdentity=$(if [ -n "$activePath" ]; then readlink -f "$activePath" 2>/dev/null || realpath "$activePath" 2>/dev/null || printf '%s' "$activePath"; fi);`,
+    `if [ -n "$version" ]; then if [ -n "$activePath" ] && [ "$activeIdentity" != "$managerIdentity" ]; then printf 'installed=1\\nversion=%s\\nowner=bun\\nmanager_path=%s\\nactive_path=%s\\ncollision=1\\n' \"$version\" \"$managerPath\" \"$activePath\"; else printf 'installed=1\\nversion=%s\\n' \"$version\"; fi; else printf 'installed=0\\n'; fi;`,
     "else printf 'installed=0\\n'; fi",
     "else printf 'installed=0\\n'; fi",
   ].join(" ");
