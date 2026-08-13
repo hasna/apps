@@ -74,6 +74,14 @@ reported success about things it had not actually established.
   than reached by deleting a check. Physical classes are untouched: `dgx-spark`
   keeps `tailscale:join` and gets no absence item.
 
+## [0.2.23] - 2026-08-13
+
+### Fixed
+
+- `apps apply` now compares canonical executable identity when verifying a
+  manager-owned Bun install, accepting symlink-equivalent PATH entries while
+  reporting a true owner/PATH collision explicitly.
+
 ## [0.2.22] - 2026-08-13
 
 ### Fixed
