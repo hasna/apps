@@ -646,16 +646,11 @@ export class CloudConfigStore implements ConfigStore {
     params.set("limit", String(normalized.limit));
     params.set("cursor", String(normalized.cursor));
     const qs = params.toString();
-    const { status, data } = await this.request<{
+    const { data } = await this.requestProfileRoute<{
       profile: Profile & { configs?: Config[] };
       configs?: BoundedReadPage<Config>;
-    }>(
-      "GET",
-      `/profiles/${encodeURIComponent(idOrSlug)}${qs ? `?${qs}` : ""}`,
-      undefined,
-      { allow404: true },
-    );
-    if (status === 404 || !data?.profile) throw new ProfileNotFoundError(idOrSlug);
+    }>(idOrSlug, (profileId) => `/profiles/${encodeURIComponent(profileId)}${qs ? `?${qs}` : ""}`, (value) => Boolean(value?.profile));
+    if (!data?.profile) throw new ProfileNotFoundError(idOrSlug);
     return parseBoundedOrLegacyPage<Config>(
       data.configs,
       data.profile.configs,
@@ -665,14 +660,41 @@ export class CloudConfigStore implements ConfigStore {
   }
 
   async getProfileConfigBindings(idOrSlug: string): Promise<ProfileConfigBinding[]> {
-    const { status, data } = await this.request<{ bindings: ProfileConfigBinding[] }>(
-      "GET",
-      `/profiles/${encodeURIComponent(idOrSlug)}/bindings`,
-      undefined,
-      { allow404: true },
+    const { data } = await this.requestProfileRoute<{ bindings: ProfileConfigBinding[] }>(
+      idOrSlug,
+      (profileId) => `/profiles/${encodeURIComponent(profileId)}/bindings`,
+      (value) => Array.isArray(value?.bindings),
     );
-    if (status === 404 || !Array.isArray(data?.bindings)) throw new ProfileNotFoundError(idOrSlug);
+    if (!data || !Array.isArray(data.bindings)) throw new ProfileNotFoundError(idOrSlug);
     return data.bindings;
+  }
+
+  private async requestProfileRoute<T>(
+    idOrSlug: string,
+    pathForId: (profileId: string) => string,
+    isUsable: (value: T | null) => boolean,
+  ): Promise<{ status: number; data: T | null }> {
+    const attempted = new Set<string>();
+    const request = async (profileId: string) => {
+      attempted.add(profileId);
+      return this.request<T>("GET", pathForId(profileId), undefined, { allow404: true });
+    };
+
+    const first = await request(idOrSlug);
+    if (first.status !== 404 && isUsable(first.data)) return first;
+
+    // The collection endpoint is authoritative on deployments whose direct
+    // profile identity resolver is stale. Retry both stable identities from
+    // the matched row, but never turn an unknown profile into an empty read.
+    const profiles = await this.listProfiles();
+    const profile = profiles.find((candidate) => candidate.id === idOrSlug || candidate.slug === idOrSlug);
+    if (!profile) throw new ProfileNotFoundError(idOrSlug);
+    for (const candidate of [profile.id, profile.slug]) {
+      if (attempted.has(candidate)) continue;
+      const response = await request(candidate);
+      if (response.status !== 404 && isUsable(response.data)) return response;
+    }
+    throw new ProfileNotFoundError(idOrSlug);
   }
 
   async createProfile(input: CreateProfileInput): Promise<Profile> {
@@ -731,13 +753,12 @@ export class CloudConfigStore implements ConfigStore {
   }
 
   async getProfileAssetBindings(profileIdOrSlug: string): Promise<ProfileAssetBinding[]> {
-    const { status, data } = await this.request<{ assets: ProfileAssetBinding[] }>(
-      "GET",
-      `/profiles/${encodeURIComponent(profileIdOrSlug)}/assets`,
-      undefined,
-      { allow404: true },
+    const { data } = await this.requestProfileRoute<{ assets: ProfileAssetBinding[] }>(
+      profileIdOrSlug,
+      (profileId) => `/profiles/${encodeURIComponent(profileId)}/assets`,
+      (value) => Array.isArray(value?.assets),
     );
-    if (status === 404 || !Array.isArray(data?.assets)) throw new ProfileNotFoundError(profileIdOrSlug);
+    if (!data || !Array.isArray(data.assets)) throw new ProfileNotFoundError(profileIdOrSlug);
     return data.assets;
   }
 

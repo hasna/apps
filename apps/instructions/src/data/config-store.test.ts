@@ -306,6 +306,39 @@ describe("CloudConfigStore CRUD mapping", () => {
     ]);
   });
 
+  test("profile follow-up reads retry the list-visible slug when canonical routes return 404", async () => {
+    const canonicalId = "ae1030fc-4b10-41c7-a127-9d81fccfbac0";
+    const profile = { ...SAMPLE_PROFILE, id: canonicalId, slug: "my-setup" };
+    const m = mockFetch((call) => {
+      if (call.url.endsWith(`/v1/profiles/${canonicalId}?limit=20&cursor=0`)) return { status: 404, json: { error: "Profile not found: ae1030" } };
+      if (call.url.endsWith(`/v1/profiles/${canonicalId}/assets`)) return { status: 404, json: { error: "Profile not found: ae1030" } };
+      if (call.url.endsWith(`/v1/profiles/${canonicalId}/bindings`)) return { status: 404, json: { error: "Profile not found: ae1030" } };
+      if (call.url.endsWith(`/v1/profiles/my-setup?limit=20&cursor=0`)) return { json: { profile, configs: page([SAMPLE]) } };
+      if (call.url.endsWith(`/v1/profiles/my-setup/assets`)) return { json: { assets: [] } };
+      if (call.url.endsWith(`/v1/profiles/my-setup/bindings`)) return { json: { bindings: [] } };
+      if (call.url.includes("/v1/profiles?")) return { json: page([profile]) };
+      return { status: 404, json: { error: "unexpected request" } };
+    });
+    active = m;
+    const store = new CloudConfigStore(CONFIG);
+
+    await expect(store.getProfileConfigsPage(canonicalId)).resolves.toMatchObject({ items: [SAMPLE] });
+    await expect(store.getProfileAssetBindings(canonicalId)).resolves.toEqual([]);
+    await expect(store.getProfileConfigBindings(canonicalId)).resolves.toEqual([]);
+
+    expect(m.calls.map((call) => call.url)).toEqual([
+      `https://instructions.hasna.xyz/v1/profiles/${canonicalId}?limit=20&cursor=0`,
+      "https://instructions.hasna.xyz/v1/profiles?limit=100&cursor=0",
+      "https://instructions.hasna.xyz/v1/profiles/my-setup?limit=20&cursor=0",
+      `https://instructions.hasna.xyz/v1/profiles/${canonicalId}/assets`,
+      "https://instructions.hasna.xyz/v1/profiles?limit=100&cursor=0",
+      "https://instructions.hasna.xyz/v1/profiles/my-setup/assets",
+      `https://instructions.hasna.xyz/v1/profiles/${canonicalId}/bindings`,
+      "https://instructions.hasna.xyz/v1/profiles?limit=100&cursor=0",
+      "https://instructions.hasna.xyz/v1/profiles/my-setup/bindings",
+    ]);
+  });
+
   test("maps profile asset CRUD to the separate cloud API paths", async () => {
     const m = mockFetch((call) => {
       if (call.method === "GET") return { json: { assets: [SAMPLE_ASSET] } };
