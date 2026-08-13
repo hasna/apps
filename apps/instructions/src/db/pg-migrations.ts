@@ -78,4 +78,7 @@ export const PG_MIGRATIONS: string[] = [
 
   // Migration 7: output fan-out metadata
   `ALTER TABLE configs ADD COLUMN IF NOT EXISTS outputs TEXT NOT NULL DEFAULT '[]'`,
+
+  // Migration 8: schema-versioned profile instruction binding
+  `ALTER TABLE profile_configs ADD COLUMN IF NOT EXISTS binding TEXT NOT NULL DEFAULT '{"schema":"hasna.instructions.profile-config-binding/v1","activation":{"mode":"always"},"required":true,"fallback":"fail"}'`,
 ];

@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import * as cloud from "./cloud.js";
 import * as store from "../storage/cloud-store.js";
-import type { Config, Profile } from "../types/index.js";
+import type { Config, Profile, ProfileConfigBinding } from "../types/index.js";
 import { buildV1OpenApiDocument } from "./openapi.js";
 import { handleV1Request } from "./v1.js";
 
@@ -137,6 +137,38 @@ describe("mixed-version profile HTTP compatibility", () => {
     expect(await removeResponse?.json()).toEqual({ removed: true });
     expect(remove).toHaveBeenCalledWith(expect.anything(), "profile-1", "config-2");
   });
+
+  test("profile binding handlers persist and return the schema-versioned binding", async () => {
+    mockCloudBoundary();
+    const binding: ProfileConfigBinding = {
+      profile_id: "profile-1",
+      config_id: "config-2",
+      sort_order: 0,
+      binding: {
+        schema: "hasna.instructions.profile-config-binding/v1",
+        activation: { mode: "glob", globs: ["**/*.ts"] },
+        required: true,
+        fallback: "fail",
+      },
+    };
+    const list = track(spyOn(store, "getProfileConfigBindings").mockResolvedValue([binding]));
+    const set = track(spyOn(store, "setProfileConfigBinding").mockResolvedValue(binding));
+    const listResponse = await handleV1Request(
+      new Request("https://instructions.hasna.xyz/v1/profiles/profile-1/bindings"),
+      new URL("https://instructions.hasna.xyz/v1/profiles/profile-1/bindings"),
+    );
+    const setResponse = await handleV1Request(
+      new Request("https://instructions.hasna.xyz/v1/profiles/profile-1/configs/config-2", {
+        method: "PUT",
+        body: JSON.stringify({ binding: binding.binding }),
+      }),
+      new URL("https://instructions.hasna.xyz/v1/profiles/profile-1/configs/config-2"),
+    );
+    expect(await listResponse?.json()).toEqual({ bindings: [binding] });
+    expect(list).toHaveBeenCalledWith(expect.anything(), "profile-1");
+    expect(await setResponse?.json()).toEqual({ binding });
+    expect(set).toHaveBeenCalledWith(expect.anything(), "profile-1", "config-2", binding.binding);
+  });
 });
 
 describe("profile OpenAPI and generated SDK contract", () => {
@@ -188,6 +220,9 @@ describe("profile OpenAPI and generated SDK contract", () => {
 
     expect(addPath.get).toBeUndefined();
     expect(removePath.post).toBeUndefined();
+    expect(spec.paths["/v1/profiles/{id}/bindings"].get.operationId).toBe("getProfileConfigBindings");
+    expect(removePath.put.operationId).toBe("setProfileConfigBinding");
+    expect(removePath.put.security).toEqual([{ apiKey: [] }]);
   });
 
   test("tracked generated SDK exposes bounded profile list, show, and resolve methods", () => {
@@ -204,13 +239,15 @@ describe("profile OpenAPI and generated SDK contract", () => {
     expect(generated).toContain('"batch_limit": number | null');
   });
 
-  test("tracked generated SDK exposes only the implemented profile membership mutations", () => {
+  test("tracked generated SDK exposes the implemented profile membership and binding operations", () => {
     const generated = readFileSync(join(import.meta.dir, "../../sdk/src/v1.generated.ts"), "utf8");
 
     expect(generated).toContain("export interface AddProfileConfigInput");
     expect(generated).toContain("export interface ProfileConfigAddedResponse");
     expect(generated).toContain("export interface ProfileConfigRemovedResponse");
     expect(generated).toContain("async addConfigToProfile(id: string, body: AddProfileConfigInput");
+    expect(generated).toContain("async getProfileConfigBindings(id: string");
+    expect(generated).toContain("async setProfileConfigBinding(id: string, configId: string");
     expect(generated).toContain("async removeConfigFromProfile(id: string, configId: string");
     expect(generated).not.toContain("async replaceConfigInProfile(");
   });

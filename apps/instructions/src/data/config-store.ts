@@ -29,9 +29,11 @@ import {
   deleteProfile as dbDeleteProfile,
   getProfile as dbGetProfile,
   getProfileConfigsPage as dbGetProfileConfigsPage,
+  getProfileConfigBindings as dbGetProfileConfigBindings,
   listProfilesPage as dbListProfilesPage,
   removeConfigFromProfile as dbRemoveConfigFromProfile,
   resolveProfileForMachineRead as dbResolveProfileForMachineRead,
+  setProfileConfigBinding as dbSetProfileConfigBinding,
   updateProfile as dbUpdateProfile,
 } from "../db/profiles.js";
 import {
@@ -62,6 +64,8 @@ import type {
   ProfileResolutionRead,
   UpdateConfigInput,
   UpdateProfileInput,
+  ProfileConfigBinding,
+  ProfileConfigBindingSpec,
 } from "../types/index.js";
 import { boundedReadPage, normalizeBoundedReadOptions } from "../lib/bounded-read.js";
 
@@ -228,10 +232,12 @@ export interface ConfigStore {
   getProfile(idOrSlug: string): Promise<Profile>;
   getProfileConfigs(idOrSlug: string): Promise<Config[]>;
   getProfileConfigsPage(idOrSlug: string, options?: BoundedReadOptions): Promise<BoundedReadPage<Config>>;
+  getProfileConfigBindings(idOrSlug: string): Promise<ProfileConfigBinding[]>;
   createProfile(input: CreateProfileInput): Promise<Profile>;
   updateProfile(idOrSlug: string, input: UpdateProfileInput): Promise<Profile>;
   deleteProfile(idOrSlug: string): Promise<void>;
   addConfigToProfile(profileIdOrSlug: string, configId: string): Promise<void>;
+  setProfileConfigBinding(profileIdOrSlug: string, configId: string, binding: ProfileConfigBindingSpec): Promise<ProfileConfigBinding>;
   removeConfigFromProfile(profileIdOrSlug: string, configId: string): Promise<void>;
   resolveProfileForMachine(machine?: MachineContext): Promise<Profile | null>;
   resolveProfileForMachineRead(machine?: MachineContext, options?: BoundedReadOptions): Promise<ProfileResolutionRead>;
@@ -327,6 +333,9 @@ export class LocalConfigStore implements ConfigStore {
   async getProfileConfigsPage(idOrSlug: string, options: BoundedReadOptions = {}): Promise<BoundedReadPage<Config>> {
     return dbGetProfileConfigsPage(idOrSlug, options, this.db);
   }
+  async getProfileConfigBindings(idOrSlug: string): Promise<ProfileConfigBinding[]> {
+    return dbGetProfileConfigBindings(idOrSlug, this.db);
+  }
   async createProfile(input: CreateProfileInput): Promise<Profile> {
     return dbCreateProfile(input, this.db);
   }
@@ -338,6 +347,9 @@ export class LocalConfigStore implements ConfigStore {
   }
   async addConfigToProfile(profileIdOrSlug: string, configId: string): Promise<void> {
     dbAddConfigToProfile(profileIdOrSlug, configId, this.db);
+  }
+  async setProfileConfigBinding(profileIdOrSlug: string, configId: string, binding: ProfileConfigBindingSpec): Promise<ProfileConfigBinding> {
+    return dbSetProfileConfigBinding(profileIdOrSlug, configId, binding, this.db);
   }
   async removeConfigFromProfile(profileIdOrSlug: string, configId: string): Promise<void> {
     dbRemoveConfigFromProfile(profileIdOrSlug, configId, this.db);
@@ -621,6 +633,17 @@ export class CloudConfigStore implements ConfigStore {
     );
   }
 
+  async getProfileConfigBindings(idOrSlug: string): Promise<ProfileConfigBinding[]> {
+    const { status, data } = await this.request<{ bindings: ProfileConfigBinding[] }>(
+      "GET",
+      `/profiles/${encodeURIComponent(idOrSlug)}/bindings`,
+      undefined,
+      { allow404: true },
+    );
+    if (status === 404 || !Array.isArray(data?.bindings)) throw new ProfileNotFoundError(idOrSlug);
+    return data.bindings;
+  }
+
   async createProfile(input: CreateProfileInput): Promise<Profile> {
     const { data } = await this.request<{ profile: Profile }>("POST", "/profiles", input, {
       idempotent: true,
@@ -654,6 +677,17 @@ export class CloudConfigStore implements ConfigStore {
       { config_id: configId },
       { idempotent: true },
     );
+  }
+
+  async setProfileConfigBinding(profileIdOrSlug: string, configId: string, binding: ProfileConfigBindingSpec): Promise<ProfileConfigBinding> {
+    const { status, data } = await this.request<{ binding: ProfileConfigBinding }>(
+      "PUT",
+      `/profiles/${encodeURIComponent(profileIdOrSlug)}/configs/${encodeURIComponent(configId)}`,
+      { binding },
+      { allow404: true, idempotent: true },
+    );
+    if (status === 404 || !data?.binding) throw new ProfileNotFoundError(profileIdOrSlug);
+    return data.binding;
   }
 
   async removeConfigFromProfile(profileIdOrSlug: string, configId: string): Promise<void> {

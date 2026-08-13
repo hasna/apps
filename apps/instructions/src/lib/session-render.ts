@@ -1471,12 +1471,15 @@ function buildCursorRuleFiles(
     const n = String(index + 1).padStart(2, "0");
     const stem = `${n}-${source.normalizedId}`;
     const relativePath = posix.join(adapter.managedDir, `${stem}.mdc`);
-    const description = `${source.resolvedLabel} (${source.resolvedLayer})`;
+    const activation = source.metadata?.["activation"] as { mode?: string; description?: string } | undefined;
+    const description = activation?.description ?? `${source.resolvedLabel} (${source.resolvedLayer})`;
+    const sourceGlobs = source.globs && source.globs.length > 0 ? source.globs : ["**/*"];
+    const alwaysApply = activation?.mode !== "glob";
     const content = [
       "---",
       `description: ${yamlQuote(description)}`,
-      'globs: ["**/*"]',
-      "alwaysApply: true",
+      `globs: ${JSON.stringify(sourceGlobs)}`,
+      `alwaysApply: ${alwaysApply}`,
       "---",
       "",
       `<!-- ${SESSION_RENDER_MANAGED_MARKER}. Do not edit this generated file directly. -->`,

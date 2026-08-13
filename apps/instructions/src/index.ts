@@ -53,6 +53,26 @@ export {
   sourceFromFilePath,
   sourcesFromIdentityExport,
 } from "./lib/session-render.js";
+export {
+  INSTRUCTION_GRAPH_PLAN_SCHEMA,
+  PROVIDER_CAPABILITIES,
+  PROVIDER_CAPABILITY_SCHEMA,
+  InstructionGraphValidationError,
+  compileInstructionGraph,
+  legacyProfileConfigBinding,
+  normalizeProfileConfigBinding,
+  planProfileSessionRender,
+} from "./lib/instruction-graph.js";
+export type {
+  CompiledInstructionGraph,
+  InstructionGraphArtifact,
+  InstructionGraphContext,
+  InstructionGraphDiagnostic,
+  InstructionGraphRenderPlan,
+  InstructionGraphUnit,
+  ProfileSessionRenderPlan,
+  ProviderCapability,
+} from "./lib/instruction-graph.js";
 export type {
   SessionInstructionLayer,
   SessionInstructionMerge,

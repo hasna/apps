@@ -185,6 +185,11 @@ export async function handleV1Request(req: Request, url: URL): Promise<Response 
         return json(resolution);
       }
       // /v1/profiles/:id/configs  and  /v1/profiles/:id/configs/:configId
+      if (action === "bindings") {
+        if (method !== "GET") return errorResponse(405, `method ${method} not allowed on /v1/profiles/:id/bindings`);
+        const bindings = await store.getProfileConfigBindings(client, id);
+        return json({ bindings });
+      }
       if (action === "configs") {
         const configId = segments[4] ? decodeURIComponent(segments[4]) : undefined;
         if (method === "POST" && !configId) {
@@ -196,6 +201,12 @@ export async function handleV1Request(req: Request, url: URL): Promise<Response 
         if (method === "DELETE" && configId) {
           await store.removeConfigFromProfile(client, id, configId);
           return json({ removed: true });
+        }
+        if (method === "PUT" && configId) {
+          const body = await readJson<{ binding?: Parameters<typeof store.setProfileConfigBinding>[3] }>(req);
+          if (!body?.binding) return errorResponse(400, "binding is required");
+          const binding = await store.setProfileConfigBinding(client, id, configId, body.binding);
+          return json({ binding });
         }
         return errorResponse(405, `method ${method} not allowed on /v1/profiles/:id/configs`);
       }

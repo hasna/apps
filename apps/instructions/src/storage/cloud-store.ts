@@ -27,8 +27,11 @@ import {
   type ProfileResolutionRead,
   type UpdateConfigInput,
   type UpdateProfileInput,
+  type ProfileConfigBinding,
+  type ProfileConfigBindingSpec,
 } from "../types/index.js";
 import { boundedReadPage, normalizeBoundedReadOptions } from "../lib/bounded-read.js";
+import { legacyProfileConfigBinding, normalizeProfileConfigBinding } from "../lib/instruction-graph.js";
 
 function slugify(name: string): string {
   return name
@@ -520,6 +523,42 @@ export async function addConfigToProfile(
      VALUES ($1,$2,$3) ON CONFLICT (profile_id, config_id) DO NOTHING`,
     [profile.id, configId, order],
   );
+}
+
+export async function getProfileConfigBindings(
+  client: TypedQueryClient,
+  profileIdOrSlug: string,
+): Promise<ProfileConfigBinding[]> {
+  const profile = await getProfile(client, profileIdOrSlug);
+  const rows = await client.many<{ profile_id: string; config_id: string; sort_order: number; binding: unknown }>(
+    `SELECT profile_id, config_id, sort_order, binding
+       FROM profile_configs
+      WHERE profile_id = $1
+      ORDER BY sort_order, config_id`,
+    [profile.id],
+  );
+  return rows.map((row) => ({
+    profile_id: row.profile_id,
+    config_id: row.config_id,
+    sort_order: Number(row.sort_order),
+    binding: row.binding == null ? legacyProfileConfigBinding() : normalizeProfileConfigBinding(row.binding),
+  }));
+}
+
+export async function setProfileConfigBinding(
+  client: TypedQueryClient,
+  profileIdOrSlug: string,
+  configId: string,
+  binding: ProfileConfigBindingSpec,
+): Promise<ProfileConfigBinding> {
+  const profile = await getProfile(client, profileIdOrSlug);
+  const normalized = normalizeProfileConfigBinding(binding);
+  const result = await client.query(
+    "UPDATE profile_configs SET binding = $1 WHERE profile_id = $2 AND config_id = $3",
+    [JSON.stringify(normalized), profile.id, configId],
+  );
+  if ((result.rowCount ?? 0) !== 1) throw new Error(`Config ${configId} is not a member of profile ${profile.slug}.`);
+  return (await getProfileConfigBindings(client, profile.id)).find((row) => row.config_id === configId)!;
 }
 
 export async function removeConfigFromProfile(

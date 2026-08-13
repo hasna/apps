@@ -95,6 +95,9 @@ const MIGRATIONS = [
   `
   ALTER TABLE configs ADD COLUMN outputs TEXT NOT NULL DEFAULT '[]';
   `,
+  `
+  ALTER TABLE profile_configs ADD COLUMN binding TEXT NOT NULL DEFAULT '{"schema":"hasna.instructions.profile-config-binding/v1","activation":{"mode":"always"},"required":true,"fallback":"fail"}';
+  `,
 ];
 
 let _db: Database | null = null;
