@@ -21,7 +21,8 @@ import { normalizeTenantId } from "../auth/tenant";
 import { ApiKeyStore, type AuthQueryClient } from "../auth/store";
 import { createSecretsClientFromEnv, type SecretsClient, type SecretsClientOptions } from "@hasna/secrets";
 
-type IssueKeyStore = Pick<ApiKeyStore, "ensureSchema" | "insertMinted"> & Partial<Pick<ApiKeyStore, "revoke">>;
+type IssueKeyStore = Pick<ApiKeyStore, "ensureSchema" | "insertMinted"> &
+  Partial<Pick<ApiKeyStore, "revoke" | "insertMintedPending" | "activatePending">>;
 type IssueKeyStoreHandle = { store: IssueKeyStore; close: () => Promise<void> };
 type IssueKeyConnectStore = (connectionString: string, table: string) => Promise<IssueKeyStoreHandle>;
 type IssueKeySecretsClient = Pick<SecretsClient, "putSecret" | "deleteSecret">;
@@ -429,7 +430,7 @@ export async function runIssueKey(options: Record<string, unknown>, deps: IssueK
       const connect = deps.connectStore ?? connectStore;
       handle = await connect(connectionString, table);
       await handle.store.ensureSchema();
-      if (!handle.store.revoke) {
+      if (!handle.store.revoke || !handle.store.insertMintedPending || !handle.store.activatePending) {
         deps.report({ json }, "The selected key store does not support fail-closed compensation.", {
           code: "bad_secrets_store_contract",
         });
@@ -443,14 +444,22 @@ export async function runIssueKey(options: Record<string, unknown>, deps: IssueK
       });
       return;
     } finally {
-      if (!handle?.store.revoke || !secretsClient) await closeQuietly(handle);
+      if (
+        !handle?.store.revoke ||
+        !handle.store.insertMintedPending ||
+        !handle.store.activatePending ||
+        !secretsClient
+      ) {
+        await closeQuietly(handle);
+      }
     }
 
-    // At this point both consumers are ready. The DB write comes first because
-    // an ambiguous DB outcome can be made fail-closed by kid before the token
-    // has ever reached the vault. No POST is retried internally.
+    // At this point both consumers are ready. The DB write comes first in an
+    // issuance-pending (therefore revoked) state. Every released verifier
+    // already refuses that state, so an ambiguous vault response remains safe
+    // even if both best-effort cleanup operations are unavailable.
     try {
-      await handle.store.insertMinted(minted, createdBy);
+      await handle.store.insertMintedPending(minted, createdBy);
     } catch {
       const compensated = await compensateRecord(handle.store, minted.kid);
       deps.report({ json }, "Could not persist the credential record.", {
@@ -475,11 +484,14 @@ export async function runIssueKey(options: Record<string, unknown>, deps: IssueK
       if (metadata.key !== secretsRef || metadata.type !== "api_key") {
         throw new Error("Secrets metadata did not match the requested reference.");
       }
+      const activated = await handle.store.activatePending(minted.kid);
+      if (!activated) throw new Error("The pending credential record could not be activated.");
     } catch {
-      // A failed POST response is ambiguous: the vault write may have landed.
-      // Revoke first, then delete the exact ref. Neither compensation forwards
-      // the underlying error because a producer is allowed to include request
-      // data in its error and the request data contains the token.
+      // A failed vault response is ambiguous: the write may have landed. A
+      // final activation failure is handled by the same fail-closed path. The
+      // record was inserted pending, so it remains unusable even when both
+      // best-effort cleanups fail. Neither cleanup forwards the underlying
+      // error because a producer may include token-bearing request data in it.
       const recordCompensated = await compensateRecord(handle.store, minted.kid);
       const vaultCompensated = await compensateSecret(secretsClient, secretsRef);
       const compensated = recordCompensated && vaultCompensated;

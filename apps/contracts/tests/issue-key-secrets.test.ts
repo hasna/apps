@@ -60,6 +60,7 @@ describe("issue-key credential-safe Secrets delivery", () => {
   test("creates one signed DB record and one exact vault row while every output stays token-free", async () => {
     const { reports, report } = collectReports();
     const inserted: MintedApiKey[] = [];
+    const activated: string[] = [];
     const revoked: string[] = [];
     const delivered: Array<{ key: string; value: string; type?: string; label?: string }> = [];
     const deleted: string[] = [];
@@ -72,7 +73,14 @@ describe("issue-key credential-safe Secrets delivery", () => {
         connectStore: async () => ({
           store: {
             ensureSchema: async () => {},
-            insertMinted: async (minted) => void inserted.push(minted),
+            insertMinted: async () => {
+              throw new Error("active insert must not run");
+            },
+            insertMintedPending: async (minted) => void inserted.push(minted),
+            activatePending: async (kid) => {
+              activated.push(kid);
+              return true;
+            },
             revoke: async (kid) => {
               revoked.push(kid);
               return true;
@@ -106,6 +114,7 @@ describe("issue-key credential-safe Secrets delivery", () => {
     expect(streams.stderr).toBe("");
     expect(inserted).toHaveLength(1);
     expect(delivered).toHaveLength(1);
+    expect(activated).toEqual([inserted[0]!.kid]);
     expect(revoked).toEqual([]);
     expect(deleted).toEqual([]);
 
@@ -216,9 +225,13 @@ describe("issue-key credential-safe Secrets delivery", () => {
         connectStore: async () => ({
           store: {
             ensureSchema: async () => {},
-            insertMinted: async (value) => {
+            insertMinted: async () => {
+              throw new Error("active insert must not run");
+            },
+            insertMintedPending: async (value) => {
               minted = value;
             },
+            activatePending: async () => true,
             revoke: async () => true,
           },
           close: async () => {},
@@ -275,10 +288,14 @@ describe("issue-key credential-safe Secrets delivery", () => {
         connectStore: async () => ({
           store: {
             ensureSchema: async () => {},
-            insertMinted: async (value) => {
+            insertMinted: async () => {
+              throw new Error("active insert must not run");
+            },
+            insertMintedPending: async (value) => {
               minted = value;
               throw new Error(`ambiguous database response ${value.token}`);
             },
+            activatePending: async () => false,
             revoke: async (kid) => {
               revoked.push(kid);
               return true;
@@ -319,9 +336,13 @@ describe("issue-key credential-safe Secrets delivery", () => {
         connectStore: async () => ({
           store: {
             ensureSchema: async () => {},
-            insertMinted: async (value) => {
+            insertMinted: async () => {
+              throw new Error("active insert must not run");
+            },
+            insertMintedPending: async (value) => {
               minted = value;
             },
+            activatePending: async () => true,
             revoke: async (kid) => {
               revoked.push(kid);
               return true;
@@ -356,6 +377,115 @@ describe("issue-key credential-safe Secrets delivery", () => {
     expect(observable).not.toContain(minted!.token);
     expect(observable).not.toContain(minted!.tokenHash);
     expect(observable).not.toContain("ambiguous vault response");
+  });
+
+  test("a committed vault write with a lost response stays unusable when both cleanups fail and retry yields exactly one usable key", async () => {
+    const issued: MintedApiKey[] = [];
+    const states = new Map<string, "pending" | "active" | "revoked">();
+    const vault = new Map<string, string>();
+    let vaultWrites = 0;
+
+    const connectStore = async () => ({
+      store: {
+        ensureSchema: async () => {},
+        insertMinted: async (minted: MintedApiKey) => {
+          issued.push(minted);
+          states.set(minted.kid, "active");
+        },
+        insertMintedPending: async (minted: MintedApiKey) => {
+          issued.push(minted);
+          states.set(minted.kid, "pending");
+        },
+        activatePending: async (kid: string) => {
+          if (states.get(kid) !== "pending") return false;
+          states.set(kid, "active");
+          return true;
+        },
+        revoke: async (kid: string) => {
+          if (vaultWrites === 1) throw new Error("record cleanup unavailable");
+          states.set(kid, "revoked");
+          return true;
+        },
+      },
+      close: async () => {},
+    });
+    const connectSecrets = async () => ({
+      putSecret: async (input: { key: string; value: string }) => {
+        vaultWrites += 1;
+        vault.set(input.key, input.value);
+        if (vaultWrites === 1) throw new Error(`committed response lost ${input.value}`);
+        return {
+          key: input.key,
+          type: "api_key" as const,
+          created_at: "2026-08-13T00:00:00.000Z",
+          updated_at: "2026-08-13T00:00:00.000Z",
+        };
+      },
+      deleteSecret: async () => {
+        throw new Error("vault cleanup unavailable");
+      },
+    });
+    const isUsable = (minted: MintedApiKey): boolean => {
+      const ref = `todos/agents/${AGENT}/${minted.kid}`;
+      return (
+        verifyApiKeyToken(minted.token, {
+          signingSecret: TODO_SIGNING,
+          expectedApp: "todos",
+          nowMs: 1_700_000_001_000,
+        }).ok &&
+        states.get(minted.kid) === "active" &&
+        vault.get(ref) === minted.token
+      );
+    };
+
+    const first = collectReports();
+    const firstStreams = await captureStreams(async () => {
+      await runIssueKey(baseOptions(), {
+        report: first.report,
+        env: baseEnv(),
+        now: () => 1_700_000_000_000,
+        connectStore,
+        connectSecrets,
+      });
+    });
+
+    expect(first.reports[0]?.details).toMatchObject({
+      code: "secrets_store_failed",
+      compensated: false,
+      recordCompensated: false,
+      vaultCompensated: false,
+    });
+    expect(issued).toHaveLength(1);
+    expect(isUsable(issued[0]!)).toBe(false);
+
+    const retry = collectReports();
+    const retryStreams = await captureStreams(async () => {
+      await runIssueKey(baseOptions(), {
+        report: retry.report,
+        env: baseEnv(),
+        now: () => 1_700_000_000_000,
+        connectStore,
+        connectSecrets,
+      });
+    });
+
+    expect(retry.reports).toEqual([]);
+    expect(issued).toHaveLength(2);
+    expect(issued.filter(isUsable)).toHaveLength(1);
+    expect(states.get(issued[0]!.kid)).toBe("pending");
+    expect(states.get(issued[1]!.kid)).toBe("active");
+    for (const minted of issued) {
+      const observable = [
+        firstStreams.stdout,
+        firstStreams.stderr,
+        retryStreams.stdout,
+        retryStreams.stderr,
+        JSON.stringify(first.reports),
+        JSON.stringify(retry.reports),
+      ].join("\n");
+      expect(observable).not.toContain(minted.token);
+      expect(observable).not.toContain(minted.tokenHash);
+    }
   });
 
   test("silent delivery refuses overwrite-prone or unbound references before any persistence", async () => {
