@@ -152,6 +152,24 @@
         "typescript": "^5.7.3",
       },
     },
+    "apps/releases": {
+      "name": "@hasna/releases",
+      "version": "0.1.1",
+      "bin": {
+        "releases": "dist/cli/index.js",
+        "releases-mcp": "dist/mcp/index.js",
+      },
+      "dependencies": {
+        "@hasna/events": "^0.1.13",
+        "@modelcontextprotocol/sdk": "^1.26.0",
+        "commander": "^13.1.0",
+        "zod": "^3.25.76",
+      },
+      "devDependencies": {
+        "@types/bun": "^1.2.4",
+        "typescript": "^5.7.3",
+      },
+    },
     "apps/router": {
       "name": "@hasna/router",
       "version": "0.1.0",
@@ -299,6 +317,8 @@
     "@hasna/events": ["@hasna/events@0.1.15", "", { "dependencies": { "commander": "^13.1.0" }, "bin": { "events": "dist/cli/index.js", "hasna-events": "dist/cli/index.js" } }, "sha512-q4lVzv4n9a9C2zQDZVe/KXy6ZA+y5HRCOL6sG+xc3adHrVKJz0wW8JococwbldfgQhyYmnOloLSoy+B1MNUVZQ=="],
 
     "@hasna/orgs": ["@hasna/orgs@workspace:apps/orgs"],
+
+    "@hasna/releases": ["@hasna/releases@workspace:apps/releases"],
 
     "@hasna/router": ["@hasna/router@workspace:apps/router"],
 
@@ -897,6 +917,8 @@
     "@hasna/orgs/@types/node": ["@types/node@22.20.1", "", { "dependencies": { "undici-types": "~6.21.0" } }, "sha512-EANqOCF9QFyra+4pfxUcX9STKJpCLjMbObVzljIJomAWSnuSIEAvyzEU53GaajbXJEgdh0iEcPL+DGvpUd4k1Q=="],
 
     "@hasna/orgs/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
+
+    "@hasna/releases/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
 
     "@hasna/router/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
 
