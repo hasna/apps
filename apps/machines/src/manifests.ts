@@ -245,6 +245,50 @@ function normalizeMachines(machines: MachineManifest[]): MachineManifest[] {
   return [...machines].sort((left, right) => left.id.localeCompare(right.id));
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((entry) => typeof entry === "string");
+}
+
+/**
+ * Move the pre-metadata heartbeat alias field into the current metadata
+ * namespace while loading a manifest. Keep the schema strict for every other
+ * unknown field, and leave malformed legacy values untouched so validation
+ * still rejects them.
+ */
+function migrateLegacyManifest(raw: unknown): unknown {
+  if (!isRecord(raw) || !Array.isArray(raw.machines)) return raw;
+
+  let migrated = false;
+  const machines = raw.machines.map((machine): unknown => {
+    if (!isRecord(machine) || !Object.prototype.hasOwnProperty.call(machine, "heartbeatAliases")) {
+      return machine;
+    }
+
+    const aliases = machine.heartbeatAliases;
+    if (!isStringArray(aliases)) return machine;
+
+    const metadata = machine.metadata;
+    if (metadata !== undefined && !isRecord(metadata)) return machine;
+
+    const nextMetadata: Record<string, unknown> = { ...(metadata ?? {}) };
+    const currentAliases = nextMetadata.heartbeatAliases;
+    if (currentAliases !== undefined && !isStringArray(currentAliases)) return machine;
+
+    nextMetadata.heartbeatAliases = [...new Set([...(currentAliases ?? []), ...aliases])];
+    const nextMachine = { ...machine };
+    delete nextMachine.heartbeatAliases;
+    nextMachine.metadata = nextMetadata;
+    migrated = true;
+    return nextMachine;
+  });
+
+  return migrated ? { ...raw, machines } : raw;
+}
+
 export function normalizeFriendlyName(value: string | null | undefined): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
@@ -311,7 +355,7 @@ export function readManifest(path = getManifestPath()): FleetManifest {
     return getDefaultManifest();
   }
   const raw = JSON.parse(readFileSync(path, "utf8"));
-  return fleetSchema.parse(raw);
+  return fleetSchema.parse(migrateLegacyManifest(raw));
 }
 
 export function readManifestWithSource(options: ReadManifestWithSourceOptions = {}): { manifest: FleetManifest; info: ManifestLoadInfo } {
@@ -326,7 +370,7 @@ export function readManifestWithSource(options: ReadManifestWithSourceOptions = 
         const manifest = options.adapter.readManifest({ source, rawRef });
         if (manifest) {
           return {
-            manifest: fleetSchema.parse(manifest),
+            manifest: fleetSchema.parse(migrateLegacyManifest(manifest)),
             info: {
               source,
               loadedFrom: "private-ref",

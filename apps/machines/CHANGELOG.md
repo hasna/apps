@@ -74,6 +74,14 @@ reported success about things it had not actually established.
   than reached by deleting a check. Physical classes are untouched: `dgx-spark`
   keeps `tailscale:join` and gets no absence item.
 
+## [0.2.22] - 2026-08-13
+
+### Fixed
+
+- Legacy manifests with top-level `heartbeatAliases` now load through the
+  compatibility boundary by moving aliases into `metadata`, while unrelated
+  unknown manifest keys remain rejected.
+
 ## [0.2.21] - 2026-08-13
 
 ### Fixed
