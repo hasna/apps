@@ -81,10 +81,15 @@ function packageSelector(spec: DesiredPackage): string {
 
 function packageVersionProbeCommand(spec: DesiredPackage): string {
   const bin = shellQuote(spec.bin);
+  const managerBin = shellQuote(spec.bin);
   return [
-    `if output=$(${bin} --version 2>/dev/null); then`,
+    `if bunBin=$(bun pm bin -g 2>/dev/null) && [ -n "$bunBin" ] && [ -x "$bunBin"/${managerBin} ]; then`,
+    `managerPath="$bunBin"/${managerBin};`,
+    `if output=$("$managerPath" --version 2>/dev/null); then`,
     "version=$(printf '%s\\n' \"$output\" | awk 'match($0, /[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?/) { print substr($0, RSTART, RLENGTH); exit }');",
-    "if [ -n \"$version\" ]; then printf 'installed=1\\nversion=%s\\n' \"$version\"; else printf 'installed=0\\n'; fi;",
+    `activePath=$(command -v ${bin} 2>/dev/null || true);`,
+    `if [ -n "$version" ]; then if [ "$activePath" != "$managerPath" ] && [ -n "$activePath" ]; then printf 'installed=1\\nversion=%s\\nowner=bun\\nmanager_path=%s\\nactive_path=%s\\ncollision=1\\n' \"$version\" \"$managerPath\" \"$activePath\"; else printf 'installed=1\\nversion=%s\\n' \"$version\"; fi; else printf 'installed=0\\n'; fi;`,
+    "else printf 'installed=0\\n'; fi",
     "else printf 'installed=0\\n'; fi",
   ].join(" ");
 }
@@ -189,7 +194,12 @@ function parseStepProbeOutput(step: SetupStep, stdout: string): { installed: boo
   const lines = stdout.trim().split(/\r?\n/).filter(Boolean);
   const installedLines = lines.filter((line) => line.startsWith("installed="));
   const versionLines = lines.filter((line) => line.startsWith("version="));
-  const recognizedLineCount = installedLines.length + versionLines.length;
+  const ownerLines = lines.filter((line) => line.startsWith("owner="));
+  const managerPathLines = lines.filter((line) => line.startsWith("manager_path="));
+  const activePathLines = lines.filter((line) => line.startsWith("active_path="));
+  const collisionLines = lines.filter((line) => line.startsWith("collision="));
+  const recognizedLineCount = installedLines.length + versionLines.length + ownerLines.length
+    + managerPathLines.length + activePathLines.length + collisionLines.length;
   if (installedLines.length !== 1 || recognizedLineCount !== lines.length) {
     throw new Error(`App probe ${step.id} returned malformed output: expected one installed=0|1 line and an optional version line.`);
   }
@@ -212,6 +222,17 @@ function parseStepProbeOutput(step: SetupStep, stdout: string): { installed: boo
   const version = versionLines[0]!.slice("version=".length);
   if (!version.trim()) {
     throw new Error(`App probe ${step.id} returned malformed output: version must not be blank.`);
+  }
+  if (collisionLines.length > 0) {
+    if (ownerLines.length !== 1 || ownerLines[0] !== "owner=bun"
+      || managerPathLines.length !== 1 || activePathLines.length !== 1
+      || collisionLines.length !== 1 || collisionLines[0] !== "collision=1") {
+      throw new Error(`App probe ${step.id} returned malformed output: owner/PATH collision details are incomplete.`);
+    }
+    throw new Error(
+      `App verify ${step.id} failed: owner/PATH collision: Bun-managed ${managerPathLines[0]!.slice("manager_path=".length)} reports ${version}, `
+      + `but active PATH resolves ${activePathLines[0]!.slice("active_path=".length)}.`,
+    );
   }
   return { installed: true, version };
 }
