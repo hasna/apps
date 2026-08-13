@@ -1,5 +1,5 @@
 import { getLocalMachineId } from "../db.js";
-import { readManifestWithSource, type ManifestSourceAdapter } from "../manifests.js";
+import { findManifestMachine, readManifestWithSource, type ManifestSourceAdapter } from "../manifests.js";
 import { redactIdentifier, redactManifestForDiagnostics, redactPath, redactSensitiveValue } from "../redaction.js";
 import { runMachineCommand, type MachineCommandRunner } from "../remote.js";
 import type { DoctorCheck, DoctorProbe, DoctorReport, FleetManifest, ManifestLoadInfo } from "../types.js";
@@ -214,7 +214,7 @@ export function runDoctor(machineId?: string, options: DoctorOptions = {}): Doct
     timedOut: commandChecks.timedOut === true,
     reason: probeReason,
   };
-  const machineInManifest = manifest.machines.find((machine) => machine.id === requestedMachineId);
+  const machineInManifest = findManifestMachine(manifest, requestedMachineId);
   const diagnosticMachine = machineInManifest ? redactManifestForDiagnostics(machineInManifest) : null;
   if (implicitLocalMachine && diagnosticMachine) diagnosticMachine.id = reportedMachineId;
   const optionalAdapterChecks = options.includeOptionalAdapters === false

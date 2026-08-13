@@ -1,6 +1,7 @@
 import { buildSshCommandPlan } from "./ssh.js";
 import {
   discoverMachineTopology,
+  findMachineTopologyEntry,
   resolveMachineRoute,
   type MachineRouteOptions,
   type MachineRouteKind,
@@ -101,9 +102,7 @@ export function resolveScreenTarget(machineId: string, options: MachineRouteOpti
   // If the route target didn't carry a user, look one up from topology metadata.
   if (!user) {
     const topology = options.topology ?? discoverMachineTopology({ ...options, limit: null, offset: 0 });
-    const entry = topology.machines.find(
-      (m) => m.machine_id === (resolved.machine_id ?? machineId),
-    );
+    const entry = findMachineTopologyEntry(topology, resolved.machine_id ?? machineId);
     user = entry?.user ?? null;
   }
 
@@ -123,7 +122,7 @@ export function resolveScreenTarget(machineId: string, options: MachineRouteOpti
 export function resolveScreenCredentials(machineId: string, options: ScreenCredentialOptions = {}): ScreenCredentialResolution {
   const topology = options.topology ?? discoverMachineTopology({ ...options, limit: null, offset: 0 });
   const screen = resolveScreenTarget(machineId, { ...options, topology });
-  const entry = topology.machines.find((machine) => machine.machine_id === screen.machineId);
+  const entry = findMachineTopologyEntry(topology, screen.machineId);
   const manifestEntry = getManifestMachine(screen.machineId) ?? getManifestMachine(machineId);
   const metadata = manifestEntry?.metadata ?? entry?.metadata;
   const metadataUser = metadataString(metadata, ["screenUser", "screen_user", "user", "username"]);

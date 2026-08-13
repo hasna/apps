@@ -7,6 +7,7 @@ import {
   MACHINES_CONSUMER_CONTRACT_VERSION,
   MACHINES_PACKAGE_NAME,
   discoverMachineTopology,
+  findMachineTopologyEntry,
   getMachinesConsumerCapabilities,
   redactRouteForOutput,
   resolveMachineRoute,
@@ -317,7 +318,7 @@ function topologyEntry(topology: MachineTopology, machineId: string): MachineTop
   if (machineId === "local" || machineId === "localhost") {
     return topology.machines.find((entry) => entry.machine_id === topology.local_machine_id) ?? null;
   }
-  return topology.machines.find((entry) => entry.machine_id === machineId) ?? null;
+  return findMachineTopologyEntry(topology, machineId);
 }
 
 function defaultTargets(localMachineId: string, includeApple01: boolean): DispatchFleetSmokeTargetInput[] {

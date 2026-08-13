@@ -1,5 +1,5 @@
 import { homedir } from "node:os";
-import { readManifest } from "../manifests.js";
+import { findManifestMachine, readManifest } from "../manifests.js";
 import { getLocalMachineId, recordSetupRun } from "../db.js";
 import { assertMutationPlanDigest, attachMutationPlanDigest } from "./mutation-approval.js";
 import { describeMachineCommandFailure, runMachineCommand, type MachineCommandRunner } from "../remote.js";
@@ -104,8 +104,8 @@ export function buildSetupPlan(machineId?: string): SetupResult {
   const manifest = readManifest();
   const currentMachineId = getLocalMachineId();
   const selected = machineId
-    ? manifest.machines.find((machine) => machine.id === machineId)
-    : manifest.machines.find((machine) => machine.id === currentMachineId);
+    ? findManifestMachine(manifest, machineId)
+    : findManifestMachine(manifest, currentMachineId);
 
   if (machineId && !selected) {
     throw new Error(`Machine not found in manifest: ${machineId}`);

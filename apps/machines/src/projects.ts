@@ -1,4 +1,4 @@
-import { readManifest, writeManifest } from "./manifests.js";
+import { findManifestMachine, readManifest, writeManifest } from "./manifests.js";
 import type { MachineTopologyOptions } from "./topology.js";
 import {
   MACHINES_CONSUMER_CONTRACT_VERSION,
@@ -441,12 +441,14 @@ function machineSummaries(assignments: MachineProjectAssignment[]): MachineProje
 export function listMachineProjectAssignments(options: MachineProjectAssignmentsOptions = {}): MachineProjectAssignments {
   const manifest = options.manifest ?? readManifest();
   const localMachineId = process.env["HASNA_MACHINES_MACHINE_ID"]?.trim() || null;
+  const requestedMachine = options.machineId ? findManifestMachine(manifest, options.machineId) : null;
+  const filterMachineId = requestedMachine?.id ?? options.machineId;
   const allAssignments = mergeAssignments(manifest.machines.flatMap((machine) => [
     ...collectAssignmentMapEntries(machine, localMachineId),
     ...collectPathMapEntries(machine, localMachineId),
   ]));
   const assignments = allAssignments.filter((assignment) => {
-    if (options.machineId && assignment.machine_id !== options.machineId) return false;
+    if (filterMachineId && assignment.machine_id !== filterMachineId) return false;
     if (options.projectId && assignment.project_id !== options.projectId && assignment.workspace_id !== options.projectId) return false;
     return true;
   });
@@ -458,7 +460,7 @@ export function listMachineProjectAssignments(options: MachineProjectAssignments
     },
     generated_at: (options.now ?? new Date()).toISOString(),
     filters: {
-      machine_id: options.machineId ?? null,
+      machine_id: filterMachineId ?? null,
       project_id: options.projectId ?? null,
     },
     assignments,
@@ -515,9 +517,10 @@ function removeProjectFromMaps(metadata: Record<string, unknown>, projectId: str
 }
 
 function updateManifestMachine(manifest: FleetManifest, machineId: string, updater: (machine: MachineManifest) => MachineManifest): FleetManifest {
+  const target = findManifestMachine(manifest, machineId);
   let found = false;
   const machines = manifest.machines.map((machine) => {
-    if (machine.id !== machineId) return machine;
+    if (!target || machine.id !== target.id) return machine;
     found = true;
     return updater(machine);
   });

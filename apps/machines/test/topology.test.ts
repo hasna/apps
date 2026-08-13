@@ -130,6 +130,95 @@ describe("machine topology SDK", () => {
     }
   });
 
+  test("resolves a legacy manifest alias to the canonical topology route", () => {
+    const dir = setupTemp("machines-topology-machine-alias-");
+    try {
+      manifestAdd({
+        id: "station03",
+        friendlyName: "station03",
+        aliases: ["apple03"],
+        hostname: "station03.local",
+        sshAddress: "operator@station03.local",
+        tailscaleName: "station03.tailnet.ts.net",
+        platform: "linux",
+        workspacePath: "/home/operator/workspace",
+      });
+
+      const topology = discoverMachineTopology({
+        now: new Date("2026-06-09T00:00:00.000Z"),
+        runner: fakeRunner({
+          Self: { HostName: "demo-node-02", DNSName: "demo-node-02.tailnet.ts.net.", OS: "linux", Online: true },
+          Peer: {
+            "nodekey:station03": {
+              HostName: "station03",
+              DNSName: "station03.tailnet.ts.net.",
+              OS: "linux",
+              TailscaleIPs: ["203.0.113.53"],
+              Online: true,
+              Active: true,
+            },
+          },
+        }),
+      });
+
+      const canonical = topology.machines.find((machine) => machine.machine_id === "station03");
+      expect(canonical?.aliases).toEqual(["apple03"]);
+
+      const route = resolveMachineRoute("apple03", { topology, now: new Date("2026-06-09T00:00:00.000Z") });
+      expect(route.ok).toBe(true);
+      expect(route.machine_id).toBe("station03");
+      expect(route.evidence.matched_by).toBe("alias");
+      expect(route.target).toBe("station03.tailnet.ts.net");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("retains Tailscale state when a peer advertises only the legacy alias", () => {
+    const dir = setupTemp("machines-topology-legacy-peer-alias-");
+    try {
+      manifestAdd({
+        id: "station03",
+        friendlyName: "station03",
+        aliases: ["apple03"],
+        hostname: "station03.local",
+        sshAddress: "operator@station03.local",
+        tailscaleName: "station03.tailnet.ts.net",
+        platform: "linux",
+        workspacePath: "/home/operator/workspace",
+      });
+
+      const topology = discoverMachineTopology({
+        now: new Date("2026-06-09T00:00:00.000Z"),
+        runner: fakeRunner({
+          Self: { HostName: "demo-node-02", DNSName: "demo-node-02.tailnet.ts.net.", OS: "linux", Online: true },
+          Peer: {
+            "nodekey:apple03": {
+              HostName: "apple03",
+              DNSName: "apple03.tailnet.ts.net.",
+              OS: "linux",
+              TailscaleIPs: ["203.0.113.54"],
+              Online: true,
+              Active: true,
+            },
+          },
+        }),
+      });
+
+      const canonical = topology.machines.find((machine) => machine.machine_id === "station03");
+      expect(canonical?.tailscale.ips).toEqual(["203.0.113.54"]);
+      expect(canonical?.tailscale.online).toBe(true);
+      expect(canonical?.tailscale.active).toBe(true);
+
+      const route = resolveMachineRoute("station03", { topology, now: new Date("2026-06-09T00:00:00.000Z") });
+      expect(route.route).toBe("tailscale");
+      expect(route.target).toBe("station03.tailnet.ts.net");
+      expect(route.evidence.tailscale_online).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("resolves project paths from manifest metadata without exposing secrets", () => {
     const dir = setupTemp("machines-workspace-paths-");
     try {

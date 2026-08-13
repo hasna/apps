@@ -2330,6 +2330,12 @@
               "machine_id": {
                 "type": "string"
               },
+              "aliases": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
               "friendly_name": {
                 "type": [
                   "string",

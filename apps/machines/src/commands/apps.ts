@@ -1,4 +1,4 @@
-import { detectCurrentMachineManifest, getManifestMachine, readManifest } from "../manifests.js";
+import { detectCurrentMachineManifest, findManifestMachine, getManifestMachine, readManifest } from "../manifests.js";
 import { resolveExactManifestPath } from "../paths.js";
 import { assertMutationPlanDigest, attachMutationPlanDigest } from "./mutation-approval.js";
 import { requireMachineCommandSuccess, runMachineCommand, type MachineCommandRunner } from "../remote.js";
@@ -260,7 +260,7 @@ function resolveMachine(machineId?: string, options: AppsManifestOptions = {}, r
   }
   if (manifestPath) {
     const manifest = readManifest(manifestPath);
-    const machine = manifest.machines.find((entry) => entry.id === machineId) ?? null;
+    const machine = findManifestMachine(manifest, machineId);
     if (machine && exactBunPackages(machine).length > 0 && manifest.machines.length !== 1) {
       throw new Error("Exact app candidate manifest must contain exactly one target machine.");
     }
@@ -358,7 +358,7 @@ export function validateAppsCandidate(machineId: string, options: AppsManifestOp
     const manifestPath = resolveExactManifestPath(options.manifestPath, options.env);
     const manifest = readManifest(manifestPath);
     if (manifest.machines.length !== 1) errors.push("candidate_manifest_not_target_only");
-    machine = manifest.machines.find((entry) => entry.id === machineId) ?? null;
+    machine = findManifestMachine(manifest, machineId);
     if (!machine) errors.push("target_missing");
     else errors.push(...validateExactBunMachine(machine));
   } catch (error) {

@@ -3,6 +3,7 @@ import {
   MACHINES_PACKAGE_NAME,
   MACHINE_LIST_ORDER,
   discoverMachineTopology,
+  findMachineTopologyEntry,
   getMachinesConsumerCapabilities,
   type MachineTopology,
   type MachineListPagination,
@@ -140,8 +141,7 @@ function isPaginatedTopology(topology: MachineTopology): boolean {
 
 function topologyHasMachineIds(topology: MachineTopology, machineIds: string[]): boolean {
   if (machineIds.length === 0) return true;
-  const present = new Set(topology.machines.map((machine) => machine.machine_id));
-  return machineIds.every((machineId) => present.has(machineId));
+  return machineIds.every((machineId) => findMachineTopologyEntry(topology, machineId) !== null);
 }
 
 function mergeTopologyForMachineLookup(primary: MachineTopology, fallback: MachineTopology, warning: string): MachineTopology {
@@ -195,7 +195,7 @@ function dedupeMachineIds(values: Array<string | null | undefined>): string[] {
 }
 
 function findMachine(topology: MachineTopology, machineId: string): MachineTopologyEntry | null {
-  return topology.machines.find((machine) => machine.machine_id === machineId) ?? null;
+  return findMachineTopologyEntry(topology, machineId);
 }
 
 export function machineReferenceForNote(
@@ -363,7 +363,10 @@ export function listMachineTrashPolicies(options: MachineTrashPoliciesOptions = 
     ? mergeTopologyForMachineLookup(options.topology, unpaginatedDiscoveredTopology(options), "paginated_topology_expanded_for_trash_policy")
     : initialTopology;
   const machines = machineId
-    ? topology.machines.filter((machine) => machine.machine_id === machineId)
+    ? (() => {
+      const machine = findMachineTopologyEntry(topology, machineId);
+      return machine ? [machine] : [];
+    })()
     : topology.machines;
   const pagination: MachineListPagination = machineId
     ? {

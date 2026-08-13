@@ -9,6 +9,7 @@ import {
   MACHINES_CONSUMER_CONTRACT_VERSION,
   MACHINES_PACKAGE_NAME,
   discoverMachineTopology,
+  findMachineTopologyEntry,
   getMachinesConsumerCapabilities,
   type MachineTopology,
   type MachineTopologyEntry,
@@ -107,7 +108,7 @@ function isPaginatedTopology(topology: MachineTopology): boolean {
 }
 
 function topologyHasMachineId(topology: MachineTopology, machineId: string): boolean {
-  return topology.machines.some((machine) => machine.machine_id === machineId);
+  return findMachineTopologyEntry(topology, machineId) !== null;
 }
 
 function fullTopology(options: MachineDetailsOptions): MachineTopology {
@@ -136,7 +137,7 @@ function findMachine(topology: MachineTopology, machineId: string): MachineTopol
   if (machineId === "local" || machineId === "localhost") {
     return topology.machines.find((machine) => machine.machine_id === topology.local_machine_id) ?? null;
   }
-  return topology.machines.find((machine) => machine.machine_id === machineId) ?? null;
+  return findMachineTopologyEntry(topology, machineId);
 }
 
 function parseDateMs(value: string | null | undefined): number | null {

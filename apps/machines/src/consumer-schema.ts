@@ -729,6 +729,7 @@ export const MACHINES_CONSUMER_SCHEMA_BUNDLE: MachinesConsumerSchemaBundle = {
             required: ["machine_id", "friendly_name", "display_name", "updated_at"],
             properties: {
               machine_id: { type: "string" },
+              aliases: { type: "array", items: { type: "string" } },
               friendly_name: { type: ["string", "null"] },
               display_name: { type: "string" },
               updated_at: { type: ["string", "null"], format: "date-time" },
@@ -1223,6 +1224,9 @@ export function validateMachinesConsumerEnvelope(
         }
         requireFields(machine, ["machine_id", "friendly_name", "display_name", "updated_at"], errors);
         if (!hasString(machine, "machine_id")) errors.push(`machines.${index}.machine_id`);
+        if (machine.aliases !== undefined && (!Array.isArray(machine.aliases) || machine.aliases.some((alias) => typeof alias !== "string"))) {
+          errors.push(`machines.${index}.aliases`);
+        }
         if (!hasString(machine, "display_name")) errors.push(`machines.${index}.display_name`);
         if (machine.friendly_name !== null && typeof machine.friendly_name !== "string") errors.push(`machines.${index}.friendly_name`);
         if (machine.updated_at !== null && typeof machine.updated_at !== "string") errors.push(`machines.${index}.updated_at`);
