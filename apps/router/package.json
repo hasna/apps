@@ -22,6 +22,7 @@
     "docs",
     "examples",
     "router.config.example.json",
+    "CHANGELOG.md",
     "README.md",
     "LICENSE"
   ],
@@ -52,11 +53,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/hasna/open-router.git"
+    "url": "git+https://github.com/hasna/router.git"
   },
-  "homepage": "https://github.com/hasna/open-router",
+  "homepage": "https://github.com/hasna/router",
   "bugs": {
-    "url": "https://github.com/hasna/open-router/issues"
+    "url": "https://github.com/hasna/router/issues"
   },
   "engines": {
     "bun": ">=1.0.0"
