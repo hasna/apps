@@ -1,10 +1,10 @@
 // `contracts issue-key` implementation.
 //
-// Mints a Hasna API key, persists ONLY the hashed record to the app's Postgres,
-// and prints the plaintext secret exactly once (that is the command's purpose —
-// it is a freshly generated secret, not the disclosure of an at-rest credential).
-// The secret exists only in this process, so every exit path after minting prints
-// it, including persistence failures.
+// Mints a Hasna API key and persists ONLY the hashed record to the app's
+// Postgres. The legacy path prints the plaintext secret exactly once. The
+// credential-safe `--secrets-ref` path instead delivers it directly through
+// the typed @hasna/secrets SDK and emits metadata only; the two paths stay
+// separate because their failure contracts are deliberately opposite.
 //
 // PERSISTENCE IS POSTGRES-ONLY, DELIBERATELY. Writing the hashed record through an
 // app's cloud `/v1` API would need an `api-keys` operation that is declared in the
@@ -19,16 +19,112 @@
 import { mintApiKey, type MintedApiKey } from "../auth/keys";
 import { normalizeTenantId } from "../auth/tenant";
 import { ApiKeyStore, type AuthQueryClient } from "../auth/store";
+import { createSecretsClientFromEnv, type SecretsClient } from "@hasna/secrets";
 
-type IssueKeyStore = Pick<ApiKeyStore, "ensureSchema" | "insertMinted">;
+type IssueKeyStore = Pick<ApiKeyStore, "ensureSchema" | "insertMinted"> & Partial<Pick<ApiKeyStore, "revoke">>;
 type IssueKeyStoreHandle = { store: IssueKeyStore; close: () => Promise<void> };
 type IssueKeyConnectStore = (connectionString: string, table: string) => Promise<IssueKeyStoreHandle>;
+type IssueKeySecretsClient = Pick<SecretsClient, "putSecret" | "deleteSecret">;
+type IssueKeyConnectSecrets = (env: NodeJS.ProcessEnv) => Promise<IssueKeySecretsClient>;
 
 export interface IssueKeyDeps {
   report: (options: { json?: boolean }, error: string, details?: Record<string, unknown>) => void;
   env?: NodeJS.ProcessEnv;
   now?: () => number;
   connectStore?: IssueKeyConnectStore;
+  connectSecrets?: IssueKeyConnectSecrets;
+}
+
+const SAFE_REFERENCE_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+const AGENT_REFERENCE_SEGMENT = "{agent}";
+const KID_REFERENCE_SEGMENT = "{kid}";
+
+interface SecretsReferenceTemplate {
+  resolve(kid: string): string;
+}
+
+/**
+ * Validate a collision-resistant Secrets reference before any credential is
+ * minted. Both placeholders are complete path segments on purpose:
+ *
+ * - `{agent}` makes the signed subject and storage namespace visibly agree;
+ * - `{kid}` makes every successful issuance create a distinct vault row, so a
+ *   retry cannot silently overwrite the only copy of another credential.
+ *
+ * This path is deliberately non-idempotent. A failed invocation compensates
+ * and a retry mints a fresh kid/reference pair. One invocation never retries a
+ * POST internally, and concurrent invocations cannot target the same resolved
+ * reference unless the cryptographic kid generator collides (the DB unique key
+ * refuses that before the vault write).
+ */
+function validateSecretsReferenceTemplate(value: unknown, agent: string): SecretsReferenceTemplate {
+  if (typeof value !== "string") {
+    throw new Error("--secrets-ref must be a string reference template.");
+  }
+  const template = value.trim();
+  if (template.length === 0 || template.length > 256) {
+    throw new Error("--secrets-ref must be 1-256 characters.");
+  }
+  if (!SAFE_REFERENCE_SEGMENT.test(agent)) {
+    throw new Error("--agent must be a safe non-empty Secrets path segment (letters, digits, '.', '_' or '-').");
+  }
+  const segments = template.split("/");
+  if (segments.length > 16 || segments.some((segment) => segment.length === 0)) {
+    throw new Error("--secrets-ref must contain 1-16 non-empty path segments.");
+  }
+  const agentSegments = segments.filter((segment) => segment === AGENT_REFERENCE_SEGMENT).length;
+  const kidSegments = segments.filter((segment) => segment === KID_REFERENCE_SEGMENT).length;
+  if (agentSegments !== 1 || kidSegments !== 1) {
+    throw new Error("--secrets-ref must contain exactly one '{agent}' segment and one '{kid}' segment.");
+  }
+  for (const segment of segments) {
+    if (segment === AGENT_REFERENCE_SEGMENT || segment === KID_REFERENCE_SEGMENT) continue;
+    if (!SAFE_REFERENCE_SEGMENT.test(segment)) {
+      throw new Error("--secrets-ref contains an unsafe path segment.");
+    }
+  }
+  return {
+    resolve: (kid) =>
+      segments
+        .map((segment) => (segment === AGENT_REFERENCE_SEGMENT ? agent : segment === KID_REFERENCE_SEGMENT ? kid : segment))
+        .join("/"),
+  };
+}
+
+async function connectSecrets(env: NodeJS.ProcessEnv): Promise<IssueKeySecretsClient> {
+  return createSecretsClientFromEnv(env);
+}
+
+async function closeQuietly(handle: IssueKeyStoreHandle | undefined): Promise<void> {
+  if (!handle) return;
+  try {
+    await handle.close();
+  } catch {
+    // A pool-close error cannot change the already committed issuance result.
+  }
+}
+
+async function compensateRecord(store: IssueKeyStore, kid: string): Promise<boolean> {
+  if (!store.revoke) return false;
+  try {
+    // A successful call is fail-closed whether it changed one row (revoked) or
+    // zero rows (the preceding insert never committed).
+    await store.revoke(kid, "credential_delivery_failed");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function compensateSecret(client: IssueKeySecretsClient, key: string): Promise<boolean> {
+  try {
+    // Delete is idempotent. A successful call means the exact ref is absent,
+    // whether the preceding PUT committed before its response was lost or not.
+    await client.deleteSecret({ key });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function envToken(app: string): string {
@@ -114,6 +210,7 @@ export async function runIssueKey(options: Record<string, unknown>, deps: IssueK
   const optDatabaseUrlEnv = ownOption(options, "databaseUrlEnv") as string | undefined;
   const optTable = ownOption(options, "table") as string | undefined;
   const optStore = ownOption(options, "store");
+  const optSecretsRef = ownOption(options, "secretsRef");
 
   const json = optJson === true;
   const app = String(optApp ?? "").trim();
@@ -143,6 +240,35 @@ export async function runIssueKey(options: Record<string, unknown>, deps: IssueK
   // signature. `String()` coercion and the `bootstrap` fallback are preserved
   // exactly; only the prototype walk is gone.
   const agent = optAgent !== undefined ? String(optAgent) : bootstrap ? "bootstrap" : undefined;
+
+  // `--secrets-ref` selects the credential-silent path. It is intentionally a
+  // separate branch rather than a formatting flag on the existing command:
+  // the legacy path promises to disclose the token, including on failures,
+  // while this path promises that the token can reach only the typed Secrets
+  // consumer. Mixing those contracts behind `--json` or a redaction toggle
+  // makes one future error path enough to put the token back on stdout.
+  let secretsReference: SecretsReferenceTemplate | undefined;
+  if (optSecretsRef !== undefined) {
+    if (bootstrap || typeof optAgent !== "string" || optAgent.trim().length === 0) {
+      deps.report({ json }, "Credential-safe Secrets issuance requires an explicit --agent.", {
+        code: "missing_agent",
+      });
+      return;
+    }
+    if (optStore === false) {
+      deps.report({ json }, "--secrets-ref cannot be combined with --no-store.", {
+        code: "bad_secrets_store_mode",
+      });
+      return;
+    }
+    try {
+      secretsReference = validateSecretsReferenceTemplate(optSecretsRef, agent as string);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Invalid --secrets-ref.";
+      deps.report({ json }, message, { code: "bad_secrets_ref" });
+      return;
+    }
+  }
 
   let tid: string | undefined;
   if (optTid !== undefined) {
@@ -201,6 +327,120 @@ export async function runIssueKey(options: Record<string, unknown>, deps: IssueK
   const dbEnvName = databaseUrlEnvName(app, optDatabaseUrlEnv);
   const expiresAt = minted.claims.exp === null ? null : new Date(minted.claims.exp * 1000).toISOString();
   const issuedAt = new Date(minted.claims.iat * 1000).toISOString();
+
+  if (secretsReference) {
+    const secretsRef = secretsReference.resolve(minted.kid);
+    const createdBy = agent as string;
+    const connectionString = env[dbEnvName];
+    if (!connectionString) {
+      deps.report({ json }, `No database URL found. Set ${dbEnvName}.`, {
+        code: "missing_database_url",
+        databaseUrlEnv: dbEnvName,
+      });
+      return;
+    }
+
+    let handle: IssueKeyStoreHandle | undefined;
+    let secretsClient: IssueKeySecretsClient | undefined;
+    try {
+      const connect = deps.connectStore ?? connectStore;
+      handle = await connect(connectionString, table);
+      await handle.store.ensureSchema();
+      if (!handle.store.revoke) {
+        deps.report({ json }, "The selected key store does not support fail-closed compensation.", {
+          code: "bad_secrets_store_contract",
+        });
+        return;
+      }
+      const connectVault = deps.connectSecrets ?? connectSecrets;
+      secretsClient = await connectVault(env);
+    } catch {
+      deps.report({ json }, "Could not prepare credential-safe key storage.", {
+        code: "storage_prepare_failed",
+      });
+      return;
+    } finally {
+      if (!handle?.store.revoke || !secretsClient) await closeQuietly(handle);
+    }
+
+    // At this point both consumers are ready. The DB write comes first because
+    // an ambiguous DB outcome can be made fail-closed by kid before the token
+    // has ever reached the vault. No POST is retried internally.
+    try {
+      await handle.store.insertMinted(minted, createdBy);
+    } catch {
+      const compensated = await compensateRecord(handle.store, minted.kid);
+      deps.report({ json }, "Could not persist the credential record.", {
+        code: "store_failed",
+        app,
+        kid: minted.kid,
+        agent: createdBy,
+        secretsRef,
+        compensated,
+      });
+      await closeQuietly(handle);
+      return;
+    }
+
+    try {
+      const metadata = await secretsClient.putSecret({
+        key: secretsRef,
+        value: minted.token,
+        type: "api_key",
+        label: `${app} API key for ${createdBy}`,
+      });
+      if (metadata.key !== secretsRef || metadata.type !== "api_key") {
+        throw new Error("Secrets metadata did not match the requested reference.");
+      }
+    } catch {
+      // A failed POST response is ambiguous: the vault write may have landed.
+      // Revoke first, then delete the exact ref. Neither compensation forwards
+      // the underlying error because a producer is allowed to include request
+      // data in its error and the request data contains the token.
+      const recordCompensated = await compensateRecord(handle.store, minted.kid);
+      const vaultCompensated = await compensateSecret(secretsClient, secretsRef);
+      const compensated = recordCompensated && vaultCompensated;
+      deps.report({ json }, "Could not store the credential in Hasna Secrets.", {
+        code: "secrets_store_failed",
+        app,
+        kid: minted.kid,
+        agent: createdBy,
+        secretsRef,
+        compensated,
+        recordCompensated,
+        vaultCompensated,
+      });
+      await closeQuietly(handle);
+      return;
+    }
+
+    await closeQuietly(handle);
+    const receipt = {
+      ok: true,
+      app,
+      kid: minted.kid,
+      agent: createdBy,
+      tid: tid ?? null,
+      scopes,
+      issuedAt,
+      expiresAt,
+      secretsRef,
+      stored: true,
+      vaultStored: true,
+    };
+    if (json) {
+      console.log(JSON.stringify(receipt, null, 2));
+      return;
+    }
+    console.log(`Issued API key metadata for app '${app}' (kid ${minted.kid})`);
+    console.log(`  agent:      ${createdBy}`);
+    console.log(`  tenant:     ${tid ?? "- (untenanted)"}`);
+    console.log(`  scopes:     ${scopes.join(", ")}`);
+    console.log(`  issued:     ${issuedAt}`);
+    console.log(`  expires:    ${expiresAt ?? "never"}`);
+    console.log(`  secretsRef: ${secretsRef}`);
+    return;
+  }
 
   // The plaintext token is derived at mint time and never persisted anywhere.
   // EVERY exit path after minting must hand it to the operator: a persistence

@@ -502,6 +502,15 @@ Scope grammar is `<app>:<action>` with wildcards (`*`, `<app>:*`, `*:<action>`).
 # Mint a scoped key: stores the hashed record in RDS, prints the secret ONCE.
 contracts issue-key --app todos --agent worker-1 --scopes 'todos:read,todos:write'
 
+# Credential-safe agent issuance: stores the hashed record and delivers the
+# plaintext directly to one unique Hasna Secrets reference. Output is metadata
+# only; the resolved reference is reported, never the token.
+contracts issue-key --app todos --agent worker-1 --scopes 'todos:read,todos:write' \
+  --secrets-ref 'todos/agents/{agent}/{kid}' --json
+
+# Consume the resolved reference from the metadata receipt without disclosure.
+secrets exec todos/agents/worker-1/<kid-from-receipt> --as HASNA_TODOS_API_KEY -- todos <command>
+
 # Bootstrap admin key (scopes default to '<app>:*', agent 'bootstrap'):
 contracts issue-key --app todos --bootstrap
 
@@ -522,6 +531,17 @@ whether a record was really stored.
 Any persistence failure still prints the minted secret — it exists only in that
 process and cannot be reissued. Generate a signing secret with
 `openssl rand -hex 32`. Revoke with `store.revoke(kid)`.
+
+The exception is `--secrets-ref`, whose contract is intentionally credential-
+silent on success and failure. It requires an explicit `--agent`, a normal
+hashed-record write, and a template containing exactly one `{agent}` segment
+and one `{kid}` segment. The resolved reference is unique per issuance, so
+concurrent runs never overwrite a stable credential. The command does not
+retry a vault write: an ambiguous database failure is revoked by kid; an
+ambiguous Secrets failure revokes the database row and deletes the exact vault
+reference. Retry then mints a new kid/reference pair. `--agent` remains a claim
+inside the signed token, not authentication for the caller; the consuming
+service must keep its authenticated-principal authorization checks.
 
 Services that expose API, MCP, CLI-token, dashboard, worker, sync/export, or
 provider webhook surfaces must also follow the shared

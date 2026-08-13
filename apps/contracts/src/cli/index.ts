@@ -527,7 +527,7 @@ export function createContractsProgram() {
 
   program
     .command("issue-key")
-    .description("Mint an API key (prefix hasna_<app>_): stores the hashed record and prints the secret ONCE")
+    .description("Mint an API key: disclose it once, or deliver it silently to an exact Hasna Secrets reference")
     .requiredOption("--app <app>", "App slug the key authenticates (e.g. todos)")
     .option("--agent <agent>", "Issued-to agent/subject (informational)")
     .option("--tid <tenant>", "Tenant/organization the key acts for (UUID, ULID, slug, or prefixed id). Omit for an untenanted key")
@@ -538,6 +538,10 @@ export function createContractsProgram() {
     .option("--signing-secret-env <name>", "Env var holding the HMAC signing secret (default HASNA_<APP>_API_SIGNING_KEY, then HASNA_API_SIGNING_KEY)")
     .option("--database-url-env <name>", "Env var holding the Postgres URL for the record store (default HASNA_<APP>_DATABASE_URL)")
     .option("--table <name>", "api-keys table name (default api_keys)")
+    .option(
+      "--secrets-ref <template>",
+      "Deliver without plaintext output; template must contain separate {agent} and {kid} path segments",
+    )
     .option("--no-store", "Do not persist the hashed record (print secret + hash only)")
     .option("-j, --json", "Output JSON")
     .action(async (options: Record<string, unknown>) => {
