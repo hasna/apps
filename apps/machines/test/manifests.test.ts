@@ -116,6 +116,42 @@ describe("manifest commands", () => {
     expect(manifestValidate().version).toBe(1);
   });
 
+  test("migrates legacy top-level heartbeat aliases at the manifest read boundary", () => {
+    const dir = mkdtempSync(join(tmpdir(), "machines-legacy-heartbeat-aliases-"));
+    const path = join(dir, "machines.json");
+    writeFileSync(path, JSON.stringify({
+      version: 1,
+      machines: [{
+        id: "legacy-node",
+        platform: "linux",
+        workspacePath: "/srv/legacy",
+        heartbeatAliases: ["legacy-host"],
+      }],
+    }), "utf8");
+
+    const manifest = readManifest(path);
+
+    expect(manifest.machines[0]?.metadata).toMatchObject({ heartbeatAliases: ["legacy-host"] });
+    expect((manifest.machines[0] as Record<string, unknown>).heartbeatAliases).toBeUndefined();
+  });
+
+  test("does not broaden legacy migration to unrelated unknown machine keys", () => {
+    const dir = mkdtempSync(join(tmpdir(), "machines-legacy-heartbeat-unknown-key-"));
+    const path = join(dir, "machines.json");
+    writeFileSync(path, JSON.stringify({
+      version: 1,
+      machines: [{
+        id: "legacy-node",
+        platform: "linux",
+        workspacePath: "/srv/legacy",
+        heartbeatAliases: ["legacy-host"],
+        unrelatedLegacyKey: true,
+      }],
+    }), "utf8");
+
+    expect(() => readManifest(path)).toThrow();
+  });
+
   test("keeps private manifest refs opaque and falls back to local files without an adapter", () => {
     const dir = mkdtempSync(join(tmpdir(), "machines-private-manifest-"));
     const path = join(dir, "machines.json");
