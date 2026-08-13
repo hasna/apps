@@ -74,6 +74,7 @@ import type {
   ProfileAssetBindingSpec,
 } from "../types/index.js";
 import { boundedReadPage, normalizeBoundedReadOptions } from "../lib/bounded-read.js";
+import { legacyProfileConfigBinding } from "../lib/instruction-graph.js";
 
 export interface CloudConfig {
   apiUrl: string;
@@ -660,11 +661,21 @@ export class CloudConfigStore implements ConfigStore {
   }
 
   async getProfileConfigBindings(idOrSlug: string): Promise<ProfileConfigBinding[]> {
-    const { data } = await this.requestProfileRoute<{ bindings: ProfileConfigBinding[] }>(
+    const { status, data } = await this.requestProfileRoute<{ bindings: ProfileConfigBinding[] }>(
       idOrSlug,
       (profileId) => `/profiles/${encodeURIComponent(profileId)}/bindings`,
       (value) => Array.isArray(value?.bindings),
     );
+    if (status === 404) {
+      const profile = await this.getProfile(idOrSlug);
+      const configs = await this.getProfileConfigs(idOrSlug);
+      return configs.map((config, sort_order) => ({
+        profile_id: profile.id,
+        config_id: config.id,
+        sort_order,
+        binding: legacyProfileConfigBinding(),
+      }));
+    }
     if (!data || !Array.isArray(data.bindings)) throw new ProfileNotFoundError(idOrSlug);
     return data.bindings;
   }
@@ -681,7 +692,10 @@ export class CloudConfigStore implements ConfigStore {
     };
 
     const first = await request(idOrSlug);
-    if (first.status !== 404 && isUsable(first.data)) return first;
+    if (first.status !== 404) {
+      if (isUsable(first.data)) return first;
+      throw new CloudHttpError(502, "profile follow-up returned an invalid response", first.data);
+    }
 
     // The collection endpoint is authoritative on deployments whose direct
     // profile identity resolver is stale. Retry both stable identities from
@@ -692,9 +706,12 @@ export class CloudConfigStore implements ConfigStore {
     for (const candidate of [profile.id, profile.slug]) {
       if (attempted.has(candidate)) continue;
       const response = await request(candidate);
-      if (response.status !== 404 && isUsable(response.data)) return response;
+      if (response.status !== 404) {
+        if (isUsable(response.data)) return response;
+        throw new CloudHttpError(502, "profile follow-up returned an invalid response", response.data);
+      }
     }
-    throw new ProfileNotFoundError(idOrSlug);
+    return { status: 404, data: null };
   }
 
   async createProfile(input: CreateProfileInput): Promise<Profile> {
@@ -753,11 +770,15 @@ export class CloudConfigStore implements ConfigStore {
   }
 
   async getProfileAssetBindings(profileIdOrSlug: string): Promise<ProfileAssetBinding[]> {
-    const { data } = await this.requestProfileRoute<{ assets: ProfileAssetBinding[] }>(
+    const { status, data } = await this.requestProfileRoute<{ assets: ProfileAssetBinding[] }>(
       profileIdOrSlug,
       (profileId) => `/profiles/${encodeURIComponent(profileId)}/assets`,
       (value) => Array.isArray(value?.assets),
     );
+    if (status === 404) {
+      await this.getProfile(profileIdOrSlug);
+      return [];
+    }
     if (!data || !Array.isArray(data.assets)) throw new ProfileNotFoundError(profileIdOrSlug);
     return data.assets;
   }

@@ -339,6 +339,52 @@ describe("CloudConfigStore CRUD mapping", () => {
     ]);
   });
 
+  test("profile follow-ups preserve a legacy API's embedded configs when bindings and assets routes are absent", async () => {
+    const canonicalId = "ae1030fc-4b10-41c7-a127-9d81fccfbac0";
+    const profile = { ...SAMPLE_PROFILE, id: canonicalId, slug: "my-setup", configs: [SAMPLE] };
+    const m = mockFetch((call) => {
+      if (call.url.endsWith(`/v1/profiles/${canonicalId}`) || call.url.endsWith(`/v1/profiles/${canonicalId}?limit=100&cursor=0`)) {
+        return { json: { profile } };
+      }
+      if (call.url.endsWith(`/v1/profiles/${canonicalId}/bindings`) || call.url.endsWith(`/v1/profiles/${canonicalId}/assets`)) {
+        return { status: 404, json: { error: "unknown profile action" } };
+      }
+      if (call.url.includes("/v1/profiles?")) return { json: page([profile]) };
+      return { status: 404, json: { error: "unexpected request" } };
+    });
+    active = m;
+    const store = new CloudConfigStore(CONFIG);
+
+    await expect(store.getProfileConfigBindings(canonicalId)).resolves.toEqual([
+      { profile_id: canonicalId, config_id: SAMPLE.id, sort_order: 0, binding: expect.objectContaining({ activation: { mode: "always" } }) },
+    ]);
+    await expect(store.getProfileAssetBindings(canonicalId)).resolves.toEqual([]);
+  });
+
+  test("legacy follow-up fallback rejects unknown identities for bindings and assets", async () => {
+    const m = mockFetch((call) => {
+      if (call.url.endsWith("/v1/profiles/missing/bindings") || call.url.endsWith("/v1/profiles/missing/assets")) {
+        return { status: 404, json: { error: "unknown profile action" } };
+      }
+      if (call.url.includes("/v1/profiles?")) return { json: page([{ ...SAMPLE_PROFILE, id: "p1", slug: "present" }]) };
+      return { status: 404, json: { error: "Profile not found: missing" } };
+    });
+    active = m;
+    const store = new CloudConfigStore(CONFIG);
+
+    await expect(store.getProfileConfigBindings("missing")).rejects.toThrow("Profile not found: missing");
+    await expect(store.getProfileAssetBindings("missing")).rejects.toThrow("Profile not found: missing");
+  });
+
+  test("non-404 malformed follow-up responses do not degrade to an empty legacy result", async () => {
+    const m = mockFetch(() => ({ json: { unexpected: true } }));
+    active = m;
+    const store = new CloudConfigStore(CONFIG);
+
+    await expect(store.getProfileAssetBindings("profile")).rejects.toThrow("invalid response");
+    await expect(store.getProfileConfigBindings("profile")).rejects.toThrow("invalid response");
+  });
+
   test("maps profile asset CRUD to the separate cloud API paths", async () => {
     const m = mockFetch((call) => {
       if (call.method === "GET") return { json: { assets: [SAMPLE_ASSET] } };
