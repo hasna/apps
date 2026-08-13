@@ -908,15 +908,16 @@ describe("package-owned inbox installation", () => {
     const pkg = JSON.parse(await readFile(PACKAGE_JSON, "utf8")) as {
       bin?: Record<string, string>;
     };
-    expect(pkg.bin?.inbox).toBe("bin/inbox");
+    expect(pkg.bin?.["conversations-inbox"]).toBe("bin/inbox");
+    expect(pkg.bin?.inbox).toBeUndefined();
   });
 
   test("installs atomically while preserving the previous target", async () => {
     const harness = await createHarness();
     const installDir = join(harness.root, "installed");
-    const target = join(installDir, "inbox");
+    const target = join(installDir, "conversations-inbox");
     await mkdir(installDir, { recursive: true });
-    await writeFile(target, "old-inbox\n", { mode: 0o755 });
+    await writeFile(target, "old-conversations-inbox\n", { mode: 0o755 });
 
     const result = runInbox(
       harness,
@@ -929,8 +930,8 @@ describe("package-owned inbox installation", () => {
     expect(result.stdout).toContain(target);
     expect(await readFile(target, "utf8")).toBe(await readFile(PACKAGE_INBOX, "utf8"));
     const files = await readdir(installDir);
-    const backups = files.filter((name) => name.startsWith("inbox.bak-"));
+    const backups = files.filter((name) => name.startsWith("conversations-inbox.bak-"));
     expect(backups).toHaveLength(1);
-    expect(await readFile(join(installDir, backups[0]), "utf8")).toBe("old-inbox\n");
+    expect(await readFile(join(installDir, backups[0]), "utf8")).toBe("old-conversations-inbox\n");
   });
 });
