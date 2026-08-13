@@ -8,7 +8,8 @@
 #                   contract-manifest placeholder.
 #   build-test    — the affected build + test graph via turbo --affected.
 #   publish-guard — internal-infra strings must never reach a published
-#                   tarball (placeholder until member packages land).
+#                   tarball. Real npm pack --dry-run per member; fails loudly
+#                   when a pack cannot be parsed (never a vacuous pass).
 #
 # Every job is independent, so a red secret scan does not hide a red
 # conformance run and the summary names which gate refused rather than "CI
@@ -135,10 +136,13 @@ jobs:
       - name: Install
         run: bun install --frozen-lockfile
 
-      # Placeholder until member packages land: with zero members the guard
-      # passes vacuously and says so. Its string-block half is live and
-      # self-tested; the tarball-diff half is deferred with the packages that
-      # will define expected contents.
+      # The guard dry-runs `npm pack --json` per member and parses the real
+      # entry list; prepack scripts interleave stdout with the JSON document,
+      # so raw JSON.parse fails on chatty members and the guard must extract
+      # the trailing JSON array instead — and FAIL (exit 1) on any parse
+      # failure, never report an empty scan. Its two-sided self-test proves it
+      # can fire on a seeded blocked entry, stays silent on a clean pack, and
+      # fails loudly on a broken pack.
       - name: Publish-guard self-test
         run: bun tooling/ci/check-publish-guard.ts --self-test
 
