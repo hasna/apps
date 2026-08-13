@@ -67,7 +67,7 @@ bun run verify            # typecheck + test + build + conformance
 
 ### v0 vs v1 (integrator phasing)
 
-This cohort ships **v0**: fleet models its own domain and exposes all surfaces over
+This release family ships **v0**: fleet models its own domain and exposes all surfaces over
 **fixture read-adapters** (`src/adapters/*`). **v1** (later, gated by
 `HASNA_FLEET_LIVE_UPSTREAM=1`) swaps the fixtures for live MCP/CLI calls to the
 upstream services — the rollup layer depends only on the adapter interfaces.

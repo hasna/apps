@@ -22,7 +22,7 @@ describe("cloud TLS config (verify-full)", () => {
     expect(() => resolveTlsConfig(VERIFY_FULL_DSN, { env: {} })).toThrow(/CA bundle/);
   });
 
-  it("require mode does NOT verify the cert (why the cohort mandates verify-full)", () => {
+  it("require mode does NOT verify the cert (why the fleet mandates verify-full)", () => {
     const cfg = resolveTlsConfig(REQUIRE_DSN, { ca: FAKE_CA });
     expect(cfg).toEqual({ rejectUnauthorized: false, ca: FAKE_CA });
   });
