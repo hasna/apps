@@ -1078,10 +1078,14 @@ profileCmd.command("show <id>").description("Show profile and its configs")
   try {
     const store = resolveConfigStore();
     const p = await store.getProfile(id);
-    const page = await store.getProfileConfigsPage(id, { limit: opts.limit, cursor: opts.cursor });
-    const assets = await store.getProfileAssetBindings(id);
+    // Follow-up reads must use the canonical ID returned by profile lookup.
+    // A remote API may resolve a slug through its collection fallback while
+    // its slug route remains stale; passing the original slug would regress
+    // immediately on configs, bindings, or assets.
+    const page = await store.getProfileConfigsPage(p.id, { limit: opts.limit, cursor: opts.cursor });
+    const assets = await store.getProfileAssetBindings(p.id);
     if (opts.json) {
-      printJson({ profile: p, configs: page, bindings: await store.getProfileConfigBindings(id), assets });
+      printJson({ profile: p, configs: page, bindings: await store.getProfileConfigBindings(p.id), assets });
       return;
     }
     console.log(chalk.bold(p.name) + chalk.dim(` (${p.slug})`));
