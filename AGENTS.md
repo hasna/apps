@@ -10,7 +10,7 @@ re-derived for a producer tree, never copied from a consumer tree.
 | surface | repo | publishes |
 |---|---|---|
 | public OSS apps & packages | **this repo** (`hasna/apps`) | `@hasna/*` (public, npm) |
-| private operating system, internal apps, agent infra | `hasna-internal/platform` (private) | `@hasna-internal/*` (restricted) |
+| private scope — NEVER referenced beyond this line | `hasna-internal/platform` (private) | `@hasna-internal/*` (restricted) |
 | forks and archived projects | standalone `hasna/<name>` repos | unchanged, kept separate |
 
 Membership of a project in THIS monorepo is decided by role, not by popularity:
