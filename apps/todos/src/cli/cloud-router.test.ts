@@ -56,6 +56,7 @@ import {
   cloudApplyPlanProjectLink,
   cloudRollbackPlanProjectLink,
   cloudResolveProjectRef,
+  cloudRenameProject,
   cloudResolvePlan,
   cloudResolveTaskListRef,
   cloudResolveTaskRef,
@@ -1812,6 +1813,29 @@ describe("cloud task-list, filter, and force-unlock parity", () => {
     ]) {
       await expect(cloudResolveProjectRef(client, ref))
         .resolves.toBe("99999999-9999-4999-8999-999999999999");
+    }
+  });
+
+  test("project-rename reports an incompatible authority when rename is missing (404/405)", async () => {
+    const projectId = "cbf3b934-44d0-4e1c-8225-23b44ade1d67";
+    for (const status of [404, 405]) {
+      resetTodosCloudClient();
+      installFetch((call) => {
+        if (call.url === "https://todos.example.com/v1/projects") {
+          return {
+            body: {
+              projects: [{ id: projectId, name: "Mallorca", path: "/tmp/mallorca", task_list_id: "mallorca-vacation" }],
+            },
+          };
+        }
+        if (call.url === `https://todos.example.com/v1/projects/${projectId}/rename`) {
+          return { status, body: { error: "method POST not allowed on /v1/projects/:id" } };
+        }
+        return { status: 404, body: { error: "not found" } };
+      });
+      const client = getTodosCloudClient(CLOUD_ENV)!;
+      await expect(cloudRenameProject(client, "cbf3b934", "mallorca-holiday"))
+        .rejects.toThrow(/REMOTE_API_INCOMPATIBLE.*\/v1\/projects\/:id\/rename/i);
     }
   });
 
