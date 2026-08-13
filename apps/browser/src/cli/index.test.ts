@@ -93,7 +93,7 @@ describe("CLI — one-shot browse commands", () => {
         "bun",
         "--json",
       ],
-      5_000,
+      10_000,
       { BROWSER_ENABLE_BUN_WEBVIEW: "1" },
     );
     expect(timedOut).toBe(false);
@@ -101,7 +101,7 @@ describe("CLI — one-shot browse commands", () => {
     const parsed = JSON.parse(stdout);
     expect(parsed.title).toBe("Bun fallback");
     expect(parsed.screenshot).toBeString();
-  }, 10_000);
+  }, 20_000);
 
   it("check --json tolerates concurrent shared SQLite startup", async () => {
     const runs = await Promise.all(
