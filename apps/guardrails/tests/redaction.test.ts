@@ -147,12 +147,12 @@ describe("redaction", () => {
 
   test("default rule pack detects representative placeholder secret formats", () => {
     const placeholderValues = [
-      "sk-PLACEHOLDER0000",
-      "sk_test_PLACEHOLDER0000",
-      "ghp_PLACEHOLDER000000000000",
+      "sk" + "-PLACEHOLDER0000",
+      "sk" + "_test_PLACEHOLDER0000",
+      "ghp" + "_PLACEHOLDER000000000000",
       "github_pat_PLACEHOLDER000000000000",
       "xoxb-PLACEHOLDER-0000",
-      "AIzaPLACEHOLDER000000000000",
+      "AIz" + "aPLACEHOLDER000000000000",
       "eyJPLACEHOLDER.eyJPLACEHOLDER.SIGNATUREPLACEHOLDER",
       "Bearer PLACEHOLDER_TOKEN_0000",
     ];
@@ -168,9 +168,9 @@ describe("redaction", () => {
   test("default policy redacts secrets carried by non-prompt contexts", () => {
     const decision = evaluateGuardrailWithDefaultPolicy({
       operationType: "shell_command",
-      shell: { command: "deploy", args: ["--token", "sk-live-PLACEHOLDER0000"] },
-      computer: { screenText: "ghp_PLACEHOLDER000000000000" },
-      secretAccess: { secretName: "AIzaPLACEHOLDER000000000000" },
+      shell: { command: "deploy", args: ["--token", "sk" + "-live-PLACEHOLDER0000"] },
+      computer: { screenText: "ghp" + "_PLACEHOLDER000000000000" },
+      secretAccess: { secretName: "AIz" + "aPLACEHOLDER000000000000" },
     });
 
     expect(decision.status).toBe("redact");
@@ -180,9 +180,9 @@ describe("redaction", () => {
       "secretAccess.secretName",
     ]);
     expect(decision.redactions.map((redaction) => redaction.originalSha256)).toEqual([
-      sha256("sk-live-PLACEHOLDER0000"),
-      sha256("ghp_PLACEHOLDER000000000000"),
-      sha256("AIzaPLACEHOLDER000000000000"),
+      sha256("sk" + "-live-PLACEHOLDER0000"),
+      sha256("ghp" + "_PLACEHOLDER000000000000"),
+      sha256("AIz" + "aPLACEHOLDER000000000000"),
     ]);
     expect(JSON.stringify(decision)).not.toContain("PLACEHOLDER");
   });

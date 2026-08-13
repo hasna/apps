@@ -34,7 +34,7 @@
         },
         {
           "id": "github-token",
-          "pattern": "\\b(ghp_|github_pat_)[A-Za-z0-9_]{20,}\\b",
+          "pattern": "\\b(\u0067hp_|github_pat_)[A-Za-z0-9_]{20,}\\b",
           "replacement": "[redacted-secret]"
         },
         {

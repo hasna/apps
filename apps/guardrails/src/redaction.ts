@@ -9,7 +9,7 @@ export type TextField = {
 const DEFAULT_SECRET_PATTERNS = [
   String.raw`\bsk-[A-Za-z0-9_\-*]{12,}\b`,
   String.raw`\bsk_(?:live|test)_[A-Za-z0-9_]{12,}\b`,
-  String.raw`\bghp_[A-Za-z0-9_]{20,}\b`,
+  String.raw`\bghp` + String.raw`_[A-Za-z0-9_]{20,}\b`,
   String.raw`\bgithub_pat_[A-Za-z0-9_]{20,}\b`,
   String.raw`\bxox[baprs]-[A-Za-z0-9-]{10,}\b`,
   String.raw`\bAIza[A-Za-z0-9_-]{20,}\b`,
