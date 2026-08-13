@@ -836,6 +836,25 @@ describe("apps", () => {
     expect(JSON.stringify(applied)).not.toContain("/private/home");
   });
 
+  test("resolves a legacy alias to the canonical machine in an exact candidate", () => {
+    const dir = mkdtempSync(join(tmpdir(), "machines-apps-exact-alias-candidate-"));
+    const manifestPath = join(dir, "candidate.json");
+    process.env["HASNA_MACHINES_MANIFEST_PATH"] = manifestPath;
+    const candidate = exactBunCandidate("station03", { platform: "macos", bunPath: "/Users/hasna/.bun/bin/bun" });
+    (candidate.machines as Array<Record<string, unknown>>)[0]!.aliases = ["apple03"];
+    writeFileSync(manifestPath, `${JSON.stringify(candidate, null, 2)}\n`);
+
+    expect(validateAppsCandidate("apple03", { manifestPath })).toMatchObject({
+      valid: true,
+      machineId: "apple03",
+      platform: "macos",
+      errors: [],
+    });
+    const plan = buildAppsPlan("apple03", { manifestPath });
+    expect("schema" in plan && plan.schema).toBe("machines.apps.plan.v2");
+    expect(plan.machineId).toBe("station03");
+  });
+
   test("live-revalidates installed state before a zero-step no-op", () => {
     const dir = mkdtempSync(join(tmpdir(), "machines-apps-exact-installed-state-"));
     const manifestPath = join(dir, "candidate.json");

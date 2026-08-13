@@ -1,8 +1,8 @@
 import { existsSync } from "node:fs";
 import { arch, hostname, platform, userInfo } from "node:os";
 import { spawnSync } from "node:child_process";
-import { getLocalMachineId, latestHeartbeatByMachine, listHeartbeats } from "./db.js";
-import { machineDisplayName, normalizeFriendlyName, readManifest } from "./manifests.js";
+import { getLocalMachineId, listHeartbeats } from "./db.js";
+import { findManifestMachine, machineDisplayName, normalizeFriendlyName, readManifest } from "./manifests.js";
 import { getManifestPath } from "./paths.js";
 import { REDACTED_VALUE, publicMetadataKeys, redactErrorMessage, redactMetadataForTopology, redactSensitiveValue } from "./redaction.js";
 import type { MachineManifest, MachinePlatform } from "./types.js";
@@ -44,6 +44,8 @@ export interface MachineRouteHint {
 
 export interface MachineTopologyEntry {
   machine_id: string;
+  /** Legacy manifest identities retained during a canonical stationNN re-key. */
+  aliases?: string[];
   friendly_name: string | null;
   display_name: string;
   updated_at: string | null;
@@ -472,7 +474,7 @@ export interface MachineRouteResolution {
   local: boolean;
   evidence: {
     topology: boolean;
-    matched_by: "machine_id" | "hostname" | "tailscale" | "route_target" | "local_alias" | "fallback" | null;
+  matched_by: "machine_id" | "alias" | "hostname" | "tailscale" | "route_target" | "local_alias" | "fallback" | null;
     manifest_declared: boolean | null;
     heartbeat_status: MachineTopologyEntry["heartbeat_status"] | null;
     tailscale_online: boolean | null;
@@ -856,6 +858,7 @@ function buildEntry(input: {
   const displayName = manifest ? machineDisplayName(manifest) : input.machineId;
   return {
     machine_id: input.machineId,
+    aliases: manifest?.aliases ?? [],
     friendly_name: friendlyName,
     display_name: displayName,
     updated_at: latestIso([manifest?.updatedAt, input.heartbeat?.updated_at, peer?.LastSeen]),
@@ -907,16 +910,22 @@ export function discoverMachineTopology(options: MachineTopologyOptions = {}): M
   const warnings: string[] = [];
   const manifest = readManifest();
   const heartbeats = listHeartbeats();
-  const heartbeatByMachine = latestHeartbeatByMachine(heartbeats);
-  const localMachineId = getLocalMachineId();
   const peers = options.includeTailscale === false ? new Map<string, TailscalePeer>() : loadTailscalePeers(runner, warnings);
-  const machineIds = new Set<string>([
-    localMachineId,
-    ...manifest.machines.map((machine) => machine.id),
-    ...heartbeats.map((heartbeat) => heartbeat.machine_id),
-    ...peers.keys(),
-  ]);
   const manifestById = new Map(manifest.machines.map((machine) => [machine.id, machine]));
+  const canonicalMachineId = (machineId: string): string => findManifestMachine(manifest, machineId)?.id ?? machineId;
+  const localMachineId = canonicalMachineId(getLocalMachineId());
+  const heartbeatByMachine = new Map<string, ReturnType<typeof listHeartbeats>[number]>();
+  for (const heartbeat of heartbeats) {
+    const canonicalId = canonicalMachineId(heartbeat.machine_id);
+    const previous = heartbeatByMachine.get(canonicalId);
+    if (!previous || heartbeat.updated_at > previous.updated_at) heartbeatByMachine.set(canonicalId, heartbeat);
+  }
+  const machineIds = new Set<string>([
+    canonicalMachineId(localMachineId),
+    ...manifest.machines.map((machine) => machine.id),
+    ...heartbeats.map((heartbeat) => canonicalMachineId(heartbeat.machine_id)),
+    ...[...peers.keys()].map(canonicalMachineId),
+  ]);
   const allMachines = [...machineIds].sort().map((machineId) => {
     const manifestMachine = manifestById.get(machineId);
     return buildEntry({
@@ -1018,6 +1027,14 @@ function normalizeMachineAlias(value: string): string {
   return value.trim().replace(/\.$/, "").toLowerCase();
 }
 
+/** Resolve a topology machine by its canonical id or a retained manifest alias. */
+export function findMachineTopologyEntry(topology: MachineTopology, machineId: string): MachineTopologyEntry | null {
+  const requested = normalizeMachineAlias(machineId);
+  return topology.machines.find((machine) => normalizeMachineAlias(machine.machine_id) === requested)
+    ?? topology.machines.find((machine) => (machine.aliases ?? []).some((alias) => normalizeMachineAlias(alias) === requested))
+    ?? null;
+}
+
 function routeTargetMatches(machine: MachineTopologyEntry, requested: string): boolean {
   const normalized = normalizeMachineAlias(requested);
   const values = [
@@ -1046,6 +1063,8 @@ function findRouteMachine(topology: MachineTopology, requestedMachineId: string)
 
   const machineIdMatch = topology.machines.find((machine) => normalizeMachineAlias(machine.machine_id) === requested);
   if (machineIdMatch) return { machine: machineIdMatch, matchedBy: "machine_id" };
+  const aliasMatch = topology.machines.find((machine) => (machine.aliases ?? []).some((alias) => normalizeMachineAlias(alias) === requested));
+  if (aliasMatch) return { machine: aliasMatch, matchedBy: "alias" };
 
   const hostnameMatch = topology.machines.find((machine) => machine.hostname && normalizeMachineAlias(machine.hostname) === requested);
   if (hostnameMatch) return { machine: hostnameMatch, matchedBy: "hostname" };
@@ -1878,6 +1897,7 @@ export function getLocalMachineTopology(options: MachineTopologyOptions = {}): M
   const topology = discoverMachineTopology({ ...options, limit: null, offset: 0 });
   return topology.machines.find((machine) => machine.machine_id === topology.local_machine_id) ?? {
     machine_id: topology.local_machine_id,
+    aliases: [],
     friendly_name: null,
     display_name: topology.local_machine_id,
     updated_at: null,

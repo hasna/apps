@@ -78,6 +78,8 @@ export interface ManifestFileSyncSpec {
 
 export interface MachineManifest {
   id: string;
+  /** Legacy machine identities retained during a canonical stationNN re-key. */
+  aliases?: string[];
   friendlyName?: string;
   updatedAt?: string;
   hostname?: string;

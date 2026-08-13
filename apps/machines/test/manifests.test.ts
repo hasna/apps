@@ -15,6 +15,7 @@ import {
 import {
   LEGACY_BUN_REGISTRY_SOURCE_SHA256,
   detectCurrentMachineManifest,
+  getManifestMachine,
   getManifestSourceRef,
   readManifest,
   readManifestWithSource,
@@ -133,6 +134,43 @@ describe("manifest commands", () => {
 
     expect(manifest.machines[0]?.metadata).toMatchObject({ heartbeatAliases: ["legacy-host"] });
     expect((manifest.machines[0] as Record<string, unknown>).heartbeatAliases).toBeUndefined();
+  });
+
+  test("accepts canonical machine ids with legacy aliases and resolves either identity", () => {
+    const dir = mkdtempSync(join(tmpdir(), "machines-manifest-machine-aliases-"));
+    const path = join(dir, "machines.json");
+    writeFileSync(path, JSON.stringify({
+      version: 1,
+      machines: [{
+        id: "station03",
+        friendlyName: "station03",
+        aliases: ["apple03", "legacy-apple03"],
+        platform: "linux",
+        workspacePath: "/srv/station03",
+      }],
+    }), "utf8");
+
+    const manifest = readManifest(path);
+
+    expect(manifest.machines[0]?.id).toBe("station03");
+    expect(manifest.machines[0]?.aliases).toEqual(["apple03", "legacy-apple03"]);
+    expect(getManifestMachine("station03", path)?.id).toBe("station03");
+    expect(getManifestMachine("apple03", path)?.id).toBe("station03");
+    expect(getManifestMachine("legacy-apple03", path)?.id).toBe("station03");
+  });
+
+  test("rejects ids and aliases that collide across the fleet", () => {
+    const dir = mkdtempSync(join(tmpdir(), "machines-manifest-machine-alias-collision-"));
+    const path = join(dir, "machines.json");
+    writeFileSync(path, JSON.stringify({
+      version: 1,
+      machines: [
+        { id: "station03", aliases: ["apple03"], platform: "linux", workspacePath: "/srv/station03" },
+        { id: "station04", aliases: ["apple03"], platform: "linux", workspacePath: "/srv/station04" },
+      ],
+    }), "utf8");
+
+    expect(() => readManifest(path)).toThrow(/machine alias apple03|duplicate machine identity apple03/i);
   });
 
   test("does not broaden legacy migration to unrelated unknown machine keys", () => {

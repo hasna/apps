@@ -1,7 +1,7 @@
 import { existsSync, lstatSync, readFileSync, symlinkSync, copyFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname } from "node:path";
-import { readManifest } from "../manifests.js";
+import { findManifestMachine, readManifest } from "../manifests.js";
 import { ensureParentDir } from "../paths.js";
 import { getLocalMachineId, recordSyncRun } from "../db.js";
 import { assertMutationPlanDigest, attachMutationPlanDigest } from "./mutation-approval.js";
@@ -95,8 +95,8 @@ export function buildSyncPlan(machineId?: string, runner: MachineCommandRunner =
   const manifest = readManifest();
   const currentMachineId = getLocalMachineId();
   const selected = machineId
-    ? manifest.machines.find((machine) => machine.id === machineId)
-    : manifest.machines.find((machine) => machine.id === currentMachineId);
+    ? findManifestMachine(manifest, machineId)
+    : findManifestMachine(manifest, currentMachineId);
 
   if (machineId && !selected) {
     throw new Error(`Machine not found in manifest: ${machineId}`);

@@ -1,5 +1,5 @@
 import { getManifestPath } from "../paths.js";
-import { readManifest, writeManifest } from "../manifests.js";
+import { findManifestMachine, readManifest, writeManifest } from "../manifests.js";
 import { resolveMachineWorkspace, type MachineWorkspaceResolution } from "../topology.js";
 import type { FleetManifest, MachineManifest } from "../types.js";
 
@@ -127,7 +127,7 @@ export function repairWorkspaceManifestMappings(options: WorkspaceManifestRepair
   const warnings = [...resolution.warnings];
   const manifest = readManifest();
   const manifestMachineId = resolution.machine_id ?? options.machineId;
-  const machine = manifest.machines.find((entry) => entry.id === manifestMachineId) ?? null;
+  const machine = findManifestMachine(manifest, manifestMachineId);
   const trusted = resolution.machine.trust_status === "trusted" || options.allowUntrusted === true;
 
   if (!machine) {

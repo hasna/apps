@@ -165,6 +165,7 @@ const fileSchema = z.object({
 
 export const machineSchema = z.object({
   id: z.string(),
+  aliases: z.array(z.string().trim().min(1)).optional(),
   friendlyName: z.string().optional(),
   updatedAt: z.string().optional(),
   hostname: z.string().optional(),
@@ -219,11 +220,29 @@ export const fleetSchema = z.object({
     });
   }
   const seenMachines = new Set<string>();
+  const seenIdentities = new Map<string, { machineIndex: number; kind: "id" | "alias" }>();
   fleet.machines.forEach((machine, index) => {
     if (seenMachines.has(machine.id)) {
       context.addIssue({ code: z.ZodIssueCode.custom, path: ["machines", index, "id"], message: `duplicate machine id ${machine.id}` });
     }
     seenMachines.add(machine.id);
+    const identities: Array<{ value: string; kind: "id" | "alias"; aliasIndex?: number }> = [
+      { value: machine.id, kind: "id" },
+      ...(machine.aliases ?? []).map((value, aliasIndex) => ({ value, kind: "alias" as const, aliasIndex })),
+    ];
+    for (const identity of identities) {
+      const key = identity.value.trim().toLowerCase();
+      const previous = seenIdentities.get(key);
+      if (previous) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["machines", index, identity.kind === "id" ? "id" : "aliases", ...(identity.aliasIndex === undefined ? [] : [identity.aliasIndex])],
+          message: `duplicate machine identity ${identity.value}`,
+        });
+      } else {
+        seenIdentities.set(key, { machineIndex: index, kind: identity.kind });
+      }
+    }
   });
 });
 
@@ -427,7 +446,15 @@ export function writeManifest(manifest: FleetManifest, path = getManifestPath())
 }
 
 export function getManifestMachine(machineId: string, path = getManifestPath()): MachineManifest | null {
-  return readManifest(path).machines.find((machine) => machine.id === machineId) || null;
+  return findManifestMachine(readManifest(path), machineId);
+}
+
+/** Resolve canonical ids first, then the legacy aliases retained by a re-keyed machine. */
+export function findManifestMachine(manifest: FleetManifest, machineId: string): MachineManifest | null {
+  const direct = manifest.machines.find((machine) => machine.id === machineId);
+  if (direct) return direct;
+  const requested = machineId.trim().toLowerCase();
+  return manifest.machines.find((machine) => (machine.aliases ?? []).some((alias) => alias.trim().toLowerCase() === requested)) ?? null;
 }
 
 export function detectCurrentMachineManifest(): MachineManifest {

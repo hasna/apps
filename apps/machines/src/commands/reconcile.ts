@@ -10,7 +10,7 @@ import {
   type RolloutVerification,
 } from "../distribution.js";
 import { findFreeze, listActiveFreezes } from "./freeze.js";
-import { readManifest } from "../manifests.js";
+import { findManifestMachine, readManifest } from "../manifests.js";
 import { ensureParentDir, getManifestPath, getRolloutRecordsPath } from "../paths.js";
 import {
   buildExactBunAppsPlan,
@@ -128,7 +128,7 @@ export function resolveDesiredPackages(manifest: FleetManifest, machineId: strin
   for (const spec of manifest.packages ?? []) {
     if (isBunManaged(spec)) merged.set(spec.name, spec);
   }
-  const machine = manifest.machines.find((entry) => entry.id === machineId);
+  const machine = findManifestMachine(manifest, machineId);
   for (const spec of machine?.packages ?? []) {
     if (isBunManaged(spec)) merged.set(spec.name, { ...merged.get(spec.name), ...spec });
   }
@@ -205,7 +205,7 @@ export function buildReconcilePlan(options: BuildReconcilePlanOptions = {}): Rec
     now,
   });
 
-  const machine = manifest.machines.find((entry) => entry.id === machineId);
+  const machine = findManifestMachine(manifest, machineId);
   const machineExactPackages = machine ? exactBunPackages(machine) : [];
   const exactBunPlan = machineExactPackages.length > 0 && machine
     ? buildExactBunAppsPlan(machine, options.exactInstalledState)
@@ -495,7 +495,7 @@ export async function executeReconcilePlan(plan: ReconcilePlan, options: Execute
       let exactReasonCodes: string[] = ["exact_bun_transaction_failed"];
       try {
         const manifest = options.manifest ?? readManifest(options.manifestPath ?? getManifestPath());
-        const machine = manifest.machines.find((entry) => entry.id === plan.machineId);
+        const machine = findManifestMachine(manifest, plan.machineId);
         if (!machine) throw new Error("exact_target_missing");
         const currentPlan = buildExactBunAppsPlan(machine, options.exactInstalledState);
         if (currentPlan.planDigest !== plan.exactBunPlan.planDigest) throw new Error("exact_plan_digest_changed");

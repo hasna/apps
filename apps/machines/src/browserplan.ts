@@ -3,6 +3,7 @@ import {
   MACHINES_CONSUMER_CONTRACT_VERSION,
   MACHINES_PACKAGE_NAME,
   discoverMachineTopology,
+  findMachineTopologyEntry,
   getMachinesConsumerCapabilities,
   resolveMachineRoute,
   resolveMachineWorkspace,
@@ -371,7 +372,7 @@ function fullTopology(options: BrowserPlanFleetOptions): MachineTopology {
 }
 
 function findMachine(topology: MachineTopology, machineId: string): MachineTopologyEntry | null {
-  return topology.machines.find((machine) => machine.machine_id === machineId) ?? null;
+  return findMachineTopologyEntry(topology, machineId);
 }
 
 function statusForMachine(machine: MachineTopologyEntry | null): BrowserPlanMachineStatus {

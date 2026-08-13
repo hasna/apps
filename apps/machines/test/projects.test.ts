@@ -165,6 +165,34 @@ describe("machine project assignments", () => {
     }
   });
 
+  test("assigns and filters project metadata through a retained machine alias", () => {
+    const dir = setupTemp("machines-project-alias-");
+    try {
+      manifestAdd({
+        id: "station03",
+        aliases: ["apple03"],
+        platform: "linux",
+        workspacePath: "/home/operator/workspace",
+      });
+
+      const assigned = assignMachineProject({
+        machineId: "apple03",
+        projectId: "open-machines",
+        path: "/srv/projects/open-machines",
+        label: "station03",
+        kind: "machine-local",
+      });
+      expect(assigned.filters.machine_id).toBe("station03");
+      expect(assigned.assignments[0]?.machine_id).toBe("station03");
+      expect(listMachineProjectAssignments({ machineId: "apple03" }).assignments[0]?.machine_id).toBe("station03");
+
+      removeMachineProjectAssignment({ machineId: "apple03", projectId: "open-machines" });
+      expect(listMachineProjectAssignments({ machineId: "station03" }).assignments).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("removes supported array-form project assignments", () => {
     const dir = setupTemp("machines-project-array-remove-");
     try {
