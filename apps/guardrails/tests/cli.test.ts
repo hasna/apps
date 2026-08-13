@@ -1,84 +1,139 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { randomUUID } from "node:crypto";
+import { rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { runCli } from "../src/cli/index";
+import { guardrailsVersion } from "../src";
 
-const output: string[] = [];
-const errors: string[] = [];
-const originalLog = console.log;
-const originalError = console.error;
+const paths: string[] = [];
+let logs: string[] = [];
+let errors: string[] = [];
+let logSpy: ReturnType<typeof spyOn>;
+let errorSpy: ReturnType<typeof spyOn>;
 
-async function captureCli(args: string[]): Promise<{ stdout: string; stderr: string; exitCode: string | number | undefined }> {
-  output.length = 0;
-  errors.length = 0;
-  process.exitCode = undefined;
-  console.log = (value?: unknown) => {
-    output.push(String(value ?? ""));
-  };
-  console.error = (value?: unknown) => {
-    errors.push(String(value ?? ""));
-  };
-  await runCli(args);
-  return { stdout: output.join("\n"), stderr: errors.join("\n"), exitCode: process.exitCode };
+async function fixture(name: string, value: unknown): Promise<string> {
+  const path = join(tmpdir(), `open-guardrails-cli-${randomUUID()}-${name}.json`);
+  paths.push(path);
+  await Bun.write(path, JSON.stringify(value));
+  return path;
 }
 
-afterEach(() => {
-  console.log = originalLog;
-  console.error = originalError;
-  process.exitCode = undefined;
+beforeEach(() => {
+  logs = [];
+  errors = [];
+  process.exitCode = 0;
+  logSpy = spyOn(console, "log").mockImplementation((...values: unknown[]) => logs.push(values.join(" ")));
+  errorSpy = spyOn(console, "error").mockImplementation((...values: unknown[]) => errors.push(values.join(" ")));
 });
 
-describe("CLI output disclosure", () => {
-  test("evaluate defaults to compact output with detail hints", async () => {
-    const result = await captureCli(["evaluate", "--input", "examples/requests/secret-redaction.json"]);
+afterEach(() => {
+  logSpy.mockRestore();
+  errorSpy.mockRestore();
+  process.exitCode = 0;
+});
 
-    expect(result.exitCode).toBeUndefined();
-    expect(result.stdout.split("\n").length).toBeLessThanOrEqual(5);
-    expect(result.stdout).toContain("REDACT redact");
-    expect(result.stdout).toContain("2 redactions");
-    expect(result.stdout).toContain("use --verbose or guardrails inspect");
-    expect(result.stdout).not.toContain("originalSha256");
+afterAll(async () => {
+  await Promise.all(paths.map((path) => rm(path, { force: true })));
+});
+
+describe("CLI", () => {
+  test("prints help and version", async () => {
+    await runCli([]);
+    expect(logs[0]).toContain("Usage:");
+    logs = [];
+    await runCli(["ignored", "positional", "--help"]);
+    expect(logs[0]).toContain("open-guardrails");
+    logs = [];
+    await runCli(["version", "--first", "--second"]);
+    expect(logs).toEqual([guardrailsVersion]);
   });
 
-  test("evaluate --verbose discloses sectioned details without full JSON", async () => {
-    const result = await captureCli(["evaluate", "--input", "examples/requests/secret-redaction.json", "--verbose"]);
+  test("emits a parseable decision for evaluate --json without leaking placeholder secret text", async () => {
+    const rawPlaceholderSecret = "sk-PLACEHOLDER0000";
+    const inputPath = await fixture("input", {
+      operationType: "prompt",
+      prompt: { text: `Use ${rawPlaceholderSecret}` },
+    });
 
-    expect(result.stdout).toContain("matched policies: showing 1 of 1");
-    expect(result.stdout).toContain("redactions: showing 2 of 2");
-    expect(result.stdout).toContain("sha256=");
-    expect(result.stdout).not.toContain("\"matchedPolicies\"");
+    await runCli(["evaluate", "--input", inputPath, "--json"]);
+
+    expect(logs).toHaveLength(1);
+    const decision = JSON.parse(logs[0] ?? "") as { status: string; redactions: unknown[] };
+    expect(decision.status).toBe("redact");
+    expect(decision.redactions).toHaveLength(1);
+    expect(logs[0]).not.toContain(rawPlaceholderSecret);
+    expect(process.exitCode).toBe(0);
   });
 
-  test("inspect is a verbose detail path and supports limit/cursor", async () => {
-    const result = await captureCli([
-      "inspect",
-      "--input",
-      "examples/requests/secret-redaction.json",
-      "--limit",
-      "1",
-      "--cursor",
-      "1",
+  test("reads evaluate JSON from stdin", async () => {
+    const stdinSpy = spyOn(Bun.stdin, "text").mockResolvedValue(
+      JSON.stringify({ operationType: "prompt", prompt: { text: "ordinary placeholder" } }),
+    );
+    try {
+      await runCli(["evaluate", "--stdin", "--json"]);
+      expect(JSON.parse(logs[0] ?? "").status).toBe("allow");
+    } finally {
+      stdinSpy.mockRestore();
+    }
+  });
+
+  test("loads custom policy files and prints human-readable denial details", async () => {
+    const inputPath = await fixture("action", {
+      operationType: "action",
+      action: { name: "placeholder action" },
+    });
+    const policyPath = await fixture("policy", {
+      id: "cli-policy",
+      policies: [
+        {
+          id: "approval",
+          effect: "approval_required",
+          reason: "Placeholder approval required.",
+          approval: { id: "approval-id" },
+        },
+      ],
+    });
+
+    await runCli(["evaluate", "--input", inputPath, "--policy", policyPath]);
+
+    expect(logs).toEqual([
+      "approval_required: Placeholder approval required.",
+      "matched: approval",
+      "approvals: 1",
     ]);
-
-    expect(result.stdout).toContain("redactions: showing 1 of 2 from 1");
-    expect(result.stdout).not.toContain("matched policies: showing 0");
-    expect(result.stdout).not.toContain("evidence: showing 0");
-    expect(result.stdout).toContain("json: use --json");
+    expect(process.exitCode).toBe(2);
   });
 
-  test("--json remains the full machine-readable decision", async () => {
-    const result = await captureCli(["evaluate", "--input", "examples/requests/secret-redaction.json", "--json"]);
-    const parsed = JSON.parse(result.stdout);
-
-    expect(parsed.status).toBe("redact");
-    expect(parsed.redactions).toHaveLength(2);
-    expect(parsed.audit.policySetId).toBe("open-guardrails-starter");
+  test("prints redaction counts in human-readable output", async () => {
+    const inputPath = await fixture("redaction", {
+      operationType: "prompt",
+      prompt: { text: "sk-PLACEHOLDER0000" },
+    });
+    await runCli(["evaluate", "--input", inputPath]);
+    expect(logs.at(-1)).toBe("redactions: 1");
   });
 
-  test("validate --verbose shows policy counts while default stays one line", async () => {
-    const compact = await captureCli(["validate", "--policy", "examples/policies/starter.guardrails.json"]);
-    const verbose = await captureCli(["validate", "--policy", "examples/policies/starter.guardrails.json", "--verbose"]);
+  test("validates policy files and reports invalid policies", async () => {
+    const validPath = await fixture("valid", { id: "valid", policies: [] });
+    await runCli(["validate", "--policy", validPath]);
+    expect(logs).toEqual([`Policy ${validPath} is valid.`]);
 
-    expect(compact.stdout.split("\n")).toHaveLength(1);
-    expect(verbose.stdout).toContain("policies:");
-    expect(verbose.stdout).toContain("effects:");
+    logs = [];
+    const invalidPath = await fixture("invalid", { id: "invalid", policies: "invalid" });
+    await runCli(["validate", "--policy", invalidPath]);
+    expect(errors[0]).toContain("policies");
+    expect(process.exitCode).toBe(1);
+  });
+
+  test("rejects missing required arguments", async () => {
+    await expect(runCli(["validate"])).rejects.toThrow("--policy is required");
+    await expect(runCli(["evaluate"])).rejects.toThrow("--input is required");
+  });
+
+  test("unknown commands show help and fail", async () => {
+    await runCli(["unknown"]);
+    expect(logs[0]).toContain("Usage:");
+    expect(process.exitCode).toBe(1);
   });
 });

@@ -22,31 +22,11 @@ bun test
 
 ## CLI
 
-Default terminal output is intentionally compact for humans and agents:
-
 ```bash
 guardrails evaluate \
   --policy examples/policies/starter.guardrails.json \
-  --input examples/requests/destructive-shell-command.json
-```
-
-Example compact output:
-
-```text
-APPROVAL approval_required: Destructive shell commands require a human approval checkpoint.
-1 policy | 1 evidence item | 0 obligations | 0 redactions | 1 approval
-matched: destructive-shell-command-approval:approval_required
-details: use --verbose or guardrails inspect --input <file> for evidence, obligations, redactions, approvals, and audit metadata.
-```
-
-Use gradual disclosure when you need more:
-
-```bash
-guardrails evaluate --input examples/requests/destructive-shell-command.json --verbose
-guardrails inspect --input examples/requests/destructive-shell-command.json --limit 10
-guardrails show --input examples/requests/secret-redaction.json --limit 1
-guardrails evaluate --input examples/requests/destructive-shell-command.json --json
-guardrails validate --policy examples/policies/starter.guardrails.json --verbose
+  --input examples/requests/destructive-shell-command.json \
+  --json
 ```
 
 Exit codes:
@@ -54,10 +34,6 @@ Exit codes:
 - `0`: allowed, warned, or redacted.
 - `1`: denied or invalid input.
 - `2`: approval required.
-
-`--json` remains the full stable machine-readable decision object. Human output
-uses `--limit` and `--cursor` only for displayed sections, so agents can page
-through details without flooding context.
 
 ## SDK
 
@@ -82,10 +58,29 @@ const decision = evaluateGuardrail(input, defaultGuardrailPolicySet);
 Every decision includes:
 
 - `status`: `allow`, `deny`, `warn`, `redact`, or `approval_required`.
-- `reason` and `matchedPolicies`.
+- `reason`, the selected `matchedRule`, and all effective `matchedPolicies`.
+- `rationaleTrace`, including each rule's match result, specificity, failed
+  matcher groups, and selection rationale.
 - `evidence`, `obligations`, `redactions`, and `approvalRequirements`.
-- `audit` metadata with decision id, evaluated time, policy set, operation type,
-  actor, trace id, and labels.
+- `audit` metadata with a per-evaluation `decisionId`, an `evaluatedAt`
+  timestamp, policy set, operation type, actor, trace id, and labels. Pass
+  `options.decisionId` or `options.now` to supply either yourself.
+- `audit.decisionFingerprint`: a deterministic hash of the input, policy set,
+  and engine version. Two evaluations of the same request share a fingerprint
+  while keeping distinct decision ids, so audit rows stay both correlatable and
+  individually addressable.
+
+Matched rules are ranked by effect (`deny` > `approval_required` > `redact` >
+`warn` > `allow`), then by the number of matcher constraints, then by the
+number of alternatives those constraints accept. Policy id is the final
+deterministic tie-break.
+
+`policySet.defaultDecision` is a **fallback, not a floor**: it applies only when
+no rule matches. A single matching rule of any effect — including `warn` or
+`allow` — overrides it. To express a deny-by-default posture, write the denial
+as a broad rule and let more specific `allow` rules outrank it; setting
+`defaultDecision: "deny"` alone will not block a request that any advisory rule
+happens to match.
 
 ## Examples
 
@@ -111,5 +106,4 @@ run commands, call MCP tools, route models, or scan repositories.
   execution.
 
 See [docs/boundaries.md](docs/boundaries.md) and
-[docs/integrations.md](docs/integrations.md). See
-[docs/cli-output.md](docs/cli-output.md) for compact-output conventions.
+[docs/integrations.md](docs/integrations.md).

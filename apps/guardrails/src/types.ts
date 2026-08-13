@@ -313,6 +313,18 @@ export type MatchedGuardrailPolicy = {
   description?: string;
 };
 
+export type GuardrailRationaleTraceEntry = {
+  policyId: string;
+  effect: GuardrailEffect;
+  matched: boolean;
+  effective: boolean;
+  selected: boolean;
+  specificity: number;
+  constraints: string[];
+  failedConstraints: string[];
+  rationale: string;
+};
+
 export type GuardrailEvidence = {
   policyId: string;
   message: string;
@@ -332,7 +344,13 @@ export type GuardrailRedaction = {
 };
 
 export type GuardrailAuditMetadata = {
+  /** Unique per evaluation, so two identical requests remain separate audit events. */
   decisionId: string;
+  /**
+   * Content hash of the input, policy set, and engine version. Two evaluations of the
+   * same request share a fingerprint even though their decision ids differ.
+   */
+  decisionFingerprint: string;
   evaluatedAt: string;
   engineVersion: string;
   policySetId: string;
@@ -349,7 +367,9 @@ export type GuardrailDecision = {
   status: GuardrailDecisionStatus;
   allowed: boolean;
   reason: string;
+  matchedRule: MatchedGuardrailPolicy | null;
   matchedPolicies: MatchedGuardrailPolicy[];
+  rationaleTrace: GuardrailRationaleTraceEntry[];
   evidence: GuardrailEvidence[];
   obligations: GuardrailObligation[];
   redactions: GuardrailRedaction[];
