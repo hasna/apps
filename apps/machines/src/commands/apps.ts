@@ -83,7 +83,7 @@ function packageVersionProbeCommand(spec: DesiredPackage): string {
   const bin = shellQuote(spec.bin);
   return [
     `if output=$(${bin} --version 2>/dev/null); then`,
-    "version=$(printf '%s\\n' \"$output\" | sed -nE 's/.*([0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?).*/\\1/p' | head -n 1);",
+    "version=$(printf '%s\\n' \"$output\" | awk 'match($0, /[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?/) { print substr($0, RSTART, RLENGTH); exit }');",
     "if [ -n \"$version\" ]; then printf 'installed=1\\nversion=%s\\n' \"$version\"; else printf 'installed=0\\n'; fi;",
     "else printf 'installed=0\\n'; fi",
   ].join(" ");
