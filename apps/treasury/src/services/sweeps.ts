@@ -47,7 +47,7 @@ export interface GenerateSweepsInput {
 
 /**
  * Generate intercompany-funding RECOMMENDATIONS (advisory only — treasury never
- * moves money; execution must be requested through iapp-controls). Lifts
+ * moves money; execution must be requested through the controls service). Lifts
  * short-runway entities toward `min_runway_months` funded by entities holding a
  * surplus above `healthy_runway_months`.
  */

@@ -92,7 +92,7 @@ export type SweepStatus = "recommended" | "acknowledged" | "dismissed";
 /**
  * A sweep / intercompany-funding RECOMMENDATION. Treasury is read/advisory and
  * NEVER moves money itself — executing a recommendation must be requested
- * through iapp-controls, which issues the single-use authorization token.
+ * through the controls service, which issues the single-use authorization token.
  */
 export interface SweepRecommendation {
   id: string;

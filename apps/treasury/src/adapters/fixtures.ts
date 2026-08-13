@@ -2,7 +2,7 @@ import type { BalancesAdapter, CostAdapter, FxAdapter, UpstreamAdapters, Upstrea
 
 // Deterministic fixture adapters for v0. Live upstream wiring (v1) is gated
 // behind HASNA_TREASURY_LIVE_UPSTREAM=1 and is intentionally NOT built in this
-// cohort — a fixture adapter returns coherent, testable data keyed by entity_id.
+// fixture set — a fixture adapter returns coherent, testable data keyed by entity_id.
 
 const AS_OF = "2026-07-01T00:00:00.000Z";
 

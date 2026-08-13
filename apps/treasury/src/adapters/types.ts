@@ -1,7 +1,7 @@
 // Read-adapter interfaces for treasury's upstream dependencies (BUILD-SPEC §1a).
 // treasury is a cross-app INTEGRATOR: v0 ships these interfaces backed by
 // fixtures (below). v1 (gated behind HASNA_TREASURY_LIVE_UPSTREAM=1) swaps the
-// fixture impls for live MCP/CLI calls to iapp-wallets / iapp-banking / an FX
+// fixture impls for live MCP/CLI calls to wallets / banking / an FX
 // provider / a cost feed. treasury never persists upstream data as
 // source-of-truth — it caches snapshots with provenance.
 
@@ -30,7 +30,7 @@ export interface UpstreamCostFeed {
   as_of: string;
 }
 
-/** Reads live/cached bank + wallet balances (iapp-banking / iapp-wallets). */
+/** Reads live/cached bank + wallet balances (banking / wallets). */
 export interface BalancesAdapter {
   readonly source: string;
   fetchBalances(entityIds: string[]): Promise<UpstreamBalance[]>;
