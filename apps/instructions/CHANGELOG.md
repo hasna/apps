@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.33
+
+Publishes merged PR #96, which restores legacy profile follow-up reads when
+canonical profile routes are unavailable. The release carries the exact merged
+main tree at `2781bc8`.
+
 ## 0.4.32
 
 Publishes merged PR #94, which restores stale profile follow-up resolution
