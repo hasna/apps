@@ -612,7 +612,16 @@ export class CloudConfigStore implements ConfigStore {
       undefined,
       { allow404: true },
     );
-    if (status === 404 || !data?.profile) throw new ProfileNotFoundError(idOrSlug);
+    if (status === 404 || !data?.profile) {
+      // Some deployed API revisions can return a complete profile collection
+      // while their single-profile route has stale identity resolution. Use
+      // the authoritative bounded collection to recover the exact row rather
+      // than silently falling back to the local store.
+      const profiles = await this.listProfiles();
+      const profile = profiles.find((candidate) => candidate.id === idOrSlug || candidate.slug === idOrSlug);
+      if (!profile) throw new ProfileNotFoundError(idOrSlug);
+      return profile;
+    }
     const { configs: _configs, ...profile } = data.profile;
     return profile;
   }

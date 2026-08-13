@@ -239,6 +239,45 @@ describe("CloudConfigStore CRUD mapping", () => {
     expect(configs).toHaveLength(1);
   });
 
+  test("getProfile resolves a list-visible profile when direct identity lookup returns 404", async () => {
+    const m = mockFetch((call) => {
+      if (call.url.endsWith("/v1/profiles/my-setup")) {
+        return { status: 404, json: { error: "Profile not found: my-setup" } };
+      }
+      if (call.url.includes("/v1/profiles?")) {
+        return { json: page([{ ...SAMPLE_PROFILE, id: "ae1030fc-4b10-41c7-a127-9d81fccfbac0", slug: "my-setup" }]) };
+      }
+      return { status: 404, json: { error: "unexpected request" } };
+    });
+    active = m;
+    const store = new CloudConfigStore(CONFIG);
+
+    await expect(store.getProfile("my-setup")).resolves.toMatchObject({
+      id: "ae1030fc-4b10-41c7-a127-9d81fccfbac0",
+      slug: "my-setup",
+    });
+    expect(m.calls.map((call) => call.url)).toEqual([
+      "https://instructions.hasna.xyz/v1/profiles/my-setup",
+      "https://instructions.hasna.xyz/v1/profiles?limit=100&cursor=0",
+    ]);
+  });
+
+  test("getProfile still rejects an identity absent from both direct and list reads", async () => {
+    const m = mockFetch((call) => {
+      if (call.url.endsWith("/v1/profiles/missing")) {
+        return { status: 404, json: { error: "Profile not found: missing" } };
+      }
+      if (call.url.includes("/v1/profiles?")) {
+        return { json: page([{ ...SAMPLE_PROFILE, id: "p1", slug: "present" }]) };
+      }
+      return { status: 404, json: { error: "unexpected request" } };
+    });
+    active = m;
+    const store = new CloudConfigStore(CONFIG);
+
+    await expect(store.getProfile("missing")).rejects.toThrow("Profile not found: missing");
+  });
+
   test("maps profile asset CRUD to the separate cloud API paths", async () => {
     const m = mockFetch((call) => {
       if (call.method === "GET") return { json: { assets: [SAMPLE_ASSET] } };
