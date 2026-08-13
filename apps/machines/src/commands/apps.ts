@@ -90,7 +90,7 @@ function packageVersionProbeCommand(spec: DesiredPackage): string {
     `activePath=$(command -v ${bin} 2>/dev/null || true);`,
     `managerIdentity=$(readlink -f "$managerPath" 2>/dev/null || realpath "$managerPath" 2>/dev/null || printf '%s' "$managerPath");`,
     `activeIdentity=$(if [ -n "$activePath" ]; then readlink -f "$activePath" 2>/dev/null || realpath "$activePath" 2>/dev/null || printf '%s' "$activePath"; fi);`,
-    `if [ -n "$version" ]; then if [ -n "$activePath" ] && [ "$activeIdentity" != "$managerIdentity" ]; then printf 'installed=1\\nversion=%s\\nowner=bun\\nmanager_path=%s\\nactive_path=%s\\ncollision=1\\n' \"$version\" \"$managerPath\" \"$activePath\"; else printf 'installed=1\\nversion=%s\\n' \"$version\"; fi; else printf 'installed=0\\n'; fi;`,
+    `if [ -n "$version" ]; then if [ -z "$activePath" ]; then printf 'installed=0\\n'; elif [ "$activeIdentity" != "$managerIdentity" ]; then printf 'installed=1\\nversion=%s\\nowner=bun\\nmanager_path=%s\\nactive_path=%s\\ncollision=1\\n' \"$version\" \"$managerPath\" \"$activePath\"; else printf 'installed=1\\nversion=%s\\n' \"$version\"; fi; else printf 'installed=0\\n'; fi;`,
     "else printf 'installed=0\\n'; fi",
     "else printf 'installed=0\\n'; fi",
   ].join(" ");

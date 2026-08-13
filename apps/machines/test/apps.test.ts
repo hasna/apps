@@ -464,6 +464,52 @@ describe("apps", () => {
     )).toThrow(new RegExp(`owner/PATH collision:.*${managerBinDir}.*${shadowBinDir}`));
   });
 
+  test("fails verification when the Bun-managed executable is absent from active PATH", () => {
+    const dir = mkdtempSync(join(tmpdir(), "machines-apps-bun-owner-missing-path-"));
+    probeFixtureDirs.push(dir);
+    const manifestPath = join(dir, "machines.json");
+    process.env["HASNA_MACHINES_MANIFEST_PATH"] = manifestPath;
+    writeFileSync(manifestPath, `${JSON.stringify({
+      version: 1,
+      packages: [{ name: "@hasna/codewith", manager: "bun", version: "0.1.92", bin: "codewith" }],
+      machines: [{ id: "remote-linux", platform: "linux", workspacePath: "/home/operator/workspace" }],
+    }, null, 2)}\n`);
+
+    const plan = buildAppsPlan("remote-linux");
+    if (!("steps" in plan) || !plan.steps[0]?.probeCommand) throw new Error("expected one Bun package step");
+    const fakeBinDir = join(dir, "fake-bin");
+    const managerBinDir = join(dir, "bun-bin");
+    mkdirSync(fakeBinDir);
+    mkdirSync(managerBinDir);
+    writeFileSync(join(fakeBinDir, "bun"), `#!/bin/sh\nprintf '%s\\n' ${shellQuote(managerBinDir)}\n`);
+    writeFileSync(join(managerBinDir, "codewith"), "#!/bin/sh\nprintf 'codewith 0.1.92\\n'\n");
+    chmodSync(join(fakeBinDir, "bun"), 0o755);
+    chmodSync(join(managerBinDir, "codewith"), 0o755);
+
+    const runner: MachineCommandRunner = (machineId, command) => {
+      if (command === "bun install -g '@hasna/codewith@0.1.92'") {
+        return { machineId, source: "ssh", stdout: "", stderr: "", exitCode: 0 };
+      }
+      const result = spawnSync("sh", ["-c", command], {
+        env: { ...process.env, PATH: `${fakeBinDir}:/usr/bin:/bin` },
+        encoding: "utf8",
+      });
+      return {
+        machineId,
+        source: "ssh",
+        stdout: result.stdout ?? "",
+        stderr: result.stderr ?? "",
+        exitCode: result.status ?? 1,
+      };
+    };
+
+    expect(() => runAppsInstall(
+      "remote-linux",
+      { apply: true, yes: true, expectedPlanDigest: plan.planDigest },
+      runner,
+    )).toThrow("executable not installed");
+  });
+
   test("accepts an active symlink that resolves to the Bun-managed executable", () => {
     const dir = mkdtempSync(join(tmpdir(), "machines-apps-bun-owner-symlink-"));
     probeFixtureDirs.push(dir);
