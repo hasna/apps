@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.4.30
+
+Publishes the merged compiler and provider-surface work from PRs #88, #89,
+and #90.
+
+PR #88 adds profile instruction-graph compilation with durable profile/config
+bindings, graph-aware apply planning, and the associated CLI, API, migration,
+and storage contracts.
+
+PR #89 adds version-aware provider render adapters so provider capabilities are
+selected from the declared runtime/version surface rather than inferred from a
+single unversioned path.
+
+PR #90 adds the provider-assets pipeline, including asset plans, profile asset
+bindings, provider asset adapters, version metadata, and the API/storage
+round-trip needed to render those assets through the same managed compiler.
+
+The published 0.4.29 artifact predates all three merges. This release carries
+the exact merged main tree at `9756352f` to the registry.
+
 ## 0.4.29
 
 Allows a same-revision Projects v1-to-v2 project-context migration only when a
