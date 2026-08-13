@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.32
+
+Publishes merged PR #94, which restores stale profile follow-up resolution
+after a profile lookup recovers through the complete remote source. The
+release carries the exact merged main tree at `4e58d8c`.
+
 ## 0.4.31
 
 Publishes merged PR #92, which fixes remote profile resolution so profile
