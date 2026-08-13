@@ -16,7 +16,7 @@ import { extractTemplateVars } from "../lib/template.js";
 import { detectMachineContext, resolveProfileVariables } from "../lib/machine.js";
 import { applySessionRender, restoreSessionRenderSnapshot } from "../lib/session-apply.js";
 import { normalizeSessionInstructionSourceId, planSessionRender, resolveSessionPath, sourceFromConfig, sourceFromFilePath, sourcesFromIdentityExport, SESSION_INSTRUCTION_LAYERS, SESSION_RENDER_TOOLS, type SessionInstructionLayer, type SessionInstructionSource, type SessionRenderFile, type SessionRenderPlan, type SessionRenderTool } from "../lib/session-render.js";
-import { normalizeProfileConfigBinding, planProfileSessionRender } from "../lib/instruction-graph.js";
+import { normalizeProfileConfigBinding, planProfileSessionRender, type InstructionGraphRenderPlan } from "../lib/instruction-graph.js";
 import { accountedGlobalSourceSlugs, computeGlobalSourceCoverage, formatGlobalSourceCoverageWarnings, type GlobalSourceCoverageResult } from "../lib/global-source-coverage.js";
 import { ensurePlatformProfiles } from "../lib/platform-profiles.js";
 import { ensureProjectDashboardStandardConfig } from "../lib/project-dashboard-standard.js";
@@ -271,6 +271,7 @@ async function buildSessionRenderPlan(
     allowEmptySources?: boolean;
     compileProfile?: string;
     providerVersion?: string;
+    providerVariant?: string;
     model?: string;
     path?: string;
     manual?: string[];
@@ -279,6 +280,7 @@ async function buildSessionRenderPlan(
   store: ConfigStore,
 ): Promise<SessionRenderPlan> {
   if (!opts.compileProfile) {
+    if (opts.providerVariant) throw new Error("--provider-variant requires --compile-profile.");
     const sources = await collectSessionSources(opts, tool, store);
     return planSessionRender({
       tool,
@@ -314,6 +316,7 @@ async function buildSessionRenderPlan(
       ...(opts.model ? { model: opts.model } : {}),
       ...(opts.path ? { path: opts.path } : {}),
       ...(opts.manual?.length ? { manual: opts.manual } : {}),
+      ...(opts.providerVariant ? { provider_variant: opts.providerVariant } : {}),
     },
   });
 }
@@ -347,6 +350,24 @@ function planJsonForOutput(plan: SessionRenderPlan) {
     manifestFile: stripSessionFileContent(plan.manifestFile),
     allFiles: plan.allFiles.map(stripSessionFileContent),
   };
+}
+
+function instructionGraphFromPlan(plan: SessionRenderPlan) {
+  return "instructionGraph" in plan
+    ? (plan as SessionRenderPlan & { instructionGraph: InstructionGraphRenderPlan }).instructionGraph
+    : null;
+}
+
+function printInstructionGraphSelection(plan: SessionRenderPlan): void {
+  const graph = instructionGraphFromPlan(plan);
+  if (!graph) return;
+  console.log(`${chalk.cyan("capability:")} ${graph.capability.schema} descriptor=${graph.capability.descriptor_version}`);
+  console.log(`${chalk.cyan("provider selection:")} ${graph.provider} ${graph.provider_version} variant=${graph.capability.provider_variant} range=${graph.capability.provider_version_range}`);
+  console.log(`${chalk.cyan("loading path:")} ${graph.capability.loading_path} (${graph.capability.selected_representation})`);
+  console.log(`${chalk.cyan("source hash:")} ${graph.source_hash}`);
+  for (const diagnostic of graph.diagnostics) {
+    console.log(`${chalk.cyan("fallback diagnostic:")} ${diagnostic.code} ${diagnostic.message}`);
+  }
 }
 
 function parseProjectContextRuntime(value: string): ProjectContextRuntime {
@@ -1285,6 +1306,7 @@ sessionCmd.command("plan")
   .option("--replace-source <replacer-id>[=<target-source-id>]", "source id that broadly replaces earlier layers, or targets one earlier source", collectOption, [])
   .option("--compile-profile <id-or-slug>", "compile persisted config bindings from this Instructions profile")
   .option("--provider-version <semver>", "installed provider version used for capability matching")
+  .option("--provider-variant <variant>", "explicit provider capability variant (for example OpenCode v2-agents)")
   .option("--model <model>", "active model used for model activation")
   .option("--path <path>", "active path recorded in the graph context")
   .option("--manual <config-id-or-slug>", "manually activate a binding; repeatable", collectOption, [])
@@ -1313,6 +1335,7 @@ sessionCmd.command("plan")
       console.log(`${chalk.cyan("profile:")} ${plan.profile}`);
       console.log(`${chalk.cyan("target:")} ${plan.targetHome}`);
       console.log(`${chalk.cyan("owner:")} ${plan.targetOwner.kind} ${chalk.dim(plan.targetOwner.reason)}`);
+      printInstructionGraphSelection(plan);
       if (plan.blocked) console.log(chalk.red(`blocked: ${plan.blockers.join("; ")}`));
       const envEntries = Object.entries(plan.env);
       if (envEntries.length > 0) {
@@ -1348,6 +1371,7 @@ sessionCmd.command("apply")
   .option("--replace-source <replacer-id>[=<target-source-id>]", "source id that broadly replaces earlier layers, or targets one earlier source", collectOption, [])
   .option("--compile-profile <id-or-slug>", "compile persisted config bindings from this Instructions profile")
   .option("--provider-version <semver>", "installed provider version used for capability matching")
+  .option("--provider-variant <variant>", "explicit provider capability variant (for example OpenCode v2-agents)")
   .option("--model <model>", "active model used for model activation")
   .option("--path <path>", "active path recorded in the graph context")
   .option("--manual <config-id-or-slug>", "manually activate a binding; repeatable", collectOption, [])
@@ -1371,6 +1395,7 @@ sessionCmd.command("apply")
       if (opts.json) {
         printJson({
           ...result,
+          ...(instructionGraphFromPlan(plan) ? { instructionGraph: instructionGraphFromPlan(plan) } : {}),
           ...(globalCoverage ? { globalSourceCoverage: globalCoverage } : {}),
         });
         if (result.conflicts.length > 0) process.exitCode = 1;
@@ -1380,6 +1405,7 @@ sessionCmd.command("apply")
       console.log(`${prefix} ${plan.tool} session apply ${chalk.dim(`(${plan.adapter.mode})`)}`);
       console.log(`${chalk.cyan("target:")} ${result.targetHome}`);
       console.log(`${chalk.cyan("owner:")} ${plan.targetOwner.kind}`);
+      printInstructionGraphSelection(plan);
       if (result.snapshotPath) console.log(`${chalk.cyan("snapshot:")} ${result.snapshotPath}`);
       if (Object.keys(result.env).length > 0) {
         console.log(`${chalk.cyan("env:")} ${Object.entries(result.env).map(([key, value]) => `${key}=${value}`).join(" ")}`);

@@ -56,12 +56,14 @@ export {
 export {
   INSTRUCTION_GRAPH_PLAN_SCHEMA,
   PROVIDER_CAPABILITIES,
+  PROVIDER_CAPABILITY_DESCRIPTORS,
   PROVIDER_CAPABILITY_SCHEMA,
   InstructionGraphValidationError,
   compileInstructionGraph,
   legacyProfileConfigBinding,
   normalizeProfileConfigBinding,
   planProfileSessionRender,
+  selectProviderCapability,
 } from "./lib/instruction-graph.js";
 export type {
   CompiledInstructionGraph,
@@ -82,6 +84,7 @@ export type {
   SessionInstructionSourcePath,
   SessionProfileRenderSelection,
   SessionProviderConfig,
+  SessionProviderSurface,
   SessionRenderFile,
   SessionRenderFileRole,
   SessionRenderInput,

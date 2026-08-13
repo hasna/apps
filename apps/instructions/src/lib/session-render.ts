@@ -82,6 +82,7 @@ export const SESSION_RENDER_OWNED_CONFIG_TARGETS = [
 
 export type SessionRenderTool = (typeof SESSION_RENDER_TOOLS)[number];
 export type SessionRenderMode = "native-imports" | "flattened-markdown" | "cursor-mdc" | "opencode-instructions" | "antigravity-rules";
+export type SessionProviderSurface = "opencode-config-instructions" | "opencode-agents-md";
 export type SessionInstructionLayer = (typeof SESSION_INSTRUCTION_LAYERS)[number];
 export type SessionInstructionLayerAlias = SessionInstructionLayer | "provider" | "identity" | "project";
 export type SessionInstructionMerge = "append" | "replace";
@@ -120,6 +121,7 @@ export interface SessionToolAdapter {
   envVar?: string;
   nativeImports: boolean;
   description: string;
+  providerSurface?: "legacy-dual" | SessionProviderSurface;
 }
 
 export interface SessionInstructionSource {
@@ -244,6 +246,8 @@ export interface SessionRenderInput {
   codewithNativeImports?: boolean;
   allowEmptySources?: boolean;
   providerConfig?: SessionProviderConfig;
+  /** Explicit provider loading surface selected by the compiled capability descriptor. */
+  providerSurface?: SessionProviderSurface;
   skippedSources?: SessionSkippedSource[];
 }
 
@@ -441,6 +445,7 @@ export const SESSION_TOOL_ADAPTERS: Record<SessionRenderTool, SessionToolAdapter
     envVar: "OPENCODE_CONFIG_DIR",
     nativeImports: false,
     description: "OpenCode AGENTS.md plus opencode.json instructions pointing at managed fragments.",
+    providerSurface: "legacy-dual",
   },
   aicopilot: {
     tool: "aicopilot",
@@ -1471,7 +1476,10 @@ function buildCursorRuleFiles(
     const n = String(index + 1).padStart(2, "0");
     const stem = `${n}-${source.normalizedId}`;
     const relativePath = posix.join(adapter.managedDir, `${stem}.mdc`);
-    const activation = source.metadata?.["activation"] as { mode?: string; description?: string } | undefined;
+    const compiledBinding = source.provenance?.["profileBinding"];
+    const activation = compiledBinding && typeof compiledBinding === "object"
+      ? source.metadata?.["activation"] as { mode?: string; description?: string } | undefined
+      : undefined;
     const description = activation?.description ?? `${source.resolvedLabel} (${source.resolvedLayer})`;
     const sourceGlobs = source.globs && source.globs.length > 0 ? source.globs : ["**/*"];
     const alwaysApply = activation?.mode !== "glob";
@@ -1515,6 +1523,7 @@ function buildOpenCodeFiles(
   sources: OrderedSessionInstructionSource[],
   providerConfig?: SessionProviderConfig,
 ): SessionRenderFile[] {
+  const surface = adapter.providerSurface ?? "legacy-dual";
   const fragments = sources.flatMap((source, index) => [
     makeFile(targetHome, fragmentPath(adapter, index, source), "fragment", sectionForSource(source), [source.id]),
     ...source.resolvedRules.map((rule) =>
@@ -1559,11 +1568,30 @@ function buildOpenCodeFiles(
     ...sources.map((source) => source.id),
     ...(providerConfig ? [providerConfig.sourceId] : []),
   ];
-  return [
-    flattenedIndex,
-    makeFile(targetHome, adapter.configFile!, "config", JSON.stringify(config, null, 2), configSourceIds),
-    ...fragments,
-  ];
+  const configFile = makeFile(targetHome, adapter.configFile!, "config", JSON.stringify(config, null, 2), configSourceIds);
+  if (surface === "opencode-config-instructions") return [configFile, ...fragments];
+  if (surface === "opencode-agents-md") {
+    const agentsOnlyConfig = {
+      ...config,
+      instructions: preservedInstructions,
+    };
+    return [
+      flattenedIndex,
+      makeFile(targetHome, adapter.configFile!, "config", JSON.stringify(agentsOnlyConfig, null, 2), configSourceIds),
+      // This non-provider-loaded marker keeps the managed namespace explicit
+      // during a v1 -> v2 transition. It lets the existing silent-wipe guard
+      // distinguish an intentional surface replacement from an empty render
+      // without duplicating any instruction payload.
+      makeFile(
+        targetHome,
+        posix.join(adapter.managedDir, "opencode-v2-surface.json"),
+        "config",
+        JSON.stringify({ schema: "hasna.instructions.opencode-surface/v1", surface }, null, 2),
+        [],
+      ),
+    ];
+  }
+  return [flattenedIndex, configFile, ...fragments];
 }
 
 function readOpenCodeConfig(content: string, source: string): Record<string, unknown> {
@@ -1646,6 +1674,18 @@ function buildFiles(
 }
 
 function adapterFor(input: SessionRenderInput): SessionToolAdapter {
+  if (input.providerSurface && input.tool !== "opencode") {
+    throw new Error(`Provider surface ${input.providerSurface} is valid only for OpenCode.`);
+  }
+  if (input.tool === "opencode" && input.providerSurface) {
+    return Object.freeze({
+      ...SESSION_TOOL_ADAPTERS.opencode,
+      providerSurface: input.providerSurface,
+      description: input.providerSurface === "opencode-config-instructions"
+        ? "OpenCode v1 instructions loaded exactly once through opencode.json managed fragments."
+        : "OpenCode v2 instructions loaded exactly once through flattened AGENTS.md.",
+    });
+  }
   if (input.tool !== "codewith") return SESSION_TOOL_ADAPTERS[input.tool];
   const gatedNativeImports =
     input.codewithNativeImports === true ||
@@ -1883,6 +1923,7 @@ export function planSessionRender(input: SessionRenderInput): SessionRenderPlan 
     sourceHash: fingerprint(projectContext
       ? {
         sources: orderedSources.map(sourceFingerprint),
+        providerSurface: input.providerSurface ?? null,
         providerConfig: input.providerConfig
           ? { sourceId: input.providerConfig.sourceId, content: input.providerConfig.content }
           : null,
@@ -1890,6 +1931,7 @@ export function planSessionRender(input: SessionRenderInput): SessionRenderPlan 
       }
       : {
         sources: orderedSources.map(sourceFingerprint),
+        providerSurface: input.providerSurface ?? null,
         providerConfig: input.providerConfig
           ? { sourceId: input.providerConfig.sourceId, content: input.providerConfig.content }
           : null,

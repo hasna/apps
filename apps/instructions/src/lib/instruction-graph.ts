@@ -18,6 +18,7 @@ import type {
   SessionInstructionSource,
   SessionRenderInput,
   SessionRenderPlan,
+  SessionProviderSurface,
   SessionRenderTool,
 } from "./session-render.js";
 import { planSessionRender, sourceFromConfig } from "./session-render.js";
@@ -30,6 +31,11 @@ export interface ProviderCapability {
   provider: SessionRenderTool;
   descriptor_version: number;
   provider_version_range: string;
+  provider_variant: string;
+  default_variant: boolean;
+  selected_representation: string;
+  loading_path: string;
+  session_surface?: SessionProviderSurface;
   activation_modes: readonly InstructionActivationMode[];
   native_imports: boolean;
   conditional_artifacts: boolean;
@@ -38,25 +44,62 @@ export interface ProviderCapability {
 
 const COMMON_FALLBACKS = ["fail", "flatten", "promote-always", "omit"] as const;
 
+function capability(
+  provider: SessionRenderTool,
+  providerVersionRange: string,
+  selectedRepresentation: string,
+  loadingPath: string,
+  options: Partial<Pick<ProviderCapability, "provider_variant" | "default_variant" | "session_surface" | "activation_modes" | "native_imports" | "conditional_artifacts">> = {},
+): ProviderCapability {
+  return Object.freeze({
+    schema: PROVIDER_CAPABILITY_SCHEMA,
+    provider,
+    descriptor_version: 1,
+    provider_version_range: providerVersionRange,
+    provider_variant: options.provider_variant ?? "default",
+    default_variant: options.default_variant ?? true,
+    selected_representation: selectedRepresentation,
+    loading_path: loadingPath,
+    activation_modes: options.activation_modes ?? (["always"] as const),
+    native_imports: options.native_imports ?? false,
+    conditional_artifacts: options.conditional_artifacts ?? false,
+    supported_fallbacks: COMMON_FALLBACKS,
+    ...(options.session_surface ? { session_surface: options.session_surface } : {}),
+  });
+}
+
 /**
  * Code-owned and versioned on purpose: provider output capabilities are an
  * implementation contract, not mutable profile data. Provider releases are
  * matched independently through provider_version_range.
  */
-export const PROVIDER_CAPABILITIES: Readonly<Record<SessionRenderTool, ProviderCapability>> = Object.freeze({
-  claude: Object.freeze({ schema: PROVIDER_CAPABILITY_SCHEMA, provider: "claude", descriptor_version: 1, provider_version_range: ">=1.0.0", activation_modes: ["always"] as const, native_imports: true, conditional_artifacts: false, supported_fallbacks: COMMON_FALLBACKS }),
-  codex: Object.freeze({ schema: PROVIDER_CAPABILITY_SCHEMA, provider: "codex", descriptor_version: 1, provider_version_range: ">=0.1.0", activation_modes: ["always"] as const, native_imports: false, conditional_artifacts: false, supported_fallbacks: COMMON_FALLBACKS }),
-  cursor: Object.freeze({ schema: PROVIDER_CAPABILITY_SCHEMA, provider: "cursor", descriptor_version: 1, provider_version_range: ">=1.0.0", activation_modes: ["always", "glob"] as const, native_imports: false, conditional_artifacts: true, supported_fallbacks: COMMON_FALLBACKS }),
-  opencode: Object.freeze({ schema: PROVIDER_CAPABILITY_SCHEMA, provider: "opencode", descriptor_version: 1, provider_version_range: ">=1.0.0", activation_modes: ["always"] as const, native_imports: false, conditional_artifacts: false, supported_fallbacks: COMMON_FALLBACKS }),
-  codewith: Object.freeze({ schema: PROVIDER_CAPABILITY_SCHEMA, provider: "codewith", descriptor_version: 1, provider_version_range: ">=0.1.0", activation_modes: ["always"] as const, native_imports: false, conditional_artifacts: false, supported_fallbacks: COMMON_FALLBACKS }),
-  qwen: Object.freeze({ schema: PROVIDER_CAPABILITY_SCHEMA, provider: "qwen", descriptor_version: 1, provider_version_range: ">=0.1.0", activation_modes: ["always"] as const, native_imports: false, conditional_artifacts: false, supported_fallbacks: COMMON_FALLBACKS }),
-  aicopilot: Object.freeze({ schema: PROVIDER_CAPABILITY_SCHEMA, provider: "aicopilot", descriptor_version: 1, provider_version_range: ">=0.1.0", activation_modes: ["always"] as const, native_imports: false, conditional_artifacts: false, supported_fallbacks: COMMON_FALLBACKS }),
-  antigravity: Object.freeze({ schema: PROVIDER_CAPABILITY_SCHEMA, provider: "antigravity", descriptor_version: 1, provider_version_range: ">=1.0.0", activation_modes: ["always"] as const, native_imports: false, conditional_artifacts: false, supported_fallbacks: COMMON_FALLBACKS }),
+const DEFAULT_PROVIDER_CAPABILITIES: Readonly<Record<SessionRenderTool, ProviderCapability>> = Object.freeze({
+  claude: capability("claude", ">=1.0.0", "native-import", "CLAUDE.md @ imports", { native_imports: true }),
+  codex: capability("codex", ">=0.1.0", "flattened", "AGENTS.md"),
+  cursor: capability("cursor", ">=1.0.0", "cursor-rule", ".cursor/rules/*.mdc", { activation_modes: ["always", "glob"], conditional_artifacts: true }),
+  opencode: capability("opencode", ">=1.0.0", "managed-fragment", "opencode.json instructions", { provider_variant: "v1-instructions", session_surface: "opencode-config-instructions" }),
+  codewith: capability("codewith", ">=0.1.0", "flattened", "CODEWITH.md"),
+  qwen: capability("qwen", ">=0.1.0", "flattened", "QWEN.md"),
+  aicopilot: capability("aicopilot", ">=0.1.0", "flattened", "AICOPILOT.md"),
+  antigravity: capability("antigravity", ">=1.0.0", "provider-rule", ".agents/rules/*.md"),
 });
+
+export const PROVIDER_CAPABILITY_DESCRIPTORS: readonly ProviderCapability[] = Object.freeze([
+  ...Object.values(DEFAULT_PROVIDER_CAPABILITIES),
+  capability("opencode", "*", "flattened", "AGENTS.md", {
+    provider_variant: "v2-agents",
+    default_variant: false,
+    session_surface: "opencode-agents-md",
+  }),
+]);
+
+/** Backward-compatible default descriptor lookup for callers without variants. */
+export const PROVIDER_CAPABILITIES = DEFAULT_PROVIDER_CAPABILITIES;
 
 export interface InstructionGraphContext {
   provider: SessionRenderTool;
   provider_version: string;
+  provider_variant?: string;
   model?: string;
   path?: string;
   manual?: string[];
@@ -87,7 +130,8 @@ export interface InstructionGraphArtifact {
   artifact_id: string;
   unit_id: string;
   provider: SessionRenderTool;
-  representation: "native-import" | "conditional-rule" | "flattened";
+  representation: string;
+  loading_path: string;
 }
 
 export interface InstructionGraphRenderPlan {
@@ -96,6 +140,14 @@ export interface InstructionGraphRenderPlan {
   provider: SessionRenderTool;
   provider_version: string;
   capability_descriptor_version: number;
+  capability: {
+    schema: typeof PROVIDER_CAPABILITY_SCHEMA;
+    descriptor_version: number;
+    provider_version_range: string;
+    provider_variant: string;
+    selected_representation: string;
+    loading_path: string;
+  };
   units: InstructionGraphUnit[];
   artifacts: InstructionGraphArtifact[];
   diagnostics: InstructionGraphDiagnostic[];
@@ -105,6 +157,7 @@ export interface InstructionGraphRenderPlan {
 export interface CompiledInstructionGraph {
   plan: InstructionGraphRenderPlan;
   sources: SessionInstructionSource[];
+  capability: ProviderCapability;
 }
 
 export interface ProfileSessionRenderPlan extends SessionRenderPlan {
@@ -203,6 +256,26 @@ function optionalString(value: unknown, label: string): string | undefined {
   return requiredString(value, label);
 }
 
+export function selectProviderCapability(context: InstructionGraphContext): ProviderCapability {
+  const candidates = PROVIDER_CAPABILITY_DESCRIPTORS.filter((entry) => entry.provider === context.provider);
+  const requestedVariant = context.provider_variant?.trim();
+  if (context.provider_variant !== undefined && !requestedVariant) {
+    throw new InstructionGraphValidationError([
+      errorDiagnostic(null, "PROVIDER_VARIANT_INVALID", "Provider variant cannot be empty."),
+    ]);
+  }
+  const selected = requestedVariant
+    ? candidates.find((entry) => entry.provider_variant === requestedVariant)
+    : candidates.find((entry) => entry.default_variant);
+  if (!selected) {
+    const available = candidates.map((entry) => entry.provider_variant).sort().join(", ");
+    throw new InstructionGraphValidationError([
+      errorDiagnostic(null, "PROVIDER_VARIANT_UNSUPPORTED", `${context.provider} variant ${requestedVariant ?? "<default>"} is unsupported; available variants: ${available}.`),
+    ]);
+  }
+  return selected;
+}
+
 export function compileInstructionGraph(input: {
   profile_id: string;
   configs: Config[];
@@ -210,8 +283,13 @@ export function compileInstructionGraph(input: {
   context: InstructionGraphContext;
   capability?: ProviderCapability;
 }): CompiledInstructionGraph {
-  const capability = input.capability ?? PROVIDER_CAPABILITIES[input.context.provider];
+  const capability = input.capability ?? selectProviderCapability(input.context);
   if (capability.provider !== input.context.provider) throw new Error(`Provider capability ${capability.provider} cannot compile ${input.context.provider}.`);
+  if (input.context.provider_variant && capability.provider_variant !== input.context.provider_variant) {
+    throw new InstructionGraphValidationError([
+      errorDiagnostic(null, "PROVIDER_VARIANT_MISMATCH", `${input.context.provider} capability variant ${capability.provider_variant} cannot compile requested variant ${input.context.provider_variant}.`),
+    ]);
+  }
   const diagnostics: InstructionGraphDiagnostic[] = [];
   if (!versionSatisfies(input.context.provider_version, capability.provider_version_range)) {
     diagnostics.push(errorDiagnostic(null, "PROVIDER_VERSION_UNSUPPORTED", `${input.context.provider} ${input.context.provider_version} does not satisfy capability range ${capability.provider_version_range}.`));
@@ -308,7 +386,8 @@ export function compileInstructionGraph(input: {
     provider: input.context.provider,
     representation: unit.effective_activation.mode === "glob"
       ? "conditional-rule"
-      : capability.native_imports ? "native-import" : "flattened",
+      : capability.selected_representation,
+    loading_path: capability.loading_path,
   }));
   assertExactOnce(units, artifacts);
   const sources = units.map((unit, index) => {
@@ -321,6 +400,14 @@ export function compileInstructionGraph(input: {
     provider: input.context.provider,
     provider_version: input.context.provider_version,
     capability_descriptor_version: capability.descriptor_version,
+    capability: {
+      schema: capability.schema,
+      descriptor_version: capability.descriptor_version,
+      provider_version_range: capability.provider_version_range,
+      provider_variant: capability.provider_variant,
+      selected_representation: capability.selected_representation,
+      loading_path: capability.loading_path,
+    },
     units,
     artifacts,
     diagnostics,
@@ -328,6 +415,7 @@ export function compileInstructionGraph(input: {
   return {
     plan: deepFreeze({ ...planWithoutHash, source_hash: sha256(stableJson(planWithoutHash)) }),
     sources,
+    capability,
   };
 }
 
@@ -345,7 +433,19 @@ export function planProfileSessionRender(input: Omit<SessionRenderInput, "source
     context: { provider: input.tool, provider_version: input.provider_version, ...input.graph_context },
   });
   const { profile_id: _profileId, provider_version: _providerVersion, configs: _configs, bindings: _bindings, graph_context: _graphContext, ...renderInput } = input;
-  return deepFreeze({ ...planSessionRender({ ...renderInput, sources: compiled.sources }), instructionGraph: compiled.plan });
+  if (renderInput.providerSurface && renderInput.providerSurface !== compiled.capability.session_surface) {
+    throw new InstructionGraphValidationError([
+      errorDiagnostic(null, "PROVIDER_SURFACE_MISMATCH", `Requested render surface ${renderInput.providerSurface} does not match capability ${compiled.capability.provider_variant}.`),
+    ]);
+  }
+  return deepFreeze({
+    ...planSessionRender({
+      ...renderInput,
+      ...(compiled.capability.session_surface ? { providerSurface: compiled.capability.session_surface } : {}),
+      sources: compiled.sources,
+    }),
+    instructionGraph: compiled.plan,
+  });
 }
 
 function sourceForUnit(config: Config, unit: InstructionGraphUnit, order: number): SessionInstructionSource {
@@ -524,7 +624,7 @@ function versionSatisfies(version: string, range: string): boolean {
 }
 
 function parseVersion(value: string): [number, number, number] {
-  const match = /^(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:[-+].*)?$/.exec(value.trim());
+  const match = /^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:[-+].*)?$/.exec(value.trim());
   if (!match) throw new Error(`Invalid provider version: ${value}`);
   return [Number(match[1]), Number(match[2] ?? 0), Number(match[3] ?? 0)];
 }
