@@ -1,0 +1,414 @@
+import { describe, it, expect, mock, beforeAll, beforeEach, afterEach } from "bun:test";
+import { Database as SqliteDatabase } from "bun:sqlite";
+import { tmpdir } from "os";
+import { join } from "path";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
+import type { Attachment } from "./db";
+
+// AttachmentsDB is dynamically imported after mock.restore() so we always get the real class,
+// even when other test files (upload.test.ts, download.test.ts) have mocked "./db".
+let AttachmentsDB: import("./db").AttachmentsDB extends object
+  ? typeof import("./db").AttachmentsDB
+  : never;
+
+type AttachmentsDBCtor = new (path?: string) => import("./db").AttachmentsDB;
+let DB: AttachmentsDBCtor;
+
+beforeAll(async () => {
+  mock.restore();
+  const mod = await import("./db");
+  DB = mod.AttachmentsDB as AttachmentsDBCtor;
+});
+
+function makeTempPath(): string {
+  return join(tmpdir(), `open-attachments-test-${Date.now()}-${Math.random().toString(36).slice(2)}.sqlite`);
+}
+
+function makeAttachment(overrides: Partial<Attachment> = {}): Attachment {
+  return {
+    id: "att_test001",
+    filename: "photo.png",
+    s3Key: "uploads/photo.png",
+    bucket: "my-bucket",
+    size: 1024,
+    contentType: "image/png",
+    link: null,
+    tag: null,
+    expiresAt: null,
+    createdAt: Date.now(),
+    ...overrides,
+  };
+}
+
+describe("AttachmentsDB", () => {
+  let db: import("./db").AttachmentsDB;
+  let dbPath: string;
+
+  beforeEach(() => {
+    dbPath = makeTempPath();
+    db = new DB(dbPath);
+  });
+
+  afterEach(() => {
+    db.close();
+    try {
+      rmSync(dbPath);
+      rmSync(dbPath + "-wal", { force: true });
+      rmSync(dbPath + "-shm", { force: true });
+    } catch {}
+  });
+
+  describe("insert & findById", () => {
+    it("inserts an attachment and retrieves it by id", () => {
+      const att = makeAttachment();
+      db.insert(att);
+      const found = db.findById(att.id);
+      expect(found).not.toBeNull();
+      expect(found!.id).toBe(att.id);
+      expect(found!.filename).toBe(att.filename);
+      expect(found!.s3Key).toBe(att.s3Key);
+      expect(found!.bucket).toBe(att.bucket);
+      expect(found!.size).toBe(att.size);
+      expect(found!.contentType).toBe(att.contentType);
+      expect(found!.link).toBeNull();
+      expect(found!.expiresAt).toBeNull();
+      expect(found!.createdAt).toBe(att.createdAt);
+    });
+
+    it("returns null for a non-existent id", () => {
+      expect(db.findById("att_missing")).toBeNull();
+    });
+
+    it("preserves link and expiresAt when set on insert", () => {
+      const att = makeAttachment({ link: "https://example.com/file", expiresAt: 9999999999999 });
+      db.insert(att);
+      const found = db.findById(att.id);
+      expect(found!.link).toBe("https://example.com/file");
+      expect(found!.expiresAt).toBe(9999999999999);
+    });
+
+    it("preserves tag when set on insert", () => {
+      const att = makeAttachment({ tag: "session-123" });
+      db.insert(att);
+      const found = db.findById(att.id);
+      expect(found!.tag).toBe("session-123");
+    });
+
+    it("stores tag as null when not set", () => {
+      const att = makeAttachment();
+      db.insert(att);
+      const found = db.findById(att.id);
+      expect(found!.tag).toBeNull();
+    });
+  });
+
+  describe("findAll", () => {
+    it("returns all non-expired attachments by default", () => {
+      const now = Date.now();
+      const future = now + 10_000;
+      const past = now - 10_000;
+
+      db.insert(makeAttachment({ id: "att_a", createdAt: now, expiresAt: null }));
+      db.insert(makeAttachment({ id: "att_b", createdAt: now - 1, expiresAt: future }));
+      db.insert(makeAttachment({ id: "att_c", createdAt: now - 2, expiresAt: past }));
+
+      const results = db.findAll();
+      const ids = results.map((r) => r.id);
+      expect(ids).toContain("att_a");
+      expect(ids).toContain("att_b");
+      expect(ids).not.toContain("att_c");
+    });
+
+    it("includes expired when includeExpired=true", () => {
+      const past = Date.now() - 10_000;
+      db.insert(makeAttachment({ id: "att_expired", expiresAt: past }));
+
+      const withExpired = db.findAll({ includeExpired: true });
+      const withoutExpired = db.findAll({ includeExpired: false });
+
+      expect(withExpired.map((r) => r.id)).toContain("att_expired");
+      expect(withoutExpired.map((r) => r.id)).not.toContain("att_expired");
+    });
+
+    it("respects the limit option", () => {
+      for (let i = 0; i < 5; i++) {
+        db.insert(makeAttachment({ id: `att_${i}`, createdAt: Date.now() - i * 1000 }));
+      }
+      const results = db.findAll({ limit: 3 });
+      expect(results.length).toBe(3);
+    });
+
+    it("returns empty array when no attachments", () => {
+      expect(db.findAll()).toEqual([]);
+    });
+
+    it("filters by tag when tag option is set", () => {
+      const now = Date.now();
+      db.insert(makeAttachment({ id: "att_tagged1", tag: "session-1", createdAt: now }));
+      db.insert(makeAttachment({ id: "att_tagged2", tag: "session-1", createdAt: now - 1 }));
+      db.insert(makeAttachment({ id: "att_other", tag: "session-2", createdAt: now - 2 }));
+      db.insert(makeAttachment({ id: "att_noTag", tag: null, createdAt: now - 3 }));
+
+      const results = db.findAll({ tag: "session-1" });
+      const ids = results.map((r) => r.id);
+      expect(ids).toContain("att_tagged1");
+      expect(ids).toContain("att_tagged2");
+      expect(ids).not.toContain("att_other");
+      expect(ids).not.toContain("att_noTag");
+      expect(results.length).toBe(2);
+    });
+
+    it("returns all when tag option is not set", () => {
+      const now = Date.now();
+      db.insert(makeAttachment({ id: "att_t1", tag: "session-1", createdAt: now }));
+      db.insert(makeAttachment({ id: "att_t2", tag: null, createdAt: now - 1 }));
+
+      const results = db.findAll();
+      expect(results.length).toBe(2);
+    });
+
+    it("orders by createdAt descending", () => {
+      const base = Date.now();
+      db.insert(makeAttachment({ id: "att_old", createdAt: base - 2000 }));
+      db.insert(makeAttachment({ id: "att_mid", createdAt: base - 1000 }));
+      db.insert(makeAttachment({ id: "att_new", createdAt: base }));
+
+      const results = db.findAll();
+      expect(results[0].id).toBe("att_new");
+      expect(results[1].id).toBe("att_mid");
+      expect(results[2].id).toBe("att_old");
+    });
+  });
+
+  describe("updateLink", () => {
+    it("updates link and expiresAt for existing attachment", () => {
+      const att = makeAttachment();
+      db.insert(att);
+
+      const expiresAt = Date.now() + 3600_000;
+      db.updateLink(att.id, "https://cdn.example.com/file", expiresAt);
+
+      const found = db.findById(att.id);
+      expect(found!.link).toBe("https://cdn.example.com/file");
+      expect(found!.expiresAt).toBe(expiresAt);
+    });
+
+    it("sets expiresAt to null when not provided", () => {
+      const att = makeAttachment({ expiresAt: 9999999999 });
+      db.insert(att);
+
+      db.updateLink(att.id, "https://cdn.example.com/file");
+
+      const found = db.findById(att.id);
+      expect(found!.link).toBe("https://cdn.example.com/file");
+      expect(found!.expiresAt).toBeNull();
+    });
+
+    it("sets expiresAt to null when explicitly passed null", () => {
+      const att = makeAttachment({ expiresAt: 9999999999 });
+      db.insert(att);
+
+      db.updateLink(att.id, "https://cdn.example.com/file", null);
+
+      const found = db.findById(att.id);
+      expect(found!.expiresAt).toBeNull();
+    });
+  });
+
+  describe("delete", () => {
+    it("removes the attachment from the database", () => {
+      const att = makeAttachment();
+      db.insert(att);
+      db.delete(att.id);
+      expect(db.findById(att.id)).toBeNull();
+    });
+
+    it("does not throw when deleting a non-existent id", () => {
+      expect(() => db.delete("att_nonexistent")).not.toThrow();
+    });
+  });
+
+  describe("deleteExpired", () => {
+    it("deletes only expired attachments and returns count", () => {
+      const now = Date.now();
+      db.insert(makeAttachment({ id: "att_active", expiresAt: now + 10_000 }));
+      db.insert(makeAttachment({ id: "att_no_expiry", expiresAt: null }));
+      db.insert(makeAttachment({ id: "att_expired1", expiresAt: now - 1 }));
+      db.insert(makeAttachment({ id: "att_expired2", expiresAt: now - 5000 }));
+
+      const deleted = db.deleteExpired();
+      expect(deleted).toBe(2);
+
+      expect(db.findById("att_active")).not.toBeNull();
+      expect(db.findById("att_no_expiry")).not.toBeNull();
+      expect(db.findById("att_expired1")).toBeNull();
+      expect(db.findById("att_expired2")).toBeNull();
+    });
+
+    it("returns 0 when nothing is expired", () => {
+      db.insert(makeAttachment({ id: "att_future", expiresAt: Date.now() + 99999999 }));
+      expect(db.deleteExpired()).toBe(0);
+    });
+  });
+});
+
+describe("AttachmentsDB default path constructor", () => {
+  it("creates a DB at the default ~/.hasna/attachments/db.sqlite path when no path given", () => {
+    const originalHome = process.env["HOME"];
+    const originalUserProfile = process.env["USERPROFILE"];
+    const originalDbPath = process.env["HASNA_ATTACHMENTS_DB_PATH"];
+    const home = join(tmpdir(), `attachments-db-home-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    let db: import("./db").AttachmentsDB | null = null;
+    try {
+      mkdirSync(home, { recursive: true });
+      process.env["HOME"] = home;
+      delete process.env["USERPROFILE"];
+      delete process.env["HASNA_ATTACHMENTS_DB_PATH"];
+      expect(() => {
+        db = new DB();
+      }).not.toThrow();
+      expect(db).not.toBeNull();
+      expect(existsSync(join(home, ".hasna", "attachments", "db.sqlite"))).toBe(true);
+      expect(() => (db as import("./db").AttachmentsDB).findAll()).not.toThrow();
+    } finally {
+      db?.close();
+      if (originalHome === undefined) delete process.env["HOME"];
+      else process.env["HOME"] = originalHome;
+      if (originalUserProfile === undefined) delete process.env["USERPROFILE"];
+      else process.env["USERPROFILE"] = originalUserProfile;
+      if (originalDbPath === undefined) delete process.env["HASNA_ATTACHMENTS_DB_PATH"];
+      else process.env["HASNA_ATTACHMENTS_DB_PATH"] = originalDbPath;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("uses HASNA_ATTACHMENTS_DB_PATH when no constructor path is provided", () => {
+    const originalHome = process.env["HOME"];
+    const originalUserProfile = process.env["USERPROFILE"];
+    const originalDbPath = process.env["HASNA_ATTACHMENTS_DB_PATH"];
+    const home = join(tmpdir(), `attachments-db-home-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    let db: import("./db").AttachmentsDB | null = null;
+    try {
+      mkdirSync(home, { recursive: true });
+      process.env["HOME"] = home;
+      delete process.env["USERPROFILE"];
+      process.env["HASNA_ATTACHMENTS_DB_PATH"] = "~/custom/metadata.sqlite";
+
+      expect(() => {
+        db = new DB();
+      }).not.toThrow();
+      expect(existsSync(join(home, "custom", "metadata.sqlite"))).toBe(true);
+      expect(existsSync(join(home, ".hasna", "attachments", "db.sqlite"))).toBe(false);
+    } finally {
+      db?.close();
+      if (originalHome === undefined) delete process.env["HOME"];
+      else process.env["HOME"] = originalHome;
+      if (originalUserProfile === undefined) delete process.env["USERPROFILE"];
+      else process.env["USERPROFILE"] = originalUserProfile;
+      if (originalDbPath === undefined) delete process.env["HASNA_ATTACHMENTS_DB_PATH"];
+      else process.env["HASNA_ATTACHMENTS_DB_PATH"] = originalDbPath;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("copies a legacy attachments.db when HASNA_ATTACHMENTS_DB_PATH points at the canonical DB", () => {
+    const originalHome = process.env["HOME"];
+    const originalUserProfile = process.env["USERPROFILE"];
+    const originalDbPath = process.env["HASNA_ATTACHMENTS_DB_PATH"];
+    const home = join(tmpdir(), `attachments-db-home-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    let db: import("./db").AttachmentsDB | null = null;
+    try {
+      mkdirSync(join(home, ".attachments"), { recursive: true });
+      const legacyDbPath = join(home, ".attachments", "attachments.db");
+      const legacyDb = new SqliteDatabase(legacyDbPath);
+      legacyDb.run("PRAGMA user_version = 47;");
+      legacyDb.close();
+
+      process.env["HOME"] = home;
+      delete process.env["USERPROFILE"];
+      process.env["HASNA_ATTACHMENTS_DB_PATH"] = "~/.hasna/attachments/db.sqlite";
+      db = new DB();
+      db.close();
+      db = null;
+
+      const migratedDb = new SqliteDatabase(join(home, ".hasna", "attachments", "db.sqlite"));
+      const version = migratedDb.query("PRAGMA user_version;").get() as { user_version: number };
+      migratedDb.close();
+      expect(version.user_version).toBe(47);
+    } finally {
+      db?.close();
+      if (originalHome === undefined) delete process.env["HOME"];
+      else process.env["HOME"] = originalHome;
+      if (originalUserProfile === undefined) delete process.env["USERPROFILE"];
+      else process.env["USERPROFILE"] = originalUserProfile;
+      if (originalDbPath === undefined) delete process.env["HASNA_ATTACHMENTS_DB_PATH"];
+      else process.env["HASNA_ATTACHMENTS_DB_PATH"] = originalDbPath;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("merges both legacy dirs into ~/.hasna/attachments before opening the default DB", () => {
+    const originalHome = process.env["HOME"];
+    const originalUserProfile = process.env["USERPROFILE"];
+    const originalDbPath = process.env["HASNA_ATTACHMENTS_DB_PATH"];
+    const home = join(tmpdir(), `attachments-db-home-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    let db: import("./db").AttachmentsDB | null = null;
+    try {
+      mkdirSync(join(home, ".open-attachments", "objects"), { recursive: true });
+      mkdirSync(join(home, ".attachments", "objects"), { recursive: true });
+      writeFileSync(join(home, ".open-attachments", "objects", "legacy.txt"), "legacy");
+      writeFileSync(join(home, ".attachments", "objects", "old-only.txt"), "old");
+      process.env["HOME"] = home;
+      delete process.env["USERPROFILE"];
+      delete process.env["HASNA_ATTACHMENTS_DB_PATH"];
+      db = new DB();
+      expect(readFileSync(join(home, ".hasna", "attachments", "objects", "legacy.txt"), "utf8")).toBe("legacy");
+      expect(readFileSync(join(home, ".hasna", "attachments", "objects", "old-only.txt"), "utf8")).toBe("old");
+    } finally {
+      db?.close();
+      if (originalHome === undefined) delete process.env["HOME"];
+      else process.env["HOME"] = originalHome;
+      if (originalUserProfile === undefined) delete process.env["USERPROFILE"];
+      else process.env["USERPROFILE"] = originalUserProfile;
+      if (originalDbPath === undefined) delete process.env["HASNA_ATTACHMENTS_DB_PATH"];
+      else process.env["HASNA_ATTACHMENTS_DB_PATH"] = originalDbPath;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("copies a legacy attachments.db from the secondary legacy dir into db.sqlite", () => {
+    const originalHome = process.env["HOME"];
+    const originalUserProfile = process.env["USERPROFILE"];
+    const originalDbPath = process.env["HASNA_ATTACHMENTS_DB_PATH"];
+    const home = join(tmpdir(), `attachments-db-home-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    let db: import("./db").AttachmentsDB | null = null;
+    try {
+      mkdirSync(join(home, ".attachments"), { recursive: true });
+      const legacyDbPath = join(home, ".attachments", "attachments.db");
+      const legacyDb = new SqliteDatabase(legacyDbPath);
+      legacyDb.run("PRAGMA user_version = 47;");
+      legacyDb.close();
+
+      process.env["HOME"] = home;
+      delete process.env["USERPROFILE"];
+      delete process.env["HASNA_ATTACHMENTS_DB_PATH"];
+      db = new DB();
+      db.close();
+      db = null;
+
+      const migratedDb = new SqliteDatabase(join(home, ".hasna", "attachments", "db.sqlite"));
+      const version = migratedDb.query("PRAGMA user_version;").get() as { user_version: number };
+      migratedDb.close();
+      expect(version.user_version).toBe(47);
+    } finally {
+      db?.close();
+      if (originalHome === undefined) delete process.env["HOME"];
+      else process.env["HOME"] = originalHome;
+      if (originalUserProfile === undefined) delete process.env["USERPROFILE"];
+      else process.env["USERPROFILE"] = originalUserProfile;
+      if (originalDbPath === undefined) delete process.env["HASNA_ATTACHMENTS_DB_PATH"];
+      else process.env["HASNA_ATTACHMENTS_DB_PATH"] = originalDbPath;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+});

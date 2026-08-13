@@ -1,0 +1,65 @@
+{
+  "$schema": "./node_modules/@hasna/contracts/src/hasna.contract.schema.json",
+  "schema": "hasna.service_contract.v1",
+  "name": "banking",
+  "class": "cli-with-store",
+  "contractVersion": "v1",
+  "kitVersion": "0.8.5",
+  "description": "Agent-safe banking control plane for Hasna infrastructure and AI agents. Ships intent, policy, and provider types plus CLI and MCP surfaces; production storage is supplied by the host through the BankingCoreStore interface.",
+  "bins": [
+    "banking",
+    "banking-mcp"
+  ],
+  "hosting": [
+    "user-hosted"
+  ],
+  "serviceSurfaces": [
+    {
+      "name": "package-sdk",
+      "kind": "sdk",
+      "status": "supported",
+      "authMode": "none",
+      "exportSubpath": "."
+    },
+    {
+      "name": "cli",
+      "kind": "cli",
+      "status": "supported",
+      "bin": "banking",
+      "authMode": "local-only"
+    },
+    {
+      "name": "mcp",
+      "kind": "mcp",
+      "status": "supported",
+      "mcpBin": "banking-mcp",
+      "authMode": "local-only"
+    }
+  ],
+  "storage": {
+    "mode": "sqlite",
+    "engines": [
+      "sqlite"
+    ],
+    "envPrefix": "HASNA_BANKING_",
+    "aliasEnvPrefix": "BANKING_",
+    "sqlitePath": "~/.hasna/banking/banking.db"
+  },
+  "metadata": {
+    "release": {
+      "artifactScan": {
+        "script": "artifact-scan"
+      }
+    },
+    "conformance": {
+      "waivedStorageEngines": [
+        {
+          "engine": "postgres",
+          "reason": "The bundled SQLite adapter is a development fixture that defaults to an in-memory database; hosts supply production storage, PostgreSQL included, through the BankingCoreStore interface in src/core/store.ts.",
+          "reviewedBy": "platform-storage",
+          "expiresAt": "2027-01-01T00:00:00.000Z"
+        }
+      ]
+    }
+  }
+}
