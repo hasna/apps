@@ -108,17 +108,27 @@ export function runResolvedMachineCommand(
   });
   const timedOut = Boolean(result.error && "code" in result.error && result.error.code === "ETIMEDOUT");
   const timeoutMessage = timedOut ? `Command timed out after ${options.timeoutMs}ms.` : "";
-  const stderr = [result.stderr || "", timeoutMessage].filter(Boolean).join(result.stderr ? "\n" : "");
+  const rawStdout = result.stdout || "";
+  const rawStderr = [result.stderr || "", timeoutMessage].filter(Boolean).join(result.stderr ? "\n" : "");
+  const stdout = options.redactOutput === true ? redactMachineCommandOutput(rawStdout) : rawStdout;
+  const stderr = options.redactOutput === true ? redactMachineCommandOutput(rawStderr) : rawStderr;
 
   return {
     machineId,
     source: resolved.source,
-    stdout: result.stdout || "",
+    stdout,
     stderr,
     exitCode: timedOut ? 124 : result.status ?? 1,
     timedOut,
     signal: result.signal,
+    stdoutRedacted: options.redactOutput === true,
+    stderrRedacted: options.redactOutput === true,
   };
+}
+
+function redactMachineCommandOutput(value: string): string {
+  const redactor = createIncrementalCredentialRedactor();
+  return redactor.push(value) + redactor.finish();
 }
 
 function machineCommandInput(options: MachineCommandOptions): Buffer | undefined {

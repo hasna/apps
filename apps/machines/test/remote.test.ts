@@ -1,15 +1,30 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describeMachineCommandFailure, requireMachineCommandSuccess, resolveMachineCommand, runMachineCommand } from "../src/remote.js";
+
+const roots: string[] = [];
 
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
+function useEmptyManifest(): void {
+  const root = mkdtempSync(join(tmpdir(), "machines-remote-manifest-"));
+  roots.push(root);
+  const manifestPath = join(root, "machines.json");
+  writeFileSync(manifestPath, `${JSON.stringify({ version: 1, machines: [] })}\n`);
+  process.env["HASNA_MACHINES_MANIFEST_PATH"] = manifestPath;
+}
+
 describe("machine command routing", () => {
+  afterEach(() => {
+    delete process.env["HASNA_MACHINES_MANIFEST_PATH"];
+    for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+
   test("treats local aliases as local commands", () => {
     expect(resolveMachineCommand("local", "echo ok", "demo-node-02")).toEqual({
       source: "local",
@@ -23,6 +38,7 @@ describe("machine command routing", () => {
   });
 
   test("falls back to direct SSH alias when a machine is not manifest-managed", () => {
+    useEmptyManifest();
     expect(resolveMachineCommand("unmanaged-fixture", "knowledge --version", "demo-node-02")).toEqual({
       source: "ssh",
       command: "ssh",
@@ -33,6 +49,7 @@ describe("machine command routing", () => {
   });
 
   test("rejects unmanaged SSH aliases that would be parsed as SSH options", () => {
+    useEmptyManifest();
     expect(() => resolveMachineCommand("-oProxyCommand=touch/tmp/pwned", "true", "demo-node-02"))
       .toThrow("Unsafe SSH target");
   });
@@ -66,6 +83,22 @@ describe("machine command routing", () => {
     expect(result.timedOut).toBe(false);
     expect(result.stdout.length).toBe(200_000);
     expect(result.stdout.endsWith("x")).toBe(true);
+  });
+
+  test("redacts direct command output when requested without needing the timeout helper", () => {
+    const result = runMachineCommand(
+      "local",
+      "printf '%s\\n' 'token=fixture-value'; printf '%s\\n' 'Bearer fixturevalue' >&2",
+      { redactOutput: true },
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("token=[redacted]");
+    expect(result.stdout).not.toContain("fixture-value");
+    expect(result.stderr).toContain("[redacted]");
+    expect(result.stderr).not.toContain("fixturevalue");
+    expect(result.stdoutRedacted).toBe(true);
+    expect(result.stderrRedacted).toBe(true);
   });
 
   test("bounds each stream while the timeout helper collects output", () => {

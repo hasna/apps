@@ -1,16 +1,66 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { spawnSync } from "node:child_process";
 import { buildAppsPlan, diffApps, getAppsStatus, listApps, runAppsInstall, runAppsPlan, validateAppsCandidate } from "../src/commands/apps.js";
 import { manifestAdd, manifestInit } from "../src/commands/manifest.js";
 import type { MachineCommandRunner } from "../src/remote.js";
 import { exactBunCandidate, exactBunFixtureSource, exactBunTargetFixtures, writeExactBunCandidate } from "./fixtures/exact-bun.js";
 
+const probeFixtureDirs: string[] = [];
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+function createExactBunPackageFixture(expectedVersion: string) {
+  const dir = mkdtempSync(join(tmpdir(), "machines-apps-package-exact-"));
+  probeFixtureDirs.push(dir);
+  const manifestPath = join(dir, "machines.json");
+  process.env["HASNA_MACHINES_MANIFEST_PATH"] = manifestPath;
+  writeFileSync(manifestPath, `${JSON.stringify({
+    version: 1,
+    packages: [{
+      name: "@hasna/machines",
+      manager: "bun",
+      version: expectedVersion,
+      bin: "machines",
+    }],
+    machines: [{
+      id: "remote-linux",
+      platform: "linux",
+      workspacePath: "/home/operator/workspace",
+    }],
+  }, null, 2)}\n`);
+
+  const plan = buildAppsPlan("remote-linux");
+  const step = plan.steps[0];
+  if (!step?.probeCommand || !step.command) throw new Error("expected one exact Bun package step");
+  return { plan, probeCommand: step.probeCommand, installCommand: step.command };
+}
+
+function runProbeCommand(probeCommand: string, binaryOutput: string) {
+  const dir = mkdtempSync(join(tmpdir(), "machines-apps-probe-bin-"));
+  probeFixtureDirs.push(dir);
+  const binDir = join(dir, "bin");
+  mkdirSync(binDir);
+  const binaryPath = join(binDir, "machines");
+  writeFileSync(binaryPath, `#!/bin/sh\nprintf '%s\\n' ${shellQuote(binaryOutput)}\n`);
+  chmodSync(binaryPath, 0o755);
+  return spawnSync("sh", ["-c", probeCommand], {
+    env: { ...process.env, PATH: `${binDir}:${process.env.PATH ?? ""}` },
+    encoding: "utf8",
+  });
+}
+
 describe("apps", () => {
   afterEach(() => {
     delete process.env["HASNA_MACHINES_MANIFEST_PATH"];
     delete process.env["HASNA_MACHINES_MACHINE_ID"];
+    while (probeFixtureDirs.length > 0) {
+      rmSync(probeFixtureDirs.pop()!, { force: true, recursive: true });
+    }
   });
 
   test("lists apps from manifest", () => {
@@ -248,6 +298,29 @@ describe("apps", () => {
     });
   });
 
+  test("fails closed when the exact Bun version banner does not match", () => {
+    const { probeCommand } = createExactBunPackageFixture("0.2.21");
+    const result = runProbeCommand(probeCommand, "machines v0.2.20 (build 2026.08.13)");
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("installed=1\nversion=0.2.20\n");
+    expect(result.stderr).toBe("");
+
+    const runner: MachineCommandRunner = (machineId, command) => ({
+      machineId,
+      source: "ssh",
+      stdout: command === "true" ? "" : result.stdout,
+      stderr: "",
+      exitCode: 0,
+    });
+    expect(getAppsStatus("remote-linux", runner).apps[0]).toEqual({
+      name: "@hasna/machines",
+      packageName: "@hasna/machines",
+      manager: "bun",
+      installed: false,
+      version: "0.2.20",
+    });
+  });
+
   test("keeps legacy custom packageName install and command-v probe semantics", () => {
     const dir = mkdtempSync(join(tmpdir(), "machines-apps-custom-legacy-"));
     process.env["HASNA_MACHINES_MANIFEST_PATH"] = join(dir, "machines.json");
@@ -276,6 +349,72 @@ describe("apps", () => {
       "true",
       "if command -v 'sh' >/dev/null 2>&1; then printf 'installed=1\\nversion=custom\\n'; else printf 'installed=0\\n'; fi",
     ]);
+  });
+
+  test("installs exact Bun package specs through apps and verifies the declared executable version", () => {
+    const { plan } = createExactBunPackageFixture("0.2.21");
+    expect(plan.steps).toHaveLength(1);
+    expect(plan.steps[0]).toMatchObject({
+      id: "package-hasna-machines",
+      title: "Install @hasna/machines@0.2.21 on remote-linux",
+      command: "bun install -g '@hasna/machines@0.2.21'",
+      manager: "bun",
+      privileged: false,
+      expectedVersion: "0.2.21",
+    });
+    expect(plan.steps[0]?.probeCommand).toContain("'machines' --version");
+    expect(plan.steps[0]?.probeCommand).not.toContain("@hasna/machines@0.2.21");
+    expect(JSON.stringify(plan)).not.toContain("publish-token");
+    expect(JSON.stringify(plan)).not.toContain("NODE_AUTH_TOKEN");
+
+    const calls: Array<{ command: string; redactOutput: boolean }> = [];
+    const runner: MachineCommandRunner = (machineId, command, options) => {
+      calls.push({ command, redactOutput: options?.redactOutput === true });
+      if (command === "true") return { machineId, source: "ssh", stdout: "", stderr: "", exitCode: 0 };
+      if (command.includes("'machines' --version")) {
+        return { machineId, source: "ssh", stdout: "installed=1\nversion=0.2.21\n", stderr: "", exitCode: 0 };
+      }
+      if (command === "bun install -g '@hasna/machines@0.2.21'") {
+        return { machineId, source: "ssh", stdout: "", stderr: "", exitCode: 0 };
+      }
+      throw new Error(`unexpected command: ${command}`);
+    };
+
+    expect(getAppsStatus("remote-linux", runner).apps).toEqual([{
+      name: "@hasna/machines",
+      packageName: "@hasna/machines",
+      manager: "bun",
+      installed: true,
+      version: "0.2.21",
+    }]);
+    const applied = runAppsInstall(
+      "remote-linux",
+      { apply: true, yes: true, expectedPlanDigest: plan.planDigest },
+      runner,
+    );
+    expect(applied.executed).toBe(1);
+    expect(calls).toEqual([
+      { command: "true", redactOutput: false },
+      { command: plan.steps[0]?.probeCommand, redactOutput: true },
+      { command: "bun install -g '@hasna/machines@0.2.21'", redactOutput: true },
+      { command: plan.steps[0]?.probeCommand, redactOutput: true },
+    ]);
+  });
+
+  test("extracts the version token from a banner with trailing build metadata", () => {
+    const { probeCommand } = createExactBunPackageFixture("0.2.21");
+    const result = runProbeCommand(probeCommand, "machines v0.2.21 (build 2026.08.13)");
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("installed=1\nversion=0.2.21\n");
+    expect(result.stderr).toBe("");
+  });
+
+  test("extracts the version token from a banner with adjacent node metadata", () => {
+    const { probeCommand } = createExactBunPackageFixture("1.2.3");
+    const result = runProbeCommand(probeCommand, "version 1.2.3 (node 20.11.1)");
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("installed=1\nversion=1.2.3\n");
+    expect(result.stderr).toBe("");
   });
 
   test("keeps apt, brew, and winget install command compatibility", () => {
