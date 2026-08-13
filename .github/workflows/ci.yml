@@ -96,9 +96,15 @@ jobs:
       # apps/browser). Provision the browser runtime from the MEMBER directory
       # so bun resolves the member's own playwright pin (the root may resolve a
       # different version whose browser build the member's tests reject).
-      # No-op for members that do not use it.
+      # google-chrome-stable is the system chrome that Bun's Linux WebView
+      # backend drives over CDP — without it, WebView-route tests hang on a
+      # runner that has no other chrome. No-op for members that do not use it.
       - name: Install playwright chromium (member browser tests)
-        run: bunx playwright install chromium --with-deps
+        run: |
+          bunx playwright install chromium --with-deps
+          if ! command -v google-chrome >/dev/null 2>&1; then
+            sudo apt-get update -qq && sudo apt-get install -y -qq google-chrome-stable
+          fi
         working-directory: apps/browser
 
       # TURBO_SCM_BASE makes --affected real in both lanes. On pull_request the
