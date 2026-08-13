@@ -2,7 +2,7 @@
 
 Thin agent-facing **billing/dunning orchestration over Stripe Billing** — NOT a rebuilt billing engine. It mirrors Stripe subscription/invoice state and owns its own derived dunning tables, exposing a CLI + MCP + serve triad over a Hasna-contract store.
 
-Part of the Hasna internal-apps cohort. `billing` composes with `entities` (seller entity anchor), `invoices`, `payments`, and Stripe.
+`billing` is a standalone billing/dunning orchestration layer over Stripe Billing: it mirrors Stripe subscription and invoice state into its own tables and applies configurable dunning policies (decline-code retry schedules, pre-dunning window, graduated downgrades), with multi-entity invoicing and signature-verified webhook ingest.
 
 ## What it does
 
