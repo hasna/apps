@@ -1,0 +1,53 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: fleet
+      POSTGRES_USER: fleet
+      POSTGRES_PASSWORD_FILE: /run/secrets/pg_password
+    secrets: [pg_password]
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fleet"]
+      interval: 5s
+      retries: 10
+  serve:
+    image: oven/bun:1
+    # invoke the serve bin directly via --package (a bare `bunx @hasna/fleet fleet-serve`
+    # would run the default CLI bin and treat "fleet-serve" as a bogus argument).
+    command: ["bunx", "--package", "@hasna/fleet", "fleet-serve"]
+    environment:
+      HASNA_FLEET_STORAGE_MODE: cloud
+      HASNA_FLEET_DATABASE_URL_FILE: /run/secrets/database_url
+      HASNA_FLEET_PORT: "3485"
+      HASNA_FLEET_BIND_HOST: "0.0.0.0"
+      HASNA_FLEET_CORS_ORIGINS: ${CORS_ORIGINS:-}
+      HASNA_FLEET_API_CREDENTIALS: ${FLEET_API_CREDENTIALS:-}
+    secrets: [database_url]
+    depends_on: { db: { condition: service_healthy } }
+    ports: ["3485:3485"]
+  mcp:
+    image: oven/bun:1
+    # --package selects the MCP bin; a bare `bunx @hasna/fleet fleet-mcp` would run
+    # the CLI and treat "fleet-mcp" as a bogus argument. (BUILD-SPEC §6.4)
+    command: ["bunx", "--package", "@hasna/fleet", "fleet-mcp", "--http", "--port", "8889"]
+    environment:
+      HASNA_FLEET_STORAGE_MODE: cloud
+      HASNA_FLEET_DATABASE_URL_FILE: /run/secrets/database_url
+      MCP_HTTP: "1"
+      MCP_HTTP_PORT: "8889"
+      # Bind 0.0.0.0 so the published 8889 is reachable; the default loopback bind
+      # is invisible to Docker port forwarding. A non-loopback bind forces auth ON
+      # (mcpAuthRequired), satisfied here by wiring API_CREDENTIALS. Never publish
+      # this port without credentials.
+      HASNA_FLEET_MCP_BIND_HOST: "0.0.0.0"
+      HASNA_FLEET_API_CREDENTIALS: ${FLEET_API_CREDENTIALS:-}
+    secrets: [database_url]
+    depends_on: { db: { condition: service_healthy } }
+    ports: ["8889:8889"]
+secrets:
+  pg_password:
+    file: ./secrets/pg_password
+  database_url:
+    file: ./secrets/database_url   # postgres://fleet:<pw>@db:5432/fleet?sslmode=verify-full
+volumes: { pgdata: {} }
