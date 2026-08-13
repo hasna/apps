@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "id": "wks_3texxrawhaxm",
+  "slug": "open-models",
+  "name": "open-models",
+  "kind": "open-source",
+  "root_id": "root_28xtmiu5mi8j",
+  "recipe_id": null,
+  "primary_path": "/home/hasna/workspace/hasna/opensource/open-models",
+  "git_remote": null,
+  "tags": [
+    "hasna",
+    "opensource",
+    "models",
+    "huggingface",
+    "ml",
+    "cli"
+  ],
+  "integrations": {},
+  "generated_at": "2026-06-18T10:57:52.360Z"
+}
