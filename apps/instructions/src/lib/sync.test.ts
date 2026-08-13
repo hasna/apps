@@ -37,6 +37,10 @@ describe("detectCategory", () => {
 describe("detectAgent", () => {
   test("detects claude for .claude dir", () => expect(detectAgent("/home/user/.claude/CLAUDE.md")).toBe("claude"));
   test("detects codex for .codex dir", () => expect(detectAgent("/home/user/.codex/config.toml")).toBe("codex"));
+  test("detects Copilot repository instruction files", () => expect(detectAgent("/home/user/repo/.github/instructions/typescript.instructions.md")).toBe("copilot"));
+  test("detects current Devin rule files", () => expect(detectAgent("/home/user/repo/.devin/rules/review.md")).toBe("devin"));
+  test("detects legacy Windsurf rule files", () => expect(detectAgent("/home/user/repo/.windsurf/rules/review.md")).toBe("windsurf-legacy"));
+  test("detects Cline rule files", () => expect(detectAgent("/home/user/repo/.clinerules/review.md")).toBe("cline"));
   test("detects zsh for .zshrc", () => expect(detectAgent("/home/user/.zshrc")).toBe("zsh"));
   test("detects npm for .npmrc", () => expect(detectAgent("/home/user/.npmrc")).toBe("npm"));
 });

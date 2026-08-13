@@ -29,9 +29,12 @@ import {
   type UpdateProfileInput,
   type ProfileConfigBinding,
   type ProfileConfigBindingSpec,
+  type ProfileAssetBinding,
+  type ProfileAssetBindingSpec,
 } from "../types/index.js";
 import { boundedReadPage, normalizeBoundedReadOptions } from "../lib/bounded-read.js";
 import { legacyProfileConfigBinding, normalizeProfileConfigBinding } from "../lib/instruction-graph.js";
+import { normalizeProfileAssetBinding } from "../lib/asset-plan.js";
 
 function slugify(name: string): string {
   return name
@@ -571,6 +574,70 @@ export async function removeConfigFromProfile(
     "DELETE FROM profile_configs WHERE profile_id = $1 AND config_id = $2",
     [profile.id, configId],
   );
+}
+
+export async function addAssetToProfile(
+  client: TypedQueryClient,
+  profileIdOrSlug: string,
+  sourceConfigId: string,
+  binding: ProfileAssetBindingSpec,
+): Promise<ProfileAssetBinding> {
+  const profile = await getProfile(client, profileIdOrSlug);
+  await getConfig(client, sourceConfigId);
+  const normalized = normalizeProfileAssetBinding(binding);
+  const maxRow = await client.get<{ max_order: number | null }>(
+    "SELECT MAX(sort_order) AS max_order FROM profile_assets WHERE profile_id = $1",
+    [profile.id],
+  );
+  const order = (maxRow?.max_order ?? -1) + 1;
+  await client.execute(
+    "INSERT INTO profile_assets (profile_id, source_config_id, asset_key, sort_order, binding) VALUES ($1,$2,$3,$4,$5::jsonb)",
+    [profile.id, sourceConfigId, normalized.assetKey, order, JSON.stringify(normalized)],
+  );
+  return (await getProfileAssetBindings(client, profile.id)).find((row) => row.binding.assetKey === normalized.assetKey)!;
+}
+
+export async function setProfileAssetBinding(
+  client: TypedQueryClient,
+  profileIdOrSlug: string,
+  assetKey: string,
+  binding: ProfileAssetBindingSpec,
+): Promise<ProfileAssetBinding> {
+  const profile = await getProfile(client, profileIdOrSlug);
+  const normalized = normalizeProfileAssetBinding(binding);
+  if (normalized.assetKey !== assetKey) throw new Error(`Asset binding key ${normalized.assetKey} does not match route key ${assetKey}.`);
+  const result = await client.query(
+    "UPDATE profile_assets SET binding = $1::jsonb WHERE profile_id = $2 AND asset_key = $3",
+    [JSON.stringify(normalized), profile.id, assetKey],
+  );
+  if ((result.rowCount ?? 0) !== 1) throw new Error(`Asset ${assetKey} is not a member of profile ${profile.slug}.`);
+  return (await getProfileAssetBindings(client, profile.id)).find((row) => row.binding.assetKey === assetKey)!;
+}
+
+export async function getProfileAssetBindings(
+  client: TypedQueryClient,
+  profileIdOrSlug: string,
+): Promise<ProfileAssetBinding[]> {
+  const profile = await getProfile(client, profileIdOrSlug);
+  const rows = await client.many<{ profile_id: string; source_config_id: string; sort_order: number; binding: unknown }>(
+    "SELECT profile_id, source_config_id, sort_order, binding FROM profile_assets WHERE profile_id = $1 ORDER BY sort_order, asset_key",
+    [profile.id],
+  );
+  return rows.map((row) => ({
+    profile_id: row.profile_id,
+    source_config_id: row.source_config_id,
+    sort_order: Number(row.sort_order),
+    binding: normalizeProfileAssetBinding(row.binding),
+  }));
+}
+
+export async function removeAssetFromProfile(
+  client: TypedQueryClient,
+  profileIdOrSlug: string,
+  assetKey: string,
+): Promise<void> {
+  const profile = await getProfile(client, profileIdOrSlug);
+  await client.execute("DELETE FROM profile_assets WHERE profile_id = $1 AND asset_key = $2", [profile.id, assetKey]);
 }
 
 // ── Profile resolution (machine-aware) ───────────────────────────────────────

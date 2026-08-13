@@ -20,6 +20,12 @@ export interface ProfileConfigBindingSpec { "schema": string; "activation": Reco
 
 export interface ProfileConfigBinding { "profile_id": string; "config_id": string; "sort_order": number; "binding": ProfileConfigBindingSpec }
 
+export interface ProfileAssetBindingSpec { "schema": string; "assetKey": string; "kind": "skill" | "workflow" | "plugin" | "extension" | "hook" | "custom-agent"; "enabled": boolean; "required": boolean; "selector": { "provider": string; "versionRange": string; "surface": string; "scope": "global" | "project" | "session" }; "source": { "kind": "skill" | "workflow" | "plugin" | "extension" | "hook" | "custom-agent"; "locator": string; "digest": string; "immutable": boolean; "allowed": boolean }; "destination": { "strategy": "emit-file" | "install-local" | "install-marketplace" | "unsupported"; "root": "target-home" | "project-root"; "relativePath": string }; "uninstall": "remove-managed" | "retain"; "rollback": "snapshot" | "installer-receipt" | "none" }
+
+export interface ProfileAssetBinding { "profile_id": string; "source_config_id": string; "sort_order": number; "binding": ProfileAssetBindingSpec }
+
+export interface AddProfileAssetInput { "source_config_id": string; "binding": ProfileAssetBindingSpec }
+
 export interface ProfileConfigAddedResponse { "added": boolean }
 
 export interface ProfileConfigRemovedResponse { "removed": boolean }
@@ -191,6 +197,42 @@ export class InstructionsV1Client {
     /** Delete a profile */
     async deleteProfile(id: string, init?: RequestInit): Promise<{ "deleted"?: boolean; "id"?: string }> {
       return this.request("DELETE", `/v1/profiles/${encodeURIComponent(String(id))}`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** List typed asset bindings for a profile */
+    async getProfileAssetBindings(id: string, init?: RequestInit): Promise<{ "assets"?: Array<ProfileAssetBinding> }> {
+      return this.request("GET", `/v1/profiles/${encodeURIComponent(String(id))}/assets`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Add a content-addressed asset binding to a profile */
+    async addAssetToProfile(id: string, body: AddProfileAssetInput, init?: RequestInit): Promise<{ "asset"?: ProfileAssetBinding }> {
+      return this.request("POST", `/v1/profiles/${encodeURIComponent(String(id))}/assets`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Replace one schema-versioned profile asset binding */
+    async setProfileAssetBinding(id: string, assetKey: string, body: { "binding": ProfileAssetBindingSpec }, init?: RequestInit): Promise<{ "asset"?: ProfileAssetBinding }> {
+      return this.request("PUT", `/v1/profiles/${encodeURIComponent(String(id))}/assets/${encodeURIComponent(String(assetKey))}`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Remove one managed asset binding from a profile */
+    async removeAssetFromProfile(id: string, assetKey: string, init?: RequestInit): Promise<{ "removed"?: boolean }> {
+      return this.request("DELETE", `/v1/profiles/${encodeURIComponent(String(id))}/assets/${encodeURIComponent(String(assetKey))}`, {
         body: undefined,
         query: undefined,
         init,

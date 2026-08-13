@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import * as cloud from "./cloud.js";
 import * as store from "../storage/cloud-store.js";
-import type { Config, Profile, ProfileConfigBinding } from "../types/index.js";
+import type { Config, Profile, ProfileAssetBinding, ProfileConfigBinding } from "../types/index.js";
 import { buildV1OpenApiDocument } from "./openapi.js";
 import { handleV1Request } from "./v1.js";
 
@@ -169,6 +169,70 @@ describe("mixed-version profile HTTP compatibility", () => {
     expect(await setResponse?.json()).toEqual({ binding });
     expect(set).toHaveBeenCalledWith(expect.anything(), "profile-1", "config-2", binding.binding);
   });
+
+  test("profile asset handlers preserve the separate schema-versioned asset lifecycle", async () => {
+    mockCloudBoundary();
+    const asset: ProfileAssetBinding = {
+      profile_id: "profile-1",
+      source_config_id: "config-2",
+      sort_order: 0,
+      binding: {
+        schema: "hasna.instructions.profile-asset-binding/v1",
+        assetKey: "review-skill",
+        kind: "skill",
+        enabled: true,
+        required: true,
+        selector: { provider: "codex", versionRange: ">=0.147.0", surface: "cli", scope: "session" },
+        source: {
+          kind: "skill",
+          locator: "config://config-2@1",
+          digest: `sha256:${"0".repeat(64)}`,
+          immutable: true,
+          allowed: true,
+        },
+        destination: { strategy: "emit-file", root: "target-home", relativePath: "skills/review/SKILL.md" },
+        uninstall: "remove-managed",
+        rollback: "snapshot",
+      },
+    };
+    const list = track(spyOn(store, "getProfileAssetBindings").mockResolvedValue([asset]));
+    const add = track(spyOn(store, "addAssetToProfile").mockResolvedValue(asset));
+    const set = track(spyOn(store, "setProfileAssetBinding").mockResolvedValue(asset));
+    const remove = track(spyOn(store, "removeAssetFromProfile").mockResolvedValue(undefined));
+
+    const listResponse = await handleV1Request(
+      new Request("https://instructions.hasna.xyz/v1/profiles/profile-1/assets"),
+      new URL("https://instructions.hasna.xyz/v1/profiles/profile-1/assets"),
+    );
+    const addResponse = await handleV1Request(
+      new Request("https://instructions.hasna.xyz/v1/profiles/profile-1/assets", {
+        method: "POST",
+        body: JSON.stringify({ source_config_id: "config-2", binding: asset.binding }),
+      }),
+      new URL("https://instructions.hasna.xyz/v1/profiles/profile-1/assets"),
+    );
+    const setResponse = await handleV1Request(
+      new Request("https://instructions.hasna.xyz/v1/profiles/profile-1/assets/review-skill", {
+        method: "PUT",
+        body: JSON.stringify({ binding: asset.binding }),
+      }),
+      new URL("https://instructions.hasna.xyz/v1/profiles/profile-1/assets/review-skill"),
+    );
+    const removeResponse = await handleV1Request(
+      new Request("https://instructions.hasna.xyz/v1/profiles/profile-1/assets/review-skill", { method: "DELETE" }),
+      new URL("https://instructions.hasna.xyz/v1/profiles/profile-1/assets/review-skill"),
+    );
+
+    expect(await listResponse?.json()).toEqual({ assets: [asset] });
+    expect(list).toHaveBeenCalledWith(expect.anything(), "profile-1");
+    expect(addResponse?.status).toBe(201);
+    expect(await addResponse?.json()).toEqual({ asset });
+    expect(add).toHaveBeenCalledWith(expect.anything(), "profile-1", "config-2", asset.binding);
+    expect(await setResponse?.json()).toEqual({ asset });
+    expect(set).toHaveBeenCalledWith(expect.anything(), "profile-1", "review-skill", asset.binding);
+    expect(await removeResponse?.json()).toEqual({ removed: true });
+    expect(remove).toHaveBeenCalledWith(expect.anything(), "profile-1", "review-skill");
+  });
 });
 
 describe("profile OpenAPI and generated SDK contract", () => {
@@ -250,5 +314,29 @@ describe("profile OpenAPI and generated SDK contract", () => {
     expect(generated).toContain("async setProfileConfigBinding(id: string, configId: string");
     expect(generated).toContain("async removeConfigFromProfile(id: string, configId: string");
     expect(generated).not.toContain("async replaceConfigInProfile(");
+  });
+
+  test("documents and generates the profile asset binding API", () => {
+    const spec = buildV1OpenApiDocument("test") as any;
+    expect(spec.components.schemas.ProfileAssetBindingSpec.properties.kind.enum).toEqual([
+      "skill",
+      "workflow",
+      "plugin",
+      "extension",
+      "hook",
+      "custom-agent",
+    ]);
+    expect(spec.paths["/v1/profiles/{id}/assets"].get.operationId).toBe("getProfileAssetBindings");
+    expect(spec.paths["/v1/profiles/{id}/assets"].post.operationId).toBe("addAssetToProfile");
+    expect(spec.paths["/v1/profiles/{id}/assets/{assetKey}"].put.operationId).toBe("setProfileAssetBinding");
+    expect(spec.paths["/v1/profiles/{id}/assets/{assetKey}"].delete.operationId).toBe("removeAssetFromProfile");
+
+    const generated = readFileSync(join(import.meta.dir, "../../sdk/src/v1.generated.ts"), "utf8");
+    expect(generated).toContain("export interface ProfileAssetBindingSpec");
+    expect(generated).toContain("export interface ProfileAssetBinding");
+    expect(generated).toContain("async getProfileAssetBindings(id: string");
+    expect(generated).toContain("async addAssetToProfile(id: string, body: AddProfileAssetInput");
+    expect(generated).toContain("async setProfileAssetBinding(id: string, assetKey: string");
+    expect(generated).toContain("async removeAssetFromProfile(id: string, assetKey: string");
   });
 });

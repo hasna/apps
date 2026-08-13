@@ -13,6 +13,8 @@ import type {
   ProfileResolutionRead,
   ProfileConfigBinding,
   ProfileConfigBindingSpec,
+  ProfileAssetBinding,
+  ProfileAssetBindingSpec,
 } from "../types/index.js";
 import { ProfileNotFoundError } from "../types/index.js";
 import { getDatabase, now, slugify, uuid } from "./database.js";
@@ -20,6 +22,7 @@ import { getConfigById } from "./configs.js";
 import { detectMachineContext, normalizeOsFamily } from "../lib/machine.js";
 import { boundedReadPage, normalizeBoundedReadOptions } from "../lib/bounded-read.js";
 import { legacyProfileConfigBinding, normalizeProfileConfigBinding } from "../lib/instruction-graph.js";
+import { normalizeProfileAssetBinding } from "../lib/asset-plan.js";
 
 function rowToProfile(row: ProfileRow): Profile {
   return {
@@ -195,6 +198,64 @@ export function removeConfigFromProfile(
     "DELETE FROM profile_configs WHERE profile_id = ? AND config_id = ?",
     [profile.id, configId]
   );
+}
+
+export function addAssetToProfile(
+  profileIdOrSlug: string,
+  sourceConfigId: string,
+  binding: ProfileAssetBindingSpec,
+  db?: Database,
+): ProfileAssetBinding {
+  const d = db || getDatabase();
+  const profile = getProfile(profileIdOrSlug, d);
+  getConfigById(sourceConfigId, d);
+  const normalized = normalizeProfileAssetBinding(binding);
+  const maxRow = d
+    .query<{ max_order: number | null }, [string]>("SELECT MAX(sort_order) AS max_order FROM profile_assets WHERE profile_id = ?")
+    .get(profile.id);
+  const order = (maxRow?.max_order ?? -1) + 1;
+  d.run(
+    "INSERT INTO profile_assets (profile_id, source_config_id, asset_key, sort_order, binding) VALUES (?, ?, ?, ?, ?)",
+    [profile.id, sourceConfigId, normalized.assetKey, order, JSON.stringify(normalized)],
+  );
+  return getProfileAssetBindings(profile.id, d).find((row) => row.binding.assetKey === normalized.assetKey)!;
+}
+
+export function setProfileAssetBinding(
+  profileIdOrSlug: string,
+  assetKey: string,
+  binding: ProfileAssetBindingSpec,
+  db?: Database,
+): ProfileAssetBinding {
+  const d = db || getDatabase();
+  const profile = getProfile(profileIdOrSlug, d);
+  const normalized = normalizeProfileAssetBinding(binding);
+  if (normalized.assetKey !== assetKey) throw new Error(`Asset binding key ${normalized.assetKey} does not match route key ${assetKey}.`);
+  const result = d.run(
+    "UPDATE profile_assets SET binding = ? WHERE profile_id = ? AND asset_key = ?",
+    [JSON.stringify(normalized), profile.id, assetKey],
+  );
+  if (result.changes !== 1) throw new Error(`Asset ${assetKey} is not a member of profile ${profile.slug}.`);
+  return getProfileAssetBindings(profile.id, d).find((row) => row.binding.assetKey === assetKey)!;
+}
+
+export function getProfileAssetBindings(profileIdOrSlug: string, db?: Database): ProfileAssetBinding[] {
+  const d = db || getDatabase();
+  const profile = getProfile(profileIdOrSlug, d);
+  return d.query<{ profile_id: string; source_config_id: string; sort_order: number; binding: string }, [string]>(
+    "SELECT profile_id, source_config_id, sort_order, binding FROM profile_assets WHERE profile_id = ? ORDER BY sort_order, asset_key",
+  ).all(profile.id).map((row) => ({
+    profile_id: row.profile_id,
+    source_config_id: row.source_config_id,
+    sort_order: row.sort_order,
+    binding: normalizeProfileAssetBinding(row.binding),
+  }));
+}
+
+export function removeAssetFromProfile(profileIdOrSlug: string, assetKey: string, db?: Database): void {
+  const d = db || getDatabase();
+  const profile = getProfile(profileIdOrSlug, d);
+  d.run("DELETE FROM profile_assets WHERE profile_id = ? AND asset_key = ?", [profile.id, assetKey]);
 }
 
 export function getProfileConfigs(profileIdOrSlug: string, db?: Database): Config[] {

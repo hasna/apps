@@ -128,6 +128,67 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
             binding: { $ref: "#/components/schemas/ProfileConfigBindingSpec" },
           },
         },
+        ProfileAssetBindingSpec: {
+          type: "object",
+          required: ["schema", "assetKey", "kind", "enabled", "required", "selector", "source", "destination", "uninstall", "rollback"],
+          properties: {
+            schema: { type: "string", const: "hasna.instructions.profile-asset-binding/v1" },
+            assetKey: { type: "string", minLength: 1 },
+            kind: { type: "string", enum: ["skill", "workflow", "plugin", "extension", "hook", "custom-agent"] },
+            enabled: { type: "boolean" },
+            required: { type: "boolean" },
+            selector: {
+              type: "object",
+              required: ["provider", "versionRange", "surface", "scope"],
+              properties: {
+                provider: { type: "string" },
+                versionRange: { type: "string" },
+                surface: { type: "string" },
+                scope: { type: "string", enum: ["global", "project", "session"] },
+              },
+            },
+            source: {
+              type: "object",
+              required: ["kind", "locator", "digest", "immutable", "allowed"],
+              properties: {
+                kind: { type: "string", enum: ["skill", "workflow", "plugin", "extension", "hook", "custom-agent"] },
+                locator: { type: "string" },
+                digest: { type: "string", pattern: "^sha256:[a-f0-9]{64}$" },
+                immutable: { type: "boolean" },
+                allowed: { type: "boolean" },
+              },
+            },
+            destination: {
+              type: "object",
+              required: ["strategy", "root", "relativePath"],
+              properties: {
+                strategy: { type: "string", enum: ["emit-file", "install-local", "install-marketplace", "unsupported"] },
+                root: { type: "string", enum: ["target-home", "project-root"] },
+                relativePath: { type: "string", minLength: 1 },
+              },
+            },
+            uninstall: { type: "string", enum: ["remove-managed", "retain"] },
+            rollback: { type: "string", enum: ["snapshot", "installer-receipt", "none"] },
+          },
+        },
+        ProfileAssetBinding: {
+          type: "object",
+          required: ["profile_id", "source_config_id", "sort_order", "binding"],
+          properties: {
+            profile_id: { type: "string" },
+            source_config_id: { type: "string" },
+            sort_order: { type: "integer" },
+            binding: { $ref: "#/components/schemas/ProfileAssetBindingSpec" },
+          },
+        },
+        AddProfileAssetInput: {
+          type: "object",
+          required: ["source_config_id", "binding"],
+          properties: {
+            source_config_id: { type: "string" },
+            binding: { $ref: "#/components/schemas/ProfileAssetBindingSpec" },
+          },
+        },
         ProfileConfigAddedResponse: {
           type: "object",
           required: ["added"],
@@ -448,6 +509,45 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
           summary: "List schema-versioned config bindings for a profile",
           parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
           responses: { "200": { content: { "application/json": { schema: { type: "object", properties: { bindings: { type: "array", items: { $ref: "#/components/schemas/ProfileConfigBinding" } } } } } } } },
+        },
+      },
+      "/v1/profiles/{id}/assets": {
+        get: {
+          operationId: "getProfileAssetBindings",
+          summary: "List typed asset bindings for a profile",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          responses: { "200": { content: { "application/json": { schema: { type: "object", properties: { assets: { type: "array", items: { $ref: "#/components/schemas/ProfileAssetBinding" } } } } } } } },
+        },
+        post: {
+          operationId: "addAssetToProfile",
+          summary: "Add a content-addressed asset binding to a profile",
+          security: [{ apiKey: [] }],
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/AddProfileAssetInput" } } } },
+          responses: { "201": { content: { "application/json": { schema: { type: "object", properties: { asset: { $ref: "#/components/schemas/ProfileAssetBinding" } } } } } } },
+        },
+      },
+      "/v1/profiles/{id}/assets/{assetKey}": {
+        put: {
+          operationId: "setProfileAssetBinding",
+          summary: "Replace one schema-versioned profile asset binding",
+          security: [{ apiKey: [] }],
+          parameters: [
+            { name: "id", in: "path", required: true, schema: { type: "string" } },
+            { name: "assetKey", in: "path", required: true, schema: { type: "string" } },
+          ],
+          requestBody: { required: true, content: { "application/json": { schema: { type: "object", required: ["binding"], properties: { binding: { $ref: "#/components/schemas/ProfileAssetBindingSpec" } } } } } },
+          responses: { "200": { content: { "application/json": { schema: { type: "object", properties: { asset: { $ref: "#/components/schemas/ProfileAssetBinding" } } } } } } },
+        },
+        delete: {
+          operationId: "removeAssetFromProfile",
+          summary: "Remove one managed asset binding from a profile",
+          security: [{ apiKey: [] }],
+          parameters: [
+            { name: "id", in: "path", required: true, schema: { type: "string" } },
+            { name: "assetKey", in: "path", required: true, schema: { type: "string" } },
+          ],
+          responses: { "200": { content: { "application/json": { schema: { type: "object", properties: { removed: { type: "boolean", const: true } } } } } } },
         },
       },
       "/v1/stats": {

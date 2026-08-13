@@ -27,6 +27,7 @@ import {
 } from "./project-context.js";
 import { isRetiredOrUnsupportedConfigAgent } from "./config-agents.js";
 import { applyTransform } from "./transforms.js";
+import { configAssetDigest, resolveAssetDestination, type AssetPlan } from "./asset-plan.js";
 import {
   detectCursorAuthorityConflicts,
   observeCursorGlobalAuthority,
@@ -66,6 +67,11 @@ export const SESSION_RENDER_TOOLS = [
   "qwen",
   "aicopilot",
   "antigravity",
+  "grok",
+  "copilot",
+  "devin",
+  "windsurf-legacy",
+  "cline",
 ] as const;
 
 export const SESSION_RENDER_PROFILE_ENTRYPOINTS = [
@@ -81,12 +87,16 @@ export const SESSION_RENDER_OWNED_CONFIG_TARGETS = [
 ] as const;
 
 export type SessionRenderTool = (typeof SESSION_RENDER_TOOLS)[number];
-export type SessionRenderMode = "native-imports" | "flattened-markdown" | "cursor-mdc" | "opencode-instructions" | "antigravity-rules";
-export type SessionProviderSurface = "opencode-config-instructions" | "opencode-agents-md";
+export type SessionRenderMode = "native-imports" | "flattened-markdown" | "cursor-mdc" | "opencode-instructions" | "antigravity-rules" | "provider-rules";
+export type SessionProviderSurface =
+  | "opencode-config-instructions"
+  | "opencode-agents-md"
+  | "copilot-repository-instructions"
+  | "copilot-path-instructions";
 export type SessionInstructionLayer = (typeof SESSION_INSTRUCTION_LAYERS)[number];
 export type SessionInstructionLayerAlias = SessionInstructionLayer | "provider" | "identity" | "project";
 export type SessionInstructionMerge = "append" | "replace";
-export type SessionRenderFileRole = "index" | "fragment" | "rule" | "config" | "manifest";
+export type SessionRenderFileRole = "index" | "fragment" | "rule" | "config" | "asset" | "manifest";
 export type SessionRenderTargetKind = "session-home" | "project-root" | "blocked";
 export type SessionTargetOwnerKind = "provider-profile" | "project" | "blocked";
 
@@ -122,6 +132,8 @@ export interface SessionToolAdapter {
   nativeImports: boolean;
   description: string;
   providerSurface?: "legacy-dual" | SessionProviderSurface;
+  projectScoped?: boolean;
+  ruleExtension?: ".md" | ".instructions.md";
 }
 
 export interface SessionInstructionSource {
@@ -249,6 +261,10 @@ export interface SessionRenderInput {
   /** Explicit provider loading surface selected by the compiled capability descriptor. */
   providerSurface?: SessionProviderSurface;
   skippedSources?: SessionSkippedSource[];
+  /** Executable/supporting assets remain separate from instruction sources. */
+  assetPlan?: AssetPlan;
+  /** Pinned source bytes keyed by source config id; never serialized into the plan or manifest. */
+  assetContents?: Readonly<Record<string, string>>;
 }
 
 export interface SessionRenderFile {
@@ -354,6 +370,24 @@ export interface SessionRenderManifest {
     fragmentPath: string;
   };
   compatibility?: Record<string, unknown>;
+  assetPlan?: {
+    schema: AssetPlan["schema"];
+    planDigest: string;
+    profileId: string;
+    providerVersion: string;
+    surface: string;
+    scope: string;
+    assets: Array<{
+      assetId: string;
+      assetKey: string;
+      kind: string;
+      action: string;
+      mutationMode: string;
+      destination: AssetPlan["assets"][number]["destination"];
+      digest: string;
+      exactOnceKey: string;
+    }>;
+  };
 }
 
 export interface SessionRenderPlan {
@@ -383,6 +417,8 @@ export interface SessionRenderPlan {
   allowEmptySources: boolean;
   env: Record<string, string>;
   files: SessionRenderFile[];
+  assetPlan?: AssetPlan;
+  assetFiles: SessionRenderFile[];
   manifest: SessionRenderManifest;
   manifestFile: SessionRenderFile;
   allFiles: SessionRenderFile[];
@@ -435,6 +471,7 @@ export const SESSION_TOOL_ADAPTERS: Record<SessionRenderTool, SessionToolAdapter
     managedDir: ".cursor/rules",
     nativeImports: false,
     description: "Cursor project rule files in .cursor/rules/*.mdc.",
+    projectScoped: true,
   },
   opencode: {
     tool: "opencode",
@@ -471,6 +508,53 @@ export const SESSION_TOOL_ADAPTERS: Record<SessionRenderTool, SessionToolAdapter
     managedDir: ".agents/rules",
     nativeImports: false,
     description: "Google Antigravity project rules in .agents/rules/*.md.",
+    projectScoped: true,
+  },
+  grok: {
+    tool: "grok",
+    mode: "flattened-markdown",
+    indexFile: "AGENTS.md",
+    managedDir: ".grok/instructions",
+    nativeImports: false,
+    description: "Grok Build repository instructions in AGENTS.md.",
+    projectScoped: true,
+  },
+  copilot: {
+    tool: "copilot",
+    mode: "flattened-markdown",
+    indexFile: ".github/copilot-instructions.md",
+    managedDir: ".github/instructions",
+    nativeImports: false,
+    description: "GitHub Copilot repository-wide instructions.",
+    projectScoped: true,
+    providerSurface: "copilot-repository-instructions",
+  },
+  devin: {
+    tool: "devin",
+    mode: "provider-rules",
+    managedDir: ".devin/rules",
+    nativeImports: false,
+    description: "Devin repository rules in .devin/rules/*.md.",
+    projectScoped: true,
+    ruleExtension: ".md",
+  },
+  "windsurf-legacy": {
+    tool: "windsurf-legacy",
+    mode: "provider-rules",
+    managedDir: ".windsurf/rules",
+    nativeImports: false,
+    description: "Legacy Windsurf repository rules in .windsurf/rules/*.md.",
+    projectScoped: true,
+    ruleExtension: ".md",
+  },
+  cline: {
+    tool: "cline",
+    mode: "provider-rules",
+    managedDir: ".clinerules",
+    nativeImports: false,
+    description: "Cline repository rules in .clinerules/*.md.",
+    projectScoped: true,
+    ruleExtension: ".md",
   },
   codewith: CODEWITH_FLATTENED_ADAPTER,
 };
@@ -1637,6 +1721,54 @@ function buildAntigravityRuleFiles(
   });
 }
 
+function buildProviderRuleFiles(
+  targetHome: string,
+  adapter: SessionToolAdapter,
+  sources: OrderedSessionInstructionSource[],
+): SessionRenderFile[] {
+  const extension = adapter.ruleExtension ?? ".md";
+  return sources.flatMap((source, index) => {
+    const n = String(index + 1).padStart(2, "0");
+    const sourcePath = posix.join(adapter.managedDir, `${n}-${source.normalizedId}${extension}`);
+    const sourceFile = makeFile(targetHome, sourcePath, "rule", providerRuleContent(adapter, source, sectionForSource(source)), [source.id]);
+    const ruleFiles = source.resolvedRules.map((rule) => {
+      const stem = rule.resolvedPath.replace(/\.(md|instructions\.md)$/i, "");
+      const rulePath = posix.join(adapter.managedDir, `${n}-${source.normalizedId}-${stem}${extension}`);
+      return makeFile(targetHome, rulePath, "rule", providerRuleContent(adapter, source, sectionForRule(source, rule), rule.globs), [source.id, rule.id]);
+    });
+    return [sourceFile, ...ruleFiles];
+  });
+}
+
+function providerRuleContent(
+  adapter: SessionToolAdapter,
+  source: OrderedSessionInstructionSource,
+  content: string,
+  ruleGlobs?: string[],
+): string {
+  const activation = source.metadata?.["activation"] as { mode?: string; globs?: string[]; models?: string[]; description?: string } | undefined;
+  const globs = ruleGlobs?.length ? ruleGlobs : activation?.globs;
+  if (adapter.tool === "copilot") {
+    return globs?.length
+      ? ["---", `applyTo: ${yamlQuote(globs.join(","))}`, "---", "", content].join("\n")
+      : content;
+  }
+  if (adapter.tool === "devin" || adapter.tool === "windsurf-legacy") {
+    const mode = activation?.mode === "glob"
+      ? "glob"
+      : activation?.mode === "model"
+        ? "model_decision"
+        : activation?.mode === "manual"
+          ? "manual"
+          : "always_on";
+    const frontmatter = ["---", `activation: ${mode}`];
+    if (globs?.length) frontmatter.push(`globs: ${JSON.stringify(globs)}`);
+    if (activation?.description) frontmatter.push(`description: ${yamlQuote(activation.description)}`);
+    return [...frontmatter, "---", "", content].join("\n");
+  }
+  return content;
+}
+
 function makeAntigravityRuleFile(
   targetHome: string,
   relativePath: string,
@@ -1670,14 +1802,44 @@ function buildFiles(
       return buildOpenCodeFiles(targetHome, adapter, profile, sources, providerConfig);
     case "antigravity-rules":
       return buildAntigravityRuleFiles(targetHome, adapter, sources);
+    case "provider-rules":
+      return buildProviderRuleFiles(targetHome, adapter, sources);
   }
 }
 
+function buildAssetFiles(input: SessionRenderInput, targetHome: string, blocked: boolean): SessionRenderFile[] {
+  const plan = input.assetPlan;
+  if (!plan || blocked) return [];
+  if (plan.provider !== input.tool) throw new Error(`Asset plan provider ${plan.provider} cannot render with ${input.tool}.`);
+  return plan.assets.filter((item) => item.action === "write").map((item) => {
+    if (item.destination.strategy !== "emit-file") throw new Error(`Asset ${item.assetKey} has write action without emit-file strategy.`);
+    const content = input.assetContents?.[item.sourceConfigId];
+    if (content === undefined) throw new Error(`Asset ${item.assetKey} is missing its pinned source bytes.`);
+    if (configAssetDigest(content) !== item.source.digest) throw new Error(`Asset ${item.assetKey} bytes no longer match its validated digest.`);
+    const path = resolveAssetDestination(item, {
+      targetHome,
+      ...(input.projectRoot ? { projectRoot: resolveSessionPath(input.projectRoot) } : {}),
+    });
+    const relativePath = relative(targetHome, path).replaceAll("\\", "/");
+    if (!relativePath || relativePath === ".." || relativePath.startsWith("../") || isAbsolute(relativePath)) {
+      throw new Error(`Asset ${item.assetKey} is outside the session snapshot root; use a project-scoped session plan for atomic application.`);
+    }
+    return {
+      path,
+      relativePath: assertSafeRelativePath(relativePath),
+      role: "asset" as const,
+      content,
+      sha256: sha256(content),
+      sourceIds: [item.sourceConfigId, item.assetId],
+    };
+  });
+}
+
 function adapterFor(input: SessionRenderInput): SessionToolAdapter {
-  if (input.providerSurface && input.tool !== "opencode") {
-    throw new Error(`Provider surface ${input.providerSurface} is valid only for OpenCode.`);
-  }
   if (input.tool === "opencode" && input.providerSurface) {
+    if (input.providerSurface !== "opencode-config-instructions" && input.providerSurface !== "opencode-agents-md") {
+      throw new Error(`Provider surface ${input.providerSurface} is not valid for OpenCode.`);
+    }
     return Object.freeze({
       ...SESSION_TOOL_ADAPTERS.opencode,
       providerSurface: input.providerSurface,
@@ -1685,6 +1847,23 @@ function adapterFor(input: SessionRenderInput): SessionToolAdapter {
         ? "OpenCode v1 instructions loaded exactly once through opencode.json managed fragments."
         : "OpenCode v2 instructions loaded exactly once through flattened AGENTS.md.",
     });
+  }
+  if (input.tool === "copilot" && input.providerSurface) {
+    if (input.providerSurface === "copilot-repository-instructions") return SESSION_TOOL_ADAPTERS.copilot;
+    if (input.providerSurface === "copilot-path-instructions") {
+      return Object.freeze({
+        ...SESSION_TOOL_ADAPTERS.copilot,
+        mode: "provider-rules",
+        indexFile: undefined,
+        ruleExtension: ".instructions.md",
+        providerSurface: input.providerSurface,
+        description: "GitHub Copilot path-specific instructions in .github/instructions/*.instructions.md.",
+      });
+    }
+    throw new Error(`Provider surface ${input.providerSurface} is not valid for GitHub Copilot.`);
+  }
+  if (input.providerSurface && input.tool !== "opencode" && input.tool !== "copilot") {
+    throw new Error(`Provider surface ${input.providerSurface} is not valid for ${input.tool}.`);
   }
   if (input.tool !== "codewith") return SESSION_TOOL_ADAPTERS[input.tool];
   const gatedNativeImports =
@@ -1746,10 +1925,19 @@ function resolveRenderTarget(input: SessionRenderInput): {
   targetKind: SessionRenderTargetKind;
   blockers: string[];
 } {
-  if (input.tool === "cursor" || input.tool === "antigravity") {
+  const adapter = SESSION_TOOL_ADAPTERS[input.tool];
+  if (adapter.projectScoped) {
     if (!input.projectRoot) {
-      const label = input.tool === "cursor" ? "Cursor rules" : "Antigravity rules";
-      const path = input.tool === "cursor" ? ".cursor/rules files" : ".agents/rules files";
+      const label = input.tool === "cursor"
+        ? "Cursor rules"
+        : input.tool === "antigravity"
+          ? "Antigravity rules"
+          : `${adapter.description.split(".")[0]} files`;
+      const path = input.tool === "cursor"
+        ? ".cursor/rules files"
+        : input.tool === "antigravity"
+          ? ".agents/rules files"
+          : adapter.indexFile ?? `${adapter.managedDir} files`;
       return {
         targetHome: defaultTargetHome(input.tool, input.profile, input.sessionId),
         targetKind: "blocked",
@@ -1902,7 +2090,8 @@ export function planSessionRender(input: SessionRenderInput): SessionRenderPlan 
     throw new Error(`Session source ${projectContext.source.id} is reserved for the durable Instructions project-context renderer.`);
   }
   const files = projectContext?.files ?? baseFiles;
-  rejectDuplicateRenderPaths(files);
+  const assetFiles = buildAssetFiles(input, targetHome, blocked);
+  rejectDuplicateRenderPaths([...files, ...assetFiles]);
 
   const manifest: SessionRenderManifest = {
     schema: SESSION_RENDER_SCHEMA,
@@ -1928,6 +2117,7 @@ export function planSessionRender(input: SessionRenderInput): SessionRenderPlan 
           ? { sourceId: input.providerConfig.sourceId, content: input.providerConfig.content }
           : null,
         projectContext: projectContext.project_context,
+        assetPlanDigest: input.assetPlan?.planDigest ?? null,
       }
       : {
         sources: orderedSources.map(sourceFingerprint),
@@ -1935,6 +2125,7 @@ export function planSessionRender(input: SessionRenderInput): SessionRenderPlan 
         providerConfig: input.providerConfig
           ? { sourceId: input.providerConfig.sourceId, content: input.providerConfig.content }
           : null,
+        assetPlanDigest: input.assetPlan?.planDigest ?? null,
       }),
     sources: [
       ...orderedSources.map((source) => ({
@@ -1965,7 +2156,7 @@ export function planSessionRender(input: SessionRenderInput): SessionRenderPlan 
       ...(projectContext ? [projectContext.source] : []),
     ],
     skippedSources,
-    files: files.map((file) => ({
+    files: [...files, ...assetFiles].map((file) => ({
       path: file.path,
       relativePath: file.relativePath,
       role: file.role,
@@ -1973,6 +2164,28 @@ export function planSessionRender(input: SessionRenderInput): SessionRenderPlan 
       sourceIds: file.sourceIds,
     })),
     warnings,
+    ...(input.assetPlan
+      ? {
+        assetPlan: {
+          schema: input.assetPlan.schema,
+          planDigest: input.assetPlan.planDigest,
+          profileId: input.assetPlan.profileId,
+          providerVersion: input.assetPlan.providerVersion,
+          surface: input.assetPlan.surface,
+          scope: input.assetPlan.scope,
+          assets: input.assetPlan.assets.map((item) => ({
+            assetId: item.assetId,
+            assetKey: item.assetKey,
+            kind: item.kind,
+            action: item.action,
+            mutationMode: item.mutationMode,
+            destination: item.destination,
+            digest: item.source.digest,
+            exactOnceKey: item.exactOnceKey,
+          })),
+        },
+      }
+      : {}),
     ...(input.providerConfig
       ? {
         providerConfig: {
@@ -2001,7 +2214,7 @@ export function planSessionRender(input: SessionRenderInput): SessionRenderPlan 
   // The manifest is checked alongside the entrypoints because it is allowlisted at the same
   // raised bound and grows with the same corpus — a render that only guards the entrypoint
   // moves the identical wedge onto the manifest and calls the job done.
-  const managedOutputs = [...files, manifestFile];
+  const managedOutputs = [...files, ...assetFiles, manifestFile];
   rejectOversizedManagedOutputs(managedOutputs);
   warnings.push(...managedOutputHeadroomWarnings(managedOutputs));
 
@@ -2022,9 +2235,11 @@ export function planSessionRender(input: SessionRenderInput): SessionRenderPlan 
     allowEmptySources,
     env,
     files,
+    ...(input.assetPlan ? { assetPlan: input.assetPlan } : {}),
+    assetFiles,
     manifest,
     manifestFile,
-    allFiles: [...files, manifestFile],
+    allFiles: [...files, ...assetFiles, manifestFile],
     warnings,
     ...(projectContextGuard ? { projectContextGuard } : {}),
   };

@@ -98,6 +98,17 @@ const MIGRATIONS = [
   `
   ALTER TABLE profile_configs ADD COLUMN binding TEXT NOT NULL DEFAULT '{"schema":"hasna.instructions.profile-config-binding/v1","activation":{"mode":"always"},"required":true,"fallback":"fail"}';
   `,
+  `
+  CREATE TABLE IF NOT EXISTS profile_assets (
+    profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+    source_config_id TEXT NOT NULL REFERENCES configs(id) ON DELETE CASCADE,
+    asset_key TEXT NOT NULL,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    binding TEXT NOT NULL,
+    PRIMARY KEY (profile_id, asset_key)
+  );
+  CREATE INDEX IF NOT EXISTS profile_assets_source_config_idx ON profile_assets (source_config_id);
+  `,
 ];
 
 let _db: Database | null = null;

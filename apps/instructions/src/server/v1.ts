@@ -210,6 +210,33 @@ export async function handleV1Request(req: Request, url: URL): Promise<Response 
         }
         return errorResponse(405, `method ${method} not allowed on /v1/profiles/:id/configs`);
       }
+      if (action === "assets") {
+        const assetKey = segments[4] ? decodeURIComponent(segments[4]) : undefined;
+        if (method === "GET" && !assetKey) {
+          const assets = await store.getProfileAssetBindings(client, id);
+          return json({ assets });
+        }
+        if (method === "POST" && !assetKey) {
+          const body = await readJson<{
+            source_config_id?: string;
+            binding?: Parameters<typeof store.addAssetToProfile>[3];
+          }>(req);
+          if (!body?.source_config_id || !body.binding) return errorResponse(400, "source_config_id and binding are required");
+          const asset = await store.addAssetToProfile(client, id, body.source_config_id, body.binding);
+          return json({ asset }, 201);
+        }
+        if (method === "PUT" && assetKey) {
+          const body = await readJson<{ binding?: Parameters<typeof store.setProfileAssetBinding>[3] }>(req);
+          if (!body?.binding) return errorResponse(400, "binding is required");
+          const asset = await store.setProfileAssetBinding(client, id, assetKey, body.binding);
+          return json({ asset });
+        }
+        if (method === "DELETE" && assetKey) {
+          await store.removeAssetFromProfile(client, id, assetKey);
+          return json({ removed: true });
+        }
+        return errorResponse(405, `method ${method} not allowed on /v1/profiles/:id/assets`);
+      }
       if (action) return errorResponse(404, `unknown profile action: ${action}`);
       if (method === "GET") {
         const profile = await store.getProfile(client, id);

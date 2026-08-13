@@ -35,6 +35,10 @@ import {
   resolveProfileForMachineRead as dbResolveProfileForMachineRead,
   setProfileConfigBinding as dbSetProfileConfigBinding,
   updateProfile as dbUpdateProfile,
+  addAssetToProfile as dbAddAssetToProfile,
+  getProfileAssetBindings as dbGetProfileAssetBindings,
+  removeAssetFromProfile as dbRemoveAssetFromProfile,
+  setProfileAssetBinding as dbSetProfileAssetBinding,
 } from "../db/profiles.js";
 import {
   createSnapshot as dbCreateSnapshot,
@@ -66,6 +70,8 @@ import type {
   UpdateProfileInput,
   ProfileConfigBinding,
   ProfileConfigBindingSpec,
+  ProfileAssetBinding,
+  ProfileAssetBindingSpec,
 } from "../types/index.js";
 import { boundedReadPage, normalizeBoundedReadOptions } from "../lib/bounded-read.js";
 
@@ -239,6 +245,10 @@ export interface ConfigStore {
   addConfigToProfile(profileIdOrSlug: string, configId: string): Promise<void>;
   setProfileConfigBinding(profileIdOrSlug: string, configId: string, binding: ProfileConfigBindingSpec): Promise<ProfileConfigBinding>;
   removeConfigFromProfile(profileIdOrSlug: string, configId: string): Promise<void>;
+  getProfileAssetBindings(profileIdOrSlug: string): Promise<ProfileAssetBinding[]>;
+  addAssetToProfile(profileIdOrSlug: string, sourceConfigId: string, binding: ProfileAssetBindingSpec): Promise<ProfileAssetBinding>;
+  setProfileAssetBinding(profileIdOrSlug: string, assetKey: string, binding: ProfileAssetBindingSpec): Promise<ProfileAssetBinding>;
+  removeAssetFromProfile(profileIdOrSlug: string, assetKey: string): Promise<void>;
   resolveProfileForMachine(machine?: MachineContext): Promise<Profile | null>;
   resolveProfileForMachineRead(machine?: MachineContext, options?: BoundedReadOptions): Promise<ProfileResolutionRead>;
   // Machines
@@ -353,6 +363,18 @@ export class LocalConfigStore implements ConfigStore {
   }
   async removeConfigFromProfile(profileIdOrSlug: string, configId: string): Promise<void> {
     dbRemoveConfigFromProfile(profileIdOrSlug, configId, this.db);
+  }
+  async getProfileAssetBindings(profileIdOrSlug: string): Promise<ProfileAssetBinding[]> {
+    return dbGetProfileAssetBindings(profileIdOrSlug, this.db);
+  }
+  async addAssetToProfile(profileIdOrSlug: string, sourceConfigId: string, binding: ProfileAssetBindingSpec): Promise<ProfileAssetBinding> {
+    return dbAddAssetToProfile(profileIdOrSlug, sourceConfigId, binding, this.db);
+  }
+  async setProfileAssetBinding(profileIdOrSlug: string, assetKey: string, binding: ProfileAssetBindingSpec): Promise<ProfileAssetBinding> {
+    return dbSetProfileAssetBinding(profileIdOrSlug, assetKey, binding, this.db);
+  }
+  async removeAssetFromProfile(profileIdOrSlug: string, assetKey: string): Promise<void> {
+    dbRemoveAssetFromProfile(profileIdOrSlug, assetKey, this.db);
   }
   async resolveProfileForMachine(machine?: MachineContext): Promise<Profile | null> {
     return (await this.resolveProfileForMachineRead(machine)).profile;
@@ -694,6 +716,47 @@ export class CloudConfigStore implements ConfigStore {
     await this.request<{ removed: boolean }>(
       "DELETE",
       `/profiles/${encodeURIComponent(profileIdOrSlug)}/configs/${encodeURIComponent(configId)}`,
+      undefined,
+      { allow404: true },
+    );
+  }
+
+  async getProfileAssetBindings(profileIdOrSlug: string): Promise<ProfileAssetBinding[]> {
+    const { status, data } = await this.request<{ assets: ProfileAssetBinding[] }>(
+      "GET",
+      `/profiles/${encodeURIComponent(profileIdOrSlug)}/assets`,
+      undefined,
+      { allow404: true },
+    );
+    if (status === 404 || !Array.isArray(data?.assets)) throw new ProfileNotFoundError(profileIdOrSlug);
+    return data.assets;
+  }
+
+  async addAssetToProfile(profileIdOrSlug: string, sourceConfigId: string, binding: ProfileAssetBindingSpec): Promise<ProfileAssetBinding> {
+    const { data } = await this.request<{ asset: ProfileAssetBinding }>(
+      "POST",
+      `/profiles/${encodeURIComponent(profileIdOrSlug)}/assets`,
+      { source_config_id: sourceConfigId, binding },
+      { idempotent: true },
+    );
+    return (data as { asset: ProfileAssetBinding }).asset;
+  }
+
+  async setProfileAssetBinding(profileIdOrSlug: string, assetKey: string, binding: ProfileAssetBindingSpec): Promise<ProfileAssetBinding> {
+    const { status, data } = await this.request<{ asset: ProfileAssetBinding }>(
+      "PUT",
+      `/profiles/${encodeURIComponent(profileIdOrSlug)}/assets/${encodeURIComponent(assetKey)}`,
+      { binding },
+      { allow404: true, idempotent: true },
+    );
+    if (status === 404 || !data?.asset) throw new ProfileNotFoundError(profileIdOrSlug);
+    return data.asset;
+  }
+
+  async removeAssetFromProfile(profileIdOrSlug: string, assetKey: string): Promise<void> {
+    await this.request<{ removed: boolean }>(
+      "DELETE",
+      `/profiles/${encodeURIComponent(profileIdOrSlug)}/assets/${encodeURIComponent(assetKey)}`,
       undefined,
       { allow404: true },
     );

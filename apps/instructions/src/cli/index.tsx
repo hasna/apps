@@ -16,6 +16,7 @@ import { extractTemplateVars } from "../lib/template.js";
 import { detectMachineContext, resolveProfileVariables } from "../lib/machine.js";
 import { applySessionRender, restoreSessionRenderSnapshot } from "../lib/session-apply.js";
 import { normalizeSessionInstructionSourceId, planSessionRender, resolveSessionPath, sourceFromConfig, sourceFromFilePath, sourcesFromIdentityExport, SESSION_INSTRUCTION_LAYERS, SESSION_RENDER_TOOLS, type SessionInstructionLayer, type SessionInstructionSource, type SessionRenderFile, type SessionRenderPlan, type SessionRenderTool } from "../lib/session-render.js";
+import { normalizeProfileAssetBinding } from "../lib/asset-plan.js";
 import { normalizeProfileConfigBinding, planProfileSessionRender, type InstructionGraphRenderPlan } from "../lib/instruction-graph.js";
 import { accountedGlobalSourceSlugs, computeGlobalSourceCoverage, formatGlobalSourceCoverageWarnings, type GlobalSourceCoverageResult } from "../lib/global-source-coverage.js";
 import { ensurePlatformProfiles } from "../lib/platform-profiles.js";
@@ -275,9 +276,13 @@ async function buildSessionRenderPlan(
     model?: string;
     path?: string;
     manual?: string[];
+    assetSurface?: string;
+    assetScope?: "global" | "project" | "session";
+    allowAssetInstallers?: boolean;
   },
   tool: SessionRenderTool,
   store: ConfigStore,
+  assetPlanMode: "dry-run" | "apply" = "dry-run",
 ): Promise<SessionRenderPlan> {
   if (!opts.compileProfile) {
     if (opts.providerVariant) throw new Error("--provider-variant requires --compile-profile.");
@@ -300,6 +305,10 @@ async function buildSessionRenderPlan(
   const profile = await store.getProfile(opts.compileProfile);
   const configs = await store.getProfileConfigs(profile.id);
   const bindings = await store.getProfileConfigBindings(profile.id);
+  const assetBindings = await store.getProfileAssetBindings(profile.id);
+  const assetConfigs = await Promise.all(
+    [...new Set(assetBindings.map((binding) => binding.source_config_id))].map((id) => store.getConfigById(id)),
+  );
   return planProfileSessionRender({
     profile_id: profile.id,
     provider_version: opts.providerVersion,
@@ -312,6 +321,12 @@ async function buildSessionRenderPlan(
     allowEmptySources: opts.allowEmptySources,
     configs,
     bindings,
+    asset_configs: assetConfigs,
+    asset_bindings: assetBindings,
+    asset_plan_mode: assetPlanMode,
+    ...(opts.assetScope ? { asset_scope: opts.assetScope } : {}),
+    ...(opts.assetSurface ? { asset_surface: opts.assetSurface } : {}),
+    allow_asset_installers: opts.allowAssetInstallers,
     graph_context: {
       ...(opts.model ? { model: opts.model } : {}),
       ...(opts.path ? { path: opts.path } : {}),
@@ -347,6 +362,7 @@ function planJsonForOutput(plan: SessionRenderPlan) {
   return {
     ...plan,
     files: plan.files.map(stripSessionFileContent),
+    assetFiles: plan.assetFiles.map(stripSessionFileContent),
     manifestFile: stripSessionFileContent(plan.manifestFile),
     allFiles: plan.allFiles.map(stripSessionFileContent),
   };
@@ -367,6 +383,15 @@ function printInstructionGraphSelection(plan: SessionRenderPlan): void {
   console.log(`${chalk.cyan("source hash:")} ${graph.source_hash}`);
   for (const diagnostic of graph.diagnostics) {
     console.log(`${chalk.cyan("fallback diagnostic:")} ${diagnostic.code} ${diagnostic.message}`);
+  }
+  if (plan.assetPlan) {
+    console.log(`${chalk.cyan("asset plan:")} ${plan.assetPlan.assets.length} asset(s) ${plan.assetPlan.planDigest}`);
+    for (const item of plan.assetPlan.assets) {
+      console.log(`${chalk.cyan("asset:")} ${item.assetKey} ${item.kind} ${item.support}/${item.action} -> ${item.destination.root}:${item.destination.relativePath}`);
+    }
+    for (const diagnostic of plan.assetPlan.diagnostics) {
+      console.log(`${chalk.cyan("asset diagnostic:")} ${diagnostic.code} ${diagnostic.message}`);
+    }
   }
 }
 
@@ -1054,8 +1079,9 @@ profileCmd.command("show <id>").description("Show profile and its configs")
     const store = resolveConfigStore();
     const p = await store.getProfile(id);
     const page = await store.getProfileConfigsPage(id, { limit: opts.limit, cursor: opts.cursor });
+    const assets = await store.getProfileAssetBindings(id);
     if (opts.json) {
-      printJson({ profile: p, configs: page, bindings: await store.getProfileConfigBindings(id) });
+      printJson({ profile: p, configs: page, bindings: await store.getProfileConfigBindings(id), assets });
       return;
     }
     console.log(chalk.bold(p.name) + chalk.dim(` (${p.slug})`));
@@ -1066,6 +1092,8 @@ profileCmd.command("show <id>").description("Show profile and its configs")
     if (varSummary) console.log(chalk.dim(`vars: ${varSummary}`));
     console.log(chalk.cyan(`${page.total} config(s):`));
     for (const c of page.items) console.log(`  ${c.slug} ${chalk.dim(`[${c.category}/${c.agent}]`)}`);
+    console.log(chalk.cyan(`${assets.length} asset(s):`));
+    for (const asset of assets) console.log(`  ${asset.binding.assetKey} ${chalk.dim(`[${asset.binding.kind}]`)}`);
     if (page.has_more) {
       console.log(chalk.dim(`Showing ${page.items.length} of ${page.total}. Next: configs profile show ${id} --cursor ${page.next_cursor} --limit ${page.limit}`));
     }
@@ -1089,6 +1117,61 @@ profileCmd.command("remove <profile> <config>").description("Remove a config fro
     console.log(chalk.green("✓") + ` Removed ${c.slug} from profile ${profile}`);
   } catch (e) { console.error(chalk.red(formatCliError(e))); process.exit(1); }
 });
+
+const profileAssetCmd = profileCmd.command("asset").description("Manage typed skills, workflows, plugins, extensions, hooks, and custom-agent assets");
+
+profileAssetCmd.command("list <profile>").description("List a profile's asset bindings")
+  .option("--json", "output asset bindings as JSON")
+  .action(async (profile, opts) => {
+    try {
+      const assets = await resolveConfigStore().getProfileAssetBindings(profile);
+      if (opts.json) { printJson({ assets }); return; }
+      if (assets.length === 0) { console.log(chalk.dim("No asset bindings.")); return; }
+      for (const row of assets) {
+        const binding = row.binding;
+        console.log(`${chalk.bold(binding.assetKey)} ${chalk.dim(`[${binding.kind}]`)}`);
+        console.log(`  ${binding.selector.provider}/${binding.selector.surface}@${binding.selector.versionRange} ${binding.selector.scope}`);
+        console.log(`  ${binding.destination.strategy} -> ${binding.destination.root}:${binding.destination.relativePath}`);
+      }
+    } catch (e) { console.error(chalk.red(formatCliError(e))); process.exit(1); }
+  });
+
+profileAssetCmd.command("add <profile> <config>").description("Add a content-addressed asset binding sourced from a stored config")
+  .requiredOption("--input <path>", "JSON file containing the asset binding object")
+  .option("--json", "output the stored asset binding as JSON")
+  .action(async (profile, config, opts) => {
+    try {
+      const store = resolveConfigStore();
+      const source = await store.getConfig(config);
+      const path = resolveSessionPath(opts.input);
+      const binding = normalizeProfileAssetBinding(JSON.parse(readSessionInstructionSourceFile(path)));
+      const stored = await store.addAssetToProfile(profile, source.id, binding);
+      if (opts.json) printJson(stored);
+      else console.log(chalk.green("✓") + ` Added ${binding.assetKey} asset to profile ${profile}`);
+    } catch (e) { console.error(chalk.red(formatCliError(e))); process.exit(1); }
+  });
+
+profileAssetCmd.command("set <profile> <asset-key>").description("Replace one profile asset binding without changing its source bundle")
+  .requiredOption("--input <path>", "JSON file containing the asset binding object")
+  .option("--json", "output the stored asset binding as JSON")
+  .action(async (profile, assetKey, opts) => {
+    try {
+      const store = resolveConfigStore();
+      const path = resolveSessionPath(opts.input);
+      const binding = normalizeProfileAssetBinding(JSON.parse(readSessionInstructionSourceFile(path)));
+      const stored = await store.setProfileAssetBinding(profile, assetKey, binding);
+      if (opts.json) printJson(stored);
+      else console.log(chalk.green("✓") + ` Updated ${assetKey} asset in profile ${profile}`);
+    } catch (e) { console.error(chalk.red(formatCliError(e))); process.exit(1); }
+  });
+
+profileAssetCmd.command("remove <profile> <asset-key>").description("Remove one managed asset binding from a profile")
+  .action(async (profile, assetKey) => {
+    try {
+      await resolveConfigStore().removeAssetFromProfile(profile, assetKey);
+      console.log(chalk.green("✓") + ` Removed ${assetKey} asset from profile ${profile}`);
+    } catch (e) { console.error(chalk.red(formatCliError(e))); process.exit(1); }
+  });
 
 profileCmd.command("binding <profile> <config>").description("Set a config's schema-versioned instruction binding in one profile")
   .requiredOption("--input <path>", "JSON file containing the binding object")
@@ -1310,6 +1393,9 @@ sessionCmd.command("plan")
   .option("--model <model>", "active model used for model activation")
   .option("--path <path>", "active path recorded in the graph context")
   .option("--manual <config-id-or-slug>", "manually activate a binding; repeatable", collectOption, [])
+  .option("--asset-surface <surface>", "explicit provider asset surface (for example cline cli or ide)")
+  .option("--asset-scope <scope>", "asset scope (global|project|session)")
+  .option("--allow-asset-installers", "opt in to planned provider installers; planning never invokes them")
   .option("--codewith-native-imports", "select the gated Codewith native @ import adapter")
   .option("--allow-empty-sources", "allow an explicit empty render plan")
   .option("--check-global-coverage", "warn (non-fatal) when a registered, non-retired global-* source is absent from this render's --config list; expected is read fresh from the registry, independent of this plan (todos 102d6d0a)")
@@ -1322,7 +1408,7 @@ sessionCmd.command("plan")
         process.exit(1);
       }
       const store = resolveConfigStore();
-      const plan = await buildSessionRenderPlan(opts, tool, store);
+      const plan = await buildSessionRenderPlan(opts, tool, store, "dry-run");
       const globalCoverage = opts.checkGlobalCoverage ? await checkGlobalSourceCoverage(plan, store) : null;
       if (opts.json) {
         printJson({
@@ -1375,6 +1461,8 @@ sessionCmd.command("apply")
   .option("--model <model>", "active model used for model activation")
   .option("--path <path>", "active path recorded in the graph context")
   .option("--manual <config-id-or-slug>", "manually activate a binding; repeatable", collectOption, [])
+  .option("--asset-surface <surface>", "explicit provider asset surface (for example cline cli or ide)")
+  .option("--asset-scope <scope>", "asset scope (global|project|session)")
   .option("--codewith-native-imports", "select the gated Codewith native @ import adapter")
   .option("--allow-empty-sources", "allow an explicit empty render")
   .option("--check-global-coverage", "warn (non-fatal) when a registered, non-retired global-* source is absent from this render's --config list; expected is read fresh from the registry, independent of this plan (todos 102d6d0a)")
@@ -1389,7 +1477,7 @@ sessionCmd.command("apply")
         process.exit(1);
       }
       const store = resolveConfigStore();
-      const plan = await buildSessionRenderPlan(opts, tool, store);
+      const plan = await buildSessionRenderPlan(opts, tool, store, "apply");
       const globalCoverage = opts.checkGlobalCoverage ? await checkGlobalSourceCoverage(plan, store) : null;
       const result = applySessionRender(plan, { dryRun: opts.dryRun, force: opts.force });
       if (opts.json) {

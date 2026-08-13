@@ -76,6 +76,29 @@ const SAMPLE_PROFILE = {
   created_at: "",
   updated_at: "",
 };
+const SAMPLE_ASSET = {
+  profile_id: "p1",
+  source_config_id: "cfg-1",
+  sort_order: 0,
+  binding: {
+    schema: "hasna.instructions.profile-asset-binding/v1" as const,
+    assetKey: "review-skill",
+    kind: "skill" as const,
+    enabled: true,
+    required: true,
+    selector: { provider: "codex" as const, versionRange: ">=0.147.0", surface: "cli", scope: "session" as const },
+    source: {
+      kind: "skill" as const,
+      locator: "config://cfg-1@1",
+      digest: `sha256:${"0".repeat(64)}`,
+      immutable: true,
+      allowed: true,
+    },
+    destination: { strategy: "emit-file" as const, root: "target-home" as const, relativePath: "skills/review/SKILL.md" },
+    uninstall: "remove-managed" as const,
+    rollback: "snapshot" as const,
+  },
+};
 const SAMPLE_MACHINE: MachineContext = {
   id: "machine-1",
   hostname: "station02",
@@ -214,6 +237,32 @@ describe("CloudConfigStore CRUD mapping", () => {
     const store = new CloudConfigStore(CONFIG);
     const configs = await store.getProfileConfigs("p");
     expect(configs).toHaveLength(1);
+  });
+
+  test("maps profile asset CRUD to the separate cloud API paths", async () => {
+    const m = mockFetch((call) => {
+      if (call.method === "GET") return { json: { assets: [SAMPLE_ASSET] } };
+      if (call.method === "DELETE") return { json: { removed: true } };
+      return { status: call.method === "POST" ? 201 : 200, json: { asset: SAMPLE_ASSET } };
+    });
+    active = m;
+    const store = new CloudConfigStore(CONFIG);
+
+    expect(await store.getProfileAssetBindings("p1")).toEqual([SAMPLE_ASSET]);
+    expect(await store.addAssetToProfile("p1", "cfg-1", SAMPLE_ASSET.binding)).toEqual(SAMPLE_ASSET);
+    expect(await store.setProfileAssetBinding("p1", "review-skill", SAMPLE_ASSET.binding)).toEqual(SAMPLE_ASSET);
+    await store.removeAssetFromProfile("p1", "review-skill");
+
+    expect(m.calls.map((call) => [call.method, call.url])).toEqual([
+      ["GET", "https://instructions.hasna.xyz/v1/profiles/p1/assets"],
+      ["POST", "https://instructions.hasna.xyz/v1/profiles/p1/assets"],
+      ["PUT", "https://instructions.hasna.xyz/v1/profiles/p1/assets/review-skill"],
+      ["DELETE", "https://instructions.hasna.xyz/v1/profiles/p1/assets/review-skill"],
+    ]);
+    expect(m.calls[1]?.body).toEqual({ source_config_id: "cfg-1", binding: SAMPLE_ASSET.binding });
+    expect(m.calls[2]?.body).toEqual({ binding: SAMPLE_ASSET.binding });
+    expect(m.calls[1]?.headers["Idempotency-Key"]).toBeTruthy();
+    expect(m.calls[2]?.headers["Idempotency-Key"]).toBeTruthy();
   });
 
   test("listProfilesPage sends producer bounds and requires complete metadata", async () => {

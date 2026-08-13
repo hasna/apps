@@ -1774,7 +1774,7 @@ function sanitizeLegacyFiles(value: unknown): Array<Record<string, unknown>> {
     if (!/^[a-f0-9]{64}$/.test(sha)) {
       throw new ProjectContextError("PROJECT_CONTEXT_MANIFEST_INVALID", "provider session file inventory contains an invalid hash");
     }
-    const role = typeof file["role"] === "string" && ["index", "fragment", "rule", "config", "manifest"].includes(file["role"])
+    const role = typeof file["role"] === "string" && ["index", "fragment", "rule", "config", "asset", "manifest"].includes(file["role"])
       ? file["role"]
       : "index";
     return {

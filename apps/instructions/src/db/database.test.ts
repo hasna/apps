@@ -125,7 +125,7 @@ describe("database", () => {
     const row = resumed.query<{ profile_id: string; config_id: string; sort_order: number; binding: string }, []>(
       "SELECT profile_id, config_id, sort_order, binding FROM profile_configs",
     ).get();
-    expect(version?.version).toBe(4);
+    expect(version?.version).toBe(5);
     expect(row).toEqual(expect.objectContaining({ profile_id: "profile-1", config_id: "config-1", sort_order: 7 }));
     expect(JSON.parse(row!.binding).schema).toBe("hasna.instructions.profile-config-binding/v1");
   });

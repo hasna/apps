@@ -75,6 +75,32 @@ export type {
   ProfileSessionRenderPlan,
   ProviderCapability,
 } from "./lib/instruction-graph.js";
+export {
+  ASSET_BUNDLE_SCHEMA,
+  ASSET_CAPABILITY_DESCRIPTORS,
+  ASSET_CAPABILITY_SCHEMA,
+  ASSET_PLAN_SCHEMA,
+  AssetPlanValidationError,
+  assetBundleFromConfig,
+  compileAssetPlan,
+  configAssetDigest,
+  configAssetLocator,
+  normalizeProfileAssetBinding,
+  resolveAssetDestination,
+  selectAssetCapability,
+} from "./lib/asset-plan.js";
+export type {
+  AssetAction,
+  AssetBundle,
+  AssetCapability,
+  AssetPlan,
+  AssetPlanDiagnostic,
+  AssetPlanItem,
+  AssetPlanMode,
+  AssetSupport,
+  CompileAssetPlanInput,
+} from "./lib/asset-plan.js";
+export { providerVersionSatisfies } from "./lib/provider-version.js";
 export type {
   SessionInstructionLayer,
   SessionInstructionMerge,

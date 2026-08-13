@@ -193,10 +193,17 @@ function applySessionRenderUnlocked(
   if (plan.blocked || !plan.writable) {
     throw new SessionApplyError(`Session render plan is blocked: ${plan.blockers.join("; ")}`);
   }
+  const installerAssets = plan.assetPlan?.assets.filter((asset) => asset.action === "install") ?? [];
+  if (!(options.dryRun ?? false) && installerAssets.length > 0) {
+    throw new SessionApplyError(
+      `Asset installer execution is not available in this release; plan only: ${installerAssets.map((asset) => asset.assetKey).join(", ")}`,
+    );
+  }
   assertCursorAuthorityUnchanged(plan);
 
   const targetHome = assertSafeTargetHome(plan.targetHome);
-  const files = [...plan.files, plan.manifestFile];
+  const payloadFiles = [...plan.files, ...(plan.assetFiles ?? [])];
+  const files = [...payloadFiles, plan.manifestFile];
   const manifestPath = resolvePlannedFilePath(plan, plan.manifestFile, targetHome);
   const previousManifest = readPreviousManifest(manifestPath);
   const previousHashes = previousManifest
@@ -257,7 +264,7 @@ function applySessionRenderUnlocked(
     snapshotPath = rollback.snapshotPath;
     options.test_hooks?.before_apply_writes?.({ plan, results });
     const resultsByPath = new Map(results.map((result) => [result.path, result]));
-    for (const file of plan.files) {
+    for (const file of payloadFiles) {
       applyPlannedFile(
         plan,
         file,
@@ -887,6 +894,7 @@ function isSessionRenderFileRole(role: unknown): role is SessionRenderFileRole {
     || role === "fragment"
     || role === "rule"
     || role === "config"
+    || role === "asset"
     || role === "manifest";
 }
 

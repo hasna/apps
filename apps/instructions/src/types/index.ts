@@ -25,6 +25,11 @@ export const CONFIG_AGENTS = [
   "aicopilot",
   "antigravity",
   "qwen",
+  "grok",
+  "copilot",
+  "devin",
+  "windsurf-legacy",
+  "cline",
   "zsh",
   "git",
   "npm",
@@ -259,6 +264,62 @@ export interface ProfileConfigBinding {
   config_id: string;
   sort_order: number;
   binding: ProfileConfigBindingSpec;
+}
+
+// Profile ↔ executable/supporting asset join. Assets deliberately do not use
+// profile_configs: instruction text and executable/provider assets have
+// different trust, destination, enablement, and rollback contracts.
+export const PROFILE_ASSET_BINDING_SCHEMA = "hasna.instructions.profile-asset-binding/v1" as const;
+export const ASSET_KINDS = ["skill", "workflow", "plugin", "extension", "hook", "custom-agent"] as const;
+export type AssetKind = (typeof ASSET_KINDS)[number];
+export const ASSET_DESTINATION_STRATEGIES = ["emit-file", "install-local", "install-marketplace", "unsupported"] as const;
+export type AssetDestinationStrategy = (typeof ASSET_DESTINATION_STRATEGIES)[number];
+export const ASSET_SCOPES = ["global", "project", "session"] as const;
+export type AssetScope = (typeof ASSET_SCOPES)[number];
+export const ASSET_UNINSTALL_POLICIES = ["remove-managed", "retain"] as const;
+export type AssetUninstallPolicy = (typeof ASSET_UNINSTALL_POLICIES)[number];
+export const ASSET_ROLLBACK_POLICIES = ["snapshot", "installer-receipt", "none"] as const;
+export type AssetRollbackPolicy = (typeof ASSET_ROLLBACK_POLICIES)[number];
+
+export interface AssetProviderSelector {
+  provider: ConfigAgent;
+  versionRange: string;
+  surface: string;
+  scope: AssetScope;
+}
+
+export interface AssetSourceSpec {
+  kind: AssetKind;
+  locator: string;
+  digest: string;
+  immutable: boolean;
+  allowed: boolean;
+}
+
+export interface AssetDestinationSpec {
+  strategy: AssetDestinationStrategy;
+  root: "target-home" | "project-root";
+  relativePath: string;
+}
+
+export interface ProfileAssetBindingSpec {
+  schema: typeof PROFILE_ASSET_BINDING_SCHEMA;
+  assetKey: string;
+  kind: AssetKind;
+  enabled: boolean;
+  required: boolean;
+  selector: AssetProviderSelector;
+  source: AssetSourceSpec;
+  destination: AssetDestinationSpec;
+  uninstall: AssetUninstallPolicy;
+  rollback: AssetRollbackPolicy;
+}
+
+export interface ProfileAssetBinding {
+  profile_id: string;
+  source_config_id: string;
+  sort_order: number;
+  binding: ProfileAssetBindingSpec;
 }
 
 /** @deprecated Use ProfileConfigBinding for persisted profile membership. */

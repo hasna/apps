@@ -7,6 +7,7 @@ import type {
   InstructionFallback,
   ProfileConfigBinding,
   ProfileConfigBindingSpec,
+  ProfileAssetBinding,
 } from "../types/index.js";
 import {
   CONFIG_AGENTS,
@@ -22,6 +23,10 @@ import type {
   SessionRenderTool,
 } from "./session-render.js";
 import { planSessionRender, sourceFromConfig } from "./session-render.js";
+import { providerVersionSatisfies } from "./provider-version.js";
+import { compileAssetPlan, type AssetPlanMode } from "./asset-plan.js";
+
+export { providerVersionSatisfies } from "./provider-version.js";
 
 export const INSTRUCTION_GRAPH_PLAN_SCHEMA = "hasna.instructions.render-plan/v1" as const;
 export const PROVIDER_CAPABILITY_SCHEMA = "hasna.instructions.provider-capability/v1" as const;
@@ -36,6 +41,7 @@ export interface ProviderCapability {
   selected_representation: string;
   loading_path: string;
   session_surface?: SessionProviderSurface;
+  asset_surface: string;
   activation_modes: readonly InstructionActivationMode[];
   native_imports: boolean;
   conditional_artifacts: boolean;
@@ -49,7 +55,7 @@ function capability(
   providerVersionRange: string,
   selectedRepresentation: string,
   loadingPath: string,
-  options: Partial<Pick<ProviderCapability, "provider_variant" | "default_variant" | "session_surface" | "activation_modes" | "native_imports" | "conditional_artifacts">> = {},
+  options: Partial<Pick<ProviderCapability, "provider_variant" | "default_variant" | "session_surface" | "asset_surface" | "activation_modes" | "native_imports" | "conditional_artifacts">> = {},
 ): ProviderCapability {
   return Object.freeze({
     schema: PROVIDER_CAPABILITY_SCHEMA,
@@ -60,6 +66,7 @@ function capability(
     default_variant: options.default_variant ?? true,
     selected_representation: selectedRepresentation,
     loading_path: loadingPath,
+    asset_surface: options.asset_surface ?? "cli",
     activation_modes: options.activation_modes ?? (["always"] as const),
     native_imports: options.native_imports ?? false,
     conditional_artifacts: options.conditional_artifacts ?? false,
@@ -74,14 +81,34 @@ function capability(
  * matched independently through provider_version_range.
  */
 const DEFAULT_PROVIDER_CAPABILITIES: Readonly<Record<SessionRenderTool, ProviderCapability>> = Object.freeze({
-  claude: capability("claude", ">=1.0.0", "native-import", "CLAUDE.md @ imports", { native_imports: true }),
-  codex: capability("codex", ">=0.1.0", "flattened", "AGENTS.md"),
-  cursor: capability("cursor", ">=1.0.0", "cursor-rule", ".cursor/rules/*.mdc", { activation_modes: ["always", "glob"], conditional_artifacts: true }),
+  claude: capability("claude", ">=1.0.0", "native-import", "CLAUDE.md @ imports", { native_imports: true, asset_surface: "code" }),
+  codex: capability("codex", ">=0.1.0", "flattened", "AGENTS.md", { asset_surface: "cli" }),
+  cursor: capability("cursor", ">=1.0.0", "cursor-rule", ".cursor/rules/*.mdc", { activation_modes: ["always", "glob"], conditional_artifacts: true, asset_surface: "ide" }),
   opencode: capability("opencode", ">=1.0.0", "managed-fragment", "opencode.json instructions", { provider_variant: "v1-instructions", session_surface: "opencode-config-instructions" }),
   codewith: capability("codewith", ">=0.1.0", "flattened", "CODEWITH.md"),
   qwen: capability("qwen", ">=0.1.0", "flattened", "QWEN.md"),
   aicopilot: capability("aicopilot", ">=0.1.0", "flattened", "AICOPILOT.md"),
-  antigravity: capability("antigravity", ">=1.0.0", "provider-rule", ".agents/rules/*.md"),
+  antigravity: capability("antigravity", ">=1.0.0", "provider-rule", ".agents/rules/*.md", { asset_surface: "project" }),
+  grok: capability("grok", ">=1.0.0", "flattened", "AGENTS.md", { asset_surface: "build" }),
+  copilot: capability("copilot", ">=1.0.0", "flattened", ".github/copilot-instructions.md", {
+    provider_variant: "repository",
+    session_surface: "copilot-repository-instructions",
+    asset_surface: "repository",
+  }),
+  devin: capability("devin", ">=1.0.0", "provider-rule", ".devin/rules/*.md", {
+    activation_modes: ["always", "glob", "model", "manual"],
+    conditional_artifacts: true,
+    asset_surface: "repository",
+  }),
+  "windsurf-legacy": capability("windsurf-legacy", ">=1.0.0", "provider-rule", ".windsurf/rules/*.md", {
+    activation_modes: ["always", "glob", "model", "manual"],
+    conditional_artifacts: true,
+    asset_surface: "legacy",
+  }),
+  cline: capability("cline", ">=1.0.0", "provider-rule", ".clinerules/*.md", {
+    provider_variant: "ide",
+    asset_surface: "ide",
+  }),
 });
 
 export const PROVIDER_CAPABILITY_DESCRIPTORS: readonly ProviderCapability[] = Object.freeze([
@@ -90,6 +117,24 @@ export const PROVIDER_CAPABILITY_DESCRIPTORS: readonly ProviderCapability[] = Ob
     provider_variant: "v2-agents",
     default_variant: false,
     session_surface: "opencode-agents-md",
+  }),
+  capability("copilot", ">=1.0.0", "conditional-rule", ".github/instructions/*.instructions.md", {
+    provider_variant: "path-instructions",
+    default_variant: false,
+    session_surface: "copilot-path-instructions",
+    activation_modes: ["always", "glob"],
+    conditional_artifacts: true,
+    asset_surface: "repository",
+  }),
+  capability("cline", ">=1.0.0", "provider-rule", ".clinerules/*.md", {
+    provider_variant: "cli",
+    default_variant: false,
+    asset_surface: "cli",
+  }),
+  capability("cline", ">=1.0.0", "provider-rule", ".clinerules/*.md", {
+    provider_variant: "sdk",
+    default_variant: false,
+    asset_surface: "cli",
   }),
 ]);
 
@@ -147,6 +192,8 @@ export interface InstructionGraphRenderPlan {
     provider_variant: string;
     selected_representation: string;
     loading_path: string;
+    session_surface?: SessionProviderSurface;
+    asset_surface: string;
   };
   units: InstructionGraphUnit[];
   artifacts: InstructionGraphArtifact[];
@@ -230,7 +277,7 @@ function normalizeProviders(value: unknown): ProfileConfigBindingSpec["providers
     const provider = requiredString(record["provider"], "provider selector provider") as ConfigAgent;
     if (!CONFIG_AGENTS.includes(provider)) throw new Error(`Invalid provider selector provider: ${provider}`);
     const versionRange = optionalString(record["version_range"], "provider selector version_range");
-    if (versionRange) versionSatisfies("0.0.0", versionRange);
+    if (versionRange) providerVersionSatisfies("0.0.0", versionRange);
     return { provider, ...(versionRange ? { version_range: versionRange } : {}) };
   });
 }
@@ -291,7 +338,7 @@ export function compileInstructionGraph(input: {
     ]);
   }
   const diagnostics: InstructionGraphDiagnostic[] = [];
-  if (!versionSatisfies(input.context.provider_version, capability.provider_version_range)) {
+  if (!providerVersionSatisfies(input.context.provider_version, capability.provider_version_range)) {
     diagnostics.push(errorDiagnostic(null, "PROVIDER_VERSION_UNSUPPORTED", `${input.context.provider} ${input.context.provider_version} does not satisfy capability range ${capability.provider_version_range}.`));
   }
   const configs = new Map(input.configs.map((config) => [config.id, config]));
@@ -317,7 +364,7 @@ export function compileInstructionGraph(input: {
     const binding = row.binding;
     const selector = binding.providers?.find((entry) => entry.provider === input.context.provider || entry.provider === "global");
     if (binding.providers?.length && !selector) continue;
-    if (selector?.version_range && !versionSatisfies(input.context.provider_version, selector.version_range)) {
+    if (selector?.version_range && !providerVersionSatisfies(input.context.provider_version, selector.version_range)) {
       diagnostics.push({ severity: binding.required ? "error" : "warning", code: "PROVIDER_SELECTOR_VERSION_MISMATCH", config_id: configId, message: `${config.slug} requires ${input.context.provider} ${selector.version_range}; current version is ${input.context.provider_version}.` });
       continue;
     }
@@ -407,6 +454,8 @@ export function compileInstructionGraph(input: {
       provider_variant: capability.provider_variant,
       selected_representation: capability.selected_representation,
       loading_path: capability.loading_path,
+      ...(capability.session_surface ? { session_surface: capability.session_surface } : {}),
+      asset_surface: capability.asset_surface,
     },
     units,
     artifacts,
@@ -424,6 +473,12 @@ export function planProfileSessionRender(input: Omit<SessionRenderInput, "source
   provider_version: string;
   configs: Config[];
   bindings: ProfileConfigBinding[];
+  asset_configs?: Config[];
+  asset_bindings?: ProfileAssetBinding[];
+  asset_plan_mode?: AssetPlanMode;
+  asset_scope?: "global" | "project" | "session";
+  asset_surface?: string;
+  allow_asset_installers?: boolean;
   graph_context?: Omit<InstructionGraphContext, "provider" | "provider_version">;
 }): ProfileSessionRenderPlan {
   const compiled = compileInstructionGraph({
@@ -432,7 +487,33 @@ export function planProfileSessionRender(input: Omit<SessionRenderInput, "source
     bindings: input.bindings,
     context: { provider: input.tool, provider_version: input.provider_version, ...input.graph_context },
   });
-  const { profile_id: _profileId, provider_version: _providerVersion, configs: _configs, bindings: _bindings, graph_context: _graphContext, ...renderInput } = input;
+  const assetPlan = compileAssetPlan({
+    profileId: input.profile_id,
+    provider: input.tool,
+    providerVersion: input.provider_version,
+    surface: input.asset_surface ?? compiled.capability.asset_surface,
+    scope: input.asset_scope ?? (input.projectRoot ? "project" : "session"),
+    mode: input.asset_plan_mode ?? "dry-run",
+    configs: input.asset_configs ?? [],
+    bindings: input.asset_bindings ?? [],
+    allowInstallers: input.allow_asset_installers,
+  });
+  const {
+    profile_id: _profileId,
+    provider_version: _providerVersion,
+    configs: _configs,
+    bindings: _bindings,
+    asset_configs: _assetConfigs,
+    asset_bindings: _assetBindings,
+    asset_plan_mode: _assetPlanMode,
+    asset_scope: _assetScope,
+    asset_surface: _assetSurface,
+    allow_asset_installers: _allowAssetInstallers,
+    graph_context: _graphContext,
+    assetPlan: _callerAssetPlan,
+    assetContents: _callerAssetContents,
+    ...renderInput
+  } = input;
   if (renderInput.providerSurface && renderInput.providerSurface !== compiled.capability.session_surface) {
     throw new InstructionGraphValidationError([
       errorDiagnostic(null, "PROVIDER_SURFACE_MISMATCH", `Requested render surface ${renderInput.providerSurface} does not match capability ${compiled.capability.provider_variant}.`),
@@ -443,6 +524,8 @@ export function planProfileSessionRender(input: Omit<SessionRenderInput, "source
       ...renderInput,
       ...(compiled.capability.session_surface ? { providerSurface: compiled.capability.session_surface } : {}),
       sources: compiled.sources,
+      assetPlan,
+      assetContents: Object.fromEntries((input.asset_configs ?? []).map((config) => [config.id, config.content])),
     }),
     instructionGraph: compiled.plan,
   });
@@ -600,36 +683,4 @@ function deepFreeze<T>(value: T): T {
   if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
   for (const child of Object.values(value as Record<string, unknown>)) deepFreeze(child);
   return Object.freeze(value);
-}
-
-function versionSatisfies(version: string, range: string): boolean {
-  const current = parseVersion(version);
-  const trimmed = range.trim();
-  if (trimmed === "*" || trimmed === "") return true;
-  return trimmed.split(/\s+/).every((part) => {
-    const match = /^(>=|<=|>|<|\^|~)?(\d+)(?:\.(\d+))?(?:\.(\d+))?$/.exec(part);
-    if (!match) throw new Error(`Unsupported provider version range: ${range}`);
-    const target: [number, number, number] = [Number(match[2]), Number(match[3] ?? 0), Number(match[4] ?? 0)];
-    const cmp = compareVersion(current, target);
-    switch (match[1] ?? "=") {
-      case ">=": return cmp >= 0;
-      case "<=": return cmp <= 0;
-      case ">": return cmp > 0;
-      case "<": return cmp < 0;
-      case "^": return cmp >= 0 && current[0] === target[0];
-      case "~": return cmp >= 0 && current[0] === target[0] && current[1] === target[1];
-      default: return cmp === 0;
-    }
-  });
-}
-
-function parseVersion(value: string): [number, number, number] {
-  const match = /^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:[-+].*)?$/.exec(value.trim());
-  if (!match) throw new Error(`Invalid provider version: ${value}`);
-  return [Number(match[1]), Number(match[2] ?? 0), Number(match[3] ?? 0)];
-}
-
-function compareVersion(left: [number, number, number], right: [number, number, number]): number {
-  for (let i = 0; i < 3; i++) if (left[i] !== right[i]) return left[i]! - right[i]!;
-  return 0;
 }
