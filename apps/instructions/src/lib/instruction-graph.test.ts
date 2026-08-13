@@ -97,6 +97,44 @@ describe("instruction graph compiler", () => {
     }
   });
 
+  test("resolves chained replacements independently of caller order", () => {
+    const configs = [config("a"), config("b"), config("c")];
+    const bindings = [
+      binding("a", spec({ replaces: ["b"] }), 0),
+      binding("b", spec({ replaces: ["c"] }), 1),
+      binding("c", spec(), 2),
+    ];
+
+    const forward = compile(configs, bindings);
+    const reversed = compile([...configs].reverse(), [...bindings].reverse());
+
+    expect(forward.plan.units.map((unit) => unit.config_id)).toEqual(["a"]);
+    expect(reversed.plan.units.map((unit) => unit.config_id)).toEqual(["a"]);
+    expect(reversed.plan.source_hash).toBe(forward.plan.source_hash);
+  });
+
+  test("rejects replacement cycles deterministically", () => {
+    const configs = [config("a"), config("b")];
+    const bindings = [
+      binding("a", spec({ replaces: ["b"] }), 0),
+      binding("b", spec({ replaces: ["a"] }), 1),
+    ];
+    const diagnostics = (orderedConfigs: Config[], orderedBindings: ProfileConfigBinding[]) => {
+      try {
+        compile(orderedConfigs, orderedBindings);
+        throw new Error("expected replacement cycle failure");
+      } catch (error) {
+        expect(error).toBeInstanceOf(InstructionGraphValidationError);
+        return (error as InstructionGraphValidationError).diagnostics.filter((entry) => entry.code === "GRAPH_REPLACEMENT_CYCLE");
+      }
+    };
+
+    const forward = diagnostics(configs, bindings);
+    const reversed = diagnostics([...configs].reverse(), [...bindings].reverse());
+    expect(forward).toEqual([expect.objectContaining({ message: "Instruction replacement cycle: a -> b -> a" })]);
+    expect(reversed).toEqual(forward);
+  });
+
   test("rejects unsupported required activation with fail fallback", () => {
     expect(() => compileInstructionGraph({
       profile_id: "profile-1",

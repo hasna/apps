@@ -265,14 +265,7 @@ export function compileInstructionGraph(input: {
     effective.set(configId, { ...binding.activation, mode: "always" });
     diagnostics.push({ severity: "warning", code: "FALLBACK_APPLIED", config_id: configId, message: `${config.slug} ${binding.activation.mode} activation used ${binding.fallback} on ${input.context.provider}.` });
   }
-  for (const [configId, row] of rows) {
-    if (!selected.has(configId)) continue;
-    for (const raw of row.binding.replaces ?? []) {
-      const target = resolveRef(raw);
-      if (!target) diagnostics.push(errorDiagnostic(configId, "GRAPH_TARGET_MISSING", `Replacement target does not exist: ${raw}`));
-      else if (selected.delete(target)) diagnostics.push({ severity: "info", code: "GRAPH_REPLACED", config_id: target, message: `${configs.get(configId)!.slug} replaced ${configs.get(target)!.slug}.` });
-    }
-  }
+  applyReplacements(selected, rows, configs, resolveRef, diagnostics);
   const dependencies = new Map<string, string[]>();
   for (const configId of selected) {
     const row = rows.get(configId)!;
@@ -369,6 +362,76 @@ function activationMatches(activation: InstructionActivation, config: Config, co
   if (activation.mode === "always" || activation.mode === "glob") return true;
   if (activation.mode === "model") return Boolean(context.model && activation.models?.includes(context.model));
   return (context.manual ?? []).some((entry) => entry === config.id || entry === config.slug);
+}
+
+function applyReplacements(
+  selected: Set<string>,
+  rows: Map<string, ProfileConfigBinding>,
+  configs: Map<string, Config>,
+  resolveRef: (ref: string) => string | null,
+  diagnostics: InstructionGraphDiagnostic[],
+): void {
+  const initiallySelected = new Set(selected);
+  const stableIds = [...initiallySelected].sort((left, right) => {
+    return configs.get(left)!.slug.localeCompare(configs.get(right)!.slug) || left.localeCompare(right);
+  });
+  const edges = new Map<string, string[]>();
+  for (const configId of stableIds) {
+    const targets: string[] = [];
+    for (const raw of [...(rows.get(configId)!.binding.replaces ?? [])].sort()) {
+      const target = resolveRef(raw);
+      if (!target) {
+        diagnostics.push(errorDiagnostic(configId, "GRAPH_TARGET_MISSING", `Replacement target does not exist: ${raw}`));
+      } else if (initiallySelected.has(target)) {
+        targets.push(target);
+      }
+    }
+    edges.set(configId, [...new Set(targets)].sort((left, right) => stableIds.indexOf(left) - stableIds.indexOf(right)));
+  }
+
+  const state = new Map<string, 0 | 1 | 2>();
+  const reportedCycles = new Set<string>();
+  const visit = (id: string, trail: string[]) => {
+    const status = state.get(id) ?? 0;
+    if (status === 2) return;
+    if (status === 1) {
+      const start = trail.indexOf(id);
+      const cycleIds = canonicalReplacementCycle([...trail.slice(start), id], configs);
+      const key = cycleIds.slice(0, -1).sort().join("\0");
+      if (!reportedCycles.has(key)) {
+        reportedCycles.add(key);
+        diagnostics.push(errorDiagnostic(cycleIds[0]!, "GRAPH_REPLACEMENT_CYCLE", `Instruction replacement cycle: ${cycleIds.map((entry) => configs.get(entry)!.slug).join(" -> ")}`));
+      }
+      return;
+    }
+    state.set(id, 1);
+    for (const target of edges.get(id) ?? []) visit(target, [...trail, id]);
+    state.set(id, 2);
+  };
+  for (const id of stableIds) visit(id, []);
+  if (reportedCycles.size > 0) return;
+
+  // Resolve every edge against the same initial selection, then remove all
+  // targets together. A replaced node therefore still contributes its own
+  // replacement edges, making A -> B -> C collapse to A regardless of input.
+  for (const source of stableIds) {
+    for (const target of edges.get(source) ?? []) {
+      selected.delete(target);
+      diagnostics.push({ severity: "info", code: "GRAPH_REPLACED", config_id: target, message: `${configs.get(source)!.slug} replaced ${configs.get(target)!.slug}.` });
+    }
+  }
+}
+
+function canonicalReplacementCycle(cycle: string[], configs: Map<string, Config>): string[] {
+  const members = cycle.slice(0, -1);
+  let best = 0;
+  for (let index = 1; index < members.length; index++) {
+    const current = `${configs.get(members[index]!)!.slug}\0${members[index]}`;
+    const candidate = `${configs.get(members[best]!)!.slug}\0${members[best]}`;
+    if (current.localeCompare(candidate) < 0) best = index;
+  }
+  const rotated = [...members.slice(best), ...members.slice(0, best)];
+  return [...rotated, rotated[0]!];
 }
 
 function topologicalOrder(
