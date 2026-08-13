@@ -1,0 +1,1066 @@
+#!/usr/bin/env bun
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { Command } from "commander";
+import { ZodError } from "zod";
+import {
+  ensureConfig,
+  loadConfig,
+  saveConfig,
+  upsertAgent,
+  upsertChannel,
+  upsertProfile,
+  upsertRoute,
+  daemonLogs,
+  daemonPaths,
+  daemonStatus,
+  doctor,
+  installDaemon,
+  restartInstalledDaemon,
+  restartProcessDaemon,
+  routeMessage,
+  runAgent,
+  sendTelegramMessage,
+  startInstalledDaemon,
+  startProcessDaemon,
+  stopInstalledDaemon,
+  stopProcessDaemon,
+  uninstallDaemon,
+  getTelegramUpdates,
+  getIMessageMessagePage,
+  imessageHandleAllowed,
+  imessageRowToMessage,
+  sendIMessage,
+  telegramToken,
+  telegramUpdateToMessage,
+  defaultConfigPath,
+  defaultStatePath,
+  loadState,
+  saveState,
+  attachBridgeSession,
+  broadcast,
+  createBridgeSession,
+  detachBridgeBinding,
+  dispatchMessageWithSessions,
+  handleInboundMessage,
+  notifyDeadLetter,
+  reconcileInFlight,
+  upsertAgentWorkspace,
+  assertTelegramTokensConfigured,
+  pollBackoffMs,
+  DEFAULT_MAX_ATTEMPTS,
+  TelegramApiError,
+  getBridgeSession,
+  getBroadcast,
+  listBridgeSessions,
+  listBroadcasts,
+  recordBroadcast,
+  sendBridgeSessionMessage,
+  updateBridgeSessionStatus,
+  type AgentKind,
+  type BridgeMessage,
+  type BridgeState,
+  type IMessageChannelConfig,
+  type MessageLedgerEntry,
+  type TelegramChannelConfig,
+} from "../index.js";
+
+function version(): string {
+  try {
+    const pkgPath = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "package.json");
+    return JSON.parse(readFileSync(pkgPath, "utf-8")).version || "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
+}
+
+function asJson(value: unknown): void {
+  console.log(JSON.stringify(value, null, 2));
+}
+
+function parseEnv(values: string[] | undefined): Record<string, string> | undefined {
+  if (!values?.length) return undefined;
+  const env: Record<string, string> = {};
+  for (const value of values) {
+    const index = value.indexOf("=");
+    if (index <= 0) throw new Error(`Invalid env assignment: ${value}`);
+    env[value.slice(0, index)] = value.slice(index + 1);
+  }
+  return env;
+}
+
+function splitCsv(value: string | undefined): string[] | undefined {
+  return value?.split(",").map((item) => item.trim()).filter(Boolean);
+}
+
+function parseNonNegativeInt(value: string | undefined, name: string): number {
+  const raw = value || "0";
+  if (!/^\d+$/.test(raw)) throw new Error(`${name} must be a non-negative integer`);
+  return Number.parseInt(raw, 10);
+}
+
+function printList(items: Record<string, unknown> | unknown[]): void {
+  const rows = Array.isArray(items) ? items : Object.values(items);
+  if (!rows.length) {
+    console.log("No entries.");
+    return;
+  }
+  for (const item of rows) console.log(JSON.stringify(item));
+}
+
+async function runServe(options: { once?: boolean; interval?: string; json?: boolean; state?: string; config?: string; resume?: boolean; maxAttempts?: string }): Promise<void> {
+  const config = await loadConfig(options.config);
+  const telegramChannels = Object.values(config.channels).filter(
+    (channel): channel is TelegramChannelConfig => channel.kind === "telegram" && channel.enabled !== false,
+  );
+  const imessageChannels = Object.values(config.channels).filter(
+    (channel): channel is IMessageChannelConfig => channel.kind === "imessage" && channel.enabled !== false && channel.receiveMode === "chat-db",
+  );
+  const intervalMs = parseNonNegativeInt(options.interval || "1000", "--interval");
+  const maxAttempts = options.maxAttempts ? parseNonNegativeInt(options.maxAttempts, "--max-attempts") || DEFAULT_MAX_ATTEMPTS : DEFAULT_MAX_ATTEMPTS;
+  if (!telegramChannels.length && !imessageChannels.length) throw new Error("No enabled pollable channels configured");
+  // A missing bot token can never be fixed while this process runs, so refuse to
+  // start rather than log the same unrecoverable error on every backoff cycle.
+  // (`bridge daemon start` already preflights this; foreground serve did not.)
+  assertTelegramTokensConfigured(config);
+
+  const statePath = options.state || defaultStatePath();
+
+  if (options.resume) {
+    const resumeState = await loadState(statePath);
+    const report = reconcileInFlight(resumeState);
+    await saveState(resumeState, statePath);
+    console.error(`[bridge] resume: ${report.sessions} session(s), ${report.bindings} binding(s), offsets=${JSON.stringify(report.offsets)}; in-flight processing=${report.processing.length} agent_completed=${report.agentCompleted.length} failed=${report.failed.length}`);
+  }
+
+  // Lazily provisioned per-agent workspaces (own project folder + agent-<name>
+  // channel) are persisted back into the config file so restarts skip the
+  // provisioning CLI round-trips.
+  const provision = {
+    persist: async (agentId: string, workspace: Parameters<typeof upsertAgentWorkspace>[1]) => {
+      await upsertAgentWorkspace(agentId, workspace, options.config || defaultConfigPath());
+    },
+    log: (message: string) => console.error(message),
+  };
+  const dispatchOptions = {
+    writeConsole: (options.json ? false : undefined) as false | undefined,
+    fallbackToRoutes: true,
+    maxAttempts,
+    run: ((cfg, agentId, input) => runAgent(cfg, agentId, input, { provision })) as typeof runAgent,
+    persistState: async (nextState: BridgeState) => saveState(nextState, statePath),
+    onDeadLetter: async (message: BridgeMessage, entry: MessageLedgerEntry) => {
+      console.error(`[bridge] dead-letter ${entry.id} after ${entry.attempts} attempt(s): ${entry.error || "unknown error"}`);
+      // Surface a clear error reply to the sender — never a silent dead-letter.
+      try {
+        await notifyDeadLetter(config, message, entry);
+      } catch (err) {
+        console.error(`[bridge] dead-letter notice failed for ${entry.id}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+    // The agent answered but the reply could not be sent. There is no point
+    // notifying the sender over the transport that is failing, so this is an
+    // operator signal only; the reply stays in the ledger, redeliverable.
+    onDeliveryExhausted: (_message: BridgeMessage, entry: MessageLedgerEntry) => {
+      console.error(
+        `[bridge] undelivered reply for ${entry.id} after ${entry.deliveryAttempts} delivery attempt(s):`
+        + ` ${entry.error || "unknown error"} — the agent answer is retained in the ledger`,
+      );
+    },
+  };
+
+  const errorCounts = new Map<string, number>();
+  let stopping = false;
+  // Shutdown must interrupt whatever the loop is currently blocked on: a
+  // getUpdates long poll (up to 50s) or a backoff sleep (up to 5min). Setting a
+  // flag alone made `bridge daemon stop` / systemctl stop hit their SIGTERM
+  // timeout, and left Ctrl-C looking frozen.
+  const shutdown = new AbortController();
+  const sleepers = new Set<() => void>();
+  let stopSignals = 0;
+  const stop = () => {
+    stopSignals += 1;
+    if (stopSignals > 1) {
+      // A graceful stop cannot interrupt an in-flight agent run (a codewith turn
+      // can take minutes), so a repeated Ctrl-C / SIGTERM stays an escape hatch.
+      console.error("[bridge] forced shutdown");
+      process.exit(130);
+    }
+    stopping = true;
+    shutdown.abort();
+    for (const wake of [...sleepers]) wake();
+  };
+  const sleep = async (ms: number): Promise<void> => {
+    if (stopping || ms <= 0) return;
+    await new Promise<void>((resolve) => {
+      const wake = () => {
+        clearTimeout(timer);
+        sleepers.delete(wake);
+        resolve();
+      };
+      const timer = setTimeout(wake, ms);
+      sleepers.add(wake);
+    });
+  };
+  const onPollError = async (channelId: string, err: unknown): Promise<void> => {
+    if (stopping) return;
+    const count = (errorCounts.get(channelId) || 0) + 1;
+    errorCounts.set(channelId, count);
+    const message = err instanceof Error ? err.message : String(err);
+    const retryAfterSeconds = err instanceof TelegramApiError ? err.retryAfterSeconds : undefined;
+    const backoff = pollBackoffMs({ attempt: count, intervalMs, retryAfterSeconds });
+    console.error(
+      `[bridge] ${channelId} poll failed (${count}): ${message}`
+      + (retryAfterSeconds !== undefined ? ` (Telegram asked for ${retryAfterSeconds}s)` : "")
+      + ` — retrying in ${Math.round(backoff / 1000)}s`,
+    );
+    await sleep(backoff);
+  };
+
+  process.on("SIGTERM", stop);
+  process.on("SIGINT", stop);
+  try {
+    while (!stopping) {
+      for (const channel of telegramChannels) {
+        if (stopping) break;
+        try {
+          const pollState = await loadState(statePath);
+          const updates = await getTelegramUpdates(telegramToken(channel), {
+            offset: pollState.telegramOffsets[channel.id],
+            timeoutSeconds: channel.pollTimeoutSeconds || 20,
+            signal: shutdown.signal,
+          });
+          errorCounts.delete(channel.id);
+          for (const update of updates) {
+            if (stopping) break;
+            const state = await loadState(statePath);
+            const message = telegramUpdateToMessage(channel.id, update);
+            if (!message) {
+              state.telegramOffsets[channel.id] = update.update_id + 1;
+              await saveState(state, statePath);
+              continue;
+            }
+            const outcome = await handleInboundMessage(config, state, message, dispatchOptions);
+            if (outcome.advanceOffset) {
+              state.telegramOffsets[channel.id] = update.update_id + 1;
+              await saveState(state, statePath);
+              if (options.json) asJson(outcome.result);
+            } else {
+              await saveState(state, statePath);
+              throw new Error(outcome.error || `Message ${message.id} did not reach a terminal state`);
+            }
+          }
+        } catch (err) {
+          if (options.once) throw err;
+          await onPollError(channel.id, err);
+        }
+      }
+      for (const channel of imessageChannels) {
+        if (stopping) break;
+        try {
+          const pollState = await loadState(statePath);
+          const cursorKey = `imessage:${channel.id}`;
+          const page = getIMessageMessagePage(channel, {
+            afterRowId: Number(pollState.cursors[cursorKey] || 0),
+            limit: channel.pollLimit || 50,
+          });
+          errorCounts.delete(channel.id);
+          let interrupted = false;
+          for (const row of page.rows) {
+            if (stopping) {
+              interrupted = true;
+              break;
+            }
+            const state = await loadState(statePath);
+            const message = imessageRowToMessage(channel.id, row);
+            const outcome = await handleInboundMessage(config, state, message, dispatchOptions);
+            if (outcome.advanceOffset) {
+              state.cursors[cursorKey] = row.rowId;
+              await saveState(state, statePath);
+              if (options.json) asJson(outcome.result);
+            } else {
+              await saveState(state, statePath);
+              throw new Error(outcome.error || `Message ${message.id} did not reach a terminal state`);
+            }
+          }
+          // Step the cursor past rows the filters rejected, so a scan window with
+          // nothing deliverable in it cannot block every later message.
+          if (!interrupted && page.scannedThroughRowId !== undefined) {
+            const state = await loadState(statePath);
+            if (Number(state.cursors[cursorKey] || 0) < page.scannedThroughRowId) {
+              state.cursors[cursorKey] = page.scannedThroughRowId;
+              await saveState(state, statePath);
+            }
+          }
+        } catch (err) {
+          if (options.once) throw err;
+          await onPollError(channel.id, err);
+        }
+      }
+      if (options.once) break;
+      await sleep(intervalMs);
+    }
+  } finally {
+    process.removeListener("SIGTERM", stop);
+    process.removeListener("SIGINT", stop);
+  }
+}
+
+const program = new Command();
+program
+  .name("bridge")
+  .description("Agent messaging bridge for Telegram and other channels")
+  .version(version());
+
+program
+  .command("init")
+  .description("Create an empty bridge config if missing")
+  .option("-c, --config <path>", "config path", defaultConfigPath())
+  .option("--json", "output JSON")
+  .action(async (options) => {
+    const config = await ensureConfig(options.config);
+    const result = { path: options.config, config };
+    if (options.json) asJson(result);
+    else console.log(`Initialized ${options.config}`);
+  });
+
+program
+  .command("doctor")
+  .description("Validate local bridge setup")
+  .option("-c, --config <path>", "config path", defaultConfigPath())
+  .option("--json", "output JSON")
+  .action(async (options) => {
+    const report = await doctor(options.config);
+    if (options.json) asJson(report);
+    else {
+      for (const check of report.checks) {
+        console.log(`${check.ok ? "ok" : "fail"} ${check.name}${check.detail ? ` - ${check.detail}` : ""}`);
+      }
+    }
+    // Outside the branch: `--json` used to always exit 0, so CI and scripts
+    // could never detect a failing check.
+    process.exitCode = report.ok ? 0 : 1;
+  });
+
+const configCommand = program.command("config").description("Inspect bridge config");
+configCommand.command("path").description("Print config path").action(() => console.log(defaultConfigPath()));
+configCommand
+  .command("show")
+  .description("Print config")
+  .option("-c, --config <path>", "config path", defaultConfigPath())
+  .action(async (options) => asJson(await loadConfig(options.config)));
+
+const channels = program.command("channels").description("Manage message channels");
+channels.command("list").option("-c, --config <path>", "config path", defaultConfigPath()).option("--json", "output JSON").action(async (options) => {
+  const config = await loadConfig(options.config);
+  options.json ? asJson(config.channels) : printList(config.channels);
+});
+channels
+  .command("add-telegram")
+  .argument("<id>")
+  .description("Add a Telegram bot channel")
+  .option("--token-env <name>", "environment variable containing bot token", "TELEGRAM_BOT_TOKEN")
+  .option("--default-chat-id <id>", "default chat id for bridge send")
+  .option("--allowed-chat-ids <ids>", "comma-separated allowed chat ids")
+  .option("--allow-all-chats", "explicitly allow every chat that can reach this bot")
+  .option("--default-agent <id>", "agent that inbound messages auto-attach to when no session/route exists")
+  .option("--broadcast-chat-ids <ids>", "comma-separated outbound broadcast chat ids (channels/groups)")
+  .option("--allow-all-broadcasts", "explicitly allow broadcasting to any chat id")
+  .option("-c, --config <path>", "config path", defaultConfigPath())
+  .option("--json", "output JSON")
+  .action(async (id, options) => {
+    const allowedChatIds = splitCsv(options.allowedChatIds);
+    if (!allowedChatIds?.length && !options.allowAllChats) {
+      throw new Error("Telegram channels require --allowed-chat-ids or explicit --allow-all-chats");
+    }
+    const config = await upsertChannel({
+      id,
+      kind: "telegram",
+      enabled: true,
+      defaultAgentId: options.defaultAgent,
+      botTokenEnv: options.tokenEnv,
+      defaultChatId: options.defaultChatId,
+      allowedChatIds,
+      allowAllChats: Boolean(options.allowAllChats),
+      broadcastChatIds: splitCsv(options.broadcastChatIds),
+      allowAllBroadcasts: Boolean(options.allowAllBroadcasts),
+    }, options.config);
+    options.json ? asJson(config.channels[id]) : console.log(`Added telegram channel ${id}`);
+  });
+channels
+  .command("add-console")
+  .argument("<id>")
+  .description("Add a console channel for local testing")
+  .option("--default-agent <id>", "agent that inbound messages auto-attach to when no session/route exists")
+  .option("-c, --config <path>", "config path", defaultConfigPath())
+  .option("--json", "output JSON")
+  .action(async (id, options) => {
+    const config = await upsertChannel({ id, kind: "console", enabled: true, defaultAgentId: options.defaultAgent }, options.config);
+    options.json ? asJson(config.channels[id]) : console.log(`Added console channel ${id}`);
+  });
+channels
+  .command("add-imessage")
+  .argument("<id>")
+  .description("Add a local macOS iMessage channel")
+  .option("--default-handle <handle>", "default iMessage handle for bridge send")
+  .option("--allowed-handles <handles>", "comma-separated allowed handles")
+  .option("--allow-all-handles", "explicitly allow every local iMessage handle")
+  .option("--account <account>", "Messages account selector for multi-account Macs")
+  .option("--service-name <name>", "Messages service name", "iMessage")
+  .option("--receive", "enable local Messages chat.db polling")
+  .option("--chat-db-path <path>", "override Messages chat.db path")
+  .option("--poll-limit <n>", "maximum rows per poll")
+  .option("--default-agent <id>", "agent that inbound messages auto-attach to when no session/route exists")
+  .option("-c, --config <path>", "config path", defaultConfigPath())
+  .option("--json", "output JSON")
+  .action(async (id, options) => {
+    const allowedHandles = splitCsv(options.allowedHandles);
+    if (!allowedHandles?.length && !options.allowAllHandles) {
+      throw new Error("iMessage channels require --allowed-handles or explicit --allow-all-handles");
+    }
+    const pollLimit = options.pollLimit ? Number.parseInt(options.pollLimit, 10) : undefined;
+    const config = await upsertChannel({
+      id,
+      kind: "imessage",
+      enabled: true,
+      defaultAgentId: options.defaultAgent,
+      defaultHandle: options.defaultHandle,
+      allowedHandles,
+      allowAllHandles: Boolean(options.allowAllHandles),
+      account: options.account,
+      serviceName: options.serviceName,
+      receiveMode: options.receive ? "chat-db" : "disabled",
+      chatDbPath: options.chatDbPath,
+      pollLimit,
+    }, options.config);
+    options.json ? asJson(config.channels[id]) : console.log(`Added imessage channel ${id}`);
+  });
+
+const profiles = program.command("profiles").description("Manage reusable agent profiles");
+profiles.command("list").option("-c, --config <path>", "config path", defaultConfigPath()).option("--json", "output JSON").action(async (options) => {
+  const config = await loadConfig(options.config);
+  options.json ? asJson(config.profiles) : printList(config.profiles);
+});
+profiles
+  .command("add")
+  .argument("<id>")
+  .requiredOption("--agent-kind <kind>", "codewith, claude, aicopilot, or shell")
+  .option("--auth-profile <name>", "Codewith auth profile")
+  .option("--cwd <path>", "default working directory")
+  .option("--home <path>", "profile HOME override")
+  .option("--command <command>", "custom command")
+  .option("--arg <arg...>", "custom args; {prompt} is replaced")
+  .option("--env <key=value...>", "environment values")
+  .option("-c, --config <path>", "config path", defaultConfigPath())
+  .option("--json", "output JSON")
+  .action(async (id, options) => {
+    const config = await upsertProfile({
+      id,
+      agentKind: options.agentKind as AgentKind,
+      authProfile: options.authProfile,
+      cwd: options.cwd,
+      home: options.home,
+      command: options.command,
+      args: options.arg,
+      env: parseEnv(options.env),
+    }, options.config);
+    options.json ? asJson(config.profiles[id]) : console.log(`Added profile ${id}`);
+  });
+
+const agents = program.command("agents").description("Manage bridge agent targets");
+agents.command("list").option("-c, --config <path>", "config path", defaultConfigPath()).option("--json", "output JSON").action(async (options) => {
+  const config = await loadConfig(options.config);
+  options.json ? asJson(config.agents) : printList(config.agents);
+});
+agents
+  .command("add")
+  .argument("<id>")
+  .requiredOption("--kind <kind>", "codewith, claude, aicopilot, or shell")
+  .option("--profile <id>", "profile id")
+  .option("--fallback-profile <id...>", "fallback profile id(s) for auth rotation on exhaustion")
+  .option("--cwd <path>", "working directory")
+  .option("--command <command>", "custom command")
+  .option("--arg <arg...>", "custom args; {prompt} is replaced")
+  .option("--env <key=value...>", "environment values")
+  .option("--timeout-ms <n>", "agent timeout in milliseconds")
+  .option("-c, --config <path>", "config path", defaultConfigPath())
+  .option("--json", "output JSON")
+  .action(async (id, options) => {
+    const timeoutMs = options.timeoutMs ? Number.parseInt(options.timeoutMs, 10) : undefined;
+    const config = await upsertAgent({
+      id,
+      kind: options.kind as AgentKind,
+      profileId: options.profile,
+      fallbackProfileIds: options.fallbackProfile,
+      cwd: options.cwd,
+      command: options.command,
+      args: options.arg,
+      env: parseEnv(options.env),
+      timeoutMs,
+    }, options.config);
+    options.json ? asJson(config.agents[id]) : console.log(`Added agent ${id}`);
+  });
+
+const routes = program.command("routes").description("Manage channel-to-agent routes");
+routes.command("list").option("-c, --config <path>", "config path", defaultConfigPath()).option("--json", "output JSON").action(async (options) => {
+  const config = await loadConfig(options.config);
+  options.json ? asJson(config.routes) : printList(config.routes);
+});
+routes
+  .command("add")
+  .argument("<id>")
+  .requiredOption("--from <channel>", "source channel id")
+  .requiredOption("--to <agent>", "destination agent id")
+  .option("--response-channel <channel>", "response channel id")
+  .option("--chat-ids <ids>", "comma-separated chat ids")
+  .option("--text-regex <pattern>", "message text regex")
+  .option("-c, --config <path>", "config path", defaultConfigPath())
+  .option("--json", "output JSON")
+  .action(async (id, options) => {
+    const config = await upsertRoute({
+      id,
+      fromChannel: options.from,
+      toAgent: options.to,
+      responseChannel: options.responseChannel,
+      enabled: true,
+      match: {
+        chatIds: splitCsv(options.chatIds),
+        textRegex: options.textRegex,
+      },
+    }, options.config);
+    options.json ? asJson(config.routes.find((route) => route.id === id)) : console.log(`Added route ${id}`);
+  });
+
+const sessions = program.command("sessions").description("Manage durable bridge sessions and channel bindings");
+sessions
+  .command("list")
+  .description("List bridge sessions")
+  .option("--state <path>", "state path", defaultStatePath())
+  .option("--json", "output JSON")
+  .action(async (options) => {
+    const state = await loadState(options.state);
+    const items = listBridgeSessions(state);
+    options.json ? asJson(items) : printList(items);
+  });
+sessions
+  .command("show")
+  .argument("<id>")
+  .description("Show one bridge session")
+  .option("--state <path>", "state path", defaultStatePath())
+  .option("--json", "output JSON")
+  .action(async (id, options) => {
+    const state = await loadState(options.state);
+    const session = getBridgeSession(state, id);
+    options.json ? asJson(session) : console.log(JSON.stringify(session, null, 2));
+  });
+sessions
+  .command("create")
+  .description("Create a bridge-owned session for an agent")
+  .requiredOption("--agent <id>", "agent id")
+  .option("--id <id>", "explicit session id")
+  .option("--title <text>", "session title")
+  .option("--cwd <path>", "session working directory override")
+  .option("-c, --config <path>", "config path", defaultConfigPath())
+  .option("--state <path>", "state path", defaultStatePath())
+  .option("--json", "output JSON")
+  .action(async (options) => {
+    const config = await loadConfig(options.config);
+    const state = await loadState(options.state);
+    const session = createBridgeSession(config, state, {
+      id: options.id,
+      agentId: options.agent,
+      title: options.title,
+      cwd: options.cwd,
+    });
+    await saveState(state, options.state);
+    options.json ? asJson(session) : console.log(session.id);
+  });
+async function attachSessionAction(sessionId: string, options: { channel: string; conversation: string; default?: boolean; config: string; state: string; json?: boolean }): Promise<void> {
+  const config = await loadConfig(options.config);
+  const state = await loadState(options.state);
+  const binding = attachBridgeSession(config, state, {
+    sessionId,
+    channelId: options.channel,
+    conversation: options.conversation,
+    makeDefault: Boolean(options.default),
+  });
+  await saveState(state, options.state);
+  options.json ? asJson(binding) : console.log(binding.id);
+}
+sessions
+  .command("attach")
+  .argument("<id>")
+  .description("Attach a session to a channel conversation")
+  .requiredOption("--channel <id>", "channel id")
+  .requiredOption("--conversation <id>", "external conversation id, such as a Telegram chat id")
+  .option("--default", "also make this the default session for the conversation")
+  .option("-c, --config <path>", "config path", defaultConfigPath())
+  .option("--state <path>", "state path", defaultStatePath())
+  .option("--json", "output JSON")
+  .action(attachSessionAction);
+sessions
+  .command("use")
+  .argument("<id>")
+  .description("Set the active session for a channel conversation")
+  .requiredOption("--channel <id>", "channel id")
+  .requiredOption("--conversation <id>", "external conversation id, such as a Telegram chat id")
+  .option("-c, --config <path>", "config path", defaultConfigPath())
+  .option("--state <path>", "state path", defaultStatePath())
+  .option("--json", "output JSON")
+  .action(async (id, options) => attachSessionAction(id, { ...options, default: true }));
+sessions
+  .command("detach")
+  .description("Detach the active session from a channel conversation")
+  .requiredOption("--channel <id>", "channel id")
+  .requiredOption("--conversation <id>", "external conversation id, such as a Telegram chat id")
+  .option("-c, --config <path>", "config path", defaultConfigPath())
+  .option("--state <path>", "state path", defaultStatePath())
+  .option("--json", "output JSON")
+  .action(async (options) => {
+    const config = await loadConfig(options.config);
+    const state = await loadState(options.state);
+    const binding = detachBridgeBinding(config, state, options.channel, options.conversation);
+    await saveState(state, options.state);
+    options.json ? asJson(binding || null) : console.log(binding ? `detached ${binding.id}` : "No binding.");
+  });
+for (const status of ["pause", "resume", "close"] as const) {
+  const nextStatus = status === "pause" ? "paused" : status === "resume" ? "active" : "closed";
+  sessions
+    .command(status)
+    .argument("<id>")
+    .description(`${status} a bridge session`)
+    .option("--state <path>", "state path", defaultStatePath())
+    .option("--json", "output JSON")
+    .action(async (id, options) => {
+      const state = await loadState(options.state);
+      const session = updateBridgeSessionStatus(state, id, nextStatus);
+      await saveState(state, options.state);
+      options.json ? asJson(session) : console.log(`${session.id} ${session.status}`);
+    });
+}
+sessions
+  .command("send")
+  .argument("<id>")
+  .argument("<text...>")
+  .description("Send one message directly to a bridge session")
+  .option("-c, --config <path>", "config path", defaultConfigPath())
+  .option("--state <path>", "state path", defaultStatePath())
+  .option("--json", "output JSON")
+  .action(async (id, textParts, options) => {
+    const config = await loadConfig(options.config);
+    const state = await loadState(options.state);
+    const message: BridgeMessage = {
+      id: `cli:${Date.now()}`,
+      channelId: "cli",
+      text: (textParts as string[]).join(" "),
+      receivedAt: new Date().toISOString(),
+    };
+    const result = await sendBridgeSessionMessage(config, state, id, message, { writeConsole: false });
+    await saveState(state, options.state);
+    if (options.json) asJson(result);
+    else process.stdout.write(result.agent?.stdout || result.agent?.stderr || result.message || "");
+    // A paused/closed/failed send produces no agent result; `?? 0` used to
+    // report success for those, so scripts could not tell delivery from failure.
+    const delivered = result.status === "delivered" || result.status === "no_output";
+    process.exitCode = delivered ? (result.agent?.exitCode ?? 0) : (result.agent?.exitCode || 1);
+  });
+sessions
+  .command("route-message")
+  .description("Route one synthetic message through session bindings")
+  .requiredOption("--channel <id>", "source channel id")
+  .requiredOption("--text <text>", "message text")
+  .option("--chat-id <id>", "chat id")
+  .option("--from <from>", "sender")
+  .option("--fallback-routes", "fall back to compatibility routes when no session is bound")
+  .option("-c, --config <path>", "config path", defaultConfigPath())
+  .option("--state <path>", "state path", defaultStatePath())
+  .option("--json", "output JSON")
+  .action(async (options) => {
+    const config = await loadConfig(options.config);
+    const state = await loadState(options.state);
+    const result = await dispatchMessageWithSessions(config, state, {
+      id: `cli:${Date.now()}`,
+      channelId: options.channel,
+      text: options.text,
+      chatId: options.chatId,
+      from: options.from,
+      receivedAt: new Date().toISOString(),
+    }, {
+      writeConsole: options.json ? false : undefined,
+      fallbackToRoutes: Boolean(options.fallbackRoutes),
+      persistState: async (nextState) => saveState(nextState, options.state),
+    });
+    await saveState(state, options.state);
+    options.json ? asJson(result) : printList(result.session ? [result.session] : result.routes || []);
+  });
+
+program
+  .command("send")
+  .argument("<channel>")
+  .argument("[chatId]")
+  .argument("[text...]")
+  .description("Send a message through a channel")
+  .option("-c, --config <path>", "config path", defaultConfigPath())
+  .option("--json", "output JSON")
+  .action(async (channelId, chatId, textParts, options) => {
+    const config = await loadConfig(options.config);
+    const channel = config.channels[channelId];
+    if (!channel) throw new Error(`Channel not found: ${channelId}`);
+    let targetChat = chatId as string | undefined;
+    const textArgParts = textParts as string[];
+    let text = textArgParts.join(" ");
+    if (channel.kind === "console" && !text && targetChat) {
+      text = targetChat;
+      targetChat = undefined;
+    }
+    if (channel.kind === "telegram") {
+      targetChat = targetChat || channel.defaultChatId;
+      if (!targetChat) throw new Error("chatId argument or channel.defaultChatId is required");
+      // Matches the iMessage branch: reject locally instead of spending an API
+      // call on a message Telegram will refuse anyway.
+      if (!text.trim()) throw new Error("message text is required");
+      if (!channel.allowAllChats && !channel.allowedChatIds?.includes(targetChat)) {
+        throw new Error(`Telegram chat ${targetChat} is not in channel allowedChatIds`);
+      }
+      const result = await sendTelegramMessage(telegramToken(channel), targetChat, text);
+      options.json ? asJson(result) : console.log("sent");
+      return;
+    }
+    if (channel.kind === "console") {
+      if (options.json) asJson({ channel: channelId, text });
+      else console.log(text);
+      return;
+    }
+    if (channel.kind === "imessage") {
+      if (!text && targetChat) {
+        const looksLikeHandle = targetChat.startsWith("+") || targetChat.includes("@") || imessageHandleAllowed(channel, targetChat);
+        if (looksLikeHandle) throw new Error("message text is required when an iMessage handle is provided");
+        text = targetChat;
+        targetChat = undefined;
+      }
+      targetChat = targetChat || channel.defaultHandle;
+      if (!targetChat) throw new Error("chatId/handle argument or channel.defaultHandle is required");
+      if (!text) throw new Error("message text is required");
+      if (!imessageHandleAllowed(channel, targetChat)) {
+        throw new Error(`iMessage handle ${targetChat} is not allowed for channel ${channel.id}`);
+      }
+      const result = await sendIMessage(channel, targetChat, text);
+      options.json ? asJson(result) : console.log("sent");
+      return;
+    }
+    throw new Error(`Sending through ${channel.kind} is not implemented yet`);
+  });
+
+program
+  .command("ask")
+  .argument("<agent>")
+  .argument("<text...>")
+  .description("Run one agent directly")
+  .option("-c, --config <path>", "config path", defaultConfigPath())
+  .option("--json", "output JSON")
+  .action(async (agentId, textParts, options) => {
+    const config = await loadConfig(options.config);
+    const message: BridgeMessage = {
+      id: `cli:${Date.now()}`,
+      channelId: "cli",
+      text: (textParts as string[]).join(" "),
+      receivedAt: new Date().toISOString(),
+    };
+    const result = await runAgent(config, agentId, { message, route: { id: "cli", fromChannel: "cli", toAgent: agentId } }, {
+      provision: {
+        persist: async (id, workspace) => {
+          await upsertAgentWorkspace(id, workspace, options.config || defaultConfigPath());
+        },
+        log: (line: string) => console.error(line),
+      },
+    });
+    options.json ? asJson(result) : process.stdout.write(result.stdout || result.stderr);
+    process.exitCode = result.exitCode ?? 1;
+  });
+
+program
+  .command("serve")
+  .description("Poll configured channels and route messages to agents")
+  .option("--once", "poll once and exit")
+  .option("--interval <ms>", "delay between polls", "1000")
+  .option("--resume", "reconcile durable in-flight state (bindings, sessions, offsets) before polling")
+  .option("--max-attempts <n>", "max delivery attempts before a message is dead-lettered", String(DEFAULT_MAX_ATTEMPTS))
+  .option("-c, --config <path>", "config path", defaultConfigPath())
+  .option("--state <path>", "state path", defaultStatePath())
+  .option("--json", "emit routed message JSON")
+  .action(runServe);
+
+const daemon = program.command("daemon").description("Manage the bridge background daemon");
+
+daemon
+  .command("status")
+  .description("Show daemon status")
+  .option("--supervisor <type>", "process, launchd, systemd, or auto", "process")
+  .option("--daemon-dir <path>", "daemon metadata/log directory")
+  .option("--json", "output JSON")
+  .action(async (options) => {
+    const status = await daemonStatus({ supervisor: options.supervisor, daemonDir: options.daemonDir });
+    if (options.json) asJson(status);
+    else {
+      console.log(`${status.running ? "running" : status.stale ? "stale" : "stopped"} ${status.supervisor}${status.pid ? ` pid=${status.pid}` : ""}`);
+      console.log(`daemonDir=${status.paths.dir}`);
+      console.log(`stdout=${status.paths.stdoutLog}`);
+      console.log(`stderr=${status.paths.stderrLog}`);
+      if (status.telegramApiBase.error) {
+        console.log(`telegramApiBaseError=${status.telegramApiBase.error}`);
+      } else if (status.telegramApiBase.overridden) {
+        console.log(`telegramApiBase=${status.telegramApiBase.origin}${status.telegramApiBase.pathname}`);
+      }
+    }
+  });
+
+daemon
+  .command("start")
+  .description("Start bridge serve in the background")
+  .option("--supervisor <type>", "process, launchd, systemd, or auto", "process")
+  .option("--daemon-dir <path>", "daemon metadata/log directory")
+  .option("--interval <ms>", "delay between polls", "1000")
+  .option("--no-resume", "do not reconcile durable in-flight state on start")
+  .option("--max-attempts <n>", "max delivery attempts before a message is dead-lettered")
+  .option("-c, --config <path>", "config path", defaultConfigPath())
+  .option("--state <path>", "state path", defaultStatePath())
+  .option("--serve-json", "emit routed message JSON to daemon stdout log")
+  .option("--json", "output JSON")
+  .action(async (options) => {
+    const intervalMs = parseNonNegativeInt(options.interval, "--interval");
+    const maxAttempts = options.maxAttempts ? parseNonNegativeInt(options.maxAttempts, "--max-attempts") : undefined;
+    const supervisor = options.supervisor;
+    const common = { daemonDir: options.daemonDir, configPath: options.config, statePath: options.state, intervalMs, serveJson: options.serveJson, resume: options.resume, maxAttempts };
+    const result = supervisor === "process"
+      ? await startProcessDaemon(common)
+      : await startInstalledDaemon({ supervisor, ...common });
+    options.json ? asJson(result) : console.log("started");
+  });
+
+daemon
+  .command("stop")
+  .description("Stop the bridge daemon")
+  .option("--supervisor <type>", "process, launchd, systemd, or auto", "process")
+  .option("--daemon-dir <path>", "daemon metadata/log directory")
+  .option("--timeout-ms <ms>", "graceful stop timeout", "5000")
+  .option("--force", "force kill after timeout")
+  .option("--json", "output JSON")
+  .action(async (options) => {
+    const timeoutMs = parseNonNegativeInt(options.timeoutMs, "--timeout-ms");
+    const result = options.supervisor === "process"
+      ? await stopProcessDaemon({ daemonDir: options.daemonDir, timeoutMs, force: options.force })
+      : await stopInstalledDaemon({ supervisor: options.supervisor, daemonDir: options.daemonDir, timeoutMs, force: options.force });
+    options.json ? asJson(result || { stopped: true }) : console.log("stopped");
+  });
+
+daemon
+  .command("restart")
+  .description("Restart the bridge daemon")
+  .option("--supervisor <type>", "process, launchd, systemd, or auto", "process")
+  .option("--daemon-dir <path>", "daemon metadata/log directory")
+  .option("--interval <ms>", "delay between polls")
+  .option("--no-resume", "do not reconcile durable in-flight state on restart")
+  .option("--max-attempts <n>", "max delivery attempts before a message is dead-lettered")
+  .option("-c, --config <path>", "config path")
+  .option("--state <path>", "state path")
+  .option("--serve-json", "emit routed message JSON to daemon stdout log")
+  .option("--timeout-ms <ms>", "graceful stop timeout", "5000")
+  .option("--force", "force kill after timeout")
+  .option("--json", "output JSON")
+  .action(async (options) => {
+    const restartOptions = {
+      supervisor: options.supervisor,
+      daemonDir: options.daemonDir,
+      configPath: options.config,
+      statePath: options.state,
+      intervalMs: options.interval ? parseNonNegativeInt(options.interval, "--interval") : undefined,
+      serveJson: options.serveJson,
+      resume: options.resume,
+      maxAttempts: options.maxAttempts ? parseNonNegativeInt(options.maxAttempts, "--max-attempts") : undefined,
+      timeoutMs: parseNonNegativeInt(options.timeoutMs, "--timeout-ms"),
+      force: options.force,
+    };
+    const result = options.supervisor === "process"
+      ? await restartProcessDaemon(restartOptions)
+      : await restartInstalledDaemon(restartOptions);
+    options.json ? asJson(result) : console.log("restarted");
+  });
+
+daemon
+  .command("logs")
+  .description("Print daemon logs")
+  .option("--daemon-dir <path>", "daemon metadata/log directory")
+  .option("--lines <n>", "number of lines", "100")
+  .option("--follow", "follow logs")
+  .option("--json", "output JSON")
+  .action(async (options) => {
+    const lines = parseNonNegativeInt(options.lines, "--lines") || 100;
+    if (options.follow) {
+      const paths = daemonPaths(options.daemonDir);
+      const tail = Bun.spawn(["tail", "-n", String(lines), "-f", paths.stdoutLog, paths.stderrLog], {
+        stdout: "inherit",
+        stderr: "inherit",
+      });
+      await tail.exited;
+      return;
+    }
+    const logs = await daemonLogs({ daemonDir: options.daemonDir, lines });
+    if (options.json) asJson(logs);
+    else {
+      if (logs.stdout) console.log(logs.stdout);
+      if (logs.stderr) console.error(logs.stderr);
+    }
+  });
+
+daemon
+  .command("install")
+  .description("Write launchd or systemd user supervisor files")
+  .option("--supervisor <type>", "launchd, systemd, or auto", "auto")
+  .option("--daemon-dir <path>", "daemon metadata/log directory")
+  .option("--interval <ms>", "delay between polls", "1000")
+  .option("-c, --config <path>", "config path", defaultConfigPath())
+  .option("--state <path>", "state path", defaultStatePath())
+  .option("--serve-json", "emit routed message JSON to daemon stdout log")
+  .option("--json", "output JSON")
+  .action(async (options) => {
+    const result = await installDaemon({
+      supervisor: options.supervisor,
+      daemonDir: options.daemonDir,
+      configPath: options.config,
+      statePath: options.state,
+      intervalMs: parseNonNegativeInt(options.interval, "--interval"),
+      serveJson: options.serveJson,
+    });
+    options.json ? asJson(result) : console.log(`installed ${result.supervisor}: ${result.path}`);
+  });
+
+daemon
+  .command("uninstall")
+  .description("Remove launchd/systemd supervisor files or process metadata")
+  .option("--supervisor <type>", "process, launchd, systemd, or auto", "auto")
+  .option("--daemon-dir <path>", "daemon metadata/log directory")
+  .option("--json", "output JSON")
+  .action(async (options) => {
+    const result = await uninstallDaemon({ supervisor: options.supervisor, daemonDir: options.daemonDir });
+    options.json ? asJson(result) : console.log(`removed ${result.removed.join(", ")}`);
+  });
+
+program
+  .command("route-message")
+  .description("Route one synthetic message; useful for tests and MCP-style probes")
+  .requiredOption("--channel <id>", "source channel id")
+  .requiredOption("--text <text>", "message text")
+  .option("--chat-id <id>", "chat id")
+  .option("--from <from>", "sender")
+  .option("-c, --config <path>", "config path", defaultConfigPath())
+  .option("--json", "output JSON")
+  .action(async (options) => {
+    const config = await loadConfig(options.config);
+    const result = await routeMessage(config, {
+      id: `cli:${Date.now()}`,
+      channelId: options.channel,
+      text: options.text,
+      chatId: options.chatId,
+      from: options.from,
+      receivedAt: new Date().toISOString(),
+    }, { writeConsole: options.json ? false : undefined });
+    options.json ? asJson(result) : printList(result);
+  });
+
+program
+  .command("broadcast")
+  .argument("<channelId>", "channel to broadcast on (telegram or console)")
+  // Variadic like `send` and `ask`: unquoted multi-word text used to be rejected
+  // with "too many arguments" instead of being broadcast.
+  .argument("<text...>", "message text to post to every target")
+  .description("Broadcast a message to a channel's outbound targets and report per-post delivery status")
+  .option("--targets <ids>", "comma-separated target chat ids (defaults to the channel's broadcastChatIds)")
+  .option("--no-record", "do not persist the delivery report in state")
+  .option("-c, --config <path>", "config path", defaultConfigPath())
+  .option("--state <path>", "state path", defaultStatePath())
+  .option("--json", "output JSON")
+  .action(async (channelId, textParts, options) => {
+    const config = await loadConfig(options.config);
+    const text = (textParts as string[]).join(" ");
+    const result = await broadcast(config, channelId, text, {
+      targets: splitCsv(options.targets),
+      writeConsole: options.json ? false : undefined,
+    });
+    if (options.record !== false) {
+      const state = await loadState(options.state);
+      recordBroadcast(state, result);
+      await saveState(state, options.state);
+    }
+    if (options.json) {
+      asJson(result);
+    } else {
+      console.log(`Broadcast ${result.id} on ${result.channelId}: ${result.sent} sent, ${result.failed} failed, ${result.skipped} skipped`);
+      for (const post of result.posts) {
+        console.log(`  ${post.target}: ${post.status}${post.messageId ? ` (message ${post.messageId})` : ""}${post.detail ? ` — ${post.detail}` : ""}`);
+      }
+    }
+    if (result.failed > 0) process.exitCode = 1;
+  });
+
+const broadcasts = program.command("broadcasts").description("Inspect recorded broadcast delivery reports");
+broadcasts
+  .command("list")
+  .option("--channel <id>", "filter by channel id")
+  .option("--limit <n>", "maximum reports to show", "20")
+  .option("--state <path>", "state path", defaultStatePath())
+  .option("--json", "output JSON")
+  .action(async (options) => {
+    const state = await loadState(options.state);
+    const reports = listBroadcasts(state, {
+      channelId: options.channel,
+      limit: parseNonNegativeInt(options.limit, "--limit") || undefined,
+    });
+    options.json ? asJson(reports) : printList(reports.map((r) => ({
+      id: r.id, channel: r.channelId, at: r.requestedAt, sent: r.sent, failed: r.failed, skipped: r.skipped,
+    })));
+  });
+broadcasts
+  .command("show")
+  .argument("<id>")
+  .option("--state <path>", "state path", defaultStatePath())
+  .action(async (id, options) => {
+    const state = await loadState(options.state);
+    const report = getBroadcast(state, id);
+    if (!report) throw new Error(`No broadcast report: ${id}`);
+    asJson(report);
+  });
+
+/**
+ * Turn a thrown value into the one-line message a terminal user should see.
+ * Without this, every failure (a typo'd channel id, a refused connection) was
+ * reported by Bun's uncaught-error printer, which dumps surrounding source code,
+ * a stack trace, and — critically — the error's own properties. Bun attaches the
+ * failed request URL to network errors, and for Telegram that URL embeds the bot
+ * token, so the raw printer leaked credentials to the terminal and to the daemon
+ * stderr log.
+ */
+function describeCliError(err: unknown): string {
+  if (err instanceof ZodError) {
+    return `invalid config: ${err.issues
+      .map((issue) => `${issue.path.join(".") || "<root>"}: ${issue.message}`)
+      .join("; ")}`;
+  }
+  if (err instanceof Error) return err.message;
+  return String(err);
+}
+
+function failCli(err: unknown): void {
+  console.error(`bridge: ${describeCliError(err)}`);
+  if (process.env["BRIDGE_DEBUG"] && err instanceof Error && err.stack) console.error(err.stack);
+  process.exitCode = 1;
+}
+
+// Commander handles its own parse errors (unknown option, missing argument) and
+// exits directly, so only action-handler failures reach here. Rejections from
+// anywhere else stay unhandled on purpose: those are real bugs and should crash
+// loudly rather than be swallowed into an exit code.
+try {
+  await program.parseAsync(process.argv);
+} catch (err) {
+  failCli(err);
+}
