@@ -19,13 +19,14 @@
 import { mintApiKey, type MintedApiKey } from "../auth/keys";
 import { normalizeTenantId } from "../auth/tenant";
 import { ApiKeyStore, type AuthQueryClient } from "../auth/store";
-import { createSecretsClientFromEnv, type SecretsClient } from "@hasna/secrets";
+import { createSecretsClientFromEnv, type SecretsClient, type SecretsClientOptions } from "@hasna/secrets";
 
 type IssueKeyStore = Pick<ApiKeyStore, "ensureSchema" | "insertMinted"> & Partial<Pick<ApiKeyStore, "revoke">>;
 type IssueKeyStoreHandle = { store: IssueKeyStore; close: () => Promise<void> };
 type IssueKeyConnectStore = (connectionString: string, table: string) => Promise<IssueKeyStoreHandle>;
 type IssueKeySecretsClient = Pick<SecretsClient, "putSecret" | "deleteSecret">;
-type IssueKeyConnectSecrets = (env: NodeJS.ProcessEnv) => Promise<IssueKeySecretsClient>;
+type SecretsServiceConfig = Required<Pick<SecretsClientOptions, "baseUrl" | "apiKey">>;
+type IssueKeyConnectSecrets = (config: SecretsServiceConfig) => Promise<IssueKeySecretsClient>;
 
 export interface IssueKeyDeps {
   report: (options: { json?: boolean }, error: string, details?: Record<string, unknown>) => void;
@@ -38,6 +39,22 @@ export interface IssueKeyDeps {
 const SAFE_REFERENCE_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const AGENT_REFERENCE_SEGMENT = "{agent}";
 const KID_REFERENCE_SEGMENT = "{kid}";
+const CANONICAL_SECRETS_URL_ENV = "HASNA_SECRETS_API_URL";
+const CANONICAL_SECRETS_KEY_ENV = "HASNA_SECRETS_API_KEY";
+const LEGACY_SECRETS_URL_ENV = "SECRETS_API_URL";
+const LEGACY_SECRETS_KEY_ENV = "SECRETS_API_KEY";
+
+type SecretsConfigurationErrorCode =
+  | "missing_secrets_config"
+  | "invalid_secrets_config"
+  | "conflicting_secrets_config";
+
+class SecretsConfigurationError extends Error {
+  constructor(readonly code: SecretsConfigurationErrorCode) {
+    super(code);
+    this.name = "SecretsConfigurationError";
+  }
+}
 
 interface SecretsReferenceTemplate {
   resolve(kid: string): string;
@@ -91,8 +108,66 @@ function validateSecretsReferenceTemplate(value: unknown, agent: string): Secret
   };
 }
 
-async function connectSecrets(env: NodeJS.ProcessEnv): Promise<IssueKeySecretsClient> {
-  return createSecretsClientFromEnv(env);
+function ownEnv(env: NodeJS.ProcessEnv, key: string): string | undefined {
+  const value = Object.hasOwn(env, key) ? env[key] : undefined;
+  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+}
+
+function normalizeSecretsBaseUrl(value: string): string {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new SecretsConfigurationError("invalid_secrets_config");
+  }
+  if (
+    (url.protocol !== "http:" && url.protocol !== "https:") ||
+    url.username.length > 0 ||
+    url.password.length > 0 ||
+    url.pathname !== "/" ||
+    url.search.length > 0 ||
+    url.hash.length > 0
+  ) {
+    throw new SecretsConfigurationError("invalid_secrets_config");
+  }
+  return url.origin;
+}
+
+function resolveSecretsAlias(
+  env: NodeJS.ProcessEnv,
+  urlEnv: string,
+  keyEnv: string,
+): SecretsServiceConfig | undefined {
+  const rawUrl = ownEnv(env, urlEnv);
+  const rawApiKey = ownEnv(env, keyEnv);
+  if (!rawUrl && !rawApiKey) return undefined;
+  if (!rawUrl || !rawApiKey || rawApiKey !== rawApiKey.trim()) {
+    throw new SecretsConfigurationError("invalid_secrets_config");
+  }
+  return { baseUrl: normalizeSecretsBaseUrl(rawUrl), apiKey: rawApiKey };
+}
+
+/**
+ * Collapse the two package-supported env aliases into one explicit authority.
+ * The SDK historically resolves URL and key independently with legacy-first
+ * precedence, so an overlapping environment can otherwise pair credentials
+ * with a different service. Equivalent complete aliases are one authority;
+ * partial or conflicting aliases fail before a credential is minted.
+ */
+function resolveSecretsServiceConfig(env: NodeJS.ProcessEnv): SecretsServiceConfig {
+  const canonical = resolveSecretsAlias(env, CANONICAL_SECRETS_URL_ENV, CANONICAL_SECRETS_KEY_ENV);
+  const legacy = resolveSecretsAlias(env, LEGACY_SECRETS_URL_ENV, LEGACY_SECRETS_KEY_ENV);
+  if (!canonical && !legacy) throw new SecretsConfigurationError("missing_secrets_config");
+  if (canonical && legacy && (canonical.baseUrl !== legacy.baseUrl || canonical.apiKey !== legacy.apiKey)) {
+    throw new SecretsConfigurationError("conflicting_secrets_config");
+  }
+  return canonical ?? legacy!;
+}
+
+async function connectSecrets(config: SecretsServiceConfig): Promise<IssueKeySecretsClient> {
+  // Empty env plus explicit overrides prevents the SDK's legacy-first ambient
+  // resolver from selecting a different URL/key pair after validation.
+  return createSecretsClientFromEnv({}, config);
 }
 
 async function closeQuietly(handle: IssueKeyStoreHandle | undefined): Promise<void> {
@@ -248,6 +323,7 @@ export async function runIssueKey(options: Record<string, unknown>, deps: IssueK
   // consumer. Mixing those contracts behind `--json` or a redaction toggle
   // makes one future error path enough to put the token back on stdout.
   let secretsReference: SecretsReferenceTemplate | undefined;
+  let secretsConfig: SecretsServiceConfig | undefined;
   if (optSecretsRef !== undefined) {
     if (bootstrap || typeof optAgent !== "string" || optAgent.trim().length === 0) {
       deps.report({ json }, "Credential-safe Secrets issuance requires an explicit --agent.", {
@@ -263,7 +339,14 @@ export async function runIssueKey(options: Record<string, unknown>, deps: IssueK
     }
     try {
       secretsReference = validateSecretsReferenceTemplate(optSecretsRef, agent as string);
+      secretsConfig = resolveSecretsServiceConfig(env);
     } catch (error) {
+      if (error instanceof SecretsConfigurationError) {
+        deps.report({ json }, "Could not resolve one unambiguous Hasna Secrets service configuration.", {
+          code: error.code,
+        });
+        return;
+      }
       const message = error instanceof Error ? error.message : "Invalid --secrets-ref.";
       deps.report({ json }, message, { code: "bad_secrets_ref" });
       return;
@@ -353,7 +436,7 @@ export async function runIssueKey(options: Record<string, unknown>, deps: IssueK
         return;
       }
       const connectVault = deps.connectSecrets ?? connectSecrets;
-      secretsClient = await connectVault(env);
+      secretsClient = await connectVault(secretsConfig!);
     } catch {
       deps.report({ json }, "Could not prepare credential-safe key storage.", {
         code: "storage_prepare_failed",

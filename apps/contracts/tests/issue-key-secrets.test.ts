@@ -7,6 +7,8 @@ const FLEET_SIGNING = "test-fleet-signing-secret-not-a-real-credential-000";
 const DB_URL = "postgres://unused.example/todos";
 const AGENT = "agent-chief-engineering";
 const REF_TEMPLATE = "todos/agents/{agent}/{kid}";
+const SECRETS_BASE_URL = "https://secrets.example.test";
+const SECRETS_TRANSPORT_KEY = "test-secrets-transport-key-not-a-real-credential";
 
 function collectReports() {
   const reports: Array<{ error: string; details?: Record<string, unknown> }> = [];
@@ -49,8 +51,8 @@ function baseEnv(signingSecret = TODO_SIGNING): NodeJS.ProcessEnv {
   return {
     HASNA_TODOS_API_SIGNING_KEY: signingSecret,
     HASNA_TODOS_DATABASE_URL: DB_URL,
-    HASNA_SECRETS_API_URL: "https://secrets.example.test",
-    HASNA_SECRETS_API_KEY: "test-secrets-transport-key-not-a-real-credential",
+    HASNA_SECRETS_API_URL: SECRETS_BASE_URL,
+    HASNA_SECRETS_API_KEY: SECRETS_TRANSPORT_KEY,
   };
 }
 
@@ -78,22 +80,25 @@ describe("issue-key credential-safe Secrets delivery", () => {
           },
           close: async () => {},
         }),
-        connectSecrets: async () => ({
-          putSecret: async (input) => {
-            delivered.push(input);
-            return {
-              key: input.key,
-              type: "api_key",
-              created_at: "2026-08-13T00:00:00.000Z",
-              updated_at: "2026-08-13T00:00:00.000Z",
-            };
-          },
-          deleteSecret: async (query) => {
-            if (!query) throw new Error("missing key");
-            deleted.push(query.key);
-            return { deleted: true };
-          },
-        }),
+        connectSecrets: async (config) => {
+          expect(config).toEqual({ baseUrl: SECRETS_BASE_URL, apiKey: SECRETS_TRANSPORT_KEY });
+          return {
+            putSecret: async (input) => {
+              delivered.push(input);
+              return {
+                key: input.key,
+                type: "api_key",
+                created_at: "2026-08-13T00:00:00.000Z",
+                updated_at: "2026-08-13T00:00:00.000Z",
+              };
+            },
+            deleteSecret: async (query) => {
+              if (!query) throw new Error("missing key");
+              deleted.push(query.key);
+              return { deleted: true };
+            },
+          };
+        },
       });
     });
 
@@ -141,6 +146,48 @@ describe("issue-key credential-safe Secrets delivery", () => {
         nowMs: 1_700_000_001_000,
       }).ok,
     ).toBe(false);
+  });
+
+  test("conflicting canonical and legacy Secrets aliases fail before mint or any remote write", async () => {
+    const { reports, report } = collectReports();
+    const env = {
+      ...baseEnv(),
+      SECRETS_API_URL: "https://legacy-secrets.example.test",
+      SECRETS_API_KEY: "test-legacy-secrets-key-not-a-real-credential",
+    };
+    let mintClockReads = 0;
+    let dbCalls = 0;
+    let vaultCalls = 0;
+
+    const streams = await captureStreams(async () => {
+      await runIssueKey(baseOptions(), {
+        report,
+        env,
+        now: () => {
+          mintClockReads += 1;
+          return 1_700_000_000_000;
+        },
+        connectStore: async () => {
+          dbCalls += 1;
+          throw new Error("must not connect");
+        },
+        connectSecrets: async () => {
+          vaultCalls += 1;
+          throw new Error("must not connect");
+        },
+      });
+    });
+
+    expect(reports).toHaveLength(1);
+    expect(reports[0]?.details).toEqual({ code: "conflicting_secrets_config" });
+    expect(mintClockReads).toBe(0);
+    expect(dbCalls).toBe(0);
+    expect(vaultCalls).toBe(0);
+    const observable = [streams.stdout, streams.stderr, JSON.stringify(reports)].join("\n");
+    expect(observable).not.toContain(SECRETS_BASE_URL);
+    expect(observable).not.toContain(env.SECRETS_API_URL);
+    expect(observable).not.toContain(SECRETS_TRANSPORT_KEY);
+    expect(observable).not.toContain(env.SECRETS_API_KEY);
   });
 
   test("a fleet-signed token with --agent remains invalid to the Todos signing authority", () => {
