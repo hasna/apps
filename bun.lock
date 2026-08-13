@@ -159,6 +159,25 @@
         "typescript": "^5.7.3",
       },
     },
+    "apps/bridge": {
+      "name": "@hasna/bridge",
+      "version": "0.7.0",
+      "bin": {
+        "bridge": "dist/cli/index.js",
+        "bridge-mcp": "dist/mcp/index.js",
+      },
+      "dependencies": {
+        "@modelcontextprotocol/sdk": "^1.29.0",
+        "commander": "^13.1.0",
+        "zod": "^3.25.76",
+      },
+      "devDependencies": {
+        "@types/bun": "^1.2.4",
+        "@types/node": "26.1.0",
+        "bun-types": "1.3.14",
+        "typescript": "^5.7.3",
+      },
+    },
     "apps/calendar": {
       "name": "@hasna/calendar",
       "version": "0.3.1",
@@ -555,6 +574,8 @@
     "@hasna/billing": ["@hasna/billing@workspace:apps/billing"],
 
     "@hasna/brains": ["@hasna/brains@workspace:apps/brains"],
+
+    "@hasna/bridge": ["@hasna/bridge@workspace:apps/bridge"],
 
     "@hasna/calendar": ["@hasna/calendar@workspace:apps/calendar"],
 
@@ -1567,6 +1588,10 @@
     "@hasna/brains/@types/node": ["@types/node@26.1.0", "", { "dependencies": { "undici-types": "~8.3.0" } }, "sha512-O0A1G3xPGy4w7AgQdAQYUlQ+BKk2Oovw8eRpofyp5KdBZULnbe+WqaOVNrm705SHphCiG4XHsACrSmPu1f+Kgw=="],
 
     "@hasna/brains/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
+
+    "@hasna/bridge/@types/node": ["@types/node@26.1.0", "", { "dependencies": { "undici-types": "~8.3.0" } }, "sha512-O0A1G3xPGy4w7AgQdAQYUlQ+BKk2Oovw8eRpofyp5KdBZULnbe+WqaOVNrm705SHphCiG4XHsACrSmPu1f+Kgw=="],
+
+    "@hasna/bridge/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
 
     "@hasna/calendar/@hasna/contracts": ["@hasna/contracts@0.4.2", "", { "dependencies": { "commander": "^13.1.0", "zod": "^3.25.76" }, "bin": { "contracts": "dist/cli/index.js", "contracts-cli": "dist/cli/index.js" } }, "sha512-xD7ZWQXR+AjYAJVpaMsQ+8V0SABiJSKVeI0B1WbPByYeGz6daDtgyZ6c3q0c2S6uzIEtUxlGHPundr675636ew=="],
 
