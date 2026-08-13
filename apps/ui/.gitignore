@@ -1,0 +1,12 @@
+node_modules
+dist
+*.log
+.env.local
+.env
+# ui.sh proprietary material — NOT redistributed; regenerate with `bun run harvest`
+content/
+demo/ui-picker.reference.js
+# projects-CLI / agent scaffolding
+AGENTS.md
+CLAUDE.md
+.implementation/
