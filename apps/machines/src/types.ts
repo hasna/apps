@@ -235,7 +235,7 @@ export interface NotificationTestResult {
 export interface InstalledAppStatus {
   name: string;
   packageName: string;
-  manager: "brew" | "cask" | "apt" | "winget" | "custom";
+  manager: "bun" | "brew" | "cask" | "apt" | "winget" | "custom";
   installed: boolean;
   version?: string;
 }

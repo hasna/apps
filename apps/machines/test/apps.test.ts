@@ -278,6 +278,74 @@ describe("apps", () => {
     ]);
   });
 
+  test("installs exact Bun package specs through apps and verifies the declared executable version", () => {
+    const dir = mkdtempSync(join(tmpdir(), "machines-apps-package-exact-"));
+    const manifestPath = join(dir, "machines.json");
+    process.env["HASNA_MACHINES_MANIFEST_PATH"] = manifestPath;
+    writeFileSync(manifestPath, `${JSON.stringify({
+      version: 1,
+      packages: [{
+        name: "@hasna/machines",
+        manager: "bun",
+        version: "0.2.21",
+        bin: "machines",
+      }],
+      machines: [{
+        id: "remote-linux",
+        platform: "linux",
+        workspacePath: "/home/operator/workspace",
+      }],
+    }, null, 2)}\n`);
+
+    const plan = buildAppsPlan("remote-linux");
+    expect(plan.steps).toHaveLength(1);
+    expect(plan.steps[0]).toMatchObject({
+      id: "package-hasna-machines",
+      title: "Install @hasna/machines@0.2.21 on remote-linux",
+      command: "bun install -g '@hasna/machines@0.2.21'",
+      manager: "bun",
+      privileged: false,
+      expectedVersion: "0.2.21",
+    });
+    expect(plan.steps[0]?.probeCommand).toContain("'machines' --version");
+    expect(plan.steps[0]?.probeCommand).not.toContain("@hasna/machines@0.2.21");
+    expect(JSON.stringify(plan)).not.toContain("publish-token");
+    expect(JSON.stringify(plan)).not.toContain("NODE_AUTH_TOKEN");
+
+    const calls: Array<{ command: string; redactOutput: boolean }> = [];
+    const runner: MachineCommandRunner = (machineId, command, options) => {
+      calls.push({ command, redactOutput: options?.redactOutput === true });
+      if (command === "true") return { machineId, source: "ssh", stdout: "", stderr: "", exitCode: 0 };
+      if (command.includes("'machines' --version")) {
+        return { machineId, source: "ssh", stdout: "installed=1\nversion=0.2.21\n", stderr: "", exitCode: 0 };
+      }
+      if (command === "bun install -g '@hasna/machines@0.2.21'") {
+        return { machineId, source: "ssh", stdout: "", stderr: "", exitCode: 0 };
+      }
+      throw new Error(`unexpected command: ${command}`);
+    };
+
+    expect(getAppsStatus("remote-linux", runner).apps).toEqual([{
+      name: "@hasna/machines",
+      packageName: "@hasna/machines",
+      manager: "bun",
+      installed: true,
+      version: "0.2.21",
+    }]);
+    const applied = runAppsInstall(
+      "remote-linux",
+      { apply: true, yes: true, expectedPlanDigest: plan.planDigest },
+      runner,
+    );
+    expect(applied.executed).toBe(1);
+    expect(calls).toEqual([
+      { command: "true", redactOutput: false },
+      { command: plan.steps[0]?.probeCommand, redactOutput: true },
+      { command: "bun install -g '@hasna/machines@0.2.21'", redactOutput: true },
+      { command: plan.steps[0]?.probeCommand, redactOutput: true },
+    ]);
+  });
+
   test("keeps apt, brew, and winget install command compatibility", () => {
     const dir = mkdtempSync(join(tmpdir(), "machines-apps-manager-compat-"));
     process.env["HASNA_MACHINES_MANIFEST_PATH"] = join(dir, "machines.json");

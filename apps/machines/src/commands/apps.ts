@@ -2,6 +2,7 @@ import { detectCurrentMachineManifest, getManifestMachine, readManifest } from "
 import { resolveExactManifestPath } from "../paths.js";
 import { assertMutationPlanDigest, attachMutationPlanDigest } from "./mutation-approval.js";
 import { requireMachineCommandSuccess, runMachineCommand, type MachineCommandRunner } from "../remote.js";
+import { resolveDesiredPackages, type DesiredPackage } from "./reconcile.js";
 import {
   buildExactBunAppsPlan,
   defaultExactBunSourceLoader,
@@ -67,6 +68,51 @@ function getAppManager(machine: MachineManifest, app: ManifestAppSpec): Installe
 
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+function packageStepId(packageName: string): string {
+  return `package-${packageName.replace(/^@/, "").replace(/[^A-Za-z0-9._-]+/g, "-")}`;
+}
+
+function packageSelector(spec: DesiredPackage): string {
+  if (!spec.version) throw new Error(`Package ${spec.name} must declare an exact version for apps install.`);
+  return `${spec.name}@${spec.version}`;
+}
+
+function packageVersionProbeCommand(spec: DesiredPackage): string {
+  const bin = shellQuote(spec.bin);
+  return [
+    `if output=$(${bin} --version 2>/dev/null); then`,
+    "version=$(printf '%s\\n' \"$output\" | sed -nE 's/.*([0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?).*/\\1/p' | head -n 1);",
+    "if [ -n \"$version\" ]; then printf 'installed=1\\nversion=%s\\n' \"$version\"; else printf 'installed=0\\n'; fi;",
+    "else printf 'installed=0\\n'; fi",
+  ].join(" ");
+}
+
+function readSelectedManifest(options: AppsManifestOptions): ReturnType<typeof readManifest> {
+  const manifestPath = options.manifestPath === undefined && options.env === undefined
+    ? undefined
+    : resolveExactManifestPath(options.manifestPath, options.env);
+  return readManifest(manifestPath);
+}
+
+function packageSpecsForApps(machine: MachineManifest, options: AppsManifestOptions): DesiredPackage[] {
+  const manifest = readSelectedManifest(options);
+  if (!manifest.machines.some((entry) => entry.id === machine.id)) return [];
+  return resolveDesiredPackages(manifest, machine.id)
+    .filter((spec) => spec.version !== undefined && spec.verify !== false && spec.exactBunRegistry === undefined);
+}
+
+function buildPackageSteps(machine: MachineManifest, options: AppsManifestOptions = {}): SetupStep[] {
+  return packageSpecsForApps(machine, options).map((spec) => ({
+    id: packageStepId(spec.name),
+    title: `Install ${packageSelector(spec)} on ${machine.id}`,
+    command: `bun install -g ${shellQuote(packageSelector(spec))}`,
+    manager: "bun",
+    privileged: false,
+    probeCommand: packageVersionProbeCommand(spec),
+    expectedVersion: spec.version,
+  }));
 }
 
 function buildAppCommand(machine: MachineManifest, app: ManifestAppSpec): string {
@@ -137,6 +183,45 @@ function buildAppSteps(machine: MachineManifest): SetupStep[] {
     }
     return step;
   });
+}
+
+function parseStepProbeOutput(step: SetupStep, stdout: string): { installed: boolean; version?: string } {
+  const lines = stdout.trim().split(/\r?\n/).filter(Boolean);
+  const installedLines = lines.filter((line) => line.startsWith("installed="));
+  const versionLines = lines.filter((line) => line.startsWith("version="));
+  const recognizedLineCount = installedLines.length + versionLines.length;
+  if (installedLines.length !== 1 || recognizedLineCount !== lines.length) {
+    throw new Error(`App probe ${step.id} returned malformed output: expected one installed=0|1 line and an optional version line.`);
+  }
+
+  const installedValue = installedLines[0]!.slice("installed=".length);
+  if (installedValue !== "0" && installedValue !== "1") {
+    throw new Error(`App probe ${step.id} returned malformed output: installed must be 0 or 1.`);
+  }
+
+  if (installedValue === "0") {
+    if (versionLines.length > 0) {
+      throw new Error(`App probe ${step.id} returned malformed output: an absent app must not report a version.`);
+    }
+    return { installed: false };
+  }
+
+  if (versionLines.length !== 1) {
+    throw new Error(`App probe ${step.id} returned malformed output: installed=1 requires exactly one version line.`);
+  }
+  const version = versionLines[0]!.slice("version=".length);
+  if (!version.trim()) {
+    throw new Error(`App probe ${step.id} returned malformed output: version must not be blank.`);
+  }
+  return { installed: true, version };
+}
+
+function requireStepProbeSuccess(step: SetupStep, result: ReturnType<typeof requireMachineCommandSuccess>): void {
+  const parsed = parseStepProbeOutput(step, result.stdout);
+  if (!parsed.installed) throw new Error(`App verify ${step.id} failed: executable not installed.`);
+  if (step.expectedVersion !== undefined && parsed.version !== step.expectedVersion) {
+    throw new Error(`App verify ${step.id} failed: ${parsed.version ?? "no version"} reported, expected ${step.expectedVersion}.`);
+  }
 }
 
 function resolveMachine(machineId?: string, options: AppsManifestOptions = {}, requireExactTarget = false): MachineManifest {
@@ -224,7 +309,7 @@ export function buildAppsPlan(machineId?: string, options: AppsManifestOptions =
   return attachMutationPlanDigest({
     machineId: machine.id,
     mode: "plan",
-    steps: buildAppSteps(machine),
+    steps: [...buildAppSteps(machine), ...buildPackageSteps(machine, options)],
     executed: 0,
   });
 }
@@ -275,10 +360,30 @@ export function getAppsStatus(
     return readExactBunAppsStatus(machine, runner, options.bootstrapSourceLoader);
   }
   const readiness = requireMachineCommandSuccess("Apps status readiness check", runner(machine.id, "true"));
-  const apps = (machine.apps || []).map((app) => {
+  const apps: InstalledAppStatus[] = (machine.apps || []).map((app) => {
     const probe = requireMachineCommandSuccess(`App probe ${app.name}`, runner(machine.id, buildAppProbeCommand(machine, app)));
     return parseProbeOutput(app, machine, probe.stdout);
   });
+  for (const spec of packageSpecsForApps(machine, options)) {
+    const probeCommand = packageVersionProbeCommand(spec);
+    const probe = requireMachineCommandSuccess(`App probe ${spec.name}`, runner(machine.id, probeCommand, { redactOutput: true }));
+    const parsed = parseStepProbeOutput({
+      id: packageStepId(spec.name),
+      title: `Probe ${spec.name} on ${machine.id}`,
+      command: probeCommand,
+      manager: "bun",
+      privileged: false,
+      probeCommand,
+      expectedVersion: spec.version,
+    }, probe.stdout);
+    apps.push({
+      name: spec.name,
+      packageName: spec.name,
+      manager: "bun",
+      installed: parsed.installed && parsed.version === spec.version,
+      ...(parsed.version ? { version: parsed.version } : {}),
+    });
+  }
   return {
     machineId: machine.id,
     source: readiness.source,
@@ -355,8 +460,18 @@ export function runAppsPlan(
 
   let executed = 0;
   for (const step of plan.steps) {
-    requireMachineCommandSuccess(`App install ${step.id}`, runner(plan.machineId, step.command));
+    requireMachineCommandSuccess(
+      `App install ${step.id}`,
+      runner(plan.machineId, step.command, step.manager === "bun" ? { redactOutput: true } : undefined),
+    );
     executed += 1;
+    if (step.manager === "bun" && step.probeCommand) {
+      const probe = requireMachineCommandSuccess(
+        `App verify ${step.id}`,
+        runner(plan.machineId, step.probeCommand, { redactOutput: true }),
+      );
+      requireStepProbeSuccess(step, probe);
+    }
   }
 
   return attachMutationPlanDigest({
