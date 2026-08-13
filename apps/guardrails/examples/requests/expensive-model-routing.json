@@ -1,0 +1,16 @@
+{
+  "operationType": "model_routing",
+  "modelRouting": {
+    "requestedModel": "premium-reasoner",
+    "selectedModel": "provider/premium-reasoner",
+    "provider": "example-provider",
+    "inputUsdPerMillionTokens": 8,
+    "outputUsdPerMillionTokens": 30,
+    "estimatedInputTokens": 20000,
+    "estimatedOutputTokens": 8000
+  },
+  "session": {
+    "tool": "open-router",
+    "traceId": "example-expensive-model"
+  }
+}
