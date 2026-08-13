@@ -1,0 +1,143 @@
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+### Added
+
+- Friendly, password-protected share aliases are now supported end to end. Use
+  `attachments slug <slug>` for a read-only availability check, then
+  `attachments link <id> --regenerate --slug <slug> --password <password>` to
+  create `https://<public-host>/a/<slug>`. Slugs are stored only as hashes in
+  the existing share-link table, so no schema migration is required.
+
+## [1.1.5] - 2026-07-25
+
+### Fixed
+
+- **Password-protected share links 404'd on the cloud service (D3).** `attachments-serve` minted `<public base>/a/<token>` links — which every password or max-download link is forced to use — but `createServeApp` registered only `/health`, `/ready`, `/version` and `/v1/*`. The public route did not exist in the service at all, so the link could never resolve, no matter which hostname fronted it. The cloud service now serves `GET /a/:token` (metadata + password form), `GET|POST /a/:token/download` and the matching `HEAD` probes against its Postgres store.
+- **Expiry beyond 7 days returned HTTP 500 (D2).** A presigned S3 URL cannot be signed for more than the AWS ceiling of 604800 seconds; the SDK throws and the route answered a bare 500 for `8d`, `14d`, `30d`, `60d`, `720h`. Link-type selection is now a single shared decision (`resolveDeliverableLinkType`) that upgrades to a server-hosted link whenever the request cannot be expressed as a presigned URL — long expiries, `never`, passwords, download caps, email gates, encryption, local backend. `expiry=never` no longer silently hands back a 7-day URL. An unparsable expiry is now a 400 with the reason, not a 500.
+- **`multipart/form-data` uploads corrupted the file (D1c).** There was no multipart branch: the whole MIME envelope (boundary + part headers) was stored as the file body, and the filename and content type were lost (`upload_XXXX`, `application/octet-stream`). Multipart is now parsed properly and carries `expiry` / `password` / `tag` / `link_type` / `max_downloads` form fields.
+- **`--client-mode local` produced dead links (D1b).** An on-box upload built its share link from the configured public host, which on a machine configured for the cloud API is the remote service — the link pointed at a database that does not contain the token. Local uploads now resolve their base URL from the internal/loopback address whenever the configured public host is the remote API origin, and the CLI says so on stderr.
+- **Opaque CLI errors (D1a).** A failed API call surfaced only the response body, so a server 500 became the single word "Internal Server Error". Errors now carry the method, route, HTTP status and the server's `error`/`detail`. API keys are never included.
+- **Downloads of files with non-ASCII names returned 500.** `Content-Disposition` embedded the raw UTF-8 name in the quoted `filename` parameter, which is not a legal header value; the name now falls back to ASCII there while `filename*=UTF-8''` keeps the exact name.
+
+### Changed
+
+- Share-link access policy (`assertShareLinkUsable` / `assertAttachmentUsable`) and the password brute-force throttle are now shared modules consumed by both the on-box SQLite server and the cloud service, so the two deployments cannot drift on revocation, expiry, use counts or lockout.
+- The cloud service applies the same `Content-Security-Policy` / `Cache-Control: no-store` to its public pages as the on-box server, and defaults to trusting proxy headers for throttle identity (it always runs behind an ALB); set `ATTACHMENTS_TRUST_PROXY=0` to disable.
+
+### Security
+
+- **The password lockout could be bypassed, or weaponised, through `x-forwarded-for`.** Caller identity was taken from the leftmost entry of the chain, which is whatever the client sent: a brute-forcer got a fresh 10-attempt bucket per guess. The chain is now read right to left, from the hop the nearest proxy actually appended. `ATTACHMENTS_TRUSTED_PROXIES` (comma separated) names proxies we operate — the public edge in front of the service — so those hops are stepped over instead of collapsing every visitor into one bucket, which would have let a single attacker lock a link for everyone.
+- `scripts/test.sh` is now actually hermetic. It exported `ATTACHMENTS_CLIENT_MODE`, which nothing reads; with a shell configured for the production API, 8 test files failed for environmental reasons on a clean checkout.
+
+## [1.1.4] - 2026-07-24
+
+### Changed
+
+- **Reconciled `main` with the published npm line.** `main` had diverged from the deployed release: npm `latest` was `1.1.3` (a Store-only architecture rewrite) while `main` was stuck at `1.0.51`, so the deployed source of truth was not on `main`. This release merges the published `v1.1.3` history into `main` (preserving both lines, no history rewrite) and bumps above npm latest. `main` now equals deployed reality.
+
+### Included from the previously-published (but never-merged) `1.1.3` line
+
+- **Store-only client architecture.** All client access now routes through a single `Store` abstraction (`LocalStore` + `ApiStore`); the client-side DSN sync path was removed and `send_feedback` routes through the Store.
+- Depend on published `@hasna/contracts@^0.5.2` (quarantine-excluded for the Store-only build).
+- `complete-task` persists attachments as retrievable todos evidence.
+- Default share links are presigned S3 links so default-link downloads work end-to-end.
+
+### Preserved from `main`
+
+- `cloud-v1` test-dependency fix and the task-journal CLI smoke-test hardening (merged; the DB-mock variant of the task-journal test was superseded by the Store-only test, which is now the source of truth for that file).
+
+## [1.1.2] - 2026-07-08
+
+### Fixed
+
+- `complete-task` / `complete_task_with_files` (CLI + MCP) now persist uploaded attachments as retrievable todos evidence. The todos `POST /api/tasks/:id/complete` endpoint ignores its request body, so the attachment IDs sent there were silently discarded and `resolve-evidence` reported "No attachments found in evidence". The command now explicitly merges the full attachment entries into `metadata._evidence.attachments` (the exact shape `resolve-evidence` reads) via a PATCH — preserving existing metadata and honoring optimistic-concurrency versioning — before marking the task complete. Completion notes are recorded under `metadata._evidence.notes`.
+- The MCP `complete_task_with_files` tool now routes through the shared CLI implementation instead of duplicating the (buggy) completion logic, so both surfaces behave identically.
+
+## [1.0.47] - 2026-06-27
+
+### Fixed
+
+- Merge missing files from both legacy attachment data directories into `~/.hasna/attachments` without overwriting existing canonical data.
+- Copy legacy `attachments.db` forward to `db.sqlite` even when it only exists in the secondary `~/.attachments` directory.
+
+## [1.0.5] - 2026-03-14
+
+### Fixed
+- SDK `Attachment` type was missing `tag` field (added in v0.2.0 but never reflected in types)
+- Default port changed from 3457 (conflict with @hasna/configs) to 3459
+- Server now binds to `localhost` by default instead of `0.0.0.0`
+- `src/index.ts` now exports the full library API (was empty in v0.1.0)
+- `prepare` script ensures `dist/` is rebuilt before every `npm publish`
+
+### Added (since v0.1.0)
+- **Dashboard** — React + Vite UI with dark/light mode for browsing and managing attachments
+- **CLI** — new commands: `health-check`, `watch`, `link-task`, `complete-task`, `snapshot-session`, `task-journal`, `status`, `clean`, `whoami`, `presign-upload`
+- **MCP** — expanded from 8 to 14 tools total; `ATTACHMENTS_PROFILE` env var for token optimization (`minimal`=3, `standard`=7, `full`=14)
+- **Economy integration** — set `ATTACHMENTS_TRACK_COSTS=1` to log cost data via the economy service
+- **Sessions integration** — `snapshot-session` / `save_session` MCP tool fetches a transcript from open-sessions and uploads it to S3
+- **Todos integration** — `link-task`, `complete-task`, `watch` (reactive health checks), `task-journal`, `link_to_task` MCP tool, `complete_task_with_files` MCP tool
+- **File size limit** — `ATTACHMENTS_MAX_SIZE` env var (default 5 GB); uploads exceeding the limit return HTTP 413
+- **Tag support** — `--tag` flag on CLI upload/list, `?tag=` query param on REST API, `tag` param in all relevant MCP tools
+- **Batch upload** — `upload_attachments` MCP tool and `upload_attachments` REST endpoint for multi-file uploads
+- **Presigned PUT** — `presign-upload` CLI and `presign_upload` MCP tool for direct client-to-S3 uploads without server credentials
+- **Health check MCP tool** — `check_attachment_health` audits all links (expired/dead/healthy) with optional `fix:true` to regenerate expired presigned links
+- **AGENTS.md** — standard agent workflow documentation
+
+## [0.1.0] - 2026-03-12
+
+### Added
+
+- Initial release of `@hasna/attachments` and `@hasna/attachments-sdk`.
+
+**CLI (`attachments`)**
+- `upload <file>` — upload a local file to S3 and print a shareable link; supports `--expiry`, `--link-type`, `--format`
+- `download <id-or-url>` — download an attachment by ID or `/d/:id` URL with `--output` option
+- `list` — list attachments with `--format` (compact/table/json), `--limit`, and `--expired` options
+- `delete <id>` — delete an attachment from S3 and the local database; `--yes` to skip confirmation
+- `link <id>` — show or regenerate the shareable link; supports `--regenerate`, `--expiry`, `--format`
+- `config show` — print current configuration with secrets masked
+- `config set` — update S3, server, and defaults configuration
+- `config test` — verify S3 connectivity by listing one bucket object
+- `serve` — start the Hono REST API server; supports `--port` and `--host`
+- `mcp` — install or uninstall the MCP server into Claude Code, Codex, and Gemini; supports `--all` and `--uninstall`
+
+**MCP server (`attachments-mcp`)**
+- 8 lean-stub tools to minimize token consumption: `upload_attachment`, `download_attachment`, `list_attachments`, `delete_attachment`, `get_link`, `configure_s3`, `describe_tools`, `search_tools`
+- `describe_tools` returns full verbose JSON Schema for any tool on demand
+- `search_tools` searches tool names by keyword
+- stdio transport compatible with all MCP-capable agents
+
+**REST API**
+- `POST /api/attachments` — multipart file upload
+- `GET /api/attachments` — list with `limit`, `fields`, `format`, `expired` query params
+- `GET /api/attachments/:id` — get attachment metadata
+- `DELETE /api/attachments/:id` — delete from S3 and database
+- `GET /api/attachments/:id/download` — download or redirect to presigned URL
+- `GET /api/attachments/:id/link` — get current shareable link
+- `POST /api/attachments/:id/link` — regenerate link with optional new expiry
+- `GET /d/:id` — public shortlink that redirects to the file
+
+**`@hasna/attachments-sdk`**
+- Zero-dependency TypeScript client compatible with Node.js, Bun, Deno, and browsers
+- `upload(filePathOrBlob, opts?)` — upload from a file path or a `File`/`Blob`
+- `download(idOrUrl, destPath?)` — download attachment to disk (Node.js/Bun)
+- `list(opts?)` — list attachments with field selection and format options
+- `get(id)` — get attachment metadata
+- `delete(id)` — delete attachment
+- `getLink(id)` — get current shareable link
+- `regenerateLink(id, opts?)` — regenerate link with optional new expiry
+
+**S3 / storage**
+- AWS S3 support with presigned URL generation via `@aws-sdk/s3-request-presigner`
+- S3-compatible endpoint support (Cloudflare R2, MinIO, LocalStack)
+- Configurable link expiry: minutes (`m`), hours (`h`), days (`d`), or `never`
+- Two link types: `presigned` (S3-signed URL) and `server` (local shortlink)
+- SQLite-backed local attachment database at `~/.attachments/attachments.db`
+- Configuration stored at `~/.attachments/config.json`
