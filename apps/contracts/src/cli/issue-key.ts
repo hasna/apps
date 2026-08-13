@@ -1,10 +1,10 @@
 // `contracts issue-key` implementation.
 //
-// Mints a Hasna API key, persists ONLY the hashed record to the app's Postgres,
-// and prints the plaintext secret exactly once (that is the command's purpose —
-// it is a freshly generated secret, not the disclosure of an at-rest credential).
-// The secret exists only in this process, so every exit path after minting prints
-// it, including persistence failures.
+// Mints a Hasna API key and persists ONLY the hashed record to the app's
+// Postgres. The legacy path prints the plaintext secret exactly once. The
+// credential-safe `--secrets-ref` path instead delivers it directly through
+// the typed @hasna/secrets SDK and emits metadata only; the two paths stay
+// separate because their failure contracts are deliberately opposite.
 //
 // PERSISTENCE IS POSTGRES-ONLY, DELIBERATELY. Writing the hashed record through an
 // app's cloud `/v1` API would need an `api-keys` operation that is declared in the
@@ -18,17 +18,195 @@
 
 import { mintApiKey, type MintedApiKey } from "../auth/keys";
 import { normalizeTenantId } from "../auth/tenant";
-import { ApiKeyStore, type AuthQueryClient } from "../auth/store";
+import {
+  API_KEY_ISSUANCE_PENDING_REASON,
+  ApiKeyStore,
+  type ApiKeyRecord,
+  type AuthQueryClient,
+} from "../auth/store";
+import { createSecretsClientFromEnv, type SecretsClient, type SecretsClientOptions } from "@hasna/secrets";
 
-type IssueKeyStore = Pick<ApiKeyStore, "ensureSchema" | "insertMinted">;
+type IssueKeyStore = Pick<ApiKeyStore, "ensureSchema" | "insertMinted"> &
+  Partial<Pick<ApiKeyStore, "revoke" | "insertMintedPending" | "activatePending" | "findByKid">>;
 type IssueKeyStoreHandle = { store: IssueKeyStore; close: () => Promise<void> };
 type IssueKeyConnectStore = (connectionString: string, table: string) => Promise<IssueKeyStoreHandle>;
+type IssueKeySecretsClient = Pick<SecretsClient, "putSecret" | "deleteSecret"> &
+  Partial<Pick<SecretsClient, "listSecrets">>;
+type SecretsServiceConfig = Required<Pick<SecretsClientOptions, "baseUrl" | "apiKey">>;
+type IssueKeyConnectSecrets = (config: SecretsServiceConfig) => Promise<IssueKeySecretsClient>;
 
 export interface IssueKeyDeps {
   report: (options: { json?: boolean }, error: string, details?: Record<string, unknown>) => void;
   env?: NodeJS.ProcessEnv;
   now?: () => number;
   connectStore?: IssueKeyConnectStore;
+  connectSecrets?: IssueKeyConnectSecrets;
+}
+
+const SAFE_REFERENCE_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+const AGENT_REFERENCE_SEGMENT = "{agent}";
+const KID_REFERENCE_SEGMENT = "{kid}";
+const CANONICAL_SECRETS_URL_ENV = "HASNA_SECRETS_API_URL";
+const CANONICAL_SECRETS_KEY_ENV = "HASNA_SECRETS_API_KEY";
+const LEGACY_SECRETS_URL_ENV = "SECRETS_API_URL";
+const LEGACY_SECRETS_KEY_ENV = "SECRETS_API_KEY";
+
+type SecretsConfigurationErrorCode =
+  | "missing_secrets_config"
+  | "invalid_secrets_config"
+  | "conflicting_secrets_config";
+
+class SecretsConfigurationError extends Error {
+  constructor(readonly code: SecretsConfigurationErrorCode) {
+    super(code);
+    this.name = "SecretsConfigurationError";
+  }
+}
+
+interface SecretsReferenceTemplate {
+  resolve(kid: string): string;
+}
+
+/**
+ * Validate a collision-resistant Secrets reference before any credential is
+ * minted. Both placeholders are complete path segments on purpose:
+ *
+ * - `{agent}` makes the signed subject and storage namespace visibly agree;
+ * - `{kid}` makes every successful issuance create a distinct vault row, so a
+ *   retry cannot silently overwrite the only copy of another credential.
+ *
+ * This path is deliberately non-idempotent. A failed invocation compensates
+ * and a retry mints a fresh kid/reference pair. One invocation never retries a
+ * POST internally, and concurrent invocations cannot target the same resolved
+ * reference unless the cryptographic kid generator collides (the DB unique key
+ * refuses that before the vault write).
+ */
+function validateSecretsReferenceTemplate(value: unknown, agent: string): SecretsReferenceTemplate {
+  if (typeof value !== "string") {
+    throw new Error("--secrets-ref must be a string reference template.");
+  }
+  const template = value.trim();
+  if (template.length === 0 || template.length > 256) {
+    throw new Error("--secrets-ref must be 1-256 characters.");
+  }
+  if (!SAFE_REFERENCE_SEGMENT.test(agent)) {
+    throw new Error("--agent must be a safe non-empty Secrets path segment (letters, digits, '.', '_' or '-').");
+  }
+  const segments = template.split("/");
+  if (segments.length > 16 || segments.some((segment) => segment.length === 0)) {
+    throw new Error("--secrets-ref must contain 1-16 non-empty path segments.");
+  }
+  const agentSegments = segments.filter((segment) => segment === AGENT_REFERENCE_SEGMENT).length;
+  const kidSegments = segments.filter((segment) => segment === KID_REFERENCE_SEGMENT).length;
+  if (agentSegments !== 1 || kidSegments !== 1) {
+    throw new Error("--secrets-ref must contain exactly one '{agent}' segment and one '{kid}' segment.");
+  }
+  for (const segment of segments) {
+    if (segment === AGENT_REFERENCE_SEGMENT || segment === KID_REFERENCE_SEGMENT) continue;
+    if (!SAFE_REFERENCE_SEGMENT.test(segment)) {
+      throw new Error("--secrets-ref contains an unsafe path segment.");
+    }
+  }
+  return {
+    resolve: (kid) =>
+      segments
+        .map((segment) => (segment === AGENT_REFERENCE_SEGMENT ? agent : segment === KID_REFERENCE_SEGMENT ? kid : segment))
+        .join("/"),
+  };
+}
+
+function ownEnv(env: NodeJS.ProcessEnv, key: string): string | undefined {
+  const value = Object.hasOwn(env, key) ? env[key] : undefined;
+  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+}
+
+function normalizeSecretsBaseUrl(value: string): string {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new SecretsConfigurationError("invalid_secrets_config");
+  }
+  if (
+    (url.protocol !== "http:" && url.protocol !== "https:") ||
+    url.username.length > 0 ||
+    url.password.length > 0 ||
+    url.pathname !== "/" ||
+    url.search.length > 0 ||
+    url.hash.length > 0
+  ) {
+    throw new SecretsConfigurationError("invalid_secrets_config");
+  }
+  return url.origin;
+}
+
+function resolveSecretsAlias(
+  env: NodeJS.ProcessEnv,
+  urlEnv: string,
+  keyEnv: string,
+): SecretsServiceConfig | undefined {
+  const rawUrl = ownEnv(env, urlEnv);
+  const rawApiKey = ownEnv(env, keyEnv);
+  if (!rawUrl && !rawApiKey) return undefined;
+  if (!rawUrl || !rawApiKey || rawApiKey !== rawApiKey.trim()) {
+    throw new SecretsConfigurationError("invalid_secrets_config");
+  }
+  return { baseUrl: normalizeSecretsBaseUrl(rawUrl), apiKey: rawApiKey };
+}
+
+/**
+ * Collapse the two package-supported env aliases into one explicit authority.
+ * The SDK historically resolves URL and key independently with legacy-first
+ * precedence, so an overlapping environment can otherwise pair credentials
+ * with a different service. Equivalent complete aliases are one authority;
+ * partial or conflicting aliases fail before a credential is minted.
+ */
+function resolveSecretsServiceConfig(env: NodeJS.ProcessEnv): SecretsServiceConfig {
+  const canonical = resolveSecretsAlias(env, CANONICAL_SECRETS_URL_ENV, CANONICAL_SECRETS_KEY_ENV);
+  const legacy = resolveSecretsAlias(env, LEGACY_SECRETS_URL_ENV, LEGACY_SECRETS_KEY_ENV);
+  if (!canonical && !legacy) throw new SecretsConfigurationError("missing_secrets_config");
+  if (canonical && legacy && (canonical.baseUrl !== legacy.baseUrl || canonical.apiKey !== legacy.apiKey)) {
+    throw new SecretsConfigurationError("conflicting_secrets_config");
+  }
+  return canonical ?? legacy!;
+}
+
+async function connectSecrets(config: SecretsServiceConfig): Promise<IssueKeySecretsClient> {
+  // Empty env plus explicit overrides prevents the SDK's legacy-first ambient
+  // resolver from selecting a different URL/key pair after validation.
+  return createSecretsClientFromEnv({}, config);
+}
+
+async function closeQuietly(handle: IssueKeyStoreHandle | undefined): Promise<void> {
+  if (!handle) return;
+  try {
+    await handle.close();
+  } catch {
+    // A pool-close error cannot change the already committed issuance result.
+  }
+}
+
+async function compensateRecord(store: IssueKeyStore, kid: string): Promise<boolean> {
+  if (!store.revoke) return false;
+  try {
+    // A successful call is fail-closed whether it changed one row (revoked) or
+    // zero rows (the preceding insert never committed).
+    await store.revoke(kid, "credential_delivery_failed");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function compensateSecret(client: IssueKeySecretsClient, key: string): Promise<boolean> {
+  try {
+    // Delete is idempotent. A successful call means the exact ref is absent,
+    // whether the preceding PUT committed before its response was lost or not.
+    await client.deleteSecret({ key });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function envToken(app: string): string {
@@ -74,6 +252,95 @@ function parseScopesCsv(csv: unknown): string[] {
     .filter((s) => s.length > 0);
 }
 
+function validateIssuanceId(value: unknown): string {
+  if (typeof value !== "string" || value !== value.trim() || !/^[A-Za-z0-9_-]{1,64}$/.test(value)) {
+    throw new Error("--issuance-id must be a safe 1-64 character key id (letters, digits, '_' or '-').");
+  }
+  return value;
+}
+
+function sameStrings(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function existingIssuanceMatches(
+  record: ApiKeyRecord,
+  request: {
+    app: string;
+    agent: string;
+    tid: string | undefined;
+    scopes: string[];
+    ttlSeconds: number | null;
+  },
+): boolean {
+  const issuedAtMs = Date.parse(record.issuedAt);
+  const expiresAtMs = record.expiresAt === null ? null : Date.parse(record.expiresAt);
+  if (!Number.isFinite(issuedAtMs) || (expiresAtMs !== null && !Number.isFinite(expiresAtMs))) return false;
+  const storedTtlSeconds = expiresAtMs === null ? null : Math.floor((expiresAtMs - issuedAtMs) / 1000);
+  return (
+    record.app === request.app &&
+    record.agent === request.agent &&
+    record.tid === (request.tid ?? null) &&
+    record.createdBy === request.agent &&
+    storedTtlSeconds === request.ttlSeconds &&
+    sameStrings(record.scopes, request.scopes)
+  );
+}
+
+async function hasExactSecretMetadata(client: IssueKeySecretsClient, key: string): Promise<boolean> {
+  if (!client.listSecrets) return false;
+  const result = await client.listSecrets({ namespace: key });
+  return result.secrets?.some((metadata) => metadata.key === key && metadata.type === "api_key") === true;
+}
+
+async function activateIdempotently(
+  store: IssueKeyStore,
+  issuance: Pick<MintedApiKey, "kid" | "tokenHash">,
+): Promise<boolean> {
+  if (!store.activatePending) return false;
+  try {
+    return await store.activatePending(issuance.kid, issuance.tokenHash);
+  } catch {
+    // The UPDATE may have committed before its response was lost. The method
+    // is keyed by kid + token hash and accepts the already-active exact row, so
+    // repeating it reconciles that outcome instead of creating another key.
+    return store.activatePending(issuance.kid, issuance.tokenHash);
+  }
+}
+
+function emitSilentReceipt(
+  json: boolean,
+  receipt: {
+    app: string;
+    kid: string;
+    agent: string;
+    tid: string | null;
+    scopes: string[];
+    issuedAt: string;
+    expiresAt: string | null;
+    secretsRef: string;
+  },
+): void {
+  const output = {
+    ok: true,
+    ...receipt,
+    issuanceId: receipt.kid,
+    stored: true,
+    vaultStored: true,
+  };
+  if (json) {
+    console.log(JSON.stringify(output, null, 2));
+    return;
+  }
+  console.log(`Issued API key metadata for app '${receipt.app}' (kid ${receipt.kid})`);
+  console.log(`  agent:      ${receipt.agent}`);
+  console.log(`  tenant:     ${receipt.tid ?? "- (untenanted)"}`);
+  console.log(`  scopes:     ${receipt.scopes.join(", ")}`);
+  console.log(`  issued:     ${receipt.issuedAt}`);
+  console.log(`  expires:    ${receipt.expiresAt ?? "never"}`);
+  console.log(`  secretsRef: ${receipt.secretsRef}`);
+}
+
 async function connectStore(connectionString: string, table: string): Promise<IssueKeyStoreHandle> {
   let pgModule: any;
   try {
@@ -114,6 +381,8 @@ export async function runIssueKey(options: Record<string, unknown>, deps: IssueK
   const optDatabaseUrlEnv = ownOption(options, "databaseUrlEnv") as string | undefined;
   const optTable = ownOption(options, "table") as string | undefined;
   const optStore = ownOption(options, "store");
+  const optSecretsRef = ownOption(options, "secretsRef");
+  const optIssuanceId = ownOption(options, "issuanceId");
 
   const json = optJson === true;
   const app = String(optApp ?? "").trim();
@@ -143,6 +412,60 @@ export async function runIssueKey(options: Record<string, unknown>, deps: IssueK
   // signature. `String()` coercion and the `bootstrap` fallback are preserved
   // exactly; only the prototype walk is gone.
   const agent = optAgent !== undefined ? String(optAgent) : bootstrap ? "bootstrap" : undefined;
+
+  // `--secrets-ref` selects the credential-silent path. It is intentionally a
+  // separate branch rather than a formatting flag on the existing command:
+  // the legacy path promises to disclose the token, including on failures,
+  // while this path promises that the token can reach only the typed Secrets
+  // consumer. Mixing those contracts behind `--json` or a redaction toggle
+  // makes one future error path enough to put the token back on stdout.
+  let secretsReference: SecretsReferenceTemplate | undefined;
+  let secretsConfig: SecretsServiceConfig | undefined;
+  let issuanceId: string | undefined;
+  if (optIssuanceId !== undefined && optSecretsRef === undefined) {
+    deps.report({ json }, "--issuance-id is supported only with credential-safe --secrets-ref issuance.", {
+      code: "bad_issuance_id",
+    });
+    return;
+  }
+  if (optSecretsRef !== undefined) {
+    if (bootstrap || typeof optAgent !== "string" || optAgent.trim().length === 0) {
+      deps.report({ json }, "Credential-safe Secrets issuance requires an explicit --agent.", {
+        code: "missing_agent",
+      });
+      return;
+    }
+    if (optStore === false) {
+      deps.report({ json }, "--secrets-ref cannot be combined with --no-store.", {
+        code: "bad_secrets_store_mode",
+      });
+      return;
+    }
+    if (optIssuanceId !== undefined) {
+      try {
+        issuanceId = validateIssuanceId(optIssuanceId);
+      } catch (error) {
+        deps.report({ json }, error instanceof Error ? error.message : "Invalid --issuance-id.", {
+          code: "bad_issuance_id",
+        });
+        return;
+      }
+    }
+    try {
+      secretsReference = validateSecretsReferenceTemplate(optSecretsRef, agent as string);
+      secretsConfig = resolveSecretsServiceConfig(env);
+    } catch (error) {
+      if (error instanceof SecretsConfigurationError) {
+        deps.report({ json }, "Could not resolve one unambiguous Hasna Secrets service configuration.", {
+          code: error.code,
+        });
+        return;
+      }
+      const message = error instanceof Error ? error.message : "Invalid --secrets-ref.";
+      deps.report({ json }, message, { code: "bad_secrets_ref" });
+      return;
+    }
+  }
 
   let tid: string | undefined;
   if (optTid !== undefined) {
@@ -181,7 +504,9 @@ export async function runIssueKey(options: Record<string, unknown>, deps: IssueK
   }
 
   let minted: MintedApiKey;
+  let issuanceNowMs: number | undefined;
   try {
+    issuanceNowMs = deps.now ? deps.now() : undefined;
     minted = mintApiKey({
       app,
       scopes,
@@ -189,7 +514,8 @@ export async function runIssueKey(options: Record<string, unknown>, deps: IssueK
       ttlSeconds,
       ...(agent !== undefined ? { agent } : {}),
       ...(tid !== undefined ? { tid } : {}),
-      ...(deps.now ? { nowMs: deps.now() } : {}),
+      ...(issuanceId !== undefined ? { kid: issuanceId } : {}),
+      ...(issuanceNowMs !== undefined ? { nowMs: issuanceNowMs } : {}),
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -201,6 +527,236 @@ export async function runIssueKey(options: Record<string, unknown>, deps: IssueK
   const dbEnvName = databaseUrlEnvName(app, optDatabaseUrlEnv);
   const expiresAt = minted.claims.exp === null ? null : new Date(minted.claims.exp * 1000).toISOString();
   const issuedAt = new Date(minted.claims.iat * 1000).toISOString();
+
+  if (secretsReference) {
+    const secretsRef = secretsReference.resolve(minted.kid);
+    const createdBy = agent as string;
+    const connectionString = env[dbEnvName];
+    if (!connectionString) {
+      deps.report({ json }, `No database URL found. Set ${dbEnvName}.`, {
+        code: "missing_database_url",
+        databaseUrlEnv: dbEnvName,
+      });
+      return;
+    }
+
+    let handle: IssueKeyStoreHandle | undefined;
+    let secretsClient: IssueKeySecretsClient | undefined;
+    let storageReady = false;
+    try {
+      const connect = deps.connectStore ?? connectStore;
+      handle = await connect(connectionString, table);
+      await handle.store.ensureSchema();
+      if (!handle.store.revoke || !handle.store.insertMintedPending || !handle.store.activatePending) {
+        deps.report({ json }, "The selected key store does not support fail-closed compensation.", {
+          code: "bad_secrets_store_contract",
+        });
+        return;
+      }
+      if (issuanceId && !handle.store.findByKid) {
+        deps.report({ json }, "The selected key store does not support idempotent issuance reconciliation.", {
+          code: "bad_secrets_store_contract",
+        });
+        return;
+      }
+      const connectVault = deps.connectSecrets ?? connectSecrets;
+      secretsClient = await connectVault(secretsConfig!);
+      if (issuanceId && !secretsClient.listSecrets) {
+        deps.report({ json }, "The selected Secrets client does not support metadata-only issuance reconciliation.", {
+          code: "bad_secrets_store_contract",
+        });
+        return;
+      }
+      storageReady = true;
+    } catch {
+      deps.report({ json }, "Could not prepare credential-safe key storage.", {
+        code: "storage_prepare_failed",
+      });
+      return;
+    } finally {
+      if (!storageReady) await closeQuietly(handle);
+    }
+
+    // An explicit issuance id makes a command retry address the same kid and
+    // vault reference. Bind it to the stored request metadata and reconcile
+    // without reading the token from Secrets or placing it on an output surface.
+    if (issuanceId) {
+      let existing: ApiKeyRecord | null;
+      try {
+        existing = await handle.store.findByKid!(minted.kid);
+      } catch {
+        deps.report({ json }, "Could not inspect the existing credential issuance.", {
+          code: "issuance_reconciliation_failed",
+          app,
+          kid: minted.kid,
+          issuanceId: minted.kid,
+          agent: createdBy,
+          secretsRef,
+        });
+        await closeQuietly(handle);
+        return;
+      }
+      if (existing) {
+        const matches = existingIssuanceMatches(existing, {
+          app,
+          agent: createdBy,
+          tid,
+          scopes: minted.claims.scopes,
+          ttlSeconds,
+        });
+        if (!matches) {
+          deps.report({ json }, "The issuance id is already bound to a different credential request.", {
+            code: "issuance_conflict",
+            app,
+            kid: minted.kid,
+            issuanceId: minted.kid,
+            agent: createdBy,
+            secretsRef,
+          });
+          await closeQuietly(handle);
+          return;
+        }
+
+        let vaultPresent = false;
+        try {
+          vaultPresent = await hasExactSecretMetadata(secretsClient, secretsRef);
+        } catch {
+          // A metadata-read failure cannot justify either minting a replacement
+          // or claiming the previous delivery exists.
+        }
+        const pending =
+          existing.revokedAt !== null && existing.revokedReason === API_KEY_ISSUANCE_PENDING_REASON;
+        let active = existing.revokedAt === null && existing.revokedReason === null;
+        if (pending && vaultPresent) {
+          try {
+            active = await activateIdempotently(handle.store, existing);
+          } catch {
+            active = false;
+          }
+        }
+        const expired =
+          existing.expiresAt !== null && Date.parse(existing.expiresAt) <= (issuanceNowMs ?? Date.now());
+        if (!active || !vaultPresent || expired) {
+          deps.report({ json }, "Could not reconcile the existing credential issuance to one usable record and vault row.", {
+            code: "issuance_reconciliation_failed",
+            app,
+            kid: existing.kid,
+            issuanceId: existing.kid,
+            agent: createdBy,
+            secretsRef,
+          });
+          await closeQuietly(handle);
+          return;
+        }
+
+        await closeQuietly(handle);
+        emitSilentReceipt(json, {
+          app,
+          kid: existing.kid,
+          agent: createdBy,
+          tid: existing.tid,
+          scopes: existing.scopes,
+          issuedAt: existing.issuedAt,
+          expiresAt: existing.expiresAt,
+          secretsRef,
+        });
+        return;
+      }
+    }
+
+    // At this point both consumers are ready. The DB write comes first in an
+    // issuance-pending (therefore revoked) state. Every released verifier
+    // already refuses that state, so an ambiguous vault response remains safe
+    // even if both best-effort cleanup operations are unavailable.
+    try {
+      await handle.store.insertMintedPending(minted, createdBy);
+    } catch {
+      if (issuanceId) {
+        // Another invocation may have won the same stable issuance id between
+        // our pre-read and INSERT. Never compensate a row this invocation did
+        // not create; the next ordinary retry will reconcile its exact state.
+        let concurrent: ApiKeyRecord | null = null;
+        try {
+          concurrent = await handle.store.findByKid!(minted.kid);
+        } catch {
+          // Preserve the fail-closed result below without exposing DB details.
+        }
+        if (concurrent) {
+          deps.report({ json }, "The credential issuance is already in progress; retry the same issuance id.", {
+            code: "issuance_in_progress",
+            app,
+            kid: minted.kid,
+            issuanceId: minted.kid,
+            agent: createdBy,
+            secretsRef,
+          });
+          await closeQuietly(handle);
+          return;
+        }
+      }
+      const compensated = await compensateRecord(handle.store, minted.kid);
+      deps.report({ json }, "Could not persist the credential record.", {
+        code: "store_failed",
+        app,
+        kid: minted.kid,
+        issuanceId: minted.kid,
+        agent: createdBy,
+        secretsRef,
+        compensated,
+      });
+      await closeQuietly(handle);
+      return;
+    }
+
+    try {
+      const metadata = await secretsClient.putSecret({
+        key: secretsRef,
+        value: minted.token,
+        type: "api_key",
+        label: `${app} API key for ${createdBy}`,
+      });
+      if (metadata.key !== secretsRef || metadata.type !== "api_key") {
+        throw new Error("Secrets metadata did not match the requested reference.");
+      }
+      const activated = await activateIdempotently(handle.store, minted);
+      if (!activated) throw new Error("The pending credential record could not be activated.");
+    } catch {
+      // A failed vault response is ambiguous: the write may have landed. A
+      // final activation failure is handled by the same fail-closed path. The
+      // record was inserted pending, so it remains unusable even when both
+      // best-effort cleanups fail. Neither cleanup forwards the underlying
+      // error because a producer may include token-bearing request data in it.
+      const recordCompensated = await compensateRecord(handle.store, minted.kid);
+      const vaultCompensated = await compensateSecret(secretsClient, secretsRef);
+      const compensated = recordCompensated && vaultCompensated;
+      deps.report({ json }, "Could not store the credential in Hasna Secrets.", {
+        code: "secrets_store_failed",
+        app,
+        kid: minted.kid,
+        issuanceId: minted.kid,
+        agent: createdBy,
+        secretsRef,
+        compensated,
+        recordCompensated,
+        vaultCompensated,
+      });
+      await closeQuietly(handle);
+      return;
+    }
+
+    await closeQuietly(handle);
+    emitSilentReceipt(json, {
+      app,
+      kid: minted.kid,
+      agent: createdBy,
+      tid: tid ?? null,
+      scopes: minted.claims.scopes,
+      issuedAt,
+      expiresAt,
+      secretsRef,
+    });
+    return;
+  }
 
   // The plaintext token is derived at mint time and never persisted anywhere.
   // EVERY exit path after minting must hand it to the operator: a persistence

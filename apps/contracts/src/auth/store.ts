@@ -25,6 +25,7 @@ export interface AuthQueryClient {
 }
 
 export const DEFAULT_API_KEYS_TABLE = "api_keys";
+export const API_KEY_ISSUANCE_PENDING_REASON = "credential_delivery_pending";
 
 export interface ApiKeyRecord {
   kid: string;
@@ -193,14 +194,22 @@ export class ApiKeyStore {
 
   /** Insert a hashed key record. Throws on duplicate kid/token hash. */
   async insert(input: InsertKeyInput): Promise<void> {
+    await this.insertWithLifecycle(input, null, null);
+  }
+
+  private async insertWithLifecycle(
+    input: InsertKeyInput,
+    revokedAt: string | null,
+    revokedReason: string | null,
+  ): Promise<void> {
     // Own-property read (see `ownTenantId`): a polluted prototype must not put
     // a tenant on a row the caller inserted without one.
     const tid = ownTenantId(input);
     const agent = ownAgentClaim(input);
     await this.client.execute(
       `INSERT INTO ${this.table}
-         (kid, app, agent, tid, scopes, token_hash, issued_at, expires_at, created_by)
-       VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9)`,
+         (kid, app, agent, tid, scopes, token_hash, issued_at, expires_at, created_by, revoked_at, revoked_reason)
+       VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9, $10, $11)`,
       [
         input.kid,
         input.app,
@@ -211,14 +220,15 @@ export class ApiKeyStore {
         input.issuedAt.toISOString(),
         input.expiresAt ? input.expiresAt.toISOString() : null,
         input.createdBy ?? null,
+        revokedAt,
+        revokedReason,
       ],
     );
   }
 
-  /** Convenience: persist the record for a freshly minted key. */
-  async insertMinted(minted: MintedApiKey, createdBy?: string): Promise<void> {
+  private mintedInput(minted: MintedApiKey, createdBy?: string): InsertKeyInput {
     const claims: ApiKeyClaims = minted.claims;
-    await this.insert({
+    return {
       kid: minted.kid,
       app: claims.app,
       // Own-property reads, both of them. The claims literal is built locally by
@@ -234,7 +244,57 @@ export class ApiKeyStore {
       issuedAt: new Date(claims.iat * 1000),
       expiresAt: claims.exp === null ? null : new Date(claims.exp * 1000),
       createdBy: createdBy ?? null,
-    });
+    };
+  }
+
+  /** Convenience: persist the record for a freshly minted active key. */
+  async insertMinted(minted: MintedApiKey, createdBy?: string): Promise<void> {
+    await this.insert(this.mintedInput(minted, createdBy));
+  }
+
+  /**
+   * Persist a freshly minted key in a fail-closed issuance state.
+   *
+   * The existing revocation columns deliberately carry this state so every
+   * released verifier already refuses the key. No schema migration or consumer
+   * upgrade is needed before credential-safe issuance can use it.
+   */
+  async insertMintedPending(minted: MintedApiKey, createdBy?: string, atMs = Date.now()): Promise<void> {
+    await this.insertWithLifecycle(
+      this.mintedInput(minted, createdBy),
+      new Date(atMs).toISOString(),
+      API_KEY_ISSUANCE_PENDING_REASON,
+    );
+  }
+
+  /**
+   * Idempotently activate one issuance identified by kid + token hash.
+   *
+   * A committed UPDATE can lose its response. Repeating this method then sees
+   * the already-active exact record and returns true; a different token with a
+   * colliding kid can never be accepted as the same issuance.
+   */
+  async activatePending(kid: string, tokenHash: string): Promise<boolean> {
+    const row = await this.client.get<Row>(
+      `UPDATE ${this.table}
+          SET revoked_at = NULL, revoked_reason = NULL
+        WHERE kid = $1
+          AND revoked_at IS NOT NULL
+          AND revoked_reason = $2
+          AND token_hash = $3
+      RETURNING kid`,
+      [kid, API_KEY_ISSUANCE_PENDING_REASON, tokenHash],
+    );
+    if (row) return true;
+    const active = await this.client.get<Row>(
+      `SELECT kid FROM ${this.table}
+        WHERE kid = $1
+          AND token_hash = $2
+          AND revoked_at IS NULL
+          AND revoked_reason IS NULL`,
+      [kid, tokenHash],
+    );
+    return active !== null;
   }
 
   async findByKid(kid: string): Promise<ApiKeyRecord | null> {
