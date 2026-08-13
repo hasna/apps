@@ -316,6 +316,54 @@ describe("renameChannel", () => {
     expect(channels[0].message_count).toBe(1);
     expect(channels[0].member_count).toBe(1);
   });
+
+  test("refuses a rename without reparenting when reply parents exist", () => {
+    createChannel("thread-immutable", "alice");
+    const root = sendMessage({
+      from: "alice", to: "thread-immutable", content: "root",
+      channel: "thread-immutable", session_id: "channel:thread-immutable",
+    });
+    sendMessage({
+      from: "bob", to: "thread-immutable", content: "reply",
+      channel: "thread-immutable", session_id: "channel:thread-immutable",
+      reply_to: root.id, reply_to_uuid: root.uuid,
+    });
+
+    expect(() => renameChannel("thread-immutable", "thread-blocked")).toThrow(
+      "reply parent scope is immutable while replies exist",
+    );
+    expect(getChannel("thread-immutable")).not.toBeNull();
+    expect(getChannel("thread-blocked")).toBeNull();
+    expect(readMessages({ channel: "thread-immutable" })).toHaveLength(2);
+  });
+
+  test("reparenting rewrites the reply-parent scope atomically and preserves the reply chain", () => {
+    createChannel("thread-reparent", "alice");
+    const root = sendMessage({
+      from: "alice", to: "thread-reparent", content: "root",
+      channel: "thread-reparent", session_id: "channel:thread-reparent",
+    });
+    const reply = sendMessage({
+      from: "bob", to: "thread-reparent", content: "reply",
+      channel: "thread-reparent", session_id: "channel:thread-reparent",
+      reply_to: root.id, reply_to_uuid: root.uuid,
+    });
+
+    const channel = renameChannel("thread-reparent", "thread-moved", { reparent: true });
+    expect(channel.name).toBe("thread-moved");
+
+    const moved = readMessages({ channel: "thread-moved" });
+    expect(moved).toHaveLength(2);
+    expect(readMessages({ channel: "thread-reparent" })).toHaveLength(0);
+    expect(moved.every((m) => m.channel === "thread-moved" && m.session_id === "channel:thread-moved")).toBe(true);
+
+    const movedRoot = moved.find((m) => m.id === root.id);
+    const movedReply = moved.find((m) => m.id === reply.id);
+    expect(movedRoot?.uuid).toBe(root.uuid);
+    expect(movedRoot?.created_at).toBe(root.created_at);
+    expect(movedReply?.reply_to).toBe(root.id);
+    expect(movedReply?.created_at).toBe(reply.created_at);
+  });
 });
 
 describe("updateChannel rename via --name", () => {

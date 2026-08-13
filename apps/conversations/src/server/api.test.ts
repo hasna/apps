@@ -25,6 +25,7 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
   const agentPresence = new Map<string, any>();
   const manyCalls: Array<{ sql: string; params: readonly unknown[] }> = [];
   const queryCalls: Array<{ sql: string; params: readonly unknown[] }> = [];
+  const scopeRewriteCalls: Array<{ sql: string; params: readonly unknown[] }> = [];
   const projects: Record<string, any> = Object.fromEntries(
     initialProjects.map((project) => [project.id, { ...project }]),
   );
@@ -252,6 +253,9 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
       return { rows: [], rowCount: 0 };
     },
     async get(sql: string, p: readonly unknown[] = []): Promise<any> {
+      if (/set_config\('hasna\.conversations\.channel_scope_rewrite'/i.test(sql)) {
+        scopeRewriteCalls.push({ sql, params: [...p] });
+      }
       if (/SELECT 1 AS ok/i.test(sql)) return { ok: 1 };
       if (/SELECT \* FROM resource_locks/i.test(sql)) {
         const [resourceType, resourceId, lockType] = p as any[];
@@ -771,6 +775,7 @@ function makeFakeClient(initialProjects: Array<Record<string, any>> = [
       agentPresence,
       manyCalls,
       queryCalls,
+      scopeRewriteCalls,
       projects,
       seedChannel(input: Record<string, any>, members: string[], channelMessages: any[]) {
         channels[input.name] = { ...input };
@@ -1672,6 +1677,82 @@ describe("conversations-serve", () => {
         channel: source,
         session_id: `channel:${source}`,
         to_agent: source,
+      });
+    } finally {
+      renameServer.stop(true);
+    }
+  });
+
+  test("PATCH rename arms the scope-rewrite GUC only when reparent is requested", async () => {
+    const source = "reparent-source";
+    const target = "reparent-target";
+    const finalName = "reparent-final";
+    const renameClient = makeFakeClient([]);
+    renameClient.__debug.seedChannel(
+      {
+        id: "chn_abcdef0123456789abcdef0123456789",
+        name: source,
+        description: null,
+        topic: null,
+        project_id: null,
+        created_by: "alice",
+        created_at: "2026-08-07T00:00:00.000Z",
+        archived_at: null,
+        metadata: null,
+        tags: null,
+      },
+      ["alice"],
+      [{
+        id: 1,
+        uuid: "reparent-root",
+        channel: source,
+        session_id: `channel:${source}`,
+        from_agent: "alice",
+        to_agent: source,
+        content: "root",
+        created_at: "2026-08-07T00:00:01.000Z",
+      }],
+    );
+    const renameServer = startApiServer({
+      port: 0,
+      host: "127.0.0.1",
+      deps: {
+        client: renameClient as any,
+        keys: new ApiKeyStore(renameClient as any),
+        verifier: verifyApiKey({
+          app: "conversations",
+          signingSecret: SIGNING,
+          isRevoked: async () => false,
+        }),
+      },
+    });
+    const renameBase = `http://127.0.0.1:${renameServer.port}`;
+    const headers = { "x-api-key": rwKey, "content-type": "application/json" };
+
+    try {
+      const plain = await fetch(`${renameBase}/v1/channels/${source}`, {
+        method: "PATCH",
+        headers,
+        body: JSON.stringify({ name: target }),
+      });
+      expect(plain.status).toBe(200);
+      expect(renameClient.__debug.scopeRewriteCalls).toHaveLength(0);
+
+      const reparent = await fetch(`${renameBase}/v1/channels/${target}`, {
+        method: "PATCH",
+        headers,
+        body: JSON.stringify({ name: finalName, reparent: true }),
+      });
+      expect(reparent.status).toBe(200);
+      expect(renameClient.__debug.scopeRewriteCalls).toHaveLength(1);
+      const guard = JSON.parse(String(renameClient.__debug.scopeRewriteCalls[0].params[0])) as Record<string, unknown>;
+      expect(guard).toMatchObject({
+        old_session_id: `channel:${target}`,
+        new_session_id: `channel:${finalName}`,
+        old_channel: target,
+        new_channel: finalName,
+        old_to_agent: target,
+        new_to_agent: finalName,
       });
     } finally {
       renameServer.stop(true);

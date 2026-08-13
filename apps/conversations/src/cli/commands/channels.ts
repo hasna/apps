@@ -275,6 +275,10 @@ export function registerChannelCommands(program: Command): void {
     .argument("<name>", "Current channel name")
     .argument("<new-name>", "New channel name")
     .option("-j, --json", "Output as JSON")
+    .option(
+      "--reparent",
+      "Rewrite reply-parent scopes atomically with the rename (required when the channel has replies)",
+    )
     .action(async (name, newName, opts) => {
       const channelName = typeof name === "string" ? name.trim() : "";
       const target = typeof newName === "string" ? newName.trim() : "";
@@ -288,7 +292,7 @@ export function registerChannelCommands(program: Command): void {
       }
 
       try {
-        const sp = await getStore().renameChannel(channelName, target);
+        const sp = await getStore().renameChannel(channelName, target, { reparent: Boolean(opts.reparent) });
         if (opts.json) {
           printJson(sp);
         } else {
