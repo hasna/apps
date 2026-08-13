@@ -6,11 +6,14 @@ export interface StatuslineConfig {
   separator: string;
   /** Ordered list of enabled segment ids. */
   segments: string[];
+  /** Colourize segments that ask for it (default on; off when `NO_COLOR` is set). */
+  colors?: boolean;
 }
 
 export function defaultConfig(): StatuslineConfig {
   return {
     separator: " · ",
+    colors: true,
     segments: [
       "machine",
       "project",
@@ -40,6 +43,7 @@ export function loadConfig(path = configPath()): StatuslineConfig {
       segments: Array.isArray(raw.segments)
         ? raw.segments.filter((s: unknown) => typeof s === "string")
         : fallback.segments,
+      colors: typeof raw.colors === "boolean" ? raw.colors : fallback.colors,
     };
   } catch {
     return defaultConfig();

@@ -4,13 +4,20 @@ import { renderLine } from "./render.js";
 import { getSegment, segments } from "./segments/index.js";
 import pkg from "../package.json";
 
+export {
+  sessionAccount,
+  sessionAccountEmail,
+  sessionConfigDir,
+  sessionStateFile,
+  type SessionAccount,
+} from "./accounts.js";
 export { defaultConfig, loadConfig, saveConfig, configPath, type StatuslineConfig } from "./config.js";
 export { contextUsage, type ContextUsage } from "./context-window.js";
 export { compactAge, compactDuration, compactNum, money } from "./format.js";
 export { gitBranch, gitProjectName, gitRoot, lastCommitEpoch, trackedLineCount } from "./git.js";
-export { installClaude } from "./install.js";
+export { claudeSettingsPath, installClaude } from "./install.js";
 export { parseClaudeInput } from "./providers/claude.js";
-export type { Segment, StatusContext } from "./providers/types.js";
+export type { Segment, SegmentColor, StatusContext } from "./providers/types.js";
 export { renderLine } from "./render.js";
 export { getSegment, segments } from "./segments/index.js";
 
@@ -79,6 +86,10 @@ export function setSeparator(separator: string, config: StatuslineConfig = loadC
   return { config: { ...config, separator }, changed: ["separator"] };
 }
 
+export function setColors(colors: boolean, config: StatuslineConfig = loadConfig()): ConfigUpdateResult {
+  return { config: { ...config, colors }, changed: ["colors"] };
+}
+
 export function resetStatuslineConfig(): StatuslineConfig {
   return defaultConfig();
 }
@@ -97,6 +108,10 @@ export function sampleClaudeInput(cwd = process.cwd()): Record<string, unknown> 
     cost: { total_cost_usd: 12.34, total_duration_ms: 5_400_000, total_lines_added: 42, total_lines_removed: 7 },
     version: statuslineVersion,
     session_id: "preview0-0000-0000-0000-000000000000",
+    session_name: "preview thread",
+    effort: { level: "high" },
+    thinking: { enabled: true },
+    rate_limits: { five_hour: { used_percentage: 42 } },
   };
 }
 
