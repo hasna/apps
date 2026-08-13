@@ -96,15 +96,19 @@ jobs:
       # base is the CURRENT base branch ref — not
       # github.event.pull_request.base.sha, which is a snapshot from PR-open
       # time and goes stale as the base branch moves. On push to main it is
-      # HEAD^...HEAD. Without a correct base, push-to-main diffs main against
-      # itself ("build in 0 packages" — a vacuous green).
+      # HEAD^...HEAD, except on the ROOT commit where HEAD^ does not exist
+      # (measured on the repo's first push: turbo died with "ambiguous
+      # argument 'HEAD^'") — there the base falls back to HEAD, which diffs the
+      # root commit against itself and correctly builds nothing.
       - name: Compute affected base
         id: affected
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             echo "base=origin/${{ github.base_ref }}" >> "$GITHUB_OUTPUT"
-          else
+          elif git rev-parse --verify -q HEAD^ >/dev/null; then
             echo "base=HEAD^" >> "$GITHUB_OUTPUT"
+          else
+            echo "base=HEAD" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Build (affected)
