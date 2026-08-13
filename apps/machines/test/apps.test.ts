@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
@@ -46,7 +46,10 @@ function runProbeCommand(probeCommand: string, binaryOutput: string) {
   const binDir = join(dir, "bin");
   mkdirSync(binDir);
   const binaryPath = join(binDir, "machines");
+  const bunPath = join(binDir, "bun");
+  writeFileSync(bunPath, `#!/bin/sh\nprintf '%s\\n' ${shellQuote(binDir)}\n`);
   writeFileSync(binaryPath, `#!/bin/sh\nprintf '%s\\n' ${shellQuote(binaryOutput)}\n`);
+  chmodSync(bunPath, 0o755);
   chmodSync(binaryPath, 0o755);
   return spawnSync("sh", ["-c", probeCommand], {
     env: { ...process.env, PATH: `${binDir}:${process.env.PATH ?? ""}` },
@@ -362,7 +365,8 @@ describe("apps", () => {
       privileged: false,
       expectedVersion: "0.2.21",
     });
-    expect(plan.steps[0]?.probeCommand).toContain("'machines' --version");
+    expect(plan.steps[0]?.probeCommand).toContain("managerPath");
+    expect(plan.steps[0]?.probeCommand).toContain("--version");
     expect(plan.steps[0]?.probeCommand).not.toContain("@hasna/machines@0.2.21");
     expect(JSON.stringify(plan)).not.toContain("publish-token");
     expect(JSON.stringify(plan)).not.toContain("NODE_AUTH_TOKEN");
@@ -371,7 +375,7 @@ describe("apps", () => {
     const runner: MachineCommandRunner = (machineId, command, options) => {
       calls.push({ command, redactOutput: options?.redactOutput === true });
       if (command === "true") return { machineId, source: "ssh", stdout: "", stderr: "", exitCode: 0 };
-      if (command.includes("'machines' --version")) {
+      if (command.includes("managerPath") && command.includes("--version")) {
         return { machineId, source: "ssh", stdout: "installed=1\nversion=0.2.21\n", stderr: "", exitCode: 0 };
       }
       if (command === "bun install -g '@hasna/machines@0.2.21'") {
@@ -399,6 +403,115 @@ describe("apps", () => {
       { command: "bun install -g '@hasna/machines@0.2.21'", redactOutput: true },
       { command: plan.steps[0]?.probeCommand, redactOutput: true },
     ]);
+  });
+
+  test("reports a Bun owner/PATH collision instead of trusting a shadowed executable", () => {
+    const dir = mkdtempSync(join(tmpdir(), "machines-apps-bun-owner-collision-"));
+    probeFixtureDirs.push(dir);
+    const manifestPath = join(dir, "machines.json");
+    process.env["HASNA_MACHINES_MANIFEST_PATH"] = manifestPath;
+    writeFileSync(manifestPath, `${JSON.stringify({
+      version: 1,
+      packages: [{
+        name: "@hasna/codewith",
+        manager: "bun",
+        version: "0.1.92",
+        bin: "codewith",
+      }],
+      machines: [{
+        id: "remote-linux",
+        platform: "linux",
+        workspacePath: "/home/operator/workspace",
+      }],
+    }, null, 2)}\n`);
+
+    const plan = buildAppsPlan("remote-linux");
+    if (!("steps" in plan) || !plan.steps[0]?.probeCommand) throw new Error("expected one Bun package step");
+    const fakeBinDir = join(dir, "fake-bin");
+    const managerBinDir = join(dir, "bun-bin");
+    const shadowBinDir = join(dir, "shadow-bin");
+    mkdirSync(fakeBinDir);
+    mkdirSync(managerBinDir);
+    mkdirSync(shadowBinDir);
+    writeFileSync(join(fakeBinDir, "bun"), `#!/bin/sh\nprintf '%s\\n' ${shellQuote(managerBinDir)}\n`);
+    writeFileSync(join(managerBinDir, "codewith"), "#!/bin/sh\nprintf 'codewith 0.1.92\\n'\n");
+    writeFileSync(join(shadowBinDir, "codewith"), "#!/bin/sh\nprintf 'codewith 0.1.90\\n'\n");
+    chmodSync(join(fakeBinDir, "bun"), 0o755);
+    chmodSync(join(managerBinDir, "codewith"), 0o755);
+    chmodSync(join(shadowBinDir, "codewith"), 0o755);
+
+    const runner: MachineCommandRunner = (machineId, command) => {
+      if (command === "bun install -g '@hasna/codewith@0.1.92'") {
+        return { machineId, source: "ssh", stdout: "", stderr: "", exitCode: 0 };
+      }
+      const result = spawnSync("sh", ["-c", command], {
+        env: { ...process.env, PATH: `${shadowBinDir}:${fakeBinDir}:${process.env.PATH ?? ""}` },
+        encoding: "utf8",
+      });
+      return {
+        machineId,
+        source: "ssh",
+        stdout: result.stdout ?? "",
+        stderr: result.stderr ?? "",
+        exitCode: result.status ?? 1,
+      };
+    };
+
+    expect(() => runAppsInstall(
+      "remote-linux",
+      { apply: true, yes: true, expectedPlanDigest: plan.planDigest },
+      runner,
+    )).toThrow(new RegExp(`owner/PATH collision:.*${managerBinDir}.*${shadowBinDir}`));
+  });
+
+  test("accepts an active symlink that resolves to the Bun-managed executable", () => {
+    const dir = mkdtempSync(join(tmpdir(), "machines-apps-bun-owner-symlink-"));
+    probeFixtureDirs.push(dir);
+    const manifestPath = join(dir, "machines.json");
+    process.env["HASNA_MACHINES_MANIFEST_PATH"] = manifestPath;
+    writeFileSync(manifestPath, `${JSON.stringify({
+      version: 1,
+      packages: [{ name: "@hasna/codewith", manager: "bun", version: "0.1.92", bin: "codewith" }],
+      machines: [{ id: "remote-linux", platform: "linux", workspacePath: "/home/operator/workspace" }],
+    }, null, 2)}\n`);
+
+    const plan = buildAppsPlan("remote-linux");
+    if (!("steps" in plan) || !plan.steps[0]?.probeCommand) throw new Error("expected one Bun package step");
+    const fakeBinDir = join(dir, "fake-bin");
+    const managerBinDir = join(dir, "bun-bin");
+    const activeBinDir = join(dir, "active-bin");
+    mkdirSync(fakeBinDir);
+    mkdirSync(managerBinDir);
+    mkdirSync(activeBinDir);
+    const managerBinary = join(managerBinDir, "codewith");
+    writeFileSync(join(fakeBinDir, "bun"), `#!/bin/sh\nprintf '%s\\n' ${shellQuote(managerBinDir)}\n`);
+    writeFileSync(managerBinary, "#!/bin/sh\nprintf 'codewith 0.1.92\\n'\n");
+    symlinkSync(managerBinary, join(activeBinDir, "codewith"));
+    chmodSync(join(fakeBinDir, "bun"), 0o755);
+    chmodSync(managerBinary, 0o755);
+
+    const runner: MachineCommandRunner = (machineId, command) => {
+      if (command === "bun install -g '@hasna/codewith@0.1.92'") {
+        return { machineId, source: "ssh", stdout: "", stderr: "", exitCode: 0 };
+      }
+      const result = spawnSync("sh", ["-c", command], {
+        env: { ...process.env, PATH: `${activeBinDir}:${fakeBinDir}:${process.env.PATH ?? ""}` },
+        encoding: "utf8",
+      });
+      return {
+        machineId,
+        source: "ssh",
+        stdout: result.stdout ?? "",
+        stderr: result.stderr ?? "",
+        exitCode: result.status ?? 1,
+      };
+    };
+
+    expect(runAppsInstall(
+      "remote-linux",
+      { apply: true, yes: true, expectedPlanDigest: plan.planDigest },
+      runner,
+    )).toMatchObject({ executed: 1 });
   });
 
   test("extracts the version token from a banner with trailing build metadata", () => {
