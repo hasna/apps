@@ -1,0 +1,14 @@
+{
+  "operationType": "business_operation",
+  "business": {
+    "operation": "refund",
+    "resource": "invoice",
+    "amountUsd": 2500,
+    "customerId": "cus_example",
+    "irreversible": true
+  },
+  "session": {
+    "tool": "open-actions",
+    "traceId": "example-business-approval"
+  }
+}
