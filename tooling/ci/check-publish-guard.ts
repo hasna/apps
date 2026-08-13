@@ -4,8 +4,9 @@
  *
  * For every member package, dry-run `npm pack` and scan the resulting file
  * list for internal-infra strings: `*.hasna.xyz`, ARNs, 12-digit AWS account
- * ids. A public npm package that carries any of these leaks Hasna's internal
- * estate into the open.
+ * ids, the private-scope markers, and the internal platform account id. A
+ * public npm package that carries any of these leaks Hasna's internal estate
+ * into the open.
  *
  * Usage:
  *   bun tooling/ci/check-publish-guard.ts [--root <dir>]
@@ -24,6 +25,10 @@ const INTERNAL_PATTERNS: Array<{ name: string; re: RegExp }> = [
   { name: "hasna-xyz-domain", re: /[.]hasna[.]xyz/ },
   { name: "aws-arn", re: /arn[:]aws[:]/ },
   { name: "aws-account-id", re: /\b[0-9]{12}\b/ },
+  { name: "hasna-internal-org", re: /hasna[-]internal/ },
+  { name: "internal-apps", re: /internal[-]apps/ },
+  { name: "hasna-internal-scope", re: /@hasna[-]internal/ },
+  { name: "internal-platform-account", re: new RegExp("7898" + "77399345") },
 ];
 
 function memberPackages(root: string): string[] {
@@ -95,10 +100,18 @@ function selfTest(): number {
     `internal.${"hasna" + "." + "xyz"}/config.json`,
     `deploy/${"arn" + ":aws:" + "iam"}.txt`,
     `secrets/${"1".repeat(12)}-key.json`,
+    `deploy/${"hasna" + "-" + "internal"}/platform.yml`,
+    `pkg/${"internal" + "-" + "apps"}/cohort.json`,
+    `scoped/${"@hasna" + "-" + "internal"}/x.tgz`,
+    `account/${"7898" + "77399345"}.json`,
   ];
   const clean = ["dist/index.js", "readme.md", "bin/cli.js", "src/sdk.ts"];
   const badHits = scanNames(bad);
-  check(`fires on seeded internal-infra names (${badHits.length}/${bad.length})`, badHits.length === bad.length);
+  // Some seeded names match more than one pattern (the scoped marker contains
+  // the org marker; the account id is also 12 digits), so count distinct names
+  // that fired — every seeded name must fire at least once.
+  const fired = new Set(badHits.map((h) => h.name)).size;
+  check(`fires on seeded internal-infra names (${fired}/${bad.length})`, fired === bad.length);
   check(`stays silent on clean tarball names (0 hits)`, scanNames(clean).length === 0);
   if (failed) {
     console.error("self-test FAILED — the guard cannot be trusted");

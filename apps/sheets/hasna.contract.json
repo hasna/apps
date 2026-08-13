@@ -1,0 +1,32 @@
+{
+  "schema": "hasna.service_contract.v1",
+  "name": "sheets",
+  "class": "library",
+  "contractVersion": "v1",
+  "kitVersion": "0.4.2",
+  "description": "Headless spreadsheet SDK — a framework-agnostic workbook model with an MIT formula engine (fast-formula-parser), dependency-graph recalculation, and CSV/XLSX/JSON import-export. Ships a `react-spreadsheet`-backed editor from the @hasna/sheets/react entry point and a headless `sheets` CLI. v1 is a library + CLI; the HTTP service (sheets-serve), MCP server (sheets-mcp), and Postgres persistence described in the metadata block are planned surfaces, not yet implemented.",
+  "bins": ["sheets"],
+  "exports": [".", "./react"],
+  "storage": {
+    "mode": "local",
+    "envPrefix": "HASNA_SHEETS_",
+    "aliasEnvPrefix": "SHEETS_",
+    "databaseUrlSecretRef": "hasna/oss/sheets/database-url",
+    "sqlitePath": "~/.hasna/sheets/sheets.db"
+  },
+  "metadata": {
+    "service": {
+      "port": 19455,
+      "healthPath": "/health",
+      "readyPath": "/ready",
+      "versionPath": "/version",
+      "apiVersion": "v1",
+      "auth": "api-key",
+      "signingSecretSecretRef": "hasna/oss/sheets/api-key-signing-secret"
+    },
+    "client": {
+      "apiUrlEnv": "SHEETS_API_URL",
+      "apiKeyEnv": "SHEETS_API_KEY"
+    }
+  }
+}
