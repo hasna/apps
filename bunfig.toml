@@ -1,0 +1,14 @@
+# Coverage gating for member packages.
+#
+# Only the SCALAR form gates. MEASURED ON bun 1.3.14 (0d9b296a): the table form
+# `coverageThreshold = { line = 0.80, function = 0.80 }` is SILENTLY IGNORED and
+# exits 0 no matter how low coverage is — the check-that-cannot-fail class
+# wearing a config file. The scalar form is the only one that refuses.
+#
+# The threshold arms only when coverage is actually collected (`bun test
+# --coverage`). It is deliberately NOT `coverage = true` here: turbo runs each
+# package's own `bun test` with that package as cwd, where this file is not read
+# at all, and an always-on coverage setting would slow every unrelated `bun test`
+# while gating nothing extra.
+[test]
+coverageThreshold = 0.80

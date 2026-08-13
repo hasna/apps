@@ -1,0 +1,26 @@
+{
+  "$schema": "https://turborepo.com/schema.json",
+  "//": "turbo envMode is STRICT by default on this version (verified on the platform repo, turbo 2.5.4): a variable ABSENT from a task's `env` list DOES NOT REACH that task. When a member package starts reading a new variable, add it to the relevant task's `env` here in the same change. Note that `tasks` accepts task objects ONLY — a '//' comment key inside it is a hard parse error.",
+  "tasks": {
+    "build": {
+      "dependsOn": [
+        "^build"
+      ],
+      "outputs": [
+        "dist/**"
+      ],
+      "env": []
+    },
+    "test": {
+      "dependsOn": [
+        "build"
+      ],
+      "outputs": [],
+      "env": []
+    },
+    "lint": {
+      "outputs": [],
+      "env": []
+    }
+  }
+}

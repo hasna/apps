@@ -1,0 +1,25 @@
+{
+  "name": "@hasna/apps",
+  "private": true,
+  "version": "0.0.0",
+  "packageManager": "bun@1.3.14",
+  "description": "Hasna's public OSS apps monorepo — @hasna/* packages built and published from apps/ (per-app CLIs, unified hasna CLI, SDKs).",
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "turbo run build",
+    "test": "turbo run test",
+    "lint": "turbo run lint",
+    "check": "bun run check:names && bun run check:secrets && bun run check:manifests && bun run check:publish-guard",
+    "check:names": "bun tooling/ci/check-names.ts",
+    "check:secrets": "bun tooling/ci/check-secrets.ts",
+    "check:manifests": "bun tooling/ci/check-manifests.ts",
+    "check:publish-guard": "bun tooling/ci/check-publish-guard.ts"
+  },
+  "devDependencies": {
+    "@changesets/cli": "2.27.9",
+    "turbo": "2.5.4",
+    "typescript": "5.6.3"
+  }
+}

@@ -1,0 +1,11 @@
+# CODEOWNERS — two-tier review model
+#
+# Tier-0 paths below: review REQUIRED from the founder (@andrei-hasna).
+# Everything else: one approving review required (any authorized reviewer),
+# encoded via branch protection on the main branch.
+#
+# Tier-0 — contract- and infrastructure-critical paths → founder review required.
+
+/.github/                     @andrei-hasna
+/CODEOWNERS                   @andrei-hasna
+/contracts/                   @andrei-hasna
