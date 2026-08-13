@@ -153,7 +153,7 @@ export function postgresTodosSyncSchemaSql(
     // returns for a given input.
     `CREATE OR REPLACE FUNCTION todos_try_timestamptz(text)
       RETURNS timestamptz
-      LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE
+      LANGUAGE plpgsql IMMUTABLE PARALLEL UNSAFE
       SET DateStyle TO 'ISO, YMD'
       AS $$
       BEGIN

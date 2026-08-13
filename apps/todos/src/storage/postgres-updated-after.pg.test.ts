@@ -138,6 +138,14 @@ describe.skipIf(!PG_URL)("postgres updated_after since-cursor", () => {
     expect(names).not.toContain("todos_sync_records_task_updated_at_idx");
   });
 
+  test("todos_try_timestamptz is PARALLEL UNSAFE — its EXCEPTION block cannot run in a parallel worker", async () => {
+    const { rows } = await client.query<{ proparallel: string }>(
+      `SELECT proparallel FROM pg_proc WHERE proname = 'todos_try_timestamptz'`,
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].proparallel).toBe("u");
+  });
+
   test("todos_try_timestamptz reads a no-offset stamp as UTC under ANY session zone", async () => {
     for (const zone of ["UTC", "Asia/Tokyo", "America/Los_Angeles"]) {
       await pinned.query(`SET TimeZone TO '${zone}'`);
