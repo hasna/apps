@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.31
+
+Publishes merged PR #92, which fixes remote profile resolution so profile
+lookups use the complete bounded source rather than stopping at the default
+page. This keeps profile selection correct when the remote store contains more
+profiles than the first response page.
+
+The registry's 0.4.30 artifact was published before PR #92 merged. This
+release carries the exact merged main tree at `56416db` to the registry.
+
 ## 0.4.30
 
 Publishes the merged compiler and provider-surface work from PRs #88, #89,
