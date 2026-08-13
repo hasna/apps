@@ -909,6 +909,7 @@ describe("package-owned inbox installation", () => {
       bin?: Record<string, string>;
     };
     expect(pkg.bin?.["conversations-inbox"]).toBe("bin/inbox");
+    expect(pkg.bin?.inbox).toBeUndefined();
   });
 
   test("installs atomically while preserving the previous target", async () => {
