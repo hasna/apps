@@ -11,9 +11,19 @@
     "fleet-serve": "dist/server/index.js"
   },
   "exports": {
-    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" }
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
   },
-  "files": ["dist", "hasna.contract.json", "openapi.json", "docker-compose.yml", "LICENSE", "README.md"],
+  "files": [
+    "dist",
+    "hasna.contract.json",
+    "openapi.json",
+    "docker-compose.yml",
+    "LICENSE",
+    "README.md"
+  ],
   "scripts": {
     "build": "bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external @modelcontextprotocol/sdk --external hono && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk && bun build src/server/index.ts --outdir dist/server --target bun --external hono && bun build src/index.ts --outdir dist --target bun && tsc --emitDeclarationOnly --outDir dist",
     "typecheck": "tsc --noEmit",
@@ -28,11 +38,21 @@
     "dev:serve": "bun run src/server/index.ts",
     "postinstall": "node -e \"const fs=require('node:fs'),path=require('node:path'),os=require('node:os');const home=process.env.HOME||process.env.USERPROFILE||os.homedir();const root=path.join(home,'.hasna','fleet');try{fs.mkdirSync(root,{recursive:true,mode:0o700});for(const dir of ['config','data','exports','backups','logs','tmp'])fs.mkdirSync(path.join(root,dir),{recursive:true,mode:0o700});}catch{}\""
   },
-  "publishConfig": { "registry": "https://registry.npmjs.org", "access": "public" },
-  "repository": { "type": "git", "url": "git+https://github.com/hasna/fleet.git" },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org",
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hasna/fleet.git"
+  },
   "homepage": "https://github.com/hasna/fleet#readme",
-  "bugs": { "url": "https://github.com/hasna/fleet/issues" },
-  "engines": { "bun": ">=1.1.0" },
+  "bugs": {
+    "url": "https://github.com/hasna/fleet/issues"
+  },
+  "engines": {
+    "bun": ">=1.1.0"
+  },
   "author": "Andrei Hasna <andrei@hasna.com>",
   "license": "Apache-2.0",
   "dependencies": {
@@ -50,6 +70,7 @@
     "@types/bun": "^1.2.4",
     "@types/pg": "^8.11.10",
     "@types/react": "^18.3.18",
-    "typescript": "^5.7.3"
+    "typescript": "^5.7.3",
+    "bun-types": "1.3.14"
   }
 }
