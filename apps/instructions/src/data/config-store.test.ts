@@ -278,6 +278,34 @@ describe("CloudConfigStore CRUD mapping", () => {
     await expect(store.getProfile("missing")).rejects.toThrow("Profile not found: missing");
   });
 
+  test("profile show follow-up reads use the canonical id after slug recovery", async () => {
+    const canonicalId = "ae1030fc-4b10-41c7-a127-9d81fccfbac0";
+    const profile = { ...SAMPLE_PROFILE, id: canonicalId, slug: "my-setup" };
+    const m = mockFetch((call) => {
+      if (call.url.endsWith("/v1/profiles/my-setup")) return { status: 404, json: { error: "Profile not found: my-setup" } };
+      if (call.url.includes("/v1/profiles?")) return { json: page([profile]) };
+      if (call.url.includes(`/v1/profiles/${canonicalId}?`)) return { json: { profile, configs: page([SAMPLE]) } };
+      if (call.url.endsWith(`/v1/profiles/${canonicalId}/assets`)) return { json: { assets: [] } };
+      if (call.url.endsWith(`/v1/profiles/${canonicalId}/bindings`)) return { json: { bindings: [] } };
+      return { status: 404, json: { error: "unexpected slug follow-up" } };
+    });
+    active = m;
+    const store = new CloudConfigStore(CONFIG);
+
+    const resolved = await store.getProfile("my-setup");
+    await store.getProfileConfigsPage(resolved.id);
+    await store.getProfileAssetBindings(resolved.id);
+    await store.getProfileConfigBindings(resolved.id);
+
+    expect(m.calls.map((call) => call.url)).toEqual([
+      "https://instructions.hasna.xyz/v1/profiles/my-setup",
+      "https://instructions.hasna.xyz/v1/profiles?limit=100&cursor=0",
+      `https://instructions.hasna.xyz/v1/profiles/${canonicalId}?limit=20&cursor=0`,
+      `https://instructions.hasna.xyz/v1/profiles/${canonicalId}/assets`,
+      `https://instructions.hasna.xyz/v1/profiles/${canonicalId}/bindings`,
+    ]);
+  });
+
   test("maps profile asset CRUD to the separate cloud API paths", async () => {
     const m = mockFetch((call) => {
       if (call.method === "GET") return { json: { assets: [SAMPLE_ASSET] } };
