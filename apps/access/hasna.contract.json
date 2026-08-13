@@ -1,0 +1,20 @@
+{
+  "schema": "hasna.service_contract.v1",
+  "name": "access",
+  "class": "cli-with-store",
+  "contractVersion": "v1",
+  "kitVersion": "0.4.1",
+  "description": "Non-human-identity governance CLI + MCP + serve: inventory of every agent/service identity, its credentials and MCP tool scopes, owner mapping, JIT elevation, access reviews and one-click revocation, plus the cohort MCP bearer-token issuer. Local mode uses SQLite at ~/.hasna/access/access.db; cloud mode (HASNA_ACCESS_STORAGE_MODE=cloud) is PURE REMOTE per Amendment A1 with all reads/writes hitting the shared cloud Postgres.",
+  "bins": [
+    "access",
+    "access-mcp",
+    "access-serve"
+  ],
+  "storage": {
+    "mode": "local",
+    "envPrefix": "HASNA_ACCESS_",
+    "aliasEnvPrefix": "ACCESS_",
+    "databaseUrlSecretRef": "hasna/oss/access/database-url",
+    "sqlitePath": "~/.hasna/access/access.db"
+  }
+}
