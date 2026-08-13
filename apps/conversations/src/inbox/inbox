@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# inbox — one agent inbox over the conversations + todos CLIs.
+# conversations-inbox — one agent inbox over the conversations + todos CLIs.
 #
 # Verbs:  (bare)=check  check  watch  subscribe  unsubscribe  status  install
 #
@@ -44,7 +44,7 @@
 set -uo pipefail
 
 VERSION="1.4.3"
-PROG="inbox"
+PROG="conversations-inbox"
 
 # Tunables (all overridable by env; all documented in --help)
 LIMIT="${INBOX_LIMIT:-500}"            # rows per bounded message read (hard max 500)
@@ -70,7 +70,7 @@ EX_OK=0; EX_USAGE=2; EX_DEGRADED=3; EX_FAILED=4; EX_INT=130; EX_TERM=143
 AGENT=""; AGENT_SOURCE=""; INHERITED=0
 SEAT_KEY="${INBOX_SEAT:-}"
 SIGNATURE="${INBOX_SIGNATURE:-}"
-INSTALL_TARGET="${INBOX_INSTALL_TARGET:-$HOME/.hasna/bin/inbox}"
+INSTALL_TARGET="${INBOX_INSTALL_TARGET:-$HOME/.hasna/bin/conversations-inbox}"
 
 resolve_agent() {
   if [ -n "$AGENT" ]; then AGENT_SOURCE="--as"; return 0; fi
@@ -89,7 +89,7 @@ resolve_agent() {
     return 1
   fi
   AGENT_SOURCE="conversations whoami (machine-global file)"
-  # An inherited identity is a GUESS, and a bare `inbox` is the thing people
+  # An inherited identity is a GUESS, and a bare `conversations-inbox` is the thing people
   # type by reflex. Reporting under a guess is fine; advancing another seat's
   # cursor or task ledger under one is not -- it silently moves a high-water
   # mark that seat depends on. So an inherited identity is forced read-only.
@@ -435,7 +435,7 @@ cleanup() {
   [ -z "$INSTALL_TMP" ] || rm -f "$INSTALL_TMP"
 }
 
-# A WATCH THAT STOPS WATCHING MUST SAY SO. `inbox watch` was reported dying
+# A WATCH THAT STOPS WATCHING MUST SAY SO. `conversations-inbox watch` was reported dying
 # after ~15 minutes with a bare exit 1 -- a code outside this tool's contract,
 # with no message. That is the false-green this tool exists to detect, landing
 # inside the instrument itself: whatever supervises a monitor cannot tell "died"
@@ -538,7 +538,7 @@ refresh_subs() {
   # Zero subscriptions is the likeliest real cause of a permanently quiet
   # inbox -- never made, or dropped when the identity was released. It must
   # not be indistinguishable from calm.
-  [ "$SUBS_N" -eq 0 ] && degrade_add "subscriptions: none of [$AGENTS_TXT] is subscribed to ANY channel — channel traffic cannot reach you (inbox subscribe <channel>)"
+  [ "$SUBS_N" -eq 0 ] && degrade_add "subscriptions: none of [$AGENTS_TXT] is subscribed to ANY channel — channel traffic cannot reach you (conversations-inbox subscribe <channel>)"
   return 0
 }
 
@@ -906,7 +906,7 @@ do_check() {
 # ----------------------------------------------------------------------------
 # Forced read-only covers LOCAL state; subscribe/unsubscribe write REMOTELY, so
 # a guessed identity must not reach them at all. Otherwise a bare
-# `inbox subscribe X` subscribes whoever owns the machine-global id file while
+# `conversations-inbox subscribe X` subscribes whoever owns the machine-global id file while
 # the same run prints "Running READ-ONLY" -- a banner that would be false.
 refuse_if_inherited() {
   [ "$INHERITED" = 1 ] || return 0
@@ -1099,7 +1099,7 @@ Options
                      The FIRST owns remote subscribe/unsubscribe writes. Local
                      state is keyed by the sorted identity set.
   --seat <key>       stable state key when a seat's alias membership may change
-  --target <path>    install target (install only; default $HOME/.hasna/bin/inbox)
+  --target <path>    install target (install only; default $HOME/.hasna/bin/conversations-inbox)
   --interval <s>     watch poll interval, default 45
   --limit <n>        rows per bounded message read, default $LIMIT
   --todo-limit <n>   rows per todos poll, default $TODO_LIMIT
@@ -1149,7 +1149,7 @@ need_val() {
 
 CMD=""; ARGS=()
 case "${1:-}" in
-  # Bare `inbox` runs a check. It is the most natural thing to type and is
+  # Bare `conversations-inbox` runs a check. It is the most natural thing to type and is
   # documented that way in every skill home; help is -h/--help.
   "") CMD="check" ;;
   -h|--help|help) usage; exit $EX_OK ;;

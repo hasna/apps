@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 0.6.0 - 2026-08-13
+
+### Breaking
+
+- **The `inbox` binary is renamed to `conversations-inbox`.** The bin entry in package metadata is now `conversations-inbox` (the previous `inbox` name is removed, not aliased). The script's install target default moves to `$HOME/.hasna/bin/conversations-inbox`. Internal state paths (`INBOX_AGENT`, `INBOX_STATE_DIR`, `INBOX_SIGNATURE`, the `~/.hasna/inbox` state root) are unchanged so existing monitors keep their cursor and subscription state. Update any monitor invocation, skill, or wrapper that calls `inbox` to call `conversations-inbox`.
+
 ## 0.5.47 - 2026-08-12
 
 ### Fixed
