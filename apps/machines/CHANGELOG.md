@@ -74,6 +74,13 @@ reported success about things it had not actually established.
   than reached by deleting a check. Physical classes are untouched: `dgx-spark`
   keeps `tailscale:join` and gets no absence item.
 
+## [0.2.24] - 2026-08-14
+
+### Fixed
+
+- `apps apply` now runs every declared custom app probe after installation,
+  failing closed when the active owner or expected version is not verified.
+
 ## [0.2.23] - 2026-08-13
 
 ### Fixed
