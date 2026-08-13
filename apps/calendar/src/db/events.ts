@@ -1,0 +1,196 @@
+import { Database } from "bun:sqlite";
+import { getDatabase } from "./database.js";
+import { assertEventEndsAfterStart, compareEventInstants, compareEventTimestampStrings, parseEventTimestamp, parseTimeRange } from "./event-time.js";
+import type { Event, CreateEventInput, UpdateEventInput } from "../types/index.js";
+import { NotFoundError } from "../types/index.js";
+
+function rowToEvent(row: any): Event {
+  return {
+    id: row.id,
+    calendar_id: row.calendar_id,
+    org_id: row.org_id,
+    title: row.title,
+    description: row.description,
+    location: row.location,
+    start_at: row.start_at,
+    end_at: row.end_at,
+    all_day: !!row.all_day,
+    timezone: row.timezone,
+    status: row.status as Event["status"],
+    busy_type: row.busy_type as Event["busy_type"],
+    visibility: row.visibility as Event["visibility"],
+    recurrence_rule: row.recurrence_rule,
+    recurrence_exception_dates: row.recurrence_exception_dates ? JSON.parse(row.recurrence_exception_dates as string) : null,
+    source_task_id: row.source_task_id,
+    created_by: row.created_by,
+    metadata: row.metadata ? JSON.parse(row.metadata as string) : {},
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+function positiveInteger(value: number | undefined): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
+}
+
+export function createEvent(input: CreateEventInput, db?: Database): Event {
+  db = db || getDatabase();
+  const id = crypto.randomUUID().slice(0, 8);
+  assertEventEndsAfterStart(input.start_at, input.end_at);
+
+  db.run(
+    `INSERT INTO events (id, calendar_id, org_id, title, description, location, start_at, end_at, all_day, timezone, status, busy_type, visibility, recurrence_rule, recurrence_exception_dates, source_task_id, created_by, metadata)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [id, input.calendar_id, input.org_id, input.title, input.description || null, input.location || null, input.start_at, input.end_at, input.all_day ? 1 : 0, input.timezone || "UTC", input.status || "confirmed", input.busy_type || "busy", input.visibility || "default", input.recurrence_rule || null, input.recurrence_exception_dates ? JSON.stringify(input.recurrence_exception_dates) : null, input.source_task_id || null, input.created_by || null, JSON.stringify(input.metadata || {})]
+  );
+
+  return getEvent(id, db)!;
+}
+
+export function getEvent(id: string, db?: Database): Event | null {
+  db = db || getDatabase();
+  const row = db.query("SELECT * FROM events WHERE id = ?").get(id);
+  return row ? rowToEvent(row) : null;
+}
+
+export interface ListEventsFilter {
+  calendar_id?: string;
+  org_id?: string;
+  status?: string;
+  after?: string; // ISO date — events starting after this
+  before?: string; // ISO date — events starting before this
+  created_by?: string;
+  source_task_id?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export function listEvents(filter: ListEventsFilter = {}, db?: Database): Event[] {
+  db = db || getDatabase();
+  const conditions: string[] = [];
+  const params: any[] = [];
+  const after = filter.after ? parseEventTimestamp(filter.after) : null;
+  const before = filter.before ? parseEventTimestamp(filter.before) : null;
+
+  if (filter.calendar_id) { conditions.push("calendar_id = ?"); params.push(filter.calendar_id); }
+  if (filter.org_id) { conditions.push("org_id = ?"); params.push(filter.org_id); }
+  if (filter.status) { conditions.push("status = ?"); params.push(filter.status); }
+  if (filter.created_by) { conditions.push("created_by = ?"); params.push(filter.created_by); }
+  if (filter.source_task_id) { conditions.push("source_task_id = ?"); params.push(filter.source_task_id); }
+
+  const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+  const rows = db.query(`SELECT * FROM events ${where}`).all(...params);
+  const events = (rows as any[])
+    .map(rowToEvent)
+    .map((event) => ({ event, start: parseEventTimestamp(event.start_at) }))
+    .filter(({ start }) => (after === null || start >= after) && (before === null || start <= before))
+    .sort((a, b) => compareEventInstants(a.start, b.start) || a.event.start_at.localeCompare(b.event.start_at))
+    .map(({ event }) => event);
+
+  const offset = positiveInteger(filter.offset) || 0;
+  const limit = positiveInteger(filter.limit);
+  return limit ? events.slice(offset, offset + limit) : events.slice(offset);
+}
+
+export function updateEvent(id: string, input: UpdateEventInput, db?: Database): Event {
+  db = db || getDatabase();
+  const existing = getEvent(id, db);
+  if (!existing) throw new NotFoundError("Event", id);
+  const startAt = input.start_at ?? existing.start_at;
+  const endAt = input.end_at ?? existing.end_at;
+  assertEventEndsAfterStart(startAt, endAt);
+
+  db.run(
+    `UPDATE events SET title = ?, description = ?, location = ?, start_at = ?, end_at = ?, all_day = ?, timezone = ?, status = ?, busy_type = ?, visibility = ?, recurrence_rule = ?, recurrence_exception_dates = ?, source_task_id = ?, metadata = ?, updated_at = datetime('now') WHERE id = ?`,
+    [input.title ?? existing.title, input.description !== undefined ? input.description : existing.description, input.location !== undefined ? input.location : existing.location, input.start_at ?? existing.start_at, input.end_at ?? existing.end_at, input.all_day !== undefined ? (input.all_day ? 1 : 0) : (existing.all_day ? 1 : 0), input.timezone ?? existing.timezone, input.status ?? existing.status, input.busy_type ?? existing.busy_type, input.visibility ?? existing.visibility, input.recurrence_rule !== undefined ? input.recurrence_rule : existing.recurrence_rule, input.recurrence_exception_dates !== undefined ? (input.recurrence_exception_dates ? JSON.stringify(input.recurrence_exception_dates) : null) : (existing.recurrence_exception_dates ? JSON.stringify(existing.recurrence_exception_dates) : null), input.source_task_id !== undefined ? input.source_task_id : existing.source_task_id, JSON.stringify(input.metadata ?? existing.metadata), id]
+  );
+
+  return getEvent(id, db)!;
+}
+
+export function deleteEvent(id: string, db?: Database): boolean {
+  db = db || getDatabase();
+  const result = db.run(`DELETE FROM events WHERE id = ?`, [id]);
+  return result.changes > 0;
+}
+
+// ── Conflict detection ───────────────────────────────────────────────────────
+
+export interface TimeRange {
+  start: string;
+  end: string;
+}
+
+/** Find events that overlap with the given time range in a calendar */
+export function findConflicts(calendarId: string, range: TimeRange, excludeEventId?: string, db?: Database): Event[] {
+  db = db || getDatabase();
+  const exclude = excludeEventId ? "AND id != ?" : "";
+  const params = excludeEventId ? [calendarId, excludeEventId] : [calendarId];
+  const { start: rangeStart, end: rangeEnd } = parseTimeRange(range.start, range.end);
+
+  // Overlap: event.start < range.end AND event.end > range.start
+  const rows = db.query(
+    `SELECT * FROM events WHERE calendar_id = ? AND status != 'cancelled' ${exclude}`,
+  ).all(...params);
+
+  return (rows as any[])
+    .map(rowToEvent)
+    .map((event) => ({ event, start: parseEventTimestamp(event.start_at), end: parseEventTimestamp(event.end_at) }))
+    .filter(({ start, end }) => start < rangeEnd && end > rangeStart)
+    .sort((a, b) => compareEventInstants(a.start, b.start) || a.event.start_at.localeCompare(b.event.start_at))
+    .map(({ event }) => event);
+}
+
+/** Find conflicting events across all calendars for a specific agent in the time range */
+export function findAgentConflicts(agentId: string, range: TimeRange, excludeEventId?: string, db?: Database): Event[] {
+  db = db || getDatabase();
+  const exclude = excludeEventId ? "AND e.id != ?" : "";
+  const params = excludeEventId ? [agentId, excludeEventId] : [agentId];
+  const { start: rangeStart, end: rangeEnd } = parseTimeRange(range.start, range.end);
+
+  const rows = db.query(
+    `SELECT e.* FROM events e
+     INNER JOIN event_attendees a ON a.event_id = e.id
+     WHERE a.agent_id = ? AND e.status != 'cancelled' ${exclude}`,
+  ).all(...params);
+
+  return (rows as any[])
+    .map(rowToEvent)
+    .map((event) => ({ event, start: parseEventTimestamp(event.start_at), end: parseEventTimestamp(event.end_at) }))
+    .filter(({ start, end }) => start < rangeEnd && end > rangeStart)
+    .sort((a, b) => compareEventInstants(a.start, b.start) || a.event.start_at.localeCompare(b.event.start_at))
+    .map(({ event }) => event);
+}
+
+// ── FTS search ───────────────────────────────────────────────────────────────
+
+/**
+ * Turn free-text into a safe FTS5 MATCH expression. Raw user input can contain
+ * characters FTS5 parses as query syntax — a hyphen is a NOT, a colon is a
+ * column filter, and a bareword like `xyz` after a hyphen is read as a column
+ * name — which is why an unquoted `meeting-xyz` crashes with
+ * `no such column: xyz`. We extract alphanumeric barewords and wrap each as a
+ * quoted string term joined by implicit AND, which is literal and never a
+ * syntax/injection hazard. Returns "" when there is no searchable token.
+ */
+function toFtsMatchQuery(query: string): string {
+  const tokens = query.match(/[\p{L}\p{N}]+/gu);
+  if (!tokens || tokens.length === 0) return "";
+  return tokens.map((token) => `"${token}"`).join(" ");
+}
+
+export function searchEvents(query: string, orgId?: string, db?: Database): Event[] {
+  db = db || getDatabase();
+  const match = toFtsMatchQuery(query);
+  if (!match) return [];
+  const rows = db.query(
+    `SELECT e.* FROM events e
+     INNER JOIN events_fts f ON f.rowid = e.rowid
+     WHERE events_fts MATCH ?
+     ${orgId ? "AND e.org_id = ?" : ""}`,
+  ).all(match, ...(orgId ? [orgId] : []));
+
+  return (rows as any[])
+    .map(rowToEvent)
+    .sort((a, b) => compareEventTimestampStrings(a.start_at, b.start_at));
+}
