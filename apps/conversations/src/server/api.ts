@@ -678,11 +678,17 @@ async function processMentions(
  * transaction. Unlike the SQLite path (FKs off), Postgres enforces the
  * channel_members/channel_subscriptions → channels(name) FK, so the new channel
  * row is created first, children are moved, then the old row is dropped.
+ *
+ * When `opts.reparent` is set, the transaction-local scope-rewrite guard is
+ * armed so messages whose reply parents exist move atomically with the rename.
+ * Without it the reply-parent immutability trigger stays in force and the
+ * rename is rejected when reply parents exist.
  */
 async function renameChannelServer(
   client: PoolQueryClient,
   oldName: string,
   newName: string,
+  opts: { reparent?: boolean } = {},
 ): Promise<{ ok: true; name: string } | { ok: false; error: string; status: number }> {
   const from = normalizeChannelName(oldName);
   const to = normalizeChannelName(newName);
@@ -703,17 +709,23 @@ async function renameChannelServer(
     if (reserved && reserved.current_channel !== from) {
       return { ok: false as const, error: `Channel #${to} is a reserved historical alias.`, status: 409 };
     }
-    await tx.get(
-      "SELECT set_config('hasna.conversations.channel_scope_rewrite', $1, TRUE) AS configured",
-      [JSON.stringify({
-        old_session_id: `channel:${from}`,
-        new_session_id: `channel:${to}`,
-        old_channel: from,
-        new_channel: to,
-        old_to_agent: from,
-        new_to_agent: to,
-      })],
-    );
+    // Reply-parent scopes are immutable while replies exist. Only an explicit
+    // reparent request arms the transaction-local rewrite guard that lets the
+    // message scope move atomically with the rename; a plain rename keeps the
+    // guard in force and the server rejects it when reply parents exist.
+    if (opts.reparent) {
+      await tx.get(
+        "SELECT set_config('hasna.conversations.channel_scope_rewrite', $1, TRUE) AS configured",
+        [JSON.stringify({
+          old_session_id: `channel:${from}`,
+          new_session_id: `channel:${to}`,
+          old_channel: from,
+          new_channel: to,
+          old_to_agent: from,
+          new_to_agent: to,
+        })],
+      );
+    }
     // The source and replacement rows briefly share the same immutable id.
     // Migration 4 makes this constraint deferrable so uniqueness is checked
     // after the source row is deleted at transaction commit.
@@ -2695,7 +2707,9 @@ async function handleV1(
       const body = await readJson(req);
       // A rename (new name) is applied first, then field updates target the new name.
       if (body.name !== undefined && normalizeChannelName(String(body.name)) !== name) {
-        const renamed = await renameChannelServer(client, name, String(body.name));
+        const renamed = await renameChannelServer(client, name, String(body.name), {
+          reparent: body.reparent === true,
+        });
         if (!renamed.ok) return json({ error: renamed.error }, renamed.status);
         name = renamed.name;
       }

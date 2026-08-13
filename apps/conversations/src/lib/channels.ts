@@ -279,10 +279,12 @@ function localHasColumn(db: ReturnType<typeof getDb>, table: string, column: str
  *  - fails if the (normalized) old channel does not exist,
  *  - fails if the (normalized) new channel name already exists,
  *  - is a no-op returning the existing channel when old and new normalize equal,
+ *  - refuses without `opts.reparent` when messages with reply parents exist, so
+ *    the reply-parent scope guard stays in force on the unsafe path,
  *  - updates the channel row in place (by name) and rewrites every table that
  *    references the channel name, all inside a single transaction.
  */
-export function renameChannel(oldName: string, newName: string): Channel {
+export function renameChannel(oldName: string, newName: string, opts: { reparent?: boolean } = {}): Channel {
   const db = getDb();
   const from = normalizeChannelName(oldName);
   const to = normalizeChannelName(newName);
@@ -307,14 +309,26 @@ export function renameChannel(oldName: string, newName: string): Channel {
     throw new Error(`Channel #${to} is a reserved historical alias for #${targetAlias.current_channel}.`);
   }
 
+  if (!opts.reparent) {
+    const replyParents = db.prepare(
+      `SELECT COUNT(*) AS n FROM messages
+       WHERE channel = ? AND id IN (SELECT DISTINCT reply_to FROM messages WHERE reply_to IS NOT NULL)`,
+    ).get(from) as { n: number };
+    if (replyParents.n > 0) {
+      throw new Error("reply parent scope is immutable while replies exist");
+    }
+  }
+
   db.exec("BEGIN");
   try {
     db.exec("PRAGMA defer_foreign_keys = ON");
-    db.prepare(
-      `INSERT INTO message_scope_rewrite_guard (
-         token, old_session_id, new_session_id, old_channel, new_channel, old_to_agent, new_to_agent
-       ) VALUES (1, ?, ?, ?, ?, ?, ?)`,
-    ).run(`channel:${from}`, `channel:${to}`, from, to, from, to);
+    if (opts.reparent) {
+      db.prepare(
+        `INSERT INTO message_scope_rewrite_guard (
+           token, old_session_id, new_session_id, old_channel, new_channel, old_to_agent, new_to_agent
+         ) VALUES (1, ?, ?, ?, ?, ?, ?)`,
+      ).run(`channel:${from}`, `channel:${to}`, from, to, from, to);
+    }
     // Channel row itself (PK is the name column).
     db.prepare("UPDATE channels SET name = ? WHERE name = ?").run(to, from);
 

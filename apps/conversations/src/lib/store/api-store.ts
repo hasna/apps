@@ -311,9 +311,14 @@ export class ApiStore implements ConversationsStore {
     const body = await this.patch<{ channel: unknown }>(`/channels/${encodeURIComponent(normalizeChannelName(name))}`, updates);
     return body.channel as never;
   };
-  renameChannel: ConversationsStore["renameChannel"] = async (oldName, newName) => {
-    const body = await this.patch<{ channel: unknown }>(`/channels/${encodeURIComponent(normalizeChannelName(oldName))}`, { name: newName });
-    return body.channel as never;
+  renameChannel: ConversationsStore["renameChannel"] = async (oldName, newName, opts) => {
+    const body: Record<string, unknown> = { name: newName };
+    if (opts?.reparent) body.reparent = true;
+    const res = await this.patch<{ channel: unknown }>(
+      `/channels/${encodeURIComponent(normalizeChannelName(oldName))}`,
+      body,
+    );
+    return res.channel as never;
   };
   archiveChannel: ConversationsStore["archiveChannel"] = async (name) => {
     const body = await this.post<{ channel: unknown }>(`/channels/${encodeURIComponent(normalizeChannelName(name))}/archive`);

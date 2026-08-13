@@ -229,9 +229,9 @@ describe("append-only incident projections", () => {
     expect(getUnreadBlockers("channel-reader").map((message) => message.id)).toEqual([projection.message.id]);
     expect(getUnreadBlockers("outsider")).toEqual([]);
 
-    renameChannel("incidents", "incident-log");
+    renameChannel("incidents", "incident-log", { reparent: true });
     expect(getUnreadBlockers("channel-reader").map((message) => message.id)).toEqual([projection.message.id]);
-    renameChannel("incident-log", "incident-archive");
+    renameChannel("incident-log", "incident-archive", { reparent: true });
     expect(getUnreadBlockers("channel-reader").map((message) => message.id)).toEqual([projection.message.id]);
     expect(getUnreadBlockers("outsider")).toEqual([]);
     expect(db.prepare(
@@ -265,7 +265,7 @@ describe("append-only incident projections", () => {
       "SELECT current_channel FROM channel_rename_aliases WHERE old_channel = 'incidents'",
     ).get()).toEqual({ current_channel: "incident-archive" });
 
-    renameChannel("incident-archive", "incidents");
+    renameChannel("incident-archive", "incidents", { reparent: true });
     expect(getUnreadBlockers("channel-reader").map((message) => message.id)).toEqual([future.message.id]);
     expect(db.prepare(
       "SELECT old_channel, current_channel FROM channel_rename_aliases ORDER BY old_channel",
@@ -332,7 +332,7 @@ describe("append-only incident projections", () => {
     expect(() => deleteMessage(projection.message.id, "todos-projector")).toThrow("append-only");
     const db = getDb();
     expect(() => db.prepare("UPDATE messages SET channel = 'other' WHERE id = ?").run(projection.message.id)).toThrow("append-only");
-    renameChannel("incidents", "incident-log");
+    renameChannel("incidents", "incident-log", { reparent: true });
     const renamed = getMessageById(projection.message.id)!;
     expect(renamed.channel).toBe("incident-log");
     expect(renamed.session_id).toBe("channel:incident-log");

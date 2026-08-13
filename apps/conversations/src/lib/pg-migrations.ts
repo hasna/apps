@@ -865,6 +865,10 @@ export const PG_MIGRATIONS: string[] = [
   // Migration 9: bounded incident/safe-read parity for existing PostgreSQL
   // installations. Previous migrations remain immutable; this migration adds
   // reply-scope integrity, append-only incident projections, and rename aliases.
+  // Amended 2026-08-13 (channel rename reparenting): the scope-rewrite guard
+  // accepts an unchanged session alongside the guarded mapping, so the two-step
+  // server rename (channel first, then session) can pass under an explicit
+  // reparent transaction without weakening the unarmed guard.
   `
   CREATE TABLE IF NOT EXISTS channel_rename_aliases (
     old_channel TEXT PRIMARY KEY,
@@ -900,9 +904,11 @@ export const PG_MIGRATIONS: string[] = [
   BEGIN
     IF guard_text IS NULL OR guard_text = '' THEN RETURN FALSE; END IF;
     guard := guard_text::jsonb;
-    RETURN old_session = guard->>'old_session_id'
-       AND new_session = guard->>'new_session_id'
-       AND (
+    RETURN (
+       (old_session = guard->>'old_session_id' AND new_session = guard->>'new_session_id')
+       OR old_session IS NOT DISTINCT FROM new_session
+     )
+     AND (
          (old_channel IS NOT DISTINCT FROM guard->>'old_channel'
           AND new_channel IS NOT DISTINCT FROM guard->>'new_channel')
          OR old_channel IS NOT DISTINCT FROM new_channel
