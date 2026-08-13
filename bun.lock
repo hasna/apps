@@ -350,6 +350,20 @@
         "react-spreadsheet",
       ],
     },
+    "apps/snapshots": {
+      "name": "@hasna/snapshots",
+      "version": "0.1.3",
+      "bin": {
+        "snapshots": "dist/cli/index.js",
+        "snapshots-agent": "dist/agent/index.js",
+        "snapshots-mcp": "dist/mcp/index.js",
+        "snapshots-serve": "dist/server/index.js",
+      },
+      "devDependencies": {
+        "@types/bun": "^1.3.14",
+        "typescript": "^5.9.3",
+      },
+    },
     "apps/tables": {
       "name": "@hasna/tables",
       "version": "0.1.0",
@@ -611,6 +625,8 @@
     "@hasna/router": ["@hasna/router@workspace:apps/router"],
 
     "@hasna/sheets": ["@hasna/sheets@workspace:apps/sheets"],
+
+    "@hasna/snapshots": ["@hasna/snapshots@workspace:apps/snapshots"],
 
     "@hasna/tables": ["@hasna/tables@workspace:apps/tables"],
 
@@ -1641,6 +1657,8 @@
     "@hasna/sheets/@types/react-dom": ["@types/react-dom@18.3.7", "", { "peerDependencies": { "@types/react": "^18.0.0" } }, "sha512-MEe3UeoENYVFXzoXEWsvcpg6ZvlrFNlOQ7EOsvhI3CfAXwzPfO8Qwuxd40nepsYKqyyVQnTdEfv68q91yLcKrQ=="],
 
     "@hasna/sheets/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
+
+    "@hasna/snapshots/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
 
     "@hasna/tables/@types/react-dom": ["@types/react-dom@18.3.7", "", { "peerDependencies": { "@types/react": "^18.0.0" } }, "sha512-MEe3UeoENYVFXzoXEWsvcpg6ZvlrFNlOQ7EOsvhI3CfAXwzPfO8Qwuxd40nepsYKqyyVQnTdEfv68q91yLcKrQ=="],
 
