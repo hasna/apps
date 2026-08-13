@@ -95,6 +95,9 @@ const MIGRATIONS = [
   `
   ALTER TABLE configs ADD COLUMN outputs TEXT NOT NULL DEFAULT '[]';
   `,
+  `
+  ALTER TABLE profile_configs ADD COLUMN binding TEXT NOT NULL DEFAULT '{"schema":"hasna.instructions.profile-config-binding/v1","activation":{"mode":"always"},"required":true,"fallback":"fail"}';
+  `,
 ];
 
 let _db: Database | null = null;
@@ -157,10 +160,20 @@ function applyMigrations(db: Database): void {
     currentVersion = 0;
   }
 
-  for (let i = currentVersion; i < MIGRATIONS.length; i++) {
-    db.exec(MIGRATIONS[i]!);
-    db.run(`INSERT OR REPLACE INTO schema_version (version) VALUES (${i + 1})`);
-  }
+  const applyOne = db.transaction((index: number) => {
+    if (!migrationEffectAlreadyPresent(db, index)) db.exec(MIGRATIONS[index]!);
+    db.run(`INSERT OR REPLACE INTO schema_version (version) VALUES (${index + 1})`);
+  });
+  for (let i = currentVersion; i < MIGRATIONS.length; i++) applyOne(i);
+}
+
+function migrationEffectAlreadyPresent(db: Database, index: number): boolean {
+  // Migration 4 can be observed in this state after an interrupted older
+  // process: its ALTER committed but schema_version still says 3. Treat the
+  // column as the durable effect, preserve its rows, and finish the receipt.
+  if (index !== 3) return false;
+  return db.query<{ name: string }, []>("PRAGMA table_info(profile_configs)").all()
+    .some((column) => column.name === "binding");
 }
 
 function ensureFeedbackTable(db: Database): void {

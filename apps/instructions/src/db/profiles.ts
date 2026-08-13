@@ -11,12 +11,15 @@ import type {
   BoundedReadOptions,
   BoundedReadPage,
   ProfileResolutionRead,
+  ProfileConfigBinding,
+  ProfileConfigBindingSpec,
 } from "../types/index.js";
 import { ProfileNotFoundError } from "../types/index.js";
 import { getDatabase, now, slugify, uuid } from "./database.js";
 import { getConfigById } from "./configs.js";
 import { detectMachineContext, normalizeOsFamily } from "../lib/machine.js";
 import { boundedReadPage, normalizeBoundedReadOptions } from "../lib/bounded-read.js";
+import { legacyProfileConfigBinding, normalizeProfileConfigBinding } from "../lib/instruction-graph.js";
 
 function rowToProfile(row: ProfileRow): Profile {
   return {
@@ -134,7 +137,8 @@ export function deleteProfile(idOrSlug: string, db?: Database): void {
 export function addConfigToProfile(
   profileIdOrSlug: string,
   configId: string,
-  db?: Database
+  db?: Database,
+  binding?: ProfileConfigBindingSpec,
 ): void {
   const d = db || getDatabase();
   const profile = getProfile(profileIdOrSlug, d);
@@ -145,9 +149,39 @@ export function addConfigToProfile(
     .get(profile.id);
   const order = (maxRow?.max_order ?? -1) + 1;
   d.run(
-    "INSERT OR IGNORE INTO profile_configs (profile_id, config_id, sort_order) VALUES (?, ?, ?)",
-    [profile.id, configId, order]
+    "INSERT OR IGNORE INTO profile_configs (profile_id, config_id, sort_order, binding) VALUES (?, ?, ?, ?)",
+    [profile.id, configId, order, JSON.stringify(normalizeProfileConfigBinding(binding))]
   );
+}
+
+export function setProfileConfigBinding(
+  profileIdOrSlug: string,
+  configId: string,
+  binding: ProfileConfigBindingSpec,
+  db?: Database,
+): ProfileConfigBinding {
+  const d = db || getDatabase();
+  const profile = getProfile(profileIdOrSlug, d);
+  const normalized = normalizeProfileConfigBinding(binding);
+  const result = d.run(
+    "UPDATE profile_configs SET binding = ? WHERE profile_id = ? AND config_id = ?",
+    [JSON.stringify(normalized), profile.id, configId],
+  );
+  if (result.changes !== 1) throw new Error(`Config ${configId} is not a member of profile ${profile.slug}.`);
+  return getProfileConfigBindings(profile.id, d).find((row) => row.config_id === configId)!;
+}
+
+export function getProfileConfigBindings(profileIdOrSlug: string, db?: Database): ProfileConfigBinding[] {
+  const d = db || getDatabase();
+  const profile = getProfile(profileIdOrSlug, d);
+  return d.query<{ profile_id: string; config_id: string; sort_order: number; binding: string | null }, [string]>(
+    "SELECT profile_id, config_id, sort_order, binding FROM profile_configs WHERE profile_id = ? ORDER BY sort_order, config_id",
+  ).all(profile.id).map((row) => ({
+    profile_id: row.profile_id,
+    config_id: row.config_id,
+    sort_order: row.sort_order,
+    binding: row.binding ? normalizeProfileConfigBinding(row.binding) : legacyProfileConfigBinding(),
+  }));
 }
 
 export function removeConfigFromProfile(

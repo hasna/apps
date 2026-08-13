@@ -2,7 +2,7 @@
 // Regenerate: bun run scripts/generate-sdk.ts
 
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
-// Source: Instructions V1 API 0.4.26
+// Source: Instructions V1 API 0.4.29
 
 export interface Config { "id"?: string; "name"?: string; "slug"?: string; "kind"?: string; "category"?: string; "agent"?: string; "target_path"?: string | null; "outputs"?: Array<Record<string, unknown>>; "format"?: string; "content"?: string; "description"?: string | null; "tags"?: Array<string>; "is_template"?: boolean; "version"?: number; "created_at"?: string; "updated_at"?: string; "synced_at"?: string | null }
 
@@ -15,6 +15,10 @@ export interface UpdateConfigInput { "name"?: string; "category"?: string; "agen
 export interface CreateProfileInput { "name": string; "description"?: string; "selectors"?: Record<string, unknown>; "variables"?: Record<string, unknown> }
 
 export interface AddProfileConfigInput { "config_id": string }
+
+export interface ProfileConfigBindingSpec { "schema": string; "activation": Record<string, unknown>; "required": boolean; "fallback": "fail" | "flatten" | "promote-always" | "omit"; "providers"?: Array<Record<string, unknown>>; "depends_on"?: Array<string>; "replaces"?: Array<string>; "conflicts_with"?: Array<string> }
+
+export interface ProfileConfigBinding { "profile_id": string; "config_id": string; "sort_order": number; "binding": ProfileConfigBindingSpec }
 
 export interface ProfileConfigAddedResponse { "added": boolean }
 
@@ -193,9 +197,27 @@ export class InstructionsV1Client {
       });
     }
 
+    /** List schema-versioned config bindings for a profile */
+    async getProfileConfigBindings(id: string, init?: RequestInit): Promise<{ "bindings"?: Array<ProfileConfigBinding> }> {
+      return this.request("GET", `/v1/profiles/${encodeURIComponent(String(id))}/bindings`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
     /** Add a config to a profile */
     async addConfigToProfile(id: string, body: AddProfileConfigInput, init?: RequestInit): Promise<ProfileConfigAddedResponse> {
       return this.request("POST", `/v1/profiles/${encodeURIComponent(String(id))}/configs`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Set the schema-versioned binding for one profile config */
+    async setProfileConfigBinding(id: string, configId: string, body: { "binding": ProfileConfigBindingSpec }, init?: RequestInit): Promise<{ "binding"?: ProfileConfigBinding }> {
+      return this.request("PUT", `/v1/profiles/${encodeURIComponent(String(id))}/configs/${encodeURIComponent(String(configId))}`, {
         body,
         query: undefined,
         init,

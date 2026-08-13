@@ -16,6 +16,7 @@ import { extractTemplateVars } from "../lib/template.js";
 import { detectMachineContext, resolveProfileVariables } from "../lib/machine.js";
 import { applySessionRender, restoreSessionRenderSnapshot } from "../lib/session-apply.js";
 import { normalizeSessionInstructionSourceId, planSessionRender, resolveSessionPath, sourceFromConfig, sourceFromFilePath, sourcesFromIdentityExport, SESSION_INSTRUCTION_LAYERS, SESSION_RENDER_TOOLS, type SessionInstructionLayer, type SessionInstructionSource, type SessionRenderFile, type SessionRenderPlan, type SessionRenderTool } from "../lib/session-render.js";
+import { normalizeProfileConfigBinding, planProfileSessionRender } from "../lib/instruction-graph.js";
 import { accountedGlobalSourceSlugs, computeGlobalSourceCoverage, formatGlobalSourceCoverageWarnings, type GlobalSourceCoverageResult } from "../lib/global-source-coverage.js";
 import { ensurePlatformProfiles } from "../lib/platform-profiles.js";
 import { ensureProjectDashboardStandardConfig } from "../lib/project-dashboard-standard.js";
@@ -253,6 +254,67 @@ async function collectSessionSources(
       merge: "replace",
       replacementScope: replacement.replacementScope,
     };
+  });
+}
+
+async function buildSessionRenderPlan(
+  opts: {
+    profile: string;
+    targetHome?: string;
+    projectRoot?: string;
+    sessionId?: string;
+    source?: string[];
+    config?: string[];
+    identityExport?: string[];
+    replaceSource?: string[];
+    codewithNativeImports?: boolean;
+    allowEmptySources?: boolean;
+    compileProfile?: string;
+    providerVersion?: string;
+    model?: string;
+    path?: string;
+    manual?: string[];
+  },
+  tool: SessionRenderTool,
+  store: ConfigStore,
+): Promise<SessionRenderPlan> {
+  if (!opts.compileProfile) {
+    const sources = await collectSessionSources(opts, tool, store);
+    return planSessionRender({
+      tool,
+      profile: opts.profile,
+      targetHome: opts.targetHome,
+      projectRoot: opts.projectRoot,
+      sessionId: opts.sessionId,
+      codewithNativeImports: opts.codewithNativeImports,
+      allowEmptySources: opts.allowEmptySources,
+      sources,
+    });
+  }
+  if (!opts.providerVersion?.trim()) throw new Error("--provider-version is required with --compile-profile.");
+  if ((opts.source?.length ?? 0) || (opts.config?.length ?? 0) || (opts.identityExport?.length ?? 0) || (opts.replaceSource?.length ?? 0)) {
+    throw new Error("--compile-profile cannot be mixed with --source, --config, --identity-export, or --replace-source.");
+  }
+  const profile = await store.getProfile(opts.compileProfile);
+  const configs = await store.getProfileConfigs(profile.id);
+  const bindings = await store.getProfileConfigBindings(profile.id);
+  return planProfileSessionRender({
+    profile_id: profile.id,
+    provider_version: opts.providerVersion,
+    tool,
+    profile: opts.profile,
+    targetHome: opts.targetHome,
+    projectRoot: opts.projectRoot,
+    sessionId: opts.sessionId,
+    codewithNativeImports: opts.codewithNativeImports,
+    allowEmptySources: opts.allowEmptySources,
+    configs,
+    bindings,
+    graph_context: {
+      ...(opts.model ? { model: opts.model } : {}),
+      ...(opts.path ? { path: opts.path } : {}),
+      ...(opts.manual?.length ? { manual: opts.manual } : {}),
+    },
   });
 }
 
@@ -972,7 +1034,7 @@ profileCmd.command("show <id>").description("Show profile and its configs")
     const p = await store.getProfile(id);
     const page = await store.getProfileConfigsPage(id, { limit: opts.limit, cursor: opts.cursor });
     if (opts.json) {
-      printJson({ profile: p, configs: page });
+      printJson({ profile: p, configs: page, bindings: await store.getProfileConfigBindings(id) });
       return;
     }
     console.log(chalk.bold(p.name) + chalk.dim(` (${p.slug})`));
@@ -1006,6 +1068,21 @@ profileCmd.command("remove <profile> <config>").description("Remove a config fro
     console.log(chalk.green("✓") + ` Removed ${c.slug} from profile ${profile}`);
   } catch (e) { console.error(chalk.red(formatCliError(e))); process.exit(1); }
 });
+
+profileCmd.command("binding <profile> <config>").description("Set a config's schema-versioned instruction binding in one profile")
+  .requiredOption("--input <path>", "JSON file containing the binding object")
+  .option("--json", "output the stored binding as JSON")
+  .action(async (profile, config, opts) => {
+    try {
+      const store = resolveConfigStore();
+      const selected = await store.getConfig(config);
+      const path = resolveSessionPath(opts.input);
+      const binding = normalizeProfileConfigBinding(JSON.parse(readSessionInstructionSourceFile(path)));
+      const stored = await store.setProfileConfigBinding(profile, selected.id, binding);
+      if (opts.json) printJson(stored);
+      else console.log(chalk.green("✓") + ` Updated ${selected.slug} binding in profile ${profile}`);
+    } catch (e) { console.error(chalk.red(formatCliError(e))); process.exit(1); }
+  });
 
 profileCmd.command("apply [id]").description("Apply all configs in a profile to disk")
   .option("--dry-run", "preview without writing")
@@ -1206,6 +1283,11 @@ sessionCmd.command("plan")
   .option("--config <layer:id-or-slug>", "stored config source by id/slug; repeatable; layer aliases match --source", collectOption, [])
   .option("--identity-export <path>", "OpenIdentities configs instruction export JSON; repeatable", collectOption, [])
   .option("--replace-source <replacer-id>[=<target-source-id>]", "source id that broadly replaces earlier layers, or targets one earlier source", collectOption, [])
+  .option("--compile-profile <id-or-slug>", "compile persisted config bindings from this Instructions profile")
+  .option("--provider-version <semver>", "installed provider version used for capability matching")
+  .option("--model <model>", "active model used for model activation")
+  .option("--path <path>", "active path recorded in the graph context")
+  .option("--manual <config-id-or-slug>", "manually activate a binding; repeatable", collectOption, [])
   .option("--codewith-native-imports", "select the gated Codewith native @ import adapter")
   .option("--allow-empty-sources", "allow an explicit empty render plan")
   .option("--check-global-coverage", "warn (non-fatal) when a registered, non-retired global-* source is absent from this render's --config list; expected is read fresh from the registry, independent of this plan (todos 102d6d0a)")
@@ -1218,17 +1300,7 @@ sessionCmd.command("plan")
         process.exit(1);
       }
       const store = resolveConfigStore();
-      const sources = await collectSessionSources(opts, tool, store);
-      const plan = planSessionRender({
-        tool,
-        profile: opts.profile,
-        targetHome: opts.targetHome,
-        projectRoot: opts.projectRoot,
-        sessionId: opts.sessionId,
-        codewithNativeImports: opts.codewithNativeImports,
-        allowEmptySources: opts.allowEmptySources,
-        sources,
-      });
+      const plan = await buildSessionRenderPlan(opts, tool, store);
       const globalCoverage = opts.checkGlobalCoverage ? await checkGlobalSourceCoverage(plan, store) : null;
       if (opts.json) {
         printJson({
@@ -1274,6 +1346,11 @@ sessionCmd.command("apply")
   .option("--config <layer:id-or-slug>", "stored config source by id/slug; repeatable; layer aliases match --source", collectOption, [])
   .option("--identity-export <path>", "OpenIdentities configs instruction export JSON; repeatable", collectOption, [])
   .option("--replace-source <replacer-id>[=<target-source-id>]", "source id that broadly replaces earlier layers, or targets one earlier source", collectOption, [])
+  .option("--compile-profile <id-or-slug>", "compile persisted config bindings from this Instructions profile")
+  .option("--provider-version <semver>", "installed provider version used for capability matching")
+  .option("--model <model>", "active model used for model activation")
+  .option("--path <path>", "active path recorded in the graph context")
+  .option("--manual <config-id-or-slug>", "manually activate a binding; repeatable", collectOption, [])
   .option("--codewith-native-imports", "select the gated Codewith native @ import adapter")
   .option("--allow-empty-sources", "allow an explicit empty render")
   .option("--check-global-coverage", "warn (non-fatal) when a registered, non-retired global-* source is absent from this render's --config list; expected is read fresh from the registry, independent of this plan (todos 102d6d0a)")
@@ -1288,17 +1365,7 @@ sessionCmd.command("apply")
         process.exit(1);
       }
       const store = resolveConfigStore();
-      const sources = await collectSessionSources(opts, tool, store);
-      const plan = planSessionRender({
-        tool,
-        profile: opts.profile,
-        targetHome: opts.targetHome,
-        projectRoot: opts.projectRoot,
-        sessionId: opts.sessionId,
-        codewithNativeImports: opts.codewithNativeImports,
-        allowEmptySources: opts.allowEmptySources,
-        sources,
-      });
+      const plan = await buildSessionRenderPlan(opts, tool, store);
       const globalCoverage = opts.checkGlobalCoverage ? await checkGlobalSourceCoverage(plan, store) : null;
       const result = applySessionRender(plan, { dryRun: opts.dryRun, force: opts.force });
       if (opts.json) {

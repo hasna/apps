@@ -48,8 +48,10 @@ CREATE TABLE IF NOT EXISTS profile_configs (
     profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
     config_id TEXT NOT NULL REFERENCES configs(id) ON DELETE CASCADE,
     sort_order INTEGER NOT NULL DEFAULT 0,
+    binding JSONB NOT NULL DEFAULT '{"schema":"hasna.instructions.profile-config-binding/v1","activation":{"mode":"always"},"required":true,"fallback":"fail"}'::jsonb,
     PRIMARY KEY (profile_id, config_id)
 );
+ALTER TABLE profile_configs ADD COLUMN IF NOT EXISTS binding JSONB NOT NULL DEFAULT '{"schema":"hasna.instructions.profile-config-binding/v1","activation":{"mode":"always"},"required":true,"fallback":"fail"}'::jsonb;
 
 CREATE TABLE IF NOT EXISTS machines (
     id TEXT PRIMARY KEY,

@@ -221,7 +221,47 @@ export interface ProfileResolutionRead {
   truncated: false;
 }
 
-// Profile ↔ Config join
+// Profile ↔ Config join. The binding is deliberately separate from Config:
+// one canonical config can participate in several profiles with different
+// activation, provider and graph semantics without cloning its content.
+export const PROFILE_CONFIG_BINDING_SCHEMA = "hasna.instructions.profile-config-binding/v1" as const;
+export const INSTRUCTION_ACTIVATION_MODES = ["always", "glob", "model", "manual"] as const;
+export type InstructionActivationMode = (typeof INSTRUCTION_ACTIVATION_MODES)[number];
+export const INSTRUCTION_FALLBACKS = ["fail", "flatten", "promote-always", "omit"] as const;
+export type InstructionFallback = (typeof INSTRUCTION_FALLBACKS)[number];
+
+export interface InstructionActivation {
+  mode: InstructionActivationMode;
+  globs?: string[];
+  models?: string[];
+  description?: string;
+  directory_scope?: string;
+}
+
+export interface InstructionProviderSelector {
+  provider: ConfigAgent;
+  version_range?: string;
+}
+
+export interface ProfileConfigBindingSpec {
+  schema: typeof PROFILE_CONFIG_BINDING_SCHEMA;
+  activation: InstructionActivation;
+  required: boolean;
+  fallback: InstructionFallback;
+  providers?: InstructionProviderSelector[];
+  depends_on?: string[];
+  replaces?: string[];
+  conflicts_with?: string[];
+}
+
+export interface ProfileConfigBinding {
+  profile_id: string;
+  config_id: string;
+  sort_order: number;
+  binding: ProfileConfigBindingSpec;
+}
+
+/** @deprecated Use ProfileConfigBinding for persisted profile membership. */
 export interface ProfileConfig {
   profile_id: string;
   config_id: string;

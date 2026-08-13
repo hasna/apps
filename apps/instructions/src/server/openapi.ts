@@ -104,6 +104,30 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
             config_id: { type: "string" },
           },
         },
+        ProfileConfigBindingSpec: {
+          type: "object",
+          required: ["schema", "activation", "required", "fallback"],
+          properties: {
+            schema: { type: "string", const: "hasna.instructions.profile-config-binding/v1" },
+            activation: { type: "object" },
+            required: { type: "boolean" },
+            fallback: { type: "string", enum: ["fail", "flatten", "promote-always", "omit"] },
+            providers: { type: "array", items: { type: "object" } },
+            depends_on: { type: "array", items: { type: "string" } },
+            replaces: { type: "array", items: { type: "string" } },
+            conflicts_with: { type: "array", items: { type: "string" } },
+          },
+        },
+        ProfileConfigBinding: {
+          type: "object",
+          required: ["profile_id", "config_id", "sort_order", "binding"],
+          properties: {
+            profile_id: { type: "string" },
+            config_id: { type: "string" },
+            sort_order: { type: "integer" },
+            binding: { $ref: "#/components/schemas/ProfileConfigBindingSpec" },
+          },
+        },
         ProfileConfigAddedResponse: {
           type: "object",
           required: ["added"],
@@ -384,6 +408,20 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
         },
       },
       "/v1/profiles/{id}/configs/{configId}": {
+        put: {
+          operationId: "setProfileConfigBinding",
+          summary: "Set the schema-versioned binding for one profile config",
+          security: [{ apiKey: [] }],
+          parameters: [
+            { name: "id", in: "path", required: true, schema: { type: "string" } },
+            { name: "configId", in: "path", required: true, schema: { type: "string" } },
+          ],
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: { type: "object", required: ["binding"], properties: { binding: { $ref: "#/components/schemas/ProfileConfigBindingSpec" } } } } },
+          },
+          responses: { "200": { content: { "application/json": { schema: { type: "object", properties: { binding: { $ref: "#/components/schemas/ProfileConfigBinding" } } } } } } },
+        },
         delete: {
           operationId: "removeConfigFromProfile",
           summary: "Remove a config from a profile",
@@ -402,6 +440,14 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
               },
             },
           },
+        },
+      },
+      "/v1/profiles/{id}/bindings": {
+        get: {
+          operationId: "getProfileConfigBindings",
+          summary: "List schema-versioned config bindings for a profile",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          responses: { "200": { content: { "application/json": { schema: { type: "object", properties: { bindings: { type: "array", items: { $ref: "#/components/schemas/ProfileConfigBinding" } } } } } } } },
         },
       },
       "/v1/stats": {
