@@ -41,6 +41,7 @@ const POLLUTION = {
   signingSecretEnv: "ATTACKER_SIGNING_ENV",
   databaseUrlEnv: "ATTACKER_DB_ENV",
   secretsRef: "todos/agents/{agent}/{kid}",
+  issuanceId: "attacker-issuance-id",
   json: true,
 } as const;
 
@@ -169,6 +170,7 @@ describe("commander own-property shape for issue-key", () => {
       .option("--database-url-env <name>", "")
       .option("--table <name>", "")
       .option("--secrets-ref <template>", "")
+      .option("--issuance-id <id>", "")
       .option("--no-store", "")
       .option("-j, --json", "")
       .action((options: Record<string, unknown>) => {
@@ -192,6 +194,7 @@ describe("commander own-property shape for issue-key", () => {
       "databaseUrlEnv",
       "table",
       "secretsRef",
+      "issuanceId",
       "json",
     ]) {
       expect(Object.hasOwn(captured!, absent)).toBe(false);
@@ -303,6 +306,15 @@ describe("issue-key: no polluted option reaches the signed body", () => {
     const parsed = JSON.parse(out) as Record<string, unknown>;
     expect(typeof parsed.token).toBe("string");
     expect(Object.hasOwn(parsed, "secretsRef")).toBe(false);
+  });
+
+  test("a polluted `issuanceId` cannot choose the signed key id", async () => {
+    const { out, reports } = await withPolluted(["issuanceId"], () =>
+      run({ app: APP, scopes: "todos:read", store: false, json: true }, BASE_ENV),
+    );
+
+    expect(reports).toEqual([]);
+    expect(signedClaims(out).kid).not.toBe(POLLUTION.issuanceId);
   });
 });
 

@@ -33,9 +33,15 @@ class PendingStoreClient implements AuthQueryClient {
     }
     if (sql.startsWith("UPDATE") && sql.includes("SET revoked_at = NULL")) {
       if (!row || !row.revoked_at || row.revoked_reason !== params[1]) return null;
+      if (row.token_hash !== params[2]) return null;
       row.revoked_at = null;
       row.revoked_reason = null;
       return { kid: row.kid } as unknown as T;
+    }
+    if (sql.startsWith("SELECT kid") && sql.includes("token_hash = $2")) {
+      return row && row.token_hash === params[1] && !row.revoked_at && !row.revoked_reason
+        ? ({ kid: row.kid } as unknown as T)
+        : null;
     }
     if (sql.includes("WHERE kid =")) return (row as T | undefined) ?? null;
     return null;
@@ -58,8 +64,10 @@ describe("API key pending issuance lifecycle", () => {
     expect(await store.statusChecker()(minted.kid)).toBe(true);
     expect(await store.list()).toEqual([]);
 
-    expect(await store.activatePending(minted.kid)).toBe(true);
-    expect(await store.activatePending(minted.kid)).toBe(false);
+    expect(await store.activatePending(minted.kid, "wrong-hash")).toBe(false);
+    expect(await store.activatePending(minted.kid, minted.tokenHash)).toBe(true);
+    expect(await store.activatePending(minted.kid, minted.tokenHash)).toBe(true);
+    expect(await store.activatePending(minted.kid, "wrong-hash")).toBe(false);
     expect(await store.status(minted.kid)).toBe("active");
     expect(await store.isRevoked(minted.kid)).toBe(false);
     expect(await store.statusChecker()(minted.kid)).toBe(false);

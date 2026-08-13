@@ -25,7 +25,7 @@ export interface AuthQueryClient {
 }
 
 export const DEFAULT_API_KEYS_TABLE = "api_keys";
-const CREDENTIAL_DELIVERY_PENDING_REASON = "credential_delivery_pending";
+export const API_KEY_ISSUANCE_PENDING_REASON = "credential_delivery_pending";
 
 export interface ApiKeyRecord {
   kid: string;
@@ -263,22 +263,38 @@ export class ApiKeyStore {
     await this.insertWithLifecycle(
       this.mintedInput(minted, createdBy),
       new Date(atMs).toISOString(),
-      CREDENTIAL_DELIVERY_PENDING_REASON,
+      API_KEY_ISSUANCE_PENDING_REASON,
     );
   }
 
-  /** Activate exactly one record that is still in the issuance-pending state. */
-  async activatePending(kid: string): Promise<boolean> {
+  /**
+   * Idempotently activate one issuance identified by kid + token hash.
+   *
+   * A committed UPDATE can lose its response. Repeating this method then sees
+   * the already-active exact record and returns true; a different token with a
+   * colliding kid can never be accepted as the same issuance.
+   */
+  async activatePending(kid: string, tokenHash: string): Promise<boolean> {
     const row = await this.client.get<Row>(
       `UPDATE ${this.table}
           SET revoked_at = NULL, revoked_reason = NULL
         WHERE kid = $1
           AND revoked_at IS NOT NULL
           AND revoked_reason = $2
+          AND token_hash = $3
       RETURNING kid`,
-      [kid, CREDENTIAL_DELIVERY_PENDING_REASON],
+      [kid, API_KEY_ISSUANCE_PENDING_REASON, tokenHash],
     );
-    return row !== null;
+    if (row) return true;
+    const active = await this.client.get<Row>(
+      `SELECT kid FROM ${this.table}
+        WHERE kid = $1
+          AND token_hash = $2
+          AND revoked_at IS NULL
+          AND revoked_reason IS NULL`,
+      [kid, tokenHash],
+    );
+    return active !== null;
   }
 
   async findByKid(kid: string): Promise<ApiKeyRecord | null> {

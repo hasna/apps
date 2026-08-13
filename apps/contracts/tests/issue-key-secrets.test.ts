@@ -488,11 +488,146 @@ describe("issue-key credential-safe Secrets delivery", () => {
     }
   });
 
+  test("an activation commit with a lost response is reconciled by stable issuance id and retry keeps one authoritative credential", async () => {
+    const issuanceId = "task-d5a381b5-activation";
+    const records = new Map<string, { minted: MintedApiKey; state: "pending" | "active" }>();
+    const vault = new Map<string, { value: string; type: string }>();
+    let activationCalls = 0;
+    let vaultWrites = 0;
+    let cleanupCalls = 0;
+
+    const connectStore = async () => ({
+      store: {
+        ensureSchema: async () => {},
+        insertMinted: async () => {
+          throw new Error("active insert must not run");
+        },
+        insertMintedPending: async (minted: MintedApiKey) => {
+          if (records.has(minted.kid)) throw new Error("duplicate kid");
+          records.set(minted.kid, { minted, state: "pending" });
+        },
+        activatePending: async (kid: string, tokenHash: string) => {
+          activationCalls += 1;
+          const record = records.get(kid);
+          if (!record || record.minted.tokenHash !== tokenHash) return false;
+          if (record.state === "pending") {
+            record.state = "active";
+            throw new Error("activation response lost after commit");
+          }
+          return record.state === "active";
+        },
+        findByKid: async (kid: string) => {
+          const record = records.get(kid);
+          if (!record) return null;
+          return {
+            kid,
+            app: record.minted.claims.app,
+            agent: record.minted.claims.agent ?? null,
+            tid: record.minted.claims.tid ?? null,
+            scopes: record.minted.claims.scopes,
+            tokenHash: record.minted.tokenHash,
+            issuedAt: new Date(record.minted.claims.iat * 1000).toISOString(),
+            expiresAt:
+              record.minted.claims.exp === null ? null : new Date(record.minted.claims.exp * 1000).toISOString(),
+            revokedAt: record.state === "pending" ? "2026-08-13T00:00:00.000Z" : null,
+            revokedReason: record.state === "pending" ? "credential_delivery_pending" : null,
+            lastUsedAt: null,
+            createdBy: AGENT,
+          };
+        },
+        revoke: async () => {
+          cleanupCalls += 1;
+          throw new Error("record cleanup unavailable");
+        },
+      },
+      close: async () => {},
+    });
+    const connectSecrets = async () => ({
+      putSecret: async (input: { key: string; value: string; type?: string }) => {
+        vaultWrites += 1;
+        vault.set(input.key, { value: input.value, type: input.type ?? "" });
+        return {
+          key: input.key,
+          type: "api_key" as const,
+          created_at: "2026-08-13T00:00:00.000Z",
+          updated_at: "2026-08-13T00:00:00.000Z",
+        };
+      },
+      listSecrets: async ({ namespace }: { namespace?: string } = {}) => ({
+        secrets: [...vault.entries()]
+          .filter(([key]) => namespace === undefined || key === namespace)
+          .map(([key, metadata]) => ({
+            key,
+            type: metadata.type === "api_key" ? ("api_key" as const) : ("other" as const),
+            created_at: "2026-08-13T00:00:00.000Z",
+            updated_at: "2026-08-13T00:00:00.000Z",
+          })),
+      }),
+      deleteSecret: async () => {
+        cleanupCalls += 1;
+        throw new Error("vault cleanup unavailable");
+      },
+    });
+    const options = baseOptions({ issuanceId });
+
+    const first = collectReports();
+    const firstStreams = await captureStreams(async () => {
+      await runIssueKey(options, {
+        report: first.report,
+        env: baseEnv(),
+        now: () => 1_700_000_000_000,
+        connectStore,
+        connectSecrets,
+      });
+    });
+
+    expect(first.reports).toEqual([]);
+    expect(JSON.parse(firstStreams.stdout)).toMatchObject({ ok: true, kid: issuanceId, issuanceId });
+    expect(records).toHaveLength(1);
+    expect(records.get(issuanceId)?.state).toBe("active");
+    expect(vault).toHaveLength(1);
+    expect(vaultWrites).toBe(1);
+    expect(cleanupCalls).toBe(0);
+
+    const retry = collectReports();
+    const retryStreams = await captureStreams(async () => {
+      await runIssueKey(options, {
+        report: retry.report,
+        env: baseEnv(),
+        now: () => 1_700_000_100_000,
+        connectStore,
+        connectSecrets,
+      });
+    });
+
+    expect(retry.reports).toEqual([]);
+    expect(JSON.parse(retryStreams.stdout)).toMatchObject({ ok: true, kid: issuanceId, issuanceId });
+    expect(records).toHaveLength(1);
+    expect([...records.values()].filter((record) => record.state === "active")).toHaveLength(1);
+    expect(vault).toHaveLength(1);
+    expect(vaultWrites).toBe(1);
+    expect(activationCalls).toBe(2);
+    for (const { minted } of records.values()) {
+      const observable = [
+        firstStreams.stdout,
+        firstStreams.stderr,
+        retryStreams.stdout,
+        retryStreams.stderr,
+        JSON.stringify(first.reports),
+        JSON.stringify(retry.reports),
+      ].join("\n");
+      expect(observable).not.toContain(minted.token);
+      expect(observable).not.toContain(minted.tokenHash);
+    }
+  });
+
   test("silent delivery refuses overwrite-prone or unbound references before any persistence", async () => {
     for (const options of [
       baseOptions({ secretsRef: "todos/agents/fixed-key" }),
       baseOptions({ secretsRef: "todos/agents/{agent}/fixed-key" }),
       baseOptions({ secretsRef: "todos/agents/{kid}" }),
+      baseOptions({ issuanceId: "unsafe/id" }),
+      baseOptions({ secretsRef: undefined, issuanceId: "stable-id" }),
       baseOptions({ agent: undefined }),
       baseOptions({ store: false }),
     ]) {
@@ -514,7 +649,7 @@ describe("issue-key credential-safe Secrets delivery", () => {
         });
       });
       expect(reports).toHaveLength(1);
-      expect(String(reports[0]?.details?.code)).toMatch(/^bad_secrets_|^missing_agent$/);
+      expect(String(reports[0]?.details?.code)).toMatch(/^bad_secrets_|^bad_issuance_id$|^missing_agent$/);
       expect(dbCalls).toBe(0);
       expect(vaultCalls).toBe(0);
       expect(streams.stdout).not.toContain("hasna_todos_");

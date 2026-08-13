@@ -542,6 +542,7 @@ export function createContractsProgram() {
       "--secrets-ref <template>",
       "Deliver without plaintext output; template must contain separate {agent} and {kid} path segments",
     )
+    .option("--issuance-id <id>", "Stable key id for idempotent retry with --secrets-ref")
     .option("--no-store", "Do not persist the hashed record (print secret + hash only)")
     .option("-j, --json", "Output JSON")
     .action(async (options: Record<string, unknown>) => {

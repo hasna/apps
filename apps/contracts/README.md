@@ -506,7 +506,8 @@ contracts issue-key --app todos --agent worker-1 --scopes 'todos:read,todos:writ
 # plaintext directly to one unique Hasna Secrets reference. Output is metadata
 # only; the resolved reference is reported, never the token.
 contracts issue-key --app todos --agent worker-1 --scopes 'todos:read,todos:write' \
-  --secrets-ref 'todos/agents/{agent}/{kid}' --json
+  --secrets-ref 'todos/agents/{agent}/{kid}' \
+  --issuance-id '<stable-workflow-or-task-id>' --json
 
 # Consume the resolved reference from the metadata receipt without disclosure.
 secrets exec todos/agents/worker-1/<kid-from-receipt> --as HASNA_TODOS_API_KEY -- todos <command>
@@ -539,8 +540,14 @@ and one `{kid}` segment. The resolved reference is unique per issuance, so
 concurrent runs never overwrite a stable credential. The command does not
 retry a vault write: an ambiguous database failure is revoked by kid; an
 ambiguous Secrets failure revokes the database row and deletes the exact vault
-reference. Retry then mints a new kid/reference pair. `--agent` remains a claim
-inside the signed token, not authentication for the caller; the consuming
+reference. `--issuance-id` is optional and supplies a stable key id for an
+idempotent workflow retry: the same request reconciles the existing hashed
+record and exact Secrets metadata and returns the original metadata receipt;
+different claims under the same id fail as a conflict. Without it, a later
+invocation intentionally mints a new kid/reference pair. Activation itself is
+idempotent on kid plus token hash, so a committed activation whose response is
+lost is recognized without creating another credential. `--agent` remains a
+claim inside the signed token, not authentication for the caller; the consuming
 service must keep its authenticated-principal authorization checks.
 
 Services that expose API, MCP, CLI-token, dashboard, worker, sync/export, or
