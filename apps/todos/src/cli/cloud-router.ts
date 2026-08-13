@@ -505,7 +505,7 @@ async function requiredRemoteRoute<T>(
     return await request();
   } catch (error) {
     const status = error && typeof error === "object" ? (error as { status?: unknown }).status : undefined;
-    if (status === 404) {
+    if (status === 404 || status === 405) {
       const body = error && typeof error === "object" ? (error as { body?: unknown }).body : undefined;
       const code = body && typeof body === "object" && !Array.isArray(body)
         ? (body as { code?: unknown }).code
@@ -3406,12 +3406,18 @@ export async function cloudRenameProject(
   newSlug: string,
   name?: string,
 ): Promise<{ project: Project; task_lists_updated: number }> {
-  const id = await cloudResolveProjectRef(client, ref);
-  const normalizedSlug = cloudProjectSlug(newSlug);
-  if (!normalizedSlug) throw new Error("Invalid slug — must be non-empty kebab-case");
-  return client.transport.post<{ project: Project; task_lists_updated: number }>(
-    `/projects/${encodeURIComponent(id)}/rename`,
-    { new_slug: normalizedSlug, ...(name !== undefined ? { name } : {}) },
+  return requiredRemoteRoute(
+    client,
+    "/v1/projects/:id/rename",
+    async () => {
+      const id = await cloudResolveProjectRef(client, ref);
+      const normalizedSlug = cloudProjectSlug(newSlug);
+      if (!normalizedSlug) throw new Error("Invalid slug — must be non-empty kebab-case");
+      return client.transport.post<{ project: Project; task_lists_updated: number }>(
+        `/projects/${encodeURIComponent(id)}/rename`,
+        { new_slug: normalizedSlug, ...(name !== undefined ? { name } : {}) },
+      );
+    },
   );
 }
 
