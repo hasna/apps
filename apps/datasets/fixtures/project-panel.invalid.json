@@ -1,0 +1,128 @@
+{
+  "schema": "hasna.project_panel.v1",
+  "id": "datasets_panel_swiss-bank-account",
+  "createdAt": "2026-07-29T14:25:03.780Z",
+  "projectId": "swiss-bank-account",
+  "kind": "custom",
+  "title": "Datasets",
+  "summary": "1 dataset with 2 rows.",
+  "state": "ready",
+  "generatedAt": "2026-07-29T14:25:03.780Z",
+  "freshness": "fresh",
+  "metrics": [
+    {
+      "id": "datasets",
+      "label": "Datasets",
+      "value": 1,
+      "status": "good",
+      "resourceRefs": []
+    },
+    {
+      "id": "active_datasets",
+      "label": "Active",
+      "value": 1,
+      "status": "good",
+      "resourceRefs": []
+    },
+    {
+      "id": "rows",
+      "label": "Rows",
+      "value": 2,
+      "status": "good",
+      "resourceRefs": []
+    },
+    {
+      "id": "sources",
+      "label": "Sources",
+      "value": 0,
+      "status": "unknown",
+      "resourceRefs": []
+    },
+    {
+      "id": "classifications",
+      "label": "Classifications",
+      "value": 1,
+      "status": "good",
+      "resourceRefs": []
+    }
+  ],
+  "items": [
+    {
+      "id": "dset_t523osbs37p8",
+      "title": "Bank shortlist",
+      "summary": "2 rows · 2 fields",
+      "status": "active",
+      "priority": "medium",
+      "timestamp": "2026-07-29T14:25:03.773Z",
+      "resourceRefs": [
+        {
+          "kind": "artifact",
+          "id": "dset_t523osbs37p8",
+          "name": "Bank shortlist",
+          "uri": "artifact://datasets/dset_t523osbs37p8",
+          "externalId": "dset_t523osbs37p8",
+          "sourcePackage": "@hasna/datasets",
+          "tags": [
+            "dataset",
+            "active",
+            "private"
+          ]
+        }
+      ],
+      "evidenceRefs": [],
+      "metadata": {
+        "slug": "bank-shortlist",
+        "classification": "private",
+        "previewColumns": [
+          "bank",
+          "status"
+        ]
+      }
+    }
+  ],
+  "actions": [],
+  "resourceRefs": [
+    {
+      "kind": "project",
+      "id": "swiss-bank-account",
+      "name": "swiss-bank-account",
+      "uri": "project://swiss-bank-account",
+      "externalId": "swiss-bank-account",
+      "sourcePackage": "@hasna/datasets",
+      "tags": []
+    },
+    {
+      "kind": "artifact",
+      "id": "dset_t523osbs37p8",
+      "name": "Bank shortlist",
+      "uri": "artifact://datasets/dset_t523osbs37p8",
+      "externalId": "dset_t523osbs37p8",
+      "sourcePackage": "@hasna/datasets",
+      "tags": [
+        "dataset",
+        "active",
+        "private"
+      ]
+    }
+  ],
+  "evidenceRefs": [],
+  "renderFragment": {
+    "renderer": "json_render",
+    "title": "Datasets",
+    "imports": [],
+    "spec": {
+      "component": "project.datasets.summary",
+      "itemLimit": 5,
+      "datasets": [
+        {
+          "id": "dset_t523osbs37p8",
+          "slug": "bank-shortlist",
+          "name": "Bank shortlist",
+          "rows": 2,
+          "classification": "private"
+        }
+      ]
+    }
+  },
+  "warnings": []
+}
