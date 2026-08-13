@@ -93,10 +93,13 @@ jobs:
         run: bun install --frozen-lockfile
 
       # Member test suites may drive a real browser (playwright chromium, e.g.
-      # apps/browser). Provision the browser runtime so those tests can run in
-      # CI instead of failing at launch. No-op for members that do not use it.
+      # apps/browser). Provision the browser runtime from the MEMBER directory
+      # so bun resolves the member's own playwright pin (the root may resolve a
+      # different version whose browser build the member's tests reject).
+      # No-op for members that do not use it.
       - name: Install playwright chromium (member browser tests)
-        run: bunx playwright install chromium
+        run: bunx playwright install chromium --with-deps
+        working-directory: apps/browser
 
       # TURBO_SCM_BASE makes --affected real in both lanes. On pull_request the
       # base is the CURRENT base branch ref — not
