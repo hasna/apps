@@ -1,0 +1,39 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - run: bun install --frozen-lockfile
+
+      - name: typecheck
+        run: bun run typecheck
+
+      - name: test
+        run: bun test
+
+      - name: build
+        run: bun run build
+
+      # The two gates this repo had no automation for: an invalid
+      # hasna.contract.json and a prepack that bricks packing both reached a
+      # green PR because nothing ran them.
+      - name: contract conformance
+        run: bunx @hasna/contracts@0.8.5 repo-conformance .
+
+      - name: pack the release artifact
+        run: bun pm pack --dry-run
+
+      - name: scan the packed artifact
+        run: bun run scan:artifact
