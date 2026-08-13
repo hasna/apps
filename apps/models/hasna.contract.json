@@ -1,0 +1,55 @@
+{
+  "schema": "hasna.service_contract.v1",
+  "name": "models",
+  "class": "cli-with-store",
+  "contractVersion": "v1",
+  "kitVersion": "0.8.5",
+  "description": "Local model catalog and install manager: searches provider catalogs, records capabilities, and installs models into a user-scoped store.",
+  "bins": [
+    "models"
+  ],
+  "hosting": [
+    "user-hosted"
+  ],
+  "serviceSurfaces": [
+    {
+      "name": "models-cli",
+      "kind": "cli",
+      "status": "supported",
+      "bin": "models",
+      "authMode": "local-only"
+    },
+    {
+      "name": "models-sdk",
+      "kind": "sdk",
+      "status": "supported",
+      "authMode": "local-only",
+      "exportSubpath": "."
+    }
+  ],
+  "storage": {
+    "mode": "sqlite",
+    "engines": [
+      "sqlite"
+    ],
+    "envPrefix": "HASNA_MODELS_",
+    "sqlitePath": "~/.hasna/models/models.db"
+  },
+  "metadata": {
+    "conformance": {
+      "waivedStorageEngines": [
+        {
+          "engine": "postgres",
+          "reason": "models is a single-operator local CLI whose catalog and install state are user-scoped; it ships no serve bin and no hasna-saas story, so there is no multi-tenant deployment that would require PostgreSQL.",
+          "reviewedBy": "platform-storage",
+          "expiresAt": "2027-01-01T00:00:00.000Z"
+        }
+      ]
+    },
+    "release": {
+      "artifactScan": {
+        "script": "scan-artifact"
+      }
+    }
+  }
+}
