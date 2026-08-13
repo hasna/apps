@@ -1,7 +1,7 @@
 {
   "name": "@hasna/slides",
   "version": "0.1.0",
-  "description": "Headless presentation-deck SDK for Hasna-coded apps — author slides in Markdown or HTML, model themes/transitions/fragments/vertical stacks, serialize to JSON, and export a self-contained reveal.js HTML deck. Ships a React reveal.js viewer at @hasna/slides/react.",
+  "description": "Headless presentation-deck SDK for Hasna-coded apps \u2014 author slides in Markdown or HTML, model themes/transitions/fragments/vertical stacks, serialize to JSON, and export a self-contained reveal.js HTML deck. Ships a React reveal.js viewer at @hasna/slides/react.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -35,7 +35,7 @@
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "dev:dashboard": "cd dashboard && bun run dev",
-    "postinstall": "mkdir -p $HOME/.hasna/slides 2>/dev/null || true"
+    "postinstall": "mkdir -p $HOME/.hasna/slides 2>/dev/null || true && cd dashboard && bun install --frozen-lockfile"
   },
   "keywords": [
     "slides",
