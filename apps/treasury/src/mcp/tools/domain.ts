@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { ZodRawShapeCompat } from "@modelcontextprotocol/sdk/server/zod-compat.js";
 import { openDatabase } from "../../db/database.js";
 import { contextFromPrincipal } from "../../services/context.js";
 import type { ApiPrincipal } from "../../server/auth.js";
@@ -35,10 +36,11 @@ function assembleInput(op: OpDef, args: Record<string, unknown>): Record<string,
 export function registerDomainTools(server: McpServer, principal: ApiPrincipal, profile: Profile): void {
   for (const op of OPS) {
     if (!op.profiles.includes(profile)) continue;
-    server.tool(op.name, op.description, zodShapeFor(op), async (args: Record<string, unknown>) => {
+    server.tool(op.name, op.description, zodShapeFor(op) as unknown as ZodRawShapeCompat, async (input: unknown) => {
       try {
         const db = await openDatabase();
         const rc = contextFromPrincipal(db, principal);
+        const args = input && typeof input === "object" && !Array.isArray(input) ? (input as Record<string, unknown>) : {};
         return ok(await op.run(rc, assembleInput(op, args)));
       } catch (e) {
         return fail(e);
