@@ -2,15 +2,14 @@
 
 Hasna's **public** OSS apps monorepo. Member packages under `apps/` publish
 public `@hasna/*` npm packages — per-app CLIs, the unified `hasna` CLI, and
-SDKs. This is the producer counterpart to `hasna-internal/platform` (private,
-consumes `@hasna/*`).
+SDKs. This repo is fully public. Hasna's private scope (`@hasna-internal/*`,
+`hasna-internal` org) is never described or referenced beyond this prohibition;
+see the publish guard.
 
 ## What lives where
 
 - **Public apps** (this repo): every project that publishes a public
   `@hasna/<name>` package and is not a fork or archived artifact.
-- **Private apps**: `hasna-internal/platform` (private org) — internal control
-  plane, internal apps, agent infrastructure; publishes `@hasna-internal/*`.
 - **Forks / archived**: standalone `hasna/<name>` repos, unchanged.
 
 ## Layout
