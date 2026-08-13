@@ -2,9 +2,14 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { hasContentMirror } from "../src/content.ts";
 import { uriToFile, fetchOne, fetchMany } from "../src/fetch.ts";
 
 const CONTENT = join(import.meta.dir, "..", "content");
+// The content mirror is ui.sh proprietary material and is deliberately NOT
+// committed (see .gitignore). Mirror-required tests run only where `bun run harvest`
+// has materialised it; in a fresh checkout they skip rather than fail.
+const mirrorPresent = await hasContentMirror(CONTENT);
 
 describe("uriToFile", () => {
   test("maps the root resource", () => {
@@ -29,12 +34,12 @@ describe("uriToFile", () => {
 });
 
 describe("fetchOne (mirrored content)", () => {
-  test("root resource lists the subskills", async () => {
+  test.skipIf(!mirrorPresent)("root resource lists the subskills", async () => {
     const text = await fetchOne("uidotsh://ui", { contentDir: CONTENT });
     expect(text).toContain("Subskills");
     expect(text).toContain("design");
   });
-  test("buttons guideline has real content", async () => {
+  test.skipIf(!mirrorPresent)("buttons guideline has real content", async () => {
     const text = await fetchOne("uidotsh://ui/design-guidelines/buttons", { contentDir: CONTENT });
     expect(text.toLowerCase()).toContain("button");
     expect(text.length).toBeGreaterThan(100);
@@ -45,7 +50,7 @@ describe("fetchOne (mirrored content)", () => {
 });
 
 describe("fetchMany", () => {
-  test("concatenates multiple resources with headers", async () => {
+  test.skipIf(!mirrorPresent)("concatenates multiple resources with headers", async () => {
     const text = await fetchMany(["uidotsh://ui/ideas", "uidotsh://ui/componentize"], { contentDir: CONTENT });
     expect(text).toContain("## uidotsh://ui/ideas");
     expect(text).toContain("## uidotsh://ui/componentize");
@@ -71,7 +76,7 @@ describe("missing content mirror guidance", () => {
 });
 
 describe("ui list CLI", () => {
-  test("caps human output and pages json when requested", () => {
+  test.skipIf(!mirrorPresent)("caps human output and pages json when requested", () => {
     const human = Bun.spawnSync({
       cmd: ["bun", "run", "src/cli.ts", "list", "--limit", "3"],
       stdout: "pipe",
@@ -109,7 +114,7 @@ describe("ui list CLI", () => {
 });
 
 describe("content tree completeness", () => {
-  test("index.json mirrors the full resource set (>= 40)", async () => {
+  test.skipIf(!mirrorPresent)("index.json mirrors the full resource set (>= 40)", async () => {
     const idx = (await Bun.file(join(CONTENT, "index.json")).json()) as Record<string, string>;
     const keys = Object.keys(idx);
     expect(keys.length).toBeGreaterThanOrEqual(40);

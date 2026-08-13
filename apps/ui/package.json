@@ -44,7 +44,7 @@
     "test": "bun test"
   },
   "dependencies": {
-    "@hasna/events": "^0.1.6",
+    "@hasna/events": "0.1.6",
     "commander": "^13.1.0"
   },
   "devDependencies": {

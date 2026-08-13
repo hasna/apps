@@ -274,7 +274,7 @@
         "ui": "src/cli.ts",
       },
       "dependencies": {
-        "@hasna/events": "^0.1.6",
+        "@hasna/events": "0.1.6",
         "commander": "^13.1.0",
       },
       "devDependencies": {
@@ -1317,6 +1317,8 @@
     "@hasna/tables/commander": ["commander@15.0.0", "", {}, "sha512-z67u4ZhzCL/Tydu1lJARtEZYWbWaN7oYLHbsuzocr6y4N6WZAagG3RQ4FW61V1/0+jImpj293XfrcYnd1qxtPg=="],
 
     "@hasna/tables/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
+
+    "@hasna/ui/@hasna/events": ["@hasna/events@0.1.6", "", { "dependencies": { "commander": "^13.1.0" }, "bin": { "events": "dist/cli/index.js", "hasna-events": "dist/cli/index.js" } }, "sha512-rKLxjBIat45UxciUwh9hKM63l/mcurJXAhgVkYHvrsGnOK9HwExrwgOlylNzDBDb+huiQw9DWdLb31q5oWDfIw=="],
 
     "@json-render/core/zod": ["zod@4.4.3", "", {}, "sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ=="],
 
