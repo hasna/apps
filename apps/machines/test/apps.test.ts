@@ -166,6 +166,7 @@ describe("apps", () => {
       "remote-linux:true",
       `remote-linux:${probeCommand}`,
       `remote-linux:${installCommand}`,
+      `remote-linux:${probeCommand}`,
     ]);
 
     manifestAdd({

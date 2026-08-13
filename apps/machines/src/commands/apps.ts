@@ -491,7 +491,7 @@ export function runAppsPlan(
       runner(plan.machineId, step.command, step.manager === "bun" ? { redactOutput: true } : undefined),
     );
     executed += 1;
-    if (step.manager === "bun" && step.probeCommand) {
+    if (step.probeCommand) {
       const probe = requireMachineCommandSuccess(
         `App verify ${step.id}`,
         runner(plan.machineId, step.probeCommand, { redactOutput: true }),
