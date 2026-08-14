@@ -1,0 +1,1498 @@
+import { SqliteAdapter as Database } from "../storage.js";
+type SQLQueryBindings = string | number | null | boolean;
+import type {
+  CreateMemoryInput,
+  DedupeMode,
+  Memory,
+  MemoryFilter,
+  MemoryVersion,
+  UpdateMemoryInput,
+} from "../types/index.js";
+import {
+  MemoryNotFoundError,
+  VersionConflictError,
+  MemoryConflictError,
+} from "../types/index.js";
+import { getDatabase, now, uuid, resolvePartialId } from "./database.js";
+import { generateEmbedding, cosineSimilarity, serializeEmbedding, deserializeEmbedding } from "../lib/embeddings.js";
+import { redactSecrets } from "../lib/redact.js";
+import { validateMemoryEnums, formatEnumViolation } from "../lib/enum-validation.js";
+import { hookRegistry } from "../lib/hooks.js";
+import { computeTrustScore } from "../lib/poisoning.js";
+// Entity extraction is now handled by the LLM auto-memory pipeline (src/lib/auto-memory.ts).
+// The regex extractor has been removed. Extraction fires async via PostMemorySave hook.
+// Keeping this comment so the migration intent is clear.
+import { unlinkEntityFromMemory, getEntityMemoryLinks } from "./entity-memories.js";
+import { isApiMode, apiJson, toQuery, ApiRequestError } from "./api-mode.js";
+
+// ============================================================================
+// Entity extraction helper
+// ============================================================================
+
+// runEntityExtraction previously used regex-based extraction (extractor.ts).
+// Now removed — LLM-based extraction fires async via auto-memory pipeline
+// (src/lib/auto-memory.ts) after every memory save, triggered by PostMemorySave hook.
+function runEntityExtraction(_memory: Memory, _projectId: string | undefined, _d: Database): void {
+  // No-op: async LLM extraction handled by PostMemorySave hook in auto-memory pipeline.
+  // See src/lib/auto-memory.ts → linkEntitiesToMemory()
+}
+
+/**
+ * Persist a non-default content_type on a freshly written memory. Applied as a
+ * follow-up UPDATE (mirroring the trust_score pattern) so the hand-rolled test
+ * schemas that omit the column keep working; production and the cloud server
+ * carry `content_type` via migration 20.
+ */
+function applyContentType(
+  d: Database,
+  id: string,
+  memory: Memory,
+  contentType?: CreateMemoryInput["content_type"],
+): void {
+  if (!contentType || contentType === "text") return;
+  try {
+    d.run("UPDATE memories SET content_type = ? WHERE id = ?", [contentType, id]);
+    memory.content_type = contentType;
+  } catch {
+    // content_type column may not exist in test schemas — ignore
+  }
+}
+
+// ============================================================================
+// Helpers
+// ============================================================================
+
+export function parseMemoryRow(row: Record<string, unknown>): Memory {
+  return {
+    id: row["id"] as string,
+    key: row["key"] as string,
+    value: row["value"] as string,
+    category: row["category"] as Memory["category"],
+    scope: row["scope"] as Memory["scope"],
+    summary: (row["summary"] as string) || null,
+    tags: JSON.parse((row["tags"] as string) || "[]") as string[],
+    importance: row["importance"] as number,
+    source: row["source"] as Memory["source"],
+    status: row["status"] as Memory["status"],
+    pinned: !!(row["pinned"] as number),
+    agent_id: (row["agent_id"] as string) || null,
+    project_id: (row["project_id"] as string) || null,
+    session_id: (row["session_id"] as string) || null,
+    machine_id: (row["machine_id"] as string) || null,
+    flag: (row["flag"] as string) || null,
+    when_to_use: (row["when_to_use"] as string) || null,
+    sequence_group: (row["sequence_group"] as string) || null,
+    sequence_order: (row["sequence_order"] as number) ?? null,
+    content_type: (row["content_type"] as string as Memory["content_type"]) || "text",
+    namespace: (row["namespace"] as string) || null,
+    created_by_agent: (row["created_by_agent"] as string) || null,
+    updated_by_agent: (row["updated_by_agent"] as string) || null,
+    trust_score: row["trust_score"] != null ? (row["trust_score"] as number) : null,
+    metadata: JSON.parse((row["metadata"] as string) || "{}") as Record<string, unknown>,
+    access_count: row["access_count"] as number,
+    version: row["version"] as number,
+    expires_at: (row["expires_at"] as string) || null,
+    valid_from: (row["valid_from"] as string) || null,
+    valid_until: (row["valid_until"] as string) || null,
+    ingested_at: (row["ingested_at"] as string) || null,
+    created_at: row["created_at"] as string,
+    updated_at: row["updated_at"] as string,
+    accessed_at: (row["accessed_at"] as string) || null,
+  };
+}
+
+// ============================================================================
+// Create
+// ============================================================================
+
+export function createMemory(
+  input: CreateMemoryInput,
+  dedupeMode: DedupeMode = "merge",
+  db?: Database
+): Memory {
+  if (!db && isApiMode()) {
+    const { status, data } = apiJson<Memory>("POST", "/memories", { ...input, dedupe: dedupeMode });
+    // A create is only successful if the server actually handed back the stored
+    // row. A 2xx with an empty/!id body means nothing was persisted; returning
+    // it made the CLI print "Saved:" and exit 0 on a write that never landed.
+    if (!data || !data.id) {
+      throw new ApiRequestError(
+        `mementos cloud POST /memories → ${status} but no memory was returned; the write did not persist (key: ${input.key})`,
+        status,
+        "",
+      );
+    }
+    return data;
+  }
+  const d = db || getDatabase();
+  const timestamp = now();
+
+  // Resolve partial project_id to full UUID to avoid FK constraint failures.
+  // Agents often pass short IDs (first 8 chars) from list_projects output.
+  if (input.project_id) {
+    const resolved = resolvePartialId(d, "projects", input.project_id);
+    if (resolved) {
+      input = { ...input, project_id: resolved };
+    }
+  }
+
+  // Handle TTL
+  let expiresAt = input.expires_at || null;
+  if (input.ttl_ms && !expiresAt) {
+    expiresAt = new Date(Date.now() + input.ttl_ms).toISOString();
+  }
+
+  // Working scope: auto-set expires_at to 1 hour from now if not explicitly provided
+  if (input.scope === "working" && !expiresAt) {
+    expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+  }
+
+  const id = uuid();
+  const tags = input.tags || [];
+  const tagsJson = JSON.stringify(tags);
+  const metadataJson = JSON.stringify(input.metadata || {});
+
+  // Auto-redact secrets from value and summary
+  const safeValue = redactSecrets(input.value);
+  const safeSummary = input.summary ? redactSecrets(input.summary) : null;
+
+  // "overwrite" is an alias for "merge"; "version-fork" is an alias for "create"
+  const effectiveMode = dedupeMode === "overwrite" ? "merge"
+    : dedupeMode === "version-fork" ? "create"
+    : dedupeMode;
+
+  if (effectiveMode === "error") {
+    // Fail if any memory with the same key exists in this scope (regardless of agent)
+    const existing = d.query(
+      `SELECT id, agent_id, updated_at FROM memories
+       WHERE key = ? AND scope = ? AND COALESCE(project_id, '') = ? AND status = 'active'
+       LIMIT 1`
+    ).get(
+      input.key,
+      input.scope || "private",
+      input.project_id || ""
+    ) as { id: string; agent_id: string | null; updated_at: string } | null;
+
+    if (existing) {
+      throw new MemoryConflictError(input.key, existing);
+    }
+    // No conflict — fall through to insert below
+  }
+
+  if (effectiveMode === "merge") {
+    // Try upsert: if key+scope+agent+project+session already exists, update value
+    const existing = d
+      .query(
+        `SELECT id, version FROM memories
+         WHERE key = ? AND scope = ?
+           AND COALESCE(agent_id, '') = ?
+           AND COALESCE(project_id, '') = ?
+           AND COALESCE(session_id, '') = ?`
+      )
+      .get(
+        input.key,
+        input.scope || "private",
+        input.agent_id || "",
+        input.project_id || "",
+        input.session_id || ""
+      ) as { id: string; version: number } | null;
+
+    if (existing) {
+      d.run(
+        `UPDATE memories SET
+           value = ?, category = ?, summary = ?, tags = ?,
+           importance = ?, metadata = ?, expires_at = ?,
+           when_to_use = ?,
+           pinned = COALESCE(pinned, 0),
+           version = version + 1, updated_at = ?
+         WHERE id = ?`,
+        [
+          safeValue,
+          input.category || "knowledge",
+          safeSummary,
+          tagsJson,
+          input.importance ?? 5,
+          metadataJson,
+          expiresAt,
+          input.when_to_use || null,
+          timestamp,
+          existing.id,
+        ]
+      );
+
+      // Update tags
+      d.run("DELETE FROM memory_tags WHERE memory_id = ?", [existing.id]);
+      const insertTag = d.prepare(
+        "INSERT OR IGNORE INTO memory_tags (memory_id, tag) VALUES (?, ?)"
+      );
+      for (const tag of tags) {
+        insertTag.run(existing.id, tag);
+      }
+
+      const merged = getMemory(existing.id, d)!;
+      applyContentType(d, existing.id, merged, input.content_type);
+
+      // Compute and store trust_score for poisoning detection
+      try {
+        const existingMemories = listMemoriesByKey(input.key, d);
+        const trustScore = computeTrustScore(safeValue, input.key, existingMemories, input.importance);
+        d.run("UPDATE memories SET trust_score = ? WHERE id = ?", [trustScore, existing.id]);
+      } catch {
+        // trust_score column may not exist in test schemas — ignore
+      }
+
+      // Re-extract entities on merge (value changed)
+      try {
+        // Remove old entity links
+        const oldLinks = getEntityMemoryLinks(undefined, merged.id, d);
+        for (const link of oldLinks) {
+          unlinkEntityFromMemory(link.entity_id, merged.id, d);
+        }
+        runEntityExtraction(merged, input.project_id, d);
+      } catch {
+        // Don't block save if extraction fails
+      }
+
+      return merged;
+    }
+  }
+
+  // Ensure FK-referenced rows exist before inserting. On the cloud server and
+  // during cross-machine imports, a memory can reference an agent/project/
+  // session/machine id created on another machine that is absent here; with
+  // `PRAGMA foreign_keys = ON` (and the equivalent FK constraints on Postgres)
+  // that INSERT throws a FK error (opaque HTTP 500) and drops the write.
+  // Provision minimal stubs so authorship is preserved.
+  ensureMemoryReferences(d, input);
+
+  // Insert new
+  d.run(
+    `INSERT INTO memories (id, key, value, category, scope, summary, tags, importance, source, status, pinned, agent_id, project_id, session_id, machine_id, namespace, created_by_agent, when_to_use, sequence_group, sequence_order, metadata, access_count, version, expires_at, valid_from, valid_until, ingested_at, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', FALSE, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 1, ?, ?, ?, ?, ?, ?)`,
+    [
+      id,
+      input.key,
+      safeValue,
+      input.category || "knowledge",
+      input.scope || "private",
+      input.summary || null,
+      tagsJson,
+      input.importance ?? 5,
+      input.source || "agent",
+      input.agent_id || null,
+      input.project_id || null,
+      input.session_id || null,
+      input.machine_id || null,
+      input.namespace || null,
+      input.agent_id || null, // created_by_agent
+      input.when_to_use || null,
+      input.sequence_group || null,
+      input.sequence_order ?? null,
+      metadataJson,
+      expiresAt,
+      (input.metadata as Record<string, unknown>)?.valid_from as string ?? timestamp,
+      (input.metadata as Record<string, unknown>)?.valid_until as string ?? null,
+      timestamp,
+      timestamp,
+      timestamp,
+    ]
+  );
+
+  // Insert tags
+  const insertTag = d.prepare(
+    "INSERT OR IGNORE INTO memory_tags (memory_id, tag) VALUES (?, ?)"
+  );
+  for (const tag of tags) {
+    insertTag.run(id, tag);
+  }
+
+  const memory = getMemory(id, d)!;
+  applyContentType(d, id, memory, input.content_type);
+
+  // Compute and store trust_score for poisoning detection
+  try {
+    const existingMemories = listMemoriesByKey(input.key, d);
+    const trustScore = computeTrustScore(safeValue, input.key, existingMemories, input.importance);
+    d.run("UPDATE memories SET trust_score = ? WHERE id = ?", [trustScore, id]);
+  } catch {
+    // trust_score column may not exist in test schemas — ignore
+  }
+
+  // Run entity extraction no-op (replaced by async LLM pipeline)
+  runEntityExtraction(memory, input.project_id, d);
+
+  // Fire PostMemorySave hook (non-blocking — never delays the caller)
+  void hookRegistry.runHooks("PostMemorySave", {
+    memory,
+    wasUpdated: false,
+    agentId: input.agent_id,
+    projectId: input.project_id,
+    sessionId: input.session_id,
+    timestamp: Date.now(),
+  });
+
+  return memory;
+}
+
+// ============================================================================
+// Bulk restore / backfill
+// ============================================================================
+
+export interface BulkUpsertResult {
+  inserted: number;
+  /** Rows the store already had (id or unique-key conflict) — a benign no-op. */
+  skipped: number;
+  /**
+   * Rows the store REFUSED (bad enum, failed CHECK/FK, missing key). These did
+   * NOT persist. Kept separate from `skipped` so a caller can never read a
+   * dropped row as an idempotent no-op; every rejection also has a line in
+   * `errors`. `inserted + skipped + rejected === total`.
+   */
+  rejected: number;
+  errors: string[];
+  total: number;
+}
+
+/**
+ * Faithful, idempotent bulk restore of memories into the current store.
+ *
+ * Unlike {@link createMemory}, this primitive:
+ *  - PRESERVES the original `id` (does not regenerate a UUID);
+ *  - PRESERVES `status` (archived stays archived — never resurrected to active);
+ *  - PRESERVES timestamps, `version`, `pinned`, `access_count` and scope fields;
+ *  - does NOT dedupe by key/scope/agent and does NOT fire hooks / entity
+ *    extraction / embedding work (those run asynchronously elsewhere).
+ *
+ * Idempotency is by conflict, not by suppression: the statement carries an
+ * explicit bare `ON CONFLICT DO NOTHING`, which SQLite and Postgres both read
+ * as "ignore a uniqueness conflict (primary-key `id` or the unique key index)".
+ * A row already present is therefore left untouched and re-runs never create
+ * duplicates. This is the cross-machine → cloud backfill path for the fleet
+ * self-host cutover: a machine's local memories are shipped to the cloud store
+ * verbatim without mutating rows that are already present.
+ *
+ * It deliberately does NOT use `INSERT OR IGNORE`: on SQLite that swallows
+ * *every* constraint failure, so a row refused by the `category`/`scope`/
+ * `source`/`status` CHECK vanished with `changes === 0` and was counted as an
+ * idempotent `skipped` — a cloud write that did not persist reporting success.
+ * With a bare `ON CONFLICT DO NOTHING` a CHECK/FK/NOT NULL violation still
+ * throws into the catch below and lands in `rejected` + `errors`. Enum values
+ * are additionally pre-validated per row so the reason names the field and the
+ * accepted set instead of quoting raw constraint SQL.
+ *
+ * FK-referenced agent/project/session/machine rows are stubbed via
+ * {@link ensureMemoryReferences} so cross-machine authorship ids never fail the
+ * write. Values and summaries are still passed through {@link redactSecrets}.
+ */
+export function bulkUpsertMemories(
+  memories: Array<Record<string, unknown>>,
+  db?: Database
+): BulkUpsertResult {
+  if (!db && isApiMode()) {
+    const { data } = apiJson<BulkUpsertResult>("POST", "/memories/bulk-upsert", { memories });
+    return data;
+  }
+  const d = db || getDatabase();
+  let inserted = 0;
+  let skipped = 0;
+  let rejected = 0;
+  const errors: string[] = [];
+
+  const insert = d.prepare(
+    `INSERT INTO memories (id, key, value, category, scope, summary, tags, importance, source, status, pinned, agent_id, project_id, session_id, machine_id, namespace, created_by_agent, when_to_use, sequence_group, sequence_order, metadata, access_count, version, expires_at, valid_from, valid_until, ingested_at, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT DO NOTHING`
+  );
+  const insertTag = d.prepare(
+    "INSERT OR IGNORE INTO memory_tags (memory_id, tag) VALUES (?, ?)"
+  );
+
+  for (const mem of memories) {
+    const key = mem["key"] as string | undefined;
+    const id = (mem["id"] as string) || uuid();
+    try {
+      if (!key) {
+        rejected++;
+        errors.push(`rejected row without key (id=${id})`);
+        continue;
+      }
+
+      // Reject an out-of-enum column before it reaches SQLite, so the reason
+      // names the field and the accepted set rather than quoting the raw CHECK.
+      const violation = validateMemoryEnums(mem);
+      if (violation) {
+        rejected++;
+        errors.push(`Rejected "${key}": ${formatEnumViolation(violation)}`);
+        continue;
+      }
+
+      const timestamp = now();
+
+      // tags may arrive as an array (JSON body) or a serialized JSON string (row dump)
+      let tags: string[] = [];
+      const rawTags = mem["tags"];
+      if (Array.isArray(rawTags)) {
+        tags = rawTags as string[];
+      } else if (typeof rawTags === "string" && rawTags.trim()) {
+        try {
+          const parsed = JSON.parse(rawTags);
+          if (Array.isArray(parsed)) tags = parsed as string[];
+        } catch {
+          // leave tags empty on malformed input
+        }
+      }
+      const tagsJson = JSON.stringify(tags);
+
+      // metadata may arrive as an object or a serialized JSON string
+      let metadataJson = "{}";
+      const rawMeta = mem["metadata"];
+      if (rawMeta && typeof rawMeta === "object") {
+        metadataJson = JSON.stringify(rawMeta);
+      } else if (typeof rawMeta === "string" && rawMeta.trim()) {
+        metadataJson = rawMeta;
+      }
+
+      const safeValue = redactSecrets(String(mem["value"] ?? ""));
+      const safeSummary = mem["summary"] ? redactSecrets(String(mem["summary"])) : null;
+
+      const agentId = (mem["agent_id"] as string) ?? null;
+      const projectId = (mem["project_id"] as string) ?? null;
+      const sessionId = (mem["session_id"] as string) ?? null;
+      const machineId = (mem["machine_id"] as string) ?? null;
+
+      // Satisfy FK constraints for ids that were created on another machine.
+      ensureMemoryReferences(d, {
+        key,
+        value: safeValue,
+        agent_id: agentId ?? undefined,
+        project_id: projectId ?? undefined,
+        session_id: sessionId ?? undefined,
+        machine_id: machineId ?? undefined,
+      } as CreateMemoryInput);
+
+      const res = insert.run(
+        id,
+        key,
+        safeValue,
+        (mem["category"] as string) || "knowledge",
+        (mem["scope"] as string) || "private",
+        safeSummary,
+        tagsJson,
+        (mem["importance"] as number) ?? 5,
+        (mem["source"] as string) || "imported",
+        (mem["status"] as string) || "active",
+        Boolean(mem["pinned"]),
+        agentId,
+        projectId,
+        sessionId,
+        machineId,
+        (mem["namespace"] as string) ?? null,
+        (mem["created_by_agent"] as string) ?? agentId,
+        (mem["when_to_use"] as string) ?? null,
+        (mem["sequence_group"] as string) ?? null,
+        (mem["sequence_order"] as number) ?? null,
+        metadataJson,
+        (mem["access_count"] as number) ?? 0,
+        (mem["version"] as number) ?? 1,
+        (mem["expires_at"] as string) ?? null,
+        (mem["valid_from"] as string) ?? timestamp,
+        (mem["valid_until"] as string) ?? null,
+        (mem["ingested_at"] as string) ?? timestamp,
+        (mem["created_at"] as string) ?? timestamp,
+        (mem["updated_at"] as string) ?? timestamp
+      );
+
+      if ((res?.changes ?? 0) > 0) {
+        inserted++;
+        for (const tag of tags) {
+          try {
+            insertTag.run(id, tag);
+          } catch {
+            // tag table may be absent in reduced schemas — never block the row
+          }
+        }
+      } else {
+        // Uniqueness conflict only (bare ON CONFLICT DO NOTHING): the row is
+        // already present and was left untouched (idempotent, non-destructive).
+        // A refused row cannot reach here — it throws into the catch below.
+        skipped++;
+      }
+    } catch (e) {
+      // The store refused the row: it did NOT persist. Never counted as skipped.
+      rejected++;
+      errors.push(
+        `Failed "${String(key)}": ${e instanceof Error ? e.message : String(e)}`
+      );
+    }
+  }
+
+  return { inserted, skipped, rejected, errors, total: memories.length };
+}
+
+// ============================================================================
+// Internal helpers
+// ============================================================================
+
+/**
+ * Ensure the agent/project/session/machine rows referenced by a memory exist,
+ * inserting minimal stubs when they do not. Idempotent (INSERT OR IGNORE keyed
+ * on the primary id, so existing real rows are never modified). This keeps the
+ * FK constraints on `memories` satisfiable for writes that originate on another
+ * machine (the cloud/self_hosted flip and cross-machine imports) instead of
+ * failing the whole write with a foreign-key error.
+ */
+function ensureMemoryReferences(d: Database, input: CreateMemoryInput): void {
+  const t = now();
+  // Each stub is best-effort and independently guarded: a referenced table may
+  // be absent in reduced/test schemas, and a missing stub must never block the
+  // write (the FK, when present, is what we are satisfying).
+  const tryRun = (sql: string, params: unknown[]): void => {
+    try {
+      d.run(sql, params as never[]);
+    } catch {
+      // Table/column may not exist in this schema variant — ignore.
+    }
+  };
+  if (input.agent_id) {
+    tryRun(
+      "INSERT OR IGNORE INTO agents (id, name, role, created_at, last_seen_at) VALUES (?, ?, 'agent', ?, ?)",
+      [input.agent_id, `imported-${input.agent_id}`, t, t]
+    );
+  }
+  if (input.project_id) {
+    tryRun(
+      "INSERT OR IGNORE INTO projects (id, name, path, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+      [input.project_id, `imported-${input.project_id}`, `imported://${input.project_id}`, t, t]
+    );
+  }
+  if (input.machine_id) {
+    tryRun(
+      "INSERT OR IGNORE INTO machines (id, name, hostname, platform, created_at, last_seen_at) VALUES (?, ?, ?, 'unknown', ?, ?)",
+      [input.machine_id, `imported-${input.machine_id}`, `imported-${input.machine_id}`, t, t]
+    );
+  }
+  if (input.session_id) {
+    // sessions.agent_id / project_id reference agents/projects (stubbed above).
+    tryRun(
+      "INSERT OR IGNORE INTO sessions (id, agent_id, project_id, started_at, last_activity) VALUES (?, ?, ?, ?, ?)",
+      [input.session_id, input.agent_id ?? null, input.project_id ?? null, t, t]
+    );
+  }
+}
+
+/** List active memories with the same key (for trust_score contradiction check). */
+function listMemoriesByKey(key: string, db: Database): Memory[] {
+  const rows = db
+    .query("SELECT * FROM memories WHERE key = ? AND status = 'active' ORDER BY importance DESC LIMIT 10")
+    .all(key) as Record<string, unknown>[];
+  return rows.map(parseMemoryRow);
+}
+
+// ============================================================================
+// Read
+// ============================================================================
+
+export function getMemory(id: string, db?: Database): Memory | null {
+  if (!db && isApiMode()) {
+    const { status, data } = apiJson<Memory>("GET", `/memories/${encodeURIComponent(id)}`, undefined, { allow404: true });
+    return status === 404 ? null : (data ?? null);
+  }
+  const d = db || getDatabase();
+  // Resolve a partial-ID prefix to the full UUID. In local mode the CLI
+  // pre-resolves via resolveMemoryId, but in API mode the client cannot
+  // prefix-match (no local table), so `show`/`when-to-use <partial-id>` reach
+  // the server with a prefix. Resolving here makes those work against the cloud
+  // exactly as they do locally. A full 36-char id short-circuits to an exact
+  // match; anything shorter is a unique-prefix lookup.
+  const resolvedId = resolvePartialId(d, "memories", id) ?? id;
+  const row = d.query("SELECT * FROM memories WHERE id = ?").get(resolvedId) as
+    | Record<string, unknown>
+    | null;
+  if (!row) return null;
+  return parseMemoryRow(row);
+}
+
+export function getMemoryByKey(
+  key: string,
+  scope?: string,
+  agentId?: string,
+  projectId?: string,
+  sessionId?: string,
+  db?: Database,
+  as_of?: string
+): Memory | null {
+  if (!db && isApiMode()) {
+    const q = toQuery({ key, scope, agent_id: agentId, project_id: projectId, session_id: sessionId, as_of, status: "active", limit: 1 });
+    const { data } = apiJson<{ memories: Memory[] }>("GET", `/memories${q}`);
+    return data?.memories?.[0] ?? null;
+  }
+  const d = db || getDatabase();
+
+  let sql = "SELECT * FROM memories WHERE key = ?";
+  const params: SQLQueryBindings[] = [key];
+
+  if (scope) {
+    sql += " AND scope = ?";
+    params.push(scope);
+  }
+  if (agentId) {
+    sql += " AND agent_id = ?";
+    params.push(agentId);
+  }
+  if (projectId) {
+    sql += " AND project_id = ?";
+    params.push(projectId);
+  }
+  if (sessionId) {
+    sql += " AND session_id = ?";
+    params.push(sessionId);
+  }
+  if (as_of) {
+    sql += " AND (valid_from IS NULL OR valid_from <= ?)";
+    params.push(as_of);
+    sql += " AND (valid_until IS NULL OR valid_until > ?)";
+    params.push(as_of);
+  }
+
+  sql += " AND status = 'active' ORDER BY importance DESC LIMIT 1";
+
+  const row = d.query(sql).get(...params) as Record<string, unknown> | null;
+  if (!row) return null;
+  return parseMemoryRow(row);
+}
+
+/**
+ * Return ALL active memories matching a key (across scopes/agents/projects).
+ * Optional filters narrow the result set.
+ */
+export function getMemoriesByKey(
+  key: string,
+  scope?: string,
+  agentId?: string,
+  projectId?: string,
+  db?: Database
+): Memory[] {
+  if (!db && isApiMode()) {
+    // Cloud path: return ALL active matches for this key so callers (e.g. the
+    // `forget <key>` CLI command) can find/delete cloud-resident memories.
+    const q = toQuery({ key, scope, agent_id: agentId, project_id: projectId, status: "active" });
+    const { data } = apiJson<{ memories: Memory[] }>("GET", `/memories${q}`);
+    return data?.memories ?? [];
+  }
+  const d = db || getDatabase();
+
+  let sql = "SELECT * FROM memories WHERE key = ?";
+  const params: SQLQueryBindings[] = [key];
+
+  if (scope) {
+    sql += " AND scope = ?";
+    params.push(scope);
+  }
+  if (agentId) {
+    sql += " AND agent_id = ?";
+    params.push(agentId);
+  }
+  if (projectId) {
+    sql += " AND project_id = ?";
+    params.push(projectId);
+  }
+
+  sql += " AND status = 'active' ORDER BY importance DESC";
+
+  const rows = d.query(sql).all(...params) as Record<string, unknown>[];
+  return rows.map(parseMemoryRow);
+}
+
+// ============================================================================
+// List
+// ============================================================================
+
+export function listMemories(filter?: MemoryFilter, db?: Database): Memory[] {
+  if (!db && isApiMode()) {
+    const f = filter || {};
+    const q = toQuery({
+      key: f.key,
+      scope: f.scope,
+      category: f.category,
+      status: f.status,
+      tags: f.tags,
+      min_importance: f.min_importance,
+      pinned: f.pinned,
+      agent_id: f.agent_id,
+      project_id: f.project_id,
+      session_id: f.session_id,
+      namespace: f.namespace,
+      as_of: f.as_of,
+      limit: f.limit,
+      offset: f.offset,
+    });
+    const { data } = apiJson<{ memories: Memory[] }>("GET", `/memories${q}`);
+    return data?.memories ?? [];
+  }
+  const d = db || getDatabase();
+  const conditions: string[] = [];
+  const params: SQLQueryBindings[] = [];
+
+  if (filter) {
+    if (filter.key) {
+      conditions.push("key = ?");
+      params.push(filter.key);
+    }
+    if (filter.scope) {
+      if (Array.isArray(filter.scope)) {
+        conditions.push(`scope IN (${filter.scope.map(() => "?").join(",")})`);
+        params.push(...filter.scope);
+      } else {
+        conditions.push("scope = ?");
+        params.push(filter.scope);
+      }
+    }
+    if (filter.category) {
+      if (Array.isArray(filter.category)) {
+        conditions.push(
+          `category IN (${filter.category.map(() => "?").join(",")})`
+        );
+        params.push(...filter.category);
+      } else {
+        conditions.push("category = ?");
+        params.push(filter.category);
+      }
+    }
+    if (filter.source) {
+      if (Array.isArray(filter.source)) {
+        conditions.push(
+          `source IN (${filter.source.map(() => "?").join(",")})`
+        );
+        params.push(...filter.source);
+      } else {
+        conditions.push("source = ?");
+        params.push(filter.source);
+      }
+    }
+    if (filter.status) {
+      if (Array.isArray(filter.status)) {
+        conditions.push(
+          `status IN (${filter.status.map(() => "?").join(",")})`
+        );
+        params.push(...filter.status);
+      } else {
+        conditions.push("status = ?");
+        params.push(filter.status);
+      }
+    } else {
+      // Default: only active memories
+      conditions.push("status = 'active'");
+    }
+    if (filter.project_id) {
+      conditions.push("project_id = ?");
+      params.push(filter.project_id);
+    }
+    if (filter.agent_id) {
+      conditions.push("agent_id = ?");
+      params.push(filter.agent_id);
+    }
+    if (filter.session_id) {
+      conditions.push("session_id = ?");
+      params.push(filter.session_id);
+    }
+    if ("machine_id" in filter) {
+      if (filter.machine_id === null) {
+        conditions.push("machine_id IS NULL");
+      } else if (filter.machine_id) {
+        conditions.push("machine_id = ?");
+        params.push(filter.machine_id);
+      }
+    }
+    if ("visible_to_machine_id" in filter) {
+      if (filter.visible_to_machine_id === null) {
+        conditions.push("machine_id IS NULL");
+      } else if (filter.visible_to_machine_id !== undefined) {
+        conditions.push("(machine_id IS NULL OR machine_id = ?)");
+        params.push(filter.visible_to_machine_id);
+      }
+    }
+    if (filter.min_importance) {
+      conditions.push("importance >= ?");
+      params.push(filter.min_importance);
+    }
+    if (filter.pinned !== undefined) {
+      conditions.push("pinned = ?");
+      params.push(filter.pinned ? 1 : 0);
+    }
+    if ((filter as Record<string, unknown>).flagged === true) {
+      conditions.push("flag IS NOT NULL");
+    } else if ((filter as Record<string, unknown>).flag) {
+      conditions.push("flag = ?");
+      params.push((filter as Record<string, unknown>).flag as string);
+    }
+    if (filter.tags && filter.tags.length > 0) {
+      // AND match: memory must have ALL specified tags
+      for (const tag of filter.tags) {
+        conditions.push(
+          "id IN (SELECT memory_id FROM memory_tags WHERE tag = ?)"
+        );
+        params.push(tag);
+      }
+    }
+    if (filter.namespace) {
+      conditions.push("namespace = ?");
+      params.push(filter.namespace);
+    }
+    if (filter.search) {
+      conditions.push(
+        "(key LIKE ? OR value LIKE ? OR summary LIKE ?)"
+      );
+      const term = `%${filter.search}%`;
+      params.push(term, term, term);
+    }
+    if (filter.as_of) {
+      // Bi-temporal query: return memories that were valid at the given point in time
+      // valid_from <= as_of AND (valid_until IS NULL OR valid_until > as_of)
+      conditions.push("(valid_from IS NULL OR valid_from <= ?)");
+      params.push(filter.as_of);
+      conditions.push("(valid_until IS NULL OR valid_until > ?)");
+      params.push(filter.as_of);
+    }
+  } else {
+    conditions.push("status = 'active'");
+  }
+
+  let sql = "SELECT * FROM memories";
+  if (conditions.length > 0) {
+    sql += ` WHERE ${conditions.join(" AND ")}`;
+  }
+  sql += " ORDER BY importance DESC, created_at DESC";
+
+  if (filter?.limit) {
+    sql += " LIMIT ?";
+    params.push(filter.limit);
+  }
+  if (filter?.offset) {
+    sql += " OFFSET ?";
+    params.push(filter.offset);
+  }
+
+  const rows = d.query(sql).all(...params) as Record<string, unknown>[];
+  return rows.map(parseMemoryRow);
+}
+
+export interface MemoryBriefingResult {
+  new: Memory[];
+  updated: Memory[];
+  expired: Memory[];
+}
+
+/**
+ * Delta briefing: memories created / updated / expired since a timestamp,
+ * scoped by machine visibility. Transport-aware: in API mode the whole
+ * computation runs on the self-hosted server (the client has no DB).
+ *
+ * `visible_machine_id`: a resolved value (the caller resolves its own current
+ * machine). `null`/`undefined` restricts to machine-agnostic memories; a string
+ * also includes memories local to that machine.
+ */
+export function getMemoryBriefing(
+  opts: {
+    since: string;
+    scope?: string;
+    project_id?: string;
+    visible_machine_id?: string | null;
+    limit?: number;
+  },
+  db?: Database
+): MemoryBriefingResult {
+  const limit = opts.limit ?? 20;
+  if (!db && isApiMode()) {
+    const q = toQuery({
+      since: opts.since,
+      scope: opts.scope,
+      project_id: opts.project_id,
+      machine_agnostic: opts.visible_machine_id === null || opts.visible_machine_id === undefined ? true : undefined,
+      visible_machine_id: typeof opts.visible_machine_id === "string" ? opts.visible_machine_id : undefined,
+      limit,
+    });
+    const { data } = apiJson<MemoryBriefingResult>("GET", `/memories/briefing${q}`);
+    return data ?? { new: [], updated: [], expired: [] };
+  }
+  const d = db || getDatabase();
+
+  const visibleMachineId = opts.visible_machine_id;
+  const scopeClause = opts.scope ? "AND scope = ?" : "";
+  const projectClause = opts.project_id ? "AND project_id = ?" : "";
+  const machineClause =
+    typeof visibleMachineId === "string"
+      ? "AND (machine_id IS NULL OR machine_id = ?)"
+      : "AND machine_id IS NULL";
+  const extraParams: SQLQueryBindings[] = [
+    ...(opts.scope ? [opts.scope] : []),
+    ...(opts.project_id ? [opts.project_id] : []),
+    ...(typeof visibleMachineId === "string" ? [visibleMachineId] : []),
+  ];
+
+  const newRows = d.prepare(
+    `SELECT * FROM memories
+     WHERE status = 'active' AND created_at > ? ${scopeClause} ${projectClause} ${machineClause}
+     ORDER BY importance DESC, created_at DESC LIMIT ?`
+  ).all(opts.since, ...extraParams, limit) as Record<string, unknown>[];
+
+  const updatedRows = d.prepare(
+    `SELECT * FROM memories
+     WHERE status = 'active' AND updated_at > ? AND created_at <= ? ${scopeClause} ${projectClause} ${machineClause}
+     ORDER BY importance DESC, updated_at DESC LIMIT ?`
+  ).all(opts.since, opts.since, ...extraParams, limit) as Record<string, unknown>[];
+
+  const expiredRows = d.prepare(
+    `SELECT * FROM memories
+     WHERE status != 'active' AND updated_at > ? ${scopeClause} ${projectClause} ${machineClause}
+     ORDER BY updated_at DESC LIMIT ?`
+  ).all(opts.since, ...extraParams, Math.min(limit, 10)) as Record<string, unknown>[];
+
+  return {
+    new: newRows.map(parseMemoryRow),
+    updated: updatedRows.map(parseMemoryRow),
+    expired: expiredRows.map(parseMemoryRow),
+  };
+}
+
+/**
+ * Low-trust memories (trust_score below a threshold) for poisoning review.
+ * Transport-aware: API mode reads from the self-hosted server.
+ */
+export function listLowTrustMemories(
+  opts: { threshold?: number; project_id?: string; limit?: number; offset?: number } = {},
+  db?: Database
+): Memory[] {
+  const threshold = opts.threshold ?? 0.8;
+  const limit = opts.limit ?? 20;
+  const offset = opts.offset ?? 0;
+  if (!db && isApiMode()) {
+    const q = toQuery({ threshold, project_id: opts.project_id, limit, offset });
+    const { data } = apiJson<{ memories: Memory[] }>("GET", `/memories/audit${q}`);
+    return data?.memories ?? [];
+  }
+  const d = db || getDatabase();
+  const conditions: string[] = ["trust_score < ?", "status = 'active'"];
+  const params: SQLQueryBindings[] = [threshold];
+  if (opts.project_id) {
+    const resolved = resolvePartialId(d, "projects", opts.project_id);
+    conditions.push("project_id = ?");
+    params.push(resolved ?? opts.project_id);
+  }
+  params.push(limit, offset);
+  const rows = d.prepare(
+    `SELECT * FROM memories WHERE ${conditions.join(" AND ")} ORDER BY trust_score ASC LIMIT ? OFFSET ?`
+  ).all(...params) as Record<string, unknown>[];
+  return rows.map(parseMemoryRow);
+}
+
+/**
+ * List memories ordered by most-recently-accessed (the `history` surface).
+ * Only returns memories that have been accessed at least once.
+ */
+export function listMemoryHistory(
+  opts: { limit?: number; offset?: number } = {},
+  db?: Database
+): Memory[] {
+  const limit = opts.limit ?? 20;
+  const offset = opts.offset ?? 0;
+  if (!db && isApiMode()) {
+    const q = toQuery({ limit, offset });
+    const { data } = apiJson<{ memories: Memory[] }>("GET", `/memories/history${q}`);
+    return data?.memories ?? [];
+  }
+  const d = db || getDatabase();
+  const params: SQLQueryBindings[] = [limit];
+  let sql =
+    "SELECT * FROM memories WHERE status = 'active' AND accessed_at IS NOT NULL ORDER BY accessed_at DESC LIMIT ?";
+  if (offset) {
+    sql += " OFFSET ?";
+    params.push(offset);
+  }
+  const rows = d.query(sql).all(...params) as Record<string, unknown>[];
+  return rows.map(parseMemoryRow);
+}
+
+/**
+ * Retrieve an ordered memory chain by sequence_group (the `chain` surface).
+ */
+export function getMemoryChain(
+  sequenceGroup: string,
+  projectId?: string,
+  db?: Database
+): Memory[] {
+  if (!db && isApiMode()) {
+    const q = toQuery({ project_id: projectId });
+    // Server returns already-parsed Memory objects (like /memories), so use them
+    // directly rather than re-running parseMemoryRow over a parsed shape.
+    const { data } = apiJson<{ chain: Memory[] }>(
+      "GET",
+      `/chains/${encodeURIComponent(sequenceGroup)}${q}`
+    );
+    return data?.chain ?? [];
+  }
+  const d = db || getDatabase();
+  const conditions = ["sequence_group = ?", "status = 'active'"];
+  const params: SQLQueryBindings[] = [sequenceGroup];
+  if (projectId) {
+    conditions.push("project_id = ?");
+    params.push(projectId);
+  }
+  const rows = d
+    .prepare(
+      `SELECT * FROM memories WHERE ${conditions.join(" AND ")} ORDER BY sequence_order ASC`
+    )
+    .all(...params) as Record<string, unknown>[];
+  return rows.map(parseMemoryRow);
+}
+
+/**
+ * Load stored embeddings for a set of memory ids, for in-process re-ranking.
+ * API mode has no local embeddings table (the cloud store owns embeddings and
+ * ranks server-side), so it returns an empty map and callers gracefully fall
+ * back to importance/recency ordering.
+ */
+export function getMemoryEmbeddings(ids: string[], db?: Database): Map<string, number[]> {
+  const map = new Map<string, number[]>();
+  if (ids.length === 0) return map;
+  if (!db && isApiMode()) return map;
+  const d = db || getDatabase();
+  const rows = d
+    .prepare(
+      `SELECT memory_id, embedding FROM memory_embeddings WHERE memory_id IN (${ids.map(() => "?").join(",")})`
+    )
+    .all(...(ids as SQLQueryBindings[])) as Array<{ memory_id: string; embedding: string }>;
+  for (const row of rows) {
+    try {
+      map.set(row.memory_id, deserializeEmbedding(row.embedding));
+    } catch {
+      // skip malformed embedding
+    }
+  }
+  return map;
+}
+
+// ============================================================================
+// Update
+// ============================================================================
+
+export function updateMemory(
+  id: string,
+  input: UpdateMemoryInput,
+  db?: Database
+): Memory {
+  if (!db && isApiMode()) {
+    const { status, data } = apiJson<Memory>("PATCH", `/memories/${encodeURIComponent(id)}`, input, { allow404: true });
+    if (status === 404) throw new MemoryNotFoundError(id);
+
+    // Verify the write actually happened rather than trusting a 200. Every
+    // update bumps `version`, so a returned record whose version did not move
+    // past the one we submitted means the server accepted the request and
+    // changed nothing — which is precisely how this defect presented: HTTP 200,
+    // a success receipt naming the field, and the old value still in the store.
+    //
+    // This check is deliberately here on the CLIENT and not only in the SQL
+    // path below, because a client always talks to whatever server image is
+    // deployed. A server fixed today does not fix the operator running against
+    // one that is not yet redeployed; this makes such a server fail loudly
+    // instead of lying.
+    if (
+      data &&
+      typeof input.version === "number" &&
+      typeof data.version === "number" &&
+      data.version <= input.version
+    ) {
+      throw new Error(
+        `Update did not persist for memory ${id}: the server returned success but the record is unchanged ` +
+          `(version still ${data.version}). Your data was NOT written. ` +
+          `The server is likely running a build predating the partial-id fix — pass the full 36-character id as a workaround.`,
+      );
+    }
+    return data;
+  }
+  const d = db || getDatabase();
+  const existing = getMemory(id, d);
+  if (!existing) throw new MemoryNotFoundError(id);
+
+  // `id` may be a prefix: getMemory resolves partials, the WHERE clauses below
+  // do not. Bind the resolved id everywhere from here on, or the write targets
+  // zero rows while the confirming re-read resolves the prefix again and hands
+  // back the untouched row as a success. Callers reaching this with a partial
+  // are not hypothetical — in api mode the CLI forwards the operator's 8-char
+  // id straight to the server, which calls this function with it.
+  const memoryId = existing.id;
+
+  if (existing.version !== input.version) {
+    throw new VersionConflictError(id, input.version, existing.version);
+  }
+
+  const sets: string[] = ["version = version + 1", "updated_at = ?"];
+  const params: SQLQueryBindings[] = [now()];
+
+  if (input.value !== undefined) {
+    sets.push("value = ?");
+    params.push(redactSecrets(input.value));
+  }
+  if (input.category !== undefined) {
+    sets.push("category = ?");
+    params.push(input.category);
+  }
+  if (input.scope !== undefined) {
+    sets.push("scope = ?");
+    params.push(input.scope);
+  }
+  if (input.summary !== undefined) {
+    sets.push("summary = ?");
+    params.push(input.summary);
+  }
+  if (input.importance !== undefined) {
+    sets.push("importance = ?");
+    params.push(input.importance);
+  }
+  if (input.pinned !== undefined) {
+    sets.push("pinned = ?");
+    params.push(input.pinned ? 1 : 0);
+  }
+  if (input.status !== undefined) {
+    sets.push("status = ?");
+    params.push(input.status);
+  }
+  if (input.metadata !== undefined) {
+    sets.push("metadata = ?");
+    params.push(JSON.stringify(input.metadata));
+  }
+  if (input.expires_at !== undefined) {
+    sets.push("expires_at = ?");
+    params.push(input.expires_at);
+  }
+  if (input.flag !== undefined) {
+    sets.push("flag = ?");
+    params.push(input.flag ?? null);
+  }
+  if ((input as any).when_to_use !== undefined) {
+    sets.push("when_to_use = ?");
+    params.push((input as any).when_to_use ?? null);
+  }
+  if (input.tags !== undefined) {
+    sets.push("tags = ?");
+    params.push(JSON.stringify(input.tags));
+    // Update tags table
+    d.run("DELETE FROM memory_tags WHERE memory_id = ?", [memoryId]);
+    const insertTag = d.prepare(
+      "INSERT OR IGNORE INTO memory_tags (memory_id, tag) VALUES (?, ?)"
+    );
+    for (const tag of input.tags) {
+      insertTag.run(memoryId, tag);
+    }
+  }
+
+  params.push(memoryId);
+  const result = d.run(`UPDATE memories SET ${sets.join(", ")} WHERE id = ?`, params);
+
+  // A write that touched nothing must never be reported as a write. The row was
+  // read successfully a few lines up, so zero affected rows means the statement
+  // did not do what the caller asked and the caller cannot tell from the return
+  // value alone — which is exactly how this failed silently before.
+  if (result.changes === 0) {
+    throw new Error(
+      `Update affected no rows for memory ${memoryId}: the record was read but not written. ` +
+        `This is a bug in @hasna/mementos, not a bad argument — please report it.`,
+    );
+  }
+
+  const updated = getMemory(memoryId, d)!;
+
+  // Remove stale entity links if value changed (LLM pipeline re-links async)
+  if (input.value !== undefined) {
+    try {
+      const oldLinks = getEntityMemoryLinks(undefined, updated.id, d);
+      for (const link of oldLinks) {
+        unlinkEntityFromMemory(link.entity_id, updated.id, d);
+      }
+    } catch {
+      // Non-fatal
+    }
+  }
+
+  // Fire PostMemoryUpdate hook (non-blocking)
+  void hookRegistry.runHooks("PostMemoryUpdate", {
+    memory: updated,
+    previousValue: existing.value,
+    agentId: existing.agent_id ?? undefined,
+    projectId: existing.project_id ?? undefined,
+    sessionId: existing.session_id ?? undefined,
+    timestamp: Date.now(),
+  });
+
+  return updated;
+}
+
+// ============================================================================
+// Delete
+// ============================================================================
+
+export function deleteMemory(id: string, db?: Database): boolean {
+  if (!db && isApiMode()) {
+    const { status } = apiJson<{ deleted: boolean }>("DELETE", `/memories/${encodeURIComponent(id)}`, undefined, { allow404: true });
+    return status !== 404;
+  }
+  const d = db || getDatabase();
+  // Resolve a prefix the same way the read path does. Without this, `forget`
+  // given one of the 8-char ids that search/recall/save print deleted nothing
+  // and answered "No memory found" — a false negative about the store, for an
+  // id the CLI had just handed the operator.
+  const memoryId = resolvePartialId(d, "memories", id) ?? id;
+  // Fire PostMemoryDelete hook (non-blocking)
+  const result = d.run("DELETE FROM memories WHERE id = ?", [memoryId]);
+  if (result.changes > 0) {
+    void hookRegistry.runHooks("PostMemoryDelete", {
+      memoryId,
+      timestamp: Date.now(),
+    });
+  }
+  return result.changes > 0;
+}
+
+export function bulkDeleteMemories(ids: string[], db?: Database): number {
+  if (ids.length === 0) return 0;
+  if (!db && isApiMode()) {
+    const { data } = apiJson<{ deleted: number; total: number }>("POST", "/memories/bulk-forget", { ids });
+    return data?.deleted ?? 0;
+  }
+  const d = db || getDatabase();
+
+  // Resolve prefixes the way the read path does, for the same reason
+  // deleteMemory does: `IN (...)` is an exact match, so a partial id silently
+  // matches nothing and the caller is told "0 memories affected" at rc=0.
+  // An id that resolves to nothing is left as-is so it simply matches no row.
+  const resolvedIds = ids.map((id) => resolvePartialId(d, "memories", id) ?? id);
+
+  const placeholders = resolvedIds.map(() => "?").join(",");
+  // Count first — result.changes includes FTS5 trigger operations
+  const countRow = d
+    .query(
+      `SELECT COUNT(*) as c FROM memories WHERE id IN (${placeholders})`
+    )
+    .get(...(resolvedIds as SQLQueryBindings[])) as { c: number };
+  const count = countRow.c;
+  if (count > 0) {
+    d.run(
+      `DELETE FROM memories WHERE id IN (${placeholders})`,
+      resolvedIds as SQLQueryBindings[]
+    );
+  }
+  return count;
+}
+
+// ============================================================================
+// Touch (update access tracking)
+// ============================================================================
+
+export function touchMemory(id: string, db?: Database): void {
+  // In API mode the server touches on GET; avoid an extra round-trip.
+  if (!db && isApiMode()) return;
+  const d = db || getDatabase();
+  d.run(
+    "UPDATE memories SET access_count = access_count + 1, accessed_at = ? WHERE id = ?",
+    [now(), id]
+  );
+}
+
+/**
+ * Increment recall_count for a memory and auto-promote importance if threshold reached.
+ * Borrowed from nuggets: memories recalled frequently are more important.
+ * Default threshold: 3 recalls → importance +1 (capped at 10).
+ * Call this whenever a memory is returned to a user/agent.
+ */
+const RECALL_PROMOTE_THRESHOLD = 3;
+
+export function incrementRecallCount(id: string, db?: Database): void {
+  if (!db && isApiMode()) return;
+  const d = db || getDatabase();
+  try {
+    // Increment recall_count and access_count atomically
+    d.run(
+      "UPDATE memories SET recall_count = recall_count + 1, access_count = access_count + 1, accessed_at = ? WHERE id = ?",
+      [now(), id]
+    );
+    // Check if we should promote importance
+    const row = d
+      .query("SELECT recall_count, importance FROM memories WHERE id = ?")
+      .get(id) as { recall_count: number; importance: number } | null;
+    if (!row) return;
+    // Auto-promote: every RECALL_PROMOTE_THRESHOLD recalls, importance goes up by 1
+    const promotions = Math.floor(row.recall_count / RECALL_PROMOTE_THRESHOLD);
+    if (promotions > 0 && row.importance < 10) {
+      const newImportance = Math.min(10, row.importance + 1);
+      d.run("UPDATE memories SET importance = ? WHERE id = ? AND importance < 10", [newImportance, id]);
+    }
+  } catch {
+    // Non-fatal — recall tracking should never break a memory read
+  }
+}
+
+// ============================================================================
+// Cleanup
+// ============================================================================
+
+export function cleanExpiredMemories(db?: Database): number {
+  if (!db && isApiMode()) {
+    const { data } = apiJson<{ cleaned: number }>("POST", "/memories/clean");
+    return data?.cleaned ?? 0;
+  }
+  const d = db || getDatabase();
+  const timestamp = now();
+  // Count first — result.changes includes FTS5 trigger operations
+  const countRow = d
+    .query(
+      "SELECT COUNT(*) as c FROM memories WHERE expires_at IS NOT NULL AND expires_at < ?"
+    )
+    .get(timestamp) as { c: number };
+  const count = countRow.c;
+  if (count > 0) {
+    d.run(
+      "DELETE FROM memories WHERE expires_at IS NOT NULL AND expires_at < ?",
+      [timestamp]
+    );
+  }
+  return count;
+}
+
+// ============================================================================
+// Version history
+// ============================================================================
+
+export function getMemoryVersions(memoryId: string, db?: Database): MemoryVersion[] {
+  if (!db && isApiMode()) {
+    const { data } = apiJson<{ versions: MemoryVersion[] }>("GET", `/memories/${encodeURIComponent(memoryId)}/versions`);
+    return data?.versions ?? [];
+  }
+  const d = db || getDatabase();
+  try {
+    const rows = d
+      .query("SELECT * FROM memory_versions WHERE memory_id = ? ORDER BY version ASC")
+      .all(memoryId) as Record<string, unknown>[];
+    return rows.map((row) => ({
+      id: row["id"] as string,
+      memory_id: row["memory_id"] as string,
+      version: row["version"] as number,
+      value: row["value"] as string,
+      importance: row["importance"] as number,
+      scope: row["scope"] as MemoryVersion["scope"],
+      category: row["category"] as MemoryVersion["category"],
+      tags: JSON.parse((row["tags"] as string) || "[]") as string[],
+      summary: (row["summary"] as string) || null,
+      pinned: !!(row["pinned"] as number),
+      status: row["status"] as MemoryVersion["status"],
+      created_at: row["created_at"] as string,
+    }));
+  } catch {
+    // memory_versions table may not exist yet
+    return [];
+  }
+}
+
+// ============================================================================
+// Semantic search via vector embeddings
+// ============================================================================
+
+export interface SemanticSearchResult {
+  memory: Memory;
+  score: number;
+}
+
+/**
+ * Store or update the embedding for a memory. Called asynchronously after saves.
+ * Non-blocking: failures are silently ignored.
+ */
+export async function indexMemoryEmbedding(memoryId: string, text: string, db?: Database): Promise<void> {
+  try {
+    const d = db || getDatabase();
+    const { embedding, model, dimensions } = await generateEmbedding(text);
+    const serialized = serializeEmbedding(embedding);
+    d.run(
+      `INSERT INTO memory_embeddings (memory_id, embedding, model, dimensions)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(memory_id) DO UPDATE SET embedding=excluded.embedding, model=excluded.model, dimensions=excluded.dimensions, created_at=datetime('now')`,
+      [memoryId, serialized, model, dimensions]
+    );
+  } catch {
+    // Non-critical: silently ignore embedding failures
+  }
+}
+
+/**
+ * Semantic search across memories using cosine similarity.
+ * Falls back gracefully if no embeddings exist yet.
+ */
+export async function semanticSearch(
+  queryText: string,
+  options: {
+    threshold?: number;
+    limit?: number;
+    scope?: string;
+    agent_id?: string;
+    project_id?: string;
+    index_missing?: boolean;
+  } = {},
+  db?: Database
+): Promise<SemanticSearchResult[]> {
+  if (!db && isApiMode()) {
+    const { data } = apiJson<{ results: SemanticSearchResult[] }>("POST", "/memories/search/semantic", { query: queryText, ...options });
+    return data?.results ?? [];
+  }
+  const d = db || getDatabase();
+  const { threshold = 0.5, limit = 10, scope, agent_id, project_id } = options;
+
+  // Optionally backfill embeddings for any active memories that lack one, so a
+  // freshly-populated store can be searched semantically on first call. This is
+  // a store-side (local/server) operation; in API mode it runs on the server
+  // via the forwarded index_missing flag above.
+  if (options.index_missing) {
+    const unindexed = d.prepare(
+      `SELECT id, value, summary, when_to_use FROM memories
+       WHERE status = 'active' AND id NOT IN (SELECT memory_id FROM memory_embeddings)
+       LIMIT 100`
+    ).all() as Array<{ id: string; value: string; summary: string | null; when_to_use: string | null }>;
+    await Promise.all(
+      unindexed.map((m) =>
+        indexMemoryEmbedding(m.id, m.when_to_use || [m.value, m.summary].filter(Boolean).join(" "), d)
+      )
+    );
+  }
+
+  // Generate query embedding
+  const { embedding: queryEmbedding } = await generateEmbedding(queryText);
+
+  // Load all embeddings with basic filters
+  const conditions: string[] = ["m.status = 'active'", "e.embedding IS NOT NULL"];
+  const params: (string | number)[] = [];
+  if (scope) { conditions.push("m.scope = ?"); params.push(scope); }
+  if (agent_id) { conditions.push("m.agent_id = ?"); params.push(agent_id); }
+  if (project_id) { conditions.push("m.project_id = ?"); params.push(project_id); }
+
+  const where = conditions.join(" AND ");
+  const rows = d.prepare(
+    `SELECT m.*, e.embedding FROM memories m
+     JOIN memory_embeddings e ON e.memory_id = m.id
+     WHERE ${where}`
+  ).all(...params) as Array<Record<string, unknown> & { embedding: string }>;
+
+  // Compute cosine similarity and rank
+  const scored: SemanticSearchResult[] = [];
+  for (const row of rows) {
+    try {
+      const docEmbedding = deserializeEmbedding(row.embedding as string);
+      const score = cosineSimilarity(queryEmbedding, docEmbedding);
+      if (score >= threshold) {
+        const { embedding: _, ...memRow } = row;
+        scored.push({ memory: parseMemoryRow(memRow), score: Math.round(score * 1000) / 1000 });
+      }
+    } catch {
+      // Skip malformed embeddings
+    }
+  }
+
+  // Sort by score desc, return top N
+  scored.sort((a, b) => b.score - a.score);
+  return scored.slice(0, limit);
+}

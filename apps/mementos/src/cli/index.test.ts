@@ -1,0 +1,1001 @@
+import { describe, test, expect, beforeAll, afterAll } from "bun:test";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import {
+  assertLocalStoreBackend,
+  assertScratchDbCreated,
+  blankLlmProviderEnv,
+  isolatedStoreEnv,
+} from "../test-support/store-isolation.js";
+import { projectAuthorityTestEnv } from "../test-support/project-authority-identity.js";
+import { RECALL_EXIT_FUZZY, RECALL_EXIT_NOT_FOUND } from "./commands/memory-cmd-recall-exit.js";
+
+// Use a temp file DB so all subprocess calls share the same database
+const DB_PATH = join(tmpdir(), `mementos-cli-test-${Date.now()}.db`);
+const CLI_PATH = new URL("./index.tsx", import.meta.url).pathname;
+const PROJECT_AUTHORITY_ENV = projectAuthorityTestEnv();
+const UNCONFIGURED_PROJECT_AUTHORITY_ENV = Object.fromEntries(
+  Object.keys(PROJECT_AUTHORITY_ENV).map((key) => [key, ""]),
+);
+
+// This suite drives the real CLI and WRITES. The child env must be pinned to
+// DB_PATH — see src/test-support/store-isolation.ts for why blanking the vars
+// by hand here was unsafe, and why `beforeAll` verifies the result instead of
+// trusting it.
+const CLI_ENV = isolatedStoreEnv(DB_PATH, { extra: blankLlmProviderEnv() });
+
+beforeAll(async () => {
+  // Fail loudly BEFORE any write if the child did not resolve to local SQLite.
+  // Ambient HASNA_MEMENTOS_API_URL + HASNA_MEMENTOS_API_KEY (exported by the
+  // operator shell and inherited through tmux) would otherwise route every
+  // write in this file into the shared production store.
+  await assertLocalStoreBackend(CLI_PATH, CLI_ENV, DB_PATH);
+});
+
+afterAll(() => {
+  // Cleanup temp DB
+  for (const suffix of ["", "-wal", "-shm"]) {
+    const f = DB_PATH + suffix;
+    if (existsSync(f)) try { unlinkSync(f); } catch {}
+  }
+});
+
+async function runCli(
+  ...args: string[]
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  return runCliWithEnv({}, ...args);
+}
+
+async function runCliWithEnv(
+  env: Record<string, string>,
+  ...args: string[]
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  const proc = Bun.spawn(["bun", "run", CLI_PATH, ...args], {
+    env: { ...CLI_ENV, ...env },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [stdout, stderr] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ]);
+  const exitCode = await proc.exited;
+  return { stdout: stdout.trim(), stderr: stderr.trim(), exitCode };
+}
+
+async function runGuardedProjectCli(
+  ...args: string[]
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  return runCliWithEnv(PROJECT_AUTHORITY_ENV, ...args);
+}
+
+describe("store isolation", () => {
+  // The mode report says where the child INTENDS to write; this says a write
+  // actually landed there. The incident that motivated this guard had a
+  // correct-looking path and no file ever created, so both halves are required.
+  test("a real save lands in the scratch database, not the ambient store", async () => {
+    const key = `store-isolation.probe-${Date.now()}`;
+    const value = "written by the store-isolation guard";
+    const { exitCode, stderr } = await runCli("save", key, value);
+    expect(stderr).not.toContain("error:");
+    expect(exitCode).toBe(0);
+
+    assertScratchDbCreated(DB_PATH);
+
+    // Read the scratch file directly: the row must be IN it, which is only
+    // possible if the write went to this file and not over the network.
+    const { Database } = await import("bun:sqlite");
+    const db = new Database(DB_PATH, { readonly: true });
+    try {
+      const row = db.query("SELECT value FROM memories WHERE key = ?").get(key) as
+        | { value: string }
+        | null;
+      expect(row?.value).toBe(value);
+    } finally {
+      db.close();
+    }
+  });
+});
+
+describe("CLI", () => {
+  test("warns on startup when no primary machine is configured", async () => {
+    const { stderr } = await runCli("list", "--json");
+    expect(stderr).toContain("No primary machine configured");
+  });
+
+  test("--version outputs version", async () => {
+    const { stdout } = await runCli("--version");
+    expect(stdout).toMatch(/^\d+\.\d+\.\d+$/);
+  });
+
+  test("--help shows all key commands", async () => {
+    const { stdout } = await runCli("--help");
+    // Core memory commands
+    expect(stdout).toContain("save");
+    expect(stdout).toContain("recall");
+    expect(stdout).toContain("list");
+    expect(stdout).toContain("search");
+    expect(stdout).toContain("forget");
+    expect(stdout).toContain("update");
+    expect(stdout).toContain("pin");
+    expect(stdout).toContain("archive");
+    expect(stdout).toContain("versions");
+    expect(stdout).toContain("stale");
+    // Agent/project commands
+    expect(stdout).toContain("agents");
+    expect(stdout).toContain("projects");
+    // Utility commands
+    expect(stdout).toContain("report");
+    expect(stdout).toContain("stats");
+    expect(stdout).toContain("profile");
+    expect(stdout).toContain("doctor");
+    expect(stdout).toContain("inject");
+    expect(stdout).toContain("mcp");
+    expect(stdout).toContain("storage");
+    expect(stdout).toContain("consolidate");
+    expect(stdout).toContain("reflect");
+    expect(stdout).not.toContain("cloud  ");
+  });
+
+  test("completions bash lists every real top-level subcommand", async () => {
+    // Regression: the completion script used to carry a hand-maintained command
+    // string that drifted from the real CLI, omitting ~22 registered subcommands
+    // (entity, relation, graph, storage, brains, events, hooks, etc.). The list
+    // is now derived from commander, so it must stay in sync with `--help`.
+    const help = await runCli("--help");
+    const commandSection = help.stdout.slice(help.stdout.indexOf("Commands:"));
+    const realCommands = new Set<string>();
+    for (const line of commandSection.split("\n").slice(1)) {
+      const match = line.match(/^\s{2,}([a-z][a-z-]*)/);
+      if (!match) continue;
+      const name = match[1];
+      if (name === "help") continue;
+      realCommands.add(name);
+    }
+    // Sanity: help parsing found a meaningful set of commands.
+    expect(realCommands.size).toBeGreaterThan(30);
+
+    const bash = await runCli("completions", "bash");
+    const listMatch = bash.stdout.match(/local commands="([^"]*)"/);
+    expect(listMatch).not.toBeNull();
+    const completionCommands = new Set((listMatch?.[1] ?? "").split(/\s+/).filter(Boolean));
+
+    const missing = [...realCommands].filter((c) => !completionCommands.has(c));
+    expect(missing).toEqual([]);
+
+    // Spot-check subcommands that were specifically missing before the fix.
+    for (const cmd of ["entity", "relation", "graph", "storage", "brains", "events", "hooks", "auto-memory", "consolidate", "reflect", "when-to-use", "chain", "heartbeat", "project-panel", "tool-events", "synthesized-profile"]) {
+      expect(completionCommands.has(cmd)).toBe(true);
+    }
+  });
+
+  test("--help shows short global option aliases", async () => {
+    const { stdout } = await runCli("--help");
+    expect(stdout).toContain("-j, --json");
+    expect(stdout).toContain("-f, --format");
+    expect(stdout).toContain("-p, --project");
+    expect(stdout).toContain("-a, --agent");
+    expect(stdout).toContain("-s, --session");
+  });
+
+  test("storage status --json reports canonical storage config", async () => {
+    const { stdout, exitCode } = await runCli("storage", "status", "--json");
+    expect(exitCode).toBe(0);
+    const parsed = JSON.parse(stdout) as {
+      mode: string;
+      enabled: boolean;
+      runtime: {
+        runtime: {
+          kind: string;
+          local: { adapter: string; local_file_sync: { supported: boolean } };
+          remote: { adapter: string };
+          object_storage: { s3: { supported: boolean }; aws: { mutation_allowed: boolean } };
+        };
+      };
+      config: {
+        mode: string;
+        rds: { password_configured: boolean };
+      };
+    };
+    expect(parsed.mode).toBe("local");
+    expect(parsed.enabled).toBe(false);
+    expect(parsed.runtime.runtime.kind).toBe("local-sqlite");
+    expect(parsed.runtime.runtime.local.adapter).toBe("sqlite");
+    expect(parsed.runtime.runtime.local.local_file_sync.supported).toBe(false);
+    expect(parsed.runtime.runtime.remote.adapter).toBe("postgres");
+    expect(parsed.runtime.runtime.object_storage.s3.supported).toBe(false);
+    expect(parsed.runtime.runtime.object_storage.aws.mutation_allowed).toBe(false);
+    expect(parsed.config.mode).toBe("local");
+    expect(parsed.config.rds.password_configured).toBe(false);
+  });
+
+  test("storage migrate --dry-run --json fails closed without remote config", async () => {
+    const { stdout, exitCode } = await runCli("storage", "migrate", "--dry-run", "--json");
+    expect(exitCode).toBe(1);
+    const parsed = JSON.parse(stdout) as {
+      ok: boolean;
+      no_network: boolean;
+      issues: string[];
+    };
+    expect(parsed.ok).toBe(false);
+    expect(parsed.no_network).toBe(true);
+    // The CLI runs as a client, where the server-side DSN gate refuses to
+    // construct an RDS Postgres connection string. Diagnostics must still fail
+    // closed and surface that reason (never contact the network).
+    expect(parsed.issues.length).toBeGreaterThan(0);
+    expect(parsed.issues.join("\n")).toContain("mementos-serve");
+  });
+
+  test("storage migrate --dry-run --json redacts connection strings", async () => {
+    const { stdout, exitCode } = await runCli(
+      "storage",
+      "migrate",
+      "--dry-run",
+      "--json",
+      "--connection-string",
+      "postgres://user:secret@example.test/mementos?sslmode=require"
+    );
+    expect(exitCode).toBe(0);
+    const parsed = JSON.parse(stdout) as {
+      ok: boolean;
+      redacted_connection_string: string;
+      mutates_remote_on_apply: boolean;
+      requires_approval_for_live_run: boolean;
+    };
+    expect(parsed.ok).toBe(true);
+    expect(parsed.redacted_connection_string).toBe(
+      "postgres://user:***@example.test/mementos?sslmode=require"
+    );
+    expect(parsed.mutates_remote_on_apply).toBe(true);
+    expect(parsed.requires_approval_for_live_run).toBe(true);
+    expect(stdout).not.toContain(":secret");
+  });
+
+  test("storage migrate --dry-run --json rejects non-Postgres connection strings", async () => {
+    const { stdout, exitCode } = await runCli(
+      "storage",
+      "migrate",
+      "--dry-run",
+      "--json",
+      "--connection-string",
+      "sqlite:///tmp/mementos.db?access_token=local-secret"
+    );
+    expect(exitCode).toBe(1);
+    const parsed = JSON.parse(stdout) as {
+      ok: boolean;
+      configured: boolean;
+      redacted_connection_string: string;
+      issues: string[];
+    };
+    expect(parsed.ok).toBe(false);
+    expect(parsed.configured).toBe(false);
+    expect(parsed.redacted_connection_string).toBe("sqlite:///tmp/mementos.db?access_token=***");
+    expect(parsed.issues.join("\n")).toContain("postgres:// or postgresql://");
+    expect(stdout).not.toContain("local-secret");
+  });
+
+  test("consolidate --dry-run --json reports planned actions without applying", async () => {
+    await runCli("save", "consolidate-a", "CLI MCP parity must stay visible across features", "--scope", "shared", "--category", "history");
+    await runCli("save", "consolidate-b", "CLI and MCP parity must stay visible across feature work", "--scope", "shared", "--category", "history");
+
+    const { stdout, exitCode } = await runCli("--json", "consolidate", "--dry-run", "--scope", "shared", "--duplicate-threshold", "0.5");
+    expect(exitCode).toBe(0);
+    const parsed = JSON.parse(stdout);
+    expect(parsed.dryRun).toBe(true);
+    expect(Array.isArray(parsed.actions)).toBe(true);
+    expect(parsed.actions.some((action: { type: string }) => action.type === "merge_duplicate")).toBe(true);
+
+    const { stdout: listOut } = await runCli("--json", "list", "--scope", "shared");
+    const memories = JSON.parse(listOut);
+    const activeKeys = memories.map((memory: { key: string }) => memory.key);
+    expect(activeKeys).toContain("consolidate-a");
+    expect(activeKeys).toContain("consolidate-b");
+  });
+
+  test("reflect --dry-run --json returns structured lessons", async () => {
+    await runCli("--session", "cli-reflect-session", "save", "reflect-session-step", "The session wrote tests first and kept CLI MCP parity visible.", "--scope", "shared", "--category", "history");
+
+    const { stdout, exitCode } = await runCli("--json", "reflect", "--on", "session", "--source", "cli-reflect-session", "--dry-run");
+    expect(exitCode).toBe(0);
+    const parsed = JSON.parse(stdout);
+    expect(parsed.dryRun).toBe(true);
+    expect(Array.isArray(parsed.lessons)).toBe(true);
+    expect(parsed.lessons.length).toBeGreaterThan(0);
+  });
+
+  test("save creates a memory", async () => {
+    const { stdout, exitCode } = await runCli("save", "cli-test-key", "cli-test-value");
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("Created:");
+    expect(stdout).toContain("cli-test-key");
+  });
+
+  test("save with scope and importance", async () => {
+    const { stdout } = await runCli(
+      "save", "cli-global", "global-val",
+      "--scope", "global",
+      "--importance", "9",
+      "--category", "fact"
+    );
+    expect(stdout).toContain("Created:");
+    expect(stdout).toContain("cli-global");
+  });
+
+  test("save with tags", async () => {
+    const { stdout, exitCode } = await runCli(
+      "save", "cli-tagged", "tagged-val",
+      "--tags", "alpha,beta,gamma"
+    );
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("Created:");
+    expect(stdout).toContain("cli-tagged");
+  });
+
+  test("recall retrieves saved memory", async () => {
+    const { stdout } = await runCli("recall", "cli-test-key");
+    expect(stdout).toContain("cli-test-key");
+    expect(stdout).toContain("cli-test-value");
+  });
+
+  test("recall shows not found", async () => {
+    const { stdout, stderr } = await runCli("recall", "nonexistent-key-xyz");
+    const output = (stdout + stderr).toLowerCase();
+    expect(output).toContain("no memory found");
+  });
+});
+
+// ===========================================================================
+// `recall` answers "does key X exist", and callers read the EXIT CODE.
+//
+// The defect these tests exist for (todos 961d1ebc): recall fell back to a
+// fuzzy search and returned a DIFFERENT record at exit 0. Its asymmetry is why
+// it survived review for so long, and it dictates the shape of this block:
+//
+//   far key never saved   -> exit 1   (fails CLOSED — the path that works)
+//   NEAR-MISS never saved -> exit 0   (fails OPEN — returns someone else's row)
+//
+// Every negative control anyone wrote used an invented string, which is far
+// from everything and therefore exercised only the working path. Three seats
+// ran that control on the same day and all three passed while the instrument
+// was broken. So the NEAR-MISS arm below is the load-bearing one: a suite that
+// tests only the far key reproduces the original blind spot exactly.
+// ===========================================================================
+describe("recall key identity (todos 961d1ebc)", () => {
+  const STEM = "recall-identity-neighbour-record-with-a-long-distinctive-key";
+  const NEAR_MISS = `${STEM}-XYZ`;
+  const FAR = "zzq-recall-identity-far-key-4471";
+
+  beforeAll(async () => {
+    const { exitCode } = await runCli("save", STEM, "the neighbour record");
+    expect(exitCode).toBe(0);
+  });
+
+  test("a near-miss key IS near: --fuzzy substitutes the neighbour for it", async () => {
+    // Positive control for the arms below. Without this, a near-miss that the
+    // search engine considers far would make the exit-code assertions pass for
+    // the wrong reason — they would be testing the far-key path under a
+    // near-miss name, which is the very mistake this block exists to prevent.
+    const { stdout, stderr, exitCode } = await runCli("recall", NEAR_MISS, "--fuzzy");
+    expect(stdout + stderr).toContain(STEM);
+    expect(exitCode).not.toBe(RECALL_EXIT_NOT_FOUND);
+  });
+
+  test("exact key present: exit 0 and the returned key is the requested key", async () => {
+    const { stdout, exitCode } = await runCli("--json", "recall", STEM);
+    expect(exitCode).toBe(0);
+    expect(JSON.parse(stdout).key).toBe(STEM);
+  });
+
+  test("NEAR-MISS key never saved: exit is non-zero and NO record is returned", async () => {
+    const { stdout, stderr, exitCode } = await runCli("recall", NEAR_MISS);
+    expect(exitCode).not.toBe(0);
+    // Not merely "an error was printed": the neighbour's key must not appear at
+    // all. The original defect printed a full, well-formed record.
+    expect(stdout).not.toContain(STEM);
+    expect(stderr.toLowerCase()).toContain("no memory found");
+  });
+
+  test("NEAR-MISS key never saved, --json: error payload, no memory, non-zero exit", async () => {
+    const { stdout, exitCode } = await runCli("--json", "recall", NEAR_MISS);
+    expect(exitCode).not.toBe(0);
+    const parsed = JSON.parse(stdout);
+    expect(parsed.error).toBeDefined();
+    expect(parsed.key).toBeUndefined();
+    expect(parsed.requested_key).toBe(NEAR_MISS);
+  });
+
+  test("far key never saved: still exit non-zero (no regression)", async () => {
+    const { stdout, exitCode } = await runCli("recall", FAR);
+    expect(exitCode).not.toBe(0);
+    expect(stdout).not.toContain(STEM);
+  });
+
+  test("--fuzzy returns the neighbour AND signals that it substituted", async () => {
+    const { stdout, stderr, exitCode } = await runCli("recall", NEAR_MISS, "--fuzzy");
+    // The record is still returned — the opt-in behaviour is preserved.
+    expect(stdout).toContain(STEM);
+    // ...but the exit code must not claim the requested key was found.
+    expect(exitCode).toBe(RECALL_EXIT_FUZZY);
+    expect(exitCode).not.toBe(0);
+    // The warning names both keys, so a human reading the output can see the swap.
+    expect(stderr).toContain(NEAR_MISS);
+    expect(stderr).toContain(STEM);
+  });
+
+  test("--fuzzy --json marks the substitution and carries both keys", async () => {
+    const { stdout, exitCode } = await runCli("--json", "recall", NEAR_MISS, "--fuzzy");
+    expect(exitCode).toBe(RECALL_EXIT_FUZZY);
+    const parsed = JSON.parse(stdout);
+    expect(parsed.fuzzy_match).toBe(true);
+    expect(parsed.requested_key).toBe(NEAR_MISS);
+    expect(parsed.returned_key).toBe(STEM);
+    expect(parsed.memory.key).toBe(STEM);
+  });
+
+  test("--fuzzy on an exact hit is a plain hit: exit 0, no substitution marker", async () => {
+    const { stdout, exitCode } = await runCli("--json", "recall", STEM, "--fuzzy");
+    expect(exitCode).toBe(0);
+    const parsed = JSON.parse(stdout);
+    expect(parsed.key).toBe(STEM);
+    expect(parsed.fuzzy_match).toBeUndefined();
+  });
+
+  // `mementos get` did not exist and exited 1 with "unknown command" — a FALSE
+  // ABSENT that is byte-identical, to a caller reading only rc, to a genuine
+  // miss. That was the other half of the trap, so `get` is now an exact alias.
+  test("get is an exact alias: hit exits 0, near-miss exits non-zero", async () => {
+    const hit = await runCli("--json", "get", STEM);
+    expect(hit.exitCode).toBe(0);
+    expect(JSON.parse(hit.stdout).key).toBe(STEM);
+
+    const miss = await runCli("get", NEAR_MISS);
+    expect(miss.exitCode).not.toBe(0);
+    expect(miss.stdout).not.toContain(STEM);
+    expect((miss.stdout + miss.stderr).toLowerCase()).not.toContain("unknown command");
+  });
+});
+
+describe("cli memory commands (continued)", () => {
+
+  test("list shows memories", async () => {
+    const { stdout } = await runCli("list");
+    expect(stdout).toContain("cli-test-key");
+  });
+
+  test("list compact default pages noisy records and preserves JSON detail", async () => {
+    const tag = `compact-list-${Date.now()}`;
+    const longValue = "compact default output should truncate this repeated detail ".repeat(8) + "UNTRUNCATED_SENTINEL";
+    for (let i = 0; i < 25; i++) {
+      await runCli("save", `${tag}-${i}`, longValue, "--tags", tag, "--scope", "shared");
+    }
+
+    const { stdout, exitCode } = await runCli("list", "--tags", tag);
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("20+ memories");
+    expect(stdout).toContain("Hint:");
+    expect(stdout).toContain("mementos show <id>");
+    expect(stdout).not.toContain("UNTRUNCATED_SENTINEL");
+
+    const { stdout: jsonOut } = await runCli("list", "--tags", tag, "--json");
+    const parsed = JSON.parse(jsonOut);
+    expect(Array.isArray(parsed)).toBe(true);
+    expect(parsed[0].value).toContain("UNTRUNCATED_SENTINEL");
+    // 27 sequential CLI subprocess spawns (25 saves + 2 reads). Measured 19.00s
+    // in isolation on station01, so the suite-wide --timeout=10000 is undersized
+    // by construction, not flakily: this test cannot pass at that budget here.
+    // Nothing about the assertions is relaxed; only the time allowance matches
+    // what the test actually costs.
+  }, 60000);
+
+  test("list --json outputs parseable JSON", async () => {
+    const { stdout } = await runCli("list", "--json");
+    const parsed = JSON.parse(stdout);
+    expect(Array.isArray(parsed)).toBe(true);
+    expect(parsed.length).toBeGreaterThan(0);
+  });
+
+  test("warns on startup when no primary machine is configured", async () => {
+    const { stderr } = await runCli("list", "--json");
+    expect(stderr).toContain("No primary machine configured");
+  });
+
+  test("-j short alias outputs parseable JSON", async () => {
+    const { stdout, exitCode } = await runCli("-j", "list");
+    expect(exitCode).toBe(0);
+    const parsed = JSON.parse(stdout);
+    expect(Array.isArray(parsed)).toBe(true);
+  });
+
+  test("-f short alias sets JSON output format", async () => {
+    const { stdout, exitCode } = await runCli("-f", "json", "list");
+    expect(exitCode).toBe(0);
+    const parsed = JSON.parse(stdout);
+    expect(Array.isArray(parsed)).toBe(true);
+  });
+
+  test("search finds matching memories", async () => {
+    const { stdout } = await runCli("search", "global-val");
+    expect(stdout).toContain("cli-global");
+  });
+
+  test("search compact default hides highlights until verbose", async () => {
+    const needle = `compact-search-${Date.now()}`;
+    const longValue = `This memory contains ${needle} and a long body that should not print highlight detail by default. `.repeat(5);
+    for (let i = 0; i < 12; i++) {
+      await runCli("save", `${needle}-${i}`, longValue, "--scope", "shared");
+    }
+
+    const compact = await runCli("search", needle);
+    expect(compact.exitCode).toBe(0);
+    expect(compact.stdout).toContain("10+ results");
+    expect(compact.stdout).toContain("Hint:");
+    expect(compact.stdout).not.toContain("value:");
+
+    const verbose = await runCli("search", needle, "--verbose", "--limit", "1");
+    expect(verbose.exitCode).toBe(0);
+    expect(verbose.stdout).toContain("value:");
+    // 14 sequential CLI subprocess spawns (12 saves + 2 reads). Measured 11.22s
+    // in isolation on station01, likewise over the 10s suite budget.
+  }, 60000);
+
+  test("stats shows counts", async () => {
+    const { stdout, exitCode } = await runCli("stats");
+    expect(exitCode).toBe(0);
+    expect(stdout.toLowerCase()).toContain("total");
+  });
+
+  test("register-agent registers agent", async () => {
+    const { stdout, exitCode } = await runCli("register-agent", "cli-agent");
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("cli-agent");
+  });
+
+  test("agents lists registered agents", async () => {
+    const { stdout } = await runCli("agents");
+    expect(stdout).toContain("cli-agent");
+  });
+
+  test("export outputs JSON", async () => {
+    const { stdout } = await runCli("export");
+    const parsed = JSON.parse(stdout);
+    expect(Array.isArray(parsed)).toBe(true);
+    expect(parsed.length).toBeGreaterThan(0);
+  });
+
+  test("clean runs without error", async () => {
+    const { exitCode } = await runCli("clean");
+    expect(exitCode).toBe(0);
+  });
+
+  test("inject outputs context", async () => {
+    const { stdout } = await runCli("inject");
+    // Should have some content since we have global/high-importance memories
+    expect(stdout.length).toBeGreaterThan(0);
+  });
+
+  test("forget deletes a memory", async () => {
+    // Save one to delete
+    await runCli("save", "to-delete", "delete-me");
+    const { stdout, exitCode } = await runCli("forget", "to-delete");
+    expect(exitCode).toBe(0);
+    expect(stdout.toLowerCase()).toMatch(/delet|forgot|removed/);
+  });
+
+  test("projects shows empty or list", async () => {
+    const { exitCode } = await runCli("projects");
+    expect(exitCode).toBe(0);
+  });
+
+  test("projects updates name and path by stable ID", async () => {
+    const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const oldName = `iproj-cli-${suffix}`;
+    const oldPath = join(tmpdir(), oldName);
+    const newName = `CLI Project ${suffix}`;
+    const newPath = join(tmpdir(), `cli-project-${suffix}`);
+
+    const createdResult = await runCliWithEnv(
+      UNCONFIGURED_PROJECT_AUTHORITY_ENV,
+      "--json",
+      "projects",
+      "--add",
+      "--name",
+      oldName,
+      "--path",
+      oldPath
+    );
+    expect(createdResult.exitCode).toBe(0);
+    const created = JSON.parse(createdResult.stdout);
+
+    const unconfiguredPreview = await runCliWithEnv(
+      UNCONFIGURED_PROJECT_AUTHORITY_ENV,
+      "--json",
+      "projects",
+      "--update",
+      created.id,
+      "--expected-revision",
+      created.updated_at,
+      "--idempotency-key",
+      `cli-project-unconfigured-${suffix}`,
+      "--dry-run",
+      "--name",
+      newName,
+      "--path",
+      newPath
+    );
+    expect(unconfiguredPreview.exitCode).toBe(1);
+    expect(JSON.parse(unconfiguredPreview.stdout)).toMatchObject({
+      error: expect.stringMatching(/project authority identity is not configured/i),
+    });
+
+    const previewResult = await runGuardedProjectCli(
+      "--json",
+      "projects",
+      "--update",
+      created.id,
+      "--expected-revision",
+      created.updated_at,
+      "--idempotency-key",
+      `cli-project-preview-${suffix}`,
+      "--dry-run",
+      "--name",
+      newName,
+      "--path",
+      newPath
+    );
+    expect(previewResult.exitCode).toBe(0);
+    expect(JSON.parse(previewResult.stdout)).toMatchObject({
+      dry_run: true,
+      applied: false,
+      receipt: null,
+      project: { id: created.id, name: newName, path: newPath },
+    });
+    const afterPreview = JSON.parse((
+      await runCliWithEnv(
+        UNCONFIGURED_PROJECT_AUTHORITY_ENV,
+        "--json",
+        "projects",
+      )
+    ).stdout);
+    expect(afterPreview).toContainEqual(created);
+
+    const updatedResult = await runGuardedProjectCli(
+      "--json",
+      "projects",
+      "--update",
+      created.id,
+      "--expected-revision",
+      created.updated_at,
+      "--idempotency-key",
+      `cli-project-update-${suffix}`,
+      "--name",
+      newName,
+      "--path",
+      newPath
+    );
+    expect(updatedResult.exitCode).toBe(0);
+    const updated = JSON.parse(updatedResult.stdout);
+    expect(updated).toMatchObject({
+      dry_run: false,
+      applied: true,
+      project: { id: created.id, name: newName, path: newPath },
+      receipt: { direction: "forward", target_id: created.id },
+    });
+
+    const duplicateResult = await runGuardedProjectCli(
+      "--json",
+      "projects",
+      "--update",
+      created.id,
+      "--expected-revision",
+      created.updated_at,
+      "--idempotency-key",
+      `cli-project-update-${suffix}`,
+      "--name",
+      newName,
+      "--path",
+      newPath
+    );
+    expect(duplicateResult.exitCode).toBe(0);
+    expect(JSON.parse(duplicateResult.stdout)).toEqual(updated);
+
+    const inconsistentRetry = await runGuardedProjectCli(
+      "projects",
+      "--update",
+      created.id,
+      "--expected-revision",
+      created.updated_at,
+      "--idempotency-key",
+      `cli-project-update-${suffix}`,
+      "--description",
+      "different request under the same caller key"
+    );
+    expect(inconsistentRetry.exitCode).toBe(1);
+    expect(inconsistentRetry.stderr).toMatch(/idempotency key.*different request/i);
+
+    const projectBeforeRollbackPreview = JSON.parse(
+      (
+        await runCliWithEnv(
+          UNCONFIGURED_PROJECT_AUTHORITY_ENV,
+          "--json",
+          "projects",
+        )
+      ).stdout,
+    ).find((project: { id: string }) => project.id === created.id);
+    const { Database } = await import("bun:sqlite");
+    const receiptDbBeforeRollbackPreview = new Database(DB_PATH, { readonly: true });
+    const receiptCountBeforeRollbackPreview = receiptDbBeforeRollbackPreview
+      .query("SELECT COUNT(*) AS count FROM mementos_project_update_receipts")
+      .get() as { count: number };
+    receiptDbBeforeRollbackPreview.close();
+
+    const rollbackPreviewResult = await runGuardedProjectCli(
+      "--json",
+      "projects",
+      "--update",
+      created.id,
+      "--expected-revision",
+      updated.project.updated_at,
+      "--idempotency-key",
+      `cli-project-rollback-preview-${suffix}`,
+      "--rollback-receipt",
+      updated.receipt.receipt_id,
+      "--dry-run"
+    );
+    expect(rollbackPreviewResult.exitCode).toBe(1);
+    expect(rollbackPreviewResult.stderr).toMatch(/dry-run.*rollback.*not supported/i);
+
+    const projectAfterRollbackPreview = JSON.parse(
+      (
+        await runCliWithEnv(
+          UNCONFIGURED_PROJECT_AUTHORITY_ENV,
+          "--json",
+          "projects",
+        )
+      ).stdout,
+    ).find((project: { id: string }) => project.id === created.id);
+    const receiptDbAfterRollbackPreview = new Database(DB_PATH, { readonly: true });
+    const receiptCountAfterRollbackPreview = receiptDbAfterRollbackPreview
+      .query("SELECT COUNT(*) AS count FROM mementos_project_update_receipts")
+      .get() as { count: number };
+    receiptDbAfterRollbackPreview.close();
+    expect(projectAfterRollbackPreview).toEqual(projectBeforeRollbackPreview);
+    expect(receiptCountAfterRollbackPreview).toEqual(receiptCountBeforeRollbackPreview);
+
+    const rollbackResult = await runGuardedProjectCli(
+      "--json",
+      "projects",
+      "--update",
+      created.id,
+      "--expected-revision",
+      updated.project.updated_at,
+      "--idempotency-key",
+      `cli-project-rollback-${suffix}`,
+      "--rollback-receipt",
+      updated.receipt.receipt_id
+    );
+    expect(rollbackResult.exitCode).toBe(0);
+    expect(JSON.parse(rollbackResult.stdout)).toMatchObject({
+      project: created,
+      receipt: {
+        direction: "rollback",
+        accepted_receipt_id: updated.receipt.receipt_id,
+      },
+    });
+
+    const staleLocator = await runGuardedProjectCli(
+      "projects",
+      "--update",
+      oldName,
+      "--expected-revision",
+      created.updated_at,
+      "--idempotency-key",
+      `cli-project-stale-locator-${suffix}`,
+      "--description",
+      "must not resolve by the old name"
+    );
+    expect(staleLocator.exitCode).toBe(1);
+    expect(staleLocator.stderr).toMatch(/exact stable ID/i);
+  });
+
+  test("save --json returns parseable JSON", async () => {
+    const { stdout, exitCode } = await runCli("--json", "save", "json-save-key", "json-save-val");
+    expect(exitCode).toBe(0);
+    const parsed = JSON.parse(stdout);
+    expect(parsed.key).toBe("json-save-key");
+    expect(parsed.value).toBe("json-save-val");
+  });
+
+  test("recall --json returns parseable JSON", async () => {
+    const { stdout, exitCode } = await runCli("--json", "recall", "json-save-key");
+    expect(exitCode).toBe(0);
+    const parsed = JSON.parse(stdout);
+    expect(parsed.key).toBe("json-save-key");
+  });
+
+  test("stats --json returns parseable JSON", async () => {
+    const { stdout, exitCode } = await runCli("--json", "stats");
+    expect(exitCode).toBe(0);
+    const parsed = JSON.parse(stdout);
+    expect(typeof parsed.total).toBe("number");
+    expect(parsed.by_scope).toBeDefined();
+    expect(parsed.by_category).toBeDefined();
+  });
+
+  test("stats --json by_status buckets partition total (regression #stats-status-buckets)", async () => {
+    // Seed a memory and archive it so the store contains a non-active status.
+    // Before the fix, by_status tallied ALL statuses while total/by_scope/by_category
+    // counted only active rows, so the archived row inflated by_status beyond total.
+    await runCli("save", "bucket-regression-key", "bucket-regression-val");
+    const arch = await runCli("archive", "bucket-regression-key");
+    expect(arch.exitCode).toBe(0);
+
+    const { stdout, exitCode } = await runCli("--json", "stats");
+    expect(exitCode).toBe(0);
+    const parsed = JSON.parse(stdout);
+
+    const sum = (obj: Record<string, number>) =>
+      Object.values(obj).reduce((a, b) => a + b, 0);
+
+    // All three groupings must partition `total` exactly.
+    expect(sum(parsed.by_scope)).toBe(parsed.total);
+    expect(sum(parsed.by_category)).toBe(parsed.total);
+    expect(sum(parsed.by_status)).toBe(parsed.total);
+    // The active bucket must not exceed total (it previously equalled the full
+    // total while archived added even more on top).
+    expect(parsed.by_status.active).toBeLessThanOrEqual(parsed.total);
+  }, 20000);
+
+  test("search --json returns parseable JSON", async () => {
+    const { stdout, exitCode } = await runCli("--json", "search", "cli-test");
+    expect(exitCode).toBe(0);
+    const parsed = JSON.parse(stdout);
+    expect(Array.isArray(parsed)).toBe(true);
+  });
+
+  test("register-agent --json returns agent JSON", async () => {
+    const { stdout, exitCode } = await runCli("--json", "register-agent", "json-agent");
+    expect(exitCode).toBe(0);
+    const parsed = JSON.parse(stdout);
+    expect(parsed.name).toBe("json-agent");
+    expect(parsed.id).toBeDefined();
+  });
+
+  test("agents --json returns array", async () => {
+    const { stdout, exitCode } = await runCli("--json", "agents");
+    expect(exitCode).toBe(0);
+    const parsed = JSON.parse(stdout);
+    expect(Array.isArray(parsed)).toBe(true);
+    expect(parsed.length).toBeGreaterThan(0);
+  });
+
+  test("forget --json returns deleted id", async () => {
+    await runCli("save", "forget-json-key", "forget-json-val");
+    const { stdout, exitCode } = await runCli("--json", "forget", "forget-json-key");
+    expect(exitCode).toBe(0);
+    const parsed = JSON.parse(stdout);
+    expect(parsed.deleted).toBeDefined();
+  });
+
+  test("save with summary", async () => {
+    const { stdout, exitCode } = await runCli(
+      "save", "summary-key", "summary-value",
+      "--summary", "A brief summary"
+    );
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("Created:");
+  });
+
+  test("pin by key", async () => {
+    await runCli("save", "pin-test-key", "pin-test-value");
+    const { stdout, exitCode } = await runCli("pin", "pin-test-key");
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("Pinned:");
+    expect(stdout).toContain("pin-test-key");
+  });
+
+  test("unpin by key", async () => {
+    await runCli("save", "unpin-test-key", "unpin-test-value");
+    // Pin first, then unpin
+    await runCli("pin", "unpin-test-key");
+    const { stdout, exitCode } = await runCli("unpin", "unpin-test-key");
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("Unpinned:");
+    expect(stdout).toContain("unpin-test-key");
+  });
+
+  test("pin --json returns full memory object", async () => {
+    await runCli("save", "pin-json-key", "pin-json-value");
+    const { stdout, exitCode } = await runCli("--json", "pin", "pin-json-key");
+    expect(exitCode).toBe(0);
+    const parsed = JSON.parse(stdout);
+    expect(parsed.key).toBe("pin-json-key");
+    expect(parsed.pinned).toBe(true);
+  });
+
+  test("unpin --json returns full memory object", async () => {
+    await runCli("save", "unpin-json-key", "unpin-json-value");
+    await runCli("pin", "unpin-json-key");
+    const { stdout, exitCode } = await runCli("--json", "unpin", "unpin-json-key");
+    expect(exitCode).toBe(0);
+    const parsed = JSON.parse(stdout);
+    expect(parsed.key).toBe("unpin-json-key");
+    expect(parsed.pinned).toBe(false);
+  });
+
+  test("pin nonexistent key fails", async () => {
+    const { stderr, exitCode } = await runCli("pin", "nonexistent-pin-key-xyz");
+    expect(exitCode).not.toBe(0);
+    expect(stderr.toLowerCase()).toContain("no memory found");
+  });
+
+  test("unpin nonexistent key fails", async () => {
+    const { stderr, exitCode } = await runCli("unpin", "nonexistent-unpin-key-xyz");
+    expect(exitCode).not.toBe(0);
+    expect(stderr.toLowerCase()).toContain("no memory found");
+  });
+
+  test("report shows memory summary", async () => {
+    await runCli("save", "report-test-key", "report-test-value", "--scope", "global", "--importance", "8");
+    const { stdout, exitCode } = await runCli("report", "--days", "7");
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("Total:");
+    expect(stdout).toContain("Recent:");
+  });
+
+  test("report --json outputs parseable JSON", async () => {
+    // Global --json must come before subcommand in Commander.js
+    const { stdout, exitCode } = await runCli("--json", "report");
+    expect(exitCode).toBe(0);
+    const data = JSON.parse(stdout);
+    expect(typeof data.total).toBe("number");
+    expect(typeof data.pinned).toBe("number");
+    expect(typeof data.recent.total).toBe("number");
+  });
+
+  test("report --markdown outputs markdown", async () => {
+    const { stdout, exitCode } = await runCli("report", "--markdown");
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("## Mementos Report");
+  });
+
+  test("profile list shows profiles", async () => {
+    const { exitCode } = await runCli("profile", "list");
+    expect(exitCode).toBe(0);
+  });
+
+  test("config set refuses malformed global config without rewriting it", async () => {
+    const home = mkdtempSync(join(tmpdir(), "mementos-config-home-"));
+    const configDir = join(home, ".hasna", "mementos");
+    const configPath = join(configDir, "config.json");
+    const malformed = '{"active_profile":"keep","default_scope":"shared"';
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(configPath, malformed, "utf-8");
+
+    try {
+      const { stderr, exitCode } = await runCliWithEnv(
+        { HOME: home, USERPROFILE: home },
+        "config",
+        "set",
+        "default_scope",
+        "global",
+      );
+
+      expect(exitCode).not.toBe(0);
+      expect(stderr).toContain("Cannot update global config");
+      expect(readFileSync(configPath, "utf-8")).toBe(malformed);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("pin by partial ID", async () => {
+    // Save and get the ID from JSON output
+    const { stdout: saveOut } = await runCli("--json", "save", "pin-id-key", "pin-id-value");
+    const saved = JSON.parse(saveOut);
+    const partialId = saved.id.slice(0, 8);
+    const { stdout, exitCode } = await runCli("pin", partialId);
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("Pinned:");
+  });
+});

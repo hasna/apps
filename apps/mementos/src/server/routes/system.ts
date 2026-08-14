@@ -1,0 +1,17 @@
+import { registerSystemAutoMemoryRoutes } from "./system-auto-memory.js";
+import { registerSystemHookRoutes } from "./system-hooks.js";
+import { registerSystemSynthesisRoutes } from "./system-synthesis.js";
+import { registerSystemSessionRoutes } from "./system-sessions.js";
+import { registerSystemToolRoutes } from "./system-tools.js";
+import { registerSystemChainRoutes } from "./system-chain.js";
+import { registerSystemConsolidationRoutes } from "./system-consolidation.js";
+import { registerSystemSubscriptionRoutes } from "./system-subscriptions.js";
+
+registerSystemAutoMemoryRoutes();
+registerSystemHookRoutes();
+registerSystemSynthesisRoutes();
+registerSystemSessionRoutes();
+registerSystemToolRoutes();
+registerSystemChainRoutes();
+registerSystemConsolidationRoutes();
+registerSystemSubscriptionRoutes();
