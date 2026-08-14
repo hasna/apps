@@ -4,6 +4,7 @@ import type { TypedQueryClient } from "../generated/storage-kit/query.js";
 import type {
   AgentRow,
   GuardedProjectMutationReceiptRow,
+  ProjectQuarantineRequest,
   ProjectResourceLinkMigrationEvent,
   ProjectResourceLinkMigrationManifestRow,
   ProjectResourceLinkRow,
@@ -429,6 +430,9 @@ function resourceLinkMutationClient() {
         return links
           .filter((link) => link.project_id === params[0])
           .slice(0, Number(params[1])) as T[];
+      }
+      if (sql.includes("FROM workspace_locations")) {
+        return [];
       }
       if (sql.includes("FROM project_resource_link_migration_events")) {
         return migrationEvents
@@ -1317,6 +1321,80 @@ describe("pg-store typed resource-link transaction model", () => {
       evidence: projectAReceipt.verificationEvidence(planned.manifest.links[0]!.link_id),
       ...bounds,
     })).rejects.toThrow(/trusted project subject/i);
+  });
+});
+
+describe("pg-store duplicate project quarantine", () => {
+  test("stale dry runs are repeatable without hosted receipts or domain writes", async () => {
+    const harness = resourceLinkMutationClient();
+    const store = new ProjectsPgStore(harness.client);
+    const read = await store.readDuplicateProjectQuarantinePreimage({
+      project_id: harness.workspace().id,
+      resource_link_max_items: 10,
+      workspace_location_max_items: 10,
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+    });
+    const staleDryRun: ProjectQuarantineRequest = {
+      project_id: read.project_id,
+      operation_id: "pg-quarantine-stale-dry-run",
+      step_id: "retire-duplicate",
+      expected_revision: "2026-01-01 00:00:00",
+      expected_project_digest: read.snapshot.project_digest,
+      expected_resource_link_collection_digest: read.snapshot.resource_link_collection_digest,
+      expected_resource_link_ids: read.snapshot.resource_links.map((link) => link.id),
+      resource_link_max_items: 10,
+      expected_workspace_location_collection_digest: read.snapshot.workspace_location_collection_digest,
+      expected_workspace_location_ids: read.snapshot.workspace_locations.map((location) => location.id),
+      workspace_location_max_items: 10,
+      quarantine_name: "Postgres Resource provenance",
+      quarantine_slug: "pg-resource-provenance",
+      dry_run: true,
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+    };
+    const before = {
+      workspace: harness.workspace(),
+      links: harness.links(),
+      receipts: harness.receipts(),
+      events: harness.events(),
+    };
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const result = await store.quarantineDuplicateProject(staleDryRun);
+      expect(result).toMatchObject({
+        ok: false,
+        dry_run: true,
+        outcome: "terminal_nonacceptance",
+        receipt: null,
+        rollback: null,
+      });
+      expect({
+        workspace: harness.workspace(),
+        links: harness.links(),
+        receipts: harness.receipts(),
+        events: harness.events(),
+      }).toEqual(before);
+    }
+
+    const applied = await store.quarantineDuplicateProject({
+      ...staleDryRun,
+      dry_run: false,
+    });
+    expect(applied).toMatchObject({
+      ok: false,
+      dry_run: false,
+      outcome: "terminal_nonacceptance",
+      receipt: {
+        operation_id: staleDryRun.operation_id,
+        reason: "stale_revision",
+      },
+      rollback: null,
+    });
+    expect(harness.workspace()).toEqual(before.workspace);
+    expect(harness.links()).toEqual(before.links);
+    expect(harness.events()).toEqual(before.events);
+    expect(harness.receipts()).toHaveLength(before.receipts.length + 1);
   });
 });
 

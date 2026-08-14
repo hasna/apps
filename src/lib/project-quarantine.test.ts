@@ -120,6 +120,10 @@ function domainState(db: Database, projectId: string) {
   };
 }
 
+function receiptCount(db: Database): number {
+  return (db.query("SELECT COUNT(*) AS n FROM guarded_project_mutation_receipts").get() as { n: number }).n;
+}
+
 describe("duplicate project quarantine transaction", () => {
   test("atomically frees selectors and links, preserves the row, and restores the exact preimage", () => {
     const db = makeDb();
@@ -200,6 +204,96 @@ describe("duplicate project quarantine transaction", () => {
       expect(result.outcome, label).toBe("terminal_nonacceptance");
       expect(result.receipt?.reason, label).toBe(reason);
       expect(domainState(db, read.project_id), label).toEqual(before);
+    }
+  });
+
+  test("stale dry runs are repeatable terminal previews that consume no receipt or operation id", () => {
+    const db = makeDb();
+    const read = seed(db);
+    const before = domainState(db, read.project_id);
+    const receiptsBefore = receiptCount(db);
+    const staleDryRun = request(read, {
+      operation_id: "quarantine-stale-dry-run",
+      expected_revision: "2026-01-01 00:00:00",
+      dry_run: true,
+    });
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const result = quarantineDuplicateProject(staleDryRun, db);
+      expect(result).toMatchObject({
+        ok: false,
+        dry_run: true,
+        outcome: "terminal_nonacceptance",
+        receipt: null,
+        rollback: null,
+      });
+      expect(result.current_revision).toBe(read.current_revision);
+      expect(domainState(db, read.project_id)).toEqual(before);
+      expect(receiptCount(db)).toBe(receiptsBefore);
+    }
+
+    const applied = quarantineDuplicateProject({
+      ...staleDryRun,
+      dry_run: false,
+    }, db);
+    expect(applied).toMatchObject({
+      ok: false,
+      dry_run: false,
+      outcome: "terminal_nonacceptance",
+      receipt: {
+        operation_id: staleDryRun.operation_id,
+        reason: "stale_revision",
+      },
+      rollback: null,
+    });
+    expect(domainState(db, read.project_id)).toEqual(before);
+    expect(receiptCount(db)).toBe(receiptsBefore + 1);
+  });
+
+  test("accepted and changed-request dry-run retries never append duplicate or terminal receipts", () => {
+    const db = makeDb();
+    const read = seed(db);
+    const acceptedInput = request(read, {
+      operation_id: "quarantine-accepted-dry-run-retry",
+    });
+    const accepted = quarantineDuplicateProject(acceptedInput, db);
+    expect(accepted.outcome).toBe("accepted");
+    const acceptedState = domainState(db, read.project_id);
+    const receiptsAfterAccepted = receiptCount(db);
+
+    const duplicatePreview = quarantineDuplicateProject({
+      ...acceptedInput,
+      dry_run: true,
+    }, db);
+    expect(duplicatePreview).toMatchObject({
+      ok: true,
+      dry_run: true,
+      outcome: "duplicate_of_accepted",
+      receipt: null,
+      rollback: {
+        accepted_receipt_id: accepted.receipt?.receipt_id,
+      },
+    });
+    expect(domainState(db, read.project_id)).toEqual(acceptedState);
+    expect(receiptCount(db)).toBe(receiptsAfterAccepted);
+
+    const changedPreviewInput = {
+      ...acceptedInput,
+      quarantine_name: "Changed quarantine preview",
+      quarantine_slug: "changed-quarantine-preview",
+      dry_run: true,
+    };
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const changedPreview = quarantineDuplicateProject(changedPreviewInput, db);
+      expect(changedPreview).toMatchObject({
+        ok: false,
+        dry_run: true,
+        outcome: "terminal_nonacceptance",
+        receipt: null,
+        rollback: null,
+      });
+      expect(domainState(db, read.project_id)).toEqual(acceptedState);
+      expect(receiptCount(db)).toBe(receiptsAfterAccepted);
     }
   });
 

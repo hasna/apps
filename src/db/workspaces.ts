@@ -1939,6 +1939,26 @@ export function quarantineDuplicateProject(
       ) {
         throw new Error("project quarantine retry refuses drift after the accepted receipt");
       }
+      if (input.dry_run) {
+        return withResponseControl({
+          ok: true,
+          dry_run: true,
+          outcome: "duplicate_of_accepted" as const,
+          idempotency_key: idempotencyKey,
+          request_digest: reqDigest,
+          precondition_digest: preDigest,
+          project_id: input.project_id,
+          expected_revision: input.expected_revision,
+          current_revision: beforeProject.updated_at,
+          before,
+          after: acceptedAfter,
+          receipt: null,
+          rollback: {
+            accepted_receipt_id: duplicate.receipt_id,
+            expected_current_revision: duplicate.post_revision!,
+          },
+        }, input, started, "project quarantine");
+      }
       const receipt = duplicateOfAcceptedReceipt(
         duplicate,
         beforeProject,
@@ -1971,6 +1991,23 @@ export function quarantineDuplicateProject(
       target_id: input.project_id,
     }, d);
     if (priorAccepted) {
+      if (input.dry_run) {
+        return withResponseControl({
+          ok: false,
+          dry_run: true,
+          outcome: "terminal_nonacceptance" as const,
+          idempotency_key: idempotencyKey,
+          request_digest: reqDigest,
+          precondition_digest: preDigest,
+          project_id: input.project_id,
+          expected_revision: input.expected_revision,
+          current_revision: beforeProject.updated_at,
+          before,
+          after: null,
+          receipt: null,
+          rollback: null,
+        }, input, started, "project quarantine");
+      }
       const receipt = terminalNonacceptanceReceipt({
         operation_id: input.operation_id,
         step_id: input.step_id,
@@ -2001,6 +2038,23 @@ export function quarantineDuplicateProject(
     }
     const refusal = assertProjectQuarantinePreconditions(input, before);
     if (refusal) {
+      if (input.dry_run) {
+        return withResponseControl({
+          ok: false,
+          dry_run: true,
+          outcome: "terminal_nonacceptance" as const,
+          idempotency_key: idempotencyKey,
+          request_digest: reqDigest,
+          precondition_digest: preDigest,
+          project_id: input.project_id,
+          expected_revision: input.expected_revision,
+          current_revision: beforeProject.updated_at,
+          before,
+          after: null,
+          receipt: null,
+          rollback: null,
+        }, input, started, "project quarantine");
+      }
       const receipt = terminalNonacceptanceReceipt({
         operation_id: input.operation_id,
         step_id: input.step_id,

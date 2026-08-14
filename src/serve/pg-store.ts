@@ -1610,6 +1610,26 @@ export class ProjectsPgStore {
       ) {
         throw new ValidationError("project quarantine retry refuses drift after the accepted receipt");
       }
+      if (input.dry_run) {
+        return withResponseControl({
+          ok: true,
+          dry_run: true,
+          outcome: "duplicate_of_accepted" as const,
+          idempotency_key: idempotencyKey,
+          request_digest: reqDigest,
+          precondition_digest: preDigest,
+          project_id: input.project_id,
+          expected_revision: input.expected_revision,
+          current_revision: beforeProject.updated_at,
+          before,
+          after: acceptedAfter,
+          receipt: null,
+          rollback: {
+            accepted_receipt_id: duplicate.receipt_id,
+            expected_current_revision: duplicate.post_revision!,
+          },
+        }, input, started, "project quarantine");
+      }
       const receipt = await this.duplicateGuardedReceipt(
         duplicate,
         beforeProject,
@@ -1641,6 +1661,23 @@ export class ProjectsPgStore {
       target_id: input.project_id,
     });
     if (priorAccepted) {
+      if (input.dry_run) {
+        return withResponseControl({
+          ok: false,
+          dry_run: true,
+          outcome: "terminal_nonacceptance" as const,
+          idempotency_key: idempotencyKey,
+          request_digest: reqDigest,
+          precondition_digest: preDigest,
+          project_id: input.project_id,
+          expected_revision: input.expected_revision,
+          current_revision: beforeProject.updated_at,
+          before,
+          after: null,
+          receipt: null,
+          rollback: null,
+        }, input, started, "project quarantine");
+      }
       const receipt = await this.guardedTerminalNonacceptance({
         operation_id: input.operation_id,
         step_id: input.step_id,
@@ -1676,6 +1713,23 @@ export class ProjectsPgStore {
       throw new ValidationError(err instanceof Error ? err.message : String(err));
     }
     if (refusal) {
+      if (input.dry_run) {
+        return withResponseControl({
+          ok: false,
+          dry_run: true,
+          outcome: "terminal_nonacceptance" as const,
+          idempotency_key: idempotencyKey,
+          request_digest: reqDigest,
+          precondition_digest: preDigest,
+          project_id: input.project_id,
+          expected_revision: input.expected_revision,
+          current_revision: beforeProject.updated_at,
+          before,
+          after: null,
+          receipt: null,
+          rollback: null,
+        }, input, started, "project quarantine");
+      }
       const receipt = await this.guardedTerminalNonacceptance({
         operation_id: input.operation_id,
         step_id: input.step_id,
