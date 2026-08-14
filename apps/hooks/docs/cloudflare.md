@@ -1,24 +1,26 @@
 # @hasna/hooks — Cloudflare Operator Guide
 
-> **Status: implementation in progress — lane L1 (PR pending). These docs describe the target state.**
+> **Status: implemented.** This guide describes `hooks cf deploy` and the
+> Cloudflare Worker as merged on main (src/cf/provision.ts,
+> src/cf/worker.ts).
 
-This guide is for operators running the optional Cloudflare backend for
-`@hasna/hooks`: a Workers API, a D1 catalog/lock database, and an R2
-immutable artifact store. The backend is opt-in. Without it, the client is
-fully local and nothing in this document applies.
+This guide is for operators running the optional Cloudflare registry for
+`@hasna/hooks`: a Workers API, a D1 catalog database, and an R2 artifact
+store. The backend is opt-in. Without it, the client is fully local and
+nothing in this document applies.
 
 ## 1. Prerequisites
 
 - A Cloudflare account.
-- A Cloudflare API token with permissions to manage Workers, D1 databases,
-  and R2 buckets (the token must cover the zone/account you deploy to).
+- A Cloudflare API token with permissions to manage D1 databases and R2
+  buckets (the token must cover the account you provision into).
 - The token available **only via the environment** (see §6) — never in a
   config file, a manifest, a transcript, or a commit.
 - Your Cloudflare account id.
-- `wrangler` installed and logged in (for the upload step printed by
+- `wrangler` installed and logged in (for the upload steps printed by
   `hooks cf deploy`).
 
-## 2. Initializing the client for the remote backend
+## 2. Initializing the client for the remote registry
 
 ```bash
 hooks init --cloudflare \
@@ -35,7 +37,7 @@ hooks init --cloudflare \
   name. See §6.
 
 After init, `hooks list`, `hooks search`, `hooks install <name>`, and
-`hooks sync` operate against the remote backend while the API URL is
+`hooks sync` operate against the remote registry while the API URL is
 configured.
 
 ## 3. Deploying the backend
@@ -44,54 +46,59 @@ configured.
 hooks cf deploy
 ```
 
-`hooks cf deploy` performs the provisioning steps:
+`hooks cf deploy` provisions the Cloudflare resources through the Cloudflare
+API:
 
-1. Creates (or reconciles) the D1 database — including applying the D1
-   schema, which is the parity mirror of the SQLite schema (see
-   `docs/architecture.md` §5).
-2. Creates (or reconciles) the R2 bucket.
-3. Builds the worker bundle with the fixed bindings:
-
-   ```
-   HOOKS_D1   D1 database binding
-   HOOKS_R2   R2 bucket binding
-   ```
-
-4. Prints the exact `wrangler` upload command for the worker, for example:
+1. Creates (or finds) the D1 database.
+2. Creates (or finds) the R2 bucket.
+3. Prints the exact `wrangler` commands for the operator to run:
 
    ```bash
-   wrangler deploy --name hooks-api \
-     --bindings D1:HOOKS_D1=<db-id> R2:HOOKS_R2=<bucket-name>
+   wrangler d1 migrations apply <database-name> --remote
+   wrangler secret put HOOKS_API_KEY
+   wrangler deploy --config wrangler.toml
    ```
 
-   Run the printed command (or, when the Cloudflare CLI is available and
-   authenticated, `hooks cf deploy` runs it for you). After the worker is
-   live, verify:
+**`hooks cf deploy` does not upload the worker.** The worker needs the
+workerd target, which only wrangler can bundle; the command prints the
+commands instead of shipping a token-bearing upload path. Copy
+`src/cf/wrangler.toml.example` to `wrangler.toml`, fill in the D1 database id
+and the account/worker fields, then run the printed commands.
 
-   ```bash
-   curl -sS <api-url>/health
-   ```
+The `--dry-run` flag prints the plan without calling the Cloudflare API.
+`--account-id`, `--database-name`, and `--bucket-name` override the defaults
+(`CF_ACCOUNT_ID`, `hooks-registry`, `hooks-registry-artifacts`).
 
-   which must return `200 OK` with a JSON body.
+After the worker is live, verify:
+
+```bash
+curl -sS <api-url>/health
+```
+
+which must return `200` with the JSON body `{"status":"ok","name":"hooks-registry"}`.
 
 ## 4. Serving artifacts
 
 Once deployed, the API serves:
 
+- `GET /health` — liveness (no auth).
 - `GET /api/v1/catalog` — the catalog (no auth).
 - `GET /api/v1/hooks/:name/:version` — one artifact envelope with the
-  `X-Hooks-Sha256` header (no auth).
+  `x-hook-sha256` header (no auth).
+- `GET /api/v1/lock` — server-side lock state (no auth).
 - `PUT /api/v1/hooks` — publish (auth).
-- `GET|PUT /api/v1/lock` — lock state (auth).
 
-R2 stores artifacts immutably at:
+R2 stores artifacts at:
 
 ```
 hook_artifacts/<name>/<version>.json
 ```
 
-The key embeds name and version; the envelope embeds the digest. A collision
-with a different digest is rejected at the API. Full wire contract:
+The key embeds name and version. Re-publishing the same `name@version`
+**overwrites** the object unconditionally — there is no digest-collision
+rejection at publish time. Integrity is enforced at consumption: `hooks sync`
+verifies each artifact's script against the lock entry before installing, and
+the run-time trust check enforces the pin. Full wire contract:
 `docs/api.md`.
 
 ## 5. Syncing machines
@@ -135,14 +142,13 @@ never rotated piecemeal.
 The backend is designed to sit inside Cloudflare's free tiers for normal
 scale:
 
-- **D1** — free tier covers the catalog and lock tables at typical hook
-  counts (hundreds of rows, low write rate). Writes are small: one row per
-  published hook/version and per lock state.
+- **D1** — free tier covers the catalog table at typical hook counts
+  (hundreds of rows, low write rate). Writes are small: one row per
+  published hook/version.
 - **R2** — free tier covers artifact storage: objects are small (a manifest
-  plus a script, typically a few KB) and immutable, so no churn. Each hook
-  version costs one object forever.
+  plus a script, typically a few KB). Each hook version costs one object.
 - **Workers** — catalog/artifact GETs are cacheable and the API is
-  read-mostly; publish and lock PUTs are rare.
+  read-mostly; publish PUTs are rare.
 
 Monitor usage via the Cloudflare dashboard. If a large fleet pushes traffic
 out of the free tiers, the API's read paths are cache-friendly — the first
@@ -154,7 +160,7 @@ cheap optimisation is Cloudflare's cache on `/api/v1/catalog` and
 | symptom | check |
 |---|---|
 | `sync` fails closed, API unreachable | `curl -sS <api-url>/health`; token/account scope; worker deployed? |
-| `401 Unauthorized` on PUT routes | key name resolution failed or wrong key; re-check `--api-key` reference and env |
-| publish rejected with collision error | that `name@version` already exists with a different digest — bump the version |
+| `401 Unauthorized` on `PUT /api/v1/hooks` | key name resolution failed or wrong key; re-check `--api-key` reference and env; `wrangler secret put HOOKS_API_KEY` run? |
+| published artifact differs from what you uploaded | re-publishing the same `name@version` overwrites silently — bump the version to keep history |
 | worker 500 on catalog | D1 binding missing or wrong `--bindings` in the printed wrangler command |
 | artifacts 404 but catalog lists them | R2 binding wrong, or the object key differs from `hook_artifacts/<name>/<version>.json` |

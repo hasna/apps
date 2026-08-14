@@ -1,13 +1,14 @@
 # @hasna/hooks — Versioning Model
 
-> **Status: implementation in progress — lane L1 (PR pending). These docs describe the target state.**
+> **Status: implemented.** This document describes the versioning, lock, and
+> trust model as merged on main (src/lib/store.ts, src/config.ts).
 
-This document describes how hook versions are pinned, trusted, upgraded,
-rolled back, and kept consistent across machines.
+This document describes how hook versions are pinned, trusted, updated, and
+kept consistent across machines.
 
 ## 1. Versions are semver
 
-Every hook version is a strict semver `MAJOR.MINOR.PATCH` (`1.4.0`). The
+Every hook version is a strict semver `MAJOR.MINOR.PATCH` (`0.1.0`). The
 semantics follow the usual contract:
 
 - **MAJOR** — breaking change (different events, different output contract,
@@ -15,59 +16,61 @@ semantics follow the usual contract:
 - **MINOR** — backward-compatible feature.
 - **PATCH** — backward-compatible fix.
 
-A manifest with an invalid or missing version is rejected at install and
-publish time.
+A manifest with an invalid or missing version is rejected at install time
+(the manifest schema requires `^\d+\.\d+\.\d+`).
 
 ## 2. The lockfile (`hooks.lock`)
 
 `hooks.lock` pins every installed hook to an exact version **and** an exact
-digest. Format:
+digest. Format — a `hooks` map keyed by name, each entry carrying `version`,
+`sha256`, and `source`:
 
 ```json
 {
-  "version": 1,
-  "hooks": [
-    { "name": "pre-bash", "version": "1.4.0", "sha256": "9f2c…" },
-    { "name": "ci-guard", "version": "1.0.0", "sha256": "3ab7…" },
-    { "name": "stop-sync", "version": "0.9.1", "sha256": "e51d…" }
-  ]
+  "hooks": {
+    "pre-bash": { "version": "0.1.0", "sha256": "9f2c…", "source": "bundled" },
+    "ci-guard": { "version": "1.0.0", "sha256": "3ab7…", "source": "custom" },
+    "stop-sync": { "version": "0.1.0", "sha256": "e51d…", "source": "bundled" }
+  }
 }
 ```
 
 Rules:
 
-- **`version`** at the top is the lockfile format version (currently `1`),
-  not a hook version.
-- **`sha256`** is the bundle digest recorded at install time. It is the
-  trust anchor — see §3.
+- **`sha256`** is the script digest recorded when the pin was written. It is
+  the trust anchor — see §3.
+- **`source`** records where the hook came from (`bundled`, `custom`,
+  `remote`).
 - The lockfile is the source of truth for *what is installed and what must
-  run*. The `hooks` table mirrors it; the lockfile is what is synced,
-  reverted, and replayed.
+  run*. The `hooks` table mirrors it.
 
-The lockfile lives at `~/.hasna/hooks/lock/hooks.lock` locally, and is
-mirrored server-side via `GET|PUT /api/v1/lock` when a remote backend is
-configured.
+The lockfile lives at `~/.hasna/hooks/hooks.lock` by default (overridable
+via `HASNA_HOOKS_LOCK_PATH` / `HOOKS_LOCK_PATH`), and is mirrored
+server-side via `GET /api/v1/lock` when a remote registry is configured —
+the server derives it from the store; there is no write path for it.
 
 ## 3. The trust model
 
 Trust is bound to a digest, never to a name or a version string.
 
-- **Install** trusts the digest you received, implicitly and deliberately:
-  the act of installing records the pin. The hook runs from that digest until
-  the pin changes.
-- **Update** to a new digest is never silent. The new digest is reported and
-  the hook is not considered trusted until you approve it:
+- **First run pins.** The first time a hook runs, `checkScriptHash` records
+  the current script sha256 in the `hooks` table and in `hooks.lock` and
+  lets the hook run — the digest you received is the digest that runs, pinned
+  from that moment. `hooks sync`, `hooks update`, and `hooks trust` also
+  write pins explicitly.
+- **Verification at run time.** Every `hooks run` re-checks the script bytes
+  against the pinned digest — the verified bytes are the executed bytes
+  (TOCTOU-safe: the path is never re-opened after the trust check). A
+  mismatch refuses execution and reports both digests (expected vs actual).
+- **Accepting a new digest is explicit:**
 
   ```bash
   hooks trust <name>
   ```
 
-  This mirrors Codewith's `trusted_hash` model: the runtime stores the
-  trusted hash for a hook name, and any artifact whose hash differs refuses
-  to run.
-- **Verification at every boundary.** Install, `hooks sync`, and `hooks run`
-  all re-check the artifact against the pinned digest. A mismatch refuses
-  execution and reports both digests (expected vs actual).
+  This re-pins the sha256 of the script currently on disk. It mirrors
+  Codewith's `trusted_hash` model: the runtime stores the trusted hash for a
+  hook name, and any artifact whose hash differs refuses to run.
 - A mismatch you did not initiate is an incident, not a routine approval.
   Re-trusting without understanding the mismatch gives the new digest the
   authority of the old one.
@@ -75,68 +78,61 @@ Trust is bound to a digest, never to a name or a version string.
 ## 4. Upgrade flow
 
 ```bash
-hooks update <name>          # resolve and apply the next semver-compatible version
-hooks update --all           # update every hook
-hooks trust <name>           # approve the new digest if the update introduced one
+hooks update [name...]     # defaults to all installed hooks
 ```
 
-Step by step:
+`hooks update` is a **re-registration**, not a version resolver:
 
-1. `hooks update <name>` resolves the newest version allowed by the current
-   pin's semver range (default: latest compatible; `--major` opts into
-   MAJOR bumps).
-2. The artifact is fetched and its digest computed.
-3. If the digest differs from the pinned one, the update **stages** the new
-   version but does not run it: the lockfile entry is not rewritten until
-   `hooks trust <name>` records the new digest.
-4. `hooks trust <name>` rewrites the pin to `name@newversion#newsha256`.
-5. Until step 4 happens, the old pinned version keeps running — the update is
-   visible in the catalog but the working set is unchanged.
+1. Re-registers each installed hook (picking up a new `@hasna/hooks` package
+   version — this is how bundled hook updates land).
+2. Refreshes the lock pins: the current script's sha256 is pinned for each
+   updated hook.
 
-`hooks update` output always names the before and after pins:
+There is no `--major` option, no semver-range resolution, and no `--all`
+flag: `hooks update` with no arguments updates every installed hook, and the
+new pin applies immediately (no staging, no separate approval step — `hooks
+trust` remains for the case where content changed without an update).
+
+`hooks update` output always names the result per hook:
 
 ```
-pre-bash: 1.4.0#9f2c… -> 1.5.0#77aa…  (digest changed — run: hooks trust pre-bash)
-stop-sync: 0.9.1#e51d… -> 0.9.1#e51d… (unchanged)
+✓ pre-bash updated (pinned 0.1.0)
 ```
 
 ## 5. Rollback
 
-A rollback is a lockfile operation, not a delete:
+A rollback is a lockfile-plus-files restore, not a delete:
 
-1. Revert `hooks.lock` to the previous known-good state (keep a dated copy of
-   the lockfile before every upgrade — the rollback input is the file you
-   saved, not memory).
-2. Reinstall the pinned versions:
+1. Keep a dated copy of `hooks.lock` (and, for custom hooks, the hook files)
+   before every upgrade — the rollback input is the file you saved, not
+   memory.
+2. Restore the previous `hooks.lock` and the previous hook files.
+3. Verify: `hooks list` shows the previous pins, and the restored files
+   match the restored pin (the run-time trust check enforces it).
 
-   ```bash
-   hooks install <name>@<previous-version>   # or: hooks sync after restoring the lockfile
-   ```
-
-3. Verify: `hooks run <name> --event <EVENT>` (see `docs/custom-hooks.md` §5)
-   and `hooks list` must show the previous pins restored.
-
-Because installs are digest-verified against the lockfile, a restored
-lockfile reinstalls exactly the bytes that previously ran — the artifact is
-immutable (`hook_artifacts/<name>/<version>.json` server-side, versioned
-directories locally), so rollback does not re-trust anything.
+Because the trust check verifies the restored bytes against the restored
+pin, a restored state runs exactly the bytes that previously ran — rollback
+does not re-trust anything. With a remote registry, restoring the server-side
+lock state (what `GET /api/v1/lock` serves) and running `hooks sync`
+converges machines to that pinned state; local-only hooks are never touched.
 
 ## 6. Multi-machine consistency
 
 `hooks sync` is the reconciliation mechanism (see `docs/architecture.md` §8):
 
-1. Pull the catalog and the server-side lock state (when a remote backend is
-   configured).
+1. Pull the catalog and the server-side lock state (when a remote registry
+   is configured; otherwise pin the bundled catalog).
 2. Compute the diff against the local lockfile and the local `hooks` table.
-3. Verify every artifact's sha256 before installing anything.
+3. Verify every artifact's sha256 against the lock before installing
+   anything.
 4. Apply the diff; report the plan with `--dry-run` first.
 
 Consistency properties:
 
-- **Pins win.** If the remote lock pins `pre-bash@1.4.0` and a machine has
-  `1.5.0`, sync downgrades the pin back — but only after verifying the
-  `1.4.0` artifact digest. The lockfile, not "whatever is installed", defines
-  the target state.
+- **Remote pins win.** If the remote lock pins `pre-bash@0.1.0` and a machine
+  has `0.2.0`, sync reinstalls the pinned version — but only after verifying
+  the artifact digest. The lock, not "whatever is installed", defines the
+  target state.
 - **Fail-closed offline.** If the API is unreachable, sync changes nothing
   and exits non-zero. A machine never half-reconciles against a stale view.
 - **Local-only hooks survive.** A hook present locally but absent from the
