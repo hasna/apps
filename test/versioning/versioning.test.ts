@@ -22,6 +22,9 @@ const membersByName = new Map(members.map((member) => [member.name, member]));
 // They are exceptions, not a general relaxation: a different value remains a failure.
 const KNOWN_CHANGELOG_MISMATCHES = new Map([
   ["@hasna/calendar", { packageVersion: "0.3.1", changelogVersion: "0.3.0" }],
+  // Landing-state (merge-ref) drift from import #91: package 0.5.0 landed without a
+  // matching changelog release. Reconcile task 5e8fe7a0-1d13-4a54-8500-c34e4cdeaf91.
+  ["@hasna/hooks", { packageVersion: "0.5.0", changelogVersion: "0.4.1" }],
   ["@hasna/loops", { packageVersion: "0.4.42", changelogVersion: "0.4.41" }],
   ["@hasna/secrets", { packageVersion: "0.2.22", changelogVersion: "0.2.21" }],
   ["@hasna/signatures", { packageVersion: "0.1.14", changelogVersion: "0.1.12" }],
