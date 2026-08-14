@@ -25,6 +25,7 @@ jobs:
         run: bun install --frozen-lockfile
       - name: Environment + DNS facts
         run: |
+          set +e
           echo "nproc: $(nproc)"; free -m | head -2
           echo "resolv.conf:"; cat /etc/resolv.conf
           echo "db.internal lookup:"
