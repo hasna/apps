@@ -1,0 +1,21 @@
+# hooks registry Cloudflare Worker configuration (template).
+# Copy to wrangler.toml, fill in your D1 database id, then:
+#   wrangler d1 migrations apply <db-name> --remote
+#   wrangler deploy
+
+name = "hooks-registry"
+main = "src/cf/worker.ts"
+compatibility_date = "2026-08-01"
+
+[[d1_databases]]
+binding = "HOOKS_D1"
+database_name = "hooks-registry"
+database_id = "<replace-with-d1-database-id>"
+
+[[r2_buckets]]
+binding = "HOOKS_R2"
+bucket_name = "hooks-registry-artifacts"
+
+[vars]
+# HOOKS_API_KEY must be set as an encrypted secret instead:
+#   wrangler secret put HOOKS_API_KEY
