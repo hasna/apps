@@ -980,7 +980,7 @@ export const PG_MIGRATIONS: string[] = [
      FOR EACH ROW EXECUTE FUNCTION knowledge_guarded_item_authority()`,
   `ALTER TABLE knowledge_items ENABLE ALWAYS TRIGGER trg_knowledge_items_00_guarded_authority`,
 
-  // Hosted iapp-knowledge tenancy migrations add knowledge_items.tenant_id as
+  // Hosted knowledge tenancy migrations add knowledge_items.tenant_id as
   // UUID while FCAME-1 guarded claims retain TEXT tenant ids. Preserve the
   // historical trigger migration above for checksum-ledger compatibility and
   // append this replacement function so both fresh installs and already-ledgered

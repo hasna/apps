@@ -83,8 +83,8 @@ Mapped legacy AWS Secrets Manager names to canonical ownership paths:
 | --- | --- | --- |
 | `prod/microservice/rds/master` | `example/microservices/prod/rds/legacy-master` | Migration-only legacy master alias. |
 | `prod/connect/rds/master` | `example/connectors/prod/rds/legacy-master` | Migration-only legacy master alias. |
-| `internalapps/prod/rds/master` | `example/infra/apps/prod/postgres/legacy-internalapps-master` | Migration-only legacy shared/admin alias. |
-| `internalapps/prod/iapp-news/env` | `example/internalapp/news/prod/env` | Canonical app env path for internalapp `news`. |
+| `legacyapps/prod/rds/master` | `example/infra/apps/prod/postgres/legacy-legacyapps-master` | Migration-only legacy shared/admin alias. |
+| `legacyapps/prod/example-app/env` | `example/app/news/prod/env` | Canonical app env path for app `news`. |
 
 The three RDS aliases preserve old master credential payloads under explicit
 legacy names so migration jobs can read them without relying on noncanonical
@@ -94,7 +94,7 @@ app-owned paths such as:
 
 ```txt
 example/files/prod/rds
-example/internalapp/news/prod/rds
+example/app/news/prod/rds
 ```
 
 The shared canonical Postgres admin pointer remains:
@@ -108,9 +108,9 @@ example/infra/apps/prod/postgres/master
 AWS Secrets Manager name-only verification returned these canonical entries:
 
 ```txt
-example/infra/apps/prod/postgres/legacy-internalapps-master
+example/infra/apps/prod/postgres/legacy-legacyapps-master
 example/infra/apps/prod/postgres/master
-example/internalapp/news/prod/env
+example/app/news/prod/env
 example/connectors/prod/rds/legacy-master
 example/files/prod/aws
 example/files/prod/env
