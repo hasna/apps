@@ -212,6 +212,80 @@ describe("generated Projects SDK server parity", () => {
     expect(calls.every((call) => call.apiKey === "sdk-test-key")).toBe(true);
   });
 
+  test("routes duplicate quarantine preimage, forward transaction, and exact inverse", async () => {
+    const calls: Array<{ method: string; path: string; query: string; body: unknown }> = [];
+    const client = new ProjectsClient({
+      baseUrl: "https://projects.example.test",
+      fetch: (async (input: string | URL | Request, init?: RequestInit) => {
+        const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+        calls.push({
+          method: init?.method ?? "GET",
+          path: url.pathname,
+          query: url.search,
+          body: init?.body ? JSON.parse(String(init.body)) : undefined,
+        });
+        return Response.json({});
+      }) as typeof fetch,
+    });
+    const projectId = workspaceFixture.id;
+    const forward = {
+      operation_id: "sdk-quarantine",
+      step_id: "retire-duplicate",
+      expected_revision: "2026-08-13 13:50:08.071",
+      expected_project_digest: "project-digest",
+      expected_resource_link_collection_digest: "link-digest",
+      expected_resource_link_ids: ["prl_one"],
+      resource_link_max_items: 10,
+      expected_workspace_location_collection_digest: "location-digest",
+      expected_workspace_location_ids: ["loc_one"],
+      workspace_location_max_items: 20,
+      quarantine_name: "SDK quarantine provenance",
+      quarantine_slug: "sdk-quarantine-provenance",
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+    };
+    const inverse = {
+      operation_id: "sdk-quarantine-rollback",
+      step_id: "restore-duplicate",
+      accepted_receipt_id: "gpmr_sdk_quarantine",
+      expected_current_revision: "2026-08-13 13:50:09.071",
+      resource_link_max_items: 10,
+      workspace_location_max_items: 20,
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+    };
+
+    await client.readDuplicateProjectQuarantinePreimage(projectId, {
+      resource_link_max_items: 10,
+      workspace_location_max_items: 20,
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+    });
+    await client.quarantineDuplicateProject(projectId, forward);
+    await client.rollbackDuplicateProjectQuarantine(projectId, inverse);
+
+    expect(calls).toEqual([
+      {
+        method: "GET",
+        path: `/v1/projects/${projectId}/duplicate-quarantine`,
+        query: "?resource_link_max_items=10&workspace_location_max_items=20&response_byte_limit=100000&time_budget_ms=5000",
+        body: undefined,
+      },
+      {
+        method: "POST",
+        path: `/v1/projects/${projectId}/duplicate-quarantine`,
+        query: "",
+        body: forward,
+      },
+      {
+        method: "POST",
+        path: `/v1/projects/${projectId}/duplicate-quarantine/rollback`,
+        query: "",
+        body: inverse,
+      },
+    ]);
+  });
+
   test("routes durable resource-link migration plan, read, advance, and rollback", async () => {
     const calls: Array<{ method: string; path: string; query: string; body: unknown }> = [];
     const client = new ProjectsClient({

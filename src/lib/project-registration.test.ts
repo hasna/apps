@@ -29,6 +29,7 @@ import {
 import {
   PROJECT_REGISTRATION_DEPENDENCY_TASKS,
   PROJECT_REGISTRATION_GOALS_FILENAME,
+  PROJECT_REGISTRATION_WORKLOG_FILENAME,
   ProjectRegistrationPathHandle,
   assertCurrentProjectRegistrationSlug,
   lookupProjectRegistrationReceipt,
@@ -105,6 +106,7 @@ function input(
     },
     target,
     goals_markdown: "# Goals\n\n- Register every authority safely.\n",
+    worklog_markdown: "# Worklog\n\n- Registration requested.\n",
     response_byte_limit: 1_000_000,
     time_budget_ms: 10_000,
   };
@@ -1536,6 +1538,7 @@ describe("full project registration transaction", () => {
         mementos_project_id: expect.any(String),
       });
       expect(existsSync(join(target.path, PROJECT_REGISTRATION_GOALS_FILENAME))).toBe(true);
+      expect(existsSync(join(target.path, PROJECT_REGISTRATION_WORKLOG_FILENAME))).toBe(true);
       expect(existsSync(join(target.path, PROJECT_MARKER_FILENAME))).toBe(true);
       expect(db.query("SELECT COUNT(*) AS n FROM workspaces WHERE id = ?").get(projectId)).toEqual({ n: 1 });
       expect(db.query(
@@ -3472,7 +3475,7 @@ describe("full project registration transaction", () => {
     }
   });
 
-  test("guardedly adopts compatible existing authorities, GOALS, and marker under a new retrofit operation", async () => {
+  test("guardedly adopts compatible existing authorities, GOALS, WORKLOG, and marker under a new retrofit operation", async () => {
     const db = makeDb();
     const target = tempTarget("retrofit-compatible-adoption");
     const fakes = fakeAuthorities();
@@ -3498,6 +3501,9 @@ describe("full project registration transaction", () => {
       expect(adopted.receipts.find((receipt) => receipt.step_id === "projects_directory")?.rollback).toEqual([]);
       expect(adopted.receipts.find((receipt) => receipt.step_id === "projects_goals")?.artifacts).toEqual([
         expect.objectContaining({ adopted: true }),
+      ]);
+      expect(adopted.receipts.find((receipt) => receipt.step_id === "projects_worklog")?.artifacts).toEqual([
+        expect.objectContaining({ adopted: true, kind: "project_worklog" }),
       ]);
       expect(adopted.receipts.find((receipt) => receipt.step_id === "projects_marker")?.artifacts).toEqual([
         expect.objectContaining({ adopted: true }),
@@ -3638,6 +3644,69 @@ describe("full project registration transaction", () => {
     }
   });
 
+  test("preserves a foreign WORKLOG and compensates an exact adopted GOALS file during retrofit", async () => {
+    const db = makeDb();
+    const target = tempTarget("retrofit-worklog-conflict");
+    const fakes = fakeAuthorities();
+    const projectId = "wks_retrofitworklog01";
+    const request = input("op-retrofit-worklog-conflict", target.target, { id: projectId });
+    mkdirSync(target.path);
+    writeFileSync(
+      join(target.path, PROJECT_REGISTRATION_GOALS_FILENAME),
+      request.goals_markdown,
+    );
+    writeFileSync(
+      join(target.path, PROJECT_REGISTRATION_WORKLOG_FILENAME),
+      "# Existing worklog\n\n- Preserve this append-only history.\n",
+    );
+    try {
+      const existing = createWorkspace({
+        id: projectId,
+        name: "Fleet Resources",
+        slug: "fleet-resources",
+        kind: "project",
+        primary_path: target.path,
+        integrations: { github_repo: "hasna/projects" },
+        metadata: { owner: "quintilian" },
+        require_exact_identity: true,
+      }, db);
+
+      const result = await registerFullProject({
+        ...request,
+        mode: "retrofit",
+        expected_project_revision: existing.updated_at,
+      }, { db, authorities: fakes.authorities });
+
+      expect(result).toMatchObject({
+        ok: false,
+        outcome: "rolled_back",
+        failed_step: "projects_worklog",
+        reason_code: "retrofit_existing_file_conflict",
+      });
+      expect(result.receipts.find((receipt) => receipt.step_id === "projects_goals")?.artifacts).toEqual([
+        expect.objectContaining({ adopted: true, kind: "project_goals" }),
+      ]);
+      expect(result.rollback).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          step_id: "projects_goals",
+          status: "skipped",
+          reason_code: "preexisting_resource_preserved",
+        }),
+      ]));
+      expect(readFileSync(join(target.path, PROJECT_REGISTRATION_GOALS_FILENAME), "utf8"))
+        .toBe(request.goals_markdown);
+      expect(readFileSync(join(target.path, PROJECT_REGISTRATION_WORKLOG_FILENAME), "utf8"))
+        .toBe("# Existing worklog\n\n- Preserve this append-only history.\n");
+      expect(existsSync(join(target.path, PROJECT_MARKER_FILENAME))).toBe(false);
+      expect(getWorkspace(projectId, db)?.integrations).toEqual({ github_repo: "hasna/projects" });
+      expect(fakes.todos.records.size).toBe(0);
+      expect(fakes.mementos.records.size).toBe(0);
+      expect(fakes.conversations.records.size).toBe(0);
+    } finally {
+      db.close();
+    }
+  });
+
   test("refuses an unclaimed existing-row retrofit before external or filesystem mutation", async () => {
     const db = makeDb();
     const target = tempTarget("retrofit-unclaimed");
@@ -3678,7 +3747,7 @@ describe("full project registration transaction", () => {
     }
   });
 
-  test("registers every authority, writes GOALS then the final marker, and returns exact stable IDs", async () => {
+  test("registers every authority, writes GOALS and WORKLOG before the final marker, and returns exact stable IDs", async () => {
     const db = makeDb();
     const target = tempTarget("success");
     const fakes = fakeAuthorities();
@@ -3713,8 +3782,10 @@ describe("full project registration transaction", () => {
       expect(taskListRequest?.desired.todos_project_id).toBe(project?.integrations.todos_project_id);
 
       const goalsPath = join(target.path, PROJECT_REGISTRATION_GOALS_FILENAME);
+      const worklogPath = join(target.path, PROJECT_REGISTRATION_WORKLOG_FILENAME);
       const markerPath = join(target.path, PROJECT_MARKER_FILENAME);
       expect(readFileSync(goalsPath, "utf8")).toContain("Register every authority safely");
+      expect(readFileSync(worklogPath, "utf8")).toContain("Registration requested");
       const marker = JSON.parse(readFileSync(markerPath, "utf8")) as {
         id: string;
         integrations: Record<string, string>;
@@ -3723,8 +3794,24 @@ describe("full project registration transaction", () => {
       expect(marker.integrations.todos_task_list_id).toBe(project!.integrations.todos_task_list_id!);
 
       const goalsReceipt = result.receipts.find((receipt) => receipt.step_id === "projects_goals");
+      const worklogReceipt = result.receipts.find((receipt) => receipt.step_id === "projects_worklog");
       const markerReceipt = result.receipts.find((receipt) => receipt.step_id === "projects_marker");
-      expect(goalsReceipt?.sequence).toBeLessThan(markerReceipt!.sequence);
+      expect(goalsReceipt?.sequence).toBeLessThan(worklogReceipt!.sequence);
+      expect(worklogReceipt?.sequence).toBeLessThan(markerReceipt!.sequence);
+      expect(worklogReceipt).toMatchObject({
+        direction: "forward",
+        outcome: "accepted",
+        artifacts: [expect.objectContaining({
+          kind: "project_worklog",
+          authority: "projects-files",
+          adopted: false,
+          expected_digest: sha256("# Worklog\n\n- Registration requested.\n"),
+        })],
+        rollback: [expect.objectContaining({
+          action: "unlink_if_digest_matches",
+          target_id: result.project_id,
+        })],
+      });
       expect(result.receipts.at(-1)?.step_id).toBe("registration_terminal");
       expect(JSON.stringify(result.receipts)).not.toContain(target.path);
       expect(result.artifacts.map((artifact) => artifact.target_id)).toContain(result.project_id);
@@ -3774,8 +3861,13 @@ describe("full project registration transaction", () => {
           depends_on: ["projects_integrations"],
         }),
         expect.objectContaining({
-          step_id: "projects_marker",
+          step_id: "projects_worklog",
           depends_on: ["projects_goals"],
+          inverse_step_id: "projects_worklog:inverse",
+        }),
+        expect.objectContaining({
+          step_id: "projects_marker",
+          depends_on: ["projects_worklog"],
         }),
       ]));
       expect(JSON.stringify(manifest)).not.toContain(target.path);

@@ -62,6 +62,7 @@ import type { ProjectStore } from "../store/project-store.js";
 
 export const PROJECT_REGISTRATION_ROUTE = "projects.full-registration.v1";
 export const PROJECT_REGISTRATION_GOALS_FILENAME = "GOALS.md";
+export const PROJECT_REGISTRATION_WORKLOG_FILENAME = "WORKLOG.md";
 const PROJECT_REGISTRATION_PROVENANCE_KEY = "_hasna_projects_full_registration";
 export const PROJECT_REGISTRATION_MAX_RECEIPTS = 32;
 
@@ -437,6 +438,7 @@ export interface FullProjectRegistrationInput extends ProjectRegistrationBounds 
   project: FullProjectRegistrationProjectInput;
   target: ProjectRegistrationPathHandle;
   goals_markdown: string;
+  worklog_markdown: string;
 }
 
 export interface ProjectRegistrationArtifact {
@@ -1179,6 +1181,7 @@ function validateInput(input: FullProjectRegistrationInput): {
   }
   const projectMetadata = normalizeProjectMetadata(input.project.metadata);
   if (!input.goals_markdown?.trim()) throw new Error("project registration requires non-empty GOALS.md content");
+  if (!input.worklog_markdown?.trim()) throw new Error("project registration requires non-empty WORKLOG.md content");
   if (!Number.isInteger(input.response_byte_limit) || input.response_byte_limit < 64 * 1024) {
     throw new Error("response_byte_limit must be an integer of at least 65536");
   }
@@ -1212,6 +1215,7 @@ function validateInput(input: FullProjectRegistrationInput): {
       metadata_digest: sha256(canonicalJson(projectMetadata)),
       target_path_digest: input.target.digest,
       goals_digest: sha256(input.goals_markdown),
+      worklog_digest: sha256(input.worklog_markdown),
     },
   }));
   return {
@@ -1550,11 +1554,19 @@ function manifestPlan(input: {
         inverse_step_id: "projects_goals:inverse",
       },
       {
+        step_id: "projects_worklog",
+        authority: "projects-files",
+        resource_kind: "file",
+        target_selector: `${input.project_id}:${PROJECT_REGISTRATION_WORKLOG_FILENAME}`,
+        depends_on: ["projects_goals"],
+        inverse_step_id: "projects_worklog:inverse",
+      },
+      {
         step_id: "projects_marker",
         authority: "projects-files",
         resource_kind: "file",
         target_selector: `${input.project_id}:${PROJECT_MARKER_FILENAME}`,
-        depends_on: ["projects_goals"],
+        depends_on: ["projects_worklog"],
         inverse_step_id: "projects_marker:inverse",
       },
       {
@@ -2866,6 +2878,13 @@ async function compensateExternalStep(
   return localReceipt;
 }
 
+function projectFileArtifactKind(filename: string): string {
+  if (filename === PROJECT_MARKER_FILENAME) return "project_marker";
+  if (filename === PROJECT_REGISTRATION_GOALS_FILENAME) return "project_goals";
+  if (filename === PROJECT_REGISTRATION_WORKLOG_FILENAME) return "project_worklog";
+  return "project_file";
+}
+
 function atomicWriteOwnedFile(
   input: {
     operation_id: string;
@@ -2926,7 +2945,7 @@ function atomicWriteOwnedFile(
         result_digest: contentDigest,
         artifacts: [{
           authority: "projects-files",
-          kind: input.filename === PROJECT_MARKER_FILENAME ? "project_marker" : "project_goals",
+          kind: projectFileArtifactKind(input.filename),
           target_id: `${input.project.id}:${input.filename}`,
           digest: contentDigest,
         }],
@@ -3027,7 +3046,7 @@ function writeOrAdoptOwnedFile(
     result_digest: adopted.digest,
     artifacts: [{
       authority: "projects-files",
-      kind: input.filename === PROJECT_MARKER_FILENAME ? "project_marker" : "project_goals",
+      kind: projectFileArtifactKind(input.filename),
       target_id: `${input.project.id}:${input.filename}`,
       digest: adopted.digest,
       adopted: true,
@@ -3864,7 +3883,7 @@ function projectArtifacts(
   }
   for (const item of files) {
     artifacts.push({
-      kind: item.filename === PROJECT_MARKER_FILENAME ? "project_marker" : "project_goals",
+      kind: projectFileArtifactKind(item.filename),
       authority: "projects-files",
       target_id: item.local_receipt.target_id!,
       revision: item.digest,
@@ -3925,7 +3944,7 @@ function completedRegistration(
     throw new ProjectRegistrationStepError("registration_terminal", "completed_project_readback_missing");
   }
   const fileArtifacts = accepted.artifacts.filter((artifact) =>
-    ["project_goals", "project_marker"].includes(String(artifact.kind ?? ""))
+    ["project_goals", "project_worklog", "project_marker"].includes(String(artifact.kind ?? ""))
   );
   target.withOwnedPath((path) => {
     for (const artifact of fileArtifacts) {
@@ -4839,6 +4858,16 @@ export async function registerFullProject(
       target: input.target,
     }, db));
 
+    failedStep = "projects_worklog";
+    fileAccepted.push((retrofitProject ? writeOrAdoptOwnedFile : atomicWriteOwnedFile)({
+      operation_id: input.operation_id,
+      step_id: failedStep,
+      filename: PROJECT_REGISTRATION_WORKLOG_FILENAME,
+      content: input.worklog_markdown.endsWith("\n") ? input.worklog_markdown : `${input.worklog_markdown}\n`,
+      project,
+      target: input.target,
+    }, db));
+
     failedStep = "projects_marker";
     const marker = `${JSON.stringify(buildWorkspaceMarker(project), null, 2)}\n`;
     fileAccepted.push((retrofitProject ? writeOrAdoptOwnedFile : atomicWriteOwnedFile)({
@@ -4862,6 +4891,7 @@ export async function registerFullProject(
       artifacts,
       rollback: [
         { step_id: "projects_marker", action: "unlink_if_digest_matches" },
+        { step_id: "projects_worklog", action: "unlink_if_digest_matches" },
         { step_id: "projects_goals", action: "unlink_if_digest_matches" },
         { step_id: "projects_integrations", action: "restore_if_revision_matches" },
         ...externalAccepted.slice().reverse().flatMap((item) => [

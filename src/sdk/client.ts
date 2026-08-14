@@ -1,7 +1,7 @@
 // @generated from the projects-serve OpenAPI document by scripts/generate-sdk.ts.
 // DO NOT EDIT BY HAND. Regenerate: bun run sdk:generate
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
-// Source: Projects API 0.1.117
+// Source: Projects API 0.1.129
 
 export interface Root { "id": string; "slug": string; "name": string; "base_path": string; "tags"?: Array<string>; "default_kind"?: string | null; "repo_visibility"?: string | null; "allowed_recipes"?: Array<string>; "allowed_agents"?: Array<string>; "metadata"?: Record<string, unknown>; "created_at"?: string; "updated_at"?: string }
 
@@ -60,6 +60,18 @@ export interface ProjectResourceLinkRead { "ok": boolean; "project_id": string; 
 export interface ProjectResourceLinkMutationRequest { "operation_id": string; "step_id": string; "mode"?: "add" | "reconcile"; "expected_revision": string; "links": Array<ProjectResourceLinkInput>; "integrations"?: Record<string, unknown>; "max_items"?: number; "dry_run"?: boolean; "agent_id"?: string; "source"?: string; "command"?: string; "response_byte_limit": number; "time_budget_ms": number }
 
 export interface ProjectResourceLinkMutationResult { "ok": boolean; "dry_run": boolean; "outcome": "accepted" | "duplicate_of_accepted" | "terminal_nonacceptance" | "planned"; "mode": "add" | "reconcile"; "idempotency_key": string; "request_digest": string; "precondition_digest": string; "project_id": string; "expected_revision": string; "current_revision": string; "before": ProjectResourceLinkSnapshot; "after": ProjectResourceLinkSnapshot | null; "receipt": GuardedProjectMutationReceipt | null; "response_control": GuardedResponseControl }
+
+export interface WorkspaceLocation { "id": string; "workspace_id": string; "path": string; "machine_id": string; "label": string; "kind": string; "is_primary": boolean; "exists_at_create": boolean; "metadata": Record<string, unknown>; "created_at": string }
+
+export interface ProjectQuarantineSnapshot { "project": Workspace; "project_digest": string; "resource_links": Array<ProjectResourceLink>; "resource_link_collection_digest": string; "workspace_locations": Array<WorkspaceLocation>; "workspace_location_collection_digest": string }
+
+export interface ProjectQuarantineRead { "ok": boolean; "project_id": string; "current_revision": string; "snapshot": ProjectQuarantineSnapshot; "resource_link_count": number; "workspace_location_count": number; "complete": boolean; "truncated": boolean; "response_control": GuardedResponseControl }
+
+export interface ProjectQuarantineRequest { "operation_id": string; "step_id": string; "expected_revision": string; "expected_project_digest": string; "expected_resource_link_collection_digest": string; "expected_resource_link_ids": Array<string>; "resource_link_max_items": number; "expected_workspace_location_collection_digest": string; "expected_workspace_location_ids": Array<string>; "workspace_location_max_items": number; "quarantine_name": string; "quarantine_slug": string; "dry_run"?: boolean; "agent_id"?: string; "source"?: string; "command"?: string; "response_byte_limit": number; "time_budget_ms": number }
+
+export interface ProjectQuarantineRollbackRequest { "operation_id": string; "step_id": string; "accepted_receipt_id": string; "expected_current_revision": string; "resource_link_max_items": number; "workspace_location_max_items": number; "agent_id"?: string; "source"?: string; "command"?: string; "response_byte_limit": number; "time_budget_ms": number }
+
+export interface ProjectQuarantineResult { "ok": boolean; "dry_run": boolean; "outcome": "accepted" | "duplicate_of_accepted" | "terminal_nonacceptance" | "planned"; "idempotency_key": string; "request_digest": string; "precondition_digest": string; "project_id": string; "expected_revision": string; "current_revision": string; "before": ProjectQuarantineSnapshot; "after": ProjectQuarantineSnapshot | null; "receipt": GuardedProjectMutationReceipt | null; "rollback": { "accepted_receipt_id": string; "expected_current_revision": string } | null; "response_control": GuardedResponseControl }
 
 export interface ContactProjectMembershipSnapshot { "contact_id": string; "project_id": string; "linked": boolean; "version": string }
 
@@ -300,6 +312,33 @@ export class ProjectsClient {
     /** Detach a Contact through Contacts-authoritative compensation-safe coordination */
     async detachProjectContact(id: string, contactId: string, body: ProjectContactLinkMutationRequest, init?: RequestInit): Promise<ProjectContactLinkMutationResult> {
       return this.request("POST", `/v1/projects/${encodeURIComponent(String(id))}/contacts/${encodeURIComponent(String(contactId))}/detach`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Read the exact complete project, resource-link, and path-selector preimage for quarantine */
+    async readDuplicateProjectQuarantinePreimage(id: string, query?: { "resource_link_max_items": number; "workspace_location_max_items": number; "response_byte_limit": number; "time_budget_ms": number }, init?: RequestInit): Promise<ProjectQuarantineRead> {
+      return this.request("GET", `/v1/projects/${encodeURIComponent(String(id))}/duplicate-quarantine`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
+    /** Atomically retire duplicate selectors and links while retaining reversible provenance */
+    async quarantineDuplicateProject(id: string, body: ProjectQuarantineRequest, init?: RequestInit): Promise<ProjectQuarantineResult> {
+      return this.request("POST", `/v1/projects/${encodeURIComponent(String(id))}/duplicate-quarantine`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Restore the exact project metadata, resource links, and path selectors from the accepted receipt */
+    async rollbackDuplicateProjectQuarantine(id: string, body: ProjectQuarantineRollbackRequest, init?: RequestInit): Promise<ProjectQuarantineResult> {
+      return this.request("POST", `/v1/projects/${encodeURIComponent(String(id))}/duplicate-quarantine/rollback`, {
         body,
         query: undefined,
         init,
