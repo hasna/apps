@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "id": "wks_stvhdtlw05ac",
+  "slug": "open-changelog",
+  "name": "Open Changelog",
+  "kind": "open-source",
+  "root_id": null,
+  "recipe_id": null,
+  "primary_path": "/home/hasna/workspace/hasna/opensource/open-changelog",
+  "git_remote": null,
+  "tags": [
+    "open-source",
+    "changelog",
+    "sdk",
+    "cli",
+    "mcp",
+    "api",
+    "typescript",
+    "app"
+  ],
+  "integrations": {},
+  "generated_at": "2026-07-01T07:12:52.815Z"
+}

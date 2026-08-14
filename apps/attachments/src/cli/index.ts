@@ -1,0 +1,68 @@
+#!/usr/bin/env bun
+import { Command } from "commander";
+import { registerEventsCommands } from "@hasna/events/commander";
+import { registerUpload } from "./commands/upload";
+import { registerDownload } from "./commands/download";
+import { registerServe } from "./commands/serve";
+import { registerMcp } from "./commands/mcp";
+import { registerClean } from "./commands/clean";
+import { registerWhoami } from "./commands/whoami";
+import { registerStatus } from "./commands/status";
+import { registerPresign } from "./commands/presign";
+import { registerLinkTask } from "./commands/link-task";
+import { registerCompleteTask } from "./commands/complete-task";
+import { registerSnapshotSession } from "./commands/snapshot-session";
+import { registerHealthCheck } from "./commands/health-check";
+import { registerWatch } from "./commands/watch";
+import { registerTaskJournal } from "./commands/task-journal";
+import { registerReport } from "./commands/report";
+import { registerResolveEvidence } from "./commands/resolve-evidence";
+import { registerDoctor } from "./commands/doctor";
+import { listCommand } from "./commands/list";
+import { deleteCommand } from "./commands/delete";
+import { removeCommand } from "./commands/remove";
+import { linkCommand } from "./commands/link";
+import { configCommand } from "./commands/config";
+import { initCommand, heartbeatCommand, focusCommand } from "./commands/agent";
+import { domainCommand } from "./commands/domain";
+import { slugCommand } from "./commands/slug";
+
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const pkgVersion: string = (() => { try { return (require("../../package.json") as { version: string }).version; } catch { return process.env.npm_package_version ?? "unknown"; } })();
+
+const program = new Command()
+  .name("attachments")
+  .description("Attachment transfer for agents — local or private S3")
+  .version(pkgVersion);
+
+// Register all subcommands
+registerUpload(program);
+registerDownload(program);
+registerServe(program);
+registerMcp(program);
+registerClean(program);
+registerWhoami(program);
+registerStatus(program);
+registerPresign(program);
+registerLinkTask(program);
+registerCompleteTask(program);
+registerSnapshotSession(program);
+registerHealthCheck(program);
+registerWatch(program);
+registerTaskJournal(program);
+registerReport(program);
+registerResolveEvidence(program);
+registerDoctor(program);
+program.addCommand(listCommand());
+program.addCommand(deleteCommand());
+program.addCommand(removeCommand());
+program.addCommand(linkCommand());
+program.addCommand(configCommand());
+program.addCommand(domainCommand());
+program.addCommand(slugCommand());
+program.addCommand(initCommand());
+program.addCommand(heartbeatCommand());
+program.addCommand(focusCommand());
+registerEventsCommands(program, { source: "attachments" });
+
+program.parse(process.argv);
