@@ -501,14 +501,14 @@ segmentsCmd
   });
 
 segmentsCmd
-  .command('keys <segmentName> <environmentName>')
+  .command('keys <segmentName> <environmentId>')
   .description('List keys in a segment')
   .option('--limit <limit>', 'Limit', parseInt)
   .option('--offset <offset>', 'Offset', parseInt)
-  .action(async function(this: Command, segmentName: string, environmentName: string, opts) {
+  .action(async function(this: Command, segmentName: string, environmentId: string, opts) {
     try {
       const client = getClient();
-      const result = await client.getSegmentKeys(segmentName, environmentName, {
+      const result = await client.getSegmentKeys(segmentName, environmentId, {
         limit: opts.limit,
         offset: opts.offset,
       });
@@ -520,14 +520,14 @@ segmentsCmd
   });
 
 segmentsCmd
-  .command('add-keys <segmentName> <environmentName>')
+  .command('add-keys <segmentName> <environmentId>')
   .description('Add keys to a segment')
   .requiredOption('--keys <keys...>', 'Keys to add')
   .option('--comment <comment>', 'Change comment')
-  .action(async function(this: Command, segmentName: string, environmentName: string, opts) {
+  .action(async function(this: Command, segmentName: string, environmentId: string, opts) {
     try {
       const client = getClient();
-      const result = await client.addKeysToSegment(segmentName, environmentName, opts.keys, opts.comment);
+      const result = await client.addKeysToSegment(segmentName, environmentId, opts.keys, opts.comment);
       print(result, getFormat(this));
       success(`Added ${opts.keys.length} key(s) to ${segmentName}`);
     } catch (err) {
@@ -537,13 +537,13 @@ segmentsCmd
   });
 
 segmentsCmd
-  .command('remove-keys <segmentName> <environmentName>')
+  .command('remove-keys <segmentName> <environmentId>')
   .description('Remove keys from a segment')
   .requiredOption('--keys <keys...>', 'Keys to remove')
-  .action(async function(this: Command, segmentName: string, environmentName: string, opts) {
+  .action(async function(this: Command, segmentName: string, environmentId: string, opts) {
     try {
       const client = getClient();
-      await client.removeKeysFromSegment(segmentName, environmentName, opts.keys);
+      await client.removeKeysFromSegment(segmentName, environmentId, opts.keys);
       success(`Removed ${opts.keys.length} key(s) from ${segmentName}`);
     } catch (err) {
       error(String(err));

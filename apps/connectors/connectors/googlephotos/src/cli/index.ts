@@ -122,7 +122,7 @@ authCmd
         const userInfo = await getUserInfo(result.tokens!.accessToken);
         const email = userInfo.email;
 
-        // Convert email to profile slug: andrei@hasna.com → andreihasnacom
+        // Convert email to profile slug: user@example.com → userexamplecom
         const profileSlug = email.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
 
         // Create profile if it doesn't exist

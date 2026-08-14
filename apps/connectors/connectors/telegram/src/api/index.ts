@@ -64,3 +64,4 @@ export { ChatsApi } from './chats';
 export { UpdatesApi } from './updates';
 export { InlineApi } from './inline';
 export { BotApi } from './bot';
+export type { DownloadFileResult } from './bot';

@@ -59,6 +59,11 @@ export interface GetFileOptions {
   fileId: string;
 }
 
+export interface DownloadFileResult {
+  file: TelegramFile;
+  data: Uint8Array;
+}
+
 export interface BotName {
   name: string;
 }
@@ -219,5 +224,20 @@ export class BotApi {
         file_id: options.fileId,
       },
     });
+  }
+
+  /**
+   * Resolve and download a Telegram file
+   */
+  async downloadFile(options: GetFileOptions): Promise<DownloadFileResult> {
+    const file = await this.getFile(options);
+    if (!file.file_path) {
+      throw new Error('Telegram did not return a downloadable file path');
+    }
+
+    return {
+      file,
+      data: await this.client.downloadFile(file.file_path),
+    };
   }
 }

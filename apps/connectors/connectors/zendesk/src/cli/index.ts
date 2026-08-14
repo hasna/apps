@@ -16,7 +16,7 @@ import {
   getConfigDir,
   getBaseConfigDir,
   getExportsDir,
-  getRemoteApiUrl,
+  findRemoteApiUrl,
   setRemoteApiUrl,
   setProfileOverride,
   getCurrentProfile,
@@ -238,7 +238,7 @@ configCmd
 
 configCmd
   .command('set-remote-url <url>')
-  .description('Set remote API URL (default: https://connect.hasna.com/zendesk)')
+  .description('Set remote API URL (no default; also settable via ZENDESK_REMOTE_API_URL)')
   .action((url: string) => {
     setRemoteApiUrl(url);
     success(`Remote API URL set to: ${url}`);
@@ -253,13 +253,13 @@ configCmd
     const apiToken = getApiToken();
     const baseUrl = getBaseUrl();
     const account = getDefaultAccount();
-    const remoteUrl = getRemoteApiUrl();
+    const remoteUrl = findRemoteApiUrl();
     info(`Profile: ${chalk.cyan(profile)}`);
     info(`Email: ${email || chalk.gray('not set')}`);
     info(`API Token: ${apiToken ? `${apiToken.substring(0, 6)}...${apiToken.substring(apiToken.length - 4)}` : chalk.gray('not set')}`);
     info(`Base URL: ${baseUrl || chalk.gray('not set')}`);
     info(`Default Account: ${account || chalk.gray('not set')}`);
-    info(`Remote API URL: ${remoteUrl}`);
+    info(`Remote API URL: ${remoteUrl || chalk.gray('not set')}`);
     info(`Config Directory: ${getBaseConfigDir()}`);
     info(`Profile Config: ${getConfigDir()}`);
     info(`Exports Directory: ${getExportsDir()}`);
@@ -274,17 +274,28 @@ configCmd
   });
 
 // ============================================
-// Remote API Commands (connect.hasna.com)
+// Remote API Commands (host comes from ZENDESK_REMOTE_API_URL / config)
 // ============================================
 const remoteCmd = program
   .command('remote')
   .description('Interact with the remote Zendesk connector API');
 
+// The remote host has no shipped default. Commands that need it exit with the
+// connector's usual error convention rather than an uncaught throw.
+function requireRemoteApiUrl(): string {
+  const remoteUrl = findRemoteApiUrl();
+  if (!remoteUrl) {
+    error('Remote API URL is not configured. Set ZENDESK_REMOTE_API_URL or run: connect-zendesk config set-remote-url <url>');
+    process.exit(1);
+  }
+  return remoteUrl;
+}
+
 remoteCmd
   .command('status')
   .description('Check remote API status')
   .action(async () => {
-    const remoteUrl = getRemoteApiUrl();
+    const remoteUrl = requireRemoteApiUrl();
     logger.command('remote status', { remoteUrl });
     try {
       const response = await fetch(`${remoteUrl}/status`);
@@ -301,7 +312,7 @@ remoteCmd
   .command('health')
   .description('Check remote API health')
   .action(async () => {
-    const remoteUrl = getRemoteApiUrl();
+    const remoteUrl = requireRemoteApiUrl();
     logger.command('remote health', { remoteUrl });
     try {
       const response = await fetch(`${remoteUrl}/health`);
@@ -321,7 +332,7 @@ remoteCmd
   .command('url')
   .description('Show current remote API URL')
   .action(() => {
-    info(`Remote API URL: ${getRemoteApiUrl()}`);
+    info(`Remote API URL: ${findRemoteApiUrl() || chalk.gray('not set')}`);
   });
 
 // ============================================

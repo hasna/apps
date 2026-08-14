@@ -9,7 +9,10 @@ afterEach(() => {
 
 describe("Telegram messages API", () => {
   test("sends raw exclamation marks unless MarkdownV2 parse mode is requested", async () => {
-    const fetchMock = mock(async () =>
+    const fetchMock = mock(async (
+      _input: string | URL | Request,
+      _init?: RequestInit
+    ) =>
       Response.json({
         ok: true,
         result: {
@@ -37,7 +40,10 @@ describe("Telegram messages API", () => {
   });
 
   test("preserves raw text when HTML parse mode is explicit", async () => {
-    const fetchMock = mock(async () =>
+    const fetchMock = mock(async (
+      _input: string | URL | Request,
+      _init?: RequestInit
+    ) =>
       Response.json({
         ok: true,
         result: {

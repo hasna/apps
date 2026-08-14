@@ -8,10 +8,8 @@ This connector provides programmatic access to Zendesk's Support API, including 
 
 | Resource | Name |
 |----------|------|
-| EC2 Instance | `hasna-prod-connect-zendesk` |
-| RDS Database | `hasna-prod-connect-zendesk` |
-| S3 Bucket | `hasna-prod-connect-zendesk` |
-| Remote API | `https://connect.hasna.com/zendesk` |
+| Compute, database, object storage | Deployment-specific; not published with this package |
+| Remote API | configured per deployment via `ZENDESK_REMOTE_API_URL` (no default) |
 
 ## Installation
 
@@ -273,13 +271,11 @@ This connector implements the following Zendesk API modules:
 
 ## Deployment
 
-This connector is deployed to:
+This connector runs as a systemd service behind the deployment's own reverse proxy.
+Deployment resource names are not published with this package.
 
-- **EC2**: `hasna-prod-connect-zendesk`
-- **Database**: `hasna-prod-connect-zendesk`
-- **S3**: `hasna-prod-connect-zendesk`
-
-The remote API is accessible at `https://connect.hasna.com/zendesk`
+The remote API host is deployment-specific and has no built-in default. Point the CLI at your
+deployment with `ZENDESK_REMOTE_API_URL` or `connect-zendesk config set-remote-url <url>`.
 
 ## License
 

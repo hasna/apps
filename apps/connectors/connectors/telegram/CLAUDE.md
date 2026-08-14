@@ -26,6 +26,7 @@ bun run dev --help
 bun run dev me
 bun run dev send <chatId> <text>
 bun run dev updates
+bun run dev get-file <fileId>
 ```
 
 ## Code Style
@@ -105,6 +106,8 @@ connect-telegram send-document <chatId> <path>   # Send document
 connect-telegram updates                         # Get recent updates
 connect-telegram updates -l 20                   # Get 20 updates
 connect-telegram updates -o 12345                # Start from offset
+connect-telegram get-file <fileId>                # Download using Telegram's file name
+connect-telegram get-file <fileId> -o ./image.jpg # Download to an explicit path
 ```
 
 ### Chats
@@ -184,6 +187,10 @@ const message = await telegram.messages.sendMessage({
 
 // Get updates
 const updates = await telegram.updates.getUpdates({ limit: 10 });
+
+// Resolve or download incoming media by the file_id shown in updates
+const file = await telegram.bot.getFile({ fileId: 'FILE_ID' });
+const downloaded = await telegram.bot.downloadFile({ fileId: 'FILE_ID' });
 
 // Get chat info
 const chat = await telegram.chats.getChat({ chatId: '@channelname' });

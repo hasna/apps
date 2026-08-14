@@ -33,17 +33,18 @@ cd connect-notion
 3. Update the API base URL in `src/api/client.ts`
 4. Add your API modules
 
-## Infrastructure Naming Convention
+## Naming Convention
 
-Each connector follows this naming pattern:
+Each connector follows this naming pattern for its PUBLISHED artifacts. Deployment
+resource naming (compute, database, object storage) is deliberately not documented
+here: publishing the pattern next to a worked example makes every connector's
+resource names derivable from a public package, which is a wider disclosure than
+any single name.
 
 | Resource | Pattern | Example (for Notion) |
 |----------|---------|----------------------|
 | CLI | `connect-{name}` | `connect-notion` |
-| EC2 Instance | `hasna-prod-connect-{name}` | `hasna-prod-connect-notion` |
-| RDS Database | `hasna-prod-connect-{name}` | `hasna-prod-connect-notion` |
-| S3 Bucket | `hasna-prod-connect-{name}` | `hasna-prod-connect-notion` |
-| Remote API | `https://connect.hasna.com/{name}` | `https://connect.hasna.com/notion` |
+| Remote API | `https://<connect-host>/{name}` | `https://connect.example.com/notion` |
 
 ## Project Structure
 
@@ -175,4 +176,4 @@ The connector is deployed to AWS infrastructure:
 
 1. Build the project: `make build`
 2. Deploy to EC2: `make deploy-ec2`
-3. Configure the remote API at `https://connect.hasna.com/{name}`
+3. Point the CLI at the deployment via `<NAME>_REMOTE_API_URL` (no default is shipped)

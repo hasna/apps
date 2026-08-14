@@ -499,10 +499,20 @@ export function clearConfig(): void {
   saveConfig({});
 }
 
-const DEFAULT_REMOTE_API_URL = 'https://connect.hasna.com/zendesk';
+// The remote API host is deployment-specific and has no shippable default.
+// Configure it with ZENDESK_REMOTE_API_URL or `connect-zendesk config set-remote-url <url>`.
+export function findRemoteApiUrl(): string | undefined {
+  return process.env.ZENDESK_REMOTE_API_URL || loadConfig().remoteApiUrl || undefined;
+}
 
 export function getRemoteApiUrl(): string {
-  return process.env.ZENDESK_REMOTE_API_URL || loadConfig().remoteApiUrl || DEFAULT_REMOTE_API_URL;
+  const url = findRemoteApiUrl();
+  if (!url) {
+    throw new Error(
+      'Remote API URL is not configured. Set ZENDESK_REMOTE_API_URL or run: connect-zendesk config set-remote-url <url>',
+    );
+  }
+  return url;
 }
 
 export function setRemoteApiUrl(url: string): void {

@@ -25,7 +25,7 @@ export YOUSEARCH_API_KEY=your-api-key
 connect-yousearch search "latest AI news" --count 5
 
 # Web search with domain filters (POST)
-connect-yousearch search-post "alumia platform" --include-domains "hasna.com,github.com"
+connect-yousearch search-post "agent frameworks" --include-domains "example.com,github.com"
 
 # Multi-step research
 connect-yousearch research "What are the latest developments in AI agents?" --effort deep

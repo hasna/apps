@@ -9,14 +9,17 @@
 #   make typecheck   - Run TypeScript type checking
 #   make clean       - Remove build artifacts
 
-.PHONY: install dev server server-prod build typecheck test clean help link unlink deploy deploy-ec2 deploy-sync logs ssh npm-publish
+.PHONY: install dev server server-prod build typecheck test clean help link unlink deploy deploy-ec2 deploy-sync logs ssh npm-publish require-ec2-host
 
 # Configuration
-EC2_HOST ?= hasna-prod-connect-zendesk
+# Deployment target. Deployment-specific - no default, and never committed.
+EC2_HOST ?=
 EC2_USER ?= ec2-user
 DEPLOY_PATH ?= /home/ec2-user/connectors/connect-zendesk
 SERVICE_NAME ?= connect-zendesk
 PORT ?= 21010
+# Public URL the deployed server is reachable at. Deployment-specific — no default.
+REMOTE_API_URL ?=
 
 # Default target
 help:
@@ -72,7 +75,19 @@ unlink:
 	bun unlink @hasna/connect-zendesk
 
 # Deployment targets
-deploy-sync:
+#
+# EC2_HOST has no default, so every deployment target depends on this check.
+# Without it an unset host silently becomes `rsync ... ec2-user@:/path`, which
+# rsync reads as a LOCAL copy and which ssh fails on obscurely — a confusing
+# failure in place of a clear one.
+require-ec2-host:
+	@test -n "$(EC2_HOST)" || { \
+		echo "EC2_HOST is not set."; \
+		echo "Pass it on the command line (make deploy EC2_HOST=<host>) or export it."; \
+		exit 1; \
+	}
+
+deploy-sync: require-ec2-host
 	@echo "Syncing to $(EC2_HOST):$(DEPLOY_PATH)..."
 	rsync -avz --delete \
 		--exclude='.git' \
@@ -92,12 +107,12 @@ deploy-ec2: deploy-sync
 
 deploy: build deploy-ec2
 	@echo "✅ Deployment complete"
-	@echo "Server running at https://connect.hasna.com/zendesk"
+	@echo "Server running at $(if $(REMOTE_API_URL),$(REMOTE_API_URL),<REMOTE_API_URL not set>)"
 
-logs:
+logs: require-ec2-host
 	ssh $(EC2_USER)@$(EC2_HOST) "sudo journalctl -u $(SERVICE_NAME) -f"
 
-ssh:
+ssh: require-ec2-host
 	ssh $(EC2_USER)@$(EC2_HOST)
 
 # NPM publishing
