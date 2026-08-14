@@ -1,0 +1,36 @@
+# General
+.DS_Store
+*.swp
+*.swo
+
+# Secrets and sensitive files
+.env
+.env.*
+*.pem
+*.key
+id_rsa*
+*.crt
+*.p12
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+
+# Node / frontend
+node_modules/
+dist/
+build/
+
+# Logs and temp
+*.log
+storage/tmp/
+tmp_downloads/

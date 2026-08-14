@@ -1,0 +1,59 @@
+{
+  "name": "@hasna/connect-ticketbud",
+  "version": "0.0.1",
+  "description": "Ticketbud event ticketing API connector",
+  "type": "module",
+  "bin": {
+    "connect-ticketbud": "./bin/index.js"
+  },
+  "files": [
+    "bin/",
+    "dist/",
+    "README.md",
+    ".env.example"
+  ],
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc --emitDeclarationOnly --outDir ./dist && bun build ./src/index.ts --outdir ./dist --target bun && bun build ./src/cli/index.ts --outdir ./bin --target bun",
+    "dev": "bun run ./src/cli/index.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "prepublishOnly": "bun run build",
+    "release": "bun run scripts/release.ts",
+    "release:dry": "bun run scripts/release.ts --dry-run"
+  },
+  "keywords": [
+    "api",
+    "connector",
+    "ticketbud",
+    "events",
+    "ticketing",
+    "cli",
+    "typescript",
+    "bun"
+  ],
+  "author": "Hasna",
+  "license": "Apache-2.0",
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "chalk": "^5.3.0",
+    "commander": "^12.1.0"
+  },
+  "engines": {
+    "bun": ">=1.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hasna/connectors.git"
+  }
+}
