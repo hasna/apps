@@ -12,7 +12,10 @@ import { loadRemoteRegistry, loadRemoteSkill } from "../../lib/remote-registry.j
 import { getSkillDocs, getSkillRequirements } from "../../lib/skillinfo.js";
 import { getInstallMeta, getInstalledSkills, getSkillPath } from "../../lib/installer.js";
 import { validateSkillDirectory } from "../../lib/skill-validation.js";
-import { findPortableSkill, validatePortableSkillDirectory } from "../../lib/portable-skills.js";
+import { findPortableSkill, normalizePortableSkillName, validatePortableSkillDirectory } from "../../lib/portable-skills.js";
+import { SYNC_AGENTS, SYNC_MARKER_FILE, agentGlobalSkillsDir } from "../../lib/agent-sync.js";
+import { resolveCorpusRoot } from "../../lib/home-migration.js";
+import { hashSkillMarkdownFile } from "../../lib/skill-hash.js";
 import {
   getPublicSkillDiscovery,
   publicDiscoveryDependencies,
@@ -83,7 +86,7 @@ export function registerIntrospect(parent: Command) {
     .command("diff")
     .argument("<name>", "Skill name to diff")
     .option("--json", "Output as JSON", false)
-    .description("Show pinned version metadata against bundled registry")
+    .description("Compare a skill across agent homes against the canonical corpus; pin metadata is included as a subset")
     .action((name: string, options: { json: boolean }) => handleDiff(name, options));
 }
 
@@ -232,19 +235,20 @@ function handleValidate(name: string, options: { json: boolean }) {
 
 function handleDiff(name: string, options: { json: boolean }) {
   const bare = name;
+  const normalized = normalizePortableSkillName(bare);
   const sourcePath = getSkillPath(bare);
 
-  if (!existsSync(sourcePath)) {
-    if (options.json) console.log(JSON.stringify({ error: `Skill '${bare}' not found in registry` }));
-    else skillNotFound(bare);
-    process.exitCode = 1; return;
-  }
-  if (!getInstalledSkills().includes(bare)) {
-    if (options.json) console.log(JSON.stringify({ pinned: false, message: `'${bare}' is not pinned locally` }));
-    else console.log(chalk.dim(`'${bare}' is not pinned. Run: skills pin ${bare}`));
-    return;
-  }
+  const canonicalDir = join(resolveCorpusRoot(), normalized);
+  const canonicalSkillMd = join(canonicalDir, "SKILL.md");
+  const canonical = {
+    present: existsSync(canonicalSkillMd),
+    path: canonicalDir,
+    ...(existsSync(canonicalSkillMd) ? { hash: hashSkillMarkdownFile(canonicalSkillMd) } : {}),
+  };
 
+  // Pin comparison remains, as a subset of the home-vs-canonical comparison:
+  // a skill can be pinned and simultaneously diverged in an agent home.
+  const pinned = getInstalledSkills().includes(bare);
   const installMeta = getInstallMeta();
   const installedVersion = installMeta.skills[bare]?.version ?? "unknown";
   const registryPkgPath = join(sourcePath, "package.json");
@@ -255,14 +259,58 @@ function handleDiff(name: string, options: { json: boolean }) {
     } catch {}
   }
   const upToDate = installedVersion === registryVersion;
+
+  const homes = [];
+  for (const agent of SYNC_AGENTS) {
+    const dir = join(agentGlobalSkillsDir(agent), normalized);
+    const present = existsSync(dir);
+    const managed = existsSync(join(dir, SYNC_MARKER_FILE));
+    const skillMdPath = join(dir, "SKILL.md");
+    const hash = present && existsSync(skillMdPath) ? hashSkillMarkdownFile(skillMdPath) : undefined;
+    const diverged = present && canonical.present && managed && hash !== canonical.hash;
+    homes.push({
+      agent,
+      path: dir,
+      present,
+      managed,
+      ...(hash ? { hash } : {}),
+      ...(diverged !== undefined ? { diverged } : {}),
+    });
+  }
+  const divergedHomes = homes.filter((home) => home.diverged === true);
+
   if (options.json) {
-    console.log(JSON.stringify({ name: bare, pinned: true, installedVersion, registryVersion, upToDate }));
-    return;
+    console.log(JSON.stringify({
+      name: bare,
+      canonical,
+      pinned,
+      installedVersion,
+      registryVersion,
+      upToDate,
+      homes,
+    }, null, 2));
+  } else {
+    if (!canonical.present) {
+      console.log(chalk.yellow(`${bare}: no canonical corpus entry`));
+    } else {
+      console.log(chalk.dim(`${bare} canonical: ${canonical.hash?.slice(0, 12)}…`));
+    }
+    if (pinned) {
+      console.log(upToDate
+        ? chalk.green(`✓ pin is up to date (${installedVersion})`)
+        : chalk.yellow(`pin metadata differs: ${installedVersion} → ${registryVersion}`));
+    }
+    for (const home of homes) {
+      if (!home.present) {
+        console.log(`${chalk.dim("•")} ${home.agent}: ${chalk.dim("not present")}`);
+      } else if (!home.managed) {
+        console.log(`${chalk.dim("•")} ${home.agent}: ${chalk.yellow("unmarked (adoption candidate)")}`);
+      } else if (home.diverged) {
+        console.log(`${chalk.red("✗")} ${home.agent}: ${chalk.red("diverged")} ${chalk.dim(home.hash?.slice(0, 12))} ≠ ${chalk.dim(canonical.hash?.slice(0, 12))}`);
+      } else {
+        console.log(`${chalk.green("✓")} ${home.agent}: ${chalk.green("matches canonical")}`);
+      }
+    }
   }
-  if (upToDate) {
-    console.log(chalk.green(`✓ ${bare} pin is up to date (${installedVersion})`));
-    return;
-  }
-  console.log(chalk.yellow(`${bare} pin metadata differs: ${installedVersion} → ${registryVersion}`));
-  console.log(chalk.dim(`\nRun 'skills update ${bare}' to refresh the pin`));
+  if (divergedHomes.length > 0 || (homes.length > 0 && !canonical.present)) process.exitCode = 1;
 }

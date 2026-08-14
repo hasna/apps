@@ -1,7 +1,9 @@
 /**
  * `skills sync` — the last mile: write skills from this machine's corpus
- * (~/.hasna/skills/installed/<name>/) into each coding agent's global skills directory,
- * per-tool adapted, so an agent auto-loads them.
+ * (the migrated owner-layout cache ~/.hasna/skills/skills/<name>/, or the
+ * legacy ~/.hasna/skills/installed/<name>/ when not migrated) into each coding
+ * agent's global skills directory, per-tool adapted, so an agent auto-loads
+ * them.
  *
  * This is the deliberate reversal of the old "pins, not installs" stub: agent skill
  * folders used to be left entirely unmanaged and every write path returned success:false.
@@ -24,6 +26,7 @@ import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { listPortableSkills, normalizePortableSkillName, readPortableSkillManifest } from "./portable-skills.js";
+import { resolveCorpusRoot } from "./home-migration.js";
 import type { SkillKind } from "./registry-types.js";
 
 /**
@@ -164,8 +167,9 @@ export function syncSkillsToAgents(options: SyncSkillsOptions = {}): SyncSkillsR
   const requested = normalizeRequested(options.names);
   const agents = options.agents?.length ? options.agents : [...SYNC_AGENTS];
   const homeDir = options.homeDir ?? homedir();
-  const corpusOptions = corpusLocation(options);
-  const corpus = listPortableSkills(corpusOptions);
+  // The corpus source is the migrated owner-layout cache (skills/) when a
+  // migration record exists, else the installed/ corpus — see resolveCorpusRoot.
+  const corpus = listPortableSkills({ rootDir: resolveCorpusRoot(corpusLocation(options)) });
   const byName = new Map(corpus.map((skill) => [skill.name, skill]));
 
   const actions: AgentSyncAction[] = [];

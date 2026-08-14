@@ -1,0 +1,136 @@
+/**
+ * Home drift census — `skills sync --check`.
+ *
+ * Compares each configured agent home against the canonical corpus cache and
+ * reports three drift classes:
+ *
+ *   missing-from-home  canonical corpus skill absent from a home that exists
+ *   stray-in-home      marked home dir with no canonical corpus entry
+ *   diverged           marked home dir whose SKILL.md hash differs from canonical
+ *
+ * Unmarked home dirs are counted, never reported as drift: they are adoption
+ * candidates, not managed state. A home that does not exist is not checked.
+ * `clean` is false whenever any drift entry exists; the CLI maps that to a
+ * non-zero exit code.
+ */
+import { existsSync, readdirSync, statSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+
+import {
+  SYNC_AGENTS,
+  SYNC_MARKER_FILE,
+  agentGlobalSkillsDir,
+  type SyncAgent,
+} from "./agent-sync.js";
+import { indexCanonicalCorpus, type AdoptionOptions } from "./home-adoption.js";
+import { resolveCorpusRoot } from "./home-migration.js";
+import { hashSkillMarkdownFile } from "./skill-hash.js";
+
+export type DriftKind = "missing-from-home" | "stray-in-home" | "diverged";
+
+export interface DriftEntry {
+  agent: SyncAgent;
+  skill: string;
+  kind: DriftKind;
+  path: string;
+  homeHash?: string;
+  canonicalHash?: string;
+}
+
+export interface DriftCensus {
+  entries: DriftEntry[];
+  /** Homes that exist and were checked. */
+  homesChecked: number;
+  /** Unmarked home skill dirs (adoption candidates, not drift). */
+  unmarked: number;
+  /** Marked home skill dirs. */
+  managed: number;
+  clean: boolean;
+}
+
+function sortEntries(entries: DriftEntry[]): DriftEntry[] {
+  return entries.sort((a, b) => {
+    const left = `${a.agent}/${a.skill}/${a.kind}`;
+    const right = `${b.agent}/${b.skill}/${b.kind}`;
+    return left.localeCompare(right);
+  });
+}
+
+export function censusHomeDrift(options: AdoptionOptions = {}): DriftCensus {
+  const homeDir = options.homeDir ?? homedir();
+  const corpusRoot = resolveCorpusRoot(options);
+  const index = indexCanonicalCorpus(corpusRoot);
+  const agents = options.agents?.length ? options.agents : [...SYNC_AGENTS];
+
+  const entries: DriftEntry[] = [];
+  let unmarked = 0;
+  let managed = 0;
+  let homesChecked = 0;
+
+  for (const agent of agents) {
+    const home = agentGlobalSkillsDir(agent, homeDir);
+    if (!existsSync(home)) continue;
+    homesChecked += 1;
+
+    const present = new Set<string>();
+    let dirEntries: string[] = [];
+    try {
+      dirEntries = readdirSync(home);
+    } catch {
+      continue;
+    }
+    for (const skill of dirEntries.sort()) {
+      if (skill.startsWith(".")) continue;
+      const dir = join(home, skill);
+      try {
+        if (!statSync(dir).isDirectory()) continue;
+      } catch {
+        continue;
+      }
+      present.add(skill);
+
+      const markerPath = join(dir, SYNC_MARKER_FILE);
+      if (!existsSync(markerPath)) {
+        unmarked += 1;
+        continue;
+      }
+      managed += 1;
+
+      const canonicalHash = index.get(skill);
+      if (canonicalHash === undefined) {
+        entries.push({ agent, skill, kind: "stray-in-home", path: dir });
+        continue;
+      }
+      const skillMdPath = join(dir, "SKILL.md");
+      if (!existsSync(skillMdPath)) {
+        entries.push({ agent, skill, kind: "diverged", path: dir, canonicalHash });
+        continue;
+      }
+      const homeHash = hashSkillMarkdownFile(skillMdPath);
+      if (homeHash !== canonicalHash) {
+        entries.push({ agent, skill, kind: "diverged", path: dir, homeHash, canonicalHash });
+      }
+    }
+
+    for (const [name, canonicalHash] of index) {
+      if (!present.has(name)) {
+        entries.push({
+          agent,
+          skill: name,
+          kind: "missing-from-home",
+          path: join(home, name),
+          canonicalHash,
+        });
+      }
+    }
+  }
+
+  return {
+    entries: sortEntries(entries),
+    homesChecked,
+    unmarked,
+    managed,
+    clean: entries.length === 0,
+  };
+}
