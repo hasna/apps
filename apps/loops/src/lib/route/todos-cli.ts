@@ -10,9 +10,28 @@ export function defaultLoopsProject(): string {
   return process.env.LOOPS_TASK_PROJECT || process.env.LOOPS_DATA_DIR || `${process.env.HOME || homedir()}/.hasna/loops`;
 }
 
+export function defaultTodosProject(): string | undefined {
+  return process.env.LOOPS_TASK_PROJECT?.trim() || undefined;
+}
+
+export function todosCliArgs(project: string | undefined, args: string[]): string[] {
+  const value = project?.trim();
+  return value ? ["--project", value, ...args] : args;
+}
+
 export interface LocalCommandResult {
   ok: boolean;
-  status: number | null;
+  /**
+   * `undefined` is reachable and is NOT the same as `null`. Measured on bun 1.3.14:
+   * `spawnSync` reports a missing binary (ENOENT) and a non-executable file
+   * (EACCES) as `status: undefined`, while a timeout kill (ETIMEDOUT), a maxBuffer
+   * overflow (ENOBUFS) and a signal kill report `status: null`. Declaring only
+   * `number | null` let TypeScript narrow `typeof status !== "number"` down to
+   * `null`, which tells a reader the ENOENT branch is dead code and invites
+   * "simplifying" it to `=== null` — reintroducing a silent drop for the most
+   * likely misconfiguration. Callers must treat any non-number as "no answer".
+   */
+  status: number | null | undefined;
   stdout: string;
   stderr: string;
   error: string;

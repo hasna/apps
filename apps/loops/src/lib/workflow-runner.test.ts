@@ -4,13 +4,21 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, test } from "bun:test";
 import { MockLanguageModelV3 } from "ai/test";
-import type { WorkflowStepInput } from "../types.js";
+import type { AgentTarget, WorkflowStepInput } from "../types.js";
+import { workflowStepAgentSessionContract } from "./agent-adapter.js";
+import { buildHealthReport } from "./health.js";
 import { tick } from "./scheduler.js";
 import { Store } from "./store.js";
 import { prHandoffCommand } from "./template-kit.js";
+import { renderTodosTaskWorkerVerifierWorkflow, TODOS_TASK_WORKER_VERIFIER_TEMPLATE_ID } from "./templates.js";
 import { executeLoopTarget, executeWorkflow } from "./workflow-runner.js";
 import { workflowBodyFromJson } from "./workflow-spec.js";
 import { expectMarkerNeverWritten, gatedWriteCommand, openGate, waitUntil } from "../test-helpers.js";
+import {
+  operationAdmissionReceipt,
+  operationTerminalReceipt,
+  parsePrivateOperationDescriptor,
+} from "./operation-contract.js";
 
 interface EnvelopeStepSummary {
   stepId: string;
@@ -42,6 +50,117 @@ function mockObjects(objects: unknown[], totalTokens = 10) {
   let index = 0;
   return new MockLanguageModelV3({
     doGenerate: async () => generated(objects[Math.min(index++, objects.length - 1)], totalTokens),
+  });
+}
+
+function installFakeCodewithAndTodos(root: string): string {
+  const binDir = join(root, "bin");
+  mkdirSync(binDir, { recursive: true });
+  writeFileSync(join(root, ".bash_profile"), `export PATH='${binDir}':$PATH\n`);
+  const codewith = join(binDir, "codewith");
+  writeFileSync(codewith, "#!/usr/bin/env bash\ncat >/dev/null\nprintf 'fake codewith succeeded without todos mutation\\n'\n");
+  chmodSync(codewith, 0o755);
+  const todos = join(binDir, "todos");
+  writeFileSync(
+    todos,
+    [
+      "#!/usr/bin/env bash",
+      "for arg in \"$@\"; do",
+      "  if [ \"$arg\" = \"inspect\" ]; then",
+      "    if [ -n \"${FAKE_TODOS_TASK_JSON+x}\" ]; then",
+      "      printf '%s\\n' \"$FAKE_TODOS_TASK_JSON\"",
+      "    else",
+      "      printf '{}\\n'",
+      "    fi",
+      "    exit 0",
+      "  fi",
+      "done",
+      "printf 'unsupported fake todos command: %s\\n' \"$*\" >&2",
+      "exit 2",
+    ].join("\n"),
+  );
+  chmodSync(todos, 0o755);
+  return binDir;
+}
+
+function createTodosTaskRouteHarness(store: Store, projectPath: string, taskId = "task-hidden") {
+  const workflow = store.createWorkflow(renderTodosTaskWorkerVerifierWorkflow({
+    taskId,
+    projectPath,
+    todosProjectPath: projectPath,
+    worktreeMode: "off",
+  }));
+  const invocation = store.createWorkflowInvocation({
+    templateId: TODOS_TASK_WORKER_VERIFIER_TEMPLATE_ID,
+    sourceRef: { kind: "event", id: `evt-${taskId}`, dedupeKey: `route-${taskId}` },
+    subjectRef: { kind: "task", id: taskId, path: projectPath },
+    intent: "route",
+    scope: { projectPath },
+  });
+  const workItem = store.upsertWorkflowWorkItem({
+    routeKey: "todos-task",
+    idempotencyKey: `route-${taskId}`,
+    invocationId: invocation.id,
+    sourceType: "task.created",
+    sourceRef: `evt-${taskId}`,
+    subjectRef: taskId,
+    projectKey: projectPath,
+    status: "queued",
+  });
+  const loop = store.createLoop({
+    name: `route-${taskId}`,
+    schedule: { type: "once", at: new Date().toISOString() },
+    target: {
+      type: "workflow",
+      workflowId: workflow.id,
+      input: {
+        workflowInvocationId: invocation.id,
+        workflowWorkItemId: workItem.id,
+      },
+    },
+    overlap: "skip",
+    maxAttempts: 1,
+    retryDelayMs: 60_000,
+    leaseMs: 90_000,
+  });
+  return { workflow, workItem, loop };
+}
+
+class ServerDerivedContractStore extends Store {
+  readonly serverDerivedAgentSessionContracts = true;
+}
+
+function installFakeCodex(root: string, jsonl: Record<string, unknown>[]): { binDir: string; invocationsFile: string } {
+  const binDir = join(root, "bin");
+  const invocationsFile = join(root, "codex-invocations");
+  mkdirSync(binDir, { recursive: true });
+  writeFileSync(
+    join(binDir, "codex"),
+    [
+      "#!/bin/sh",
+      "cat >/dev/null",
+      `printf 'invoked\\n' >> ${JSON.stringify(invocationsFile)}`,
+      ...jsonl.map((event) => `printf '%s\\n' ${JSON.stringify(JSON.stringify(event))}`),
+    ].join("\n"),
+  );
+  chmodSync(join(binDir, "codex"), 0o755);
+  return { binDir, invocationsFile };
+}
+
+function workerVerifierWorkflow(store: Store, cwd: string) {
+  return store.createWorkflow({
+    name: "worker-verifier-execution-evidence",
+    steps: [
+      {
+        id: "worker",
+        target: { type: "agent", provider: "codex", prompt: "perform the task", cwd, sandbox: "workspace-write" },
+      },
+      {
+        id: "verifier",
+        dependsOn: ["worker"],
+        target: { type: "agent", provider: "codex", prompt: "verify the worker", cwd, sandbox: "workspace-write" },
+      },
+    ],
   });
 }
 
@@ -78,6 +197,484 @@ describe("workflow runner", () => {
       expect(events.map((event) => event.eventType)).toContain("step_succeeded");
     } finally {
       store.close();
+    }
+  });
+
+  test("resumes from an immutable terminal receipt without repeating the external effect", async () => {
+    const store = new Store(":memory:");
+    const root = mkdtempSync(join(tmpdir(), "loops-operation-terminal-resume-"));
+    const marker = join(root, "effect-count");
+    try {
+      const workflow = store.createWorkflow({
+        name: "terminal-receipt-resume",
+        steps: [{
+          id: "effect",
+          target: {
+            type: "command",
+            command: `printf 'effect\\n' >> ${JSON.stringify(marker)}`,
+            shell: true,
+          },
+        }],
+      });
+      const idempotencyKey = "terminal-receipt-resume-key";
+      const run = store.createWorkflowRun({ workflow, idempotencyKey });
+      store.startWorkflowStepRun(run.id, "effect");
+      const descriptor = parsePrivateOperationDescriptor(
+        store.listWorkflowEvents(run.id).find((event) =>
+          event.eventType === "private_operation_descriptor" && event.stepId === "effect"
+        )?.payload,
+      );
+      store.appendWorkflowEvent(
+        run.id,
+        "private_operation_admitted",
+        "effect",
+        operationAdmissionReceipt(descriptor) as unknown as Record<string, unknown>,
+      );
+      writeFileSync(marker, "effect\n");
+      store.appendWorkflowEvent(
+        run.id,
+        "private_operation_terminal",
+        "effect",
+        operationTerminalReceipt(descriptor, {
+          status: "succeeded",
+          exitCode: 0,
+          durationMs: 1,
+          stdout: "effect",
+          stderr: "",
+        }) as unknown as Record<string, unknown>,
+      );
+
+      const result = await executeWorkflow(store, workflow, { idempotencyKey });
+
+      expect(result.status).toBe("succeeded");
+      expect(readFileSync(marker, "utf8")).toBe("effect\n");
+      expect(store.getWorkflowStepRun(run.id, "effect")).toMatchObject({ status: "succeeded" });
+      expect(store.listWorkflowEvents(run.id).filter((event) =>
+        event.eventType === "private_operation_terminal" && event.stepId === "effect"
+      )).toHaveLength(1);
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test.each([
+    {
+      name: "failed",
+      terminal: { status: "failed" as const, exitCode: 1, error: "effect failed" },
+      continueOnFailure: false,
+      expectedResult: "failed",
+      expectedEffect: "failed",
+      expectedNext: "skipped",
+      expectedMarker: "effect\n",
+    },
+    {
+      name: "timed out with continueOnFailure",
+      terminal: { status: "timed_out" as const, exitCode: 1, error: "effect timed out" },
+      continueOnFailure: true,
+      expectedResult: "succeeded",
+      expectedEffect: "timed_out",
+      expectedNext: "succeeded",
+      expectedMarker: "effect\nnext\n",
+    },
+    {
+      name: "policy-blocked gate",
+      terminal: { status: "failed" as const, exitCode: 12, error: "policy denied" },
+      continueOnFailure: false,
+      expectedResult: "succeeded",
+      expectedEffect: "skipped",
+      expectedNext: "skipped",
+      expectedMarker: "effect\n",
+    },
+  ])("consumes a $name terminal receipt exactly once on resume", async ({
+    name,
+    terminal,
+    continueOnFailure,
+    expectedResult,
+    expectedEffect,
+    expectedNext,
+    expectedMarker,
+  }) => {
+    const store = new Store(":memory:");
+    const root = mkdtempSync(join(tmpdir(), `loops-operation-${name.replaceAll(" ", "-")}-resume-`));
+    const marker = join(root, "effect-count");
+    try {
+      const workflow = store.createWorkflow({
+        name: `terminal-receipt-${name}`,
+        steps: [
+          {
+            id: name === "policy-blocked gate" ? "gate" : "effect",
+            continueOnFailure,
+            target: {
+              type: "command",
+              command: `printf 'effect\\n' >> ${JSON.stringify(marker)}`,
+              shell: true,
+            },
+          },
+          {
+            id: "next",
+            dependsOn: [name === "policy-blocked gate" ? "gate" : "effect"],
+            target: {
+              type: "command",
+              command: `printf 'next\\n' >> ${JSON.stringify(marker)}`,
+              shell: true,
+            },
+          },
+        ],
+      });
+      const effectStepId = workflow.steps[0]!.id;
+      const idempotencyKey = `terminal-receipt-${name}-key`;
+      const run = store.createWorkflowRun({ workflow, idempotencyKey });
+      store.startWorkflowStepRun(run.id, effectStepId);
+      const descriptor = parsePrivateOperationDescriptor(
+        store.listWorkflowEvents(run.id).find((event) =>
+          event.eventType === "private_operation_descriptor" && event.stepId === effectStepId
+        )?.payload,
+      );
+      store.appendWorkflowEvent(
+        run.id,
+        "private_operation_admitted",
+        effectStepId,
+        operationAdmissionReceipt(descriptor) as unknown as Record<string, unknown>,
+      );
+      writeFileSync(marker, "effect\n");
+      store.appendWorkflowEvent(
+        run.id,
+        "private_operation_terminal",
+        effectStepId,
+        operationTerminalReceipt(descriptor, {
+          ...terminal,
+          durationMs: 1,
+          stdout: "",
+          stderr: "",
+        }) as unknown as Record<string, unknown>,
+      );
+
+      const result = await executeWorkflow(store, workflow, { idempotencyKey });
+
+      expect(result.status).toBe(expectedResult);
+      expect(store.getWorkflowRun(run.id)?.status).toBe(expectedResult);
+      expect(readFileSync(marker, "utf8")).toBe(expectedMarker);
+      expect(store.getWorkflowStepRun(run.id, effectStepId)?.status).toBe(expectedEffect);
+      expect(store.getWorkflowStepRun(run.id, "next")?.status).toBe(expectedNext);
+      expect(store.listWorkflowEvents(run.id).filter((event) =>
+        event.eventType === "step_started" && event.stepId === effectStepId
+      )).toHaveLength(1);
+      expect(store.listWorkflowEvents(run.id).filter((event) =>
+        event.eventType === "private_operation_terminal" && event.stepId === effectStepId
+      )).toHaveLength(1);
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("crash after an admitted external effect ends in reconciliation instead of blind replay", async () => {
+    const store = new Store(":memory:");
+    const root = mkdtempSync(join(tmpdir(), "loops-operation-uncertain-resume-"));
+    const marker = join(root, "effect-count");
+    try {
+      const workflow = store.createWorkflow({
+        name: "uncertain-effect-resume",
+        steps: [{
+          id: "effect",
+          target: {
+            type: "command",
+            command: `printf 'effect\\n' >> ${JSON.stringify(marker)}`,
+            shell: true,
+          },
+        }],
+      });
+      const idempotencyKey = "uncertain-effect-resume-key";
+      const run = store.createWorkflowRun({ workflow, idempotencyKey });
+      store.startWorkflowStepRun(run.id, "effect");
+      const descriptor = parsePrivateOperationDescriptor(
+        store.listWorkflowEvents(run.id).find((event) =>
+          event.eventType === "private_operation_descriptor" && event.stepId === "effect"
+        )?.payload,
+      );
+      store.appendWorkflowEvent(
+        run.id,
+        "private_operation_admitted",
+        "effect",
+        operationAdmissionReceipt(descriptor) as unknown as Record<string, unknown>,
+      );
+      // This is the crash-after-effect boundary: the effect happened, but no
+      // terminal receipt was durably observed before the executor resumed.
+      writeFileSync(marker, "effect\n");
+
+      const result = await executeWorkflow(store, workflow, { idempotencyKey });
+
+      expect(result.status).toBe("failed");
+      expect(result.error).toContain("outcome uncertain after admission receipt");
+      expect(readFileSync(marker, "utf8")).toBe("effect\n");
+      expect(store.getWorkflowStepRun(run.id, "effect")).toMatchObject({
+        status: "failed",
+        error: expect.stringContaining("reconciliation required"),
+      });
+      expect(store.listWorkflowEvents(run.id).filter((event) =>
+        event.eventType === "private_operation_terminal" && event.stepId === "effect"
+      )).toHaveLength(0);
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("persists the exact advisory agent session contract before execution", async () => {
+    const store = new Store(":memory:");
+    const binDir = mkdtempSync(join(tmpdir(), "loops-workflow-agent-contract-"));
+    const fakeCodewith = join(binDir, "codewith");
+    writeFileSync(fakeCodewith, "#!/bin/sh\ncat >/dev/null\nprintf agent-ok\n");
+    chmodSync(fakeCodewith, 0o755);
+    try {
+      const workflow = store.createWorkflow({
+        name: "agent-contract",
+        steps: [{
+          id: "agent",
+          target: {
+            type: "agent",
+            provider: "codewith",
+            prompt: "inspect the scoped repository state",
+            cwd: binDir,
+            model: "gpt-test",
+            sandbox: "workspace-write",
+            timeoutMs: 1234,
+            allowlist: {
+              tools: ["functions.exec_command"],
+              commands: ["git", "bun"],
+              enforcement: "metadata_only",
+              safetyReason: "scoped workflow agent test",
+            },
+            routing: { taskId: "task-123", eventId: "event-123", eventType: "task.created" },
+          },
+        }],
+      });
+
+      const result = await executeWorkflow(store, workflow, {
+        env: { ...process.env, PATH: `${binDir}:${process.env.PATH ?? ""}` },
+      });
+
+      expect(result.status).toBe("succeeded");
+      const run = store.listWorkflowRuns({ workflowId: workflow.id, limit: 1 })[0]!;
+      const event = store.listWorkflowEvents(run.id).find((entry) => entry.eventType === "agent_session_contract");
+      expect(event?.stepId).toBe("agent");
+      expect(event?.payload).toMatchObject({
+        version: 1,
+        provider: "codewith",
+        model: "gpt-test",
+        cwd: binDir,
+        sandbox: "workspace-write",
+        manualBreakGlass: false,
+        routing: { taskId: "task-123", eventId: "event-123", eventType: "task.created" },
+        timeoutMs: 1234,
+        restrictions: {
+          tools: ["functions.exec_command"],
+          commands: ["git", "bun"],
+          enforcement: "metadata_only",
+          providerEnforced: false,
+        },
+        safetyReason: "scoped workflow agent test",
+      });
+    } finally {
+      store.close();
+      rmSync(binDir, { recursive: true, force: true });
+    }
+  });
+
+  test("does not submit a client-authored contract when the server derives workflow contract events", async () => {
+    const store = new ServerDerivedContractStore(":memory:");
+    const binDir = mkdtempSync(join(tmpdir(), "loops-workflow-server-contract-"));
+    const fakeCodewith = join(binDir, "codewith");
+    writeFileSync(fakeCodewith, "#!/bin/sh\ncat >/dev/null\nprintf agent-ok\n");
+    chmodSync(fakeCodewith, 0o755);
+    try {
+      const workflow = store.createWorkflow({
+        name: "server-derived-agent-contract",
+        steps: [{
+          id: "agent",
+          target: {
+            type: "agent",
+            provider: "codewith",
+            prompt: "inspect scoped state",
+            cwd: binDir,
+            allowlist: { commands: ["git"], safetyReason: "server-derived contract test" },
+          },
+        }],
+      });
+
+      const result = await executeWorkflow(store, workflow, {
+        env: { ...process.env, PATH: `${binDir}:${process.env.PATH ?? ""}` },
+      });
+
+      expect(result.status).toBe("succeeded");
+      const run = store.listWorkflowRuns({ workflowId: workflow.id, limit: 1 })[0]!;
+      expect(store.listWorkflowEvents(run.id).filter((event) => event.eventType === "agent_session_contract")).toHaveLength(1);
+    } finally {
+      store.close();
+      rmSync(binDir, { recursive: true, force: true });
+    }
+  });
+
+  test("fails a worker-verifier workflow when sandbox setup prevents every command", async () => {
+    const store = new Store(":memory:");
+    const root = mkdtempSync(join(tmpdir(), "loops-workflow-sandbox-blocked-"));
+    const { binDir, invocationsFile } = installFakeCodex(root, [
+      {
+        type: "item.started",
+        item: {
+          type: "command_execution",
+          command: "git status --short",
+          status: "in_progress",
+        },
+      },
+      {
+        type: "item.completed",
+        item: {
+          type: "command_execution",
+          command: "git status --short",
+          aggregated_output: "bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted",
+          exit_code: 1,
+          status: "failed",
+        },
+      },
+      {
+        type: "item.completed",
+        item: {
+          type: "agent_message",
+          text: "No local command could execute: bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted",
+        },
+      },
+    ]);
+    try {
+      const workflow = workerVerifierWorkflow(store, root);
+      const result = await executeWorkflow(store, workflow, {
+        env: { ...process.env, PATH: `${binDir}:${process.env.PATH ?? ""}` },
+      });
+
+      expect(result.status).toBe("failed");
+      const run = store.listWorkflowRuns({ workflowId: workflow.id, limit: 1 })[0]!;
+      expect(run.status).toBe("failed");
+      const steps = store.listWorkflowStepRuns(run.id);
+      expect(steps.map((step) => [step.stepId, step.status])).toEqual([
+        ["worker", "failed"],
+        ["verifier", "skipped"],
+      ]);
+      expect(steps[0]?.error).toContain("could not execute any command because sandbox setup failed");
+      expect(readFileSync(invocationsFile, "utf8").trim().split("\n")).toHaveLength(1);
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("succeeds a worker-verifier workflow when a real command executed", async () => {
+    const store = new Store(":memory:");
+    const root = mkdtempSync(join(tmpdir(), "loops-workflow-command-executed-"));
+    const { binDir, invocationsFile } = installFakeCodex(root, [
+      {
+        type: "item.completed",
+        item: {
+          type: "command_execution",
+          command: "git status --short",
+          aggregated_output: "",
+          exit_code: 0,
+          status: "completed",
+        },
+      },
+      { type: "item.completed", item: { type: "agent_message", text: "The command completed successfully." } },
+    ]);
+    try {
+      const workflow = workerVerifierWorkflow(store, root);
+      const result = await executeWorkflow(store, workflow, {
+        env: { ...process.env, PATH: `${binDir}:${process.env.PATH ?? ""}` },
+      });
+
+      expect(result.status).toBe("succeeded");
+      const run = store.listWorkflowRuns({ workflowId: workflow.id, limit: 1 })[0]!;
+      expect(run.status).toBe("succeeded");
+      expect(store.listWorkflowStepRuns(run.id).map((step) => [step.stepId, step.status])).toEqual([
+        ["worker", "succeeded"],
+        ["verifier", "succeeded"],
+      ]);
+      expect(readFileSync(invocationsFile, "utf8").trim().split("\n")).toHaveLength(2);
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("todos task workflow fails when successful agents leave no task completion evidence", async () => {
+    const store = new Store(":memory:");
+    const root = mkdtempSync(join(tmpdir(), "loops-hidden-evidence-"));
+    const binDir = installFakeCodewithAndTodos(root);
+    try {
+      const { workflow, workItem, loop } = createTodosTaskRouteHarness(store, root);
+      const result = await executeWorkflow(store, workflow, {
+        loop,
+        env: {
+          ...process.env,
+          HOME: root,
+          PATH: `${binDir}:${process.env.PATH ?? ""}`,
+          FAKE_TODOS_TASK_JSON: JSON.stringify({ id: "task-hidden", status: "pending", comments: [] }),
+        },
+      });
+
+      expect(result.status).toBe("failed");
+      const run = store.listWorkflowRuns({ workflowId: workflow.id, limit: 1 })[0]!;
+      expect(run.status).toBe("failed");
+      expect(store.getWorkflowWorkItem(workItem.id)?.status).toBe("failed");
+      const steps = store.listWorkflowStepRuns(run.id);
+      expect(steps.map((step) => [step.stepId, step.status])).toEqual([
+        ["source-task-gate", "succeeded"],
+        ["worker", "succeeded"],
+        ["verifier", "succeeded"],
+        ["task-evidence-check", "failed"],
+      ]);
+      expect(steps.find((step) => step.stepId === "task-evidence-check")?.stderr).toContain("task evidence gate failed");
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("todos task workflow succeeds only after completed worker and verifier evidence markers", async () => {
+    const store = new Store(":memory:");
+    const root = mkdtempSync(join(tmpdir(), "loops-visible-evidence-"));
+    const binDir = installFakeCodewithAndTodos(root);
+    try {
+      const { workflow, workItem, loop } = createTodosTaskRouteHarness(store, root, "task-visible");
+      const result = await executeWorkflow(store, workflow, {
+        loop,
+        env: {
+          ...process.env,
+          HOME: root,
+          PATH: `${binDir}:${process.env.PATH ?? ""}`,
+          FAKE_TODOS_TASK_JSON: JSON.stringify({
+            id: "task-visible",
+            status: "completed",
+            comments: [
+              {
+                content: "openloops:worker=evidence task=task-visible\nchanged files: src/a.ts; validation: bun test passed",
+                created_at: "2026-06-30T10:00:00.000Z",
+              },
+              {
+                content: "openloops:verifier=evidence task=task-visible\nverdict: GO; validation rerun passed",
+                created_at: "2026-06-30T10:05:00.000Z",
+              },
+            ],
+          }),
+        },
+      });
+
+      expect(result.status).toBe("succeeded");
+      const run = store.listWorkflowRuns({ workflowId: workflow.id, limit: 1 })[0]!;
+      expect(run.status).toBe("succeeded");
+      expect(store.getWorkflowWorkItem(workItem.id)?.status).toBe("succeeded");
+      expect(store.getWorkflowStepRun(run.id, "task-evidence-check")?.stdout).toContain('"ok":true');
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
     }
   });
 
@@ -423,6 +1020,126 @@ describe("workflow runner", () => {
     }
   });
 
+  test("workflow provider DNS failures are reported as retry-pending provider outages", async () => {
+    const store = new Store(":memory:");
+    try {
+      const workflow = store.createWorkflow({
+        name: "machine-tasks-inprogress-completion-audit-workflow",
+        steps: [
+          {
+            id: "cursor-inprogress-audit",
+            target: {
+              type: "command",
+              command: "printf 'Error: [unavailable] getaddrinfo EAI_AGAIN api2.cursor.sh' >&2; exit 1",
+              shell: true,
+            },
+          },
+        ],
+      });
+      const loop = store.createLoop(
+        {
+          name: "machine-tasks-in-progress-audit",
+          schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+          target: { type: "workflow", workflowId: workflow.id },
+          maxAttempts: 2,
+          retryDelayMs: 1_000,
+        },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+
+      const first = await tick({
+        store,
+        runnerId: "test",
+        now: () => new Date("2026-01-01T00:00:00Z"),
+        random: () => 0.5,
+      });
+
+      expect(first.completed[0]?.status).toBe("failed");
+      expect(first.completed[0]?.attempt).toBe(1);
+      const retrying = store.getLoop(loop.id);
+      expect(retrying?.status).toBe("active");
+      expect(retrying?.retryScheduledFor).toBe("2026-01-01T00:00:00.000Z");
+      expect(retrying?.nextRunAt).toBeDefined();
+      expect(retrying?.nextRunAt).not.toBe(retrying?.retryScheduledFor);
+
+      const report = buildHealthReport(store);
+      const expectation = report.expectations.find((entry) => entry.loop.id === loop.id);
+      expect(report.ok).toBe(true);
+      expect(report.summary.unhealthy).toBe(0);
+      expect(report.summary.warnings).toBe(1);
+      expect(report.classifications.provider_unavailable).toBe(1);
+      expect(expectation?.ok).toBe(true);
+      expect(expectation?.check.status).toBe("warn");
+      expect(expectation?.check.message).toContain("retry is scheduled");
+      expect(expectation?.loop.retryScheduledFor).toBe("2026-01-01T00:00:00.000Z");
+      expect(expectation?.failure?.classification).toBe("provider_unavailable");
+      expect(expectation?.failure?.evidence.summary).toBe("provider DNS lookup failed: EAI_AGAIN api2.cursor.sh");
+      expect(expectation?.recommendedTask).toBeUndefined();
+    } finally {
+      store.close();
+    }
+  });
+
+  test("workflow Cursor resource_exhausted failures are reported as retry-pending provider capacity", async () => {
+    const store = new Store(":memory:");
+    try {
+      const workflow = store.createWorkflow({
+        name: "machine-tasks-inprogress-completion-audit-workflow",
+        steps: [
+          {
+            id: "cursor-inprogress-audit",
+            target: {
+              type: "command",
+              command: "printf '%s\\n%s' 'Connection lost to https://agentn.global.api5.cursor.sh attempts 1-3' 'RetriableError: [resource_exhausted] Error' >&2; exit 1",
+              shell: true,
+            },
+          },
+        ],
+      });
+      const loop = store.createLoop(
+        {
+          name: "machine-tasks-in-progress-audit",
+          schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+          target: { type: "workflow", workflowId: workflow.id },
+          maxAttempts: 2,
+          retryDelayMs: 1_000,
+        },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+
+      const first = await tick({
+        store,
+        runnerId: "test",
+        now: () => new Date("2026-01-01T00:00:00Z"),
+        random: () => 0.5,
+      });
+
+      expect(first.completed[0]?.status).toBe("failed");
+      expect(first.completed[0]?.attempt).toBe(1);
+      const retrying = store.getLoop(loop.id);
+      expect(retrying?.status).toBe("active");
+      expect(retrying?.retryScheduledFor).toBe("2026-01-01T00:00:00.000Z");
+      expect(retrying?.nextRunAt).toBeDefined();
+      expect(retrying?.nextRunAt).not.toBe(retrying?.retryScheduledFor);
+
+      const report = buildHealthReport(store);
+      const expectation = report.expectations.find((entry) => entry.loop.id === loop.id);
+      expect(report.ok).toBe(true);
+      expect(report.summary.unhealthy).toBe(0);
+      expect(report.summary.warnings).toBe(1);
+      expect(report.classifications.provider_capacity).toBe(1);
+      expect(expectation?.ok).toBe(true);
+      expect(expectation?.check.status).toBe("warn");
+      expect(expectation?.check.message).toContain("capacity/resource exhaustion");
+      expect(expectation?.loop.retryScheduledFor).toBe("2026-01-01T00:00:00.000Z");
+      expect(expectation?.failure?.classification).toBe("provider_capacity");
+      expect(expectation?.failure?.evidence.summary).toBe("provider capacity exhausted: resource_exhausted agentn.global.api5.cursor.sh");
+      expect(expectation?.recommendedTask).toBeUndefined();
+    } finally {
+      store.close();
+    }
+  });
+
   test("same idempotency key cannot double-run an active workflow step", async () => {
     const store = new Store(":memory:");
     const root = mkdtempSync(join(tmpdir(), "loops-idempotent-active-"));
@@ -626,7 +1343,7 @@ describe("workflow runner", () => {
       const claim = store.claimRun(loop, "2026-01-01T00:00:00.000Z", "crashed", new Date("2026-01-01T00:00:00Z"));
       expect(claim).toBeDefined();
       const executing = executeLoopTarget(store, loop, claim!.run, {
-        onSpawn: (pid) => store.markRunPid(claim!.run.id, pid, "crashed"),
+        onSpawn: (pid) => store.markRunPid(claim!.run.id, pid, "crashed", { claimToken: claim!.claimToken }),
       });
       await waitUntil(() => store.getRun(claim!.run.id)?.pid !== undefined, { label: "run pid recorded" });
       expect(store.getRun(claim!.run.id)?.pid).toBeDefined();
@@ -923,6 +1640,48 @@ describe("workflow runner", () => {
     }
   });
 
+  test("resumed agent workflow reuses its matching contract event after interrupted execution", async () => {
+    const store = new Store(":memory:");
+    const root = mkdtempSync(join(tmpdir(), "loops-agent-resume-contract-"));
+    const marker = join(root, "marker");
+    const fakeCodewith = join(root, "codewith");
+    const DEAD_PID = 0x3fffffff;
+    writeFileSync(fakeCodewith, `#!/bin/sh\ncat >/dev/null\nprintf done > '${marker}'\nprintf agent-ok\n`);
+    chmodSync(fakeCodewith, 0o755);
+    try {
+      const target = {
+        type: "agent",
+        provider: "codewith",
+        prompt: "perform scoped work",
+        cwd: root,
+        allowlist: { commands: ["git"], safetyReason: "interrupted agent recovery test" },
+      } satisfies AgentTarget;
+      const workflow = store.createWorkflow({
+        name: "agent-resume-contract",
+        steps: [{ id: "agent", target }],
+      });
+      const stranded = store.createWorkflowRun({ workflow, idempotencyKey: "agent-resume-key" });
+      store.startWorkflowStepRun(stranded.id, "agent");
+      store.markWorkflowStepPid(stranded.id, "agent", DEAD_PID);
+
+      const result = await executeWorkflow(store, workflow, {
+        idempotencyKey: "agent-resume-key",
+        env: { ...process.env, PATH: `${root}:${process.env.PATH ?? ""}` },
+      });
+
+      if (result.status !== "succeeded") throw new Error(JSON.stringify(result));
+      expect(result.status).toBe("succeeded");
+      expect(readFileSync(marker, "utf8")).toBe("done");
+      expect(store.listWorkflowEvents(stranded.id).filter((event) =>
+        event.eventType === "agent_session_contract" && event.stepId === "agent"
+      )).toHaveLength(1);
+
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   // Regression (MEDIUM 3): an unexpected throw inside the step loop (e.g. a store
   // error like SQLITE_BUSY past busy_timeout) must not leave the workflow_run
   // stuck "running" forever — it is finalized failed and a failed result returned.
@@ -953,6 +1712,7 @@ describe("workflow runner", () => {
 });
 
 describe("pr-handoff direct-PR integration", () => {
+  // This integration test spawns real processes, so loaded machines need more than Bun's 5s default.
   test("cursor pattern (worker opens PR, no artifact): pr-handoff exits 0 so the verifier still runs", async () => {
     const store = new Store(":memory:");
     const home = mkdtempSync(join(tmpdir(), "loops-prh-int-home-"));
@@ -1049,5 +1809,5 @@ describe("pr-handoff direct-PR integration", () => {
       rmSync(bin, { recursive: true, force: true });
       rmSync(wt, { recursive: true, force: true });
     }
-  });
+  }, 90_000);
 });

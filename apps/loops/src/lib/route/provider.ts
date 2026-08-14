@@ -43,12 +43,12 @@ export function normalizeAgentProvider(value: string | undefined, source: string
 
 export function parseProviderRoutingRule(raw: string): ProviderRoutingRule {
   const rule = raw.trim();
-  const selectorIndex = rule.indexOf(":");
+  const equalsIndex = rule.indexOf("=");
+  if (equalsIndex <= 0) throw new ValidationError(`invalid --provider-rule "${raw}", expected field=value:provider[:profile1,profile2]`);
+  const selectorIndex = providerRuleSelectorIndex(rule, equalsIndex);
   if (selectorIndex <= 0) throw new ValidationError(`invalid --provider-rule "${raw}", expected field=value:provider[:profile1,profile2]`);
   const selector = rule.slice(0, selectorIndex).trim();
   const route = rule.slice(selectorIndex + 1).trim();
-  const equalsIndex = selector.indexOf("=");
-  if (equalsIndex <= 0) throw new ValidationError(`invalid --provider-rule "${raw}", expected field=value:provider[:profile1,profile2]`);
   const field = selector.slice(0, equalsIndex).trim();
   const value = selector.slice(equalsIndex + 1).trim();
   const providerIndex = route.indexOf(":");
@@ -62,6 +62,19 @@ export function parseProviderRoutingRule(raw: string): ProviderRoutingRule {
     provider: normalizeAgentProvider(providerRaw, `provider rule ${field}=${value}`),
     profiles: splitList(profilesRaw),
   };
+}
+
+function providerRuleSelectorIndex(rule: string, equalsIndex: number): number {
+  const firstColon = rule.indexOf(":", equalsIndex + 1);
+  if (firstColon < 0) return firstColon;
+  let cursor = firstColon;
+  while (cursor >= 0) {
+    const nextColon = rule.indexOf(":", cursor + 1);
+    const providerRaw = (nextColon >= 0 ? rule.slice(cursor + 1, nextColon) : rule.slice(cursor + 1)).trim().toLowerCase();
+    if (SUPPORTED_AGENT_PROVIDERS.has(providerRaw as AgentProvider)) return cursor;
+    cursor = nextColon;
+  }
+  return firstColon;
 }
 
 function parseProviderRoutingRules(values: string[] | undefined): ProviderRoutingRule[] {

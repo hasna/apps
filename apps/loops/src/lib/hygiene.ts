@@ -1,7 +1,8 @@
 import { basename } from "node:path";
 import { homedir } from "node:os";
-import type { Loop, ScheduleSpec } from "../types.js";
+import type { Loop, LoopRun, ScheduleSpec } from "../types.js";
 import type { Store } from "./store.js";
+import { advanceLoop } from "./scheduler.js";
 
 export interface NameHygieneChange {
   id: string;
@@ -322,5 +323,189 @@ export function buildScriptInventoryReport(
     checked: loops.length,
     scriptBacked: scriptBacked.length,
     loops: scriptBacked,
+  };
+}
+
+export interface StuckRunEntry {
+  runId: string;
+  loopId: string;
+  loopName: string;
+  scheduledFor: string;
+  startedAt?: string;
+  leaseExpiresAt?: string;
+  pid?: number;
+  /** Why this run was left alone instead of reclaimed. Present only for entries that were not reclaimed. */
+  deferredReason?: "live_process";
+  /** True once this run has actually been marked `abandoned` by an --apply run. */
+  reclaimed: boolean;
+}
+
+export interface StuckRunReport {
+  ok: boolean;
+  generatedAt: string;
+  applied: boolean;
+  /** Total running runs found with an expired lease, reclaimable or not. */
+  checked: number;
+  /** Runs with an expired lease AND no live process — the reclaimable set. */
+  stuck: number;
+  /** Runs with an expired lease but a still-live process — never reclaimed. */
+  liveDeferred: number;
+  entries: StuckRunEntry[];
+  /** Loop ids whose nextRunAt was advanced immediately after reclaiming a run, unblocking their cadence without waiting for a daemon tick. */
+  advancedLoopIds: string[];
+}
+
+function toStuckRunEntry(run: LoopRun, reclaimed: boolean, deferredReason?: "live_process"): StuckRunEntry {
+  return {
+    runId: run.id,
+    loopId: run.loopId,
+    loopName: run.loopName,
+    scheduledFor: run.scheduledFor,
+    startedAt: run.startedAt,
+    leaseExpiresAt: run.leaseExpiresAt,
+    pid: run.pid,
+    deferredReason,
+    reclaimed,
+  };
+}
+
+/**
+ * Detect (and, with `apply`, reclaim) loop runs stuck in `status: "running"`
+ * with an expired lease and no live backing process — the `7cf8d8c1` defect
+ * class: a run that outlives both its lease and its execution timeout with no
+ * process behind it, leaving an unreapable orphan row whose loop's cursor
+ * never advances through recovery because nothing ever moves the run out of
+ * `running`.
+ *
+ * Be precise about what that state does NOT do, because the imprecise version
+ * ("`overlap: "skip"` then blocks the loop forever") sends the next reader to
+ * the scheduler instead of to recovery: an EXPIRED lease does not, on its own,
+ * refuse a later slot. That gate turns on a run holding a LIVE lease or a live
+ * process (`Store#hasBlockingRunningRunForOtherSlot`), which the store's own
+ * test "overlap skip does not block a later slot on an expired dead lease"
+ * (`src/lib/store.test.ts`) pins in exactly this shape. What this command
+ * repairs is the orphan row and the loop cursor behind it, not a wedged
+ * scheduler.
+ *
+ * The discriminator is evidence, not age: `Store#previewExpiredRunLeases` (and,
+ * on apply, `Store#recoverExpiredRunLeasesDetailed`) only ever classifies a run
+ * as reclaimable when its lease has expired AND EITHER its recorded process is
+ * not alive (bounded, additionally, by the daemon's own pid-recycling and
+ * workflow-step-liveness checks) OR it looks alive but has already exceeded
+ * the daemon's own bounded grace ceiling (`MAX_LIVE_EXPIRED_RUN_DEFERRALS`
+ * deferrals — a live-looking process that keeps failing to renew its lease is
+ * a wedged runner or a recycled pid, not a run this tool should defer
+ * forever). A run whose process looks alive AND is still under that ceiling is
+ * reported as `liveDeferred` and is not abandoned — but `apply` still touches
+ * it: each such call advances its `defer_count` exactly as a live daemon tick
+ * would, which is what lets it ever reach the ceiling in the first place. A
+ * genuinely, persistently alive run never crosses the ceiling because its
+ * lease keeps renewing before ever going stale enough to be selected at all.
+ *
+ * SUPERSEDES PART OF #182, DOES NOT REVERT IT (P1 fixed in this cycle, found
+ * by pr182-reviewer, reproduced and confirmed independently before this PR):
+ * #182 called `recoverExpiredRunLeasesDetailed(now, { preserveLiveProcesses:
+ * true })` here, unconditionally. That flag makes `store.ts` `continue` on
+ * every "looks alive" row regardless of `defer_count`, so the ceiling-abandon
+ * branch a few lines below it is provably unreachable through this command —
+ * a live-looking wedged run could never be reclaimed by `--apply`, no matter
+ * how long it sat or how many times the command ran, which under `overlap:
+ * "skip"` is exactly the "blocks every run queued behind it" failure this
+ * whole command exists to fix. That call is changed here to omit
+ * `preserveLiveProcesses`, restoring the ceiling-based reclaim. The
+ * `preserveLiveProcesses` option itself is left in place on
+ * `recoverExpiredRunLeasesDetailed` — #182's safety intent (never touch a
+ * process that looks alive) is a legitimate primitive for some other caller
+ * to opt into; the defect was applying it here, unconditionally, to the one
+ * command whose whole job is to eventually reclaim a run that only *looks*
+ * alive.
+ *
+ * On this fleet a loop's `leaseMs` is conventionally set wider than its
+ * target's `timeoutMs` (e.g. 9m lease over an 8m execution timeout), so lease
+ * expiry is already evidence that the execution timeout has also elapsed; this
+ * command does not additionally re-check `timeoutMs` because doing so could
+ * only ever narrow, never widen, what the lease+liveness check already
+ * requires.
+ *
+ * Reclaiming a run is not enough on its own to unblock its loop: `overlap:
+ * "skip"` only re-admits new claims once no `running` run remains for the
+ * loop, and `nextRunAt` is only recomputed by the scheduler's own advancement
+ * logic. Waiting for that to happen relies on a live daemon ticking against
+ * this exact store, which is precisely the condition already absent for a run
+ * that got this stuck. So on `apply`, this command calls the scheduler's own
+ * `advanceLoop` directly against each reclaimed run, synchronously, so the
+ * loop's `nextRunAt` moves in the same command invocation rather than waiting
+ * on a daemon that may not come back.
+ */
+export function buildStuckRunReport(store: Store, opts: { apply?: boolean; limit?: number; now?: Date } = {}): StuckRunReport {
+  const now = opts.now ?? new Date();
+  const preview = store.previewExpiredRunLeases(now, { limit: opts.limit });
+  const advancedLoopIds: string[] = [];
+  let entries: StuckRunEntry[];
+  let stuckCount = preview.reclaimable.length;
+  let liveDeferredCount = preview.liveDeferred.length;
+  // CORRECTED (P1, PR #182 review): this used to gate the mutating call on
+  // `preview.reclaimable.length > 0`. That is wrong even once the ceiling
+  // check above is fixed, because a live-looking run under the grace ceiling
+  // is reported by preview as `liveDeferred`, never `reclaimable` — so that
+  // gate would skip calling `recoverExpiredRunLeasesDetailed` for exactly the
+  // runs whose `defer_count` needs to advance toward the ceiling. Left gated,
+  // such a run's `defer_count` stays at 0 forever and it can never be
+  // reclaimed even after real, prior invocations. The daemon's own tick calls
+  // this unconditionally every time it finds an expired-lease row at all
+  // (never conditioned on "would anything be abandoned"); `apply` must match
+  // that, not re-derive a narrower trigger.
+  if (opts.apply && (preview.reclaimable.length > 0 || preview.liveDeferred.length > 0)) {
+    // NOTE: deliberately NOT passing `preserveLiveProcesses` — see the
+    // "SUPERSEDES PART OF #182" note above the doc comment for why passing
+    // `true` here made this command permanently unable to reclaim a
+    // live-looking wedged run.
+    const result = store.recoverExpiredRunLeasesDetailed(now, { limit: opts.limit });
+    for (const run of result.abandoned) {
+      const loop = store.getLoop(run.loopId);
+      if (!loop) continue;
+      // advanceLoop is a documented no-op for a non-active loop (planLoopAdvancement
+      // reason: "inactive") — a paused or stopped loop's nextRunAt must stay exactly
+      // where an operator left it, never get silently nudged forward by a reclaim.
+      // advanceLoop itself never reports whether it actually changed anything, so
+      // compare before/after to report advancement truthfully rather than reporting
+      // "advanced" for every non-throwing call, most of which are no-ops.
+      const before = loop.nextRunAt;
+      try {
+        advanceLoop(store, loop, run, now, false);
+      } catch {
+        // Best-effort: a lost race or a since-archived loop leaves nextRunAt
+        // for the daemon's own tick to repair (see repairWedgedTerminalSlot).
+        // The run is already reclaimed either way — that half never rolls back.
+        continue;
+      }
+      if (store.getLoop(loop.id)?.nextRunAt !== before) advancedLoopIds.push(loop.id);
+    }
+    // Report what THIS invocation actually did (abandoned vs re-deferred),
+    // not the pre-mutation preview counts — the two can legitimately differ
+    // now: a run at the ceiling shows as `reclaimable` in preview but was
+    // just abandoned by this call, and a run below the ceiling shows as
+    // `liveDeferred` in both, but its `defer_count` has now moved.
+    stuckCount = result.abandoned.length;
+    liveDeferredCount = result.deferred.length;
+    entries = [
+      ...result.abandoned.map((run) => toStuckRunEntry(run, true)),
+      ...result.deferred.map((run) => toStuckRunEntry(run, false, "live_process")),
+    ];
+  } else {
+    entries = [
+      ...preview.reclaimable.map((run) => toStuckRunEntry(run, false)),
+      ...preview.liveDeferred.map((run) => toStuckRunEntry(run, false, "live_process")),
+    ];
+  }
+  return {
+    ok: stuckCount === 0,
+    generatedAt: now.toISOString(),
+    applied: Boolean(opts.apply),
+    checked: stuckCount + liveDeferredCount,
+    stuck: stuckCount,
+    liveDeferred: liveDeferredCount,
+    entries,
+    advancedLoopIds,
   };
 }

@@ -49,6 +49,13 @@ export function taskEventField(data: Record<string, unknown>, keys: string[]): s
       const direct = stringField((payload as Record<string, unknown>)[key]);
       if (direct) return direct;
     }
+    const payloadTask = (payload as Record<string, unknown>).task;
+    if (payloadTask && typeof payloadTask === "object" && !Array.isArray(payloadTask)) {
+      for (const key of keys) {
+        const direct = stringField((payloadTask as Record<string, unknown>)[key]);
+        if (direct) return direct;
+      }
+    }
   }
   return undefined;
 }
@@ -187,6 +194,17 @@ const ROUTE_MANUAL_GATE_FIELDS = [
   "approval_required",
   "approvalRequired",
 ];
+
+/**
+ * First route-disallowed tag on a task, if any. Exposed so drains can exclude
+ * tasks that can never route (no-auto/blocked/manual/…) from the bounded
+ * candidate window *before* slicing, instead of letting them occupy scan slots
+ * every tick only to be rejected by eligibility — the "skip re-burns the window
+ * forever" half of the merge-lane decay.
+ */
+export function taskRouteDisallowedTag(tags: string[]): string | undefined {
+  return tags.find((tag) => ROUTE_DISALLOWED_TASK_TAGS.has(tag.toLowerCase()));
+}
 
 export function taskRouteEligibility(data: Record<string, unknown>, metadata: Record<string, unknown>): { eligible: boolean; reason?: string; tags: string[] } {
   const records = taskEventRecords(data, metadata);

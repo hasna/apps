@@ -7,15 +7,24 @@ export type LoopStorageMethodName =
   | "getLoop"
   | "findLoopByName"
   | "requireLoop"
+  | "requireUniqueLoop"
   | "listLoops"
   | "dueLoops"
   | "updateLoop"
+  | "mutateLoop"
+  | "getLoopMutationResult"
+  | "advanceLoopIfCurrent"
+  | "tripCircuitBreakerIfCurrent"
   | "renameLoop"
   | "archiveLoop"
   | "unarchiveLoop"
   | "deleteLoop"
+  | "upsertMigrationLoop"
+  | "upsertMigrationRun"
+  | "upsertMigrationWorkflow"
   | "createWorkflow"
   | "getWorkflow"
+  | "requireWorkflow"
   | "listWorkflows"
   | "countWorkflows"
   | "archiveWorkflow"
@@ -29,6 +38,8 @@ export type LoopStorageMethodName =
   | "admitWorkflowWorkItem"
   | "createGoal"
   | "getGoal"
+  | "requireGoal"
+  | "findGoalByContext"
   | "listGoals"
   | "createGoalPlanNodes"
   | "listGoalPlanNodes"
@@ -38,12 +49,17 @@ export type LoopStorageMethodName =
   | "listGoalRuns"
   | "createWorkflowRun"
   | "getWorkflowRun"
+  | "requireWorkflowRun"
   | "listWorkflowRuns"
   | "listWorkflowStepRuns"
   | "getWorkflowStepRun"
+  | "isWorkflowRunTerminal"
   | "startWorkflowStepRun"
+  | "markWorkflowStepPid"
+  | "recordWorkflowStepProgress"
   | "recoverWorkflowRun"
   | "finalizeWorkflowStepRun"
+  | "skipWorkflowStepRun"
   | "finalizeWorkflowRun"
   | "appendWorkflowEvent"
   | "listWorkflowEvents"
@@ -51,10 +67,16 @@ export type LoopStorageMethodName =
   | "createSkippedRun"
   | "getRun"
   | "getRunBySlot"
+  | "nextRetryableRun"
   | "claimRun"
   | "finalizeRun"
   | "heartbeatRunLease"
   | "listRuns"
+  | "listRecoveredLeaseRunsPage"
+  | "writeRunReceipt"
+  | "getRunReceipt"
+  | "listRunReceipts"
+  | "listExpiredRunLeaseCandidates"
   | "recoverExpiredRunLeases"
   | "recoverExpiredRunLeasesDetailed"
   | "countLoops"
@@ -78,15 +100,24 @@ export interface LoopStorageContract extends Record<LoopStorageMethodName, (...a
   getLoop: AsyncStoreMethod<"getLoop">;
   findLoopByName: AsyncStoreMethod<"findLoopByName">;
   requireLoop: AsyncStoreMethod<"requireLoop">;
+  requireUniqueLoop: AsyncStoreMethod<"requireUniqueLoop">;
   listLoops: AsyncStoreMethod<"listLoops">;
   dueLoops: AsyncStoreMethod<"dueLoops">;
   updateLoop: AsyncStoreMethod<"updateLoop">;
+  mutateLoop: AsyncStoreMethod<"mutateLoop">;
+  getLoopMutationResult: AsyncStoreMethod<"getLoopMutationResult">;
+  advanceLoopIfCurrent: AsyncStoreMethod<"advanceLoopIfCurrent">;
+  tripCircuitBreakerIfCurrent: AsyncStoreMethod<"tripCircuitBreakerIfCurrent">;
   renameLoop: AsyncStoreMethod<"renameLoop">;
   archiveLoop: AsyncStoreMethod<"archiveLoop">;
   unarchiveLoop: AsyncStoreMethod<"unarchiveLoop">;
   deleteLoop: AsyncStoreMethod<"deleteLoop">;
+  upsertMigrationLoop: AsyncStoreMethod<"upsertMigrationLoop">;
+  upsertMigrationRun: AsyncStoreMethod<"upsertMigrationRun">;
+  upsertMigrationWorkflow: AsyncStoreMethod<"upsertMigrationWorkflow">;
   createWorkflow: AsyncStoreMethod<"createWorkflow">;
   getWorkflow: AsyncStoreMethod<"getWorkflow">;
+  requireWorkflow: AsyncStoreMethod<"requireWorkflow">;
   listWorkflows: AsyncStoreMethod<"listWorkflows">;
   countWorkflows: AsyncStoreMethod<"countWorkflows">;
   archiveWorkflow: AsyncStoreMethod<"archiveWorkflow">;
@@ -100,6 +131,8 @@ export interface LoopStorageContract extends Record<LoopStorageMethodName, (...a
   admitWorkflowWorkItem: AsyncStoreMethod<"admitWorkflowWorkItem">;
   createGoal: AsyncStoreMethod<"createGoal">;
   getGoal: AsyncStoreMethod<"getGoal">;
+  requireGoal: AsyncStoreMethod<"requireGoal">;
+  findGoalByContext: AsyncStoreMethod<"findGoalByContext">;
   listGoals: AsyncStoreMethod<"listGoals">;
   createGoalPlanNodes: AsyncStoreMethod<"createGoalPlanNodes">;
   listGoalPlanNodes: AsyncStoreMethod<"listGoalPlanNodes">;
@@ -109,12 +142,17 @@ export interface LoopStorageContract extends Record<LoopStorageMethodName, (...a
   listGoalRuns: AsyncStoreMethod<"listGoalRuns">;
   createWorkflowRun: AsyncStoreMethod<"createWorkflowRun">;
   getWorkflowRun: AsyncStoreMethod<"getWorkflowRun">;
+  requireWorkflowRun: AsyncStoreMethod<"requireWorkflowRun">;
   listWorkflowRuns: AsyncStoreMethod<"listWorkflowRuns">;
   listWorkflowStepRuns: AsyncStoreMethod<"listWorkflowStepRuns">;
   getWorkflowStepRun: AsyncStoreMethod<"getWorkflowStepRun">;
+  isWorkflowRunTerminal: AsyncStoreMethod<"isWorkflowRunTerminal">;
   startWorkflowStepRun: AsyncStoreMethod<"startWorkflowStepRun">;
+  markWorkflowStepPid: AsyncStoreMethod<"markWorkflowStepPid">;
+  recordWorkflowStepProgress: AsyncStoreMethod<"recordWorkflowStepProgress">;
   recoverWorkflowRun: AsyncStoreMethod<"recoverWorkflowRun">;
   finalizeWorkflowStepRun: AsyncStoreMethod<"finalizeWorkflowStepRun">;
+  skipWorkflowStepRun: AsyncStoreMethod<"skipWorkflowStepRun">;
   finalizeWorkflowRun: AsyncStoreMethod<"finalizeWorkflowRun">;
   appendWorkflowEvent: AsyncStoreMethod<"appendWorkflowEvent">;
   listWorkflowEvents: AsyncStoreMethod<"listWorkflowEvents">;
@@ -122,10 +160,16 @@ export interface LoopStorageContract extends Record<LoopStorageMethodName, (...a
   createSkippedRun: AsyncStoreMethod<"createSkippedRun">;
   getRun: AsyncStoreMethod<"getRun">;
   getRunBySlot: AsyncStoreMethod<"getRunBySlot">;
+  nextRetryableRun: AsyncStoreMethod<"nextRetryableRun">;
   claimRun: AsyncStoreMethod<"claimRun">;
   finalizeRun: AsyncStoreMethod<"finalizeRun">;
   heartbeatRunLease: AsyncStoreMethod<"heartbeatRunLease">;
   listRuns: AsyncStoreMethod<"listRuns">;
+  listRecoveredLeaseRunsPage: AsyncStoreMethod<"listRecoveredLeaseRunsPage">;
+  writeRunReceipt: AsyncStoreMethod<"writeRunReceipt">;
+  getRunReceipt: AsyncStoreMethod<"getRunReceipt">;
+  listRunReceipts: AsyncStoreMethod<"listRunReceipts">;
+  listExpiredRunLeaseCandidates: AsyncStoreMethod<"listExpiredRunLeaseCandidates">;
   recoverExpiredRunLeases: AsyncStoreMethod<"recoverExpiredRunLeases">;
   recoverExpiredRunLeasesDetailed: AsyncStoreMethod<"recoverExpiredRunLeasesDetailed">;
   countLoops: AsyncStoreMethod<"countLoops">;
@@ -165,7 +209,7 @@ export interface SchemaMigrationStorage {
   readonly backend: LoopStorageBackend;
   readonly migrations: readonly StorageMigration[];
   listAppliedMigrations(): Promise<AppliedStorageMigration[]>;
-  migrate(opts?: { dryRun?: boolean }): Promise<StorageMigrationResult>;
+  migrate(opts?: { dryRun?: boolean; through?: string }): Promise<StorageMigrationResult>;
   close(): Promise<void>;
 }
 

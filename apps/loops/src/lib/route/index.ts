@@ -1,6 +1,6 @@
 /**
  * Route engine: turns Hasna events, todos ready queues, and health/hygiene
- * findings into deduped, throttled OpenLoops workflow loops and todos tasks.
+ * findings into deduped, throttled Loops workflow loops and todos tasks.
  * Extracted from the CLI so commands stay thin and the SDK/daemon can reuse it.
  */
 export * from "./types.js";
@@ -40,11 +40,21 @@ export {
   SUPPORTED_AGENT_PROVIDERS,
   type ProviderRoutingDecision,
 } from "./provider.js";
+export {
+  checkProviderAdmission,
+  parseCodewithAdmissionDiagnostics,
+  providerActiveCapFromOpts,
+  providerAdmissionPlanFromOpts,
+  type CodewithAdmissionDiagnostics,
+  type ProviderAdmissionDecision,
+  type ProviderAdmissionPlan,
+} from "./provider-admission.js";
 export { prReviewRoutingDecision, type PrReviewRoutingDecision } from "./pr-review.js";
 export {
   hasThrottleLimits,
   normalizeRoutePath,
   routeThrottleDecision,
+  routeThrottleLimitsFromInputs,
   routeThrottleLimitsFromOpts,
   type RouteThrottleDecision,
   type RouteThrottleLimits,
@@ -68,5 +78,17 @@ export {
   type RouteTaskSpec,
   type UpsertRouteTasksOptions,
 } from "./route-tasks.js";
-export { defaultLoopsProject, ensureTodosTaskList, runLocalCommand, runLocalCommandWithStdoutFile } from "./todos-cli.js";
+export { defaultLoopsProject, defaultTodosProject, ensureTodosTaskList, runLocalCommand, runLocalCommandWithStdoutFile, todosCliArgs } from "./todos-cli.js";
 export { addAgentRoutingOptions, addRouteEventOptions, addTodosDrainOptions, routeDrainArgs, type AgentRoutingOptionConfig } from "./options.js";
+export {
+  applyRoutePolicyToDrainOptions,
+  applyRoutePolicyToScheduleOptions,
+  getRoutePolicy,
+  listRoutePolicies,
+  renderRoutePolicy,
+  routePolicyEvidenceFromOptions,
+  validateRoutePolicy,
+  type RoutePolicyDefinition,
+  type RoutePolicyId,
+  type RoutePolicyRender,
+} from "./policies.js";

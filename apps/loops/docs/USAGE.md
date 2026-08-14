@@ -1,6 +1,6 @@
-# OpenLoops
+# Loops
 
-OpenLoops is a local CLI and daemon for persistent loops and workflows: scheduled or recurring work that survives process restarts and records every run.
+Loops is a local CLI and daemon for persistent loops and workflows: scheduled or recurring work that survives process restarts and records every run.
 
 It supports deterministic command loops, JSON-defined workflows, and guarded CLI adapters for headless coding agents:
 
@@ -13,31 +13,34 @@ It supports deterministic command loops, JSON-defined workflows, and guarded CLI
 
 ## Deployment Modes
 
-OpenLoops defaults to `local`, where SQLite in `LOOPS_DATA_DIR` is
+Loops defaults to `local`, where SQLite in `LOOPS_DATA_DIR` is
 authoritative and `loops-daemon` executes scheduled work. The package also
-defines a `cloud` contract for the AWS-backed hosted control plane:
+defines `self_hosted` and `cloud` contracts for non-local control planes:
 
-- `cloud`: AWS-backed hosted control-plane contract; this release exposes
-  client/runner status only, and requires `LOOPS_CLOUD_API_URL` plus
-  `LOOPS_CLOUD_TOKEN` or `HASNA_LOOPS_CLOUD_TOKEN` before status can report
-  ready.
-
-Set `LOOPS_MODE` or `HASNA_LOOPS_MODE` to `local` or `cloud`. Without an
-explicit mode, `LOOPS_CLOUD_API_URL` or `HASNA_LOOPS_CLOUD_API_URL` selects
-`cloud`; otherwise OpenLoops uses `local`. The shared `@hasna/cloud` runtime
-has been retired fleet-wide.
+- `self_hosted`: the Hasna-owned AWS/RDS control-plane deployment, served by
+  `loops-serve` and backed by Postgres, with the embeddable `loops-api` contract
+  shared by serve, SDK, and tests. This release exposes storage-backed `/v1`
+  loop CRUD and run listing, runner claim/lease heartbeat/finalize foundations,
+  and local migration previews. Durable runner registration is not exposed
+  until the machine-record lifecycle is implemented.
+- `cloud`: hosted control-plane contract; this release exposes client/runner
+  status only, and requires `HASNA_LOOPS_API_URL` plus
+  `HASNA_LOOPS_API_KEY` before status can report ready.
 
 Scheduler state is explicit in status JSON. `schedulerState.localStore` is
 SQLite plus local run artifact files: authoritative in `local`, cache/spool in
 non-local modes. `schedulerState.remoteStore` names the non-local contract
 (`api_control_plane_contract`, `postgres_contract`, or
-`hosted_control_plane_contract`) and reports `applySupported=false` because this
-public package does not directly mutate remote Postgres, S3/object storage, AWS
-resources, or hosted credentials. Route admission remains bounded by
-`max_dispatch`, `max_active`, `max_active_per_project`,
-`max_active_per_project_group`, `max_active_scope`, and `max_per_profile`.
+`hosted_control_plane_contract`). The standalone `loops` CLI reports
+`applySupported=false` for non-local apply because it does not perform
+id-preserving remote migration, S3/object storage mutation, AWS resource
+mutation, or hosted credential mutation. `loops-serve` mutates self-hosted
+Postgres for normal control-plane CRUD and runner protocol routes when it is
+explicitly configured. Route admission remains bounded by `max_dispatch`,
+`max_active`, `max_active_per_project`, `max_active_per_project_group`,
+`max_active_scope`, and `max_per_profile`.
 
-Useful status commands:
+Useful status and setup commands:
 
 ```bash
 loops mode
@@ -46,10 +49,11 @@ loops self-hosted status
 loops self-hosted migrate --dry-run
 loops self-hosted push --dry-run
 loops self-hosted pull --dry-run
-loops self-hosted runner-register --runner-id <id> --machine-id <machine>
-loops self-hosted runner-register --runner-id <id> --machine-id <machine> --apply
 loops cloud status
-loops-api status
+loops self-hosted status
+loops-serve version
+HASNA_LOOPS_MIGRATOR_DATABASE_URL=... loops-serve migrate --dry-run
+HASNA_LOOPS_DATABASE_URL=... HASNA_LOOPS_AUTH_DATABASE_URL=... loops-serve serve
 loops-runner status
 ```
 
@@ -82,28 +86,33 @@ leases, running runs, leased work items). Inline command env values are not
 exported as secrets; bundles with redacted env values require
 `--allow-redacted` and are marked non-importable.
 
-Cloud sync commands are preview-only until the AWS-backed control-plane API
-exposes id-preserving import endpoints. The transitional `loops self-hosted *`
-CLI surface still exists for compatibility:
+Self-hosted sync commands compare local definitions with the control-plane API.
+`push` can apply through the id-preserving `/v1/import` endpoint; `migrate` and
+`pull` remain preview/blocked for remote state that lacks a full export surface:
 
 ```bash
 loops self-hosted migrate --dry-run
 loops self-hosted push --dry-run
+loops self-hosted push --apply --manifest-file ./self-hosted-push.json
 loops self-hosted pull --dry-run
 ```
 
-The preview inspects the configured cloud control-plane URL but refuses remote
-apply because normal loop CRUD would generate new ids. Use
-`loops self-hosted runner-register` to verify runner registration against the
-control plane, then use `loops-runner run-once` for the current bounded
-non-workflow claim/execute/finalize protocol. Runner registration is
-preview-only unless `--apply` is present.
+Self-hosted push is safe by default: workflows are archived and loops are
+paused with scheduling pointers cleared, including existing same-id rows that
+need re-neutralizing. `--replace` permits broader same-id data updates, but is
+not required for that safety normalization. `loops-runner run-once` uses the
+current bounded non-workflow
+claim/execute/finalize protocol. Durable runner registration is intentionally
+absent until the control plane persists and verifies machine records.
+`loops-serve migrate` applies the Postgres schema and `api_keys` table for a
+self-hosted control-plane host.
 
 ## Install
 
-**OpenLoops requires the [Bun](https://bun.sh) runtime (`bun >= 1.0`).** The
-installed binaries are `loops`, `loops-daemon`, `loops-api`, `loops-runner`, and
-`loops-mcp`; each uses a `#!/usr/bin/env bun` shebang.
+**Loops requires the [Bun](https://bun.sh) runtime (`bun >= 1.0`).** The
+installed binaries are `loops`, `loops-daemon`, `loops-serve`, `loops-runner`,
+and `loops-mcp`; each uses a `#!/usr/bin/env bun` shebang. The embeddable API
+remains available as `@hasna/loops/api`.
 
 From npm:
 
@@ -135,7 +144,7 @@ The CLI stores state in `~/.hasna/loops` by default. Set `LOOPS_DATA_DIR` to iso
 
 ## MCP Server
 
-OpenLoops ships a stdio MCP server for safe loop and workflow inspection from
+Loops ships a stdio MCP server for safe loop and workflow inspection from
 MCP-capable agents:
 
 ```bash
@@ -152,6 +161,7 @@ import { createLoopsMcpServer } from "@hasna/loops/mcp";
 Available read tools include `loops_list`, `loops_show`, `loops_runs`,
 `loops_doctor`, `loops_workflows_list`, `loops_workflow_read`, and
 `loops_workflow_validate`.
+`loops_list` and `loops_runs` accept label arrays with AND semantics.
 Resources are available at `loops://runtime` and `loops://tools`.
 Those tools use the same `Store`, public redaction helpers, and workflow parser
 as the CLI and SDK, so read output and validation behavior stay aligned across
@@ -161,12 +171,16 @@ Mutation tools are disabled by default. Start the server with
 `LOOPS_MCP_ALLOW_MUTATIONS=true` only for a trusted local MCP host that should be
 allowed to change loop state. The guarded mutation tools use canonical names:
 `loops_pause`, `loops_resume`, `loops_stop`, `loops_run_now`, `loops_archive`,
-`loops_unarchive`, `loops_create_command`, and `loops_create_workflow`.
+`loops_unarchive`, `loops_labels_update`, `loops_create_command`, and
+`loops_create_workflow`.
 Deprecated `loop_*` aliases are still registered where compatibility needs them,
 but callers should use the `loops_*` names. Mutation tools do not require or
 accept confirmation-string parameters; the server-side environment opt-in is the
 gate. MCP `loops_run_now` schedules the loop for immediate daemon pickup; inline
 execution remains CLI-only.
+When `showOutput` is enabled, `loops_runs` caps each stdout/stderr field at
+32,000 characters, caps output-bearing pages at 25 runs, and caps the aggregate
+MCP JSON response at 128,000 characters.
 
 Keep host-affecting or long-running operations on the CLI: daemon
 start/stop/install/logs, inline `run-now`, `tick`, loop deletion, workflow
@@ -200,6 +214,16 @@ Codewith auth profile, or workflow step dependency fails without creating a
 scheduled loop. Use `--json` with `--preflight` to capture stable machine-readable
 preflight evidence.
 
+For Codewith `--auth-profile` and workflow `authProfile`, local and remote
+preflight first request `codewith profile list --json` and match the requested
+name exactly against the root `data` or `profiles` inventory. That inventory is
+authoritative: `usable: false` rejects a profile, legacy entries without
+`usable` remain usable, and `currentProfile` does not add inventory membership.
+Loops falls back to the human-readable table, including active `*` rows,
+only when JSON mode is unsupported or its inventory is structurally
+unavailable. Embedded NUL bytes, missing profiles, and non-fallback
+profile-list failures fail closed.
+
 For shell command loops, preflight can only verify the shell plus configured
 accounts because the command string is interpreted later by the shell. Use
 `--no-shell` or workflow command `args` when you need executable-level
@@ -210,6 +234,23 @@ run time before launching expensive agent or workflow work. Runtime preflight
 failures are recorded as failed loop runs with a `runtime preflight failed`
 error, so health/routing checks can create follow-up tasks without spawning the
 worker.
+
+For controlled launches, scheduled todos-task drains can be guarded by blocker
+tasks:
+
+```bash
+loops routes schedule todos-task platform-drain \
+  --every 5m \
+  --todos-project /path/to/source/todos-project \
+  --tags auto:route \
+  --launch-gate "pa19-controlled-launch" \
+  --launch-gate-blocker "/path/to/open-codewith::2d9d931b" \
+  --launch-gate-blocker "/path/to/open-loops::816e99db" \
+  --worktree-mode required
+```
+
+The drain creates zero worker loops while any blocker task is not completed.
+Each blocked tick writes launch-gate evidence and leaves source tasks untouched.
 
 Run a Claude loop every morning:
 
@@ -256,8 +297,34 @@ loops create agent supply-chain-watch \
   --prompt "Check for suspicious dependency or supply-chain changes. Report only concrete findings."
 ```
 
+Codewith `--auth-profile` is provider-native, not an OpenAccounts selector.
+Use `--account` only when you want OpenAccounts environment isolation.
+
+## Labels
+
+Command, agent, and workflow loops accept repeatable labels:
+
+```bash
+loops create command repo-status --every 1m --cmd "git status --short" \
+  --label BrowserPlan --label maintenance
+loops list --label browserplan --label maintenance
+loops runs --label browserplan
+```
+
+Labels are normalized to lowercase, deduplicated, limited to 32 per loop, and
+must match `[a-z0-9][a-z0-9._-]{0,63}` after normalization. Repeated filters use
+AND semantics. Run filtering uses the loop's current labels rather than a
+historical snapshot on each run.
+
+```bash
+loops labels add repo-status urgent
+loops labels remove repo-status maintenance
+loops labels set repo-status browserplan nightly
+loops labels clear repo-status
+```
+
 Run an OpenCode loop with an explicit provider/model. OpenCode reads
-`~/.config/opencode/config.json` when no model is supplied, so OpenLoops rejects
+`~/.config/opencode/config.json` when no model is supplied, so Loops rejects
 OpenCode agent targets without `--model` instead of inheriting a stale or
 machine-specific default.
 
@@ -270,7 +337,7 @@ loops create agent opencode-smoke \
   --prompt "Reply with exactly OK."
 ```
 
-Agent loops can also carry advisory per-session allowlist metadata:
+Agent loops can also carry an auditable advisory session contract:
 
 ```bash
 loops create agent repo-check \
@@ -279,13 +346,25 @@ loops create agent repo-check \
   --cwd /path/to/repo \
   --prompt "Check the repo and report concrete failures." \
   --allow-tool functions.exec_command \
-  --allow-command git,bun
+  --allow-command git,bun \
+  --safety-reason "isolated repository status inspection"
 ```
 
-These fields are stored on the loop target and exposed to the run environment
-as `LOOPS_AGENT_ALLOWED_TOOLS`, `LOOPS_AGENT_ALLOWED_COMMANDS`, and
-`LOOPS_AGENT_ALLOWLIST_ENFORCEMENT=metadata_only`. They are not enforced by
-OpenLoops yet; provider-native enforcement will be added separately.
+These fields are stored on the loop target, appended to provider stdin, and
+exposed as `LOOPS_AGENT_ALLOWED_TOOLS`, `LOOPS_AGENT_ALLOWED_COMMANDS`,
+`LOOPS_AGENT_ALLOWLIST_SAFETY_REASON`,
+`LOOPS_AGENT_ALLOWLIST_ENFORCEMENT=metadata_only`, and
+`LOOPS_AGENT_SESSION_CONTRACT`. A direct agent loop has no workflow run and
+does not create a workflow event. Agent steps inside workflow runs that carry
+an audit contract additionally persist one server-derived
+`agent_session_contract` event per step and run.
+Tool/command restrictions remain advisory metadata: current provider adapters
+do not claim native enforcement.
+
+Codewith/Codex `danger-full-access`, Cursor `sandbox=disabled`, and provider
+bypass modes (Claude, Cursor, AI Copilot, and OpenCode) require both a non-empty
+`--safety-reason` and explicit `--manual-break-glass`. A reason alone never
+substitutes for operator break-glass approval.
 
 For `codewith` and `aicopilot` account isolation, register matching OpenAccounts tools first if they are not built in on the machine:
 
@@ -332,7 +411,7 @@ from the workflow JSON file's directory:
 }
 ```
 
-OpenLoops stores the resolved prompt text for execution and records
+Loops stores the resolved prompt text for execution and records
 `promptSource` metadata with the absolute file path. Public CLI output from
 `show`, `list`, `workflows list`, `workflows show`, `workflows validate`,
 `workflows create`, and `templates render` redacts prompt bodies by default
@@ -421,6 +500,13 @@ for those. Set `"blockedExitCodes": []` on a gate-named step to opt out.
 
 ## Templates And Task Events
 
+Loops is the runtime/scheduler/workflow engine for these flows — not the
+automation domain model. Todos-task routes are Loops-native admission; they
+do not replace the OpenAutomations product queue. See
+[Runtime Boundary](./RUNTIME_BOUNDARY.md) for ownership split and external
+compiler handoff paths (`@hasna/automations` claim-queue,
+`@hasna/actions` planned upsert-one-shot).
+
 Built-in templates turn common orchestration flows into reusable workflow JSON.
 `todos-task-worker-verifier` performs one todos task and then verifies it.
 `event-worker-verifier` handles any Hasna event envelope and then verifies the
@@ -428,7 +514,13 @@ handling. `bounded-agent-worker-verifier` is for recurring bounded agent work:
 one worker runs a narrow objective, then a fresh verifier audits the result.
 The catalog also includes `task-lifecycle`, `pr-review`, `scheduled-audit`,
 `knowledge-refresh`, `report-only`, `incident-response`, and
-`deterministic-check-create-task` for common operator workflows.
+`deterministic-check-create-task` for common operator workflows. Use
+`routing-remediation` for bounded routing-doctor repair runs: it dry-runs by
+default, gates `safe_auto` capacity, applies only supported
+`todos doctor routing --apply` repairs when explicitly enabled, and files
+a blocker evidence report plus one aggregate conversations post for
+human/cross-repo/unsupported findings — never one task per finding (owner directive
+2026-07-30, "routine operational alerts are not tasks").
 
 ```bash
 loops templates list
@@ -439,7 +531,7 @@ loops templates render todos-task-worker-verifier \
   --var provider=codewith \
   --var authProfilePool=account001,account002,account003 \
   --var sandbox=workspace-write \
-  --var todosProjectPath=$HOME/.hasna/loops \
+  --var todosProjectPath=/path/to/todos-project \
   --var addDirs=$HOME/.hasna/todos,$HOME/.hasna/loops
 loops workflows create --template todos-task-worker-verifier \
   --var taskId=<task-id> \
@@ -462,9 +554,15 @@ loops templates render pr-review \
 loops templates render deterministic-check-create-task \
   --var projectPath=/path/to/repo \
   --var checkCommand='your deterministic check and todos upsert command'
+loops templates render routing-remediation \
+  --var projectPath=/path/to/repo \
+  --var todosProjectPath=/path/to/todos-project \
+  --var shard=0/6 \
+  --var maxRepairs=25 \
+  --var idempotencyKey=routing-health:repo:shard0
 ```
 
-Custom reusable workflow templates live under the OpenLoops app data directory:
+Custom reusable workflow templates live under the Loops app data directory:
 `~/.hasna/loops/templates` by default, or `$LOOPS_DATA_DIR/templates` when
 `LOOPS_DATA_DIR` is set. Store templates as declarative JSON files; listing,
 showing, and rendering templates never executes workflow steps or mutates the
@@ -481,21 +579,39 @@ worker finishes; pass `--verifier-idle-timeout none` or template variable
 `verifierIdleTimeoutMs=none` only when another heartbeat is guaranteed. Use a
 positive numeric `timeoutMs` only when an agentic step is intentionally bounded.
 
-To migrate existing workflow loops, do not edit `workflow_specs.steps_json`
-directly because historical workflow runs must keep pointing at their original
-spec. Use the append-only migrator:
+To migrate existing agentic loops, use the timeout migrator instead of editing
+the database directly. Workflow loops are migrated append-only because
+historical workflow runs must keep pointing at their original spec; direct
+agent loops selected with `--loop` update their stored target in place for
+future executions:
 
 ```bash
 loops workflows migrate-agent-timeouts --loop <loop-id-or-name>
 loops workflows migrate-agent-timeouts --loop <loop-id-or-name> --apply
+loops workflows migrate-goal-wrappers --loop <loop-id-or-name>
+loops workflows migrate-goal-wrappers --loop <loop-id-or-name> --apply
+loops workflows migrate-goal-wrappers --loop <loop-id-or-name> --apply --archive-old
 ```
 
-The command dry-runs by default. With `--apply`, it creates a new workflow spec
-with the requested agent timeout policy, retargets only future executions of
-eligible non-running workflow loops, and leaves terminal timed-out workflow runs
-as audit history. Use `loops workflows recover` only for interrupted `running`
-workflow runs whose recorded child process is gone; terminal `timed_out` runs
-must be requeued with `loops routes requeue <work-item-id> --reason "<cause fixed>"` before
+Both migrators dry-run by default. For eligible non-running workflow loops,
+`--apply` creates a new workflow spec and retargets only future executions;
+historical workflow runs keep pointing at their original spec. For direct agent
+loops selected with `--loop`, `migrate-agent-timeouts --apply` updates the
+stored target in place for future executions. Use `--archive-old` to archive
+superseded workflow specs when no active loops still reference them.
+
+`migrate-agent-timeouts` clones the workflow with the requested agent timeout
+policy (`--timeout none` by default). `migrate-goal-wrappers` targets loops that
+define both a loop-level goal and a redundant workflow-level top-level goal: it
+clones a goal-free workflow spec, retargets the loop, and leaves the loop-level
+goal as the sole orchestration wrapper. Loops with only a workflow-level goal or
+only a loop-level goal are skipped. New workflow loops cannot combine both
+wrappers; use loop-level `--goal` on `loops create workflow` instead of nesting
+a top-level `"goal"` in the workflow JSON.
+
+Use `loops workflows recover` only for interrupted `running` workflow runs whose
+recorded child process is gone; terminal `timed_out` runs must be requeued with
+`loops routes requeue <work-item-id> --reason "<cause fixed>"` before
 re-delivering or draining the original task/event route.
 
 ```json
@@ -552,6 +668,8 @@ arguments, and implicit Codewith/Codex full-access defaults. If a custom
 Codewith/Codex template uses `permissionMode: "bypass"`, it must also set
 `sandbox` to `workspace-write` or `read-only`. Use built-in templates with
 explicit break-glass handling for emergency workflows that need full access.
+Claude, Cursor, AI Copilot, and OpenCode bypass modes always require explicit
+break-glass plus a non-empty safety reason.
 
 Repo-mutating task/event routes should set `worktreeMode=required` so the
 workflow fails fast instead of falling back to the main checkout. When
@@ -564,12 +682,14 @@ on the remote machine. The generated agent target includes worktree metadata
 inspection expose the exact checkout.
 
 Before a worker starts, worktree preparation verifies that any existing
-managed path is a real git worktree with the same top-level checkout, the same
-git common directory as the source repo, and the expected generated branch. A
-detached HEAD or unexpected branch fails closed with evidence
-(`worktreeMode=required`) instead of silently running a mutating workflow in
-the wrong state; `worktreeMode=auto` falls back to the original checkout and
-records the fallback.
+managed path is a real git worktree with the same top-level checkout and the
+same git common directory as the source repo. If the checkout is on a detached
+HEAD or unexpected branch, Loops only reattaches it to the expected
+generated branch when the worktree is clean. Dirty worktrees, symlinked paths,
+non-worktree paths, different common dirs, and unrecoverable branch switches
+fail closed with cleanup evidence (`worktreeMode=required`) instead of
+silently running a mutating workflow in the wrong state; `worktreeMode=auto`
+falls back to the original checkout and records the fallback.
 
 Use explicit main/default checkout mode only when the task truly requires it:
 
@@ -601,7 +721,7 @@ cat task-created-event.json | loops routes create todos-task \
   --auth-profile-pool account001,account002,account003 \
   --permission-mode bypass \
   --sandbox workspace-write \
-  --todos-project "$HOME/.hasna/loops" \
+  --todos-project /path/to/todos-project \
   --add-dir "$HOME/.hasna/todos,$HOME/.hasna/loops" \
   --worktree-mode required
 ```
@@ -613,6 +733,9 @@ blocked, completed/done, cancelled/canceled, failed, archived, manual,
 approval-required, or `no-auto` tasks. This guard exists even when the upstream
 `@hasna/events` webhook filter is misconfigured, so task existence alone is not
 permission to execute agent work.
+Route work items are the durable reservation ledger: they include the stable
+idempotency key, task/event references, project/group keys, admitting machine
+ID, route scope, workflow/loop IDs, and the current terminal or active status.
 
 Task route drains can select providers from task metadata instead of running one
 fixed provider/account pool for the whole drain. Add one or more
@@ -622,13 +745,20 @@ matching rule wins. Rule profiles become a Codewith auth-profile pool for
 can also carry `provider_hint`/`route_provider`, `auth_profile_pool`, or
 `account_pool` metadata. Dry-run, drain evidence, and route invocation scope
 include `providerRouting` so operators can see why a provider/account was
-selected.
+selected. Selector values may contain `:`; the parser treats the colon before a
+supported provider id as the route delimiter, so exact tag selectors such as
+`tags=area:frontend:claude:account003,account015` and
+`tags=provider:claude-code:claude:account003,account015` match literal task
+tags `area:frontend` and `provider:claude-code`.
 
 ```bash
 loops routes drain todos-task \
   --dry-run \
+  --provider-rule tags=area:frontend:claude:account003,account015 \
+  --provider-rule tags=provider:claude-code:claude:account003,account015 \
   --provider-rule area=frontend:claude:claude-ui-a,claude-ui-b \
   --provider-rule area=backend:codewith:account001,account002 \
+  --provider-rule tags=task-lifecycle:codewith:account001,account002 \
   --worktree-mode required
 ```
 
@@ -648,10 +778,12 @@ triage -> planner -> worker -> verifier lifecycle. The route rejects unrelated
 workflow templates such as `pr-review` so a todos task cannot accidentally use a
 template with the wrong contract.
 The default worker/verifier template starts with a deterministic
-`source-task-gate` command that runs `todos --project <source-store> --json
-inspect <task-id>` before the worker. If the routed source task cannot be
-resolved in the intended Todos store, the workflow fails before repo-mutating
-agent work starts.
+`source-task-gate` command that runs `todos --json inspect <task-id>` before the
+worker, adding `--project <source-store>` only when `--todos-project` or
+`LOOPS_TASK_PROJECT` supplied a Todos-owned project. `LOOPS_DATA_DIR` remains a
+Loops-only setting and is never reused as a Todos project. If the routed source
+task cannot be resolved, the workflow fails before repo-mutating agent work
+starts.
 The lifecycle template inserts deterministic gate steps after triage and after
 planning. If either agent marks the task blocked, omits its contextual
 `openloops:triage=go task=<id> event=<event-id>` /
@@ -675,13 +807,26 @@ cat task-created-event.json | loops routes create todos-task \
   --max-active 12
 ```
 
-The limits count active admitted/running OpenLoops work items once per workflow.
+The limits count active admitted/running Loops work items once per workflow.
 `--max-active-per-project` gates new work for the same project path,
 `--max-active-per-project-group` shares a pool across related projects such as
 `oss`, and `--max-active` is the global routed-workflow cap. Project matching
 uses the canonical git top-level path when available, so repo subdirectories
-share the same project cap. A throttled event records a deferred OpenLoops
+share the same project cap. A throttled event records a deferred Loops
 admission work item with JSON evidence instead of creating another worker loop.
+Route flags or an expanded named policy are authoritative ceilings. Positive
+integer task/event fields (`max_active`, `max_active_per_project`, and
+`max_active_per_project_group`, including camel-case aliases) may only lower an
+already configured ceiling for that admission attempt; metadata cannot create a
+cap, raise it, or override an explicit `--project-group`. The resolved route
+scope, project group, and limits are copied into workflow prompts and invocation
+evidence.
+
+Admission caps coordinate only through the active local SQLite store. The count
+and admission write are one transaction, so concurrent routers sharing the same
+`loops.db` serialize correctly. Separate `LOOPS_DATA_DIR` databases or machines
+do not share counts; these flags do not provide distributed coordination.
+
 Re-delivering the event later is safe because handlers dedupe by the work-item
 idempotency key before rendering worktree plans or checking route limits. In
 dry-run mode, throttle counts are not evaluated because opening the live loop
@@ -696,16 +841,20 @@ workflow id, and loop id.
 
 When a sandboxed Codewith/Codex worker must update app stores outside the repo
 worktree, pass those stores explicitly with `--add-dir` or template `addDirs`.
-For task-created routes, pass `--todos-project` so worker/verifier prompts use
-the actual todos storage project while route concurrency and worktree isolation
-still use the repository path. This avoids `danger-full-access` for normal
-todos comments, completion state, and loop evidence writes. `addDirs` is
-intentionally accepted only for Codewith/Codex until other providers expose
-equivalent directory-scoped write controls.
+For task-created routes, pass `--todos-project` or set `LOOPS_TASK_PROJECT` when
+worker/verifier commands must pin a specific Todos project. If neither is set,
+Loops omits `--project` instead of inventing one from the routed repository or
+`LOOPS_DATA_DIR`. Route concurrency and worktree isolation still use the
+repository path. `addDirs` is intentionally accepted only for Codewith/Codex
+until other providers expose equivalent directory-scoped write controls.
 
 Inspect route state with:
 
 ```bash
+loops routes policies list
+loops routes policies show oss
+loops routes policies render oss
+loops routes policies validate
 cat task-created-event.json | loops routes preview todos-task --sandbox workspace-write
 cat task-created-event.json | loops routes create todos-task --sandbox workspace-write
 loops routes drain todos-task --task-list oss --max-dispatch 2 --compact
@@ -716,7 +865,30 @@ loops routes requeue <work-item-id> --reason "fixed upstream blocker"
 loops routes invocations
 ```
 
-When a workflow run starts from an admitted work item, OpenLoops writes a
+Compact drain output includes route reservation IDs, work-item status, machine
+ID, workflow ID, loop ID, and route scope for each considered task.
+
+Named route policies expand the long recurring drain commands used by the live
+task routers into explicit, replayable options. `repoops-pr-queue`, `oss`,
+`pilot`, and `machine-sync` are built in. Operators can inspect the policy,
+render the exact `loops --json routes drain todos-task ...` command, and validate
+that the rendered args no longer depend on `--policy`/`--preset`:
+
+```bash
+loops routes policies render oss
+loops routes schedule todos-task machine-oss-task-lifecycle-router --policy oss
+```
+
+Scheduled policy routes store explicit drain args plus
+`--route-policy-evidence <id>`, so future runs remain auditable even if a policy
+definition changes later. Policy drains and dry-runs include `routePolicy`
+evidence with the source, safety class, guards, expanded options, and rendered
+args. Passing a conflicting explicit option fails before the route is created.
+The `pilot` policy uses `sandbox=danger-full-access` and is treated as a paused
+manual break-glass lane; applying it requires the operator to pass
+`--manual-break-glass` explicitly.
+
+When a workflow run starts from an admitted work item, Loops writes a
 manifest under:
 
 ```text
@@ -733,7 +905,7 @@ locks, or non-pending states stay queued in todos and are not routed:
 
 ```bash
 loops routes drain todos-task \
-  --todos-project "$HOME/.hasna/loops" \
+  --todos-project /path/to/todos-project \
   --template task-lifecycle \
   --task-list repoops-pr-queue \
   --tags auto:route \
@@ -747,6 +919,8 @@ loops routes drain todos-task \
   --max-active-per-project 1 \
   --max-active-per-project-group 4 \
   --max-active 12 \
+  --provider-active-cap 6 \
+  --provider-admission-check \
   --worktree-mode required \
   --evidence-dir "$HOME/.hasna/loops/reports/task-drain"
 ```
@@ -762,14 +936,24 @@ every candidate, so a drain can safely run every few minutes as a deterministic
 command loop: it fills only available capacity, writes compact JSON evidence
 when requested, and leaves excess ready tasks in todos for a later drain pass.
 Use `--dry-run` to preview candidates and rendered workflows without mutating
-OpenLoops state.
+Loops state.
+
+The route throttle flags count Loops routed workflow work items, not the
+live background-agent slots inside a provider. For Codewith drains, add
+`--provider-active-cap <n>` (or `--codewith-active-cap <n>`) so each candidate
+checks `codewith agent diagnostics --json` before workflow-loop creation and
+defers when `activeRunCount >= n`. Use `--provider-admission-check` when the
+drain should also fail closed on diagnostics errors, unsupported providers, or
+Codewith reports with no available admission slots. Backlog prioritizer and
+drain loops should use these first-class flags rather than a shell guard around
+`codewith agent diagnostics`.
 
 For an OSS task-created route, keep the drain deterministic and narrow:
 
 ```bash
 loops routes schedule todos-task oss-task-route-drain \
   --every 5m \
-  --todos-project "$HOME/.hasna/loops" \
+  --todos-project /path/to/todos-project \
   --template task-lifecycle \
   --project-path-prefix "$HOME/workspace/example/opensource" \
   --tags auto:route \
@@ -782,6 +966,8 @@ loops routes schedule todos-task oss-task-route-drain \
   --max-active-per-project 1 \
   --max-active-per-project-group 4 \
   --max-active 12 \
+  --provider-active-cap 6 \
+  --provider-admission-check \
   --worktree-mode required \
   --evidence-dir "$HOME/.hasna/loops/reports/oss-task-route-drain" \
   --compact
@@ -792,15 +978,17 @@ in with the `auto:route` tag, `route_enabled=true`, or
 `automation.allowed=true` should be routed. Keep repo-mutating worker/verifier
 runs on a Codewith account pool with `--worktree-mode required`. Do not dispatch
 or paste task prompts into tmux panes. Use max-active throttles and
-`--max-dispatch` to bound agent fan-out, and write compact evidence into a
-bounded reports directory so operators can audit each drain without unbounded
-stdout or loop history growth. Keep `--scan-limit` large enough for the current
-ready-task backlog; if the scan is exhausted before matching tasks appear, the
-drain will correctly do no work.
+`--max-dispatch` to bound Loops agent fan-out, and use
+`--provider-active-cap` plus `--provider-admission-check` to bound live Codewith
+background-agent admission. Write compact evidence into a bounded reports
+directory so operators can audit each drain without unbounded stdout or loop
+history growth. Keep `--scan-limit` large enough for the current ready-task
+backlog; if the scan is exhausted before matching tasks appear, the drain will
+correctly do no work.
 
 Generated task/event route workflow specs are lifecycle-managed. After a
 generated one-shot route workflow run reaches `succeeded`, `failed`,
-`timed_out`, or `cancelled`, OpenLoops archives the generated workflow spec while
+`timed_out`, or `cancelled`, Loops archives the generated workflow spec while
 preserving workflow run, step, event, manifest, loop, invocation, and work-item
 history.
 
@@ -818,23 +1006,44 @@ cat event.json | loops routes create generic \
 ```
 
 This is the intended deterministic-to-agentic path: a producer creates a todos
-task, `@hasna/events` delivers `task.created`, OpenLoops records the invocation
-and admission item, OpenLoops creates a worker/verifier workflow when admitted,
+task, `@hasna/events` delivers `task.created`, Loops records the invocation
+and admission item, Loops creates a worker/verifier workflow when admitted,
 and the workflow updates todos with evidence. Use account pools so worker and
-verifier steps do not burn the same profile; OpenLoops picks deterministically
+verifier steps do not burn the same profile; Loops picks deterministically
 and uses a different verifier profile when the pool has at least two entries.
 Use `--dry-run` to inspect the rendered invocation, work item, workflow, and
 loop input without storing anything, including the worktree path and branch for
 git-backed tasks.
 
 Generated worker/verifier workflows fail closed when `sandbox=danger-full-access`
-is requested without `manualBreakGlass=true`. Use `workspace-write` for
-unattended task/event routes. Full access is an explicit manual emergency path,
-not a default automation mode.
+is requested without both `manualBreakGlass=true` and a non-empty
+`safetyReason`. Use `workspace-write` for unattended task/event routes. Full
+access is an explicit manual emergency path, not a default automation mode.
+
+## Run Receipts
+
+Use run receipts when an agent, scheduler, route, or external workflow needs a
+stable run outcome without parsing raw stdout or wrapper-script text. Receipts
+are scheduler-neutral JSON records with these public snake_case fields:
+`loop_id`, `run_id`, `machine`, `repo`, `task_ids`, `knowledge_ids`,
+`digest_id`, `started_at`, `finished_at`, `status`, `exit_code`, `summary`, and
+`evidence_paths`. The summary contains bounded, scrubbed excerpts and byte
+counts; raw unbounded stdout/stderr stays out of the receipt contract.
+
+```bash
+cat receipt.json | loops --json receipts write --file -
+loops --json receipts read run_123
+loops --json receipts list --loop-id loop_123 --task-id task_123
+```
+
+MCP clients can use `loops_receipt_read`, `loops_receipts_list`, and the
+mutation-gated `loops_receipt_write`. The SDK exposes `writeReceipt`,
+`receipt`, and `receipts`; the HTTP API exposes `POST /v1/receipts`,
+`GET /v1/receipts/{runId}`, and `GET /v1/receipts`.
 
 ## Transcript-Driven Loops
 
-OpenLoops can turn long-form media or meeting transcripts into recurring workflow work when paired with `iapp-transcriber`. The template at `docs/workflows/transcript-feedback-to-loops.json` transcribes an authorized media URL, asks an agent to extract recurring loop candidates, authors workflow specs, and validates generated workflows before scheduling. Copy it into the target repo, replace `/path/to/repo` with that repo's absolute path, and provide `TRANSCRIBER_SOURCE_URL` through the runner environment or a private, uncommitted workflow copy before storing or scheduling it. Do not commit private or signed media URLs.
+Loops can turn long-form media or meeting transcripts into recurring workflow work when paired with `iapp-transcriber`. The template at `docs/workflows/transcript-feedback-to-loops.json` transcribes an authorized media URL, asks an agent to extract recurring loop candidates, authors workflow specs, and validates generated workflows before scheduling. Copy it into the target repo, replace `/path/to/repo` with that repo's absolute path, and provide `TRANSCRIBER_SOURCE_URL` through the runner environment or a private, uncommitted workflow copy before storing or scheduling it. Do not commit private or signed media URLs.
 
 ```bash
 loops workflows validate /path/to/repo/.openloops/transcript-feedback-to-loops.json --preflight
@@ -868,24 +1077,45 @@ agent-run failures for default-loop SLOs:
 
 ```bash
 loops health --json
+loops health scan --include active,paused --latest-run --doctor --daemon --json
 loops expectations <loop-id-or-name> --json
 ```
 
 The JSON contains the expectation result, bounded error/stdout/stderr evidence,
 a stable failure fingerprint, route metadata, and recommended task fields.
-OpenLoops does not mutate Todos from `health` or `expectations`. To turn failed
-expectations into deduped tasks, use the explicit routing command:
+Loops does not mutate Todos from `health`, `expectations`, or read-only
+`health scan`. To turn failed expectations or scan findings into deduped tasks,
+use an explicit mutating command:
 
 ```bash
 loops health route-tasks \
   --project ~/.hasna/loops \
   --task-list loop-error-self-heal \
   --max-actions 5
+
+loops health scan \
+  --include active,paused \
+  --latest-run \
+  --doctor \
+  --daemon \
+  --upsert-todos \
+  --dry-run \
+  --max-actions 5 \
+  --evidence-dir ~/.hasna/loops/reports/health-scan
 ```
 
 Use `--dry-run --json` first when testing a new automation path. Routed tasks
 include the stable failure fingerprint, classification, loop id/name, and
 `no_tmux_dispatch=true` metadata.
+
+`health scan` replaces local loop-error self-heal scripts with package-owned
+CLI/SDK/MCP primitives. It inventories included loop statuses, detects daemon,
+doctor, preflight, latest-run, and stale-running issues, writes bounded
+`summary.json` and `report.md` files under
+`$LOOPS_DATA_DIR/reports/health-scan` or `--report-dir`/`--evidence-dir`, and
+keeps output compact. It is read-only by default. The only safe self-heal is
+`--start-daemon`, which starts the daemon only when status proves it is not
+running; it does not stop, resume, archive, delete, or reap loops.
 
 Use `--evidence-dir <dir>` when a deterministic loop needs a compact JSON
 heartbeat/report on disk. Use `--auto-route` only on task lists that should feed
@@ -902,7 +1132,7 @@ Failure classifications are: `rate_limit`, `auth`, `model_not_found`,
 
 ## Hygiene
 
-OpenLoops includes deterministic hygiene checks for replacing local maintenance
+Loops includes deterministic hygiene checks for replacing local maintenance
 scripts with package commands:
 
 ```bash
@@ -956,7 +1186,7 @@ Archived loops are hidden from the default `loops list`, excluded from daemon sc
 
 `loops run-now` reports the manual run source:
 
-- `source=ad_hoc`: the loop was not due yet, so OpenLoops created a one-off manual slot. This is a single immediate attempt and does not schedule retries or consume the future scheduled slot.
+- `source=ad_hoc`: the loop was not due yet, so Loops created a one-off manual slot. This is a single immediate attempt and does not schedule retries or consume the future scheduled slot.
 - `source=due_slot`: the persisted scheduled slot was already due, so the manual run claims that slot and advances or retries the loop using normal scheduler rules.
 - `source=retry_slot`: the loop was waiting on a failed slot retry, so the manual run claims that retry slot and advances the loop using normal retry rules.
 
@@ -1005,15 +1235,30 @@ On Linux this writes a user systemd service. On macOS it writes a LaunchAgent pl
 The adapters intentionally use provider command surfaces instead of pretending every agent has one SDK:
 
 - Claude uses `claude -p --output-format json` and safe-mode/local setting sources by default.
-- Codewith runs non-interactive `codewith --ask-for-approval never exec --json` sessions by default. exec starts a fresh session per invocation, avoiding the multi-megabyte rollout history that `codewith agent start` reloaded every turn (which drove `context_length_exceeded` silent no-ops), and it keeps network egress for gh/git — the `workspace-write` sandbox opts back into `sandbox_workspace_write.network_access`. Codewith exec is remote-capable like codex. OpenLoops rejects Codewith `extraArgs` that try to force `exec`, `--ephemeral`, `--json`, or other exec launch flags that the adapter already manages.
+- Codewith runs non-interactive `codewith --ask-for-approval never exec --json` sessions by default. exec starts a fresh session per invocation, avoiding the multi-megabyte rollout history that `codewith agent start` reloaded every turn (which drove `context_length_exceeded` silent no-ops), and it keeps network egress for gh/git — the `workspace-write` sandbox opts back into `sandbox_workspace_write.network_access`. Codewith exec is remote-capable like codex.
 - AI Copilot and OpenCode use `run --format json --pure`. OpenCode requires an explicit provider/model id because ambient OpenCode config is machine-specific.
-- Cursor is CLI-first for now via the standalone `agent -p` binary. OpenLoops no longer falls back to `cursor agent`; install the standalone Cursor Agent CLI so preflight and scheduled runs use the same executable.
+- Cursor is CLI-first for now via the standalone `agent -p` binary. Loops no longer falls back to `cursor agent`; install the standalone Cursor Agent CLI so preflight and scheduled runs use the same executable.
 - Codex uses `codex --ask-for-approval never exec --json --ephemeral --skip-git-repo-check`, with `--add-dir` for explicit extra writable directories where supported.
 - Agent prompts are sent through child stdin instead of argv where the provider supports stdin, including Codewith `exec` (which reads instructions from stdin when no positional prompt is given), so the prompt never lands on argv.
-- When `--account` or a step `account` is set, OpenLoops resolves `accounts env <profile> --tool <tool>` before spawning the target, strips inherited tool home/API-key variables, and applies the selected profile only to that process. Missing account profiles fail before the provider binary receives the prompt.
-- `--auth-profile` and step `authProfile` are provider-native auth selectors. They currently apply to Codewith and are passed to Codewith as `--auth-profile <name>` on the `exec` invocation; they do not call OpenAccounts.
+- When `--account` or a step `account` is set, Loops resolves `accounts env <profile> --tool <tool>` before spawning the target, strips inherited tool home/API-key variables, and applies the selected profile only to that process. Missing account profiles fail before the provider binary receives the prompt.
+- `--auth-profile` and step `authProfile` are provider-native Codewith selectors passed as `--auth-profile <name>` on the `exec` invocation; they do not call OpenAccounts. Local and remote preflight share the JSON-first, exact-name contract described above, use human-table parsing only as a compatibility fallback, and fail closed for unusable or missing profiles, NUL-containing names, and non-fallback list failures.
 - `--sandbox` maps to provider-native sandbox flags. Codewith/Codex accept `read-only`, `workspace-write`, or `danger-full-access`; Cursor accepts `enabled` or `disabled`.
+- `--allow-tool` and `--allow-command` declare advisory, metadata-only
+  restrictions and require `--safety-reason`. The exact contract is persisted
+  and emitted for audit, but Loops does not claim provider-side enforcement.
+  Relaxed sandboxes and native provider bypass modes also require explicit
+  `--manual-break-glass`.
 - `--permission-mode` maps `plan`, `auto`, and `bypass` where the provider supports it. Claude uses native permission modes, Cursor maps bypass to `--force`, and OpenCode/AICopilot map bypass to `--dangerously-skip-permissions`.
+- `extraArgs` is fail-closed: every provider currently rejects non-empty
+  passthrough arguments, including unknown options, positional subcommands,
+  split values, `--option=value`, and attached short-option forms. Configure
+  execution, output, permissions, sandboxing, model, cwd, and other supported
+  behavior through the modeled agent-target fields. A passthrough option must
+  be explicitly reviewed and added to the provider allowlist before use.
+  Legacy persisted targets are not silently accepted or rewritten: execution
+  fails validation until `extraArgs` is removed and replaced with modeled
+  fields. API and migration imports reject those targets instead of stripping
+  the arguments; update the source record and retry the import.
 - `--variant` is provider-specific reasoning/model effort. Claude maps it to `--effort`, Codewith/Codex map it to `model_reasoning_effort`, and OpenCode/AICopilot pass `--variant`.
 - Daemon and scheduled runs prepend common user executable directories such as `~/.local/bin` and `~/.bun/bin` before resolving provider CLIs.
 - Agent targets that set neither `timeoutMs` nor `idleTimeoutMs` get a default
@@ -1025,6 +1270,14 @@ The adapters intentionally use provider command surfaces instead of pretending e
   `LOOPS_AGENT_IDLE_TIMEOUT_MS=0` (or `none`/`off`), or set explicit
   `timeoutMs`/`idleTimeoutMs` per target — `"timeoutMs": null` opts a target
   out of both the wall-clock default and the idle watchdog.
+
+For hosted workflow runs, the control plane derives any required agent session
+contract from the stored workflow step and persists it before execution. Reusing an
+older workflow run backfills a missing valid contract idempotently. Stored
+pre-contract workflows with unsafe/invalid agent options, mismatched stored
+contracts, duplicate contracts, command-step contracts, and client-fabricated
+contracts fail closed. Direct agent loops continue to expose their contract
+through prompt/environment metadata only.
 
 For production loops that can mutate repos, prefer the built-in
 `worktreeMode=auto`/`required` path and explicit prompts that name allowed write

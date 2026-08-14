@@ -235,9 +235,9 @@ export function buildHygieneRouteTasks(
       const fingerprint = `openloops:hygiene:names:${change.id}:${stableHash([change.oldName, change.newName])}`;
       tasks.push({
         check: "names",
-        title: `OpenLoops hygiene: rename loop ${change.oldName}`,
+        title: `Loops hygiene: rename loop ${change.oldName}`,
         description: [
-          `OpenLoops name hygiene found a non-canonical loop name.`,
+          `Loops name hygiene found a non-canonical loop name.`,
           `Loop: ${change.oldName} (${change.id})`,
           `Expected name: ${change.newName}`,
           `Scope: ${change.scope} / ${change.scopeSlug}`,
@@ -245,7 +245,7 @@ export function buildHygieneRouteTasks(
           "",
           "Acceptance:",
           "- Confirm the canonical name is correct for the loop scope.",
-          "- Rename through OpenLoops CLI/API so ids, schedules, run history, and metadata are preserved.",
+          "- Rename through Loops CLI/API so ids, schedules, run history, and metadata are preserved.",
           "- Do not dispatch work by tmux.",
         ].join("\n"),
         priority: "low",
@@ -273,9 +273,9 @@ export function buildHygieneRouteTasks(
       const fingerprint = `openloops:hygiene:duplicates:${stableHash([group.key, loopIds])}`;
       tasks.push({
         check: "duplicates",
-        title: `OpenLoops hygiene: duplicate/overlapping loops - ${group.baseName}`,
+        title: `Loops hygiene: duplicate/overlapping loops - ${group.baseName}`,
         description: [
-          `OpenLoops duplicate/overlap hygiene found multiple loops with the same normalized name, cwd, and schedule.`,
+          `Loops duplicate/overlap hygiene found multiple loops with the same normalized name, cwd, and schedule.`,
           `Base name: ${group.baseName}`,
           group.cwd ? `Cwd: ${group.cwd}` : undefined,
           `Schedule: ${group.schedule}`,
@@ -286,7 +286,7 @@ export function buildHygieneRouteTasks(
           "",
           "Acceptance:",
           "- Decide the authoritative active loop.",
-          "- Archive or retarget superseded loops through OpenLoops CLI/API while preserving history.",
+          "- Archive or retarget superseded loops through Loops CLI/API while preserving history.",
           "- Do not dispatch work by tmux.",
         ].filter(Boolean).join("\n"),
         priority: group.loops.some((loop) => loop.status === "active") ? "medium" : "low",
@@ -312,9 +312,9 @@ export function buildHygieneRouteTasks(
       const fingerprint = `openloops:hygiene:scripts:${loop.id}:${stableHash([loop.command])}`;
       tasks.push({
         check: "scripts",
-        title: `OpenLoops hygiene: replace script-backed loop ${loop.name}`,
+        title: `Loops hygiene: replace script-backed loop ${loop.name}`,
         description: [
-          `OpenLoops script inventory found a loop still backed by a local script command.`,
+          `Loops script inventory found a loop still backed by a local script command.`,
           `Loop: ${loop.name} (${loop.id})`,
           `Status: ${loop.status}`,
           loop.cwd ? `Cwd: ${loop.cwd}` : undefined,
@@ -324,7 +324,7 @@ export function buildHygieneRouteTasks(
           "Acceptance:",
           "- Replace this loop with a package-level CLI/API/template abstraction when one exists.",
           "- If no abstraction exists, create/update the owning repo task instead of adding another local script.",
-          "- Archive superseded loops through OpenLoops CLI/API and preserve history.",
+          "- Archive superseded loops through Loops CLI/API and preserve history.",
           "- Do not dispatch work by tmux.",
         ].filter(Boolean).join("\n"),
         priority: loop.status === "active" ? "medium" : "low",

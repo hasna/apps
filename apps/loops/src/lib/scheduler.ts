@@ -1,9 +1,27 @@
 import type { ExecutorResult, Loop, LoopRun } from "../types.js";
-import { LoopArchivedError } from "./errors.js";
-import { classifyRunFailure } from "./health.js";
-import { computeNextAfter, dueSlots } from "./recurrence.js";
+import { LoopAdvancementConflictError, LoopArchivedError } from "./errors.js";
+import {
+  CIRCUIT_BREAKER_REASON_PREFIX,
+  DEFAULT_CIRCUIT_BREAKER_THRESHOLD,
+  MAX_RETRY_DELAY_MS,
+  consecutiveFailureCountFromRuns,
+  loopAdvancementPatchMatchesCurrent,
+  planLoopAdvancement,
+  resolveBreakerThreshold,
+  retryBackoffDelayMs,
+  type CircuitBreakerThreshold,
+} from "./advancement.js";
+import { dueSlots } from "./recurrence.js";
+import { classifyLoopExecutionResult } from "./loop-result.js";
 import type { Store } from "./store.js";
 import { executeLoopTarget } from "./workflow-runner.js";
+
+export {
+  CIRCUIT_BREAKER_REASON_PREFIX,
+  DEFAULT_CIRCUIT_BREAKER_THRESHOLD,
+  MAX_RETRY_DELAY_MS,
+  retryBackoffDelayMs,
+} from "./advancement.js";
 
 export interface SchedulerDeps {
   store: Store;
@@ -32,6 +50,7 @@ export interface TickResult {
 export interface ClaimedLoopRun {
   loop: Loop;
   run: LoopRun;
+  claimToken: string;
 }
 
 export interface ClaimDueRunsResult extends TickResult {
@@ -165,43 +184,19 @@ export async function runLoopNow(deps: RunLoopNowDeps): Promise<RunLoopNowResult
   const run = await executeClaimedRun({
     store,
     runnerId,
+    claimToken: claim.claimToken,
     loop: claim.loop,
     run: claim.run,
     now: deps.now,
     execute: deps.execute,
   });
   if (shouldAdvance) {
-    advanceLoop(store, claim.loop, run, new Date(run.finishedAt ?? new Date()), run.status === "succeeded");
+    advanceLoop(store, claim.loop, run, new Date(run.updatedAt), run.status === "succeeded");
   }
   return { mode: "inline", loop: claim.loop, run, source, advancedLoop: shouldAdvance };
 }
 
-export const MAX_RETRY_DELAY_MS = 6 * 60 * 60 * 1000;
-export const DEFAULT_CIRCUIT_BREAKER_THRESHOLD = 5;
-export const CIRCUIT_BREAKER_REASON_PREFIX = "circuit breaker open";
 export const MAX_SKIPS_PER_LOOP_PER_TICK = 10;
-const THROTTLED_RETRY_MULTIPLIER = 4;
-const MAX_RETRY_EXPONENT = 20;
-
-/**
- * Exponential retry backoff with jitter:
- * delay = retryDelayMs * 2^(attempt-1) * (0.5 + random), capped at 6h.
- * Failures classified as rate_limit/auth back off 4x harder, since hammering
- * a throttled or misconfigured provider only makes things worse.
- */
-export function retryBackoffDelayMs(loop: Loop, run: LoopRun, random: () => number = Math.random): number {
-  const attempt = Math.max(1, run.attempt);
-  const failure = classifyRunFailure(run);
-  const throttled = failure?.classification === "rate_limit" || failure?.classification === "auth";
-  const growth = 2 ** Math.min(attempt - 1, MAX_RETRY_EXPONENT);
-  const base = loop.retryDelayMs * growth * (throttled ? THROTTLED_RETRY_MULTIPLIER : 1);
-  const jitter = 0.5 + random();
-  return Math.min(MAX_RETRY_DELAY_MS, Math.round(base * jitter));
-}
-
-function nextAfterRetry(loop: Loop, run: LoopRun, now: Date, random?: () => number): string {
-  return new Date(now.getTime() + retryBackoffDelayMs(loop, run, random)).toISOString();
-}
 
 function isDaemonLeaseLost(error: unknown): boolean {
   return error instanceof Error && error.message === "daemon lease lost";
@@ -210,19 +205,8 @@ function isDaemonLeaseLost(error: unknown): boolean {
 export interface AdvanceLoopOptions {
   daemonLeaseId?: string;
   random?: () => number;
-  circuitBreakerThreshold?: number | ((loop: Loop) => number | undefined);
+  circuitBreakerThreshold?: CircuitBreakerThreshold;
   onRun?: (run: LoopRun) => void;
-}
-
-function resolveBreakerThreshold(loop: Loop, override?: number | ((loop: Loop) => number | undefined)): number {
-  // The Loop schema (owned by lib-core) has no breaker column yet; honor a
-  // structural circuitBreakerThreshold override so a future schema addition
-  // works here without scheduler changes.
-  const perLoop = (loop as { circuitBreakerThreshold?: unknown }).circuitBreakerThreshold;
-  if (typeof perLoop === "number" && Number.isFinite(perLoop)) return Math.floor(perLoop);
-  const resolved = typeof override === "function" ? override(loop) : override;
-  if (typeof resolved === "number" && Number.isFinite(resolved)) return Math.floor(resolved);
-  return DEFAULT_CIRCUIT_BREAKER_THRESHOLD;
 }
 
 /**
@@ -237,62 +221,24 @@ function resolveBreakerThreshold(loop: Loop, override?: number | ((loop: Loop) =
  * fresh streak before the breaker can trip again.
  */
 export function consecutiveFailureCount(store: Store, loopId: string, maxAttempts = 1, scanLimit = 50): number {
-  const runs = store.listRuns({ loopId, limit: scanLimit });
-  let watermark: number | undefined;
-  for (const run of runs) {
-    if (run.status !== "skipped" || !run.error?.startsWith(CIRCUIT_BREAKER_REASON_PREFIX)) continue;
-    const at = new Date(run.scheduledFor).getTime();
-    if (watermark === undefined || at > watermark) watermark = at;
-  }
-  let count = 0;
-  for (const run of runs) {
-    if (run.status === "running" || run.status === "skipped") continue;
-    if (watermark !== undefined && new Date(run.scheduledFor).getTime() <= watermark) continue;
-    if (run.status === "succeeded") break;
-    if (run.attempt < maxAttempts) continue;
-    count += 1;
-  }
-  return count;
+  return consecutiveFailureCountFromRuns(store.listRuns({ loopId, limit: scanLimit }), maxAttempts);
 }
 
-function awaitStrictlyNewerRunTimestamp(store: Store, loopId: string): void {
-  // createSkippedRun stamps createdAt from the wall clock and listRuns orders
-  // by created_at only, so nudge past the newest run's millisecond to make the
-  // breaker marker sort strictly newest (bounded spin, at most ~1ms of clock).
-  const latest = store.listRuns({ loopId, limit: 1 })[0];
-  if (!latest) return;
-  const latestMs = new Date(latest.createdAt).getTime();
-  for (let spin = 0; spin < 1_000_000 && Date.now() <= latestMs; spin += 1) {
-    /* wait for the clock to advance */
-  }
-}
-
-function tripCircuitBreaker(
+function applyCircuitBreakerPlan(
   store: Store,
   loop: Loop,
-  run: LoopRun,
-  finishedAt: Date,
-  failures: number,
+  plan: Extract<ReturnType<typeof planLoopAdvancement>, { kind: "circuit_breaker" }>,
   opts: AdvanceLoopOptions,
-): void {
-  awaitStrictlyNewerRunTimestamp(store, loop.id);
-  const reason = `${CIRCUIT_BREAKER_REASON_PREFIX}: ${failures} consecutive failed runs; loop auto-paused (resume with 'loops resume ${loop.name}')`;
-  // The marker is a skipped bookkeeping run: it records the pause reason in
-  // run history (health-visible) without any schema change.
-  let markerAtMs = finishedAt.getTime();
-  for (let probe = 0; probe < 1_000 && store.getRunBySlot(loop.id, new Date(markerAtMs).toISOString()); probe += 1) {
-    markerAtMs += 1;
-  }
-  const marker = store.createSkippedRun(loop, new Date(markerAtMs).toISOString(), reason, {
-    daemonLeaseId: opts.daemonLeaseId,
-  });
-  const nextRunAt = computeNextAfter(loop.schedule, new Date(run.scheduledFor), finishedAt);
-  store.updateLoop(loop.id, {
-    status: "paused",
-    nextRunAt,
-    retryScheduledFor: undefined,
-  }, { daemonLeaseId: opts.daemonLeaseId });
-  opts.onRun?.(marker);
+): boolean {
+  const transition = store.tripCircuitBreakerIfCurrent(
+    loop.id,
+    loop,
+    plan.patch,
+    { scheduledFor: plan.markerScheduledFor, reason: plan.reason },
+    { daemonLeaseId: opts.daemonLeaseId },
+  );
+  if (transition) opts.onRun?.(transition.marker);
+  return transition !== undefined;
 }
 
 export function advanceLoop(
@@ -303,61 +249,46 @@ export function advanceLoop(
   succeeded: boolean,
   opts: AdvanceLoopOptions = {},
 ): void {
-  if (run.status === "running") return;
-  const current = store.getLoop(loop.id);
-  if (!current || current.status !== "active" || current.archivedAt) return;
-  if (current.retryScheduledFor && current.retryScheduledFor !== run.scheduledFor) return;
-  const shouldRetry = !succeeded && run.attempt < current.maxAttempts;
-  if (shouldRetry) {
-    store.updateLoop(current.id, {
-      status: "active",
-      nextRunAt: nextAfterRetry(current, run, finishedAt, opts.random),
-      retryScheduledFor: run.scheduledFor,
-    }, { daemonLeaseId: opts.daemonLeaseId });
-    return;
+  const retryRandom = (opts.random ?? Math.random)();
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const current = store.getLoop(loop.id);
+    const threshold = current ? resolveBreakerThreshold(current, opts.circuitBreakerThreshold) : 0;
+    const plan = planLoopAdvancement({
+      current,
+      run,
+      finishedAt,
+      succeeded,
+      deferredRetry: current ? store.nextRetryableRun(current.id, current.maxAttempts) : undefined,
+      retryIntentRun: current?.retryScheduledFor
+        ? store.getRunBySlot(current.id, current.retryScheduledFor)
+        : undefined,
+      recentRuns: current ? store.listRuns({ loopId: current.id, limit: Math.max(threshold * 4, 50) }) : [],
+      retryRandom,
+      circuitBreakerThreshold: threshold,
+    });
+    if (plan.kind === "none") return;
+    if (loopAdvancementPatchMatchesCurrent(current!, plan.patch)) return;
+    const applied = plan.kind === "circuit_breaker"
+      ? applyCircuitBreakerPlan(store, current!, plan, opts)
+      : store.advanceLoopIfCurrent(current!.id, current!, plan.patch, {
+        daemonLeaseId: opts.daemonLeaseId,
+      }) !== undefined;
+    if (applied) return;
+    if (attempt === 1) throw new LoopAdvancementConflictError(loop.id, run.id);
   }
-
-  // Restore deferred retries before the breaker evaluates: slots that still
-  // have attempts remaining are owed their retries, and the breaker only
-  // reasons about final failures (tripping here would silently drop them).
-  const deferredRetry = store.nextRetryableRun(current.id, current.maxAttempts, run.scheduledFor);
-  if (deferredRetry) {
-    store.updateLoop(current.id, {
-      status: "active",
-      nextRunAt: nextAfterRetry(current, deferredRetry, finishedAt, opts.random),
-      retryScheduledFor: deferredRetry.scheduledFor,
-    }, { daemonLeaseId: opts.daemonLeaseId });
-    return;
-  }
-
-  if (!succeeded) {
-    const threshold = resolveBreakerThreshold(current, opts.circuitBreakerThreshold);
-    if (threshold > 0) {
-      const failures = consecutiveFailureCount(store, current.id, current.maxAttempts, Math.max(threshold * 4, 50));
-      if (failures >= threshold) {
-        tripCircuitBreaker(store, current, run, finishedAt, failures, opts);
-        return;
-      }
-    }
-  }
-
-  const nextRunAt = computeNextAfter(current.schedule, new Date(run.scheduledFor), finishedAt);
-  store.updateLoop(current.id, {
-    status: nextRunAt ? "active" : "stopped",
-    nextRunAt,
-    retryScheduledFor: undefined,
-  }, { daemonLeaseId: opts.daemonLeaseId });
 }
 
 export async function executeClaimedRun(deps: {
   store: Store;
   runnerId: string;
+  claimToken: string;
   loop: Loop;
   run: LoopRun;
   now?: () => Date;
   beforeFinalize?: (loop: Loop, run: LoopRun) => void;
   daemonLeaseId?: string;
   execute?: (loop: Loop, run: LoopRun) => Promise<ExecutorResult>;
+  finalizeResult?: (result: ExecutorResult, loop: Loop, run: LoopRun) => Omit<ExecutorResult, "status"> & { status: LoopRun["status"] };
   onError?: (loop: Loop, error: unknown) => void;
 }): Promise<LoopRun> {
   let heartbeat: ReturnType<typeof setInterval> | undefined;
@@ -365,6 +296,7 @@ export async function executeClaimedRun(deps: {
   heartbeat = setInterval(() => {
     deps.store.heartbeatRunLease(deps.run.id, deps.runnerId, deps.loop.leaseMs, new Date(), {
       daemonLeaseId: deps.daemonLeaseId,
+      claimToken: deps.claimToken,
     });
   }, heartbeatEveryMs);
   heartbeat.unref();
@@ -373,22 +305,28 @@ export async function executeClaimedRun(deps: {
     const result = await (deps.execute ?? ((loop, run) =>
       executeLoopTarget(deps.store, loop, run, {
         daemonLeaseId: deps.daemonLeaseId,
-        onSpawn: (pid) => deps.store.markRunPid(run.id, pid, deps.runnerId, { daemonLeaseId: deps.daemonLeaseId }),
+        onSpawn: (pid) => deps.store.markRunPid(run.id, pid, deps.runnerId, {
+          daemonLeaseId: deps.daemonLeaseId,
+          claimToken: deps.claimToken,
+        }),
       })))(deps.loop, deps.run);
+    const transformedResult = deps.finalizeResult?.(result, deps.loop, deps.run) ?? result;
+    const finalResult = classifyLoopExecutionResult(deps.loop, transformedResult);
     deps.beforeFinalize?.(deps.loop, deps.run);
     return deps.store.finalizeRun(deps.run.id, {
-      status: result.status,
-      finishedAt: result.finishedAt,
-      durationMs: result.durationMs,
-      stdout: result.stdout,
-      stderr: result.stderr,
-      exitCode: result.exitCode,
-      error: result.error,
-      pid: result.pid,
+      status: finalResult.status,
+      finishedAt: finalResult.finishedAt,
+      durationMs: finalResult.durationMs,
+      stdout: finalResult.stdout,
+      stderr: finalResult.stderr,
+      exitCode: finalResult.exitCode,
+      error: finalResult.error,
+      pid: finalResult.pid,
     }, {
       claimedBy: deps.runnerId,
+      claimToken: deps.claimToken,
       daemonLeaseId: deps.daemonLeaseId,
-      now: deps.now?.() ?? new Date(result.finishedAt),
+      now: deps.now?.() ?? new Date(),
     });
   } catch (err) {
     deps.onError?.(deps.loop, err);
@@ -407,6 +345,7 @@ export async function executeClaimedRun(deps: {
       error: err instanceof Error ? err.message : String(err),
     }, {
       claimedBy: deps.runnerId,
+      claimToken: deps.claimToken,
       daemonLeaseId: deps.daemonLeaseId,
       now: deps.now?.() ?? finishedAt,
     });
@@ -452,7 +391,7 @@ function repairWedgedTerminalSlot(deps: SchedulerDeps, loop: Loop, scheduledFor:
       deps.store,
       loop,
       existing,
-      new Date(existing.finishedAt ?? now),
+      new Date(existing.updatedAt),
       existing.status === "succeeded",
       advanceOptions(deps),
     );
@@ -477,7 +416,7 @@ async function runSlot(deps: SchedulerDeps, loop: Loop, scheduledFor: string): P
       if (deps.daemonLeaseId && isDaemonLeaseLost(error)) return undefined;
       throw error;
     }
-    advanceLoop(deps.store, loop, skipped, now, true, advanceOptions(deps));
+    advanceLoop(deps.store, loop, skipped, new Date(skipped.updatedAt), true, advanceOptions(deps));
     deps.onRun?.(skipped);
     return skipped;
   }
@@ -499,6 +438,7 @@ async function runSlot(deps: SchedulerDeps, loop: Loop, scheduledFor: string): P
   const finalRun = await executeClaimedRun({
     store: deps.store,
     runnerId: deps.runnerId,
+    claimToken: claim.claimToken,
     loop: claim.loop,
     run: claim.run,
     now: deps.now,
@@ -511,7 +451,7 @@ async function runSlot(deps: SchedulerDeps, loop: Loop, scheduledFor: string): P
     deps.store,
     claim.loop,
     finalRun,
-    new Date(finalRun.finishedAt ?? new Date()),
+    new Date(finalRun.updatedAt),
     finalRun.status === "succeeded",
     advanceOptions(deps),
   );
@@ -533,7 +473,7 @@ function claimSlot(deps: SchedulerDeps, loop: Loop, scheduledFor: string): Claim
       if (deps.daemonLeaseId && isDaemonLeaseLost(error)) return undefined;
       throw error;
     }
-    advanceLoop(deps.store, loop, skipped, now, true, advanceOptions(deps));
+    advanceLoop(deps.store, loop, skipped, new Date(skipped.updatedAt), true, advanceOptions(deps));
     deps.onRun?.(skipped);
     return skipped;
   }
@@ -579,13 +519,13 @@ function recoverAndExpire(deps: SchedulerDeps, now: Date): { recovered: LoopRun[
       .filter((run) => run.attempt < loop.maxAttempts)
       .sort((a, b) => new Date(a.scheduledFor).getTime() - new Date(b.scheduledFor).getTime())[0];
     if (retryable) {
-      advanceLoop(deps.store, loop, retryable, new Date(retryable.finishedAt ?? now), false, advanceOptions(deps));
+      advanceLoop(deps.store, loop, retryable, new Date(retryable.updatedAt), false, advanceOptions(deps));
       continue;
     }
     for (const run of runs) {
       const current = deps.store.getLoop(run.loopId);
       if (current) {
-        advanceLoop(deps.store, current, run, new Date(run.finishedAt ?? now), false, advanceOptions(deps));
+        advanceLoop(deps.store, current, run, new Date(run.updatedAt), false, advanceOptions(deps));
       }
     }
   }
@@ -663,7 +603,12 @@ export async function tick(deps: SchedulerDeps): Promise<TickResult> {
         loopSkips += 1;
       } else completed.push(run);
       // tick-only retry gate: see recoverAndExpire() doc comment.
-      if (["failed", "timed_out", "abandoned"].includes(run.status) && run.attempt < loop.maxAttempts) break;
+      // The retry budget can change while a run is executing, so decide from
+      // the persisted loop instead of the pre-run snapshot used by dueSlots().
+      if (["failed", "timed_out", "abandoned"].includes(run.status)) {
+        const current = deps.store.getLoop(loop.id);
+        if (current && run.attempt < current.maxAttempts) break;
+      }
     }
   }
 

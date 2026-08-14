@@ -3,15 +3,17 @@ import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 import type { Store } from "../store.js";
 import { ValidationError } from "../errors.js";
-import { taskEventField } from "./fields.js";
-import { positiveInteger } from "./parse.js";
+import { taskEventField, taskEventRecords } from "./fields.js";
+import { nonNegativeInteger, positiveInteger } from "./parse.js";
 
 /** Active-workflow admission throttles and canonical project-path handling. */
 
 export interface RouteThrottleLimits {
   maxActive?: number;
+  maxActiveScope?: string;
   maxActivePerProject?: number;
   maxActivePerProjectGroup?: number;
+  maxPerProfile?: number;
 }
 
 export interface RouteThrottleDecision {
@@ -29,18 +31,99 @@ export interface RouteThrottleDecision {
 
 export function routeThrottleLimitsFromOpts(opts: {
   maxActive?: string;
+  maxActiveScope?: string;
   maxActivePerProject?: string;
   maxActivePerProjectGroup?: string;
+  maxPerProfile?: string;
 }): RouteThrottleLimits {
   return {
     maxActive: positiveInteger(opts.maxActive, "--max-active"),
+    maxActiveScope: opts.maxActiveScope?.trim() || undefined,
     maxActivePerProject: positiveInteger(opts.maxActivePerProject, "--max-active-per-project"),
     maxActivePerProjectGroup: positiveInteger(opts.maxActivePerProjectGroup, "--max-active-per-project-group"),
+    maxPerProfile: nonNegativeInteger(opts.maxPerProfile, "--max-per-profile"),
+  };
+}
+
+function positiveMetadataInteger(value: unknown): number | undefined {
+  if (typeof value === "number") return Number.isInteger(value) && value > 0 ? value : undefined;
+  if (typeof value !== "string" || value.trim() === "") return undefined;
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function routeThrottleMetadataLimit(
+  data: Record<string, unknown>,
+  metadata: Record<string, unknown>,
+  keys: string[],
+): number | undefined {
+  for (const record of taskEventRecords(data, metadata)) {
+    for (const key of keys) {
+      const value = positiveMetadataInteger(record[key]);
+      if (value !== undefined) return value;
+    }
+  }
+  return undefined;
+}
+
+function tightenConfiguredLimit(
+  configured: number | undefined,
+  data: Record<string, unknown>,
+  metadata: Record<string, unknown>,
+  keys: string[],
+): number | undefined {
+  // Task/event payloads are untrusted route inputs. They may request a lower
+  // effective cap for this admission attempt, but cannot create or raise the
+  // operator/policy ceiling.
+  if (configured === undefined) return undefined;
+  const requested = routeThrottleMetadataLimit(data, metadata, keys);
+  return requested === undefined ? configured : Math.min(configured, requested);
+}
+
+export function routeThrottleLimitsFromInputs(
+  opts: {
+    maxActive?: string;
+    maxActiveScope?: string;
+    maxActivePerProject?: string;
+    maxActivePerProjectGroup?: string;
+    maxPerProfile?: string;
+  },
+  data: Record<string, unknown>,
+  metadata: Record<string, unknown>,
+): RouteThrottleLimits {
+  const configured = routeThrottleLimitsFromOpts(opts);
+  return {
+    maxActive: tightenConfiguredLimit(configured.maxActive, data, metadata, [
+      "max_active",
+      "maxActive",
+      "route_max_active",
+      "routeMaxActive",
+    ]),
+    maxActiveScope: configured.maxActiveScope,
+    maxActivePerProject: tightenConfiguredLimit(configured.maxActivePerProject, data, metadata, [
+      "max_active_per_project",
+      "maxActivePerProject",
+      "route_max_active_per_project",
+      "routeMaxActivePerProject",
+    ]),
+    maxActivePerProjectGroup: tightenConfiguredLimit(configured.maxActivePerProjectGroup, data, metadata, [
+      "max_active_per_project_group",
+      "maxActivePerProjectGroup",
+      "max_active_per_group",
+      "maxActivePerGroup",
+      "project_group_max_active",
+      "projectGroupMaxActive",
+      "route_max_active_per_project_group",
+      "routeMaxActivePerProjectGroup",
+    ]),
+    maxPerProfile: configured.maxPerProfile,
   };
 }
 
 export function hasThrottleLimits(limits: RouteThrottleLimits): boolean {
-  return limits.maxActive !== undefined || limits.maxActivePerProject !== undefined || limits.maxActivePerProjectGroup !== undefined;
+  return limits.maxActive !== undefined ||
+    limits.maxActivePerProject !== undefined ||
+    limits.maxActivePerProjectGroup !== undefined;
 }
 
 export function normalizeRoutePath(value: string | undefined): string | undefined {
@@ -84,7 +167,8 @@ export function routeThrottleDecision(
     counts,
   };
   if (args.limits.maxActive !== undefined && counts.global >= args.limits.maxActive) {
-    return { ...base, allowed: false, reason: `global active workflow limit reached (${counts.global}/${args.limits.maxActive})` };
+    const scopeLabel = routeScope ? `scope ${routeScope}` : "global";
+    return { ...base, allowed: false, reason: `${scopeLabel} active workflow limit reached (${counts.global}/${args.limits.maxActive})` };
   }
   if (args.limits.maxActivePerProject !== undefined && counts.project >= args.limits.maxActivePerProject) {
     return { ...base, allowed: false, reason: `project active workflow limit reached (${counts.project}/${args.limits.maxActivePerProject})` };

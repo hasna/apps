@@ -1,9 +1,392 @@
 # Changelog
 
-All notable changes to OpenLoops (npm `@hasna/loops`, repo `hasna/loops`) are
+All notable changes to Loops (npm `@hasna/loops`, repo `hasna/loops`) are
 documented in this file. Version entries are generated from the
 conventional-commit git history; one commit maps to one released patch version
 unless noted.
+
+## 0.4.41 (2026-08-09)
+
+### Fixed
+
+- **Terminal receipt recovery:** resumed workflows consume immutable failed,
+  timed-out, and policy-blocked terminal receipts exactly once, preserving
+  continuation policy without repeating the external effect.
+- **Hosted admitted-operation reconciliation:** legacy maintenance, per-run
+  recovery, and runner polling now return bounded reconciliation outcomes for
+  admitted external operations without mutating run, workflow, or loop state.
+  Public command projections also omit private command bodies and arguments.
+
+## 0.4.40 (2026-08-09)
+
+### Fixed
+
+- **Truthful agent execution:** stored agent prompts are validated before
+  execution and delivered unchanged to the supported provider invocation.
+  Missing, blank, redacted, and agent-produced-no-output runs fail explicitly
+  instead of producing successful receipts.
+- **Hosted stuck-run diagnosis and recovery:** authenticated API and CLI
+  controls detect safely expired leases, reconcile exact opaque snapshots, and
+  refuse blind replay after an external operation was admitted. Hosted health
+  now treats terminal run status as truth, accepts policy-backed nonzero exits,
+  reports repeated terminal failures as dead cadence, and labels insufficient
+  finished history as unproven.
+- **Private operation provenance:** workflow execution persists tenant-bound
+  private descriptors plus immutable admission and terminal receipts with
+  stable identifiers, finite lookup bounds, duplicate proof, and result
+  references. Public loop, workflow, list, and event surfaces omit private
+  prompt, path, profile, recipient, and capability payloads.
+
+## 0.4.39 (2026-08-07)
+
+### Fixed
+
+- **Expired hosted run leases:** runner polling carries the lease-aware claim
+  and bounded recovery path merged after the deployed 0.4.28 image. A dead
+  runner's expired `running` row no longer suppresses every later occurrence of
+  an `overlap: "skip"` loop while the loop continues to report active.
+- **Configured overlap declines:** a non-workflow `overlap: "skip"` loop whose
+  target exits 75 is persisted as the neutral terminal `skipped` status. It
+  advances recurrence without retry or circuit-breaker impact, stays distinct
+  from success, and is exposed consistently by runner finalization, OpenAPI,
+  the generated HTTP SDK, CLI exit behavior, and health reporting.
+- **Runner dependency advisories:** security overrides now resolve
+  `fast-uri` 3.1.5, `ip-address` 10.3.1, and `hono` 4.12.34 so the packaged
+  runner clears dependency-audit and CRITICAL/HIGH image-scan gates.
+
+## 0.4.37 (2026-08-01)
+
+### Fixed
+
+- **Todos-owned route project defaults:** `todos-task` routes now use an
+  explicit `--todos-project` or `LOOPS_TASK_PROJECT` only. When neither is
+  configured, drains, source-task gates, and task mutations invoke `todos`
+  without `--project` instead of passing the unrelated `LOOPS_DATA_DIR`.
+  Scheduled drains preserve the same distinction.
+
+## 0.4.36 (2026-08-01)
+
+### Fixed
+
+- **Reachable Codewith exec retries:** the bounded fast-failure guard now
+  identifies transient SQLite and process-contention failures on the supported
+  `codewith exec` path. Obsolete `codewith agent start` diagnostics no longer
+  trigger retries, and retry logs describe exec contention instead of the
+  removed start lifecycle.
+
+## 0.4.35 (2026-08-01)
+
+### Fixed
+
+- **Durable Codewith retry evidence:** local and remote agent execution now
+  reserves a bounded, scrubbed summary for each transient start failure. Retry
+  numbers and failed-attempt diagnostics survive both the executor's 256 KiB
+  tail retention and the store's 64 KiB head-plus-tail clamp without making a
+  silent final attempt look productive.
+
+## 0.4.34 (2026-08-01)
+
+### Fixed
+
+- **Hosted lease recovery:** authenticated runner polls now perform a bounded
+  tenant recovery pass, abandon expired PostgreSQL run leases that no eligible
+  runner reclaimed, and advance their loop cursors. A run owned by a missing
+  runner can no longer remain `running` indefinitely and hold a fixed-rate
+  cadence overdue until an operator calls the maintenance endpoint.
+
+## 0.4.29 (2026-07-21)
+
+This source release gives the post-`npm/loops/v0.4.28` code line a new,
+unambiguous package, OpenAPI, and generated HTTP SDK identity.
+
+### Added
+
+- **Tenant-bound authentication and PostgreSQL row isolation:** migrations
+  `0008_tenant_prepare`, `0009_tenant_backfill`, and
+  `0010_tenant_enforce` add tenant/principal/membership/API-key state, require
+  an explicit complete tenant assignment before enforcement, and install the
+  closed-world owner/migrator/runtime/authenticator role model with
+  tenant-scoped privileges and RLS. The API now validates tenant-bound keys,
+  roles, scopes, and token kinds and emits structured denial evidence.
+- **Tenant migration operations:** encrypted tenant-backfill delivery,
+  provider credential reconciliation, PostgreSQL 16 bootstrap membership
+  gates, and protected shared-database transfer tooling now support rehearsed,
+  auditable cutovers without command overrides or unverified TLS targets.
+- **Runner and workflow execution:** long-running runner readiness and workflow
+  execution are implemented, with operator recovery, replayable advancement,
+  workflow-definition provenance in `0011_workflow_run_provenance`, and loop
+  labels in `0012_loop_labels`.
+
+### Changed
+
+- **Product identity:** user-facing product and documentation naming is now
+  **Loops**, while published compatibility identifiers and paths such as
+  the legacy uppercase environment-variable namespace, `open_loops`,
+  `.openloops`, `openloops`, `runtimeOwner`, MCP identifiers, project slugs,
+  and the `loops-api` compatibility binary/waiver remain stable.
+- **Runtime and supply chain:** the runtime image now uses pinned Bun Alpine
+  packages, runs the runner as non-root, pins CI actions, adds a protected ECR
+  candidate workflow, and fails closed on high-severity or malformed scan
+  results. Packed artifacts are checked for private-host leakage, branding
+  regressions, storage-kit drift, and contract conformance.
+- **Public contracts:** the OpenAPI document and generated HTTP SDK cover the
+  expanded tenant, runner, workflow, recovery, labels, count, archive, and
+  operational surfaces. MCP output is bounded, and public or persisted
+  workflow output is scrubbed before truncation.
+
+### Fixed
+
+- **Agent boundaries:** Codewith auth profiles are resolved from exact
+  JSON-first inventory, unusable or malformed profiles and extra arguments
+  fail closed, session creation is atomic, root agent directories are rejected,
+  route agent allowlists propagate correctly, and Cursor provider/retry
+  handling no longer weakens trust boundaries.
+- **API and claim safety:** tenant error compatibility is preserved while
+  runner endpoints, route admission, loop updates, runner clocks, local claims,
+  recovery snapshots, and persisted workflow/session contracts reject
+  ambiguous, stale, or cross-boundary state.
+- **Archive and finalization:** ambiguous archive names fail closed and resolve
+  against target state; PostgreSQL finalization conflicts are enforced
+  directly; SQLite generated-route finalization matches PostgreSQL behavior;
+  and public CLI errors and pagination avoid leaking unsafe context.
+- **Recovery and advancement:** workflow recovery ownership is fenced,
+  advancement is unified across schedulers, replay is idempotent, successor and
+  completion parity gaps are closed, and recovery cannot double-claim local
+  work or regenerate already-finalized routes.
+- **Security boundaries:** private and encoded infrastructure hostnames are
+  removed from publishable output, encoded separator bypasses are rejected,
+  trusted contracts and legacy events are validated, and the shared transfer
+  gate accepts only verified TLS DSNs.
+
+### Upgrade warning
+
+- **`0010_tenant_enforce` is a rollback boundary.** After this migration is
+  applied, the immutable published `0.4.28` image cannot pass readiness because
+  it does not contain the `0008`-`0010` tenant migration lineage. Do not roll
+  the binary back in place. Recovery requires rolling forward to `0.4.29` or a
+  later compatible image, or restoring the rehearsed pre-cutover database
+  target before starting the older image.
+
+## 0.4.26
+
+### Fixed
+
+- `PostgresLoopStorage.createWorkflow` is now implemented (ported from the sqlite
+  `Store`), so `POST /v1/workflows` on the self-hosted server persists workflow
+  specs instead of returning `500 not_implemented`. This unblocks the cloud-mode
+  CLI `workflows create` / `templates create-workflow` and the MCP workflow
+  tools. `archiveWorkflow` is likewise ported so `POST /v1/workflows/:id/archive`
+  works on the Postgres backend. Requires an ECS redeploy of the loops server
+  image for the live self-hosted API to pick up the new endpoints.
+
+## Unreleased
+
+### Fixed
+
+- **Codewith auth-profile preflight:** use JSON-first exact profile matching for
+  local and remote runs. Root `data`/`profiles` entries are authoritative:
+  `usable: false` is rejected, legacy entries without `usable` remain accepted,
+  and `currentProfile` does not add inventory membership. Human-table parsing,
+  including active `*` rows, is used only when JSON mode is unsupported or its
+  inventory is structurally unavailable. NUL-containing names, missing
+  profiles, and non-fallback profile-list failures fail closed.
+
+### Added
+
+- `loops-mcp` now serves a shared Streamable HTTP transport (default
+  `http://127.0.0.1:8890/mcp`, `GET /health`) in addition to stdio. Running
+  it as one long-lived daemon with the routing env baked in (e.g.
+  `HASNA_LOOPS_API_URL` + `HASNA_LOOPS_API_KEY`) makes every connecting agent
+  route CRUD deterministically to the same backend regardless of the caller's
+  own shell environment (including non-login SSH). Select the transport with
+  `--http`/`MCP_HTTP=1` (default) or `--stdio`/`MCP_STDIO=1`; the port is set
+  via `--port` or `MCP_HTTP_PORT`.
+
+### Changed
+
+- Documentation now names `loops-serve` as the Postgres-backed Hasna-owned
+  self-hosted control-plane host, keeps `loops-api` as the shared embeddable API
+  contract, and reserves `cloud` wording for the hosted SaaS contract rather
+  than the Hasna-owned self-hosted deployment.
+- The cutover and migration docs now match the 0.4.14 self-hosted backend:
+  `PostgresLoopStorage`, API-key auth, HTTP SDK, ARM64 deploy artifacts, and
+  `loops-serve migrate` are shipped; long-running runner daemon mode, workflow
+  execution over the runner protocol, and id-preserving remote import remain
+  follow-up work.
+
+## 0.4.18 (2026-07-07/08)
+
+Drain reliability: kill the todos-task redispatch "black hole" family, then the
+merge-lane routing wedge and the schema-lockout class behind it. One artifact
+consolidates the whole independently-reviewed family: #82 (dead-letter at the
+cap + attempt refunds + requeue reset + worktree self-heal), #88 (per-task
+repository routing + candidate-window memory), #89 (schema-compat soft-open +
+gate-death ceiling), plus the previously unpublished 0.4.15–0.4.17 ride-alongs
+documented below.
+
+### Fixed
+
+- **Merge-lane wedge — the task's own repository wins over a group-root
+  `--project-path`:** commit 8ab2664 made the router-level `--project-path` win
+  unconditionally in todos-task drains, so multi-repo routers that pass it as a
+  concurrency group root (a non-repository directory such as the operator's
+  home) sent every task to the group root and skipped it (`worktreeMode=required
+  but projectPath is not an existing git repository`), zeroing merge dispatch
+  fleet-wide. A drain
+  now routes each task to its own first *usable* repository path (explicit
+  `project_path`, metadata, the description's `Repository:` line, then
+  `working_dir` — first that is a real git repo, probed once per path per tick);
+  the router-level `--project-path` remains the rescue fallback for tasks whose
+  recorded path is stale or broken (8ab2664's original intent). Registry drains
+  are unchanged (the scanned source project still wins; task-controlled fields
+  cannot redirect a route).
+- **Route-disallowed tasks no longer burn the candidate window:** tasks bearing
+  `no-auto`/`blocked`/`manual`-class tags can never route, but each occupied one
+  of the bounded candidate rows every tick just to be rejected by eligibility —
+  enough marked tasks starved a drain into `considered=N created=0` forever.
+  They are now held out of the window before slicing (unless the drain's own
+  `--tags` explicitly selects that tag) and counted as `excludedDisallowedTag`
+  in drain reports, so the exclusion is auditable.
+- **Deterministic gate deaths are bounded by a secondary ceiling:** gate deaths
+  (runs that fail at worktree prep or a fast triage/planner gate before any real
+  work) refund their redispatch attempt — correct for transient faults, but a
+  deterministic fault would retry forever at the backoff floor. Work items now
+  count consecutive gate deaths (`gate_deaths`, additive migration
+  `0011_work_item_gate_deaths`, no schema `user_version` bump); at the ceiling
+  (20) the item is dead-lettered — visible in drain reports — instead of
+  spinning, and the bounded route re-admission will not requeue it. A
+  productive failure or an `exit 75` tempfail (runs that reached the worker)
+  resets the streak; `loops routes requeue` (default attempts reset) re-arms
+  the full ceiling. Known gap (review finding N1; fix queued for the next
+  patch): a non-closing SUCCESS does not yet reset the streak — bounded and
+  safe (it errs toward a recoverable early dead-letter, and the redispatch cap
+  independently bounds chronically non-closing successes).
+- **Redispatch cap no longer a silent black hole** (the original #82 core: a
+  still-actionable task whose runs kept finishing without closing it was
+  deduped forever once its attempt count reached the cap): when a todos-task
+  work item reaches `MAX_TODOS_TASK_ROUTE_REDISPATCHES` (8) it is transitioned
+  to a visible `dead_letter` state instead of being deduped forever with no
+  signal. Drain reports gain a `deadLettered` count (and the deduped result
+  carries `deadLettered: true` + the reason), so a capped task is surfaced and
+  an operator can requeue it rather than the drain silently reporting
+  `created=0`.
+- **Gate deaths no longer count toward the cap:** a run that dies before doing
+  real work — worktree preparation failure, or a fast (`<60s`) `triage`/`planner`
+  gate failure — has its attempt refunded by `finalizeWorkflowRun`, so an infra
+  fault cannot dead-letter a task that never reached its worker.
+- **`exit(75)` tempfail is requeueable, not dedupe-bait:** a step that exits 75
+  (`EX_TEMPFAIL`, "retry later") drops its work item back to `queued` with the
+  attempt refunded, so the "retry next tick" contract fires instead of leaving a
+  terminal row that counts toward the cap.
+- **`loops routes requeue` resets attempts by default:** an operator unwedge is
+  now durable rather than one-shot (a capped item no longer re-caps after a
+  single further terminal run). `--keep-attempts` preserves the count for the
+  cautious path; the bounded route-path re-admission still preserves attempts so
+  the cap keeps working.
+- **Executor self-heals a stale worktree registration:** on git's "missing but
+  already registered worktree" error, `ensureLocalWorktree` (and the remote
+  worktree-prep script) now runs `git worktree prune` and retries the add exactly
+  once — git's own prescribed remedy — before failing honestly. This removes the
+  single biggest burner of the redispatch cap at its source.
+
+### Changed
+
+- **Newer-schema databases soft-open when the delta is non-breaking:** an older
+  binary used to refuse ANY database with a newer `PRAGMA user_version` — during
+  the 2026-07-07 schema-8 lockout that bricked the whole CLI fleet over purely
+  additive migrations. The database now carries a compatibility floor
+  (`schema_compat.min_compatible_user_version`, raised only by BREAKING
+  migrations; additive ones leave it untouched): a binary opens any newer
+  database whose floor it meets, preserves the newer `user_version` stamp
+  (never downgrades it), and refuses only on a known-breaking delta or when the
+  floor row is absent (pre-contract/unblessed databases stay conservative).
+
+## 0.4.15 – 0.4.17 (2026-07-06/07 — unpublished; first shipped with 0.4.18)
+
+These three versions were committed to `main` with version bumps but never
+published to npm individually; the 0.4.18 release is the first registry artifact
+that carries them. Consolidated here so the published history stays honest.
+
+### Added
+
+- **0.4.15** — self-hosted client mode: the CLI routes loop reads/writes to the
+  hosted `/v1` API when `self_hosted` mode is configured (#74).
+- **0.4.16** — id-preserving bulk import endpoint (`POST /v1/import`) for
+  self-hosted backfill, plus `loops self-hosted push --apply` in the CLI (#76).
+- **0.4.17** — `GET /v1/loops/count` and `GET /v1/runs/count` endpoints (#77).
+- Run receipt contract: run receipts table + API surface for verifiable run
+  evidence (`migrations/0005_run_receipts.sql` mirror).
+
+### Changed
+
+- **SQLite schema `user_version` 7 → 8** via ledger migrations
+  `0009_run_receipts` and `0010_work_item_machine_id` (additive; applied
+  automatically on first open). NOTE: binaries older than this range refuse to
+  open a migrated database ("schema version 8 is newer than this binary
+  supports"), so downgrading below 0.4.15 after opening a database with this
+  release requires restoring a pre-upgrade backup. A version-tolerance softening
+  (open unless a known-breaking delta) is planned follow-up work.
+- Launch-gated route drains: `--launch-gate`/`--launch-gate-blocker` hold a
+  drain closed until named blocker tasks are completed.
+
+### Fixed
+
+- codewith agent JSON output parsing (#17).
+- PR handoff: no-remote fallback repaired and handoff artifact errors scrubbed
+  from templates.
+
+## 0.4.14 (2026-07-06)
+
+Self-hosted control-plane service brought to the full Hasna standard: all four
+surfaces (CLI, MCP, serve, SDK) are real over the Postgres backend, with
+internet-facing API-key auth and a deployable ARM64 image.
+
+### Added
+
+- **`loops-serve` HTTP control plane:** RDS-direct (Amendment A1) Postgres
+  storage wired into the serve; public `GET /health`, `/ready` (storage
+  reachable + fully migrated), `/version` (all `{status, version, mode}`) and
+  `/openapi.json`; the versioned `/v1` loops + runs API is gated behind
+  `@hasna/contracts` API-key auth (`verifyApiKey`, strict revocation via the
+  shared `api_keys` table). `loops-serve migrate` applies the ledger-tracked
+  schema + api_keys table.
+- **Generated HTTP SDK:** `@hasna/loops/sdk/http` exports a typed dependency-free
+  `LoopsClient` generated from `openapi/loops.json` (the serve contract).
+- **Deploy artifacts:** ARM64/bun `Dockerfile` (Amazon RDS CA baked for
+  verify-full TLS), `docker-compose.yml`, `hasna.contract.json` service
+  manifest, and a `migrations/` mirror of the ledger migrations.
+
+## 0.4.13 (2026-07-05)
+
+`--pr-handoff` workflows whose worker pushes its own branch and opens the PR
+directly (no handoff artifact — the cursor pattern) now complete instead of
+failing the pr-handoff step and skipping the verifier.
+
+### Fixed
+
+- **pr-handoff — no-artifact/direct-PR path exited 1 instead of 0:** the step
+  runs as `bash -lc` (a login shell). The no-artifact guard ended with an
+  explicit `exit 0` while `set -e` was active; under systemd (`SHLVL` unset →
+  bash sets 1) an explicit exit sources `~/.bash_logout`, whose `clear_console`
+  fails without a controlling TTY, and errexit handed that failure back as the
+  step's exit code. The workflow failed, the verifier (which depends on
+  pr-handoff) was skipped, and the source task was stranded `in_progress`.
+  Both guard branches now route through bun heredocs and fall through the `if`'s
+  natural end — no top-level shell `exit` — so the intended status is preserved
+  on the local and remote execution paths alike (gate steps already ended
+  naturally, which is why only pr-handoff failed). (#34)
+
+### Added
+
+- **Worker-opened PR detection on the no-artifact path:** when no handoff
+  artifact exists, pr-handoff now looks up the worker's own open PR for the
+  workflow branch (`gh pr list --head <branch> --state open`), records the same
+  `openloops:pr-handoff=done task=… pr=… commit=… branch=…` comment the
+  artifact path records, and exits 0 — so direct-PR (cursor-style) completions
+  carry PR evidence into the verifier and merge lane. Best-effort and
+  fail-open on lookup: a missing PR or a `gh`/`git`/`todos` error is logged,
+  writes no done-evidence, and never fails the step. The artifact (codewith)
+  handoff path is unchanged. (#34)
 
 ## 0.4.12 (2026-07-05)
 
@@ -445,13 +828,63 @@ CLI/MCP/SDK surface with deprecation aliases.
   npm installs), and `@hasna/machines` is now an optional dependency —
   installs without it simply disable remote-machine assignment.
 
+## 0.3.60 (2026-07-01)
+
+Experimental Codewith durable-agent controller for long workflow steps.
+
+### Fixed
+
+- **Codewith executor:** run Codewith agent steps through the durable
+  `codewith agent start` background-agent lifecycle with rollout progress
+  recording into workflow step runs.
+
+Superseded in **0.4.9**: task-lifecycle and route workers now dispatch Codewith
+via non-interactive `codewith exec --json` because `agent start` reloaded
+multi-megabyte rollout history every turn and stalled workers with silent
+`context_length_exceeded` completions.
+
+## 0.3.59 (2026-07-01)
+
+Harden append-only workflow goal-wrapper migration.
+
+### Fixed
+
+- **`migrate-goal-wrappers`:** dry-run and apply paths now use compact migration
+  summaries, block retarget while a loop run is active, and route failures
+  through `cloneWorkflowWithoutGoalAndRetargetLoop` so only loops with both a
+  loop-level goal and a workflow-level top-level goal migrate.
+- **Store:** `cloneWorkflowWithoutGoalAndRetargetLoop` inserts a goal-free
+  workflow spec, retargets the loop, and optionally archives the old spec when
+  unreferenced — matching the append-only semantics of
+  `migrate-agent-timeouts`.
+
+## 0.3.58 (2026-07-01)
+
+Break nested workflow goal deadlocks and add a migration path.
+
+### Fixed
+
+- **Workflow loops — nested top-level goals:** a loop-level goal wrapping a
+  workflow that also defined a top-level `"goal"` deadlocked because each layer
+  waited on the other. New workflow loops that combine both wrappers are
+  rejected at creation; retargeting onto a dual-goal workflow is blocked. When
+  only a legacy dual-wrapper loop remains, the runner strips the workflow goal
+  for execution so the loop-level goal can drive orchestration.
+- **Workflow runner:** loop-level goals on workflow loops execute the underlying
+  workflow with the workflow-level goal removed when both were present.
+
+### Added
+
+- **`loops workflows migrate-goal-wrappers`:** append-only migrator that clones
+  a goal-free workflow spec and retargets eligible non-running workflow loops
+  that still carry redundant workflow-level goal wrappers alongside a loop-level
+  goal. Supports `--loop`, `--apply`, and `--archive-old` like
+  `migrate-agent-timeouts`.
+
 ## 0.3.x
 
 Compact history for the 0.3 line, newest first (`version (date) commit subject`).
 
-- 0.3.60 (2026-07-01) fix: run Codewith loops as durable agents
-- 0.3.59 (2026-07-01) fix: harden workflow goal migration
-- 0.3.58 (2026-07-01) fix: avoid nested workflow goal deadlocks
 - 0.3.57 (2026-07-01) feat: harden loop routing and add MCP server
 - 0.3.56 (2026-06-30) fix: allow worktree agents to write git metadata
 - 0.3.55 (2026-06-30) fix: agent workflow timeout policy

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Store } from "./store.js";
 import { runDoctor, type DoctorReport } from "./doctor.js";
+import { RESTART_INTERRUPTED_RUN_PREFIX } from "./health.js";
 
 function check(report: DoctorReport, id: string) {
   return report.checks.find((entry) => entry.id === id);
@@ -22,24 +23,14 @@ describe("doctor", () => {
     for (const key of [
       "LOOPS_DATA_DIR",
       "HASNA_MACHINES_DIR",
-      "LOOPS_MODE",
-      "HASNA_LOOPS_MODE",
-      "LOOPS_API_URL",
+      "HASNA_LOOPS_STORAGE_MODE",
       "HASNA_LOOPS_API_URL",
-      "LOOPS_CLOUD_API_URL",
-      "HASNA_LOOPS_CLOUD_API_URL",
-      "LOOPS_DATABASE_URL",
       "HASNA_LOOPS_DATABASE_URL",
     ]) savedEnv[key] = process.env[key];
     process.env.LOOPS_DATA_DIR = dataDir;
     process.env.HASNA_MACHINES_DIR = machinesDir;
-    process.env.LOOPS_MODE = "";
-    process.env.HASNA_LOOPS_MODE = "";
-    process.env.LOOPS_API_URL = "";
+    process.env.HASNA_LOOPS_STORAGE_MODE = "";
     process.env.HASNA_LOOPS_API_URL = "";
-    process.env.LOOPS_CLOUD_API_URL = "";
-    process.env.HASNA_LOOPS_CLOUD_API_URL = "";
-    process.env.LOOPS_DATABASE_URL = "";
     process.env.HASNA_LOOPS_DATABASE_URL = "";
   });
 
@@ -81,7 +72,7 @@ describe("doctor", () => {
   });
 
   test("warns when non-local scheduler state is selected without control-plane configuration", () => {
-    process.env.LOOPS_MODE = "cloud";
+    process.env.HASNA_LOOPS_STORAGE_MODE = "cloud";
     const store = new Store(":memory:");
     try {
       const report = runDoctor(store);
@@ -108,11 +99,36 @@ describe("doctor", () => {
       store.finalizeRun(
         claim!.run.id,
         { status: "failed", finishedAt: "2026-01-01T00:00:01.000Z", durationMs: 1_000, stdout: "", stderr: "boom" },
-        { claimedBy: "test", now: new Date("2026-01-01T00:00:01Z") },
+        { claimedBy: "test", claimToken: claim!.claimToken, now: new Date("2026-01-01T00:00:01Z") },
       );
       const report = runDoctor(store);
       expect(check(report, "loop-runs")?.status).toBe("warn");
       expect(check(report, "loop-runs")?.message).toContain("1 failed loop run(s)");
+      expect(report.ok).toBe(true);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("surfaces restart-interrupted runs separately from failed loop runs", () => {
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop({
+        name: "doctor-restart-interrupted-run",
+        schedule: { type: "interval", everyMs: 60_000 },
+        target: { type: "command", command: "sleep", args: ["10"] },
+      });
+      store.createSkippedRun(
+        loop,
+        "2026-01-01T00:00:00.000Z",
+        `${RESTART_INTERRUPTED_RUN_PREFIX}: child process terminated by SIGTERM during daemon stop/restart`,
+      );
+
+      const report = runDoctor(store);
+      expect(check(report, "loop-runs")?.status).toBe("ok");
+      expect(check(report, "loop-runs")?.message).toBe("no failed loop runs recorded");
+      expect(check(report, "loop-runs:restart-interrupted")?.status).toBe("warn");
+      expect(check(report, "loop-runs:restart-interrupted")?.message).toContain("1 daemon restart-interrupted");
       expect(report.ok).toBe(true);
     } finally {
       store.close();

@@ -35,17 +35,23 @@ import {
   PR_REVIEW_TEMPLATE_ID,
   prHandoffCommand,
   REPORT_ONLY_TEMPLATE_ID,
+  ROUTING_HEALTH_ALERTS_ARE_NOT_TASKS_FRAGMENT,
+  ROUTING_REMEDIATION_ALERT_CHANNEL,
+  ROUTING_REMEDIATION_TEMPLATE_ID,
+  routingRemediationDoctorCommand,
+  routingRemediationPreflightCommand,
   SCHEDULED_AUDIT_TEMPLATE_ID,
   sourceTaskGateCommand,
+  taskEvidenceGateCommand,
+  taskEvidenceMarker,
   TASK_LIFECYCLE_TEMPLATE_ID,
   TASK_REVIEW_FOCUS,
   TASK_VERIFIER_DECISION_FRAGMENT,
   TODOS_TASK_WORKER_VERIFIER_TEMPLATE_ID,
   todosDoneLine,
-  todosEvidenceLine,
   todosExactCommandsFragment,
   todosStartLine,
-  todosVerificationLine,
+  todosTaskEvidenceLine,
   VERIFIER_TINY_FIXES_FRAGMENT,
   verifierIdleTimeoutMs,
   verifierRuntimeGuidance,
@@ -64,6 +70,7 @@ export {
   KNOWLEDGE_REFRESH_TEMPLATE_ID,
   PR_REVIEW_TEMPLATE_ID,
   REPORT_ONLY_TEMPLATE_ID,
+  ROUTING_REMEDIATION_TEMPLATE_ID,
   SCHEDULED_AUDIT_TEMPLATE_ID,
   TASK_LIFECYCLE_TEMPLATE_ID,
   TODOS_TASK_WORKER_VERIFIER_TEMPLATE_ID,
@@ -85,6 +92,14 @@ export interface AgentWorkflowTemplateBaseInput {
   projectPath: string;
   routeProjectPath?: string;
   projectGroup?: string;
+  routeScope?: string;
+  routeThrottleLimits?: {
+    maxActive?: number;
+    maxActiveScope?: string;
+    maxActivePerProject?: number;
+    maxActivePerProjectGroup?: number;
+    maxPerProfile?: number;
+  };
   provider?: AgentProvider;
   authProfile?: string;
   authProfilePool?: string[];
@@ -104,6 +119,9 @@ export interface AgentWorkflowTemplateBaseInput {
   addDirs?: string[];
   permissionMode?: AgentPermissionMode;
   sandbox?: AgentSandbox;
+  allowTools?: string[];
+  allowCommands?: string[];
+  safetyReason?: string;
   manualBreakGlass?: boolean;
   worktreeMode?: AgentWorktreeMode;
   worktreeRoot?: string;
@@ -148,6 +166,26 @@ export interface BoundedAgentWorkflowTemplateInput extends AgentWorkflowTemplate
   prompt?: string;
 }
 
+export interface RoutingRemediationWorkflowTemplateInput extends AgentWorkflowTemplateBaseInput {
+  todosProjectPath?: string;
+  doctorJsonPath?: string;
+  doctorProject?: string;
+  tag?: string;
+  status?: string;
+  shard?: string;
+  limit?: string;
+  maxRepairs?: number;
+  dryRun?: boolean;
+  idempotencyKey?: string;
+  evidenceDir?: string;
+  undoDir?: string;
+  /**
+   * Conversations channel that routing-health blocker findings are summarised to.
+   * Defaults to {@link ROUTING_REMEDIATION_ALERT_CHANNEL}. They are never filed as tasks.
+   */
+  alertChannel?: string;
+}
+
 export type LoopTemplateSourceFilter = LoopTemplateSource | "all";
 
 export interface ListLoopTemplatesOptions {
@@ -190,6 +228,25 @@ function taskLabel(input: TodosTaskWorkflowTemplateInput): string {
   return head.length > 160 ? `${head.slice(0, 157)}...` : head;
 }
 
+function routeAdmissionContext(input: AgentWorkflowTemplateBaseInput): Record<string, unknown> | undefined {
+  const limits = input.routeThrottleLimits
+    ? {
+        maxActive: input.routeThrottleLimits.maxActive,
+        maxActiveScope: input.routeThrottleLimits.maxActiveScope,
+        maxActivePerProject: input.routeThrottleLimits.maxActivePerProject,
+        maxActivePerProjectGroup: input.routeThrottleLimits.maxActivePerProjectGroup,
+        maxPerProfile: input.routeThrottleLimits.maxPerProfile,
+      }
+    : undefined;
+  const hasLimits = Boolean(limits && Object.values(limits).some((value) => value !== undefined));
+  if (!input.projectGroup && !input.routeScope && !hasLimits) return undefined;
+  return {
+    projectGroup: input.projectGroup,
+    routeScope: input.routeScope,
+    ...(hasLimits ? { limits } : {}),
+  };
+}
+
 const UNLIMITED_AGENT_TIMEOUT_MS: TimeoutMs = null;
 
 function agentTimeoutMs(input: { timeoutMs?: TimeoutMs }): TimeoutMs {
@@ -222,6 +279,13 @@ function parseDeterministicTimeoutMs(raw: string | undefined, fallbackMs: number
   if (raw === undefined || raw.trim() === "") return fallbackMs;
   const value = Number(raw);
   if (!Number.isInteger(value) || value <= 0) throw new Error(`${label} must be a positive integer number of milliseconds`);
+  return value;
+}
+
+function parseNonNegativeIntegerVar(raw: string | undefined, fallback: number, label: string): number {
+  if (raw === undefined || raw.trim() === "") return fallback;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 0) throw new Error(`${label} must be a non-negative integer`);
   return value;
 }
 
@@ -384,12 +448,31 @@ function assertNativeAuthProfileSupport(input: AgentWorkflowTemplateBaseInput, p
 }
 
 function failClosedSandbox(input: AgentWorkflowTemplateBaseInput, provider: AgentProvider, sandbox: AgentSandbox | undefined): void {
-  if (!["codewith", "codex"].includes(provider)) return;
-  if (sandbox !== "danger-full-access") return;
-  if (input.manualBreakGlass) return;
+  const relaxed = (["codewith", "codex"].includes(provider) && sandbox === "danger-full-access") ||
+    (provider === "cursor" && sandbox === "disabled");
+  if (!relaxed) return;
+  if (input.manualBreakGlass && input.safetyReason?.trim()) return;
   throw new Error(
-    "danger-full-access is manual break-glass only for generated worker/verifier workflows; use sandbox=workspace-write or set manualBreakGlass=true with explicit operator approval",
+    `${sandbox} is manual break-glass only for generated worker/verifier workflows; use a restricted sandbox or set manualBreakGlass=true with a non-empty safetyReason and explicit operator approval`,
   );
+}
+
+function agentAllowlist(input: AgentWorkflowTemplateBaseInput) {
+  const tools = input.allowTools?.length ? [...new Set(input.allowTools)] : undefined;
+  const commands = [...(input.allowCommands ?? [])];
+  if (input.manualBreakGlass) commands.push("manual-break-glass");
+  const uniqueCommands = commands.length ? [...new Set(commands)] : undefined;
+  const safetyReason = input.safetyReason?.trim() || undefined;
+  if ((tools?.length || uniqueCommands?.length) && !safetyReason) {
+    throw new Error("allowlist.safetyReason is required when tool or command restrictions are declared");
+  }
+  if (!tools?.length && !uniqueCommands?.length && !safetyReason) return undefined;
+  return {
+    tools,
+    commands: uniqueCommands,
+    enforcement: "metadata_only" as const,
+    safetyReason,
+  };
 }
 
 function agentTarget(
@@ -429,8 +512,11 @@ function agentTarget(
     addDirs: addDirs.length ? [...new Set(addDirs)] : undefined,
     authProfile: provider === "codewith" ? authProfileForRole(input, role, seed) : undefined,
     configIsolation: "safe",
-    permissionMode: input.permissionMode ?? "bypass",
+    permissionMode:
+      input.permissionMode ??
+      (provider === "codewith" || provider === "codex" ? "bypass" : "default"),
     sandbox,
+    manualBreakGlass: input.manualBreakGlass || undefined,
     worktree: {
       mode: plan.mode,
       enabled: plan.enabled,
@@ -442,7 +528,7 @@ function agentTarget(
       branch: plan.branch,
       reason: plan.reason,
     },
-    allowlist: input.manualBreakGlass ? { enforcement: "metadata_only", commands: ["manual-break-glass"] } : undefined,
+    allowlist: agentAllowlist(input),
     routing: {
       projectPath: input.routeProjectPath ?? input.projectPath,
       ...(input.projectGroup ? { projectGroup: input.projectGroup } : {}),
@@ -480,8 +566,8 @@ interface CommandStepOptions {
 }
 
 /**
- * Deterministic helper steps run in the original checkout: their commands pin
- * the todos project and repo paths explicitly, and the executor prepares the
+ * Deterministic helper steps run in the original checkout. Their commands pin
+ * a Todos project only when one is configured, and the executor prepares the
  * agent worktree lazily so the worktree cwd may not exist yet.
  */
 function commandStep(opts: CommandStepOptions): GateWorkflowStep {
@@ -503,7 +589,7 @@ function commandStep(opts: CommandStepOptions): GateWorkflowStep {
   };
 }
 
-function sourceTaskGateStep(todosProjectPath: string, taskId: string, plan: WorktreePlan, description: string): GateWorkflowStep {
+function sourceTaskGateStep(todosProjectPath: string | undefined, taskId: string, plan: WorktreePlan, description: string): GateWorkflowStep {
   return commandStep({
     id: "source-task-gate",
     name: "Source Task Gate",
@@ -519,7 +605,7 @@ interface LifecycleGateStepOptions {
   stage: LifecycleGateStage;
   description: string;
   dependsOn: string[];
-  todosProjectPath: string;
+  todosProjectPath?: string;
   taskId: string;
   goMarker: string;
   blockedMarker: string;
@@ -539,11 +625,30 @@ function lifecycleGateStep(opts: LifecycleGateStepOptions): GateWorkflowStep {
   });
 }
 
+function taskEvidenceCheckStep(
+  todosProjectPath: string | undefined,
+  taskId: string,
+  plan: WorktreePlan,
+  workerMarker: string,
+  verifierMarker: string,
+): WorkflowStep {
+  return commandStep({
+    id: "task-evidence-check",
+    name: "Task Evidence Check",
+    description: "Fail route success unless the verifier completed the task with visible worker and verifier evidence.",
+    dependsOn: ["verifier"],
+    command: taskEvidenceGateCommand(todosProjectPath, taskId, workerMarker, verifierMarker),
+    cwd: plan.originalCwd,
+    timeoutMs: 60_000,
+    blockedExitCodes: [],
+  });
+}
+
 function prHandoffArtifactPath(plan: WorktreePlan, taskId: string): string {
   return join(plan.cwd, ".openloops", "pr-handoff", `${slugSegment(taskId, "task")}.json`);
 }
 
-function prHandoffStep(input: TodosTaskWorkflowTemplateInput, plan: WorktreePlan, todosProjectPath: string): WorkflowStep {
+function prHandoffStep(input: TodosTaskWorkflowTemplateInput, plan: WorktreePlan, todosProjectPath: string | undefined): WorkflowStep {
   return commandStep({
     id: "pr-handoff",
     name: "PR Handoff",
@@ -663,8 +768,10 @@ export function getLoopTemplate(id: string, opts: ListLoopTemplatesOptions = {})
 export function renderTodosTaskWorkerVerifierWorkflow(input: TodosTaskWorkflowTemplateInput): CreateWorkflowInput {
   if (!input.taskId?.trim()) throw new Error("taskId is required");
   if (!input.projectPath?.trim()) throw new Error("projectPath is required");
-  const todosProjectPath = input.todosProjectPath ?? input.routeProjectPath ?? input.projectPath;
+  const todosProjectPath = input.todosProjectPath?.trim() || undefined;
   const plan = worktreePlan(input, input.taskId);
+  const workerMarker = taskEvidenceMarker("worker", input.taskId, input.eventId);
+  const verifierMarker = taskEvidenceMarker("verifier", input.taskId, input.eventId);
   const taskContext = {
     taskId: input.taskId,
     taskTitle: input.taskTitle,
@@ -674,6 +781,7 @@ export function renderTodosTaskWorkerVerifierWorkflow(input: TodosTaskWorkflowTe
     projectPath: input.projectPath,
     routeProjectPath: input.routeProjectPath,
     projectGroup: input.projectGroup,
+    routeAdmission: routeAdmissionContext(input),
     worktree: worktreeContextFragment(plan),
   };
   const workerPrompt = [
@@ -681,7 +789,7 @@ export function renderTodosTaskWorkerVerifierWorkflow(input: TodosTaskWorkflowTe
     worktreePrompt(plan),
     ...todosExactCommandsFragment(todosProjectPath, input.taskId, [
       todosStartLine(todosProjectPath, input.taskId),
-      todosEvidenceLine(todosProjectPath, input.taskId, "concise evidence and blockers"),
+      todosTaskEvidenceLine(todosProjectPath, input.taskId, "worker", workerMarker, "concise worker evidence and blockers"),
     ]),
     "Investigate first before changing files. Use the todos CLI as the source of truth for the task.",
     "Inspect the repository/project state, implement only the task scope, run focused validation, preserve unrelated user changes, and update the task with comments, evidence, changed files, commits, and blockers.",
@@ -694,7 +802,7 @@ export function renderTodosTaskWorkerVerifierWorkflow(input: TodosTaskWorkflowTe
     ...goalHeaderFragment(`Verify todos task ${input.taskId} after the worker step.`, "verifier", "task"),
     worktreePrompt(plan),
     ...todosExactCommandsFragment(todosProjectPath, input.taskId, [
-      todosVerificationLine(todosProjectPath, input.taskId),
+      todosTaskEvidenceLine(todosProjectPath, input.taskId, "verifier", verifierMarker, "concise verification evidence or blocker"),
       todosDoneLine(todosProjectPath, input.taskId),
     ]),
     adversarialReviewFragment("the task, repository state, commits, tests, and worker evidence", TASK_REVIEW_FOCUS),
@@ -727,6 +835,7 @@ export function renderTodosTaskWorkerVerifierWorkflow(input: TodosTaskWorkflowTe
         verifierDescription: "Adversarially verify worker output and update todos.",
         workerDependsOn: ["source-task-gate"],
       }),
+      taskEvidenceCheckStep(todosProjectPath, input.taskId, plan, workerMarker, verifierMarker),
     ],
   };
 }
@@ -734,8 +843,10 @@ export function renderTodosTaskWorkerVerifierWorkflow(input: TodosTaskWorkflowTe
 export function renderTaskLifecycleWorkflow(input: TodosTaskWorkflowTemplateInput): CreateWorkflowInput {
   if (!input.taskId?.trim()) throw new Error("taskId is required");
   if (!input.projectPath?.trim()) throw new Error("projectPath is required");
-  const todosProjectPath = input.todosProjectPath ?? input.routeProjectPath ?? input.projectPath;
+  const todosProjectPath = input.todosProjectPath?.trim() || undefined;
   const plan = worktreePlan(input, input.taskId);
+  const workerMarker = taskEvidenceMarker("worker", input.taskId, input.eventId);
+  const verifierMarker = taskEvidenceMarker("verifier", input.taskId, input.eventId);
   const taskContext = {
     taskId: input.taskId,
     taskTitle: input.taskTitle,
@@ -747,6 +858,7 @@ export function renderTaskLifecycleWorkflow(input: TodosTaskWorkflowTemplateInpu
     projectGroup: input.projectGroup,
     todosProjectPath,
     prReviewRouting: prReviewRoutingContext(input),
+    routeAdmission: routeAdmissionContext(input),
     worktree: worktreeContextFragment(plan),
   };
   const handoffArtifactPath = prHandoffArtifactPath(plan, input.taskId);
@@ -771,9 +883,10 @@ export function renderTaskLifecycleWorkflow(input: TodosTaskWorkflowTemplateInpu
   ].join("\n");
   const gateMarker = (stage: LifecycleGateStage, state: "go" | "blocked"): string =>
     `openloops:${stage}=${state} task=${input.taskId}${input.eventId ? ` event=${input.eventId}` : ""}`;
-  const blockTaskCommand = `todos --project ${todosProjectPath} update ${input.taskId} --status blocked`;
+  const todosCommand = todosProjectPath ? `todos --project ${todosProjectPath}` : "todos";
+  const blockTaskCommand = `${todosCommand} update ${input.taskId} --status blocked`;
   const markerCommentCommand = (stage: LifecycleGateStage, state: "go" | "blocked", evidencePlaceholder: string): string =>
-    `todos --project ${todosProjectPath} comment ${input.taskId} "${gateMarker(stage, state)}\n<${evidencePlaceholder}>"`;
+    `${todosCommand} comment ${input.taskId} "${gateMarker(stage, state)}\n<${evidencePlaceholder}>"`;
   const gateStopFragment = (stage: LifecycleGateStage, stops: string): string =>
     `The deterministic ${stage} gate will stop ${stops} unless the latest ${stage} marker is the exact go marker and the task has no blocked/completed/done/cancelled/failed/archived/no-auto/manual/approval-required state.`;
   const triagePrompt = [
@@ -806,6 +919,7 @@ export function renderTaskLifecycleWorkflow(input: TodosTaskWorkflowTemplateInpu
     ...boundedStepHeaderFragment(`Complete todos task ${input.taskId} according to the planner evidence.`, "worker", "lifecycle"),
     shared,
     todosStartLine(todosProjectPath, input.taskId),
+    todosTaskEvidenceLine(todosProjectPath, input.taskId, "worker", workerMarker, "concrete worker evidence: changed files, commits, validation, blockers, residual risks"),
     "Read the triage and planner comments first. Implement only the scoped task, run focused validation, and record concrete worker evidence in todos: changed files, commits, validation results, blockers, and residual risks.",
     input.prHandoff ? `When only GitHub network access is blocked after a successful commit/validation, record the handoff artifact at ${handoffArtifactPath} instead of repeatedly retrying push/PR creation.` : undefined,
     WORKER_LEAVES_COMPLETION_FRAGMENT,
@@ -814,6 +928,7 @@ export function renderTaskLifecycleWorkflow(input: TodosTaskWorkflowTemplateInpu
     ...boundedStepHeaderFragment(`Verify todos task ${input.taskId} after the full lifecycle worker step.`, "verifier", "lifecycle"),
     shared,
     "Before completion, record concrete verification evidence in todos with changed files, validation results, findings, and the task decision.",
+    todosTaskEvidenceLine(todosProjectPath, input.taskId, "verifier", verifierMarker, "concrete verifier evidence: findings, validation, task decision"),
     todosDoneLine(todosProjectPath, input.taskId),
     adversarialReviewFragment("triage, plan, worker evidence, repo state, commits, tests, and acceptance criteria", TASK_REVIEW_FOCUS),
     verifierRuntimeGuidance(input),
@@ -884,12 +999,181 @@ export function renderTaskLifecycleWorkflow(input: TodosTaskWorkflowTemplateInpu
     target: agentTarget(input, verifierPrompt, "verifier", input.taskId, plan),
     timeoutMs: agentTimeoutMs(input),
   });
+  steps.push(taskEvidenceCheckStep(todosProjectPath, input.taskId, plan, workerMarker, verifierMarker));
 
   return {
     name: `task-lifecycle-${input.taskId.slice(0, 8)}-triage-plan-worker-verifier`,
     description: `Full task lifecycle workflow for ${taskLabel(input)}`,
     version: 1,
     steps,
+  };
+}
+
+export function renderRoutingRemediationWorkflow(input: RoutingRemediationWorkflowTemplateInput): CreateWorkflowInput {
+  if (!input.projectPath?.trim()) throw new Error("projectPath is required");
+  const todosProjectPath = input.todosProjectPath ?? input.routeProjectPath ?? input.projectPath;
+  const status = input.status ?? "pending,in_progress";
+  const scope = {
+    doctorProject: input.doctorProject,
+    tag: input.tag,
+    status,
+    shard: input.shard,
+    limit: input.limit,
+  };
+  const idempotencyKey =
+    input.idempotencyKey?.trim() ||
+    [
+      "routing-remediation",
+      todosProjectPath,
+      input.doctorJsonPath ?? "doctor-live",
+      input.doctorProject ?? "all-projects",
+      input.tag ?? "all-tags",
+      status,
+      input.shard ?? "all-shards",
+      input.limit ?? "unlimited",
+    ].join(":");
+  const runId = `${slugSegment(idempotencyKey, "routing-remediation").slice(0, 48)}-${stableHex(idempotencyKey)}`;
+  const maxRepairs = input.maxRepairs ?? 25;
+  if (!Number.isInteger(maxRepairs) || maxRepairs < 0) throw new Error("maxRepairs must be a non-negative integer");
+  const dryRun = input.dryRun ?? true;
+  const plan = worktreePlan(input, idempotencyKey);
+  const evidenceDir = input.evidenceDir ?? join(input.projectPath, ".openloops", "routing-remediation");
+  const undoDir = input.undoDir ?? evidenceDir;
+  const doctorOutputPath = join(evidenceDir, `routing-doctor-${runId}.json`);
+  const preflightOutputPath = join(evidenceDir, `routing-remediation-preflight-${runId}.json`);
+  const applyOutputPath = join(evidenceDir, `routing-remediation-apply-${runId}.json`);
+  const recheckOutputPath = join(evidenceDir, `routing-remediation-recheck-${runId}.json`);
+  const blockerReportPath = join(evidenceDir, `routing-remediation-blockers-${runId}.json`);
+  const alertChannel = input.alertChannel?.trim() || ROUTING_REMEDIATION_ALERT_CHANNEL;
+  const undoRecordPath = join(undoDir, `routing-remediation-${runId}.undo.json`);
+  const applyCommand = routingRemediationDoctorCommand({
+    todosProjectPath,
+    apply: true,
+    undoRecordPath,
+    ...scope,
+  });
+  const recheckCommand = routingRemediationDoctorCommand({
+    todosProjectPath,
+    ...scope,
+  });
+  const preflightCommand = routingRemediationPreflightCommand({
+    todosProjectPath,
+    doctorJsonPath: input.doctorJsonPath,
+    doctorOutputPath,
+    preflightOutputPath,
+    maxRepairs,
+    dryRun,
+    idempotencyKey,
+    applyCommand,
+    blockerReportPath,
+    alertChannel,
+    ...scope,
+  });
+  const context = {
+    idempotencyKey,
+    projectPath: input.projectPath,
+    routeProjectPath: input.routeProjectPath,
+    projectGroup: input.projectGroup,
+    todosProjectPath,
+    doctorJsonPath: input.doctorJsonPath,
+    doctorProject: input.doctorProject,
+    tag: input.tag,
+    status,
+    shard: input.shard,
+    limit: input.limit,
+    maxRepairs,
+    dryRun,
+    evidence: {
+      doctorOutputPath,
+      preflightOutputPath,
+      applyOutputPath,
+      recheckOutputPath,
+      blockerReportPath,
+      undoRecordPath,
+    },
+    alertChannel,
+    worktree: worktreeContextFragment(plan),
+  };
+  const shared = [
+    worktreePrompt(plan),
+    "Routing remediation contract:",
+    `- Todos project path: ${todosProjectPath}`,
+    `- Idempotency key: ${idempotencyKey}`,
+    `- Dry-run/preflight mode: ${dryRun ? "true" : "false"}`,
+    `- Max safe_auto repairs for this run: ${maxRepairs}`,
+    `- Source doctor JSON: ${input.doctorJsonPath ?? "generated by routing-doctor-preflight"}`,
+    `- Normalized doctor JSON: ${doctorOutputPath}`,
+    `- Preflight JSON: ${preflightOutputPath}`,
+    `- Apply JSON target: ${applyOutputPath}`,
+    `- Recheck JSON target: ${recheckOutputPath}`,
+    `- Blocker findings report (evidence, NOT tasks): ${blockerReportPath}`,
+    `- Blocker alert conversations channel: ${alertChannel}`,
+    `- Undo record target: ${undoRecordPath}`,
+    "Never edit the Todos SQLite database, raw DB files, or task JSON storage directly. Do not use sqlite3, ad hoc SQL, or filesystem mutations as a repair mechanism.",
+    "Only supported Todos CLI/API commands may mutate tasks. Safe repairs are limited to doctor findings classified safe_auto whose suggested_repair.field is working_dir or task_list_id.",
+    "Refuse blocker_human, blocker_cross_repo, blocker_invalid_path, unsupported, legal, and other human-judgement findings as mutations. Report them as evidence; never mutate them.",
+    ROUTING_HEALTH_ALERTS_ARE_NOT_TASKS_FRAGMENT(alertChannel, blockerReportPath),
+    NO_TMUX_DISPATCH_FRAGMENT,
+    "",
+    `Routing remediation context JSON: ${compactJson(context)}`,
+  ].join("\n");
+  const workerPrompt = [
+    ...boundedStepHeaderFragment("Apply bounded routing-doctor remediation from preflight evidence.", "worker", "bounded"),
+    shared,
+    "Read the preflight JSON before making any mutation. If preflight apply_allowed is false, do not run the apply command.",
+    dryRun
+      ? "This workflow was rendered with dryRun=true. Do not run the apply command; produce only a dry-run summary and blocker-task preview/update evidence."
+      : `If preflight permits apply, run the supported repair command and capture stdout JSON to ${applyOutputPath}: ${applyCommand}`,
+    `After any apply run, recheck route state and capture stdout JSON to ${recheckOutputPath}: ${recheckCommand}`,
+    "For every modified task, ensure a task comment records old value, new value, repair command, source doctor run, undo record, and route-state recheck result. If the Todos CLI already wrote a complete per-task repair comment, verify it; otherwise add the missing evidence with todos comment.",
+    `Every blocker_human, blocker_cross_repo, blocker_invalid_path, unsupported, or legal finding is already recorded in the blocker report at ${blockerReportPath} by the preflight step. Verify it is complete; do not re-file any of it anywhere else.`,
+    [
+      "Aggregate alert command shape — exactly ONE post per run, never one per finding:",
+      `conversations send ${alertChannel} "routing-health ${idempotencyKey}: <N> blocker findings (<category>=<count>, ...). Evidence: ${blockerReportPath}"`,
+      "Skip the post entirely when the run produced zero blocker findings — silence is the correct output for a clean run.",
+    ].join("\n"),
+    "Do not change cross-repo task intent. A cross-repo finding can only be changed when the doctor itself classifies the exact field repair as safe_auto and the supported Todos repair command applies it.",
+    "Record compact workflow evidence: changed tasks, blocker report path, apply/recheck artifact paths, undo record path, validation results, and residual risks.",
+  ].join("\n");
+  const verifierPrompt = [
+    ...boundedStepHeaderFragment("Verify bounded routing-doctor remediation evidence.", "verifier", "bounded"),
+    shared,
+    adversarialReviewFragment("the preflight artifact, apply output, undo record, blocker report, per-task comments, and route-state recheck", TASK_REVIEW_FOCUS),
+    verifierRuntimeGuidance(input),
+    `Re-run or inspect the route-state recheck command as needed: ${recheckCommand}`,
+    `Confirm safe_auto repairs were limited to working_dir and task_list_id, raw DB edits were not used, cross-repo/human/legal/unsupported findings landed in ${blockerReportPath} and at most one aggregate post on ${alertChannel}, and every changed task has old/new/command/source/recheck evidence.`,
+    "Fail verification if this run created ANY todos task for a routing finding. Routine operational alerts are not tasks (owner directive 2026-07-30); one task per finding is the exact defect this workflow was changed to remove.",
+    "If dry-run mode was rendered, verify that no apply/repair mutation occurred and that the output is clearly preflight-only.",
+    "If invalid, record precise blocker evidence and create follow-up tasks rather than broad fixes.",
+    VERIFIER_TINY_FIXES_FRAGMENT,
+  ].join("\n");
+
+  return {
+    name: `routing-remediation-${runId}`,
+    description: `Routing doctor remediation workflow; dryRun=${dryRun}; maxRepairs=${maxRepairs}; idempotency=${idempotencyKey}`,
+    version: 1,
+    steps: [
+      commandStep({
+        id: "routing-doctor-preflight",
+        name: "Routing Doctor Preflight",
+        description: "Run or consume routing doctor JSON, enforce safe-field and repair-capacity gates, and write bounded evidence.",
+        command: preflightCommand,
+        cwd: input.projectPath,
+        timeoutMs: 5 * 60_000,
+        idleTimeoutMs: 60_000,
+        blockedExitCodes: GATE_BLOCKED_EXIT_CODES,
+      }),
+      ...workerVerifierSteps({
+        input,
+        seed: idempotencyKey,
+        plan,
+        workerPrompt,
+        verifierPrompt,
+        workerDescription: "Apply only supported Todos CLI safe_auto repairs and report blocker findings as evidence; never as tasks.",
+        verifierDescription: "Adversarially verify routing remediation evidence and safety boundaries.",
+        workerDependsOn: ["routing-doctor-preflight"],
+      }),
+    ],
   };
 }
 
@@ -910,6 +1194,7 @@ export function renderEventWorkerVerifierWorkflow(input: EventWorkflowTemplateIn
     projectPath: input.projectPath,
     routeProjectPath: input.routeProjectPath,
     projectGroup: input.projectGroup,
+    routeAdmission: routeAdmissionContext(input),
     worktree: worktreeContextFragment(plan),
   };
   const eventContextLines = [
@@ -1025,12 +1310,34 @@ function accountPoolVar(value: string | undefined, tool?: string): AccountRef[] 
   return listVar(value)?.map((profile) => ({ profile, tool }));
 }
 
+function positiveTemplateInteger(raw: string | undefined, label: string): number | undefined {
+  if (raw === undefined || raw.trim() === "") return undefined;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value <= 0) throw new Error(`${label} must be a positive integer`);
+  return value;
+}
+
+function nonNegativeTemplateInteger(raw: string | undefined, label: string): number | undefined {
+  if (raw === undefined || raw.trim() === "") return undefined;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 0) throw new Error(`${label} must be a non-negative integer`);
+  return value;
+}
+
 /** Variable mapping shared by every agent-backed builtin template. */
 function agentTemplateInput(values: Record<string, string | undefined>): AgentWorkflowTemplateBaseInput {
   return {
     projectPath: values.projectPath ?? values.cwd ?? process.cwd(),
     routeProjectPath: values.routeProjectPath,
     projectGroup: values.projectGroup,
+    routeScope: values.routeScope,
+    routeThrottleLimits: {
+      maxActive: positiveTemplateInteger(values.maxActive, "maxActive"),
+      maxActiveScope: values.maxActiveScope?.trim() || undefined,
+      maxActivePerProject: positiveTemplateInteger(values.maxActivePerProject, "maxActivePerProject"),
+      maxActivePerProjectGroup: positiveTemplateInteger(values.maxActivePerProjectGroup, "maxActivePerProjectGroup"),
+      maxPerProfile: nonNegativeTemplateInteger(values.maxPerProfile, "maxPerProfile"),
+    },
     provider: values.provider as AgentProvider | undefined,
     authProfile: values.authProfile,
     authProfilePool: listVar(values.authProfilePool),
@@ -1042,8 +1349,11 @@ function agentTemplateInput(values: Record<string, string | undefined>): AgentWo
     variant: values.variant,
     agent: values.agent,
     addDirs: listVar(values.addDirs ?? values.addDir),
+    allowTools: listVar(values.allowTools ?? values.allowTool),
+    allowCommands: listVar(values.allowCommands ?? values.allowCommand),
     permissionMode: values.permissionMode as AgentPermissionMode | undefined,
     sandbox: values.sandbox as AgentSandbox | undefined,
+    safetyReason: values.safetyReason,
     manualBreakGlass: booleanVar(values.manualBreakGlass),
     worktreeMode: values.worktreeMode as AgentWorktreeMode | undefined,
     worktreeRoot: values.worktreeRoot,
@@ -1178,9 +1488,33 @@ function renderDeterministicCheckCreateTaskWorkflow(values: Record<string, strin
   };
 }
 
+function renderRoutingRemediationTemplate(values: Record<string, string | undefined>): CreateWorkflowInput {
+  const base = agentTemplateInput(values);
+  return renderRoutingRemediationWorkflow({
+    ...base,
+    todosProjectPath: values.todosProjectPath ?? values.todosProject,
+    doctorJsonPath: values.doctorJsonPath,
+    doctorProject: values.doctorProject,
+    tag: values.tag,
+    status: values.status,
+    shard: values.shard,
+    limit: values.limit,
+    maxRepairs: parseNonNegativeIntegerVar(values.maxRepairs, 25, "maxRepairs"),
+    dryRun: booleanVar(values.dryRun) ?? true,
+    idempotencyKey: values.idempotencyKey,
+    evidenceDir: values.evidenceDir,
+    undoDir: values.undoDir,
+    alertChannel: values.alertChannel,
+    worktreeMode: base.worktreeMode ?? "required",
+  });
+}
+
 function renderBuiltinLoopTemplate(id: string, values: Record<string, string | undefined>): CreateWorkflowInput {
   if (id === DETERMINISTIC_CHECK_CREATE_TASK_TEMPLATE_ID) {
     return renderDeterministicCheckCreateTaskWorkflow(values);
+  }
+  if (id === ROUTING_REMEDIATION_TEMPLATE_ID) {
+    return renderRoutingRemediationTemplate(values);
   }
   const lifecycle = renderLifecycleBoundedTemplate(id, values);
   if (lifecycle) return lifecycle;

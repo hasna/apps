@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { assignPoolAuthProfiles, poolRoleOffset, selectLeastLoadedProfile, stableIndex } from "./profile-pool.js";
+import { assignPoolAuthProfiles, poolRoleOffset, selectLeastLoadedProfile, selectVerifierAccount, stableIndex } from "./profile-pool.js";
 
 const POOL = ["acctA", "acctB", "acctC"];
 
@@ -125,5 +125,28 @@ describe("assignPoolAuthProfiles — edge cases", () => {
     const res = assignPoolAuthProfiles({ pool: ["only"], seed: "s", loadCounts: {}, roles: ["worker", "verifier"] });
     expect(res.profiles.worker).toBe("only");
     expect(res.profiles.verifier).toBe("only");
+  });
+});
+
+describe("selectVerifierAccount", () => {
+  const accounts = [
+    { profile: "acctA", tool: "codewith" },
+    { profile: "acctB", tool: "codewith" },
+    { profile: "acctC", tool: "codewith" },
+  ];
+
+  test("chooses the least-loaded eligible verifier account", () => {
+    expect(selectVerifierAccount(accounts, { acctA: 0, acctB: 4, acctC: 1 }, accounts[0])).toEqual(accounts[2]);
+  });
+
+  test("never chooses the worker account", () => {
+    expect(selectVerifierAccount(accounts, { acctA: 0, acctB: 5, acctC: 6 }, accounts[0])).toEqual(accounts[1]);
+    expect(selectVerifierAccount([accounts[0]!], { acctA: 0 }, accounts[0])).toBeUndefined();
+  });
+
+  test("breaks equal-load ties by pool order", () => {
+    const loads = { acctA: 2, acctB: 1, acctC: 1 };
+    expect(selectVerifierAccount(accounts, loads, accounts[0])).toEqual(accounts[1]);
+    expect(selectVerifierAccount(accounts, loads, accounts[0])).toEqual(accounts[1]);
   });
 });

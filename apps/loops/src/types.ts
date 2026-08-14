@@ -23,6 +23,13 @@ export type RunStatus =
   | "abandoned"
   | "skipped";
 
+export interface RecoveredLeaseRunSnapshotEntry {
+  updatedAt: string;
+  scheduledFor: string;
+  id: string;
+  attempt: number;
+}
+
 export type CatchUpPolicy = "none" | "latest" | "all";
 
 export type OverlapPolicy = "skip" | "allow";
@@ -121,10 +128,14 @@ export type AgentPermissionMode = "default" | "plan" | "auto" | "bypass";
 
 export type AgentSandbox = "read-only" | "workspace-write" | "danger-full-access" | "enabled" | "disabled";
 
+export type AgentAllowlistEnforcement = "metadata_only";
+
 export interface AgentAllowlistSpec {
+  /** Advisory provider metadata. Restrictions require this non-empty audit reason. */
   tools?: string[];
   commands?: string[];
-  enforcement?: "metadata_only";
+  enforcement?: AgentAllowlistEnforcement;
+  safetyReason?: string;
 }
 
 export type AgentWorktreeMode = "auto" | "required" | "off" | "main";
@@ -153,6 +164,26 @@ export interface AgentRoutingSpec {
   role?: "triage" | "planner" | "worker" | "verifier";
 }
 
+/** Server-derived audit contract for an agent step inside a workflow run. */
+export interface AgentSessionContract {
+  version: 1;
+  provider: AgentProvider;
+  model?: string;
+  cwd?: string;
+  permissionMode: AgentPermissionMode;
+  sandbox: AgentSandbox | "provider-default";
+  manualBreakGlass: boolean;
+  routing?: AgentRoutingSpec;
+  timeoutMs: TimeoutMs;
+  restrictions: {
+    tools?: string[];
+    commands?: string[];
+    enforcement: AgentAllowlistEnforcement;
+    providerEnforced: false;
+  };
+  safetyReason?: string;
+}
+
 export interface AgentPromptSource {
   type: "file";
   path: string;
@@ -166,6 +197,13 @@ export interface AgentTargetBase {
   variant?: string;
   agent?: string;
   authProfile?: string;
+  /** Environment variables merged into the run's process environment, same as CommandTarget.env. */
+  env?: Record<string, string>;
+  /**
+   * Provider CLI passthrough arguments. Fail-closed: omitted or empty is valid,
+   * while every non-empty or malformed entry is rejected until that exact
+   * provider option is explicitly reviewed and allowlisted by the adapter.
+   */
   extraArgs?: string[];
   addDirs?: string[];
   timeoutMs?: TimeoutMs;
@@ -173,6 +211,8 @@ export interface AgentTargetBase {
   configIsolation?: AgentConfigIsolation;
   permissionMode?: AgentPermissionMode;
   sandbox?: AgentSandbox;
+  /** Explicit operator acknowledgement required with a non-empty safetyReason for relaxed sandbox or provider bypass modes. */
+  manualBreakGlass?: boolean;
   allowlist?: AgentAllowlistSpec;
   worktree?: AgentWorktreeSpec;
   routing?: AgentRoutingSpec;
@@ -226,6 +266,7 @@ export interface WorkflowInvocationRef {
 
 export interface WorkflowInvocationScope {
   projectPath?: string;
+  todosProjectPath?: string;
   projectGroup?: string;
   worktreePolicy?: AgentWorktreeMode;
   permissions?: string;
@@ -284,6 +325,8 @@ export interface WorkflowWorkItem {
   subjectRef: string;
   projectKey?: string;
   projectGroup?: string;
+  /** Machine that reserved/admitted this route work item, when known. */
+  machineId?: string;
   /**
    * The drain/route identity (loop name) that admitted this item. Used to scope
    * the `--max-active` global admission count to a single route instead of the
@@ -293,6 +336,16 @@ export interface WorkflowWorkItem {
   priority: number;
   status: WorkflowWorkItemStatus;
   attempts: number;
+  /**
+   * Consecutive non-productive "gate death" finishes (runs that failed at
+   * worktree prep or a fast triage/planner gate before any real work). Gate
+   * deaths refund their redispatch attempt, so this second counter bounds a
+   * deterministic infrastructure fault: at the ceiling the item is
+   * dead-lettered instead of retrying forever. Reset by a run that reaches
+   * the worker (success, productive failure, or tempfail) and by an
+   * operator requeue with attempts reset.
+   */
+  gateDeaths: number;
   nextAttemptAt?: string;
   leaseExpiresAt?: string;
   workflowId?: string;
@@ -304,6 +357,7 @@ export interface WorkflowWorkItem {
 }
 
 export interface UpsertWorkflowWorkItemInput {
+  id?: string;
   routeKey: string;
   idempotencyKey: string;
   invocationId: string;
@@ -312,6 +366,7 @@ export interface UpsertWorkflowWorkItemInput {
   subjectRef: string;
   projectKey?: string;
   projectGroup?: string;
+  machineId?: string;
   routeScope?: string;
   priority?: number;
   status?: Extract<WorkflowWorkItemStatus, "queued" | "deferred">;
@@ -408,6 +463,11 @@ export interface WorkflowStepRun {
   finishedAt?: string;
   exitCode?: number;
   pid?: number;
+  /**
+   * Start time of {@link pid}, recorded at spawn (migration 0014). Pairs with
+   * the pid to survive pid recycling; absent on rows written before 0014.
+   */
+  processStartedAt?: string;
   durationMs?: number;
   stdout?: string;
   stderr?: string;
@@ -419,20 +479,69 @@ export interface WorkflowStepRun {
   updatedAt: string;
 }
 
-export interface WorkflowEvent {
+export type WorkflowLifecycleEventType =
+  | "created"
+  | "workflow_archived"
+  | "todos_workflow_pointers_synced"
+  | "todos_workflow_pointers_sync_failed"
+  | "step_started"
+  | "step_progress"
+  | "recovered"
+  | "step_pending"
+  | "step_running"
+  | "step_succeeded"
+  | "step_failed"
+  | "step_timed_out"
+  | "step_skipped"
+  | "step_cancelled"
+  | "succeeded"
+  | "failed"
+  | "timed_out"
+  | "cancelled";
+
+export interface WorkflowEventBase {
   id: string;
   workflowRunId: string;
   sequence: number;
-  eventType: string;
   stepId?: string;
   payload?: Record<string, unknown>;
   createdAt: string;
 }
 
+/** Raw persisted event shape used inside storage adapters before public validation. */
+export interface StoredWorkflowEvent extends WorkflowEventBase {
+  eventType: string;
+}
+
+export interface GenericWorkflowEvent extends WorkflowEventBase {
+  eventType: WorkflowLifecycleEventType;
+}
+
+export interface AgentSessionContractWorkflowEvent extends Omit<WorkflowEventBase, "stepId" | "payload"> {
+  eventType: "agent_session_contract";
+  stepId: string;
+  payload: AgentSessionContract;
+}
+
+/**
+ * Backwards-compatible public shape for historical or mixed-version custom
+ * events. `eventKind` makes the generic branch unambiguous without weakening
+ * the schemas of server-owned lifecycle and agent-session-contract events.
+ */
+export interface CustomWorkflowEvent extends WorkflowEventBase {
+  eventKind: "custom";
+  eventType: string;
+}
+
+export type WorkflowEvent = AgentSessionContractWorkflowEvent | GenericWorkflowEvent;
+export type PublicWorkflowEvent = WorkflowEvent | CustomWorkflowEvent;
+
 export interface Loop {
   id: string;
   name: string;
   description?: string;
+  /** Persisted loop labels. Legacy in-memory fixtures may omit this; stores normalize it to an empty array. */
+  labels?: string[];
   status: LoopStatus;
   archivedAt?: string;
   archivedFromStatus?: LoopStatus;
@@ -449,6 +558,9 @@ export interface Loop {
   retryDelayMs: number;
   leaseMs: number;
   expiresAt?: string;
+  latestRunId?: string;
+  latestRunStatus?: RunStatus;
+  lastRunAt?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -477,9 +589,60 @@ export interface LoopRun {
   updatedAt: string;
 }
 
+export type RunReceiptMachine = string | Record<string, unknown>;
+
+export interface RunReceiptSummary {
+  text?: string;
+  stdout_bytes: number;
+  stderr_bytes: number;
+  stdout_excerpt?: string;
+  stderr_excerpt?: string;
+  error?: string;
+  duration_ms?: number;
+}
+
+export interface RunReceipt {
+  loop_id: string;
+  run_id: string;
+  machine: RunReceiptMachine;
+  repo: string;
+  task_ids: string[];
+  knowledge_ids: string[];
+  digest_id: string;
+  started_at: string | null;
+  finished_at: string | null;
+  status: string;
+  exit_code: number | null;
+  summary: RunReceiptSummary;
+  evidence_paths: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WriteRunReceiptInput {
+  loop_id?: string;
+  run_id: string;
+  machine?: RunReceiptMachine;
+  repo?: string;
+  task_ids?: string[];
+  knowledge_ids?: string[];
+  digest_id?: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+  status?: string;
+  exit_code?: number | null;
+  summary?: string | Partial<RunReceiptSummary> | null;
+  evidence_paths?: string[];
+  stdout?: string;
+  stderr?: string;
+  error?: string;
+  duration_ms?: number;
+}
+
 export interface CreateLoopInput {
   name: string;
   description?: string;
+  labels?: string[];
   schedule: ScheduleSpec;
   target: LoopTargetInput;
   goal?: GoalSpec;

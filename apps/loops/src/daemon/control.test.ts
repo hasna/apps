@@ -266,7 +266,7 @@ describe("daemon control", () => {
       });
       const claim = store.claimRun(loop, new Date().toISOString(), daemonRunner);
       expect(claim).toBeDefined();
-      store.markRunPid(claim!.run.id, orphan.pid, daemonRunner);
+      store.markRunPid(claim!.run.id, orphan.pid, daemonRunner, { claimToken: claim!.claimToken });
       store.close();
 
       const result = await stopDaemon({ path, timeoutMs: 300, reapGraceMs: 200 });
@@ -302,7 +302,7 @@ describe("daemon control", () => {
       });
       const orphanClaim = store.claimRun(orphanLoop, new Date().toISOString(), daemonRunner);
       expect(orphanClaim).toBeDefined();
-      store.markRunPid(orphanClaim!.run.id, orphan.pid, daemonRunner);
+      store.markRunPid(orphanClaim!.run.id, orphan.pid, daemonRunner, { claimToken: orphanClaim!.claimToken });
       await Bun.sleep(10);
       for (let i = 0; i < 110; i++) {
         const filler = store.createLoop({
@@ -343,7 +343,7 @@ describe("daemon control", () => {
       });
       const daemonClaim = store.claimRun(daemonLoop, new Date().toISOString(), daemonRunner);
       expect(daemonClaim).toBeDefined();
-      store.markRunPid(daemonClaim!.run.id, daemonChild.pid, daemonRunner);
+      store.markRunPid(daemonClaim!.run.id, daemonChild.pid, daemonRunner, { claimToken: daemonClaim!.claimToken });
       // Inline `loops run-now` in another terminal: healthy child, live owner, valid lease.
       const manualRunner = `manual:${process.pid}`;
       const manualLoop = store.createLoop({
@@ -353,8 +353,8 @@ describe("daemon control", () => {
       });
       const manualClaim = store.claimRun(manualLoop, new Date().toISOString(), manualRunner);
       expect(manualClaim).toBeDefined();
-      store.markRunPid(manualClaim!.run.id, manualChild.pid, manualRunner);
-      store.heartbeatRunLease(manualClaim!.run.id, manualRunner, 60_000);
+      store.markRunPid(manualClaim!.run.id, manualChild.pid, manualRunner, { claimToken: manualClaim!.claimToken });
+      store.heartbeatRunLease(manualClaim!.run.id, manualRunner, 60_000, new Date(), { claimToken: manualClaim!.claimToken });
       store.close();
 
       const result = await stopDaemon({ path, timeoutMs: 300, reapGraceMs: 200 });

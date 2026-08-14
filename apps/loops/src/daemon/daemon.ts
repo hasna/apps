@@ -4,6 +4,7 @@ import { spawn } from "node:child_process";
 import { genId } from "../lib/ids.js";
 import { daemonLogPath, ensureDataDir, pidFilePath } from "../lib/paths.js";
 import { advanceLoop, claimDueRuns, executeClaimedRun, inlineRunnerOwnerPid, loopLane, type ClaimedLoopRun, type SchedulerLane } from "../lib/scheduler.js";
+import { RESTART_INTERRUPTED_RUN_PREFIX } from "../lib/health.js";
 import { executeLoopTarget } from "../lib/workflow-runner.js";
 import { Store } from "../lib/store.js";
 import {
@@ -87,6 +88,16 @@ export function daemonLogLine(message: string): string {
   return `[${new Date().toISOString()}] [loops-daemon] ${message}`;
 }
 
+// Matches CSI SGR color/style sequences (e.g. ESC[31m, ESC[0m). Older daemon
+// builds logged through `console.error`, which Bun wraps in red SGR codes under
+// a TTY/FORCE_COLOR, so historical log files hold color-polluted lines that the
+// `daemon logs` reader must strip before emitting.
+const ANSI_SGR = /\x1b\[[0-9;]*m/g;
+
+export function stripAnsi(text: string): string {
+  return text.replace(ANSI_SGR, "");
+}
+
 export function rotateDaemonLog(
   path: string = daemonLogPath(),
   maxBytes: number = DAEMON_LOG_MAX_BYTES,
@@ -115,7 +126,11 @@ export function rotateDaemonLog(
 
 function defaultDaemonLog(message: string): void {
   rotateDaemonLog();
-  console.error(daemonLogLine(message));
+  // Write directly to stderr rather than `console.error`: Bun wraps
+  // `console.error` output in red SGR codes under a TTY/FORCE_COLOR, which
+  // mis-colored every daemon log line (including non-error "succeeded"/"stopped"
+  // lines) red in the persisted log file.
+  process.stderr.write(`${daemonLogLine(message)}\n`);
 }
 
 export async function runDaemon(opts: RunDaemonOptions = {}): Promise<void> {
@@ -155,6 +170,8 @@ export async function runDaemon(opts: RunDaemonOptions = {}): Promise<void> {
   let runAbort = new AbortController();
   const activeRuns = new Map<string, Promise<void>>();
   const activeByLane: Record<SchedulerLane, number> = { command: 0, agent: 0 };
+  const isControlledStopInterruption = (result: ExecutorResult): boolean =>
+    stopFlag && !leaseLost && result.status === "failed" && result.error?.includes("terminated by SIGTERM") === true;
   const requestStop = (message?: string): void => {
     stopFlag = true;
     if (!runAbort.signal.aborted) runAbort.abort();
@@ -222,6 +239,7 @@ export async function runDaemon(opts: RunDaemonOptions = {}): Promise<void> {
     const finalRun = await executeClaimedRun({
       store,
       runnerId,
+      claimToken: claim.claimToken,
       loop: claim.loop,
       run: claim.run,
       daemonLeaseId: leaseId,
@@ -233,12 +251,27 @@ export async function runDaemon(opts: RunDaemonOptions = {}): Promise<void> {
           daemonLeaseId: leaseId,
           onSpawn: (pid) => {
             ensureLease();
-            store.markRunPid(run.id, pid, runnerId, { daemonLeaseId: leaseId });
+            store.markRunPid(run.id, pid, runnerId, {
+              daemonLeaseId: leaseId,
+              claimToken: claim.claimToken,
+            });
           },
           onSpawnProcess: (info) => {
-            store.recordRunProcess(run.id, info, { daemonLeaseId: leaseId });
+            store.recordRunProcess(run.id, info, {
+              daemonLeaseId: leaseId,
+              claimToken: claim.claimToken,
+            });
           },
         })),
+      finalizeResult: (result) => {
+        if (!isControlledStopInterruption(result)) return result;
+        return {
+          ...result,
+          status: "skipped",
+          exitCode: undefined,
+          error: `${RESTART_INTERRUPTED_RUN_PREFIX}: child process terminated by SIGTERM during daemon stop/restart`,
+        };
+      },
       onError: (loop, err) => log(`loop ${loop.id} failed: ${err instanceof Error ? err.message : String(err)}`),
     });
     ensureLease();
@@ -247,7 +280,7 @@ export async function runDaemon(opts: RunDaemonOptions = {}): Promise<void> {
       store,
       claim.loop,
       finalRun,
-      new Date(finalRun.finishedAt ?? new Date()),
+      new Date(finalRun.updatedAt),
       finalRun.status === "succeeded",
       { daemonLeaseId: leaseId },
     );

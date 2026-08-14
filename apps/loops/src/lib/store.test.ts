@@ -1,10 +1,20 @@
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AmbiguousNameError, LoopArchivedError, LoopNotFoundError } from "./errors.js";
+import {
+  AmbiguousNameError,
+  DuplicateWorkflowEventError,
+  LegacyWorkflowRunProvenanceError,
+  LoopArchivedError,
+  LoopNotFoundError,
+  RunFinalizationConflictError,
+  ValidationError,
+  WorkflowRunDefinitionConflictError,
+} from "./errors.js";
 import { Store } from "./store.js";
+import { workflowDefinitionHash } from "./workflow-provenance.js";
 
 // Credential fixtures assembled at runtime so the literal token shapes never
 // appear contiguously in source (avoids tripping source secret scanners such as
@@ -19,6 +29,225 @@ const OPENAI_KEY = j("sk-", "proj-AbCd1234EfGh5678IjKl9012");
 const DEAD_PID = 0x3fffffff;
 
 describe("Store", () => {
+  test("persists normalized loop labels and applies AND filters to loops and current-label runs", () => {
+    const store = new Store(":memory:");
+    try {
+      const browser = store.createLoop(
+        {
+          name: "browser-loop",
+          labels: ["BrowserPlan", "nightly", "nightly"],
+          schedule: { type: "once", at: "2026-08-01T00:00:00Z" },
+          target: { type: "command", command: "true" },
+        },
+        new Date("2026-07-31T00:00:00Z"),
+      );
+      const maintenance = store.createLoop(
+        {
+          name: "maintenance-loop",
+          labels: ["maintenance"],
+          schedule: { type: "once", at: "2026-08-01T00:01:00Z" },
+          target: { type: "command", command: "true" },
+        },
+        new Date("2026-07-31T00:00:00Z"),
+      );
+      store.claimRun(browser, "2026-08-01T00:00:00.000Z", "test");
+      store.claimRun(maintenance, "2026-08-01T00:01:00.000Z", "test");
+
+      expect(store.getLoop(browser.id)?.labels).toEqual(["browserplan", "nightly"]);
+      expect(store.listLoops({ labels: ["browserplan", "nightly"] }).map((loop) => loop.name)).toEqual(["browser-loop"]);
+      expect(store.listLoops({ labels: ["browserplan", "missing"] })).toEqual([]);
+      expect(store.listRuns({ labels: ["browserplan"] }).map((run) => run.loopName)).toEqual(["browser-loop"]);
+
+      store.updateLoop(browser.id, { labels: ["maintenance"] });
+      expect(store.listRuns({ labels: ["browserplan"] })).toEqual([]);
+      expect(store.listRuns({ labels: ["maintenance"] }).map((run) => run.loopName).sort()).toEqual([
+        "browser-loop",
+        "maintenance-loop",
+      ]);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("updateLoop changes maxAttempts in place, keeping the loop's id, schedule and run history", () => {
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop(
+        {
+          name: "retry-budget",
+          schedule: { type: "once", at: "2027-01-01T00:00:00Z" },
+          target: { type: "command", command: "true" },
+        },
+        new Date("2026-01-01T00:00:00Z"),
+      );
+      // The default is 1: one transient failure retires the loop with no retry.
+      expect(loop.maxAttempts).toBe(1);
+      store.claimRun(loop, "2027-01-01T00:00:00.000Z", "test");
+      const runsBefore = store.listRuns({ loopId: loop.id }).length;
+      expect(runsBefore).toBe(1);
+
+      const updated = store.updateLoop(loop.id, { maxAttempts: 3 });
+
+      expect(updated.maxAttempts).toBe(3);
+      expect(store.getLoop(loop.id)?.maxAttempts).toBe(3);
+      // In place: nothing that a delete-and-recreate would have destroyed moved.
+      expect(updated.id).toBe(loop.id);
+      expect(updated.name).toBe(loop.name);
+      expect(updated.schedule).toEqual(loop.schedule);
+      expect(updated.nextRunAt).toBe(loop.nextRunAt);
+      expect(updated.createdAt).toBe(loop.createdAt);
+      expect(store.listRuns({ loopId: loop.id }).length).toBe(runsBefore);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("updateLoop leaves maxAttempts untouched when the patch omits it", () => {
+    // Regression: updateLoop writes max_attempts unconditionally from the merged
+    // row, so an omitted key must fall through to the current value rather than
+    // resetting the retry budget. This is the same class of bug that once wiped
+    // omitted schedule fields on the /v1 PATCH path.
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop(
+        {
+          name: "retry-budget-preserved",
+          maxAttempts: 5,
+          schedule: { type: "once", at: "2027-01-01T00:00:00Z" },
+          target: { type: "command", command: "true" },
+        },
+        new Date("2026-01-01T00:00:00Z"),
+      );
+      expect(loop.maxAttempts).toBe(5);
+
+      store.updateLoop(loop.id, { labels: ["unrelated"] });
+      expect(store.getLoop(loop.id)?.maxAttempts).toBe(5);
+
+      store.updateLoop(loop.id, { status: "paused" });
+      expect(store.getLoop(loop.id)?.maxAttempts).toBe(5);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("updateLoop rejects a maxAttempts that is not an integer >= 1, atomically", () => {
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop(
+        {
+          name: "retry-budget-invalid",
+          maxAttempts: 4,
+          schedule: { type: "once", at: "2027-01-01T00:00:00Z" },
+          target: { type: "command", command: "true" },
+        },
+        new Date("2026-01-01T00:00:00Z"),
+      );
+      const before = store.getLoop(loop.id);
+      // 0 and negatives would make `attempt < maxAttempts` false forever, so a
+      // run could never be admitted or retried.
+      for (const maxAttempts of [0, -1, 1.5, "2", null, {}, Number.NaN]) {
+        expect(() =>
+          store.updateLoop(loop.id, {
+            maxAttempts,
+            labels: ["mutated"],
+          } as unknown as Parameters<Store["updateLoop"]>[1])
+        ).toThrow(ValidationError);
+        expect(store.getLoop(loop.id)).toEqual(before);
+      }
+
+      expect(store.updateLoop(loop.id, { maxAttempts: 1 }).maxAttempts).toBe(1);
+      expect(store.updateLoop(loop.id, { maxAttempts: 10 }).maxAttempts).toBe(10);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("updateLoop rejects erased invalid statuses atomically and accepts every canonical status", () => {
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop(
+        {
+          name: "status-boundary",
+          labels: ["original"],
+          schedule: { type: "once", at: "2027-01-01T00:00:00Z" },
+          target: { type: "command", command: "true" },
+        },
+        new Date("2026-01-01T00:00:00Z"),
+      );
+      const before = store.getLoop(loop.id);
+      for (const status of ["poisoned", null, 7, {}, ""]) {
+        expect(() =>
+          store.updateLoop(loop.id, {
+            status,
+            labels: ["mutated"],
+            nextRunAt: "2099-01-01T00:00:00.000Z",
+          } as unknown as Parameters<Store["updateLoop"]>[1])
+        ).toThrow(ValidationError);
+        expect(store.getLoop(loop.id)).toEqual(before);
+      }
+
+      for (const status of ["active", "paused", "stopped", "expired"] as const) {
+        expect(store.updateLoop(loop.id, { status }).status).toBe(status);
+      }
+    } finally {
+      store.close();
+    }
+  });
+
+  test("migrates unlabeled SQLite loops to empty labels without raising the compatibility floor", () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-label-migration-"));
+    const dbFile = join(root, "loops.db");
+    const old = new Database(dbFile);
+    try {
+      old.exec(`
+        CREATE TABLE loops (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          description TEXT,
+          status TEXT NOT NULL,
+          schedule_json TEXT NOT NULL,
+          target_json TEXT NOT NULL,
+          goal_json TEXT,
+          machine_json TEXT,
+          next_run_at TEXT,
+          retry_scheduled_for TEXT,
+          catch_up TEXT NOT NULL,
+          catch_up_limit INTEGER NOT NULL,
+          overlap TEXT NOT NULL,
+          max_attempts INTEGER NOT NULL,
+          retry_delay_ms INTEGER NOT NULL,
+          lease_ms INTEGER NOT NULL,
+          expires_at TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        INSERT INTO loops (
+          id, name, description, status, schedule_json, target_json, goal_json, machine_json, next_run_at,
+          retry_scheduled_for, catch_up, catch_up_limit, overlap, max_attempts, retry_delay_ms, lease_ms,
+          expires_at, created_at, updated_at
+        ) VALUES (
+          'old-loop', 'old-loop', NULL, 'active', '{"type":"once","at":"2026-08-01T00:00:00Z"}',
+          '{"type":"command","command":"true"}', NULL, NULL, '2026-08-01T00:00:00.000Z',
+          NULL, 'latest', 50, 'skip', 1, 60000, 1800000, NULL,
+          '2026-07-20T00:00:00.000Z', '2026-07-20T00:00:00.000Z'
+        );
+        PRAGMA user_version = 8;
+      `);
+    } finally {
+      old.close();
+    }
+
+    const store = new Store(dbFile);
+    try {
+      expect(store.requireLoop("old-loop").labels).toEqual([]);
+      expect(store.listLoops({ labels: ["missing"] })).toEqual([]);
+      const version = store["db"].query("PRAGMA user_version").get() as { user_version: number };
+      expect(version.user_version).toBe(8);
+    } finally {
+      store.close();
+    }
+  });
+
   test("hardens existing store directory and sqlite files to owner-only permissions", () => {
     const root = mkdtempSync(join(tmpdir(), "loops-store-permissions-"));
     const dbFile = join(root, "loops.db");
@@ -64,6 +293,138 @@ describe("Store", () => {
     }
   });
 
+  test("overlap skip blocks a second running slot for the same loop", () => {
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop(
+        {
+          name: "skip-overlap-catchup",
+          schedule: { type: "interval", everyMs: 60_000 },
+          target: { type: "command", command: "true" },
+          catchUp: "latest",
+          catchUpLimit: 50,
+          overlap: "skip",
+          leaseMs: 30 * 60_000,
+        },
+        new Date("2026-06-25T11:12:00Z"),
+      );
+
+      const stale = store.claimRun(
+        loop,
+        "2026-06-25T11:12:00.000Z",
+        "runner-a",
+        new Date("2026-07-02T07:39:15.144Z"),
+      );
+      const current = store.claimRun(
+        loop,
+        "2026-07-02T07:12:00.000Z",
+        "runner-b",
+        new Date("2026-07-02T07:39:16.000Z"),
+      );
+
+      expect(stale?.run.status).toBe("running");
+      expect(current).toBeUndefined();
+      expect(store.listRuns({ loopId: loop.id, status: "running" })).toHaveLength(1);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("overlap allow still permits running different slots for the same loop", () => {
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop(
+        {
+          name: "allow-overlap-catchup",
+          schedule: { type: "interval", everyMs: 60_000 },
+          target: { type: "command", command: "true" },
+          catchUp: "all",
+          overlap: "allow",
+          leaseMs: 30 * 60_000,
+        },
+        new Date("2026-01-01T00:00:00Z"),
+      );
+
+      const first = store.claimRun(loop, "2026-01-01T00:00:00.000Z", "runner-a", new Date("2026-01-01T00:00:00Z"));
+      const second = store.claimRun(loop, "2026-01-01T00:01:00.000Z", "runner-b", new Date("2026-01-01T00:01:00Z"));
+
+      expect(first?.run.status).toBe("running");
+      expect(second?.run.status).toBe("running");
+      expect(store.listRuns({ loopId: loop.id, status: "running" })).toHaveLength(2);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("overlap skip does not block a later slot on an expired dead lease", () => {
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop(
+        {
+          name: "skip-overlap-expired-dead",
+          schedule: { type: "interval", everyMs: 60_000 },
+          target: { type: "command", command: "true" },
+          overlap: "skip",
+          leaseMs: 10,
+        },
+        new Date("2026-01-01T00:00:00Z"),
+      );
+
+      const expired = store.claimRun(loop, "2026-01-01T00:00:00.000Z", "runner-a", new Date("2026-01-01T00:00:00Z"));
+      expect(expired?.run.status).toBe("running");
+
+      const later = store.claimRun(loop, "2026-01-01T00:01:00.000Z", "runner-b", new Date("2026-01-01T00:01:00Z"));
+      expect(later?.run.status).toBe("running");
+    } finally {
+      store.close();
+    }
+  });
+
+  test("hydrates latest run summaries when listing loops without merging duplicate names", () => {
+    const store = new Store(":memory:");
+    try {
+      const paused = store.createLoop(
+        {
+          name: "duplicate-router",
+          schedule: { type: "interval", everyMs: 60_000 },
+          target: { type: "command", command: "true" },
+        },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+      store.updateLoop(paused.id, { status: "paused" });
+      const active = store.createLoop(
+        {
+          name: "duplicate-router",
+          schedule: { type: "interval", everyMs: 60_000 },
+          target: { type: "command", command: "true" },
+        },
+        new Date("2025-12-31T00:00:01Z"),
+      );
+      const claim = store.claimRun(active, "2026-01-01T00:00:00.000Z", "runner", new Date("2026-01-01T00:00:00Z"));
+      expect(claim).toBeDefined();
+      const run = store.finalizeRun(claim!.run.id, {
+        status: "succeeded",
+        finishedAt: "2026-01-01T00:00:05.000Z",
+        durationMs: 5_000,
+        stdout: "",
+        stderr: "",
+      });
+
+      const loops = store.listLoops({ includeArchived: true });
+      const activeListed = loops.find((loop) => loop.id === active.id);
+      const pausedListed = loops.find((loop) => loop.id === paused.id);
+      expect(activeListed).toMatchObject({
+        latestRunId: run.id,
+        latestRunStatus: "succeeded",
+        lastRunAt: "2026-01-01T00:00:05.000Z",
+      });
+      expect(pausedListed?.latestRunId).toBeUndefined();
+      expect(pausedListed?.name).toBe(activeListed?.name);
+    } finally {
+      store.close();
+    }
+  });
+
   test("clamps oversized run stdout/stderr but keeps small output verbatim (loops.db growth guard)", () => {
     const store = new Store(":memory:");
     try {
@@ -82,7 +443,7 @@ describe("Store", () => {
       const finishedBig = store.finalizeRun(
         bigClaim!.run.id,
         { status: "succeeded", finishedAt: "2026-01-01T00:00:01.000Z", durationMs: 1_000, stdout: huge, stderr: huge },
-        { claimedBy: "runner", now: new Date("2026-01-01T00:00:00.500Z") },
+        { claimedBy: "runner", claimToken: bigClaim!.claimToken, now: new Date("2026-01-01T00:00:00.500Z") },
       );
       const storedBig = store.getRun(finishedBig.id)!;
       expect(storedBig.stdout!.length).toBeLessThan(huge.length);
@@ -103,10 +464,167 @@ describe("Store", () => {
       const finishedSmall = store.finalizeRun(
         smallClaim!.run.id,
         { status: "succeeded", finishedAt: "2026-01-02T00:00:01.000Z", durationMs: 1_000, stdout: "all good", stderr: "" },
-        { claimedBy: "runner", now: new Date("2026-01-02T00:00:00.500Z") },
+        { claimedBy: "runner", claimToken: smallClaim!.claimToken, now: new Date("2026-01-02T00:00:00.500Z") },
       );
       const storedSmall = store.getRun(finishedSmall.id)!;
       expect(storedSmall.stdout).toBe("all good");
+    } finally {
+      store.close();
+    }
+  });
+
+  test("finalizeRun bounds runner timestamps and derives omitted duration from the server clock", () => {
+    const store = new Store(":memory:");
+    try {
+      const serverNow = new Date("2026-01-01T00:00:10.000Z");
+      const startedAt = new Date("2026-01-01T00:00:05.000Z");
+      for (const [name, requestedFinishedAt, expectedFinishedAt] of [
+        ["future", "2099-01-01T00:00:00.000Z", serverNow.toISOString()],
+        ["past", "2000-01-01T00:00:00.000Z", startedAt.toISOString()],
+        ["omitted", undefined, serverNow.toISOString()],
+      ] as const) {
+        const loop = store.createLoop(
+          {
+            name: `completion-${name}`,
+            schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+            target: { type: "command", command: "true" },
+          },
+          new Date("2025-12-31T00:00:00Z"),
+        );
+        const claim = store.claimRun(loop, "2026-01-01T00:00:00.000Z", "runner", startedAt);
+        expect(claim).toBeDefined();
+        const finalized = store.finalizeRun(
+          claim!.run.id,
+          {
+            status: "succeeded",
+            ...(requestedFinishedAt === undefined ? {} : { finishedAt: requestedFinishedAt }),
+            stdout: "",
+            stderr: "",
+          } as unknown as Parameters<Store["finalizeRun"]>[1],
+          { claimedBy: "runner", claimToken: claim!.claimToken, now: serverNow },
+        );
+        expect(finalized).toMatchObject({
+          status: "succeeded",
+          finishedAt: expectedFinishedAt,
+          durationMs: 5_000,
+          updatedAt: serverNow.toISOString(),
+        });
+      }
+
+      const invalidLoop = store.createLoop(
+        {
+          name: "completion-invalid",
+          schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+          target: { type: "command", command: "true" },
+        },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+      const invalidClaim = store.claimRun(invalidLoop, "2026-01-01T00:00:00.000Z", "runner", startedAt);
+      for (const invalidPatch of [
+        { finishedAt: "not-a-date" },
+        { finishedAt: 123 },
+        { durationMs: -1 },
+      ]) {
+        expect(() =>
+          store.finalizeRun(
+            invalidClaim!.run.id,
+            { status: "succeeded", ...invalidPatch, stdout: "", stderr: "" } as unknown as Parameters<Store["finalizeRun"]>[1],
+            { claimedBy: "runner", claimToken: invalidClaim!.claimToken, now: serverNow },
+          )
+        ).toThrow(ValidationError);
+      }
+      expect(store.getRun(invalidClaim!.run.id)?.status).toBe("running");
+    } finally {
+      store.close();
+    }
+  });
+
+  test("writes idempotent scheduler-neutral run receipts with bounded summaries", () => {
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop(
+        {
+          name: "receipt-loop",
+          schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+          target: { type: "command", command: "true", cwd: "/workspace/open-loops" },
+          machine: { id: "spark01" },
+        },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+      const claim = store.claimRun(loop, "2026-01-01T00:00:00.000Z", "runner", new Date("2026-01-01T00:00:00Z"));
+      expect(claim).toBeDefined();
+      const run = store.finalizeRun(claim!.run.id, {
+        status: "succeeded",
+        finishedAt: "2026-01-01T00:00:03.000Z",
+        durationMs: 3_000,
+        stdout: "stored",
+        stderr: "",
+      });
+
+      const first = store.writeRunReceipt(
+        {
+          run_id: run.id,
+          task_ids: ["task-1", "task-1"],
+          knowledge_ids: ["knowledge-1"],
+          summary: "worker finished",
+          evidence_paths: ["/tmp/evidence.json"],
+          stdout: `validated ${OPENAI_KEY}`,
+          stderr: "warn",
+        },
+        { now: new Date("2026-01-01T00:00:04Z") },
+      );
+
+      expect(first).toMatchObject({
+        loop_id: loop.id,
+        run_id: run.id,
+        repo: "/workspace/open-loops",
+        task_ids: ["task-1"],
+        knowledge_ids: ["knowledge-1"],
+        status: "succeeded",
+        exit_code: null,
+        started_at: "2026-01-01T00:00:00.000Z",
+        finished_at: "2026-01-01T00:00:03.000Z",
+      });
+      expect(first.digest_id).toMatch(/^sha256:/);
+      expect(first.summary.text).toBe("worker finished");
+      expect(first.summary.stdout_bytes).toBeGreaterThan(OPENAI_KEY.length);
+      expect(first.summary.stdout_excerpt).toContain("[SCRUBBED]");
+      expect(first.summary.stdout_excerpt).not.toContain(OPENAI_KEY);
+
+      const updated = store.writeRunReceipt(
+        {
+          run_id: run.id,
+          loop_id: loop.id,
+          repo: "/workspace/open-loops",
+          task_ids: ["task-2"],
+          status: "failed",
+          exit_code: 12,
+          summary: { text: "updated receipt", stdout_bytes: 0, stderr_bytes: 0 },
+        },
+        { now: new Date("2026-01-01T00:00:05Z") },
+      );
+      expect(updated.created_at).toBe(first.created_at);
+      expect(updated.updated_at).toBe("2026-01-01T00:00:05.000Z");
+      expect(updated.status).toBe("failed");
+      expect(updated.exit_code).toBe(12);
+      expect(store.getRunReceipt(run.id)?.task_ids).toEqual(["task-2"]);
+      expect(store.listRunReceipts({ taskId: "task-2" }).map((receipt) => receipt.run_id)).toEqual([run.id]);
+      expect(store.listRunReceipts({ knowledgeId: "knowledge-1" })).toEqual([]);
+      expect(store.listRunReceipts({ repo: "/workspace/open-loops", status: "failed" })).toHaveLength(1);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("rejects malformed receipt writes through receipt validation", () => {
+    const store = new Store(":memory:");
+    try {
+      expect(() =>
+        store.writeRunReceipt({
+          loop_id: "loop-id",
+          status: "succeeded",
+        } as any),
+      ).toThrow("run_id must be non-empty");
     } finally {
       store.close();
     }
@@ -157,8 +675,10 @@ describe("Store", () => {
         sourceRef: "evt-1",
         subjectRef: "task-1",
         projectKey: "/tmp/open-loops",
+        machineId: "spark-test",
       });
       expect(workItem.status).toBe("queued");
+      expect(workItem.machineId).toBe("spark-test");
       expect(store.countActiveWorkflowWorkItems({ projectKey: "/tmp/open-loops" })).toEqual({ global: 0, project: 0 });
 
       const workflow = store.createWorkflow({
@@ -194,12 +714,185 @@ describe("Store", () => {
 
       store.finalizeWorkflowRun(run.id, "succeeded");
       expect(store.getWorkflowWorkItem(workItem.id)?.status).toBe("succeeded");
+      expect(store.getWorkflowWorkItem(workItem.id)?.machineId).toBe("spark-test");
       expect(store.countActiveWorkflowWorkItems({ projectKey: "/tmp/open-loops" })).toEqual({ global: 0, project: 0 });
       expect(store.getWorkflow(workflow.id)?.status).toBe("archived");
       expect(store.listWorkflowRuns({ workflowId: workflow.id })).toHaveLength(1);
       expect(store.listWorkflowEvents(run.id).map((event) => event.eventType)).toContain("workflow_archived");
     } finally {
       store.close();
+    }
+  });
+
+  test("syncs successful task-lifecycle todos workflow pointers after requeued cancellation", () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-task-lifecycle-pointers-"));
+    const fakeBin = join(root, "bin");
+    const todosLog = join(root, "todos-args.log");
+    mkdirSync(fakeBin);
+    writeFileSync(
+      join(fakeBin, "todos"),
+      `#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "$TODOS_POINTER_LOG"
+exit 0
+`,
+      { mode: 0o700 },
+    );
+    const previousPath = process.env.PATH;
+    const previousLog = process.env.TODOS_POINTER_LOG;
+    process.env.PATH = `${fakeBin}:${previousPath ?? ""}`;
+    process.env.TODOS_POINTER_LOG = todosLog;
+    const store = new Store(join(root, "loops.db"));
+    try {
+      const invocation = store.createWorkflowInvocation({
+        templateId: "task-lifecycle",
+        sourceRef: { kind: "event", id: "evt-task-1", dedupeKey: "todos-task:task-1:task.created" },
+        subjectRef: { kind: "task", id: "task-1", path: "/tmp/open-loops" },
+        intent: "route",
+        scope: {
+          projectPath: "/tmp/open-loops",
+          todosProjectPath: "/tmp/todos-source",
+          worktreePolicy: "required",
+        },
+      });
+      const workItem = store.upsertWorkflowWorkItem({
+        routeKey: "todos-task",
+        idempotencyKey: "todos-task:task-1:task.created",
+        invocationId: invocation.id,
+        sourceType: "task.created",
+        sourceRef: "evt-task-1",
+        subjectRef: "task-1",
+        projectKey: "/tmp/open-loops",
+      });
+      const cancelledWorkflow = store.createWorkflow({
+        name: "route-task-1-cancelled",
+        steps: [{ id: "worker", target: { type: "command", command: "true" } }],
+      });
+      const cancelledLoop = store.createLoop({
+        name: "route-task-1-cancelled-run",
+        schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+        target: {
+          type: "workflow",
+          workflowId: cancelledWorkflow.id,
+          input: {
+            workflowInvocationId: invocation.id,
+            workflowWorkItemId: workItem.id,
+          },
+        },
+      });
+      store.admitWorkflowWorkItem(workItem.id, { workflowId: cancelledWorkflow.id, loopId: cancelledLoop.id });
+      const cancelledRun = store.createWorkflowRun({ workflow: cancelledWorkflow, loop: cancelledLoop, scheduledFor: "2026-01-01T00:00:00.000Z" });
+      store.cancelWorkflowRun(cancelledRun.id);
+      expect(existsSync(todosLog)).toBe(false);
+
+      store.requeueWorkflowWorkItem(workItem.id, { reason: "task still actionable after cancelled lifecycle run" });
+      const successWorkflow = store.createWorkflow({
+        name: "route-task-1-success",
+        steps: [{ id: "worker", target: { type: "command", command: "true" } }],
+      });
+      const successLoop = store.createLoop({
+        name: "route-task-1-success-run",
+        schedule: { type: "once", at: "2026-01-01T00:01:00Z" },
+        target: {
+          type: "workflow",
+          workflowId: successWorkflow.id,
+          input: {
+            workflowInvocationId: invocation.id,
+            workflowWorkItemId: workItem.id,
+          },
+        },
+      });
+      store.admitWorkflowWorkItem(workItem.id, { workflowId: successWorkflow.id, loopId: successLoop.id });
+      const successRun = store.createWorkflowRun({ workflow: successWorkflow, loop: successLoop, scheduledFor: "2026-01-01T00:01:00.000Z" });
+
+      store.finalizeWorkflowRun(successRun.id, "succeeded");
+
+      const args = readFileSync(todosLog, "utf8").trim();
+      expect(args).toContain("--project /tmp/todos-source task workflow-pointers task-1 --clear");
+      expect(args).not.toContain("--project /tmp/open-loops");
+      expect(args).toContain(`--invocation ${invocation.id}`);
+      expect(args).toContain(`--run ${successRun.id}`);
+      expect(args).toContain(`--manifest ${successRun.manifestPath}`);
+      expect(args).toContain("--state succeeded");
+      expect(args).toContain("--actor openloops:task-lifecycle");
+      expect(args).not.toContain(cancelledRun.id);
+      expect(store.listWorkflowEvents(successRun.id).map((event) => event.eventType)).toContain("todos_workflow_pointers_synced");
+
+      for (const scenario of [
+        {
+          taskId: "task-env-default",
+          todosProjectPath: "/tmp/todos-env-default",
+          expectedPrefix: "--project /tmp/todos-env-default task workflow-pointers task-env-default --clear",
+        },
+        {
+          taskId: "task-unscoped",
+          todosProjectPath: undefined,
+          expectedPrefix: "task workflow-pointers task-unscoped --clear",
+        },
+      ]) {
+        writeFileSync(todosLog, "");
+        const scenarioInvocation = store.createWorkflowInvocation({
+          templateId: "task-lifecycle",
+          sourceRef: {
+            kind: "event",
+            id: `evt-${scenario.taskId}`,
+            dedupeKey: `todos-task:${scenario.taskId}:task.created`,
+          },
+          subjectRef: { kind: "task", id: scenario.taskId, path: "/tmp/open-loops" },
+          intent: "route",
+          scope: {
+            projectPath: "/tmp/open-loops",
+            todosProjectPath: scenario.todosProjectPath,
+            worktreePolicy: "required",
+          },
+        });
+        const scenarioItem = store.upsertWorkflowWorkItem({
+          routeKey: "todos-task",
+          idempotencyKey: `todos-task:${scenario.taskId}:task.created`,
+          invocationId: scenarioInvocation.id,
+          sourceType: "task.created",
+          sourceRef: `evt-${scenario.taskId}`,
+          subjectRef: scenario.taskId,
+          projectKey: "/tmp/open-loops",
+        });
+        const scenarioWorkflow = store.createWorkflow({
+          name: `route-${scenario.taskId}`,
+          steps: [{ id: "worker", target: { type: "command", command: "true" } }],
+        });
+        const scenarioLoop = store.createLoop({
+          name: `route-${scenario.taskId}-run`,
+          schedule: { type: "once", at: "2026-01-01T00:02:00Z" },
+          target: {
+            type: "workflow",
+            workflowId: scenarioWorkflow.id,
+            input: {
+              workflowInvocationId: scenarioInvocation.id,
+              workflowWorkItemId: scenarioItem.id,
+            },
+          },
+        });
+        store.admitWorkflowWorkItem(scenarioItem.id, {
+          workflowId: scenarioWorkflow.id,
+          loopId: scenarioLoop.id,
+        });
+        const scenarioRun = store.createWorkflowRun({
+          workflow: scenarioWorkflow,
+          loop: scenarioLoop,
+          scheduledFor: "2026-01-01T00:02:00.000Z",
+        });
+        store.finalizeWorkflowRun(scenarioRun.id, "succeeded");
+
+        const scenarioArgs = readFileSync(todosLog, "utf8").trim();
+        expect(scenarioArgs).toContain(scenario.expectedPrefix);
+        expect(scenarioArgs).not.toContain("--project /tmp/open-loops");
+        if (!scenario.todosProjectPath) expect(scenarioArgs).not.toContain("--project");
+      }
+    } finally {
+      store.close();
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+      if (previousLog === undefined) delete process.env.TODOS_POINTER_LOG;
+      else process.env.TODOS_POINTER_LOG = previousLog;
+      rmSync(root, { recursive: true, force: true });
     }
   });
 
@@ -317,6 +1010,255 @@ describe("Store", () => {
     }
   });
 
+  test("matches generated-route retry and preflight archival semantics across SQLite finalizers", async () => {
+    const store = new Store(":memory:");
+    const scheduledFor = "2026-01-01T00:00:00.000Z";
+    try {
+      const makeRoute = (
+        suffix: string,
+        maxAttempts: number,
+        templateId = "task-lifecycle",
+      ) => {
+        const invocation = store.createWorkflowInvocation({
+          templateId,
+          sourceRef: {
+            kind: "event",
+            id: `sqlite-parent-${suffix}`,
+            dedupeKey: `todos-task:sqlite-parent-${suffix}`,
+          },
+          subjectRef: { kind: "task", id: `sqlite-parent-${suffix}`, path: "/tmp/loops" },
+          intent: "route",
+          scope: { projectPath: "/tmp/loops" },
+        });
+        const workItem = store.upsertWorkflowWorkItem({
+          routeKey: "todos-task",
+          idempotencyKey: `todos-task:sqlite-parent-${suffix}`,
+          invocationId: invocation.id,
+          sourceType: "task.created",
+          sourceRef: `sqlite-parent-${suffix}`,
+          subjectRef: `sqlite-parent-${suffix}`,
+        });
+        const workflow = store.createWorkflow({
+          name: `sqlite-parent-generated-${suffix}`,
+          steps: [{ id: "worker", target: { type: "command", command: "false" } }],
+        });
+        const loop = store.createLoop({
+          name: `sqlite-parent-generated-loop-${suffix}`,
+          schedule: { type: "once", at: scheduledFor },
+          target: {
+            type: "workflow",
+            workflowId: workflow.id,
+            input: {
+              workflowInvocationId: invocation.id,
+              workflowWorkItemId: workItem.id,
+            },
+          },
+          maxAttempts,
+          leaseMs: 60_000,
+        }, new Date("2025-12-31T23:59:00.000Z"));
+        store.admitWorkflowWorkItem(workItem.id, { workflowId: workflow.id, loopId: loop.id });
+        const claim = store.claimRun(
+          loop,
+          scheduledFor,
+          `runner-parent-${suffix}`,
+          new Date(scheduledFor),
+        );
+        expect(claim).toBeDefined();
+        return { invocation, workItem, workflow, loop, claim: claim! };
+      };
+      const finalizeParent = (
+        fixture: ReturnType<typeof makeRoute>,
+        finishedAt = "2026-01-01T00:00:01.000Z",
+      ) => store.finalizeRun(
+        fixture.claim.run.id,
+        {
+          status: "failed",
+          finishedAt,
+          durationMs: 1_000,
+          stdout: "",
+          stderr: "",
+          error: "parent failed",
+        },
+        {
+          claimedBy: fixture.claim.run.claimedBy,
+          claimToken: fixture.claim.claimToken,
+          now: new Date(finishedAt),
+        },
+      );
+
+      const retryable = makeRoute("retryable-attempt-one-of-two", 2);
+      const retryableFirstRun = store.createWorkflowRun({
+        workflow: retryable.workflow,
+        loop: retryable.loop,
+        loopRun: retryable.claim.run,
+      });
+      store.finalizeWorkflowRun(retryableFirstRun.id, "failed", {
+        finishedAt: "2026-01-01T00:00:00.500Z",
+        error: "attempt one failed",
+      });
+      expect(store.getWorkflowWorkItem(retryable.workItem.id)).toMatchObject({
+        status: "admitted",
+        lastReason: "attempt failed; retry pending: attempt one failed",
+      });
+      expect(store.getWorkflow(retryable.workflow.id)?.status).toBe("active");
+      expect(store.listWorkflowEvents(retryableFirstRun.id)
+        .filter((event) => event.eventType === "workflow_archived")).toHaveLength(0);
+      finalizeParent(retryable);
+      const secondClaim = store.claimRun(
+        retryable.loop,
+        scheduledFor,
+        "runner-parent-retryable-attempt-one-of-two-2",
+        new Date("2026-01-01T00:00:02.000Z"),
+      );
+      expect(secondClaim?.run.attempt).toBe(2);
+      const retryableSecondRun = store.createWorkflowRun({
+        workflow: retryable.workflow,
+        loop: retryable.loop,
+        loopRun: secondClaim!.run,
+      });
+      store.finalizeWorkflowRun(retryableSecondRun.id, "timed_out", {
+        finishedAt: "2026-01-01T00:00:02.500Z",
+        error: "attempt two timed out",
+      });
+      expect(store.getWorkflowWorkItem(retryable.workItem.id)).toMatchObject({
+        status: "failed",
+        lastReason: "attempt two timed out",
+      });
+      expect(store.getWorkflow(retryable.workflow.id)?.status).toBe("archived");
+      expect(store.listWorkflowEvents(retryableSecondRun.id)
+        .filter((event) => event.eventType === "workflow_archived")).toHaveLength(1);
+
+      const lateAttempt = makeRoute("late-attempt-one", 2);
+      const lateAttemptFirstRun = store.createWorkflowRun({
+        workflow: lateAttempt.workflow,
+        loop: lateAttempt.loop,
+        loopRun: lateAttempt.claim.run,
+      });
+      finalizeParent(lateAttempt);
+      const lateAttemptSecondClaim = store.claimRun(
+        lateAttempt.loop,
+        scheduledFor,
+        "runner-parent-late-attempt-one-2",
+        new Date("2026-01-01T00:00:02.000Z"),
+      );
+      expect(lateAttemptSecondClaim?.run).toMatchObject({ attempt: 2, status: "running" });
+      expect(store.getWorkflowWorkItem(lateAttempt.workItem.id)).toMatchObject({
+        status: "admitted",
+        workflowRunId: lateAttemptFirstRun.id,
+      });
+      store.finalizeWorkflowRun(lateAttemptFirstRun.id, "failed", {
+        finishedAt: "2026-01-01T00:00:02.100Z",
+        error: "late attempt one failure",
+      });
+      expect(store.getWorkflowRun(lateAttemptFirstRun.id)?.status).toBe("failed");
+      expect(store.getWorkflowWorkItem(lateAttempt.workItem.id)).toMatchObject({
+        status: "admitted",
+        workflowRunId: lateAttemptFirstRun.id,
+        lastReason: "attempt failed; retry pending: parent failed",
+      });
+      expect(store.getWorkflow(lateAttempt.workflow.id)?.status).toBe("active");
+      expect(store.listWorkflowEvents(lateAttemptFirstRun.id)
+        .filter((event) => event.eventType === "workflow_archived")).toHaveLength(0);
+      const lateAttemptSecondRun = store.createWorkflowRun({
+        workflow: lateAttempt.workflow,
+        loop: lateAttempt.loop,
+        loopRun: lateAttemptSecondClaim!.run,
+      });
+      store.finalizeWorkflowRun(lateAttemptSecondRun.id, "failed", {
+        finishedAt: "2026-01-01T00:00:02.500Z",
+        error: "attempt two failed",
+      });
+      expect(store.getWorkflowWorkItem(lateAttempt.workItem.id)?.status).toBe("failed");
+      expect(store.getWorkflow(lateAttempt.workflow.id)?.status).toBe("archived");
+      expect(store.listWorkflowEvents(lateAttemptSecondRun.id)
+        .filter((event) => event.eventType === "workflow_archived")).toHaveLength(1);
+
+      const exhausted = makeRoute("exhausted", 1);
+      const exhaustedRun = store.createWorkflowRun({
+        workflow: exhausted.workflow,
+        loop: exhausted.loop,
+        loopRun: exhausted.claim.run,
+      });
+      store.finalizeWorkflowRun(exhaustedRun.id, "failed", {
+        finishedAt: "2026-01-01T00:00:00.500Z",
+        error: "final attempt failed",
+      });
+      expect(store.getWorkflowWorkItem(exhausted.workItem.id)?.status).toBe("failed");
+      expect(store.getWorkflow(exhausted.workflow.id)?.status).toBe("archived");
+      expect(store.listWorkflowEvents(exhaustedRun.id)
+        .filter((event) => event.eventType === "workflow_archived")).toHaveLength(1);
+      store.finalizeWorkflowRun(exhaustedRun.id, "failed", {
+        finishedAt: "2026-01-01T00:00:00.500Z",
+        error: "final attempt failed",
+      });
+      expect(store.listWorkflowEvents(exhaustedRun.id)
+        .filter((event) => event.eventType === "workflow_archived")).toHaveLength(1);
+
+      const parentExisting = makeRoute("parent-existing-run", 1);
+      const parentExistingRun = store.createWorkflowRun({
+        workflow: parentExisting.workflow,
+        loop: parentExisting.loop,
+        loopRun: parentExisting.claim.run,
+      });
+      store["db"]
+        .query("UPDATE workflow_runs SET status='failed', finished_at=?, updated_at=? WHERE id=?")
+        .run("2026-01-01T00:00:00.500Z", "2026-01-01T00:00:00.500Z", parentExistingRun.id);
+      finalizeParent(parentExisting);
+      expect(store.getWorkflowWorkItem(parentExisting.workItem.id)?.status).toBe("failed");
+      expect(store.getWorkflow(parentExisting.workflow.id)?.status).toBe("archived");
+      expect(store.listWorkflowEvents(parentExistingRun.id)
+        .filter((event) => event.eventType === "workflow_archived")).toHaveLength(1);
+
+      const nearMiss = makeRoute("near-miss", 1, "manual-workflow");
+      finalizeParent(nearMiss);
+      expect(store.getWorkflow(nearMiss.workflow.id)?.status).toBe("active");
+      expect(store.getWorkflowWorkItem(nearMiss.workItem.id)?.workflowRunId).toBeUndefined();
+      expect(store.getWorkflowRun(`preflight-archive:${nearMiss.claim.run.id}`)).toBeUndefined();
+
+      const preflight = makeRoute("preflight", 1);
+      const preflightResults = await Promise.allSettled([
+        Promise.resolve().then(() => finalizeParent(preflight)),
+        Promise.resolve().then(() => finalizeParent(preflight)),
+      ]);
+      expect(preflightResults.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+      expect(preflightResults.filter((result) => result.status === "rejected")).toHaveLength(1);
+      expect(store.getWorkflowWorkItem(preflight.workItem.id)?.status).toBe("failed");
+      expect(store.getWorkflow(preflight.workflow.id)?.status).toBe("archived");
+      const ownerId = `preflight-archive:${preflight.claim.run.id}`;
+      const owner = store.getWorkflowRun(ownerId);
+      expect(owner).toMatchObject({
+        id: ownerId,
+        workflowId: preflight.workflow.id,
+        workflowName: preflight.workflow.name,
+        loopId: preflight.loop.id,
+        loopRunId: preflight.claim.run.id,
+        invocationId: preflight.invocation.id,
+        workItemId: preflight.workItem.id,
+        scheduledFor,
+        status: "failed",
+        finishedAt: "2026-01-01T00:00:01.000Z",
+        error: "workflow preflight failed before workflow execution; synthetic archival event owner",
+        createdAt: "2026-01-01T00:00:01.000Z",
+        updatedAt: "2026-01-01T00:00:01.000Z",
+      });
+      expect(owner?.startedAt).toBeUndefined();
+      expect(owner?.durationMs).toBeUndefined();
+      expect(owner?.manifestPath).toBeUndefined();
+      expect(owner?.idempotencyKey).toBeUndefined();
+      expect(store.listWorkflowStepRuns(ownerId)).toHaveLength(0);
+      expect(store.getWorkflowWorkItem(preflight.workItem.id)?.workflowRunId).toBe(ownerId);
+      const ownerRow = store["db"]
+        .query<{ workflow_definition_hash: string | null }, [string]>(
+          "SELECT workflow_definition_hash FROM workflow_runs WHERE id = ?",
+        )
+        .get(ownerId);
+      expect(ownerRow?.workflow_definition_hash).toBe(workflowDefinitionHash(preflight.workflow));
+      expect(store.listWorkflowEvents(ownerId).map((event) => event.eventType)).toEqual(["workflow_archived"]);
+    } finally {
+      store.close();
+    }
+  });
+
   test("does not archive reusable workflows after ordinary terminal runs", () => {
     const store = new Store(":memory:");
     try {
@@ -428,7 +1370,7 @@ describe("Store", () => {
           stderr: "",
           error: "runtime preflight failed before workflow run creation",
         },
-        { claimedBy: "runner", now: new Date("2026-01-01T00:00:00.500Z") },
+        { claimedBy: "runner", claimToken: claim!.claimToken, now: new Date("2026-01-01T00:00:00.500Z") },
       );
 
       expect(store.getWorkflowWorkItem(workItem.id)?.status).toBe("failed");
@@ -467,8 +1409,9 @@ describe("Store", () => {
         target: { type: "workflow", workflowId: workflow.id },
       });
       const admitted = store.admitWorkflowWorkItem(workItem.id, { workflowId: workflow.id, loopId: loop.id });
+      const claim = store.claimRun(loop, "2026-01-01T00:00:00.000Z", "runner", new Date("2026-01-01T00:00:00Z"))!;
       store.finalizeRun(
-        store.claimRun(loop, "2026-01-01T00:00:00.000Z", "runner", new Date("2026-01-01T00:00:00Z"))!.run.id,
+        claim.run.id,
         {
           status: "failed",
           finishedAt: "2026-01-01T00:00:01.000Z",
@@ -477,7 +1420,7 @@ describe("Store", () => {
           stderr: "",
           error: "first attempt failed",
         },
-        { claimedBy: "runner", now: new Date("2026-01-01T00:00:00.500Z") },
+        { claimedBy: "runner", claimToken: claim.claimToken, now: new Date("2026-01-01T00:00:00.500Z") },
       );
       expect(store.getWorkflowWorkItem(admitted.id)?.status).toBe("failed");
 
@@ -687,7 +1630,7 @@ describe("Store", () => {
           stdout: "seed",
           stderr: "",
         },
-        { claimedBy: "seed", now: new Date("2026-01-01T00:00:01Z") },
+        { claimedBy: "seed", claimToken: claim!.claimToken, now: new Date("2026-01-01T00:00:01Z") },
       );
 
       const archived = store.archiveLoop(loop.id);
@@ -792,6 +1735,64 @@ describe("Store", () => {
     }
   });
 
+  test("keeps generated route workflows active when expired lease recovery is retryable", () => {
+    const store = new Store(":memory:");
+    try {
+      const invocation = store.createWorkflowInvocation({
+        templateId: "todos-task-worker-verifier",
+        sourceRef: { kind: "event", id: "evt-lease-route-retry", dedupeKey: "todos-task:lease-route-retry" },
+        subjectRef: { kind: "task", id: "lease-route-retry", path: "/tmp/open-loops" },
+        intent: "route",
+        scope: { projectPath: "/tmp/open-loops" },
+      });
+      const workItem = store.upsertWorkflowWorkItem({
+        routeKey: "todos-task",
+        idempotencyKey: "todos-task:lease-route-retry",
+        invocationId: invocation.id,
+        sourceType: "task.created",
+        sourceRef: "evt-lease-route-retry",
+        subjectRef: "lease-route-retry",
+        projectKey: "/tmp/open-loops",
+      });
+      const workflow = store.createWorkflow({
+        name: "lease-route-retry-workflow",
+        steps: [{ id: "worker", target: { type: "command", command: "true" } }],
+      });
+      const loop = store.createLoop(
+        {
+          name: "lease-route-retry-loop",
+          schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+          target: {
+            type: "workflow",
+            workflowId: workflow.id,
+            input: {
+              workflowInvocationId: invocation.id,
+              workflowWorkItemId: workItem.id,
+            },
+          },
+          leaseMs: 10,
+          maxAttempts: 2,
+        },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+      store.admitWorkflowWorkItem(workItem.id, { workflowId: workflow.id, loopId: loop.id });
+      const claim = store.claimRun(loop, "2026-01-01T00:00:00.000Z", "runner", new Date("2026-01-01T00:00:00Z"));
+      expect(claim).toBeDefined();
+      const workflowRun = store.createWorkflowRun({ workflow, loop, loopRun: claim!.run });
+
+      const recovered = store.recoverExpiredRunLeases(new Date("2026-01-01T00:00:01Z"));
+
+      expect(recovered).toHaveLength(1);
+      expect(store.getWorkflowRun(workflowRun.id)?.status).toBe("failed");
+      expect(store.getWorkflowWorkItem(workItem.id)?.status).toBe("admitted");
+      expect(store.getWorkflow(workflow.id)?.status).toBe("active");
+      expect(store.listWorkflowEvents(workflowRun.id).map((event) => event.eventType))
+        .not.toContain("workflow_archived");
+    } finally {
+      store.close();
+    }
+  });
+
   test("recovers expired run leases in bounded batches", () => {
     const store = new Store(":memory:");
     try {
@@ -836,8 +1837,8 @@ describe("Store", () => {
       const claims = loops.map((loop) =>
         store.claimRun(loop, "2026-01-01T00:00:00.000Z", "runner", new Date("2026-01-01T00:00:00Z"))!,
       );
-      store.markRunPid(claims[0]!.run.id, process.pid, "runner");
-      store.markRunPid(claims[1]!.run.id, process.pid, "runner");
+      store.markRunPid(claims[0]!.run.id, process.pid, "runner", { claimToken: claims[0]!.claimToken });
+      store.markRunPid(claims[1]!.run.id, process.pid, "runner", { claimToken: claims[1]!.claimToken });
 
       const recovered = store.recoverExpiredRunLeases(new Date("2026-01-01T00:00:01Z"), { limit: 1, scanLimit: 3 });
       expect(recovered).toHaveLength(1);
@@ -940,7 +1941,7 @@ describe("Store", () => {
       const claim = store.claimRun(loop, "2026-01-01T00:00:00.000Z", "runner", new Date("2026-01-01T00:00:00Z"));
       expect(claim).toBeDefined();
       expect(store.heartbeatRunLease(claim!.run.id, "runner", 1_000, new Date("2026-01-01T00:00:01Z"))).toBeUndefined();
-      const final = store.finalizeRun(
+      expect(() => store.finalizeRun(
         claim!.run.id,
         {
           status: "succeeded",
@@ -950,9 +1951,11 @@ describe("Store", () => {
           stderr: "",
         },
         { claimedBy: "runner", now: new Date("2026-01-01T00:00:01Z") },
-      );
-      expect(final.status).toBe("running");
-      expect(final.stdout).toBeUndefined();
+      )).toThrow(RunFinalizationConflictError);
+      expect(store.getRun(claim!.run.id)).toMatchObject({
+        status: "running",
+        stdout: undefined,
+      });
     } finally {
       store.close();
     }
@@ -1024,7 +2027,7 @@ describe("Store", () => {
       expect(claim).toBeDefined();
 
       store.releaseDaemonLease("daemon");
-      const final = store.finalizeRun(
+      expect(() => store.finalizeRun(
         claim!.run.id,
         {
           status: "succeeded",
@@ -1034,10 +2037,12 @@ describe("Store", () => {
           stderr: "",
         },
         { claimedBy: "runner", daemonLeaseId: "daemon", now: new Date("2026-01-01T00:00:01Z") },
-      );
-      expect(final.status).toBe("running");
-      expect(final.stdout).toBeUndefined();
-      expect(final.finishedAt).toBeUndefined();
+      )).toThrow(RunFinalizationConflictError);
+      expect(store.getRun(claim!.run.id)).toMatchObject({
+        status: "running",
+        stdout: undefined,
+        finishedAt: undefined,
+      });
     } finally {
       store.close();
     }
@@ -1173,7 +2178,7 @@ describe("Store", () => {
       const claim = store.claimRun(loop, "2026-01-01T00:00:00.000Z", "runner", new Date("2026-01-01T00:00:00Z"));
       expect(claim).toBeDefined();
       store.recoverExpiredRunLeases(new Date("2026-01-01T00:00:01Z"));
-      const final = store.finalizeRun(
+      expect(() => store.finalizeRun(
         claim!.run.id,
         {
           status: "succeeded",
@@ -1183,9 +2188,11 @@ describe("Store", () => {
           stderr: "",
         },
         { claimedBy: "runner", now: new Date("2026-01-01T00:00:02Z") },
-      );
-      expect(final.status).toBe("abandoned");
-      expect(final.stdout).toBeUndefined();
+      )).toThrow(RunFinalizationConflictError);
+      expect(store.getRun(claim!.run.id)).toMatchObject({
+        status: "abandoned",
+        stdout: undefined,
+      });
     } finally {
       store.close();
     }
@@ -1371,6 +2378,49 @@ describe("Store", () => {
     }
   });
 
+  test("archive and unarchive fail closed on ambiguous names while ids stay exact", () => {
+    const store = new Store(":memory:");
+    try {
+      const input = {
+        name: "archive-ambiguous",
+        schedule: { type: "once", at: "2026-01-01T00:00:00Z" } as const,
+        target: { type: "command", command: "true" } as const,
+      };
+      const first = store.createLoop(input, new Date("2025-12-31T00:00:00Z"));
+      const second = store.createLoop(input, new Date("2025-12-31T00:00:01Z"));
+
+      expect(() => store.archiveLoop(input.name)).toThrow(AmbiguousNameError);
+      expect(store.getLoop(first.id)?.archivedAt).toBeUndefined();
+      expect(store.getLoop(second.id)?.archivedAt).toBeUndefined();
+
+      expect(store.archiveLoop(first.id).id).toBe(first.id);
+      expect(store.archiveLoop(input.name).id).toBe(second.id);
+      expect(store.getLoop(first.id)?.archivedAt).toBeString();
+      expect(store.getLoop(second.id)?.archivedAt).toBeString();
+
+      expect(() => store.unarchiveLoop(input.name)).toThrow(AmbiguousNameError);
+      expect(store.getLoop(first.id)?.archivedAt).toBeString();
+      expect(store.getLoop(second.id)?.archivedAt).toBeString();
+
+      expect(store.unarchiveLoop(first.id).id).toBe(first.id);
+      expect(store.getLoop(first.id)?.archivedAt).toBeUndefined();
+      expect(store.getLoop(second.id)?.archivedAt).toBeString();
+      // Reviewer reproduction: the active namesake must not mask the sole
+      // archived candidate during operation-specific unarchive resolution.
+      expect(store.unarchiveLoop(input.name).id).toBe(second.id);
+      expect(store.getLoop(first.id)?.archivedAt).toBeUndefined();
+      expect(store.getLoop(second.id)?.archivedAt).toBeUndefined();
+
+      // Exact ids remain idempotent even when same-named rows exist.
+      expect(store.unarchiveLoop(first.id).id).toBe(first.id);
+      expect(store.archiveLoop(second.id).id).toBe(second.id);
+      const archivedAt = store.getLoop(second.id)?.archivedAt;
+      expect(store.archiveLoop(second.id).archivedAt).toBe(archivedAt);
+    } finally {
+      store.close();
+    }
+  });
+
   test("rejects mutations of archived loops until they are unarchived", () => {
     const store = new Store(":memory:");
     try {
@@ -1414,13 +2464,20 @@ describe("Store", () => {
         "0006_run_process_tracking",
         "0007_run_claim_tokens",
         "0008_work_item_route_scope",
+        "0009_run_receipts",
+        "0010_work_item_machine_id",
+        "0011_work_item_gate_deaths",
+        "0012_workflow_run_provenance",
+        "0013_loop_labels",
+        "0014_run_defer_ceiling_and_step_process_fingerprint",
+        "0015_loop_mutation_contract",
       ]);
-      // 0008 adds a nullable, additive column and deliberately does NOT bump
-      // SCHEMA_USER_VERSION: an older binary must still open a DB the newer one
-      // touched (rollback safety), and the migration runner tolerates the extra
-      // ledger row + ignores the unknown column.
       const version = store["db"].query("PRAGMA user_version").get() as { user_version: number };
-      expect(version.user_version).toBeGreaterThanOrEqual(7);
+      // 0011/0012/0014 are additive and deliberately do NOT bump
+      // the schema user_version — older v8 binaries keep opening this database.
+      // 0014 adds two nullable/defaulted columns an older binary simply ignores,
+      // so it must not lock the fleet's CLIs out mid-rollout.
+      expect(version.user_version).toBe(8);
     } finally {
       store.close();
     }
@@ -1435,17 +2492,34 @@ describe("Store", () => {
     }
   });
 
-  test("refuses to open databases written by a newer schema version", () => {
+  test("refuses to open newer databases only on a known-breaking delta", () => {
+    // The schema-compat contract (post-2026-07-07 lockout): a database carries
+    // its compatibility floor; a newer user_version alone no longer refuses —
+    // full soft-open matrix in schema-compat.test.ts. Refusal remains for a
+    // floor above this binary (breaking delta)…
     const root = mkdtempSync(join(tmpdir(), "loops-newer-schema-"));
     const dbFile = join(root, "loops.db");
     new Store(dbFile).close();
     const raw = new Database(dbFile);
     try {
       raw.exec("PRAGMA user_version = 99");
+      raw.query("UPDATE schema_compat SET min_compatible_user_version = 99 WHERE id = 1").run();
     } finally {
       raw.close();
     }
-    expect(() => new Store(dbFile)).toThrow(/newer than this binary supports/);
+    expect(() => new Store(dbFile)).toThrow(/requires a binary with schema support >= 99/);
+
+    // …and for a newer database with no floor at all (pre-contract/unblessed).
+    const bare = join(root, "loops-bare.db");
+    new Store(bare).close();
+    const rawBare = new Database(bare);
+    try {
+      rawBare.exec("PRAGMA user_version = 99");
+      rawBare.exec("DROP TABLE schema_compat");
+    } finally {
+      rawBare.close();
+    }
+    expect(() => new Store(bare)).toThrow(/newer than this binary supports/);
   });
 
   test("upgrades version 6 stores before creating claim-token indexes", () => {
@@ -1506,11 +2580,12 @@ describe("Store", () => {
       );
       expect(indexes).toContain("idx_runs_claim_token");
       const version = store["db"].query("PRAGMA user_version").get() as { user_version: number };
-      expect(version.user_version).toBe(7);
+      expect(version.user_version).toBe(8);
       const ids = (store["db"].query("SELECT id FROM schema_migrations ORDER BY id").all() as Array<{ id: string }>).map(
         (row) => row.id,
       );
       expect(ids).toContain("0007_run_claim_tokens");
+      expect(ids).toContain("0009_run_receipts");
       expect(store.listRuns()).toEqual([]);
     } finally {
       store.close();
@@ -1638,6 +2713,49 @@ describe("Store", () => {
     }
   });
 
+  test("scrubs SQLite workflow reasons and errors across recover, skip, finalize, cancel, and skipped runs", () => {
+    const store = new Store(":memory:");
+    try {
+      const workflow = store.createWorkflow({
+        name: "scrub-workflow-reasons",
+        steps: [{ id: "worker", target: { type: "command", command: "true" } }],
+      });
+      const reason = `operation failed with ${GH_PAT}`;
+
+      const recoveredRun = store.createWorkflowRun({ workflow });
+      store.startWorkflowStepRun(recoveredRun.id, "worker");
+      const recovered = store.recoverWorkflowRun(recoveredRun.id, reason);
+      expect(recovered.recoveredSteps[0]?.error).toBe("operation failed with [SCRUBBED]");
+      expect(JSON.stringify(store.listWorkflowEvents(recoveredRun.id))).not.toContain("ghp_");
+
+      const skippedRun = store.createWorkflowRun({ workflow });
+      const skipped = store.skipWorkflowStepRun(skippedRun.id, "worker", reason);
+      expect(skipped.error).toBe("operation failed with [SCRUBBED]");
+      expect(JSON.stringify(store.listWorkflowEvents(skippedRun.id))).not.toContain("ghp_");
+
+      const finalizedRun = store.createWorkflowRun({ workflow });
+      const finalized = store.finalizeWorkflowRun(finalizedRun.id, "failed", { error: reason });
+      expect(finalized.error).toBe("operation failed with [SCRUBBED]");
+      expect(JSON.stringify(store.listWorkflowEvents(finalizedRun.id))).not.toContain("ghp_");
+
+      const cancelledRun = store.createWorkflowRun({ workflow });
+      const cancelled = store.cancelWorkflowRun(cancelledRun.id, reason);
+      expect(cancelled.error).toBe("operation failed with [SCRUBBED]");
+      expect(store.listWorkflowStepRuns(cancelledRun.id)[0]?.error).toBe("operation failed with [SCRUBBED]");
+      expect(JSON.stringify(store.listWorkflowEvents(cancelledRun.id))).not.toContain("ghp_");
+
+      const loop = store.createLoop({
+        name: "scrub-skipped-reason",
+        schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+        target: { type: "command", command: "true" },
+      });
+      const skippedLoopRun = store.createSkippedRun(loop, "2026-01-01T00:00:00.000Z", reason);
+      expect(skippedLoopRun.error).toBe("operation failed with [SCRUBBED]");
+    } finally {
+      store.close();
+    }
+  });
+
   test("records process identity and reports abandoned vs deferred lease recovery", () => {
     const store = new Store(":memory:");
     try {
@@ -1655,13 +2773,13 @@ describe("Store", () => {
         pid: DEAD_PID,
         pgid: DEAD_PID,
         processStartedAt: "2026-01-01T00:00:00.000Z",
-      });
+      }, { claimToken: dead!.claimToken });
       expect(recordedDead?.pid).toBe(DEAD_PID);
       expect(recordedDead?.pgid).toBe(DEAD_PID);
       expect(recordedDead?.processStartedAt).toBe("2026-01-01T00:00:00.000Z");
 
       const alive = store.claimRun(loop, "2026-01-01T00:01:00.000Z", "runner", new Date("2026-01-01T00:01:00Z"));
-      store.recordRunProcess(alive!.run.id, { pid: process.pid, pgid: process.pid });
+      store.recordRunProcess(alive!.run.id, { pid: process.pid, pgid: process.pid }, { claimToken: alive!.claimToken });
 
       const result = store.recoverExpiredRunLeasesDetailed(new Date("2026-01-01T00:02:00Z"));
       expect(result.abandoned.map((run) => run.id)).toEqual([dead!.run.id]);
@@ -1672,6 +2790,113 @@ describe("Store", () => {
       expect(store.getRun(alive!.run.id)?.status).toBe("running");
       // recoverExpiredRunLeases keeps returning the abandoned entries only.
       expect(store.recoverExpiredRunLeases(new Date("2026-01-01T00:02:00Z"))).toEqual([]);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("lease recovery honours protectClaimedByInLoops and scopes it to the claiming runner", () => {
+    const store = new Store(":memory:");
+    try {
+      const protectedLoop = store.createLoop(
+        {
+          name: "protect-kept",
+          schedule: { type: "interval", everyMs: 60_000 },
+          target: { type: "command", command: "true" },
+          overlap: "allow",
+          leaseMs: 10,
+        },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+      const otherLoop = store.createLoop(
+        {
+          name: "protect-reaped",
+          schedule: { type: "interval", everyMs: 60_000 },
+          target: { type: "command", command: "true" },
+          leaseMs: 10,
+        },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+      const at = new Date("2026-01-01T00:00:00Z");
+      const kept = store.claimRun(protectedLoop, "2026-01-01T00:00:00.000Z", "runner-x", at);
+      // Same protected loop, different runner: the protection is per-runner, so
+      // this one must still be reaped.
+      const otherRunnerSameLoop = store.claimRun(protectedLoop, "2026-01-01T00:01:00.000Z", "runner-y", at);
+      const reaped = store.claimRun(otherLoop, "2026-01-01T00:00:00.000Z", "runner-x", at);
+      expect(kept).toBeTruthy();
+      expect(otherRunnerSameLoop).toBeTruthy();
+      expect(reaped).toBeTruthy();
+
+      const result = store.recoverExpiredRunLeasesDetailed(new Date("2026-01-01T00:02:00Z"), {
+        protectClaimedByInLoops: { claimedBy: "runner-x", loopIds: [protectedLoop.id] },
+      });
+
+      expect(result.abandoned.map((run) => run.id).sort()).toEqual(
+        [otherRunnerSameLoop!.run.id, reaped!.run.id].sort(),
+      );
+      expect(store.getRun(kept!.run.id)?.status).toBe("running");
+    } finally {
+      store.close();
+    }
+  });
+
+  test("protected runs do not consume the lease-recovery scan window", () => {
+    // Regression for select-then-filter ordering: protected rows discarded in
+    // application code after the scan `LIMIT` crowd the window and starve an
+    // unrelated reapable run. The caller rebuilds the same protected set every
+    // poll, so the starvation is permanent rather than transient. `scanLimit`
+    // is pinned small so three rows cross the window instead of five hundred.
+    const store = new Store(":memory:");
+    try {
+      const protectedLoop = store.createLoop(
+        {
+          name: "scanwindow-protected",
+          schedule: { type: "interval", everyMs: 60_000 },
+          target: { type: "command", command: "true" },
+          overlap: "allow",
+          leaseMs: 10,
+        },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+      const reapableLoop = store.createLoop(
+        {
+          name: "scanwindow-reapable",
+          schedule: { type: "interval", everyMs: 60_000 },
+          target: { type: "command", command: "true" },
+          leaseMs: 10,
+        },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+
+      const protectedIds: string[] = [];
+      for (let i = 0; i < 3; i += 1) {
+        const claim = store.claimRun(
+          protectedLoop,
+          `2026-01-01T00:0${i}:00.000Z`,
+          "runner-x",
+          new Date("2026-01-01T00:00:00Z"),
+        );
+        expect(claim).toBeTruthy();
+        protectedIds.push(claim!.run.id);
+      }
+      // Claimed later, so its lease expires last and it sorts behind every
+      // protected row under `ORDER BY lease_expires_at ASC`.
+      const reapable = store.claimRun(
+        reapableLoop,
+        "2026-01-01T00:10:00.000Z",
+        "runner-y",
+        new Date("2026-01-01T00:10:00Z"),
+      );
+      expect(reapable).toBeTruthy();
+
+      const result = store.recoverExpiredRunLeasesDetailed(new Date("2026-01-01T01:00:00Z"), {
+        limit: 1,
+        scanLimit: 3,
+        protectClaimedByInLoops: { claimedBy: "runner-x", loopIds: [protectedLoop.id] },
+      });
+
+      expect(result.abandoned.map((run) => run.id)).toEqual([reapable!.run.id]);
+      for (const id of protectedIds) expect(store.getRun(id)?.status).toBe("running");
     } finally {
       store.close();
     }
@@ -1697,7 +2922,7 @@ describe("Store", () => {
         pid: process.pid,
         pgid: process.pid,
         processStartedAt: new Date(Date.now() - 24 * 60 * 60 * 1_000).toISOString(),
-      });
+      }, { claimToken: recycled!.claimToken });
       const result = store.recoverExpiredRunLeasesDetailed(new Date("2026-01-01T00:02:00Z"));
       expect(result.abandoned.map((run) => run.id)).toEqual([recycled!.run.id]);
       expect(result.deferred).toEqual([]);
@@ -1710,17 +2935,221 @@ describe("Store", () => {
         pid: process.pid,
         pgid: process.pid,
         processStartedAt: new Date(Date.now() - 24 * 60 * 60 * 1_000).toISOString(),
-      });
+      }, { claimToken: stale!.claimToken });
       const takeover = store.claimRun(loop, "2026-01-01T00:10:00.000Z", "runner-b", new Date("2026-01-01T00:11:00Z"));
       expect(takeover).toBeDefined();
       expect(takeover?.run.claimedBy).toBe("runner-b");
 
       // A matching fingerprint keeps blocking the takeover while deferring.
       const genuine = store.claimRun(loop, "2026-01-01T00:20:00.000Z", "runner-c", new Date("2026-01-01T00:20:00Z"));
-      store.recordRunProcess(genuine!.run.id, { pid: process.pid, pgid: process.pid });
+      store.recordRunProcess(genuine!.run.id, { pid: process.pid, pgid: process.pid }, { claimToken: genuine!.claimToken });
       expect(store.claimRun(loop, "2026-01-01T00:20:00.000Z", "runner-d", new Date("2026-01-01T00:21:00Z"))).toBeUndefined();
       const deferredResult = store.recoverExpiredRunLeasesDetailed(new Date("2026-01-01T00:22:00Z"));
       expect(deferredResult.deferred.map((run) => run.id)).toEqual([genuine!.run.id]);
+    } finally {
+      store.close();
+    }
+  });
+
+  // Regression (da94588c, OWNER-BLOCKING 2026-07-31): expired-lease recovery
+  // re-deferred a "live" run every LIVE_EXPIRED_RUN_GRACE_MS forever. Nothing
+  // counted the deferrals and nothing ever gave up, so the run was never
+  // abandoned, never advanced, and blocked everything queued behind it — a
+  // wall of codewith "Loop run deferred" toasts once a minute.
+  test("lease recovery abandons a still-live run once the deferral ceiling is exhausted", () => {
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop(
+        {
+          name: "defer-ceiling",
+          schedule: { type: "interval", everyMs: 60_000 },
+          target: { type: "command", command: "true" },
+          leaseMs: 10,
+        },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+      // This test process: genuinely alive, fingerprint genuinely matching.
+      // The ONLY thing that ends this run is the ceiling.
+      const claim = store.claimRun(loop, "2026-01-01T00:00:00.000Z", "runner", new Date("2026-01-01T00:00:00Z"));
+      store.recordRunProcess(claim!.run.id, { pid: process.pid, pgid: process.pid }, { claimToken: claim!.claimToken });
+
+      // ARM 3 (the discriminating one): a genuinely live run must STILL be
+      // deferred inside the grace window. A fix that simply abandoned
+      // everything would pass the two arms below and break the feature.
+      for (let attempt = 1; attempt <= 10; attempt += 1) {
+        const at = new Date(Date.parse("2026-01-01T00:02:00Z") + attempt * 60_000);
+        const result = store.recoverExpiredRunLeasesDetailed(at);
+        expect(result.deferred.map((run) => run.id)).toEqual([claim!.run.id]);
+        expect(result.abandoned).toEqual([]);
+        expect(store.getRun(claim!.run.id)?.status).toBe("running");
+      }
+
+      // The 11th pass is past the ceiling: abandoned despite still looking alive.
+      const past = store.recoverExpiredRunLeasesDetailed(new Date("2026-01-01T00:14:00Z"));
+      expect(past.abandoned.map((run) => run.id)).toEqual([claim!.run.id]);
+      expect(past.deferred).toEqual([]);
+      const abandoned = store.getRun(claim!.run.id);
+      expect(abandoned?.status).toBe("abandoned");
+      // The error distinguishes an exhausted grace from a plainly dead run, so
+      // an operator can tell "wedged runner" from "process gone".
+      expect(abandoned?.error).toContain("deferral ceiling");
+    } finally {
+      store.close();
+    }
+  });
+
+  // NOTE ON WHAT THIS TEST IS AND IS NOT: unlike the four around it, this one
+  // also PASSES on pre-fix bytes — before the ceiling existed, "ten more
+  // deferrals are available" was trivially true. So it is not a regression
+  // control for the reported defect; it is a behaviour lock on the reset,
+  // and it does guard that: deleting `defer_count=0` from heartbeatRunLease
+  // fails it. Recorded here so nobody later cites it as evidence the ceiling
+  // works — the other four tests carry that.
+  test("a successful lease heartbeat resets the deferral ceiling", () => {
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop(
+        {
+          name: "defer-ceiling-reset",
+          schedule: { type: "interval", everyMs: 60_000 },
+          target: { type: "command", command: "true" },
+          leaseMs: 10,
+        },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+      const claim = store.claimRun(loop, "2026-01-01T00:00:00.000Z", "runner", new Date("2026-01-01T00:00:00Z"));
+      store.recordRunProcess(claim!.run.id, { pid: process.pid, pgid: process.pid }, { claimToken: claim!.claimToken });
+
+      // Burn most of the ceiling.
+      for (let attempt = 1; attempt <= 9; attempt += 1) {
+        const at = new Date(Date.parse("2026-01-01T00:02:00Z") + attempt * 60_000);
+        expect(store.recoverExpiredRunLeasesDetailed(at).deferred).toHaveLength(1);
+      }
+      // A renewal proves the runner is alive and holding its lease: the count
+      // is CONSECUTIVE failures to renew, so a recovered run starts over.
+      const renewed = store.heartbeatRunLease(claim!.run.id, "runner", 60_000, new Date("2026-01-01T00:11:30Z"), {
+        claimToken: claim!.claimToken,
+      });
+      expect(renewed).toBeDefined();
+
+      // Ten more deferrals must now be available rather than one.
+      for (let attempt = 1; attempt <= 10; attempt += 1) {
+        const at = new Date(Date.parse("2026-01-01T00:13:00Z") + attempt * 60_000);
+        expect(store.recoverExpiredRunLeasesDetailed(at).deferred).toHaveLength(1);
+      }
+      expect(store.getRun(claim!.run.id)?.status).toBe("running");
+    } finally {
+      store.close();
+    }
+  });
+
+  test("lease recovery abandons a run whose workflow step pid was recycled", () => {
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop(
+        {
+          name: "recycled-step-pid",
+          schedule: { type: "interval", everyMs: 60_000 },
+          target: { type: "command", command: "true" },
+          leaseMs: 10,
+        },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+      const claim = store.claimRun(loop, "2026-01-01T00:00:00.000Z", "runner", new Date("2026-01-01T00:00:00Z"));
+      // The run's own process is plainly dead, so the ONLY thing that could
+      // hold this run open is the step-level probe.
+      store.recordRunProcess(claim!.run.id, { pid: DEAD_PID, pgid: DEAD_PID }, { claimToken: claim!.claimToken });
+
+      const workflow = store.createWorkflow({
+        name: "recycled-step",
+        steps: [{ id: "work", target: { type: "command", command: "true" } }],
+      });
+      const workflowRun = store.createWorkflowRun({ workflow, loop, loopRun: claim!.run });
+      store.startWorkflowStepRun(workflowRun.id, "work");
+      store.markWorkflowStepPid(workflowRun.id, "work", process.pid);
+
+      // Recycled pid: the number is alive (it is this test process) but it is
+      // not the process the step spawned. Overwrite the fingerprint with one a
+      // day off — the OS handed this pid to something else.
+      const internal = store as unknown as { db: Database };
+      internal.db
+        .query("UPDATE workflow_step_runs SET process_started_at = ? WHERE workflow_run_id = ? AND step_id = ?")
+        .run(new Date(Date.now() - 24 * 60 * 60 * 1_000).toISOString(), workflowRun.id, "work");
+
+      // Abandoned on the FIRST pass — identity is decidable here, so this
+      // must not consume the ceiling at all.
+      const result = store.recoverExpiredRunLeasesDetailed(new Date("2026-01-01T00:02:00Z"));
+      expect(result.abandoned.map((run) => run.id)).toEqual([claim!.run.id]);
+      expect(result.deferred).toEqual([]);
+      expect(store.getRun(claim!.run.id)?.status).toBe("abandoned");
+    } finally {
+      store.close();
+    }
+  });
+
+  test("a workflow step with an unparseable start hits the ceiling instead of deferring forever", () => {
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop(
+        {
+          name: "unparseable-step-start",
+          schedule: { type: "interval", everyMs: 60_000 },
+          target: { type: "command", command: "true" },
+          leaseMs: 10,
+        },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+      const claim = store.claimRun(loop, "2026-01-01T00:00:00.000Z", "runner", new Date("2026-01-01T00:00:00Z"));
+      store.recordRunProcess(claim!.run.id, { pid: DEAD_PID, pgid: DEAD_PID }, { claimToken: claim!.claimToken });
+
+      const workflow = store.createWorkflow({
+        name: "unparseable-step",
+        steps: [{ id: "work", target: { type: "command", command: "true" } }],
+      });
+      const workflowRun = store.createWorkflowRun({ workflow, loop, loopRun: claim!.run });
+      store.startWorkflowStepRun(workflowRun.id, "work");
+
+      // A legacy-shaped row: the pid is written WITHOUT going through
+      // markWorkflowStepPid, so it carries no fingerprint (exactly a row
+      // written before migration 0014), and its started_at is unparseable.
+      // The probe cannot decide either way and stays lenient — which is
+      // precisely the state that used to wedge the runner forever.
+      //
+      // Deliberately schema-agnostic: this UPDATE names no column added by
+      // this fix, so the test runs unchanged against the pre-fix binary and
+      // fails there on BEHAVIOUR (deferred forever, never abandoned) rather
+      // than on a missing column.
+      const internal = store as unknown as { db: Database };
+      internal.db
+        .query("UPDATE workflow_step_runs SET pid = ?, started_at = 'not-a-timestamp' WHERE workflow_run_id = ? AND step_id = ?")
+        .run(process.pid, workflowRun.id, "work");
+
+      for (let attempt = 1; attempt <= 10; attempt += 1) {
+        const at = new Date(Date.parse("2026-01-01T00:02:00Z") + attempt * 60_000);
+        expect(store.recoverExpiredRunLeasesDetailed(at).deferred).toHaveLength(1);
+      }
+      const past = store.recoverExpiredRunLeasesDetailed(new Date("2026-01-01T00:14:00Z"));
+      expect(past.abandoned.map((run) => run.id)).toEqual([claim!.run.id]);
+      expect(store.getRun(claim!.run.id)?.status).toBe("abandoned");
+    } finally {
+      store.close();
+    }
+  });
+
+  test("markWorkflowStepPid records the step pid start-time fingerprint", () => {
+    const store = new Store(":memory:");
+    try {
+      const workflow = store.createWorkflow({
+        name: "step-fingerprint",
+        steps: [{ id: "work", target: { type: "command", command: "true" } }],
+      });
+      const workflowRun = store.createWorkflowRun({ workflow });
+      store.startWorkflowStepRun(workflowRun.id, "work");
+      const marked = store.markWorkflowStepPid(workflowRun.id, "work", process.pid);
+      expect(marked.pid).toBe(process.pid);
+      // Without this, a recycled step pid is undetectable and the step probe
+      // is a one-sided guess.
+      expect(marked.processStartedAt).toBeDefined();
     } finally {
       store.close();
     }
@@ -1738,7 +3167,7 @@ describe("Store", () => {
         new Date("2025-12-31T00:00:00Z"),
       );
       const claim = store.claimRun(loop, "2026-01-01T00:00:00.000Z", "runner", new Date("2026-01-01T00:00:00Z"));
-      const marked = store.markRunPid(claim!.run.id, process.pid, "runner");
+      const marked = store.markRunPid(claim!.run.id, process.pid, "runner", { claimToken: claim!.claimToken });
       expect(marked?.pid).toBe(process.pid);
       // The fingerprint is required so recovery and the daemon reaper can
       // verify pid identity later (fail-closed against pid recycling).
@@ -1882,9 +3311,181 @@ describe("Store", () => {
       const run = store.createWorkflowRun({ workflow });
       const second = store.appendWorkflowEvent(run.id, "custom_one");
       const third = store.appendWorkflowEvent(run.id, "custom_two");
-      expect(second.sequence).toBe(2);
-      expect(third.sequence).toBe(3);
-      expect(store.listWorkflowEvents(run.id).map((event) => event.sequence)).toEqual([1, 2, 3]);
+      expect(second.sequence).toBe(3);
+      expect(third.sequence).toBe(4);
+      expect(store.listWorkflowEvents(run.id).map((event) => event.sequence)).toEqual([1, 2, 3, 4]);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("binds idempotent workflow runs to immutable definitions and creates contracts atomically", () => {
+    const store = new Store(":memory:");
+    try {
+      const workflow = store.createWorkflow({
+        name: "immutable-idempotent-workflow",
+        steps: ["worker-one", "worker-two"].map((id) => ({
+          id,
+          target: {
+            type: "agent" as const,
+            provider: "codewith" as const,
+            prompt: `perform scoped work for ${id}`,
+            allowlist: { commands: ["git"], safetyReason: "scoped workflow test" },
+          },
+        })),
+      });
+      const first = store.createWorkflowRun({ workflow, idempotencyKey: "same-definition" });
+      const retry = store.createWorkflowRun({ workflow, idempotencyKey: "same-definition" });
+      expect(retry.id).toBe(first.id);
+      expect(store.listWorkflowEvents(first.id).filter((event) =>
+        event.eventType === "agent_session_contract"
+      )).toHaveLength(2);
+
+      const changed = {
+        ...workflow,
+        steps: [{
+          ...workflow.steps[0]!,
+          target: { ...workflow.steps[0]!.target, prompt: "changed after creation" },
+        }],
+      };
+      expect(() => store.createWorkflowRun({
+        workflow: changed,
+        idempotencyKey: "same-definition",
+      })).toThrow(WorkflowRunDefinitionConflictError);
+
+      const internal = store as unknown as { db: Database };
+      const atomicCounts = () => internal.db.query<{
+        run_count: number;
+        step_count: number;
+        event_count: number;
+      }, []>(`
+        SELECT
+          (SELECT COUNT(*) FROM workflow_runs) AS run_count,
+          (SELECT COUNT(*) FROM workflow_step_runs) AS step_count,
+          (SELECT COUNT(*) FROM workflow_events) AS event_count
+      `).get();
+      const beforeFailedCreate = atomicCounts();
+      expect(() => store.createWorkflowRun({
+        workflow,
+        idempotencyKey: "rolls-back",
+        beforeInitialWorkflowEventPersist: (event) => {
+          if (event.stepId === "worker-two") throw new Error("injected second contract append failure");
+        },
+      })).toThrow("injected second contract append failure");
+      expect(atomicCounts()).toEqual(beforeFailedCreate);
+      expect(store.listWorkflowRuns({ workflowId: workflow.id }).some((run) =>
+        run.idempotencyKey === "rolls-back"
+      )).toBe(false);
+
+      internal.db.query("UPDATE workflow_runs SET workflow_definition_hash = NULL WHERE id = ?").run(first.id);
+      expect(() => store.createWorkflowRun({
+        workflow,
+        idempotencyKey: "same-definition",
+      })).toThrow(LegacyWorkflowRunProvenanceError);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("atomically rejects duplicate agent session contracts for one workflow step", () => {
+    const store = new Store(":memory:");
+    try {
+      const workflow = store.createWorkflow({
+        name: "unique-agent-contract-workflow",
+        steps: [{ id: "worker", target: { type: "command", command: "true" } }],
+      });
+      const run = store.createWorkflowRun({ workflow });
+      store.appendWorkflowEvent(run.id, "agent_session_contract", "worker", { version: 1 });
+      expect(() => store.appendWorkflowEvent(
+        run.id,
+        "agent_session_contract",
+        "worker",
+        { version: 1 },
+      )).toThrow(DuplicateWorkflowEventError);
+      expect(store.listWorkflowEvents(run.id).filter((event) =>
+        event.eventType === "agent_session_contract" && event.stepId === "worker"
+      )).toHaveLength(1);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("scrubs workflow step progress event payloads before persistence", () => {
+    const store = new Store(":memory:");
+    try {
+      const workflow = store.createWorkflow({
+        name: "progress-redaction-workflow",
+        steps: [{ id: "worker", target: { type: "command", command: "true" } }],
+      });
+      const run = store.createWorkflowRun({ workflow });
+      store.startWorkflowStepRun(run.id, "worker");
+
+      const randomSecret = j("q7Rt2x", "Vz9LpW4", "mKe8sYw");
+      store.recordWorkflowStepProgress(run.id, "worker", {
+        payload: {
+          status: "streaming",
+          apiKey: randomSecret,
+          nested: { token: OPENAI_KEY },
+          safe: "visible",
+        },
+      });
+
+      const internal = store as unknown as { db: Database };
+      const row = internal.db
+        .query<{ payload_json: string | null }, []>(
+          "SELECT payload_json FROM workflow_events WHERE event_type = 'step_progress'",
+        )
+        .get();
+      expect(row?.payload_json).toContain("[SCRUBBED]");
+      expect(row?.payload_json).not.toContain(randomSecret);
+      expect(row?.payload_json).not.toContain(OPENAI_KEY);
+
+      const progressEvent = store.listWorkflowEvents(run.id).find((event) => event.eventType === "step_progress");
+      expect(progressEvent?.payload).toEqual({
+        status: "streaming",
+        apiKey: "[SCRUBBED]",
+        nested: { token: "[SCRUBBED]" },
+        safe: "visible",
+      });
+    } finally {
+      store.close();
+    }
+  });
+
+  test("bounds oversized workflow step progress event payloads before persistence", () => {
+    const store = new Store(":memory:");
+    try {
+      const workflow = store.createWorkflow({
+        name: "progress-bounds-workflow",
+        steps: [{ id: "worker", target: { type: "command", command: "true" } }],
+      });
+      const run = store.createWorkflowRun({ workflow });
+      store.startWorkflowStepRun(run.id, "worker");
+
+      const secret = j("x9Kd2", "mQz7Lp", "4Rv8t");
+      const envSecretKey = `${"DB"}_${"PASSWORD"}`;
+      const hugePayload = `${"a".repeat(140_000)} ${envSecretKey}="${secret}" ${"z".repeat(140_000)}`;
+      store.recordWorkflowStepProgress(run.id, "worker", {
+        payload: {
+          status: "streaming",
+          hugePayload,
+        },
+      });
+
+      const internal = store as unknown as { db: Database };
+      const row = internal.db
+        .query<{ payload_json: string | null }, []>(
+          "SELECT payload_json FROM workflow_events WHERE event_type = 'step_progress'",
+        )
+        .get();
+      expect(row?.payload_json).toBeDefined();
+      expect(row!.payload_json!.length).toBeLessThanOrEqual(64 * 1024);
+      expect(row?.payload_json).not.toContain(secret);
+
+      const progressEvent = store.listWorkflowEvents(run.id).find((event) => event.eventType === "step_progress");
+      expect(progressEvent?.payload?.truncated).toBe(true);
+      expect(progressEvent?.payload?.maxChars).toBe(64 * 1024);
+      expect(progressEvent?.payload?.preview).toContain("truncated by loops workflow-event payload retention");
     } finally {
       store.close();
     }
@@ -1974,7 +3575,7 @@ describe("Store", () => {
       store.finalizeRun(
         claim!.run.id,
         { status: "succeeded", finishedAt: "2026-01-01T00:00:01.000Z", durationMs: 1_000, stdout: "real", stderr: "" },
-        { claimedBy: "runner", now: new Date("2026-01-01T00:00:01Z") },
+        { claimedBy: "runner", claimToken: claim!.claimToken, now: new Date("2026-01-01T00:00:01Z") },
       );
       expect(store.getRun(claim!.run.id)?.status).toBe("succeeded");
 
@@ -1988,6 +3589,52 @@ describe("Store", () => {
 
       expect(after.status).toBe("succeeded");
       expect(after.stdout).toBe("real");
+    } finally {
+      store.close();
+    }
+  });
+
+  test("fenced finalizeRun exposes a lost transition instead of returning a terminal row", () => {
+    const store = new Store(":memory:");
+    try {
+      const now = new Date("2026-01-01T00:00:01.000Z");
+      const loop = store.createLoop(
+        {
+          name: "fenced-finalize-conflict",
+          schedule: { type: "interval", everyMs: 60_000, anchor: "fixed_delay" },
+          target: { type: "command", command: "true" },
+        },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+      const claim = store.claimRun(loop, "2026-01-01T00:00:00.000Z", "runner", new Date("2026-01-01T00:00:00Z"));
+      expect(claim).toBeDefined();
+      const patch = {
+        status: "succeeded" as const,
+        finishedAt: now.toISOString(),
+        durationMs: 1_000,
+        stdout: "",
+        stderr: "",
+      };
+      store.finalizeRun(claim!.run.id, patch, {
+        claimedBy: "runner",
+        claimToken: claim!.claimToken,
+        now,
+      });
+
+      expect(() => store.finalizeRun(claim!.run.id, patch, {
+        claimedBy: "runner",
+        claimToken: claim!.claimToken,
+        now,
+      })).toThrow(RunFinalizationConflictError);
+      try {
+        store.finalizeRun(claim!.run.id, patch, {
+          claimedBy: "runner",
+          claimToken: claim!.claimToken,
+          now,
+        });
+      } catch (error) {
+        expect(error).toMatchObject({ reason: "run_not_running" });
+      }
     } finally {
       store.close();
     }

@@ -3,12 +3,26 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSy
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, test } from "bun:test";
+import type { AgentTarget } from "../types.js";
 import { Store } from "./store.js";
-import { defaultAgentIdleTimeoutMs, executeLoop, preflightTarget, type SpawnedProcessInfo } from "./executor.js";
+import { defaultAgentIdleTimeoutMs, executeLoop, executeTarget, isStaleWorktreeRegistration, preflightTarget, type SpawnedProcessInfo } from "./executor.js";
 import { openGate, waitUntil } from "../test-helpers.js";
 
 function gateWaitScript(gate: string): string {
   return `while [ ! -f ${JSON.stringify(gate)} ]; do sleep 0.02; done\n`;
+}
+
+function guardedLoginExitCommand(missingPath: string): string {
+  const quoted = JSON.stringify(missingPath);
+  return [
+    `if [ ! -s ${quoted} ]; then`,
+    `  printf 'no artifact at %s\\n' ${quoted}`,
+    "  exit 0",
+    "fi",
+    "bun - <<'BUN'",
+    "console.log('unexpected artifact path');",
+    "BUN",
+  ].join("\n");
 }
 
 function writeFakeCodewithProfileList(fake: string, output: string, exitCode = 0): void {
@@ -26,6 +40,63 @@ function writeFakeCodewithProfileList(fake: string, output: string, exitCode = 0
       "exit 0",
       "",
     ].join("\n"),
+  );
+  chmodSync(fake, 0o755);
+}
+
+function writeFakeCodewithJsonFailureThenProfileList(fake: string, output: string): void {
+  const delimiter = "__OPENLOOPS_FAKE_CODEWITH_PROFILE_LIST__";
+  writeFileSync(
+    fake,
+    [
+      "#!/usr/bin/env bash",
+      'if [[ "${1:-}" == "profile" && "${2:-}" == "list" && "${3:-}" == "--json" ]]; then',
+      "echo \"error: unexpected argument '--json' found\" >&2",
+      "exit 64",
+      "fi",
+      'if [[ "${1:-}" == "profile" && "${2:-}" == "list" ]]; then',
+      `cat <<'${delimiter}'`,
+      output.endsWith("\n") ? output.slice(0, -1) : output,
+      delimiter,
+      "exit 0",
+      "fi",
+      "exit 0",
+      "",
+    ].join("\n"),
+  );
+  chmodSync(fake, 0o755);
+}
+
+function writeFakeCodewithJsonThenProfileList(
+  fake: string,
+  jsonOutput: string,
+  tableOutput: string,
+  invocationLog?: string,
+): void {
+  const jsonDelimiter = "__OPENLOOPS_FAKE_CODEWITH_JSON_PROFILE_LIST__";
+  const tableDelimiter = "__OPENLOOPS_FAKE_CODEWITH_TABLE_PROFILE_LIST__";
+  writeFileSync(
+    fake,
+    [
+      "#!/usr/bin/env bash",
+      invocationLog ? `printf '%s\\n' "$*" >> ${JSON.stringify(invocationLog)}` : "",
+      'if [[ "${1:-}" == "profile" && "${2:-}" == "list" && "${3:-}" == "--json" ]]; then',
+      `cat <<'${jsonDelimiter}'`,
+      jsonOutput.endsWith("\n") ? jsonOutput.slice(0, -1) : jsonOutput,
+      jsonDelimiter,
+      "exit 0",
+      "fi",
+      'if [[ "${1:-}" == "profile" && "${2:-}" == "list" ]]; then',
+      `cat <<'${tableDelimiter}'`,
+      tableOutput.endsWith("\n") ? tableOutput.slice(0, -1) : tableOutput,
+      tableDelimiter,
+      "exit 0",
+      "fi",
+      "exit 0",
+      "",
+    ]
+      .filter(Boolean)
+      .join("\n"),
   );
   chmodSync(fake, 0o755);
 }
@@ -79,6 +150,143 @@ describe("executeLoop", () => {
       expect(result.stdout).toContain("hello");
     } finally {
       store.close();
+    }
+  });
+
+  test("keeps raw exit 75 failures generic until the loop finalization boundary", async () => {
+    const store = new Store(":memory:");
+    try {
+      const skippedLoop = store.createLoop({
+        name: "configured-skip",
+        schedule: { type: "once", at: new Date().toISOString() },
+        target: { type: "command", command: "exit 75", shell: true },
+        overlap: "skip",
+      });
+      const skippedClaim = store.claimRun(skippedLoop, new Date().toISOString(), "test");
+      expect(skippedClaim).toBeDefined();
+      expect(await executeLoop(skippedLoop, skippedClaim!.run)).toMatchObject({
+        status: "failed",
+        exitCode: 75,
+      });
+
+      const allowedLoop = store.createLoop({
+        name: "unconfigured-skip",
+        schedule: { type: "once", at: new Date().toISOString() },
+        target: { type: "command", command: "exit 75", shell: true },
+        overlap: "allow",
+      });
+      const allowedClaim = store.claimRun(allowedLoop, new Date().toISOString(), "test");
+      expect(allowedClaim).toBeDefined();
+      expect(await executeLoop(allowedLoop, allowedClaim!.run)).toMatchObject({
+        status: "failed",
+        exitCode: 75,
+      });
+
+      expect(await executeTarget({ type: "command", command: "exit 75", shell: true })).toMatchObject({
+        status: "failed",
+        exitCode: 75,
+      });
+    } finally {
+      store.close();
+    }
+  });
+
+  // Regression: todos de1f78af. The live runner's bootstrap script sources only
+  // its own env file, and composeExecutionEnv bases the child env on the runner's
+  // process.env. The child is `/bin/sh -c` (dash), which reads no rc file and ignores
+  // BASH_ENV, so nothing downstream recovers the missing config: every hasna CLI called
+  // from a loop-spawned shell silently fell back to a stale on-box store and returned
+  // wrong data at exit 0.
+  describe("hasna client env propagation into spawned shells", () => {
+    function clientEnvDir(files: Record<string, string>): { root: string; dir: string } {
+      const root = mkdtempSync(join(tmpdir(), "loops-exec-client-env-"));
+      const dir = join(root, "cloud");
+      mkdirSync(dir, { recursive: true });
+      for (const [name, body] of Object.entries(files)) writeFileSync(join(dir, name), body);
+      return { root, dir };
+    }
+
+    test("a spawned shell sees client config the runner process never had", async () => {
+      const { root, dir } = clientEnvDir({ "todos.env": "HASNA_DE1F78AF_API_URL=https://live.example\n" });
+      try {
+        const base: NodeJS.ProcessEnv = { ...process.env, HASNA_CLIENT_ENV_DIR: dir };
+        delete base.HASNA_DE1F78AF_API_URL;
+        const result = await executeTarget(
+          { type: "command", command: 'printf "%s" "${HASNA_DE1F78AF_API_URL:-UNSET}"', shell: true, timeoutMs: 5_000 },
+          {},
+          { env: base },
+        );
+        expect(result.status).toBe("succeeded");
+        expect(result.stdout).toBe("https://live.example");
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    test("does not clobber a value the caller explicitly set", async () => {
+      const { root, dir } = clientEnvDir({ "todos.env": "HASNA_DE1F78AF_API_URL=https://from-file\n" });
+      try {
+        const result = await executeTarget(
+          { type: "command", command: 'printf "%s" "${HASNA_DE1F78AF_API_URL:-UNSET}"', shell: true, timeoutMs: 5_000 },
+          {},
+          { env: { ...process.env, HASNA_CLIENT_ENV_DIR: dir, HASNA_DE1F78AF_API_URL: "https://explicit" } },
+        );
+        expect(result.status).toBe("succeeded");
+        expect(result.stdout).toBe("https://explicit");
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    test("target env still overrides client config", async () => {
+      const { root, dir } = clientEnvDir({ "todos.env": "HASNA_DE1F78AF_API_URL=https://from-file\n" });
+      try {
+        const base: NodeJS.ProcessEnv = { ...process.env, HASNA_CLIENT_ENV_DIR: dir };
+        delete base.HASNA_DE1F78AF_API_URL;
+        const result = await executeTarget(
+          {
+            type: "command",
+            command: 'printf "%s" "${HASNA_DE1F78AF_API_URL:-UNSET}"',
+            shell: true,
+            env: { HASNA_DE1F78AF_API_URL: "https://from-target" },
+            timeoutMs: 5_000,
+          },
+          {},
+          { env: base },
+        );
+        expect(result.status).toBe("succeeded");
+        expect(result.stdout).toBe("https://from-target");
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+  });
+
+  test("normalizes SHLVL for bash login command targets with guarded exits", async () => {
+    const store = new Store(":memory:");
+    const root = mkdtempSync(join(tmpdir(), "loops-login-shell-env-"));
+    try {
+      const loop = store.createLoop({
+        name: "guarded-login-shell",
+        schedule: { type: "once", at: new Date().toISOString() },
+        target: {
+          type: "command",
+          command: "bash",
+          args: ["-lc", guardedLoginExitCommand(join(root, "missing.json"))],
+          timeoutMs: 5_000,
+        },
+      });
+      const claim = store.claimRun(loop, new Date().toISOString(), "test");
+      expect(claim).toBeDefined();
+      const result = await executeLoop(loop, claim!.run, {
+        env: { HOME: root, PATH: "/usr/bin:/bin" },
+      });
+      expect(result.status).toBe("succeeded");
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("no artifact at");
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
     }
   });
 
@@ -145,6 +353,118 @@ describe("executeLoop", () => {
       });
       expect(result.status).toBe("succeeded");
       expect(result.stdout).toContain("agent-done");
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // Regression test for todos 9eca45d6: `loops create agent` had no way to
+  // declare environment variables for the run, so a loop-spawned agent could
+  // not carry e.g. CONVERSATIONS_AGENT_ID. This asserts the variable actually
+  // reaches the spawned process's environment — not merely that the target
+  // shape accepts an `env` field.
+  test("carries agent target env vars into the run environment", async () => {
+    const store = new Store(":memory:");
+    const root = mkdtempSync(join(tmpdir(), "loops-agent-env-"));
+    const bin = join(root, "bin");
+    mkdirSync(bin, { recursive: true });
+    const claude = join(bin, "claude");
+    writeFileSync(
+      claude,
+      [
+        "#!/usr/bin/env bash",
+        'printf \'seen=%s\\n\' "$LOOPS_TEST_AGENT_ENV_VAR"',
+        "cat >/dev/null",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(claude, 0o755);
+    try {
+      const loop = store.createLoop({
+        name: "agent-env-var",
+        schedule: { type: "once", at: new Date().toISOString() },
+        target: {
+          type: "agent",
+          provider: "claude",
+          prompt: "work",
+          env: { LOOPS_TEST_AGENT_ENV_VAR: "custom-value" },
+        },
+      });
+      const claim = store.claimRun(loop, new Date().toISOString(), "test");
+      expect(claim).toBeDefined();
+      const result = await executeLoop(loop, claim!.run, {
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` },
+      });
+      expect(result.status).toBe("succeeded");
+      expect(result.stdout).toContain("seen=custom-value");
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("exports the auditable advisory session contract without claiming enforcement", async () => {
+    const store = new Store(":memory:");
+    const root = mkdtempSync(join(tmpdir(), "loops-agent-session-contract-"));
+    const bin = join(root, "bin");
+    mkdirSync(bin, { recursive: true });
+    const claude = join(bin, "claude");
+    writeFileSync(
+      claude,
+      [
+        "#!/usr/bin/env bash",
+        "printf 'contract=%s\\n' \"$LOOPS_AGENT_SESSION_CONTRACT\"",
+        "printf 'enforcement=%s\\n' \"$LOOPS_AGENT_ALLOWLIST_ENFORCEMENT\"",
+        "printf 'reason=%s\\n' \"$LOOPS_AGENT_ALLOWLIST_SAFETY_REASON\"",
+        "cat >/dev/null",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(claude, 0o755);
+    try {
+      const loop = store.createLoop({
+        name: "auditable-agent-contract",
+        schedule: { type: "once", at: new Date().toISOString() },
+        target: {
+          type: "agent",
+          provider: "claude",
+          prompt: "work",
+          cwd: root,
+          routing: { taskId: "task-123" },
+          allowlist: {
+            tools: ["functions.exec_command"],
+            commands: ["git", "bun"],
+            enforcement: "metadata_only",
+            safetyReason: "isolated repository maintenance",
+          },
+        },
+      });
+      const claim = store.claimRun(loop, new Date().toISOString(), "test");
+      expect(claim).toBeDefined();
+      const result = await executeLoop(loop, claim!.run, {
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` },
+      });
+      expect(result.status).toBe("succeeded");
+      expect(result.stdout).toContain("enforcement=metadata_only");
+      expect(result.stdout).toContain("reason=isolated repository maintenance");
+      const contractLine = result.stdout.split(/\r?\n/).find((line) => line.startsWith("contract="));
+      expect(contractLine).toBeTruthy();
+      const contract = JSON.parse(contractLine!.slice("contract=".length));
+      expect(contract).toMatchObject({
+        version: 1,
+        provider: "claude",
+        cwd: root,
+        sandbox: "provider-default",
+        manualBreakGlass: false,
+        restrictions: {
+          tools: ["functions.exec_command"],
+          commands: ["git", "bun"],
+          enforcement: "metadata_only",
+          providerEnforced: false,
+        },
+        safetyReason: "isolated repository maintenance",
+      });
     } finally {
       store.close();
       rmSync(root, { recursive: true, force: true });
@@ -279,7 +599,7 @@ describe("executeLoop", () => {
       return bin;
     }
 
-    test("prepares and enters a required git worktree before spawning", async () => {
+    test("prepares, enters, and recovers a clean required git worktree before spawning", async () => {
       const root = mkdtempSync(join(tmpdir(), "loops-worktree-required-"));
       const repo = initRepo(root);
       const bin = fakePwdBinary(root);
@@ -322,6 +642,101 @@ describe("executeLoop", () => {
         });
         expect(again.status).toBe("succeeded");
         expect(again.stdout.trim()).toBe(realpathSync(wtPath));
+
+        execFileSync("git", ["-C", wtPath, "checkout", "--detach"], { stdio: "ignore" });
+        expect(execFileSync("git", ["-C", wtPath, "branch", "--show-current"], { encoding: "utf8" }).trim()).toBe("");
+
+        const recovered = await executeLoop(loop, claim!.run, {
+          env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` },
+        });
+        expect(recovered.status).toBe("succeeded");
+        expect(recovered.stdout.trim()).toBe(realpathSync(wtPath));
+        expect(execFileSync("git", ["-C", wtPath, "branch", "--show-current"], { encoding: "utf8" }).trim()).toBe("openloops/exec-test");
+
+        writeFileSync(join(wtPath, "detached-marker.txt"), "preserve detached head\n");
+        execFileSync("git", ["-C", wtPath, "-c", "user.email=test@example.com", "-c", "user.name=test", "add", "detached-marker.txt"], {
+          stdio: "ignore",
+        });
+        execFileSync("git", ["-C", wtPath, "-c", "user.email=test@example.com", "-c", "user.name=test", "commit", "-m", "detached marker"], {
+          stdio: "ignore",
+        });
+        const detachedHead = execFileSync("git", ["-C", wtPath, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+        execFileSync("git", ["-C", wtPath, "checkout", "--detach"], { stdio: "ignore" });
+        execFileSync("git", ["-C", repo, "branch", "-D", "openloops/exec-test"], { stdio: "ignore" });
+
+        const recreated = await executeLoop(loop, claim!.run, {
+          env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` },
+        });
+        expect(recreated.status).toBe("succeeded");
+        expect(execFileSync("git", ["-C", wtPath, "branch", "--show-current"], { encoding: "utf8" }).trim()).toBe("openloops/exec-test");
+        expect(execFileSync("git", ["-C", wtPath, "rev-parse", "HEAD"], { encoding: "utf8" }).trim()).toBe(detachedHead);
+        expect(readFileSync(join(wtPath, "detached-marker.txt"), "utf8")).toBe("preserve detached head\n");
+      } finally {
+        store.close();
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    test("detects git's stale 'missing but already registered worktree' error", () => {
+      expect(
+        isStaleWorktreeRegistration(
+          "fatal: '/x/run-1' is a missing but already registered worktree;\nuse 'add -f' to override, or 'prune' or 'remove' to clear",
+        ),
+      ).toBe(true);
+      expect(isStaleWorktreeRegistration("fatal: '/x/run-1' already exists")).toBe(false);
+      expect(isStaleWorktreeRegistration(undefined)).toBe(false);
+      expect(isStaleWorktreeRegistration("")).toBe(false);
+    });
+
+    test("self-heals a stale 'missing but already registered' worktree registration", async () => {
+      const root = mkdtempSync(join(tmpdir(), "loops-worktree-stale-"));
+      const repo = initRepo(root);
+      const bin = fakePwdBinary(root);
+      const wtPath = join(root, "worktrees", "repo", "run-1");
+      const store = new Store(":memory:");
+      try {
+        // Fabricate the exact 48693723 fault: register a worktree (creating the
+        // branch), then delete its directory, leaving the `.git/worktrees/<name>`
+        // entry git refuses to overwrite ("missing but already registered
+        // worktree") while the branch stays checked-out to the missing path.
+        execFileSync("git", ["-C", repo, "worktree", "add", "-b", "openloops/stale-test", wtPath], { stdio: "ignore" });
+        rmSync(wtPath, { recursive: true, force: true });
+        expect(existsSync(wtPath)).toBe(false);
+
+        const loop = store.createLoop({
+          name: "worktree-stale-selfheal",
+          schedule: { type: "once", at: new Date().toISOString() },
+          target: {
+            type: "agent",
+            provider: "claude",
+            prompt: "work",
+            configIsolation: "safe",
+            cwd: wtPath,
+            timeoutMs: 30_000,
+            worktree: {
+              mode: "required",
+              enabled: true,
+              originalCwd: repo,
+              cwd: wtPath,
+              repoRoot: repo,
+              root: join(root, "worktrees"),
+              path: wtPath,
+              branch: "openloops/stale-test",
+            },
+          },
+        });
+        const claim = store.claimRun(loop, new Date().toISOString(), "test");
+        expect(claim).toBeDefined();
+        const result = await executeLoop(loop, claim!.run, {
+          env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` },
+        });
+        // Self-heal: prune cleared the stale registration, the single retry
+        // recreated the worktree, and the agent ran inside it. Without the fix
+        // this fails "worktree preparation failed ... missing but already
+        // registered worktree" (mode=required fails closed).
+        expect(result.status).toBe("succeeded");
+        expect(result.stdout.trim()).toBe(realpathSync(wtPath));
+        expect(existsSync(join(wtPath, ".git"))).toBe(true);
       } finally {
         store.close();
         rmSync(root, { recursive: true, force: true });
@@ -466,13 +881,35 @@ describe("executeLoop", () => {
         expect(result.stdout.trim()).toBe(wtPath);
         expect(execFileSync("git", ["-C", wtPath, "branch", "--show-current"], { encoding: "utf8" }).trim()).toBe("openloops/exec-test");
 
-        // Second run reuses the existing worktree.
+        // Second run recovers a clean detached worktree before entering it.
+        execFileSync("git", ["-C", wtPath, "checkout", "--detach"], { stdio: "ignore" });
         const again = await executeLoop(loop, claim!.run, {
           ...remoteHooks,
           env: { HOME: home, PATH: "/usr/bin:/bin" },
         });
         expect(again.status).toBe("succeeded");
         expect(again.stdout.trim()).toBe(wtPath);
+        expect(execFileSync("git", ["-C", wtPath, "branch", "--show-current"], { encoding: "utf8" }).trim()).toBe("openloops/exec-test");
+
+        writeFileSync(join(wtPath, "detached-marker.txt"), "preserve remote detached head\n");
+        execFileSync("git", ["-C", wtPath, "-c", "user.email=test@example.com", "-c", "user.name=test", "add", "detached-marker.txt"], {
+          stdio: "ignore",
+        });
+        execFileSync("git", ["-C", wtPath, "-c", "user.email=test@example.com", "-c", "user.name=test", "commit", "-m", "detached marker"], {
+          stdio: "ignore",
+        });
+        const detachedHead = execFileSync("git", ["-C", wtPath, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+        execFileSync("git", ["-C", wtPath, "checkout", "--detach"], { stdio: "ignore" });
+        execFileSync("git", ["-C", repo, "branch", "-D", "openloops/exec-test"], { stdio: "ignore" });
+
+        const recreated = await executeLoop(loop, claim!.run, {
+          ...remoteHooks,
+          env: { HOME: home, PATH: "/usr/bin:/bin" },
+        });
+        expect(recreated.status).toBe("succeeded");
+        expect(execFileSync("git", ["-C", wtPath, "branch", "--show-current"], { encoding: "utf8" }).trim()).toBe("openloops/exec-test");
+        expect(execFileSync("git", ["-C", wtPath, "rev-parse", "HEAD"], { encoding: "utf8" }).trim()).toBe(detachedHead);
+        expect(readFileSync(join(wtPath, "detached-marker.txt"), "utf8")).toBe("preserve remote detached head\n");
       } finally {
         store.close();
         rmSync(root, { recursive: true, force: true });
@@ -526,6 +963,152 @@ describe("executeLoop", () => {
         expect(result.stdout).not.toContain(wtPath);
       } finally {
         store.close();
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    test("local auto worktree fallback reuses one validated extra-args snapshot", async () => {
+      const root = mkdtempSync(join(tmpdir(), "loops-worktree-local-extra-args-snapshot-"));
+      const notRepo = join(root, "not-a-repo");
+      mkdirSync(notRepo, { recursive: true });
+      const bin = join(root, "bin");
+      mkdirSync(bin, { recursive: true });
+      const fake = join(bin, "claude");
+      writeFileSync(
+        fake,
+        [
+          "#!/usr/bin/env bash",
+          "pwd",
+          "printf 'env-contract:%s\\n' \"${LOOPS_AGENT_SESSION_CONTRACT:-}\"",
+          "printf 'stdin:'",
+          "cat",
+        ].join("\n"),
+      );
+      chmodSync(fake, 0o755);
+      const wtPath = join(root, "worktrees", "repo", "run-1");
+      let extraArgsReads = 0;
+      const target: AgentTarget = {
+        type: "agent",
+        provider: "claude",
+        prompt: "work",
+        configIsolation: "safe",
+        allowlist: { safetyReason: "verify local fallback contract cwd" },
+        cwd: wtPath,
+        timeoutMs: 30_000,
+        worktree: {
+          mode: "auto",
+          enabled: true,
+          originalCwd: notRepo,
+          cwd: wtPath,
+          repoRoot: notRepo,
+          path: wtPath,
+          branch: "openloops/exec-test",
+        },
+      };
+      Object.defineProperty(target, "extraArgs", {
+        configurable: true,
+        enumerable: true,
+        get() {
+          extraArgsReads += 1;
+          return [];
+        },
+      });
+
+      try {
+        const result = await executeTarget(target, {}, {
+          env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` },
+        });
+        expect(result.status).toBe("succeeded");
+        expect(result.stdout.split(/\r?\n/, 1)[0]).toBe(realpathSync(notRepo));
+        const envContract = result.stdout.split(/\r?\n/).find((line) => line.startsWith("env-contract:"));
+        const stdin = result.stdout.slice(result.stdout.indexOf("stdin:"));
+        expect(envContract).toContain(`\"cwd\":\"${notRepo}\"`);
+        expect(envContract).not.toContain(wtPath);
+        expect(stdin).toContain(`"cwd":${JSON.stringify(notRepo)}`);
+        expect(stdin).not.toContain(wtPath);
+        expect(extraArgsReads).toBe(1);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    test("remote auto worktree fallback reuses one validated extra-args snapshot", async () => {
+      const root = mkdtempSync(join(tmpdir(), "loops-worktree-remote-extra-args-snapshot-"));
+      const notRepo = join(root, "not-a-repo");
+      mkdirSync(notRepo, { recursive: true });
+      const home = join(root, "home");
+      const binDir = join(home, ".local", "bin");
+      mkdirSync(binDir, { recursive: true });
+      const fake = join(binDir, "codex");
+      writeFileSync(
+        fake,
+        [
+          "#!/usr/bin/env bash",
+          "printf '%s\\n' \"$@\"",
+          "printf 'env-contract:%s\\n' \"${LOOPS_AGENT_SESSION_CONTRACT:-}\"",
+          "printf 'stdin:'",
+          "cat",
+        ].join("\n"),
+      );
+      chmodSync(fake, 0o755);
+      const mktempLog = join(root, "mktemp.log");
+      const fakeMktemp = join(binDir, "mktemp");
+      writeFileSync(
+        fakeMktemp,
+        [
+          "#!/usr/bin/env bash",
+          `printf 'mktemp\\n' >> ${JSON.stringify(mktempLog)}`,
+          'exec /usr/bin/mktemp "$@"',
+        ].join("\n"),
+      );
+      chmodSync(fakeMktemp, 0o755);
+      const wtPath = join(root, "worktrees", "repo", "run-1");
+      let extraArgsReads = 0;
+      const target: AgentTarget = {
+        type: "agent",
+        provider: "codex",
+        prompt: "work",
+        configIsolation: "safe",
+        allowlist: { safetyReason: "verify remote fallback contract cwd" },
+        cwd: wtPath,
+        timeoutMs: 30_000,
+        worktree: {
+          mode: "auto",
+          enabled: true,
+          originalCwd: notRepo,
+          cwd: wtPath,
+          repoRoot: notRepo,
+          path: wtPath,
+          branch: "openloops/exec-test",
+        },
+      };
+      Object.defineProperty(target, "extraArgs", {
+        configurable: true,
+        enumerable: true,
+        get() {
+          extraArgsReads += 1;
+          return [];
+        },
+      });
+
+      try {
+        const result = await executeTarget(target, {}, {
+          ...remoteHooks,
+          machine: { id: "remote-test", local: false, route: "ssh" },
+          env: { HOME: home, PATH: "/usr/bin:/bin" },
+        });
+        expect(result.status).toBe("succeeded");
+        expect(result.stderr).toContain("worktree preparation failed (mode=auto)");
+        expect(result.stdout).toContain(`--cd\n${notRepo}`);
+        const envContract = result.stdout.split(/\r?\n/).find((line) => line.startsWith("env-contract:"));
+        const stdin = result.stdout.slice(result.stdout.indexOf("stdin:"));
+        expect(envContract).toContain(`\"cwd\":\"${notRepo}\"`);
+        expect(envContract).not.toContain(wtPath);
+        expect(stdin).toContain(`"cwd":${JSON.stringify(notRepo)}`);
+        expect(stdin).not.toContain(wtPath);
+        expect(readFileSync(mktempLog, "utf8").trim().split(/\r?\n/)).toEqual(["mktemp"]);
+        expect(extraArgsReads).toBe(1);
+      } finally {
         rmSync(root, { recursive: true, force: true });
       }
     });
@@ -711,6 +1294,36 @@ describe("executeLoop", () => {
       const script = readFileSync(scriptFile, "utf8");
       expect(script).toContain("sh -c ");
       expect(script).not.toContain("sh -lc ");
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("normalizes SHLVL for remote bash login command targets with guarded exits", async () => {
+    const store = new Store(":memory:");
+    const root = mkdtempSync(join(tmpdir(), "loops-remote-login-shell-env-"));
+    try {
+      const loop = store.createLoop({
+        name: "remote-guarded-login-shell",
+        schedule: { type: "once", at: new Date().toISOString() },
+        target: {
+          type: "command",
+          command: "bash",
+          args: ["-lc", guardedLoginExitCommand(join(root, "missing.json"))],
+          timeoutMs: 5_000,
+        },
+        machine: { id: "remote-test", local: false, route: "ssh" },
+      });
+      const claim = store.claimRun(loop, new Date().toISOString(), "test");
+      expect(claim).toBeDefined();
+      const result = await executeLoop(loop, claim!.run, {
+        ...remoteHooks,
+        env: { HOME: root, PATH: "/usr/bin:/bin" },
+      });
+      expect(result.status).toBe("succeeded");
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("no artifact at");
     } finally {
       store.close();
       rmSync(root, { recursive: true, force: true });
@@ -919,7 +1532,11 @@ describe("executeLoop", () => {
     mkdirSync(binDir, { recursive: true });
     const gate = join(home, "gate");
     const fake = join(binDir, "claude");
-    await Bun.write(fake, `#!/usr/bin/env bash\n${gateWaitScript(gate)}cat >/dev/null\n`);
+    // Emits output on purpose: this test is about env stripping, but an agent
+    // that exits 0 having written nothing at all is now a failed run (the
+    // incident-607176 no-output guard), so a silent fixture would fail here for
+    // a reason unrelated to what it is checking.
+    await Bun.write(fake, `#!/usr/bin/env bash\n${gateWaitScript(gate)}cat >/dev/null\nprintf 'remote-env-agent-ran\\n'\n`);
     chmodSync(fake, 0o755);
 
     const store = new Store(":memory:");
@@ -1011,6 +1628,37 @@ describe("executeLoop", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  test("remote preflight classifies ssh host key verification failures without bypassing trust", () => {
+    let message = "";
+    try {
+      preflightTarget(
+        { type: "command", command: "printf ok", shell: true },
+        {},
+        {
+          machine: { id: "station02", local: false, route: "ssh" },
+          machineResolver: (machine) => ({ ...machine, local: false, route: "ssh" }),
+          env: { HOME: tmpdir(), PATH: "/usr/bin:/bin" },
+          machineCommandResolver: () => ({
+            command: "bash",
+            args: ["-c", "printf 'Host key verification failed.\\n' >&2; exit 255"],
+            source: "ssh",
+          }),
+        },
+      );
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    expect(message).toContain("remote preflight failed on station02: SSH host key verification failed.");
+    expect(message).toContain("Verify station02's host identity");
+    expect(message).toContain("repair SSH known_hosts/trust material outside Loops");
+    expect(message).toContain("Loops will not disable host-key checking or modify known_hosts automatically.");
+    expect(message).toContain("Transport detail: Host key verification failed.");
+    expect(message).not.toContain("StrictHostKeyChecking=no");
+    expect(message).not.toContain("UserKnownHostsFile=/dev/null");
+    expect(message).not.toContain("ssh-keyscan");
   });
 
   test("remote codewith auth profile preflight quotes missing profile errors safely", () => {
@@ -1108,6 +1756,265 @@ describe("executeLoop", () => {
     }
   });
 
+  test("local codewith auth profile preflight accepts JSON profile list output", () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-local-codewith-json-"));
+    const home = join(root, "home");
+    const binDir = join(home, ".local", "bin");
+    mkdirSync(binDir, { recursive: true });
+    const fake = join(binDir, "codewith");
+    writeFakeCodewithProfileList(
+      fake,
+      JSON.stringify(
+        {
+          currentProfile: { name: null, profileKind: "default", available: true },
+          data: [
+            {
+              name: "account001",
+              profileKind: "named",
+              active: false,
+              selected: false,
+              subscriptionProvider: "chat-gpt",
+              authMode: "chatgpt",
+              accountLabel: "redacted",
+              usable: true,
+              unusableReason: null,
+            },
+            {
+              name: "account002",
+              profileKind: "named",
+              active: false,
+              selected: false,
+              subscriptionProvider: "chat-gpt",
+              authMode: "chatgpt",
+              accountLabel: "redacted",
+              usable: true,
+              unusableReason: null,
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+    );
+    const env = { HOME: home, PATH: `${binDir}:/usr/bin:/bin` };
+    try {
+      expect(() =>
+        preflightTarget(
+          { type: "agent", provider: "codewith", authProfile: "account002", prompt: "run", configIsolation: "safe" },
+          {},
+          { env },
+        ),
+      ).not.toThrow();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("local sync codewith auth profile preflight accepts usable compact multi-entry JSON", () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-local-codewith-json-usable-"));
+    const home = join(root, "home");
+    const binDir = join(home, ".local", "bin");
+    mkdirSync(binDir, { recursive: true });
+    const fake = join(binDir, "codewith");
+    writeFakeCodewithJsonThenProfileList(
+      fake,
+      JSON.stringify({
+        data: [
+          { name: "account001", usable: false },
+          { name: "openai-api-default", usable: true },
+          { name: "account003", usable: true },
+        ],
+      }),
+      "NAME ACCOUNT PROVIDER MODE PLAN\naccount001 - ChatGPT chatgpt Pro",
+    );
+    const env = { HOME: home, PATH: `${binDir}:/usr/bin:/bin` };
+    try {
+      expect(() =>
+        preflightTarget(
+          {
+            type: "agent",
+            provider: "codewith",
+            authProfile: "openai-api-default",
+            prompt: "run",
+            configIsolation: "safe",
+          },
+          {},
+          { env },
+        ),
+      ).not.toThrow();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("local sync codewith auth profile preflight rejects unusable JSON without table fallback", () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-local-codewith-json-unusable-"));
+    const home = join(root, "home");
+    const binDir = join(home, ".local", "bin");
+    const invocationLog = join(root, "invocations.log");
+    mkdirSync(binDir, { recursive: true });
+    const fake = join(binDir, "codewith");
+    writeFakeCodewithJsonThenProfileList(
+      fake,
+      JSON.stringify({ data: [{ name: "account002", usable: false }] }),
+      "NAME ACCOUNT PROVIDER MODE PLAN\naccount002 - ChatGPT chatgpt Pro",
+      invocationLog,
+    );
+    const env = { HOME: home, PATH: `${binDir}:/usr/bin:/bin` };
+    try {
+      expect(() =>
+        preflightTarget(
+          { type: "agent", provider: "codewith", authProfile: "account002", prompt: "run", configIsolation: "safe" },
+          {},
+          { env },
+        ),
+      ).toThrow("codewith auth profile preflight failed: profile is unusable: account002");
+      expect(readFileSync(invocationLog, "utf8").trim().split(/\r?\n/)).toEqual(["profile list --json"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("local async codewith auth profile preflight rejects unusable JSON without table fallback", async () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-local-codewith-json-unusable-async-"));
+    const home = join(root, "home");
+    const binDir = join(home, ".local", "bin");
+    const invocationLog = join(root, "invocations.log");
+    mkdirSync(binDir, { recursive: true });
+    const fake = join(binDir, "codewith");
+    writeFakeCodewithJsonThenProfileList(
+      fake,
+      JSON.stringify({ profiles: [{ name: "account002", usable: false }] }),
+      "NAME ACCOUNT PROVIDER MODE PLAN\naccount002 - ChatGPT chatgpt Pro",
+      invocationLog,
+    );
+    const env = { HOME: home, PATH: `${binDir}:/usr/bin:/bin` };
+    try {
+      const result = await executeTarget(
+        { type: "agent", provider: "codewith", authProfile: "account002", prompt: "run", configIsolation: "safe" },
+        {},
+        { env },
+      );
+      expect(result.status).toBe("failed");
+      expect(result.error).toContain("codewith auth profile preflight failed: profile is unusable: account002");
+      expect(readFileSync(invocationLog, "utf8").trim().split(/\r?\n/)).toEqual(["profile list --json"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("local codewith auth profile preflight treats valid JSON inventory as authoritative when profile is missing", () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-local-codewith-json-missing-"));
+    const home = join(root, "home");
+    const binDir = join(home, ".local", "bin");
+    const invocationLog = join(root, "invocations.log");
+    mkdirSync(binDir, { recursive: true });
+    const fake = join(binDir, "codewith");
+    writeFakeCodewithJsonThenProfileList(
+      fake,
+      JSON.stringify({ data: [{ name: "account001", usable: true }] }),
+      "NAME ACCOUNT PROVIDER MODE PLAN\nmissing - ChatGPT chatgpt Pro",
+      invocationLog,
+    );
+    const env = { HOME: home, PATH: `${binDir}:/usr/bin:/bin` };
+    try {
+      expect(() =>
+        preflightTarget(
+          { type: "agent", provider: "codewith", authProfile: "missing", prompt: "run", configIsolation: "safe" },
+          {},
+          { env },
+        ),
+      ).toThrow("codewith auth profile not found: missing");
+      expect(readFileSync(invocationLog, "utf8").trim().split(/\r?\n/)).toEqual(["profile list --json"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("local codewith auth profile preflight preserves legacy profiles JSON without usable", () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-local-codewith-json-legacy-"));
+    const home = join(root, "home");
+    const binDir = join(home, ".local", "bin");
+    mkdirSync(binDir, { recursive: true });
+    const fake = join(binDir, "codewith");
+    writeFakeCodewithJsonThenProfileList(
+      fake,
+      JSON.stringify({ profiles: [{ name: "account001" }, { name: "account002" }] }),
+      "NAME ACCOUNT PROVIDER MODE PLAN",
+    );
+    const env = { HOME: home, PATH: `${binDir}:/usr/bin:/bin` };
+    try {
+      expect(() =>
+        preflightTarget(
+          { type: "agent", provider: "codewith", authProfile: "account002", prompt: "run", configIsolation: "safe" },
+          {},
+          { env },
+        ),
+      ).not.toThrow();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("local codewith auth profile preflight does not accept JSON currentProfile without a saved profile", () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-local-codewith-json-current-"));
+    const home = join(root, "home");
+    const binDir = join(home, ".local", "bin");
+    mkdirSync(binDir, { recursive: true });
+    const fake = join(binDir, "codewith");
+    writeFakeCodewithProfileList(
+      fake,
+      JSON.stringify(
+        {
+          currentProfile: { name: "account002", profileKind: "named", available: false },
+          data: [],
+        },
+        null,
+        2,
+      ),
+    );
+    const env = { HOME: home, PATH: `${binDir}:/usr/bin:/bin` };
+    try {
+      expect(() =>
+        preflightTarget(
+          { type: "agent", provider: "codewith", authProfile: "account002", prompt: "run", configIsolation: "safe" },
+          {},
+          { env },
+        ),
+      ).toThrow("codewith auth profile not found: account002");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("local codewith auth profile preflight falls back to table output when JSON is unsupported", () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-local-codewith-json-fallback-"));
+    const home = join(root, "home");
+    const binDir = join(home, ".local", "bin");
+    mkdirSync(binDir, { recursive: true });
+    const fake = join(binDir, "codewith");
+    writeFakeCodewithJsonFailureThenProfileList(
+      fake,
+      [
+        "  NAME       ACCOUNT   PROVIDER MODE    PLAN",
+        "  account001 -         ChatGPT chatgpt Pro",
+        "* account002 -         ChatGPT chatgpt Pro",
+      ].join("\n"),
+    );
+    const env = { HOME: home, PATH: `${binDir}:/usr/bin:/bin` };
+    try {
+      expect(() =>
+        preflightTarget(
+          { type: "agent", provider: "codewith", authProfile: "account002", prompt: "run", configIsolation: "safe" },
+          {},
+          { env },
+        ),
+      ).not.toThrow();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("remote codewith auth profile preflight accepts active and non-active listed profiles", () => {
     const root = mkdtempSync(join(tmpdir(), "loops-remote-codewith-auth-listed-"));
     const home = join(root, "home");
@@ -1133,6 +2040,157 @@ describe("executeLoop", () => {
       expect(() =>
         preflightTarget(
           { type: "agent", provider: "codewith", authProfile: "account001", prompt: "run", configIsolation: "safe" },
+          {},
+          remoteCodewithPreflightOptions(home),
+        ),
+      ).not.toThrow();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("remote codewith auth profile preflight accepts native tool-style JSON profiles", () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-remote-codewith-auth-json-"));
+    const home = join(root, "home");
+    const binDir = join(home, ".local", "bin");
+    mkdirSync(binDir, { recursive: true });
+    const fake = join(binDir, "codewith");
+    writeFakeCodewithProfileList(
+      fake,
+      JSON.stringify(
+        {
+          currentProfile: "account006",
+          profiles: [
+            { name: null, displayName: "Default", current: false },
+            { name: "account001", displayName: "account001", current: false },
+            { name: "account002", displayName: "account002", current: false },
+          ],
+        },
+        null,
+        2,
+      ),
+    );
+    try {
+      expect(() =>
+        preflightTarget(
+          { type: "agent", provider: "codewith", authProfile: "account002", prompt: "run", configIsolation: "safe" },
+          {},
+          remoteCodewithPreflightOptions(home),
+        ),
+      ).not.toThrow();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("remote codewith auth profile preflight rejects unusable compact JSON without table fallback", () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-remote-codewith-auth-json-unusable-"));
+    const home = join(root, "home");
+    const binDir = join(home, ".local", "bin");
+    const invocationLog = join(root, "invocations.log");
+    mkdirSync(binDir, { recursive: true });
+    const fake = join(binDir, "codewith");
+    writeFakeCodewithJsonThenProfileList(
+      fake,
+      JSON.stringify({
+        profiles: [
+          { name: "account001", usable: true },
+          { name: "account002", usable: false },
+          { name: "account003", usable: true },
+        ],
+      }),
+      "NAME ACCOUNT PROVIDER MODE PLAN\naccount002 - ChatGPT chatgpt Pro",
+      invocationLog,
+    );
+    try {
+      expect(() =>
+        preflightTarget(
+          { type: "agent", provider: "codewith", authProfile: "account002", prompt: "run", configIsolation: "safe" },
+          {},
+          remoteCodewithPreflightOptions(home),
+        ),
+      ).toThrow("codewith auth profile preflight failed: profile is unusable: account002");
+      expect(readFileSync(invocationLog, "utf8").trim().split(/\r?\n/)).toEqual(["profile list --json"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("remote codewith auth profile preflight treats valid JSON inventory as authoritative when profile is missing", () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-remote-codewith-auth-json-missing-"));
+    const home = join(root, "home");
+    const binDir = join(home, ".local", "bin");
+    const invocationLog = join(root, "invocations.log");
+    mkdirSync(binDir, { recursive: true });
+    const fake = join(binDir, "codewith");
+    writeFakeCodewithJsonThenProfileList(
+      fake,
+      JSON.stringify({ data: [{ name: "account001", usable: true }] }),
+      "NAME ACCOUNT PROVIDER MODE PLAN\nmissing - ChatGPT chatgpt Pro",
+      invocationLog,
+    );
+    try {
+      expect(() =>
+        preflightTarget(
+          { type: "agent", provider: "codewith", authProfile: "missing", prompt: "run", configIsolation: "safe" },
+          {},
+          remoteCodewithPreflightOptions(home),
+        ),
+      ).toThrow("codewith auth profile not found: missing");
+      expect(readFileSync(invocationLog, "utf8").trim().split(/\r?\n/)).toEqual(["profile list --json"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("remote codewith auth profile preflight ignores currentProfile outside an empty authoritative inventory", () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-remote-codewith-auth-json-current-only-"));
+    const home = join(root, "home");
+    const binDir = join(home, ".local", "bin");
+    const invocationLog = join(root, "invocations.log");
+    mkdirSync(binDir, { recursive: true });
+    const fake = join(binDir, "codewith");
+    writeFakeCodewithJsonThenProfileList(
+      fake,
+      JSON.stringify({
+        currentProfile: { name: "account002", profileKind: "named", available: false },
+        data: [],
+      }),
+      "NAME ACCOUNT PROVIDER MODE PLAN\naccount002 - ChatGPT chatgpt Pro",
+      invocationLog,
+    );
+    try {
+      expect(() =>
+        preflightTarget(
+          { type: "agent", provider: "codewith", authProfile: "account002", prompt: "run", configIsolation: "safe" },
+          {},
+          remoteCodewithPreflightOptions(home),
+        ),
+      ).toThrow("codewith auth profile not found: account002");
+      expect(readFileSync(invocationLog, "utf8").trim().split(/\r?\n/)).toEqual(["profile list --json"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("remote codewith auth profile preflight falls back to table output when JSON is unsupported", () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-remote-codewith-auth-json-fallback-"));
+    const home = join(root, "home");
+    const binDir = join(home, ".local", "bin");
+    mkdirSync(binDir, { recursive: true });
+    const fake = join(binDir, "codewith");
+    writeFakeCodewithJsonFailureThenProfileList(
+      fake,
+      [
+        "  NAME       ACCOUNT   PROVIDER MODE    PLAN",
+        "  account001 -         ChatGPT chatgpt Pro",
+        "* account002 -         ChatGPT chatgpt Pro",
+      ].join("\n"),
+    );
+    try {
+      expect(() =>
+        preflightTarget(
+          { type: "agent", provider: "codewith", authProfile: "account002", prompt: "run", configIsolation: "safe" },
           {},
           remoteCodewithPreflightOptions(home),
         ),
@@ -1357,5 +2415,173 @@ describe("executeLoop", () => {
         { env: { PATH: "/usr/bin:/bin" } },
       ),
     ).toThrow("opencode.model is required");
+  });
+});
+
+// Incident 607176 — "fake green": agent loops reported succeeded/exit 0 while
+// having done nothing at all. The trigger was a redacted prompt reaching the
+// executor (the control plane's runner-claim payload ran target.prompt through
+// publicLoop, so the provider was handed the literal string
+// "[redacted N chars]"). The provider dutifully exited 0 after answering that
+// it could not see a task, and the runner recorded success.
+//
+// These tests pin the two independent defences:
+//   1. PRECONDITION — an agent prompt that is missing, blank, or a redaction
+//      placeholder is never executed. Deterministic, zero false positives, and
+//      it holds no matter which upstream hop corrupts the prompt.
+//   2. POSTCONDITION — an agent process that exits 0 having written nothing at
+//      all to stdout or stderr did not really run, and must not be success.
+describe("agent run integrity (incident 607176)", () => {
+  function fakeClaude(root: string, script: string): string {
+    const bin = join(root, "bin");
+    mkdirSync(bin, { recursive: true });
+    const claude = join(bin, "claude");
+    writeFileSync(claude, script);
+    chmodSync(claude, 0o755);
+    return bin;
+  }
+
+  const echoingClaude = ["#!/usr/bin/env bash", "cat > /dev/null", "printf 'agent ran\\n'", ""].join("\n");
+  const silentClaude = ["#!/usr/bin/env bash", "cat > /dev/null", "exit 0", ""].join("\n");
+
+  test.each([
+    ["a redaction placeholder with a length", "[redacted 152 chars]"],
+    ["a bare redaction placeholder", "[redacted]"],
+    ["an empty prompt", ""],
+    ["a whitespace-only prompt", "   \n\t  "],
+  ])("refuses to execute an agent target whose prompt is %s", async (_label, prompt) => {
+    const root = mkdtempSync(join(tmpdir(), "loops-agent-prompt-guard-"));
+    // The marker proves the guard is a PREcondition: if the provider is ever
+    // spawned the file appears, and a "failed" status would be an accident.
+    const marker = join(root, "provider-was-spawned");
+    const bin = fakeClaude(
+      root,
+      ["#!/usr/bin/env bash", `touch ${JSON.stringify(marker)}`, "cat > /dev/null", "printf 'ran\\n'", ""].join("\n"),
+    );
+    try {
+      const result = await executeTarget(
+        { type: "agent", provider: "claude", prompt, cwd: root } as AgentTarget,
+        {},
+        { env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` } },
+      );
+      expect(result.status).toBe("failed");
+      expect(result.error ?? "").toMatch(/prompt/i);
+      expect(existsSync(marker)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a real prompt still runs and still succeeds", async () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-agent-prompt-ok-"));
+    const bin = fakeClaude(root, echoingClaude);
+    try {
+      const result = await executeTarget(
+        {
+          type: "agent",
+          provider: "claude",
+          prompt: "Write /tmp/sentinel.txt containing SENTINEL-OK and stop.",
+          cwd: root,
+        } as AgentTarget,
+        {},
+        { env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` } },
+      );
+      expect(result.status).toBe("succeeded");
+      expect(result.stdout).toContain("agent ran");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("the exact stored prompt reaches the supported provider invocation", async () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-agent-stored-prompt-"));
+    const bin = join(root, "bin");
+    const capture = join(root, "provider-stdin.txt");
+    const codewith = join(bin, "codewith");
+    const sentinel = "NON_SENSITIVE_STORED_PROMPT_SENTINEL_607176";
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(
+      codewith,
+      [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        "cat > \"${CAPTURE_FILE:?}\"",
+        "printf 'PROVIDER_OUTPUT_SENTINEL\\n'",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(codewith, 0o755);
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop({
+        name: "stored-prompt-provider-proof",
+        schedule: { type: "once", at: "2026-08-09T00:00:00.000Z" },
+        target: {
+          type: "agent",
+          provider: "codewith",
+          prompt: sentinel,
+          cwd: root,
+          configIsolation: "safe",
+        },
+      });
+      const claim = store.claimRun(loop, "2026-08-09T00:00:00.000Z", "truthfulness-test");
+      expect(claim).toBeDefined();
+      const result = await executeLoop(loop, claim!.run, {
+        env: {
+          ...process.env,
+          HOME: root,
+          PATH: `${bin}:/usr/bin:/bin`,
+          CAPTURE_FILE: capture,
+        },
+      });
+      expect(result.status).toBe("succeeded");
+      expect(result.stdout).toContain("PROVIDER_OUTPUT_SENTINEL");
+      expect(readFileSync(capture, "utf8")).toBe(sentinel);
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a prompt that merely mentions redaction is not mistaken for a placeholder", async () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-agent-prompt-mentions-"));
+    const bin = fakeClaude(root, echoingClaude);
+    try {
+      const result = await executeTarget(
+        {
+          type: "agent",
+          provider: "claude",
+          prompt: "Explain why [redacted 12 chars] shows up in loop output, then stop.",
+          cwd: root,
+        } as AgentTarget,
+        {},
+        { env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` } },
+      );
+      expect(result.status).toBe("succeeded");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("an agent that exits 0 with no output at all is not a success", async () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-agent-silent-"));
+    const bin = fakeClaude(root, silentClaude);
+    try {
+      const result = await executeTarget(
+        { type: "agent", provider: "claude", prompt: "do the thing", cwd: root } as AgentTarget,
+        {},
+        { env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` } },
+      );
+      expect(result.status).toBe("failed");
+      expect(result.exitCode).toBe(0);
+      expect(result.error ?? "").toMatch(/no output/i);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a silent command target is still a success (the guard is agent-only)", async () => {
+    const result = await executeTarget({ type: "command", command: "true" }, {}, {});
+    expect(result.status).toBe("succeeded");
   });
 });

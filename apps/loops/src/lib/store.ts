@@ -18,9 +18,13 @@ import type {
   LoopRun,
   LoopStatus,
   LoopTarget,
+  RecoveredLeaseRunSnapshotEntry,
+  RunReceipt,
+  RunReceiptMachine,
   RunStatus,
   TimeoutMs,
-  WorkflowEvent,
+  StoredWorkflowEvent,
+  WriteRunReceiptInput,
   WorkflowInvocation,
   WorkflowRun,
   WorkflowRunStatus,
@@ -31,45 +35,133 @@ import type {
   WorkflowWorkItemStatus,
   UpsertWorkflowWorkItemInput,
 } from "../types.js";
-import { AmbiguousNameError, LoopArchivedError, LoopNotFoundError, ValidationError } from "./errors.js";
+import {
+  AmbiguousNameError,
+  DuplicateWorkflowEventError,
+  LegacyWorkflowRunProvenanceError,
+  LoopArchivedError,
+  LoopMutationConflictError,
+  LoopNotFoundError,
+  RunFinalizationConflictError,
+  ValidationError,
+  WorkflowRunDefinitionConflictError,
+  WorkflowRunHasLiveStepsError,
+  WorkflowRunNotRunningError,
+} from "./errors.js";
 import { genId, nowIso } from "./ids.js";
 import { dbPath } from "./paths.js";
-import { processStartTimeMs, sameProcessStart, START_TIME_TOLERANCE_MS } from "./process-identity.js";
+import { processStartTimeMs, sameProcessStart, verifiedProcessStart, START_TIME_TOLERANCE_MS } from "./process-identity.js";
 import { scrubSecrets, scrubSecretsDeep } from "./redact.js";
 import { initialNextRun } from "./recurrence.js";
 import { assertGoalTransition, rollupSummary, updateReadyFlags } from "./goal/status.js";
 import { GOAL_TERMINAL } from "./goal/types.js";
 import { normalizeCreateWorkflowInput } from "./workflow-spec.js";
 import {
+  initialAgentSessionContractEvents,
+  type InitialAgentSessionContractEvent,
+  workflowDefinitionHash,
+} from "./workflow-provenance.js";
+import {
   commitWorkflowRunManifest,
   discardWorkflowRunManifest,
   stageWorkflowRunManifest,
 } from "./run-artifacts.js";
+import { normalizeRunReceipt } from "./run-receipts.js";
+import { normalizeLoopLabels } from "./labels.js";
+import { assertLoopStatus, assertMaxAttempts } from "./loop-status.js";
+import { normalizeRunCompletion } from "./run-completion.js";
+import { runLocalCommand, todosCliArgs, todosMutationSummary } from "./route/todos-cli.js";
+import {
+  DEFAULT_LOOP_MUTATION_LOOKUP_CAPS,
+  isPrivateOperationEventType,
+  loopMutationAdmissionReceipt,
+  loopMutationTerminalReceipt,
+  normalizeLoopMutationEnvelope,
+  privateOperationEventsForWorkflowRun,
+  type LoopMutationEnvelope,
+  type LoopMutationLookupCaps,
+  type LoopMutationResult,
+  type OperationAuthorityBinding,
+} from "./operation-contract.js";
 
 interface DaemonLeaseFence {
   daemonLeaseId?: string;
   now?: Date;
   claimToken?: string;
+  recoveredRun?: RecoveredLeaseRunSnapshotEntry;
+}
+
+export interface WorkflowRecoveryContext {
+  mode?: "internal" | "operator" | "runner";
+  now?: Date;
+  loopRunId?: string;
+  claimedBy?: string;
+  claimToken?: string;
+}
+
+export type LoopSchedulingState = Pick<Loop, "status" | "nextRunAt" | "retryScheduledFor">;
+
+export interface CircuitBreakerTransitionResult {
+  loop: Loop;
+  marker: LoopRun;
 }
 
 const DEFAULT_RECOVERY_BATCH_LIMIT = 100;
 const DEFAULT_RECOVERY_SCAN_MULTIPLIER = 5;
 const LIVE_EXPIRED_RUN_GRACE_MS = 60_000;
 /**
+ * Ceiling on CONSECUTIVE lease-recovery deferrals for a single run. Past it the
+ * run is abandoned regardless of how alive its process still looks.
+ *
+ * A grace that cannot expire is not a grace. Without this ceiling a run whose
+ * process merely *looks* alive is re-deferred every
+ * {@link LIVE_EXPIRED_RUN_GRACE_MS} forever: never abandoned, never advanced,
+ * and blocking everything queued behind it (station01, 2026-07-31 — a wall of
+ * codewith "Loop run deferred" toasts once a minute and a stalled publish).
+ *
+ * A run only reaches recovery when its lease has ALREADY expired, which means
+ * the runner stopped renewing it — healthy work renews and never enters this
+ * path at all. So the ceiling costs a genuinely-live run nothing, and bounds
+ * total grace at MAX x GRACE (10 min), after which a wedged or
+ * recycled-pid run is released instead of wedging the queue.
+ */
+const MAX_LIVE_EXPIRED_RUN_DEFERRALS = 10;
+/**
  * Highest schema version this binary understands. Bump alongside every new
  * numbered migration so older binaries refuse to open newer databases instead
  * of silently misreading them (checked against PRAGMA user_version).
  */
-const SCHEMA_USER_VERSION = 7;
+const SCHEMA_USER_VERSION = 8;
+/**
+ * The database-carried compatibility floor this binary writes into
+ * `schema_compat.min_compatible_user_version`: the LOWEST
+ * `SCHEMA_USER_VERSION` a binary may have and still safely open a database
+ * migrated to this binary's schema. Raise it ONLY when a migration is
+ * breaking for older readers (semantic changes older binaries would misread —
+ * e.g. 0007's run claim tokens, which alter claim-concurrency correctness).
+ * Purely additive migrations (new nullable columns, new tables, new indexes:
+ * 0008 route_scope, 0009 run receipts, 0010 work-item machine_id) must NOT
+ * raise it — that is exactly what lets an older binary keep working during a
+ * rollout instead of bricking the CLI fleet (the 2026-07-07 schema-8 lockout).
+ */
+const BREAKING_SCHEMA_FLOOR = 7;
 const TERMINAL_RUN_STATUSES = ["succeeded", "failed", "timed_out", "abandoned", "skipped"] as const;
 const PRUNE_BATCH_SIZE = 400;
-const GENERATED_ROUTE_TEMPLATE_IDS = new Set(["todos-task-worker-verifier", "task-lifecycle", "event-worker-verifier"]);
-const GENERATED_ROUTE_KEYS = new Set(["todos-task", "generic-event"]);
+export const GENERATED_ROUTE_TEMPLATE_IDS = new Set(["todos-task-worker-verifier", "task-lifecycle", "event-worker-verifier"]);
+export const GENERATED_ROUTE_KEYS = new Set(["todos-task", "generic-event"]);
+const TASK_LIFECYCLE_TEMPLATE_ID = "task-lifecycle";
 
-interface LoopRow {
+export function isGeneratedRouteTemplate(routeKey: string, templateId: string): boolean {
+  return routeKey === "todos-task"
+    ? templateId === "todos-task-worker-verifier" || templateId === TASK_LIFECYCLE_TEMPLATE_ID
+    : routeKey === "generic-event" && templateId === "event-worker-verifier";
+}
+
+export interface LoopRow {
   id: string;
   name: string;
   description: string | null;
+  labels_json: string | null;
   status: string;
   archived_at: string | null;
   archived_from_status: string | null;
@@ -90,7 +182,7 @@ interface LoopRow {
   updated_at: string;
 }
 
-interface RunRow {
+export interface RunRow {
   id: string;
   loop_id: string;
   loop_name: string;
@@ -105,6 +197,8 @@ interface RunRow {
   pid: number | null;
   pgid: number | null;
   process_started_at: string | null;
+  /** Nullable for rows read before migration 0014 backfills the column. */
+  defer_count: number | null;
   exit_code: number | null;
   duration_ms: number | null;
   stdout: string | null;
@@ -115,7 +209,34 @@ interface RunRow {
   updated_at: string;
 }
 
-interface WorkflowRow {
+export interface RunReceiptRow {
+  loop_id: string;
+  run_id: string;
+  machine_json: string;
+  repo: string;
+  task_ids_json: string;
+  knowledge_ids_json: string;
+  digest_id: string;
+  started_at: string | null;
+  finished_at: string | null;
+  status: string;
+  exit_code: number | null;
+  summary_json: string;
+  evidence_paths_json: string;
+  created_at: string;
+  updated_at: string;
+}
+
+interface LatestRunSummaryRow {
+  loop_id: string;
+  id: string;
+  status: string;
+  started_at: string | null;
+  finished_at: string | null;
+  created_at: string;
+}
+
+export interface WorkflowRow {
   id: string;
   name: string;
   description: string | null;
@@ -127,7 +248,7 @@ interface WorkflowRow {
   updated_at: string;
 }
 
-interface WorkflowRunRow {
+export interface WorkflowRunRow {
   id: string;
   workflow_id: string;
   workflow_name: string;
@@ -137,6 +258,7 @@ interface WorkflowRunRow {
   work_item_id: string | null;
   scheduled_for: string | null;
   idempotency_key: string | null;
+  workflow_definition_hash: string | null;
   manifest_path: string | null;
   status: string;
   started_at: string | null;
@@ -148,7 +270,7 @@ interface WorkflowRunRow {
   updated_at: string;
 }
 
-interface WorkflowInvocationRow {
+export interface WorkflowInvocationRow {
   id: string;
   workflow_id: string | null;
   template_id: string | null;
@@ -168,7 +290,7 @@ interface WorkflowInvocationRow {
   updated_at: string;
 }
 
-interface WorkflowWorkItemRow {
+export interface WorkflowWorkItemRow {
   id: string;
   route_key: string;
   idempotency_key: string;
@@ -178,10 +300,13 @@ interface WorkflowWorkItemRow {
   subject_ref: string;
   project_key: string | null;
   project_group: string | null;
+  machine_id: string | null;
   route_scope: string | null;
   priority: number;
   status: string;
   attempts: number;
+  /** Nullable for rows read before migration 0011 backfills the column. */
+  gate_deaths: number | null;
   next_attempt_at: string | null;
   lease_expires_at: string | null;
   workflow_id: string | null;
@@ -192,7 +317,7 @@ interface WorkflowWorkItemRow {
   updated_at: string;
 }
 
-interface WorkflowStepRunRow {
+export interface WorkflowStepRunRow {
   id: string;
   workflow_run_id: string;
   step_id: string;
@@ -202,6 +327,8 @@ interface WorkflowStepRunRow {
   finished_at: string | null;
   exit_code: number | null;
   pid: number | null;
+  /** Nullable for rows written before migration 0014 added the fingerprint. */
+  process_started_at: string | null;
   duration_ms: number | null;
   stdout: string | null;
   stderr: string | null;
@@ -213,7 +340,7 @@ interface WorkflowStepRunRow {
   updated_at: string;
 }
 
-interface WorkflowEventRow {
+export interface WorkflowEventRow {
   id: string;
   workflow_run_id: string;
   sequence: number;
@@ -223,7 +350,7 @@ interface WorkflowEventRow {
   created_at: string;
 }
 
-interface GoalRow {
+export interface GoalRow {
   id: string;
   plan_id: string;
   objective: string;
@@ -244,7 +371,7 @@ interface GoalRow {
   updated_at: string;
 }
 
-interface GoalPlanNodeRow {
+export interface GoalPlanNodeRow {
   id: string;
   goal_id: string;
   plan_id: string;
@@ -262,7 +389,7 @@ interface GoalPlanNodeRow {
   updated_at: string;
 }
 
-interface GoalRunRow {
+export interface GoalRunRow {
   id: string;
   goal_id: string;
   plan_id: string;
@@ -292,7 +419,7 @@ export interface DaemonLease {
   updatedAt: string;
 }
 
-interface LeaseRow {
+export interface LeaseRow {
   id: string;
   pid: number;
   hostname: string;
@@ -302,11 +429,12 @@ interface LeaseRow {
   updated_at: string;
 }
 
-function rowToLoop(row: LoopRow): Loop {
+export function rowToLoop(row: LoopRow): Loop {
   return {
     id: row.id,
     name: row.name,
     description: row.description ?? undefined,
+    labels: row.labels_json ? normalizeLoopLabels(JSON.parse(row.labels_json) as string[]) : [],
     status: row.status as LoopStatus,
     archivedAt: row.archived_at ?? undefined,
     archivedFromStatus: row.archived_from_status ? (row.archived_from_status as LoopStatus) : undefined,
@@ -328,7 +456,7 @@ function rowToLoop(row: LoopRow): Loop {
   };
 }
 
-function rowToRun(row: RunRow): LoopRun {
+export function rowToRun(row: RunRow): LoopRun {
   return {
     id: row.id,
     loopId: row.loop_id,
@@ -354,7 +482,31 @@ function rowToRun(row: RunRow): LoopRun {
   };
 }
 
-function rowToWorkflow(row: WorkflowRow): WorkflowSpec {
+export function rowToRunReceipt(row: RunReceiptRow): RunReceipt {
+  return {
+    loop_id: row.loop_id,
+    run_id: row.run_id,
+    machine: JSON.parse(row.machine_json) as RunReceiptMachine,
+    repo: row.repo,
+    task_ids: JSON.parse(row.task_ids_json) as string[],
+    knowledge_ids: JSON.parse(row.knowledge_ids_json) as string[],
+    digest_id: row.digest_id,
+    started_at: row.started_at,
+    finished_at: row.finished_at,
+    status: row.status,
+    exit_code: row.exit_code,
+    summary: JSON.parse(row.summary_json) as RunReceipt["summary"],
+    evidence_paths: JSON.parse(row.evidence_paths_json) as string[],
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+function latestRunTime(row: LatestRunSummaryRow): string {
+  return row.finished_at ?? row.started_at ?? row.created_at;
+}
+
+export function rowToWorkflow(row: WorkflowRow): WorkflowSpec {
   return {
     id: row.id,
     name: row.name,
@@ -368,7 +520,7 @@ function rowToWorkflow(row: WorkflowRow): WorkflowSpec {
   };
 }
 
-function rowToWorkflowRun(row: WorkflowRunRow): WorkflowRun {
+export function rowToWorkflowRun(row: WorkflowRunRow): WorkflowRun {
   return {
     id: row.id,
     workflowId: row.workflow_id,
@@ -391,7 +543,7 @@ function rowToWorkflowRun(row: WorkflowRunRow): WorkflowRun {
   };
 }
 
-function rowToWorkflowInvocation(row: WorkflowInvocationRow): WorkflowInvocation {
+export function rowToWorkflowInvocation(row: WorkflowInvocationRow): WorkflowInvocation {
   return {
     id: row.id,
     workflowId: row.workflow_id ?? undefined,
@@ -406,7 +558,7 @@ function rowToWorkflowInvocation(row: WorkflowInvocationRow): WorkflowInvocation
   };
 }
 
-function rowToWorkflowWorkItem(row: WorkflowWorkItemRow): WorkflowWorkItem {
+export function rowToWorkflowWorkItem(row: WorkflowWorkItemRow): WorkflowWorkItem {
   return {
     id: row.id,
     routeKey: row.route_key,
@@ -417,10 +569,12 @@ function rowToWorkflowWorkItem(row: WorkflowWorkItemRow): WorkflowWorkItem {
     subjectRef: row.subject_ref,
     projectKey: row.project_key ?? undefined,
     projectGroup: row.project_group ?? undefined,
+    machineId: row.machine_id ?? undefined,
     routeScope: row.route_scope ?? undefined,
     priority: row.priority,
     status: row.status as WorkflowWorkItemStatus,
     attempts: row.attempts,
+    gateDeaths: row.gate_deaths ?? 0,
     nextAttemptAt: row.next_attempt_at ?? undefined,
     leaseExpiresAt: row.lease_expires_at ?? undefined,
     workflowId: row.workflow_id ?? undefined,
@@ -432,7 +586,7 @@ function rowToWorkflowWorkItem(row: WorkflowWorkItemRow): WorkflowWorkItem {
   };
 }
 
-function rowToWorkflowStepRun(row: WorkflowStepRunRow): WorkflowStepRun {
+export function rowToWorkflowStepRun(row: WorkflowStepRunRow): WorkflowStepRun {
   return {
     id: row.id,
     workflowRunId: row.workflow_run_id,
@@ -443,6 +597,7 @@ function rowToWorkflowStepRun(row: WorkflowStepRunRow): WorkflowStepRun {
     finishedAt: row.finished_at ?? undefined,
     exitCode: row.exit_code ?? undefined,
     pid: row.pid ?? undefined,
+    processStartedAt: row.process_started_at ?? undefined,
     durationMs: row.duration_ms ?? undefined,
     stdout: row.stdout ?? undefined,
     stderr: row.stderr ?? undefined,
@@ -455,7 +610,7 @@ function rowToWorkflowStepRun(row: WorkflowStepRunRow): WorkflowStepRun {
   };
 }
 
-function rowToGoal(row: GoalRow): Goal {
+export function rowToGoal(row: GoalRow): Goal {
   return {
     goalId: row.id,
     planId: row.plan_id,
@@ -478,7 +633,7 @@ function rowToGoal(row: GoalRow): Goal {
   };
 }
 
-function rowToGoalPlanNode(row: GoalPlanNodeRow): GoalPlanNode {
+export function rowToGoalPlanNode(row: GoalPlanNodeRow): GoalPlanNode {
   return {
     nodeId: row.id,
     planId: row.plan_id,
@@ -497,7 +652,7 @@ function rowToGoalPlanNode(row: GoalPlanNodeRow): GoalPlanNode {
   };
 }
 
-function rowToGoalRun(row: GoalRunRow): GoalRun {
+export function rowToGoalRun(row: GoalRunRow): GoalRun {
   return {
     runId: row.id,
     goalId: row.goal_id,
@@ -519,7 +674,7 @@ function rowToGoalRun(row: GoalRunRow): GoalRun {
   };
 }
 
-function rowToWorkflowEvent(row: WorkflowEventRow): WorkflowEvent {
+export function rowToWorkflowEvent(row: WorkflowEventRow): StoredWorkflowEvent {
   return {
     id: row.id,
     workflowRunId: row.workflow_run_id,
@@ -553,27 +708,46 @@ function isRecordedProcessAlive(pid: number | null | undefined, processStartedAt
   return sameProcessStart(processStartedAt ?? undefined, processStartTimeMs(pid));
 }
 
-/**
- * Whether a workflow step's recorded pid is still the step's own process.
- * `workflow_step_runs` carries no start-time fingerprint, so use the step's
- * `started_at` as a lower bound: a genuine child was spawned at/after the
- * step started, while a recycled pid from before the step (e.g. after a
- * reboot) predates it. Unresolvable start times stay lenient.
- */
 function isoProcessStart(pid: number): string | undefined {
   const startedMs = processStartTimeMs(pid);
   return startedMs === undefined ? undefined : new Date(startedMs).toISOString();
 }
 
-function isLiveStepProcess(pid: number, stepStartedAt: string | null | undefined): boolean {
+/**
+ * Whether a workflow step's recorded pid is still the step's own process.
+ *
+ * Two paths, because the answer is only as strong as the evidence on the row:
+ *
+ * - **Fingerprinted** (migration 0014 onward): `processStartedAt` holds the
+ *   child's real start time, so identity is a TWO-SIDED match via
+ *   {@link verifiedProcessStart} — the same strict comparison
+ *   `isRecordedProcessAlive` uses for runs, and it fails closed. This is what
+ *   rejects a recycled pid: the OS handing that number to an unrelated process
+ *   yields a start time that does not match, in either direction.
+ *
+ * - **Legacy** (rows written before 0014, no fingerprint): fall back to the
+ *   step's `started_at` as a lower bound. This is a guess, not an identity
+ *   check — it rejects a pid older than the step but cannot reject a newer
+ *   one — so it stays lenient on unresolvable data rather than killing live
+ *   work mid-upgrade. Leniency here is safe ONLY because
+ *   {@link MAX_LIVE_EXPIRED_RUN_DEFERRALS} bounds how long a "possibly alive"
+ *   answer can hold a run open. Before that ceiling existed, this branch
+ *   returning `true` on one unreadable timestamp wedged the runner forever.
+ */
+export function isLiveStepProcess(
+  pid: number,
+  stepStartedAt: string | null | undefined,
+  processStartedAt?: string | null,
+): boolean {
   if (!isProcessAlive(pid)) return false;
   const actualMs = processStartTimeMs(pid);
+  if (processStartedAt) return verifiedProcessStart(processStartedAt, actualMs);
   const stepStartMs = stepStartedAt ? Date.parse(stepStartedAt) : Number.NaN;
   if (actualMs === undefined || !Number.isFinite(stepStartMs)) return true;
   return actualMs >= stepStartMs - START_TIME_TOLERANCE_MS;
 }
 
-function rowToLease(row: LeaseRow): DaemonLease {
+export function rowToLease(row: LeaseRow): DaemonLease {
   return {
     id: row.id,
     pid: row.pid,
@@ -588,7 +762,7 @@ function rowToLease(row: LeaseRow): DaemonLease {
 export interface ClaimRunResult {
   run: LoopRun;
   loop: Loop;
-  claimToken?: string;
+  claimToken: string;
 }
 
 export interface CreateWorkflowRunInput {
@@ -600,6 +774,9 @@ export interface CreateWorkflowRunInput {
   invocationId?: string;
   workItemId?: string;
   daemonLeaseId?: string;
+  operationAuthority?: OperationAuthorityBinding;
+  /** Internal deterministic fault-injection seam used to verify atomic initial event persistence. */
+  beforeInitialWorkflowEventPersist?: (event: InitialAgentSessionContractEvent) => void;
 }
 
 export interface CreateGoalInput {
@@ -635,6 +812,26 @@ export interface RecoverExpiredRunLeasesResult {
   abandoned: LoopRun[];
   /** Runs whose lease expired while their process (group) is still alive; lease deferred. */
   deferred: LoopRun[];
+  /** Runs left unchanged because an admitted private operation has no terminal receipt. */
+  operationReconciliationRequired: LoopRun[];
+}
+
+export interface ExpiredRunLeaseCandidate {
+  runId: string;
+  loopId: string;
+  leaseExpiresAt: string;
+  updatedAt: string;
+}
+
+export interface ExpiredRunLeaseCandidatePage {
+  candidates: ExpiredRunLeaseCandidate[];
+  truncated: boolean;
+}
+
+export interface RecoveredLeaseRunPage {
+  runs: LoopRun[];
+  snapshot?: RecoveredLeaseRunSnapshotEntry[];
+  nextOffset?: number;
 }
 
 export interface PruneHistoryOptions {
@@ -709,7 +906,7 @@ export interface RecordGoalEventInput {
   rawResponse?: unknown;
 }
 
-function workItemStatusForLoopRun(
+export function workItemStatusForLoopRun(
   status: RunStatus,
   attempt: number,
   maxAttempts: number | undefined,
@@ -721,7 +918,69 @@ function workItemStatusForLoopRun(
   return undefined;
 }
 
-function scrubbedOrNull(value: string | undefined | null): string | null {
+/**
+ * `exit(75)` = `EX_TEMPFAIL`: the sysexits.h "temporary failure, retry later"
+ * code. A gate/worker step that exits 75 (e.g. an account-quota probe that is
+ * still dry) is signalling "not now", not a real failed attempt — so it must
+ * not burn the todos-task redispatch cap and must leave the work item
+ * requeueable rather than persisting as a terminal, dedupe-forever row.
+ */
+export const WORK_ITEM_TEMPFAIL_EXIT_CODE = 75;
+
+/**
+ * Workflow step ids that run BEFORE the worker does any real work. A failure in
+ * one of these (triage/planner gate, or the pre-step worktree preparation) that
+ * dies quickly is a "gate death": the run never executed the worker, so it must
+ * not count toward the redispatch cap (otherwise a purely infrastructural fault
+ * — e.g. a stale worktree registration — silently dead-letters a task that
+ * never actually ran).
+ */
+export const GATE_STEP_IDS: ReadonlySet<string> = new Set(["triage", "planner", "plan"]);
+
+/** A gate-step failure only counts as a gate death when it dies before any real
+ *  work could have happened. Worktree-prep deaths are always gate deaths (they
+ *  fail before the agent is spawned) regardless of this bound. */
+export const GATE_DEATH_MAX_DURATION_MS = 60_000;
+
+/**
+ * Secondary ceiling for CONSECUTIVE gate deaths. Gate deaths refund their
+ * redispatch attempt (the worker never ran), which is correct for transient
+ * infrastructure faults — but a deterministic fault (e.g. a permanently broken
+ * repo path) would otherwise retry forever at the backoff floor. After this
+ * many consecutive gate deaths the work item is dead-lettered (visible in
+ * drain reports) instead of spinning; any run that reaches the worker resets
+ * the streak, and an operator requeue (attempts reset) re-arms it. At the
+ * ~2–4 minute refunded-attempts backoff this bounds a deterministic fault to
+ * roughly an hour of auto-retry before it demands an operator.
+ */
+export const GATE_DEATH_CEILING = 20;
+
+export type NonProductiveFailureKind = "tempfail" | "gate-death";
+
+type ClassifiableStepRun = Pick<WorkflowStepRun, "stepId" | "status" | "exitCode" | "durationMs" | "error">;
+
+/**
+ * Classify a just-finalized *failed* workflow run's decisive failing step. A
+ * non-productive finish (a tempfail retry-signal, or a gate death before the
+ * worker ran) must not count toward the todos-task redispatch cap. Returns the
+ * non-productive kind, or `undefined` when the run represents a real worker
+ * attempt that legitimately counts toward the cap. Pure/exported for tests.
+ */
+export function classifyNonProductiveStepFailure(steps: ClassifiableStepRun[]): NonProductiveFailureKind | undefined {
+  // Steps arrive in sequence order; the decisive step is the last one that
+  // failed or timed out (a later gate stop never reaches earlier successes).
+  const failing = [...steps].reverse().find((step) => step.status === "failed" || step.status === "timed_out");
+  if (!failing) return undefined;
+  if (failing.exitCode === WORK_ITEM_TEMPFAIL_EXIT_CODE) return "tempfail";
+  // Worktree preparation fails before the agent process is spawned, so it is a
+  // gate death by definition — no real work happened — independent of duration.
+  if (typeof failing.error === "string" && failing.error.includes("worktree preparation failed")) return "gate-death";
+  const fast = failing.durationMs === undefined || failing.durationMs < GATE_DEATH_MAX_DURATION_MS;
+  if (GATE_STEP_IDS.has(failing.stepId) && fast) return "gate-death";
+  return undefined;
+}
+
+export function scrubbedOrNull(value: string | undefined | null): string | null {
   return value == null ? null : scrubSecrets(value);
 }
 
@@ -732,6 +991,7 @@ function scrubbedOrNull(value: string | undefined | null): string | null {
  * kept as head + tail around a truncation marker so evidence stays useful.
  */
 const MAX_PERSISTED_RUN_OUTPUT_CHARS = 64 * 1024;
+const MAX_PERSISTED_WORKFLOW_EVENT_PAYLOAD_CHARS = 64 * 1024;
 
 function clampPersistedRunOutput(value: string | null): string | null {
   if (value == null || value.length <= MAX_PERSISTED_RUN_OUTPUT_CHARS) return value;
@@ -743,8 +1003,47 @@ function clampPersistedRunOutput(value: string | null): string | null {
 }
 
 /** Scrub secrets then bound size before persisting run stdout/stderr. */
-function persistedRunOutput(value: string | undefined | null): string | null {
+export function persistedRunOutput(value: string | undefined | null): string | null {
   return clampPersistedRunOutput(scrubbedOrNull(value));
+}
+
+/** Scrub structured string leaves before stringify, then scrub the encoded JSON. */
+export function persistedJson(value: unknown): string {
+  return scrubSecrets(JSON.stringify(scrubSecretsDeep(value)));
+}
+
+function clampTextToChars(value: string, maxChars: number, reason: string): string {
+  if (value.length <= maxChars) return value;
+  const marker = `\n...[truncated by ${reason}]...\n`;
+  const budget = Math.max(0, maxChars - marker.length);
+  const headLength = Math.ceil(budget / 2);
+  const tailLength = Math.floor(budget / 2);
+  return `${value.slice(0, headLength)}${marker}${value.slice(value.length - tailLength)}`;
+}
+
+function boundedWorkflowEventPayloadJson(scrubbedJson: string): string {
+  if (scrubbedJson.length <= MAX_PERSISTED_WORKFLOW_EVENT_PAYLOAD_CHARS) return scrubbedJson;
+
+  const base = {
+    truncated: true,
+    originalChars: scrubbedJson.length,
+    maxChars: MAX_PERSISTED_WORKFLOW_EVENT_PAYLOAD_CHARS,
+    preview: "",
+  };
+  const baseChars = JSON.stringify(base).length;
+  let previewBudget = Math.max(0, MAX_PERSISTED_WORKFLOW_EVENT_PAYLOAD_CHARS - baseChars - 64);
+
+  while (true) {
+    const preview = clampTextToChars(scrubbedJson, previewBudget, "loops workflow-event payload retention");
+    const bounded = JSON.stringify({ ...base, preview });
+    if (bounded.length <= MAX_PERSISTED_WORKFLOW_EVENT_PAYLOAD_CHARS || previewBudget === 0) return bounded;
+    previewBudget = Math.max(0, previewBudget - (bounded.length - MAX_PERSISTED_WORKFLOW_EVENT_PAYLOAD_CHARS) - 64);
+  }
+}
+
+export function persistedWorkflowEventPayload(payload: Record<string, unknown> | undefined | null): string | null {
+  if (payload == null) return null;
+  return boundedWorkflowEventPayloadJson(persistedJson(payload));
 }
 
 function chmodIfExists(path: string, mode: number): void {
@@ -794,13 +1093,41 @@ export class Store {
         id TEXT PRIMARY KEY,
         applied_at TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS schema_compat (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        min_compatible_user_version INTEGER NOT NULL
+      );
     `);
     const versionRow = this.db.query<{ user_version: number }, []>("PRAGMA user_version").get();
     const userVersion = versionRow?.user_version ?? 0;
     if (userVersion > SCHEMA_USER_VERSION) {
-      throw new Error(
-        `loops database schema version ${userVersion} is newer than this binary supports (${SCHEMA_USER_VERSION}); upgrade open-loops before opening this database`,
-      );
+      // A newer binary migrated this database. Refusing outright bricked the
+      // CLI fleet during the 2026-07-07 schema-8 lockout even though the newer
+      // migrations were purely additive. The database itself carries the
+      // compatibility floor (`schema_compat.min_compatible_user_version`,
+      // raised only by BREAKING migrations): open when this binary meets the
+      // floor; refuse only on a known-breaking delta. A newer-version database
+      // WITHOUT the floor row predates this contract (or came from an
+      // unblessed build) — stay conservative and refuse as before.
+      const floorRow = this.db
+        .query<{ min_compatible_user_version: number }, []>(
+          "SELECT min_compatible_user_version FROM schema_compat WHERE id = 1",
+        )
+        .get();
+      if (!floorRow) {
+        throw new Error(
+          `loops database schema version ${userVersion} is newer than this binary supports (${SCHEMA_USER_VERSION}) and carries no compatibility floor; upgrade Loops before opening this database`,
+        );
+      }
+      if (SCHEMA_USER_VERSION < floorRow.min_compatible_user_version) {
+        throw new Error(
+          `loops database schema version ${userVersion} requires a binary with schema support >= ${floorRow.min_compatible_user_version} (this binary supports ${SCHEMA_USER_VERSION}); upgrade Loops before opening this database`,
+        );
+      }
+      // Soft-open: everything beyond this binary's knowledge is declared
+      // non-breaking by the floor. The migration loop below only re-applies
+      // idempotent baselines / already-applied ids, and the newer
+      // user_version stamp is preserved (never downgraded).
     }
     const applied = new Set(this.db.query<{ id: string }, []>("SELECT id FROM schema_migrations").all().map((row) => row.id));
     for (const migration of this.migrations()) {
@@ -818,7 +1145,16 @@ export class Store {
         this.db.query("INSERT OR IGNORE INTO schema_migrations (id, applied_at) VALUES (?, ?)").run(migration.id, nowIso());
       }
     }
-    if (userVersion !== SCHEMA_USER_VERSION) this.db.exec(`PRAGMA user_version = ${SCHEMA_USER_VERSION}`);
+    // Stamp forward only — a soft-opened newer database keeps its newer stamp.
+    if (userVersion < SCHEMA_USER_VERSION) this.db.exec(`PRAGMA user_version = ${SCHEMA_USER_VERSION}`);
+    // Maintain the database-carried compatibility floor. MAX() so a higher
+    // floor written by a newer binary is never lowered by an older one.
+    this.db
+      .query(
+        `INSERT INTO schema_compat (id, min_compatible_user_version) VALUES (1, ?)
+         ON CONFLICT(id) DO UPDATE SET min_compatible_user_version = MAX(min_compatible_user_version, excluded.min_compatible_user_version)`,
+      )
+      .run(BREAKING_SCHEMA_FLOOR);
   }
 
   private migrations(): Array<{ id: string; baseline?: boolean; apply: () => void }> {
@@ -887,6 +1223,72 @@ export class Store {
           this.db.exec("CREATE INDEX IF NOT EXISTS idx_workflow_work_items_scope ON workflow_work_items(route_scope, status)");
         },
       },
+      {
+        id: "0009_run_receipts",
+        apply: () => this.createRunReceiptsSchema(),
+      },
+      {
+        id: "0010_work_item_machine_id",
+        apply: () => {
+          // Nullable + additive reservation evidence. Keep downgrade behavior
+          // lenient like route_scope: older binaries ignore the extra column.
+          this.addColumnIfMissing("workflow_work_items", "machine_id", "TEXT");
+          this.db.exec("CREATE INDEX IF NOT EXISTS idx_workflow_work_items_machine ON workflow_work_items(machine_id, status)");
+        },
+      },
+      {
+        id: "0011_work_item_gate_deaths",
+        apply: () => {
+          // Additive counter of CONSECUTIVE gate deaths (runs that failed
+          // before doing real work: worktree prep / fast triage-planner).
+          // Gate deaths refund their redispatch attempt, so without a second
+          // ceiling a deterministic infrastructure fault retries forever at
+          // the backoff floor; this bounds it. Older binaries ignore the
+          // column (defaults keep counting from 0 if they write rows) — no
+          // SCHEMA_USER_VERSION bump, purely additive.
+          this.addColumnIfMissing("workflow_work_items", "gate_deaths", "INTEGER NOT NULL DEFAULT 0");
+        },
+      },
+      {
+        id: "0012_workflow_run_provenance",
+        apply: () => {
+          // Immutable idempotency provenance. NULL marks pre-migration runs,
+          // which fail closed on retry because their creating definition is
+          // unknowable. Purely additive; older binaries safely ignore it.
+          this.addColumnIfMissing("workflow_runs", "workflow_definition_hash", "TEXT");
+        },
+      },
+      {
+        id: "0013_loop_labels",
+        apply: () => {
+          // Additive metadata: old binaries ignore the column, while new
+          // binaries normalize legacy NULL/absent state to an empty label set.
+          // Keep user_version and the compatibility floor unchanged.
+          this.addColumnIfMissing("loops", "labels_json", "TEXT NOT NULL DEFAULT '[]'");
+        },
+      },
+      {
+        id: "0014_run_defer_ceiling_and_step_process_fingerprint",
+        apply: () => {
+          // Additive on both counts; old binaries ignore the columns and keep
+          // their previous (unbounded, unfingerprinted) behaviour, so
+          // user_version and the compatibility floor stay unchanged.
+          //
+          // loop_runs.defer_count bounds lease-recovery deferrals
+          // (MAX_LIVE_EXPIRED_RUN_DEFERRALS).
+          this.addColumnIfMissing("loop_runs", "defer_count", "INTEGER NOT NULL DEFAULT 0");
+          // workflow_step_runs.process_started_at gives step pids the same
+          // start-time fingerprint loop_runs got in 0006, so a recycled step
+          // pid can be rejected by identity instead of by a one-sided
+          // lower-bound guess. Rows written before this migration have no
+          // fingerprint and stay lenient — bounded by the deferral ceiling.
+          this.addColumnIfMissing("workflow_step_runs", "process_started_at", "TEXT");
+        },
+      },
+      {
+        id: "0015_loop_mutation_contract",
+        apply: () => this.createLoopMutationSchema(),
+      },
     ];
   }
 
@@ -896,6 +1298,7 @@ export class Store {
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
         description TEXT,
+        labels_json TEXT NOT NULL DEFAULT '[]',
         status TEXT NOT NULL,
         archived_at TEXT,
         archived_from_status TEXT,
@@ -933,6 +1336,7 @@ export class Store {
         pid INTEGER,
         pgid INTEGER,
         process_started_at TEXT,
+        defer_count INTEGER NOT NULL DEFAULT 0,
         exit_code INTEGER,
         duration_ms INTEGER,
         stdout TEXT,
@@ -947,6 +1351,65 @@ export class Store {
       CREATE INDEX IF NOT EXISTS idx_runs_status ON loop_runs(status);
       CREATE INDEX IF NOT EXISTS idx_runs_status_lease ON loop_runs(status, lease_expires_at);
       CREATE INDEX IF NOT EXISTS idx_runs_scheduled ON loop_runs(scheduled_for);
+
+      CREATE TABLE IF NOT EXISTS run_receipts (
+        run_id TEXT PRIMARY KEY,
+        loop_id TEXT NOT NULL,
+        machine_json TEXT NOT NULL,
+        repo TEXT NOT NULL,
+        task_ids_json TEXT NOT NULL,
+        knowledge_ids_json TEXT NOT NULL,
+        digest_id TEXT NOT NULL,
+        started_at TEXT,
+        finished_at TEXT,
+        status TEXT NOT NULL,
+        exit_code INTEGER,
+        summary_json TEXT NOT NULL,
+        evidence_paths_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_run_receipts_loop ON run_receipts(loop_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_run_receipts_repo ON run_receipts(repo, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_run_receipts_digest ON run_receipts(digest_id);
+      CREATE INDEX IF NOT EXISTS idx_run_receipts_status ON run_receipts(status, created_at DESC);
+
+      CREATE TABLE IF NOT EXISTS loop_mutation_operations (
+        tenant_id TEXT NOT NULL,
+        operation_id TEXT NOT NULL,
+        step_id TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        binding_digest TEXT NOT NULL,
+        binding_json TEXT NOT NULL,
+        admission_json TEXT NOT NULL,
+        terminal_json TEXT NOT NULL,
+        result_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (tenant_id, operation_id, step_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_loop_mutation_target ON loop_mutation_operations(tenant_id, target_id, created_at DESC);
+      CREATE TRIGGER IF NOT EXISTS loop_mutation_operations_no_update
+      BEFORE UPDATE ON loop_mutation_operations
+      BEGIN
+        SELECT RAISE(ABORT, 'loop mutation receipts are immutable');
+      END;
+      CREATE TRIGGER IF NOT EXISTS loop_mutation_operations_no_delete
+      BEFORE DELETE ON loop_mutation_operations
+      BEGIN
+        SELECT RAISE(ABORT, 'loop mutation receipts are immutable');
+      END;
+
+      CREATE TABLE IF NOT EXISTS loop_mutation_leases (
+        tenant_id TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        lease_id TEXT NOT NULL,
+        operation_id TEXT NOT NULL,
+        step_id TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (tenant_id, target_id),
+        UNIQUE (tenant_id, lease_id)
+      );
 
       CREATE TABLE IF NOT EXISTS daemon_lease (
         id TEXT PRIMARY KEY,
@@ -1034,6 +1497,7 @@ export class Store {
         subject_ref TEXT NOT NULL,
         project_key TEXT,
         project_group TEXT,
+        machine_id TEXT,
         route_scope TEXT,
         priority INTEGER NOT NULL,
         status TEXT NOT NULL,
@@ -1052,10 +1516,10 @@ export class Store {
       CREATE INDEX IF NOT EXISTS idx_workflow_work_items_project ON workflow_work_items(project_key, status);
       CREATE INDEX IF NOT EXISTS idx_workflow_work_items_group ON workflow_work_items(project_group, status);
       CREATE INDEX IF NOT EXISTS idx_workflow_work_items_invocation ON workflow_work_items(invocation_id);
-      -- idx_workflow_work_items_scope (route_scope, status) is created ONLY by
-      -- migration 0008_work_item_route_scope, never here: this baseline DDL
+      -- New-column indexes (route_scope, machine_id, etc.) are created ONLY by
+      -- their additive migrations, never here: this baseline DDL
       -- re-runs on EVERY open (0001 is not skip-guarded), and on a pre-0008
-      -- database the CREATE TABLE above is a no-op, so an index on route_scope
+      -- database the CREATE TABLE above is a no-op, so an index on a new column
       -- here would execute before the column exists and crash the open
       -- ("no such column: route_scope"). New columns may be folded into the
       -- CREATE TABLE (fresh-db only); their indexes must live in the migration.
@@ -1070,6 +1534,7 @@ export class Store {
         finished_at TEXT,
         exit_code INTEGER,
         pid INTEGER,
+        process_started_at TEXT,
         duration_ms INTEGER,
         stdout TEXT,
         stderr TEXT,
@@ -1167,6 +1632,72 @@ export class Store {
     `);
   }
 
+  private createRunReceiptsSchema(): void {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS run_receipts (
+        run_id TEXT PRIMARY KEY,
+        loop_id TEXT NOT NULL,
+        machine_json TEXT NOT NULL,
+        repo TEXT NOT NULL,
+        task_ids_json TEXT NOT NULL,
+        knowledge_ids_json TEXT NOT NULL,
+        digest_id TEXT NOT NULL,
+        started_at TEXT,
+        finished_at TEXT,
+        status TEXT NOT NULL,
+        exit_code INTEGER,
+        summary_json TEXT NOT NULL,
+        evidence_paths_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_run_receipts_loop ON run_receipts(loop_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_run_receipts_repo ON run_receipts(repo, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_run_receipts_digest ON run_receipts(digest_id);
+      CREATE INDEX IF NOT EXISTS idx_run_receipts_status ON run_receipts(status, created_at DESC);
+    `);
+  }
+
+  private createLoopMutationSchema(): void {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS loop_mutation_operations (
+        tenant_id TEXT NOT NULL,
+        operation_id TEXT NOT NULL,
+        step_id TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        binding_digest TEXT NOT NULL,
+        binding_json TEXT NOT NULL,
+        admission_json TEXT NOT NULL,
+        terminal_json TEXT NOT NULL,
+        result_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (tenant_id, operation_id, step_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_loop_mutation_target ON loop_mutation_operations(tenant_id, target_id, created_at DESC);
+      CREATE TRIGGER IF NOT EXISTS loop_mutation_operations_no_update
+      BEFORE UPDATE ON loop_mutation_operations
+      BEGIN
+        SELECT RAISE(ABORT, 'loop mutation receipts are immutable');
+      END;
+      CREATE TRIGGER IF NOT EXISTS loop_mutation_operations_no_delete
+      BEFORE DELETE ON loop_mutation_operations
+      BEGIN
+        SELECT RAISE(ABORT, 'loop mutation receipts are immutable');
+      END;
+      CREATE TABLE IF NOT EXISTS loop_mutation_leases (
+        tenant_id TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        lease_id TEXT NOT NULL,
+        operation_id TEXT NOT NULL,
+        step_id TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (tenant_id, target_id),
+        UNIQUE (tenant_id, lease_id)
+      );
+    `);
+  }
+
   /**
    * Add a column only if it does not already exist. Idempotent — avoids the
    * "duplicate column name" error that SQLite logs (via libsqlite3, before any
@@ -1224,6 +1755,7 @@ export class Store {
       id: genId(),
       name: input.name,
       description: input.description,
+      labels: normalizeLoopLabels(input.labels),
       status: "active",
       schedule: input.schedule,
       target,
@@ -1242,15 +1774,16 @@ export class Store {
     };
     this.db
       .query(
-        `INSERT INTO loops (id, name, description, status, schedule_json, target_json, machine_json, next_run_at, retry_scheduled_for,
+        `INSERT INTO loops (id, name, description, labels_json, status, schedule_json, target_json, machine_json, next_run_at, retry_scheduled_for,
           goal_json, catch_up, catch_up_limit, overlap, max_attempts, retry_delay_ms, lease_ms, expires_at, created_at, updated_at)
-         VALUES ($id, $name, $description, $status, $schedule, $target, $machine, $nextRun, NULL, $goal, $catchUp, $catchUpLimit,
+         VALUES ($id, $name, $description, $labels, $status, $schedule, $target, $machine, $nextRun, NULL, $goal, $catchUp, $catchUpLimit,
           $overlap, $maxAttempts, $retryDelay, $leaseMs, $expiresAt, $created, $updated)`,
       )
       .run({
         $id: loop.id,
         $name: loop.name,
         $description: loop.description ?? null,
+        $labels: JSON.stringify(loop.labels),
         $status: loop.status,
         $schedule: JSON.stringify(loop.schedule),
         $target: JSON.stringify(loop.target),
@@ -1301,39 +1834,100 @@ export class Store {
     return rowToLoop(active[0]!);
   }
 
+  private requireArchiveMutationLoop(idOrName: string, operation: "archive" | "unarchive"): Loop {
+    const byId = this.getLoop(idOrName);
+    if (byId) return byId;
+    const eligibleWhere = operation === "archive" ? "archived_at IS NULL" : "archived_at IS NOT NULL";
+    const eligible = this.db
+      .query<LoopRow, [string]>(
+        `SELECT * FROM loops WHERE name = ? AND ${eligibleWhere} ORDER BY created_at DESC LIMIT 2`,
+      )
+      .all(idOrName);
+    if (eligible.length > 1) throw new AmbiguousNameError(idOrName);
+    if (eligible.length === 1) return rowToLoop(eligible[0]!);
+
+    // Preserve idempotence for a uniquely named loop already in the requested
+    // state. Multiple same-state rows still fail closed because a name cannot
+    // identify which exact row the caller previously targeted.
+    const alreadyWhere = operation === "archive" ? "archived_at IS NOT NULL" : "archived_at IS NULL";
+    const already = this.db
+      .query<LoopRow, [string]>(
+        `SELECT * FROM loops WHERE name = ? AND ${alreadyWhere} ORDER BY created_at DESC LIMIT 2`,
+      )
+      .all(idOrName);
+    if (already.length === 0) throw new LoopNotFoundError(idOrName);
+    if (already.length > 1) throw new AmbiguousNameError(idOrName);
+    return rowToLoop(already[0]!);
+  }
+
   requireLoop(idOrName: string): Loop {
     return this.getLoop(idOrName) ?? this.findLoopByName(idOrName) ?? (() => {
       throw new LoopNotFoundError(idOrName);
     })();
   }
 
-  listLoops(opts: { status?: LoopStatus; limit?: number; archived?: boolean; includeArchived?: boolean } = {}): Loop[] {
+  listLoops(opts: { status?: LoopStatus; labels?: string[]; limit?: number; offset?: number; archived?: boolean; includeArchived?: boolean; name?: string } = {}): Loop[] {
     const limit = opts.limit ?? 200;
-    let rows: LoopRow[];
-    if (opts.status && opts.archived) {
-      rows = this.db
-        .query<LoopRow, [string, number]>("SELECT * FROM loops WHERE status = ? AND archived_at IS NOT NULL ORDER BY next_run_at ASC LIMIT ?")
-        .all(opts.status, limit);
-    } else if (opts.status && opts.includeArchived) {
-      rows = this.db
-        .query<LoopRow, [string, number]>("SELECT * FROM loops WHERE status = ? ORDER BY next_run_at ASC LIMIT ?")
-        .all(opts.status, limit);
-    } else if (opts.status) {
-      rows = this.db
-        .query<LoopRow, [string, number]>("SELECT * FROM loops WHERE status = ? AND archived_at IS NULL ORDER BY next_run_at ASC LIMIT ?")
-        .all(opts.status, limit);
-    } else if (opts.archived) {
-      rows = this.db
-        .query<LoopRow, [number]>("SELECT * FROM loops WHERE archived_at IS NOT NULL ORDER BY archived_at DESC LIMIT ?")
-        .all(limit);
-    } else if (opts.includeArchived) {
-      rows = this.db.query<LoopRow, [number]>("SELECT * FROM loops ORDER BY status ASC, next_run_at ASC LIMIT ?").all(limit);
-    } else {
-      rows = this.db
-        .query<LoopRow, [number]>("SELECT * FROM loops WHERE archived_at IS NULL ORDER BY status ASC, next_run_at ASC LIMIT ?")
-        .all(limit);
+    const offset = Math.max(0, Math.floor(opts.offset ?? 0));
+    // Exact-name lookup short-circuits every other filter: it returns *all*
+    // loops (archived included) matching the name so callers can detect
+    // ambiguity, mirroring findLoopByName plus the resolveLoop resolution path.
+    if (opts.name != null) {
+      const rows = this.db
+        .query<LoopRow, [string, number, number]>("SELECT * FROM loops WHERE name = ? ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?")
+        .all(opts.name, limit, offset);
+      return this.withLatestRunSummaries(rows.map(rowToLoop));
     }
-    return rows.map(rowToLoop);
+    const labels = normalizeLoopLabels(opts.labels);
+    const where: string[] = [];
+    const params: Array<string | number> = [];
+    if (opts.status) {
+      where.push("loops.status = ?");
+      params.push(opts.status);
+    }
+    if (opts.archived) where.push("loops.archived_at IS NOT NULL");
+    else if (!opts.includeArchived) where.push("loops.archived_at IS NULL");
+    for (const label of labels) {
+      where.push("EXISTS (SELECT 1 FROM json_each(loops.labels_json) WHERE value = ?)");
+      params.push(label);
+    }
+    const order = opts.archived
+      ? "loops.archived_at DESC, loops.id DESC"
+      : "loops.status ASC, loops.next_run_at ASC, loops.id ASC";
+    const rows = this.db
+      .query<LoopRow, Array<string | number>>(
+        `SELECT loops.* FROM loops${where.length ? ` WHERE ${where.join(" AND ")}` : ""} ORDER BY ${order} LIMIT ? OFFSET ?`,
+      )
+      .all(...params, limit, offset);
+    return this.withLatestRunSummaries(rows.map(rowToLoop));
+  }
+
+  private withLatestRunSummaries(loops: Loop[]): Loop[] {
+    if (loops.length === 0) return loops;
+    const placeholders = loops.map(() => "?").join(",");
+    const rows = this.db
+      .query<LatestRunSummaryRow, string[]>(
+        `SELECT loop_id, id, status, started_at, finished_at, created_at
+         FROM (
+           SELECT loop_id, id, status, started_at, finished_at, created_at,
+             ROW_NUMBER() OVER (PARTITION BY loop_id ORDER BY created_at DESC, id DESC) AS rn
+           FROM loop_runs
+           WHERE loop_id IN (${placeholders})
+         )
+         WHERE rn = 1`,
+      )
+      .all(...loops.map((loop) => loop.id));
+    const latestByLoopId = new Map(rows.map((row) => [row.loop_id, row]));
+    return loops.map((loop) => {
+      const latest = latestByLoopId.get(loop.id);
+      if (!latest) return loop;
+      return {
+        ...loop,
+        latestRunId: latest.id,
+        latestRunStatus: latest.status as RunStatus,
+        lastRunAt: latestRunTime(latest),
+      };
+    });
   }
 
   dueLoops(now: Date, limit = 500): Loop[] {
@@ -1353,10 +1947,12 @@ export class Store {
 
   updateLoop(
     id: string,
-    patch: Partial<Pick<Loop, "status" | "nextRunAt" | "retryScheduledFor" | "expiresAt">>,
+    patch: Partial<Pick<Loop, "status" | "nextRunAt" | "retryScheduledFor" | "expiresAt" | "labels" | "maxAttempts">>,
     opts: DaemonLeaseFence = {},
   ): Loop {
     const updated = (opts.now ?? new Date()).toISOString();
+    if ("status" in patch && patch.status !== undefined) assertLoopStatus(patch.status);
+    if ("maxAttempts" in patch && patch.maxAttempts !== undefined) assertMaxAttempts(patch.maxAttempts);
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const current = this.getLoop(id);
@@ -1364,11 +1960,16 @@ export class Store {
       // Archived loops are frozen: the explicit unarchive mutation path is
       // unarchiveLoop(), which restores status directly.
       if (current.archivedAt) throw new LoopArchivedError(current.name || id);
-      const merged: Loop = { ...current, ...patch, updatedAt: updated };
+      const merged: Loop = {
+        ...current,
+        ...patch,
+        labels: patch.labels !== undefined ? normalizeLoopLabels(patch.labels) : current.labels,
+        updatedAt: updated,
+      };
       const res = this.db
         .query(
-          `UPDATE loops SET status=$status, next_run_at=$nextRun, retry_scheduled_for=$retrySlot,
-           expires_at=$expiresAt, updated_at=$updated
+          `UPDATE loops SET status=$status, labels_json=$labels, next_run_at=$nextRun, retry_scheduled_for=$retrySlot,
+           expires_at=$expiresAt, max_attempts=$maxAttempts, updated_at=$updated
            WHERE id=$id
              AND ($daemonLeaseId IS NULL OR EXISTS (
                SELECT 1 FROM daemon_lease WHERE id=$daemonLeaseId AND expires_at > $now
@@ -1377,9 +1978,11 @@ export class Store {
         .run({
           $id: id,
           $status: merged.status,
+          $labels: JSON.stringify(merged.labels),
           $nextRun: merged.nextRunAt ?? null,
           $retrySlot: merged.retryScheduledFor ?? null,
           $expiresAt: merged.expiresAt ?? null,
+          $maxAttempts: merged.maxAttempts,
           $updated: merged.updatedAt,
           $daemonLeaseId: opts.daemonLeaseId ?? null,
           $now: updated,
@@ -1401,6 +2004,365 @@ export class Store {
     const after = this.getLoop(id);
     if (!after) throw new Error(`loop not found after update: ${id}`);
     return after;
+  }
+
+  mutateLoop(
+    envelope: LoopMutationEnvelope,
+    authority: OperationAuthorityBinding,
+    opts: { now?: Date; leaseMs?: number } = {},
+  ): LoopMutationResult {
+    const binding = normalizeLoopMutationEnvelope(envelope, authority);
+    const now = opts.now ?? new Date();
+    const createdAt = now.toISOString();
+    const leaseExpiresAt = new Date(now.getTime() + (opts.leaseMs ?? 30_000)).toISOString();
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const existing = this.db.query<{
+        binding_digest: string;
+        binding_json: string;
+        admission_json: string;
+        terminal_json: string;
+        result_json: string;
+      }, [string, string, string]>(
+        `SELECT binding_digest, binding_json, admission_json, terminal_json, result_json
+         FROM loop_mutation_operations
+         WHERE tenant_id=? AND operation_id=? AND step_id=?`,
+      ).get(binding.authority.tenantId, binding.operationId, binding.stepId);
+      if (existing) {
+        if (existing.binding_digest !== binding.bindingDigest) {
+          throw new LoopMutationConflictError("binding_mismatch", binding.targetId);
+        }
+        this.db.exec("COMMIT");
+        return {
+          binding,
+          admission: JSON.parse(existing.admission_json),
+          terminal: JSON.parse(existing.terminal_json),
+          loop: JSON.parse(existing.result_json),
+          replayed: true,
+        } as LoopMutationResult;
+      }
+
+      const current = this.getLoop(binding.targetId);
+      if (!current) throw new LoopNotFoundError(binding.targetId);
+      if (current.archivedAt) throw new LoopArchivedError(current.name || current.id);
+      if (current.updatedAt !== binding.expectedRevision) {
+        throw new LoopMutationConflictError("revision_mismatch", binding.targetId);
+      }
+
+      this.db.query("DELETE FROM loop_mutation_leases WHERE tenant_id=? AND target_id=? AND expires_at <= ?")
+        .run(binding.authority.tenantId, binding.targetId, createdAt);
+      try {
+        this.db.query(
+          `INSERT INTO loop_mutation_leases
+           (tenant_id,target_id,lease_id,operation_id,step_id,expires_at,created_at)
+           VALUES (?,?,?,?,?,?,?)`,
+        ).run(
+          binding.authority.tenantId,
+          binding.targetId,
+          binding.leaseId,
+          binding.operationId,
+          binding.stepId,
+          leaseExpiresAt,
+          createdAt,
+        );
+      } catch {
+        throw new LoopMutationConflictError("lease_conflict", binding.targetId);
+      }
+
+      let result = current;
+      if (!binding.dryRun) {
+        const status: LoopStatus = binding.action === "pause"
+          ? "paused"
+          : binding.action === "stop"
+            ? "stopped"
+            : "active";
+        const nextRunAt = binding.action === "stop"
+          ? undefined
+          : binding.action === "resume" && !current.nextRunAt
+            ? initialNextRun(current.schedule, now)
+            : current.nextRunAt;
+        const updatedAt = new Date(Math.max(now.getTime(), Date.parse(current.updatedAt) + 1)).toISOString();
+        const update = this.db.query(
+          `UPDATE loops SET status=?, next_run_at=?, updated_at=?
+           WHERE id=? AND updated_at=? AND archived_at IS NULL`,
+        ).run(status, nextRunAt ?? null, updatedAt, current.id, binding.expectedRevision);
+        if (update.changes !== 1) throw new LoopMutationConflictError("revision_mismatch", binding.targetId);
+        if (status !== "active") {
+          this.setWorkflowWorkItemsForLoop(
+            current.id,
+            status === "paused" ? "deferred" : "cancelled",
+            `loop ${status}`,
+            updatedAt,
+          );
+        }
+        result = { ...current, status, nextRunAt, updatedAt };
+      }
+      const admission = loopMutationAdmissionReceipt(binding, createdAt);
+      const terminal = loopMutationTerminalReceipt(binding, result, createdAt);
+      this.db.query(
+        `INSERT INTO loop_mutation_operations
+         (tenant_id,operation_id,step_id,target_id,binding_digest,binding_json,admission_json,terminal_json,result_json,created_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?)`,
+      ).run(
+        binding.authority.tenantId,
+        binding.operationId,
+        binding.stepId,
+        binding.targetId,
+        binding.bindingDigest,
+        JSON.stringify(binding),
+        JSON.stringify(admission),
+        JSON.stringify(terminal),
+        JSON.stringify(result),
+        createdAt,
+      );
+      this.db.query("DELETE FROM loop_mutation_leases WHERE tenant_id=? AND target_id=? AND lease_id=?")
+        .run(binding.authority.tenantId, binding.targetId, binding.leaseId);
+      this.db.exec("COMMIT");
+      return { binding, admission, terminal, loop: result, replayed: false };
+    } catch (error) {
+      try {
+        this.db.exec("ROLLBACK");
+      } catch {
+        /* transaction may already be closed */
+      }
+      throw error;
+    }
+  }
+
+  getLoopMutationResult(
+    authority: OperationAuthorityBinding,
+    operationId: string,
+    stepId: string,
+    caps: LoopMutationLookupCaps = DEFAULT_LOOP_MUTATION_LOOKUP_CAPS,
+  ): LoopMutationResult | undefined {
+    const startedAt = Date.now();
+    if (!Number.isInteger(caps.maxCalls) || caps.maxCalls < 1) throw new ValidationError("loop mutation lookup call cap exceeded");
+    if (!Number.isInteger(caps.maxRecords) || caps.maxRecords < 1) throw new ValidationError("loop mutation lookup record cap exceeded");
+    if (!Number.isInteger(caps.maxBytes) || caps.maxBytes < 1) throw new ValidationError("loop mutation lookup byte cap exceeded");
+    if (!Number.isInteger(caps.maxWallMs) || caps.maxWallMs < 1) throw new ValidationError("loop mutation lookup wall-time cap exceeded");
+    const rows = this.db.query<{
+      binding_digest: string;
+      binding_json: string;
+      admission_json: string;
+      terminal_json: string;
+      result_json: string;
+    }, [string, string, string]>(
+      `SELECT binding_digest, binding_json, admission_json, terminal_json, result_json
+       FROM loop_mutation_operations
+       WHERE tenant_id=? AND operation_id=? AND step_id=?
+       LIMIT 2`,
+    ).all(authority.tenantId, operationId, stepId);
+    if (rows.length > caps.maxRecords) throw new ValidationError("loop mutation lookup record cap exceeded");
+    if (Date.now() - startedAt > caps.maxWallMs) throw new ValidationError("loop mutation lookup wall-time cap exceeded");
+    if (rows.length === 0) return undefined;
+    if (rows.length !== 1) throw new ValidationError("duplicate loop mutation result");
+    const row = rows[0]!;
+    const bytes = Buffer.byteLength(row.binding_json) + Buffer.byteLength(row.admission_json) +
+      Buffer.byteLength(row.terminal_json) + Buffer.byteLength(row.result_json);
+    if (bytes > caps.maxBytes) throw new ValidationError("loop mutation lookup byte cap exceeded");
+    const binding = JSON.parse(row.binding_json);
+    const admission = JSON.parse(row.admission_json);
+    const terminal = JSON.parse(row.terminal_json);
+    const loop = JSON.parse(row.result_json);
+    if (
+      binding.bindingDigest !== row.binding_digest ||
+      admission.bindingDigest !== row.binding_digest ||
+      terminal.bindingDigest !== row.binding_digest
+    ) {
+      throw new LoopMutationConflictError("binding_mismatch", admission.targetId);
+    }
+    return { binding, admission, terminal, loop, replayed: true };
+  }
+
+  advanceLoopIfCurrent(
+    id: string,
+    expected: LoopSchedulingState,
+    patch: Partial<Pick<Loop, "status" | "nextRunAt" | "retryScheduledFor">>,
+    opts: DaemonLeaseFence = {},
+  ): Loop | undefined {
+    const updated = (opts.now ?? new Date()).toISOString();
+    if ("status" in patch && patch.status !== undefined) assertLoopStatus(patch.status);
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const current = this.getLoop(id);
+      if (!current || current.archivedAt) {
+        this.db.exec("COMMIT");
+        return undefined;
+      }
+      if (
+        current.status !== expected.status ||
+        current.nextRunAt !== expected.nextRunAt ||
+        current.retryScheduledFor !== expected.retryScheduledFor
+      ) {
+        this.db.exec("COMMIT");
+        return undefined;
+      }
+      if (opts.recoveredRun) {
+        const run = this.getRun(opts.recoveredRun.id);
+        if (
+          !run ||
+          run.status !== "abandoned" ||
+          run.error !== "run lease expired before completion" ||
+          run.attempt !== opts.recoveredRun.attempt ||
+          run.updatedAt !== opts.recoveredRun.updatedAt ||
+          run.scheduledFor !== opts.recoveredRun.scheduledFor
+        ) {
+          this.db.exec("COMMIT");
+          return undefined;
+        }
+      }
+      const merged: Loop = { ...current, ...patch, updatedAt: updated };
+      const res = this.db
+        .query(
+          `UPDATE loops SET status=$status, next_run_at=$nextRun, retry_scheduled_for=$retrySlot, updated_at=$updated
+           WHERE id=$id
+             AND archived_at IS NULL
+             AND status=$expectedStatus
+             AND next_run_at IS $expectedNextRun
+             AND retry_scheduled_for IS $expectedRetrySlot
+             AND ($daemonLeaseId IS NULL OR EXISTS (
+               SELECT 1 FROM daemon_lease WHERE id=$daemonLeaseId AND expires_at > $now
+             ))`,
+        )
+        .run({
+          $id: id,
+          $status: merged.status,
+          $nextRun: merged.nextRunAt ?? null,
+          $retrySlot: merged.retryScheduledFor ?? null,
+          $updated: updated,
+          $expectedStatus: expected.status,
+          $expectedNextRun: expected.nextRunAt ?? null,
+          $expectedRetrySlot: expected.retryScheduledFor ?? null,
+          $daemonLeaseId: opts.daemonLeaseId ?? null,
+          $now: updated,
+        });
+      if (res.changes !== 1) {
+        this.db.exec("COMMIT");
+        return undefined;
+      }
+      if (patch.status && patch.status !== "active") {
+        const status: WorkflowWorkItemStatus = patch.status === "paused" ? "deferred" : "cancelled";
+        this.setWorkflowWorkItemsForLoop(id, status, `loop ${patch.status}`, updated);
+      }
+      this.db.exec("COMMIT");
+    } catch (error) {
+      try {
+        this.db.exec("ROLLBACK");
+      } catch {
+        /* transaction may already be closed */
+      }
+      throw error;
+    }
+    return this.getLoop(id);
+  }
+
+  tripCircuitBreakerIfCurrent(
+    id: string,
+    expected: LoopSchedulingState,
+    patch: Partial<Pick<Loop, "status" | "nextRunAt" | "retryScheduledFor">>,
+    marker: { scheduledFor: string; reason: string },
+    opts: DaemonLeaseFence = {},
+  ): CircuitBreakerTransitionResult | undefined {
+    const updated = (opts.now ?? new Date()).toISOString();
+    const scrubbedReason = scrubbedOrNull(marker.reason) ?? "";
+    if ("status" in patch && patch.status !== undefined) assertLoopStatus(patch.status);
+    this.db.exec("BEGIN IMMEDIATE");
+    let markerScheduledFor = marker.scheduledFor;
+    try {
+      const current = this.getLoop(id);
+      if (
+        !current ||
+        current.archivedAt ||
+        current.status !== expected.status ||
+        current.nextRunAt !== expected.nextRunAt ||
+        current.retryScheduledFor !== expected.retryScheduledFor
+      ) {
+        this.db.exec("COMMIT");
+        return undefined;
+      }
+      if (opts.recoveredRun) {
+        const run = this.getRun(opts.recoveredRun.id);
+        if (
+          !run ||
+          run.status !== "abandoned" ||
+          run.error !== "run lease expired before completion" ||
+          run.attempt !== opts.recoveredRun.attempt ||
+          run.updatedAt !== opts.recoveredRun.updatedAt ||
+          run.scheduledFor !== opts.recoveredRun.scheduledFor
+        ) {
+          this.db.exec("COMMIT");
+          return undefined;
+        }
+      }
+      const merged: Loop = { ...current, ...patch, updatedAt: updated };
+      const res = this.db
+        .query(
+          `UPDATE loops SET status=$status, next_run_at=$nextRun, retry_scheduled_for=$retrySlot, updated_at=$updated
+           WHERE id=$id
+             AND archived_at IS NULL
+             AND status=$expectedStatus
+             AND next_run_at IS $expectedNextRun
+             AND retry_scheduled_for IS $expectedRetrySlot
+             AND ($daemonLeaseId IS NULL OR EXISTS (
+               SELECT 1 FROM daemon_lease WHERE id=$daemonLeaseId AND expires_at > $now
+             ))`,
+        )
+        .run({
+          $id: id,
+          $status: merged.status,
+          $nextRun: merged.nextRunAt ?? null,
+          $retrySlot: merged.retryScheduledFor ?? null,
+          $updated: updated,
+          $expectedStatus: expected.status,
+          $expectedNextRun: expected.nextRunAt ?? null,
+          $expectedRetrySlot: expected.retryScheduledFor ?? null,
+          $daemonLeaseId: opts.daemonLeaseId ?? null,
+          $now: updated,
+        });
+      if (res.changes !== 1) {
+        this.db.exec("COMMIT");
+        return undefined;
+      }
+      let markerAtMs = new Date(markerScheduledFor).getTime();
+      for (let probe = 0; probe < 1_000 && this.getRunBySlot(id, new Date(markerAtMs).toISOString()); probe += 1) {
+        markerAtMs += 1;
+      }
+      markerScheduledFor = new Date(markerAtMs).toISOString();
+      const markerId = genId();
+      this.db
+        .query(
+          `INSERT INTO loop_runs (id, loop_id, loop_name, scheduled_for, attempt, status, started_at, finished_at,
+            claimed_by, lease_expires_at, pid, exit_code, duration_ms, stdout, stderr, error, created_at, updated_at)
+           VALUES ($id, $loopId, $loopName, $scheduledFor, 1, 'skipped', NULL, $finished, NULL, NULL, NULL, NULL, NULL,
+            NULL, NULL, $error, $created, $updated)`,
+        )
+        .run({
+          $id: markerId,
+          $loopId: current.id,
+          $loopName: current.name,
+          $scheduledFor: markerScheduledFor,
+          $finished: updated,
+          $error: scrubbedReason,
+          $created: updated,
+          $updated: updated,
+        });
+      if (patch.status && patch.status !== "active") {
+        const status: WorkflowWorkItemStatus = patch.status === "paused" ? "deferred" : "cancelled";
+        this.setWorkflowWorkItemsForLoop(id, status, `loop ${patch.status}`, updated);
+      }
+      this.db.exec("COMMIT");
+    } catch (error) {
+      try {
+        this.db.exec("ROLLBACK");
+      } catch {
+        /* transaction may already be closed */
+      }
+      throw error;
+    }
+    const loop = this.getLoop(id);
+    const createdMarker = this.getRunBySlot(id, markerScheduledFor);
+    if (!loop || !createdMarker) throw new Error(`circuit breaker transition missing committed rows: ${id}`);
+    return { loop, marker: createdMarker };
   }
 
   private activeLoopReferenceCount(workflowId: string): number {
@@ -1462,6 +2424,46 @@ export class Store {
       this.db.exec("COMMIT");
       const after = this.getLoop(current.id);
       if (!after) throw new Error(`loop not found after retarget: ${current.id}`);
+      return after;
+    } catch (error) {
+      try {
+        this.db.exec("ROLLBACK");
+      } catch {
+        /* transaction may already be closed */
+      }
+      throw error;
+    }
+  }
+
+  updateAgentLoopTimeout(idOrName: string, timeoutMs: TimeoutMs, opts: DaemonLeaseFence = {}): Loop {
+    const updated = (opts.now ?? new Date()).toISOString();
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const current = this.requireUniqueLoop(idOrName);
+      if (current.archivedAt) throw new LoopArchivedError(current.name || current.id);
+      if (current.target.type !== "agent") throw new Error(`loop is not an agent loop: ${idOrName}`);
+      if (this.hasRunningRun(current.id)) throw new Error(`refusing to update running loop: ${current.id}`);
+      const target = { ...current.target, timeoutMs };
+      if (timeoutMs === null && target.idleTimeoutMs !== undefined) delete target.idleTimeoutMs;
+      const res = this.db
+        .query(
+          `UPDATE loops SET target_json=$target, updated_at=$updated
+           WHERE id=$id
+             AND ($daemonLeaseId IS NULL OR EXISTS (
+               SELECT 1 FROM daemon_lease WHERE id=$daemonLeaseId AND expires_at > $now
+             ))`,
+        )
+        .run({
+          $id: current.id,
+          $target: JSON.stringify(target),
+          $updated: updated,
+          $daemonLeaseId: opts.daemonLeaseId ?? null,
+          $now: updated,
+        });
+      if (res.changes !== 1) throw new Error("daemon lease lost");
+      this.db.exec("COMMIT");
+      const after = this.getLoop(current.id);
+      if (!after) throw new Error(`loop not found after timeout update: ${current.id}`);
       return after;
     } catch (error) {
       try {
@@ -1650,7 +2652,7 @@ export class Store {
 
   archiveLoop(idOrName: string): Loop {
     return this.transact(() => {
-      const loop = this.requireLoop(idOrName);
+      const loop = this.requireArchiveMutationLoop(idOrName, "archive");
       if (loop.archivedAt) return loop;
       const updated = nowIso();
       const archivedStatus: LoopStatus = loop.status === "active" ? "paused" : loop.status;
@@ -1675,24 +2677,26 @@ export class Store {
   }
 
   unarchiveLoop(idOrName: string): Loop {
-    const loop = this.requireLoop(idOrName);
-    if (!loop.archivedAt) return loop;
-    const updated = nowIso();
-    const restoredStatus = loop.archivedFromStatus ?? loop.status;
-    this.db
-      .query(
-        `UPDATE loops
-         SET status=$status, archived_at=NULL, archived_from_status=NULL, updated_at=$updated
-         WHERE id=$id`,
-      )
-      .run({
-        $id: loop.id,
-        $status: restoredStatus,
-        $updated: updated,
-      });
-    const unarchived = this.getLoop(loop.id);
-    if (!unarchived) throw new Error(`loop not found after unarchive: ${loop.id}`);
-    return unarchived;
+    return this.transact(() => {
+      const loop = this.requireArchiveMutationLoop(idOrName, "unarchive");
+      if (!loop.archivedAt) return loop;
+      const updated = nowIso();
+      const restoredStatus = loop.archivedFromStatus ?? loop.status;
+      this.db
+        .query(
+          `UPDATE loops
+           SET status=$status, archived_at=NULL, archived_from_status=NULL, updated_at=$updated
+           WHERE id=$id`,
+        )
+        .run({
+          $id: loop.id,
+          $status: restoredStatus,
+          $updated: updated,
+        });
+      const unarchived = this.getLoop(loop.id);
+      if (!unarchived) throw new Error(`loop not found after unarchive: ${loop.id}`);
+      return unarchived;
+    });
   }
 
   deleteLoop(idOrName: string): boolean {
@@ -1812,23 +2816,100 @@ export class Store {
     const workItem = this.getWorkflowWorkItem(args.workItemId);
     if (!workItem || !GENERATED_ROUTE_KEYS.has(workItem.routeKey)) return undefined;
     const invocation = this.getWorkflowInvocation(workItem.invocationId);
-    if (!invocation?.templateId || !GENERATED_ROUTE_TEMPLATE_IDS.has(invocation.templateId)) return undefined;
+    if (!invocation?.templateId || !isGeneratedRouteTemplate(workItem.routeKey, invocation.templateId)) return undefined;
     const loop = this.getLoop(args.loopId);
     if (!loop || loop.schedule.type !== "once" || loop.target.type !== "workflow" || loop.target.workflowId !== args.workflowId) return undefined;
     const input = loop.target.input ?? {};
-    if (input.workflowWorkItemId && input.workflowWorkItemId !== workItem.id) return undefined;
-    if (input.workflowInvocationId && input.workflowInvocationId !== invocation.id) return undefined;
-    if (workItem.workflowId && workItem.workflowId !== args.workflowId) return undefined;
+    if (input.workflowWorkItemId !== workItem.id || input.workflowInvocationId !== invocation.id) return undefined;
+    if (workItem.loopId !== loop.id || workItem.workflowId !== args.workflowId) return undefined;
     const workflow = this.getWorkflow(args.workflowId);
     if (!workflow) return undefined;
     return { workflow, loop, workItem, invocation };
   }
 
-  private maybeArchiveGeneratedRouteWorkflow(args: { workflowId: string; loopId?: string; workItemId?: string; workflowRunId?: string; updated: string }): void {
+  private maybeArchiveGeneratedRouteWorkflow(args: {
+    workflowId: string;
+    loopId?: string;
+    loopRunId?: string;
+    workItemId?: string;
+    workflowRunId?: string;
+    workflowRunStatus?: WorkflowRunStatus;
+    updated: string;
+  }): void {
     const context = this.generatedRouteArchiveContext(args);
     if (!context) return;
-    const { workflow, loop, workItem } = context;
+    const { workflow, loop, workItem, invocation } = context;
     if (!workflow || workflow.status !== "active") return;
+    if (
+      args.loopRunId
+      && (args.workflowRunStatus === "failed" || args.workflowRunStatus === "timed_out")
+    ) {
+      const loopRun = this.getRun(args.loopRunId);
+      if (
+        loopRun?.status === "running"
+        && workItem.status === "admitted"
+        && workItem.workflowRunId === args.workflowRunId
+      ) return;
+      if (loopRun && loopRun.attempt < loop.maxAttempts) return;
+    }
+    let workflowRunId = args.workflowRunId;
+    if (!workflowRunId) {
+      if (!args.loopRunId || workItem.workflowRunId) return;
+      const loopRun = this.getRun(args.loopRunId);
+      if (!loopRun || loopRun.status === "running") return;
+      workflowRunId = `preflight-archive:${loopRun.id}`;
+      const definitionHash = workflowDefinitionHash(workflow);
+      const syntheticError = "workflow preflight failed before workflow execution; synthetic archival event owner";
+      this.db
+        .query(
+          `INSERT OR IGNORE INTO workflow_runs (id, workflow_id, workflow_name, loop_id, loop_run_id, invocation_id,
+            work_item_id, scheduled_for, idempotency_key, workflow_definition_hash, manifest_path, status, started_at,
+            finished_at, duration_ms, error, created_at, updated_at)
+           VALUES ($id, $workflowId, $workflowName, $loopId, $loopRunId, $invocationId, $workItemId, $scheduledFor,
+            NULL, $workflowDefinitionHash, NULL, 'failed', NULL, $finished, NULL, $error, $created, $updated)`,
+        )
+        .run({
+          $id: workflowRunId,
+          $workflowId: workflow.id,
+          $workflowName: workflow.name,
+          $loopId: loop.id,
+          $loopRunId: loopRun.id,
+          $invocationId: invocation.id,
+          $workItemId: workItem.id,
+          $scheduledFor: loopRun.scheduledFor,
+          $workflowDefinitionHash: definitionHash,
+          $finished: args.updated,
+          $error: syntheticError,
+          $created: args.updated,
+          $updated: args.updated,
+        });
+      const archivalOwner = this.db
+        .query<WorkflowRunRow, [string]>("SELECT * FROM workflow_runs WHERE id = ?")
+        .get(workflowRunId);
+      if (
+        !archivalOwner
+        || archivalOwner.workflow_id !== workflow.id
+        || archivalOwner.workflow_name !== workflow.name
+        || archivalOwner.loop_id !== loop.id
+        || archivalOwner.loop_run_id !== loopRun.id
+        || archivalOwner.invocation_id !== invocation.id
+        || archivalOwner.work_item_id !== workItem.id
+        || archivalOwner.scheduled_for !== loopRun.scheduledFor
+        || archivalOwner.idempotency_key !== null
+        || archivalOwner.workflow_definition_hash !== definitionHash
+        || archivalOwner.manifest_path !== null
+        || archivalOwner.status !== "failed"
+        || archivalOwner.started_at !== null
+        || archivalOwner.finished_at !== args.updated
+        || archivalOwner.duration_ms !== null
+        || archivalOwner.error !== syntheticError
+        || archivalOwner.created_at !== args.updated
+        || archivalOwner.updated_at !== args.updated
+      ) return;
+      this.db
+        .query("UPDATE workflow_work_items SET workflow_run_id=?, updated_at=? WHERE id=? AND workflow_run_id IS NULL")
+        .run(workflowRunId, args.updated, workItem.id);
+    }
     const nonTerminal = this.db
       .query<{ count: number }, [string]>(
         `SELECT COUNT(*) AS count FROM workflow_runs
@@ -1839,8 +2920,8 @@ export class Store {
     const res = this.db
       .query("UPDATE workflow_specs SET status='archived', updated_at=? WHERE id=? AND status='active'")
       .run(args.updated, args.workflowId);
-    if (res.changes === 1 && args.workflowRunId) {
-      this.appendWorkflowEvent(args.workflowRunId, "workflow_archived", undefined, {
+    if (res.changes === 1) {
+      this.appendWorkflowEvent(workflowRunId, "workflow_archived", undefined, {
         workflowId: args.workflowId,
         loopId: loop.id,
         workItemId: workItem.id,
@@ -1856,9 +2937,65 @@ export class Store {
     this.maybeArchiveGeneratedRouteWorkflow({
       workflowId: run.workflowId,
       loopId: run.loopId,
+      loopRunId: run.loopRunId,
       workItemId: run.workItemId,
       workflowRunId,
+      workflowRunStatus: run.status,
       updated,
+    });
+  }
+
+  private taskLifecycleTodosPointerContext(workflowRunId: string): {
+    todosProjectPath?: string;
+    taskId: string;
+    invocationId: string;
+    workflowRunId: string;
+    manifestPath: string;
+  } | undefined {
+    const run = this.getWorkflowRun(workflowRunId);
+    if (!run || run.status !== "succeeded" || !run.invocationId || !run.workItemId || !run.manifestPath) return undefined;
+    const workItem = this.getWorkflowWorkItem(run.workItemId);
+    if (!workItem || workItem.routeKey !== "todos-task") return undefined;
+    const invocation = this.getWorkflowInvocation(run.invocationId);
+    if (!invocation || invocation.templateId !== TASK_LIFECYCLE_TEMPLATE_ID) return undefined;
+    const todosProjectPath = invocation.scope?.todosProjectPath;
+    const taskId = invocation.subjectRef.id ?? workItem.subjectRef;
+    if (!taskId) return undefined;
+    return {
+      todosProjectPath,
+      taskId,
+      invocationId: invocation.id,
+      workflowRunId: run.id,
+      manifestPath: run.manifestPath,
+    };
+  }
+
+  private syncSuccessfulTaskLifecycleTodosPointers(workflowRunId: string): void {
+    const context = this.taskLifecycleTodosPointerContext(workflowRunId);
+    if (!context) return;
+    const result = runLocalCommand("todos", todosCliArgs(context.todosProjectPath, [
+      "task",
+      "workflow-pointers",
+      context.taskId,
+      "--clear",
+      "--invocation",
+      context.invocationId,
+      "--run",
+      context.workflowRunId,
+      "--manifest",
+      context.manifestPath,
+      "--state",
+      "succeeded",
+      "--actor",
+      "openloops:task-lifecycle",
+    ]));
+    this.appendWorkflowEvent(workflowRunId, result.ok ? "todos_workflow_pointers_synced" : "todos_workflow_pointers_sync_failed", undefined, {
+      todosProjectPath: context.todosProjectPath,
+      taskId: context.taskId,
+      invocationId: context.invocationId,
+      workflowRunId: context.workflowRunId,
+      manifestPath: context.manifestPath,
+      mutation: todosMutationSummary(result),
     });
   }
 
@@ -1986,15 +3123,15 @@ export class Store {
 
   upsertWorkflowWorkItem(input: UpsertWorkflowWorkItemInput): WorkflowWorkItem {
     const now = nowIso();
-    const id = genId();
+    const id = input.id ?? genId();
     const status = input.status ?? "queued";
     this.db
       .query(
         `INSERT INTO workflow_work_items (id, route_key, idempotency_key, invocation_id, source_type, source_ref,
-          subject_ref, project_key, project_group, route_scope, priority, status, attempts, next_attempt_at, lease_expires_at,
+          subject_ref, project_key, project_group, machine_id, route_scope, priority, status, attempts, next_attempt_at, lease_expires_at,
           workflow_id, loop_id, workflow_run_id, last_reason, created_at, updated_at)
          VALUES ($id, $routeKey, $idempotencyKey, $invocationId, $sourceType, $sourceRef, $subjectRef,
-          $projectKey, $projectGroup, $routeScope, $priority, $status, 0, $nextAttemptAt, NULL, NULL, NULL, NULL,
+          $projectKey, $projectGroup, $machineId, $routeScope, $priority, $status, 0, $nextAttemptAt, NULL, NULL, NULL, NULL,
           $lastReason, $created, $updated)
          ON CONFLICT(route_key, idempotency_key) DO UPDATE SET
           invocation_id=excluded.invocation_id,
@@ -2003,6 +3140,10 @@ export class Store {
           subject_ref=excluded.subject_ref,
           project_key=excluded.project_key,
           project_group=excluded.project_group,
+          machine_id=CASE
+            WHEN workflow_work_items.status IN ('succeeded', 'admitted', 'running', 'failed', 'dead_letter', 'cancelled') THEN workflow_work_items.machine_id
+            ELSE excluded.machine_id
+          END,
           route_scope=excluded.route_scope,
           priority=excluded.priority,
           status=CASE
@@ -2047,6 +3188,7 @@ export class Store {
         $subjectRef: input.subjectRef,
         $projectKey: input.projectKey ?? null,
         $projectGroup: input.projectGroup ?? null,
+        $machineId: input.machineId ?? null,
         $routeScope: input.routeScope ?? null,
         $priority: input.priority ?? 0,
         $status: status,
@@ -2167,7 +3309,15 @@ export class Store {
     return counts;
   }
 
-  requeueWorkflowWorkItem(id: string, patch: { reason?: string } = {}): WorkflowWorkItem {
+  /**
+   * Requeue a terminal admission work item for the next task/event delivery.
+   * By default `attempts` is preserved (used by the bounded stale-terminal
+   * re-admission on the route path, which must keep counting toward the cap).
+   * Pass `resetAttempts: true` for the operator unwedge (`loops routes requeue`)
+   * so a manual requeue is DURABLE rather than one-shot: without the reset a
+   * capped item that finishes terminal once more re-caps instantly.
+   */
+  requeueWorkflowWorkItem(id: string, patch: { reason?: string; resetAttempts?: boolean } = {}): WorkflowWorkItem {
     const current = this.getWorkflowWorkItem(id);
     if (!current) throw new Error(`workflow work item not found: ${id}`);
     const requeueableStatuses: WorkflowWorkItemStatus[] = ["succeeded", "failed", "dead_letter", "cancelled"];
@@ -2181,6 +3331,7 @@ export class Store {
       .query(
         `UPDATE workflow_work_items
          SET status='queued', workflow_id=NULL, loop_id=NULL, workflow_run_id=NULL,
+          ${patch.resetAttempts ? "attempts=0, gate_deaths=0," : ""}
           next_attempt_at=NULL, lease_expires_at=NULL, last_reason=?, updated_at=?
          WHERE id=? AND status IN (${placeholders})`,
       )
@@ -2189,6 +3340,90 @@ export class Store {
     if (!item) throw new Error(`workflow work item not found after requeue: ${id}`);
     if (res.changes !== 1) throw new Error(`workflow work item was not requeued: ${id} status=${item.status}`);
     return item;
+  }
+
+  /**
+   * Transition a terminal admission work item to `dead_letter`. Used by the
+   * route path when a still-actionable todos task has exhausted the redispatch
+   * cap: instead of silently deduping the same terminal row forever (the "black
+   * hole" — `considered=N created=0` with no signal), the item is moved to a
+   * visible `dead_letter` state so drain reports can surface + count it and an
+   * operator can `loops routes requeue` it. Idempotent: a no-op on an item that
+   * is already dead-lettered.
+   */
+  deadLetterWorkflowWorkItem(id: string, patch: { reason?: string } = {}): WorkflowWorkItem {
+    const now = nowIso();
+    const reason = patch.reason?.trim() || "redispatch cap reached; dead-lettered";
+    this.db
+      .query(
+        `UPDATE workflow_work_items
+         SET status='dead_letter', next_attempt_at=NULL, lease_expires_at=NULL, last_reason=?, updated_at=?
+         WHERE id=? AND status IN ('succeeded','failed','cancelled')`,
+      )
+      .run(reason, now, id);
+    const item = this.getWorkflowWorkItem(id);
+    if (!item) throw new Error(`workflow work item not found after dead-letter: ${id}`);
+    return item;
+  }
+
+  /**
+   * Refund a redispatch attempt for a *failed* run that never did real work.
+   * Called from {@link finalizeWorkflowRun} the moment a work item is set
+   * `failed`, so the todos-task redispatch cap only ever counts real worker
+   * attempts. A tempfail (`exit 75`) is additionally made requeueable (dropped
+   * back to `queued`, bindings cleared) so its "retry later" contract fires on
+   * the next drain instead of persisting as a terminal, dedupe-forever row. A
+   * gate death stays `failed` (the bounded re-admission picks it up after
+   * backoff once the underlying infra fault clears). Both floor attempts at 0.
+   */
+  private demoteNonProductiveWorkItems(workflowRunId: string, finishedAt: string): void {
+    const kind = classifyNonProductiveStepFailure(this.listWorkflowStepRuns(workflowRunId));
+    if (!kind) {
+      // Productive failure: the worker ran and did real work, so any
+      // consecutive-gate-death streak is broken.
+      this.db
+        .query("UPDATE workflow_work_items SET gate_deaths=0, updated_at=? WHERE workflow_run_id=? AND status='failed' AND gate_deaths > 0")
+        .run(finishedAt, workflowRunId);
+      return;
+    }
+    if (kind === "tempfail") {
+      // A tempfail also reached the worker (it executed and said "retry
+      // later"), so it breaks the gate-death streak too.
+      this.db
+        .query(
+          `UPDATE workflow_work_items
+           SET status='queued', attempts=CASE WHEN attempts > 0 THEN attempts - 1 ELSE 0 END,
+            gate_deaths=0,
+            workflow_id=NULL, loop_id=NULL, workflow_run_id=NULL,
+            next_attempt_at=NULL, lease_expires_at=NULL,
+            last_reason='worker exited 75 (tempfail): requeued for retry; attempt refunded (does not count toward redispatch cap)',
+            updated_at=?
+           WHERE workflow_run_id=? AND status='failed'`,
+        )
+        .run(finishedAt, workflowRunId);
+      return;
+    }
+    // Gate death: refund the attempt (the worker never ran) but count the
+    // consecutive streak. A deterministic infrastructure fault would otherwise
+    // retry forever at the backoff floor; at the ceiling the item is
+    // dead-lettered — visible in drain reports via the deadLettered surfacing —
+    // instead of spinning. An operator `routes requeue` (attempts reset) clears
+    // the streak and re-arms the full ceiling.
+    this.db
+      .query(
+        `UPDATE workflow_work_items
+         SET attempts=CASE WHEN attempts > 0 THEN attempts - 1 ELSE 0 END,
+          gate_deaths=gate_deaths + 1,
+          status=CASE WHEN gate_deaths + 1 >= ${GATE_DEATH_CEILING} THEN 'dead_letter' ELSE status END,
+          last_reason=CASE
+            WHEN gate_deaths + 1 >= ${GATE_DEATH_CEILING}
+              THEN 'gate-death ceiling reached (' || (gate_deaths + 1) || '/${GATE_DEATH_CEILING} consecutive runs died at worktree prep / triage / planner without reaching the worker): dead-lettered — the infrastructure fault needs an operator; ''loops routes requeue'' resets and retries'
+            ELSE 'gate death before real work (worktree prep / triage / planner): attempt refunded (does not count toward redispatch cap); consecutive gate deaths: ' || (gate_deaths + 1) || '/${GATE_DEATH_CEILING}'
+          END,
+          updated_at=?
+         WHERE workflow_run_id=? AND status='failed'`,
+      )
+      .run(finishedAt, workflowRunId);
   }
 
   admitWorkflowWorkItem(id: string, patch: { workflowId: string; loopId: string; reason?: string }): WorkflowWorkItem {
@@ -2604,9 +3839,8 @@ export class Store {
           // Scrub string leaves BEFORE stringify (which escapes quotes and
           // would hide quoted secrets), then scrub the encoded document too
           // for token shapes that survive escaping. Both passes are idempotent.
-          $evidence: input.evidence ? scrubSecrets(JSON.stringify(scrubSecretsDeep(input.evidence))) : null,
-          $rawResponse:
-            input.rawResponse === undefined ? null : scrubSecrets(JSON.stringify(scrubSecretsDeep(input.rawResponse))),
+          $evidence: input.evidence ? persistedJson(input.evidence) : null,
+          $rawResponse: input.rawResponse === undefined ? null : persistedJson(input.rawResponse),
           $created: now,
           $updated: now,
         });
@@ -2652,6 +3886,8 @@ export class Store {
 
   createWorkflowRun(input: CreateWorkflowRunInput): WorkflowRun {
     const now = nowIso();
+    const definitionHash = workflowDefinitionHash(input.workflow);
+    const initialContractEvents = initialAgentSessionContractEvents(input.workflow);
     const targetInput = input.loop?.target.type === "workflow" ? input.loop.target.input : undefined;
     const invocationId = input.invocationId ?? targetInput?.workflowInvocationId ?? targetInput?.invocationId;
     const workItemId = input.workItemId ?? targetInput?.workflowWorkItemId ?? targetInput?.workItemId;
@@ -2663,11 +3899,20 @@ export class Store {
         .get(input.workflow.id, input.idempotencyKey);
       if (existing) {
         this.assertDaemonLeaseFence(input);
+        if (!existing.workflow_definition_hash) throw new LegacyWorkflowRunProvenanceError(existing.id);
+        if (existing.workflow_definition_hash !== definitionHash) throw new WorkflowRunDefinitionConflictError(existing.id);
         return rowToWorkflowRun(existing);
       }
     }
 
     const runId = genId();
+    const operationEvents = privateOperationEventsForWorkflowRun({
+      workflow: input.workflow,
+      workflowRunId: runId,
+      attempt: input.loopRun?.attempt ?? 1,
+      idempotencyKey: input.idempotencyKey ?? `${runId}:${definitionHash}`,
+      authority: input.operationAuthority ?? { authorityId: "local", tenantId: "local" },
+    });
     const workItem = workItemId ? this.getWorkflowWorkItem(workItemId) : undefined;
     const invocation = invocationId ? this.getWorkflowInvocation(invocationId) : undefined;
     // The manifest is staged as manifest.json.tmp before BEGIN so no
@@ -2709,6 +3954,8 @@ export class Store {
           )
           .get(input.workflow.id, input.idempotencyKey);
         if (existing) {
+          if (!existing.workflow_definition_hash) throw new LegacyWorkflowRunProvenanceError(existing.id);
+          if (existing.workflow_definition_hash !== definitionHash) throw new WorkflowRunDefinitionConflictError(existing.id);
           this.db.exec("COMMIT");
           discardWorkflowRunManifest(staged);
           return rowToWorkflowRun(existing);
@@ -2718,10 +3965,10 @@ export class Store {
       this.db
         .query(
           `INSERT INTO workflow_runs (id, workflow_id, workflow_name, loop_id, loop_run_id, invocation_id, work_item_id,
-            scheduled_for, idempotency_key, manifest_path, status, started_at, finished_at, duration_ms, error,
+            scheduled_for, idempotency_key, workflow_definition_hash, manifest_path, status, started_at, finished_at, duration_ms, error,
             created_at, updated_at)
            VALUES ($id, $workflowId, $workflowName, $loopId, $loopRunId, $invocationId, $workItemId, $scheduledFor,
-            $idempotencyKey, $manifestPath, 'running', $started, NULL, NULL, NULL, $created, $updated)`,
+            $idempotencyKey, $workflowDefinitionHash, $manifestPath, 'running', $started, NULL, NULL, NULL, $created, $updated)`,
         )
         .run({
           $id: runId,
@@ -2733,6 +3980,7 @@ export class Store {
           $workItemId: workItemId ?? null,
           $scheduledFor: input.scheduledFor ?? input.loopRun?.scheduledFor ?? null,
           $idempotencyKey: input.idempotencyKey ?? null,
+          $workflowDefinitionHash: definitionHash,
           $manifestPath: manifestPath ?? null,
           $started: now,
           $created: now,
@@ -2794,7 +4042,7 @@ export class Store {
         .run({
           $id: genId(),
           $workflowRunId: runId,
-          $payload: JSON.stringify({
+          $payload: persistedWorkflowEventPayload({
             workflowId: input.workflow.id,
             workflowName: input.workflow.name,
             stepCount: input.workflow.steps.length,
@@ -2806,6 +4054,41 @@ export class Store {
           }),
           $created: now,
         });
+
+      initialContractEvents.forEach((event, index) => {
+        input.beforeInitialWorkflowEventPersist?.(event);
+        this.db
+          .query(
+            `INSERT INTO workflow_events (id, workflow_run_id, sequence, event_type, step_id, payload_json, created_at)
+             VALUES ($id, $workflowRunId, $sequence, $eventType, $stepId, $payload, $created)`,
+          )
+          .run({
+            $id: genId(),
+            $workflowRunId: runId,
+            $sequence: index + 2,
+            $eventType: event.eventType,
+            $stepId: event.stepId,
+            $payload: persistedWorkflowEventPayload(event.payload),
+            $created: now,
+          });
+      });
+
+      operationEvents.forEach((event, index) => {
+        this.db
+          .query(
+            `INSERT INTO workflow_events (id, workflow_run_id, sequence, event_type, step_id, payload_json, created_at)
+             VALUES ($id, $workflowRunId, $sequence, $eventType, $stepId, $payload, $created)`,
+          )
+          .run({
+            $id: genId(),
+            $workflowRunId: runId,
+            $sequence: initialContractEvents.length + index + 2,
+            $eventType: event.eventType,
+            $stepId: event.stepId,
+            $payload: persistedWorkflowEventPayload(event.payload),
+            $created: now,
+          });
+      });
 
       this.db.exec("COMMIT");
       commitWorkflowRunManifest(staged);
@@ -2928,7 +4211,7 @@ export class Store {
     const now = (opts.now ?? new Date()).toISOString();
     this.db
       .query(
-        `UPDATE workflow_step_runs SET pid=$pid, updated_at=$updated
+        `UPDATE workflow_step_runs SET pid=$pid, process_started_at=$processStartedAt, updated_at=$updated
          WHERE workflow_run_id=$workflowRunId AND step_id=$stepId AND status='running'
            AND ($daemonLeaseId IS NULL OR EXISTS (
              SELECT 1 FROM daemon_lease WHERE id=$daemonLeaseId AND expires_at > $now
@@ -2938,6 +4221,9 @@ export class Store {
         $workflowRunId: workflowRunId,
         $stepId: stepId,
         $pid: pid,
+        // Pair the pid with its start time so a recycled pid can later be
+        // rejected by identity rather than by a lower-bound guess.
+        $processStartedAt: isoProcessStart(pid) ?? null,
         $updated: now,
         $daemonLeaseId: opts.daemonLeaseId ?? null,
         $now: now,
@@ -2993,20 +4279,25 @@ export class Store {
     return run;
   }
 
-  recoverWorkflowRun(workflowRunId: string, reason = "workflow run recovered for retry"): {
+  recoverWorkflowRun(
+    workflowRunId: string,
+    reason = "workflow run recovered for retry",
+    _context: WorkflowRecoveryContext = {},
+  ): {
     run: WorkflowRun;
     recoveredSteps: WorkflowStepRun[];
   } {
+    const scrubbedReason = scrubbedOrNull(reason) ?? "";
     return this.transact(() => {
       const now = nowIso();
+      const run = this.requireWorkflowRun(workflowRunId);
+      if (run.status !== "running") throw new WorkflowRunNotRunningError();
       const before = this.listWorkflowStepRuns(workflowRunId).filter((step) => step.status === "running");
-      const live = before.filter((step) => step.pid !== undefined && isLiveStepProcess(step.pid, step.startedAt));
+      const live = before.filter(
+        (step) => step.pid !== undefined && isLiveStepProcess(step.pid, step.startedAt, step.processStartedAt),
+      );
       if (live.length > 0) {
-        throw new Error(
-          `cannot recover workflow run while step processes are still alive: ${live
-            .map((step) => `${step.stepId} pid=${step.pid}`)
-            .join(", ")}`,
-        );
+        throw new WorkflowRunHasLiveStepsError();
       }
       this.db
         .query(
@@ -3015,15 +4306,15 @@ export class Store {
             stdout=NULL, stderr=NULL, error=$reason, updated_at=$updated
            WHERE workflow_run_id=$workflowRunId AND status='running'`,
         )
-        .run({ $workflowRunId: workflowRunId, $reason: reason, $updated: now });
+        .run({ $workflowRunId: workflowRunId, $reason: scrubbedReason, $updated: now });
       if (before.length > 0) {
         this.appendWorkflowEvent(workflowRunId, "recovered", undefined, {
-          reason,
+          reason: scrubbedReason,
           recoveredSteps: before.map((step) => step.stepId),
         });
       }
       return {
-        run: this.requireWorkflowRun(workflowRunId),
+        run,
         recoveredSteps: before.map((step) => this.getWorkflowStepRun(workflowRunId, step.stepId)).filter(Boolean) as WorkflowStepRun[],
       };
     });
@@ -3037,7 +4328,7 @@ export class Store {
     opts: DaemonLeaseFence = {},
   ): WorkflowStepRun {
     const finishedAt = patch.finishedAt ?? nowIso();
-    const error = patch.error === undefined ? undefined : scrubSecrets(patch.error);
+    const error = patch.error === undefined ? undefined : scrubbedOrNull(patch.error) ?? undefined;
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const res = this.db
@@ -3085,6 +4376,7 @@ export class Store {
 
   skipWorkflowStepRun(workflowRunId: string, stepId: string, reason: string, opts: DaemonLeaseFence = {}): WorkflowStepRun {
     const now = (opts.now ?? new Date()).toISOString();
+    const scrubbedReason = scrubbedOrNull(reason) ?? "";
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const res = this.db
@@ -3099,12 +4391,14 @@ export class Store {
           $workflowRunId: workflowRunId,
           $stepId: stepId,
           $finished: now,
-          $error: reason,
+          $error: scrubbedReason,
           $updated: now,
           $daemonLeaseId: opts.daemonLeaseId ?? null,
           $now: now,
         });
-      if (res.changes === 1) this.appendWorkflowEvent(workflowRunId, "step_skipped", stepId, { reason });
+      if (res.changes === 1) {
+        this.appendWorkflowEvent(workflowRunId, "step_skipped", stepId, { reason: scrubbedReason });
+      }
       this.db.exec("COMMIT");
     } catch (error) {
       try {
@@ -3126,10 +4420,13 @@ export class Store {
     opts: DaemonLeaseFence = {},
   ): WorkflowRun {
     const finishedAt = patch.finishedAt ?? nowIso();
-    const error = patch.error === undefined ? undefined : scrubSecrets(patch.error);
+    const error = patch.error === undefined ? undefined : scrubbedOrNull(patch.error) ?? undefined;
     let changed = false;
     this.db.exec("BEGIN IMMEDIATE");
     try {
+      const currentRun = this.db
+        .query<WorkflowRunRow, [string]>("SELECT * FROM workflow_runs WHERE id = ?")
+        .get(workflowRunId);
       const res = this.db
         .query(
           `UPDATE workflow_runs SET status=$status, finished_at=$finished, duration_ms=$durationMs, error=$error, updated_at=$updated
@@ -3151,9 +4448,44 @@ export class Store {
       changed = res.changes === 1;
       if (changed) this.appendWorkflowEvent(workflowRunId, status, undefined, { error });
       if (changed) {
-        const itemStatus: WorkflowWorkItemStatus =
+        let itemStatus: WorkflowWorkItemStatus =
           status === "succeeded" ? "succeeded" : status === "cancelled" ? "cancelled" : "failed";
-        this.setWorkflowWorkItemsForWorkflowRun(workflowRunId, itemStatus, error, finishedAt);
+        let preserveActiveParentRetry = false;
+        if (
+          itemStatus === "failed"
+          && currentRun?.loop_id
+          && currentRun.loop_run_id
+        ) {
+          const loop = this.getLoop(currentRun.loop_id);
+          const loopRun = this.getRun(currentRun.loop_run_id);
+          const workItem = currentRun.work_item_id
+            ? this.getWorkflowWorkItem(currentRun.work_item_id)
+            : undefined;
+          preserveActiveParentRetry = Boolean(
+            loop
+            && loopRun?.status === "running"
+            && workItem?.status === "admitted"
+            && workItem.workflowRunId === workflowRunId
+            && this.generatedRouteArchiveContext({
+              workflowId: currentRun.workflow_id,
+              loopId: currentRun.loop_id,
+              workItemId: currentRun.work_item_id ?? undefined,
+            }),
+          );
+          if (loop && loopRun && loopRun.attempt < loop.maxAttempts) itemStatus = "admitted";
+        }
+        const itemReason = itemStatus === "admitted"
+          ? error ? `attempt failed; retry pending: ${error}` : "attempt failed; retry pending"
+          : error;
+        if (!preserveActiveParentRetry) {
+          this.setWorkflowWorkItemsForWorkflowRun(workflowRunId, itemStatus, itemReason, finishedAt);
+        }
+        // A run that finished non-productively (a tempfail retry-signal, or a
+        // gate death before the worker ran) must not burn the redispatch cap:
+        // refund the attempt, and for a tempfail make the item requeueable now.
+        if (itemStatus === "failed" && !preserveActiveParentRetry) {
+          this.demoteNonProductiveWorkItems(workflowRunId, finishedAt);
+        }
         this.maybeArchiveTerminalGeneratedRouteWorkflow(workflowRunId, finishedAt);
       }
       this.db.exec("COMMIT");
@@ -3167,12 +4499,14 @@ export class Store {
     }
     const run = this.getWorkflowRun(workflowRunId);
     if (!run) throw new Error(`workflow run not found after finalize: ${workflowRunId}`);
+    if (changed && status === "succeeded") this.syncSuccessfulTaskLifecycleTodosPointers(workflowRunId);
     void changed;
     return run;
   }
 
   cancelWorkflowRun(workflowRunId: string, reason = "cancelled by user"): WorkflowRun {
     const now = nowIso();
+    const scrubbedReason = scrubbedOrNull(reason) ?? "";
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const run = this.requireWorkflowRun(workflowRunId);
@@ -3183,16 +4517,16 @@ export class Store {
              SET status='cancelled', finished_at=$finished, error=$reason, updated_at=$updated
              WHERE id=$id AND status NOT IN ('succeeded', 'failed', 'timed_out', 'cancelled')`,
           )
-          .run({ $id: workflowRunId, $finished: now, $reason: reason, $updated: now });
+          .run({ $id: workflowRunId, $finished: now, $reason: scrubbedReason, $updated: now });
         this.db
           .query(
             `UPDATE workflow_step_runs
              SET status='cancelled', finished_at=$finished, pid=NULL, error=$reason, updated_at=$updated
              WHERE workflow_run_id=$workflowRunId AND status IN ('pending', 'running')`,
           )
-          .run({ $workflowRunId: workflowRunId, $finished: now, $reason: reason, $updated: now });
-        this.setWorkflowWorkItemsForWorkflowRun(workflowRunId, "cancelled", reason, now);
-        this.appendWorkflowEvent(workflowRunId, "cancelled", undefined, { reason });
+          .run({ $workflowRunId: workflowRunId, $finished: now, $reason: scrubbedReason, $updated: now });
+        this.setWorkflowWorkItemsForWorkflowRun(workflowRunId, "cancelled", scrubbedReason, now);
+        this.appendWorkflowEvent(workflowRunId, "cancelled", undefined, { reason: scrubbedReason });
         this.maybeArchiveTerminalGeneratedRouteWorkflow(workflowRunId, now);
       }
       this.db.exec("COMMIT");
@@ -3212,11 +4546,21 @@ export class Store {
     eventType: string,
     stepId?: string,
     payload?: Record<string, unknown>,
-  ): WorkflowEvent {
+  ): StoredWorkflowEvent {
     // MAX(sequence)+1 is only race-free while the write lock is held, so take
     // a write transaction when the caller has not already opened one.
     return this.transact(() => {
       const now = nowIso();
+      if (eventType === "agent_session_contract" || isPrivateOperationEventType(eventType)) {
+        const duplicate = stepId === undefined
+          ? this.db.query<{ id: string }, [string, string]>(
+              "SELECT id FROM workflow_events WHERE workflow_run_id = ? AND event_type = ? AND step_id IS NULL LIMIT 1",
+            ).get(workflowRunId, eventType)
+          : this.db.query<{ id: string }, [string, string, string]>(
+              "SELECT id FROM workflow_events WHERE workflow_run_id = ? AND event_type = ? AND step_id = ? LIMIT 1",
+            ).get(workflowRunId, eventType, stepId);
+        if (duplicate) throw new DuplicateWorkflowEventError(workflowRunId, eventType, stepId);
+      }
       const current = this.db
         .query<{ sequence: number | null }, [string]>("SELECT MAX(sequence) AS sequence FROM workflow_events WHERE workflow_run_id = ?")
         .get(workflowRunId);
@@ -3233,7 +4577,7 @@ export class Store {
           $sequence: sequence,
           $eventType: eventType,
           $stepId: stepId ?? null,
-          $payload: payload ? JSON.stringify(payload) : null,
+          $payload: persistedWorkflowEventPayload(payload),
           $created: now,
         });
       const event = this.db.query<WorkflowEventRow, [string]>("SELECT * FROM workflow_events WHERE id = ?").get(id);
@@ -3242,7 +4586,7 @@ export class Store {
     });
   }
 
-  listWorkflowEvents(workflowRunId: string, limit = 200): WorkflowEvent[] {
+  listWorkflowEvents(workflowRunId: string, limit = 200): StoredWorkflowEvent[] {
     const rows = this.db
       .query<WorkflowEventRow, [string, number]>(
         "SELECT * FROM workflow_events WHERE workflow_run_id = ? ORDER BY sequence ASC LIMIT ?",
@@ -3267,6 +4611,20 @@ export class Store {
     return (row?.count ?? 0) > 0;
   }
 
+  private hasBlockingRunningRunForOtherSlot(loopId: string, scheduledFor: string, nowIso: string): boolean {
+    const rows = this.db
+      .query<RunRow, [string, string]>(
+        `SELECT * FROM loop_runs
+         WHERE loop_id = ? AND scheduled_for <> ? AND status = 'running'`,
+      )
+      .all(loopId, scheduledFor);
+    return rows.some((row) => {
+      if (!row.lease_expires_at || row.lease_expires_at > nowIso) return true;
+      if (isRecordedProcessAlive(row.pid, row.process_started_at)) return true;
+      return this.hasLiveWorkflowStepProcesses(row.id);
+    });
+  }
+
   markRunPid(id: string, pid: number, claimedBy?: string, opts: DaemonLeaseFence = {}): LoopRun | undefined {
     const now = (opts.now ?? new Date()).toISOString();
     // Always record the pid's start-time fingerprint alongside it: recovery
@@ -3279,6 +4637,7 @@ export class Store {
           .query(
             `UPDATE loop_runs SET pid=$pid, process_started_at=$processStartedAt, updated_at=$updated
              WHERE id=$id AND status='running' AND claimed_by=$claimedBy
+               AND claim_token=$claimToken
                AND ($daemonLeaseId IS NULL OR EXISTS (
                  SELECT 1 FROM daemon_lease WHERE id=$daemonLeaseId AND expires_at > $now
                ))`,
@@ -3289,6 +4648,7 @@ export class Store {
             $processStartedAt: processStartedAt,
             $updated: now,
             $claimedBy: claimedBy,
+            $claimToken: opts.claimToken ?? null,
             $daemonLeaseId: opts.daemonLeaseId ?? null,
             $now: now,
           })
@@ -3321,7 +4681,7 @@ export class Store {
     const res = this.db
       .query(
         `UPDATE loop_runs SET pid=$pid, pgid=$pgid, process_started_at=$processStartedAt, updated_at=$updated
-         WHERE id=$id AND status='running'
+         WHERE id=$id AND status='running' AND claim_token=$claimToken
            AND ($daemonLeaseId IS NULL OR EXISTS (
              SELECT 1 FROM daemon_lease WHERE id=$daemonLeaseId AND expires_at > $now
            ))`,
@@ -3334,6 +4694,7 @@ export class Store {
         // match what the kernel reports later or recovery/reaping distrusts it.
         $processStartedAt: info.processStartedAt ?? isoProcessStart(info.pid) ?? now,
         $updated: now,
+        $claimToken: opts.claimToken ?? null,
         $daemonLeaseId: opts.daemonLeaseId ?? null,
         $now: now,
       });
@@ -3343,8 +4704,12 @@ export class Store {
 
   private hasLiveWorkflowStepProcesses(loopRunId: string): boolean {
     const liveWorkflowSteps = this.db
-      .query<{ workflow_run_id: string; step_id: string; pid: number; started_at: string | null }, [string]>(
-        `SELECT wr.id AS workflow_run_id, wsr.step_id AS step_id, wsr.pid AS pid, wsr.started_at AS started_at
+      .query<
+        { workflow_run_id: string; step_id: string; pid: number; started_at: string | null; process_started_at: string | null },
+        [string]
+      >(
+        `SELECT wr.id AS workflow_run_id, wsr.step_id AS step_id, wsr.pid AS pid, wsr.started_at AS started_at,
+                wsr.process_started_at AS process_started_at
          FROM workflow_runs wr
          JOIN workflow_step_runs wsr ON wsr.workflow_run_id = wr.id
          WHERE wr.loop_run_id = ?
@@ -3353,11 +4718,12 @@ export class Store {
            AND wsr.pid IS NOT NULL`,
       )
       .all(loopRunId);
-    return liveWorkflowSteps.some((step) => isLiveStepProcess(step.pid, step.started_at));
+    return liveWorkflowSteps.some((step) => isLiveStepProcess(step.pid, step.started_at, step.process_started_at));
   }
 
   createSkippedRun(loop: Loop, scheduledFor: string, reason: string, opts: DaemonLeaseFence = {}): LoopRun {
     const now = nowIso();
+    const scrubbedReason = scrubbedOrNull(reason) ?? "";
     const run: LoopRun = {
       id: genId(),
       loopId: loop.id,
@@ -3366,7 +4732,7 @@ export class Store {
       attempt: 1,
       status: "skipped",
       finishedAt: now,
-      error: reason,
+      error: scrubbedReason,
       createdAt: now,
       updatedAt: now,
     };
@@ -3422,14 +4788,14 @@ export class Store {
           .query<RunRow, [string, string, number]>(
             `SELECT * FROM loop_runs
              WHERE loop_id = ? AND scheduled_for > ? AND status IN ('failed', 'timed_out', 'abandoned') AND attempt < ?
-             ORDER BY scheduled_for ASC LIMIT 1`,
+             ORDER BY scheduled_for ASC, id ASC LIMIT 1`,
           )
           .get(loopId, afterScheduledFor, maxAttempts)
       : this.db
           .query<RunRow, [string, number]>(
             `SELECT * FROM loop_runs
              WHERE loop_id = ? AND status IN ('failed', 'timed_out', 'abandoned') AND attempt < ?
-             ORDER BY scheduled_for ASC LIMIT 1`,
+             ORDER BY scheduled_for ASC, id ASC LIMIT 1`,
           )
           .get(loopId, maxAttempts);
     return row ? rowToRun(row) : undefined;
@@ -3456,6 +4822,10 @@ export class Store {
       loop = currentLoop;
       const leaseExpiresAt = new Date(now.getTime() + loop.leaseMs).toISOString();
       const existing = this.getRunBySlot(loop.id, scheduledFor);
+      if (loop.overlap === "skip" && this.hasBlockingRunningRunForOtherSlot(loop.id, scheduledFor, startedAt)) {
+        this.db.exec("COMMIT");
+        return undefined;
+      }
 
       if (existing) {
         if (existing.status === "running") {
@@ -3560,33 +4930,41 @@ export class Store {
       Partial<Pick<LoopRun, "exitCode" | "error" | "pid">>,
     opts: { claimedBy?: string; now?: Date; daemonLeaseId?: string; claimToken?: string } = {},
   ): LoopRun {
-    const finishedAt = patch.finishedAt ?? nowIso();
     const error = patch.error === undefined ? undefined : scrubSecrets(patch.error);
-    const params = {
-      $id: id,
-      $status: patch.status,
-      $finished: finishedAt,
-      $pid: patch.pid ?? null,
-      $exitCode: patch.exitCode ?? null,
-      $durationMs: patch.durationMs ?? null,
-      $stdout: persistedRunOutput(patch.stdout),
-      $stderr: persistedRunOutput(patch.stderr),
-      $error: error ?? null,
-      $updated: finishedAt,
-      $claimedBy: opts.claimedBy ?? null,
-      $claimToken: opts.claimToken ?? null,
-      $now: (opts.now ?? new Date()).toISOString(),
-      $daemonLeaseId: opts.daemonLeaseId ?? null,
-    };
+    const serverNow = opts.now ?? new Date();
     // The status update and the work-item/workflow cascade must land together.
     return this.transact(() => {
+      const current = this.getRun(id);
+      if (!current) throw new Error(`run not found after finalize: ${id}`);
+      const completion = normalizeRunCompletion({
+        startedAt: current.startedAt ?? current.createdAt,
+        requestedFinishedAt: patch.finishedAt,
+        requestedDurationMs: patch.durationMs,
+        serverNow,
+      });
+      const params = {
+        $id: id,
+        $status: patch.status,
+        $finished: completion.finishedAt,
+        $pid: patch.pid ?? null,
+        $exitCode: patch.exitCode ?? null,
+        $durationMs: completion.durationMs ?? null,
+        $stdout: persistedRunOutput(patch.stdout),
+        $stderr: persistedRunOutput(patch.stderr),
+        $error: error ?? null,
+        $updated: completion.updatedAt,
+        $claimedBy: opts.claimedBy ?? null,
+        $claimToken: opts.claimToken ?? null,
+        $now: completion.updatedAt,
+        $daemonLeaseId: opts.daemonLeaseId ?? null,
+      };
       const res = opts.claimedBy
         ? this.db
             .query(
-              `UPDATE loop_runs SET status=$status, finished_at=$finished, claim_token=NULL, lease_expires_at=NULL, pid=$pid, exit_code=$exitCode,
+              `UPDATE loop_runs SET status=$status, finished_at=$finished, lease_expires_at=NULL, pid=$pid, exit_code=$exitCode,
                duration_ms=$durationMs, stdout=$stdout, stderr=$stderr, error=$error, updated_at=$updated
                WHERE id=$id AND status='running' AND claimed_by=$claimedBy AND lease_expires_at > $now
-                 AND ($claimToken IS NULL OR claim_token=$claimToken)
+                 AND claim_token=$claimToken
                  AND ($daemonLeaseId IS NULL OR EXISTS (
                    SELECT 1 FROM daemon_lease WHERE id=$daemonLeaseId AND expires_at > $now
                  ))`,
@@ -3598,25 +4976,42 @@ export class Store {
               // WHERE id=$id could resurrect an already-terminal run or clobber a
               // run another owner has since re-claimed to 'running'. Only finalize
               // a run that is still running.
-              `UPDATE loop_runs SET status=$status, finished_at=$finished, claim_token=NULL, lease_expires_at=NULL, pid=$pid, exit_code=$exitCode,
+              `UPDATE loop_runs SET status=$status, finished_at=$finished, lease_expires_at=NULL, pid=$pid, exit_code=$exitCode,
                duration_ms=$durationMs, stdout=$stdout, stderr=$stderr, error=$error, updated_at=$updated
                WHERE id=$id AND status='running'`,
             )
             .run(params);
-      const run = this.getRun(id);
-      if (!run) throw new Error(`run not found after finalize: ${id}`);
-      if (opts.claimedBy && res.changes !== 1) return run;
+      const runRow = this.db.query<RunRow, [string]>("SELECT * FROM loop_runs WHERE id = ?").get(id);
+      const run = runRow ? rowToRun(runRow) : undefined;
+      if (!run || !runRow) throw new Error(`run not found after finalize: ${id}`);
+      if (opts.claimedBy && res.changes !== 1) {
+        throw new RunFinalizationConflictError(
+          opts.claimToken === undefined || runRow.claim_token !== opts.claimToken
+            ? "stale_claim"
+            : run.status === "running" ? "stale_claim" : "run_not_running",
+          id,
+        );
+      }
       if (res.changes === 1) {
-        this.setWorkflowWorkItemsForLoopRun(run, error, finishedAt);
+        this.setWorkflowWorkItemsForLoopRun(run, error, completion.updatedAt);
         const loop = this.getLoop(run.loopId);
         const itemStatus = workItemStatusForLoopRun(run.status, run.attempt, loop?.maxAttempts);
         if (loop?.target.type === "workflow" && itemStatus && itemStatus !== "admitted") {
           const workItemId = loop.target.input?.workflowWorkItemId ?? loop.target.input?.workItemId;
+          const workflowRun = this.db
+            .query<WorkflowRunRow, [string, string]>(
+              `SELECT * FROM workflow_runs
+               WHERE loop_run_id = ? AND workflow_id = ?
+               ORDER BY created_at DESC, id DESC LIMIT 1`,
+            )
+            .get(run.id, loop.target.workflowId);
           this.maybeArchiveGeneratedRouteWorkflow({
             workflowId: loop.target.workflowId,
             loopId: loop.id,
+            loopRunId: run.id,
             workItemId,
-            updated: finishedAt,
+            workflowRunId: workflowRun?.id,
+            updated: completion.updatedAt,
           });
         }
       }
@@ -3634,9 +5029,13 @@ export class Store {
     const expiresAt = new Date(now.getTime() + leaseMs).toISOString();
     const res = this.db
       .query(
-        `UPDATE loop_runs SET lease_expires_at=$expires, updated_at=$updated
+        // A successful renewal proves the runner is genuinely alive and
+        // holding its lease, so the deferral ceiling counts only CONSECUTIVE
+        // failures to renew — a run that recovers is not punished for an
+        // earlier hiccup.
+        `UPDATE loop_runs SET lease_expires_at=$expires, defer_count=0, updated_at=$updated
          WHERE id=$id AND status='running' AND claimed_by=$claimedBy AND lease_expires_at > $now
-           AND ($claimToken IS NULL OR claim_token=$claimToken)
+           AND claim_token=$claimToken
            AND ($daemonLeaseId IS NULL OR EXISTS (
              SELECT 1 FROM daemon_lease WHERE id=$daemonLeaseId AND expires_at > $now
            ))`,
@@ -3654,27 +5053,167 @@ export class Store {
     return this.getRun(id);
   }
 
-  listRuns(opts: { loopId?: string; status?: RunStatus; limit?: number } = {}): LoopRun[] {
+  listRuns(opts: { loopId?: string; status?: RunStatus; labels?: string[]; limit?: number; offset?: number } = {}): LoopRun[] {
     const limit = opts.limit ?? 100;
-    let rows: RunRow[];
-    if (opts.loopId && opts.status) {
-      rows = this.db
-        .query<RunRow, [string, string, number]>(
-          "SELECT * FROM loop_runs WHERE loop_id = ? AND status = ? ORDER BY created_at DESC LIMIT ?",
-        )
-        .all(opts.loopId, opts.status, limit);
-    } else if (opts.loopId) {
-      rows = this.db
-        .query<RunRow, [string, number]>("SELECT * FROM loop_runs WHERE loop_id = ? ORDER BY created_at DESC LIMIT ?")
-        .all(opts.loopId, limit);
-    } else if (opts.status) {
-      rows = this.db
-        .query<RunRow, [string, number]>("SELECT * FROM loop_runs WHERE status = ? ORDER BY created_at DESC LIMIT ?")
-        .all(opts.status, limit);
-    } else {
-      rows = this.db.query<RunRow, [number]>("SELECT * FROM loop_runs ORDER BY created_at DESC LIMIT ?").all(limit);
+    const offset = Math.max(0, Math.floor(opts.offset ?? 0));
+    const labels = normalizeLoopLabels(opts.labels);
+    const where: string[] = [];
+    const params: Array<string | number> = [];
+    if (opts.loopId) {
+      where.push("loop_runs.loop_id = ?");
+      params.push(opts.loopId);
     }
+    if (opts.status) {
+      where.push("loop_runs.status = ?");
+      params.push(opts.status);
+    }
+    for (const label of labels) {
+      where.push("EXISTS (SELECT 1 FROM json_each(label_loops.labels_json) WHERE value = ?)");
+      params.push(label);
+    }
+    const join = labels.length ? " JOIN loops AS label_loops ON label_loops.id = loop_runs.loop_id" : "";
+    const rows = this.db
+      .query<RunRow, Array<string | number>>(
+        `SELECT loop_runs.* FROM loop_runs${join}${where.length ? ` WHERE ${where.join(" AND ")}` : ""} ORDER BY loop_runs.created_at DESC, loop_runs.id DESC LIMIT ? OFFSET ?`,
+      )
+      .all(...params, limit, offset);
     return rows.map(rowToRun);
+  }
+
+  listRecoveredLeaseRunsPage(opts: {
+    snapshot?: RecoveredLeaseRunSnapshotEntry[];
+    offset?: number;
+    limit?: number;
+  } = {}): RecoveredLeaseRunPage {
+    const limit = Math.max(1, Math.min(1_000, Math.floor(opts.limit ?? 1_000)));
+    const snapshot = opts.snapshot ?? this.db
+      .query<Pick<RunRow, "id" | "updated_at" | "scheduled_for" | "attempt">, []>(
+        `SELECT id, updated_at, scheduled_for, attempt FROM loop_runs
+         WHERE status='abandoned' AND error='run lease expired before completion'
+         ORDER BY updated_at ASC, scheduled_for ASC, id ASC`,
+      )
+      .all()
+      .map((row) => ({
+        id: row.id,
+        updatedAt: row.updated_at,
+        scheduledFor: row.scheduled_for,
+        attempt: row.attempt,
+      }));
+    const offset = Math.max(0, Math.min(snapshot.length, Math.floor(opts.offset ?? 0)));
+    const selected = snapshot.slice(offset, offset + limit);
+    const rows = selected.length === 0
+      ? []
+      : this.db
+          .query<RunRow, string[]>(
+            `SELECT * FROM loop_runs WHERE id IN (${selected.map(() => "?").join(",")})`,
+          )
+          .all(...selected.map((entry) => entry.id));
+    const rowsById = new Map(rows.map((row) => [row.id, row]));
+    const snapshotById = new Map(selected.map((entry) => [entry.id, entry]));
+    const runs = selected
+      .map((entry) => rowsById.get(entry.id))
+      .filter((row): row is RunRow => {
+        if (!row) return false;
+        const entry = snapshotById.get(row.id);
+        return Boolean(
+          entry &&
+          row.status === "abandoned" &&
+          row.error === "run lease expired before completion" &&
+          row.attempt === entry.attempt &&
+          row.updated_at === entry.updatedAt &&
+          row.scheduled_for === entry.scheduledFor
+        );
+      })
+      .map(rowToRun);
+    const nextOffset = offset + selected.length;
+    return {
+      runs,
+      snapshot,
+      ...(nextOffset < snapshot.length ? { nextOffset } : {}),
+    };
+  }
+
+  writeRunReceipt(input: WriteRunReceiptInput, opts: { now?: Date } = {}): RunReceipt {
+    const inputRunId = typeof input.run_id === "string" && input.run_id.trim() ? input.run_id : undefined;
+    const existing = inputRunId ? this.getRunReceipt(inputRunId) : undefined;
+    const run = inputRunId ? this.getRun(inputRunId) : undefined;
+    const loop = input.loop_id ? this.getLoop(input.loop_id) : run ? this.getLoop(run.loopId) : undefined;
+    const receipt = normalizeRunReceipt(input, { now: opts.now, run, loop, existing });
+    this.db
+      .query(
+        `INSERT INTO run_receipts (run_id, loop_id, machine_json, repo, task_ids_json, knowledge_ids_json, digest_id,
+          started_at, finished_at, status, exit_code, summary_json, evidence_paths_json, created_at, updated_at)
+         VALUES ($runId, $loopId, $machineJson, $repo, $taskIdsJson, $knowledgeIdsJson, $digestId,
+          $startedAt, $finishedAt, $status, $exitCode, $summaryJson, $evidencePathsJson, $createdAt, $updatedAt)
+         ON CONFLICT(run_id) DO UPDATE SET
+          loop_id=excluded.loop_id,
+          machine_json=excluded.machine_json,
+          repo=excluded.repo,
+          task_ids_json=excluded.task_ids_json,
+          knowledge_ids_json=excluded.knowledge_ids_json,
+          digest_id=excluded.digest_id,
+          started_at=excluded.started_at,
+          finished_at=excluded.finished_at,
+          status=excluded.status,
+          exit_code=excluded.exit_code,
+          summary_json=excluded.summary_json,
+          evidence_paths_json=excluded.evidence_paths_json,
+          updated_at=excluded.updated_at`,
+      )
+      .run({
+        $runId: receipt.run_id,
+        $loopId: receipt.loop_id,
+        $machineJson: JSON.stringify(receipt.machine),
+        $repo: receipt.repo,
+        $taskIdsJson: JSON.stringify(receipt.task_ids),
+        $knowledgeIdsJson: JSON.stringify(receipt.knowledge_ids),
+        $digestId: receipt.digest_id,
+        $startedAt: receipt.started_at,
+        $finishedAt: receipt.finished_at,
+        $status: receipt.status,
+        $exitCode: receipt.exit_code,
+        $summaryJson: JSON.stringify(receipt.summary),
+        $evidencePathsJson: JSON.stringify(receipt.evidence_paths),
+        $createdAt: receipt.created_at,
+        $updatedAt: receipt.updated_at,
+      });
+    return this.getRunReceipt(receipt.run_id) ?? receipt;
+  }
+
+  getRunReceipt(runId: string): RunReceipt | undefined {
+    const row = this.db.query<RunReceiptRow, [string]>("SELECT * FROM run_receipts WHERE run_id = ?").get(runId);
+    return row ? rowToRunReceipt(row) : undefined;
+  }
+
+  listRunReceipts(opts: { loopId?: string; repo?: string; taskId?: string; knowledgeId?: string; status?: string; limit?: number } = {}): RunReceipt[] {
+    const limit = opts.limit ?? 100;
+    const filters: string[] = [];
+    const params: unknown[] = [];
+    if (opts.loopId) {
+      filters.push("loop_id = ?");
+      params.push(opts.loopId);
+    }
+    if (opts.repo) {
+      filters.push("repo = ?");
+      params.push(opts.repo);
+    }
+    if (opts.status) {
+      filters.push("status = ?");
+      params.push(opts.status);
+    }
+    if (opts.taskId) {
+      filters.push("EXISTS (SELECT 1 FROM json_each(run_receipts.task_ids_json) WHERE value = ?)");
+      params.push(opts.taskId);
+    }
+    if (opts.knowledgeId) {
+      filters.push("EXISTS (SELECT 1 FROM json_each(run_receipts.knowledge_ids_json) WHERE value = ?)");
+      params.push(opts.knowledgeId);
+    }
+    const where = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
+    const rows = this.db
+      .query<RunReceiptRow, any>(`SELECT * FROM run_receipts ${where} ORDER BY created_at DESC LIMIT ?`)
+      .all(...params, limit);
+    return rows.map(rowToRunReceipt);
   }
 
   private deferLiveExpiredRun(id: string, now: Date, opts: DaemonLeaseFence = {}): void {
@@ -3682,7 +5221,7 @@ export class Store {
     const deferredUntil = new Date(now.getTime() + LIVE_EXPIRED_RUN_GRACE_MS).toISOString();
     this.db
       .query(
-        `UPDATE loop_runs SET lease_expires_at=$deferredUntil, updated_at=$updated
+        `UPDATE loop_runs SET lease_expires_at=$deferredUntil, defer_count=defer_count+1, updated_at=$updated
          WHERE id=$id AND status='running' AND lease_expires_at <= $now
            AND ($daemonLeaseId IS NULL OR EXISTS (
              SELECT 1 FROM daemon_lease WHERE id=$daemonLeaseId AND expires_at > $now
@@ -3697,8 +5236,98 @@ export class Store {
       });
   }
 
-  recoverExpiredRunLeases(now: Date = new Date(), opts: DaemonLeaseFence & { limit?: number; scanLimit?: number } = {}): LoopRun[] {
+  recoverExpiredRunLeases(
+    now: Date = new Date(),
+    opts: DaemonLeaseFence & {
+      limit?: number;
+      scanLimit?: number;
+      runId?: string;
+      expectedLeaseExpiresAt?: string;
+      expectedUpdatedAt?: string;
+    } = {},
+  ): LoopRun[] {
     return this.recoverExpiredRunLeasesDetailed(now, opts).abandoned;
+  }
+
+  listExpiredRunLeaseCandidates(
+    expiredBefore: Date = new Date(),
+    opts: { limit?: number } = {},
+  ): ExpiredRunLeaseCandidatePage {
+    const limit = Math.max(1, Math.min(1_000, Math.floor(opts.limit ?? DEFAULT_RECOVERY_BATCH_LIMIT)));
+    const rows = this.db
+      .query<RunRow, [string, number]>(
+        `SELECT * FROM loop_runs
+         WHERE status = 'running' AND lease_expires_at <= ?
+         ORDER BY lease_expires_at ASC, id ASC
+         LIMIT ?`,
+      )
+      .all(expiredBefore.toISOString(), limit + 1);
+    return {
+      candidates: rows.slice(0, limit).map((row) => ({
+        runId: row.id,
+        loopId: row.loop_id,
+        leaseExpiresAt: row.lease_expires_at!,
+        updatedAt: row.updated_at,
+      })),
+      truncated: rows.length > limit,
+    };
+  }
+
+  /**
+   * Read-only counterpart to {@link recoverExpiredRunLeasesDetailed}: runs the
+   * identical SELECT and the identical two-part classification — liveness
+   * (`isRecordedProcessAlive` / `hasLiveWorkflowStepProcesses`) AND the
+   * `defer_count` grace ceiling (`MAX_LIVE_EXPIRED_RUN_DEFERRALS`) — but issues
+   * no UPDATE. `reclaimable` is exactly the set a same-parameters call to
+   * `recoverExpiredRunLeasesDetailed` (without `preserveLiveProcesses`) would
+   * mark abandoned: dead now, OR alive but already past the grace ceiling.
+   * `liveDeferred` is exactly the set it would instead defer: alive AND still
+   * under the ceiling.
+   *
+   * CORRECTED (P1, PR #182 review; superseded fix in #182 itself did not
+   * address this — see hygiene.ts `buildStuckRunReport` for the paired half).
+   * This previously classified any row that "looks alive" as `liveDeferred`
+   * unconditionally, ignoring `defer_count` entirely. Because callers gate the
+   * real mutating call on `reclaimable.length > 0`, that made a live-looking
+   * run's grace-ceiling escalation permanently unreachable —
+   * `recoverExpiredRunLeasesDetailed`, the only place `defer_count` is ever
+   * incremented, was never invoked for such a run, so it sat at
+   * `defer_count=0` forever rather than ever accumulating toward the ceiling
+   * and being abandoned. Reusing the exact
+   * `looksAlive && deferralsSoFar < MAX_LIVE_EXPIRED_RUN_DEFERRALS` predicate
+   * (not a re-derived one) is what keeps this method from drifting from
+   * `recoverExpiredRunLeasesDetailed` again.
+   */
+  previewExpiredRunLeases(
+    now: Date = new Date(),
+    opts: { limit?: number; scanLimit?: number; runId?: string } = {},
+  ): { reclaimable: LoopRun[]; liveDeferred: LoopRun[] } {
+    const limit = Math.max(1, Math.min(1_000, Math.floor(opts.limit ?? DEFAULT_RECOVERY_BATCH_LIMIT)));
+    const scanLimit = Math.max(limit, Math.min(5_000, Math.floor(opts.scanLimit ?? limit * DEFAULT_RECOVERY_SCAN_MULTIPLIER)));
+    const rows = this.db
+      .query<RunRow, [string, string | null, string | null, number]>(
+        `SELECT * FROM loop_runs
+         WHERE status = 'running' AND lease_expires_at <= ?
+           AND (? IS NULL OR id = ?)
+         ORDER BY lease_expires_at ASC
+         LIMIT ?`,
+      )
+      .all(now.toISOString(), opts.runId ?? null, opts.runId ?? null, scanLimit);
+    const reclaimable: LoopRun[] = [];
+    const liveDeferred: LoopRun[] = [];
+    for (const row of rows) {
+      if (reclaimable.length >= limit) break;
+      const run = this.getRun(row.id);
+      if (!run) continue;
+      const looksAlive = isRecordedProcessAlive(row.pid, row.process_started_at) || this.hasLiveWorkflowStepProcesses(row.id);
+      const deferralsSoFar = row.defer_count ?? 0;
+      if (looksAlive && deferralsSoFar < MAX_LIVE_EXPIRED_RUN_DEFERRALS) {
+        liveDeferred.push(run);
+        continue;
+      }
+      reclaimable.push(run);
+    }
+    return { reclaimable, liveDeferred };
   }
 
   /**
@@ -3709,49 +5338,185 @@ export class Store {
    */
   recoverExpiredRunLeasesDetailed(
     now: Date = new Date(),
-    opts: DaemonLeaseFence & { limit?: number; scanLimit?: number } = {},
+    opts: DaemonLeaseFence & {
+      limit?: number;
+      scanLimit?: number;
+      runId?: string;
+      expectedLeaseExpiresAt?: string;
+      expectedUpdatedAt?: string;
+      refuseAdmittedPrivateOperations?: boolean;
+      excludeClaimedBy?: string;
+      /**
+       * Leave one runner's runs untouched, but only within an explicit set of
+       * loops. Unlike `excludeClaimedBy`, which protects everything a runner
+       * owns unconditionally, this protects only the loops the caller has
+       * established are still recoverable by other means (for Loops: loops a
+       * poll never examined, whose runs that runner is about to take over on
+       * its next poll). A runner's own run on a loop that WAS examined is not
+       * recoverable by takeover, so blanket-excluding it strands it in
+       * `running` with a dead lease indefinitely.
+       *
+       * Expressed as a loop-id set rather than a run-id set on purpose: a
+       * run-id set has to be enumerated by the caller, which both caps
+       * silently at one page and costs a query per loop. It is applied inside
+       * the scan query, BEFORE `LIMIT`, so protected rows never consume the
+       * scan window and starve an unrelated reapable run.
+       */
+      protectClaimedByInLoops?: { claimedBy: string; loopIds: readonly string[] };
+      /** Leave every currently live process untouched, even after the daemon recovery grace ceiling. */
+      preserveLiveProcesses?: boolean;
+    } = {},
   ): RecoverExpiredRunLeasesResult {
     const limit = Math.max(1, Math.min(1_000, Math.floor(opts.limit ?? DEFAULT_RECOVERY_BATCH_LIMIT)));
     const scanLimit = Math.max(limit, Math.min(5_000, Math.floor(opts.scanLimit ?? limit * DEFAULT_RECOVERY_SCAN_MULTIPLIER)));
+    // Capacity protection is part of the QUERY, not a post-scan filter: rows
+    // discarded after `LIMIT` have already consumed the scan window, so a large
+    // protected set would crowd out an unrelated expired run and — because the
+    // caller rebuilds the same protected set on every poll — starve it
+    // permanently rather than transiently.
+    const protect = opts.protectClaimedByInLoops;
+    const protectLoopIds = protect ? [...new Set(protect.loopIds)] : [];
+    // `claimed_by IS NULL` first: an unclaimed row must stay reapable, and a
+    // bare `claimed_by <> ?` is NULL (not true) for those rows.
+    const protectClause = protectLoopIds.length > 0
+      ? ` AND (claimed_by IS NULL OR claimed_by <> ? OR loop_id NOT IN (${protectLoopIds.map(() => "?").join(",")}))`
+      : "";
+    const unresolvedOperationPredicate = `EXISTS (
+      SELECT 1
+      FROM workflow_runs AS operation_workflow
+      JOIN workflow_events AS admitted_event
+        ON admitted_event.workflow_run_id = operation_workflow.id
+      WHERE operation_workflow.loop_run_id = loop_runs.id
+        AND admitted_event.event_type = 'private_operation_admitted'
+        AND NOT EXISTS (
+          SELECT 1
+          FROM workflow_events AS terminal_event
+          WHERE terminal_event.workflow_run_id = admitted_event.workflow_run_id
+            AND terminal_event.step_id = admitted_event.step_id
+            AND terminal_event.event_type = 'private_operation_terminal'
+        )
+    )`;
+    const candidateArgs = [
+      now.toISOString(),
+      opts.runId ?? null,
+      opts.runId ?? null,
+      opts.expectedLeaseExpiresAt ?? null,
+      opts.expectedLeaseExpiresAt ?? null,
+      opts.expectedUpdatedAt ?? null,
+      opts.expectedUpdatedAt ?? null,
+      opts.excludeClaimedBy ?? null,
+      opts.excludeClaimedBy ?? null,
+      ...(protectLoopIds.length > 0 ? [protect!.claimedBy, ...protectLoopIds] : []),
+    ];
+    const operationRows = opts.refuseAdmittedPrivateOperations
+      ? this.db
+          .query<RunRow, Array<string | number | null>>(
+            `SELECT * FROM loop_runs
+             WHERE status = 'running' AND lease_expires_at <= ?
+               AND (? IS NULL OR id = ?)
+               AND (? IS NULL OR lease_expires_at = ?)
+               AND (? IS NULL OR updated_at = ?)
+               AND (? IS NULL OR claimed_by IS NULL OR claimed_by <> ?)
+               AND ${unresolvedOperationPredicate}${protectClause}
+             ORDER BY lease_expires_at ASC
+             LIMIT ?`,
+          )
+          .all(...candidateArgs, limit)
+      : [];
+    const operationReconciliationRequired: LoopRun[] = operationRows
+      .map((row) => this.getRun(row.id))
+      .filter((run): run is LoopRun => Boolean(run));
+    const reconciliationRunIds = new Set(operationReconciliationRequired.map((run) => run.id));
+    const requiresOperationReconciliation = (runId: string): boolean => Boolean(
+      this.db.query<{ found: number }, [string, string]>(
+        `SELECT 1 AS found FROM loop_runs
+         WHERE id = ? AND status = 'running' AND lease_expires_at <= ?
+           AND ${unresolvedOperationPredicate}
+         LIMIT 1`,
+      ).get(runId, now.toISOString()),
+    );
     const rows = this.db
-      .query<RunRow, [string, number]>(
+      .query<RunRow, Array<string | number | null>>(
         `SELECT * FROM loop_runs
          WHERE status = 'running' AND lease_expires_at <= ?
+           AND (? IS NULL OR id = ?)
+           AND (? IS NULL OR lease_expires_at = ?)
+           AND (? IS NULL OR updated_at = ?)
+           AND (? IS NULL OR claimed_by IS NULL OR claimed_by <> ?)
+           AND (? = 0 OR NOT ${unresolvedOperationPredicate})${protectClause}
          ORDER BY lease_expires_at ASC
          LIMIT ?`,
       )
-      .all(now.toISOString(), scanLimit);
+      .all(
+        ...candidateArgs.slice(0, 9),
+        opts.refuseAdmittedPrivateOperations ? 1 : 0,
+        ...(protectLoopIds.length > 0 ? [protect!.claimedBy, ...protectLoopIds] : []),
+        scanLimit,
+      );
     const recovered: LoopRun[] = [];
     const deferred: LoopRun[] = [];
     for (const row of rows) {
       if (recovered.length >= limit) break;
-      if (isRecordedProcessAlive(row.pid, row.process_started_at) || this.hasLiveWorkflowStepProcesses(row.id)) {
+      const looksAlive = isRecordedProcessAlive(row.pid, row.process_started_at) || this.hasLiveWorkflowStepProcesses(row.id);
+      // "Looks alive" only buys a BOUNDED grace. Past the ceiling the run is
+      // abandoned regardless: an expired lease that keeps failing to renew is
+      // a wedged runner (or a pid the OS recycled under us), and deferring it
+      // forever blocks every run queued behind it.
+      const deferralsSoFar = row.defer_count ?? 0;
+      if (looksAlive && opts.preserveLiveProcesses) {
+        const deferredRun = this.getRun(row.id);
+        if (deferredRun) deferred.push(deferredRun);
+        continue;
+      }
+      if (looksAlive && deferralsSoFar < MAX_LIVE_EXPIRED_RUN_DEFERRALS) {
         this.deferLiveExpiredRun(row.id, now, opts);
         const deferredRun = this.getRun(row.id);
         if (deferredRun) deferred.push(deferredRun);
         continue;
       }
+      const exhaustedGrace = looksAlive;
+      const abandonError = exhaustedGrace
+        ? `run lease expired and exceeded the live-process deferral ceiling (${MAX_LIVE_EXPIRED_RUN_DEFERRALS} deferrals, ${Math.round((MAX_LIVE_EXPIRED_RUN_DEFERRALS * LIVE_EXPIRED_RUN_GRACE_MS) / 60_000)}m grace); the recorded process still appears alive but never renewed its lease`
+        : "run lease expired before completion";
       const finished = now.toISOString();
       this.db.exec("BEGIN IMMEDIATE");
       try {
         const res = this.db
           .query(
             `UPDATE loop_runs SET status='abandoned', finished_at=$finished, lease_expires_at=NULL,
-             error='run lease expired before completion', updated_at=$updated
+             error=$abandonError, updated_at=$updated
              WHERE id=$id AND status='running' AND lease_expires_at <= $now
+               AND ($expectedLeaseExpiresAt IS NULL OR lease_expires_at=$expectedLeaseExpiresAt)
+               AND ($expectedUpdatedAt IS NULL OR updated_at=$expectedUpdatedAt)
                AND ($daemonLeaseId IS NULL OR EXISTS (
                  SELECT 1 FROM daemon_lease WHERE id=$daemonLeaseId AND expires_at > $now
-               ))`,
+               ))
+               AND ($refuseAdmittedPrivateOperations = 0 OR NOT ${unresolvedOperationPredicate})`,
           )
           .run({
             $id: row.id,
             $finished: finished,
             $updated: finished,
             $now: finished,
+            $abandonError: abandonError,
+            $expectedLeaseExpiresAt: opts.expectedLeaseExpiresAt ?? null,
+            $expectedUpdatedAt: opts.expectedUpdatedAt ?? null,
             $daemonLeaseId: opts.daemonLeaseId ?? null,
+            $refuseAdmittedPrivateOperations: opts.refuseAdmittedPrivateOperations ? 1 : 0,
           });
         if (res.changes !== 1) {
           this.db.exec("COMMIT");
+          if (
+            opts.refuseAdmittedPrivateOperations &&
+            !reconciliationRunIds.has(row.id) &&
+            requiresOperationReconciliation(row.id)
+          ) {
+            const unchanged = this.getRun(row.id);
+            if (unchanged) {
+              operationReconciliationRequired.push(unchanged);
+              reconciliationRunIds.add(unchanged.id);
+            }
+          }
           continue;
         }
         const workflowRows = this.db
@@ -3798,7 +5563,6 @@ export class Store {
             loopRunId: row.id,
           });
           this.setWorkflowWorkItemsForWorkflowRun(workflowRow.id, "failed", "parent loop run lease expired before completion", finished);
-          this.maybeArchiveTerminalGeneratedRouteWorkflow(workflowRow.id, finished);
         }
         const loop = this.getLoop(row.loop_id);
         const itemStatus = workItemStatusForLoopRun("abandoned", row.attempt, loop?.maxAttempts);
@@ -3811,11 +5575,14 @@ export class Store {
             : "run lease expired before completion";
           this.setWorkflowWorkItemsForLoop(row.loop_id, itemStatus, reason, finished, statuses);
           if (loop?.target.type === "workflow" && itemStatus !== "admitted") {
+            const workflowId = loop.target.workflowId;
             const workItemId = loop.target.input?.workflowWorkItemId ?? loop.target.input?.workItemId;
             this.maybeArchiveGeneratedRouteWorkflow({
-              workflowId: loop.target.workflowId,
+              workflowId,
               loopId: loop.id,
+              loopRunId: row.id,
               workItemId,
+              workflowRunId: workflowRows.find((workflowRow) => workflowRow.workflow_id === workflowId)?.id,
               updated: finished,
             });
           }
@@ -3832,7 +5599,7 @@ export class Store {
       const run = this.getRun(row.id);
       if (run) recovered.push(run);
     }
-    return { abandoned: recovered, deferred };
+    return { abandoned: recovered, deferred, operationReconciliationRequired };
   }
 
   expireLoops(now: Date = new Date(), opts: DaemonLeaseFence = {}): Loop[] {
@@ -3895,6 +5662,20 @@ export class Store {
           .map(rowToRun)
       : [];
     return { schemaVersion: SCHEMA_USER_VERSION, workflows, loops, runs, checks: this.migrationChecks() };
+  }
+
+  /**
+   * Page through loop_runs for a streaming export. A full `exportMigrationRows`
+   * loads every run's stdout/stderr into memory at once (hundreds of MB on a
+   * busy host); a self-hosted backfill instead pulls stable ordered pages so
+   * peak memory stays bounded. Order is deterministic (created_at, id) so
+   * offset paging over an immutable snapshot never skips or repeats a row.
+   */
+  exportMigrationRunPage(opts: { limit: number; offset: number }): LoopRun[] {
+    return this.db
+      .query<RunRow, [number, number]>("SELECT * FROM loop_runs ORDER BY created_at ASC, id ASC LIMIT ? OFFSET ?")
+      .all(opts.limit, opts.offset)
+      .map(rowToRun);
   }
 
   private countTable(table: string): number {
@@ -3975,15 +5756,16 @@ export class Store {
     this.assertNoNestedWorkflowGoal(loop.target, loop.goal);
     this.db
       .query(
-        `INSERT INTO loops (id, name, description, status, archived_at, archived_from_status, schedule_json, target_json,
+        `INSERT INTO loops (id, name, description, labels_json, status, archived_at, archived_from_status, schedule_json, target_json,
           goal_json, machine_json, next_run_at, retry_scheduled_for, catch_up, catch_up_limit, overlap, max_attempts,
           retry_delay_ms, lease_ms, expires_at, created_at, updated_at)
-         VALUES ($id, $name, $description, $status, $archivedAt, $archivedFromStatus, $schedule, $target,
+         VALUES ($id, $name, $description, $labels, $status, $archivedAt, $archivedFromStatus, $schedule, $target,
           $goal, $machine, $nextRun, $retrySlot, $catchUp, $catchUpLimit, $overlap, $maxAttempts,
           $retryDelay, $leaseMs, $expiresAt, $created, $updated)
          ON CONFLICT(id) DO UPDATE SET
            name=$name,
            description=$description,
+           labels_json=$labels,
            status=$status,
            archived_at=$archivedAt,
            archived_from_status=$archivedFromStatus,
@@ -4007,6 +5789,7 @@ export class Store {
         $id: loop.id,
         $name: loop.name,
         $description: loop.description ?? null,
+        $labels: JSON.stringify(normalizeLoopLabels(loop.labels)),
         $status: loop.status,
         $archivedAt: loop.archivedAt ?? null,
         $archivedFromStatus: loop.archivedFromStatus ?? null,

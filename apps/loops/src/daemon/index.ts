@@ -8,7 +8,7 @@ import { packageVersion } from "../lib/version.js";
 
 const program = new Command();
 
-program.name("loops-daemon").description("OpenLoops daemon helper").version(packageVersion());
+program.name("loops-daemon").description("Loops daemon helper").version(packageVersion());
 
 program
   .command("run")

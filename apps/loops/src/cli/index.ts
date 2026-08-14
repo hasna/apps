@@ -12,11 +12,13 @@ import type {
   CreateLoopInput,
   CreateWorkflowInput,
   Loop,
+  LoopStatus,
   LoopTemplateSummary,
   LoopTarget,
   OverlapPolicy,
   ScheduleSpec,
   WorkflowSpec,
+  WriteRunReceiptInput,
 } from "../types.js";
 import { dataDir, daemonLogPath, dbPath } from "../lib/paths.js";
 import {
@@ -25,6 +27,7 @@ import {
   publicGoal,
   publicGoalRun,
   publicRun,
+  publicRunReceipt,
   publicWorkflow,
   publicWorkflowEvent,
   publicWorkflowInvocation,
@@ -36,21 +39,26 @@ import {
 } from "../lib/format.js";
 import { computeNextAfter, parseDuration } from "../lib/recurrence.js";
 import { Store } from "../lib/store.js";
+import { CloudUnsupportedError, getStore, isCloudStore, type LoopStore } from "../lib/store/index.js";
 import { executeWorkflow, preflightWorkflow } from "../lib/workflow-runner.js";
-import { advanceLoop, executeClaimedRun, manualRunScheduledFor, manualRunSource, shouldAdvanceManualRun, tick } from "../lib/scheduler.js";
+import { runLoopNow, tick } from "../lib/scheduler.js";
 import { daemonStatus, stopDaemon } from "../daemon/control.js";
-import { runDaemon, startDaemon } from "../daemon/daemon.js";
+import { runDaemon, startDaemon, stripAnsi } from "../daemon/daemon.js";
 import { enableStartup, installStartup } from "../daemon/install.js";
 import { normalizeGoalSpec } from "../lib/workflow-spec.js";
 import { runDoctor } from "../lib/doctor.js";
-import { buildHealthReport, expectationForLoop } from "../lib/health.js";
+import { buildHealthReport, buildHealthScan, expectationForLoop, writeHealthScanReports } from "../lib/health.js";
+import { buildHostedDoctorReport, buildHostedHealthReport, buildHostedHealthScan } from "../lib/hosted-diagnostics.js";
+import { isPrivateOperationEventType } from "../lib/operation-contract.js";
+import type { LoopMutationEnvelope } from "../lib/operation-contract.js";
+import { runLoopsUiApp } from "./ui.js";
 import {
   applyImportMigrationBundle,
+  applySelfHostedPush,
   buildImportMigrationPlan,
   buildSelfHostedMigrationPlan,
   exportLoopsMigrationBundle,
   publicMigrationBundle,
-  registerSelfHostedRunner,
   validateLoopsMigrationBundle,
   type LoopsMigrationPlan,
 } from "../lib/migration.js";
@@ -59,6 +67,7 @@ import {
   buildDuplicateOverlapReport,
   buildNameHygieneReport,
   buildScriptInventoryReport,
+  buildStuckRunReport,
 } from "../lib/hygiene.js";
 import { listOpenMachines, resolveLoopMachine } from "../lib/machines.js";
 import { packageVersion } from "../lib/version.js";
@@ -73,10 +82,13 @@ import {
 } from "../lib/templates.js";
 import { backupDatabase } from "../lib/backup.js";
 import { CodedError, ValidationError } from "../lib/errors.js";
+import { mergeLoopLabels, normalizeLoopLabels, removeLoopLabels } from "../lib/labels.js";
 import {
   addAgentRoutingOptions,
   addRouteEventOptions,
   addTodosDrainOptions,
+  applyRoutePolicyToDrainOptions,
+  applyRoutePolicyToScheduleOptions,
   buildHygieneRouteTasks,
   collectValues,
   defaultLoopsProject,
@@ -94,19 +106,24 @@ import {
   preflightStoredWorkflow,
   providerAuthProfileFromOpts,
   readEventEnvelopeInput,
+  listRoutePolicies,
   routeCursorKey,
   routeDrainArgs,
   routeEventByKind,
+  renderRoutePolicy,
   sandboxFromOpts,
   splitList,
   stringField,
+  todosTaskRouteTemplateId,
   timeoutDuration,
   upsertRouteTasks,
+  validateRoutePolicy,
   workflowBodyFromFile,
   workflowSpecForPreflight,
   type TodosDrainOptions,
   type TodosTaskRouteOptions,
 } from "../lib/route/index.js";
+import { sanitizeCliErrorContext } from "./safe-error-context.js";
 
 const program = new Command();
 
@@ -122,6 +139,24 @@ function print(value: unknown, human?: string): void {
   else console.log(human);
 }
 
+const LOOP_STATUS_VALUES: LoopStatus[] = ["active", "paused", "stopped", "expired"];
+
+function parseLoopStatuses(value: string | undefined, label = "--include"): LoopStatus[] {
+  const raw = splitList(value) ?? ["active", "paused"];
+  const expanded = raw.flatMap((entry) => entry === "all" ? LOOP_STATUS_VALUES : [entry]);
+  const invalid = expanded.filter((entry) => !LOOP_STATUS_VALUES.includes(entry as LoopStatus));
+  if (invalid.length > 0) throw new ValidationError(`${label} has invalid loop status: ${invalid.join(", ")}`);
+  return [...new Set(expanded as LoopStatus[])];
+}
+
+function compactHealthScanOutput(scan: unknown): unknown {
+  if (!scan || typeof scan !== "object" || !("health" in scan)) return scan;
+  const healthValue = (scan as { health?: unknown }).health;
+  if (!healthValue || typeof healthValue !== "object") return scan;
+  const { expectations: _expectations, ...health } = healthValue as Record<string, unknown>;
+  return { ...(scan as Record<string, unknown>), health };
+}
+
 /**
  * Uniform error reporting for every command action: gate failures keep their
  * stable structured JSON shape, everything else becomes
@@ -129,27 +164,30 @@ function print(value: unknown, human?: string): void {
  */
 function reportCliError(error: unknown): void {
   const message = error instanceof Error ? error.message : String(error);
+  const safeMessage = redact(message, error instanceof GateError ? 320 : 640) ?? "";
   process.exitCode = 1;
   if (error instanceof GateError) {
     if (isJson()) {
+      const safeContext = sanitizeCliErrorContext(error.context);
       print({
+        ...safeContext,
         ok: false,
         created: false,
         [error.gate]: {
           ok: false,
-          error: redact(message, 320),
+          code: error.code,
+          error: safeMessage,
         },
-        ...error.context,
       });
       return;
     }
-    console.error(`error: ${message}`);
+    console.error(`error: ${safeMessage}`);
     return;
   }
   if (isJson()) {
-    print({ ok: false, error: { code: error instanceof CodedError ? error.code : "ERROR", message: redact(message, 640) } });
+    print({ ok: false, error: { code: error instanceof CodedError ? error.code : "ERROR", message: safeMessage } });
   }
-  console.error(`error: ${message}`);
+  console.error(`error: ${safeMessage}`);
 }
 
 function runAction<Args extends unknown[]>(fn: (...args: Args) => void | Promise<void>): (...args: Args) => Promise<void> {
@@ -160,6 +198,178 @@ function runAction<Args extends unknown[]>(fn: (...args: Args) => void | Promise
       reportCliError(error);
     }
   };
+}
+
+/**
+ * Resolve the client store (local sqlite OR the hosted `/v1` API) and run `fn`
+ * against it, always closing afterwards. EVERY data command goes through here so
+ * there is no per-command `if (cloud) … else new Store()` branch and no way to
+ * silently touch the on-box island while the machine is flipped to cloud.
+ */
+async function withStore<T>(fn: (store: LoopStore) => Promise<T>): Promise<T> {
+  const store = getStore();
+  try {
+    return await fn(store);
+  } finally {
+    await store.close();
+  }
+}
+
+type LoopListOptions = NonNullable<Parameters<LoopStore["listLoops"]>[0]>;
+const CLI_LOOP_LIST_PAGE_SIZE = 200;
+const CLI_LOOP_LIST_MAX_PAGES = 1_000;
+const CLI_LOOP_LIST_MAX_ITEMS = 100_000;
+
+function loopListPaginationError(reason: string): CodedError {
+  return new CodedError("LOOP_LIST_PAGINATION_FAILED", `loop list pagination failed: ${reason}`);
+}
+
+async function listAllLoops(
+  store: LoopStore,
+  opts: Omit<LoopListOptions, "limit" | "offset"> = {},
+): Promise<Loop[]> {
+  const loops: Loop[] = [];
+  const seenIds = new Set<string>();
+  let offset = 0;
+  let pageCount = 0;
+  let previousPageIds: string[] | undefined;
+  while (true) {
+    if (pageCount >= CLI_LOOP_LIST_MAX_PAGES) {
+      throw loopListPaginationError(`exceeded the ${CLI_LOOP_LIST_MAX_PAGES}-page safety ceiling`);
+    }
+    const page = await store.listLoops({
+      ...opts,
+      limit: CLI_LOOP_LIST_PAGE_SIZE,
+      offset,
+    });
+    pageCount += 1;
+    if (page.length === 0) return loops;
+
+    const pageIds = page.map((loop) => loop.id);
+    if (
+      previousPageIds?.length === pageIds.length &&
+      pageIds.every((id, index) => id === previousPageIds![index])
+    ) {
+      throw loopListPaginationError("the backend repeated a page");
+    }
+
+    let newIds = 0;
+    for (const loop of page) {
+      if (typeof loop.id !== "string" || loop.id.length === 0) {
+        throw loopListPaginationError("the backend returned a loop without a usable id");
+      }
+      if (seenIds.has(loop.id)) continue;
+      seenIds.add(loop.id);
+      loops.push(loop);
+      newIds += 1;
+      if (loops.length > CLI_LOOP_LIST_MAX_ITEMS) {
+        throw loopListPaginationError(`exceeded the ${CLI_LOOP_LIST_MAX_ITEMS}-item safety ceiling`);
+      }
+    }
+    if (newIds === 0) throw loopListPaginationError("a page contained no new loop ids");
+    if (page.length < CLI_LOOP_LIST_PAGE_SIZE) return loops;
+
+    const nextOffset = offset + page.length;
+    if (!Number.isSafeInteger(nextOffset) || nextOffset <= offset) {
+      throw loopListPaginationError("the backend did not advance the page offset");
+    }
+    previousPageIds = pageIds;
+    offset = nextOffset;
+  }
+}
+
+/**
+ * Guard for the on-box execution/maintenance commands (daemon lifecycle, WAL
+ * checkpoint + backup rotation, ad-hoc run/tick, local migrations). These act on
+ * this machine's runtime and sqlite file, so they are meaningless — and would
+ * silently hit the local island — when the client is flipped to the hosted API.
+ * Fail loudly instead.
+ */
+function assertLocalOnlyCommand(command: string): void {
+  if (isCloudStore()) {
+    throw new ValidationError(
+      `'loops ${command}' operates on this machine's local runtime and is not available while flipped to the hosted Loops API. ` +
+        `Unset HASNA_LOOPS_API_URL/HASNA_LOOPS_API_KEY (or set HASNA_LOOPS_STORAGE_MODE=local) to run it here.`,
+    );
+  }
+}
+
+/** `123456` -> `2m3s`, so an operator reads an unclaimed slot without doing arithmetic. */
+function humanDuration(ms: number): string {
+  const totalSeconds = Math.max(0, Math.round(ms / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) return `${hours}h${minutes}m`;
+  if (minutes > 0) return `${minutes}m${seconds}s`;
+  return `${seconds}s`;
+}
+
+function printUnchecked(unchecked: Array<{ id: string; reason: string }>): void {
+  console.log("not checked:");
+  for (const entry of unchecked) console.log(`  ${entry.id}: ${entry.reason}`);
+}
+
+/**
+ * `loops health` against the hosted control plane. The banner and the
+ * `not checked` block are not decoration: a hosted summary that does not say
+ * which runtime it read, and what it did not read, is the defect this command
+ * was refused for.
+ */
+async function hostedHealth(): Promise<void> {
+  const store = getStore();
+  try {
+    const hosted = await buildHostedHealthReport(store);
+    if (isJson()) console.log(JSON.stringify(hosted, null, 2));
+    else {
+      console.log(`backend  hosted control plane ${hosted.backend.apiUrl ?? "(url unavailable)"} (transport=${hosted.backend.transport})`);
+      const summary = hosted.report.summary;
+      const executionHealthy = hosted.executionTruth.filter((entry) => entry.state === "healthy").length;
+      const deadCadence = hosted.executionTruth.filter((entry) => entry.state === "dead_cadence").length;
+      const unproven = hosted.executionTruth.filter((entry) => entry.state === "unproven").length;
+      console.log(
+        `loops=${summary.loops} healthy=${summary.healthy} unhealthy=${summary.unhealthy} warnings=${summary.warnings} ` +
+          `overdue=${summary.overdue} execution_healthy=${executionHealthy} dead_cadence=${deadCadence} unproven=${unproven}`,
+      );
+      for (const expectation of hosted.report.expectations.filter((entry) => !entry.ok || entry.check.status === "warn")) {
+        const status = expectation.ok ? "warn" : "fail";
+        console.log(
+          `${status}  ${expectation.loop.name}  ${expectation.failure?.classification ?? "unknown"}  ${expectation.failure?.fingerprint ?? "-"}`,
+        );
+      }
+      for (const expectation of hosted.report.expectations.filter((entry) => entry.overdue)) {
+        console.log(
+          `overdue  ${expectation.loop.name}  scheduled slot ${expectation.overdue!.nextRunAt} unclaimed for ${humanDuration(expectation.overdue!.byMs)}`,
+        );
+      }
+      printUnchecked(hosted.unchecked);
+    }
+    if (!hosted.report.ok) process.exitCode = 1;
+  } finally {
+    await store.close();
+  }
+}
+
+/** `loops doctor` against the hosted control plane; each check states its scope. */
+async function hostedDoctor(): Promise<void> {
+  const store = getStore();
+  try {
+    const hosted = await buildHostedDoctorReport(store);
+    if (isJson()) console.log(JSON.stringify(hosted, null, 2));
+    else {
+      console.log(`backend  hosted control plane ${hosted.backend.apiUrl ?? "(url unavailable)"} (transport=${hosted.backend.transport})`);
+      for (const check of hosted.report.checks) {
+        const marker = check.status === "ok" ? "ok" : check.status === "warn" ? "warn" : "fail";
+        console.log(
+          `${marker.padEnd(4)} ${(check.scope ?? "-").padEnd(14)} ${check.id.padEnd(22)} ${check.message}${check.detail ? ` (${check.detail})` : ""}`,
+        );
+      }
+      printUnchecked(hosted.unchecked);
+    }
+    if (!hosted.report.ok) process.exitCode = 1;
+  } finally {
+    await store.close();
+  }
 }
 
 function printDeploymentStatus(status: LoopDeploymentStatus, opts: { json?: boolean } = {}): void {
@@ -182,9 +392,20 @@ function printCreatedLoop(loop: ReturnType<Store["createLoop"]>, human: string, 
 }
 
 function publicWorkflowBody(body: CreateWorkflowInput): Record<string, unknown> {
-  const value = publicWorkflow(workflowSpecForPreflight(body, "render"));
-  const { id: _id, status: _status, createdAt: _createdAt, updatedAt: _updatedAt, ...bodyOnly } = value;
-  return bodyOnly;
+  const workflow = workflowSpecForPreflight(body, "render");
+  return {
+    name: workflow.name,
+    description: workflow.description,
+    steps: workflow.steps.map((step) => ({
+      ...step,
+      target: {
+        ...step.target,
+        ...("prompt" in step.target ? { prompt: redact(step.target.prompt) } : {}),
+        ...("env" in step.target && step.target.env ? { env: "[redacted]" } : {}),
+      },
+    })),
+    goal: workflow.goal,
+  };
 }
 
 function workflowWithAgentTimeouts(
@@ -220,6 +441,14 @@ function workflowWithAgentTimeouts(
     changed,
     agentStepIds,
   };
+}
+
+function agentLoopTargetWithTimeout(loop: Loop, timeoutMs: number | null): { changed: boolean; target: Extract<LoopTarget, { type: "agent" }> } {
+  if (loop.target.type !== "agent") throw new Error(`loop is not an agent loop: ${loop.name || loop.id}`);
+  const target = { ...loop.target, timeoutMs };
+  if (timeoutMs === null && target.idleTimeoutMs !== undefined) delete target.idleTimeoutMs;
+  const changed = loop.target.timeoutMs !== timeoutMs || (timeoutMs === null && loop.target.idleTimeoutMs !== undefined);
+  return { changed, target };
 }
 
 function workflowTimeoutMigrationName(workflow: WorkflowSpec, timeoutMs: number | null): string {
@@ -341,13 +570,15 @@ function targetLabel(target: LoopTarget): string {
 
 function defaultLoopDescription(name: string, schedule: ScheduleSpec, target: LoopTarget): string {
   return [
-    `Why: keep ${name} running as an OpenLoops scheduled automation.`,
+    `Why: keep ${name} running as a Loops scheduled automation.`,
     `How: ${targetLabel(target)} on cadence ${scheduleLabel(schedule)}.`,
-    "Outcome: record each run, status, retries, and evidence in OpenLoops for operator review.",
+    "Outcome: record each run, status, retries, and evidence in Loops for operator review.",
   ].join(" ");
 }
 
-function baseCreateInput(name: string, opts: Record<string, string | boolean | undefined>, target: LoopTarget): CreateLoopInput {
+type LoopCreateOptions = Record<string, string | string[] | boolean | undefined>;
+
+function baseCreateInput(name: string, opts: LoopCreateOptions, target: LoopTarget): CreateLoopInput {
   const schedule = parseSchedule({
     at: typeof opts.at === "string" ? opts.at : undefined,
     every: typeof opts.every === "string" ? opts.every : undefined,
@@ -366,6 +597,7 @@ function baseCreateInput(name: string, opts: Record<string, string | boolean | u
   return {
     name,
     description: explicitDescription ?? defaultLoopDescription(name, schedule, target),
+    labels: normalizeLoopLabels(Array.isArray(opts.label) ? opts.label : typeof opts.label === "string" ? [opts.label] : undefined),
     schedule,
     target,
     goal: goalFromOpts(opts),
@@ -391,6 +623,10 @@ function addScheduleOptions(command: Command): Command {
     .option("-d, --description <text>", "description");
 }
 
+function addLabelOptions(command: Command): Command {
+  return command.option("--label <label>", "loop label; repeatable or comma-separated", collectValues, [] as string[]);
+}
+
 function addAccountOptions(command: Command): Command {
   return command
     .option("--account <profile>", "OpenAccounts profile name for this target")
@@ -409,7 +645,7 @@ function addGoalOptions(command: Command): Command {
     .option("--goal-max-turns <n>", "maximum goal orchestration turns");
 }
 
-function goalFromOpts(opts: Record<string, string | boolean | undefined>) {
+function goalFromOpts(opts: LoopCreateOptions) {
   const hasGoalOption = opts.goal !== undefined || opts.goalBudget !== undefined || opts.goalModel !== undefined || opts.goalMaxTurns !== undefined;
   if (!hasGoalOption) return undefined;
   if (typeof opts.goal !== "string") throw new ValidationError("--goal is required when using goal options");
@@ -440,14 +676,16 @@ function accountFromOpts(opts: {
   return opts.account ? { profile: opts.account, tool: opts.accountTool } : undefined;
 }
 
-function allowlistFromOpts(opts: { allowTool?: string[]; allowCommand?: string[] }): AgentAllowlistSpec | undefined {
+function allowlistFromOpts(opts: { allowTool?: string[]; allowCommand?: string[]; safetyReason?: string }): AgentAllowlistSpec | undefined {
   const tools = (opts.allowTool ?? []).flatMap((entry) => splitList(entry) ?? []);
   const commands = (opts.allowCommand ?? []).flatMap((entry) => splitList(entry) ?? []);
-  if (!tools.length && !commands.length) return undefined;
+  const safetyReason = opts.safetyReason?.trim();
+  if (!tools.length && !commands.length && !safetyReason) return undefined;
   return {
     tools: tools.length ? tools : undefined,
     commands: commands.length ? commands : undefined,
     enforcement: "metadata_only",
+    safetyReason: safetyReason || undefined,
   };
 }
 
@@ -455,14 +693,24 @@ function runtimePreflightFromOpts(opts: { preflightEachRun?: boolean }): { befor
   return opts.preflightEachRun ? { beforeRun: true } : undefined;
 }
 
-function parseVars(values: string[] | undefined): Record<string, string> {
-  const vars: Record<string, string> = {};
+function parseKeyValueList(values: string[] | undefined, flag: string): Record<string, string> {
+  const parsed: Record<string, string> = {};
   for (const value of values ?? []) {
     const index = value.indexOf("=");
-    if (index <= 0) throw new ValidationError(`invalid --var value, expected key=value: ${value}`);
-    vars[value.slice(0, index)] = value.slice(index + 1);
+    if (index <= 0) throw new ValidationError(`invalid ${flag} value, expected key=value: ${value}`);
+    parsed[value.slice(0, index)] = value.slice(index + 1);
   }
-  return vars;
+  return parsed;
+}
+
+function parseVars(values: string[] | undefined): Record<string, string> {
+  return parseKeyValueList(values, "--var");
+}
+
+/** Environment variables for a command/agent target's run; undefined (not `{}`) when none were passed, so the stored target omits the field like every other optional target property. */
+function envFromOpts(values: string[] | undefined): Record<string, string> | undefined {
+  const env = parseKeyValueList(values, "--env");
+  return Object.keys(env).length ? env : undefined;
 }
 
 function parseJsonFile(file: string): unknown {
@@ -474,29 +722,14 @@ function parseJsonFile(file: string): unknown {
   }
 }
 
-function parseStringMap(values: string[] | undefined, flag: string): Record<string, string> {
-  const result: Record<string, string> = {};
-  for (const value of values ?? []) {
-    const index = value.indexOf("=");
-    if (index <= 0) throw new ValidationError(`invalid ${flag} value, expected key=value: ${value}`);
-    result[value.slice(0, index)] = value.slice(index + 1);
+function parseReceiptFile(file: string): WriteRunReceiptInput {
+  const raw = file === "-" ? readFileSync(0, "utf8") : readFileSync(file, "utf8");
+  try {
+    return JSON.parse(raw) as WriteRunReceiptInput;
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new ValidationError(`failed to read receipt JSON from ${file}: ${reason}`);
   }
-  return result;
-}
-
-function parseJsonMap(values: string[] | undefined, flag: string): Record<string, unknown> {
-  const result: Record<string, unknown> = {};
-  for (const value of values ?? []) {
-    const index = value.indexOf("=");
-    if (index <= 0) throw new ValidationError(`invalid ${flag} value, expected key=json-or-string: ${value}`);
-    const raw = value.slice(index + 1);
-    try {
-      result[value.slice(0, index)] = JSON.parse(raw);
-    } catch {
-      result[value.slice(0, index)] = raw;
-    }
-  }
-  return result;
 }
 
 function printMigrationPlan(plan: LoopsMigrationPlan, opts: { json?: boolean } = {}): void {
@@ -515,6 +748,12 @@ function printMigrationPlan(plan: LoopsMigrationPlan, opts: { json?: boolean } =
   }
 }
 
+function writeManifestFile(file: string | undefined, manifest: unknown): void {
+  if (!file) return;
+  if (manifest === undefined) throw new ValidationError("command did not produce a manifest");
+  writeFileSync(file, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
+}
+
 /** Snapshot the database through lib/backup (VACUUM INTO, 1h per-reason debounce, keep 3). */
 function backupLoopsDatabase(reason: string): string | undefined {
   return backupDatabase({ reason, keep: 3 }).path;
@@ -525,7 +764,7 @@ const create = program.command("create").description("create loops");
 addGoalOptions(
   addAccountOptions(
     addMachineOptions(
-      addScheduleOptions(
+      addLabelOptions(addScheduleOptions(
       create
         .command("command <name>")
         .description("create a deterministic shell command loop")
@@ -535,36 +774,33 @@ addGoalOptions(
         .option("--no-shell", "execute without a shell")
         .option("--preflight-each-run", "check target executables/accounts before every scheduled run")
         .option("--preflight", "check target executables/accounts before storing the loop"),
-      ),
+      )),
     ),
   ),
-).action(runAction((name, opts) => {
-  const store = new Store();
-  try {
-    const target: LoopTarget = {
-      type: "command",
-      command: opts.cmd,
-      cwd: opts.cwd,
-      shell: opts.shell,
-      timeoutMs: timeoutDuration(opts.timeout, "--timeout"),
-      account: accountFromOpts(opts),
-      preflight: runtimePreflightFromOpts(opts),
-    };
-    const input = baseCreateInput(name, opts, target);
-    const preflight = opts.preflight
-      ? preflightLoopTarget(input.target as Exclude<LoopTarget, { type: "workflow" }>, { name, type: "command" }, { loopName: name }, { machine: input.machine })
-      : undefined;
-    const loop = store.createLoop(input);
+).action(runAction(async (name, opts) => {
+  const target: LoopTarget = {
+    type: "command",
+    command: opts.cmd,
+    cwd: opts.cwd,
+    shell: opts.shell,
+    timeoutMs: timeoutDuration(opts.timeout, "--timeout"),
+    account: accountFromOpts(opts),
+    preflight: runtimePreflightFromOpts(opts),
+  };
+  const input = baseCreateInput(name, opts, target);
+  const preflight = opts.preflight
+    ? preflightLoopTarget(input.target as Exclude<LoopTarget, { type: "workflow" }>, { name, type: "command" }, { loopName: name }, { machine: input.machine })
+    : undefined;
+  await withStore(async (store) => {
+    const loop = await store.createLoop(input);
     printCreatedLoop(loop, `created loop ${loop.id} (${loop.name}) next=${loop.nextRunAt}`, preflight);
-  } finally {
-    store.close();
-  }
+  });
 }));
 
 addGoalOptions(
   addAccountOptions(
     addMachineOptions(
-      addScheduleOptions(
+      addLabelOptions(addScheduleOptions(
       create
         .command("agent <name>")
         .description("create a headless coding-agent loop")
@@ -576,19 +812,22 @@ addGoalOptions(
         .option("--variant <variant>", "provider-specific model variant or reasoning effort")
         .option("--agent <agent>", "provider-specific agent")
         .option("--auth-profile <profile>", "provider-native auth profile; currently supported for codewith")
+        .option("--env <key=value>", "environment variable for the run; may be repeated", collectValues, [] as string[])
         .option("--add-dir <dir>", "additional writable directory for provider sandboxes; may be repeated or comma-separated", collectValues, [] as string[])
         .option("--timeout <duration>", "run timeout; use none/unlimited for no timeout")
         .option("--permission-mode <mode>", "provider permission mode: default, plan, auto, or bypass")
         .option("--sandbox <mode>", "provider sandbox: codewith/codex use read-only/workspace-write/danger-full-access; cursor uses enabled/disabled")
         .option("--allow-tool <name>", "advisory per-session tool allowlist metadata; may be repeated or comma-separated", collectValues, [] as string[])
         .option("--allow-command <name>", "advisory per-session command allowlist metadata; may be repeated or comma-separated", collectValues, [] as string[])
+        .option("--safety-reason <reason>", "auditable reason for advisory restrictions or relaxed sandbox access")
+        .option("--manual-break-glass", "confirm explicit operator break-glass approval for a relaxed sandbox")
         .option("--config-isolation <mode>", "safe or none", "safe")
         .option("--preflight-each-run", "check provider/account readiness before every scheduled run")
         .option("--preflight", "check target executables/accounts before storing the loop"),
-      ),
+      )),
     ),
   ),
-).action(runAction((name, opts) => {
+).action(runAction(async (name, opts) => {
   const provider = opts.provider as AgentProvider;
   if (!["claude", "cursor", "codewith", "aicopilot", "opencode", "codex"].includes(provider)) {
     throw new ValidationError("unsupported provider");
@@ -596,41 +835,40 @@ addGoalOptions(
   if (!["safe", "none"].includes(opts.configIsolation)) {
     throw new ValidationError("--config-isolation must be safe or none");
   }
-  const store = new Store();
-  try {
-    const target = normalizeLoopTargetForStorage({
-      type: "agent",
-      provider,
-      prompt: opts.prompt,
-      promptFile: opts.promptFile,
-      cwd: opts.cwd,
-      model: opts.model,
-      variant: opts.variant,
-      agent: opts.agent,
-      authProfile: providerAuthProfileFromOpts(opts, provider),
-      addDirs: listFromRepeatedOpts(opts.addDir),
-      timeoutMs: timeoutDuration(opts.timeout, "--timeout"),
-      configIsolation: opts.configIsolation,
-      permissionMode: permissionModeFromOpts(opts, provider),
-      sandbox: sandboxFromOpts(opts, provider),
-      allowlist: allowlistFromOpts(opts),
-      account: accountFromOpts(opts),
-      preflight: runtimePreflightFromOpts(opts),
-    }, { name, type: "agent", provider }, { baseDir: process.cwd() });
-    const input = baseCreateInput(name, opts, target);
-    const preflight = opts.preflight
-      ? preflightLoopTarget(input.target as Exclude<LoopTarget, { type: "workflow" }>, { name, type: "agent", provider }, { loopName: name }, { machine: input.machine })
-      : undefined;
-    const loop = store.createLoop(input);
+  const target = normalizeLoopTargetForStorage({
+    type: "agent",
+    provider,
+    prompt: opts.prompt,
+    promptFile: opts.promptFile,
+    cwd: opts.cwd,
+    model: opts.model,
+    variant: opts.variant,
+    agent: opts.agent,
+    authProfile: providerAuthProfileFromOpts(opts, provider),
+    env: envFromOpts(opts.env),
+    addDirs: listFromRepeatedOpts(opts.addDir),
+    timeoutMs: timeoutDuration(opts.timeout, "--timeout"),
+    configIsolation: opts.configIsolation,
+    permissionMode: permissionModeFromOpts(opts, provider),
+    sandbox: sandboxFromOpts(opts, provider),
+    manualBreakGlass: Boolean(opts.manualBreakGlass) || undefined,
+    allowlist: allowlistFromOpts(opts),
+    account: accountFromOpts(opts),
+    preflight: runtimePreflightFromOpts(opts),
+  }, { name, type: "agent", provider }, { baseDir: process.cwd() });
+  const input = baseCreateInput(name, opts, target);
+  const preflight = opts.preflight
+    ? preflightLoopTarget(input.target as Exclude<LoopTarget, { type: "workflow" }>, { name, type: "agent", provider }, { loopName: name }, { machine: input.machine })
+    : undefined;
+  await withStore(async (store) => {
+    const loop = await store.createLoop(input);
     printCreatedLoop(loop, `created loop ${loop.id} (${loop.name}) next=${loop.nextRunAt}`, preflight);
-  } finally {
-    store.close();
-  }
+  });
 }));
 
 addGoalOptions(
   addMachineOptions(
-    addScheduleOptions(
+    addLabelOptions(addScheduleOptions(
     create
       .command("workflow <name>")
       .description("schedule a stored workflow")
@@ -638,28 +876,23 @@ addGoalOptions(
       .option("--timeout <duration>", "workflow run timeout; use none/unlimited for no workflow-level timeout")
       .option("--preflight-each-run", "check workflow steps before every scheduled run")
       .option("--preflight", "check workflow step executables/accounts before storing the loop"),
-    ),
+    )),
   ),
-).action(runAction((name, opts) => {
-  const store = new Store();
-  try {
-    const workflow = store.requireWorkflow(opts.workflow);
-    const target: LoopTarget = {
-      type: "workflow",
-      workflowId: workflow.id,
-      timeoutMs: timeoutDuration(opts.timeout, "--timeout"),
-      preflight: runtimePreflightFromOpts(opts),
-    };
-    const input = baseCreateInput(name, opts, target);
-    const preflight = opts.preflight
-      ? preflightStoredWorkflow(workflow, { name, type: "workflow", workflow: workflow.name }, { machine: input.machine })
-      : undefined;
-    const loop = store.createLoop(input);
-    printCreatedLoop(loop, `created workflow loop ${loop.id} (${loop.name}) workflow=${workflow.name} next=${loop.nextRunAt}`, preflight);
-  } finally {
-    store.close();
-  }
-}));
+).action(runAction((name, opts) => withStore(async (store) => {
+  const workflow = await store.requireWorkflow(opts.workflow);
+  const target: LoopTarget = {
+    type: "workflow",
+    workflowId: workflow.id,
+    timeoutMs: timeoutDuration(opts.timeout, "--timeout"),
+    preflight: runtimePreflightFromOpts(opts),
+  };
+  const input = baseCreateInput(name, opts, target);
+  const preflight = opts.preflight
+    ? preflightStoredWorkflow(workflow, { name, type: "workflow", workflow: workflow.name }, { machine: input.machine })
+    : undefined;
+  const loop = await store.createLoop(input);
+  printCreatedLoop(loop, `created workflow loop ${loop.id} (${loop.name}) workflow=${workflow.name} next=${loop.nextRunAt}`, preflight);
+})));
 
 const workflows = program.command("workflows").alias("workflow").description("manage workflow specs and runs");
 
@@ -675,11 +908,11 @@ const goal = program.command("goal").description("inspect goal runs");
 
 program
   .command("mode")
-  .description("show the active OpenLoops deployment mode")
+  .description("show the active Loops deployment mode")
   .option("--json", "print JSON")
   .action(runAction(deploymentStatusCommand()));
 
-const selfHosted = program.command("self-hosted").alias("selfhosted").description("inspect the self-hosted OpenLoops contract");
+const selfHosted = program.command("self-hosted").description("inspect the self-hosted Loops contract");
 selfHosted
   .command("status")
   .option("--json", "print JSON")
@@ -687,13 +920,16 @@ selfHosted
 
 program
   .command("export")
-  .description("export a local OpenLoops migration bundle")
-  .requiredOption("--file <path>", "write bundle JSON to this path")
+  .description("export a local Loops migration bundle")
+  .option("--file <path>", "write bundle JSON to this path (required unless --dry-run)")
   .option("--dry-run", "preview the bundle without writing the file")
   .option("--no-runs", "omit loop run history from the bundle")
   .option("--allow-redacted", "write a redacted non-importable bundle when env/secrets must be removed")
   .option("--json", "print JSON")
   .action(runAction((opts) => {
+    if (!opts.dryRun && !opts.file) {
+      throw new ValidationError("--file <path> is required unless --dry-run is used");
+    }
     const store = new Store();
     try {
       const bundle = exportLoopsMigrationBundle(store, { includeRuns: opts.runs });
@@ -704,12 +940,13 @@ program
       const output = {
         ok: true,
         dryRun: Boolean(opts.dryRun),
-        file: opts.file,
+        file: opts.file ?? null,
         bundle: publicMigrationBundle(bundle),
       };
       if (isJson() || opts.json) console.log(JSON.stringify(output, null, 2));
       else {
-        console.log(`${opts.dryRun ? "would export" : "exported"} ${opts.file} workflows=${bundle.counts.workflows} loops=${bundle.counts.loops} runs=${bundle.counts.runs}`);
+        const target = opts.file ?? "(no file)";
+        console.log(`${opts.dryRun ? "would export" : "exported"} ${target} workflows=${bundle.counts.workflows} loops=${bundle.counts.loops} runs=${bundle.counts.runs}`);
         for (const warning of bundle.warnings) console.log(`warn ${warning}`);
       }
     } finally {
@@ -719,7 +956,7 @@ program
 
 program
   .command("import <file>")
-  .description("preview or apply a local OpenLoops migration bundle")
+  .description("preview or apply a local Loops migration bundle")
   .option("--apply", "apply the import; default is a dry-run preview")
   .option("--replace", "update existing rows whose ids match but hashes differ")
   .option("--no-runs", "ignore loop run history in the bundle")
@@ -788,12 +1025,50 @@ selfHosted
 
 selfHosted
   .command("push")
-  .description("preview local rows that would be pushed to self-hosted")
+  .description("preview (default) or apply an id-preserving local->self-hosted backfill")
   .option("--api-url <url>", "self-hosted control-plane API URL")
-  .option("--dry-run", "preview only; self-hosted push does not apply remote changes yet")
-  .option("--no-runs", "omit loop run history from the preview")
+  .option("--apply", "apply the backfill via the control-plane /v1/import endpoint (default is preview)")
+  .option("--replace", "update differing same-id remote rows; safe default may still archive/pause same-id definitions")
+  .option("--dry-run", "preview only; equivalent to omitting --apply")
+  .option("--no-runs", "omit loop run history")
+  .option("--manifest-file <path>", "write a self-hosted comparison/import manifest JSON file")
   .option("--json", "print JSON")
-  .action(selfHostedMigrationCommand("self-hosted-push"));
+  .action(runAction(async (opts: { apiUrl?: string; apply?: boolean; replace?: boolean; dryRun?: boolean; runs?: boolean; manifestFile?: string; json?: boolean }) => {
+    if (!opts.apply || opts.dryRun) {
+      const store = new Store();
+      try {
+        const plan = await buildSelfHostedMigrationPlan(store, {
+          operation: "self-hosted-push",
+          apiUrl: opts.apiUrl,
+          includeRuns: opts.runs,
+          replace: opts.replace,
+        });
+        writeManifestFile(opts.manifestFile, plan.manifest);
+        printMigrationPlan(plan, opts);
+      } finally {
+        store.close();
+      }
+      return;
+    }
+    const store = new Store();
+    try {
+      const result = await applySelfHostedPush(store, {
+        apiUrl: opts.apiUrl,
+        includeRuns: opts.runs,
+        replace: opts.replace,
+      });
+      writeManifestFile(opts.manifestFile, result.manifest);
+      if (isJson() || opts.json) console.log(JSON.stringify(result, null, 2));
+      else {
+        console.log(
+          `pushed workflows=${result.applied.workflows} loops=${result.applied.loops} runs=${result.applied.runs} ` +
+            `(skipped running=${result.skipped.runningRuns} orphan-runs=${result.skipped.orphanRuns}, ${result.requests} requests) -> ${result.apiUrl}`,
+        );
+      }
+    } finally {
+      store.close();
+    }
+  }));
 
 selfHosted
   .command("pull")
@@ -804,34 +1079,7 @@ selfHosted
   .option("--json", "print JSON")
   .action(selfHostedMigrationCommand("self-hosted-pull"));
 
-selfHosted
-  .command("runner-register")
-  .description("register this machine as a self-hosted runner")
-  .requiredOption("--runner-id <id>", "stable runner id")
-  .option("--api-url <url>", "self-hosted control-plane API URL")
-  .option("--machine-id <id>", "OpenMachines machine id")
-  .option("--label <key=value>", "runner label; may be repeated or comma-separated", collectValues, [] as string[])
-  .option("--capability <key=json>", "runner capability; may be repeated or comma-separated", collectValues, [] as string[])
-  .option("--dry-run", "preview registration without posting")
-  .option("--apply", "post the registration to the control plane")
-  .option("--json", "print JSON")
-  .action(runAction(async (opts) => {
-    if (opts.apply && opts.dryRun) throw new ValidationError("use either --apply or --dry-run, not both");
-    const request = {
-      apiUrl: opts.apiUrl,
-      runnerId: opts.runnerId,
-      machineId: opts.machineId,
-      labels: parseStringMap(listFromRepeatedOpts(opts.label), "--label"),
-      capabilities: parseJsonMap(listFromRepeatedOpts(opts.capability), "--capability"),
-    };
-    const result = opts.apply
-      ? await registerSelfHostedRunner(request)
-      : { ok: true, dryRun: true, runner: request };
-    if (isJson() || opts.json) console.log(JSON.stringify(result, null, 2));
-    else console.log(`${opts.apply ? "registered" : "would register"} runner ${String(opts.runnerId)}`);
-  }));
-
-const cloud = program.command("cloud").description("inspect the hosted OpenLoops contract");
+const cloud = program.command("cloud").description("inspect the hosted Loops contract");
 cloud
   .command("status")
   .option("--json", "print JSON")
@@ -900,7 +1148,7 @@ function printWorkflowListWarning(args: { shown: number; total: number; status?:
 templates
   .command("list")
   .alias("ls")
-  .description("list OpenLoops templates")
+  .description("list Loops templates")
   .option("--source <source>", "template source: all, builtin, or custom", "all")
   .action(runAction((opts) => {
     const values = listLoopTemplates({ source: templateSource(opts.source) });
@@ -955,20 +1203,17 @@ addTemplateSourceOption(
     print(value, JSON.stringify(value, null, 2));
   }));
 
-function createWorkflowFromTemplate(id: string, opts: { var?: string[]; source?: string; name?: string; preflight?: boolean }): void {
-  const store = new Store();
-  try {
+function createWorkflowFromTemplate(id: string, opts: { var?: string[]; source?: string; name?: string; preflight?: boolean }): Promise<void> {
+  return withStore(async (store) => {
     let body = renderLoopTemplate(id, parseVars(opts.var), { source: templateSource(opts.source) });
     if (opts.name) body = { ...body, name: opts.name };
     const preflight = opts.preflight
       ? preflightStoredWorkflow(workflowSpecForPreflight(body, "creation-preflight"), { name: body.name, type: "workflow", template: id }, {})
       : undefined;
-    const workflow = store.createWorkflow(body);
+    const workflow = await store.createWorkflow(body);
     if (preflight !== undefined) print({ workflow: publicWorkflow(workflow), preflight }, `created workflow ${workflow.id} (${workflow.name}) steps=${workflow.steps.length}`);
     else print(publicWorkflow(workflow), `created workflow ${workflow.id} (${workflow.name}) steps=${workflow.steps.length}`);
-  } finally {
-    store.close();
-  }
+  });
 }
 
 addTemplateSourceOption(
@@ -985,96 +1230,179 @@ routes
   .option("--status <status>", "filter by work item status")
   .option("--route-key <key>", "filter by route key")
   .option("--limit <n>", "maximum rows", "50")
-  .action(runAction((opts) => {
-    const store = new Store();
-    try {
-      const items = store.listWorkflowWorkItems({
-        status: opts.status,
-        routeKey: opts.routeKey,
-        limit: positiveInteger(opts.limit, "--limit") ?? 50,
-      });
-      if (isJson()) print(items.map(publicWorkflowWorkItem));
-      else {
-        for (const item of items) {
-          console.log(`${item.id} ${item.status.padEnd(10)} ${item.routeKey} ${item.subjectRef} ${item.loopId ?? "-"}`);
-        }
+  .action(runAction((opts) => withStore(async (store) => {
+    const items = await store.listWorkflowWorkItems({
+      status: opts.status,
+      routeKey: opts.routeKey,
+      limit: positiveInteger(opts.limit, "--limit") ?? 50,
+    });
+    if (isJson()) print(items.map(publicWorkflowWorkItem));
+    else {
+      for (const item of items) {
+        console.log(`${item.id} ${item.status.padEnd(10)} ${item.routeKey} ${item.subjectRef} ${item.loopId ?? "-"}`);
       }
-    } finally {
-      store.close();
     }
-  }));
+  })));
 
 routes
   .command("show <id>")
   .description("show one admission work item")
-  .action(runAction((id) => {
-    const store = new Store();
-    try {
-      const item = store.getWorkflowWorkItem(id);
-      if (!item) throw new Error(`route work item not found: ${id}`);
-      const invocation = store.getWorkflowInvocation(item.invocationId);
-      const workflow = item.workflowId ? store.getWorkflow(item.workflowId) : undefined;
-      const loop = item.loopId ? store.getLoop(item.loopId) : undefined;
-      print(
-        {
-          item: publicWorkflowWorkItem(item),
-          invocation: invocation ? publicWorkflowInvocation(invocation) : undefined,
-          workflow: workflow ? publicWorkflow(workflow) : undefined,
-          loop: loop ? publicLoop(loop) : undefined,
-        },
-        `${item.id} ${item.status} ${item.routeKey} ${item.subjectRef}`,
-      );
-    } finally {
-      store.close();
-    }
-  }));
+  .action(runAction((id) => withStore(async (store) => {
+    const item = await store.getWorkflowWorkItem(id);
+    if (!item) throw new Error(`route work item not found: ${id}`);
+    const invocation = await store.getWorkflowInvocation(item.invocationId);
+    const workflow = item.workflowId ? await store.getWorkflow(item.workflowId) : undefined;
+    const loop = item.loopId ? await store.getLoop(item.loopId) : undefined;
+    print(
+      {
+        item: publicWorkflowWorkItem(item),
+        invocation: invocation ? publicWorkflowInvocation(invocation) : undefined,
+        workflow: workflow ? publicWorkflow(workflow) : undefined,
+        loop: loop ? publicLoop(loop) : undefined,
+      },
+      `${item.id} ${item.status} ${item.routeKey} ${item.subjectRef}`,
+    );
+  })));
 
 routes
   .command("requeue <id>")
-  .description("requeue a terminal admission work item for the next task/event delivery")
+  .description("requeue a terminal admission work item for the next task/event delivery (resets the redispatch attempt count so the unwedge is durable; --keep-attempts preserves it)")
   .option("--reason <text>", "operator reason recorded on the work item")
-  .action(runAction((id, opts) => {
-    const store = new Store();
-    try {
-      const reason = stringField(opts.reason);
-      if (!reason) throw new ValidationError("routes requeue requires --reason <text>");
-      const item = store.requeueWorkflowWorkItem(id, { reason });
-      print(publicWorkflowWorkItem(item), `requeued route work item ${item.id} (${item.routeKey})`);
-    } finally {
-      store.close();
-    }
-  }));
+  .option("--keep-attempts", "preserve the redispatch attempt count instead of resetting it (cautious path: the item may re-cap after one more terminal run)")
+  .action(runAction((id, opts) => withStore(async (store) => {
+    const reason = stringField(opts.reason);
+    if (!reason) throw new ValidationError("routes requeue requires --reason <text>");
+    const item = await store.requeueWorkflowWorkItem(id, { reason, resetAttempts: !opts.keepAttempts });
+    print(
+      publicWorkflowWorkItem(item),
+      `requeued route work item ${item.id} (${item.routeKey}) - ${opts.keepAttempts ? "attempts preserved" : "attempts reset"}`,
+    );
+  })));
 
 routes
   .command("invocations")
   .description("list workflow invocations")
   .option("--limit <n>", "maximum rows", "50")
-  .action(runAction((opts) => {
-    const store = new Store();
-    try {
-      const invocations = store.listWorkflowInvocations({ limit: positiveInteger(opts.limit, "--limit") ?? 50 });
-      if (isJson()) print(invocations.map(publicWorkflowInvocation));
-      else {
-        for (const invocation of invocations) {
-          console.log(
-            `${invocation.id} ${invocation.intent.padEnd(8)} ${invocation.sourceRef.kind}:${invocation.sourceRef.id ?? "-"} -> ${invocation.subjectRef.kind}:${invocation.subjectRef.id ?? invocation.subjectRef.path ?? "-"}`,
-          );
-        }
+  .action(runAction((opts) => withStore(async (store) => {
+    const invocations = await store.listWorkflowInvocations({ limit: positiveInteger(opts.limit, "--limit") ?? 50 });
+    if (isJson()) print(invocations.map(publicWorkflowInvocation));
+    else {
+      for (const invocation of invocations) {
+        console.log(
+          `${invocation.id} ${invocation.intent.padEnd(8)} ${invocation.sourceRef.kind}:${invocation.sourceRef.id ?? "-"} -> ${invocation.subjectRef.kind}:${invocation.subjectRef.id ?? invocation.subjectRef.path ?? "-"}`,
+        );
       }
-    } finally {
-      store.close();
+    }
+  })));
+
+const routePolicies = routes.command("policies").alias("presets").description("inspect named route drain policies");
+
+routePolicies
+  .command("list")
+  .alias("ls")
+  .description("list named route drain policies")
+  .action(runAction(() => {
+    const policies = listRoutePolicies();
+    if (isJson()) {
+      print(policies.map((policy) => ({
+        id: policy.id,
+        title: policy.title,
+        routeKind: policy.routeKind,
+        safety: policy.safety,
+        aliases: policy.aliases,
+        source: policy.source,
+      })));
+      return;
+    }
+    for (const policy of policies) {
+      console.log(`${policy.id}\t${policy.safety}\t${policy.routeKind}\t${policy.title}`);
     }
   }));
 
+routePolicies
+  .command("show <id>")
+  .description("show one named route drain policy")
+  .action(runAction((id) => {
+    const rendered = renderRoutePolicy(id);
+    if (isJson()) print(rendered.policy);
+    else {
+      const policy = rendered.policy;
+      console.log(`${policy.id} (${policy.safety})`);
+      console.log(policy.title);
+      console.log(policy.description);
+      console.log(`source: ${policy.source}`);
+      if (policy.aliases?.length) console.log(`aliases: ${policy.aliases.join(",")}`);
+      if (policy.notes?.length) {
+        for (const note of policy.notes) console.log(`note: ${note}`);
+      }
+    }
+  }));
+
+routePolicies
+  .command("render <id>")
+  .description("render a named route policy as explicit replayable route drain arguments")
+  .action(runAction((id) => {
+    const rendered = renderRoutePolicy(id);
+    if (isJson()) print(rendered);
+    else {
+      console.log(rendered.command);
+      if (rendered.schedule.every) console.log(`schedule: --every ${rendered.schedule.every}`);
+      else if (rendered.schedule.cron) console.log(`schedule: --cron ${rendered.schedule.cron}`);
+      else if (rendered.schedule.at) console.log(`schedule: --at ${rendered.schedule.at}`);
+      else if (rendered.schedule.dynamic) console.log("schedule: --dynamic");
+    }
+  }));
+
+routePolicies
+  .command("validate [id]")
+  .description("validate one named route policy, or all policies when id is omitted")
+  .action(runAction((id) => {
+    const rendered = id ? [validateRoutePolicy(id)] : listRoutePolicies().map((policy) => validateRoutePolicy(policy.id));
+    const value = {
+      ok: true,
+      policies: rendered.map((entry) => ({
+        id: entry.policy.id,
+        safety: entry.policy.safety,
+        routeKind: entry.policy.routeKind,
+        explicitArgCount: entry.args.length,
+      })),
+    };
+    print(value, `valid route policies: ${value.policies.map((policy) => policy.id).join(",")}`);
+  }));
+
 async function handleRouteEvent(kind: string, opts: TodosTaskRouteOptions): Promise<void> {
+  // Route admission writes invocations, work items, and loops through the local
+  // sqlite Store in one transaction and gates on this machine's live concurrency
+  // (countRunningWorkflowStepsByAuthProfile). It has no hosted /v1 equivalent, so
+  // when the client is flipped to the cloud API a real (non-dry-run) create would
+  // silently write to the on-box island — the split-brain we forbid. A dry-run
+  // preview never touches the store, so it stays available in every mode.
+  if (!opts.dryRun) assertLocalOnlyCommand("routes create");
   const event = await readEventEnvelopeInput(opts);
   const result = routeEventByKind(kind, event, opts);
   print(result.value, result.human);
+  // A skip because the source could not be reached is not a successful routing
+  // decision. @hasna/events records a command delivery as successful purely on
+  // `code === 0` (transports.js: `const success = code === 0`), so exiting 0 here
+  // files a dropped event as delivered. Exiting non-zero files it as failed, which
+  // is what makes the drop visible. It does NOT by itself cause a redelivery:
+  // measured on this fleet, every task-routing channel has `retry: null` and the
+  // policy default is `maxAttempts: 1`, so retry happens only where a channel
+  // explicitly configures it. Same doctrine as the drain's `fatal` count.
+  if (result.value.sourceUnavailable) {
+    console.error(`route could not reach the task source; event not routed and recorded as a failed delivery (retried only if this channel configures retry): ${String(result.value.reason ?? "source unavailable")}`);
+    process.exitCode = 1;
+  }
 }
 
 function handleRouteDrain(kind: string, opts: TodosDrainOptions): void {
+  // Draining a source queue admits work through the same local-only Store
+  // transaction path as `routes create`, so it is a local-runtime command: fail
+  // loudly rather than write the on-box island while flipped to the hosted API.
+  assertLocalOnlyCommand("routes drain");
   if (kind !== "todos-task") throw new ValidationError("route drain currently supports kind todos-task");
-  const result = drainTodosTaskRoutes(opts);
+  const expandedOpts = applyRoutePolicyToDrainOptions(opts, { requireExplicitSafety: true });
+  const result = drainTodosTaskRoutes(expandedOpts);
   print(result.value, result.human);
   // Non-skippable route errors are captured per-task so the batch completes, but
   // the run must not report success: a systemic misconfig where every candidate
@@ -1118,24 +1446,20 @@ addScheduleOptions(
   ),
 ).action(runAction((kind, name, opts) => {
   if (kind !== "todos-task") throw new ValidationError("route schedule currently supports kind todos-task");
-  const store = new Store();
-  try {
+  const expandedOpts = applyRoutePolicyToScheduleOptions(opts);
+  todosTaskRouteTemplateId(expandedOpts);
+  return withStore(async (store) => {
     const target: LoopTarget = {
       type: "command",
       command: "loops",
-      args: ["--json", ...routeDrainArgs({ ...opts, compact: opts.compact ?? true })],
+      args: ["--json", ...routeDrainArgs({ ...expandedOpts, compact: expandedOpts.compact ?? true })],
       timeoutMs: parseDuration("20m"),
-      preflight: runtimePreflightFromOpts(opts),
+      preflight: runtimePreflightFromOpts(expandedOpts),
     };
-    const input = baseCreateInput(name, opts, target);
-    const preflight = opts.preflight
-      ? preflightLoopTarget(input.target as Exclude<LoopTarget, { type: "workflow" }>, { name, type: "route-drain", kind }, { loopName: name }, { machine: input.machine })
-      : undefined;
-    const loop = store.createLoop(input);
-    printCreatedLoop(loop, `created route drain loop ${loop.id} (${loop.name}) next=${loop.nextRunAt}`, preflight);
-  } finally {
-    store.close();
-  }
+    const input = baseCreateInput(name, expandedOpts, target);
+    const loop = await store.createLoop(input);
+    printCreatedLoop(loop, `created route drain loop ${loop.id} (${loop.name}) next=${loop.nextRunAt}`);
+  });
 }));
 
 const eventsHandle = events.command("handle").description("(deprecated) handle a Hasna event envelope; alias of 'routes create'");
@@ -1172,33 +1496,46 @@ addTodosDrainOptions(
     .description("(deprecated: use 'routes drain todos-task') drain ready todos tasks into bounded worker/verifier workflow loops"),
 ).action(runAction((opts) => handleRouteDrain("todos-task", opts)));
 
-function showGoal(idOrName: string): void {
-  const store = new Store();
-  try {
-    const runtimeGoal = store.getGoal(idOrName) ?? store.findGoalByLoop(idOrName) ?? store.findGoalByRunId(idOrName);
+function showGoal(idOrName: string): Promise<void> {
+  return withStore(async (store) => {
+    const runtimeGoal = (await store.getGoal(idOrName)) ?? (await store.findGoalByLoop(idOrName)) ?? (await store.findGoalByRunId(idOrName));
     if (runtimeGoal) {
       const value = {
         goal: publicGoal(runtimeGoal),
-        nodes: store.listGoalPlanNodes(runtimeGoal.goalId),
-        runs: store.listGoalRuns({ goalId: runtimeGoal.goalId }).map(publicGoalRun),
+        nodes: await store.listGoalPlanNodes(runtimeGoal.goalId),
+        runs: (await store.listGoalRuns({ goalId: runtimeGoal.goalId })).map(publicGoalRun),
       };
       print(value, `${runtimeGoal.goalId} ${runtimeGoal.status} ${runtimeGoal.objective}`);
       return;
     }
-    const loop = store.getLoop(idOrName) ?? store.findLoopByName(idOrName);
+    const loop = (await store.getLoop(idOrName)) ?? (await store.findLoopByName(idOrName));
     if (loop?.goal) {
       print({ config: loop.goal, loop: publicLoop(loop) }, `configured goal for loop ${loop.name}: ${loop.goal.objective}`);
       return;
     }
-    const workflow = store.getWorkflow(idOrName) ?? store.findWorkflowByName(idOrName);
+    const workflow = (await store.getWorkflow(idOrName)) ?? (await store.findWorkflowByName(idOrName));
     if (workflow?.goal) {
       print({ config: workflow.goal, workflow: publicWorkflow(workflow) }, `configured goal for workflow ${workflow.name}: ${workflow.goal.objective}`);
       return;
     }
+    const run = await store.getRun(idOrName);
+    if (run) {
+      const loop = await store.getLoop(run.loopId);
+      if (loop?.goal) {
+        print(
+          { config: loop.goal, loop: publicLoop(loop), run: publicRun(run) },
+          `configured goal for loop ${loop.name}: ${loop.goal.objective}`,
+        );
+        return;
+      }
+      print(
+        { run: publicRun(run), loop: loop ? publicLoop(loop) : undefined },
+        `loop run ${run.id}: ${run.status} ${run.loopName}`,
+      );
+      return;
+    }
     throw new Error(`goal not found: ${idOrName}`);
-  } finally {
-    store.close();
-  }
+  });
 }
 
 goal
@@ -1253,22 +1590,18 @@ workflows
   .action(runAction((file, opts) => {
     if (opts.template && file) throw new ValidationError("choose either a workflow JSON file or --template <id>, not both");
     if (opts.template) {
-      createWorkflowFromTemplate(opts.template, opts);
-      return;
+      return createWorkflowFromTemplate(opts.template, opts);
     }
     if (!file) throw new ValidationError("workflows create requires a workflow JSON file or --template <id>");
-    const store = new Store();
-    try {
+    return withStore(async (store) => {
       const body = workflowBodyFromFile(file, opts.name, { file, type: "workflow" });
       const preflight = opts.preflight
         ? preflightStoredWorkflow(workflowSpecForPreflight(body, "creation-preflight"), { name: body.name, type: "workflow" }, {})
         : undefined;
-      const workflow = store.createWorkflow(body);
+      const workflow = await store.createWorkflow(body);
       if (preflight !== undefined) print({ workflow: publicWorkflow(workflow), preflight }, `created workflow ${workflow.id} (${workflow.name}) steps=${workflow.steps.length}`);
       else print(publicWorkflow(workflow), `created workflow ${workflow.id} (${workflow.name}) steps=${workflow.steps.length}`);
-    } finally {
-      store.close();
-    }
+    });
   }));
 
 workflows
@@ -1279,65 +1612,52 @@ workflows
   .option("--all", "include active and archived workflows")
   .option("--limit <n>", "maximum rows to print; omitted means all matching workflows")
   .option("--offset <n>", "number of matching rows to skip before printing", "0")
-  .action(runAction((opts) => {
-    const store = new Store();
-    try {
-      const status = workflowStatusFromOpts(opts.status, opts.all);
-      const limit = positiveInteger(opts.limit, "--limit");
-      const offset = nonNegativeInteger(opts.offset, "--offset") ?? 0;
-      const workflowsList = store.listWorkflows({ status, limit, offset });
-      const total = store.countWorkflows({ status });
-      if (isJson()) print(workflowsList.map(publicWorkflow));
-      else {
-        for (const workflow of workflowsList) {
-          console.log(`${workflow.id}  ${workflow.status.padEnd(8)}  steps=${workflow.steps.length}  ${workflow.name}`);
-        }
-      }
-      if (limit !== undefined || offset > 0) printWorkflowListWarning({ shown: workflowsList.length, total, status, offset, limit });
-    } finally {
-      store.close();
-    }
-  }));
-
-workflows.command("show <idOrName>").description("show one stored workflow spec").action(runAction((idOrName) => {
-  const store = new Store();
-  try {
-    print(publicWorkflow(store.requireWorkflow(idOrName)));
-  } finally {
-    store.close();
-  }
-}));
-
-workflows.command("inspect <runId>").description("show a workflow run with steps and events").action(runAction((runId) => {
-  const store = new Store();
-  try {
-    const run = store.requireWorkflowRun(runId);
-    const steps = store.listWorkflowStepRuns(run.id);
-    const runEvents = store.listWorkflowEvents(run.id);
-    const value = {
-      workflowRun: publicWorkflowRun(run),
-      steps: steps.map((step) => publicWorkflowStepRun(step)),
-      events: runEvents.map(publicWorkflowEvent),
-    };
-    if (isJson()) print(value);
+  .action(runAction((opts) => withStore(async (store) => {
+    const status = workflowStatusFromOpts(opts.status, opts.all);
+    const limit = positiveInteger(opts.limit, "--limit");
+    const offset = nonNegativeInteger(opts.offset, "--offset") ?? 0;
+    const workflowsList = await store.listWorkflows({ status, limit, offset });
+    const total = await store.countWorkflows({ status });
+    if (isJson()) print(workflowsList.map(publicWorkflow));
     else {
-      console.log(`${run.id}  ${run.status}  ${run.workflowName}`);
-      for (const step of steps) {
-        const publicStep = publicWorkflowStepRun(step);
-        console.log(`  ${String(step.sequence).padStart(2, "0")}  ${step.status.padEnd(10)}  ${step.stepId}  ${publicStep.error ?? ""}`);
+      for (const workflow of workflowsList) {
+        console.log(`${workflow.id}  ${workflow.status.padEnd(8)}  steps=${workflow.steps.length}  ${workflow.name}`);
       }
-      console.log(`  events=${runEvents.length}`);
     }
-  } finally {
-    store.close();
+    if (limit !== undefined || offset > 0) printWorkflowListWarning({ shown: workflowsList.length, total, status, offset, limit });
+  })));
+
+workflows.command("show <idOrName>").description("show one stored workflow spec").action(runAction((idOrName) => withStore(async (store) => {
+  print(publicWorkflow(await store.requireWorkflow(idOrName)));
+})));
+
+workflows.command("inspect <runId>").description("show a workflow run with steps and events").action(runAction((runId) => withStore(async (store) => {
+  const run = await store.requireWorkflowRun(runId);
+  const steps = await store.listWorkflowStepRuns(run.id);
+  const runEvents = await store.listWorkflowEvents(run.id);
+  const publicEvents = runEvents.filter((event) => !isPrivateOperationEventType(event.eventType));
+  const value = {
+    workflowRun: publicWorkflowRun(run),
+    steps: steps.map((step) => publicWorkflowStepRun(step)),
+    events: publicEvents.map(publicWorkflowEvent),
+  };
+  if (isJson()) print(value);
+  else {
+    console.log(`${run.id}  ${run.status}  ${run.workflowName}`);
+    for (const step of steps) {
+      const publicStep = publicWorkflowStepRun(step);
+      console.log(`  ${String(step.sequence).padStart(2, "0")}  ${step.status.padEnd(10)}  ${step.stepId}  ${publicStep.error ?? ""}`);
+    }
+    console.log(`  events=${publicEvents.length}`);
   }
-}));
+})));
 
 workflows
   .command("run <idOrName>")
   .description("execute a stored workflow once now")
   .option("--show-output", "show step stdout/stderr")
   .action(runAction(async (idOrName, opts) => {
+    assertLocalOnlyCommand("workflows run");
     const store = new Store();
     try {
       const workflow = store.requireWorkflow(idOrName);
@@ -1368,83 +1688,65 @@ workflows
   .command("runs [idOrName]")
   .description("list workflow runs, optionally for one workflow")
   .option("--limit <n>", "limit", "50")
-  .action(runAction((idOrName, opts) => {
-    const store = new Store();
-    try {
-      const workflow = idOrName ? store.requireWorkflow(idOrName) : undefined;
-      const runs = store.listWorkflowRuns({ workflowId: workflow?.id, limit: positiveInteger(opts.limit, "--limit") ?? 50 });
-      if (isJson()) print(runs.map(publicWorkflowRun));
-      else {
-        for (const run of runs) {
-          console.log(`${run.id}  ${run.status.padEnd(10)}  ${run.workflowName}  started=${run.startedAt ?? "-"}`);
-        }
+  .action(runAction((idOrName, opts) => withStore(async (store) => {
+    const workflow = idOrName ? await store.requireWorkflow(idOrName) : undefined;
+    const runs = await store.listWorkflowRuns({ workflowId: workflow?.id, limit: positiveInteger(opts.limit, "--limit") ?? 50 });
+    if (isJson()) print(runs.map(publicWorkflowRun));
+    else {
+      for (const run of runs) {
+        console.log(`${run.id}  ${run.status.padEnd(10)}  ${run.workflowName}  started=${run.startedAt ?? "-"}`);
       }
-    } finally {
-      store.close();
     }
-  }));
+  })));
 
 workflows
   .command("events <runId>")
   .description("list step/lifecycle events for a workflow run")
   .option("--limit <n>", "limit", "200")
-  .action(runAction((runId, opts) => {
-    const store = new Store();
-    try {
-      const runEvents = store.listWorkflowEvents(runId, positiveInteger(opts.limit, "--limit") ?? 200);
-      if (isJson()) print(runEvents.map(publicWorkflowEvent));
-      else {
-        for (const event of runEvents) {
-          console.log(`${String(event.sequence).padStart(3, "0")}  ${event.eventType.padEnd(14)}  ${event.stepId ?? "-"}  ${event.createdAt}`);
-        }
+  .action(runAction((runId, opts) => withStore(async (store) => {
+    const runEvents = await store.listWorkflowEvents(runId, positiveInteger(opts.limit, "--limit") ?? 200);
+    const publicEvents = runEvents.filter((event) => !isPrivateOperationEventType(event.eventType));
+    if (isJson()) print(publicEvents.map(publicWorkflowEvent));
+    else {
+      for (const event of publicEvents) {
+        console.log(`${String(event.sequence).padStart(3, "0")}  ${event.eventType.padEnd(14)}  ${event.stepId ?? "-"}  ${event.createdAt}`);
       }
-    } finally {
-      store.close();
     }
-  }));
+  })));
 
 workflows
   .command("cancel <runId>")
   .description("mark a workflow run cancelled and cancel pending/running steps")
   .option("--reason <reason>", "cancellation reason", "cancelled by user")
-  .action(runAction((runId, opts) => {
-    const store = new Store();
-    try {
-      const run = store.cancelWorkflowRun(runId, opts.reason);
-      print(publicWorkflowRun(run), `${run.id} ${run.status}`);
-    } finally {
-      store.close();
-    }
-  }));
+  .action(runAction((runId, opts) => withStore(async (store) => {
+    const run = await store.cancelWorkflowRun(runId, opts.reason);
+    print(publicWorkflowRun(run), `${run.id} ${run.status}`);
+  })));
 
 workflows
   .command("recover <runId>")
   .description("reset interrupted running workflow steps to pending")
   .option("--reason <reason>", "recovery reason", "manual recovery")
-  .action(runAction((runId, opts) => {
-    const store = new Store();
-    try {
-      const result = store.recoverWorkflowRun(runId, opts.reason);
-      print(
-        {
-          workflowRun: publicWorkflowRun(result.run),
-          recoveredSteps: result.recoveredSteps.map((step) => publicWorkflowStepRun(step)),
-        },
-        `${result.run.id} recovered=${result.recoveredSteps.length}`,
-      );
-    } finally {
-      store.close();
-    }
-  }));
+  .action(runAction((runId, opts) => withStore(async (store) => {
+    const result = await store.recoverWorkflowRun(runId, opts.reason);
+    print(
+      {
+        workflowRun: publicWorkflowRun(result.run),
+        recoveredSteps: result.recoveredSteps.map((step) => publicWorkflowStepRun(step)),
+      },
+      `${result.run.id} recovered=${result.recoveredSteps.length}`,
+    );
+  })));
 
 workflows
   .command("migrate-agent-timeouts")
-  .description("append-only migrate active workflow loops to a new agent timeout policy")
-  .option("--loop <idOrName>", "migrate only one loop instead of all active workflow loops")
+  .description("migrate workflow loops, or a direct agent loop selected with --loop, to a new agent timeout policy")
+  .option("--loop <idOrName>", "migrate only one loop; required for direct agent loops")
   .option("--timeout <duration>", "agent timeout policy; use none/unlimited for no timeout", "none")
-  .option("--apply", "create new workflow specs and retarget eligible loops")
+  .option("--apply", "create new workflow specs or update direct agent targets for eligible loops")
   .option("--archive-old", "archive old workflow specs after retargeting when no active loops still reference them")
   .action(runAction((opts) => {
+    assertLocalOnlyCommand("workflows migrate-agent-timeouts");
     const store = new Store();
     try {
       const timeoutMs = timeoutDuration(opts.timeout, "--timeout") ?? null;
@@ -1458,8 +1760,47 @@ workflows
           rows.push({ loop: publicLoop(loop), status: "skipped", reason: "loop is archived" });
           continue;
         }
+        if (loop.target.type === "agent") {
+          const migration = agentLoopTargetWithTimeout(loop, timeoutMs);
+          if (!migration.changed) {
+            rows.push({ loop: publicLoop(loop), status: "skipped", reason: "agent timeout policy already matches" });
+            continue;
+          }
+          if (store.hasRunningRun(loop.id)) {
+            rows.push({ loop: publicLoop(loop), status: "blocked", reason: "loop has a running run; retry after it finishes" });
+            continue;
+          }
+
+          if (!opts.apply) {
+            rows.push({
+              loop: publicLoop(loop),
+              status: "would_update",
+              target: { ...migration.target, prompt: redact(migration.target.prompt) },
+              timeoutMs,
+            });
+            continue;
+          }
+
+          try {
+            const updated = store.updateAgentLoopTimeout(loop.id, timeoutMs);
+            rows.push({
+              loop: publicLoop(updated),
+              previousLoop: publicLoop(loop),
+              status: "updated",
+              timeoutMs,
+            });
+          } catch (error) {
+            rows.push({
+              loop: publicLoop(loop),
+              status: "blocked",
+              reason: migrationErrorReason(error),
+              timeoutMs,
+            });
+          }
+          continue;
+        }
         if (loop.target.type !== "workflow") {
-          rows.push({ loop: publicLoop(loop), status: "skipped", reason: "loop is not a workflow loop" });
+          rows.push({ loop: publicLoop(loop), status: "skipped", reason: "loop is not an agent or workflow loop" });
           continue;
         }
         const workflow = store.requireWorkflow(loop.target.workflowId);
@@ -1521,11 +1862,13 @@ workflows
         timeoutMs,
         total: rows.length,
         migrated: rows.filter((row) => row.status === "migrated").length,
+        updated: rows.filter((row) => row.status === "updated").length,
         wouldMigrate: rows.filter((row) => row.status === "would_migrate").length,
+        wouldUpdate: rows.filter((row) => row.status === "would_update").length,
         blocked: rows.filter((row) => row.status === "blocked").length,
         skipped: rows.filter((row) => row.status === "skipped").length,
       };
-      print({ summary, rows }, opts.apply ? `migrated=${summary.migrated} blocked=${summary.blocked} skipped=${summary.skipped}` : `would_migrate=${summary.wouldMigrate} blocked=${summary.blocked} skipped=${summary.skipped}`);
+      print({ summary, rows }, opts.apply ? `migrated=${summary.migrated} updated=${summary.updated} blocked=${summary.blocked} skipped=${summary.skipped}` : `would_migrate=${summary.wouldMigrate} would_update=${summary.wouldUpdate} blocked=${summary.blocked} skipped=${summary.skipped}`);
     } finally {
       store.close();
     }
@@ -1538,6 +1881,7 @@ workflows
   .option("--apply", "create new workflow specs and retarget eligible loops")
   .option("--archive-old", "archive old workflow specs after retargeting when no active loops still reference them")
   .action(runAction((opts) => {
+    assertLocalOnlyCommand("workflows migrate-goal-wrappers");
     const store = new Store();
     try {
       const candidateLoops = opts.loop
@@ -1632,79 +1976,181 @@ workflows
     }
   }));
 
-workflows.command("archive <idOrName>").description("archive a workflow spec without deleting runs").action(runAction((idOrName) => {
-  const store = new Store();
-  try {
-    const workflow = store.archiveWorkflow(idOrName);
-    print(publicWorkflow(workflow), `${workflow.id} ${workflow.status}`);
-  } finally {
-    store.close();
-  }
-}));
+workflows.command("archive <idOrName>").description("archive a workflow spec without deleting runs").action(runAction((idOrName) => withStore(async (store) => {
+  const workflow = await store.archiveWorkflow(idOrName);
+  print(publicWorkflow(workflow), `${workflow.id} ${workflow.status}`);
+})));
 
 program
   .command("list")
   .alias("ls")
   .description("list loops with schedule and next-run summaries")
   .option("--status <status>", "filter by status")
+  .option("--label <label>", "require a label; repeatable or comma-separated", collectValues, [] as string[])
   .option("--archived", "show only archived loops")
   .option("--all", "include archived loops")
-  .action(runAction((opts) => {
+  .action(runAction(async (opts) => {
     if (opts.archived && opts.all) throw new ValidationError("use either --archived or --all, not both");
-    const store = new Store();
-    try {
-      const loops = store.listLoops({ status: opts.status, archived: opts.archived, includeArchived: opts.all });
-      if (isJson()) print(loops.map(publicLoop));
-      else {
-        for (const loop of loops) {
-          const machine = loop.machine ? `  machine=${loop.machine.id}` : "";
-          const archive = loop.archivedAt ? `  archived=${loop.archivedAt} from=${loop.archivedFromStatus ?? "-"}` : "";
-          console.log(`${loop.id}  ${loop.status.padEnd(7)}  cadence=${scheduleLabel(loop.schedule)}  next=${loop.nextRunAt ?? "-"}  ${loop.name}${machine}${archive}`);
-        }
+    const loops = await withStore((store) =>
+      listAllLoops(store, {
+        status: opts.status,
+        labels: normalizeLoopLabels(opts.label),
+        archived: opts.archived,
+        includeArchived: opts.all,
+      }),
+    );
+    if (isJson()) print(loops.map(publicLoop));
+    else {
+      for (const loop of loops) {
+        const machine = loop.machine ? `  machine=${loop.machine.id}` : "";
+        const archive = loop.archivedAt ? `  archived=${loop.archivedAt} from=${loop.archivedFromStatus ?? "-"}` : "";
+        const labels = loop.labels?.length ? `  labels=${loop.labels.join(",")}` : "";
+        console.log(`${loop.id}  ${loop.status.padEnd(7)}  cadence=${scheduleLabel(loop.schedule)}  next=${loop.nextRunAt ?? "-"}  ${loop.name}${labels}${machine}${archive}`);
       }
-    } finally {
-      store.close();
     }
   }));
 
-program.command("show <idOrName>").description("show one loop by id or name").action(runAction((idOrName) => {
-  const store = new Store();
-  try {
-    print(publicLoop(store.requireLoop(idOrName)));
-  } finally {
-    store.close();
-  }
-}));
+program
+  .command("ui")
+  .description("open a live table of active loops")
+  .option("--refresh <duration>", "refresh interval", "2s")
+  .action(runAction(async (opts: { refresh?: string }) => {
+    // The live table reads this machine's local sqlite runtime directly (active
+    // loops, running runs, local counts via countRuns) on a refresh loop; it has
+    // no hosted /v1 equivalent, so it would show the on-box island's rows while
+    // flipped to the cloud API. Fail loudly instead of rendering the wrong store.
+    assertLocalOnlyCommand("ui");
+    if (!process.stdin.isTTY || !process.stdout.isTTY) {
+      console.error("Loops UI requires a TTY terminal.");
+      console.error("Use `loops list`, `loops runs`, or `loops daemon status` non-interactively.");
+      process.exitCode = 1;
+      return;
+    }
+    const refreshMs = Math.max(500, parseDuration(opts.refresh ?? "2s"));
+    await runLoopsUiApp({ refreshMs });
+  }));
+
+program.command("show <idOrName>").description("show one loop by id or name").action(runAction((idOrName) => withStore(async (store) => {
+  print(publicLoop(await store.requireLoop(idOrName)));
+})));
 
 program
   .command("runs [idOrName]")
   .description("list recent runs, optionally for one loop")
   .option("--limit <n>", "limit", "50")
+  .option("--label <label>", "require the loop's current label; repeatable or comma-separated", collectValues, [] as string[])
   .option("--show-output", "show stdout/stderr")
-  .action(runAction((idOrName, opts) => {
-    const store = new Store();
-    try {
-      const loop = idOrName ? store.requireLoop(idOrName) : undefined;
-      const runs = store.listRuns({ loopId: loop?.id, limit: positiveInteger(opts.limit, "--limit") ?? 50 });
-      if (isJson()) print(runs.map((run) => publicRun(run, opts.showOutput)));
-      else {
-        for (const run of runs) {
-          console.log(
-            `${run.id}  ${run.status.padEnd(10)}  attempt=${run.attempt}  slot=${run.scheduledFor}  ${run.loopName}`,
-          );
-          if (opts.showOutput) printTextOutput(run);
+  .action(runAction((idOrName, opts) => withStore(async (store) => {
+    const limit = positiveInteger(opts.limit, "--limit") ?? 50;
+    let loop: Loop | undefined;
+    if (idOrName) {
+      try {
+        loop = await store.requireLoop(idOrName);
+      } catch (error) {
+        if (error instanceof CodedError && error.code === "LOOP_NOT_FOUND" && await store.getRun(idOrName)) {
+          throw new CodedError("LOOP_NOT_FOUND", `loop not found: ${idOrName}; argument looks like a run id; use 'loops goal show ${idOrName}' to inspect it`);
         }
+        throw error;
       }
-    } finally {
-      store.close();
     }
-  }));
+    const runs = await store.listRuns({ loopId: loop?.id, labels: normalizeLoopLabels(opts.label), limit });
+    if (isJson()) print(runs.map((run) => publicRun(run, opts.showOutput)));
+    else {
+      for (const run of runs) {
+        console.log(
+          `${run.id}  ${run.status.padEnd(10)}  attempt=${run.attempt}  slot=${run.scheduledFor}  ${run.loopName}`,
+        );
+        if (opts.showOutput) printTextOutput(run);
+      }
+    }
+  })));
+
+const labels = program.command("labels").description("set or edit persisted loop labels");
+
+labels
+  .command("set <idOrName> <labels...>")
+  .description("replace all loop labels")
+  .action(runAction((idOrName, values: string[]) => withStore(async (store) => {
+    const loop = await store.requireUniqueLoop(idOrName);
+    print(publicLoop(await store.updateLoop(loop.id, { labels: normalizeLoopLabels(values) })));
+  })));
+
+labels
+  .command("add <idOrName> <labels...>")
+  .description("add loop labels")
+  .action(runAction((idOrName, values: string[]) => withStore(async (store) => {
+    const loop = await store.requireUniqueLoop(idOrName);
+    print(publicLoop(await store.updateLoop(loop.id, { labels: mergeLoopLabels(loop.labels, values) })));
+  })));
+
+labels
+  .command("remove <idOrName> <labels...>")
+  .description("remove loop labels")
+  .action(runAction((idOrName, values: string[]) => withStore(async (store) => {
+    const loop = await store.requireUniqueLoop(idOrName);
+    print(publicLoop(await store.updateLoop(loop.id, { labels: removeLoopLabels(loop.labels, values) })));
+  })));
+
+labels
+  .command("clear <idOrName>")
+  .description("remove all loop labels")
+  .action(runAction((idOrName) => withStore(async (store) => {
+    const loop = await store.requireUniqueLoop(idOrName);
+    print(publicLoop(await store.updateLoop(loop.id, { labels: [] })));
+  })));
+
+const receipts = program.command("receipts").description("read and write scheduler-neutral run receipts");
+
+receipts
+  .command("write")
+  .description("write a bounded run receipt from JSON")
+  .option("--file <path>", "receipt JSON file; use - for stdin", "-")
+  .action(runAction((opts) => withStore(async (store) => {
+    const receipt = await store.writeRunReceipt(parseReceiptFile(opts.file));
+    print(publicRunReceipt(receipt), `receipt ${receipt.run_id} ${receipt.status} digest=${receipt.digest_id}`);
+  })));
+
+receipts
+  .command("read <runId>")
+  .description("read one run receipt by run id")
+  .action(runAction((runId) => withStore(async (store) => {
+    const receipt = await store.getRunReceipt(runId);
+    if (!receipt) throw new ValidationError(`run receipt not found: ${runId}`);
+    print(publicRunReceipt(receipt), `receipt ${receipt.run_id} ${receipt.status} digest=${receipt.digest_id}`);
+  })));
+
+receipts
+  .command("list")
+  .description("list run receipts")
+  .option("--loop-id <id>", "filter by loop_id")
+  .option("--repo <repo>", "filter by repo")
+  .option("--task-id <id>", "filter by task id")
+  .option("--knowledge-id <id>", "filter by knowledge id")
+  .option("--status <status>", "filter by status")
+  .option("--limit <n>", "limit", "50")
+  .action(runAction((opts) => withStore(async (store) => {
+    const values = await store.listRunReceipts({
+      loopId: opts.loopId,
+      repo: opts.repo,
+      taskId: opts.taskId,
+      knowledgeId: opts.knowledgeId,
+      status: opts.status,
+      limit: positiveInteger(opts.limit, "--limit") ?? 50,
+    });
+    if (isJson()) print(values.map(publicRunReceipt));
+    else {
+      for (const receipt of values) {
+        console.log(`${receipt.run_id}  ${receipt.status.padEnd(10)}  loop=${receipt.loop_id}  repo=${receipt.repo}`);
+      }
+    }
+  })));
 
 program
   .command("expectations [idOrName]")
   .description("evaluate deterministic loop expectations without mutating external task systems")
   .option("--limit <n>", "maximum loops to inspect when no loop is specified", "200")
   .action(runAction((idOrName, opts) => {
+    assertLocalOnlyCommand("expectations");
     const store = new Store();
     try {
       const loops = idOrName ? [store.requireLoop(idOrName)] : store.listLoops({ limit: positiveInteger(opts.limit, "--limit") ?? 200 });
@@ -1725,7 +2171,8 @@ program
 const health = program
   .command("health")
   .description("summarize loop health and latest-run expectation status")
-  .action(runAction(() => {
+  .action(runAction(async () => {
+    if (isCloudStore()) return await hostedHealth();
     const store = new Store();
     try {
       const report = buildHealthReport(store);
@@ -1734,13 +2181,204 @@ const health = program
         console.log(
           `loops=${report.summary.loops} healthy=${report.summary.healthy} unhealthy=${report.summary.unhealthy} warnings=${report.summary.warnings}`,
         );
-        for (const expectation of report.expectations.filter((entry) => !entry.ok)) {
+        for (const expectation of report.expectations.filter((entry) => !entry.ok || entry.check.status === "warn")) {
+          const status = expectation.ok ? "warn" : "fail";
           console.log(
-            `fail  ${expectation.loop.name}  ${expectation.failure?.classification ?? "unknown"}  ${expectation.failure?.fingerprint ?? "-"}`,
+            `${status}  ${expectation.loop.name}  ${expectation.failure?.classification ?? "unknown"}  ${expectation.failure?.fingerprint ?? "-"}`,
           );
         }
       }
       if (!report.ok) process.exitCode = 1;
+    } finally {
+      store.close();
+    }
+  }));
+
+health
+  .command("scan")
+  .description("scan Loops health, write bounded reports, and optionally upsert deduped todos findings")
+  .option("--include <statuses>", "comma-separated loop statuses to inventory: active,paused,stopped,expired,all", "active,paused")
+  .option("--limit <n>", "maximum loops to inspect", "200")
+  .option("--max-findings <n>", "maximum findings to include in output", "100")
+  .option("--latest-run", "include latest-run and stale-running checks")
+  .option("--no-latest-run", "skip latest-run and stale-running checks")
+  .option("--stale-running-after <duration>", "minimum age before a running latest run is stale; loop lease and 10m still apply")
+  .option("--doctor", "include doctor/preflight checks")
+  .option("--daemon", "include daemon status")
+  .option("--start-daemon", "safe self-heal: start the daemon if it is not running")
+  .option("--report-dir <path>", "write summary.json and report.md under this reports root")
+  .option("--evidence-dir <path>", "alias for --report-dir and todo evidence output")
+  .option("--upsert-todos", "upsert deduped todos tasks for scan findings")
+  .option("--project <path>", "todos project path for --upsert-todos", defaultLoopsProject())
+  .option("--task-list <slug>", "todos task-list slug for --upsert-todos", "loop-error-self-heal")
+  .option("--max-actions <n>", "maximum todos tasks to upsert", "5")
+  .option("--dry-run", "with --upsert-todos, print intended task upserts without mutating todos")
+  .option("--auto-route", "with --upsert-todos, opt routed tasks into task-created headless worker/verifier automation")
+  .option("--route-project-path <path>", "fallback project path for --auto-route when the finding has no cwd")
+  .option("-j, --json", "print JSON for this command")
+  .action(runAction(async (opts) => {
+    if (isCloudStore()) {
+      if (opts.startDaemon || opts.daemon || opts.doctor || opts.upsertTodos) {
+        throw new CloudUnsupportedError(
+          "hosted health scan only supports read-only hosted checks; daemon, doctor, and todos routing remain machine-local",
+        );
+      }
+      const store = getStore();
+      try {
+        const hosted = await buildHostedHealthScan(store, {
+          includeStatuses: parseLoopStatuses(opts.include, "--include"),
+          limit: positiveInteger(opts.limit, "--limit") ?? 200,
+          maxFindings: nonNegativeInteger(opts.maxFindings, "--max-findings") ?? 100,
+          latestRun: opts.latestRun !== false,
+          staleRunningMs: opts.staleRunningAfter
+            ? positiveDuration(opts.staleRunningAfter, "--stale-running-after")
+            : undefined,
+        });
+        const scan = writeHealthScanReports(hosted.scan, { reportDir: opts.reportDir ?? opts.evidenceDir });
+        const output = { ...scan, backend: hosted.backend, unchecked: hosted.unchecked };
+        if (opts.json || isJson()) console.log(JSON.stringify(compactHealthScanOutput(output), null, 2));
+        else {
+          console.log(
+            `health_scan backend=hosted status=${scan.status} loops=${scan.counts.loops} findings=${scan.counts.findings} ` +
+              `reported=${scan.counts.reportedFindings} truncated=${scan.counts.truncatedFindings} ` +
+              `latest=${scan.counts.latestRunFindings} stale_running=${scan.counts.staleRunning}`,
+          );
+          for (const finding of scan.findings) {
+            console.log(`${finding.severity} ${finding.kind} ${finding.fingerprint} ${finding.loop?.name ?? ""} ${finding.message}`);
+          }
+          printUnchecked(hosted.unchecked);
+        }
+        if (scan.status !== "ok") process.exitCode = scan.status === "critical" ? 2 : 1;
+      } finally {
+        await store.close();
+      }
+      return;
+    }
+    assertLocalOnlyCommand("health scan");
+    const store = new Store();
+    try {
+      const includeStatuses = parseLoopStatuses(opts.include, "--include");
+      let daemon = (opts.daemon || opts.startDaemon) ? daemonStatus(store) : undefined;
+      const selfHeals = [];
+      if (opts.startDaemon) {
+        if (daemon?.running) {
+          selfHeals.push({
+            kind: "daemon-start" as const,
+            attempted: false,
+            ok: true,
+            reason: "daemon already running",
+          });
+        } else {
+          const result = await startDaemon({ cliEntry: process.argv[1] ?? "loops" });
+          const ok = Boolean(result.started || result.alreadyRunning);
+          selfHeals.push({
+            kind: "daemon-start" as const,
+            attempted: true,
+            ok,
+            reason: daemon?.stale ? "daemon pid file was stale" : "daemon was not running",
+            result: result as unknown as Record<string, unknown>,
+          });
+          daemon = daemonStatus(store);
+        }
+      }
+
+      let scan = writeHealthScanReports(
+        buildHealthScan(store, {
+          includeStatuses,
+          limit: positiveInteger(opts.limit, "--limit") ?? 200,
+          maxFindings: nonNegativeInteger(opts.maxFindings, "--max-findings") ?? 100,
+          latestRun: opts.latestRun !== false,
+          staleRunningMs: opts.staleRunningAfter ? positiveDuration(opts.staleRunningAfter, "--stale-running-after") : undefined,
+          doctor: opts.doctor ? runDoctor(store) : undefined,
+          daemon,
+          selfHeals,
+        }),
+        { reportDir: opts.reportDir ?? opts.evidenceDir },
+      );
+
+      if (opts.upsertTodos) {
+        const tasks = scan.findings
+          .filter((finding) => finding.recommendedTask)
+          .map((finding) => {
+            const task = finding.recommendedTask!;
+            const description = [
+              task.description,
+              scan.reports ? `Report: ${scan.reports.markdown}` : undefined,
+            ].filter(Boolean).join("\n\n");
+            return {
+              title: task.title,
+              description,
+              priority: task.priority,
+              tags: task.tags,
+              fingerprint: task.dedupeKey,
+              extra: {
+                kind: finding.kind,
+                severity: finding.severity,
+                classification: finding.classification,
+              },
+              metadata: {
+                source: "openloops.health.scan",
+                kind: finding.kind,
+                severity: finding.severity,
+                loop_id: finding.loop?.id,
+                loop_name: finding.loop?.name,
+                loop_status: finding.loop?.status,
+                run_id: finding.run?.id,
+                classification: finding.classification,
+                fingerprint: task.dedupeKey,
+                cwd: finding.route?.cwd,
+                provider: finding.route?.provider,
+                report_dir: scan.reports?.dir,
+                no_tmux_dispatch: true,
+              },
+            };
+          });
+        const result = upsertRouteTasks({
+          project: opts.project,
+          taskList: {
+            slug: opts.taskList,
+            name: "Loop Error Self Heal",
+            description: "Deduped Loops health scan findings for daemon, doctor, preflight, latest-run, and stale-running issues.",
+          },
+          cursorKey: routeCursorKey(
+            "health",
+            ["scan", opts.project, opts.taskList, includeStatuses.join(","), opts.limit, Boolean(opts.doctor), Boolean(opts.daemon)],
+            { autoRoute: Boolean(opts.autoRoute), routeProjectPath: opts.routeProjectPath },
+          ),
+          maxActions: positiveInteger(opts.maxActions, "--max-actions") ?? 5,
+          dryRun: Boolean(opts.dryRun),
+          autoRoute: Boolean(opts.autoRoute),
+          routeProjectPath: opts.routeProjectPath,
+          source: "openloops.health.scan",
+          evidence: { kind: "health-scan-route-tasks", dir: opts.evidenceDir ?? opts.reportDir },
+          summary: {
+            status: scan.status,
+            inspected: scan.counts.loops,
+            findings: scan.counts.findings,
+            reportDir: scan.reports?.dir,
+          },
+          tasks,
+        });
+        scan = { ...scan, todos: result.output };
+        if (!result.ok) process.exitCode = 1;
+      }
+
+      const jsonMode = isJson() || Boolean(opts.json);
+      if (jsonMode) console.log(JSON.stringify(compactHealthScanOutput(scan), null, 2));
+      else {
+        const actions = Array.isArray(scan.todos?.actions) ? scan.todos.actions as Array<Record<string, unknown>> : [];
+        console.log(
+          `health_scan status=${scan.status} loops=${scan.counts.loops} findings=${scan.counts.findings} ` +
+            `reported=${scan.counts.reportedFindings} truncated=${scan.counts.truncatedFindings} ` +
+            `latest=${scan.counts.latestRunFindings} stale_running=${scan.counts.staleRunning} ` +
+            `daemon=${scan.counts.daemonFindings} doctor=${scan.counts.doctorFindings} preflight=${scan.counts.preflightFindings} ` +
+            `report=${scan.reports?.markdown ?? "none"} todos_actions=${actions.length}`,
+        );
+        for (const finding of scan.findings) {
+          console.log(`${finding.severity} ${finding.kind} ${finding.fingerprint} ${finding.loop?.name ?? ""} ${finding.message}`);
+        }
+      }
+      if (!process.exitCode && scan.status !== "ok") process.exitCode = scan.status === "critical" ? 2 : 1;
     } finally {
       store.close();
     }
@@ -1759,6 +2397,7 @@ health
   .option("--evidence-dir <path>", "write the route result JSON to this directory")
   .option("--dry-run", "print intended task upserts without mutating todos")
   .action(runAction((opts) => {
+    assertLocalOnlyCommand("health route-tasks");
     const store = new Store();
     try {
       const report = buildHealthReport(store, { limit: positiveInteger(opts.limit, "--limit") ?? 200, includeInactive: Boolean(opts.includeInactive) });
@@ -1768,7 +2407,7 @@ health
         taskList: {
           slug: opts.taskList,
           name: "Loop Error Self Heal",
-          description: "Deduped OpenLoops health expectation failures routed by loops health route-tasks.",
+          description: "Deduped Loops health expectation failures routed by loops health route-tasks.",
         },
         cursorKey: routeCursorKey("health", [opts.project, opts.taskList, opts.limit, Boolean(opts.includeInactive)], {
           autoRoute: Boolean(opts.autoRoute),
@@ -1817,7 +2456,7 @@ health
     }
   }));
 
-const hygiene = program.command("hygiene").description("deterministic OpenLoops hygiene checks and safe repairs");
+const hygiene = program.command("hygiene").description("deterministic Loops hygiene checks and safe repairs");
 
 hygiene
   .command("names")
@@ -1827,6 +2466,7 @@ hygiene
   .option("--include-inactive", "include stopped, expired, and archived loops")
   .option("--limit <n>", "maximum loops to inspect", "1000")
   .action(runAction((opts) => {
+    assertLocalOnlyCommand("hygiene names");
     const store = new Store();
     try {
       const report = buildNameHygieneReport(store, {
@@ -1868,6 +2508,7 @@ hygiene
   .option("--include-inactive", "include stopped, expired, and archived loops")
   .option("--limit <n>", "maximum loops to inspect", "1000")
   .action(runAction((opts) => {
+    assertLocalOnlyCommand("hygiene duplicates");
     const store = new Store();
     try {
       const report = buildDuplicateOverlapReport(store, {
@@ -1894,6 +2535,7 @@ hygiene
   .option("--include-inactive", "include stopped, expired, and archived loops")
   .option("--limit <n>", "maximum loops to inspect", "1000")
   .action(runAction((opts) => {
+    assertLocalOnlyCommand("hygiene scripts");
     const store = new Store();
     try {
       const report = buildScriptInventoryReport(store, {
@@ -1927,6 +2569,7 @@ hygiene
   .option("--evidence-dir <path>", "write the route result JSON to this directory")
   .option("--dry-run", "print intended task upserts without mutating todos")
   .action(runAction((opts) => {
+    assertLocalOnlyCommand("hygiene route-tasks");
     const store = new Store();
     try {
       const checks = parseHygieneChecks(opts.checks);
@@ -1940,8 +2583,8 @@ hygiene
         project: opts.project,
         taskList: {
           slug: opts.taskList,
-          name: "OpenLoops Hygiene",
-          description: "Deduped OpenLoops hygiene findings routed by loops hygiene route-tasks.",
+          name: "Loops Hygiene",
+          description: "Deduped Loops hygiene findings routed by loops hygiene route-tasks.",
         },
         cursorKey: routeCursorKey("hygiene", [opts.project, opts.taskList, checks, opts.limit, Boolean(opts.includeInactive), opts.scriptsDir ?? ""], {
           autoRoute: Boolean(opts.autoRoute),
@@ -1978,64 +2621,232 @@ hygiene
     }
   }));
 
-program.command("pause <idOrName>").description("pause an active loop without losing its schedule").action(runAction((idOrName) => updateStatus(idOrName, "paused")));
-program.command("resume <idOrName>").description("resume a paused or stopped loop").action(runAction((idOrName) => updateStatus(idOrName, "active")));
-program.command("stop <idOrName>").description("stop a loop and clear its next scheduled run").action(runAction((idOrName) => updateStatus(idOrName, "stopped")));
-
-program
-  .command("rename <idOrName> <newName>")
-  .description("rename a loop without changing its id, schedule, runs, or history")
-  .action(runAction((idOrName, newName) => {
+hygiene
+  .command("stuck")
+  .description(
+    "check or reclaim loop runs stuck 'running' with an expired lease and no live process (7cf8d8c1: an unreapable orphan row whose loop cursor never advances through recovery)",
+  )
+  .option("--apply", "abandon reclaimable runs and immediately advance their loop's nextRunAt")
+  .option("--limit <n>", "maximum runs to reclaim in one pass", "100")
+  .action(runAction(async (opts) => {
+    const limit = positiveInteger(opts.limit, "--limit") ?? 100;
+    if (isCloudStore()) {
+      await withStore(async (store) => {
+        const report = await store.listStuckRunCandidates({ limit });
+        const reconciliation = opts.apply && report.candidates.length > 0
+          ? await store.reconcileStuckRunCandidates(report.candidates)
+          : undefined;
+        const output = { ...report, applied: Boolean(opts.apply), reconciliation };
+        if (isJson()) console.log(JSON.stringify(output, null, 2));
+        else {
+          console.log(
+            `hygiene_stuck backend=hosted state=${report.state} candidates=${report.candidates.length} ` +
+              `truncated=${report.truncated} applied=${Boolean(opts.apply)}`,
+          );
+          for (const candidate of report.candidates) {
+            const outcome = reconciliation?.outcomes.find((entry) => entry.runId === candidate.runId);
+            console.log(
+              `${outcome?.outcome ?? "would-reconcile"} run=${candidate.runId} loop=${candidate.loopId} ` +
+                `snapshot=${candidate.snapshotId}${outcome?.reason ? ` reason=${outcome.reason}` : ""}`,
+            );
+          }
+        }
+        if (!opts.apply && report.state === "stuck") process.exitCode = 1;
+        if (reconciliation?.outcomes.some((outcome) =>
+          outcome.outcome === "conflict" || outcome.outcome === "operation_reconciliation_required"
+        )) process.exitCode = 1;
+      });
+      return;
+    }
     const store = new Store();
     try {
-      const loop = store.requireUniqueLoop(idOrName);
-      const oldName = loop.name;
-      const trimmed = String(newName).trim();
-      if (!trimmed) throw new ValidationError("loop name must not be empty");
-
-      const existing = store.findLoopByName(trimmed);
-      if (existing && existing.id !== loop.id) {
-        throw new ValidationError(`loop name already exists: ${trimmed} (${existing.id})`);
-      }
-
-      if (trimmed === oldName) {
-        print(
-          {
-            changed: false,
-            id: loop.id,
-            oldName,
-            newName: oldName,
-            loop: publicLoop(loop),
-          },
-          `${loop.id} unchanged (${oldName})`,
+      const preview = buildStuckRunReport(store, { apply: false, limit });
+      // A live-looking-but-deferred run still gets mutated on apply (its
+      // lease_expires_at and defer_count both advance toward the grace
+      // ceiling), so back up whenever apply will touch ANY expired-lease row,
+      // not only when something is immediately reclaimable.
+      const backupPath =
+        opts.apply && preview.stuck + preview.liveDeferred > 0 ? backupLoopsDatabase("stuck-run-hygiene") : undefined;
+      const report = opts.apply ? buildStuckRunReport(store, { apply: true, limit }) : preview;
+      const output = backupPath ? { ...report, backupPath } : report;
+      if (isJson()) console.log(JSON.stringify(output, null, 2));
+      else {
+        console.log(
+          `hygiene_stuck checked=${report.checked} stuck=${report.stuck} live_deferred=${report.liveDeferred} applied=${report.applied}`,
         );
-        return;
+        if (backupPath) console.log(`backup=${backupPath}`);
+        for (const entry of report.entries) {
+          const verb = entry.reclaimed ? "reclaimed" : entry.deferredReason === "live_process" ? "live-deferred" : "would-reclaim";
+          console.log(`${verb} run=${entry.runId} loop=${entry.loopId} (${entry.loopName}) lease_expired=${entry.leaseExpiresAt ?? ""} pid=${entry.pid ?? ""}`);
+        }
+        for (const loopId of report.advancedLoopIds) console.log(`advanced loop=${loopId}`);
       }
-
-      const backupPath = backupLoopsDatabase("rename");
-      const renamed = store.renameLoop(loop.id, trimmed);
-      print(
-        {
-          changed: true,
-          id: renamed.id,
-          oldName,
-          newName: renamed.name,
-          backupPath,
-          loop: publicLoop(renamed),
-        },
-        `${renamed.id} renamed ${oldName} -> ${renamed.name}\nbackup=${backupPath ?? "skipped (recent rename backup exists)"}`,
-      );
+      if (!report.ok && !report.applied) process.exitCode = 1;
     } finally {
       store.close();
     }
   }));
 
-function updateStatus(idOrName: string, status: "paused" | "active" | "stopped"): void {
-  const store = new Store();
-  try {
+interface LoopMutationCliOptions {
+  operationId?: string;
+  stepId?: string;
+  expectedRevision?: string;
+  approvedPlanDigest?: string;
+  manifestDigest?: string;
+  descriptorRef?: string;
+  descriptorDigest?: string;
+  dryRun?: boolean;
+}
+
+function addLoopMutationOptions(command: Command): Command {
+  return command
+    .option("--operation-id <id>", "caller-stable mutation operation id")
+    .option("--step-id <id>", "caller-stable mutation step id")
+    .option("--expected-revision <revision>", "exact loop updatedAt revision read before mutation")
+    .option("--approved-plan-digest <sha256>", "approved plan sha256 digest")
+    .option("--manifest-digest <sha256>", "immutable mutation manifest sha256 digest")
+    .option("--descriptor-ref <ref>", "opaque owner-only target descriptor reference")
+    .option("--descriptor-digest <sha256>", "target descriptor sha256 digest")
+    .option("--dry-run", "validate and receipt the mutation without changing the loop");
+}
+
+addLoopMutationOptions(program.command("pause <id>").description("pause a loop by full id using the hosted mutation contract"))
+  .action(runAction((id, opts) => updateStatus(id, "paused", opts)));
+addLoopMutationOptions(program.command("resume <id>").description("resume a loop by full id using the hosted mutation contract"))
+  .action(runAction((id, opts) => updateStatus(id, "active", opts)));
+addLoopMutationOptions(program.command("stop <id>").description("stop a loop by full id using the hosted mutation contract"))
+  .action(runAction((id, opts) => updateStatus(id, "stopped", opts)));
+
+program
+  .command("rename <idOrName> <newName>")
+  .description("rename a loop without changing its id, schedule, runs, or history")
+  .action(runAction((idOrName, newName) => withStore(async (store) => {
+    const loop = await store.requireUniqueLoop(idOrName);
+    const oldName = loop.name;
+    const trimmed = String(newName).trim();
+    if (!trimmed) throw new ValidationError("loop name must not be empty");
+
+    const existing = await store.findLoopByName(trimmed);
+    if (existing && existing.id !== loop.id) {
+      throw new ValidationError(`loop name already exists: ${trimmed} (${existing.id})`);
+    }
+
+    if (trimmed === oldName) {
+      print(
+        {
+          changed: false,
+          id: loop.id,
+          oldName,
+          newName: oldName,
+          loop: publicLoop(loop),
+        },
+        `${loop.id} unchanged (${oldName})`,
+      );
+      return;
+    }
+
+    // Backups protect the on-box sqlite file; there is nothing local to snapshot
+    // when the rename is routed to the hosted API.
+    const backupPath = store.transport === "local" ? backupLoopsDatabase("rename") : undefined;
+    const renamed = await store.renameLoop(loop.id, trimmed);
+    print(
+      {
+        changed: true,
+        id: renamed.id,
+        oldName,
+        newName: renamed.name,
+        backupPath,
+        loop: publicLoop(renamed),
+      },
+      `${renamed.id} renamed ${oldName} -> ${renamed.name}\nbackup=${backupPath ?? "skipped (recent rename backup exists)"}`,
+    );
+  })));
+
+program
+  .command("set-max-attempts <idOrName> <attempts>")
+  .description("change a loop's retry budget in place, without losing its id, schedule, runs, or history")
+  .action(runAction((idOrName, attempts) => withStore(async (store) => {
+    // requireUniqueLoop so an ambiguous name errors instead of mutating the
+    // newest same-named loop -- the same guard rename and pause/resume use.
+    const loop = await store.requireUniqueLoop(idOrName);
+    const previous = loop.maxAttempts;
+    const next = positiveInteger(String(attempts), "<attempts>");
+    if (next === undefined) throw new ValidationError("attempts must be an integer >= 1");
+
+    if (next === previous) {
+      print(
+        { changed: false, id: loop.id, maxAttempts: previous, loop: publicLoop(loop) },
+        `${loop.id} unchanged (maxAttempts=${previous})`,
+      );
+      return;
+    }
+
+    // Backups protect the on-box sqlite file; there is nothing local to snapshot
+    // when the update is routed to the hosted API.
+    const backupPath = store.transport === "local" ? backupLoopsDatabase("set-max-attempts") : undefined;
+    const updated = await store.updateLoop(loop.id, { maxAttempts: next });
+    print(
+      {
+        changed: true,
+        id: updated.id,
+        previousMaxAttempts: previous,
+        maxAttempts: updated.maxAttempts,
+        backupPath,
+        loop: publicLoop(updated),
+      },
+      `${updated.id} maxAttempts ${previous} -> ${updated.maxAttempts}\nbackup=${backupPath ?? "skipped (recent backup exists)"}`,
+    );
+  })));
+
+function updateStatus(
+  idOrName: string,
+  status: "paused" | "active" | "stopped",
+  opts: LoopMutationCliOptions = {},
+): Promise<void> {
+  return withStore(async (store) => {
+    const supplied = [
+      opts.operationId,
+      opts.stepId,
+      opts.expectedRevision,
+      opts.approvedPlanDigest,
+      opts.manifestDigest,
+      opts.descriptorRef,
+      opts.descriptorDigest,
+    ];
+    const usesContract = supplied.some((value) => value !== undefined) || opts.dryRun === true;
+    if (store.transport === "cloud-http" || usesContract) {
+      if (supplied.some((value) => typeof value !== "string" || value.trim() === "")) {
+        throw new ValidationError(
+          "hosted pause/resume/stop require --operation-id, --step-id, --expected-revision, " +
+          "--approved-plan-digest, --manifest-digest, --descriptor-ref, and --descriptor-digest",
+        );
+      }
+      const envelope: LoopMutationEnvelope = {
+        schema: "openloops.loop_mutation.v1",
+        operationId: opts.operationId!,
+        stepId: opts.stepId!,
+        targetId: idOrName,
+        action: status === "active" ? "resume" : status === "paused" ? "pause" : "stop",
+        expectedRevision: opts.expectedRevision!,
+        approvedPlanDigest: opts.approvedPlanDigest!,
+        manifestDigest: opts.manifestDigest!,
+        descriptorRef: opts.descriptorRef!,
+        descriptorDigest: opts.descriptorDigest!,
+        ...(opts.dryRun ? { dryRun: true } : {}),
+      };
+      const mutation = await store.mutateLoop(envelope);
+      print(
+        {
+          ...mutation,
+          loop: publicLoop(mutation.loop),
+        },
+        `${mutation.loop.id} ${mutation.terminal.state} (${mutation.loop.status}) replayed=${mutation.replayed}`,
+      );
+      return;
+    }
     // requireUniqueLoop so an ambiguous name errors instead of mutating the
     // newest same-named loop.
-    const loop = store.requireUniqueLoop(idOrName);
+    const loop = await store.requireUniqueLoop(idOrName);
     if (loop.archivedAt) throw new Error(`loop is archived; run 'loops unarchive ${idOrName}' first`);
     let nextRunAt = loop.nextRunAt;
     if (status === "stopped") {
@@ -2047,88 +2858,60 @@ function updateStatus(idOrName: string, status: "paused" | "active" | "stopped")
       const now = new Date();
       nextRunAt = computeNextAfter(loop.schedule, now, now);
     }
-    const updated = store.updateLoop(loop.id, { status, nextRunAt });
+    const updated = await store.updateLoop(loop.id, { status, nextRunAt });
     print(publicLoop(updated), `${updated.id} ${updated.status}`);
-  } finally {
-    store.close();
-  }
+  });
 }
 
 program
   .command("remove <idOrName>")
   .alias("rm")
   .description("delete a loop and its run history")
-  .action(runAction((idOrName) => {
-    const store = new Store();
-    try {
-      // requireUniqueLoop so an ambiguous name errors instead of deleting the
-      // newest same-named loop.
-      const removed = store.deleteLoop(store.requireUniqueLoop(idOrName).id);
-      print({ removed }, removed ? "removed" : "not removed");
-    } finally {
-      store.close();
-    }
-  }));
+  .action(runAction((idOrName) => withStore(async (store) => {
+    // requireUniqueLoop so an ambiguous name errors instead of deleting the
+    // newest same-named loop.
+    const loop = await store.requireUniqueLoop(idOrName);
+    const removed = await store.deleteLoop(loop.id);
+    print({ removed }, removed ? "removed" : "not removed");
+  })));
 
-program.command("archive <idOrName>").description("archive a loop without deleting history").action(runAction((idOrName) => {
-  const store = new Store();
-  try {
-    const loop = store.archiveLoop(idOrName);
-    print(publicLoop(loop), `${loop.id} archived`);
-  } finally {
-    store.close();
-  }
-}));
+program.command("archive <idOrName>").description("archive a loop without deleting history").action(runAction((idOrName) => withStore(async (store) => {
+  const loop = await store.archiveLoop(idOrName);
+  print(publicLoop(loop), `${loop.id} archived`);
+})));
 
-program.command("unarchive <idOrName>").alias("restore").description("restore an archived loop").action(runAction((idOrName) => {
-  const store = new Store();
-  try {
-    const loop = store.unarchiveLoop(idOrName);
-    print(publicLoop(loop), `${loop.id} ${loop.status}`);
-  } finally {
-    store.close();
-  }
-}));
+program.command("unarchive <idOrName>").alias("restore").description("restore an archived loop").action(runAction((idOrName) => withStore(async (store) => {
+  const loop = await store.unarchiveLoop(idOrName);
+  print(publicLoop(loop), `${loop.id} ${loop.status}`);
+})));
 
 program
   .command("run-now <idOrName>")
   .description("claim and execute one loop run immediately")
   .option("--show-output", "show stdout/stderr")
   .action(runAction(async (idOrName, opts) => {
+    assertLocalOnlyCommand("run-now");
     const store = new Store();
     try {
       const loop = store.requireUniqueLoop(idOrName);
       if (loop.archivedAt) throw new Error(`loop is archived; run 'loops unarchive ${idOrName}' before running it`);
-      const runnerId = `manual:${process.pid}`;
-      const now = new Date();
-      let scheduledFor = manualRunScheduledFor(loop, now);
-      let source = manualRunSource(loop, scheduledFor, now);
-      let shouldAdvance = shouldAdvanceManualRun(loop, scheduledFor, now);
-      let claim = store.claimRun(loop, scheduledFor, runnerId, now);
-      if (!claim && shouldAdvance) {
-        const existing = store.getRunBySlot(loop.id, scheduledFor);
-        if (existing && existing.status !== "running") {
-          scheduledFor = now.toISOString();
-          source = "ad_hoc";
-          shouldAdvance = false;
-          claim = store.claimRun(loop, scheduledFor, runnerId, now);
-        }
-      }
-      if (!claim) throw new Error("could not claim manual run");
-      const run = await executeClaimedRun({ store, runnerId, loop: claim.loop, run: claim.run });
-      if (shouldAdvance) {
-        advanceLoop(store, claim.loop, run, new Date(run.finishedAt ?? new Date()), run.status === "succeeded");
-      }
-      const value = { ...publicRun(run, opts.showOutput), runNow: { source, advancesLoop: shouldAdvance } };
-      print(value, `${run.id} ${run.status} source=${source} slot=${run.scheduledFor}`);
+      const result = await runLoopNow({
+        store,
+        idOrName: loop.id,
+        runnerId: `manual:${process.pid}`,
+      });
+      const run = result.run;
+      const value = { ...publicRun(run, opts.showOutput), runNow: { source: result.source, advancesLoop: result.advancedLoop } };
+      print(value, `${run.id} ${run.status} source=${result.source} slot=${run.scheduledFor}`);
       if (!isJson() && opts.showOutput) printTextOutput(run);
-      if (run.status !== "succeeded") process.exitCode = 1;
+      if (run.status !== "succeeded" && run.status !== "skipped") process.exitCode = 1;
     } finally {
       store.close();
     }
   }));
 
 program.command("tick").description("run one scheduler tick").action(runAction(async () => {
+  assertLocalOnlyCommand("tick");
   const store = new Store();
   try {
     const result = await tick({ store, runnerId: `manual-tick:${process.pid}` });
@@ -2138,7 +2921,8 @@ program.command("tick").description("run one scheduler tick").action(runAction(a
   }
 }));
 
-program.command("doctor").description("check local OpenLoops runtime dependencies and state").action(runAction(() => {
+program.command("doctor").description("check Loops runtime dependencies and state").action(runAction(async () => {
+  if (isCloudStore()) return await hostedDoctor();
   const store = new Store();
   try {
     const report = runDoctor(store);
@@ -2200,6 +2984,10 @@ program
   .option("--dry-run", "preview deletions without changing anything (default)")
   .option("--apply", "actually delete history, prune backups, checkpoint, and remove stray files")
   .action(runAction((opts) => {
+    // gc rotates the on-box sqlite backups + WAL and prunes local temp files, so
+    // it is a local-runtime maintenance command. (History pruning of the shared
+    // store is available via the hosted control plane, not this on-box command.)
+    assertLocalOnlyCommand("gc");
     if (opts.dryRun && opts.apply) throw new ValidationError("choose either --dry-run or --apply, not both");
     const dryRun = !opts.apply;
     const maxAgeDays = nonNegativeInteger(opts.maxAgeDays, "--max-age-days");
@@ -2266,19 +3054,25 @@ daemon
   .command("run")
   .description("run the scheduler daemon in the foreground")
   .option("--interval-ms <ms>", "tick interval", (value) => Number(value))
-  .action(runAction(async (opts) => runDaemon({ intervalMs: opts.intervalMs })));
+  .action(runAction(async (opts) => {
+    assertLocalOnlyCommand("daemon run");
+    return runDaemon({ intervalMs: opts.intervalMs });
+  }));
 
 daemon.command("start").description("start the daemon in the background").action(runAction(async () => {
+  assertLocalOnlyCommand("daemon start");
   const result = await startDaemon({ cliEntry: process.argv[1] ?? "loops" });
   print(result, result.alreadyRunning ? `already running pid=${result.pid}` : result.started ? `started pid=${result.pid}` : "failed to start");
 }));
 
 daemon.command("stop").description("stop the background daemon").action(runAction(async () => {
+  assertLocalOnlyCommand("daemon stop");
   const result = await stopDaemon();
   print(result, result.stopped ? `stopped pid=${result.pid}` : "not running");
 }));
 
 daemon.command("status").description("show daemon lease/heartbeat status").action(runAction(() => {
+  assertLocalOnlyCommand("daemon status");
   const store = new Store();
   try {
     print(daemonStatus(store));
@@ -2292,6 +3086,7 @@ daemon
   .description("write a systemd user service or launchd plist")
   .option("--enable", "also enable/start the user service when supported")
   .action(runAction((opts) => {
+    assertLocalOnlyCommand("daemon install");
     const result = installStartup(process.argv[1] ?? "loops");
     if (opts.enable) result.enableResults = enableStartup(result);
     const enableText = result.enableResults
@@ -2308,16 +3103,22 @@ daemon
   // otherwise reject it as an unknown option.
   .option("--tail <n>", "alias for --lines")
   .action(runAction((opts) => {
+    assertLocalOnlyCommand("daemon logs");
     const path = daemonLogPath();
     if (!existsSync(path)) {
-      console.log("");
+      if (isJson()) console.log(JSON.stringify({ path, lines: [] }, null, 2));
+      else console.log("");
       return;
     }
     // Validate n so a bad value ('abc') errors instead of NaN -> slice(0) dumping
     // the whole log. --tail wins when both are supplied.
     const count = positiveInteger(opts.tail ?? opts.lines, opts.tail !== undefined ? "--tail" : "--lines") ?? 80;
-    const lines = readFileSync(path, "utf8").trimEnd().split("\n");
-    console.log(lines.slice(-count).join("\n"));
+    // Strip SGR color codes: older daemon builds logged through Bun's
+    // `console.error`, which wraps lines in red ANSI, so persisted logs carry
+    // color pollution that would otherwise leak into both outputs.
+    const lines = readFileSync(path, "utf8").trimEnd().split("\n").slice(-count).map(stripAnsi);
+    if (isJson()) console.log(JSON.stringify({ path, lines }, null, 2));
+    else console.log(lines.join("\n"));
   }));
 
 await program.parseAsync(process.argv);

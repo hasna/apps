@@ -19,6 +19,33 @@ export const KNOWLEDGE_REFRESH_TEMPLATE_ID = "knowledge-refresh";
 export const REPORT_ONLY_TEMPLATE_ID = "report-only";
 export const INCIDENT_RESPONSE_TEMPLATE_ID = "incident-response";
 export const DETERMINISTIC_CHECK_CREATE_TASK_TEMPLATE_ID = "deterministic-check-create-task";
+export const ROUTING_REMEDIATION_TEMPLATE_ID = "routing-remediation";
+
+/**
+ * Conversations channel that routing-health findings are reported to.
+ *
+ * Owner directive 2026-07-30 ("routine operational alerts are not tasks"): a routing
+ * failure is a measurement, not a claim on someone's attention, so it must not be
+ * filed as a todos task. Before that directive this template told the worker to
+ * `todos task upsert` one blocker task per finding, and a single sweep on 2026-07-05
+ * emitted 2,817 of them — none ever assigned, actioned, or commented on. Findings now
+ * go to a run evidence artifact plus ONE aggregate post on this channel.
+ */
+export const ROUTING_REMEDIATION_ALERT_CHANNEL = "open-loops";
+
+/**
+ * Instruction fragment forbidding a routing-health worker from turning findings into
+ * todos rows. Owner directive 2026-07-30: the task store is for work someone intends
+ * to do; a routing failure is a measurement and belongs in evidence plus one aggregate
+ * channel post.
+ */
+export function ROUTING_HEALTH_ALERTS_ARE_NOT_TASKS_FRAGMENT(alertChannel: string, blockerReportPath: string): string {
+  return [
+    "Routine operational alerts are NOT tasks (owner directive 2026-07-30). Do not create, upsert, or fingerprint a todos task for any routing finding, blocker, or health signal — not one per finding, not one per category, not one per run.",
+    `Findings go to the blocker report artifact ${blockerReportPath} and to at most ONE aggregate summary post on the ${alertChannel} conversations channel.`,
+    "The only todos writes this workflow may make are comments on the tasks it actually repaired.",
+  ].join("\n");
+}
 
 export type AgentWorkflowRole = "triage" | "planner" | "worker" | "verifier";
 
@@ -73,9 +100,12 @@ function workerVerifierAgentVariables(opts: { addDirs: boolean; branchNoun: stri
       : []),
     { name: "permissionMode", default: "bypass", description: "Provider permission mode: default, plan, auto, or bypass." },
     { name: "sandbox", default: "workspace-write", description: "Provider sandbox mode." },
+    { name: "allowTools", description: "Comma-separated advisory provider session tool restrictions." },
+    { name: "allowCommands", description: "Comma-separated advisory provider session command restrictions." },
+    { name: "safetyReason", description: "Auditable reason required for advisory restrictions or relaxed sandbox access." },
     { name: "manualBreakGlass", default: "false", description: "Allow explicit danger-full-access in a generated workflow. Intended for manual emergency use only." },
     { name: "worktreeMode", default: "auto", description: "Worktree isolation mode: auto, required, off, or main." },
-    { name: "worktreeRoot", default: "~/.hasna/loops/worktrees", description: "Base directory for OpenLoops-managed git worktrees." },
+    { name: "worktreeRoot", default: "~/.hasna/loops/worktrees", description: "Base directory for Loops-managed git worktrees." },
     { name: "worktreeBranchPrefix", default: "openloops", description: `Branch prefix for generated ${opts.branchNoun} worktree branches.` },
     agentTimeoutVariable(),
     verifierIdleTimeoutVariable(),
@@ -245,6 +275,29 @@ export const BUILTIN_TEMPLATE_SUMMARIES: LoopTemplateSummary[] = [
       { name: "timeoutMs", default: "300000", description: "Check timeout in milliseconds." },
     ],
   },
+  {
+    id: ROUTING_REMEDIATION_TEMPLATE_ID,
+    name: "Routing Remediation",
+    description:
+      "Run a bounded routing-doctor remediation workflow: deterministic preflight, safe Todos CLI repair, blocker evidence reporting to a conversations channel, and adversarial verification.",
+    kind: "workflow",
+    variables: [
+      projectPathVariable("Repository/project path used for workflow evidence artifacts."),
+      { name: "todosProjectPath", description: "Todos storage project path to inspect and repair; defaults to projectPath." },
+      { name: "doctorJsonPath", description: "Optional existing todos doctor routing --json output to consume instead of running a fresh dry-run." },
+      { name: "doctorProject", description: "Optional todos doctor routing --project scope (id, slug, or path)." },
+      { name: "tag", description: "Optional todos doctor routing --tag scope." },
+      { name: "status", default: "pending,in_progress", description: "Comma-separated task statuses for the doctor." },
+      { name: "shard", description: "Optional deterministic shard such as 0/6." },
+      { name: "limit", description: "Optional maximum tasks inspected by the doctor." },
+      { name: "maxRepairs", default: "25", description: "Capacity gate: maximum safe_auto findings allowed in one apply run." },
+      { name: "dryRun", default: "true", description: "When true, perform preflight/reporting only and do not apply repairs." },
+      { name: "idempotencyKey", description: "Stable key used for evidence paths, undo records, and dedupe fingerprints." },
+      { name: "evidenceDir", description: "Directory for doctor, preflight, apply, and recheck JSON artifacts." },
+      { name: "undoDir", description: "Directory for todos doctor routing --undo-record output." },
+      ...lifecycleSharedVariables({ worktreeModeDefault: "required" }),
+    ],
+  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -281,10 +334,10 @@ export const EVENT_REVIEW_FOCUS = "correctness, regressions, security, missing e
 export type BuiltinFlow = "task" | "lifecycle" | "event" | "bounded";
 
 const FLOW_FRAGMENTS: Record<BuiltinFlow, { noun: string; description: string }> = {
-  task: { noun: "agent", description: "a task-triggered OpenLoops workflow" },
-  lifecycle: { noun: "step", description: "a full task-triggered OpenLoops lifecycle" },
-  event: { noun: "agent", description: "an event-triggered OpenLoops workflow" },
-  bounded: { noun: "step", description: "a bounded OpenLoops agent workflow" },
+  task: { noun: "agent", description: "a task-triggered Loops workflow" },
+  lifecycle: { noun: "step", description: "a full task-triggered Loops lifecycle" },
+  event: { noun: "agent", description: "an event-triggered Loops workflow" },
+  bounded: { noun: "step", description: "a bounded Loops agent workflow" },
 };
 
 export function roleFragment(role: string, flow: BuiltinFlow): string {
@@ -326,38 +379,67 @@ export function verifierRuntimeGuidance(input: { verifierIdleTimeoutMs?: number 
   return [
     "Verifier runtime contract:",
     idleTimeout
-      ? `- OpenLoops will mark this verifier timed_out after ${idleTimeout}ms without stdout/stderr. Emit a concise heartbeat/progress line before long checks.`
+      ? `- Loops will mark this verifier timed_out after ${idleTimeout}ms without stdout/stderr. Emit a concise heartbeat/progress line before long checks.`
       : "- The verifier idle watchdog is disabled for this workflow; still emit concise progress before long checks.",
     "- Keep final evidence compact: summarize changed files, validation commands/results, findings, and the task decision instead of pasting bulky logs.",
     "- If validation cannot finish, record a clear blocked/failed task comment with the last completed check and the next concrete action.",
   ].join("\n");
 }
 
-export function todosInspectLine(todosProjectPath: string, taskId: string): string {
-  return `- Inspect first: todos --project ${todosProjectPath} inspect ${taskId}`;
+function todosPromptCommand(todosProjectPath: string | undefined): string {
+  const project = todosProjectPath?.trim();
+  return project ? `todos --project ${project}` : "todos";
 }
 
-export function todosStartLine(todosProjectPath: string, taskId: string): string {
-  return `- Claim/start if appropriate: todos --project ${todosProjectPath} start ${taskId}`;
+function todosShellCommand(todosProjectPath: string | undefined): string {
+  const project = todosProjectPath?.trim();
+  return project ? `todos --project ${shellQuote(project)}` : "todos";
 }
 
-export function todosEvidenceLine(todosProjectPath: string, taskId: string, placeholder: string): string {
-  return `- Record evidence: todos --project ${todosProjectPath} comment ${taskId} "<${placeholder}>"`;
+export function todosInspectLine(todosProjectPath: string | undefined, taskId: string): string {
+  return `- Inspect first: ${todosPromptCommand(todosProjectPath)} inspect ${taskId}`;
 }
 
-export function todosVerificationLine(todosProjectPath: string, taskId: string): string {
-  return `- Record verification: todos --project ${todosProjectPath} comment ${taskId} "<verification evidence or blocker>"`;
+export function todosStartLine(todosProjectPath: string | undefined, taskId: string): string {
+  return `- Claim/start if appropriate: ${todosPromptCommand(todosProjectPath)} start ${taskId}`;
 }
 
-export function todosDoneLine(todosProjectPath: string, taskId: string): string {
-  return `- If valid and complete: todos --project ${todosProjectPath} done ${taskId}`;
+export function todosEvidenceLine(todosProjectPath: string | undefined, taskId: string, placeholder: string): string {
+  return `- Record evidence: ${todosPromptCommand(todosProjectPath)} comment ${taskId} "<${placeholder}>"`;
 }
 
-/** Exact-todos-commands stanza: project pin, cwd-inference warning, inspect, then role-specific command lines. */
-export function todosExactCommandsFragment(todosProjectPath: string, taskId: string, commandLines: string[]): string[] {
+export function todosVerificationLine(todosProjectPath: string | undefined, taskId: string): string {
+  return `- Record verification: ${todosPromptCommand(todosProjectPath)} comment ${taskId} "<verification evidence or blocker>"`;
+}
+
+export type TaskEvidenceRole = "worker" | "verifier";
+
+export function taskEvidenceMarker(role: TaskEvidenceRole, taskId: string, eventId?: string): string {
+  return `openloops:${role}=evidence task=${taskId}${eventId ? ` event=${eventId}` : ""}`;
+}
+
+export function todosTaskEvidenceLine(
+  todosProjectPath: string | undefined,
+  taskId: string,
+  role: TaskEvidenceRole,
+  marker: string,
+  placeholder: string,
+): string {
+  return `- Record ${role} evidence: ${todosPromptCommand(todosProjectPath)} comment ${taskId} "${marker}\n<${placeholder}>"`;
+}
+
+export function todosDoneLine(todosProjectPath: string | undefined, taskId: string): string {
+  return `- If valid and complete: ${todosPromptCommand(todosProjectPath)} done ${taskId}`;
+}
+
+/** Exact-todos-commands stanza: optional project pin, inspect, then role-specific command lines. */
+export function todosExactCommandsFragment(todosProjectPath: string | undefined, taskId: string, commandLines: string[]): string[] {
+  const project = todosProjectPath?.trim();
   return [
-    `Todos project path: ${todosProjectPath}`,
-    "Use these exact todos commands so worktree cwd inference cannot attach to the wrong project:",
+    project ? `Todos project path: ${project}` : "Todos project path: not specified; use the CLI default without --project.",
+    project
+      ? "Use these exact todos commands so worktree cwd inference cannot attach to the wrong project:"
+      : "Use these exact todos commands and do not invent a --project value:",
     todosInspectLine(todosProjectPath, taskId),
     ...commandLines,
   ];
@@ -367,7 +449,7 @@ export function todosExactCommandsFragment(todosProjectPath: string, taskId: str
 export function worktreePrompt(plan: AgentWorktreeSpec): string {
   if (plan.enabled) {
     return [
-      "OpenLoops worktree policy:",
+      "Loops worktree policy:",
       "- Use the isolated git worktree as the only writeable repository checkout for this task/event.",
       `- Worktree cwd: ${plan.cwd}`,
       `- Worktree root: ${plan.path}`,
@@ -378,7 +460,7 @@ export function worktreePrompt(plan: AgentWorktreeSpec): string {
     ].join("\n");
   }
   return [
-    "OpenLoops worktree policy:",
+    "Loops worktree policy:",
     `- Worktree mode ${plan.mode} did not select an isolated worktree: ${plan.reason ?? "not enabled"}.`,
     `- Cwd: ${plan.cwd}`,
     "- Do not create ad hoc worktrees unless the task itself explicitly requires one.",
@@ -404,11 +486,211 @@ export function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
-export function sourceTaskGateCommand(todosProjectPath: string, taskId: string): string {
+export interface RoutingRemediationScopeOptions {
+  doctorProject?: string;
+  tag?: string;
+  status?: string;
+  shard?: string;
+  limit?: string;
+}
+
+export interface RoutingRemediationPreflightCommandOptions extends RoutingRemediationScopeOptions {
+  todosProjectPath: string;
+  doctorJsonPath?: string;
+  doctorOutputPath: string;
+  preflightOutputPath: string;
+  maxRepairs: number;
+  dryRun: boolean;
+  idempotencyKey: string;
+  applyCommand: string;
+  /** Where blocker findings are written as evidence instead of being filed as tasks. */
+  blockerReportPath: string;
+  /** Conversations channel the aggregate blocker summary is posted to. */
+  alertChannel?: string;
+}
+
+export function routingRemediationDoctorScopeArgs(opts: RoutingRemediationScopeOptions): string[] {
+  return [
+    opts.doctorProject ? ["--project", opts.doctorProject] : [],
+    opts.tag ? ["--tag", opts.tag] : [],
+    opts.status ? ["--status", opts.status] : [],
+    opts.shard ? ["--shard", opts.shard] : [],
+    opts.limit ? ["--limit", opts.limit] : [],
+  ].flat();
+}
+
+function displayCommand(command: string, args: string[]): string {
+  const shellSafe = /^[A-Za-z0-9_./:@%+=,-]+$/;
+  return [command, ...args.map((arg) => shellSafe.test(arg) ? arg : shellQuote(arg))].join(" ");
+}
+
+export function routingRemediationDoctorCommand(opts: RoutingRemediationScopeOptions & {
+  todosProjectPath: string;
+  apply?: boolean;
+  undoRecordPath?: string;
+}): string {
+  const args = [
+    "--project",
+    opts.todosProjectPath,
+    "doctor",
+    "routing",
+    "--json",
+    ...(opts.apply ? ["--apply"] : []),
+    ...(opts.apply && opts.undoRecordPath ? ["--undo-record", opts.undoRecordPath] : []),
+    ...routingRemediationDoctorScopeArgs(opts),
+  ];
+  return displayCommand("todos", args);
+}
+
+const ROUTING_REMEDIATION_PREFLIGHT_SCRIPT = [
+  "const { mkdirSync, readFileSync, writeFileSync } = await import('node:fs');",
+  "const { dirname } = await import('node:path');",
+  "const { spawnSync } = await import('node:child_process');",
+  "const env = process.env;",
+  "const required = (name) => {",
+  "  const value = env[name];",
+  "  if (!value || !value.trim()) throw new Error(`${name} is required`);",
+  "  return value.trim();",
+  "};",
+  "const optional = (name) => {",
+  "  const value = env[name];",
+  "  return value && value.trim() ? value.trim() : undefined;",
+  "};",
+  "const parseJson = (text, label) => {",
+  "  try { return JSON.parse(text || '{}'); } catch (error) { throw new Error(`${label} is not valid JSON: ${error?.message || error}`); }",
+  "};",
+  "const writeJson = (path, value) => {",
+  "  mkdirSync(dirname(path), { recursive: true });",
+  "  writeFileSync(path, `${JSON.stringify(value, null, 2)}\\n`);",
+  "};",
+  "const todosProject = required('OPENLOOPS_ROUTING_REMEDIATION_TODOS_PROJECT');",
+  "const doctorJsonPath = optional('OPENLOOPS_ROUTING_REMEDIATION_DOCTOR_JSON');",
+  "const doctorOutputPath = required('OPENLOOPS_ROUTING_REMEDIATION_DOCTOR_OUTPUT');",
+  "const preflightOutputPath = required('OPENLOOPS_ROUTING_REMEDIATION_PREFLIGHT_OUTPUT');",
+  "const idempotencyKey = required('OPENLOOPS_ROUTING_REMEDIATION_IDEMPOTENCY_KEY');",
+  "const applyCommand = required('OPENLOOPS_ROUTING_REMEDIATION_APPLY_COMMAND');",
+  "const blockerAlertChannel = required('OPENLOOPS_ROUTING_REMEDIATION_ALERT_CHANNEL');",
+  "const blockerReportPath = required('OPENLOOPS_ROUTING_REMEDIATION_BLOCKER_REPORT');",
+  "const scopeArgs = parseJson(env.OPENLOOPS_ROUTING_REMEDIATION_SCOPE_ARGS || '[]', 'scope args');",
+  "if (!Array.isArray(scopeArgs) || !scopeArgs.every((entry) => typeof entry === 'string')) throw new Error('scope args must be a string array');",
+  "const maxRepairs = Number(env.OPENLOOPS_ROUTING_REMEDIATION_MAX_REPAIRS || '25');",
+  "if (!Number.isInteger(maxRepairs) || maxRepairs < 0) throw new Error('maxRepairs must be a non-negative integer');",
+  "const dryRun = !['0', 'false', 'no', 'off'].includes(String(env.OPENLOOPS_ROUTING_REMEDIATION_DRY_RUN || 'true').toLowerCase());",
+  "let doctor;",
+  "let sourceDoctorRun;",
+  "if (doctorJsonPath) {",
+  "  doctor = parseJson(readFileSync(doctorJsonPath, 'utf8'), doctorJsonPath);",
+  "  sourceDoctorRun = { type: 'file', path: doctorJsonPath };",
+  "} else {",
+  "  const args = ['--project', todosProject, 'doctor', 'routing', '--json', ...scopeArgs];",
+  "  const result = spawnSync('todos', args, { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });",
+  "  if (![0, 1].includes(result.status ?? -1)) {",
+  "    throw new Error(`todos doctor routing preflight failed status=${result.status ?? 'null'} ${String(result.stderr || result.error || result.stdout).slice(0, 500)}`);",
+  "  }",
+  "  doctor = parseJson(result.stdout, 'todos doctor routing output');",
+  "  sourceDoctorRun = { type: 'command', command: ['todos', ...args].join(' ') };",
+  "}",
+  "if (doctor.schema_version !== 'todos.routing_doctor.v1') throw new Error(`unsupported routing doctor schema: ${doctor.schema_version || 'missing'}`);",
+  "const findings = Array.isArray(doctor.findings) ? doctor.findings : [];",
+  "const safeFindings = findings.filter((finding) => finding?.repair_class === 'safe_auto');",
+  "const allowedSafeFields = new Set(['working_dir', 'task_list_id']);",
+  "const safeFields = safeFindings.map((finding) => String(finding?.suggested_repair?.field || finding?.field || '__missing_safe_field__'));",
+  "const unsupportedSafeFields = [...new Set(safeFields.filter((field) => !allowedSafeFields.has(field)))];",
+  "const blockerClasses = new Set(['blocker_human', 'blocker_cross_repo', 'blocker_invalid_path', 'unsupported']);",
+  "const blockerFindings = findings.filter((finding) => blockerClasses.has(String(finding?.repair_class || '')));",
+  "const byCategory = findings.reduce((acc, finding) => {",
+  "  const category = String(finding?.category || 'unknown');",
+  "  acc[category] = (acc[category] || 0) + 1;",
+  "  return acc;",
+  "}, {});",
+  "const preflight = {",
+  "  schema_version: 'openloops.routing_remediation_preflight.v1',",
+  "  generated_at: new Date().toISOString(),",
+  "  ok: unsupportedSafeFields.length === 0 && safeFindings.length <= maxRepairs,",
+  "  dry_run: dryRun,",
+  "  idempotency_key: idempotencyKey,",
+  "  source_doctor_run: sourceDoctorRun,",
+  "  doctor_json_path: doctorOutputPath,",
+  "  safe_auto: safeFindings.length,",
+  "  blocker_findings: blockerFindings.length,",
+  "  unsupported_findings: findings.filter((finding) => finding?.repair_class === 'unsupported').length,",
+  "  by_category: byCategory,",
+  "  allowed_safe_fields: [...allowedSafeFields],",
+  "  unsupported_safe_fields: unsupportedSafeFields,",
+  "  capacity: { max_repairs: maxRepairs, requested_repairs: safeFindings.length, allowed: safeFindings.length <= maxRepairs },",
+  "  apply_allowed: !dryRun && unsupportedSafeFields.length === 0 && safeFindings.length <= maxRepairs,",
+  "  apply_command: applyCommand,",
+  "  blocker_alert_channel: blockerAlertChannel,",
+  "  blocker_report_path: blockerReportPath,",
+  "  blocker_repair_classes: [...blockerClasses],",
+  "};",
+  "writeJson(doctorOutputPath, doctor);",
+  "writeJson(preflightOutputPath, preflight);",
+  "// Blocker findings are telemetry, not work: they land in this artifact and are",
+  "// summarised once to the alert channel. They must never become todos rows.",
+  "const blockerByCategory = blockerFindings.reduce((acc, finding) => {",
+  "  const category = String(finding?.category || 'unknown');",
+  "  acc[category] = (acc[category] || 0) + 1;",
+  "  return acc;",
+  "}, {});",
+  "writeJson(blockerReportPath, {",
+  "  schema_version: 'openloops.routing_remediation_blockers.v1',",
+  "  generated_at: preflight.generated_at,",
+  "  idempotency_key: idempotencyKey,",
+  "  alert_channel: blockerAlertChannel,",
+  "  count: blockerFindings.length,",
+  "  by_category: blockerByCategory,",
+  "  findings: blockerFindings,",
+  "});",
+  "console.log(JSON.stringify({",
+  "  ok: preflight.ok,",
+  "  dry_run: preflight.dry_run,",
+  "  idempotency_key: preflight.idempotency_key,",
+  "  doctor_json_path: preflight.doctor_json_path,",
+  "  preflight_output_path: preflightOutputPath,",
+  "  safe_auto: preflight.safe_auto,",
+  "  blocker_findings: preflight.blocker_findings,",
+  "  blocker_report_path: blockerReportPath,",
+  "  blocker_alert_channel: blockerAlertChannel,",
+  "  unsupported_safe_fields: preflight.unsupported_safe_fields,",
+  "  capacity: preflight.capacity,",
+  "}));",
+  "if (unsupportedSafeFields.length) {",
+  "  console.error(`routing remediation preflight blocked unsupported safe_auto fields: ${unsupportedSafeFields.join(', ')}`);",
+  "  process.exit(12);",
+  "}",
+  "if (safeFindings.length > maxRepairs) {",
+  "  console.error(`routing remediation preflight blocked capacity: safe_auto=${safeFindings.length} maxRepairs=${maxRepairs}`);",
+  "  process.exit(12);",
+  "}",
+].join("\n");
+
+export function routingRemediationPreflightCommand(opts: RoutingRemediationPreflightCommandOptions): string {
   return [
     "set -euo pipefail",
-    `todos --project ${shellQuote(todosProjectPath)} --json inspect ${shellQuote(taskId)} >/dev/null`,
-    `printf "source task %s resolved in todos project %s\\n" ${shellQuote(taskId)} ${shellQuote(todosProjectPath)}`,
+    `export OPENLOOPS_ROUTING_REMEDIATION_TODOS_PROJECT=${shellQuote(opts.todosProjectPath)}`,
+    `export OPENLOOPS_ROUTING_REMEDIATION_DOCTOR_JSON=${shellQuote(opts.doctorJsonPath ?? "")}`,
+    `export OPENLOOPS_ROUTING_REMEDIATION_DOCTOR_OUTPUT=${shellQuote(opts.doctorOutputPath)}`,
+    `export OPENLOOPS_ROUTING_REMEDIATION_PREFLIGHT_OUTPUT=${shellQuote(opts.preflightOutputPath)}`,
+    `export OPENLOOPS_ROUTING_REMEDIATION_IDEMPOTENCY_KEY=${shellQuote(opts.idempotencyKey)}`,
+    `export OPENLOOPS_ROUTING_REMEDIATION_MAX_REPAIRS=${shellQuote(String(opts.maxRepairs))}`,
+    `export OPENLOOPS_ROUTING_REMEDIATION_DRY_RUN=${shellQuote(opts.dryRun ? "true" : "false")}`,
+    `export OPENLOOPS_ROUTING_REMEDIATION_SCOPE_ARGS=${shellQuote(JSON.stringify(routingRemediationDoctorScopeArgs(opts)))}`,
+    `export OPENLOOPS_ROUTING_REMEDIATION_APPLY_COMMAND=${shellQuote(opts.applyCommand)}`,
+    `export OPENLOOPS_ROUTING_REMEDIATION_BLOCKER_REPORT=${shellQuote(opts.blockerReportPath)}`,
+    `export OPENLOOPS_ROUTING_REMEDIATION_ALERT_CHANNEL=${shellQuote(opts.alertChannel ?? ROUTING_REMEDIATION_ALERT_CHANNEL)}`,
+    "bun - <<'BUN'",
+    ROUTING_REMEDIATION_PREFLIGHT_SCRIPT,
+    "BUN",
+  ].join("\n");
+}
+
+export function sourceTaskGateCommand(todosProjectPath: string | undefined, taskId: string): string {
+  const projectLabel = todosProjectPath?.trim() || "default todos resolution";
+  return [
+    "set -euo pipefail",
+    `${todosShellCommand(todosProjectPath)} --json inspect ${shellQuote(taskId)} >/dev/null`,
+    `printf "source task %s resolved via %s\\n" ${shellQuote(taskId)} ${shellQuote(projectLabel)}`,
   ].join("\n");
 }
 
@@ -471,7 +753,7 @@ const LIFECYCLE_GATE_SCRIPT_TAIL = [
 ].join("\n");
 
 export function lifecycleGateCommand(
-  todosProjectPath: string,
+  todosProjectPath: string | undefined,
   taskId: string,
   stage: LifecycleGateStage,
   goMarker: string,
@@ -479,12 +761,86 @@ export function lifecycleGateCommand(
 ): string {
   return [
     "set -euo pipefail",
-    `task_json="$(todos --project ${shellQuote(todosProjectPath)} --json inspect ${shellQuote(taskId)})"`,
+    `task_json="$(${todosShellCommand(todosProjectPath)} --json inspect ${shellQuote(taskId)})"`,
     `TASK_JSON="$task_json" STAGE=${shellQuote(stage)} bun - <<'BUN'`,
     LIFECYCLE_GATE_SCRIPT_HEAD,
     `const goMarker = ${JSON.stringify(goMarker)};`,
     `const blockedMarker = ${JSON.stringify(blockedMarker)};`,
     LIFECYCLE_GATE_SCRIPT_TAIL,
+    "BUN",
+  ].join("\n");
+}
+
+const TASK_EVIDENCE_GATE_SCRIPT = [
+  "const raw = process.env.TASK_JSON || '{}';",
+  "const payload = JSON.parse(raw);",
+  "const task = payload.task && typeof payload.task === 'object' ? payload.task : payload;",
+  "const status = String(task.status || '').toLowerCase().replace(/_/g, '-');",
+  "const taskId = process.env.TASK_ID || String(task.id || task.taskId || 'task');",
+  "const workerMarker = process.env.WORKER_MARKER || '';",
+  "const verifierMarker = process.env.VERIFIER_MARKER || '';",
+  "const completedStatuses = new Set(['completed', 'done']);",
+  "const commentText = (comment) => String(comment?.content ?? comment?.text ?? comment?.body ?? comment?.comment ?? '');",
+  "const taskComments = Array.isArray(task.comments) ? task.comments : [];",
+  "const payloadComments = Array.isArray(payload.comments) ? payload.comments : [];",
+  "const comments = taskComments.length ? taskComments : payloadComments;",
+  "const markerTime = (comment, index) => {",
+  "  const rawTime = comment?.created_at ?? comment?.createdAt ?? comment?.updated_at ?? comment?.updatedAt;",
+  "  const parsed = rawTime ? Date.parse(String(rawTime)) : Number.NaN;",
+  "  return Number.isFinite(parsed) ? parsed : index;",
+  "};",
+  "const markerRecord = (marker) => comments",
+  "  .map((comment, index) => {",
+  "    const text = commentText(comment);",
+  "    const firstLine = text.trimStart().split(/\\r?\\n/, 1)[0]?.trimEnd() || '';",
+  "    const body = text.trimStart().split(/\\r?\\n/).slice(1).join('\\n').trim();",
+  "    return { marker: firstLine, body, order: markerTime(comment, index), index };",
+  "  })",
+  "  .filter((entry) => entry.marker === marker)",
+  "  .sort((a, b) => a.order - b.order || a.index - b.index)",
+  "  .at(-1);",
+  "const hasEvidenceBody = (entry) => {",
+  "  if (!entry) return false;",
+  "  if (entry.body.length < 12) return false;",
+  "  if (/^<[^>]+>$/.test(entry.body)) return false;",
+  "  if (/placeholder|verification evidence or blocker|concise evidence/i.test(entry.body)) return false;",
+  "  return true;",
+  "};",
+  "const worker = markerRecord(workerMarker);",
+  "const verifier = markerRecord(verifierMarker);",
+  "const blockers = [];",
+  "if (!completedStatuses.has(status)) blockers.push(`task status is ${status || 'unknown'}, expected completed/done`);",
+  "if (!worker) blockers.push(`missing worker evidence marker: ${workerMarker}`);",
+  "else if (!hasEvidenceBody(worker)) blockers.push('worker evidence marker has no concrete non-placeholder body');",
+  "if (!verifier) blockers.push(`missing verifier evidence marker: ${verifierMarker}`);",
+  "else if (!hasEvidenceBody(verifier)) blockers.push('verifier evidence marker has no concrete non-placeholder body');",
+  "if (worker && verifier && verifier.order < worker.order) blockers.push('verifier evidence marker predates worker evidence marker');",
+  "if (blockers.length) {",
+  "  console.error(`task evidence gate failed for ${taskId}: ${blockers.join('; ')}`);",
+  "  process.exit(1);",
+  "}",
+  "console.log(JSON.stringify({",
+  "  ok: true,",
+  "  taskId,",
+  "  status,",
+  "  evidence: {",
+  "    worker: { marker: workerMarker, order: worker.order },",
+  "    verifier: { marker: verifierMarker, order: verifier.order },",
+  "  },",
+  "}));",
+].join("\n");
+
+export function taskEvidenceGateCommand(
+  todosProjectPath: string | undefined,
+  taskId: string,
+  workerMarker: string,
+  verifierMarker: string,
+): string {
+  return [
+    "set -euo pipefail",
+    `task_json="$(${todosShellCommand(todosProjectPath)} --json inspect ${shellQuote(taskId)})"`,
+    `TASK_JSON="$task_json" TASK_ID=${shellQuote(taskId)} WORKER_MARKER=${shellQuote(workerMarker)} VERIFIER_MARKER=${shellQuote(verifierMarker)} bun - <<'BUN'`,
+    TASK_EVIDENCE_GATE_SCRIPT,
     "BUN",
   ].join("\n");
 }
@@ -511,6 +867,7 @@ const PR_HANDOFF_SCRIPT = [
   "  }",
   "  return undefined;",
   "};",
+  "const scrubUrlCredentials = (value) => String(value || '').replace(/(https?:\\/\\/)[^\\s/@]+:[^\\s/@]+@/gi, '$1').replace(/(https?:\\/\\/)[^\\s/@]+@/gi, '$1');",
   "const run = (command, args, options = {}) => spawnSync(command, args, { encoding: 'utf8', ...options });",
   "const todosArgs = (...args) => todosProject ? ['--project', todosProject, ...args] : args;",
   "const todos = (...args) => run(todosBin, todosArgs(...args));",
@@ -525,23 +882,25 @@ const PR_HANDOFF_SCRIPT = [
   "const remote = stringField('remote') || 'origin';",
   "let commit = stringField('commit', 'commitSha', 'sha');",
   "const repo = stringField('githubRepo', 'repoSlug', 'repository');",
+  "const repoDisplay = scrubUrlCredentials(repo || stringField('repo', 'remoteUrl') || '');",
+  "const artifactError = scrubUrlCredentials(artifact.error);",
   "const prUrl = stringField('prUrl', 'pullRequestUrl');",
   "const title = stringField('title', 'prTitle') || `PR handoff for ${taskId}`;",
   "const body = stringField('body', 'prBody') || [",
-  "  `OpenLoops PR handoff for task ${taskId}.`,",
+  "  `Loops PR handoff for task ${taskId}.`,",
   "  `Commit: ${commit || 'unknown'}`,",
   "  `Branch: ${branch || 'unknown'}`,",
   "  artifact.validation ? `Validation: ${artifact.validation}` : undefined,",
-  "  artifact.error ? `Worker network error: ${artifact.error}` : undefined,",
+  "  artifactError ? `Worker network error: ${artifactError}` : undefined,",
   "].filter(Boolean).join('\\n\\n');",
   "const fingerprint = stringField('fingerprint') || `openloops:pr-handoff:${taskId}:${branch || 'missing-branch'}:${commit || 'missing-commit'}`;",
-  "const repoTagSource = (repo || stringField('repo', 'remoteUrl') || repoPath).split(/[/:]/).filter(Boolean).at(-1) || 'unknown';",
+  "const repoTagSource = (repoDisplay || repoPath).split(/[/:]/).filter(Boolean).at(-1) || 'unknown';",
   "const repoTag = `repo:${repoTagSource.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'unknown'}`;",
   "const metadata = {",
   "  route_enabled: true,",
   "  source: 'openloops.pr-handoff',",
   "  original_task_id: taskId,",
-  "  repo: repo || stringField('repo', 'remoteUrl') || '',",
+  "  repo: repoDisplay,",
   "  branch: branch || '',",
   "  base,",
   "  commit: commit || '',",
@@ -551,18 +910,19 @@ const PR_HANDOFF_SCRIPT = [
   "  no_tmux_dispatch: true,",
   "};",
   "const upsertTask = (why) => {",
+  "  const safeWhy = scrubUrlCredentials(why);",
   "  const description = [",
-  "    `OpenLoops could not complete network PR handoff for original task ${taskId}.`,",
-  "    `Reason: ${why}`,",
+  "    `Loops could not complete network PR handoff for original task ${taskId}.`,",
+  "    `Reason: ${safeWhy}`,",
   "    `Fingerprint: ${fingerprint}`,",
-  "    `Repository: ${repo || stringField('repo', 'remoteUrl') || 'unknown'}`,",
+  "    `Repository: ${repoDisplay || 'unknown'}`,",
   "    `Worktree: ${repoPath}`,",
   "    `Branch: ${branch || 'unknown'}`,",
   "    `Base: ${base}`,",
   "    `Commit: ${commit || 'unknown'}`,",
   "    `Artifact: ${artifactPath}`,",
   "    artifact.validation ? `Validation: ${artifact.validation}` : undefined,",
-  "    artifact.error ? `Worker error: ${artifact.error}` : undefined,",
+  "    artifactError ? `Worker error: ${artifactError}` : undefined,",
   "    'Do not rerun implementation work. Push the recorded commit/branch, open or update the PR, then comment the original task with the PR URL and validation evidence.',",
   "  ].filter(Boolean).join('\\n\\n');",
   "  const result = todos(",
@@ -576,8 +936,8 @@ const PR_HANDOFF_SCRIPT = [
   "    '--metadata-json', JSON.stringify(metadata),",
   "    '--working-dir', repoPath,",
   "  );",
-  "  if (result.status !== 0) throw new Error(`todos task upsert failed: ${result.stderr || result.stdout || result.status}`);",
-  "  comment(`openloops:pr-handoff=pending task=${taskId} artifact=${artifactPath} fingerprint=${fingerprint} reason=${why}`);",
+  "  if (result.status !== 0) throw new Error(`todos task upsert failed: ${scrubUrlCredentials(result.stderr || result.stdout || result.status)}`);",
+  "  comment(`openloops:pr-handoff=pending task=${taskId} artifact=${artifactPath} fingerprint=${fingerprint} reason=${safeWhy}`);",
   "  console.log(`queued PR handoff task fingerprint=${fingerprint}`);",
   "};",
   "const queueNetworkHandoff = (why) => { upsertTask(why); process.exit(0); };",
@@ -585,6 +945,10 @@ const PR_HANDOFF_SCRIPT = [
   "  comment(`openloops:pr-handoff=invalid task=${taskId} artifact=${artifactPath} reason=${why}`);",
   "  console.error(`invalid PR handoff artifact: ${why}`);",
   "  process.exit(0);",
+  "};",
+  "const preflightGitHub = () => {",
+  "  const probe = run(gitBin, ['-C', repoPath, 'ls-remote', '--heads', remote, base]);",
+  "  if (probe.status !== 0) queueNetworkHandoff(`github preflight failed before push/PR: ${String(probe.stderr || probe.stdout || probe.status).slice(0, 300)}`);",
   "};",
   "const canonicalPath = (path) => {",
   "  try { return realpathSync(path); } catch { return path; }",
@@ -606,6 +970,7 @@ const PR_HANDOFF_SCRIPT = [
   "commit = String(resolvedCommit.stdout || commit).trim();",
   "const reachable = run(gitBin, ['-C', repoPath, 'merge-base', '--is-ancestor', commit, 'HEAD']);",
   "if (reachable.status !== 0) invalidArtifact(`artifact commit ${commit} is not reachable from HEAD`);",
+  "preflightGitHub();",
   "if (prUrl) {",
   "  const viewed = run(ghBin, ['pr', 'view', prUrl, '--json', 'url,headRefName', '--jq', '.url + \"\\\\n\" + .headRefName']);",
   "  if (viewed.status !== 0) queueNetworkHandoff(`could not verify existing PR URL: ${String(viewed.stderr || viewed.stdout || viewed.status).slice(0, 300)}`);",
@@ -665,6 +1030,34 @@ const PR_HANDOFF_NO_ARTIFACT_SCRIPT = [
   "  const result = run(todosBin, todosArgs('comment', taskId, text));",
   "  if (result.status !== 0) console.error(`failed to comment original task: ${result.stderr || result.stdout || result.status}`);",
   "};",
+  "const scrubUrlCredentials = (value) => String(value || '').replace(/(https?:\\/\\/)[^\\s/@]+@/gi, '$1').replace(/(https?:\\/\\/)[^\\s/@]+:[^\\s/@]+@/gi, '$1');",
+  "const upsertTask = (why, branch, commit, remoteUrl) => {",
+  "  const safeWhy = scrubUrlCredentials(why);",
+  "  const displayRemoteUrl = scrubUrlCredentials(remoteUrl);",
+  "  const fingerprint = `openloops:pr-handoff:${taskId}:${branch || 'missing-branch'}:${commit || 'missing-commit'}`;",
+  "  const repoTagSource = String(displayRemoteUrl || worktree).split(/[/:]/).filter(Boolean).at(-1) || 'unknown';",
+  "  const repoTag = `repo:${repoTagSource.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'unknown'}`;",
+  "  const metadata = { route_enabled: true, source: 'openloops.pr-handoff', original_task_id: taskId, repo: displayRemoteUrl || '', branch: branch || '', commit: commit || '', fingerprint, automation: { allowed: true, mode: 'auto' }, no_tmux_dispatch: true };",
+  "  const description = [",
+  "    `Loops could not complete no-artifact PR handoff for original task ${taskId}.`,",
+  "    `Reason: ${safeWhy}`,",
+  "    `Fingerprint: ${fingerprint}`,",
+  "    `Repository: ${displayRemoteUrl || 'unknown'}`,",
+  "    `Worktree: ${worktree}`,",
+  "    `Branch: ${branch || 'unknown'}`,",
+  "    `Commit: ${commit || 'unknown'}`,",
+  "    'Do not rerun implementation work. Use the recorded worktree/branch/commit to verify or create the PR, then comment the original task with the PR URL and validation evidence.',",
+  "  ].filter(Boolean).join('\\n\\n');",
+  "  const result = run(todosBin, todosArgs('task', 'upsert', '--fingerprint', fingerprint, '--title', `PR handoff for ${taskId}`, '-d', description, '-p', 'high', '-t', ['auto:route', 'pr-handoff', 'github', 'network', repoTag].join(','), '--metadata-json', JSON.stringify(metadata), '--working-dir', worktree));",
+  "  if (result.status !== 0) {",
+  "    const upsertError = scrubUrlCredentials(result.stderr || result.stdout || result.status);",
+  "    console.error(`todos task upsert failed: ${upsertError}`);",
+  "    comment(`openloops:pr-handoff=failed task=${taskId} fingerprint=${fingerprint} reason=todos-upsert-failed detail=${String(upsertError).slice(0, 300)}`);",
+  "    return;",
+  "  }",
+  "  comment(`openloops:pr-handoff=pending task=${taskId} fingerprint=${fingerprint} reason=${safeWhy}`);",
+  "  console.log(`queued PR handoff task fingerprint=${fingerprint}`);",
+  "};",
   "const main = () => {",
   "  let branch = expectedBranch;",
   "  if (!branch) {",
@@ -672,17 +1065,27 @@ const PR_HANDOFF_NO_ARTIFACT_SCRIPT = [
   "    branch = String((shown.status === 0 ? shown.stdout : '') || '').trim();",
   "  }",
   "  if (!branch) { console.log('pr-handoff: no artifact and no resolvable branch; nothing to hand off'); return; }",
+  "  const head = run(gitBin, ['-C', worktree, 'rev-parse', 'HEAD']);",
+  "  const commitFromHead = String((head.status === 0 ? head.stdout : '') || '').trim();",
+  "  const remoteUrlResult = run(gitBin, ['-C', worktree, 'remote', 'get-url', 'origin']);",
+  "  const remoteUrl = String((remoteUrlResult.status === 0 ? remoteUrlResult.stdout : '') || '').trim();",
+  "  if (remoteUrl) {",
+  "    const probe = run(gitBin, ['-C', worktree, 'ls-remote', '--heads', 'origin', branch]);",
+  "    if (probe.status !== 0) { upsertTask(`github preflight failed before PR lookup: ${String(probe.stderr || probe.stdout || probe.status).slice(0, 300)}`, branch, commitFromHead, remoteUrl); return; }",
+  "  }",
   "  const listed = run(ghBin, ['pr', 'list', '--head', branch, '--state', 'open', '--json', 'url,number,headRefName,headRefOid'], { cwd: worktree });",
-  "  if (listed.status !== 0) { console.log(`pr-handoff: no artifact; PR lookup failed for branch ${branch}: ${String(listed.stderr || listed.stdout || listed.status).slice(0, 300)}`); return; }",
+  "  if (listed.status !== 0) {",
+  "    const reason = `gh PR lookup failed for branch ${branch}: ${String(listed.stderr || listed.stdout || listed.status).slice(0, 300)}`;",
+  "    if (remoteUrl) upsertTask(reason, branch, commitFromHead, remoteUrl);",
+  "    else console.log(`pr-handoff: no artifact; PR lookup failed for branch ${branch}: ${String(listed.stderr || listed.stdout || listed.status).slice(0, 300)}`);",
+  "    return;",
+  "  }",
   "  let prs = [];",
   "  try { prs = JSON.parse(String(listed.stdout || '[]')); } catch { prs = []; }",
   "  const pr = Array.isArray(prs) ? prs.find((entry) => entry && entry.headRefName === branch && typeof entry.url === 'string' && entry.url) : undefined;",
   "  if (!pr) { console.log(`pr-handoff: no artifact and no open PR for branch ${branch}; worker completed without opening a PR`); return; }",
   "  let commit = String(pr.headRefOid || '').trim();",
-  "  if (!commit) {",
-  "    const head = run(gitBin, ['-C', worktree, 'rev-parse', 'HEAD']);",
-  "    commit = String((head.status === 0 ? head.stdout : '') || '').trim();",
-  "  }",
+  "  if (!commit) commit = commitFromHead;",
   "  comment(`openloops:pr-handoff=done task=${taskId} pr=${pr.url} commit=${commit || 'unknown'} branch=${branch}`);",
   "  console.log(`PR handoff complete (worker-opened PR): ${pr.url}`);",
   "};",
@@ -692,7 +1095,7 @@ const PR_HANDOFF_NO_ARTIFACT_SCRIPT = [
 export interface PrHandoffCommandOptions {
   artifactPath: string;
   taskId: string;
-  todosProjectPath: string;
+  todosProjectPath?: string;
   worktreeCwd: string;
   worktreeRoot: string;
   expectedBranch: string;
@@ -703,7 +1106,7 @@ export function prHandoffCommand(opts: PrHandoffCommandOptions): string {
     "set -euo pipefail",
     `export OPENLOOPS_PR_HANDOFF_ARTIFACT=${shellQuote(opts.artifactPath)}`,
     `export OPENLOOPS_PR_HANDOFF_TASK_ID=${shellQuote(opts.taskId)}`,
-    `export OPENLOOPS_PR_HANDOFF_TODOS_PROJECT=${shellQuote(opts.todosProjectPath)}`,
+    `export OPENLOOPS_PR_HANDOFF_TODOS_PROJECT=${shellQuote(opts.todosProjectPath?.trim() || "")}`,
     `export OPENLOOPS_PR_HANDOFF_WORKTREE=${shellQuote(opts.worktreeCwd)}`,
     `export OPENLOOPS_PR_HANDOFF_WORKTREE_ROOT=${shellQuote(opts.worktreeRoot)}`,
     `export OPENLOOPS_PR_HANDOFF_EXPECTED_BRANCH=${shellQuote(opts.expectedBranch)}`,

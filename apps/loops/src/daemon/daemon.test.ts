@@ -5,7 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 import { Store } from "../lib/store.js";
-import { daemonLogLine, rotateDaemonLog, runDaemon } from "./daemon.js";
+import { daemonLogLine, rotateDaemonLog, runDaemon, stripAnsi } from "./daemon.js";
+import { RESTART_INTERRUPTED_RUN_PREFIX } from "../lib/health.js";
 import { isAlive, processStartTimeMs } from "./control.js";
 import { tick } from "../lib/scheduler.js";
 import { expectMarkerNeverWritten, gatedWriteCommand, waitUntil } from "../test-helpers.js";
@@ -202,6 +203,50 @@ describe("daemon", () => {
     }
   });
 
+  test("classifies active loop runs interrupted by daemon stop separately from workload failure", async () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-daemon-stop-run-"));
+    const marker = join(root, "late-write");
+    const gate = join(root, "gate");
+    const store = new Store(":memory:");
+    const controller = new AbortController();
+    try {
+      store.createLoop({
+        name: "daemon-stop-command-loop",
+        schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+        target: { type: "command", command: gatedWriteCommand(gate, marker), shell: true },
+      });
+
+      const daemon = runDaemon({
+        store,
+        pidPath: join(root, "loops-daemon.pid"),
+        intervalMs: 5,
+        signal: controller.signal,
+        sleep: async (ms) => Bun.sleep(ms),
+        shouldStop: () => controller.signal.aborted,
+        log: () => undefined,
+      });
+      const running = await waitUntil(() => {
+        const run = store.listRuns({ limit: 1 })[0];
+        return run?.status === "running" ? run : undefined;
+      }, { label: "command loop running" });
+      expect(running).toBeDefined();
+
+      controller.abort();
+      await daemon;
+
+      const run = store.getRun(running.id);
+      await expectMarkerNeverWritten(gate, marker);
+      expect(run?.status).toBe("skipped");
+      expect(run?.error).toStartWith(RESTART_INTERRUPTED_RUN_PREFIX);
+      expect(store.countRuns("failed")).toBe(0);
+      expect(existsSync(marker)).toBe(false);
+    } finally {
+      if (!controller.signal.aborted) controller.abort();
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("aborts active workflow children on daemon stop", async () => {
     const root = mkdtempSync(join(tmpdir(), "loops-daemon-stop-"));
     const marker = join(root, "late-write");
@@ -241,6 +286,9 @@ describe("daemon", () => {
       controller.abort();
       await daemon;
       await expectMarkerNeverWritten(gate, marker);
+      const loopRun = store.listRuns({ limit: 1 })[0];
+      expect(loopRun?.status).toBe("skipped");
+      expect(loopRun?.error).toStartWith(RESTART_INTERRUPTED_RUN_PREFIX);
       expect(store.requireWorkflowRun(runId!).status).toBe("failed");
       expect(existsSync(marker)).toBe(false);
     } finally {
@@ -447,7 +495,7 @@ describe("daemon", () => {
         const runnerId = `${owner}:${process.pid}`;
         const claim = store.claimRun(loop, new Date().toISOString(), runnerId);
         expect(claim).toBeDefined();
-        store.markRunPid(claim!.run.id, children[index]!.pid!, runnerId);
+        store.markRunPid(claim!.run.id, children[index]!.pid!, runnerId, { claimToken: claim!.claimToken });
         return claim!;
       });
       await Bun.sleep(30);
@@ -510,6 +558,14 @@ describe("daemon", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  test("stripAnsi removes SGR color codes while preserving text", () => {
+    // Bun wraps console.error output in red SGR codes under a TTY/FORCE_COLOR,
+    // so persisted daemon logs from older builds carry this pollution.
+    expect(stripAnsi("\x1b[0m\x1b[31m[loops-daemon] stopped\x1b[0m")).toBe("[loops-daemon] stopped");
+    expect(stripAnsi("[loops-daemon] plain")).toBe("[loops-daemon] plain");
+    expect(stripAnsi("")).toBe("");
   });
 
   test("rejects a completed child result when the daemon lease was lost before finalization", async () => {

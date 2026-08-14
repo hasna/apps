@@ -21,6 +21,16 @@
           "type": "string",
           "description": "Why/how/outcome description; a default is generated when omitted."
         },
+        "labels": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "maxItems": 32,
+          "description": "Persisted loop labels; normalized lowercase and deduplicated."
+        },
         "schedule": {
           "anyOf": [
             {
@@ -205,6 +215,16 @@
           "type": "string",
           "description": "Why/how/outcome description; a default is generated when omitted."
         },
+        "labels": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "maxItems": 32,
+          "description": "Persisted loop labels; normalized lowercase and deduplicated."
+        },
         "schedule": {
           "anyOf": [
             {
@@ -385,7 +405,7 @@
         },
         "showOutput": {
           "type": "boolean",
-          "description": "Include raw stdout/stderr (default false: only redacted lengths are returned)."
+          "description": "Include scrubbed, bounded stdout/stderr (default false: only redacted lengths are returned)."
         }
       },
       "required": [
@@ -471,6 +491,16 @@
           ],
           "description": "Filter by run status."
         },
+        "labels": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "maxItems": 32,
+          "description": "Require all current labels on the run's loop."
+        },
         "limit": {
           "type": "integer",
           "minimum": 1,
@@ -479,7 +509,13 @@
         },
         "showOutput": {
           "type": "boolean",
-          "description": "Include raw stdout/stderr (default false: only redacted lengths are returned)."
+          "description": "Include scrubbed, bounded stdout/stderr (default false: only redacted lengths are returned)."
+        },
+        "maxOutputChars": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 32000,
+          "description": "Maximum characters returned for each stdout/stderr field (1-32000)."
         }
       },
       "additionalProperties": false,
@@ -499,6 +535,43 @@
       },
       "required": [
         "idOrName"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "loop_update_labels",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "idOrName": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Loop id or exact loop name. Names resolve on exact match only; ambiguous names require the id."
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "set",
+            "add",
+            "remove",
+            "clear"
+          ]
+        },
+        "labels": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "maxItems": 32
+        }
+      },
+      "required": [
+        "idOrName",
+        "mode"
       ],
       "additionalProperties": false,
       "$schema": "http://json-schema.org/draft-07/schema#"
@@ -535,6 +608,16 @@
         "description": {
           "type": "string",
           "description": "Why/how/outcome description; a default is generated when omitted."
+        },
+        "labels": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "maxItems": 32,
+          "description": "Persisted loop labels; normalized lowercase and deduplicated."
         },
         "schedule": {
           "anyOf": [
@@ -719,6 +802,16 @@
         "description": {
           "type": "string",
           "description": "Why/how/outcome description; a default is generated when omitted."
+        },
+        "labels": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "maxItems": 32,
+          "description": "Persisted loop labels; normalized lowercase and deduplicated."
         },
         "schedule": {
           "anyOf": [
@@ -908,7 +1001,7 @@
         },
         "showOutput": {
           "type": "boolean",
-          "description": "Include raw stdout/stderr (default false: only redacted lengths are returned)."
+          "description": "Include scrubbed, bounded stdout/stderr (default false: only redacted lengths are returned)."
         }
       },
       "required": [
@@ -951,6 +1044,99 @@
     }
   },
   {
+    "name": "loops_health_scan",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "includeStatuses": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "active",
+              "paused",
+              "stopped",
+              "expired"
+            ]
+          },
+          "description": "Loop statuses to inventory (default active and paused)."
+        },
+        "includeArchived": {
+          "type": "boolean",
+          "description": "Include archived loops in the scan (default false)."
+        },
+        "latestRun": {
+          "type": "boolean",
+          "description": "Include latest-run and stale-running checks (default true)."
+        },
+        "doctor": {
+          "type": "boolean",
+          "description": "Include doctor/preflight checks (default false)."
+        },
+        "daemon": {
+          "type": "boolean",
+          "description": "Include daemon status checks (default false)."
+        },
+        "staleRunningMs": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "description": "Minimum age before a running latest run is stale; loop lease and 10m still apply."
+        },
+        "maxFindings": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 500,
+          "description": "Maximum findings to return (0-500, default 100)."
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500,
+          "description": "Maximum entries to return (1-500)."
+        }
+      },
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "loops_labels_update",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "idOrName": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Loop id or exact loop name. Names resolve on exact match only; ambiguous names require the id."
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "set",
+            "add",
+            "remove",
+            "clear"
+          ]
+        },
+        "labels": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "maxItems": 32
+        }
+      },
+      "required": [
+        "idOrName",
+        "mode"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
     "name": "loops_list",
     "inputSchema": {
       "type": "object",
@@ -965,6 +1151,16 @@
             "all"
           ],
           "description": "Filter by loop status; 'all' disables the filter."
+        },
+        "labels": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "maxItems": 32,
+          "description": "Require all listed labels."
         },
         "limit": {
           "type": "integer",
@@ -999,6 +1195,234 @@
       "required": [
         "idOrName"
       ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "loops_receipt_read",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "run_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Run id."
+        }
+      },
+      "required": [
+        "run_id"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "loops_receipt_write",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "loop_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Loops loop id. Optional when run_id references an existing loop run."
+        },
+        "run_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Scheduler-neutral run id. Existing values are updated idempotently."
+        },
+        "machine": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "object",
+              "additionalProperties": {}
+            }
+          ],
+          "description": "Machine id/name or machine metadata object."
+        },
+        "repo": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Repository path or owner/repo string. Defaults from the loop target cwd when possible."
+        },
+        "task_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Task ids associated with this run."
+        },
+        "knowledge_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Knowledge record ids associated with this run."
+        },
+        "digest_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Stable digest id. Computed from normalized receipt content when omitted."
+        },
+        "started_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Run start timestamp."
+        },
+        "finished_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Run finish timestamp."
+        },
+        "status": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Run status."
+        },
+        "exit_code": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Process exit code."
+        },
+        "summary": {
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "text": {
+                      "type": "string",
+                      "description": "Short human summary. It is scrubbed and bounded before storage."
+                    },
+                    "stdout_bytes": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "description": "Original stdout byte count."
+                    },
+                    "stderr_bytes": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "description": "Original stderr byte count."
+                    },
+                    "stdout_excerpt": {
+                      "type": "string",
+                      "description": "Bounded stdout excerpt. Raw unbounded stdout is never required."
+                    },
+                    "stderr_excerpt": {
+                      "type": "string",
+                      "description": "Bounded stderr excerpt. Raw unbounded stderr is never required."
+                    },
+                    "error": {
+                      "type": "string",
+                      "description": "Bounded error excerpt."
+                    },
+                    "duration_ms": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "description": "Run duration in milliseconds."
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Bounded structured summary; may be a string shorthand."
+        },
+        "evidence_paths": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Bounded paths to durable evidence artifacts."
+        },
+        "stdout": {
+          "type": "string",
+          "description": "Optional raw stdout to summarize and bound before storage."
+        },
+        "stderr": {
+          "type": "string",
+          "description": "Optional raw stderr to summarize and bound before storage."
+        },
+        "error": {
+          "type": "string",
+          "description": "Optional raw error text to summarize and bound before storage."
+        },
+        "duration_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Run duration in milliseconds."
+        }
+      },
+      "required": [
+        "run_id"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "loops_receipts_list",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "loop_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Filter by loop_id."
+        },
+        "repo": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Filter by repo."
+        },
+        "task_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Filter by task id."
+        },
+        "knowledge_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Filter by knowledge id."
+        },
+        "status": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Filter by receipt status."
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500,
+          "description": "Maximum entries to return (1-500)."
+        }
+      },
       "additionalProperties": false,
       "$schema": "http://json-schema.org/draft-07/schema#"
     }
@@ -1061,6 +1485,16 @@
           ],
           "description": "Filter by run status."
         },
+        "labels": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "maxItems": 32,
+          "description": "Require all current labels on the run's loop."
+        },
         "limit": {
           "type": "integer",
           "minimum": 1,
@@ -1069,7 +1503,13 @@
         },
         "showOutput": {
           "type": "boolean",
-          "description": "Include raw stdout/stderr (default false: only redacted lengths are returned)."
+          "description": "Include scrubbed, bounded stdout/stderr (default false: only redacted lengths are returned)."
+        },
+        "maxOutputChars": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 32000,
+          "description": "Maximum characters returned for each stdout/stderr field (1-32000)."
         }
       },
       "additionalProperties": false,
@@ -1092,7 +1532,13 @@
         },
         "showOutput": {
           "type": "boolean",
-          "description": "Include raw stdout/stderr (default false: only redacted lengths are returned)."
+          "description": "Include scrubbed, bounded stdout/stderr (default false: only redacted lengths are returned)."
+        },
+        "maxOutputChars": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 32000,
+          "description": "Maximum characters returned for each stdout/stderr field (1-32000)."
         }
       },
       "required": [
@@ -1164,7 +1610,7 @@
         },
         "showOutput": {
           "type": "boolean",
-          "description": "Include raw stdout/stderr (default false: only redacted lengths are returned)."
+          "description": "Include scrubbed, bounded stdout/stderr (default false: only redacted lengths are returned)."
         }
       },
       "required": [
@@ -1190,7 +1636,7 @@
         },
         "showOutput": {
           "type": "boolean",
-          "description": "Include raw stdout/stderr (default false: only redacted lengths are returned)."
+          "description": "Include scrubbed, bounded stdout/stderr (default false: only redacted lengths are returned)."
         }
       },
       "required": [
@@ -1284,7 +1730,7 @@
         },
         "showOutput": {
           "type": "boolean",
-          "description": "Include raw stdout/stderr (default false: only redacted lengths are returned)."
+          "description": "Include scrubbed, bounded stdout/stderr (default false: only redacted lengths are returned)."
         }
       },
       "required": [
@@ -1310,7 +1756,7 @@
         },
         "showOutput": {
           "type": "boolean",
-          "description": "Include raw stdout/stderr (default false: only redacted lengths are returned)."
+          "description": "Include scrubbed, bounded stdout/stderr (default false: only redacted lengths are returned)."
         }
       },
       "required": [

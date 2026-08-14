@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { AgentTarget, CreateWorkflowInput, WorkflowStepInput } from "../types.js";
-import { prHandoffCommand } from "./template-kit.js";
+import { prHandoffCommand, ROUTING_REMEDIATION_ALERT_CHANNEL } from "./template-kit.js";
 import {
   BOUNDED_AGENT_WORKER_VERIFIER_TEMPLATE_ID,
   DETERMINISTIC_CHECK_CREATE_TASK_TEMPLATE_ID,
@@ -13,6 +13,7 @@ import {
   KNOWLEDGE_REFRESH_TEMPLATE_ID,
   PR_REVIEW_TEMPLATE_ID,
   REPORT_ONLY_TEMPLATE_ID,
+  ROUTING_REMEDIATION_TEMPLATE_ID,
   SCHEDULED_AUDIT_TEMPLATE_ID,
   TASK_LIFECYCLE_TEMPLATE_ID,
   TODOS_TASK_WORKER_VERIFIER_TEMPLATE_ID,
@@ -109,14 +110,15 @@ describe("prompt fragment composition", () => {
   const verifierPrompt = agentTargetOf(stepById(workflow, "verifier")).prompt;
 
   test("worker prompt composes goal header, worktree policy, and exact todos commands in order", () => {
-    expect(workerPrompt.startsWith("/goal Complete todos task task-1200 in REPO_PLACEHOLDER.\n\nYou are the worker agent for a task-triggered OpenLoops workflow.")).toBe(true);
+    expect(workerPrompt.startsWith("/goal Complete todos task task-1200 in REPO_PLACEHOLDER.\n\nYou are the worker agent for a task-triggered Loops workflow.")).toBe(true);
     const lines = workerPrompt.split("\n");
     const stanzaStart = lines.indexOf("Use these exact todos commands so worktree cwd inference cannot attach to the wrong project:");
     expect(stanzaStart).toBeGreaterThan(0);
     expect(lines[stanzaStart - 1]).toBe("Todos project path: /srv/todos");
     expect(lines[stanzaStart + 1]).toBe("- Inspect first: todos --project /srv/todos inspect task-1200");
     expect(lines[stanzaStart + 2]).toBe("- Claim/start if appropriate: todos --project /srv/todos start task-1200");
-    expect(lines[stanzaStart + 3]).toBe('- Record evidence: todos --project /srv/todos comment task-1200 "<concise evidence and blockers>"');
+    expect(lines[stanzaStart + 3]).toBe('- Record worker evidence: todos --project /srv/todos comment task-1200 "openloops:worker=evidence task=task-1200');
+    expect(lines[stanzaStart + 4]).toBe('<concise worker evidence and blockers>"');
   });
 
   test("worker prompt keeps the no-tmux and completion-ownership stanzas", () => {
@@ -125,14 +127,36 @@ describe("prompt fragment composition", () => {
   });
 
   test("verifier prompt gets verification/done commands but not the claim/start command", () => {
-    expect(verifierPrompt).toContain('- Record verification: todos --project /srv/todos comment task-1200 "<verification evidence or blocker>"');
+    expect(verifierPrompt).toContain('- Record verifier evidence: todos --project /srv/todos comment task-1200 "openloops:verifier=evidence task=task-1200\n<concise verification evidence or blocker>"');
     expect(verifierPrompt).toContain("- If valid and complete: todos --project /srv/todos done task-1200");
     expect(verifierPrompt).not.toContain("- Claim/start if appropriate:");
     expect(verifierPrompt).toContain("Act as an adversarial reviewer focused on correctness, regressions, missing tests, security, and incomplete requirements.");
   });
 
+  test("omitted todos project uses unscoped commands instead of the routed repository", () => {
+    const unscoped = renderTodosTaskWorkerVerifierWorkflow({
+      taskId: "task-unscoped",
+      projectPath: repoPath,
+      routeProjectPath: repoPath,
+      worktreeMode: "off",
+    });
+    const worker = agentTargetOf(stepById(unscoped, "worker")).prompt;
+    const verifier = agentTargetOf(stepById(unscoped, "verifier")).prompt;
+    const sourceGate = commandOf(stepById(unscoped, "source-task-gate"));
+    const evidenceGate = commandOf(stepById(unscoped, "task-evidence-check"));
+
+    expect(worker).toContain("Todos project path: not specified; use the CLI default without --project.");
+    expect(worker).toContain("- Inspect first: todos inspect task-unscoped");
+    expect(worker).toContain("- Claim/start if appropriate: todos start task-unscoped");
+    expect(verifier).toContain("- If valid and complete: todos done task-unscoped");
+    for (const value of [worker, verifier, sourceGate, evidenceGate]) {
+      expect(value).not.toContain("todos --project");
+      expect(value).not.toContain(`--project ${repoPath}`);
+    }
+  });
+
   test("disabled worktree policy prose explains the mode instead of listing worktree paths", () => {
-    expect(workerPrompt).toContain("OpenLoops worktree policy:");
+    expect(workerPrompt).toContain("Loops worktree policy:");
     expect(workerPrompt).toContain("- Worktree mode off did not select an isolated worktree: worktree mode disabled.");
     expect(workerPrompt).not.toContain("- Worktree root:");
   });
@@ -163,10 +187,10 @@ describe("prompt fragment composition", () => {
     for (const prompt of [triage, planner, worker, verifier]) {
       expect(prompt).not.toContain("/goal ");
       expect(prompt).toContain("You are the ");
-      expect(prompt).toContain("step for a full task-triggered OpenLoops lifecycle.");
+      expect(prompt).toContain("step for a full task-triggered Loops lifecycle.");
     }
-    expect(worker.startsWith("Objective: Complete todos task task-1200 according to the planner evidence.\nYou are the worker step for a full task-triggered OpenLoops lifecycle.")).toBe(true);
-    expect(verifier.startsWith("Objective: Verify todos task task-1200 after the full lifecycle worker step.\nYou are the verifier step for a full task-triggered OpenLoops lifecycle.")).toBe(true);
+    expect(worker.startsWith("Objective: Complete todos task task-1200 according to the planner evidence.\nYou are the worker step for a full task-triggered Loops lifecycle.")).toBe(true);
+    expect(verifier.startsWith("Objective: Verify todos task task-1200 after the full lifecycle worker step.\nYou are the verifier step for a full task-triggered Loops lifecycle.")).toBe(true);
   });
 
   test("lifecycle gate-stop fragment carries per-stage deltas", () => {
@@ -182,6 +206,26 @@ describe("prompt fragment composition", () => {
     expect(planner).toContain("The deterministic planner gate will stop the worker unless the latest planner marker is the exact go marker");
     expect(triage).toContain("openloops:triage=go task=task-1200 event=evt-9");
     expect(planner).toContain("openloops:planner=blocked task=task-1200 event=evt-9");
+  });
+
+  test("route admission context is visible in lifecycle prompts", () => {
+    const lifecycle = renderTaskLifecycleWorkflow({
+      taskId: "task-1200",
+      projectPath: repoPath,
+      worktreeRoot,
+      projectGroup: "loop-script-migration-rollout",
+      routeScope: "route-drain-rollout",
+      routeThrottleLimits: {
+        maxActiveScope: "route-drain-rollout",
+        maxActivePerProjectGroup: 1,
+        maxPerProfile: 2,
+      },
+    });
+    const worker = agentTargetOf(stepById(lifecycle, "worker")).prompt;
+    expect(worker).toContain('"routeAdmission":{"projectGroup":"loop-script-migration-rollout"');
+    expect(worker).toContain('"routeScope":"route-drain-rollout"');
+    expect(worker).toContain('"maxActivePerProjectGroup":1');
+    expect(worker).toContain('"maxPerProfile":2');
   });
 
   test("lifecycle prompts propagate PR review routing evidence to follow-up todos", () => {
@@ -244,13 +288,15 @@ describe("prompt fragment composition", () => {
     expect(planner).toContain(plannerGoCommand);
     expect(planner).toContain(plannerBlockedCommand);
     expect(worker).toContain("record concrete worker evidence in todos");
+    expect(worker).toContain('openloops:worker=evidence task=task-1200 event=evt-9');
     expect(verifier).toContain("record concrete verification evidence in todos");
+    expect(verifier).toContain('openloops:verifier=evidence task=task-1200 event=evt-9');
   });
 
   test("verifier runtime guidance reflects the idle watchdog configuration", () => {
     const defaults = renderTodosTaskWorkerVerifierWorkflow({ taskId: "t", projectPath: plainPath });
     const defaultVerifier = agentTargetOf(stepById(defaults, "verifier"));
-    expect(defaultVerifier.prompt).toContain("OpenLoops will mark this verifier timed_out after 900000ms without stdout/stderr.");
+    expect(defaultVerifier.prompt).toContain("Loops will mark this verifier timed_out after 900000ms without stdout/stderr.");
     expect(defaultVerifier.idleTimeoutMs).toBe(900000);
 
     const disabled = renderLoopTemplate(TODOS_TASK_WORKER_VERIFIER_TEMPLATE_ID, {
@@ -262,6 +308,84 @@ describe("prompt fragment composition", () => {
     expect(disabledVerifier.prompt).toContain("The verifier idle watchdog is disabled for this workflow");
     expect(disabledVerifier.idleTimeoutMs).toBeUndefined();
   });
+
+  test("routing-remediation prompt and preflight enforce safe CLI-only repairs", () => {
+    const workflow = renderLoopTemplate(ROUTING_REMEDIATION_TEMPLATE_ID, {
+      projectPath: repoPath,
+      todosProjectPath: "/srv/todos",
+      dryRun: "false",
+      shard: "0/6",
+      limit: "10",
+      maxRepairs: "3",
+      idempotencyKey: "routing-health:open-loops:shard0",
+      worktreeRoot,
+    });
+    expect(workflow.steps.map((step) => step.id)).toEqual(["routing-doctor-preflight", "worker", "verifier"]);
+    const preflight = stepById(workflow, "routing-doctor-preflight") as WorkflowStepInput & { blockedExitCodes?: number[] };
+    expect(preflight.target.type).toBe("command");
+    expect(preflight.target.type === "command" ? preflight.target.cwd : undefined).toBe(repoPath);
+    expect(preflight.blockedExitCodes).toEqual([12]);
+    const preflightCommand = commandOf(preflight);
+    expect(preflightCommand).toContain("OPENLOOPS_ROUTING_REMEDIATION_MAX_REPAIRS='3'");
+    expect(preflightCommand).toContain("OPENLOOPS_ROUTING_REMEDIATION_SCOPE_ARGS='[");
+    expect(preflightCommand).toContain("\"--shard\",\"0/6\"");
+    expect(preflightCommand).toContain("allowedSafeFields = new Set(['working_dir', 'task_list_id'])");
+    expect(preflightCommand).toContain("__missing_safe_field__");
+    expect(preflightCommand).toContain("process.exit(12);");
+
+    const worker = agentTargetOf(stepById(workflow, "worker"));
+    expect(worker.prompt).toContain("Dry-run/preflight mode: false");
+    expect(worker.prompt).toContain("todos --project /srv/todos doctor routing --json --apply --undo-record");
+    expect(worker.prompt).toContain("Never edit the Todos SQLite database");
+    expect(worker.prompt).toContain("safe_auto");
+    expect(worker.prompt).toContain("blocker_cross_repo");
+    expect(worker.prompt).toContain("old value, new value, repair command, source doctor run, undo record, and route-state recheck result");
+
+    // Owner directive 2026-07-30: routine operational alerts are not tasks. The pre-fix
+    // template told the worker to `todos task upsert` one blocker task per finding, and
+    // a single 2026-07-05 sweep emitted 2,817 of them. Findings now go to an evidence
+    // artifact plus at most one aggregate channel post.
+    expect(worker.prompt).not.toContain("task upsert");
+    expect(worker.prompt).not.toContain("from-kai,routing-health");
+    expect(worker.prompt).not.toContain("routing-health:blocker:<source-task-id>:<finding-category>");
+    expect(worker.prompt).toContain("Routine operational alerts are NOT tasks");
+    expect(worker.prompt).toContain("routing-remediation-blockers-");
+    expect(worker.prompt).toContain(`conversations send ${ROUTING_REMEDIATION_ALERT_CHANNEL}`);
+    expect(worker.prompt).toContain("exactly ONE post per run, never one per finding");
+    // Built from the exported constant rather than written out: a shell-quoted channel
+    // name spelled literally here reads to the branding guard as a possessive form of the
+    // legacy product name, and the assertion is stronger tied to the constant anyway.
+    expect(preflightCommand).toContain(
+      `OPENLOOPS_ROUTING_REMEDIATION_ALERT_CHANNEL='${ROUTING_REMEDIATION_ALERT_CHANNEL}'`,
+    );
+    expect(preflightCommand).toContain("OPENLOOPS_ROUTING_REMEDIATION_BLOCKER_REPORT=");
+    expect(preflightCommand).not.toContain("blocker_task_tags");
+
+    const verifier = agentTargetOf(stepById(workflow, "verifier"));
+    expect(verifier.prompt).toContain("Confirm safe_auto repairs were limited to working_dir and task_list_id");
+    expect(verifier.prompt).toContain("Fail verification if this run created ANY todos task for a routing finding");
+    expect(verifier.prompt).toContain("If dry-run mode was rendered, verify that no apply/repair mutation occurred");
+
+    const dryRunWorkflow = renderLoopTemplate(ROUTING_REMEDIATION_TEMPLATE_ID, {
+      projectPath: repoPath,
+      todosProjectPath: "/srv/todos",
+      idempotencyKey: "routing-health:open-loops:dry-run",
+      worktreeRoot,
+    });
+    expect(agentTargetOf(stepById(dryRunWorkflow, "worker")).prompt).toContain("This workflow was rendered with dryRun=true. Do not run the apply command");
+
+    const customChannel = renderLoopTemplate(ROUTING_REMEDIATION_TEMPLATE_ID, {
+      projectPath: repoPath,
+      todosProjectPath: "/srv/todos",
+      idempotencyKey: "routing-health:open-loops:custom-channel",
+      alertChannel: "incidents",
+      worktreeRoot,
+    });
+    expect(agentTargetOf(stepById(customChannel, "worker")).prompt).toContain("conversations send incidents");
+    expect(commandOf(stepById(customChannel, "routing-doctor-preflight"))).toContain(
+      "OPENLOOPS_ROUTING_REMEDIATION_ALERT_CHANNEL='incidents'",
+    );
+  });
 });
 
 describe("executor-native worktree specs", () => {
@@ -271,8 +395,9 @@ describe("executor-native worktree specs", () => {
       projectPath: repoPath,
       worktreeRoot,
     });
-    expect(workflow.steps.map((step) => step.id)).toEqual(["source-task-gate", "worker", "verifier"]);
+    expect(workflow.steps.map((step) => step.id)).toEqual(["source-task-gate", "worker", "verifier", "task-evidence-check"]);
     expect(stepById(workflow, "worker").dependsOn).toEqual(["source-task-gate"]);
+    expect(stepById(workflow, "task-evidence-check").dependsOn).toEqual(["verifier"]);
     for (const step of workflow.steps) {
       const command = step.target.type === "command" ? commandOf(step) : "";
       expect(command).not.toContain("git worktree add");
@@ -317,7 +442,7 @@ describe("executor-native worktree specs", () => {
       expect(spec).toEqual(specs[0]);
       expect(spec?.enabled).toBe(true);
     }
-    for (const id of ["source-task-gate", "triage-gate", "planner-gate", "pr-handoff"]) {
+    for (const id of ["source-task-gate", "triage-gate", "planner-gate", "pr-handoff", "task-evidence-check"]) {
       const step = stepById(workflow, id);
       expect(step.target.type).toBe("command");
       expect(step.target.type === "command" ? step.target.cwd : undefined).toBe(repoPath);
@@ -340,7 +465,8 @@ describe("gate steps", () => {
       expect(gate.blockedExitCodes).toEqual([12]);
     }
     for (const step of steps.filter((entry) => !entry.id.endsWith("-gate"))) {
-      expect(step.blockedExitCodes).toBeUndefined();
+      if (step.id === "task-evidence-check") expect(step.blockedExitCodes).toEqual([]);
+      else expect(step.blockedExitCodes).toBeUndefined();
     }
   });
 
@@ -351,6 +477,24 @@ describe("gate steps", () => {
     expect(command).toContain('const goMarker = "openloops:triage=go task=task-1200";');
     expect(command).toContain('const blockedMarker = "openloops:triage=blocked task=task-1200";');
     expect(command).toContain("bun - <<'BUN'");
+  });
+
+  test("task evidence check requires completed task plus worker and verifier markers", () => {
+    const workflow = renderTaskLifecycleWorkflow({
+      taskId: "task-1200",
+      projectPath: repoPath,
+      worktreeRoot,
+      eventId: "evt-9",
+    });
+    const step = stepById(workflow, "task-evidence-check") as WorkflowStepInput & { blockedExitCodes?: number[] };
+    const command = commandOf(step);
+    expect(step.dependsOn).toEqual(["verifier"]);
+    expect(step.blockedExitCodes).toEqual([]);
+    expect(command).toContain("completedStatuses = new Set(['completed', 'done'])");
+    expect(command).toContain("WORKER_MARKER='openloops:worker=evidence task=task-1200 event=evt-9'");
+    expect(command).toContain("VERIFIER_MARKER='openloops:verifier=evidence task=task-1200 event=evt-9'");
+    expect(command).toContain("missing worker evidence marker");
+    expect(command).toContain("process.exit(1);");
   });
 
   test("pr-handoff step is env-driven and bounded", () => {
@@ -398,11 +542,49 @@ describe("permission and break-glass fail-closed rendering", () => {
       taskId: "t",
       projectPath: plainPath,
       sandbox: "danger-full-access",
+      allowTools: "functions.exec_command",
+      allowCommands: "git,bun",
       manualBreakGlass: "true",
+      safetyReason: "operator-approved isolated emergency repair",
     });
     const target = agentTargetOf(stepById(workflow, "worker"));
     expect(target.sandbox).toBe("danger-full-access");
-    expect(target.allowlist).toEqual({ enforcement: "metadata_only", commands: ["manual-break-glass"] });
+    expect(target.manualBreakGlass).toBe(true);
+    expect(target.allowlist).toEqual({
+      enforcement: "metadata_only",
+      tools: ["functions.exec_command"],
+      commands: ["git", "bun", "manual-break-glass"],
+      safetyReason: "operator-approved isolated emergency repair",
+    });
+  });
+
+  test("builtin allowlist variables require a safety reason and reach every generated agent target", () => {
+    expect(() =>
+      renderLoopTemplate(TODOS_TASK_WORKER_VERIFIER_TEMPLATE_ID, {
+        taskId: "t",
+        projectPath: plainPath,
+        allowTools: "functions.exec_command",
+      }),
+    ).toThrow("allowlist.safetyReason");
+
+    const workflow = renderLoopTemplate(TODOS_TASK_WORKER_VERIFIER_TEMPLATE_ID, {
+      taskId: "t",
+      projectPath: plainPath,
+      allowTools: "functions.exec_command,functions.view_image",
+      allowCommands: "git,bun",
+      safetyReason: "bounded repository inspection and verification",
+    });
+    for (const step of agentSteps(workflow)) {
+      const target = agentTargetOf(step);
+      expect(target.manualBreakGlass).toBeUndefined();
+      expect(target.sandbox).toBe("workspace-write");
+      expect(target.allowlist).toEqual({
+        enforcement: "metadata_only",
+        tools: ["functions.exec_command", "functions.view_image"],
+        commands: ["git", "bun"],
+        safetyReason: "bounded repository inspection and verification",
+      });
+    }
   });
 
   test("codewith/codex default to workspace-write sandbox with bypass permission mode", () => {
@@ -411,6 +593,21 @@ describe("permission and break-glass fail-closed rendering", () => {
     expect(target.sandbox).toBe("workspace-write");
     expect(target.permissionMode).toBe("bypass");
     expect(target.configIsolation).toBe("safe");
+  });
+
+  test("native providers default generated workflows to provider-managed permissions", () => {
+    const inputs = [
+      { provider: "claude" },
+      { provider: "cursor" },
+      { provider: "aicopilot" },
+      { provider: "opencode", model: "openrouter/test/model" },
+    ] as const;
+    for (const input of inputs) {
+      const workflow = renderTodosTaskWorkerVerifierWorkflow({ taskId: "t", projectPath: plainPath, ...input });
+      const target = agentTargetOf(stepById(workflow, "worker"));
+      expect(target.permissionMode).toBe("default");
+      expect(target.manualBreakGlass).toBeUndefined();
+    }
   });
 
   test("native auth profiles are rejected for non-codewith providers", () => {
@@ -641,6 +838,10 @@ describe("pr-handoff no-artifact / direct-PR path", () => {
     expect(command).not.toMatch(/^\s*exit\b/m);
     // No-artifact branch detects the worker-opened PR by head branch...
     expect(command).toContain("'pr', 'list', '--head', branch, '--state', 'open'");
+    // GitHub-dependent handoff work must preflight git network before push/PR operations.
+    expect(command).toContain("'ls-remote', '--heads'");
+    expect(command).toContain("github preflight failed before push/PR");
+    expect(command).toContain("github preflight failed before PR lookup");
     // ...and records the same done marker the artifact path records.
     expect(command).toContain("openloops:pr-handoff=done task=${taskId} pr=${pr.url}");
     // Artifact (codewith-style) path is preserved unchanged.
@@ -758,6 +959,213 @@ describe("pr-handoff no-artifact / direct-PR path", () => {
       expect(result.status).toBe(0);
       const captured = existsSync(cap) ? readFileSync(cap, "utf8") : "";
       expect(captured).not.toContain("openloops:pr-handoff=done");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+      rmSync(bin, { recursive: true, force: true });
+      rmSync(wt, { recursive: true, force: true });
+    }
+  });
+
+  test("no-artifact path queues bounded handoff when GitHub preflight fails before PR lookup", () => {
+    const home = mkdtempSync(join(tmpdir(), "loops-prh-home-"));
+    const bin = mkdtempSync(join(tmpdir(), "loops-prh-bin-"));
+    const wt = mkdtempSync(join(tmpdir(), "loops-prh-wt-"));
+    try {
+      writeFileSync(join(home, ".bash_logout"), "false\n");
+      const git = join(bin, "git");
+      writeFileSync(
+        git,
+        [
+          "#!/usr/bin/env bash",
+          "args=\"$*\"",
+          "if [[ \"$args\" == *\" rev-parse HEAD\"* ]]; then printf '%s\\n' abc123; exit 0; fi",
+          "if [[ \"$args\" == *\" remote get-url origin\"* ]]; then printf '%s\\n' https://token:secret@github.com/acme/repo.git; exit 0; fi",
+          "if [[ \"$args\" == *\" ls-remote --heads origin feat/direct-pr\"* ]]; then printf '%s\\n' 'fatal: unable to access https://token:secret@github.com/acme/repo.git/: Could not resolve host: github.com' >&2; exit 128; fi",
+          "printf 'unexpected git args: %s\\n' \"$*\" >&2",
+          "exit 64",
+        ].join("\n"),
+      );
+      chmodSync(git, 0o755);
+      const gh = join(bin, "gh");
+      writeFileSync(gh, "#!/usr/bin/env bash\nprintf 'gh should not run after failed preflight\\n' >&2\nexit 65\n");
+      chmodSync(gh, 0o755);
+      const cap = join(bin, "todos.cap");
+      const todos = join(bin, "todos");
+      writeFileSync(todos, ["#!/usr/bin/env bash", `printf '%s\\0' "$@" >> ${JSON.stringify(cap)}`, "exit 0"].join("\n"));
+      chmodSync(todos, 0o755);
+
+      const command = prHandoffCommand({
+        artifactPath: join(wt, ".openloops", "pr-handoff", "missing.json"),
+        taskId: "task-network-pr",
+        todosProjectPath: wt,
+        worktreeCwd: wt,
+        worktreeRoot: wt,
+        expectedBranch: "feat/direct-pr",
+      });
+      const env = {
+        HOME: home,
+        PATH: `${dirname(process.execPath)}:/usr/bin:/bin`,
+        OPENLOOPS_PR_HANDOFF_GH_BIN: gh,
+        OPENLOOPS_PR_HANDOFF_TODOS_BIN: todos,
+        OPENLOOPS_PR_HANDOFF_GIT_BIN: git,
+      };
+      const result = spawnSync("bash", ["-lc", command], { env, cwd: wt, encoding: "utf8" });
+      expect(result.status).toBe(0);
+      const captured = existsSync(cap) ? readFileSync(cap, "utf8") : "";
+      expect(captured).toContain("task\u0000upsert");
+      expect(captured).toContain("openloops:pr-handoff:task-network-pr:feat/direct-pr:abc123");
+      expect(captured).toContain("github preflight failed before PR lookup");
+      expect(captured).toContain("https://github.com/acme/repo.git");
+      expect(captured).not.toContain("token:secret");
+      expect(captured).not.toContain("secret@github.com");
+      expect(captured).toContain("openloops:pr-handoff=pending");
+      expect(result.stderr).not.toContain("gh should not run");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+      rmSync(bin, { recursive: true, force: true });
+      rmSync(wt, { recursive: true, force: true });
+    }
+  });
+
+  test("artifact path queues bounded handoff when GitHub preflight fails before push", () => {
+    const home = mkdtempSync(join(tmpdir(), "loops-prh-home-"));
+    const bin = mkdtempSync(join(tmpdir(), "loops-prh-bin-"));
+    const wt = mkdtempSync(join(tmpdir(), "loops-prh-wt-"));
+    try {
+      writeFileSync(join(home, ".bash_logout"), "false\n");
+      const artifactPath = join(wt, ".openloops", "pr-handoff", "task-artifact-pr.json");
+      mkdirSync(dirname(artifactPath), { recursive: true });
+      writeFileSync(
+        artifactPath,
+        JSON.stringify({
+          taskId: "task-artifact-pr",
+          worktreePath: wt,
+          branch: "feat/artifact-pr",
+          base: "main",
+          commit: "abc123",
+          remote: "origin",
+          remoteUrl: "https://token:secret@github.com/acme/repo.git",
+          validation: "unit tests passed",
+          error: "fatal: unable to access https://token:secret@github.com/acme/repo.git/: Could not resolve host: github.com",
+        }),
+      );
+      const git = join(bin, "git");
+      writeFileSync(
+        git,
+        [
+          "#!/usr/bin/env bash",
+          "args=\"$*\"",
+          `if [[ "$args" == *" rev-parse --show-toplevel"* ]]; then printf '%s\\n' ${JSON.stringify(wt)}; exit 0; fi`,
+          "if [[ \"$args\" == *\" branch --show-current\"* ]]; then printf '%s\\n' feat/artifact-pr; exit 0; fi",
+          "if [[ \"$args\" == *\" rev-parse --verify abc123\"* ]]; then printf '%s\\n' abc123; exit 0; fi",
+          "if [[ \"$args\" == *\" merge-base --is-ancestor abc123 HEAD\"* ]]; then exit 0; fi",
+          "if [[ \"$args\" == *\" ls-remote --heads origin main\"* ]]; then printf '%s\\n' 'fatal: unable to access https://token:secret@github.com/acme/repo.git/: Could not resolve host: github.com' >&2; exit 128; fi",
+          "printf 'unexpected git args: %s\\n' \"$*\" >&2",
+          "exit 64",
+        ].join("\n"),
+      );
+      chmodSync(git, 0o755);
+      const gh = join(bin, "gh");
+      writeFileSync(gh, "#!/usr/bin/env bash\nprintf 'gh should not run after failed artifact preflight\\n' >&2\nexit 65\n");
+      chmodSync(gh, 0o755);
+      const cap = join(bin, "todos.cap");
+      const todos = join(bin, "todos");
+      writeFileSync(todos, ["#!/usr/bin/env bash", `printf '%s\\0' "$@" >> ${JSON.stringify(cap)}`, "exit 0"].join("\n"));
+      chmodSync(todos, 0o755);
+
+      const command = prHandoffCommand({
+        artifactPath,
+        taskId: "task-artifact-pr",
+        todosProjectPath: wt,
+        worktreeCwd: wt,
+        worktreeRoot: wt,
+        expectedBranch: "feat/artifact-pr",
+      });
+      const env = {
+        HOME: home,
+        PATH: `${dirname(process.execPath)}:/usr/bin:/bin`,
+        OPENLOOPS_PR_HANDOFF_GH_BIN: gh,
+        OPENLOOPS_PR_HANDOFF_TODOS_BIN: todos,
+        OPENLOOPS_PR_HANDOFF_GIT_BIN: git,
+      };
+      const result = spawnSync("bash", ["-lc", command], { env, cwd: wt, encoding: "utf8" });
+      expect(result.status).toBe(0);
+      const captured = existsSync(cap) ? readFileSync(cap, "utf8") : "";
+      expect(captured).toContain("task\u0000upsert");
+      expect(captured).toContain("openloops:pr-handoff:task-artifact-pr:feat/artifact-pr:abc123");
+      expect(captured).toContain("github preflight failed before push/PR");
+      expect(captured).toContain("https://github.com/acme/repo.git");
+      expect(captured).not.toContain("token:secret");
+      expect(captured).not.toContain("secret@github.com");
+      expect(captured).toContain("openloops:pr-handoff=pending");
+      expect(result.stderr).not.toContain("gh should not run");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+      rmSync(bin, { recursive: true, force: true });
+      rmSync(wt, { recursive: true, force: true });
+    }
+  });
+
+  test("no-artifact path does not mark pending when the bounded handoff task upsert fails", () => {
+    const home = mkdtempSync(join(tmpdir(), "loops-prh-home-"));
+    const bin = mkdtempSync(join(tmpdir(), "loops-prh-bin-"));
+    const wt = mkdtempSync(join(tmpdir(), "loops-prh-wt-"));
+    try {
+      writeFileSync(join(home, ".bash_logout"), "false\n");
+      const git = join(bin, "git");
+      writeFileSync(
+        git,
+        [
+          "#!/usr/bin/env bash",
+          "args=\"$*\"",
+          "if [[ \"$args\" == *\" rev-parse HEAD\"* ]]; then printf '%s\\n' def456; exit 0; fi",
+          "if [[ \"$args\" == *\" remote get-url origin\"* ]]; then printf '%s\\n' https://github.com/acme/repo.git; exit 0; fi",
+          "if [[ \"$args\" == *\" ls-remote --heads origin feat/direct-pr\"* ]]; then printf '%s\\n' 'fatal: unable to access https://github.com/acme/repo.git/: Could not resolve host: github.com' >&2; exit 128; fi",
+          "printf 'unexpected git args: %s\\n' \"$*\" >&2",
+          "exit 64",
+        ].join("\n"),
+      );
+      chmodSync(git, 0o755);
+      const gh = join(bin, "gh");
+      writeFileSync(gh, "#!/usr/bin/env bash\nprintf 'gh should not run after failed preflight\\n' >&2\nexit 65\n");
+      chmodSync(gh, 0o755);
+      const cap = join(bin, "todos.cap");
+      const todos = join(bin, "todos");
+      writeFileSync(
+        todos,
+        [
+          "#!/usr/bin/env bash",
+          `printf '%s\\0' "$@" >> ${JSON.stringify(cap)}`,
+          "if [[ \"$*\" == *\" task upsert \"* ]]; then printf 'upsert failed\\n' >&2; exit 47; fi",
+          "exit 0",
+        ].join("\n"),
+      );
+      chmodSync(todos, 0o755);
+
+      const command = prHandoffCommand({
+        artifactPath: join(wt, ".openloops", "pr-handoff", "missing.json"),
+        taskId: "task-upsert-fails",
+        todosProjectPath: wt,
+        worktreeCwd: wt,
+        worktreeRoot: wt,
+        expectedBranch: "feat/direct-pr",
+      });
+      const env = {
+        HOME: home,
+        PATH: `${dirname(process.execPath)}:/usr/bin:/bin`,
+        OPENLOOPS_PR_HANDOFF_GH_BIN: gh,
+        OPENLOOPS_PR_HANDOFF_TODOS_BIN: todos,
+        OPENLOOPS_PR_HANDOFF_GIT_BIN: git,
+      };
+      const result = spawnSync("bash", ["-lc", command], { env, cwd: wt, encoding: "utf8" });
+      expect(result.status).toBe(0);
+      expect(result.stderr).toContain("todos task upsert failed");
+      const captured = existsSync(cap) ? readFileSync(cap, "utf8") : "";
+      expect(captured).toContain("task\u0000upsert");
+      expect(captured).toContain("openloops:pr-handoff=failed");
+      expect(captured).toContain("reason=todos-upsert-failed");
+      expect(captured).not.toContain("openloops:pr-handoff=pending");
+      expect(result.stderr).not.toContain("gh should not run");
     } finally {
       rmSync(home, { recursive: true, force: true });
       rmSync(bin, { recursive: true, force: true });

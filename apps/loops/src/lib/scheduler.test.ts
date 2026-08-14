@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { ExecutorResult, Loop, LoopRun } from "../types.js";
+import { planLoopAdvancement } from "./advancement.js";
+import { RunFinalizationConflictError } from "./errors.js";
 import { buildHealthReport } from "./health.js";
 import {
   advanceLoop,
@@ -177,6 +179,47 @@ describe("scheduler", () => {
     }
   });
 
+  test("anchors local retry timing to the persisted receipt time, not executor finishedAt", async () => {
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop(
+        {
+          name: "local-receipt-time-retry",
+          schedule: { type: "interval", everyMs: 60_000 },
+          target: { type: "command", command: "false" },
+          maxAttempts: 2,
+          retryDelayMs: 1_000,
+        },
+        new Date("2026-01-01T00:00:00.000Z"),
+      );
+      store.updateLoop(loop.id, { nextRunAt: "2026-01-01T00:00:00.000Z" });
+
+      let clockReads = 0;
+      await tick({
+        store,
+        runnerId: "local-receipt-runner",
+        now: () => {
+          clockReads += 1;
+          return new Date(clockReads < 3
+            ? "2026-01-01T00:00:01.000Z"
+            : "2026-01-01T00:00:10.000Z");
+        },
+        random: noJitter,
+        execute: async () => result("failed", "2026-01-01T00:00:02.000Z"),
+      });
+
+      const failed = store.listRuns({ loopId: loop.id })[0]!;
+      expect(failed.finishedAt).toBe("2026-01-01T00:00:02.000Z");
+      expect(failed.updatedAt).toBe("2026-01-01T00:00:10.000Z");
+      expect(store.getLoop(loop.id)).toMatchObject({
+        retryScheduledFor: failed.scheduledFor,
+        nextRunAt: "2026-01-01T00:00:11.000Z",
+      });
+    } finally {
+      store.close();
+    }
+  });
+
   test("advances interval loops after abandoned run recovery", async () => {
     const store = new Store(":memory:");
     try {
@@ -200,6 +243,87 @@ describe("scheduler", () => {
       expect(out.recovered).toHaveLength(1);
       expect(store.getLoop(loop.id)?.nextRunAt).not.toBe(firstSlot);
       expect(store.getRunBySlot(loop.id, firstSlot)?.status).toBe("abandoned");
+    } finally {
+      store.close();
+    }
+  });
+
+  test("same-runner reclaim fences stale scheduler execution by exact claim token", async () => {
+    const store = new Store(":memory:");
+    try {
+      const claimedAt = new Date("2026-01-01T00:00:00.000Z");
+      const loop = store.createLoop({
+        name: "scheduler-same-runner-reclaim",
+        schedule: { type: "once", at: claimedAt.toISOString() },
+        target: { type: "command", command: "true" },
+        leaseMs: 10,
+      }, claimedAt);
+      const first = store.claimRun(loop, claimedAt.toISOString(), "same-runner", claimedAt);
+      const second = store.claimRun(loop, claimedAt.toISOString(), "same-runner", new Date("2026-01-01T00:00:00.020Z"));
+      expect(first?.claimToken).toBeString();
+      expect(second?.claimToken).toBeString();
+      expect(second?.claimToken).not.toBe(first?.claimToken);
+
+      await expect(executeClaimedRun({
+        store,
+        runnerId: "same-runner",
+        claimToken: first!.claimToken,
+        loop: first!.loop,
+        run: first!.run,
+        now: () => new Date("2026-01-01T00:00:00.021Z"),
+        execute: async () => result("succeeded", "2026-01-01T00:00:00.021Z"),
+      })).rejects.toBeInstanceOf(RunFinalizationConflictError);
+      expect(store.getRun(second!.run.id)).toMatchObject({ status: "running", startedAt: second!.run.startedAt });
+
+      expect(await executeClaimedRun({
+        store,
+        runnerId: "same-runner",
+        claimToken: second!.claimToken,
+        loop: second!.loop,
+        run: second!.run,
+        now: () => new Date("2026-01-01T00:00:00.022Z"),
+        execute: async () => result("succeeded", "2026-01-01T00:00:00.022Z"),
+      })).toMatchObject({ status: "succeeded" });
+    } finally {
+      store.close();
+    }
+  });
+
+  test("executeClaimedRun persists injected exit 75 as skipped only for overlap-skip loops", async () => {
+    const store = new Store(":memory:");
+    try {
+      const now = new Date("2026-01-01T00:00:00.000Z");
+      const loop = store.createLoop({
+        name: "scheduler-configured-skip",
+        schedule: { type: "interval", everyMs: 60_000 },
+        target: { type: "command", command: "exit 75", shell: true },
+        overlap: "skip",
+        maxAttempts: 3,
+      }, now);
+      const claim = store.claimRun(loop, loop.nextRunAt!, "scheduler-skip", new Date(loop.nextRunAt!));
+      expect(claim).toBeTruthy();
+
+      const finalized = await executeClaimedRun({
+        store,
+        runnerId: "scheduler-skip",
+        claimToken: claim!.claimToken,
+        loop: claim!.loop,
+        run: claim!.run,
+        now: () => new Date("2026-01-01T00:01:01.000Z"),
+        execute: async () => ({
+          status: "failed",
+          exitCode: 75,
+          stdout: "",
+          stderr: "configured decline",
+          error: "process exited with code 75",
+          startedAt: "2026-01-01T00:01:00.000Z",
+          finishedAt: "2026-01-01T00:01:01.000Z",
+          durationMs: 1_000,
+        }),
+      });
+
+      expect(finalized).toMatchObject({ status: "skipped", exitCode: 75 });
+      expect(consecutiveFailureCount(store, loop.id, loop.maxAttempts)).toBe(0);
     } finally {
       store.close();
     }
@@ -360,6 +484,48 @@ describe("scheduler", () => {
     }
   });
 
+  test("catch_up all honors a retry budget raised while the first slot is running", async () => {
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop(
+        {
+          name: "catch-up-live-retry-budget",
+          schedule: { type: "interval", everyMs: 1_000 },
+          target: { type: "command", command: "true" },
+          catchUp: "all",
+          catchUpLimit: 10,
+          maxAttempts: 1,
+          retryDelayMs: 5_000,
+        },
+        new Date("2026-01-01T00:00:00Z"),
+      );
+      const firstSlot = loop.nextRunAt!;
+      let raisedBudget = false;
+
+      const out = await tick({
+        store,
+        runnerId: "test",
+        now: () => new Date("2026-01-01T00:00:05Z"),
+        random: noJitter,
+        beforeFinalize: () => {
+          if (raisedBudget) return;
+          store.updateLoop(loop.id, { maxAttempts: 2 });
+          raisedBudget = true;
+        },
+        execute: async () => result("failed", "2026-01-01T00:00:05.000Z"),
+      });
+
+      expect(out.completed).toHaveLength(1);
+      expect(store.listRuns({ loopId: loop.id })).toHaveLength(1);
+      const updated = store.getLoop(loop.id);
+      expect(updated?.maxAttempts).toBe(2);
+      expect(updated?.retryScheduledFor).toBe(firstSlot);
+      expect(updated?.nextRunAt).toBe("2026-01-01T00:00:10.000Z");
+    } finally {
+      store.close();
+    }
+  });
+
   test("preserves retry intent for recovered abandoned runs before advancing later recovered slots", async () => {
     const store = new Store(":memory:");
     try {
@@ -392,7 +558,11 @@ describe("scheduler", () => {
           stderr: "",
           error: "first failed",
         },
-        { claimedBy: "runner", now: new Date("2026-01-01T00:00:02.100Z") },
+        {
+          claimedBy: "runner",
+          claimToken: secondAttemptOne!.claimToken,
+          now: new Date("2026-01-01T00:00:02.100Z"),
+        },
       );
       expect(store.claimRun(loop, secondSlot, "runner", new Date("2026-01-01T00:00:02.200Z"))?.run.attempt).toBe(2);
 
@@ -459,7 +629,7 @@ describe("scheduler", () => {
       expect(store.getRunBySlot(loop.id, firstSlot)?.status).toBe("succeeded");
       expect(store.getRunBySlot(loop.id, firstSlot)?.attempt).toBe(2);
       expect(store.getLoop(loop.id)?.retryScheduledFor).toBe(secondSlot);
-      expect(store.getLoop(loop.id)?.nextRunAt).toBe("2026-01-01T00:00:20.000Z");
+      expect(store.getLoop(loop.id)?.nextRunAt).toBe("2026-01-01T00:00:15.000Z");
 
       await tick({
         store,
@@ -522,8 +692,10 @@ describe("scheduler", () => {
       const manual = await executeClaimedRun({
         store,
         runnerId: "manual",
+        claimToken: claim!.claimToken,
         loop: claim!.loop,
         run: claim!.run,
+        now: () => now,
         execute: async () => result("succeeded", "2026-01-02T00:00:00.000Z"),
       });
       expect(manual.status).toBe("succeeded");
@@ -563,10 +735,12 @@ describe("scheduler", () => {
     }
   });
 
-  test("rate-limit and auth failures back off harder and everything caps at six hours", () => {
+  test("provider-gated failures back off harder and everything caps at six hours", () => {
     const loop = loopFixture({ retryDelayMs: 1_000 });
     expect(retryBackoffDelayMs(loop, runFixture({ error: "429 too many requests" }), noJitter)).toBe(4_000);
     expect(retryBackoffDelayMs(loop, runFixture({ error: "invalid token" }), noJitter)).toBe(4_000);
+    expect(retryBackoffDelayMs(loop, runFixture({ stderr: "Connection lost to https://agentn.global.api5.cursor.sh attempts 1-3\nRetriableError: [resource_exhausted] Error" }), noJitter)).toBe(4_000);
+    expect(retryBackoffDelayMs(loop, runFixture({ stderr: "Error: [unavailable] getaddrinfo EAI_AGAIN api2.cursor.sh" }), noJitter)).toBe(4_000);
     expect(retryBackoffDelayMs(loop, runFixture({ error: "boom" }), noJitter)).toBe(1_000);
     const slow = loopFixture({ retryDelayMs: 3_600_000 });
     expect(retryBackoffDelayMs(slow, runFixture({ attempt: 10, error: "429 too many requests" }), noJitter)).toBe(MAX_RETRY_DELAY_MS);
@@ -607,6 +781,53 @@ describe("scheduler", () => {
     } finally {
       store.close();
     }
+  });
+
+  test("a stale earlier-attempt replay anchors the reused run row to the latest persisted receipt", () => {
+    const scheduledFor = "2026-01-01T00:00:00.000Z";
+    const current = loopFixture({
+      schedule: { type: "interval", everyMs: 60_000 },
+      maxAttempts: 3,
+      nextRunAt: "2026-01-01T00:00:11.000Z",
+      retryScheduledFor: scheduledFor,
+    });
+    const staleAttempt = runFixture({
+      id: "same-run-row",
+      scheduledFor,
+      attempt: 1,
+      startedAt: "2026-01-01T00:00:01.000Z",
+      updatedAt: "2026-01-01T00:00:10.000Z",
+    });
+    const latestAttempt = runFixture({
+      id: "same-run-row",
+      scheduledFor,
+      attempt: 2,
+      startedAt: "2026-01-01T00:00:11.000Z",
+      updatedAt: "2026-01-01T00:00:20.000Z",
+    });
+    const input = {
+      current,
+      run: staleAttempt,
+      finishedAt: new Date(staleAttempt.updatedAt),
+      succeeded: false,
+      deferredRetry: latestAttempt,
+      retryRandom: 0.5,
+      circuitBreakerThreshold: 0,
+    } as const;
+
+    expect(planLoopAdvancement(input)).toEqual({
+      kind: "update",
+      reason: "deferred_retry",
+      patch: {
+        status: "active",
+        nextRunAt: "2026-01-01T00:00:22.000Z",
+        retryScheduledFor: scheduledFor,
+      },
+    });
+    expect(planLoopAdvancement({
+      ...input,
+      current: { ...current, nextRunAt: "2026-01-01T00:00:22.000Z" },
+    })).toEqual({ kind: "none", reason: "already_applied" });
   });
 
   test("circuit breaker pauses a loop after consecutive final failures and manual resume clears it", async () => {
@@ -674,6 +895,48 @@ describe("scheduler", () => {
     }
   });
 
+  test("transient Bun signal-exit loader failures stay scheduled and self-heal", async () => {
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop(
+        {
+          name: "signal-exit-drain",
+          schedule: { type: "interval", everyMs: 1_000 },
+          target: { type: "command", command: "nopen" },
+          catchUp: "none",
+          maxAttempts: 1,
+        },
+        new Date("2026-01-01T00:00:00Z"),
+      );
+      const loaderError =
+        "SyntaxError: Missing 'default' export in module /home/hasna/.bun/install/global/node_modules/signal-exit/dist/mjs/index.js";
+      const runTick = async (status: ExecutorResult["status"]): Promise<void> => {
+        await Bun.sleep(2);
+        const due = store.getLoop(loop.id)!.nextRunAt!;
+        await tick({
+          store,
+          runnerId: "test",
+          now: () => new Date(due),
+          random: noJitter,
+          circuitBreakerThreshold: 3,
+          execute: async () => result(status, due, loaderError),
+        });
+      };
+
+      await runTick("failed");
+      await runTick("failed");
+      await runTick("failed");
+      expect(store.getLoop(loop.id)?.status).toBe("active");
+      expect(consecutiveFailureCount(store, loop.id)).toBe(0);
+
+      await runTick("succeeded");
+      expect(store.getLoop(loop.id)?.status).toBe("active");
+      expect(store.listRuns({ loopId: loop.id })[0]?.status).toBe("succeeded");
+    } finally {
+      store.close();
+    }
+  });
+
   test("circuit breaker does not trip while deferred backlog retries are owed", async () => {
     const store = new Store(":memory:");
     try {
@@ -699,6 +962,7 @@ describe("scheduler", () => {
           const final = await executeClaimedRun({
             store,
             runnerId: "test",
+            claimToken: claim.claimToken,
             loop: claim.loop,
             run: claim.run,
             now: () => now,
@@ -807,7 +1071,11 @@ describe("scheduler", () => {
       store.finalizeRun(
         claim!.run.id,
         { status: "succeeded", finishedAt: "2026-01-01T00:00:01.000Z", durationMs: 1_000, stdout: "ok", stderr: "" },
-        { claimedBy: "host:1:lease", now: new Date("2026-01-01T00:00:01Z") },
+        {
+          claimedBy: "host:1:lease",
+          claimToken: claim!.claimToken,
+          now: new Date("2026-01-01T00:00:01Z"),
+        },
       );
       // Wedged: loop still active with nextRunAt pinned to the terminal slot, and
       // a fresh claim on that slot yields nothing.
@@ -847,7 +1115,11 @@ describe("scheduler", () => {
       store.finalizeRun(
         claim!.run.id,
         { status: "succeeded", finishedAt, durationMs: 1_000, stdout: "ok", stderr: "" },
-        { claimedBy: "host:1:lease", now: new Date(finishedAt) },
+        {
+          claimedBy: "host:1:lease",
+          claimToken: claim!.claimToken,
+          now: new Date(finishedAt),
+        },
       );
       expect(store.getLoop(loop.id)?.nextRunAt).toBe(slot);
 

@@ -4,32 +4,57 @@ import type {
   GoalRun,
   Loop,
   LoopRun,
-  WorkflowEvent,
+  RunReceipt,
+  PublicWorkflowEvent,
+  StoredWorkflowEvent,
   WorkflowInvocation,
   WorkflowRun,
   WorkflowSpec,
   WorkflowStepRun,
   WorkflowWorkItem,
 } from "../types.js";
+import { isRedactionPlaceholder, scrubSecrets } from "./redact.js";
+import { publicWorkflowEvent as validatedWorkflowEvent } from "./workflow-events.js";
+import { loopOperationTemplateId, operationTemplateId } from "./operation-contract.js";
 
 const TEXT_OUTPUT_LIMIT = 32 * 1024;
 const SENSITIVE_PAYLOAD_KEYS = new Set(["env", "error", "prompt", "reason", "stderr", "stdout"]);
 
+/**
+ * Replace `value` with a placeholder recording how long it was.
+ *
+ * Idempotent: redacting an already-redacted value returns it unchanged rather
+ * than reporting the placeholder's own length. A control-plane client reads
+ * loops through an API that has already redacted them, then formats them for
+ * display — without this, a 137-character prompt printed as "[redacted 20
+ * chars]" (the length of "[redacted 137 chars]"), which silently destroyed the
+ * only signal an operator had for checking the stored prompt was intact.
+ */
 export function redact(value: string | undefined, visible = 0): string | undefined {
   if (!value) return value;
-  if (value.length <= visible) return value;
-  if (visible <= 0) return `[redacted ${value.length} chars]`;
-  return `${value.slice(0, visible)}... [redacted ${value.length - visible} chars]`;
+  if (isRedactionPlaceholder(value)) return value;
+  const scrubbed = scrubSecrets(value);
+  if (scrubbed.length <= visible) return scrubbed;
+  if (visible <= 0) return `[redacted ${scrubbed.length} chars]`;
+  return `${scrubbed.slice(0, visible)}... [redacted ${scrubbed.length - visible} chars]`;
 }
 
 function truncateTextOutput(value: string): string {
-  if (value.length <= TEXT_OUTPUT_LIMIT) return value;
-  return `${value.slice(0, TEXT_OUTPUT_LIMIT)}\n[truncated ${value.length - TEXT_OUTPUT_LIMIT} chars]`;
+  const scrubbed = scrubSecrets(value);
+  if (scrubbed.length <= TEXT_OUTPUT_LIMIT) return scrubbed;
+  return `${scrubbed.slice(0, TEXT_OUTPUT_LIMIT)}\n[truncated ${scrubbed.length - TEXT_OUTPUT_LIMIT} chars]`;
+}
+
+function scrubOptional(value: string | undefined): string | undefined {
+  return value === undefined ? undefined : scrubSecrets(value);
 }
 
 function redactSensitivePayload(value: unknown, key?: string): unknown {
+  if (typeof value === "string") {
+    const scrubbed = scrubSecrets(value);
+    return key && SENSITIVE_PAYLOAD_KEYS.has(key) ? redact(scrubbed) : scrubbed;
+  }
   if (key && SENSITIVE_PAYLOAD_KEYS.has(key)) {
-    if (typeof value === "string") return redact(value);
     if (value === undefined || value === null) return value;
     return "[redacted]";
   }
@@ -38,6 +63,83 @@ function redactSensitivePayload(value: unknown, key?: string): unknown {
     return Object.fromEntries(Object.entries(value).map(([entryKey, entryValue]) => [entryKey, redactSensitivePayload(entryValue, entryKey)]));
   }
   return value;
+}
+
+function existingOperationTemplateId(target: unknown): string | undefined {
+  if (!target || typeof target !== "object") return undefined;
+  const value = (target as Record<string, unknown>).operationTemplateId;
+  return typeof value === "string" && value.startsWith("op-template:sha256:") ? value : undefined;
+}
+
+function safeCommandName(command: string): string {
+  const normalized = command.replaceAll("\\", "/");
+  return normalized.slice(normalized.lastIndexOf("/") + 1) || "command";
+}
+
+function publicTarget(
+  target: Loop["target"],
+  operationTemplateId: string,
+): Record<string, unknown> {
+  const stableTemplateId = existingOperationTemplateId(target) ?? operationTemplateId;
+  if (target.type === "command") {
+    return {
+      type: "command",
+      command: target.shell ? "shell" : safeCommandName(target.command),
+      shell: target.shell,
+      timeoutMs: target.timeoutMs,
+      idleTimeoutMs: target.idleTimeoutMs,
+      preflight: target.preflight,
+      operationTemplateId: stableTemplateId,
+    };
+  }
+  if (target.type === "workflow") {
+    return {
+      type: "workflow",
+      workflowId: target.workflowId,
+      timeoutMs: target.timeoutMs,
+      preflight: target.preflight,
+      operationTemplateId: stableTemplateId,
+    };
+  }
+  return {
+    type: "agent",
+    provider: target.provider,
+    model: target.model,
+    variant: target.variant,
+    timeoutMs: target.timeoutMs,
+    idleTimeoutMs: target.idleTimeoutMs,
+    configIsolation: target.configIsolation,
+    permissionMode: target.permissionMode,
+    sandbox: target.sandbox,
+    manualBreakGlass: target.manualBreakGlass,
+    allowlist: target.allowlist
+      ? {
+          tools: target.allowlist.tools,
+          commands: target.allowlist.commands,
+          enforcement: target.allowlist.enforcement,
+        }
+      : undefined,
+    worktree: target.worktree
+      ? {
+          mode: target.worktree.mode,
+          enabled: target.worktree.enabled,
+          reason: target.worktree.reason,
+        }
+      : undefined,
+    routing: target.routing?.role ? { role: target.routing.role } : undefined,
+    preflight: target.preflight,
+    operationTemplateId: stableTemplateId,
+  };
+}
+
+function publicOperationReference(
+  target: Loop["target"],
+  stableTemplateId: string,
+): Record<string, unknown> {
+  return {
+    type: target.type,
+    operationTemplateId: existingOperationTemplateId(target) ?? stableTemplateId,
+  };
 }
 
 export function textOutputBlocks(
@@ -61,74 +163,164 @@ export function textOutputBlocks(
 }
 
 export function publicLoop(loop: Loop): Record<string, unknown> {
-  const target =
-    loop.target.type === "command"
-      ? { ...loop.target, env: loop.target.env ? "[redacted]" : undefined }
-      : loop.target.type === "agent"
-        ? { ...loop.target, prompt: redact(loop.target.prompt) }
-        : loop.target;
+  const {
+    target: _target,
+    goal: _goal,
+    machine: _machine,
+    ...safe
+  } = loop;
   return {
-    ...loop,
-    target,
+    ...safe,
+    target: publicTarget(loop.target, loopOperationTemplateId(loop)),
+    machine: loop.machine
+      ? {
+          id: loop.machine.id,
+          route: loop.machine.route,
+          local: loop.machine.local,
+          confidence: loop.machine.confidence,
+          packageVersion: loop.machine.packageVersion,
+          warnings: loop.machine.warnings,
+        }
+      : undefined,
   };
 }
 
 export function publicRun(run: LoopRun, showOutput = false, opts: { redactError?: boolean } = {}): Record<string, unknown> {
   return {
     ...run,
-    stdout: showOutput ? run.stdout : run.stdout ? `[redacted ${run.stdout.length} chars]` : undefined,
-    stderr: showOutput ? run.stderr : run.stderr ? `[redacted ${run.stderr.length} chars]` : undefined,
-    error: opts.redactError ? redact(run.error) : run.error,
+    stdout: showOutput ? scrubOptional(run.stdout) : run.stdout ? `[redacted ${run.stdout.length} chars]` : undefined,
+    stderr: showOutput ? scrubOptional(run.stderr) : run.stderr ? `[redacted ${run.stderr.length} chars]` : undefined,
+    error: opts.redactError ? redact(run.error) : scrubOptional(run.error),
+  };
+}
+
+export function publicRunReceipt(receipt: RunReceipt): Record<string, unknown> {
+  return {
+    loop_id: receipt.loop_id,
+    run_id: receipt.run_id,
+    repo: receipt.repo,
+    task_ids: receipt.task_ids,
+    knowledge_ids: receipt.knowledge_ids,
+    digest_id: receipt.digest_id,
+    started_at: receipt.started_at,
+    finished_at: receipt.finished_at,
+    status: receipt.status,
+    exit_code: receipt.exit_code,
+    summary: {
+      stdout_bytes: receipt.summary.stdout_bytes,
+      stderr_bytes: receipt.summary.stderr_bytes,
+      duration_ms: receipt.summary.duration_ms,
+    },
+    result_ref: receipt.digest_id,
+    created_at: receipt.created_at,
+    updated_at: receipt.updated_at,
   };
 }
 
 export function publicExecutorResult(result: ExecutorResult, showOutput = false): Record<string, unknown> {
   return {
     ...result,
-    stdout: showOutput ? result.stdout : result.stdout ? `[redacted ${result.stdout.length} chars]` : undefined,
-    stderr: showOutput ? result.stderr : result.stderr ? `[redacted ${result.stderr.length} chars]` : undefined,
+    stdout: showOutput ? scrubOptional(result.stdout) : result.stdout ? `[redacted ${result.stdout.length} chars]` : undefined,
+    stderr: showOutput ? scrubOptional(result.stderr) : result.stderr ? `[redacted ${result.stderr.length} chars]` : undefined,
     error: redact(result.error),
   };
 }
 
 export function publicWorkflow(workflow: WorkflowSpec): Record<string, unknown> {
   return {
-    ...workflow,
+    id: workflow.id,
+    name: workflow.name,
+    description: workflow.description,
+    version: workflow.version,
+    status: workflow.status,
     steps: workflow.steps.map((step) => ({
-      ...step,
-      target:
-        step.target.type === "agent"
-          ? { ...step.target, prompt: redact(step.target.prompt) }
-          : step.target.type === "command" && step.target.env
-            ? { ...step.target, env: "[redacted]" }
-            : step.target,
+      id: step.id,
+      name: step.name,
+      description: step.description,
+      dependsOn: step.dependsOn,
+      continueOnFailure: step.continueOnFailure,
+      timeoutMs: step.timeoutMs,
+      target: publicOperationReference(step.target, operationTemplateId(workflow, step)),
     })),
+    createdAt: workflow.createdAt,
+    updatedAt: workflow.updatedAt,
   };
 }
 
 export function publicWorkflowRun(run: WorkflowRun): Record<string, unknown> {
-  return { ...run, error: redact(run.error) };
+  const { manifestPath: _manifestPath, idempotencyKey: _idempotencyKey, ...safe } = run;
+  return { ...safe, error: redact(run.error) };
 }
 
 export function publicWorkflowInvocation(invocation: WorkflowInvocation): Record<string, unknown> {
-  return redactSensitivePayload(invocation) as Record<string, unknown>;
+  const publicRef = (ref: WorkflowInvocation["sourceRef"]) => ({
+    kind: ref.kind,
+    id: ref.id,
+    dedupeKey: ref.dedupeKey,
+  });
+  return {
+    id: invocation.id,
+    workflowId: invocation.workflowId,
+    templateId: invocation.templateId,
+    sourceRef: publicRef(invocation.sourceRef),
+    subjectRef: publicRef(invocation.subjectRef),
+    intent: invocation.intent,
+    scope: invocation.scope
+      ? {
+          projectGroup: invocation.scope.projectGroup,
+          worktreePolicy: invocation.scope.worktreePolicy,
+          permissions: invocation.scope.permissions,
+          concurrencyGroup: invocation.scope.concurrencyGroup,
+        }
+      : undefined,
+    outputPolicy: invocation.outputPolicy,
+    createdAt: invocation.createdAt,
+    updatedAt: invocation.updatedAt,
+  };
 }
 
 export function publicWorkflowWorkItem(item: WorkflowWorkItem): Record<string, unknown> {
-  return { ...item, lastReason: redact(item.lastReason, 240) };
+  return {
+    id: item.id,
+    routeKey: item.routeKey,
+    idempotencyKey: item.idempotencyKey,
+    invocationId: item.invocationId,
+    sourceType: item.sourceType,
+    projectGroup: item.projectGroup,
+    machineId: item.machineId,
+    routeScope: item.routeScope,
+    priority: item.priority,
+    status: item.status,
+    attempts: item.attempts,
+    gateDeaths: item.gateDeaths,
+    nextAttemptAt: item.nextAttemptAt,
+    leaseExpiresAt: item.leaseExpiresAt,
+    workflowId: item.workflowId,
+    loopId: item.loopId,
+    workflowRunId: item.workflowRunId,
+    createdAt: item.createdAt,
+    updatedAt: item.updatedAt,
+  };
 }
 
 export function publicWorkflowStepRun(run: WorkflowStepRun, showOutput = false): Record<string, unknown> {
+  const {
+    accountProfile: _accountProfile,
+    accountTool: _accountTool,
+    ...safe
+  } = run;
   return {
-    ...run,
-    stdout: showOutput ? run.stdout : run.stdout ? `[redacted ${run.stdout.length} chars]` : undefined,
-    stderr: showOutput ? run.stderr : run.stderr ? `[redacted ${run.stderr.length} chars]` : undefined,
+    ...safe,
+    stdout: showOutput ? scrubOptional(run.stdout) : run.stdout ? `[redacted ${run.stdout.length} chars]` : undefined,
+    stderr: showOutput ? scrubOptional(run.stderr) : run.stderr ? `[redacted ${run.stderr.length} chars]` : undefined,
     error: redact(run.error),
   };
 }
 
-export function publicWorkflowEvent(event: WorkflowEvent): Record<string, unknown> {
-  return { ...event, payload: redactSensitivePayload(event.payload) };
+export function publicWorkflowEvent(event: StoredWorkflowEvent | PublicWorkflowEvent): Record<string, unknown> {
+  const validated = validatedWorkflowEvent(event);
+  if ("eventKind" in validated && validated.eventKind === "custom") return { ...validated };
+  return { ...validated, payload: redactSensitivePayload(validated.payload) };
 }
 
 export function publicGoal(goal: Goal): Record<string, unknown> {

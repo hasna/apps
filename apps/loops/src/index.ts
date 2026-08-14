@@ -54,6 +54,7 @@ export type {
   AgentProvider,
   AgentRoutingSpec,
   AgentSandbox,
+  AgentSessionContract,
   AgentTarget,
   AgentTargetBase,
   AgentWorktreeMode,
@@ -67,8 +68,14 @@ export type {
   RuntimePreflightPolicy,
   WorkflowTarget,
   // workflows
+  AgentSessionContractWorkflowEvent,
   CreateWorkflowInput,
+  CustomWorkflowEvent,
+  GenericWorkflowEvent,
+  PublicWorkflowEvent,
   WorkflowEvent,
+  WorkflowEventBase,
+  WorkflowLifecycleEventType,
   WorkflowRun,
   WorkflowRunStatus,
   WorkflowSpec,
@@ -84,12 +91,20 @@ export type {
 // ---------------------------------------------------------------------------
 export { runDoctor } from "./lib/doctor.js";
 export type { DoctorCheck, DoctorReport, DoctorSeverity } from "./lib/doctor.js";
-export { buildHealthReport, classifyRunFailure, expectationForLoop } from "./lib/health.js";
+export { buildHealthReport, buildHealthScan, classifyRunFailure, expectationForLoop, writeHealthScanReports } from "./lib/health.js";
 export type {
+  BuildHealthScanOptions,
+  HealthScanFinding,
+  HealthScanFindingKind,
+  HealthScanFindingSeverity,
+  HealthScanSelfHealAction,
+  HealthScanStatus,
   LoopExpectationResult,
   LoopsHealthReport,
+  LoopsHealthScan,
   RunFailureClassification,
   RunFailureSignal,
+  WriteHealthScanReportsOptions,
 } from "./lib/health.js";
 export { computeNextAfter, initialNextRun, nextCronRun, parseCron, parseDuration } from "./lib/recurrence.js";
 
@@ -191,7 +206,6 @@ export {
   exportLoopsMigrationBundle,
   migrationHash,
   publicMigrationBundle,
-  registerSelfHostedRunner,
   selfHostedControlPlaneSummary,
   validateLoopsMigrationBundle,
 } from "./lib/migration.js";
@@ -246,7 +260,5 @@ export type {
   LoopsMigrationPlanRow,
   LoopsMigrationPlanSummary,
   LoopsMigrationResource,
-  RunnerRegistrationOptions,
-  RunnerRegistrationResult,
   SelfHostedPlanOptions,
 } from "./lib/migration.js";

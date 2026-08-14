@@ -1,7 +1,9 @@
 import type { Command } from "commander";
+import { ValidationError } from "../errors.js";
 import { TODOS_TASK_WORKER_VERIFIER_TEMPLATE_ID } from "../templates.js";
 import { collectValues, listFromRepeatedOpts } from "./parse.js";
-import { defaultLoopsProject } from "./todos-cli.js";
+import { providerActiveCapFromOpts } from "./provider-admission.js";
+import { defaultTodosProject } from "./todos-cli.js";
 import type { TodosDrainOptions } from "./types.js";
 
 /**
@@ -21,7 +23,7 @@ interface RouteOptionSpec {
   /** Camel-case commander opts key. */
   key: string;
   kind: RouteOptionKind;
-  defaultValue?: string | (() => string);
+  defaultValue?: string | (() => string | undefined);
   /** Only meaningful for todos-task routes (template, role accounts, PR gating). */
   todosTaskOnly?: boolean;
   /** Skip when rebuilding argv (e.g. aliases another flag). */
@@ -40,6 +42,9 @@ const EVENT_INPUT_OPTION_SPECS: RouteOptionSpec[] = [
 ];
 
 const DRAIN_FILTER_OPTION_SPECS: RouteOptionSpec[] = [
+  { flags: "--policy <id>", key: "policy", kind: "value", description: "apply a named route policy before draining or scheduling", skipSerialize: true },
+  { flags: "--preset <id>", key: "preset", kind: "value", description: "alias for --policy", skipSerialize: true },
+  { flags: "--route-policy-evidence <id>", key: "routePolicyEvidence", kind: "value", description: "record an already-expanded route policy id for audit evidence" },
   {
     flags: "--todos-projects-from-registry",
     key: "todosProjectsFromRegistry",
@@ -67,6 +72,14 @@ const DRAIN_FILTER_OPTION_SPECS: RouteOptionSpec[] = [
   { flags: "--limit <n>", key: "limit", kind: "value", description: "maximum filtered ready-task candidates to consider", defaultValue: "50" },
   { flags: "--scan-limit <n>", key: "scanLimit", kind: "value", description: "maximum raw todos ready rows to fetch before filters; defaults to 500 when filters are used" },
   { flags: "--max-dispatch <n>", key: "maxDispatch", kind: "value", description: "maximum new workflow loops to create in this drain run", defaultValue: "1" },
+  { flags: "--launch-gate <name>", key: "launchGate", kind: "value", description: "human label for a launch/admission gate checked before draining" },
+  {
+    flags: "--launch-gate-blocker <project::task>",
+    key: "launchGateBlocker",
+    kind: "repeat",
+    description: "skip the whole drain while this todos blocker task is not completed; format <todos-project-path>::<task-id>; may be repeated or comma-separated",
+    serializeValue: (opts) => listFromRepeatedOpts(opts.launchGateBlocker as string[] | undefined),
+  },
   { flags: "--evidence-dir <path>", key: "evidenceDir", kind: "value", description: "write a JSON drain report to this directory" },
   { flags: "--compact", key: "compact", kind: "boolean", description: "print compact JSON to stdout while preserving the full evidence file" },
 ];
@@ -77,7 +90,7 @@ const AGENT_ROUTING_OPTION_SPECS: RouteOptionSpec[] = [
     key: "todosProject",
     kind: "value",
     description: "todos storage project path for generated task commands",
-    defaultValue: () => defaultLoopsProject(),
+    defaultValue: () => defaultTodosProject(),
     todosTaskOnly: true,
   },
   {
@@ -93,7 +106,7 @@ const AGENT_ROUTING_OPTION_SPECS: RouteOptionSpec[] = [
     flags: "--provider-rule <rule>",
     key: "providerRule",
     kind: "repeat",
-    description: "task/event metadata provider routing rule field=value:provider[:profile1,profile2]; may be repeated",
+    description: "task/event metadata provider routing rule field=value:provider[:profile1,profile2]; values may contain ':' when followed by a supported provider",
   },
   { flags: "--auth-profile <profile>", key: "authProfile", kind: "value", description: "provider-native auth profile; currently supported for codewith" },
   { flags: "--auth-profile-pool <profiles>", key: "authProfilePool", kind: "value", description: "comma-separated provider-native auth profile pool" },
@@ -126,8 +139,23 @@ const AGENT_ROUTING_OPTION_SPECS: RouteOptionSpec[] = [
     description: "verifier idle watchdog; use none/off to disable when an external heartbeat exists",
     defaultValue: "15m",
   },
-  { flags: "--permission-mode <mode>", key: "permissionMode", kind: "value", description: "provider permission mode: default, plan, auto, or bypass", defaultValue: "bypass" },
+  { flags: "--permission-mode <mode>", key: "permissionMode", kind: "value", description: "provider permission mode: default, plan, auto, or bypass; defaults to bypass for sandboxed codewith/codex routes and provider-default otherwise" },
   { flags: "--sandbox <mode>", key: "sandbox", kind: "value", description: "provider sandbox" },
+  {
+    flags: "--allow-tool <name>",
+    key: "allowTool",
+    kind: "repeat",
+    description: "advisory provider session tool restriction; may be repeated or comma-separated",
+    serializeValue: (opts) => listFromRepeatedOpts(opts.allowTool as string[] | undefined),
+  },
+  {
+    flags: "--allow-command <name>",
+    key: "allowCommand",
+    kind: "repeat",
+    description: "advisory provider session command restriction; may be repeated or comma-separated",
+    serializeValue: (opts) => listFromRepeatedOpts(opts.allowCommand as string[] | undefined),
+  },
+  { flags: "--safety-reason <reason>", key: "safetyReason", kind: "value", description: "auditable reason required for advisory restrictions or relaxed sandbox access" },
   {
     flags: "--manual-break-glass",
     key: "manualBreakGlass",
@@ -156,13 +184,31 @@ const AGENT_ROUTING_OPTION_SPECS: RouteOptionSpec[] = [
     description: "scope --max-active counting to this route/drain identity (defaults to the LOOPS_LOOP_NAME of the running loop, else the route key) so each drain's --max-active is its own ceiling instead of a store-wide one",
   },
   {
+    flags: "--provider-active-cap <n>",
+    key: "providerActiveCap",
+    kind: "value",
+    description: "skip creating a workflow when provider-native diagnostics report at least this many active background-agent runs",
+  },
+  {
+    flags: "--codewith-active-cap <n>",
+    key: "codewithActiveCap",
+    kind: "value",
+    description: "alias for --provider-active-cap for Codewith background-agent diagnostics",
+  },
+  {
+    flags: "--provider-admission-check",
+    key: "providerAdmissionCheck",
+    kind: "boolean",
+    description: "check provider-native admission diagnostics before creating workflow loops; currently implemented for Codewith",
+  },
+  {
     flags: "--max-per-profile <n>",
     key: "maxPerProfile",
     kind: "value",
     description: "for codewith auth-profile pools, spread dispatch to the least-loaded account and defer when every pool member already has this many running steps (default 2 for pools of 2+; 0 disables the guard)",
   },
   { flags: "--worktree-mode <mode>", key: "worktreeMode", kind: "value", description: "worktree isolation mode: auto, required, off, or main", defaultValue: "auto" },
-  { flags: "--worktree-root <path>", key: "worktreeRoot", kind: "value", description: "base directory for OpenLoops-managed git worktrees" },
+  { flags: "--worktree-root <path>", key: "worktreeRoot", kind: "value", description: "base directory for Loops-managed git worktrees" },
   { flags: "--worktree-branch-prefix <prefix>", key: "worktreeBranchPrefix", kind: "value", description: "branch prefix for generated worktrees", defaultValue: "openloops" },
   {
     flags: "--pr-handoff",
@@ -276,6 +322,12 @@ function serializeOptionSpecs(specs: RouteOptionSpec[], opts: Record<string, unk
  * operator passed to `routes schedule`.
  */
 export function routeDrainArgs(opts: TodosDrainOptions): string[] {
+  providerActiveCapFromOpts(opts);
+  const allowTools = listFromRepeatedOpts(opts.allowTool);
+  const allowCommands = listFromRepeatedOpts(opts.allowCommand);
+  if ((allowTools?.length || allowCommands?.length) && !opts.safetyReason?.trim()) {
+    throw new ValidationError("--safety-reason is required when --allow-tool or --allow-command is used");
+  }
   const args = ["routes", "drain", "todos-task"];
   serializeOptionSpecs(DRAIN_FILTER_OPTION_SPECS, opts as Record<string, unknown>, args);
   serializeOptionSpecs(AGENT_ROUTING_OPTION_SPECS, opts as Record<string, unknown>, args);
