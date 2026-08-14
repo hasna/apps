@@ -134,8 +134,7 @@ function ensureLocalTables(sqlite: SqliteAdapter["raw"]): void {
   `);
 }
 
-export function getDb(dbPath?: string) {
-  const resolvedPath = getBrainsDbPath(dbPath);
+function openDbConnection(resolvedPath: string) {
   ensureDir(resolvedPath);
   const adapter = new SqliteAdapter(resolvedPath);
   secureSqliteArtifacts(resolvedPath);
@@ -151,6 +150,17 @@ export function getDb(dbPath?: string) {
 
   ensureLocalTables(sqlite);
   secureSqliteArtifacts(resolvedPath);
+  return db;
+}
+
+const dbCache = new Map<string, ReturnType<typeof openDbConnection>>();
+
+export function getDb(dbPath?: string) {
+  const resolvedPath = getBrainsDbPath(dbPath);
+  const cached = dbCache.get(resolvedPath);
+  if (cached) return cached;
+  const db = openDbConnection(resolvedPath);
+  dbCache.set(resolvedPath, db);
   return db;
 }
 
