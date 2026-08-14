@@ -36,6 +36,22 @@ const VALID_SKILL: Record<string, string> = {
     tags: ["custom", "release"],
     inputs: [{ name: "args", type: "string[]", required: false }],
     commands: [{ name: "release-notes", entry: "src/index.ts" }],
+    runtime: {
+      runtime: "bun",
+      entrypoint: "src/index.ts",
+      timeout: 900,
+      needs_network: false,
+      env: [],
+      sandbox: "readonly-fs",
+      system_deps: [],
+      artifacts: [],
+    },
+    provenance: {
+      source_commit: "unknown",
+      // Canonical SHA-256 over this exact fixture bundle (see docs/skill-standard.md).
+      // Recompute with computeContentHash when fixture content changes.
+      content_hash: "6054b2d21a0596be95fe91fbcb6cc2ac3cc333767702dca2f475754c8a709f8a",
+    },
   }, null, 2),
   "AGENTS.md": "# Agent Build Instructions\n",
   "package.json": JSON.stringify({ name: "release-notes", version: "2.1.0", type: "module", bin: { "release-notes": "src/index.ts" } }, null, 2),

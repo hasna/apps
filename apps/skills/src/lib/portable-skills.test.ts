@@ -220,7 +220,7 @@ Use this when you need guidance, not a runnable command.
       // skill.json declares the instruction kind and no commands.
       const skillJson = JSON.parse(readFileSync(join(result.path, "skill.json"), "utf8"));
       expect(skillJson.kind).toBe("instruction");
-      expect(skillJson.commands).toBeUndefined();
+      expect(skillJson.commands).toEqual([]);
       expect(result.manifest.kind).toBe("instruction");
       expect(result.manifest.commands).toEqual([]);
     });

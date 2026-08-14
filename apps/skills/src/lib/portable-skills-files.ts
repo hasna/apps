@@ -426,8 +426,10 @@ export function renderSkillJsonObject(manifest: PortableSkillManifest): Record<s
     category: manifest.category ?? "Development Tools",
     tags: manifest.tags ?? ["custom", manifest.name],
     ...(manifest.kind ? { kind: manifest.kind } : {}),
-    // Instruction skills are SKILL.md-primary: no inputs or commands declared.
-    ...(manifest.kind === "instruction" ? {} : { inputs: manifest.inputs, commands: manifest.commands }),
+    // Instruction skills declare no inputs or commands; empty arrays make that
+    // explicit and schema-valid.
+    inputs: manifest.inputs,
+    commands: manifest.commands,
     ...(manifest.runtime ? { runtime: manifest.runtime } : {}),
     ...(manifest.provenance ? { provenance: manifest.provenance } : {}),
   };
