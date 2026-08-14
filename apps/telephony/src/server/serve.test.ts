@@ -426,14 +426,11 @@ describe("server-backed read routing", () => {
   const apiUrlEnv = ["HASNA", "TELEPHONY", "API", "URL"].join("_");
   const apiKeyEnv = ["HASNA", "TELEPHONY", "API", "KEY"].join("_");
 
-  it("serves REST read routes from the Store (server API) — not on-box sqlite — when flipped", async () => {
-    // A machine pointed at server-backed data runs `telephony serve` as a webhook
-    // receiver + dashboard. Its read routes MUST come from the SAME store the
-    // inbound handlers write to; reading on-box sqlite here is the split-brain bug.
-    //
-    // Start from a cleared client-flip env: an operator shell exporting
-    // HASNA_TELEPHONY_STORAGE_MODE must not decide this repo's verdict, and this
-    // case is specifically about the URL+key inference path with no mode set.
+  it("serves REST read routes from the Store (server API) — not on-box sqlite — when the API pair is set", async () => {
+    // A machine pointed at the server's HTTP API runs `telephony serve` as a
+    // webhook receiver + dashboard. Its read routes MUST come from the SAME
+    // store the inbound handlers write to; reading on-box sqlite here is the
+    // split-brain bug.
     clearClientStoreEnv();
     const seenPaths: string[] = [];
     const cloud = Bun.serve({

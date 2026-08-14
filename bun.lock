@@ -1699,7 +1699,7 @@
         "telephony-serve": "dist/server/cloud-entry.js",
       },
       "dependencies": {
-        "@hasna/contracts": "0.8.4",
+        "@hasna/contracts": "0.10.6",
         "@hasna/events": "^0.1.6",
         "@modelcontextprotocol/sdk": "^1.12.1",
         "commander": "^13.1.0",
@@ -4814,7 +4814,7 @@
 
     "@hasna/tai/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
 
-    "@hasna/telephony/@hasna/contracts": ["@hasna/contracts@0.8.4", "", { "dependencies": { "commander": "^13.1.0", "zod": "^3.25.76" }, "bin": { "contracts": "dist/cli/index.js", "contracts-cli": "dist/cli/contracts-cli.js" } }, "sha512-a/flLzdu8cbCUrScNQT3VBMl2HgwbjUYWrmwQ45x19X6F8FPiOf2gbb43MT0vlKTLUPEonh5jSoEPdjp44nAGw=="],
+    "@hasna/telephony/@hasna/contracts": ["@hasna/contracts@0.10.6", "", { "dependencies": { "@hasna/secrets": "^0.2.22", "commander": "^13.1.0", "zod": "^3.25.76", "zod-to-json-schema": "^3.24.6" }, "bin": { "contracts": "dist/cli/index.js", "contracts-cli": "dist/cli/contracts-cli.js" } }, "sha512-lHGwSjCAJof2868o3xAHbWbq8WR675MNQMnRVaRPHvX0LeSLsEWfV5nqE4KjhDJfDRhXhiSo4pmvI03AW4cMnQ=="],
 
     "@hasna/telephony/@hasna/events": ["@hasna/events@0.1.15", "", { "dependencies": { "commander": "^13.1.0" }, "bin": { "events": "dist/cli/index.js", "hasna-events": "dist/cli/index.js" } }, "sha512-q4lVzv4n9a9C2zQDZVe/KXy6ZA+y5HRCOL6sG+xc3adHrVKJz0wW8JococwbldfgQhyYmnOloLSoy+B1MNUVZQ=="],
 

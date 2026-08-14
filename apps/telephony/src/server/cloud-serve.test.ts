@@ -15,8 +15,13 @@ function makeShimClient(): PoolQueryClient {
   const run = (sql: string, params: readonly unknown[] = []): { rows: Record<string, unknown>[]; rowCount: number } => {
     const s = sql.replace(/\s+/g, " ").trim().toLowerCase();
     if (s.startsWith("select 1")) return { rows: [{ "?column?": 1 }], rowCount: 1 };
-    // api_keys revocation lookups: never revoked in this shim.
-    if (s.includes("from api_keys")) return { rows: [], rowCount: 0 };
+    // api_keys lifecycle lookups: every minted key is active in this shim.
+    if (s.includes("from api_keys")) {
+      return {
+        rows: [{ kid: params[0], app: "telephony", scopes: [], token_hash: "x", issued_at: new Date(0).toISOString(), expires_at: null, revoked_at: null }],
+        rowCount: 1,
+      };
+    }
     if (s.startsWith("insert into contacts")) {
       const now = new Date();
       const row = {
@@ -116,19 +121,19 @@ const SIGNING = "test-signing-secret-not-a-real-key";
 function deps(): ServeDeps {
   const client = makeShimClient();
   const store = new ApiKeyStore(client);
-  const verifier = verifyApiKey({ app: "telephony", signingSecret: SIGNING, isRevoked: store.isRevoked });
+  const verifier = verifyApiKey({ app: "telephony", signingSecret: SIGNING, keyStatus: store.keyStatus });
   return { client, verifier, store, version: "9.9.9" };
 }
 
 describe("telephony cloud serve", () => {
-  it("serves public probes with { status, version, mode }", async () => {
+  it("serves public probes with { status, version, backend }", async () => {
     const handler = createServeHandler(deps());
     for (const path of ["/health", "/version"]) {
       const res = await handler(new Request(`http://x${path}`));
       expect(res.status).toBe(200);
-      const body = (await res.json()) as { status: string; version: string; mode: string };
+      const body = (await res.json()) as { status: string; version: string; backend: string };
       expect(body.version).toBe("9.9.9");
-      expect(body.mode).toBe("postgres");
+      expect(body.backend).toBe("postgresql");
       expect(body.status).toBeTruthy();
     }
     const ready = await handler(new Request("http://x/ready"));
@@ -294,7 +299,12 @@ describe("telephony cloud serve", () => {
     const run = (text: string, params: readonly unknown[] = []) => {
       const s = text.replace(/\s+/g, " ").trim().toLowerCase();
       if (s.startsWith("select 1")) return { rows: [{ "?column?": 1 }], rowCount: 1 };
-      if (s.includes("from api_keys")) return { rows: [], rowCount: 0 };
+      if (s.includes("from api_keys")) {
+        return {
+          rows: [{ kid: params[0], app: "telephony", scopes: [], token_hash: "x", issued_at: new Date(0).toISOString(), expires_at: null, revoked_at: null }],
+          rowCount: 1,
+        };
+      }
       if (s.startsWith("select")) sql.push({ text: s, params });
       return { rows: [], rowCount: 0 };
     };
@@ -309,7 +319,7 @@ describe("telephony cloud serve", () => {
       async close() {},
     } as unknown as PoolQueryClient;
     const store = new ApiKeyStore(client);
-    const verifier = verifyApiKey({ app: "telephony", signingSecret: SIGNING, isRevoked: store.isRevoked });
+    const verifier = verifyApiKey({ app: "telephony", signingSecret: SIGNING, keyStatus: store.keyStatus });
     return { deps: { client, verifier, store, version: "9.9.9" }, sql };
   }
 
@@ -413,7 +423,12 @@ describe("telephony cloud serve", () => {
     const run = (text: string, params: readonly unknown[] = []) => {
       const s = text.replace(/\s+/g, " ").trim().toLowerCase();
       if (s.startsWith("select 1")) return { rows: [{ "?column?": 1 }], rowCount: 1 };
-      if (s.includes("from api_keys")) return { rows: [], rowCount: 0 };
+      if (s.includes("from api_keys")) {
+        return {
+          rows: [{ kid: params[0], app: "telephony", scopes: [], token_hash: "x", issued_at: new Date(0).toISOString(), expires_at: null, revoked_at: null }],
+          rowCount: 1,
+        };
+      }
       sql.push({ text: s, params });
       if (s.includes("from agents where lower(name)")) {
         return { rows: existing ? [existing] : [], rowCount: existing ? 1 : 0 };
@@ -453,7 +468,7 @@ describe("telephony cloud serve", () => {
       async close() {},
     } as unknown as PoolQueryClient;
     const store = new ApiKeyStore(client);
-    const verifier = verifyApiKey({ app: "telephony", signingSecret: SIGNING, isRevoked: store.isRevoked });
+    const verifier = verifyApiKey({ app: "telephony", signingSecret: SIGNING, keyStatus: store.keyStatus });
     return { deps: { client, verifier, store, version: "9.9.9" }, sql };
   }
 

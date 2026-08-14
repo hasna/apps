@@ -11,11 +11,12 @@
 //   • ApiStore   — the server's HTTP API at `<API_URL>/v1` with a bearer key.
 //     Delegates to the vendored client-flip HTTP storage client.
 //
-// `getStore()` resolves which transport to use from the client-flip env
-// (HASNA_TELEPHONY_API_URL + HASNA_TELEPHONY_API_KEY / HASNA_TELEPHONY_STORAGE_MODE
-// = sqlite | postgres). Callers NEVER branch on the backend themselves and NEVER
-// touch sqlite or fetch directly — that was the split-brain bug this module
-// eliminates.
+// `getStore()` resolves which transport to use from the API env pair
+// (HASNA_TELEPHONY_API_URL + HASNA_TELEPHONY_API_KEY both set selects the HTTP
+// API; neither set selects on-box SQLite; a partial pair throws; any retired
+// STORAGE_MODE variable throws). Callers NEVER branch on the backend themselves
+// and NEVER touch sqlite or fetch directly — that was the split-brain bug this
+// module eliminates.
 //
 // Who runs the server and what they pay for it is operation, not a storage
 // branch: a user's own server and the hosted SaaS are the SAME client code
@@ -29,9 +30,9 @@
 import {
   HasnaHttpError,
   resolveStorageClient,
-  type Env,
   type HasnaStorageClient,
-} from "../../generated/storage-client/index.js";
+} from "@hasna/contracts";
+import { assertNoLegacyStorageMode } from "../retired-storage-mode.js";
 
 import * as dbAgents from "../../db/agents.js";
 import * as dbProjects from "../../db/projects.js";
@@ -128,9 +129,10 @@ export interface FeedbackInput {
 //
 // `searchAvailableNumbers` and `listTwilioNumbers` are NOT stored data — they
 // are live passthroughs to the Twilio API, which requires real Twilio
-// credentials. Per the self-host architecture the client NEVER holds real
-// provider credentials or calls third-party APIs directly in cloud mode, so
-// ApiStore routes these through the server-side `/v1/numbers/{available,twilio}`
+// credentials. Per the transport architecture the client NEVER holds real
+// provider credentials or calls third-party APIs directly on the HTTP API
+// transport, so ApiStore routes these through the server-side
+// `/v1/numbers/{available,twilio}`
 // proxy (the server holds the Twilio secret). LocalStore — which IS its own
 // server on-box — calls Twilio directly with the machine's local credentials.
 
@@ -210,11 +212,11 @@ export interface TelephonyStore {
   assignPhoneNumber(id: string, agentId?: string, projectId?: string): Promise<PhoneNumber | null>;
   releasePhoneNumber(id: string): Promise<boolean>;
 
-  // Twilio provider passthrough (live Twilio API — server-side proxy in cloud)
+  // Twilio provider passthrough (live Twilio API — server-side proxy on HTTP)
   searchAvailableNumbers(options: SearchAvailableOptions): Promise<AvailableNumber[]>;
   listTwilioNumbers(): Promise<TwilioNumberRef[]>;
-  // ElevenLabs provider passthrough (non-stored data) — same 3-mode contract as
-  // the Twilio passthrough above: LocalStore calls ElevenLabs directly, ApiStore
+  // ElevenLabs provider passthrough (non-stored data) — same transport contract
+  // as the Twilio passthrough above: LocalStore calls ElevenLabs directly, ApiStore
   // routes through the server-side `/v1/voices` proxy so the credential stays
   // on the server.
   listVoices(): Promise<Voice[]>;
@@ -495,7 +497,7 @@ export class ApiStore implements TelephonyStore {
     // name-normalization + active-session conflict / force-takeover semantics
     // and returns the AgentConflictError envelope with a 409 when the name is
     // held by a live session. Surface that as the conflict value (not a throw)
-    // so CLI/MCP/SDK callers behave identically in local and cloud mode.
+    // so CLI/MCP/SDK callers behave identically on either transport.
     try {
       return await this.cloud.create<Agent>("agents", input);
     } catch (error) {
@@ -646,7 +648,7 @@ export class ApiStore implements TelephonyStore {
     if (filters?.agent_id) q.agent_id = filters.agent_id;
     if (filters?.project_id) q.project_id = filters.project_id;
     // listened is a tri-state (undefined = no filter); send it DB-side so the
-    // --unheard filter isn't silently dropped in cloud mode.
+    // --unheard filter isn't silently dropped on the HTTP API transport.
     if (filters?.listened !== undefined) q.listened = String(filters.listened);
     return (await this.cloud.list<Voicemail>("voicemails", { query: q })).items;
   }
@@ -676,7 +678,8 @@ export class ApiStore implements TelephonyStore {
   }
   async listSchedules(filters?: ScheduleFilters) {
     // enabled is a tri-state (undefined = no filter); send all three DB-side so
-    // the CLI/MCP schedule-list filters aren't silently dropped in cloud mode.
+    // the CLI/MCP schedule-list filters aren't silently dropped on the HTTP API
+    // transport.
     return this.listAll<Schedule>("schedules", {
       agent_id: filters?.agent_id,
       project_id: filters?.project_id,
@@ -732,21 +735,50 @@ export class ApiStore implements TelephonyStore {
 
 let cached: TelephonyStore | null = null;
 
+const API_URL_KEYS = ["HASNA_TELEPHONY_API_URL", "TELEPHONY_API_URL"] as const;
+const API_KEY_KEYS = ["HASNA_TELEPHONY_API_KEY", "TELEPHONY_API_KEY"] as const;
+
+function firstEnvValue(env: NodeJS.ProcessEnv, keys: readonly string[]): { key: string; value: string } | null {
+  for (const key of keys) {
+    if (Object.hasOwn(env, key)) {
+      const value = env[key]?.trim();
+      if (value) return { key, value };
+    }
+  }
+  return null;
+}
+
 /**
- * Resolve (and cache) the telephony Store from the client-flip env. Returns an
- * {@link ApiStore} when the env resolves to server-backed data
- * (STORAGE_MODE=postgres + API_URL + API_KEY), else a {@link LocalStore}. Throws
- * if the server backend was requested but is misconfigured (so callers never
- * silently read the wrong dataset).
+ * Resolve (and cache) the telephony Store from the environment. Transport is
+ * selected by the API env pair alone: both `HASNA_TELEPHONY_API_URL` and
+ * `HASNA_TELEPHONY_API_KEY` set selects the {@link ApiStore} (HTTP), neither
+ * set selects the {@link LocalStore} (on-box SQLite), and exactly one set
+ * throws naming the missing variable — no silent drift. Any retired
+ * storage-mode variable throws first via `assertNoLegacyStorageMode`.
  */
-export function getStore(env: Env = process.env): TelephonyStore {
+export function getStore(env: NodeJS.ProcessEnv = process.env): TelephonyStore {
   // Cache only the default (process.env) resolution — the hot path for CLI/MCP/
   // lib actions. An explicit env override (e.g. SDK constructor) always resolves
   // fresh so callers can target a different transport in the same process.
   const isDefaultEnv = env === process.env;
   if (isDefaultEnv && cached) return cached;
-  const resolved = resolveStorageClient(TELEPHONY_APP, env);
-  const store = resolved.transport === "cloud-http" ? new ApiStore(resolved.client) : new LocalStore();
+  assertNoLegacyStorageMode(env);
+  const urlHit = firstEnvValue(env, API_URL_KEYS);
+  const keyHit = firstEnvValue(env, API_KEY_KEYS);
+  let store: TelephonyStore;
+  if (!urlHit && !keyHit) {
+    store = new LocalStore();
+  } else if (!urlHit || !keyHit) {
+    throw new Error(
+      `API transport requires BOTH HASNA_TELEPHONY_API_URL and HASNA_TELEPHONY_API_KEY; only ` +
+        `${urlHit ? "HASNA_TELEPHONY_API_URL" : "HASNA_TELEPHONY_API_KEY"} is set. Set both to use the HTTP API, ` +
+        `or unset both to use the local store.`,
+    );
+  } else {
+    // Full pair: the client reads AND writes through the server's `/v1` API.
+    const resolved = resolveStorageClient(TELEPHONY_APP, env);
+    store = resolved.transport === "http" ? new ApiStore(resolved.client) : new LocalStore();
+  }
   if (isDefaultEnv) cached = store;
   return store;
 }
@@ -757,6 +789,6 @@ export function resetStore(): void {
 }
 
 /** True when the resolved Store is the cloud HTTP transport. */
-export function isCloudStore(env: Env = process.env): boolean {
+export function isCloudStore(env: NodeJS.ProcessEnv = process.env): boolean {
   return getStore(env).transport === "cloud-http";
 }
