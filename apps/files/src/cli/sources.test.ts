@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "fs";
+import { Database } from "bun:sqlite";
+import { closeSync, mkdtempSync, openSync, readFileSync, rmSync } from "fs";
+import { spawn } from "node:child_process";
 import { tmpdir } from "os";
 import { join } from "path";
 
@@ -12,6 +14,27 @@ afterEach(() => {
 });
 
 describe("sources CLI", () => {
+  test("drains JSON larger than a pipe buffer before exiting", async () => {
+    const env = cliEnv();
+    seedLargeSourceList(env);
+
+    const regularOutputPath = join(testDir!, "sources-regular.json");
+    const regular = await runCliToFile(["sources", "list", "--json"], env, regularOutputPath);
+    const regularOutput = readFileSync(regularOutputPath, "utf8");
+    const regularSources = JSON.parse(regularOutput) as Array<{ name: string }>;
+
+    expect(regular.exitCode).toBe(0);
+    expect(regular.stderr).toBe("");
+    expect(Buffer.byteLength(regularOutput)).toBeGreaterThan(64 * 1024);
+    expect(regularSources).toHaveLength(1201);
+
+    const piped = await runCliThroughPipe(["sources", "list", "--json"], env);
+    expect(piped.exitCode).toBe(0);
+    expect(piped.stderr).toBe("");
+    expect(Buffer.byteLength(piped.stdout)).toBe(Buffer.byteLength(regularOutput));
+    expect(JSON.parse(piped.stdout)).toEqual(regularSources);
+  });
+
   test("persists AWS profile on S3 sources", () => {
     const env = cliEnv();
     const add = Bun.spawnSync({
@@ -383,8 +406,21 @@ describe("sources CLI", () => {
 
 function cliEnv(): NodeJS.ProcessEnv {
   testDir = mkdtempSync(join(tmpdir(), "open-files-cli-"));
+  const env = { ...process.env };
+  for (const key of [
+    "HASNA_FILES_STORAGE_MODE",
+    "HASNA_FILES_MODE",
+    "FILES_STORAGE_MODE",
+    "FILES_MODE",
+    "HASNA_FILES_API_URL",
+    "FILES_API_URL",
+    "HASNA_FILES_API_KEY",
+    "FILES_API_KEY",
+  ]) {
+    delete env[key];
+  }
   return {
-    ...process.env,
+    ...env,
     HASNA_FILES_DATA_DIR: testDir,
     HASNA_FILES_DB_PATH: join(testDir, "files.db"),
     // This package ships no default bucket/profile (see SECURITY note in
@@ -393,4 +429,93 @@ function cliEnv(): NodeJS.ProcessEnv {
     HASNA_FILES_S3_BUCKET: "example-files-bucket",
     HASNA_FILES_AWS_PROFILE: "test-aws-profile",
   };
+}
+
+function seedLargeSourceList(env: NodeJS.ProcessEnv): void {
+  const initialized = Bun.spawnSync({
+    cmd: ["bun", cliPath, "sources", "add", testDir!, "--name", "pipe-output-control"],
+    env,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  expect(initialized.exitCode).toBe(0);
+
+  const db = new Database(env.HASNA_FILES_DB_PATH!);
+  const machine = db.query<{ id: string }, []>("SELECT id FROM machines LIMIT 1").get();
+  expect(machine).not.toBeNull();
+  const insert = db.prepare(`
+    INSERT INTO sources (id, name, type, path, config, machine_id)
+    VALUES (?, ?, 'local', ?, ?, ?)
+  `);
+  const seed = db.transaction(() => {
+    for (let index = 0; index < 1200; index += 1) {
+      const suffix = index.toString().padStart(4, "0");
+      insert.run(
+        `src_pipe_${suffix}`,
+        `pipe-source-${suffix}-${"n".repeat(64)}`,
+        `/tmp/pipe-output/${suffix}/${"p".repeat(96)}`,
+        JSON.stringify({ marker: "c".repeat(64) }),
+        machine!.id,
+      );
+    }
+  });
+  seed();
+  db.close();
+}
+
+function runCliThroughPipe(
+  args: string[],
+  env: NodeJS.ProcessEnv,
+): Promise<{ exitCode: number | null; stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn("bun", [cliPath, ...args], {
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
+    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+    child.once("error", reject);
+    child.once("close", (exitCode) => {
+      resolve({
+        exitCode,
+        stdout: Buffer.concat(stdout).toString("utf8"),
+        stderr: Buffer.concat(stderr).toString("utf8"),
+      });
+    });
+  });
+}
+
+function runCliToFile(
+  args: string[],
+  env: NodeJS.ProcessEnv,
+  outputPath: string,
+): Promise<{ exitCode: number | null; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const stdoutFd = openSync(outputPath, "w");
+    let stdoutClosed = false;
+    const closeStdout = () => {
+      if (stdoutClosed) return;
+      closeSync(stdoutFd);
+      stdoutClosed = true;
+    };
+    const child = spawn("bun", [cliPath, ...args], {
+      env,
+      stdio: ["ignore", stdoutFd, "pipe"],
+    });
+    const stderr: Buffer[] = [];
+    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+    child.once("error", (error) => {
+      closeStdout();
+      reject(error);
+    });
+    child.once("close", (exitCode) => {
+      closeStdout();
+      resolve({
+        exitCode,
+        stderr: Buffer.concat(stderr).toString("utf8"),
+      });
+    });
+  });
 }

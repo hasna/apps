@@ -1,5 +1,87 @@
 # Changelog
 
+## 0.3.16 — 2026-08-09
+
+- Preserve combined local `source` and `tag` filtering by binding SQLite JOIN
+  parameters before WHERE parameters, matching the generated SQL placeholder
+  order without changing sorting, pagination, or the other list filters.
+- Add store and CLI regressions with known-positive and absent-tag controls,
+  covering both local and hosted list paths.
+
+## 0.3.15 — 2026-08-09
+
+Release of the immutable evidence authority and hosted lineage hardening merged
+in #40 and #41.
+
+- Make Files the immutable bytes-and-SHA-256 authority for evidence assets,
+  including versioned provenance, retention and classification metadata,
+  private download grants, and auditable access events across local and hosted
+  stores.
+- Bind hosted evidence ownership to the authenticated API-key tenant so
+  cross-organization list, read, link, sign, verify, and upload-completion
+  requests fail without exposing another tenant's assets.
+- Publish all nine evidence-authority operations in OpenAPI and the generated
+  `FilesClient`, covering upload intents, completion, asset reads and listing,
+  links, private download grants, verification, and access events.
+- Make concurrent requests with the same evidence idempotency key converge on
+  the same asset and upload intent instead of surfacing a unique-index error.
+- Quarantine ambiguous legacy hosted file lineage rather than binding an API
+  key when tenant reconstruction is not unique.
+
+## 0.3.13 — 2026-08-09
+
+Release of the complete PostgreSQL migration-lineage compatibility repair
+merged in #37.
+
+- Restore the exact historical `files-0113` through `files-0154` migration
+  lineage, including the four tenancy-bridge migrations.
+- Append the `required_headers` scrub as `files-0155` without renumbering or
+  rewriting historical migrations.
+- Preserve downgrade and checksum-drift guards while restoring compatibility
+  with the complete production migration ledger.
+
+## 0.3.12 — 2026-08-09
+
+- Preserve the `files list` JSON-array contract while fulfilling logical
+  limits above the hosted API's 500-row per-request bound through internal
+  pagination. A requested 1,000 rows can no longer return 500 at exit 0 with
+  no indication that the result was truncated.
+- Preserve caller offsets across internal pages and stop when the service
+  returns a short page, without adding unnecessary requests for limits already
+  within the server contract.
+
+## 0.3.11 — 2026-08-08
+
+Release of the hosted extension-filter normalization fix merged in #34.
+
+- Accept extension filters with or without a leading dot in hosted list and
+  metadata-search requests.
+- Normalize extension filters to lowercase so values such as `PDF` match the
+  canonical stored `.pdf` extension.
+
+## 0.3.10 — 2026-08-08
+
+Release of the PostgreSQL migration compatibility fix merged in #32.
+
+- Restore the exact historical `files-0113` migration so databases that
+  already applied it are recognized by the migration ledger.
+- Preserve checksum-drift and unknown-migration downgrade guards without
+  renumbering any existing migration.
+
+## 0.3.9 — 2026-08-08
+
+Release of the hosted content retrieval and event-loop isolation fixes merged
+in #29 and #30.
+
+- Add authenticated, tenant-scoped hosted routes for raw file bytes and derived
+  text extraction.
+- Make hosted CLI downloads and extraction write create-only, owner-mode output
+  files while refusing stdout, symlinks, collisions, and tenant mismatches.
+- Run hosted extraction and caller-supplied redaction patterns in a bounded
+  worker so pathological regular expressions cannot monopolize the shared
+  server request loop, while preserving existing redaction and private-output
+  behavior.
+
 ## 0.3.8 — 2026-08-07
 
 Release of the page-limit fix merged in #26.

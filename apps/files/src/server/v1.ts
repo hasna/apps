@@ -20,6 +20,12 @@ import {
 } from "../lib/evidence.js";
 import type { FileAssetStatus } from "../types/index.js";
 import type { TypedQueryClient } from "../generated/storage-kit/query.js";
+import {
+  extractRemoteFileText,
+  readRemoteObject,
+  type RemoteFileLocator,
+  type RemoteObjectReader,
+} from "./file-content.js";
 
 const FILE_ASSET_STATUSES: readonly FileAssetStatus[] = [
   "pending_upload", "uploaded", "verified", "archived", "deleted",
@@ -61,20 +67,30 @@ export interface V1Handler {
   keyStore(): ApiKeyStore;
 }
 
-export function createV1Handler(): V1Handler {
+export interface V1HandlerOptions {
+  getClient?: () => TypedQueryClient;
+  verifier?: ApiKeyVerifier;
+  signingSecret?: string;
+  readObject?: RemoteObjectReader;
+}
+
+export function createV1Handler(options: V1HandlerOptions = {}): V1Handler {
   let verifier: ApiKeyVerifier | null = null;
   let keys: ApiKeyStore | null = null;
+  const resolveClient = options.getClient ?? getCloudClient;
+  const objectReader = options.readObject ?? readRemoteObject;
 
   function ensureKeys(client: TypedQueryClient): ApiKeyStore {
     if (!keys) keys = new ApiKeyStore(client);
     return keys;
   }
   function ensureVerifier(client: TypedQueryClient): ApiKeyVerifier {
+    if (options.verifier) return options.verifier;
     if (!verifier) {
       const ks = ensureKeys(client);
       verifier = verifyApiKey({
         app: "files",
-        signingSecret: signingSecret(),
+        signingSecret: options.signingSecret ?? signingSecret(),
         isRevoked: (kid) => ks.isRevoked(kid),
         audit: (e) => { if (e.outcome === "deny") console.warn(`[auth] deny kid=${e.kid ?? "-"} reason=${e.reason} ${e.method} ${e.path}`); },
       });
@@ -84,7 +100,7 @@ export function createV1Handler(): V1Handler {
 
   return {
     keyStore() {
-      return ensureKeys(getCloudClient());
+      return ensureKeys(resolveClient());
     },
     async handle(req: Request, url: URL): Promise<Response | null> {
       const path = url.pathname;
@@ -92,14 +108,15 @@ export function createV1Handler(): V1Handler {
 
       let client: TypedQueryClient;
       try {
-        client = getCloudClient();
+        client = resolveClient();
       } catch (e) {
         return err(`storage unavailable: ${(e as Error).message}`, 503);
       }
 
       const method = req.method;
       const isRead = method === "GET" || method === "HEAD";
-      const requiredScopes = [isRead ? "files:read" : "files:write"];
+      const isContentRead = /^\/v1\/files\/[^/]+\/(?:content|extract-text)$/.test(path);
+      const requiredScopes = [isRead || isContentRead ? "files:read" : "files:write"];
 
       // ── Authenticate ───────────────────────────────────────────────────
       let decision;
@@ -169,6 +186,8 @@ export function createV1Handler(): V1Handler {
             return json(await store.listFiles(client, {
               source_id: q("source_id"),
               machine_id: q("machine_id"),
+              project_id: q("project_id"),
+              tag: q("tag"),
               ext: q("ext"),
               status: q("status"),
               q: q("q"),
@@ -195,6 +214,42 @@ export function createV1Handler(): V1Handler {
           if (seg.length === 2 && method === "POST" && seg[1] === "purge") {
             const b = await body();
             return json({ purged: await store.purgeDeleted(client, b.source_id as string | undefined, b.older_than as string | undefined) });
+          }
+          if (seg.length === 3 && seg[2] === "content" && method === "GET") {
+            const locator = await authorizedFileLocator(client, decision.principal.kid, seg[1]!);
+            if (!locator) return err("File not found", 404);
+            try {
+              const object = await objectReader(locator);
+              if (!object) return err("File not found", 404);
+              return new Response(object.body, {
+                status: 200,
+                headers: {
+                  "Content-Type": locator.mime || "application/octet-stream",
+                  "Cache-Control": "private, no-store",
+                  "X-Content-Type-Options": "nosniff",
+                },
+              });
+            } catch {
+              return err("File content unavailable", 502);
+            }
+          }
+          if (seg.length === 3 && seg[2] === "extract-text" && method === "POST") {
+            const locator = await authorizedFileLocator(client, decision.principal.kid, seg[1]!);
+            if (!locator) return err("File not found", 404);
+            const b = await body();
+            try {
+              const result = await extractRemoteFileText(locator, objectReader, {
+                max_bytes: typeof b.max_bytes === "number" ? b.max_bytes : undefined,
+                max_segment_chars: typeof b.max_segment_chars === "number" ? b.max_segment_chars : undefined,
+                redact_patterns: Array.isArray(b.redact_patterns)
+                  ? b.redact_patterns.filter((value): value is string => typeof value === "string")
+                  : undefined,
+              });
+              return result ? json(result) : err("File not found", 404);
+            } catch (error) {
+              if (error instanceof SyntaxError) return err("Invalid extraction options", 400);
+              return err("File content unavailable", 502);
+            }
           }
           if (seg.length === 2 && method === "GET") {
             const f = await store.getFile(client, seg[1]!);
@@ -412,11 +467,14 @@ export function createV1Handler(): V1Handler {
         if (seg[0] === "evidence") {
           const evDb = store.evidenceDbFor(client);
           const serverStorage = {}; // env-configured server defaults only
+          const tenantId = await store.getApiKeyTenant(client, decision.principal.kid);
+          if (!tenantId) return err("Evidence tenant binding not found", 403);
 
           if (seg[1] === "upload-intents" && seg.length === 2 && method === "POST") {
             const b = await body();
+            if (tenantMismatch(b.org_id, tenantId)) return err("org_id does not match authenticated tenant", 403);
             const result = await createEvidenceUploadIntent({
-              org_id: b.org_id as string,
+              org_id: tenantId,
               company_id: b.company_id as string | undefined,
               app: b.app as string,
               kind: b.kind as string,
@@ -424,7 +482,16 @@ export function createV1Handler(): V1Handler {
               content_type: b.content_type as string | undefined,
               size: Number(b.size),
               checksum: b.checksum as string,
+              checksum_algorithm: b.checksum_algorithm as "sha256" | undefined,
               classification: b.classification as string | undefined,
+              version: b.version as number | undefined,
+              provenance_type: b.provenance_type as string | undefined,
+              provenance_id: b.provenance_id as string | undefined,
+              provenance_ref: b.provenance_ref as string | undefined,
+              external_references: Array.isArray(b.external_references)
+                ? b.external_references.filter((value): value is string => typeof value === "string")
+                : undefined,
+              idempotency_key: b.idempotency_key as string | undefined,
               retention_until: b.retention_until as string | undefined,
               retention_policy: b.retention_policy as string | undefined,
               storage_class: b.storage_class as string | undefined,
@@ -436,29 +503,44 @@ export function createV1Handler(): V1Handler {
             return json(b.include_upload_url === true ? result : redactEvidenceUploadCredentials(result), 201);
           }
           if (seg[1] === "upload-intents" && seg.length === 4 && seg[3] === "complete" && method === "POST") {
+            const intent = await store.evGetUploadIntent(client, seg[2]!);
+            const asset = intent ? await evidenceAssetForTenant(client, tenantId, intent.asset_id) : null;
+            if (!intent || !asset) return err("Evidence upload intent not found", 404);
             return json(await completeEvidenceUpload(seg[2]!, serverStorage, evDb));
           }
           if (seg[1] === "assets" && seg.length === 2 && method === "GET") {
+            if (tenantMismatch(q("org_id"), tenantId)) return err("org_id does not match authenticated tenant", 403);
             return json(await store.evListFileAssets(client, {
-              org_id: q("org_id"),
+              org_id: tenantId,
               company_id: q("company_id"),
               app: q("app"),
               kind: q("kind"),
               status: asAssetStatus(q("status")),
               checksum: q("checksum"),
+              provenance_type: q("provenance_type"),
+              provenance_id: q("provenance_id"),
+              provenance_ref: q("provenance_ref"),
+              version: url.searchParams.has("version") ? Number(q("version")) : undefined,
+              classification: q("classification"),
+              retention_policy: q("retention_policy"),
+              external_reference: q("external_reference"),
+              idempotency_key: q("idempotency_key"),
               limit: url.searchParams.has("limit") ? Number(q("limit")) : undefined,
               offset: url.searchParams.has("offset") ? Number(q("offset")) : undefined,
             }));
           }
           if (seg[1] === "assets" && seg.length === 3 && method === "GET") {
-            const asset = await store.evGetFileAsset(client, seg[2]!);
+            const asset = await evidenceAssetForTenant(client, tenantId, seg[2]!);
             return asset ? json(asset) : err("Evidence asset not found", 404);
           }
           if (seg[1] === "assets" && seg.length === 4 && seg[3] === "links" && method === "POST") {
             const b = await body();
+            const asset = await evidenceAssetForTenant(client, tenantId, seg[2]!);
+            if (!asset) return err("Evidence asset not found", 404);
+            if (tenantMismatch(b.org_id, tenantId)) return err("org_id does not match authenticated tenant", 403);
             return json(await linkEvidenceAsset({
               asset_id: seg[2]!,
-              org_id: b.org_id as string,
+              org_id: tenantId,
               company_id: b.company_id as string | undefined,
               app: b.app as string,
               source_type: b.source_type as string,
@@ -468,9 +550,11 @@ export function createV1Handler(): V1Handler {
             }, evDb), 201);
           }
           if (seg[1] === "assets" && seg.length === 4 && seg[3] === "links" && method === "GET") {
+            if (!await evidenceAssetForTenant(client, tenantId, seg[2]!)) return err("Evidence asset not found", 404);
             return json(await store.evListFileLinks(client, seg[2]!));
           }
           if (seg[1] === "assets" && seg.length === 4 && seg[3] === "sign-download" && method === "POST") {
+            if (!await evidenceAssetForTenant(client, tenantId, seg[2]!)) return err("Evidence asset not found", 404);
             const b = await body();
             return json(await signEvidenceDownload({
               asset_id: seg[2]!,
@@ -480,9 +564,11 @@ export function createV1Handler(): V1Handler {
             }, serverStorage, evDb));
           }
           if (seg[1] === "assets" && seg.length === 4 && seg[3] === "verify" && method === "POST") {
+            if (!await evidenceAssetForTenant(client, tenantId, seg[2]!)) return err("Evidence asset not found", 404);
             return json(await verifyEvidenceAsset(seg[2]!, serverStorage, evDb));
           }
           if (seg[1] === "assets" && seg.length === 4 && seg[3] === "access-events" && method === "GET") {
+            if (!await evidenceAssetForTenant(client, tenantId, seg[2]!)) return err("Evidence asset not found", 404);
             return json(await store.evListAccessEvents(client, seg[2]!, url.searchParams.has("limit") ? Number(q("limit")) : 50));
           }
         }
@@ -502,4 +588,34 @@ export function createV1Handler(): V1Handler {
       }
     },
   };
+}
+
+async function authorizedFileLocator(
+  client: TypedQueryClient,
+  kid: string,
+  fileId: string,
+): Promise<RemoteFileLocator | null> {
+  const tenantId = await store.getApiKeyTenant(client, kid);
+  if (!tenantId) return null;
+
+  const locator = await store.getRemoteFileLocator(client, fileId);
+  if (!locator) return null;
+
+  // Private content always fails closed: both the verified key and the
+  // server-owned object must carry the same explicit tenant binding.
+  if (!locator.tenant_id || tenantId !== locator.tenant_id) return null;
+  return locator;
+}
+
+function tenantMismatch(requested: unknown, tenantId: string): boolean {
+  return requested !== undefined && requested !== null && requested !== "" && requested !== tenantId;
+}
+
+async function evidenceAssetForTenant(
+  client: TypedQueryClient,
+  tenantId: string,
+  assetId: string,
+) {
+  const asset = await store.evGetFileAsset(client, assetId);
+  return asset?.org_id === tenantId ? asset : null;
 }

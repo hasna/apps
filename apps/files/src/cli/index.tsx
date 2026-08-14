@@ -27,6 +27,7 @@ import { doctorKnowledgeSources } from "../lib/knowledge-doctor.js";
 import { exportKnowledgeSourceManifest, formatKnowledgeSourceManifest } from "../lib/knowledge-manifest.js";
 import { resolveKnowledgeSourceRef } from "../lib/knowledge-resolver.js";
 import { buildFilesContextPack, buildFilesSearchPack } from "../lib/context-pack.js";
+import { openSecureOutput } from "../lib/secure-output.js";
 import { buildOpenFilesFileRef, buildOpenFilesFileRevisionRef } from "../lib/source-ref.js";
 import { acknowledgeKnowledgeSourceOutbox, pollKnowledgeSourceOutbox } from "../db/knowledge-outbox.js";
 import { runDbIntegrityCheck, runOpsStateSnapshot } from "../lib/ops-loop.js";
@@ -45,7 +46,7 @@ import type {
   S3Config,
   SearchScope,
 } from "../types/index.js";
-import { store } from "../store/index.js";
+import { ApiStore, store } from "../store/index.js";
 
 import { createRequire } from "module";
 const _require = createRequire(import.meta.url);
@@ -181,7 +182,7 @@ sources
   .action(async (opts: { json?: boolean }) => {
     const files = store();
     const all = await files.listSources();
-    if (opts.json) { console.log(JSON.stringify(all, null, 2)); return; }
+    if (opts.json) { await writeStdoutLine(JSON.stringify(all, null, 2)); return; }
     if (!all.length) {
       console.log(chalk.dim("No sources configured. Run: files sources add <path>"));
       return;
@@ -548,7 +549,8 @@ sources
       }
       // The LocalStore resolves a partial id against the local db; the ApiStore
       // passes the cloud id straight through to DELETE /v1/sources/:id.
-      await store().deleteSource(id);
+      const ok = await store().deleteSource(id);
+      if (!ok) throw new Error(`Source not found: ${id}`);
       console.log(chalk.green(`✓ Source ${id} removed`));
     } catch (e) { console.error(chalk.red((e as Error).message)); process.exit(1); }
   });
@@ -1133,7 +1135,31 @@ program
   .command("download <file-id> [dest]")
   .description("Download a file to local disk")
   .action(async (fileId: string, dest?: string) => {
-    requireLocalTransport("files download");
+    const files = store();
+    if (files.transport === "api") {
+      if (!(files instanceof ApiStore)) {
+        console.error(chalk.red("Authenticated file-content transport is unavailable."));
+        process.exit(1);
+      }
+      if (!dest) {
+        console.error(chalk.red("Hosted downloads require an explicit destination path."));
+        process.exit(1);
+      }
+
+      let output;
+      try {
+        output = openSecureOutput(dest);
+        await files.downloadFileContent(fileId, (chunk) => output!.write(chunk));
+        output.commit();
+        console.log(chalk.green("✓ Download complete"));
+      } catch (error) {
+        output?.abort();
+        console.error(chalk.red(remoteContentFailure("download", error)));
+        process.exit(1);
+      }
+      return;
+    }
+
     let resolved;
     try {
       resolved = resolveFileObject(requireId(fileId, "files"));
@@ -1503,41 +1529,74 @@ program
   .command("extract-text <file-id>")
   .description("Return chunk-ready extracted text metadata for knowledge indexing")
   .option("--json", "Output as JSON")
+  .option("--output-file <path>", "Write private extraction JSON to a new owner-only file")
   .option("--max-bytes <n>", "Maximum bytes to read", "1048576")
   .option("--segment-chars <n>", "Maximum characters per segment", "4000")
   .option("--redact <pattern>", "Regex pattern to redact; can be repeated", collectValues, [] as string[])
   .action(async (fileId: string, opts: {
     json?: boolean;
+    outputFile?: string;
     maxBytes: string;
     segmentChars: string;
     redact: string[];
   }) => {
-    requireLocalTransport("files extract-text");
     try {
       const maxBytes = parseIntFlag(opts.maxBytes, "max-bytes", { min: 1 });
       const maxSegmentChars = parseIntFlag(opts.segmentChars, "segment-chars", { min: 256 });
       const redactPatterns = opts.redact.map((pattern) => new RegExp(pattern, "g"));
-      const result = await extractTextFromFile(requireId(fileId, "files"), {
-        max_bytes: maxBytes,
-        max_segment_chars: maxSegmentChars,
-        redact_patterns: redactPatterns,
-      });
-
-      if (opts.json) {
-        console.log(JSON.stringify(result, null, 2));
-        return;
-      }
-
-      console.log(chalk.bold(`status: ${result.status}`));
-      if (result.status_reason) console.log(chalk.dim(result.status_reason));
-      for (const segment of result.segments) {
-        if (result.segments.length > 1) {
-          console.log(chalk.dim(`\n--- segment ${segment.index + 1}/${result.segments.length} lines ${segment.line_start}-${segment.line_end} bytes ${segment.byte_start}-${segment.byte_end} ---`));
+      const files = store();
+      const remoteFiles = files instanceof ApiStore ? files : null;
+      let output;
+      if (files.transport === "api") {
+        if (!remoteFiles) throw new Error("Authenticated file-content transport is unavailable.");
+        if (!opts.outputFile) {
+          throw new Error("Hosted extraction requires --output-file so private text is not written to stdout.");
         }
-        process.stdout.write(segment.text);
-        if (!segment.text.endsWith("\n")) process.stdout.write("\n");
+        output = openSecureOutput(opts.outputFile);
+      } else if (opts.outputFile) {
+        output = openSecureOutput(opts.outputFile);
       }
-    } catch (e) { console.error(chalk.red((e as Error).message)); process.exit(1); }
+
+      try {
+        const result = remoteFiles
+          ? await remoteFiles.extractFileText(fileId, {
+              max_bytes: maxBytes,
+              max_segment_chars: maxSegmentChars,
+              redact_patterns: opts.redact,
+            })
+          : await extractTextFromFile(requireId(fileId, "files"), {
+              max_bytes: maxBytes,
+              max_segment_chars: maxSegmentChars,
+              redact_patterns: redactPatterns,
+            });
+
+        if (output) {
+          output.write(`${JSON.stringify(result, null, 2)}\n`);
+          output.commit();
+          if (opts.json) console.log(JSON.stringify({ ok: true }));
+          else console.log(chalk.green("✓ Extraction written securely"));
+          return;
+        }
+
+        if (opts.json) {
+          console.log(JSON.stringify(result, null, 2));
+          return;
+        }
+
+        console.log(chalk.bold(`status: ${result.status}`));
+        if (result.status_reason) console.log(chalk.dim(result.status_reason));
+        for (const segment of result.segments) {
+          if (result.segments.length > 1) {
+            console.log(chalk.dim(`\n--- segment ${segment.index + 1}/${result.segments.length} lines ${segment.line_start}-${segment.line_end} bytes ${segment.byte_start}-${segment.byte_end} ---`));
+          }
+          process.stdout.write(segment.text);
+          if (!segment.text.endsWith("\n")) process.stdout.write("\n");
+        }
+      } catch (error) {
+        output?.abort();
+        throw error;
+      }
+    } catch (e) { console.error(chalk.red(remoteContentFailure("extraction", e))); process.exit(1); }
   });
 
 program
@@ -2102,6 +2161,16 @@ function parseIntFlag(value: string, name: string, opts: { min?: number } = {}):
   return n;
 }
 
+function remoteContentFailure(operation: "download" | "extraction", error: unknown): string {
+  const status = typeof error === "object" && error !== null && "status" in error
+    ? Number((error as { status?: unknown }).status)
+    : Number.NaN;
+  if (Number.isInteger(status) && status >= 400) {
+    return `Remote ${operation} failed (HTTP ${status}).`;
+  }
+  return error instanceof Error ? error.message : `Remote ${operation} failed.`;
+}
+
 function parseManifestFormat(value: string): KnowledgeSourceManifestFormat {
   if (value === "json" || value === "jsonl") return value;
   throw new Error("Invalid --format: expected json or jsonl");
@@ -2151,9 +2220,33 @@ program
     else { console.error(chalk.red(`Source not found: ${id}`)); process.exit(1); }
   });
 
-program.parseAsync().catch((error: unknown) => {
+await program.parseAsync().catch(async (error: unknown) => {
   // Any command action that rejects (e.g. a HasnaHttpError from the cloud
   // transport) surfaces here as a single clean line — never a raw stack trace.
-  console.error(chalk.red(error instanceof Error ? error.message : String(error)));
+  await writeStderrLine(chalk.red(error instanceof Error ? error.message : String(error)));
   process.exit(1);
 });
+
+async function writeStdoutLine(line: string): Promise<void> {
+  await writeStandardStreamLine(process.stdout, line);
+}
+
+async function writeStderrLine(line: string): Promise<void> {
+  await writeStandardStreamLine(process.stderr, line);
+}
+
+function writeStandardStreamLine(stream: NodeJS.WriteStream, line: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const cleanup = () => stream.off("error", onError);
+    const onError = (error: Error) => {
+      cleanup();
+      reject(error);
+    };
+    stream.once("error", onError);
+    stream.write(`${line}\n`, (error) => {
+      cleanup();
+      if (error) reject(error);
+      else resolve();
+    });
+  });
+}

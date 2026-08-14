@@ -16,6 +16,7 @@ import { lookup as mimeLookup } from "mime-types";
 import type { HasnaStorageClient } from "@hasna/contracts/client/storage";
 import { HasnaHttpError } from "@hasna/contracts/client";
 import { sha256File } from "../lib/hasher.js";
+import { FILES_API_MAX_PAGE_SIZE } from "../lib/api-pagination.js";
 import type {
   Agent,
   AgentActivity,
@@ -33,7 +34,9 @@ import type {
   SearchResult,
   Source,
   Tag,
+  ExtractedTextResult,
 } from "../types/index.js";
+import type { AuthenticatedFilesFetch } from "../lib/cloud-storage.js";
 import {
   redactEvidenceUploadCredentials,
   type CreateEvidenceUploadInput,
@@ -94,7 +97,10 @@ async function deletedOk(p: Promise<unknown>): Promise<boolean> {
 export class ApiStore implements FilesStore {
   readonly transport = "api" as const;
 
-  constructor(private readonly client: HasnaStorageClient) {}
+  constructor(
+    private readonly client: HasnaStorageClient,
+    private readonly fetchContent?: AuthenticatedFilesFetch,
+  ) {}
 
   private get http() {
     return this.client.transport;
@@ -130,18 +136,48 @@ export class ApiStore implements FilesStore {
   // ── files ────────────────────────────────────────────────────────────────
   async listFiles(opts: ListFilesOptions = {}): Promise<FileWithTags[]> {
     // The cloud /v1/files endpoint filters on this subset; richer local-only
-    // filters (tag/collection/project/date/size/sort) are not part of the API
+    // filters (collection/date/size/sort) are not part of the API
     // contract and are intentionally omitted rather than silently ignored.
-    return (await this.client.list<FileWithTags>("files", {
-      query: {
-        source_id: opts.source_id,
-        machine_id: opts.machine_id,
-        ext: opts.ext,
-        status: opts.status,
-        limit: opts.limit,
-        offset: opts.offset,
-      },
-    })).items;
+    const listPage = async (limit: number | undefined, offset: number | undefined) => (
+      await this.client.list<FileWithTags>("files", {
+        query: {
+          source_id: opts.source_id,
+          machine_id: opts.machine_id,
+          project_id: opts.project_id,
+          tag: opts.tag,
+          ext: opts.ext,
+          status: opts.status,
+          limit,
+          offset,
+        },
+      })
+    ).items;
+
+    const requestedLimit = opts.limit;
+    if (
+      requestedLimit === undefined
+      || !Number.isInteger(requestedLimit)
+      || requestedLimit <= FILES_API_MAX_PAGE_SIZE
+    ) {
+      return listPage(requestedLimit, opts.offset);
+    }
+
+    // `/v1/files` is intentionally bounded per request. Older deployed
+    // servers silently clamped an oversized page to 500; current servers
+    // reject it. In both cases, asking once made a requested 1000-row logical
+    // read either look complete at 500 or fail. Walk bounded pages here and
+    // preserve the public result contract: callers still receive one array
+    // containing at most the count they requested.
+    const files: FileWithTags[] = [];
+    let offset = opts.offset ?? 0;
+    while (files.length < requestedLimit) {
+      const pageLimit = Math.min(FILES_API_MAX_PAGE_SIZE, requestedLimit - files.length);
+      const page = await listPage(pageLimit, offset);
+      files.push(...page.slice(0, requestedLimit - files.length));
+      if (page.length < pageLimit) break;
+      offset += page.length;
+    }
+    return files;
   }
   async getFile(id: string): Promise<FileWithTags | null> {
     return this.client.get<FileWithTags>("files", id);
@@ -222,6 +258,35 @@ export class ApiStore implements FilesStore {
   }
   async resolveConflict(fileId: string): Promise<boolean> {
     return (await orNull(this.http.post(`/files/${seg(fileId)}/resolve-conflict`))) !== null;
+  }
+
+  async downloadFileContent(
+    fileId: string,
+    write: (chunk: Uint8Array) => void | Promise<void>,
+  ): Promise<void> {
+    if (!this.fetchContent) throw new Error("Authenticated file-content transport is unavailable.");
+    const path = `/files/${seg(fileId)}/content`;
+    const response = await this.fetchContent(path, { method: "GET" });
+    if (!response.ok) throw await remoteContentError("GET", path, response);
+    if (!response.body) throw new Error("The file-content response was empty.");
+
+    const reader = response.body.getReader();
+    while (true) {
+      const next = await reader.read();
+      if (next.done) break;
+      await write(next.value);
+    }
+  }
+
+  async extractFileText(
+    fileId: string,
+    input: {
+      max_bytes?: number;
+      max_segment_chars?: number;
+      redact_patterns?: string[];
+    } = {},
+  ): Promise<ExtractedTextResult> {
+    return this.http.post<ExtractedTextResult>(`/files/${seg(fileId)}/extract-text`, input);
   }
 
   // ── tags ─────────────────────────────────────────────────────────────────
@@ -356,7 +421,7 @@ export class ApiStore implements FilesStore {
     if (!existsSync(input.path)) throw new Error(`File not found: ${input.path}`);
     const stat = statSync(input.path);
     const { path: _path, original_name, ...rest } = input;
-    const { intent } = await this.createEvidenceUploadIntent({
+    const created = await this.createEvidenceUploadIntent({
       ...rest,
       original_name: original_name ?? basename(input.path),
       content_type: (mimeLookup(input.path) || "application/octet-stream").toString(),
@@ -364,6 +429,10 @@ export class ApiStore implements FilesStore {
       checksum: sha256File(input.path),
       checksum_algorithm: "sha256",
     }, undefined, { includeUploadUrl: true });
+    if (created.replayed && created.asset.status === "verified") {
+      return redactEvidenceUploadCredentials(created);
+    }
+    const { intent } = created;
     if (!intent.upload_url) throw new Error("Server did not return an evidence upload URL");
     const uploadUrl = intent.upload_url;
     const res = await fetch(uploadUrl, {
@@ -373,7 +442,7 @@ export class ApiStore implements FilesStore {
     });
     if (!res.ok) throw new Error(`Evidence byte upload failed: ${res.status} ${res.statusText}`);
     const asset = await this.completeEvidenceUpload(intent.id);
-    return redactEvidenceUploadCredentials({ asset, intent });
+    return redactEvidenceUploadCredentials({ asset, intent, replayed: created.replayed });
   }
   async completeEvidenceUpload(intentId: string, _storage?: EvidenceStorageOptions): Promise<FileAsset> {
     return this.http.post<FileAsset>(`/evidence/upload-intents/${seg(intentId)}/complete`);
@@ -398,6 +467,14 @@ export class ApiStore implements FilesStore {
         kind: opts.kind,
         status: opts.status,
         checksum: opts.checksum,
+        provenance_type: opts.provenance_type,
+        provenance_id: opts.provenance_id,
+        provenance_ref: opts.provenance_ref,
+        version: opts.version,
+        classification: opts.classification,
+        retention_policy: opts.retention_policy,
+        external_reference: opts.external_reference,
+        idempotency_key: opts.idempotency_key,
         limit: opts.limit,
         offset: opts.offset,
       },
@@ -412,4 +489,14 @@ export class ApiStore implements FilesStore {
   async listEvidenceAccessEvents(assetId: string, limit = 50): Promise<FileAccessEvent[]> {
     return this.http.get<FileAccessEvent[]>(`/evidence/assets/${seg(assetId)}/access-events`, { query: { limit } });
   }
+}
+
+async function remoteContentError(method: string, path: string, response: Response): Promise<HasnaHttpError> {
+  let body: unknown = null;
+  try {
+    body = await response.json();
+  } catch {
+    // Private file bytes and provider errors are never reflected into the CLI.
+  }
+  return new HasnaHttpError(method, path, response.status, body);
 }

@@ -22,6 +22,12 @@ interface FileAssetRow {
   app: string;
   kind: string;
   classification: string;
+  version: number;
+  provenance_type: string;
+  provenance_id: string | null;
+  provenance_ref: string | null;
+  external_references: string;
+  idempotency_key: string | null;
   original_name: string;
   content_type: string;
   size: number;
@@ -93,6 +99,14 @@ export interface ListFileAssetsOptions {
   kind?: string;
   status?: FileAssetStatus;
   checksum?: string;
+  provenance_type?: string;
+  provenance_id?: string;
+  provenance_ref?: string;
+  version?: number;
+  classification?: string;
+  retention_policy?: string;
+  external_reference?: string;
+  idempotency_key?: string;
   limit?: number;
   offset?: number;
 }
@@ -104,7 +118,17 @@ function parseJsonObject(value: string): Record<string, unknown> {
     : {};
 }
 
+function parseJsonStrings(value: string): string[] {
+  const parsed = JSON.parse(value || "[]") as unknown;
+  return Array.isArray(parsed) ? parsed.filter((entry): entry is string => typeof entry === "string") : [];
+}
+
+export function buildEvidenceCanonicalRef(id: string, version: number): string {
+  return `open-files://evidence/${id}/versions/${version}`;
+}
+
 function toAsset(row: FileAssetRow): FileAsset {
+  const version = row.version || 1;
   return {
     id: row.id,
     org_id: row.org_id,
@@ -112,6 +136,13 @@ function toAsset(row: FileAssetRow): FileAsset {
     app: row.app,
     kind: row.kind,
     classification: row.classification,
+    version,
+    canonical_ref: buildEvidenceCanonicalRef(row.id, version),
+    provenance_type: row.provenance_type,
+    provenance_id: row.provenance_id ?? row.checksum,
+    provenance_ref: row.provenance_ref ?? undefined,
+    external_references: parseJsonStrings(row.external_references),
+    idempotency_key: row.idempotency_key ?? undefined,
     original_name: row.original_name,
     content_type: row.content_type,
     size: row.size,
@@ -185,13 +216,18 @@ function toAccessEvent(row: AccessEventRow): FileAccessEvent {
 }
 
 export function createFileAsset(input: CreateFileAssetInput): FileAsset {
+  return createFileAssetConvergent(input).asset;
+}
+
+export function createFileAssetConvergent(input: CreateFileAssetInput): { asset: FileAsset; created: boolean } {
   const id = input.id ?? `asset_${nanoid(12)}`;
-  getDb().run(
-    `INSERT INTO file_assets (
-      id, org_id, company_id, app, kind, classification, original_name, content_type,
+  const result = getDb().run(
+    `${input.idempotency_key ? "INSERT OR IGNORE" : "INSERT"} INTO file_assets (
+      id, org_id, company_id, app, kind, classification, version, provenance_type,
+      provenance_id, provenance_ref, external_references, idempotency_key, original_name, content_type,
       size, checksum, checksum_algorithm, storage_provider, bucket, region, object_key,
       quarantine_key, retention_until, retention_policy, storage_class, legal_hold, immutable, metadata
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
       input.org_id,
@@ -199,6 +235,12 @@ export function createFileAsset(input: CreateFileAssetInput): FileAsset {
       input.app,
       input.kind,
       input.classification ?? "general",
+      input.version ?? 1,
+      input.provenance_type ?? "direct_upload",
+      input.provenance_id ?? input.checksum,
+      input.provenance_ref ?? null,
+      JSON.stringify(input.external_references ?? []),
+      input.idempotency_key ?? null,
       input.original_name,
       input.content_type,
       input.size,
@@ -217,11 +259,24 @@ export function createFileAsset(input: CreateFileAssetInput): FileAsset {
       JSON.stringify(input.metadata ?? {}),
     ],
   );
-  return getFileAsset(id)!;
+  const asset = input.idempotency_key
+    ? getFileAssetByIdempotencyKey(input.org_id, input.app, input.idempotency_key)
+    : getFileAsset(id);
+  if (!asset) throw new Error(`Failed to create evidence asset: ${id}`);
+  return { asset, created: result.changes > 0 };
 }
 
 export function getFileAsset(id: string): FileAsset | null {
   const row = getDb().query<FileAssetRow, [string]>("SELECT * FROM file_assets WHERE id = ?").get(id);
+  return row ? toAsset(row) : null;
+}
+
+export function getFileAssetByIdempotencyKey(orgId: string, app: string, idempotencyKey: string): FileAsset | null {
+  const row = getDb()
+    .query<FileAssetRow, [string, string, string]>(
+      "SELECT * FROM file_assets WHERE org_id = ? AND app = ? AND idempotency_key = ?",
+    )
+    .get(orgId, app, idempotencyKey);
   return row ? toAsset(row) : null;
 }
 
@@ -234,6 +289,17 @@ export function listFileAssets(opts: ListFileAssetsOptions = {}): FileAsset[] {
   if (opts.kind) { conditions.push("kind = ?"); params.push(opts.kind); }
   if (opts.status) { conditions.push("status = ?"); params.push(opts.status); }
   if (opts.checksum) { conditions.push("checksum = ?"); params.push(opts.checksum); }
+  if (opts.provenance_type) { conditions.push("provenance_type = ?"); params.push(opts.provenance_type); }
+  if (opts.provenance_id) { conditions.push("provenance_id = ?"); params.push(opts.provenance_id); }
+  if (opts.provenance_ref) { conditions.push("provenance_ref = ?"); params.push(opts.provenance_ref); }
+  if (opts.version !== undefined) { conditions.push("version = ?"); params.push(opts.version); }
+  if (opts.classification) { conditions.push("classification = ?"); params.push(opts.classification); }
+  if (opts.retention_policy) { conditions.push("retention_policy = ?"); params.push(opts.retention_policy); }
+  if (opts.idempotency_key) { conditions.push("idempotency_key = ?"); params.push(opts.idempotency_key); }
+  if (opts.external_reference) {
+    conditions.push("EXISTS (SELECT 1 FROM json_each(file_assets.external_references) WHERE value = ?)");
+    params.push(opts.external_reference);
+  }
   const limit = opts.limit ?? 50;
   const offset = opts.offset ?? 0;
   return getDb()
@@ -245,6 +311,7 @@ export function listFileAssets(opts: ListFileAssetsOptions = {}): FileAsset[] {
 }
 
 export function createFileUploadIntent(input: {
+  id?: string;
   asset_id: string;
   expires_at: string;
   expected_checksum: string;
@@ -253,9 +320,9 @@ export function createFileUploadIntent(input: {
   required_headers?: Record<string, string>;
   metadata?: Record<string, unknown>;
 }): FileUploadIntent {
-  const id = `upl_${nanoid(12)}`;
+  const id = input.id ?? `upl_${nanoid(12)}`;
   getDb().run(
-    `INSERT INTO file_upload_intents (
+    `${input.id ? "INSERT OR IGNORE" : "INSERT"} INTO file_upload_intents (
       id, asset_id, expires_at, expected_checksum, expected_checksum_algorithm,
       expected_size, required_headers, metadata
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -270,7 +337,11 @@ export function createFileUploadIntent(input: {
       JSON.stringify(input.metadata ?? {}),
     ],
   );
-  return getFileUploadIntent(id)!;
+  const intent = getFileUploadIntent(id);
+  if (!intent || intent.asset_id !== input.asset_id) {
+    throw new Error(`Failed to create evidence upload intent for asset: ${input.asset_id}`);
+  }
+  return intent;
 }
 
 export function getFileUploadIntent(id: string, uploadUrl?: string): FileUploadIntent | null {
@@ -278,6 +349,15 @@ export function getFileUploadIntent(id: string, uploadUrl?: string): FileUploadI
     .query<UploadIntentRow, [string]>("SELECT * FROM file_upload_intents WHERE id = ?")
     .get(id);
   return row ? toIntent(row, uploadUrl) : null;
+}
+
+export function getFileUploadIntentForAsset(assetId: string): FileUploadIntent | null {
+  const row = getDb()
+    .query<UploadIntentRow, [string]>(
+      "SELECT * FROM file_upload_intents WHERE asset_id = ? ORDER BY created_at ASC LIMIT 1",
+    )
+    .get(assetId);
+  return row ? toIntent(row) : null;
 }
 
 export function markFileUploadIntentCompleted(id: string): FileUploadIntent | null {

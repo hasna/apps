@@ -858,6 +858,13 @@ export interface FileAsset {
   app: string;
   kind: string;
   classification: string;
+  version: number;
+  canonical_ref: string;
+  provenance_type: string;
+  provenance_id: string;
+  provenance_ref?: string;
+  external_references: string[];
+  idempotency_key?: string;
   original_name: string;
   content_type: string;
   size: number;
@@ -930,6 +937,12 @@ export interface CreateFileAssetInput {
   app: string;
   kind: string;
   classification?: string;
+  version?: number;
+  provenance_type?: string;
+  provenance_id?: string;
+  provenance_ref?: string;
+  external_references?: string[];
+  idempotency_key?: string;
   original_name: string;
   content_type: string;
   size: number;

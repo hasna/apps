@@ -141,4 +141,101 @@ describe("evidence CLI", () => {
     expect(verified.diagnostics).toEqual([]);
     expect(verified.ok).toBe(true);
   });
+
+  test("writes, filters, replays, and protects immutable authority metadata", () => {
+    testDir = mkdtempSync(join(tmpdir(), "files-evidence-authority-cli-"));
+    const evidenceRoot = join(testDir, "evidence");
+    const fixture = join(testDir, "synthetic-evidence.txt");
+    writeFileSync(fixture, "synthetic immutable evidence");
+    const env = {
+      ...process.env,
+      HASNA_FILES_DATA_DIR: testDir,
+      HASNA_FILES_DB_PATH: join(testDir, "files.db"),
+      HASNA_FILES_EVIDENCE_STORAGE: "local",
+      HASNA_FILES_EVIDENCE_LOCAL_ROOT: evidenceRoot,
+    };
+    const args = [
+      "bun", "run", cliPath, "evidence", "upload", fixture,
+      "--org", "org_synthetic",
+      "--company", "co_synthetic",
+      "--app", "iapp-monthly-filing",
+      "--kind", "supporting_document",
+      "--classification", "restricted",
+      "--retention-policy", "seven_year_records",
+      "--provenance-type", "monthly_filing",
+      "--provenance-id", "filing_synthetic_cli",
+      "--provenance-ref", "monthly-filing://filing/synthetic-cli",
+      "--evidence-version", "4",
+      "--external-ref", "invoices://invoice/synthetic-cli",
+      "--idempotency-key", "monthly-filing:synthetic-cli:v4",
+      "--storage", "local",
+      "--local-root", evidenceRoot,
+      "--json",
+    ];
+
+    const first = Bun.spawnSync({ cmd: args, env, stdout: "pipe", stderr: "pipe" });
+    expect(first.exitCode).toBe(0);
+    const created = JSON.parse(new TextDecoder().decode(first.stdout)) as {
+      replayed: boolean;
+      asset: {
+        id: string;
+        version: number;
+        canonical_ref: string;
+        provenance_type: string;
+        provenance_id: string;
+        provenance_ref?: string;
+        external_references: string[];
+        immutable: boolean;
+      };
+      intent: { id: string };
+    };
+    expect(created.replayed).toBe(false);
+    expect(created.asset).toMatchObject({
+      version: 4,
+      provenance_type: "monthly_filing",
+      provenance_id: "filing_synthetic_cli",
+      provenance_ref: "monthly-filing://filing/synthetic-cli",
+      external_references: ["invoices://invoice/synthetic-cli"],
+      immutable: true,
+    });
+    expect(created.asset.canonical_ref).toBe(`open-files://evidence/${created.asset.id}/versions/4`);
+
+    const replay = Bun.spawnSync({ cmd: args, env, stdout: "pipe", stderr: "pipe" });
+    expect(replay.exitCode).toBe(0);
+    const replayed = JSON.parse(new TextDecoder().decode(replay.stdout)) as {
+      replayed: boolean;
+      asset: { id: string };
+      intent: { id: string };
+    };
+    expect(replayed).toMatchObject({
+      replayed: true,
+      asset: { id: created.asset.id },
+      intent: { id: created.intent.id },
+    });
+
+    const list = Bun.spawnSync({
+      cmd: [
+        "bun", "run", cliPath, "evidence", "list",
+        "--provenance-type", "monthly_filing",
+        "--provenance-id", "filing_synthetic_cli",
+        "--provenance-ref", "monthly-filing://filing/synthetic-cli",
+        "--evidence-version", "4",
+        "--classification", "restricted",
+        "--retention-policy", "seven_year_records",
+        "--external-ref", "invoices://invoice/synthetic-cli",
+        "--json",
+      ],
+      env,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(list.exitCode).toBe(0);
+    expect((JSON.parse(new TextDecoder().decode(list.stdout)) as Array<{ id: string }>).map((asset) => asset.id))
+      .toEqual([created.asset.id]);
+
+    writeFileSync(fixture, "mutated synthetic evidence");
+    const mutation = Bun.spawnSync({ cmd: args, env, stdout: "pipe", stderr: "pipe" });
+    expect(mutation.exitCode).toBe(1);
+    expect(new TextDecoder().decode(mutation.stderr)).toMatch(/immutable evidence replay conflict/i);
+  });
 });

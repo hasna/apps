@@ -5,11 +5,13 @@ import { lookup as mimeLookup } from "mime-types";
 import { getDataDir } from "../db/database.js";
 import {
   createFileAccessEvent,
-  createFileAsset,
+  createFileAssetConvergent,
   createFileLink,
   createFileUploadIntent,
   getFileAsset,
+  getFileAssetByIdempotencyKey,
   getFileUploadIntent,
+  getFileUploadIntentForAsset,
   listFileAccessEvents,
   listFileAssets,
   listFileLinks,
@@ -18,7 +20,7 @@ import {
   type ListFileAssetsOptions,
 } from "../db/evidence.js";
 import { copyS3Object, deleteFromS3, getPresignedPutUrl, getPresignedUrl, headS3Object, uploadBufferToS3 } from "./s3.js";
-import { sha256File } from "./hasher.js";
+import { sha256Buffer, sha256File } from "./hasher.js";
 import type {
   CreateFileAccessEventInput,
   CreateFileAssetInput,
@@ -47,6 +49,7 @@ import type {
  * orchestration awaits them uniformly.
  */
 export interface CreateUploadIntentInput {
+  id?: string;
   asset_id: string;
   expires_at: string;
   expected_checksum: string;
@@ -64,10 +67,16 @@ export interface UpdateFileAssetStatusInput {
 }
 
 export interface EvidenceDb {
-  createFileAsset(input: CreateFileAssetInput): FileAsset | Promise<FileAsset>;
+  createFileAsset(input: CreateFileAssetInput): { asset: FileAsset; created: boolean } | Promise<{ asset: FileAsset; created: boolean }>;
   getFileAsset(id: string): FileAsset | null | Promise<FileAsset | null>;
+  getFileAssetByIdempotencyKey(
+    orgId: string,
+    app: string,
+    idempotencyKey: string,
+  ): FileAsset | null | Promise<FileAsset | null>;
   createFileUploadIntent(input: CreateUploadIntentInput): FileUploadIntent | Promise<FileUploadIntent>;
   getFileUploadIntent(id: string): FileUploadIntent | null | Promise<FileUploadIntent | null>;
+  getFileUploadIntentForAsset(assetId: string): FileUploadIntent | null | Promise<FileUploadIntent | null>;
   markFileUploadIntentCompleted(id: string): FileUploadIntent | null | Promise<FileUploadIntent | null>;
   updateFileAssetStatus(input: UpdateFileAssetStatusInput): FileAsset | null | Promise<FileAsset | null>;
   createFileLink(input: CreateFileLinkInput): FileLink | Promise<FileLink>;
@@ -76,10 +85,12 @@ export interface EvidenceDb {
 
 /** Default (on-box sqlite) evidence DB seam. */
 export const sqliteEvidenceDb: EvidenceDb = {
-  createFileAsset,
+  createFileAsset: createFileAssetConvergent,
   getFileAsset,
+  getFileAssetByIdempotencyKey,
   createFileUploadIntent,
   getFileUploadIntent,
+  getFileUploadIntentForAsset,
   markFileUploadIntentCompleted,
   updateFileAssetStatus,
   createFileLink,
@@ -108,6 +119,12 @@ export interface CreateEvidenceUploadInput {
   checksum: string;
   checksum_algorithm?: "sha256";
   classification?: string;
+  version?: number;
+  provenance_type?: string;
+  provenance_id?: string;
+  provenance_ref?: string;
+  external_references?: string[];
+  idempotency_key?: string;
   retention_until?: string;
   retention_policy?: string;
   storage_class?: string;
@@ -120,6 +137,7 @@ export interface CreateEvidenceUploadInput {
 export interface EvidenceUploadResult {
   asset: FileAsset;
   intent: FileUploadIntent;
+  replayed: boolean;
 }
 
 export interface EvidenceCredentialOutputOptions {
@@ -135,7 +153,7 @@ export interface EvidenceCredentialOutputOptions {
 export function redactEvidenceUploadCredentials(result: EvidenceUploadResult): EvidenceUploadResult {
   const intent = { ...result.intent };
   delete intent.upload_url;
-  return { asset: result.asset, intent };
+  return { asset: result.asset, intent, replayed: result.replayed };
 }
 
 export interface EvidenceDownloadGrant {
@@ -201,15 +219,40 @@ export async function createEvidenceUploadIntent(
 ): Promise<EvidenceUploadResult> {
   validateUploadInput(input);
   const storage = getEvidenceStorageOptions(storageOverrides);
-  const assetId = `asset_${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
-  const objectKey = buildEvidenceObjectKey({ ...input, asset_id: assetId, prefix: storage.prefix });
-  const quarantineKey = `quarantine/${objectKey}`;
   const contentType = input.content_type ?? (mimeLookup(input.original_name) || "application/octet-stream").toString();
-  const asset = await db.createFileAsset({
-    ...input,
+  const normalizedInput = normalizeEvidenceInput(input, contentType);
+
+  if (normalizedInput.idempotency_key) {
+    const existing = await db.getFileAssetByIdempotencyKey(
+      normalizedInput.org_id,
+      normalizedInput.app,
+      normalizedInput.idempotency_key,
+    );
+    if (existing) {
+      assertImmutableReplay(existing, normalizedInput, storage);
+      const intent = await db.getFileUploadIntentForAsset(existing.id);
+      if (!intent) throw new Error(`Upload intent not found for replayed evidence asset: ${existing.id}`);
+      const replayIntent = await withEvidenceUploadUrl(existing, intent, storage, input.expires_in_seconds ?? 600);
+      await db.createFileAccessEvent({
+        asset_id: existing.id,
+        org_id: existing.org_id,
+        company_id: existing.company_id,
+        app: existing.app,
+        action: "create_upload",
+        metadata: { intent_id: intent.id, storage_provider: storage.provider, replayed: true },
+      });
+      return { asset: existing, intent: replayIntent, replayed: true };
+    }
+  }
+
+  const assetId = normalizedInput.idempotency_key
+    ? deterministicEvidenceId("asset", normalizedInput.org_id, normalizedInput.app, normalizedInput.idempotency_key)
+    : `asset_${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
+  const objectKey = buildEvidenceObjectKey({ ...normalizedInput, asset_id: assetId, prefix: storage.prefix });
+  const quarantineKey = `quarantine/${objectKey}`;
+  const created = await db.createFileAsset({
+    ...normalizedInput,
     id: assetId,
-    content_type: contentType,
-    checksum_algorithm: input.checksum_algorithm ?? "sha256",
     storage_provider: storage.provider,
     // `bucket` is the storage container for the asset. For s3 that is the S3
     // bucket; for local it is the resolved on-box evidence root. Persisting it
@@ -221,14 +264,17 @@ export async function createEvidenceUploadIntent(
     object_key: objectKey,
     quarantine_key: quarantineKey,
   });
+  const asset = created.asset;
 
-  if (asset.id !== assetId) {
+  if (created.created && asset.id !== assetId) {
     throw new Error("Evidence asset id allocation mismatch");
   }
+  if (!created.created) assertImmutableReplay(asset, normalizedInput, storage);
 
   const expiresAt = new Date(Date.now() + (input.expires_in_seconds ?? 600) * 1000).toISOString();
   const requiredHeaders = makeRequiredUploadHeaders(asset);
   const intent = await db.createFileUploadIntent({
+    id: normalizedInput.idempotency_key ? deterministicEvidenceId("upl", asset.id) : undefined,
     asset_id: asset.id,
     expires_at: expiresAt,
     expected_checksum: asset.checksum,
@@ -237,15 +283,7 @@ export async function createEvidenceUploadIntent(
     required_headers: requiredHeaders,
   });
 
-  const uploadUrl = storage.provider === "s3"
-    ? await getPresignedPutUrl(makeEvidenceSource(storage), quarantineKey, {
-        expiresIn: input.expires_in_seconds ?? 600,
-        contentType,
-        contentLength: input.size,
-        checksumSha256: asset.checksum,
-        metadata: evidenceMetadata(asset),
-      })
-    : pathToFileURL(localObjectPath(storage, quarantineKey, asset)).toString();
+  const uploadIntent = await withEvidenceUploadUrl(asset, intent, storage, input.expires_in_seconds ?? 600);
 
   await db.createFileAccessEvent({
     asset_id: asset.id,
@@ -253,10 +291,10 @@ export async function createEvidenceUploadIntent(
     company_id: asset.company_id,
     app: asset.app,
     action: "create_upload",
-    metadata: { intent_id: intent.id, storage_provider: storage.provider },
+    metadata: { intent_id: intent.id, storage_provider: storage.provider, replayed: !created.created },
   });
 
-  return { asset, intent: { ...intent, upload_url: uploadUrl, required_headers: requiredHeaders } };
+  return { asset, intent: uploadIntent, replayed: !created.created };
 }
 
 export type UploadEvidenceFileInput = Omit<CreateEvidenceUploadInput, "size" | "checksum" | "content_type" | "original_name"> & {
@@ -280,6 +318,10 @@ export async function uploadEvidenceFile(
     checksum_algorithm: "sha256",
   }, storageOverrides, db);
 
+  if (result.replayed && result.asset.status === "verified") {
+    return redactEvidenceUploadCredentials(result);
+  }
+
   const storage = getEvidenceStorageOptions(storageOverrides);
   const key = result.asset.quarantine_key ?? result.asset.object_key;
   if (storage.provider === "s3") {
@@ -302,6 +344,7 @@ export async function uploadEvidenceFile(
   return redactEvidenceUploadCredentials({
     asset: completed,
     intent: (await db.getFileUploadIntent(result.intent.id))!,
+    replayed: result.replayed,
   });
 }
 
@@ -312,6 +355,10 @@ export async function completeEvidenceUpload(
 ): Promise<FileAsset> {
   const intent = await db.getFileUploadIntent(intentId);
   if (!intent) throw new Error(`Upload intent not found: ${intentId}`);
+  if (intent.status === "completed") {
+    const completed = await db.getFileAsset(intent.asset_id);
+    if (completed?.status === "verified") return completed;
+  }
   if (intent.status !== "pending") throw new Error(`Upload intent is not pending: ${intent.status}`);
   if (Date.parse(intent.expires_at) < Date.now()) throw new Error(`Upload intent expired: ${intentId}`);
 
@@ -453,6 +500,143 @@ function validateUploadInput(input: CreateEvidenceUploadInput): void {
   if (!/^[a-f0-9]{64}$/i.test(input.checksum)) throw new Error("checksum must be a sha256 hex digest");
   if (input.retention_until && Number.isNaN(Date.parse(input.retention_until))) throw new Error("retention_until must be an ISO date string");
   if (input.storage_class && !/^[A-Za-z0-9_.-]{1,64}$/.test(input.storage_class)) throw new Error("storage_class contains unsupported characters");
+  if (input.immutable === false) throw new Error("Evidence assets are immutable and cannot set immutable=false");
+  if (input.version !== undefined && (!Number.isInteger(input.version) || input.version < 1)) {
+    throw new Error("version must be an integer >= 1");
+  }
+  if (input.provenance_type !== undefined && !input.provenance_type.trim()) throw new Error("provenance_type cannot be empty");
+  if (input.provenance_id !== undefined && !input.provenance_id.trim()) throw new Error("provenance_id cannot be empty");
+  if (input.idempotency_key !== undefined && !input.idempotency_key.trim()) throw new Error("idempotency_key cannot be empty");
+  if (input.external_references?.some((ref) => !ref.trim())) throw new Error("external_references cannot contain empty values");
+}
+
+function normalizeEvidenceInput(
+  input: CreateEvidenceUploadInput,
+  contentType: string,
+): CreateEvidenceUploadInput & {
+  content_type: string;
+  checksum_algorithm: "sha256";
+  classification: string;
+  version: number;
+  provenance_type: string;
+  provenance_id: string;
+  external_references: string[];
+  immutable: true;
+} {
+  return {
+    ...input,
+    content_type: contentType,
+    checksum_algorithm: input.checksum_algorithm ?? "sha256",
+    classification: input.classification ?? "general",
+    version: input.version ?? 1,
+    provenance_type: input.provenance_type?.trim() || "direct_upload",
+    provenance_id: input.provenance_id?.trim() || input.idempotency_key?.trim() || input.checksum.toLowerCase(),
+    provenance_ref: input.provenance_ref?.trim() || undefined,
+    external_references: [...new Set((input.external_references ?? []).map((ref) => ref.trim()))].sort(),
+    idempotency_key: input.idempotency_key?.trim() || undefined,
+    immutable: true,
+    metadata: input.metadata ?? {},
+  };
+}
+
+async function withEvidenceUploadUrl(
+  asset: FileAsset,
+  intent: FileUploadIntent,
+  storage: Required<EvidenceStorageOptions>,
+  expiresIn: number,
+): Promise<FileUploadIntent> {
+  const requiredHeaders = makeRequiredUploadHeaders(asset);
+  if (intent.status !== "pending") return intent;
+  const key = asset.quarantine_key ?? asset.object_key;
+  const uploadUrl = storage.provider === "s3"
+    ? await getPresignedPutUrl(makeEvidenceSource(storage, asset), key, {
+        expiresIn,
+        contentType: asset.content_type,
+        contentLength: asset.size,
+        checksumSha256: asset.checksum,
+        metadata: evidenceMetadata(asset),
+      })
+    : pathToFileURL(localObjectPath(storage, key, asset)).toString();
+  return { ...intent, upload_url: uploadUrl, required_headers: requiredHeaders };
+}
+
+function assertImmutableReplay(
+  existing: FileAsset,
+  desired: ReturnType<typeof normalizeEvidenceInput>,
+  storage: Required<EvidenceStorageOptions>,
+): void {
+  const expected: Record<string, unknown> = {
+    org_id: desired.org_id,
+    company_id: desired.company_id,
+    app: desired.app,
+    kind: desired.kind,
+    classification: desired.classification,
+    version: desired.version,
+    provenance_type: desired.provenance_type,
+    provenance_id: desired.provenance_id,
+    provenance_ref: desired.provenance_ref,
+    external_references: desired.external_references,
+    original_name: desired.original_name,
+    content_type: desired.content_type,
+    size: desired.size,
+    checksum: desired.checksum.toLowerCase(),
+    checksum_algorithm: desired.checksum_algorithm,
+    storage_provider: storage.provider,
+    bucket: storage.provider === "s3" ? storage.bucket : storage.localRoot,
+    region: storage.provider === "s3" ? storage.region : undefined,
+    retention_until: desired.retention_until,
+    retention_policy: desired.retention_policy,
+    storage_class: desired.storage_class,
+    legal_hold: desired.legal_hold ?? false,
+    immutable: true,
+    metadata: desired.metadata,
+  };
+  const actual: Record<string, unknown> = {
+    org_id: existing.org_id,
+    company_id: existing.company_id,
+    app: existing.app,
+    kind: existing.kind,
+    classification: existing.classification,
+    version: existing.version,
+    provenance_type: existing.provenance_type,
+    provenance_id: existing.provenance_id,
+    provenance_ref: existing.provenance_ref,
+    external_references: [...existing.external_references].sort(),
+    original_name: existing.original_name,
+    content_type: existing.content_type,
+    size: existing.size,
+    checksum: existing.checksum.toLowerCase(),
+    checksum_algorithm: existing.checksum_algorithm,
+    storage_provider: existing.storage_provider,
+    bucket: existing.bucket,
+    region: existing.region,
+    retention_until: existing.retention_until,
+    retention_policy: existing.retention_policy,
+    storage_class: existing.storage_class,
+    legal_hold: existing.legal_hold,
+    immutable: existing.immutable,
+    metadata: existing.metadata,
+  };
+  if (stableJson(actual) !== stableJson(expected)) {
+    throw new Error(`Immutable evidence replay conflict for idempotency key: ${desired.idempotency_key}`);
+  }
+}
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .filter(([, entry]) => entry !== undefined)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, entry]) => `${JSON.stringify(key)}:${stableJson(entry)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "undefined";
+}
+
+function deterministicEvidenceId(prefix: "asset" | "upl", ...parts: string[]): string {
+  const digest = sha256Buffer(Buffer.from(parts.join("\u0000"), "utf8"));
+  return `${prefix}_${digest.slice(0, prefix === "asset" ? 16 : 12)}`;
 }
 
 function makeEvidenceSource(storage: Required<EvidenceStorageOptions>, asset?: FileAsset): Source {

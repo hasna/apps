@@ -29,6 +29,28 @@ export interface Ok { "ok": boolean }
 
 export interface Stats { "total_files": number; "total_size": number; "by_ext"?: Array<Record<string, unknown>>; "by_source"?: Array<Record<string, unknown>> }
 
+export interface ExtractedText { "source_ref": string; "file_id"?: string; "revision_id"?: string; "status": string; "mime": string; "bytes_read": number; "total_size"?: number; "truncated": boolean; "redacted": boolean; "segments": Array<Record<string, unknown>>; "metadata": Record<string, unknown> }
+
+export interface FileAsset { "id": string; "org_id": string; "company_id"?: string; "app": string; "kind": string; "classification": string; "version": number; "canonical_ref": string; "provenance_type": string; "provenance_id": string; "provenance_ref"?: string; "external_references": Array<string>; "idempotency_key"?: string; "original_name": string; "content_type": string; "size": number; "checksum": string; "checksum_algorithm": "sha256"; "storage_provider": "s3" | "local"; "bucket"?: string; "region"?: string; "object_key": string; "quarantine_key"?: string; "status": "pending_upload" | "uploaded" | "verified" | "archived" | "deleted"; "scan_status": "pending" | "clean" | "skipped" | "suspicious" | "blocked"; "retention_until"?: string; "retention_policy"?: string; "storage_class"?: string; "legal_hold": boolean; "immutable": boolean; "metadata": Record<string, unknown>; "created_at": string; "updated_at": string; "verified_at"?: string }
+
+export interface FileUploadIntent { "id": string; "asset_id": string; "method": "PUT"; "upload_url"?: string; "expires_at": string; "status": "pending" | "completed" | "expired" | "cancelled"; "expected_checksum": string; "expected_checksum_algorithm": string; "expected_size": number; "required_headers": Record<string, string>; "metadata": Record<string, unknown>; "created_at": string; "completed_at"?: string }
+
+export interface EvidenceUploadResult { "asset": FileAsset; "intent": FileUploadIntent; "replayed": boolean }
+
+export interface CreateEvidenceUpload { "org_id"?: string; "company_id"?: string; "app": string; "kind": string; "original_name": string; "content_type"?: string; "size": number; "checksum": string; "checksum_algorithm"?: "sha256"; "classification"?: string; "version"?: number; "provenance_type"?: string; "provenance_id"?: string; "provenance_ref"?: string; "external_references"?: Array<string>; "idempotency_key"?: string; "retention_until"?: string; "retention_policy"?: string; "storage_class"?: string; "legal_hold"?: boolean; "immutable"?: boolean; "metadata"?: Record<string, unknown>; "expires_in_seconds"?: number; "include_upload_url"?: boolean }
+
+export interface FileLink { "id": string; "asset_id": string; "org_id": string; "company_id"?: string; "app": string; "source_type": string; "source_id": string; "kind": string; "metadata": Record<string, unknown>; "created_at": string }
+
+export interface CreateEvidenceLink { "org_id"?: string; "company_id"?: string; "app": string; "source_type": string; "source_id": string; "kind": string; "metadata"?: Record<string, unknown> }
+
+export interface FileAccessEvent { "id": string; "asset_id": string; "org_id": string; "company_id"?: string; "app"?: string; "actor_id"?: string; "action": "create_upload" | "complete_upload" | "link" | "sign_download" | "download" | "verify" | "archive" | "delete"; "purpose"?: string; "metadata": Record<string, unknown>; "created_at": string }
+
+export interface SignEvidenceDownload { "actor_id"?: string; "purpose"?: string; "expires_in_seconds"?: number }
+
+export interface EvidenceDownloadGrant { "asset": FileAsset; "url": string; "expires_at": string }
+
+export interface EvidenceVerifyResult { "asset": FileAsset; "ok": boolean; "diagnostics": Array<string> }
+
 export interface FilesClientOptions {
   /** Base URL, e.g. process.env.APP_API_URL. */
   baseUrl: string;
@@ -120,8 +142,89 @@ export class FilesClient {
       });
     }
 
+    /** List evidence assets owned by the authenticated tenant */
+    async listEvidenceAssets(query?: { "org_id"?: string; "company_id"?: string; "app"?: string; "kind"?: string; "status"?: "pending_upload" | "uploaded" | "verified" | "archived" | "deleted"; "checksum"?: string; "provenance_type"?: string; "provenance_id"?: string; "provenance_ref"?: string; "version"?: number; "classification"?: string; "retention_policy"?: string; "external_reference"?: string; "idempotency_key"?: string; "limit"?: number; "offset"?: number }, init?: RequestInit): Promise<Array<FileAsset>> {
+      return this.request("GET", `/evidence/assets`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
+    /** Get an evidence asset owned by the authenticated tenant */
+    async getEvidenceAsset(id: string, init?: RequestInit): Promise<FileAsset> {
+      return this.request("GET", `/evidence/assets/${encodeURIComponent(String(id))}`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** List access events for an evidence asset owned by the authenticated tenant */
+    async listEvidenceAccessEvents(id: string, query?: { "limit"?: number }, init?: RequestInit): Promise<Array<FileAccessEvent>> {
+      return this.request("GET", `/evidence/assets/${encodeURIComponent(String(id))}/access-events`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
+    /** List links for an evidence asset owned by the authenticated tenant */
+    async listEvidenceLinks(id: string, init?: RequestInit): Promise<Array<FileLink>> {
+      return this.request("GET", `/evidence/assets/${encodeURIComponent(String(id))}/links`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Link an evidence asset owned by the authenticated tenant */
+    async linkEvidenceAsset(id: string, body: CreateEvidenceLink, init?: RequestInit): Promise<FileLink> {
+      return this.request("POST", `/evidence/assets/${encodeURIComponent(String(id))}/links`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Create a private download grant for an evidence asset owned by the authenticated tenant */
+    async signEvidenceDownload(id: string, body?: SignEvidenceDownload, init?: RequestInit): Promise<EvidenceDownloadGrant> {
+      return this.request("POST", `/evidence/assets/${encodeURIComponent(String(id))}/sign-download`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Verify the bytes and checksum of an evidence asset owned by the authenticated tenant */
+    async verifyEvidenceAsset(id: string, init?: RequestInit): Promise<EvidenceVerifyResult> {
+      return this.request("POST", `/evidence/assets/${encodeURIComponent(String(id))}/verify`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Create an immutable evidence asset and upload intent for the authenticated tenant */
+    async createEvidenceUploadIntent(body: CreateEvidenceUpload, init?: RequestInit): Promise<EvidenceUploadResult> {
+      return this.request("POST", `/evidence/upload-intents`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Complete and verify an evidence upload owned by the authenticated tenant */
+    async completeEvidenceUpload(id: string, init?: RequestInit): Promise<FileAsset> {
+      return this.request("POST", `/evidence/upload-intents/${encodeURIComponent(String(id))}/complete`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
     /** List / search files */
-    async listFiles(query?: { "source_id"?: string; "ext"?: string; "q"?: string; "status"?: string; "limit"?: number; "offset"?: number }, init?: RequestInit): Promise<Array<File>> {
+    async listFiles(query?: { "source_id"?: string; "tag"?: string; "ext"?: string; "q"?: string; "status"?: string; "limit"?: number; "offset"?: number }, init?: RequestInit): Promise<Array<File>> {
       return this.request("GET", `/files`, {
         body: undefined,
         query,
@@ -133,6 +236,15 @@ export class FilesClient {
     async getFile(id: string, init?: RequestInit): Promise<File> {
       return this.request("GET", `/files/${encodeURIComponent(String(id))}`, {
         body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Retrieve authorized derived text extraction */
+    async extractFileText(id: string, body?: { "max_bytes"?: number; "max_segment_chars"?: number; "redact_patterns"?: Array<string> }, init?: RequestInit): Promise<ExtractedText> {
+      return this.request("POST", `/files/${encodeURIComponent(String(id))}/extract-text`, {
+        body,
         query: undefined,
         init,
       });

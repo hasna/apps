@@ -230,10 +230,19 @@ boundaries, and SDK usage, see [docs/service-and-sdk.md](docs/service-and-sdk.md
 
 ## Evidence Vault
 
-`@hasna/files` can also serve as a shared evidence layer for other apps. Apps
-store `file_asset_id` plus domain metadata; this package owns durable storage,
-upload intents, checksum verification, quarantine promotion, signed downloads,
-retention metadata, and access audit.
+`@hasna/files` is the immutable evidence authority for other apps. Accounting,
+Invoices, Monthly Filing, and other consumers store the returned asset ID and
+stable references—never file bytes. This package owns the immutable object ID,
+content hash, byte size, media type, provenance, metadata version, access and
+retention classifications, external references, durable storage, upload
+intents, checksum verification, quarantine promotion, signed downloads, and
+access audit.
+
+An `idempotency_key` is scoped by organization and app and makes duplicate
+writes deterministic. Replaying the same immutable envelope returns the
+original asset and upload intent; changing its bytes or metadata is rejected.
+`canonical_ref` is derived as
+`open-files://evidence/<asset-id>/versions/<version>`.
 
 This package ships no default evidence bucket. Configure one via
 `HASNA_FILES_S3_BUCKET` (or `HASNA_FILES_EVIDENCE_BUCKET`) and inspect the
@@ -252,13 +261,17 @@ files evidence upload ./receipt.pdf \
   --company co_us \
   --app iapp-accounting \
   --kind receipt \
+  --provenance-type accounting \
+  --provenance-id journal-entry-123 \
+  --evidence-version 1 \
+  --external-ref accounting://journal/journal-entry-123 \
+  --idempotency-key accounting:journal-entry-123:v1 \
   --storage local \
   --local-root ./.tmp/evidence
 ```
 
-The future web interface can use the REST endpoints under `/evidence/*`, and
-agents can use the MCP tools such as `create_evidence_upload_intent`,
-`upload_evidence_file`, `link_evidence_asset`, and `sign_evidence_download`.
+The web interface uses the REST endpoints under `/evidence/*`. Programmatic
+clients use the same Store/API contract in local and API transports.
 
 See [docs/evidence-storage.md](docs/evidence-storage.md) for the storage
 boundary and object layout.

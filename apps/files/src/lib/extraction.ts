@@ -35,7 +35,7 @@ export async function extractTextFromFile(fileId: string, opts: ExtractTextOptio
   const sourceRef = revision
     ? buildOpenFilesFileRevisionRef(fileId, revision.id)
     : buildOpenFilesFileRef(fileId);
-  const maxBytes = normalizeMaxBytes(opts.max_bytes, resolved.file.mime);
+  const maxBytes = normalizeExtractMaxBytes(opts.max_bytes, resolved.file.mime);
 
   if (!isExtractableTextMime(resolved.file.mime, resolved.file.name)) {
     return baseResult({
@@ -45,7 +45,7 @@ export async function extractTextFromFile(fileId: string, opts: ExtractTextOptio
       status: "unsupported",
       status_reason: `Unsupported MIME type for text extraction: ${resolved.file.mime}`,
       max_bytes: maxBytes,
-      max_segment_chars: normalizeMaxSegmentChars(opts.max_segment_chars),
+      max_segment_chars: normalizeExtractMaxSegmentChars(opts.max_segment_chars),
     });
   }
 
@@ -62,8 +62,8 @@ export async function extractTextFromFile(fileId: string, opts: ExtractTextOptio
 }
 
 export function extractTextFromBuffer(input: ExtractTextFromBufferInput): ExtractedTextResult {
-  const maxBytes = normalizeMaxBytes(input.max_bytes, input.mime);
-  const maxSegmentChars = normalizeMaxSegmentChars(input.max_segment_chars);
+  const maxBytes = normalizeExtractMaxBytes(input.max_bytes, input.mime);
+  const maxSegmentChars = normalizeExtractMaxSegmentChars(input.max_segment_chars);
   const bytes = Buffer.from(input.bytes).slice(0, maxBytes);
   const supportedMime = isExtractableTextMime(input.mime);
 
@@ -342,7 +342,7 @@ function baseResult(opts: {
   };
 }
 
-function normalizeMaxBytes(value: number | undefined, mime: string): number {
+export function normalizeExtractMaxBytes(value: number | undefined, mime: string): number {
   const fallback = mime.includes("json") ? JSON_MAX_BYTES : DEFAULT_MAX_BYTES;
   if (!Number.isFinite(value ?? fallback)) return fallback;
   return Math.min(MAX_BYTES_CEILING, Math.max(1, Math.floor(value ?? fallback)));
@@ -359,7 +359,7 @@ function readLocalFilePrefix(path: string, maxBytes: number): Buffer {
   }
 }
 
-function normalizeMaxSegmentChars(value: number | undefined): number {
+export function normalizeExtractMaxSegmentChars(value: number | undefined): number {
   return Math.max(256, Math.floor(value ?? DEFAULT_MAX_SEGMENT_CHARS));
 }
 

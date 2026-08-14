@@ -20,10 +20,13 @@ jobs:
           bun-version: latest
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
-          node-version: 22
+          node-version: 24
           registry-url: https://registry.npmjs.org
+
+      - name: Verify npm supports trusted publishing
+        run: bun run scripts/verify-npm-trusted-publishing-version.ts "$(npm --version)"
 
       - name: Install dependencies
         run: bun install --frozen-lockfile

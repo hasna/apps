@@ -167,30 +167,31 @@ export function getFile(id: string): FileWithTags | null {
 export function listFiles(opts: ListFilesOptions = {}): FileWithTags[] {
   const db = getDb();
   const conditions: string[] = ["f.status = 'active'"];
-  const params: unknown[] = [];
+  const joinParams: unknown[] = [];
+  const whereParams: unknown[] = [];
 
-  if (opts.source_id) { conditions.push("f.source_id = ?"); params.push(opts.source_id); }
-  if (opts.machine_id) { conditions.push("f.machine_id = ?"); params.push(opts.machine_id); }
-  if (opts.sync_status) { conditions.push("f.sync_status = ?"); params.push(opts.sync_status); }
-  if (opts.ext) { conditions.push("f.ext = ?"); params.push(opts.ext.startsWith(".") ? opts.ext : `.${opts.ext}`); }
-  if (opts.status) { conditions[0] = `f.status = ?`; params.unshift(opts.status); }
-  if (opts.after) { conditions.push("COALESCE(f.modified_at, f.indexed_at) >= ?"); params.push(opts.after); }
-  if (opts.before) { conditions.push("COALESCE(f.modified_at, f.indexed_at) <= ?"); params.push(opts.before); }
-  if (opts.min_size !== undefined) { conditions.push("f.size >= ?"); params.push(opts.min_size); }
-  if (opts.max_size !== undefined) { conditions.push("f.size <= ?"); params.push(opts.max_size); }
+  if (opts.source_id) { conditions.push("f.source_id = ?"); whereParams.push(opts.source_id); }
+  if (opts.machine_id) { conditions.push("f.machine_id = ?"); whereParams.push(opts.machine_id); }
+  if (opts.sync_status) { conditions.push("f.sync_status = ?"); whereParams.push(opts.sync_status); }
+  if (opts.ext) { conditions.push("f.ext = ?"); whereParams.push(opts.ext.startsWith(".") ? opts.ext : `.${opts.ext}`); }
+  if (opts.status) { conditions[0] = `f.status = ?`; whereParams.unshift(opts.status); }
+  if (opts.after) { conditions.push("COALESCE(f.modified_at, f.indexed_at) >= ?"); whereParams.push(opts.after); }
+  if (opts.before) { conditions.push("COALESCE(f.modified_at, f.indexed_at) <= ?"); whereParams.push(opts.before); }
+  if (opts.min_size !== undefined) { conditions.push("f.size >= ?"); whereParams.push(opts.min_size); }
+  if (opts.max_size !== undefined) { conditions.push("f.size <= ?"); whereParams.push(opts.max_size); }
 
   let join = "";
   if (opts.tag) {
     join += " JOIN file_tags ft_filter ON ft_filter.file_id = f.id JOIN tags t_filter ON t_filter.id = ft_filter.tag_id AND t_filter.name = ?";
-    params.push(opts.tag);
+    joinParams.push(opts.tag);
   }
   if (opts.collection_id) {
     join += " JOIN collection_files cf ON cf.file_id = f.id AND cf.collection_id = ?";
-    params.push(opts.collection_id);
+    joinParams.push(opts.collection_id);
   }
   if (opts.project_id) {
     join += " JOIN project_files pf ON pf.file_id = f.id AND pf.project_id = ?";
-    params.push(opts.project_id);
+    joinParams.push(opts.project_id);
   }
 
   const sortCol = opts.sort === "name" ? "f.name" : opts.sort === "size" ? "f.size" : "f.indexed_at";
@@ -202,7 +203,7 @@ export function listFiles(opts: ListFilesOptions = {}): FileWithTags[] {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const rows = (db.query(
     `SELECT DISTINCT f.* FROM files f ${join} ${where} ORDER BY ${sortCol} ${sortDir} LIMIT ? OFFSET ?`
-  ) as any).all([...params, limit, offset]) as FileRow[];
+  ) as any).all([...joinParams, ...whereParams, limit, offset]) as FileRow[];
 
   return rows.map((row) => {
     const tags = db.query<{ name: string }, [string]>(
