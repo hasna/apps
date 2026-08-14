@@ -125,7 +125,7 @@ function keyFor(scopes: string[]): string {
 function buildHandler(trace: SqlTraceEntry[] = []) {
   const client = makeMemoryClient(trace);
   const store = new ApiKeyStore(client);
-  const verifier = verifyApiKey({ app: 'knowledge', signingSecret: SIGNING, isRevoked: store.isRevoked });
+  const verifier = verifyApiKey({ app: 'knowledge', signingSecret: SIGNING, keyStatus: () => Promise.resolve('active' as const) });
   return createServeHandler({ client, verifier, store, version: '9.9.9' });
 }
 

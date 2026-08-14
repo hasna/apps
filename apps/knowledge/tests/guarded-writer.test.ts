@@ -109,7 +109,7 @@ beforeAll(async () => {
   const verifier = verifyApiKey({
     app: 'knowledge',
     signingSecret: SIGNING,
-    isRevoked: store.isRevoked,
+    keyStatus: () => Promise.resolve('active' as const),
   });
   const handler = createServeHandler({
     client,
@@ -1384,7 +1384,7 @@ describe('FCAME-1 guarded Knowledge writer', () => {
       const verifier = verifyApiKey({
         app: 'knowledge',
         signingSecret: SIGNING,
-        isRevoked: store.isRevoked,
+        keyStatus: () => Promise.resolve('active' as const),
       });
       const binding: KnowledgeGuardedBinding = {
         ...BINDING,
@@ -1468,7 +1468,7 @@ describe('FCAME-1 guarded Knowledge writer', () => {
       const verifier = verifyApiKey({
         app: 'knowledge',
         signingSecret: SIGNING,
-        isRevoked: store.isRevoked,
+        keyStatus: () => Promise.resolve('active' as const),
       });
       const binding: KnowledgeGuardedBinding = {
         ...BINDING,

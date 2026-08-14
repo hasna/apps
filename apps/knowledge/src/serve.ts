@@ -4742,14 +4742,13 @@ export async function startKnowledgeServe(options: StartServeOptions = {}): Prom
   const verifier = verifyApiKey({
     app: KNOWLEDGE_SERVE_APP,
     signingSecret: resolveSigningSecret(env),
-    isRevoked: store.isRevoked,
+    keyStatus: store.keyStatus,
     audit: (e) => {
       if (e.outcome === 'deny') {
         // Never log tokens/keys — kid + reason only.
         console.warn(`[knowledge-serve] auth deny kid=${e.kid ?? '-'} reason=${e.reason} ${e.method} ${e.path}`);
       }
-    },
-  });
+    },  });
 
   const handler = createServeHandler({
     client,

@@ -29663,7 +29663,7 @@ async function startKnowledgeServe(options = {}) {
   const verifier = verifyApiKey({
     app: KNOWLEDGE_SERVE_APP,
     signingSecret: resolveSigningSecret(env),
-    isRevoked: store.isRevoked,
+    keyStatus: store.keyStatus,
     audit: (e) => {
       if (e.outcome === "deny") {
         console.warn(`[knowledge-serve] auth deny kid=${e.kid ?? "-"} reason=${e.reason} ${e.method} ${e.path}`);

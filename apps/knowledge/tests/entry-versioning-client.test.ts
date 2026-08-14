@@ -36,7 +36,7 @@ beforeAll(async () => {
   const created = await createMigratedPglite();
   db = created.db;
   const store = new ApiKeyStore(created.client);
-  const verifier = verifyApiKey({ app: 'knowledge', signingSecret: SIGNING, isRevoked: store.isRevoked });
+  const verifier = verifyApiKey({ app: 'knowledge', signingSecret: SIGNING, keyStatus: () => Promise.resolve('active' as const) });
   const handler = createServeHandler({ client: created.client, verifier, store, version: '9.9.9' });
   server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: handler });
 
