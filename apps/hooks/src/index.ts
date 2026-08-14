@@ -107,7 +107,6 @@ export function removeProjectHook(name: string): boolean {
 
 import { getHook as _getHook } from "./lib/registry.js";
 import { getHookPath as _getHookPath, hookExists as _hookExists } from "./lib/installer.js";
-import { join } from "path";
 import { existsSync } from "fs";
 
 export interface RunHookOptions {
@@ -129,12 +128,23 @@ export interface RunHookResult {
  * and returns the parsed stdout JSON.
  */
 export async function runHook(name: string, input: HookInput, options: RunHookOptions = {}): Promise<RunHookResult> {
-  const meta = _getHook(name);
-  if (!meta) throw new Error(`Hook '${name}' not found`);
+  const { readCustomManifest } = await import("./lib/manifest.js");
+  const custom = readCustomManifest(name);
+  const resolvedMeta = custom ? undefined : _getHook(name);
+  if (!custom && !resolvedMeta) throw new Error(`Hook '${name}' not found`);
 
-  const hookDir = _getHookPath(name);
-  const hookScript = join(hookDir, "src", "hook.ts");
-  if (!existsSync(hookScript)) throw new Error(`Hook script not found: ${hookScript}`);
+  const hookScript = _getHookPath(name) + "/src/hook.ts";
+  const resolvedScript = custom?.scriptPath;
+  const script = resolvedScript ?? (existsSync(hookScript) ? hookScript : undefined);
+  if (!script) throw new Error(`Hook script not found: ${name}`);
+
+  const { verifyScriptHash } = await import("./lib/store.js");
+  const check = await verifyScriptHash(name, script);
+  if (!check.ok) {
+    throw new Error(
+      `Hook '${name}' script changed since it was trusted (sha256 ${check.expected} != ${check.actual}). Run 'hooks trust ${name}' to trust the new content.`,
+    );
+  }
 
   let hookInput = { ...input };
   if (options.profile) {
@@ -150,11 +160,12 @@ export async function runHook(name: string, input: HookInput, options: RunHookOp
     }
   }
 
-  const proc = Bun.spawn(["bun", "run", hookScript], {
+  const proc = Bun.spawn(["bun", "run", script, ...(custom?.manifest.args ?? [])], {
     stdin: new Response(JSON.stringify(hookInput)),
     stdout: "pipe",
     stderr: "pipe",
     env: process.env,
+    ...(custom?.manifest.timeout_ms ? { timeout: custom.manifest.timeout_ms } : {}),
   });
 
   const [stdoutText, stderrText, exitCode] = await Promise.all([
@@ -213,3 +224,73 @@ export {
   storageSync,
 } from "./storage.js";
 export type { StorageBackend, StorageEnv, StorageStatus, SyncMeta, SyncResult } from "./storage.js";
+
+export {
+  getHooksDataDir,
+  getCustomHooksDir,
+  getLockPath,
+  getConfigPath,
+  readConfig,
+  writeConfig,
+  resolveApiUrl,
+  resolveApiKey,
+} from "./config.js";
+export type { HooksConfig } from "./config.js";
+
+export {
+  getHookRecord,
+  listHookRecords,
+  upsertHookRecord,
+  removeHookRecord,
+  readLock,
+  writeLock,
+  setPinnedHook,
+  getPinnedHook,
+  removePinnedHook,
+  verifyScriptHash,
+  retrustHook,
+  sha256Of,
+  sha256File,
+} from "./lib/store.js";
+export type { HookRecord, LockEntry, LockFile, TrustCheck } from "./lib/store.js";
+
+export {
+  parseManifest,
+  readCustomManifest,
+  listCustomHooks,
+  writeCustomHook,
+  resolveScript,
+} from "./lib/manifest.js";
+export type { HookManifest, ParsedManifest } from "./lib/manifest.js";
+
+export {
+  resolveHook,
+  resolveHookDir,
+  resolveHookMeta,
+  resolveScriptPath,
+} from "./lib/resolve.js";
+export type { ResolvedHook, HookSource } from "./lib/resolve.js";
+
+export {
+  installCustomSource,
+  isCustomSource,
+} from "./lib/custom-install.js";
+export type { CustomInstallResult, CustomSourceKind } from "./lib/custom-install.js";
+
+export {
+  planSync,
+  syncHooks,
+} from "./lib/sync.js";
+export type { SyncDiff, SyncPlan, ArtifactResponse } from "./lib/sync.js";
+
+export {
+  handleServeRequest,
+  startServeServer,
+  DEFAULT_SERVE_PORT,
+} from "./serve.js";
+export type { CatalogEntry, ArtifactPayload } from "./serve.js";
+
+export {
+  provisionCloudflareResources,
+} from "./cf/provision.js";
+export type { ProvisionOptions, ProvisionResult } from "./cf/provision.js";
