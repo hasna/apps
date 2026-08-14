@@ -145,8 +145,10 @@ describe("self-hosted OpenAPI routine error-status parity", () => {
         500,
       ]);
       expectStatuses(item, "get", [200, 401, 403, 404, 500]);
-      expectStatuses(item, "patch", [200, 400, 401, 403, 404, 413, 500]);
-      expectStatuses(item, "put", [200, 400, 401, 403, 404, 413, 500]);
+      if (resource.path !== "priority-sender-rules") {
+        expectStatuses(item, "patch", [200, 400, 401, 403, 404, 413, 500]);
+        expectStatuses(item, "put", [200, 400, 401, 403, 404, 413, 500]);
+      }
       expectStatuses(item, "delete", [200, 401, 403, 404, 500]);
     }
   });

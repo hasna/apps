@@ -163,6 +163,9 @@ describe("v1-stub — messages semantics over the async mail data source", () =>
         { id: "m2", direction: "inbound", from_addr: "b@x.com", to_addrs: ["me@x.com"], subject: "second", body_text: "yo", status: "received", is_read: true, is_starred: false, labels: [], received_at: "2026-06-03T00:00:00.000Z" },
         { id: "m3", direction: "outbound", from_addr: "me@x.com", to_addrs: ["c@x.com"], subject: "sent one", body_text: "out", status: "sent", labels: [], created_at: "2026-06-01T00:00:00.000Z" },
       ],
+      "priority-sender-rules": [
+        { id: "priority:address:a@x.com", kind: "address", value: "a@x.com" },
+      ],
     });
   });
 
@@ -175,6 +178,7 @@ describe("v1-stub — messages semantics over the async mail data source", () =>
     const counts = await ds!.mailboxCounts();
     expect(counts.inbox).toBe(2);
     expect(counts.unread).toBe(1);
+    expect(counts.priority).toBe(1);
     expect(counts.sent).toBe(1);
   });
 

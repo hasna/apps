@@ -149,6 +149,11 @@ export function cliEquivalentForTool(name: string, input: unknown): string {
     download_attachment: () => `emails inbox attachment ${id ?? "<inbound-id>"} --download${flag(input, "index")}${flag(input, "output_dir", "output-dir")}${flag(input, "max_bytes", "max-bytes")} --json`,
     search_inbound: () => `emails inbox search ${arg(input, "query") ?? "<query>"} --json`,
     get_inbox_sync_status: () => "emails inbox sync-status --json",
+    list_mailbox_filters: () => `emails inbox filter list${flag(input, "limit")}${flag(input, "offset")} --json`,
+    create_mailbox_filter: () => `emails inbox filter add ${arg(input, "name") ?? "<name>"} --mailbox ${arg(input, "mailbox") ?? "inbox"} --json`,
+    update_mailbox_filter: () => `emails inbox filter update ${id ?? "<filter-id>"} --json`,
+    delete_mailbox_filter: () => `emails inbox filter remove ${id ?? "<filter-id>"} --yes --json`,
+    apply_mailbox_filter: () => `emails inbox list --filter ${id ?? "<filter-id>"}${flag(input, "limit")}${flag(input, "offset")} --json`,
 
     list_sequences: () => `emails sequence list${flag(input, "limit")}${flag(input, "offset")} --json`,
     create_sequence: () => `emails sequence create ${arg(input, "name") ?? "<name>"} --json`,
@@ -180,6 +185,7 @@ export function cliEquivalentForTool(name: string, input: unknown): string {
 }
 
 function errorCode(message: string): string {
+  if (/already exists|duplicate|conflict/i.test(message)) return "conflict";
   if (/could not resolve id|not found/i.test(message)) return "not_found";
   if (/requires|missing|required/i.test(message)) return "missing_required_input";
   if (/invalid|must be/i.test(message)) return "invalid_input";

@@ -10,10 +10,10 @@ import { marked } from "marked";
 
 // ── folders / mailboxes ───────────────────────────────────────────────────────
 
-export type Folder = "inbox" | "unread" | "starred" | "sent" | "archived" | "spam" | "trash";
+export type Folder = "inbox" | "priority" | "unread" | "starred" | "sent" | "archived" | "spam" | "trash";
 export type Mailbox = Folder;
 
-export const FOLDERS: Folder[] = ["inbox", "unread", "starred", "sent", "archived", "spam", "trash"];
+export const FOLDERS: Folder[] = ["inbox", "priority", "unread", "starred", "sent", "archived", "spam", "trash"];
 
 /**
  * Refusal text for a provider-scoped clear against the self-hosted store.
@@ -76,6 +76,7 @@ export function parseCliFolder(value: string | undefined, fallback: Mailbox = "i
 export function mailboxLabel(m: Mailbox): string {
   return {
     inbox: "Inbox",
+    priority: "Priority Inbox",
     unread: "Unread",
     starred: "Starred",
     sent: "Sent",
@@ -129,6 +130,8 @@ export interface TuiMessage {
   attachments: number;
   /** True if I sent it (app-sent, or imported mail labelled SENT). */
   sentByMe: boolean;
+  /** True when the sender matches an active exact-address or domain rule. */
+  is_priority?: boolean;
   /** Ledger status (e.g. sent | failed | uncertain); undefined when unreported. */
   status?: string;
   /** Send-intent state (self-hosted ledger); undefined when unreported. */
@@ -201,6 +204,7 @@ export function threadItemToMessage(item: TuiThreadMessage, base: TuiMessage): T
     provider_thread_id: base.provider_thread_id,
     attachments: 0,
     sentByMe: item.kind === "sent",
+    is_priority: false,
   };
 }
 
@@ -229,7 +233,13 @@ export interface MailboxListOptions {
   limit?: number;
   offset?: number;
   since?: string;
+  until?: string;
   search?: string;
+  from?: string;
+  to?: string;
+  domain?: string;
+  address?: string;
+  subject?: string;
   label?: string;
   source?: MailboxSource;
   sort?: "newest" | "oldest";
@@ -241,11 +251,15 @@ export interface MailboxListOptions {
    * a flag.
    */
   read?: boolean;
+  unread?: boolean;
+  starred?: boolean;
+  archived?: boolean;
 }
 
 export interface MailboxCounts {
   inbox: number;
   unread: number;
+  priority: number;
   starred: number;
   sent: number;
   archived: number;
@@ -254,7 +268,7 @@ export interface MailboxCounts {
 }
 
 export function emptyMailboxCounts(): MailboxCounts {
-  return { inbox: 0, unread: 0, starred: 0, sent: 0, archived: 0, spam: 0, trash: 0 };
+  return { inbox: 0, unread: 0, priority: 0, starred: 0, sent: 0, archived: 0, spam: 0, trash: 0 };
 }
 
 export interface MailboxFolderStatus {
@@ -327,6 +341,7 @@ export interface MessageBody {
   html: string | null;
   summary: string;
   flags: string[];
+  is_priority?: boolean;
   attachments: AttachmentInfo[];
 }
 
@@ -471,8 +486,8 @@ export function isImportantLabel(label: string): boolean {
     || normalized === "customer";
 }
 
-export function isImportantMessage(message: Pick<TuiMessage, "is_starred" | "labels">): boolean {
-  return message.is_starred || message.labels.some(isImportantLabel);
+export function isImportantMessage(message: Pick<TuiMessage, "is_starred" | "labels"> & Partial<Pick<TuiMessage, "is_priority">>): boolean {
+  return message.is_priority === true || message.is_starred || message.labels.some(isImportantLabel);
 }
 
 function messageCategory(message: TuiMessage): string {
