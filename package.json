@@ -15,7 +15,8 @@
     "check:names": "bun tooling/ci/check-names.ts",
     "check:secrets": "bun tooling/ci/check-secrets.ts",
     "check:manifests": "bun tooling/ci/check-manifests.ts",
-    "check:publish-guard": "bun tooling/ci/check-publish-guard.ts"
+    "check:publish-guard": "bun tooling/ci/check-publish-guard.ts",
+    "test:standard": "bun test tooling/ci/tests/standard"
   },
   "devDependencies": {
     "@changesets/cli": "2.27.9",
