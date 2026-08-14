@@ -88,6 +88,8 @@ describe("project-registration OpenAPI and generated SDK", () => {
 
   test("generated SDK exposes every project-registration route with exact query and bodies", async () => {
     const requests: Request[] = [];
+    const historicalCorpusId =
+      "todos:adfd95c7-ee8b-52cb-ae47-4ae65dae3313:postgresql";
     const receipt = {
       receipt_id: "tpr_fixture",
       authority: "todos",
@@ -112,6 +114,12 @@ describe("project-registration OpenAPI and generated SDK", () => {
       accepted_receipt_id: null,
       created_by_operation: false,
       created_at: "2026-08-11T00:00:00.000Z",
+    } as const;
+    const historicalReceipt = {
+      ...receipt,
+      receipt_id: "tpr_historical_fixture",
+      package_version: "0.15.29",
+      corpus_id: historicalCorpusId,
     } as const;
     const client = new TodosV1Client({
       baseUrl: "https://todos.example.invalid",
@@ -177,7 +185,7 @@ describe("project-registration OpenAPI and generated SDK", () => {
         }
         if (path.endsWith("/receipts/lookup")) {
           return Response.json({
-            receipt,
+            receipt: historicalReceipt,
             response_control: {
               response_byte_limit: 65536,
               time_budget_ms: 5000,
@@ -194,10 +202,10 @@ describe("project-registration OpenAPI and generated SDK", () => {
               valid: true,
               resource_kind: "project",
               target_id: receipt.target_id,
-              source_receipt_id: receipt.receipt_id,
-              accepted_receipt_id: receipt.receipt_id,
+              source_receipt_id: historicalReceipt.receipt_id,
+              accepted_receipt_id: historicalReceipt.receipt_id,
               source_outcome: "accepted",
-              created_at: receipt.created_at,
+              created_at: historicalReceipt.created_at,
               current_revision: receipt.result_revision,
               accepted_result_digest: receipt.result_digest,
             },
@@ -238,6 +246,11 @@ describe("project-registration OpenAPI and generated SDK", () => {
       response_byte_limit: 65536,
       time_budget_ms: 5000,
     } satisfies ProjectRegistrationRequest;
+    const historicalSourceRequest = {
+      ...request,
+      package_version: historicalReceipt.package_version,
+      corpus_id: historicalReceipt.corpus_id,
+    } satisfies ProjectRegistrationRequest;
     const currentRecord = {
       id: receipt.target_id,
       name: "SDK fixture",
@@ -266,10 +279,10 @@ describe("project-registration OpenAPI and generated SDK", () => {
       direction: request.direction,
       authority: "todos",
       authority_route: request.authority_route,
-      package_version: request.package_version,
+      package_version: historicalReceipt.package_version,
       authority_id: request.authority_id,
       tenant_id: request.tenant_id,
-      corpus_id: request.corpus_id,
+      corpus_id: historicalReceipt.corpus_id,
       target_selector: request.target_selector,
       idempotency_key: request.idempotency_key,
       max_items: 1,
@@ -283,8 +296,8 @@ describe("project-registration OpenAPI and generated SDK", () => {
       cursor: "cursor-fixture",
     });
     await client.validatePriorRegistrationAdoption({
-      source_request: request,
-      source_receipt: receipt,
+      source_request: historicalSourceRequest,
+      source_receipt: historicalReceipt,
       current_record: currentRecord,
     });
     await client.compensateProjectRegistrationResource(request);
@@ -306,9 +319,13 @@ describe("project-registration OpenAPI and generated SDK", () => {
     expect(new URL(requests[4]!.url).searchParams.get("limit")).toBe("2");
     expect(new URL(requests[4]!.url).searchParams.get("cursor")).toBe("cursor-fixture");
     expect(await requests[1]!.json()).toMatchObject({ bind_existing: true });
+    expect(await requests[3]!.json()).toMatchObject({
+      package_version: historicalReceipt.package_version,
+      corpus_id: historicalCorpusId,
+    });
     expect(await requests[5]!.json()).toEqual({
-      source_request: request,
-      source_receipt: receipt,
+      source_request: historicalSourceRequest,
+      source_receipt: historicalReceipt,
       current_record: currentRecord,
     });
   });

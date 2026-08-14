@@ -67,11 +67,13 @@ describe("project-registration receipt lookup CLI", () => {
     const db = new Database(dbPath);
     runMigrations(db);
     const historicalPackageVersion = "1.0.0-rc.3";
+    const historicalCorpusId =
+      "todos:adfd95c7-ee8b-52cb-ae47-4ae65dae3313:postgresql";
     const historical = createLocalTodosProjectRegistrationAuthority(db, {
       packageVersion: historicalPackageVersion,
       authorityId: "todos",
       tenantId: "sqlite",
-      corpusId: "todos:sqlite",
+      corpusId: historicalCorpusId,
       now: () => "2026-08-07T10:00:00.000Z",
     });
     const desired = {
@@ -104,7 +106,7 @@ describe("project-registration receipt lookup CLI", () => {
       package_version: historicalPackageVersion,
       authority_id: "todos",
       tenant_id: "sqlite",
-      corpus_id: "todos:sqlite",
+      corpus_id: historicalCorpusId,
       target_selector: targetSelector,
       idempotency_key: idempotencyKey,
       request_digest: requestDigest,
@@ -129,7 +131,7 @@ describe("project-registration receipt lookup CLI", () => {
       package_version: historicalPackageVersion,
       authority_id: "todos",
       tenant_id: "sqlite",
-      corpus_id: "todos:sqlite",
+      corpus_id: historicalCorpusId,
       target_selector: targetSelector,
       idempotency_key: idempotencyKey,
       target_id: receipt.target_id,
@@ -152,6 +154,14 @@ describe("project-registration receipt lookup CLI", () => {
       },
       response_control: { complete: true, truncated: false },
     });
+
+    writeFileSync(requestPath, JSON.stringify({
+      ...lookup,
+      corpus_id: "todos:sqlite",
+    }));
+    const currentCorpus = await runCli(root, dbPath, requestPath);
+    expect(currentCorpus.exitCode).toBe(1);
+    expect(currentCorpus.stderr).toContain("no exact terminal receipt matched");
 
     writeFileSync(requestPath, JSON.stringify({
       ...lookup,

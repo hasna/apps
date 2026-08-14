@@ -1423,13 +1423,17 @@ implements TodosProjectRegistrationAuthority {
       request.authority !== "todos"
       || request.authority_id !== this.capabilityValue.authority_id
       || request.tenant_id !== this.capabilityValue.tenant_id
-      || request.corpus_id !== this.capabilityValue.corpus_id
     ) {
       throw new TodosProjectRegistrationError(
         "TODOS_PROJECT_REGISTRATION_CAPABILITY_MISMATCH",
         "receipt lookup does not match this authority capability identity",
       );
     }
+    requireString(request.corpus_id, "corpus_id", {
+      min: 3,
+      max: 128,
+      pattern: AUTHORITY_ROUTE_PATTERN,
+    });
     requireString(request.authority_route, "authority_route", {
       min: 3,
       max: 128,
@@ -1463,6 +1467,7 @@ implements TodosProjectRegistrationAuthority {
     }
     const receipt = await this.backend.getReceiptForLookup({
       ...authorityScope(this.capabilityValue),
+      corpus_id: request.corpus_id,
       route: request.authority_route,
       package_version: request.package_version,
       operation_id: request.operation_id,
@@ -1652,9 +1657,15 @@ implements TodosProjectRegistrationAuthority {
       max: 128,
       pattern: PACKAGE_VERSION_PATTERN,
     });
+    requireString(sourceRequest.corpus_id, "corpus_id", {
+      min: 3,
+      max: 128,
+      pattern: AUTHORITY_ROUTE_PATTERN,
+    });
     assertForwardRequest(sourceRequest, {
       ...this.capabilityValue,
       package_version: sourceRequest.package_version,
+      corpus_id: sourceRequest.corpus_id,
     });
     const validation = await this.backend.transaction(async (transaction) => {
       const storedSource = await transaction.getReceiptById(sourceReceipt.receipt_id);
@@ -1724,7 +1735,11 @@ implements TodosProjectRegistrationAuthority {
       }
 
       const binding = await transaction.getBinding(
-        authorityScope(this.capabilityValue),
+        {
+          authority_id: sourceRequest.authority_id,
+          tenant_id: sourceRequest.tenant_id,
+          corpus_id: sourceRequest.corpus_id,
+        },
         sourceRequest.resource_kind,
         sourceRequest.target_selector,
       );
