@@ -30,21 +30,22 @@ jobs:
           echo "nproc: $(nproc)"
           free -m | head -2
           echo "PATH:"; echo "$PATH" | tr ':' '\n' | head -20
-      - name: Reproduce guard packs (10x each member)
+      - name: Reproduce guard packs (accounts 20x, computers/contracts 3x)
         run: |
           set +e
-          for m in accounts computers contracts; do
-            echo "===== MEMBER $m ====="
-            for i in $(seq 1 10); do
+          for m in accounts:20 computers:3 contracts:3; do
+            member="${m%%:*}"; count="${m##*:}"
+            echo "===== MEMBER $member (x$count) ====="
+            for i in $(seq 1 $count); do
               start=$(date +%s.%N)
-              (cd apps/$m && npm pack --dry-run --json > /tmp/pack-$m-$i.out 2> /tmp/pack-$m-$i.err)
+              (cd apps/$member && npm pack --dry-run --json > /tmp/pack-$member-$i.out 2> /tmp/pack-$member-$i.err)
               rc=$?
               end=$(date +%s.%N)
               dur=$(echo "$end $start" | awk '{printf "%.1f", $1-$2}')
               echo "iter $i: rc=$rc dur=${dur}s"
               if [ $rc -ne 0 ]; then
-                echo "--- stderr tail ---"; tail -5 /tmp/pack-$m-$i.err
-                echo "--- stdout tail (prepack logs) ---"; tail -60 /tmp/pack-$m-$i.out
+                echo "--- stderr tail ---"; tail -5 /tmp/pack-$member-$i.err
+                echo "--- stdout tail (prepack logs) ---"; tail -80 /tmp/pack-$member-$i.out
                 LOG=$(ls -t "$HOME/.npm/_logs" 2>/dev/null | head -1)
                 if [ -n "$LOG" ]; then echo "--- npm debug log: $LOG ---"; tail -60 "$HOME/.npm/_logs/$LOG"; fi
               fi
