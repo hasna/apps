@@ -23,6 +23,7 @@ import type { SQLQueryBindings } from "bun:sqlite";
 import type { Database } from "../db/database.js";
 import { cappedLimit, safeOffset } from "../db/pagination.js";
 import { now, uuid } from "../db/runtime.js";
+import { normalizePriorityRuleInput, prioritySenderRuleId } from "../lib/priority-senders.js";
 import type { Outcome } from "../store/outcome.js";
 import type { ListOptions, ResourceInput, ResourceRow } from "../store/records.js";
 import type { ResourceRepository } from "../store/repositories.js";
@@ -73,6 +74,8 @@ export const RESOURCE_TABLES = Object.freeze({
   emailDigests: "email_digests",
   webhookReceipts: "webhook_receipts",
   sandbox: "sandbox_emails",
+  mailboxFilters: "mailbox_filters",
+  prioritySenderRules: "priority_sender_rules",
 });
 
 export type ResourceFamily = keyof typeof RESOURCE_TABLES;
@@ -133,6 +136,9 @@ const CALLER_WRITABLE_STAMPS: Record<string, readonly string[]> = Object.freeze(
   sandbox_emails: Object.freeze(["created_at"]),
   sequence_steps: Object.freeze(["created_at"]),
   address_ownership_events: Object.freeze(["id", "created_at"]),
+  // Priority rule ids are derived from the canonical kind/value pair, so the
+  // dedicated wrapper below mints them rather than accepting arbitrary ids.
+  priority_sender_rules: Object.freeze(["id"]),
 });
 
 function serverOwnedFor(table: string): readonly string[] {
@@ -392,5 +398,42 @@ export function createResourceRepository(db: Database, table: string): ResourceR
         return ok(db.run(`DELETE FROM ${table} WHERE ${shape.idColumn} = ?`, [id]).changes > 0);
       });
     },
+  };
+}
+
+/**
+ * Priority rules are immutable canonical identities, not an ordinary CRUD table.
+ * Keep the generic repository as the storage primitive, but put normalization and
+ * deterministic duplicate handling at the SQLite store seam too so callers cannot
+ * bypass the public priority-rule contract through `EmailStore`.
+ */
+export function createPrioritySenderRulesRepository(db: Database): ResourceRepository<ResourceRow> {
+  const generic = createResourceRepository(db, RESOURCE_TABLES.prioritySenderRules);
+  return {
+    list: (opts) => generic.list(opts),
+    get: (id) => generic.get(id),
+    async create(input): Promise<Outcome<ResourceRow>> {
+      let normalized;
+      try {
+        normalized = normalizePriorityRuleInput(input.kind, input.value);
+      } catch (error) {
+        return invalidInput(error instanceof Error ? error.message : String(error));
+      }
+      const existing = await generic.list({
+        limit: 1,
+        filters: { kind: normalized.kind, value: normalized.value },
+      });
+      if (!existing.ok) return existing;
+      if (existing.value[0]) return ok(existing.value[0]);
+      return generic.create({
+        id: prioritySenderRuleId(normalized.kind, normalized.value),
+        kind: normalized.kind,
+        value: normalized.value,
+      });
+    },
+    async update(): Promise<Outcome<ResourceRow | null>> {
+      return invalidInput("priority sender rules are immutable; remove and add a new rule");
+    },
+    remove: (id) => generic.remove(id),
   };
 }

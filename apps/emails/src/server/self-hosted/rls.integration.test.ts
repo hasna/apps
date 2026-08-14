@@ -25,6 +25,7 @@ import { createPgPool, createQueryClient, MigrationLedger } from "../../storage-
 import type { PoolQueryClient, TypedQueryClient } from "../../storage-kit/index.js";
 import { DEFAULT_TENANT_ID, emailsSelfHostedMigrations } from "./migrations.js";
 import { assertServingRoleCannotBypassRls } from "./serve.js";
+import { EmailsSelfHostedStore, LEGACY_INBOUND_MISSING_PAYLOAD_SCAN_SQL } from "./store.js";
 
 const databaseUrl = process.env["EMAILS_TEST_POSTGRES_URL"];
 const pg: PoolQueryClient | null = databaseUrl
@@ -35,8 +36,9 @@ const PROBE = "emails_rls_probe";
 const TENANT_A = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
 const TENANT_B = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
 // Representative of every access shape: hand-written domains/messages, a generic
-// registry resource (contacts), and the composite-PK resource (email_agent_settings).
-const TABLES = ["domains", "contacts", "messages", "email_agent_settings", "send_intent_tombstones"] as const;
+// registry resource (contacts), a saved-filter resource, composite-PK resources,
+// and the natural-key composite resource (priority_sender_rules, migration 0026).
+const TABLES = ["domains", "contacts", "messages", "mailbox_filters", "email_agent_settings", "send_intent_tombstones", "priority_sender_rules"] as const;
 // message_recipients/message_counters (0019) are trigger-maintained from
 // messages writes, so any role that can write messages must own/write them
 // too — and they must fail closed exactly like the tables they mirror. They
@@ -91,6 +93,11 @@ beforeAll(async () => {
     [TENANT_A, TENANT_B],
   );
   await pg.execute(
+    `INSERT INTO mailbox_filters (id, tenant_id, name, normalized_name, mailbox, criteria)
+     VALUES ('11111111-1111-4111-8111-111111111111','${TENANT_A}','A filter','a-filter','inbox','{}'),
+            ('22222222-2222-4222-8222-222222222222','${TENANT_B}','B filter','b-filter','inbox','{}')`,
+  );
+  await pg.execute(
     `INSERT INTO email_agent_settings (tenant_id, agent_key, model) VALUES ($1,'labeler','m'), ($2,'labeler','m')`,
     [TENANT_A, TENANT_B],
   );
@@ -98,6 +105,12 @@ beforeAll(async () => {
     `INSERT INTO send_intent_tombstones (tenant_id, idempotency_key_hash) VALUES
        ($1, $3), ($2, $4)`,
     [TENANT_A, TENANT_B, "a".repeat(64), "b".repeat(64)],
+  );
+  await pg.execute(
+    `INSERT INTO priority_sender_rules (tenant_id, id, kind, value) VALUES
+       ($1, 'priority:address:a@a.example', 'address', 'a@a.example'),
+       ($2, 'priority:address:b@b.example', 'address', 'b@b.example')`,
+    [TENANT_A, TENANT_B],
   );
   await pg.execute(
     `INSERT INTO attachment_repair_runs (
@@ -149,6 +162,10 @@ beforeAll(async () => {
   // non-superuser needs USAGE on the schema to resolve unqualified names.
   await pg.execute(`CREATE ROLE ${PROBE} NOLOGIN NOSUPERUSER NOBYPASSRLS`);
   await pg.execute(`GRANT USAGE ON SCHEMA public TO ${PROBE}`);
+  // The all-tenant census enumerates `tenants` (the registry, no RLS); in
+  // production `emails_app` owns that table, so the probe needs the read grant
+  // to stand in for it.
+  await pg.execute(`GRANT SELECT ON tenants TO ${PROBE}`);
   for (const t of [...TABLES, ...ROLLUP_TABLES, ...REPAIR_TABLES, ...REPAIR_ALIAS_TABLES]) {
     await pg.execute(`ALTER TABLE ${t} OWNER TO ${PROBE}`);
   }
@@ -240,6 +257,18 @@ describe.skipIf(!pg)("Row-Level Security backstop (Layer 2, migration 0013)", ()
     expect(bDomain).toBeNull();
     const bContact = await asProbe(TENANT_A, (tx) => tx.get<{ id: string }>(`SELECT id FROM contacts WHERE id = 'con-b'`));
     expect(bContact).toBeNull();
+    // Priority rules (0026) isolate exactly like the other tables: A sees only
+    // its own rule, never B's.
+    const rules = await asProbe(TENANT_A, (tx) =>
+      tx.many<{ id: string; value: string }>(
+        `SELECT id, value FROM priority_sender_rules ORDER BY id`,
+      ),
+    );
+    expect(rules).toEqual([{ id: "priority:address:a@a.example", value: "a@a.example" }]);
+    const bRule = await asProbe(TENANT_A, (tx) =>
+      tx.get<{ id: string }>(`SELECT id FROM priority_sender_rules WHERE id = 'priority:address:b@b.example'`),
+    );
+    expect(bRule).toBeNull();
   });
 
   it("blocks a cross-tenant WRITE at the DB layer even if Layer 1 were forgotten", async () => {
@@ -262,6 +291,15 @@ describe.skipIf(!pg)("Row-Level Security backstop (Layer 2, migration 0013)", ()
         tx.execute(
           `INSERT INTO send_intent_tombstones (tenant_id, idempotency_key_hash) VALUES ($1, $2)`,
           [TENANT_B, "c".repeat(64)],
+        ),
+      ),
+    ).rejects.toThrow(rls);
+    await expect(
+      asProbe(TENANT_A, (tx) =>
+        tx.execute(
+          `INSERT INTO priority_sender_rules (tenant_id, id, kind, value)
+           VALUES ($1, 'priority:address:x@x.example', 'address', 'x@x.example')`,
+          [TENANT_B],
         ),
       ),
     ).rejects.toThrow(rls);
@@ -324,6 +362,81 @@ describe.skipIf(!pg)("Row-Level Security backstop (Layer 2, migration 0013)", ()
     ).toBeNull();
   });
 
+  it("legacy-inbound census: the real scan query fails closed with no GUC, and the store sets the GUC per tenant", async () => {
+    // Seed one census-matching row (metadata-only attachment) per tenant plus
+    // one non-matching row per tenant (payload present). Seeded as superuser,
+    // which is not what this test measures — the assertions run as the probe.
+    await pg!.execute(
+      `INSERT INTO messages (id, from_addr, source_id, attachments, tenant_id) VALUES
+         ($1, 'legacy@a.example', 'legacy:inbound_emails:a-example', $3, $4),
+         ($2, 'legacy@b.example', 'legacy:inbound_emails:b-example', $5, $6),
+         ($7, 'legacy@a.example', 'legacy:inbound_emails:a-ok', $8, $4),
+         ($9, 'legacy@b.example', 'legacy:inbound_emails:b-ok', $10, $6)`,
+      [
+        "legacy-msg-a",
+        "legacy-msg-b",
+        JSON.stringify([{ filename: "a.txt", size: 3 }]),
+        TENANT_A,
+        JSON.stringify([{ filename: "b.txt", size: 3 }]),
+        TENANT_B,
+        "legacy-ok-a",
+        JSON.stringify([{ filename: "ok.txt", size: 3, content_base64: "aGk=" }]),
+        "legacy-ok-b",
+        JSON.stringify([{ filename: "ok.txt", size: 3, content_base64: "aGk=" }]),
+      ],
+    );
+    try {
+      // Fail-closed control: the EXACT production query shape with NO GUC
+      // returns zero — the vacuous census the omitted set_config produced
+      // (confident zero, rc=0, recovery never starts).
+      const unset = await asProbe(null, (tx) =>
+        tx.many<{ message_id: string }>(LEGACY_INBOUND_MISSING_PAYLOAD_SCAN_SQL, [TENANT_A, null, 100]),
+      );
+      expect(unset, "census query with NO app.current_tenant GUC").toEqual([]);
+
+      // GUC set per tenant: the same query sees exactly that tenant's row.
+      const aRows = await asProbe(TENANT_A, (tx) =>
+        tx.many<{ message_id: string }>(LEGACY_INBOUND_MISSING_PAYLOAD_SCAN_SQL, [TENANT_A, null, 100]),
+      );
+      const bRows = await asProbe(TENANT_B, (tx) =>
+        tx.many<{ message_id: string }>(LEGACY_INBOUND_MISSING_PAYLOAD_SCAN_SQL, [TENANT_B, null, 100]),
+      );
+      expect(aRows.map((r) => r.message_id)).toEqual(["legacy-msg-a"]);
+      expect(bRows.map((r) => r.message_id)).toEqual(["legacy-msg-b"]);
+
+      // Cross-tenant control: A's GUC + B's row predicate -> zero (RLS agrees
+      // with Layer 1; the fail-closed semantics are unchanged by the fix).
+      const cross = await asProbe(TENANT_A, (tx) =>
+        tx.many<{ message_id: string }>(LEGACY_INBOUND_MISSING_PAYLOAD_SCAN_SQL, [TENANT_B, null, 100]),
+      );
+      expect(cross, "census query with A's GUC cannot see B's rows").toEqual([]);
+
+      // The fixed store method under the production serving posture
+      // (NOBYPASSRLS + FORCE RLS + GUC set per tenant) finds both legacy rows
+      // and only them.
+      const probeClient: PoolQueryClient = {
+        ...pg!,
+        async transaction<T>(fn: (tx: TypedQueryClient) => Promise<T>): Promise<T> {
+          return pg!.transaction(async (tx) => {
+            await tx.execute(`SET LOCAL ROLE ${PROBE}`);
+            return fn(tx);
+          });
+        },
+      };
+      const store = new EmailsSelfHostedStore(probeClient);
+      const page = await store.listLegacyInboundMissingPayloadBindings(null, 100);
+      expect(page.rows.map((r) => r.message_id).sort()).toEqual(["legacy-msg-a", "legacy-msg-b"]);
+      expect(page.has_more).toBe(false);
+      // The replay lookup (the pattern the scan now copies) is equally visible.
+      const replay = await store.getLegacyInboundPayloadBindings("legacy-msg-a");
+      expect(replay.map((r) => r.message_id)).toEqual(["legacy-msg-a"]);
+    } finally {
+      await pg!.execute(`DELETE FROM messages WHERE id = ANY($1)`, [
+        ["legacy-msg-a", "legacy-msg-b", "legacy-ok-a", "legacy-ok-b"],
+      ]);
+    }
+  });
+
   it("boot assertion: rejects a role that can bypass RLS, accepts one that cannot", async () => {
     // The connecting role is a superuser (rolsuper) -> must be refused.
     await expect(assertServingRoleCannotBypassRls(pg!)).rejects.toThrow(/bypass Row-Level Security/i);
@@ -353,7 +466,7 @@ describe.skipIf(!pg)("Row-Level Security backstop (Layer 2, migration 0013)", ()
     expect(await countAsProbe(null, "contacts")).toBe(0);
   });
 
-  it("every one of the 28 tenant tables is RLS-enabled + FORCEd with a tenant policy", async () => {
+  it("every one of the 29 tenant tables is RLS-enabled + FORCEd with a tenant policy", async () => {
     // Guards the hand-maintained table list in migration 0013: a dropped/misspelled
     // entry would leave a table un-forced (a silent hole) with no other failing test.
     const ALL_TENANT_TABLES = [
@@ -362,7 +475,7 @@ describe.skipIf(!pg)("Row-Level Security backstop (Layer 2, migration 0013)", ()
       "forwarding_rules", "warming_schedules", "email_triage", "provisioning_events",
       "mailbox_sources", "events", "email_agent_settings", "email_agent_runs", "email_digests",
       "group_members", "sequence_steps", "sequence_enrollments", "address_ownership_events",
-      "webhook_receipts", "sandbox_emails", "send_intent_tombstones",
+      "webhook_receipts", "sandbox_emails", "send_intent_tombstones", "mailbox_filters",
     ];
     const flags = await pg!.many<{ relname: string; en: boolean; force: boolean }>(
       `SELECT c.relname, c.relrowsecurity AS en, c.relforcerowsecurity AS force
@@ -382,7 +495,7 @@ describe.skipIf(!pg)("Row-Level Security backstop (Layer 2, migration 0013)", ()
     );
     const noPolicy = ALL_TENANT_TABLES.filter((t) => !pols.find((p) => p.tablename === t));
     expect(noPolicy, "tables without a tenant policy").toEqual([]);
-    expect(ALL_TENANT_TABLES).toHaveLength(28);
+    expect(ALL_TENANT_TABLES).toHaveLength(29);
   });
 
   it("migration 0018 is internally idempotent and keeps explicit USING/WITH CHECK policy", async () => {

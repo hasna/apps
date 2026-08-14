@@ -31,9 +31,11 @@ import type {
   ForwardingRepository,
   GroupsRepository,
   InboundRepository,
+  MailboxFiltersRepository,
   MessagesRepository,
   OwnersRepository,
   ProvidersRepository,
+  PrioritySenderRulesRepository,
   ProvisioningRepository,
   SandboxRepository,
   ScheduledRepository,
@@ -68,10 +70,13 @@ export interface EmailStore {
   readonly addressLifecycle: AddressLifecycleRepository;
   readonly provisioning: ProvisioningRepository;
   readonly messages: MessagesRepository;
+  readonly mailboxFilters: MailboxFiltersRepository;
   readonly emailContent: EmailContentRepository;
   readonly inbound: InboundRepository;
   readonly threads: ThreadsRepository;
   readonly sandbox: SandboxRepository;
+  /** Priority sender rules are persisted resources, scoped to this store's tenant/mailbox. */
+  readonly prioritySenderRules?: PrioritySenderRulesRepository;
   readonly emailDigests: EmailDigestsRepository;
   readonly scheduled: ScheduledRepository;
   readonly events: EventsRepository;
@@ -93,4 +98,9 @@ export interface EmailStore {
   // the clearest cases of a capability that a store must refuse rather than fake.
   readonly sendIntents: SendIntentsRepository;
   readonly attachmentRepair: AttachmentRepairRepository;
+}
+
+/** Complete store surface used by the concrete SQLite and HTTP implementations. */
+export interface PrioritySenderRulesStore {
+  readonly prioritySenderRules: PrioritySenderRulesRepository;
 }

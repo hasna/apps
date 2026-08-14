@@ -16402,6 +16402,1019 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
   },
   {
     "method": "GET",
+    "operationId": "listResourceMailboxFilters",
+    "path": "/v1/mailbox-filters",
+    "status": 200,
+    "schema": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "description": "Tenant-scoped mailbox-filters row.",
+            "properties": {
+              "name": {
+                "type": "string",
+                "nullable": true
+              },
+              "normalized_name": {
+                "type": "string",
+                "nullable": true
+              },
+              "mailbox": {
+                "type": "string",
+                "nullable": true
+              },
+              "criteria": {},
+              "id": {
+                "type": "string"
+              },
+              "tenant_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "created_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "updated_at": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "id",
+              "tenant_id",
+              "name",
+              "normalized_name",
+              "mailbox",
+              "criteria",
+              "created_at",
+              "updated_at"
+            ],
+            "additionalProperties": true
+          }
+        }
+      },
+      "required": [
+        "items"
+      ]
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "listResourceMailboxFilters",
+    "path": "/v1/mailbox-filters",
+    "status": 401,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "listResourceMailboxFilters",
+    "path": "/v1/mailbox-filters",
+    "status": 403,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "listResourceMailboxFilters",
+    "path": "/v1/mailbox-filters",
+    "status": 500,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "internal error"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "createResourceMailboxFilters",
+    "path": "/v1/mailbox-filters",
+    "status": 201,
+    "schema": {
+      "type": "object",
+      "description": "Tenant-scoped mailbox-filters row.",
+      "properties": {
+        "name": {
+          "type": "string",
+          "nullable": true
+        },
+        "normalized_name": {
+          "type": "string",
+          "nullable": true
+        },
+        "mailbox": {
+          "type": "string",
+          "nullable": true
+        },
+        "criteria": {},
+        "id": {
+          "type": "string"
+        },
+        "tenant_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "tenant_id",
+        "name",
+        "normalized_name",
+        "mailbox",
+        "criteria",
+        "created_at",
+        "updated_at"
+      ],
+      "additionalProperties": true
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "createResourceMailboxFilters",
+    "path": "/v1/mailbox-filters",
+    "status": 400,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "createResourceMailboxFilters",
+    "path": "/v1/mailbox-filters",
+    "status": 401,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "createResourceMailboxFilters",
+    "path": "/v1/mailbox-filters",
+    "status": 403,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "createResourceMailboxFilters",
+    "path": "/v1/mailbox-filters",
+    "status": 413,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "request body too large"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "createResourceMailboxFilters",
+    "path": "/v1/mailbox-filters",
+    "status": 500,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "internal error"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "DELETE",
+    "operationId": "deleteResourceMailboxFilters",
+    "path": "/v1/mailbox-filters/{id}",
+    "status": 200,
+    "schema": {
+      "type": "object",
+      "properties": {
+        "deleted": {
+          "type": "boolean",
+          "enum": [
+            true
+          ]
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "deleted",
+        "id"
+      ]
+    }
+  },
+  {
+    "method": "DELETE",
+    "operationId": "deleteResourceMailboxFilters",
+    "path": "/v1/mailbox-filters/{id}",
+    "status": 401,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "DELETE",
+    "operationId": "deleteResourceMailboxFilters",
+    "path": "/v1/mailbox-filters/{id}",
+    "status": 403,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "DELETE",
+    "operationId": "deleteResourceMailboxFilters",
+    "path": "/v1/mailbox-filters/{id}",
+    "status": 404,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "mailbox-filters not found"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "DELETE",
+    "operationId": "deleteResourceMailboxFilters",
+    "path": "/v1/mailbox-filters/{id}",
+    "status": 500,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "internal error"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getResourceMailboxFilters",
+    "path": "/v1/mailbox-filters/{id}",
+    "status": 200,
+    "schema": {
+      "type": "object",
+      "description": "Tenant-scoped mailbox-filters row.",
+      "properties": {
+        "name": {
+          "type": "string",
+          "nullable": true
+        },
+        "normalized_name": {
+          "type": "string",
+          "nullable": true
+        },
+        "mailbox": {
+          "type": "string",
+          "nullable": true
+        },
+        "criteria": {},
+        "id": {
+          "type": "string"
+        },
+        "tenant_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "tenant_id",
+        "name",
+        "normalized_name",
+        "mailbox",
+        "criteria",
+        "created_at",
+        "updated_at"
+      ],
+      "additionalProperties": true
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getResourceMailboxFilters",
+    "path": "/v1/mailbox-filters/{id}",
+    "status": 401,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getResourceMailboxFilters",
+    "path": "/v1/mailbox-filters/{id}",
+    "status": 403,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getResourceMailboxFilters",
+    "path": "/v1/mailbox-filters/{id}",
+    "status": 404,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "mailbox-filters not found"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getResourceMailboxFilters",
+    "path": "/v1/mailbox-filters/{id}",
+    "status": 500,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "internal error"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "PATCH",
+    "operationId": "updateResourceMailboxFilters",
+    "path": "/v1/mailbox-filters/{id}",
+    "status": 200,
+    "schema": {
+      "type": "object",
+      "description": "Tenant-scoped mailbox-filters row.",
+      "properties": {
+        "name": {
+          "type": "string",
+          "nullable": true
+        },
+        "normalized_name": {
+          "type": "string",
+          "nullable": true
+        },
+        "mailbox": {
+          "type": "string",
+          "nullable": true
+        },
+        "criteria": {},
+        "id": {
+          "type": "string"
+        },
+        "tenant_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "tenant_id",
+        "name",
+        "normalized_name",
+        "mailbox",
+        "criteria",
+        "created_at",
+        "updated_at"
+      ],
+      "additionalProperties": true
+    }
+  },
+  {
+    "method": "PATCH",
+    "operationId": "updateResourceMailboxFilters",
+    "path": "/v1/mailbox-filters/{id}",
+    "status": 400,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "PATCH",
+    "operationId": "updateResourceMailboxFilters",
+    "path": "/v1/mailbox-filters/{id}",
+    "status": 401,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "PATCH",
+    "operationId": "updateResourceMailboxFilters",
+    "path": "/v1/mailbox-filters/{id}",
+    "status": 403,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "PATCH",
+    "operationId": "updateResourceMailboxFilters",
+    "path": "/v1/mailbox-filters/{id}",
+    "status": 404,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "mailbox-filters not found"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "PATCH",
+    "operationId": "updateResourceMailboxFilters",
+    "path": "/v1/mailbox-filters/{id}",
+    "status": 413,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "request body too large"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "PATCH",
+    "operationId": "updateResourceMailboxFilters",
+    "path": "/v1/mailbox-filters/{id}",
+    "status": 500,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "internal error"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "PUT",
+    "operationId": "replaceResourceMailboxFilters",
+    "path": "/v1/mailbox-filters/{id}",
+    "status": 200,
+    "schema": {
+      "type": "object",
+      "description": "Tenant-scoped mailbox-filters row.",
+      "properties": {
+        "name": {
+          "type": "string",
+          "nullable": true
+        },
+        "normalized_name": {
+          "type": "string",
+          "nullable": true
+        },
+        "mailbox": {
+          "type": "string",
+          "nullable": true
+        },
+        "criteria": {},
+        "id": {
+          "type": "string"
+        },
+        "tenant_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "tenant_id",
+        "name",
+        "normalized_name",
+        "mailbox",
+        "criteria",
+        "created_at",
+        "updated_at"
+      ],
+      "additionalProperties": true
+    }
+  },
+  {
+    "method": "PUT",
+    "operationId": "replaceResourceMailboxFilters",
+    "path": "/v1/mailbox-filters/{id}",
+    "status": 400,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "PUT",
+    "operationId": "replaceResourceMailboxFilters",
+    "path": "/v1/mailbox-filters/{id}",
+    "status": 401,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "PUT",
+    "operationId": "replaceResourceMailboxFilters",
+    "path": "/v1/mailbox-filters/{id}",
+    "status": 403,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "PUT",
+    "operationId": "replaceResourceMailboxFilters",
+    "path": "/v1/mailbox-filters/{id}",
+    "status": 404,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "mailbox-filters not found"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "PUT",
+    "operationId": "replaceResourceMailboxFilters",
+    "path": "/v1/mailbox-filters/{id}",
+    "status": 413,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "request body too large"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "PUT",
+    "operationId": "replaceResourceMailboxFilters",
+    "path": "/v1/mailbox-filters/{id}",
+    "status": 500,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "internal error"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "applyMailboxFilter",
+    "path": "/v1/mailbox-filters/{id}/apply",
+    "status": 200,
+    "schema": {
+      "type": "object",
+      "properties": {
+        "filter": {
+          "type": "object"
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/MessageListItem"
+          }
+        },
+        "limit": {
+          "type": "integer"
+        },
+        "offset": {
+          "type": "integer"
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "filter",
+        "items",
+        "limit",
+        "offset",
+        "truncated"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "applyMailboxFilter",
+    "path": "/v1/mailbox-filters/{id}/apply",
+    "status": 401,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "applyMailboxFilter",
+    "path": "/v1/mailbox-filters/{id}/apply",
+    "status": 403,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "applyMailboxFilter",
+    "path": "/v1/mailbox-filters/{id}/apply",
+    "status": 500,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "internal error"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "GET",
     "operationId": "listMailboxes",
     "path": "/v1/mailboxes",
     "status": 200,
@@ -21288,6 +22301,531 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
     "method": "PUT",
     "operationId": "replaceResourceOwners",
     "path": "/v1/owners/{id}",
+    "status": 500,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "internal error"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "listResourcePrioritySenderRules",
+    "path": "/v1/priority-sender-rules",
+    "status": 200,
+    "schema": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "description": "Tenant-scoped priority-sender-rules row.",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "nullable": true
+              },
+              "value": {
+                "type": "string",
+                "nullable": true
+              },
+              "tenant_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "created_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "updated_at": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "id",
+              "tenant_id",
+              "kind",
+              "value",
+              "created_at",
+              "updated_at"
+            ],
+            "additionalProperties": true
+          }
+        }
+      },
+      "required": [
+        "items"
+      ]
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "listResourcePrioritySenderRules",
+    "path": "/v1/priority-sender-rules",
+    "status": 401,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "listResourcePrioritySenderRules",
+    "path": "/v1/priority-sender-rules",
+    "status": 403,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "listResourcePrioritySenderRules",
+    "path": "/v1/priority-sender-rules",
+    "status": 500,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "internal error"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "createResourcePrioritySenderRules",
+    "path": "/v1/priority-sender-rules",
+    "status": 201,
+    "schema": {
+      "type": "object",
+      "description": "Tenant-scoped priority-sender-rules row.",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "nullable": true
+        },
+        "value": {
+          "type": "string",
+          "nullable": true
+        },
+        "tenant_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "tenant_id",
+        "kind",
+        "value",
+        "created_at",
+        "updated_at"
+      ],
+      "additionalProperties": true
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "createResourcePrioritySenderRules",
+    "path": "/v1/priority-sender-rules",
+    "status": 400,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "createResourcePrioritySenderRules",
+    "path": "/v1/priority-sender-rules",
+    "status": 401,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "createResourcePrioritySenderRules",
+    "path": "/v1/priority-sender-rules",
+    "status": 403,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "createResourcePrioritySenderRules",
+    "path": "/v1/priority-sender-rules",
+    "status": 413,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "request body too large"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "createResourcePrioritySenderRules",
+    "path": "/v1/priority-sender-rules",
+    "status": 500,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "internal error"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "DELETE",
+    "operationId": "deleteResourcePrioritySenderRules",
+    "path": "/v1/priority-sender-rules/{id}",
+    "status": 200,
+    "schema": {
+      "type": "object",
+      "properties": {
+        "deleted": {
+          "type": "boolean",
+          "enum": [
+            true
+          ]
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "deleted",
+        "id"
+      ]
+    }
+  },
+  {
+    "method": "DELETE",
+    "operationId": "deleteResourcePrioritySenderRules",
+    "path": "/v1/priority-sender-rules/{id}",
+    "status": 401,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "DELETE",
+    "operationId": "deleteResourcePrioritySenderRules",
+    "path": "/v1/priority-sender-rules/{id}",
+    "status": 403,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "DELETE",
+    "operationId": "deleteResourcePrioritySenderRules",
+    "path": "/v1/priority-sender-rules/{id}",
+    "status": 404,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "priority-sender-rules not found"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "DELETE",
+    "operationId": "deleteResourcePrioritySenderRules",
+    "path": "/v1/priority-sender-rules/{id}",
+    "status": 500,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "internal error"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getResourcePrioritySenderRules",
+    "path": "/v1/priority-sender-rules/{id}",
+    "status": 200,
+    "schema": {
+      "type": "object",
+      "description": "Tenant-scoped priority-sender-rules row.",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "nullable": true
+        },
+        "value": {
+          "type": "string",
+          "nullable": true
+        },
+        "tenant_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "tenant_id",
+        "kind",
+        "value",
+        "created_at",
+        "updated_at"
+      ],
+      "additionalProperties": true
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getResourcePrioritySenderRules",
+    "path": "/v1/priority-sender-rules/{id}",
+    "status": 401,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getResourcePrioritySenderRules",
+    "path": "/v1/priority-sender-rules/{id}",
+    "status": 403,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getResourcePrioritySenderRules",
+    "path": "/v1/priority-sender-rules/{id}",
+    "status": 404,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "priority-sender-rules not found"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getResourcePrioritySenderRules",
+    "path": "/v1/priority-sender-rules/{id}",
     "status": 500,
     "schema": {
       "type": "object",
@@ -37245,6 +38783,10 @@ export const SELF_HOSTED_RESPONSE_COMPONENTS: Readonly<Record<string, unknown>> 
         "minimum": 0
       },
       "unread": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "priority": {
         "type": "integer",
         "minimum": 0
       },
