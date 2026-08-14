@@ -209,7 +209,6 @@ export class AutomationsStore {
     validateAutomationSpec(spec);
     const timestamp = nowIso();
     const status = spec.status ?? "active";
-    const persistedSpec = automationSpecForPersistence(spec, status);
     this.db.query(`
       INSERT INTO automations (id, spec_json, status, created_at, updated_at)
       VALUES ($id, $specJson, $status, $createdAt, $updatedAt)
@@ -219,48 +218,12 @@ export class AutomationsStore {
         updated_at = excluded.updated_at
     `).run({
       $id: spec.id,
-      $specJson: JSON.stringify(persistedSpec),
+      $specJson: JSON.stringify({ ...spec, status }),
       $status: status,
       $createdAt: timestamp,
       $updatedAt: timestamp,
     });
     return this.requireAutomation(spec.id);
-  }
-
-  /**
-   * Atomically installs an immutable automation identity.
-   * Identical content is idempotent; conflicting content never mutates the row.
-   */
-  ensureAutomation(spec: AutomationSpec): AutomationRecord {
-    validateAutomationSpec(spec);
-    const status = spec.status ?? "active";
-    const persistedSpec = automationSpecForPersistence(spec, status);
-    return withImmediateTransaction(this.db, () => {
-      const existingRow = this.db.query("SELECT * FROM automations WHERE id = $id").get({ $id: spec.id }) as AutomationRow | null;
-      if (existingRow) {
-        const existing = automationFromRow(existingRow);
-        if (!jsonValuesEqual(
-          existing.spec as unknown as JsonValue,
-          persistedSpec as unknown as JsonValue,
-        )) {
-          throw new Error(`installed automation ${spec.id} has different content; immutable template installs cannot overwrite it`);
-        }
-        return existing;
-      }
-
-      const timestamp = nowIso();
-      this.db.query(`
-        INSERT INTO automations (id, spec_json, status, created_at, updated_at)
-        VALUES ($id, $specJson, $status, $createdAt, $updatedAt)
-      `).run({
-        $id: spec.id,
-        $specJson: JSON.stringify(persistedSpec),
-        $status: status,
-        $createdAt: timestamp,
-        $updatedAt: timestamp,
-      });
-      return this.requireAutomation(spec.id);
-    });
   }
 
   listAutomations(): AutomationRecord[] {
@@ -832,19 +795,6 @@ export class AutomationsStore {
     if (source.status !== "succeeded" || source.result?.metadata?.deliveryStatus !== "partial") {
       throw new Error(`queued action is not a typed partial receipt: ${id}`);
     }
-    const receipts = source.result.metadata?.deliveryReceipts;
-    const replayOnlySinks = Array.isArray(receipts)
-      ? receipts
-        .filter((receipt): receipt is JsonObject => isPlainObject(receipt) && receipt.status === "failed" && typeof receipt.sink === "string")
-        .map((receipt) => receipt.sink as string)
-        .sort()
-      : [];
-    if (replayOnlySinks.length === 0) {
-      throw new Error(`typed partial receipt has no failed sinks to replay: ${id}`);
-    }
-    const replayRootActionId = typeof source.metadata?.partialReplayRootActionId === "string"
-      ? source.metadata.partialReplayRootActionId
-      : id;
     const replayActionId = `${id}:partial-replay`;
     if (this.db.query("SELECT id FROM automation_actions WHERE id = $id").get({ $id: replayActionId })) {
       return this.requireQueuedAction(replayActionId);
@@ -871,8 +821,6 @@ export class AutomationsStore {
         availableAt: options.now,
         metadata: {
           partialReplayOf: id,
-          partialReplayRootActionId: replayRootActionId,
-          replayOnlySinks,
           ...(options.requestedBy ? { replayRequestedBy: options.requestedBy } : {}),
           ...(options.reason ? { replayReason: options.reason } : {}),
         },
@@ -1680,22 +1628,6 @@ function objectFilterMatches(filter: JsonObject | undefined, data: JsonObject): 
   });
 }
 
-function jsonValuesEqual(left: JsonValue | undefined, right: JsonValue | undefined): boolean {
-  if (left === right) return true;
-  if (Array.isArray(left) || Array.isArray(right)) {
-    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
-    return left.every((entry, index) => jsonValuesEqual(entry, right[index]));
-  }
-  if (isPlainObject(left) || isPlainObject(right)) {
-    if (!isPlainObject(left) || !isPlainObject(right)) return false;
-    const leftKeys = Object.keys(left);
-    const rightKeys = Object.keys(right);
-    if (leftKeys.length !== rightKeys.length) return false;
-    return leftKeys.every((key) => Object.hasOwn(right, key) && jsonValuesEqual(left[key], right[key]));
-  }
-  return false;
-}
-
 function isPlainObject(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -1801,10 +1733,6 @@ function resolveMappedData(value: JsonValue | undefined, path: string): JsonObje
 
 function nowIso(): string {
   return new Date().toISOString();
-}
-
-function automationSpecForPersistence(spec: AutomationSpec, status: AutomationStatus): AutomationSpec {
-  return JSON.parse(JSON.stringify({ ...spec, status })) as AutomationSpec;
 }
 
 function normalizeIso(value?: string | Date): string {

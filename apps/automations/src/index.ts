@@ -63,5 +63,3 @@ export {
   type LaunchFollowupOptions,
   type RecipeDescriptor,
 } from "./recipes/launch-followup.js";
-export * from "./templates/core.js";
-export * from "./templates/first-party.js";

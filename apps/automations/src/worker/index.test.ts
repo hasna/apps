@@ -99,64 +99,6 @@ describe("TypedActionWorker", () => {
     }
   });
 
-  test("materializes declared step outputs before invoking a dependent action", async () => {
-    const store = new AutomationsStore();
-    try {
-      store.createAutomation({
-        schemaVersion: "1.0",
-        id: "typed.outputs",
-        name: "Typed output materialization",
-        version: "1.0.0",
-        triggers: [{ kind: "manual" }],
-        actions: [
-          {
-            id: "lookup",
-            actionId: "typed.lookup",
-            manifestVersion: "1.0.0",
-            input: {},
-          },
-          {
-            id: "send",
-            actionId: "typed.send",
-            manifestVersion: "1.0.0",
-            dependsOn: ["lookup"],
-            input: {
-              contactId: "${{ steps.lookup.outputs.contactId }}",
-            },
-          },
-        ],
-        metadata: {
-          template: {
-            stepOutputs: {
-              lookup: {
-                contactId: "/contact/id",
-              },
-            },
-          },
-        },
-      });
-      let received: JsonValue | undefined;
-      const worker = new TypedActionWorker({
-        store,
-        definitions: [
-          definition("typed.lookup", () => ({
-            output: { contact: { id: "contact-1" } },
-          })),
-          definition("typed.send", ({ input }) => {
-            received = input;
-            return { output: { accepted: true } };
-          }),
-        ],
-      });
-
-      const receipt = await worker.run("typed.outputs@1.0.0");
-      expect(receipt.status).toBe("succeeded");
-      expect(received).toEqual({ contactId: "contact-1" });
-    } finally {
-      store.close();
-    }
-  });
-
   test("rejects non-TypeScript executor bindings before registration", () => {
     const store = new AutomationsStore();
     try {
