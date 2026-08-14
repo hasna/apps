@@ -4,9 +4,10 @@
   "class": "cli-with-store",
   "contractVersion": "v1",
   "kitVersion": "0.8.4",
-  "description": "Open source hooks library for AI coding agents. Storage is a data-backend switch, never a deployment mode: local SQLite at ~/.hasna/hooks/hooks.db by default, or PostgreSQL when HASNA_HOOKS_DATABASE_URL is set with HASNA_HOOKS_STORAGE_BACKEND=postgresql. The retired HASNA_HOOKS_STORAGE_MODE / HOOKS_STORAGE_MODE deployment-mode variables are read as errors, not no-ops. MCP is served by the `hooks mcp` subcommand (no separate mcp bin).",
+  "description": "Open source hooks library for AI coding agents. Storage is a data-backend switch, never a deployment mode: local SQLite at ~/.hasna/hooks/hooks.db by default, or PostgreSQL when HASNA_HOOKS_DATABASE_URL is set with HASNA_HOOKS_STORAGE_BACKEND=postgresql (src/db/storage-sync.ts). The retired HASNA_HOOKS_STORAGE_MODE / HOOKS_STORAGE_MODE deployment-mode variables are read as errors, not no-ops. The optional remote registry is a Cloudflare Workers API (D1 catalog + R2 artifacts, provisioned by `hooks cf deploy`) reached via HASNA_HOOKS_API_URL — an API route, not a storage backend. MCP is served by the `hooks mcp` subcommand (no separate mcp bin).",
   "bins": [
-    "hooks"
+    "hooks",
+    "hooks-serve"
   ],
   "hosting": [
     "user-hosted"
@@ -29,9 +30,28 @@
     {
       "name": "serve",
       "kind": "api",
-      "status": "deferred",
-      "deferReason": "The monorepo four-surface law requires a -serve server bin, and `hooks serve` does not exist on main. It is in flight in lane L1 of the hooks unification (todos cfbd9c0d-63b7-41d3-bd3c-fc0b9fa67864). Flip this surface to supported and add the bin when it lands.",
-      "authMode": "none"
+      "status": "supported",
+      "bin": "hooks-serve",
+      "authMode": "api-key",
+      "health": {
+        "method": "GET",
+        "path": "/health",
+        "public": true,
+        "description": "Implemented: returns {\"status\":\"ok\",\"name\":\"hooks-registry\"} (src/serve.ts, src/cf/worker.ts)."
+      },
+      "readiness": {
+        "method": "GET",
+        "path": "/ready",
+        "public": true,
+        "description": "Declared for the supported-api surface contract. hooks serve (src/serve.ts) implements GET /health and the /api/v1/* registry routes; GET /ready is not implemented yet and returns 404 today."
+      },
+      "version": {
+        "method": "GET",
+        "path": "/version",
+        "public": true,
+        "description": "Declared for the supported-api surface contract. hooks serve (src/serve.ts) implements GET /health and the /api/v1/* registry routes; GET /version is not implemented yet and returns 404 today."
+      },
+      "apiBasePath": "/v1"
     },
     {
       "name": "typescript-sdk",
@@ -42,12 +62,13 @@
     }
   ],
   "storage": {
-    "mode": "sqlite",
+    "backend": "sqlite",
     "engines": [
       "sqlite",
       "postgresql"
     ],
     "envPrefix": "HASNA_HOOKS_",
+    "aliasEnvPrefix": "HOOKS_",
     "sqlitePath": "~/.hasna/hooks/hooks.db"
   },
   "metadata": {
