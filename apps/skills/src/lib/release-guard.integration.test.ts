@@ -54,10 +54,12 @@ function runGuard(cwd: string): GuardResult {
   };
 }
 
-describe("release-guard end-to-end (S1 + S2 + S3)", () => {
-  test("passes on a clean package", () => {
-    const dir = makePkg(["skills/", "README.md"]);
+describe("release-guard end-to-end (S0 zero-corpus + S1 + S2 + S3)", () => {
+  test("passes on a clean zero-corpus package", () => {
+    const dir = makePkg(["README.md"]);
     try {
+      // The corpus exists in the repo tree but is deliberately excluded from the
+      // package: this is the new clean shape.
       addSkill(dir, "clean-skill", {
         "SKILL.md": "---\nname: clean-skill\n---\n\n# Clean\n\nSummarizes text.\n",
         "package.json": JSON.stringify({ name: "clean-skill", skills: { visibility: "public" } }),
@@ -70,23 +72,23 @@ describe("release-guard end-to-end (S1 + S2 + S3)", () => {
     }
   });
 
-  test("blocks repository-managed agent skill files omitted from the package", () => {
-    const dir = makePkg(["README.md"]);
+  test("S0: blocks a package that would ship corpus files (zero-corpus boundary)", () => {
+    const dir = makePkg(["skills/", "README.md"]);
     try {
-      addAgentSkill(dir, "fleet-package-rollout", {
-        "SKILL.md": "---\nname: fleet-package-rollout\n---\n\n# Fleet Package Rollout\n",
+      addSkill(dir, "clean-skill", {
+        "SKILL.md": "---\nname: clean-skill\n---\n\n# Clean\n",
       });
       const result = runGuard(dir);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("repository-managed agent skill files are missing");
-      expect(result.stderr).toContain("agent-skills/fleet-package-rollout/SKILL.md");
+      expect(result.stderr).toContain("zero skill corpus");
+      expect(result.stderr).toContain("skills/clean-skill/SKILL.md");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  test("passes when repository-managed agent skill files are packaged", () => {
-    const dir = makePkg(["agent-skills/", "README.md"]);
+  test("S0: passes when corpus files stay out of the package", () => {
+    const dir = makePkg(["README.md"]);
     try {
       addAgentSkill(dir, "fleet-package-rollout", {
         "SKILL.md": "---\nname: fleet-package-rollout\n---\n\n# Fleet Package Rollout\n",
@@ -99,11 +101,10 @@ describe("release-guard end-to-end (S1 + S2 + S3)", () => {
   });
 
   test("S2: blocks a package whose body leaks a phone number", () => {
-    const dir = makePkg(["skills/", "README.md"]);
+    const dir = makePkg(["docs/", "README.md"]);
     try {
-      addSkill(dir, "leaky", {
-        "SKILL.md": "---\nname: leaky\n---\n\nCall +13128675309 for support.\n",
-      });
+      mkdirSync(join(dir, "docs"), { recursive: true });
+      writeFileSync(join(dir, "docs", "leaky.md"), "Call +13128675309 for support.\n");
       const result = runGuard(dir);
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain("secrets, PII, or private context");
@@ -116,11 +117,10 @@ describe("release-guard end-to-end (S1 + S2 + S3)", () => {
   });
 
   test("S2: blocks a package whose body leaks a fleet hostname and internal CLI", () => {
-    const dir = makePkg(["skills/", "README.md"]);
+    const dir = makePkg(["docs/", "README.md"]);
     try {
-      addSkill(dir, "fleety", {
-        "SKILL.md": "---\nname: fleety\n---\n\nssh spark03 then run `domains r53 list_hosted_zones`.\n",
-      });
+      mkdirSync(join(dir, "docs"), { recursive: true });
+      writeFileSync(join(dir, "docs", "fleety.md"), "ssh spark03 then run `domains r53 list_hosted_zones`.\n");
       const result = runGuard(dir);
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain("fleet-hostname");
@@ -151,7 +151,7 @@ describe("release-guard end-to-end (S1 + S2 + S3)", () => {
   });
 
   test("S1: a private skill excluded via files globs does NOT trip the boundary", () => {
-    const dir = makePkg(["skills/", "!skills/private-fleet", "README.md"]);
+    const dir = makePkg(["!skills/", "README.md"]);
     try {
       addSkill(dir, "private-fleet", {
         ".private": "",
@@ -188,7 +188,7 @@ describe("release-guard end-to-end (S1 + S2 + S3)", () => {
   });
 
   test("S3: a hosted skill whose src is excluded via files globs does NOT trip the boundary", () => {
-    const dir = makePkg(["skills/", "!skills/hosted-thing/src", "README.md"]);
+    const dir = makePkg(["!skills/", "README.md"]);
     try {
       addSkill(dir, "hosted-thing", {
         "SKILL.md": "---\nname: hosted-thing\n---\n\n# Hosted thing\n",

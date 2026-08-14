@@ -29,9 +29,6 @@
     "bin/",
     "migrations/",
     "docs/skill-standard.md",
-    "skills/",
-    "!skills/**/node_modules",
-    "agent-skills/",
     "LICENSE",
     "README.md"
   ],

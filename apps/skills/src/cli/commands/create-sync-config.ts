@@ -117,12 +117,19 @@ export function registerCreateSync(parent: Command) {
     .action((name: string, options: any) => handleCreate(name, options));
 
   // Sync — the last mile: corpus -> each agent's global skills folder.
+  // The package ships no bundled corpus, so the corpus is the installed cache
+  // (~/.hasna/skills/installed, what `skills pull` writes), or an explicit canonical
+  // source — `--source <path>` or $SKILLS_SOURCE, typically the monorepo checkout.
   parent
     .command("sync")
     .alias("render")
     .argument("[names...]", "Skills to sync (default: every skill in this machine's corpus)")
     .option("--for <agent>", `Target one agent (${SYNC_AGENTS.join(", ")}, or all)`, "all")
     .option("--all", "Sync every corpus skill (the default)", false)
+    .option(
+      "--source <path>",
+      "Canonical corpus source: a directory of skill folders, or a package root with skills/ and agent-skills/ (overrides $SKILLS_SOURCE)",
+    )
     .option("--dry-run", "Show what would be written without touching any agent folder", false)
     .option(
       "--force",
@@ -173,7 +180,7 @@ function handleCreate(name: string, options: { category: string; description?: s
 
 function handleSync(
   names: string[],
-  options: { for: string; all: boolean; dryRun: boolean; force: boolean; json: boolean },
+  options: { for: string; all: boolean; source?: string; dryRun: boolean; force: boolean; json: boolean },
 ) {
   let agents;
   try {
@@ -185,13 +192,22 @@ function handleSync(
     return;
   }
 
-  const { actions } = syncSkillsToAgents({
-    ...(names.length ? { names } : {}),
-    all: options.all,
-    agents,
-    dryRun: options.dryRun,
-    force: options.force,
-  });
+  let actions;
+  try {
+    ({ actions } = syncSkillsToAgents({
+      ...(names.length ? { names } : {}),
+      all: options.all,
+      agents,
+      sourceDir: options.source,
+      dryRun: options.dryRun,
+      force: options.force,
+    }));
+  } catch (error) {
+    if (options.json) console.log(JSON.stringify({ error: (error as Error).message }));
+    else console.error(chalk.red((error as Error).message));
+    process.exitCode = 1;
+    return;
+  }
 
   if (options.json) {
     console.log(JSON.stringify({ dryRun: options.dryRun, actions }, null, 2));

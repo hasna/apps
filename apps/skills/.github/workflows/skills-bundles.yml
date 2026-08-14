@@ -1,0 +1,77 @@
+name: Skills bundles
+
+# The npm package ships zero corpus. This workflow is the distribution producer:
+# it builds one signed, versioned tar.gz + manifest per skill in the canonical
+# corpus (apps/skills/skills/ + apps/skills/agent-skills/), uploads them as
+# workflow artifacts, and — only when a skills server origin is configured — pushes
+# them to that server. Without a signing key the bundles are emitted unsigned
+# (the build script warns); without SKILLS_API_URL/SKILLS_API_KEY the server push
+# step is skipped entirely.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/skills/**"
+      - ".github/workflows/skills-bundles.yml"
+  pull_request:
+    paths:
+      - "apps/skills/**"
+      - ".github/workflows/skills-bundles.yml"
+
+jobs:
+  build-bundles:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - name: Install dependencies
+        working-directory: apps/skills
+        run: bun install --frozen-lockfile
+      - name: Build signed skill bundles
+        working-directory: apps/skills
+        env:
+          SKILLS_SIGNING_KEY: ${{ secrets.SKILLS_SIGNING_KEY }}
+          SKILLS_SOURCE_COMMIT: ${{ github.sha }}
+        run: bun run scripts/bundle-skills.ts
+      - name: Upload bundle artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: skill-bundles-${{ github.sha }}
+          path: apps/skills/dist/bundles/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Push bundles to the skills server
+        if: ${{ env.SKILLS_API_URL != '' && env.SKILLS_API_KEY != '' }}
+        env:
+          SKILLS_API_URL: ${{ secrets.SKILLS_API_URL }}
+          SKILLS_API_KEY: ${{ secrets.SKILLS_API_KEY }}
+        working-directory: apps/skills
+        run: |
+          set -euo pipefail
+          endpoint="${SKILLS_API_URL%/}/api/v1/skills"
+          failed=0
+          for manifest_file in dist/bundles/*.server.json; do
+            base="${manifest_file%.server.json}"
+            bundle_file="${base}.tar.gz"
+            name="$(basename "$base")"
+            bundle_sha="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["bundleSha256"])' "$manifest_file")"
+            echo "pushing ${name} (${bundle_sha})"
+            status="$(curl -fsS -o /dev/null -w '%{http_code}' \
+              -H "Authorization: Bearer ${SKILLS_API_KEY}" \
+              -F "manifest=@${manifest_file};type=application/json" \
+              -F "bundle=@${bundle_file};type=application/gzip" \
+              "${endpoint}")"
+            if [[ "$status" != "201" && "$status" != "200" ]]; then
+              echo "push of ${name} failed with HTTP ${status}" >&2
+              failed=1
+            fi
+          done
+          if [[ "$failed" -ne 0 ]]; then exit 1; fi
