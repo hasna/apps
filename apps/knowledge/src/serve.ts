@@ -4748,7 +4748,8 @@ export async function startKnowledgeServe(options: StartServeOptions = {}): Prom
         // Never log tokens/keys — kid + reason only.
         console.warn(`[knowledge-serve] auth deny kid=${e.kid ?? '-'} reason=${e.reason} ${e.method} ${e.path}`);
       }
-    },  });
+    },
+  });
 
   const handler = createServeHandler({
     client,
