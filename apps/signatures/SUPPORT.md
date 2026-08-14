@@ -2,7 +2,7 @@
 
 Use GitHub Issues for bugs, feature requests, and documentation gaps:
 
-https://github.com/hasna/signatures/issues
+https://github.com/hasna/apps/issues
 
 For security issues, follow [SECURITY.md](SECURITY.md).
 

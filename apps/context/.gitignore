@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.context/
+.hasna/
+*.db
+*.db-shm
+*.db-wal
+.env
+.env.*
+*.local
+bun.lockb
