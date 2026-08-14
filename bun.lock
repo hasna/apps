@@ -649,6 +649,26 @@
         "typescript": "^5.7.3",
       },
     },
+    "apps/gateway": {
+      "name": "@hasna/gateway",
+      "version": "0.1.8",
+      "bin": {
+        "gateway": "dist/cli/index.js",
+        "gateway-mcp": "dist/mcp/index.js",
+        "gateway-serve": "dist/serve.js",
+      },
+      "dependencies": {
+        "@hasna/contracts": "^0.2.2",
+        "@modelcontextprotocol/sdk": "^1.12.1",
+        "pg": "^8.13.3",
+        "zod": "^3.25.76",
+      },
+      "devDependencies": {
+        "@types/bun": "^1.2.4",
+        "@types/pg": "^8.11.11",
+        "typescript": "^5.7.3",
+      },
+    },
     "apps/guardrails": {
       "name": "@hasna/guardrails",
       "version": "0.2.0",
@@ -1762,6 +1782,8 @@
     "@hasna/events": ["@hasna/events@0.1.15", "", { "dependencies": { "commander": "^13.1.0" }, "bin": { "events": "dist/cli/index.js", "hasna-events": "dist/cli/index.js" } }, "sha512-q4lVzv4n9a9C2zQDZVe/KXy6ZA+y5HRCOL6sG+xc3adHrVKJz0wW8JococwbldfgQhyYmnOloLSoy+B1MNUVZQ=="],
 
     "@hasna/fleet": ["@hasna/fleet@workspace:apps/fleet"],
+
+    "@hasna/gateway": ["@hasna/gateway@workspace:apps/gateway"],
 
     "@hasna/guardrails": ["@hasna/guardrails@workspace:apps/guardrails"],
 
@@ -3714,6 +3736,10 @@
     "@hasna/evals/typescript": ["typescript@6.0.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw=="],
 
     "@hasna/fleet/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
+
+    "@hasna/gateway/@hasna/contracts": ["@hasna/contracts@0.2.2", "", { "dependencies": { "commander": "^13.1.0", "zod": "^3.25.76" }, "bin": { "contracts": "dist/cli/index.js", "contracts-cli": "dist/cli/index.js" } }, "sha512-xpOkF8NIH1+P6kSkb7LiOMfb+yLR2iVvtP1SR93G4f6puGx6YSSj/JgpzaAN4lG0WbpftG5w7xqTsk3Dl/27Rw=="],
+
+    "@hasna/gateway/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
 
     "@hasna/guardrails/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
 
