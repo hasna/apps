@@ -1,0 +1,427 @@
+name: ECR candidate
+
+# Builds and pushes an immutable, security-scanned candidate container image for
+# @hasna/todos. Adapted from the identical, already-proven pattern in
+# hasna/loops (.github/workflows/ecr-candidate.yml, role loops-ecr-candidate-github) —
+# this is the fleet's established shape for "build + scan + push", not a new design.
+#
+# This closes the gap where nothing automated the todos-prod-image-builder image:
+# releases were built by hand-zipping the repo, uploading it to S3, and invoking
+# CodeBuild's bare `docker build && push` by hand, with no scan gate. See
+# todos task 2b77341c for the investigation.
+#
+# Deliberately manual (workflow_dispatch only), not triggered on every push to
+# main: this is the FIRST automation of a previously fully hand-run image
+# pipeline. An automatic trigger on merge would push a candidate to ECR on
+# every PR landing without anyone deciding "this commit should become an
+# image", which is a bigger change than closing today's packaging gap. Once
+# this path has run a few times, switching the trigger to release/tag-based is
+# a follow-up, not part of this change.
+#
+# This workflow builds and pushes an image candidate ONLY. It does not deploy,
+# does not touch ECS, and does not move any `latest`-style pointer.
+#
+# ADOPTING THIS FOR ANOTHER REPOSITORY: every value that is repo-specific is
+# either derived at runtime (repository name, Bun version — read straight off
+# this repo's own Dockerfile, so it can never drift from what actually gets
+# built) or comes from the GitHub Actions Environment named `ecr-candidate`
+# (`vars.AWS_REGION`, `vars.AWS_ROLE_ARN`, `vars.ECR_REPOSITORY`). Nothing in
+# the step bodies below hardcodes this repository's name. To adopt this file
+# elsewhere: copy it unchanged, create that repo's own IAM role (narrowly
+# scoped to ITS OWN ECR repository only — do not reuse this role's ARN), set
+# the three Environment variables to point at it, and confirm the target
+# Dockerfile has a build stage literally named `runner` (or change the one
+# `--target runner` reference below to match).
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Full lowercase commit SHA reachable from origin/main
+        required: true
+        type: string
+      confirmation:
+        description: Type "push <full-sha>" to authorize this immutable candidate
+        required: true
+        type: string
+
+concurrency:
+  group: ecr-candidate-${{ inputs.source_sha }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
+  ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+  SOURCE_SHA: ${{ inputs.source_sha }}
+  CONFIRMATION: ${{ inputs.confirmation }}
+
+jobs:
+  build-scan-push:
+    name: Build, scan, and push immutable candidate
+    runs-on: ubuntu-24.04-arm
+    environment: ecr-candidate
+    timeout-minutes: 45
+    steps:
+      - name: Validate dispatch and configuration
+        id: preflight
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          if [[ ! "${SOURCE_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "source_sha must be a full lowercase 40-character commit SHA" >&2
+            exit 1
+          fi
+          if [[ "${CONFIRMATION}" != "push ${SOURCE_SHA}" ]]; then
+            echo "confirmation must exactly match: push <full-sha>" >&2
+            exit 1
+          fi
+          if [[ -z "${AWS_REGION}" || -z "${AWS_ROLE_ARN}" || -z "${ECR_REPOSITORY}" ]]; then
+            echo "AWS_REGION, AWS_ROLE_ARN, and ECR_REPOSITORY repository variables are required" >&2
+            exit 1
+          fi
+          if [[ ! "${AWS_REGION}" =~ ^[a-z]{2}(-gov)?-[a-z]+-[0-9]+$ ]]; then
+            echo "AWS_REGION has an invalid format" >&2
+            exit 1
+          fi
+          if [[ ! "${AWS_ROLE_ARN}" =~ ^arn:(aws|aws-us-gov|aws-cn):iam::[0-9]{12}:role/[A-Za-z0-9+=,.@_/-]+$ ]]; then
+            echo "AWS_ROLE_ARN has an invalid format" >&2
+            exit 1
+          fi
+          if [[ ! "${ECR_REPOSITORY}" =~ ^[a-z0-9]+([._/-][a-z0-9]+)*$ ]]; then
+            echo "ECR_REPOSITORY has an invalid format" >&2
+            exit 1
+          fi
+
+          short_sha="${SOURCE_SHA:0:12}"
+          candidate_tag="candidate-${short_sha}-${SOURCE_SHA}"
+          printf 'short_sha=%s\n' "${short_sha}" >> "${GITHUB_OUTPUT}"
+          printf 'candidate_tag=%s\n' "${candidate_tag}" >> "${GITHUB_OUTPUT}"
+          printf 'SAFE_SOURCE_SHA=%s\n' "${SOURCE_SHA}" >> "${GITHUB_ENV}"
+          printf 'SHORT_SHA=%s\n' "${short_sha}" >> "${GITHUB_ENV}"
+          printf 'CANDIDATE_TAG=%s\n' "${candidate_tag}" >> "${GITHUB_ENV}"
+
+          # Derived from the repository this workflow is running in, never
+          # hardcoded — this is the one thing that makes the file copy-paste
+          # adoptable across repos without editing step bodies.
+          local_image_name="$(basename "${GITHUB_REPOSITORY}")-candidate"
+          printf 'LOCAL_IMAGE_NAME=%s\n' "${local_image_name}" >> "${GITHUB_ENV}"
+
+      - name: Checkout requested commit
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ inputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact commit is on main
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          test "$(git rev-parse HEAD)" = "${SOURCE_SHA}"
+          git merge-base --is-ancestor "${SOURCE_SHA}^{commit}" refs/remotes/origin/main
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Build native ARM64 runner image
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          docker buildx build \
+            --platform linux/arm64 \
+            --file Dockerfile \
+            --target runner \
+            --load \
+            --label "org.opencontainers.image.revision=${SOURCE_SHA}" \
+            --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+            --tag "${LOCAL_IMAGE_NAME}:${SOURCE_SHA}" \
+            .
+          local_image_id="$(docker image inspect --format '{{.Id}}' "${LOCAL_IMAGE_NAME}:${SOURCE_SHA}")"
+          if [[ ! "${local_image_id}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "built image did not produce a valid local image id" >&2
+            exit 1
+          fi
+          printf 'LOCAL_IMAGE_ID=%s\n' "${local_image_id}" >> "${GITHUB_ENV}"
+
+      - name: Verify shipped Bun and server version
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          # Read the expected Bun version straight off this repo's own
+          # Dockerfile (the ARG the base image is pinned to) rather than
+          # hardcoding it here, so this check can never drift from what the
+          # Dockerfile actually builds — on this repo or any other that
+          # adopts this workflow unchanged.
+          expected_bun_version="$(grep -oP '(?<=oven/bun:)[0-9]+\.[0-9]+\.[0-9]+' Dockerfile | head -1)"
+          test -n "${expected_bun_version}"
+          expected_version="$(node -e "console.log(require('./package.json').version)" 2>/dev/null || python3 -c "import json;print(json.load(open('package.json'))['version'])")"
+          test "$(docker run --rm --entrypoint bun "${LOCAL_IMAGE_NAME}:${SOURCE_SHA}" --version)" = "${expected_bun_version}"
+          test "$(docker run --rm --entrypoint bun "${LOCAL_IMAGE_NAME}:${SOURCE_SHA}" dist/server/index.js --version)" = "${expected_version}"
+
+      - name: Generate local vulnerability report
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.LOCAL_IMAGE_NAME }}:${{ inputs.source_sha }}
+          format: json
+          output: trivy-local.json
+          scanners: vuln
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
+          ignore-unfixed: false
+          exit-code: "0"
+
+      - name: Enforce local vulnerability gate
+        id: local-scan
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          critical="$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL")] | length' trivy-local.json)"
+          high="$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "HIGH")] | length' trivy-local.json)"
+          printf 'critical=%s\n' "${critical}" >> "${GITHUB_OUTPUT}"
+          printf 'high=%s\n' "${high}" >> "${GITHUB_OUTPUT}"
+          printf 'LOCAL_CRITICAL=%s\n' "${critical}" >> "${GITHUB_ENV}"
+          printf 'LOCAL_HIGH=%s\n' "${high}" >> "${GITHUB_ENV}"
+          if (( critical > 0 || high > 0 )); then
+            echo "local Trivy gate failed: critical=${critical}, high=${high}" >&2
+            exit 1
+          fi
+
+      - name: Generate CycloneDX SBOM
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.LOCAL_IMAGE_NAME }}:${{ inputs.source_sha }}
+          format: cyclonedx
+          output: ${{ env.LOCAL_IMAGE_NAME }}.sbom.cdx.json
+          scanners: vuln
+          vuln-type: os,library
+          exit-code: "0"
+
+      - name: Configure AWS credentials with OIDC
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
+        with:
+          aws-region: ${{ vars.AWS_REGION }}
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          role-session-name: ${{ env.LOCAL_IMAGE_NAME }}-${{ github.run_id }}
+          role-duration-seconds: 1800
+          mask-aws-account-id: true
+          unset-current-credentials: true
+
+      - name: Verify immutable scan-on-push repository
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          repository="$(aws ecr describe-repositories \
+            --repository-names "${ECR_REPOSITORY}" \
+            --query 'repositories[0].{mutability:imageTagMutability,scanOnPush:imageScanningConfiguration.scanOnPush}' \
+            --output json)"
+          if [[ "$(jq -r '.mutability' <<<"${repository}")" != "IMMUTABLE" ]]; then
+            echo "ECR repository must enforce IMMUTABLE tags" >&2
+            exit 1
+          fi
+          if [[ "$(jq -r '.scanOnPush' <<<"${repository}")" != "true" ]]; then
+            echo "ECR repository must enable scan-on-push" >&2
+            exit 1
+          fi
+          existing="$(aws ecr batch-get-image \
+            --repository-name "${ECR_REPOSITORY}" \
+            --image-ids imageTag="${CANDIDATE_TAG}" \
+            --query 'length(images)' \
+            --output text)"
+          if [[ "${existing}" != "0" ]]; then
+            echo "candidate tag already exists; refusing to overwrite" >&2
+            exit 1
+          fi
+
+      - name: Log in to Amazon ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@d539f0932e70871a027e9d5a9d8fc38589180a64 # v2
+        with:
+          mask-password: true
+
+      - name: Push scanned immutable candidate
+        id: push
+        env:
+          ECR_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          image_uri="${ECR_REGISTRY}/${ECR_REPOSITORY}:${CANDIDATE_TAG}"
+          docker tag "${LOCAL_IMAGE_NAME}:${SOURCE_SHA}" "${image_uri}"
+          docker push "${image_uri}"
+
+          remote_digest=""
+          for attempt in {1..12}; do
+            remote_digest="$(aws ecr describe-images \
+              --repository-name "${ECR_REPOSITORY}" \
+              --image-ids imageTag="${CANDIDATE_TAG}" \
+              --query 'imageDetails[0].imageDigest' \
+              --output text 2>/dev/null || true)"
+            if [[ "${remote_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              break
+            fi
+            sleep 5
+          done
+          if [[ ! "${remote_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "ECR did not return a valid digest" >&2
+            exit 1
+          fi
+          printf 'digest=%s\n' "${remote_digest}" >> "${GITHUB_OUTPUT}"
+          printf 'REMOTE_DIGEST=%s\n' "${remote_digest}" >> "${GITHUB_ENV}"
+
+      - name: Wait for ECR vulnerability scan
+        id: ecr-scan
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          max_attempts=60
+          retry_interval_seconds=15
+          scan_complete=false
+          scan_error_file="${RUNNER_TEMP}/ecr-scan-error.txt"
+          findings=""
+
+          for (( attempt=1; attempt<=max_attempts; attempt++ )); do
+            scan_response=""
+            if ! scan_response="$(aws ecr describe-image-scan-findings \
+              --repository-name "${ECR_REPOSITORY}" \
+              --image-id imageDigest="${REMOTE_DIGEST}" \
+              --query '{status: imageScanStatus.status, counts: imageScanFindings.findingSeverityCounts}' \
+              --output json 2>"${scan_error_file}")"; then
+              scan_error="$(<"${scan_error_file}")"
+              if [[ "${scan_error}" == *"ScanNotFoundException"* ]]; then
+                echo "ECR scan is not registered yet (attempt ${attempt}/${max_attempts})" >&2
+                if (( attempt < max_attempts )); then
+                  sleep "${retry_interval_seconds}"
+                fi
+                continue
+              fi
+              echo "nontransient ECR scan query failed" >&2
+              exit 1
+            fi
+
+            if ! scan_status="$(jq -er '.status | strings | select(length > 0)' <<<"${scan_response}")"; then
+              echo "ECR returned an empty or malformed scan status" >&2
+              exit 1
+            fi
+
+            case "${scan_status}" in
+              "COMPLETE")
+                if ! findings="$(jq -ce '.counts | if type == "object" then . else error("missing or malformed finding counts") end' <<<"${scan_response}")"; then
+                  echo "ECR returned empty or malformed finding counts" >&2
+                  exit 1
+                fi
+                scan_complete=true
+                break
+                ;;
+              "IN_PROGRESS")
+                echo "ECR scan is still in progress (attempt ${attempt}/${max_attempts})" >&2
+                ;;
+              *)
+                echo "ECR scan entered terminal status: ${scan_status}" >&2
+                exit 1
+                ;;
+            esac
+
+            if (( attempt < max_attempts )); then
+              sleep "${retry_interval_seconds}"
+            fi
+          done
+          rm -f "${scan_error_file}"
+
+          if [[ "${scan_complete}" != "true" ]]; then
+            echo "ECR scan did not complete after ${max_attempts} attempts" >&2
+            exit 1
+          fi
+
+          if ! critical="$(jq -er '(if has("CRITICAL") then .CRITICAL else 0 end) | if type == "number" and . >= 0 and floor == . then . else error("malformed CRITICAL count") end' <<<"${findings}")"; then
+            echo "ECR returned a malformed CRITICAL finding count" >&2
+            exit 1
+          fi
+          if ! high="$(jq -er '(if has("HIGH") then .HIGH else 0 end) | if type == "number" and . >= 0 and floor == . then . else error("malformed HIGH count") end' <<<"${findings}")"; then
+            echo "ECR returned a malformed HIGH finding count" >&2
+            exit 1
+          fi
+          jq -n \
+            --argjson critical "${critical}" \
+            --argjson high "${high}" \
+            '{critical: $critical, high: $high}' > ecr-scan-counts.json
+          printf 'critical=%s\n' "${critical}" >> "${GITHUB_OUTPUT}"
+          printf 'high=%s\n' "${high}" >> "${GITHUB_OUTPUT}"
+          printf 'ECR_CRITICAL=%s\n' "${critical}" >> "${GITHUB_ENV}"
+          printf 'ECR_HIGH=%s\n' "${high}" >> "${GITHUB_ENV}"
+          if (( critical > 0 || high > 0 )); then
+            echo "ECR scan gate failed: critical=${critical}, high=${high}" >&2
+            exit 1
+          fi
+
+      - name: Generate source provenance statement
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          jq -n \
+            --arg repository "${GITHUB_REPOSITORY}" \
+            --arg source_sha "${SOURCE_SHA}" \
+            --arg candidate_tag "${CANDIDATE_TAG}" \
+            --arg digest "${REMOTE_DIGEST#sha256:}" \
+            --arg run_id "${GITHUB_RUN_ID}" \
+            --arg run_attempt "${GITHUB_RUN_ATTEMPT}" \
+            '{
+              "_type": "https://in-toto.io/Statement/v1",
+              subject: [{name: ($repository + ":" + $candidate_tag), digest: {sha256: $digest}}],
+              predicateType: "https://slsa.dev/provenance/v1",
+              predicate: {
+                buildDefinition: {
+                  buildType: ("https://github.com/" + $repository + "/.github/workflows/ecr-candidate.yml"),
+                  externalParameters: {
+                    sourceSha: $source_sha,
+                    dockerfile: "Dockerfile",
+                    target: "runner",
+                    platform: "linux/arm64"
+                  },
+                  internalParameters: {},
+                  resolvedDependencies: [{
+                    uri: ("git+https://github.com/" + $repository + "@" + $source_sha),
+                    digest: {gitCommit: $source_sha}
+                  }]
+                },
+                runDetails: {
+                  builder: {id: ("https://github.com/" + $repository + "/actions/runs/" + $run_id)},
+                  metadata: {invocationId: ($run_id + ":" + $run_attempt)}
+                }
+              }
+            }' > "${LOCAL_IMAGE_NAME}.provenance.json"
+
+      - name: Upload candidate evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ecr-candidate-${{ github.run_id }}
+          path: |
+            trivy-local.json
+            ${{ env.LOCAL_IMAGE_NAME }}.sbom.cdx.json
+            ${{ env.LOCAL_IMAGE_NAME }}.provenance.json
+            ecr-scan-counts.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Publish candidate summary
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          {
+            echo "## ${GITHUB_REPOSITORY} ECR candidate"
+            echo
+            echo "- source SHA: \`${SAFE_SOURCE_SHA:-invalid}\`"
+            echo "- immutable tag: \`${CANDIDATE_TAG:-not-created}\`"
+            echo "- digest: \`${REMOTE_DIGEST:-not-pushed}\`"
+            echo "- local Trivy critical/high: \`${LOCAL_CRITICAL:-not-run}/${LOCAL_HIGH:-not-run}\`"
+            echo "- ECR critical/high: \`${ECR_CRITICAL:-not-run}/${ECR_HIGH:-not-run}\`"
+            echo "- ECS/latest mutation: \`none\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
