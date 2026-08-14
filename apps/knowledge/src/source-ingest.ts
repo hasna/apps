@@ -81,7 +81,7 @@ async function readS3Text(uri: string, config?: KnowledgeConfig, safetyPolicy?: 
 async function readWebText(uri: string, safetyPolicy?: SafetyPolicy): Promise<{ text: string; mime: string | null }> {
   if (safetyPolicy) assertWebSearchAllowed(safetyPolicy);
   // The package's second outbound path, and it goes through the same guard as
-  // the cloud item transport: under NODE_ENV=test a `web://` source ref must not
+  // the HTTP item transport: under NODE_ENV=test a `web://` source ref must not
   // reach the network any more than a note write must. Nothing in the suite
   // ingests a web ref today, which is exactly why this is easy to leave open.
   const response = await guardedFetch(uri, {

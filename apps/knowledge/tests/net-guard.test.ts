@@ -32,7 +32,7 @@ import {
   isLoopbackHostname,
   isNetworkGuardActive,
 } from '../src/net-guard';
-import { resolveKnowledgeCloudStore } from '../src/cloud-store';
+import { resolveKnowledgeHttpStore } from '../src/http-store';
 
 const GUARDED = { NODE_ENV: 'test' } as NodeJS.ProcessEnv;
 const UNGUARDED = { NODE_ENV: 'production' } as NodeJS.ProcessEnv;
@@ -130,8 +130,7 @@ describe('the guard sits at the cloud transport boundary', () => {
     // this is the transport refusing to emit the request. The failure must be
     // the guard, NOT an HTTP status and NOT a DNS error — either of those would
     // mean a socket was opened.
-    const store = resolveKnowledgeCloudStore({
-      HASNA_KNOWLEDGE_STORAGE_MODE: 'postgres',
+    const store = resolveKnowledgeHttpStore({
       HASNA_KNOWLEDGE_API_URL: NON_LOOPBACK,
       HASNA_KNOWLEDGE_API_KEY: FAKE_KEY,
       NODE_ENV: 'test',
@@ -150,8 +149,7 @@ describe('the guard sits at the cloud transport boundary', () => {
   });
 
   test('a cloud write against a non-loopback endpoint is refused too', async () => {
-    const store = resolveKnowledgeCloudStore({
-      HASNA_KNOWLEDGE_STORAGE_MODE: 'postgres',
+    const store = resolveKnowledgeHttpStore({
       HASNA_KNOWLEDGE_API_URL: NON_LOOPBACK,
       HASNA_KNOWLEDGE_API_KEY: FAKE_KEY,
       NODE_ENV: 'test',
@@ -267,8 +265,7 @@ describe('loopback cloud traffic still works (positive control)', () => {
   });
 
   test('the real HTTP transport reaches a 127.0.0.1 server while the guard is armed', async () => {
-    const store = resolveKnowledgeCloudStore({
-      HASNA_KNOWLEDGE_STORAGE_MODE: 'postgres',
+    const store = resolveKnowledgeHttpStore({
       HASNA_KNOWLEDGE_API_URL: `http://127.0.0.1:${server.port}`,
       HASNA_KNOWLEDGE_API_KEY: FAKE_KEY,
       NODE_ENV: 'test',

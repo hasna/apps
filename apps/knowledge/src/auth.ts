@@ -4,8 +4,7 @@ import { dirname, join } from 'node:path';
 import {
   KNOWLEDGE_API_KEY_ENV_KEYS,
   KNOWLEDGE_API_URL_ENV_KEYS,
-} from './knowledge-mode';
-import type { KnowledgeConfig } from './workspace';
+} from './client-transport';
 
 export interface KnowledgeAuthConfig {
   api_key: string;
@@ -54,13 +53,12 @@ export function knowledgeAuthPath(env: Record<string, string | undefined> = proc
 }
 
 export function resolveKnowledgeApiUrl(
-  config?: KnowledgeConfig,
   env: Record<string, string | undefined> = process.env,
 ): string {
   const envApiUrl = KNOWLEDGE_API_URL_ENV_KEYS
     .map((key) => env[key]?.trim())
     .find((value): value is string => Boolean(value));
-  return normalizeKnowledgeApiOrigin(envApiUrl ?? config?.hosted?.api_url ?? DEFAULT_KNOWLEDGE_API_URL);
+  return normalizeKnowledgeApiOrigin(envApiUrl ?? DEFAULT_KNOWLEDGE_API_URL);
 }
 
 export function getKnowledgeAuth(env: Record<string, string | undefined> = process.env): KnowledgeAuthConfig | null {
@@ -108,17 +106,16 @@ export function getKnowledgeApiKey(env: Record<string, string | undefined> = pro
 }
 
 export function knowledgeAuthStatus(
-  config?: KnowledgeConfig,
   env: Record<string, string | undefined> = process.env,
 ): KnowledgeAuthStatus {
   const auth = getKnowledgeAuth(env);
   const key = getKnowledgeApiKey(env);
   const hasEnvApiUrl = KNOWLEDGE_API_URL_ENV_KEYS.some((name) => Boolean(env[name]?.trim()));
   const apiUrl = hasEnvApiUrl
-    ? resolveKnowledgeApiUrl(config, env)
+    ? resolveKnowledgeApiUrl(env)
     : auth?.api_url
       ? normalizeKnowledgeApiOrigin(auth.api_url)
-      : resolveKnowledgeApiUrl(config, env);
+      : resolveKnowledgeApiUrl(env);
   return {
     authenticated: Boolean(key.apiKey),
     source: key.source,

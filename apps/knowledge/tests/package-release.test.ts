@@ -30,7 +30,7 @@ const publicDocs = [
 ].sort();
 
 const publicScripts = [
-  'scripts/apply-cloud-migrations.mjs',
+  'scripts/apply-postgres-migrations.mjs',
   'scripts/live-private-query.mjs',
   // Imported by scripts/smoke-machine-sync-release.mjs, so it must ship with it or the
   // published script fails to resolve at runtime.
@@ -95,9 +95,8 @@ describe('public package release safety', () => {
   // published script still throwing, so they are listed individually.
   const knownUnresolvedImports = new Set([
     // task 1eb481d5 - src/ is not in `files`
-    'scripts/apply-cloud-migrations.mjs -> ../src/storage.ts',
     // task 1eb481d5 - @hasna/contracts is a devDependency only
-    'scripts/apply-cloud-migrations.mjs -> @hasna/contracts/auth',
+    'scripts/apply-postgres-migrations.mjs -> @hasna/contracts/auth',
     // task 104f993d - bun:sqlite throws ERR_UNSUPPORTED_ESM_URL_SCHEME under node
     'scripts/smoke-open-files-installed-boundary.mjs -> bun:sqlite',
   ]);
@@ -316,8 +315,8 @@ describe('public package release safety', () => {
 
     // Each exempted import must still exist; a stale exemption invites the next one to be
     // added without evidence.
-    expect(importsOf('scripts/apply-cloud-migrations.mjs')).toContain('../src/storage.ts');
-    expect(importsOf('scripts/apply-cloud-migrations.mjs')).toContain('@hasna/contracts/auth');
+    expect(importsOf('scripts/apply-postgres-migrations.mjs')).toContain('../dist/serve.js');
+    expect(importsOf('scripts/apply-postgres-migrations.mjs')).toContain('@hasna/contracts/auth');
     expect(importsOf('scripts/smoke-open-files-installed-boundary.mjs')).toContain('bun:sqlite');
 
     // ...and each is genuinely unresolvable, not merely unfamiliar.

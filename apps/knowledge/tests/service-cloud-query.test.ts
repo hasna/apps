@@ -49,13 +49,11 @@ beforeAll(() => {
 
   const keys = [
     'NODE_ENV',
-    'HASNA_KNOWLEDGE_STORAGE_MODE',
     'HASNA_KNOWLEDGE_API_URL',
     ['HASNA_KNOWLEDGE_API', 'KEY'].join('_'),
   ];
   for (const key of keys) savedEnv[key] = process.env[key];
   process.env.NODE_ENV = 'test';
-  process.env.HASNA_KNOWLEDGE_STORAGE_MODE = 'postgres';
   process.env.HASNA_KNOWLEDGE_API_URL = `http://127.0.0.1:${server.port}`;
   process.env[['HASNA_KNOWLEDGE_API', 'KEY'].join('_')] = ['fixture', 'credential'].join('-');
 });
