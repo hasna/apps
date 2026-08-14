@@ -1,3 +1,4 @@
+#!/usr/bin/env bun
 /**
  * hooks serve — the local registry HTTP API.
  *
@@ -7,11 +8,13 @@
 
 import { HOOKS, type HookEvent } from "./lib/registry.js";
 import { listCustomHooks, shortManifestName } from "./lib/manifest.js";
-import { readLock, sha256File, setPinnedHook } from "./lib/store.js";
+import { readLock, sha256File, retrustHook } from "./lib/store.js";
 import { resolveHook } from "./lib/resolve.js";
 import { resolveApiKey } from "./config.js";
 
-export const DEFAULT_SERVE_PORT = 39427;
+// Distinct from the MCP SSE default (39427) so `hooks serve` and
+// `hooks mcp --sse` can run on the same machine without colliding.
+export const DEFAULT_SERVE_PORT = 39428;
 export const SERVE_HOST = "127.0.0.1";
 export const SERVE_SERVICE_NAME = "hooks-registry";
 
@@ -136,10 +139,12 @@ export function handleServeRequest(req: Request, apiKey: string | undefined): Pr
         if (version && version !== resolved.version) {
           return json({ error: `Version mismatch: local '${name}' is ${resolved.version}, requested ${version}` }, 409);
         }
-        return sha256File(resolved.scriptPath).then((hash) => {
-          setPinnedHook(name, { version: resolved.version, sha256: hash, source: "serve" });
-          return json({ ok: true, hook: { name, version: resolved.version, sha256: hash } });
-        });
+        // Single write path: retrustHook updates BOTH the SQLite record and
+        // the hooks.lock pin. Publishing only the pin left the DB record
+        // stale, so the next run refused the very hook that was just
+        // published (DB record takes precedence in checkScriptHash).
+        const check = retrustHook(name, resolved.scriptPath, resolved.version, "serve");
+        return json({ ok: true, hook: { name, version: resolved.version, sha256: check.actual } });
       },
       () => json({ error: "invalid JSON body" }, 400),
     );
@@ -167,4 +172,10 @@ export function startServeServer(options: {
 
   console.error(`hooks registry listening on http://${host}:${port} (publish requires an API key)`);
   return server;
+}
+
+// Direct execution — the `hooks-serve` bin. Starts the registry server with
+// environment-configured defaults (HASNA_HOOKS_API_KEY / HOOKS_API_KEY).
+if (import.meta.main) {
+  startServeServer({});
 }

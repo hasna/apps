@@ -45,6 +45,8 @@ import {
   exportProfiles,
   importProfiles,
 } from "../lib/profiles.js";
+import { readCustomManifest } from "../lib/manifest.js";
+import { resolveHookMeta } from "../lib/resolve.js";
 
 const program = new Command();
 
@@ -745,22 +747,31 @@ program
     const registered = getRegisteredHooks(scope);
 
     for (const name of registered) {
-      const meta = getHook(name);
+      const custom = readCustomManifest(name);
+      const meta = custom ? resolveHookMeta(name) : getHook(name);
       let hookHealthy = true;
 
-      // Check hook exists in the package
-      if (!hookExists(name)) {
-        issues.push({ hook: name, issue: "Hook not found in @hasna/hooks package", severity: "error" });
-        hookHealthy = false;
-        continue;
-      }
+      if (custom) {
+        // Custom hook from the custom dir: healthy when its script exists.
+        if (!existsSync(custom.scriptPath)) {
+          issues.push({ hook: name, issue: `Custom hook script missing: ${custom.scriptPath}`, severity: "error" });
+          hookHealthy = false;
+        }
+      } else {
+        // Check hook exists in the package
+        if (!hookExists(name)) {
+          issues.push({ hook: name, issue: "Hook not found in @hasna/hooks package", severity: "error" });
+          hookHealthy = false;
+          continue;
+        }
 
-      // Check hook has source
-      const hookDir = getHookPath(name);
-      const hookScript = join(hookDir, "src", "hook.ts");
-      if (!existsSync(hookScript)) {
-        issues.push({ hook: name, issue: "Missing src/hook.ts in package", severity: "error" });
-        hookHealthy = false;
+        // Check hook has source
+        const hookDir = getHookPath(name);
+        const hookScript = join(hookDir, "src", "hook.ts");
+        if (!existsSync(hookScript)) {
+          issues.push({ hook: name, issue: "Missing src/hook.ts in package", severity: "error" });
+          hookHealthy = false;
+        }
       }
 
       // Verify correct event registration
@@ -1451,7 +1462,7 @@ program
 // Serve command — local registry HTTP API
 program
   .command("serve")
-  .option("-p, --port <port>", "Port (default 39427)")
+  .option("-p, --port <port>", "Port (default 39428)")
   .option("--host <host>", "Host to bind (default 127.0.0.1)")
   .option("--api-key <key>", "API key for publish (defaults to HASNA_HOOKS_API_KEY / HOOKS_API_KEY)")
   .description("Serve the local hook registry over HTTP (catalog, artifacts, lock)")

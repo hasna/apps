@@ -129,6 +129,38 @@ describe("serve publish (PUT)", () => {
     expect(res.status).toBe(200);
   });
 
+  test("publish then run succeeds without re-trust (DB record and pin updated together)", async () => {
+    const dir = customHookDir("pub-run");
+    writeCustomHook(
+      "pub-run",
+      { name: "pub-run", version: "1.0.0", events: ["PostToolUse"], script: "script.ts" },
+      `console.log(JSON.stringify({ ok: true }));`,
+      "script.ts",
+    );
+    try {
+      const { runHook } = await import("./index.js");
+      const first = await runHook("pub-run", {});
+      expect(first.output).toEqual({ ok: true });
+
+      // Local content changes; the registry publishes the new bytes.
+      writeFileSync(join(dir, "script.ts"), `console.log(JSON.stringify({ ok: "v2" }));`);
+      const res = await handleServeRequest(
+        req("PUT", "/api/v1/hooks", { name: "pub-run" }, { authorization: "Bearer secret" }),
+        "secret",
+      );
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { ok: boolean; hook: { sha256: string } };
+      expect(body.hook.sha256).toMatch(/^[0-9a-f]{64}$/);
+
+      // The very next run must succeed without re-trusting: publishing
+      // updates the DB record, not only the lock pin.
+      const second = await runHook("pub-run", {});
+      expect(second.output).toEqual({ ok: "v2" });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("GET /api/v1/lock returns the published lock", async () => {
     const res = await handleServeRequest(req("GET", "/api/v1/lock"), undefined);
     const body = (await res.json()) as { hooks: Record<string, { version: string; sha256: string; source: string }> };

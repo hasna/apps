@@ -114,7 +114,7 @@ hooks update         # re-register hooks and refresh pins
 **Registry server.** `hooks serve` exposes the local store over HTTP — catalog, artifacts, and the published lock:
 
 ```bash
-hooks serve --port 39427 --api-key "$HASNA_HOOKS_API_KEY"
+hooks serve --port 39428 --api-key "$HASNA_HOOKS_API_KEY"
 # GET /health, GET /api/v1/catalog, GET /api/v1/hooks/:name/:version,
 # PUT /api/v1/hooks (publish, requires the key), GET /api/v1/lock
 ```
