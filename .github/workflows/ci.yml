@@ -162,7 +162,14 @@ jobs:
           fi
 
       - name: Build (affected)
-        run: bunx turbo run build --affected
+        run: |
+          bunx turbo run build --affected
+          rc=$?
+          if [ $rc -ne 0 ]; then
+            echo "--- dirty-tree diagnostics (turbo rc=$rc; repos provenance gate refuses a dirty tree) ---"
+            git status --porcelain --untracked-files=all | head -80
+          fi
+          exit $rc
         env:
           TURBO_SCM_BASE: ${{ steps.affected.outputs.base }}
 
