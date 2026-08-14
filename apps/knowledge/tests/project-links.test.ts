@@ -1,0 +1,995 @@
+import { afterAll, describe, expect, test } from 'bun:test';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import type { ItemStore } from '../src/item-store';
+import {
+  KNOWLEDGE_PROJECT_REGISTRATION_ROUTE,
+  KnowledgeProjectLinksError,
+  createKnowledgeProjectLinksHttpClient,
+  createLocalKnowledgeProjectLinksAuthority,
+  createPostgresKnowledgeProjectLinksAuthority,
+  digestKnowledgeProjectLinksValue,
+  type KnowledgeProjectLinksAuthority,
+  type KnowledgeProjectRegistrationCapability,
+  type KnowledgeProjectRegistrationReceipt,
+} from '../src/project-links';
+import type { KnowledgeItem } from '../src/store';
+import { createKnowledgeClient } from '../src/sdk';
+import { createServeHandler, knowledgeOpenApi } from '../src/serve';
+import { createMigratedPglite } from './fixtures/pglite-client';
+
+const tempRoots: string[] = [];
+const localAuthorities: KnowledgeProjectLinksAuthority[] = [];
+const fixedNow = () => '2026-08-10T12:00:00.000Z';
+const repoRoot = join(fileURLToPath(new URL('.', import.meta.url)), '..');
+
+afterAll(async () => {
+  for (const authority of localAuthorities.splice(0)) await authority.close();
+  for (const root of tempRoots) rmSync(root, { recursive: true, force: true });
+});
+
+function tempRoot(): string {
+  const root = mkdtempSync(join(tmpdir(), 'knowledge-project-links-'));
+  tempRoots.push(root);
+  return root;
+}
+
+function item(id: string, title: string, tags: string[] = []): KnowledgeItem {
+  return {
+    id,
+    short_id: id.slice(0, 8),
+    title,
+    content: `${title} body`,
+    url: null,
+    tags,
+    metadata: {},
+    archived: false,
+    created_at: fixedNow(),
+    updated_at: fixedNow(),
+    version: 1,
+  };
+}
+
+function mapItemStore(items: Map<string, KnowledgeItem>): ItemStore {
+  return {
+    kind: 'local',
+    location: 'test-map',
+    exists: true,
+    supportsVersions: false,
+    async list() {
+      return { items: [...items.values()], total: items.size, exists: true };
+    },
+    async listAll() {
+      return { items: [...items.values()], total: items.size, exists: true };
+    },
+    async get(id) {
+      return items.get(id) ?? null;
+    },
+    async create(input) {
+      const created = item(input.id ?? `k_${items.size + 1}`, input.title, input.tags);
+      items.set(created.id, created);
+      return created;
+    },
+    async update() {
+      throw new Error('not used');
+    },
+    async delete() {
+      throw new Error('not used');
+    },
+    async deleteMany() {
+      throw new Error('not used');
+    },
+    async listVersions() {
+      throw new Error('not used');
+    },
+    async getVersion() {
+      throw new Error('not used');
+    },
+  };
+}
+
+async function registrationRequest(
+  authority: KnowledgeProjectLinksAuthority,
+  input: {
+    operationId?: string;
+    stepId?: string;
+    idempotencyKey?: string;
+    projectId?: string;
+    projectSlug?: string;
+    projectName?: string;
+  } = {},
+) {
+  const capability = await authority.capability();
+  const projectId = input.projectId ?? 'wks_project_alpha';
+  const projectSlug = input.projectSlug ?? 'alpha';
+  const projectName = input.projectName ?? 'Alpha';
+  const collectionSlug = `${projectSlug}-knowledge`;
+  const collectionName = `${projectName} Knowledge`;
+  return {
+    operation_id: input.operationId ?? 'op-register-alpha',
+    step_id: input.stepId ?? 'step-register-alpha',
+    resource_kind: 'collection' as const,
+    direction: 'forward' as const,
+    authority_route: KNOWLEDGE_PROJECT_REGISTRATION_ROUTE,
+    package_version: capability.package_version,
+    authority_id: capability.authority_id,
+    tenant_id: capability.tenant_id,
+    corpus_id: capability.corpus_id,
+    target_selector: projectId,
+    idempotency_key: input.idempotencyKey ?? 'idem-register-alpha',
+    request_digest: digestKnowledgeProjectLinksValue({
+      action: 'register_collection',
+      source_project_id: projectId,
+      project_slug: projectSlug,
+      project_name: projectName,
+      collection_slug: collectionSlug,
+      collection_name: collectionName,
+      membership_rule: 'explicit_collection_binding',
+    }),
+    precondition_digest: digestKnowledgeProjectLinksValue({
+      source_project_id: projectId,
+      expected: 'absent_or_exact_match',
+    }),
+    project_id: projectId,
+    project_slug: projectSlug,
+    project_name: projectName,
+    desired: {
+      collection_slug: collectionSlug,
+      collection_name: collectionName,
+    },
+  };
+}
+
+async function bindingRequest(
+  authority: KnowledgeProjectLinksAuthority,
+  collectionId: string,
+  itemId: string,
+  input: {
+    operationId?: string;
+    stepId?: string;
+    idempotencyKey?: string;
+  } = {},
+) {
+  const capability = await authority.capability();
+  return {
+    operation_id: input.operationId ?? `op-bind-${itemId}`,
+    step_id: input.stepId ?? `step-bind-${itemId}`,
+    direction: 'forward' as const,
+    authority_route: KNOWLEDGE_PROJECT_REGISTRATION_ROUTE,
+    package_version: capability.package_version,
+    authority_id: capability.authority_id,
+    tenant_id: capability.tenant_id,
+    corpus_id: capability.corpus_id,
+    idempotency_key: input.idempotencyKey ?? `idem-bind-${itemId}`,
+    request_digest: digestKnowledgeProjectLinksValue({
+      action: 'bind_item',
+      collection_id: collectionId,
+      item_id: itemId,
+    }),
+    precondition_digest: digestKnowledgeProjectLinksValue({
+      collection_id: collectionId,
+      item_id: itemId,
+      expected: 'unbound_or_exact_membership',
+    }),
+    collection_id: collectionId,
+    item_id: itemId,
+  };
+}
+
+async function inverseRequest(
+  capability: KnowledgeProjectRegistrationCapability,
+  receipt: KnowledgeProjectRegistrationReceipt,
+  input: {
+    operationId: string;
+    stepId: string;
+    idempotencyKey: string;
+  },
+) {
+  return {
+    operation_id: input.operationId,
+    step_id: input.stepId,
+    authority_route: KNOWLEDGE_PROJECT_REGISTRATION_ROUTE,
+    package_version: capability.package_version,
+    authority_id: capability.authority_id,
+    tenant_id: capability.tenant_id,
+    corpus_id: capability.corpus_id,
+    idempotency_key: input.idempotencyKey,
+    accepted_receipt_id: receipt.receipt_id,
+  };
+}
+
+function receiptLookupRequest(
+  capability: KnowledgeProjectRegistrationCapability,
+  receipt: KnowledgeProjectRegistrationReceipt,
+) {
+  return {
+    authority_id: capability.authority_id,
+    tenant_id: capability.tenant_id,
+    corpus_id: capability.corpus_id,
+    operation_id: receipt.operation_id,
+    step_id: receipt.step_id,
+    action: receipt.action,
+    direction: receipt.direction,
+    idempotency_key: receipt.idempotency_key,
+    max_items: 1 as const,
+  };
+}
+
+interface TestJsonSchema {
+  $ref?: string;
+  type?: string;
+  format?: string;
+  enum?: unknown[];
+  required?: string[];
+  properties?: Record<string, TestJsonSchema>;
+  items?: TestJsonSchema;
+  additionalProperties?: boolean | TestJsonSchema;
+}
+
+function expectSchemaAccepts(
+  schemas: Record<string, TestJsonSchema>,
+  schema: TestJsonSchema,
+  value: unknown,
+  path = '$',
+): void {
+  if (schema.$ref) {
+    const name = schema.$ref.split('/').at(-1)!;
+    expectSchemaAccepts(schemas, schemas[name]!, value, path);
+    return;
+  }
+  if (schema.enum) {
+    expect(schema.enum, `${path} enum`).toContain(value);
+  }
+  if (schema.type === 'string') {
+    expect(typeof value, `${path} type`).toBe('string');
+    if (schema.format === 'date-time') {
+      expect(Number.isNaN(Date.parse(value as string)), `${path} date-time`).toBe(false);
+    }
+    return;
+  }
+  if (schema.type === 'integer') {
+    expect(Number.isInteger(value), `${path} type`).toBe(true);
+    return;
+  }
+  if (schema.type === 'boolean') {
+    expect(typeof value, `${path} type`).toBe('boolean');
+    return;
+  }
+  if (schema.type === 'array') {
+    expect(Array.isArray(value), `${path} type`).toBe(true);
+    for (const [index, entry] of (value as unknown[]).entries()) {
+      expectSchemaAccepts(schemas, schema.items!, entry, `${path}[${index}]`);
+    }
+    return;
+  }
+  if (schema.type === 'object') {
+    expect(value !== null && typeof value === 'object' && !Array.isArray(value), `${path} type`)
+      .toBe(true);
+    const record = value as Record<string, unknown>;
+    for (const field of schema.required ?? []) {
+      expect(record, `${path}.${field} required`).toHaveProperty(field);
+      expect(schema.properties, `${path}.${field} schema`).toHaveProperty(field);
+    }
+    if (schema.additionalProperties === false) {
+      expect(
+        Object.keys(record).filter((field) => !schema.properties?.[field]),
+        `${path} additional properties`,
+      ).toEqual([]);
+    }
+    for (const [field, fieldSchema] of Object.entries(schema.properties ?? {})) {
+      if (field in record) expectSchemaAccepts(schemas, fieldSchema, record[field], `${path}.${field}`);
+    }
+  }
+}
+
+function localHarness(items = new Map<string, KnowledgeItem>()) {
+  const root = tempRoot();
+  const store = mapItemStore(items);
+  const authority = createLocalKnowledgeProjectLinksAuthority({
+    databasePath: join(root, 'knowledge.db'),
+    itemStore: store,
+    options: {
+      packageVersion: '9.9.9',
+      authorityId: 'knowledge-test',
+      tenantId: 'tenant-test',
+      corpusId: 'corpus-test',
+      now: fixedNow,
+    },
+  });
+  localAuthorities.push(authority);
+  return { root, store, items, authority };
+}
+
+describe('Knowledge Projects resource-link producer', () => {
+  test('SQLite owns a real aggregate, explicit later-child membership, stable taxonomy, and complete paging', async () => {
+    const first = item('k_first', 'First', ['Policy', 'Shared']);
+    const later = item('k_later', 'Later', ['shared', 'Runbook']);
+    const unbound = item('k_unbound', 'Unbound', ['Invisible']);
+    const harness = localHarness(new Map([
+      [first.id, first],
+      [unbound.id, unbound],
+    ]));
+
+    const registration = await harness.authority.registerCollection(
+      await registrationRequest(harness.authority),
+    );
+    expect(registration.outcome).toBe('accepted');
+    expect(registration.created_by_operation).toBe(true);
+    expect(registration.collection_id).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
+
+    const initial = await harness.authority.readAllProjectResources('wks_project_alpha');
+    expect(initial.map((resource) => resource.kind)).toEqual(['collection', 'project']);
+
+    const firstBinding = await harness.authority.bindItem(
+      await bindingRequest(harness.authority, registration.collection_id!, first.id),
+    );
+    expect(firstBinding.created_by_operation).toBe(true);
+
+    const firstPage = await harness.authority.listProjectResources('wks_project_alpha', { limit: 2 });
+    expect(firstPage.count).toBe(2);
+    expect(firstPage.total).toBe(5);
+    expect(firstPage.has_more).toBe(true);
+    expect(firstPage.complete).toBe(false);
+    expect(firstPage.next_cursor).not.toBeNull();
+
+    const exactFirst = await harness.authority.readProjectResource(
+      'wks_project_alpha',
+      'item',
+      first.id,
+    );
+    expect(exactFirst.locator.value).toBe('knowledge:item:k_first');
+    expect(exactFirst.metadata.tags).toEqual(['Policy', 'Shared']);
+    expect((await harness.authority.readAllProjectResources('wks_project_alpha')))
+      .not.toContainEqual(expect.objectContaining({ id: unbound.id }));
+
+    harness.items.set(later.id, later);
+    const beforeLaterBinding = await harness.authority.readAllProjectResources('wks_project_alpha');
+    expect(beforeLaterBinding).not.toContainEqual(expect.objectContaining({ id: later.id }));
+
+    const laterBinding = await harness.authority.bindItem(
+      await bindingRequest(harness.authority, registration.collection_id!, later.id),
+    );
+    expect(laterBinding.result_revision).toBe('r3');
+    const afterLaterBinding = await harness.authority.readAllProjectResources('wks_project_alpha', {
+      limit: 2,
+    });
+    expect(afterLaterBinding).toContainEqual(expect.objectContaining({ kind: 'item', id: later.id }));
+    expect(afterLaterBinding).not.toContainEqual(expect.objectContaining({ id: unbound.id }));
+
+    const sharedTaxonomy = afterLaterBinding.find(
+      (resource) => resource.kind === 'taxonomy' && resource.metadata.normalized_tag === 'shared',
+    );
+    expect(sharedTaxonomy?.metadata.item_count).toBe(2);
+    expect(sharedTaxonomy?.locator.kind).toBe('external_uuid');
+
+    await expect(
+      harness.authority.listProjectResources('wks_project_alpha', {
+        limit: 2,
+        cursor: firstPage.next_cursor,
+      }),
+    ).rejects.toMatchObject({
+      code: 'KNOWLEDGE_PROJECT_LINKS_CURSOR_STALE',
+    });
+
+    const preMutationPage = await harness.authority.listProjectResources(
+      'wks_project_alpha',
+      { limit: 2 },
+    );
+    harness.items.set(first.id, {
+      ...first,
+      title: 'First revised',
+      tags: ['Policy', 'Changed'],
+      version: 2,
+    });
+    await expect(
+      harness.authority.listProjectResources('wks_project_alpha', {
+        limit: 2,
+        cursor: preMutationPage.next_cursor,
+      }),
+    ).rejects.toMatchObject({
+      code: 'KNOWLEDGE_PROJECT_LINKS_CURSOR_STALE',
+    });
+    const postMutationResources = await harness.authority.readAllProjectResources(
+      'wks_project_alpha',
+    );
+
+    const reopened = createLocalKnowledgeProjectLinksAuthority({
+      databasePath: join(harness.root, 'knowledge.db'),
+      itemStore: harness.store,
+      options: {
+        packageVersion: '9.9.9',
+        authorityId: 'knowledge-test',
+        tenantId: 'tenant-test',
+        corpusId: 'corpus-test',
+        now: fixedNow,
+      },
+    });
+    localAuthorities.push(reopened);
+    expect((await reopened.readCollection(registration.collection_id!)).digest)
+      .toBe((await harness.authority.readCollection(registration.collection_id!)).digest);
+    expect((await reopened.readAllProjectResources('wks_project_alpha')).length)
+      .toBe(postMutationResources.length);
+  });
+
+  test('later accepted adopters preserve creator-owned collections and memberships', async () => {
+    const existing = item('k_existing', 'Existing', ['Convention']);
+    const { authority } = localHarness(new Map([[existing.id, existing]]));
+    const request = await registrationRequest(authority);
+    const accepted = await authority.registerCollection(request);
+    expect(await authority.registerCollection(request)).toEqual(accepted);
+
+    const adoptedRegistration = await authority.registerCollection(
+      await registrationRequest(authority, {
+        operationId: 'op-adopt-collection',
+        stepId: 'step-adopt-collection',
+        idempotencyKey: 'idem-adopt-collection',
+      }),
+    );
+    expect(adoptedRegistration.reason).toBe('adopted_existing_collection');
+    expect(adoptedRegistration.created_by_operation).toBe(false);
+
+    const capability = await authority.capability();
+    const registrationInverseRequest = await inverseRequest(capability, accepted, {
+      operationId: 'op-inverse-owned-collection',
+      stepId: 'step-inverse-owned-collection',
+      idempotencyKey: 'idem-inverse-owned-collection',
+    });
+    const registrationInverse = await authority.compensateRegistration(registrationInverseRequest);
+    expect(registrationInverse.outcome).toBe('terminal_nonacceptance');
+    expect(registrationInverse.reason).toBe('collection_has_later_accepted_adopter');
+    expect(await authority.lookupReceipt(receiptLookupRequest(capability, adoptedRegistration)))
+      .toEqual(adoptedRegistration);
+    expect((await authority.readCollection(accepted.collection_id!)).collection_id)
+      .toBe(accepted.collection_id);
+
+    const binding = await authority.bindItem(
+      await bindingRequest(authority, accepted.collection_id!, existing.id),
+    );
+    const adoptedBinding = await authority.bindItem(
+      await bindingRequest(authority, accepted.collection_id!, existing.id, {
+        operationId: 'op-adopt-membership',
+        stepId: 'step-adopt-membership',
+        idempotencyKey: 'idem-adopt-membership',
+      }),
+    );
+    expect(adoptedBinding.reason).toBe('adopted_existing_membership');
+    expect(adoptedBinding.created_by_operation).toBe(false);
+
+    const adoptedInverseRequest = await inverseRequest(capability, adoptedBinding, {
+      operationId: 'op-inverse-adopted-membership',
+      stepId: 'step-inverse-adopted-membership',
+      idempotencyKey: 'idem-inverse-adopted-membership',
+    });
+    const adoptedInverse = await authority.compensateItemBinding(adoptedInverseRequest);
+    expect(adoptedInverse.outcome).toBe('terminal_nonacceptance');
+    expect(adoptedInverse.reason).toBe('adopted_membership_is_not_inverse_owned');
+    expect(await authority.readItemBinding(accepted.collection_id!, existing.id))
+      .toMatchObject({ item_id: existing.id });
+
+    const bindingInverseRequest = await inverseRequest(capability, binding, {
+      operationId: 'op-inverse-owned-membership',
+      stepId: 'step-inverse-owned-membership',
+      idempotencyKey: 'idem-inverse-owned-membership',
+    });
+    const bindingInverse = await authority.compensateItemBinding(bindingInverseRequest);
+    expect(bindingInverse.outcome).toBe('terminal_nonacceptance');
+    expect(bindingInverse.reason).toBe('membership_has_later_accepted_adopter');
+    expect(await authority.lookupReceipt(receiptLookupRequest(capability, adoptedBinding)))
+      .toEqual(adoptedBinding);
+    expect(await authority.readItemBinding(accepted.collection_id!, existing.id))
+      .toMatchObject({ item_id: existing.id });
+  });
+
+  test('inverse removes solely owned effects and binds idempotency to the accepted receipt', async () => {
+    const first = item('k_inverse_first', 'Inverse First');
+    const second = item('k_inverse_second', 'Inverse Second');
+    const { authority } = localHarness(new Map([
+      [first.id, first],
+      [second.id, second],
+    ]));
+    const firstRegistration = await authority.registerCollection(
+      await registrationRequest(authority),
+    );
+    const secondRegistration = await authority.registerCollection(
+      await registrationRequest(authority, {
+        operationId: 'op-register-beta',
+        stepId: 'step-register-beta',
+        idempotencyKey: 'idem-register-beta',
+        projectId: 'wks_project_beta',
+        projectSlug: 'beta',
+        projectName: 'Beta',
+      }),
+    );
+    const capability = await authority.capability();
+
+    const firstRegistrationInverse = await inverseRequest(capability, firstRegistration, {
+      operationId: 'op-inverse-registration',
+      stepId: 'step-inverse-registration',
+      idempotencyKey: 'idem-inverse-registration',
+    });
+    expect((await authority.compensateRegistration(firstRegistrationInverse)).outcome)
+      .toBe('accepted');
+    expect(await authority.verifyRegistrationInverse(firstRegistrationInverse))
+      .toMatchObject({ target_id: firstRegistration.collection_id, absent: true });
+    await expect(
+      authority.compensateRegistration({
+        ...firstRegistrationInverse,
+        accepted_receipt_id: secondRegistration.receipt_id,
+      }),
+    ).rejects.toMatchObject({
+      code: 'KNOWLEDGE_PROJECT_LINKS_IDEMPOTENCY_MISMATCH',
+    });
+    expect((await authority.readCollection(secondRegistration.collection_id!)).collection_id)
+      .toBe(secondRegistration.collection_id);
+
+    const firstBinding = await authority.bindItem(
+      await bindingRequest(authority, secondRegistration.collection_id!, first.id),
+    );
+    const secondBinding = await authority.bindItem(
+      await bindingRequest(authority, secondRegistration.collection_id!, second.id),
+    );
+    const firstBindingInverse = await inverseRequest(capability, firstBinding, {
+      operationId: 'op-inverse-binding',
+      stepId: 'step-inverse-binding',
+      idempotencyKey: 'idem-inverse-binding',
+    });
+    expect((await authority.compensateItemBinding(firstBindingInverse)).outcome)
+      .toBe('accepted');
+    expect(await authority.verifyItemBindingInverse(firstBindingInverse))
+      .toMatchObject({ target_id: first.id, absent: true });
+    await expect(
+      authority.compensateItemBinding({
+        ...firstBindingInverse,
+        accepted_receipt_id: secondBinding.receipt_id,
+      }),
+    ).rejects.toMatchObject({
+      code: 'KNOWLEDGE_PROJECT_LINKS_IDEMPOTENCY_MISMATCH',
+    });
+    expect(await authority.readItemBinding(secondRegistration.collection_id!, second.id))
+      .toMatchObject({ item_id: second.id });
+  });
+
+  test('local authority close releases the owned SQLite handle before directory cleanup', async () => {
+    const root = tempRoot();
+    const authority = createLocalKnowledgeProjectLinksAuthority({
+      databasePath: join(root, 'knowledge.db'),
+      itemStore: mapItemStore(new Map()),
+      options: {
+        packageVersion: '9.9.9',
+        authorityId: 'knowledge-test',
+        tenantId: 'tenant-test',
+        corpusId: 'corpus-test',
+        now: fixedNow,
+      },
+    });
+    await authority.capability();
+    await authority.close();
+    await authority.close();
+    rmSync(root, { recursive: true, force: true });
+    expect(existsSync(root)).toBe(false);
+  });
+
+  test('Postgres executes the same aggregate, membership, receipt, and resource semantics', async () => {
+    const { db, client } = await createMigratedPglite();
+    const pgItem = item('k_pg', 'Postgres Item', ['Postgres']);
+    await db.query(
+      `INSERT INTO knowledge_items (
+         id, short_id, title, content, url, tags, metadata, archived, created_at, updated_at
+       ) VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8,$9,$10)`,
+      [
+        pgItem.id,
+        pgItem.short_id,
+        pgItem.title,
+        pgItem.content,
+        pgItem.url,
+        JSON.stringify(pgItem.tags),
+        JSON.stringify(pgItem.metadata),
+        pgItem.archived,
+        pgItem.created_at,
+        pgItem.updated_at,
+      ],
+    );
+    const authority = createPostgresKnowledgeProjectLinksAuthority({
+      client,
+      itemResolver: async (id) => id === pgItem.id ? pgItem : null,
+      options: {
+        packageVersion: '9.9.9',
+        authorityId: 'knowledge-test',
+        tenantId: 'tenant-test',
+        corpusId: 'corpus-test',
+        now: fixedNow,
+      },
+    });
+    const registration = await authority.registerCollection(await registrationRequest(authority));
+    const binding = await authority.bindItem(
+      await bindingRequest(authority, registration.collection_id!, pgItem.id),
+    );
+    expect(binding.outcome).toBe('accepted');
+    expect((await authority.readAllProjectResources('wks_project_alpha')).map(
+      (resource) => `${resource.kind}:${resource.id}`,
+    )).toEqual([
+      `collection:${registration.collection_id}`,
+      `item:${pgItem.id}`,
+      `project:${registration.project_id}`,
+      expect.stringMatching(/^taxonomy:/),
+    ]);
+
+    const receiptMutation = await db.query(
+      `UPDATE knowledge_project_link_receipts SET reason = 'mutated' WHERE receipt_id = $1`,
+      [binding.receipt_id],
+    ).then(
+      () => 'unexpected-success',
+      (error) => String(error),
+    );
+    expect(receiptMutation).toContain('immutable');
+    await authority.close();
+    await db.close();
+  });
+
+  test('HTTP routes, SDK group, and OpenAPI expose the same producer contract', async () => {
+    const apiItem = item('k_http', 'HTTP Item', ['API']);
+    const { authority } = localHarness(new Map([[apiItem.id, apiItem]]));
+    const handler = createServeHandler({
+      client: {
+        async query() {
+          return { rows: [], rowCount: 0 };
+        },
+        async many() {
+          return [];
+        },
+        async get() {
+          return null;
+        },
+        async one() {
+          throw new Error('not used');
+        },
+        async execute() {},
+        async transaction(fn) {
+          return fn(this);
+        },
+        async close() {},
+        get pool() {
+          return {} as never;
+        },
+      },
+      verifier: {
+        async authenticate() {
+          return {
+            ok: true,
+            principal: {
+              app: 'knowledge',
+              tid: 'tenant-test',
+              kid: 'kid-test',
+              scopes: ['knowledge:read', 'knowledge:write'],
+              agent: null,
+            },
+          };
+        },
+      } as never,
+      store: {
+        async touchLastUsed() {},
+      } as never,
+      version: '9.9.9',
+      projectLinksAuthority: () => authority,
+    });
+    const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: handler });
+    const client = createKnowledgeProjectLinksHttpClient({
+      baseUrl: `http://127.0.0.1:${server.port}`,
+      fetch,
+    });
+    const registration = await client.registerCollection(await registrationRequest(client));
+    await client.bindItem(await bindingRequest(client, registration.collection_id!, apiItem.id));
+    expect((await client.readAllProjectResources('wks_project_alpha')).map((entry) => entry.kind))
+      .toEqual(['collection', 'item', 'project', 'taxonomy']);
+    const exactResource = await client.readProjectResource(
+      'wks_project_alpha',
+      'item',
+      apiItem.id,
+    );
+    await client.close();
+    server.stop(true);
+
+    const sdk = createKnowledgeClient({ projectLinksAuthority: authority });
+    expect((await sdk.projectLinks.capability()).route).toBe(KNOWLEDGE_PROJECT_REGISTRATION_ROUTE);
+    const collectionRecord = await sdk.projectLinks.readCollection(registration.collection_id!);
+    expect(collectionRecord.collection_id)
+      .toBe(registration.collection_id);
+
+    const openapi = knowledgeOpenApi('9.9.9');
+    expect(openapi.paths).toHaveProperty('/v1/project-registration/capability');
+    expect(openapi.paths).toHaveProperty('/v1/project-registration/items/bind');
+    expect(openapi.paths).toHaveProperty('/v1/projects/{projectId}/resources');
+    expect(openapi.paths).toHaveProperty('/v1/projects/{projectId}/resources/{kind}/{resourceId}');
+    const schemas = (openapi.components as { schemas: Record<string, TestJsonSchema> }).schemas;
+    expect(schemas).toHaveProperty('ProjectResourcePage');
+    expectSchemaAccepts(schemas, schemas.ProjectCollectionRecord!, collectionRecord);
+    expectSchemaAccepts(schemas, schemas.ProjectResource!, exactResource);
+  });
+
+  test('HTTP client accepts a valid two-resource page and exact readback envelope', async () => {
+    const project = {
+      key: 'project:wks_http',
+      kind: 'project' as const,
+      id: 'wks_http',
+      project_id: 'wks_http',
+      source_project_id: 'wks_http',
+      collection_id: 'col_http',
+      revision: '1',
+      digest: 'digest-project',
+      title: 'HTTP Project',
+      locator: { kind: 'external_uuid' as const, value: 'wks_http' },
+      metadata: {},
+    };
+    const itemResource = {
+      key: 'item:k_http',
+      kind: 'item' as const,
+      id: 'k_http',
+      project_id: 'wks_http',
+      source_project_id: 'wks_http',
+      collection_id: 'col_http',
+      revision: '1',
+      digest: 'digest-item',
+      title: 'HTTP Item',
+      locator: { kind: 'external_uuid' as const, value: 'k_http' },
+      metadata: {},
+    };
+    const responses = [
+      Response.json({
+        schema: 'knowledge.project-resources.page.v1',
+        authority: 'knowledge',
+        route: 'knowledge.project-resources.v1',
+        authority_id: 'knowledge',
+        tenant_id: 'tenant-http',
+        corpus_id: 'knowledge',
+        project_id: 'wks_http',
+        source_project_id: 'wks_http',
+        collection_id: 'col_http',
+        collection_revision: '1',
+        population_digest: 'population-digest',
+        resource_kinds: ['project', 'item'],
+        resources: [project, itemResource],
+        count: 2,
+        total: 2,
+        limit: 2,
+        cursor: null,
+        next_cursor: null,
+        has_more: false,
+        complete: true,
+        truncated: false,
+      }),
+      Response.json({ resource: itemResource }),
+    ];
+    const client = createKnowledgeProjectLinksHttpClient({
+      baseUrl: 'https://knowledge.example.com',
+      fetch: async () => responses.shift()!,
+    });
+
+    const page = await client.listProjectResources('wks_http', { limit: 2 });
+    expect(page.resources).toHaveLength(2);
+    expect(page.resources.map((resource) => resource.key)).toEqual([
+      'project:wks_http',
+      'item:k_http',
+    ]);
+    expect(await client.readProjectResource('wks_http', 'item', 'k_http'))
+      .toEqual(itemResource);
+  });
+
+  test('HTTP client rejects malformed success envelopes and maps generic hosted 404s', async () => {
+    const malformedPage = createKnowledgeProjectLinksHttpClient({
+      baseUrl: 'https://knowledge.example.com',
+      fetch: async () => Response.json({ ok: true }),
+    });
+    await expect(malformedPage.listProjectResources('wks_http')).rejects.toMatchObject({
+      code: 'KNOWLEDGE_PROJECT_LINKS_INVALID_RESPONSE',
+    });
+
+    const malformedExact = createKnowledgeProjectLinksHttpClient({
+      baseUrl: 'https://knowledge.example.com',
+      fetch: async () => Response.json({}),
+    });
+    await expect(
+      malformedExact.readProjectResource('wks_http', 'item', 'k_http'),
+    ).rejects.toMatchObject({
+      code: 'KNOWLEDGE_PROJECT_LINKS_INVALID_RESPONSE',
+    });
+
+    const missingRoute = createKnowledgeProjectLinksHttpClient({
+      baseUrl: 'https://knowledge.example.com',
+      fetch: async () => Response.json(
+        { error: 'not_found', path: '/v1/projects/wks_http/resources' },
+        { status: 404 },
+      ),
+    });
+    await expect(missingRoute.listProjectResources('wks_http')).rejects.toMatchObject({
+      code: 'KNOWLEDGE_PROJECT_LINKS_NOT_FOUND',
+    });
+  });
+
+  test('hosted CLI fails closed with a structured code on a malformed success envelope', async () => {
+    const server = Bun.serve({
+      hostname: '127.0.0.1',
+      port: 0,
+      fetch: () => Response.json({ ok: true }),
+    });
+    const env = { ...process.env } as Record<string, string>;
+    for (const name of [
+      'HASNA_KNOWLEDGE_STORAGE_MODE',
+      'KNOWLEDGE_STORAGE_MODE',
+      'HASNA_KNOWLEDGE_API_URL',
+      'KNOWLEDGE_API_URL',
+      'HASNA_KNOWLEDGE_API_KEY',
+      'KNOWLEDGE_API_KEY',
+    ]) {
+      delete env[name];
+    }
+    Object.assign(env, {
+      HASNA_KNOWLEDGE_STORAGE_MODE: 'postgres',
+      HASNA_KNOWLEDGE_API_URL: `http://127.0.0.1:${server.port}`,
+      HASNA_KNOWLEDGE_API_KEY: 'test-key-not-a-credential',
+    });
+    const child = Bun.spawn({
+      cmd: [
+        'bun',
+        'src/cli.ts',
+        'project-resources',
+        'wks_http',
+        '--json',
+      ],
+      cwd: repoRoot,
+      env,
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    const [exitCode, stdout, stderr] = await Promise.all([
+      child.exited,
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+    ]);
+    server.stop(true);
+
+    expect(exitCode, stderr).toBe(1);
+    expect(JSON.parse(stdout)).toMatchObject({
+      ok: false,
+      code: 'KNOWLEDGE_PROJECT_LINKS_INVALID_RESPONSE',
+    });
+  });
+
+  test('CLI registers, binds, exhausts, and exactly reads the same local producer', () => {
+    const root = tempRoot();
+    const storePath = join(root, 'db.json');
+    const run = (args: string[]) => {
+      const result = Bun.spawnSync({
+        cmd: ['bun', 'src/cli.ts', ...args],
+        cwd: repoRoot,
+        env: {
+          ...process.env,
+          HASNA_KNOWLEDGE_STORAGE_MODE: 'sqlite',
+          HASNA_KNOWLEDGE_PROJECT_AUTHORITY_ID: 'knowledge-cli-test',
+          HASNA_KNOWLEDGE_PROJECT_TENANT_ID: 'tenant-cli-test',
+          HASNA_KNOWLEDGE_PROJECT_CORPUS_ID: 'corpus-cli-test',
+        },
+        stdout: 'pipe',
+        stderr: 'pipe',
+      });
+      const stdout = result.stdout.toString();
+      const stderr = result.stderr.toString();
+      expect(
+        result.exitCode,
+        `command failed: ${args.join(' ')}\nstdout=${stdout}\nstderr=${stderr}`,
+      ).toBe(0);
+      return JSON.parse(stdout) as Record<string, unknown>;
+    };
+
+    run([
+      'upsert',
+      'CLI Item',
+      'CLI body',
+      '--id',
+      'k_cli',
+      '--tag',
+      'CLI',
+      '--store',
+      storePath,
+      '--json',
+    ]);
+    const registered = run([
+      'project-registration',
+      'create',
+      '--operation-id',
+      'op-cli-register',
+      '--step-id',
+      'step-cli-register',
+      '--idempotency-key',
+      'idem-cli-register',
+      '--project',
+      'wks_cli',
+      '--slug',
+      'cli',
+      '--name',
+      'CLI',
+      '--store',
+      storePath,
+      '--json',
+    ]);
+    const collectionId = (
+      registered.receipt as KnowledgeProjectRegistrationReceipt
+    ).collection_id!;
+    run([
+      'project-membership',
+      'bind',
+      '--operation-id',
+      'op-cli-bind',
+      '--step-id',
+      'step-cli-bind',
+      '--idempotency-key',
+      'idem-cli-bind',
+      '--collection-id',
+      collectionId,
+      '--item-id',
+      'k_cli',
+      '--store',
+      storePath,
+      '--json',
+    ]);
+    const exhausted = run([
+      'project-resources',
+      'wks_cli',
+      '--all',
+      '--limit',
+      '1',
+      '--store',
+      storePath,
+      '--json',
+    ]);
+    expect(exhausted.resources).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'project' }),
+      expect.objectContaining({ kind: 'collection', id: collectionId }),
+      expect.objectContaining({ kind: 'item', id: 'k_cli' }),
+      expect.objectContaining({ kind: 'taxonomy' }),
+    ]));
+    const exact = run([
+      'project-resource',
+      'wks_cli',
+      'item',
+      'k_cli',
+      '--store',
+      storePath,
+      '--json',
+    ]);
+    expect(exact.resource).toMatchObject({ kind: 'item', id: 'k_cli' });
+
+    const completions = Bun.spawnSync({
+      cmd: ['bun', 'src/cli.ts', '--completions', 'bash'],
+      cwd: repoRoot,
+      env: process.env,
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    expect(completions.exitCode).toBe(0);
+    expect(completions.stdout.toString()).toContain('project-registration');
+    expect(completions.stdout.toString()).toContain('--collection-id');
+    expect(completions.stdout.toString()).toContain('--kind');
+
+    for (const command of [
+      'project-registration',
+      'project-membership',
+      'project-resources',
+      'project-resource',
+    ]) {
+      const help = Bun.spawnSync({
+        cmd: ['bun', 'src/cli.ts', command, '--help'],
+        cwd: repoRoot,
+        env: process.env,
+        stdout: 'pipe',
+        stderr: 'pipe',
+      });
+      expect(help.exitCode).toBe(0);
+      expect(help.stdout.toString()).toStartWith(`Usage: knowledge ${command}`);
+      expect(help.stdout.toString()).not.toContain('Commands:');
+    }
+  });
+});

@@ -1,0 +1,85 @@
+{
+  "schema": "hasna.project_panel.v1",
+  "id": "knowledge_panel_open-knowledge",
+  "createdAt": "2026-08-01T09:00:00.000Z",
+  "projectId": "open-knowledge",
+  "provider": {
+    "kind": "knowledge",
+    "id": "knowledge_open-knowledge",
+    "name": "Knowledge",
+    "sourcePackage": "@hasna/knowledge",
+    "externalId": "project://open-knowledge"
+  },
+  "kind": "knowledge",
+  "title": "Knowledge",
+  "summary": "1 active note, 1 source, and 3 indexed chunks.",
+  "state": "ready",
+  "generatedAt": "2026-08-01T09:00:00.000Z",
+  "freshness": "fresh",
+  "metrics": [
+    {
+      "id": "active_items",
+      "label": "Active notes",
+      "value": 1,
+      "status": "good"
+    }
+  ],
+  "items": [
+    {
+      "id": "item_contract-boundaries",
+      "title": "Contract boundaries",
+      "summary": "Shared project-panel payloads are parsed at the package boundary.",
+      "status": "active",
+      "priority": "medium",
+      "resourceRefs": [
+        {
+          "kind": "knowledge",
+          "id": "contract-boundaries",
+          "name": "Contract boundaries",
+          "uri": "knowledge://item/contract-boundaries",
+          "externalId": "contract-boundaries",
+          "sourcePackage": "@hasna/knowledge",
+          "tags": [
+            "contracts"
+          ]
+        }
+      ],
+      "evidenceRefs": []
+    }
+  ],
+  "actions": [
+    {
+      "kind": "action",
+      "id": "knowledge:inventory",
+      "name": "Inspect knowledge inventory",
+      "externalId": "knowledge:inventory",
+      "sourcePackage": "@hasna/knowledge",
+      "tags": []
+    }
+  ],
+  "resourceRefs": [
+    {
+      "kind": "project",
+      "id": "open-knowledge",
+      "name": "open-knowledge",
+      "uri": "project://open-knowledge",
+      "externalId": "open-knowledge",
+      "sourcePackage": "@hasna/knowledge",
+      "tags": []
+    }
+  ],
+  "renderFragment": {
+    "renderer": "json_render",
+    "title": "Knowledge",
+    "spec": {
+      "component": "project.knowledge.summary",
+      "metrics": [
+        "active_items"
+      ]
+    }
+  },
+  "metadata": {
+    "scope": "project",
+    "home": "project://open-knowledge"
+  }
+}
