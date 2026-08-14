@@ -1,0 +1,8 @@
+{
+  "schema": "hasna.decision_envelope.v1",
+  "id": "approval_decision_invalid",
+  "createdAt": "2026-07-07T10:00:00.000Z",
+  "decisionType": "approval",
+  "status": "approval_required",
+  "reason": "Missing actionable obligations."
+}
