@@ -1,10 +1,11 @@
 # TEMPORARY DIAGNOSTIC workflow (billing publish-guard flake, task 40ce31ad).
 # REMOVE BEFORE MERGE. The fail-loud guard reports only npm's stderr tail on
-# failure; the inner failing step of billing's prepack (`bun run verify && bun
-# run scan:artifact`) is invisible in CI logs. Measured on the runner:
-# typecheck 2.9s + test 1.4s ≈ the 4.2s failure point, so the failing step is
-# `bun test`. This workflow hammers bun test, captures full failure output,
-# and checks DNS behavior for the probe host used by mcp-safety tests.
+# failure; the inner failing step of billing's prepack is invisible in CI logs.
+# Phase 1 found: direct `bun test` on the runner fails `contracts` PATH
+# resolution (deployment-terms test spawns node_modules/.bin/contracts). The
+# guard chain goes npm -> sh -> bun run verify -> bun run test -> bun test, and
+# `bun run` prepends node_modules/.bin to PATH. Decisive test: run the EXACT
+# guard chain (npm pack 10x) + bun run test 10x + PATH/.bin facts.
 name: diagnose-billing-pack
 
 on:
@@ -23,38 +24,31 @@ jobs:
           bun-version: 1.3.14
       - name: Install
         run: bun install --frozen-lockfile
-      - name: Environment + DNS facts
+      - name: Facts (PATH, .bin links, versions)
         run: |
           set +e
-          echo "nproc: $(nproc)"; free -m | head -2
-          echo "resolv.conf:"; cat /etc/resolv.conf
-          echo "db.internal lookup:"
-          getent hosts db.internal; echo "getent rc=$?"
-          time (bun -e 'try { console.log("bun dns:", await Bun.dns.lookup("db.internal")) } catch (e) { console.log("bun dns failed:", e.message) }')
-          echo "env names:"; env | cut -d= -f1 | sort | grep -E "^(CI|GITHUB_|RUNNER_|ACTIONS_|LANG|LC_)" | tr '\n' ' '; echo
-      - name: Hammer bun test (15x, full output on failure)
+          echo "nproc: $(nproc)"
+          echo "bun: $(bun --version) npm: $(npm --version)"
+          echo "PATH=$PATH"
+          echo "billing .bin:"; ls -la apps/billing/node_modules/.bin/ 2>&1
+          echo "billing .bin contracts resolve:"; test -x apps/billing/node_modules/.bin/contracts && echo PRESENT || echo MISSING
+      - name: Guard chain — bun run test (10x)
         run: |
           set +e
-          FAILS=0
-          for i in $(seq 1 15); do
+          for i in $(seq 1 10); do
             start=$(date +%s.%N)
-            (cd apps/billing && bun test > /tmp/bt-$i.log 2>&1)
+            (cd apps/billing && bun run test > /tmp/brt-$i.log 2>&1)
             rc=$?
             end=$(date +%s.%N)
             dur=$(echo "$end $start" | awk '{printf "%.1f", $1-$2}')
-            echo "bt iter $i: rc=$rc dur=${dur}s"
-            if [ $rc -ne 0 ]; then
-              FAILS=$((FAILS+1))
-              echo "===== FAILURE OUTPUT iter $i ====="
-              cat /tmp/bt-$i.log
-            fi
+            echo "bun run test iter $i: rc=$rc dur=${dur}s"
+            if [ $rc -ne 0 ]; then echo "===== FAILURE iter $i ====="; cat /tmp/brt-$i.log; fi
           done
-          echo "bt failures: $FAILS/15"
           exit 0
-      - name: Hammer pack (5x, full prepack output on failure)
+      - name: Guard chain — npm pack (10x, full output on failure)
         run: |
           set +e
-          for i in $(seq 1 5); do
+          for i in $(seq 1 10); do
             start=$(date +%s.%N)
             (cd apps/billing && npm pack --dry-run --json > /tmp/pack-$i.out 2> /tmp/pack-$i.err)
             rc=$?
@@ -63,7 +57,9 @@ jobs:
             echo "pack iter $i: rc=$rc dur=${dur}s"
             if [ $rc -ne 0 ]; then
               echo "--- stderr ---"; cat /tmp/pack-$i.err
-              echo "--- stdout (prepack) tail ---"; tail -50 /tmp/pack-$i.out
+              echo "--- stdout (prepack) tail ---"; tail -60 /tmp/pack-$i.out
+              LOG=$(ls -t "$HOME/.npm/_logs" 2>/dev/null | head -1)
+              if [ -n "$LOG" ]; then echo "--- npm debug log: $LOG ---"; tail -80 "$HOME/.npm/_logs/$LOG"; fi
             fi
           done
           exit 0
