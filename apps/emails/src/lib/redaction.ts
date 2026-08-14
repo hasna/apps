@@ -1,0 +1,73 @@
+const REDACTED = "***";
+
+const SENSITIVE_KEY_PARTS = [
+  "api_key",
+  "apikey",
+  "access_key",
+  "accesskey",
+  "secret_key",
+  "secretkey",
+  "secret",
+  "password",
+  "token",
+  "refresh_token",
+  "access_token",
+  "client_secret",
+  "private_key",
+  "credential",
+];
+
+/**
+ * Whether a key name looks credential-bearing. Exported so the config
+ * write-allowlist can assert it never admits one (defense in depth: the
+ * allowlist is the gate, this is the trip-wire if someone widens it).
+ */
+export function isSensitiveKey(key: string): boolean {
+  const normalized = key
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .replace(/[-\s]/g, "_")
+    .toLowerCase();
+  return SENSITIVE_KEY_PARTS.some((part) => normalized.includes(part));
+}
+
+function shouldRedactValue(value: unknown): boolean {
+  return value !== null && value !== undefined && value !== "";
+}
+
+/**
+ * Render an operator-supplied diagnostic value without echoing an inline
+ * structured payload. Environment selectors and vault pointers are normally
+ * short strings, so a complete JSON object/array is configuration data, not a
+ * useful label; emitting it can disclose every value it carries.
+ */
+export function redactStructuredDiagnosticValue(value: string): string {
+  const trimmed = value.trim();
+  if (
+    !((trimmed.startsWith("{") && trimmed.endsWith("}")) ||
+      (trimmed.startsWith("[") && trimmed.endsWith("]")))
+  ) {
+    return value;
+  }
+  try {
+    const parsed = JSON.parse(trimmed);
+    return parsed !== null && typeof parsed === "object" ? REDACTED : value;
+  } catch {
+    return value;
+  }
+}
+
+export function redactSecrets<T>(value: T): T {
+  if (Array.isArray(value)) {
+    return value.map((item) => redactSecrets(item)) as T;
+  }
+  if (!value || typeof value !== "object") return value;
+  if (value instanceof Date) return value;
+
+  const out: Record<string, unknown> = {};
+  for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
+    out[key] = isSensitiveKey(key) && shouldRedactValue(nested)
+      ? REDACTED
+      : redactSecrets(nested);
+  }
+  return out as T;
+}
