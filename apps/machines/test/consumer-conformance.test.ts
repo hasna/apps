@@ -14,13 +14,18 @@ describe("consumer conformance fixture", () => {
     try {
       const packageDir = join(dir, "package");
       mkdirSync(join(packageDir, "dist"), { recursive: true });
-      const build = await Bun.build({
-        entrypoints: [join(sourceRoot, "consumer.ts")],
-        outdir: join(packageDir, "dist"),
-        target: "bun",
-        format: "esm",
+      const buildScript = join(dir, "build.mjs");
+      writeFileSync(buildScript, [
+        "import { build } from 'bun';",
+        `const result = await build({ entrypoints: [${JSON.stringify(join(sourceRoot, "consumer.ts"))}], outdir: ${JSON.stringify(join(packageDir, "dist"))}, target: 'bun', format: 'esm' });`,
+        "if (!result.success) { console.error(result.logs.map((log) => log.message).join('\\n')); process.exit(1); }",
+      ].join("\n"));
+      const buildResult = spawnSync(process.execPath, [buildScript], {
+        cwd: repoRoot,
+        env: process.env,
+        encoding: "utf8",
       });
-      expect(build.success).toBe(true);
+      expect(buildResult.status).toBe(0);
       writeFileSync(join(packageDir, "package.json"), JSON.stringify({
         name: "@hasna/machines",
         version: "0.0.0-conformance-test",
