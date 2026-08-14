@@ -11,6 +11,11 @@
  * kitVersion advanced to 0.10.6 by #111 (record added, task 8417a133),
  * and todos (#105) gained a pre-backend-schema-era manifest validated at
  * pinned 0.5.2 (conformance + kitVersion records added, task 0ad82b16).
+ * The monitor (#97) and testers (#95) imports landed 2026-08-14: monitor
+ * gained a conformance + NO_VALIDATOR_PIN record (bins_match_package —
+ * package ships monitor-server/monitor-web the manifest does not declare;
+ * task d2c6d20f) plus serve/sdk WARN records, testers gained an sdk WARN
+ * record.
  * The telephony conformance record was REMOVED 2026-08-14 after CI
  * (clean environment, no HASNA_TELEPHONY_STORAGE_MODE) reported it as a
  * recorded exception that now passes: the mode_enum_compliance violation
@@ -163,6 +168,7 @@ export const SERVE_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "guardrails", reason: "Library-shaped; no server surface." },
   { member: "mcps", reason: "CLI-only member (MCP registry tooling); no server surface." },
   { member: "models", reason: "Library-shaped; no server surface." },
+  { member: "monitor", reason: "CLI+MCP member (system monitoring); no server surface. Imported by #97 after the original census; aggregate task (todos 35e136f2)." },
   { member: "orgs", reason: "Registry-shaped; no server surface." },
   { member: "releases", reason: "CLI-only member; no server surface." },
   { member: "router", reason: "Gateway-shaped; no server surface (also missing the HARD CLI bin — see CLI_EXCEPTIONS)." },
@@ -213,6 +219,8 @@ export const SDK_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "markdown", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "mcps", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "models", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
+  { member: "monitor", reason: "SDK lane (c7ce8b75); no ./sdk export yet. Imported by #97 after the original census." },
+  { member: "testers", reason: "SDK lane (c7ce8b75); no ./sdk export yet. Imported by #95 after the original census." },
   { member: "orgs", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "prompts", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "releases", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
@@ -359,6 +367,11 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
     task: "todos 5695459d (contracts task — mementos)",
   },
   {
+    member: "monitor",
+    cause: "bins_match_package: package.json ships bins monitor-server and monitor-web that the manifest does not declare (manifest declares monitor, monitor-mcp only). Imported by #97 after the original census; validated at kitVersion 0.8.5 (no pinned dep).",
+    task: "todos d2c6d20f-7c80-4b84-ae35-a92ce866bc14 (contracts task — monitor)",
+  },
+  {
     member: "prompts",
     cause: "surface_matrix (api/sdk missing or unwaived), service_api_topology, self_host_artifact (no compose/Dockerfile), storage_capabilities (sqlite/postgres + pgTestGate missing).",
     task: "todos eb3f331d (contracts task — prompts)",
@@ -420,6 +433,7 @@ export const NO_VALIDATOR_PIN: string[] = [
   "draw",
   "guardrails",
   "hooks",
+  "monitor",
   "sheets",
   "slides",
   "tables",

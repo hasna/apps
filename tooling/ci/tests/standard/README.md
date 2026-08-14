@@ -28,7 +28,7 @@ Filed 2026-08-14 in todos project `5e44770b-694c-46a3-864f-20a2b9ec1de2`
 
 - `router` (`452b7a32`), `slides` (`62ec9dbc`) — missing the HARD `<name>`
   CLI bin (per-member tasks; bins are never invented in-suite).
-- 21 contracts-conformance failures (automations `99f670fe`, calendar
+- 22 contracts-conformance failures (automations `99f670fe`, calendar
   `a967c9bd`, catalog `e4d8cd62`, docs `6818348f`, draw `5698b7d3`, emails
   `e0ef3e32`, gateway `9dc0ee28`, instructions `c15cca18`, knowledge
   `a8c97621`, logs `d166125e`, machines `6ab8775b`, mementos `5695459d`,
@@ -37,8 +37,10 @@ Filed 2026-08-14 in todos project `5e44770b-694c-46a3-864f-20a2b9ec1de2`
   (`2aceeb94`, added by the integrator lane for import #74), `hooks`
   (`03d497e8`, added by the integrator lane when #102's manifest landed),
   `files` (`b0845699`, added by the iterate-to-green fixer when #90's
-  manifest landed) and `todos` (`0ad82b16`, added by the iterate-to-green
-  fixer when #105's manifest landed) — per-member tasks.
+  manifest landed), `todos` (`0ad82b16`, added by the iterate-to-green
+  fixer when #105's manifest landed) and `monitor` (`d2c6d20f`, added by
+  the iterate-to-green fixer when #97's manifest landed) — per-member
+  tasks.
 - 25 members without `hasna.contract.json` (24 at the original census plus
   `connectors` and `terminal`, added by the integrator lane for imports
   #80/#88, minus `hooks`, whose manifest landed in #102) — one aggregate
