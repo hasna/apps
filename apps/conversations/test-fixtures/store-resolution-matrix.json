@@ -1,5 +1,5 @@
 {
-  "note": "ONE shared expectation for two resolvers that cannot call each other. The macOS shell (Sources/HasnaConversationsCore) decides which store the bundled server will use and then builds the environment it hands that server; src/lib/store/index.ts is what the server actually resolves with. They diverged: the shell read 3 env vars, the resolver honours 8, and 5 of the uncovered ones select the local store — so the shell logged store=hosted while the child served local SQLite, silently. Each arm below carries the input, what the shell must announce, and the exact store-selecting keys the child must receive. Tests/HasnaConversationsCoreTests asserts the shell half; src/lib/store/store-resolution-matrix.test.ts asserts the TypeScript resolver reaches the same store from that child environment. Neither half can drift without the other's test failing.",
+  "note": "ONE shared expectation for two resolvers that cannot call each other. The macOS shell (Sources/HasnaConversationsCore) decides which store the bundled server will use and then builds the environment it hands that server; src/lib/store/index.ts is what the server actually resolves with. They diverged: the shell read 3 env vars, the resolver honours more, and uncovered ones select the local store — so the shell logged store=hosted while the child served local SQLite, silently. Deployment modes no longer exist (owner directive 2026-07-29; knowledge k_ms5wv466_u0jidq): client transport is the API url + key pair alone, and any retired storage-mode variable is a fail-loud error naming the variable. Each arm below carries the input, what the shell must announce, and the exact store-selecting keys the child must receive. Tests/HasnaConversationsCoreTests asserts the shell half; src/lib/store/store-resolution-matrix.test.ts asserts the TypeScript resolver reaches the same store from that child environment. Neither half can drift without the other's test failing.",
   "values": {
     "apiUrl": "https://conversations.hasna.xyz/v1",
     "apiKey": "fixture-not-a-real-credential",
@@ -24,7 +24,7 @@
     },
     {
       "name": "arm2-inherited-prefixed-db-path-outranks-url-and-key",
-      "note": "BEFORE: shell announced hosted, child resolved local. NOW: no config file is present, so the inherited environment is all there is, and DB_PATH is the resolver's highest-precedence signal — the shell announces local and the child gets local. Announcement matches outcome.",
+      "note": "The DB path is the resolver's highest-precedence signal among valid selectors — the shell announces local and the child gets local. The child env carries the DB path and NO retired mode key (a mode key in the child would trip the fail-loud ratchet).",
       "configFile": null,
       "environment": {
         "HASNA_CONVERSATIONS_API_URL": "https://conversations.hasna.xyz/v1",
@@ -34,7 +34,6 @@
       "shell": "local",
       "expectedSelectedBy": "HASNA_CONVERSATIONS_DB_PATH",
       "childStoreEnv": {
-        "HASNA_CONVERSATIONS_STORAGE_MODE": "local",
         "HASNA_CONVERSATIONS_DB_PATH": "/tmp/fixture-conversations.db"
       },
       "childStore": "local"
@@ -51,58 +50,45 @@
       "shell": "local",
       "expectedSelectedBy": "CONVERSATIONS_DB_PATH",
       "childStoreEnv": {
-        "HASNA_CONVERSATIONS_STORAGE_MODE": "local",
         "HASNA_CONVERSATIONS_DB_PATH": "/tmp/fixture-conversations.db"
       },
       "childStore": "local"
     },
     {
       "name": "arm4-inherited-unprefixed-mode-local",
-      "note": "CONVERSATIONS_MODE is one of the four mode keys the resolver honours and the old shell read none of the last three.",
+      "note": "CONVERSATIONS_MODE is a RETIRED selector: set means refuse, naming the variable. The old resolver treated it as an explicit local pin.",
       "configFile": null,
       "environment": {
         "HASNA_CONVERSATIONS_API_URL": "https://conversations.hasna.xyz/v1",
         "HASNA_CONVERSATIONS_API_KEY": "fixture-not-a-real-credential",
         "CONVERSATIONS_MODE": "local"
       },
-      "shell": "local",
-      "expectedSelectedBy": "CONVERSATIONS_MODE",
-      "childStoreEnv": {
-        "HASNA_CONVERSATIONS_STORAGE_MODE": "local"
-      },
-      "childStore": "local"
+      "shell": "unresolved",
+      "reasonContains": "CONVERSATIONS_MODE"
     },
     {
       "name": "arm5-inherited-prefixed-alias-mode-local",
-      "note": "HASNA_CONVERSATIONS_MODE, the near-miss alias of the one key the old shell did read.",
+      "note": "HASNA_CONVERSATIONS_MODE, the near-miss alias of the one key the old shell did read. Retired: refuse naming the variable.",
       "configFile": null,
       "environment": {
         "HASNA_CONVERSATIONS_API_URL": "https://conversations.hasna.xyz/v1",
         "HASNA_CONVERSATIONS_API_KEY": "fixture-not-a-real-credential",
         "HASNA_CONVERSATIONS_MODE": "local"
       },
-      "shell": "local",
-      "expectedSelectedBy": "HASNA_CONVERSATIONS_MODE",
-      "childStoreEnv": {
-        "HASNA_CONVERSATIONS_STORAGE_MODE": "local"
-      },
-      "childStore": "local"
+      "shell": "unresolved",
+      "reasonContains": "HASNA_CONVERSATIONS_MODE"
     },
     {
       "name": "arm19-inherited-unprefixed-storage-mode-local",
-      "note": "CONVERSATIONS_STORAGE_MODE is the sixth and last key that can select local, and it was the one key with no arm. Selection is a uniform firstSet lookup, so the risk was low - but 'low risk' is what an untested branch always looks like, and this is the arm that proves the announcement names THIS key rather than a higher-precedence one that is not set.",
+      "note": "CONVERSATIONS_STORAGE_MODE is retired: set means refuse, naming the variable. This arm proves the announcement names THIS key.",
       "configFile": null,
       "environment": {
         "HASNA_CONVERSATIONS_API_URL": "https://conversations.hasna.xyz/v1",
         "HASNA_CONVERSATIONS_API_KEY": "fixture-not-a-real-credential",
         "CONVERSATIONS_STORAGE_MODE": "local"
       },
-      "shell": "local",
-      "expectedSelectedBy": "CONVERSATIONS_STORAGE_MODE",
-      "childStoreEnv": {
-        "HASNA_CONVERSATIONS_STORAGE_MODE": "local"
-      },
-      "childStore": "local"
+      "shell": "unresolved",
+      "reasonContains": "CONVERSATIONS_STORAGE_MODE"
     },
     {
       "name": "arm6-unprefixed-url-and-key-only",
@@ -157,6 +143,7 @@
     },
     {
       "name": "arm4f-fleet-config-beats-inherited-unprefixed-mode-local",
+      "note": "The fleet config file names the hosted service; a stale inherited mode variable is stripped and cannot steer the store. The child env carries NO mode key.",
       "configFile": {
         "HASNA_CONVERSATIONS_API_URL": "https://conversations.hasna.xyz/v1",
         "HASNA_CONVERSATIONS_API_KEY": "fixture-not-a-real-credential"
@@ -190,56 +177,137 @@
       "childStore": "cloud"
     },
     {
-      "name": "file-explicit-local-is-honoured",
-      "note": "Local is fully supported when it is asked for by name — the guard refuses ambiguity, not local storage.",
+      "name": "file-fleet-config-names-cloud",
+      "note": "The fleet config file alone, with nothing inherited, resolves to the hosted service.",
       "configFile": {
-        "HASNA_CONVERSATIONS_STORAGE_MODE": "local"
+        "HASNA_CONVERSATIONS_API_URL": "https://conversations.hasna.xyz/v1",
+        "HASNA_CONVERSATIONS_API_KEY": "fixture-not-a-real-credential"
       },
       "environment": {},
-      "shell": "local",
-      "expectedSelectedBy": "HASNA_CONVERSATIONS_STORAGE_MODE",
+      "shell": "cloud",
+      "announcedUrl": "https://conversations.hasna.xyz",
       "childStoreEnv": {
-        "HASNA_CONVERSATIONS_STORAGE_MODE": "local"
+        "HASNA_CONVERSATIONS_API_URL": "https://conversations.hasna.xyz/v1",
+        "HASNA_CONVERSATIONS_API_KEY": "fixture-not-a-real-credential"
+      },
+      "childStore": "cloud"
+    },
+    {
+      "name": "file-db-path-names-local",
+      "note": "A config file naming a local DB path resolves to local, announced by that key.",
+      "configFile": {
+        "HASNA_CONVERSATIONS_DB_PATH": "/tmp/fixture-conversations.db"
+      },
+      "environment": {
+        "HASNA_CONVERSATIONS_API_URL": "https://conversations.hasna.xyz/v1",
+        "HASNA_CONVERSATIONS_API_KEY": "fixture-not-a-real-credential"
+      },
+      "shell": "local",
+      "expectedSelectedBy": "HASNA_CONVERSATIONS_DB_PATH",
+      "childStoreEnv": {
+        "HASNA_CONVERSATIONS_DB_PATH": "/tmp/fixture-conversations.db"
       },
       "childStore": "local"
     },
     {
-      "name": "file-deprecated-alias-self-hosted-is-cloud",
-      "note": "normalizeStorageMode maps remote/hybrid/self_hosted to cloud. The shell carries the operator's token through unchanged rather than inventing one.",
+      "name": "env-db-path-only-names-local",
+      "note": "An inherited DB path alone resolves to local, announced by that key.",
+      "configFile": null,
+      "environment": {
+        "HASNA_CONVERSATIONS_DB_PATH": "/tmp/fixture-conversations.db"
+      },
+      "shell": "local",
+      "expectedSelectedBy": "HASNA_CONVERSATIONS_DB_PATH",
+      "childStoreEnv": {
+        "HASNA_CONVERSATIONS_DB_PATH": "/tmp/fixture-conversations.db"
+      },
+      "childStore": "local"
+    },
+    {
+      "name": "env-unprefixed-db-path-only-names-local",
+      "note": "The unprefixed DB path alias is honoured and named as the selector.",
+      "configFile": null,
+      "environment": {
+        "CONVERSATIONS_DB_PATH": "/tmp/fixture-conversations.db"
+      },
+      "shell": "local",
+      "expectedSelectedBy": "CONVERSATIONS_DB_PATH",
+      "childStoreEnv": {
+        "CONVERSATIONS_DB_PATH": "/tmp/fixture-conversations.db"
+      },
+      "childStore": "local"
+    },
+    {
+      "name": "file-pair-beats-inherited-key-only",
+      "note": "The file outranks the inherited environment: a stray inherited key cannot turn the file's cloud config into a refusal.",
       "configFile": {
-        "HASNA_CONVERSATIONS_STORAGE_MODE": "self_hosted",
         "HASNA_CONVERSATIONS_API_URL": "https://conversations.hasna.xyz/v1",
         "HASNA_CONVERSATIONS_API_KEY": "fixture-not-a-real-credential"
       },
-      "environment": {},
+      "environment": {
+        "CONVERSATIONS_API_KEY": "fixture-not-a-real-credential"
+      },
       "shell": "cloud",
       "announcedUrl": "https://conversations.hasna.xyz",
       "childStoreEnv": {
-        "HASNA_CONVERSATIONS_STORAGE_MODE": "self_hosted",
         "HASNA_CONVERSATIONS_API_URL": "https://conversations.hasna.xyz/v1",
         "HASNA_CONVERSATIONS_API_KEY": "fixture-not-a-real-credential"
       },
       "childStore": "cloud"
     },
     {
-      "name": "key-without-url-uses-the-default-host",
-      "note": "The transport defaults the base URL when a key is present and no URL is set. The shell must announce that same default rather than refuse a configuration the resolver accepts.",
+      "name": "file-pair-beats-inherited-url-only",
+      "note": "The file outranks the inherited environment: a stray inherited URL cannot turn the file's cloud config into a refusal.",
       "configFile": {
-        "HASNA_CONVERSATIONS_STORAGE_MODE": "cloud",
+        "HASNA_CONVERSATIONS_API_URL": "https://conversations.hasna.xyz/v1",
         "HASNA_CONVERSATIONS_API_KEY": "fixture-not-a-real-credential"
       },
-      "environment": {},
+      "environment": {
+        "CONVERSATIONS_API_URL": "https://stray.invalid/v1"
+      },
       "shell": "cloud",
       "announcedUrl": "https://conversations.hasna.xyz",
       "childStoreEnv": {
-        "HASNA_CONVERSATIONS_STORAGE_MODE": "cloud",
+        "HASNA_CONVERSATIONS_API_URL": "https://conversations.hasna.xyz/v1",
         "HASNA_CONVERSATIONS_API_KEY": "fixture-not-a-real-credential"
       },
       "childStore": "cloud"
+    },
+    {
+      "name": "file-explicit-local-is-honoured",
+      "note": "A config file carrying a RETIRED storage-mode variable refuses, naming the variable — local is selected by a DB path or by absence of an API pair, never by a mode token.",
+      "configFile": {
+        "HASNA_CONVERSATIONS_STORAGE_MODE": "local"
+      },
+      "environment": {},
+      "shell": "unresolved",
+      "reasonContains": "HASNA_CONVERSATIONS_STORAGE_MODE"
+    },
+    {
+      "name": "file-deprecated-alias-self-hosted-is-refused",
+      "note": "self_hosted was a deprecated mode alias; with modes gone it is dead vocabulary and the variable refuses, naming the variable.",
+      "configFile": {
+        "HASNA_CONVERSATIONS_STORAGE_MODE": "self_hosted",
+        "HASNA_CONVERSATIONS_API_URL": "https://conversations.hasna.xyz/v1",
+        "HASNA_CONVERSATIONS_API_KEY": "fixture-not-a-real-credential"
+      },
+      "environment": {},
+      "shell": "unresolved",
+      "reasonContains": "HASNA_CONVERSATIONS_STORAGE_MODE"
+    },
+    {
+      "name": "blank-storage-mode-refuses",
+      "note": "The ratchet fires on SET, not on non-blank: a blank leftover storage-mode variable is still a stale fragment and names itself.",
+      "configFile": {
+        "HASNA_CONVERSATIONS_STORAGE_MODE": ""
+      },
+      "environment": {},
+      "shell": "unresolved",
+      "reasonContains": "HASNA_CONVERSATIONS_STORAGE_MODE"
     },
     {
       "name": "file-url-without-key-refuses",
-      "note": "Half a cloud configuration is an error, never a fall-back to local. The reviewer listed this branch as having no evidence behind it.",
+      "note": "Half an API configuration is an error, never a fall-back to local. The reviewer listed this branch as having no evidence behind it.",
       "configFile": {
         "HASNA_CONVERSATIONS_API_URL": "https://conversations.hasna.xyz/v1"
       },
@@ -248,17 +316,28 @@
       "reasonContains": "HASNA_CONVERSATIONS_API_KEY"
     },
     {
-      "name": "explicit-cloud-without-key-refuses",
+      "name": "key-without-url-refuses",
+      "note": "The mirror half: a key with no URL is an error naming the missing URL variable. The old default-host behaviour (mode=cloud + key) is gone with the modes.",
+      "configFile": {
+        "HASNA_CONVERSATIONS_API_KEY": "fixture-not-a-real-credential"
+      },
+      "environment": {},
+      "shell": "unresolved",
+      "reasonContains": "HASNA_CONVERSATIONS_API_URL"
+    },
+    {
+      "name": "explicit-cloud-mode-refuses",
+      "note": "A retired mode variable refuses before any key check: the message names the mode variable itself.",
       "configFile": {
         "HASNA_CONVERSATIONS_STORAGE_MODE": "cloud"
       },
       "environment": {},
       "shell": "unresolved",
-      "reasonContains": "HASNA_CONVERSATIONS_API_KEY"
+      "reasonContains": "HASNA_CONVERSATIONS_STORAGE_MODE"
     },
     {
       "name": "unrecognised-mode-refuses",
-      "note": "The resolver throws on an unknown token rather than guessing; the shell must not guess either.",
+      "note": "The resolver's ratchet rejects every retired mode variable by name; there is no token parsing left to disagree about.",
       "configFile": {
         "HASNA_CONVERSATIONS_STORAGE_MODE": "hosted-ish",
         "HASNA_CONVERSATIONS_API_URL": "https://conversations.hasna.xyz/v1",
@@ -266,7 +345,7 @@
       },
       "environment": {},
       "shell": "unresolved",
-      "reasonContains": "unrecognised value"
+      "reasonContains": "HASNA_CONVERSATIONS_STORAGE_MODE"
     },
     {
       "name": "non-http-url-refuses",
@@ -281,7 +360,7 @@
     },
     {
       "name": "nothing-configured-fails-closed",
-      "note": "The one deliberate divergence from the TypeScript resolver, and the reason this app exists: with nothing configured the library documents local SQLite as the single-operator default, while the app refuses to start. No child is launched, so the two cannot disagree about a running server. This is the exact string measured on station06 as arm B of the fail-closed pair.",
+      "note": "The one deliberate divergence from the TypeScript resolver, and the reason this app exists: with nothing configured the library documents local SQLite as the single-operator default, while the app refuses to start. No child is launched, so the two cannot disagree about a running server.",
       "configFile": null,
       "environment": {},
       "shell": "unresolved",

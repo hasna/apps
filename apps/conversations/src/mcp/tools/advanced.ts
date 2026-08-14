@@ -7,9 +7,9 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod/v3";
 import { registerMcpTool } from "../tool-compat.js";
 import { getStore } from "../../lib/store/index.js";
-// Writes (auto-DMs) route to the cloud API in self_hosted mode so a flipped
-// fleet sees them; falls through to the local store otherwise. Read-only tools
-// below still read the local store (no cloud endpoint yet) — documented residual.
+// Writes (auto-DMs) route to the cloud API when the client is flipped to it so
+// a flipped fleet sees them; falls through to the local store otherwise. Read-only
+// tools below still read the local store (no cloud endpoint yet) — documented residual.
 import { identityFor } from "../identity.js";
 import { pageQueriedItems, summarizeMessage, windowItems } from "../../lib/compact-output.js";
 import { compactPreviewPage, jsonText, resolveMcpPageOptions, resolveMcpWindow } from "../compact.js";

@@ -1,72 +1,85 @@
 import { describe, expect, test } from "bun:test";
-import { conversationsCloudEnv, serverStorageMode, SERVER_MODE_CANDIDATES } from "./index.js";
+import {
+  assertNoLegacyStorageMode,
+  conversationsCloudEnv,
+  resolveConversationsCloud,
+  ConversationsStoreConfigError,
+} from "./index.js";
 
-// -- Forward compatibility across the storage-mode enum change -----------------
+// -- Transport resolution after the deployment-mode removal -------------------
 //
-// The injected mode value is DERIVED from the vendored contracts client, never
-// hardcoded. That is load-bearing: the enum has already changed once and the two
-// valid sets are DISJOINT.
+// Deployment modes no longer exist (owner directive 2026-07-29; knowledge
+// k_ms5wv466_u0jidq). Client transport is selected by the API env pair alone:
 //
-//   contracts <= 0.8.5      accepts cloud + deprecated aliases (self_hosted,
-//                           remote, hybrid); THROWS on postgres/sqlite
-//   contracts post-#63      accepts ONLY sqlite/postgres; THROWS on everything
-//                           else, including cloud and self_hosted
+//   both HASNA_CONVERSATIONS_API_URL + HASNA_CONVERSATIONS_API_KEY set  -> HTTP API
+//   neither set                                                          -> local SQLite
+//   exactly one set                                                      -> THROW naming the missing var
+//   any retired *STORAGE_MODE / *MODE variable SET (even blank)          -> THROW naming the var
 //
-// So any literal pinned in source is a bet on which side of that change a given
-// machine is on, and the bet loses on one side or the other. Measured 2026-07-30:
-// against contracts 0.5.2 `postgres` throws and `self_hosted` normalizes; against
-// contracts main (0.8.6) `postgres` normalizes and `self_hosted` throws.
-//
-// `normalize` is injectable for exactly this reason — both generations have to be
-// exercised, and only one of them can be installed at a time.
+// The former SERVER_MODE_CANDIDATES probe (`["postgres", "self_hosted", "cloud"]`)
+// is gone: there is no server-mode token for a client to infer, and `self_hosted`
+// is dead vocabulary. The server backend switch (`sqlite | postgresql`) is a
+// server-side concern selected by HASNA_CONVERSATIONS_DATABASE_URL.
 
-describe("serverStorageMode", () => {
-  const acceptOnly = (accepted: readonly string[]) => (value: string) => {
-    if (!accepted.includes(value)) throw new Error(`Unknown storage mode '${value}'`);
-    return value;
-  };
+const CLOUD_ENV = {
+  HASNA_CONVERSATIONS_API_URL: "https://conversations.hasna.xyz",
+  HASNA_CONVERSATIONS_API_KEY: "hasna_conversations_testkey_00000000",
+};
 
-  test("derives self_hosted on the pre-#63 contracts enum", () => {
-    const normalize = acceptOnly(["local", "cloud", "self_hosted", "remote", "hybrid"]);
+describe("transport resolution — API pair presence", () => {
+  test("(a) API url + key present => HTTP client", () => {
+    const env = conversationsCloudEnv({ ...CLOUD_ENV });
 
-    expect(serverStorageMode(normalize)).toBe("self_hosted");
+    expect(resolveConversationsCloud(env)).not.toBeNull();
+    expect(env.HASNA_CONVERSATIONS_STORAGE_MODE).toBeUndefined();
+    expect(env.CONVERSATIONS_STORAGE_MODE).toBeUndefined();
   });
 
-  test("derives postgres on the post-#63 contracts enum", () => {
-    const normalize = acceptOnly(["sqlite", "postgres", "postgresql"]);
+  test("(b) neither API url nor key => local, no client", () => {
+    const env = conversationsCloudEnv({});
 
-    expect(serverStorageMode(normalize)).toBe("postgres");
+    expect(resolveConversationsCloud(env)).toBeNull();
+    expect(env.HASNA_CONVERSATIONS_STORAGE_MODE).toBeUndefined();
   });
 
-  test("prefers the newest accepted token when several are valid", () => {
-    // A transitional release that still honours the aliases must not pin the
-    // deprecated one.
-    const normalize = acceptOnly(["sqlite", "postgres", "cloud", "self_hosted"]);
-
-    expect(serverStorageMode(normalize)).toBe("postgres");
+  test("(c) exactly one of the pair => throws naming the missing variable", () => {
+    expect(() => conversationsCloudEnv({ HASNA_CONVERSATIONS_API_URL: CLOUD_ENV.HASNA_CONVERSATIONS_API_URL }))
+      .toThrow(/HASNA_CONVERSATIONS_API_KEY/);
+    expect(() => conversationsCloudEnv({ HASNA_CONVERSATIONS_API_KEY: CLOUD_ENV.HASNA_CONVERSATIONS_API_KEY }))
+      .toThrow(/HASNA_CONVERSATIONS_API_URL/);
   });
 
-  test("throws with an actionable message when the enum changes again", () => {
-    // Guessing is the defect class this pin exists to remove, so an unrecognised
-    // enum must fail loudly rather than fall through to a wrong dataset.
-    const normalize = acceptOnly([]);
-
-    expect(() => serverStorageMode(normalize)).toThrow(/No known server storage mode/);
-    expect(() => serverStorageMode(normalize)).toThrow(/SERVER_MODE_CANDIDATES/);
+  test("(d) HASNA_CONVERSATIONS_STORAGE_MODE set => throws naming the variable", () => {
+    const err = () => assertNoLegacyStorageMode({ HASNA_CONVERSATIONS_STORAGE_MODE: "cloud" });
+    expect(err).toThrow(ConversationsStoreConfigError);
+    expect(err).toThrow(/HASNA_CONVERSATIONS_STORAGE_MODE/);
+    // ...and the ratchet fires even for a blank leftover value.
+    expect(() => assertNoLegacyStorageMode({ HASNA_CONVERSATIONS_STORAGE_MODE: "" })).toThrow(
+      /HASNA_CONVERSATIONS_STORAGE_MODE/,
+    );
   });
 
-  test("agrees with the contracts version actually installed", () => {
-    // Not a tautology: this is the assertion that fails the day a dependency bump
-    // lands a generation the candidate list does not cover.
-    expect([...SERVER_MODE_CANDIDATES] as string[]).toContain(serverStorageMode());
+  test("every retired selector key is rejected by name, even beside a valid pair", () => {
+    for (const key of [
+      "HASNA_CONVERSATIONS_STORAGE_MODE",
+      "HASNA_CONVERSATIONS_MODE",
+      "CONVERSATIONS_STORAGE_MODE",
+      "CONVERSATIONS_MODE",
+    ]) {
+      expect(() => conversationsCloudEnv({ ...CLOUD_ENV, [key]: "local" })).toThrow(new RegExp(key));
+    }
   });
 
-  test("the injected mode is the derived one, not a literal", () => {
+  test("a local DB path forces local without emitting any mode variable", () => {
     const env = conversationsCloudEnv({
-      HASNA_CONVERSATIONS_API_URL: "https://conversations.hasna.xyz",
-      HASNA_CONVERSATIONS_API_KEY: ["conversations", "FAKE", "KEY"].join("_"),
+      ...CLOUD_ENV,
+      HASNA_CONVERSATIONS_DB_PATH: "/tmp/conversations-mode-removal.db",
     });
 
-    expect(env.HASNA_CONVERSATIONS_STORAGE_MODE).toBe(serverStorageMode());
+    expect(resolveConversationsCloud(env)).toBeNull();
+    expect(env.HASNA_CONVERSATIONS_STORAGE_MODE).toBeUndefined();
+    expect(env.HASNA_CONVERSATIONS_API_URL).toBeUndefined();
+    expect(env.HASNA_CONVERSATIONS_API_KEY).toBeUndefined();
+    expect(env.HASNA_CONVERSATIONS_DB_PATH).toBe("/tmp/conversations-mode-removal.db");
   });
 });

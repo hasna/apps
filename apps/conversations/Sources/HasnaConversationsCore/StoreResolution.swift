@@ -19,13 +19,17 @@
 // embedded here — the file is the source of truth, and it is the same file the
 // `conversations` CLI reads.
 //
-// TWO PROPERTIES THIS FILE OWES, and the second was missing until 2026-07-31:
+// DEPLOYMENT MODES NO LONGER EXIST (owner directive 2026-07-29; knowledge
+// k_ms5wv466_u0jidq). The client selects the HTTP API by the API url + key pair;
+// any retired storage-mode variable is a fail-loud error naming the variable.
+//
+// TWO PROPERTIES THIS FILE OWES:
 //
 //  1. FAIL CLOSED. No unambiguous store ⇒ no server is started at all.
 //
 //  2. THE ANNOUNCEMENT MATCHES THE OUTCOME. An earlier version read three env
-//     vars while the resolver it guards honoured eight, five of which select the
-//     local store — `HASNA_CONVERSATIONS_MODE`, `CONVERSATIONS_STORAGE_MODE`,
+//     vars while the resolver it guarded honoured more, several of which select
+//     the local store — `HASNA_CONVERSATIONS_MODE`, `CONVERSATIONS_STORAGE_MODE`,
 //     `CONVERSATIONS_MODE`, `HASNA_CONVERSATIONS_DB_PATH`, `CONVERSATIONS_DB_PATH`
 //     — and it forwarded the whole inherited environment to the child. With any
 //     one of those set, the shell logged `store=hosted` and the child resolved
@@ -147,9 +151,9 @@ enum StoreSelection {
     case nothing
     /// The on-box SQLite store, chosen deliberately.
     case local(dbPath: String?, selectedBy: String)
-    /// The hosted service. `url` is nil when only a key was given, in which case
-    /// the transport uses its default host.
-    case cloud(url: String?, apiKey: String, modeValue: String?)
+    /// The HTTP API, fully configured. `url` is always present: the resolver
+    /// requires the full url + key pair and refuses a half configuration.
+    case cloud(url: String, apiKey: String)
     /// This source is self-contradictory or incomplete. Refuse; never downgrade.
     case refuse(reason: String)
 }
@@ -162,12 +166,14 @@ private func firstSet(_ env: [String: String], _ keys: [String]) -> (key: String
     return nil
 }
 
-/// Normalize a storage-mode token the way `normalizeStorageMode` does: trim,
-/// lowercase, and treat `-` as `_` so `self-hosted` and `self_hosted` agree.
-private func normalizeModeToken(_ raw: String) -> String {
-    raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        .lowercased()
-        .replacingOccurrences(of: "-", with: "_")
+/// The first RETIRED storage-mode key that is SET in the source, even to a blank
+/// value. Deployment modes no longer exist, so a stale mode variable is an error
+/// naming the variable — never a selector, never silently ignored.
+private func firstLegacyModeKey(_ env: [String: String]) -> String? {
+    for key in StoreEnvContract.legacyModeKeys where env[key] != nil {
+        return key
+    }
+    return nil
 }
 
 /// Reduce a URL to the parts that say WHICH SERVER is being contacted, so it is
@@ -238,9 +244,18 @@ private func unusableURLReason(_ hit: (key: String, value: String)) -> String? {
 /// Apply the resolver's precedence to ONE source.
 ///
 /// Mirrors `assertUnambiguousStoreEnv` + `conversationsCloudEnv` in
-/// src/lib/store/index.ts, in the same order: an explicit local DB path is the
-/// narrowest signal and wins; then an explicit mode; then the url + key pair.
+/// src/lib/store/index.ts, in the same order: the retired mode-key ratchet;
+/// then an explicit local DB path; then the url + key pair.
 func storeSelection(from env: [String: String], source: String) -> StoreSelection {
+    // 0. The fail-loud ratchet. A retired storage-mode variable is an error,
+    //    never a selector, and it is not rescued by a DB path or a valid pair.
+    if let modeKey = firstLegacyModeKey(env) {
+        return .refuse(reason: "\(modeKey) in \(source) was removed. Deployment modes no "
+            + "longer exist: delete the storage-mode variable. The client uses the on-box "
+            + "SQLite store, or the HTTP API selected by "
+            + "\(StoreEnvContract.apiUrlKeys[0]) + \(StoreEnvContract.apiKeyKeys[0]).")
+    }
+
     // 1. An explicit local SQLite path is the narrowest, most specific signal.
     if let dbHit = firstSet(env, StoreEnvContract.dbPathKeys) {
         return .local(dbPath: dbHit.value, selectedBy: dbHit.key)
@@ -249,33 +264,13 @@ func storeSelection(from env: [String: String], source: String) -> StoreSelectio
     let urlHit = firstSet(env, StoreEnvContract.apiUrlKeys)
     let keyHit = firstSet(env, StoreEnvContract.apiKeyKeys)
 
-    // 2. An explicit mode is authoritative — but must be spelled correctly.
-    if let modeHit = firstSet(env, StoreEnvContract.modeKeys) {
-        let token = normalizeModeToken(modeHit.value)
-        if token == StoreEnvContract.localModeToken {
-            return .local(dbPath: nil, selectedBy: modeHit.key)
-        }
-        guard StoreEnvContract.cloudModeTokens.contains(token) else {
-            return .refuse(reason: "\(modeHit.key) in \(source) is set to an unrecognised value. "
-                + "Valid values are 'local' and 'cloud'. Refusing to guess which store to use.")
-        }
-        // Explicit cloud with no credential: refuse. Do NOT read the local store.
-        guard let keyHit else {
-            return .refuse(reason: "\(modeHit.key) in \(source) selects the hosted service but "
-                + "\(StoreEnvContract.apiKeyKeys[0]) is not set. Refusing to serve the on-box "
-                + "SQLite store in its place, because it holds a different dataset.")
-        }
-        if let urlHit, let bad = unusableURLReason(urlHit) { return .refuse(reason: bad) }
-        return .cloud(url: urlHit?.value, apiKey: keyHit.value, modeValue: modeHit.value)
-    }
-
-    // 3. No explicit mode: the URL + key pair is the fleet flip signal.
+    // 2. The URL + key pair is the fleet flip signal.
     if let urlHit, let keyHit {
         if let bad = unusableURLReason(urlHit) { return .refuse(reason: bad) }
-        return .cloud(url: urlHit.value, apiKey: keyHit.value, modeValue: nil)
+        return .cloud(url: urlHit.value, apiKey: keyHit.value)
     }
 
-    // 3a. Half a cloud configuration is an error, never a fall-back to local.
+    // 2a. Half a cloud configuration is an error, never a fall-back to local.
     if let urlHit {
         return .refuse(reason: "\(source) defines \(urlHit.key) but not "
             + "\(StoreEnvContract.apiKeyKeys[0]), so the hosted service cannot be reached. "
@@ -289,7 +284,7 @@ func storeSelection(from env: [String: String], source: String) -> StoreSelectio
             + "different dataset.")
     }
 
-    // 4. This source says nothing.
+    // 3. This source says nothing.
     return .nothing
 }
 
@@ -338,20 +333,17 @@ public func resolveStore(
     }
 
     switch selection {
-    case .cloud(let url, let apiKey, let modeValue):
+    case .cloud(let url, let apiKey):
         var env = withoutStoreSelectingKeys(environment)
         env[StoreEnvContract.apiKeyKeys[0]] = apiKey
-        if let url { env[StoreEnvContract.apiUrlKeys[0]] = url }
-        // Carry an explicit mode through when one was given, but never invent one:
-        // which token means "the hosted API" is the package's decision, not this
-        // shell's. With url + key present and no mode, src/lib/store/index.ts
-        // resolves the API transport on its own.
-        if let modeValue { env[StoreEnvContract.modeKeys[0]] = modeValue }
-        return .cloud(env: env, url: loggableURL(url ?? StoreEnvContract.defaultCloudBaseUrl))
+        env[StoreEnvContract.apiUrlKeys[0]] = url
+        // No mode token is ever emitted: with url + key present,
+        // src/lib/store/index.ts resolves the API transport on its own, and a
+        // retired mode key in the child would trip its fail-loud ratchet.
+        return .cloud(env: env, url: loggableURL(url))
 
     case .local(let dbPath, let selectedBy):
         var env = withoutStoreSelectingKeys(environment)
-        env[StoreEnvContract.modeKeys[0]] = StoreEnvContract.localModeToken
         if let dbPath { env[StoreEnvContract.dbPathKeys[0]] = dbPath }
         return .explicitLocal(env: env, selectedBy: selectedBy)
 

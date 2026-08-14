@@ -9,7 +9,7 @@
  * The public surface is the Store abstraction plus the shared domain types.
  * EVERY SDK consumer reads and writes conversations DATA through `getStore()`,
  * which returns a `ConversationsStore` bound to on-box SQLite (LocalStore) or the
- * self_hosted/cloud HTTP API (ApiStore) resolved from the client-flip env — the
+ * HTTP API (ApiStore) resolved from the client-flip env — the
  * SAME one interface the CLI and MCP use. The raw on-box SQLite domain helpers
  * (sendMessage/readMessages/markRead/…) and the `getDb()` handle are NOT public
  * API: re-exporting them meant SDK callers silently bypassed the Store and always

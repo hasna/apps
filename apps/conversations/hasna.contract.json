@@ -3,15 +3,67 @@
   "name": "conversations",
   "class": "service",
   "contractVersion": "v1",
-  "kitVersion": "0.4.2",
-  "description": "Real-time messaging + coordination for AI agents: channels, messages, projects, presence, tasks. CLI + MCP + HTTP API (conversations-serve) + generated SDK. Cloud mode (HASNA_CONVERSATIONS_STORAGE_MODE=cloud / HASNA_CONVERSATIONS_DATABASE_URL set) is PURE REMOTE per Amendment A1: the serve process reads/writes the shared cloud Postgres directly with API-key auth via @hasna/contracts.",
+  "kitVersion": "0.10.6",
+  "description": "Real-time messaging + coordination for AI agents: channels, messages, projects, presence, tasks. CLI + MCP + HTTP API (conversations-serve) + generated SDK. Clients use local SQLite or the HTTP API selected by HASNA_CONVERSATIONS_API_URL; conversations-serve reads PostgreSQL selected by HASNA_CONVERSATIONS_DATABASE_URL. The data backend is the only runtime switch.",
   "bins": [
     "conversations",
     "conversations-mcp",
     "conversations-serve"
   ],
+  "serviceSurfaces": [
+    {
+      "name": "conversations-api",
+      "kind": "api",
+      "status": "supported",
+      "bin": "conversations-serve",
+      "authMode": "api-key",
+      "health": {
+        "method": "GET",
+        "path": "/health",
+        "public": true
+      },
+      "readiness": {
+        "method": "GET",
+        "path": "/ready",
+        "public": true
+      },
+      "version": {
+        "method": "GET",
+        "path": "/version",
+        "public": true
+      },
+      "apiBasePath": "/v1",
+      "openApiPath": "/v1/openapi.json"
+    },
+    {
+      "name": "conversations-sdk",
+      "kind": "sdk",
+      "status": "supported",
+      "authMode": "api-key",
+      "exportSubpath": "./sdk",
+      "generatedFrom": "/v1/openapi.json"
+    },
+    {
+      "name": "conversations-cli",
+      "kind": "cli",
+      "status": "supported",
+      "bin": "conversations",
+      "authMode": "local-only"
+    },
+    {
+      "name": "conversations-mcp",
+      "kind": "mcp",
+      "status": "supported",
+      "mcpBin": "conversations-mcp",
+      "authMode": "local-only"
+    }
+  ],
   "storage": {
-    "mode": "local",
+    "backend": "postgresql",
+    "engines": [
+      "sqlite",
+      "postgresql"
+    ],
     "envPrefix": "HASNA_CONVERSATIONS_",
     "aliasEnvPrefix": "CONVERSATIONS_",
     "databaseUrlSecretRef": "hasna/oss/conversations/database-url",
@@ -30,8 +82,8 @@
       "databaseUrlOwnerSecretRef": "hasna/oss/conversations/database-url-owner"
     },
     "client": {
-      "apiUrlEnv": "CONVERSATIONS_API_URL",
-      "apiKeyEnv": "CONVERSATIONS_API_KEY"
+      "apiUrlEnv": "HASNA_CONVERSATIONS_API_URL",
+      "apiKeyEnv": "HASNA_CONVERSATIONS_API_KEY"
     }
   }
 }

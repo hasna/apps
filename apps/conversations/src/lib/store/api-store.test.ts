@@ -422,7 +422,7 @@ describe("ApiStore channel notification cursor", () => {
 
 // Regression cover for HC-00148, cloud-transport layer. ApiStore.sendMessage
 // forwards an EXPLICIT field whitelist, and reply_to was not on it — so in
-// self_hosted/cloud mode the parent link was dropped before the request even
+// API mode the parent link was dropped before the request even
 // left the machine, while the local SQLite path (and its tests) stayed correct.
 // This asserts on the body that actually goes over the wire.
 describe("ApiStore.sendMessage wire body", () => {
@@ -1050,7 +1050,7 @@ describe("ApiStore.sendMessage wire body", () => {
   // correct because parseMessage coerces with `Number(row.reply_to)`
   // (lib/messages.ts:46). That coercion is now load-bearing for every cloud
   // reply: drop it and `"42" !== 42` makes the CLI reject its own successful
-  // write on every threaded reply in self_hosted/cloud mode.
+  // write on every threaded reply in API mode.
   //
   // Nothing pinned that. Removing the coercion was measured to leave 178 tests
   // across messages/api-store/reply-threading/api green, because every fake

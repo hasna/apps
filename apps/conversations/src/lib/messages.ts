@@ -1170,7 +1170,7 @@ export interface DigestCounts {
  * packing is done ONCE here, storage-agnostic — the caller supplies the counts
  * and pre-fetched rows (from SQLite locally, or the cloud API), then marks the
  * entries and calls `rebuild`. This keeps the packing algorithm a single source
- * of truth across the local and self_hosted digest paths.
+ * of truth across the local and HTTP digest paths.
  */
 export interface DigestAssembly {
   rebuild: (markedRead: number) => DigestResult;

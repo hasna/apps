@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { startApiServer, type ApiServerDeps } from "../server/api.js";
-import { mintApiKey, verifyApiKey, ApiKeyStore } from "@hasna/contracts/auth";
+import { mintApiKey, verifyApiKey, ApiKeyStore, type ApiKeyStatus } from "@hasna/contracts/auth";
 import { STORE_SELECTING_KEYS } from "../lib/store/isolated-test-env.js";
 
 const SIGNING = ["test", "signing", "material", "0123456789"].join("-");
@@ -75,7 +75,16 @@ function makeFakeClient() {
 function makeDeps(): ApiServerDeps {
   const client = makeFakeClient();
   const keys = new ApiKeyStore(client as any);
-  const verifier = verifyApiKey({ app: "conversations", signingSecret: SIGNING, isRevoked: async () => false });
+  const verifier = verifyApiKey({
+    app: "conversations",
+    signingSecret: SIGNING,
+    // @hasna/contracts >= 0.10.6 rejects a bare `isRevoked` boolean predicate
+    // (it cannot refuse an unregistered key). The stub accepts every
+    // cryptographically valid token, which is exactly what the old
+    // `isRevoked: async () => false` meant — expressed through the strict
+    // key-status hook.
+    keyStatus: async (): Promise<ApiKeyStatus> => "active",
+  });
   return { client: client as any, keys, verifier };
 }
 

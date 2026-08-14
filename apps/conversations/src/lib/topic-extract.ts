@@ -1,7 +1,7 @@
 // ── Pure topic extraction ────────────────────────────────────────────────────
 //
 // Storage-agnostic keyword extraction shared by the local store (topics.ts,
-// summary.ts) and the self_hosted/cloud API server (src/server/api.ts). Kept in
+// summary.ts) and the HTTP API server (src/server/api.ts). Kept in
 // its own module with NO database import so the server can reuse the identical
 // algorithm without pulling in bun:sqlite. This is the single source of truth
 // for topic weighting across both transports.

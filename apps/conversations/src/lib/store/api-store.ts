@@ -1,8 +1,8 @@
-// ── ApiStore: the self_hosted / cloud HTTP transport ─────────────────────────
+// ── ApiStore: the HTTP API transport ─────────────────────────────────────────
 //
 // Implements {@link ConversationsStore} against the app's own `/v1` HTTP API with
-// a bearer key. Both `self_hosted` and `cloud` use this identical client code;
-// only the URL/key differ (server-side tenancy). Every method here is a network
+// a bearer key. This is the single HTTP client code; only the URL/key differ
+// (server-side tenancy). Every method here is a network
 // call — there is NO local sqlite fallback (that was the split-brain bug). When a
 // server endpoint is missing the call surfaces as a `HasnaHttpError`, never a
 // silent local write.
@@ -862,7 +862,7 @@ export class ApiStore implements ConversationsStore {
       blocking: opts.blocking === true,
       // This is an explicit field whitelist, so anything missing here is
       // silently dropped on the cloud path. reply_to was missing, which
-      // unthreaded every reply sent in self_hosted/cloud mode while the local
+      // unthreaded every reply sent in API mode while the local
       // SQLite path (and its tests) stayed correct.
       reply_to: opts.reply_to ?? undefined,
       reply_to_uuid: replyUuid ?? undefined,

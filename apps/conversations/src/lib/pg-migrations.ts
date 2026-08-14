@@ -632,7 +632,7 @@ export const PG_MIGRATIONS: string[] = [
   // Migration 3: tasks + task_comments + task_activity + task_dependencies.
   // The SQLite schema (db.ts) carries a full task tracker; migration 1 only
   // referenced `tasks` conditionally (for legacy-space rewrites) but never
-  // created it. This mirrors the SQLite tables so the self_hosted/cloud API can
+  // created it. This mirrors the SQLite tables so the HTTP API can
   // serve the ApiStore's /tasks/* routes at parity with the local store.
   `
   CREATE TABLE IF NOT EXISTS tasks (

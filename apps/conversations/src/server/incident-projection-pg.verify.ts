@@ -168,7 +168,7 @@ export async function verifyIncidentProjectionPg(argv: string[] = []): Promise<n
     const verifier = verifyApiKey({
       app: "conversations",
       signingSecret,
-      isRevoked: keys.isRevoked,
+      keyStatus: keys.keyStatus,
     });
 
     server = startApiServer({

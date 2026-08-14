@@ -47,6 +47,6 @@ describe("swift store-env contract", () => {
     // or because the file was read as "", proves nothing about drift.
     const onDisk = readFileSync(join(repoRoot, SWIFT_CONTRACT_PATH), "utf8");
     expect(onDisk.length).toBeGreaterThan(500);
-    expect(onDisk).not.toBe(renderSwiftStoreEnvContract().replace("modeKeys", "modeKeysX"));
+    expect(onDisk).not.toBe(renderSwiftStoreEnvContract().replace("legacyModeKeys", "legacyModeKeysX"));
   });
 });

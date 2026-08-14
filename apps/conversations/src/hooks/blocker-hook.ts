@@ -36,7 +36,7 @@ try {
   process.exit(0);
 }
 
-// Routed through the Store: local sqlite or the self_hosted/cloud API.
+// Routed through the Store: local sqlite or the HTTP API.
 const blockers = await getStore().getUnreadBlockers(agent, { limit: 10 });
 
 closeDb();

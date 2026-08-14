@@ -4,7 +4,7 @@ import { basename } from "node:path";
 import { getStore } from "../../lib/store/index.js";
 import chalk from "chalk";
 import { normalizeExactIsoTimestamp, normalizeSince } from "../../lib/since.js";
-// Reads/writes route through getStore(): ApiStore (self_hosted/cloud) or LocalStore.
+// Reads/writes route through getStore(): ApiStore (HTTP API) or LocalStore.
 import { closeDb } from "../../lib/db.js";
 import { resolveIdentities, resolveIdentity } from "../../lib/identity.js";
 import { renderContent } from "../../lib/terminal-markdown.js";

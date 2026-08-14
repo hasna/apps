@@ -37,17 +37,26 @@ const PRESENCE_REPORT = [
 ].join("\n");
 
 function runCli(args: string[], agent = "e2e-sender") {
+  const env: Record<string, string | undefined> = {
+    ...process.env,
+    CONVERSATIONS_DB_PATH: TEST_DB,
+    CONVERSATIONS_AGENT_ID: agent,
+    FORCE_COLOR: "0",
+  };
+  // Retired storage-mode variables would trip the fail-loud ratchet in the
+  // child; scrub any ambient leftovers so this suite tests the local store.
+  for (const key of [
+    "HASNA_CONVERSATIONS_STORAGE_MODE",
+    "HASNA_CONVERSATIONS_MODE",
+    "CONVERSATIONS_STORAGE_MODE",
+    "CONVERSATIONS_MODE",
+  ]) {
+    delete env[key];
+  }
   const result = Bun.spawnSync({
     cmd: [...CLI, ...args],
     cwd: process.cwd(),
-    env: {
-      ...process.env,
-      CONVERSATIONS_DB_PATH: TEST_DB,
-      CONVERSATIONS_AGENT_ID: agent,
-      CONVERSATIONS_STORAGE_MODE: "local",
-      HASNA_CONVERSATIONS_STORAGE_MODE: "local",
-      FORCE_COLOR: "0",
-    },
+    env,
     stdout: "pipe",
     stderr: "pipe",
   });

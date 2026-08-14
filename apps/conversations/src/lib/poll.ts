@@ -1,7 +1,7 @@
 // Live message polling. Routes EVERY read through the active Store (getStore),
 // so `conversations watch` and the interactive TUI surface new messages from
-// whichever transport is active — on-box SQLite (LocalStore) or the
-// self_hosted/cloud HTTP API (ApiStore). Nothing here touches sqlite directly;
+// whichever transport is active — on-box SQLite (LocalStore) or the HTTP API
+// (ApiStore). Nothing here touches sqlite directly;
 // reading the local db while the client was flipped to the cloud was the
 // split-brain bug this eliminates.
 

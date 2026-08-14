@@ -292,19 +292,20 @@ daemon must pass `from` explicitly on every write, or run their own process with
 the same machine identity; it is now an error, so the misattribution surfaces at
 the first call instead of in the message history a day later.
 
-## Self-hosted HTTP API (`conversations-serve`)
+## HTTP API (`conversations-serve`)
 
-`conversations-serve` is the self_hosted service surface. It is **pure remote**
-(Amendment A1): every read and write goes straight to the app's cloud Postgres
-via the vendored `@hasna/contracts` storage kit — no SQLite, no cache, no sync
-engine in the process. Requests to `/v1/*` are authenticated with
-`@hasna/contracts` API keys (scope grammar `conversations:read` /
-`conversations:write`).
+`conversations-serve` is the server HTTP API surface. Every read and write goes
+straight to the app's Postgres selected by `HASNA_CONVERSATIONS_DATABASE_URL`
+via the vendored `@hasna/contracts` storage kit (the server backend switch is
+`sqlite | postgresql`; this process serves the postgresql backend). Requests to
+`/v1/*` are authenticated with `@hasna/contracts` API keys (scope grammar
+`conversations:read` / `conversations:write`).
 
 ```bash
-export HASNA_CONVERSATIONS_STORAGE_MODE=cloud
-export HASNA_CONVERSATIONS_DATABASE_URL="postgres://…?sslmode=require&uselibpqcompat=true"
-export HASNA_CONVERSATIONS_API_SIGNING_KEY="$(openssl rand -hex 32)"
+# the app DSN for the postgresql backend (generate/rotate per deployment)
+export HASNA_CONVERSATIONS_DATABASE_URL=<your-postgres-dsn>
+# generate the signing secret once, e.g. with: openssl rand -hex 32
+export HASNA_CONVERSATIONS_API_SIGNING_KEY=<your-random-hex>
 conversations-serve                     # listens on :8080 (PORT/HOST configurable)
 
 # one-shot schema migration (owner role, idempotent)

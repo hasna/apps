@@ -4,7 +4,7 @@
  * The cloud API (and the local SQLite `created_at > ?` filter) expect an
  * absolute ISO-8601 timestamp. Users, however, routinely pass relative
  * durations like `7d`, `24h`, `30m`, `1w`, `45s`, or combos such as `1w2d3h`.
- * Forwarding those straight through made the self_hosted service 500 on an
+ * Forwarding those straight through made the serve API 500 on an
  * unparseable `since=7d`, and silently mismatched the local `created_at > ?`
  * string comparison. This converts a relative duration into
  * `new Date(now - ms).toISOString()` while leaving any absolute / ISO value

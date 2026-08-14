@@ -1,5 +1,4 @@
-# Local/self-hosted compose for conversations-serve against a Postgres.
-# PURE REMOTE (A1): the service reads/writes Postgres directly.
+# Local compose for conversations-serve against a Postgres.
 #
 # Usage:
 #   HASNA_CONVERSATIONS_DATABASE_URL=postgres://... \
@@ -17,7 +16,6 @@ services:
     environment:
       PORT: "8080"
       HOST: "0.0.0.0"
-      HASNA_CONVERSATIONS_STORAGE_MODE: "cloud"
       HASNA_CONVERSATIONS_DATABASE_URL: "${HASNA_CONVERSATIONS_DATABASE_URL:?set the app DSN}"
       HASNA_CONVERSATIONS_API_SIGNING_KEY: "${HASNA_CONVERSATIONS_API_SIGNING_KEY:?set the signing secret}"
     restart: unless-stopped

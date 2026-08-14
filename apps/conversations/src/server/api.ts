@@ -1,10 +1,9 @@
 /**
- * conversations-serve — the self_hosted HTTP API surface.
+ * conversations-serve — the HTTP API surface.
  *
- * PURE REMOTE (Amendment A1): every read and write goes straight to the app's
- * cloud Postgres via the vendored storage kit. There is no SQLite, no cache,
- * and no sync engine in this process. The degraded outbox/cache lives in the
- * CLIENT, out of scope here.
+ * The server reads/writes the app's Postgres via the vendored storage kit,
+ * selected by HASNA_CONVERSATIONS_DATABASE_URL (the server backend switch is
+ * `sqlite | postgresql`; this process serves the postgresql backend).
  *
  * Surfaces:
  *   GET  /health   liveness (unauthenticated, trivial)
@@ -13,11 +12,11 @@
  *   /v1/*          versioned API, guarded by @hasna/contracts API-key auth
  *
  * The /v1 surface covers the app's core operations: messages, channels,
- * projects, and agent presence — real SQL against the cloud schema, no stubs.
+ * projects, and agent presence — real SQL against the schema, no stubs.
  */
 
 import { randomUUID } from "crypto";
-import { createCloudPoolFromEnv } from "../generated/storage-kit/index.js";
+import { createServerPoolFromEnv } from "../generated/storage-kit/index.js";
 import type { TypedQueryClient, PoolQueryClient } from "../generated/storage-kit/query.js";
 import { verifyApiKey, ApiKeyStore } from "@hasna/contracts/auth";
 import type { ApiKeyVerifier } from "@hasna/contracts/auth";
@@ -183,12 +182,12 @@ function incidentProjectorContextFromEnv(): IncidentProjectorContext | null {
 
 /** Build the request-handling deps from the environment (cloud Postgres). */
 export function buildDeps(): ApiServerDeps {
-  const { client } = createCloudPoolFromEnv(APP, { applicationName: "conversations-serve" });
+  const { client } = createServerPoolFromEnv(APP, { applicationName: "conversations-serve" });
   const keys = new ApiKeyStore(client);
   const verifier = verifyApiKey({
     app: APP,
     signingSecret: signingSecret(),
-    isRevoked: keys.isRevoked,
+    keyStatus: keys.keyStatus,
     audit: (e) => {
       if (e.outcome === "deny") {
         console.warn(`[auth] deny ${e.method ?? "?"} ${e.path ?? "?"} reason=${e.reason} kid=${e.kid ?? "-"}`);

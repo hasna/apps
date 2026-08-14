@@ -94,16 +94,33 @@ final class StoreResolutionMatrixTests: XCTestCase {
     /// rather than as a count, so a seventh key added to `StoreEnvContract` fails
     /// here until someone writes its arm. One key (`CONVERSATIONS_STORAGE_MODE`)
     /// had no arm at all, which is the shape this replaces: a coverage claim that
-    /// nothing re-derives goes stale the moment the contract grows.
+    /// nothing re-derives goes stale the moment the contract grows. Deployment
+    /// modes are gone, so local is selected by a DB path alone (or by the absence
+    /// of an API pair); the retired mode keys are covered by the refuse-arm test.
     func testEveryLocalSelectingKeyHasAnArm() throws {
         let covered = Set(try loadMatrix().arms.compactMap {
             $0.shell == "local" ? $0.expectedSelectedBy : nil
         })
-        let selectable = Set(StoreEnvContract.modeKeys + StoreEnvContract.dbPathKeys)
+        let selectable = Set(StoreEnvContract.dbPathKeys)
         XCTAssertEqual(
             selectable.subtracting(covered), [],
             "these keys can select local and no fixture arm exercises them"
         )
+    }
+
+    /// EVERY retired mode key must have an arm that refuses naming it. Without
+    /// this, a mode key added to the contract could be dropped from the ratchet
+    /// without any fixture noticing.
+    func testEveryLegacyModeKeyHasARefuseArm() throws {
+        let covered = Set(try loadMatrix().arms.compactMap {
+            $0.shell == "unresolved" ? $0.reasonContains : nil
+        })
+        for key in StoreEnvContract.legacyModeKeys {
+            XCTAssertTrue(
+                covered.contains { $0.contains(key) },
+                "no unresolved arm names the retired mode key \(key)"
+            )
+        }
     }
 
     func testEveryArm() throws {
@@ -180,8 +197,10 @@ final class StoreResolutionMatrixTests: XCTestCase {
 final class StoreGuardPropertyTests: XCTestCase {
 
     /// Whatever the shell announces, the environment it hands the child must
-    /// contain no key that could select the other store. This is the invariant
-    /// the divergence broke, asserted independently of any single arm.
+    /// contain no key that could select the other store — and no retired mode key
+    /// at all, because a mode key in the child would trip the resolver's
+    /// fail-loud ratchet. This is the invariant the divergence broke, asserted
+    /// independently of any single arm.
     func testCloudChildEnvCarriesNoLocalSelectingKey() throws {
         let hostileEnv = [
             "HASNA_CONVERSATIONS_DB_PATH": "/tmp/should-not-survive.db",
@@ -202,8 +221,8 @@ final class StoreGuardPropertyTests: XCTestCase {
         for key in StoreEnvContract.dbPathKeys {
             XCTAssertNil(env[key], "\(key) survived into the child environment")
         }
-        for key in StoreEnvContract.modeKeys where env[key] != nil {
-            XCTAssertNotEqual(env[key], "local", "\(key)=local survived into the child environment")
+        for key in StoreEnvContract.legacyModeKeys {
+            XCTAssertNil(env[key], "retired \(key) survived into the child environment")
         }
         // Unrelated inherited variables are untouched — the shell strips the
         // store-selecting keys, not the environment.
@@ -228,15 +247,30 @@ final class StoreGuardPropertyTests: XCTestCase {
     }
 
     /// Explicit local is supported and announced as local — the guard refuses
-    /// ambiguity, not local storage.
+    /// ambiguity, not local storage. Local is selected by a DB path (or by the
+    /// absence of an API pair); retired mode tokens are errors, not selectors.
     func testExplicitLocalIsAnnouncedAsLocal() throws {
-        let configPath = try writeConfigFile(["HASNA_CONVERSATIONS_STORAGE_MODE": "local"])
+        let configPath = try writeConfigFile(["HASNA_CONVERSATIONS_DB_PATH": "/tmp/fixture.db"])
         guard case .explicitLocal(let env, let selectedBy) =
             resolveStore(environment: [:], configPath: configPath) else {
             return XCTFail("explicit local must resolve to explicitLocal")
         }
-        XCTAssertEqual(env["HASNA_CONVERSATIONS_STORAGE_MODE"], "local")
-        XCTAssertEqual(selectedBy, "HASNA_CONVERSATIONS_STORAGE_MODE")
+        XCTAssertEqual(env["HASNA_CONVERSATIONS_DB_PATH"], "/tmp/fixture.db")
+        XCTAssertNil(env["HASNA_CONVERSATIONS_STORAGE_MODE"])
+        XCTAssertEqual(selectedBy, "HASNA_CONVERSATIONS_DB_PATH")
+    }
+
+    /// A retired storage-mode variable in the fleet config is an error naming
+    /// the variable — never a local selector, never silently ignored.
+    func testRetiredStorageModeVariableRefusesByName() throws {
+        let configPath = try writeConfigFile(["HASNA_CONVERSATIONS_STORAGE_MODE": "local"])
+        guard case .unresolved(let reason) = resolveStore(environment: [:], configPath: configPath) else {
+            return XCTFail("a retired storage-mode variable must refuse, not resolve")
+        }
+        XCTAssertTrue(
+            reason.contains("HASNA_CONVERSATIONS_STORAGE_MODE"),
+            "reason must name the retired variable — got: \(reason)"
+        )
     }
 
     /// A debug description must never carry the API key value: XCTest prints it
