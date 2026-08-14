@@ -74,6 +74,14 @@ reported success about things it had not actually established.
   than reached by deleting a check. Physical classes are untouched: `dgx-spark`
   keeps `tailscale:join` and gets no absence item.
 
+## [0.2.25] - 2026-08-14
+
+### Fixed
+
+- Legacy machine aliases now resolve to canonical station entries across
+  manifest, topology, project, app, workspace, diagnostics, notes, and screen
+  consumers, including Tailscale peers that advertise only a retained alias.
+
 ## [0.2.24] - 2026-08-14
 
 ### Fixed
