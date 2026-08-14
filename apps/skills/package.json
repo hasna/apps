@@ -82,6 +82,7 @@
     "typescript": "^5"
   },
   "dependencies": {
+    "@aws-sdk/client-ecs": "^3.1079.0",
     "@aws-sdk/client-s3": "^3.1079.0",
     "@hasna/events": "0.1.7",
     "@modelcontextprotocol/sdk": "^1.26.0",
