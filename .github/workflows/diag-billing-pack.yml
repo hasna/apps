@@ -1,10 +1,7 @@
 # TEMPORARY DIAGNOSTIC workflow (billing publish-guard flake, task 40ce31ad).
-# REMOVE BEFORE MERGE. Hypothesis: bun install on the runner intermittently
-# skips creating some workspace-member node_modules/.bin links, so member
-# verify/build chains fail with "Executable not found" (billing ~4.2s =
-# typecheck + test-with-missing-contracts; prompts ~0.8s instant). Test:
-# fresh installs x3, census .bin link presence for every member. Then run the
-# real guard with the diagnostic stdout hook.
+# REMOVE BEFORE MERGE. Loop the REAL publish-guard 3x with the diagnostic hook
+# in check-publish-guard.ts (dumps captured prepack stdout on failure) to
+# catch the intermittent member-prepack failure and identify the inner step.
 name: diagnose-billing-pack
 
 on:
@@ -23,56 +20,24 @@ jobs:
           bun-version: 1.3.14
       - name: Install
         run: bun install --frozen-lockfile
-      - name: .bin link census — install attempt 1
+      - name: Real guard x3 (diag hook dumps prepack stdout on failure)
         run: |
           set +e
-          MISSING=0
-          for d in apps/*; do
-            [ -f "$d/package.json" ] || continue
-            bins=$(ls "$d/node_modules/.bin" 2>/dev/null | wc -l)
-            if [ "$bins" -eq 0 ]; then echo "EMPTY .bin: $d"; MISSING=$((MISSING+1)); fi
+          for round in 1 2 3; do
+            echo "===== ROUND $round ====="
+            free -m | head -2
+            ps aux | wc -l
+            start=$(date +%s.%N)
+            bun tooling/ci/check-publish-guard.ts > /tmp/guard-$round.out 2> /tmp/guard-$round.err
+            rc=$?
+            end=$(date +%s.%N)
+            echo "guard round $round rc=$rc dur=$(echo "$end $start" | awk '{printf "%.1f", $1-$2}')s"
+            if [ $rc -ne 0 ]; then
+              echo "--- guard stdout ---"; cat /tmp/guard-$round.out
+              echo "--- guard stderr ---"; cat /tmp/guard-$round.err
+              echo "--- newest npm debug log ---"
+              LOG=$(ls -t "$HOME/.npm/_logs" 2>/dev/null | head -1)
+              if [ -n "$LOG" ]; then tail -80 "$HOME/.npm/_logs/$LOG"; fi
+            fi
           done
-          echo "attempt1: members with empty .bin = $MISSING"
-          test -x apps/billing/node_modules/.bin/contracts && echo "billing contracts: PRESENT" || echo "billing contracts: MISSING"
-          exit 0
-      - name: .bin link census — install attempt 2 (fresh)
-        run: |
-          set +e
-          rm -rf node_modules apps/*/node_modules
-          bun install --frozen-lockfile > /tmp/inst2.log 2>&1
-          echo "install2 rc=$?"
-          MISSING=0
-          for d in apps/*; do
-            [ -f "$d/package.json" ] || continue
-            bins=$(ls "$d/node_modules/.bin" 2>/dev/null | wc -l)
-            if [ "$bins" -eq 0 ]; then echo "EMPTY .bin: $d"; MISSING=$((MISSING+1)); fi
-          done
-          echo "attempt2: members with empty .bin = $MISSING"
-          test -x apps/billing/node_modules/.bin/contracts && echo "billing contracts: PRESENT" || echo "billing contracts: MISSING"
-          exit 0
-      - name: .bin link census — install attempt 3 (fresh)
-        run: |
-          set +e
-          rm -rf node_modules apps/*/node_modules
-          bun install --frozen-lockfile > /tmp/inst3.log 2>&1
-          echo "install3 rc=$?"
-          MISSING=0
-          for d in apps/*; do
-            [ -f "$d/package.json" ] || continue
-            bins=$(ls "$d/node_modules/.bin" 2>/dev/null | wc -l)
-            if [ "$bins" -eq 0 ]; then echo "EMPTY .bin: $d"; MISSING=$((MISSING+1)); fi
-          done
-          echo "attempt3: members with empty .bin = $MISSING"
-          test -x apps/billing/node_modules/.bin/contracts && echo "billing contracts: PRESENT" || echo "billing contracts: MISSING"
-          exit 0
-      - name: Real guard (diag hook dumps prepack stdout on failure)
-        run: |
-          set +e
-          start=$(date +%s.%N)
-          bun tooling/ci/check-publish-guard.ts > /tmp/guard.out 2> /tmp/guard.err
-          rc=$?
-          end=$(date +%s.%N)
-          echo "guard rc=$rc dur=$(echo "$end $start" | awk '{printf "%.1f", $1-$2}')s"
-          echo "--- guard stdout ---"; cat /tmp/guard.out
-          echo "--- guard stderr ---"; cat /tmp/guard.err
           exit 0
