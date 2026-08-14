@@ -1566,6 +1566,31 @@ export class InboundDomainRouteConflictError extends Error {
 }
 
 /**
+ * Census scan for legacy-inbound messages whose attachment rows carry metadata
+ * but no payload bytes (issue hasna/emails#52). Exported so the FORCE RLS
+ * integration test executes the EXACT production query shape.
+ *
+ * The query is subject to the fail-closed tenant policy (migration 0013):
+ * with the `app.current_tenant` GUC unset the policy is `tenant_id = NULL` and
+ * the census returns a confident zero. Every caller MUST set the GUC to the
+ * tenant being scanned; `listLegacyInboundMissingPayloadBindings` does, exactly
+ * like the replay lookup.
+ */
+export const LEGACY_INBOUND_MISSING_PAYLOAD_SCAN_SQL = `SELECT m.id AS message_id, m.provider_message_id, m.message_id AS message_id_column,
+                  m.attachments
+           FROM messages m
+           WHERE m.tenant_id = $1::uuid
+             AND m.source_id LIKE 'legacy:inbound_emails:%'
+             AND ($2::text IS NULL OR m.id > $2)
+             AND jsonb_typeof(COALESCE(m.attachments, '[]'::jsonb)) = 'array'
+             AND EXISTS (
+               SELECT 1 FROM jsonb_array_elements(COALESCE(m.attachments, '[]'::jsonb)) AS a(item)
+               WHERE jsonb_typeof(a.item -> 'content_base64') IS DISTINCT FROM 'string'
+             )
+           ORDER BY m.id
+           LIMIT $3`;
+
+/**
  * Unscoped root store. Holds `forTenant()` plus global pre-tenant resolution
  * primitives for inbound routing. It deliberately exposes NO
  * tenant-scoped data CRUD: a request handler is only ever handed a
@@ -1873,8 +1898,10 @@ export class EmailsSelfHostedStore {
   /**
    * Read-only keyset-paged scan of legacy-inbound messages whose attachment
    * rows carry metadata but no payload bytes (issue hasna/emails#52). FORCE RLS
-   * stays enabled: one read-only transaction visits each tenant scope, exactly
-   * like the inbound provenance audit. Rows carry identifiers and attachment
+   * stays enabled: one read-only transaction visits each tenant scope, setting
+   * `app.current_tenant` per tenant exactly like the replay lookup — with the
+   * GUC unset the policy (migration 0013) is `tenant_id = NULL` and this census
+   * would return a confident zero. Rows carry identifiers and attachment
    * METADATA only — payload bytes never leave the store through this method.
    */
   async listLegacyInboundMissingPayloadBindings(
@@ -1894,25 +1921,14 @@ export class EmailsSelfHostedStore {
       const tenants = await tx.many<{ id: string }>(`SELECT id::text AS id FROM tenants ORDER BY id`);
       for (const tenant of tenants) {
         if (cursor && tenant.id < cursor.tenantId) continue;
+        await tx.execute(`SELECT set_config('app.current_tenant', $1, true)`, [tenant.id]);
         const rows = await tx.many<{
           message_id: string;
           provider_message_id: string | null;
           message_id_column: string | null;
           attachments: unknown;
         }>(
-          `SELECT m.id AS message_id, m.provider_message_id, m.message_id AS message_id_column,
-                  m.attachments
-           FROM messages m
-           WHERE m.tenant_id = $1::uuid
-             AND m.source_id LIKE 'legacy:inbound_emails:%'
-             AND ($2::text IS NULL OR m.id > $2)
-             AND jsonb_typeof(COALESCE(m.attachments, '[]'::jsonb)) = 'array'
-             AND EXISTS (
-               SELECT 1 FROM jsonb_array_elements(COALESCE(m.attachments, '[]'::jsonb)) AS a(item)
-               WHERE jsonb_typeof(a.item -> 'content_base64') IS DISTINCT FROM 'string'
-             )
-           ORDER BY m.id
-           LIMIT $3`,
+          LEGACY_INBOUND_MISSING_PAYLOAD_SCAN_SQL,
           [tenant.id, cursor && tenant.id === cursor.tenantId ? cursor.messageId : null, limit - page.length],
         );
         for (const row of rows) {
