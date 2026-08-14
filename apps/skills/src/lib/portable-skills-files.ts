@@ -65,10 +65,10 @@ const DEFAULT_INPUTS: PortableSkillInput[] = [
  * runtime; the sandbox is read-only by default, execution is time-capped at
  * 900s and does not assume network egress.
  */
-export function defaultRuntimeContract(name: string, entrypoint?: string): PortableSkillRuntimeContract {
+export function defaultRuntimeContract(entrypoint = "src/index.ts"): PortableSkillRuntimeContract {
   return {
     runtime: "bun",
-    entrypoint: entrypoint ?? "src/index.ts",
+    entrypoint,
     timeout: 900,
     needs_network: false,
     env: [],
@@ -159,7 +159,7 @@ export function createInstructionManifest(name: string, options: { description: 
     kind: "instruction",
     inputs: [],
     commands: [],
-    runtime: defaultRuntimeContract(name),
+    runtime: defaultRuntimeContract(),
     provenance: defaultProvenance(),
   };
 }
@@ -194,7 +194,7 @@ export function createPortableManifest(name: string, options: { description: str
       entry: "src/index.ts",
       args: ["...args"],
     }],
-    runtime: defaultRuntimeContract(name, "src/index.ts"),
+    runtime: defaultRuntimeContract("src/index.ts"),
     provenance: defaultProvenance(),
   };
 }
@@ -214,11 +214,11 @@ export function writePortableSkillTemplate(skillPath: string, manifest: Portable
  * every emitted skill.json carries the full hasna.skill.v1 contract.
  */
 function fillContractDefaults(manifest: PortableSkillManifest, entrypoint?: string): PortableSkillManifest {
-  const resolvedEntrypoint = entrypoint ?? manifest.commands[0]?.entry;
+  const resolvedEntrypoint = entrypoint ?? manifest.commands[0]?.entry ?? "src/index.ts";
   return {
     ...manifest,
     standard: PORTABLE_SKILL_STANDARD,
-    runtime: manifest.runtime ?? defaultRuntimeContract(manifest.name, resolvedEntrypoint),
+    runtime: manifest.runtime ?? defaultRuntimeContract(resolvedEntrypoint),
     provenance: {
       ...defaultProvenance(),
       ...(manifest.provenance ?? {}),
