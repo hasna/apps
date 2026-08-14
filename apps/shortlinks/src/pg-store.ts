@@ -1,8 +1,17 @@
+// Server-side Postgres store for @hasna/shortlinks.
+//
+// This module is used ONLY by the cloud server (`src/serve`, running on ECS
+// Fargate). It is never imported by the client CLI/MCP/SDK, and it holds NO DSN:
+// the store is always built over a `TypedQueryClient` that the serve entrypoint
+// opens through the sanctioned storage kit (`createCloudPoolFromEnv`). Clients
+// reach this data exclusively through the HTTP `/v1` ApiStore.
+
 import { createHash } from "node:crypto";
-import { formatShortUrl, normalizeHostname } from "./config.js";
+import { formatShortUrl, getClickSalt, normalizeHostname } from "./config.js";
 import { makeId, now } from "./database.js";
 import { getMachineId } from "./machine.js";
 import { DEFAULT_SLUG_LENGTH, normalizeSlug, randomToken } from "./slug.js";
+import type { TypedQueryClient } from "./generated/storage-kit/query.js";
 import type { AddDomainInput, Click, ClickInput, CreateLinkInput, Domain, Link, LinkStats } from "./types.js";
 
 type PgAdapterLike = {
@@ -38,6 +47,11 @@ function parseJsonObject(value: string | Record<string, unknown> | null | undefi
   }
 }
 
+function toPostgresSql(sql: string): string {
+  let index = 0;
+  return sql.replace(/\?/g, () => `$${++index}`);
+}
+
 function toIsoString(value: unknown): string {
   if (value instanceof Date) return value.toISOString();
   return String(value);
@@ -63,8 +77,6 @@ function linkFromRow(row: LinkRow): Link {
   return {
     ...row,
     active: Boolean(row.active),
-    max_uses: row.max_uses ?? null,
-    used_count: row.used_count ?? 0,
     expires_at: nullableIso(row.expires_at),
     synced_at: nullableIso(row.synced_at),
     created_at: toIsoString(row.created_at),
@@ -94,12 +106,6 @@ function isoOrNull(input: string | undefined): string | null {
   return date.toISOString();
 }
 
-function normalizeMaxUses(value: number | null | undefined): number | null {
-  if (value === null || value === undefined) return null;
-  if (!Number.isInteger(value) || value <= 0) throw new Error("maxUses must be a positive integer.");
-  return value;
-}
-
 function clickFromRow(row: ClickRow): Click {
   return {
     ...row,
@@ -111,20 +117,39 @@ function clickFromRow(row: ClickRow): Click {
   };
 }
 
+/**
+ * Adapt a vendored storage-kit `TypedQueryClient` (which speaks `$1` positional
+ * params) to the `?`-placeholder `PgAdapterLike` the store queries are written
+ * against. This lets `shortlinks-serve` reuse the exact same SQL as the CLI while
+ * opening its cloud pool through the sanctioned kit (`createCloudPoolFromEnv`).
+ */
+export function createKitPgAdapter(client: TypedQueryClient): PgAdapterLike {
+  return {
+    async get(sql: string, ...params: unknown[]): Promise<any> {
+      return client.get(toPostgresSql(sql), params as unknown[]);
+    },
+    async all(sql: string, ...params: unknown[]): Promise<any[]> {
+      return client.many(toPostgresSql(sql), params as unknown[]);
+    },
+    async run(sql: string, ...params: unknown[]): Promise<unknown> {
+      return client.query(toPostgresSql(sql), params as unknown[]);
+    },
+  };
+}
+
 export class PgShortlinksStore {
   constructor(private readonly pg: PgAdapterLike) {}
 
-  static async fromConnectionString(connectionString: string): Promise<PgShortlinksStore> {
-    const { PgAdapterAsync } = await import("./remote-storage.js");
-    return new PgShortlinksStore(new PgAdapterAsync(connectionString));
+  /**
+   * Build a store over a vendored storage-kit query client. This is the ONLY
+   * constructor: the serve entrypoint opens its pool via `createCloudPoolFromEnv`
+   * (server-side) and hands the client here. There is deliberately no
+   * DSN-from-env / connection-string path so this store can never be misused to
+   * open the raw RDS from a client.
+   */
+  static fromQueryClient(client: TypedQueryClient): PgShortlinksStore {
+    return new PgShortlinksStore(createKitPgAdapter(client));
   }
-
-  static async fromStorage(service = "shortlinks"): Promise<PgShortlinksStore> {
-    const { getStorageConnectionString } = await import("./storage-config.js");
-    return PgShortlinksStore.fromConnectionString(getStorageConnectionString(service));
-  }
-
-  static fromCloud = PgShortlinksStore.fromStorage;
 
   async close(): Promise<void> {
     await this.pg.close?.();
@@ -203,6 +228,14 @@ export class PgShortlinksStore {
     return row ? domainFromRow(row) : null;
   }
 
+  async deleteDomain(hostnameOrId: string): Promise<Domain> {
+    const domain = await this.getDomain(hostnameOrId);
+    if (!domain) throw new Error("Domain not found.");
+    // links + clicks cascade via ON DELETE CASCADE.
+    await this.pg.run("DELETE FROM domains WHERE id = ?", domain.id);
+    return domain;
+  }
+
   async createLink(input: CreateLinkInput): Promise<Link> {
     const domain = input.domain ? await this.getDomain(input.domain) : await this.getDefaultDomain();
     if (!domain) {
@@ -212,7 +245,6 @@ export class PgShortlinksStore {
     const timestamp = now();
     const machineId = getMachineId();
     const expiresAt = isoOrNull(input.expiresAt);
-    const maxUses = normalizeMaxUses(input.maxUses);
     const slug = input.slug
       ? normalizeSlug(input.slug)
       : await this.generateAvailableSlug(domain.id, input.slugLength || DEFAULT_SLUG_LENGTH);
@@ -220,10 +252,10 @@ export class PgShortlinksStore {
     try {
       await this.pg.run(`
         INSERT INTO links (
-          id, domain_id, slug, destination_url, title, active, expires_at, max_uses, used_count, metadata,
+          id, domain_id, slug, destination_url, title, active, expires_at, metadata,
           machine_id, synced_at, created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, 1, ?, ?, 0, ?, ?, NULL, ?, ?)
+        VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, NULL, ?, ?)
       `,
         makeId("lnk"),
         domain.id,
@@ -231,7 +263,6 @@ export class PgShortlinksStore {
         destinationUrl,
         input.title || null,
         expiresAt,
-        maxUses,
         JSON.stringify(input.metadata || {}),
         machineId,
         timestamp,
@@ -246,21 +277,6 @@ export class PgShortlinksStore {
     }
 
     return (await this.getLink(domain.hostname, slug))!;
-  }
-
-  async consumeLinkUse(link: Link): Promise<Link | null> {
-    const timestamp = now();
-    await this.pg.run(`
-      UPDATE links
-      SET used_count = used_count + 1, updated_at = ?, synced_at = NULL
-      WHERE id = ?
-        AND active = 1
-        AND (max_uses IS NULL OR used_count < max_uses)
-    `, timestamp, link.id);
-    const refreshed = await this.getLink(link.hostname, link.slug);
-    if (!refreshed) return null;
-    if (link.max_uses !== null && refreshed.used_count === link.used_count) return null;
-    return refreshed;
   }
 
   async listLinks(options: { domain?: string; activeOnly?: boolean; limit?: number } = {}): Promise<Link[]> {
@@ -418,8 +434,7 @@ export class PgShortlinksStore {
   }
 
   private hashIp(ip: string): string {
-    const salt = process.env.SHORTLINKS_CLICK_SALT || "shortlinks-cloud";
-    return createHash("sha256").update(`${salt}:${ip}`).digest("hex");
+    return createHash("sha256").update(`${getClickSalt()}:${ip}`).digest("hex");
   }
 
   private async generateAvailableSlug(domainId: string, length: number): Promise<string> {

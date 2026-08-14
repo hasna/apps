@@ -4,15 +4,7 @@ set -euo pipefail
 export AWS_REGION="${AWS_REGION:-us-east-1}"
 export SHORTLINKS_HOME="/var/lib/shortlinks"
 export SHORTLINKS_PACKAGE="@hasna/shortlinks@latest"
-export RDS_SECRET_ID="${RDS_SECRET_ID:-}"
-export RDS_HOST="${RDS_HOST:-}"
-export RDS_USERNAME="${RDS_USERNAME:-}"
-export SHORTLINKS_DOMAIN="${SHORTLINKS_DOMAIN:-}"
-export ATTACHMENTS_ORIGIN="${ATTACHMENTS_ORIGIN:-}"
-export SHORTLINKS_API_PATH_PREFIX="${SHORTLINKS_API_PATH_PREFIX:-/_shortlinks/api}"
-
-: "${RDS_SECRET_ID:?Set RDS_SECRET_ID to the AWS Secrets Manager secret for the PostgreSQL database_url}"
-: "${SHORTLINKS_DOMAIN:?Set SHORTLINKS_DOMAIN to the public host served by Caddy}"
+export SHORTLINKS_DATABASE_SECRET_ID="${SHORTLINKS_DATABASE_SECRET_ID:-hasna/xyz/opensource/shortlinks/prod/postgres}"
 
 dnf update -y
 dnf install -y awscli jq tar gzip shadow-utils libcap
@@ -21,29 +13,14 @@ if ! id shortlinks >/dev/null 2>&1; then
   useradd --system --create-home --home-dir "${SHORTLINKS_HOME}" --shell /sbin/nologin shortlinks
 fi
 
-install -d -o shortlinks -g shortlinks "${SHORTLINKS_HOME}/.hasna/shortlinks/storage"
 install -d -o shortlinks -g shortlinks "${SHORTLINKS_HOME}/.hasna/shortlinks"
-
-if [ -n "${RDS_HOST}" ] && [ -n "${RDS_USERNAME}" ]; then
-cat > "${SHORTLINKS_HOME}/.hasna/shortlinks/storage/config.json" <<CLOUD_CONFIG
-{
-  "rds": {
-    "host": "${RDS_HOST}",
-    "port": 5432,
-    "username": "${RDS_USERNAME}",
-    "password_env": "SHORTLINKS_CLOUD_DATABASE_PASSWORD",
-    "ssl": true
-  },
-  "mode": "hybrid",
-  "auto_sync_interval_minutes": 0,
-  "sync": {
-    "schedule_minutes": 0
-  }
-}
-CLOUD_CONFIG
-chown shortlinks:shortlinks "${SHORTLINKS_HOME}/.hasna/shortlinks/storage/config.json"
-chmod 600 "${SHORTLINKS_HOME}/.hasna/shortlinks/storage/config.json"
-fi
+cat > /etc/shortlinks.env <<ENV
+SHORTLINKS_DATABASE_SECRET_ID=${SHORTLINKS_DATABASE_SECRET_ID}
+HASNA_SHORTLINKS_STORE=postgres
+HASNA_SHORTLINKS_DATABASE_SSL=true
+ENV
+chown root:shortlinks /etc/shortlinks.env
+chmod 640 /etc/shortlinks.env
 
 su -s /bin/bash shortlinks -c 'curl -fsSL https://bun.sh/install | bash'
 su -s /bin/bash shortlinks -c "${SHORTLINKS_HOME}/.bun/bin/bun install -g ${SHORTLINKS_PACKAGE} --no-cache"
@@ -55,24 +32,32 @@ set -euo pipefail
 export AWS_REGION="${AWS_REGION:-us-east-1}"
 export HOME="/var/lib/shortlinks"
 export PATH="/var/lib/shortlinks/.bun/bin:/usr/local/bin:/usr/bin:/bin"
-export NODE_TLS_REJECT_UNAUTHORIZED="0"
-
-: "${RDS_SECRET_ID:?Set RDS_SECRET_ID to the AWS Secrets Manager secret for the PostgreSQL database_url}"
+export HASNA_SHORTLINKS_STORE="postgres"
+export HASNA_SHORTLINKS_DATABASE_SSL="${HASNA_SHORTLINKS_DATABASE_SSL:-true}"
 
 secret_json="$(aws secretsmanager get-secret-value \
   --region "${AWS_REGION}" \
-  --secret-id "${RDS_SECRET_ID}" \
+  --secret-id "${SHORTLINKS_DATABASE_SECRET_ID:-hasna/xyz/opensource/shortlinks/prod/postgres}" \
   --query SecretString \
   --output text)"
 
-export HASNA_SHORTLINKS_DATABASE_URL
-HASNA_SHORTLINKS_DATABASE_URL="$(jq -r '.database_url // empty' <<<"${secret_json}")"
-if [ -n "${HASNA_SHORTLINKS_DATABASE_URL}" ]; then
-  export SHORTLINKS_DATABASE_URL="${HASNA_SHORTLINKS_DATABASE_URL}"
-else
-  export SHORTLINKS_CLOUD_DATABASE_PASSWORD
-  SHORTLINKS_CLOUD_DATABASE_PASSWORD="$(jq -r '.password // empty' <<<"${secret_json}")"
+connection_url="$(jq -r '(.connectionString // .connection_string // .url // .database_url // empty)' <<<"${secret_json}")"
+if [[ -z "${connection_url}" ]]; then
+  db_host="$(jq -r '.host // empty' <<<"${secret_json}")"
+  db_port="$(jq -r '.port // 5432' <<<"${secret_json}")"
+  db_name="$(jq -r '.database // .dbname // "shortlinks"' <<<"${secret_json}")"
+  db_user="$(jq -r '.username // .user // empty' <<<"${secret_json}")"
+  db_password="$(jq -r '.password // empty' <<<"${secret_json}")"
+  if [[ -z "${db_host}" || -z "${db_user}" || -z "${db_password}" ]]; then
+    echo "Shortlinks database secret must include connectionString/url or host, username, and password." >&2
+    exit 1
+  fi
+  db_user_encoded="$(jq -nr --arg value "${db_user}" '$value|@uri')"
+  db_password_encoded="$(jq -nr --arg value "${db_password}" '$value|@uri')"
+  connection_url="postgres://${db_user_encoded}:${db_password_encoded}@${db_host}:${db_port}/${db_name}"
 fi
+
+export HASNA_SHORTLINKS_DATABASE_URL="${connection_url}"
 
 exec "$@"
 RUNNER
@@ -80,16 +65,6 @@ chmod 750 /usr/local/bin/shortlinks-env-exec
 chown root:shortlinks /usr/local/bin/shortlinks-env-exec
 
 su -s /bin/bash shortlinks -c 'PATH=/var/lib/shortlinks/.bun/bin:$PATH shortlinks --version'
-
-cat > /etc/default/shortlinks <<SHORTLINKS_ENV
-AWS_REGION=${AWS_REGION}
-RDS_SECRET_ID=${RDS_SECRET_ID}
-SHORTLINKS_DOMAIN=${SHORTLINKS_DOMAIN}
-SHORTLINKS_STORE=remote
-SHORTLINKS_API_PATH_PREFIX=${SHORTLINKS_API_PATH_PREFIX}
-SHORTLINKS_ENV
-chmod 640 /etc/default/shortlinks
-chown root:shortlinks /etc/default/shortlinks
 
 caddy_version="$(curl -fsSL https://api.github.com/repos/caddyserver/caddy/releases/latest | jq -r '.tag_name // "v2.10.2"' | sed 's/^v//')"
 case "$(uname -m)" in
@@ -115,8 +90,9 @@ Group=shortlinks
 WorkingDirectory=/var/lib/shortlinks
 Environment=HOME=/var/lib/shortlinks
 Environment=PATH=/var/lib/shortlinks/.bun/bin:/usr/local/bin:/usr/bin:/bin
-EnvironmentFile=/etc/default/shortlinks
-ExecStart=/usr/local/bin/shortlinks-env-exec shortlinks serve --remote --host 127.0.0.1 --port 8787 --default-host ${SHORTLINKS_DOMAIN} --api-path-prefix ${SHORTLINKS_API_PATH_PREFIX}
+EnvironmentFile=/etc/shortlinks.env
+ExecStartPre=/usr/local/bin/shortlinks-env-exec shortlinks postgres migrate
+ExecStart=/usr/local/bin/shortlinks-env-exec shortlinks --store postgres serve --host 127.0.0.1 --port 8787 --default-host has.na
 Restart=always
 RestartSec=5
 
@@ -148,53 +124,14 @@ WantedBy=multi-user.target
 SERVICE
 
 install -d /etc/caddy
-if [ -n "${ATTACHMENTS_ORIGIN}" ]; then
-cat > /etc/caddy/Caddyfile <<CADDY
-${SHORTLINKS_DOMAIN} {
+cat > /etc/caddy/Caddyfile <<'CADDY'
+has.na {
   encode zstd gzip
-
-  handle ${SHORTLINKS_API_PATH_PREFIX}* {
-    respond "Not found" 404
-  }
-
-  handle /a/* {
-    reverse_proxy ${ATTACHMENTS_ORIGIN}
-  }
-
-  handle /api/* {
-    reverse_proxy ${ATTACHMENTS_ORIGIN}
-  }
-
-  handle /_shortlinks/* {
-    reverse_proxy 127.0.0.1:8787
-  }
-
-  handle {
-    reverse_proxy 127.0.0.1:8787
-  }
+  reverse_proxy 127.0.0.1:8787
 }
 CADDY
-else
-cat > /etc/caddy/Caddyfile <<CADDY
-${SHORTLINKS_DOMAIN} {
-  encode zstd gzip
-
-  handle ${SHORTLINKS_API_PATH_PREFIX}* {
-    respond "Not found" 404
-  }
-
-  handle /api* {
-    respond "Not found" 404
-  }
-
-  handle {
-    reverse_proxy 127.0.0.1:8787
-  }
-}
-CADDY
-fi
 
 systemctl daemon-reload
 systemctl enable shortlinks.service caddy.service
 systemctl start shortlinks.service
-systemctl start caddy.service || true
+systemctl start caddy.service

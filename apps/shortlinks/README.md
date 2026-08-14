@@ -1,8 +1,33 @@
 # @hasna/shortlinks
 
-CLI-only shortlink management for custom domains.
+Shortlink management for custom domains — CLI, MCP server, REST API, and a generated SDK.
 
-`shortlinks` creates Bitly-style short URLs, supports multiple domains, records click analytics, can run a tiny redirect server, and includes helper commands for Cloudflare DNS/Workers, `@hasna/domains`, and package-native storage sync. Production serving can run directly against the shared RDS database with `--remote`; local SQLite is only for explicit local/offline use.
+`shortlinks` creates Bitly-style short URLs, supports multiple domains, records click analytics, can run a tiny redirect server, and includes helper commands for Cloudflare DNS/Workers and `@hasna/domains`. It defaults to local SQLite and can serve from an app-owned PostgreSQL database when `HASNA_SHORTLINKS_STORE=postgres` and `HASNA_SHORTLINKS_DATABASE_URL` are configured.
+
+## Surfaces
+
+Four surfaces share one core library:
+
+| Surface | Bin / package | Purpose |
+| --- | --- | --- |
+| CLI | `shortlinks` | Interactive/scriptable link + domain management (`--json` for agents). |
+| MCP | `shortlinks-mcp` | Model Context Protocol server (stdio or `--http`) exposing link/domain tools to agents. |
+| REST API | `shortlinks-serve` | HTTP service: `GET /health`, `/ready`, `/version`, `/openapi.json`, and a versioned `/v1` CRUD API guarded by API-key auth. |
+| SDK | `@hasna/shortlinks-sdk` (+ `@hasna/shortlinks/sdk`) | Typed fetch client generated from the serve OpenAPI (`bun run sdk:generate`). |
+
+### Cloud service (PURE REMOTE, Amendment A1)
+
+`shortlinks-serve` reads/writes the shared cloud Postgres directly via the vendored `@hasna/contracts` storage kit — no sync engine or cache in the service. API-key auth comes from `@hasna/contracts/auth`; mint keys with `contracts issue-key --app shortlinks --scopes 'shortlinks:read,shortlinks:write'`.
+
+```bash
+HASNA_SHORTLINKS_STORAGE_MODE=cloud \
+HASNA_SHORTLINKS_DATABASE_URL=postgres://user:pass@host:5432/shortlinks?sslmode=require \
+HASNA_SHORTLINKS_API_SIGNING_KEY=... \
+shortlinks-serve            # migrate (idempotent) then serve on :8080
+shortlinks-serve migrate    # one-shot migration task
+```
+
+Client self_hosted mode uses `SHORTLINKS_API_URL` + `SHORTLINKS_API_KEY` (never a DSN).
 
 [![npm](https://img.shields.io/npm/v/@hasna/shortlinks)](https://www.npmjs.com/package/@hasna/shortlinks)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
@@ -46,6 +71,41 @@ Errors are emitted as:
 { "error": "message" }
 ```
 
+## Compact Defaults and Details
+
+Human output is compact by default so agent terminals do not fill with full
+records. List and status commands show essential fields, truncate long URLs or
+text, cap human rows, and print the next command to use for details.
+
+Use these gradual disclosure paths when you need more:
+
+```bash
+shortlinks link list --limit 50
+shortlinks link get home --verbose
+shortlinks stats home --verbose
+shortlinks doctor --verbose
+shortlinks domain check has.na --verbose
+shortlinks events list --limit 50
+shortlinks webhooks list --limit 50
+shortlinks --json link get home
+```
+
+`--json` remains the machine-readable path and keeps full objects where commands
+already returned them. Prefer `--json` for automation and `--verbose` for human
+debugging.
+
+Example compact output:
+
+```text
+https://has.na/home -> https://example.com/landing-page-with-a-very-long-path... active
+Showing 1 link(s).
+Use `shortlinks link get <slug>` for details.
+```
+
+Before this behavior, detail/status commands such as `shortlinks link get home`,
+`shortlinks stats home`, and `shortlinks doctor` printed full JSON-like objects
+by default.
+
 ## CLI
 
 ```bash
@@ -64,26 +124,8 @@ shortlinks link enable home --domain has.na
 shortlinks stats home --domain has.na
 
 shortlinks serve --port 8787
-shortlinks serve --remote --port 8787
 shortlinks doctor
 ```
-
-## Admin API Security
-
-The redirect server includes an admin API for automation. Mutating routes such as
-`POST /api/links`, `POST /api/links/:slug/active`, `POST /api/domains`, and
-`DELETE /api/links/:slug` require an explicit API token. Set
-`SHORTLINKS_API_TOKEN` or `HASNA_SHORTLINKS_API_TOKEN` before using those routes:
-
-```bash
-export SHORTLINKS_API_TOKEN="$(openssl rand -hex 32)"
-shortlinks serve --remote --host 127.0.0.1 --port 8787 --api-path-prefix /_shortlinks/api
-```
-
-If no token is configured, write routes fail closed with `401` instead of
-accepting unauthenticated changes. Generated Cloudflare Workers are intended for
-public redirect traffic only; by default they do not forward `/api` or
-`/_shortlinks/api` to the shortlinks origin.
 
 ## Local Domain Setup
 
@@ -107,32 +149,34 @@ shortlinks domain add go.example.com --provider cloudflare
 
 Generated links use the default domain unless `--domain` is passed.
 
+Remove a domain (this also deletes all of its links and clicks):
+
+```bash
+shortlinks domain remove go.example.com
+```
+
 ## Cloudflare
 
 Create a dry-run plan:
 
 ```bash
 shortlinks cloudflare plan has.na \
-  --target shortlinks.example.com \
-  --origin https://shortlinks.example.com
+  --target shortlinks.hasna.xyz \
+  --origin https://shortlinks.hasna.xyz
 ```
 
-Write a Cloudflare Worker that forwards redirect requests to the server while
-preserving the original host. The generated Worker treats `/a` and `/api` as
-reserved public prefixes, and keeps known shortlinks admin API prefixes from
-being proxied to the shortlinks origin. If `ATTACHMENTS_ORIGIN` is configured,
-reserved attachment prefixes are sent there instead.
+Write a Cloudflare Worker that forwards requests to the redirect server while preserving the original host:
 
 ```bash
 shortlinks cloudflare worker \
   --worker shortlinks \
-  --origin https://shortlinks.example.com
+  --origin https://shortlinks.hasna.xyz
 ```
 
 Upsert DNS when `CLOUDFLARE_API_TOKEN` is available. Global API key auth is also supported with `CLOUDFLARE_API_KEY` plus `CLOUDFLARE_EMAIL`.
 
 ```bash
-shortlinks cloudflare dns has.na --target shortlinks.example.com
+shortlinks cloudflare dns has.na --target shortlinks.hasna.xyz
 ```
 
 ## Buying Domains
@@ -146,39 +190,28 @@ shortlinks domain buy new-short-domain.ai --dry-run
 
 This package does not install or call any removed `connect-*` packages.
 
-## Storage Sync
+## Storage modes
 
-Storage sync is optional and implemented inside this package:
+The client resolves ONE `Store` from the environment — there is no DSN on any client:
 
-```bash
-shortlinks storage migrate
-shortlinks storage push
-shortlinks storage pull
-shortlinks storage sync
-```
-
-For production storage, set `HASNA_SHORTLINKS_DATABASE_URL` or configure
-`~/.hasna/shortlinks/storage/config.json` to run in hybrid/remote mode with
-PostgreSQL. `SHORTLINKS_DATABASE_URL` remains supported as a rollback/local
-fallback. The storage database service name is `shortlinks`.
-Programmatic storage helpers are available from `@hasna/shortlinks/storage`.
-Use direct RDS mode for production and live management:
+- **local** (default): on-box SQLite. Every command, MCP tool, and SDK call reads
+  and writes the local database.
+- **self_hosted / cloud**: set `HASNA_SHORTLINKS_API_URL` + `HASNA_SHORTLINKS_API_KEY`
+  (and optionally `HASNA_SHORTLINKS_STORAGE_MODE`) to route every call to the cloud
+  `/v1` HTTP API with a bearer key. `self_hosted` and `cloud` are identical client
+  code; only the URL/key differ.
 
 ```bash
-shortlinks --remote create https://example.com
-shortlinks --remote link list
-shortlinks serve --remote --host 127.0.0.1 --port 8787
+# Route the client to the self-hosted cloud API (bearer key, never a DSN):
+export HASNA_SHORTLINKS_API_URL=https://shortlinks.hasna.xyz
+export HASNA_SHORTLINKS_API_KEY=hsk_...
+export HASNA_SHORTLINKS_STORAGE_MODE=self_hosted
+shortlinks doctor
 ```
 
-## AWS Origin
-
-For an apex domain that needs stable A records, `infra/aws-ec2-user-data.sh` bootstraps a small EC2 redirect origin with:
-
-- `@hasna/shortlinks` installed through Bun
-- direct reads and click writes against the `shortlinks` RDS database through the package-native PostgreSQL store
-- Caddy terminating HTTPS and proxying to `shortlinks serve`
-
-The script reads the RDS password from AWS Secrets Manager through the instance role; it does not contain secret values.
+The cloud server (`shortlinks-serve`, run on ECS Fargate) is the only component
+that holds a Postgres connection, and it opens its pool server-side through the
+sanctioned storage kit — the raw RDS DSN is never distributed to clients.
 
 ## Development
 

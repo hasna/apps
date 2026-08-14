@@ -24,8 +24,6 @@ export interface Link {
   title: string | null;
   active: boolean;
   expires_at: string | null;
-  max_uses: number | null;
-  used_count: number;
   metadata: Record<string, unknown>;
   machine_id: string | null;
   synced_at: string | null;
@@ -66,7 +64,6 @@ export interface CreateLinkInput {
   slug?: string;
   title?: string;
   expiresAt?: string;
-  maxUses?: number | null;
   metadata?: Record<string, unknown>;
   slugLength?: number;
 }

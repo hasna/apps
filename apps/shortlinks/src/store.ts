@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { ShortlinksDatabase, makeId, now } from "./database.js";
-import { formatShortUrl, loadConfig, normalizeHostname, updateConfig } from "./config.js";
+import { formatShortUrl, getClickSalt, loadConfig, normalizeHostname, updateConfig } from "./config.js";
 import { getMachineId } from "./machine.js";
 import { DEFAULT_SLUG_LENGTH, normalizeSlug, randomToken } from "./slug.js";
 import type { AddDomainInput, Click, ClickInput, CreateLinkInput, Domain, Link, LinkStats } from "./types.js";
@@ -44,8 +44,6 @@ function linkFromRow(row: LinkRow): Link {
   return {
     ...row,
     active: Boolean(row.active),
-    max_uses: row.max_uses ?? null,
-    used_count: row.used_count ?? 0,
     metadata: parseJsonObject(row.metadata),
     short_url: formatShortUrl(row.hostname, row.slug, publicBaseUrl),
   };
@@ -76,12 +74,6 @@ function isoOrNull(input: string | undefined): string | null {
   const date = new Date(input);
   if (Number.isNaN(date.getTime())) throw new Error(`Invalid date: ${input}`);
   return date.toISOString();
-}
-
-function normalizeMaxUses(value: number | null | undefined): number | null {
-  if (value === null || value === undefined) return null;
-  if (!Number.isInteger(value) || value <= 0) throw new Error("maxUses must be a positive integer.");
-  return value;
 }
 
 export class ShortlinksStore {
@@ -162,6 +154,18 @@ export class ShortlinksStore {
     return row ? domainFromRow(row) : null;
   }
 
+  deleteDomain(hostnameOrId: string): Domain {
+    const domain = this.getDomain(hostnameOrId);
+    if (!domain) throw new Error("Domain not found.");
+    // links + clicks cascade via ON DELETE CASCADE (foreign_keys pragma is ON).
+    this.database.db.query("DELETE FROM domains WHERE id = ?").run(domain.id);
+    const config = loadConfig();
+    if (config.defaultDomain && normalizeHostname(config.defaultDomain) === domain.hostname) {
+      updateConfig({ defaultDomain: undefined, publicBaseUrl: undefined });
+    }
+    return domain;
+  }
+
   getDefaultDomain(): Domain | null {
     const config = loadConfig();
     if (config.defaultDomain) {
@@ -183,7 +187,6 @@ export class ShortlinksStore {
     const timestamp = now();
     const machineId = getMachineId();
     const expiresAt = isoOrNull(input.expiresAt);
-    const maxUses = normalizeMaxUses(input.maxUses);
     const slug = input.slug
       ? normalizeSlug(input.slug)
       : this.generateAvailableSlug(domain.id, input.slugLength || DEFAULT_SLUG_LENGTH);
@@ -191,10 +194,10 @@ export class ShortlinksStore {
     try {
       this.database.db.query(`
         INSERT INTO links (
-          id, domain_id, slug, destination_url, title, active, expires_at, max_uses, used_count, metadata,
+          id, domain_id, slug, destination_url, title, active, expires_at, metadata,
           machine_id, synced_at, created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, 1, ?, ?, 0, ?, ?, NULL, ?, ?)
+        VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, NULL, ?, ?)
       `).run(
         makeId("lnk"),
         domain.id,
@@ -202,7 +205,6 @@ export class ShortlinksStore {
         destinationUrl,
         input.title || null,
         expiresAt,
-        maxUses,
         JSON.stringify(input.metadata || {}),
         machineId,
         timestamp,
@@ -217,19 +219,6 @@ export class ShortlinksStore {
     }
 
     return this.getLink(domain.hostname, slug)!;
-  }
-
-  consumeLinkUse(link: Link): Link | null {
-    const timestamp = now();
-    const result = this.database.db.query(`
-      UPDATE links
-      SET used_count = used_count + 1, updated_at = ?, synced_at = NULL
-      WHERE id = ?
-        AND active = 1
-        AND (max_uses IS NULL OR used_count < max_uses)
-    `).run(timestamp, link.id);
-    if (result.changes === 0) return null;
-    return this.getLink(link.hostname, link.slug);
   }
 
   listLinks(options: { domain?: string; activeOnly?: boolean; limit?: number } = {}): Link[] {
@@ -394,7 +383,6 @@ export class ShortlinksStore {
   }
 
   private hashIp(ip: string): string {
-    const salt = process.env.SHORTLINKS_CLICK_SALT || "shortlinks-local";
-    return createHash("sha256").update(`${salt}:${ip}`).digest("hex");
+    return createHash("sha256").update(`${getClickSalt()}:${ip}`).digest("hex");
   }
 }

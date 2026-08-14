@@ -1,23 +1,26 @@
 #!/usr/bin/env bun
-import { Command, Option } from "commander";
-import { registerEventsCommands } from "@hasna/events/commander";
+import {
+  EventsClient,
+  sanitizeChannelForOutput,
+  sanitizeChannelsForOutput,
+  type ChannelConfig,
+  type EventFilter,
+  type TransportKind,
+} from "@hasna/events";
+import { Command } from "commander";
 import chalk from "chalk";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
-import { ShortlinksStore } from "../store.js";
-import { PgShortlinksStore } from "../pg-store.js";
+import { resolveStore, type Store } from "../client-store.js";
+import type { TotalStats } from "../store-interface.js";
 import { getConfigPath, getDataDir, getDatabasePath, loadConfig, saveConfig, updateConfig } from "../config.js";
-import { ShortlinksApiClient } from "../api-client.js";
 import { serveShortlinks } from "../server.js";
 import { createCloudflarePlan, writeWorkerFiles, upsertCloudflareDnsRecord } from "../cloudflare.js";
 import { runDomains } from "../domains-cli.js";
 import { createLocalSetupPlan, registerMachinesDns } from "../local.js";
-import { PG_MIGRATIONS } from "../pg-migrations.js";
-import type { Link } from "../types.js";
-
-type RuntimeStore = ShortlinksStore | PgShortlinksStore | ShortlinksApiClient;
+import type { Domain, Link, LinkStats } from "../types.js";
 
 function getPackageVersion(): string {
   try {
@@ -52,56 +55,19 @@ function handleError(error: unknown): never {
   process.exit(1);
 }
 
-function withStore<T>(fn: (store: ShortlinksStore) => T): T {
-  const store = new ShortlinksStore(program.opts().db);
-  try {
-    return fn(store);
-  } finally {
-    store.close();
-  }
-}
-
-async function withStoreAsync<T>(fn: (store: ShortlinksStore) => Promise<T>): Promise<T> {
-  const store = new ShortlinksStore(program.opts().db);
+/**
+ * Run `fn` with the resolved client {@link Store}. The store is the cloud
+ * ApiStore when the client flip is on (HASNA_SHORTLINKS_API_URL + _API_KEY /
+ * _STORAGE_MODE), otherwise the on-box LocalStore. There is no DSN/postgres
+ * client path: a client never touches the raw RDS.
+ */
+async function withRuntimeStore<T>(fn: (store: Store) => T | Promise<T>): Promise<T> {
+  const store = resolveStore(process.env, { dbPath: program.opts().db });
   try {
     return await fn(store);
   } finally {
-    store.close();
+    await store.close();
   }
-}
-
-function storeMode(): "local" | "remote" | "api" {
-  const opts = program.opts();
-  const config = loadConfig();
-  const value = String(opts.remote ? "remote" : opts.store || process.env.SHORTLINKS_STORE || config.mode || "local").toLowerCase();
-  if (value !== "local" && value !== "remote" && value !== "api") throw new Error(`Unknown store mode: ${value}`);
-  return value;
-}
-
-async function withRuntimeStore<T>(fn: (store: RuntimeStore) => T | Promise<T>): Promise<T> {
-  const mode = storeMode();
-  if (mode === "api") {
-    const store = new ShortlinksApiClient({ baseUrl: program.opts().apiUrl });
-    return await fn(store);
-  }
-  if (mode === "remote") {
-    const store = await PgShortlinksStore.fromStorage("shortlinks");
-    try {
-      return await fn(store);
-    } finally {
-      await store.close();
-    }
-  }
-  const store = new ShortlinksStore(program.opts().db);
-  try {
-    return await fn(store);
-  } finally {
-    store.close();
-  }
-}
-
-function formatLink(link: Link): string {
-  return `${chalk.green(link.short_url || `${link.hostname}/${link.slug}`)} ${chalk.dim("->")} ${link.destination_url}`;
 }
 
 function commandExists(command: string): boolean {
@@ -109,22 +75,450 @@ function commandExists(command: string): boolean {
   return result.status === 0;
 }
 
-function parseMaxUses(opts: { maxUses?: string; maxClicks?: string }): number | undefined {
-  const raw = opts.maxUses ?? opts.maxClicks;
-  if (!raw) return undefined;
-  const parsed = Number(raw);
-  if (!Number.isInteger(parsed) || parsed <= 0) throw new Error("--max-uses must be a positive integer");
+const DEFAULT_HUMAN_LIMIT = 20;
+const DEFAULT_JSON_LIMIT = 100;
+const TEXT_LIMIT = 88;
+const EXTERNAL_OUTPUT_LIMIT = 20;
+const EXTERNAL_OUTPUT_WIDTH = 120;
+
+function parseLimit(value: string | number | undefined, fallback: number, label = "--limit"): number {
+  if (value === undefined || value === null || value === "") return fallback;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) throw new Error(`${label} must be a positive integer.`);
   return parsed;
+}
+
+function humanLimit(opts: { limit?: string | number }): number {
+  return parseLimit(opts.limit, DEFAULT_HUMAN_LIMIT);
+}
+
+function jsonLimit(opts: { limit?: string | number }): number | undefined {
+  return opts.limit === undefined ? undefined : parseLimit(opts.limit, DEFAULT_JSON_LIMIT);
+}
+
+function truncateText(value: string | null | undefined, max = TEXT_LIMIT): string {
+  const text = value || "";
+  return text.length > max ? `${text.slice(0, Math.max(0, max - 3))}...` : text;
+}
+
+function yesNo(value: boolean): string {
+  return value ? "yes" : "no";
+}
+
+function printHint(message: string): void {
+  console.log(chalk.dim(message));
+}
+
+function printVerbose(data: unknown, opts: { verbose?: boolean }): boolean {
+  if (!opts.verbose) return false;
+  console.log(JSON.stringify(data, null, 2));
+  return true;
+}
+
+function formatLink(link: Link, maxDestinationLength = 72): string {
+  return `${chalk.green(link.short_url || `${link.hostname}/${link.slug}`)} ${chalk.dim("->")} ${truncateText(link.destination_url, maxDestinationLength)}`;
+}
+
+function printBoundedTextOutput(text: string, stream: "stdout" | "stderr"): boolean {
+  const lines = text.trim().split(/\r?\n/).filter(Boolean);
+  let truncated = lines.length > EXTERNAL_OUTPUT_LIMIT;
+  for (const line of lines.slice(0, EXTERNAL_OUTPUT_LIMIT)) {
+    const output = truncateText(line, EXTERNAL_OUTPUT_WIDTH);
+    if (output !== line) truncated = true;
+    if (stream === "stderr") console.error(output);
+    else console.log(output);
+  }
+  return truncated;
+}
+
+function printExternalCommandResult(
+  result: ReturnType<typeof runDomains>,
+  opts: { verbose?: boolean },
+  label: string,
+): void {
+  if (opts.verbose) {
+    if (result.stdout.trim()) console.log(result.stdout.trim());
+    if (result.stderr.trim()) console.error(result.stderr.trim());
+    return;
+  }
+
+  const stdoutTruncated = result.stdout.trim() ? printBoundedTextOutput(result.stdout, "stdout") : false;
+  const stderrTruncated = result.stderr.trim() ? printBoundedTextOutput(result.stderr, "stderr") : false;
+  if (stdoutTruncated || stderrTruncated) printHint(`Use --verbose or --json for full ${label} command output.`);
+}
+
+function printDomainSummary(domain: Domain): void {
+  console.log(`${domain.default_domain ? "*" : " "} ${domain.hostname} ${chalk.dim(domain.provider)} default=${yesNo(domain.default_domain)}`);
+  if (domain.origin_url) console.log(`  origin: ${truncateText(domain.origin_url)}`);
+  if (domain.cloudflare_worker_name) console.log(`  worker: ${domain.cloudflare_worker_name}`);
+  printHint("Use `shortlinks domain get <hostname> --verbose` or `--json` for full details.");
+}
+
+function printLinkSummary(link: Link): void {
+  console.log(formatLink(link));
+  console.log(`  slug: ${link.slug}`);
+  console.log(`  domain: ${link.hostname}`);
+  console.log(`  active: ${yesNo(link.active)}`);
+  if (link.title) console.log(`  title: ${truncateText(link.title)}`);
+  if (link.expires_at) console.log(`  expires: ${link.expires_at}`);
+  printHint("Use `shortlinks link get <slug> --verbose` or `--json` for full details.");
+}
+
+function printStatsSummary(stats: LinkStats | { domains: number; links: number; clicks: number }): void {
+  if ("link" in stats) {
+    console.log(`${stats.link.short_url || `${stats.link.hostname}/${stats.link.slug}`} clicks=${stats.clicks}`);
+    console.log(`  destination: ${truncateText(stats.link.destination_url)}`);
+    console.log(`  last clicked: ${stats.last_clicked_at || "never"}`);
+    const topReferrer = stats.top_referrers[0];
+    const topAgent = stats.top_user_agents[0];
+    if (topReferrer) console.log(`  top referrer: ${truncateText(topReferrer.referer || "(direct)", 72)} (${topReferrer.clicks})`);
+    if (topAgent) console.log(`  top user agent: ${truncateText(topAgent.user_agent || "(unknown)", 72)} (${topAgent.clicks})`);
+    printHint("Use `shortlinks stats <slug> --verbose` or `--json` for full stats.");
+    return;
+  }
+  console.log(`domains=${stats.domains} links=${stats.links} clicks=${stats.clicks}`);
+}
+
+function printConfigSummary(data: { path: string; config: unknown }): void {
+  const config = data.config as {
+    defaultDomain?: string;
+    publicBaseUrl?: string;
+    cloudflare?: { accountId?: string; workerName?: string; origin?: string };
+  };
+  console.log("shortlinks config");
+  console.log(`  path: ${data.path}`);
+  console.log(`  default domain: ${config.defaultDomain || "(unset)"}`);
+  console.log(`  public base URL: ${config.publicBaseUrl || "(unset)"}`);
+  if (config.cloudflare) {
+    console.log(`  cloudflare worker: ${config.cloudflare.workerName || "(unset)"}`);
+    console.log(`  cloudflare origin: ${config.cloudflare.origin || "(unset)"}`);
+  }
+  printHint("Use `shortlinks config show --verbose` or `--json` for full config.");
+}
+
+function printCloudflarePlanSummary(plan: {
+  hostname: string;
+  target: string;
+  proxied: boolean;
+  workerName: string;
+  origin: string;
+  wranglerCommand: string;
+}): void {
+  console.log(`Cloudflare plan for ${plan.hostname}`);
+  console.log(`  CNAME: ${plan.hostname} -> ${plan.target} proxied=${yesNo(plan.proxied)}`);
+  console.log(`  worker: ${plan.workerName}`);
+  console.log(`  origin: ${truncateText(plan.origin)}`);
+  console.log(`  deploy: ${plan.wranglerCommand}`);
+  printHint("Use `--verbose` or `--json` for the full DNS payload.");
+}
+
+function printCloudflareDnsSummary(result: unknown): void {
+  if (result && typeof result === "object" && "dnsRecord" in result) {
+    printCloudflarePlanSummary(result as unknown as Parameters<typeof printCloudflarePlanSummary>[0]);
+    return;
+  }
+  const value = result as { id?: string; action?: string };
+  console.log(`Cloudflare DNS ${value.action || "updated"} ${value.id || ""}`.trim());
+  printHint("Use `--json` for the full API result.");
+}
+
+function printLocalPlanSummary(plan: {
+  domain: string;
+  targetHost: string;
+  port: number;
+  hostsEntry: string;
+  caddySnippet: string;
+  certPath: string;
+  keyPath: string;
+  machinesCommand: string;
+}): void {
+  console.log(`Local plan for ${plan.domain}`);
+  console.log(`  target: ${plan.targetHost}:${plan.port}`);
+  console.log(`  hosts: ${plan.hostsEntry}`);
+  console.log(`  cert: ${truncateText(plan.certPath)}`);
+  console.log(`  key: ${truncateText(plan.keyPath)}`);
+  console.log(`  machines: ${plan.machinesCommand}`);
+  printHint("Use `--verbose` or `--json` for the full Caddy snippet.");
+}
+
+function printDoctorSummary(data: {
+  service: string;
+  store: string;
+  db_path: string;
+  db_exists: boolean;
+  stats: { domains: number; links: number; clicks: number };
+  commands: Record<string, boolean>;
+  environment: Record<string, unknown>;
+}): void {
+  const missingCommands = Object.entries(data.commands).filter(([, present]) => !present).map(([name]) => name);
+  const presentEnv = Object.entries(data.environment).filter(([, present]) => present).map(([name]) => name);
+  console.log(`${data.service} doctor`);
+  console.log(`  store: ${data.store}`);
+  console.log(`  db: ${data.db_exists ? "found" : "missing"} ${truncateText(data.db_path)}`);
+  console.log(`  stats: domains=${data.stats.domains} links=${data.stats.links} clicks=${data.stats.clicks}`);
+  console.log(`  commands: ${missingCommands.length ? `missing ${missingCommands.join(", ")}` : "ok"}`);
+  console.log(`  env: ${presentEnv.length ? presentEnv.join(", ") : "no optional env vars detected"}`);
+  printHint("Use `shortlinks doctor --verbose` or `--json` for paths and full readiness data.");
+}
+
+function parseNumber(value: string | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) throw new Error(`Expected a number, got ${value}`);
+  return parsed;
+}
+
+function collectValues(value: string, previous: string[] = []): string[] {
+  return [...previous, value];
+}
+
+function parseJsonObject(value: string | undefined, fallback: Record<string, unknown> = {}): Record<string, unknown> {
+  if (!value) return fallback;
+  const parsed = JSON.parse(value);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Expected a JSON object.");
+  }
+  return parsed as Record<string, unknown>;
+}
+
+function parseHeaders(values: string[] = []): Record<string, string> {
+  const headers: Record<string, string> = {};
+  for (const value of values) {
+    const index = value.indexOf("=");
+    if (index <= 0) throw new Error(`Header must be name=value: ${value}`);
+    headers[value.slice(0, index)] = value.slice(index + 1);
+  }
+  return headers;
+}
+
+function parseEventFilter(opts: {
+  type?: string;
+  source?: string;
+  subject?: string;
+  severity?: string;
+}): EventFilter[] {
+  const filter: EventFilter = {};
+  if (opts.type) filter.type = opts.type;
+  if (opts.source) filter.source = opts.source;
+  if (opts.subject) filter.subject = opts.subject;
+  if (opts.severity) filter.severity = opts.severity;
+  return Object.keys(filter).length ? [filter] : [];
+}
+
+function createEventsClient(): EventsClient {
+  return new EventsClient();
+}
+
+function formatEventRow(event: { time: string; id: string; source: string; type: string; severity: string; subject?: string }): string {
+  return `${event.time}\t${event.id}\t${event.source}\t${event.type}\t${event.severity}${event.subject ? `\t${truncateText(event.subject, 48)}` : ""}`;
+}
+
+function formatChannelTarget(channel: ChannelConfig): string {
+  return channel.webhook?.url ?? channel.command?.command ?? channel.transport;
+}
+
+function registerCompactEventsCommands(program: Command): void {
+  const webhooks = program.command("webhooks").description("Manage Hasna event webhook subscriptions");
+
+  webhooks
+    .command("add")
+    .description("Add or replace a webhook or command subscription")
+    .argument("<target>", "Webhook URL or command binary")
+    .requiredOption("--id <id>", "Subscription/channel identifier")
+    .option("--transport <kind>", "Transport kind: webhook or command", "webhook")
+    .option("--name <name>", "Display name")
+    .option("--type <pattern>", "Event type filter, e.g. todos.task.*")
+    .option("--source <pattern>", "Event source filter")
+    .option("--subject <pattern>", "Event subject filter")
+    .option("--severity <pattern>", "Event severity filter")
+    .option("--secret <secret>", "Webhook HMAC secret")
+    .option("--header <name=value...>", "Webhook header", collectValues, [])
+    .option("--arg <arg...>", "Command argument", collectValues, [])
+    .option("--timeout-ms <ms>", "Transport timeout in milliseconds", parseNumber)
+    .option("--retry-attempts <n>", "Maximum delivery attempts", parseNumber)
+    .option("--retry-backoff-ms <ms>", "Initial retry backoff in milliseconds", parseNumber)
+    .option("--redact <path...>", "Event field path to redact before delivery", collectValues, [])
+    .option("--disabled", "Create channel disabled", false)
+    .option("-j, --json", "Output JSON")
+    .action(async (target, opts) => {
+      try {
+        const transport = opts.transport as TransportKind;
+        const channel: Omit<ChannelConfig, "createdAt" | "updatedAt"> = {
+          id: opts.id,
+          name: opts.name,
+          enabled: !opts.disabled,
+          transport,
+          filters: parseEventFilter(opts),
+          retry: opts.retryAttempts || opts.retryBackoffMs ? { maxAttempts: opts.retryAttempts, backoffMs: opts.retryBackoffMs } : undefined,
+          redact: opts.redact?.length ? { paths: opts.redact } : undefined,
+        };
+        if (transport === "webhook") {
+          channel.webhook = { url: target, secret: opts.secret, headers: parseHeaders(opts.header), timeoutMs: opts.timeoutMs };
+        } else if (transport === "command") {
+          channel.command = { command: target, args: opts.arg ?? [], timeoutMs: opts.timeoutMs };
+        } else {
+          throw new Error(`Transport ${transport} is reserved for future use and cannot be added yet.`);
+        }
+        const saved = sanitizeChannelForOutput(await createEventsClient().addChannel(channel));
+        print(saved, opts, () => console.log(`Added ${saved.transport} channel ${saved.id}`));
+      } catch (error) {
+        handleError(error);
+      }
+    });
+
+  webhooks
+    .command("list")
+    .description("List configured subscriptions")
+    .option("--limit <n>", "Maximum rows")
+    .option("-j, --json", "Output JSON")
+    .action(async (opts) => {
+      try {
+        const channels = sanitizeChannelsForOutput(await createEventsClient().listChannels());
+        const outputChannels = useJson(opts) && opts.limit === undefined ? channels : channels.slice(0, useJson(opts) ? parseLimit(opts.limit, channels.length) : humanLimit(opts));
+        print(outputChannels, opts, () => {
+          if (!channels.length) {
+            console.log("No channels configured.");
+            return;
+          }
+          for (const channel of outputChannels) {
+            console.log(`${channel.id}\t${channel.enabled ? "enabled" : "disabled"}\t${channel.transport}\t${truncateText(formatChannelTarget(channel), 80)}`);
+          }
+          console.log(chalk.dim(`Showing ${outputChannels.length} of ${channels.length} channel(s).`));
+          if (channels.length > outputChannels.length) printHint(`Use --limit ${channels.length} or --json for more.`);
+        });
+      } catch (error) {
+        handleError(error);
+      }
+    });
+
+  webhooks
+    .command("remove")
+    .description("Remove a subscription")
+    .argument("<id>", "Subscription/channel identifier")
+    .option("-j, --json", "Output JSON")
+    .action(async (id, opts) => {
+      try {
+        const removed = await createEventsClient().removeChannel(id);
+        print({ removed }, opts, () => console.log(removed ? `Removed ${id}` : `Channel not found: ${id}`));
+      } catch (error) {
+        handleError(error);
+      }
+    });
+
+  webhooks
+    .command("test")
+    .description("Send a test event to one subscription")
+    .argument("<id>", "Subscription/channel identifier")
+    .option("--type <type>", "Event type", "events.test")
+    .option("--subject <subject>", "Event subject")
+    .option("--message <message>", "Event message", "Hasna events test delivery")
+    .option("--data <json>", "Event data JSON object")
+    .option("-j, --json", "Output JSON")
+    .action(async (id, opts) => {
+      try {
+        const result = await createEventsClient().testChannel(id, {
+          source: "shortlinks",
+          type: opts.type,
+          subject: opts.subject ?? id,
+          message: opts.message,
+          data: parseJsonObject(opts.data, { test: true }),
+        });
+        print(result, opts, () => console.log(`${result.status}: ${result.channelId}`));
+      } catch (error) {
+        handleError(error);
+      }
+    });
+
+  const events = program.command("events").description("Emit, list, and replay Hasna events");
+
+  events
+    .command("emit")
+    .description("Emit an event from this app")
+    .argument("<type>", "Event type")
+    .option("--source <source>", "Event source override")
+    .option("--subject <subject>", "Event subject")
+    .option("--severity <severity>", "Event severity", "info")
+    .option("--message <message>", "Event message")
+    .option("--dedupe-key <key>", "Dedupe key")
+    .option("--data <json>", "Event data JSON object")
+    .option("--metadata <json>", "Event metadata JSON object")
+    .option("--no-deliver", "Record without delivering")
+    .option("--no-dedupe", "Allow duplicate id/dedupeKey events")
+    .option("-j, --json", "Output JSON")
+    .action(async (type, opts) => {
+      try {
+        const result = await createEventsClient().emit({
+          source: opts.source ?? "shortlinks",
+          type,
+          subject: opts.subject,
+          severity: opts.severity,
+          message: opts.message,
+          dedupeKey: opts.dedupeKey,
+          data: parseJsonObject(opts.data, {}),
+          metadata: parseJsonObject(opts.metadata, {}),
+        }, { deliver: opts.deliver, dedupe: opts.dedupe });
+        print(result, opts, () => console.log(`${result.deduped ? "Deduped" : "Emitted"} ${result.event.id} to ${result.deliveries.length} channel(s)`));
+      } catch (error) {
+        handleError(error);
+      }
+    });
+
+  events
+    .command("list")
+    .description("List recorded events")
+    .option("--source <source>", "Filter by source")
+    .option("--type <type>", "Filter by type")
+    .option("--limit <n>", "Maximum rows")
+    .option("-j, --json", "Output JSON")
+    .action(async (opts) => {
+      try {
+        let rows = await createEventsClient().listEvents();
+        if (opts.source) rows = rows.filter((event) => event.source === opts.source);
+        if (opts.type) rows = rows.filter((event) => event.type === opts.type);
+        const limit = useJson(opts) ? jsonLimit(opts) : humanLimit(opts);
+        const outputRows = limit === undefined ? rows : rows.slice(-limit);
+        print(outputRows, opts, () => {
+          if (!rows.length) {
+            console.log("No events recorded.");
+            return;
+          }
+          for (const event of outputRows) console.log(formatEventRow(event));
+          console.log(chalk.dim(`Showing ${outputRows.length} of ${rows.length} event(s).`));
+          if (rows.length > outputRows.length) printHint(`Use --limit ${rows.length} or --json for more.`);
+        });
+      } catch (error) {
+        handleError(error);
+      }
+    });
+
+  events
+    .command("replay")
+    .description("Replay recorded events")
+    .option("--id <id>", "Replay one event id")
+    .option("--source <source>", "Filter by source")
+    .option("--type <type>", "Filter by type")
+    .option("--dry-run", "Preview without delivery", false)
+    .option("-j, --json", "Output JSON")
+    .action(async (opts) => {
+      try {
+        const result = await createEventsClient().replay({
+          eventId: opts.id,
+          source: opts.source,
+          type: opts.type,
+          dryRun: opts.dryRun,
+        });
+        print(result, opts, () => console.log(`Replayed ${result.events.length} event(s), ${result.deliveries.length} delivery result(s)`));
+      } catch (error) {
+        handleError(error);
+      }
+    });
 }
 
 program
   .name("shortlinks")
-  .description("CLI-only shortlink manager with custom domains, click tracking, Cloudflare helpers, and storage sync")
+  .description("Shortlink manager with custom domains, click tracking, and Cloudflare helpers — local SQLite or self-hosted cloud /v1 API storage")
   .version(getPackageVersion())
-  .option("--db <path>", "SQLite database path")
-  .option("--store <mode>", "Data store mode: local, remote, or api", process.env.SHORTLINKS_STORE || loadConfig().mode || "local")
-  .option("--api-url <url>", "Shortlinks HTTP API base URL")
-  .addOption(new Option("--remote", "Use the shortlinks PostgreSQL storage database directly"))
+  .option("--db <path>", "SQLite database path (local mode only)")
   .option("-j, --json", "Output JSON for agents and scripts");
 
 program
@@ -147,12 +541,12 @@ program
           config.defaultDomain = domain.hostname;
           config.publicBaseUrl = opts.publicBaseUrl || `https://${domain.hostname}`;
         }
-        if (storeMode() === "local") saveConfig(config);
+        if (store.kind === "local") saveConfig(config);
         return {
           data_dir: getDataDir(),
           config_path: getConfigPath(),
           db_path: getDatabasePath(program.opts().db),
-          store: storeMode(),
+          store: store.kind,
           config,
           stats: await store.totalStats(),
         };
@@ -173,47 +567,29 @@ const configCmd = program.command("config").description("View and update local c
 configCmd
   .command("show")
   .description("Show local config")
+  .option("--verbose", "Show full config object")
   .option("-j, --json", "Output JSON")
   .action((opts) => {
-    const config = loadConfig();
-    const data = {
-      path: getConfigPath(),
-      config: {
-        ...config,
-        api: config.api ? { ...config.api, token: config.api.token ? "****" : "" } : undefined,
-      },
-    };
-    print(data, opts, () => console.log(JSON.stringify(data, null, 2)));
+    const data = { path: getConfigPath(), config: loadConfig() };
+    print(data, opts, () => {
+      if (printVerbose(data, opts)) return;
+      printConfigSummary(data);
+    });
   });
 
 configCmd
   .command("set <key> <value>")
-  .description("Set config value: mode, default-domain, public-base-url, api-url, api-token, api-token-env, cloudflare-account-id, cloudflare-worker-name, cloudflare-origin")
+  .description("Set config value: default-domain, public-base-url, cloudflare-account-id, cloudflare-worker-name, cloudflare-origin")
   .option("-j, --json", "Output JSON")
   .action((key, value, opts) => {
     try {
       let config = loadConfig();
       switch (key) {
-        case "mode": {
-          const mode = value.toLowerCase();
-          if (mode !== "local" && mode !== "remote" && mode !== "api") throw new Error("mode must be local, remote, or api");
-          config = updateConfig({ mode: mode as "local" | "remote" | "api" });
-          break;
-        }
         case "default-domain":
           config = updateConfig({ defaultDomain: value, publicBaseUrl: config.publicBaseUrl || `https://${value}` });
           break;
         case "public-base-url":
           config = updateConfig({ publicBaseUrl: value });
-          break;
-        case "api-url":
-          config = updateConfig({ api: { baseUrl: value.replace(/\/+$/, "") } });
-          break;
-        case "api-token":
-          config = updateConfig({ api: { token: value } });
-          break;
-        case "api-token-env":
-          config = updateConfig({ api: { tokenEnv: value } });
           break;
         case "cloudflare-account-id":
           config = updateConfig({ cloudflare: { accountId: value } });
@@ -227,11 +603,7 @@ configCmd
         default:
           throw new Error(`Unknown config key: ${key}`);
       }
-      const masked = {
-        ...config,
-        api: config.api ? { ...config.api, token: config.api.token ? "****" : "" } : undefined,
-      };
-      print({ path: getConfigPath(), config: masked }, opts, () => console.log(chalk.green(`Set ${key}.`)));
+      print({ path: getConfigPath(), config }, opts, () => console.log(chalk.green(`Set ${key}.`)));
     } catch (error) {
       handleError(error);
     }
@@ -274,11 +646,14 @@ domainCmd
 domainCmd
   .command("list")
   .description("List configured domains")
+  .option("--limit <n>", "Maximum rows")
   .option("-j, --json", "Output JSON")
   .action(async (opts) => {
     try {
-      const domains = await withRuntimeStore((store) => store.listDomains());
-      print(domains, opts, () => {
+      const allDomains = await withRuntimeStore((store) => store.listDomains());
+      const outputDomains = useJson(opts) && opts.limit === undefined ? allDomains : allDomains.slice(0, useJson(opts) ? parseLimit(opts.limit, allDomains.length) : humanLimit(opts));
+      print(outputDomains, opts, () => {
+        const domains = outputDomains;
         if (domains.length === 0) {
           console.log(chalk.dim("No domains configured."));
           return;
@@ -287,6 +662,9 @@ domainCmd
           const marker = domain.default_domain ? chalk.green("*") : " ";
           console.log(`${marker} ${domain.hostname} ${chalk.dim(domain.provider)}`);
         }
+        console.log(chalk.dim(`Showing ${domains.length} of ${allDomains.length} domain(s).`));
+        if (allDomains.length > domains.length) printHint(`Use --limit ${allDomains.length} or --json for more.`);
+        printHint("Use `shortlinks domain get <hostname>` for details.");
       });
     } catch (error) {
       handleError(error);
@@ -295,13 +673,36 @@ domainCmd
 
 domainCmd
   .command("get <hostname>")
+  .alias("show")
   .description("Show a configured domain")
+  .option("--verbose", "Show full domain object")
   .option("-j, --json", "Output JSON")
   .action(async (hostname, opts) => {
     try {
       const domain = await withRuntimeStore((store) => store.getDomain(hostname));
       if (!domain) throw new Error("Domain not found.");
-      print(domain, opts, () => console.log(JSON.stringify(domain, null, 2)));
+      print(domain, opts, () => {
+        if (printVerbose(domain, opts)) return;
+        printDomainSummary(domain);
+      });
+    } catch (error) {
+      handleError(error);
+    }
+  });
+
+domainCmd
+  .command("remove <hostname>")
+  .alias("delete")
+  .alias("rm")
+  .description("Delete a domain and all of its links and clicks")
+  .option("-j, --json", "Output JSON")
+  .action(async (hostname, opts) => {
+    try {
+      const domain = await withRuntimeStore((store) => store.deleteDomain(hostname));
+      print({ deleted: true, hostname: domain.hostname }, opts, () => {
+        console.log(chalk.green(`Domain removed: ${domain.hostname}`));
+        console.log(chalk.dim("Its links and clicks were deleted."));
+      });
     } catch (error) {
       handleError(error);
     }
@@ -316,6 +717,7 @@ domainCmd
   .option("--target <hostname>", "CNAME target for Cloudflare DNS")
   .option("--zone-id <id>", "Cloudflare zone ID")
   .option("--dry-run", "Show the Cloudflare plan without changing DNS")
+  .option("--verbose", "Show full setup result")
   .option("-j, --json", "Output JSON")
   .action(async (hostname, opts) => {
     try {
@@ -337,8 +739,10 @@ domainCmd
         return { domain, cloudflare };
       });
       print(result, opts, () => {
+        if (printVerbose(result, opts)) return;
         console.log(chalk.green(`Domain ready: ${result.domain.hostname}`));
-        if (result.cloudflare) console.log(JSON.stringify(result.cloudflare, null, 2));
+        if (result.cloudflare) printCloudflareDnsSummary(result.cloudflare);
+        if (!result.cloudflare) printHint("Use --cloudflare --dry-run to preview DNS changes.");
       });
     } catch (error) {
       handleError(error);
@@ -349,12 +753,12 @@ domainCmd
   .command("check <hostname>")
   .description("Check domain availability through @hasna/domains")
   .option("--dry-run", "Print the command without running it")
+  .option("--verbose", "Show full domains CLI output")
   .option("-j, --json", "Output JSON")
   .action((hostname, opts) => {
     const result = runDomains("check", hostname, { dryRun: opts.dryRun });
     print(result, opts, () => {
-      if (result.stdout.trim()) console.log(result.stdout.trim());
-      if (result.stderr.trim()) console.error(result.stderr.trim());
+      printExternalCommandResult(result, opts, "domains check");
       if (result.status !== 0) process.exit(result.status || 1);
     });
   });
@@ -363,12 +767,12 @@ domainCmd
   .command("buy <hostname>")
   .description("Buy a domain through @hasna/domains / Route 53")
   .option("--dry-run", "Print the command without running it")
+  .option("--verbose", "Show full domains CLI output")
   .option("-j, --json", "Output JSON")
   .action((hostname, opts) => {
     const result = runDomains("buy", hostname, { dryRun: opts.dryRun });
     print(result, opts, () => {
-      if (result.stdout.trim()) console.log(result.stdout.trim());
-      if (result.stderr.trim()) console.error(result.stderr.trim());
+      printExternalCommandResult(result, opts, "domains buy");
       if (result.status !== 0) process.exit(result.status || 1);
     });
   });
@@ -383,7 +787,6 @@ async function createLinkAction(url: string, opts: any): Promise<void> {
       slug: opts.slug,
       title: opts.title,
       expiresAt: opts.expires,
-      maxUses: parseMaxUses(opts),
       slugLength: opts.length ? Number(opts.length) : undefined,
     }));
     print(link, opts, () => console.log(formatLink(link)));
@@ -399,8 +802,6 @@ linkCmd
   .option("--slug <slug>", "Custom slug")
   .option("--title <title>", "Human title")
   .option("--expires <date>", "Expiration date")
-  .option("--max-uses <count>", "Maximum successful redirects")
-  .option("--max-clicks <count>", "Alias for --max-uses")
   .option("--length <n>", "Generated slug length", "7")
   .option("-j, --json", "Output JSON")
   .action(createLinkAction);
@@ -412,8 +813,6 @@ program
   .option("--slug <slug>", "Custom slug")
   .option("--title <title>", "Human title")
   .option("--expires <date>", "Expiration date")
-  .option("--max-uses <count>", "Maximum successful redirects")
-  .option("--max-clicks <count>", "Alias for --max-uses")
   .option("--length <n>", "Generated slug length", "7")
   .option("-j, --json", "Output JSON")
   .action(createLinkAction);
@@ -423,21 +822,30 @@ linkCmd
   .description("List shortlinks")
   .option("--domain <hostname>", "Filter by domain")
   .option("--active", "Only active links")
-  .option("--limit <n>", "Maximum rows", "100")
+  .option("--limit <n>", "Maximum rows")
   .option("-j, --json", "Output JSON")
   .action(async (opts) => {
     try {
+      const requestedLimit = useJson(opts) ? jsonLimit(opts) : humanLimit(opts) + 1;
       const links = await withRuntimeStore((store) => store.listLinks({
         domain: opts.domain,
         activeOnly: opts.active,
-        limit: Number(opts.limit),
+        limit: requestedLimit,
       }));
       print(links, opts, () => {
         if (links.length === 0) {
           console.log(chalk.dim("No links yet."));
           return;
         }
-        for (const link of links) console.log(formatLink(link));
+        const limit = humanLimit(opts);
+        const displayed = links.slice(0, limit);
+        for (const link of displayed) {
+          const status = link.active ? "active" : "disabled";
+          console.log(`${formatLink(link)} ${chalk.dim(status)}`);
+        }
+        console.log(chalk.dim(`Showing ${displayed.length}${links.length > displayed.length ? "+" : ""} link(s).`));
+        if (links.length > displayed.length) printHint(`Use --limit ${limit * 2} or --json to see more rows.`);
+        printHint("Use `shortlinks link get <slug>` for details.");
       });
     } catch (error) {
       handleError(error);
@@ -446,14 +854,19 @@ linkCmd
 
 linkCmd
   .command("get <slug>")
+  .alias("show")
   .description("Show a shortlink")
   .option("--domain <hostname>", "Domain to use")
+  .option("--verbose", "Show full shortlink object")
   .option("-j, --json", "Output JSON")
   .action(async (slug, opts) => {
     try {
       const link = await withRuntimeStore((store) => opts.domain ? store.getLink(opts.domain, slug) : store.getLink(slug));
       if (!link) throw new Error("Link not found.");
-      print(link, opts, () => console.log(JSON.stringify(link, null, 2)));
+      print(link, opts, () => {
+        if (printVerbose(link, opts)) return;
+        printLinkSummary(link);
+      });
     } catch (error) {
       handleError(error);
     }
@@ -520,14 +933,18 @@ program
   .command("stats [slug]")
   .description("Show overall stats or stats for a shortlink")
   .option("--domain <hostname>", "Domain to use")
+  .option("--verbose", "Show full stats object")
   .option("-j, --json", "Output JSON")
   .action(async (slug, opts) => {
     try {
-      const result = await withRuntimeStore((store) => {
+      const result = await withRuntimeStore<LinkStats | TotalStats>((store) => {
         if (slug) return opts.domain ? store.getStats(opts.domain, slug) : store.getStats(slug);
         return store.totalStats();
       });
-      print(result, opts, () => console.log(JSON.stringify(result, null, 2)));
+      print(result, opts, () => {
+        if (printVerbose(result, opts)) return;
+        printStatsSummary(result);
+      });
     } catch (error) {
       handleError(error);
     }
@@ -535,28 +952,23 @@ program
 
 program
   .command("serve")
-  .description("Run the redirect server that records clicks")
+  .description("Run the on-box redirect server that records clicks (routes through the resolved Store)")
   .option("--host <host>", "Bind host", "127.0.0.1")
   .option("--port <port>", "Port", "8787")
   .option("--default-host <hostname>", "Fallback host if the request has no Host header")
-  .option("--api-path-prefix <path>", "Admin API path prefix", process.env.SHORTLINKS_API_PATH_PREFIX || "/api")
-  .option("--remote", "Serve directly from the shortlinks PostgreSQL storage database")
-  .addOption(new Option("--cloud", "Deprecated alias for --remote").hideHelp())
   .action(async (opts) => {
     try {
-      const store = opts.remote || opts.cloud || storeMode() === "remote"
-        ? await PgShortlinksStore.fromStorage("shortlinks")
-        : undefined;
+      // The redirect server reads/records through the same Store seam as every
+      // other command: LocalStore on-box, or the cloud ApiStore when the flip is
+      // on. There is no DSN path here — a client never opens the raw RDS.
+      const store = resolveStore(process.env, { dbPath: program.opts().db });
       const server = serveShortlinks({
         store,
-        dbPath: program.opts().db,
         host: opts.host,
         port: Number(opts.port),
         defaultHost: opts.defaultHost,
-        apiPathPrefix: opts.apiPathPrefix,
       });
-      const mode = store ? "remote" : "local";
-      console.log(chalk.green(`shortlinks redirect server listening on http://${server.hostname}:${server.port} (${mode})`));
+      console.log(chalk.green(`shortlinks redirect server listening on http://${server.hostname}:${server.port} (${store.kind})`));
     } catch (error) {
       handleError(error);
     }
@@ -571,6 +983,7 @@ cfCmd
   .option("--origin <url>", "Origin redirect server URL", process.env.SHORTLINKS_ORIGIN || "https://shortlinks.example.com")
   .option("--worker <name>", "Worker name", "shortlinks")
   .option("--no-proxied", "Create unproxied DNS record")
+  .option("--verbose", "Show full Cloudflare setup plan")
   .option("-j, --json", "Output JSON")
   .action((hostname, opts) => {
     try {
@@ -581,7 +994,10 @@ cfCmd
         workerName: opts.worker,
         proxied: opts.proxied,
       });
-      print(plan, opts, () => console.log(JSON.stringify(plan, null, 2)));
+      print(plan, opts, () => {
+        if (printVerbose(plan, opts)) return;
+        printCloudflarePlanSummary(plan);
+      });
     } catch (error) {
       handleError(error);
     }
@@ -593,16 +1009,10 @@ cfCmd
   .option("--out-dir <dir>", "Output directory", "cloudflare")
   .option("--worker <name>", "Worker name", "shortlinks")
   .option("--origin <url>", "Origin redirect server URL", process.env.SHORTLINKS_ORIGIN || "https://shortlinks.example.com")
-  .option("--attachments-origin <url>", "Origin URL for reserved attachment paths", process.env.ATTACHMENTS_ORIGIN)
   .option("-j, --json", "Output JSON")
   .action((opts) => {
     try {
-      const result = writeWorkerFiles({
-        outDir: opts.outDir,
-        workerName: opts.worker,
-        origin: opts.origin,
-        attachmentsOrigin: opts.attachmentsOrigin,
-      });
+      const result = writeWorkerFiles({ outDir: opts.outDir, workerName: opts.worker, origin: opts.origin });
       print(result, opts, () => {
         console.log(chalk.green(`Wrote ${result.workerPath}`));
         console.log(chalk.green(`Wrote ${result.wranglerPath}`));
@@ -619,6 +1029,7 @@ cfCmd
   .option("--zone-id <id>", "Cloudflare zone ID")
   .option("--dry-run", "Show plan without changing DNS")
   .option("--no-proxied", "Create unproxied DNS record")
+  .option("--verbose", "Show full Cloudflare API result or dry-run plan")
   .option("-j, --json", "Output JSON")
   .action(async (hostname, opts) => {
     try {
@@ -629,80 +1040,14 @@ cfCmd
         dryRun: opts.dryRun,
         proxied: opts.proxied,
       });
-      print(result, opts, () => console.log(JSON.stringify(result, null, 2)));
+      print(result, opts, () => {
+        if (printVerbose(result, opts)) return;
+        printCloudflareDnsSummary(result);
+      });
     } catch (error) {
       handleError(error);
     }
   });
-
-function installStorageCommands(storageCmd: Command): void {
-  storageCmd
-  .command("migrate")
-  .description("Apply shortlinks PostgreSQL migrations to remote storage")
-  .option("--connection-string <url>", "PostgreSQL connection string")
-  .option("-j, --json", "Output JSON")
-  .action(async (opts) => {
-    try {
-      const { getStorageConnectionString } = await import("../storage-config.js");
-      const { applyPgMigrations } = await import("../pg-migrate.js");
-      const conn = opts.connectionString || getStorageConnectionString("shortlinks");
-      const result = await applyPgMigrations(conn);
-      print(result, opts, () => console.log(JSON.stringify(result, null, 2)));
-    } catch (error) {
-      handleError(error);
-    }
-  });
-
-async function syncStorage(direction: "push" | "pull" | "sync", opts: any): Promise<void> {
-  const { getStorageConfig } = await import("../storage-config.js");
-  const { parseStorageTables, pullStorageChanges, pushStorageChanges, syncStorageChanges } = await import("../storage-sync.js");
-  const config = getStorageConfig();
-  if (config.mode === "local") throw new Error("Storage mode is local. Configure HASNA_SHORTLINKS_DATABASE_URL or ~/.hasna/shortlinks/storage/config.json first.");
-  const tables = parseStorageTables(opts.tables);
-  const dbPath = program.opts().db;
-  const result = direction === "push"
-    ? await pushStorageChanges(dbPath, tables)
-    : direction === "pull"
-      ? await pullStorageChanges(dbPath, tables)
-      : await syncStorageChanges(dbPath, tables);
-  print({ service: "shortlinks", result }, opts, () => console.log(JSON.stringify({ service: "shortlinks", result }, null, 2)));
-}
-
-for (const direction of ["push", "pull", "sync"] as const) {
-  storageCmd
-    .command(direction)
-    .description(`${direction === "sync" ? "Bidirectionally sync" : direction === "push" ? "Push" : "Pull"} shortlinks data ${direction === "pull" ? "from" : "to"} remote PostgreSQL storage`)
-    .option("--tables <tables>", "Comma-separated table names")
-    .option("-j, --json", "Output JSON")
-    .action((opts) => syncStorage(direction, opts).catch(handleError));
-}
-
-storageCmd
-  .command("status")
-  .description("Show local and remote storage configuration health")
-  .option("-j, --json", "Output JSON")
-  .action(async (opts) => {
-    try {
-      const { getStorageStatus } = await import("../storage-sync.js");
-      const stats = withStore((store) => store.totalStats());
-      const status = getStorageStatus(program.opts().db);
-      const data = {
-        service: "shortlinks",
-        db_path: status.db_path,
-        local: stats,
-        canonical: status.canonical,
-        storage_mode: status.mode,
-        enabled: status.enabled,
-        tables: status.tables,
-      };
-      print(data, opts, () => console.log(JSON.stringify(data, null, 2)));
-    } catch (error) {
-      handleError(error);
-    }
-  });
-}
-
-installStorageCommands(program.command("storage").description("Local/remote storage sync helpers"));
 
 const localCmd = program.command("local").description("Local domain setup helpers");
 
@@ -711,6 +1056,7 @@ localCmd
   .description("Render hosts and reverse-proxy setup for a local shortlink domain")
   .option("--port <port>", "Local redirect server port", "8787")
   .option("--target-host <host>", "Local target host", "127.0.0.1")
+  .option("--verbose", "Show full local setup plan")
   .option("-j, --json", "Output JSON")
   .action((domain, opts) => {
     try {
@@ -719,7 +1065,10 @@ localCmd
         port: Number(opts.port),
         targetHost: opts.targetHost,
       });
-      print(plan, opts, () => console.log(JSON.stringify(plan, null, 2)));
+      print(plan, opts, () => {
+        if (printVerbose(plan, opts)) return;
+        printLocalPlanSummary(plan);
+      });
     } catch (error) {
       handleError(error);
     }
@@ -731,6 +1080,7 @@ localCmd
   .option("--port <port>", "Local redirect server port", "8787")
   .option("--target-host <host>", "Local target host", "127.0.0.1")
   .option("--skip-machines", "Do not call machines dns add")
+  .option("--verbose", "Show full local setup result")
   .option("-j, --json", "Output JSON")
   .action((domain, opts) => {
     try {
@@ -749,7 +1099,9 @@ localCmd
         if (machines && machines.status !== 0) {
           console.error(chalk.yellow(machines.stderr.trim() || "machines dns add failed"));
         }
-        console.log(JSON.stringify(result, null, 2));
+        if (printVerbose(result, opts)) return;
+        printLocalPlanSummary(plan);
+        if (machines) console.log(`  machines status: ${machines.status ?? "not started"}`);
       });
     } catch (error) {
       handleError(error);
@@ -759,38 +1111,45 @@ localCmd
 program
   .command("doctor")
   .description("Check local shortlinks tooling and integration readiness")
+  .option("--verbose", "Show full diagnostic object")
   .option("-j, --json", "Output JSON")
   .action(async (opts) => {
     try {
-      const mode = storeMode();
-      const stats = await withRuntimeStore((store) => store.totalStats());
-      const data = {
+      const dbPath = getDatabasePath(program.opts().db);
+      const data = await withRuntimeStore(async (store) => ({
         service: "shortlinks",
-        store: mode,
+        ok: true,
+        // Which transport the client flip resolved to: "local" or "cloud-http".
+        store: store.kind,
         data_dir: getDataDir(),
         config_path: getConfigPath(),
-        db_path: getDatabasePath(program.opts().db),
-        db_exists: existsSync(getDatabasePath(program.opts().db)),
-        stats,
+        db_path: dbPath,
+        db_exists: existsSync(dbPath),
+        stats: await store.totalStats(),
         commands: {
           domains: commandExists("domains"),
-          storage: commandExists("storage"),
           wrangler: commandExists("wrangler"),
           secrets: commandExists("secrets"),
         },
         environment: {
+          // API mode is bearer-key only — never a DB DSN on the client.
+          api_url_present: Boolean(process.env.HASNA_SHORTLINKS_API_URL),
+          api_key_present: Boolean(process.env.HASNA_SHORTLINKS_API_KEY),
+          storage_mode: process.env.HASNA_SHORTLINKS_STORAGE_MODE || process.env.HASNA_SHORTLINKS_MODE || null,
           cloudflare_api_token_present: Boolean(process.env.CLOUDFLARE_API_TOKEN),
           cloudflare_api_key_present: Boolean(process.env.CLOUDFLARE_API_KEY),
           cloudflare_email_present: Boolean(process.env.CLOUDFLARE_EMAIL),
           shortlinks_origin_present: Boolean(process.env.SHORTLINKS_ORIGIN),
         },
-      };
-      print(data, opts, () => console.log(JSON.stringify(data, null, 2)));
+      }));
+      print(data, opts, () => {
+        if (printVerbose(data, opts)) return;
+        printDoctorSummary(data);
+      });
     } catch (error) {
       handleError(error);
     }
   });
-registerEventsCommands(program, { source: "shortlinks" });
-
+registerCompactEventsCommands(program);
 
 program.parseAsync(process.argv).catch(handleError);

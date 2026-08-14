@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
@@ -8,12 +9,6 @@ export const DEFAULT_DATA_DIR = join(homedir(), ".hasna", SERVICE_NAME);
 export interface ShortlinksConfig {
   defaultDomain?: string;
   publicBaseUrl?: string;
-  mode?: "local" | "remote" | "api";
-  api?: {
-    baseUrl?: string;
-    token?: string;
-    tokenEnv?: string;
-  };
   cloudflare?: {
     accountId?: string;
     workerName?: string;
@@ -35,10 +30,61 @@ export function getConfigPath(): string {
   return join(ensureDataDir(), "config.json");
 }
 
+export function getClickSaltPath(): string {
+  return join(ensureDataDir(), "click-salt");
+}
+
 export function getDatabasePath(explicitPath?: string): string {
   if (explicitPath) return resolve(explicitPath);
   if (process.env.SHORTLINKS_DB) return resolve(process.env.SHORTLINKS_DB);
   return join(ensureDataDir(), `${SERVICE_NAME}.db`);
+}
+
+function readClickSaltFile(path: string): string | null {
+  try {
+    const saved = readFileSync(path, "utf-8").trim();
+    return saved || null;
+  } catch {
+    return null;
+  }
+}
+
+function clickSaltError(path: string, error: unknown): Error {
+  const detail = error instanceof Error ? error.message : String(error);
+  return new Error(`Could not initialize click salt at ${path}. Set SHORTLINKS_CLICK_SALT or fix data directory permissions. ${detail}`);
+}
+
+export function getClickSalt(): string {
+  const explicit = process.env.SHORTLINKS_CLICK_SALT?.trim();
+  if (explicit) return explicit;
+
+  const path = getClickSaltPath();
+  const saved = readClickSaltFile(path);
+  if (saved) return saved;
+
+  const generated = randomBytes(32).toString("hex");
+  const tempPath = `${path}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
+  try {
+    writeFileSync(tempPath, `${generated}\n`, { flag: "wx", mode: 0o600 });
+    try {
+      linkSync(tempPath, path);
+      return generated;
+    } catch (error) {
+      const winner = readClickSaltFile(path);
+      if (winner) return winner;
+      throw clickSaltError(path, error);
+    } finally {
+      try {
+        unlinkSync(tempPath);
+      } catch {
+        // Best-effort cleanup; the canonical salt remains at path.
+      }
+    }
+  } catch (error) {
+    const winner = readClickSaltFile(path);
+    if (winner) return winner;
+    throw clickSaltError(path, error);
+  }
 }
 
 export function loadConfig(): ShortlinksConfig {
@@ -59,37 +105,16 @@ export function saveConfig(config: ShortlinksConfig): void {
 }
 
 export function updateConfig(patch: ShortlinksConfig): ShortlinksConfig {
-  const current = loadConfig();
   const next: ShortlinksConfig = {
-    ...current,
+    ...loadConfig(),
     ...patch,
-    api: {
-      ...current.api,
-      ...patch.api,
-    },
     cloudflare: {
-      ...current.cloudflare,
+      ...loadConfig().cloudflare,
       ...patch.cloudflare,
     },
   };
   saveConfig(next);
   return next;
-}
-
-export function getApiBaseUrl(config = loadConfig()): string | null {
-  const baseUrl = process.env.SHORTLINKS_API_URL || process.env.HASNA_SHORTLINKS_API_URL || config.api?.baseUrl || "";
-  return baseUrl ? baseUrl.replace(/\/+$/, "") : null;
-}
-
-export function getApiToken(config = loadConfig()): string | null {
-  const envName = config.api?.tokenEnv || "SHORTLINKS_API_TOKEN";
-  const token =
-    process.env[envName] ||
-    process.env.SHORTLINKS_API_TOKEN ||
-    process.env.HASNA_SHORTLINKS_API_TOKEN ||
-    config.api?.token ||
-    "";
-  return token || null;
 }
 
 export function normalizeHostname(input: string): string {
@@ -103,7 +128,15 @@ export function normalizeHostname(input: string): string {
     throw new Error(`Invalid domain: ${input}`);
   }
   hostname = hostname.replace(/\.$/, "");
-  if (!/^[a-z0-9.-]+$/.test(hostname) || hostname.includes("..")) {
+  const labels = hostname.split(".");
+  const labelsAreValid = labels.every((label) => (
+    label.length >= 1 &&
+    label.length <= 63 &&
+    /^[a-z0-9-]+$/.test(label) &&
+    !label.startsWith("-") &&
+    !label.endsWith("-")
+  ));
+  if (hostname.length > 253 || !labelsAreValid) {
     throw new Error(`Invalid domain: ${input}`);
   }
   return hostname;
