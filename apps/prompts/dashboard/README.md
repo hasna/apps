@@ -1,73 +1,50 @@
-# React + TypeScript + Vite
+# Prompts Dashboard
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+React dashboard for the local `@hasna/prompts` REST API.
 
-Currently, two official plugins are available:
+## Run Locally
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+Start the API from the repository root:
 
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+bun install
+bun run dev:serve
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+In another terminal, start Vite:
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+cd dashboard
+bun install
+bun run dev
 ```
+
+The dashboard calls `http://localhost:19430` by default. Override the API
+origin when needed:
+
+```bash
+VITE_API_URL=http://localhost:9000 bun run dev
+```
+
+The REST server enables CORS. Vite serves the dashboard separately; the
+`prompts-serve` binary does not serve the dashboard bundle.
+
+## Features
+
+- Browse and search prompts with collection, project, template, and tag views.
+- Create, edit, delete, render, copy, and inspect prompt history.
+- View prompt usage statistics and switch light/dark themes.
+- Select multiple prompt rows and clear the current selection.
+- Use `/` to focus search, `n` to create a prompt, and `Escape` to close panels.
+
+## Scripts
+
+```bash
+bun run dev       # Vite development server
+bun run build     # TypeScript project build and production bundle
+bun run lint      # ESLint
+bun run preview   # Preview the production bundle
+```
+
+The root package build includes `dashboard/dist` in the published package, but
+the package does not currently provide a command that hosts those static files.
