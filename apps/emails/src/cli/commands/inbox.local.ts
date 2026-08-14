@@ -25,6 +25,7 @@ import { domainInboundReadinessSignals } from "../../lib/domain-inbound-evidence
 import { resolveEmailsMode } from "../../lib/mode.js";
 import { resolveMailDataSource, type MailDataSource } from "../../lib/mail-data-source.js";
 import { readableMessageText, renderReadableEmailDocument } from "../tui/format.js";
+import { registerMailboxFilterCommands } from "./mailbox-filter-commands.js";
 import type {
   Mailbox,
   MailboxSource,
@@ -35,7 +36,7 @@ import type {
 } from "../tui/data.js";
 
 const MAX_INBOX_CLI_LIMIT = 1000;
-const CLI_MAILBOXES = ["inbox", "unread", "starred", "sent", "archived", "spam", "trash"] as const satisfies readonly Mailbox[];
+const CLI_MAILBOXES = ["inbox", "priority", "unread", "starred", "sent", "archived", "spam", "trash"] as const satisfies readonly Mailbox[];
 
 function normalizeSinceOption(value: string | undefined): string | undefined {
   if (!value) return undefined;
@@ -44,10 +45,11 @@ function normalizeSinceOption(value: string | undefined): string | undefined {
   return new Date(time).toISOString();
 }
 
-function messageOnOrAfter(message: TuiMessage, since: string | undefined): boolean {
-  if (!since) return true;
-  const time = Date.parse(message.date);
-  return Number.isFinite(time) && time >= Date.parse(since);
+function normalizeUntilOption(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const time = Date.parse(value);
+  if (!Number.isFinite(time)) throw new Error(`Invalid --until date: ${value}`);
+  return new Date(time).toISOString();
 }
 
 function resolveInboundEmailId(id: string): string {
@@ -217,6 +219,7 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
       output({ commands: inboxCmd.commands.map((command) => command.name()) }, "");
     }
   });
+  registerMailboxFilterCommands(inboxCmd, output);
 
   async function getInboundLinks(emailId: string, opts?: { all?: boolean }): Promise<InboundLinksResult> {
     const ds = resolveMailDataSource();
@@ -451,6 +454,7 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
     .option("--address <address>", "Mailbox scope: exact recipient/sender address")
     .option("--domain <domain>", "Mailbox scope: recipient/sender domain")
     .option("--since <date>", "Only show emails after this date")
+    .option("--until <date>", "Only show emails up to this date")
     .option("--limit <n>", "Max results", "20")
     .option("--offset <n>", "Skip first N emails", "0")
     .option("--search <query>", "Filter by subject/from/to/body")
@@ -460,10 +464,17 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
     .option("--starred", "Only starred mail")
     .option("--archived", "Show archived mail (hidden by default)")
     .option("--label <label>", "Only mail carrying this label")
-    .action(async (opts: { provider?: string; source?: string; folder?: string; address?: string; domain?: string; since?: string; limit?: string; offset?: string; search?: string; to?: string; unread?: boolean; read?: boolean; starred?: boolean; archived?: boolean; label?: string }) => {
+    .option("--filter <name-or-id>", "Apply a saved mailbox filter")
+    .action(async (opts: { provider?: string; source?: string; folder?: string; address?: string; domain?: string; since?: string; until?: string; limit?: string; offset?: string; search?: string; to?: string; unread?: boolean; read?: boolean; starred?: boolean; archived?: boolean; label?: string; filter?: string }) => {
       try {
         const limit = parsePositiveIntOption(opts.limit, 20);
         const offset = parseNonNegativeIntOption(opts.offset);
+        const ds = resolveMailDataSource();
+        if (opts.filter) {
+          const applied = await ds.applyMailboxFilter(opts.filter, { limit, offset });
+          output(applied.items, formatMailboxMessages(applied.items, `Saved filter: ${applied.filter.name}`));
+          return;
+        }
         const toFilter = opts.to?.trim().toLowerCase();
         // An explicit non-inbox --folder wins; otherwise the flag shorthands pick it.
         const folder = opts.folder && opts.folder !== "inbox"
@@ -475,19 +486,26 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
           if (toFilter.includes("@")) { if (!source.address) source.address = toFilter; }
           else if (!source.domain) source.domain = toFilter;
         }
-        const ds = resolveMailDataSource();
         const since = normalizeSinceOption(opts.since);
+        const until = normalizeUntilOption(opts.until);
         let rows = await ds.listMailbox(folder, {
           source,
           limit,
           offset,
           since,
+          until,
+          read: opts.read === true ? true : undefined,
+          unread: opts.unread === true ? true : undefined,
+          starred: opts.starred === true ? true : undefined,
+          archived: opts.archived === true ? true : undefined,
           search: opts.search,
+          from: undefined,
+          to: toFilter,
+          domain: opts.domain,
+          address: opts.address,
+          subject: undefined,
           label: opts.label,
         });
-        // Keep a parsed-date guard in case an older data source ignores `since`.
-        if (opts.read) rows = rows.filter((row) => row.is_read);
-        if (since) rows = rows.filter((row) => messageOnOrAfter(row, since));
         if (rows.length === 0) {
           // `emails pull` (alias `emails provider sync`), NOT `emails refresh` —
           // the latter is not a registered command and exits with

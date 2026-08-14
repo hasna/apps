@@ -1,0 +1,239 @@
+import { LocalConfigStore } from "../data/config-store";
+import { describe, test, expect, beforeEach, afterEach } from "bun:test";
+import { writeFileSync, mkdirSync, existsSync, readFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { getDatabase, resetDatabase } from "../db/database";
+import { createConfig, listConfigs } from "../db/configs";
+import { diffConfig, detectCategory, detectAgent, detectFormat, syncKnown, syncToDisk } from "./sync";
+import { syncFromDir } from "./sync-dir";
+import type { ConfigAgent } from "../types";
+import { tempRootPath } from "./test-temp-root";
+
+let tmpDir: string;
+
+beforeEach(() => {
+  resetDatabase();
+  process.env["HASNA_INSTRUCTIONS_DB_PATH"] = ":memory:";
+  tmpDir = tempRootPath(`configs-sync-test-${Date.now()}`);
+  mkdirSync(tmpDir, { recursive: true });
+});
+
+afterEach(() => {
+  if (existsSync(tmpDir)) rmSync(tmpDir, { recursive: true, force: true });
+  delete process.env["HASNA_INSTRUCTIONS_DB_PATH"];
+  delete process.env["CONFIGS_HOME"];
+});
+
+describe("detectCategory", () => {
+  test("detects rules for claude.md", () => expect(detectCategory("/home/user/.claude/CLAUDE.md")).toBe("rules"));
+  test("detects rules for rules dir", () => expect(detectCategory("/home/user/.claude/rules/git.md")).toBe("rules"));
+  test("detects rules for Antigravity rule files whose names contain mcp", () => expect(detectCategory("/home/user/repo/.agents/rules/mcp.md")).toBe("rules"));
+  test("detects agent for .claude dir", () => expect(detectCategory("/home/user/.claude/settings.json")).toBe("agent"));
+  test("detects shell for .zshrc", () => expect(detectCategory("/home/user/.zshrc")).toBe("shell"));
+  test("detects git for .gitconfig", () => expect(detectCategory("/home/user/.gitconfig")).toBe("git"));
+  test("detects tools for tsconfig", () => expect(detectCategory("/home/user/project/tsconfig.json")).toBe("tools"));
+});
+
+describe("detectAgent", () => {
+  test("detects claude for .claude dir", () => expect(detectAgent("/home/user/.claude/CLAUDE.md")).toBe("claude"));
+  test("detects codex for .codex dir", () => expect(detectAgent("/home/user/.codex/config.toml")).toBe("codex"));
+  test("detects Copilot repository instruction files", () => expect(detectAgent("/home/user/repo/.github/instructions/typescript.instructions.md")).toBe("copilot"));
+  test("detects current Devin rule files", () => expect(detectAgent("/home/user/repo/.devin/rules/review.md")).toBe("devin"));
+  test("detects legacy Windsurf rule files", () => expect(detectAgent("/home/user/repo/.windsurf/rules/review.md")).toBe("windsurf-legacy"));
+  test("detects Cline rule files", () => expect(detectAgent("/home/user/repo/.clinerules/review.md")).toBe("cline"));
+  test("detects zsh for .zshrc", () => expect(detectAgent("/home/user/.zshrc")).toBe("zsh"));
+  test("detects npm for .npmrc", () => expect(detectAgent("/home/user/.npmrc")).toBe("npm"));
+});
+
+describe("detectFormat", () => {
+  test("json", () => expect(detectFormat("foo.json")).toBe("json"));
+  test("toml", () => expect(detectFormat("foo.toml")).toBe("toml"));
+  test("markdown", () => expect(detectFormat("foo.md")).toBe("markdown"));
+  test("yaml", () => expect(detectFormat("foo.yaml")).toBe("yaml"));
+  test("text fallback", () => expect(detectFormat("foo")).toBe("text"));
+});
+
+describe("syncFromDir", () => {
+  test("adds new files from disk", async () => {
+    writeFileSync(join(tmpDir, "test.md"), "# Hello");
+    const db = getDatabase();
+    const result = await syncFromDir(tmpDir, { store: new LocalConfigStore(db), recursive: false });
+    expect(result.added).toBe(1);
+    expect(listConfigs(undefined, db).length).toBe(1);
+  });
+
+  test("unchanged files are not updated", async () => {
+    const db = getDatabase();
+    writeFileSync(join(tmpDir, "same.txt"), "same");
+    await syncFromDir(tmpDir, { store: new LocalConfigStore(db), recursive: false });
+    const result2 = await syncFromDir(tmpDir, { store: new LocalConfigStore(db), recursive: false });
+    expect(result2.unchanged).toBe(1);
+    expect(result2.updated).toBe(0);
+  });
+
+  test("updated files are detected", async () => {
+    const db = getDatabase();
+    const file = join(tmpDir, "change.txt");
+    writeFileSync(file, "v1");
+    await syncFromDir(tmpDir, { store: new LocalConfigStore(db), recursive: false });
+    writeFileSync(file, "v2");
+    const result = await syncFromDir(tmpDir, { store: new LocalConfigStore(db), recursive: false });
+    expect(result.updated).toBe(1);
+  });
+
+  test("dry-run does not write to DB", async () => {
+    const db = getDatabase();
+    writeFileSync(join(tmpDir, "new.md"), "content");
+    const result = await syncFromDir(tmpDir, { store: new LocalConfigStore(db), dryRun: true, recursive: false });
+    expect(result.added).toBe(1);
+    expect(listConfigs(undefined, db).length).toBe(0);
+  });
+
+  test("returns skipped for missing dir", async () => {
+    const db = getDatabase();
+    const result = await syncFromDir("/nonexistent/path", { store: new LocalConfigStore(db) });
+    expect(result.skipped.length).toBeGreaterThan(0);
+  });
+});
+
+describe("syncKnown shell source safety", () => {
+  function runLoginShell(home: string, command: string) {
+    const result = Bun.spawnSync(["bash", "--login", "-c", command], {
+      cwd: home,
+      env: {
+        ...process.env,
+        HOME: home,
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    return {
+      status: result.exitCode,
+      stdout: result.stdout.toString(),
+      stderr: result.stderr.toString(),
+    };
+  }
+
+  async function syncAndApplyBashProfile() {
+    process.env["CONFIGS_HOME"] = tmpDir;
+    const db = getDatabase(join(tmpDir, "instructions-test.db"));
+    const store = new LocalConfigStore(db);
+    const result = await syncKnown({ store, category: "shell" });
+    expect(result.added).toBe(1);
+    const config = await store.getConfig("bash-profile");
+    await syncToDisk({ store, category: "shell" });
+    return config;
+  }
+
+  test("guards the optional local env helper when it is absent", async () => {
+    writeFileSync(join(tmpDir, ".bash_profile"), '. "$HOME/.local/bin/env"\n');
+
+    const config = await syncAndApplyBashProfile();
+    const login = runLoginShell(tmpDir, 'printf "started"');
+
+    expect(config.content).toContain('[ -r "$HOME/.local/bin/env" ] && . "$HOME/.local/bin/env"');
+    expect(login.status).toBe(0);
+    expect(login.stdout).toBe("started");
+    expect(login.stderr).toBe("");
+  });
+
+  test("preserves local env initialization when the helper is present", async () => {
+    mkdirSync(join(tmpDir, ".local", "bin"), { recursive: true });
+    writeFileSync(join(tmpDir, ".local", "bin", "env"), "export HASNA_LOCAL_ENV_HELPER_LOADED=present\n");
+    writeFileSync(join(tmpDir, ".bash_profile"), '. "$HOME/.local/bin/env"\n');
+
+    const config = await syncAndApplyBashProfile();
+    const login = runLoginShell(tmpDir, 'printf "%s" "${HASNA_LOCAL_ENV_HELPER_LOADED:-missing}"');
+
+    expect(config.content).toContain('[ -r "$HOME/.local/bin/env" ] && . "$HOME/.local/bin/env"');
+    expect(login.status).toBe(0);
+    expect(login.stdout).toBe("present");
+    expect(login.stderr).toBe("");
+  });
+});
+
+describe("diffConfig", () => {
+  test("returns identical message when same", async () => {
+    writeFileSync(join(tmpDir, "same.txt"), "content");
+    const db = getDatabase();
+    const c = createConfig({ name: "same", category: "tools", content: "content", target_path: join(tmpDir, "same.txt") }, db);
+    expect(await diffConfig(c)).toBe("(no diff — identical)");
+  });
+
+  test("returns diff for different content", async () => {
+    writeFileSync(join(tmpDir, "diff.txt"), "disk content");
+    const db = getDatabase();
+    const c = createConfig({ name: "diff", category: "tools", content: "stored content", target_path: join(tmpDir, "diff.txt") }, db);
+    const diff = await diffConfig(c);
+    expect(diff).toContain("-stored content");
+    expect(diff).toContain("+disk content");
+  });
+
+  test("returns file not found for missing path", async () => {
+    const db = getDatabase();
+    const c = createConfig({ name: "missing", category: "tools", content: "x", target_path: join(tmpDir, "nope.txt") }, db);
+    expect(await diffConfig(c)).toContain("not found on disk");
+  });
+
+  test("diff includes transformed output paths", async () => {
+    const db = getDatabase();
+    const primary = join(tmpDir, "CLAUDE.md");
+    const output = join(tmpDir, "AGENTS.md");
+    writeFileSync(primary, "# Claude");
+    writeFileSync(output, "# stale");
+    const c = createConfig({
+      name: "Claude",
+      category: "rules",
+      agent: "claude",
+      content: "# Claude",
+      target_path: primary,
+      outputs: [
+        { agent: "codex", target_path: output, transform: "codex-flat" },
+      ],
+    }, db);
+
+    const diff = await diffConfig(c, { store: new LocalConfigStore(db) });
+
+    expect(diff).toContain(`+++ disk (${output})`);
+    expect(diff).toContain("-# Claude");
+    expect(diff).toContain("+# stale");
+  });
+});
+
+describe("syncToDisk", () => {
+  test("skips stale retired Gemini and session-owned Antigravity rows", async () => {
+    const db = getDatabase();
+    const store = new LocalConfigStore(db);
+    process.env["CONFIGS_HOME"] = tmpDir;
+    const antigravityTarget = join(tmpDir, ".gemini", "GEMINI.md");
+
+    createConfig({
+      name: "Stale Gemini Global Rules",
+      category: "rules",
+      agent: "gemini" as ConfigAgent,
+      target_path: "~/.gemini/GEMINI.md",
+      format: "markdown",
+      content: "retired gemini content",
+    }, db);
+
+    const retiredOnlyResult = await syncToDisk({ store });
+    expect(retiredOnlyResult.skipped.length).toBe(1);
+    expect(retiredOnlyResult.skipped[0]).toContain("deprecated agent: gemini");
+    expect(existsSync(antigravityTarget)).toBe(false);
+
+    createConfig({
+      name: "Active Antigravity Global Rules",
+      category: "rules",
+      agent: "antigravity",
+      target_path: "~/.gemini/GEMINI.md",
+      format: "markdown",
+      content: "active antigravity content",
+    }, db);
+
+    const result = await syncToDisk({ store });
+    expect(result.updated).toBe(0);
+    expect(result.skipped.length).toBe(2);
+    expect(result.skipped.some((entry) => entry.includes("instructions-session-renderer"))).toBe(true);
+    expect(existsSync(antigravityTarget)).toBe(false);
+  });
+});

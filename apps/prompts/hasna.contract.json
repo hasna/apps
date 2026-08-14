@@ -1,0 +1,60 @@
+{
+  "$schema": "./node_modules/@hasna/contracts/dist/hasna.contract.schema.json",
+  "schema": "hasna.service_contract.v1",
+  "name": "prompts",
+  "class": "cli-with-store",
+  "contractVersion": "v1",
+  "kitVersion": "0.8.5",
+  "description": "Reusable prompt library for AI agents — CLI, MCP server, REST API, and web dashboard over a local-first prompt registry.",
+  "bins": [
+    "prompts",
+    "prompts-mcp",
+    "prompts-serve"
+  ],
+  "hosting": [
+    "user-hosted"
+  ],
+  "serviceSurfaces": [
+    {
+      "name": "cli",
+      "kind": "cli",
+      "status": "supported",
+      "bin": "prompts",
+      "authMode": "local-only"
+    },
+    {
+      "name": "mcp",
+      "kind": "mcp",
+      "status": "supported",
+      "mcpBin": "prompts-mcp",
+      "authMode": "local-only"
+    },
+    {
+      "name": "http-api",
+      "kind": "api",
+      "status": "deferred",
+      "authMode": "local-only",
+      "deferReason": "prompts-serve exposes an unversioned /api surface with GET /health only; the /v1 base path, GET /ready, GET /version, and the OpenAPI document are not implemented yet."
+    },
+    {
+      "name": "typescript-sdk",
+      "kind": "sdk",
+      "status": "deferred",
+      "authMode": "local-only",
+      "deferReason": "The \".\" export is a hand-written library surface, not a client generated from an OpenAPI document; the generated service SDK lands with the /v1 API surface."
+    }
+  ],
+  "storage": {
+    "mode": "sqlite",
+    "envPrefix": "HASNA_PROMPTS_",
+    "aliasEnvPrefix": "PROMPTS_",
+    "sqlitePath": "~/.hasna/prompts/prompts.db"
+  },
+  "metadata": {
+    "release": {
+      "artifactScan": {
+        "script": "scan:artifact"
+      }
+    }
+  }
+}

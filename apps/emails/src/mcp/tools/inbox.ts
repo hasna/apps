@@ -4,6 +4,7 @@ import {
   DEFAULT_ATTACHMENT_INVENTORY_LIMIT,
   MAX_ATTACHMENT_INVENTORY_LIMIT,
 } from "../../lib/attachment-inventory.js";
+import { registerMailboxFilterTools } from "./filters.js";
 
 const MAX_MCP_INBOX_LIMIT = 1000;
 const MAX_MCP_WAIT_TIMEOUT_SECONDS = 300;
@@ -32,7 +33,12 @@ type InboxToolName =
   | "get_attachment"
   | "download_attachment"
   | "search_inbound"
-  | "get_inbox_sync_status";
+  | "get_inbox_sync_status"
+  | "list_mailbox_filters"
+  | "create_mailbox_filter"
+  | "update_mailbox_filter"
+  | "delete_mailbox_filter"
+  | "apply_mailbox_filter";
 
 async function runInboxTool(name: InboxToolName, input: Record<string, unknown>) {
   const { runInboxTool: run } = await import("./inbox-impl.js");
@@ -281,4 +287,6 @@ export function registerInboxTools(server: McpServer): void {
     {},
     handler("get_inbox_sync_status"),
   );
+
+  registerMailboxFilterTools(server);
 }
