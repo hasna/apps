@@ -1,0 +1,51 @@
+# TEMPORARY DIAGNOSTIC workflow (billing publish-guard flake, task 40ce31ad).
+# REMOVE BEFORE MERGE. The fail-loud guard reports only npm's stderr tail on
+# failure; the inner failing step of billing's prepack (`bun run verify && bun
+# run scan:artifact`) is invisible in CI logs. This workflow replicates the
+# guard's exact invocation on a real runner and prints the captured prepack
+# output + npm debug log on failure, plus per-step timings.
+name: diagnose-billing-pack
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  diagnose:
+    name: diagnose billing pack flake
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - name: Install
+        run: bun install --frozen-lockfile
+      - name: Reproduce billing pack under CI conditions (10x, verbose)
+        run: |
+          set +e
+          echo "nproc: $(nproc)"; free -m | head -2; echo "bun: $(bun --version) npm: $(npm --version)"
+          for i in $(seq 1 10); do
+            start=$(date +%s.%N)
+            (cd apps/billing && npm_config_loglevel=verbose npm pack --dry-run --json > /tmp/pack-$i.out 2> /tmp/pack-$i.err)
+            rc=$?
+            end=$(date +%s.%N)
+            dur=$(echo "$end $start" | awk '{printf "%.1f", $1-$2}')
+            echo "iter $i: rc=$rc dur=${dur}s"
+            if [ $rc -ne 0 ]; then
+              echo "--- stderr tail ---"; tail -8 /tmp/pack-$i.err
+              echo "--- stdout tail (prepack logs) ---"; tail -40 /tmp/pack-$i.out
+              LOG=$(ls -t "$HOME/.npm/_logs" 2>/dev/null | head -1)
+              if [ -n "$LOG" ]; then
+                echo "--- npm debug log tail: $LOG ---"; tail -80 "$HOME/.npm/_logs/$LOG"
+              fi
+            fi
+          done
+          echo "--- per-step timings (verify chain) ---"
+          (cd apps/billing && for s in typecheck test build conformance; do
+            t0=$(date +%s.%N); bun run $s > /tmp/step-$s.log 2>&1; r=$?; t1=$(date +%s.%N)
+            echo "step $s: rc=$r dur=$(echo "$t1 $t0" | awk '{printf "%.1f", $1-$2}')s"
+            if [ $r -ne 0 ]; then tail -12 /tmp/step-$s.log; fi
+          done)
+          exit 0
