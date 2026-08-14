@@ -59,14 +59,19 @@ describe("KNOWN_CONFIGS", () => {
       "aicopilot",
       "antigravity",
       "claude",
+      "cline",
       "codewith",
       "codex",
+      "copilot",
       "cursor",
+      "devin",
       "git",
       "global",
+      "grok",
       "npm",
       "opencode",
       "qwen",
+      "windsurf-legacy",
       "zsh",
     ]);
     expect(CONFIG_AGENTS).not.toContain("gemini" as never);
@@ -274,6 +279,35 @@ describe("syncProject", () => {
     expect(configs[0]!.target_path).toBe(join(projDir, ".cursor", "rules", "security.mdc"));
   });
 
+  test("syncs typed provider project rule directories", async () => {
+    const db = getDatabase();
+    const projDir = join(tmpDir, "provider-rules-project");
+    const fixtures = [
+      [".github/instructions", "copilot.instructions.md", "copilot"],
+      [".devin/rules", "review.md", "devin"],
+      [".windsurf/rules", "review.md", "windsurf-legacy"],
+      [".clinerules", "review.md", "cline"],
+    ] as const;
+    for (const [directory, file, agent] of fixtures) {
+      mkdirSync(join(projDir, directory), { recursive: true });
+      writeFileSync(join(projDir, directory, file), `# ${agent} rule`);
+    }
+
+    const result = await syncProject({ store: new LocalConfigStore(db), projectDir: projDir });
+    const configs = listConfigs(undefined, db);
+
+    expect(result.added).toBe(fixtures.length);
+    expect(configs.map((entry) => entry.agent).sort()).toEqual([
+      "cline",
+      "copilot",
+      "devin",
+      "windsurf-legacy",
+    ]);
+    for (const [, , agent] of fixtures) {
+      expect(configs.find((entry) => entry.agent === agent)?.category).toBe("rules");
+    }
+  });
+
   test("syncs project rules/*.md", async () => {
     const db = getDatabase();
     const projDir = join(tmpDir, "rules-project");
@@ -329,6 +363,7 @@ describe("PROJECT_CONFIG_FILES", () => {
     expect(files).toContain(".agents/mcp_config.json");
     expect(files).toContain("QWEN.md");
     expect(files).toContain(".qwen/settings.json");
+    expect(files).toContain(".github/copilot-instructions.md");
     expect(files).not.toContain("GEMINI.md");
   });
 });

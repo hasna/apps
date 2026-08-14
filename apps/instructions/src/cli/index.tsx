@@ -6,7 +6,7 @@ import { existsSync, lstatSync, readFileSync, readSync, writeSync } from "node:f
 import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { applyConfigsWithReport, expandPath } from "../lib/apply.js";
-import { findConfigsByTargetPath, findDuplicateTargetPathGroups } from "../lib/config-target-identity.js";
+import { findConfigsByTargetPath, findDuplicateTargetPathGroups, findReferenceConfigsByName, findDuplicateReferenceNameGroups } from "../lib/config-target-identity.js";
 import { diffConfig, syncKnown, syncToDisk, syncProject, detectCategory, detectAgent, detectFormat, KNOWN_CONFIGS } from "../lib/sync.js";
 import { syncFromDir } from "../lib/sync-dir.js";
 import { redactContent, scanSecrets } from "../lib/redact.js";
@@ -15,7 +15,9 @@ import { importConfigs } from "../lib/import.js";
 import { extractTemplateVars } from "../lib/template.js";
 import { detectMachineContext, resolveProfileVariables } from "../lib/machine.js";
 import { applySessionRender, restoreSessionRenderSnapshot } from "../lib/session-apply.js";
-import { planSessionRender, resolveSessionPath, sourceFromConfig, sourceFromFilePath, sourcesFromIdentityExport, SESSION_INSTRUCTION_LAYERS, SESSION_RENDER_TOOLS, type SessionInstructionLayer, type SessionInstructionSource, type SessionRenderFile, type SessionRenderPlan, type SessionRenderTool } from "../lib/session-render.js";
+import { normalizeSessionInstructionSourceId, planSessionRender, resolveSessionPath, sourceFromConfig, sourceFromFilePath, sourcesFromIdentityExport, SESSION_INSTRUCTION_LAYERS, SESSION_RENDER_TOOLS, type SessionInstructionLayer, type SessionInstructionSource, type SessionRenderFile, type SessionRenderPlan, type SessionRenderTool } from "../lib/session-render.js";
+import { normalizeProfileAssetBinding } from "../lib/asset-plan.js";
+import { normalizeProfileConfigBinding, planProfileSessionRender, type InstructionGraphRenderPlan } from "../lib/instruction-graph.js";
 import { accountedGlobalSourceSlugs, computeGlobalSourceCoverage, formatGlobalSourceCoverageWarnings, type GlobalSourceCoverageResult } from "../lib/global-source-coverage.js";
 import { ensurePlatformProfiles } from "../lib/platform-profiles.js";
 import { ensureProjectDashboardStandardConfig } from "../lib/project-dashboard-standard.js";
@@ -25,6 +27,7 @@ import { ensureCodewithSharedTodosStorageStandardConfig } from "../lib/codewith-
 import {
   ProjectContextError,
   PROJECT_CONTEXT_MAX_INPUT_BYTES,
+  SESSION_MANAGED_INPUT_MAX_BYTES,
   applyProjectContext,
   parseProjectContextBundle,
   planProjectContext,
@@ -126,7 +129,7 @@ function parseSessionLayer(value: string): SessionInstructionLayer {
   throw new Error(`Invalid source layer "${value}"`);
 }
 
-function parseSessionSource(value: string, order: number, replaceIds: Set<string>): SessionInstructionSource {
+function parseSessionSource(value: string, order: number): SessionInstructionSource {
   const idx = value.indexOf("=");
   let id = idx > 0 ? value.slice(0, idx).trim() : "";
   const path = idx > 0 ? value.slice(idx + 1).trim() : value.trim();
@@ -139,7 +142,7 @@ function parseSessionSource(value: string, order: number, replaceIds: Set<string
   if (!path) throw new Error(`Invalid --source "${value}" (expected path or id=path)`);
   const absPath = resolveSessionPath(path);
   if (!existsSync(absPath)) throw new Error(`Instruction source file not found: ${absPath}`);
-  const content = readFileSync(absPath, "utf-8");
+  const content = readSessionInstructionSourceFile(absPath);
   const source = sourceFromFilePath(absPath, content, order);
   const resolvedId = id || source.id || basename(absPath);
   return {
@@ -147,8 +150,61 @@ function parseSessionSource(value: string, order: number, replaceIds: Set<string
     id: resolvedId,
     label: id ? resolvedId : source.label ?? resolvedId,
     layer,
-    merge: replaceIds.has(resolvedId) ? "replace" : "append",
+    merge: "append",
   };
+}
+
+interface SessionSourceReplacement {
+  replacerId: string;
+  replacementScope?: string;
+}
+
+function parseSessionSourceReplacement(value: string): SessionSourceReplacement {
+  const trimmed = value.trim();
+  const separator = trimmed.indexOf("=");
+  const replacerId = (separator >= 0 ? trimmed.slice(0, separator) : trimmed).trim();
+  if (!replacerId) {
+    throw new Error(`Invalid --replace-source "${value}" (expected replacer-id or replacer-id=target-source-id)`);
+  }
+  if (separator < 0) return { replacerId };
+  const targetId = trimmed.slice(separator + 1).trim();
+  if (!targetId) {
+    throw new Error(`Invalid --replace-source "${value}" (target source id is required after "=")`);
+  }
+  return {
+    replacerId,
+    replacementScope: `source:${normalizeSessionInstructionSourceId(targetId)}`,
+  };
+}
+
+function sessionSourceReplacements(values: string[]): Map<string, SessionSourceReplacement> {
+  const replacements = new Map<string, SessionSourceReplacement>();
+  for (const value of values) {
+    const replacement = parseSessionSourceReplacement(value);
+    const existing = replacements.get(replacement.replacerId);
+    if (existing && existing.replacementScope !== replacement.replacementScope) {
+      throw new Error(
+        `Conflicting --replace-source values for "${replacement.replacerId}": `
+        + `${existing.replacementScope ?? "broad"} and ${replacement.replacementScope ?? "broad"}.`,
+      );
+    }
+    replacements.set(replacement.replacerId, replacement);
+  }
+  return replacements;
+}
+
+function readSessionInstructionSourceFile(path: string): string {
+  const stat = lstatSync(path);
+  if (stat.isSymbolicLink()) {
+    throw new Error("SESSION_SOURCE_SYMLINK_REJECTED: instruction source file must be a regular non-symlink file");
+  }
+  if (!stat.isFile()) {
+    throw new Error(`SESSION_SOURCE_PATH_INVALID: instruction source path is not a regular file: ${path}`);
+  }
+  if (stat.size > SESSION_MANAGED_INPUT_MAX_BYTES) {
+    throw new Error(`SESSION_SOURCE_INPUT_TOO_LARGE: instruction source file exceeds ${SESSION_MANAGED_INPUT_MAX_BYTES} bytes`);
+  }
+  return readFileSync(path, "utf-8");
 }
 
 function parseLayeredReference(value: string): { layer?: SessionInstructionLayer; id: string } {
@@ -176,8 +232,8 @@ async function collectSessionSources(
   tool: SessionRenderTool,
   store: ConfigStore,
 ): Promise<SessionInstructionSource[]> {
-  const replaceIds = new Set<string>(opts.replaceSource ?? []);
-  const sources = (opts.source ?? []).map((value, index) => parseSessionSource(value, index, replaceIds));
+  const replacements = sessionSourceReplacements(opts.replaceSource ?? []);
+  const sources = (opts.source ?? []).map((value, index) => parseSessionSource(value, index));
 
   for (const value of opts.config ?? []) {
     const { layer, id } = parseLayeredReference(value);
@@ -191,7 +247,93 @@ async function collectSessionSources(
     sources.push(...sourcesFromIdentityExport(parsed, { path, tool, orderOffset: sources.length }));
   }
 
-  return sources.map((source) => replaceIds.has(source.id) ? { ...source, merge: "replace" } : source);
+  return sources.map((source) => {
+    const replacement = replacements.get(source.id);
+    if (!replacement) return source;
+    return {
+      ...source,
+      merge: "replace",
+      replacementScope: replacement.replacementScope,
+    };
+  });
+}
+
+async function buildSessionRenderPlan(
+  opts: {
+    profile: string;
+    targetHome?: string;
+    projectRoot?: string;
+    sessionId?: string;
+    source?: string[];
+    config?: string[];
+    identityExport?: string[];
+    replaceSource?: string[];
+    codewithNativeImports?: boolean;
+    allowEmptySources?: boolean;
+    compileProfile?: string;
+    providerVersion?: string;
+    providerVariant?: string;
+    model?: string;
+    path?: string;
+    manual?: string[];
+    assetSurface?: string;
+    assetScope?: "global" | "project" | "session";
+    allowAssetInstallers?: boolean;
+  },
+  tool: SessionRenderTool,
+  store: ConfigStore,
+  assetPlanMode: "dry-run" | "apply" = "dry-run",
+): Promise<SessionRenderPlan> {
+  if (!opts.compileProfile) {
+    if (opts.providerVariant) throw new Error("--provider-variant requires --compile-profile.");
+    const sources = await collectSessionSources(opts, tool, store);
+    return planSessionRender({
+      tool,
+      profile: opts.profile,
+      targetHome: opts.targetHome,
+      projectRoot: opts.projectRoot,
+      sessionId: opts.sessionId,
+      codewithNativeImports: opts.codewithNativeImports,
+      allowEmptySources: opts.allowEmptySources,
+      sources,
+    });
+  }
+  if (!opts.providerVersion?.trim()) throw new Error("--provider-version is required with --compile-profile.");
+  if ((opts.source?.length ?? 0) || (opts.config?.length ?? 0) || (opts.identityExport?.length ?? 0) || (opts.replaceSource?.length ?? 0)) {
+    throw new Error("--compile-profile cannot be mixed with --source, --config, --identity-export, or --replace-source.");
+  }
+  const profile = await store.getProfile(opts.compileProfile);
+  const configs = await store.getProfileConfigs(profile.id);
+  const bindings = await store.getProfileConfigBindings(profile.id);
+  const assetBindings = await store.getProfileAssetBindings(profile.id);
+  const assetConfigs = await Promise.all(
+    [...new Set(assetBindings.map((binding) => binding.source_config_id))].map((id) => store.getConfigById(id)),
+  );
+  return planProfileSessionRender({
+    profile_id: profile.id,
+    provider_version: opts.providerVersion,
+    tool,
+    profile: opts.profile,
+    targetHome: opts.targetHome,
+    projectRoot: opts.projectRoot,
+    sessionId: opts.sessionId,
+    codewithNativeImports: opts.codewithNativeImports,
+    allowEmptySources: opts.allowEmptySources,
+    configs,
+    bindings,
+    asset_configs: assetConfigs,
+    asset_bindings: assetBindings,
+    asset_plan_mode: assetPlanMode,
+    ...(opts.assetScope ? { asset_scope: opts.assetScope } : {}),
+    ...(opts.assetSurface ? { asset_surface: opts.assetSurface } : {}),
+    allow_asset_installers: opts.allowAssetInstallers,
+    graph_context: {
+      ...(opts.model ? { model: opts.model } : {}),
+      ...(opts.path ? { path: opts.path } : {}),
+      ...(opts.manual?.length ? { manual: opts.manual } : {}),
+      ...(opts.providerVariant ? { provider_variant: opts.providerVariant } : {}),
+    },
+  });
 }
 
 // Reconcile-and-warn for todos 102d6d0a/5dcd60ec: `--config global:<slug>` entries
@@ -220,9 +362,37 @@ function planJsonForOutput(plan: SessionRenderPlan) {
   return {
     ...plan,
     files: plan.files.map(stripSessionFileContent),
+    assetFiles: plan.assetFiles.map(stripSessionFileContent),
     manifestFile: stripSessionFileContent(plan.manifestFile),
     allFiles: plan.allFiles.map(stripSessionFileContent),
   };
+}
+
+function instructionGraphFromPlan(plan: SessionRenderPlan) {
+  return "instructionGraph" in plan
+    ? (plan as SessionRenderPlan & { instructionGraph: InstructionGraphRenderPlan }).instructionGraph
+    : null;
+}
+
+function printInstructionGraphSelection(plan: SessionRenderPlan): void {
+  const graph = instructionGraphFromPlan(plan);
+  if (!graph) return;
+  console.log(`${chalk.cyan("capability:")} ${graph.capability.schema} descriptor=${graph.capability.descriptor_version}`);
+  console.log(`${chalk.cyan("provider selection:")} ${graph.provider} ${graph.provider_version} variant=${graph.capability.provider_variant} range=${graph.capability.provider_version_range}`);
+  console.log(`${chalk.cyan("loading path:")} ${graph.capability.loading_path} (${graph.capability.selected_representation})`);
+  console.log(`${chalk.cyan("source hash:")} ${graph.source_hash}`);
+  for (const diagnostic of graph.diagnostics) {
+    console.log(`${chalk.cyan("fallback diagnostic:")} ${diagnostic.code} ${diagnostic.message}`);
+  }
+  if (plan.assetPlan) {
+    console.log(`${chalk.cyan("asset plan:")} ${plan.assetPlan.assets.length} asset(s) ${plan.assetPlan.planDigest}`);
+    for (const item of plan.assetPlan.assets) {
+      console.log(`${chalk.cyan("asset:")} ${item.assetKey} ${item.kind} ${item.support}/${item.action} -> ${item.destination.root}:${item.destination.relativePath}`);
+    }
+    for (const diagnostic of plan.assetPlan.diagnostics) {
+      console.log(`${chalk.cyan("asset diagnostic:")} ${diagnostic.code} ${diagnostic.message}`);
+    }
+  }
 }
 
 function parseProjectContextRuntime(value: string): ProjectContextRuntime {
@@ -292,6 +462,15 @@ function parseVarArgs(values?: string[]): ProfileVariables | undefined {
   return Object.keys(vars).length > 0 ? vars : undefined;
 }
 
+function parseUnsetVarArgs(values?: string[]): string[] {
+  if (!values || values.length === 0) return [];
+  const keys = [...new Set(values.map((value) => value.trim()))];
+  if (keys.some((key) => key.length === 0 || key.includes("="))) {
+    throw new Error('Invalid --unset-var (expected variable names without "=")');
+  }
+  return keys;
+}
+
 function parseProfileSelectors(opts: { os?: string; arch?: string; hostname?: string }): ProfileSelector | undefined {
   const selectors: ProfileSelector = {};
   const os = splitCsv(opts.os);
@@ -320,10 +499,12 @@ function formatProfileVariables(profile: Pick<Profile, "variables">): string {
 async function getMachineProfileContext(
   opts: { hostname?: string; os?: string; arch?: string },
   store: ConfigStore,
+  readOptions: { limit?: unknown } = {},
 ) {
   const machine = detectMachineContext({ hostname: opts.hostname, os: opts.os, arch: opts.arch });
-  const profile = await store.resolveProfileForMachine(machine);
-  return { machine, profile, vars: resolveProfileVariables(profile, machine) };
+  const resolution = await store.resolveProfileForMachineRead(machine, readOptions);
+  const profile = resolution.profile;
+  return { machine, profile, resolution, vars: resolveProfileVariables(profile, machine) };
 }
 
 // ── list ─────────────────────────────────────────────────────────────────────
@@ -448,31 +629,80 @@ program
     const name = opts.name || filePath.split("/").pop()!;
     const store = resolveConfigStore();
 
-    // One target path, one row. Without this, a second `add` of a file the store
-    // already tracks INSERTED a twin (uniqueSlug appending `-1`), and two rows on
-    // one path make `apply` race itself — last writer wins, silently. Refusing by
-    // default rather than updating is deliberate: the stored row may hold
-    // redacted or templateized content that the literal bytes on disk would
-    // flatten, so overwriting it is the operator's call, not a side effect of
-    // re-running `add`.
+    // One identity, one row. Without this, a second `add` of something the
+    // store already tracks INSERTED a twin (uniqueSlug appending `-1`), and two
+    // rows on one identity make `apply`/`session render` race each other — last
+    // writer wins, silently. Refusing by default rather than updating is
+    // deliberate: the stored row may hold redacted or templateized content that
+    // the literal bytes on disk would flatten, so overwriting it is the
+    // operator's call, not a side effect of re-running `add`.
+    //
+    // A file-kind config's identity is its target_path (one file, one owner).
+    // A reference-kind config owns no target_path — it is not mirrored 1:1 onto
+    // one file, so `findConfigsByTargetPath` never matches it, by design (see
+    // that function's doc comment) — its identity is its NAME instead (via
+    // slug). Before this fix `existingOwners` was hardcoded to `[]` for
+    // reference kind, so `--update` had no row to find at any setting and every
+    // re-ingest of a reference config silently minted a duplicate. Fixed per
+    // todos 757cefdb, evidenced 2026-08-04: 20/20 reference-kind rows in the
+    // fleet store had target_path=null, so this was not a corner case — it is
+    // the population that carries managed operating-rules content.
+    const allConfigs = await store.listConfigs();
     const existingOwners = opts.kind === "reference"
-      ? []
-      : findConfigsByTargetPath(await store.listConfigs(), targetPath);
+      ? findReferenceConfigsByName(allConfigs, name)
+      : findConfigsByTargetPath(allConfigs, targetPath);
+    const isReference = opts.kind === "reference";
+    const identityLabel = isReference ? `Reference config "${name}"` : targetPath;
+    const identityNoun = isReference ? "name" : "path";
 
     if (existingOwners.length > 0 && !opts.update) {
       const owners = existingOwners.map((owner) => `${owner.slug} (${owner.id})`).join(", ");
-      console.error(chalk.red(`${targetPath} is already tracked by: ${owners}`));
+      console.error(chalk.red(`${identityLabel} is already tracked by: ${owners}`));
       if (existingOwners.length > 1) {
-        console.error(chalk.red(`  ${existingOwners.length} rows already collide on this path — apply order between them is undefined.`));
+        console.error(chalk.red(`  ${existingOwners.length} rows already collide on this ${identityNoun} — apply order between them is undefined.`));
       }
       console.error(chalk.dim("  Use `instructions add <path> --update` to refresh that row in place,"));
-      console.error(chalk.dim("  `instructions sync` to pull disk changes in, or `instructions delete <id>` first."));
+      if (isReference) {
+        console.error(chalk.dim("  or `instructions delete <id>` first."));
+      } else {
+        console.error(chalk.dim("  `instructions sync` to pull disk changes in, or `instructions delete <id>` first."));
+      }
       process.exit(1);
     }
 
     let config: Config;
     if (existingOwners.length > 0) {
-      const [target, ...rest] = existingOwners;
+      // Prefer the row whose stored name EXACTLY matches what the caller
+      // named, over whichever row `listConfigs`'s `ORDER BY category, name`
+      // happens to sort first. `existingOwners` can hold more than one row
+      // for a reference config once two rows collide only via the slug
+      // fallback (see findReferenceConfigsByName's case/punctuation clause,
+      // config-target-identity.ts) — e.g. "Sample Rule" and "sample rule".
+      // SQLite's default BINARY collation sorts uppercase before lowercase,
+      // so `existingOwners[0]` for that pair is always "Sample Rule"
+      // regardless of which one `--name` actually asked for. Without this,
+      // `add --update --name "sample rule"` silently overwrote "Sample
+      // Rule"'s content instead — the wrong row, with no error, and the
+      // confirmation line itself named the wrong config. Fixed per todos
+      // 195272ae, Finding 2. File-kind identity has no such ambiguity (a
+      // path's owners do not carry a comparable "exact name" concept), so
+      // this only changes behaviour for reference-kind configs; file-kind
+      // `existingOwners` still resolves to its first (and, in practice,
+      // only) entry exactly as before.
+      const exactIndex = isReference ? existingOwners.findIndex((owner) => owner.name === name) : -1;
+      const target = exactIndex >= 0 ? existingOwners[exactIndex] : existingOwners[0];
+      const rest = existingOwners.filter((owner) => owner.id !== target!.id);
+      // Preserve provenance: capture the row's current content and version as a
+      // snapshot BEFORE it is overwritten, whenever the content is actually
+      // changing. This is the same primitive `apply.ts` already uses to protect
+      // a disk file's previous content right before a render overwrites it
+      // (`store.createSnapshot`) — applied here at the DB-write boundary
+      // instead, so a content edit via `add --update` is recoverable via
+      // `instructions snapshot list/restore` even before anything is ever
+      // applied or rendered again.
+      if (content !== target!.content) {
+        await store.createSnapshot(target!.id, target!.content, target!.version);
+      }
       config = await store.updateConfig(target!.id, {
         content,
         format: fmt,
@@ -482,7 +712,7 @@ program
       });
       console.log(chalk.green("✓") + ` Updated: ${chalk.bold(config.name)} ${chalk.dim(`(${config.slug})`)}`);
       if (rest.length > 0) {
-        console.log(chalk.yellow(`  ⚠ ${rest.length} other row(s) still target ${targetPath}: ${rest.map((r) => r.slug).join(", ")}`));
+        console.log(chalk.yellow(`  ⚠ ${rest.length} other row(s) still share this ${identityNoun}: ${rest.map((r) => r.slug).join(", ")}`));
         console.log(chalk.yellow("    Apply order between them is undefined. Delete the extras."));
       }
       if (redacted.length > 0) {
@@ -772,24 +1002,23 @@ profileCmd.command("list").description("List all profiles")
   .option("-f, --format <fmt>", "compact|table|json", "compact")
   .option("--verbose", "show expanded profile metadata")
   .option("--json", "output full profiles as JSON")
-  .option("--limit <n>", `max rows for human output (default ${DEFAULT_LIST_LIMIT})`)
-  .option("--cursor <n>", "zero-based pagination cursor for human output")
+  .option("--limit <n>", `max rows requested from the source (default ${DEFAULT_LIST_LIMIT})`)
+  .option("--cursor <n>", "zero-based source pagination cursor")
   .action(async (opts) => {
   const fmt = opts.json ? "json" : opts.verbose ? "table" : opts.brief ? "compact" : opts.format;
   const store = resolveConfigStore();
-  const profiles = await store.listProfiles();
-  if (fmt === "json") { printJson(profiles); return; }
-  if (profiles.length === 0) { console.log(chalk.dim("No profiles.")); return; }
-  const page = paginate(profiles, { limit: opts.limit, cursor: opts.cursor });
+  const page = await store.listProfilesPage({ limit: opts.limit, cursor: opts.cursor });
+  if (fmt === "json") { printJson(page); return; }
+  if (page.total === 0) { console.log(chalk.dim("No profiles.")); return; }
   if (fmt === "compact") console.log(`${pad("slug", 28)} ${pad("configs", 8)} ${pad("match", 36)} vars`);
   for (const p of page.items) {
+    const configCount = (await store.getProfileConfigsPage(p.id, { limit: 1 })).total;
     if (fmt === "compact") {
       const selectorSummary = formatProfileSelectorSummary(p);
-      console.log(`${pad(p.slug, 28)} ${pad(String((await store.getProfileConfigs(p.id)).length), 8)} ${pad(selectorSummary || "-", 36)} ${Object.keys(p.variables).length}`);
+      console.log(`${pad(p.slug, 28)} ${pad(String(configCount), 8)} ${pad(selectorSummary || "-", 36)} ${Object.keys(p.variables).length}`);
       continue;
     }
-    const configs = await store.getProfileConfigs(p.id);
-    console.log(`${chalk.bold(p.name)} ${chalk.dim(`(${p.slug})`)} — ${configs.length} config(s)`);
+    console.log(`${chalk.bold(p.name)} ${chalk.dim(`(${p.slug})`)} — ${configCount} config(s)`);
     if (p.description) console.log(`  ${chalk.dim(p.description)}`);
     const selectorSummary = formatProfileSelectorSummary(p);
     if (selectorSummary) console.log(`  ${chalk.dim(`match: ${selectorSummary}`)}`);
@@ -815,23 +1044,60 @@ profileCmd.command("create <name>").description("Create a new profile")
     console.log(chalk.green("✓") + ` Created profile: ${chalk.bold(p.name)} ${chalk.dim(`(${p.slug})`)}`);
   });
 
+profileCmd.command("update <id>").description("Update an existing profile's variables in one store operation")
+  .option("--var <vars...>", "set profile variable(s) as KEY=VALUE")
+  .option("--unset-var <keys...>", "remove profile variable(s) by key")
+  .action(async (id, opts) => {
+    try {
+      const setVariables = parseVarArgs(opts.var) ?? {};
+      const unsetVariables = parseUnsetVarArgs(opts.unsetVar);
+      const setKeys = new Set(Object.keys(setVariables));
+      const conflicts = unsetVariables.filter((key) => setKeys.has(key));
+      if (conflicts.length > 0) {
+        throw new Error(`Variables cannot be both set and unset: ${conflicts.join(", ")}`);
+      }
+      if (Object.keys(setVariables).length === 0 && unsetVariables.length === 0) {
+        throw new Error("Provide --var KEY=VALUE and/or --unset-var KEY");
+      }
+
+      const store = resolveConfigStore();
+      const profile = await store.getProfile(id);
+      const variables = { ...profile.variables };
+      for (const key of unsetVariables) delete variables[key];
+      Object.assign(variables, setVariables);
+      const updated = await store.updateProfile(profile.id, { variables });
+      console.log(chalk.green("✓") + ` Updated profile: ${chalk.bold(updated.name)} ${chalk.dim(`(${updated.slug})`)}`);
+    } catch (e) { console.error(chalk.red(formatCliError(e))); process.exit(1); }
+  });
+
 profileCmd.command("show <id>").description("Show profile and its configs")
   .option("--limit <n>", `max config rows (default ${DEFAULT_LIST_LIMIT})`)
   .option("--cursor <n>", "zero-based pagination cursor")
+  .option("--json", "output the profile and bounded membership page as JSON")
   .action(async (id, opts) => {
   try {
     const store = resolveConfigStore();
     const p = await store.getProfile(id);
-    const configs = await store.getProfileConfigs(id);
+    // Follow-up reads must use the canonical ID returned by profile lookup.
+    // A remote API may resolve a slug through its collection fallback while
+    // its slug route remains stale; passing the original slug would regress
+    // immediately on configs, bindings, or assets.
+    const page = await store.getProfileConfigsPage(p.id, { limit: opts.limit, cursor: opts.cursor });
+    const assets = await store.getProfileAssetBindings(p.id);
+    if (opts.json) {
+      printJson({ profile: p, configs: page, bindings: await store.getProfileConfigBindings(p.id), assets });
+      return;
+    }
     console.log(chalk.bold(p.name) + chalk.dim(` (${p.slug})`));
     if (p.description) console.log(chalk.dim(p.description));
     const selectorSummary = formatProfileSelectorSummary(p);
     if (selectorSummary) console.log(chalk.dim(`match: ${selectorSummary}`));
     const varSummary = formatProfileVariables(p);
     if (varSummary) console.log(chalk.dim(`vars: ${varSummary}`));
-    console.log(chalk.cyan(`${configs.length} config(s):`));
-    const page = paginate(configs, { limit: opts.limit, cursor: opts.cursor });
+    console.log(chalk.cyan(`${page.total} config(s):`));
     for (const c of page.items) console.log(`  ${c.slug} ${chalk.dim(`[${c.category}/${c.agent}]`)}`);
+    console.log(chalk.cyan(`${assets.length} asset(s):`));
+    for (const asset of assets) console.log(`  ${asset.binding.assetKey} ${chalk.dim(`[${asset.binding.kind}]`)}`);
     if (page.has_more) {
       console.log(chalk.dim(`Showing ${page.items.length} of ${page.total}. Next: configs profile show ${id} --cursor ${page.next_cursor} --limit ${page.limit}`));
     }
@@ -855,6 +1121,76 @@ profileCmd.command("remove <profile> <config>").description("Remove a config fro
     console.log(chalk.green("✓") + ` Removed ${c.slug} from profile ${profile}`);
   } catch (e) { console.error(chalk.red(formatCliError(e))); process.exit(1); }
 });
+
+const profileAssetCmd = profileCmd.command("asset").description("Manage typed skills, workflows, plugins, extensions, hooks, and custom-agent assets");
+
+profileAssetCmd.command("list <profile>").description("List a profile's asset bindings")
+  .option("--json", "output asset bindings as JSON")
+  .action(async (profile, opts) => {
+    try {
+      const assets = await resolveConfigStore().getProfileAssetBindings(profile);
+      if (opts.json) { printJson({ assets }); return; }
+      if (assets.length === 0) { console.log(chalk.dim("No asset bindings.")); return; }
+      for (const row of assets) {
+        const binding = row.binding;
+        console.log(`${chalk.bold(binding.assetKey)} ${chalk.dim(`[${binding.kind}]`)}`);
+        console.log(`  ${binding.selector.provider}/${binding.selector.surface}@${binding.selector.versionRange} ${binding.selector.scope}`);
+        console.log(`  ${binding.destination.strategy} -> ${binding.destination.root}:${binding.destination.relativePath}`);
+      }
+    } catch (e) { console.error(chalk.red(formatCliError(e))); process.exit(1); }
+  });
+
+profileAssetCmd.command("add <profile> <config>").description("Add a content-addressed asset binding sourced from a stored config")
+  .requiredOption("--input <path>", "JSON file containing the asset binding object")
+  .option("--json", "output the stored asset binding as JSON")
+  .action(async (profile, config, opts) => {
+    try {
+      const store = resolveConfigStore();
+      const source = await store.getConfig(config);
+      const path = resolveSessionPath(opts.input);
+      const binding = normalizeProfileAssetBinding(JSON.parse(readSessionInstructionSourceFile(path)));
+      const stored = await store.addAssetToProfile(profile, source.id, binding);
+      if (opts.json) printJson(stored);
+      else console.log(chalk.green("✓") + ` Added ${binding.assetKey} asset to profile ${profile}`);
+    } catch (e) { console.error(chalk.red(formatCliError(e))); process.exit(1); }
+  });
+
+profileAssetCmd.command("set <profile> <asset-key>").description("Replace one profile asset binding without changing its source bundle")
+  .requiredOption("--input <path>", "JSON file containing the asset binding object")
+  .option("--json", "output the stored asset binding as JSON")
+  .action(async (profile, assetKey, opts) => {
+    try {
+      const store = resolveConfigStore();
+      const path = resolveSessionPath(opts.input);
+      const binding = normalizeProfileAssetBinding(JSON.parse(readSessionInstructionSourceFile(path)));
+      const stored = await store.setProfileAssetBinding(profile, assetKey, binding);
+      if (opts.json) printJson(stored);
+      else console.log(chalk.green("✓") + ` Updated ${assetKey} asset in profile ${profile}`);
+    } catch (e) { console.error(chalk.red(formatCliError(e))); process.exit(1); }
+  });
+
+profileAssetCmd.command("remove <profile> <asset-key>").description("Remove one managed asset binding from a profile")
+  .action(async (profile, assetKey) => {
+    try {
+      await resolveConfigStore().removeAssetFromProfile(profile, assetKey);
+      console.log(chalk.green("✓") + ` Removed ${assetKey} asset from profile ${profile}`);
+    } catch (e) { console.error(chalk.red(formatCliError(e))); process.exit(1); }
+  });
+
+profileCmd.command("binding <profile> <config>").description("Set a config's schema-versioned instruction binding in one profile")
+  .requiredOption("--input <path>", "JSON file containing the binding object")
+  .option("--json", "output the stored binding as JSON")
+  .action(async (profile, config, opts) => {
+    try {
+      const store = resolveConfigStore();
+      const selected = await store.getConfig(config);
+      const path = resolveSessionPath(opts.input);
+      const binding = normalizeProfileConfigBinding(JSON.parse(readSessionInstructionSourceFile(path)));
+      const stored = await store.setProfileConfigBinding(profile, selected.id, binding);
+      if (opts.json) printJson(stored);
+      else console.log(chalk.green("✓") + ` Updated ${selected.slug} binding in profile ${profile}`);
+    } catch (e) { console.error(chalk.red(formatCliError(e))); process.exit(1); }
+  });
 
 profileCmd.command("apply [id]").description("Apply all configs in a profile to disk")
   .option("--dry-run", "preview without writing")
@@ -912,9 +1248,16 @@ profileCmd.command("resolve").description("Resolve the matching machine-aware pr
   .option("--hostname <hostname>", "override detected hostname")
   .option("--os <os>", "override detected OS")
   .option("--arch <arch>", "override detected arch")
+  .option("--limit <n>", `maximum profiles per source scan batch (default ${DEFAULT_LIST_LIMIT})`)
+  .option("--json", "output the complete bounded resolution read as JSON")
   .action(async (opts) => {
     const store = resolveConfigStore();
-    const { machine, profile, vars } = await getMachineProfileContext(opts, store);
+    const { machine, profile, resolution, vars } = await getMachineProfileContext(opts, store, { limit: opts.limit });
+    if (opts.json) {
+      printJson({ ...resolution, machine, vars });
+      if (!profile) process.exitCode = 1;
+      return;
+    }
     if (!profile) {
       console.log(chalk.yellow(`No matching profile for ${machine.hostname} ${machine.os_family}/${machine.arch}`));
       process.exit(1);
@@ -1047,7 +1390,16 @@ sessionCmd.command("plan")
   .option("--source <layer:id=path>", `instruction source file; layers: ${SESSION_SOURCE_LAYER_HELP}`, collectOption, [])
   .option("--config <layer:id-or-slug>", "stored config source by id/slug; repeatable; layer aliases match --source", collectOption, [])
   .option("--identity-export <path>", "OpenIdentities configs instruction export JSON; repeatable", collectOption, [])
-  .option("--replace-source <id>", "source id that replaces earlier layers instead of appending", collectOption, [])
+  .option("--replace-source <replacer-id>[=<target-source-id>]", "source id that broadly replaces earlier layers, or targets one earlier source", collectOption, [])
+  .option("--compile-profile <id-or-slug>", "compile persisted config bindings from this Instructions profile")
+  .option("--provider-version <semver>", "installed provider version used for capability matching")
+  .option("--provider-variant <variant>", "explicit provider capability variant (for example OpenCode v2-agents)")
+  .option("--model <model>", "active model used for model activation")
+  .option("--path <path>", "active path recorded in the graph context")
+  .option("--manual <config-id-or-slug>", "manually activate a binding; repeatable", collectOption, [])
+  .option("--asset-surface <surface>", "explicit provider asset surface (for example cline cli or ide)")
+  .option("--asset-scope <scope>", "asset scope (global|project|session)")
+  .option("--allow-asset-installers", "opt in to planned provider installers; planning never invokes them")
   .option("--codewith-native-imports", "select the gated Codewith native @ import adapter")
   .option("--allow-empty-sources", "allow an explicit empty render plan")
   .option("--check-global-coverage", "warn (non-fatal) when a registered, non-retired global-* source is absent from this render's --config list; expected is read fresh from the registry, independent of this plan (todos 102d6d0a)")
@@ -1060,17 +1412,7 @@ sessionCmd.command("plan")
         process.exit(1);
       }
       const store = resolveConfigStore();
-      const sources = await collectSessionSources(opts, tool, store);
-      const plan = planSessionRender({
-        tool,
-        profile: opts.profile,
-        targetHome: opts.targetHome,
-        projectRoot: opts.projectRoot,
-        sessionId: opts.sessionId,
-        codewithNativeImports: opts.codewithNativeImports,
-        allowEmptySources: opts.allowEmptySources,
-        sources,
-      });
+      const plan = await buildSessionRenderPlan(opts, tool, store, "dry-run");
       const globalCoverage = opts.checkGlobalCoverage ? await checkGlobalSourceCoverage(plan, store) : null;
       if (opts.json) {
         printJson({
@@ -1083,6 +1425,7 @@ sessionCmd.command("plan")
       console.log(`${chalk.cyan("profile:")} ${plan.profile}`);
       console.log(`${chalk.cyan("target:")} ${plan.targetHome}`);
       console.log(`${chalk.cyan("owner:")} ${plan.targetOwner.kind} ${chalk.dim(plan.targetOwner.reason)}`);
+      printInstructionGraphSelection(plan);
       if (plan.blocked) console.log(chalk.red(`blocked: ${plan.blockers.join("; ")}`));
       const envEntries = Object.entries(plan.env);
       if (envEntries.length > 0) {
@@ -1115,7 +1458,15 @@ sessionCmd.command("apply")
   .option("--source <layer:id=path>", `instruction source file; layers: ${SESSION_SOURCE_LAYER_HELP}`, collectOption, [])
   .option("--config <layer:id-or-slug>", "stored config source by id/slug; repeatable; layer aliases match --source", collectOption, [])
   .option("--identity-export <path>", "OpenIdentities configs instruction export JSON; repeatable", collectOption, [])
-  .option("--replace-source <id>", "source id that replaces earlier layers instead of appending", collectOption, [])
+  .option("--replace-source <replacer-id>[=<target-source-id>]", "source id that broadly replaces earlier layers, or targets one earlier source", collectOption, [])
+  .option("--compile-profile <id-or-slug>", "compile persisted config bindings from this Instructions profile")
+  .option("--provider-version <semver>", "installed provider version used for capability matching")
+  .option("--provider-variant <variant>", "explicit provider capability variant (for example OpenCode v2-agents)")
+  .option("--model <model>", "active model used for model activation")
+  .option("--path <path>", "active path recorded in the graph context")
+  .option("--manual <config-id-or-slug>", "manually activate a binding; repeatable", collectOption, [])
+  .option("--asset-surface <surface>", "explicit provider asset surface (for example cline cli or ide)")
+  .option("--asset-scope <scope>", "asset scope (global|project|session)")
   .option("--codewith-native-imports", "select the gated Codewith native @ import adapter")
   .option("--allow-empty-sources", "allow an explicit empty render")
   .option("--check-global-coverage", "warn (non-fatal) when a registered, non-retired global-* source is absent from this render's --config list; expected is read fresh from the registry, independent of this plan (todos 102d6d0a)")
@@ -1130,22 +1481,13 @@ sessionCmd.command("apply")
         process.exit(1);
       }
       const store = resolveConfigStore();
-      const sources = await collectSessionSources(opts, tool, store);
-      const plan = planSessionRender({
-        tool,
-        profile: opts.profile,
-        targetHome: opts.targetHome,
-        projectRoot: opts.projectRoot,
-        sessionId: opts.sessionId,
-        codewithNativeImports: opts.codewithNativeImports,
-        allowEmptySources: opts.allowEmptySources,
-        sources,
-      });
+      const plan = await buildSessionRenderPlan(opts, tool, store, "apply");
       const globalCoverage = opts.checkGlobalCoverage ? await checkGlobalSourceCoverage(plan, store) : null;
       const result = applySessionRender(plan, { dryRun: opts.dryRun, force: opts.force });
       if (opts.json) {
         printJson({
           ...result,
+          ...(instructionGraphFromPlan(plan) ? { instructionGraph: instructionGraphFromPlan(plan) } : {}),
           ...(globalCoverage ? { globalSourceCoverage: globalCoverage } : {}),
         });
         if (result.conflicts.length > 0) process.exitCode = 1;
@@ -1155,6 +1497,7 @@ sessionCmd.command("apply")
       console.log(`${prefix} ${plan.tool} session apply ${chalk.dim(`(${plan.adapter.mode})`)}`);
       console.log(`${chalk.cyan("target:")} ${result.targetHome}`);
       console.log(`${chalk.cyan("owner:")} ${plan.targetOwner.kind}`);
+      printInstructionGraphSelection(plan);
       if (result.snapshotPath) console.log(`${chalk.cyan("snapshot:")} ${result.snapshotPath}`);
       if (Object.keys(result.env).length > 0) {
         console.log(`${chalk.cyan("env:")} ${Object.entries(result.env).map(([key, value]) => `${key}=${value}`).join(" ")}`);
@@ -1695,6 +2038,26 @@ program
       console.log(chalk.dim("      Keep one row per path: `instructions delete <id>` for the extras."));
     }
 
+    // Same failure, the reference-kind identity axis: a reference config's
+    // identity is its NAME, not a target_path (it has none). Before todos
+    // 757cefdb, `add --update` had no way to find an existing reference row at
+    // all, so every re-ingest minted a fresh one — this reports rows that
+    // accumulated during that window so they can be reconciled by hand.
+    const duplicateReferenceNames = findDuplicateReferenceNameGroups(allConfigs);
+    if (duplicateReferenceNames.length === 0) {
+      pass("No reference config name is claimed by more than one row");
+    } else {
+      const rowCount = duplicateReferenceNames.reduce((total, group) => total + group.configs.length, 0);
+      fail(`${duplicateReferenceNames.length} reference name(s) claimed by more than one row (${rowCount} rows) — only one is live in the next render`);
+      for (const group of duplicateReferenceNames) {
+        console.log(chalk.yellow(`      ${group.name}`));
+        for (const c of group.configs) {
+          console.log(chalk.dim(`        ${c.slug}  (${c.id})  updated ${c.updated_at}`));
+        }
+      }
+      console.log(chalk.dim("      Keep one row per name: `instructions delete <id>` for the extras."));
+    }
+
     console.log(`\n${issues === 0 ? chalk.green("✓ All checks passed") : chalk.yellow(`${issues} issue(s) found`)}`);
   });
 
@@ -1867,7 +2230,7 @@ program
   .description("Summary of stored configs, drift, and ecosystem health")
   .option("--json", "output as JSON")
   .option("--markdown", "output as markdown")
-  .action(async () => {
+  .action(async (opts) => {
     const store = resolveConfigStore();
     const stats = await store.getConfigStats();
     const allConfigs = await store.listConfigs();
@@ -1893,6 +2256,37 @@ program
 
     // Project configs
     const projectConfigs = allConfigs.filter((c) => c.target_path && !c.target_path.startsWith("~/."));
+
+    if (opts.json) {
+      printJson({
+        schema_version: 1,
+        configs: {
+          total: allConfigs.length,
+          files: fileConfigs.length,
+          references: refConfigs.length,
+          templates: templates.length,
+          project: projectConfigs.length,
+        },
+        profiles: {
+          total: profiles.length,
+        },
+        drift: {
+          drifted,
+          missing,
+        },
+        secrets: {
+          findings: 0,
+          policy: "redacted_on_ingest",
+        },
+        by_agent: byAgent,
+        by_category: Object.fromEntries(
+          Object.entries(stats)
+            .filter(([key]) => key !== "total")
+            .map(([key, value]) => [key, Number(value)]),
+        ),
+      });
+      return;
+    }
 
     console.log(chalk.bold("configs report\n"));
     console.log(`  Total:       ${allConfigs.length} configs (${fileConfigs.length} files, ${refConfigs.length} references)`);

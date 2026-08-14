@@ -9,6 +9,7 @@ import {
   resolveCloudConfig,
   resolveConfigStore,
 } from "./config-store.js";
+import type { MachineContext } from "../types/index.js";
 
 interface RecordedCall {
   url: string;
@@ -65,6 +66,67 @@ const SAMPLE = {
   updated_at: "",
   synced_at: null,
 };
+const SAMPLE_PROFILE = {
+  id: "p1",
+  name: "Profile",
+  slug: "profile",
+  description: null,
+  selectors: { hostnames: ["station02"] },
+  variables: {},
+  created_at: "",
+  updated_at: "",
+};
+const SAMPLE_ASSET = {
+  profile_id: "p1",
+  source_config_id: "cfg-1",
+  sort_order: 0,
+  binding: {
+    schema: "hasna.instructions.profile-asset-binding/v1" as const,
+    assetKey: "review-skill",
+    kind: "skill" as const,
+    enabled: true,
+    required: true,
+    selector: { provider: "codex" as const, versionRange: ">=0.147.0", surface: "cli", scope: "session" as const },
+    source: {
+      kind: "skill" as const,
+      locator: "config://cfg-1@1",
+      digest: `sha256:${"0".repeat(64)}`,
+      immutable: true,
+      allowed: true,
+    },
+    destination: { strategy: "emit-file" as const, root: "target-home" as const, relativePath: "skills/review/SKILL.md" },
+    uninstall: "remove-managed" as const,
+    rollback: "snapshot" as const,
+  },
+};
+const SAMPLE_MACHINE: MachineContext = {
+  id: "machine-1",
+  hostname: "station02",
+  os: "linux",
+  arch: "x64",
+  os_family: "linux",
+  home_dir: "/tmp",
+  workspace_root: "/tmp/workspace",
+  bun_bin_dir: "/tmp/bin",
+  bun_path: "/tmp/bin/bun",
+  path_prefix: "/tmp/bin",
+  last_applied_at: null,
+  created_at: "",
+};
+
+function page<T>(items: T[], total = items.length, limit = 20, cursor = 0) {
+  const complete = cursor + items.length >= total;
+  return {
+    items,
+    total,
+    limit,
+    cursor,
+    next_cursor: complete ? null : cursor + items.length,
+    has_more: !complete,
+    complete,
+    truncated: false,
+  };
+}
 
 let active: { restore(): void } | undefined;
 afterEach(() => {
@@ -170,11 +232,314 @@ describe("CloudConfigStore CRUD mapping", () => {
   });
 
   test("getProfileConfigs -> GET /v1/profiles/:id embeds configs", async () => {
-    const m = mockFetch(() => ({ json: { profile: { id: "p1", name: "P", slug: "p", configs: [SAMPLE] } } }));
+    const m = mockFetch(() => ({ json: { profile: { ...SAMPLE_PROFILE, configs: [SAMPLE] }, configs: page([SAMPLE]) } }));
     active = m;
     const store = new CloudConfigStore(CONFIG);
     const configs = await store.getProfileConfigs("p");
     expect(configs).toHaveLength(1);
+  });
+
+  test("getProfile resolves a list-visible profile when direct identity lookup returns 404", async () => {
+    const m = mockFetch((call) => {
+      if (call.url.endsWith("/v1/profiles/my-setup")) {
+        return { status: 404, json: { error: "Profile not found: my-setup" } };
+      }
+      if (call.url.includes("/v1/profiles?")) {
+        return { json: page([{ ...SAMPLE_PROFILE, id: "ae1030fc-4b10-41c7-a127-9d81fccfbac0", slug: "my-setup" }]) };
+      }
+      return { status: 404, json: { error: "unexpected request" } };
+    });
+    active = m;
+    const store = new CloudConfigStore(CONFIG);
+
+    await expect(store.getProfile("my-setup")).resolves.toMatchObject({
+      id: "ae1030fc-4b10-41c7-a127-9d81fccfbac0",
+      slug: "my-setup",
+    });
+    expect(m.calls.map((call) => call.url)).toEqual([
+      "https://instructions.hasna.xyz/v1/profiles/my-setup",
+      "https://instructions.hasna.xyz/v1/profiles?limit=100&cursor=0",
+    ]);
+  });
+
+  test("getProfile still rejects an identity absent from both direct and list reads", async () => {
+    const m = mockFetch((call) => {
+      if (call.url.endsWith("/v1/profiles/missing")) {
+        return { status: 404, json: { error: "Profile not found: missing" } };
+      }
+      if (call.url.includes("/v1/profiles?")) {
+        return { json: page([{ ...SAMPLE_PROFILE, id: "p1", slug: "present" }]) };
+      }
+      return { status: 404, json: { error: "unexpected request" } };
+    });
+    active = m;
+    const store = new CloudConfigStore(CONFIG);
+
+    await expect(store.getProfile("missing")).rejects.toThrow("Profile not found: missing");
+  });
+
+  test("profile show follow-up reads use the canonical id after slug recovery", async () => {
+    const canonicalId = "ae1030fc-4b10-41c7-a127-9d81fccfbac0";
+    const profile = { ...SAMPLE_PROFILE, id: canonicalId, slug: "my-setup" };
+    const m = mockFetch((call) => {
+      if (call.url.endsWith("/v1/profiles/my-setup")) return { status: 404, json: { error: "Profile not found: my-setup" } };
+      if (call.url.includes("/v1/profiles?")) return { json: page([profile]) };
+      if (call.url.includes(`/v1/profiles/${canonicalId}?`)) return { json: { profile, configs: page([SAMPLE]) } };
+      if (call.url.endsWith(`/v1/profiles/${canonicalId}/assets`)) return { json: { assets: [] } };
+      if (call.url.endsWith(`/v1/profiles/${canonicalId}/bindings`)) return { json: { bindings: [] } };
+      return { status: 404, json: { error: "unexpected slug follow-up" } };
+    });
+    active = m;
+    const store = new CloudConfigStore(CONFIG);
+
+    const resolved = await store.getProfile("my-setup");
+    await store.getProfileConfigsPage(resolved.id);
+    await store.getProfileAssetBindings(resolved.id);
+    await store.getProfileConfigBindings(resolved.id);
+
+    expect(m.calls.map((call) => call.url)).toEqual([
+      "https://instructions.hasna.xyz/v1/profiles/my-setup",
+      "https://instructions.hasna.xyz/v1/profiles?limit=100&cursor=0",
+      `https://instructions.hasna.xyz/v1/profiles/${canonicalId}?limit=20&cursor=0`,
+      `https://instructions.hasna.xyz/v1/profiles/${canonicalId}/assets`,
+      `https://instructions.hasna.xyz/v1/profiles/${canonicalId}/bindings`,
+    ]);
+  });
+
+  test("profile follow-up reads retry the list-visible slug when canonical routes return 404", async () => {
+    const canonicalId = "ae1030fc-4b10-41c7-a127-9d81fccfbac0";
+    const profile = { ...SAMPLE_PROFILE, id: canonicalId, slug: "my-setup" };
+    const m = mockFetch((call) => {
+      if (call.url.endsWith(`/v1/profiles/${canonicalId}?limit=20&cursor=0`)) return { status: 404, json: { error: "Profile not found: ae1030" } };
+      if (call.url.endsWith(`/v1/profiles/${canonicalId}/assets`)) return { status: 404, json: { error: "Profile not found: ae1030" } };
+      if (call.url.endsWith(`/v1/profiles/${canonicalId}/bindings`)) return { status: 404, json: { error: "Profile not found: ae1030" } };
+      if (call.url.endsWith(`/v1/profiles/my-setup?limit=20&cursor=0`)) return { json: { profile, configs: page([SAMPLE]) } };
+      if (call.url.endsWith(`/v1/profiles/my-setup/assets`)) return { json: { assets: [] } };
+      if (call.url.endsWith(`/v1/profiles/my-setup/bindings`)) return { json: { bindings: [] } };
+      if (call.url.includes("/v1/profiles?")) return { json: page([profile]) };
+      return { status: 404, json: { error: "unexpected request" } };
+    });
+    active = m;
+    const store = new CloudConfigStore(CONFIG);
+
+    await expect(store.getProfileConfigsPage(canonicalId)).resolves.toMatchObject({ items: [SAMPLE] });
+    await expect(store.getProfileAssetBindings(canonicalId)).resolves.toEqual([]);
+    await expect(store.getProfileConfigBindings(canonicalId)).resolves.toEqual([]);
+
+    expect(m.calls.map((call) => call.url)).toEqual([
+      `https://instructions.hasna.xyz/v1/profiles/${canonicalId}?limit=20&cursor=0`,
+      "https://instructions.hasna.xyz/v1/profiles?limit=100&cursor=0",
+      "https://instructions.hasna.xyz/v1/profiles/my-setup?limit=20&cursor=0",
+      `https://instructions.hasna.xyz/v1/profiles/${canonicalId}/assets`,
+      "https://instructions.hasna.xyz/v1/profiles?limit=100&cursor=0",
+      "https://instructions.hasna.xyz/v1/profiles/my-setup/assets",
+      `https://instructions.hasna.xyz/v1/profiles/${canonicalId}/bindings`,
+      "https://instructions.hasna.xyz/v1/profiles?limit=100&cursor=0",
+      "https://instructions.hasna.xyz/v1/profiles/my-setup/bindings",
+    ]);
+  });
+
+  test("profile follow-ups preserve a legacy API's embedded configs when bindings and assets routes are absent", async () => {
+    const canonicalId = "ae1030fc-4b10-41c7-a127-9d81fccfbac0";
+    const profile = { ...SAMPLE_PROFILE, id: canonicalId, slug: "my-setup", configs: [SAMPLE] };
+    const m = mockFetch((call) => {
+      if (call.url.endsWith(`/v1/profiles/${canonicalId}`) || call.url.endsWith(`/v1/profiles/${canonicalId}?limit=100&cursor=0`)) {
+        return { json: { profile } };
+      }
+      if (call.url.endsWith(`/v1/profiles/${canonicalId}/bindings`) || call.url.endsWith(`/v1/profiles/${canonicalId}/assets`)) {
+        return { status: 404, json: { error: "unknown profile action" } };
+      }
+      if (call.url.includes("/v1/profiles?")) return { json: page([profile]) };
+      return { status: 404, json: { error: "unexpected request" } };
+    });
+    active = m;
+    const store = new CloudConfigStore(CONFIG);
+
+    await expect(store.getProfileConfigBindings(canonicalId)).resolves.toEqual([
+      { profile_id: canonicalId, config_id: SAMPLE.id, sort_order: 0, binding: expect.objectContaining({ activation: { mode: "always" } }) },
+    ]);
+    await expect(store.getProfileAssetBindings(canonicalId)).resolves.toEqual([]);
+  });
+
+  test("legacy follow-up fallback rejects unknown identities for bindings and assets", async () => {
+    const m = mockFetch((call) => {
+      if (call.url.endsWith("/v1/profiles/missing/bindings") || call.url.endsWith("/v1/profiles/missing/assets")) {
+        return { status: 404, json: { error: "unknown profile action" } };
+      }
+      if (call.url.includes("/v1/profiles?")) return { json: page([{ ...SAMPLE_PROFILE, id: "p1", slug: "present" }]) };
+      return { status: 404, json: { error: "Profile not found: missing" } };
+    });
+    active = m;
+    const store = new CloudConfigStore(CONFIG);
+
+    await expect(store.getProfileConfigBindings("missing")).rejects.toThrow("Profile not found: missing");
+    await expect(store.getProfileAssetBindings("missing")).rejects.toThrow("Profile not found: missing");
+  });
+
+  test("non-404 malformed follow-up responses do not degrade to an empty legacy result", async () => {
+    const m = mockFetch(() => ({ json: { unexpected: true } }));
+    active = m;
+    const store = new CloudConfigStore(CONFIG);
+
+    await expect(store.getProfileAssetBindings("profile")).rejects.toThrow("invalid response");
+    await expect(store.getProfileConfigBindings("profile")).rejects.toThrow("invalid response");
+  });
+
+  test("maps profile asset CRUD to the separate cloud API paths", async () => {
+    const m = mockFetch((call) => {
+      if (call.method === "GET") return { json: { assets: [SAMPLE_ASSET] } };
+      if (call.method === "DELETE") return { json: { removed: true } };
+      return { status: call.method === "POST" ? 201 : 200, json: { asset: SAMPLE_ASSET } };
+    });
+    active = m;
+    const store = new CloudConfigStore(CONFIG);
+
+    expect(await store.getProfileAssetBindings("p1")).toEqual([SAMPLE_ASSET]);
+    expect(await store.addAssetToProfile("p1", "cfg-1", SAMPLE_ASSET.binding)).toEqual(SAMPLE_ASSET);
+    expect(await store.setProfileAssetBinding("p1", "review-skill", SAMPLE_ASSET.binding)).toEqual(SAMPLE_ASSET);
+    await store.removeAssetFromProfile("p1", "review-skill");
+
+    expect(m.calls.map((call) => [call.method, call.url])).toEqual([
+      ["GET", "https://instructions.hasna.xyz/v1/profiles/p1/assets"],
+      ["POST", "https://instructions.hasna.xyz/v1/profiles/p1/assets"],
+      ["PUT", "https://instructions.hasna.xyz/v1/profiles/p1/assets/review-skill"],
+      ["DELETE", "https://instructions.hasna.xyz/v1/profiles/p1/assets/review-skill"],
+    ]);
+    expect(m.calls[1]?.body).toEqual({ source_config_id: "cfg-1", binding: SAMPLE_ASSET.binding });
+    expect(m.calls[2]?.body).toEqual({ binding: SAMPLE_ASSET.binding });
+    expect(m.calls[1]?.headers["Idempotency-Key"]).toBeTruthy();
+    expect(m.calls[2]?.headers["Idempotency-Key"]).toBeTruthy();
+  });
+
+  test("listProfilesPage sends producer bounds and requires complete metadata", async () => {
+    const m = mockFetch(() => ({ json: page([SAMPLE_PROFILE], 3, 2, 2) }));
+    active = m;
+    const store = new CloudConfigStore(CONFIG);
+    const result = await store.listProfilesPage({ limit: 2, cursor: 2 });
+
+    expect(m.calls[0].url).toBe("https://instructions.hasna.xyz/v1/profiles?limit=2&cursor=2");
+    expect(result).toMatchObject({ total: 3, limit: 2, cursor: 2, complete: true, truncated: false });
+  });
+
+  test("getProfileConfigsPage sends membership bounds", async () => {
+    const m = mockFetch(() => ({
+      json: {
+        profile: { ...SAMPLE_PROFILE, configs: [SAMPLE] },
+        configs: page([SAMPLE], 5, 2, 4),
+      },
+    }));
+    active = m;
+    const store = new CloudConfigStore(CONFIG);
+    const result = await store.getProfileConfigsPage("profile", { limit: 2, cursor: 4 });
+
+    expect(m.calls[0].url).toBe("https://instructions.hasna.xyz/v1/profiles/profile?limit=2&cursor=4");
+    expect(result).toMatchObject({ total: 5, cursor: 4, complete: true, truncated: false });
+  });
+
+  test("resolveProfileForMachineRead sends the source scan bound", async () => {
+    const m = mockFetch(() => ({
+      json: {
+        profile: SAMPLE_PROFILE,
+        scanned: 5,
+        total: 5,
+        batch_limit: 2,
+        complete: true,
+        truncated: false,
+      },
+    }));
+    active = m;
+    const store = new CloudConfigStore(CONFIG);
+    const result = await store.resolveProfileForMachineRead(SAMPLE_MACHINE, { limit: 2 });
+
+    expect(m.calls[0].url).toBe("https://instructions.hasna.xyz/v1/profiles/resolve?hostname=station02&os=linux&arch=x64&limit=2");
+    expect(result).toMatchObject({ scanned: 5, total: 5, batch_limit: 2, complete: true, truncated: false });
+  });
+
+  test("new client sends explicit default bounds and safely pages an old server's complete profile array", async () => {
+    const legacyProfiles = Array.from({ length: 5 }, (_, index) => ({
+      ...SAMPLE_PROFILE,
+      id: `p${index + 1}`,
+      name: `Profile ${index + 1}`,
+      slug: `profile-${index + 1}`,
+    }));
+    const m = mockFetch(() => ({ json: { profiles: legacyProfiles, count: legacyProfiles.length } }));
+    active = m;
+    const store = new CloudConfigStore(CONFIG);
+    const result = await store.listProfilesPage();
+
+    expect(m.calls[0].url).toBe("https://instructions.hasna.xyz/v1/profiles?limit=20&cursor=0");
+    expect(result.items.map((profile) => profile.slug)).toEqual(legacyProfiles.map((profile) => profile.slug));
+    expect(result).toMatchObject({
+      total: 5,
+      limit: 20,
+      cursor: 0,
+      complete: true,
+      truncated: false,
+    });
+  });
+
+  test("new client safely pages an old server's complete embedded profile membership", async () => {
+    const legacyConfigs = Array.from({ length: 5 }, (_, index) => ({
+      ...SAMPLE,
+      id: `cfg-${index + 1}`,
+      name: `Config ${index + 1}`,
+      slug: `config-${index + 1}`,
+    }));
+    const m = mockFetch(() => ({
+      json: { profile: { ...SAMPLE_PROFILE, configs: legacyConfigs } },
+    }));
+    active = m;
+    const store = new CloudConfigStore(CONFIG);
+    const result = await store.getProfileConfigsPage("profile", { limit: 2, cursor: 2 });
+
+    expect(m.calls[0].url).toBe("https://instructions.hasna.xyz/v1/profiles/profile?limit=2&cursor=2");
+    expect(result.items.map((config) => config.slug)).toEqual(["config-3", "config-4"]);
+    expect(result).toMatchObject({
+      total: 5,
+      limit: 2,
+      cursor: 2,
+      next_cursor: 4,
+      complete: false,
+      truncated: false,
+    });
+  });
+
+  test("new client labels an old server's complete resolver response without inventing bounded counts", async () => {
+    const m = mockFetch(() => ({ json: { profile: SAMPLE_PROFILE } }));
+    active = m;
+    const store = new CloudConfigStore(CONFIG);
+    const result = await store.resolveProfileForMachineRead(
+      { ...SAMPLE_MACHINE, os: null, arch: null },
+      { limit: 2 },
+    );
+
+    expect(m.calls[0].url).toBe("https://instructions.hasna.xyz/v1/profiles/resolve?hostname=station02&limit=2");
+    expect(result).toMatchObject({
+      profile: SAMPLE_PROFILE,
+      scanned: null,
+      total: null,
+      batch_limit: null,
+      source_bounded: false,
+      complete: true,
+      truncated: false,
+    });
+  });
+
+  test("new client safely maps an old server's no-match 404 to a complete legacy result", async () => {
+    const m = mockFetch(() => ({ status: 404, json: { error: "no matching machine-aware profile" } }));
+    active = m;
+    const store = new CloudConfigStore(CONFIG);
+    const result = await store.resolveProfileForMachineRead({ ...SAMPLE_MACHINE, hostname: "missing" }, { limit: 2 });
+
+    expect(result).toMatchObject({
+      profile: null,
+      scanned: null,
+      total: null,
+      batch_limit: null,
+      source_bounded: false,
+      complete: true,
+      truncated: false,
+    });
   });
 });
 

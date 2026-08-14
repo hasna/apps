@@ -6,22 +6,34 @@ import type { Config } from "../types/index.js";
 import {
   AGENT_OPERATING_RULES_HEADING_PATTERN,
   AGENT_OPERATING_RULES_ROLE,
+  AGENT_OPERATING_RULES_PAYLOAD_SHA256,
   AGENT_OPERATING_RULES_SEMANTIC_POLICY_KEY,
   AGENT_OPERATING_RULES_SENTINEL_PATTERN,
   AGENT_OPERATING_RULES_SOURCE_ID,
   GLOBAL_AGENT_RULES_STANDARD_SLUG,
+  type AgentOperatingRulesPayloadIntegrity,
   compareAgentOperatingRulesVersions,
   parseAgentOperatingRulesVersion,
   resolveAgentOperatingRulesPayload,
 } from "./global-agent-rules-standard.js";
 import { CODEWITH_SHARED_TODOS_STORAGE_STANDARD_SLUG } from "./codewith-shared-todos-storage-standard.js";
 import {
+  SESSION_MANAGED_OUTPUT_MAX_BYTES,
+  SESSION_MANAGED_OUTPUT_WARN_BYTES,
   composeProjectContextSessionRender,
+  isSessionManagedOutputRelativePath,
   observeProjectContextSessionGuard,
   type ProjectContextSessionGuard,
 } from "./project-context.js";
 import { isRetiredOrUnsupportedConfigAgent } from "./config-agents.js";
 import { applyTransform } from "./transforms.js";
+import { configAssetDigest, resolveAssetDestination, type AssetPlan } from "./asset-plan.js";
+import {
+  detectCursorAuthorityConflicts,
+  observeCursorGlobalAuthority,
+  type CursorAuthorityConflict,
+  type CursorAuthorityObservation,
+} from "./cursor-authority.js";
 import {
   CODEWITH_NATIVE_IMPORTS_ENV,
   SESSION_INSTRUCTION_LAYERS,
@@ -55,6 +67,11 @@ export const SESSION_RENDER_TOOLS = [
   "qwen",
   "aicopilot",
   "antigravity",
+  "grok",
+  "copilot",
+  "devin",
+  "windsurf-legacy",
+  "cline",
 ] as const;
 
 export const SESSION_RENDER_PROFILE_ENTRYPOINTS = [
@@ -70,11 +87,16 @@ export const SESSION_RENDER_OWNED_CONFIG_TARGETS = [
 ] as const;
 
 export type SessionRenderTool = (typeof SESSION_RENDER_TOOLS)[number];
-export type SessionRenderMode = "native-imports" | "flattened-markdown" | "cursor-mdc" | "opencode-instructions" | "antigravity-rules";
+export type SessionRenderMode = "native-imports" | "flattened-markdown" | "cursor-mdc" | "opencode-instructions" | "antigravity-rules" | "provider-rules";
+export type SessionProviderSurface =
+  | "opencode-config-instructions"
+  | "opencode-agents-md"
+  | "copilot-repository-instructions"
+  | "copilot-path-instructions";
 export type SessionInstructionLayer = (typeof SESSION_INSTRUCTION_LAYERS)[number];
 export type SessionInstructionLayerAlias = SessionInstructionLayer | "provider" | "identity" | "project";
 export type SessionInstructionMerge = "append" | "replace";
-export type SessionRenderFileRole = "index" | "fragment" | "rule" | "config" | "manifest";
+export type SessionRenderFileRole = "index" | "fragment" | "rule" | "config" | "asset" | "manifest";
 export type SessionRenderTargetKind = "session-home" | "project-root" | "blocked";
 export type SessionTargetOwnerKind = "provider-profile" | "project" | "blocked";
 
@@ -109,6 +131,9 @@ export interface SessionToolAdapter {
   envVar?: string;
   nativeImports: boolean;
   description: string;
+  providerSurface?: "legacy-dual" | SessionProviderSurface;
+  projectScoped?: boolean;
+  ruleExtension?: ".md" | ".instructions.md";
 }
 
 export interface SessionInstructionSource {
@@ -131,6 +156,29 @@ export interface SessionInstructionSource {
   metadata?: Record<string, unknown> | null;
 }
 
+const IDENTITY_EXPORT_AUTHORITY = Symbol("hasna.instructions.identity-export-authority");
+
+const CODEWITH_PROTECTED_REPLACEMENT_TARGETS = new Map<string, string>([
+  [
+    "codewith-adversarial-review-proportionality",
+    "global-adversarial-review-proportionality-system-prompt",
+  ],
+  [
+    "codewith-workflow-reviewer-neutralizer",
+    "global-workflow-construction-standard",
+  ],
+]);
+
+interface IdentityExportAuthority {
+  token: object;
+  shape: IdentityExportShape;
+  packageName: string | null;
+}
+
+interface IdentityExportBoundSessionInstructionSource extends SessionInstructionSource {
+  [IDENTITY_EXPORT_AUTHORITY]?: IdentityExportAuthority;
+}
+
 interface OrderedSessionInstructionSource extends SessionInstructionSource {
   normalizedId: string;
   resolvedLabel: string;
@@ -138,6 +186,7 @@ interface OrderedSessionInstructionSource extends SessionInstructionSource {
   resolvedMerge: SessionInstructionMerge;
   resolvedOrder: number;
   resolvedRules: OrderedSessionInstructionRule[];
+  [IDENTITY_EXPORT_AUTHORITY]?: IdentityExportAuthority;
 }
 
 interface OrderedSessionInstructionRule extends SessionInstructionRule {
@@ -175,6 +224,16 @@ export interface SessionSkippedSource {
   label: string;
   targetProviders: string[];
   reason: string;
+  source?: {
+    layer: SessionInstructionLayer;
+    merge: SessionInstructionMerge;
+    order: number;
+    path: string | null;
+    hash: string | null;
+    renderedPayloadSha256: string;
+    nonOverridable: boolean;
+    provenance: Record<string, unknown> | null;
+  };
 }
 
 export interface SessionProfileRenderSelection {
@@ -190,11 +249,22 @@ export interface SessionRenderInput {
   projectRoot?: string;
   targetHome?: string;
   sessionId?: string;
+  /**
+   * Explicit Cursor authority home for isolated planners/tests. Production
+   * callers omit this and the detector resolves the current user home.
+   */
+  cursorAuthorityHome?: string;
   generatedAt?: string;
   codewithNativeImports?: boolean;
   allowEmptySources?: boolean;
   providerConfig?: SessionProviderConfig;
+  /** Explicit provider loading surface selected by the compiled capability descriptor. */
+  providerSurface?: SessionProviderSurface;
   skippedSources?: SessionSkippedSource[];
+  /** Executable/supporting assets remain separate from instruction sources. */
+  assetPlan?: AssetPlan;
+  /** Pinned source bytes keyed by source config id; never serialized into the plan or manifest. */
+  assetContents?: Readonly<Record<string, string>>;
 }
 
 export interface SessionRenderFile {
@@ -218,6 +288,8 @@ export interface SessionRenderManifest {
   writable: boolean;
   blocked: boolean;
   blockers: string[];
+  authorityObservations: CursorAuthorityObservation[];
+  authorityConflicts: CursorAuthorityConflict[];
   generatedAt: string;
   env: Record<string, string>;
   sourceHash: string;
@@ -240,6 +312,18 @@ export interface SessionRenderManifest {
       path: string;
       globs: string[];
       hash: string | null;
+      // Attestation for the rule PATH. Before todos `9af165a8` this entry stopped at
+      // `hash` — which is the caller's declared hash and is null on the export transport
+      // — so a rule-borne policy payload that had been repaired, and one that had never
+      // been checked at all, produced byte-identical manifests. There was no field a
+      // repair could be recorded in, which is why that failure was silent as well as
+      // unguarded. `contentSha256` is always present and is the digest of the bytes this
+      // render actually emitted; the floor keys are null when the floor did not apply.
+      contentSha256: string;
+      payloadFloorApplied: boolean | null;
+      flooredFromRulesVersion: string | null;
+      flooredFromPayloadSha256: string | null;
+      payloadIntegrity: string | null;
     }>;
     renderedPayloadSha256: string;
     provenance: Record<string, unknown> | null;
@@ -250,6 +334,16 @@ export interface SessionRenderManifest {
     label: string;
     targetProviders: string[];
     reason: string;
+    source?: {
+      layer: SessionInstructionLayer;
+      merge: SessionInstructionMerge;
+      order: number;
+      path: string | null;
+      hash: string | null;
+      renderedPayloadSha256: string;
+      nonOverridable: boolean;
+      provenance: Record<string, unknown> | null;
+    };
   }>;
   files: Array<{
     path: string;
@@ -276,6 +370,24 @@ export interface SessionRenderManifest {
     fragmentPath: string;
   };
   compatibility?: Record<string, unknown>;
+  assetPlan?: {
+    schema: AssetPlan["schema"];
+    planDigest: string;
+    profileId: string;
+    providerVersion: string;
+    surface: string;
+    scope: string;
+    assets: Array<{
+      assetId: string;
+      assetKey: string;
+      kind: string;
+      action: string;
+      mutationMode: string;
+      destination: AssetPlan["assets"][number]["destination"];
+      digest: string;
+      exactOnceKey: string;
+    }>;
+  };
 }
 
 export interface SessionRenderPlan {
@@ -290,6 +402,8 @@ export interface SessionRenderPlan {
   writable: boolean;
   blocked: boolean;
   blockers: string[];
+  authorityObservations: CursorAuthorityObservation[];
+  authorityConflicts: CursorAuthorityConflict[];
   /**
    * Carries the caller's --allow-empty-sources choice from plan-build time into
    * apply time. Apply-time emptiness (a plan that deletes every previously
@@ -303,6 +417,8 @@ export interface SessionRenderPlan {
   allowEmptySources: boolean;
   env: Record<string, string>;
   files: SessionRenderFile[];
+  assetPlan?: AssetPlan;
+  assetFiles: SessionRenderFile[];
   manifest: SessionRenderManifest;
   manifestFile: SessionRenderFile;
   allFiles: SessionRenderFile[];
@@ -355,6 +471,7 @@ export const SESSION_TOOL_ADAPTERS: Record<SessionRenderTool, SessionToolAdapter
     managedDir: ".cursor/rules",
     nativeImports: false,
     description: "Cursor project rule files in .cursor/rules/*.mdc.",
+    projectScoped: true,
   },
   opencode: {
     tool: "opencode",
@@ -365,6 +482,7 @@ export const SESSION_TOOL_ADAPTERS: Record<SessionRenderTool, SessionToolAdapter
     envVar: "OPENCODE_CONFIG_DIR",
     nativeImports: false,
     description: "OpenCode AGENTS.md plus opencode.json instructions pointing at managed fragments.",
+    providerSurface: "legacy-dual",
   },
   aicopilot: {
     tool: "aicopilot",
@@ -390,6 +508,53 @@ export const SESSION_TOOL_ADAPTERS: Record<SessionRenderTool, SessionToolAdapter
     managedDir: ".agents/rules",
     nativeImports: false,
     description: "Google Antigravity project rules in .agents/rules/*.md.",
+    projectScoped: true,
+  },
+  grok: {
+    tool: "grok",
+    mode: "flattened-markdown",
+    indexFile: "AGENTS.md",
+    managedDir: ".grok/instructions",
+    nativeImports: false,
+    description: "Grok Build repository instructions in AGENTS.md.",
+    projectScoped: true,
+  },
+  copilot: {
+    tool: "copilot",
+    mode: "flattened-markdown",
+    indexFile: ".github/copilot-instructions.md",
+    managedDir: ".github/instructions",
+    nativeImports: false,
+    description: "GitHub Copilot repository-wide instructions.",
+    projectScoped: true,
+    providerSurface: "copilot-repository-instructions",
+  },
+  devin: {
+    tool: "devin",
+    mode: "provider-rules",
+    managedDir: ".devin/rules",
+    nativeImports: false,
+    description: "Devin repository rules in .devin/rules/*.md.",
+    projectScoped: true,
+    ruleExtension: ".md",
+  },
+  "windsurf-legacy": {
+    tool: "windsurf-legacy",
+    mode: "provider-rules",
+    managedDir: ".windsurf/rules",
+    nativeImports: false,
+    description: "Legacy Windsurf repository rules in .windsurf/rules/*.md.",
+    projectScoped: true,
+    ruleExtension: ".md",
+  },
+  cline: {
+    tool: "cline",
+    mode: "provider-rules",
+    managedDir: ".clinerules",
+    nativeImports: false,
+    description: "Cline repository rules in .clinerules/*.md.",
+    projectScoped: true,
+    ruleExtension: ".md",
   },
   codewith: CODEWITH_FLATTENED_ADAPTER,
 };
@@ -490,6 +655,37 @@ function canonicalFingerprintValue(value: unknown): unknown {
   return value;
 }
 
+/**
+ * Per-rule attestation for the manifest.
+ *
+ * Reads the keys {@link applyAgentOperatingRulesFloorToRule} stamps onto rule metadata and
+ * flattens them onto the manifest entry, so an audit can tell FLOORED from UNFLOORED
+ * without re-deriving anything. Absent keys are emitted as explicit nulls rather than
+ * omitted: a missing key and a key that is legitimately null read identically to a
+ * consumer, and the whole point of this entry is that the two must be distinguishable.
+ */
+function ruleAttestation(rule: OrderedSessionInstructionRule): {
+  contentSha256: string;
+  payloadFloorApplied: boolean | null;
+  flooredFromRulesVersion: string | null;
+  flooredFromPayloadSha256: string | null;
+  payloadIntegrity: string | null;
+} {
+  const metadata = rule.metadata ?? {};
+  const read = (key: string): string | null => {
+    const value = metadata[key];
+    return typeof value === "string" ? value : null;
+  };
+  const applied = metadata["payloadFloorApplied"];
+  return {
+    contentSha256: sha256(rule.content ?? ""),
+    payloadFloorApplied: typeof applied === "boolean" ? applied : null,
+    flooredFromRulesVersion: read("flooredFromRulesVersion"),
+    flooredFromPayloadSha256: read("flooredFromPayloadSha256"),
+    payloadIntegrity: read("payloadIntegrity"),
+  };
+}
+
 function sourceFingerprint(source: OrderedSessionInstructionSource): Record<string, unknown> {
   return {
     id: source.id,
@@ -520,12 +716,16 @@ function sourceFingerprint(source: OrderedSessionInstructionSource): Record<stri
   };
 }
 
-function slug(value: string): string {
+export function normalizeSessionInstructionSourceId(value: string): string {
   const s = value
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
   return s || "instruction";
+}
+
+function slug(value: string): string {
+  return normalizeSessionInstructionSourceId(value);
 }
 
 function yamlQuote(value: string): string {
@@ -641,6 +841,63 @@ function applyAgentOperatingRulesFloor(
 }
 
 /**
+ * The rule-body twin of {@link applyAgentOperatingRulesFloor}.
+ *
+ * WHY THIS EXISTS AT ALL. The floor above guards exactly one field, `source.content`.
+ * `source.rules[].content` arrives on the SAME untrusted identity-export transport —
+ * `normalizeIdentityRules` copies rule bodies straight out of export JSON — and was
+ * neither floored, deduped, nor attested. So an export could install a below-baseline or
+ * tampered NON-OVERRIDABLE rules document simply by putting it in `rules[]` instead of
+ * `content`, and the render reported `floored: null`, `integrity: null`, `warnings: []`
+ * and `skipped: []`: indistinguishable from healthy. Measured on 088b862 and in the
+ * shipped 0.4.18 bundle (todos `9af165a8`).
+ *
+ * THE GATE IS THE DANGEROUS PART, and it is deliberately the SAME predicate the source
+ * path uses — {@link claimsAgentOperatingRulesPolicy}, evaluated against the RULE body
+ * with the rule's PARENT source supplying the privilege markers. Gating on a bare
+ * sentinel match instead would destroy any rule file that merely QUOTES the rules, which
+ * is the exact F2 failure `662a0bd` introduced and `4ba8737` had to fix at source level.
+ * Do not "simplify" this to a sentinel test.
+ *
+ * That predicate gives the property the source-level doc block already relies on: the
+ * privilege markers that let a payload win precedence (`nonOverridable`, the managed
+ * slug/source id, the agent-operating-rules role) are the same markers that pull it into
+ * the floor. A payload that drops them to escape the floor also drops its ability to
+ * displace the genuine rules. A rule that opens with the canonical heading is caught on
+ * presentation alone; one that merely quotes the heading mid-body is not, because
+ * {@link AGENT_OPERATING_RULES_HEADING_PATTERN} is anchored at the start of the body.
+ *
+ * Metadata is merged from the RULE, not the source, so a repair is recorded against the
+ * rule that was repaired.
+ */
+function applyAgentOperatingRulesFloorToRule(
+  source: SessionInstructionSource,
+  rule: SessionInstructionRule,
+  content: string,
+): { content: string; metadata: Record<string, unknown> | null } {
+  const unchanged = { content, metadata: rule.metadata ?? null };
+  if (!claimsAgentOperatingRulesPolicy(source, content)) return unchanged;
+
+  const payload = resolveAgentOperatingRulesPayload(content);
+  if (payload.content === content) {
+    return {
+      content,
+      metadata: { ...(rule.metadata ?? {}), payloadIntegrity: payload.integrity },
+    };
+  }
+
+  const floored = {
+    payloadFloorApplied: true,
+    flooredFromRulesVersion: parseAgentOperatingRulesVersion(content),
+    flooredFromPayloadSha256: sha256(content),
+  };
+  return {
+    content: payload.content,
+    metadata: { ...(rule.metadata ?? {}), ...payload.metadata, ...floored },
+  };
+}
+
+/**
  * A source the render deliberately discarded, and why.
  *
  * Every path that removes a source produces one of these. That is the whole point:
@@ -657,6 +914,16 @@ function skippedSource(source: OrderedSessionInstructionSource, reason: string):
     label: source.resolvedLabel,
     targetProviders: source.targetProviders ?? [],
     reason,
+    source: {
+      layer: source.resolvedLayer,
+      merge: source.resolvedMerge,
+      order: source.resolvedOrder,
+      path: source.path ?? null,
+      hash: source.hash ?? null,
+      renderedPayloadSha256: sha256(source.content),
+      nonOverridable: source.nonOverridable === true,
+      provenance: source.provenance ?? null,
+    },
   };
 }
 
@@ -691,16 +958,22 @@ function normalizeSources(
       }
       return normalized;
     });
+  const originalOrder = [...normalized].sort(compareSessionInstructionSources);
   const deduplicated = deduplicateSemanticPolicySources(normalized);
-  const ordered = deduplicated.selected
-    .sort((a, b) =>
-      SESSION_LAYER_RANK[a.resolvedLayer] - SESSION_LAYER_RANK[b.resolvedLayer] ||
-      a.resolvedOrder - b.resolvedOrder ||
-      a.id.localeCompare(b.id)
-    );
+  const ordered = deduplicated.selected.sort(compareSessionInstructionSources);
+  validateTargetedReplacementSources(originalOrder, ordered, deduplicated.skipped, tool);
   rejectDuplicateSourceSlugs(ordered);
   rejectDuplicateRulePaths(ordered);
   return { sources: ordered, skipped: deduplicated.skipped };
+}
+
+function compareSessionInstructionSources(
+  a: OrderedSessionInstructionSource,
+  b: OrderedSessionInstructionSource,
+): number {
+  return SESSION_LAYER_RANK[a.resolvedLayer] - SESSION_LAYER_RANK[b.resolvedLayer]
+    || a.resolvedOrder - b.resolvedOrder
+    || a.id.localeCompare(b.id);
 }
 
 /**
@@ -713,26 +986,147 @@ function normalizeSources(
  * source still wins over an ordinary source that merely declares a higher version, and
  * two equally-privileged sources resolve to the newer one.
  */
+/**
+ * What a source declares as the semantic policy, from EITHER field it can arrive in.
+ *
+ * `source.content` is checked first and on a bare sentinel, exactly as before — that
+ * branch is unchanged on purpose. Weakening it to the claim predicate would let a source
+ * carrying a bare sentinel escape the dedupe guard, trading one hole for another.
+ *
+ * The RULE branch is additive and is claim-gated rather than sentinel-gated, for the same
+ * F2 reason the floor is: a rule that merely QUOTES the rules contains the sentinel, and
+ * treating that as a declaration would let an innocent quoting file evict the genuine
+ * policy source. Gate and floor therefore agree by construction — a rule body is deduped
+ * on exactly the condition that also got it floored, so the bytes compared here are the
+ * floored bytes.
+ *
+ * Without this branch, a sentinel living only in a rule body walked straight past the
+ * collapse and one home rendered TWO contradictory rule-set versions with `skipped: []`
+ * and `warnings: []` — measured on 088b862, v115 and v116 side by side (todos `9af165a8`).
+ */
+interface SemanticPolicyDeclaration {
+  version: string;
+  normalizedContent: string;
+  integrity: AgentOperatingRulesPayloadIntegrity;
+}
+
+/**
+ * Whether the bytes about to be compared were checked against a digest this build pins.
+ *
+ * This is the ONLY signal available at selection time that the payload's own author does
+ * not control. `nonOverridable`, the source id, `metadata.role`, `kind` and the sentinel
+ * VERSION are all fields an identity export writes for itself; two candidates arriving on
+ * the same export are indistinguishable by any of them. The digest is computed here from
+ * the bytes against {@link AGENT_OPERATING_RULES_PAYLOAD_SHA256}, so it cannot be asserted
+ * into existence by a payload. Same predicate `resolveAgentOperatingRulesPayload` uses —
+ * this reads the value rather than inventing a new trust signal.
+ */
+function semanticPolicyIntegrity(body: string): AgentOperatingRulesPayloadIntegrity {
+  return sha256(body) === AGENT_OPERATING_RULES_PAYLOAD_SHA256 ? "pinned-digest" : "unverified-self-declared";
+}
+
+function semanticPolicyDeclaration(
+  source: OrderedSessionInstructionSource,
+): SemanticPolicyDeclaration | null {
+  const normalize = (value: string) => value.replace(/\r\n/g, "\n").trim();
+  const sentinel = source.content.match(AGENT_OPERATING_RULES_SENTINEL_PATTERN);
+  if (sentinel) {
+    return {
+      version: sentinel[1]!,
+      normalizedContent: normalize(source.content),
+      integrity: semanticPolicyIntegrity(source.content),
+    };
+  }
+  for (const rule of source.resolvedRules) {
+    const body = rule.content ?? "";
+    if (!claimsAgentOperatingRulesPolicy(source, body)) continue;
+    const ruleSentinel = body.match(AGENT_OPERATING_RULES_SENTINEL_PATTERN);
+    if (!ruleSentinel) continue;
+    return {
+      version: ruleSentinel[1]!,
+      normalizedContent: normalize(body),
+      integrity: semanticPolicyIntegrity(body),
+    };
+  }
+  return null;
+}
+
+/**
+ * The losing source with its policy payload removed and everything else intact, or null
+ * when the policy WAS the whole source.
+ *
+ * Before this, losing the collapse discarded the entire source. A valid `@hasna/identities`
+ * export may carry ordinary content plus several `rules[]` entries beside a policy rule;
+ * promoting that one rule to a declaration for the whole source and then skipping the
+ * source deleted unrelated safety and operational instructions from the rendered home,
+ * with only a source-level skip record and no copy of what was lost. That is a home
+ * carrying LESS than the ratified rule set, which is the failure this collapse exists to
+ * prevent arriving by a different door (hasna/instructions#54, @agent-chief-strategy P1).
+ *
+ * Every declaring carrier is removed, not just the one `semanticPolicyDeclaration`
+ * happened to report: a source whose content AND a rule both declare would otherwise keep
+ * the second copy and defeat the collapse it just lost.
+ */
+function withoutSemanticPolicyPayloads(
+  source: OrderedSessionInstructionSource,
+): OrderedSessionInstructionSource | null {
+  const content = AGENT_OPERATING_RULES_SENTINEL_PATTERN.test(source.content) ? "" : source.content;
+  const resolvedRules = source.resolvedRules.filter((rule) => {
+    const body = rule.content ?? "";
+    return !(AGENT_OPERATING_RULES_SENTINEL_PATTERN.test(body) && claimsAgentOperatingRulesPolicy(source, body));
+  });
+  const hasPathReferences = (source.sourcePaths ?? []).length > 0;
+  if (!content.trim() && resolvedRules.length === 0 && !hasPathReferences) return null;
+  return { ...source, content, resolvedRules };
+}
+
 function deduplicateSemanticPolicySources(
   sources: OrderedSessionInstructionSource[],
 ): { selected: OrderedSessionInstructionSource[]; skipped: SessionSkippedSource[] } {
   const selected: OrderedSessionInstructionSource[] = [];
   const skipped: SessionSkippedSource[] = [];
-  const policySources = new Map<string, { index: number; version: string; normalizedContent: string }>();
-  const collapseReason = (winner: OrderedSessionInstructionSource, key: string) =>
-    `superseded by "${winner.id}": sources declaring the semantic policy ${key} collapse to one so a single instruction home cannot carry two rule-set versions`;
+  const policySources = new Map<string, {
+    index: number;
+    version: string;
+    normalizedContent: string;
+    integrity: AgentOperatingRulesPayloadIntegrity;
+  }>();
+  const collapseReason = (
+    winner: OrderedSessionInstructionSource,
+    key: string,
+    partial: boolean,
+    displacesVerified: boolean,
+  ) =>
+    `superseded by "${winner.id}": sources declaring the semantic policy ${key} collapse to one so a single instruction home cannot carry two rule-set versions`
+    + (partial
+      ? "; only the policy payload was removed and this source's other instructions still render"
+      : "")
+    + (displacesVerified
+      ? "; WARNING the surviving payload is unverified-self-declared and displaced a digest-verified one on its own version claim"
+      : "");
+  // A loser is stripped rather than deleted where it carries anything else, and the skip
+  // record says which of the two happened.
+  const discard = (
+    loser: OrderedSessionInstructionSource,
+    winner: OrderedSessionInstructionSource,
+    key: string,
+    displacesVerified: boolean,
+  ) => {
+    const remainder = withoutSemanticPolicyPayloads(loser);
+    skipped.push(skippedSource(loser, collapseReason(winner, key, remainder !== null, displacesVerified)));
+    return remainder;
+  };
   for (const source of sources) {
-    const sentinel = source.content.match(AGENT_OPERATING_RULES_SENTINEL_PATTERN);
-    if (!sentinel) {
+    const declaration = semanticPolicyDeclaration(source);
+    if (!declaration) {
       selected.push(source);
       continue;
     }
-    const version = sentinel[1]!;
+    const { version, normalizedContent, integrity } = declaration;
     const key = AGENT_OPERATING_RULES_SEMANTIC_POLICY_KEY;
-    const normalizedContent = source.content.replace(/\r\n/g, "\n").trim();
     const existing = policySources.get(key);
     if (!existing) {
-      policySources.set(key, { index: selected.length, version, normalizedContent });
+      policySources.set(key, { index: selected.length, version, normalizedContent, integrity });
       selected.push(source);
       continue;
     }
@@ -745,28 +1139,81 @@ function deduplicateSemanticPolicySources(
     }
     const current = selected[existing.index]!;
     const priorityOrder = semanticPolicySourcePriority(source) - semanticPolicySourcePriority(current);
+    // SELECTION IS PRIORITY-THEN-VERSION, and the version half is NOT a trust decision.
+    //
+    // The reachable eviction reported on hasna/instructions#54 was a `9.9.9` payload
+    // displacing the genuine rules at EQUAL priority. It was reachable because
+    // `semanticPolicySourcePriority` credited only {@link GLOBAL_AGENT_RULES_STANDARD_SLUG}
+    // while {@link claimsAgentOperatingRulesPolicy} recognises {@link
+    // AGENT_OPERATING_RULES_SOURCE_ID} as the managed identity too — so the canonical
+    // managed source tied with an ordinary export instead of outranking it, and the
+    // attacker-chosen version number became the tiebreak. That asymmetry is fixed in
+    // `semanticPolicySourcePriority`.
+    //
+    // ORDERING BY INTEGRITY INSTEAD WAS TRIED AND REJECTED, recorded so it is not
+    // re-proposed as an obvious improvement. Ranking `pinned-digest` above
+    // `unverified-self-declared` closes the equal-priority case, and it also inverts
+    // `collapses to the newer version regardless of source ordering` in
+    // `session-render.test.ts`: the pinned digest describes THIS BUILD's embedded snapshot,
+    // so "verified" and "stale" are the same payload, and preferring it would freeze any
+    // home that carries the old snapshot beside a newly published rules document on the
+    // snapshot. That is the downgrade the floor exists to prevent, arriving by the
+    // selection path instead.
+    //
+    // WHAT REMAINS OPEN, because a comparison cannot close it: every field here is one the
+    // payload writes about itself, so an export that also mimics the canonical source id
+    // ties on priority and wins on version again. Selection is precedence, not
+    // authentication — closing it needs a signed payload or a digest delivered by the
+    // package channel. Until then the residual is made LOUD rather than silent: when an
+    // unverified payload displaces a digest-verified one, the skip reason says so, and
+    // `planSessionRender` turns every skip reason into a warning line.
+    const displacesVerified = existing.integrity === "pinned-digest"
+      && integrity === "unverified-self-declared";
+    const arrivingWins = priorityOrder > 0
+      || (priorityOrder === 0 && versionOrder > 0);
     // The incumbent wins: the ARRIVING source is the one being discarded.
-    if (priorityOrder < 0 || (priorityOrder === 0 && versionOrder <= 0)) {
-      skipped.push(skippedSource(source, collapseReason(current, key)));
+    if (!arrivingWins) {
+      const remainder = discard(source, current, key, false);
+      if (remainder) selected.push(remainder);
       continue;
     }
     // The arriving source wins: the INCUMBENT is the one being discarded. Reporting only
     // the first case would leave exactly the eviction an operator is most likely to care
     // about — a payload they explicitly passed losing to a later one — unreported.
-    skipped.push(skippedSource(current, collapseReason(source, key)));
+    const remainder = discard(current, source, key, displacesVerified);
     selected[existing.index] = {
       ...source,
       resolvedOrder: current.resolvedOrder,
     };
-    policySources.set(key, { index: existing.index, version, normalizedContent });
+    // Appended rather than left in place: the winner takes the incumbent's slot, and
+    // `normalizeSources` re-sorts on layer/order/id immediately after, so the remainder
+    // returns to its own position rather than to the end of the render.
+    if (remainder) selected.push(remainder);
+    policySources.set(key, { index: existing.index, version, normalizedContent, integrity });
   }
   return { selected, skipped };
 }
 
+/**
+ * Precedence among sources declaring the same semantic policy.
+ *
+ * BOTH canonical managed ids are credited, and the omission of the second one was the
+ * reachable defect behind hasna/instructions#54: {@link claimsAgentOperatingRulesPolicy}
+ * treats {@link GLOBAL_AGENT_RULES_STANDARD_SLUG} and {@link AGENT_OPERATING_RULES_SOURCE_ID}
+ * as the same managed identity, but only the first earned precedence here. A render whose
+ * genuine policy source carried the SECOND id therefore tied with any ordinary export that
+ * set `nonOverridable`, and the tie fell through to the sentinel VERSION — which the
+ * export writes for itself. An export stamping `9.9.9` evicted the genuine rules and
+ * rendered in their place as the non-overridable policy.
+ *
+ * This is PRECEDENCE, not authentication. Every input is self-declared, so an export that
+ * also mimics a canonical id ties again; see the ordering note in
+ * `deduplicateSemanticPolicySources` for why a digest comparison cannot substitute.
+ */
 function semanticPolicySourcePriority(source: OrderedSessionInstructionSource): number {
   let priority = 0;
   if (source.nonOverridable) priority += 4;
-  if (source.id === GLOBAL_AGENT_RULES_STANDARD_SLUG) priority += 2;
+  if (source.id === GLOBAL_AGENT_RULES_STANDARD_SLUG || source.id === AGENT_OPERATING_RULES_SOURCE_ID) priority += 2;
   if (source.metadata?.["role"] === AGENT_OPERATING_RULES_ROLE) priority += 1;
   return priority;
 }
@@ -795,7 +1242,111 @@ function filterProviderOnlyBlocks(content: string, tool: SessionRenderTool): str
   return output.join("\n");
 }
 
-function composeSources(
+function targetedReplacementTarget(source: OrderedSessionInstructionSource): string | null {
+  if (source.replacementScope == null) return null;
+  if (source.resolvedMerge !== "replace") {
+    throw new Error(
+      `Session instruction source "${source.id}" uses replacement scope "${source.replacementScope}" `
+      + `with merge=${source.resolvedMerge}; replacement scopes require merge=replace, not append.`,
+    );
+  }
+  const scope = source.replacementScope.trim();
+  if (!scope.startsWith("source:")) {
+    throw new Error(
+      `Invalid replacement scope "${source.replacementScope}" for source "${source.id}"; `
+      + 'expected "source:<normalized-source-id>".',
+    );
+  }
+  const target = scope.slice("source:".length);
+  if (!target || target !== slug(target)) {
+    throw new Error(
+      `Invalid replacement scope "${source.replacementScope}" for source "${source.id}"; `
+      + "the target must be a non-empty normalized source id.",
+    );
+  }
+  return target;
+}
+
+/**
+ * Validate scoped replacement against the graph before semantic-policy deduplication can
+ * make the requested target disappear.
+ *
+ * Deduplication remains intentionally before composition. A targeted replacement is a
+ * claim about one exact earlier source, though, so a dedupe loser cannot be reported as
+ * if the scoped replacer removed it.
+ */
+function validateTargetedReplacementSources(
+  originalSources: OrderedSessionInstructionSource[],
+  selectedSources: OrderedSessionInstructionSource[],
+  deduplicatedSources: SessionSkippedSource[],
+  tool: SessionRenderTool,
+): void {
+  for (let replacerIndex = 0; replacerIndex < originalSources.length; replacerIndex++) {
+    const replacer = originalSources[replacerIndex]!;
+    const targetNormalizedId = targetedReplacementTarget(replacer);
+    if (targetNormalizedId === null) continue;
+
+    const matches = originalSources.filter((source) => source.normalizedId === targetNormalizedId);
+    if (matches.length === 0) {
+      throw new Error(
+        `Targeted replacement source "${replacer.id}" names missing source "${targetNormalizedId}".`,
+      );
+    }
+    if (matches.length > 1) {
+      throw new Error(
+        `Targeted replacement source "${replacer.id}" is ambiguous after normalization: `
+        + `"${targetNormalizedId}" matches ${matches.map((source) => `"${source.id}"`).join(", ")}.`,
+      );
+    }
+
+    const target = matches[0]!;
+    const targetIndex = originalSources.indexOf(target);
+    if (targetIndex >= replacerIndex) {
+      throw new Error(
+        `Targeted replacement source "${replacer.id}" must name an earlier source; `
+        + `"${target.id}" is later than or identical to the replacer.`,
+      );
+    }
+    if (target.nonOverridable && !authorizedProtectedTargetedReplacement(replacer, target, tool)) {
+      throw new Error(
+        `Targeted replacement source "${replacer.id}" cannot replace non-overridable source "${target.id}".`,
+      );
+    }
+    if (!selectedSources.some((source) => source.id === replacer.id)) {
+      throw new Error(
+        `Targeted replacement source "${replacer.id}" was removed by semantic-policy deduplication before composition.`,
+      );
+    }
+    if (deduplicatedSources.some((source) => source.id === target.id)) {
+      throw new Error(
+        `Targeted replacement source "${replacer.id}" cannot claim success because target "${target.id}" `
+        + "was removed by semantic-policy deduplication before composition.",
+      );
+    }
+  }
+}
+
+function authorizedProtectedTargetedReplacement(
+  replacer: OrderedSessionInstructionSource,
+  target: OrderedSessionInstructionSource,
+  tool: SessionRenderTool,
+): boolean {
+  if (tool !== "codewith" || replacer.nonOverridable !== true) return false;
+  if (CODEWITH_PROTECTED_REPLACEMENT_TARGETS.get(replacer.id) !== target.id) return false;
+  const providers = (replacer.targetProviders ?? []).map((provider) => provider.trim().toLowerCase());
+  if (providers.length !== 1 || providers[0] !== "codewith") return false;
+  const replacerAuthority = replacer[IDENTITY_EXPORT_AUTHORITY];
+  const targetAuthority = target[IDENTITY_EXPORT_AUTHORITY];
+  return replacerAuthority !== undefined
+    && targetAuthority !== undefined
+    && replacerAuthority.token === targetAuthority.token
+    && replacerAuthority.shape === "canonical-open-identities"
+    && targetAuthority.shape === "canonical-open-identities"
+    && replacerAuthority.packageName !== null
+    && replacerAuthority.packageName === targetAuthority.packageName;
+}
+
+function composeBroadReplaceSources(
   sources: OrderedSessionInstructionSource[],
 ): { sources: OrderedSessionInstructionSource[]; skipped: SessionSkippedSource[] } {
   let start = -1;
@@ -817,6 +1368,77 @@ function composeSources(
       `superseded by "${replacer.id}": a replace-merge source discards earlier overridable instruction layers`,
     ));
   return { sources: [...protectedSources, ...sources.slice(start)], skipped };
+}
+
+function composeSources(
+  sources: OrderedSessionInstructionSource[],
+  tool: SessionRenderTool,
+): { sources: OrderedSessionInstructionSource[]; skipped: SessionSkippedSource[] } {
+  const hasTargetedReplacement = sources.some((source) => source.replacementScope !== undefined);
+  if (!hasTargetedReplacement) return composeBroadReplaceSources(sources);
+
+  const selected: OrderedSessionInstructionSource[] = [];
+  const skipped: SessionSkippedSource[] = [];
+  for (const source of sources) {
+    const targetNormalizedId = targetedReplacementTarget(source);
+    if (targetNormalizedId !== null) {
+      const targetIndex = selected.findIndex((candidate) => candidate.normalizedId === targetNormalizedId);
+      if (targetIndex < 0) {
+        throw new Error(
+          `Targeted replacement source "${source.id}" cannot replace "${targetNormalizedId}": `
+          + "the earlier target was already removed.",
+        );
+      }
+      const target = selected[targetIndex]!;
+      const protectedReplacement = target.nonOverridable === true;
+      if (protectedReplacement && !authorizedProtectedTargetedReplacement(source, target, tool)) {
+        throw new Error(
+          `Targeted replacement source "${source.id}" cannot replace non-overridable source "${target.id}".`,
+        );
+      }
+      selected.splice(targetIndex, 1);
+      skipped.push(skippedSource(
+        target,
+        `superseded by "${source.id}": targeted replacement ${source.replacementScope} `
+        + `removed exactly source "${target.id}"`,
+      ));
+      selected.push({
+        ...source,
+        provenance: {
+          ...(source.provenance ?? {}),
+          targetedReplacement: {
+            scope: source.replacementScope,
+            targetSourceId: target.id,
+            targetNormalizedSourceId: target.normalizedId,
+            targetHash: target.hash ?? null,
+            targetRenderedPayloadSha256: sha256(target.content),
+            targetNonOverridable: protectedReplacement,
+            authority: protectedReplacement
+              ? "canonical-identity-export/codewith-provider/v1"
+              : "overridable-source/v1",
+          },
+        },
+      });
+      continue;
+    }
+
+    if (source.resolvedMerge === "replace") {
+      const retained = selected.filter((candidate) => candidate.nonOverridable);
+      for (const candidate of selected) {
+        if (candidate.nonOverridable) continue;
+        skipped.push(skippedSource(
+          candidate,
+          `superseded by "${source.id}": a replace-merge source discards earlier overridable instruction layers`,
+        ));
+      }
+      selected.length = 0;
+      selected.push(...retained, source);
+      continue;
+    }
+
+    selected.push(source);
+  }
+  return { sources: selected, skipped };
 }
 
 function sectionForSource(source: OrderedSessionInstructionSource): string {
@@ -938,12 +1560,18 @@ function buildCursorRuleFiles(
     const n = String(index + 1).padStart(2, "0");
     const stem = `${n}-${source.normalizedId}`;
     const relativePath = posix.join(adapter.managedDir, `${stem}.mdc`);
-    const description = `${source.resolvedLabel} (${source.resolvedLayer})`;
+    const compiledBinding = source.provenance?.["profileBinding"];
+    const activation = compiledBinding && typeof compiledBinding === "object"
+      ? source.metadata?.["activation"] as { mode?: string; description?: string } | undefined
+      : undefined;
+    const description = activation?.description ?? `${source.resolvedLabel} (${source.resolvedLayer})`;
+    const sourceGlobs = source.globs && source.globs.length > 0 ? source.globs : ["**/*"];
+    const alwaysApply = activation?.mode !== "glob";
     const content = [
       "---",
       `description: ${yamlQuote(description)}`,
-      'globs: ["**/*"]',
-      "alwaysApply: true",
+      `globs: ${JSON.stringify(sourceGlobs)}`,
+      `alwaysApply: ${alwaysApply}`,
       "---",
       "",
       `<!-- ${SESSION_RENDER_MANAGED_MARKER}. Do not edit this generated file directly. -->`,
@@ -979,6 +1607,7 @@ function buildOpenCodeFiles(
   sources: OrderedSessionInstructionSource[],
   providerConfig?: SessionProviderConfig,
 ): SessionRenderFile[] {
+  const surface = adapter.providerSurface ?? "legacy-dual";
   const fragments = sources.flatMap((source, index) => [
     makeFile(targetHome, fragmentPath(adapter, index, source), "fragment", sectionForSource(source), [source.id]),
     ...source.resolvedRules.map((rule) =>
@@ -1023,11 +1652,30 @@ function buildOpenCodeFiles(
     ...sources.map((source) => source.id),
     ...(providerConfig ? [providerConfig.sourceId] : []),
   ];
-  return [
-    flattenedIndex,
-    makeFile(targetHome, adapter.configFile!, "config", JSON.stringify(config, null, 2), configSourceIds),
-    ...fragments,
-  ];
+  const configFile = makeFile(targetHome, adapter.configFile!, "config", JSON.stringify(config, null, 2), configSourceIds);
+  if (surface === "opencode-config-instructions") return [configFile, ...fragments];
+  if (surface === "opencode-agents-md") {
+    const agentsOnlyConfig = {
+      ...config,
+      instructions: preservedInstructions,
+    };
+    return [
+      flattenedIndex,
+      makeFile(targetHome, adapter.configFile!, "config", JSON.stringify(agentsOnlyConfig, null, 2), configSourceIds),
+      // This non-provider-loaded marker keeps the managed namespace explicit
+      // during a v1 -> v2 transition. It lets the existing silent-wipe guard
+      // distinguish an intentional surface replacement from an empty render
+      // without duplicating any instruction payload.
+      makeFile(
+        targetHome,
+        posix.join(adapter.managedDir, "opencode-v2-surface.json"),
+        "config",
+        JSON.stringify({ schema: "hasna.instructions.opencode-surface/v1", surface }, null, 2),
+        [],
+      ),
+    ];
+  }
+  return [flattenedIndex, configFile, ...fragments];
 }
 
 function readOpenCodeConfig(content: string, source: string): Record<string, unknown> {
@@ -1073,6 +1721,54 @@ function buildAntigravityRuleFiles(
   });
 }
 
+function buildProviderRuleFiles(
+  targetHome: string,
+  adapter: SessionToolAdapter,
+  sources: OrderedSessionInstructionSource[],
+): SessionRenderFile[] {
+  const extension = adapter.ruleExtension ?? ".md";
+  return sources.flatMap((source, index) => {
+    const n = String(index + 1).padStart(2, "0");
+    const sourcePath = posix.join(adapter.managedDir, `${n}-${source.normalizedId}${extension}`);
+    const sourceFile = makeFile(targetHome, sourcePath, "rule", providerRuleContent(adapter, source, sectionForSource(source)), [source.id]);
+    const ruleFiles = source.resolvedRules.map((rule) => {
+      const stem = rule.resolvedPath.replace(/\.(md|instructions\.md)$/i, "");
+      const rulePath = posix.join(adapter.managedDir, `${n}-${source.normalizedId}-${stem}${extension}`);
+      return makeFile(targetHome, rulePath, "rule", providerRuleContent(adapter, source, sectionForRule(source, rule), rule.globs), [source.id, rule.id]);
+    });
+    return [sourceFile, ...ruleFiles];
+  });
+}
+
+function providerRuleContent(
+  adapter: SessionToolAdapter,
+  source: OrderedSessionInstructionSource,
+  content: string,
+  ruleGlobs?: string[],
+): string {
+  const activation = source.metadata?.["activation"] as { mode?: string; globs?: string[]; models?: string[]; description?: string } | undefined;
+  const globs = ruleGlobs?.length ? ruleGlobs : activation?.globs;
+  if (adapter.tool === "copilot") {
+    return globs?.length
+      ? ["---", `applyTo: ${yamlQuote(globs.join(","))}`, "---", "", content].join("\n")
+      : content;
+  }
+  if (adapter.tool === "devin" || adapter.tool === "windsurf-legacy") {
+    const mode = activation?.mode === "glob"
+      ? "glob"
+      : activation?.mode === "model"
+        ? "model_decision"
+        : activation?.mode === "manual"
+          ? "manual"
+          : "always_on";
+    const frontmatter = ["---", `activation: ${mode}`];
+    if (globs?.length) frontmatter.push(`globs: ${JSON.stringify(globs)}`);
+    if (activation?.description) frontmatter.push(`description: ${yamlQuote(activation.description)}`);
+    return [...frontmatter, "---", "", content].join("\n");
+  }
+  return content;
+}
+
 function makeAntigravityRuleFile(
   targetHome: string,
   relativePath: string,
@@ -1106,10 +1802,69 @@ function buildFiles(
       return buildOpenCodeFiles(targetHome, adapter, profile, sources, providerConfig);
     case "antigravity-rules":
       return buildAntigravityRuleFiles(targetHome, adapter, sources);
+    case "provider-rules":
+      return buildProviderRuleFiles(targetHome, adapter, sources);
   }
 }
 
+function buildAssetFiles(input: SessionRenderInput, targetHome: string, blocked: boolean): SessionRenderFile[] {
+  const plan = input.assetPlan;
+  if (!plan || blocked) return [];
+  if (plan.provider !== input.tool) throw new Error(`Asset plan provider ${plan.provider} cannot render with ${input.tool}.`);
+  return plan.assets.filter((item) => item.action === "write").map((item) => {
+    if (item.destination.strategy !== "emit-file") throw new Error(`Asset ${item.assetKey} has write action without emit-file strategy.`);
+    const content = input.assetContents?.[item.sourceConfigId];
+    if (content === undefined) throw new Error(`Asset ${item.assetKey} is missing its pinned source bytes.`);
+    if (configAssetDigest(content) !== item.source.digest) throw new Error(`Asset ${item.assetKey} bytes no longer match its validated digest.`);
+    const path = resolveAssetDestination(item, {
+      targetHome,
+      ...(input.projectRoot ? { projectRoot: resolveSessionPath(input.projectRoot) } : {}),
+    });
+    const relativePath = relative(targetHome, path).replaceAll("\\", "/");
+    if (!relativePath || relativePath === ".." || relativePath.startsWith("../") || isAbsolute(relativePath)) {
+      throw new Error(`Asset ${item.assetKey} is outside the session snapshot root; use a project-scoped session plan for atomic application.`);
+    }
+    return {
+      path,
+      relativePath: assertSafeRelativePath(relativePath),
+      role: "asset" as const,
+      content,
+      sha256: sha256(content),
+      sourceIds: [item.sourceConfigId, item.assetId],
+    };
+  });
+}
+
 function adapterFor(input: SessionRenderInput): SessionToolAdapter {
+  if (input.tool === "opencode" && input.providerSurface) {
+    if (input.providerSurface !== "opencode-config-instructions" && input.providerSurface !== "opencode-agents-md") {
+      throw new Error(`Provider surface ${input.providerSurface} is not valid for OpenCode.`);
+    }
+    return Object.freeze({
+      ...SESSION_TOOL_ADAPTERS.opencode,
+      providerSurface: input.providerSurface,
+      description: input.providerSurface === "opencode-config-instructions"
+        ? "OpenCode v1 instructions loaded exactly once through opencode.json managed fragments."
+        : "OpenCode v2 instructions loaded exactly once through flattened AGENTS.md.",
+    });
+  }
+  if (input.tool === "copilot" && input.providerSurface) {
+    if (input.providerSurface === "copilot-repository-instructions") return SESSION_TOOL_ADAPTERS.copilot;
+    if (input.providerSurface === "copilot-path-instructions") {
+      return Object.freeze({
+        ...SESSION_TOOL_ADAPTERS.copilot,
+        mode: "provider-rules",
+        indexFile: undefined,
+        ruleExtension: ".instructions.md",
+        providerSurface: input.providerSurface,
+        description: "GitHub Copilot path-specific instructions in .github/instructions/*.instructions.md.",
+      });
+    }
+    throw new Error(`Provider surface ${input.providerSurface} is not valid for GitHub Copilot.`);
+  }
+  if (input.providerSurface && input.tool !== "opencode" && input.tool !== "copilot") {
+    throw new Error(`Provider surface ${input.providerSurface} is not valid for ${input.tool}.`);
+  }
   if (input.tool !== "codewith") return SESSION_TOOL_ADAPTERS[input.tool];
   const gatedNativeImports =
     input.codewithNativeImports === true ||
@@ -1170,10 +1925,19 @@ function resolveRenderTarget(input: SessionRenderInput): {
   targetKind: SessionRenderTargetKind;
   blockers: string[];
 } {
-  if (input.tool === "cursor" || input.tool === "antigravity") {
+  const adapter = SESSION_TOOL_ADAPTERS[input.tool];
+  if (adapter.projectScoped) {
     if (!input.projectRoot) {
-      const label = input.tool === "cursor" ? "Cursor rules" : "Antigravity rules";
-      const path = input.tool === "cursor" ? ".cursor/rules files" : ".agents/rules files";
+      const label = input.tool === "cursor"
+        ? "Cursor rules"
+        : input.tool === "antigravity"
+          ? "Antigravity rules"
+          : `${adapter.description.split(".")[0]} files`;
+      const path = input.tool === "cursor"
+        ? ".cursor/rules files"
+        : input.tool === "antigravity"
+          ? ".agents/rules files"
+          : adapter.indexFile ?? `${adapter.managedDir} files`;
       return {
         targetHome: defaultTargetHome(input.tool, input.profile, input.sessionId),
         targetKind: "blocked",
@@ -1261,12 +2025,26 @@ export function planSessionRender(input: SessionRenderInput): SessionRenderPlan 
   if (!input.profile.trim()) throw new Error("Session render profile is required.");
 
   const adapter = adapterFor(input);
-  const { targetHome, targetKind, blockers } = resolveRenderTarget(input);
+  const {
+    targetHome,
+    targetKind,
+    blockers: targetBlockers,
+  } = resolveRenderTarget(input);
+  const authorityObservations = input.tool === "cursor" && targetKind !== "blocked"
+    ? [observeCursorGlobalAuthority({ home: input.cursorAuthorityHome })]
+    : [];
+  const authorityConflicts = input.tool === "cursor" && targetKind !== "blocked"
+    ? detectCursorAuthorityConflicts(authorityObservations[0])
+    : [];
+  const blockers = [
+    ...targetBlockers,
+    ...authorityConflicts.map((conflict) => `${conflict.relativePath}: ${conflict.reason}`),
+  ];
   const targetOwner = resolveSessionTargetOwnership(input, { targetHome, targetKind });
   const blocked = blockers.length > 0;
   const allowEmptySources = input.allowEmptySources === true;
   const normalized = normalizeSources(input.sources, input.tool, allowEmptySources);
-  const composed = composeSources(normalized.sources);
+  const composed = composeSources(normalized.sources, input.tool);
   const orderedSources = composed.sources;
   // Caller-supplied entries first (provider filtering, done before the render was even
   // asked for), then everything this render discarded itself.
@@ -1312,7 +2090,8 @@ export function planSessionRender(input: SessionRenderInput): SessionRenderPlan 
     throw new Error(`Session source ${projectContext.source.id} is reserved for the durable Instructions project-context renderer.`);
   }
   const files = projectContext?.files ?? baseFiles;
-  rejectDuplicateRenderPaths(files);
+  const assetFiles = buildAssetFiles(input, targetHome, blocked);
+  rejectDuplicateRenderPaths([...files, ...assetFiles]);
 
   const manifest: SessionRenderManifest = {
     schema: SESSION_RENDER_SCHEMA,
@@ -1326,21 +2105,27 @@ export function planSessionRender(input: SessionRenderInput): SessionRenderPlan 
     writable: !blocked,
     blocked,
     blockers,
+    authorityObservations,
+    authorityConflicts,
     generatedAt,
     env,
     sourceHash: fingerprint(projectContext
       ? {
         sources: orderedSources.map(sourceFingerprint),
+        providerSurface: input.providerSurface ?? null,
         providerConfig: input.providerConfig
           ? { sourceId: input.providerConfig.sourceId, content: input.providerConfig.content }
           : null,
         projectContext: projectContext.project_context,
+        assetPlanDigest: input.assetPlan?.planDigest ?? null,
       }
       : {
         sources: orderedSources.map(sourceFingerprint),
+        providerSurface: input.providerSurface ?? null,
         providerConfig: input.providerConfig
           ? { sourceId: input.providerConfig.sourceId, content: input.providerConfig.content }
           : null,
+        assetPlanDigest: input.assetPlan?.planDigest ?? null,
       }),
     sources: [
       ...orderedSources.map((source) => ({
@@ -1362,6 +2147,7 @@ export function planSessionRender(input: SessionRenderInput): SessionRenderPlan 
           path: rule.resolvedPath,
           globs: rule.globs ?? [],
           hash: rule.hash ?? null,
+          ...ruleAttestation(rule),
         })),
         renderedPayloadSha256: sha256(source.content),
         provenance: source.provenance ?? null,
@@ -1370,7 +2156,7 @@ export function planSessionRender(input: SessionRenderInput): SessionRenderPlan 
       ...(projectContext ? [projectContext.source] : []),
     ],
     skippedSources,
-    files: files.map((file) => ({
+    files: [...files, ...assetFiles].map((file) => ({
       path: file.path,
       relativePath: file.relativePath,
       role: file.role,
@@ -1378,6 +2164,28 @@ export function planSessionRender(input: SessionRenderInput): SessionRenderPlan 
       sourceIds: file.sourceIds,
     })),
     warnings,
+    ...(input.assetPlan
+      ? {
+        assetPlan: {
+          schema: input.assetPlan.schema,
+          planDigest: input.assetPlan.planDigest,
+          profileId: input.assetPlan.profileId,
+          providerVersion: input.assetPlan.providerVersion,
+          surface: input.assetPlan.surface,
+          scope: input.assetPlan.scope,
+          assets: input.assetPlan.assets.map((item) => ({
+            assetId: item.assetId,
+            assetKey: item.assetKey,
+            kind: item.kind,
+            action: item.action,
+            mutationMode: item.mutationMode,
+            destination: item.destination,
+            digest: item.source.digest,
+            exactOnceKey: item.exactOnceKey,
+          })),
+        },
+      }
+      : {}),
     ...(input.providerConfig
       ? {
         providerConfig: {
@@ -1403,6 +2211,12 @@ export function planSessionRender(input: SessionRenderInput): SessionRenderPlan 
     JSON.stringify(manifest, null, 2),
     orderedSources.map((source) => source.id),
   );
+  // The manifest is checked alongside the entrypoints because it is allowlisted at the same
+  // raised bound and grows with the same corpus — a render that only guards the entrypoint
+  // moves the identical wedge onto the manifest and calls the job done.
+  const managedOutputs = [...files, ...assetFiles, manifestFile];
+  rejectOversizedManagedOutputs(managedOutputs);
+  warnings.push(...managedOutputHeadroomWarnings(managedOutputs));
 
   return {
     dryRun: true,
@@ -1416,12 +2230,16 @@ export function planSessionRender(input: SessionRenderInput): SessionRenderPlan 
     writable: !blocked,
     blocked,
     blockers,
+    authorityObservations,
+    authorityConflicts,
     allowEmptySources,
     env,
     files,
+    ...(input.assetPlan ? { assetPlan: input.assetPlan } : {}),
+    assetFiles,
     manifest,
     manifestFile,
-    allFiles: [...files, manifestFile],
+    allFiles: [...files, ...assetFiles, manifestFile],
     warnings,
     ...(projectContextGuard ? { projectContextGuard } : {}),
   };
@@ -1609,6 +2427,13 @@ export function sourcesFromIdentityExport(
 ): SessionInstructionSource[] {
   const record = asRecord(value, "identity instruction export");
   const shape = requireIdentityExportShape(record);
+  const authority: IdentityExportAuthority = {
+    token: {},
+    shape,
+    packageName: shape === "canonical-open-identities"
+      ? requireString(record["package"], "canonical identity export package")
+      : null,
+  };
   const validation = asOptionalRecord(record["validation"]);
   if (validation && validation["valid"] === false) {
     const issues = Array.isArray(validation["issues"]) ? validation["issues"] : [];
@@ -1623,6 +2448,7 @@ export function sourcesFromIdentityExport(
       tool: options.tool,
       orderFallback: offset + index,
       exportShape: shape,
+      authority,
     }))
     .filter((source): source is SessionInstructionSource => source !== null);
 }
@@ -1660,7 +2486,12 @@ function normalizeInstructionRules(source: SessionInstructionSource, tool: Sessi
   const seen = new Set<string>();
   return (source.rules ?? []).map((rule) => {
     if (!rule.id.trim()) throw new Error(`Instruction rule id is required for source ${source.id}.`);
-    const content = filterProviderOnlyBlocks(rule.content ?? "", tool);
+    // Floor BEFORE provider filtering, for the same reason `normalizeSources` does at the
+    // source level: the pinned digest describes the payload AS PUBLISHED, so comparing
+    // filtered bytes against it would fail for any payload that legitimately uses
+    // provider-only blocks and would silently replace it.
+    const floored = applyAgentOperatingRulesFloorToRule(source, rule, rule.content ?? "");
+    const content = filterProviderOnlyBlocks(floored.content, tool);
     if (!content.trim() && !rule.path) throw new Error(`Instruction rule content or path is required for rule ${rule.id}.`);
     const resolvedPath = normalizeRulePath(rule.path ?? `${slug(rule.id)}.md`);
     const key = resolvedPath.toLowerCase();
@@ -1669,6 +2500,7 @@ function normalizeInstructionRules(source: SessionInstructionSource, tool: Sessi
     return {
       ...rule,
       content,
+      metadata: floored.metadata,
       normalizedId: slug(rule.id),
       resolvedLabel: rule.label ?? rule.id,
       resolvedPath,
@@ -1683,6 +2515,63 @@ function rejectDuplicateRenderPaths(files: SessionRenderFile[]): void {
     if (seen.has(key)) throw new Error(`Duplicate session render file path: ${file.relativePath}`);
     seen.add(key);
   }
+}
+
+/**
+ * Refuse a managed output the reader would later refuse.
+ *
+ * 0.4.23 raised the READ bound on these paths to SESSION_MANAGED_OUTPUT_MAX_BYTES and left the
+ * WRITE unbounded, so the two agreed only by headroom. Measured on origin/main @ 6091ba6: a
+ * render emitted an 8,389,869-byte AGENTS.md at rc=0, and every subsequent planSessionRender on
+ * that home threw PROJECT_CONTEXT_INPUT_TOO_LARGE from observeProjectContextSessionGuard —
+ * including a render that would have SHRUNK the file back under the bound. The home is then
+ * unrecoverable through this tool at all, because planning reads the oversized file before it
+ * can decide to replace it, and the failure is silent in the way that matters: the home simply
+ * stops updating.
+ *
+ * Refusing HERE, at plan time, is what makes that recoverable. planSessionRender writes nothing,
+ * so the previous home survives intact and merely stale, `session plan` and `--dry-run` predict
+ * the failure instead of discovering it, and the operator sees it while their hands are on the
+ * command. Refusing at the write instead would land mid-loop over per-file atomic replacements
+ * and leave the home half-new, half-old with a manifest describing neither.
+ *
+ * NOT truncation, deliberately: a silently shortened instruction home is a home that looks
+ * complete to every agent that reads it and is missing directives. A stale home is wrong in a
+ * way somebody notices; a truncated one is wrong in a way nobody can see.
+ */
+function rejectOversizedManagedOutputs(files: SessionRenderFile[]): void {
+  for (const file of files) {
+    if (!isSessionManagedOutputRelativePath(file.relativePath)) continue;
+    const bytes = Buffer.byteLength(file.content, "utf8");
+    if (bytes <= SESSION_MANAGED_OUTPUT_MAX_BYTES) continue;
+    throw new Error(
+      `Session render output ${file.relativePath} is ${bytes} bytes and the managed read bound is `
+      + `${SESSION_MANAGED_OUTPUT_MAX_BYTES}. Writing it would wedge this home: every later render `
+      + `refuses to read it, including one that would shrink it back. Reduce the instruction corpus `
+      + `for this profile, or raise SESSION_MANAGED_OUTPUT_MAX_BYTES — it is one constant and both `
+      + `the reader and this check read it.`
+    );
+  }
+}
+
+/**
+ * Headroom warnings for the same set. The refusal above is a backstop that should never fire;
+ * this is the signal that stops it becoming the thing that discovers the problem.
+ */
+function managedOutputHeadroomWarnings(files: SessionRenderFile[]): string[] {
+  const warnings: string[] = [];
+  for (const file of files) {
+    if (!isSessionManagedOutputRelativePath(file.relativePath)) continue;
+    const bytes = Buffer.byteLength(file.content, "utf8");
+    if (bytes <= SESSION_MANAGED_OUTPUT_WARN_BYTES) continue;
+    if (bytes > SESSION_MANAGED_OUTPUT_MAX_BYTES) continue;
+    warnings.push(
+      `Managed output ${file.relativePath} is ${bytes} bytes, past ${SESSION_MANAGED_OUTPUT_WARN_BYTES} `
+      + `of a ${SESSION_MANAGED_OUTPUT_MAX_BYTES} byte bound. Renders refuse at the bound; raise `
+      + `SESSION_MANAGED_OUTPUT_MAX_BYTES or reduce this profile's instruction corpus before then.`
+    );
+  }
+  return warnings;
 }
 
 function rejectDuplicateSourceSlugs(sources: OrderedSessionInstructionSource[]): void {
@@ -1718,7 +2607,13 @@ function normalizeRulePath(path: string): string {
 
 function identitySourceToSessionSource(
   value: unknown,
-  options: { path?: string; tool?: SessionRenderTool; orderFallback: number; exportShape: IdentityExportShape },
+  options: {
+    path?: string;
+    tool?: SessionRenderTool;
+    orderFallback: number;
+    exportShape: IdentityExportShape;
+    authority: IdentityExportAuthority;
+  },
 ): SessionInstructionSource | null {
   const record = asRecord(value, "identity instruction source");
   const providers = asStringArray(record["targetProviders"]);
@@ -1732,7 +2627,7 @@ function identitySourceToSessionSource(
   const resolvedContent = inlineContent && inlineContent.trim()
     ? inlineContent
     : contentFromIdentitySourcePaths(sourcePaths, options.path, id) ?? inlineContent;
-  return {
+  const source: IdentityExportBoundSessionInstructionSource = {
     id,
     label: maybeString(record["label"]) ?? maybeString(record["title"]) ?? id,
     layer,
@@ -1757,7 +2652,9 @@ function identitySourceToSessionSource(
     nonOverridable: record["nonOverridable"] === true,
     replacementScope: maybeString(record["replacementScope"]),
     metadata: asOptionalRecord(record["metadata"]) ?? null,
+    [IDENTITY_EXPORT_AUTHORITY]: options.authority,
   };
+  return source;
 }
 
 function layerFromIdentityKind(kind: string | undefined, exportShape: IdentityExportShape): SessionInstructionLayer {

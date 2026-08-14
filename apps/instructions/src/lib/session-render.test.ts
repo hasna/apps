@@ -47,6 +47,63 @@ function hash(content: string): string {
   return createHash("sha256").update(content).digest("hex");
 }
 
+function codewithNeutralizationExport(packageName = "@hasna/identities") {
+  return {
+    version: 1,
+    package: packageName,
+    sources: [
+      {
+        id: "global-adversarial-review-proportionality-system-prompt",
+        kind: "global-system-prompt",
+        title: "Generic Adversarial Review Prompt",
+        content: "Substantial work requires two reviewers.",
+        precedence: 100,
+        mergePolicy: "append",
+        nonOverridable: true,
+        hash: "sha256:generic-review",
+        provenance: { configId: "9ea55f93-b18f-49c5-85b0-3a8e6c9d7e8c", version: 7 },
+      },
+      {
+        id: "global-workflow-construction-standard",
+        kind: "global-rules",
+        title: "Generic Workflow Construction Standard",
+        content: "Workflow reviewers are Fable agents.",
+        precedence: 101,
+        mergePolicy: "append",
+        nonOverridable: true,
+        hash: "sha256:generic-workflow",
+        provenance: { configId: "workflow-generic", version: 1 },
+      },
+      {
+        id: "codewith-adversarial-review-proportionality",
+        kind: "provider-rules",
+        title: "Codewith Adversarial Review Proportionality",
+        content: "Every Codewith work item gets ONE independent Codewith sub-agent reviewer.",
+        precedence: 200,
+        mergePolicy: "replace",
+        replacementScope: "source:global-adversarial-review-proportionality-system-prompt",
+        nonOverridable: true,
+        targetProviders: ["codewith"],
+        hash: "sha256:codewith-review",
+        provenance: { configId: "ca75bd29-1cd9-4afe-88b5-493f07ef8611", version: 70 },
+      },
+      {
+        id: "codewith-workflow-reviewer-neutralizer",
+        kind: "provider-rules",
+        title: "Codewith Workflow Reviewer Neutralizer",
+        content: "Fable does not satisfy the Codewith adversarial review gate.",
+        precedence: 201,
+        mergePolicy: "replace",
+        replacementScope: "source:global-workflow-construction-standard",
+        nonOverridable: true,
+        targetProviders: ["codewith"],
+        hash: "sha256:codewith-workflow",
+        provenance: { configId: "ca75bd29-1cd9-4afe-88b5-493f07ef8611", version: 70 },
+      },
+    ],
+  };
+}
+
 let tmpRoot = "";
 let previousRawHome: string | undefined;
 let previousHome: string | undefined;
@@ -177,6 +234,7 @@ describe("session render planner", () => {
       tool: "cursor",
       profile: "account999",
       projectRoot,
+      cursorAuthorityHome: join(tmpRoot, "cursor-authority-home"),
       sources: [globalIdentity, agentIdentity],
     });
 
@@ -184,11 +242,62 @@ describe("session render planner", () => {
     expect(plan.targetKind).toBe("project-root");
     expect(plan.targetOwner.kind).toBe("project");
     expect(plan.blocked).toBe(false);
+    expect(plan.authorityObservations).toMatchObject([{
+      relativePath: ".cursor/rules/hasna-global.mdc",
+      status: "absent",
+    }]);
+    expect(plan.authorityConflicts).toEqual([]);
     expect(plan.files.map((file) => file.relativePath)).toEqual([
       ".cursor/rules/01-global-codewith.mdc",
       ".cursor/rules/02-agent-marcus.mdc",
     ]);
     expect(plan.files[0]?.path).toBe(join(projectRoot, ".cursor", "rules", "01-global-codewith.mdc"));
+  });
+
+  test("blocks Cursor project rules when fixed global authority is unmanaged", () => {
+    mkdirSync(join(tmpRoot, "home", ".cursor", "rules"), { recursive: true });
+    writeFileSync(
+      join(tmpRoot, "home", ".cursor", "rules", "hasna-global.mdc"),
+      "---\nalwaysApply: true\n---\n# Legacy global rule\n",
+    );
+
+    const plan = planSessionRender({
+      tool: "cursor",
+      profile: "account999",
+      projectRoot: join(tmpRoot, "repo"),
+      cursorAuthorityHome: join(tmpRoot, "home"),
+      sources: [globalIdentity],
+    });
+
+    expect(plan.blocked).toBe(true);
+    expect(plan.writable).toBe(false);
+    expect(plan.files).toEqual([]);
+    expect(plan.authorityObservations[0]).toMatchObject({
+      relativePath: ".cursor/rules/hasna-global.mdc",
+      status: "unmanaged",
+    });
+    expect(plan.authorityConflicts[0]).toMatchObject({
+      kind: "unknown-unmanaged-authority",
+      provenance: { detection: "unknown-content" },
+    });
+    expect(plan.manifest.authorityObservations).toEqual(plan.authorityObservations);
+    expect(plan.manifest.authorityConflicts).toEqual(plan.authorityConflicts);
+  });
+
+  test("keeps unrelated adapters independent of Cursor fixed global authority", () => {
+    mkdirSync(join(tmpRoot, "home", ".cursor", "rules"), { recursive: true });
+    writeFileSync(join(tmpRoot, "home", ".cursor", "rules", "hasna-global.mdc"), "# Legacy global rule\n");
+
+    const plan = planSessionRender({
+      tool: "claude",
+      profile: "account999",
+      targetHome: join(tmpRoot, "claude-target"),
+      sources: [globalIdentity],
+    });
+
+    expect(plan.blocked).toBe(false);
+    expect(plan.authorityObservations).toEqual([]);
+    expect(plan.authorityConflicts).toEqual([]);
   });
 
   test("plans Antigravity as project-owned .agents rules", () => {
@@ -258,6 +367,7 @@ describe("session render planner", () => {
       tool: "cursor",
       profile: "account999",
       targetHome: join(tmpRoot, "not-a-repo-root"),
+      cursorAuthorityHome: join(tmpRoot, "cursor-authority-home"),
       sources: [globalIdentity],
     });
 
@@ -545,6 +655,180 @@ describe("session render planner", () => {
     expect(plan.manifest.sources.map((source) => source.layer)).toEqual(["tool", "repo"]);
     expect(plan.manifest.sources[0]?.sourcePaths[0]?.path).toBe("providers/codewith.md");
     expect(plan.manifest.sources[1]?.owner).toMatchObject({ kind: "project" });
+  });
+
+  test("lets a Codewith-only source replace protected generic sources from the same canonical identity export", () => {
+    const plan = planSessionRender({
+      tool: "codewith",
+      profile: "account999",
+      targetHome: "/tmp/codewith-account999",
+      generatedAt: "2026-08-12T00:00:00.000Z",
+      sources: sourcesFromIdentityExport(codewithNeutralizationExport(), { tool: "codewith" }),
+    });
+    const rendered = plan.files.map((file) => file.content).join("\n");
+
+    expect(rendered).toContain("ONE independent Codewith sub-agent reviewer");
+    expect(rendered).toContain("Fable does not satisfy the Codewith adversarial review gate");
+    expect(rendered).not.toContain("two reviewers");
+    expect(rendered).not.toContain("Workflow reviewers are Fable agents");
+    expect(plan.manifest.sources.map((source) => source.id)).toEqual([
+      "codewith-adversarial-review-proportionality",
+      "codewith-workflow-reviewer-neutralizer",
+    ]);
+    expect(plan.manifest.sources.map((source) => source.hash)).toEqual([
+      "sha256:codewith-review",
+      "sha256:codewith-workflow",
+    ]);
+    expect(plan.manifest.sources.map((source) => source.order)).toEqual([200, 201]);
+    expect(plan.manifest.sources[0]?.provenance).toMatchObject({
+      configId: "ca75bd29-1cd9-4afe-88b5-493f07ef8611",
+      version: 70,
+      targetedReplacement: {
+        targetSourceId: "global-adversarial-review-proportionality-system-prompt",
+        targetHash: "sha256:generic-review",
+        targetNonOverridable: true,
+        authority: "canonical-identity-export/codewith-provider/v1",
+      },
+    });
+    expect(plan.manifest.skippedSources.map((source) => source.id)).toEqual([
+      "global-adversarial-review-proportionality-system-prompt",
+      "global-workflow-construction-standard",
+    ]);
+    expect(plan.manifest.skippedSources[0]?.source).toMatchObject({
+      layer: "global",
+      merge: "append",
+      order: 100,
+      hash: "sha256:generic-review",
+      nonOverridable: true,
+      provenance: { configId: "9ea55f93-b18f-49c5-85b0-3a8e6c9d7e8c", version: 7 },
+    });
+    expect(plan.manifest.skippedSources[0]?.source?.renderedPayloadSha256).toBe(
+      hash("Substantial work requires two reviewers."),
+    );
+    expect(plan.manifest.sourceHash).toHaveLength(64);
+    expect(plan.manifest.files[0]?.sourceIds).toEqual([
+      "codewith-adversarial-review-proportionality",
+      "codewith-workflow-reviewer-neutralizer",
+    ]);
+  });
+
+  test.each([
+    ["claude", "/tmp/claude-account999", undefined],
+    ["cursor", "/tmp/cursor-account999", "/tmp/cursor-project"],
+    ["codex", "/tmp/codex-account999", undefined],
+    ["opencode", "/tmp/opencode-account999", undefined],
+  ] as const)("preserves protected generic sources for the %s provider", (tool, targetHome, projectRoot) => {
+    const plan = planSessionRender({
+      tool,
+      profile: "account999",
+      targetHome,
+      projectRoot,
+      sources: sourcesFromIdentityExport(codewithNeutralizationExport(), { tool }),
+    });
+    const rendered = plan.files.map((file) => file.content).join("\n");
+
+    expect(plan.manifest.sources.map((source) => source.id)).toEqual([
+      "global-adversarial-review-proportionality-system-prompt",
+      "global-workflow-construction-standard",
+    ]);
+    expect(plan.manifest.skippedSources).toEqual([]);
+    expect(rendered).toContain("Substantial work requires two reviewers.");
+    expect(rendered).toContain("Workflow reviewers are Fable agents.");
+    expect(rendered).not.toContain("ONE independent Codewith sub-agent reviewer");
+  });
+
+  test("refuses protected replacement outside one canonical Codewith export authority", () => {
+    const canonical = codewithNeutralizationExport();
+    const targetExport = { ...canonical, sources: canonical.sources.slice(0, 1) };
+    const replacementExport = { ...canonical, sources: canonical.sources.slice(2, 3) };
+    const crossExportSources = [
+      ...sourcesFromIdentityExport(targetExport, { tool: "codewith" }),
+      ...sourcesFromIdentityExport(replacementExport, { tool: "codewith" }),
+    ];
+
+    expect(() => planSessionRender({
+      tool: "codewith",
+      profile: "account999",
+      targetHome: "/tmp/codewith-account999",
+      sources: crossExportSources,
+    })).toThrow(
+      'Targeted replacement source "codewith-adversarial-review-proportionality" cannot replace non-overridable source "global-adversarial-review-proportionality-system-prompt".',
+    );
+
+    const configsContract = {
+      contract: "hasna.identities.configs-instructions/v1",
+      sources: canonical.sources.slice(0, 1).concat(canonical.sources.slice(2, 3)),
+      validation: { valid: true },
+    };
+    expect(() => planSessionRender({
+      tool: "codewith",
+      profile: "account999",
+      targetHome: "/tmp/codewith-account999",
+      sources: sourcesFromIdentityExport(configsContract, { tool: "codewith" }),
+    })).toThrow("cannot replace non-overridable source");
+  });
+
+  test("refuses a generic-provider replacer even inside one canonical identity export", () => {
+    const identityExport = codewithNeutralizationExport();
+    const replacement = identityExport.sources[2]!;
+    replacement.targetProviders = ["all"];
+
+    expect(() => planSessionRender({
+      tool: "codewith",
+      profile: "account999",
+      targetHome: "/tmp/codewith-account999",
+      sources: sourcesFromIdentityExport({
+        ...identityExport,
+        sources: [identityExport.sources[0], replacement],
+      }, { tool: "codewith" }),
+    })).toThrow("cannot replace non-overridable source");
+  });
+
+  test("refuses an allowed Codewith replacer targeting an unrelated protected source", () => {
+    const identityExport = codewithNeutralizationExport();
+    const unrelatedProtectedTarget = {
+      ...identityExport.sources[0]!,
+      id: "global-credential-exposure-hygiene",
+      title: "Credential Exposure Hygiene",
+      content: "Never expose credential values.",
+      hash: "sha256:credential-hygiene",
+    };
+    const mismatchedReplacer = {
+      ...identityExport.sources[2]!,
+      replacementScope: "source:global-credential-exposure-hygiene",
+    };
+
+    expect(() => planSessionRender({
+      tool: "codewith",
+      profile: "account999",
+      targetHome: "/tmp/codewith-account999",
+      sources: sourcesFromIdentityExport({
+        ...identityExport,
+        sources: [unrelatedProtectedTarget, mismatchedReplacer],
+      }, { tool: "codewith" }),
+    })).toThrow(
+      'Targeted replacement source "codewith-adversarial-review-proportionality" cannot replace non-overridable source "global-credential-exposure-hygiene".',
+    );
+  });
+
+  test("refuses an unknown Codewith replacer targeting an allowed protected source", () => {
+    const identityExport = codewithNeutralizationExport();
+    const unknownReplacer = {
+      ...identityExport.sources[2]!,
+      id: "codewith-unknown-review-neutralizer",
+    };
+
+    expect(() => planSessionRender({
+      tool: "codewith",
+      profile: "account999",
+      targetHome: "/tmp/codewith-account999",
+      sources: sourcesFromIdentityExport({
+        ...identityExport,
+        sources: [identityExport.sources[0], unknownReplacer],
+      }, { tool: "codewith" }),
+    })).toThrow(
+      'Targeted replacement source "codewith-unknown-review-neutralizer" cannot replace non-overridable source "global-adversarial-review-proportionality-system-prompt".',
+    );
   });
 
   // The conflict error now covers only the case the currency floor cannot adjudicate: two

@@ -17,12 +17,17 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import {
+  FOREIGN_INPUT_MAX_BYTES,
   PROJECT_CONTEXT_FRAGMENT_PATH,
   PROJECT_CONTEXT_MANAGED_COMMENT,
   PROJECT_CONTEXT_MANIFEST_PATH,
   ProjectContextError,
+  SESSION_MANAGED_OUTPUT_MAX_BYTES,
+  SESSION_MANAGED_OUTPUT_PATHS,
   applyProjectContext,
   computeProjectContextSourceHash,
+  managedObservationMaxBytes,
+  observeProjectContextSessionGuard,
   parseProjectContextBundle,
   planProjectContext,
   removeProjectContextCoordinatedFile,
@@ -30,7 +35,7 @@ import {
   type ProjectContextRuntime,
 } from "./project-context";
 import { CODEWITH_NATIVE_IMPORTS_ENV, planSessionRender, type SessionRenderTool } from "./session-render";
-import { applySessionRender } from "./session-apply";
+import { applySessionRender, restoreSessionRenderSnapshot } from "./session-apply";
 import { makeTempRoot } from "./test-temp-root";
 
 let tmpRoot = "";
@@ -109,6 +114,40 @@ function bundleJson(bundle = makeBundle()): string {
   return `${JSON.stringify(bundle)}\n`;
 }
 
+function makeFinanceMetadata(overrides: Record<string, unknown> = {}) {
+  return {
+    schema: "hasna.projects.finance_project_metadata.v1" as const,
+    business_area: "finance" as const,
+    jurisdiction: "RO",
+    legal_entities: ["Example Alpha SRL"],
+    fiscal_cycle: "monthly" as const,
+    data_classification: "restricted" as const,
+    retention_policy: "knowledge:finance-retention-v1",
+    ledger_authority: "@hasna/accounting",
+    evidence_store: "@hasna/files",
+    approver: "role:finance-controller",
+    external_recipient_policy: "@hasna/invoices:approved-recipient-only",
+    ...overrides,
+  };
+}
+
+function stableStringifyForTest(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableStringifyForTest).join(",")}]`;
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record)
+      .sort((left, right) => left.localeCompare(right))
+      .map((key) => `${JSON.stringify(key)}:${stableStringifyForTest(record[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function legacyProjectContextHash(bundle: ProjectContextBundleV1): string {
+  const { hash: _hash, ...legacyPayload } = bundle;
+  return `sha256:${createHash("sha256").update(stableStringifyForTest(legacyPayload)).digest("hex")}`;
+}
+
 function expectCode(fn: () => unknown, code: string): void {
   try {
     fn();
@@ -126,6 +165,49 @@ describe("project context bundle validation", () => {
     expect(parsed.project.slug).toBe("agent-executive-assistant");
     expect(parsed.revision).toBe("rev-7");
     expect(parsed.commands).toHaveLength(2);
+  });
+
+  test("keeps the source hash stable across generation times but changes it for durable payload changes", () => {
+    const original = makeBundle();
+    const regenerated = {
+      ...original,
+      generated_at: "2026-07-22T10:01:00.000Z",
+    };
+    const changed = {
+      ...regenerated,
+      project: {
+        ...regenerated.project,
+        name: "Changed Durable Project Name",
+      },
+    };
+
+    expect(computeProjectContextSourceHash(regenerated)).toBe(
+      computeProjectContextSourceHash(original),
+    );
+    expect(computeProjectContextSourceHash(changed)).not.toBe(
+      computeProjectContextSourceHash(original),
+    );
+  });
+
+  test("accepts canonical and exact legacy v1 hashes while rejecting tampered and hashless bundles", () => {
+    const canonical = makeBundle();
+    const legacy: ProjectContextBundleV1 = {
+      ...canonical,
+      hash: legacyProjectContextHash(canonical),
+    };
+    const tampered: ProjectContextBundleV1 = {
+      ...legacy,
+      project: {
+        ...legacy.project,
+        name: "Tampered Durable Project Name",
+      },
+    };
+    const hashless = { ...canonical, hash: "" };
+
+    expect(parseProjectContextBundle(canonical).hash).toBe(canonical.hash);
+    expect(parseProjectContextBundle(legacy).hash).toBe(canonical.hash);
+    expectCode(() => parseProjectContextBundle(tampered), "PROJECT_CONTEXT_HASH_MISMATCH");
+    expectCode(() => parseProjectContextBundle(hashless), "PROJECT_CONTEXT_INVALID");
   });
 
   test("rejects additional properties, inconsistent hashes, bad enums, and too many argv commands", () => {
@@ -433,6 +515,77 @@ describe("project context adapters and managed edits", () => {
     expect(readFileSync(target, "utf8").match(/project context BEGIN/g)).toHaveLength(1);
   });
 
+  test("fails a fused END marker without force and force-repairs it without consuming following user bytes", () => {
+    const targetHome = join(tmpRoot, ".codewith");
+    const target = join(targetHome, "CODEWITH.md");
+    const prefix = "Owner prefix stays byte-for-byte.\n\n";
+    const suffix = "## Modus Operandi\n\nOwner suffix stays byte-for-byte.\n";
+    mkdirSync(targetHome, { recursive: true });
+    writeFileSync(target, prefix);
+
+    const bundle = makeBundle();
+    applyProjectContext({
+      workspace_root: tmpRoot,
+      runtime: "codewith",
+      bundle_json: bundleJson(bundle),
+      source_path: join(tmpRoot, "bundle.json"),
+      now: new Date("2026-07-22T10:01:00.000Z"),
+      codewith_native_imports: true,
+    });
+
+    const rendered = readFileSync(target, "utf8");
+    const endMarkerEnd = rendered.lastIndexOf(" -->") + " -->".length;
+    expect(endMarkerEnd).toBeGreaterThan(" -->".length);
+    const malformed = `${rendered.slice(0, endMarkerEnd)}${suffix}`;
+    writeFileSync(target, malformed);
+
+    expectCode(() => applyProjectContext({
+      workspace_root: tmpRoot,
+      runtime: "codewith",
+      bundle_json: bundleJson(bundle),
+      source_path: join(tmpRoot, "bundle.json"),
+      now: new Date("2026-07-22T10:01:00.000Z"),
+      codewith_native_imports: true,
+    }), "MANAGED_BLOCK_INVALID");
+    expect(readFileSync(target, "utf8")).toBe(malformed);
+
+    const repaired = applyProjectContext({
+      workspace_root: tmpRoot,
+      runtime: "codewith",
+      bundle_json: bundleJson(bundle),
+      source_path: join(tmpRoot, "bundle.json"),
+      now: new Date("2026-07-22T10:01:00.000Z"),
+      codewith_native_imports: true,
+      force: true,
+    });
+    expect(repaired.applied).toBe(true);
+    expect(repaired.snapshot_path).not.toBeNull();
+    const repairedContent = readFileSync(target, "utf8");
+    expect(repairedContent.startsWith(prefix)).toBe(true);
+    expect(repairedContent.endsWith(suffix)).toBe(true);
+    expect(repairedContent).toContain(" -->\n## Modus Operandi");
+
+    process.env[CODEWITH_NATIVE_IMPORTS_ENV] = "1";
+    const sessionPlan = planSessionRender({
+      tool: "codewith",
+      profile: "fused-marker-repair",
+      targetHome,
+      sources: [{
+        id: "global-rules",
+        layer: "global",
+        content: "## Modus Operandi\n\nOwner suffix stays byte-for-byte.\n",
+      }],
+    });
+    expect(sessionPlan.files.find((file) => file.path === target)?.content).toContain(
+      PROJECT_CONTEXT_MANAGED_COMMENT,
+    );
+
+    const restored = restoreSessionRenderSnapshot(repaired.snapshot_path!);
+    expect(restored.restored).toBe(true);
+    expect(restored.conflicts).toEqual([]);
+    expect(readFileSync(target, "utf8")).toBe(malformed);
+  });
+
   test("rejects a well-formed managed block for another project even with force", () => {
     const target = join(tmpRoot, "AGENTS.md");
     writeFileSync(target, [
@@ -719,6 +872,90 @@ describe("legacy migration and compatibility", () => {
     }
   });
 
+  test("keeps regenerated bundles idempotent across a managed Codewith render and two post-render applies", () => {
+    const root = join(tmpRoot, "codewith-regenerated-bundle");
+    const targetHome = join(root, ".codewith");
+    mkdirSync(targetHome, { recursive: true });
+    const original = makeBundle();
+    const legacyOriginal: ProjectContextBundleV1 = {
+      ...original,
+      hash: legacyProjectContextHash(original),
+    };
+
+    const initial = applyProjectContext({
+      workspace_root: root,
+      runtime: "codewith",
+      bundle_json: bundleJson(legacyOriginal),
+      source_path: join(root, "bundle.json"),
+      now: new Date("2026-07-22T10:01:00.000Z"),
+      codewith_native_imports: true,
+    });
+    expect(initial.applied).toBe(true);
+    expect(initial.hash).toBe(original.hash);
+
+    process.env[CODEWITH_NATIVE_IMPORTS_ENV] = "1";
+    const sessionPlan = planSessionRender({
+      tool: "codewith",
+      profile: "live-codewith",
+      targetHome,
+      sources: [{
+        id: "global-rules",
+        layer: "global",
+        content: "Managed Codewith rules.",
+      }],
+    });
+    const sessionResult = applySessionRender(sessionPlan);
+    expect(sessionResult.applied).toBe(true);
+    expect(sessionResult.conflicts).toEqual([]);
+    const managedRules = sessionPlan.files.find((file) => file.content.includes("Managed Codewith rules."));
+    expect(managedRules).toBeDefined();
+
+    const regenerated: ProjectContextBundleV1 = {
+      ...original,
+      generated_at: "2026-07-22T10:02:00.000Z",
+      hash: original.hash,
+    };
+    expect(computeProjectContextSourceHash(regenerated)).toBe(original.hash);
+
+    const firstPostRender = applyProjectContext({
+      workspace_root: root,
+      runtime: "codewith",
+      bundle_json: bundleJson(regenerated),
+      source_path: join(root, "regenerated-bundle.json"),
+      now: new Date("2026-07-22T10:03:00.000Z"),
+      codewith_native_imports: true,
+    });
+    expect(firstPostRender.applied).toBe(true);
+    expect(firstPostRender.snapshot_path).toBeNull();
+
+    const managedPaths = [
+      join(targetHome, "CODEWITH.md"),
+      join(targetHome, ".hasna", "session-render-manifest.json"),
+      managedRules!.path,
+      join(root, ...PROJECT_CONTEXT_FRAGMENT_PATH.split("/")),
+      join(root, ...PROJECT_CONTEXT_MANIFEST_PATH.split("/")),
+      join(root, ".hasna", "project-context-cache.json"),
+    ];
+    const afterFirstPostRender = managedPaths.map((path) => readFileSync(path, "utf8"));
+
+    const secondPostRender = applyProjectContext({
+      workspace_root: root,
+      runtime: "codewith",
+      bundle_json: bundleJson(regenerated),
+      source_path: join(root, "regenerated-bundle.json"),
+      now: new Date("2026-07-22T10:03:00.000Z"),
+      codewith_native_imports: true,
+    });
+    expect(secondPostRender.applied).toBe(true);
+    expect(secondPostRender.snapshot_path).toBeNull();
+    expect(managedPaths.map((path) => readFileSync(path, "utf8"))).toEqual(afterFirstPostRender);
+
+    const rendered = readFileSync(join(targetHome, "CODEWITH.md"), "utf8");
+    expect(readFileSync(managedRules!.path, "utf8")).toContain("Managed Codewith rules.");
+    expect(rendered).toContain(`@../${PROJECT_CONTEXT_FRAGMENT_PATH}`);
+    expect(rendered.match(/project context BEGIN/g)).toHaveLength(1);
+  });
+
   test("rejects a stale session plan instead of downgrading newer durable project context", () => {
     const first = planSessionRender({
       tool: "codex",
@@ -969,6 +1206,161 @@ describe("legacy migration and compatibility", () => {
 });
 
 describe("cache, revision, crash, and race safety", () => {
+  test("rejects an unproven same-revision manifest hash even when cache, marker, and fragment agree", () => {
+    const bundle = makeBundle();
+    applyProjectContext({
+      workspace_root: tmpRoot,
+      runtime: "agents",
+      bundle_json: bundleJson(bundle),
+      source_path: join(tmpRoot, "bundle.json"),
+      now: new Date("2026-07-22T10:00:30.000Z"),
+    });
+
+    const manifestPath = join(tmpRoot, ...PROJECT_CONTEXT_MANIFEST_PATH.split("/"));
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as {
+      projectContext: { hash: string };
+    };
+    manifest.projectContext.hash = `sha256:${"b".repeat(64)}`;
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    expectCode(() => applyProjectContext({
+      workspace_root: tmpRoot,
+      runtime: "agents",
+      bundle_json: bundleJson(bundle),
+      source_path: join(tmpRoot, "bundle.json"),
+      now: new Date("2026-07-22T10:00:30.000Z"),
+    }), "PROJECT_CONTEXT_REVISION_CONFLICT");
+  });
+
+  test("migrates persisted legacy v1 hashes to canonical state and recovers an interrupted apply", () => {
+    const original = makeBundle();
+    const canonicalHash = original.hash;
+    const legacyHash = legacyProjectContextHash(original);
+    const legacyBundle = { ...original, hash: legacyHash };
+    expect(legacyHash).not.toBe(canonicalHash);
+    expect(parseProjectContextBundle(legacyBundle).hash).toBe(canonicalHash);
+
+    applyProjectContext({
+      workspace_root: tmpRoot,
+      runtime: "agents",
+      bundle_json: bundleJson(original),
+      source_path: join(tmpRoot, "bundle.json"),
+      now: new Date("2026-07-22T10:00:30.000Z"),
+    });
+
+    const targetPath = join(tmpRoot, "AGENTS.md");
+    const fragmentPath = join(tmpRoot, ...PROJECT_CONTEXT_FRAGMENT_PATH.split("/"));
+    const cachePath = join(tmpRoot, ".hasna", "project-context-cache.json");
+    const manifestPath = join(tmpRoot, ...PROJECT_CONTEXT_MANIFEST_PATH.split("/"));
+    const sessionManifestPath = join(tmpRoot, ".hasna", "session-render-manifest.json");
+    for (const path of [targetPath, fragmentPath, cachePath]) {
+      writeFileSync(path, readFileSync(path, "utf8").replaceAll(canonicalHash, legacyHash));
+    }
+
+    const legacyRenderedPayloadSha256 = createHash("sha256")
+      .update(JSON.stringify(legacyBundle))
+      .digest("hex");
+    const rewriteManifest = (path: string, sourceHash: string): void => {
+      const manifest = JSON.parse(
+        readFileSync(path, "utf8").replaceAll(canonicalHash, legacyHash),
+      ) as {
+        sourceHash: string;
+        sources: Array<{ id: string; renderedPayloadSha256?: string }>;
+        files: Array<{ path: string; sha256: string }>;
+      };
+      manifest.sourceHash = sourceHash;
+      for (const source of manifest.sources) {
+        if (source.id === "project-context-bundle") {
+          source.renderedPayloadSha256 = legacyRenderedPayloadSha256;
+        }
+      }
+      for (const file of manifest.files) {
+        file.sha256 = createHash("sha256").update(readFileSync(file.path, "utf8")).digest("hex");
+      }
+      writeFileSync(path, `${JSON.stringify(manifest, null, 2)}\n`);
+    };
+    rewriteManifest(manifestPath, legacyHash);
+    rewriteManifest(
+      sessionManifestPath,
+      createHash("sha256")
+        .update(stableStringifyForTest({ previous: null, projectContext: legacyHash }))
+        .digest("hex"),
+    );
+
+    const regenerated: ProjectContextBundleV1 = {
+      ...original,
+      generated_at: "2026-07-22T10:01:00.000Z",
+      hash: canonicalHash,
+    };
+    expect(computeProjectContextSourceHash(regenerated)).toBe(canonicalHash);
+    expect(legacyProjectContextHash(regenerated)).not.toBe(legacyHash);
+
+    expect(() => applyProjectContext({
+      workspace_root: tmpRoot,
+      runtime: "agents",
+      bundle_json: bundleJson(regenerated),
+      source_path: join(tmpRoot, "regenerated-bundle.json"),
+      now: new Date("2026-07-22T10:02:00.000Z"),
+      test_hooks: {
+        before_manifest: () => {
+          throw new Error("simulated migration crash before final manifest");
+        },
+      },
+    })).toThrow("simulated migration crash before final manifest");
+    expect((JSON.parse(readFileSync(cachePath, "utf8")) as { hash: string }).hash).toBe(canonicalHash);
+    expect(
+      (JSON.parse(readFileSync(manifestPath, "utf8")) as { projectContext: { hash: string } })
+        .projectContext.hash,
+    ).toBe(legacyHash);
+
+    const changedAfterCrash: ProjectContextBundleV1 = {
+      ...regenerated,
+      project: {
+        ...regenerated.project,
+        name: "Changed Durable Project Name",
+      },
+      hash: "",
+    };
+    changedAfterCrash.hash = computeProjectContextSourceHash(changedAfterCrash);
+    expectCode(() => applyProjectContext({
+      workspace_root: tmpRoot,
+      runtime: "agents",
+      bundle_json: bundleJson(changedAfterCrash),
+      source_path: join(tmpRoot, "changed-after-crash.json"),
+      now: new Date("2026-07-22T10:02:00.000Z"),
+    }), "MANAGED_BLOCK_CONFLICT");
+
+    const migrated = applyProjectContext({
+      workspace_root: tmpRoot,
+      runtime: "agents",
+      bundle_json: bundleJson(regenerated),
+      source_path: join(tmpRoot, "regenerated-bundle.json"),
+      now: new Date("2026-07-22T10:02:00.000Z"),
+    });
+    expect(migrated.applied).toBe(true);
+    expect(migrated.snapshot_path).not.toBeNull();
+    expect((JSON.parse(readFileSync(cachePath, "utf8")) as { hash: string }).hash).toBe(canonicalHash);
+    expect(
+      (JSON.parse(readFileSync(manifestPath, "utf8")) as { projectContext: { hash: string } })
+        .projectContext.hash,
+    ).toBe(canonicalHash);
+    expect(readFileSync(targetPath, "utf8")).toContain(canonicalHash);
+    expect(readFileSync(targetPath, "utf8")).not.toContain(legacyHash);
+
+    const managedPaths = [targetPath, fragmentPath, cachePath, manifestPath, sessionManifestPath];
+    const afterMigration = managedPaths.map((path) => readFileSync(path, "utf8"));
+    const repeated = applyProjectContext({
+      workspace_root: tmpRoot,
+      runtime: "agents",
+      bundle_json: bundleJson(regenerated),
+      source_path: join(tmpRoot, "regenerated-bundle.json"),
+      now: new Date("2026-07-22T10:02:00.000Z"),
+    });
+    expect(repeated.applied).toBe(true);
+    expect(repeated.snapshot_path).toBeNull();
+    expect(managedPaths.map((path) => readFileSync(path, "utf8"))).toEqual(afterMigration);
+  });
+
   test("uses only a compatible same-ID bounded stale cache with a visible age", () => {
     applyProjectContext({
       workspace_root: tmpRoot,
@@ -1092,6 +1484,145 @@ describe("cache, revision, crash, and race safety", () => {
     }), "PROJECT_CONTEXT_CACHE_INVALID");
   });
 
+  test("accepts current Projects v2 bundles without losing reserved project-context bytes", () => {
+    const original = applyProjectContext({
+      workspace_root: tmpRoot,
+      runtime: "codewith",
+      bundle_json: bundleJson(),
+      source_path: join(tmpRoot, "bundle.json"),
+      now: new Date("2026-07-22T10:00:30.000Z"),
+    });
+    expect(original.applied).toBe(true);
+
+    const v2WithoutFinance = {
+      ...makeBundle(),
+      schema: "hasna.projects.project_context_bundle.v2" as const,
+      hash: "",
+    };
+    v2WithoutFinance.hash = computeProjectContextSourceHash(v2WithoutFinance);
+    expect(parseProjectContextBundle(v2WithoutFinance).project.finance).toBeUndefined();
+
+    const v2WithLegacyHash = {
+      ...v2WithoutFinance,
+      hash: legacyProjectContextHash(v2WithoutFinance),
+    };
+    expectCode(() => parseProjectContextBundle(v2WithLegacyHash), "PROJECT_CONTEXT_HASH_MISMATCH");
+
+    const finance = makeFinanceMetadata();
+    const v2 = {
+      ...makeBundle({
+        revision: "rev-8",
+        project: { ...makeBundle().project, name: "Chief of Finance", finance },
+        links: {
+          ...makeBundle().links,
+          mementos: { state: "unlinked", project_id: null, scope: null },
+        },
+        commands: [
+          { name: "show", argv: ["projects", "show", "wks_ZXg7liK4CFJ1KZjC_Fg_b", "--json"] },
+          { name: "context", argv: ["projects", "context", "wks_ZXg7liK4CFJ1KZjC_Fg_b", "--json"] },
+          { name: "why", argv: ["projects", "why", "wks_ZXg7liK4CFJ1KZjC_Fg_b", "--json"] },
+          { name: "context-bundle", argv: ["projects", "context-bundle", "wks_ZXg7liK4CFJ1KZjC_Fg_b", "--json"] },
+        ],
+      }),
+      schema: "hasna.projects.project_context_bundle.v2",
+      hash: "",
+    };
+    v2.hash = computeProjectContextSourceHash(v2);
+
+    expect(parseProjectContextBundle(v2).project.finance).toEqual(finance);
+
+    const updated = applyProjectContext({
+      workspace_root: tmpRoot,
+      runtime: "codewith",
+      bundle_json: `${JSON.stringify(v2)}\n`,
+      source_path: join(tmpRoot, "v2.json"),
+      now: new Date("2026-08-11T17:33:00.000Z"),
+    });
+    expect(updated.applied).toBe(true);
+    expect(updated.revision).toBe("rev-8");
+    expect(updated.hash).toBe(v2.hash);
+
+    const cache = JSON.parse(readFileSync(join(tmpRoot, ".hasna", "project-context-cache.json"), "utf8")) as {
+      hash: string;
+      bundle: ProjectContextBundleV1;
+    };
+    expect(cache.hash).toBe(v2.hash);
+    expect(cache.bundle.schema).toBe("hasna.projects.project_context_bundle.v2");
+    expect(cache.bundle.project.finance).toEqual(finance);
+
+    const targetHome = join(tmpRoot, ".codewith");
+    const plan = planSessionRender({
+      tool: "codewith",
+      profile: "live-codewith",
+      targetHome,
+      sources: [{ id: "global-rules", layer: "global", content: "Session rules after v2." }],
+    });
+    expect(applySessionRender(plan).applied).toBe(true);
+    const rendered = readFileSync(join(targetHome, "CODEWITH.md"), "utf8");
+    expect(rendered).toContain("Session rules after v2.");
+    expect(rendered).toContain("Chief of Finance");
+    expect(rendered).toContain("revision=rev-8");
+
+    const manifest = JSON.parse(readFileSync(join(targetHome, ".hasna", "session-render-manifest.json"), "utf8")) as {
+      sources: Array<{ id: string; provenance?: { schema?: string } }>;
+      projectContext: { schema: string; hash: string };
+      files: Array<{ relativePath: string; sourceIds: string[] }>;
+    };
+    expect(manifest.projectContext.schema).toBe("hasna.projects.project_context_bundle.v2");
+    expect(manifest.projectContext.hash).toBe(v2.hash);
+    expect(manifest.sources.find((source) => source.id === "project-context-bundle")?.provenance?.schema)
+      .toBe("hasna.projects.project_context_bundle.v2");
+    expect(manifest.files.find((file) => file.relativePath === "CODEWITH.md")?.sourceIds)
+      .toContain("project-context-bundle");
+  });
+
+  test("rejects malformed finance metadata and finance metadata attached to v1", () => {
+    const finance = makeFinanceMetadata();
+    const malformed = {
+      ...makeBundle(),
+      schema: "hasna.projects.project_context_bundle.v2" as const,
+      project: {
+        ...makeBundle().project,
+        finance: { ...finance, fiscal_cycle: "weekly" },
+      },
+      hash: "",
+    };
+    malformed.hash = computeProjectContextSourceHash(malformed);
+    expectCode(() => parseProjectContextBundle(malformed), "PROJECT_CONTEXT_INVALID");
+
+    const invalidLegalEntities = {
+      ...makeBundle(),
+      schema: "hasna.projects.project_context_bundle.v2" as const,
+      project: {
+        ...makeBundle().project,
+        finance: { ...finance, legal_entities: "Example Alpha SRL" },
+      },
+      hash: "",
+    };
+    invalidLegalEntities.hash = computeProjectContextSourceHash(invalidLegalEntities);
+    expectCode(() => parseProjectContextBundle(invalidLegalEntities), "PROJECT_CONTEXT_INVALID");
+
+    const emptyLegalEntities = {
+      ...makeBundle(),
+      schema: "hasna.projects.project_context_bundle.v2" as const,
+      project: {
+        ...makeBundle().project,
+        finance: { ...finance, legal_entities: [] },
+      },
+      hash: "",
+    };
+    emptyLegalEntities.hash = computeProjectContextSourceHash(emptyLegalEntities);
+    expectCode(() => parseProjectContextBundle(emptyLegalEntities), "PROJECT_CONTEXT_INVALID");
+
+    const v1WithFinance = {
+      ...makeBundle(),
+      project: { ...makeBundle().project, finance },
+      hash: "",
+    };
+    v1WithFinance.hash = computeProjectContextSourceHash(v1WithFinance);
+    expectCode(() => parseProjectContextBundle(v1WithFinance), "PROJECT_CONTEXT_INVALID");
+  });
+
   test("fails unknown majors by default and can fall back only to an explicit same-ID cache", () => {
     applyProjectContext({
       workspace_root: tmpRoot,
@@ -1100,7 +1631,7 @@ describe("cache, revision, crash, and race safety", () => {
       source_path: join(tmpRoot, "bundle.json"),
       now: new Date("2026-07-22T10:00:30.000Z"),
     });
-    const future = { ...makeBundle(), schema: "hasna.projects.project_context_bundle.v2" };
+    const future = { ...makeBundle(), schema: "hasna.projects.project_context_bundle.v3" };
 
     expectCode(() => applyProjectContext({
       workspace_root: tmpRoot,
@@ -1161,6 +1692,132 @@ describe("cache, revision, crash, and race safety", () => {
     });
     expect(result.revision).toBe("rev-8");
     expect(readFileSync(join(tmpRoot, "AGENTS.md"), "utf8")).toContain("Rollback Target Identity");
+  });
+
+  test("migrates only a proven same-revision v1 payload to v2 and keeps CAS strict", () => {
+    const v1 = makeBundle();
+    applyProjectContext({
+      workspace_root: tmpRoot,
+      runtime: "agents",
+      bundle_json: bundleJson(v1),
+      source_path: join(tmpRoot, "v1.json"),
+    });
+
+    const finance = makeFinanceMetadata();
+    const v2: ProjectContextBundleV1 = {
+      ...v1,
+      schema: "hasna.projects.project_context_bundle.v2",
+      generated_at: "2026-07-22T10:01:00.000Z",
+      hash: "",
+    };
+    v2.hash = computeProjectContextSourceHash(v2);
+
+    const sameRevisionWithFinance: ProjectContextBundleV1 = {
+      ...v2,
+      project: { ...v2.project, finance },
+      hash: "",
+    };
+    sameRevisionWithFinance.hash = computeProjectContextSourceHash(sameRevisionWithFinance);
+    const repeatNow = new Date("2026-07-22T10:02:00.000Z");
+    const financeMigration = applyProjectContext({
+      workspace_root: tmpRoot,
+      runtime: "agents",
+      bundle_json: bundleJson(sameRevisionWithFinance),
+      source_path: join(tmpRoot, "same-revision-finance-v2.json"),
+      now: repeatNow,
+    });
+    expect(financeMigration.revision).toBe(v1.revision);
+    const financeCache = JSON.parse(
+      readFileSync(join(tmpRoot, ".hasna", "project-context-cache.json"), "utf8"),
+    ) as { bundle: ProjectContextBundleV1 };
+    expect(financeCache.bundle.schema).toBe("hasna.projects.project_context_bundle.v2");
+    expect(financeCache.bundle.project.finance).toEqual(finance);
+
+    const repeated = applyProjectContext({
+      workspace_root: tmpRoot,
+      runtime: "agents",
+      bundle_json: bundleJson(sameRevisionWithFinance),
+      source_path: join(tmpRoot, "same-revision-finance-v2-repeat.json"),
+      now: repeatNow,
+    });
+    expect(repeated.hash).toBe(financeMigration.hash);
+    expect(readFileSync(join(tmpRoot, ".hasna", "project-context-cache.json"), "utf8"))
+      .toBe(`${JSON.stringify(financeCache, null, 2)}\n`);
+
+    expectCode(() => applyProjectContext({
+      workspace_root: tmpRoot,
+      runtime: "agents",
+      bundle_json: bundleJson(v1),
+      source_path: join(tmpRoot, "v1-rollback.json"),
+    }), "PROJECT_CONTEXT_REVISION_CONFLICT");
+
+    rmSync(tmpRoot, { recursive: true, force: true });
+    mkdirSync(tmpRoot, { recursive: true });
+    applyProjectContext({
+      workspace_root: tmpRoot,
+      runtime: "agents",
+      bundle_json: bundleJson(v1),
+      source_path: join(tmpRoot, "v1.json"),
+    });
+
+    const migrated = applyProjectContext({
+      workspace_root: tmpRoot,
+      runtime: "agents",
+      bundle_json: bundleJson(v2),
+      source_path: join(tmpRoot, "v2.json"),
+    });
+    expect(migrated.revision).toBe(v1.revision);
+    const migratedCache = JSON.parse(
+      readFileSync(join(tmpRoot, ".hasna", "project-context-cache.json"), "utf8"),
+    ) as { bundle: ProjectContextBundleV1 };
+    expect(migratedCache.bundle.schema).toBe("hasna.projects.project_context_bundle.v2");
+    expect(migratedCache.bundle.project.finance).toBeUndefined();
+
+    const tampered: ProjectContextBundleV1 = {
+      ...v2,
+      project: { ...v2.project, name: "Unproven Same-Revision Name" },
+      hash: "",
+    };
+    tampered.hash = computeProjectContextSourceHash(tampered);
+    expectCode(() => applyProjectContext({
+      workspace_root: tmpRoot,
+      runtime: "agents",
+      bundle_json: bundleJson(tampered),
+      source_path: join(tmpRoot, "tampered-v2.json"),
+    }), "PROJECT_CONTEXT_REVISION_CONFLICT");
+    expectCode(() => applyProjectContext({
+      workspace_root: tmpRoot,
+      runtime: "agents",
+      bundle_json: bundleJson(tampered),
+      source_path: join(tmpRoot, "tampered-v2-force.json"),
+      force: true,
+    }), "PROJECT_CONTEXT_REVISION_CONFLICT");
+
+    const future = { ...v2, schema: "hasna.projects.project_context_bundle.v3" };
+    expectCode(() => applyProjectContext({
+      workspace_root: tmpRoot,
+      runtime: "agents",
+      bundle_json: JSON.stringify(future),
+      source_path: join(tmpRoot, "future-v3.json"),
+    }), "PROJECT_CONTEXT_UNSUPPORTED_VERSION");
+
+    const newer: ProjectContextBundleV1 = {
+      ...tampered,
+      revision: "rev-8",
+      project: { ...tampered.project, finance },
+      hash: "",
+    };
+    newer.hash = computeProjectContextSourceHash(newer);
+    expect(applyProjectContext({
+      workspace_root: tmpRoot,
+      runtime: "agents",
+      bundle_json: bundleJson(newer),
+      source_path: join(tmpRoot, "newer-v2.json"),
+    }).revision).toBe("rev-8");
+    const newerCache = JSON.parse(
+      readFileSync(join(tmpRoot, ".hasna", "project-context-cache.json"), "utf8"),
+    ) as { bundle: ProjectContextBundleV1 };
+    expect(newerCache.bundle.project.finance).toEqual(finance);
   });
 
   test("orders producer-default timestamp revisions and encodes them safely in markers", () => {
@@ -1697,5 +2354,46 @@ describe("cache, revision, crash, and race safety", () => {
         expect(readFileSync(join(snapshotsDir, entry), "utf8")).not.toContain("PRIVATE USER PROSE");
       }
     }
+  });
+});
+
+// Regression: todos b46ca2a3. Session render wrote AGENTS.md with no size bound while the
+// guard that reads it back was capped at 256 KiB, so a home whose instruction corpus grew
+// past that cap wedged permanently and silently — every later plan/apply for that home threw
+// PROJECT_CONTEXT_INPUT_TOO_LARGE before it could do any work. Measured on station01
+// 2026-08-07 against a real 273,860-byte ~/.codex/AGENTS.md: clean home rc=0, same command
+// with the oversized file present rc=1.
+describe("managed output read bound", () => {
+  const OVERSIZED_BYTES = FOREIGN_INPUT_MAX_BYTES + 16 * 1024;
+
+  test("the fixture exceeds the foreign-input bound, so these tests can fail", () => {
+    expect(OVERSIZED_BYTES).toBeGreaterThan(FOREIGN_INPUT_MAX_BYTES);
+    expect(FOREIGN_INPUT_MAX_BYTES).toBeLessThan(SESSION_MANAGED_OUTPUT_MAX_BYTES);
+  });
+
+  test("the session guard hashes a managed target larger than the foreign-input bound", () => {
+    const target = join(tmpRoot, "AGENTS.md");
+    const body = "x".repeat(OVERSIZED_BYTES);
+    writeFileSync(target, body);
+    expect(statSync(target).size).toBeGreaterThan(FOREIGN_INPUT_MAX_BYTES);
+
+    const guard = observeProjectContextSessionGuard({ tool: "codex", target_home: tmpRoot });
+    expect(guard).not.toBeNull();
+    const observed = guard?.observed_hashes.find((entry) => entry.path === target);
+    expect(observed).toBeDefined();
+    expect(observed?.sha256).toBe(createHash("sha256").update(body).digest("hex"));
+  });
+
+  test("every managed session-render output gets the managed bound", () => {
+    expect(SESSION_MANAGED_OUTPUT_PATHS.length).toBeGreaterThan(0);
+    for (const relativePath of SESSION_MANAGED_OUTPUT_PATHS) {
+      expect(managedObservationMaxBytes(relativePath)).toBe(SESSION_MANAGED_OUTPUT_MAX_BYTES);
+    }
+  });
+
+  test("foreign input keeps the tight bound", () => {
+    expect(managedObservationMaxBytes("some/other/file.md")).toBe(FOREIGN_INPUT_MAX_BYTES);
+    expect(managedObservationMaxBytes(".hasna/instructions/01-global-fix-on-sight.md")).toBe(FOREIGN_INPUT_MAX_BYTES);
+    expect(managedObservationMaxBytes("opencode.json")).toBe(FOREIGN_INPUT_MAX_BYTES);
   });
 });

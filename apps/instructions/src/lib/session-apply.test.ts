@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, w
 import { join } from "node:path";
 import { applySessionRender, checkSessionRenderDrift, restoreSessionRenderSnapshot } from "./session-apply";
 import { planSessionRender, sourcesFromIdentityExport, type SessionInstructionSource, type SessionRenderTool } from "./session-render";
+import { CURSOR_GLOBAL_AUTHORITY_RELATIVE_PATH } from "./cursor-authority";
 import { tempRootPath } from "./test-temp-root";
 
 let tmpRoot = "";
@@ -103,6 +104,12 @@ describe("session apply writer", () => {
     expect(result.conflicts).toEqual([]);
     expect(result.files.map((file) => file.action)).toEqual(["create", "create"]);
     expect(result.snapshotPath).toBeNull();
+    expect(result.rollback).toEqual({
+      schema: "hasna.configs.session-render-rollback/v1",
+      status: "not-required",
+      snapshotPath: null,
+      reason: "dry-run-does-not-write",
+    });
     expect(existsSync(join(targetHome, "AGENTS.md"))).toBe(false);
   });
 
@@ -147,6 +154,7 @@ describe("session apply writer", () => {
         profile: "account999",
         targetHome: adapter.targetHome,
         projectRoot: adapter.projectRoot,
+        ...(adapter.tool === "cursor" ? { cursorAuthorityHome: targetFor("cursor-authority-home") } : {}),
         sources: [globalIdentity, agentIdentity],
       });
       const result = applySessionRender(plan);
@@ -158,6 +166,27 @@ describe("session apply writer", () => {
       }
       expect(existsSync(join(adapter.targetHome, ".hasna", "session-render-manifest.json"))).toBe(true);
     }
+  });
+
+  test("rechecks Cursor fixed authority at apply and writes nothing when it appears after planning", () => {
+    const projectRoot = targetFor("cursor-authority-stale-plan-project");
+    const authorityHome = targetFor("cursor-authority-stale-plan-home");
+    const plan = planSessionRender({
+      tool: "cursor",
+      profile: "account999",
+      projectRoot,
+      cursorAuthorityHome: authorityHome,
+      sources: [globalIdentity],
+    });
+    expect(plan.blocked).toBe(false);
+
+    const authorityPath = join(authorityHome, ...CURSOR_GLOBAL_AUTHORITY_RELATIVE_PATH.split("/"));
+    mkdirSync(join(authorityHome, ".cursor", "rules"), { recursive: true });
+    writeFileSync(authorityPath, "# Unmanaged fixed global authority\n");
+
+    expect(() => applySessionRender(plan)).toThrow("Cursor fixed global authority changed after planning");
+    expect(existsSync(join(projectRoot, ".cursor", "rules", "01-global-codewith.mdc"))).toBe(false);
+    expect(existsSync(join(projectRoot, ".hasna", "session-render-manifest.json"))).toBe(false);
   });
 
   test("preserves legacy support for session outputs larger than the project-context read cap", () => {
@@ -235,10 +264,67 @@ describe("session apply writer", () => {
 
     expect(result.conflicts).toEqual([]);
     expect(typeof result.snapshotPath).toBe("string");
+    expect(result.rollback).toMatchObject({
+      schema: "hasna.configs.session-render-rollback/v1",
+      status: "available",
+      snapshotPath: result.snapshotPath,
+      reason: "snapshot-created",
+    });
     expect(existsSync(result.snapshotPath!)).toBe(true);
     expect(readFileSync(result.snapshotPath!, "utf-8")).toContain("Use the shared Hasna engineering rules.");
     expect(result.files.find((file) => file.relativePath === "AGENTS.md")?.action).toBe("update");
     expect(readFileSync(join(targetHome, "AGENTS.md"), "utf-8")).toContain("Updated managed content.");
+  });
+
+  test("creates and previews a rollback snapshot for a first Codewith render", () => {
+    const targetHome = targetFor("codewith-new-root-rollback");
+    const applied = applySessionRender(planSessionRender({
+      tool: "codewith",
+      profile: "account999",
+      targetHome,
+      sources: [globalIdentity],
+      generatedAt: "2026-08-12T00:00:00.000Z",
+    }));
+
+    expect(applied.rollback).toMatchObject({
+      schema: "hasna.configs.session-render-rollback/v1",
+      status: "available",
+      snapshotPath: applied.snapshotPath,
+      reason: "snapshot-created",
+    });
+    expect(applied.snapshotPath).not.toBeNull();
+    const preview = restoreSessionRenderSnapshot(applied.snapshotPath!, { dryRun: true });
+    expect(preview.conflicts).toEqual([]);
+    expect(preview.files.map((file) => [file.relativePath, file.action])).toEqual([
+      ["CODEWITH.md", "delete"],
+      [".hasna/session-render-manifest.json", "delete"],
+    ]);
+    expect(existsSync(join(targetHome, "CODEWITH.md"))).toBe(true);
+
+    const restored = restoreSessionRenderSnapshot(applied.snapshotPath!);
+    expect(restored.restored).toBe(true);
+    expect(existsSync(join(targetHome, "CODEWITH.md"))).toBe(false);
+    expect(existsSync(join(targetHome, ".hasna", "session-render-manifest.json"))).toBe(false);
+    expect(existsSync(applied.snapshotPath!)).toBe(true);
+  });
+
+  test("reports unsupported new-root rollback explicitly for unchanged adapters", () => {
+    const targetHome = targetFor("codex-new-root-rollback");
+    const applied = applySessionRender(planSessionRender({
+      tool: "codex",
+      profile: "account999",
+      targetHome,
+      sources: [globalIdentity],
+      generatedAt: "2026-08-12T00:00:00.000Z",
+    }));
+
+    expect(applied.snapshotPath).toBeNull();
+    expect(applied.rollback).toEqual({
+      schema: "hasna.configs.session-render-rollback/v1",
+      status: "unsupported",
+      snapshotPath: null,
+      reason: "new-root-snapshot-not-supported-for-adapter",
+    });
   });
 
   test("restores a session snapshot only when the applied files are unchanged", () => {
@@ -601,6 +687,7 @@ describe("session apply writer", () => {
       tool: "cursor",
       profile: "account999",
       projectRoot: targetHome,
+      cursorAuthorityHome: targetFor("cursor-authority-home"),
       sources: [globalIdentity, agentIdentity],
       generatedAt: "2026-07-01T00:00:00.000Z",
     });
@@ -614,6 +701,7 @@ describe("session apply writer", () => {
       tool: "cursor",
       profile: "account999",
       projectRoot: targetHome,
+      cursorAuthorityHome: targetFor("cursor-authority-home"),
       sources: [{ ...globalIdentity, content: "Portable managed update." }],
       generatedAt: "2026-07-01T00:01:00.000Z",
     });
@@ -662,6 +750,7 @@ describe("session apply writer", () => {
       tool: "cursor",
       profile: "account999",
       projectRoot: targetHome,
+      cursorAuthorityHome: targetFor("cursor-authority-home"),
       sources: [globalIdentity, agentIdentity],
       generatedAt: "2026-07-01T00:00:00.000Z",
     });
@@ -673,6 +762,7 @@ describe("session apply writer", () => {
       tool: "cursor",
       profile: "account999",
       projectRoot: targetHome,
+      cursorAuthorityHome: targetFor("cursor-authority-home"),
       sources: [globalIdentity],
       generatedAt: "2026-07-01T00:01:00.000Z",
     });
@@ -690,6 +780,7 @@ describe("session apply writer", () => {
       tool: "cursor",
       profile: "account999",
       projectRoot: targetHome,
+      cursorAuthorityHome: targetFor("cursor-authority-home"),
       sources: [globalIdentity, agentIdentity],
     });
     applySessionRender(first);
@@ -700,6 +791,7 @@ describe("session apply writer", () => {
       tool: "cursor",
       profile: "account999",
       projectRoot: targetHome,
+      cursorAuthorityHome: targetFor("cursor-authority-home"),
       sources: [globalIdentity],
     });
     const result = applySessionRender(second);

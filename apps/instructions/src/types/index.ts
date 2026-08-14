@@ -25,6 +25,11 @@ export const CONFIG_AGENTS = [
   "aicopilot",
   "antigravity",
   "qwen",
+  "grok",
+  "copilot",
+  "devin",
+  "windsurf-legacy",
+  "cline",
   "zsh",
   "git",
   "npm",
@@ -194,7 +199,130 @@ export interface UpdateProfileInput {
   variables?: ProfileVariables;
 }
 
-// Profile ↔ Config join
+export interface BoundedReadOptions {
+  limit?: unknown;
+  cursor?: unknown;
+}
+
+export interface BoundedReadPage<T> {
+  items: T[];
+  total: number;
+  limit: number;
+  cursor: number;
+  next_cursor: number | null;
+  has_more: boolean;
+  complete: boolean;
+  truncated: false;
+  source_bounded: boolean;
+}
+
+export interface ProfileResolutionRead {
+  profile: Profile | null;
+  scanned: number | null;
+  total: number | null;
+  batch_limit: number | null;
+  source_bounded: boolean;
+  complete: true;
+  truncated: false;
+}
+
+// Profile ↔ Config join. The binding is deliberately separate from Config:
+// one canonical config can participate in several profiles with different
+// activation, provider and graph semantics without cloning its content.
+export const PROFILE_CONFIG_BINDING_SCHEMA = "hasna.instructions.profile-config-binding/v1" as const;
+export const INSTRUCTION_ACTIVATION_MODES = ["always", "glob", "model", "manual"] as const;
+export type InstructionActivationMode = (typeof INSTRUCTION_ACTIVATION_MODES)[number];
+export const INSTRUCTION_FALLBACKS = ["fail", "flatten", "promote-always", "omit"] as const;
+export type InstructionFallback = (typeof INSTRUCTION_FALLBACKS)[number];
+
+export interface InstructionActivation {
+  mode: InstructionActivationMode;
+  globs?: string[];
+  models?: string[];
+  description?: string;
+  directory_scope?: string;
+}
+
+export interface InstructionProviderSelector {
+  provider: ConfigAgent;
+  version_range?: string;
+}
+
+export interface ProfileConfigBindingSpec {
+  schema: typeof PROFILE_CONFIG_BINDING_SCHEMA;
+  activation: InstructionActivation;
+  required: boolean;
+  fallback: InstructionFallback;
+  providers?: InstructionProviderSelector[];
+  depends_on?: string[];
+  replaces?: string[];
+  conflicts_with?: string[];
+}
+
+export interface ProfileConfigBinding {
+  profile_id: string;
+  config_id: string;
+  sort_order: number;
+  binding: ProfileConfigBindingSpec;
+}
+
+// Profile ↔ executable/supporting asset join. Assets deliberately do not use
+// profile_configs: instruction text and executable/provider assets have
+// different trust, destination, enablement, and rollback contracts.
+export const PROFILE_ASSET_BINDING_SCHEMA = "hasna.instructions.profile-asset-binding/v1" as const;
+export const ASSET_KINDS = ["skill", "workflow", "plugin", "extension", "hook", "custom-agent"] as const;
+export type AssetKind = (typeof ASSET_KINDS)[number];
+export const ASSET_DESTINATION_STRATEGIES = ["emit-file", "install-local", "install-marketplace", "unsupported"] as const;
+export type AssetDestinationStrategy = (typeof ASSET_DESTINATION_STRATEGIES)[number];
+export const ASSET_SCOPES = ["global", "project", "session"] as const;
+export type AssetScope = (typeof ASSET_SCOPES)[number];
+export const ASSET_UNINSTALL_POLICIES = ["remove-managed", "retain"] as const;
+export type AssetUninstallPolicy = (typeof ASSET_UNINSTALL_POLICIES)[number];
+export const ASSET_ROLLBACK_POLICIES = ["snapshot", "installer-receipt", "none"] as const;
+export type AssetRollbackPolicy = (typeof ASSET_ROLLBACK_POLICIES)[number];
+
+export interface AssetProviderSelector {
+  provider: ConfigAgent;
+  versionRange: string;
+  surface: string;
+  scope: AssetScope;
+}
+
+export interface AssetSourceSpec {
+  kind: AssetKind;
+  locator: string;
+  digest: string;
+  immutable: boolean;
+  allowed: boolean;
+}
+
+export interface AssetDestinationSpec {
+  strategy: AssetDestinationStrategy;
+  root: "target-home" | "project-root";
+  relativePath: string;
+}
+
+export interface ProfileAssetBindingSpec {
+  schema: typeof PROFILE_ASSET_BINDING_SCHEMA;
+  assetKey: string;
+  kind: AssetKind;
+  enabled: boolean;
+  required: boolean;
+  selector: AssetProviderSelector;
+  source: AssetSourceSpec;
+  destination: AssetDestinationSpec;
+  uninstall: AssetUninstallPolicy;
+  rollback: AssetRollbackPolicy;
+}
+
+export interface ProfileAssetBinding {
+  profile_id: string;
+  source_config_id: string;
+  sort_order: number;
+  binding: ProfileAssetBindingSpec;
+}
+
+/** @deprecated Use ProfileConfigBinding for persisted profile membership. */
 export interface ProfileConfig {
   profile_id: string;
   config_id: string;

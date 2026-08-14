@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { planSessionRender, type SessionInstructionSource } from "./session-render";
+import { createHash } from "node:crypto";
+import {
+  planSessionRender,
+  sourcesFromIdentityExport,
+  type SessionInstructionSource,
+} from "./session-render";
 
 /**
  * Regression cover for todos 0c7ffd33 — `session plan` / `session apply` discarded
@@ -51,6 +56,10 @@ function plan(sources: SessionInstructionSource[]) {
     generatedAt: "2026-08-02T00:00:00.000Z",
     sources,
   });
+}
+
+function sha256(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
 }
 
 describe("session render reports every source it discards (todos 0c7ffd33)", () => {
@@ -168,5 +177,304 @@ describe("session render reports every source it discards (todos 0c7ffd33)", () 
     expect(result.manifest.sources).toHaveLength(24);
     expect(result.manifest.skippedSources).toEqual([]);
     expect(result.warnings).toEqual([]);
+  });
+});
+
+describe("targeted source replacement (goal 36dd6ed8)", () => {
+  const sharedReview = "Shared review requires two reviewers.";
+  const r11 = "R11 recording eagerness remains byte-for-byte present.";
+  const r12 = "R12 session self-scheduling remains byte-for-byte present.";
+  const protectedSafety = "Non-overridable safety remains byte-for-byte present.";
+  const codewithReview = "Codewith review requires one reviewer.";
+
+  function targetedSources(): SessionInstructionSource[] {
+    return [
+      { id: "shared-review", layer: "global", order: 0, content: sharedReview },
+      { id: "r11-recording", layer: "global", order: 1, content: r11 },
+      { id: "r12-scheduling", layer: "global", order: 2, content: r12 },
+      {
+        id: "protected-safety",
+        layer: "global",
+        order: 3,
+        content: protectedSafety,
+        nonOverridable: true,
+      },
+      {
+        id: "codewith-review",
+        layer: "global",
+        order: 4,
+        merge: "replace",
+        replacementScope: "source:shared-review",
+        content: codewithReview,
+        provenance: { source: "identity-export" },
+      },
+    ];
+  }
+
+  test("removes only the named earlier overridable source and preserves unrelated bytes", () => {
+    const result = plan(targetedSources());
+    const rendered = result.allFiles.map((file) => file.content).join("\n");
+
+    expect(result.manifest.sources.map((source) => source.id)).toEqual([
+      "r11-recording",
+      "r12-scheduling",
+      "protected-safety",
+      "codewith-review",
+    ]);
+    expect(rendered).not.toContain(sharedReview);
+    expect(rendered).toContain(r11);
+    expect(rendered).toContain(r12);
+    expect(rendered).toContain(protectedSafety);
+    expect(rendered).toContain(codewithReview);
+
+    const r11Manifest = result.manifest.sources.find((source) => source.id === "r11-recording");
+    const r12Manifest = result.manifest.sources.find((source) => source.id === "r12-scheduling");
+    const protectedManifest = result.manifest.sources.find((source) => source.id === "protected-safety");
+    expect(r11Manifest?.renderedPayloadSha256).toBe(sha256(r11));
+    expect(r12Manifest?.renderedPayloadSha256).toBe(sha256(r12));
+    expect(protectedManifest?.renderedPayloadSha256).toBe(sha256(protectedSafety));
+  });
+
+  test("records the targeted relation in skipped sources and replacer provenance", () => {
+    const result = plan(targetedSources());
+    const replacer = result.manifest.sources.find((source) => source.id === "codewith-review");
+
+    expect(result.manifest.skippedSources).toHaveLength(1);
+    expect(result.manifest.skippedSources[0]).toMatchObject({ id: "shared-review" });
+    expect(result.manifest.skippedSources[0]!.reason).toContain("source:shared-review");
+    expect(replacer?.replacementScope).toBe("source:shared-review");
+    expect(replacer?.provenance).toMatchObject({
+      source: "identity-export",
+      targetedReplacement: {
+        scope: "source:shared-review",
+        targetSourceId: "shared-review",
+        targetNormalizedSourceId: "shared-review",
+      },
+    });
+  });
+
+  test("targeted replacement changes the source hash", () => {
+    const appended = targetedSources().map((source) =>
+      source.id === "codewith-review"
+        ? { ...source, merge: "append" as const, replacementScope: undefined }
+        : source
+    );
+
+    expect(plan(targetedSources()).manifest.sourceHash).not.toBe(plan(appended).manifest.sourceHash);
+  });
+
+  test("identity-exported replacementScope follows the same composition contract", () => {
+    const sources = sourcesFromIdentityExport({
+      contract: "hasna.identities.configs-instructions/v1",
+      validation: { valid: true },
+      sources: targetedSources().map((source) => ({
+        id: source.id,
+        title: source.id,
+        kind: "global-rules",
+        precedence: source.order,
+        mergePolicy: source.merge ?? "append",
+        content: source.content,
+        nonOverridable: source.nonOverridable ?? false,
+        replacementScope: source.replacementScope,
+        provenance: source.provenance,
+      })),
+    }, { tool: "claude" });
+
+    const result = plan(sources);
+    expect(result.manifest.sources.map((source) => source.id)).toEqual([
+      "r11-recording",
+      "r12-scheduling",
+      "protected-safety",
+      "codewith-review",
+    ]);
+    expect(result.manifest.skippedSources.map((source) => source.id)).toEqual(["shared-review"]);
+  });
+
+  test("two targeted replacers compose left to right without deleting unrelated sources", () => {
+    const result = plan([
+      { id: "target-a", layer: "global", order: 0, content: "Target A." },
+      { id: "unrelated", layer: "global", order: 1, content: "Unrelated." },
+      { id: "target-b", layer: "global", order: 2, content: "Target B." },
+      {
+        id: "replacer-a",
+        layer: "global",
+        order: 3,
+        merge: "replace",
+        replacementScope: "source:target-a",
+        content: "Replacer A.",
+      },
+      {
+        id: "replacer-b",
+        layer: "global",
+        order: 4,
+        merge: "replace",
+        replacementScope: "source:target-b",
+        content: "Replacer B.",
+      },
+    ]);
+
+    expect(result.manifest.sources.map((source) => source.id)).toEqual([
+      "unrelated",
+      "replacer-a",
+      "replacer-b",
+    ]);
+    expect(result.manifest.skippedSources.map((source) => source.id)).toEqual(["target-a", "target-b"]);
+  });
+
+  test("fails closed when the targeted source is missing", () => {
+    expect(() => plan([
+      {
+        id: "replacer",
+        layer: "global",
+        order: 0,
+        merge: "replace",
+        replacementScope: "source:missing",
+        content: "Replacer.",
+      },
+    ])).toThrow("missing");
+  });
+
+  test("fails closed when the targeted source appears later", () => {
+    expect(() => plan([
+      {
+        id: "replacer",
+        layer: "global",
+        order: 0,
+        merge: "replace",
+        replacementScope: "source:later-target",
+        content: "Replacer.",
+      },
+      { id: "later-target", layer: "global", order: 1, content: "Later target." },
+    ])).toThrow("later");
+  });
+
+  test("fails closed when an earlier replacer already removed the target", () => {
+    expect(() => plan([
+      { id: "target", layer: "global", order: 0, content: "Target." },
+      {
+        id: "first-replacer",
+        layer: "global",
+        order: 1,
+        merge: "replace",
+        replacementScope: "source:target",
+        content: "First replacer.",
+      },
+      {
+        id: "second-replacer",
+        layer: "global",
+        order: 2,
+        merge: "replace",
+        replacementScope: "source:target",
+        content: "Second replacer.",
+      },
+    ])).toThrow("already removed");
+  });
+
+  test("fails closed when the target is ambiguous after normalization", () => {
+    expect(() => plan([
+      { id: "shared_review", layer: "global", order: 0, content: "First target." },
+      { id: "shared-review", layer: "global", order: 1, content: "Second target." },
+      {
+        id: "replacer",
+        layer: "global",
+        order: 2,
+        merge: "replace",
+        replacementScope: "source:shared-review",
+        content: "Replacer.",
+      },
+    ])).toThrow("ambiguous");
+  });
+
+  test("fails closed on unknown replacement scope syntax", () => {
+    expect(() => plan([
+      { id: "target", layer: "global", order: 0, content: "Target." },
+      {
+        id: "replacer",
+        layer: "global",
+        order: 1,
+        merge: "replace",
+        replacementScope: "rule:target",
+        content: "Replacer.",
+      },
+    ])).toThrow("replacement scope");
+  });
+
+  test("fails closed when append mode carries a replacement scope", () => {
+    expect(() => plan([
+      { id: "target", layer: "global", order: 0, content: "Target." },
+      {
+        id: "replacer",
+        layer: "global",
+        order: 1,
+        merge: "append",
+        replacementScope: "source:target",
+        content: "Replacer.",
+      },
+    ])).toThrow("append");
+  });
+
+  test("fails closed when the targeted source is non-overridable", () => {
+    expect(() => plan([
+      {
+        id: "protected-target",
+        layer: "global",
+        order: 0,
+        content: "Protected target.",
+        nonOverridable: true,
+      },
+      {
+        id: "replacer",
+        layer: "global",
+        order: 1,
+        merge: "replace",
+        replacementScope: "source:protected-target",
+        content: "Replacer.",
+      },
+    ])).toThrow("non-overridable");
+  });
+
+  test("unscoped replace remains broad for compatibility", () => {
+    const result = plan([
+      { id: "ordinary-a", layer: "global", order: 0, content: "Ordinary A." },
+      { id: "ordinary-b", layer: "global", order: 1, content: "Ordinary B." },
+      {
+        id: "protected",
+        layer: "global",
+        order: 2,
+        content: "Protected.",
+        nonOverridable: true,
+      },
+      { id: "broad-replacer", layer: "global", order: 3, merge: "replace", content: "Broad." },
+    ]);
+
+    expect(result.manifest.sources.map((source) => source.id)).toEqual(["protected", "broad-replacer"]);
+    expect(result.manifest.skippedSources.map((source) => source.id)).toEqual(["ordinary-a", "ordinary-b"]);
+  });
+
+  test("fails when semantic-policy deduplication removed the target before replacement", () => {
+    expect(() => plan([
+      {
+        id: OLDER_ID,
+        label: `Rules v${OLDER}`,
+        layer: "global",
+        order: 0,
+        content: rulesPayload(OLDER, "Older policy body."),
+      },
+      {
+        id: NEWER_ID,
+        label: `Rules v${NEWER}`,
+        layer: "global",
+        order: 1,
+        content: rulesPayload(NEWER, "Newer policy body."),
+      },
+      {
+        id: "replacer",
+        layer: "global",
+        order: 2,
+        merge: "replace",
+        replacementScope: "source:rules-9-9-8",
+        content: "Replacer.",
+      },
+    ])).toThrow("deduplication");
   });
 });

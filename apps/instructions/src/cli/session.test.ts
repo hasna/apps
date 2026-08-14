@@ -14,6 +14,8 @@ function runCli(args: string[], env: Record<string, string | undefined> = {}) {
     encoding: "utf8",
     env: {
       ...process.env,
+      HASNA_INSTRUCTIONS_API_URL: "",
+      HASNA_INSTRUCTIONS_API_KEY: "",
       ...env,
       NO_COLOR: "1",
       FORCE_COLOR: "0",
@@ -306,6 +308,173 @@ describe("configs session CLI", () => {
       expect(plan.manifest.sources.map((source) => source.id)).toEqual(["provider-codewith", "project-cli"]);
       expect(plan.manifest.sources.map((source) => source.layer)).toEqual(["tool", "repo"]);
       expect(result.stdout).not.toContain("Claude only.");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("--replace-source replacer=target matches identity-exported replacementScope", () => {
+    const home = makeTempRoot("open-configs-session-cli-");
+    try {
+      const cliScopedExport = join(home, "cli-scoped.json");
+      const identityScopedExport = join(home, "identity-scoped.json");
+      const sources = [
+        {
+          id: "shared-review",
+          title: "Shared Review",
+          kind: "global-rules",
+          precedence: 0,
+          mergePolicy: "append",
+          content: "Shared review requires two reviewers.",
+        },
+        {
+          id: "r11-recording",
+          title: "R11 Recording",
+          kind: "global-rules",
+          precedence: 1,
+          mergePolicy: "append",
+          content: "R11 remains.",
+        },
+        {
+          id: "codewith-review",
+          title: "Codewith Review",
+          kind: "global-rules",
+          precedence: 2,
+          mergePolicy: "append",
+          content: "Codewith review requires one reviewer.",
+        },
+      ];
+      const exportPayload = (scoped: boolean) => ({
+        contract: "hasna.identities.configs-instructions/v1",
+        validation: { valid: true },
+        sources: sources.map((source) =>
+          source.id === "codewith-review" && scoped
+            ? {
+              ...source,
+              mergePolicy: "replace",
+              replacementScope: "source:shared-review",
+            }
+            : source
+        ),
+      });
+      writeFileSync(cliScopedExport, JSON.stringify(exportPayload(false)));
+      writeFileSync(identityScopedExport, JSON.stringify(exportPayload(true)));
+      const env = {
+        HOME: home,
+        HASNA_CONFIGS_HOME: join(home, ".hasna", "configs"),
+      };
+      const common = [
+        "session",
+        "plan",
+        "--tool",
+        "codex",
+        "--profile",
+        "account999",
+        "--target-home",
+        "~/session-home",
+        "--json",
+      ];
+
+      const fromCli = runCli([
+        ...common,
+        "--identity-export",
+        cliScopedExport,
+        "--replace-source",
+        "codewith-review=Shared Review",
+      ], env);
+      const fromIdentity = runCli([
+        ...common,
+        "--identity-export",
+        identityScopedExport,
+      ], env);
+
+      expect(fromCli.status).toBe(0);
+      expect(fromIdentity.status).toBe(0);
+      const cliPlan = JSON.parse(fromCli.stdout) as {
+        manifest: {
+          sourceHash: string;
+          sources: Array<{ id: string; replacementScope: string | null; provenance: unknown }>;
+          skippedSources: Array<{ id: string; reason: string }>;
+        };
+      };
+      const identityPlan = JSON.parse(fromIdentity.stdout) as typeof cliPlan;
+      expect(cliPlan.manifest.sourceHash).toBe(identityPlan.manifest.sourceHash);
+      expect(cliPlan.manifest.sources).toEqual(identityPlan.manifest.sources);
+      expect(cliPlan.manifest.skippedSources).toEqual(identityPlan.manifest.skippedSources);
+      expect(cliPlan.manifest.sources.map((source) => source.id)).toEqual([
+        "r11-recording",
+        "codewith-review",
+      ]);
+      expect(cliPlan.manifest.sources[1]?.replacementScope).toBe("source:shared-review");
+      expect(cliPlan.manifest.skippedSources.map((source) => source.id)).toEqual(["shared-review"]);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("--replace-source replacer keeps broad replacement compatibility", () => {
+    const home = makeTempRoot("open-configs-session-cli-");
+    try {
+      const exportPath = join(home, "broad-replace.json");
+      writeFileSync(exportPath, JSON.stringify({
+        contract: "hasna.identities.configs-instructions/v1",
+        validation: { valid: true },
+        sources: [
+          {
+            id: "ordinary-a",
+            title: "Ordinary A",
+            kind: "global-rules",
+            precedence: 0,
+            mergePolicy: "append",
+            content: "Ordinary A.",
+          },
+          {
+            id: "ordinary-b",
+            title: "Ordinary B",
+            kind: "global-rules",
+            precedence: 1,
+            mergePolicy: "append",
+            content: "Ordinary B.",
+          },
+          {
+            id: "broad-replacer",
+            title: "Broad Replacer",
+            kind: "global-rules",
+            precedence: 2,
+            mergePolicy: "append",
+            content: "Broad replacement.",
+          },
+        ],
+      }));
+
+      const result = runCli([
+        "session",
+        "plan",
+        "--tool",
+        "codex",
+        "--profile",
+        "account999",
+        "--identity-export",
+        exportPath,
+        "--replace-source",
+        "broad-replacer",
+        "--json",
+      ], {
+        HOME: home,
+        HASNA_CONFIGS_HOME: join(home, ".hasna", "configs"),
+      });
+
+      expect(result.status).toBe(0);
+      const plan = JSON.parse(result.stdout) as {
+        manifest: {
+          sources: Array<{ id: string; replacementScope: string | null }>;
+          skippedSources: Array<{ id: string }>;
+        };
+      };
+      expect(plan.manifest.sources).toEqual([
+        expect.objectContaining({ id: "broad-replacer", replacementScope: null }),
+      ]);
+      expect(plan.manifest.skippedSources.map((source) => source.id)).toEqual(["ordinary-a", "ordinary-b"]);
     } finally {
       rmSync(home, { recursive: true, force: true });
     }

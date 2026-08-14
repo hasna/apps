@@ -22,9 +22,19 @@ import {
   type Profile,
   type ProfileSelector,
   type ProfileVariables,
+  type BoundedReadOptions,
+  type BoundedReadPage,
+  type ProfileResolutionRead,
   type UpdateConfigInput,
   type UpdateProfileInput,
+  type ProfileConfigBinding,
+  type ProfileConfigBindingSpec,
+  type ProfileAssetBinding,
+  type ProfileAssetBindingSpec,
 } from "../types/index.js";
+import { boundedReadPage, normalizeBoundedReadOptions } from "../lib/bounded-read.js";
+import { legacyProfileConfigBinding, normalizeProfileConfigBinding } from "../lib/instruction-graph.js";
+import { normalizeProfileAssetBinding } from "../lib/asset-plan.js";
 
 function slugify(name: string): string {
   return name
@@ -370,8 +380,27 @@ function rowToProfile(row: ProfileDbRow): Profile {
 }
 
 export async function listProfiles(client: TypedQueryClient): Promise<Profile[]> {
-  const rows = await client.many<ProfileDbRow>("SELECT * FROM profiles ORDER BY name");
-  return rows.map(rowToProfile);
+  const profiles: Profile[] = [];
+  let cursor = 0;
+  while (true) {
+    const page = await listProfilesPage(client, { limit: 100, cursor });
+    profiles.push(...page.items);
+    if (page.complete) return profiles;
+    cursor = page.next_cursor!;
+  }
+}
+
+export async function listProfilesPage(
+  client: TypedQueryClient,
+  options: BoundedReadOptions = {},
+): Promise<BoundedReadPage<Profile>> {
+  const normalized = normalizeBoundedReadOptions(options);
+  const count = await client.get<{ total: number | string }>("SELECT COUNT(*) AS total FROM profiles");
+  const rows = await client.many<ProfileDbRow>(
+    "SELECT * FROM profiles ORDER BY name LIMIT $1 OFFSET $2",
+    [normalized.limit, normalized.cursor],
+  );
+  return boundedReadPage(rows.map(rowToProfile), Number(count?.total ?? 0), normalized);
 }
 
 export async function getProfile(client: TypedQueryClient, idOrSlug: string): Promise<Profile> {
@@ -387,15 +416,36 @@ export async function getProfileConfigs(
   client: TypedQueryClient,
   idOrSlug: string,
 ): Promise<Config[]> {
+  const configs: Config[] = [];
+  let cursor = 0;
+  while (true) {
+    const page = await getProfileConfigsPage(client, idOrSlug, { limit: 100, cursor });
+    configs.push(...page.items);
+    if (page.complete) return configs;
+    cursor = page.next_cursor!;
+  }
+}
+
+export async function getProfileConfigsPage(
+  client: TypedQueryClient,
+  idOrSlug: string,
+  options: BoundedReadOptions = {},
+): Promise<BoundedReadPage<Config>> {
   const profile = await getProfile(client, idOrSlug);
+  const normalized = normalizeBoundedReadOptions(options);
+  const count = await client.get<{ total: number | string }>(
+    "SELECT COUNT(*) AS total FROM profile_configs WHERE profile_id = $1",
+    [profile.id],
+  );
   const rows = await client.many<ConfigDbRow>(
     `SELECT c.* FROM configs c
        JOIN profile_configs pc ON pc.config_id = c.id
       WHERE pc.profile_id = $1
-      ORDER BY pc.sort_order`,
-    [profile.id],
+      ORDER BY pc.sort_order
+      LIMIT $2 OFFSET $3`,
+    [profile.id, normalized.limit, normalized.cursor],
   );
-  return rows.map(rowToConfig);
+  return boundedReadPage(rows.map(rowToConfig), Number(count?.total ?? 0), normalized);
 }
 
 export async function createProfile(
@@ -478,6 +528,42 @@ export async function addConfigToProfile(
   );
 }
 
+export async function getProfileConfigBindings(
+  client: TypedQueryClient,
+  profileIdOrSlug: string,
+): Promise<ProfileConfigBinding[]> {
+  const profile = await getProfile(client, profileIdOrSlug);
+  const rows = await client.many<{ profile_id: string; config_id: string; sort_order: number; binding: unknown }>(
+    `SELECT profile_id, config_id, sort_order, binding
+       FROM profile_configs
+      WHERE profile_id = $1
+      ORDER BY sort_order, config_id`,
+    [profile.id],
+  );
+  return rows.map((row) => ({
+    profile_id: row.profile_id,
+    config_id: row.config_id,
+    sort_order: Number(row.sort_order),
+    binding: row.binding == null ? legacyProfileConfigBinding() : normalizeProfileConfigBinding(row.binding),
+  }));
+}
+
+export async function setProfileConfigBinding(
+  client: TypedQueryClient,
+  profileIdOrSlug: string,
+  configId: string,
+  binding: ProfileConfigBindingSpec,
+): Promise<ProfileConfigBinding> {
+  const profile = await getProfile(client, profileIdOrSlug);
+  const normalized = normalizeProfileConfigBinding(binding);
+  const result = await client.query(
+    "UPDATE profile_configs SET binding = $1 WHERE profile_id = $2 AND config_id = $3",
+    [JSON.stringify(normalized), profile.id, configId],
+  );
+  if ((result.rowCount ?? 0) !== 1) throw new Error(`Config ${configId} is not a member of profile ${profile.slug}.`);
+  return (await getProfileConfigBindings(client, profile.id)).find((row) => row.config_id === configId)!;
+}
+
 export async function removeConfigFromProfile(
   client: TypedQueryClient,
   profileIdOrSlug: string,
@@ -488,6 +574,70 @@ export async function removeConfigFromProfile(
     "DELETE FROM profile_configs WHERE profile_id = $1 AND config_id = $2",
     [profile.id, configId],
   );
+}
+
+export async function addAssetToProfile(
+  client: TypedQueryClient,
+  profileIdOrSlug: string,
+  sourceConfigId: string,
+  binding: ProfileAssetBindingSpec,
+): Promise<ProfileAssetBinding> {
+  const profile = await getProfile(client, profileIdOrSlug);
+  await getConfig(client, sourceConfigId);
+  const normalized = normalizeProfileAssetBinding(binding);
+  const maxRow = await client.get<{ max_order: number | null }>(
+    "SELECT MAX(sort_order) AS max_order FROM profile_assets WHERE profile_id = $1",
+    [profile.id],
+  );
+  const order = (maxRow?.max_order ?? -1) + 1;
+  await client.execute(
+    "INSERT INTO profile_assets (profile_id, source_config_id, asset_key, sort_order, binding) VALUES ($1,$2,$3,$4,$5::jsonb)",
+    [profile.id, sourceConfigId, normalized.assetKey, order, JSON.stringify(normalized)],
+  );
+  return (await getProfileAssetBindings(client, profile.id)).find((row) => row.binding.assetKey === normalized.assetKey)!;
+}
+
+export async function setProfileAssetBinding(
+  client: TypedQueryClient,
+  profileIdOrSlug: string,
+  assetKey: string,
+  binding: ProfileAssetBindingSpec,
+): Promise<ProfileAssetBinding> {
+  const profile = await getProfile(client, profileIdOrSlug);
+  const normalized = normalizeProfileAssetBinding(binding);
+  if (normalized.assetKey !== assetKey) throw new Error(`Asset binding key ${normalized.assetKey} does not match route key ${assetKey}.`);
+  const result = await client.query(
+    "UPDATE profile_assets SET binding = $1::jsonb WHERE profile_id = $2 AND asset_key = $3",
+    [JSON.stringify(normalized), profile.id, assetKey],
+  );
+  if ((result.rowCount ?? 0) !== 1) throw new Error(`Asset ${assetKey} is not a member of profile ${profile.slug}.`);
+  return (await getProfileAssetBindings(client, profile.id)).find((row) => row.binding.assetKey === assetKey)!;
+}
+
+export async function getProfileAssetBindings(
+  client: TypedQueryClient,
+  profileIdOrSlug: string,
+): Promise<ProfileAssetBinding[]> {
+  const profile = await getProfile(client, profileIdOrSlug);
+  const rows = await client.many<{ profile_id: string; source_config_id: string; sort_order: number; binding: unknown }>(
+    "SELECT profile_id, source_config_id, sort_order, binding FROM profile_assets WHERE profile_id = $1 ORDER BY sort_order, asset_key",
+    [profile.id],
+  );
+  return rows.map((row) => ({
+    profile_id: row.profile_id,
+    source_config_id: row.source_config_id,
+    sort_order: Number(row.sort_order),
+    binding: normalizeProfileAssetBinding(row.binding),
+  }));
+}
+
+export async function removeAssetFromProfile(
+  client: TypedQueryClient,
+  profileIdOrSlug: string,
+  assetKey: string,
+): Promise<void> {
+  const profile = await getProfile(client, profileIdOrSlug);
+  await client.execute("DELETE FROM profile_assets WHERE profile_id = $1 AND asset_key = $2", [profile.id, assetKey]);
 }
 
 // ── Profile resolution (machine-aware) ───────────────────────────────────────
@@ -502,24 +652,59 @@ export async function resolveProfileForMachine(
   client: TypedQueryClient,
   machine: { hostname?: string; os?: string; arch?: string },
 ): Promise<Profile | null> {
-  const profiles = (await listProfiles(client)).filter((p) => profileHasSelectors(p.selectors));
+  return (await resolveProfileForMachineRead(client, machine)).profile;
+}
+
+export async function resolveProfileForMachineRead(
+  client: TypedQueryClient,
+  machine: { hostname?: string; os?: string; arch?: string },
+  options: BoundedReadOptions = {},
+): Promise<ProfileResolutionRead> {
+  const { limit } = normalizeBoundedReadOptions(options);
   const host = (machine.hostname ?? "").trim().toLowerCase();
   const os = (machine.os ?? "").trim().toLowerCase();
   const arch = (machine.arch ?? "").trim().toLowerCase();
-  const matches = profiles
-    .filter((p) => {
+  let cursor = 0;
+  let scanned = 0;
+  let total = 0;
+  let selected: { profile: Profile; score: number } | null = null;
+
+  while (true) {
+    const page = await listProfilesPage(client, { limit, cursor });
+    total = page.total;
+    scanned += page.items.length;
+    for (const p of page.items) {
+      if (!profileHasSelectors(p.selectors)) continue;
       const s = p.selectors;
       const osOk = !s.os?.length || s.os.some((c) => c.trim().toLowerCase() === os);
       const archOk = !s.arch?.length || s.arch.some((c) => c.trim().toLowerCase() === arch);
       const hostOk = !s.hostnames?.length || s.hostnames.some((c) => c.trim().toLowerCase() === host);
-      return osOk && archOk && hostOk;
-    })
-    .map((p) => ({
-      profile: p,
-      score: (p.selectors.hostnames?.length ? 100 : 0) + (p.selectors.os?.length ? 10 : 0) + (p.selectors.arch?.length ? 10 : 0),
-    }))
-    .sort((a, b) => b.score - a.score || a.profile.name.localeCompare(b.profile.name));
-  return matches[0]?.profile ?? null;
+      if (!osOk || !archOk || !hostOk) continue;
+      const score =
+        (p.selectors.hostnames?.length ? 100 : 0) +
+        (p.selectors.os?.length ? 10 : 0) +
+        (p.selectors.arch?.length ? 10 : 0);
+      if (
+        !selected ||
+        score > selected.score ||
+        (score === selected.score && p.name.localeCompare(selected.profile.name) < 0)
+      ) {
+        selected = { profile: p, score };
+      }
+    }
+    if (page.complete) break;
+    cursor = page.next_cursor!;
+  }
+
+  return {
+    profile: selected?.profile ?? null,
+    scanned,
+    total,
+    batch_limit: limit,
+    source_bounded: true,
+    complete: true,
+    truncated: false,
+  };
 }
 
 // ── Machines ─────────────────────────────────────────────────────────────────

@@ -52,6 +52,17 @@ function outputsEqual(a: ConfigOutput[] | undefined, b: ConfigOutput[] | undefin
   return JSON.stringify(normalizeOutputs(a)) === JSON.stringify(normalizeOutputs(b));
 }
 
+const UNGUARDED_LOCAL_ENV_HELPER = '. "$HOME/.local/bin/env"';
+const GUARDED_LOCAL_ENV_HELPER = '[ -r "$HOME/.local/bin/env" ] && . "$HOME/.local/bin/env"';
+
+function normalizeKnownConfigSource(known: KnownConfig, content: string): string {
+  if (known.name !== "bash-profile") return content;
+  return content
+    .split("\n")
+    .map((line) => line === UNGUARDED_LOCAL_ENV_HELPER ? GUARDED_LOCAL_ENV_HELPER : line)
+    .join("\n");
+}
+
 function outputOwnerIdsByTarget(configs: Config[]): Map<string, Set<string>> {
   const owners = new Map<string, Set<string>>();
   for (const config of configs) {
@@ -164,6 +175,7 @@ export const PROJECT_CONFIG_FILES = [
   { file: ".aicopilot/AICOPILOT.md",    category: "rules" as ConfigCategory,  agent: "aicopilot" as ConfigAgent, format: "markdown" as ConfigFormat },
   { file: "AICOPILOT.md",               category: "rules" as ConfigCategory,  agent: "aicopilot" as ConfigAgent, format: "markdown" as ConfigFormat },
   { file: ".cursor/mcp.json",          category: "mcp" as ConfigCategory,    agent: "cursor" as ConfigAgent, format: "json" as ConfigFormat },
+  { file: ".github/copilot-instructions.md", category: "rules" as ConfigCategory, agent: "copilot" as ConfigAgent, format: "markdown" as ConfigFormat },
   { file: "QWEN.md",                    category: "rules" as ConfigCategory,  agent: "qwen" as ConfigAgent, format: "markdown" as ConfigFormat },
   { file: ".agents/mcp_config.json",    category: "mcp" as ConfigCategory,    agent: "antigravity" as ConfigAgent, format: "json" as ConfigFormat },
   { file: ".qwen/settings.json",         category: "agent" as ConfigCategory,  agent: "qwen" as ConfigAgent, format: "json" as ConfigFormat },
@@ -215,6 +227,10 @@ export async function syncProject(opts: SyncProjectOptions): Promise<SyncResult>
     { dir: join(absDir, ".claude", "rules"), agent: "claude" as ConfigAgent, namePrefix: "rules" },
     { dir: join(absDir, ".agents", "rules"), agent: "antigravity" as ConfigAgent, namePrefix: "antigravity-rules" },
     { dir: join(absDir, ".cursor", "rules"), agent: "cursor" as ConfigAgent, namePrefix: "cursor-rules" },
+    { dir: join(absDir, ".github", "instructions"), agent: "copilot" as ConfigAgent, namePrefix: "copilot-instructions" },
+    { dir: join(absDir, ".devin", "rules"), agent: "devin" as ConfigAgent, namePrefix: "devin-rules" },
+    { dir: join(absDir, ".windsurf", "rules"), agent: "windsurf-legacy" as ConfigAgent, namePrefix: "windsurf-rules" },
+    { dir: join(absDir, ".clinerules"), agent: "cline" as ConfigAgent, namePrefix: "cline-rules" },
   ]) {
     if (!existsSync(ruleDir.dir)) continue;
     const mdFiles = readdirSync(ruleDir.dir).filter((f) => f.endsWith(".md") || f.endsWith(".mdc"));
@@ -305,7 +321,7 @@ export async function syncKnown(opts: SyncKnownOptions = {}): Promise<SyncResult
     if (!existsSync(abs)) { result.skipped.push(known.path); continue; }
 
     try {
-      const rawContent = readFileSync(abs, "utf-8");
+      const rawContent = normalizeKnownConfigSource(known, readFileSync(abs, "utf-8"));
       if (rawContent.length > 500_000) { result.skipped.push(known.path + " (too large)"); continue; }
       const fmt = known.format ?? detectFormat(abs);
       // Always redact before storing
@@ -604,6 +620,10 @@ export function detectCategory(filePath: string): ConfigCategory {
 
 export function detectAgent(filePath: string): ConfigAgent {
   const p = filePath.toLowerCase().replace(getConfigHome(), "~");
+  if (p.includes("/.github/instructions/") || p.endsWith("/.github/copilot-instructions.md")) return "copilot";
+  if (p.includes("/.devin/rules/")) return "devin";
+  if (p.includes("/.windsurf/rules/")) return "windsurf-legacy";
+  if (p.includes("/.clinerules/")) return "cline";
   if (p.endsWith("/.gemini/gemini.md") || p.endsWith("/.gemini/config/mcp_config.json")) return "antigravity";
   if (p.includes("/.agents/rules/") || p.endsWith("/.agents/mcp_config.json")) return "antigravity";
   if (p.includes("/.claude/") || p.endsWith("claude.md")) return "claude";

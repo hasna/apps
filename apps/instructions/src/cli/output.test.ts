@@ -33,7 +33,7 @@ function seedConfigs(count: number): { home: string; dbPath: string } {
   const dbPath = join(home, "configs.db");
   process.env["HASNA_INSTRUCTIONS_DB_PATH"] = dbPath;
   resetDatabase();
-  const db = getDatabase();
+  const db = getDatabase(dbPath);
   for (let i = 1; i <= count; i++) {
     createConfig({
       name: `Very Long Agent Config ${String(i).padStart(2, "0")}`,
@@ -94,6 +94,64 @@ describe("configs list output", () => {
   });
 });
 
+describe("configs report output", () => {
+  test("json output is parseable and follows the stable report schema", () => {
+    const home = makeTempRoot("open-configs-report-json-");
+    tempDirs.push(home);
+    const dbPath = join(home, "configs.db");
+    const result = runCli(["report", "--json"], dbPath, home);
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(JSON.parse(result.stdout)).toEqual({
+      schema_version: 1,
+      configs: {
+        total: 0,
+        files: 0,
+        references: 0,
+        templates: 0,
+        project: 0,
+      },
+      profiles: {
+        total: 0,
+      },
+      drift: {
+        drifted: 0,
+        missing: 0,
+      },
+      secrets: {
+        findings: 0,
+        policy: "redacted_on_ingest",
+      },
+      by_agent: {},
+      by_category: {},
+    });
+  });
+
+  test("the no-flag report preserves the existing human surface", () => {
+    const home = makeTempRoot("open-configs-report-human-");
+    tempDirs.push(home);
+    const dbPath = join(home, "configs.db");
+    const result = runCli(["report"], dbPath, home);
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toBe(
+      "configs report\n" +
+      "\n" +
+      "  Total:       0 configs (0 files, 0 references)\n" +
+      "  Templates:   0 (with {{VAR}} placeholders)\n" +
+      "  Profiles:    0\n" +
+      "  Drift:       0 ✓ drifted, 0 missing\n" +
+      "  Secrets:     0 ✓ (redacted on ingest)\n" +
+      "\n" +
+      "  By agent:\n" +
+      "\n" +
+      "  By category:\n",
+    );
+  });
+});
+
 describe("configs apply ownership output", () => {
   test("CLI direct and profile dry-runs report owned instructions and preserve OpenCode settings", () => {
     const home = makeTempRoot("open-configs-apply-cli-");
@@ -101,7 +159,7 @@ describe("configs apply ownership output", () => {
     const dbPath = join(home, "configs.db");
     process.env["HASNA_INSTRUCTIONS_DB_PATH"] = dbPath;
     resetDatabase();
-    const db = getDatabase();
+    const db = getDatabase(dbPath);
     const claude = createConfig({
       name: "Claude Legacy Writer",
       category: "rules",

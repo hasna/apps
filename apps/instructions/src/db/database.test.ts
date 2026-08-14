@@ -99,6 +99,37 @@ describe("database", () => {
     expect(configColumns).toContain("outputs");
   });
 
+  test("migration 4 resumes when binding DDL landed before its version record", () => {
+    const home = useTempHome();
+    const dbPath = join(home, "interrupted-v4.db");
+    const interrupted = new Database(dbPath);
+    interrupted.exec(`
+      CREATE TABLE schema_version (version INTEGER PRIMARY KEY);
+      INSERT INTO schema_version (version) VALUES (3);
+      CREATE TABLE profile_configs (
+        profile_id TEXT NOT NULL,
+        config_id TEXT NOT NULL,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        binding TEXT NOT NULL DEFAULT '{"schema":"hasna.instructions.profile-config-binding/v1","activation":{"mode":"always"},"required":true,"fallback":"fail"}',
+        PRIMARY KEY (profile_id, config_id)
+      );
+      INSERT INTO profile_configs (profile_id, config_id, sort_order) VALUES ('profile-1', 'config-1', 7);
+    `);
+    interrupted.close();
+
+    resetDatabase();
+    const resumed = getDatabase(dbPath);
+    const version = resumed.query<{ version: number }, []>(
+      "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1",
+    ).get();
+    const row = resumed.query<{ profile_id: string; config_id: string; sort_order: number; binding: string }, []>(
+      "SELECT profile_id, config_id, sort_order, binding FROM profile_configs",
+    ).get();
+    expect(version?.version).toBe(5);
+    expect(row).toEqual(expect.objectContaining({ profile_id: "profile-1", config_id: "config-1", sort_order: 7 }));
+    expect(JSON.parse(row!.binding).schema).toBe("hasna.instructions.profile-config-binding/v1");
+  });
+
   test("feedback insert works on a fresh database", () => {
     const db = getDatabase();
     expect(() => insertFeedback({ message: "hi", category: "bug", version: "9.9.9" }, db)).not.toThrow();

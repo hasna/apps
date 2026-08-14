@@ -52,6 +52,12 @@ small. Human output is capped at 20 rows unless you pass `--limit`; use
 - `--json` preserves full machine-readable records for automation.
 - `show`/`inspect` and `snapshot show` print full config or snapshot content.
 
+`instructions report --json` emits the stable `schema_version: 1` report
+envelope. Its top-level fields are `configs`, `profiles`, `drift`, `secrets`,
+`by_agent`, and `by_category`. The nested count fields are numeric, and
+`secrets.policy` is `redacted_on_ingest`. Run `instructions report` without
+`--json` for the human-readable report.
+
 ## Package-Manager Secret Guard
 
 `instructions package-manager-scan` blocks package-manager credential ingress without
@@ -243,7 +249,8 @@ never silently become "overwrite renderer-owned instruction files".
 ### Managed project context
 
 `instructions project-context plan|apply` is the sole writer for the strict
-`hasna.projects.project_context_bundle.v1` contract emitted by Projects. It
+`hasna.projects.project_context_bundle.v1` and schema-compatible
+`hasna.projects.project_context_bundle.v2` contracts emitted by Projects. It
 accepts bounded structured JSON from a regular file or stdin and never invokes
 Projects, Todos, Conversations, or Mementos while rendering:
 
@@ -285,6 +292,12 @@ replacement rather than approximating an exchange. A same-project,
 compatible last-known-good cache can be selected explicitly with
 `--allow-stale-cache --expected-project-id <id>`; its bounded age/status is
 visible in the rendered context.
+
+Projects v2 bundles may carry the strict optional
+`hasna.projects.finance_project_metadata.v1` object. Instructions validates
+that object and preserves every accepted finance field through the bundle
+cache and session-manifest provenance path; malformed finance metadata and
+finance attached to a legacy v1 bundle fail closed.
 
 Compatibility remains additive: project-context manifests keep
 `hasna.configs.session-render/v1`, `Managed by @hasna/configs`, and
@@ -331,14 +344,22 @@ workflows:
 - `{{PROJECT_DASHBOARD_DIR}}` -> `.hasna/project`
 - `{{PROJECT_DASHBOARD_RENDER_MANIFEST}}` -> `.hasna/project/dashboard/render.json`
 - `{{PROJECT_DASHBOARD_SNAPSHOTS_DIR}}` -> `.hasna/project/dashboard/snapshots`
-- `{{PROJECT_CHANNEL_PREFIX}}` -> `iproj-`
+- `{{PROJECT_CHANNEL_PREFIX}}` -> `""` (no prefix; the channel is the normalized project slug)
+
+Existing profiles can be migrated in place without deleting or recreating them:
+
+```bash
+instructions profile update linux-arm64 \
+  --var PROJECT_CHANNEL_PREFIX= \
+  --unset-var LEGACY_VARIABLE
+```
 
 `instructions init` and `bun run seed` seed the
 `agent-managed-project-dashboard-standard` reference. It documents the standard
 `.hasna/project` layout, `projects dashboard *` commands, provider panel
-commands, `#iproj-*` channel naming, durable todos/goal workflow, and the rule
-that dashboards must show ids/statuses/evidence refs instead of raw private
-documents or secrets.
+commands, normalized project-slug channel naming, durable todos/goal workflow,
+and the rule that dashboards must show ids/statuses/evidence refs instead of raw
+private documents or secrets.
 
 ## License
 

@@ -2,7 +2,7 @@
 // Regenerate: bun run scripts/generate-sdk.ts
 
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
-// Source: Instructions V1 API 0.3.0
+// Source: Instructions V1 API 0.4.29
 
 export interface Config { "id"?: string; "name"?: string; "slug"?: string; "kind"?: string; "category"?: string; "agent"?: string; "target_path"?: string | null; "outputs"?: Array<Record<string, unknown>>; "format"?: string; "content"?: string; "description"?: string | null; "tags"?: Array<string>; "is_template"?: boolean; "version"?: number; "created_at"?: string; "updated_at"?: string; "synced_at"?: string | null }
 
@@ -13,6 +13,32 @@ export interface CreateConfigInput { "name": string; "category": string; "conten
 export interface UpdateConfigInput { "name"?: string; "category"?: string; "agent"?: string; "content"?: string; "description"?: string; "tags"?: Array<string>; "is_template"?: boolean }
 
 export interface CreateProfileInput { "name": string; "description"?: string; "selectors"?: Record<string, unknown>; "variables"?: Record<string, unknown> }
+
+export interface AddProfileConfigInput { "config_id": string }
+
+export interface ProfileConfigBindingSpec { "schema": string; "activation": Record<string, unknown>; "required": boolean; "fallback": "fail" | "flatten" | "promote-always" | "omit"; "providers"?: Array<Record<string, unknown>>; "depends_on"?: Array<string>; "replaces"?: Array<string>; "conflicts_with"?: Array<string> }
+
+export interface ProfileConfigBinding { "profile_id": string; "config_id": string; "sort_order": number; "binding": ProfileConfigBindingSpec }
+
+export interface ProfileAssetBindingSpec { "schema": string; "assetKey": string; "kind": "skill" | "workflow" | "plugin" | "extension" | "hook" | "custom-agent"; "enabled": boolean; "required": boolean; "selector": { "provider": string; "versionRange": string; "surface": string; "scope": "global" | "project" | "session" }; "source": { "kind": "skill" | "workflow" | "plugin" | "extension" | "hook" | "custom-agent"; "locator": string; "digest": string; "immutable": boolean; "allowed": boolean }; "destination": { "strategy": "emit-file" | "install-local" | "install-marketplace" | "unsupported"; "root": "target-home" | "project-root"; "relativePath": string }; "uninstall": "remove-managed" | "retain"; "rollback": "snapshot" | "installer-receipt" | "none" }
+
+export interface ProfileAssetBinding { "profile_id": string; "source_config_id": string; "sort_order": number; "binding": ProfileAssetBindingSpec }
+
+export interface AddProfileAssetInput { "source_config_id": string; "binding": ProfileAssetBindingSpec }
+
+export interface ProfileConfigAddedResponse { "added": boolean }
+
+export interface ProfileConfigRemovedResponse { "removed": boolean }
+
+export interface ProfileWithConfigs { "id"?: string; "name"?: string; "slug"?: string; "description"?: string | null; "selectors"?: Record<string, unknown>; "variables"?: Record<string, unknown>; "created_at"?: string; "updated_at"?: string; "configs"?: Array<Config> }
+
+export interface BoundedProfilePage { "profiles"?: Array<Profile>; "items": Array<Profile>; "count"?: number; "total": number; "limit": number; "cursor": number; "next_cursor": number | null; "has_more": boolean; "complete": boolean; "truncated": boolean; "source_bounded": boolean }
+
+export interface BoundedConfigPage { "items": Array<Config>; "total": number; "limit": number; "cursor": number; "next_cursor": number | null; "has_more": boolean; "complete": boolean; "truncated": boolean; "source_bounded": boolean }
+
+export interface ProfileShowResponse { "profile": ProfileWithConfigs; "configs": BoundedConfigPage }
+
+export interface ProfileResolutionRead { "profile": Profile | null; "scanned": number | null; "total": number | null; "batch_limit": number | null; "source_bounded": boolean; "complete": boolean; "truncated": boolean }
 
 export interface InstructionsV1ClientOptions {
   /** Base URL, e.g. process.env.APP_API_URL. */
@@ -132,11 +158,11 @@ export class InstructionsV1Client {
       });
     }
 
-    /** List profiles */
-    async listProfiles(init?: RequestInit): Promise<{ "profiles"?: Array<Profile>; "count"?: number }> {
+    /** List profiles with producer-side bounds */
+    async listProfiles(query?: { "limit"?: number; "cursor"?: number }, init?: RequestInit): Promise<BoundedProfilePage> {
       return this.request("GET", `/v1/profiles`, {
         body: undefined,
-        query: undefined,
+        query,
         init,
       });
     }
@@ -150,11 +176,20 @@ export class InstructionsV1Client {
       });
     }
 
+    /** Resolve a machine profile by scanning producer-bounded batches */
+    async resolveProfile(query?: { "hostname"?: string; "os"?: string; "arch"?: string; "limit"?: number }, init?: RequestInit): Promise<ProfileResolutionRead> {
+      return this.request("GET", `/v1/profiles/resolve`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
     /** Get a profile (with its configs) by id or slug */
-    async getProfile(id: string, init?: RequestInit): Promise<{ "profile"?: Profile }> {
+    async getProfile(id: string, query?: { "limit"?: number; "cursor"?: number }, init?: RequestInit): Promise<ProfileShowResponse> {
       return this.request("GET", `/v1/profiles/${encodeURIComponent(String(id))}`, {
         body: undefined,
-        query: undefined,
+        query,
         init,
       });
     }
@@ -162,6 +197,78 @@ export class InstructionsV1Client {
     /** Delete a profile */
     async deleteProfile(id: string, init?: RequestInit): Promise<{ "deleted"?: boolean; "id"?: string }> {
       return this.request("DELETE", `/v1/profiles/${encodeURIComponent(String(id))}`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** List typed asset bindings for a profile */
+    async getProfileAssetBindings(id: string, init?: RequestInit): Promise<{ "assets"?: Array<ProfileAssetBinding> }> {
+      return this.request("GET", `/v1/profiles/${encodeURIComponent(String(id))}/assets`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Add a content-addressed asset binding to a profile */
+    async addAssetToProfile(id: string, body: AddProfileAssetInput, init?: RequestInit): Promise<{ "asset"?: ProfileAssetBinding }> {
+      return this.request("POST", `/v1/profiles/${encodeURIComponent(String(id))}/assets`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Replace one schema-versioned profile asset binding */
+    async setProfileAssetBinding(id: string, assetKey: string, body: { "binding": ProfileAssetBindingSpec }, init?: RequestInit): Promise<{ "asset"?: ProfileAssetBinding }> {
+      return this.request("PUT", `/v1/profiles/${encodeURIComponent(String(id))}/assets/${encodeURIComponent(String(assetKey))}`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Remove one managed asset binding from a profile */
+    async removeAssetFromProfile(id: string, assetKey: string, init?: RequestInit): Promise<{ "removed"?: boolean }> {
+      return this.request("DELETE", `/v1/profiles/${encodeURIComponent(String(id))}/assets/${encodeURIComponent(String(assetKey))}`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** List schema-versioned config bindings for a profile */
+    async getProfileConfigBindings(id: string, init?: RequestInit): Promise<{ "bindings"?: Array<ProfileConfigBinding> }> {
+      return this.request("GET", `/v1/profiles/${encodeURIComponent(String(id))}/bindings`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Add a config to a profile */
+    async addConfigToProfile(id: string, body: AddProfileConfigInput, init?: RequestInit): Promise<ProfileConfigAddedResponse> {
+      return this.request("POST", `/v1/profiles/${encodeURIComponent(String(id))}/configs`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Set the schema-versioned binding for one profile config */
+    async setProfileConfigBinding(id: string, configId: string, body: { "binding": ProfileConfigBindingSpec }, init?: RequestInit): Promise<{ "binding"?: ProfileConfigBinding }> {
+      return this.request("PUT", `/v1/profiles/${encodeURIComponent(String(id))}/configs/${encodeURIComponent(String(configId))}`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Remove a config from a profile */
+    async removeConfigFromProfile(id: string, configId: string, init?: RequestInit): Promise<ProfileConfigRemovedResponse> {
+      return this.request("DELETE", `/v1/profiles/${encodeURIComponent(String(id))}/configs/${encodeURIComponent(String(configId))}`, {
         body: undefined,
         query: undefined,
         init,
