@@ -26,7 +26,33 @@ export interface SecretMetadata { "key": string; "type": "api_key" | "password" 
 
 export interface Secret { "key": string; "value": string; "type": string; "label"?: string | null; "expires_at"?: string | null; "created_at"?: string; "updated_at"?: string }
 
-export interface SecretInput { "key": string; "value": string; "type"?: "api_key" | "password" | "token" | "credential" | "other"; "label"?: string; "ttl"?: string }
+export interface SecretInput { "key": string; "value": string; "type"?: "api_key" | "password" | "token" | "credential" | "other"; "label"?: string; "ttl"?: string; "reason"?: string; "change_kind"?: string; "batch_id"?: string }
+
+export type VersionChangeKind = "initial" | "set" | "rotation" | "import" | "restore" | "migration";
+
+export interface SecretVersionMeta {
+  "version": number;
+  "change_kind": VersionChangeKind;
+  "reason"?: string | null;
+  "label"?: string | null;
+  "created_at": string;
+  "created_by": string;
+  "source_version"?: number | null;
+  "batch_id"?: string | null;
+  "provider_expires_at"?: string | null;
+  "value_length": number;
+  "fingerprint": string;
+  "current": boolean;
+}
+
+export type SecretVersionCheck = SecretVersionMeta & { "hash": string };
+
+export interface RestoreInput {
+  "key": string;
+  "version": number;
+  "reason": string;
+  "expected_current_version": number;
+}
 
 export interface VaultItemMetadata { "id": string; "kind": string; "title": string; "subtitle"?: string | null; "domains": Array<string>; "tags": Array<string>; "favorite": boolean; "created_at": string; "updated_at": string }
 
@@ -199,6 +225,33 @@ export class SecretsClient {
       return this.request("GET", `/v1/secrets/search`, {
         body: undefined,
         query,
+        init,
+      });
+    }
+
+    /** List secret version metadata (never value material) */
+    async listSecretVersions(query?: { "key": string; "limit"?: number }, init?: RequestInit): Promise<{ "versions"?: Array<SecretVersionMeta> }> {
+      return this.request("GET", `/v1/secrets/versions`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
+    /** Version evidence in the get --check class: length + sha256, never the value */
+    async checkSecretVersion(query?: { "key": string; "version": number }, init?: RequestInit): Promise<{ "check"?: SecretVersionCheck }> {
+      return this.request("GET", `/v1/secrets/versions/check`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
+    /** Append-only restore: server-side copy of a historical value into a new current version */
+    async restoreSecretVersion(body: RestoreInput, init?: RequestInit): Promise<{ "restored"?: SecretVersionMeta }> {
+      return this.request("POST", `/v1/secrets/restore`, {
+        body,
+        query: undefined,
         init,
       });
     }

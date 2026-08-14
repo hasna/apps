@@ -26,6 +26,7 @@ import { buildOpenApiDocument } from "./openapi.js";
 import { getCloudMasterKey, VaultDecryptionError } from "./cloud-crypto.js";
 import { VERSION } from "../version.js";
 import type { SecretType, VaultItemKind } from "../types.js";
+import { MetadataValidationError, VersionConflictError, VersionNotFoundError } from "../store/types.js";
 
 const READ = ["secrets:read"];
 const WRITE = ["secrets:write"];
@@ -118,7 +119,17 @@ export function createHandler(deps: ServeDeps): (req: Request) => Promise<Respon
         const a = await auth(req, WRITE);
         if (!a.ok) return a.res;
         const body = (await req.json().catch(() => null)) as
-          | { key?: string; value?: string; type?: string; label?: string; ttl?: string; expires_at?: string }
+          | {
+              key?: string;
+              value?: string;
+              type?: string;
+              label?: string;
+              ttl?: string;
+              expires_at?: string;
+              reason?: string;
+              change_kind?: string;
+              batch_id?: string;
+            }
           | null;
         if (!body?.key || typeof body.value !== "string") return json({ error: "key and value are required" }, 400);
         const type = (body.type && SECRET_TYPES.includes(body.type as SecretType) ? body.type : "other") as SecretType;
@@ -135,9 +146,25 @@ export function createHandler(deps: ServeDeps): (req: Request) => Promise<Respon
             return json({ error: err instanceof Error ? err.message : "Invalid ttl" }, 400);
           }
         }
-        const entry = await store.setSecret(body.key, body.value, type, body.label, expiresAt, a.actor, a.tenantId);
+        const CHANGE_KINDS = ["initial", "set", "rotation", "import", "restore", "migration"];
+        const entry = await store.setSecret(
+          body.key,
+          body.value,
+          type,
+          body.label,
+          expiresAt,
+          a.actor,
+          a.tenantId,
+          {
+            ...(typeof body.reason === "string" ? { reason: body.reason } : {}),
+            ...(typeof body.change_kind === "string" && CHANGE_KINDS.includes(body.change_kind)
+              ? { changeKind: body.change_kind as "initial" | "set" | "rotation" | "import" | "restore" | "migration" }
+              : {}),
+            ...(typeof body.batch_id === "string" ? { batchId: body.batch_id } : {}),
+          },
+        );
         const { value, ...meta } = entry;
-        return json(meta, 200);
+        return json({ ...meta, version: entry.version, unchanged: entry.unchanged }, 200);
       }
       if (path === "/v1/secrets" && method === "DELETE") {
         const a = await auth(req, WRITE);
@@ -162,6 +189,59 @@ export function createHandler(deps: ServeDeps): (req: Request) => Promise<Respon
         const q = url.searchParams.get("q");
         if (!q) return json({ error: "Missing q" }, 400);
         return json({ results: await store.searchSecretMetadata(q) });
+      }
+
+      // ---- /v1 secret versioning (metadata-only; values never leave the server) ----
+      if (path === "/v1/secrets/versions" && method === "GET") {
+        const a = await auth(req, READ);
+        if (!a.ok) return a.res;
+        const key = url.searchParams.get("key");
+        if (!key) return json({ error: "Missing key" }, 400);
+        const limit = url.searchParams.get("limit") ? Number(url.searchParams.get("limit")) : 20;
+        if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+          return json({ error: "Invalid limit (1..100)" }, 400);
+        }
+        return json({ versions: await store.listVersions(key, a.actor, a.tenantId, limit) });
+      }
+      if (path === "/v1/secrets/versions/check" && method === "GET") {
+        const a = await auth(req, READ);
+        if (!a.ok) return a.res;
+        const key = url.searchParams.get("key");
+        const version = url.searchParams.get("version");
+        if (!key || !version) return json({ error: "key and version are required" }, 400);
+        const versionNum = Number(version);
+        if (!Number.isInteger(versionNum) || versionNum < 1) return json({ error: "Invalid version" }, 400);
+        return json({ check: await store.checkVersion(key, versionNum, a.actor, a.tenantId) });
+      }
+      if (path === "/v1/secrets/restore" && method === "POST") {
+        const a = await auth(req, WRITE);
+        if (!a.ok) return a.res;
+        const body = (await req.json().catch(() => null)) as
+          | { key?: string; version?: number; reason?: string; expected_current_version?: number }
+          | null;
+        if (!body?.key || typeof body.version !== "number") {
+          return json({ error: "key and version are required" }, 400);
+        }
+        if (!Number.isInteger(body.version) || body.version < 1) return json({ error: "Invalid version" }, 400);
+        if (!body.reason?.trim()) return json({ error: "reason is required for restore" }, 400);
+        if (
+          typeof body.expected_current_version !== "number" ||
+          !Number.isInteger(body.expected_current_version) ||
+          body.expected_current_version < 1
+        ) {
+          // CAS is mandatory at the API boundary (spec §2.2/§2.7.8): a restore
+          // without the expected current version would be a blind overwrite of
+          // a possibly newer rotation. The CLI always submits it.
+          return json({ error: "expected_current_version is required and must be a positive integer" }, 400);
+        }
+        const restored = await store.restoreVersion(
+          body.key,
+          body.version,
+          { reason: body.reason, expectCurrent: body.expected_current_version },
+          a.actor,
+          a.tenantId,
+        );
+        return json({ restored });
       }
 
       // ---- /v1 vault items ----
@@ -258,6 +338,15 @@ export function createHandler(deps: ServeDeps): (req: Request) => Promise<Respon
           422,
         );
       }
+      if (error instanceof VersionNotFoundError) {
+        return json({ error: error.message }, 404);
+      }
+      if (error instanceof VersionConflictError) {
+        return json({ error: error.message }, 409);
+      }
+      if (error instanceof MetadataValidationError) {
+        return json({ error: error.message }, 400);
+      }
       const message = error instanceof Error ? error.message : String(error);
       return json({ error: message }, 500);
     }
@@ -274,6 +363,11 @@ export async function startCloudServer(): Promise<void> {
 
   const { client } = createCloudPoolFromEnv(APP_NAME, { applicationName: "secrets-serve" });
   const store = new CloudSecretsStore(client);
+  // Idempotent version baseline: every existing value becomes version 1
+  // (change_kind=migration) exactly once. Runs at boot before serving; a second
+  // run is a no-op (UNIQUE(key, version)).
+  const backfilled = await store.runVersionBackfill();
+  if (backfilled > 0) console.log(`secrets-serve: version baseline backfilled ${backfilled} key(s)`);
   const keyStore = new ApiKeyStore(client);
   const verifier = verifyApiKey({
     app: APP_NAME,
