@@ -11,6 +11,10 @@
     "README.md",
     "LICENSE"
   ],
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org",
+    "access": "public"
+  },
   "bin": {
     "actions": "dist/cli/index.js",
     "actions-mcp": "dist/mcp/index.js"
