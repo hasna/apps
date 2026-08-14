@@ -481,6 +481,34 @@ describe("Emails self-hosted client resolver", () => {
     expect(String(thrown)).not.toContain(body);
   });
 
+  test("root probe falls back to the API key after a selected session token needs reauthentication", () => {
+    process.env[PRIMARY_MODE_KEY] = "self_hosted";
+    process.env["EMAILS_SELF_HOSTED_URL"] = "https://emails.example";
+    process.env[EMAILS_SESSION_TOKEN_ENV] = "session-token-placeholder";
+    process.env[EMAILS_SELF_HOSTED_API_KEY_ENV] = "api-key-placeholder";
+    const capture = installFakeCurlSessionFallback(
+      {
+        status: 401,
+        body: JSON.stringify({ error: "session is invalid or expired", reason: "reauthenticate" }),
+      },
+      {
+        status: 200,
+        body: JSON.stringify({ status: "ok", version: "1.3.2", mode: "self_hosted", name: "emails", db: { ok: true, latencyMs: 2 } }),
+      },
+    );
+
+    const result = selfHostedProbe("/health");
+
+    expect(result.status).toBe(200);
+    expect(readFileSync(capture.callsPath, "utf8").trim().split(/\r?\n/)).toEqual(["1", "2"]);
+    const first = readFileSync(capture.stdinForCall(1), "utf8");
+    const second = readFileSync(capture.stdinForCall(2), "utf8");
+    expect(first).toContain("session-token-placeholder");
+    expect(first).not.toContain("api-key-placeholder");
+    expect(second).toContain("api-key-placeholder");
+    expect(second).not.toContain("session-token-placeholder");
+  });
+
   test("generic get and delete validate a declared 404 before returning absence", () => {
     process.env["EMAILS_MODE"] = "self_hosted";
     process.env["EMAILS_SELF_HOSTED_URL"] = "https://emails.example";
