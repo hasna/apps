@@ -481,6 +481,34 @@ describe("Emails self-hosted client resolver", () => {
     expect(String(thrown)).not.toContain(body);
   });
 
+  test("root probe falls back to the API key after a selected session token needs reauthentication", () => {
+    process.env[PRIMARY_MODE_KEY] = "self_hosted";
+    process.env["EMAILS_SELF_HOSTED_URL"] = "https://emails.example";
+    process.env[EMAILS_SESSION_TOKEN_ENV] = "session-token-placeholder";
+    process.env[EMAILS_SELF_HOSTED_API_KEY_ENV] = "api-key-placeholder";
+    const capture = installFakeCurlSessionFallback(
+      {
+        status: 401,
+        body: JSON.stringify({ error: "session is invalid or expired", reason: "reauthenticate" }),
+      },
+      {
+        status: 200,
+        body: JSON.stringify({ status: "ok", version: "1.3.2", mode: "self_hosted", name: "emails", db: { ok: true, latencyMs: 2 } }),
+      },
+    );
+
+    const result = selfHostedProbe("/health");
+
+    expect(result.status).toBe(200);
+    expect(readFileSync(capture.callsPath, "utf8").trim().split(/\r?\n/)).toEqual(["1", "2"]);
+    const first = readFileSync(capture.stdinForCall(1), "utf8");
+    const second = readFileSync(capture.stdinForCall(2), "utf8");
+    expect(first).toContain("session-token-placeholder");
+    expect(first).not.toContain("api-key-placeholder");
+    expect(second).toContain("api-key-placeholder");
+    expect(second).not.toContain("session-token-placeholder");
+  });
+
   test("generic get and delete validate a declared 404 before returning absence", () => {
     process.env["EMAILS_MODE"] = "self_hosted";
     process.env["EMAILS_SELF_HOSTED_URL"] = "https://emails.example";
@@ -490,6 +518,21 @@ describe("Emails self-hosted client resolver", () => {
     const store = selfHostedStoreFor("domains");
     expect(store.get("missing")).toBeNull();
     expect(store.del("missing")).toBe(false);
+  });
+
+  test("priority-sender-rules get and delete of a missing rule return absence, not a throw", () => {
+    // Regression: the serve's 404 text used to diverge from the declared
+    // contract ("priority sender rule not found" vs the generated
+    // "priority-sender-rules not found"), so the strict 404-body validation
+    // made the client THROW on a missing rule instead of returning null/false.
+    process.env[PRIMARY_MODE_KEY] = "self_hosted";
+    process.env["EMAILS_SELF_HOSTED_URL"] = "https://emails.example";
+    process.env["EMAILS_SELF_HOSTED_API_KEY"] = "test-key";
+    installFakeCurl({ status: 404, body: '{"error":"priority-sender-rules not found"}' });
+
+    const store = selfHostedStoreFor("priority-sender-rules");
+    expect(store.get("priority:address:missing@example.com")).toBeNull();
+    expect(store.del("priority:address:missing@example.com")).toBe(false);
   });
 
   for (const [label, body] of [

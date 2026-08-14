@@ -15,6 +15,13 @@ import {
   decodeAttachmentPayload,
   validateAttachmentMetadata,
 } from "../../lib/attachment-download.js";
+import {
+  MailboxFilterConflictError,
+  MailboxFilterNotFoundError,
+  normalizeMailboxFilterInput,
+  type MailboxFilter,
+  type MailboxFilterInput,
+} from "../../lib/mailbox-filters.js";
 
 /** A live pool exposes `transaction()`; an in-memory unit-test shim does not. */
 function isTransactional(client: TypedQueryClient): client is PoolQueryClient {
@@ -584,6 +591,10 @@ const OUTBOUND_SQL = "lower(COALESCE(direction, '')) = 'outbound'";
 const ARCHIVED_SQL = `labels @> '["archived"]'::jsonb`;
 const SPAM_SQL = `(labels @> '["spam"]'::jsonb OR lower(COALESCE(status, '')) = 'spam')`;
 const TRASH_SQL = `labels @> '["trash"]'::jsonb`;
+// Inbound MIME rows preserve the display-name form of From (for example,
+// `Alice <alice@example.com>`). Keep server-side counts aligned with the
+// SQLite/TUI matcher, which extracts the angle-bracket address before matching.
+const SENDER_EMAIL_SQL = "lower(COALESCE(substring(from_addr FROM '<([^<>]+)>'), btrim(from_addr)))";
 
 const FOLDER_PREDICATES: Record<MessageFolder, readonly string[]> = {
   inbox: [NOT_OUTBOUND_SQL, `NOT (${ARCHIVED_SQL})`, `NOT ${SPAM_SQL}`, `NOT (${TRASH_SQL})`],
@@ -674,14 +685,23 @@ export interface ListMessagesOptions extends ListOptions {
   to?: string;
   from?: string;
   subject?: string;
+  address?: string;
   search?: string;
   since?: string;
+  until?: string;
+  read?: boolean;
+  unread?: boolean;
+  starred?: boolean;
+  archived?: boolean;
+  label?: string;
   /** Opaque keyset cursor (from a previous page's next_cursor). Wins over offset. */
   cursor?: string;
-  /** Only messages with a recipient at one of these domains (lowercased). */
+  /** Only messages whose sender or a to/cc recipient is at one of these domains (lowercased). */
   domains?: string[];
   /** Server-side folder filter; same semantics as the folder counts. */
   folder?: MessageFolder;
+  /** Internal apply-only ceiling; ordinary message lists remain capped at 500. */
+  maxLimit?: number;
 }
 
 /**
@@ -747,6 +767,7 @@ export function decodeAttachmentsCursor(
 export interface MessageCountsRecord {
   inbox: number;
   unread: number;
+  priority: number;
   starred: number;
   sent: number;
   archived: number;
@@ -865,9 +886,9 @@ function buildRawMime(rec: MessageRecord): string {
   return `${lines.join("\r\n")}\r\n\r\n${body}`;
 }
 
-function clampLimit(limit: number | undefined): number {
+function clampLimit(limit: number | undefined, max = 500): number {
   if (!limit || Number.isNaN(limit)) return 100;
-  return Math.min(Math.max(1, Math.floor(limit)), 500);
+  return Math.min(Math.max(1, Math.floor(limit)), max);
 }
 
 function clampOffset(offset: number | undefined): number {
@@ -2394,6 +2415,10 @@ export class TenantScopedStore {
       params.push(likeContains(opts.subject));
       where.push(`lower(COALESCE(subject, '')) LIKE $${params.length} ESCAPE '\\'`);
     }
+    if (opts.address?.trim()) {
+      params.push(likeContains(opts.address));
+      where.push(`(lower(COALESCE(from_addr, '')) LIKE $${params.length} ESCAPE '\\' OR lower(to_addrs::text) LIKE $${params.length} ESCAPE '\\')`);
+    }
     if (opts.search?.trim()) {
       params.push(likeContains(opts.search));
       // Stays a scan by design: all text-search operators are non-LEAKPROOF,
@@ -2423,11 +2448,34 @@ export class TenantScopedStore {
       params.push(opts.since.trim());
       where.push(`${MESSAGE_TS_EXPR} >= $${params.length}::timestamptz`);
     }
+    if (opts.until?.trim()) {
+      params.push(opts.until.trim());
+      where.push(`${MESSAGE_TS_EXPR} <= $${params.length}::timestamptz`);
+    }
+    if (opts.read === true) where.push("(is_read = true OR lower(COALESCE(direction, '')) = 'outbound')");
+    if (opts.unread === true) where.push("is_read = false AND lower(COALESCE(direction, '')) <> 'outbound'");
+    if (opts.starred === true) where.push("is_starred = true");
+    if (opts.archived === true) where.push(ARCHIVED_SQL);
+    if (opts.label?.trim()) {
+      params.push(opts.label.trim().toLowerCase());
+      where.push(`EXISTS (
+        SELECT 1 FROM jsonb_array_elements_text(
+          CASE WHEN jsonb_typeof(labels) = 'array' THEN labels ELSE '[]'::jsonb END
+        ) AS saved_filter_label(value)
+        WHERE lower(saved_filter_label.value) = $${params.length}
+      )`);
+    }
     const domains = (opts.domains ?? []).map((d) => d.trim().toLowerCase()).filter(Boolean);
     if (domains.length > 0) {
       params.push(domains);
+      // Parity with the SQLite-local store (from OR recipients): message_recipients
+      // carries only to/cc rows, so the sender domain must be matched against
+      // from_addr directly or a SENDER-only domain criterion silently drops the
+      // row (the local matcher also re-checks from/to/cc, so this pushdown may
+      // return a superset but never a subset of the criteria match).
       where.push(
-        `EXISTS (SELECT 1 FROM message_recipients r WHERE r.tenant_id = messages.tenant_id AND r.message_id = messages.id AND r.domain = ANY($${params.length}))`,
+        `(emails_extract_domain(from_addr) = ANY($${params.length})
+          OR EXISTS (SELECT 1 FROM message_recipients r WHERE r.tenant_id = messages.tenant_id AND r.message_id = messages.id AND r.domain = ANY($${params.length})))`,
       );
     }
     // Keyset cursor: strictly-before in (ts DESC, id DESC) order, served by
@@ -2449,7 +2497,7 @@ export class TenantScopedStore {
       where.push(`(${MESSAGE_TS_EXPR}, id) < ($${tsIndex}::timestamptz, $${params.length})`);
     }
     const whereSql = `WHERE ${where.join(" AND ")}`;
-    const limit = clampLimit(opts.limit);
+    const limit = clampLimit(opts.limit, opts.maxLimit);
     params.push(limit);
     const limitIndex = params.length;
     params.push(cursor ? 0 : clampOffset(opts.offset));
@@ -2472,6 +2520,157 @@ export class TenantScopedStore {
         ? encodeMessagesCursor(last["cursor_ts"], last["id"])
         : null;
     return { items: rows.map(mapMessageListRow), next_cursor: nextCursor };
+  }
+
+  private mailboxFilterFromRow(row: Record<string, unknown>): MailboxFilter {
+    const criteria = typeof row["criteria"] === "string"
+      ? JSON.parse(row["criteria"] as string)
+      : row["criteria"];
+    return {
+      id: String(row["id"] ?? ""),
+      tenant_id: String(row["tenant_id"] ?? this.tenantId),
+      name: String(row["name"] ?? ""),
+      normalized_name: String(row["normalized_name"] ?? ""),
+      mailbox: String(row["mailbox"] ?? "inbox") as MailboxFilter["mailbox"],
+      criteria: criteria as MailboxFilter["criteria"],
+      created_at: toIso(row["created_at"]) ?? "",
+      updated_at: toIso(row["updated_at"]) ?? "",
+    };
+  }
+
+  async listMailboxFilters(opts: ListOptions & {
+    filters?: { normalized_name?: string; mailbox?: string };
+  } = {}): Promise<MailboxFilter[]> {
+    const filters = opts.filters ?? {};
+    const params: unknown[] = [this.tenantId];
+    const where = ["tenant_id = $1"];
+    if (filters.normalized_name !== undefined) {
+      params.push(filters.normalized_name);
+      where.push(`normalized_name = $${params.length}`);
+    }
+    if (filters.mailbox !== undefined) {
+      params.push(filters.mailbox);
+      where.push(`mailbox = $${params.length}`);
+    }
+    const limitIndex = params.push(clampLimit(opts.limit));
+    const offsetIndex = params.push(clampOffset(opts.offset));
+    const rows = await this.client.many<Record<string, unknown>>(
+      `SELECT id, tenant_id, name, normalized_name, mailbox, criteria, created_at, updated_at
+         FROM mailbox_filters WHERE ${where.join(" AND ")}
+        ORDER BY updated_at DESC, id ASC LIMIT $${limitIndex} OFFSET $${offsetIndex}`,
+      params,
+    );
+    return rows.map((row) => this.mailboxFilterFromRow(row));
+  }
+
+  async getMailboxFilter(identifier: string): Promise<MailboxFilter | null> {
+    const value = identifier.trim();
+    if (!value) return null;
+    let normalized = value.toLowerCase().replace(/\s+/g, "-").replaceAll("_", "-").slice(0, 64);
+    try { normalized = normalizeMailboxFilterInput({ name: value, mailbox: "inbox" }).normalized_name; } catch { /* id lookup may still succeed */ }
+    // `id` is a uuid column; binding a non-UUID identifier (every filter NAME)
+    // to `id = $2` raises 22P02 before the name branch runs and turns a missing
+    // name into a 500. The id branch is therefore guarded to UUID-shaped values
+    // only and compared via `id::text`, which can never throw; names resolve
+    // through normalized_name and a missing name is a plain not-found.
+    const row = await this.client.get<Record<string, unknown>>(
+      `SELECT id, tenant_id, name, normalized_name, mailbox, criteria, created_at, updated_at
+         FROM mailbox_filters
+        WHERE tenant_id = $1
+          AND (($2 ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' AND id::text = $2)
+               OR normalized_name = $3)
+        LIMIT 1`,
+      [this.tenantId, value, normalized],
+    );
+    return row ? this.mailboxFilterFromRow(row) : null;
+  }
+
+  async createMailboxFilter(input: MailboxFilterInput): Promise<MailboxFilter> {
+    const normalized = normalizeMailboxFilterInput(input);
+    try {
+      const row = await this.client.one<Record<string, unknown>>(
+        `INSERT INTO mailbox_filters (id, tenant_id, name, normalized_name, mailbox, criteria)
+         VALUES ($1, $2, $3, $4, $5, $6::jsonb) RETURNING id, tenant_id, name, normalized_name, mailbox, criteria, created_at, updated_at`,
+        [randomUUID(), this.tenantId, normalized.name, normalized.normalized_name, normalized.mailbox, JSON.stringify(normalized.criteria)],
+      );
+      return this.mailboxFilterFromRow(row);
+    } catch (error) {
+      if ((error as { code?: string }).code === "23505") throw new MailboxFilterConflictError(normalized.name);
+      throw error;
+    }
+  }
+
+  async updateMailboxFilter(
+    identifier: string,
+    input: Partial<MailboxFilterInput>,
+    options: { replaceCriteria?: boolean } = {},
+  ): Promise<MailboxFilter> {
+    const current = await this.getMailboxFilter(identifier);
+    if (!current) throw new MailboxFilterNotFoundError(identifier);
+    const normalized = normalizeMailboxFilterInput({
+      name: input.name ?? current.name,
+      mailbox: input.mailbox ?? input.folder ?? current.mailbox,
+      criteria: options.replaceCriteria
+        ? (input.criteria ?? {})
+        : { ...current.criteria, ...(input.criteria ?? {}) },
+    });
+    try {
+      const row = await this.client.get<Record<string, unknown>>(
+        `UPDATE mailbox_filters
+            SET name = $1, normalized_name = $2, mailbox = $3, criteria = $4::jsonb, updated_at = now()
+          WHERE tenant_id = $5 AND id = $6
+        RETURNING id, tenant_id, name, normalized_name, mailbox, criteria, created_at, updated_at`,
+        [normalized.name, normalized.normalized_name, normalized.mailbox, JSON.stringify(normalized.criteria), this.tenantId, current.id],
+      );
+      if (!row) throw new MailboxFilterNotFoundError(identifier);
+      return this.mailboxFilterFromRow(row);
+    } catch (error) {
+      if ((error as { code?: string }).code === "23505") throw new MailboxFilterConflictError(normalized.name);
+      throw error;
+    }
+  }
+
+  async deleteMailboxFilter(identifier: string): Promise<boolean> {
+    const current = await this.getMailboxFilter(identifier);
+    if (!current) return false;
+    const rows = await this.client.many<{ id: string }>(
+      "DELETE FROM mailbox_filters WHERE tenant_id = $1 AND id = $2 RETURNING id",
+      [this.tenantId, current.id],
+    );
+    return rows.length > 0;
+  }
+
+  async applyMailboxFilter(identifier: string, opts: ListOptions = {}): Promise<{
+    filter: Pick<MailboxFilter, "name" | "criteria">;
+    page: MessageListPage;
+    limit: number;
+    offset: number;
+  }> {
+    const filter = await this.getMailboxFilter(identifier);
+    if (!filter) throw new MailboxFilterNotFoundError(identifier);
+    const limit = Math.min(1000, Math.max(1, Math.floor(opts.limit ?? 100)));
+    const offset = clampOffset(opts.offset);
+    const folder = filter.mailbox === "unread" ? "inbox" : filter.mailbox as MessageFolder;
+    const page = await this.listMessages({
+      limit: limit + 1,
+      maxLimit: 1001,
+      offset,
+      folder,
+      search: filter.criteria.search,
+      from: filter.criteria.from,
+      to: filter.criteria.to,
+      address: filter.criteria.address,
+      subject: filter.criteria.subject,
+      domains: filter.criteria.domain ? [filter.criteria.domain] : undefined,
+      since: filter.criteria.since,
+      until: filter.criteria.until,
+      label: filter.criteria.label,
+      read: filter.criteria.read,
+      unread: filter.criteria.unread || filter.mailbox === "unread",
+      starred: filter.criteria.starred,
+      archived: filter.criteria.archived,
+    });
+    return { filter: { name: filter.name, criteria: filter.criteria }, page, limit, offset };
   }
 
   /**
@@ -3420,6 +3619,25 @@ export class TenantScopedStore {
       latest instanceof Date ? latest.toISOString() : latest ? String(latest) : null;
 
     const domains = (opts.domains ?? []).map((d) => d.trim().toLowerCase()).filter(Boolean);
+    const priorityRow = await this.client.get<{ priority: unknown }>(
+      `SELECT count(*)::int AS priority
+         FROM messages m
+        WHERE m.tenant_id = $1
+          AND ${NOT_OUTBOUND_SQL.replaceAll("direction", "m.direction")}
+          AND NOT (${ARCHIVED_SQL.replaceAll("labels", "m.labels")})
+          AND NOT ${SPAM_SQL.replaceAll("labels", "m.labels").replaceAll("status", "m.status")}
+          AND NOT (${TRASH_SQL.replaceAll("labels", "m.labels")})
+          AND EXISTS (
+            SELECT 1
+              FROM priority_sender_rules r
+             WHERE r.tenant_id = m.tenant_id
+               AND ((r.kind = 'address' AND rtrim(${SENDER_EMAIL_SQL.replaceAll("from_addr", "m.from_addr")}, '.') = r.value)
+                 OR (r.kind = 'domain' AND rtrim(split_part(${SENDER_EMAIL_SQL.replaceAll("from_addr", "m.from_addr")}, '@', 2), '.') = r.value))
+          )
+          ${domains.length > 0 ? "AND EXISTS (SELECT 1 FROM message_recipients mr WHERE mr.tenant_id = m.tenant_id AND mr.message_id = m.id AND mr.domain = ANY($2))" : ""}`,
+      domains.length > 0 ? [this.tenantId, domains] : [this.tenantId],
+    );
+    const priority = number(priorityRow?.priority);
     if (domains.length > 0) {
       // Single domain (the native client's case): the write-time
       // first_for_domain marker guarantees one row per message, so this is a
@@ -3465,7 +3683,7 @@ export class TenantScopedStore {
              FROM per_message`;
       const row = await this.client.get<Record<string, unknown>>(sql, [this.tenantId, domains]);
       return {
-        inbox: number(row?.["inbox"]), unread: number(row?.["unread"]), starred: number(row?.["starred"]),
+        inbox: number(row?.["inbox"]), unread: number(row?.["unread"]), priority, starred: number(row?.["starred"]),
         sent: number(row?.["sent"]), archived: number(row?.["archived"]), spam: number(row?.["spam"]),
         trash: number(row?.["trash"]), total: number(row?.["total"]),
         latest_received_at: toLatest(row?.["latest_received_at"]),
@@ -3486,6 +3704,7 @@ export class TenantScopedStore {
     return {
       inbox: counters.get("inbox") ?? 0,
       unread: counters.get("unread") ?? 0,
+      priority,
       starred: counters.get("starred") ?? 0,
       sent: counters.get("sent") ?? 0,
       archived: counters.get("archived") ?? 0,
@@ -4557,6 +4776,7 @@ export class TenantScopedStore {
     cols.push("tenant_id");
     placeholders.push(`$${params.length}`);
     for (const col of spec.columns) {
+      if (col.readOnly) continue;
       if (!(col.name in body)) continue;
       params.push(encodeColumn(col, body[col.name]));
       cols.push(col.name);
@@ -4590,6 +4810,7 @@ export class TenantScopedStore {
     const sets: string[] = [];
     const params: unknown[] = [id, this.tenantId];
     for (const col of spec.columns) {
+      if (col.readOnly) continue;
       if (!(col.name in body)) continue;
       if (col.name === key) continue; // never rewrite the primary key
       params.push(encodeColumn(col, body[col.name]));

@@ -824,7 +824,12 @@ type InboxToolName =
   | "get_attachment"
   | "download_attachment"
   | "search_inbound"
-  | "get_inbox_sync_status";
+  | "get_inbox_sync_status"
+  | "list_mailbox_filters"
+  | "create_mailbox_filter"
+  | "update_mailbox_filter"
+  | "delete_mailbox_filter"
+  | "apply_mailbox_filter";
 
 type ToolHandler = (input: Record<string, unknown>) => ToolResult | Promise<ToolResult>;
 

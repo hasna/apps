@@ -1,0 +1,26 @@
+{
+  "schema": "hasna.release-review-trust/v1",
+  "generation": 3,
+  "repository": "hasna/accounts",
+  "reviewer": {
+    "type": "coding-agent",
+    "agent": "Sagan Accounts Release Reviewer 2026-08-10",
+    "id": "019feba2-ca72-7301-97e1-9fd609b0bb50"
+  },
+  "publicKey": {
+    "algorithm": "ed25519",
+    "encoding": "base64-spki-der",
+    "value": "MCowBQYDK2VwAyEAyyNvq/+eREX4XVrcYnErgScxAqBGclPVUjACstGb0HA=",
+    "sha256": "98c824dbe600dafa01dfeb54b853ef9472a684a76b1dea4b8da3bf4d124c9215"
+  },
+  "signer": {
+    "secretRef": "hasna/accounts/npm-release/reviewer-ed25519-private-key-g3-20260810"
+  },
+  "rotation": {
+    "payload": "eyJzY2hlbWEiOiJoYXNuYS5yZWxlYXNlLXJldmlldy10cnVzdC1yb3RhdGlvbi92MiIsInByZXZpb3VzVHJ1c3QiOnsicmVwb3NpdG9yeSI6Imhhc25hL2FjY291bnRzIiwicGF0aCI6ImNvbmZpZy9yZWxlYXNlLXJldmlldy10cnVzdC1oaXN0b3J5L2dlbmVyYXRpb24tMi5qc29uIiwiZ2VuZXJhdGlvbiI6MiwidHJ1c3RTaGEyNTYiOiJhNTkzOTEyN2MwNjc2MjkyNmFjNGEzN2IzYjE2NDhkODI2YmM0ZDQ4MWM3NGE3ZDg1ZDUwYmM1YjRlZTI1ZmNkIn0sIm5leHRUcnVzdCI6eyJzY2hlbWEiOiJoYXNuYS5yZWxlYXNlLXJldmlldy10cnVzdC92MSIsImdlbmVyYXRpb24iOjMsInJlcG9zaXRvcnkiOiJoYXNuYS9hY2NvdW50cyIsInJldmlld2VyIjp7InR5cGUiOiJjb2RpbmctYWdlbnQiLCJhZ2VudCI6IlNhZ2FuIEFjY291bnRzIFJlbGVhc2UgUmV2aWV3ZXIgMjAyNi0wOC0xMCIsImlkIjoiMDE5ZmViYTItY2E3Mi03MzAxLTk3ZTEtOWZkNjA5YjBiYjUwIn0sInB1YmxpY0tleSI6eyJhbGdvcml0aG0iOiJlZDI1NTE5IiwiZW5jb2RpbmciOiJiYXNlNjQtc3BraS1kZXIiLCJ2YWx1ZSI6Ik1Db3dCUVlESzJWd0F5RUF5eU52cS8rZVJFWDRYVnJjWW5FcmdTY3hBcUJHY2xQVlVqQUNzdEdiMEhBPSIsInNoYTI1NiI6Ijk4YzgyNGRiZTYwMGRhZmEwMWRmZWI1NGI4NTNlZjk0NzJhNjg0YTc2YjFkZWE0YjhkYTNiZjRkMTI0YzkyMTUifSwic2lnbmVyIjp7InNlY3JldFJlZiI6Imhhc25hL2FjY291bnRzL25wbS1yZWxlYXNlL3Jldmlld2VyLWVkMjU1MTktcHJpdmF0ZS1rZXktZzMtMjAyNjA4MTAifX19",
+    "signature": {
+      "algorithm": "ed25519",
+      "value": "7KeUyVqh1wM/bEbVm0Eft4HoBaNA9dlIAis0VKhf2gO7MVsLA90zCfGaqVvsIW1oczWdIaYjIh2N0W4JUxlnAg=="
+    }
+  }
+}

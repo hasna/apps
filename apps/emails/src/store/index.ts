@@ -84,6 +84,7 @@ export type {
   ForwardingRepository,
   GroupsRepository,
   InboundRepository,
+  MailboxFiltersRepository,
   MessagesRepository,
   OwnersRepository,
   ProvidersRepository,

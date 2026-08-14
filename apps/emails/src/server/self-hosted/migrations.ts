@@ -2869,6 +2869,63 @@ const ADDRESS_PROVIDER_BINDING = defineMigration(
   `,
 );
 
+/**
+ * 0026 — tenant-scoped saved inbox filters.
+ *
+ * The normalized name is stored separately so uniqueness is deterministic and
+ * independent of the database collation. Criteria are canonical JSON produced
+ * by the shared mailbox-filter normalizer.
+ */
+const MAILBOX_FILTERS = defineMigration(
+  "0026_mailbox_filters",
+  `
+  CREATE TABLE IF NOT EXISTS mailbox_filters (
+    id              uuid PRIMARY KEY,
+    tenant_id       uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    name            text NOT NULL,
+    normalized_name text NOT NULL,
+    mailbox         text NOT NULL,
+    criteria        jsonb NOT NULL DEFAULT '{}'::jsonb,
+    created_at      timestamptz NOT NULL DEFAULT now(),
+    updated_at      timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (tenant_id, normalized_name)
+  );
+  CREATE INDEX IF NOT EXISTS mailbox_filters_tenant_updated_idx
+    ON mailbox_filters (tenant_id, updated_at DESC);
+  ALTER TABLE mailbox_filters ENABLE ROW LEVEL SECURITY;
+  ALTER TABLE mailbox_filters FORCE ROW LEVEL SECURITY;
+  DROP POLICY IF EXISTS mailbox_filters_tenant_policy ON mailbox_filters;
+  CREATE POLICY mailbox_filters_tenant_policy ON mailbox_filters
+    USING (tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid)
+    WITH CHECK (tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid);
+  `,
+);
+
+/** Persist mailbox-scoped exact-address and sender-domain Priority Inbox rules. */
+const PRIORITY_SENDER_RULES = defineMigration(
+  "0026_priority_sender_rules",
+  `
+  CREATE TABLE IF NOT EXISTS priority_sender_rules (
+    tenant_id  uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    id         text NOT NULL,
+    kind       text NOT NULL CHECK (kind IN ('address', 'domain')),
+    value      text NOT NULL CHECK (value = lower(btrim(value))),
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (tenant_id, id),
+    UNIQUE (tenant_id, kind, value)
+  );
+  ALTER TABLE priority_sender_rules ENABLE ROW LEVEL SECURITY;
+  ALTER TABLE priority_sender_rules FORCE ROW LEVEL SECURITY;
+  DROP POLICY IF EXISTS priority_sender_rules_tenant_isolation ON priority_sender_rules;
+  CREATE POLICY priority_sender_rules_tenant_isolation ON priority_sender_rules
+    USING (tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid)
+    WITH CHECK (tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid);
+  CREATE INDEX IF NOT EXISTS priority_sender_rules_tenant_order_idx
+    ON priority_sender_rules (tenant_id, kind ASC, value ASC);
+  `,
+);
+
 /** All migrations, in order: api-keys table (auth), the core schema, inbound. */
 export function emailsSelfHostedMigrations(): Migration[] {
   const authMigrations = apiKeyMigrations().map((m) => defineMigration(m.id, m.sql));
@@ -2901,5 +2958,7 @@ export function emailsSelfHostedMigrations(): Migration[] {
     WEBHOOK_EVENT_IDEMPOTENCY,
     IDP_PRINCIPAL_TENANTS_MULTI_GRANT,
     ADDRESS_PROVIDER_BINDING,
+    MAILBOX_FILTERS,
+    PRIORITY_SENDER_RULES,
   ];
 }

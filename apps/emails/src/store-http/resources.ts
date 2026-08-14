@@ -281,3 +281,21 @@ export function createResourceRepository(gateway: ResourceGateway): ResourceRepo
     },
   };
 }
+
+/**
+ * Priority rules are immutable canonical identities, not an ordinary CRUD table.
+ * Keep the shared gateway for list/get/create/remove, but refuse update locally so
+ * this client cannot issue a PATCH route the service intentionally does not serve.
+ */
+export function createImmutableResourceRepository(gateway: ResourceGateway): ResourceRepository<ResourceRow> {
+  const generic = createResourceRepository(gateway);
+  return {
+    list: (opts) => generic.list(opts),
+    get: (id) => generic.get(id),
+    create: (input) => generic.create(input),
+    async update(): Promise<Outcome<ResourceRow | null>> {
+      return invalidInput("priority sender rules are immutable; remove and add a new rule");
+    },
+    remove: (id) => generic.remove(id),
+  };
+}
