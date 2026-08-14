@@ -466,7 +466,12 @@ describe("self-hosted OpenAPI success-response schemas", () => {
       expect(schema.required, resource.path).toEqual(expected);
       expect(schema.properties, resource.path).toHaveProperty("tenant_id");
       expect(schema.properties, resource.path).not.toHaveProperty("key_hash");
-      expectRequired(`/v1/${resource.path}/{id}`, "put", 200, expected);
+      if (resource.path === "priority-sender-rules") {
+        expect(paths[`/v1/${resource.path}/{id}`]?.patch, resource.path).toBeUndefined();
+        expect(paths[`/v1/${resource.path}/{id}`]?.put, resource.path).toBeUndefined();
+      } else {
+        expectRequired(`/v1/${resource.path}/{id}`, "put", 200, expected);
+      }
     }
   });
 

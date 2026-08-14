@@ -1491,6 +1491,7 @@ const messageCountsSchema = {
   properties: {
     inbox: { type: "integer", minimum: 0 },
     unread: { type: "integer", minimum: 0 },
+    priority: { type: "integer", minimum: 0 },
     starred: { type: "integer", minimum: 0 },
     sent: { type: "integer", minimum: 0 },
     archived: { type: "integer", minimum: 0 },
@@ -1499,6 +1500,9 @@ const messageCountsSchema = {
     total: { type: "integer", minimum: 0 },
     latest_received_at: { type: "string", format: "date-time", nullable: true },
   },
+  // `priority` is intentionally NOT required: it is an additive field, and a
+  // serve that predates the Priority Inbox answers counts without it. Clients
+  // default the missing field to 0 rather than rejecting the whole envelope.
   required: [
     "inbox",
     "unread",
@@ -1533,6 +1537,35 @@ const listParams = [
 ] as const;
 
 const idParam = [{ name: "id", in: "path", required: true, schema: { type: "string" } }] as const;
+const mailboxFilterApplyPath = {
+  post: {
+    operationId: "applyMailboxFilter",
+    summary: "Apply a saved mailbox filter",
+    parameters: [
+      ...idParam,
+      ...listParams,
+    ],
+    responses: {
+      "200": {
+        content: {
+          "application/json": {
+            schema: {
+              type: "object",
+              properties: {
+                filter: { type: "object" },
+                items: { type: "array", items: { $ref: "#/components/schemas/MessageListItem" } },
+                limit: { type: "integer" },
+                offset: { type: "integer" },
+                truncated: { type: "boolean" },
+              },
+              required: ["filter", "items", "limit", "offset", "truncated"],
+            },
+          },
+        },
+      },
+    },
+  },
+} as const;
 const subParam = [{ name: "sub", in: "path", required: true, schema: { type: "string" } }] as const;
 const attachmentRepairIdParam = [{
   name: "id",
@@ -1668,7 +1701,14 @@ for (const resource of SELF_HOSTED_RESOURCES) {
   };
   const bodySchema = {
     type: "object",
-    properties: Object.fromEntries(resource.columns.map((column) => [column.name, resourceColumnSchema(column)])),
+    properties: Object.fromEntries(resource.columns
+      .filter((column) => !column.readOnly)
+      .map((column) => [column.name, resourceColumnSchema(column)])),
+    // The generic routes do not enforce required fields, so this is only ever
+    // set where the bespoke handler for the resource does (resources.ts
+    // `requiredColumns`). A generic `required` here would document a promise
+    // the router does not keep.
+    ...(resource.requiredColumns === undefined ? {} : { required: resource.requiredColumns }),
     additionalProperties: false,
   };
   const queryParameters = [
@@ -1707,25 +1747,11 @@ for (const resource of SELF_HOSTED_RESOURCES) {
       responses: { "201": { content: { "application/json": { schema: itemSchema } } } },
     },
   };
-  genericResourcePaths[`/v1/${resource.path}/{id}`] = {
+  const resourceItemPath: Record<string, unknown> = {
     get: {
       operationId: `getResource${name}`,
       summary: `Get a tenant-scoped ${resource.path} row`,
       parameters: idParam,
-      responses: { "200": { content: { "application/json": { schema: itemSchema } } } },
-    },
-    patch: {
-      operationId: `updateResource${name}`,
-      summary: `Update a tenant-scoped ${resource.path} row`,
-      parameters: idParam,
-      requestBody: { required: true, content: { "application/json": { schema: bodySchema } } },
-      responses: { "200": { content: { "application/json": { schema: itemSchema } } } },
-    },
-    put: {
-      operationId: `replaceResource${name}`,
-      summary: `Replace mutable fields on a tenant-scoped ${resource.path} row`,
-      parameters: idParam,
-      requestBody: { required: true, content: { "application/json": { schema: bodySchema } } },
       responses: { "200": { content: { "application/json": { schema: itemSchema } } } },
     },
     delete: {
@@ -1745,6 +1771,23 @@ for (const resource of SELF_HOSTED_RESOURCES) {
       },
     },
   };
+  if (resource.path !== "priority-sender-rules") {
+    resourceItemPath.patch = {
+      operationId: `updateResource${name}`,
+      summary: `Update a tenant-scoped ${resource.path} row`,
+      parameters: idParam,
+      requestBody: { required: true, content: { "application/json": { schema: bodySchema } } },
+      responses: { "200": { content: { "application/json": { schema: itemSchema } } } },
+    };
+    resourceItemPath.put = {
+      operationId: `replaceResource${name}`,
+      summary: `Replace mutable fields on a tenant-scoped ${resource.path} row`,
+      parameters: idParam,
+      requestBody: { required: true, content: { "application/json": { schema: bodySchema } } },
+      responses: { "200": { content: { "application/json": { schema: itemSchema } } } },
+    };
+  }
+  genericResourcePaths[`/v1/${resource.path}/{id}`] = resourceItemPath;
 }
 
 function operationAt(
@@ -1861,18 +1904,20 @@ function addRoutineErrorParity(document: EmailsOpenApiDocument): void {
     for (const method of ["get", "delete"] as const) {
       addRoutineError(document, item, method, 404, `${resource.path} row not found`, notFound, "replace");
     }
-    for (const method of ["patch", "put"] as const) {
-      addRoutineError(
-        document,
-        item,
-        method,
-        404,
-        `${resource.path} row or referenced row not found`,
-        resource.foreignKeys?.length
-          ? anyOfSchemas(notFound, crossTenantReferenceSchema)
-          : notFound,
-        "replace",
-      );
+    if (resource.path !== "priority-sender-rules") {
+      for (const method of ["patch", "put"] as const) {
+        addRoutineError(
+          document,
+          item,
+          method,
+          404,
+          `${resource.path} row or referenced row not found`,
+          resource.foreignKeys?.length
+            ? anyOfSchemas(notFound, crossTenantReferenceSchema)
+            : notFound,
+          "replace",
+        );
+      }
     }
     if (resource.foreignKeys?.length) {
       addRoutineError(
@@ -2145,6 +2190,7 @@ export const emailsSelfHostedOpenApi: EmailsOpenApiDocument = {
   security: [{ apiKeyAuth: [] }, { bearerAuth: [] }],
   paths: {
     ...genericResourcePaths,
+    "/v1/mailbox-filters/{id}/apply": mailboxFilterApplyPath,
     "/health": {
       get: {
         ...publicOperation,
@@ -3350,13 +3396,20 @@ export const emailsSelfHostedOpenApi: EmailsOpenApiDocument = {
           { name: "cursor", in: "query", required: false, schema: { type: "string" }, description: "Opaque keyset cursor from a previous page's next_cursor. Takes precedence over offset; pages are ordered by (received_at || created_at, id) descending." },
           { name: "direction", in: "query", required: false, schema: { type: "string", enum: ["inbound", "outbound"] } },
           { name: "folder", in: "query", required: false, schema: { type: "string", enum: ["inbox", "starred", "sent", "archived", "spam", "trash"] }, description: "Server-side folder filter; same semantics as /v1/messages/groups counts." },
-          { name: "domain", in: "query", required: false, explode: true, schema: { type: "array", items: { type: "string" } }, description: "Repeatable. Only messages with a to/cc recipient at one of these domains." },
+          { name: "domain", in: "query", required: false, explode: true, schema: { type: "array", items: { type: "string" } }, description: "Repeatable. Only messages whose sender or a to/cc recipient is at one of these domains." },
           { name: "to", in: "query", required: false, schema: { type: "string" } },
           { name: "from", in: "query", required: false, schema: { type: "string" } },
           { name: "subject", in: "query", required: false, schema: { type: "string" } },
           { name: "q", in: "query", required: false, schema: { type: "string" }, description: "Substring search over from/to/subject/body AND attachment filename/content_type (alias of search)." },
           { name: "search", in: "query", required: false, schema: { type: "string" }, description: "Substring search over from/to/subject/body AND attachment filename/content_type." },
           { name: "since", in: "query", required: false, schema: { type: "string", format: "date-time" } },
+          { name: "until", in: "query", required: false, schema: { type: "string", format: "date-time" }, description: "Only messages received at or before this instant." },
+          { name: "read", in: "query", required: false, schema: { type: "boolean" }, description: "Only read messages. Outbound messages count as read." },
+          { name: "unread", in: "query", required: false, schema: { type: "boolean" }, description: "Only unread inbound messages; outbound messages never match." },
+          { name: "starred", in: "query", required: false, schema: { type: "boolean" }, description: "Only starred messages." },
+          { name: "archived", in: "query", required: false, schema: { type: "boolean" }, description: "Only archived messages." },
+          { name: "address", in: "query", required: false, schema: { type: "string" }, description: "Substring match against the sender or any recipient address." },
+          { name: "label", in: "query", required: false, schema: { type: "string" }, description: "Only messages carrying this label (case-insensitive)." },
         ],
         responses: {
           "200": {
