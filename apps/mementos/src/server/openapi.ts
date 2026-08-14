@@ -46,19 +46,54 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
   for (const route of routes) {
     const p = toV1Path(route.path);
     const method = route.method.toLowerCase();
-    const params = route.paramNames.map((name) => ({
+    const params: Record<string, unknown>[] = route.paramNames.map((name) => ({
       name,
       in: "path",
       required: true,
       schema: { type: "string" },
     }));
+    if (route.method === "GET" && route.path === "/api/projects/:id/resources") {
+      params.push(
+        {
+          name: "limit",
+          in: "query",
+          required: false,
+          schema: { type: "integer", minimum: 1, maximum: 1000, default: 100 },
+        },
+        {
+          name: "cursor",
+          in: "query",
+          required: false,
+          schema: { type: "string" },
+        },
+        {
+          name: "resource_kinds",
+          in: "query",
+          required: false,
+          description: "Comma-separated subset of project, knowledge, memory, session",
+          schema: { type: "string" },
+        },
+      );
+    }
+    const successSchema = route.method === "GET"
+      && route.path === "/api/projects/:id/resources"
+      ? { $ref: "#/components/schemas/MementosProjectResourcePage" }
+      : route.method === "GET"
+        && route.path === "/api/projects/:id/resources/:kind/:resource_id"
+        ? { $ref: "#/components/schemas/MementosProjectResourceExactResult" }
+        : undefined;
     paths[p] = paths[p] ?? {};
     (paths[p] as Record<string, unknown>)[method] = {
       summary: `${route.method} ${p}`,
       operationId: `${method}_${p.replace(/[^a-zA-Z0-9]+/g, "_").replace(/^_|_$/g, "")}`,
       ...(params.length ? { parameters: params } : {}),
       responses: {
-        "200": { description: "OK" },
+        "200": {
+          description: "OK",
+          ...(successSchema
+            ? { content: { "application/json": { schema: successSchema } } }
+            : {}),
+        },
         "401": { description: "Unauthorized" },
         "403": { description: "Forbidden" },
         "404": { description: "Not found" },
@@ -78,6 +113,124 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
       securitySchemes: {
         bearerAuth: { type: "http", scheme: "bearer" },
         apiKeyAuth: { type: "apiKey", in: "header", name: "x-api-key" },
+      },
+      schemas: {
+        MementosProjectResource: {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "authority",
+            "source_package",
+            "project_id",
+            "resource_kind",
+            "stable_id",
+            "revision",
+            "digest",
+            "membership",
+          ],
+          properties: {
+            authority: { const: "mementos" },
+            source_package: { const: "@hasna/mementos" },
+            project_id: { type: "string" },
+            resource_kind: {
+              type: "string",
+              enum: ["project", "knowledge", "memory", "session"],
+            },
+            stable_id: { type: "string" },
+            revision: { type: "string" },
+            digest: { type: "string", pattern: "^[0-9a-f]{64}$" },
+            membership: {
+              type: "string",
+              enum: ["project_aggregate", "explicit_project_id_or_focus"],
+            },
+          },
+        },
+        MementosProjectResourceAuthority: {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "authority",
+            "authority_id",
+            "tenant_id",
+            "corpus_id",
+            "package_version",
+          ],
+          properties: {
+            authority: { const: "mementos" },
+            authority_id: { type: "string" },
+            tenant_id: { type: "string" },
+            corpus_id: { type: "string" },
+            package_version: { type: "string" },
+          },
+        },
+        MementosProjectResourcePage: {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "schema",
+            "authority",
+            "project_id",
+            "project_revision",
+            "collection_revision",
+            "resource_kinds",
+            "resources",
+            "count",
+            "total",
+            "limit",
+            "cursor",
+            "next_cursor",
+            "has_more",
+            "complete",
+            "truncated",
+          ],
+          properties: {
+            schema: { const: "mementos.project-resources.v1" },
+            authority: { $ref: "#/components/schemas/MementosProjectResourceAuthority" },
+            project_id: { type: "string" },
+            project_revision: { type: "string" },
+            collection_revision: { type: "string", pattern: "^[0-9a-f]{64}$" },
+            resource_kinds: {
+              type: "array",
+              items: { type: "string", enum: ["project", "knowledge", "memory", "session"] },
+            },
+            resources: {
+              type: "array",
+              items: { $ref: "#/components/schemas/MementosProjectResource" },
+            },
+            count: { type: "integer", minimum: 0 },
+            total: { type: "integer", minimum: 0 },
+            limit: { type: "integer", minimum: 1, maximum: 1000 },
+            cursor: { type: ["string", "null"] },
+            next_cursor: { type: ["string", "null"] },
+            has_more: { type: "boolean" },
+            complete: { const: true },
+            truncated: { const: false },
+          },
+        },
+        MementosProjectResourceExactResult: {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "schema",
+            "authority",
+            "project_id",
+            "project_revision",
+            "collection_revision",
+            "resource",
+            "complete",
+            "truncated",
+          ],
+          properties: {
+            schema: { const: "mementos.project-resource.v1" },
+            authority: { $ref: "#/components/schemas/MementosProjectResourceAuthority" },
+            project_id: { type: "string" },
+            project_revision: { type: "string" },
+            collection_revision: { type: "string", pattern: "^[0-9a-f]{64}$" },
+            resource: { $ref: "#/components/schemas/MementosProjectResource" },
+            complete: { const: true },
+            truncated: { const: false },
+          },
+        },
       },
     },
     security: [{ bearerAuth: [] }, { apiKeyAuth: [] }],

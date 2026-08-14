@@ -145,6 +145,201 @@ export interface Project {
   updated_at: string;
 }
 
+export type MementosProjectResourceKind =
+  | "project"
+  | "knowledge"
+  | "memory"
+  | "session";
+
+export interface MementosProjectResourceAuthority {
+  authority: "mementos";
+  authority_id: string;
+  tenant_id: string;
+  corpus_id: string;
+  package_version: string;
+}
+
+export interface MementosProjectResource {
+  authority: "mementos";
+  source_package: "@hasna/mementos";
+  project_id: string;
+  resource_kind: MementosProjectResourceKind;
+  stable_id: string;
+  revision: string;
+  digest: string;
+  membership: "project_aggregate" | "explicit_project_id_or_focus";
+}
+
+export interface MementosProjectResourcePage {
+  schema: "mementos.project-resources.v1";
+  authority: MementosProjectResourceAuthority;
+  project_id: string;
+  project_revision: string;
+  collection_revision: string;
+  resource_kinds: MementosProjectResourceKind[];
+  resources: MementosProjectResource[];
+  count: number;
+  total: number;
+  limit: number;
+  cursor: string | null;
+  next_cursor: string | null;
+  has_more: boolean;
+  complete: true;
+  truncated: false;
+}
+
+export interface MementosProjectResourceExactResult {
+  schema: "mementos.project-resource.v1";
+  authority: MementosProjectResourceAuthority;
+  project_id: string;
+  project_revision: string;
+  collection_revision: string;
+  resource: MementosProjectResource;
+  complete: true;
+  truncated: false;
+}
+
+export interface ListMementosProjectResourcesOptions {
+  limit?: number;
+  cursor?: string;
+  resource_kinds?: MementosProjectResourceKind[];
+}
+
+export interface ListAllMementosProjectResourcesOptions {
+  page_size?: number;
+  resource_kinds?: MementosProjectResourceKind[];
+}
+
+export interface UpdateProjectInput {
+  name?: string;
+  path?: string;
+  description?: string | null;
+  memory_prefix?: string | null;
+}
+
+export interface ProjectAuthorityIdentity {
+  authority_id: string;
+  tenant_id: string;
+  corpus_id: string;
+}
+
+export interface ProjectGuardedUpdateRequest extends ProjectAuthorityIdentity {
+  operation_id: string;
+  step_id: string;
+  idempotency_key: string;
+  expected_revision: string;
+  updates: UpdateProjectInput;
+}
+
+export interface ProjectGuardedRollbackRequest extends ProjectAuthorityIdentity {
+  operation_id: string;
+  step_id: string;
+  idempotency_key: string;
+  expected_revision: string;
+  accepted_receipt_id: string;
+}
+
+export interface ProjectUpdateReceipt {
+  receipt_id: string;
+  authority: "mementos";
+  route: "mementos.project-guarded-update.v1";
+  package_version: string;
+  authority_id: string;
+  tenant_id: string;
+  corpus_id: string;
+  operation_id: string;
+  step_id: string;
+  direction: "forward" | "rollback";
+  idempotency_key: string;
+  request_digest: string;
+  outcome: "accepted";
+  target_id: string;
+  expected_revision: string;
+  result_revision: string;
+  result_digest: string;
+  accepted_receipt_id: string | null;
+  before_project: Project;
+  after_project: Project;
+  created_at: string;
+}
+
+export interface ProjectGuardedUpdateResult {
+  dry_run: boolean;
+  applied: boolean;
+  project: Project;
+  receipt: ProjectUpdateReceipt | null;
+}
+
+export interface MemoryProjectLinkSnapshot {
+  memory_id: string;
+  project_id: string | null;
+  memory_version: number;
+  memory_revision: string;
+  memory_digest: string;
+}
+
+export interface MemoryProjectLinkRequest extends ProjectAuthorityIdentity {
+  operation_id: string;
+  step_id: string;
+  idempotency_key: string;
+  expected_memory_version: number;
+  expected_memory_revision: string;
+  target_project_id: string;
+  expected_project_revision: string;
+}
+
+export interface MemoryProjectLinkRollbackRequest extends ProjectAuthorityIdentity {
+  operation_id: string;
+  step_id: string;
+  idempotency_key: string;
+  expected_memory_version: number;
+  expected_memory_revision: string;
+  accepted_receipt_id: string;
+}
+
+export interface MemoryProjectLinkReceipt {
+  receipt_id: string;
+  authority: "mementos";
+  route: "mementos.memory-project-link.v1";
+  package_version: string;
+  authority_id: string;
+  tenant_id: string;
+  corpus_id: string;
+  operation_id: string;
+  step_id: string;
+  direction: "forward" | "rollback";
+  idempotency_key: string;
+  request_digest: string;
+  outcome: "accepted" | "no_change";
+  target_memory_id: string;
+  requested_project_id: string;
+  expected_memory_version: number;
+  expected_memory_revision: string;
+  expected_project_revision: string | null;
+  result_memory_version: number;
+  result_memory_revision: string;
+  result_memory_digest: string;
+  result_project_revision: string | null;
+  result_project_digest: string | null;
+  accepted_receipt_id: string | null;
+  before_link: MemoryProjectLinkSnapshot;
+  after_link: MemoryProjectLinkSnapshot;
+  before_project_revision: string | null;
+  before_project_digest: string | null;
+  after_project_revision: string | null;
+  after_project_digest: string | null;
+  created_at: string;
+}
+
+export interface MemoryProjectLinkResult {
+  dry_run: boolean;
+  applied: boolean;
+  no_change: boolean;
+  memory: Memory;
+  project: Project | null;
+  receipt: MemoryProjectLinkReceipt | null;
+}
+
 export interface Entity {
   id: string;
   name: string;
@@ -689,6 +884,315 @@ export class MementosClient {
 
   getProject(idOrName: string): Promise<Project> {
     return this.get(`/api/projects/${encodeURIComponent(idOrName)}`);
+  }
+
+  listProjectResources(
+    projectId: string,
+    options: ListMementosProjectResourcesOptions = {},
+  ): Promise<MementosProjectResourcePage> {
+    return this.get(`/api/projects/${encodeURIComponent(projectId)}/resources`, {
+      limit: options.limit,
+      cursor: options.cursor,
+      resource_kinds: options.resource_kinds?.join(","),
+    });
+  }
+
+  async listAllProjectResources(
+    projectId: string,
+    options: ListAllMementosProjectResourcesOptions = {},
+  ): Promise<MementosProjectResourcePage> {
+    const pageSize = options.page_size ?? 100;
+    if (!Number.isSafeInteger(pageSize) || pageSize < 1 || pageSize > 1_000) {
+      throw new MementosError(
+        "Project resource page_size must be an integer between 1 and 1000",
+        400,
+      );
+    }
+    let cursor: string | undefined;
+    let first: MementosProjectResourcePage | undefined;
+    let pageCount = 0;
+    let maxPageCount = 1;
+    const resources: MementosProjectResource[] = [];
+    const seen = new Set<string>();
+    const seenCursors = new Set<string>();
+
+    do {
+      const page = await this.listProjectResources(projectId, {
+        limit: pageSize,
+        cursor,
+        resource_kinds: options.resource_kinds,
+      });
+      pageCount += 1;
+      if (!first) {
+        first = page;
+        if (!Number.isSafeInteger(first.total) || first.total < 0) {
+          throw new MementosError(
+            `Project resource traversal for ${projectId} returned an invalid total`,
+            502,
+          );
+        }
+        maxPageCount = Math.max(1, Math.ceil(first.total / pageSize));
+      }
+      if (
+        page.project_id !== projectId
+        || page.collection_revision !== first.collection_revision
+        || page.total !== first.total
+        || JSON.stringify(page.resource_kinds) !== JSON.stringify(first.resource_kinds)
+      ) {
+        throw new MementosError(
+          `Project resource collection changed during complete traversal for ${projectId}`,
+          409,
+        );
+      }
+      for (const resource of page.resources) {
+        const key = `${resource.resource_kind}:${resource.stable_id}`;
+        if (seen.has(key)) {
+          throw new MementosError(
+            `Project resource traversal returned duplicate stable ID ${key}`,
+            502,
+          );
+        }
+        seen.add(key);
+        resources.push(resource);
+      }
+      if (page.has_more && !page.next_cursor) {
+        throw new MementosError(
+          `Project resource page for ${projectId} claimed more results without a cursor`,
+          502,
+        );
+      }
+      if (!page.has_more && page.next_cursor) {
+        throw new MementosError(
+          `Project resource page for ${projectId} returned a continuation cursor while claiming no more results`,
+          502,
+        );
+      }
+      if (page.next_cursor && seenCursors.has(page.next_cursor)) {
+        throw new MementosError(
+          `Project resource traversal for ${projectId} repeated a continuation cursor`,
+          502,
+        );
+      }
+      if (page.has_more && pageCount >= maxPageCount) {
+        throw new MementosError(
+          `Project resource traversal for ${projectId} exceeded its bounded ${maxPageCount}-page population`,
+          502,
+        );
+      }
+      if (page.next_cursor) seenCursors.add(page.next_cursor);
+      cursor = page.next_cursor ?? undefined;
+    } while (cursor);
+
+    if (!first || resources.length !== first.total) {
+      throw new MementosError(
+        `Project resource traversal for ${projectId} was incomplete`,
+        502,
+        { returned: resources.length, expected: first?.total },
+      );
+    }
+    return {
+      ...first,
+      resources,
+      count: resources.length,
+      total: resources.length,
+      limit: pageSize,
+      cursor: null,
+      next_cursor: null,
+      has_more: false,
+      complete: true,
+      truncated: false,
+    };
+  }
+
+  getProjectResource(
+    projectId: string,
+    resourceKind: MementosProjectResourceKind,
+    stableId: string,
+  ): Promise<MementosProjectResourceExactResult> {
+    return this.get(
+      `/api/projects/${encodeURIComponent(projectId)}/resources/${encodeURIComponent(resourceKind)}/${encodeURIComponent(stableId)}`,
+    );
+  }
+
+  async updateProject(
+    id: string,
+    request: ProjectGuardedUpdateRequest,
+  ): Promise<ProjectGuardedUpdateResult> {
+    const normalizedUpdates: UpdateProjectInput = {};
+    if (request.updates.name !== undefined) normalizedUpdates.name = request.updates.name.trim();
+    if (request.updates.path !== undefined) normalizedUpdates.path = request.updates.path.trim();
+    if (request.updates.description !== undefined) {
+      normalizedUpdates.description = request.updates.description;
+    }
+    if (request.updates.memory_prefix !== undefined) {
+      normalizedUpdates.memory_prefix = request.updates.memory_prefix;
+    }
+    const result = await this.post<ProjectGuardedUpdateResult>(
+      `/api/projects/${encodeURIComponent(id)}/guarded-update`,
+      { ...request, updates: normalizedUpdates, dry_run: false },
+    );
+    if (result.project.id !== id || result.receipt?.target_id !== id) {
+      throw new MementosError(
+        `Project update did not persist for ${id}: server returned a different stable ID`,
+        502
+      );
+    }
+    for (const field of ["name", "path", "description", "memory_prefix"] as const) {
+      if (
+        normalizedUpdates[field] !== undefined &&
+        result.project[field] !== normalizedUpdates[field]
+      ) {
+        throw new MementosError(
+          `Project update did not persist for ${id}: ${field} remained ${JSON.stringify(result.project[field])}`,
+          502
+        );
+      }
+    }
+    return result;
+  }
+
+  async previewProjectUpdate(
+    id: string,
+    request: ProjectGuardedUpdateRequest,
+  ): Promise<ProjectGuardedUpdateResult> {
+    const result = await this.post<ProjectGuardedUpdateResult>(
+      `/api/projects/${encodeURIComponent(id)}/guarded-update`,
+      { ...request, dry_run: true },
+    );
+    if (result.applied || result.receipt !== null || result.project.id !== id) {
+      throw new MementosError(
+        `Project update dry run violated its no-write contract for ${id}`,
+        502,
+      );
+    }
+    return result;
+  }
+
+  async rollbackProjectUpdate(
+    id: string,
+    request: ProjectGuardedRollbackRequest,
+  ): Promise<ProjectGuardedUpdateResult> {
+    const result = await this.post<ProjectGuardedUpdateResult>(
+      `/api/projects/${encodeURIComponent(id)}/guarded-rollback`,
+      request,
+    );
+    if (result.project.id !== id || result.receipt?.target_id !== id) {
+      throw new MementosError(
+        `Project rollback did not preserve the exact stable ID ${id}`,
+        502,
+      );
+    }
+    return result;
+  }
+
+  getProjectUpdateReceipt(
+    id: string,
+    receiptId: string,
+    identity: ProjectAuthorityIdentity,
+  ): Promise<ProjectUpdateReceipt> {
+    return this.post(`/api/projects/${encodeURIComponent(id)}/update-receipts/lookup`, {
+      ...identity,
+      receipt_id: receiptId,
+    });
+  }
+
+  async linkMemoryProject(
+    memoryId: string,
+    request: MemoryProjectLinkRequest,
+  ): Promise<MemoryProjectLinkResult> {
+    const result = await this.post<MemoryProjectLinkResult>(
+      `/api/memories/${encodeURIComponent(memoryId)}/guarded-project-link`,
+      { ...request, dry_run: false },
+    );
+    if (
+      result.memory.id !== memoryId
+      || result.memory.project_id !== request.target_project_id
+      || result.project?.id !== request.target_project_id
+      || result.receipt?.target_memory_id !== memoryId
+      || result.receipt.requested_project_id !== request.target_project_id
+      || result.receipt.after_link.project_id !== request.target_project_id
+    ) {
+      throw new MementosError(
+        `Memory project link did not preserve the exact memory/project IDs for ${memoryId}`,
+        502,
+      );
+    }
+    if (!result.applied && !result.no_change) {
+      throw new MementosError(
+        `Memory project link returned neither applied nor no-change for ${memoryId}`,
+        502,
+      );
+    }
+    return result;
+  }
+
+  async previewMemoryProjectLink(
+    memoryId: string,
+    request: MemoryProjectLinkRequest,
+  ): Promise<MemoryProjectLinkResult> {
+    const result = await this.post<MemoryProjectLinkResult>(
+      `/api/memories/${encodeURIComponent(memoryId)}/guarded-project-link`,
+      { ...request, dry_run: true },
+    );
+    if (
+      result.applied
+      || result.receipt !== null
+      || result.memory.id !== memoryId
+      || result.memory.project_id !== request.target_project_id
+      || result.project?.id !== request.target_project_id
+    ) {
+      throw new MementosError(
+        `Memory project-link dry run violated its no-write or exact-ID contract for ${memoryId}`,
+        502,
+      );
+    }
+    return result;
+  }
+
+  async rollbackMemoryProjectLink(
+    memoryId: string,
+    request: MemoryProjectLinkRollbackRequest,
+  ): Promise<MemoryProjectLinkResult> {
+    const result = await this.post<MemoryProjectLinkResult>(
+      `/api/memories/${encodeURIComponent(memoryId)}/guarded-project-link-rollback`,
+      request,
+    );
+    if (
+      result.memory.id !== memoryId
+      || result.receipt?.target_memory_id !== memoryId
+      || result.receipt.direction !== "rollback"
+      || result.receipt.accepted_receipt_id !== request.accepted_receipt_id
+    ) {
+      throw new MementosError(
+        `Memory project-link rollback did not preserve the exact stable memory ID ${memoryId}`,
+        502,
+      );
+    }
+    return result;
+  }
+
+  async getMemoryProjectLinkReceipt(
+    memoryId: string,
+    receiptId: string,
+    identity: ProjectAuthorityIdentity,
+  ): Promise<MemoryProjectLinkReceipt> {
+    const receipt = await this.post<MemoryProjectLinkReceipt>(
+      `/api/memories/${encodeURIComponent(memoryId)}/project-link-receipts/lookup`,
+      { ...identity, receipt_id: receiptId },
+    );
+    if (
+      receipt.receipt_id !== receiptId
+      || receipt.target_memory_id !== memoryId
+      || receipt.authority_id !== identity.authority_id
+      || receipt.tenant_id !== identity.tenant_id
+      || receipt.corpus_id !== identity.corpus_id
+    ) {
+      throw new MementosError(
+        `Memory project-link receipt lookup returned a mismatched receipt for ${memoryId}`,
+        502,
+      );
+    }
+    return receipt;
   }
 
   getProjectAgents(idOrName: string): Promise<{ agents: Agent[]; count: number }> {

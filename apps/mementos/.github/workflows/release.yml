@@ -1,29 +1,183 @@
-name: Release
+name: Release npm package
+
+# npm trusted publishing binds @hasna/mementos to this workflow filename and
+# the npm-release environment below. OIDC publishes the preserved tarball under
+# a version-specific quarantine tag. A separate package-scoped credential can
+# mutate dist-tags but is never available to the publication step.
 
 on:
   push:
-    tags: ["v*"]
+    tags:
+      - "npm/mementos/v*"
+
+concurrency:
+  group: hasna-mementos-npm-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
 
 jobs:
   publish:
+    if: github.repository == 'hasna/mementos'
     runs-on: ubuntu-latest
+    environment: npm-release
+    timeout-minutes: 45
+    env:
+      NPM_DIST_TAG_TOKEN_CONFIGURED: ${{ secrets.NPM_DIST_TAG_TOKEN != '' }}
     permissions:
       contents: read
+      id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - name: Verify release environment is provisioned
+        run: |
+          set -euo pipefail
+          if [ "${NPM_DIST_TAG_TOKEN_CONFIGURED}" != "true" ]; then
+            echo "::error::NPM_DIST_TAG_TOKEN is not configured in the npm-release environment"
+            exit 1
+          fi
+          echo "release environment is provisioned for quarantined publication and promotion"
 
-      - uses: oven-sh/setup-bun@v2
+      - name: Check out the release commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          bun-version: latest
+          fetch-depth: 0
+          persist-credentials: false
 
-      - run: bun install
+      - name: Set up Node.js for npm trusted publishing
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.18.0"
+          registry-url: "https://registry.npmjs.org"
+          package-manager-cache: false
 
-      - run: bun run typecheck
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.3.14"
 
-      - run: bun test
+      - name: Verify pinned release toolchain
+        run: |
+          set -euo pipefail
+          node_version="$(node --version)"
+          npm_version="$(npm --version)"
+          bun_version="$(bun --version)"
+          if [ "${node_version}" != "v24.18.0" ]; then
+            echo "::error::Node ${node_version} is not v24.18.0"
+            exit 1
+          fi
+          if [ "${npm_version}" != "11.16.0" ]; then
+            echo "::error::npm ${npm_version} is not 11.16.0"
+            exit 1
+          fi
+          if [ "${bun_version}" != "1.3.14" ]; then
+            echo "::error::Bun ${bun_version} is not 1.3.14"
+            exit 1
+          fi
+          echo "release toolchain is exact: Node ${node_version}, npm ${npm_version}, Bun ${bun_version}"
 
-      - run: bun run build
+      - name: Install locked dependencies with release-age quarantine
+        run: bun install --frozen-lockfile --minimum-release-age 604800
 
-      - run: bun publish --access public
+      - name: Bind the tag to the package version
+        run: |
+          set -euo pipefail
+          expected_name="@hasna/mementos"
+          expected_prefix="npm/mementos/v"
+          pkg_name="$(node -p "require('./package.json').name")"
+          pkg_version="$(node -p "require('./package.json').version")"
+
+          if [ "${pkg_name}" != "${expected_name}" ]; then
+            echo "::error::package.json names ${pkg_name}, expected ${expected_name}"
+            exit 1
+          fi
+          if [ "${GITHUB_REF_TYPE}" != "tag" ]; then
+            echo "::error::release workflow requires a tag ref"
+            exit 1
+          fi
+          case "${GITHUB_REF_NAME}" in
+            npm/mementos/v*)
+              tag_version="${GITHUB_REF_NAME#npm/mementos/v}" ;;
+            *)
+              echo "::error::tag ${GITHUB_REF_NAME} does not start with ${expected_prefix}"
+              exit 1 ;;
+          esac
+          if [ "${tag_version}" != "${pkg_version}" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} carries ${tag_version}, package.json declares ${pkg_version}"
+            exit 1
+          fi
+
+          tag_commit="$(git rev-parse "${GITHUB_REF}^{commit}")"
+          checkout_commit="$(git rev-parse HEAD)"
+          if [ "${tag_commit}" != "${GITHUB_SHA}" ] || [ "${checkout_commit}" != "${GITHUB_SHA}" ]; then
+            echo "::error::tag ref, event SHA, and checked-out commit do not agree"
+            exit 1
+          fi
+          echo "tag ${GITHUB_REF_NAME}, package ${pkg_name}@${pkg_version}, and commit ${GITHUB_SHA} agree"
+
+      - name: Require the release commit on protected main
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "${GITHUB_SHA}" "refs/remotes/origin/main"; then
+            echo "::error::release commit ${GITHUB_SHA} is not contained in current protected main"
+            exit 1
+          fi
+          echo "release commit ${GITHUB_SHA} is contained in current protected main"
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Test
+        run: bun run test
+
+      - name: Verify package contracts
+        run: |
+          set -euo pipefail
+          bun run contracts:conformance
+          bun run contracts no-cloud-scan .
+
+      - name: Build and scan the package artifact
+        run: |
+          set -euo pipefail
+          bun run build
+          bun run scan-artifact
+
+      - name: Bind and preserve the deterministic release candidate
+        run: >-
+          bun run scripts/release-provenance.ts candidate
+          --out "$RUNNER_TEMP/release-candidate.json"
+          --artifact "$RUNNER_TEMP/release-candidate.tgz"
+
+      - name: Reconcile an interrupted publication
+        id: reconciliation
+        run: >-
+          bun run scripts/release-provenance.ts ensure-unpublished
+          --candidate "$RUNNER_TEMP/release-candidate.json"
+
+      - name: Publish preserved candidate under version quarantine
+        id: publication
+        run: >-
+          bun run scripts/release-provenance.ts publish-staged
+          --candidate "$RUNNER_TEMP/release-candidate.json"
+
+      - name: Verify quarantined registry bytes, provenance, signatures, and CLI
+        if: ${{ steps.publication.outputs.state == 'staged' }}
+        run: >-
+          bun run scripts/release-provenance.ts verify-registry
+          --candidate "$RUNNER_TEMP/release-candidate.json"
+          --phase staged
+
+      - name: Promote the verified version to latest
+        if: ${{ steps.publication.outputs.state == 'staged' }}
         env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_DIST_TAG_TOKEN }}
+        run: >-
+          bun run scripts/release-provenance.ts promote
+          --candidate "$RUNNER_TEMP/release-candidate.json"
+
+      - name: Verify final dist-tag and artifact agreement
+        run: >-
+          bun run scripts/release-provenance.ts verify-registry
+          --candidate "$RUNNER_TEMP/release-candidate.json"
+          --phase promoted

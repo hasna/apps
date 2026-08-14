@@ -5,7 +5,7 @@ import {
   getStorageConnectionString,
   isServerContext,
 } from "../storage.js";
-import { isApiMode } from "./api-mode.js";
+import { DB_PATH_ENV_KEYS, isApiMode } from "./api-mode.js";
 import { existsSync, mkdirSync, cpSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { MIGRATIONS } from "./migrations.js";
@@ -55,9 +55,13 @@ function migrateGlobalDir(): void {
 }
 
 export function getDbPath(): string {
-  const envPath = process.env["HASNA_MEMENTOS_DB_PATH"] ?? process.env["MEMENTOS_DB_PATH"];
-  if (envPath) {
-    return envPath;
+  // Use the API resolver's canonical key order and nonempty semantics. Routing
+  // treats a blank/whitespace preferred key as absent and may select the alias;
+  // resolving the actual SQLite path differently would silently open another
+  // dataset after API mode had already been disabled by that alias.
+  for (const key of DB_PATH_ENV_KEYS) {
+    const envPath = process.env[key]?.trim();
+    if (envPath) return envPath;
   }
 
   const cwd = process.cwd();
@@ -151,6 +155,46 @@ export function getDatabase(dbPath?: string): Database {
     }
     if (getStorageMode() === "cloud") {
       return getCloudDatabase();
+    }
+    // ── Unpinned-test-open guard (fail-closed) ──────────────────────────────
+    // Todos 57b8b8c5. `if (!db && isApiMode())` gates 30+ domain call sites
+    // (src/db/{memories,agents,entities,...}.ts) onto the API transport when
+    // API mode is on — but with API mode correctly disabled (as the test
+    // preload, src/test-support/preload-local-store.ts, guarantees under
+    // `bun test`), an in-process test that reaches this function without an
+    // explicit `dbPath` and without a DB_PATH env key resolves to whatever
+    // getDbPath() picks by default, which under `bun test` is the real,
+    // shared, on-disk local store — silently, with no error. This is the
+    // in-process mirror of the split-brain guard above: that one stops a
+    // local write from happening in API mode, this one stops a live-store
+    // write from happening in a TEST process that forgot to pin a path.
+    //
+    // Scoped to NODE_ENV === "test" so CLI/MCP/server processes are
+    // unaffected: an operator running the real CLI with no pin is supposed
+    // to get the real store. It only READS the DB_PATH env keys in this
+    // condition and never sets them, so it cannot interact with the
+    // getApiConfig() DB_PATH precedence guard in either direction.
+    //
+    // NAMED RESIDUAL: this is not a complete chokepoint for local opens.
+    // src/lib/storage-sync.ts:616 and :697 construct
+    // `new SqliteAdapter(getDbPath())` directly and bypass getDatabase()
+    // entirely; an unpinned test reaching the local branch of a storage-sync
+    // merge/pull is not covered by this guard.
+    if (process.env["NODE_ENV"] === "test") {
+      const hasExplicitDbPath = DB_PATH_ENV_KEYS.some(
+        (key) => process.env[key]?.trim()
+      );
+      if (!hasExplicitDbPath) {
+        throw new Error(
+          "REFUSING-UNPINNED-TEST-OPEN: a test process tried to open the default local " +
+            `SQLite store (${getDbPath()}) with no explicit dbPath argument and no ` +
+            `${DB_PATH_ENV_KEYS.join("/")} set. Pass an explicit dbPath (e.g. ":memory:" ` +
+            "or a scratch file), or set one of those env keys to a scratch path, before " +
+            "calling getDatabase(). This guard exists because an unpinned test process " +
+            "would otherwise silently read and write the real, shared, on-disk memory " +
+            "store (todos 57b8b8c5)."
+        );
+      }
     }
   }
 

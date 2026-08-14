@@ -1,7 +1,14 @@
 import type { Command } from "commander";
 import chalk from "chalk";
 import { resolve } from "node:path";
-import { registerProject, getProject, listProjects } from "../../db/projects.js";
+import {
+  registerProject,
+  getProject,
+  listProjects,
+  applyProjectUpdate,
+  previewProjectUpdate,
+  rollbackProjectUpdate,
+} from "../../db/projects.js";
 import { listMemories, touchMemory } from "../../db/memories.js";
 import {
   resolveVisibleMachineId,
@@ -11,6 +18,14 @@ import type {
   Memory,
   MemoryCategory,
 } from "../../types/index.js";
+import {
+  MEMENTOS_PROJECT_RESOURCE_KINDS,
+  getMementosProjectResourceExact,
+  readAllMementosProjectResources,
+  readMementosProjectResourcePage,
+  resolveMementosProjectAuthorityIdentity,
+  type MementosProjectResourceKind,
+} from "../../project-registration/index.js";
 import {
   DEFAULT_COMPACT_LIMIT,
   outputJson,
@@ -33,15 +48,28 @@ export function registerProjectCommands(program: Command): void {
     .command("projects")
     .description("Manage projects")
     .option("--add", "Add a new project")
+    .option("--update <id>", "Update a project by its exact stable ID")
     .option("--name <name>", "Project name")
     .option("--path <path>", "Project path")
     .option("--description <text>", "Project description")
+    .option("--memory-prefix <prefix>", "Project memory prefix")
+    .option("--expected-revision <revision>", "Exact updated_at revision required for compare-and-swap")
+    .option("--idempotency-key <key>", "Caller-owned key for one guarded mutation")
+    .option("--operation-id <id>", "Operation identifier (defaults to the idempotency key)")
+    .option("--step-id <id>", "Step identifier (defaults to mementos_project_update)")
+    .option("--dry-run", "Validate and preview the guarded update without writing")
+    .option("--rollback-receipt <id>", "Restore the exact before snapshot from an accepted update receipt")
     .option("--limit <n>", "Max results (compact default: 20)", parseInt)
     .option("--cursor <n>", "Cursor offset for the next page", parseInt)
     .option("--offset <n>", "Offset for pagination", parseInt)
     .action((opts) => {
       try {
         const globalOpts = program.opts<GlobalOpts>();
+
+        if (opts.add && opts.update) {
+          console.error(chalk.red("--add and --update cannot be used together"));
+          process.exit(1);
+        }
 
         if (opts.add) {
           const name = opts.name as string | undefined;
@@ -73,18 +101,96 @@ export function registerProjectCommands(program: Command): void {
           return;
         }
 
+        if (opts.update) {
+          const updates: {
+            name?: string;
+            path?: string;
+            description?: string;
+            memory_prefix?: string;
+          } = {};
+          if (opts.name !== undefined) updates.name = opts.name as string;
+          if (opts.path !== undefined) updates.path = resolve(opts.path as string);
+          if (opts.description !== undefined) {
+            updates.description = opts.description as string;
+          }
+          if (opts.memoryPrefix !== undefined) {
+            updates.memory_prefix = opts.memoryPrefix as string;
+          }
+          const rollbackReceipt = opts.rollbackReceipt as string | undefined;
+          if (Object.keys(updates).length === 0 && !rollbackReceipt) {
+            console.error(
+              chalk.red(
+                "At least one of --name, --path, --description, or --memory-prefix is required when updating"
+              )
+            );
+            process.exit(1);
+          }
+          if (Object.keys(updates).length > 0 && rollbackReceipt) {
+            console.error(chalk.red("Project fields and --rollback-receipt cannot be used together"));
+            process.exit(1);
+          }
+          if (opts.dryRun && rollbackReceipt) {
+            console.error(chalk.red("Dry-run project rollback is not supported"));
+            process.exit(1);
+          }
+          const expectedRevision = opts.expectedRevision as string | undefined;
+          const idempotencyKey = opts.idempotencyKey as string | undefined;
+          if (!expectedRevision || !idempotencyKey) {
+            console.error(chalk.red(
+              "--expected-revision and --idempotency-key are required for every project update",
+            ));
+            process.exit(1);
+          }
+          const common = {
+            ...resolveMementosProjectAuthorityIdentity(),
+            operation_id: (opts.operationId as string | undefined) ?? idempotencyKey,
+            step_id: (opts.stepId as string | undefined)
+              ?? (rollbackReceipt ? "mementos_project_rollback" : "mementos_project_update"),
+            idempotency_key: idempotencyKey,
+            expected_revision: expectedRevision,
+          };
+          const result = rollbackReceipt
+            ? rollbackProjectUpdate(opts.update as string, {
+              ...common,
+              accepted_receipt_id: rollbackReceipt,
+            })
+            : opts.dryRun
+              ? previewProjectUpdate(opts.update as string, { ...common, updates })
+              : applyProjectUpdate(opts.update as string, { ...common, updates });
+
+          if (globalOpts.json) {
+            outputJson(result);
+          } else {
+            console.log(chalk.green(result.dry_run ? "Project update preview:" : "Project updated:"));
+            console.log(`  ${chalk.bold("ID:")}       ${result.project.id}`);
+            console.log(`  ${chalk.bold("Name:")}     ${result.project.name}`);
+            console.log(`  ${chalk.bold("Path:")}     ${result.project.path}`);
+            console.log(`  ${chalk.bold("Revision:")} ${result.project.updated_at}`);
+            if (result.receipt) {
+              console.log(`  ${chalk.bold("Receipt:")}  ${result.receipt.receipt_id}`);
+            }
+          }
+          return;
+        }
+
         // List projects
         const allProjects = listProjects();
         const limit = positiveIntOrDefault(opts.limit, DEFAULT_COMPACT_LIMIT);
         const offset = cursorOrOffset(opts.cursor, opts.offset) ?? 0;
+        const explicitPagination =
+          opts.limit !== undefined ||
+          opts.cursor !== undefined ||
+          opts.offset !== undefined;
         const projects = globalOpts.json
-          ? allProjects
+          ? (explicitPagination
+            ? allProjects.slice(offset, offset + limit)
+            : allProjects)
           : allProjects.slice(offset, offset + limit + 1);
         const hasMore = !globalOpts.json && projects.length > limit;
         const displayProjects = hasMore ? projects.slice(0, limit) : projects;
 
         if (globalOpts.json) {
-          outputJson(allProjects);
+          outputJson(projects);
           return;
         }
 
@@ -114,6 +220,91 @@ export function registerProjectCommands(program: Command): void {
         });
       } catch (e) {
         handleError(e);
+      }
+    });
+
+  program
+    .command("project-resources <project-id>")
+    .description("Enumerate the complete project-owned Mementos resource population")
+    .option("--limit <n>", "Bounded page size (1-1000)", parseInt)
+    .option("--cursor <cursor>", "Opaque revision-bound continuation cursor")
+    .option(
+      "--kinds <kinds>",
+      "Comma-separated resource kinds: project,knowledge,memory,session",
+    )
+    .option("--all", "Traverse every page and verify complete unique coverage")
+    .option("--resource-kind <kind>", "Read one exact resource kind")
+    .option("--resource-id <id>", "Read one exact stable resource ID")
+    .action((projectId: string, opts) => {
+      try {
+        const globalOpts = program.opts<GlobalOpts>();
+        const resourceKind = opts.resourceKind as string | undefined;
+        const resourceId = opts.resourceId as string | undefined;
+        if (Boolean(resourceKind) !== Boolean(resourceId)) {
+          throw new Error("--resource-kind and --resource-id must be provided together");
+        }
+        const resourceKinds = opts.kinds === undefined
+          ? undefined
+          : String(opts.kinds)
+            .split(",")
+            .map((value) => value.trim())
+            .filter(Boolean) as MementosProjectResourceKind[];
+        if (resourceKinds) {
+          for (const kind of resourceKinds) {
+            if (!MEMENTOS_PROJECT_RESOURCE_KINDS.includes(kind)) {
+              throw new Error(`Unsupported project resource kind: ${kind}`);
+            }
+          }
+        }
+
+        const result = resourceKind && resourceId
+          ? getMementosProjectResourceExact(
+            projectId,
+            resourceKind as MementosProjectResourceKind,
+            resourceId,
+          )
+          : opts.all
+            ? readAllMementosProjectResources(projectId, {
+              page_size: opts.limit as number | undefined,
+              resource_kinds: resourceKinds,
+            })
+            : readMementosProjectResourcePage(projectId, {
+              limit: opts.limit as number | undefined,
+              cursor: opts.cursor as string | undefined,
+              resource_kinds: resourceKinds,
+            });
+
+        if (globalOpts.json) {
+          outputJson(result);
+          return;
+        }
+        if ("resource" in result) {
+          console.log(chalk.green("Project resource:"));
+          console.log(`  ${chalk.bold("Project:")}    ${result.project_id}`);
+          console.log(`  ${chalk.bold("Kind:")}       ${result.resource.resource_kind}`);
+          console.log(`  ${chalk.bold("Stable ID:")}  ${result.resource.stable_id}`);
+          console.log(`  ${chalk.bold("Revision:")}   ${result.resource.revision}`);
+          return;
+        }
+        console.log(chalk.bold(
+          `${result.count} of ${result.total} project resource${result.total === 1 ? "" : "s"}:`,
+        ));
+        for (const resource of result.resources) {
+          console.log(
+            `  ${chalk.dim(resource.resource_kind.padEnd(9))} ${resource.stable_id}`,
+          );
+        }
+        console.log(
+          `  ${chalk.bold("Complete:")} ${result.complete}  `
+          + `${chalk.bold("Has more:")} ${result.has_more}`,
+        );
+        if (result.next_cursor) {
+          console.log(
+            chalk.dim(`Next: mementos project-resources ${projectId} --cursor ${result.next_cursor}`),
+          );
+        }
+      } catch (error) {
+        handleError(error);
       }
     });
 

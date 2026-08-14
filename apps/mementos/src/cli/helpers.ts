@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { getDatabase, resolvePartialId } from "../db/database.js";
 import { isApiMode } from "../db/api-mode.js";
 import { getMemory, getMemoryByKey } from "../db/memories.js";
+import { getAgent } from "../db/agents.js";
 import { getProject } from "../db/projects.js";
 import { getEntityByName, getEntity } from "../db/entities.js";
 import type { Command } from "commander";
@@ -87,9 +88,16 @@ const entityTypeColor: Record<string, (s: string) => string> = {
   organization: chalk.white,
 };
 
-export function colorEntityType(type: string): string {
+// `suffix` (e.g. ":") is appended to the RENDERED text only, never to the
+// colour-lookup key — `entityTypeColor` is keyed on bare type names
+// ("tool", "person", ...), so passing `${type}${suffix}` as the lookup key
+// itself would miss the map for every call and silently fall back to
+// chalk.white, losing the per-type colour. Defaults to "" so every existing
+// call site (which never needs a trailing colon inside the styled span)
+// keeps its exact prior behaviour.
+export function colorEntityType(type: string, suffix = ""): string {
   const colorFn = entityTypeColor[type] || chalk.white;
-  return colorFn(type);
+  return colorFn(`${type}${suffix}`);
 }
 
 export function resolveEntityArg(nameOrId: string, type?: EntityType): Entity {
@@ -340,6 +348,54 @@ export function resolveMemoryId(partialId: string): string {
 }
 
 /**
+ * Resolve an `--agent` filter value to the agent id the store actually indexes.
+ *
+ * WHY THIS EXISTS. Every read command declared `--agent <name>` and then used
+ * the raw string as an agent ID. A registered NAME therefore matched nothing,
+ * and — because an empty list is a legal answer — the miss was reported as
+ * "No memories found." at rc=0 with empty stderr. A real name and a fabricated
+ * string produced byte-identical output, so no caller could tell an empty set
+ * from a mistyped one. The fleet's compliance check for the mementos-discipline
+ * rule is `list --agent <seat>`, which meant it reported every seat as
+ * non-compliant regardless of truth: a check that cannot pass.
+ *
+ * RESOLUTION IS DELEGATED, NOT REIMPLEMENTED. `getAgent` already does
+ * id -> case-insensitive name -> unique partial id (returning null when a
+ * partial is ambiguous), it is what the `save` path uses since #43, and it is
+ * MODE-AWARE — in API mode it resolves through `GET /agents/<value>` rather
+ * than SQL. A local-only lookup here would have worked on a developer box and
+ * failed on the fleet, which runs in API mode.
+ *
+ * ON A MISS: WARN AND PASS THE RAW VALUE THROUGH.
+ *
+ *   - WARN rather than THROW. The save path throws (#43) because there rc=0 was
+ *     illusory: the write silently landed in the unowned bucket and destroyed
+ *     what was there. A read filter destroys nothing, and callers legitimately
+ *     treat an empty list as a scriptable answer, so the sibling contract to
+ *     match is `todos list --assigned <bogus>`, which warns at rc=0. Same class,
+ *     opposite verb, deliberately different remedy.
+ *   - The warning goes to STDERR so `--format json` stays parseable on stdout.
+ *   - PASSING THE RAW VALUE THROUGH, rather than dropping the filter, is the
+ *     load-bearing half. Dropping it is what `search` and `info-stale` did, and
+ *     it WIDENS the query: an unresolvable agent then returns every agent's
+ *     rows. Zero rows is a visible failure; other agents' rows returned as
+ *     yours is an invisible one. Passing the raw value keeps the query narrow
+ *     and also cannot regress a caller whose id has no `agents` row — measured
+ *     0 such rows across 8340 memories at the time of the fix, but the store is
+ *     not frozen.
+ */
+export function resolveAgentFilter(nameOrId: string | undefined): string | undefined {
+  if (!nameOrId) return undefined;
+  const agent = getAgent(nameOrId);
+  if (agent) return agent.id;
+  process.stderr.write(
+    `Warning: no agent named '${nameOrId}' is registered, so this empty result may be a\n` +
+      `         mistyped name rather than an empty set. Check with 'mementos agents'.\n`
+  );
+  return nameOrId;
+}
+
+/**
  * Resolve a key-or-id argument to a Memory object.
  * Tries key lookup first (with optional scope/agent/project filters), then partial ID.
  */
@@ -348,7 +404,7 @@ export function resolveKeyOrId(
   opts: { scope?: string; agent?: string; project?: string },
   globalOpts: GlobalOpts
 ): Memory | null {
-  const agentId = (opts.agent as string | undefined) || globalOpts.agent;
+  const agentId = resolveAgentFilter((opts.agent as string | undefined) || globalOpts.agent);
   const projectPath =
     (opts.project as string | undefined) || globalOpts.project;
   let projectId: string | undefined;
@@ -706,9 +762,14 @@ export function readFileConfig(): Record<string, unknown> {
   const configPath = getConfigPath();
   if (!existsSync(configPath)) return {};
   try {
-    return JSON.parse(readFileSync(configPath, "utf-8")) as Record<string, unknown>;
-  } catch {
-    return {};
+    const data = JSON.parse(readFileSync(configPath, "utf-8")) as unknown;
+    if (data === null || typeof data !== "object" || Array.isArray(data)) {
+      throw new Error("expected a JSON object");
+    }
+    return data as Record<string, unknown>;
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`Cannot update global config at ${configPath}: ${detail}`);
   }
 }
 

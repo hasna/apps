@@ -16,6 +16,17 @@ export type {
   DedupeMode,
   Agent,
   Project,
+  UpdateProjectInput,
+  ProjectAuthorityIdentity,
+  ProjectGuardedUpdateRequest,
+  ProjectGuardedRollbackRequest,
+  ProjectGuardedUpdateResult,
+  ProjectUpdateReceipt,
+  MemoryProjectLinkSnapshot,
+  MemoryProjectLinkRequest,
+  MemoryProjectLinkRollbackRequest,
+  MemoryProjectLinkReceipt,
+  MemoryProjectLinkResult,
   MementosConfig,
   SyncDirection,
   SyncOptions,
@@ -71,6 +82,16 @@ export {
   getMemoryVersions,
 } from "./db/memories.js";
 
+// Guarded existing-memory project linkage
+export {
+  previewMemoryProjectLink,
+  applyMemoryProjectLink,
+  rollbackMemoryProjectLink,
+  getMemoryProjectLinkReceipt,
+  MemoryProjectLinkError,
+} from "./db/memory-project-link.js";
+export * from "./memory-project-link/index.js";
+
 // Agents
 export {
   registerAgent,
@@ -119,7 +140,17 @@ export {
   registerProject,
   getProject,
   listProjects,
+  previewProjectUpdate,
+  applyProjectUpdate,
+  rollbackProjectUpdate,
+  getProjectUpdateReceipt,
+  ProjectGuardedUpdateError,
+  ProjectCollisionError,
 } from "./db/projects.js";
+
+// Opt-in, receipt-backed authority used by Projects full registration.
+// Ordinary registerProject behavior above remains unchanged.
+export * from "./project-registration/index.js";
 
 // Machines
 export {

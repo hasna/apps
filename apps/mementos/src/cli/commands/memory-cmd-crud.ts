@@ -10,6 +10,13 @@ import {
   updateMemory,
   deleteMemory,
 } from "../../db/memories.js";
+import {
+  applyMemoryProjectLink,
+  getMemoryProjectLinkReceipt,
+  previewMemoryProjectLink,
+  rollbackMemoryProjectLink,
+} from "../../db/memory-project-link.js";
+import { resolveMementosProjectAuthorityIdentity } from "../../project-registration/index.js";
 import { getProject } from "../../db/projects.js";
 import { getAgent } from "../../db/agents.js";
 import { parseDuration } from "../../lib/duration.js";
@@ -31,6 +38,123 @@ import {
 
 export function registerCrudCommands(program: Command): void {
   const handleError = makeHandleError(program);
+
+  // ============================================================================
+  // link-project <memory-id>
+  // ============================================================================
+
+  program
+    .command("link-project <memory-id>")
+    .description("Guardedly link an existing memory to an existing project")
+    .option("--project-id <id>", "Exact stable ID of the existing target project")
+    .option("--expected-memory-version <n>", "Exact memory version required for compare-and-set", parseInt)
+    .option("--expected-memory-revision <revision>", "Exact memory updated_at revision required for compare-and-set")
+    .option("--expected-project-revision <revision>", "Exact target project updated_at revision required for compare-and-set")
+    .option("--idempotency-key <key>", "Caller-owned key for one guarded link or rollback")
+    .option("--operation-id <id>", "Operation identifier (defaults to the idempotency key)")
+    .option("--step-id <id>", "Step identifier")
+    .option("--dry-run", "Validate and preview the guarded link without writing")
+    .option("--rollback-receipt <id>", "Restore the exact prior linkage from an accepted receipt")
+    .option("--lookup-receipt <id>", "Read one immutable receipt for this exact memory")
+    .action((memoryId: string, opts) => {
+      try {
+        const globalOpts = program.opts<GlobalOpts>();
+        const rollbackReceipt = opts.rollbackReceipt as string | undefined;
+        const lookupReceipt = opts.lookupReceipt as string | undefined;
+        const projectId = opts.projectId as string | undefined;
+
+        if (rollbackReceipt && lookupReceipt) {
+          throw new Error("--rollback-receipt and --lookup-receipt cannot be used together");
+        }
+        if (lookupReceipt) {
+          if (opts.dryRun || projectId || rollbackReceipt) {
+            throw new Error("Receipt lookup cannot be combined with link, rollback, or dry-run options");
+          }
+          const receipt = getMemoryProjectLinkReceipt(memoryId, lookupReceipt, {
+            ...resolveMementosProjectAuthorityIdentity(),
+          });
+          if (globalOpts.json) outputJson(receipt);
+          else {
+            console.log(chalk.green("Memory project-link receipt:"));
+            console.log(`  ${chalk.bold("Receipt:")} ${receipt.receipt_id}`);
+            console.log(`  ${chalk.bold("Memory:")}  ${receipt.target_memory_id}`);
+            console.log(`  ${chalk.bold("Before:")}  ${receipt.before_link.project_id ?? "none"}`);
+            console.log(`  ${chalk.bold("After:")}   ${receipt.after_link.project_id ?? "none"}`);
+          }
+          return;
+        }
+
+        const expectedMemoryVersion = opts.expectedMemoryVersion as number | undefined;
+        const expectedMemoryRevision = opts.expectedMemoryRevision as string | undefined;
+        const idempotencyKey = opts.idempotencyKey as string | undefined;
+        if (!expectedMemoryVersion || !expectedMemoryRevision || !idempotencyKey) {
+          throw new Error(
+            "--expected-memory-version, --expected-memory-revision, and --idempotency-key are required",
+          );
+        }
+        if (opts.dryRun && rollbackReceipt) {
+          throw new Error("Dry-run memory project-link rollback is not supported");
+        }
+        if (projectId && rollbackReceipt) {
+          throw new Error("--project-id and --rollback-receipt cannot be used together");
+        }
+
+        const common = {
+          ...resolveMementosProjectAuthorityIdentity(),
+          operation_id: (opts.operationId as string | undefined) ?? idempotencyKey,
+          step_id: (opts.stepId as string | undefined)
+            ?? (rollbackReceipt
+              ? "mementos_memory_project_link_rollback"
+              : "mementos_memory_project_link"),
+          idempotency_key: idempotencyKey,
+          expected_memory_version: expectedMemoryVersion,
+          expected_memory_revision: expectedMemoryRevision,
+        };
+
+        let result;
+        if (rollbackReceipt) {
+          result = rollbackMemoryProjectLink(memoryId, {
+            ...common,
+            accepted_receipt_id: rollbackReceipt,
+          });
+        } else {
+          const expectedProjectRevision = opts.expectedProjectRevision as string | undefined;
+          if (!projectId || !expectedProjectRevision) {
+            throw new Error(
+              "--project-id and --expected-project-revision are required for a memory project link",
+            );
+          }
+          const request = {
+            ...common,
+            target_project_id: projectId,
+            expected_project_revision: expectedProjectRevision,
+          };
+          result = opts.dryRun
+            ? previewMemoryProjectLink(memoryId, request)
+            : applyMemoryProjectLink(memoryId, request);
+        }
+
+        if (globalOpts.json) {
+          outputJson(result);
+        } else {
+          const label = result.dry_run
+            ? "Memory project-link preview:"
+            : result.no_change
+              ? "Memory already linked:"
+              : "Memory project linkage updated:";
+          console.log(chalk.green(label));
+          console.log(`  ${chalk.bold("Memory:")}   ${result.memory.id}`);
+          console.log(`  ${chalk.bold("Project:")}  ${result.memory.project_id ?? "none"}`);
+          console.log(`  ${chalk.bold("Version:")}  ${result.memory.version}`);
+          console.log(`  ${chalk.bold("Revision:")} ${result.memory.updated_at}`);
+          if (result.receipt) {
+            console.log(`  ${chalk.bold("Receipt:")}  ${result.receipt.receipt_id}`);
+          }
+        }
+      } catch (error) {
+        handleError(error);
+      }
+    });
 
   // ============================================================================
   // save <key> <value>
@@ -149,11 +273,47 @@ export function registerCrudCommands(program: Command): void {
             ? templateDefaults.tags
             : undefined;
 
-        // Resolve agent name/partial-id → actual agent ID (avoids FK violation)
+        // Resolve agent name/partial-id → actual agent ID (avoids FK violation).
+        //
+        // An unresolvable name is REFUSED rather than dropped. Dropping it left
+        // `agent_id` undefined, and the upsert bucket collapses "undefined" and
+        // "no --agent at all" onto the same value — `?? ""` in the fork guard
+        // below, `COALESCE(agent_id,'')` in createMemory. So `--agent <typo>`
+        // silently retargeted the write onto the UNOWNED row for this key and
+        // upserted it, reporting rc=0 "Updated".
+        //
+        // Two things made that worth a throw rather than a warning:
+        //   1. It is destructive. Measured on the fleet store 2026-08-03, 812 of
+        //      1169 active rows (69.5%) carry a NULL agent_id, so the unowned
+        //      bucket is the majority of the store, not an empty corner.
+        //   2. It is not recoverable afterwards. `agent_id` and
+        //      `created_by_agent` are both NULL whether the caller passed a bogus
+        //      agent or passed none, so an overwritten row is indistinguishable
+        //      from a legitimately unowned one.
+        //
+        // The sibling `--session` guard added in #42 only WARNS, and that remains
+        // right for it: `--session shared` writes a legal row and is a
+        // documentation bug, whereas this writes to a bucket the caller did not
+        // name and destroys what was there. The blast radius was measured before
+        // choosing: across four skill homes there are 74 `mementos save` call
+        // sites and ZERO of them pass `--agent` or `--project`.
+        //
+        // A row owned by a REAL other agent was never at risk here — its bucket
+        // differs, so the fork guard below already refused it.
         let resolvedAgentId: string | undefined;
         if (globalOpts.agent) {
           const ag = getAgent(globalOpts.agent);
-          resolvedAgentId = ag?.id; // undefined if agent not found — don't store unresolvable IDs
+          if (!ag) {
+            throw new Error(
+              `Unknown agent "${globalOpts.agent}": no registered agent matches that name or id.\n` +
+                `Refusing to save. Dropping the flag would write this memory to the unowned ` +
+                `(no-agent) row for key "${key}", overwriting whatever is there under an owner ` +
+                `you did not name.\n` +
+                `Register the agent first:  mementos register-agent ${globalOpts.agent}\n` +
+                `Or omit --agent to write to the unowned row deliberately.`,
+            );
+          }
+          resolvedAgentId = ag.id;
         }
 
         const input: CreateMemoryInput = {
@@ -175,10 +335,54 @@ export function registerCrudCommands(program: Command): void {
           session_id: globalOpts.session,
         };
 
-        // Resolve project from --project path
+        // Resolve project from --project path. Refused when unresolvable, for
+        // exactly the reason given for --agent above: project_id is another
+        // column of the same upsert bucket, so a path that is not a registered
+        // project silently retargeted the write onto the no-project row and
+        // upserted it. Same defect, same function, same consequence — fixing one
+        // and leaving the other would be fixing the instance instead of the
+        // mechanism.
         if (globalOpts.project) {
-          const project = getProject(resolve(globalOpts.project));
-          if (project) input.project_id = project.id;
+          const projectPath = resolve(globalOpts.project);
+          const project = getProject(projectPath);
+          if (!project) {
+            throw new Error(
+              `Unknown project "${projectPath}": no registered project matches that path.\n` +
+                `Refusing to save. Dropping the flag would write this memory to the no-project ` +
+                `row for key "${key}", overwriting whatever is there in a scope you did not name.\n` +
+                `Register it first:  mementos projects --add --path ${projectPath} --name <name>\n` +
+                `Or omit --project to write outside any project deliberately.`,
+            );
+          }
+          input.project_id = project.id;
+        }
+
+        // HC-00149's other half. `update` already refuses a no-op and points at
+        // the shadowed short flag; `save` never did, so `save k v -s shared`
+        // stayed silently wrong — it writes session_id="shared" and leaves scope
+        // at its default, which is the opposite of what the author asked for.
+        //
+        // Measured on the live fleet store 2026-08-03: 96 of 1142 active rows
+        // carry a session_id that is literally a scope word (87 "shared", 7
+        // "private", 2 "global"). Nobody has ever named a session "shared".
+        //
+        // Warn rather than throw: the write itself is legal, `--session shared`
+        // is not forgeable as an error, and 80 skill-file call sites across six
+        // skill homes currently depend on it succeeding. Failing here would
+        // convert a documentation bug into a fleet outage. Advice on stderr
+        // keeps stdout clean for `--json` consumers.
+        if (
+          typeof input.session_id === "string" &&
+          (MEMORY_SCOPES as readonly string[]).includes(input.session_id)
+        ) {
+          console.error(
+            chalk.yellow(
+              `Warning: --session "${input.session_id}" looks like a scope, not a session id. ` +
+                `Note that -s is the global --session, not --scope; this save is writing ` +
+                `session_id="${input.session_id}" and leaving scope at "${input.scope ?? "private"}". ` +
+                `If you meant the scope, pass --scope ${input.session_id} (long form only).`,
+            ),
+          );
         }
 
         // `save` is documented as "create or upsert", but the upsert matches on
@@ -212,14 +416,20 @@ export function registerCrudCommands(program: Command): void {
             const rows = sameKey
               .map((m) => `  ${m.id.slice(0, 8)}  scope=${m.scope}  project=${m.project_id ?? "none"}  session=${m.session_id ?? "none"}  agent=${m.agent_id ?? "none"}`)
               .join("\n");
+            // The bucket is FOUR columns (scope, agent, project, session) but
+            // this descriptor listed three, omitting agent. When agent is the
+            // only column that differs — two agents saving one key, which is
+            // the common fleet case — the target line and the existing-row line
+            // printed identical scope/project/session and the refusal read as
+            // self-contradictory. Name every column that is actually compared.
             throw new Error(
               `Refusing to fork key "${key}": ${sameKey.length} active memor${sameKey.length === 1 ? "y" : "ies"} ` +
                 `already ${sameKey.length === 1 ? "uses" : "use"} it, ` +
-                `but none matches the scope/project/session this save targets ` +
-                `(scope=${input.scope ?? "private"}, project=${input.project_id ?? "none"}, session=${input.session_id ?? "none"}).\n` +
+                `but none matches the scope/project/session/agent this save targets ` +
+                `(scope=${input.scope ?? "private"}, project=${input.project_id ?? "none"}, session=${input.session_id ?? "none"}, agent=${input.agent_id ?? "none"}).\n` +
                 `${rows}\n` +
                 `Saving would create a second active row under the same key. Either target the existing row ` +
-                `(match its scope/project/session flags, or use \`mementos update <id>\`), or pass \`--dedupe create\` ` +
+                `(match its scope/project/session/agent flags, or use \`mementos update <id>\`), or pass \`--dedupe create\` ` +
                 `to fork deliberately.`,
             );
           }

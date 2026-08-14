@@ -2,6 +2,7 @@
 process.env["MEMENTOS_DB_PATH"] = ":memory:";
 
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
+import { projectAuthorityTestEnv } from "../test-support/project-authority-identity.js";
 import { isolatedStoreEnv } from "../test-support/store-isolation.js";
 
 const PORT = 19400 + Math.floor(Math.random() * 100);
@@ -13,7 +14,7 @@ beforeAll(async () => {
   serverProc = Bun.spawn(
     ["bun", "run", "src/server/index.ts", "--port", String(PORT)],
     {
-      env: isolatedStoreEnv(":memory:"),
+      env: isolatedStoreEnv(":memory:", { extra: projectAuthorityTestEnv() }),
       stdout: "pipe",
       stderr: "pipe",
       cwd: new URL("../../", import.meta.url).pathname.replace(/\/$/, ""),
@@ -398,6 +399,33 @@ describe("GET /api/agents", () => {
     expect(Array.isArray(data.agents)).toBe(true);
     expect(typeof data.count).toBe("number");
   });
+
+  test("honors limit, cursor, offset, and an empty terminal page", async () => {
+    await api("/api/agents", {
+      method: "POST",
+      body: JSON.stringify({ name: `pagination-rest-a-${Date.now()}` }),
+    });
+    await api("/api/agents", {
+      method: "POST",
+      body: JSON.stringify({ name: `pagination-rest-b-${Date.now()}` }),
+    });
+
+    const all = await api("/api/agents");
+    const first = await api("/api/agents?limit=1&cursor=0");
+    const second = await api("/api/agents?limit=1&cursor=1");
+    const offset = await api("/api/agents?limit=1&offset=1");
+    const offsetOnly = await api("/api/agents?offset=1");
+    const terminal = await api(`/api/agents?limit=1&cursor=${all.data.agents.length}`);
+
+    expect(first.data.agents).toHaveLength(1);
+    expect(second.data.agents).toHaveLength(1);
+    expect(second.data.agents[0].id).not.toBe(first.data.agents[0].id);
+    expect(offset.data.agents[0].id).toBe(second.data.agents[0].id);
+    expect(offsetOnly.data.agents.map((agent: { id: string }) => agent.id)).toEqual(
+      all.data.agents.slice(1).map((agent: { id: string }) => agent.id)
+    );
+    expect(terminal.data.agents).toEqual([]);
+  });
 });
 
 // ============================================================================
@@ -531,6 +559,119 @@ describe("GET /api/projects/:id", () => {
 
   test("returns 404 for unknown project", async () => {
     const { status } = await api("/api/projects/definitely-does-not-exist");
+    expect(status).toBe(404);
+  });
+});
+
+describe("POST /api/projects/:id/guarded-update", () => {
+  test("is exposed by the live OpenAPI route table and the old direct PATCH is guarded", async () => {
+    const { status, data } = await api("/openapi.json");
+    expect(status).toBe(200);
+    expect(data.paths["/v1/projects/{id}/guarded-update"].post).toMatchObject({
+      operationId: "post_v1_projects_id_guarded_update",
+    });
+    const direct = await api("/api/projects/project-1", {
+      method: "PATCH",
+      body: JSON.stringify({ name: "unsafe" }),
+    });
+    expect(direct.status).toBe(428);
+  });
+
+  test("renames and repaths a project without changing its stable ID", async () => {
+    const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const oldName = `iproj-api-${suffix}`;
+    const oldPath = `/tmp/iproj-api-${suffix}`;
+    const { data: project } = await api("/api/projects", {
+      method: "POST",
+      body: JSON.stringify({ name: oldName, path: oldPath }),
+    });
+
+    const { status, data } = await api(`/api/projects/${project.id}/guarded-update`, {
+      method: "POST",
+      body: JSON.stringify({
+        authority_id: "mementos",
+        tenant_id: "default",
+        corpus_id: "default",
+        operation_id: `api-project-update-${suffix}`,
+        step_id: "mementos_project_update",
+        idempotency_key: `api-project-update-request-${suffix}`,
+        expected_revision: project.updated_at,
+        updates: {
+          name: `API Project ${suffix}`,
+          path: `/tmp/api-project-${suffix}`,
+        },
+      }),
+    });
+
+    expect(status).toBe(200);
+    expect(data.project.id).toBe(project.id);
+    expect(data.project.name).toBe(`API Project ${suffix}`);
+    expect(data.project.path).toBe(`/tmp/api-project-${suffix}`);
+    expect(data.receipt).toMatchObject({ direction: "forward", target_id: project.id });
+
+    const staleName = await api(`/api/projects/${encodeURIComponent(oldName)}`);
+    const stalePath = await api(`/api/projects/${encodeURIComponent(oldPath)}`);
+    expect(staleName.status).toBe(404);
+    expect(stalePath.status).toBe(404);
+  });
+
+  test("returns 409 for project name and path collisions", async () => {
+    const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const { data: source } = await api("/api/projects", {
+      method: "POST",
+      body: JSON.stringify({ name: `Source ${suffix}`, path: `/tmp/source-${suffix}` }),
+    });
+    const { data: target } = await api("/api/projects", {
+      method: "POST",
+      body: JSON.stringify({ name: `Target ${suffix}`, path: `/tmp/target-${suffix}` }),
+    });
+
+    const common = {
+      authority_id: "mementos",
+      tenant_id: "default",
+      corpus_id: "default",
+      operation_id: `api-project-collision-${suffix}`,
+      step_id: "mementos_project_update",
+      expected_revision: source.updated_at,
+    };
+    const nameCollision = await api(`/api/projects/${source.id}/guarded-update`, {
+      method: "POST",
+      body: JSON.stringify({
+        ...common,
+        idempotency_key: `api-project-name-collision-${suffix}`,
+        updates: { name: `target ${suffix}` },
+      }),
+    });
+    const pathCollision = await api(`/api/projects/${source.id}/guarded-update`, {
+      method: "POST",
+      body: JSON.stringify({
+        ...common,
+        idempotency_key: `api-project-path-collision-${suffix}`,
+        updates: { path: target.path },
+      }),
+    });
+
+    expect(nameCollision.status).toBe(409);
+    expect(pathCollision.status).toBe(409);
+  });
+
+  test("returns 404 for a missing stable project ID", async () => {
+    const { status } = await api(
+      "/api/projects/00000000-0000-0000-0000-000000000000/guarded-update",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          authority_id: "mementos",
+          tenant_id: "default",
+          corpus_id: "default",
+          operation_id: "api-project-missing-operation-v1",
+          step_id: "mementos_project_update",
+          idempotency_key: "api-project-missing-request-0001",
+          expected_revision: "2026-08-07T00:00:00.000Z",
+          updates: { name: "Missing Project" },
+        }),
+      },
+    );
     expect(status).toBe(404);
   });
 });
