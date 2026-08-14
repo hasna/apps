@@ -48,6 +48,7 @@ import {
   renderMarkdown,
   SELF_HOSTED_PROVIDER_CLEAR_UNSUPPORTED,
 } from "./mail-types.js";
+import { normalizePriorityRuleInput, priorityRuleMatchesSender, prioritySenderRuleId, type PrioritySenderRule } from "./priority-senders.js";
 import type {
   MailBulkInput,
   MailBulkResult,
@@ -59,6 +60,7 @@ import type {
   MailSendInput,
   MailSendResult,
 } from "./mail-data-source.js";
+import type { MailboxFilter, MailboxFilterInput } from "./mailbox-filters.js";
 import {
   findVerificationCode,
   type VerificationCodeCandidateOptions,
@@ -78,6 +80,7 @@ import {
   readSelfHostedResponseText,
   selfHostedTransportLimit,
   validateSelfHostedMailSuccessResponse,
+  SelfHostedWireResponseError,
 } from "./self-hosted-wire.js";
 // ── the /v1 message row (snake_case, as the self-hosted serve returns) ────────
 
@@ -211,7 +214,7 @@ const MAX_SCAN_ROWS = 100_000;
 type ServerListFolder = "inbox" | "starred" | "sent" | "archived" | "spam" | "trash";
 
 function serverListFolderOf(mailbox: Mailbox): ServerListFolder {
-  return mailbox === "unread" ? "inbox" : mailbox;
+  return mailbox === "unread" || mailbox === "priority" ? "inbox" : mailbox;
 }
 
 // Hard cap on /messages requests for ONE filtered folder listing. Only a server
@@ -712,6 +715,12 @@ function isOnOrAfter(m: V1Message, since: string | undefined): boolean {
   return messageTime(m) >= Date.parse(since);
 }
 
+function isOnOrBefore(m: V1Message, until: string | undefined): boolean {
+  if (!until) return true;
+  const cutoff = Date.parse(until);
+  return Number.isFinite(cutoff) && Number.isFinite(messageTime(m)) && messageTime(m) <= cutoff;
+}
+
 function labelsOf(m: V1Message): string[] {
   return Array.isArray(m.labels) ? m.labels.filter((l): l is string => typeof l === "string") : [];
 }
@@ -720,13 +729,61 @@ function hasLabel(m: V1Message, name: string): boolean {
   return labelsOf(m).some((l) => l.trim().toLowerCase() === name);
 }
 
+function containsOption(value: unknown, query: string | undefined): boolean {
+  if (!query?.trim()) return true;
+  return String(value ?? "").toLowerCase().includes(query.trim().toLowerCase());
+}
+
+/**
+ * The local half of a list read, applied over a server page. The server applies
+ * the same predicates as query parameters (see `listPage`); this is the
+ * fallback that keeps a read correct when the serve cannot push them down.
+ */
+function mailboxOptionsMatchLocally(message: V1Message, opts: MailboxListOptions | undefined, since: string | undefined, until: string | undefined): boolean {
+  if (!isOnOrAfter(message, since) || !isOnOrBefore(message, until)) return false;
+  if (opts?.label?.trim() && !hasLabel(message, opts.label.trim().toLowerCase())) return false;
+  // Outbound rows render as read in the projection (v1ToTuiMessage forces
+  // is_read on them) and the server pushdown agrees
+  // (`is_read = true OR direction = 'outbound'`), so a read filter can never
+  // hide a row the very same listing renders as read, and unread excludes
+  // outbound exactly as the pushdown does.
+  const outbound = (message.direction ?? "").toLowerCase() === "outbound";
+  if (opts?.read === true && !Boolean(message.is_read) && !outbound) return false;
+  if (opts?.unread === true && (Boolean(message.is_read) || outbound)) return false;
+  if (opts?.starred === true && !Boolean(message.is_starred)) return false;
+  if (opts?.archived === true && !hasLabel(message, "archived")) return false;
+  if (!containsOption(message.from_addr, opts?.from)) return false;
+  if (!containsOption(message.subject, opts?.subject)) return false;
+  const addresses = [message.from_addr ?? "", ...(message.to_addrs ?? [])].map(bareEmail);
+  if (opts?.address?.trim() && !addresses.includes(opts.address.trim().toLowerCase())) return false;
+  if (opts?.domain?.trim()) {
+    const domain = opts.domain.trim().toLowerCase();
+    // Recipients include cc, matching the server's domain pushdown
+    // (from_addr OR message_recipients, where message_recipients spans to+cc) —
+    // a stricter local check here would silently drop cc-only matches the
+    // server already returned.
+    const domainAddresses = [message.from_addr ?? "", ...(message.to_addrs ?? []), ...(message.cc_addrs ?? [])].map(bareEmail);
+    if (!domainAddresses.some((address) => address.split("@")[1] === domain)) return false;
+  }
+  if (opts?.to?.trim()) {
+    const query = opts.to.trim().toLowerCase();
+    const toAddresses = (message.to_addrs ?? []).map(bareEmail);
+    if (query.includes("@")) {
+      if (!toAddresses.includes(query)) return false;
+    } else if (!toAddresses.some((address) => address.split("@")[1] === query)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 // Drop the redundant system `unread` label on a read message (parity with local,
 // which has no such label — see mail-data-source visibleLabels()).
 function visibleLabels(labels: string[], isRead: boolean): string[] {
   return isRead ? labels.filter((l) => l.trim().toLowerCase() !== "unread") : labels;
 }
 
-function v1ToTuiMessage(m: V1Message): TuiMessage {
+function v1ToTuiMessage(m: V1Message, rules: PrioritySenderRule[] = []): TuiMessage {
   const isRead = Boolean(m.is_read);
   const outbound = (m.direction ?? "").toLowerCase() === "outbound";
   const attachments =
@@ -755,6 +812,7 @@ function v1ToTuiMessage(m: V1Message): TuiMessage {
     provider_thread_id: null,
     attachments,
     sentByMe: outbound,
+    is_priority: !outbound && priorityRuleMatchesSender(m.from_addr ?? "", rules),
     // Surface the ledger truth: a row stuck in `uncertain`/`failed` must never
     // render identically to a delivered message (2026-07-25 incident).
     ...(typeof m.status === "string" && m.status ? { status: m.status } : {}),
@@ -810,12 +868,14 @@ function v1AttachmentMetadata(m: V1Message): AttachmentPath[] {
   });
 }
 
-function v1ToMessageBody(m: V1Message): MessageBody {
+function v1ToMessageBody(m: V1Message, rules: PrioritySenderRule[] = []): MessageBody {
   const isRead = Boolean(m.is_read);
   const flags = [...new Set([
     ...visibleLabels(labelsOf(m), isRead),
     m.is_starred ? "starred" : "",
     isRead ? "" : "unread",
+    !((m.direction ?? "").toLowerCase() === "outbound")
+      && priorityRuleMatchesSender(m.from_addr ?? "", rules) ? "priority" : "",
   ].filter(Boolean))];
   return {
     from: m.from_addr ?? "",
@@ -827,6 +887,8 @@ function v1ToMessageBody(m: V1Message): MessageBody {
     html: m.body_html ?? null,
     summary: "",
     flags,
+    is_priority: !((m.direction ?? "").toLowerCase() === "outbound")
+      && priorityRuleMatchesSender(m.from_addr ?? "", rules),
     attachments: v1AttachmentMetadata(m),
   };
 }
@@ -847,19 +909,12 @@ function v1ToThreadMessage(m: V1Message): TuiThreadMessage {
   };
 }
 
-// "Already read", using the SAME rule the row projection reports as `is_read`
-// (an outbound message is never unread), so `--read` can never hide a row that
-// the very same listing renders as read.
-function readMatch(m: V1Message): boolean {
-  return (m.direction ?? "").toLowerCase() === "outbound" || Boolean(m.is_read);
-}
-
 function emptyCounts(): MailboxCounts {
-  return { inbox: 0, unread: 0, starred: 0, sent: 0, archived: 0, spam: 0, trash: 0 };
+  return { inbox: 0, unread: 0, priority: 0, starred: 0, sent: 0, archived: 0, spam: 0, trash: 0 };
 }
 
 // Which folder(s) a message belongs to (a message can count toward several).
-function folderMatch(m: V1Message, folder: Mailbox): boolean {
+function folderMatch(m: V1Message, folder: Mailbox, rules: PrioritySenderRule[] = []): boolean {
   const outbound = (m.direction ?? "").toLowerCase() === "outbound";
   const archived = hasLabel(m, "archived");
   const spam = hasLabel(m, "spam") || (m.status ?? "").toLowerCase() === "spam";
@@ -867,6 +922,9 @@ function folderMatch(m: V1Message, folder: Mailbox): boolean {
   switch (folder) {
     case "inbox":
       return !outbound && !archived && !spam && !trash;
+    case "priority":
+      return !outbound && !archived && !spam && !trash
+        && priorityRuleMatchesSender(m.from_addr ?? "", rules);
     case "unread":
       return !outbound && !m.is_read && !archived && !spam && !trash;
     case "starred":
@@ -1014,6 +1072,7 @@ export class SelfHostedMailDataSource implements MailDataSource {
   private readonly timeoutMs: number;
   private readonly maxResponseBytes: number;
   private scanCache: { at: number; rows: V1Message[] } | null = null;
+  private priorityRulesCache: { at: number; rules: PrioritySenderRule[] } | null = null;
   private labelTallyCache: { at: number; tally: Map<string, number> } | null = null;
   private labelTallyInFlight: { generation: number; promise: Promise<{ tally: Map<string, number> }> } | null = null;
   // Fences the tally against a write that lands MID-WALK. Clearing the cache is
@@ -1137,10 +1196,18 @@ export class SelfHostedMailDataSource implements MailDataSource {
     opts: {
       direction?: "inbound" | "outbound";
       since?: string;
+      until?: string;
       to?: string;
       from?: string;
+      address?: string;
       subject?: string;
       search?: string;
+      domain?: string;
+      label?: string;
+      read?: boolean;
+      unread?: boolean;
+      starred?: boolean;
+      archived?: boolean;
       folder?: ServerListFolder;
     } = {},
   ): Promise<V1MessagePage> {
@@ -1151,10 +1218,18 @@ export class SelfHostedMailDataSource implements MailDataSource {
     if (opts.folder) params.set("folder", opts.folder);
     if (opts.direction) params.set("direction", opts.direction);
     if (opts.since) params.set("since", opts.since);
+    if (opts.until) params.set("until", opts.until);
     if (opts.to) params.set("to", opts.to);
     if (opts.from) params.set("from", opts.from);
+    if (opts.address) params.set("address", opts.address);
     if (opts.subject) params.set("subject", opts.subject);
     if (opts.search) params.set("search", opts.search);
+    if (opts.domain) params.set("domain", opts.domain);
+    if (opts.label) params.set("label", opts.label);
+    if (opts.read === true) params.set("read", "true");
+    if (opts.unread === true) params.set("unread", "true");
+    if (opts.starred === true) params.set("starred", "true");
+    if (opts.archived === true) params.set("archived", "true");
     const { status, json } = await this.request("GET", `/messages?${params.toString()}`);
     if (status < 200 || status >= 300) {
       throw new Error(`self-hosted emails: GET /messages failed (HTTP ${status})`);
@@ -1241,6 +1316,7 @@ export class SelfHostedMailDataSource implements MailDataSource {
       counts: {
         inbox: number("inbox"),
         unread: number("unread"),
+        priority: number("priority"),
         starred: number("starred"),
         sent: number("sent"),
         archived: number("archived"),
@@ -1296,6 +1372,7 @@ export class SelfHostedMailDataSource implements MailDataSource {
 
   private invalidate(): void {
     this.scanCache = null;
+    this.priorityRulesCache = null;
     // Labelling a message changes the tally, so a write must drop it too — and
     // must also fence any walk currently in flight, whose rows predate this
     // write. Without the generation bump that walk would install a stale tally
@@ -1313,20 +1390,66 @@ export class SelfHostedMailDataSource implements MailDataSource {
     this.scopedCountsGeneration += 1;
   }
 
-  private async listFilteredMailboxPage(mailbox: Mailbox, scope: SelfHostedScope | undefined, opts?: MailboxListOptions): Promise<V1Message[]> {
+  private async priorityRules(): Promise<PrioritySenderRule[]> {
+    const cached = this.priorityRulesCache;
+    if (cached && this.now() - cached.at < SCAN_TTL_MS) return cached.rules;
+    let response: { status: number; json: unknown };
+    try {
+      response = await this.request("GET", "/priority-sender-rules?limit=1000");
+    } catch (error) {
+      // A serve that predates the Priority Inbox does not serve the rules
+      // endpoint, and its 404 is not a declared error for this route — the
+      // wire client rejects it. Degrade to "no rules" (an empty Priority
+      // Inbox) rather than breaking every mailbox against the older serve,
+      // the same skew tolerance as the `?folder=` pushdown.
+      if (
+        error instanceof SelfHostedWireResponseError
+        && error.path === "/priority-sender-rules?limit=1000"
+        && error.message.includes("HTTP 404")
+      ) {
+        this.priorityRulesCache = { at: this.now(), rules: [] };
+        return [];
+      }
+      throw error;
+    }
+    if (response.status < 200 || response.status >= 300) {
+      throw new Error(`self-hosted emails: GET /priority-sender-rules failed (HTTP ${response.status})`);
+    }
+    const rows = (response.json as { items?: unknown } | null)?.items;
+    if (!Array.isArray(rows)) throw new Error("self-hosted emails: priority rule response was malformed");
+    const rules = rows.flatMap((row): PrioritySenderRule[] => {
+      if (!row || typeof row !== "object") return [];
+      const value = row as Record<string, unknown>;
+      if (typeof value.kind !== "string" || typeof value.value !== "string") return [];
+      try {
+        const normalized = normalizePriorityRuleInput(value.kind, value.value);
+        return [{
+          id: typeof value.id === "string" && value.id.length > 0
+            ? value.id
+            : prioritySenderRuleId(normalized.kind, normalized.value),
+          kind: normalized.kind,
+          value: normalized.value,
+        }];
+      } catch {
+        return [];
+      }
+    });
+    this.priorityRulesCache = { at: this.now(), rules };
+    return rules;
+  }
+
+  private async listFilteredMailboxPage(mailbox: Mailbox, scope: SelfHostedScope | undefined, opts?: MailboxListOptions, rules: PrioritySenderRule[] = []): Promise<V1Message[]> {
     const offset = opts?.offset && opts.offset > 0 ? opts.offset : 0;
     const limit = opts?.limit && opts.limit > 0 ? opts.limit : 200;
     const wanted = offset + limit;
     const pageLimit = Math.min(PAGE_LIMIT, Math.max(50, wanted));
     const direction = mailbox === "sent" ? "outbound" : "inbound";
     const since = normalizeSince(opts?.since);
-    const label = opts?.label?.trim().toLowerCase();
+    const until = normalizeSince(opts?.until);
     const matchesLocally = async (message: V1Message): Promise<V1Message | null> => {
-      if (!folderMatch(message, mailbox)
+      if (!folderMatch(message, mailbox, rules)
         || !scopeMatch(message, scope)
-        || !isOnOrAfter(message, since)
-        || (opts?.read === true && !readMatch(message))
-        || (label && !labelsOf(message).some((value) => value.trim().toLowerCase() === label))
+        || !mailboxOptionsMatchLocally(message, opts, since, until)
       ) return null;
       const { message: candidate, matches } = await this.searchMatchWithDetails(message, opts?.search);
       return matches ? candidate : null;
@@ -1363,8 +1486,18 @@ export class SelfHostedMailDataSource implements MailDataSource {
           folder,
           direction,
           since,
+          until,
           ...filtersForRequest,
           search: opts?.search,
+          to: opts?.to ?? filtersForRequest.to,
+          from: opts?.from ?? filtersForRequest.from,
+          address: opts?.address,
+          subject: opts?.subject,
+          domain: opts?.domain,
+          read: opts?.read,
+          unread: opts?.unread,
+          starred: opts?.starred,
+          archived: opts?.archived,
         })) {
           for (const message of page) {
             const candidate = await matchesLocally(message);
@@ -1388,8 +1521,18 @@ export class SelfHostedMailDataSource implements MailDataSource {
           folder,
           direction,
           since,
+          until,
           ...sourceFilters,
           search: opts?.search,
+          to: opts?.to ?? sourceFilters.to,
+          from: opts?.from ?? sourceFilters.from,
+          address: opts?.address,
+          subject: opts?.subject,
+          domain: opts?.domain,
+          read: opts?.read,
+          unread: opts?.unread,
+          starred: opts?.starred,
+          archived: opts?.archived,
       })) {
         for (const message of page) {
           const candidate = await matchesLocally(message);
@@ -1528,7 +1671,55 @@ export class SelfHostedMailDataSource implements MailDataSource {
 
   async listMailbox(mailbox: Mailbox, opts?: MailboxListOptions): Promise<TuiMessage[]> {
     const scope = selfHostedScopeOf(opts?.source);
-    return (await this.listFilteredMailboxPage(mailbox, scope, opts)).map(v1ToTuiMessage);
+    const rules = await this.priorityRules();
+    return (await this.listFilteredMailboxPage(mailbox, scope, opts, rules)).map((message) => v1ToTuiMessage(message, rules));
+  }
+
+  async listMailboxFilters(options: { limit?: number; offset?: number } = {}): Promise<MailboxFilter[]> {
+    const params = new URLSearchParams();
+    if (options.limit !== undefined) params.set("limit", String(options.limit));
+    if (options.offset !== undefined) params.set("offset", String(options.offset));
+    const { status, json } = await this.request("GET", `/mailbox-filters?${params.toString()}`);
+    if (status < 200 || status >= 300) throw new Error(`self-hosted emails: GET /mailbox-filters failed (HTTP ${status})`);
+    const items = (json as { items?: unknown } | null)?.items;
+    return Array.isArray(items) ? items as MailboxFilter[] : [];
+  }
+
+  async getMailboxFilter(identifier: string): Promise<MailboxFilter | null> {
+    const { status, json } = await this.request("GET", `/mailbox-filters/${encodeURIComponent(identifier)}`);
+    if (status === 404) return null;
+    if (status < 200 || status >= 300) throw new Error(`self-hosted emails: GET /mailbox-filters/<id> failed (HTTP ${status})`);
+    return json as MailboxFilter;
+  }
+
+  async createMailboxFilter(input: MailboxFilterInput): Promise<MailboxFilter> {
+    const { status, json } = await this.request("POST", "/mailbox-filters", input);
+    if (status < 200 || status >= 300) throw new Error(`self-hosted emails: POST /mailbox-filters failed (HTTP ${status})`);
+    return json as MailboxFilter;
+  }
+
+  async updateMailboxFilter(identifier: string, input: Partial<MailboxFilterInput>): Promise<MailboxFilter> {
+    const { status, json } = await this.request("PATCH", `/mailbox-filters/${encodeURIComponent(identifier)}`, input);
+    if (status === 404) throw new Error(`mailbox filter not found: ${identifier}`);
+    if (status < 200 || status >= 300) throw new Error(`self-hosted emails: PATCH /mailbox-filters/<id> failed (HTTP ${status})`);
+    return json as MailboxFilter;
+  }
+
+  async deleteMailboxFilter(identifier: string): Promise<void> {
+    const { status } = await this.request("DELETE", `/mailbox-filters/${encodeURIComponent(identifier)}`);
+    if (status === 404) throw new Error(`mailbox filter not found: ${identifier}`);
+    if (status < 200 || status >= 300) throw new Error(`self-hosted emails: DELETE /mailbox-filters/<id> failed (HTTP ${status})`);
+  }
+
+  async applyMailboxFilter(identifier: string, options: { limit?: number; offset?: number } = {}): Promise<import("./mail-data-source.js").MailboxFilterApplyResult> {
+    const params = new URLSearchParams();
+    if (options.limit !== undefined) params.set("limit", String(options.limit));
+    if (options.offset !== undefined) params.set("offset", String(options.offset));
+    const { status, json } = await this.request("POST", `/mailbox-filters/${encodeURIComponent(identifier)}/apply?${params.toString()}`);
+    if (status === 404) throw new Error(`mailbox filter not found: ${identifier}`);
+    if (status < 200 || status >= 300) throw new Error(`self-hosted emails: POST /mailbox-filters/<id>/apply failed (HTTP ${status})`);
+    const body = json as { filter: Pick<MailboxFilter, "name" | "criteria">; items?: unknown[]; limit: number; offset: number; truncated: boolean };
+    return { ...body, items: (body.items ?? []).map((item) => v1ToTuiMessage(item as V1Message)) };
   }
 
   /**
@@ -1560,6 +1751,10 @@ export class SelfHostedMailDataSource implements MailDataSource {
     if (inFlight && inFlight.generation === generation) return { ...(await inFlight.promise) };
 
     const walk = (async () => {
+      // The rules read is part of the walk: it must sit INSIDE the coalesced
+      // promise, or three concurrent calls each await it before any of them
+      // registers in-flight, and the coalescing they share is silently lost.
+      const rules = await this.priorityRules();
       const counts = emptyCounts();
       const seen = new Set<string>();
       // Across the WHOLE walk, including both halves of an address's to/from
@@ -1589,7 +1784,7 @@ export class SelfHostedMailDataSource implements MailDataSource {
               if (!scopeMatch(message, scope) || seen.has(message.id)) continue;
               seen.add(message.id);
               for (const folder of MAILBOXES) {
-                if (folderMatch(message, folder)) counts[folder] += 1;
+                if (folderMatch(message, folder, rules)) counts[folder] += 1;
               }
             }
           }
@@ -1679,12 +1874,12 @@ export class SelfHostedMailDataSource implements MailDataSource {
 
   async getMessage(id: string): Promise<TuiMessage | null> {
     const m = await this.getRaw(id);
-    return m ? v1ToTuiMessage(m) : null;
+    return m ? v1ToTuiMessage(m, await this.priorityRules()) : null;
   }
 
   async getMessageBody(msg: TuiMessage): Promise<MessageBody | null> {
     const m = await this.getRaw(msg.id);
-    return m ? v1ToMessageBody(m) : null;
+    return m ? v1ToMessageBody(m, await this.priorityRules()) : null;
   }
 
   // Fetch a message AND its body from a SINGLE row read. A `read` needs both, and
@@ -1693,7 +1888,9 @@ export class SelfHostedMailDataSource implements MailDataSource {
   // short prefix — the server resolves it — so `read <shortid>` is one GET.
   async getMessageWithBody(id: string): Promise<{ msg: TuiMessage; body: MessageBody } | null> {
     const m = await this.getRaw(id);
-    return m ? { msg: v1ToTuiMessage(m), body: v1ToMessageBody(m) } : null;
+    if (!m) return null;
+    const rules = await this.priorityRules();
+    return { msg: v1ToTuiMessage(m, rules), body: v1ToMessageBody(m, rules) };
   }
 
   async getConversation(msg: TuiMessage): Promise<TuiThreadMessage[]> {
@@ -1715,7 +1912,7 @@ export class SelfHostedMailDataSource implements MailDataSource {
     for (const row of windowed) {
       // List rows carry no body; re-read only the rows in the window.
       const full = row.body_text == null && row.body_html == null ? (await this.getRaw(row.id)) ?? row : row;
-      bodies.push({ item: v1ToThreadMessage(full), body: v1ToMessageBody(full) });
+      bodies.push({ item: v1ToThreadMessage(full), body: v1ToMessageBody(full, await this.priorityRules()) });
     }
     return bodies;
   }
@@ -1941,9 +2138,10 @@ export class SelfHostedMailDataSource implements MailDataSource {
       pageCount = continuationPageCount;
     }
     messages.sort((a, b) => messageDate(a).localeCompare(messageDate(b)));
+    const rules = await this.priorityRules();
     return {
       semantics: "insert_only",
-      insertions: messages.map(v1ToTuiMessage),
+      insertions: messages.map((message) => v1ToTuiMessage(message, rules)),
       cursor: nextCursor,
     };
   }
@@ -2100,9 +2298,10 @@ export class SelfHostedMailDataSource implements MailDataSource {
     if (filter?.providerId) throw new Error(SELF_HOSTED_PROVIDER_CLEAR_UNSUPPORTED);
     const scope = selfHostedScopeOf(filter?.source);
     const mailbox: Mailbox = filter?.mailbox ?? "inbox";
+    const rules = await this.priorityRules();
     const targets = new Set<string>();
     for (const message of await this.scanScopeRows(scope)) {
-      if (folderMatch(message, mailbox) && scopeMatch(message, scope)) targets.add(message.id);
+      if (folderMatch(message, mailbox, rules) && scopeMatch(message, scope)) targets.add(message.id);
     }
     for (const id of targets) await this.deleteMessage(id);
     return { cleared: targets.size };

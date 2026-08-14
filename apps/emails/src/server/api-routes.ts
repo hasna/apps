@@ -10,7 +10,8 @@ type RouteKey =
   | "resend-webhook"
   | "core"
   | "contacts-groups"
-  | "inbound-sequences";
+  | "inbound-sequences"
+  | "mailbox-filters";
 
 type ApiRouteHandler = (
   req: Request,
@@ -25,6 +26,7 @@ const allRouteModules: readonly RouteKey[] = [
   "core",
   "contacts-groups",
   "inbound-sequences",
+  "mailbox-filters",
 ];
 
 function pathStartsWithAny(path: string, prefixes: readonly string[]): boolean {
@@ -35,6 +37,7 @@ export function routeModulesFor(path: string): readonly RouteKey[] {
   if (path === "/webhook/ses-inbound") return ["inbound-webhook"];
   if (path === "/webhook/resend-inbound") return ["resend-webhook"];
   if (path.startsWith("/track/")) return ["inbound-sequences"];
+  if (pathStartsWithAny(path, ["/api/mailbox-filters"])) return ["mailbox-filters"];
 
   if (
     pathStartsWithAny(path, [
@@ -75,6 +78,7 @@ export function routeModulesFor(path: string): readonly RouteKey[] {
 	      "/api/digest",
 	      "/api/sequences",
       "/api/warming",
+      "/api/priority-sender-rules",
     ])
   ) {
     return ["inbound-sequences"];
@@ -103,6 +107,10 @@ async function loadRouteHandler(route: RouteKey): Promise<ApiRouteHandler> {
     }
     case "inbound-sequences": {
       const { handle } = await import("./routes/inbound-sequences.js");
+      return handle;
+    }
+    case "mailbox-filters": {
+      const { handle } = await import("./routes/mailbox-filters.js");
       return handle;
     }
   }

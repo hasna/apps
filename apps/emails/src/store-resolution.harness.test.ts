@@ -131,8 +131,8 @@ beforeAll(async () => {
   stub = await startV1Stub();
 });
 
-afterAll(() => {
-  stub.stop();
+afterAll(async () => {
+  await stub.stop();
 });
 
 beforeEach(async () => {

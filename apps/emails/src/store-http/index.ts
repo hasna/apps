@@ -26,6 +26,7 @@ import type { EmailsClientCredentialCandidate, EmailsClientCredentialSetting } f
 import type { AddressOwnershipLedger } from "../store-address-ownership-ledger.js";
 import type { GroupMembership } from "../store-group-membership.js";
 import type { SequenceCapableEmailStore } from "../store-sequence-subledger.js";
+import type { PrioritySenderRulesStore } from "../store/email-store.js";
 import { createAttachmentRepairRepository, createSendIntentsRepository } from "./ledger.js";
 import {
   createEmailContentRepository,
@@ -40,7 +41,12 @@ import {
   createDomainsRepository,
   createProvisioningRepository,
 } from "./registry.js";
-import { createResourceGateways, createResourceRepository, type ResourceGateway } from "./resources.js";
+import {
+  createImmutableResourceRepository,
+  createResourceGateways,
+  createResourceRepository,
+  type ResourceGateway,
+} from "./resources.js";
 import { RESOURCE_PATHS } from "./routes.js";
 import { createSendKeysRepository } from "./send-keys.js";
 import { createTransport, toV1BaseUrl, type FetchImplementation } from "./wire.js";
@@ -273,7 +279,7 @@ function gateway(gateways: Record<string, ResourceGateway>, family: string): Res
 
 export function createHttpEmailStore(
   options: HttpEmailStoreOptions,
-): SequenceCapableEmailStore & GroupMembership & AddressOwnershipLedger {
+): SequenceCapableEmailStore & GroupMembership & AddressOwnershipLedger & PrioritySenderRulesStore {
   const transport = createTransport({
     baseUrl: options.baseUrl,
     credential: options.credential,
@@ -293,10 +299,12 @@ export function createHttpEmailStore(
     addressLifecycle: createAddressLifecycleRepository(transport),
     provisioning: createProvisioningRepository(transport, gateway(gateways, "provisioning")),
     messages: createMessagesRepository(transport),
+    mailboxFilters: createResourceRepository(gateway(gateways, "mailboxFilters")),
     emailContent: createEmailContentRepository(transport),
     inbound: createInboundRepository(transport),
     threads: createThreadsRepository(transport),
     sandbox: createResourceRepository(gateway(gateways, "sandbox")),
+    prioritySenderRules: createImmutableResourceRepository(gateway(gateways, "prioritySenderRules")),
     emailDigests: createResourceRepository(gateway(gateways, "emailDigests")),
     scheduled: createResourceRepository(gateway(gateways, "scheduled")),
     events: createResourceRepository(gateway(gateways, "events")),
