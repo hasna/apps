@@ -1,0 +1,43 @@
+node_modules/
+dist/
+.build/
+*.db
+*.db-shm
+*.db-wal
+.takumi/
+.codewith/
+.hasna/
+.env
+.env.local
+.env.*.local
+.secrets
+.secrets/
+bun.lockb
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Editors
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Logs
+*.log
+npm-debug.log*
+bun-debug.log*
+
+# Coverage
+coverage/
+.nyc_output/
+.prod-full-schema.sql
+
+# local agent scratch / one-off artifacts
+.claude/
+.prod-schema-drift.txt
