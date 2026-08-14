@@ -1,0 +1,50 @@
+import { describe, expect, test } from "bun:test";
+import {
+  getSkillToolDependencies,
+  getToolPrimitive,
+  isGatewayBackedSkill,
+  listToolPrimitives,
+  validateToolPrimitiveCoverage,
+} from "./tool-primitives.js";
+
+import { useDefaultTestTimeout } from "../test-preload.js";
+
+useDefaultTestTimeout();
+
+describe("tool primitives", () => {
+  test("exposes stable primitive definitions", () => {
+    const primitives = listToolPrimitives();
+    expect(primitives.length).toBeGreaterThanOrEqual(10);
+    expect(primitives.map((primitive) => primitive.name)).toContain("ai-gateway");
+    expect(getToolPrimitive("ai-gateway")).toMatchObject({
+      name: "ai-gateway",
+      runtime: "gateway",
+      stable: true,
+    });
+  });
+
+  test("maps representative skills to primitive dependencies", () => {
+    const image = getSkillToolDependencies("ad-creative-pack");
+    expect(image?.dependencies.map((dependency) => dependency.primitive)).toEqual(expect.arrayContaining([
+      "media-image",
+    ]));
+    expect(image?.gatewayBacked).toBe(true); // category rule: Business & Marketing is AI-assisted
+    expect(image?.hostedRuntime).toBe(false);
+    expect(isGatewayBackedSkill("ad-creative-pack")).toBe(true);
+
+    const doc = getSkillToolDependencies("contract-review-report");
+    expect(doc?.dependencies.map((dependency) => dependency.primitive)).toContain("documents-read");
+    expect(doc?.dependencies.map((dependency) => dependency.primitive)).toContain("structured-data");
+  });
+
+  test("validates primitive coverage for the bundled catalog", () => {
+    const result = validateToolPrimitiveCoverage("all");
+    expect(result.valid).toBe(true);
+    // OSS catalog: 85 shipped skills (19 instruction + 66 executable), every one
+    // mapped to a primitive by category/keyword inference.
+    expect(result.skillCount).toBe(85);
+    expect(result.mappedSkillCount).toBe(result.skillCount);
+    expect(result.gatewayBackedSkillCount).toBe(41);
+    expect(result.issues).toEqual([]);
+  });
+});
