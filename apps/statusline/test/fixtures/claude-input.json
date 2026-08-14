@@ -1,0 +1,26 @@
+{
+  "hook_event_name": "Status",
+  "session_id": "abc12345-6789-4def-9012-3456789abcde",
+  "transcript_path": "/tmp/statusline-test-transcript.jsonl",
+  "cwd": "/Users/hasna/Workspace/hasna/opensource/open-statusline",
+  "model": {
+    "id": "claude-fable-5[1m]",
+    "display_name": "Fable"
+  },
+  "workspace": {
+    "current_dir": "/Users/hasna/Workspace/hasna/opensource/open-statusline",
+    "project_dir": "/Users/hasna/Workspace/hasna/opensource/open-statusline"
+  },
+  "version": "2.1.39",
+  "output_style": {
+    "name": "default"
+  },
+  "cost": {
+    "total_cost_usd": 1234.5,
+    "total_duration_ms": 5400000,
+    "total_api_duration_ms": 120000,
+    "total_lines_added": 142,
+    "total_lines_removed": 18
+  },
+  "exceeds_200k_tokens": false
+}
