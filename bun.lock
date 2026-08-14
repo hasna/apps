@@ -657,6 +657,28 @@
         "typescript": "5.9.3",
       },
     },
+    "apps/markdown": {
+      "name": "@hasna/markdown",
+      "version": "0.1.18",
+      "bin": {
+        "markdown": "dist/cli/index.js",
+        "markdown-mcp": "dist/mcp/index.js",
+        "markdown-serve": "dist/server/index.js",
+      },
+      "dependencies": {
+        "@hasna/events": "^0.1.6",
+        "@modelcontextprotocol/sdk": "^1.12.1",
+        "chalk": "^5.4.1",
+        "commander": "^13.1.0",
+        "pg": "^8.20.0",
+        "zod": "^3.24.2",
+      },
+      "devDependencies": {
+        "@types/bun": "^1.2.4",
+        "@types/pg": "^8.15.6",
+        "typescript": "^5.7.3",
+      },
+    },
     "apps/mcps": {
       "name": "@hasna/mcps",
       "version": "0.0.31",
@@ -1534,6 +1556,8 @@
     "@hasna/holdings": ["@hasna/holdings@workspace:apps/holdings"],
 
     "@hasna/knowledge": ["@hasna/knowledge@workspace:apps/knowledge"],
+
+    "@hasna/markdown": ["@hasna/markdown@workspace:apps/markdown"],
 
     "@hasna/mcp-harness": ["@hasna/mcp-harness@0.1.0", "", { "peerDependencies": { "@modelcontextprotocol/sdk": "^1.12.1", "zod": "^3.24.2" } }, "sha512-dP/IaN28a7PFhaG2EXuL3xbdbcEofjSRC2sXR4qN7jcB3yuJbUXLy4ejzL9Hh7x8HhomK1g1u7c0LqKclzFWSQ=="],
 
@@ -3420,6 +3444,8 @@
     "@hasna/knowledge/@hasna/events": ["@hasna/events@0.1.14", "", { "dependencies": { "commander": "^13.1.0" }, "bin": { "events": "dist/cli/index.js", "hasna-events": "dist/cli/index.js" } }, "sha512-UXzEM6/8XUeysIUHspe7U3lottNZ7Ir6zwEJn5wH3MCtTXHuh+Vva+uPCowf6RAVnhxZic3xrfYk5atVBRFyLA=="],
 
     "@hasna/knowledge/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
+
+    "@hasna/markdown/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
 
     "@hasna/mcps/@hasna/contracts": ["@hasna/contracts@0.8.5", "", { "dependencies": { "commander": "^13.1.0", "zod": "^3.25.76" }, "bin": { "contracts": "dist/cli/index.js", "contracts-cli": "dist/cli/contracts-cli.js" } }, "sha512-Iyk5srD6J3R7ci2g0gkyt+MCa6Da/lghPosGtgWBRgtJeGYCIAAnHF1yweoXnnqGAWZajFuDgJEWDVH11qpUhA=="],
 
