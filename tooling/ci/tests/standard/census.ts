@@ -4,7 +4,14 @@
  * Measured 2026-08-14 against origin/main @ ce470e4ad; refreshed by the
  * integrator lane at the ci/test-suites merge ref (2026-08-14) for the
  * imports that landed after that base — connectors (#80), shield (#74),
- * terminal (#88). The exception registry is DATA, not prose: every entry
+ * terminal (#88). Refreshed again 2026-08-14 by the ci/test-suites
+ * iterate-to-green fixer at the fresh merge of current main (a7d60a96,
+ * todos import #105): files (#90) gained hasna.contract.json (contracts
+ * conformance + kitVersion records added, task b0845699), instructions
+ * kitVersion advanced to 0.10.6 by #111 (record added, task 8417a133),
+ * and todos (#105) gained a pre-backend-schema-era manifest validated at
+ * pinned 0.5.2 (conformance + kitVersion records added, task 0ad82b16).
+ * The exception registry is DATA, not prose: every entry
  * is keyed to a measured violation class and carries the reason and the
  * tracked remediation task. When a violation is fixed, DELETE its exception
  * entry — a check that cannot fail is not a check.
@@ -306,6 +313,11 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
     task: "todos e0ef3e32 (contracts task — emails)",
   },
   {
+    member: "files",
+    cause: "manifest_valid: service-class manifest declares no service surface (service repos must declare at least one). Imported by #90 after the original census; validated at pinned 0.5.2.",
+    task: "todos b0845699-4e54-49f7-817e-025d4f6ca270 (contracts task — files)",
+  },
+  {
     member: "gateway",
     cause: "kitVersion 0.4.1 predates the manifest shape (deploymentModes/serviceSurfaces); validates clean at 0.5.2. kitVersion claim is stale; pinned dep 0.2.2 lacks repo-conformance.",
     task: "todos 9dc0ee28 (contracts task — gateway)",
@@ -375,6 +387,11 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
     cause: "surface_matrix/service_api_topology: no supported API surface declared; surface_bindings: serviceSurfaces[2].exportSubpath targets missing ./sdk/dist files and generatedFrom is required; self_host_artifact: service-class repo lacks a self-host deployment artifact. Imported by #74 after the original census; validated at 0.8.5 (no pinned dep, kitVersion resolution).",
     task: "todos 2aceeb94-7077-4479-b61a-0a7b33b856f7 (contracts task — shield)",
   },
+  {
+    member: "todos",
+    cause: "manifest_valid: pre-backend-schema-era manifest (kitVersion 0.8.4) validated at pinned 0.5.2 — storage.mode Invalid enum value. Expected 'local' | 'cloud', received 'sqlite'; storage Unrecognized key(s) in object: 'engines', 'pgTestGate'; serviceSurfaces.*.deploymentModes Required; serviceSurfaces.* Unrecognized key(s) in object: 'kind'/'exportSubpath'/'generatedFrom'; <root> Unrecognized key(s) in object: 'hosting'. Imported by #105 after the original census.",
+    task: "todos 0ad82b16-5a7c-43c3-95b9-db2dc64f7ffa (contracts task — todos)",
+  },
 ];
 
 /** kitVersion must match the member's pinned @hasna/contracts version
@@ -382,9 +399,12 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
 export const KIT_VERSION_EXCEPTIONS: Array<{ member: string; kitVersion: string; pinned: string }> = [
   { member: "calendar", kitVersion: "0.8.4", pinned: "0.4.2" },
   { member: "domains", kitVersion: "0.4.2", pinned: "0.5.2" },
+  { member: "files", kitVersion: "0.4.2", pinned: "0.5.2" },
   { member: "gateway", kitVersion: "0.4.1", pinned: "0.2.2" },
+  { member: "instructions", kitVersion: "0.10.6", pinned: "0.4.2" },
   { member: "logs", kitVersion: "0.4.2", pinned: "0.5.2" },
   { member: "shortlinks", kitVersion: "0.4.2", pinned: "0.5.2" },
+  { member: "todos", kitVersion: "0.8.4", pinned: "0.5.2" },
 ];
 
 /** Members with a manifest but NO pinned @hasna/contracts dependency —

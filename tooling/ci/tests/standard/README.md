@@ -34,9 +34,11 @@ Filed 2026-08-14 in todos project `5e44770b-694c-46a3-864f-20a2b9ec1de2`
   `a8c97621`, logs `d166125e`, machines `6ab8775b`, mementos `5695459d`,
   prompts `eb3f331d`, sheets `d766ac9c`, signatures `7001d8d7`, slides
   `ccc2e931`, tables `daaa2841`, telephony `26ad6a16`) plus `shield`
-  (`2aceeb94`, added by the integrator lane for import #74) and `hooks`
-  (`03d497e8`, added by the integrator lane when #102's manifest landed)
-  — per-member tasks.
+  (`2aceeb94`, added by the integrator lane for import #74), `hooks`
+  (`03d497e8`, added by the integrator lane when #102's manifest landed),
+  `files` (`b0845699`, added by the iterate-to-green fixer when #90's
+  manifest landed) and `todos` (`0ad82b16`, added by the iterate-to-green
+  fixer when #105's manifest landed) — per-member tasks.
 - 25 members without `hasna.contract.json` (24 at the original census plus
   `connectors` and `terminal`, added by the integrator lane for imports
   #80/#88, minus `hooks`, whose manifest landed in #102) — one aggregate
