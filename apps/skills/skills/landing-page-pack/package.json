@@ -1,0 +1,10 @@
+{
+  "name": "landing-page-pack",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Hosted premium landing page copy and conversion artifact generator",
+  "type": "module",
+  "skills": {
+    "kind": "instruction"
+  }
+}
