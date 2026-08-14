@@ -12,6 +12,7 @@ import { basename, dirname, join, relative } from "path";
 
 import type { SkillKind } from "./registry-types.js";
 import { parseSkillFrontmatter } from "./skill-validation.js";
+import { computeContentHash } from "./skill-hash.js";
 import {
   PORTABLE_SKILL_DEFAULT_VERSION,
   PORTABLE_SKILL_SCHEMA,
@@ -19,6 +20,8 @@ import {
   type PortableSkillCommand,
   type PortableSkillInput,
   type PortableSkillManifest,
+  type PortableSkillProvenance,
+  type PortableSkillRuntimeContract,
 } from "./portable-skills-types.js";
 
 interface PackageJson {
@@ -56,6 +59,29 @@ const DEFAULT_INPUTS: PortableSkillInput[] = [
     description: "Arguments passed after `skills run <name>`.",
   },
 ];
+
+/**
+ * Default runtime contract (hasna.skill.v1). `bun` is the Hasna default
+ * runtime; the sandbox is read-only by default, execution is time-capped at
+ * 900s and does not assume network egress.
+ */
+export function defaultRuntimeContract(name: string, entrypoint?: string): PortableSkillRuntimeContract {
+  return {
+    runtime: "bun",
+    entrypoint: entrypoint ?? "src/index.ts",
+    timeout: 900,
+    needs_network: false,
+    env: [],
+    sandbox: "readonly-fs",
+    system_deps: [],
+    artifacts: [],
+  };
+}
+
+/** Provenance defaults; content_hash is filled at write time over the bundle. */
+export function defaultProvenance(sourceCommit = "unknown"): PortableSkillProvenance {
+  return { source_commit: sourceCommit };
+}
 
 export function normalizePortableSkillName(name: string): string {
   const normalized = name
@@ -110,6 +136,8 @@ export function readPortableSkillManifest(skillPath: string, fallbackName = base
     ...(kind ? { kind } : {}),
     inputs: kind === "instruction" ? (parseManifestInputs(jsonManifest) ?? []) : (parseManifestInputs(jsonManifest) ?? DEFAULT_INPUTS),
     commands,
+    ...(parseManifestRuntime(jsonManifest) ? { runtime: parseManifestRuntime(jsonManifest) } : {}),
+    ...(parseManifestProvenance(jsonManifest) ? { provenance: parseManifestProvenance(jsonManifest) } : {}),
   };
 }
 
@@ -131,13 +159,15 @@ export function createInstructionManifest(name: string, options: { description: 
     kind: "instruction",
     inputs: [],
     commands: [],
+    runtime: defaultRuntimeContract(name),
+    provenance: defaultProvenance(),
   };
 }
 
 export function writeInstructionSkillTemplate(skillPath: string, manifest: PortableSkillManifest): void {
   mkdirSync(skillPath, { recursive: true });
   writeFileSync(join(skillPath, "SKILL.md"), renderInstructionSkillMd(manifest));
-  writeFileSync(join(skillPath, "skill.json"), renderSkillJson(manifest));
+  writeSkillJsonWithHash(skillPath, manifest);
 }
 
 function renderInstructionSkillMd(manifest: PortableSkillManifest): string {
@@ -164,17 +194,79 @@ export function createPortableManifest(name: string, options: { description: str
       entry: "src/index.ts",
       args: ["...args"],
     }],
+    runtime: defaultRuntimeContract(name, "src/index.ts"),
+    provenance: defaultProvenance(),
   };
 }
 
 export function writePortableSkillTemplate(skillPath: string, manifest: PortableSkillManifest): void {
   mkdirSync(join(skillPath, "src"), { recursive: true });
   writeFileSync(join(skillPath, "SKILL.md"), renderSkillMd(manifest));
-  writeFileSync(join(skillPath, "skill.json"), renderSkillJson(manifest));
   writeFileSync(join(skillPath, "AGENTS.md"), renderAgentsMd(manifest));
   writeFileSync(join(skillPath, "package.json"), renderPackageJson(manifest));
   writeFileSync(join(skillPath, "tsconfig.json"), renderTsconfig());
   writeFileSync(join(skillPath, "src", "index.ts"), renderEntrypoint(manifest));
+  writeSkillJsonWithHash(skillPath, manifest);
+}
+
+/**
+ * Fill the runtime contract and provenance defaults a manifest may lack, so
+ * every emitted skill.json carries the full hasna.skill.v1 contract.
+ */
+function fillContractDefaults(manifest: PortableSkillManifest, entrypoint?: string): PortableSkillManifest {
+  const resolvedEntrypoint = entrypoint ?? manifest.commands[0]?.entry;
+  return {
+    ...manifest,
+    standard: PORTABLE_SKILL_STANDARD,
+    runtime: manifest.runtime ?? defaultRuntimeContract(manifest.name, resolvedEntrypoint),
+    provenance: {
+      ...defaultProvenance(),
+      ...(manifest.provenance ?? {}),
+    },
+  };
+}
+
+/**
+ * Write skill.json with the canonical content_hash computed over the current
+ * bundle. Preserves unknown keys already present in an existing skill.json
+ * (merge, never replace) and recomputes the hash whenever content changed.
+ *
+ * The manifest is written hashless FIRST so the canonical bundle covers
+ * skill.json itself; canonicalization strips content_hash, so adding the hash
+ * afterwards does not change the digest.
+ */
+export function writeSkillJsonWithHash(skillPath: string, manifest: PortableSkillManifest): PortableSkillManifest {
+  const withDefaults = fillContractDefaults(manifest);
+  const existing = readExistingSkillJson(skillPath);
+  const withoutHash: PortableSkillManifest = {
+    ...withDefaults,
+    provenance: {
+      ...(withDefaults.provenance ?? {}),
+      content_hash: undefined,
+    },
+  };
+  writeFileSync(join(skillPath, "skill.json"), `${JSON.stringify({ ...existing, ...renderSkillJsonObject(withoutHash) }, null, 2)}\n`);
+  const hash = computeContentHash(skillPath);
+  const withHash: PortableSkillManifest = {
+    ...withDefaults,
+    provenance: {
+      ...(withDefaults.provenance ?? {}),
+      content_hash: hash,
+    },
+  };
+  writeFileSync(join(skillPath, "skill.json"), `${JSON.stringify({ ...existing, ...renderSkillJsonObject(withHash) }, null, 2)}\n`);
+  return withHash;
+}
+
+function readExistingSkillJson(skillPath: string): Record<string, unknown> {
+  const path = join(skillPath, "skill.json");
+  if (!existsSync(path)) return {};
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(path, "utf-8"));
+    return isRecord(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
 }
 
 export function ensurePortableSkillFiles(skillPath: string, manifest: PortableSkillManifest): PortableSkillManifest {
@@ -207,10 +299,11 @@ export function ensurePortableSkillFiles(skillPath: string, manifest: PortableSk
   }
   if (!existsSync(join(skillPath, "SKILL.md"))) writeFileSync(join(skillPath, "SKILL.md"), renderSkillMd(next));
   else writeFileSync(join(skillPath, "SKILL.md"), ensureSkillMdFrontmatter(readFileSync(join(skillPath, "SKILL.md"), "utf-8"), next));
-  if (!existsSync(join(skillPath, "skill.json"))) writeFileSync(join(skillPath, "skill.json"), renderSkillJson(next));
   if (!existsSync(join(skillPath, "AGENTS.md"))) writeFileSync(join(skillPath, "AGENTS.md"), renderAgentsMd(next));
   ensurePackageJson(skillPath, next);
   if (!existsSync(join(skillPath, "tsconfig.json"))) writeFileSync(join(skillPath, "tsconfig.json"), renderTsconfig());
+  // Hash last: every file it covers must already be on disk in final form.
+  writeSkillJsonWithHash(skillPath, next);
   return readPortableSkillManifest(skillPath, next.name);
 }
 
@@ -275,7 +368,7 @@ export function ensureInstructionSkillFiles(skillPath: string, manifest: Portabl
   if (!existsSync(join(skillPath, "SKILL.md"))) {
     writeFileSync(join(skillPath, "SKILL.md"), renderSkillMd(next));
   }
-  writeFileSync(join(skillPath, "skill.json"), renderInstructionSkillJson(next));
+  writeSkillJsonWithHash(skillPath, next);
   return readPortableSkillManifest(skillPath, next.name);
 }
 
@@ -312,14 +405,18 @@ function isExcludedCopyEntry(name: string, isFirstSegment: boolean): boolean {
 }
 
 function renderSkillMd(manifest: PortableSkillManifest): string {
-  const tags = manifest.tags?.length
-    ? `tags:\n${manifest.tags.map((tag) => `  - ${tag}`).join("\n")}\n`
-    : "";
-  return `---\nname: ${manifest.name}\ndescription: ${manifest.description}\nversion: ${manifest.version}\nsource: custom\ncategory: ${manifest.category ?? "Development Tools"}\n${tags}---\n\n# ${manifest.displayName ?? displayName(manifest.name)}\n\n${manifest.description}\n\n## Usage\n\n\`\`\`bash\nskills run ${manifest.name} --help\n\`\`\`\n`;
+  // Consumer frontmatter stays minimal (name + description only): portable
+  // metadata lives in skill.json (hasna.skill.v1). See docs/authoring-rule-amendment.md.
+  return `---\nname: ${manifest.name}\ndescription: ${manifest.description}\n---\n\n# ${manifest.displayName ?? displayName(manifest.name)}\n\n${manifest.description}\n\n## Usage\n\n\`\`\`bash\nskills run ${manifest.name} --help\n\`\`\`\n`;
 }
 
 export function renderSkillJson(manifest: PortableSkillManifest): string {
-  return `${JSON.stringify({
+  return `${JSON.stringify(renderSkillJsonObject(manifest), null, 2)}\n`;
+}
+
+/** The skill.json object for a manifest, with contract defaults applied. */
+export function renderSkillJsonObject(manifest: PortableSkillManifest): Record<string, unknown> {
+  return {
     $schema: manifest.$schema ?? PORTABLE_SKILL_SCHEMA,
     standard: PORTABLE_SKILL_STANDARD,
     name: manifest.name,
@@ -329,9 +426,11 @@ export function renderSkillJson(manifest: PortableSkillManifest): string {
     category: manifest.category ?? "Development Tools",
     tags: manifest.tags ?? ["custom", manifest.name],
     ...(manifest.kind ? { kind: manifest.kind } : {}),
-    inputs: manifest.inputs,
-    commands: manifest.commands,
-  }, null, 2)}\n`;
+    // Instruction skills are SKILL.md-primary: no inputs or commands declared.
+    ...(manifest.kind === "instruction" ? {} : { inputs: manifest.inputs, commands: manifest.commands }),
+    ...(manifest.runtime ? { runtime: manifest.runtime } : {}),
+    ...(manifest.provenance ? { provenance: manifest.provenance } : {}),
+  };
 }
 
 function renderInstructionSkillJson(manifest: PortableSkillManifest): string {
@@ -345,6 +444,8 @@ function renderInstructionSkillJson(manifest: PortableSkillManifest): string {
     category: manifest.category ?? "Development Tools",
     tags: manifest.tags ?? ["custom", manifest.name],
     kind: "instruction",
+    ...(manifest.runtime ? { runtime: manifest.runtime } : {}),
+    ...(manifest.provenance ? { provenance: manifest.provenance } : {}),
   }, null, 2)}\n`;
 }
 
@@ -381,7 +482,7 @@ function renderEntrypoint(manifest: PortableSkillManifest): string {
 function renderAgentsMd(manifest: PortableSkillManifest): string {
   const command = manifest.commands[0];
   const entry = command?.entry ?? "src/index.ts";
-  return `# Agent Build Instructions: ${manifest.name}\n\nThis folder is a portable @hasna/skills skill. Build it in place and keep it valid against the portable skill standard.\n\n## Contract\n\n- Skill name: \`${manifest.name}\`\n- Description: ${manifest.description}\n- Manifest files: \`SKILL.md\` frontmatter and \`skill.json\`\n- Runtime entrypoint: \`${entry}\`\n- User command: \`skills run ${manifest.name} [args]\`\n\n## Build Rules\n\n1. Put executable logic in \`${entry}\` or files imported by it.\n2. Keep \`skill.json\` updated when inputs, commands, or version change.\n3. Keep \`SKILL.md\` concise and compatible with Codewith-style skill frontmatter: \`name\`, \`description\`, \`version\`, optional \`category\`, and optional \`tags\`.\n4. Add tests under \`tests/\` when behavior is non-trivial, then run \`bun test\` from this folder if tests exist.\n5. Verify with \`skills validate ${manifest.name}\` and smoke-test with \`skills run ${manifest.name} --help\`.\n6. Do not commit secrets, generated credentials, \`.env\`, \`node_modules\`, or build output.\n`;
+  return `# Agent Build Instructions: ${manifest.name}\n\nThis folder is a portable @hasna/skills skill. Build it in place and keep it valid against the portable skill standard.\n\n## Contract\n\n- Skill name: \`${manifest.name}\`\n- Description: ${manifest.description}\n- Portable metadata: \`skill.json\` (standard \`hasna.skill.v1\`) — the source of truth\n- Consumer frontmatter: \`SKILL.md\` keeps \`name\` + \`description\` only\n- Runtime entrypoint: \`${entry}\`\n- User command: \`skills run ${manifest.name} [args]\`\n\n## Build Rules\n\n1. Put executable logic in \`${entry}\` or files imported by it.\n2. Keep \`skill.json\` updated when inputs, commands, version, or the runtime contract change. Any content change requires a version bump.\n3. Keep \`SKILL.md\` concise: \`name\` + \`description\` frontmatter only.\n4. Add tests under \`tests/\` when behavior is non-trivial, then run \`bun test\` from this folder if tests exist.\n5. Verify with \`skills validate ${manifest.name}\` (checks the schema and the canonical \`content_hash\`) and smoke-test with \`skills run ${manifest.name} --help\`.\n6. Do not commit secrets, generated credentials, \`.env\`, \`node_modules\`, or build output.\n`;
 }
 
 function ensureSkillMdFrontmatter(content: string, manifest: PortableSkillManifest): string {
@@ -411,8 +512,34 @@ function parseManifestCommands(value: Record<string, unknown> | undefined): Port
   return commands.length ? commands : undefined;
 }
 
-function parseManifestInputs(value: Record<string, unknown> | undefined): PortableSkillInput[] | undefined {
-  const raw = value?.inputs;
+function parseManifestRuntime(value: Record<string, unknown> | undefined): PortableSkillRuntimeContract | undefined {
+  const raw = value?.runtime;
+  if (!isRecord(raw)) return undefined;
+  const runtimeName = stringValue(raw.runtime);
+  if (!runtimeName) return undefined;
+  const parsed: PortableSkillRuntimeContract = { runtime: runtimeName as PortableSkillRuntimeContract["runtime"] };
+  if (stringValue(raw.version)) parsed.version = stringValue(raw.version);
+  if (stringValue(raw.entrypoint)) parsed.entrypoint = stringValue(raw.entrypoint);
+  if (typeof raw.timeout === "number") parsed.timeout = raw.timeout;
+  if (typeof raw.needs_network === "boolean") parsed.needs_network = raw.needs_network;
+  if (Array.isArray(raw.env)) parsed.env = raw.env.filter((item): item is string => typeof item === "string");
+  if (stringValue(raw.sandbox)) parsed.sandbox = raw.sandbox as PortableSkillRuntimeContract["sandbox"];
+  if (Array.isArray(raw.system_deps)) parsed.system_deps = raw.system_deps.filter((item): item is string => typeof item === "string") as PortableSkillRuntimeContract["system_deps"];
+  if (Array.isArray(raw.artifacts)) parsed.artifacts = raw.artifacts.filter((item): item is string => typeof item === "string");
+  return parsed;
+}
+
+function parseManifestProvenance(value: Record<string, unknown> | undefined): PortableSkillProvenance | undefined {
+  const raw = value?.provenance;
+  if (!isRecord(raw)) return undefined;
+  const parsed: PortableSkillProvenance = {};
+  if (stringValue(raw.source_commit)) parsed.source_commit = stringValue(raw.source_commit);
+  if (stringValue(raw.content_hash)) parsed.content_hash = stringValue(raw.content_hash);
+  if (stringValue(raw.changelog)) parsed.changelog = stringValue(raw.changelog);
+  return Object.keys(parsed).length > 0 ? parsed : undefined;
+}
+
+function parseManifestInputs(value: Record<string, unknown> | undefined): PortableSkillInput[] | undefined {  const raw = value?.inputs;
   if (!Array.isArray(raw)) return undefined;
   const inputs = raw
     .map((item) => {
