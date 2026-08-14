@@ -6,7 +6,8 @@ import { listPlans } from "../db/plans.js";
 import { listProjects } from "../db/projects.js";
 import { listTaskLists } from "../db/task-lists.js";
 import { listTasks, replaceTaskTags } from "../db/tasks.js";
-import { listTemplates } from "../db/templates.js";
+import { getTemplateTasks, listTemplates } from "../db/templates.js";
+import type { TaskHistory } from "../types/index.js";
 import {
   getStorageTombstone,
   listStorageTombstones,
@@ -21,6 +22,11 @@ import type {
   TodosProjectMachinePath,
 } from "./interfaces.js";
 import { validateSnapshotRoutingDestinationConflicts, validateSnapshotRoutingRecords } from "../lib/slugs.js";
+import {
+  auditHistoryRowsAreFieldIdentical,
+  divergentAuditHistoryReplayError,
+  forbiddenAuditHistoryTombstoneError,
+} from "./audit-history-import.js";
 
 const PROJECT_COLUMNS = [
   "id", "name", "path", "description", "task_list_id", "task_prefix", "task_counter",
@@ -52,6 +58,11 @@ const TEMPLATE_COLUMNS = [
   "project_id", "plan_id", "metadata", "version", "created_at", "machine_id", "synced_at",
 ] as const;
 
+const TEMPLATE_TASK_COLUMNS = [
+  "id", "template_id", "position", "title_pattern", "description", "priority", "tags",
+  "task_type", "condition", "include_template_id", "depends_on_positions", "metadata", "created_at",
+] as const;
+
 const TASK_COLUMNS = [
   "id", "short_id", "project_id", "parent_id", "plan_id", "task_list_id", "title",
   "description", "status", "priority", "agent_id", "assigned_to", "session_id",
@@ -71,7 +82,7 @@ const AUDIT_COLUMNS = [
   "created_at", "machine_id",
 ] as const;
 
-const JSON_COLUMNS = new Set(["tags", "metadata", "permissions", "capabilities", "variables"]);
+const JSON_COLUMNS = new Set(["tags", "metadata", "permissions", "capabilities", "variables", "depends_on_positions"]);
 const BOOLEAN_COLUMNS = new Set(["requires_approval"]);
 
 export function exportSqliteTodosStorageSnapshot(db?: Database): TodosStorageSnapshot {
@@ -86,6 +97,7 @@ export function exportSqliteTodosStorageSnapshot(db?: Database): TodosStorageSna
     agents: listAgents({ include_archived: true }, d),
     taskLists: listTaskLists(undefined, d),
     templates: listTemplates(d),
+    templateTasks: listTemplates(d).flatMap((template) => getTemplateTasks(template.id, d)),
     auditHistory: getRecentActivity(Number.MAX_SAFE_INTEGER, d),
     tombstones: listStorageTombstones(d),
   };
@@ -120,7 +132,10 @@ export function importSqliteTodosStorageSnapshot(
   }
   // Preflight the full snapshot before any write so malformed routing metadata
   // cannot leave an otherwise-valid prefix partially imported.
+  const auditImport = preflightAuditHistoryImport(d, snapshot.auditHistory, snapshot.tombstones ?? []);
+  result.errors.push(...auditImport.errors);
   if (result.errors.length > 0) return result;
+  result.skipped += auditImport.identicalReplayCount;
 
   const applyRows = (
     objectType: StorageTombstoneObjectType,
@@ -128,6 +143,7 @@ export function importSqliteTodosStorageSnapshot(
     columns: readonly string[],
     rows: readonly unknown[],
     updateClockColumn?: string,
+    acceptEqualClock = true,
     afterUpsert?: (row: Record<string, unknown>, changed: boolean) => void,
   ) => {
     for (const row of rows) {
@@ -140,7 +156,7 @@ export function importSqliteTodosStorageSnapshot(
           result.skipped += 1;
           continue;
         }
-        const state = upsertById(d, table, columns, record, updateClockColumn);
+        const state = upsertById(d, table, columns, record, updateClockColumn, acceptEqualClock);
         if (state === "inserted") result.inserted += 1;
         else if (state === "updated") result.updated += 1;
         else result.skipped += 1;
@@ -155,17 +171,105 @@ export function importSqliteTodosStorageSnapshot(
   applyRows("project_machine_paths", "project_machine_paths", PROJECT_MACHINE_PATH_COLUMNS, snapshot.projectMachinePaths ?? [], "updated_at");
   applyRows("agents", "agents", AGENT_COLUMNS, snapshot.agents, "last_seen_at");
   applyRows("task_lists", "task_lists", TASK_LIST_COLUMNS, snapshot.taskLists, "updated_at");
-  applyRows("plans", "plans", PLAN_COLUMNS, snapshot.plans, "updated_at");
+  // Plans have no optimistic-lock version. Equal-clock replacement therefore
+  // cannot distinguish an idempotent replay from a competing full-row writer;
+  // first-writer-wins is the only safe deterministic rule.
+  applyRows("plans", "plans", PLAN_COLUMNS, snapshot.plans, "updated_at", false);
   applyRows("templates", "task_templates", TEMPLATE_COLUMNS, snapshot.templates);
-  applyRows("tasks", "tasks", TASK_COLUMNS, sortedTasks(snapshot.tasks), "updated_at", (row, changed) => {
+  applyRows("template_tasks", "template_tasks", TEMPLATE_TASK_COLUMNS, snapshot.templateTasks ?? []);
+  applyRows("tasks", "tasks", TASK_COLUMNS, sortedTasks(snapshot.tasks), "updated_at", true, (row, changed) => {
     if (changed && Array.isArray(row["tags"]) && typeof row["id"] === "string") {
       replaceTaskTags(row["id"], row["tags"].filter((tag): tag is string => typeof tag === "string"), d);
     }
   });
-  applyRows("audit_history", "task_history", AUDIT_COLUMNS, snapshot.auditHistory);
+  insertAuditHistoryRows(d, auditImport.rowsToInsert, result);
   applyTombstones(d, snapshot.tombstones ?? [], result);
 
   return result;
+}
+
+function preflightAuditHistoryImport(
+  db: Database,
+  rows: readonly TaskHistory[],
+  tombstones: readonly TodosStorageTombstone[],
+): {
+  rowsToInsert: TaskHistory[];
+  identicalReplayCount: number;
+  errors: string[];
+} {
+  const errors = tombstones
+    .filter((tombstone) => (tombstone.object_type as string) === "audit_history")
+    .map((tombstone) => forbiddenAuditHistoryTombstoneError(tombstone.object_id));
+  const rowsToInsert: TaskHistory[] = [];
+  const seen = new Map<string, TaskHistory>();
+  let identicalReplayCount = 0;
+
+  for (const rawRow of rows) {
+    try {
+      const row = asRecord(rawRow) as unknown as TaskHistory;
+      if (typeof row.id !== "string" || !row.id) {
+        throw new Error("task_history row is missing id");
+      }
+      const prior = seen.get(row.id);
+      if (prior) {
+        if (auditHistoryRowsAreFieldIdentical(prior, row)) identicalReplayCount += 1;
+        else errors.push(divergentAuditHistoryReplayError(row.id));
+        continue;
+      }
+      seen.set(row.id, row);
+
+      const existing = getAuditHistoryById(db, row.id);
+      if (!existing) {
+        rowsToInsert.push(row);
+      } else if (auditHistoryRowsAreFieldIdentical(existing, row)) {
+        identicalReplayCount += 1;
+      } else {
+        errors.push(divergentAuditHistoryReplayError(row.id));
+      }
+    } catch (error) {
+      errors.push(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  return { rowsToInsert, identicalReplayCount, errors };
+}
+
+function insertAuditHistoryRows(
+  db: Database,
+  rows: readonly TaskHistory[],
+  result: TodosStorageImportResult,
+): void {
+  for (const rawRow of rows) {
+    try {
+      const row = asRecord(rawRow);
+      const presentColumns = AUDIT_COLUMNS.filter((column) => column in row);
+      if (!presentColumns.includes("id")) presentColumns.unshift("id");
+      const placeholders = presentColumns.map(() => "?").join(", ");
+      const values = presentColumns.map((column) => valueForColumn(column, row[column]));
+      const changes = db.run(
+        `INSERT OR IGNORE INTO task_history (${presentColumns.join(", ")}) VALUES (${placeholders})`,
+        values,
+      ).changes;
+      if (changes > 0) {
+        result.inserted += 1;
+        continue;
+      }
+      const existing = getAuditHistoryById(db, String(row["id"]));
+      if (existing && auditHistoryRowsAreFieldIdentical(existing, row as unknown as TaskHistory)) {
+        result.skipped += 1;
+      } else {
+        result.errors.push(divergentAuditHistoryReplayError(String(row["id"])));
+      }
+    } catch (error) {
+      result.errors.push(error instanceof Error ? error.message : String(error));
+    }
+  }
+}
+
+function getAuditHistoryById(db: Database, id: string): TaskHistory | null {
+  return db.query(
+    `SELECT ${AUDIT_COLUMNS.join(", ")} FROM task_history WHERE id = ? LIMIT 1`,
+  ).get(id) as TaskHistory | null;
 }
 
 function upsertById(
@@ -174,6 +278,7 @@ function upsertById(
   columns: readonly string[],
   row: Record<string, unknown>,
   updateClockColumn?: string,
+  acceptEqualClock = true,
 ): "inserted" | "updated" | "skipped" {
   const id = row["id"];
   if (typeof id !== "string" || !id) throw new Error(`${table} row is missing id`);
@@ -192,7 +297,7 @@ function upsertById(
       : `${column} = excluded.${column}`))
     .join(", ");
   const clockGuard = updateClockColumn && presentColumns.includes(updateClockColumn)
-    ? ` WHERE ${table}.${updateClockColumn} IS NULL OR ${table}.${updateClockColumn} <= excluded.${updateClockColumn}`
+    ? ` WHERE ${table}.${updateClockColumn} IS NULL OR ${table}.${updateClockColumn} ${acceptEqualClock ? "<=" : "<"} excluded.${updateClockColumn}`
     : "";
   const sql = updateSet
     ? `INSERT INTO ${table} (${presentColumns.join(", ")}) VALUES (${placeholders})
@@ -275,7 +380,8 @@ function tableForTombstone(objectType: TodosStorageTombstone["object_type"]): st
   if (objectType === "agents") return "agents";
   if (objectType === "task_lists") return "task_lists";
   if (objectType === "templates") return "task_templates";
-  return "task_history";
+  if (objectType === "template_tasks") return "template_tasks";
+  throw new Error(`unsupported storage tombstone object_type: ${String(objectType)}`);
 }
 
 function listRows<T extends readonly string[]>(

@@ -22,8 +22,10 @@ import {
   failTask,
   claimNextTask,
 } from "../db/tasks.js";
-import { getDatabase } from "../db/database.js";
-import { VersionConflictError, CompletionGuardError, LockError, TaskNotFoundError } from "../types/index.js";
+import { assignedToAliasSet, getDatabase } from "../db/database.js";
+import { collapseEnumValues, resolveEnumVocabulary } from "../lib/enum-vocabulary.js";
+import { TASK_STATUSES } from "../types/index.js";
+import { VersionConflictError, CompletionGuardError, LockError, TaskNotFoundError, TaskNotStartableError } from "../types/index.js";
 import { listProjects, createProject, deleteProject } from "../db/projects.js";
 import { listAgents, registerAgent, isAgentConflict, getOrgChart, getDirectReports, updateAgent, deleteAgent, InvalidAgentNameError } from "../db/agents.js";
 import { createPlan, getPlan, listPlans, updatePlan, deletePlan } from "../db/plans.js";
@@ -73,10 +75,13 @@ function mapTaskError(e: unknown, json: (data: unknown, status?: number) => Resp
       retry_after: e.retryAfterSeconds ?? null,
     }, 409);
   }
+  if (e instanceof TaskNotStartableError) {
+    return json({ error: e.message, code: TaskNotStartableError.code }, 409);
+  }
   // The lifecycle layer throws a plain Error (no typed class yet) for blocked
-  // dependencies and non-startable transitions. Match the known phrases so these
-  // real precondition failures surface as 409 instead of a generic 500.
-  if (e instanceof Error && (/ is blocked by /.test(e.message) || /cannot be started/.test(e.message))) {
+  // dependencies. Match the known phrase so this real precondition failure
+  // surfaces as 409 instead of a generic 500.
+  if (e instanceof Error && / is blocked by /.test(e.message)) {
     return json({ error: e.message, code: "TASK_NOT_STARTABLE" }, 409);
   }
   return null;
@@ -231,8 +236,27 @@ export function handleStats(_ctx: RouteContext, json: (data: unknown, status?: n
   });
 }
 
+/**
+ * Validate the `status` query param of the dashboard API against `TASK_STATUSES`.
+ *
+ * Unvalidated it was cast straight into the `listTasks` filter, so
+ * `?status=open` answered HTTP 200 with `[]` — the same silent empty result the
+ * CLI produced, one layer down. Returns the validated filter value, or an error
+ * message for the caller to turn into a 400.
+ */
+function taskStatusQueryParam(url: URL):
+  | { ok: true; value: string | string[] | undefined }
+  | { ok: false; message: string } {
+  const raw = url.searchParams.get("status");
+  if (!raw) return { ok: true, value: undefined };
+  const result = resolveEnumVocabulary(raw, { name: "status", vocabulary: TASK_STATUSES });
+  if (!result.ok) return { ok: false, message: result.message };
+  return { ok: true, value: collapseEnumValues(result.values) };
+}
+
 export async function handleListTasks(_req: Request, url: URL, _ctx: RouteContext, json: (data: unknown, status?: number) => Response, taskToSummary: (task: Task, fields?: string[]) => unknown): Promise<Response> {
-  const status = url.searchParams.get("status") || undefined;
+  const statusParam = taskStatusQueryParam(url);
+  if (!statusParam.ok) return json({ error: statusParam.message }, 400);
   const projectId = url.searchParams.get("project_id") || undefined;
   const sessionId = url.searchParams.get("session_id") || undefined;
   const agentId = url.searchParams.get("agent_id") || undefined;
@@ -240,7 +264,7 @@ export async function handleListTasks(_req: Request, url: URL, _ctx: RouteContex
   const offsetParam = url.searchParams.get("offset");
   const fields = parseFieldsParam(url);
   const tasks = listTasks({
-    status: status as Task["status"] | undefined,
+    status: statusParam.value as Task["status"] | Task["status"][] | undefined,
     project_id: projectId,
     session_id: sessionId,
     agent_id: agentId,
@@ -252,13 +276,24 @@ export async function handleListTasks(_req: Request, url: URL, _ctx: RouteContex
 
 export async function handleCreateTask(req: Request, ctx: RouteContext, json: (data: unknown, status?: number) => Response, taskToSummary: (task: Task, fields?: string[]) => unknown): Promise<Response> {
   try {
-    const body = await req.json() as { title: string; description?: string; priority?: string; project_id?: string };
+    const body = await req.json() as {
+      title: string; description?: string; priority?: string; project_id?: string;
+      agent_id?: string; created_by?: string; assigned_to?: string;
+    };
     if (!body.title) return json({ error: "Missing 'title'" }, 400);
+    // Authorship was dropped entirely on this route, so every task filed from the
+    // dashboard was unattributable regardless of what the caller sent. The
+    // dashboard has no API-key principal, so fall back to a literal marker rather
+    // than to null — "filed from the dashboard" is a real answer, and null is not.
+    const createdBy = body.created_by ?? body.agent_id ?? "dashboard";
     const task = createTask({
       title: body.title,
       description: body.description,
       priority: body.priority as Task["priority"] | undefined,
       project_id: body.project_id,
+      agent_id: body.agent_id ?? createdBy,
+      created_by: createdBy,
+      ...(body.assigned_to ? { assigned_to: body.assigned_to } : {}),
     });
     ctx.broadcastEvent({ type: "task", task_id: task.id, action: "created", agent_id: task.agent_id, project_id: task.project_id });
     return json(taskToSummary(task), 201);
@@ -304,9 +339,19 @@ export async function handleUpsertTask(req: Request, ctx: RouteContext, json: (d
 
 export function handleTasksExport(_req: Request, url: URL, _ctx: RouteContext, _json: (data: unknown, status?: number) => Response, taskToSummary: (task: Task, fields?: string[]) => unknown): Response {
   const format = url.searchParams.get("format") || "json";
-  const status = url.searchParams.get("status") || undefined;
+  const statusParam = taskStatusQueryParam(url);
+  if (!statusParam.ok) {
+    return new Response(JSON.stringify({ error: statusParam.message }), {
+      status: 400,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
   const projectId = url.searchParams.get("project_id") || undefined;
-  const tasks = listTasks({ status: status as any, project_id: projectId, limit: 10000 });
+  const tasks = listTasks({
+    status: statusParam.value as Task["status"] | Task["status"][] | undefined,
+    project_id: projectId,
+    limit: 10000,
+  });
   const summaries = tasks.map(t => taskToSummary(t));
 
   if (format === "csv") {
@@ -624,9 +669,14 @@ export async function handleAgentMe(_req: Request, url: URL, _ctx: RouteContext,
 }
 
 export function handleAgentQueue(agentId: string, _ctx: RouteContext, json: (data: unknown, status?: number) => Response, taskToSummary: (task: Task, fields?: string[]) => unknown): Response {
+  // Alias-resolved (task 84c77210): `assigned_to` holds an agent id from one
+  // write path and a resolved name from another — see database.ts for the
+  // root cause. `listTasks` here has no `assigned_to` filter applied, so
+  // this in-memory filter is the only agent match for the queue.
+  const aliasSet = assignedToAliasSet(getDatabase(), agentId);
   const pending = listTasks({ status: "pending" as any });
   const queue = pending.filter(t =>
-    t.assigned_to === agentId || t.agent_id === agentId || (!t.assigned_to && !t.locked_by)
+    aliasSet.has((t.assigned_to ?? "").toLowerCase()) || t.agent_id === agentId || (!t.assigned_to && !t.locked_by)
   );
   const order: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
   queue.sort((a, b) => (order[a.priority] ?? 4) - (order[b.priority] ?? 4) || new Date(a.created_at).getTime() - new Date(b.created_at).getTime());

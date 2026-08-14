@@ -19,12 +19,10 @@ import {
 } from "./import-export-bridge.js";
 
 let tempDir: string;
-let dbPath: string;
 
 beforeEach(() => {
   tempDir = mkdtempSync(join(tmpdir(), "todos-bridge-"));
-  dbPath = join(tempDir, "todos.db");
-  process.env["TODOS_DB_PATH"] = dbPath;
+  process.env["TODOS_DB_PATH"] = ":memory:";
   resetDatabase();
   getDatabase();
 });
@@ -47,6 +45,21 @@ describe("import-export bridge", () => {
 
     const validation = validateBundle(bundle);
     expect(validation.valid).toBe(true);
+  });
+
+  it("redacts local bundles by default and blocks unacknowledged plaintext exports", () => {
+    const fakeToken = ["ghp", "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"].join("_");
+    const task = createTask({ title: "Legacy export" });
+    getDatabase().run("UPDATE tasks SET title = ?, description = ?, metadata = ? WHERE id = ?", [
+      `legacy ${fakeToken}`,
+      `description ${fakeToken}`,
+      JSON.stringify({ token: fakeToken }),
+      task.id,
+    ]);
+
+    const bundle = exportLocalBundle();
+    expect(JSON.stringify(bundle)).not.toContain(fakeToken);
+    expect(() => exportLocalBundle({ profile: "plaintext" })).toThrow(/acknowledge_plaintext/);
   });
 
   it("writes and reads bundle files", () => {
@@ -96,7 +109,7 @@ describe("import-export bridge", () => {
     const bundle = exportLocalBundle();
     closeDatabase();
 
-    process.env["TODOS_DB_PATH"] = join(tempDir, "dep.db");
+    process.env["TODOS_DB_PATH"] = ":memory:";
     resetDatabase();
     getDatabase();
     importBundle({ ...bundle, projects: [], plans: [], templates: [], comments: [], verification_records: [] }, { strategy: "remote_wins" });
@@ -113,7 +126,7 @@ describe("import-export bridge", () => {
   it("dry run does not mutate database", () => {
     const bundle = exportLocalBundle();
     closeDatabase();
-    process.env["TODOS_DB_PATH"] = join(tempDir, "dry.db");
+    process.env["TODOS_DB_PATH"] = ":memory:";
     resetDatabase();
     getDatabase();
     const before = getDatabase().query("SELECT COUNT(*) as c FROM tasks").get() as { c: number };

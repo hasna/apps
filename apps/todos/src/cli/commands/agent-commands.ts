@@ -3,13 +3,17 @@ import chalk from "chalk";
 import { execSync } from "node:child_process";
 import { getDatabase, resolvePartialId } from "../../db/database.js";
 import { releaseAgent, listAgents, normalizeGeneratedAgentNames, suggestAgentNames } from "../../db/agents.js";
-import { createTaskList, listTaskLists, deleteTaskList } from "../../db/task-lists.js";
+import { normalizeAgentNameInput } from "../../lib/agent-name-normalize.js";
+import { createTaskList, getTaskList, listTaskLists, updateTaskList, deleteTaskList } from "../../db/task-lists.js";
 import { listTasks } from "../../db/tasks.js";
-import { getPackageVersion, handleError, autoProject, output } from "../helpers.js";
+import { getPackageVersion, handleError, autoProject, output, outputRecord } from "../helpers.js";
+import { clearPersistedIdentity, detectIdentityCollision, persistIdentity, readPersistedIdentity } from "../../lib/creator-identity.js";
 import {
   getTodosCloudClient,
   cloudCreateTaskList,
   cloudDeleteTaskList,
+  cloudGetTaskList,
+  cloudUpdateTaskList,
   cloudHeartbeatAgent,
   cloudListAgents,
   cloudListTaskLists,
@@ -20,35 +24,184 @@ import {
   cloudResolveTaskListRef,
 } from "../cloud-router.js";
 
+/**
+ * Resolve an agent from the shared cloud roster by id, or by name
+ * case-insensitively — preferring the freshest record when historical rows hold
+ * more than one spelling of the same identity (todos task 0bf5d979).
+ *
+ * `todos agent <name>` is the surface a coordinator reads to decide whether a
+ * dispatched agent is still alive, so landing on a stale case-variant here is
+ * what turns "check on the worker" into "kill the live worker".
+ */
+function resolveCloudAgentByNameOrId<T extends { id: string; name: string; last_seen_at: string }>(
+  agents: readonly T[],
+  nameOrId: string,
+): T | null {
+  const byId = agents.find((agent) => agent.id === nameOrId);
+  if (byId) return byId;
+  const target = normalizeAgentNameInput(nameOrId);
+  const matches = agents.filter((agent) => normalizeAgentNameInput(agent.name) === target);
+  if (matches.length === 0) return null;
+  return matches.reduce((freshest, candidate) =>
+    new Date(candidate.last_seen_at).getTime() > new Date(freshest.last_seen_at).getTime()
+      ? candidate
+      : freshest,
+  );
+}
+
+
+/**
+ * Rows that are the SAME identity as `requested` under the canonical
+ * case-insensitive rule, but are spelled differently — i.e. the rows that
+ * registering `requested` would turn into a case-variant clash.
+ *
+ * WHY THIS GUARD IS ON THE CLOUD BRANCH AND NOT SHARED (todos task 1170f87b).
+ * `init` has two branches. The LOCAL one goes through `db/agents.ts`, whose
+ * `validateAgentName` RETURNS the lower-cased name, so a case variant cannot
+ * be created there. The CLOUD one posts the raw argument straight to
+ * `/v1/agents`. Every station on this fleet is cloud-routed, so 100% of
+ * registrations took the unnormalised branch and the shared normaliser —
+ * documented in `lib/agent-name-normalize.ts` as "the single source of truth"
+ * for `fabricius`, `Fabricius` and `FABRICIUS` being ONE agent — was never
+ * consulted. Measured on the live roster 2026-08-02: 1291 rows, 75 names held
+ * in two or more capitalisations, 7 of those clashes minted since 07-29.
+ *
+ * WHY IT REFUSES RATHER THAN SILENTLY LOWER-CASING. Normalising here would
+ * redirect a session that registers as `Silvanus` onto the existing
+ * `silvanus` row — merging two mailboxes with nothing on screen to say so.
+ * The live consequence of these split identities is that
+ * `todos list --assigned Silvanus` and `--assigned silvanus` return disjoint
+ * sets (28 and 29 rows, intersection 0), so silently moving an agent between
+ * them would change which queue a running watcher reads. A refusal is
+ * visible; a silent redirect is another instance of the defect being fixed.
+ *
+ * WHY IT DOES NOT CALL `validateAgentName` FOR SYMMETRY WITH THE LOCAL PATH.
+ * That validator enforces `/^[a-z]+$/` — letters only. 283 of the 1291 live
+ * names (21.9%) fail it, including every seat (`agent-ceo`,
+ * `agent-chief-staff`, ...). Applying it here would make registration fail for
+ * a fifth of the fleet. Only the trim-and-lower-case normaliser is safe.
+ *
+ * An EXACT-spelling row is deliberately NOT a conflict: re-registering an
+ * identity that already exists is the ordinary restart path, and refusing it
+ * would break every agent on the fleet rather than only the typos.
+ */
+export function findCaseVariantRows<T extends { id: string; name: string }>(
+  agents: readonly T[],
+  requested: string,
+): T[] {
+  const raw = requested.trim();
+  const target = normalizeAgentNameInput(raw);
+  if (!target) return [];
+  if (agents.some((agent) => agent.name === raw)) return [];
+  return agents.filter((agent) => normalizeAgentNameInput(agent.name) === target);
+}
+
+/** Drop the persisted identity only when the agent being released IS the persisted one —
+ *  releasing some other agent must not silently un-identify this session. */
+function clearIdentityIfMine(agentId: string, agentName?: string): void {
+  const persisted = readPersistedIdentity();
+  if (!persisted) return;
+  if (persisted.agent_id === agentId || (agentName && persisted.agent_name === agentName)) {
+    clearPersistedIdentity();
+  }
+}
+
 export function registerAgentCommands(program: Command) {
   // init
   program
     .command("init <name>")
-    .description("Register an agents and get a short UUID")
+    // `register` mirrors the MCP `register_agent` verb.
+    .alias("register")
+    .description("Register an agent and get a short UUID (alias: register)")
     .option("-d, --description <text>", "Agent description")
+    .option("--force", "Take over the machine-wide persisted identity even if another session holds it")
     .action(async (name: string, opts) => {
       const globalOpts = program.opts();
       try {
-        // self_hosted cloud routing: register into the SHARED cloud roster so the
+        // http authority routing: register into the SHARED cloud roster so the
         // agent identity lives in /v1/agents (not this machine's local sqlite).
         // This is the agent-identity misroute fix — a flipped machine's `init`
         // used to write the agent locally only, invisible to the cloud fleet.
         const cloud = getTodosCloudClient();
+        // The guard compares the trimmed spelling, so registration must send
+        // that same spelling. Sending the original value would let an exact
+        // restart such as `  zoilus  ` pass the guard and mint a whitespace
+        // variant on an older exact-match cloud authority.
+        const registrationName = name.trim();
+        if (cloud) {
+          // Degrade OPEN on a roster read failure, with the cost stated on
+          // stderr. Same precedent as `loadSeatSlugs` in assignee-validation:
+          // a guard that refuses every registration when it cannot reach its
+          // own reference data is a worse defect than the one it prevents.
+          let roster: Awaited<ReturnType<typeof cloudListAgents>> | null = null;
+          try {
+            roster = await cloudListAgents(cloud);
+          } catch {
+            console.error(chalk.yellow(
+              "Warning: could not read the shared roster, so the case-variant check was skipped for this registration.",
+            ));
+          }
+          const variants = roster ? findCaseVariantRows(roster, registrationName) : [];
+          if (variants.length > 0) {
+            const listed = variants.map((a) => `${a.name} (${a.id})`).join(", ");
+            console.error(chalk.red(
+              `'${name}' is a case variant of an agent that already exists: ${listed}. ` +
+              `Agent names are ONE case-insensitive identity, so registering this spelling would create a second row ` +
+              `and split the identity in two — tasks assigned to one spelling are invisible to the other. ` +
+              `Register with the existing spelling instead.`,
+            ));
+            process.exit(1);
+          }
+        }
         const result = cloud
-          ? await cloudRegisterAgent(cloud, { name, description: opts.description })
-          : (await import("../../db/agents.js")).registerAgent({ name, description: opts.description });
+          ? await cloudRegisterAgent(cloud, { name: registrationName, description: opts.description })
+          : (await import("../../db/agents.js")).registerAgent({ name: registrationName, description: opts.description });
         const { isAgentConflict } = await import("../../db/agents.js");
         if (isAgentConflict(result)) {
           console.error(chalk.red("CONFLICT:"), result.message);
           process.exit(1);
         }
+        // Persist the identity. Without this, `init` printed "use --agent <id>"
+        // and every later command had to re-supply it by hand — which nothing did,
+        // leaving creator attribution empty on 92% of rows.
+        //
+        // Refuse to silently replace a DIFFERENT identity: many named sessions share
+        // one HOME on this fleet, and a clobber would leave the other session quietly
+        // attributing its work to this one.
+        const collision = detectIdentityCollision(result.id, result.name);
+        if (collision && !opts.force) {
+          const held = collision.existing.agent_name || collision.existing.agent_id;
+          console.error(chalk.red(`This machine already has a persisted todos identity: ${held} (registered ${collision.existing.registered_at}).`));
+          console.error(chalk.yellow(
+            "Overwriting it would make that session attribute its tasks to you.\n" +
+            `For a concurrent session, set a per-process identity instead — it outranks the file and cannot collide:\n` +
+            `  export TODOS_AGENT_ID=${result.name}\n` +
+            "Or pass --force to take over the machine-wide identity.",
+          ));
+          process.exit(2);
+        }
+        persistIdentity({ agent_id: result.id, agent_name: result.name, ...(globalOpts.session ? { session_id: globalOpts.session } : {}) });
         if (globalOpts.json) {
-          output(result, true);
+          output({ ...result, identity_persisted: true }, true);
         } else {
           console.log(chalk.green("Agent registered:"));
           console.log(`  ${chalk.dim("ID:")}   ${result.id}`);
           console.log(`  ${chalk.dim("Name:")} ${result.name}`);
-          console.log(`\nUse ${chalk.cyan(`--agent ${result.id}`)} on future commands.`);
+          // #192 made the persisted file read-only for DISPLAY and diagnostics
+          // (`--inbox`, `resolveCreatorIdentity`) — it is never written into a
+          // task's created_by/agent_id/assigned_to (see resolveWritableIdentity
+          // in lib/creator-identity.ts). The line this replaces claimed the
+          // opposite ("later commands attribute to this agent automatically"),
+          // which is false on every column since #192. The collision path
+          // (exit 2, above) already prints the correct escape hatch; the
+          // success path — the one every fresh session hits — must say the
+          // same thing instead of the opposite (todos task a3f4bb1a, F2).
+          console.log(
+            `\n${chalk.dim("Identity saved for diagnostics and --inbox — it is not attribution.")}\n` +
+            `${chalk.dim("For per-session attribution, set a per-process identity — it outranks this file and cannot collide with another session on the same machine:")}\n` +
+            `  ${chalk.dim(`export TODOS_AGENT_ID=${result.name}`)}\n` +
+            `${chalk.dim(`Or pass --agent ${result.name} on each command.`)}`,
+          );
         }
       } catch (e) {
         handleError(e);
@@ -62,22 +215,22 @@ export function registerAgentCommands(program: Command) {
     .action(async (agent?: string) => {
       const globalOpts = program.opts();
       const agentId = agent || globalOpts.agent;
-      if (!agentId) { console.error(chalk.red("Agent ID required. Use --agent or pass as argument.")); process.exit(1); }
+      if (!agentId) { handleError(new Error("Agent ID required. Use --agent or pass as argument.")); }
       try {
-        // self_hosted cloud routing: heartbeat the SHARED cloud roster so a flipped
+        // http authority routing: heartbeat the SHARED cloud roster so a flipped
         // machine refreshes the same agent every other agent sees. The local path
         // 404'd cloud-only agents ("Agent not found").
         const cloud = getTodosCloudClient();
         if (cloud) {
           const a = await cloudHeartbeatAgent(cloud, agentId);
-          if (!a) { console.error(chalk.red(`Agent not found: ${agentId}`)); process.exit(1); }
+          if (!a) { handleError(new Error(`Agent not found: ${agentId}`)); }
           if (globalOpts.json) { console.log(JSON.stringify({ agent_id: a.id, name: a.name, last_seen_at: a.last_seen_at })); }
           else { console.log(chalk.green(`♥ ${a.name} (${a.id.slice(0, 8)}) — heartbeat sent`)); }
           return;
         }
         const { updateAgentActivity, getAgent, getAgentByName } = await import("../../db/agents.js");
         const a = getAgent(agentId) || getAgentByName(agentId);
-        if (!a) { console.error(chalk.red(`Agent not found: ${agentId}`)); process.exit(1); }
+        if (!a) { handleError(new Error(`Agent not found: ${agentId}`)); }
         updateAgentActivity(a.id);
         if (globalOpts.json) { console.log(JSON.stringify({ agent_id: a.id, name: a.name, last_seen_at: new Date().toISOString() })); }
         else { console.log(chalk.green(`♥ ${a.name} (${a.id.slice(0, 8)}) — heartbeat sent`)); }
@@ -94,18 +247,18 @@ export function registerAgentCommands(program: Command) {
     .action(async (agent?: string, opts?: { sessionId?: string }) => {
       const globalOpts = program.opts();
       const agentId = agent || globalOpts.agent;
-      if (!agentId) { console.error(chalk.red("Agent ID or name required. Use --agent or pass as argument.")); process.exit(1); }
+      if (!agentId) { handleError(new Error("Agent ID or name required. Use --agent or pass as argument.")); }
       try {
-        // self_hosted cloud routing: release in the SHARED cloud roster so the name
+        // http authority routing: release in the SHARED cloud roster so the name
         // frees up for every agent. The local path 404'd cloud-only agents.
         const cloud = getTodosCloudClient();
         if (cloud) {
           const result = await cloudReleaseAgent(cloud, agentId, opts?.sessionId);
-          if (!result.agent) { console.error(chalk.red(`Agent not found: ${agentId}`)); process.exit(1); }
+          if (!result.agent) { handleError(new Error(`Agent not found: ${agentId}`)); }
           if (!result.released) {
-            console.error(chalk.red("Release denied: session_id does not match agent's current session."));
-            process.exit(1);
+            handleError(new Error("Release denied: session_id does not match agent's current session."));
           }
+          clearIdentityIfMine(result.agent.id, result.agent.name);
           if (globalOpts.json) {
             console.log(JSON.stringify({ agent_id: result.agent.id, name: result.agent.name, released: true }));
           } else {
@@ -115,12 +268,12 @@ export function registerAgentCommands(program: Command) {
         }
         const { getAgent, getAgentByName } = await import("../../db/agents.js");
         const a = getAgent(agentId) || getAgentByName(agentId);
-        if (!a) { console.error(chalk.red(`Agent not found: ${agentId}`)); process.exit(1); }
+        if (!a) { handleError(new Error(`Agent not found: ${agentId}`)); }
         const released = releaseAgent(a.id, opts?.sessionId);
         if (!released) {
-          console.error(chalk.red("Release denied: session_id does not match agent's current session."));
-          process.exit(1);
+          handleError(new Error("Release denied: session_id does not match agent's current session."));
         }
+        clearIdentityIfMine(a.id, a.name);
         if (globalOpts.json) {
           console.log(JSON.stringify({ agent_id: a.id, name: a.name, released: true }));
         } else {
@@ -138,7 +291,7 @@ export function registerAgentCommands(program: Command) {
     .action(async (project?: string) => {
       const globalOpts = program.opts();
       const agentId = globalOpts.agent;
-      if (!agentId) { console.error(chalk.red("Agent ID required. Use --agent.")); process.exit(1); }
+      if (!agentId) { handleError(new Error("Agent ID required. Use --agent.")); }
       const db = getDatabase();
       if (project) {
         const { getProjectByPath } = await import("../../db/projects.js");
@@ -182,24 +335,25 @@ export function registerAgentCommands(program: Command) {
   program
     .command("agents-normalize")
     .alias("normalize-agents")
-    .description("Rename invalid/generated agent names (agent, agent-1, name-2, two-word names) to safe one-word names")
+    .description("Plan safe replacement labels for invalid/generated agent names (non-mutating: candidates are quarantined, existing names and references are left unchanged)")
     .action(async () => {
       const globalOpts = program.opts();
       try {
         const db = getDatabase();
-        const renamed = normalizeGeneratedAgentNames(db);
+        const planned = normalizeGeneratedAgentNames(db);
         if (globalOpts.json) {
-          output({ renamed, suggestions: suggestAgentNames(listAgents().map((agent) => agent.name)).slice(0, 5) }, true);
+          output({ planned, applied: false, suggestions: suggestAgentNames(listAgents().map((agent) => agent.name)).slice(0, 5) }, true);
           return;
         }
-        if (renamed.length === 0) {
+        if (planned.length === 0) {
           console.log(chalk.green("No invalid or generated agent names found."));
           return;
         }
-        console.log(chalk.green(`Normalized ${renamed.length} agent name(s):`));
-        for (const item of renamed) {
-          console.log(`  ${chalk.cyan(item.id)} ${chalk.red(item.old_name)} ${chalk.dim("->")} ${chalk.bold(item.new_name)} ${chalk.dim(`(${item.reference_updates} reference updates)`)}`);
+        console.log(chalk.yellow(`Planned ${planned.length} candidate rename(s) (quarantined, not applied):`));
+        for (const item of planned) {
+          console.log(`  ${chalk.cyan(item.id)} ${chalk.red(item.old_name)} ${chalk.dim("->")} ${chalk.bold(item.new_name)} ${chalk.dim(`(${item.status}; names left unchanged)`)}`);
         }
+        console.log(chalk.dim("Names remain display-only; applying a candidate requires a separate explicit reconciliation action."));
       } catch (e) {
         handleError(e);
       }
@@ -219,8 +373,7 @@ export function registerAgentCommands(program: Command) {
         const { getAgentByName: findByName, updateAgent: doUpdate } = await import("../../db/agents.js");
         const agent = findByName(name);
         if (!agent) {
-          console.error(chalk.red(`Agent not found: ${name}`));
-          process.exit(1);
+          handleError(new Error(`Agent not found: ${name}`));
         }
         const updates: Record<string, unknown> = {};
         if (opts.description !== undefined) updates.description = opts.description;
@@ -252,12 +405,11 @@ export function registerAgentCommands(program: Command) {
       // cloud-only agent is invisible to this box's local sqlite), then read that
       // agent's tasks from the cloud too.
       const agent = cloud
-        ? (await cloudListAgents(cloud)).find((a) => a.name === name || a.id === name) ?? null
+        ? resolveCloudAgentByNameOrId(await cloudListAgents(cloud), name)
         : findByName(name);
 
       if (!agent) {
-        console.error(chalk.red(`Agent not found: ${name}`));
-        process.exit(1);
+        handleError(new Error(`Agent not found: ${name}`));
       }
 
       const byAssigned = cloud ? await cloudListTasks(cloud, { assigned_to: agent.name }) : listTasks({ assigned_to: agent.name });
@@ -345,11 +497,11 @@ export function registerAgentCommands(program: Command) {
       if (opts.set) {
         const [agentName, managerName] = opts.set.split("=");
         const agent = getByName(agentName);
-        if (!agent) { console.error(chalk.red(`Agent not found: ${agentName}`)); process.exit(1); }
+        if (!agent) { handleError(new Error(`Agent not found: ${agentName}`)); }
         let managerId: string | null = null;
         if (managerName) {
           const manager = getByName(managerName);
-          if (!manager) { console.error(chalk.red(`Manager not found: ${managerName}`)); process.exit(1); }
+          if (!manager) { handleError(new Error(`Manager not found: ${managerName}`)); }
           managerId = manager.id;
         }
         update(agent.id, { reports_to: managerId });
@@ -380,8 +532,11 @@ export function registerAgentCommands(program: Command) {
     .aliases(["task-lists", "tl"])
     .description("List and manage task lists")
     .option("--add <name>", "Create a task list")
-    .option("--slug <slug>", "Custom slug (with --add)")
-    .option("-d, --description <text>", "Description (with --add)")
+    .option("--show <id>", "Resolve and show a task list")
+    .option("--update <id>", "Update a task list")
+    .option("--name <name>", "Name (with --update)")
+    .option("--slug <slug>", "Custom slug (with --add or --update)")
+    .option("-d, --description <text>", "Description (with --add or --update)")
     .option("--delete <id>", "Delete a task list")
     .action(async (opts) => {
       try {
@@ -405,19 +560,53 @@ export function registerAgentCommands(program: Command) {
           return;
         }
 
+        if (opts.show || opts.update) {
+          const ref = opts.show || opts.update;
+          const resolved = cloud
+            ? await cloudResolveTaskListRef(cloud, ref, projectId ?? undefined)
+            : resolvePartialId(getDatabase(), "task_lists", ref);
+          if (!resolved) throw new Error(`Task list not found or ambiguous: ${ref}`);
+          if (opts.show) {
+            const list = cloud ? await cloudGetTaskList(cloud, resolved) : getTaskList(resolved);
+            if (!list) throw new Error(`Task list not found: ${ref}`);
+            // outputRecord, not output: `output` prints only under --json, so this
+            // exited 0 with completely empty stdout in human mode.
+            outputRecord(list, Boolean(globalOpts.json), "Task list:");
+            return;
+          }
+          const patch = {
+            ...(opts.name !== undefined ? { name: opts.name } : {}),
+            ...(opts.slug !== undefined ? { slug: opts.slug } : {}),
+            ...(opts.description !== undefined ? { description: opts.description } : {}),
+          };
+          if (Object.keys(patch).length === 0) throw new Error("lists --update requires --name, --slug, or --description");
+          const list = cloud
+            ? await cloudUpdateTaskList(cloud, resolved, patch)
+            : updateTaskList(resolved, patch);
+          // A successful mutation must say so; this printed nothing in human mode.
+          outputRecord(list, Boolean(globalOpts.json), "Task list updated:");
+          return;
+        }
+
         if (opts.delete) {
           if (cloud) {
             const resolved = await cloudResolveTaskListRef(cloud, opts.delete, projectId ?? undefined);
             if (!resolved) throw new Error(`Task list not found or ambiguous: ${opts.delete}`);
-            await cloudDeleteTaskList(cloud, resolved);
-            console.log(chalk.green("Task list deleted."));
+            const deleted = await cloudDeleteTaskList(cloud, resolved);
+            if (globalOpts.json) {
+              output({ deleted }, true);
+              if (!deleted) process.exitCode = 1;
+            } else if (deleted) {
+              console.log(chalk.green("Task list deleted."));
+            } else {
+              handleError(new Error("Task list not found"));
+            }
             return;
           }
           const db = getDatabase();
           const resolved = resolvePartialId(db, "task_lists", opts.delete);
           if (!resolved) {
-            console.error(chalk.red("Task list not found"));
-            process.exit(1);
+            handleError(new Error("Task list not found"));
           }
           deleteTaskList(resolved);
           console.log(chalk.green("Task list deleted."));
@@ -453,8 +642,7 @@ export function registerAgentCommands(program: Command) {
 
         const res = await fetch("https://registry.npmjs.org/@hasna/todos/latest");
         if (!res.ok) {
-          console.error(chalk.red("Failed to check for updates."));
-          process.exit(1);
+          handleError(new Error("Failed to check for updates."));
         }
         const data = (await res.json()) as { version: string };
         const latestVersion = data.version;

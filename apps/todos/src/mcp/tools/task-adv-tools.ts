@@ -9,6 +9,7 @@ import { z } from "zod";
 import type { Task } from "../../types/index.js";
 import { compactJson, compactStatus, compactTask, truncateText } from "../token-utils.js";
 import { getTodosCloudClient, cloudGetStats, cloudGetTask, cloudCountTasks, cloudAddComment } from "../../cli/cloud-router.js";
+import { assignedToAliasSet, getDatabase } from "../../db/database.js";
 
 interface TaskAdvContext {
   shouldRegisterTool: (name: string) => boolean;
@@ -64,7 +65,7 @@ export function registerTaskAdvTools(server: McpServer, ctx: TaskAdvContext) {
           const cloud = getTodosCloudClient();
           if (!task_id) {
             if (cloud) {
-              // self_hosted cloud routing: queue summary from <app>.hasna.xyz/v1.
+              // http authority routing: queue summary from <app-host>/v1.
               const baseFilter: Record<string, unknown> = {};
               if (project_id) baseFilter.project_id = project_id;
               if (task_list_id) baseFilter.task_list_id = task_list_id;
@@ -365,9 +366,13 @@ export function registerTaskAdvTools(server: McpServer, ctx: TaskAdvContext) {
           }, undefined) as Task[];
           const completedYesterday = completed.filter(t => t.completed_at && t.completed_at.startsWith(yesterdayStr));
 
+          // Alias-resolved (task 84c77210): `getBlockedTasks` takes no agent
+          // filter of its own, so this in-memory filter is the only place
+          // doing the agent match here — see database.ts for the root cause.
           const { getBlockedTasks } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
+          const blockedAliases = effectiveAgentId ? assignedToAliasSet(getDatabase(), effectiveAgentId) : null;
           const blocked = getBlockedTasks(effectiveProjectId ? resolveId(effectiveProjectId, "projects") : undefined)
-            .filter((t: any) => t.assigned_to === effectiveAgentId);
+            .filter((t: any) => blockedAliases ? blockedAliases.has((t.assigned_to ?? "").toLowerCase()) : false);
 
           const lines = [
             `Standup for ${effectiveAgentId} (${effectiveProjectId ? `project: ${effectiveProjectId.slice(0,8)}` : "all projects"})`,
@@ -572,7 +577,7 @@ export function registerTaskAdvTools(server: McpServer, ctx: TaskAdvContext) {
       },
       async ({ task_id, body, author }) => {
         try {
-          // self_hosted cloud routing: comment straight against <app>.hasna.xyz/v1.
+          // http authority routing: comment straight against <app-host>/v1.
           // Skip local id-resolution (it hits local SQLite and 404s cloud-only
           // tasks); pass the id through so the cloud dataset is authoritative. The
           // server 404s a genuinely missing task, surfaced as isError below.

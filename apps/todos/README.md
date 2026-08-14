@@ -86,12 +86,12 @@ last-seen heartbeats, workspace paths, git roots, and user-provided Tailscale
 or LAN addresses without probing the network:
 
 ```bash
-todos machines register spark01 --ssh hasna@spark01 --tailscale-name spark01.tailnet --tailscale-ip 100.64.0.10 --lan-address 192.168.8.10 --workspace ~/workspace
-todos machines heartbeat spark01 --workspace ~/workspace
+todos machines register my-machine --ssh user@my-machine --tailscale-name my-machine.tailnet --tailscale-ip 100.100.100.100 --lan-address 192.0.2.10 --workspace ~/workspace
+todos machines heartbeat my-machine --workspace ~/workspace
 todos machines topology --json
-todos machines sync --machine spark01 --dry-run --json
-todos machines sync --machine spark01 --push
-todos machines sync --ssh hasna@spark01 --dry-run
+todos machines sync --machine my-machine --dry-run --json
+todos machines sync --machine my-machine --push
+todos machines sync --ssh user@my-machine --dry-run
 todos projects-path set <project-id> ~/workspace/my-project
 ```
 
@@ -595,9 +595,19 @@ services. Use them to keep agents from starting blocked work:
 ```bash
 todos deps <task-id> --needs <blocking-task-id>
 todos deps <task-id> --graph
+todos deps <task-id> --json            # machine-readable edges (ids + status) for this task
+todos deps --project <ref> --json      # the whole-project graph (nodes + edges + cycles) in one read
 todos blocked
 todos ready
 ```
+
+`--json` returns versioned, machine-readable shapes for schedulers:
+`todos.task_dependency_edges.v1` for a single task (`dependencies` = upstream
+prerequisites, `blocked_by` = the incomplete prerequisites currently blocking
+the task — empty means dispatchable, `blocks` = downstream dependents) and
+`todos.project_dependency_graph.v1` for `--project` (a `nodes`/`edges`/`cycles`
+adjacency list). Both are identical on the sqlite and http transports. Human output
+and `--graph --json` are unchanged.
 
 The same workflow is available to MCP clients through
 `add_task_dependency`, `remove_task_dependency`, `get_task_dependencies`, and
@@ -718,6 +728,28 @@ workflow is available to MCP clients through `list_template_library`,
 `write_template_library`, `init_templates`, `create_template`, `list_templates`,
 `create_task_from_template`, `preview_template`, `export_template`, and
 `import_template`.
+
+## Moving Tasks Between Plans
+
+Plan assignment is editable after creation, so reorganizing a backlog never
+requires deleting and recreating tasks (which would lose history, comments, and
+assignments):
+
+```bash
+todos add "My task" --plan <plan-id>          # assign at creation
+todos update <task-id> --plan <plan-id>       # move one task to another plan
+todos update <task-id> --clear-plan           # detach from its plan
+todos bulk plan --plan <plan-id> <id> <id>    # move many tasks at once
+todos bulk move-plan --clear-plan <id> <id>   # detach many tasks at once
+todos bulk tag <id> <id> --tag a,b            # add tags to many tasks (merges; never replaces)
+todos bulk untag <id> <id> --tag a            # remove tags from many tasks
+todos plans --show <plan-id>                  # verify the plan's task set
+```
+
+Plan references accept a UUID, a plan slug, a plan name, or a unique id prefix.
+An unknown or ambiguous reference exits non-zero before any task is modified.
+All of these run against whichever store the CLI is configured for: the local
+SQLite file, or the shared dataset behind a hosted `/v1` authority.
 
 ## Local Git Traceability
 
@@ -1343,29 +1375,93 @@ Name`, checkbox items, optional `priority: high`, `comment: ...`, `depends_on:
 Other task title`, `run: completed smoke`, `#tags`, and `@agent` markers to
 migrate older files without a hosted service.
 
-## Local Doctor and Repair
+## Doctor: referential integrity and the exit-code contract
 
-`todos doctor` audits the local SQLite database without calling hosted services.
-By default it is a dry-run and reports schema/migration drift, orphaned rows,
-duplicate indexes, invalid JSON metadata, missing project roots, and unsafe
-database file permissions:
+`todos doctor` reports schema/migration drift, referential integrity, duplicate
+indexes, invalid JSON metadata, missing project roots, and unsafe database file
+permissions. In local mode it audits SQLite without calling hosted services; in
+remote mode it audits the configured `/v1` authority.
 
 ```bash
 todos doctor
 todos doctor --json
 ```
 
-Safe repairs require explicit apply mode. Before any mutation, the command
-creates a local backup next to the database when the database is file-backed:
+### Exit codes
+
+| code | meaning |
+| --- | --- |
+| `0` | CLEAN — every referential condition was measured and every count is zero. |
+| `1` | FINDINGS — at least one orphaned/dangling reference, or an error-severity schema check. |
+| `2` | INCOMPLETE — no findings, but a condition could not be measured, so health was **not** established. |
+
+Advisory warnings (stale `in_progress` tasks, project paths missing on this
+machine, duplicate indexes) are reported but do **not** change the exit code.
+Findings dominate an incomplete report: a run with both exits `1` and says how
+many conditions went unchecked.
+
+`--no-fail-on-findings` forces exit `0` for a legacy consumer that gates on the
+exit code. The findings are still printed, and the suppression is stated rather
+than hidden — the printed code is always the one the process returns:
+
+```
+6 integrity condition(s) FAILED — 6 row(s) affected (5 error, 1 warning). (exit 0 — findings gate suppressed by --no-fail-on-findings; the verdict is 1)
+```
+
+`--json` therefore carries both numbers, and they must never be conflated:
+
+| field | meaning |
+| --- | --- |
+| `exit_code` | the status the process **returns** (what a caller observes) |
+| `verdict_exit_code` | the status the reported rows **imply**, ignoring suppression |
+| `fail_on_findings` | `false` when the gate was opted out of |
+
+### Referential conditions
+
+Doctor counts each condition separately and prints every one of them —
+including the zeroes — so "measured and clean" and "never measured" are visually
+distinct:
+
+| condition | severity |
+| --- | --- |
+| `tasks_without_project` | warn, **error** when it hides open work |
+| `tasks_without_task_list` | warn, **error** when it hides open work |
+| `tasks_with_unregistered_project` | error |
+| `tasks_with_unregistered_task_list` | error |
+| `task_lists_without_project` | warn |
+| `task_lists_with_unregistered_project` | error |
+
+Counts come from the backing engine, one aggregate query per condition, for
+**both** storage engines (SQLite tables and the Postgres JSONB record store,
+which has no foreign keys and is therefore where these rows accumulate). A
+self-hosted authority exposes them at `GET /v1/integrity`; a backend that cannot
+answer returns `501` rather than a false clean.
+
+In remote mode doctor prefers that aggregate. When the authority does not expose
+it, the task-list conditions are still derived exactly from the collections
+doctor already fetches, and the task-level conditions are reported as
+`NOT CHECKED` unless you opt into a read-only paged walk of `/v1/tasks`:
+
+```bash
+todos doctor --scan-tasks     # remote only; one GET per page, no writes
+```
+
+### Repair
+
+Integrity findings are **report-only**: `--apply` never rewrites, deletes or
+re-points an orphaned row, because deciding what happens to existing orphans is
+an owner decision, not a diagnostic's. Safe repairs require explicit apply mode
+and, when the database is file-backed, a local backup is created first:
 
 ```bash
 todos doctor --apply
 ```
 
-Repairs are limited to local integrity fixes such as running the migration
-safety net, clearing missing parent references, pruning orphaned dependency/run
-rows, resetting invalid metadata JSON to `{}`, dropping duplicate non-primary
-indexes, and tightening database file permissions.
+Repairs are limited to local schema/hygiene fixes: running the migration safety
+net, clearing missing parent references, pruning orphaned dependency/run rows,
+resetting invalid metadata JSON to `{}`, dropping duplicate non-primary indexes,
+and tightening database file permissions. `--apply` is refused outright against
+a remote authority.
 
 ## MCP Server
 
@@ -1401,17 +1497,36 @@ MCP calls such as `get_task`, `get_status`, `get_context`, `bootstrap`, and
 todos-serve
 ```
 
-Generate an API key before exposing the REST API to another app. Once at least one
-generated key exists, all `/api/*` requests require `x-api-key` or
-`Authorization: Bearer`.
+`/api/*` and `/mcp` are **local-only data planes and they fail closed**. The server
+refuses to start unless one of the following is true:
+
+| Configuration | Result |
+| --- | --- |
+| `TODOS_API_KEY=<key>` (or `--api-key <key>`) | `/api/*` + `/mcp` require the key |
+| at least one `todos api-keys create` key exists | `/api/*` + `/mcp` require a key |
+| `--allow-anonymous` **and** a loopback bind | anonymous, loopback peers only (local dev) |
+| a cloud `DATABASE_URL` is configured (hosted `/v1` deployment) | `/api/*` + `/mcp` are **not served**; `/v1` stays authenticated |
+| nothing of the above | **server exits non-zero** with the env var to set |
 
 ```bash
-todos api-keys create "My app"
-todos-serve --host 0.0.0.0
+todos api-keys create "My app"          # then send x-api-key / Authorization: Bearer
+TODOS_API_KEY=<key> todos-serve --host 0.0.0.0
+todos serve --allow-anonymous           # local dev only; refused for a non-loopback --host
 ```
+
+`--allow-anonymous` (or `TODOS_ALLOW_ANONYMOUS=1`) is refused for any non-loopback
+bind host, and even when enabled it only serves requests whose transport peer is
+itself loopback — so it can never publish an anonymous task read/write plane
+off-box. `todos-mcp --http` sets it implicitly because that transport is pinned to
+`127.0.0.1`; set `TODOS_API_KEY` (and send it from your MCP client) to require a
+credential there too.
 
 Pass the generated key from your app as `x-api-key` or set `TODOS_API_KEY` for
 the SDK client.
+
+Always-on / hosted deployments should use the versioned `/v1` API, which
+authenticates independently against the cloud key store. `/health`, `/ready`,
+`/version` and `/openapi.json` are the only routes that are public by design.
 
 Agent callers can trim REST responses with field selectors:
 
@@ -1439,8 +1554,13 @@ Release checks enforce that boundary before publishing:
   service coupling
 - public text surfaces and packed files are scanned for secret-like values
 - local runtime tests use a no-network fixture for local-only workflows
-- `bun run verify:release` builds, packs, validates provenance, and runs a clean
-  Bun global install smoke test from the candidate tarball
+- `bun run verify:release` performs a non-authoritative two-build review,
+  validates commit/tree provenance and deterministic tarball bytes, and runs an
+  isolated Bun install smoke test from the candidate tarball without changing
+  the global installation
+- authoritative publication is available only through `prepublishOnly` with an
+  externally supplied `HASNA_TODOS_EXPECTED_COMMIT` matching `HEAD`; skips and
+  final-pack mutation scripts are rejected
 - the install smoke plan itself is covered by tests: it installs only with Bun,
   verifies `todos`, `todos-mcp`, and `todos-serve`, and rejects private or
   hosted endpoint references

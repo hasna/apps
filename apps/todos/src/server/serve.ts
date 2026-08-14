@@ -9,6 +9,15 @@ import { join, dirname, extname } from "path";
 import { fileURLToPath } from "url";
 import { getDatabase } from "../db/database.js";
 import { hasActiveApiKeys, verifyApiKey, safeEqualStrings } from "../db/api-keys.js";
+import {
+  ALLOW_ANONYMOUS_ENV_VAR,
+  AUTH_ENV_VAR,
+  describeAuthPosture,
+  isAnonymousOptInEnv,
+  isLoopbackAddress,
+  resolveAuthPosture,
+  type AuthPosture,
+} from "./auth-posture.js";
 import type { Task } from "../types/index.js";
 import type { RouteContext, FilteredClient } from "./routes.js";
 import * as handlers from "./routes.js";
@@ -69,22 +78,65 @@ function getProvidedApiKey(req: Request): string | null {
   return auth.replace(/^Bearer\s+/i, "").trim() || null;
 }
 
-/** Check API key auth — returns a Response if unauthorized, null if OK */
-function checkAuth(req: Request, apiKey: string | null): Response | null {
-  const generatedKeysEnabled = hasActiveApiKeys();
-  if (!apiKey && !generatedKeysEnabled) return null; // no key configured, skip auth
+function unauthorized(): Response {
+  return new Response(JSON.stringify({ error: "Unauthorized" }), {
+    status: 401,
+    headers: { "Content-Type": "application/json", "WWW-Authenticate": "Bearer", ...SECURITY_HEADERS },
+  });
+}
+
+/**
+ * The local-only data planes (`/api/*`, `/mcp`) are not mounted on a hosted
+ * deployment that has no local credential. 404 (not 401) keeps the hosted
+ * surface identical to the published contract, which only declares `/v1`.
+ */
+function localPlaneDisabled(): Response {
+  return new Response(
+    JSON.stringify({
+      error: "Not found",
+      code: "LOCAL_PLANE_DISABLED",
+      hint: `/api/* and /mcp are local-only planes and are disabled on this deployment. Set ${AUTH_ENV_VAR} to serve them behind an API key, or use the authenticated /v1 API.`,
+    }),
+    { status: 404, headers: { "Content-Type": "application/json", ...SECURITY_HEADERS } },
+  );
+}
+
+/**
+ * Check API key auth for a data route — returns a Response if the request must
+ * be refused, null if it may proceed.
+ *
+ * FAILS CLOSED. There is deliberately no "no key configured, skip auth" branch:
+ * the unconfigured case is resolved at startup by `resolveAuthPosture`, which
+ * either refuses to start or disables these routes entirely. A request is only
+ * ever served anonymously under the explicit `anonymous-loopback` posture, and
+ * then only when the peer address is itself loopback.
+ */
+export function checkAuth(
+  req: Request,
+  apiKey: string | null,
+  posture: AuthPosture,
+  clientIp?: string,
+): Response | null {
+  if (posture.mode === "local-plane-disabled") return localPlaneDisabled();
+
+  if (posture.mode === "anonymous-loopback") {
+    // An operator who mints a key while the server is running (`todos api-keys
+    // create`) expects it to take effect — re-check per request so the anonymous
+    // window closes without a restart. This is the same per-request query the old
+    // fail-open implementation already did.
+    if (!hasActiveApiKeys()) {
+      // Defense in depth: the bind host is already loopback, but a proxy/tunnel in
+      // front of the process must not be able to launder off-box traffic in.
+      return isLoopbackAddress(clientIp) ? null : unauthorized();
+    }
+  }
 
   const provided = getProvidedApiKey(req);
   // Constant-time compare for the static env/CLI key — avoids a timing oracle
   // that a plain `===` short-circuit would expose.
   const matchesEnvKey = Boolean(apiKey && provided && safeEqualStrings(provided, apiKey));
   const matchesGeneratedKey = Boolean(provided && verifyApiKey(provided));
-  if (!matchesEnvKey && !matchesGeneratedKey) {
-    return new Response(JSON.stringify({ error: "Unauthorized" }), {
-      status: 401,
-      headers: { "Content-Type": "application/json", "WWW-Authenticate": "Bearer", ...SECURITY_HEADERS },
-    });
-  }
+  if (!matchesEnvKey && !matchesGeneratedKey) return unauthorized();
   return null;
 }
 
@@ -184,12 +236,46 @@ export function taskToSummary(task: Task, fields?: string[]) {
   return Object.fromEntries(fields.map(f => [f, (full as Record<string, unknown>)[f] ?? null]));
 }
 
-export async function startServer(port: number, options?: { open?: boolean; host?: string; apiKey?: string }): Promise<void> {
+export interface StartServerOptions {
+  open?: boolean;
+  host?: string;
+  apiKey?: string;
+  /**
+   * Explicitly opt into serving `/api/*` + `/mcp` anonymously. Honored ONLY when
+   * no credential is configured AND the bind host is loopback; otherwise the
+   * server refuses to start. `todos-mcp --http` sets this because that transport
+   * is loopback-pinned by contract.
+   */
+  allowAnonymous?: boolean;
+}
+
+export async function startServer(port: number, options?: StartServerOptions): Promise<void> {
   const shouldOpen = options?.open ?? true;
   const apiKey = options?.apiKey || process.env.TODOS_API_KEY || null;
 
   // Initialize database
   const db = getDatabase();
+
+  // ── Auth posture (fail closed) ───────────────────────────────────────────────
+  // Resolved BEFORE the socket is bound so an unconfigured server never accepts a
+  // single anonymous data request. `resolveAuthPosture` throws when the only
+  // remaining option would be to expose /api/* + /mcp off-box.
+  const authPosture = resolveAuthPosture({
+    apiKey,
+    hasGeneratedKeys: hasActiveApiKeys(),
+    host: options?.host,
+    allowAnonymous: options?.allowAnonymous === true || isAnonymousOptInEnv(),
+  });
+  if (authPosture.mode === "anonymous-loopback") {
+    console.error(
+      `\n⚠  ${describeAuthPosture(authPosture)}\n`
+      + `   /api/* and /mcp accept UNAUTHENTICATED task read/write from any process on this\n`
+      + `   machine. Set ${AUTH_ENV_VAR}=<key> (or run \`todos api-keys create "<name>"\`) to require a\n`
+      + `   credential, and never combine ${ALLOW_ANONYMOUS_ENV_VAR} with an off-box bind.\n`,
+    );
+  } else {
+    console.log(describeAuthPosture(authPosture));
+  }
 
   // Durable dual-write shadow: capture triggers are installed at getDatabase();
   // this long-running server also drains the outbox to cloud Postgres.
@@ -255,7 +341,7 @@ export async function startServer(port: number, options?: { open?: boolean; host
       const path = url.pathname;
       const method = req.method;
       const reqOrigin = req.headers.get("origin") || undefined;
-      const corsHeaders = reqOrigin && (reqOrigin === `http://localhost:${port}` || reqOrigin === "http://localhost:0")
+      const corsHeaders = reqOrigin && reqOrigin === `http://localhost:${ctx.port}`
         ? {
             "Access-Control-Allow-Origin": reqOrigin,
             "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
@@ -278,6 +364,10 @@ export async function startServer(port: number, options?: { open?: boolean; host
       // ── Rate limiting (ALL requests, including /mcp and /health) ──
       // Keyed on the real socket peer, not spoofable client headers.
       const ip = resolveClientIp(req, server);
+      // The anonymous-loopback auth check must use the RAW transport peer, never
+      // resolveClientIp: with TODOS_TRUST_PROXY=1 a client could otherwise spoof
+      // `x-forwarded-for: 127.0.0.1` and impersonate a loopback caller.
+      const peerIp = server.requestIP(req)?.address;
       const rl = checkRateLimit(ip);
       if (!rl.allowed) {
         return new Response(JSON.stringify({ error: "Too many requests", retry_after: rl.retryAfter }), {
@@ -289,26 +379,29 @@ export async function startServer(port: number, options?: { open?: boolean; host
       // ── Service surface probes (unauthenticated): /health /ready /version ──
       if ((path === "/health" || path === "/ready" || path === "/version") && method === "GET") {
         const { getPackageVersion } = await import("../lib/package-version.js");
-        const { isCloudModeEnabled, pingCloud } = await import("./cloud.js");
-        const mode = isCloudModeEnabled() ? "remote" : "local";
+        const { isPostgresBackendConfigured, pingCloud } = await import("./cloud.js");
+        // `mode` keeps its historical remote|local wire values (deployed smoke
+        // checks assert them); `backend` is the canonical two-arm answer.
+        const backend = isPostgresBackendConfigured() ? "postgresql" : "sqlite";
+        const mode = backend === "postgresql" ? "remote" : "local";
         const version = getPackageVersion();
         if (path === "/version") {
-          return Response.json({ status: "ok", version, mode, name: "todos" });
+          return Response.json({ status: "ok", version, mode, backend, name: "todos" });
         }
         if (path === "/ready") {
-          if (mode === "remote") {
+          if (backend === "postgresql") {
             try {
               await pingCloud();
             } catch (e) {
               return Response.json(
-                { status: "unavailable", version, mode, error: (e as Error).message },
+                { status: "unavailable", version, mode, backend, error: (e as Error).message },
                 { status: 503 },
               );
             }
           }
-          return Response.json({ status: "ready", version, mode });
+          return Response.json({ status: "ready", version, mode, backend });
         }
-        return Response.json({ status: "ok", version, mode, name: "todos" });
+        return Response.json({ status: "ok", version, mode, backend, name: "todos" });
       }
 
       // ── OpenAPI document (unauthenticated; source of truth for the SDK) ──
@@ -328,7 +421,7 @@ export async function startServer(port: number, options?: { open?: boolean; host
       // Gated by the SAME auth check as /api/* — otherwise the MCP transport is
       // an unauthenticated create/update/delete backdoor around the REST auth.
       if (path === "/mcp") {
-        const authError = checkAuth(req, apiKey);
+        const authError = checkAuth(req, apiKey, authPosture, peerIp);
         if (authError) return authError;
         const { handleMcpHttpRequest } = await import("../mcp/http.js");
         const { buildServer } = await import("../mcp/index.js");
@@ -336,9 +429,24 @@ export async function startServer(port: number, options?: { open?: boolean; host
       }
 
       // ── API key auth (all /api/* routes) ──
-      if (path.startsWith("/api/")) {
-        const authError = checkAuth(req, apiKey);
+      if (path === "/api" || path.startsWith("/api/")) {
+        const authError = checkAuth(req, apiKey, authPosture, peerIp);
         if (authError) return authError;
+      }
+
+      // ── API: authoritative local PR-group ledger ──
+      if (path === "/api/pr-groups" || path.startsWith("/api/pr-groups/")) {
+        const [{ handlePrGroupHttpRequest }, { createLocalPrGroupLedger }] = await Promise.all([
+          import("./pr-groups.js"),
+          import("../pr-groups/index.js"),
+        ]);
+        const response = await handlePrGroupHttpRequest(
+          req,
+          url,
+          createLocalPrGroupLedger(db),
+          "/api/pr-groups",
+        );
+        if (response) return response;
       }
 
       // ── SSE Event Stream (supports optional agent_id/project_id filtering) ──
@@ -655,7 +763,18 @@ export async function startServer(port: number, options?: { open?: boolean; host
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
 
-  const serverUrl = `http://localhost:${port}`;
+  // `port` is what we ASKED for; `server.port` is what we GOT. They differ when 0
+  // was requested (kernel-assigned ephemeral port). Everything observable — the
+  // CORS origin check, ctx.port handed to route handlers, and the URL printed
+  // below, which is the readiness signal subprocess callers parse — must report
+  // the port actually bound, or callers connect to the wrong place.
+  // `server.port` is typed optional because a unix-socket server has none; this
+  // server always binds TCP, so fall back to the requested port rather than
+  // asserting.
+  const boundPort = server.port ?? port;
+  ctx.port = boundPort;
+
+  const serverUrl = `http://localhost:${boundPort}`;
   console.log(`Todos Dashboard running at ${serverUrl}`);
 
   if (shouldOpen) {

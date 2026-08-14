@@ -293,6 +293,7 @@ export class TodosShadowOutbox {
       case "agents": snapshot.agents.push(record as unknown as TodosStorageSnapshot["agents"][number]); break;
       case "task_lists": snapshot.taskLists.push(record as unknown as TodosStorageSnapshot["taskLists"][number]); break;
       case "templates": snapshot.templates.push(record as unknown as TodosStorageSnapshot["templates"][number]); break;
+      case "template_tasks": snapshot.templateTasks.push(record as unknown as TodosStorageSnapshot["templateTasks"][number]); break;
       case "audit_history": snapshot.auditHistory.push(record as unknown as TaskHistory); break;
       default: break;
     }
@@ -362,6 +363,7 @@ function emptySnapshot(): TodosStorageSnapshot {
     agents: [],
     taskLists: [],
     templates: [],
+    templateTasks: [],
     auditHistory: [],
     tombstones: [],
   };

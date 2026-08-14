@@ -71,4 +71,48 @@ describe("local secret redaction", () => {
       access_token: "[REDACTED]",
     });
   });
+
+  test("exempts placeholder keys from key-based redaction without exempting env-assignment keys", () => {
+    // A key reduced entirely to a placeholder is not a secret name, so the clean value
+    // beneath it must survive.
+    expect(redactValue({ "[REDACTED_GITHUB_TOKEN]": "key text is sanitized too" }))
+      .toEqual({ "[REDACTED_GITHUB_TOKEN]": "key text is sanitized too" });
+
+    // But "NAME=[REDACTED]" is the shape env-secret-assignment *produces*, and the value
+    // beneath it is opaque (matches no text pattern). Exempting it would emit the secret
+    // in cleartext, so key-based redaction must still apply.
+    const opaque = ["hunter2", "hunter2", "hunter2"].join("");
+    const awsSecret = ["wJalrXUtnFEMIK7MDENG", "bPxRfiCYzEXAMPLEK"].join("");
+    expect(redactValue({ "DB_PASSWORD=[REDACTED]": opaque }))
+      .toEqual({ "DB_PASSWORD=[REDACTED]": "[REDACTED]" });
+    expect(redactValue({ "AWS_SECRET_ACCESS_KEY=[REDACTED]": awsSecret }))
+      .toEqual({ "AWS_SECRET_ACCESS_KEY=[REDACTED]": "[REDACTED]" });
+    expect(redactValue({ "API_KEY='[REDACTED]'": opaque }))
+      .toEqual({ "API_KEY='[REDACTED]'": "[REDACTED]" });
+  });
+
+  test("detects npm and GitHub token families without returning values", () => {
+    const npmValue = `npm_${"a".repeat(36)}`;
+    const githubValue = `github_pat_${"A".repeat(32)}`;
+
+    const findings = listSecretFindings(`install token ${npmValue}\nrepo token ${githubValue}`);
+
+    expect(findings).toEqual([
+      { pattern: "npm-token", count: 1 },
+      { pattern: "github-fine-grained-token", count: 1 },
+    ]);
+    expect(JSON.stringify(findings)).not.toContain(npmValue);
+    expect(JSON.stringify(findings)).not.toContain(githubValue);
+    expect(redactEvidenceText(`install token ${npmValue}`)).toBe("install token [REDACTED_NPM_TOKEN]");
+  });
+
+  test("does not report redaction placeholders as env assignment secrets", () => {
+    const npmKey = ["NPM_", "TO", "KEN"].join("");
+    const genericKey = ["TO", "KEN"].join("");
+    expect(listSecretFindings(`${npmKey}=[REDACTED]\n${genericKey}=[REDACTED_NPM_TOKEN]`)).toEqual([]);
+    const malformedPlaceholder = `${genericKey}=${"[REDACTED]"}suffix`;
+    expect(listSecretFindings(malformedPlaceholder)).toEqual([
+      { pattern: "env-secret-assignment", count: 1 },
+    ]);
+  });
 });

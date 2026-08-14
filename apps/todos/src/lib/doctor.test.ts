@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDatabase, getDatabase, resetDatabase } from "../db/database.js";
 import { createProject } from "../db/projects.js";
+import { createTaskList } from "../db/task-lists.js";
 import { createTask, getTaskDependencies, listTasks } from "../db/tasks.js";
 import { runTodosDoctor } from "./doctor.js";
 
@@ -86,8 +87,17 @@ describe("local doctor diagnostics and repair", () => {
 
   test("applies safe repairs only with explicit apply mode and creates a backup first", () => {
     const db = getDatabase();
-    const child = createTask({ title: "Child" }, db);
-    const dependency = createTask({ title: "Dependency" }, db);
+    // Fully ROUTED fixture (project + task list on every task, project on the list).
+    // This test's subject is apply-mode repair + backup, so the rows must not trip a
+    // referential-integrity condition: since `ok` is now derived from the integrity
+    // counts as well as the checks, an unrouted fixture would make `ok` false for a
+    // reason that has nothing to do with repair, and the assertion below would stop
+    // measuring the repair path at all.
+    const project = createProject({ name: "Repair project", path: tempDir }, db);
+    const taskList = createTaskList({ name: "Repair list", project_id: project.id }, db);
+    const routed = { project_id: project.id, task_list_id: taskList.id };
+    const child = createTask({ title: "Child", ...routed }, db);
+    const dependency = createTask({ title: "Dependency", ...routed }, db);
     db.run("PRAGMA foreign_keys = OFF");
     db.run("UPDATE tasks SET parent_id = 'missing-parent', metadata = '{bad json' WHERE id = ?", [child.id]);
     db.run("INSERT INTO task_dependencies (task_id, depends_on) VALUES (?, ?)", [child.id, dependency.id]);
@@ -97,6 +107,10 @@ describe("local doctor diagnostics and repair", () => {
     const result = runTodosDoctor({ db, dbPath, apply: true });
 
     expect(result.ok).toBe(true);
+    // State the reason `ok` is true, so a future integrity regression fails here with
+    // a diagnosis instead of a bare `true !== false`.
+    expect(result.integrity.summary.complete).toBe(true);
+    expect(result.integrity.summary.findings).toBe(0);
     expect(result.dry_run).toBe(false);
     expect(result.backup?.path).toBeDefined();
     expect(existsSync(result.backup!.path)).toBe(true);

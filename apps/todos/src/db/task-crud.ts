@@ -10,10 +10,14 @@ import type {
   UpsertTaskByFingerprintResult,
 } from "../types/index.js";
 import {
+  ResourceConflictError,
   TaskNotFoundError,
   VersionConflictError,
+  isBlockingDependencyStatus,
+  isTerminalStatus,
 } from "../types/index.js";
-import { getDatabase, now, uuid } from "./database.js";
+import { getDatabase, lowerInClause, now, resolveAssignedToAliases, uuid } from "./database.js";
+export { resolveAssignedToAliases, assignedToAliasSet, lowerInClause } from "./database.js";
 import { checkCompletionGuard } from "../lib/completion-guard.js";
 import { databasePathFromDatabase } from "../lib/event-emission-safety.js";
 import { emitLocalEventHooksQuiet } from "../lib/event-hooks.js";
@@ -22,6 +26,9 @@ import { logTaskChange } from "./audit.js";
 import { dispatchWebhook } from "./webhooks.js";
 import { getChecklist } from "./checklists.js";
 import { currentStorageMachineId, recordStorageTombstone } from "./storage-tombstones.js";
+import { guardPlanRowsSqlite } from "./plan-row-serialization.js";
+import { sanitizePreWriteText, sanitizePreWriteValue } from "../lib/prewrite-secrets.js";
+import { assertTaskParentIntegrity } from "../lib/task-parent-integrity.js";
 
 // Re-export helpers for use by other modules
 export function rowToTask(row: TaskRow): Task {
@@ -63,13 +70,59 @@ function addMetadataConditions(
   }
 }
 
-export function createTask(input: CreateTaskInput, db?: Database): Task {
-  const d = db || getDatabase();
+function sanitizeCreateTaskInput(input: CreateTaskInput): CreateTaskInput {
+  return {
+    ...input,
+    title: sanitizePreWriteText(input.title, "task.title"),
+    description: input.description !== undefined
+      ? sanitizePreWriteText(input.description, "task.description")
+      : undefined,
+    tags: input.tags !== undefined ? sanitizePreWriteValue(input.tags, "task.tags") : undefined,
+    metadata: input.metadata !== undefined ? sanitizePreWriteValue(input.metadata, "task.metadata") : undefined,
+    reason: input.reason !== undefined ? sanitizePreWriteText(input.reason, "task.reason") : undefined,
+  };
+}
+
+function sanitizeUpdateTaskInput(input: UpdateTaskInput): UpdateTaskInput {
+  return {
+    ...input,
+    title: input.title !== undefined ? sanitizePreWriteText(input.title, "task.title") : undefined,
+    description: input.description !== undefined ? sanitizePreWriteText(input.description, "task.description") : undefined,
+    tags: input.tags !== undefined ? sanitizePreWriteValue(input.tags, "task.tags") : undefined,
+    metadata: input.metadata !== undefined ? sanitizePreWriteValue(input.metadata, "task.metadata") : undefined,
+  };
+}
+
+function linkedPlanProjectId(planId: string | null | undefined, db: Database): string | null {
+  if (!planId) return null;
+  const row = db.query("SELECT project_id FROM plans WHERE id = ?").get(planId) as { project_id: string | null } | null;
+  return row?.project_id ?? null;
+}
+
+function resolveCreateProjectForPlan(input: CreateTaskInput, db: Database): string | null {
+  const linkedProjectId = linkedPlanProjectId(input.plan_id, db);
+  if (!linkedProjectId) return input.project_id || null;
+  if (input.project_id !== undefined && input.project_id !== linkedProjectId) {
+    throw new ResourceConflictError(
+      "PLAN_PROJECT_LINK_CONFLICT",
+      `Task project conflicts with linked plan ${input.plan_id}: expected ${linkedProjectId}`,
+    );
+  }
+  return linkedProjectId;
+}
+
+function createTaskStored(input: CreateTaskInput, d: Database): Task {
+  const effectiveProjectId = resolveCreateProjectForPlan(input, d);
   const timestamp = now();
   const tags = input.tags || [];
   const machineId = currentStorageMachineId(d);
 
-  // assigned_by = who created this task (always the calling agent)
+  // created_by = who FILED this task. Write-once here and never touched again by
+  // start/claim/steal/update, so "who put this in the system" stays answerable
+  // for the life of the row. Falls back to agent_id because every existing caller
+  // that bothered to identify itself did so through agent_id.
+  const createdBy = input.created_by || input.agent_id || null;
+  // assigned_by = who handed this task over
   // assigned_from_project = which project they were in when they assigned it
   const assignedBy = input.assigned_by || input.agent_id;
   const assignedFromProject = input.assigned_from_project || null;
@@ -78,13 +131,14 @@ export function createTask(input: CreateTaskInput, db?: Database): Task {
   let id = uuid();
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
+      assertTaskParentIntegrity(id, input.parent_id, (candidateId) => getTask(candidateId, d));
       d.run(
-        `INSERT INTO tasks (id, short_id, project_id, parent_id, plan_id, task_list_id, cycle_id, title, description, status, priority, agent_id, assigned_to, session_id, working_dir, tags, metadata, version, created_at, updated_at, due_at, estimated_minutes, sla_minutes, confidence, retry_count, max_retries, retry_after, requires_approval, approved_by, approved_at, recurrence_rule, recurrence_parent_id, spawns_template_id, reason, spawned_from_session, assigned_by, assigned_from_project, task_type, machine_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO tasks (id, short_id, project_id, parent_id, plan_id, task_list_id, cycle_id, title, description, status, priority, agent_id, assigned_to, session_id, working_dir, tags, metadata, version, created_at, updated_at, due_at, estimated_minutes, sla_minutes, confidence, retry_count, max_retries, retry_after, requires_approval, approved_by, approved_at, recurrence_rule, recurrence_parent_id, spawns_template_id, reason, spawned_from_session, assigned_by, created_by, assigned_from_project, task_type, machine_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           id,
           null,
-          input.project_id || null,
+          effectiveProjectId,
           input.parent_id || null,
           input.plan_id || null,
           input.task_list_id || null,
@@ -117,6 +171,7 @@ export function createTask(input: CreateTaskInput, db?: Database): Task {
           input.reason || null,
           input.spawned_from_session || null,
           assignedBy || null,
+          createdBy,
           assignedFromProject || null,
           input.task_type || null,
           machineId,
@@ -137,7 +192,18 @@ export function createTask(input: CreateTaskInput, db?: Database): Task {
     insertTaskTags(id, tags, d);
   }
 
-  const task = getTask(id, d)!;
+  return getTask(id, d)!;
+}
+
+export function createTask(input: CreateTaskInput, db?: Database): Task {
+  input = sanitizeCreateTaskInput(input);
+  const d = db || getDatabase();
+  const task = input.plan_id
+    ? d.transaction(() => {
+      guardPlanRowsSqlite([input.plan_id], d);
+      return createTaskStored(input, d);
+    })()
+    : createTaskStored(input, d);
   const payload = taskEventData(task);
   const databasePath = databasePathFromDatabase(d);
   dispatchWebhook("task.created", payload, d).catch(() => {});
@@ -177,15 +243,21 @@ export function getTaskWithRelations(
     .all(id) as TaskRow[];
   const dependencies = depRows.map(rowToTask);
 
-  // Get blocked_by (tasks that depend on this task)
-  const blockedByRows = d
+  // blocked_by = the prerequisites still standing in the way. A completed or
+  // cancelled prerequisite no longer blocks (same rule as getBlockedTasks).
+  // Regression 4599ef37: this field used to carry the DEPENDENTS, so JSON
+  // consumers gating on it by name blocked the wrong side of every edge.
+  const blocked_by = dependencies.filter((dep) => isBlockingDependencyStatus(dep.status));
+
+  // Get blocks (tasks that depend on this task — the ones this task blocks)
+  const blocksRows = d
     .query(
       `SELECT t.* FROM tasks t
        JOIN task_dependencies td ON td.task_id = t.id
        WHERE td.depends_on = ?`,
     )
     .all(id) as TaskRow[];
-  const blocked_by = blockedByRows.map(rowToTask);
+  const blocks = blocksRows.map(rowToTask);
 
   // Get comments
   const comments = d
@@ -205,11 +277,18 @@ export function getTaskWithRelations(
     subtasks,
     dependencies,
     blocked_by,
+    blocks,
     comments,
     parent,
     checklist,
   };
 }
+
+// `resolveAssignedToAliases` and `lowerInClause` moved to ./database.js so
+// every other exact-match `assigned_to` call site in this package can reuse
+// them (task 84c77210 — the sibling sites to this file's original PR #160
+// fix). Re-imported above; kept as a named re-export here too so any
+// existing `from "./task-crud.js"` import site keeps working.
 
 export function listTasks(filter: TaskFilter = {}, db?: Database): Task[] {
   const d = db || getDatabase();
@@ -260,13 +339,42 @@ export function listTasks(filter: TaskFilter = {}, db?: Database): Task[] {
   }
 
   if (filter.assigned_to) {
-    conditions.push("assigned_to = ?");
-    params.push(filter.assigned_to);
+    conditions.push(lowerInClause("assigned_to", resolveAssignedToAliases(d, filter.assigned_to), params));
   }
 
   if (filter.agent_id) {
     conditions.push("agent_id = ?");
     params.push(filter.agent_id);
+  }
+
+  // Compared case-insensitively, matching how agent names are already resolved
+  // elsewhere (`getAgentByNameProjection` uses `WHERE LOWER(name) = ?`).
+  // Canonicalising only at WRITE time is not enough: rows stored before that fix
+  // carry whatever case they were written with, and a hand-typed
+  // `--created-by Cassius` never passes through the resolver at all. Both would
+  // silently return the wrong set against an exact-match comparison.
+  if (filter.created_by) {
+    conditions.push("LOWER(created_by) = LOWER(?)");
+    params.push(filter.created_by);
+  }
+
+  if (filter.not_created_by) {
+    // Rows with a NULL created_by predate the field and are unattributable — they
+    // are kept rather than silently dropped, because "we don't know who filed it"
+    // is not the same claim as "someone else filed it".
+    conditions.push("(created_by IS NULL OR LOWER(created_by) != LOWER(?))");
+    params.push(filter.not_created_by);
+  }
+
+  // Since-cursor. Compared as an INSTANT via julianday(), not as text: stored
+  // stamps mix "2026-08-05T18:54:55.814Z" with "2026-06-10 11:24:47", and as
+  // text "T" sorts after " ", so a string comparison mis-orders them.
+  // A stamp julianday() cannot parse yields NULL; those rows are KEPT, because
+  // "we cannot read this row's timestamp" is not the same claim as "this row is
+  // older than the cursor" — dropping them would silently hide changed work.
+  if (filter.updated_after) {
+    conditions.push("(julianday(updated_at) IS NULL OR julianday(updated_at) > julianday(?))");
+    params.push(filter.updated_after);
   }
 
   if (filter.session_id) {
@@ -474,13 +582,42 @@ export function countTasks(filter: Omit<TaskFilter, 'limit' | 'offset'> = {}, db
   }
 
   if (filter.assigned_to) {
-    conditions.push("assigned_to = ?");
-    params.push(filter.assigned_to);
+    conditions.push(lowerInClause("assigned_to", resolveAssignedToAliases(d, filter.assigned_to), params));
   }
 
   if (filter.agent_id) {
     conditions.push("agent_id = ?");
     params.push(filter.agent_id);
+  }
+
+  // Compared case-insensitively, matching how agent names are already resolved
+  // elsewhere (`getAgentByNameProjection` uses `WHERE LOWER(name) = ?`).
+  // Canonicalising only at WRITE time is not enough: rows stored before that fix
+  // carry whatever case they were written with, and a hand-typed
+  // `--created-by Cassius` never passes through the resolver at all. Both would
+  // silently return the wrong set against an exact-match comparison.
+  if (filter.created_by) {
+    conditions.push("LOWER(created_by) = LOWER(?)");
+    params.push(filter.created_by);
+  }
+
+  if (filter.not_created_by) {
+    // Rows with a NULL created_by predate the field and are unattributable — they
+    // are kept rather than silently dropped, because "we don't know who filed it"
+    // is not the same claim as "someone else filed it".
+    conditions.push("(created_by IS NULL OR LOWER(created_by) != LOWER(?))");
+    params.push(filter.not_created_by);
+  }
+
+  // Since-cursor. Compared as an INSTANT via julianday(), not as text: stored
+  // stamps mix "2026-08-05T18:54:55.814Z" with "2026-06-10 11:24:47", and as
+  // text "T" sorts after " ", so a string comparison mis-orders them.
+  // A stamp julianday() cannot parse yields NULL; those rows are KEPT, because
+  // "we cannot read this row's timestamp" is not the same claim as "this row is
+  // older than the cursor" — dropping them would silently hide changed work.
+  if (filter.updated_after) {
+    conditions.push("(julianday(updated_at) IS NULL OR julianday(updated_at) > julianday(?))");
+    params.push(filter.updated_after);
   }
 
   if (filter.session_id) {
@@ -533,7 +670,7 @@ export function countTasks(filter: Omit<TaskFilter, 'limit' | 'offset'> = {}, db
   return row.count;
 }
 
-export function updateTask(
+function updateTaskStored(
   id: string,
   input: UpdateTaskInput,
   db?: Database,
@@ -545,6 +682,24 @@ export function updateTask(
   // Optimistic locking check
   if (task.version !== input.version) {
     throw new VersionConflictError(id, input.version, task.version);
+  }
+  input = sanitizeUpdateTaskInput(input);
+  assertTaskParentIntegrity(id, input.parent_id, (candidateId) => getTask(candidateId, d));
+
+  const effectivePlanId = input.plan_id !== undefined ? input.plan_id : task.plan_id;
+  const linkedProjectId = linkedPlanProjectId(effectivePlanId, d);
+  if (linkedProjectId) {
+    const effectiveProjectId = input.project_id !== undefined ? input.project_id : task.project_id;
+    if (effectiveProjectId !== linkedProjectId) {
+      if (input.project_id === undefined && (input.plan_id !== undefined || task.project_id === null)) {
+        input = { ...input, project_id: linkedProjectId };
+      } else {
+        throw new ResourceConflictError(
+          "PLAN_PROJECT_LINK_CONFLICT",
+          `Task project conflicts with linked plan ${effectivePlanId}: expected ${linkedProjectId}`,
+        );
+      }
+    }
   }
 
   const timestamp = now();
@@ -560,6 +715,13 @@ export function updateTask(
     sets.push("description = ?");
     params.push(input.description);
   }
+  if (input.agent_id !== undefined) {
+    // The repair path. `created_by` stays write-once — correcting a bad stamp must
+    // not become a way to rewrite authorship — but `agent_id` had no write path at
+    // all after creation, so a row misattributed at creation was uncorrectable.
+    sets.push("agent_id = ?");
+    params.push(input.agent_id);
+  }
   if (input.status !== undefined) {
     // Completion guard when transitioning to completed
     if (input.status === "completed") {
@@ -567,13 +729,21 @@ export function updateTask(
     }
     sets.push("status = ?");
     params.push(input.status);
+    if (isTerminalStatus(input.status)) {
+      // M1: mirror completeTask/failTask — reaching a TERMINAL state releases the
+      // lock so a recurring/handoff chain isn't left holding a stale one.
+      //
+      // This used to fire for "completed" only, so `update --status failed` and
+      // `--status cancelled` leaked a permanent lock: `startTask` refuses a row
+      // that is not pending/in_progress, so nothing can ever re-acquire it and
+      // repair-on-reacquisition can never reach it. The dedicated completeTask
+      // and failTask paths always cleared it; only this generic patch path did not.
+      sets.push("locked_by = NULL");
+      sets.push("locked_at = NULL");
+    }
     if (input.status === "completed") {
       sets.push("completed_at = ?");
       params.push(completionTimestamp);
-      // M1: mirror completeTask — completing a task releases its lock so a
-      // recurring/handoff chain isn't left holding a stale lock.
-      sets.push("locked_by = NULL");
-      sets.push("locked_at = NULL");
     } else if (task.status === "completed" && input.completed_at === undefined) {
       // M3: reopening a completed task clears the stale completed_at.
       sets.push("completed_at = NULL");
@@ -587,9 +757,37 @@ export function updateTask(
     sets.push("project_id = ?");
     params.push(input.project_id);
   }
+  if (input.parent_id !== undefined) {
+    sets.push("parent_id = ?");
+    params.push(input.parent_id);
+  }
   if (input.assigned_to !== undefined) {
     sets.push("assigned_to = ?");
     params.push(input.assigned_to);
+  }
+  // ── delegation lineage ────────────────────────────────────────────────────
+  // These three columns existed, were indexed, and had NO write path after
+  // creation. A PATCH carrying them bumped the version and changed nothing, at
+  // rc=0 — so `todos delegate`, whose entire claim over `todos assign` is that
+  // it records the handover, would have reported success while writing none of
+  // it. Each branch tests `!== undefined` rather than truthiness because
+  // `delegation_depth: 0` and `delegated_from: null` are both meaningful: depth
+  // zero is a root dispatch, and an explicit null detaches a mis-stamped chain.
+  //
+  // `created_by` deliberately has no branch here and keeps its write-once
+  // semantics: correcting who DISPATCHED a row must never become a way to
+  // rewrite who FILED it.
+  if (input.assigned_by !== undefined) {
+    sets.push("assigned_by = ?");
+    params.push(input.assigned_by);
+  }
+  if (input.delegated_from !== undefined) {
+    sets.push("delegated_from = ?");
+    params.push(input.delegated_from);
+  }
+  if (input.delegation_depth !== undefined) {
+    sets.push("delegation_depth = ?");
+    params.push(input.delegation_depth);
   }
   if (input.working_dir !== undefined) {
     sets.push("working_dir = ?");
@@ -718,6 +916,7 @@ export function updateTask(
   if (input.status !== undefined && input.status !== task.status) logTaskChange(id, "update", "status", task.status, input.status, agentId, d);
   if (input.priority !== undefined && input.priority !== task.priority) logTaskChange(id, "update", "priority", task.priority, input.priority, agentId, d);
   if (input.title !== undefined && input.title !== task.title) logTaskChange(id, "update", "title", task.title, input.title, agentId, d);
+  if (input.parent_id !== undefined && input.parent_id !== task.parent_id) logTaskChange(id, "update", "parent_id", task.parent_id, input.parent_id, agentId, d);
   if (input.assigned_to !== undefined && input.assigned_to !== task.assigned_to) logTaskChange(id, "update", "assigned_to", task.assigned_to, input.assigned_to, agentId, d);
   if (input.working_dir !== undefined && input.working_dir !== task.working_dir) logTaskChange(id, "update", "working_dir", task.working_dir, input.working_dir, agentId, d);
   if (input.approved_by !== undefined) logTaskChange(id, "approve", "approved_by", null, input.approved_by, agentId, d);
@@ -725,6 +924,10 @@ export function updateTask(
   // Determine the post-write completion timestamp / lock state to mirror the SQL above.
   const reopened = input.status !== undefined && input.status !== "completed" && task.status === "completed" && input.completed_at === undefined;
   const completedNow = input.status === "completed";
+  // Mirrors the `isTerminalStatus` branch in the SQL above. These two must agree:
+  // when they did not, the row was written correctly and the object returned to
+  // the caller still reported the released lock as held.
+  const terminalNow = input.status !== undefined && isTerminalStatus(input.status);
   const updatedTask: Task = {
     ...task,
     ...Object.fromEntries(Object.entries(input).filter(([, v]) => v !== undefined)),
@@ -732,8 +935,8 @@ export function updateTask(
     metadata: input.metadata ?? task.metadata,
     version: task.version + 1,
     updated_at: timestamp,
-    locked_by: completedNow ? null : task.locked_by,
-    locked_at: completedNow ? null : task.locked_at,
+    locked_by: terminalNow ? null : task.locked_by,
+    locked_at: terminalNow ? null : task.locked_at,
     completed_at: completedNow ? completionTimestamp : reopened ? null : input.completed_at !== undefined ? input.completed_at : task.completed_at,
     sla_minutes: input.sla_minutes !== undefined ? input.sla_minutes : task.sla_minutes,
     actual_minutes: input.actual_minutes ?? task.actual_minutes,
@@ -771,6 +974,25 @@ export function updateTask(
 
   // Return updated task without re-fetching from DB
   return updatedTask;
+}
+
+export function updateTask(
+  id: string,
+  input: UpdateTaskInput,
+  db?: Database,
+): Task {
+  const d = db || getDatabase();
+  const before = getTask(id, d);
+  if (!before) throw new TaskNotFoundError(id);
+  const guardedPlanIds = [before.plan_id, input.plan_id];
+  const needsSerializedWrite = input.parent_id !== undefined || guardedPlanIds.some(Boolean);
+  if (!needsSerializedWrite) return updateTaskStored(id, input, d);
+  return d.transaction(() => {
+    guardPlanRowsSqlite(guardedPlanIds, d);
+    const current = getTask(id, d);
+    guardPlanRowsSqlite([current?.plan_id, input.plan_id], d);
+    return updateTaskStored(id, input, d);
+  })();
 }
 
 export function deleteTask(id: string, db?: Database): boolean {

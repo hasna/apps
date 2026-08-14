@@ -2,8 +2,10 @@ import type { Database } from "bun:sqlite";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { getDatabase, getDatabasePath, now } from "../db/database.js";
+import { scanSqliteIntegrity } from "../db/integrity.js";
 import { MIGRATIONS } from "../db/migrations.js";
 import { ensureSchema, runMigrations } from "../db/schema.js";
+import type { IntegrityReport } from "./integrity.js";
 import { isValidRecurrenceRule } from "./recurrence.js";
 
 export type DoctorSeverity = "info" | "warn" | "error";
@@ -14,6 +16,12 @@ export interface DoctorCheck {
   message: string;
   count?: number;
   repairable?: boolean;
+  /**
+   * True for checks projected from the referential-integrity report, so a renderer
+   * can show them in the per-condition breakdown instead of the generic list. Never
+   * repairable — doctor reports orphans, it does not decide their fate.
+   */
+  integrity?: boolean;
 }
 
 export interface DoctorRepair {
@@ -34,9 +42,20 @@ export interface DoctorSummary {
   infos: number;
   repairable: number;
   applied: number;
+  /** Referential conditions measured with matching rows. Report-only, never repaired. */
+  integrity_findings: number;
+  /** Rows affected across all integrity findings. */
+  integrity_rows: number;
+  /** Conditions doctor could not measure — never folded into "all clear". */
+  integrity_unverified: number;
 }
 
 export interface DoctorResult {
+  /**
+   * True only when there is no error-severity check AND the referential-integrity
+   * report is both complete and empty. `ok` is derived from the same checks and
+   * counts that get printed — never asserted independently of them.
+   */
   ok: boolean;
   dry_run: boolean;
   database_path: string;
@@ -47,6 +66,8 @@ export interface DoctorResult {
   backup?: DoctorBackup;
   checks: DoctorCheck[];
   repairs: DoctorRepair[];
+  /** Per-condition referential-integrity breakdown (orphans, dangling references). */
+  integrity: IntegrityReport;
   summary: DoctorSummary;
 }
 
@@ -263,14 +284,47 @@ function pushRepair(repairs: DoctorRepair[], type: string, message: string, appl
   repairs.push({ type, message, applied, count });
 }
 
-function summarize(checks: DoctorCheck[], repairs: DoctorRepair[]): DoctorSummary {
+function summarize(checks: DoctorCheck[], repairs: DoctorRepair[], integrity: IntegrityReport): DoctorSummary {
   return {
     errors: checks.filter((check) => check.severity === "error").length,
     warnings: checks.filter((check) => check.severity === "warn").length,
     infos: checks.filter((check) => check.severity === "info").length,
     repairable: checks.filter((check) => check.repairable).length,
     applied: repairs.filter((repair) => repair.applied).length,
+    integrity_findings: integrity.summary.findings,
+    integrity_rows: integrity.summary.rows,
+    integrity_unverified: integrity.summary.unverified,
   };
+}
+
+/**
+ * Fold the referential-integrity report into doctor's check list so the human
+ * output, the JSON contract and the exit code all read the SAME rows. Findings are
+ * deliberately `repairable: false`: doctor reports orphans, it does not decide what
+ * to do with them (`--apply` must never touch them).
+ */
+function addIntegrityChecks(integrity: IntegrityReport, checks: DoctorCheck[]): void {
+  for (const condition of integrity.conditions) {
+    if (!condition.verified) {
+      addCheck(checks, {
+        severity: "warn",
+        type: `${condition.id}_unverified`,
+        message: condition.message,
+        repairable: false,
+        integrity: true,
+      });
+      continue;
+    }
+    if ((condition.count ?? 0) === 0) continue;
+    addCheck(checks, {
+      severity: condition.severity ?? "warn",
+      type: condition.id,
+      message: `${condition.message} — ${condition.impact}`,
+      count: condition.count ?? undefined,
+      repairable: false,
+      integrity: true,
+    });
+  }
 }
 
 function deleteOrphans(db: Database, table: string, where: string): number {
@@ -363,6 +417,12 @@ export function runTodosDoctor(options: RunTodosDoctorOptions = {}): DoctorResul
   }
 
   addTaskStateChecks(db, checks);
+
+  // Referential integrity: orphaned/dangling project and task-list references.
+  // These are the conditions that hide work from operators, and the ones doctor
+  // historically never counted at all.
+  const integrity = scanSqliteIntegrity(db);
+  addIntegrityChecks(integrity, checks);
 
   const corruptJson = findCorruptJsonMetadata(db);
   if (corruptJson.length > 0) {
@@ -466,16 +526,22 @@ export function runTodosDoctor(options: RunTodosDoctorOptions = {}): DoctorResul
     }
   }
 
-  const finalChecks = apply && hasRepairableIssue ? runTodosDoctor({ db, dbPath, apply: false }).checks : checks;
-  const summary = summarize(finalChecks, repairs);
+  // Re-read after a repair so the reported state is the POST-repair state.
+  const reread = apply && hasRepairableIssue ? runTodosDoctor({ db, dbPath, apply: false }) : undefined;
+  const finalChecks = reread?.checks ?? checks;
+  const finalIntegrity = reread?.integrity ?? integrity;
+  const summary = summarize(finalChecks, repairs, finalIntegrity);
   return {
-    ok: !finalChecks.some((check) => check.severity === "error"),
+    // Honest verdict: an error-severity check, an integrity finding, or a condition
+    // that could not be measured all keep `ok` false.
+    ok: !finalChecks.some((check) => check.severity === "error") && finalIntegrity.summary.ok,
     dry_run: !apply,
     database_path: dbPath,
     migration: { current: getMigrationLevel(db), expected: migrationExpected },
     backup,
     checks: finalChecks,
     repairs,
+    integrity: finalIntegrity,
     summary,
   };
 }

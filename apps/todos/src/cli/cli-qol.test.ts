@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from "bun:test";
+import { describe, it, expect, beforeAll, afterAll, setDefaultTimeout } from "bun:test";
 import { mkdtemp, rm, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,6 +11,10 @@ const CWD = join(import.meta.dir, "../..");
 let tmpDir: string;
 let dbPath: string;
 let fakeHome: string;
+
+// This file exercises the real CLI through subprocesses. The child helper
+// allows 15s, so its parent tests must not inherit Bun's shorter 5s default.
+setDefaultTimeout(30_000);
 
 function run(args: string): string {
   return execSync(
@@ -73,10 +77,14 @@ describe("CLI QoL commands", () => {
     const t1 = JSON.parse(run("add 'Bulk done 1' --json"));
     const t2 = JSON.parse(run("add 'Bulk done 2' --json"));
 
-    // Tasks must be in_progress before completing
-    run(`--json bulk start ${t1.id} ${t2.id}`);
+    // Tasks must be in_progress before completing.
+    // `--agent` is required on a claim verb (todos cf995f20): `bulk start` used
+    // to fall back to the literal "cli", which every unidentified session on a
+    // station shared as a lock holder. This test is about bulk mechanics, not
+    // identity policy, so it simply supplies one.
+    run(`--agent qol-bulk --json bulk start ${t1.id} ${t2.id}`);
 
-    const out = run(`--json bulk done ${t1.id} ${t2.id}`);
+    const out = run(`--agent qol-bulk --json bulk done ${t1.id} ${t2.id}`);
     const result = JSON.parse(out);
 
     expect(result.succeeded).toBe(2);
@@ -97,7 +105,8 @@ describe("CLI QoL commands", () => {
   it("bulk start should start a task", () => {
     const t = JSON.parse(run("add 'Bulk start task' --json"));
 
-    const out = run(`--json bulk start ${t.id}`);
+    // `--agent` required on a claim verb — see the note on bulk done above.
+    const out = run(`--agent qol-bulk --json bulk start ${t.id}`);
     const result = JSON.parse(out);
 
     expect(result.succeeded).toBe(1);
@@ -220,6 +229,43 @@ describe("CLI QoL commands", () => {
     expect(idx1).toBeLessThan(idx2);
   });
 
+  // ── list --sort with --limit ───────────────────────────────────
+  //
+  // `--limit` reaches storage, whose ORDER BY is `priority_rank, created_at DESC`
+  // — NOT the requested sort field, which used to be applied in JS only AFTER the
+  // truncated page came back. So `--sort updated --limit 2` returned "the 2
+  // highest-priority rows, ordered by update time" while reading as "the 2 most
+  // recently updated". The row that was actually updated last was absent, at exit
+  // 0, with nothing to indicate the window was the wrong one.
+  //
+  // The fixture makes the two orderings disagree on purpose: the most recently
+  // updated task is the LOWEST priority and the OLDEST created, so storage ranks
+  // it dead last and any limit applied before the sort drops it.
+
+  it("list --sort updated must select the window AFTER sorting, not before", () => {
+    const tag = "sortlimit";
+    // Created first + lowest priority => last in the storage ordering.
+    const low = JSON.parse(run(`add 'SL low priority' --priority low --tags ${tag} --json`));
+    JSON.parse(run(`add 'SL critical one' --priority critical --tags ${tag} --json`));
+    JSON.parse(run(`add 'SL critical two' --priority critical --tags ${tag} --json`));
+    // ...but updated last, so it is unambiguously the most recently updated row.
+    run(`update ${low.id} --description 'touched last'`);
+
+    // Control: with no --limit the fixture must put `low` first. If this fails the
+    // fixture is wrong (not the code), so the assertion below would be meaningless.
+    const unlimited = JSON.parse(run(`--json list --all --tags ${tag} --sort updated`));
+    expect(unlimited[0].id).toBe(low.id);
+
+    const limited = JSON.parse(run(`--json list --all --tags ${tag} --sort updated --limit 2`));
+    expect(limited.length).toBe(2);
+    // The most recently updated task must be in — and at the head of — a window
+    // that claims to be the 2 most recently updated.
+    expect(limited[0].id).toBe(low.id);
+    expect(limited.map((t: any) => t.id)).toContain(low.id);
+    // Six cold `bun run` subprocesses (~0.5s each) overrun the 5s bun-test default
+    // under parallel CI load. Matches the explicit budgets in src/cli/cli.test.ts.
+  }, 30000);
+
   // ── list --project-name ────────────────────────────────────────
 
   it("list --project-name should filter by project name", () => {
@@ -253,6 +299,57 @@ describe("CLI QoL commands", () => {
     expect(updated.task_list_id).toBe("next-slug");
     expect(lists).toEqual([expect.objectContaining({ slug: "next-slug" })]);
   }, 15_000);
+
+  it("projects --ensure-task-list plans safely, applies once, and conditionally rolls back", () => {
+    const projectPath = join(tmpDir, "ensure-project-task-list");
+    const project = JSON.parse(run(
+      `--json projects --add ${projectPath} --name 'Ensure Project' --task-list-id ensure-project`,
+    ));
+
+    const plan = JSON.parse(run(`--json projects --ensure-task-list ${project.id}`));
+    expect(plan).toMatchObject({
+      mode: "plan",
+      action: "would_create",
+      project: { id: project.id, name: "Ensure Project", task_list_id: "ensure-project" },
+      task_list: null,
+      receipt: null,
+    });
+    expect(JSON.parse(run(`--project ${project.id} --json lists`))).toEqual([]);
+
+    const first = JSON.parse(run(
+      `--json projects --ensure-task-list ${project.id} --apply --idempotency-key ensure-project-default-list`,
+    ));
+    const second = JSON.parse(run(
+      `--json projects --ensure-task-list ${project.id} --apply --idempotency-key ensure-project-default-list`,
+    ));
+    expect(first).toMatchObject({
+      mode: "apply",
+      action: "created",
+      task_list: { project_id: project.id, slug: "ensure-project", name: "Ensure Project" },
+      receipt: { created_by_operation: true, rollback_supported: true },
+    });
+    expect(second).toMatchObject({
+      mode: "apply",
+      action: "already_present",
+      task_list: { id: first.task_list.id },
+      receipt: { receipt_id: first.receipt.receipt_id },
+    });
+    const lists = JSON.parse(run(`--project ${project.id} --json lists`));
+    expect(lists).toEqual([
+      expect.objectContaining({ id: first.task_list.id, project_id: project.id, slug: "ensure-project" }),
+    ]);
+
+    const rollback = JSON.parse(run(
+      `--json projects --rollback-task-list ${project.id} --apply --receipt ${first.receipt.receipt_id}`,
+    ));
+    expect(rollback).toMatchObject({
+      action: "removed",
+      project_id: project.id,
+      task_list_id: first.task_list.id,
+      accepted_receipt_id: first.receipt.receipt_id,
+    });
+    expect(JSON.parse(run(`--project ${project.id} --json lists`))).toEqual([]);
+  }, 30_000);
 
   it("project-panel --json should emit a project panel contract", () => {
     const projPath = join(tmpDir, "panel-project");
@@ -494,11 +591,20 @@ describe("CLI QoL commands", () => {
   });
 
   it("doctor --json should report local dry-run diagnostics", () => {
-    const out = run("--json doctor");
+    // This suite's tasks are created with TODOS_AUTO_PROJECT=false, so the store
+    // legitimately carries unrouted tasks and `doctor` exits 1 on findings. `run`
+    // shells out with execSync (which throws on a non-zero exit), so this shape
+    // check uses the documented opt-out; the exit-code contract itself is asserted
+    // in src/cli/doctor-exit-code.test.ts.
+    const out = run("--json doctor --no-fail-on-findings");
     const result = JSON.parse(out);
     expect(result.dry_run).toBe(true);
     expect(result.checks.some((check: { type: string }) => check.type === "migration_level")).toBe(true);
     expect(result.checks.some((check: { type: string }) => check.type === "database_permissions")).toBe(true);
+    // The referential breakdown is part of the local contract, not just remote.
+    expect(result.integrity.schema_version).toBe("todos.integrity.v1");
+    expect(result.integrity.conditions).toHaveLength(6);
+    expect(result.integrity.summary.complete).toBe(true);
   });
 
   it("list --sort priority should sort tasks by priority", () => {

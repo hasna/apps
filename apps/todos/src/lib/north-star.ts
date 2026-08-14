@@ -1,5 +1,5 @@
 import type { Database } from "bun:sqlite";
-import { getDatabase } from "../db/database.js";
+import { assignedToAliasSet, getDatabase, resolvePartialId } from "../db/database.js";
 import { getActiveWork, getStaleTasks } from "../db/task-lifecycle.js";
 import { getLastHeartbeat } from "../db/checkpoints.js";
 
@@ -45,10 +45,27 @@ export function getNorthStarSnapshot(
     `SELECT COUNT(*) as count FROM tasks WHERE ${conditions.join(" AND ")}`,
   ).get(...params) as { count: number };
 
+  // Alias-resolved (task 84c77210): `assigned_to` holds an agent id from one
+  // write path and a resolved name from another — see database.ts for the
+  // root cause. Bucketing by the raw string (as this did before) silently
+  // split one real agent's activity into two disjoint buckets whenever some
+  // of its tasks were recorded under the other form, which can misreport
+  // `top_agent` — the exact "a rate/ranking nobody questions because it
+  // carries no obvious scale" shape 84c77210 named for agent-metrics.
+  // Canonicalise every raw key to the agent's registered id before it goes
+  // into `agentMap`, so aliases of the same agent merge into one bucket.
+  const canonicalAgentKey = (raw: string): string => {
+    try {
+      return resolvePartialId(d, "agents", raw) ?? raw;
+    } catch {
+      return raw;
+    }
+  };
+
   // Group active tasks by agent
   const agentMap = new Map<string, AgentActivity>();
   for (const task of active) {
-    const agentId = task.assigned_to || task.locked_by || "unassigned";
+    const agentId = canonicalAgentKey(task.assigned_to || task.locked_by || "unassigned");
     const existing = agentMap.get(agentId);
     if (existing) {
       existing.active_tasks++;
@@ -68,13 +85,18 @@ export function getNorthStarSnapshot(
      GROUP BY assigned_to`,
   ).all(new Date(Date.now() - 60 * 60 * 1000).toISOString()) as { assigned_to: string; count: number }[];
 
+  // GROUP BY on the raw column splits one agent's completions across its
+  // alias forms just like the active-work bucketing above, so canonicalise
+  // here too and ADD into an existing bucket rather than overwrite — two raw
+  // rows can canonicalise to the same agent.
   for (const row of agentCompletions) {
-    const agent = agentMap.get(row.assigned_to);
+    const canonicalId = canonicalAgentKey(row.assigned_to);
+    const agent = agentMap.get(canonicalId);
     if (agent) {
-      agent.completions_last_hour = row.count;
+      agent.completions_last_hour += row.count;
     } else {
-      agentMap.set(row.assigned_to, {
-        agent_id: row.assigned_to,
+      agentMap.set(canonicalId, {
+        agent_id: canonicalId,
         active_tasks: 0,
         completions_last_hour: row.count,
       });
@@ -83,8 +105,11 @@ export function getNorthStarSnapshot(
 
   // Get last heartbeats for active agents
   for (const agent of agentMap.values()) {
-    // Get last heartbeat for this agent's first active task
-    const agentTask = active.find(t => t.assigned_to === agent.agent_id || t.locked_by === agent.agent_id);
+    // Get last heartbeat for this agent's first active task. `agent.agent_id`
+    // is canonicalised above; `t.assigned_to` on the raw task is not, so
+    // match it via the same alias set rather than a bare `===`.
+    const agentAliases = assignedToAliasSet(d, agent.agent_id);
+    const agentTask = active.find(t => agentAliases.has((t.assigned_to ?? "").toLowerCase()) || t.locked_by === agent.agent_id);
     if (agentTask) {
       const hb = getLastHeartbeat(agentTask.id, d);
       if (hb) agent.last_heartbeat = hb.created_at;

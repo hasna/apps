@@ -88,6 +88,46 @@ describe("local agent context packs", () => {
     expect(pack.warnings).toContain("1 older comments omitted");
   });
 
+  test("caps plan task context at the latest 24 with exact omitted counts and load-more guidance", () => {
+    const db = getDatabase();
+    const plan = createPlan({ name: "Large plan" }, db);
+    const task = createTask({ title: "Context target", plan_id: plan.id }, db);
+    db.run("UPDATE tasks SET created_at = ?, updated_at = ? WHERE id = ?", ["2024-01-01T00:00:00.000Z", "2024-01-01T00:00:00.000Z", task.id]);
+
+    const siblings = Array.from({ length: 30 }, (_, index) => {
+      const sibling = createTask({
+        title: `Plan sibling ${String(index).padStart(2, "0")}`,
+        plan_id: plan.id,
+        priority: index === 0 ? "critical" : "low",
+      }, db);
+      const timestamp = index >= 28
+        ? "2025-01-01T00:00:59.000Z"
+        : `2025-01-01T00:00:${String(index).padStart(2, "0")}.000Z`;
+      db.run("UPDATE tasks SET created_at = ?, updated_at = ? WHERE id = ?", [timestamp, timestamp, sibling.id]);
+      return sibling;
+    });
+
+    const pack = createAgentContextPack({ task_id: task.id }, db);
+    const markdown = renderAgentContextPackMarkdown(pack);
+    const tiedLatestIds = siblings.slice(28).map((item) => item.id).sort();
+
+    expect(pack.limits.plan_task_limit).toBe(24);
+    expect(pack.plan?.tasks).toHaveLength(24);
+    expect(pack.plan?.total_tasks).toBe(31);
+    expect(pack.plan?.omitted_tasks).toBe(7);
+    expect(pack.plan?.tasks.slice(0, 2).map((item) => item.id)).toEqual(tiedLatestIds);
+    expect(pack.plan?.tasks.map((item) => item.title)).toContain("Plan sibling 27");
+    expect(pack.plan?.tasks.map((item) => item.title)).not.toContain("Plan sibling 00");
+    expect(markdown).toContain("24 shown of 31 total (7 omitted)");
+    expect(markdown).toContain("todos plans --show");
+    expect(markdown).toContain("todos context-pack <task-id>");
+
+    const oversizedRequest = createAgentContextPack({ task_id: task.id, plan_task_limit: 100 }, db);
+    expect(oversizedRequest.limits.plan_task_limit).toBe(24);
+    expect(oversizedRequest.plan?.tasks).toHaveLength(24);
+    expect(oversizedRequest.plan?.omitted_tasks).toBe(7);
+  });
+
   test("budgets context locally with include exclude rules and deterministic summaries", async () => {
     const db = getDatabase();
     const project = createProject({ name: "Budget Project", path: "/tmp/budget" }, db);

@@ -3,10 +3,12 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { getAgent, getAgentByName } from "../db/agents.js";
 import { getDatabase, resolvePartialId } from "../db/database.js";
+import { formatExpiredLock, lockDisplayState } from "../lib/lock-display.js";
 import { logError } from "../lib/logger.js";
 import {
   VersionConflictError,
   TaskNotFoundError,
+  TaskReferenceAmbiguousError,
   ProjectNotFoundError,
   LockError,
   DependencyCycleError,
@@ -123,6 +125,15 @@ function formatError(error: unknown): string {
   if (error instanceof TaskNotFoundError) {
     return JSON.stringify({ code: TaskNotFoundError.code, message: error.message, suggestion: TaskNotFoundError.suggestion });
   }
+  if (error instanceof TaskReferenceAmbiguousError) {
+    return JSON.stringify({
+      code: TaskReferenceAmbiguousError.code,
+      message: error.message,
+      candidate_project_ids: error.candidateProjectIds,
+      candidate_task_ids: error.candidateTaskIds,
+      suggestion: "Use a full task UUID.",
+    });
+  }
   if (error instanceof ProjectNotFoundError) {
     return JSON.stringify({ code: ProjectNotFoundError.code, message: error.message, suggestion: ProjectNotFoundError.suggestion });
   }
@@ -196,16 +207,17 @@ function resolveId(partialId: string, table = "tasks"): string {
 }
 
 /** Compact single-line task summary for mutation responses (create/update/start/complete). */
-function formatTask(task: Task): string {
+export function formatTask(task: Task): string {
   const id = task.short_id || task.id.slice(0, 8);
   const assigned = task.assigned_to ? ` -> ${task.assigned_to}` : "";
-  const lock = task.locked_by ? ` [locked:${task.locked_by}]` : "";
+  const lockState = lockDisplayState(task.locked_by, task.locked_at);
+  const lock = lockState.held ? ` [locked:${lockState.holder}]` : "";
   const recur = task.recurrence_rule ? ` [↻]` : "";
   return `${id} ${task.status.padEnd(11)} ${task.priority.padEnd(8)} ${task.title}${assigned}${lock}${recur}`;
 }
 
 /** Full multi-line task detail for get_task responses. */
-function formatTaskDetail(task: Task, maxDescriptionChars?: number): string {
+export function formatTaskDetail(task: Task, maxDescriptionChars?: number): string {
   const parts = [
     `ID: ${task.id}`,
     `Title: ${task.title}`,
@@ -220,7 +232,9 @@ function formatTaskDetail(task: Task, maxDescriptionChars?: number): string {
   }
   if (task.assigned_to) parts.push(`Assigned to: ${task.assigned_to}`);
   if (task.agent_id) parts.push(`Agent: ${task.agent_id}`);
-  if (task.locked_by) parts.push(`Locked by: ${task.locked_by}`);
+  const detailLock = lockDisplayState(task.locked_by, task.locked_at);
+  if (detailLock.held) parts.push(`Locked by: ${detailLock.holder}`);
+  else if (detailLock.expired) parts.push(`Lock: ${formatExpiredLock(detailLock)}`);
   if (task.parent_id) parts.push(`Parent: ${task.parent_id}`);
   if (task.project_id) parts.push(`Project: ${task.project_id}`);
   if (task.plan_id) parts.push(`Plan: ${task.plan_id}`);
@@ -265,6 +279,7 @@ export function buildServer() {
     formatTask,
     formatTaskDetail,
     getAgentFocus,
+    applyFocus,
   };
 
   registerTaskCrudTools(server, toolContext);
@@ -315,7 +330,11 @@ async function main() {
   // Opt-in shared Streamable HTTP server (one process per MCP, many agents).
   const { startServer } = await import("../server/serve.js");
   const port = resolveHttpPort();
-  await startServer(port, { open: false, host: "127.0.0.1" });
+  // This transport is loopback-pinned by contract (README: "Bind: 127.0.0.1
+  // only"), and MCP clients spawn it with no credential, so it keeps the
+  // anonymous local plane — but ONLY on loopback, and only when no credential is
+  // configured. Set TODOS_API_KEY (and send it from the client) to enforce auth.
+  await startServer(port, { open: false, host: "127.0.0.1", allowAnonymous: true });
   console.error(`todos MCP HTTP mounted at http://127.0.0.1:${port}/mcp`);
 }
 

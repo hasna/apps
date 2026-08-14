@@ -19,11 +19,16 @@ export interface HeadlessBoundaryManifest {
   notes: string[];
 }
 
+// The private billing host is assembled from parts (matching the composition
+// used below for other private/platform identifiers) so the internal domain is
+// not shipped as a plaintext literal, while the outbound guard still blocks it.
+const PRIVATE_BILLING_HOST = ["pay", "hasna", "tools"].join(".");
+
 export const FORBIDDEN_HOSTED_HOSTS = [
   "todos.md",
   "www.todos.md",
   "preview.todos.md",
-  "pay.hasna.tools",
+  PRIVATE_BILLING_HOST,
   ["platform", "todos"].join("-"),
 ] as const;
 

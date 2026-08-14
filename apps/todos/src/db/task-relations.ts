@@ -9,7 +9,7 @@ import type {
   TaskTimeLog,
   TaskWatcher,
 } from "../types/index.js";
-import { getDatabase, now, uuid } from "./database.js";
+import { getDatabase, lowerInClause, now, resolveAssignedToAliases, uuid } from "./database.js";
 import { createTask, getTask, updateTask, rowToTask } from "./task-crud.js";
 import { addDependency } from "./task-graph.js";
 import { dispatchWebhook } from "./webhooks.js";
@@ -240,8 +240,8 @@ export function getEscalatedTasks(
     params.push(opts.project_id);
   }
   if (opts.agent_id) {
-    conditions.push("assigned_to = ?");
-    params.push(opts.agent_id);
+    // Alias-resolved (task 84c77210) — see database.ts for the root cause.
+    conditions.push(lowerInClause("assigned_to", resolveAssignedToAliases(d, opts.agent_id), params));
   }
 
   const rows = d
@@ -299,8 +299,8 @@ export function notifyUpcomingDeadlines(
     params.push(opts.project_id);
   }
   if (opts.agent_id) {
-    conditions.push("assigned_to = ?");
-    params.push(opts.agent_id);
+    // Alias-resolved (task 84c77210) — see database.ts for the root cause.
+    conditions.push(lowerInClause("assigned_to", resolveAssignedToAliases(d, opts.agent_id), params));
   }
   const rows = d
     .query(`SELECT * FROM tasks WHERE ${conditions.join(" AND ")} ORDER BY due_at ASC`)
@@ -623,13 +623,18 @@ export function getTimeReport(opts?: { project_id?: string; plan_id?: string; ag
   if (opts?.project_id) { conditions.push("t.project_id = ?"); params.push(opts.project_id); }
   if (opts?.plan_id) { conditions.push("t.plan_id = ?"); params.push(opts.plan_id); }
   if (opts?.agent_id) {
+    // Alias-resolved (task 84c77210) for the `t.assigned_to` leg only — see
+    // database.ts for the root cause. `agent_id` and the time-log/focus-session
+    // `agent_id` columns are left as exact matches; they are populated from a
+    // different, less aliasable write path and are out of this fix's scope.
+    const assignedInClause = lowerInClause("t.assigned_to", resolveAssignedToAliases(d, opts.agent_id), params);
     conditions.push(`(
-      t.assigned_to = ?
+      ${assignedInClause}
       OR t.agent_id = ?
       OR EXISTS (SELECT 1 FROM task_time_logs ttl WHERE ttl.task_id = t.id AND ttl.agent_id = ?)
       OR EXISTS (SELECT 1 FROM focus_sessions fs WHERE fs.task_id = t.id AND fs.agent_id = ?)
     )`);
-    params.push(opts.agent_id, opts.agent_id, opts.agent_id, opts.agent_id);
+    params.push(opts.agent_id, opts.agent_id, opts.agent_id);
   }
   if (opts?.since) { conditions.push("(t.completed_at >= ? OR t.updated_at >= ?)"); params.push(opts.since, opts.since); }
   const rows = d.query(`

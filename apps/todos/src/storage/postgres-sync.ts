@@ -20,6 +20,7 @@ export type TodosPostgresSyncRecordType =
   | "agents"
   | "task_lists"
   | "templates"
+  | "template_tasks"
   | "audit_history";
 
 export interface TodosPostgresQueryResult<T = Record<string, unknown>> {
@@ -31,6 +32,16 @@ export interface TodosPostgresQueryClient {
     sql: string,
     values?: readonly unknown[],
   ): Promise<TodosPostgresQueryResult<T>>;
+  /**
+   * Optional authoritative same-connection transaction callback.
+   *
+   * Query-only clients remain valid for reads and independent writes. Storage
+   * operations whose correctness depends on a lock followed by a fresh
+   * READ-COMMITTED statement fail closed when this callback is unavailable.
+   */
+  transaction?<T>(
+    fn: (client: TodosPostgresQueryClient) => Promise<T>,
+  ): Promise<T>;
 }
 
 export interface CreatePostgresTodosSyncStoreOptions {
@@ -90,6 +101,99 @@ export function postgresTodosSyncSchemaSql(
     `CREATE INDEX IF NOT EXISTS ${tableName}_task_status_idx ON ${tableName} ((payload->>'status')) WHERE object_type = 'tasks' AND deleted_at IS NULL`,
     `CREATE INDEX IF NOT EXISTS ${tableName}_task_project_idx ON ${tableName} ((payload->>'project_id')) WHERE object_type = 'tasks' AND deleted_at IS NULL`,
     `CREATE INDEX IF NOT EXISTS ${tableName}_payload_gin ON ${tableName} USING gin (payload jsonb_path_ops)`,
+    // Full-text + fuzzy search parity for the Postgres backend. Mirrors
+    // migrations/0006_task_fulltext_search.sql so a FRESH bootstrap (which runs
+    // ensureSchema, not the numbered migrations) gets the same weighted tsvector,
+    // GIN, and pg_trgm indexes the Postgres adapter's buildTaskFilterSql relies on.
+    // Without these, cloud search hits a table with no search column and errors /
+    // returns empty. All idempotent. Extensions are no-ops when already present.
+    `CREATE EXTENSION IF NOT EXISTS pg_trgm`,
+    `CREATE EXTENSION IF NOT EXISTS unaccent`,
+    // Stock unaccent(text) is STABLE and cannot be used in a generated column or
+    // expression index; the two-arg form pinned in an IMMUTABLE wrapper can.
+    `CREATE OR REPLACE FUNCTION todos_immutable_unaccent(text)
+      RETURNS text
+      LANGUAGE sql IMMUTABLE PARALLEL SAFE STRICT
+      AS $$ SELECT unaccent('unaccent', $1) $$`,
+    // Timestamp coercion for the `updated_after` since-cursor. A plain
+    // `::timestamptz` cast raises on a malformed stamp and takes the whole query
+    // with it, and the stored dataset genuinely mixes formats
+    // ("2026-08-05T18:54:55.814Z" alongside "2026-06-10 11:24:47", measured
+    // 2026-08-07). This returns NULL instead of raising, so one bad row cannot
+    // fail a list call.
+    //
+    // A NO-OFFSET STAMP IS PINNED TO UTC, and that is the whole point of the
+    // CASE — it is what makes the IMMUTABLE declaration true rather than merely
+    // asserted. A bare `$1::timestamptz` resolves a no-offset stamp against the
+    // SESSION `TimeZone`, so the same text yields different instants in
+    // different sessions. Postgres knows this and refuses to index the cast
+    // directly:
+    //
+    //     CREATE INDEX ctl_idx ON ctl ((t::timestamptz));
+    //     ERROR:  functions in index expression must be marked IMMUTABLE
+    //
+    // Wrapping it in a function declared IMMUTABLE bypasses that guard rather
+    // than satisfying it, and produces exactly the corruption the guard exists
+    // to prevent: entries written under one zone, probed under another. Measured
+    // on PostgreSQL 16.13, index built under `TimeZone=UTC` and read under
+    // `TimeZone=Asia/Tokyo`, same query, same session, plan the only difference:
+    //
+    //       plan    | ids
+    //     ----------+-------
+    //      seqscan  | c
+    //      indexscan| b,c
+    //
+    // Row `b` is `2026-06-10 11:24:47` — the legacy no-timezone stamp this
+    // cursor exists to serve. Pinning to UTC also matches the SQLite path, whose
+    // `julianday()` reads a no-offset stamp as UTC; without it the two backends
+    // answer the same cursor differently by the server's UTC offset.
+    //
+    // `SET DateStyle` pins the second session GUC that reaches text-to-timestamp
+    // parsing, so neither knob a session can turn changes what this function
+    // returns for a given input.
+    `CREATE OR REPLACE FUNCTION todos_try_timestamptz(text)
+      RETURNS timestamptz
+      LANGUAGE plpgsql IMMUTABLE PARALLEL UNSAFE
+      SET DateStyle TO 'ISO, YMD'
+      AS $$
+      BEGIN
+        RETURN CASE
+          WHEN $1 ~ '(Z|[+-][0-9]{2}:?[0-9]{2})$' THEN $1::timestamptz
+          ELSE ($1::timestamp AT TIME ZONE 'UTC')
+        END;
+      EXCEPTION WHEN others THEN RETURN NULL; END $$`,
+    // REBUILD, not create-if-absent. `CREATE OR REPLACE FUNCTION` does NOT
+    // rebuild dependent expression indexes, and `CREATE INDEX IF NOT EXISTS`
+    // will NOT recreate an index that already exists — so on any cluster that
+    // already ran the previous schema, replacing the function above would leave
+    // the old index in place, still holding entries computed by the old body,
+    // and the fix would silently do nothing. A migration that works on a fresh
+    // database and no-ops on a deployed one is worse than no migration.
+    //
+    // Dropping the superseded name and building under a new one is idempotent in
+    // both directions: on a fresh cluster the DROP is a no-op, and on a re-run
+    // the CREATE is.
+    `DROP INDEX IF EXISTS ${tableName}_task_updated_at_idx`,
+    // Backs the since-cursor predicate so a poller's incremental read is an
+    // index scan rather than a sequential scan over every task row.
+    `CREATE INDEX IF NOT EXISTS ${tableName}_task_updated_at_utc_idx
+      ON ${tableName} (todos_try_timestamptz(payload->>'updated_at'))
+      WHERE object_type = 'tasks' AND deleted_at IS NULL`,
+    `ALTER TABLE ${tableName}
+      ADD COLUMN IF NOT EXISTS task_search_tsv tsvector
+      GENERATED ALWAYS AS (
+        setweight(to_tsvector('simple', todos_immutable_unaccent(COALESCE(payload->>'title', ''))), 'A')
+        || setweight(to_tsvector('simple', todos_immutable_unaccent(COALESCE(payload->>'description', ''))), 'B')
+        || setweight(to_tsvector('simple', todos_immutable_unaccent(translate(COALESCE(payload->>'tags', '[]'), '[]",', '    '))), 'C')
+      ) STORED`,
+    `CREATE INDEX IF NOT EXISTS ${tableName}_task_search_tsv_idx
+      ON ${tableName} USING gin (task_search_tsv)
+      WHERE object_type = 'tasks' AND deleted_at IS NULL`,
+    `CREATE INDEX IF NOT EXISTS ${tableName}_task_search_trgm_idx
+      ON ${tableName} USING gin (
+        todos_immutable_unaccent(COALESCE(payload->>'title', '') || ' ' || COALESCE(payload->>'description', '')) gin_trgm_ops
+      )
+      WHERE object_type = 'tasks' AND deleted_at IS NULL`,
     `CREATE TABLE IF NOT EXISTS ${cursorTableName} (
       service text NOT NULL,
       cursor_name text NOT NULL,
@@ -255,6 +359,44 @@ export function postgresTodosCommentCursorIndexSql(
     WHERE object_type = 'comments' AND deleted_at IS NULL`;
 }
 
+/**
+ * Predeploy-only expression index that keeps short-reference resolution
+ * (`GET /v1/tasks/:ref` → resolveTaskRef) O(log n) as the shared task set grows.
+ * This covers the case-insensitive `short_id` lookup; the id-prefix branch is
+ * served by the companion `_task_object_id_c_idx` (COLLATE "C"), since the default
+ * PK collation cannot serve that byte-ordered range. CONCURRENTLY avoids blocking
+ * writes on the shared sync table and must run outside a
+ * transaction; it is deliberately excluded from request-path `ensureSchema()`.
+ * OPTIONAL: resolution is correct without it (a filtered task-row scan), so it is
+ * a pure latency optimization for large datasets.
+ */
+export function postgresTodosTaskShortIdIndexSql(
+  tableName = DEFAULT_TODOS_POSTGRES_SYNC_TABLE,
+): string {
+  assertSafeIdentifier(tableName);
+  return `CREATE INDEX CONCURRENTLY IF NOT EXISTS ${tableName}_task_short_id_idx
+    ON ${tableName} ((LOWER(payload->>'short_id')))
+    WHERE object_type = 'tasks' AND deleted_at IS NULL`;
+}
+
+/**
+ * Predeploy-only byte-order (COLLATE "C") index over task object_id so the
+ * id-prefix branch of resolveTaskRef (`object_id COLLATE "C" >= $lo AND < $hi`)
+ * is an index range scan rather than a seq scan. The default locale collation
+ * cannot serve this range (its ordering disagrees with the code-point upper
+ * bound), so a dedicated C-collation index is required. CONCURRENTLY, outside a
+ * transaction; excluded from request-path `ensureSchema()`. OPTIONAL: resolution
+ * is correct without it (the range is still byte-ordered), just not index-bounded.
+ */
+export function postgresTodosTaskObjectIdIndexSql(
+  tableName = DEFAULT_TODOS_POSTGRES_SYNC_TABLE,
+): string {
+  assertSafeIdentifier(tableName);
+  return `CREATE INDEX CONCURRENTLY IF NOT EXISTS ${tableName}_task_object_id_c_idx
+    ON ${tableName} (service, (object_id COLLATE "C"))
+    WHERE object_type = 'tasks' AND deleted_at IS NULL`;
+}
+
 export class PostgresTodosSyncStore {
   private readonly service: string;
   private readonly sourceMachineId?: string;
@@ -412,6 +554,7 @@ function snapshotEntries(snapshot: TodosStorageSnapshot): Array<{
     ...snapshot.agents.map((payload) => entry("agents", payload as unknown as Record<string, unknown>, snapshot.exportedAt)),
     ...snapshot.taskLists.map((payload) => entry("task_lists", payload as unknown as Record<string, unknown>, snapshot.exportedAt)),
     ...snapshot.templates.map((payload) => entry("templates", payload as unknown as Record<string, unknown>, snapshot.exportedAt)),
+    ...(snapshot.templateTasks ?? []).map((payload) => entry("template_tasks", payload as unknown as Record<string, unknown>, snapshot.exportedAt)),
     ...snapshot.auditHistory.map((payload) => entry("audit_history", payload as unknown as Record<string, unknown>, snapshot.exportedAt)),
     ...(snapshot.tombstones ?? []).map((tombstone) => ({
       type: tombstone.object_type,
@@ -464,6 +607,7 @@ function rowsToSnapshot(rows: TodosPostgresSyncRecordRow[]): TodosStorageSnapsho
     agents: [],
     taskLists: [],
     templates: [],
+    templateTasks: [],
     auditHistory: [],
     tombstones: [],
   };
@@ -494,6 +638,7 @@ function rowsToSnapshot(rows: TodosPostgresSyncRecordRow[]): TodosStorageSnapsho
     else if (row.object_type === "agents") snapshot.agents.push(payload as unknown as TodosStorageSnapshot["agents"][number]);
     else if (row.object_type === "task_lists") snapshot.taskLists.push(payload as unknown as TodosStorageSnapshot["taskLists"][number]);
     else if (row.object_type === "templates") snapshot.templates.push(payload as unknown as TodosStorageSnapshot["templates"][number]);
+    else if (row.object_type === "template_tasks") snapshot.templateTasks.push(payload as unknown as TodosStorageSnapshot["templateTasks"][number]);
     else if (row.object_type === "audit_history") snapshot.auditHistory.push(payload as unknown as TaskHistory);
   }
   return snapshot;

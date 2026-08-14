@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import packageJson from "../package.json";
 import {
   TODOS_CONTRACTS,
@@ -41,10 +43,42 @@ const expectedExports = {
     types: "./dist/storage.d.ts",
     import: "./dist/storage.js",
   },
+  "./testing": {
+    types: "./dist/testing.d.ts",
+    import: "./dist/testing.js",
+  },
+  "./project-registration": {
+    types: "./dist/project-registration.d.ts",
+    import: "./dist/project-registration.js",
+  },
+  "./task-manifest": {
+    types: "./dist/task-manifest.d.ts",
+    import: "./dist/task-manifest.js",
+  },
 };
 
 describe("package subpath exports", () => {
-  test("declares stable root, SDK, MCP, registry, contracts, and storage exports", () => {
+  // Regression: ./testing shipped with `types: ./dist/testing.d.ts` while
+  // tsconfig.json's `include` did not list src/testing.ts, so `tsc --emitDeclarationOnly`
+  // silently produced no declaration and the published tarball would have had a subpath
+  // whose types resolve to nothing. `bun run typecheck` did not catch it (different
+  // tsconfig); only a real build did. This test catches it without a build.
+  test("every declared subpath has its source entry in the tsconfig include list", () => {
+    const tsconfig = readFileSync(join(import.meta.dir, "..", "tsconfig.json"), "utf8");
+    const include: string[] = JSON.parse(tsconfig.replace(/^\s*\/\/.*$/gm, "")).include;
+
+    for (const subpath of Object.keys(expectedExports)) {
+      const emitted = expectedExports[subpath as keyof typeof expectedExports].types;
+      // ./dist/foo.d.ts -> src/foo.ts ; ./dist/foo/index.d.ts -> src/foo/index.ts
+      const source = emitted.replace(/^\.\/dist\//, "src/").replace(/\.d\.ts$/, ".ts");
+      const covered = include.some(
+        (entry) => entry === source || (entry.includes("*") && source.startsWith(entry.split("*")[0]!)),
+      );
+      expect(covered ? source : `${source} (declared by "${subpath}") is missing from tsconfig include`).toBe(source);
+    }
+  });
+
+  test("declares every stable package subpath export", () => {
     expect(packageJson.exports).toEqual(expectedExports);
     expect(TODOS_PACKAGE_EXPORTS.map((entry) => entry.subpath)).toEqual(Object.keys(expectedExports));
 

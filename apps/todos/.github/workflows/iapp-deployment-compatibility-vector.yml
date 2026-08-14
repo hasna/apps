@@ -1,0 +1,107 @@
+name: iapp-deployment compatibility vector
+
+on:
+  pull_request:
+    branches:
+      - main
+
+concurrency:
+  group: iapp-deployment-compatibility-${{ github.event.pull_request.head.sha }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  PRODUCER_SHA: ${{ github.event.pull_request.head.sha }}
+  CONSUMER_SHA: 905d57bb845cf2f172b319cdd722656675c13630
+  VECTOR_DIR: iapp-deployment-compatibility-vector
+
+jobs:
+  publish-vector:
+    name: Publish exact producer data vector
+    if: >-
+      github.repository == 'hasna/todos' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Validate exact producer head
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if [[ ! "${PRODUCER_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "producer head must be a full lowercase commit SHA" >&2
+            exit 1
+          fi
+          if [[ ! "${CONSUMER_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "consumer head must be a full lowercase commit SHA" >&2
+            exit 1
+          fi
+
+      - name: Checkout exact producer head
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Bind the exact producer tree
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "${PRODUCER_SHA}"
+          printf 'PRODUCER_TREE=%s\n' "$(git rev-parse "${PRODUCER_SHA}^{tree}")" >> "${GITHUB_ENV}"
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: "1.3.14"
+
+      - name: Install frozen dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Verify producer source-record generation
+        run: bun run test:attested-container-candidate
+
+      - name: Emit and verify the exact five-record vector
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bun run scripts/attested-container-compatibility-vector.ts emit \
+            --output-dir "${VECTOR_DIR}" \
+            --producer-sha "${PRODUCER_SHA}" \
+            --producer-tree "${PRODUCER_TREE}" \
+            --consumer-sha "${CONSUMER_SHA}"
+          bun run scripts/attested-container-compatibility-vector.ts verify \
+            --root "${VECTOR_DIR}" \
+            --producer-sha "${PRODUCER_SHA}" \
+            --producer-tree "${PRODUCER_TREE}" \
+            --consumer-sha "${CONSUMER_SHA}"
+          test -s "${VECTOR_DIR}/subject-checksums.txt"
+
+      - name: Upload the public compatibility vector
+        id: upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: iapp-deployment-compatibility-${{ github.event.pull_request.head.sha }}
+          path: ${{ env.VECTOR_DIR }}
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Report immutable artifact identity
+        shell: bash
+        env:
+          ARTIFACT_DIGEST: ${{ steps.upload.outputs.artifact-digest }}
+          ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
+        run: |
+          set -Eeuo pipefail
+          {
+            printf 'run_id=%s\n' "${GITHUB_RUN_ID}"
+            printf 'producer_sha=%s\n' "${PRODUCER_SHA}"
+            printf 'producer_tree=%s\n' "${PRODUCER_TREE}"
+            printf 'consumer_sha=%s\n' "${CONSUMER_SHA}"
+            printf 'artifact_name=iapp-deployment-compatibility-%s\n' "${PRODUCER_SHA}"
+            printf 'artifact_id=%s\n' "${ARTIFACT_ID}"
+            printf 'artifact_digest=%s\n' "${ARTIFACT_DIGEST}"
+          } >> "${GITHUB_STEP_SUMMARY}"

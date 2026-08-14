@@ -23,8 +23,7 @@ const PROBABILITIES = ["low", "medium", "high"] as const;
 
 function parseChoice<T extends string>(value: string, choices: readonly T[], label: string): T {
   if ((choices as readonly string[]).includes(value)) return value as T;
-  console.error(chalk.red(`${label} must be one of: ${choices.join(", ")}`));
-  process.exit(1);
+  handleError(new Error(`${label} must be one of: ${choices.join(", ")}`));
 }
 
 function parseJsonObject(value: string | undefined, label: string): Record<string, unknown> | undefined {
@@ -34,8 +33,7 @@ function parseJsonObject(value: string | undefined, label: string): Record<strin
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("not object");
     return parsed as Record<string, unknown>;
   } catch {
-    console.error(chalk.red(`${label} must be a valid JSON object`));
-    process.exit(1);
+    handleError(new Error(`${label} must be a valid JSON object`));
   }
 }
 

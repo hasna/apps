@@ -2,7 +2,8 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { registerAgent, isAgentConflict, releaseAgent, getAgent, getAgentByName, listAgents, updateAgent, updateAgentActivity, archiveAgent, unarchiveAgent, getAvailableNamesFromPool } from "../../db/agents.js";
 import { getAgentPoolForProject } from "../../lib/config.js";
-import { getDatabase } from "../../db/database.js";
+import { getDatabase, resolvePartialId } from "../../db/database.js";
+import { IdentityAliasAmbiguousError } from "../../types/index.js";
 import { getTodosCloudClient, cloudListAgents, cloudRegisterAgent, cloudHeartbeatAgent, cloudReleaseAgent } from "../../cli/cloud-router.js";
 
 interface AgentFocus {
@@ -108,7 +109,7 @@ export function registerAgentTools(server: McpServer, { shouldRegisterTool, reso
       },
       async ({ name, description, role, title, level, permissions, capabilities, session_id, working_dir, force }) => {
         try {
-          // self_hosted cloud routing: register into the SHARED cloud roster so the
+          // http authority routing: register into the SHARED cloud roster so the
           // agent lands in /v1/agents (not this machine's local sqlite island),
           // fixing the identity misroute where list_agents/tasks read cloud but the
           // agent existed only locally.
@@ -209,7 +210,7 @@ export function registerAgentTools(server: McpServer, { shouldRegisterTool, reso
       },
       async ({ include_archived }) => {
         try {
-          // self_hosted cloud routing: list agents from the shared <app>.hasna.xyz/v1
+          // http authority routing: list agents from the shared <app-host>/v1
           // dataset rather than this machine's local SQLite island.
           const cloud = getTodosCloudClient();
           const agents = cloud
@@ -286,12 +287,25 @@ export function registerAgentTools(server: McpServer, { shouldRegisterTool, reso
             return { content: [{ type: "text" as const, text: `Agent not found: ${id || name}` }], isError: true };
           }
           const oldName = agent.name;
+          const db = getDatabase();
+          let oldNameUniquelyIdentifiesAgent = false;
+          try {
+            oldNameUniquelyIdentifiesAgent = resolvePartialId(db, "agents", oldName) === agent.id;
+          } catch (error) {
+            if (!(error instanceof IdentityAliasAmbiguousError)) throw error;
+          }
           const updated = updateAgent(agent.id, { name: new_name });
 
-          // Update assigned_to on tasks that reference the old name
-          const db = getDatabase();
+          // Update differently cased task aliases only when the old name
+          // uniquely identified this agent before the rename.
+          // Legacy databases can contain two distinct agents whose names differ
+          // only by case. A case-insensitive UPDATE would transfer both agents'
+          // tasks to the renamed agent. The agent's id form is unaffected by a
+          // rename and is intentionally not part of this UPDATE.
           const tasksResult = db.run(
-            "UPDATE tasks SET assigned_to = ? WHERE assigned_to = ?",
+            oldNameUniquelyIdentifiesAgent
+              ? "UPDATE tasks SET assigned_to = ? WHERE LOWER(assigned_to) = LOWER(?)"
+              : "UPDATE tasks SET assigned_to = ? WHERE assigned_to = ?",
             [new_name, oldName],
           );
 
@@ -431,7 +445,7 @@ export function registerAgentTools(server: McpServer, { shouldRegisterTool, reso
       },
       async ({ agent_id }) => {
         try {
-          // self_hosted cloud routing: heartbeat the SHARED cloud roster so a
+          // http authority routing: heartbeat the SHARED cloud roster so a
           // flipped machine refreshes the same agent every other agent sees. The
           // local path 404'd cloud-only agents ("Agent not found").
           const cloud = getTodosCloudClient();
@@ -476,7 +490,7 @@ export function registerAgentTools(server: McpServer, { shouldRegisterTool, reso
       },
       async ({ agent_id, session_id }) => {
         try {
-          // self_hosted cloud routing: release in the SHARED cloud roster so the
+          // http authority routing: release in the SHARED cloud roster so the
           // name frees up for every agent. The local path 404'd cloud-only agents.
           const cloud = getTodosCloudClient();
           if (cloud) {

@@ -1,5 +1,5 @@
 import type { Database, SQLQueryBindings } from "bun:sqlite";
-import { getDatabase, now, uuid } from "./database.js";
+import { getDatabase, lowerInClause, now, resolveAssignedToAliases, uuid } from "./database.js";
 import { redactEvidenceText } from "../lib/redaction.js";
 
 export interface Handoff {
@@ -354,8 +354,13 @@ export function getLatestHandoff(agentId?: string, projectId?: string, db?: Data
 export function createSessionRecoveryHandoff(input: CreateSessionRecoveryHandoffInput, db?: Database): Handoff {
   const d = db || getDatabase();
   const limit = input.limit || 20;
-  const conditions = ["status = 'in_progress'", "(assigned_to = ? OR agent_id = ? OR locked_by = ?)"];
-  const params: SQLQueryBindings[] = [input.agent_id, input.agent_id, input.agent_id];
+  // Alias-resolved (task 84c77210) for the `assigned_to` leg only — see
+  // database.ts for the root cause. `agent_id`/`locked_by` are left as exact
+  // matches; they are populated from a different, less aliasable write path.
+  const params: SQLQueryBindings[] = [];
+  const assignedInClause = lowerInClause("assigned_to", resolveAssignedToAliases(d, input.agent_id), params);
+  const conditions = ["status = 'in_progress'", `(${assignedInClause} OR agent_id = ? OR locked_by = ?)`];
+  params.push(input.agent_id, input.agent_id);
   if (input.session_id) {
     conditions.push("session_id = ?");
     params.push(input.session_id);

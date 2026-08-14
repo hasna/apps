@@ -7,8 +7,8 @@ import { getTaskTraceability } from "../db/task-commits.js";
 import { listTaskFiles, type TaskFile } from "../db/task-files.js";
 import { getTaskDependencies, getTaskDependents } from "../db/task-graph.js";
 import { getTaskRunLedger, listTaskRuns } from "../db/task-runs.js";
-import { getTask, listTasks } from "../db/tasks.js";
-import type { Plan, Project, Task, TaskComment } from "../types/index.js";
+import { countTasks, getTask, rowToTask } from "../db/tasks.js";
+import type { Plan, Project, Task, TaskComment, TaskRow } from "../types/index.js";
 import { TaskNotFoundError } from "../types/index.js";
 import { redactEvidenceText, redactValue } from "./redaction.js";
 
@@ -79,7 +79,7 @@ export interface AgentContextPack {
   agent_id: string | null;
   task: AgentContextPackTask;
   project: Pick<Project, "id" | "name" | "path" | "description"> | null;
-  plan: (Pick<Plan, "id" | "name" | "description" | "status" | "agent_id"> & { tasks: AgentContextPackRelatedTask[]; omitted_tasks: number }) | null;
+  plan: (Pick<Plan, "id" | "name" | "description" | "status" | "agent_id"> & { tasks: AgentContextPackRelatedTask[]; total_tasks: number; omitted_tasks: number }) | null;
   acceptance_criteria: string[];
   dependencies: {
     upstream: AgentContextPackRelatedTask[];
@@ -140,11 +140,13 @@ const DEFAULT_LIMITS = {
   verification_limit: 10,
   run_limit: 3,
   dependency_limit: 12,
-  plan_task_limit: 20,
+  plan_task_limit: 24,
   max_text_chars: 6000,
   summary_char_limit: 480,
   stale_after_hours: 72,
 } as const;
+
+const MAX_CONTEXT_TASKS = 24;
 
 const ALL_CONTEXT_SECTIONS: AgentContextPackSection[] = [
   "project",
@@ -180,7 +182,7 @@ function limits(input: CreateAgentContextPackInput): AgentContextPack["limits"] 
     verification_limit: clamp(input.verification_limit, DEFAULT_LIMITS.verification_limit, 100),
     run_limit: clamp(input.run_limit, DEFAULT_LIMITS.run_limit, 20),
     dependency_limit: clamp(input.dependency_limit, DEFAULT_LIMITS.dependency_limit, 100),
-    plan_task_limit: clamp(input.plan_task_limit, DEFAULT_LIMITS.plan_task_limit, 100),
+    plan_task_limit: clamp(input.plan_task_limit, DEFAULT_LIMITS.plan_task_limit, MAX_CONTEXT_TASKS),
     max_text_chars: clamp(input.max_text_chars, DEFAULT_LIMITS.max_text_chars, 50000),
     summary_char_limit: clamp(input.summary_char_limit, DEFAULT_LIMITS.summary_char_limit, 4000),
     stale_after_hours: clamp(input.stale_after_hours, DEFAULT_LIMITS.stale_after_hours, 24 * 365),
@@ -202,6 +204,16 @@ function taskSummary(task: Task | null): AgentContextPackRelatedTask | null {
     status: task.status,
     priority: task.priority,
   };
+}
+
+function latestPlanTasks(planId: string, limit: number, db: Database): Task[] {
+  const rows = db.query(
+    `SELECT * FROM tasks
+     WHERE plan_id = ? AND archived_at IS NULL
+     ORDER BY updated_at DESC, created_at DESC, id ASC
+     LIMIT ?`,
+  ).all(planId, limit) as TaskRow[];
+  return rows.map(rowToTask);
 }
 
 function acceptanceCriteria(task: Task, maxText: number): string[] {
@@ -306,7 +318,7 @@ function summarizeSection(pack: AgentContextPack, section: AgentContextPackSecti
     if (!pack.plan) return "No plan was attached.";
     return summarizeStrings([
       `Plan ${pack.plan.name} is ${pack.plan.status}`,
-      `${pack.plan.tasks.length} listed plan tasks`,
+      `${pack.plan.tasks.length} of ${pack.plan.total_tasks} plan tasks listed; ${pack.plan.omitted_tasks} omitted`,
       ...pack.plan.tasks.slice(0, 4).map((task) => `${task.status} ${task.short_id || task.id.slice(0, 8)} ${task.title}`),
     ], maxChars);
   }
@@ -444,7 +456,8 @@ export function createAgentContextPack(input: CreateAgentContextPackInput, db?: 
   const limit = limits(input);
   const project = task.project_id ? getProject(task.project_id, d) : null;
   const plan = task.plan_id ? getPlan(task.plan_id, d) : null;
-  const planTasks = task.plan_id ? listTasks({ plan_id: task.plan_id, limit: limit.plan_task_limit + 1 }, d) : [];
+  const planTasks = task.plan_id ? latestPlanTasks(task.plan_id, limit.plan_task_limit, d) : [];
+  const totalPlanTasks = task.plan_id ? countTasks({ plan_id: task.plan_id }, d) : 0;
   const upstream = getTaskDependencies(task.id, d).map((dep) => taskSummary(getTask(dep.depends_on, d))).filter((item): item is AgentContextPackRelatedTask => Boolean(item));
   const downstream = getTaskDependents(task.id, d).map((dep) => taskSummary(getTask(dep.task_id, d))).filter((item): item is AgentContextPackRelatedTask => Boolean(item));
   const comments = listComments(task.id, d);
@@ -479,6 +492,9 @@ export function createAgentContextPack(input: CreateAgentContextPackInput, db?: 
   if (traceability.verifications.length > verifications.length) warnings.push(`${traceability.verifications.length - verifications.length} older verifications omitted`);
   if (runs.length > selectedRuns.length) warnings.push(`${runs.length - selectedRuns.length} older runs omitted`);
   if (fileMap.size > relevantFiles.length) warnings.push(`${fileMap.size - relevantFiles.length} relevant files omitted`);
+  if (totalPlanTasks > planTasks.length && plan) {
+    warnings.push(`${totalPlanTasks - planTasks.length} plan tasks omitted (${totalPlanTasks} total); load more on demand with "todos plans --show ${plan.id}" and inspect task details with "todos show <task-id>" or "todos context-pack <task-id>"`);
+  }
 
   const contextTask: AgentContextPackTask = {
     id: task.id,
@@ -512,8 +528,9 @@ export function createAgentContextPack(input: CreateAgentContextPackInput, db?: 
       description: truncate(plan.description, limit.max_text_chars),
       status: plan.status,
       agent_id: plan.agent_id,
-      tasks: planTasks.slice(0, limit.plan_task_limit).map(taskSummary).filter((item): item is AgentContextPackRelatedTask => Boolean(item)),
-      omitted_tasks: Math.max(0, planTasks.length - limit.plan_task_limit),
+      tasks: planTasks.map(taskSummary).filter((item): item is AgentContextPackRelatedTask => Boolean(item)),
+      total_tasks: totalPlanTasks,
+      omitted_tasks: Math.max(0, totalPlanTasks - planTasks.length),
     } : null,
     acceptance_criteria: acceptanceCriteria(task, limit.max_text_chars),
     dependencies: {
@@ -624,6 +641,8 @@ export function renderAgentContextPackMarkdown(pack: AgentContextPack): string {
     "## Project And Plan",
     pack.project ? `- Project: ${pack.project.name} (${pack.project.path})` : "- Project: none",
     pack.plan ? `- Plan: ${pack.plan.name} (${pack.plan.status})` : "- Plan: none",
+    pack.plan ? `- Plan tasks: ${pack.plan.tasks.length} shown of ${pack.plan.total_tasks} total (${pack.plan.omitted_tasks} omitted)` : null,
+    pack.plan && pack.plan.omitted_tasks > 0 ? `- Load more on demand: \`todos plans --show ${pack.plan.id}\`; inspect one task with \`todos show <task-id>\` or \`todos context-pack <task-id>\`.` : null,
     pack.plan && pack.plan.tasks.length > 0 ? bullet(pack.plan.tasks.map((task) => `${task.status} ${task.short_id || task.id.slice(0, 8)} ${task.title}`)) : null,
     "",
     "## Acceptance Criteria",

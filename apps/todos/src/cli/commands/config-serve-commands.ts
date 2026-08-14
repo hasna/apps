@@ -2,11 +2,12 @@ import type { Command } from "commander";
 import chalk from "chalk";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { DEFAULT_PORT as DEFAULT_SERVER_PORT } from "../../server/port.js";
 import { getDatabase } from "../../db/database.js";
 import { listTasks } from "../../db/tasks.js";
 import { loadConfig } from "../../lib/config.js";
 import { getTodosGlobalDir } from "../../lib/sync-utils.js";
-import { autoProject, output, formatTaskLine, normalizeStatus, resolveTaskId } from "../helpers.js";
+import { autoProject, handleError, output, formatTaskLine, parseEnumFlagList, resolveTaskId, TASK_STATUS_FLAG } from "../helpers.js";
 
 export function registerConfigServeCommands(program: Command) {
   // config
@@ -215,6 +216,65 @@ export function registerConfigServeCommands(program: Command) {
       console.log(chalk.yellow(`${findings.length} secret pattern(s) detected.`));
       for (const finding of findings) console.log(`  - ${finding.pattern}: ${finding.count}`);
       process.exitCode = 1;
+    });
+
+  redaction
+    .command("evidence")
+    .description("Dry-run or apply scoped redaction for task evidence rows without printing secret values")
+    .option("--task <ids>", "Comma-separated task IDs to scan/redact")
+    .option("--comment <ids>", "Comma-separated task comment IDs to scan/redact")
+    .option("--apply", "Apply redaction. Defaults to dry-run.")
+    .option("--authority <text>", "Required apply authority reference; do not pass secret values")
+    .option("--confirm <value>", "Required exact confirmation for --apply")
+    .option("--backup-output <path>", "SQLite backup path to create before --apply")
+    .action(async (opts: {
+      task?: string;
+      comment?: string;
+      apply?: boolean;
+      authority?: string;
+      confirm?: string;
+      backupOutput?: string;
+    }) => {
+      const globalOpts = program.opts();
+      try {
+        const {
+          TODOS_EVIDENCE_REDACTION_CONFIRM,
+          redactEvidenceRows,
+        } = await import("../../lib/evidence-redaction.js");
+        const report = redactEvidenceRows({
+          task_ids: listOption(opts.task),
+          comment_ids: listOption(opts.comment),
+          apply: Boolean(opts.apply),
+          authority: opts.authority,
+          confirm: opts.confirm,
+          backup_output: opts.backupOutput,
+        });
+        const failed = report.issues.length > 0 || report.redacted_preview.findings.length > 0 || report.post_scan?.clean === false;
+        if (failed) process.exitCode = 1;
+        if (globalOpts.json) { output(report, true); return; }
+        console.log(chalk.bold(opts.apply ? "Evidence redaction apply" : "Evidence redaction dry-run"));
+        console.log(`  ${chalk.dim("Tasks:")} ${report.scope.task_ids.length}`);
+        console.log(`  ${chalk.dim("Comments:")} ${report.scope.comment_ids.length}`);
+        console.log(`  ${chalk.dim("Matched fields:")} ${report.totals.matched_fields}`);
+        console.log(`  ${chalk.dim("Findings:")} ${report.totals.findings}`);
+        console.log(`  ${chalk.dim("Would update:")} ${report.totals.would_update_fields}`);
+        console.log(`  ${chalk.dim("Applied fields:")} ${report.totals.applied_fields}`);
+        console.log(`  ${chalk.dim("Redacted preview clean:")} ${report.redacted_preview.clean ? "yes" : "no"}`);
+        if (report.backup) {
+          console.log(`  ${chalk.dim("Backup:")} ${report.backup.path}`);
+          console.log(`  ${chalk.dim("Backup integrity:")} ${report.backup.integrity_ok ? "ok" : "failed"}`);
+        }
+        for (const surface of report.surfaces) {
+          if (surface.matched_fields === 0) continue;
+          console.log(`  ${surface.surface}: ${surface.matched_fields} field(s), ${surface.findings} finding(s)`);
+        }
+        for (const issue of report.issues) console.log(chalk.yellow(`  issue: ${issue}`));
+        if (!opts.apply) {
+          console.log(chalk.dim(`  Apply requires --apply --authority <ref> --confirm ${TODOS_EVIDENCE_REDACTION_CONFIRM}`));
+        }
+      } catch (error) {
+        handleError(error);
+      }
     });
 
   const retention = program
@@ -1106,27 +1166,42 @@ export function registerConfigServeCommands(program: Command) {
   program
     .command("serve")
     .description("Start the web dashboard")
-    .option("--port <port>", "Port number", "19427")
+    .option("--port <port>", "Port number", String(DEFAULT_SERVER_PORT))
     .option("--host <host>", "Host to bind (default: 127.0.0.1 localhost only, use 0.0.0.0 for all interfaces)")
     .option("--api-key <key>", "Require this API key for /api/* requests")
+    .option("--allow-anonymous", "Local dev only: serve /api/* and /mcp without a credential (refused unless the bind host is loopback)")
     .option("--no-open", "Don't open browser automatically")
     .action(async (opts) => {
       const { startServer } = await import("../../server/serve.js");
-      const requestedPort = parseInt(opts.port, 10);
-      let port = requestedPort;
-      // Auto-find free port if default is in use
-      for (let p = requestedPort; p < requestedPort + 100; p++) {
-        try {
-          const s = Bun.serve({ port: p, fetch: () => new Response("") });
-          s.stop(true);
-          port = p;
-          break;
-        } catch { /* port in use */ }
-      }
+      const { coercePort, findFreePort, refuseInvalidPort } = await import("../../server/port.js");
+      // Shared with the standalone todos-serve entry point. This used to be its
+      // own `parseInt(opts.port, 10)` plus a duplicate scan loop, so an
+      // unparseable --port produced NaN, skipped the loop entirely, and reached
+      // Bun.serve as NaN — which silently binds a random ephemeral port.
+      // opts.port always has a value (commander defaults it to DEFAULT_PORT, which
+      // is itself valid), so coercePort only fails when the user supplied
+      // something that is not a port — refuse it instead of starting elsewhere.
+      const requestedPort = coercePort(opts.port) ?? refuseInvalidPort("--port", String(opts.port));
+      // 0 means "kernel, pick one": bind it as asked rather than scanning.
+      const port = requestedPort === 0 ? requestedPort : await findFreePort(requestedPort);
       if (port !== requestedPort) {
         console.log(`Port ${requestedPort} in use, using ${port}`);
       }
-      await startServer(port, { open: opts.open !== false, host: opts.host, apiKey: opts.apiKey });
+      try {
+        await startServer(port, {
+          open: opts.open !== false,
+          host: opts.host,
+          apiKey: opts.apiKey,
+          allowAnonymous: opts.allowAnonymous === true,
+        });
+      } catch (error) {
+        const { AuthNotConfiguredError } = await import("../../server/auth-posture.js");
+        if (error instanceof AuthNotConfiguredError) {
+          console.error(`\n${error.message}\n`);
+          process.exit(1);
+        }
+        throw error;
+      }
     });
 
   // watch
@@ -1139,7 +1214,15 @@ export function registerConfigServeCommands(program: Command) {
       const globalOpts = program.opts();
       const projectId = autoProject(globalOpts);
       const interval = parseInt(opts.interval, 10) * 1000;
-      const statusFilter = opts.status ? opts.status.split(",").map((s: string) => normalizeStatus(s.trim())) : ["pending", "in_progress"];
+      // `watch` is a read verb with the same closed vocabulary as `list`, and it
+      // failed the same way: an out-of-vocabulary status matched no rows, so
+      // `watch --status open` painted a permanently empty dashboard that an
+      // operator reads as "there is no work". Worse than the `list` case, because
+      // a live view invites you to sit and watch it. `parseEnumFlagList` keeps the
+      // documented aliases (`done` -> `completed`) via the spec's `normalize` and
+      // splits the list itself, so this is the same behaviour for every valid
+      // input and non-zero for the invalid ones.
+      const statusFilter = parseEnumFlagList(opts.status, TASK_STATUS_FLAG) ?? ["pending", "in_progress"];
 
       function render() {
         const tasks = listTasks({ project_id: projectId, status: statusFilter as any });
@@ -1216,8 +1299,7 @@ export function registerConfigServeCommands(program: Command) {
       try {
         const resp = await fetch(url);
         if (!resp.ok || !resp.body) {
-          console.error(chalk.red(`Failed to connect: ${resp.status}`));
-          process.exit(1);
+          handleError(new Error(`Failed to connect: ${resp.status}`));
         }
         const reader = resp.body.getReader();
         const decoder = new TextDecoder();

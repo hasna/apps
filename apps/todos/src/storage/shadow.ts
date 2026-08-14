@@ -37,6 +37,7 @@ type ShadowSnapshotKey =
   | "agents"
   | "taskLists"
   | "templates"
+  | "templateTasks"
   | "auditHistory";
 
 const SNAPSHOT_TO_OBJECT_TYPE: Record<ShadowSnapshotKey, TodosPostgresSyncRecordType> = {
@@ -46,6 +47,7 @@ const SNAPSHOT_TO_OBJECT_TYPE: Record<ShadowSnapshotKey, TodosPostgresSyncRecord
   agents: "agents",
   taskLists: "task_lists",
   templates: "templates",
+  templateTasks: "template_tasks",
   auditHistory: "audit_history",
 };
 
@@ -321,6 +323,7 @@ function emptySnapshot(): TodosStorageSnapshot {
     agents: [],
     taskLists: [],
     templates: [],
+    templateTasks: [],
     auditHistory: [],
     tombstones: [],
   };
@@ -429,6 +432,14 @@ export function createShadowTodosStorageAdapter(
         const plan = await local.plans.update(id, input, context);
         mirror.enqueueUpsert("plans", plan, context);
         return plan;
+      },
+      async completeAtRevision(id, expectedUpdatedAt, context) {
+        if (typeof local.plans.completeAtRevision !== "function") {
+          throw new Error("Atomic plan completion is not supported by the local shadow adapter");
+        }
+        const completed = await local.plans.completeAtRevision(id, expectedUpdatedAt, context);
+        if (completed.applied) mirror.enqueueUpsert("plans", completed.plan, context);
+        return completed;
       },
       async delete(id, context) {
         const deleted = await local.plans.delete(id, context);

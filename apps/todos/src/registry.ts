@@ -20,7 +20,16 @@ export interface TodosPackageSource {
 }
 
 export interface TodosPackageExportContract {
-  subpath: "." | "./sdk" | "./mcp" | "./registry" | "./contracts" | "./storage";
+  subpath:
+    | "."
+    | "./sdk"
+    | "./mcp"
+    | "./registry"
+    | "./contracts"
+    | "./storage"
+    | "./testing"
+    | "./project-registration"
+    | "./task-manifest";
   import: string;
   types: string;
   description: string;
@@ -80,6 +89,27 @@ export const TODOS_PACKAGE_EXPORTS: TodosPackageExportContract[] = [
     import: "./dist/storage.js",
     types: "./dist/storage.d.ts",
     description: "Storage and service adapter contracts for local SQLite implementations.",
+    stability: "stable",
+  },
+  {
+    subpath: "./testing",
+    import: "./dist/testing.js",
+    types: "./dist/testing.d.ts",
+    description: "Test-store isolation helpers that keep a consumer's test suite off a shared todos store.",
+    stability: "stable",
+  },
+  {
+    subpath: "./project-registration",
+    import: "./dist/project-registration.js",
+    types: "./dist/project-registration.d.ts",
+    description: "Conditional Projects-to-Todos project and task-list registration authority.",
+    stability: "stable",
+  },
+  {
+    subpath: "./task-manifest",
+    import: "./dist/task-manifest.js",
+    types: "./dist/task-manifest.d.ts",
+    description: "Transactional package-owned authority for deterministic plan and task graph manifests.",
     stability: "stable",
   },
 ];

@@ -7,6 +7,7 @@ import { createTask } from "./db/task-crud.js";
 import { closeDatabase, getDatabase, resetDatabase } from "./db/database.js";
 import { createMcpManifest } from "./mcp.js";
 import { withNoNetwork } from "./test/no-network.js";
+import { cliSpawnBudgetMs } from "./test/spawn-budget.js";
 
 const CWD = join(import.meta.dir, "..");
 const cloudPackage = "@hasna" + "/cloud";
@@ -18,11 +19,10 @@ let dbPath: string;
 
 async function runCli(
   args: string[],
-  env: Record<string, string>,
+  env: Record<string, string | undefined>,
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-  const proc = Bun.spawn(["bun", "run", "src/cli/index.tsx", ...args], {
-    cwd: CWD,
-    env: {
+  const childEnv = Object.fromEntries(
+    Object.entries({
       ...process.env,
       HOME: fakeHome,
       TODOS_DB_PATH: dbPath,
@@ -34,7 +34,11 @@ async function runCli(
       TODOS_API_URL: "",
       TODOS_API_KEY: "",
       ...env,
-    },
+    }).filter((entry): entry is [string, string] => entry[1] !== undefined),
+  );
+  const proc = Bun.spawn(["bun", "run", "src/cli/index.tsx", ...args], {
+    cwd: CWD,
+    env: childEnv,
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -130,8 +134,8 @@ describe("OSS local-first runtime defaults", () => {
     try {
       // Both HASNA_TODOS_* and bare TODOS_* forms of URL+KEY, but no mode var.
       const noModeEnv = {
-        HASNA_TODOS_STORAGE_MODE: "",
-        TODOS_STORAGE_MODE: "",
+        HASNA_TODOS_STORAGE_MODE: undefined,
+        TODOS_STORAGE_MODE: undefined,
         HASNA_TODOS_API_URL: String(server.url).replace(/\/$/, ""),
         HASNA_TODOS_API_KEY: "remote-token",
         TODOS_API_URL: String(server.url).replace(/\/$/, ""),
@@ -148,7 +152,11 @@ describe("OSS local-first runtime defaults", () => {
     } finally {
       server.stop(true);
     }
-  });
+    // Two sequential cold CLI starts (`add`, then `list`). This file runs in the
+    // `test:no-cloud` release-guard lane, which deliberately has NO `--retry` —
+    // a boundary violation must not be retried into a pass — so the budget here
+    // is the only thing standing between a slow runner and a blocked merge.
+  }, cliSpawnBudgetMs(2));
 
   // Regression: `--project` is parsed onto the global program opts, so the add
   // command (which only read its local opts.project) silently dropped it and
@@ -168,5 +176,6 @@ describe("OSS local-first runtime defaults", () => {
     );
     expect(added.exitCode).toBe(0);
     expect(JSON.parse(added.stdout).project_id).toBe(projectId);
-  });
+    // Two sequential cold CLI starts (`projects --add`, then `add --project`).
+  }, cliSpawnBudgetMs(2));
 });

@@ -2,6 +2,62 @@ import type { Database } from "bun:sqlite";
 import type { TaskHistory } from "../types/index.js";
 import { getDatabase, now, uuid } from "./database.js";
 import { currentStorageMachineId } from "./storage-tombstones.js";
+import { sanitizePreWriteText } from "../lib/prewrite-secrets.js";
+
+function sanitizeHistoryValue(value: string | null | undefined, context: string): string | null {
+  return value === undefined || value === null ? null : sanitizePreWriteText(String(value), context);
+}
+
+/**
+ * Insert one caller-constructed history entry through the owning audit path.
+ *
+ * Operations that must mutate a task and persist their immutable receipt in the
+ * SAME transaction use this form. Ordinary callers should keep using
+ * logTaskChange(), which creates the id and timestamp for them.
+ */
+export function insertTaskHistory(entry: TaskHistory, db?: Database): TaskHistory {
+  const d = db || getDatabase();
+  const safeEntry: TaskHistory = {
+    ...entry,
+    field: entry.field || null,
+    old_value: sanitizeHistoryValue(entry.old_value, "task_history.old_value"),
+    new_value: sanitizeHistoryValue(entry.new_value, "task_history.new_value"),
+    agent_id: entry.agent_id || null,
+    machine_id: entry.machine_id ?? currentStorageMachineId(d),
+  };
+  d.run(
+    `INSERT INTO task_history (id, task_id, action, field, old_value, new_value, agent_id, created_at, machine_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      safeEntry.id,
+      safeEntry.task_id,
+      safeEntry.action,
+      safeEntry.field,
+      safeEntry.old_value,
+      safeEntry.new_value,
+      safeEntry.agent_id,
+      safeEntry.created_at,
+      safeEntry.machine_id ?? null,
+    ],
+  );
+
+  try {
+    const { logActivity } = require("../lib/activity-audit.js") as typeof import("../lib/activity-audit.js");
+    logActivity({
+      entity_type: "task",
+      entity_id: safeEntry.task_id,
+      action: safeEntry.action,
+      field: safeEntry.field ?? undefined,
+      old_value: safeEntry.old_value,
+      new_value: safeEntry.new_value,
+      actor_id: safeEntry.agent_id ?? undefined,
+    }, d);
+  } catch {
+    /* activity_log table may not exist in legacy DBs until migration */
+  }
+
+  return safeEntry;
+}
 
 export function logTaskChange(
   taskId: string,
@@ -13,31 +69,17 @@ export function logTaskChange(
   db?: Database,
 ): TaskHistory {
   const d = db || getDatabase();
-  const id = uuid();
-  const timestamp = now();
-  const machineId = currentStorageMachineId(d);
-  d.run(
-    `INSERT INTO task_history (id, task_id, action, field, old_value, new_value, agent_id, created_at, machine_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [id, taskId, action, field || null, oldValue ?? null, newValue ?? null, agentId || null, timestamp, machineId],
-  );
-
-  try {
-    const { logActivity } = require("../lib/activity-audit.js") as typeof import("../lib/activity-audit.js");
-    logActivity({
-      entity_type: "task",
-      entity_id: taskId,
-      action,
-      field,
-      old_value: oldValue ?? null,
-      new_value: newValue ?? null,
-      actor_id: agentId ?? undefined,
-    }, d);
-  } catch {
-    /* activity_log table may not exist in legacy DBs until migration */
-  }
-
-  return { id, task_id: taskId, action, field: field || null, old_value: oldValue ?? null, new_value: newValue ?? null, agent_id: agentId || null, created_at: timestamp, machine_id: machineId };
+  return insertTaskHistory({
+    id: uuid(),
+    task_id: taskId,
+    action,
+    field: field || null,
+    old_value: oldValue ?? null,
+    new_value: newValue ?? null,
+    agent_id: agentId || null,
+    created_at: now(),
+    machine_id: currentStorageMachineId(d),
+  }, d);
 }
 
 export function getTaskHistory(taskId: string, db?: Database): TaskHistory[] {
@@ -93,9 +135,14 @@ export function getRecap(hours = 8, projectId?: string, db?: Database): RecapSum
     : d.query(`SELECT id, short_id, title, assigned_to, updated_at FROM tasks WHERE status = 'in_progress' AND updated_at < ? ORDER BY updated_at ASC`).all(staleWindow)
   ) as any[];
 
+  // Alias-resolved (task 84c77210): compares `t.assigned_to` against BOTH
+  // the agent row's id (exact) and its name (case-insensitive) — see
+  // database.ts for the root cause. No separate resolver call is needed
+  // here: `a.id` and `a.name` are already in scope from the same correlated
+  // `agents` row, unlike the other sibling sites which only had a bare ref.
   const agents = (projectId
-    ? d.query(`SELECT a.name, a.last_seen_at, (SELECT COUNT(*) FROM tasks t WHERE (t.assigned_to = a.id OR t.agent_id = a.id) AND t.status = 'completed' AND t.completed_at > ?${tpf}) as completed_count, (SELECT COUNT(*) FROM tasks t WHERE (t.assigned_to = a.id OR t.agent_id = a.id) AND t.status = 'in_progress'${tpf}) as in_progress_count FROM agents a WHERE a.status = 'active' AND a.last_seen_at > ? ORDER BY completed_count DESC`).all(since, projectId, projectId, since)
-    : d.query(`SELECT a.name, a.last_seen_at, (SELECT COUNT(*) FROM tasks t WHERE (t.assigned_to = a.id OR t.agent_id = a.id) AND t.status = 'completed' AND t.completed_at > ?) as completed_count, (SELECT COUNT(*) FROM tasks t WHERE (t.assigned_to = a.id OR t.agent_id = a.id) AND t.status = 'in_progress') as in_progress_count FROM agents a WHERE a.status = 'active' AND a.last_seen_at > ? ORDER BY completed_count DESC`).all(since, since)
+    ? d.query(`SELECT a.name, a.last_seen_at, (SELECT COUNT(*) FROM tasks t WHERE (t.assigned_to = a.id OR LOWER(t.assigned_to) = LOWER(a.name) OR t.agent_id = a.id) AND t.status = 'completed' AND t.completed_at > ?${tpf}) as completed_count, (SELECT COUNT(*) FROM tasks t WHERE (t.assigned_to = a.id OR LOWER(t.assigned_to) = LOWER(a.name) OR t.agent_id = a.id) AND t.status = 'in_progress'${tpf}) as in_progress_count FROM agents a WHERE a.status = 'active' AND a.last_seen_at > ? ORDER BY completed_count DESC`).all(since, projectId, projectId, since)
+    : d.query(`SELECT a.name, a.last_seen_at, (SELECT COUNT(*) FROM tasks t WHERE (t.assigned_to = a.id OR LOWER(t.assigned_to) = LOWER(a.name) OR t.agent_id = a.id) AND t.status = 'completed' AND t.completed_at > ?) as completed_count, (SELECT COUNT(*) FROM tasks t WHERE (t.assigned_to = a.id OR LOWER(t.assigned_to) = LOWER(a.name) OR t.agent_id = a.id) AND t.status = 'in_progress') as in_progress_count FROM agents a WHERE a.status = 'active' AND a.last_seen_at > ? ORDER BY completed_count DESC`).all(since, since)
   ) as any[];
 
   return {

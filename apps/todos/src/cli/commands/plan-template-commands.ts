@@ -10,18 +10,230 @@ import {
   deletePlan,
 } from "../../db/plans.js";
 import { createTask } from "../../db/tasks.js";
-import type { Plan } from "../../types/index.js";
+import type { TemplatePreview } from "../../db/templates.js";
+import type { Plan, Task, TemplateWithTasks } from "../../types/index.js";
+import type { HasnaStorageClient } from "@hasna/contracts/client/storage";
+import {
+  evaluateTemplateCondition,
+  resolveTemplateVariables,
+  substituteTemplateVariables,
+} from "../../lib/template-semantics.js";
 import { inspectPlanArtifact, readPlanArtifact, writePlanArtifact } from "../../lib/plan-artifacts.js";
-import { formatTaskLine, autoProject, handleError, output } from "../helpers.js";
+import {
+  applyPlanProjectLink,
+  planPlanProjectLink,
+  rollbackPlanProjectLink,
+} from "../../lib/plan-project-link.js";
+import { createLocalSqliteTodosStorageAdapter } from "../../storage/local-sqlite.js";
+import { formatTaskLine, autoProject, handleError, output, resolveExplicitProject } from "../helpers.js";
 import {
   getTodosCloudClient,
   cloudCreatePlan,
+  cloudCreateTask,
+  cloudCreateTemplate,
+  cloudAddDependency,
+  cloudDeleteTemplate,
+  cloudGetTemplate,
   cloudDeletePlan,
   cloudListPlans,
-  cloudListTasks,
+  cloudListTemplates,
+  cloudListPlanTasks,
+  cloudApplyPlanProjectLink,
+  cloudPlanPlanProjectLink,
   cloudResolvePlan,
+  cloudResolveProjectRef,
+  cloudRollbackPlanProjectLink,
+  cloudUpdateTemplate,
   cloudUpdatePlan,
 } from "../cloud-router.js";
+
+interface RemoteTemplateApplication {
+  tasks: Task[];
+}
+
+interface RemoteTemplateOverrides {
+  title?: string;
+  description?: string;
+  priority?: TemplateWithTasks["priority"];
+}
+
+function normalizeTemplateDescription(value: string | null | undefined): string | null {
+  return value || null;
+}
+
+/**
+ * Keep cloud preview output byte-for-byte compatible with the canonical local
+ * preview contract. Preview intentionally shows only the template's direct
+ * checklist steps; execution handles included templates separately.
+ */
+function previewRemoteTemplate(
+  template: TemplateWithTasks,
+  variables?: Record<string, string>,
+): TemplatePreview {
+  const resolved = resolveTemplateVariables(template.variables ?? [], variables);
+  const renderDescription = (value: string | null) => {
+    if (!value) return null;
+    return substituteTemplateVariables(value, resolved) || null;
+  };
+
+  if (template.tasks.length === 0) {
+    return {
+      template_id: template.id,
+      template_name: template.name,
+      description: normalizeTemplateDescription(template.description),
+      variables: template.variables,
+      resolved_variables: resolved,
+      tasks: [{
+        position: 0,
+        title: substituteTemplateVariables(template.title_pattern, resolved),
+        description: renderDescription(template.description),
+        priority: template.priority,
+        tags: template.tags,
+        task_type: null,
+        depends_on_positions: [],
+      }],
+    };
+  }
+
+  return {
+    template_id: template.id,
+    template_name: template.name,
+    description: normalizeTemplateDescription(template.description),
+    variables: template.variables,
+    resolved_variables: resolved,
+    tasks: template.tasks
+      .filter((step) => !step.condition || evaluateTemplateCondition(step.condition, resolved))
+      .map((step) => ({
+        position: step.position,
+        title: substituteTemplateVariables(step.title_pattern, resolved),
+        description: renderDescription(step.description),
+        priority: step.priority,
+        tags: step.tags,
+        task_type: step.task_type,
+        depends_on_positions: step.depends_on_positions,
+      })),
+  };
+}
+
+/**
+ * /v1/templates/:id returns the complete template, including ordered checklist
+ * steps. Strip storage-only fields so cloud exports round-trip through the
+ * canonical template-import contract just like local exports.
+ */
+function exportRemoteTemplate(template: TemplateWithTasks) {
+  return {
+    name: template.name,
+    title_pattern: template.title_pattern,
+    description: normalizeTemplateDescription(template.description),
+    priority: template.priority,
+    tags: template.tags,
+    variables: template.variables,
+    project_id: template.project_id,
+    plan_id: template.plan_id,
+    metadata: template.metadata,
+    tasks: template.tasks.map((step) => ({
+      position: step.position,
+      title_pattern: step.title_pattern,
+      description: normalizeTemplateDescription(step.description),
+      priority: step.priority,
+      tags: step.tags,
+      task_type: step.task_type,
+      condition: step.condition,
+      include_template_id: step.include_template_id,
+      depends_on_positions: step.depends_on_positions,
+      metadata: step.metadata,
+    })),
+  };
+}
+
+/**
+ * Apply the reusable-template contract through the hosted /v1 API without
+ * opening local storage. This deliberately shares the variable and condition
+ * language with the SQLite implementation while resolving included templates
+ * through authenticated cloud reads.
+ */
+async function createRemoteTemplateTasks(
+  cloud: HasnaStorageClient,
+  template: TemplateWithTasks,
+  projectId: string | undefined,
+  variables: Record<string, string>,
+  agentId: string | undefined,
+  overrides?: RemoteTemplateOverrides,
+  visited = new Set<string>(),
+): Promise<RemoteTemplateApplication> {
+  if (visited.has(template.id)) {
+    throw new Error(`Circular template reference detected: ${template.id}`);
+  }
+  visited.add(template.id);
+  try {
+
+    const resolved = resolveTemplateVariables(template.variables ?? [], variables);
+    const render = (value: string | null | undefined) =>
+      value === null || value === undefined ? value : substituteTemplateVariables(value, resolved);
+
+    if (template.tasks.length === 0) {
+      const task = await cloudCreateTask(cloud, {
+      title: render(overrides?.title || template.title_pattern),
+      ...(render(overrides?.description ?? template.description) ? { description: render(overrides?.description ?? template.description) } : {}),
+      priority: overrides?.priority ?? template.priority,
+      tags: template.tags,
+      ...(projectId ? { project_id: projectId } : {}),
+      ...(template.plan_id ? { plan_id: template.plan_id } : {}),
+      ...(agentId ? { agent_id: agentId } : {}),
+      ...(Object.keys(template.metadata ?? {}).length > 0 ? { metadata: template.metadata } : {}),
+    });
+      return { tasks: [task] };
+    }
+
+    const created: Task[] = [];
+    const positionToTaskId = new Map<number, string>();
+    const skippedPositions = new Set<number>();
+
+    for (const step of template.tasks) {
+    // Keep local ordering: an include takes precedence over a step condition.
+    if (step.include_template_id) {
+      const included = await cloudGetTemplate(cloud, step.include_template_id);
+      if (!included) throw new Error(`Included template not found: ${step.include_template_id}`);
+      const result = await createRemoteTemplateTasks(cloud, included, projectId, resolved, agentId, undefined, visited);
+      created.push(...result.tasks);
+      if (result.tasks.length > 0) positionToTaskId.set(step.position, result.tasks[0]!.id);
+      else skippedPositions.add(step.position);
+      continue;
+    }
+    if (step.condition && !evaluateTemplateCondition(step.condition, resolved)) {
+      skippedPositions.add(step.position);
+      continue;
+    }
+    const task = await cloudCreateTask(cloud, {
+      title: render(step.title_pattern),
+      ...(render(step.description) ? { description: render(step.description) } : {}),
+      priority: step.priority,
+      tags: step.tags,
+      ...(step.task_type ? { task_type: step.task_type } : {}),
+      ...(projectId ? { project_id: projectId } : {}),
+      ...(template.plan_id ? { plan_id: template.plan_id } : {}),
+      ...(agentId ? { agent_id: agentId } : {}),
+      ...(Object.keys(step.metadata ?? {}).length > 0 ? { metadata: step.metadata } : {}),
+    });
+    created.push(task);
+    positionToTaskId.set(step.position, task.id);
+    }
+
+    for (const step of template.tasks) {
+    if (skippedPositions.has(step.position) || step.include_template_id) continue;
+    const taskId = positionToTaskId.get(step.position);
+    if (!taskId) continue;
+    for (const dependencyPosition of step.depends_on_positions) {
+      if (skippedPositions.has(dependencyPosition)) continue;
+      const dependencyId = positionToTaskId.get(dependencyPosition);
+      if (dependencyId) await cloudAddDependency(cloud, taskId, dependencyId);
+    }
+    }
+    return { tasks: created };
+  } finally {
+    visited.delete(template.id);
+  }
+}
 
 function resolvePlanCliRef(ref: string, projectId: string | undefined): string {
   const db = getDatabase();
@@ -51,12 +263,96 @@ export function registerPlanTemplateCommands(program: Command) {
     .option("--write-artifacts", "Write local Markdown artifacts for all project-scoped plans in scope")
     .option("--delete <id>", "Delete a plan")
     .option("--complete <id>", "Mark a plan as completed")
+    .option("--link-project <id-or-slug>", "Plan or apply a guarded plan/project link")
+    .option("--rollback-project-link <id-or-slug>", "Roll back an accepted plan/project link receipt")
+    .option("--to-project <id-or-slug>", "Destination project for --link-project or --rollback-project-link")
+    .option("--apply", "Apply --link-project after its exact-revision plan")
+    .option("--idempotency-key <key>", "Stable idempotency key required with --link-project --apply")
+    .option("--receipt <id>", "Accepted receipt required with --rollback-project-link")
     .action(async (opts) => {
       const globalOpts = program.opts();
       const cloud = getTodosCloudClient();
-      // In cloud mode the auto-detected project id is a LOCAL id that does not map
-      // to the shared cloud dataset, so it must not silently scope the cloud list.
-      const projectId = cloud ? undefined : autoProject(globalOpts);
+      const projectId = cloud
+        ? (globalOpts.project ? await cloudResolveProjectRef(cloud, globalOpts.project) : undefined)
+        : autoProject(globalOpts);
+
+      if (opts.linkProject && opts.rollbackProjectLink) {
+        handleError(new Error("Choose either --link-project or --rollback-project-link, not both."));
+      }
+
+      if (opts.linkProject || opts.rollbackProjectLink) {
+        if (!opts.toProject) {
+          handleError(new Error("--to-project is required for plan/project link operations."));
+        }
+        if (opts.apply && !opts.linkProject) {
+          handleError(new Error("--apply is valid only with --link-project."));
+        }
+        const planRef = opts.linkProject ?? opts.rollbackProjectLink;
+        const plan = cloud
+          ? await cloudResolvePlan(cloud, planRef)
+          : getPlan(resolvePlanCliRef(planRef, undefined));
+        if (!plan) {
+          handleError(new Error(`Plan not found: ${planRef}`));
+        }
+        const targetProjectId = cloud
+          ? await cloudResolveProjectRef(cloud, opts.toProject)
+          : resolveExplicitProject(opts.toProject).id;
+
+        if (opts.linkProject) {
+          const planned = cloud
+            ? await cloudPlanPlanProjectLink(cloud, plan.id, targetProjectId)
+            : await planPlanProjectLink(
+                createLocalSqliteTodosStorageAdapter({ db: getDatabase() }),
+                plan.id,
+                targetProjectId,
+              );
+          if (!opts.apply) {
+            if (globalOpts.json) output(planned, true);
+            else console.log(chalk.cyan(`${planned.action}: ${planned.tasks.length} task(s) → ${planned.project.name}`));
+            return;
+          }
+          if (!opts.idempotencyKey) {
+            handleError(new Error("--idempotency-key is required with --link-project --apply."));
+          }
+          const result = cloud
+            ? await cloudApplyPlanProjectLink(cloud, plan.id, targetProjectId, {
+                expected_plan_revision: planned.plan.updated_at,
+                expected_project_revision: planned.project.updated_at,
+                idempotency_key: opts.idempotencyKey,
+              })
+            : await applyPlanProjectLink(
+                createLocalSqliteTodosStorageAdapter({ db: getDatabase() }),
+                plan.id,
+                targetProjectId,
+                {
+                  expected_plan_revision: planned.plan.updated_at,
+                  expected_project_revision: planned.project.updated_at,
+                  idempotency_key: opts.idempotencyKey,
+                },
+              );
+          if (globalOpts.json) output(result, true);
+          else console.log(chalk.green(`${result.action}: ${result.tasks.length} task(s) → ${result.project.name}; receipt ${result.receipt?.receipt_id}`));
+          return;
+        }
+
+        if (!opts.receipt) {
+          handleError(new Error("--receipt is required with --rollback-project-link."));
+        }
+        const result = cloud
+          ? await cloudRollbackPlanProjectLink(cloud, plan.id, targetProjectId, {
+              receipt_id: opts.receipt,
+              expected_plan_revision: plan.updated_at,
+            })
+          : await rollbackPlanProjectLink(
+              createLocalSqliteTodosStorageAdapter({ db: getDatabase() }),
+              plan.id,
+              targetProjectId,
+              { receipt_id: opts.receipt, expected_plan_revision: plan.updated_at },
+            );
+        if (globalOpts.json) output(result, true);
+        else console.log(chalk.green(`rolled_back: ${result.tasks.length} task(s); receipt ${result.rollback_receipt_id}`));
+        return;
+      }
 
       if (opts.add) {
         let plan: Plan;
@@ -89,8 +385,7 @@ export function registerPlanTemplateCommands(program: Command) {
         const resolvedId = resolvePlanCliRef(opts.artifact, projectId);
         const plan = getPlan(resolvedId);
         if (!plan) {
-          console.error(chalk.red(`Plan not found: ${opts.artifact}`));
-          process.exit(1);
+          handleError(new Error(`Plan not found: ${opts.artifact}`));
         }
         const inspection = inspectPlanArtifact(plan, db);
         if (!inspection) {
@@ -137,17 +432,16 @@ export function registerPlanTemplateCommands(program: Command) {
       }
 
       if (opts.show) {
-        // self_hosted cloud routing: resolve the plan and its tasks from the SHARED
+        // http authority routing: resolve the plan and its tasks from the SHARED
         // dataset. The local path resolved the ref against this machine's sqlite
         // (which does not carry cloud plans), so it could not open a plan its own
         // cloud `plans` list had just returned.
         if (cloud) {
           const plan = await cloudResolvePlan(cloud, opts.show, projectId);
           if (!plan) {
-            console.error(chalk.red(`Plan not found: ${opts.show}`));
-            process.exit(1);
+            handleError(new Error(`Plan not found: ${opts.show}`));
           }
-          const tasks = await cloudListTasks(cloud, { plan_id: plan.id } as never);
+          const tasks = await cloudListPlanTasks(cloud, plan.id);
           if (globalOpts.json) {
             output({ plan, tasks, artifact: null }, true);
             return;
@@ -172,8 +466,7 @@ export function registerPlanTemplateCommands(program: Command) {
         const resolvedId = resolvePlanCliRef(opts.show, projectId);
         const plan = getPlan(resolvedId);
         if (!plan) {
-          console.error(chalk.red(`Plan not found: ${opts.show}`));
-          process.exit(1);
+          handleError(new Error(`Plan not found: ${opts.show}`));
         }
         const { listTasks } = require("../../db/tasks.js") as any;
         const tasks = listTasks({ plan_id: resolvedId });
@@ -219,18 +512,17 @@ export function registerPlanTemplateCommands(program: Command) {
       if (opts.delete) {
         const cloudPlan = cloud ? await cloudResolvePlan(cloud, opts.delete, projectId) : null;
         if (cloud && !cloudPlan) {
-          console.error(chalk.red(`Plan not found: ${opts.delete}`));
-          process.exit(1);
+          handleError(new Error(`Plan not found: ${opts.delete}`));
         }
         const resolvedId = cloudPlan?.id ?? resolvePlanCliRef(opts.delete, projectId);
         const deleted = cloud ? await cloudDeletePlan(cloud, resolvedId) : deletePlan(resolvedId);
         if (globalOpts.json) {
           output({ deleted }, true);
+          if (!deleted) process.exitCode = 1;
         } else if (deleted) {
           console.log(chalk.green("Plan deleted."));
         } else {
-          console.error(chalk.red("Plan not found."));
-          process.exit(1);
+          handleError(new Error("Plan not found."));
         }
         return;
       }
@@ -238,8 +530,7 @@ export function registerPlanTemplateCommands(program: Command) {
       if (opts.complete) {
         const cloudPlan = cloud ? await cloudResolvePlan(cloud, opts.complete, projectId) : null;
         if (cloud && !cloudPlan) {
-          console.error(chalk.red(`Plan not found: ${opts.complete}`));
-          process.exit(1);
+          handleError(new Error(`Plan not found: ${opts.complete}`));
         }
         const resolvedId = cloudPlan?.id ?? resolvePlanCliRef(opts.complete, projectId);
         try {
@@ -296,6 +587,85 @@ export function registerPlanTemplateCommands(program: Command) {
     .option("--var <vars...>", "Variable substitutions: key=value (e.g. --var feature=login)")
     .action(async (opts) => {
       const globalOpts = program.opts();
+      const cloud = getTodosCloudClient();
+      if (cloud) {
+        try {
+          const projectId = globalOpts.project ? await cloudResolveProjectRef(cloud, globalOpts.project) : undefined;
+          if (opts.add) {
+            if (!opts.title) { handleError(new Error("--title is required with --add")); }
+            const template = await cloudCreateTemplate(cloud, {
+              name: opts.add,
+              title_pattern: opts.title,
+              description: opts.description,
+              priority: opts.priority || "medium",
+              tags: opts.tags ? opts.tags.split(",").map((tag: string) => tag.trim()).filter(Boolean) : [],
+              project_id: projectId,
+            });
+            if (globalOpts.json) { output(template, true); }
+            else { console.log(chalk.green(`Template created: ${template.id.slice(0, 8)} | ${template.name} | "${template.title_pattern}"`)); }
+            return;
+          }
+          if (opts.delete) {
+            const deleted = await cloudDeleteTemplate(cloud, opts.delete);
+            if (globalOpts.json) { output({ deleted }, true); }
+            else if (deleted) { console.log(chalk.green("Template deleted.")); }
+            else { handleError(new Error("Template not found.")); }
+            return;
+          }
+          if (opts.update) {
+            const updates: Record<string, unknown> = {};
+            if (opts.title) updates.title_pattern = opts.title;
+            if (opts.description) updates.description = opts.description;
+            if (opts.priority) updates.priority = opts.priority;
+            if (opts.tags) updates.tags = opts.tags.split(",").map((tag: string) => tag.trim()).filter(Boolean);
+            if (Object.keys(updates).length === 0) {
+              handleError(new Error("Provide --title, --description, --priority, or --tags with --update"));
+            }
+            const updated = await cloudUpdateTemplate(cloud, opts.update, updates);
+            if (!updated) { handleError(new Error("Template not found.")); }
+            if (globalOpts.json) { output(updated, true); }
+            else { console.log(chalk.green(`Template updated: ${updated.id.slice(0, 8)} | ${updated.name} | "${updated.title_pattern}"`)); }
+            return;
+          }
+          if (opts.use) {
+            const variables: Record<string, string> = {};
+            for (const value of (opts.var ?? []) as string[]) {
+              const separator = value.indexOf("=");
+              if (separator === -1) { handleError(new Error(`Invalid variable format: ${value} (expected key=value)`)); }
+              variables[value.slice(0, separator)] = value.slice(separator + 1);
+            }
+            const template = await cloudGetTemplate(cloud, opts.use);
+            if (!template) { handleError(new Error("Template not found.")); }
+            const targetProjectId = template.project_id ?? projectId;
+            const { tasks: created } = await createRemoteTemplateTasks(
+              cloud,
+              template,
+              targetProjectId,
+              variables,
+              globalOpts.agent,
+              {
+                title: opts.title,
+                description: opts.description,
+                priority: opts.priority,
+              },
+            );
+            if (globalOpts.json) { output(created, true); }
+            else {
+              console.log(chalk.green(`${created.length} task(s) created from template:`));
+              for (const task of created) console.log(formatTaskLine(task));
+            }
+            return;
+          }
+          const templates = await cloudListTemplates(cloud, projectId);
+          if (globalOpts.json) { output(templates, true); return; }
+          if (templates.length === 0) { console.log(chalk.dim("No templates.")); return; }
+          console.log(chalk.bold(`${templates.length} template(s):\n`));
+          for (const template of templates) {
+            console.log(`  ${chalk.dim(template.id.slice(0, 8))} ${chalk.bold(template.name)} ${chalk.cyan(`"${template.title_pattern}"`)} ${chalk.yellow(template.priority)}`);
+          }
+        } catch (error) { handleError(error); }
+        return;
+      }
       const {
         createTemplate,
         getTemplateWithTasks,
@@ -307,7 +677,7 @@ export function registerPlanTemplateCommands(program: Command) {
       } = await import("../../db/templates.js");
 
       if (opts.add) {
-        if (!opts.title) { console.error(chalk.red("--title is required with --add")); process.exit(1); }
+        if (!opts.title) { handleError(new Error("--title is required with --add")); }
         const projectId = autoProject(globalOpts);
         const template = createTemplate({
           name: opts.add,
@@ -326,7 +696,7 @@ export function registerPlanTemplateCommands(program: Command) {
         const deleted = deleteTemplate(opts.delete);
         if (globalOpts.json) { output({ deleted }, true); }
         else if (deleted) { console.log(chalk.green("Template deleted.")); }
-        else { console.error(chalk.red("Template not found.")); process.exit(1); }
+        else { handleError(new Error("Template not found.")); }
         return;
       }
 
@@ -338,7 +708,7 @@ export function registerPlanTemplateCommands(program: Command) {
         if (opts.priority) updates.priority = opts.priority;
         if (opts.tags) updates.tags = opts.tags.split(",").map((t: string) => t.trim());
         const updated = updateTemplate(opts.update, updates);
-        if (!updated) { console.error(chalk.red("Template not found.")); process.exit(1); }
+        if (!updated) { handleError(new Error("Template not found.")); }
         if (globalOpts.json) { output(updated, true); }
         else { console.log(chalk.green(`Template updated: ${updated.id.slice(0, 8)} | ${updated.name} | "${updated.title_pattern}"`)); }
         return;
@@ -350,14 +720,13 @@ export function registerPlanTemplateCommands(program: Command) {
           if (opts.var) {
             for (const v of (opts.var as string[])) {
               const eq = v.indexOf("=");
-              if (eq === -1) { console.error(chalk.red(`Invalid variable format: ${v} (expected key=value)`)); process.exit(1); }
+              if (eq === -1) { handleError(new Error(`Invalid variable format: ${v} (expected key=value)`)); }
               variables[v.slice(0, eq)] = v.slice(eq + 1);
             }
           }
           const template = getTemplateWithTasks(opts.use);
           if (!template) {
-            console.error(chalk.red("Template not found."));
-            process.exit(1);
+            handleError(new Error("Template not found."));
           }
           if (template.tasks.length > 0) {
             const tasks = tasksFromTemplate(
@@ -481,31 +850,43 @@ export function registerPlanTemplateCommands(program: Command) {
     .option("--var <vars...>", "Variable substitution in key=value format (e.g. --var name=invoices)")
     .action(async (id: string, opts: { var?: string[] }) => {
       const globalOpts = program.opts();
-      const { previewTemplate } = await import("../../db/templates.js");
 
       const variables: Record<string, string> = {};
       if (opts.var) {
         for (const v of opts.var) {
           const eq = v.indexOf("=");
-          if (eq === -1) { console.error(chalk.red(`Invalid variable format: ${v} (expected key=value)`)); process.exit(1); }
+          if (eq === -1) { handleError(new Error(`Invalid variable format: ${v} (expected key=value)`)); }
           variables[v.slice(0, eq)] = v.slice(eq + 1);
         }
       }
 
       try {
-        const preview = previewTemplate(id, Object.keys(variables).length > 0 ? variables : undefined);
-        if (globalOpts.json) { output(preview, true); return; }
-
-        console.log(chalk.bold(`Preview: ${preview.template_name} (${preview.tasks.length} tasks)`));
-        if (preview.description) console.log(chalk.dim(`  ${preview.description}`));
-        if (preview.variables.length > 0) {
-          console.log(chalk.dim(`  Variables: ${preview.variables.map((v: any) => `${v.name}${v.required ? '*' : ''}${v.default ? `=${v.default}` : ''}`).join(', ')}`));
+        const cloud = getTodosCloudClient();
+        let result: TemplatePreview;
+        if (cloud) {
+          const template = await cloudGetTemplate(cloud, id);
+          if (!template) {
+            handleError(new Error("Template not found."));
+          }
+          result = previewRemoteTemplate(template, Object.keys(variables).length > 0 ? variables : undefined);
+        } else {
+          result = (await import("../../db/templates.js")).previewTemplate(
+            id,
+            Object.keys(variables).length > 0 ? variables : undefined,
+          );
         }
-        if (Object.keys(preview.resolved_variables).length > 0) {
-          console.log(chalk.dim(`  Resolved: ${Object.entries(preview.resolved_variables).map(([k, v]) => `${k}=${v}`).join(', ')}`));
+        if (globalOpts.json) { output(result, true); return; }
+
+        console.log(chalk.bold(`Preview: ${result.template_name} (${result.tasks.length} tasks)`));
+        if (result.description) console.log(chalk.dim(`  ${result.description}`));
+        if (result.variables.length > 0) {
+          console.log(chalk.dim(`  Variables: ${result.variables.map((v: any) => `${v.name}${v.required ? '*' : ''}${v.default ? `=${v.default}` : ''}`).join(', ')}`));
+        }
+        if (Object.keys(result.resolved_variables).length > 0) {
+          console.log(chalk.dim(`  Resolved: ${Object.entries(result.resolved_variables).map(([k, v]) => `${k}=${v}`).join(', ')}`));
         }
         console.log();
-        for (const t of preview.tasks) {
+        for (const t of result.tasks) {
           const deps = t.depends_on_positions.length > 0 ? chalk.dim(` (after: ${t.depends_on_positions.join(", ")})`) : "";
           console.log(`  ${chalk.dim(`[${t.position}]`)} ${chalk.yellow(t.priority)} | ${t.title}${deps}`);
         }
@@ -518,9 +899,17 @@ export function registerPlanTemplateCommands(program: Command) {
     .alias("templates-export")
     .description("Export a template as JSON to stdout")
     .action(async (id: string) => {
-      const { exportTemplate } = await import("../../db/templates.js");
       try {
-        const json = exportTemplate(id);
+        const cloud = getTodosCloudClient();
+        const template = cloud
+          ? await cloudGetTemplate(cloud, id)
+          : null;
+        if (cloud && !template) {
+          handleError(new Error("Template not found."));
+        }
+        const json = cloud
+          ? exportRemoteTemplate(template!)
+          : (await import("../../db/templates.js")).exportTemplate(id);
         console.log(JSON.stringify(json, null, 2));
       } catch (e) { handleError(e); }
     });
@@ -533,14 +922,16 @@ export function registerPlanTemplateCommands(program: Command) {
     .option("--file <path>", "Path to template JSON file (alternative to positional arg)")
     .action(async (file: string | undefined, opts: { file?: string }) => {
       const globalOpts = program.opts();
-      const { importTemplate } = await import("../../db/templates.js");
       const { readFileSync } = await import("node:fs");
       try {
         const filePath = file || opts.file;
-        if (!filePath) { console.error(chalk.red("Provide a file path: todos template-import <file> or --file <path>")); process.exit(1); }
+        if (!filePath) { handleError(new Error("Provide a file path: todos template-import <file> or --file <path>")); }
         const content = readFileSync(filePath, "utf-8");
         const json = JSON.parse(content);
-        const template = importTemplate(json);
+        const cloud = getTodosCloudClient();
+        const template = cloud
+          ? await cloudCreateTemplate(cloud, json)
+          : (await import("../../db/templates.js")).importTemplate(json);
         if (globalOpts.json) { output(template, true); }
         else { console.log(chalk.green(`Template imported: ${template.id.slice(0, 8)} | ${template.name} | "${template.title_pattern}"`)); }
       } catch (e) { handleError(e); }
@@ -556,7 +947,7 @@ export function registerPlanTemplateCommands(program: Command) {
       const { listTemplateVersions, getTemplate } = await import("../../db/templates.js");
       try {
         const template = getTemplate(id);
-        if (!template) { console.error(chalk.red("Template not found.")); process.exit(1); }
+        if (!template) { handleError(new Error("Template not found.")); }
         const versions = listTemplateVersions(id);
         if (globalOpts.json) { output({ current_version: template.version, versions }, true); return; }
         console.log(chalk.bold(`${template.name} — current version: ${template.version}`));

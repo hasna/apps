@@ -1,0 +1,272 @@
+import type { Database } from "bun:sqlite";
+import type { TodosPostgresQueryClient } from "../storage/postgres-sync.js";
+import type { TaskPriority, TaskStatus } from "../types/index.js";
+
+export const TODOS_TASK_MANIFEST_ROUTE = "todos.task-manifest.v1" as const;
+export const TODOS_TASK_MANIFEST_CALLER_ROUTE = "accounts.task-manifest.v1" as const;
+export const TODOS_TASK_MANIFEST_SCHEMA_VERSION = 1 as const;
+export const TODOS_TASK_MANIFEST_PLAN_SLUG_PROVENANCE = "deterministic-v1" as const;
+
+export type TodosTaskManifestStatus = TaskStatus;
+export type TodosTaskManifestPriority = TaskPriority;
+export type TodosTaskManifestVerificationStatus = "passed" | "failed" | "unknown";
+export type TodosTaskManifestDirection = "apply" | "compensate";
+export type TodosTaskManifestOutcome =
+  | "accepted"
+  | "duplicate_of_accepted"
+  | "terminal_nonacceptance";
+
+export interface TodosTaskManifestComment {
+  content: string;
+  type?: "comment" | "progress" | "status_change" | "system";
+  progress_pct?: number;
+  agent_id?: string;
+  session_id?: string;
+}
+
+export interface TodosTaskManifestVerification {
+  command: string;
+  status?: TodosTaskManifestVerificationStatus;
+  output_summary?: string;
+  artifact_path?: string;
+  agent_id?: string;
+}
+
+export interface TodosTaskManifestTask {
+  key: string;
+  title: string;
+  description?: string;
+  status?: TodosTaskManifestStatus;
+  priority?: TodosTaskManifestPriority;
+  assigned_to?: string;
+  created_by?: string;
+  tags?: string[];
+  metadata?: Record<string, string | number | boolean | null>;
+  comments?: TodosTaskManifestComment[];
+  verifications?: TodosTaskManifestVerification[];
+}
+
+export interface TodosTaskManifestDependency {
+  task: string;
+  depends_on: string;
+}
+
+export interface TodosTaskManifestEffect {
+  topic: string;
+  payload: Record<string, string | number | boolean | null>;
+}
+
+export interface TodosTaskManifest {
+  version: 1;
+  operation_id: string;
+  step_id: string;
+  idempotency_key: string;
+  precondition_digest: string;
+  project_id: string;
+  task_list_id?: string;
+  if_binding_version?: number;
+  plan: {
+    key: string;
+    name: string;
+    description?: string;
+    status?: "active" | "completed" | "archived";
+  };
+  tasks: TodosTaskManifestTask[];
+  dependencies?: TodosTaskManifestDependency[];
+  effects?: TodosTaskManifestEffect[];
+}
+
+export interface TodosTaskManifestReadback {
+  plans: number;
+  tasks: number;
+  dependencies: number;
+  comments: number;
+  verifications: number;
+  complete: true;
+}
+
+export interface TodosTaskManifestGraph {
+  plan_id: string;
+  task_ids: Record<string, string>;
+  comment_ids: string[];
+  verification_ids: string[];
+  dependency_ids: string[];
+}
+
+export interface TodosTaskManifestReceipt {
+  receipt_id: string;
+  authority: "todos";
+  route: typeof TODOS_TASK_MANIFEST_ROUTE;
+  schema_version: 1;
+  kind: "apply" | "compensate";
+  operation_id: string;
+  step_id: string;
+  idempotency_key: string;
+  request_digest: string;
+  precondition_digest: string;
+  result_digest: string;
+  outcome: TodosTaskManifestOutcome;
+  reason: TodosTaskManifestErrorCode | null;
+  duplicate_of_receipt_id: string | null;
+  binding_version: number;
+  apply_receipt_id: string | null;
+  created_at: string;
+}
+
+export interface TodosTaskManifestApplyResult {
+  duplicate: boolean;
+  receipt: TodosTaskManifestReceipt;
+  graph: TodosTaskManifestGraph;
+  readback: TodosTaskManifestReadback;
+  outbox_ids: string[];
+  result_digest: string;
+}
+
+export interface TodosTaskManifestCompensateRequest {
+  receipt_id: string;
+  operation_id: string;
+  step_id: string;
+  idempotency_key: string;
+  precondition_digest: string;
+  if_binding_version: number;
+}
+
+export interface TodosTaskManifestCompensationResult {
+  duplicate: boolean;
+  receipt: TodosTaskManifestReceipt;
+  absent: true;
+  readback: TodosTaskManifestReadback;
+}
+
+export interface TodosTaskManifestCapability {
+  authority: "todos";
+  route: typeof TODOS_TASK_MANIFEST_ROUTE;
+  schema_version: 1;
+  tenant_id: string;
+  backend: "sqlite" | "postgresql" | "http";
+  deterministic_ids: true;
+  operation_step_identity: true;
+  deterministic_idempotency_keys: true;
+  terminal_nonacceptance_receipts: true;
+  plan_slug_provenance: typeof TODOS_TASK_MANIFEST_PLAN_SLUG_PROVENANCE;
+  immutable_receipts: true;
+  transactional_outbox: true;
+  idempotent_outbox_delivery: true;
+  exact_bounded_readback: true;
+  conditional_compensation: true;
+  transcript_safe: false;
+  bounds: {
+    tasks: number;
+    dependencies: number;
+    comments: number;
+    verifications: number;
+    effects: number;
+    metadata_fields: number;
+    effect_payload_fields: number;
+    request_bytes: number;
+    response_bytes: number;
+  };
+}
+
+export function supportsIdempotentOutboxDelivery(
+  capability: unknown,
+): boolean {
+  return capability !== null
+    && typeof capability === "object"
+    && (capability as Record<string, unknown>)["idempotent_outbox_delivery"] === true;
+}
+
+export interface TodosTaskManifestBindingLookupRequest {
+  authority: "todos";
+  route: typeof TODOS_TASK_MANIFEST_ROUTE;
+  schema_version: 1;
+  tenant_id: string;
+  plan_id: string;
+  max_items: 1;
+}
+
+export interface TodosTaskManifestBindingLookupResult {
+  authority: "todos";
+  route: typeof TODOS_TASK_MANIFEST_ROUTE;
+  schema_version: 1;
+  tenant_id: string;
+  plan_id: string;
+  operation_id: string;
+  step_id: string;
+  apply_receipt_id: string;
+  binding_version: number;
+  state: "applied" | "compensated";
+}
+
+export type TodosTaskManifestFaultPoint =
+  | "after_plan_write"
+  | "after_task_write"
+  | "after_dependency_write"
+  | "after_comment_write"
+  | "after_verification_write"
+  | "after_outbox_write"
+  | "after_receipt_write";
+
+export interface TodosTaskManifestAuthority {
+  capability(): Promise<TodosTaskManifestCapability>;
+  apply(input: unknown): Promise<TodosTaskManifestApplyResult>;
+  readExact(receiptId: string): Promise<TodosTaskManifestApplyResult>;
+  lookupBinding(input: TodosTaskManifestBindingLookupRequest): Promise<TodosTaskManifestBindingLookupResult>;
+  markOutboxDelivered(outboxId: string): Promise<void>;
+  compensate(input: TodosTaskManifestCompensateRequest): Promise<TodosTaskManifestCompensationResult>;
+}
+
+export interface TodosTaskManifestAuthorityOptions {
+  tenantId?: string;
+  now?: () => string;
+  faultInjector?: (point: TodosTaskManifestFaultPoint) => boolean | void | Promise<boolean | void>;
+}
+
+export interface SqliteTodosTaskManifestAuthorityOptions extends TodosTaskManifestAuthorityOptions {
+  database: Database;
+}
+
+export interface TodosTaskManifestPostgresClient extends TodosPostgresQueryClient {
+  transaction<T>(fn: (client: TodosPostgresQueryClient) => Promise<T>): Promise<T>;
+}
+
+export interface PostgresTodosTaskManifestAuthorityOptions extends TodosTaskManifestAuthorityOptions {
+  service?: string;
+  tableName?: string;
+}
+
+export type TodosTaskManifestErrorCode =
+  | "TODOS_TASK_MANIFEST_INVALID_INPUT"
+  | "TODOS_TASK_MANIFEST_DIGEST_MISMATCH"
+  | "TODOS_TASK_MANIFEST_IDEMPOTENCY_MISMATCH"
+  | "TODOS_TASK_MANIFEST_BOUNDS_EXCEEDED"
+  | "TODOS_TASK_MANIFEST_FOREIGN_REFERENCE"
+  | "TODOS_TASK_MANIFEST_IDEMPOTENCY_CONFLICT"
+  | "TODOS_TASK_MANIFEST_CAS_CONFLICT"
+  | "TODOS_TASK_MANIFEST_GRAPH_CONFLICT"
+  | "TODOS_TASK_MANIFEST_RECEIPT_NOT_FOUND"
+  | "TODOS_TASK_MANIFEST_BINDING_NOT_FOUND"
+  | "TODOS_TASK_MANIFEST_CAPABILITY_MISMATCH"
+  | "TODOS_TASK_MANIFEST_LOOKUP_CONFLICT"
+  | "TODOS_TASK_MANIFEST_READBACK_MISMATCH"
+  | "TODOS_TASK_MANIFEST_COMPENSATION_REFUSED"
+  | "TODOS_TASK_MANIFEST_ATOMICITY_UNAVAILABLE"
+  | "TODOS_TASK_MANIFEST_HTTP_ERROR";
+
+export class TodosTaskManifestError extends Error {
+  constructor(
+    readonly code: TodosTaskManifestErrorCode,
+    message: string,
+    readonly details: Record<string, unknown> = {},
+  ) {
+    super(message);
+    this.name = "TodosTaskManifestError";
+  }
+}
+
+export interface TodosTaskManifestHttpClientOptions {
+  baseUrl: string;
+  apiKey?: string;
+  fetch?: typeof globalThis.fetch;
+  headers?: Record<string, string>;
+}

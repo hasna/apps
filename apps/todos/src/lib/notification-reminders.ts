@@ -5,7 +5,7 @@
 
 import { execSync } from "node:child_process";
 import type { Database, SQLQueryBindings } from "bun:sqlite";
-import { getDatabase, now, uuid } from "../db/database.js";
+import { assignedToAliasSet, getDatabase, lowerInClause, now, resolveAssignedToAliases, uuid } from "../db/database.js";
 import { getTask, listTasks, type Task } from "../db/tasks.js";
 import { rowToTask } from "../db/task-crud.js";
 import { getOverdueTasks } from "../db/task-relations.js";
@@ -372,8 +372,8 @@ export function getUpcomingDueTasks(
     params.push(filters.project_id);
   }
   if (filters.agent_id) {
-    query += " AND assigned_to = ?";
-    params.push(filters.agent_id);
+    // Alias-resolved (task 84c77210) — see database.ts for the root cause.
+    query += ` AND ${lowerInClause("assigned_to", resolveAssignedToAliases(d, filters.agent_id), params)}`;
   }
   query += " ORDER BY due_at ASC";
 
@@ -437,8 +437,15 @@ function scanDueDateReminders(
     reminders.push(result.reminder);
   }
 
+  // Alias-resolved (task 84c77210): `getOverdueTasks` takes no agent filter of
+  // its own, so this in-memory filter is the only place doing the agent
+  // match for overdue reminders — a reminder that never fires because its
+  // task's `assigned_to` happens to be stored under the other alias form is
+  // indistinguishable from having nothing to remind, which is exactly the
+  // silent-failure shape 84c77210 named for this file.
+  const overdueAliases = filters.agent_id ? assignedToAliasSet(d, filters.agent_id) : null;
   const overdue = getOverdueTasks(filters.project_id, d).filter((t) => {
-    if (filters.agent_id && t.assigned_to !== filters.agent_id) return false;
+    if (overdueAliases && !overdueAliases.has((t.assigned_to ?? "").toLowerCase())) return false;
     return true;
   });
   for (const task of overdue) {

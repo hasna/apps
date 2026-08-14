@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 import chalk from "chalk";
+import { readFileSync, statSync } from "node:fs";
 import { basename, resolve, sep } from "node:path";
 import { getDatabase, resolvePartialId } from "../../db/database.js";
 import {
@@ -8,27 +9,144 @@ import {
   listProjects,
   getProjectByPath,
   renameProject,
+  updateProject,
 } from "../../db/projects.js";
 import { addComment } from "../../db/comments.js";
-import { getTodosCloudClient, cloudAddComment, cloudListProjects, cloudAddDependency, cloudRemoveDependency, cloudGetDependencies, cloudRenameProject } from "../cloud-router.js";
+import { getTodosCloudClient, cloudAddComment, cloudApplyProjectTaskListEnsure, cloudCreateProject, cloudDeleteProject, cloudListProjects, cloudListTasks, cloudPlanProjectTaskListEnsure, cloudResolveProject, cloudResolveProjectRef, cloudRollbackProjectTaskListEnsure, cloudUpdateProject, cloudAddDependency, cloudRemoveDependency, cloudGetDependencies, cloudGetTaskRelations, cloudRenameProject } from "../cloud-router.js";
+import { resolveWritableIdentity } from "../../lib/creator-identity.js";
+import {
+  buildProjectDependencyGraph,
+  buildTaskDependencyEdges,
+  getProjectDependencyGraph,
+  getTaskDependencyEdges,
+  type DependencyEdge,
+  type ProjectDependencyGraph,
+} from "../../lib/dependency-graph.js";
+import type { Task } from "../../types/index.js";
 import { searchTasks } from "../../lib/search.js";
 import {
   deleteSearchView,
   listSearchViews,
-  normalizeScope,
   runSavedSearch,
   runSearchView,
   saveSearchView,
+  SAVED_SEARCH_SCOPES,
   type SavedSearchFilters,
   type SavedSearchScope,
 } from "../../lib/saved-search-views.js";
 import { defaultSyncAgents, syncWithAgent, syncWithAgents } from "../../lib/sync.js";
 import { getAgentTaskListId } from "../../lib/config.js";
-import { autoProject, autoDetectProject, handleError, output, formatTaskLine, normalizeStatus, resolveExplicitProject, resolveTaskId } from "../helpers.js";
+import { autoProject, autoDetectProject, handleError, output, outputRecord, formatTaskLine, parseEnumFlag, parseEnumFlagList, resolveExplicitProject, resolveTaskId, resolveTaskIdForCommand, TASK_PRIORITY_FLAG, TASK_STATUS_FLAG } from "../helpers.js";
 import { redactBroadOutput, redactBroadTasks } from "../output-redaction.js";
+import { createLocalSqliteTodosStorageAdapter } from "../../storage/local-sqlite.js";
+import {
+  applyProjectTaskListEnsure,
+  planProjectTaskListEnsure,
+  rollbackProjectTaskListEnsure,
+} from "../../lib/project-task-list-ensure.js";
 
 function collectOption(value: string, previous: string[] = []): string[] {
   return [...previous, value];
+}
+
+/**
+ * `--scope` vocabulary, taken from `SAVED_SEARCH_SCOPES`. `normalizeScope` silently
+ * falls back to "tasks" for anything it does not recognise, so a mistyped
+ * `--scope projekts` used to search tasks and report those results as if they were
+ * the requested scope. Validating the flag first turns that into a non-zero error.
+ */
+const SEARCH_SCOPE_FLAG = {
+  name: "--scope",
+  vocabulary: SAVED_SEARCH_SCOPES,
+  normalize: (value: string) => value.toLowerCase().trim(),
+  allowList: false,
+} as const;
+
+/**
+ * `todos export --format` vocabulary, including the documented spelling variants
+ * the action already accepts. An unrecognised value used to fall through the
+ * markdown branch and silently emit JSON, so `--format mardown` produced a
+ * plausible-looking export in the wrong format with exit 0.
+ */
+const EXPORT_FORMATS = ["json", "md", "markdown", "todos.md", "todos-md", "bridge"] as const;
+const EXPORT_FORMAT_FLAG = {
+  name: "--format",
+  vocabulary: EXPORT_FORMATS,
+  normalize: (value: string) => value.toLowerCase().trim(),
+  allowList: false,
+} as const;
+
+/** The resolved cloud/self-hosted client, when a remote authority is selected. */
+type CloudClient = NonNullable<ReturnType<typeof getTodosCloudClient>>;
+
+/** Bounded concurrency for per-task edge reads while assembling a cloud graph. */
+const CLOUD_GRAPH_EDGE_CONCURRENCY = 6;
+
+/**
+ * True unless the row is the `unresolved` placeholder `cloudGetTaskRelations`
+ * synthesizes for an edge whose target task cannot be read. Dropping these
+ * keeps the cloud per-task edge read identical to local (whose SQL JOIN already
+ * omits dangling edges) instead of leaking a synthetic "pending" node.
+ */
+function isResolvedTask(task: Task): boolean {
+  const metadata = task.metadata as Record<string, unknown> | null | undefined;
+  return !(metadata && metadata["unresolved"] === true);
+}
+
+/**
+ * Assemble the whole-project dependency graph from a hosted /v1 authority.
+ * The cloud API exposes edges per task, so nodes come from one list call and
+ * the adjacency list is gathered from each task's dependency edges (bounded
+ * concurrency). A single unreadable task degrades to a missing node/edge rather
+ * than failing the whole read, mirroring `cloudGetTaskRelations`.
+ */
+async function buildCloudProjectDependencyGraph(
+  cloud: CloudClient,
+  projectId: string | null,
+): Promise<ProjectDependencyGraph> {
+  const tasks = await cloudListTasks(cloud, {
+    ...(projectId ? { project_id: projectId } : {}),
+    include_subtasks: true,
+  });
+  const edges: DependencyEdge[] = [];
+  const seen = new Set<string>();
+  let cursor = 0;
+  const workers = Array.from(
+    { length: Math.min(CLOUD_GRAPH_EDGE_CONCURRENCY, tasks.length) },
+    async () => {
+      for (let index = cursor++; index < tasks.length; index = cursor++) {
+        const task = tasks[index]!;
+        try {
+          const deps = await cloudGetDependencies(cloud, task.id);
+          for (const edge of deps.dependencies) {
+            const key = `${edge.task_id}|${edge.depends_on}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            edges.push({ task_id: edge.task_id, depends_on: edge.depends_on });
+          }
+        } catch {
+          // A single unreadable task must not fail the whole-project read.
+        }
+      }
+    },
+  );
+  await Promise.all(workers);
+  return buildProjectDependencyGraph(projectId, tasks, edges);
+}
+
+/** Human rendering for the whole-project graph (JSON is the primary surface). */
+function printProjectDependencyGraph(graph: ProjectDependencyGraph): void {
+  if (graph.nodes.length === 0) {
+    console.log(chalk.dim("No tasks in scope."));
+    return;
+  }
+  console.log(chalk.bold(`Dependency graph: ${graph.nodes.length} task(s), ${graph.edges.length} edge(s)`));
+  if (graph.cycles.length > 0) {
+    console.log(chalk.red(`  ${graph.cycles.length} cycle(s) detected`));
+  }
+  for (const edge of graph.edges) {
+    console.log(`  ${chalk.cyan(edge.task_id.slice(0, 8))} depends on ${chalk.cyan(edge.depends_on.slice(0, 8))}`);
+  }
 }
 
 function splitList(value: string | string[] | undefined): string[] | undefined {
@@ -56,6 +174,13 @@ function countProjectTasks(projectId: string): { total: number; incomplete: numb
      FROM tasks
      WHERE project_id = ?`,
   ).get(projectId) as { total: number; incomplete: number };
+}
+
+function countTasksForDeregistration(tasks: readonly Task[]): { total: number; incomplete: number } {
+  return {
+    total: tasks.length,
+    incomplete: tasks.filter((task) => task.status !== "completed" && task.status !== "cancelled").length,
+  };
 }
 
 function pathIsWithinPrefix(projectPath: string, prefix: string): boolean {
@@ -113,12 +238,15 @@ function buildSearchFilters(query: string | undefined, opts: any, projectId?: st
   const customFields = parseJsonObjectOption(opts.fieldCustom, "--field-custom");
   const labels = splitList(opts.fieldLabel);
   const tags = splitList(opts.tag);
-  const statuses = splitList(opts.status)?.map(normalizeStatus);
+  // Validated against TASK_STATUSES / TASK_PRIORITIES before they can reach the
+  // search filter. Unvalidated they matched nothing and `search` printed
+  // `No tasks matching "<query>".` with exit 0 — the same silent empty result the
+  // `list --status open` incident produced.
   const filters: SavedSearchFilters = {
     query: query || opts.query,
     project_id: opts.allProjects ? undefined : projectId,
-    status: statuses,
-    priority: splitList(opts.priority) as SavedSearchFilters["priority"],
+    status: parseEnumFlagList(opts.status, TASK_STATUS_FLAG),
+    priority: parseEnumFlagList(opts.priority, TASK_PRIORITY_FLAG),
     assigned_to: opts.assigned,
     agent_id: opts.agentId,
     task_list_id: filterPatch?.task_list_id === undefined
@@ -195,37 +323,75 @@ export function registerProjectCommands(program: Command) {
 
   // comment (aliased as log-progress so documented progress commands work)
   program
-    .command("comment <id> <text>")
+    .command("comment <id> [text]")
     .alias("log-progress")
     .description("Add a comment to a task (alias: log-progress, for recording intermediate progress)")
+    .option("--file <path>", "Read comment text from a UTF-8 file")
     .option("--pct <percent>", "Progress percentage (0-100) to record alongside the note")
-    .action(async (id: string, text: string, opts: { pct?: string }) => {
+    .action(async (id: string, text: string | undefined, opts: { file?: string; pct?: string }) => {
+      const hasPositionalContent = text !== undefined;
+      const hasFileContent = opts.file !== undefined;
+      if (hasPositionalContent === hasFileContent) {
+        handleError(new Error("Provide exactly one comment content source: positional text or --file <path>, not both."));
+      }
+
+      let content: string;
+      if (opts.file !== undefined) {
+        const commentFilePath = resolve(opts.file);
+        let isRegularFile = false;
+        try {
+          isRegularFile = statSync(commentFilePath).isFile();
+        } catch (error) {
+          handleError(new Error(`Unable to read comment file "${opts.file}".`, { cause: error }));
+        }
+        if (!isRegularFile) {
+          handleError(new Error(`Comment file "${opts.file}" must be a regular file.`));
+        }
+        try {
+          content = readFileSync(commentFilePath, "utf8");
+        } catch (error) {
+          handleError(new Error(`Unable to read comment file "${opts.file}".`, { cause: error }));
+        }
+      } else {
+        content = text!;
+      }
+      if (!content.trim()) {
+        handleError(new Error("Comment content must not be empty."));
+      }
+
       const globalOpts = program.opts();
-      const resolvedId = resolveTaskId(id);
-      let content = text;
+      const cloud = getTodosCloudClient();
+      const resolvedId = await resolveTaskIdForCommand(id, cloud);
       let progressPct: number | undefined;
       if (opts.pct !== undefined) {
         const pct = parseInt(opts.pct, 10);
         if (!Number.isFinite(pct) || pct < 0 || pct > 100) {
-          console.error(chalk.red("--pct must be a number between 0 and 100"));
-          process.exit(1);
+          handleError(new Error("--pct must be a number between 0 and 100"));
         }
-        content = `[progress ${pct}%] ${text}`;
+        content = `[progress ${pct}%] ${content}`;
         progressPct = pct;
       }
+      // Bare `globalOpts.agent` used to be the only source checked here, so
+      // TODOS_AGENT_ID / HASNA_TODOS_AGENT_ID — the documented per-session escape
+      // hatch that `add`, `start`, and `done` all honour via resolveWritableIdentity
+      // — was silently invisible to this one command (todos task 39b4255b). This
+      // mirrors task-commands.ts's `add`: an explicit --agent keeps its original
+      // casing, and falls back to the resolver's canonicalised value (env only —
+      // never the station-shared identity.json file, which is not process-bound).
+      const router = resolveWritableIdentity(globalOpts.agent);
+      const agentId = globalOpts.agent || router.agent_id || undefined;
       try {
-        const cloud = getTodosCloudClient();
         const comment = cloud
           ? await cloudAddComment(cloud, resolvedId, {
               content,
-              agent_id: globalOpts.agent,
+              agent_id: agentId,
               session_id: globalOpts.session,
               ...(progressPct !== undefined ? { type: "progress", progress_pct: progressPct } : {}),
             })
           : addComment({
               task_id: resolvedId,
               content,
-              agent_id: globalOpts.agent,
+              agent_id: agentId,
               session_id: globalOpts.session,
             });
 
@@ -268,11 +434,20 @@ export function registerProjectCommands(program: Command) {
     .option("--save-as <name>", "Save this search as a named view")
     .option("--description <text>", "Saved view description")
     .option("--all-projects", "Do not auto-scope the search to the current project")
-    .action((query: string, opts) => {
+    .action(async (query: string, opts) => {
       const globalOpts = program.opts();
       try {
-        const projectId = opts.allProjects ? undefined : autoProject(globalOpts);
-        const scope = normalizeScope(opts.scope) as SavedSearchScope;
+        // http authority routing: the local FTS5 index (searchTasks) only sees
+        // the local SQLite file, which is empty when the http transport is selected.
+        // Route task search through the shared `/v1/tasks?q=` API so it runs the
+        // Postgres tsvector/trigram path instead of returning nothing.
+        const cloud = getTodosCloudClient();
+        const projectId = opts.allProjects
+          ? undefined
+          : cloud
+            ? undefined
+            : autoProject(globalOpts);
+        const scope = (parseEnumFlag(opts.scope, SEARCH_SCOPE_FLAG) ?? "tasks") as SavedSearchScope;
         const searchOpts = buildSearchFilters(query, opts, projectId);
         if (opts.saveAs) {
           const view = saveSearchView({
@@ -283,6 +458,38 @@ export function registerProjectCommands(program: Command) {
           });
           output(view, Boolean(globalOpts.json));
           if (!globalOpts.json) console.log(chalk.green(`Saved view ${view.name}.`));
+          return;
+        }
+        if (cloud) {
+          if (scope !== "tasks") {
+            console.error(chalk.red(`Cross-entity search scope "${scope}" is not supported against a hosted /v1 authority; only --scope tasks is available.`));
+            process.exit(1);
+          }
+          const tasks = await cloudListTasks(cloud, {
+            query,
+            ...(searchOpts.project_id ? { project_id: searchOpts.project_id } : {}),
+            ...(searchOpts.status ? { status: searchOpts.status as never } : {}),
+            ...(searchOpts.priority ? { priority: searchOpts.priority as never } : {}),
+            ...(searchOpts.assigned_to ? { assigned_to: searchOpts.assigned_to } : {}),
+            ...(searchOpts.agent_id ? { agent_id: searchOpts.agent_id } : {}),
+            ...(searchOpts.task_list_id ? { task_list_id: searchOpts.task_list_id } : {}),
+            ...(searchOpts.plan_id ? { plan_id: searchOpts.plan_id } : {}),
+            ...(searchOpts.tags?.length ? { tags: searchOpts.tags } : {}),
+            ...(typeof searchOpts.limit === "number" ? { limit: searchOpts.limit } : {}),
+          });
+          const outputTasks = redactBroadTasks(tasks);
+          if (globalOpts.json) {
+            output(outputTasks, true);
+            return;
+          }
+          if (outputTasks.length === 0) {
+            console.log(chalk.dim(`No tasks matching "${query}".`));
+            return;
+          }
+          console.log(chalk.bold(`${outputTasks.length} result(s) for "${query}":\n`));
+          for (const t of outputTasks) {
+            console.log(formatTaskLine(t));
+          }
           return;
         }
         if (scope !== "tasks") {
@@ -363,7 +570,7 @@ export function registerProjectCommands(program: Command) {
         const view = saveSearchView({
           name,
           description: opts.description,
-          scope: normalizeScope(opts.scope),
+          scope: (parseEnumFlag(opts.scope, SEARCH_SCOPE_FLAG) ?? "tasks") as SavedSearchScope,
           filters: buildSearchFilters(opts.query, opts, projectId),
         });
         output(view, Boolean(globalOpts.json));
@@ -380,7 +587,7 @@ export function registerProjectCommands(program: Command) {
     .action((opts) => {
       const globalOpts = program.opts();
       try {
-        const rows = listSearchViews(opts.scope ? normalizeScope(opts.scope) : undefined);
+        const rows = listSearchViews(parseEnumFlag(opts.scope, SEARCH_SCOPE_FLAG) as SavedSearchScope | undefined);
         output(rows, Boolean(globalOpts.json));
         if (!globalOpts.json) {
           if (rows.length === 0) {
@@ -435,47 +642,105 @@ export function registerProjectCommands(program: Command) {
 
   // deps
   program
-    .command("deps <id>")
-    .description("Manage task dependencies")
+    .command("deps [id]")
+    .description("Read or manage task dependencies. With no id, --project reads the whole-project dependency graph")
     .option("--needs <dep-id>", "Add dependency (this task needs dep-id)")
     .option("--remove <dep-id>", "Remove dependency")
     .option("--graph", "Show the dependency graph instead of direct edges")
     .option("--direction <direction>", "Graph direction: up, down, or both", "both")
-    .action(async (id: string, opts) => {
+    .option("--project <ref>", "With no id: read the whole-project graph (project id, slug, name, or path)")
+    .action(async (id: string | undefined, opts) => {
       const globalOpts = program.opts();
       const cloud = getTodosCloudClient();
 
-      // self_hosted cloud routing: dependency edges live on the SHARED dataset.
+      // Whole-project dependency graph in one read — `todos deps --project <ref>
+      // --json` (or, inside a registered repo, `todos deps` against the
+      // auto-detected project). Emits a versioned adjacency list + cycles so a
+      // scheduler can order a batch without one `deps <id>` call per task.
+      if (!id) {
+        // A mutating or direction-scoped flag with no id is a forgotten
+        // argument, not a whole-project request. `--graph` is deliberately
+        // allowed here because the whole-project read already returns a graph.
+        // Fail loudly (commander used to reject this as a missing required
+        // argument) rather than silently ignoring a write or scoped traversal.
+        if (opts.needs || opts.remove || opts.direction !== "both") {
+          handleError(new Error("A task id is required with --needs, --remove, or --direction."));
+        }
+        const projectRef = opts.project ?? globalOpts.project;
+        if (cloud) {
+          // Fail closed: a bulk read must be scoped to a project. There is no
+          // cwd-based project to auto-detect against a shared authority, and
+          // crawling every task in the dataset is never the intent.
+          if (!projectRef) {
+            handleError(new Error("deps needs a task id, or --project <ref> to read a whole-project graph."));
+          }
+          const projectId = await cloudResolveProjectRef(cloud, projectRef);
+          const graph = await buildCloudProjectDependencyGraph(cloud, projectId);
+          if (globalOpts.json) { output(graph, true); return; }
+          printProjectDependencyGraph(graph);
+          return;
+        }
+        const resolvedProjectId = projectRef ? resolveExplicitProject(projectRef).id : autoProject(globalOpts);
+        if (!resolvedProjectId) {
+          handleError(new Error("deps needs a task id, or --project <ref> to read a whole-project graph."));
+        }
+        const graph = getProjectDependencyGraph({ project_id: resolvedProjectId });
+        if (globalOpts.json) { output(graph, true); return; }
+        printProjectDependencyGraph(graph);
+        return;
+      }
+
+      // http authority routing: dependency edges live on the SHARED dataset.
       // The previous path read LOCAL sqlite and 404'd cloud tasks. The recursive
       // `--graph` view is a local-only concept; in cloud mode we show the flat
       // dependency/blocked-by edges instead.
       if (cloud) {
-        const cloudId = resolveTaskId(id);
+        const cloudId = await resolveTaskIdForCommand(id, cloud);
         if (opts.needs) {
           try {
-            const dep = await cloudAddDependency(cloud, cloudId, resolveTaskId(opts.needs));
+            const dep = await cloudAddDependency(cloud, cloudId, await resolveTaskIdForCommand(opts.needs, cloud));
             if (globalOpts.json) output(dep, true);
             else console.log(chalk.green("Dependency added."));
           } catch (e) { handleError(e); }
           return;
         }
         if (opts.remove) {
-          const removed = await cloudRemoveDependency(cloud, cloudId, resolveTaskId(opts.remove));
+          const removed = await cloudRemoveDependency(cloud, cloudId, await resolveTaskIdForCommand(opts.remove, cloud));
           if (globalOpts.json) output({ removed }, true);
           else console.log(removed ? chalk.green("Dependency removed.") : chalk.red("Dependency not found."));
           return;
         }
+        if (globalOpts.json) {
+          // Hydrate the remote edges into nodes with status so the JSON read
+          // carries ids + status (the bare edge payload has neither) and
+          // matches the local shape exactly. Edges whose target row is
+          // unreadable are DROPPED — mirroring the local SQL JOIN, which omits
+          // dangling edges — rather than emitting the `unresolved` placeholder
+          // (a synthetic "pending" node a scheduler would mistake for a real
+          // task). The edge read fires first (staying on
+          // `/v1/tasks/:id/dependencies`); `short_id` is null rather than
+          // spending an extra round trip on the root task row.
+          const relations = await cloudGetTaskRelations(cloud, cloudId);
+          output(
+            buildTaskDependencyEdges(
+              { id: cloudId, short_id: null },
+              relations.dependencies.filter(isResolvedTask),
+              relations.blocks.filter(isResolvedTask),
+            ),
+            true,
+          );
+          return;
+        }
         const edges = await cloudGetDependencies(cloud, cloudId);
-        if (globalOpts.json) { output(edges, true); return; }
         if (edges.dependencies.length > 0) {
           console.log(chalk.bold("Depends on:"));
           for (const dep of edges.dependencies) console.log(`  ${chalk.cyan(dep.depends_on)}`);
         }
-        if (edges.blocked_by.length > 0) {
+        if (edges.blocks.length > 0) {
           console.log(chalk.bold("Blocks:"));
-          for (const b of edges.blocked_by) console.log(`  ${chalk.cyan(b.task_id)}`);
+          for (const b of edges.blocks) console.log(`  ${chalk.cyan(b.task_id)}`);
         }
-        if (edges.dependencies.length === 0 && edges.blocked_by.length === 0) {
+        if (edges.dependencies.length === 0 && edges.blocks.length === 0) {
           console.log(chalk.dim("No dependencies."));
         }
         return;
@@ -489,8 +754,7 @@ export function registerProjectCommands(program: Command) {
         try {
           addDependency(resolvedId, depId);
         } catch (e) {
-          console.error(chalk.red(e instanceof Error ? e.message : String(e)));
-          process.exit(1);
+          handleError(new Error(e instanceof Error ? e.message : String(e)));
         }
         if (globalOpts.json) {
           output({ task_id: resolvedId, depends_on: depId }, true);
@@ -525,17 +789,18 @@ export function registerProjectCommands(program: Command) {
         };
 
         printNode(graph, 0, "root");
+      } else if (globalOpts.json) {
+        // Machine-readable edge read via the single canonical reader, so the
+        // JSON path and the exported library helper cannot drift apart.
+        const edges = getTaskDependencyEdges(resolvedId);
+        if (!edges) handleError(new Error("Task not found."));
+        output(edges, true);
+        return;
       } else {
-        // Show dependencies
+        // Show dependencies (human)
         const task = getTaskWithRelations(resolvedId);
         if (!task) {
-          console.error(chalk.red("Task not found."));
-          process.exit(1);
-        }
-
-        if (globalOpts.json) {
-          output({ dependencies: task.dependencies, blocked_by: task.blocked_by }, true);
-          return;
+          handleError(new Error("Task not found."));
         }
 
         if (task.dependencies.length > 0) {
@@ -544,13 +809,13 @@ export function registerProjectCommands(program: Command) {
             console.log(`  ${formatTaskLine(dep)}`);
           }
         }
-        if (task.blocked_by.length > 0) {
+        if (task.blocks.length > 0) {
           console.log(chalk.bold("Blocks:"));
-          for (const b of task.blocked_by) {
+          for (const b of task.blocks) {
             console.log(`  ${formatTaskLine(b)}`);
           }
         }
-        if (task.dependencies.length === 0 && task.blocked_by.length === 0) {
+        if (task.dependencies.length === 0 && task.blocks.length === 0) {
           console.log(chalk.dim("No dependencies."));
         }
       }
@@ -561,17 +826,134 @@ export function registerProjectCommands(program: Command) {
     .command("projects")
     .description("List and manage projects")
     .option("--add <path>", "Register a project by path")
+    .option("--show <project>", "Resolve and show a project")
+    .option("--update <project>", "Update a project's name, path, or description")
     .option("--deregister <project>", "Deregister a project without deleting its tasks; refuses projects with incomplete tasks")
     .option("--path-prefix <prefix>", "Require deregistered project path to start with this prefix")
     .option("--dry-run", "Show what would change without modifying local state")
     .option("--name <name>", "Project name (with --add)")
+    .option("--path <path>", "Project path (with --update)")
+    .option("--description <text>", "Project description (with --add or --update)")
     .option("--task-list-id <id>", "Custom task list ID (with --add)")
+    .option("--ensure-task-list <project>", "Plan or apply creation of an existing project's declared task list")
+    .option("--rollback-task-list <project>", "Conditionally roll back a task list created by --ensure-task-list")
+    .option("--apply", "Apply --ensure-task-list or --rollback-task-list; ensure plans by default")
+    .option("--idempotency-key <key>", "Stable idempotency key for --ensure-task-list --apply")
+    .option("--receipt <id>", "Accepted ensure receipt for --rollback-task-list --apply")
     .action(async (opts) => {
       const globalOpts = program.opts();
+      const cloud = getTodosCloudClient();
+
+      if (opts.ensureTaskList && opts.rollbackTaskList) {
+        handleError(new Error("Choose either --ensure-task-list or --rollback-task-list, not both"));
+      }
+      if (opts.apply && !opts.ensureTaskList && !opts.rollbackTaskList) {
+        handleError(new Error("projects --apply requires --ensure-task-list or --rollback-task-list"));
+      }
+      if (opts.dryRun && opts.apply && (opts.ensureTaskList || opts.rollbackTaskList)) {
+        handleError(new Error("Choose either --dry-run or --apply, not both"));
+      }
+
+      if (opts.ensureTaskList) {
+        const project = cloud
+          ? await cloudResolveProject(cloud, opts.ensureTaskList)
+          : resolveExplicitProject(opts.ensureTaskList);
+        const store = cloud ? null : createLocalSqliteTodosStorageAdapter({ db: getDatabase() });
+        const plan = cloud
+          ? await cloudPlanProjectTaskListEnsure(cloud, project.id)
+          : await planProjectTaskListEnsure(store!, project.id);
+        const result = opts.apply
+          ? cloud
+            ? await cloudApplyProjectTaskListEnsure(cloud, project.id, {
+              expected_project_revision: plan.project.updated_at,
+              ...(opts.idempotencyKey ? { idempotency_key: opts.idempotencyKey } : {}),
+            })
+            : await applyProjectTaskListEnsure(store!, project.id, {
+              expected_project_revision: plan.project.updated_at,
+              ...(opts.idempotencyKey ? { idempotency_key: opts.idempotencyKey } : {}),
+            })
+          : plan;
+        if (globalOpts.json) {
+          output(result, true);
+        } else {
+          const list = result.task_list
+            ? `${result.task_list.slug} (${result.task_list.id})`
+            : result.project.task_list_id;
+          console.log(chalk.green(`${result.mode === "plan" ? "Task-list plan" : "Task-list ensure"}: ${result.action}`));
+          console.log(chalk.dim(`  Project: ${result.project.name} (${result.project.id})`));
+          console.log(chalk.dim(`  Task list: ${list}`));
+          if (result.receipt) console.log(chalk.dim(`  Receipt: ${result.receipt.receipt_id}`));
+        }
+        return;
+      }
+
+      if (opts.rollbackTaskList) {
+        if (!opts.apply) {
+          handleError(new Error("projects --rollback-task-list requires --apply"));
+        }
+        if (!opts.receipt) {
+          handleError(new Error("projects --rollback-task-list requires --receipt"));
+        }
+        const project = cloud
+          ? await cloudResolveProject(cloud, opts.rollbackTaskList)
+          : resolveExplicitProject(opts.rollbackTaskList);
+        const store = cloud ? null : createLocalSqliteTodosStorageAdapter({ db: getDatabase() });
+        const plan = cloud
+          ? await cloudPlanProjectTaskListEnsure(cloud, project.id)
+          : await planProjectTaskListEnsure(store!, project.id);
+        if (!plan.task_list) {
+          handleError(new Error("The project has no exact declared task list to roll back"));
+        }
+        const input = {
+          receipt_id: opts.receipt,
+          expected_task_list_revision: plan.task_list!.updated_at,
+        };
+        const result = cloud
+          ? await cloudRollbackProjectTaskListEnsure(cloud, project.id, input)
+          : await rollbackProjectTaskListEnsure(store!, project.id, input);
+        if (globalOpts.json) {
+          output(result, true);
+        } else {
+          console.log(chalk.green(`Task-list rollback: ${result.action}`));
+          console.log(chalk.dim(`  Project: ${result.project_id}`));
+          console.log(chalk.dim(`  Removed task list: ${result.task_list_id}`));
+          console.log(chalk.dim(`  Rollback receipt: ${result.rollback_receipt_id}`));
+        }
+        return;
+      }
+
+      if (opts.show) {
+        const project = cloud ? await cloudResolveProject(cloud, opts.show) : resolveExplicitProject(opts.show);
+        // outputRecord, not output: `output` prints only under --json, so this
+        // read used to exit 0 with completely empty stdout in human mode.
+        outputRecord(project, Boolean(globalOpts.json), "Project:");
+        return;
+      }
+
+      if (opts.update) {
+        const patch = {
+          ...(opts.name !== undefined ? { name: opts.name } : {}),
+          ...(opts.path !== undefined ? { path: resolve(opts.path) } : {}),
+          ...(opts.description !== undefined ? { description: opts.description } : {}),
+        };
+        if (Object.keys(patch).length === 0) {
+          handleError(new Error("projects --update requires --name, --path, or --description"));
+        }
+        const current = cloud ? await cloudResolveProject(cloud, opts.update) : resolveExplicitProject(opts.update);
+        const project = cloud
+          ? await cloudUpdateProject(cloud, current.id, patch)
+          : updateProject(current.id, patch);
+        // A successful mutation must say so: this printed nothing at all in human
+        // mode, so the operator had no signal the write had landed.
+        outputRecord(project, Boolean(globalOpts.json), "Project updated:");
+        return;
+      }
 
       if (opts.deregister) {
-        const project = resolveExplicitProject(opts.deregister);
-        const counts = countProjectTasks(project.id);
+        const project = cloud ? await cloudResolveProject(cloud, opts.deregister) : resolveExplicitProject(opts.deregister);
+        const counts = cloud
+          ? countTasksForDeregistration(await cloudListTasks(cloud, { project_id: project.id, include_subtasks: true }))
+          : countProjectTasks(project.id);
 
         if (opts.pathPrefix && !pathIsWithinPrefix(project.path, opts.pathPrefix)) {
           handleError(new Error(`Refusing to deregister ${project.name}: path ${project.path} is not within ${opts.pathPrefix}`));
@@ -592,7 +974,8 @@ export function registerProjectCommands(program: Command) {
         };
 
         if (!opts.dryRun) {
-          deleteProject(project.id);
+          if (cloud) await cloudDeleteProject(cloud, project.id);
+          else deleteProject(project.id);
         }
 
         if (globalOpts.json) {
@@ -607,22 +990,30 @@ export function registerProjectCommands(program: Command) {
       if (opts.add) {
         const projectPath = resolve(opts.add);
         const name = opts.name || basename(projectPath);
-        const existing = getProjectByPath(projectPath);
+        const existing = cloud
+          ? (await cloudListProjects(cloud)).find((project) => project.path === projectPath)
+          : getProjectByPath(projectPath);
         let project;
         if (existing) {
           project = existing;
           if (opts.taskListId) {
-            project = renameProject(existing.id, { new_slug: opts.taskListId }).project;
+            if (cloud && existing.task_list_id !== opts.taskListId) {
+              handleError(new Error("Remote project task-list slug changes require project-rename"));
+            }
+            if (!cloud) project = renameProject(existing.id, { new_slug: opts.taskListId }).project;
           }
         } else {
-          project = createProject({ name, path: projectPath, task_list_id: opts.taskListId });
+          const input = { name, path: projectPath, description: opts.description, task_list_id: opts.taskListId };
+          project = cloud ? await cloudCreateProject(cloud, input) : createProject(input);
         }
         // Auto-register machine-local path
-        try {
-          const { setMachineLocalPath } = await import("../../db/projects.js");
-          setMachineLocalPath(project.id, projectPath);
-        } catch (e) {
-          console.log(chalk.dim("  (machine path auto-register skipped)"));
+        if (!cloud) {
+          try {
+            const { setMachineLocalPath } = await import("../../db/projects.js");
+            setMachineLocalPath(project.id, projectPath);
+          } catch {
+            console.log(chalk.dim("  (machine path auto-register skipped)"));
+          }
         }
 
         if (globalOpts.json) {
@@ -634,7 +1025,6 @@ export function registerProjectCommands(program: Command) {
         return;
       }
 
-      const cloud = getTodosCloudClient();
       const projects = cloud ? await cloudListProjects(cloud) : listProjects();
       if (globalOpts.json) {
         output(projects, true);
@@ -665,8 +1055,7 @@ export function registerProjectCommands(program: Command) {
         const globalOpts = program.opts();
         const project = opts.project ? resolveExplicitProject(opts.project) : autoDetectProject(globalOpts);
         if (!project) {
-          console.error(chalk.red("Project not found: provide --project or run inside a registered project"));
-          process.exit(1);
+          handleError(new Error("Project not found: provide --project or run inside a registered project"));
         }
 
         const { createTodosProjectPanel } = await import("../../lib/project-panel.js");
@@ -710,8 +1099,7 @@ export function registerProjectCommands(program: Command) {
             resolvedId = bySlug?.id ?? null;
           }
           if (!resolvedId) {
-            console.error(chalk.red(`Project not found: ${idOrSlug}`));
-            process.exit(1);
+            handleError(new Error(`Project not found: ${idOrSlug}`));
           }
           result = renameProject(resolvedId, { name: opts.name, new_slug: newSlug });
         }
@@ -724,8 +1112,7 @@ export function registerProjectCommands(program: Command) {
           }
         }
       } catch (e) {
-        console.error(chalk.red(e instanceof Error ? e.message : String(e)));
-        process.exit(1);
+        handleError(new Error(e instanceof Error ? e.message : String(e)));
       }
     });
 
@@ -745,13 +1132,12 @@ export function registerProjectCommands(program: Command) {
         const { setMachineLocalPath } = await import("../../db/projects.js");
         const db = getDatabase();
         const resolved = resolvePartialId(db, "projects", projectId);
-        if (!resolved) { console.error(chalk.red(`Project not found: ${projectId}`)); process.exit(1); }
+        if (!resolved) { handleError(new Error(`Project not found: ${projectId}`)); }
         const entry = setMachineLocalPath(resolved, resolve(projectPath));
         if (useJson) { output(entry, true); }
         else { console.log(chalk.green(`Local path set: ${entry.path} (machine: ${entry.machine_id.slice(0, 8)})`)); }
       } catch (e) {
-        console.error(chalk.red(e instanceof Error ? e.message : String(e)));
-        process.exit(1);
+        handleError(new Error(e instanceof Error ? e.message : String(e)));
       }
     });
 
@@ -766,7 +1152,7 @@ export function registerProjectCommands(program: Command) {
         const { listMachineLocalPaths } = await import("../../db/projects.js");
         const db = getDatabase();
         const resolved = resolvePartialId(db, "projects", projectId);
-        if (!resolved) { console.error(chalk.red(`Project not found: ${projectId}`)); process.exit(1); }
+        if (!resolved) { handleError(new Error(`Project not found: ${projectId}`)); }
         const paths = listMachineLocalPaths(resolved);
         if (useJson) { output(paths, true); return; }
         if (paths.length === 0) { console.log(chalk.dim("No machine path overrides.")); return; }
@@ -774,8 +1160,7 @@ export function registerProjectCommands(program: Command) {
           console.log(`${chalk.dim(p.machine_id.slice(0, 8))} ${p.path}  ${chalk.dim(p.updated_at)}`);
         }
       } catch (e) {
-        console.error(chalk.red(e instanceof Error ? e.message : String(e)));
-        process.exit(1);
+        handleError(new Error(e instanceof Error ? e.message : String(e)));
       }
     });
 
@@ -788,13 +1173,12 @@ export function registerProjectCommands(program: Command) {
         const { removeMachineLocalPath } = await import("../../db/projects.js");
         const db = getDatabase();
         const resolved = resolvePartialId(db, "projects", projectId);
-        if (!resolved) { console.error(chalk.red(`Project not found: ${projectId}`)); process.exit(1); }
+        if (!resolved) { handleError(new Error(`Project not found: ${projectId}`)); }
         const removed = removeMachineLocalPath(resolved, opts.machine);
         if (removed) { console.log(chalk.green("Machine path override removed.")); }
         else { console.log(chalk.dim("No override found to remove.")); }
       } catch (e) {
-        console.error(chalk.red(e instanceof Error ? e.message : String(e)));
-        process.exit(1);
+        handleError(new Error(e instanceof Error ? e.message : String(e)));
       }
     });
 
@@ -938,10 +1322,13 @@ export function registerProjectCommands(program: Command) {
     .option("-o, --output <path>", "Write export output to a file")
     .option("--encrypt", "Encrypt bridge exports with a local encryption profile")
     .option("--encryption-profile <name>", "Encryption profile name", "default")
-    .option("--allow-plaintext-sensitive", "Suppress plaintext bridge export warning")
+    .option("--allow-plaintext-sensitive", "Deprecated; bridge exports are redacted unless --encrypt is used")
     .action(async (opts) => {
       const { listTasks } = await import("../../db/tasks.js");
       const globalOpts = program.opts();
+      // Validate before any branch: an unknown format used to reach the final
+      // `else` and emit JSON regardless of what was asked for.
+      opts.format = parseEnumFlag(opts.format, EXPORT_FORMAT_FLAG) ?? "json";
       const projectId = autoProject(globalOpts);
       const writeOutput = async (content: string) => {
         if (opts.output) {
@@ -956,7 +1343,10 @@ export function registerProjectCommands(program: Command) {
         const { createLocalBridgeBundle } = await import("../../lib/local-bridge.js");
         const { createEncryptedBridgeBundle } = await import("../../lib/local-encryption.js");
         const { emitLocalEventHooksQuiet } = await import("../../lib/event-hooks.js");
-        const bundle = createLocalBridgeBundle({ project_id: projectId ?? undefined });
+        const bundle = createLocalBridgeBundle({
+          project_id: projectId ?? undefined,
+          redaction: opts.encrypt ? "unsafe_plaintext" : "redacted",
+        });
         const exported = opts.encrypt
           ? createEncryptedBridgeBundle(bundle, { profile: opts.encryptionProfile })
           : bundle;
@@ -964,7 +1354,7 @@ export function registerProjectCommands(program: Command) {
         await writeOutput(json);
         emitLocalEventHooksQuiet({ type: "export.finished", payload: { format: "bridge", encrypted: Boolean(opts.encrypt), project_id: projectId, output: opts.output ? resolve(opts.output) : null, stats: bundle.stats } });
         if (!opts.encrypt && !opts.allowPlaintextSensitive) {
-          console.error(chalk.yellow("Warning: bridge exports are plaintext JSON. Use --encrypt for sensitive metadata, evidence, and artifact bundles."));
+          console.error(chalk.dim("Bridge export redacted sensitive fields. Use --encrypt for an encrypted local bundle when a lossless legacy snapshot is required."));
         }
         if (opts.output && !globalOpts.json) {
           console.log(chalk.green(`${opts.encrypt ? "Encrypted bridge export" : "Bridge export"} written to ${resolve(opts.output)}`));
@@ -1094,8 +1484,7 @@ export function registerProjectCommands(program: Command) {
         const agent = (opts.agent as string | undefined) || "claude";
         const taskListId = resolveTaskListForAgent(agent, opts.taskList, project?.task_list_id);
         if (!taskListId) {
-          console.error(chalk.red(`Could not detect task list ID for ${agent}. Use --task-list <id> or set appropriate env vars.`));
-          process.exit(1);
+          handleError(new Error(`Could not detect task list ID for ${agent}. Use --task-list <id> or set appropriate env vars.`));
         }
         result = syncWithAgent(agent, taskListId, projectId, direction, { prefer });
       }
@@ -1139,8 +1528,7 @@ function resolveTaskListId(partialId: string): string {
   const db = getDatabase();
   const id = resolvePartialId(db, "task_lists", partialId);
   if (!id) {
-    console.error(chalk.red(`Could not resolve task list ID: ${partialId}`));
-    process.exit(1);
+    handleError(new Error(`Could not resolve task list ID: ${partialId}`));
   }
   return id;
 }

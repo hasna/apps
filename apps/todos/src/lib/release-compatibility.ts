@@ -315,7 +315,11 @@ export function createReleaseCompatibilityReport(
         "todos --help",
         "todos-mcp --help",
         "todos-serve --help",
-        "todos doctor",
+        // An install smoke test asserts the binary RUNS, not that the dataset is
+        // clean: `doctor` exits 1 on any store that carries orphaned rows, so the
+        // install plan opts out of the findings gate explicitly rather than
+        // failing an upgrade on pre-existing data.
+        "todos doctor --no-fail-on-findings",
       ],
       smoke_tests: [
         "command -v todos",
@@ -323,7 +327,7 @@ export function createReleaseCompatibilityReport(
         "command -v todos-serve",
         "todos --version",
         "todos --help",
-        "todos doctor",
+        "todos doctor --no-fail-on-findings",
       ],
       rollback: [
         "npm view @hasna/todos versions --json",

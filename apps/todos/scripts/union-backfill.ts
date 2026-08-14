@@ -5,7 +5,7 @@
  * plans and taskLists for referential completeness) to the cloud /v1/import endpoint.
  *
  * Usage: bun scripts/union-backfill.ts <missing-ids-file> <db1> [db2 ...]
- * Env:   TK=<bearer key>  TODOS_API=https://todos.hasna.xyz/v1
+ * Env:   TK=<bearer key>  TODOS_API=https://your-server.example/v1
  */
 import { Database } from "bun:sqlite";
 import { readFileSync } from "fs";
@@ -15,7 +15,7 @@ import { listPlans } from "../src/db/plans.js";
 import { listTaskLists } from "../src/db/task-lists.js";
 
 const TK = process.env.TK;
-const API = process.env.TODOS_API ?? "https://todos.hasna.xyz/v1";
+const API = process.env.TODOS_API ?? "https://your-server.example/v1";
 if (!TK) { console.error("missing TK env"); process.exit(1); }
 
 const missingFile = process.argv[2];

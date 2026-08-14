@@ -4,10 +4,12 @@ import { execSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { createTask } from "../../db/tasks.js";
-import { autoProject, output, resolveTaskId, handleError } from "../helpers.js";
+import { autoProject, output, resolveTaskId, resolveTaskIdForCommand, handleError } from "../helpers.js";
 import { getTodosCloudClient, cloudRecordVerification, cloudLinkCommit, cloudFindCommit, cloudLinkRef, cloudFindRefs } from "../cloud-router.js";
+import { getHomeDir } from "../../lib/sync-utils.js";
+import { MCP_REGISTRABLE_CLI_AGENTS } from "../../lib/agent-adapter-docs.js";
 
-const HOME = process.env["HOME"] || process.env["USERPROFILE"] || "~";
+const HOME = getHomeDir();
 
 // --- MCP Registration Helpers ---
 
@@ -80,8 +82,7 @@ function parseJsonOption(value: string | undefined, label: string): Record<strin
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("not an object");
     return parsed as Record<string, unknown>;
   } catch {
-    console.error(chalk.red(`${label} must be valid JSON object`));
-    process.exit(1);
+    handleError(new Error(`${label} must be valid JSON object`));
   }
 }
 
@@ -174,29 +175,99 @@ function unregisterGemini(): void {
   console.log(chalk.green(`Gemini CLI: unregistered from ${configPath}`));
 }
 
+// --- Takumi: use `takumi mcp add` (scopes: local, user, project) ---
+
+function registerTakumi(binPath: string, global?: boolean): void {
+  const scope = global ? "user" : "project";
+  // Pass --stdio for the same reason as the Claude Code path: without it the
+  // bare binary could fall back to another transport and the client would hang.
+  const cmd = `takumi mcp add --scope ${scope} todos -- ${binPath} --stdio`;
+  try {
+    execSync(cmd, { stdio: "pipe" });
+    console.log(chalk.green(`Takumi (${scope}): registered via 'takumi mcp add'`));
+  } catch {
+    console.log(chalk.yellow(`Takumi: could not auto-register. Run this command manually:`));
+    console.log(chalk.cyan(`  ${cmd}`));
+  }
+}
+
+function unregisterTakumi(global?: boolean): void {
+  const scope = global ? "user" : "project";
+  const cmd = `takumi mcp remove --scope ${scope} todos`;
+  try {
+    execSync(cmd, { stdio: "pipe" });
+    console.log(chalk.green(`Takumi (${scope}): removed todos MCP server`));
+  } catch {
+    console.log(chalk.yellow(`Takumi: could not auto-remove. Run manually:`));
+    console.log(chalk.cyan(`  ${cmd}`));
+  }
+}
+
+// --- Cursor: .cursor/mcp.json (project or user scope) ---
+
+function cursorConfigPath(global?: boolean): string {
+  return global
+    ? join(HOME, ".cursor", "mcp.json")
+    : join(process.cwd(), ".cursor", "mcp.json");
+}
+
+function registerCursor(binPath: string, global?: boolean): void {
+  const configPath = cursorConfigPath(global);
+  const config = readJsonFile(configPath);
+  if (!config["mcpServers"]) {
+    config["mcpServers"] = {};
+  }
+  const servers = config["mcpServers"] as Record<string, unknown>;
+  servers["todos"] = {
+    command: binPath,
+    args: ["--stdio"] as string[],
+  };
+  writeJsonFile(configPath, config);
+  console.log(chalk.green(`Cursor (${global ? "user" : "project"}): registered in ${configPath}`));
+}
+
+function unregisterCursor(global?: boolean): void {
+  const configPath = cursorConfigPath(global);
+  const config = readJsonFile(configPath);
+  const servers = config["mcpServers"] as Record<string, unknown> | undefined;
+  if (!servers || !("todos" in servers)) {
+    console.log(chalk.dim(`Cursor: todos not found in ${configPath}`));
+    return;
+  }
+  delete servers["todos"];
+  writeJsonFile(configPath, config);
+  console.log(chalk.green(`Cursor (${global ? "user" : "project"}): unregistered from ${configPath}`));
+}
+
 // --- Main register/unregister ---
 
+const MCP_AGENT_CHOICES = `${MCP_REGISTRABLE_CLI_AGENTS.join(", ")}, all`;
+
 function registerMcp(agent: string, global?: boolean): void {
-  const agents = agent === "all" ? ["claude", "codex", "gemini"] : [agent];
+  const agents = agent === "all" ? [...MCP_REGISTRABLE_CLI_AGENTS] : [agent];
   const binPath = getMcpBinaryPath();
   for (const a of agents) {
     switch (a) {
       case "claude": registerClaude(binPath, global); break;
       case "codex": registerCodex(binPath); break;
       case "gemini": registerGemini(binPath); break;
-      default: console.error(chalk.red(`Unknown agent: ${a}. Use: claude, codex, gemini, all`));
+      case "cursor": registerCursor(binPath, global); break;
+      case "takumi": registerTakumi(binPath, global); break;
+      default: console.error(chalk.red(`Unknown agent: ${a}. Use: ${MCP_AGENT_CHOICES}`));
     }
   }
 }
 
 function unregisterMcp(agent: string, global?: boolean): void {
-  const agents = agent === "all" ? ["claude", "codex", "gemini"] : [agent];
+  const agents = agent === "all" ? [...MCP_REGISTRABLE_CLI_AGENTS] : [agent];
   for (const a of agents) {
     switch (a) {
       case "claude": unregisterClaude(global); break;
       case "codex": unregisterCodex(); break;
       case "gemini": unregisterGemini(); break;
-      default: console.error(chalk.red(`Unknown agent: ${a}. Use: claude, codex, gemini, all`));
+      case "cursor": unregisterCursor(global); break;
+      case "takumi": unregisterTakumi(global); break;
+      default: console.error(chalk.red(`Unknown agent: ${a}. Use: ${MCP_AGENT_CHOICES}`));
     }
   }
 }
@@ -286,8 +357,8 @@ exit 0
   program
     .command("mcp")
     .description("Start MCP server (stdio)")
-    .option("--register <agent>", "Register MCP server with an agent (claude, codex, gemini, all)")
-    .option("--unregister <agent>", "Unregister MCP server from an agent (claude, codex, gemini, all)")
+    .option("--register <agent>", `Register MCP server with an agent (${MCP_AGENT_CHOICES})`)
+    .option("--unregister <agent>", `Unregister MCP server from an agent (${MCP_AGENT_CHOICES})`)
     .option("-g, --global", "Register/unregister globally (user-level) instead of project-level")
     .action(async (opts) => {
       if (opts.register) {
@@ -320,8 +391,7 @@ exit 0
       const { parseGitHubUrl, fetchGitHubIssue, issueToTask } = await import("../../lib/github.js");
       const parsed = parseGitHubUrl(url);
       if (!parsed) {
-        console.error(chalk.red("Invalid GitHub issue URL. Expected: https://github.com/owner/repo/issues/123"));
-        process.exit(1);
+        handleError(new Error("Invalid GitHub issue URL. Expected: https://github.com/owner/repo/issues/123"));
       }
       try {
         const issue = fetchGitHubIssue(parsed.owner, parsed.repo, parsed.number);
@@ -352,13 +422,13 @@ exit 0
     .option("--files <list>", "Comma-separated list of changed files")
     .action(async (taskId: string, sha: string, opts: { message?: string; author?: string; files?: string }) => {
       const globalOpts = program.opts();
-      const resolvedId = resolveTaskId(taskId);
+      const cloud = getTodosCloudClient();
+      const resolvedId = await resolveTaskIdForCommand(taskId, cloud);
       const files = opts.files ? opts.files.split(",").filter(Boolean) : undefined;
       try {
-        // self_hosted cloud routing: attach the commit link to the REAL cloud task.
+        // http authority routing: attach the commit link to the REAL cloud task.
         // The local path wrote to this machine's sqlite where the cloud task does
         // not exist, tripping a FOREIGN KEY constraint failure.
-        const cloud = getTodosCloudClient();
         const commit = cloud
           ? await cloudLinkCommit(cloud, resolvedId, {
               sha,
@@ -386,7 +456,7 @@ exit 0
     .action(async (sha: string) => {
       const globalOpts = program.opts();
       try {
-        // self_hosted cloud routing: search the SHARED commit-link dataset.
+        // http authority routing: search the SHARED commit-link dataset.
         const cloud = getTodosCloudClient();
         if (cloud) {
           const commit = await cloudFindCommit(cloud, sha);
@@ -425,27 +495,24 @@ exit 0
     .option("--metadata <json>", "Additional JSON metadata")
     .action(async (taskId: string, ref: string, opts: { type?: string; url?: string; provider?: string; metadata?: string }) => {
       const globalOpts = program.opts();
-      const resolvedId = resolveTaskId(taskId);
-      const { linkTaskGitRef } = await import("../../db/task-commits.js");
+      const cloud = getTodosCloudClient();
+      const resolvedId = await resolveTaskIdForCommand(taskId, cloud);
       const refType = opts.type === "pr" ? "pull_request" : opts.type;
       if (refType !== "branch" && refType !== "pull_request") {
-        console.error(chalk.red("--type must be branch, pr, or pull_request"));
-        process.exit(1);
+        handleError(new Error("--type must be branch, pr, or pull_request"));
       }
       let metadata: Record<string, unknown> | undefined;
       if (opts.metadata) {
         try {
           metadata = JSON.parse(opts.metadata) as Record<string, unknown>;
         } catch {
-          console.error(chalk.red("--metadata must be valid JSON"));
-          process.exit(1);
+          handleError(new Error("--metadata must be valid JSON"));
         }
       }
       try {
-        // self_hosted cloud routing: attach the ref link to the REAL cloud task.
+        // http authority routing: attach the ref link to the REAL cloud task.
         // The local path wrote to sqlite where the cloud task does not exist,
         // tripping a FOREIGN KEY constraint failure.
-        const cloud = getTodosCloudClient();
         const gitRef = cloud
           ? await cloudLinkRef(cloud, resolvedId, {
               ref_type: refType,
@@ -454,7 +521,7 @@ exit 0
               ...(opts.provider !== undefined ? { provider: opts.provider } : {}),
               ...(metadata ? { metadata } : {}),
             })
-          : linkTaskGitRef({
+          : (await import("../../db/task-commits.js")).linkTaskGitRef({
               task_id: resolvedId,
               ref_type: refType,
               name: ref,
@@ -475,7 +542,7 @@ exit 0
     .action(async (ref: string) => {
       const globalOpts = program.opts();
       try {
-        // self_hosted cloud routing: search the SHARED ref-link dataset.
+        // http authority routing: search the SHARED ref-link dataset.
         const cloud = getTodosCloudClient();
         if (cloud) {
           const refs = await cloudFindRefs(cloud, ref);
@@ -560,16 +627,16 @@ exit 0
     .action(async (taskId: string, command: string, opts: { status?: string; summary?: string; artifact?: string; agent?: string }) => {
       const globalOpts = program.opts();
       if (opts.status !== "passed" && opts.status !== "failed" && opts.status !== "unknown") {
-        console.error(chalk.red("--status must be passed, failed, or unknown"));
-        process.exit(1);
+        handleError(new Error("--status must be passed, failed, or unknown"));
       }
       try {
-        // self_hosted cloud routing: attach the verification to the REAL cloud task.
+        // http authority routing: attach the verification to the REAL cloud task.
         // The local path wrote the row to this machine's sqlite where the cloud task
         // does not exist, tripping a FOREIGN KEY constraint.
         const cloud = getTodosCloudClient();
+        const resolvedTaskId = await resolveTaskIdForCommand(taskId, cloud);
         const verification = cloud
-          ? await cloudRecordVerification(cloud, resolveTaskId(taskId), {
+          ? await cloudRecordVerification(cloud, resolvedTaskId, {
               command,
               status: opts.status,
               output_summary: opts.summary,
@@ -577,7 +644,7 @@ exit 0
               agent_id: opts.agent,
             })
           : (await import("../../db/task-commits.js")).addTaskVerification({
-              task_id: resolveTaskId(taskId),
+              task_id: resolvedTaskId,
               command,
               status: opts.status,
               output_summary: opts.summary,
@@ -653,8 +720,7 @@ exit 0
       const resolvedId = resolveTaskId(taskId);
       const splitSemi = (value?: string) => value?.split(";").map((item) => item.trim()).filter(Boolean);
       if (opts.risk && !["low", "medium", "high", "critical"].includes(opts.risk)) {
-        console.error(chalk.red("--risk must be low, medium, high, or critical"));
-        process.exit(1);
+        handleError(new Error("--risk must be low, medium, high, or critical"));
       }
       const { setTaskContract } = await import("../../lib/task-contracts.js");
       const contract = setTaskContract({
@@ -724,8 +790,7 @@ exit 0
       const globalOpts = program.opts();
       const resolvedId = resolveTaskId(taskId);
       if (!["approved", "changes_requested", "reopened"].includes(opts.state)) {
-        console.error(chalk.red("--state must be approved, changes_requested, or reopened"));
-        process.exit(1);
+        handleError(new Error("--state must be approved, changes_requested, or reopened"));
       }
       const { recordTaskReview } = await import("../../lib/task-contracts.js");
       const review = recordTaskReview({
@@ -774,8 +839,7 @@ exit 0
     .action(async (name: string, opts: { kind: string; command?: string; cwd?: string; capabilities?: string; attempts?: string; backoffMs?: string; timeoutMs?: string; env?: string }) => {
       const globalOpts = program.opts();
       if (!["command", "testbox", "ci_log", "browser", "script"].includes(opts.kind)) {
-        console.error(chalk.red("--kind must be command, testbox, ci_log, browser, or script"));
-        process.exit(1);
+        handleError(new Error("--kind must be command, testbox, ci_log, browser, or script"));
       }
       const { upsertVerificationProvider } = await import("../../lib/verification-providers.js");
       const provider = upsertVerificationProvider({
@@ -973,8 +1037,7 @@ exit 0
       const globalOpts = program.opts();
       const format = globalOpts.json ? "json" : opts.format || "json";
       if (format !== "json" && format !== "markdown") {
-        console.error(chalk.red("--format must be json or markdown"));
-        process.exit(1);
+        handleError(new Error("--format must be json or markdown"));
       }
       const { renderAgentReplaySimulationMarkdown, simulateAgentReplayFile } = await import("../../lib/agent-replay-simulator.js");
       const simulation = simulateAgentReplayFile(fixture, { agent_id: opts.agent || globalOpts.agent, scenario: opts.scenario });
@@ -991,8 +1054,7 @@ exit 0
       const globalOpts = program.opts();
       const allowed = ["started", "progress", "claim", "comment", "command", "file", "artifact", "completed", "failed", "cancelled"];
       if (!allowed.includes(type)) {
-        console.error(chalk.red(`type must be one of: ${allowed.join(", ")}`));
-        process.exit(1);
+        handleError(new Error(`type must be one of: ${allowed.join(", ")}`));
       }
       const { addTaskRunEvent } = await import("../../db/task-runs.js");
       const event = addTaskRunEvent({
@@ -1025,8 +1087,7 @@ exit 0
     .action(async (runId: string, command: string, opts: { status?: string; exitCode?: string; summary?: string; artifact?: string; tokens?: string; costUsd?: string; durationMs?: string; sandbox?: string; cwd?: string; write?: string; env?: string; network?: boolean; agent?: string }) => {
       const globalOpts = program.opts();
       if (opts.status !== "passed" && opts.status !== "failed" && opts.status !== "unknown") {
-        console.error(chalk.red("--status must be passed, failed, or unknown"));
-        process.exit(1);
+        handleError(new Error("--status must be passed, failed, or unknown"));
       }
       if (opts.sandbox) {
         const { checkRunnerSandbox } = await import("../../lib/runner-sandbox.js");
@@ -1072,8 +1133,7 @@ exit 0
       const globalOpts = program.opts();
       const allowed = ["planned", "active", "modified", "reviewed", "removed"];
       if (!allowed.includes(opts.status || "modified")) {
-        console.error(chalk.red(`--status must be one of: ${allowed.join(", ")}`));
-        process.exit(1);
+        handleError(new Error(`--status must be one of: ${allowed.join(", ")}`));
       }
       const { addTaskRunFile } = await import("../../db/task-runs.js");
       const file = addTaskRunFile({
@@ -1148,8 +1208,7 @@ exit 0
     .action(async (runId: string | undefined, opts: { key?: string; task?: string; status?: string; summary?: string; agent?: string; dryRun?: boolean }) => {
       const globalOpts = program.opts();
       if (opts.status !== "completed" && opts.status !== "failed" && opts.status !== "cancelled") {
-        console.error(chalk.red("--status must be completed, failed, or cancelled"));
-        process.exit(1);
+        handleError(new Error("--status must be completed, failed, or cancelled"));
       }
       const { finishTaskRunTransaction } = await import("../../db/task-runs.js");
       const result = finishTaskRunTransaction({
@@ -1263,8 +1322,7 @@ exit 0
     .action(async (name: string, opts: { command?: string; sandbox?: string; cwd?: string; env?: string }) => {
       const globalOpts = program.opts();
       if (!opts.command) {
-        console.error(chalk.red("--command is required"));
-        process.exit(1);
+        handleError(new Error("--command is required"));
       }
       const { upsertAgentRunAdapter } = await import("../../lib/agent-run-dispatcher.js");
       const adapter = upsertAgentRunAdapter({
@@ -1414,8 +1472,7 @@ exit 0
         }
         console.log(chalk.green("Post-commit hook installed. Commits with task IDs (e.g. OPE-00042) will auto-link."));
       } catch (e) {
-        console.error(chalk.red("Not in a git repository or hook install failed."));
-        process.exit(1);
+        handleError(new Error("Not in a git repository or hook install failed."));
       }
     });
 
@@ -1445,8 +1502,7 @@ exit 0
         }
         console.log(chalk.green("Post-commit hook removed."));
       } catch (e) {
-        console.error(chalk.red("Not in a git repository or hook removal failed."));
-        process.exit(1);
+        handleError(new Error("Not in a git repository or hook removal failed."));
       }
     });
 }

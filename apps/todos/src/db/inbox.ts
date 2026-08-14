@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type { Database, SQLQueryBindings } from "bun:sqlite";
 import type { Task } from "../types/index.js";
 import { parseGitHubUrl } from "../lib/github.js";
-import { redactEvidenceText } from "./task-runs.js";
+import { sanitizePreWriteText, sanitizePreWriteValue } from "../lib/prewrite-secrets.js";
 import { getDatabase, now, uuid } from "./database.js";
 import { createTask, getTask } from "./tasks.js";
 
@@ -63,7 +63,7 @@ function compactWhitespace(value: string): string {
 
 export function fingerprintInboxInput(input: Pick<CreateInboxItemInput, "body" | "source_type" | "source_url">): string {
   const sourceType = input.source_type || detectInboxSourceType(input.body, input.source_url);
-  const normalized = compactWhitespace(redactEvidenceText(input.body)).slice(0, 8000);
+  const normalized = compactWhitespace(sanitizePreWriteText(input.body, "inbox.fingerprint")).slice(0, 8000);
   return createHash("sha256").update(`${sourceType}\n${input.source_url || ""}\n${normalized}`).digest("hex");
 }
 
@@ -88,28 +88,14 @@ export function deriveInboxTitle(body: string, sourceType: InboxSourceType, sour
 }
 
 function redactedMetadata(value: Record<string, unknown>): Record<string, unknown> {
-  const redacted: Record<string, unknown> = {};
-  for (const [key, child] of Object.entries(value)) {
-    if (/api[_-]?key|token|secret|password/i.test(key)) {
-      redacted[key] = "[REDACTED]";
-    } else if (typeof child === "string") {
-      redacted[key] = redactEvidenceText(child);
-    } else if (child && typeof child === "object" && !Array.isArray(child)) {
-      redacted[key] = redactedMetadata(child as Record<string, unknown>);
-    } else if (Array.isArray(child)) {
-      redacted[key] = child.map(item => typeof item === "string" ? redactEvidenceText(item) : item);
-    } else {
-      redacted[key] = child;
-    }
-  }
-  return redacted;
+  return sanitizePreWriteValue(value, "inbox.metadata");
 }
 
 export function createInboxItem(input: CreateInboxItemInput, db?: Database): { item: InboxItem; task: Task | null; duplicate: boolean } {
   const d = db || getDatabase();
-  const body = redactEvidenceText(input.body);
+  const body = sanitizePreWriteText(input.body, "inbox.body");
   const sourceType = input.source_type || detectInboxSourceType(body, input.source_url);
-  const title = redactEvidenceText(input.title || deriveInboxTitle(body, sourceType, input.source_url));
+  const title = sanitizePreWriteText(input.title || deriveInboxTitle(body, sourceType, input.source_url), "inbox.title");
   const fingerprint = fingerprintInboxInput({ body, source_type: sourceType, source_url: input.source_url });
   const existing = d.query("SELECT * FROM inbox_items WHERE fingerprint = ?").get(fingerprint) as InboxRow | null;
   if (existing) {
@@ -130,8 +116,8 @@ export function createInboxItem(input: CreateInboxItemInput, db?: Database): { i
       title,
       description: [
         `**Inbox source:** ${sourceType}`,
-        input.source_name ? `**Source name:** ${redactEvidenceText(input.source_name)}` : null,
-        input.source_url ? `**Source URL:** ${redactEvidenceText(input.source_url)}` : null,
+        input.source_name ? `**Source name:** ${sanitizePreWriteText(input.source_name, "inbox.source_name")}` : null,
+        input.source_url ? `**Source URL:** ${sanitizePreWriteText(input.source_url, "inbox.source_url")}` : null,
         `**Captured context:**\n\`\`\`\n${body.slice(0, 4000)}\n\`\`\``,
       ].filter(Boolean).join("\n\n"),
       priority: input.priority || (sourceType === "ci_log" ? "high" : "medium"),
@@ -150,8 +136,8 @@ export function createInboxItem(input: CreateInboxItemInput, db?: Database): { i
       id,
       task?.id ?? null,
       sourceType,
-      input.source_name ? redactEvidenceText(input.source_name) : null,
-      input.source_url ? redactEvidenceText(input.source_url) : null,
+      input.source_name ? sanitizePreWriteText(input.source_name, "inbox.source_name") : null,
+      input.source_url ? sanitizePreWriteText(input.source_url, "inbox.source_url") : null,
       title,
       body,
       fingerprint,

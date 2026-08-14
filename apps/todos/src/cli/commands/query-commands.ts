@@ -58,9 +58,12 @@ import {
 } from "../../lib/workflow-states.js";
 import { createLocalReport, renderLocalReportMarkdown } from "../../lib/local-reports.js";
 import type { BoardLane, BoardScope, CalendarEventKind, TaskPriority } from "../../types/index.js";
-import { autoProject, handleError, output, formatTaskLine, resolveTaskId, resolveExplicitProject } from "../helpers.js";
+import { autoProject, handleError, output, formatTaskLine, resolveTaskId, resolveTaskIdForCommand, resolveExplicitProject } from "../helpers.js";
+import { resolveValidatedAssignee } from "../assignee-guard.js";
 import {
   getTodosCloudClient,
+  cloudGetTask,
+  cloudUpdateTask,
   cloudGetStats,
   cloudCountTasks,
   cloudListTasks,
@@ -72,10 +75,23 @@ import {
   cloudTaskStats,
   cloudRecentActivity,
   cloudNextTask,
+  cloudClaimNext,
+  cloudResolveProjectRef,
   cloudBlockingDepsMap,
   cloudRecap,
   cloudTimeline,
+  cloudListProjects,
+  cloudListPlans,
+  cloudListTaskLists,
+  cloudFailTask,
 } from "../cloud-router.js";
+import {
+  buildRemoteIntegrityReport,
+  doctorExitCode,
+  printDoctorVerdict,
+  printIntegrityReport,
+  resolveDoctorVerdict,
+} from "../doctor-integrity.js";
 import { TASK_STATUSES } from "../../types/index.js";
 
 function parseJsonObjectOption(value: string | undefined, label: string): Record<string, unknown> | undefined {
@@ -85,8 +101,7 @@ function parseJsonObjectOption(value: string | undefined, label: string): Record
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("not object");
     return parsed as Record<string, unknown>;
   } catch {
-    console.error(chalk.red(`${label} must be a valid JSON object`));
-    process.exit(1);
+    handleError(new Error(`${label} must be a valid JSON object`));
   }
 }
 
@@ -113,13 +128,11 @@ function resolveOptionalId(table: "plans" | "task_runs", value: string | undefin
     if (value.length >= 36) return value;
     const rows = db.query("SELECT id FROM task_runs WHERE id LIKE ?").all(`${value}%`) as { id: string }[];
     if (rows.length === 1) return rows[0]!.id;
-    console.error(chalk.red(`Could not resolve run ID: ${value}`));
-    process.exit(1);
+    handleError(new Error(`Could not resolve run ID: ${value}`));
   }
   const resolved = resolvePartialId(getDatabase(), table, value);
   if (!resolved) {
-    console.error(chalk.red(`Could not resolve ${table.slice(0, -1)} ID: ${value}`));
-    process.exit(1);
+    handleError(new Error(`Could not resolve ${table.slice(0, -1)} ID: ${value}`));
   }
   return resolved;
 }
@@ -128,8 +141,7 @@ function resolveProjectOption(value: string | undefined): string | undefined {
   if (!value) return undefined;
   const resolved = resolvePartialId(getDatabase(), "projects", value);
   if (!resolved) {
-    console.error(chalk.red(`Could not resolve project ID: ${value}`));
-    process.exit(1);
+    handleError(new Error(`Could not resolve project ID: ${value}`));
   }
   return resolved;
 }
@@ -138,8 +150,7 @@ function resolveFocusSessionId(value: string): string {
   if (value.length >= 36) return value;
   const rows = getDatabase().query("SELECT id FROM focus_sessions WHERE id LIKE ?").all(`${value}%`) as { id: string }[];
   if (rows.length === 1) return rows[0]!.id;
-  console.error(chalk.red(`Could not resolve focus session ID: ${value}`));
-  process.exit(1);
+  handleError(new Error(`Could not resolve focus session ID: ${value}`));
 }
 
 function parseFieldPairs(values: string[] | undefined): Record<string, unknown> | undefined {
@@ -148,8 +159,7 @@ function parseFieldPairs(values: string[] | undefined): Record<string, unknown> 
   for (const raw of values) {
     const index = raw.indexOf("=");
     if (index <= 0) {
-      console.error(chalk.red("--field entries must use key=value format"));
-      process.exit(1);
+      handleError(new Error("--field entries must use key=value format"));
     }
     result[raw.slice(0, index).trim()] = raw.slice(index + 1);
   }
@@ -167,8 +177,7 @@ function mergeCustomFields(
 function parsePriority(value: string | undefined): TaskPriority | undefined {
   if (!value) return undefined;
   if (!["low", "medium", "high", "critical"].includes(value)) {
-    console.error(chalk.red("--priority must be one of: low, medium, high, critical"));
-    process.exit(1);
+    handleError(new Error("--priority must be one of: low, medium, high, critical"));
   }
   return value as TaskPriority;
 }
@@ -176,8 +185,7 @@ function parsePriority(value: string | undefined): TaskPriority | undefined {
 function parseBoardScope(value: string | undefined): BoardScope {
   if (!value) return "tasks";
   if (value !== "tasks" && value !== "plans") {
-    console.error(chalk.red("--scope must be tasks or plans"));
-    process.exit(1);
+    handleError(new Error("--scope must be tasks or plans"));
   }
   return value;
 }
@@ -185,20 +193,17 @@ function parseBoardScope(value: string | undefined): BoardScope {
 function parseBoardLane(value: string, position: number): BoardLane {
   const [labelPart, statusPart] = value.split("=");
   if (!labelPart || !statusPart) {
-    console.error(chalk.red("--lane must use Name=status,status[:wip_limit] format"));
-    process.exit(1);
+    handleError(new Error("--lane must use Name=status,status[:wip_limit] format"));
   }
   const [statusesRaw, limitRaw] = statusPart.split(":");
   const statuses = statusesRaw!.split(",").map((status) => status.trim()).filter(Boolean);
   if (statuses.length === 0) {
-    console.error(chalk.red("--lane must include at least one status"));
-    process.exit(1);
+    handleError(new Error("--lane must include at least one status"));
   }
   const name = labelPart.trim();
   const wipLimit = limitRaw === undefined || limitRaw === "" ? null : parseInt(limitRaw, 10);
   if (wipLimit !== null && (!Number.isFinite(wipLimit) || wipLimit < 1)) {
-    console.error(chalk.red("lane WIP limit must be a positive integer"));
-    process.exit(1);
+    handleError(new Error("lane WIP limit must be a positive integer"));
   }
   return {
     id: name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || `lane-${position + 1}`,
@@ -218,8 +223,7 @@ function parseCalendarKind(value: string | undefined): CalendarEventKind | undef
   if (!value) return undefined;
   const allowed = ["task_due", "task_sla", "task_reminder", "milestone", "work_block", "run", "imported"];
   if (!allowed.includes(value)) {
-    console.error(chalk.red(`--kind must be one of: ${allowed.join(", ")}`));
-    process.exit(1);
+    handleError(new Error(`--kind must be one of: ${allowed.join(", ")}`));
   }
   return value as CalendarEventKind;
 }
@@ -229,8 +233,7 @@ function parseQuietHoursOption(value: string | undefined, timezone: string | und
   const [start, end] = value.split("-", 2).map((part) => part.trim());
   const clock = /^([01]?\d|2[0-3]):([0-5]\d)$/;
   if (!start || !end || !clock.test(start) || !clock.test(end)) {
-    console.error(chalk.red("--quiet-hours must use HH:MM-HH:MM"));
-    process.exit(1);
+    handleError(new Error("--quiet-hours must use HH:MM-HH:MM"));
   }
   const tz = timezone === "utc" ? "utc" : "local";
   return { start, end, timezone: tz };
@@ -284,19 +287,21 @@ export function registerQueryCommands(program: Command) {
     .action(async (opts) => {
       const globalOpts = program.opts();
       const json = opts.json || globalOpts.json;
-      const db = getDatabase();
       const filters: Record<string, string> = {};
       const projectInput = opts.project || globalOpts.project;
-      if (projectInput) {
+      const cloud = getTodosCloudClient();
+      if (cloud && projectInput) {
+        filters.project_id = await cloudResolveProjectRef(cloud, projectInput);
+      } else if (projectInput) {
+        const db = getDatabase();
         const pid = autoProject({ project: projectInput })
           || resolvePartialId(db, "projects", projectInput)
           || (db.query("SELECT id FROM projects WHERE path = ? OR name = ? OR task_list_id = ?").get(projectInput, projectInput, projectInput) as any)?.id;
         if (pid) filters.project_id = pid;
       }
-      const cloud = getTodosCloudClient();
       const task = cloud
         ? await cloudNextTask(cloud, opts.agent, Object.keys(filters).length ? filters : undefined)
-        : getNextTask(opts.agent, Object.keys(filters).length ? filters : undefined, db);
+        : getNextTask(opts.agent, Object.keys(filters).length ? filters : undefined, getDatabase());
       if (!task) {
         if (json) { console.log(JSON.stringify(null)); return; }
         console.log(chalk.dim("No tasks available."));
@@ -319,6 +324,18 @@ export function registerQueryCommands(program: Command) {
     .action(async (agent, opts) => {
       const globalOpts = program.opts();
       const json = opts.json || globalOpts.json;
+      const cloud = getTodosCloudClient();
+      if (cloud) {
+        const task = await cloudClaimNext(cloud, agent);
+        if (!task) {
+          if (json) { console.log(JSON.stringify(null)); return; }
+          console.log(chalk.dim("No tasks available to claim."));
+          return;
+        }
+        if (json) { console.log(JSON.stringify(task, null, 2)); return; }
+        console.log(chalk.green(`Claimed: ${task.short_id || task.id.slice(0, 8)} | ${task.priority} | ${task.title}`));
+        return;
+      }
       const db = getDatabase();
       const filters: Record<string, string> = {};
       const projectInput = opts.project || globalOpts.project;
@@ -368,15 +385,19 @@ export function registerQueryCommands(program: Command) {
       const globalOpts = program.opts();
       const json = opts.json || globalOpts.json;
       const filters: Record<string, string> = {};
-      if (opts.project) filters.project_id = opts.project;
+      const projectRef = opts.project || globalOpts.project;
+      if (projectRef) filters.project_id = projectRef;
 
       const cloud = getTodosCloudClient();
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       let s: any;
       if (cloud) {
-        // self_hosted cloud routing: build the health snapshot from the shared
+        const projectId = projectRef
+          ? await cloudResolveProjectRef(cloud, projectRef)
+          : undefined;
+        // http authority routing: build the health snapshot from the shared
         // cloud dataset (counts + active/next lists) instead of the local mirror.
-        const baseFilter = opts.project ? { project_id: opts.project } : {};
+        const baseFilter = projectId ? { project_id: projectId } : {};
         const [stats, pending, in_progress, completed, activeTasks, nextTasks] = await Promise.all([
           cloudGetStats(cloud),
           cloudCountTasks(cloud, { ...baseFilter, status: "pending" } as never),
@@ -387,10 +408,14 @@ export function registerQueryCommands(program: Command) {
         ]);
         s = {
           source: "cloud",
+          transport: "http-v1",
+          authority: { v1_base_url: cloud.baseUrl, local_fallback: false },
           pending,
           in_progress,
           completed,
-          total: (stats.tasks as number | undefined) ?? pending + in_progress + completed,
+          total: projectId
+            ? pending + in_progress + completed
+            : (stats.tasks as number | undefined) ?? pending + in_progress + completed,
           active_work: activeTasks.map((t) => ({
             id: t.id,
             short_id: t.short_id ?? null,
@@ -562,10 +587,20 @@ export function registerQueryCommands(program: Command) {
     .action(async (id, opts) => {
       const globalOpts = program.opts();
       const json = opts.json || globalOpts.json;
-      const db = getDatabase();
-      const resolvedId = resolvePartialId(db, "tasks", id);
-      if (!resolvedId) { console.error(chalk.red(`Task not found: ${id}`)); process.exit(1); }
-      const result = failTask(resolvedId, opts.agent, opts.reason, { retry: opts.retry }, db);
+      const agentId = opts.agent || globalOpts.agent;
+      const cloud = getTodosCloudClient();
+      const result = cloud
+        ? await cloudFailTask(cloud, await resolveTaskIdForCommand(id, cloud), {
+          ...(agentId ? { agent_id: agentId } : {}),
+          ...(opts.reason !== undefined ? { reason: opts.reason } : {}),
+          ...(opts.retry ? { retry: true } : {}),
+        })
+        : (() => {
+          const db = getDatabase();
+          const resolvedId = resolvePartialId(db, "tasks", id);
+          if (!resolvedId) { handleError(new Error(`Task not found: ${id}`)); }
+          return failTask(resolvedId, agentId, opts.reason, { retry: opts.retry }, db);
+        })();
       if (json) { console.log(JSON.stringify(result, null, 2)); return; }
       console.log(chalk.red(`Failed: ${result.task.short_id || result.task.id.slice(0, 8)} | ${result.task.title}`));
       if (opts.reason) console.log(chalk.dim(`Reason: ${opts.reason}`));
@@ -581,13 +616,12 @@ export function registerQueryCommands(program: Command) {
     .action(async (opts) => {
       const globalOpts = program.opts();
       const json = opts.json || globalOpts.json;
-      const db = getDatabase();
       const filters: Record<string, string> = {};
       if (opts.project) filters.project_id = opts.project;
       const cloud = getTodosCloudClient();
       const work = cloud
         ? await cloudActiveWork(cloud, Object.keys(filters).length ? (filters as never) : {})
-        : getActiveWork(Object.keys(filters).length ? filters : undefined, db);
+        : getActiveWork(Object.keys(filters).length ? filters : undefined, getDatabase());
       if (json) { console.log(JSON.stringify(work, null, 2)); return; }
       if (work.length === 0) { console.log(chalk.dim("No active work.")); return; }
       console.log(chalk.bold(`Active work (${work.length}):`));
@@ -661,12 +695,41 @@ export function registerQueryCommands(program: Command) {
     .command("assign <id> <agent>")
     .description("Assign a task to an agent")
     .option("-j, --json", "Output as JSON")
-    .action((id: string, agent: string, opts) => {
+    .option("--assign-seat", "Allow <agent> to name a durable seat (a seat queue has no session watching it)")
+    .action(async (id: string, agentInput: string, opts) => {
       const globalOpts = program.opts();
+      // Validated on the same terms as `add`/`update --assign`. This is the
+      // most literally-named assignment surface, so leaving it unguarded would
+      // make the whole rule bypassable. See `lib/assignee-validation.ts`.
+      //
+      // UNLIKE add/update/upsert, this verb takes the agent POSITIONALLY —
+      // there is no `--assign` flag here at all. Recommending `--assign <v>
+      // --assign-seat` on this verb gives "unknown option '--assign'" (todos
+      // 75296282, PR #162 review): the working form keeps the agent
+      // positional and only ADDS --assign-seat, so the hint must say exactly
+      // that and nothing else.
+      const agent = await resolveValidatedAssignee(
+        agentInput,
+        Boolean(opts.assignSeat),
+        (v) => `${id} ${v} --assign-seat`,
+      );
+      // Remote authority routing: PATCH via /v1, mirroring `update --assign`.
+      const cloud = getTodosCloudClient();
+      if (cloud) {
+        try {
+          const currentId = await resolveTaskIdForCommand(id, cloud);
+          const current = await cloudGetTask(cloud, currentId);
+          if (!current) throw new Error(`Task not found: ${id}`);
+          const updated = await cloudUpdateTask(cloud, currentId, { assigned_to: agent });
+          if (opts.json || globalOpts.json) { console.log(JSON.stringify(updated)); return; }
+          console.log(chalk.green(`Assigned to ${agent}: ${formatTaskLine(updated)}`));
+        } catch (e) { handleError(e); }
+        return;
+      }
       const resolvedId = resolveTaskId(id);
       const db = getDatabase();
       const task = getTask(resolvedId, db);
-      if (!task) { console.error(chalk.red(`Task not found: ${id}`)); process.exit(1); }
+      if (!task) { handleError(new Error(`Task not found: ${id}`)); }
       try {
         const updated = updateTask(resolvedId, { assigned_to: agent, version: task.version }, db);
         if (opts.json || globalOpts.json) { console.log(JSON.stringify(updated)); return; }
@@ -679,12 +742,34 @@ export function registerQueryCommands(program: Command) {
     .command("unassign <id>")
     .description("Remove task assignment")
     .option("-j, --json", "Output as JSON")
-    .action((id: string, opts) => {
+    .action(async (id: string, opts) => {
       const globalOpts = program.opts();
+      const cloud = getTodosCloudClient();
+      if (cloud) {
+        try {
+          const resolvedId = await resolveTaskIdForCommand(id, cloud);
+          const task = await cloudGetTask(cloud, resolvedId);
+          if (!task) {
+            throw new Error(`Task not found: ${id}`);
+          }
+          const updated = await cloudUpdateTask(cloud, resolvedId, {
+            assigned_to: null,
+          });
+          if (opts.json || globalOpts.json) {
+            console.log(JSON.stringify(updated));
+            return;
+          }
+          console.log(chalk.green(`Unassigned: ${formatTaskLine(updated)}`));
+        } catch (error) {
+          handleError(error);
+        }
+        return;
+      }
+
       const resolvedId = resolveTaskId(id);
       const db = getDatabase();
       const task = getTask(resolvedId, db);
-      if (!task) { console.error(chalk.red(`Task not found: ${id}`)); process.exit(1); }
+      if (!task) { handleError(new Error(`Task not found: ${id}`)); }
       try {
         const updated = updateTask(resolvedId, { assigned_to: undefined, version: task.version }, db);
         if (opts.json || globalOpts.json) { console.log(JSON.stringify(updated)); return; }
@@ -697,12 +782,26 @@ export function registerQueryCommands(program: Command) {
     .command("tag <id> <tag>")
     .description("Add a tag to a task")
     .option("-j, --json", "Output as JSON")
-    .action((id: string, tag: string, opts) => {
+    .action(async (id: string, tag: string, opts) => {
       const globalOpts = program.opts();
+      // Remote authority routing: read current tags, then PATCH via /v1.
+      const cloud = getTodosCloudClient();
+      if (cloud) {
+        try {
+          const currentId = await resolveTaskIdForCommand(id, cloud);
+          const current = await cloudGetTask(cloud, currentId);
+          if (!current) throw new Error(`Task not found: ${id}`);
+          const newTags = [...new Set([...current.tags, tag])];
+          const updated = await cloudUpdateTask(cloud, currentId, { tags: newTags });
+          if (opts.json || globalOpts.json) { console.log(JSON.stringify(updated)); return; }
+          console.log(chalk.green(`Tagged [${tag}]: ${formatTaskLine(updated)}`));
+        } catch (e) { handleError(e); }
+        return;
+      }
       const resolvedId = resolveTaskId(id);
       const db = getDatabase();
       const task = getTask(resolvedId, db);
-      if (!task) { console.error(chalk.red(`Task not found: ${id}`)); process.exit(1); }
+      if (!task) { handleError(new Error(`Task not found: ${id}`)); }
       const newTags = [...new Set([...task.tags, tag])];
       try {
         const updated = updateTask(resolvedId, { tags: newTags, version: task.version }, db);
@@ -716,12 +815,26 @@ export function registerQueryCommands(program: Command) {
     .command("untag <id> <tag>")
     .description("Remove a tag from a task")
     .option("-j, --json", "Output as JSON")
-    .action((id: string, tag: string, opts) => {
+    .action(async (id: string, tag: string, opts) => {
       const globalOpts = program.opts();
+      // Remote authority routing: read current tags, then PATCH via /v1.
+      const cloud = getTodosCloudClient();
+      if (cloud) {
+        try {
+          const currentId = await resolveTaskIdForCommand(id, cloud);
+          const current = await cloudGetTask(cloud, currentId);
+          if (!current) throw new Error(`Task not found: ${id}`);
+          const newTags = current.tags.filter((t) => t !== tag);
+          const updated = await cloudUpdateTask(cloud, currentId, { tags: newTags });
+          if (opts.json || globalOpts.json) { console.log(JSON.stringify(updated)); return; }
+          console.log(chalk.green(`Untagged [${tag}]: ${formatTaskLine(updated)}`));
+        } catch (e) { handleError(e); }
+        return;
+      }
       const resolvedId = resolveTaskId(id);
       const db = getDatabase();
       const task = getTask(resolvedId, db);
-      if (!task) { console.error(chalk.red(`Task not found: ${id}`)); process.exit(1); }
+      if (!task) { handleError(new Error(`Task not found: ${id}`)); }
       const newTags = task.tags.filter(t => t !== tag);
       try {
         const updated = updateTask(resolvedId, { tags: newTags, version: task.version }, db);
@@ -824,30 +937,120 @@ export function registerQueryCommands(program: Command) {
   // doctor
   const doctor = program
     .command("doctor")
-    .description("Diagnose and optionally repair local task data issues")
-    .option("--apply", "Apply safe repairs. Defaults to dry-run.")
+    .description("Diagnose task data issues — schema, referential integrity (orphans, dangling references), and local hygiene")
+    .option("--apply", "Apply safe SCHEMA repairs. Defaults to dry-run. NEVER repairs integrity findings.")
     .option("--fix", "Alias for --apply")
+    .option(
+      "--scan-tasks",
+      "Remote mode only: derive task-level integrity counts by paging /v1/tasks when the authority exposes no /v1/integrity aggregate. Read-only, one request per page.",
+    )
+    .option(
+      "--no-fail-on-findings",
+      "Exit 0 even when doctor finds orphans or dangling references (for a legacy consumer that gates on the exit code). Findings are still reported.",
+    )
     .option("-j, --json", "Output as JSON")
     .action(async (opts) => {
       const globalOpts = program.opts();
+      const jsonMode = Boolean(opts.json || globalOpts.json);
+      const cloud = getTodosCloudClient();
+      if (cloud) {
+        // Guarded before any request: --apply must never reach a shared authority.
+        if (opts.apply || opts.fix) {
+          handleError(new Error(
+            "REMOTE_COMMAND_UNSUPPORTED: doctor --apply cannot repair a remote /v1 authority; local SQLite fallback is disabled",
+          ));
+        }
+        const [stats, projects, taskLists, plans] = await Promise.all([
+          cloudGetStats(cloud),
+          cloudListProjects(cloud),
+          cloudListTaskLists(cloud),
+          cloudListPlans(cloud),
+        ]);
+        const { integrity, scan } = await buildRemoteIntegrityReport(cloud, {
+          projects,
+          taskLists,
+          scanTasks: Boolean(opts.scanTasks),
+        });
+        const verdict = resolveDoctorVerdict(doctorExitCode({
+          errors: integrity.summary.errors,
+          findings: integrity.summary.findings,
+          incomplete: !integrity.summary.complete,
+        }), opts.failOnFindings !== false);
+        const result = {
+          schema_version: "todos.remote-doctor.v1",
+          // Honest verdict: derived from the very condition rows printed below.
+          ok: integrity.summary.ok,
+          // `exit_code` is the status the process RETURNS; `verdict_exit_code` is
+          // what the rows imply. They differ only under --no-fail-on-findings.
+          exit_code: verdict.effective,
+          verdict_exit_code: verdict.verdict,
+          fail_on_findings: verdict.fail_on_findings,
+          dry_run: true,
+          mode: "remote-http",
+          authority: { v1_base_url: cloud.baseUrl, local_fallback: false },
+          routes: {
+            stats: true,
+            projects: projects.length,
+            task_lists: taskLists.length,
+            plans: plans.length,
+            tasks: stats.tasks,
+          },
+          integrity,
+          ...(scan ? { scan: { complete: scan.complete, scanned: scan.scanned, total: scan.total, pages: scan.pages, ...(scan.reason ? { reason: scan.reason } : {}) } } : {}),
+        };
+        if (jsonMode) console.log(JSON.stringify(result));
+        else {
+          console.log(chalk.bold("todos doctor (remote)\n"));
+          console.log(`  ${chalk.green("✓")} Authenticated /v1 authority: ${cloud.baseUrl}`);
+          console.log(`  ${chalk.green("✓")} Required coordination routes are available`);
+          console.log("  Local fallback: disabled");
+          printIntegrityReport(integrity);
+          if (scan && !scan.complete) console.log(chalk.yellow(`  ! task scan incomplete: ${scan.reason}`));
+          printDoctorVerdict(verdict, integrity.summary, {
+            hint: integrity.conditions.some((condition) => !condition.verified) && !opts.scanTasks
+              ? "Re-run with --scan-tasks to derive the unverified task counts from /v1/tasks, or deploy an authority that exposes GET /v1/integrity."
+              : undefined,
+          });
+        }
+        process.exitCode = verdict.effective;
+        return;
+      }
       const { runTodosDoctor } = await import("../../lib/doctor.js");
       const result = runTodosDoctor({ apply: Boolean(opts.apply || opts.fix) });
+      const verdict = resolveDoctorVerdict(doctorExitCode({
+        errors: result.summary.errors,
+        findings: result.summary.integrity_findings,
+        incomplete: result.summary.integrity_unverified > 0,
+      }), opts.failOnFindings !== false);
 
-      if (opts.json || globalOpts.json) {
-        console.log(JSON.stringify(result));
+      if (jsonMode) {
+        console.log(JSON.stringify({
+          ...result,
+          exit_code: verdict.effective,
+          verdict_exit_code: verdict.verdict,
+          fail_on_findings: verdict.fail_on_findings,
+        }));
+        process.exitCode = verdict.effective;
         return;
       }
 
       console.log(chalk.bold("todos doctor\n"));
+      // Never let a flag be silently ignored — that is a smaller version of the
+      // same defect this command was fixed for.
+      if (opts.scanTasks) {
+        console.log(chalk.dim("  Note: --scan-tasks applies to a remote authority only; local SQL counts every condition directly."));
+      }
       console.log(`  ${chalk.dim("Mode:")} ${result.dry_run ? "dry-run" : "apply"}`);
       console.log(`  ${chalk.dim("Database:")} ${result.database_path}`);
       if (result.backup) console.log(`  ${chalk.dim("Backup:")} ${result.backup.path}`);
       console.log("");
-      for (const check of result.checks) {
+      // Integrity findings render in their own per-condition breakdown below.
+      for (const check of result.checks.filter((entry) => !entry.integrity)) {
         const icon = check.severity === "error" ? chalk.red("x") : check.severity === "warn" ? chalk.yellow("!") : chalk.green("✓");
         const count = check.count === undefined ? "" : ` (${check.count})`;
         console.log(`  ${icon} ${check.message}${count}`);
       }
+      printIntegrityReport(result.integrity);
       if (result.repairs.length > 0) {
         console.log(chalk.bold("\nRepairs"));
         for (const repair of result.repairs) {
@@ -857,9 +1060,16 @@ export function registerQueryCommands(program: Command) {
         }
       }
       const { errors, warnings } = result.summary;
-      if (errors === 0 && warnings === 0) console.log(chalk.green("\n  All clear."));
-      else if (result.dry_run) console.log(chalk[errors > 0 ? "red" : "yellow"](`\n  ${errors} error(s), ${warnings} warning(s). Run with --apply to apply safe repairs after reviewing the dry-run.`));
-      else console.log(chalk[errors > 0 ? "red" : "yellow"](`\n  ${errors} error(s), ${warnings} warning(s) remain after repair.`));
+      if (verdict.verdict === 0 && errors === 0 && warnings === 0) console.log(chalk.green("\n  All clear."));
+      else {
+        printDoctorVerdict(verdict, result.integrity.summary, {
+          hint: result.summary.repairable > 0 && result.dry_run
+            ? "Run with --apply to apply safe SCHEMA repairs after reviewing the dry-run."
+            : undefined,
+        });
+        console.log(chalk.dim(`  ${errors} error(s), ${warnings} warning(s) across all checks.`));
+      }
+      process.exitCode = verdict.effective;
     });
 
   // doctor routing — deterministic routing-metadata drift detection + safe repair
@@ -1000,14 +1210,40 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
       const globalOpts = program.opts();
       const checks: { name: string; ok: boolean; message: string }[] = [];
 
+      const cloud = getTodosCloudClient();
+      if (cloud) {
+        try {
+          const stats = await cloudGetStats(cloud);
+          checks.push({ name: "Authority", ok: true, message: `${cloud.baseUrl} · authenticated HTTP` });
+          checks.push({ name: "Tasks", ok: true, message: `${stats.tasks ?? 0} tasks` });
+          checks.push({ name: "Fallback", ok: true, message: "local SQLite disabled" });
+        } catch (error) {
+          checks.push({ name: "Authority", ok: false, message: error instanceof Error ? error.message : String(error) });
+        }
+        const { getPackageVersion } = await import("../helpers.js");
+        checks.push({ name: "Version", ok: true, message: `v${getPackageVersion()} · remote HTTP client` });
+        const ok = checks.every((check) => check.ok);
+        if (opts.json || globalOpts.json) {
+          console.log(JSON.stringify({ ok, mode: "remote-http", checks }));
+        } else {
+          console.log(chalk.bold("todos health\n"));
+          for (const check of checks) {
+            const icon = check.ok ? chalk.green("✓") : chalk.yellow("!");
+            console.log(`  ${icon} ${check.name.padEnd(14)} ${check.message}`);
+          }
+        }
+        if (!ok) process.exitCode = 1;
+        return;
+      }
+
       // 1. Database check
       try {
         const db = getDatabase();
         const row = db.query("SELECT COUNT(*) as count FROM tasks").get() as { count: number };
         const { statSync } = await import("node:fs");
         const { join } = await import("node:path");
-        const home = process.env["HOME"] || process.env["USERPROFILE"] || "~";
-        const dbPath = process.env["HASNA_TODOS_DB_PATH"] || process.env["TODOS_DB_PATH"] || join(home, ".hasna", "todos", "todos.db");
+        const { getHomeDir } = await import("../../lib/sync-utils.js");
+        const dbPath = process.env["HASNA_TODOS_DB_PATH"] || process.env["TODOS_DB_PATH"] || join(getHomeDir(), ".hasna", "todos", "todos.db");
         let size = "unknown";
         try { size = `${(statSync(dbPath).size / 1024 / 1024).toFixed(1)} MB`; } catch {}
         checks.push({ name: "Database", ok: true, message: `${row.count} tasks · ${size} · ${chalk.dim(dbPath)}` });
@@ -1152,13 +1388,11 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
     .option("-j, --json", "Output as JSON")
     .action(async (opts) => {
       const globalOpts = program.opts();
-      const db = getDatabase();
       const cloud = getTodosCloudClient();
-      const { getTasksChangedSince } = await import("../../db/tasks.js");
       const start = new Date(); start.setHours(0, 0, 0, 0);
       const tasks: any[] = cloud
         ? await cloudChangedSince(cloud, start.toISOString())
-        : getTasksChangedSince(start.toISOString(), undefined, db);
+        : (await import("../../db/tasks.js")).getTasksChangedSince(start.toISOString(), undefined, getDatabase());
       const completed = tasks.filter((t: any) => t.status === "completed");
       const started = tasks.filter((t: any) => t.status === "in_progress");
       const other = tasks.filter((t: any) => t.status !== "completed" && t.status !== "in_progress");
@@ -1185,14 +1419,12 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
     .option("-j, --json", "Output as JSON")
     .action(async (opts) => {
       const globalOpts = program.opts();
-      const db = getDatabase();
       const cloud = getTodosCloudClient();
-      const { getTasksChangedSince } = await import("../../db/tasks.js");
       const start = new Date(); start.setDate(start.getDate() - 1); start.setHours(0, 0, 0, 0);
       const end = new Date(start); end.setHours(23, 59, 59, 999);
       const allChanged: any[] = cloud
         ? await cloudChangedSince(cloud, start.toISOString())
-        : getTasksChangedSince(start.toISOString(), undefined, db);
+        : (await import("../../db/tasks.js")).getTasksChangedSince(start.toISOString(), undefined, getDatabase());
       const tasks = allChanged.filter((t: any) => t.updated_at <= end.toISOString());
       const completed = tasks.filter((t: any) => t.status === "completed");
       const started = tasks.filter((t: any) => t.status === "in_progress");
@@ -1536,7 +1768,6 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
     .option("-j, --json", "Output as JSON")
     .action(async (opts) => {
       const globalOpts = program.opts();
-      const db = getDatabase();
       const cloud = getTodosCloudClient();
       if (cloud) {
         const cloudOptions = {
@@ -1569,6 +1800,7 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
         }
         return;
       }
+      const db = getDatabase();
       const { getLocalActivityTimeline } = await import("../../lib/activity-timeline.js");
       const { resolveTaskRunId } = await import("../../db/task-runs.js");
       const options: Parameters<typeof getLocalActivityTimeline>[0] = {
@@ -1690,7 +1922,7 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
           return;
         }
         const { getTaskRouteState } = await import("../../lib/task-routing.js");
-        console.log(JSON.stringify(limited.map((task) => ({ ...task, route_state: getTaskRouteState(task, db) }))));
+        console.log(JSON.stringify(limited.map((task) => ({ ...task, route_state: getTaskRouteState(task, db, { verifyProjectRoot: true }) }))));
         return;
       }
       if (limited.length === 0) {
@@ -1891,14 +2123,14 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
 
         if (opts.read) {
           const handoff = getHandoff(opts.read, db);
-          if (!handoff) { console.error(chalk.red(`Handoff not found: ${opts.read}`)); process.exit(1); }
+          if (!handoff) { handleError(new Error(`Handoff not found: ${opts.read}`)); }
           if (opts.json || globalOpts.json) { console.log(JSON.stringify(handoff)); return; }
           printHandoff(handoff);
           return;
         }
 
         if (opts.ack) {
-          if (!actor) { console.error(chalk.red("  --agent is required with --ack")); process.exit(1); }
+          if (!actor) { handleError(new Error("  --agent is required with --ack")); }
           const handoff = acknowledgeHandoff(opts.ack, actor, db);
           if (opts.json || globalOpts.json) { console.log(JSON.stringify(handoff)); return; }
           console.log(chalk.green(`  ✓ Handoff ${handoff.id.slice(0, 8)} acknowledged by ${actor}`));
@@ -1906,7 +2138,7 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
         }
 
         if (opts.recover) {
-          if (!actor) { console.error(chalk.red("  --agent is required with --recover")); process.exit(1); }
+          if (!actor) { handleError(new Error("  --agent is required with --recover")); }
           const handoff = createSessionRecoveryHandoff({
             agent_id: actor,
             session_id: sessionId,
@@ -1921,7 +2153,7 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
         }
 
         if (opts.create || opts.summary) {
-          if (!opts.summary) { console.error(chalk.red("  --summary is required for creating a handoff")); process.exit(1); }
+          if (!opts.summary) { handleError(new Error("  --summary is required for creating a handoff")); }
           const handoff = createHandoff({
             agent_id: actor,
             project_id: projectId,
@@ -2088,8 +2320,7 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
         const globalOpts = program.opts();
         const format = (opts.json || globalOpts.json) ? "json" : opts.format;
         if (!["markdown", "json"].includes(format)) {
-          console.error(chalk.red("Invalid --format. Allowed values: markdown, json."));
-          process.exit(1);
+          handleError(new Error("Invalid --format. Allowed values: markdown, json."));
         }
         const { generateReleaseNotes, renderReleaseNotesMarkdown } = await import("../../lib/release-notes.js");
         const projectInput = opts.project || globalOpts.project;
@@ -2126,7 +2357,7 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
     .option("--verifications <n>", "Verification records to include", "10")
     .option("--runs <n>", "Run ledgers to include", "3")
     .option("--dependencies <n>", "Dependencies per direction to include", "12")
-    .option("--plan-tasks <n>", "Plan sibling tasks to include", "20")
+    .option("--plan-tasks <n>", "Plan sibling tasks to include (max 24)", "24")
     .option("--max-text <n>", "Max characters for long text fields", "6000")
     .option("--summary-chars <n>", "Max characters for local omission summaries", "480")
     .option("--token-budget <n>", "Approximate token budget for compacting context locally")
@@ -2138,12 +2369,10 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
       const globalOpts = program.opts();
       const format = globalOpts.json ? "json" : opts.format;
       if (!["codex", "claude", "takumi", "generic"].includes(opts.profile)) {
-        console.error(chalk.red("Invalid --profile. Allowed values: codex, claude, takumi, generic."));
-        process.exit(1);
+        handleError(new Error("Invalid --profile. Allowed values: codex, claude, takumi, generic."));
       }
       if (!["markdown", "json", "compact-markdown", "compact-json"].includes(format)) {
-        console.error(chalk.red("Invalid --format. Allowed values: markdown, json, compact-markdown, compact-json."));
-        process.exit(1);
+        handleError(new Error("Invalid --format. Allowed values: markdown, json, compact-markdown, compact-json."));
       }
       const { createAgentContextPack, renderAgentContextPack } = await import("../../lib/context-packs.js");
       const pack = createAgentContextPack({
@@ -2991,8 +3220,7 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
         if (opts.file) body = readFileSync(opts.file, "utf-8");
         if (!body && !opts.url && !process.stdin.isTTY) body = await Bun.stdin.text();
         if (!body.trim() && !opts.url) {
-          console.error(chalk.red("Provide text, --file, --url, or stdin input."));
-          process.exit(1);
+          handleError(new Error("Provide text, --file, --url, or stdin input."));
         }
         const report = importExternalIssues({
           provider: opts.provider,
@@ -3114,8 +3342,7 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
       if (opts.file) body = readFileSync(opts.file, "utf-8");
       if (!body && !process.stdin.isTTY) body = await Bun.stdin.text();
       if (!body.trim()) {
-        console.error(chalk.red("Provide text, --file, or stdin input."));
-        process.exit(1);
+        handleError(new Error("Provide text, --file, or stdin input."));
       }
       const result = createInboxItem({
         title: opts.title,
@@ -3183,8 +3410,7 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
       if (opts.file) body = readFileSync(opts.file, "utf-8");
       if (!body && !process.stdin.isTTY) body = await Bun.stdin.text();
       if (!body.trim()) {
-        console.error(chalk.red("Provide text, --file, or stdin input."));
-        process.exit(1);
+        handleError(new Error("Provide text, --file, or stdin input."));
       }
       const result = previewNaturalLanguageIntake({
         text: body,
@@ -3230,8 +3456,7 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
       const { getInboxItem } = await import("../../db/inbox.js");
       const item = getInboxItem(id);
       if (!item) {
-        console.error(chalk.red(`Inbox item not found: ${id}`));
-        process.exit(1);
+        handleError(new Error(`Inbox item not found: ${id}`));
       }
       if (opts.json || globalOpts.json) { output(item, true); return; }
       console.log(chalk.bold(`${item.id.slice(0, 8)} ${item.title}`));

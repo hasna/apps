@@ -1,6 +1,78 @@
 // REST SDK Client (for cross-process/cross-machine use)
 export { TodosClient, createClient } from "./sdk.js";
 export type { TodosClientOptions } from "./sdk.js";
+export {
+  PrGroupHttpClient,
+  PrGroupLedger,
+  PrGroupLedgerError,
+  createLocalPrGroupLedger,
+  deterministicPrGroupAttemptId,
+  deterministicPrGroupId,
+  sanitizePrGroupMetadata,
+} from "./pr-groups/index.js";
+export type {
+  AdmitPrGroupInput,
+  AppendPrGroupEventInput,
+  PrGroupAdapterViews,
+  PrGroupAttemptRecord,
+  PrGroupCiProof,
+  PrGroupCleanupProof,
+  PrGroupDecisionEnvelopeAdapter,
+  PrGroupEventListOptions,
+  PrGroupEventPage,
+  PrGroupEventRecord,
+  PrGroupEvidenceRefAdapter,
+  PrGroupMutationResult,
+  PrGroupProofBundleAdapter,
+  PrGroupRecord,
+  PrGroupStateView,
+  PrGroupWorkRunAdapter,
+  RecoverPrGroupInput,
+} from "./pr-groups/index.js";
+export {
+  PackageOwnedTodosProjectRegistrationAuthority,
+  PostgresTodosProjectRegistrationBackend,
+  SqliteTodosProjectRegistrationBackend,
+  TODOS_PROJECT_REGISTRATION_CALLER_ROUTE,
+  TODOS_PROJECT_REGISTRATION_ROUTE,
+  TODOS_PROJECT_REGISTRATION_SCHEMA_VERSION,
+  TodosProjectRegistrationError,
+  TodosProjectRegistrationHttpClient,
+  canonicalProjectRegistrationJson,
+  createLocalTodosProjectRegistrationAuthority,
+  createPostgresTodosProjectRegistrationAuthority,
+  createTodosProjectRegistrationHttpClient,
+  deriveTodosProjectRegistrationIdempotencyKey,
+  digestProjectRegistrationValue,
+  handleTodosProjectRegistrationHttpRequest,
+  postgresTodosProjectRegistrationSchemaSql,
+  sqliteTodosProjectRegistrationSchemaSql,
+} from "./project-registration/index.js";
+export * from "./task-manifest/index.js";
+export type {
+  PostgresTodosProjectRegistrationBackendOptions,
+  TodosProjectRegistrationAuthority,
+  TodosProjectRegistrationAuthorityOptions,
+  TodosProjectRegistrationBounds,
+  TodosProjectRegistrationCapability,
+  TodosProjectRegistrationDirection,
+  TodosProjectRegistrationErrorCode,
+  TodosProjectRegistrationFaultPoint,
+  TodosProjectRegistrationHttpClientOptions,
+  TodosProjectRegistrationInverseVerification,
+  TodosProjectRegistrationLookupRequest,
+  TodosProjectRegistrationLookupResult,
+  TodosProjectRegistrationOutcome,
+  TodosProjectRegistrationPostgresClient,
+  TodosProjectRegistrationReceipt,
+  TodosProjectRegistrationRecord,
+  TodosProjectRegistrationRequest,
+  TodosProjectRegistrationResourceKind,
+  TodosProjectRegistrationResponseControl,
+  TodosPriorRegistrationAdoptionCurrentRecord,
+  TodosPriorRegistrationAdoptionValidation,
+  TodosPriorRegistrationAdoptionValidationRequest,
+} from "./project-registration/index.js";
 
 // Package capability manifest
 export { TODOS_CAPABILITIES, createCapabilityManifest } from "./capabilities.js";
@@ -14,6 +86,8 @@ export type {
 } from "./capabilities.js";
 
 // Stable integration contracts
+export * from "./ai.js";
+export * from "./ai-tools.js";
 export { TODOS_CONTRACTS, TODOS_API_ROUTES, TODOS_ERROR_CODES, createContractsManifest } from "./contracts.js";
 export type {
   CreateContractsManifestOptions,
@@ -32,6 +106,7 @@ export {
   getJsonContract,
   validateJsonContract,
 } from "./contracts.js";
+export { TODOS_AUTHORITATIVE_JSON_PROJECTIONS } from "./json-contracts.js";
 export type {
   CreateJsonContractsManifestOptions,
   JsonContractValidationIssue,
@@ -61,6 +136,15 @@ export type {
   OnboardingFixtureSummary,
   WriteOnboardingFixtureResult,
 } from "./lib/onboarding-fixtures.js";
+
+// Guarded plan/project linkage
+export {
+  PLAN_PROJECT_LINK_SCHEMA_VERSION,
+  PlanProjectLinkError,
+  applyPlanProjectLink,
+  planPlanProjectLink,
+  rollbackPlanProjectLink,
+} from "./lib/plan-project-link.js";
 
 // Local snapshot resources
 export {
@@ -897,6 +981,21 @@ export {
   REDACTION_PLACEHOLDER,
 } from "./lib/secret-redaction.js";
 export type { SecretMatch, SecretScanResult, RedactionOptions, SecretPattern } from "./lib/secret-redaction.js";
+export {
+  PREWRITE_SECRET_SCAN_SCHEMA,
+  PreWriteSecretError,
+  assertPreWriteTextClean,
+  redactPreWriteText,
+  sanitizePreWriteJsonString,
+  sanitizePreWriteText,
+  sanitizePreWriteValue,
+  scanPreWriteText,
+} from "./lib/prewrite-secrets.js";
+export type {
+  PreWriteSecretFinding,
+  PreWriteSecretMode,
+  PreWriteSecretScanResult,
+} from "./lib/prewrite-secrets.js";
 
 // Access profiles
 export {
@@ -1197,6 +1296,8 @@ export type {
 // Dependency graph
 export {
   DEPENDENCY_GRAPH_SCHEMA,
+  TASK_DEPENDENCY_EDGES_SCHEMA,
+  PROJECT_DEPENDENCY_GRAPH_SCHEMA,
   getReadyTasks,
   getBlockedTaskReports,
   getCriticalPath,
@@ -1204,9 +1305,18 @@ export {
   analyzeDependencyGraph,
   getDependents,
   getBlockers,
+  toDependencyNode,
+  detectCyclesFromEdges,
+  buildTaskDependencyEdges,
+  getTaskDependencyEdges,
+  buildProjectDependencyGraph,
+  getProjectDependencyGraph,
 } from "./lib/dependency-graph.js";
 export type {
   DependencyNode,
+  DependencyEdge,
+  TaskDependencyEdges,
+  ProjectDependencyGraph,
   BlockedTaskReport,
   ReadyTaskReport,
   CriticalPathEntry,
@@ -1704,6 +1814,7 @@ export type {
 
 // Config
 export {
+  getTodosAiConfig,
   loadConfig,
   updateConfig,
   getCompletionGuardConfig,
@@ -2127,6 +2238,38 @@ export type {
   LocalActivityTimelineSource,
 } from "./lib/activity-timeline.js";
 export { runTodosDoctor } from "./lib/doctor.js";
+export {
+  INTEGRITY_CONDITIONS,
+  OPEN_TASK_STATUSES,
+  adoptRemoteIntegrityReport,
+  TODOS_INTEGRITY_SCHEMA_VERSION,
+  buildIntegrityReport,
+  buildPostgresIntegritySql,
+  buildSqliteIntegritySql,
+  formatIntegrityMessage,
+  integrityCondition,
+  measureIntegrityRows,
+  measuredCondition,
+  resolveIntegritySeverity,
+  summarizeIntegrity,
+  unverifiedCondition,
+} from "./lib/integrity.js";
+export type {
+  IntegrityCondition,
+  IntegrityConditionSpec,
+  IntegrityEntity,
+  IntegrityMeasurement,
+  IntegrityReferenceKind,
+  IntegrityReport,
+  IntegrityRowSets,
+  IntegritySeverity,
+  IntegritySource,
+  IntegritySummary,
+  IntegrityTarget,
+  IntegrityTaskListRow,
+  IntegrityTaskRow,
+} from "./lib/integrity.js";
+export { scanSqliteIntegrity } from "./db/integrity.js";
 export type {
   DoctorBackup,
   DoctorCheck,
@@ -2362,11 +2505,14 @@ export {
   getTodosStorageDatabaseEnv,
   getTodosStorageDatabaseUrl,
   getTodosStorageEnvName,
+  getTodosStorageBackend,
   getTodosStorageMode,
   importSqliteTodosStorageSnapshot,
+  isTodosPostgresBackend,
   isTodosRemoteStorageEnabled,
   loadStorageConfig,
   loadTodosStorageConfig,
+  parseStorageBackend,
   parseStorageMode,
   planRunArtifactsS3Sync,
   postgresTodosSyncSchemaSql,
@@ -2406,6 +2552,7 @@ export type {
   TodosStorageEnv,
   TodosStorageImportResult,
   TodosStorageKind,
+  TodosStorageBackend,
   TodosStorageMode,
   TodosStorageTable,
   TodosStorageSnapshot,

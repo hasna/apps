@@ -240,6 +240,14 @@ Before an image digest may enter Terraform, require all of the following:
    checksum-pinned ORAS. Discover the referrer through the registry API and
    record both immutable digests; log-only hashes are not durable evidence.
 
+The release workflow must calculate and supply the exact source-archive SHA-256
+with every CodeBuild start. Candidate builds require an exact 40-character
+commit `SOURCE_SHA`, a 64-character `SOURCE_ARCHIVE_SHA256`, and a 64-character
+`EXPECTED_SOURCE_TREE_SHA256`; missing or malformed values fail before the
+container build or ECR push. The package version is read from the archive and
+validated as strict SemVer by the candidate build. Record all four values in the
+release evidence so an archive cannot be substituted behind a matching image tag.
+
 A non-root user remains a separate hardening item. Do not compound that identity
 change with the base-image vulnerability fix and runtime dependency pruning.
 

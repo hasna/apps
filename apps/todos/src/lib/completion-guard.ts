@@ -1,8 +1,9 @@
-import type { Database } from "bun:sqlite";
+import type { Database, SQLQueryBindings } from "bun:sqlite";
 import type { Task } from "../types/index.js";
 import { CompletionGuardError } from "../types/index.js";
 import { getCompletionGuardConfig, type CompletionGuardConfig } from "./config.js";
 import { getProject } from "../db/projects.js";
+import { lowerInClause, resolveAssignedToAliases } from "../db/database.js";
 
 /**
  * Checks completion guards before allowing a task to be marked as completed.
@@ -54,6 +55,18 @@ export function checkCompletionGuard(
     }
   }
 
+  // Alias-resolved (task 84c77210): `assigned_to` holds an agent id from one
+  // write path and a resolved name from another. Comparing it to only the
+  // single `agent` ref this function was handed (which may itself be either
+  // form) silently undercounted an agent's OWN completions whenever some of
+  // its tasks were recorded under the other form — weakening both guards
+  // below rather than failing loudly: a rate limit or cooldown that misses
+  // half an agent's completions permits more completions than intended,
+  // the exact "misses half the corpus without failing loudly" shape named
+  // in 84c77210 for completion-guard duplicate detection.
+  const assignedAliasParams: SQLQueryBindings[] = [];
+  const assignedInClause = agent ? lowerInClause("assigned_to", resolveAssignedToAliases(db, agent), assignedAliasParams) : "";
+
   // 3. Rate limit (agent-scoped)
   if (agent && config.max_completions_per_window && config.window_minutes) {
     const windowStart = new Date(
@@ -62,9 +75,9 @@ export function checkCompletionGuard(
     const result = db
       .query(
         `SELECT COUNT(*) as count FROM tasks
-         WHERE completed_at > ? AND (assigned_to = ? OR agent_id = ?)`,
+         WHERE completed_at > ? AND (${assignedInClause} OR agent_id = ?)`,
       )
-      .get(windowStart, agent, agent) as { count: number };
+      .get(windowStart, ...assignedAliasParams, agent) as { count: number };
 
     if (result.count >= config.max_completions_per_window) {
       throw new CompletionGuardError(
@@ -78,9 +91,9 @@ export function checkCompletionGuard(
     const result = db
       .query(
         `SELECT MAX(completed_at) as last_completed FROM tasks
-         WHERE completed_at IS NOT NULL AND (assigned_to = ? OR agent_id = ?) AND id != ?`,
+         WHERE completed_at IS NOT NULL AND (${assignedInClause} OR agent_id = ?) AND id != ?`,
       )
-      .get(agent, agent, task.id) as { last_completed: string | null };
+      .get(...assignedAliasParams, agent, task.id) as { last_completed: string | null };
 
     if (result.last_completed) {
       const elapsedSeconds =

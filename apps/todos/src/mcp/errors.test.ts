@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   VersionConflictError,
   TaskNotFoundError,
+  TaskReferenceAmbiguousError,
   ProjectNotFoundError,
   PlanNotFoundError,
   LockError,
@@ -18,6 +19,15 @@ function formatError(error: unknown): string {
   }
   if (error instanceof TaskNotFoundError) {
     return JSON.stringify({ code: TaskNotFoundError.code, message: error.message, suggestion: TaskNotFoundError.suggestion });
+  }
+  if (error instanceof TaskReferenceAmbiguousError) {
+    return JSON.stringify({
+      code: TaskReferenceAmbiguousError.code,
+      message: error.message,
+      candidate_project_ids: error.candidateProjectIds,
+      candidate_task_ids: error.candidateTaskIds,
+      suggestion: "Use a full task UUID.",
+    });
   }
   if (error instanceof ProjectNotFoundError) {
     return JSON.stringify({ code: ProjectNotFoundError.code, message: error.message, suggestion: ProjectNotFoundError.suggestion });
@@ -56,6 +66,20 @@ describe("Error classes have correct static properties", () => {
   test("TaskNotFoundError has correct code and suggestion", () => {
     expect(TaskNotFoundError.code).toBe("TASK_NOT_FOUND");
     expect(TaskNotFoundError.suggestion).toContain("list_tasks");
+  });
+
+  test("TaskReferenceAmbiguousError exposes candidate projects and task UUIDs", () => {
+    const err = new TaskReferenceAmbiguousError("DUP-00001", [
+      { task_id: "task-b", project_id: "project-b" },
+      { task_id: "task-a", project_id: "project-a" },
+    ]);
+    const result = JSON.parse(formatError(err));
+    expect(result).toMatchObject({
+      code: "TASK_REFERENCE_AMBIGUOUS",
+      candidate_project_ids: ["project-a", "project-b"],
+      candidate_task_ids: ["task-a", "task-b"],
+      suggestion: "Use a full task UUID.",
+    });
   });
 
   test("ProjectNotFoundError has correct code and suggestion", () => {

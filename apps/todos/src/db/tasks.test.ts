@@ -49,6 +49,7 @@ import { createProject } from "./projects.js";
 import { registerAgent } from "./agents.js";
 import { createPlan } from "./plans.js";
 import { ensureSchema } from "./schema.js";
+import { getTaskHistory } from "./audit.js";
 
 let db: Database;
 
@@ -102,6 +103,17 @@ describe("createTask", () => {
     const child = createTask({ title: "Child", parent_id: parent.id }, db);
     expect(child.parent_id).toBe(parent.id);
   });
+
+  it("REGRESSION: rejects a nonexistent parent before creating any task", () => {
+    expect(() =>
+      createTask({
+        title: "Must not become a ghost child",
+        parent_id: "ffffffff-ffff-4fff-8fff-ffffffffffff",
+      }, db),
+    ).toThrow(TaskNotFoundError);
+
+    expect(listTasks({ include_subtasks: true }, db)).toEqual([]);
+  });
 });
 
 describe("getTask", () => {
@@ -127,7 +139,7 @@ describe("getTaskWithRelations", () => {
     expect(full!.subtasks).toHaveLength(2);
   });
 
-  it("should include dependencies and blocked_by", () => {
+  it("should include dependencies, blocked_by, and blocks with correct orientation", () => {
     const a = createTask({ title: "Task A" }, db);
     const b = createTask({ title: "Task B" }, db);
     addDependency(b.id, a.id, db); // B depends on A
@@ -135,10 +147,17 @@ describe("getTaskWithRelations", () => {
     const fullB = getTaskWithRelations(b.id, db);
     expect(fullB!.dependencies).toHaveLength(1);
     expect(fullB!.dependencies[0]!.id).toBe(a.id);
+    // A is pending, so it blocks B right now.
+    expect(fullB!.blocked_by).toHaveLength(1);
+    expect(fullB!.blocked_by[0]!.id).toBe(a.id);
+    expect(fullB!.blocks).toHaveLength(0);
 
     const fullA = getTaskWithRelations(a.id, db);
-    expect(fullA!.blocked_by).toHaveLength(1);
-    expect(fullA!.blocked_by[0]!.id).toBe(b.id);
+    // Nothing blocks A (regression 4599ef37: its dependent used to land here).
+    expect(fullA!.dependencies).toHaveLength(0);
+    expect(fullA!.blocked_by).toHaveLength(0);
+    expect(fullA!.blocks).toHaveLength(1);
+    expect(fullA!.blocks[0]!.id).toBe(b.id);
   });
 });
 
@@ -175,6 +194,77 @@ describe("listTasks", () => {
     const tasks = listTasks({ assigned_to: "claude" }, db);
     expect(tasks).toHaveLength(1);
     expect(tasks[0]!.title).toBe("Assigned");
+  });
+
+  it("should resolve assigned_to across an agent's id/name aliases (task 8f07bc15)", () => {
+    const agent = registerAgent({ name: "fabricius" }, db);
+    if ("conflict" in agent) throw new Error(`agent registration conflict: ${agent.existing_name}`);
+
+    // Reproduces the real split: one caller wrote the id, another the name,
+    // into the same field.
+    const byId = createTask({ title: "stored under id", assigned_to: agent.id }, db);
+    const byName = createTask({ title: "stored under name", assigned_to: agent.name }, db);
+
+    // Direction 1: querying by id finds the row stored under the name too.
+    expect(listTasks({ assigned_to: agent.id }, db).map((t) => t.id).sort())
+      .toEqual([byId.id, byName.id].sort());
+
+    // Direction 2: querying by name finds the row stored under the id too.
+    expect(listTasks({ assigned_to: agent.name }, db).map((t) => t.id).sort())
+      .toEqual([byId.id, byName.id].sort());
+
+    // Direction 3: case-insensitive, both on the query and on a row whose
+    // assigned_to was itself written in the wrong case.
+    const byUpperName = createTask({ title: "stored uppercase", assigned_to: "FABRICIUS" }, db);
+    expect(listTasks({ assigned_to: "Fabricius" }, db).map((t) => t.id).sort())
+      .toEqual([byId.id, byName.id, byUpperName.id].sort());
+
+    // Direction 4: a genuinely unknown agent still returns zero, and an
+    // unrelated free-text assignee (never registered) keeps its existing
+    // exact-match-only behaviour rather than being swept in.
+    const stray = createTask({ title: "unrelated literal assignee", assigned_to: "not-a-registered-agent" }, db);
+    expect(listTasks({ assigned_to: "zzz-no-such-agent" }, db)).toEqual([]);
+    expect(listTasks({ assigned_to: "not-a-registered-agent" }, db).map((t) => t.id)).toEqual([stray.id]);
+  });
+
+  it("does not crash when --assigned resolves by name to 2+ registered agents (task 8f07bc15 remediation, PR #160 finding 1)", () => {
+    // Reproduces the live fleet state cited by 0bf5d979/8f07bc15: two agent
+    // rows answering to the same name in different case, created
+    // independently (registerAgent's own validateAgentName normalizes and
+    // would refuse this pair, so seed the rows directly, as the real
+    // duplicate rows were).
+    const timestamp = new Date().toISOString();
+    db.run(
+      "INSERT INTO agents (id, name, created_at, last_seen_at) VALUES (?, ?, ?, ?), (?, ?, ?, ?)",
+      ["01d4cc12", "fabricius", timestamp, timestamp, "4d77b218", "Fabricius", timestamp, timestamp],
+    );
+    const byLiveId = createTask({ title: "assigned to the live duplicate's id", assigned_to: "01d4cc12" }, db);
+    const byStaleId = createTask({ title: "assigned to the stale duplicate's id", assigned_to: "4d77b218" }, db);
+    const byLiteralName = createTask({ title: "assigned via the ambiguous literal name", assigned_to: "fabricius" }, db);
+
+    // Must not throw IdentityAliasAmbiguousError (pre-remediation: rc=1,
+    // "Identity alias or source is ambiguous: fabricius").
+    expect(() => listTasks({ assigned_to: "fabricius" }, db)).not.toThrow();
+    expect(() => countTasks({ assigned_to: "fabricius" }, db)).not.toThrow();
+
+    // An ambiguous name falls back to literal-only matching (same as a ref
+    // matching zero agents) rather than crashing or silently picking one of
+    // the two rows — so it finds exactly the rows stored under that literal
+    // string, not the id-stored rows of either candidate agent.
+    expect(listTasks({ assigned_to: "fabricius" }, db).map((t) => t.id).sort())
+      .toEqual([byLiteralName.id].sort());
+    expect(countTasks({ assigned_to: "fabricius" }, db)).toBe(1);
+
+    // Querying by either agent's id is unaffected by the name being
+    // ambiguous: an exact id match resolves to exactly that one row (id
+    // lookup, not the name lookup that throws), so it is not ambiguous at
+    // all — it widens normally to that row's own registered name, per the
+    // pre-existing id/name alias behaviour, and therefore also picks up the
+    // literal-"fabricius" task each of these two agents' names collides with.
+    expect(listTasks({ assigned_to: "01d4cc12" }, db).map((t) => t.id).sort())
+      .toEqual([byLiveId.id, byLiteralName.id].sort());
+    expect(listTasks({ assigned_to: "4d77b218" }, db).map((t) => t.id).sort())
+      .toEqual([byStaleId.id, byLiteralName.id].sort());
   });
 
   it("should filter by tags", () => {
@@ -380,6 +470,98 @@ describe("updateTask", () => {
     );
     expect(updated.completed_at).toBeTruthy();
   });
+
+  it("REGRESSION: repairs and clears an exact cross-project parent without replacing or rerouting the task", () => {
+    const childProject = createProject({ name: "Child project", path: "/child-project" }, db);
+    const parentProject = createProject({ name: "Parent project", path: "/parent-project" }, db);
+    const childList = createTaskList({
+      name: "Child list",
+      project_id: childProject.id,
+    }, db);
+    const originalParent = createTask({
+      title: "Original parent",
+      project_id: childProject.id,
+    }, db);
+    const crossProjectParent = createTask({
+      title: "Cross-project parent",
+      project_id: parentProject.id,
+    }, db);
+    const child = createTask({
+      title: "Repairable child",
+      project_id: childProject.id,
+      task_list_id: childList.id,
+      parent_id: originalParent.id,
+    }, db);
+    const unrelated = createTask({
+      title: "Unrelated control",
+      project_id: childProject.id,
+    }, db);
+    const historyBefore = getTaskHistory(child.id, db).map((entry) => entry.id);
+    const unrelatedBefore = getTask(unrelated.id, db);
+
+    const repaired = updateTask(child.id, {
+      version: child.version,
+      parent_id: crossProjectParent.id,
+    } as Parameters<typeof updateTask>[1] & { parent_id: string }, db);
+
+    expect(repaired).toMatchObject({
+      id: child.id,
+      created_at: child.created_at,
+      project_id: childProject.id,
+      task_list_id: childList.id,
+      parent_id: crossProjectParent.id,
+    });
+    expect(getTask(child.id, db)?.parent_id).toBe(crossProjectParent.id);
+    expect(getTaskHistory(child.id, db).map((entry) => entry.id))
+      .toEqual(expect.arrayContaining(historyBefore));
+    expect(getTask(unrelated.id, db)).toEqual(unrelatedBefore);
+    expect(getTask(originalParent.id, db)?.version).toBe(originalParent.version);
+    expect(getTask(crossProjectParent.id, db)?.version).toBe(crossProjectParent.version);
+
+    const cleared = updateTask(child.id, {
+      version: repaired.version,
+      parent_id: null,
+    } as Parameters<typeof updateTask>[1] & { parent_id: null }, db);
+
+    expect(cleared).toMatchObject({
+      id: child.id,
+      created_at: child.created_at,
+      project_id: childProject.id,
+      task_list_id: childList.id,
+      parent_id: null,
+    });
+    expect(getTask(child.id, db)?.parent_id).toBeNull();
+    expect(getTask(unrelated.id, db)).toEqual(unrelatedBefore);
+  });
+
+  it("REGRESSION: rejects nonexistent, self, and descendant parents without mutation", () => {
+    const root = createTask({ title: "Root" }, db);
+    const child = createTask({ title: "Child", parent_id: root.id }, db);
+    const rootBefore = getTask(root.id, db);
+    const childBefore = getTask(child.id, db);
+
+    expect(() =>
+      updateTask(root.id, {
+        version: root.version,
+        parent_id: "ffffffff-ffff-4fff-8fff-ffffffffffff",
+      } as Parameters<typeof updateTask>[1] & { parent_id: string }, db),
+    ).toThrow(TaskNotFoundError);
+    expect(() =>
+      updateTask(root.id, {
+        version: root.version,
+        parent_id: root.id,
+      } as Parameters<typeof updateTask>[1] & { parent_id: string }, db),
+    ).toThrow(/TASK_PARENT_CYCLE/);
+    expect(() =>
+      updateTask(root.id, {
+        version: root.version,
+        parent_id: child.id,
+      } as Parameters<typeof updateTask>[1] & { parent_id: string }, db),
+    ).toThrow(/TASK_PARENT_CYCLE/);
+
+    expect(getTask(root.id, db)).toEqual(rootBefore);
+    expect(getTask(child.id, db)).toEqual(childBefore);
+  });
 });
 
 describe("deleteTask", () => {
@@ -424,7 +606,7 @@ describe("startTask", () => {
 
   it("should reject restarting completed tasks", () => {
     const task = createTask({ title: "Already done", status: "completed" }, db);
-    expect(() => startTask(task.id, "claude", db)).toThrow("Task is completed");
+    expect(() => startTask(task.id, "claude", db)).toThrow(`Task ${task.id} is completed`);
   });
 });
 
@@ -2163,7 +2345,7 @@ describe("getOverdueTasks", () => {
     const task = createTask({ title: "Done overdue", due_at: yesterday.toISOString() }, db);
     const agent = registerAgent({ name: "testoverdueagent" }, db) as any;
     startTask(task.id, agent.id, db);
-    completeTask(task.id, undefined, db);
+    completeTask(task.id, agent.id, db);
 
     const overdue = getOverdueTasks(undefined, db);
     expect(overdue.length).toBe(0);

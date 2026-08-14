@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execSync } from "node:child_process";
 import { localRoutingTestEnv } from "../test/local-routing-env.fixture.test.js";
+import { TASK_PRIORITIES, TASK_STATUSES } from "../types/index.js";
 
 const CWD = join(import.meta.dir, "../..");
 const T = 30000; // generous per-test timeout: each case shells out to the CLI
@@ -120,7 +121,11 @@ describe("M5/L1: input validation instead of raw SQLite / NaN", () => {
   it("`add --status bogus` fails cleanly (no raw CHECK constraint error)", () => {
     const { code, output } = runExpectFail("add 'M5 bad status' --status bogus");
     expect(code).not.toBe(0);
-    expect(output).toContain("--status must be one of");
+    // Substance, not prose: the flag, the offending value, and the whole
+    // vocabulary from TASK_STATUSES, with no raw SQLite CHECK failure leaking.
+    expect(output).toContain("--status");
+    expect(output).toContain("bogus");
+    for (const status of TASK_STATUSES) expect(output).toContain(status);
     expect(output).not.toContain("CHECK constraint");
   }, T);
 
@@ -128,15 +133,66 @@ describe("M5/L1: input validation instead of raw SQLite / NaN", () => {
     const t = JSON.parse(run("add 'M5 update prio' --json"));
     const { code, output } = runExpectFail(`update ${t.id} -p bogus`);
     expect(code).not.toBe(0);
-    expect(output).toContain("--priority must be one of");
+    expect(output).toContain("--priority");
+    expect(output).toContain("bogus");
+    for (const priority of TASK_PRIORITIES) expect(output).toContain(priority);
   }, T);
 
   it("`done --confidence banana` is rejected (NaN not stored)", () => {
     const t = JSON.parse(run("add 'L1 confidence' --json"));
-    run(`start ${t.id}`);
+    // `--agent` is required on a claim verb (todos cf995f20). This case is about
+    // rejecting a non-numeric --confidence, so it just supplies an identity.
+    run(`--agent l1-confidence start ${t.id}`);
     const { code, output } = runExpectFail(`done ${t.id} --confidence banana`);
     expect(code).not.toBe(0);
     expect(output).toContain("--confidence must be a number");
+  }, T);
+});
+
+describe("JSON error contract: --json errors are a JSON object on stdout", () => {
+  /** Run expecting failure; capture stdout and stderr SEPARATELY. */
+  function runCapture(args: string): { code: number; stdout: string; stderr: string } {
+    try {
+      const stdout = execSync(`bun run src/cli/index.tsx ${args}`, {
+        encoding: "utf-8",
+        cwd: CWD,
+        timeout: 25000,
+        stdio: ["ignore", "pipe", "pipe"],
+        env: localRoutingTestEnv({ HOME: fakeHome, TODOS_DB_PATH: dbPath, TODOS_AUTO_PROJECT: "false" }),
+      });
+      return { code: 0, stdout, stderr: "" };
+    } catch (e: any) {
+      return { code: e.status ?? 1, stdout: String(e.stdout ?? ""), stderr: String(e.stderr ?? "") };
+    }
+  }
+
+  it("`show <missing> --json` prints a {error} JSON object on stdout, exit 1", () => {
+    // The reported bug: with --json the CLI left stdout EMPTY and only wrote
+    // plaintext to stderr. Contract (todos manual): JSON error object on stdout.
+    const { code, stdout } = runCapture("show nonexistent-id-xyz --json");
+    expect(code).toBe(1);
+    const parsed = JSON.parse(stdout.trim());
+    expect(parsed.error).toContain("nonexistent-id-xyz");
+  }, T);
+
+  it("`-j show <missing>` (short flag) also emits the JSON error envelope on stdout", () => {
+    const { code, stdout } = runCapture("-j show nonexistent-id-xyz");
+    expect(code).toBe(1);
+    expect(JSON.parse(stdout.trim()).error).toContain("nonexistent-id-xyz");
+  }, T);
+
+  it("a thrown lookup error (`comment <missing-uuid> --json`) also yields the stdout envelope", () => {
+    const uuid = "00000000-0000-4000-8000-000000000000";
+    const { code, stdout } = runCapture(`comment ${uuid} "x" --json`);
+    expect(code).toBe(1);
+    expect(JSON.parse(stdout.trim()).error).toContain(uuid);
+  }, T);
+
+  it("without --json the error stays human-readable on stderr, with empty stdout", () => {
+    const { code, stdout, stderr } = runCapture("show nonexistent-id-xyz");
+    expect(code).toBe(1);
+    expect(stdout.trim()).toBe("");
+    expect(stderr).toContain("nonexistent-id-xyz");
   }, T);
 });
 

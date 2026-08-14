@@ -85,6 +85,40 @@ describe("saved search views", () => {
     expect(result.count).toBe(result.results.length);
   });
 
+  test("excludes projects from agent-filtered all-scope searches without dropping attributed entities", () => {
+    const project = createProject({ name: "Agent Search Project", path: "/tmp/agent-search-project" }, db);
+    const unrelatedProject = createProject({ name: "Unrelated Project", path: "/tmp/unrelated-project" }, db);
+    const task = createTask({
+      title: "Attributed task",
+      project_id: project.id,
+      agent_id: "cossus",
+    }, db);
+    createTask({
+      title: "Other agent task",
+      project_id: unrelatedProject.id,
+      agent_id: "other-agent",
+    }, db);
+    const run = startTaskRun({ task_id: task.id, agent_id: "cossus", title: "Attributed run" }, db);
+    const comment = addComment({ task_id: task.id, content: "Attributed comment", agent_id: "cossus" }, db);
+
+    const present = runSavedSearch({ agent_id: "cossus", limit: 20 }, "all", db);
+    expect(present.results).toEqual(expect.arrayContaining([
+      { entity_type: "tasks", entity: task },
+      { entity_type: "runs", entity: run },
+      { entity_type: "comments", entity: comment },
+    ]));
+    expect(present.results.some((item) => item.entity_type === "projects")).toBe(false);
+
+    const absent = runSavedSearch({ agent_id: "missing-agent", limit: 20 }, "all", db);
+    expect(absent.results).toEqual([]);
+
+    const unfilteredProjects = runSavedSearch({ limit: 20 }, "projects", db);
+    expect(unfilteredProjects.results.map((item) => item.entity.id)).toEqual([
+      project.id,
+      unrelatedProject.id,
+    ]);
+  });
+
   test("filters tasks by dependency direction", () => {
     const dependency = createTask({ title: "Prepare dependency" }, db);
     const blocked = createTask({ title: "Blocked by dependency" }, db);

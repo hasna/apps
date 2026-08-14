@@ -1,4 +1,5 @@
 import { Box, Text } from "ink";
+import { lockDisplayState } from "../../lib/lock-display.js";
 import type { Task } from "../../types/index.js";
 
 interface TaskListProps {
@@ -71,7 +72,7 @@ export function TaskList({ tasks, selectedIndex }: TaskListProps) {
             {task.assigned_to && (
               <Text color="cyan"> → {task.assigned_to}</Text>
             )}
-            {task.locked_by && (
+            {lockDisplayState(task.locked_by, task.locked_at).held && (
               <Text color="magenta"> 🔒{task.locked_by}</Text>
             )}
             {task.tags.length > 0 && (

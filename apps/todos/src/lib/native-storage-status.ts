@@ -3,11 +3,12 @@ import {
   assertTodosRemoteStorageConfig,
   getCanonicalTodosRdsConfig,
   getTodosStorageEnvName,
-  isTodosRemoteStorageEnabled,
+  isTodosPostgresBackend,
   loadTodosStorageConfig,
+  parseStorageBackend,
   postgresTodosSyncSchemaSql,
 } from "../storage/index.js";
-import type { CanonicalTodosRdsConfig, TodosStorageConfig, TodosStorageEnv, TodosStorageMode } from "../storage/index.js";
+import type { CanonicalTodosRdsConfig, TodosStorageBackend, TodosStorageConfig, TodosStorageEnv } from "../storage/index.js";
 
 export interface NativeStorageEnvStatus {
   name: string;
@@ -18,7 +19,7 @@ export interface NativeStorageEnvStatus {
 export interface NativeStorageStatus {
   ok: boolean;
   service: "todos";
-  mode: TodosStorageMode;
+  mode: TodosStorageBackend;
   local_default: boolean;
   remote_enabled: boolean;
   database: {
@@ -90,10 +91,10 @@ export function getNativeStorageStatus(env: TodosStorageEnv = process.env): Nati
     issues.push(error instanceof Error ? error.message : String(error));
   }
 
-  const remoteEnabled = isTodosRemoteStorageEnabled(config);
+  const remoteEnabled = isTodosPostgresBackend(config);
   const remoteFieldsConfigured = Boolean(config.database || config.objectStorage);
   if (!remoteEnabled && remoteFieldsConfigured) {
-    warnings.push(`${TODOS_STORAGE_ENV.mode}=local ignores configured remote storage fields`);
+    warnings.push(`the sqlite backend (${TODOS_STORAGE_ENV.mode}) ignores configured remote storage fields`);
   }
   if (remoteEnabled && !config.objectStorage) {
     warnings.push(`${TODOS_STORAGE_ENV.s3Bucket} is not configured, so artifact sync will stay local`);
@@ -103,7 +104,7 @@ export function getNativeStorageStatus(env: TodosStorageEnv = process.env): Nati
     ok: issues.length === 0,
     service: "todos",
     mode: config.mode,
-    local_default: config.mode === "local",
+    local_default: config.mode === "sqlite",
     remote_enabled: remoteEnabled,
     database: {
       configured: Boolean(config.database),
@@ -192,8 +193,12 @@ function storageEnvStatus(env: TodosStorageEnv): Record<keyof typeof TODOS_STORA
 }
 
 function fallbackConfig(env: TodosStorageEnv): TodosStorageConfig {
-  const modeValue = clean(env[TODOS_STORAGE_ENV.mode]);
-  const mode = modeValue === "remote" || modeValue === "hybrid" ? modeValue : "local";
+  let mode: TodosStorageBackend;
+  try {
+    mode = parseStorageBackend(clean(env[TODOS_STORAGE_ENV.mode]));
+  } catch {
+    mode = "sqlite";
+  }
   return {
     service: "todos",
     mode,

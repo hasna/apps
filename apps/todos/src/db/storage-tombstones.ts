@@ -10,6 +10,7 @@ export type StorageTombstoneObjectType =
   | "agents"
   | "task_lists"
   | "templates"
+  | "template_tasks"
   | "audit_history";
 
 export interface StorageTombstone {

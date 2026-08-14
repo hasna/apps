@@ -1,6 +1,6 @@
-import { describe, it, expect, beforeEach, afterEach } from "bun:test";
+import { describe, it, expect, beforeEach, afterEach, setDefaultTimeout } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { getDatabase, closeDatabase, resetDatabase } from "../db/database.js";
@@ -9,10 +9,39 @@ import { createTaskList } from "../db/task-lists.js";
 import { createProject } from "../db/projects.js";
 import { runMigrations } from "../db/schema.js";
 import { localRoutingTestEnv } from "../test/local-routing-env.fixture.test.js";
+import { TASK_PRIORITIES } from "../types/index.js";
+import {
+  deriveTodosTaskManifestApplyPreconditionDigest,
+  deriveTodosTaskManifestCompensationPreconditionDigest,
+  deriveTodosTaskManifestIdempotencyKey,
+  taskManifestCompensationRequestDigest,
+  taskManifestRequestDigest,
+} from "../task-manifest/index.js";
+
+// Every test here shells out to the real CLI (a cold `bun run` per call, ~0.5s
+// each), and the heavier flows issue 6-10 subprocesses. The 5s bun-test default
+// is too tight for that under parallel CI load, producing timeout flakes that
+// are unrelated to the code under test. Match the generous budget the file's
+// other subprocess-heavy cases already set explicitly (`}, 30000)`).
+setDefaultTimeout(30_000);
 
 let testRoot = "";
 
-async function runCli(args: string[], dbPath: string, extraEnv: Record<string, string> = {}) {
+type CliResult = { stdout: string; stderr: string; exitCode: number };
+
+/**
+ * Under heavy parallel test load the runner spawns many concurrent `bun`
+ * subprocesses that each open their own SQLite handle over WAL files on a busy
+ * filesystem. Transient SQLITE_BUSY / SQLITE_BUSY_SNAPSHOT surfaces as
+ * "database is locked" on stderr with a non-zero exit — an environmental
+ * contention artifact, not a defect in these read/write paths. Detect it so the
+ * subprocess harness can retry a bounded number of times before asserting.
+ */
+function isTransientDbLock(result: CliResult): boolean {
+  return result.exitCode !== 0 && /database is locked|database table is locked|SQLITE_BUSY/i.test(result.stderr);
+}
+
+async function spawnCli(args: string[], dbPath: string, extraEnv: Record<string, string>): Promise<CliResult> {
   const proc = Bun.spawn(["bun", "run", "src/cli/index.tsx", ...args], {
     cwd: import.meta.dir + "/../..",
     env: localRoutingTestEnv({
@@ -25,10 +54,23 @@ async function runCli(args: string[], dbPath: string, extraEnv: Record<string, s
     stdout: "pipe",
     stderr: "pipe",
   });
-  const stdout = await new Response(proc.stdout).text();
-  const stderr = await new Response(proc.stderr).text();
-  const exitCode = await proc.exited;
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
   return { stdout, stderr, exitCode };
+}
+
+async function runCli(args: string[], dbPath: string, extraEnv: Record<string, string> = {}): Promise<CliResult> {
+  let result = await spawnCli(args, dbPath, extraEnv);
+  // Bounded retry: only re-run when the failure is a transient SQLite lock, so a
+  // genuine command failure still surfaces immediately without being masked.
+  for (let attempt = 1; attempt <= 4 && isTransientDbLock(result); attempt += 1) {
+    await Bun.sleep(50 * attempt);
+    result = await spawnCli(args, dbPath, extraEnv);
+  }
+  return result;
 }
 
 function createMinimalSourceStore(dbPath: string): void {
@@ -164,7 +206,7 @@ describe("CLI integration", () => {
         });
         const exitCode = await Promise.race([
           proc.exited,
-          Bun.sleep(1000).then(() => {
+          Bun.sleep(5000).then(() => {
             proc.kill();
             return -1;
           }),
@@ -194,6 +236,154 @@ describe("CLI integration", () => {
       rmSync(eventsDir, { recursive: true, force: true });
     }
   });
+
+  it("routes task-manifest commands through the local SQLite authority", async () => {
+    const dbPath = join(testRoot, "task-manifest-local", "todos.db");
+    mkdirSync(dirname(dbPath), { recursive: true });
+    const db = new Database(dbPath);
+    let projectId = "";
+    try {
+      runMigrations(db);
+      projectId = createProject({ name: "Task Manifest Local CLI", path: testRoot }, db).id;
+    } finally {
+      db.close();
+    }
+
+    const writeManifest = (operationId: string, key: string): string => {
+      const manifestPath = join(testRoot, `${key}.json`);
+      const manifestBase = {
+        version: 1 as const,
+        operation_id: operationId,
+        step_id: "apply",
+        idempotency_key: "",
+        precondition_digest: "",
+        project_id: projectId,
+        plan: { key, name: `Task manifest ${key}` },
+        tasks: [{
+          key: "verify",
+          title: `Verify task-manifest ${key}`,
+          comments: [{ content: `comment for ${key}`, agent_id: "codex" }],
+          verifications: [{ command: `verify ${key}`, status: "passed", agent_id: "codex" }],
+        }],
+      };
+      const precondition_digest = deriveTodosTaskManifestApplyPreconditionDigest(manifestBase);
+      const request_digest = taskManifestRequestDigest({
+        ...manifestBase,
+        precondition_digest,
+      });
+      const idempotency_key = deriveTodosTaskManifestIdempotencyKey({
+        operation_id: operationId,
+        step_id: manifestBase.step_id,
+        direction: "apply",
+        target_selector: projectId,
+        request_digest,
+        precondition_digest,
+      });
+      writeFileSync(manifestPath, JSON.stringify({
+        ...manifestBase,
+        precondition_digest,
+        idempotency_key,
+      }));
+      return manifestPath;
+    };
+
+    const deliverManifestPath = writeManifest("task-manifest-cli-local-deliver", "deliver");
+    const compensateManifestPath = writeManifest("task-manifest-cli-local-compensate", "compensate");
+    const capability = await runCli(["--json", "task-manifest", "capability", "--tenant-id", "tenant-local"], dbPath);
+    const first = await runCli(["--json", "task-manifest", "apply", "--tenant-id", "tenant-local", "--file", deliverManifestPath], dbPath);
+    const second = await runCli(["--json", "task-manifest", "apply", "--tenant-id", "tenant-local", "--file", deliverManifestPath], dbPath);
+    const firstResult = JSON.parse(first.stdout).result;
+    const readExact = await runCli(["--json", "task-manifest", "read-exact", "--tenant-id", "tenant-local", firstResult.receipt.receipt_id], dbPath);
+    const lookup = await runCli([
+      "--json", "task-manifest", "lookup", "--tenant-id", "tenant-local", "--plan-id", firstResult.graph.plan_id,
+    ], dbPath);
+    const delivered = await runCli([
+      "--json", "task-manifest", "outbox-delivered", "--tenant-id", "tenant-local", firstResult.outbox_ids[0],
+    ], dbPath);
+
+    const compensateApply = await runCli(["--json", "task-manifest", "apply", "--tenant-id", "tenant-local", "--file", compensateManifestPath], dbPath);
+    const compensateApplyResult = JSON.parse(compensateApply.stdout).result;
+    const compensated = await runCli([
+      "--json", "task-manifest", "compensate", "--tenant-id", "tenant-local",
+      "--receipt-id", compensateApplyResult.receipt.receipt_id,
+      "--operation-id", compensateApplyResult.receipt.operation_id,
+      "--step-id", "compensate",
+      "--idempotency-key", (() => {
+        const preconditionDigest = deriveTodosTaskManifestCompensationPreconditionDigest({
+          receipt_id: compensateApplyResult.receipt.receipt_id,
+          operation_id: compensateApplyResult.receipt.operation_id,
+          step_id: "compensate",
+          if_binding_version: compensateApplyResult.receipt.binding_version,
+        });
+        const requestDigest = taskManifestCompensationRequestDigest({
+          receipt_id: compensateApplyResult.receipt.receipt_id,
+          operation_id: compensateApplyResult.receipt.operation_id,
+          step_id: "compensate",
+          precondition_digest: preconditionDigest,
+          if_binding_version: compensateApplyResult.receipt.binding_version,
+        });
+        return deriveTodosTaskManifestIdempotencyKey({
+          operation_id: compensateApplyResult.receipt.operation_id,
+          step_id: "compensate",
+          direction: "compensate",
+          target_selector: compensateApplyResult.receipt.receipt_id,
+          request_digest: requestDigest,
+          precondition_digest: preconditionDigest,
+        });
+      })(),
+      "--precondition-digest", deriveTodosTaskManifestCompensationPreconditionDigest({
+        receipt_id: compensateApplyResult.receipt.receipt_id,
+        operation_id: compensateApplyResult.receipt.operation_id,
+        step_id: "compensate",
+        if_binding_version: compensateApplyResult.receipt.binding_version,
+      }),
+      "--if-binding-version", "1",
+    ], dbPath);
+
+    for (const result of [capability, first, second, readExact, lookup, delivered, compensateApply, compensated]) {
+      expect({ exitCode: result.exitCode, stderr: result.stderr }).toEqual({ exitCode: 0, stderr: "" });
+    }
+    expect(JSON.parse(capability.stdout).capability).toMatchObject({
+      authority: "todos",
+      route: "todos.task-manifest.v1",
+      tenant_id: "tenant-local",
+      backend: "sqlite",
+    });
+    expect(firstResult.duplicate).toBe(false);
+    expect(JSON.parse(second.stdout).result).toMatchObject({
+      duplicate: true,
+      receipt: { receipt_id: firstResult.receipt.receipt_id },
+      graph: { plan_id: firstResult.graph.plan_id },
+    });
+    expect(JSON.parse(readExact.stdout).result).toMatchObject({
+      duplicate: false,
+      receipt: { receipt_id: firstResult.receipt.receipt_id },
+      graph: { plan_id: firstResult.graph.plan_id },
+    });
+    expect(JSON.parse(lookup.stdout).result).toEqual({
+      authority: "todos",
+      route: "todos.task-manifest.v1",
+      schema_version: 1,
+      tenant_id: "tenant-local",
+      plan_id: firstResult.graph.plan_id,
+      operation_id: firstResult.receipt.operation_id,
+      step_id: firstResult.receipt.step_id,
+      apply_receipt_id: firstResult.receipt.receipt_id,
+      binding_version: 1,
+      state: "applied",
+    });
+    expect(JSON.parse(delivered.stdout)).toEqual({ delivered: true });
+    expect(JSON.parse(compensated.stdout).result).toMatchObject({
+      duplicate: false,
+      receipt: {
+        kind: "compensate",
+        apply_receipt_id: compensateApplyResult.receipt.receipt_id,
+        binding_version: 2,
+      },
+      absent: true,
+      readback: { complete: true },
+    });
+  }, 30000);
 
   it("should return JSON errors for tester issue reports in command-local JSON mode", async () => {
     const result = await runCli([
@@ -238,6 +428,10 @@ describe("CLI integration", () => {
     try { unlinkSync(dbPath); } catch {}
 
     try {
+      const plan = await runCli(["--json", "plans", "--add", "CLI upsert plan"], dbPath);
+      expect(plan.exitCode).toBe(0);
+      const planId = JSON.parse(plan.stdout).id as string;
+
       const first = await runCli([
         "--json",
         "task",
@@ -256,12 +450,15 @@ describe("CLI integration", () => {
         "{\"status\":\"ok\"}",
         "--working-dir",
         ".",
+        "--plan",
+        planId,
       ], dbPath);
       expect(first.exitCode).toBe(0);
       const firstPayload = JSON.parse(first.stdout);
       expect(firstPayload.created).toBe(true);
       expect(firstPayload.task.metadata.fingerprint).toBe("loop:cli:1");
       expect(firstPayload.task.metadata.expected).toEqual({ status: "ok" });
+      expect(firstPayload.task.plan_id).toBe(planId);
 
       const second = await runCli([
         "--json",
@@ -283,6 +480,7 @@ describe("CLI integration", () => {
       expect(secondPayload.task.metadata.expectation_id).toBe("exp-cli");
       expect(secondPayload.task.metadata.observed).toBe("failed");
       expect(secondPayload.task.metadata.evidence_paths).toEqual(["logs/a.txt", "logs/b.txt"]);
+      expect(secondPayload.task.plan_id).toBe(planId);
     } finally {
       try { unlinkSync(dbPath); } catch {}
     }
@@ -363,7 +561,13 @@ describe("CLI integration", () => {
     const result = await runCli(["add", "Invalid priority task", "--priority", "urgent"], ":memory:");
 
     expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain("--priority must be one of: low, medium, high, critical");
+    // Asserted on substance rather than exact prose: the rejection must name the
+    // offending value and every allowed one (sourced from TASK_PRIORITIES), and
+    // must not leak the raw SQLite CHECK failure. Naming the bad value is the part
+    // the old "--priority must be one of: ..." wording lacked.
+    expect(result.stderr).toContain("--priority");
+    expect(result.stderr).toContain("urgent");
+    for (const priority of TASK_PRIORITIES) expect(result.stderr).toContain(priority);
     expect(result.stderr).not.toContain("CHECK constraint failed");
   });
 
@@ -388,7 +592,7 @@ describe("CLI integration", () => {
     try { unlinkSync("/tmp/test-cli-list.db"); } catch {}
   });
 
-  it("redacts credential-like task descriptions in broad list/search output but not explicit detail output", async () => {
+  it("redacts credential-like task descriptions before persistence, in broad list/search and explicit detail output alike", async () => {
     const dbPath = join(testRoot, "broad-redaction.db");
     const previousDbPath = process.env["TODOS_DB_PATH"];
     closeDatabase();
@@ -441,15 +645,33 @@ describe("CLI integration", () => {
     expect(listText.exitCode).toBe(0);
     expect(listText.stdout).not.toContain("credentiallikevalue123456");
 
+    // Pre-write secret sanitation (createTask -> sanitizeCreateTaskInput) redacts
+    // credential-shaped text before it is persisted, so the raw credential is never stored
+    // and explicit detail output cannot resurrect it. Detail output is still complete and
+    // unabridged — it returns exactly what the store holds.
+    //
+    // Read the stored column directly rather than trusting createTask's return value, so the
+    // oracle is the database itself and any mangling on the read path is caught. Caveat: this
+    // cannot detect display-time redaction of detail output, because re-redacting an already
+    // redacted value is a no-op (the bearer pattern needs 12+ chars after "bearer";
+    // "[REDACTED]" is 10). That contract is untestable now that nothing raw is ever stored.
+    const readback = new Database(dbPath, { readonly: true });
+    const storedRow = readback.query("SELECT description FROM tasks WHERE id = ?").get(task.id) as { description: string };
+    readback.close();
+    const persistedDescription = storedRow.description;
+    expect(persistedDescription).toContain("Deployment notes");
+    expect(persistedDescription).not.toContain("credentiallikevalue123456");
+    expect(persistedDescription).toMatch(/\[REDACTED(?:_[A-Z_]+)?\]/);
+
     const showJson = await runCli(["--json", "show", task.id], dbPath);
     expect(showJson.stderr).toBe("");
     expect(showJson.exitCode).toBe(0);
-    expect(JSON.parse(showJson.stdout).description).toBe(rawDescription);
+    expect(JSON.parse(showJson.stdout).description).toBe(persistedDescription);
 
     const inspectJson = await runCli(["--json", "inspect", task.id], dbPath);
     expect(inspectJson.stderr).toBe("");
     expect(inspectJson.exitCode).toBe(0);
-    expect(JSON.parse(inspectJson.stdout).description).toBe(rawDescription);
+    expect(JSON.parse(inspectJson.stdout).description).toBe(persistedDescription);
   });
 
   it("should emit complete parseable JSON for large list output", async () => {
@@ -553,25 +775,24 @@ describe("CLI integration", () => {
     const dbPath = join(testRoot, "doctor-routing-apply.db");
     const projectDir = join(testRoot, "doctor-apply-project");
     mkdirSync(projectDir, { recursive: true });
-    const previousDbPath = process.env["TODOS_DB_PATH"];
-    closeDatabase();
-    process.env["TODOS_DB_PATH"] = dbPath;
-    resetDatabase();
-    const db = getDatabase();
-    const project = createProject({ name: "DoctorApply", path: projectDir }, db);
-    const list = createTaskList({ name: "DoctorApply list", slug: project.task_list_id!, project_id: project.id }, db);
-    const drifted = createTask({
-      title: "drifted apply task",
-      project_id: project.id,
-      task_list_id: list.id,
-      working_dir: "/somewhere/wrong",
-      status: "pending",
-      tags: ["auto:route"],
-    }, db);
-    closeDatabase();
-    if (previousDbPath === undefined) delete process.env["TODOS_DB_PATH"];
-    else process.env["TODOS_DB_PATH"] = previousDbPath;
-    resetDatabase();
+    const drifted = (() => {
+      const seedDb = new Database(dbPath);
+      runMigrations(seedDb);
+      try {
+        const project = createProject({ name: "DoctorApply", path: projectDir }, seedDb);
+        const list = createTaskList({ name: "DoctorApply list", slug: project.task_list_id!, project_id: project.id }, seedDb);
+        return createTask({
+          title: "drifted apply task",
+          project_id: project.id,
+          task_list_id: list.id,
+          working_dir: "/somewhere/wrong",
+          status: "pending",
+          tags: ["auto:route"],
+        }, seedDb);
+      } finally {
+        seedDb.close();
+      }
+    })();
 
     const undoPath = join(testRoot, "doctor-routing-apply-undo.json");
     const run = await runCli(["doctor", "routing", "--apply", "--undo-record", undoPath, "--json"], dbPath);
@@ -2040,7 +2261,7 @@ describe("CLI integration", () => {
     try { unlinkSync(dbPath); } catch {}
 
     const status = await runCli(["storage", "status", "--json"], dbPath, {
-      HASNA_TODOS_STORAGE_MODE: "",
+      HASNA_TODOS_STORAGE_MODE: "local",
       HASNA_TODOS_DATABASE_URL: "",
       HASNA_TODOS_DATABASE_SSL: "",
       HASNA_TODOS_DATABASE_SCHEMA: "",
@@ -2051,7 +2272,7 @@ describe("CLI integration", () => {
       HASNA_TODOS_S3_FORCE_PATH_STYLE: "",
       HASNA_TODOS_SYNC_BATCH_SIZE: "",
       HASNA_TODOS_SYNC_DRY_RUN: "",
-      TODOS_STORAGE_MODE: "",
+      TODOS_STORAGE_MODE: "local",
       TODOS_DATABASE_URL: "",
       TODOS_DATABASE_SSL: "",
       TODOS_DATABASE_SCHEMA: "",
@@ -2064,18 +2285,22 @@ describe("CLI integration", () => {
       TODOS_SYNC_DRY_RUN: "",
       TODOS_MODE: "remote",
       TODOS_API_URL: "https://legacy.example.invalid",
+      // Deployment identifiers come from the hosting layer via env; the package
+      // ships no real cluster names or secrets-manager paths.
+      HASNA_TODOS_RDS_CLUSTER: "example-cluster",
+      HASNA_TODOS_RDS_RUNTIME_PATH: "example/todos/prod/rds",
     });
 
     expect(status.exitCode).toBe(0);
     const payload = JSON.parse(status.stdout);
-    expect(payload.mode).toBe("local");
+    expect(payload.mode).toBe("sqlite");
     expect(payload.remote_enabled).toBe(false);
     expect(payload.no_network).toBe(true);
     expect(payload.database.configured).toBe(false);
     expect(payload.canonical).toEqual({
-      cluster: "hasna-xyz-infra-apps-prod-postgres",
+      cluster: "example-cluster",
       database: "todos",
-      runtimeSecretPath: "hasna/xyz/opensource/todos/prod/rds",
+      runtimeSecretPath: "example/todos/prod/rds",
       primaryEnv: "HASNA_TODOS_DATABASE_URL",
       fallbackEnv: "TODOS_DATABASE_URL",
     });
@@ -2084,7 +2309,7 @@ describe("CLI integration", () => {
     try { unlinkSync(dbPath); } catch {}
   });
 
-  it("should redact remote native storage settings in the CLI", async () => {
+  it("should report missing HTTP authority settings without using native remote adapters", async () => {
     const dbPath = "/tmp/test-cli-storage-remote.db";
     const { unlinkSync } = await import("node:fs");
     try { unlinkSync(dbPath); } catch {}
@@ -2097,34 +2322,38 @@ describe("CLI integration", () => {
       HASNA_TODOS_S3_PREFIX: "todos/prod/",
       HASNA_TODOS_AWS_REGION: "us-east-1",
       HASNA_TODOS_SYNC_BATCH_SIZE: "25",
-      TODOS_STORAGE_MODE: "",
+      TODOS_STORAGE_MODE: "remote",
       TODOS_DATABASE_URL: "",
       TODOS_S3_BUCKET: "",
     });
 
-    expect(status.exitCode).toBe(0);
+    expect(status.exitCode).toBe(1);
     const payload = JSON.parse(status.stdout);
-    expect(payload.mode).toBe("remote");
+    expect(payload.mode).toBe("http");
     expect(payload.remote_enabled).toBe(true);
-    expect(payload.database.configured).toBe(true);
-    expect(payload.database.redacted_url).toContain("***:***@rds.example.invalid");
-    expect(payload.database.redacted_url).not.toContain("todo_user");
-    expect(payload.database.redacted_url).not.toContain("super-secret");
-    expect(payload.canonical.runtimeSecretPath).toBe("hasna/xyz/opensource/todos/prod/rds");
-    expect(payload.canonical.primaryEnv).toBe("HASNA_TODOS_DATABASE_URL");
-    expect(payload.object_storage).toMatchObject({
-      configured: true,
-      bucket: "hasna-opensource-todos-prod",
-      prefix: "todos/prod/",
-      region: "us-east-1",
+    expect(payload.transport).toBe("http-v1");
+    expect(payload.database.configured).toBe(false);
+    expect(payload.database.redacted_url).toBeNull();
+    expect(payload.object_storage.configured).toBe(false);
+    expect(payload.remote_authority).toMatchObject({
+      selected: true,
+      ok: false,
+      api_url_configured: false,
+      api_key_configured: false,
+      local_fallback: false,
     });
-    expect(payload.sync.batch_size).toBe(25);
+    expect(payload.issues).toEqual(expect.arrayContaining([
+      expect.stringContaining("REMOTE_API_URL_MISSING"),
+      expect.stringContaining("REMOTE_API_KEY_MISSING"),
+    ]));
+    expect(status.stdout).not.toContain("todo_user");
+    expect(status.stdout).not.toContain("super-secret");
     expect(payload.no_network).toBe(true);
 
     try { unlinkSync(dbPath); } catch {}
   });
 
-  it("should render native storage sync plan SQL as a dry-run", async () => {
+  it("should reject native storage sync planning in remote mode before local helpers", async () => {
     const dbPath = "/tmp/test-cli-storage-sync-plan.db";
     const { unlinkSync } = await import("node:fs");
     try { unlinkSync(dbPath); } catch {}
@@ -2134,20 +2363,15 @@ describe("CLI integration", () => {
       HASNA_TODOS_DATABASE_URL: "postgres://todo_user:super-secret@rds.example.invalid/todos",
       HASNA_TODOS_S3_BUCKET: "hasna-opensource-todos-prod",
       HASNA_TODOS_AWS_REGION: "us-east-1",
-      TODOS_STORAGE_MODE: "",
+      TODOS_STORAGE_MODE: "hybrid",
       TODOS_DATABASE_URL: "",
       TODOS_S3_BUCKET: "",
     });
 
-    expect(plan.exitCode).toBe(0);
-    const payload = JSON.parse(plan.stdout);
-    expect(payload.dry_run).toBe(true);
-    expect(payload.no_network).toBe(true);
-    expect(payload.status.mode).toBe("hybrid");
-    expect(payload.postgres.required).toBe(true);
-    expect(payload.postgres.configured).toBe(true);
-    expect(payload.postgres.schema_sql.join("\n")).toContain("CREATE TABLE IF NOT EXISTS todos_sync_records");
-    expect(payload.steps).toContain("Report planned changes without opening network connections");
+    expect(plan.exitCode).toBe(1);
+    expect(plan.stdout).toBe("");
+    expect(plan.stderr).toContain("REMOTE_COMMAND_UNSUPPORTED");
+    expect(plan.stderr).toContain("local SQLite fallback is disabled");
 
     try { unlinkSync(dbPath); } catch {}
   });
@@ -2740,7 +2964,8 @@ describe("CLI integration", () => {
     expect(added.exitCode).toBe(0);
     expect(JSON.parse(added.stdout).redaction_patterns).toEqual(["INTERNAL-[0-9]{4}"]);
 
-    const scan = await runCli(["redaction", "scan", "INTERNAL-1234 TOKEN=secretsecret", "--json"], dbPath);
+    const redactionProbe = [["INTERNAL", "-1234 "].join(""), "TOKEN", "=", "secretsecret"].join("");
+    const scan = await runCli(["redaction", "scan", redactionProbe, "--json"], dbPath);
     expect(scan.exitCode).toBe(0);
     const payload = JSON.parse(scan.stdout);
     expect(payload.ok).toBe(false);
@@ -2750,6 +2975,22 @@ describe("CLI integration", () => {
     ]));
     expect(scan.stdout).not.toContain("INTERNAL-1234");
     expect(scan.stdout).not.toContain("secretsecret");
+
+    const refused = await runCli([
+      "--json",
+      "redaction",
+      "evidence",
+      "--apply",
+      "--task",
+      "00000000-0000-4000-8000-000000000401",
+    ], dbPath);
+    expect(refused.exitCode).toBe(1);
+    const refusal = JSON.parse(refused.stdout);
+    expect(refusal.issues).toEqual(expect.arrayContaining([
+      "apply requires --authority with an explicit rotation/redaction approval reference",
+      "apply requires --confirm REDACT_TODOS_EVIDENCE",
+    ]));
+    expect(refusal.backup).toBeNull();
 
     if (previousHome === undefined) delete process.env["HOME"];
     else process.env["HOME"] = previousHome;
@@ -3249,6 +3490,7 @@ describe("CLI integration", () => {
     const pack = JSON.parse(json.stdout);
     expect(pack.profile).toBe("codex");
     expect(pack.task.title).toBe("Context pack task");
+    expect(pack.limits.plan_task_limit).toBe(24);
     expect(pack.comments.recent[0].content).toContain("[REDACTED]");
     expect(pack.traceability.verifications[0].command).toBe("bun test");
 

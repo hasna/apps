@@ -11,6 +11,7 @@ import { linkTaskGitRef, linkTaskToCommit } from "../db/task-commits.js";
 import { addDependency, createCalendarItem, createTask, createTaskBoard, getTask, listCalendarItems, listTaskBoards, listTasks } from "../db/tasks.js";
 import { addTaskRunArtifact, addTaskRunCommand, addTaskRunFile, finishTaskRun, startTaskRun, verifyTaskRunArtifacts } from "../db/task-runs.js";
 import { resetConfig, saveConfig } from "./config.js";
+import { createEncryptedBridgeBundle, decryptBridgeBundle, upsertEncryptionProfile } from "./local-encryption.js";
 import {
   TODOS_LOCAL_BRIDGE_KIND,
   createLocalBridgeBundle,
@@ -32,6 +33,7 @@ afterEach(() => {
   rmSync(process.env["HASNA_TODOS_ARTIFACTS_DIR"] || "", { recursive: true, force: true });
   delete process.env["TODOS_DB_PATH"];
   delete process.env["HASNA_TODOS_ARTIFACTS_DIR"];
+  delete process.env["TODOS_TEST_ENCRYPTION_KEY"];
   resetConfig();
 });
 
@@ -152,6 +154,46 @@ describe("local bridge import/export", () => {
     expect(exported).not.toContain("commercial-secret");
     expect(bundle.data.comments[0]!.content).toBe("legacy [REDACTED]");
     expect(bundle.data.tasks[0]!.metadata.license).toBe("[REDACTED]");
+  });
+
+  test("redacts bridge exports by default and sanitizes unsafe encrypted imports", () => {
+    process.env["TODOS_TEST_ENCRYPTION_KEY"] = "local bridge prewrite test key";
+    upsertEncryptionProfile({ name: "secure", key_env: "TODOS_TEST_ENCRYPTION_KEY" });
+    const fakeToken = ["ghp", "cccccccccccccccccccccccccccccccccccccc"].join("_");
+    const db = getDatabase();
+    const project = createProject({ name: "Bridge secrets", path: "/tmp/bridge-secrets" }, db);
+    const task = createTask({ title: "Legacy row", project_id: project.id }, db);
+    db.run("UPDATE tasks SET title = ?, description = ?, metadata = ? WHERE id = ?", [
+      `legacy ${fakeToken}`,
+      `description ${fakeToken}`,
+      JSON.stringify({ token: fakeToken }),
+      task.id,
+    ]);
+    db.run("INSERT INTO task_comments (id, task_id, content, type, created_at) VALUES (?, ?, ?, ?, ?)", [
+      "legacy-secret-comment",
+      task.id,
+      `comment ${fakeToken}`,
+      "comment",
+      "2026-01-02T03:04:05.000Z",
+    ]);
+
+    const redacted = createLocalBridgeBundle({ project_id: project.id }, db);
+    expect(JSON.stringify(redacted)).not.toContain(fakeToken);
+
+    const unsafe = createLocalBridgeBundle({ project_id: project.id, redaction: "unsafe_plaintext" }, db);
+    expect(JSON.stringify(unsafe)).toContain(fakeToken);
+    const encrypted = createEncryptedBridgeBundle(unsafe, { profile: "secure" });
+    expect(JSON.stringify(encrypted)).not.toContain(fakeToken);
+
+    closeDatabase();
+    process.env["TODOS_DB_PATH"] = ":memory:";
+    resetDatabase();
+    const targetDb = getDatabase();
+    const decrypted = decryptBridgeBundle<typeof unsafe>(encrypted);
+    const applied = importLocalBridgeBundle(decrypted, { dryRun: false }, targetDb);
+    expect(applied.inserted.tasks).toBe(1);
+    expect(JSON.stringify(listTasks({}, targetDb))).not.toContain(fakeToken);
+    delete process.env["TODOS_TEST_ENCRYPTION_KEY"];
   });
 
   test("previews conflicts without mutation and imports missing records when applied", () => {

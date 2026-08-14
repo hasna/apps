@@ -139,7 +139,7 @@ function normalizeKey(value: string): string {
   return value.trim().toLowerCase().replace(/[^a-z0-9._:/-]+/g, "-").replace(/^-+|-+$/g, "");
 }
 
-function normalizeFingerprint(value: string): string {
+export function normalizeTaskFindingFingerprint(value: string): string {
   const normalized = normalizeKey(value);
   if (!normalized) throw new Error("finding fingerprint is required");
   return normalized.slice(0, 240);
@@ -257,7 +257,7 @@ function nextFinding(input: UpsertTaskFindingInput, db: Database): {
   artifact_path: string | null;
   metadata: Record<string, unknown>;
 } {
-  const fingerprint = normalizeFingerprint(input.fingerprint);
+  const fingerprint = normalizeTaskFindingFingerprint(input.fingerprint);
   const title = redactOptional(input.title, 300);
   if (!title) throw new Error("finding title is required");
   return {
@@ -417,7 +417,7 @@ export function resolveMissingTaskFindings(input: ResolveMissingFindingsInput, d
   const timestamp = input.resolved_at || now();
   const status = normalizeResolutionStatus(input.status);
   const runId = resolveRunForTask(input.run_id, input.task_id, d);
-  const present = new Set(input.fingerprints.map(normalizeFingerprint));
+  const present = new Set(input.fingerprints.map(normalizeTaskFindingFingerprint));
   const warnings: string[] = [];
   const conditions: string[] = ["task_id = ?", "status = 'open'"];
   const params: unknown[] = [input.task_id];

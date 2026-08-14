@@ -1,4 +1,6 @@
 import type { Database } from "bun:sqlite";
+import { TaskReferenceAmbiguousError, type Task, type TaskFilter } from "../types/index.js";
+import { searchTasks } from "../lib/search.js";
 import {
   createTask,
   getTask,
@@ -10,6 +12,7 @@ import {
   startTask,
   completeTask,
   failTask,
+  handoffStaleTaskLock,
   claimNextTask,
   getNextTask,
   getActiveWork,
@@ -26,6 +29,7 @@ import {
 } from "../db/projects.js";
 import {
   createPlan,
+  completePlanAtRevision,
   getPlan,
   listPlans,
   updatePlan,
@@ -45,6 +49,7 @@ import {
   listTaskLists,
   updateTaskList,
   deleteTaskList,
+  deleteTaskListIfUnchangedAndUnused,
 } from "../db/task-lists.js";
 import {
   createTemplate,
@@ -61,6 +66,13 @@ import {
 } from "../db/audit.js";
 import { addComment, listComments } from "../db/comments.js";
 import { getDatabase } from "../db/database.js";
+import { scanSqliteIntegrity } from "../db/integrity.js";
+import {
+  applyPlanProjectLinkSqlite,
+  getPlanProjectLinkReceipt,
+  getPlanProjectLinkReceiptByIdempotencyKey,
+  rollbackPlanProjectLinkSqlite,
+} from "../db/plan-project-links.js";
 import type { TodosStorageAdapter } from "./interfaces.js";
 import {
   exportSqliteTodosStorageSnapshot,
@@ -69,6 +81,101 @@ import {
 
 export interface CreateLocalSqliteTodosStorageAdapterOptions {
   db?: Database;
+}
+
+const TASK_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Bounded resolution of a non-UUID task reference (exact `short_id`, or a unique
+ * task-`id` prefix) to its full task. Mirrors {@link resolvePartialId} matching
+ * order (id-prefix first, then short_id) but distinguishes ambiguity from
+ * not-found so the caller can surface a 409 rather than a silent 404. Every query
+ * is `LIMIT 2` and hits the `tasks` primary key / `short_id`, so it never scans
+ * the whole table.
+ */
+function resolveTaskRefLocal(db: Database, ref: string): Task | null {
+  // Case-insensitive, matching the CLI's historical resolution: ids are stored
+  // lower-case, short_ids upper-case.
+  const raw = ref.trim().toLowerCase();
+  if (!raw) return null;
+  if (TASK_UUID_RE.test(raw)) return getTask(raw, db);
+
+  const prefixRows = db
+    .query("SELECT id, project_id FROM tasks WHERE LOWER(id) LIKE ? ESCAPE '\\' ORDER BY project_id, id LIMIT 2")
+    .all(`${raw.replace(/[\\%_]/g, (c) => `\\${c}`)}%`) as Array<{ id: string; project_id: string | null }>;
+  if (prefixRows.length > 1) {
+    throw new TaskReferenceAmbiguousError(
+      ref,
+      prefixRows.map((row) => ({ task_id: row.id, project_id: row.project_id })),
+    );
+  }
+  if (prefixRows.length === 1) return getTask(prefixRows[0]!.id, db);
+
+  const shortIdRows = db
+    .query("SELECT id, project_id FROM tasks WHERE LOWER(short_id) = ? ORDER BY project_id, id LIMIT 2")
+    .all(raw) as Array<{ id: string; project_id: string | null }>;
+  if (shortIdRows.length > 1) {
+    throw new TaskReferenceAmbiguousError(
+      ref,
+      shortIdRows.map((row) => ({ task_id: row.id, project_id: row.project_id })),
+    );
+  }
+  if (shortIdRows.length === 1) return getTask(shortIdRows[0]!.id, db);
+
+  return null;
+}
+
+function isSearchQuery(filter: TaskFilter): boolean {
+  const q = filter.query?.trim();
+  return !!q && q !== "*";
+}
+
+/**
+ * TaskFilter fields the FTS `searchTasks` path does not itself constrain but the
+ * Postgres adapter's buildTaskFilterSql does. Applied in JS after the FTS match
+ * so a SQLite-backed `/v1/tasks?q=` behaves like the Postgres one (e.g. subtasks
+ * excluded by default).
+ */
+function matchesExtraFilters(task: Task, filter: TaskFilter): boolean {
+  if (filter.ids && !filter.ids.includes(task.id)) return false;
+  if (filter.parent_id !== undefined && (task.parent_id ?? null) !== filter.parent_id) return false;
+  if (filter.plan_id !== undefined && task.plan_id !== filter.plan_id) return false;
+  if (filter.session_id !== undefined && task.session_id !== filter.session_id) return false;
+  if (filter.has_recurrence !== undefined && Boolean(task.recurrence_rule) !== filter.has_recurrence) return false;
+  if (filter.task_type !== undefined) {
+    const allowed = Array.isArray(filter.task_type) ? filter.task_type : [filter.task_type];
+    if (!allowed.includes(task.task_type ?? "")) return false;
+  }
+  if (filter.tags?.length) {
+    const taskTags = new Set(task.tags ?? []);
+    if (!filter.tags.every((tag) => taskTags.has(tag))) return false;
+  }
+  // include_subtasks defaults to false: exclude tasks that have a parent, unless
+  // a parent_id filter is explicitly targeting children.
+  if (filter.include_subtasks !== true && filter.parent_id === undefined && task.parent_id) return false;
+  return true;
+}
+
+/**
+ * Route a free-text `filter.query` through the local FTS5 search (searchTasks),
+ * then apply the remaining TaskFilter constraints, so the storage abstraction's
+ * `tasks.list` honors search on SQLite exactly as the Postgres adapter does.
+ * Without a query, defers to the plain indexed listTasks.
+ */
+function listTasksMaybeSearch(filter: TaskFilter, db: Database): Task[] {
+  if (!isSearchQuery(filter)) return listTasks(filter, db);
+  const matched = searchTasks({
+    query: filter.query,
+    project_id: filter.project_id,
+    task_list_id: filter.task_list_id,
+    status: filter.status,
+    priority: filter.priority,
+    assigned_to: filter.assigned_to,
+    agent_id: filter.agent_id,
+  }, undefined, undefined, db).filter((task) => matchesExtraFilters(task, filter));
+  const offset = filter.offset && filter.offset > 0 ? Math.trunc(filter.offset) : 0;
+  if (filter.limit !== undefined && filter.limit >= 0) return matched.slice(offset, offset + filter.limit);
+  return offset ? matched.slice(offset) : matched;
 }
 
 export function createLocalSqliteTodosStorageAdapter(
@@ -87,15 +194,32 @@ export function createLocalSqliteTodosStorageAdapter(
       sync: true,
     },
     tasks: {
-      create: (input) => createTask(input, database()),
+      // The principal arrives as context.agentId — a self-hosted SQLite-backed /v1
+      // server is a supported deployment shape, and dropping the context here
+      // reproduced the exact defect this field exists to close: the server knowing
+      // who called and discarding it. Mirrors the Postgres adapter.
+      create: (input, context) =>
+        createTask(
+          {
+            ...input,
+            agent_id: input.agent_id ?? context?.agentId,
+            created_by: input.created_by ?? input.agent_id ?? context?.agentId,
+          },
+          database(),
+        ),
       get: (id) => getTask(id, database()),
-      list: (filter = {}) => listTasks(filter, database()),
-      count: (filter = {}) => countTasks(filter, database()),
+      resolveRef: (ref) => resolveTaskRefLocal(database(), ref),
+      list: (filter = {}) => listTasksMaybeSearch(filter, database()),
+      count: (filter = {}) =>
+        isSearchQuery(filter)
+          ? listTasksMaybeSearch({ ...filter, limit: undefined, offset: undefined }, database()).length
+          : countTasks(filter, database()),
       update: (id, input) => updateTask(id, input, database()),
       unlock: (id, agentId) => {
         unlockTask(id, agentId, database());
         return true;
       },
+      handoffStaleLock: (input) => handoffStaleTaskLock(input, database()),
       delete: (id) => deleteTask(id, database()),
       start: (id, agentId) => startTask(id, agentId, database()),
       complete: (id, agentId, options) => completeTask(id, agentId, database(), options),
@@ -119,7 +243,15 @@ export function createLocalSqliteTodosStorageAdapter(
       get: (id) => getPlan(id, database()),
       list: (projectId) => listPlans(projectId, database()),
       update: (id, input) => updatePlan(id, input, database()),
+      completeAtRevision: (id, expectedUpdatedAt) =>
+        completePlanAtRevision(id, expectedUpdatedAt, database()),
       delete: (id) => deletePlan(id, database()),
+    },
+    planProjectLinks: {
+      apply: (input) => applyPlanProjectLinkSqlite(input, database()),
+      rollback: (input) => rollbackPlanProjectLinkSqlite(input, database()),
+      getReceipt: (receiptId) => getPlanProjectLinkReceipt(receiptId, database()),
+      getReceiptByIdempotencyKey: (key) => getPlanProjectLinkReceiptByIdempotencyKey(key, database()),
     },
     agents: {
       register: (input) => registerAgent(input, database()),
@@ -135,6 +267,8 @@ export function createLocalSqliteTodosStorageAdapter(
       list: (projectId) => listTaskLists(projectId, database()),
       update: (id, input) => updateTaskList(id, input, database()),
       delete: (id) => deleteTaskList(id, database()),
+      deleteIfUnchangedAndUnused: (id, expected) =>
+        deleteTaskListIfUnchangedAndUnused(id, expected, database()),
     },
     templates: {
       create: (input) => createTemplate(input, database()),
@@ -173,6 +307,9 @@ export function createLocalSqliteTodosStorageAdapter(
       getTasksChangedSince: (since, filters) => getTasksChangedSince(since, filters, database()),
       exportSnapshot: () => exportSqliteTodosStorageSnapshot(database()),
       importSnapshot: (snapshot) => importSqliteTodosStorageSnapshot(snapshot, database()),
+    },
+    integrity: {
+      report: () => scanSqliteIntegrity(database()),
     },
     transaction: (fn) => {
       const tx = database().transaction(() => fn(adapter));

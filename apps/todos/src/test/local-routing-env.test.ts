@@ -7,6 +7,7 @@ describe("localRoutingTestEnv", () => {
 
     expect(env.HASNA_TODOS_STORAGE_MODE).toBe("local");
     expect(env.TODOS_STORAGE_MODE).toBe("local");
+    expect(env.HASNA_TODOS_DB_PATH).toBe("");
     expect(env.HASNA_TODOS_API_URL).toBe("");
     expect(env.HASNA_TODOS_API_KEY).toBe("");
     expect(env.TODOS_API_URL).toBe("");

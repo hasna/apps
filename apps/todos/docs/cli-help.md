@@ -39,6 +39,18 @@ contracts, error behavior, and the generated command catalog. JSON mode is
 intended for docs automation and smoke tests that keep help text and completion
 output aligned with the CLI.
 
+## project-rename
+
+Rename a project slug. Cascades to matching task lists. Task prefixes (e.g.
+APP-00001) are unchanged.
+
+Options: `--name <name>` (also update the project display name), `-j` /
+`--json` (output as JSON).
+
+```bash
+todos project-rename my-project new-slug --name "New Name"
+```
+
 ## Deterministic Task Upsert
 
 Deterministic loops can create or refresh the same task by stable fingerprint:

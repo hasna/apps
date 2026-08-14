@@ -7,10 +7,15 @@ import type {
   CreateTaskListInput,
   CreateTemplateInput,
   Plan,
+  PlanProjectLinkReceipt,
+  PlanProjectLinkRollbackResult,
+  PlanProjectLinkResult,
   Project,
   RegisterAgentInput,
   RenameProjectInput,
   RenameProjectResult,
+  StaleLockHandoffInput,
+  StaleLockHandoffReceipt,
   Task,
   TaskComment,
   TaskDependency,
@@ -18,12 +23,14 @@ import type {
   TaskHistory,
   TaskList,
   TaskTemplate,
+  TemplateTask,
   TemplateWithTasks,
   UpdatePlanInput,
   UpdateProjectInput,
   UpdateTaskInput,
   UpdateTaskListInput,
 } from "../types/index.js";
+import type { IntegrityReport } from "../lib/integrity.js";
 
 export type MaybePromise<T> = T | Promise<T>;
 
@@ -52,6 +59,8 @@ export interface TodosStorageAdapter {
   readonly tasks: TodosTaskStore;
   readonly projects: TodosProjectStore;
   readonly plans: TodosPlanStore;
+  /** Atomic guarded linkage for one existing plan and every current member task. */
+  readonly planProjectLinks?: TodosPlanProjectLinkStore;
   readonly agents: TodosAgentStore;
   readonly taskLists: TodosTaskListStore;
   readonly templates: TodosTemplateStore;
@@ -60,7 +69,7 @@ export interface TodosStorageAdapter {
   /**
    * Task dependency edges. Optional because only the cloud/remote adapters expose
    * it through the `/v1` API — the local CLI/MCP paths call the sqlite `db/*`
-   * helpers directly. Present on the Postgres (self_hosted) adapter.
+   * helpers directly. Present on the Postgres adapter.
    */
   readonly dependencies?: TodosDependencyStore;
   /** Task verification records (optional; present on the Postgres adapter). */
@@ -69,7 +78,27 @@ export interface TodosStorageAdapter {
   readonly commits?: TodosCommitStore;
   /** Git branch/PR ref links (optional; present on the Postgres adapter). */
   readonly gitRefs?: TodosGitRefStore;
+  /**
+   * Referential-integrity counts (orphaned and dangling project / task-list
+   * references) computed SQL-side by the backing engine.
+   *
+   * Implemented by BOTH the SQLite and the Postgres adapters: a check that exists
+   * for only one engine reports healthy on the other, which is exactly how five
+   * figures of orphaned rows stayed invisible. Optional on the interface only so a
+   * third-party adapter is not broken by the addition — `GET /v1/integrity`
+   * answers 501 when it is absent, and doctor reports the conditions as
+   * UNVERIFIED rather than clean.
+   */
+  readonly integrity?: TodosIntegrityStore;
   transaction?<T>(fn: (adapter: TodosStorageAdapter) => MaybePromise<T>, context?: TodosStorageContext): MaybePromise<T>;
+}
+
+export interface TodosIntegrityStore {
+  /**
+   * Count every condition in `INTEGRITY_CONDITIONS` against the backing store.
+   * Report-only: it must never repair, delete or rewrite a row.
+   */
+  report(context?: TodosStorageContext): MaybePromise<IntegrityReport>;
 }
 
 export interface TodosTaskCommitRecord {
@@ -131,8 +160,22 @@ export interface TodosLockResult {
   error?: string;
 }
 
+/**
+ * A task's raw dependency edges as served by `GET /v1/tasks/:id/dependencies`.
+ * `dependencies` are the OUTGOING edges (this task depends on `depends_on`);
+ * `blocks` are the INCOMING edges (their `task_id` depends on this task).
+ *
+ * `blocked_by` is a DEPRECATED wire alias that carries the SAME contents as
+ * `blocks` (the incoming/dependent edges — despite what the name suggests).
+ * It is kept because fleet clients up to @hasna/todos 0.13.1 read it for the
+ * `Blocks:` rendering and the show/inspect hydration; renaming it server-side
+ * would silently flip their display (regression 4599ef37). New consumers must
+ * read `blocks`.
+ */
 export interface TodosTaskDependencies {
   dependencies: TaskDependency[];
+  blocks: TaskDependency[];
+  /** @deprecated legacy wire alias of {@link TodosTaskDependencies.blocks}. */
   blocked_by: TaskDependency[];
 }
 
@@ -142,7 +185,7 @@ export interface TodosDependencyStore {
   list(taskId: string, context?: TodosStorageContext): MaybePromise<TodosTaskDependencies>;
   /**
    * Every dependency edge in the dataset. Optional — present on the Postgres
-   * (self_hosted) adapter so the CLI can derive blocked/ready/sprint/recap
+   * adapter so the CLI can derive blocked/ready/sprint/recap
    * dependency analytics over the shared cloud set in one round trip.
    */
   listAll?(context?: TodosStorageContext): MaybePromise<TaskDependency[]>;
@@ -177,6 +220,17 @@ export interface TodosVerificationStore {
 export interface TodosTaskStore {
   create(input: CreateTaskInput, context?: TodosStorageContext): MaybePromise<Task>;
   get(id: string, context?: TodosStorageContext): MaybePromise<Task | null>;
+  /**
+   * Resolve a task reference that is NOT already a full UUID — an exact `short_id`
+   * (e.g. `OPE2-00125`) or a unique task-`id` prefix — to the single matching task,
+   * or `null` when nothing matches. Throws when a prefix or short ID is ambiguous
+   * (matches more than one task), including the candidate project IDs. This is a
+   * BOUNDED, index/SQL-side lookup: it must never load the whole task set. It exists
+   * so the `/v1/tasks/:ref` route can resolve short refs server-side instead of the
+   * CLI paging every task over HTTP to resolve them.
+   * Optional — an adapter that only ever receives full UUIDs may omit it.
+   */
+  resolveRef?(ref: string, context?: TodosStorageContext): MaybePromise<Task | null>;
   list(filter?: TaskFilter, context?: TodosStorageContext): MaybePromise<Task[]>;
   count(filter?: Omit<TaskFilter, "limit" | "offset">, context?: TodosStorageContext): MaybePromise<number>;
   update(id: string, input: UpdateTaskInput, context?: TodosStorageContext): MaybePromise<Task>;
@@ -198,6 +252,15 @@ export interface TodosTaskStore {
   lock?(id: string, agentId: string, context?: TodosStorageContext): MaybePromise<TodosLockResult>;
   /** Release a lock. Optional — cloud adapters only. */
   unlock?(id: string, agentId?: string, context?: TodosStorageContext): MaybePromise<boolean>;
+  /**
+   * Atomically transfer one exact stale lock by holder + immutable lock
+   * version. Optional for third-party adapters; the v1 route fails closed with
+   * 501 when the backing store cannot provide the CAS.
+   */
+  handoffStaleLock?(
+    input: StaleLockHandoffInput,
+    context?: TodosStorageContext,
+  ): MaybePromise<StaleLockHandoffReceipt>;
   /**
    * Resolve the single task carrying `metadata.fingerprint === fingerprint` in the
    * shared dataset, or null. Backs the `/v1/tasks/upsert` idempotent create-or-update
@@ -222,7 +285,48 @@ export interface TodosPlanStore {
   get(id: string, context?: TodosStorageContext): MaybePromise<Plan | null>;
   list(projectId?: string, context?: TodosStorageContext): MaybePromise<Plan[]>;
   update(id: string, input: UpdatePlanInput, context?: TodosStorageContext): MaybePromise<Plan>;
+  /**
+   * Atomically complete one plan only when its stored revision exactly matches
+   * the caller's observation. Optional for third-party adapters; `/v1/import`
+   * fails closed when the backing store cannot provide this CAS.
+   */
+  completeAtRevision?(
+    id: string,
+    expectedUpdatedAt: string,
+    context?: TodosStorageContext,
+  ): MaybePromise<TodosPlanCompletionAtRevisionResult>;
   delete(id: string, context?: TodosStorageContext): MaybePromise<boolean>;
+}
+
+export interface TodosPlanCompletionAtRevisionResult {
+  plan: Plan;
+  applied: boolean;
+}
+
+export interface TodosPlanProjectLinkApplyInput {
+  plan_id: string;
+  project_id: string;
+  expected_plan_revision: string;
+  expected_project_revision: string;
+  idempotency_key: string;
+  receipt_id: string;
+  created_at: string;
+}
+
+export interface TodosPlanProjectLinkRollbackInput {
+  plan_id: string;
+  project_id: string;
+  receipt_id: string;
+  expected_plan_revision: string;
+  rollback_receipt_id: string;
+  restored_at: string;
+}
+
+export interface TodosPlanProjectLinkStore {
+  apply(input: TodosPlanProjectLinkApplyInput, context?: TodosStorageContext): MaybePromise<PlanProjectLinkResult>;
+  rollback(input: TodosPlanProjectLinkRollbackInput, context?: TodosStorageContext): MaybePromise<PlanProjectLinkRollbackResult>;
+  getReceipt(receiptId: string, context?: TodosStorageContext): MaybePromise<PlanProjectLinkReceipt | null>;
+  getReceiptByIdempotencyKey(idempotencyKey: string, context?: TodosStorageContext): MaybePromise<PlanProjectLinkReceipt | null>;
 }
 
 export interface TodosAgentReleaseResult {
@@ -238,7 +342,7 @@ export interface TodosAgentStore {
   update(id: string, input: TodosAgentUpdateInput, context?: TodosStorageContext): MaybePromise<Agent | null>;
   /**
    * Refresh an agent's `last_seen_at` (heartbeat), resolving by id OR name.
-   * Optional — present on the Postgres (self_hosted) adapter so a flipped machine
+   * Optional — present on the Postgres adapter so a flipped machine
    * heartbeats the SHARED cloud roster instead of its local sqlite island (the
    * previous CLI/MCP path 404'd cloud-only agents with "Agent not found").
    */
@@ -247,7 +351,7 @@ export interface TodosAgentStore {
    * Release/logout an agent — clears its session binding so the name is available.
    * Resolves by id OR name. When `sessionId` is provided the release only succeeds
    * if it matches the agent's current session (returns `{ released: false }` on a
-   * mismatch). Optional — present on the Postgres (self_hosted) adapter.
+   * mismatch). Optional — present on the Postgres adapter.
    */
   release?(idOrName: string, sessionId?: string, context?: TodosStorageContext): MaybePromise<TodosAgentReleaseResult | null>;
 }
@@ -272,6 +376,21 @@ export interface TodosTaskListStore {
   list(projectId?: string, context?: TodosStorageContext): MaybePromise<TaskList[]>;
   update(id: string, input: UpdateTaskListInput, context?: TodosStorageContext): MaybePromise<TaskList>;
   delete(id: string, context?: TodosStorageContext): MaybePromise<boolean>;
+  /**
+   * Atomically remove one unchanged task list only when no task or plan refers
+   * to it. Optional because a backend that cannot provide the whole check and
+   * delete as one atomic operation must fail rollback closed rather than
+   * expose a check-then-delete race.
+   */
+  deleteIfUnchangedAndUnused?(
+    id: string,
+    expected: Pick<TaskList, "project_id" | "slug" | "name" | "description" | "metadata" | "updated_at">,
+    context?: TodosStorageContext,
+  ): MaybePromise<{
+    status: "deleted" | "not_found" | "changed" | "has_dependents";
+    task_dependents: number;
+    plan_dependents: number;
+  }>;
 }
 
 export interface TodosTemplateStore {
@@ -351,12 +470,18 @@ export interface TodosStorageSnapshot {
   agents: Agent[];
   taskLists: TaskList[];
   templates: TaskTemplate[];
+  templateTasks: TemplateTask[];
   auditHistory: TaskHistory[];
   tombstones?: TodosStorageTombstone[];
 }
 
 export interface TodosStorageTombstone {
-  object_type: "tasks" | "projects" | "project_machine_paths" | "plans" | "agents" | "task_lists" | "templates" | "audit_history";
+  /**
+   * `audit_history` remains representable for legacy/export readback, but it is
+   * never importable: every snapshot importer must reject that object type
+   * before applying any row or tombstone mutation.
+   */
+  object_type: "tasks" | "projects" | "project_machine_paths" | "plans" | "agents" | "task_lists" | "templates" | "template_tasks" | "audit_history";
   object_id: string;
   deleted_at: string;
   updated_at: string;

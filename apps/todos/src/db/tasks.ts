@@ -23,6 +23,7 @@ export {
   failTask,
   lockTask,
   unlockTask,
+  handoffStaleTaskLock,
   getTaskLockStatus,
   claimNextTask,
   getNextTask,

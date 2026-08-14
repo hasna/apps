@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { getDatabase, closeDatabase, resetDatabase, resolvePartialId } from "../db/database.js";
 import { addDependency, createTask, getTask, listTasks, completeTask, startTask } from "../db/tasks.js";
 import { createProject } from "../db/projects.js";
+import { createTaskList } from "../db/task-lists.js";
 import { createPlan } from "../db/plans.js";
 import { addComment, listComments } from "../db/comments.js";
 import { addTaskRunArtifact, addTaskRunCommand, addTaskRunEvent, finishTaskRun, startTaskRun } from "../db/task-runs.js";
@@ -71,6 +72,7 @@ function captureTools(register: (server: any, ctx: any) => void): Map<string, Ca
     formatTask: (task: Task) => `${task.id.slice(0, 8)} ${task.status} ${task.priority} ${task.title}`,
     formatTaskDetail: (task: Task) => `${task.id} ${task.title}`,
     getAgentFocus: () => undefined,
+    applyFocus: () => {},
     agentFocusMap: new Map(),
   };
   register(server, ctx);
@@ -1114,6 +1116,71 @@ describe("MCP tool wrappers", () => {
 
     expect(updated.assigned_to).toBe("novus");
     expect(getTask(task.id, db)!.assigned_to).toBe("novus");
+  });
+
+  it("update_task repairs and clears parent_id through the guarded storage path", async () => {
+    const tools = captureTools(registerTaskCrudTools);
+    const childProject = createProject({ name: "MCP child project", path: "/tmp/mcp-child-project" }, db);
+    const parentProject = createProject({ name: "MCP parent project", path: "/tmp/mcp-parent-project" }, db);
+    const originalParent = createTask({ title: "MCP original parent", project_id: childProject.id }, db);
+    const crossProjectParent = createTask({ title: "MCP cross-project parent", project_id: parentProject.id }, db);
+    const child = createTask({
+      title: "MCP repairable child",
+      project_id: childProject.id,
+      parent_id: originalParent.id,
+    }, db);
+
+    const repairedResult = await callCapturedTool(tools, "update_task", {
+      task_id: child.id,
+      parent_id: crossProjectParent.id,
+      version: child.version,
+    });
+    expect(repairedResult.isError).not.toBe(true);
+    expect(JSON.parse(repairedResult.content[0]!.text)).toMatchObject({
+      id: child.id,
+      project_id: childProject.id,
+      parent_id: crossProjectParent.id,
+    });
+    expect(getTask(child.id, db)?.parent_id).toBe(crossProjectParent.id);
+
+    const clearedResult = await callCapturedTool(tools, "update_task", {
+      task_id: child.id,
+      parent_id: null,
+      version: getTask(child.id, db)!.version,
+    });
+    expect(clearedResult.isError).not.toBe(true);
+    expect(JSON.parse(clearedResult.content[0]!.text)).toMatchObject({
+      id: child.id,
+      project_id: childProject.id,
+      parent_id: null,
+    });
+    expect(getTask(child.id, db)?.parent_id).toBeNull();
+  });
+
+  it("update_task rejects missing and cyclic parents without changing either row", async () => {
+    const tools = captureTools(registerTaskCrudTools);
+    const root = createTask({ title: "MCP root" }, db);
+    const child = createTask({ title: "MCP child", parent_id: root.id }, db);
+    const rootBefore = getTask(root.id, db);
+    const childBefore = getTask(child.id, db);
+
+    for (const parent_id of [
+      "ffffffff-ffff-4fff-8fff-ffffffffffff",
+      root.id,
+      child.id,
+    ]) {
+      const tool = tools.get("update_task");
+      expect(tool).toBeDefined();
+      const result = await tool!.handler({
+        task_id: root.id,
+        parent_id,
+        version: root.version,
+      }) as { isError?: boolean; content: { text: string }[] };
+      expect(result.isError).toBe(true);
+    }
+
+    expect(getTask(root.id, db)).toEqual(rootBefore);
+    expect(getTask(child.id, db)).toEqual(childBefore);
   });
 
   it("create_task returns an id accepted by get_task and update_task in one MCP session", async () => {
@@ -2431,6 +2498,27 @@ describe("MCP tool wrappers", () => {
     expect(doctor.content[0]!.text).toContain("migration_level");
   });
 
+  it("rebalance_workload leaves ambiguous case-variant assignments untouched", async () => {
+    const now = new Date().toISOString();
+    db.run(
+      "INSERT INTO agents (id, name, created_at, last_seen_at) VALUES (?, ?, ?, ?), (?, ?, ?, ?), (?, ?, ?, ?)",
+      [
+        "01d4cc12", "fabricius", now, now,
+        "4d77b218", "Fabricius", now, now,
+        "c1ce0001", "cicero", now, now,
+      ],
+    );
+    const lowerCaseTask = createTask({ title: "Lower-case owner", assigned_to: "fabricius" }, db);
+    const upperCaseTask = createTask({ title: "Upper-case owner", assigned_to: "Fabricius" }, db);
+    const tools = captureTools(registerTaskAutoTools);
+
+    const result = await callCapturedTool(tools, "rebalance_workload", { max_per_agent: 1 });
+
+    expect(result.content[0]!.text).toBe("Rebalanced: moved 0 task(s), 0 skipped.");
+    expect(getTask(lowerCaseTask.id, db)!.assigned_to).toBe("fabricius");
+    expect(getTask(upperCaseTask.id, db)!.assigned_to).toBe("Fabricius");
+  });
+
   it("machine tools expose heartbeat and topology diagnostics", async () => {
     const tools = captureTools(registerMachineTools);
     await callCapturedTool(tools, "machines_register", {
@@ -2543,6 +2631,47 @@ describe("MCP tool wrappers", () => {
     expect(released.content[0]!.text).toContain("Agent released");
   });
 
+  it("rename_agent does not rewrite tasks owned by a case-variant legacy agent", async () => {
+    const now = new Date().toISOString();
+    db.run(
+      "INSERT INTO agents (id, name, created_at, last_seen_at) VALUES (?, ?, ?, ?), (?, ?, ?, ?)",
+      [
+        "01d4cc12", "fabricius", now, now,
+        "4d77b218", "Fabricius", now, now,
+      ],
+    );
+    const renamedAgentTask = createTask({ title: "Rename exact owner", assigned_to: "fabricius" }, db);
+    const caseVariantTask = createTask({ title: "Keep distinct owner", assigned_to: "Fabricius" }, db);
+    const tools = captureTools(registerAgentTools);
+
+    const result = await callCapturedTool(tools, "rename_agent", {
+      id: "01d4cc12",
+      new_name: "cicero",
+    });
+
+    expect(result.content[0]!.text).toContain("Updated assigned_to on 1 task(s).");
+    expect(getTask(renamedAgentTask.id, db)!.assigned_to).toBe("cicero");
+    expect(getTask(caseVariantTask.id, db)!.assigned_to).toBe("Fabricius");
+  });
+
+  it("rename_agent rewrites a differently cased task alias when the agent name is unique", async () => {
+    const now = new Date().toISOString();
+    db.run(
+      "INSERT INTO agents (id, name, created_at, last_seen_at) VALUES (?, ?, ?, ?)",
+      ["01d4cc12", "fabricius", now, now],
+    );
+    const task = createTask({ title: "Unique case variant", assigned_to: "FABRICIUS" }, db);
+    const tools = captureTools(registerAgentTools);
+
+    const result = await callCapturedTool(tools, "rename_agent", {
+      id: "01d4cc12",
+      new_name: "cicero",
+    });
+
+    expect(result.content[0]!.text).toContain("Updated assigned_to on 1 task(s).");
+    expect(getTask(task.id, db)!.assigned_to).toBe("cicero");
+  });
+
   it("agent tools reject generated generic names", async () => {
     const tools = captureTools(registerAgentTools);
     const tool = tools.get("register_agent");
@@ -2652,5 +2781,46 @@ describe("Recurring task operations", () => {
     const latest = getLatestHandoff("brutus", undefined, db);
     expect(latest).not.toBeNull();
     expect(latest.summary).toBe("Second");
+  });
+});
+
+describe("move_task MCP tool", () => {
+  it("re-parents a task to another project and its task list, keeping its id", async () => {
+    const projectA = createProject({ name: "Project A", path: "/repos/mcp-move-a" }, db);
+    const projectB = createProject({ name: "Project B", path: "/repos/mcp-move-b" }, db);
+    const listA = createTaskList({ name: "List A", slug: "list-a", project_id: projectA.id }, db);
+    const listB = createTaskList({ name: "List B", slug: "list-b", project_id: projectB.id }, db);
+    const task = createTask({ title: "Portable", project_id: projectA.id, task_list_id: listA.id }, db);
+
+    const tools = captureTools(registerTaskProjectTools);
+    const result = await callCapturedTool(tools, "move_task", {
+      task_id: task.id,
+      to_project: projectB.id,
+      to_list: listB.id,
+    });
+    expect(result.content[0]!.text).toContain(task.id.slice(0, 8));
+
+    const moved = getTask(task.id, db)!;
+    expect(moved.id).toBe(task.id);
+    expect(moved.project_id).toBe(projectB.id);
+    expect(moved.task_list_id).toBe(listB.id);
+
+    // Gone from A, present in B.
+    expect(listTasks({ project_id: projectA.id }, db).map((t) => t.id)).not.toContain(task.id);
+    expect(listTasks({ project_id: projectB.id }, db).map((t) => t.id)).toContain(task.id);
+  });
+
+  it("detaches the old project-scoped list when moving projects without a new list", async () => {
+    const projectA = createProject({ name: "Detach A", path: "/repos/mcp-detach-a" }, db);
+    const projectB = createProject({ name: "Detach B", path: "/repos/mcp-detach-b" }, db);
+    const listA = createTaskList({ name: "Only A", slug: "only-a", project_id: projectA.id }, db);
+    const task = createTask({ title: "Detachable", project_id: projectA.id, task_list_id: listA.id }, db);
+
+    const tools = captureTools(registerTaskProjectTools);
+    await callCapturedTool(tools, "move_task", { task_id: task.id, to_project: projectB.id });
+
+    const moved = getTask(task.id, db)!;
+    expect(moved.project_id).toBe(projectB.id);
+    expect(moved.task_list_id).toBeNull();
   });
 });

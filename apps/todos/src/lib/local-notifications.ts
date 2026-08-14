@@ -1,5 +1,5 @@
 import type { Database } from "bun:sqlite";
-import { getDatabase, now } from "../db/database.js";
+import { assignedToAliasSet, getDatabase, now } from "../db/database.js";
 import { getEscalatedTasks, getStaleTasks, getTask, listCalendarEvents, listTasks } from "../db/tasks.js";
 import { listTaskRuns } from "../db/task-runs.js";
 import type { CalendarEvent, Task } from "../types/index.js";
@@ -182,12 +182,17 @@ function calendarAlert(event: CalendarEvent, triggeredAt: string, quieted: boole
 function runAlerts(input: CheckLocalNotificationsInput, db: Database, checkedAt: string, quieted: boolean): LocalNotificationAlert[] {
   if (input.include_runs === false) return [];
   const since = Date.parse(input.run_since || new Date(Date.parse(checkedAt) - 24 * 60 * 60_000).toISOString());
+  // Alias-resolved (task 84c77210) — see database.ts for the root cause. A
+  // run-completion alert that never fires because its task's `assigned_to`
+  // happens to be stored under the other alias form is the same
+  // silent-failure shape 84c77210 named for notification-reminders.
+  const runAlertAliases = input.agent_id ? assignedToAliasSet(db, input.agent_id) : null;
   return listTaskRuns(undefined, db)
     .filter((run) => run.completed_at && Date.parse(run.completed_at) >= since)
     .map((run): LocalNotificationAlert | null => {
       const task = getTask(run.task_id, db);
       if (input.project_id && task?.project_id !== input.project_id) return null;
-      if (input.agent_id && run.agent_id !== input.agent_id && task?.assigned_to !== input.agent_id) return null;
+      if (input.agent_id && run.agent_id !== input.agent_id && !(runAlertAliases && runAlertAliases.has((task?.assigned_to ?? "").toLowerCase()))) return null;
       const failed = ["failed", "cancelled"].includes(run.status);
       return {
         id: alertId(failed ? "run_failed" : "run_completed", run.id),
@@ -232,6 +237,9 @@ export async function checkLocalNotifications(input: CheckLocalNotificationsInpu
   const quieted = quietActive(input.quiet_hours, checkedAt);
   const warnings: string[] = [];
   if (Number.isNaN(checkedMs)) warnings.push("Invalid check timestamp; due-soon window may be incomplete.");
+  // Alias-resolved (task 84c77210) — see database.ts for the root cause.
+  // Computed once and reused by the due-soon and stale-task filters below.
+  const notifyAgentAliases = input.agent_id ? assignedToAliasSet(d, input.agent_id) : null;
 
   const alerts: LocalNotificationAlert[] = [];
   for (const escalation of getEscalatedTasks({ project_id: input.project_id, agent_id: input.agent_id }, d, new Date(checkedAt))) {
@@ -253,7 +261,7 @@ export async function checkLocalNotifications(input: CheckLocalNotificationsInpu
   if (Number.isFinite(checkedMs) && dueWithin > 0) {
     for (const task of listTasks({ project_id: input.project_id, include_archived: false, limit: 5000 }, d)) {
       if (!unfinished(task) || !task.due_at) continue;
-      if (input.agent_id && task.assigned_to !== input.agent_id && task.agent_id !== input.agent_id) continue;
+      if (input.agent_id && task.agent_id !== input.agent_id && !(notifyAgentAliases && notifyAgentAliases.has((task.assigned_to ?? "").toLowerCase()))) continue;
       if (task.due_at > checkedAt && task.due_at <= dueSoonUntil) {
         alerts.push(taskAlert(task, "task_due_soon", "task.due_soon", "warning", `Due soon: ${task.title}`, task.due_at, quieted));
       }
@@ -261,7 +269,7 @@ export async function checkLocalNotifications(input: CheckLocalNotificationsInpu
   }
 
   for (const task of getStaleTasks(staleMinutes, { project_id: input.project_id }, d)) {
-    if (input.agent_id && task.assigned_to !== input.agent_id && task.agent_id !== input.agent_id) continue;
+    if (input.agent_id && task.agent_id !== input.agent_id && !(notifyAgentAliases && notifyAgentAliases.has((task.assigned_to ?? "").toLowerCase()))) continue;
     alerts.push(taskAlert(task, "task_stale", "task.stale", "warning", `Stale task: ${task.title}`, checkedAt, quieted, { stale_minutes: staleMinutes }));
   }
 

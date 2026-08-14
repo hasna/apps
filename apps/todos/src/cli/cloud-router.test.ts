@@ -1,6 +1,18 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
+  planProjectLinkReceiptId,
+  planProjectLinkResultDigest,
+  planProjectLinkRollbackReceiptId,
+} from "../lib/plan-project-link-contract.js";
+import type {
+  TodosPriorRegistrationAdoptionValidationRequest,
+  TodosProjectResourcePage,
+} from "../project-registration/index.js";
+import type { Plan, PlanProjectLinkReceipt, Project, Task } from "../types/index.js";
+import {
   getTodosCloudClient,
+  getTodosRemoteAuthorityConfigStatus,
+  resolveTodosCliStorageMode,
   isCloudRouting,
   resetTodosCloudClient,
   cloudListTasks,
@@ -9,11 +21,14 @@ import {
   cloudUpdateTask,
   cloudDeleteTask,
   cloudTaskAction,
+  cloudFailTask,
+  cloudCompleteTask,
   cloudAddComment,
   cloudListComments,
   cloudRegisterAgent,
   cloudLockTask,
   cloudUnlockTask,
+  cloudHandoffStaleTaskLock,
   cloudAddDependency,
   cloudRemoveDependency,
   cloudGetDependencies,
@@ -25,6 +40,7 @@ import {
   cloudChangedSince,
   cloudTaskStats,
   cloudRecentActivity,
+  cloudListProjects,
   cloudListTaskLists,
   cloudNextTask,
   cloudAllDependencies,
@@ -33,17 +49,30 @@ import {
   cloudTimeline,
   cloudCreateTaskList,
   cloudDeleteTaskList,
+  cloudPlanProjectTaskListEnsure,
+  cloudApplyProjectTaskListEnsure,
+  cloudRollbackProjectTaskListEnsure,
+  cloudPlanPlanProjectLink,
+  cloudApplyPlanProjectLink,
+  cloudRollbackPlanProjectLink,
   cloudResolveProjectRef,
+  cloudRenameProject,
+  cloudResolvePlan,
   cloudResolveTaskListRef,
+  cloudResolveTaskRef,
+  cloudListProjectResources,
+  cloudValidatePriorRegistrationAdoption,
+  requireTodosRemoteAuthorityEnv,
+  serverStorageMode,
 } from "./cloud-router.js";
 
 const CLOUD_ENV = {
   HASNA_TODOS_STORAGE_MODE: "self_hosted",
-  HASNA_TODOS_API_URL: "https://todos.hasna.xyz",
+  HASNA_TODOS_API_URL: "https://todos.example.com",
   HASNA_TODOS_API_KEY: "hasna_todos_test_key",
 };
 
-type Call = { url: string; method: string; headers: Record<string, string>; body: unknown };
+type Call = { url: string; method: string; headers: Record<string, string>; body: unknown; redirect?: RequestRedirect };
 
 let previousFetch: typeof globalThis.fetch | undefined;
 
@@ -59,6 +88,7 @@ function installFetch(handler: (call: Call) => { status?: number; body?: unknown
       method: (init.method || "GET").toUpperCase(),
       headers,
       body: init.body ? JSON.parse(init.body) : undefined,
+      redirect: init.redirect,
     };
     calls.push(call);
     const { status = 200, body = {} } = handler(call);
@@ -68,6 +98,174 @@ function installFetch(handler: (call: Call) => { status?: number; body?: unknown
     });
   };
   return calls;
+}
+
+function createdByOpenApi(supported: boolean): Record<string, unknown> {
+  return {
+    openapi: "3.1.0",
+    components: {
+      schemas: {
+        CreateTaskInput: {
+          type: "object",
+          properties: supported ? { created_by: { type: "string" } } : {},
+        },
+        Task: {
+          type: "object",
+          properties: supported
+            ? { created_by: { type: "string", nullable: true } }
+            : {},
+        },
+      },
+    },
+  };
+}
+
+function planProjectLinkPlanFixture(overrides: Partial<Plan> = {}): Plan {
+  return {
+    id: "plan-1",
+    slug: "dubai-fraud",
+    project_id: null,
+    task_list_id: null,
+    agent_id: null,
+    name: "Dubai Fraud",
+    description: null,
+    status: "active",
+    created_at: "2026-08-08T00:00:00.000Z",
+    updated_at: "2026-08-08T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+function planProjectLinkProjectFixture(overrides: Partial<Project> = {}): Project {
+  return {
+    id: "project-1",
+    name: "Dubai Fraud",
+    path: "/workspace/dubai-fraud",
+    description: null,
+    task_list_id: null,
+    task_prefix: null,
+    task_counter: 0,
+    created_at: "2026-08-08T00:00:01.000Z",
+    updated_at: "2026-08-08T00:00:01.000Z",
+    ...overrides,
+  };
+}
+
+function planProjectLinkTaskFixture(overrides: Partial<Task> = {}): Task {
+  return {
+    id: "task-1",
+    short_id: "dubai-1",
+    project_id: null,
+    parent_id: null,
+    plan_id: "plan-1",
+    task_list_id: null,
+    title: "Investigate Dubai fraud",
+    description: null,
+    status: "pending",
+    priority: "medium",
+    agent_id: null,
+    assigned_to: null,
+    session_id: null,
+    working_dir: null,
+    tags: [],
+    metadata: {},
+    version: 1,
+    locked_by: null,
+    locked_at: null,
+    created_at: "2026-08-08T00:00:00.000Z",
+    updated_at: "2026-08-08T00:00:00.000Z",
+    started_at: null,
+    completed_at: null,
+    due_at: null,
+    estimated_minutes: null,
+    actual_minutes: null,
+    requires_approval: false,
+    approved_by: null,
+    approved_at: null,
+    recurrence_rule: null,
+    recurrence_parent_id: null,
+    spawns_template_id: null,
+    confidence: null,
+    reason: null,
+    spawned_from_session: null,
+    assigned_by: null,
+    created_by: null,
+    assigned_from_project: null,
+    task_type: null,
+    cost_tokens: 0,
+    cost_usd: 0,
+    delegated_from: null,
+    delegation_depth: 0,
+    retry_count: 0,
+    max_retries: 3,
+    retry_after: null,
+    sla_minutes: null,
+    runner_id: null,
+    runner_started_at: null,
+    runner_completed_at: null,
+    current_step: null,
+    total_steps: null,
+    ...overrides,
+  };
+}
+
+function planProjectLinkReceiptFixture(
+  plan: Plan,
+  tasks: Task[],
+  overrides: Partial<PlanProjectLinkReceipt> = {},
+): PlanProjectLinkReceipt {
+  const idempotencyKey = overrides.idempotency_key ?? "link-fixture";
+  return {
+    schema_version: "todos.plan-project-link.v1",
+    receipt_id: planProjectLinkReceiptId(idempotencyKey),
+    idempotency_key: idempotencyKey,
+    plan_id: plan.id,
+    project_id: plan.project_id!,
+    prior_plan_project_id: null,
+    prior_task_project_ids: Object.fromEntries(tasks.map((task) => [task.id, null])),
+    task_ids: tasks.map((task) => task.id),
+    task_count: tasks.length,
+    result_plan_revision: plan.updated_at,
+    result_digest: planProjectLinkResultDigest(plan, tasks),
+    rollback_supported: true,
+    created_at: "2026-08-08T00:00:02.000Z",
+    ...overrides,
+  };
+}
+
+function projectResourcePageFixture(
+  overrides: Partial<TodosProjectResourcePage> = {},
+): TodosProjectResourcePage {
+  const sourceProjectId = "wks_cloudresources0001";
+  return {
+    authority: "todos",
+    route: "todos.project-registration.v1",
+    package_version: "0.15.30-test",
+    authority_id: "todos",
+    tenant_id: "tenant-test",
+    corpus_id: "todos:tenant-test",
+    source_project_id: sourceProjectId,
+    todos_project_id: "11111111-1111-4111-8111-111111111111",
+    task_list_id: "22222222-2222-4222-8222-222222222222",
+    include_anchors: true,
+    collection_revision: "sha256:" + "a".repeat(64),
+    limit: 1,
+    count: 1,
+    resources: [{
+      source_project_id: sourceProjectId,
+      kind: "project",
+      scope: "collection",
+      target_id: "11111111-1111-4111-8111-111111111111",
+      parent_id: null,
+      revision: "2026-08-11T00:00:00.000Z",
+      digest: "b".repeat(64),
+    }],
+    has_more: false,
+    next_cursor: null,
+    complete: true,
+    truncated: false,
+    ...overrides,
+  };
 }
 
 afterEach(() => {
@@ -87,14 +285,14 @@ describe("todos client self_hosted resolver", () => {
   test("self_hosted + API_URL + API_KEY -> cloud-http client at /v1", () => {
     const client = getTodosCloudClient(CLOUD_ENV);
     expect(client).not.toBeNull();
-    expect(client!.baseUrl).toBe("https://todos.hasna.xyz/v1");
+    expect(client!.baseUrl).toBe("https://todos.example.com/v1");
     expect(isCloudRouting(CLOUD_ENV)).toBe(true);
   });
 
   test("API_URL + API_KEY WITHOUT a mode var -> local (flip-safety guard)", () => {
     // contracts >=0.5.1 would resolve bare URL+KEY to cloud; the todos guard keeps
     // it local so the flip is only ever armed by an explicit HASNA_TODOS_STORAGE_MODE.
-    const noMode = { HASNA_TODOS_API_URL: "https://todos.hasna.xyz", HASNA_TODOS_API_KEY: "k" } as never;
+    const noMode = { HASNA_TODOS_API_URL: "https://todos.example.com", HASNA_TODOS_API_KEY: "k" } as never;
     expect(getTodosCloudClient(noMode)).toBeNull();
     expect(isCloudRouting(noMode)).toBe(false);
   });
@@ -102,21 +300,498 @@ describe("todos client self_hosted resolver", () => {
   test("mode=cloud + API_URL + API_KEY -> cloud-http client", () => {
     const client = getTodosCloudClient({
       HASNA_TODOS_STORAGE_MODE: "cloud",
-      HASNA_TODOS_API_URL: "https://todos.hasna.xyz",
+      HASNA_TODOS_API_URL: "https://todos.example.com",
       HASNA_TODOS_API_KEY: "hasna_todos_test_key",
     } as never);
     expect(client).not.toBeNull();
-    expect(client!.baseUrl).toBe("https://todos.hasna.xyz/v1");
+    expect(client!.baseUrl).toBe("https://todos.example.com/v1");
   });
 
-  test("mode=self_hosted but missing API key -> throws (no silent local drift)", () => {
+  test("mode=remote rejects an implicit default when HASNA_TODOS_API_URL is missing", () => {
+    expect(() => getTodosCloudClient({
+      HASNA_TODOS_STORAGE_MODE: "remote",
+      HASNA_TODOS_API_KEY: "fixture-key",
+      TODOS_URL: "https://todos.md",
+    } as never)).toThrow(
+      "REMOTE_API_URL_MISSING: remote Todos storage requires HASNA_TODOS_API_URL",
+    );
+  });
+
+  test("mode=self_hosted reports the exact missing API key without local fallback", () => {
     expect(() =>
-      getTodosCloudClient({ HASNA_TODOS_STORAGE_MODE: "self_hosted", HASNA_TODOS_API_URL: "https://todos.hasna.xyz" }),
-    ).toThrow();
+      getTodosCloudClient({ HASNA_TODOS_STORAGE_MODE: "self_hosted", HASNA_TODOS_API_URL: "https://todos.example.com" }),
+    ).toThrow(
+      "REMOTE_API_KEY_MISSING: remote Todos storage requires HASNA_TODOS_API_KEY",
+    );
+  });
+
+  test("blank canonical mode is invalid instead of masking a fallback selector", () => {
+    expect(() => resolveTodosCliStorageMode({
+      HASNA_TODOS_STORAGE_MODE: "   ",
+      TODOS_STORAGE_MODE: "remote",
+    })).toThrow("REMOTE_STORAGE_MODE_INVALID");
+  });
+
+  test("invalid and conflicting selectors fail closed before local routing", () => {
+    expect(() => resolveTodosCliStorageMode({ HASNA_TODOS_STORAGE_MODE: "remtoe" })).toThrow(
+      "REMOTE_STORAGE_MODE_INVALID",
+    );
+    expect(() => resolveTodosCliStorageMode({
+      HASNA_TODOS_STORAGE_MODE: "local",
+      TODOS_STORAGE_MODE: "remote",
+    })).toThrow("REMOTE_STORAGE_MODE_CONFLICT");
+  });
+
+  test.each([
+    "https://fixture-user@todos.example",
+    "https://todos.example?route=v1",
+    "https://todos.example#v1",
+    "https://todos.example/api/v1",
+    "https://todos.example/custom",
+    "http://todos.example",
+  ])("rejects ambiguous or credential-unsafe authority URL %s", (apiUrl) => {
+    expect(() => getTodosCloudClient({
+      HASNA_TODOS_STORAGE_MODE: "remote",
+      HASNA_TODOS_API_URL: apiUrl,
+      HASNA_TODOS_API_KEY: "fixture-key",
+    })).toThrow("REMOTE_API_URL_INVALID");
+  });
+
+  test("accepts exact /v1 and loopback HTTP without duplicating the route prefix", () => {
+    const status = getTodosRemoteAuthorityConfigStatus({
+      HASNA_TODOS_STORAGE_MODE: "remote",
+      HASNA_TODOS_API_URL: "http://127.0.0.1:18881/v1",
+      HASNA_TODOS_API_KEY: "fixture-key",
+    });
+    expect(status).toMatchObject({ ok: true, v1_base_url: "http://127.0.0.1:18881/v1" });
+  });
+
+  test("never reuses a client across authority, mode, or API-key changes", async () => {
+    const calls = installFetch(() => ({ body: { projects: [], count: 0 } }));
+    const authorityA = getTodosCloudClient({
+      HASNA_TODOS_STORAGE_MODE: "remote",
+      HASNA_TODOS_API_URL: "https://authority-a.example",
+      HASNA_TODOS_API_KEY: "fixture-key-a",
+    })!;
+    const authorityB = getTodosCloudClient({
+      HASNA_TODOS_STORAGE_MODE: "remote",
+      HASNA_TODOS_API_URL: "https://authority-b.example",
+      HASNA_TODOS_API_KEY: "fixture-key-b",
+    })!;
+    expect(authorityA.baseUrl).toBe("https://authority-a.example/v1");
+    expect(authorityB.baseUrl).toBe("https://authority-b.example/v1");
+    expect(getTodosCloudClient({ HASNA_TODOS_STORAGE_MODE: "local" })).toBeNull();
+    const authorityAWithNewKey = getTodosCloudClient({
+      HASNA_TODOS_STORAGE_MODE: "remote",
+      HASNA_TODOS_API_URL: "https://authority-a.example",
+      HASNA_TODOS_API_KEY: "fixture-key-a-rotated",
+    })!;
+
+    await cloudListProjects(authorityA);
+    await cloudListProjects(authorityB);
+    await cloudListProjects(authorityAWithNewKey);
+    expect(calls.map((call) => [call.url, call.headers["authorization"]])).toEqual([
+      ["https://authority-a.example/v1/projects", "Bearer fixture-key-a"],
+      ["https://authority-b.example/v1/projects", "Bearer fixture-key-b"],
+      ["https://authority-a.example/v1/projects", "Bearer fixture-key-a-rotated"],
+    ]);
+
+    expect(getTodosCloudClient({})).toBeNull();
+    expect(getTodosCloudClient(CLOUD_ENV)?.baseUrl).toBe("https://todos.example.com/v1");
+    expect(getTodosCloudClient({ HASNA_TODOS_STORAGE_MODE: "local" })).toBeNull();
+  });
+});
+
+describe("remote authority compatibility diagnostics", () => {
+  test("routes prior-registration adoption validation through the exact fail-closed HTTP endpoint", async () => {
+    const input = {
+      source_request: {
+        operation_id: "cloud-prior-adoption-0001",
+        step_id: "todos_project",
+        resource_kind: "project",
+        direction: "forward",
+        authority_route: "todos.project-registration.v1",
+        package_version: "0.15.30-test",
+        authority_id: "todos",
+        tenant_id: "tenant-test",
+        corpus_id: "todos:tenant-test",
+        target_selector: "wks_cloudprioradoption01",
+        idempotency_key: "prk_cloud_prior_adoption",
+        request_digest: "a".repeat(64),
+        precondition_digest: "b".repeat(64),
+        project_id: "wks_cloudprioradoption01",
+        project_slug: "cloud-prior-adoption",
+        project_name: "Cloud prior adoption",
+        desired: {},
+        bind_existing: true,
+        response_byte_limit: 65_536,
+        time_budget_ms: 5_000,
+      },
+      source_receipt: {
+        receipt_id: "tpr_cloud_prior_adoption",
+        authority: "todos",
+        route: "todos.project-registration.v1",
+        package_version: "0.15.30-test",
+        authority_id: "todos",
+        tenant_id: "tenant-test",
+        corpus_id: "todos:tenant-test",
+        operation_id: "cloud-prior-adoption-0001",
+        step_id: "todos_project",
+        resource_kind: "project",
+        direction: "forward",
+        idempotency_key: "prk_cloud_prior_adoption",
+        request_digest: "a".repeat(64),
+        precondition_digest: "b".repeat(64),
+        outcome: "accepted",
+        reason: null,
+        target_id: "11111111-1111-4111-8111-111111111111",
+        result_revision: "2026-08-11T00:00:00.000Z",
+        result_digest: "c".repeat(64),
+        duplicate_of_receipt_id: null,
+        accepted_receipt_id: null,
+        created_by_operation: false,
+        created_at: "2026-08-11T00:00:00.000Z",
+      },
+      current_record: planProjectLinkProjectFixture({
+        id: "11111111-1111-4111-8111-111111111111",
+        created_at: "2026-08-11T00:00:00.000Z",
+        updated_at: "2026-08-11T00:00:00.000Z",
+      }),
+    } satisfies TodosPriorRegistrationAdoptionValidationRequest;
+    const validation = {
+      valid: true,
+      resource_kind: "project",
+      target_id: input.current_record.id,
+      source_receipt_id: input.source_receipt.receipt_id,
+      accepted_receipt_id: input.source_receipt.receipt_id,
+      source_outcome: "accepted",
+      created_at: input.current_record.created_at,
+      current_revision: input.current_record.updated_at,
+      accepted_result_digest: input.source_receipt.result_digest!,
+    } as const;
+    const calls = installFetch(() => ({ body: { validation } }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    await expect(cloudValidatePriorRegistrationAdoption(client, input))
+      .resolves.toEqual(validation);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({
+      method: "POST",
+      url: "https://todos.example.com/v1/project-registration/validate-prior-adoption",
+      body: input,
+    });
+
+    installFetch(() => ({ body: { valid: true } }));
+    await expect(cloudValidatePriorRegistrationAdoption(
+      getTodosCloudClient(CLOUD_ENV)!,
+      input,
+    )).rejects.toThrow(
+      "REMOTE_API_INCOMPATIBLE: /v1/project-registration/validate-prior-adoption",
+    );
+
+    for (const body of [
+      false,
+      { validation: false },
+      { validation: { valid: false } },
+      { validation: { valid: true } },
+      { validation: { ...validation, target_id: "22222222-2222-4222-8222-222222222222" } },
+      { validation: { ...validation, accepted_result_digest: "0".repeat(64) } },
+    ]) {
+      installFetch(() => ({ body }));
+      await expect(cloudValidatePriorRegistrationAdoption(
+        getTodosCloudClient(CLOUD_ENV)!,
+        input,
+      )).rejects.toThrow(
+        "REMOTE_API_INCOMPATIBLE: /v1/project-registration/validate-prior-adoption",
+      );
+    }
+  });
+
+  test("accepts an honest project-resource page bound to the request", async () => {
+    const page = projectResourcePageFixture();
+    const calls = installFetch(() => ({ body: { page } }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    await expect(cloudListProjectResources(client, {
+      source_project_id: page.source_project_id,
+      include_anchors: true,
+      limit: 1,
+    })).resolves.toEqual(page);
+    expect(calls.map((call) => `${call.method} ${call.url}`)).toEqual([
+      "GET https://todos.example.com/v1/project-registration/resources?source_project_id=wks_cloudresources0001&limit=1&include_anchors=true",
+    ]);
+  });
+
+  test("rejects wrong-identity and truncated project-resource pages at the HTTP boundary", async () => {
+    const request = {
+      source_project_id: "wks_cloudresources0001",
+      include_anchors: true,
+      limit: 1,
+    };
+    installFetch(() => ({
+      body: {
+        page: projectResourcePageFixture({
+          source_project_id: "wks_differentproject01",
+        }),
+      },
+    }));
+    const wrongIdentityClient = getTodosCloudClient(CLOUD_ENV)!;
+    await expect(cloudListProjectResources(wrongIdentityClient, request)).rejects.toThrow(
+      "REMOTE_API_INCOMPATIBLE: /v1/project-registration/resources returned an invalid project-resource page",
+    );
+
+    installFetch(() => ({
+      body: {
+        page: {
+          ...projectResourcePageFixture(),
+          complete: false,
+          truncated: true,
+        },
+      },
+    }));
+    const truncatedClient = getTodosCloudClient(CLOUD_ENV)!;
+    await expect(cloudListProjectResources(truncatedClient, request)).rejects.toThrow(
+      "REMOTE_API_INCOMPATIBLE: /v1/project-registration/resources returned an invalid project-resource page",
+    );
+  });
+
+  test("does not treat a health-only platform host as a Todos /v1 CRUD authority", async () => {
+    const calls = installFetch((call) => {
+      if (call.url === "https://todos.md/v1/projects") {
+        return { status: 404, body: { error: "not found" } };
+      }
+      return { status: 200, body: { status: "ok", service: "platform-todos", mode: "oss" } };
+    });
+    const client = getTodosCloudClient({
+      HASNA_TODOS_STORAGE_MODE: "remote",
+      HASNA_TODOS_API_URL: "https://todos.md",
+      HASNA_TODOS_API_KEY: "fixture-key",
+    } as never)!;
+
+    await expect(cloudListProjects(client)).rejects.toThrow(
+      "REMOTE_API_INCOMPATIBLE: configured Todos authority https://todos.md does not expose /v1/projects",
+    );
+    expect(calls.map((call) => `${call.method} ${call.url}`)).toEqual([
+      "GET https://todos.md/v1/projects",
+    ]);
+  });
+
+  test.each([
+    [401, "REMOTE_API_UNAUTHORIZED"],
+    [403, "REMOTE_API_FORBIDDEN"],
+    [503, "REMOTE_API_UNAVAILABLE"],
+  ])("classifies HTTP %i without local fallback", async (status, expected) => {
+    installFetch(() => ({ status, body: { error: "fixture rejection" } }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+    await expect(cloudListProjects(client)).rejects.toThrow(expected);
+  });
+
+  test("rejects redirects before fetch can forward authentication", async () => {
+    const calls = installFetch(() => ({ status: 302, body: { redirect: true } }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+    await expect(cloudListProjects(client)).rejects.toThrow("REMOTE_API_REDIRECT_REJECTED");
+    expect(calls[0]!.redirect).toBe("manual");
+  });
+
+  test("classifies timeout-like transport failures", async () => {
+    previousFetch ??= globalThis.fetch;
+    globalThis.fetch = async () => {
+      throw new DOMException("fixture timed out", "AbortError");
+    };
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+    await expect(cloudListProjects(client)).rejects.toThrow("REMOTE_API_TIMEOUT");
   });
 });
 
 describe("cloud task CRUD maps /v1 envelopes and carries the bearer key", () => {
+  test("full task UUID resolution remains a direct zero-request fast path", async () => {
+    const calls = installFetch(() => ({ status: 500, body: { error: "must not be called" } }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const id = "abc00000-0000-4000-8000-000000000001";
+    expect(await cloudResolveTaskRef(client, id.toUpperCase())).toBe(id);
+    expect(calls).toHaveLength(0);
+  });
+
+  test("evidence completion requires an advertised OpenAPI request schema before POST", async () => {
+    const calls = installFetch((call) => {
+      if (call.url.endsWith("/v1/openapi.json")) {
+        return {
+          body: {
+            openapi: "3.1.0",
+            paths: {
+              "/v1/tasks/{id}/complete": { post: { responses: { "200": { description: "ok" } } } },
+            },
+          },
+        };
+      }
+      return { body: { task: { id: "task-1", status: "completed" } } };
+    });
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    await expect(cloudCompleteTask(client, "task-1", {
+      agent_id: "agent-one",
+      files_changed: ["src/a.ts"],
+      confidence: 0.9,
+    })).rejects.toThrow("REMOTE_COMPLETION_EVIDENCE_UNSUPPORTED");
+    expect(calls.map((call) => `${call.method} ${call.url}`)).toEqual([
+      "GET https://todos.example.com/v1/openapi.json",
+    ]);
+  });
+
+  test("evidence capability is cached per authority while agent-only completion stays compatible", async () => {
+    const calls = installFetch((call) => {
+      if (call.url.endsWith("/v1/openapi.json")) {
+        return {
+          body: {
+            openapi: "3.1.0",
+            paths: {
+              "/v1/tasks/{id}/complete": {
+                post: {
+                  requestBody: {
+                    content: {
+                      "application/json": { schema: { $ref: "#/components/schemas/CompleteTaskInput" } },
+                    },
+                  },
+                },
+              },
+            },
+            components: {
+              schemas: {
+                CompleteTaskInput: {
+                  type: "object",
+                  properties: {
+                    agent_id: { type: "string" },
+                    attachment_ids: { type: "array", items: { type: "string" } },
+                    files_changed: { type: "array", items: { type: "string" } },
+                    test_results: { type: "string" },
+                    commit_hash: { type: "string" },
+                    notes: { type: "string" },
+                    confidence: { type: "number" },
+                  },
+                },
+              },
+            },
+          },
+        };
+      }
+      return { body: { task: { id: "task-1", status: "completed" } } };
+    });
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    await cloudCompleteTask(client, "task-1", { files_changed: ["src/a.ts"] });
+    await cloudCompleteTask(client, "task-1", { notes: "verified" });
+    await cloudCompleteTask(client, "task-1", { agent_id: "agent-only" });
+
+    expect(calls.filter((call) => call.url.endsWith("/v1/openapi.json"))).toHaveLength(1);
+    expect(calls.filter((call) => call.url.endsWith("/complete"))).toHaveLength(3);
+  });
+
+  test("completion capability results never cross authority boundaries", async () => {
+    const calls = installFetch((call) => {
+      if (call.url.endsWith("/v1/openapi.json")) {
+        const supported = call.url.startsWith("https://authority-b.example/");
+        return { body: supported ? {
+          paths: {
+            "/v1/tasks/{id}/complete": {
+              post: { requestBody: { content: { "application/json": { schema: { type: "object", properties: { notes: { type: "string" } } } } } } },
+            },
+          },
+        } : { paths: { "/v1/tasks/{id}/complete": { post: {} } } } };
+      }
+      return { body: { task: { id: "task-1", status: "completed" } } };
+    });
+    const clientA = getTodosCloudClient({
+      HASNA_TODOS_STORAGE_MODE: "remote",
+      HASNA_TODOS_API_URL: "https://authority-a.example",
+      HASNA_TODOS_API_KEY: "fixture-a",
+    })!;
+    const clientB = getTodosCloudClient({
+      HASNA_TODOS_STORAGE_MODE: "remote",
+      HASNA_TODOS_API_URL: "https://authority-b.example",
+      HASNA_TODOS_API_KEY: "fixture-b",
+    })!;
+
+    await expect(cloudCompleteTask(clientA, "task-1", { notes: "blocked" })).rejects.toThrow("REMOTE_COMPLETION_EVIDENCE_UNSUPPORTED");
+    await cloudCompleteTask(clientB, "task-1", { notes: "supported" });
+    expect(calls.map((call) => `${call.method} ${call.url}`)).toEqual([
+      "GET https://authority-a.example/v1/openapi.json",
+      "GET https://authority-b.example/v1/openapi.json",
+      "POST https://authority-b.example/v1/tasks/task-1/complete",
+    ]);
+  });
+
+  test("short (short_id) references resolve server-side in ONE bounded GET (no snapshot paging)", async () => {
+    const id = "abc00000-0000-4000-8000-000000000001";
+    const calls = installFetch((call) => {
+      const url = new URL(call.url);
+      if (url.pathname === "/v1/tasks/ope2-00125") return { body: { task: { id, short_id: "OPE2-00125" } } };
+      throw new Error(`unexpected request: ${call.url}`);
+    });
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+    // Case-insensitive: an upper-case short_id is resolved by the authority.
+    await expect(cloudResolveTaskRef(client, "OPE2-00125")).resolves.toBe(id);
+    expect(calls.map((call) => new URL(call.url).pathname)).toEqual(["/v1/tasks/ope2-00125"]);
+    expect(calls.some((call) => new URL(call.url).pathname.endsWith("/stats"))).toBe(false);
+  });
+
+  test("unique id-prefix references resolve server-side in ONE bounded GET", async () => {
+    const id = "abc00000-0000-4000-8000-000000000001";
+    const calls = installFetch((call) => {
+      const url = new URL(call.url);
+      if (url.pathname === "/v1/tasks/abc00000") return { body: { task: { id, short_id: "ONE" } } };
+      throw new Error(`unexpected request: ${call.url}`);
+    });
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+    await expect(cloudResolveTaskRef(client, "abc00000")).resolves.toBe(id);
+    expect(calls).toHaveLength(1);
+  });
+
+  test("an ambiguous reference (authority 409) surfaces an ambiguity error", async () => {
+    const projectIds = [
+      "11111111-1111-4111-8111-111111111111",
+      "22222222-2222-4222-8222-222222222222",
+    ];
+    const calls = installFetch((call) => {
+      if (new URL(call.url).pathname === "/v1/tasks/abc") {
+        return {
+          status: 409,
+          body: {
+            error: `Task reference is ambiguous: "abc". Candidate project IDs: ${projectIds.join(", ")}. Use a full task UUID.`,
+            candidate_project_ids: projectIds,
+          },
+        };
+      }
+      throw new Error(`unexpected request: ${call.url}`);
+    });
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const resolution = cloudResolveTaskRef(client, "abc");
+    await expect(resolution).rejects.toThrow("ambiguous");
+    await expect(resolution).rejects.toThrow(projectIds[0]);
+    await expect(resolution).rejects.toThrow(projectIds[1]);
+    expect(calls).toHaveLength(1);
+  });
+
+  test("a missing reference fails FAST (single GET, no whole-set paging)", async () => {
+    const calls = installFetch((call) => {
+      if (new URL(call.url).pathname === "/v1/tasks/nope-00001") return { status: 404, body: { error: "task not found" } };
+      throw new Error(`unexpected request: ${call.url}`);
+    });
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+    await expect(cloudResolveTaskRef(client, "NOPE-00001")).rejects.toThrow("Task not found");
+    expect(calls.map((call) => new URL(call.url).pathname)).toEqual(["/v1/tasks/nope-00001"]);
+  });
+
+  test("an authority that returns an unrelated task is rejected (no false positive)", async () => {
+    installFetch((call) => {
+      if (new URL(call.url).pathname === "/v1/tasks/ope2-00125") {
+        return { body: { task: { id: "abc00000-0000-4000-8000-000000000002", short_id: "OTHER-99999" } } };
+      }
+      throw new Error(`unexpected request: ${call.url}`);
+    });
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+    await expect(cloudResolveTaskRef(client, "OPE2-00125")).rejects.toThrow("Task not found");
+  });
+
   test("list -> GET /v1/tasks, unwraps { tasks }", async () => {
     const calls = installFetch(() => ({ body: { tasks: [{ id: "t1", title: "a" }], count: 1 } }));
     const client = getTodosCloudClient(CLOUD_ENV)!;
@@ -124,7 +799,7 @@ describe("cloud task CRUD maps /v1 envelopes and carries the bearer key", () => 
     expect(tasks).toHaveLength(1);
     expect(tasks[0]!.id).toBe("t1");
     expect(calls[0]!.method).toBe("GET");
-    expect(calls[0]!.url).toContain("https://todos.hasna.xyz/v1/tasks");
+    expect(calls[0]!.url).toContain("https://todos.example.com/v1/tasks");
     expect(calls[0]!.url).toContain("status=pending");
     expect(calls[0]!.url).toContain("limit=5");
     expect(calls[0]!.headers["authorization"]).toBe("Bearer hasna_todos_test_key");
@@ -137,20 +812,182 @@ describe("cloud task CRUD maps /v1 envelopes and carries the bearer key", () => 
     const client = getTodosCloudClient(CLOUD_ENV)!;
     const task = await cloudGetTask(client, "t9");
     expect(task!.id).toBe("t9");
-    expect(calls[0]!.url).toBe("https://todos.hasna.xyz/v1/tasks/t9");
+    expect(calls[0]!.url).toBe("https://todos.example.com/v1/tasks/t9");
     const gone = await cloudGetTask(client, "missing");
     expect(gone).toBeNull();
   });
 
-  test("create -> POST /v1/tasks with Idempotency-Key, unwraps { task }", async () => {
+  test("parentless create uses one POST plus authoritative GET readback", async () => {
     const calls = installFetch(() => ({ status: 201, body: { task: { id: "new1", title: "made" } } }));
     const client = getTodosCloudClient(CLOUD_ENV)!;
     const task = await cloudCreateTask(client, { title: "made" });
     expect(task.id).toBe("new1");
+    expect(calls).toHaveLength(2);
     expect(calls[0]!.method).toBe("POST");
-    expect(calls[0]!.url).toBe("https://todos.hasna.xyz/v1/tasks");
+    expect(calls[0]!.url).toBe("https://todos.example.com/v1/tasks");
     expect(calls[0]!.body).toEqual({ title: "made" });
     expect(calls[0]!.headers["idempotency-key"]).toBeTruthy();
+    expect(calls[1]!.method).toBe("GET");
+    expect(calls[1]!.url).toBe("https://todos.example.com/v1/tasks/new1");
+  });
+
+  test("parented create -> one POST plus authoritative GET readback, returning the stored task", async () => {
+    const calls = installFetch(() => ({
+      status: 201,
+      body: { task: { id: "new1", title: "made", parent_id: "parent1" } },
+    }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const task = await cloudCreateTask(client, { title: "made", parent_id: "parent1" });
+    expect(task.id).toBe("new1");
+    expect(task.parent_id).toBe("parent1");
+    expect(calls).toHaveLength(2);
+    expect(calls[0]!.method).toBe("POST");
+    expect(calls[0]!.url).toBe("https://todos.example.com/v1/tasks");
+    expect(calls[0]!.body).toEqual({ title: "made", parent_id: "parent1" });
+    expect(calls[0]!.headers["idempotency-key"]).toBeTruthy();
+    expect(calls[1]!.method).toBe("GET");
+    expect(calls[1]!.url).toBe("https://todos.example.com/v1/tasks/new1");
+  });
+
+  test("explicit created_by refuses an authority that does not advertise the creator contract", async () => {
+    const calls = installFetch((call) => {
+      if (call.url.endsWith("/v1/openapi.json")) {
+        return { body: createdByOpenApi(false) };
+      }
+      throw new Error(`task mutation must not be sent: ${call.method} ${call.url}`);
+    });
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    await expect(cloudCreateTask(client, {
+      title: "made",
+      created_by: "theophrastus",
+    }, {
+      expectedCreatedBy: "theophrastus",
+    })).rejects.toThrow("REMOTE_CREATED_BY_UNSUPPORTED");
+    expect(calls.map((call) => `${call.method} ${call.url}`)).toEqual([
+      "GET https://todos.example.com/v1/openapi.json",
+    ]);
+  });
+
+  test("explicit created_by rejects an authoritative readback that overwrites the creator", async () => {
+    const calls = installFetch((call) => {
+      if (call.url.endsWith("/v1/openapi.json")) {
+        return { body: createdByOpenApi(true) };
+      }
+      if (call.method === "POST") {
+        return {
+          status: 201,
+          body: { task: { id: "new1", title: "made", created_by: "fleet" } },
+        };
+      }
+      return { body: { task: { id: "new1", title: "made", created_by: "fleet" } } };
+    });
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    await expect(cloudCreateTask(client, {
+      title: "made",
+      created_by: "theophrastus",
+    }, {
+      expectedCreatedBy: "theophrastus",
+    })).rejects.toThrow("TASK_CREATE_PERSISTENCE_UNVERIFIED");
+    expect(calls.map((call) => `${call.method} ${call.url}`)).toEqual([
+      "GET https://todos.example.com/v1/openapi.json",
+      "POST https://todos.example.com/v1/tasks",
+      "GET https://todos.example.com/v1/tasks/new1",
+    ]);
+  });
+
+  test("create refuses a POST task that is absent from authoritative GET readback", async () => {
+    const calls = installFetch((call) =>
+      call.method === "POST"
+        ? { status: 201, body: { task: { id: "ghost1", title: "made", parent_id: "parent1" } } }
+        : { status: 404, body: { error: "task not found" } },
+    );
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    await expect(cloudCreateTask(client, { title: "made", parent_id: "parent1" }))
+      .rejects.toThrow("TASK_CREATE_PERSISTENCE_UNVERIFIED");
+    expect(calls.map((call) => call.method)).toEqual(["POST", "GET"]);
+  });
+
+  test("plan-linked create rejects an authoritative readback that dropped the requested plan", async () => {
+    const calls = installFetch(() => ({
+      status: 201,
+      body: { task: { id: "new1", title: "made", plan_id: null } },
+    }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    await expect(cloudCreateTask(client, { title: "made", plan_id: "plan-1" }))
+      .rejects.toThrow("TASK_CREATE_PERSISTENCE_UNVERIFIED");
+    expect(calls.map((call) => call.method)).toEqual(["POST", "GET"]);
+  });
+
+  test("create never replays a task POST when the authority rejects acceptance", async () => {
+    const calls = installFetch(() => ({
+      status: 500,
+      body: {
+        error: "TASK_CREATE_PERSISTENCE_UNVERIFIED: stored task readback failed",
+        code: "TASK_CREATE_PERSISTENCE_UNVERIFIED",
+      },
+    }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    await expect(cloudCreateTask(client, { title: "single attempt" }))
+      .rejects.toThrow("REMOTE_API_UNAVAILABLE");
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.method).toBe("POST");
+  });
+
+  test("create and update use the raw v1 transport instead of generic resource writes", async () => {
+    const calls: Array<{ method: string; path: string; body: unknown }> = [];
+    const taskWriteClient = {
+      baseUrl: "https://todos.example.com/v1",
+      transport: {
+        post: async (path: string, body?: unknown) => {
+          calls.push({ method: "POST", path, body });
+          return { task: { id: "created-task", title: "created" } };
+        },
+        patch: async (path: string, body?: unknown) => {
+          calls.push({ method: "PATCH", path, body });
+          return { task: { id: "updated-task", title: "updated" } };
+        },
+      },
+      get: async () => ({ task: { id: "created-task", title: "created", plan_id: "plan-1" } }),
+      create: async () => {
+        throw new Error("generic task create must not be used");
+      },
+      update: async () => {
+        throw new Error("generic task update must not be used");
+      },
+    } as unknown as Parameters<typeof cloudCreateTask>[0];
+
+    await expect(
+      cloudCreateTask(taskWriteClient, {
+        title: "created",
+        plan_id: "plan-1",
+      }),
+    )
+      .resolves.toMatchObject({ id: "created-task" });
+    await expect(
+      cloudUpdateTask(taskWriteClient, "updated-task", {
+        title: "updated",
+        plan_id: "plan-1",
+      }),
+    )
+      .resolves.toMatchObject({ id: "updated-task" });
+
+    expect(calls).toEqual([
+      {
+        method: "POST",
+        path: "/tasks",
+        body: { title: "created", plan_id: "plan-1" },
+      },
+      {
+        method: "PATCH",
+        path: "/tasks/updated-task",
+        body: { title: "updated", plan_id: "plan-1" },
+      },
+    ]);
   });
 
   test("update -> PATCH /v1/tasks/:id, unwraps { task }", async () => {
@@ -159,7 +996,7 @@ describe("cloud task CRUD maps /v1 envelopes and carries the bearer key", () => 
     const task = await cloudUpdateTask(client, "t2", { title: "patched" });
     expect(task.title).toBe("patched");
     expect(calls[0]!.method).toBe("PATCH");
-    expect(calls[0]!.url).toBe("https://todos.hasna.xyz/v1/tasks/t2");
+    expect(calls[0]!.url).toBe("https://todos.example.com/v1/tasks/t2");
   });
 
   test("delete -> DELETE /v1/tasks/:id (204 ok)", async () => {
@@ -167,7 +1004,13 @@ describe("cloud task CRUD maps /v1 envelopes and carries the bearer key", () => 
     const client = getTodosCloudClient(CLOUD_ENV)!;
     await expect(cloudDeleteTask(client, "t3")).resolves.toBe(true);
     expect(calls[0]!.method).toBe("DELETE");
-    expect(calls[0]!.url).toBe("https://todos.hasna.xyz/v1/tasks/t3");
+    expect(calls[0]!.url).toBe("https://todos.example.com/v1/tasks/t3");
+  });
+
+  test("delete preserves a resource 404 as a normal not-found result", async () => {
+    installFetch(() => ({ status: 404, body: { error: "not found" } }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+    await expect(cloudDeleteTask(client, "missing")).resolves.toBe(false);
   });
 
   test("action -> POST /v1/tasks/:id/start, unwraps { task }", async () => {
@@ -176,7 +1019,250 @@ describe("cloud task CRUD maps /v1 envelopes and carries the bearer key", () => 
     const task = await cloudTaskAction(client, "t4", "start", { agent_id: "cli" });
     expect(task.status).toBe("in_progress");
     expect(calls[0]!.method).toBe("POST");
-    expect(calls[0]!.url).toBe("https://todos.hasna.xyz/v1/tasks/t4/start");
+    expect(calls[0]!.url).toBe("https://todos.example.com/v1/tasks/t4/start");
+  });
+
+  test("retrying fail preflights advertised support, posts once, and preserves reason and retry result", async () => {
+    const calls = installFetch((call) => {
+      if (call.url.endsWith("/v1/openapi.json")) {
+        return {
+          body: {
+            openapi: "3.1.0",
+            paths: {
+              "/v1/tasks/{id}/fail": {
+                post: {
+                  requestBody: {
+                    content: {
+                      "application/json": { schema: { $ref: "#/components/schemas/FailTaskInput" } },
+                    },
+                  },
+                },
+              },
+            },
+            components: {
+              schemas: {
+                FailTaskInput: {
+                  type: "object",
+                  properties: {
+                    agent_id: { type: "string" },
+                    reason: { type: "string" },
+                    retry: { type: "boolean" },
+                  },
+                },
+              },
+            },
+          },
+        };
+      }
+      return {
+        body: {
+          result: {
+            task: { id: "t-fail", status: "failed", reason: "remote reason" },
+            retryTask: { id: "t-retry", status: "pending" },
+          },
+        },
+      };
+    });
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const result = await cloudFailTask(client, "t-fail", {
+      agent_id: "nausicaa",
+      reason: "remote reason",
+      retry: true,
+    });
+
+    expect(result.task).toMatchObject({ id: "t-fail", status: "failed", reason: "remote reason" });
+    expect(result.retryTask).toMatchObject({ id: "t-retry", status: "pending" });
+    expect(calls.map((call) => `${call.method} ${call.url}`)).toEqual([
+      "GET https://todos.example.com/v1/openapi.json",
+      "POST https://todos.example.com/v1/tasks/t-fail/fail",
+    ]);
+    expect(calls[1]).toMatchObject({
+      method: "POST",
+      url: "https://todos.example.com/v1/tasks/t-fail/fail",
+      body: { agent_id: "nausicaa", reason: "remote reason", retry: true },
+    });
+  });
+
+  test("retry capability is cached per authority and reset clears the cached result", async () => {
+    const calls = installFetch((call) => {
+      if (call.url.endsWith("/v1/openapi.json")) {
+        return {
+          body: {
+            openapi: "3.1.0",
+            paths: {
+              "/v1/tasks/{id}/fail": {
+                post: {
+                  requestBody: {
+                    content: {
+                      "application/json": {
+                        schema: {
+                          type: "object",
+                          properties: { retry: { type: "boolean" } },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        };
+      }
+      return {
+        body: {
+          result: {
+            task: { id: "t-fail", status: "failed" },
+            retryTask: { id: "t-retry", status: "pending" },
+          },
+        },
+      };
+    });
+    const authorityA = getTodosCloudClient(CLOUD_ENV)!;
+    const authorityB = getTodosCloudClient({
+      HASNA_TODOS_STORAGE_MODE: "remote",
+      HASNA_TODOS_API_URL: "https://authority-b.example",
+      HASNA_TODOS_API_KEY: "fixture-b",
+    })!;
+
+    await cloudFailTask(authorityA, "task-a-1", { retry: true });
+    await cloudFailTask(authorityA, "task-a-2", { retry: true });
+    await cloudFailTask(authorityB, "task-b-1", { retry: true });
+    expect(calls.filter((call) => call.url.endsWith("/v1/openapi.json"))).toHaveLength(2);
+
+    resetTodosCloudClient();
+    await cloudFailTask(authorityA, "task-a-3", { retry: true });
+    expect(calls.filter((call) => call.url.endsWith("/v1/openapi.json"))).toHaveLength(3);
+  });
+
+  test("retrying fail rejects a non-advertising authority before any fail mutation", async () => {
+    const calls = installFetch((call) => {
+      if (call.url.endsWith("/v1/openapi.json")) {
+        return {
+          body: {
+            openapi: "3.1.0",
+            paths: {
+              "/v1/tasks/{id}/fail": {
+                post: {
+                  requestBody: {
+                    content: {
+                      "application/json": {
+                        schema: {
+                          type: "object",
+                          properties: {
+                            agent_id: { type: "string" },
+                            reason: { type: "string" },
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        };
+      }
+      throw new Error(`unexpected mutation: ${call.method} ${call.url}`);
+    });
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    const failure = cloudFailTask(client, "t-fail", {
+      agent_id: "nausicaa",
+      reason: "must remain pending",
+      retry: true,
+    });
+    await expect(failure).rejects.toThrow("REMOTE_RETRY_UNSUPPORTED");
+    await expect(failure).rejects.toThrow("POST /v1/tasks/{id}/fail");
+    await expect(failure).rejects.toThrow("https://todos.example.com");
+    await expect(failure).rejects.toThrow("no failure mutation was sent");
+    await expect(failure).rejects.toThrow("deploy a compatible @hasna/todos /v1 server");
+    expect(calls.map((call) => `${call.method} ${call.url}`)).toEqual([
+      "GET https://todos.example.com/v1/openapi.json",
+    ]);
+  });
+
+  test.each([
+    ["missing", undefined],
+    ["malformed", "not-a-task"],
+    ["missing identity", { status: "pending" }],
+  ])("retrying fail rejects an advertised-support response with %s retryTask", async (_label, retryTask) => {
+    const calls = installFetch((call) => {
+      if (call.url.endsWith("/v1/openapi.json")) {
+        return {
+          body: {
+            openapi: "3.1.0",
+            paths: {
+              "/v1/tasks/{id}/fail": {
+                post: {
+                  requestBody: {
+                    content: {
+                      "application/json": {
+                        schema: {
+                          type: "object",
+                          properties: { retry: { type: "boolean" } },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        };
+      }
+      return {
+        body: {
+          result: {
+            task: { id: "t-fail", status: "failed" },
+            ...(retryTask !== undefined ? { retryTask } : {}),
+          },
+        },
+      };
+    });
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    await expect(cloudFailTask(client, "t-fail", { retry: true }))
+      .rejects.toThrow("REMOTE_API_INCOMPATIBLE");
+    expect(calls.filter((call) => call.url.endsWith("/fail"))).toHaveLength(1);
+  });
+
+  test("non-retry remote fail remains compatible and skips capability preflight", async () => {
+    const calls = installFetch((call) => {
+      if (call.url.endsWith("/v1/openapi.json")) throw new Error("preflight must not run");
+      return {
+        body: {
+          result: {
+            task: { id: "t-fail", status: "failed", reason: "remote reason" },
+          },
+        },
+      };
+    });
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    const result = await cloudFailTask(client, "t-fail", {
+      agent_id: "nausicaa",
+      reason: "remote reason",
+    });
+
+    expect(result.task).toMatchObject({ id: "t-fail", status: "failed", reason: "remote reason" });
+    expect(result.retryTask).toBeUndefined();
+    expect(calls.map((call) => `${call.method} ${call.url}`)).toEqual([
+      "POST https://todos.example.com/v1/tasks/t-fail/fail",
+    ]);
+  });
+
+  test("failed-task start preserves the remote transition error instead of reporting authority failure", async () => {
+    installFetch(() => ({
+      status: 409,
+      body: {
+        error: "Task is failed and cannot be started; reset status to pending before starting again",
+        code: "TASK_NOT_STARTABLE",
+      },
+    }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    await expect(cloudTaskAction(client, "failed-task", "start", { agent_id: "silvanus" }))
+      .rejects.toThrow("TASK_NOT_STARTABLE: Task is failed and cannot be started; reset status to pending before starting again");
   });
 
   test("comments -> validates the envelope, count, method, auth, and encoded task path", async () => {
@@ -202,7 +1288,7 @@ describe("cloud task CRUD maps /v1 envelopes and carries the bearer key", () => 
       pagination_supported: true,
     });
     expect(calls[0]!.method).toBe("GET");
-    expect(calls[0]!.url).toBe("https://todos.hasna.xyz/v1/tasks/task%2Fwith%20%3F%20reserved/comments?limit=100");
+    expect(calls[0]!.url).toBe("https://todos.example.com/v1/tasks/task%2Fwith%20%3F%20reserved/comments?limit=100");
     expect(calls[0]!.headers["authorization"]).toBe("Bearer hasna_todos_test_key");
   });
 
@@ -272,7 +1358,7 @@ describe("cloud task CRUD maps /v1 envelopes and carries the bearer key", () => 
     });
     expect(calls).toHaveLength(1);
     expect(calls[0]!.url).toBe(
-      "https://todos.hasna.xyz/v1/tasks/t-page/comments?limit=25&cursor=opaque-current",
+      "https://todos.example.com/v1/tasks/t-page/comments?limit=25&cursor=opaque-current",
     );
   });
 
@@ -339,7 +1425,7 @@ describe("cloud task CRUD maps /v1 envelopes and carries the bearer key", () => 
     expect(calls).toHaveLength(1);
   });
 
-  test("comments gives an actionable compatibility error for an older server and propagates 5xx", async () => {
+  test("comments gives an actionable compatibility error for an older server and classifies 5xx", async () => {
     for (const status of [404, 405]) {
       resetTodosCloudClient();
       installFetch(() => ({ status, body: { error: "unsupported" } }));
@@ -350,12 +1436,7 @@ describe("cloud task CRUD maps /v1 envelopes and carries the bearer key", () => 
     resetTodosCloudClient();
     installFetch(() => ({ status: 500, body: { error: "failed" } }));
     const retryingClient = getTodosCloudClient(CLOUD_ENV)!;
-    try {
-      await cloudListComments(retryingClient, "t4");
-      throw new Error("expected cloudListComments to reject");
-    } catch (error) {
-      expect((error as { status?: number }).status).toBe(500);
-    }
+    await expect(cloudListComments(retryingClient, "t4")).rejects.toThrow("REMOTE_API_UNAVAILABLE");
   });
 });
 
@@ -366,7 +1447,7 @@ describe("cloud agent + lock + deps + verification routing (identity/coordinatio
     const agent = await cloudRegisterAgent(client, { name: "seneca", description: "worker" });
     expect(agent.id).toBe("ag1");
     expect(calls[0]!.method).toBe("POST");
-    expect(calls[0]!.url).toBe("https://todos.hasna.xyz/v1/agents");
+    expect(calls[0]!.url).toBe("https://todos.example.com/v1/agents");
     expect(calls[0]!.body).toEqual({ name: "seneca", description: "worker" });
     expect(calls[0]!.headers["authorization"]).toBe("Bearer hasna_todos_test_key");
   });
@@ -384,7 +1465,7 @@ describe("cloud agent + lock + deps + verification routing (identity/coordinatio
     expect(result.success).toBe(true);
     expect(result.locked_by).toBe("cli");
     expect(calls[0]!.method).toBe("POST");
-    expect(calls[0]!.url).toBe("https://todos.hasna.xyz/v1/tasks/t1/lock");
+    expect(calls[0]!.url).toBe("https://todos.example.com/v1/tasks/t1/lock");
     expect(calls[0]!.body).toEqual({ agent_id: "cli" });
   });
 
@@ -393,8 +1474,59 @@ describe("cloud agent + lock + deps + verification routing (identity/coordinatio
     const client = getTodosCloudClient(CLOUD_ENV)!;
     await expect(cloudUnlockTask(client, "t1", "cli")).resolves.toBe(true);
     expect(calls[0]!.method).toBe("POST");
-    expect(calls[0]!.url).toBe("https://todos.hasna.xyz/v1/tasks/t1/unlock");
+    expect(calls[0]!.url).toBe("https://todos.example.com/v1/tasks/t1/unlock");
     expect(calls[0]!.body).toEqual({ agent_id: "cli" });
+  });
+
+  test("stale-lock handoff -> exact v1 route with every explicit CAS input and unwraps receipt", async () => {
+    const receipt = {
+      schema_version: "todos.stale-lock-handoff.v1" as const,
+      receipt_id: "33333333-3333-4333-8333-333333333333",
+      task_id: "11111111-1111-4111-8111-111111111111",
+      actor: "nausicaa",
+      previous_holder: "holder-a",
+      previous_lock_version: "2020-01-01T00:00:00.000Z",
+      new_holder: "nausicaa",
+      new_lock_version: "2026-08-09T10:00:00.000Z",
+      stale_after_seconds: 3_600,
+      stale_cutoff: "2026-08-09T09:00:00.000Z",
+      reason: "stale exact lock",
+      created_at: "2026-08-09T10:00:00.000Z",
+    };
+    const calls = installFetch((call) => call.url.endsWith("/v1/openapi.json")
+      ? {
+          body: {
+            openapi: "3.1.0",
+            paths: {
+              "/v1/tasks/{id}/stale-lock-handoff": {
+                post: {},
+              },
+            },
+          },
+        }
+      : { body: { receipt } });
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+    await expect(cloudHandoffStaleTaskLock(client, {
+      task_id: receipt.task_id,
+      expected_holder: receipt.previous_holder,
+      expected_lock_version: receipt.previous_lock_version,
+      stale_after_seconds: receipt.stale_after_seconds,
+      new_holder: receipt.new_holder,
+      reason: receipt.reason,
+    })).resolves.toEqual(receipt);
+    expect(calls[0]!.method).toBe("GET");
+    expect(calls[0]!.url).toBe("https://todos.example.com/v1/openapi.json");
+    expect(calls[1]!.method).toBe("POST");
+    expect(calls[1]!.url).toBe(
+      `https://todos.example.com/v1/tasks/${receipt.task_id}/stale-lock-handoff`,
+    );
+    expect(calls[1]!.body).toEqual({
+      expected_holder: receipt.previous_holder,
+      expected_lock_version: receipt.previous_lock_version,
+      stale_after_seconds: receipt.stale_after_seconds,
+      new_holder: receipt.new_holder,
+      reason: receipt.reason,
+    });
   });
 
   test("deps add -> POST /v1/tasks/:id/dependencies, unwraps { dependency }", async () => {
@@ -403,7 +1535,7 @@ describe("cloud agent + lock + deps + verification routing (identity/coordinatio
     const dep = await cloudAddDependency(client, "t1", "t2");
     expect(dep.depends_on).toBe("t2");
     expect(calls[0]!.method).toBe("POST");
-    expect(calls[0]!.url).toBe("https://todos.hasna.xyz/v1/tasks/t1/dependencies");
+    expect(calls[0]!.url).toBe("https://todos.example.com/v1/tasks/t1/dependencies");
     expect(calls[0]!.body).toEqual({ depends_on: "t2" });
   });
 
@@ -412,7 +1544,7 @@ describe("cloud agent + lock + deps + verification routing (identity/coordinatio
     const client = getTodosCloudClient(CLOUD_ENV)!;
     await expect(cloudRemoveDependency(client, "t1", "t2")).resolves.toBe(true);
     expect(calls[0]!.method).toBe("DELETE");
-    expect(calls[0]!.url).toBe("https://todos.hasna.xyz/v1/tasks/t1/dependencies/t2");
+    expect(calls[0]!.url).toBe("https://todos.example.com/v1/tasks/t1/dependencies/t2");
   });
 
   test("deps list -> GET /v1/tasks/:id/dependencies, defaults arrays", async () => {
@@ -420,9 +1552,16 @@ describe("cloud agent + lock + deps + verification routing (identity/coordinatio
     const client = getTodosCloudClient(CLOUD_ENV)!;
     const edges = await cloudGetDependencies(client, "t1");
     expect(edges.dependencies).toHaveLength(1);
-    expect(edges.blocked_by).toEqual([]);
+    expect(edges.blocks).toEqual([]);
     expect(calls[0]!.method).toBe("GET");
-    expect(calls[0]!.url).toBe("https://todos.hasna.xyz/v1/tasks/t1/dependencies");
+    expect(calls[0]!.url).toBe("https://todos.example.com/v1/tasks/t1/dependencies");
+  });
+
+  test("deps list reads incoming edges from the legacy wire name blocked_by (pre-0.13.2 server)", async () => {
+    installFetch(() => ({ body: { dependencies: [], blocked_by: [{ task_id: "t9", depends_on: "t1" }] } }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+    const edges = await cloudGetDependencies(client, "t1");
+    expect(edges.blocks).toEqual([{ task_id: "t9", depends_on: "t1" }]);
   });
 
   test("record-verification -> POST /v1/tasks/:id/verifications, unwraps { verification }", async () => {
@@ -431,7 +1570,7 @@ describe("cloud agent + lock + deps + verification routing (identity/coordinatio
     const v = await cloudRecordVerification(client, "t1", { command: "bun test", status: "passed" });
     expect(v.status).toBe("passed");
     expect(calls[0]!.method).toBe("POST");
-    expect(calls[0]!.url).toBe("https://todos.hasna.xyz/v1/tasks/t1/verifications");
+    expect(calls[0]!.url).toBe("https://todos.example.com/v1/tasks/t1/verifications");
     expect(calls[0]!.body).toEqual({ command: "bun test", status: "passed" });
   });
 });
@@ -576,7 +1715,7 @@ describe("cloud read/analytics routing reads the shared cloud dataset", () => {
     const client = getTodosCloudClient(CLOUD_ENV)!;
     const edges = await cloudAllDependencies(client);
     expect(edges).toHaveLength(1);
-    expect(calls[0]!.url).toBe("https://todos.hasna.xyz/v1/dependencies");
+    expect(calls[0]!.url).toBe("https://todos.example.com/v1/dependencies");
   });
 
   test("blocking deps map -> incomplete blockers only", async () => {
@@ -677,6 +1816,29 @@ describe("cloud task-list, filter, and force-unlock parity", () => {
     }
   });
 
+  test("project-rename reports an incompatible authority when rename is missing (404/405)", async () => {
+    const projectId = "cbf3b934-44d0-4e1c-8225-23b44ade1d67";
+    for (const status of [404, 405]) {
+      resetTodosCloudClient();
+      installFetch((call) => {
+        if (call.url === "https://todos.example.com/v1/projects") {
+          return {
+            body: {
+              projects: [{ id: projectId, name: "Mallorca", path: "/tmp/mallorca", task_list_id: "mallorca-vacation" }],
+            },
+          };
+        }
+        if (call.url === `https://todos.example.com/v1/projects/${projectId}/rename`) {
+          return { status, body: { error: "method POST not allowed on /v1/projects/:id" } };
+        }
+        return { status: 404, body: { error: "not found" } };
+      });
+      const client = getTodosCloudClient(CLOUD_ENV)!;
+      await expect(cloudRenameProject(client, "cbf3b934", "mallorca-holiday"))
+        .rejects.toThrow(/REMOTE_API_INCOMPATIBLE.*\/v1\/projects\/:id\/rename/i);
+    }
+  });
+
   test("project resolution fails explicitly for missing and ambiguous references", async () => {
     installFetch(() => ({
       body: {
@@ -698,7 +1860,66 @@ describe("cloud task-list, filter, and force-unlock parity", () => {
       .rejects.toThrow('Project reference is ambiguous: "aaaaaaaa"');
   });
 
-  test("list forwards task-list, parent, and multi-status filters", async () => {
+  // Regression for 7a50aa8c: a project registered elsewhere (e.g. the Hasna
+  // Projects CLI, whose "wks_..." workspace id and canonical slug are never
+  // auto-linked into a todos project) resolved by its todos NAME but not by
+  // that other system's slug — and both misses threw the byte-identical
+  // "Project not found" message, so a caller could not tell "this project has
+  // never been created" from "todos's own registry has no record under this
+  // exact string". A name/path/slug miss must now say so explicitly; a
+  // UUID-shaped id miss (a real id-lookup, not a slug guess) stays terse.
+  test("project resolution distinguishes a registry-scoped slug/name miss from a genuine UUID miss", async () => {
+    installFetch(() => ({
+      body: {
+        projects: [
+          {
+            id: "3a4b956d-3880-4b35-8c78-1c951237350f",
+            name: "wks_bdn79k6023gj",
+            path: "/home/hasna/.hasna/projects/workspaces/wks_bdn79k6023gj",
+            task_list_id: "todos-wks-bdn79k6023gj",
+          },
+        ],
+      },
+    }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    // The project's own todos name/id/slug still resolve normally.
+    await expect(cloudResolveProjectRef(client, "wks_bdn79k6023gj"))
+      .resolves.toBe("3a4b956d-3880-4b35-8c78-1c951237350f");
+
+    // A slug that is real in a DIFFERENT system but was never registered here
+    // still fails — the negative-control prefix is unchanged so existing
+    // callers that only check for "Project not found" keep working — but the
+    // message now says the search was scoped to todos's own registry, rather
+    // than reading as proof the project has never existed anywhere.
+    const otherSystemSlug = "iproj-gtm-strategy";
+    await expect(cloudResolveProjectRef(client, otherSystemSlug))
+      .rejects.toThrow(`Project not found: "${otherSystemSlug}"`);
+    await expect(cloudResolveProjectRef(client, otherSystemSlug)).rejects.toThrow(
+      /todos's own project registry|does not know about projects registered elsewhere/i,
+    );
+
+    // A genuinely-absent reference of the SAME shape (a slug, not a UUID) still
+    // fails outright — the fix does not weaken the negative case.
+    await expect(cloudResolveProjectRef(client, "definitely-not-a-project-xyz"))
+      .rejects.toThrow('Project not found: "definitely-not-a-project-xyz"');
+
+    // A UUID-shaped id that simply doesn't exist is an id-lookup miss, not a
+    // slug guess — it must NOT gain the registry-scope hint, so the two
+    // failure shapes stay distinguishable from each other.
+    const missingUuid = "00000000-0000-4000-8000-000000000000";
+    await expect(cloudResolveProjectRef(client, missingUuid))
+      .rejects.toThrow(`Project not found: "${missingUuid}"`);
+    let uuidMissMessage = "";
+    try {
+      await cloudResolveProjectRef(client, missingUuid);
+    } catch (error) {
+      uuidMissMessage = error instanceof Error ? error.message : String(error);
+    }
+    expect(uuidMissMessage).toBe(`Project not found: "${missingUuid}"`);
+  });
+
+  test("list preserves task-list and parent filters on each scalar status request", async () => {
     const calls = installFetch(() => ({ body: { tasks: [] } }));
     const client = getTodosCloudClient(CLOUD_ENV)!;
     await cloudListTasks(client, {
@@ -706,9 +1927,32 @@ describe("cloud task-list, filter, and force-unlock parity", () => {
       parent_id: "parent-1",
       status: ["pending", "in_progress"],
     });
-    expect(calls[0]!.url).toContain("task_list_id=list-1");
-    expect(calls[0]!.url).toContain("parent_id=parent-1");
-    expect(calls[0]!.url).toContain("status=pending%2Cin_progress");
+    expect(calls).toHaveLength(2);
+    const urls = calls.map((call) => new URL(call.url));
+    for (const url of urls) {
+      expect(url.searchParams.get("task_list_id")).toBe("list-1");
+      expect(url.searchParams.get("parent_id")).toBe("parent-1");
+    }
+    expect(urls.map((url) => url.searchParams.get("status")).sort())
+      .toEqual(["in_progress", "pending"]);
+  });
+
+  test("an empty status array preserves the unfiltered remote list contract", async () => {
+    const remoteTask = {
+      id: "44444444-4444-4444-8444-444444444444",
+      title: "unfiltered remote task",
+      status: "pending",
+      priority: "medium",
+      created_at: "2026-08-08T10:00:00.000Z",
+    };
+    const calls = installFetch(() => ({ body: { tasks: [remoteTask] } }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    const tasks = await cloudListTasks(client, { status: [] });
+
+    expect(tasks).toEqual([remoteTask]);
+    expect(calls).toHaveLength(1);
+    expect(new URL(calls[0]!.url).searchParams.has("status")).toBe(false);
   });
 
   test("task-list create/delete and slug/prefix resolution use /v1/task-lists", async () => {
@@ -729,15 +1973,420 @@ describe("cloud task-list, filter, and force-unlock parity", () => {
     expect(calls.some((call) => call.method === "DELETE" && call.url.endsWith("/v1/task-lists/12345678-full"))).toBe(true);
   });
 
-  test("task-list resolution preserves exact UUIDs and resolves project-scoped slugs and unique UUID prefixes", async () => {
-    const listId = "abcdef12-1111-4111-8111-111111111111";
-    const calls = installFetch(() => ({
+  test("project task-list ensure forwards plan, exact-revision apply, and conditional rollback", async () => {
+    const project = {
+      id: "project-1",
+      name: "Dubai Fraud",
+      path: "/workspace/dubai-fraud",
+      task_list_id: "dubai-fraud",
+      updated_at: "2026-08-07T10:00:00.000Z",
+    };
+    const taskList = {
+      id: "list-1",
+      project_id: project.id,
+      slug: "dubai-fraud",
+      name: project.name,
+      created_at: "2026-08-07T10:01:00.000Z",
+      updated_at: "2026-08-07T10:01:00.000Z",
+    };
+    const receipt = {
+      schema_version: "todos.project-task-list-ensure.v1",
+      receipt_id: "ptlr_fixture",
+      idempotency_key: "dubai-fraud-default-list",
+      project_id: project.id,
+      task_list_id: taskList.id,
+      slug: taskList.slug,
+      created_by_operation: true,
+      result_revision: taskList.updated_at,
+      result_digest: "fixture-digest",
+      rollback_supported: true,
+      created_at: taskList.created_at,
+    };
+    const calls = installFetch((call) => {
+      if (call.url.endsWith("/v1/projects/project-1/task-list/rollback")) {
+        return {
+          body: {
+            schema_version: receipt.schema_version,
+            action: "removed",
+            project_id: project.id,
+            task_list_id: taskList.id,
+            accepted_receipt_id: receipt.receipt_id,
+            rollback_receipt_id: "ptlr_inverse_fixture",
+            removed_at: "2026-08-07T10:02:00.000Z",
+          },
+        };
+      }
+      if (call.method === "POST") {
+        return { status: 201, body: { mode: "apply", action: "created", project, task_list: taskList, receipt } };
+      }
+      return { body: { mode: "plan", action: "would_create", project, task_list: null, receipt: null } };
+    });
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    await expect(cloudPlanProjectTaskListEnsure(client, project.id))
+      .resolves.toMatchObject({ mode: "plan", action: "would_create", task_list: null });
+    await expect(cloudApplyProjectTaskListEnsure(client, project.id, {
+      expected_project_revision: project.updated_at,
+      idempotency_key: receipt.idempotency_key,
+    })).resolves.toMatchObject({ mode: "apply", action: "created", receipt });
+    await expect(cloudRollbackProjectTaskListEnsure(client, project.id, {
+      receipt_id: receipt.receipt_id,
+      expected_task_list_revision: taskList.updated_at,
+    })).resolves.toMatchObject({ action: "removed", task_list_id: taskList.id });
+
+    expect(calls.map((call) => `${call.method} ${call.url}`)).toEqual([
+      "GET https://todos.example.com/v1/projects/project-1/task-list/ensure",
+      "POST https://todos.example.com/v1/projects/project-1/task-list/ensure",
+      "POST https://todos.example.com/v1/projects/project-1/task-list/rollback",
+    ]);
+    expect(calls[1]!.body).toEqual({
+      expected_project_revision: project.updated_at,
+      idempotency_key: receipt.idempotency_key,
+    });
+    expect(calls[2]!.body).toEqual({
+      receipt_id: receipt.receipt_id,
+      expected_task_list_revision: taskList.updated_at,
+    });
+  });
+
+  test("project task-list ensure preserves a domain PROJECT_NOT_FOUND response", async () => {
+    installFetch(() => ({
+      status: 404,
+      body: { error: "Project not found: missing", code: "PROJECT_NOT_FOUND" },
+    }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    await expect(cloudPlanProjectTaskListEnsure(client, "missing")).rejects.toMatchObject({
+      status: 404,
+      body: { code: "PROJECT_NOT_FOUND" },
+    });
+  });
+
+  test("project task-list rollback preserves a domain receipt-not-found response", async () => {
+    installFetch(() => ({
+      status: 404,
       body: {
-        task_lists: [
-          { id: listId, project_id: "project-1", slug: "release", name: "Release" },
-        ],
+        error: "No exact operation-owned task list matches this rollback receipt",
+        code: "PROJECT_TASK_LIST_RECEIPT_NOT_FOUND",
       },
     }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    await expect(cloudRollbackProjectTaskListEnsure(client, "project-1", {
+      receipt_id: "ptlr_missing",
+      expected_task_list_revision: "2026-08-07T10:01:00.000Z",
+    })).rejects.toMatchObject({
+      status: 404,
+      body: { code: "PROJECT_TASK_LIST_RECEIPT_NOT_FOUND" },
+    });
+  });
+
+  test.each([
+    ["a bare ordinary plan", {
+      id: "plan-1",
+      slug: "dubai-fraud",
+      name: "Dubai Fraud",
+      project_id: null,
+      updated_at: "2026-08-08T00:00:00.000Z",
+    }],
+    ["a partial linkage envelope", {
+      mode: "plan",
+      action: "would_link",
+      plan: { id: "plan-1", project_id: null, updated_at: "2026-08-08T00:00:00.000Z" },
+      project: { id: "project-1", updated_at: "2026-08-08T00:00:00.000Z" },
+      tasks: [],
+    }],
+    ["the wrong operation", {
+      mode: "apply",
+      action: "linked",
+      plan: { id: "plan-1", project_id: "project-1", updated_at: "2026-08-08T00:00:00.000Z" },
+      project: { id: "project-1", updated_at: "2026-08-08T00:00:00.000Z" },
+      tasks: [],
+      receipt: null,
+    }],
+  ])("plan-project-link rejects HTTP 2xx carrying %s", async (_label, body) => {
+    installFetch(() => ({ body }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    await expect(cloudPlanPlanProjectLink(client, "plan-1", "project-1"))
+      .rejects.toThrow(/REMOTE_API_INCOMPATIBLE:.*todos\.plan-project-link\.v1 plan response/i);
+  });
+
+  test("plan-project-link accepts the exact non-mutating response envelope", async () => {
+    const plan = planProjectLinkPlanFixture();
+    const project = planProjectLinkProjectFixture();
+    const task = planProjectLinkTaskFixture();
+    installFetch(() => ({
+      body: { mode: "plan", action: "would_link", plan, project, tasks: [task], receipt: null },
+    }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    await expect(cloudPlanPlanProjectLink(client, plan.id, project.id)).resolves.toEqual({
+      mode: "plan",
+      action: "would_link",
+      plan,
+      project,
+      tasks: [task],
+      receipt: null,
+    });
+  });
+
+  test("plan-project-link accepts a supported task response without created_by", async () => {
+    const plan = planProjectLinkPlanFixture();
+    const project = planProjectLinkProjectFixture();
+    const task = planProjectLinkTaskFixture();
+    const legacyTask = { ...task } as Record<string, unknown>;
+    delete legacyTask["created_by"];
+    installFetch(() => ({
+      body: { mode: "plan", action: "would_link", plan, project, tasks: [legacyTask], receipt: null },
+    }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    await expect(cloudPlanPlanProjectLink(client, plan.id, project.id)).resolves.toEqual({
+      mode: "plan",
+      action: "would_link",
+      plan,
+      project,
+      tasks: [task],
+      receipt: null,
+    });
+  });
+
+  test("plan-project-link still rejects an invalid present created_by", async () => {
+    const plan = planProjectLinkPlanFixture();
+    const project = planProjectLinkProjectFixture();
+    const task = { ...planProjectLinkTaskFixture(), created_by: 42 };
+    installFetch(() => ({
+      body: { mode: "plan", action: "would_link", plan, project, tasks: [task], receipt: null },
+    }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    await expect(cloudPlanPlanProjectLink(client, plan.id, project.id))
+      .rejects.toThrow(/tasks\[0\]\.created_by must be a string or null/);
+  });
+
+  test.each([
+    ["Plan", {
+      mode: "plan",
+      action: "would_link",
+      plan: { ...planProjectLinkPlanFixture(), name: undefined, updated_at: "not-a-date" },
+      project: planProjectLinkProjectFixture(),
+      tasks: [planProjectLinkTaskFixture()],
+      receipt: null,
+    }],
+    ["Project", {
+      mode: "plan",
+      action: "would_link",
+      plan: planProjectLinkPlanFixture(),
+      project: { ...planProjectLinkProjectFixture(), path: undefined, created_at: "not-a-date" },
+      tasks: [planProjectLinkTaskFixture()],
+      receipt: null,
+    }],
+    ["Task", {
+      mode: "plan",
+      action: "would_link",
+      plan: planProjectLinkPlanFixture(),
+      project: planProjectLinkProjectFixture(),
+      tasks: [{ ...planProjectLinkTaskFixture(), title: undefined, updated_at: "not-a-date" }],
+      receipt: null,
+    }],
+  ])("plan-project-link rejects a malformed nested %s entity", async (_label, body) => {
+    installFetch(() => ({ body }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    await expect(cloudPlanPlanProjectLink(client, "plan-1", "project-1"))
+      .rejects.toThrow(/REMOTE_API_INCOMPATIBLE:.*todos\.plan-project-link\.v1 plan response/i);
+  });
+
+  test.each([
+    ["a mismatched plan identity", { plan_id: "other-plan" }],
+    ["a mismatched count", { task_count: 2 }],
+    ["a mismatched result revision", { result_plan_revision: "2026-08-08T00:00:01.000Z" }],
+    ["a nondeterministic receipt identity", { receipt_id: "pplr_arbitrary" }],
+    ["an inconsistent result digest", { result_digest: "0".repeat(64) }],
+    ["an invalid creation timestamp", { created_at: "not-a-date" }],
+  ] as const)("plan-project-link apply rejects HTTP 2xx carrying %s", async (_label, overrides) => {
+    const plan = planProjectLinkPlanFixture({
+      project_id: "project-1",
+      updated_at: "2026-08-08T00:00:02.000Z",
+    });
+    const project = planProjectLinkProjectFixture();
+    const task = planProjectLinkTaskFixture({ project_id: project.id, updated_at: plan.updated_at });
+    const receipt = { ...planProjectLinkReceiptFixture(plan, [task]), ...overrides };
+    installFetch(() => ({
+      status: 201,
+      body: { mode: "apply", action: "linked", plan, project, tasks: [task], receipt },
+    }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    await expect(cloudApplyPlanProjectLink(client, plan.id, project.id, {
+      expected_plan_revision: "2026-08-08T00:00:00.000Z",
+      expected_project_revision: project.updated_at,
+      idempotency_key: "link-fixture",
+    })).rejects.toThrow(/REMOTE_API_INCOMPATIBLE:.*todos\.plan-project-link\.v1 apply response/i);
+  });
+
+  test("plan-project-link apply rejects a partial receipt with full nested entities", async () => {
+    const plan = planProjectLinkPlanFixture({
+      project_id: "project-1",
+      updated_at: "2026-08-08T00:00:02.000Z",
+    });
+    const project = planProjectLinkProjectFixture();
+    const task = planProjectLinkTaskFixture({ project_id: project.id, updated_at: plan.updated_at });
+    installFetch(() => ({
+      status: 201,
+      body: {
+        mode: "apply",
+        action: "linked",
+        plan,
+        project,
+        tasks: [task],
+        receipt: { schema_version: "todos.plan-project-link.v1", task_count: 1 },
+      },
+    }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    await expect(cloudApplyPlanProjectLink(client, plan.id, project.id, {
+      expected_plan_revision: "2026-08-08T00:00:00.000Z",
+      expected_project_revision: project.updated_at,
+      idempotency_key: "link-fixture",
+    })).rejects.toThrow(/REMOTE_API_INCOMPATIBLE:.*todos\.plan-project-link\.v1 apply response/i);
+  });
+
+  test("plan-project-link apply rejects an HTTP 2xx plan operation", async () => {
+    const plan = planProjectLinkPlanFixture();
+    const project = planProjectLinkProjectFixture();
+    const task = planProjectLinkTaskFixture();
+    installFetch(() => ({
+      body: { mode: "plan", action: "would_link", plan, project, tasks: [task], receipt: null },
+    }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    await expect(cloudApplyPlanProjectLink(client, plan.id, project.id, {
+      expected_plan_revision: plan.updated_at,
+      expected_project_revision: project.updated_at,
+      idempotency_key: "link-fixture",
+    })).rejects.toThrow(/REMOTE_API_INCOMPATIBLE:.*todos\.plan-project-link\.v1 apply response/i);
+  });
+
+  test.each(["linked", "already_linked"] as const)(
+    "plan-project-link apply accepts an exact %s response",
+    async (action) => {
+      const plan = planProjectLinkPlanFixture({
+        project_id: "project-1",
+        updated_at: "2026-08-08T00:00:02.000Z",
+      });
+      const project = planProjectLinkProjectFixture();
+      const task = planProjectLinkTaskFixture({ project_id: project.id, updated_at: plan.updated_at });
+      const receipt = planProjectLinkReceiptFixture(plan, [task]);
+      installFetch(() => ({
+        status: action === "linked" ? 201 : 200,
+        body: { mode: "apply", action, plan, project, tasks: [task], receipt },
+      }));
+      const client = getTodosCloudClient(CLOUD_ENV)!;
+
+      await expect(cloudApplyPlanProjectLink(client, plan.id, project.id, {
+        expected_plan_revision: "2026-08-08T00:00:00.000Z",
+        expected_project_revision: project.updated_at,
+        idempotency_key: receipt.idempotency_key,
+      })).resolves.toMatchObject({ mode: "apply", action, receipt });
+    },
+  );
+
+  test("plan-project-link apply normalizes the idempotency key before POST and response validation", async () => {
+    const plan = planProjectLinkPlanFixture({
+      project_id: "project-1",
+      updated_at: "2026-08-08T00:00:02.000Z",
+    });
+    const project = planProjectLinkProjectFixture();
+    const task = planProjectLinkTaskFixture({ project_id: project.id, updated_at: plan.updated_at });
+    const receipt = planProjectLinkReceiptFixture(plan, [task]);
+    const calls = installFetch(() => ({
+      status: 201,
+      body: { mode: "apply", action: "linked", plan, project, tasks: [task], receipt },
+    }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    await expect(cloudApplyPlanProjectLink(client, plan.id, project.id, {
+      expected_plan_revision: "2026-08-08T00:00:00.000Z",
+      expected_project_revision: project.updated_at,
+      idempotency_key: `  ${receipt.idempotency_key}  `,
+    })).resolves.toMatchObject({ mode: "apply", receipt });
+    expect(calls[0]!.body).toMatchObject({ idempotency_key: receipt.idempotency_key });
+  });
+
+  test.each([
+    ["the wrong schema", {
+      schema_version: "wrong",
+      action: "restored",
+      plan: { id: "plan-1", project_id: null, updated_at: "2026-08-08T00:00:03.000Z" },
+      tasks: [],
+      accepted_receipt_id: "pplr_fixture",
+      rollback_receipt_id: "pplr_inverse_fixture",
+      restored_at: "2026-08-08T00:00:03.000Z",
+    }],
+    ["a mismatched accepted receipt", {
+      schema_version: "todos.plan-project-link.v1",
+      action: "restored",
+      plan: { id: "plan-1", project_id: null, updated_at: "2026-08-08T00:00:03.000Z" },
+      tasks: [{ id: "task-1", plan_id: "plan-1", project_id: null }],
+      accepted_receipt_id: "other-receipt",
+      rollback_receipt_id: "pplr_inverse_fixture",
+      restored_at: "2026-08-08T00:00:03.000Z",
+    }],
+    ["a partial rollback envelope", {
+      schema_version: "todos.plan-project-link.v1",
+      action: "restored",
+    }],
+    ["the wrong rollback operation", {
+      schema_version: "todos.plan-project-link.v1",
+      action: "linked",
+      plan: { id: "plan-1", project_id: null, updated_at: "2026-08-08T00:00:03.000Z" },
+      tasks: [],
+      accepted_receipt_id: "pplr_fixture",
+      rollback_receipt_id: "pplr_inverse_fixture",
+      restored_at: "2026-08-08T00:00:03.000Z",
+    }],
+  ])("plan-project-link rollback rejects HTTP 2xx carrying %s", async (_label, body) => {
+    installFetch(() => ({ body }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    await expect(cloudRollbackPlanProjectLink(client, "plan-1", "project-1", {
+      receipt_id: "pplr_fixture",
+      expected_plan_revision: "2026-08-08T00:00:02.000Z",
+    })).rejects.toThrow(/REMOTE_API_INCOMPATIBLE:.*todos\.plan-project-link\.v1 rollback response/i);
+  });
+
+  test("plan-project-link rollback accepts the exact response envelope", async () => {
+    const acceptedReceiptId = planProjectLinkReceiptId("link-fixture");
+    const body = {
+      schema_version: "todos.plan-project-link.v1",
+      action: "restored",
+      plan: planProjectLinkPlanFixture({ updated_at: "2026-08-08T00:00:03.000Z" }),
+      tasks: [planProjectLinkTaskFixture({ updated_at: "2026-08-08T00:00:03.000Z" })],
+      accepted_receipt_id: acceptedReceiptId,
+      rollback_receipt_id: planProjectLinkRollbackReceiptId(acceptedReceiptId),
+      restored_at: "2026-08-08T00:00:03.000Z",
+    };
+    installFetch(() => ({ body }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    await expect(cloudRollbackPlanProjectLink(client, "plan-1", "project-1", {
+      receipt_id: body.accepted_receipt_id,
+      expected_plan_revision: "2026-08-08T00:00:02.000Z",
+    })).resolves.toEqual(body);
+  });
+
+  test("task-list resolution preserves exact UUIDs and resolves project-scoped slugs and unique UUID prefixes", async () => {
+    const listId = "abcdef12-1111-4111-8111-111111111111";
+    const taskList = { id: listId, project_id: "project-1", slug: "release", name: "Release" };
+    const calls = installFetch((call) => {
+      const url = new URL(call.url);
+      if (url.pathname === `/v1/task-lists/${listId}`) {
+        return { body: { task_list: taskList } };
+      }
+      return { body: { task_lists: [taskList] } };
+    });
     const client = getTodosCloudClient(CLOUD_ENV)!;
 
     await expect(cloudResolveTaskListRef(client, `  ${listId.toUpperCase()}  `))
@@ -752,10 +2401,108 @@ describe("cloud task-list, filter, and force-unlock parity", () => {
       .resolves.toBe(listId);
     await expect(cloudResolveTaskListRef(client, "ABCDEF12"))
       .resolves.toBe(listId);
-    expect(calls).toHaveLength(3);
-    expect(calls[0]!.url).toContain("project_id=project-1");
-    expect(calls[1]!.url).toContain("project_id=project-1");
-    expect(calls[2]!.url).not.toContain("project_id=");
+    expect(calls.map((call) => call.url)).toEqual([
+      "https://todos.example.com/v1/task-lists?project_id=project-1",
+      `https://todos.example.com/v1/task-lists/${listId}`,
+      "https://todos.example.com/v1/task-lists",
+    ]);
+  });
+
+  test.each([
+    ["exact UUID", "09dc7e1d-7c20-4a52-b4fb-7675d7202f90"],
+    ["project canonical slug", "todos-swiss-bank-account"],
+  ])("resolves a legacy global task list through its owning project by %s", async (_label, ref) => {
+    const projectId = "ccb079bb-385d-467c-873d-0bb00978b642";
+    const listId = "09dc7e1d-7c20-4a52-b4fb-7675d7202f90";
+    const slug = "todos-swiss-bank-account";
+    const legacyList = {
+      id: listId,
+      project_id: null,
+      slug,
+      name: "Swiss Bank Account",
+    };
+    const calls = installFetch((call) => {
+      const url = new URL(call.url);
+      if (url.pathname === `/v1/task-lists/${listId}`) {
+        return { body: { task_list: legacyList } };
+      }
+      if (url.pathname === `/v1/projects/${projectId}`) {
+        return {
+          body: {
+            project: {
+              id: projectId,
+              name: "swiss-bank-account",
+              path: "/workspace/swiss-bank-account",
+              task_list_id: slug,
+            },
+          },
+        };
+      }
+      if (url.pathname === "/v1/task-lists" && url.searchParams.get("project_id") === projectId) {
+        return { body: { task_lists: [] } };
+      }
+      if (url.pathname === "/v1/task-lists") {
+        return { body: { task_lists: [legacyList] } };
+      }
+      return { status: 404, body: { error: "not found" } };
+    });
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    await expect(cloudResolveTaskListRef(client, ref, projectId)).resolves.toBe(listId);
+    expect(calls.some((call) => call.url.includes(`/v1/projects/${projectId}`))).toBe(true);
+  });
+
+  test("does not attach an unrelated legacy global task list to a project", async () => {
+    const projectId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const listId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    installFetch((call) => {
+      const url = new URL(call.url);
+      if (url.pathname === `/v1/task-lists/${listId}`) {
+        return {
+          body: {
+            task_list: {
+              id: listId,
+              project_id: null,
+              slug: "other-project",
+              name: "Other Project",
+            },
+          },
+        };
+      }
+      if (url.pathname === `/v1/projects/${projectId}`) {
+        return {
+          body: {
+            project: {
+              id: projectId,
+              name: "Expected Project",
+              path: "/workspace/expected-project",
+              task_list_id: "expected-project",
+            },
+          },
+        };
+      }
+      return { status: 404, body: { error: "not found" } };
+    });
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    await expect(cloudResolveTaskListRef(client, listId, projectId))
+      .rejects.toThrow(`Task list not found: "${listId}"`);
+  });
+
+  test("project-scoped plan resolution rejects an exact UUID from another project", async () => {
+    const planId = "77777777-7777-4777-8777-777777777777";
+    const calls = installFetch((call) => {
+      if (call.url.endsWith(`/plans/${planId}`)) {
+        return { body: { plan: { id: planId, project_id: "project-b", slug: "foreign", name: "Foreign" } } };
+      }
+      return { body: { plans: [] } };
+    });
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+    await expect(cloudResolvePlan(client, planId, "project-a")).resolves.toBeNull();
+    expect(calls.map((call) => call.url)).toEqual([
+      `https://todos.example.com/v1/plans/${planId}`,
+      "https://todos.example.com/v1/plans?project_id=project-a",
+    ]);
   });
 
   test("task-list resolution fails explicitly for missing and ambiguous references", async () => {
@@ -782,5 +2529,128 @@ describe("cloud task-list, filter, and force-unlock parity", () => {
     const client = getTodosCloudClient(CLOUD_ENV)!;
     await expect(cloudUnlockTask(client, "task-1", undefined, true)).resolves.toBe(true);
     expect(calls[0]!.body).toEqual({ force: true });
+  });
+});
+
+// -- The injected storage mode is derived, not hardcoded -----------------------
+//
+// The storage-mode enum has already changed once and the two valid sets are
+// DISJOINT:
+//
+//   contracts <= 0.8.5   accepts cloud + the deprecated aliases self_hosted,
+//                        remote, hybrid; THROWS on postgres/sqlite
+//   post-removal         accepts ONLY sqlite/postgres; THROWS on everything
+//                        else, including cloud and self_hosted
+//
+// So a literal pinned in source is a bet on which side of that change a machine
+// is on, and the bet loses on one side or the other. In this repo specifically,
+// losing it means a todos CLI that cannot reach its own authority — which is how
+// the fleet loses the ability to coordinate its own recovery.
+//
+// `normalize` is injectable because only one contracts generation can be
+// installed at a time; without that seam, forward compatibility here would be an
+// assertion rather than a test.
+
+describe("serverStorageMode", () => {
+  const acceptOnly = (accepted: readonly string[]) => (value: string) => {
+    if (!accepted.includes(value)) throw new Error(`Unknown storage mode: ${value}`);
+    return value;
+  };
+
+  const PRE_REMOVAL = ["local", "cloud", "self_hosted", "remote", "hybrid"];
+  const POST_REMOVAL = ["sqlite", "postgres", "postgresql"];
+
+  test("derives cloud on the pre-removal contracts enum", () => {
+    expect(serverStorageMode(acceptOnly(PRE_REMOVAL))).toBe("cloud");
+  });
+
+  test("derives postgres on the post-removal contracts enum", () => {
+    // The whole point: after the bump `cloud` throws at the resolver, and this
+    // is the token that does not.
+    expect(serverStorageMode(acceptOnly(POST_REMOVAL))).toBe("postgres");
+  });
+
+  test("prefers the newest accepted token when several are valid", () => {
+    // A transitional release that still honours the old words must not pin us
+    // to the old generation.
+    expect(serverStorageMode(acceptOnly([...POST_REMOVAL, ...PRE_REMOVAL]))).toBe("postgres");
+  });
+
+  test("never prefers a deprecated alias over the canonical token of the same generation", () => {
+    // `self_hosted` and `cloud` are BOTH accepted pre-removal, and `self_hosted`
+    // is the deprecated one. Preferring it would silently move this repo onto a
+    // deprecated token — a live behaviour change dressed up as a refactor, which
+    // would pass any test that only asked "does it resolve".
+    expect(serverStorageMode(acceptOnly(["self_hosted", "cloud"]))).toBe("cloud");
+  });
+
+  test("still resolves when the alias is the only server token on offer", () => {
+    // Canonical-before-deprecated is a preference, not a refusal.
+    expect(serverStorageMode(acceptOnly(["self_hosted"]))).toBe("self_hosted");
+  });
+
+  test("throws an actionable REMOTE_STORAGE_MODE_UNSUPPORTED when the enum changes again", () => {
+    // Guessing is the defect class this derivation removes, so an unrecognised
+    // enum must fail loudly rather than route at the wrong dataset.
+    const rejectAll = acceptOnly([]);
+
+    expect(() => serverStorageMode(rejectAll)).toThrow("REMOTE_STORAGE_MODE_UNSUPPORTED");
+    expect(() => serverStorageMode(rejectAll)).toThrow(/SERVER_MODE_CANDIDATES/);
+    expect(() => serverStorageMode(rejectAll)).toThrow(/local SQLite fallback is disabled/);
+  });
+
+  test("an injected normalizer never poisons the cached default", () => {
+    // The cache is only read/written for the default normalizer. Without that
+    // guard the first injected probe would fix the value for the whole process —
+    // and every later real call would return it.
+    const real = serverStorageMode();
+
+    expect(serverStorageMode(acceptOnly(POST_REMOVAL))).toBe("postgres");
+    expect(serverStorageMode()).toBe(real);
+  });
+
+  test("agrees with the contracts version actually installed", () => {
+    // Not a tautology: this is the assertion that fails the day a dependency
+    // bump lands a generation the candidate list does not cover.
+    expect(["postgres", "cloud", "self_hosted"]).toContain(serverStorageMode());
+  });
+});
+
+describe("requireTodosRemoteAuthorityEnv", () => {
+  test("stamps the derived mode rather than a literal", () => {
+    const env = requireTodosRemoteAuthorityEnv(CLOUD_ENV);
+
+    expect(env.HASNA_TODOS_STORAGE_MODE).toBe(serverStorageMode());
+  });
+
+  test("leaves the URL rewrite and the key trim untouched", () => {
+    // This function returns THREE keys and only the mode is this change's
+    // business. The `/v1` suffix must be stripped back off (the status object
+    // appends it and the client re-appends it, so a doubled suffix would point
+    // the CLI at /v1/v1), and the key must still be trimmed.
+    const env = requireTodosRemoteAuthorityEnv({
+      ...CLOUD_ENV,
+      HASNA_TODOS_API_KEY: `  ${CLOUD_ENV.HASNA_TODOS_API_KEY}  `,
+    });
+
+    expect(env.HASNA_TODOS_API_URL).toBe("https://todos.example.com");
+    expect(env.HASNA_TODOS_API_URL).not.toMatch(/\/v1$/);
+    expect(env.HASNA_TODOS_API_KEY).toBe(CLOUD_ENV.HASNA_TODOS_API_KEY);
+  });
+
+  test("still refuses a half-configured authority", () => {
+    // Deriving the mode must not weaken the no-local-fallback guarantee.
+    expect(() =>
+      requireTodosRemoteAuthorityEnv({
+        HASNA_TODOS_STORAGE_MODE: "cloud",
+        HASNA_TODOS_API_URL: "https://todos.example.com",
+      }),
+    ).toThrow(/REMOTE_API_KEY_MISSING/);
+  });
+
+  test("passes every other variable through unchanged", () => {
+    const env = requireTodosRemoteAuthorityEnv({ ...CLOUD_ENV, UNRELATED_VAR: "kept" });
+
+    expect(env.UNRELATED_VAR).toBe("kept");
   });
 });

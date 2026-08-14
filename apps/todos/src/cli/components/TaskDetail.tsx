@@ -1,4 +1,5 @@
 import { Box, Text } from "ink";
+import { formatExpiredLock, lockDisplayState } from "../../lib/lock-display.js";
 import type { TaskWithRelations } from "../../types/index.js";
 
 interface TaskDetailProps {
@@ -75,10 +76,16 @@ export function TaskDetail({ task }: TaskDetailProps) {
             <Text>{task.working_dir}</Text>
           </Box>
         )}
-        {task.locked_by && (
+        {lockDisplayState(task.locked_by, task.locked_at).held && (
           <Box>
             <Text dimColor>{"Locked:   "}</Text>
             <Text color="magenta">{task.locked_by} (at {task.locked_at})</Text>
+          </Box>
+        )}
+        {lockDisplayState(task.locked_by, task.locked_at).expired && (
+          <Box>
+            <Text dimColor>{"Lock:     "}</Text>
+            <Text dimColor>{formatExpiredLock(lockDisplayState(task.locked_by, task.locked_at))}</Text>
           </Box>
         )}
         {task.tags.length > 0 && (
@@ -131,10 +138,10 @@ export function TaskDetail({ task }: TaskDetailProps) {
         </Box>
       )}
 
-      {task.blocked_by.length > 0 && (
+      {task.blocks.length > 0 && (
         <Box flexDirection="column" marginBottom={1}>
-          <Text bold>Blocks ({task.blocked_by.length}):</Text>
-          {task.blocked_by.map((b) => (
+          <Text bold>Blocks ({task.blocks.length}):</Text>
+          {task.blocks.map((b) => (
             <Box key={b.id} marginLeft={2}>
               <Text dimColor>{b.id.slice(0, 8)} </Text>
               <Text color={statusColors[b.status] || "white"}>[{b.status}] </Text>

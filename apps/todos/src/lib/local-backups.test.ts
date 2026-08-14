@@ -115,6 +115,27 @@ describe("local backups", () => {
     ]));
   });
 
+  test("redacts legacy raw task and artifact content in backup bundles by default", () => {
+    const { task, run } = seedBackupFixture();
+    const fakeToken = ["ghp", "dddddddddddddddddddddddddddddddddddddd"].join("_");
+    const db = getDatabase();
+    db.run("UPDATE tasks SET title = ?, description = ?, metadata = ? WHERE id = ?", [
+      `backup ${fakeToken}`,
+      `description ${fakeToken}`,
+      JSON.stringify({ token: fakeToken }),
+      task.id,
+    ]);
+    const artifactPath = join(root, "secret-evidence.log");
+    writeFileSync(artifactPath, `artifact ${fakeToken}\n`);
+    addTaskRunArtifact({ run_id: run.id, path: artifactPath, artifact_type: "log", store_content: true }, db);
+
+    const backup = createLocalBackup({ generated_at: "2026-01-02T03:04:05.000Z" }, db);
+    const payload = JSON.stringify(backup);
+
+    expect(payload).not.toContain(fakeToken);
+    expect(payload).toContain("[REDACTED]");
+  });
+
   test("dry-runs and applies restores without mutating during preview", () => {
     const { task, run } = seedBackupFixture();
     const backup = createLocalBackup({ generated_at: "2026-01-02T03:04:05.000Z" }, getDatabase());

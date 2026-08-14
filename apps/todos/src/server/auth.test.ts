@@ -4,20 +4,23 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApiKey } from "../db/api-keys.js";
 import { closeDatabase, getDatabase, resetDatabase } from "../db/database.js";
-import { localRoutingTestEnv } from "../test/local-routing-env.fixture.test.js";
+import {
+  SERVER_HOOK_BUDGET_MS,
+  SERVER_STOP_BUDGET_MS,
+  startTestServer,
+  type TestServer,
+} from "../test/server-harness.js";
 
-let port: number;
-let proc: ReturnType<typeof Bun.spawn>;
+let server: TestServer;
 let tmpDir: string;
 let dbPath: string;
 let apiKey: string;
 
 function url(path: string): string {
-  return `http://localhost:${port}${path}`;
+  return server.url(path);
 }
 
 beforeAll(async () => {
-  port = 19550 + Math.floor(Math.random() * 100);
   tmpDir = await mkdtemp(join(tmpdir(), "todos-server-auth-test-"));
   dbPath = join(tmpDir, "test.db");
 
@@ -31,35 +34,18 @@ beforeAll(async () => {
   if (oldDbPath === undefined) delete process.env["TODOS_DB_PATH"];
   else process.env["TODOS_DB_PATH"] = oldDbPath;
 
-  proc = Bun.spawn({
-    cmd: ["bun", "run", "src/server/index.ts", `--port=${port}`, "--no-open"],
-    cwd: join(import.meta.dir, "..", ".."),
-    env: localRoutingTestEnv({ TODOS_DB_PATH: dbPath, TODOS_AUTO_PROJECT: "false", TODOS_NO_OPEN: "true" }),
-    stdout: "pipe",
-    stderr: "pipe",
+  // No `--allow-anonymous`: this suite exercises the credential boundary itself,
+  // so the server must come up with the generated key seeded above as its only
+  // way in.
+  server = await startTestServer({
+    env: { TODOS_DB_PATH: dbPath, TODOS_AUTO_PROJECT: "false" },
   });
-
-  let ready = false;
-  for (let i = 0; i < 50; i++) {
-    try {
-      const res = await fetch(url("/api/health"), { headers: { "x-api-key": apiKey } });
-      if (res.ok) {
-        ready = true;
-        break;
-      }
-    } catch {
-      // Server not ready yet
-    }
-    await new Promise((resolve) => setTimeout(resolve, 200));
-  }
-  if (!ready) throw new Error(`Auth test server did not start on port ${port}`);
-}, 15_000);
+}, SERVER_HOOK_BUDGET_MS);
 
 afterAll(async () => {
-  proc.kill();
-  await proc.exited;
+  await server?.stop();
   await rm(tmpDir, { recursive: true, force: true });
-}, 15_000);
+}, SERVER_STOP_BUDGET_MS);
 
 describe("API key authentication", () => {
   it("rejects API requests without a generated key", async () => {

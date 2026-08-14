@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
-import { getDatabase, closeDatabase, resetDatabase, resolvePartialId, isLockExpired, lockExpiryCutoff, clearExpiredLocks, now, uuid, getDatabasePath } from "./database.js";
+import { getDatabase, closeDatabase, resetDatabase, resolvePartialId, resolveAssignedToAliases, assignedToAliasSet, lowerInClause, isLockExpired, lockExpiryCutoff, clearExpiredLocks, now, uuid, getDatabasePath } from "./database.js";
 import { createTask, getTask, listTasks } from "./tasks.js";
 import type { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
@@ -33,6 +33,7 @@ describe("global database path", () => {
     const home = join(tmp, "home");
     const cwd = join(tmp, "workspace");
     mkdirSync(cwd, { recursive: true });
+    mkdirSync(join(cwd, ".git"), { recursive: true });
 
     try {
       process.env["HOME"] = home;
@@ -65,6 +66,7 @@ describe("global database path", () => {
     const cwd = join(tmp, "workspace");
     const legacyDir = join(home, ".todos");
     mkdirSync(cwd, { recursive: true });
+    mkdirSync(join(cwd, ".git"), { recursive: true });
     mkdirSync(legacyDir, { recursive: true });
     writeFileSync(join(legacyDir, "todos.db"), "");
 
@@ -125,7 +127,7 @@ describe("global database path", () => {
     }
   });
 
-  it("creates project-scoped database under the git root .hasna/todos directory", () => {
+  it("does not create a project-scoped database for non-initialization calls", () => {
     closeDatabase();
     resetDatabase();
     delete process.env["TODOS_DB_PATH"];
@@ -148,9 +150,9 @@ describe("global database path", () => {
       projectDb.close();
       resetDatabase();
 
-      expect(existsSync(join(project, ".hasna", "todos", "todos.db"))).toBe(true);
+      expect(existsSync(join(project, ".hasna", "todos", "todos.db"))).toBe(false);
       expect(existsSync(join(project, ".todos", "todos.db"))).toBe(false);
-      expect(existsSync(join(home, ".hasna", "todos", "todos.db"))).toBe(false);
+      expect(existsSync(join(home, ".hasna", "todos", "todos.db"))).toBe(true);
     } finally {
       process.chdir(originalCwd);
       if (originalHome === undefined) delete process.env["HOME"];
@@ -174,10 +176,16 @@ describe("global database path", () => {
     const projectB = join(tmp, "workspace", "project-b");
     const nestedA = join(projectA, "src");
     const nestedB = join(projectB, "src");
+    const projectDbA = join(projectA, ".hasna", "todos", "todos.db");
+    const projectDbB = join(projectB, ".hasna", "todos", "todos.db");
     mkdirSync(join(projectA, ".git"), { recursive: true });
     mkdirSync(join(projectB, ".git"), { recursive: true });
     mkdirSync(nestedA, { recursive: true });
     mkdirSync(nestedB, { recursive: true });
+    mkdirSync(join(projectA, ".hasna", "todos"), { recursive: true });
+    mkdirSync(join(projectB, ".hasna", "todos"), { recursive: true });
+    writeFileSync(projectDbA, "");
+    writeFileSync(projectDbB, "");
 
     try {
       process.env["HOME"] = home;
@@ -417,5 +425,67 @@ describe("resolvePartialId - additional", () => {
     expect(resolvePartialId(db, "agents", "gaius")).toBe(agent.id);
     expect(resolvePartialId(db, "agents", "GAIUS")).toBe(agent.id); // case-insensitive
     expect(resolvePartialId(db, "agents", agent.id.slice(0, 8))).toBe(agent.id); // id prefix still works
+  });
+});
+
+describe("resolveAssignedToAliases / assignedToAliasSet / lowerInClause (task 84c77210)", () => {
+  // These moved here from db/task-crud.ts (PR #160) so every sibling
+  // exact-match `assigned_to` call site can share ONE resolver instead of
+  // re-deriving the logic. `tasks.test.ts` already covers the behaviour at
+  // the `listTasks`/`countTasks` call sites (task 8f07bc15); this covers the
+  // helper itself, and the JS-level `assignedToAliasSet` variant the
+  // sibling sites (which filter in-memory rather than in SQL) need.
+  it("resolves both directions: id -> [id, name], and name -> [id, name]", () => {
+    const { registerAgent } = require("../db/agents.js");
+    const agent = registerAgent({ name: "cinna" }, db);
+
+    expect(resolveAssignedToAliases(db, agent.id).sort()).toEqual([agent.id, agent.name].sort());
+    expect(resolveAssignedToAliases(db, agent.name).sort()).toEqual([agent.id, agent.name].sort());
+    // A ref in a different case than the registered name still resolves the
+    // agent (case-insensitive lookup), so the alias set carries BOTH the
+    // literal input (still its original case) and the registered form.
+    expect(resolveAssignedToAliases(db, "CINNA").sort()).toEqual([agent.id, agent.name, "CINNA"].sort());
+  });
+
+  it("falls back to literal-only for a ref matching zero agents (a nonsense identifier still returns nothing)", () => {
+    const aliases = resolveAssignedToAliases(db, "zzz-no-such-agent");
+    expect(aliases).toEqual(["zzz-no-such-agent"]);
+    // And the alias SET built from it matches nothing but its own literal.
+    const set = assignedToAliasSet(db, "zzz-no-such-agent");
+    expect(set.has("zzz-no-such-agent")).toBe(true);
+    expect(set.has("some-other-agent")).toBe(false);
+  });
+
+  it("degrades an ambiguous name (2+ registered rows, case-insensitive) to literal-only, matching the SQLite listTasks path", () => {
+    const timestamp = new Date().toISOString();
+    db.run(
+      "INSERT INTO agents (id, name, created_at, last_seen_at) VALUES (?, ?, ?, ?), (?, ?, ?, ?)",
+      ["01d4cc12", "fabricius", timestamp, timestamp, "4d77b218", "Fabricius", timestamp, timestamp],
+    );
+    expect(() => resolveAssignedToAliases(db, "fabricius")).not.toThrow();
+    expect(resolveAssignedToAliases(db, "fabricius")).toEqual(["fabricius"]);
+  });
+
+  it("assignedToAliasSet is lowercased, for case-insensitive in-memory filtering", () => {
+    const { registerAgent } = require("../db/agents.js");
+    const agent = registerAgent({ name: "Livia" }, db);
+    const set = assignedToAliasSet(db, agent.id);
+    expect(set.has(agent.id.toLowerCase())).toBe(true);
+    expect(set.has("livia")).toBe(true); // registered name, lowercased
+    expect(set.has("LIVIA")).toBe(false); // the set itself is lowercase; callers lowercase the probe
+  });
+
+  it("lowerInClause builds a case-insensitive IN(...) and pushes lowercased params", () => {
+    const params: unknown[] = [];
+    const clause = lowerInClause("assigned_to", ["Alpha", "BETA"], params);
+    expect(clause).toBe("LOWER(assigned_to) IN (?,?)");
+    expect(params).toEqual(["alpha", "beta"]);
+  });
+
+  it("lowerInClause on an empty alias list is an always-false clause, never an empty IN()", () => {
+    const params: unknown[] = [];
+    const clause = lowerInClause("assigned_to", [], params);
+    expect(clause).toBe("1=0");
+    expect(params).toEqual([]);
   });
 });

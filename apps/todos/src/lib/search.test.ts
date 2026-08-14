@@ -292,3 +292,64 @@ describe("searchTasks", () => {
     expect(results[0]!.title).toContain("Obj task A");
   });
 });
+
+describe("searchTasks — query quality (Stage 2)", () => {
+  it("does not reject a multi-term query containing punctuation", () => {
+    // Old shouldUseFts rejected anything with ':' and fell back to a literal
+    // LIKE %login: urgent% substring match that no field contained -> 0 results.
+    // The FTS parser now treats it as `"login"* AND "urgent"*` across the doc.
+    createTask({ title: "Login page", description: "urgent redesign" }, db);
+    createTask({ title: "Unrelated", description: "nothing here" }, db);
+
+    const results = searchTasks("login: urgent", undefined, undefined, db);
+    expect(results).toHaveLength(1);
+    expect(results[0]!.title).toBe("Login page");
+  });
+
+  it("honors an explicit limit (searches were previously unbounded)", () => {
+    for (let i = 0; i < 5; i++) createTask({ title: `Bounded task ${i}` }, db);
+
+    const limited = searchTasks({ query: "Bounded task", limit: 2 }, undefined, undefined, db);
+    expect(limited).toHaveLength(2);
+
+    const all = searchTasks({ query: "Bounded task" }, undefined, undefined, db);
+    expect(all).toHaveLength(5);
+  });
+
+  it("supports quoted phrase queries (adjacency)", () => {
+    createTask({ title: "quick brown fox" }, db);
+    createTask({ title: "brown then quick fox" }, db);
+
+    const results = searchTasks('"quick brown"', undefined, undefined, db);
+    expect(results).toHaveLength(1);
+    expect(results[0]!.title).toBe("quick brown fox");
+  });
+
+  it("treats multiple terms as AND by default", () => {
+    createTask({ title: "alpha work" }, db);
+    createTask({ title: "beta work" }, db);
+    createTask({ title: "alpha beta combo" }, db);
+
+    const results = searchTasks("alpha beta", undefined, undefined, db);
+    expect(results).toHaveLength(1);
+    expect(results[0]!.title).toBe("alpha beta combo");
+  });
+
+  it("ranks a title match above a description-only match (bm25 weighting)", () => {
+    createTask({ title: "misc", description: "authentication happens here" }, db);
+    createTask({ title: "authentication overhaul", description: "misc" }, db);
+
+    const results = searchTasks("authentication", undefined, undefined, db);
+    expect(results).toHaveLength(2);
+    expect(results[0]!.title).toBe("authentication overhaul");
+  });
+
+  it("still resolves identifier/path pastes via the LIKE fallback", () => {
+    createTask({ title: "Repo task", working_dir: "/home/x/opensource/open-todos" }, db);
+    createTask({ title: "Other" }, db);
+
+    const results = searchTasks("opensource/open-todos", undefined, undefined, db);
+    expect(results).toHaveLength(1);
+    expect(results[0]!.title).toBe("Repo task");
+  });
+});

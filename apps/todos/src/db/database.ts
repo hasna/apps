@@ -3,6 +3,9 @@ import { existsSync, mkdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { runMigrations, backfillTaskTags } from "./schema.js";
 import { backfillMachineId } from "./machines.js";
+import { ensureAgentIdentitySchema } from "./identity-mapping.js";
+import { IdentityAliasAmbiguousError, TaskReferenceAmbiguousError } from "../types/index.js";
+import { getHomeDir } from "../lib/sync-utils.js";
 
 export const LOCK_EXPIRY_MINUTES = 30;
 
@@ -36,6 +39,33 @@ function findGitRoot(startDir: string): string | null {
   return null;
 }
 
+function getGlobalDbPath(): string {
+  return join(getHomeDir(), ".hasna", "todos", "todos.db");
+}
+
+function hasExplicitProjectArg(args: readonly string[] = process.argv.slice(2)): boolean {
+  return args.some((arg) => arg === "--project" || arg.startsWith("--project="));
+}
+
+function getCliCommand(args: readonly string[] = process.argv.slice(2)): string | null {
+  const globalOptionsWithValues = new Set(["--project", "--agent", "--session"]);
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index]!;
+    if (globalOptionsWithValues.has(arg)) {
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith("-")) continue;
+    return arg;
+  }
+  return null;
+}
+
+function canCreateScopedProjectDb(args: readonly string[] = process.argv.slice(2)): boolean {
+  return getCliCommand(args) === "project-bootstrap"
+    && !args.some((arg) => arg === "--dry-run" || arg.startsWith("--dry-run="));
+}
+
 function getDbPath(): string {
   // 1. Environment variable override (new env var takes precedence)
   if (process.env["HASNA_TODOS_DB_PATH"]) {
@@ -45,22 +75,28 @@ function getDbPath(): string {
     return process.env["TODOS_DB_PATH"];
   }
 
-  // 2. Per-project: .hasna/todos/todos.db in cwd or any parent (incl. repo root)
+  // 2. An explicit project selector is resolved against the global registry.
+  // A cwd-scoped database must not silently replace that registry, especially
+  // when a stray empty database exists at the repository root.
+  if (hasExplicitProjectArg()) return getGlobalDbPath();
+
+  // 3. Per-project: .hasna/todos/todos.db in cwd or any parent (incl. repo root)
   const cwd = process.cwd();
   const nearest = findNearestProjectDb(cwd);
   if (nearest) return nearest;
 
-  // 3. Explicit project scope (force repo root)
+  // 4. Explicit project scope may create a new scoped store only through the
+  // project initialization command. Reads and ordinary writes fall back to the
+  // global store instead of materializing an accidental shadow database.
   if (process.env["TODOS_DB_SCOPE"] === "project") {
     const gitRoot = findGitRoot(cwd);
-    if (gitRoot) {
+    if (gitRoot && canCreateScopedProjectDb()) {
       return join(gitRoot, ".hasna", "todos", "todos.db");
     }
   }
 
-  // 4. Default: ~/.hasna/todos/todos.db
-  const home = process.env["HOME"] || process.env["USERPROFILE"] || "~";
-  return join(home, ".hasna", "todos", "todos.db");
+  // 5. Default: ~/.hasna/todos/todos.db
+  return getGlobalDbPath();
 }
 
 export function getDatabasePath(): string {
@@ -83,13 +119,19 @@ function openDatabase(path: string): Database {
 
   const db = new Database(path);
 
+  // busy_timeout MUST be set before any pragma that takes a lock. Switching the
+  // journal mode acquires one, so with the timeout set afterwards the WAL pragma
+  // had no timeout in effect and failed instantly with SQLITE_BUSY whenever
+  // another connection held the database — the ordinary case of a `todos serve`
+  // starting while a CLI process still has the same file open. Now it waits.
+  db.run("PRAGMA busy_timeout = 5000");
   // Enable WAL mode for concurrent access
   db.run("PRAGMA journal_mode = WAL");
-  db.run("PRAGMA busy_timeout = 5000");
   db.run("PRAGMA foreign_keys = ON");
 
   // Run migrations
   runMigrations(db);
+  ensureAgentIdentitySchema(db);
   backfillTaskTags(db);
   backfillMachineId(db);
 
@@ -204,9 +246,17 @@ export function resolvePartialId(db: Database, table: string, partialId: string)
 
   // For tasks table, also try matching on short_id (e.g. "OPE-00006")
   if (table === "tasks") {
-    const shortIdRows = db.query("SELECT id FROM tasks WHERE short_id = ?").all(partialId) as { id: string }[];
+    const shortIdRows = db.query(
+      "SELECT id, project_id FROM tasks WHERE LOWER(short_id) = LOWER(?) ORDER BY project_id, id",
+    ).all(partialId) as Array<{ id: string; project_id: string | null }>;
     if (shortIdRows.length === 1) {
       return shortIdRows[0]!.id;
+    }
+    if (shortIdRows.length > 1) {
+      throw new TaskReferenceAmbiguousError(
+        partialId,
+        shortIdRows.map((row) => ({ task_id: row.id, project_id: row.project_id })),
+      );
     }
   }
 
@@ -233,13 +283,91 @@ export function resolvePartialId(db: Database, table: string, partialId: string)
     if (nameRow) return nameRow.id;
   }
 
-  // For agents table, also try matching on name (case-insensitive). Agent names
-  // are UNIQUE, and MCP tools document assigned_to as "Agent ID or name" — without
-  // this, a name resolves to null and the caller throws UNKNOWN_ERROR.
+  // Agent labels resolve only legacy local IDs. Historical aliases are additive;
+  // candidate aliases remain quarantined, and collisions fail closed. This path
+  // never infers or returns canonical identity_id authority.
   if (table === "agents") {
-    const nameRow = db.query("SELECT id FROM agents WHERE lower(name) = ?").get(partialId.toLowerCase()) as { id: string } | null;
-    if (nameRow) return nameRow.id;
+    const normalized = partialId.trim().toLowerCase();
+    const matches = db.query(`
+      SELECT id FROM agents WHERE lower(name) = ?
+      UNION
+      SELECT local_agent_id AS id FROM agent_identity_aliases
+        WHERE normalized_label = ? AND status = 'active'
+      ORDER BY id
+    `).all(normalized, normalized) as Array<{ id: string }>;
+    if (matches.length === 1) return matches[0]!.id;
+    if (matches.length > 1) {
+      throw new IdentityAliasAmbiguousError(partialId, matches.map((match) => match.id));
+    }
   }
 
   return null;
+}
+
+/**
+ * Resolve an `--assigned`/`assigned_to` filter/comparison value to every
+ * stored form it could legitimately appear under: its registered agent's id,
+ * its registered name, and the literal input.
+ *
+ * ROOT CAUSE this closes (todos task 8f07bc15, sibling sites tracked in
+ * 84c77210): `add --agent <id>` and `update --assign <name>` both write
+ * whatever string the caller passed, unresolved, into the same `assigned_to`
+ * field — so one agent's tasks end up split across its id form and its name
+ * form with no overlap. Every exact-match read/comparison against that field
+ * therefore returns a silent subset unless it goes through this resolver (or
+ * the equivalent Postgres-side `resolveAgentForAssignedFilter` in
+ * storage/postgres-adapter.ts, for the hosted/cloud path).
+ *
+ * Canonical home: originally introduced as a private helper in
+ * db/task-crud.ts for PR #160 (`listTasks`/`countTasks`); moved here so every
+ * other exact-match `assigned_to` call site in this package can reuse the
+ * SAME resolution logic instead of re-deriving it. `task-crud.ts` re-exports
+ * it for backward compatibility with existing imports.
+ *
+ * An ambiguous name (2+ independently-registered agent rows share it
+ * case-insensitively, e.g. `fabricius` + `Fabricius`, task 0bf5d979) degrades
+ * to literal-only matching — same as no match — rather than crashing or
+ * silently picking one of the ambiguous rows. This must stay behaviourally
+ * identical to the Postgres adapter's `resolveAgentForAssignedFilter`, which
+ * resolves the same ambiguity to `null` for the same reason.
+ *
+ * Deliberately NOT covered: two independently registered agent rows for what
+ * a human considers one seat (e.g. a personal name and a seat slug registered
+ * as separate rows with no linking field). Bridging that needs an
+ * identity-model decision, not a widened query filter (todos task a37a7137).
+ */
+export function resolveAssignedToAliases(db: Database, ref: string): string[] {
+  const aliases = new Set<string>([ref]);
+  let agentId: string | null;
+  try {
+    agentId = resolvePartialId(db, "agents", ref);
+  } catch (err) {
+    if (!(err instanceof IdentityAliasAmbiguousError)) throw err;
+    agentId = null;
+  }
+  if (agentId) {
+    aliases.add(agentId);
+    const row = db.query("SELECT name FROM agents WHERE id = ?").get(agentId) as { name: string } | null;
+    if (row?.name) aliases.add(row.name);
+  }
+  return [...aliases];
+}
+
+/**
+ * `resolveAssignedToAliases`, as a lowercased Set for in-memory (JS-level)
+ * comparisons against an already-fetched `Task.assigned_to` value, e.g.
+ * `aliasSet.has((task.assigned_to ?? "").toLowerCase())`. Use this instead of
+ * a bare `task.assigned_to === ref` wherever the comparison is against a
+ * value that might be an agent id in one row and a resolved name in another —
+ * exactly the case a raw `IN (...)` SQL clause covers for query-time filters.
+ */
+export function assignedToAliasSet(db: Database, ref: string): Set<string> {
+  return new Set(resolveAssignedToAliases(db, ref).map((a) => a.toLowerCase()));
+}
+
+/** Build a case-insensitive `column IN (...)` clause matching any of `values`. */
+export function lowerInClause(column: string, values: readonly string[], params: unknown[]): string {
+  if (values.length === 0) return "1=0";
+  params.push(...values.map((v) => v.toLowerCase()));
+  return `LOWER(${column}) IN (${values.map(() => "?").join(",")})`;
 }

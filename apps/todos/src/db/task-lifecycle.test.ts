@@ -7,6 +7,7 @@ import {
   listTasks,
   countTasks,
   updateTask,
+  deleteTask,
   startTask,
   completeTask,
   failTask,
@@ -15,7 +16,7 @@ import {
   upsertTaskByFingerprint,
   getTaskByFingerprint,
 } from "./tasks.js";
-import { VersionConflictError } from "../types/index.js";
+import { LockError, VersionConflictError } from "../types/index.js";
 
 let db: Database;
 
@@ -81,6 +82,32 @@ describe("completeTask — idempotency (H3)", () => {
   });
 });
 
+describe("completeTask — live lock identity", () => {
+  it("refuses an unidentified local completion and preserves the live lock", () => {
+    const task = createTask({ title: "local anonymous completion" }, db);
+    startTask(task.id, "holder-a", db);
+    expect(getTask(task.id, db)).toMatchObject({ status: "in_progress", locked_by: "holder-a" });
+
+    expect(() => completeTask(task.id, undefined, db)).toThrow(LockError);
+    expect(getTask(task.id, db)).toMatchObject({ status: "in_progress", locked_by: "holder-a" });
+
+    expect(deleteTask(task.id, db)).toBe(true);
+    expect(getTask(task.id, db)).toBeNull();
+  });
+
+  it("lets the legitimate local holder complete and releases the live lock", () => {
+    const task = createTask({ title: "local holder completion" }, db);
+    startTask(task.id, "holder-a", db);
+    expect(getTask(task.id, db)).toMatchObject({ status: "in_progress", locked_by: "holder-a" });
+
+    expect(completeTask(task.id, "holder-a", db)).toMatchObject({ status: "completed" });
+    expect(getTask(task.id, db)).toMatchObject({ status: "completed", locked_by: null, locked_at: null });
+
+    expect(deleteTask(task.id, db)).toBe(true);
+    expect(getTask(task.id, db)).toBeNull();
+  });
+});
+
 describe("completeTask — confidence preservation (M2)", () => {
   it("does not wipe a previously stored confidence when none is passed", () => {
     const t = createTask({ title: "conf", confidence: 0.7 }, db);
@@ -120,6 +147,8 @@ describe("completeTask/failTask — optimistic guard (M4)", () => {
     expect(task.version).toBe(fresh.version);
     expect(task.version).toBe(before.version + 1);
     expect(task.locked_by).toBeNull();
+    expect(task.reason).toBe("boom");
+    expect(fresh.reason).toBe("boom");
   });
 });
 
@@ -237,5 +266,52 @@ describe("listTasks pagination is stable (L1)", () => {
     // Second listing is deterministic.
     const again = listTasks({}, db).map(t => t.id);
     expect(again).toEqual(all);
+  });
+});
+
+describe("updateTask releases the lock on EVERY terminal status, not only completed", () => {
+  // A task that reaches a terminal state is finished, so nothing can ever
+  // re-acquire its lock — `todos start` refuses a non-pending/in_progress row.
+  // A lock retained here is therefore PERMANENT, and lazy repair-on-reacquisition
+  // can never reach it. Measured on the fleet 2026-08-02: 2,205 of 2,597 locked
+  // rows sat on terminal tasks, 100% of the completed ones locked before they
+  // completed. `completed` was already covered (M1); `failed` and `cancelled`
+  // fell through the same branch and leaked.
+  for (const status of ["completed", "failed", "cancelled"] as const) {
+    it(`clears locked_by/locked_at when status becomes ${status}`, () => {
+      const t = createTask({ title: `terminal-${status}` }, db);
+      startTask(t.id, "holder-a", db);
+      expect(getTask(t.id, db)).toMatchObject({ locked_by: "holder-a" });
+
+      const fresh = getTask(t.id, db)!;
+      const out = updateTask(fresh.id, { version: fresh.version, status }, db);
+
+      expect(out.status).toBe(status);
+      expect(out.locked_by).toBeNull();
+      expect(out.locked_at).toBeNull();
+      // Read back from the row, not just the returned object.
+      expect(getTask(t.id, db)).toMatchObject({ status, locked_by: null, locked_at: null });
+    });
+  }
+
+  it("leaves the lock alone on a NON-terminal status change (negative control)", () => {
+    // The fix must not become "any update drops the lock" — an in-flight holder
+    // editing priority or re-opening a row keeps its claim.
+    const t = createTask({ title: "still-working" }, db);
+    startTask(t.id, "holder-a", db);
+    const fresh = getTask(t.id, db)!;
+    const out = updateTask(fresh.id, { version: fresh.version, status: "pending" }, db);
+    expect(out.status).toBe("pending");
+    expect(out.locked_by).toBe("holder-a");
+    expect(out.locked_at).not.toBeNull();
+  });
+
+  it("leaves the lock alone when the patch carries no status at all (negative control)", () => {
+    const t = createTask({ title: "retitle-only" }, db);
+    startTask(t.id, "holder-a", db);
+    const fresh = getTask(t.id, db)!;
+    const out = updateTask(fresh.id, { version: fresh.version, title: "renamed" }, db);
+    expect(out.title).toBe("renamed");
+    expect(out.locked_by).toBe("holder-a");
   });
 });

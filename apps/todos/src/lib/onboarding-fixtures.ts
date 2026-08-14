@@ -149,6 +149,7 @@ function task(input: {
     reason: "Bundled deterministic onboarding fixture",
     spawned_from_session: null,
     assigned_by: null,
+    created_by: null,
     assigned_from_project: null,
     task_type: "onboarding",
     cost_tokens: 0,

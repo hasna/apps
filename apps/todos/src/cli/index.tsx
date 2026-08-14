@@ -1,7 +1,18 @@
 #!/usr/bin/env bun
 import { Command } from "commander";
 import { getPackageVersion } from "../lib/package-version.js";
-import { handleError } from "./helpers.js";
+import {
+  applyTodosCliAuthorityEnvironment,
+  applyTodosCliHelpVisibility,
+  getUnavailableTodosCliRemoteMetadataCommand,
+  initializeTodosCliAuthority,
+  type TodosCliAuthorityInitialization,
+} from "./stage-a.js";
+import {
+  getTodosCloudClient,
+  getTodosRemoteCommandCapabilities,
+  type TodosRemoteCommandCapability,
+} from "./cloud-router.js";
 
 const program = new Command();
 
@@ -103,18 +114,60 @@ program
   .version(getPackageVersion())
   .option("--project <path>", "Project path")
   .option("-j, --json", "Output as JSON")
+  // NOT canonicalised here, deliberately, and the reason is worth keeping: a
+  // parse-time fold on this flag was tried and reverted. It fixed the
+  // claim/release round trip for `--agent`, but the flag is the wrong layer —
+  // `claim <agent>` and `steal <agent>` take the agent POSITIONALLY, and the
+  // MCP, TUI and dashboard writers never see this option at all, so the same
+  // unreleasable-lock defect simply reappeared one verb over. It also broke a
+  // legitimate consumer: `inspect` with no id looks up the caller's active task
+  // by `assigned_to`, and folding the query made it miss rows stored with a
+  // capitalised name. Lock-holder identity is now compared at the STORE
+  // boundary instead (see `sameHolder` in src/db/task-lifecycle.ts), which
+  // covers every writer and leaves this flag's value untouched for queries.
   .option("--agent <name>", "Agent name")
   .option("--session <id>", "Session ID");
 
+// Validate and select remote HTTP authority before importing command modules.
+// Those modules expose local helpers, so loading them before this boundary made
+// packaged remote invocations hit the native adapter containment first.
+let authority: TodosCliAuthorityInitialization;
+try {
+  authority = initializeTodosCliAuthority();
+  applyTodosCliAuthorityEnvironment(authority);
+} catch (error) {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exit(1);
+}
+
+let remoteCommandCapabilities: ReadonlySet<TodosRemoteCommandCapability> = new Set();
+const metadataRequested = authority.route === "remote-diagnostic";
+if (authority.route !== "local" && metadataRequested) {
+  try {
+    const client = getTodosCloudClient();
+    if (client) {
+      remoteCommandCapabilities = await getTodosRemoteCommandCapabilities(client);
+    }
+  } catch {
+    // Remote metadata fails closed: an unreachable or older authority cannot
+    // make a version-gated mutation appear executable in help or completions.
+    remoteCommandCapabilities = new Set();
+  }
+}
+
 const [
+  { handleError },
   { registerTaskCommands },
   { registerPlanTemplateCommands },
   { registerProjectCommands },
+  { registerProjectRegistrationCommands },
   { registerAgentCommands },
+  { registerAiCommands },
   { registerConfigServeCommands },
   { registerQueryCommands },
   { registerMcpHooksCommands },
   { registerDispatchCommands },
+  { registerDelegateCommands },
   { registerMachineCommands },
   { registerApiKeyCommands },
   { registerEnvironmentSnapshotCommands },
@@ -134,16 +187,25 @@ const [
   { registerLocalBackupCommands },
   { registerStorageCommands },
   { registerScaleHardeningCommands },
+  { registerPrGroupCommands },
+  { registerTaskManifestCommands },
   { registerHelpCommands },
 ] = await Promise.all([
+  import("./helpers.js"),
   import("./commands/task-commands.js"),
   import("./commands/plan-template-commands.js"),
   import("./commands/project-commands.js"),
+  import("./commands/project-registration-commands.js"),
   import("./commands/agent-commands.js"),
+  import("./commands/ai-commands.js"),
   import("./commands/config-serve-commands.js"),
   import("./commands/query-commands.js"),
   import("./commands/mcp-hooks-commands.js"),
   import("./commands/dispatch.js"),
+  // Inserted at the SAME ordinal as `registerDelegateCommands` in the
+  // destructure above. The two arrays are positionally matched, so a
+  // misaligned insert binds the wrong module and still typechecks.
+  import("./commands/delegate.js"),
   import("./commands/machines.js"),
   import("./commands/api-key-commands.js"),
   import("./commands/environment-snapshots.js"),
@@ -163,17 +225,22 @@ const [
   import("./commands/local-backup-commands.js"),
   import("./commands/storage-commands.js"),
   import("./commands/scale-hardening-commands.js"),
+  import("./commands/pr-group-commands.js"),
+  import("./commands/task-manifest-commands.js"),
   import("./commands/help-commands.js"),
 ]);
 
 registerTaskCommands(program);
 registerPlanTemplateCommands(program);
 registerProjectCommands(program);
+registerProjectRegistrationCommands(program);
 registerAgentCommands(program);
+registerAiCommands(program);
 registerConfigServeCommands(program);
 registerQueryCommands(program);
 registerMcpHooksCommands(program);
 registerDispatchCommands(program);
+registerDelegateCommands(program);
 registerMachineCommands(program);
 registerApiKeyCommands(program);
 registerEnvironmentSnapshotCommands(program);
@@ -193,14 +260,34 @@ registerUsageLedgerCommands(program);
 registerLocalBackupCommands(program);
 registerStorageCommands(program);
 registerScaleHardeningCommands(program);
+registerPrGroupCommands(program);
+registerTaskManifestCommands(program);
 await registerOptionalEventsCommands(program);
-registerHelpCommands(program);
+registerHelpCommands(program, authority.route, remoteCommandCapabilities);
+
+// Remote metadata describes the authority-served catalog. An admitted local
+// redaction invocation is a separate Stage-A route that pins the process to
+// local storage before the command modules above are imported.
+applyTodosCliHelpVisibility(program, authority.route, remoteCommandCapabilities);
 
 // Single top-level guard: any error thrown from an async action handler (e.g. a
 // TaskNotFoundError when a full UUID references a task absent from the local
 // mirror) surfaces as a clean red message + exit(1) instead of an unhandled
 // promise-rejection stack trace.
 try {
+  if (metadataRequested) {
+    const unavailableCommand = getUnavailableTodosCliRemoteMetadataCommand(
+      authority.route,
+      remoteCommandCapabilities,
+      process.argv.slice(2),
+    );
+    if (unavailableCommand) {
+      throw new Error(
+        `REMOTE_COMMAND_UNAVAILABLE: configured Todos authority does not advertise ${unavailableCommand}; ` +
+          "help is unavailable for this command",
+      );
+    }
+  }
   await program.parseAsync();
 } catch (err) {
   handleError(err);

@@ -10,6 +10,7 @@ import type { TaskRun, TaskRunArtifact, TaskRunCommand, TaskRunEvent } from "../
 import type { SavedSearchView } from "./saved-search-views.js";
 import { appendSyncConflict } from "./sync-utils.js";
 import { redactValue } from "./redaction.js";
+import { sanitizePreWriteValue } from "./prewrite-secrets.js";
 
 export const TODOS_LOCAL_BRIDGE_KIND = "hasna.todos.local-bridge";
 export const TODOS_LOCAL_BRIDGE_SCHEMA_VERSION = 1;
@@ -60,6 +61,7 @@ export interface ExportLocalBridgeOptions {
   project_id?: string;
   generatedAt?: string;
   version?: string;
+  redaction?: "redacted" | "unsafe_plaintext";
 }
 
 export interface LocalBridgeValidationResult {
@@ -162,6 +164,24 @@ const tableByKey: Record<keyof TodosLocalBridgeData, string> = {
 };
 
 const jsonColumns = new Set(["metadata", "tags", "data", "files_changed", "filters", "lanes"]);
+const structuralColumns = new Set([
+  "id",
+  "task_id",
+  "run_id",
+  "project_id",
+  "plan_id",
+  "task_list_id",
+  "parent_id",
+  "cycle_id",
+  "depends_on",
+  "external_project_id",
+  "external_task_id",
+  "short_id",
+  "sha",
+  "machine_id",
+  "version",
+  "schema_version",
+]);
 
 function packageSource(version: string): TodosLocalBridgePackageSource {
   return {
@@ -277,7 +297,7 @@ export function createLocalBridgeBundle(
   const project = options.project_id
     ? d.query("SELECT * FROM projects WHERE id = ?").get(options.project_id) as Project | null
     : null;
-  const data: TodosLocalBridgeData = redactValue({
+  const rawData: TodosLocalBridgeData = {
     projects: options.project_id
       ? (project ? [project] : [])
       : d.query("SELECT * FROM projects ORDER BY name").all() as Project[],
@@ -347,7 +367,10 @@ export function createLocalBridgeBundle(
     local_calendar_items: (options.project_id
       ? d.query("SELECT * FROM local_calendar_items WHERE project_id = ? ORDER BY starts_at, created_at").all(options.project_id) as Record<string, unknown>[]
       : d.query("SELECT * FROM local_calendar_items ORDER BY starts_at, created_at").all() as Record<string, unknown>[]).map(rowToCalendarItem),
-  }) as TodosLocalBridgeData;
+  };
+  const data: TodosLocalBridgeData = options.redaction === "unsafe_plaintext"
+    ? rawData
+    : sanitizePreWriteValue(redactValue(rawData), "local_bridge.export") as TodosLocalBridgeData;
 
   const artifactContents = data.run_artifacts
     .map((artifact) => exportStoredArtifactContent({
@@ -456,6 +479,19 @@ function prepareValue(column: string, value: unknown): SQLQueryBindings {
   return value === undefined ? null : value as SQLQueryBindings;
 }
 
+function sanitizeImportRecord(
+  tableKey: keyof TodosLocalBridgeData,
+  row: Record<string, unknown>,
+): Record<string, unknown> {
+  const sanitized: Record<string, unknown> = {};
+  for (const [column, value] of Object.entries(row)) {
+    sanitized[column] = structuralColumns.has(column)
+      ? value
+      : sanitizePreWriteValue(value, `local_bridge.${tableKey}.${column}`);
+  }
+  return sanitized;
+}
+
 function slugifyPlanValue(value: unknown): string {
   return typeof value === "string"
     ? value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")
@@ -506,13 +542,14 @@ function insertRecord(
   const table = tableByKey[tableKey];
   const columns = insertColumns[tableKey];
   const placeholders = columns.map(() => "?").join(", ");
-  const params = columns.map((column) => prepareValue(column, row[column]));
+  const safeRow = sanitizeImportRecord(tableKey, row);
+  const params = columns.map((column) => prepareValue(column, safeRow[column]));
   const result = db.run(
     `INSERT OR IGNORE INTO ${table} (${columns.join(", ")}) VALUES (${placeholders})`,
     params,
   );
   if (tableKey === "tasks" && result.changes > 0) {
-    const tags = parseJsonArray<string>(row.tags);
+    const tags = parseJsonArray<string>(safeRow.tags);
     const stmt = db.prepare("INSERT OR IGNORE INTO task_tags (task_id, tag) VALUES (?, ?)");
     for (const tag of tags) {
       if (tag) stmt.run(row.id as string, tag);

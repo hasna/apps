@@ -1,12 +1,29 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import type { SyncConflict } from "./sync-types.js";
 
-export const HOME = process.env["HOME"] || process.env["USERPROFILE"] || "~";
+export const TODO_SYNC_FINGERPRINT_KEY = "todos_sync_fingerprint";
 
+// A literal "~" is NOT a home directory. Nothing in Node expands it — only a
+// shell does, and only unquoted at the start of a word — so `join("~", ...)`
+// yields a RELATIVE path and every write lands under whatever the process cwd
+// happens to be. With HOME unset that silently scattered the global store into
+// the working directory: the suite left a literal `~/.hasna/todos/` folder
+// inside this repository, and the stray `~/.hasna/todos/config.json` it
+// produced is what failed the 0.15.0 publish (run 30822824396, "1 change
+// found"). Worse than the failed release, a user or daemon running with no
+// HOME (cron, systemd, a container) got a DIFFERENT task database per cwd
+// instead of one global store.
+//
+// `homedir()` consults HOME first and otherwise resolves the passwd entry, so
+// it returns a real absolute path in exactly the case the old fallback broke.
 export function getHomeDir(): string {
-  return process.env["HOME"] || process.env["USERPROFILE"] || "~";
+  return process.env["HOME"] || process.env["USERPROFILE"] || homedir();
 }
+
+export const HOME = getHomeDir();
 
 export function getTodosGlobalDir(): string {
   return join(getHomeDir(), ".hasna", "todos");
@@ -66,4 +83,41 @@ export function appendSyncConflict(
   const current = Array.isArray(metadata["sync_conflicts"]) ? metadata["sync_conflicts"] as SyncConflict[] : [];
   const next = [conflict, ...current].slice(0, limit);
   return { ...metadata, sync_conflicts: next };
+}
+
+function canonicalize(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (!value || typeof value !== "object") return value;
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, entryValue]) => entryValue !== undefined)
+    .sort(([a], [b]) => a.localeCompare(b));
+  return Object.fromEntries(entries.map(([key, entryValue]) => [key, canonicalize(entryValue)]));
+}
+
+function withoutSyncFingerprintMetadata(metadata: Record<string, unknown>): Record<string, unknown> {
+  const { [TODO_SYNC_FINGERPRINT_KEY]: _fingerprint, ...rest } = metadata;
+  return rest;
+}
+
+function syncFingerprint(record: { metadata?: Record<string, unknown> }): string {
+  const metadata = withoutSyncFingerprintMetadata(record.metadata || {});
+  const canonical = canonicalize({ ...record, metadata });
+  return `sha256:${createHash("sha256").update(JSON.stringify(canonical)).digest("hex")}`;
+}
+
+export function withSyncFingerprint<T extends { metadata: Record<string, unknown> }>(record: T): T {
+  const metadata = withoutSyncFingerprintMetadata(record.metadata);
+  return {
+    ...record,
+    metadata: {
+      ...metadata,
+      [TODO_SYNC_FINGERPRINT_KEY]: syncFingerprint({ ...record, metadata }),
+    },
+  };
+}
+
+export function hasSyncFingerprintChanged(record: { metadata?: Record<string, unknown> }): boolean | null {
+  const stored = record.metadata?.[TODO_SYNC_FINGERPRINT_KEY];
+  if (typeof stored !== "string" || stored.length === 0) return null;
+  return stored !== syncFingerprint(record);
 }

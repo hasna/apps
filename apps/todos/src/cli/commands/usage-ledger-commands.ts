@@ -1,5 +1,4 @@
 import type { Command } from "commander";
-import chalk from "chalk";
 import { getDatabase, resolvePartialId } from "../../db/database.js";
 import { autoProject, handleError, output } from "../helpers.js";
 
@@ -12,8 +11,7 @@ function parsePositiveNumber(value: string | undefined): number | undefined {
   if (value === undefined) return undefined;
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed < 0) {
-    console.error(chalk.red("quota limits must be non-negative numbers"));
-    process.exit(1);
+    handleError(new Error("quota limits must be non-negative numbers"));
   }
   return parsed;
 }
@@ -22,8 +20,7 @@ function resolveProjectInput(value: string | undefined): string | undefined {
   if (!value) return undefined;
   const resolved = autoProject({ project: value }) || resolvePartialId(getDatabase(), "projects", value);
   if (!resolved) {
-    console.error(chalk.red(`Could not resolve project ID: ${value}`));
-    process.exit(1);
+    handleError(new Error(`Could not resolve project ID: ${value}`));
   }
   return resolved;
 }

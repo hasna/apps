@@ -9,6 +9,7 @@ import type {
   ListDispatchesFilter,
 } from "../types/index.js";
 import { DispatchNotFoundError } from "../types/index.js";
+import { sanitizePreWriteText } from "../lib/prewrite-secrets.js";
 
 function rowToDispatch(row: DispatchRow): Dispatch {
   return {
@@ -28,6 +29,9 @@ export function createDispatch(input: CreateDispatchInput, db?: Database): Dispa
   const _db = db ?? getDatabase();
   const id = uuid();
   const taskIds = JSON.stringify(input.task_ids ?? []);
+  const title = input.title ? sanitizePreWriteText(input.title, "dispatch.title") : null;
+  const message = input.message ? sanitizePreWriteText(input.message, "dispatch.message") : null;
+  const targetWindow = sanitizePreWriteText(input.target_window, "dispatch.target_window");
 
   _db.run(
     `INSERT INTO dispatches
@@ -35,11 +39,11 @@ export function createDispatch(input: CreateDispatchInput, db?: Database): Dispa
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
     [
       id,
-      input.title ?? null,
-      input.target_window,
+      title,
+      targetWindow,
       taskIds,
       input.task_list_id ?? null,
-      input.message ?? null,
+      message,
       input.delay_ms ?? null,
       input.scheduled_at ?? null,
       now(),
@@ -100,9 +104,10 @@ export function updateDispatchStatus(
   db?: Database,
 ): void {
   const _db = db ?? getDatabase();
+  const error = opts.error ? sanitizePreWriteText(opts.error, "dispatch.error") : null;
   _db.run(
     "UPDATE dispatches SET status = ?, error = ?, sent_at = ? WHERE id = ?",
-    [status, opts.error ?? null, opts.sent_at ?? null, id],
+    [status, error, opts.sent_at ?? null, id],
   );
 }
 
@@ -113,14 +118,17 @@ export function createDispatchLog(
   const _db = db ?? getDatabase();
   const id = uuid();
   const created_at = now();
+  const targetWindow = sanitizePreWriteText(log.target_window, "dispatch_log.target_window");
+  const message = sanitizePreWriteText(log.message, "dispatch_log.message");
+  const error = log.error ? sanitizePreWriteText(log.error, "dispatch_log.error") : null;
 
   _db.run(
     `INSERT INTO dispatch_logs (id, dispatch_id, target_window, message, delay_ms, status, error, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    [id, log.dispatch_id, log.target_window, log.message, log.delay_ms, log.status, log.error ?? null, created_at],
+    [id, log.dispatch_id, targetWindow, message, log.delay_ms, log.status, error, created_at],
   );
 
-  return { ...log, id, created_at };
+  return { ...log, target_window: targetWindow, message, error, id, created_at };
 }
 
 export function listDispatchLogs(dispatchId: string, db?: Database): DispatchLog[] {

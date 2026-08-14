@@ -17,8 +17,7 @@ const RECORD_TYPES = ["decision", "architecture_note", "tradeoff", "context_snap
 
 function parseRecordType(value: string): KnowledgeRecordType {
   if ((RECORD_TYPES as readonly string[]).includes(value)) return value as KnowledgeRecordType;
-  console.error(chalk.red(`type must be one of: ${RECORD_TYPES.join(", ")}`));
-  process.exit(1);
+  handleError(new Error(`type must be one of: ${RECORD_TYPES.join(", ")}`));
 }
 
 function parseJsonObject(value: string | undefined, label: string): Record<string, unknown> | undefined {
@@ -28,8 +27,7 @@ function parseJsonObject(value: string | undefined, label: string): Record<strin
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("not object");
     return parsed as Record<string, unknown>;
   } catch {
-    console.error(chalk.red(`${label} must be a valid JSON object`));
-    process.exit(1);
+    handleError(new Error(`${label} must be a valid JSON object`));
   }
 }
 

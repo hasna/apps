@@ -13,9 +13,26 @@ import { ApiKeyStore, type AuthQueryClient } from "@hasna/contracts/auth";
 import { createTodosCloudQueryClient, type TodosCloudQueryClient } from "../storage/cloud-client.js";
 import { createPostgresTodosStorageAdapter } from "../storage/postgres-adapter.js";
 import type { TodosStorageAdapter } from "../storage/interfaces.js";
+import { PrGroupLedger } from "../pr-groups/ledger.js";
+import {
+  PostgresPrGroupLedgerPersistence,
+  postgresPrGroupSchemaSql,
+} from "../pr-groups/postgres.js";
+import {
+  createPostgresTodosProjectRegistrationAuthority,
+  postgresTodosProjectRegistrationSchemaSql,
+  type TodosProjectRegistrationAuthority,
+} from "../project-registration/index.js";
+import {
+  createPostgresTodosTaskManifestAuthority,
+  postgresTodosTaskManifestSchemaSql,
+  type TodosTaskManifestAuthority,
+} from "../task-manifest/index.js";
 import {
   ensurePostgresScopedSlugUniqueIndexes,
   postgresTodosCommentCursorIndexSql,
+  postgresTodosTaskShortIdIndexSql,
+  postgresTodosTaskObjectIdIndexSql,
   postgresTodosSyncSchemaSql,
 } from "../storage/postgres-sync.js";
 import {
@@ -46,16 +63,33 @@ export function resolveSigningSecret(env: NodeJS.ProcessEnv = process.env): stri
   );
 }
 
-/** True when this process is configured to serve the cloud `/v1` API. */
-export function isCloudModeEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+/**
+ * True when this process is configured with the PostgreSQL backend (a database
+ * URL is present), i.e. it serves the authenticated `/v1` API. This is the
+ * server's single data-backend switch: sqlite (no DSN) or postgres (DSN) —
+ * there is no deployment-mode axis.
+ */
+export function isPostgresBackendConfigured(env: NodeJS.ProcessEnv = process.env): boolean {
   return Boolean(resolveCloudDatabaseUrl(env));
+}
+
+/** @deprecated Renamed to {@link isPostgresBackendConfigured}. */
+export function isCloudModeEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return isPostgresBackendConfigured(env);
 }
 
 let cachedClient: TodosCloudQueryClient | null = null;
 let cachedAdapter: TodosStorageAdapter | null = null;
 let cachedStore: ApiKeyStore | null = null;
 let cachedVerifier: ApiKeyVerifier | null = null;
+let cachedPrGroupLedger: PrGroupLedger | null = null;
+let cachedProjectRegistrationAuthority: TodosProjectRegistrationAuthority | null = null;
+let cachedTaskManifestAuthority: TodosTaskManifestAuthority | null = null;
 let schemaEnsured: Promise<void> | null = null;
+
+function getCloudTenantId(): string {
+  return process.env.HASNA_TODOS_TENANT_ID ?? "default";
+}
 
 function getClient(): TodosCloudQueryClient {
   if (cachedClient) return cachedClient;
@@ -75,6 +109,38 @@ export function getCloudStorageAdapter(): TodosStorageAdapter {
   const client = getClient();
   cachedAdapter = createPostgresTodosStorageAdapter({ client, service: TODOS_APP_SLUG });
   return cachedAdapter;
+}
+
+/** Transactionally fenced PR-group ledger backed by dedicated Postgres rows. */
+export function getCloudPrGroupLedger(): PrGroupLedger {
+  if (cachedPrGroupLedger) return cachedPrGroupLedger;
+  cachedPrGroupLedger = new PrGroupLedger(new PostgresPrGroupLedgerPersistence(getClient()));
+  return cachedPrGroupLedger;
+}
+
+/** Conditional singleton Projects → Todos registration authority on Postgres. */
+export function getCloudProjectRegistrationAuthority(): TodosProjectRegistrationAuthority {
+  if (cachedProjectRegistrationAuthority) return cachedProjectRegistrationAuthority;
+  cachedProjectRegistrationAuthority = createPostgresTodosProjectRegistrationAuthority(
+    getClient(),
+    {
+      service: TODOS_APP_SLUG,
+      authorityId: TODOS_APP_SLUG,
+      tenantId: getCloudTenantId(),
+      corpusId: process.env.HASNA_TODOS_CORPUS_ID ?? `${TODOS_APP_SLUG}:postgresql`,
+    },
+  );
+  return cachedProjectRegistrationAuthority;
+}
+
+/** Package-owned task-manifest authority backed by the shared Postgres pool. */
+export function getCloudTaskManifestAuthority(): TodosTaskManifestAuthority {
+  if (cachedTaskManifestAuthority) return cachedTaskManifestAuthority;
+  cachedTaskManifestAuthority = createPostgresTodosTaskManifestAuthority(getClient(), {
+    service: TODOS_APP_SLUG,
+    tenantId: getCloudTenantId(),
+  });
+  return cachedTaskManifestAuthority;
 }
 
 /**
@@ -138,6 +204,15 @@ export async function ensureCloudSchema(): Promise<void> {
     for (const sql of postgresTodosSyncSchemaSql()) {
       await client.query(sql);
     }
+    for (const sql of postgresPrGroupSchemaSql()) {
+      await client.query(sql);
+    }
+    for (const sql of postgresTodosProjectRegistrationSchemaSql()) {
+      await client.query(sql);
+    }
+    for (const sql of postgresTodosTaskManifestSchemaSql(getCloudTenantId())) {
+      await client.query(sql);
+    }
     await getApiKeyStore().ensureSchema();
   })();
   return schemaEnsured;
@@ -150,6 +225,22 @@ export async function ensureCloudSchema(): Promise<void> {
  */
 export async function ensureCloudCommentCursorIndex(): Promise<void> {
   await getClient().query(postgresTodosCommentCursorIndexSql());
+}
+
+/**
+ * Optional latency index for case-insensitive short_id resolution. CONCURRENTLY,
+ * outside a transaction — a deployment migration, not request-path schema work.
+ */
+export async function ensureCloudTaskShortIdIndex(): Promise<void> {
+  await getClient().query(postgresTodosTaskShortIdIndexSql());
+}
+
+/**
+ * Optional byte-order index for the id-prefix branch of short-reference
+ * resolution. CONCURRENTLY, outside a transaction — a deployment migration.
+ */
+export async function ensureCloudTaskObjectIdIndex(): Promise<void> {
+  await getClient().query(postgresTodosTaskObjectIdIndexSql());
 }
 
 /** Audit duplicates, then establish project/task-list slug invariants concurrently. */
@@ -202,5 +293,8 @@ export async function closeCloud(): Promise<void> {
   cachedAdapter = null;
   cachedStore = null;
   cachedVerifier = null;
+  cachedPrGroupLedger = null;
+  cachedProjectRegistrationAuthority = null;
+  cachedTaskManifestAuthority = null;
   schemaEnsured = null;
 }

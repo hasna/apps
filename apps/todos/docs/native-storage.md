@@ -9,16 +9,70 @@ future SaaS wrappers should configure it through `HASNA_TODOS_*` variables and
 provide the matching Postgres/S3 clients through the public `./storage` package
 export.
 
-## Modes
+## The data-backend switch
 
-- `HASNA_TODOS_STORAGE_MODE=local`: default local SQLite/file behavior.
-- `HASNA_TODOS_STORAGE_MODE=remote`: use a remote adapter backed by Postgres
-  on AWS RDS and optional S3 artifact storage.
-- `HASNA_TODOS_STORAGE_MODE=hybrid`: use a local plus remote adapter with
-  explicit sync behavior.
+There is no deployment-mode axis. One switch selects where data lives, with
+exactly two arms on each side of the HTTP boundary:
+
+- **Client (CLI/MCP/TUI)** — `sqlite` (the default local file) or `http` (the
+  authenticated Todos `/v1` authority). The client never opens Postgres
+  directly.
+- **Server (`todos-serve`) / native storage tooling** — `sqlite` (no database
+  URL configured) or `postgres` (a `HASNA_TODOS_DATABASE_URL` is present).
+
+`HASNA_TODOS_STORAGE_MODE` accepts the canonical tokens `sqlite` and `http`
+(client) / `postgres` (storage tooling). The legacy tokens `local` and `remote`
+remain accepted and normalize onto the same two arms; the retired
+deployment-mode tokens (`self_hosted`, `cloud`, `hybrid`) are tolerated for
+unmigrated environments only and also normalize (client: `http`; storage:
+`postgres`). No third arm exists.
 
 Legacy hosted API toggles are not storage selectors. They must not change the
 local CLI default.
+
+## CLI Remote HTTP Authority
+
+The open CLI remote route uses only these canonical settings:
+
+| Setting | Purpose |
+| --- | --- |
+| `HASNA_TODOS_STORAGE_MODE` | Set to `http` (legacy: `remote`) to select the authenticated HTTP authority. |
+| `HASNA_TODOS_API_URL` | Todos authority root, or the same root ending in `/v1`. |
+| `HASNA_TODOS_API_KEY` | API key supplied to the authority as a bearer credential. |
+
+The URL must use HTTPS, except for loopback development authorities. Userinfo,
+query strings, fragments, redirects, `/api/v1`, and non-root custom paths are
+rejected. The CLI does not infer an authority from `TODOS_URL`, does not use a
+private SaaS route, and does not send the bearer credential across redirects.
+
+Remote selection is fail-closed. A missing URL or key, conflicting mode
+selectors, an incompatible collection route, authentication failure, timeout,
+or server failure is reported with a `REMOTE_*` diagnostic before local SQLite
+can open. A resource-level 404 remains a normal not-found result. There is no
+SQLite or Postgres fallback for a remote CLI invocation.
+
+The supported coordination surface includes storage/status diagnostics,
+projects, task lists, project-scoped plans, task create/upsert/list/show/update,
+task-list and plan moves, comments, start/complete/delete, and next/claim. A
+command without a safe `/v1` equivalent exits with `REMOTE_COMMAND_UNSUPPORTED`
+before local helpers run.
+
+`todos storage status --json` is a configuration-only diagnostic. On the http
+transport it reports the redacted `/v1` base, URL/key presence, HTTP transport, and
+the disabled local fallback without opening a database or making a network
+request. `todos health` and `todos doctor` authenticate against the required
+remote routes.
+
+`todos doctor` additionally audits REFERENTIAL INTEGRITY against the authority
+and its exit code is a verdict, not a "the call succeeded" flag: `0` clean, `1`
+findings (orphaned or dangling project / task-list references), `2` incomplete
+(a condition could not be measured, so health was not established). It prefers
+the server-side aggregate `GET /v1/integrity`, which the storage adapter computes
+with one SQL COUNT per condition on Postgres and SQLite alike; an authority that
+does not expose it leaves the task-level conditions `NOT CHECKED` unless
+`--scan-tasks` completes a read-only paged walk of `/v1/tasks`. Findings are
+report-only — `doctor --apply` remains refused outright in remote mode and never
+repairs an integrity finding in any mode.
 
 ## Native AWS Configuration
 
@@ -41,17 +95,21 @@ Plain local-development fallbacks are accepted with the same names minus the
 `TODOS_S3_BUCKET`. Public docs and wrappers should still prefer the canonical
 `HASNA_TODOS_*` names.
 
-Production secrets should follow the broader open package convention:
+Production secrets should follow a consistent namespaced convention, for
+example:
 
-- `hasna/xyz/opensource/todos/prod/env`
-- `hasna/xyz/opensource/todos/prod/rds`
-- `hasna/xyz/opensource/todos/prod/s3`
+- `<org>/<division>/<app>/<env>/env`
+- `<org>/<division>/<app>/<env>/rds`
+- `<org>/<division>/<app>/<env>/s3`
 
-The canonical production RDS target is the shared Hasna XYZ infra apps
-Postgres cluster `hasna-xyz-infra-apps-prod-postgres`, database `todos`, and
-runtime secret `hasna/xyz/opensource/todos/prod/rds`. Runtime wiring should set
-`HASNA_TODOS_DATABASE_URL` from that secret. `TODOS_DATABASE_URL` is only a
-plain fallback for local development or wrappers that have not yet migrated.
+Deployment-specific infrastructure identifiers — the managed Postgres cluster
+name and the secrets-manager path that holds the runtime database URL — are
+owned by the private hosting wrapper and supplied at runtime via the optional
+`HASNA_TODOS_RDS_CLUSTER` and `HASNA_TODOS_RDS_RUNTIME_PATH` environment
+variables; this open package ships no real cluster names or secrets-manager
+paths. Runtime wiring should set `HASNA_TODOS_DATABASE_URL` from the resolved
+secret. `TODOS_DATABASE_URL` is only a plain fallback for local development or
+wrappers that have not yet migrated.
 
 A SaaS wrapper owns tenant state, billing, accounts, deployment, observability,
 and production secret wiring. The open package owns local storage, the public
@@ -61,7 +119,7 @@ storage contract, local tests, and explicit remote adapter interfaces.
 
 The public `@hasna/todos/storage` export now includes:
 
-- `loadTodosStorageConfig` and `createTodosStorageAdapter` for mode selection.
+- `loadTodosStorageConfig` and `createTodosStorageAdapter` for backend selection.
 - `STORAGE_TABLES`, `TODOS_STORAGE_ENV`, and `TODOS_STORAGE_FALLBACK_ENV` for
   wrapper provenance and explicit env mapping.
 - `exportSqliteTodosStorageSnapshot` and `importSqliteTodosStorageSnapshot`
@@ -157,10 +215,12 @@ frontmatter/task comments. The CLI does not silently treat the Markdown file as
 authoritative when conflicts exist; agents should resolve the conflict through
 the CLI or an explicit migration task.
 
-## Hybrid Sync Shape
+## Hybrid Sync Shape (explicit migration machinery)
 
-`HASNA_TODOS_STORAGE_MODE=hybrid` can now build a local-plus-remote adapter when
-the caller passes a Postgres-style query client or sync store:
+`createHybridTodosStorageAdapter` builds a local-plus-remote adapter when the
+caller passes a Postgres-style query client or sync store. It is migration/sync
+machinery invoked explicitly — it is NOT an arm of the data-backend switch, and
+no `HASNA_TODOS_STORAGE_MODE` value selects it:
 
 - Local CRUD stays SQLite-backed and works offline.
 - `adapter.sync.exportSnapshot()` and `adapter.sync.importSnapshot()` move the
@@ -175,10 +235,11 @@ the caller passes a Postgres-style query client or sync store:
 This is the open-package boundary. SaaS tenant wrappers can be added on top
 without changing the local default or depending on a shared cloud package.
 
-## Remote CRUD Shape
+## Postgres CRUD Shape
 
-`HASNA_TODOS_STORAGE_MODE=remote` can now build a pure Postgres adapter when the
-caller passes a Postgres-style query client to `createTodosStorageAdapter`:
+`HASNA_TODOS_STORAGE_MODE=postgres` (legacy: `remote`) builds a pure Postgres
+adapter when the caller passes a Postgres-style query client to
+`createTodosStorageAdapter`:
 
 - CRUD uses the repo-owned `todos_sync_records` JSONB table rather than SaaS
   tenant tables.
