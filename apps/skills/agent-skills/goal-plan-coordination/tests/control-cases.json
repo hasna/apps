@@ -1,0 +1,218 @@
+{
+  "resume": [
+    {
+      "name": "active continues",
+      "state": "active",
+      "resume_directed": true,
+      "intentional_hold": false,
+      "budget_limited": false,
+      "expected": "continue"
+    },
+    {
+      "name": "paused resumable",
+      "state": "paused",
+      "resume_directed": true,
+      "intentional_hold": false,
+      "budget_limited": false,
+      "expected": "resume"
+    },
+    {
+      "name": "blocked resumable",
+      "state": "blocked",
+      "resume_directed": true,
+      "intentional_hold": false,
+      "budget_limited": false,
+      "expected": "resume"
+    },
+    {
+      "name": "usage limited resumable",
+      "state": "usage_limited",
+      "resume_directed": true,
+      "intentional_hold": false,
+      "budget_limited": false,
+      "expected": "resume"
+    },
+    {
+      "name": "completed remains terminal",
+      "state": "completed",
+      "resume_directed": true,
+      "intentional_hold": false,
+      "budget_limited": false,
+      "expected": "stay"
+    },
+    {
+      "name": "cancelled remains terminal",
+      "state": "cancelled",
+      "resume_directed": true,
+      "intentional_hold": false,
+      "budget_limited": false,
+      "expected": "stay"
+    },
+    {
+      "name": "deferred remains terminal",
+      "state": "deferred",
+      "resume_directed": true,
+      "intentional_hold": false,
+      "budget_limited": false,
+      "expected": "stay"
+    },
+    {
+      "name": "abandoned remains terminal",
+      "state": "abandoned",
+      "resume_directed": true,
+      "intentional_hold": false,
+      "budget_limited": false,
+      "expected": "stay"
+    },
+    {
+      "name": "intentional pause remains paused",
+      "state": "paused",
+      "resume_directed": false,
+      "intentional_hold": true,
+      "budget_limited": false,
+      "expected": "stay"
+    },
+    {
+      "name": "budget limited cannot resume",
+      "state": "usage_limited",
+      "resume_directed": true,
+      "intentional_hold": false,
+      "budget_limited": true,
+      "expected": "stay"
+    }
+  ],
+  "review": [
+    {
+      "name": "one fixed reviewer",
+      "reviewers": 1,
+      "fixed": true,
+      "reviewer_per_step": false,
+      "fresh_final_blind": false,
+      "expected": true
+    },
+    {
+      "name": "two reviewer escalation rejected",
+      "reviewers": 2,
+      "fixed": true,
+      "reviewer_per_step": false,
+      "fresh_final_blind": false,
+      "expected": false
+    },
+    {
+      "name": "reviewer per step rejected",
+      "reviewers": 1,
+      "fixed": true,
+      "reviewer_per_step": true,
+      "fresh_final_blind": false,
+      "expected": false
+    },
+    {
+      "name": "fresh final blind review rejected",
+      "reviewers": 1,
+      "fixed": true,
+      "reviewer_per_step": false,
+      "fresh_final_blind": true,
+      "expected": false
+    },
+    {
+      "name": "reviewer set must be fixed",
+      "reviewers": 1,
+      "fixed": false,
+      "reviewer_per_step": false,
+      "fresh_final_blind": false,
+      "expected": false
+    }
+  ],
+  "rereview": [
+    {
+      "name": "named P0 direct regression cycle one",
+      "classes": ["P0"],
+      "named_only": true,
+      "direct_regressions_only": true,
+      "cycle": 1,
+      "expected": true
+    },
+    {
+      "name": "named P1 direct regression cycle two",
+      "classes": ["P1"],
+      "named_only": true,
+      "direct_regressions_only": true,
+      "cycle": 2,
+      "expected": true
+    },
+    {
+      "name": "P2 cannot block focused rereview",
+      "classes": ["P2"],
+      "named_only": true,
+      "direct_regressions_only": true,
+      "cycle": 1,
+      "expected": false
+    },
+    {
+      "name": "unrelated discovery rejected",
+      "classes": ["P0"],
+      "named_only": false,
+      "direct_regressions_only": true,
+      "cycle": 1,
+      "expected": false
+    },
+    {
+      "name": "third remediation cycle rejected",
+      "classes": ["P1"],
+      "named_only": true,
+      "direct_regressions_only": true,
+      "cycle": 3,
+      "expected": false
+    }
+  ],
+  "acceptance": [
+    {
+      "name": "finite acceptance",
+      "text": "Gate: bun test src/lib/goal-plan-coordination.test.ts; lanes: lifecycle and materialization; blockers: reachable in-scope P0/P1 only.",
+      "gates": ["bun test src/lib/goal-plan-coordination.test.ts"],
+      "lanes": ["lifecycle", "materialization"],
+      "defect_classes": ["P0", "P1"],
+      "expected": true
+    },
+    {
+      "name": "all severities rejected",
+      "text": "all P0-P3",
+      "gates": ["bun test"],
+      "lanes": ["lifecycle"],
+      "defect_classes": ["P0", "P1"],
+      "expected": false
+    },
+    {
+      "name": "all findings rejected",
+      "text": "reconcile all findings",
+      "gates": ["bun test"],
+      "lanes": ["lifecycle"],
+      "defect_classes": ["P0", "P1"],
+      "expected": false
+    },
+    {
+      "name": "until clean rejected",
+      "text": "repeat validation until clean",
+      "gates": ["bun test"],
+      "lanes": ["lifecycle"],
+      "defect_classes": ["P0", "P1"],
+      "expected": false
+    },
+    {
+      "name": "missing gate rejected",
+      "text": "lanes and blockers only",
+      "gates": [],
+      "lanes": ["lifecycle"],
+      "defect_classes": ["P0", "P1"],
+      "expected": false
+    },
+    {
+      "name": "P2 blocker class rejected",
+      "text": "Gate and lane are named.",
+      "gates": ["bun test"],
+      "lanes": ["lifecycle"],
+      "defect_classes": ["P2"],
+      "expected": false
+    }
+  ]
+}

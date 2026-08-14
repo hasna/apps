@@ -1,0 +1,135 @@
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, mock } from "bun:test";
+import { createProvider } from "../db/providers.js";
+import { startV1Stub, type V1Stub } from "../test-support/v1-stub.js";
+import {
+  configureCliRuntime,
+  MAX_CLI_PAGE_LIMIT,
+  parseCliListPage,
+  parseCliNonNegativeIntOption,
+  parseCliPage,
+  formatListHint,
+  parseCliPositiveIntOption,
+  parseDuration,
+  resolveId,
+} from "./utils.js";
+
+// Self-hosted-ONLY: id resolution routes through the operator /v1 API, so the
+// resolveId test drives the REAL command against an out-of-process /v1 stub.
+let stub: V1Stub;
+
+beforeAll(async () => {
+  stub = await startV1Stub();
+});
+afterAll(() => stub.stop());
+beforeEach(async () => {
+  await stub.reset();
+  stub.applyEnv();
+});
+afterEach(() => stub.clearEnv());
+
+describe("cli/utils", () => {
+  it("parseDuration parses common units", () => {
+    expect(parseDuration("30s")).toBe(30000);
+    expect(parseDuration("5m")).toBe(300000);
+    expect(parseDuration("2h")).toBe(7200000);
+    expect(parseDuration("bad")).toBe(300000);
+  });
+
+  it("parses bounded positive integer options", () => {
+    expect(parseCliPositiveIntOption("25", 50)).toBe(25);
+    expect(parseCliPositiveIntOption(undefined, 50)).toBe(50);
+    expect(parseCliPositiveIntOption("bad", 50)).toBe(50);
+    expect(parseCliPositiveIntOption("0", 50)).toBe(50);
+    expect(parseCliPositiveIntOption("-5", 50)).toBe(50);
+    expect(parseCliPositiveIntOption("5000", 50, 1000)).toBe(1000);
+  });
+
+  it("parses non-negative integer options", () => {
+    expect(parseCliNonNegativeIntOption("25")).toBe(25);
+    expect(parseCliNonNegativeIntOption(undefined)).toBe(0);
+    expect(parseCliNonNegativeIntOption("bad", 10)).toBe(10);
+    expect(parseCliNonNegativeIntOption("-5", 10)).toBe(10);
+  });
+
+  it("parses bounded pagination options", () => {
+    expect(parseCliPage({ limit: "25", offset: "2" })).toEqual({ limit: 25, offset: 2 });
+    expect(parseCliPage({ limit: "-1", offset: "-2" })).toEqual({ limit: 50, offset: 0 });
+    expect(parseCliPage({ limit: "100000", offset: "3" })).toEqual({ limit: MAX_CLI_PAGE_LIMIT, offset: 3 });
+    expect(parseCliPage({}, 20, 30)).toEqual({ limit: 20, offset: 0 });
+  });
+
+  it("uses compact list pagination only when the user did not request a limit or verbose output", () => {
+    const originalArgv = process.argv;
+    try {
+      configureCliRuntime({ json: false, verbose: false });
+      process.argv = ["bun", "emails", "address", "list"];
+      expect(parseCliListPage({})).toEqual({ limit: 20, offset: 0, compact: true });
+      expect(parseCliListPage({ limit: "50" })).toEqual({ limit: 20, offset: 0, compact: true });
+
+      process.argv = ["bun", "emails", "address", "list", "--limit", "50"];
+      expect(parseCliListPage({ limit: "50" })).toEqual({ limit: 50, offset: 0, compact: false });
+
+      process.argv = ["bun", "emails", "address", "list"];
+      expect(parseCliListPage({ verbose: true })).toEqual({ limit: 50, offset: 0, compact: false });
+      configureCliRuntime({ json: false, verbose: true });
+      expect(parseCliListPage({})).toEqual({ limit: 50, offset: 0, compact: false });
+    } finally {
+      configureCliRuntime({ json: false, verbose: false });
+      process.argv = originalArgv;
+    }
+  });
+
+  it("resolveId resolves an id prefix from the /v1 API and prints table-aware guidance when lookup fails", () => {
+    const provider = createProvider({ name: "qa", type: "sandbox" });
+
+    const logs: string[] = [];
+    const errorSpy = mock((msg: unknown) => {
+      logs.push(String(msg));
+    });
+    const exitSpy = mock((code?: number) => {
+      throw new Error(`exit:${code ?? 0}`);
+    });
+
+    const originalError = console.error;
+    const originalExit = process.exit;
+    (console as unknown as { error: typeof errorSpy }).error = errorSpy;
+    (process as unknown as { exit: typeof exitSpy }).exit = exitSpy;
+
+    try {
+      expect(resolveId("providers", provider.id.slice(0, 6))).toBe(provider.id);
+
+      expect(() => resolveId("providers", "missing-prefix")).toThrow("exit:1");
+      expect(logs.join("\n")).toContain("table 'providers'");
+      expect(logs.join("\n")).toContain("Could not resolve ID 'missing-prefix'");
+    } finally {
+      (console as unknown as { error: typeof originalError }).error = originalError;
+      (process as unknown as { exit: typeof originalExit }).exit = originalExit;
+    }
+  });
+});
+
+// ─── THE CLI PAGE CAP MATCHES THE SEAM'S DOCUMENTED HARD CAP ──────────────────
+//
+// Task 9ec32ef4(b): the API list contract clamps every list read to 500 rows
+// (src/store/records.ts — "Server clamps: limit defaults to 100, hard cap
+// 500"), but the CLI accepts --limit up to 1000 and keyed its paging hint to
+// shown >= REQUESTED limit. A clamped 500-row page of a 1000-row request could
+// never satisfy that, so the hint vanished exactly when the set was incomplete
+// and a clamped page read as the complete set. The hint now keys on the
+// effective page size, min(limit, SEAM_LIST_HARD_CAP). The CLI cap itself
+// stays at 1000: the local database serves such pages in full (pinned by
+// output-safety.test.ts), so lowering the cap would trade a hint bug for a
+// capability regression.
+describe("the paging hint and the API list clamp", () => {
+  it("shows the paging hint on a page the store clamped below the request", () => {
+    // 500 rows against a 1000-row request: the API contract's hard cap means
+    // the request can never be filled, so a full clamped page must hint.
+    const hint = formatListHint({ shown: 500, limit: 1000, noun: "provider" });
+    expect(hint).toContain("--offset 500");
+  });
+
+  it("still hints when the request itself is filled, and stays quiet on a short page", () => {
+    expect(formatListHint({ shown: 20, limit: 20, noun: "provider" })).toContain("--offset 20");
+    expect(formatListHint({ shown: 7, limit: 20, noun: "provider" })).not.toContain("--offset");
+  });
+});

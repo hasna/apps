@@ -1,0 +1,4 @@
+interface:
+  display_name: "Goal Plan Coordination"
+  short_description: "Coordinate traced native goal plans"
+  default_prompt: "Use $goal-plan-coordination to coordinate this substantial task through one traced native goal and Todos graph with finite acceptance and one fixed Codewith correctness reviewer."

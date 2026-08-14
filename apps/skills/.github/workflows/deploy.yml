@@ -1,0 +1,239 @@
+name: deploy
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch: {}
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  APP: skills
+  AWS_REGION: us-east-1
+
+jobs:
+  deploy:
+    name: build + migrate + deploy
+    runs-on: ubuntu-24.04-arm
+    environment: production
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ env.APP }}-prod-gha-deploy
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: gha-deploy-${{ env.APP }}-${{ github.run_id }}
+
+      # Every infrastructure identifier this workflow needs (cluster, service,
+      # task family, container, ECR repo, networking, health URL) is resolved
+      # here from the deploy manifest, with an optional CI-variable override.
+      # No infrastructure name is written literally anywhere in this repository.
+      # The DEPLOY_MANIFEST line below is the single tracked line that names
+      # where the manifest lives; everything else is read out of it.
+      - name: Load deploy manifest
+        id: m
+        env:
+          DEPLOY_MANIFEST: ${{ vars.DEPLOY_MANIFEST || format('/hasna/deploy/{0}', env.APP) }}
+          VAR_CLUSTER: ${{ vars.ECS_CLUSTER }}
+          VAR_SERVICE: ${{ vars.ECS_SERVICE }}
+          VAR_WEB_FAMILY: ${{ vars.WEB_TASK_FAMILY }}
+          VAR_WEB_CONTAINER: ${{ vars.WEB_CONTAINER }}
+          VAR_MIG_FAMILY: ${{ vars.MIGRATION_TASK_FAMILY }}
+          VAR_MIG_CONTAINER: ${{ vars.MIGRATION_CONTAINER }}
+          VAR_ECR_URL: ${{ vars.ECR_REPOSITORY_URL }}
+          VAR_ASSIGN_PUBLIC_IP: ${{ vars.ASSIGN_PUBLIC_IP }}
+          VAR_SUBNETS: ${{ vars.SUBNETS }}
+          VAR_SGS: ${{ vars.SECURITY_GROUPS }}
+          VAR_WORKER_SERVICE: ${{ vars.WORKER_SERVICE }}
+          VAR_WORKER_FAMILY: ${{ vars.WORKER_TASK_FAMILY }}
+          VAR_WORKER_CONTAINER: ${{ vars.WORKER_CONTAINER }}
+          VAR_HEALTH_URL: ${{ vars.HEALTH_URL }}
+        run: |
+          set -euo pipefail
+          M="$(aws ssm get-parameter --name "$DEPLOY_MANIFEST" --query Parameter.Value --output text)"
+
+          missing=""
+
+          # resolve <output> <jq-filter> <ci-variable-name> <ci-variable-value>
+          # Manifest wins; the CI variable is the fallback. Anything that resolves
+          # to neither is collected and reported together at the end -- BEFORE any
+          # image is built and before any service is mutated, so an incompletely
+          # configured deployment fails clean rather than half-applied.
+          resolve() {
+            output="$1"; filter="$2"; var_name="$3"; var_value="${4:-}"
+            # An explicit "null" test rather than jq's `// empty`: the alternative
+            # operator also swallows `false`, which would corrupt assign_public_ip.
+            value="$(jq -r "$filter" <<<"$M" 2>/dev/null || true)"
+            if [ "$value" = "null" ]; then value=""; fi
+            if [ -z "$value" ]; then value="$var_value"; fi
+            if [ -z "$value" ]; then
+              missing="${missing}  - ${output}: manifest key '${filter}' or repository variable '${var_name}'"$'\n'
+              return 0
+            fi
+            echo "${output}=${value}" >> "$GITHUB_OUTPUT"
+          }
+
+          resolve cluster          '.cluster'                       ECS_CLUSTER            "${VAR_CLUSTER:-}"
+          resolve service          '.service'                       ECS_SERVICE            "${VAR_SERVICE:-}"
+          resolve web_family       '.web_task_family'               WEB_TASK_FAMILY        "${VAR_WEB_FAMILY:-}"
+          resolve web_container    '.web_container'                 WEB_CONTAINER          "${VAR_WEB_CONTAINER:-}"
+          resolve mig_family       '.migration_task_family'         MIGRATION_TASK_FAMILY  "${VAR_MIG_FAMILY:-}"
+          resolve mig_container    '.migration_container'           MIGRATION_CONTAINER    "${VAR_MIG_CONTAINER:-}"
+          resolve ecr_url          '.ecr_repository_url'            ECR_REPOSITORY_URL     "${VAR_ECR_URL:-}"
+          resolve assign_public_ip '.assign_public_ip'              ASSIGN_PUBLIC_IP       "${VAR_ASSIGN_PUBLIC_IP:-}"
+          resolve subnets          '.subnets | join(",")'           SUBNETS                "${VAR_SUBNETS:-}"
+          resolve sgs              '.security_groups | join(",")'   SECURITY_GROUPS        "${VAR_SGS:-}"
+          resolve worker_service   '.worker_service'                WORKER_SERVICE         "${VAR_WORKER_SERVICE:-}"
+          resolve worker_family    '.worker_task_family'            WORKER_TASK_FAMILY     "${VAR_WORKER_FAMILY:-}"
+          resolve worker_container '.worker_container'              WORKER_CONTAINER       "${VAR_WORKER_CONTAINER:-}"
+          resolve health_url       '.health_url'                    HEALTH_URL             "${VAR_HEALTH_URL:-}"
+
+          if [ -n "$missing" ]; then
+            echo "::error::deploy manifest '$DEPLOY_MANIFEST' is missing required values and no repository-variable fallback is set:"
+            printf '%s' "$missing"
+            echo "::error::add the listed manifest keys to the SSM parameter, or set the listed repository variables."
+            exit 1
+          fi
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push native arm64 image
+        id: build
+        env:
+          ECR_URL: ${{ steps.m.outputs.ecr_url }}
+        run: |
+          set -euo pipefail
+          IMAGE="${ECR_URL}:${GITHUB_SHA}"
+          docker buildx build \
+            --platform linux/arm64 \
+            --provenance=false \
+            --cache-from "type=gha" \
+            --cache-to "type=gha,mode=max" \
+            --tag "${IMAGE}" \
+            --push \
+            .
+          echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
+
+      - name: Run database migration
+        env:
+          IMAGE: ${{ steps.build.outputs.image }}
+          CLUSTER: ${{ steps.m.outputs.cluster }}
+          MIG_FAMILY: ${{ steps.m.outputs.mig_family }}
+          MIG_CONTAINER: ${{ steps.m.outputs.mig_container }}
+          SUBNETS: ${{ steps.m.outputs.subnets }}
+          SGS: ${{ steps.m.outputs.sgs }}
+          ASSIGN: ${{ steps.m.outputs.assign_public_ip }}
+        run: |
+          set -euo pipefail
+          NEW_TD="$(aws ecs describe-task-definition --task-definition "$MIG_FAMILY" \
+            --query taskDefinition | jq --arg img "$IMAGE" --arg c "$MIG_CONTAINER" '
+              .containerDefinitions |= map(if .name==$c then .image=$img else . end)
+              | del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy,.deregisteredAt)')"
+          MIG_ARN="$(aws ecs register-task-definition --cli-input-json "$NEW_TD" \
+            --query taskDefinition.taskDefinitionArn --output text)"
+          TASK_ARN="$(aws ecs run-task --cluster "$CLUSTER" --task-definition "$MIG_ARN" \
+            --launch-type FARGATE --count 1 \
+            --started-by "gha-migrate-${GITHUB_RUN_ID}" \
+            --network-configuration "awsvpcConfiguration={subnets=[$SUBNETS],securityGroups=[$SGS],assignPublicIp=$ASSIGN}" \
+            --query 'tasks[0].taskArn' --output text)"
+          if [ -z "$TASK_ARN" ] || [ "$TASK_ARN" = "None" ]; then
+            echo "::error::migration task failed to start"; exit 1
+          fi
+          aws ecs wait tasks-stopped --cluster "$CLUSTER" --tasks "$TASK_ARN"
+          DESC="$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$TASK_ARN")"
+          EXIT="$(jq -r ".tasks[0].containers[] | select(.name==\"$MIG_CONTAINER\") | .exitCode // \"null\"" <<<"$DESC")"
+          REASON="$(jq -r '.tasks[0].stoppedReason // ""' <<<"$DESC")"
+          echo "migration exitCode=$EXIT stoppedReason=$REASON"
+          if [ "$EXIT" != "0" ]; then
+            echo "::error::migration task did not exit 0 (exit=$EXIT, reason=$REASON)"; exit 1
+          fi
+
+      - name: Deploy API service
+        id: deploy_api
+        env:
+          IMAGE: ${{ steps.build.outputs.image }}
+          CLUSTER: ${{ steps.m.outputs.cluster }}
+          SERVICE: ${{ steps.m.outputs.service }}
+          WEB_FAMILY: ${{ steps.m.outputs.web_family }}
+          WEB_CONTAINER: ${{ steps.m.outputs.web_container }}
+        run: |
+          set -euo pipefail
+          NEW_TD="$(aws ecs describe-task-definition --task-definition "$WEB_FAMILY" \
+            --query taskDefinition | jq --arg img "$IMAGE" --arg c "$WEB_CONTAINER" '
+              .containerDefinitions |= map(if .name==$c then .image=$img else . end)
+              | del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy,.deregisteredAt)')"
+          WEB_ARN="$(aws ecs register-task-definition --cli-input-json "$NEW_TD" \
+            --query taskDefinition.taskDefinitionArn --output text)"
+          aws ecs update-service --cluster "$CLUSTER" --service "$SERVICE" \
+            --task-definition "$WEB_ARN" \
+            --desired-count 1 >/dev/null
+          aws ecs wait services-stable --cluster "$CLUSTER" --services "$SERVICE"
+          for attempt in {1..24}; do
+            SVC="$(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE")"
+            RS="$(jq -r '[.services[0].deployments[] | select(.status=="PRIMARY") | .rolloutState][0] // ""' <<<"$SVC")"
+            LIVE_TD="$(jq -r '[.services[0].deployments[] | select(.status=="PRIMARY") | .taskDefinition][0] // ""' <<<"$SVC")"
+            if [ "$RS" = "COMPLETED" ] && [ "$LIVE_TD" = "$WEB_ARN" ]; then
+              exit 0
+            fi
+            echo "waiting for API primary rollout completion (attempt ${attempt}/24, state=${RS}, taskDefinition=${LIVE_TD})"
+            sleep 5
+          done
+          echo "::error::API deployment did not complete cleanly"; exit 1
+
+      - name: Deploy worker service
+        env:
+          IMAGE: ${{ steps.build.outputs.image }}
+          CLUSTER: ${{ steps.m.outputs.cluster }}
+          WORKER_SERVICE: ${{ steps.m.outputs.worker_service }}
+          WORKER_FAMILY: ${{ steps.m.outputs.worker_family }}
+          WORKER_CONTAINER: ${{ steps.m.outputs.worker_container }}
+        run: |
+          set -euo pipefail
+          NEW_TD="$(aws ecs describe-task-definition --task-definition "$WORKER_FAMILY" \
+            --query taskDefinition | jq --arg img "$IMAGE" --arg c "$WORKER_CONTAINER" '
+              .containerDefinitions |= map(if .name==$c then .image=$img else . end)
+              | del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy,.deregisteredAt)')"
+          WORKER_ARN="$(aws ecs register-task-definition --cli-input-json "$NEW_TD" \
+            --query taskDefinition.taskDefinitionArn --output text)"
+          aws ecs update-service --cluster "$CLUSTER" --service "$WORKER_SERVICE" \
+            --task-definition "$WORKER_ARN" \
+            --desired-count 1 >/dev/null
+          aws ecs wait services-stable --cluster "$CLUSTER" --services "$WORKER_SERVICE"
+          for attempt in {1..24}; do
+            SVC="$(aws ecs describe-services --cluster "$CLUSTER" --services "$WORKER_SERVICE")"
+            RS="$(jq -r '[.services[0].deployments[] | select(.status=="PRIMARY") | .rolloutState][0] // ""' <<<"$SVC")"
+            LIVE_TD="$(jq -r '[.services[0].deployments[] | select(.status=="PRIMARY") | .taskDefinition][0] // ""' <<<"$SVC")"
+            if [ "$RS" = "COMPLETED" ] && [ "$LIVE_TD" = "$WORKER_ARN" ]; then
+              exit 0
+            fi
+            echo "waiting for worker primary rollout completion (attempt ${attempt}/24, state=${RS}, taskDefinition=${LIVE_TD})"
+            sleep 5
+          done
+          echo "::error::worker deployment did not complete cleanly"; exit 1
+
+      # Asserts only `.ok`, the one field of /health that is part of the
+      # endpoint's contract. `service` and `mode` are deliberately NOT asserted:
+      # `service` is churning with the product rename, and `mode` is being
+      # removed outright -- there is one deployment story, you run it.
+      - name: Smoke health endpoint
+        env:
+          HEALTH_URL: ${{ steps.m.outputs.health_url }}
+        run: |
+          set -euo pipefail
+          curl -fsS "$HEALTH_URL" | jq -e '.ok == true'

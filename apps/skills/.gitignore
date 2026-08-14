@@ -1,0 +1,68 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+bin/
+dashboard/dist/
+dashboard/out/
+dashboard/node_modules/
+
+# pnpm
+pnpm-lock.yaml
+
+# OS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+
+# Environment
+.env
+.env.local
+
+# Test coverage
+coverage/
+
+# Temp
+temp/
+
+# Installed skills
+.skills/
+skills/**/.skills/
+
+# Auth tokens
+.npmrc
+
+# Certificates and keys
+*.pem
+*.key
+*.p12
+
+# Logs
+*.log
+
+# OS
+Thumbs.db
+
+# Editor swap files
+*.swp
+*.swo
+
+# Build caches
+.eslintcache
+.tsbuildinfo
+
+# npm pack output
+*.tgz
+
+# Claude Code local session data
+.claude/
+.codewith/
+.hasna/
+.takumi/
+
+# Playwright MCP browser data
+.playwright-mcp/
+.next
