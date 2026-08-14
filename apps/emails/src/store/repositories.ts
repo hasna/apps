@@ -361,3 +361,5 @@ export type EventsRepository = ResourceRepository<ResourceRow>;
 export type EmailDigestsRepository = ResourceRepository<ResourceRow>;
 export type WebhookReceiptsRepository = ResourceRepository<ResourceRow>;
 export type SandboxRepository = ResourceRepository<ResourceRow>;
+export type MailboxFiltersRepository = ResourceRepository<ResourceRow>;
+export type PrioritySenderRulesRepository = ResourceRepository<ResourceRow>;

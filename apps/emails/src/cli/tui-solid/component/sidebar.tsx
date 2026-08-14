@@ -29,7 +29,7 @@ function CountText(props: { value: number; selected?: boolean }) {
 export function Sidebar() {
   const theme = useTheme();
   const emails = useEmails();
-  const [open, setOpen] = createSignal({ mail: true, categories: true, labels: true, tools: true });
+  const [open, setOpen] = createSignal({ mail: true, categories: true, labels: true, saved: true, tools: true });
   // Active organization, derived server-side from the credential (GET /v1/me).
   // Fetched after mount so the synchronous transport never blocks first paint;
   // stays empty when the caller is not signed in or the server is unreachable.
@@ -131,6 +131,26 @@ export function Sidebar() {
             );
           }}
         </For>
+      </Show>
+
+      <SectionHeader label={open().saved ? "Saved Filters" : "Saved Filters +"} onPress={() => setOpen((value) => ({ ...value, saved: !value.saved }))} />
+      <Show when={open().saved}>
+        <For each={emails.state.savedFilters}>
+          {(filter) => {
+            const active = () => emails.state.activeFilterId === filter.id;
+            return (
+              <Row active={active()} onPress={() => void emails.actions.applySavedFilter(filter.id)}>
+                <box flexDirection="row" width="100%" justifyContent="space-between">
+                  <text fg={active() ? selectedForeground(theme, theme.primary) : theme.text}>{filter.name}</text>
+                  <text fg={active() ? selectedForeground(theme, theme.primary) : theme.textMuted}>{filter.mailbox}</text>
+                </box>
+              </Row>
+            );
+          }}
+        </For>
+        <Row active={emails.state.dialog === "saved-filters"} onPress={() => emails.actions.openDialog("saved-filters")}>
+          <text fg={emails.state.dialog === "saved-filters" ? selectedForeground(theme, theme.primary) : theme.text}>Manage saved filters</text>
+        </Row>
       </Show>
 
       <SectionHeader label={open().tools ? "Actions" : "Actions +"} onPress={() => setOpen((value) => ({ ...value, tools: !value.tools }))} />

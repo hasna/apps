@@ -1,0 +1,280 @@
+// Public library surface for @hasna/accounts.
+export * from "./types.js";
+export { storePath, accountsHome, profilesDir } from "./storage.js";
+export {
+  BUILTIN_TOOLS,
+  DEFAULT_TOOL,
+  isBuiltinTool,
+  mergeToolArgs,
+  launchArgsFor,
+  normalizePermissionPreset,
+  permissionArgsFor,
+} from "./lib/tools.js";
+export {
+  addCustomTool,
+  getTool,
+  ensureProfileForLogin,
+  listTools,
+  loadStore,
+  removeCustomTool,
+  saveStore,
+} from "./lib/local-compat.js";
+export { profileEnv, formatEnvAssignments, formatExportLines } from "./lib/env.js";
+export {
+  ensureSharedCapabilities,
+  resetCapabilityBaseline,
+  sharedCapabilityHealth,
+  sharedHomeFor,
+  toolSharesCapabilities,
+} from "./lib/shared-capabilities.js";
+export type {
+  SharedCapabilitiesResult,
+  SharedCapabilityConfigHealth,
+  SharedCapabilityEntryHealth,
+  SharedCapabilityFloor,
+  SharedCapabilityHealth,
+  SharedEntryStatus,
+} from "./lib/shared-capabilities.js";
+export { detectEmail } from "./lib/detect.js";
+export { expandPath } from "./lib/profiles.js";
+export {
+  listProfiles,
+  findProfile,
+  getProfile,
+  getProfileToolLock,
+  lockProfileTool,
+  addProfile,
+  removeProfile,
+  renameProfile,
+  updateProfile,
+  redetectEmail,
+  useProfile,
+  currentProfile,
+} from "./lib/local-compat.js";
+export type { AddOptions, RemoveOptions, UpdateOptions, ProfileMetadata, ProfileMetadataValue } from "./lib/profiles.js";
+export { resolveStore } from "./lib/store.js";
+export type { AccountsStore, CurrentEntry, RemoveResult } from "./lib/store.js";
+export { applyProfile, appliedProfileName } from "./lib/apply.js";
+export { appliedProfile } from "./lib/local-compat.js";
+export { importProfile } from "./lib/import-profile.js";
+export type { ImportOptions } from "./lib/import-profile.js";
+export {
+  detectToolAvailability,
+  finalizeLogin,
+  installInstructions,
+  loginToolChoices,
+  nonInteractiveToolSelectionMessage,
+  prepareLogin,
+  unavailableToolMessage,
+} from "./lib/login.js";
+export type {
+  FinalizeLoginResult,
+  LoginPreparation,
+  LoginPreparationReady,
+  LoginPreparationStopped,
+  LoginToolChoice,
+  PrepareLoginOptions,
+  ToolAvailability,
+} from "./lib/login.js";
+export { publicSwitchResult, switchProfile } from "./lib/switch.js";
+export type { PublicSwitchResult, SwitchMode, SwitchOptions, SwitchResult } from "./lib/switch.js";
+export { listDirLiveSessions, resolveSessionConfigDir, switchAccount } from "./lib/switch-account.js";
+export type {
+  DirSessionInfo,
+  SessionDirKind,
+  SwitchAccountOptions,
+  SwitchAccountResult,
+} from "./lib/switch-account.js";
+export {
+  codexAppBinaryExists,
+  codexAppMenuState,
+  codexAppMenuSwiftSource,
+  runCodexAppMenuBar,
+  switchCodexAppFromMenu,
+} from "./lib/codex-app-menu.js";
+export type {
+  CodexAppMenuProfile,
+  CodexAppMenuState,
+  CodexAppMenuSwitchResult,
+  CodexAppProcessRunner,
+  CodexAppRelaunchOptions,
+  RunCodexAppMenuBarOptions,
+} from "./lib/codex-app-menu.js";
+export {
+  listSupervisorStates,
+  readSupervisorState,
+  resolveSupervisorLaunch,
+  runSupervisedTool,
+  sendSupervisorRequest,
+  supervisorDir,
+  supervisorSocketPath,
+  supervisorStatePath,
+} from "./lib/supervisor.js";
+export type {
+  RunSupervisorOptions,
+  SupervisorClientOptions,
+  SupervisorLaunchPlan,
+  SupervisorRequest,
+  SupervisorResponse,
+  SupervisorState,
+} from "./lib/supervisor.js";
+export {
+  configsSessionToolFor,
+  configsPrelaunchCommand,
+  runConfigsPrelaunch,
+} from "./lib/configs-prelaunch.js";
+export type {
+  ConfigsPrelaunchMode,
+  ConfigsPrelaunchOptions,
+  ConfigsPrelaunchResult,
+  ConfigsRunner,
+} from "./lib/configs-prelaunch.js";
+export {
+  assessConfigsManifest,
+  configsManifestPath,
+  configsPrelaunchAuditPath,
+  getConfigsPrelaunchSummary,
+  readConfigsPrelaunchAudit,
+  recordConfigsPrelaunchAudit,
+} from "./lib/configs-prelaunch-status.js";
+export type {
+  ConfigsManifestDrift,
+  ConfigsPrelaunchAudit,
+  ConfigsPrelaunchAuditResult,
+  ConfigsPrelaunchManifestStatus,
+  ConfigsPrelaunchStatus,
+  ConfigsPrelaunchSummary,
+} from "./lib/configs-prelaunch-status.js";
+export {
+  bindSessionLaunchReceipt,
+  prepareSessionLaunchReceipt,
+  sessionLaunchJsonSha256,
+  sessionLaunchProfileSha256,
+  sessionLaunchSha256,
+  SESSION_LAUNCH_ADAPTERS,
+  SESSION_LAUNCH_RECEIPT_MISMATCH,
+  SESSION_LAUNCH_RECEIPT_SCHEMA,
+  SESSION_RENDER_MANIFEST_RELATIVE_PATH,
+  SESSION_RENDER_MANIFEST_SCHEMA,
+} from "./lib/session-launch-receipt.js";
+export type {
+  PreparedSessionLaunchReceipt,
+  SessionInstructionsFileReceipt,
+  SessionInstructionsRuleReceipt,
+  SessionInstructionsReceipt,
+  SessionInstructionsSourceReceipt,
+  SessionLaunchAdapter,
+  SessionLaunchCapabilityReceipt,
+  SessionLaunchCapabilityRequest,
+  SessionLaunchCapabilityStatus,
+  SessionLaunchReceipt,
+  SessionLaunchReceiptRequest,
+  SessionLaunchRoute,
+  SessionLaunchRuntimeReceipt,
+  SessionLaunchTarget,
+  SessionLaunchTargetKind,
+  SessionLaunchTool,
+} from "./lib/session-launch-receipt.js";
+export { getAccountsReadiness } from "./lib/readiness.js";
+export type {
+  AccountsProviderReadiness,
+  AccountsProfileLoginReadiness,
+  AccountsProfileReadiness,
+  AccountsReadiness,
+  AccountsReadinessCheck,
+  AccountsReadinessStatus,
+  AccountsStorageReadiness,
+  AccountsSupervisorReadiness,
+} from "./lib/readiness.js";
+export { pickProfile } from "./lib/pick.js";
+export type { PickOptions, PickResult } from "./lib/pick.js";
+export { installHook, uninstallHook, hookPath, hookScript, shellSnippet } from "./lib/hook.js";
+export {
+  snapshotClaudeAuthToProfile,
+  snapshotLiveAuthToProfile,
+  restoreClaudeAuthFromProfile,
+  ensureProfileAuthSnapshot,
+  claudeKeychainCredentialFromProfile,
+  prepareClaudeProfileKeychain,
+  liveCredentialShouldUpdateProfile,
+  hasAuthSnapshot,
+  profileHasAuth,
+  claudeProfileAuthHealth,
+  sanitizeClaudeProfileApiSettings,
+  sanitizeClaudeOAuthProfileSettings,
+  sanitizeLiveClaudeOAuthSettings,
+  CLAUDE_API_AUTH_ENV_KEYS,
+} from "./lib/claude-auth.js";
+export type { ClaudeProfileAuthHealth, ClaudeProfileAuthStatus } from "./lib/claude-auth.js";
+export {
+  centralAuthRoot,
+  centralAuthDir,
+  centralOAuthSnapshot,
+  centralCredentialsSnapshot,
+  centralCredentialsPathForProfile,
+  centralOAuthRecordForProfile,
+  isAccountUuid,
+  profileAccountUuid,
+  syncProfileSnapshotToCentral,
+  listCentralAccounts,
+  sweepCentralAuth,
+} from "./lib/auth-store.js";
+export type {
+  CentralAccount,
+  SweepResult,
+  SweptOrphan,
+  SyncFileAction,
+  SyncResult,
+  UnresolvedProfileBinding,
+} from "./lib/auth-store.js";
+// Credential → account identity binding: the one question containment cannot
+// ask ("were these BYTES legitimately filed under this uuid?").
+export {
+  CREDENTIAL_BINDING_METHOD,
+  buildCredentialClaimIndex,
+  classifyCredentialWrite,
+  credentialBindingConflicts,
+  credentialBindingRefusal,
+  credentialClaimants,
+  credentialFingerprintFromFile,
+  listCredentialBindings,
+  readCredentialBinding,
+} from "./lib/credential-binding.js";
+export type {
+  CredentialBinding,
+  CredentialBindingConflict,
+  CredentialBindingRefusal,
+  CredentialBindingRow,
+  CredentialClaimIndex,
+  CredentialWriteVerdict,
+} from "./lib/credential-binding.js";
+// THE uuid-keyed account enumerator (central store first, per-profile stores
+// as compat fallback). Consumers must reason over this instead of walking
+// profile dirs themselves.
+export {
+  buildIdentityIndex,
+  describeAccountStatus,
+  dirAccountUuid,
+  statusNeedsOperator,
+  statusWithoutValidAccessToken,
+} from "./lib/identity-index.js";
+export type {
+  AccountDoor,
+  AccountDoorRole,
+  AccountIdentity,
+  AccountCredentialRef,
+  AccountStatus,
+  CredentialSource,
+} from "./lib/identity-index.js";
+export { withApplyLock } from "./lib/apply-lock.js";
+export { isSafeProfileName } from "./lib/hook.js";
+export { readClaudeKeychain, keychainSupported } from "./lib/keychain.js";
+export {
+  accountsCapabilityCard,
+  accountsNoCloudEvidencePack,
+  toAccountsActorRef,
+  toAgentsRunnerWorkRun,
+  toSupervisorOptionsWorkRun,
+  validateEventActorRefs,
+} from "./lib/contracts.js";
+export { AccountsEventsClient, createAccountsEventsClient } from "./lib/events.js";

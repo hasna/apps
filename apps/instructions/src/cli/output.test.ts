@@ -1,0 +1,220 @@
+import { afterEach, describe, expect, test } from "bun:test";
+import { existsSync, rmSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { createConfig } from "../db/configs";
+import { getDatabase, resetDatabase } from "../db/database";
+import { addConfigToProfile, createProfile } from "../db/profiles";
+import { makeTempRoot } from "../lib/test-temp-root";
+
+const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "../..");
+const tempDirs: string[] = [];
+
+function runCli(args: string[], dbPath: string, home?: string) {
+  return spawnSync("bun", ["src/cli/index.tsx", ...args], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      HASNA_INSTRUCTIONS_DB_PATH: dbPath,
+      HASNA_INSTRUCTIONS_API_URL: "",
+      HASNA_INSTRUCTIONS_API_KEY: "",
+      ...(home ? { HOME: home, CONFIGS_HOME: home } : {}),
+      NO_COLOR: "1",
+      FORCE_COLOR: "0",
+    },
+  });
+}
+
+function seedConfigs(count: number): { home: string; dbPath: string } {
+  const home = makeTempRoot("open-configs-output-cli-");
+  tempDirs.push(home);
+  const dbPath = join(home, "configs.db");
+  process.env["HASNA_INSTRUCTIONS_DB_PATH"] = dbPath;
+  resetDatabase();
+  const db = getDatabase(dbPath);
+  for (let i = 1; i <= count; i++) {
+    createConfig({
+      name: `Very Long Agent Config ${String(i).padStart(2, "0")}`,
+      category: i % 2 === 0 ? "agent" : "rules",
+      agent: i % 3 === 0 ? "codex" : "claude",
+      kind: "file",
+      target_path: `~/.config/very/deep/path/that/keeps/going/agent-${i}/settings-with-a-long-name.json`,
+      format: "json",
+      content: JSON.stringify({ value: "x".repeat(400) }),
+      description: "This description is intentionally long and repetitive so the default output would be noisy.",
+      tags: ["long", "sample", `item-${i}`],
+      outputs: [{ agent: "codewith", target_path: `~/.codewith/generated/agent-${i}/CODEWITH.md`, transform: "codex-flat" }],
+    }, db);
+  }
+  resetDatabase();
+  delete process.env["HASNA_INSTRUCTIONS_DB_PATH"];
+  return { home, dbPath };
+}
+
+afterEach(() => {
+  resetDatabase();
+  delete process.env["HASNA_INSTRUCTIONS_DB_PATH"];
+  for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+
+describe("configs list output", () => {
+  test("defaults to compact paged output", () => {
+    const { dbPath } = seedConfigs(25);
+    const result = runCli(["list"], dbPath);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("Showing 20 of 25");
+    expect(result.stdout).toContain("Next: configs list --cursor 20 --limit 20");
+    expect(result.stdout).toContain("configs show <slug>");
+    expect(result.stdout).not.toContain("intentionally long and repetitive");
+    expect(result.stdout.split("\n").filter(Boolean).length).toBeLessThanOrEqual(25);
+  });
+
+  test("verbose output discloses expanded metadata only when requested", () => {
+    const { dbPath } = seedConfigs(3);
+    const result = runCli(["list", "--verbose", "--limit", "1"], dbPath);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("Very Long Agent Config");
+    expect(result.stdout).toContain("intentionally long and repetitive");
+    expect(result.stdout).toContain("Showing 1 of 3");
+  });
+
+  test("json output remains full matching records", () => {
+    const { dbPath } = seedConfigs(4);
+    const result = runCli(["list", "--json"], dbPath);
+
+    expect(result.status).toBe(0);
+    const records = JSON.parse(result.stdout) as Array<{ content: string; outputs: unknown[] }>;
+    expect(records).toHaveLength(4);
+    expect(records[0]?.content).toContain("xxx");
+    expect(records[0]?.outputs).toHaveLength(1);
+  });
+});
+
+describe("configs report output", () => {
+  test("json output is parseable and follows the stable report schema", () => {
+    const home = makeTempRoot("open-configs-report-json-");
+    tempDirs.push(home);
+    const dbPath = join(home, "configs.db");
+    const result = runCli(["report", "--json"], dbPath, home);
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(JSON.parse(result.stdout)).toEqual({
+      schema_version: 1,
+      configs: {
+        total: 0,
+        files: 0,
+        references: 0,
+        templates: 0,
+        project: 0,
+      },
+      profiles: {
+        total: 0,
+      },
+      drift: {
+        drifted: 0,
+        missing: 0,
+      },
+      secrets: {
+        findings: 0,
+        policy: "redacted_on_ingest",
+      },
+      by_agent: {},
+      by_category: {},
+    });
+  });
+
+  test("the no-flag report preserves the existing human surface", () => {
+    const home = makeTempRoot("open-configs-report-human-");
+    tempDirs.push(home);
+    const dbPath = join(home, "configs.db");
+    const result = runCli(["report"], dbPath, home);
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toBe(
+      "configs report\n" +
+      "\n" +
+      "  Total:       0 configs (0 files, 0 references)\n" +
+      "  Templates:   0 (with {{VAR}} placeholders)\n" +
+      "  Profiles:    0\n" +
+      "  Drift:       0 ✓ drifted, 0 missing\n" +
+      "  Secrets:     0 ✓ (redacted on ingest)\n" +
+      "\n" +
+      "  By agent:\n" +
+      "\n" +
+      "  By category:\n",
+    );
+  });
+});
+
+describe("configs apply ownership output", () => {
+  test("CLI direct and profile dry-runs report owned instructions and preserve OpenCode settings", () => {
+    const home = makeTempRoot("open-configs-apply-cli-");
+    tempDirs.push(home);
+    const dbPath = join(home, "configs.db");
+    process.env["HASNA_INSTRUCTIONS_DB_PATH"] = dbPath;
+    resetDatabase();
+    const db = getDatabase(dbPath);
+    const claude = createConfig({
+      name: "Claude Legacy Writer",
+      category: "rules",
+      agent: "claude",
+      content: "legacy claude",
+      target_path: "~/.claude/CLAUDE.md",
+    }, db);
+    const antigravity = createConfig({
+      name: "Antigravity Legacy Writer",
+      category: "rules",
+      agent: "antigravity",
+      content: "legacy antigravity",
+      target_path: "~/.gemini/GEMINI.md",
+    }, db);
+    const opencode = createConfig({
+      name: "OpenCode Settings",
+      category: "agent",
+      agent: "opencode",
+      format: "json",
+      content: JSON.stringify({ model: "preserved-model", mcp: { preserved: true } }),
+      target_path: "~/.config/opencode/opencode.json",
+    }, db);
+    const profile = createProfile({ name: "Ownership Preview" }, db);
+    for (const config of [claude, antigravity, opencode]) addConfigToProfile(profile.id, config.id, db);
+    resetDatabase();
+    delete process.env["HASNA_INSTRUCTIONS_DB_PATH"];
+
+    const claudePreview = runCli(["apply", claude.slug, "--dry-run"], dbPath, home);
+    const antigravityPreview = runCli(["apply", antigravity.slug, "--dry-run"], dbPath, home);
+    const profilePreview = runCli([
+      "profile",
+      "apply",
+      profile.slug,
+      "--dry-run",
+      "--hostname",
+      "station01",
+      "--os",
+      "linux",
+      "--arch",
+      "arm64",
+    ], dbPath, home);
+
+    expect(claudePreview.status).toBe(0);
+    expect(claudePreview.stdout).toContain("[owned]");
+    expect(claudePreview.stdout).toContain("instructions-session-renderer");
+    expect(antigravityPreview.status).toBe(0);
+    expect(antigravityPreview.stdout).toContain("[owned]");
+    expect(antigravityPreview.stdout).toContain(".gemini/GEMINI.md");
+    expect(profilePreview.status).toBe(0);
+    expect(profilePreview.stdout).toContain(".claude/CLAUDE.md");
+    expect(profilePreview.stdout).toContain(".gemini/GEMINI.md");
+    expect(profilePreview.stdout).toContain("[dry-run]");
+    expect(profilePreview.stdout).toContain(".config/opencode/opencode.json");
+    expect(existsSync(join(home, ".claude", "CLAUDE.md"))).toBe(false);
+    expect(existsSync(join(home, ".gemini", "GEMINI.md"))).toBe(false);
+    expect(existsSync(join(home, ".config", "opencode", "opencode.json"))).toBe(false);
+  });
+});

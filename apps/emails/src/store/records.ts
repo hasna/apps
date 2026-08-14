@@ -318,7 +318,7 @@ export interface ListMessagesOptions {
   subject?: string;
   search?: string;
   since?: string;
-  /** Only messages with a recipient at one of these domains (lowercased). */
+  /** Only messages whose sender or a to/cc recipient is at one of these domains (lowercased). */
   domains?: string[];
   folder?: MessageFolder;
 }

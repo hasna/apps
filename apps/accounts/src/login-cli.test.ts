@@ -1,0 +1,1221 @@
+import { afterEach, beforeEach, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+let home: string;
+let binDir: string;
+let logPath: string;
+
+beforeEach(() => {
+  home = mkdtempSync(join(tmpdir(), "accounts-login-cli-"));
+  binDir = mkdtempSync(join(tmpdir(), "accounts-login-bin-"));
+  logPath = join(home, "fake-login.log");
+});
+
+afterEach(() => {
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
+interface RunOptions {
+  input?: string;
+  env?: Record<string, string | undefined>;
+  path?: string;
+}
+
+function runCliWith(args: string[], opts: RunOptions = {}) {
+  return spawnSync(process.execPath, ["run", "src/cli.ts", ...args], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    input: opts.input,
+    env: {
+      ...process.env,
+      NODE_ENV: "test",
+      ACCOUNTS_HOME: home,
+      FAKE_LOGIN_LOG: logPath,
+      PATH: opts.path ?? `${binDir}:${process.env.PATH ?? ""}`,
+      ...opts.env,
+    },
+  });
+}
+
+function runCli(...args: string[]) {
+  return runCliWith(args);
+}
+
+function writeFakeTool(binName: string, envVar: string, toolName = binName, exitCode = 0) {
+  const fakeBin = join(binDir, binName);
+  writeFileSync(
+    fakeBin,
+    [
+      "#!/bin/sh",
+      `home="\${${envVar}:-}"`,
+      'request_debug=""',
+      '[ "${BUN_CONFIG_VERBOSE_FETCH+x}" = x ] && request_debug="${request_debug}BUN_CONFIG_VERBOSE_FETCH,"',
+      '[ "${NODE_DEBUG+x}" = x ] && request_debug="${request_debug}NODE_DEBUG,"',
+      '[ "${NODE_DEBUG_NATIVE+x}" = x ] && request_debug="${request_debug}NODE_DEBUG_NATIVE,"',
+      `printf '{"tool":"${toolName}","args":"%s","home":"%s","requestDebug":"%s","path":"%s","httpsProxy":"%s","tlsCert":"%s","bedrock":"%s","vertex":"%s","awsProfile":"%s","googleCredentials":"%s"}\\n' "$*" "$home" "$request_debug" "$PATH" "\${HTTPS_PROXY:-}" "\${NODE_EXTRA_CA_CERTS:-}" "\${CLAUDE_CODE_USE_BEDROCK:-}" "\${CLAUDE_CODE_USE_VERTEX:-}" "\${AWS_PROFILE:-}" "\${GOOGLE_APPLICATION_CREDENTIALS:-}" >> "$FAKE_LOGIN_LOG"`,
+      'if [ -n "${BUN_CONFIG_VERBOSE_FETCH:-}${NODE_DEBUG:-}${NODE_DEBUG_NATIVE:-}" ] && [ -n "${FAKE_DEBUG_CREDENTIAL:-}" ]; then',
+      '  printf "Authorization: Bearer %s\\n" "$FAKE_DEBUG_CREDENTIAL"',
+      '  printf "x-api-key=%s\\n" "$FAKE_DEBUG_CREDENTIAL" >&2',
+      "fi",
+      `exit ${exitCode}`,
+    ].join("\n"),
+  );
+  chmodSync(fakeBin, 0o755);
+}
+
+function writeFakeConfigs() {
+  const fakeBin = join(binDir, "configs");
+  writeFileSync(
+    fakeBin,
+    [
+      "#!/bin/sh",
+      'printf \'%s\\n\' "$*" >> "$FAKE_CONFIGS_LOG"',
+      'mode="${2:-}"',
+      'tool=""',
+      'profile=""',
+      'target=""',
+      'while [ "$#" -gt 0 ]; do',
+      '  case "$1" in',
+      '    --tool) shift; tool="${1:-}" ;;',
+      '    --profile) shift; profile="${1:-}" ;;',
+      '    --target-home) shift; target="${1:-}" ;;',
+      '  esac',
+      '  shift || true',
+      'done',
+      'if [ "$mode" = "apply" ] && [ -n "$target" ]; then',
+      '  mkdir -p "$target/.hasna"',
+      '  printf \'{"schema":"hasna.configs.session-render/v1","tool":"%s","profile":"%s","targetHome":"%s","generatedAt":"2026-07-01T00:00:00.000Z","sources":[{"id":"global-codewith"}],"files":[]}\\n\' "$tool" "$profile" "$target" > "$target/.hasna/session-render-manifest.json"',
+      'fi',
+      "exit 0",
+    ].join("\n"),
+  );
+  chmodSync(fakeBin, 0o755);
+}
+
+function writeFakeSecurity() {
+  const fakeSecurity = join(binDir, "fake-security");
+  writeFileSync(
+    fakeSecurity,
+    [
+      "#!/usr/bin/env bash",
+      `printf '%s\\n' "$*" >> "$FAKE_SECURITY_LOG"`,
+      `if [ "\${1:-}" = "delete-generic-password" ]; then exit 1; fi`,
+      `if [ "\${1:-}" = "add-generic-password" ]; then`,
+      `  account=""`,
+      `  secret=""`,
+      `  while [ "$#" -gt 0 ]; do`,
+      `    case "$1" in`,
+      `      -a) shift; account="\${1:-}" ;;`,
+      `      -w) shift; secret="\${1:-}" ;;`,
+      `    esac`,
+      `    shift || true`,
+      `  done`,
+      `  printf 'account=%s\\n' "$account" >> "$FAKE_SECURITY_PAYLOAD"`,
+      `  printf 'secret=%s\\n' "$secret" >> "$FAKE_SECURITY_PAYLOAD"`,
+      `  exit 0`,
+      `fi`,
+      `exit 0`,
+    ].join("\n"),
+  );
+  chmodSync(fakeSecurity, 0o755);
+  return fakeSecurity;
+}
+
+/**
+ * Mark a profile home as one a render has already reached.
+ *
+ * A launch now refuses an instruction home carrying no operating rules (todos
+ * OPE15-00059), so a test that launches with `--skip-configs` has to say whether
+ * its fixture is a governed home or an ungoverned one. Both cases are exercised
+ * below; this makes the distinction explicit rather than incidental.
+ */
+function markInstructionHomeRendered(profileDir: string, tool: string, profile: string) {
+  mkdirSync(join(profileDir, ".hasna"), { recursive: true });
+  writeFileSync(
+    join(profileDir, ".hasna", "session-render-manifest.json"),
+    JSON.stringify({
+      schema: "hasna.configs.session-render/v1",
+      tool,
+      profile,
+      targetHome: profileDir,
+      generatedAt: "2026-07-01T00:00:00.000Z",
+      sources: [{ id: "hasna-agent-operating-rules" }],
+      files: [],
+    }) + "\n",
+  );
+}
+
+function writeClaudeAuth(profileDir: string, email: string) {
+  writeFileSync(join(profileDir, ".claude.json"), JSON.stringify({ oauthAccount: { emailAddress: email } }));
+  writeFileSync(
+    join(profileDir, ".credentials.json"),
+    JSON.stringify({
+      claudeAiOauth: {
+        accessToken: `${email}-access-token`,
+        refreshToken: `${email}-refresh-token`,
+        expiresAt: Date.now() + 60_000,
+      },
+    }),
+  );
+}
+
+function addFakeLoginTool(id = "fake-login", label = "Fake Login", envVar = "FAKE_LOGIN_HOME", bin = "fake-login-tool") {
+  const result = runCli(
+    "tools",
+    "add",
+    id,
+    "--label",
+    label,
+    "--env-var",
+    envVar,
+    "--bin",
+    bin,
+    "--login-arg",
+    "auth",
+    "login",
+  );
+  expect(result.status, result.stderr).toBe(0);
+}
+
+function readLogEntries() {
+  if (!existsSync(logPath)) return [];
+  return readFileSync(logPath, "utf8")
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as {
+      tool: string;
+      args: string;
+      home: string;
+      requestDebug: string;
+      path: string;
+      httpsProxy: string;
+      tlsCert: string;
+      bedrock: string;
+      vertex: string;
+      awsProfile: string;
+      googleCredentials: string;
+    });
+}
+
+const handoffEnvironment = {
+  BUN_CONFIG_VERBOSE_FETCH: "1",
+  NODE_DEBUG: "http,http2",
+  NODE_DEBUG_NATIVE: "http",
+  HTTPS_PROXY: "http://proxy.example.test:8443",
+  NODE_EXTRA_CA_CERTS: "/profiles/work/ca.pem",
+  CLAUDE_CODE_USE_BEDROCK: "1",
+  CLAUDE_CODE_USE_VERTEX: "1",
+  AWS_PROFILE: "work",
+  GOOGLE_APPLICATION_CREDENTIALS: "/profiles/work/google.json",
+};
+
+function expectSafeProviderObservation() {
+  const observation = readLogEntries().at(-1);
+  expect(observation).toBeTruthy();
+  expect(observation?.requestDebug).toBe("");
+  expect(observation).toMatchObject({
+    httpsProxy: handoffEnvironment.HTTPS_PROXY,
+    tlsCert: handoffEnvironment.NODE_EXTRA_CA_CERTS,
+    bedrock: handoffEnvironment.CLAUDE_CODE_USE_BEDROCK,
+    vertex: handoffEnvironment.CLAUDE_CODE_USE_VERTEX,
+    awsProfile: handoffEnvironment.AWS_PROFILE,
+    googleCredentials: handoffEnvironment.GOOGLE_APPLICATION_CREDENTIALS,
+  });
+  expect(observation?.path).toContain(binDir);
+}
+
+function executeGeneratedHandoff(lines: string) {
+  return spawnSync(
+    "/bin/sh",
+    ["-c", `${lines}\nfake-login-tool observe`],
+    {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        ...handoffEnvironment,
+        FAKE_LOGIN_LOG: logPath,
+        PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      },
+    },
+  );
+}
+
+function executeHandoffCommand(commandLine: string) {
+  return spawnSync(
+    "/bin/sh",
+    ["-c", commandLine],
+    {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        ...handoffEnvironment,
+        FAKE_LOGIN_LOG: logPath,
+        PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      },
+    },
+  );
+}
+
+function readStore() {
+  return JSON.parse(readFileSync(join(home, "accounts.json"), "utf8")) as {
+    toolLocks?: Record<string, string>;
+    profiles?: Array<{ name: string; tool: string; dir: string }>;
+  };
+}
+
+/**
+ * Write a profile row straight into the store file, bypassing `accounts add`.
+ * This is how tests model a GRANDFATHERED registry: one written before the
+ * one-account-one-tool rule, which `accounts add` can no longer produce.
+ */
+function seedProfileRow(name: string, tool: string): void {
+  const path = join(home, "accounts.json");
+  const store = JSON.parse(readFileSync(path, "utf8")) as {
+    profiles?: Array<Record<string, unknown>>;
+  };
+  store.profiles = store.profiles ?? [];
+  store.profiles.push({
+    name,
+    tool,
+    dir: join(home, "profiles", tool, name),
+    createdAt: "2026-06-21T00:00:00.000Z",
+  });
+  writeFileSync(path, JSON.stringify(store, null, 2));
+}
+
+test("launch syncs Claude profile credentials into keychain before spawning", () => {
+  writeFakeTool("claude", "CLAUDE_CONFIG_DIR", "claude");
+  const fakeSecurity = writeFakeSecurity();
+  const securityLog = join(home, "fake-security.log");
+  const securityPayload = join(home, "fake-security-payload.log");
+  expect(runCli("add", "acct", "--tool", "claude").status).toBe(0);
+  const profile = readStore().profiles?.find((entry) => entry.name === "acct" && entry.tool === "claude");
+  expect(profile).toBeTruthy();
+  writeClaudeAuth(profile!.dir, "acct@example.com");
+  markInstructionHomeRendered(profile!.dir, "claude", "acct");
+
+  const result = runCliWith(["launch", "acct", "--tool", "claude", "--skip-configs", "--", "--version"], {
+    env: {
+      ACCOUNTS_TEST_KEYCHAIN: "1",
+      ACCOUNTS_TEST_SECURITY_BIN: fakeSecurity,
+      FAKE_SECURITY_LOG: securityLog,
+      FAKE_SECURITY_PAYLOAD: securityPayload,
+    },
+  });
+
+  expect(result.status).toBe(0);
+  expect(readLogEntries()[0]?.tool).toBe("claude");
+  const keychainLog = readFileSync(securityLog, "utf8");
+  const keychainPayload = readFileSync(securityPayload, "utf8");
+  expect(keychainLog).toContain("add-generic-password");
+  expect(keychainPayload).toContain("account=acct");
+  expect(keychainPayload).toContain("acct@example.com-access-token");
+});
+
+test("launch --skip-configs into a home with no operating rules is refused end to end", () => {
+  // The exact shape of the station01 incident on 2026-08-07: `accounts launch
+  // <name> --tool claude --permissions dangerous --skip-configs` into a profile
+  // whose config dir holds no rules file, no `.hasna/instructions` and no render
+  // manifest. It ran for hours and `accounts doctor` reported it green.
+  //
+  // This runs the real CLI, so it covers the wiring and not only the guard: the
+  // three earlier guards in the prelaunch module are all unreachable on this
+  // path, because --skip-configs returns before every one of them.
+  writeFakeTool("claude", "CLAUDE_CONFIG_DIR", "claude");
+  expect(runCli("add", "ungoverned", "--tool", "claude").status).toBe(0);
+
+  const result = runCli("launch", "ungoverned", "--tool", "claude", "--skip-configs", "--", "--version");
+
+  expect(result.status).not.toBe(0);
+  expect(`${result.stderr}${result.stdout}`).toContain("no operating rules");
+  // The tool binary must never have been reached.
+  expect(readLogEntries().length).toBe(0);
+});
+
+test("launch --skip-configs --allow-empty-instructions is still allowed through", () => {
+  // The single documented override, exercised end to end so the refusal above
+  // cannot wedge an operator who genuinely wants an ungoverned home.
+  writeFakeTool("claude", "CLAUDE_CONFIG_DIR", "claude");
+  expect(runCli("add", "deliberate", "--tool", "claude").status).toBe(0);
+
+  const result = runCli(
+    "launch", "deliberate", "--tool", "claude",
+    "--skip-configs", "--allow-empty-instructions", "--", "--version",
+  );
+
+  expect(result.status).toBe(0);
+  expect(readLogEntries()[0]?.tool).toBe("claude");
+});
+
+test("login into a Claude home with no operating rules is refused before spawn", () => {
+  writeFakeTool("claude", "CLAUDE_CONFIG_DIR", "claude");
+  expect(runCli("add", "login-ungoverned", "--tool", "claude").status).toBe(0);
+
+  const result = runCli("login", "login-ungoverned", "--tool", "claude");
+
+  expect(result.status).not.toBe(0);
+  expect(`${result.stderr}${result.stdout}`).toContain("no operating rules");
+  expect(readLogEntries()).toHaveLength(0);
+});
+
+test("login --allow-empty-instructions reaches an intentionally ungoverned Claude home", () => {
+  writeFakeTool("claude", "CLAUDE_CONFIG_DIR", "claude");
+  expect(runCli("add", "login-deliberate", "--tool", "claude").status).toBe(0);
+  const profile = readStore().profiles?.find(
+    (entry) => entry.name === "login-deliberate" && entry.tool === "claude",
+  );
+  expect(profile).toBeTruthy();
+  writeClaudeAuth(profile!.dir, "login-deliberate@example.com");
+
+  const result = runCli(
+    "login", "login-deliberate", "--tool", "claude", "--allow-empty-instructions",
+  );
+
+  expect(result.status, result.stderr).toBe(0);
+  expect(readLogEntries()[0]?.tool).toBe("claude");
+});
+
+/**
+ * Prelaunch renders only when it has an instruction source to render FROM.
+ * These tests are about the render being WIRED UP, so they have to supply one;
+ * the no-sources path (skip, home untouched, launch still succeeds) is covered
+ * in src/empty-instruction-render.test.ts.
+ */
+function giveInstructionSource(name: string, tool: string): void {
+  const path = join(home, `${name}-${tool}.configs.json`);
+  writeFileSync(
+    path,
+    JSON.stringify({
+      contract: "hasna.identities.configs-instructions/v1",
+      // Same id the fake configs binary writes into the manifest, so this
+      // exercises the wiring rather than the shortfall guard.
+      sources: [{ id: "global-codewith", layer: "global", content: "rules" }],
+    }) + "\n",
+  );
+  expect(runCli("set", name, "--tool", tool, "--identity", path).status).toBe(0);
+}
+
+test("launch runs configs apply by default before spawning", () => {
+  writeFakeTool("claude", "CLAUDE_CONFIG_DIR", "claude");
+  writeFakeConfigs();
+  const configsLog = join(home, "fake-configs.log");
+  expect(runCli("add", "acct", "--tool", "claude").status).toBe(0);
+  giveInstructionSource("acct", "claude");
+  const profile = readStore().profiles?.find((entry) => entry.name === "acct" && entry.tool === "claude");
+  expect(profile).toBeTruthy();
+
+  const result = runCliWith(["launch", "acct", "--tool", "claude", "--", "--version"], {
+    env: { FAKE_CONFIGS_LOG: configsLog },
+  });
+
+  expect(result.status).toBe(0);
+  const configsCall = readFileSync(configsLog, "utf8");
+  expect(configsCall).toContain("session apply --tool claude --profile acct");
+  expect(configsCall).toContain(`--target-home ${profile!.dir}`);
+  expect(readLogEntries()[0]?.tool).toBe("claude");
+});
+
+test("launch still PROCEEDS when a profile has no instruction sources, leaving its home alone", () => {
+  // The live invocation is bare `accounts launch accountNNN --tool claude
+  // --permissions dangerous` — no --allow-configs-failure, no --skip-configs,
+  // ~15 concurrent on the fleet. So the no-sources path has to be proven at the
+  // CLI boundary, not just through an injected runner: if prelaunch throws here
+  // the process exits non-zero and every pooled agent stops starting, which is
+  // the 0.2.9 breakage. Emptying the home instead is the defect this whole
+  // change exists to remove. Neither is acceptable, so: exit 0, home untouched.
+  writeFakeTool("claude", "CLAUDE_CONFIG_DIR", "claude");
+  writeFakeConfigs();
+  const configsLog = join(home, "fake-configs-no-sources.log");
+  expect(runCli("add", "acct", "--tool", "claude").status).toBe(0);
+  const profile = readStore().profiles?.find((entry) => entry.name === "acct" && entry.tool === "claude");
+  expect(profile).toBeTruthy();
+  expect(profile!.identity ?? "").toBe("");
+
+  // A home already carrying rules from an earlier render. Stale-but-present has
+  // to survive: it is strictly better than the empty home that replaced it.
+  const indexPath = join(profile!.dir, "CLAUDE.md");
+  const existing = "# claude session instructions\n\nPR-first landing is the default.\n";
+  writeFileSync(indexPath, existing);
+
+  const result = runCliWith(["launch", "acct", "--tool", "claude", "--", "--version"], {
+    env: { FAKE_CONFIGS_LOG: configsLog },
+  });
+
+  expect(result.status).toBe(0);
+  expect(readFileSync(indexPath, "utf8")).toBe(existing);
+  // The renderer is never invoked, so it cannot have written an empty home.
+  expect(existsSync(configsLog)).toBe(false);
+  // The launch actually happened.
+  expect(readLogEntries()[0]?.tool).toBe("claude");
+  // And it said so, rather than failing silently.
+  expect(`${result.stderr}${result.stdout}`).toContain("no instruction sources resolved");
+});
+
+test("the shortfall guard is ARMED in production, not just reachable from a library call", () => {
+  // The guard shipped inert: it existed, had tests, and nothing in the CLI ever
+  // passed it an expectation, so in production it compared a render against the
+  // export that produced it. A library-level test cannot catch that — only
+  // driving the real binary can. This asserts the wiring, not the algorithm.
+  writeFakeTool("claude", "CLAUDE_CONFIG_DIR", "claude");
+  writeFakeConfigs();
+  const configsLog = join(home, "fake-configs-shortfall.log");
+  expect(runCli("add", "acct", "--tool", "claude").status).toBe(0);
+  giveInstructionSource("acct", "claude");
+
+  // Asserted through the FLAG, not the environment variable. The library reads
+  // the env itself, so an env-based assertion passes even with cli.ts reverted —
+  // measured, not assumed: removing the wiring left that version of this test
+  // green, which would have shipped a second inert guard behind a green test.
+  // `--required-instruction-source` exists only if cli.ts threads it through.
+  const result = runCliWith(
+    [
+      "launch",
+      "acct",
+      "--tool",
+      "claude",
+      "--required-instruction-source",
+      "hasna-agent-operating-rules",
+      "--",
+      "--version",
+    ],
+    { env: { FAKE_CONFIGS_LOG: configsLog } },
+  );
+
+  expect(result.status).not.toBe(0);
+  expect(`${result.stderr}${result.stdout}`).toContain("missing 1 of 1 required instruction sources");
+  expect(`${result.stderr}${result.stdout}`).toContain("hasna-agent-operating-rules");
+});
+
+test("the same launch succeeds when the required rule IS rendered", () => {
+  // Positive control: without it the test above would pass on any launch failure.
+  writeFakeTool("claude", "CLAUDE_CONFIG_DIR", "claude");
+  writeFakeConfigs();
+  const configsLog = join(home, "fake-configs-shortfall-ok.log");
+  expect(runCli("add", "acct", "--tool", "claude").status).toBe(0);
+  giveInstructionSource("acct", "claude");
+
+  const result = runCliWith(
+    ["launch", "acct", "--tool", "claude", "--required-instruction-source", "global-codewith", "--", "--version"],
+    { env: { FAKE_CONFIGS_LOG: configsLog } },
+  );
+
+  expect(result.status).toBe(0);
+});
+
+test("switch --launch runs configs apply by default before spawning", () => {
+  writeFakeTool("claude", "CLAUDE_CONFIG_DIR", "claude");
+  writeFakeConfigs();
+  const configsLog = join(home, "fake-configs.log");
+  expect(runCli("add", "acct", "--tool", "claude").status).toBe(0);
+  giveInstructionSource("acct", "claude");
+  const profile = readStore().profiles?.find((entry) => entry.name === "acct" && entry.tool === "claude");
+  expect(profile).toBeTruthy();
+
+  const result = runCliWith(["switch", "acct", "--tool", "claude", "--mode", "active", "--launch", "--", "--version"], {
+    env: { FAKE_CONFIGS_LOG: configsLog },
+  });
+
+  expect(result.status).toBe(0);
+  const configsCall = readFileSync(configsLog, "utf8");
+  expect(configsCall).toContain("session apply --tool claude --profile acct");
+  expect(configsCall).toContain(`--target-home ${profile!.dir}`);
+  expect(readLogEntries()[0]?.tool).toBe("claude");
+});
+
+test("login and switch launch suppress inherited request-debug output", () => {
+  writeFakeTool("fake-login-tool", "FAKE_LOGIN_HOME", "fake-login");
+  addFakeLoginTool();
+  expect(runCli("add", "acct", "--tool", "fake-login").status).toBe(0);
+  const dummyCredential = "dummy-login-request-credential";
+  const env = {
+    BUN_CONFIG_VERBOSE_FETCH: "1",
+    NODE_DEBUG: "http,http2",
+    NODE_DEBUG_NATIVE: "http",
+    FAKE_DEBUG_CREDENTIAL: dummyCredential,
+  };
+
+  const login = runCliWith(["login", "acct"], { env });
+  expect(login.status).toBe(0);
+  expect(login.stdout).not.toContain(dummyCredential);
+  expect(login.stderr).not.toContain(dummyCredential);
+
+  const launchedSwitch = runCliWith(
+    ["switch", "acct", "--tool", "fake-login", "--mode", "active", "--launch"],
+    { env },
+  );
+  expect(launchedSwitch.status).toBe(0);
+  expect(launchedSwitch.stdout).not.toContain(dummyCredential);
+  expect(launchedSwitch.stderr).not.toContain(dummyCredential);
+});
+
+test("env syncs Claude profile credentials into keychain before printing exports", () => {
+  const fakeSecurity = writeFakeSecurity();
+  const securityLog = join(home, "fake-security.log");
+  const securityPayload = join(home, "fake-security-payload.log");
+  expect(runCli("add", "acct", "--tool", "claude").status).toBe(0);
+  const profile = readStore().profiles?.find((entry) => entry.name === "acct" && entry.tool === "claude");
+  expect(profile).toBeTruthy();
+  writeClaudeAuth(profile!.dir, "acct@example.com");
+
+  const result = runCliWith(["env", "acct", "--tool", "claude"], {
+    env: {
+      ACCOUNTS_TEST_KEYCHAIN: "1",
+      ACCOUNTS_TEST_SECURITY_BIN: fakeSecurity,
+      FAKE_SECURITY_LOG: securityLog,
+      FAKE_SECURITY_PAYLOAD: securityPayload,
+    },
+  });
+
+  expect(result.status).toBe(0);
+  expect(result.stdout).toContain("export CLAUDE_CONFIG_DIR=");
+  const keychainLog = readFileSync(securityLog, "utf8");
+  const keychainPayload = readFileSync(securityPayload, "utf8");
+  expect(keychainLog).toContain("add-generic-password");
+  expect(keychainPayload).toContain("account=acct");
+  expect(keychainPayload).toContain("acct@example.com-access-token");
+});
+
+test("generated env and pick --env handoffs unset request debugging before provider execution", () => {
+  writeFakeTool("fake-login-tool", "FAKE_LOGIN_HOME", "fake-login");
+  addFakeLoginTool();
+  expect(runCli("add", "acct", "--tool", "fake-login").status).toBe(0);
+
+  const generated = runCliWith(["env", "acct", "--tool", "fake-login"], {
+    env: handoffEnvironment,
+  });
+  expect(generated.status).toBe(0);
+  const generatedLines = generated.stdout
+    .split("\n")
+    .filter((line) => line.startsWith("unset ") || line.startsWith("export "))
+    .join("\n");
+  expect(generatedLines).toContain("unset BUN_CONFIG_VERBOSE_FETCH NODE_DEBUG NODE_DEBUG_NATIVE");
+  expect(executeGeneratedHandoff(generatedLines).status).toBe(0);
+  expectSafeProviderObservation();
+
+  rmSync(logPath, { force: true });
+  const picked = runCliWith(["pick", "--tool", "fake-login", "--env"], {
+    input: "1\n",
+    env: handoffEnvironment,
+  });
+  expect(picked.status).toBe(0);
+  const pickedLines = picked.stdout
+    .split("\n")
+    .filter((line) => line.startsWith("unset ") || line.startsWith("export "))
+    .join("\n");
+  expect(pickedLines).toContain("unset BUN_CONFIG_VERBOSE_FETCH NODE_DEBUG NODE_DEBUG_NATIVE");
+  expect(executeGeneratedHandoff(pickedLines).status).toBe(0);
+  expectSafeProviderObservation();
+});
+
+test("env, pick --env, and switch preserve hostile profile and extra env bytes", () => {
+  const toolBin = join(binDir, "-hostile-handoff-tool");
+  const markerDollar = join(home, "cli-dollar-marker");
+  const markerBacktick = join(home, "cli-backtick-marker");
+  const hostileDir =
+    `${home}/-leading "double" 'single'\nline\\backslash $DOLLAR ` +
+    `$(touch cli-dollar-marker) \`touch cli-backtick-marker\``;
+  const extraTemplate =
+    `-extra "double" 'single'\nline\\backslash $DOLLAR ` +
+    `$(touch cli-dollar-marker) \`touch cli-backtick-marker\`::{profileDir}`;
+  const expectedExtra = extraTemplate.replaceAll("{profileDir}", hostileDir);
+  writeFileSync(
+    toolBin,
+    [
+      "#!/bin/sh",
+      `printf '%s\\n---EXTRA---\\n%s' "$HOSTILE_HOME" "$EXTRA_VALUE" > "$OBSERVATION_PATH"`,
+    ].join("\n"),
+  );
+  chmodSync(toolBin, 0o755);
+  addFakeLoginTool("hostile-handoff", "Hostile Handoff", "HOSTILE_HOME", "-hostile-handoff-tool");
+  expect(runCli("add", "acct", "--tool", "hostile-handoff").status).toBe(0);
+
+  const storePath = join(home, "accounts.json");
+  const store = JSON.parse(readFileSync(storePath, "utf8")) as {
+    profiles: Array<{ name: string; tool: string; dir: string }>;
+    tools: Array<{ id: string; extraEnv?: Record<string, string> }>;
+  };
+  store.profiles.find((entry) => entry.name === "acct" && entry.tool === "hostile-handoff")!.dir = hostileDir;
+  store.tools.find((entry) => entry.id === "hostile-handoff")!.extraEnv = { EXTRA_VALUE: extraTemplate };
+  writeFileSync(storePath, JSON.stringify(store));
+
+  const extractExports = (stdout: string): string => {
+    const start = stdout.indexOf("unset BUN_CONFIG_VERBOSE_FETCH");
+    expect(start).toBeGreaterThanOrEqual(0);
+    return stdout.slice(start).trimEnd();
+  };
+  const evaluateExports = (script: string, observation: string) =>
+    spawnSync("/bin/sh", ["-s"], {
+      cwd: home,
+      encoding: "utf8",
+      input: `${script}\nprintf '%s\\n---EXTRA---\\n%s' "$HOSTILE_HOME" "$EXTRA_VALUE" > "$OBSERVATION_PATH"`,
+      env: {
+        ...process.env,
+        DOLLAR: "expanded-by-shell",
+        OBSERVATION_PATH: observation,
+      },
+    });
+
+  const generated = runCliWith(["env", "acct", "--tool", "hostile-handoff"]);
+  expect(generated.status, generated.stderr).toBe(0);
+  const envObservation = join(home, "env-observation");
+  const evaluatedEnv = evaluateExports(extractExports(generated.stdout), envObservation);
+  expect(evaluatedEnv.status, evaluatedEnv.stderr).toBe(0);
+  expect(readFileSync(envObservation, "utf8")).toBe(`${hostileDir}\n---EXTRA---\n${expectedExtra}`);
+
+  const picked = runCliWith(["pick", "--tool", "hostile-handoff", "--env"], { input: "1\n" });
+  expect(picked.status, picked.stderr).toBe(0);
+  const pickObservation = join(home, "pick-observation");
+  const evaluatedPick = evaluateExports(extractExports(picked.stdout), pickObservation);
+  expect(evaluatedPick.status, evaluatedPick.stderr).toBe(0);
+  expect(readFileSync(pickObservation, "utf8")).toBe(`${hostileDir}\n---EXTRA---\n${expectedExtra}`);
+
+  const switched = runCliWith(["switch", "acct", "--tool", "hostile-handoff", "--mode", "active"]);
+  expect(switched.status, switched.stderr).toBe(0);
+  const commandStart = switched.stdout.indexOf("restart command: ");
+  const commandEnd = switched.stdout.indexOf("\n  Exit the current agent session", commandStart);
+  expect(commandStart).toBeGreaterThanOrEqual(0);
+  expect(commandEnd).toBeGreaterThan(commandStart);
+  const commandLine = switched.stdout.slice(commandStart + "restart command: ".length, commandEnd);
+  const switchObservation = join(home, "switch-observation");
+  const evaluatedSwitch = spawnSync("/bin/sh", ["-s"], {
+    cwd: home,
+    encoding: "utf8",
+    input: [
+      "HOSTILE_HOME=parent-value",
+      commandLine,
+      'printf %s "$HOSTILE_HOME"',
+    ].join("\n"),
+    env: {
+      ...process.env,
+      DOLLAR: "expanded-by-shell",
+      OBSERVATION_PATH: switchObservation,
+      PATH: `${binDir}:${process.env.PATH ?? ""}`,
+    },
+  });
+  expect(evaluatedSwitch.status, evaluatedSwitch.stderr).toBe(0);
+  expect(evaluatedSwitch.stdout).toBe("parent-value");
+  expect(readFileSync(switchObservation, "utf8")).toBe(`${hostileDir}\n---EXTRA---\n${expectedExtra}`);
+  expect(existsSync(markerDollar)).toBe(false);
+  expect(existsSync(markerBacktick)).toBe(false);
+});
+
+test("non-launch switch handoff command unsets request debugging before provider execution", () => {
+  writeFakeTool("fake-login-tool", "FAKE_LOGIN_HOME", "fake-login");
+  addFakeLoginTool();
+  expect(runCli("add", "acct", "--tool", "fake-login").status).toBe(0);
+
+  const switched = runCliWith(
+    ["switch", "acct", "--tool", "fake-login", "--mode", "active"],
+    { env: handoffEnvironment },
+  );
+  expect(switched.status).toBe(0);
+  const commandLine = switched.stdout.match(/restart command: (.+)/)?.[1];
+  expect(commandLine).toContain("env -u BUN_CONFIG_VERBOSE_FETCH -u NODE_DEBUG -u NODE_DEBUG_NATIVE");
+  expect(executeHandoffCommand(commandLine ?? "").status).toBe(0);
+  expectSafeProviderObservation();
+});
+
+test("switch human, JSON, and launch output use the safe DTO while launch keeps raw args transient", () => {
+  const labelSecret = "caller-controlled-tool-label-secret";
+  writeFakeTool("safe-output-tool", "SAFE_OUTPUT_HOME", "safe-output");
+  addFakeLoginTool("safe-output", labelSecret, "SAFE_OUTPUT_HOME", "safe-output-tool");
+  expect(runCli("add", "acct", "--tool", "safe-output").status).toBe(0);
+
+  const envSecret = "switch-extra-env-secret";
+  const argvSecret = "switch-api-arg-secret";
+  const storePath = join(home, "accounts.json");
+  const store = JSON.parse(readFileSync(storePath, "utf8")) as {
+    tools: Array<{ id: string; extraEnv?: Record<string, string> }>;
+  };
+  store.tools.find((tool) => tool.id === "safe-output")!.extraEnv = {
+    SERVICE_API_KEY: envSecret,
+  };
+  writeFileSync(storePath, JSON.stringify(store));
+
+  const human = runCliWith([
+    "switch",
+    "acct",
+    "--tool",
+    "safe-output",
+    "--mode",
+    "active",
+    "--",
+    "--api-key",
+    argvSecret,
+  ]);
+  expect(human.status, human.stderr).toBe(0);
+  expect(`${human.stdout}${human.stderr}`).not.toContain(argvSecret);
+  expect(`${human.stdout}${human.stderr}`).not.toContain(envSecret);
+  expect(`${human.stdout}${human.stderr}`).not.toContain(labelSecret);
+  expect(human.stdout).toContain("--api-key");
+  expect(human.stdout).toContain("[REDACTED]");
+
+  const json = runCliWith([
+    "switch",
+    "acct",
+    "--tool",
+    "safe-output",
+    "--mode",
+    "active",
+    "--json",
+    "--",
+    "--api-key",
+    argvSecret,
+  ]);
+  expect(json.status, json.stderr).toBe(0);
+  expect(`${json.stdout}${json.stderr}`).not.toContain(argvSecret);
+  expect(`${json.stdout}${json.stderr}`).not.toContain(envSecret);
+  expect(`${json.stdout}${json.stderr}`).not.toContain(labelSecret);
+  const output = JSON.parse(json.stdout) as Record<string, unknown>;
+  expect(output["schema"]).toBe("hasna.accounts.switch-output/v1");
+  expect(output).not.toHaveProperty("env");
+  expect(output).not.toHaveProperty("exports");
+  expect(output["tool"]).toEqual({ id: "safe-output", label: "Custom tool" });
+  expect(output["profile"]).toEqual({ name: "acct", tool: "safe-output" });
+
+  rmSync(logPath, { force: true });
+  const launched = runCliWith([
+    "switch",
+    "acct",
+    "--tool",
+    "safe-output",
+    "--mode",
+    "active",
+    "--launch",
+    "--",
+    "--api-key",
+    argvSecret,
+  ]);
+  expect(launched.status, launched.stderr).toBe(0);
+  expect(`${launched.stdout}${launched.stderr}`).not.toContain(argvSecret);
+  expect(`${launched.stdout}${launched.stderr}`).not.toContain(envSecret);
+  expect(`${launched.stdout}${launched.stderr}`).not.toContain(labelSecret);
+  expect(readLogEntries().at(-1)?.args).toContain(`--api-key ${argvSecret}`);
+});
+
+test("switch surfaces redact normalized, clustered, and Unicode credential arguments", () => {
+  writeFakeTool("argv-grammar-tool", "ARGV_GRAMMAR_HOME", "argv-grammar");
+  addFakeLoginTool(
+    "argv-grammar",
+    "Argv Grammar",
+    "ARGV_GRAMMAR_HOME",
+    "argv-grammar-tool",
+  );
+  expect(runCli("add", "acct", "--tool", "argv-grammar").status).toBe(0);
+
+  const secrets = Array.from(
+    { length: 28 },
+    (_, index) => `actual-switch-credential-${index}`,
+  );
+  const malformedOptionSyntax = [
+    "---api-key=",
+    "--.client-key:",
+    "--_master-key=",
+    "－－－api-key=",
+    "−−−client-key:",
+  ];
+  const malformedRetained = [
+    "keep-switch-malformed-three-dash",
+    "keep-switch-malformed-dot",
+    "keep-switch-malformed-underscore",
+    "keep-switch-malformed-fullwidth",
+    "keep-switch-malformed-minus",
+  ];
+  const credentialArgs = [
+    "--secret-key",
+    secrets[0]!,
+    `--service-account-key=${secrets[1]}`,
+    `--auth-header:${secrets[2]}`,
+    "--service-auth",
+    secrets[3]!,
+    "--bearer",
+    secrets[4]!,
+    "--credentials",
+    secrets[5]!,
+    "-vk",
+    secrets[6]!,
+    "-vvk",
+    secrets[7]!,
+    "－ｋ",
+    secrets[8]!,
+    "−k",
+    secrets[9]!,
+    `-vk${secrets[10]}`,
+    "--encryption-key",
+    secrets[11]!,
+    `--master-key=${secrets[12]}`,
+    `--client-key:${secrets[13]}`,
+    "--aws-access-key-id",
+    secrets[14]!,
+    "--api-key",
+    "--client-key",
+    secrets[15]!,
+    "-k",
+    "-vk",
+    secrets[16]!,
+    "--api-key",
+    `-x=client-key=${secrets[17]}`,
+    "keep-after-opaque-bound-value",
+    "--api-key",
+    `--label=opaque/--label=${secrets[18]}`,
+    "keep-after-complete-token-value",
+    "--api-key",
+    `---api-key=${secrets[19]}`,
+    malformedRetained[0]!,
+    "--api-key",
+    `--.client-key:${secrets[20]}`,
+    malformedRetained[1]!,
+    "--api-key",
+    `--_master-key=${secrets[21]}`,
+    malformedRetained[2]!,
+    "--api-key",
+    `－－－api-key=${secrets[22]}`,
+    malformedRetained[3]!,
+    "--api-key",
+    `−−−client-key:${secrets[23]}`,
+    malformedRetained[4]!,
+    "--api-key",
+    "--",
+    "--client-key",
+    "keep-switch-positional-plain-value",
+    `--api-key=${secrets[24]}`,
+    "env=--client-key",
+    "",
+    secrets[27]!,
+    "keep-switch-positional-wrapper-split",
+    "url=urn:authorization:public",
+    "keep-switch-positional-urn",
+    `Authorization: Bearer ${secrets[25]}`,
+    `sk-${"proj"}-${secrets[26]}`,
+    "keep-switch-positional-control",
+  ];
+
+  for (const surfaceArgs of [
+    [],
+    ["--json"],
+  ]) {
+    const result = runCliWith([
+      "switch",
+      "acct",
+      "--tool",
+      "argv-grammar",
+      "--mode",
+      "active",
+      ...surfaceArgs,
+      "--",
+      ...credentialArgs,
+    ]);
+    expect(result.status, result.stderr).toBe(0);
+    for (const secret of secrets) {
+      expect(`${result.stdout}${result.stderr}`).not.toContain(secret);
+    }
+    for (const syntax of malformedOptionSyntax) {
+      expect(`${result.stdout}${result.stderr}`).not.toContain(syntax);
+    }
+    for (const retained of malformedRetained) {
+      expect(result.stdout).toContain(retained);
+    }
+    expect(result.stdout).toContain("[REDACTED]");
+    expect(result.stdout).toContain("keep-after-opaque-bound-value");
+    expect(result.stdout).toContain("keep-after-complete-token-value");
+    expect(result.stdout).toContain("keep-switch-positional-plain-value");
+    expect(result.stdout).toContain("keep-switch-positional-wrapper-split");
+    expect(result.stdout).toContain("url=urn:authorization:public");
+    expect(result.stdout).toContain("keep-switch-positional-urn");
+    expect(result.stdout).not.toContain("keep-switch-positional-control");
+    if (surfaceArgs.includes("--json")) {
+      const output = JSON.parse(result.stdout) as {
+        command: string[];
+        commandLine: string;
+      };
+      expect(output.command).toContain("--api-key");
+      expect(output.command).toContain("--client-key");
+      expect(output.command).toContain("-k");
+      expect(output.command).toContain("-vk");
+      expect(output.command.filter((arg) => arg === "[REDACTED]").length).toBeGreaterThanOrEqual(8);
+      expect(output.commandLine).toContain("'--api-key' '--client-key' '[REDACTED]'");
+      expect(output.commandLine).toContain("'-k' '-vk' '[REDACTED]'");
+      expect(output.command).toContain("keep-after-opaque-bound-value");
+      expect(output.commandLine).toContain("'keep-after-opaque-bound-value'");
+      expect(output.command).toContain("keep-after-complete-token-value");
+      expect(output.commandLine).toContain("'keep-after-complete-token-value'");
+      for (const retained of malformedRetained) {
+        expect(output.command).toContain(retained);
+        expect(output.commandLine).toContain(`'${retained}'`);
+      }
+      expect(output.command).toContain("keep-switch-positional-plain-value");
+      expect(output.command).toContain("--api-key=[REDACTED]");
+      expect(output.command).toContain("env=--client-key");
+      expect(output.command).toContain("keep-switch-positional-wrapper-split");
+      expect(output.command).toContain("url=urn:authorization:public");
+      expect(output.command).toContain("keep-switch-positional-urn");
+      expect(output.command).toContain("Authorization: [REDACTED]");
+      expect(output.command).toContain("[REDACTED]");
+      expect(output.command).not.toContain("keep-switch-positional-control");
+      expect(output.commandLine).toContain(
+        "'--api-key' '--' '--client-key' 'keep-switch-positional-plain-value'",
+      );
+      expect(output.commandLine).toContain(
+        "'env=--client-key' '' '[REDACTED]' 'keep-switch-positional-wrapper-split'",
+      );
+      expect(output.commandLine).toContain(
+        "'url=urn:authorization:public' 'keep-switch-positional-urn'",
+      );
+      expect(output.commandLine).toContain(
+        "'Authorization: [REDACTED]' '[REDACTED]' '[REDACTED]'",
+      );
+    }
+  }
+
+  rmSync(logPath, { force: true });
+  const launched = runCliWith([
+    "switch",
+    "acct",
+    "--tool",
+    "argv-grammar",
+    "--mode",
+    "active",
+    "--launch",
+    "--",
+    ...credentialArgs,
+  ]);
+  expect(launched.status, launched.stderr).toBe(0);
+  for (const secret of secrets) {
+    expect(`${launched.stdout}${launched.stderr}`).not.toContain(secret);
+    expect(readLogEntries().at(-1)?.args).toContain(secret);
+  }
+  expect(readLogEntries().at(-1)?.args).toContain("keep-switch-positional-plain-value");
+  expect(readLogEntries().at(-1)?.args).toContain(`--api-key=${secrets[24]}`);
+  expect(readLogEntries().at(-1)?.args).toContain(
+    `Authorization: Bearer ${secrets[25]}`,
+  );
+  expect(readLogEntries().at(-1)?.args).toContain(`sk-${"proj"}-${secrets[26]}`);
+  expect(readLogEntries().at(-1)?.args).toContain(secrets[27]!);
+  expect(readLogEntries().at(-1)?.args).toContain("url=urn:authorization:public");
+  expect(readLogEntries().at(-1)?.args).toContain("keep-switch-positional-control");
+});
+
+test("accounts shell removes request debugging while preserving same-binding environment", () => {
+  writeFakeTool("fake-login-tool", "FAKE_LOGIN_HOME", "fake-login");
+  addFakeLoginTool();
+  expect(runCli("add", "acct", "--tool", "fake-login").status).toBe(0);
+
+  const shell = runCliWith(["shell", "acct", "--tool", "fake-login"], {
+    env: {
+      ...handoffEnvironment,
+      SHELL: join(binDir, "fake-login-tool"),
+    },
+  });
+
+  expect(shell.status).toBe(0);
+  expect(shell.stdout).toContain("env -u BUN_CONFIG_VERBOSE_FETCH -u NODE_DEBUG -u NODE_DEBUG_NATIVE");
+  expectSafeProviderObservation();
+});
+
+test("login infers and locks the tool for an existing unambiguous profile", () => {
+  writeFakeTool("fake-login-tool", "FAKE_LOGIN_HOME", "fake-login");
+  addFakeLoginTool();
+  expect(runCli("add", "acct", "--tool", "fake-login").status).toBe(0);
+
+  const result = runCli("login", "acct");
+
+  expect(result.status).toBe(0);
+  const entries = readLogEntries();
+  expect(entries).toHaveLength(1);
+  expect(entries[0]?.args).toBe("auth login");
+  expect(entries[0]?.home).toContain("fake-login/acct");
+  expect(readStore().toolLocks?.acct).toBe("fake-login");
+});
+
+test("login requires an explicit choice for shared profile names when non-interactive and unlocked", () => {
+  writeFakeTool("fake-login-tool", "FAKE_LOGIN_HOME", "fake-login");
+  writeFakeTool("fake-variant-tool", "FAKE_VARIANT_HOME", "fake-variant");
+  addFakeLoginTool("fake-login", "Fake Login", "FAKE_LOGIN_HOME", "fake-login-tool");
+  addFakeLoginTool("fake-variant", "Fake Variant", "FAKE_VARIANT_HOME", "fake-variant-tool");
+  expect(runCli("add", "acct", "--tool", "fake-login").status).toBe(0);
+  // A shared name can no longer be CREATED (one-account-one-tool), but
+  // registries written before the rule still hold them — seed the second row
+  // directly, as such a registry would, and assert login still disambiguates.
+  seedProfileRow("acct", "fake-variant");
+
+  const result = runCli("login", "acct");
+
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain('profile "acct" is not locked to a tool');
+  expect(result.stderr).toContain("accounts login acct --tool fake-login");
+  expect(result.stderr).toContain("accounts login acct --tool fake-variant");
+  expect(readLogEntries()).toHaveLength(0);
+});
+
+test("login requires an explicit choice for shared profile names even when locked", () => {
+  writeFakeTool("fake-login-tool", "FAKE_LOGIN_HOME", "fake-login");
+  writeFakeTool("fake-variant-tool", "FAKE_VARIANT_HOME", "fake-variant");
+  addFakeLoginTool("fake-login", "Fake Login", "FAKE_LOGIN_HOME", "fake-login-tool");
+  addFakeLoginTool("fake-variant", "Fake Variant", "FAKE_VARIANT_HOME", "fake-variant-tool");
+  expect(runCli("add", "acct", "--tool", "fake-login").status).toBe(0);
+  seedProfileRow("acct", "fake-variant");
+  const path = join(home, "accounts.json");
+  const store = readStore();
+  store.toolLocks = { ...(store.toolLocks ?? {}), acct: "fake-login" };
+  writeFileSync(path, JSON.stringify(store, null, 2));
+
+  const result = runCli("login", "acct");
+
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain('profile "acct" is not locked to a tool');
+  expect(result.stderr).toContain("accounts login acct --tool fake-login");
+  expect(result.stderr).toContain("accounts login acct --tool fake-variant");
+  expect(readLogEntries()).toHaveLength(0);
+  expect(readStore().toolLocks?.acct).toBe("fake-login");
+});
+
+test("login refuses to create a profile whose name is already held by another tool", () => {
+  writeFakeTool("fake-login-tool", "FAKE_LOGIN_HOME", "fake-login");
+  writeFakeTool("fake-variant-tool", "FAKE_VARIANT_HOME", "fake-variant");
+  addFakeLoginTool("fake-login", "Fake Login", "FAKE_LOGIN_HOME", "fake-login-tool");
+  addFakeLoginTool("fake-variant", "Fake Variant", "FAKE_VARIANT_HOME", "fake-variant-tool");
+  expect(runCli("add", "acct", "--tool", "fake-login").status).toBe(0);
+
+  // The name is held by fake-login; logging in under fake-variant would have
+  // to create a duplicate, and must be refused at the login path itself.
+  const result = runCli("login", "acct", "--tool", "fake-variant");
+
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain(
+    'a profile named "acct" already exists for tool "fake-login"; account names must be unique across tools',
+  );
+  expect(readLogEntries()).toHaveLength(0);
+  const rows = readStore().profiles?.filter((entry) => entry.name === "acct") ?? [];
+  expect(rows.map((entry) => entry.tool)).toEqual(["fake-login"]);
+});
+
+test("login chooser creates a new account with a custom registered tool variant and persists the lock", () => {
+  writeFakeTool("fake-variant-tool", "FAKE_VARIANT_HOME", "fake-variant");
+  addFakeLoginTool("fake-variant", "Fake Variant", "FAKE_VARIANT_HOME", "fake-variant-tool");
+
+  const result = runCliWith(["login", "acct"], {
+    input: "fake-variant\n",
+    env: { ACCOUNTS_FORCE_INTERACTIVE: "1" },
+  });
+
+  expect(result.status).toBe(0);
+  expect(result.stderr).toContain('Choose a tool for profile "acct"');
+  expect(result.stderr).toContain("Fake Variant (fake-variant) - available");
+  const entries = readLogEntries();
+  expect(entries).toHaveLength(1);
+  expect(entries[0]?.tool).toBe("fake-variant");
+  expect(entries[0]?.args).toBe("auth login");
+  expect(entries[0]?.home).toContain("fake-variant/acct");
+  expect(readStore().toolLocks?.acct).toBe("fake-variant");
+
+  const show = runCli("show", "acct");
+  expect(show.status).toBe(0);
+  expect(show.stdout).toContain("tool:       fake-variant");
+});
+
+test("login chooser marks unavailable tools and prefers installed tools", () => {
+  writeFakeTool("fake-login-tool", "FAKE_LOGIN_HOME", "fake-login");
+  addFakeLoginTool();
+
+  const result = runCliWith(["login", "acct"], {
+    input: "q\n",
+    env: { ACCOUNTS_FORCE_INTERACTIVE: "1" },
+    path: binDir,
+  });
+
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain("1. Fake Login (fake-login) - available");
+  expect(result.stderr).toContain("Cursor Agent (cursor) - requires install");
+  expect(readLogEntries()).toHaveLength(0);
+});
+
+test("non-interactive login for a new account does not prompt or create partial state", () => {
+  const result = runCliWith(["login", "acct"], { path: binDir });
+
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain('profile "acct" is not locked to a tool');
+  expect(readLogEntries()).toHaveLength(0);
+  expect(existsSync(join(home, "accounts.json"))).toBe(false);
+});
+
+test("explicit cursor login with missing Cursor install fails with accounts-level guidance", () => {
+  writeFakeTool("cursor-agent", "CURSOR_CONFIG_DIR", "cursor");
+
+  const result = runCliWith(["login", "acct", "--tool", "cursor"], { path: binDir });
+
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain('Cursor Agent is selected for profile "acct"');
+  expect(result.stderr).toContain("Cursor IDE installation was not found");
+  expect(result.stderr).toContain("https://cursor.com/download");
+  expect(result.stderr).toContain("Profile dir if kept selected:");
+  expect(result.stderr).not.toContain("No Cursor IDE installation found");
+  expect(existsSync(join(home, "accounts.json"))).toBe(false);
+});
+
+test("missing explicit cursor install can choose another installed tool and re-lock", () => {
+  writeFakeTool("cursor-agent", "CURSOR_CONFIG_DIR", "cursor");
+  writeFakeTool("fake-login-tool", "FAKE_LOGIN_HOME", "fake-login");
+  addFakeLoginTool();
+
+  const result = runCliWith(["login", "acct", "--tool", "cursor"], {
+    input: "1\nfake-login\n",
+    env: { ACCOUNTS_FORCE_INTERACTIVE: "1" },
+    path: binDir,
+  });
+
+  expect(result.status).toBe(0);
+  expect(result.stderr).toContain("Choose another tool");
+  const entries = readLogEntries();
+  expect(entries).toHaveLength(1);
+  expect(entries[0]?.tool).toBe("fake-login");
+  expect(readStore().toolLocks?.acct).toBe("fake-login");
+});
+
+test("missing explicit cursor install can keep cursor selected without launching it", () => {
+  writeFakeTool("cursor-agent", "CURSOR_CONFIG_DIR", "cursor");
+
+  const result = runCliWith(["login", "acct", "--tool", "cursor"], {
+    input: "2\n",
+    env: { ACCOUNTS_FORCE_INTERACTIVE: "1" },
+    path: binDir,
+  });
+
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain("Selected tool kept: cursor");
+  expect(readLogEntries()).toHaveLength(0);
+  const store = readStore();
+  expect(store.toolLocks?.acct).toBe("cursor");
+  expect(store.profiles?.some((profile) => profile.name === "acct" && profile.tool === "cursor")).toBe(true);
+});
+
+test("cancelling an inferred missing existing profile does not write a tool lock", () => {
+  expect(
+    runCli(
+      "tools",
+      "add",
+      "missing-review",
+      "--label",
+      "Missing Review",
+      "--env-var",
+      "MISSING_REVIEW_HOME",
+      "--bin",
+      "missing-review-bin",
+    ).status,
+  ).toBe(0);
+  expect(runCli("add", "acct", "--tool", "missing-review").status).toBe(0);
+
+  const result = runCliWith(["login", "acct"], {
+    input: "3\n",
+    env: { ACCOUNTS_FORCE_INTERACTIVE: "1" },
+    path: binDir,
+  });
+
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain("Cancel without changes");
+  expect(readStore().toolLocks?.acct).toBeUndefined();
+});

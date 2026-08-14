@@ -164,7 +164,9 @@ describe("SqliteEmailStore conformance", () => {
       ["events", () => subject.events.list()],
       ["emailDigests", () => subject.emailDigests.list()],
       ["webhookReceipts", () => subject.webhookReceipts.list()],
+      ["mailboxFilters", () => subject.mailboxFilters.list()],
       ["sandbox", () => subject.sandbox.list()],
+      ["prioritySenderRules", () => subject.prioritySenderRules.list()],
     ];
     // Every declared family is wired; nothing is missing and nothing extra is claimed.
     expect(families.map(([family]) => family).sort()).toEqual(Object.keys(RESOURCE_TABLES).sort());

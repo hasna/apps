@@ -1,0 +1,119 @@
+{
+  "$schema": "./node_modules/@hasna/contracts/dist/hasna.contract.schema.json",
+  "schema": "hasna.service_contract.v1",
+  "name": "loops",
+  "class": "service",
+  "contractVersion": "v1",
+  "kitVersion": "0.5.2",
+  "description": "Persistent loop and workflow runner for deterministic commands and headless AI coding agents. CLI + MCP + HTTP API (loops-serve) + generated SDK. Canonical deployment modes are local, self_hosted, and cloud; self_hosted runs loops-serve against operator-owned Postgres with API-key auth.",
+  "bins": [
+    "loops",
+    "loops-mcp",
+    "loops-serve",
+    "loops-daemon",
+    "loops-runner"
+  ],
+  "deploymentModes": [
+    "local",
+    "self-hosted",
+    "cloud"
+  ],
+  "serviceSurfaces": [
+    {
+      "name": "http",
+      "status": "supported",
+      "bin": "loops-serve",
+      "mcpBin": "loops-mcp",
+      "authMode": "api-key",
+      "deploymentModes": [
+        "self-hosted"
+      ],
+      "health": {
+        "method": "GET",
+        "path": "/health",
+        "public": true
+      },
+      "readiness": {
+        "method": "GET",
+        "path": "/ready",
+        "public": true
+      },
+      "version": {
+        "method": "GET",
+        "path": "/version",
+        "public": true
+      },
+      "apiBasePath": "/v1",
+      "openApiPath": "/openapi.json",
+      "readinessGates": [
+        {
+          "id": "api-key-auth-negative",
+          "kind": "auth",
+          "required": true,
+          "command": "bun test src/api/index.test.ts src/lib/auth/tenant-auth.test.ts",
+          "status": "passed",
+          "summary": "Protected /v1 routes fail closed without valid tenant-bound API-key authorization."
+        },
+        {
+          "id": "control-plane-readiness",
+          "kind": "readiness",
+          "required": true,
+          "command": "bun test src/api/index.test.ts src/serve/index.test.ts",
+          "status": "passed",
+          "summary": "Public readiness reports stable storage, auth, and migration codes without credential details."
+        }
+      ]
+    }
+  ],
+  "storage": {
+    "mode": "local",
+    "envPrefix": "HASNA_LOOPS_",
+    "sqlitePath": "~/.hasna/loops/loops.db"
+  },
+  "metadata": {
+    "service": {
+      "port": 8787,
+      "healthPath": "/health",
+      "readyPath": "/ready",
+      "versionPath": "/version",
+      "openapiPath": "/openapi.json",
+      "apiVersion": "v1",
+      "auth": "api-key",
+      "signingSecretSecretRef": "hasna/oss/loops/api-key-signing-secret",
+      "deploymentModeMapping": {
+        "contract": "self-hosted",
+        "runtime": "self_hosted"
+      },
+      "databaseDsnBindings": [
+        {
+          "purpose": "runtime",
+          "environmentVariable": "HASNA_LOOPS_DATABASE_URL",
+          "secretRef": "hasna/oss/loops/runtime-database-url"
+        },
+        {
+          "purpose": "auth",
+          "environmentVariable": "HASNA_LOOPS_AUTH_DATABASE_URL",
+          "secretRef": "hasna/oss/loops/auth-database-url"
+        },
+        {
+          "purpose": "migrator",
+          "environmentVariable": "HASNA_LOOPS_MIGRATOR_DATABASE_URL",
+          "secretRef": "hasna/oss/loops/migrator-database-url"
+        }
+      ],
+      "aws": {
+        "minimumDesiredCount": 2,
+        "minimumAvailabilityZones": 2,
+        "capacityProviderBase": "FARGATE:1",
+        "healthCheckPath": "/ready",
+        "requiresAlarmActions": true,
+        "requiresKmsEncryptedLogs": true,
+        "requiresSecretRotation": true
+      }
+    },
+    "client": {
+      "apiUrlEnv": "HASNA_LOOPS_API_URL",
+      "apiKeyEnv": "HASNA_LOOPS_API_KEY"
+    }
+  }
+}

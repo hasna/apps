@@ -1,0 +1,161 @@
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { Database } from "bun:sqlite";
+import { getDatabase, resetDatabase, insertFeedback, uuid, now, slugify } from "./database";
+import { makeTempRoot } from "../lib/test-temp-root";
+
+let originalHome: string | undefined;
+let tempHome: string | null = null;
+
+beforeEach(() => {
+  resetDatabase();
+  originalHome = process.env["HOME"];
+  process.env["HASNA_INSTRUCTIONS_DB_PATH"] = ":memory:";
+});
+
+afterEach(() => {
+  resetDatabase();
+  if (originalHome === undefined) delete process.env["HOME"];
+  else process.env["HOME"] = originalHome;
+  delete process.env["HASNA_INSTRUCTIONS_DB_PATH"];
+  delete process.env["HASNA_INSTRUCTIONS_DB_PATH"];
+  if (tempHome) rmSync(tempHome, { recursive: true, force: true });
+  tempHome = null;
+});
+
+function useTempHome(): string {
+  tempHome = makeTempRoot("configs-home-");
+  process.env["HOME"] = tempHome;
+  delete process.env["HASNA_INSTRUCTIONS_DB_PATH"];
+  delete process.env["HASNA_INSTRUCTIONS_DB_PATH"];
+  return tempHome;
+}
+
+describe("database", () => {
+  test("getDatabase returns a database instance", () => {
+    const db = getDatabase();
+    expect(db).toBeTruthy();
+  });
+
+  test("getDatabase returns same instance on second call", () => {
+    const db1 = getDatabase();
+    const db2 = getDatabase();
+    expect(db1).toBe(db2);
+  });
+
+  test("resetDatabase clears singleton", () => {
+    const db1 = getDatabase();
+    resetDatabase();
+    process.env["HASNA_INSTRUCTIONS_DB_PATH"] = ":memory:";
+    const db2 = getDatabase();
+    expect(db1).not.toBe(db2);
+  });
+
+  test("uuid generates unique IDs", () => {
+    const id1 = uuid();
+    const id2 = uuid();
+    expect(id1).not.toBe(id2);
+    expect(id1.length).toBeGreaterThan(10);
+  });
+
+  test("now returns ISO string", () => {
+    const ts = now();
+    expect(ts).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+  });
+
+  test("slugify converts names to slugs", () => {
+    expect(slugify("My Config File")).toBe("my-config-file");
+    expect(slugify("hello_world 123")).toBe("hello-world-123");
+    expect(slugify("  spaces  ")).toBe("spaces");
+    expect(slugify("UPPER-case")).toBe("upper-case");
+  });
+
+  test("migrations create all tables", () => {
+    const db = getDatabase();
+    const tables = db.query<{ name: string }, []>(
+      "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+    ).all().map((r) => r.name);
+    expect(tables).toContain("configs");
+    expect(tables).toContain("config_snapshots");
+    expect(tables).toContain("profiles");
+    expect(tables).toContain("profile_configs");
+    expect(tables).toContain("machines");
+    expect(tables).toContain("schema_version");
+  });
+
+  test("migrations add machine/profile platform columns", () => {
+    const db = getDatabase();
+    const profileColumns = db.query<{ name: string }, []>("PRAGMA table_info(profiles)").all().map((row) => row.name);
+    const machineColumns = db.query<{ name: string }, []>("PRAGMA table_info(machines)").all().map((row) => row.name);
+    expect(profileColumns).toContain("selectors");
+    expect(profileColumns).toContain("variables");
+    expect(machineColumns).toContain("arch");
+  });
+
+  test("migrations add config outputs column", () => {
+    const db = getDatabase();
+    const configColumns = db.query<{ name: string }, []>("PRAGMA table_info(configs)").all().map((row) => row.name);
+    expect(configColumns).toContain("outputs");
+  });
+
+  test("migration 4 resumes when binding DDL landed before its version record", () => {
+    const home = useTempHome();
+    const dbPath = join(home, "interrupted-v4.db");
+    const interrupted = new Database(dbPath);
+    interrupted.exec(`
+      CREATE TABLE schema_version (version INTEGER PRIMARY KEY);
+      INSERT INTO schema_version (version) VALUES (3);
+      CREATE TABLE profile_configs (
+        profile_id TEXT NOT NULL,
+        config_id TEXT NOT NULL,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        binding TEXT NOT NULL DEFAULT '{"schema":"hasna.instructions.profile-config-binding/v1","activation":{"mode":"always"},"required":true,"fallback":"fail"}',
+        PRIMARY KEY (profile_id, config_id)
+      );
+      INSERT INTO profile_configs (profile_id, config_id, sort_order) VALUES ('profile-1', 'config-1', 7);
+    `);
+    interrupted.close();
+
+    resetDatabase();
+    const resumed = getDatabase(dbPath);
+    const version = resumed.query<{ version: number }, []>(
+      "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1",
+    ).get();
+    const row = resumed.query<{ profile_id: string; config_id: string; sort_order: number; binding: string }, []>(
+      "SELECT profile_id, config_id, sort_order, binding FROM profile_configs",
+    ).get();
+    expect(version?.version).toBe(5);
+    expect(row).toEqual(expect.objectContaining({ profile_id: "profile-1", config_id: "config-1", sort_order: 7 }));
+    expect(JSON.parse(row!.binding).schema).toBe("hasna.instructions.profile-config-binding/v1");
+  });
+
+  test("feedback insert works on a fresh database", () => {
+    const db = getDatabase();
+    expect(() => insertFeedback({ message: "hi", category: "bug", version: "9.9.9" }, db)).not.toThrow();
+    const row = db.query<{ message: string; category: string }, []>(
+      "SELECT message, category FROM feedback LIMIT 1",
+    ).get();
+    expect(row?.message).toBe("hi");
+    expect(row?.category).toBe("bug");
+  });
+
+  test("ensureFeedbackTable backfills category on a legacy feedback table", () => {
+    const home = useTempHome();
+    const dbPath = join(home, "legacy.db");
+    // Simulate a pre-existing store whose feedback table predates the
+    // category/version columns (the exact shape that produced
+    // "table feedback has no column named category").
+    const legacy = new Database(dbPath);
+    legacy.exec("CREATE TABLE feedback (id TEXT PRIMARY KEY, message TEXT NOT NULL, email TEXT)");
+    legacy.close();
+
+    process.env["HASNA_INSTRUCTIONS_DB_PATH"] = dbPath;
+    resetDatabase();
+    const db = getDatabase(dbPath);
+    const columns = db.query<{ name: string }, []>("PRAGMA table_info(feedback)").all().map((r) => r.name);
+    expect(columns).toContain("category");
+    expect(columns).toContain("version");
+    expect(() => insertFeedback({ message: "legacy ok", category: "feature" }, db)).not.toThrow();
+  });
+});

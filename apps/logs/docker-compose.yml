@@ -1,0 +1,46 @@
+# @hasna/logs — local development stack for the cloud (PURE REMOTE) serve.
+#
+# Brings up a throwaway Postgres and runs logs-serve against it in cloud mode
+# (Amendment A1: reads AND writes go straight to this Postgres). This mirrors
+# the deployed ECS service without touching the shared RDS.
+#
+#   docker compose up --build
+#   # apply schema (owner path): the migration runs as the compose superuser
+#   docker compose run --rm serve logs db migrate
+#   # issue a key, then curl http://localhost:8080/v1/... with x-api-key
+#
+# Never commit real credentials; the values below are local-only throwaways.
+services:
+  postgres:
+    image: postgres:16
+    container_name: hasna-logs-postgres
+    environment:
+      POSTGRES_USER: logs
+      POSTGRES_PASSWORD: logs
+      POSTGRES_DB: logs
+    ports:
+      - "5433:5432"
+    volumes:
+      - logs-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U logs -d logs"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  serve:
+    build: .
+    container_name: hasna-logs-serve
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PORT: "8080"
+      HASNA_LOGS_STORAGE_MODE: cloud
+      HASNA_LOGS_DATABASE_URL: postgres://logs:logs@postgres:5432/logs
+      HASNA_LOGS_API_SIGNING_KEY: local-dev-signing-secret-change-me
+    ports:
+      - "8080:8080"
+
+volumes:
+  logs-pgdata:
