@@ -24,6 +24,18 @@ import { expectOrder, sliceBetween, sliceBetweenUnique } from "./helpers/source-
 
 const repositoryRoot = resolve(import.meta.dir, "../..");
 process.env.RECORDINGS_TEST_FS_GUARD_ADDON = ensureNativeFsGuardAddon(repositoryRoot);
+// The installer fixture in this file drives the real install_macos_app.sh with Linux-hosted
+// test seams: tool overrides (RECORDINGS_TEST_INSTALL_*), recovery/transition/crash hooks, and
+// Tailscale resolver overrides. The production script deliberately refuses every one of those
+// seams on a real Darwin host — documented in the script header ("The test overrides are
+// accepted only when the real host kernel is not Darwin, so an inherited environment cannot
+// replace pinned macOS tools in production"), in test_fault_hooks_enabled (false on Darwin),
+// in installTransitionTestPoint (early return on darwin), and in resolve_tailscale_cli.sh
+// (overrides "structurally unreachable on Darwin"). Those tests therefore run on the
+// non-Darwin hosts the fixture was authored for (the repo's Linux CI gate) and skip on macOS,
+// where the code under test deliberately closes the seam they depend on. Pure source-assertion
+// tests below still run everywhere.
+const testOnNonDarwin = process.platform === "darwin" ? test.skip : test;
 const bunExecutable = process.execPath;
 const targetPlatformIdentity = "11111111-1111-4111-8111-111111111111";
 const builderPlatformIdentity = "22222222-2222-4222-8222-222222222222";
@@ -644,6 +656,7 @@ async function runLocalInstaller(
   fixture: ReturnType<typeof createInstallerFixture>,
   args: string[] = [],
   environment: Record<string, string> = {},
+  cwd?: string,
 ) {
   return runInstaller(
     fixture,
@@ -665,6 +678,7 @@ async function runLocalInstaller(
       REQUIRED_BUILDER_IDENTITY_KIND: "hardware_uuid_sha256",
       ...environment,
     },
+    cwd,
   );
 }
 
@@ -700,7 +714,7 @@ async function runTailscaleLocalInstaller(
 }
 
 describe("macOS finalized artifact installer", () => {
-  test("rejects non-macOS invocation before inspecting artifact paths", async () => {
+  testOnNonDarwin("rejects non-macOS invocation before inspecting artifact paths", async () => {
     const fixture = createInstallerFixture();
     writeExecutable(join(fixture.bin, "uname"), "#!/usr/bin/env bash\nprintf 'Linux\\n'\n");
     rmSync(fixture.artifact);
@@ -718,7 +732,13 @@ describe("macOS finalized artifact installer", () => {
     const resolvedRelativeHome = join(fixture.root, relativeHome);
     mkdirSync(resolvedRelativeHome, { mode: 0o700 });
 
-    const result = await runInstaller(fixture, [], { HOME: relativeHome }, fixture.root);
+    // Local-only policy: on a real Darwin host the release-policy broker guard fires BEFORE the
+    // HOME canonical check (install_macos_app.sh:319-322, "the user-owned shell installer is
+    // local-development only"), so the release path never reaches the HOME guard on macOS. The
+    // user-owned shell installer's documented path is local-only, where require_absolute_
+    // canonical_owned_home (line 338) IS the operative first guard on every host. Running the
+    // fixture under that policy keeps the exact assertion meaningful on both platforms.
+    const result = await runLocalInstaller(fixture, [], { HOME: relativeHome }, fixture.root);
 
     expect(result.exitCode).not.toBe(0);
     expect(result.stderr).toContain("absolute canonical path");
@@ -751,7 +771,7 @@ describe("macOS finalized artifact installer", () => {
     expect(installer).not.toContain('"$MV_EXECUTABLE" "$STAGED_APP" "$APP_DEST"');
   });
 
-  test("does not nest an original app when its archival destination appears after precheck", async () => {
+  testOnNonDarwin("does not nest an original app when its archival destination appears after precheck", async () => {
     const fixture = createInstallerFixture();
     const source = join(fixture.home, "Applications", "Recordings.app");
     const readyFifo = join(fixture.root, "archive-destination-ready.fifo");
@@ -783,7 +803,7 @@ describe("macOS finalized artifact installer", () => {
     expect(existsSync(join(destination!, "Recordings.app"))).toBeFalse();
   });
 
-  test("rejects original source substitution after retaining the authenticated handle", async () => {
+  testOnNonDarwin("rejects original source substitution after retaining the authenticated handle", async () => {
     const fixture = createInstallerFixture();
     const source = join(fixture.home, "Applications", "Recordings.app");
     const parkedSource = join(fixture.root, "parked-original.app");
@@ -816,7 +836,7 @@ describe("macOS finalized artifact installer", () => {
     expect(existsSync(destination!)).toBeFalse();
   });
 
-  test("does not replace or nest into a candidate destination created after precheck", async () => {
+  testOnNonDarwin("does not replace or nest into a candidate destination created after precheck", async () => {
     const fixture = createInstallerFixture();
     const destination = join(fixture.home, "Applications", "Recordings.app");
     const readyFifo = join(fixture.root, "candidate-destination-ready.fifo");
@@ -845,7 +865,7 @@ describe("macOS finalized artifact installer", () => {
     expect(existsSync(staging!)).toBeFalse();
   });
 
-  test("rejects staged candidate substitution after retaining the authenticated handle", async () => {
+  testOnNonDarwin("rejects staged candidate substitution after retaining the authenticated handle", async () => {
     const fixture = createInstallerFixture();
     const destination = join(fixture.home, "Applications", "Recordings.app");
     const parkedCandidate = join(fixture.root, "parked-candidate.app");
@@ -914,7 +934,7 @@ describe("macOS finalized artifact installer", () => {
     },
   );
 
-  test("fails closed on a missing descriptor guard before creating install state", async () => {
+  testOnNonDarwin("fails closed on a missing descriptor guard before creating install state", async () => {
     const fixture = createInstallerFixture();
     const result = await runInstaller(fixture, [], {
       RECORDINGS_TEST_FS_GUARD_ADDON: join(fixture.root, "missing-native-guard.node"),
@@ -931,7 +951,7 @@ describe("macOS finalized artifact installer", () => {
     expect(existsSync(join(fixture.home, ".hasna"))).toBeFalse();
   });
 
-  test("uses one private authenticated manifest snapshot for every installer preflight read", async () => {
+  testOnNonDarwin("uses one private authenticated manifest snapshot for every installer preflight read", async () => {
     const fixture = createInstallerFixture();
     const manifestDigest = "a".repeat(64);
     const result = await runInstaller(fixture);
@@ -978,7 +998,7 @@ describe("macOS finalized artifact installer", () => {
     expect(installer).not.toContain('manifest-get --manifest "$MANIFEST_PATH"');
   });
 
-  test("rejects arbitrary app directories and target-build flags", async () => {
+  testOnNonDarwin("rejects arbitrary app directories and target-build flags", async () => {
     const fixture = createInstallerFixture();
     const process = Bun.spawn(
       ["bash", join(fixture.root, "scripts", "install_macos_app.sh"), "--app-source", fixture.candidate],
@@ -988,7 +1008,7 @@ describe("macOS finalized artifact installer", () => {
     expect(await new Response(process.stderr).text()).toContain("Unknown argument");
   });
 
-  test("local-only install has no silent fallback from the release policy", async () => {
+  testOnNonDarwin("local-only install has no silent fallback from the release policy", async () => {
     const fixture = createInstallerFixture();
     const result = await runInstaller(fixture, [], {
       REQUIRED_TEAM_ID: "ADHOC",
@@ -998,7 +1018,7 @@ describe("macOS finalized artifact installer", () => {
     expect(existsSync(join(fixture.home, "Applications", "Recordings.app"))).toBeFalse();
   });
 
-  test("release install rejects a local target identity kind before verification or mutation", async () => {
+  testOnNonDarwin("release install rejects a local target identity kind before verification or mutation", async () => {
     const fixture = createInstallerFixture();
     const result = await runInstaller(fixture, [
       "--approved-target-identity-kind",
@@ -1010,7 +1030,7 @@ describe("macOS finalized artifact installer", () => {
     expect(existsSync(join(fixture.home, ".hasna"))).toBeFalse();
   });
 
-  test("local-only install requires permission acknowledgment and the exact live target", async () => {
+  testOnNonDarwin("local-only install requires permission acknowledgment and the exact live target", async () => {
     const missingAcknowledgment = createInstallerFixture();
     const noAck = await runInstaller(
       missingAcknowledgment,
@@ -1078,7 +1098,7 @@ describe("macOS finalized artifact installer", () => {
     expect(existsSync(join(malformedTeam.markers, "bun.log"))).toBeFalse();
   });
 
-  test("Tailscale-bound local install verifies live Self before creating install state", async () => {
+  testOnNonDarwin("Tailscale-bound local install verifies live Self before creating install state", async () => {
     const fixture = createInstallerFixture();
     const result = await runTailscaleLocalInstaller(fixture);
     expect(result.exitCode, result.stderr).toBe(0);
@@ -1090,7 +1110,7 @@ describe("macOS finalized artifact installer", () => {
     );
   });
 
-  test("Tailscale-bound local install ignores a hostile PATH CLI with matching identity output", async () => {
+  testOnNonDarwin("Tailscale-bound local install ignores a hostile PATH CLI with matching identity output", async () => {
     const fixture = createInstallerFixture();
     const hostileBin = join(fixture.root, "hostile-bin");
     const hostileMarker = join(fixture.markers, "hostile-tailscale-ran");
@@ -1109,7 +1129,7 @@ describe("macOS finalized artifact installer", () => {
     expect(existsSync(hostileMarker)).toBeFalse();
   });
 
-  test("Tailscale-bound local install uses the standard app CLI fallback", async () => {
+  testOnNonDarwin("Tailscale-bound local install uses the standard app CLI fallback", async () => {
     const fixture = createInstallerFixture();
     const fallback = join(fixture.root, "Applications", "Tailscale.app", "Contents", "MacOS", "Tailscale");
     mkdirSync(dirname(fallback), { recursive: true });
@@ -1125,7 +1145,7 @@ describe("macOS finalized artifact installer", () => {
     expect(executedCli).not.toBe(fallback);
   });
 
-  test("Tailscale-bound local install rejects a non-executable app fallback before mutation", async () => {
+  testOnNonDarwin("Tailscale-bound local install rejects a non-executable app fallback before mutation", async () => {
     const fixture = createInstallerFixture();
     const fallback = join(fixture.root, "Applications", "Tailscale.app", "Contents", "MacOS", "Tailscale");
     mkdirSync(dirname(fallback), { recursive: true });
@@ -1141,7 +1161,7 @@ describe("macOS finalized artifact installer", () => {
     expect(existsSync(join(fixture.home, "Applications"))).toBeFalse();
   });
 
-  test("Tailscale-bound local install fails closed when Tailscale is missing", async () => {
+  testOnNonDarwin("Tailscale-bound local install fails closed when Tailscale is missing", async () => {
     const fixture = createInstallerFixture();
     rmSync(fixture.tailscaleApp, { recursive: true });
     const result = await runTailscaleLocalInstaller(fixture);
@@ -1208,7 +1228,7 @@ describe("macOS finalized artifact installer", () => {
     );
   });
 
-  test("Tailscale-bound local install fails closed when the packaged resolver is missing", async () => {
+  testOnNonDarwin("Tailscale-bound local install fails closed when the packaged resolver is missing", async () => {
     const fixture = createInstallerFixture();
     rmSync(join(fixture.root, "scripts", "resolve_tailscale_cli.sh"));
     const result = await runTailscaleLocalInstaller(fixture);
@@ -1239,7 +1259,7 @@ describe("macOS finalized artifact installer", () => {
     expect(existsSync(join(fixture.home, "Applications"))).toBeFalse();
   });
 
-  test("hardens a healthy three-file legacy state root and preserves its data", async () => {
+  testOnNonDarwin("hardens a healthy three-file legacy state root and preserves its data", async () => {
     const fixture = createInstallerFixture();
     const state = createLegacyState(fixture);
     const expected = ["recordings.db", "settings.json", "transcription-cache.json"].map((name) => [
@@ -1281,7 +1301,7 @@ describe("macOS finalized artifact installer", () => {
     expect(existsSync(join(state, "rollbacks"))).toBeFalse();
   });
 
-  test("recovers a crash immediately after fd-based hardening back to legacy mode", async () => {
+  testOnNonDarwin("recovers a crash immediately after fd-based hardening back to legacy mode", async () => {
     const fixture = createInstallerFixture();
     const state = createLegacyState(fixture);
     const crashed = await runTailscaleLocalInstaller(fixture, [], {
@@ -1297,7 +1317,7 @@ describe("macOS finalized artifact installer", () => {
     expect(readFileSync(join(state, "recordings.db"), "utf8")).toBe("healthy-db\n");
   });
 
-  test("recovers app and state before restoring legacy mode after candidate activation", async () => {
+  testOnNonDarwin("recovers app and state before restoring legacy mode after candidate activation", async () => {
     const fixture = createInstallerFixture();
     const state = createLegacyState(fixture);
     const installed = join(fixture.home, "Applications", "Recordings.app");
@@ -1316,7 +1336,7 @@ describe("macOS finalized artifact installer", () => {
     expect(mode(state)).toBe(0o755);
   });
 
-  test("a committed crash retains hardened state mode", async () => {
+  testOnNonDarwin("a committed crash retains hardened state mode", async () => {
     const fixture = createInstallerFixture();
     const state = createLegacyState(fixture);
     const crashed = await runTailscaleLocalInstaller(fixture, [], {
@@ -1356,7 +1376,7 @@ describe("macOS finalized artifact installer", () => {
     expect(existsSync(join(fixture.home, "Applications"))).toBeFalse();
   });
 
-  test("rejects state-root and child symlinks before creating install paths", async () => {
+  testOnNonDarwin("rejects state-root and child symlinks before creating install paths", async () => {
     const rootSymlink = createInstallerFixture();
     const outside = join(rootSymlink.root, "outside");
     mkdirSync(join(rootSymlink.home, ".hasna"), { recursive: true });
@@ -1376,7 +1396,7 @@ describe("macOS finalized artifact installer", () => {
     expect(existsSync(join(childSymlink.home, "Applications"))).toBeFalse();
   });
 
-  test("wrong live target identity leaves legacy mode and children untouched", async () => {
+  testOnNonDarwin("wrong live target identity leaves legacy mode and children untouched", async () => {
     const fixture = createInstallerFixture();
     const state = createLegacyState(fixture);
     const result = await runTailscaleLocalInstaller(fixture, [], {
@@ -1392,7 +1412,7 @@ describe("macOS finalized artifact installer", () => {
     expect(existsSync(join(fixture.home, "Applications"))).toBeFalse();
   });
 
-  test("normal private and absent state roots finish private", async () => {
+  testOnNonDarwin("normal private and absent state roots finish private", async () => {
     const privateFixture = createInstallerFixture();
     const privateState = createLegacyState(privateFixture);
     chmodSync(privateState, 0o700);
@@ -1406,7 +1426,7 @@ describe("macOS finalized artifact installer", () => {
     expect(mode(join(absentFixture.home, ".hasna", "recordings"))).toBe(0o700);
   });
 
-  test("allows a restrictive platform Home ACL while keeping state ACL checks strict", async () => {
+  testOnNonDarwin("allows a restrictive platform Home ACL while keeping state ACL checks strict", async () => {
     const fixture = createInstallerFixture();
     const state = createLegacyState(fixture);
     const result = await runTailscaleLocalInstaller(fixture, [], {
@@ -1417,7 +1437,7 @@ describe("macOS finalized artifact installer", () => {
     expect(mode(state)).toBe(0o700);
   });
 
-  test("rejects a Home ACL that grants mutation before creating install paths", async () => {
+  testOnNonDarwin("rejects a Home ACL that grants mutation before creating install paths", async () => {
     const fixture = createInstallerFixture();
     const state = createLegacyState(fixture);
     const before = readFileSync(join(state, "recordings.db"), "utf8");
@@ -1433,7 +1453,7 @@ describe("macOS finalized artifact installer", () => {
     expect(existsSync(join(state, "rollbacks"))).toBeFalse();
   });
 
-  test("installs an explicit local-only artifact transactionally without release-trust claims", async () => {
+  testOnNonDarwin("installs an explicit local-only artifact transactionally without release-trust claims", async () => {
     const fixture = createInstallerFixture();
     const stateDir = join(fixture.home, ".hasna", "recordings");
     mkdirSync(stateDir, { recursive: true });
@@ -1455,7 +1475,7 @@ describe("macOS finalized artifact installer", () => {
   // An installed app with no textual designated requirement cannot be proven compatible
   // with the candidate, so install_macos_app.sh treats it as an identity migration. That
   // is now refused by default for local-only too, not only for release.
-  test("refuses a local ad-hoc replacement of an app without a textual designated requirement until it is approved", async () => {
+  testOnNonDarwin("refuses a local ad-hoc replacement of an app without a textual designated requirement until it is approved", async () => {
     const refused = await (async () => {
       const fixture = createInstallerFixture();
       const installed = join(fixture.home, "Applications", "Recordings.app");
@@ -1490,7 +1510,7 @@ describe("macOS finalized artifact installer", () => {
     expect(codesignLog).not.toContain(" -R ");
   });
 
-  test("rejects release apps without a textual designated requirement", async () => {
+  testOnNonDarwin("rejects release apps without a textual designated requirement", async () => {
     const fixture = createInstallerFixture();
     const result = await runInstaller(fixture, [], { NO_DESIGNATED_REQUIREMENT: "1" });
     expect(result.exitCode).not.toBe(0);
@@ -1498,7 +1518,7 @@ describe("macOS finalized artifact installer", () => {
     expect(existsSync(join(fixture.home, "Applications", "Recordings.app"))).toBeFalse();
   });
 
-  test("rolls back app and state when local-only postactivation verification fails", async () => {
+  testOnNonDarwin("rolls back app and state when local-only postactivation verification fails", async () => {
     const fixture = createInstallerFixture();
     const installed = join(fixture.home, "Applications", "Recordings.app");
     const stateDir = join(fixture.home, ".hasna", "recordings");
@@ -1512,7 +1532,7 @@ describe("macOS finalized artifact installer", () => {
     expect(readFileSync(join(stateDir, "recordings.db"), "utf8")).toBe("original-state");
   });
 
-  test("rejects archive or manifest tampering before mutating an installed app", async () => {
+  testOnNonDarwin("rejects archive or manifest tampering before mutating an installed app", async () => {
     const fixture = createInstallerFixture();
     const installed = join(fixture.home, "Applications", "Recordings.app");
     createApp(installed, "installed");
@@ -1522,7 +1542,7 @@ describe("macOS finalized artifact installer", () => {
     expect(existsSync(join(fixture.markers, "codesign.log"))).toBeFalse();
   });
 
-  test("rejects additional top-level archive contents", async () => {
+  testOnNonDarwin("rejects additional top-level archive contents", async () => {
     const fixture = createInstallerFixture();
     const result = await runInstaller(fixture, [], { EXTRA_ARCHIVE_ENTRY: "1" });
     expect(result.exitCode).not.toBe(0);
@@ -1530,7 +1550,7 @@ describe("macOS finalized artifact installer", () => {
     expect(existsSync(join(fixture.home, "Applications", "Recordings.app"))).toBeFalse();
   });
 
-  test("requires the pinned Team ID and trusted timestamp before mutation", async () => {
+  testOnNonDarwin("requires the pinned Team ID and trusted timestamp before mutation", async () => {
     const fixture = createInstallerFixture();
     const wrongTeam = await runInstaller(fixture, [], { REQUIRED_TEAM_ID: "OTHERTEAM" });
     expect(wrongTeam.exitCode).not.toBe(0);
@@ -1539,7 +1559,7 @@ describe("macOS finalized artifact installer", () => {
     expect(existsSync(join(fixture.home, "Applications", "Recordings.app"))).toBeFalse();
   });
 
-  test("requires explicit migration when the forward designated requirement fails", async () => {
+  testOnNonDarwin("requires explicit migration when the forward designated requirement fails", async () => {
     const fixture = createInstallerFixture();
     const installed = join(fixture.home, "Applications", "Recordings.app");
     createApp(installed, "installed");
@@ -1548,7 +1568,7 @@ describe("macOS finalized artifact installer", () => {
     expect(result.stderr).toContain("mutually compatible");
   });
 
-  test("requires explicit migration when the reverse designated requirement fails", async () => {
+  testOnNonDarwin("requires explicit migration when the reverse designated requirement fails", async () => {
     const fixture = createInstallerFixture();
     const installed = join(fixture.home, "Applications", "Recordings.app");
     createApp(installed, "installed");
@@ -1557,7 +1577,7 @@ describe("macOS finalized artifact installer", () => {
     expect(result.stderr).toContain("mutually compatible");
   });
 
-  test("fails before mutation for a Spotlight duplicate outside managed paths", async () => {
+  testOnNonDarwin("fails before mutation for a Spotlight duplicate outside managed paths", async () => {
     const fixture = createInstallerFixture();
     const installed = join(fixture.home, "Applications", "Recordings.app");
     const external = join(fixture.root, "external", "Recordings.app");
@@ -1569,7 +1589,7 @@ describe("macOS finalized artifact installer", () => {
     expect(readFileSync(join(installed, "Contents", "MacOS", "Recordings"), "utf8")).toBe("installed");
   });
 
-  test("does not stop the current app when duplicate archival fails", async () => {
+  testOnNonDarwin("does not stop the current app when duplicate archival fails", async () => {
     const fixture = createInstallerFixture();
     const installed = join(fixture.home, "Applications", "Recordings.app");
     createApp(installed, "installed");
@@ -1589,7 +1609,7 @@ describe("macOS finalized artifact installer", () => {
     }
   });
 
-  test("safely removes a nonempty nonce-bound transaction before the first journal", async () => {
+  testOnNonDarwin("safely removes a nonempty nonce-bound transaction before the first journal", async () => {
     const fixture = createInstallerFixture();
     const state = join(fixture.home, ".hasna", "recordings");
     const applications = join(fixture.home, "Applications");
@@ -1610,7 +1630,7 @@ describe("macOS finalized artifact installer", () => {
     expect(existsSync(join(fixture.home, ".hasna", ".recordings-install-maintenance"))).toBeFalse();
   });
 
-  test("binds an existing process when the exact executable is not the first lsof text record", async () => {
+  testOnNonDarwin("binds an existing process when the exact executable is not the first lsof text record", async () => {
     const fixture = createInstallerFixture();
     const installed = join(fixture.home, "Applications", "Recordings.app");
     const expectedExecutable = join(installed, "Contents", "MacOS", "Recordings");
@@ -1634,7 +1654,7 @@ describe("macOS finalized artifact installer", () => {
     }
   });
 
-  test("keeps the committed app and duplicate cleanup when post-commit launch fails", async () => {
+  testOnNonDarwin("keeps the committed app and duplicate cleanup when post-commit launch fails", async () => {
     const fixture = createInstallerFixture();
     const installed = join(fixture.home, "Applications", "Recordings.app");
     const duplicate = join(fixture.home, ".hasna", "recordings", "Recordings.app");
@@ -1663,7 +1683,7 @@ describe("macOS finalized artifact installer", () => {
     }
   });
 
-  test("installs one canonical app and archives duplicates without touching TCC", async () => {
+  testOnNonDarwin("installs one canonical app and archives duplicates without touching TCC", async () => {
     const fixture = createInstallerFixture();
     const installed = join(fixture.home, "Applications", "Recordings.app");
     const duplicate = join(fixture.home, ".hasna", "recordings", "Recordings.app");
@@ -1679,7 +1699,7 @@ describe("macOS finalized artifact installer", () => {
     expect(readFileSync(join(fixture.markers, "syspolicy.log"), "utf8")).toContain(installed);
   });
 
-  test("installer ignores hostile PATH shadows for verification, extraction, and launch tools", async () => {
+  testOnNonDarwin("installer ignores hostile PATH shadows for verification, extraction, and launch tools", async () => {
     const fixture = createInstallerFixture();
     const hostileBin = join(fixture.root, "hostile-bin");
     const hostileMarker = join(fixture.markers, "hostile-path.log");
@@ -1712,7 +1732,7 @@ describe("macOS finalized artifact installer", () => {
     expect(readFileSync(join(fixture.markers, "open.log"), "utf8")).toContain("Recordings.app");
   });
 
-  test("installer pins deterministic locale and timezone before invoking host tools", async () => {
+  testOnNonDarwin("installer pins deterministic locale and timezone before invoking host tools", async () => {
     const fixture = createInstallerFixture();
 
     const result = await runInstaller(fixture, [], {
@@ -1725,7 +1745,7 @@ describe("macOS finalized artifact installer", () => {
     expect(result.exitCode, result.stderr).toBe(0);
   });
 
-  test("stops a legacy same-path relaunch after the stopped snapshot and never accepts it as the candidate", async () => {
+  testOnNonDarwin("stops a legacy same-path relaunch after the stopped snapshot and never accepts it as the candidate", async () => {
     const fixture = createInstallerFixture();
     const installed = join(fixture.home, "Applications", "Recordings.app");
     const prior = Bun.spawn(["sleep", "30"], { stdout: "ignore", stderr: "ignore" });
@@ -1768,7 +1788,7 @@ describe("macOS finalized artifact installer", () => {
     }
   });
 
-  test("does not signal a reused PID whose start identity changed after discovery", async () => {
+  testOnNonDarwin("does not signal a reused PID whose start identity changed after discovery", async () => {
     const fixture = createInstallerFixture();
     const installed = join(fixture.home, "Applications", "Recordings.app");
     const reused = Bun.spawn(["sleep", "30"], { stdout: "ignore", stderr: "ignore" });
@@ -1788,7 +1808,7 @@ describe("macOS finalized artifact installer", () => {
     }
   });
 
-  test("holds the barrier while a legacy relaunch after bundle move is quiesced", async () => {
+  testOnNonDarwin("holds the barrier while a legacy relaunch after bundle move is quiesced", async () => {
     const fixture = createInstallerFixture();
     const installed = join(fixture.home, "Applications", "Recordings.app");
     const readyFifo = join(fixture.root, "legacy-relaunch-ready.fifo");
@@ -1829,7 +1849,7 @@ describe("macOS finalized artifact installer", () => {
     }
   });
 
-  test("does not accept command-only candidate launch evidence from another executable", async () => {
+  testOnNonDarwin("does not accept command-only candidate launch evidence from another executable", async () => {
     const fixture = createInstallerFixture();
     const impostor = Bun.spawn(["sleep", "30"], { stdout: "ignore", stderr: "ignore" });
     try {
@@ -1847,7 +1867,7 @@ describe("macOS finalized artifact installer", () => {
     }
   });
 
-  test("recovery preserves safe standalone writes while restoring ambiguous deletions", async () => {
+  testOnNonDarwin("recovery preserves safe standalone writes while restoring ambiguous deletions", async () => {
     const fixture = createInstallerFixture();
     const installed = join(fixture.home, "Applications", "Recordings.app");
     const state = join(fixture.home, ".hasna", "recordings");
@@ -1896,7 +1916,7 @@ describe("macOS finalized artifact installer", () => {
     expect(existsSync(join(fixture.home, "Applications", ".Recordings-install-transaction.json"))).toBeFalse();
   });
 
-  test("recovery replays after SIGKILL during an atomic missing-file copy", async () => {
+  testOnNonDarwin("recovery replays after SIGKILL during an atomic missing-file copy", async () => {
     const fixture = createInstallerFixture();
     const installed = join(fixture.home, "Applications", "Recordings.app");
     const state = join(fixture.home, ".hasna", "recordings");
@@ -1967,7 +1987,7 @@ describe("macOS finalized artifact installer", () => {
     expect(existsSync(journalPath)).toBeFalse();
   });
 
-  test("recovery replays after SIGKILL following durable archive unlink", async () => {
+  testOnNonDarwin("recovery replays after SIGKILL following durable archive unlink", async () => {
     const fixture = createInstallerFixture();
     const installed = join(fixture.home, "Applications", "Recordings.app");
     const state = join(fixture.home, ".hasna", "recordings");
@@ -2013,7 +2033,7 @@ describe("macOS finalized artifact installer", () => {
     expect(existsSync(join(state, "rollbacks"))).toBeFalse();
   });
 
-  test("a concurrent live file wins atomic recovery publication", async () => {
+  testOnNonDarwin("a concurrent live file wins atomic recovery publication", async () => {
     const fixture = createInstallerFixture();
     const installed = join(fixture.home, "Applications", "Recordings.app");
     const state = join(fixture.home, ".hasna", "recordings");
@@ -2056,7 +2076,7 @@ describe("macOS finalized artifact installer", () => {
     ).toBeFalse();
   });
 
-  test("refreshes the stopped snapshot after a bundled relaunch writes state", async () => {
+  testOnNonDarwin("refreshes the stopped snapshot after a bundled relaunch writes state", async () => {
     const fixture = createInstallerFixture();
     const installed = join(fixture.home, "Applications", "Recordings.app");
     const state = join(fixture.home, ".hasna", "recordings");
@@ -2099,7 +2119,7 @@ describe("macOS finalized artifact installer", () => {
     }
   });
 
-  test("recovery rejects unsafe post-snapshot state before restoring the app", async () => {
+  testOnNonDarwin("recovery rejects unsafe post-snapshot state before restoring the app", async () => {
     const fixture = createInstallerFixture();
     const installed = join(fixture.home, "Applications", "Recordings.app");
     const state = join(fixture.home, ".hasna", "recordings");
@@ -2128,7 +2148,7 @@ describe("macOS finalized artifact installer", () => {
       .toBeTrue();
   });
 
-  test("recovery rejects an altered installer-owned archive before restoring the app", async () => {
+  testOnNonDarwin("recovery rejects an altered installer-owned archive before restoring the app", async () => {
     const fixture = createInstallerFixture();
     const installed = join(fixture.home, "Applications", "Recordings.app");
     createApp(installed, "installed");
@@ -2156,7 +2176,7 @@ describe("macOS finalized artifact installer", () => {
     expect(existsSync(journalPath)).toBeTrue();
   });
 
-  test("recovery rejects a same-owner state-root swap after pinning without external mutation", async () => {
+  testOnNonDarwin("recovery rejects a same-owner state-root swap after pinning without external mutation", async () => {
     const fixture = createInstallerFixture();
     const installed = join(fixture.home, "Applications", "Recordings.app");
     const state = join(fixture.home, ".hasna", "recordings");
@@ -2204,7 +2224,7 @@ describe("macOS finalized artifact installer", () => {
     renameSync(parkedState, state);
   });
 
-  test("recovery rejects a nested state ancestor swap after validation without external mutation", async () => {
+  testOnNonDarwin("recovery rejects a nested state ancestor swap after validation without external mutation", async () => {
     const fixture = createInstallerFixture();
     const installed = join(fixture.home, "Applications", "Recordings.app");
     const state = join(fixture.home, ".hasna", "recordings");
@@ -2254,7 +2274,7 @@ describe("macOS finalized artifact installer", () => {
     renameSync(parkedNested, nested);
   });
 
-  test("recovery rejects an Applications ancestor swap before app publication", async () => {
+  testOnNonDarwin("recovery rejects an Applications ancestor swap before app publication", async () => {
     const fixture = createInstallerFixture();
     const applications = join(fixture.home, "Applications");
     const parkedApplications = join(fixture.home, "Applications.parked");
@@ -2295,7 +2315,7 @@ describe("macOS finalized artifact installer", () => {
     rmSync(join(applications, ".Recordings-install-lock"), { recursive: true, force: true });
   });
 
-  test("recovery rejects authenticated app-backup leaf substitution before publication", async () => {
+  testOnNonDarwin("recovery rejects authenticated app-backup leaf substitution before publication", async () => {
     const fixture = createInstallerFixture();
     const installed = join(fixture.home, "Applications", "Recordings.app");
     const readyFifo = join(fixture.root, "app-source-ready.fifo");
@@ -2343,7 +2363,7 @@ describe("macOS finalized artifact installer", () => {
     renameSync(parkedBackup, backup);
   });
 
-  test("recovery rejects a rollback archive-parent swap before unlink without external mutation", async () => {
+  testOnNonDarwin("recovery rejects a rollback archive-parent swap before unlink without external mutation", async () => {
     const fixture = createInstallerFixture();
     const installed = join(fixture.home, "Applications", "Recordings.app");
     const state = join(fixture.home, ".hasna", "recordings");
@@ -2396,7 +2416,7 @@ describe("macOS finalized artifact installer", () => {
     renameSync(parkedRollbacks, rollbacks);
   });
 
-  test("recovery quarantines the proven archive and preserves final-delete leaf substitutions", async () => {
+  testOnNonDarwin("recovery quarantines the proven archive and preserves final-delete leaf substitutions", async () => {
     const fixture = createInstallerFixture();
     const installed = join(fixture.home, "Applications", "Recordings.app");
     const journalPath = join(fixture.home, "Applications", ".Recordings-install-transaction.json");
@@ -2443,7 +2463,7 @@ describe("macOS finalized artifact installer", () => {
     expect(existsSync(journalPath)).toBeTrue();
   });
 
-  test("schema-v6 recovery fails closed instead of using destructive state restore", async () => {
+  testOnNonDarwin("schema-v6 recovery fails closed instead of using destructive state restore", async () => {
     const fixture = createInstallerFixture();
     const installed = join(fixture.home, "Applications", "Recordings.app");
     createApp(installed, "installed");
@@ -2488,7 +2508,7 @@ describe("macOS finalized artifact installer", () => {
     expect(existsSync(journalPath)).toBeTrue();
   });
 
-  test("legacy recovery rejects injected candidate-tree deletion evidence", async () => {
+  testOnNonDarwin("legacy recovery rejects injected candidate-tree deletion evidence", async () => {
     const fixture = createInstallerFixture();
     const installed = join(fixture.home, "Applications", "Recordings.app");
     createApp(installed, "installed");
@@ -2516,7 +2536,7 @@ describe("macOS finalized artifact installer", () => {
     expect(existsSync(journalPath)).toBeTrue();
   });
 
-  test("recovers a committed pre-launch crash without launching the app", async () => {
+  testOnNonDarwin("recovers a committed pre-launch crash without launching the app", async () => {
     const fixture = createInstallerFixture();
     const installed = join(fixture.home, "Applications", "Recordings.app");
     createApp(installed, "installed");
@@ -2537,7 +2557,7 @@ describe("macOS finalized artifact installer", () => {
     expect(existsSync(join(fixture.markers, "launched.pid"))).toBeFalse();
   });
 
-  test("committed journal write failure rolls back before launching and restarts the prior app", async () => {
+  testOnNonDarwin("committed journal write failure rolls back before launching and restarts the prior app", async () => {
     const fixture = createInstallerFixture();
     const installed = join(fixture.home, "Applications", "Recordings.app");
     createApp(installed, "installed");
@@ -2567,7 +2587,7 @@ describe("macOS finalized artifact installer", () => {
     }
   });
 
-  test("committed crash recovery does not launch a second canonical instance", async () => {
+  testOnNonDarwin("committed crash recovery does not launch a second canonical instance", async () => {
     const fixture = createInstallerFixture();
     const installed = join(fixture.home, "Applications", "Recordings.app");
     createApp(installed, "installed");
@@ -2596,7 +2616,7 @@ describe("macOS finalized artifact installer", () => {
     }
   });
 
-  test("recovery rejects a journal redirected to a noncanonical state directory", async () => {
+  testOnNonDarwin("recovery rejects a journal redirected to a noncanonical state directory", async () => {
     const fixture = createInstallerFixture();
     const installed = join(fixture.home, "Applications", "Recordings.app");
     const victim = join(fixture.root, "victim-state");
@@ -2616,7 +2636,7 @@ describe("macOS finalized artifact installer", () => {
     expect(readFileSync(join(victim, "keep.txt"), "utf8")).toBe("keep\n");
   });
 
-  test("recovery fails closed before mutation when the state backup digest changes", async () => {
+  testOnNonDarwin("recovery fails closed before mutation when the state backup digest changes", async () => {
     const fixture = createInstallerFixture();
     const installed = join(fixture.home, "Applications", "Recordings.app");
     const state = join(fixture.home, ".hasna", "recordings", "config.json");
@@ -2635,7 +2655,7 @@ describe("macOS finalized artifact installer", () => {
     expect(existsSync(journalPath)).toBeTrue();
   });
 
-  test("a crash during stopped-state refresh recovers from the immutable initial backup", async () => {
+  testOnNonDarwin("a crash during stopped-state refresh recovers from the immutable initial backup", async () => {
     const fixture = createInstallerFixture();
     const installed = join(fixture.home, "Applications", "Recordings.app");
     createApp(installed, "installed");
@@ -2658,7 +2678,7 @@ describe("macOS finalized artifact installer", () => {
     }
   });
 
-  test("recovery restarts only the recorded legacy app after maintenance release and rejects pathless journals", async () => {
+  testOnNonDarwin("recovery restarts only the recorded legacy app after maintenance release and rejects pathless journals", async () => {
     const prepareRunningLegacyRecovery = async (fixture: ReturnType<typeof createInstallerFixture>) => {
       const legacyApp = join(fixture.home, ".hasna", "recordings", "Recordings.app");
       const canonicalApp = join(fixture.home, "Applications", "Recordings.app");
@@ -2794,7 +2814,7 @@ printf '%s\\n' "$*" >> "$REJECTED_OPEN_LOG"
     expect(existsSync(join(malformed.home, ".hasna", ".recordings-install-maintenance"))).toBeTrue();
   });
 
-  test("recovery fails closed before restoring a modified original app backup", async () => {
+  testOnNonDarwin("recovery fails closed before restoring a modified original app backup", async () => {
     const fixture = createInstallerFixture();
     const installed = join(fixture.home, "Applications", "Recordings.app");
     createApp(installed, "installed");
@@ -2813,7 +2833,7 @@ printf '%s\\n' "$*" >> "$REJECTED_OPEN_LOG"
     expect(existsSync(journalPath)).toBeTrue();
   });
 
-  test("recovery refuses a missing original app backup before removing the candidate", async () => {
+  testOnNonDarwin("recovery refuses a missing original app backup before removing the candidate", async () => {
     const fixture = createInstallerFixture();
     const installed = join(fixture.home, "Applications", "Recordings.app");
     createApp(installed, "installed");
@@ -2831,7 +2851,7 @@ printf '%s\\n' "$*" >> "$REJECTED_OPEN_LOG"
     expect(readFileSync(join(installed, "Contents", "MacOS", "Recordings"), "utf8")).toBe("candidate");
   });
 
-  test("recovery refuses a missing noncommitted transaction directory before mutation", async () => {
+  testOnNonDarwin("recovery refuses a missing noncommitted transaction directory before mutation", async () => {
     const fixture = createInstallerFixture();
     const installed = join(fixture.home, "Applications", "Recordings.app");
     createApp(installed, "installed");
@@ -2849,7 +2869,7 @@ printf '%s\\n' "$*" >> "$REJECTED_OPEN_LOG"
     expect(existsSync(join(fixture.home, "Applications", ".Recordings-install-lock"))).toBeFalse();
   });
 
-  test("recovery replays after a crash between restoring canonical and duplicate apps", async () => {
+  testOnNonDarwin("recovery replays after a crash between restoring canonical and duplicate apps", async () => {
     const fixture = createInstallerFixture();
     const installed = join(fixture.home, "Applications", "Recordings.app");
     const duplicate = join(fixture.home, ".hasna", "recordings", "Recordings.app");
@@ -2873,7 +2893,7 @@ printf '%s\\n' "$*" >> "$REJECTED_OPEN_LOG"
     expect(existsSync(join(fixture.home, "Applications", ".Recordings-install-transaction.json"))).toBeFalse();
   });
 
-  test("recovery transaction cleanup rejects a swapped leaf without deleting its substitute", async () => {
+  testOnNonDarwin("recovery transaction cleanup rejects a swapped leaf without deleting its substitute", async () => {
     const fixture = createInstallerFixture();
     const installed = join(fixture.home, "Applications", "Recordings.app");
     const readyFifo = join(fixture.root, "transaction-cleanup-ready.fifo");
@@ -2936,7 +2956,7 @@ printf '%s\\n' "$*" >> "$REJECTED_OPEN_LOG"
     renameSync(parkedTransaction, journal.transaction_dir);
   });
 
-  test("shell crash hooks require the explicit non-production master flag", async () => {
+  testOnNonDarwin("shell crash hooks require the explicit non-production master flag", async () => {
     const fixture = createInstallerFixture();
     const result = await runInstaller(fixture, [], {
       RECORDINGS_TEST_ENABLE_RECOVERY_HOOKS: "0",
@@ -2951,7 +2971,7 @@ printf '%s\\n' "$*" >> "$REJECTED_OPEN_LOG"
     ).toBe("candidate");
   });
 
-  test("first-install SIGKILL after candidate move removes the uncommitted app on recovery", async () => {
+  testOnNonDarwin("first-install SIGKILL after candidate move removes the uncommitted app on recovery", async () => {
     const fixture = createInstallerFixture();
     const installed = join(fixture.home, "Applications", "Recordings.app");
     const crashed = await runInstaller(fixture, [], {
@@ -2968,7 +2988,7 @@ printf '%s\\n' "$*" >> "$REJECTED_OPEN_LOG"
     expect(existsSync(installed)).toBeFalse();
   });
 
-  test("recovery preserves a manual candidate replacement that does not match durable evidence", async () => {
+  testOnNonDarwin("recovery preserves a manual candidate replacement that does not match durable evidence", async () => {
     const fixture = createInstallerFixture();
     const installed = join(fixture.home, "Applications", "Recordings.app");
     const parkedCandidate = join(fixture.home, "Applications", "Recordings.candidate.parked");
@@ -3014,7 +3034,7 @@ printf '%s\\n' "$*" >> "$REJECTED_OPEN_LOG"
     expect(existsSync(journalPath)).toBeTrue();
   });
 
-  test("candidate quarantine final-delete swap preserves both substitute leaves", async () => {
+  testOnNonDarwin("candidate quarantine final-delete swap preserves both substitute leaves", async () => {
     const fixture = createInstallerFixture();
     const applications = join(fixture.home, "Applications");
     const installed = join(applications, "Recordings.app");
@@ -3058,7 +3078,7 @@ printf '%s\\n' "$*" >> "$REJECTED_OPEN_LOG"
     expect(existsSync(journalPath)).toBeTrue();
   });
 
-  test("candidate-moving recovery stops an externally launched uncommitted process", async () => {
+  testOnNonDarwin("candidate-moving recovery stops an externally launched uncommitted process", async () => {
     const fixture = createInstallerFixture();
     const installed = join(fixture.home, "Applications", "Recordings.app");
     const crashed = await runInstaller(fixture, [], {
@@ -3086,7 +3106,7 @@ printf '%s\\n' "$*" >> "$REJECTED_OPEN_LOG"
     }
   });
 
-  test("active installer lock rejects a second writer before artifact mutation", async () => {
+  testOnNonDarwin("active installer lock rejects a second writer before artifact mutation", async () => {
     const fixture = createInstallerFixture();
     const lock = join(fixture.home, "Applications", ".Recordings-install-lock");
     mkdirSync(lock, { recursive: true, mode: 0o700 });
@@ -3099,7 +3119,7 @@ printf '%s\\n' "$*" >> "$REJECTED_OPEN_LOG"
     );
   });
 
-  test("an actual concurrent installer cannot enter verification while the first owns the lock", async () => {
+  testOnNonDarwin("an actual concurrent installer cannot enter verification while the first owns the lock", async () => {
     const fixture = createInstallerFixture();
     const installer = join(fixture.root, "scripts", "install_macos_app.sh");
     const first = Bun.spawn([
@@ -3160,7 +3180,7 @@ printf '%s\\n' "$*" >> "$REJECTED_OPEN_LOG"
     }
   });
 
-  test("holds the real SQLite writer barrier through the stopped-state snapshot and rollback", async () => {
+  testOnNonDarwin("holds the real SQLite writer barrier through the stopped-state snapshot and rollback", async () => {
     const runBarrierContract = async (releaseBeforeSnapshot: boolean) => {
       const fixture = createInstallerFixture();
       const installed = join(fixture.home, "Applications", "Recordings.app");
@@ -3284,7 +3304,7 @@ SQL
     expect(protectedResult.values).toEqual(["original"]);
   });
 
-  test("an existing bun:sqlite handle writes through recovery without path-replacing SQLite files", async () => {
+  testOnNonDarwin("an existing bun:sqlite handle writes through recovery without path-replacing SQLite files", async () => {
     const runOpenHandleContract = async (replaceCanonicalDatabase: boolean) => {
       const fixture = createInstallerFixture();
       const installed = join(fixture.home, "Applications", "Recordings.app");
@@ -3418,7 +3438,7 @@ SQL
     }
   });
 
-  test("the shared app-parent lock blocks an older pre-lock-mutating installer from replacement", async () => {
+  testOnNonDarwin("the shared app-parent lock blocks an older pre-lock-mutating installer from replacement", async () => {
     const fixture = createInstallerFixture();
     const state = createLegacyState(fixture);
     chmodSync(state, 0o700);
@@ -3475,7 +3495,7 @@ exit 73
     }
   });
 
-  test("does not reclaim a recent lock with incomplete owner metadata", async () => {
+  testOnNonDarwin("does not reclaim a recent lock with incomplete owner metadata", async () => {
     const fixture = createInstallerFixture();
     const lock = join(fixture.home, "Applications", ".Recordings-install-lock");
     mkdirSync(lock, { recursive: true, mode: 0o700 });
@@ -3488,7 +3508,7 @@ exit 73
     );
   });
 
-  test("rejects a zero incomplete-lock grace", async () => {
+  testOnNonDarwin("rejects a zero incomplete-lock grace", async () => {
     const fixture = createInstallerFixture();
     const result = await runInstaller(fixture, [], { RECORDINGS_LOCK_STALE_SECONDS: "0" });
     expect(result.exitCode).toBe(2);
@@ -3498,7 +3518,7 @@ exit 73
     );
   });
 
-  test("rejects a dangling canonical app symlink before transition handling", async () => {
+  testOnNonDarwin("rejects a dangling canonical app symlink before transition handling", async () => {
     const fixture = createInstallerFixture();
     const app = join(fixture.home, "Applications", "Recordings.app");
     mkdirSync(dirname(app), { recursive: true });
@@ -3508,7 +3528,7 @@ exit 73
     expect(result.stderr).toContain("not a secure directory");
   });
 
-  test("rejects insufficient transaction space before moving an installed app", async () => {
+  testOnNonDarwin("rejects insufficient transaction space before moving an installed app", async () => {
     const fixture = createInstallerFixture();
     const installed = join(fixture.home, "Applications", "Recordings.app");
     createApp(installed, "installed");
@@ -3518,7 +3538,7 @@ exit 73
     expect(readFileSync(join(installed, "Contents", "MacOS", "Recordings"), "utf8")).toBe("installed");
   });
 
-  test("fsyncs state, app backups, and candidate before advancing durable phases", async () => {
+  testOnNonDarwin("fsyncs state, app backups, and candidate before advancing durable phases", async () => {
     const fixture = createInstallerFixture();
     const installed = join(fixture.home, "Applications", "Recordings.app");
     createApp(installed, "installed");
@@ -3564,7 +3584,7 @@ exit 73
     expect(lastFsync).toBeLessThan(candidateInstalled);
   });
 
-  test("rolls back when post-activation packaged helper verification fails", async () => {
+  testOnNonDarwin("rolls back when post-activation packaged helper verification fails", async () => {
     const fixture = createInstallerFixture();
     const installed = join(fixture.home, "Applications", "Recordings.app");
     createApp(installed, "installed");
@@ -3590,7 +3610,7 @@ exit 73
     expect(bundleVerify).toBeLessThan(activeVerify);
   });
 
-  test("runtime smoke rejects evidence from a process that already exited", async () => {
+  testOnNonDarwin("runtime smoke rejects evidence from a process that already exited", async () => {
     const fixture = createInstallerFixture();
     const app = join(fixture.root, "smoke", "Recordings.app");
     createApp(app, "app");
@@ -3636,7 +3656,7 @@ while [ ! -e "$acknowledgement" ]; do /bin/sleep 0.01; done
     expect(stderr).toContain("reported a process that is not running");
   });
 
-  test("runtime smoke timeout does not wait forever on a live open process", async () => {
+  testOnNonDarwin("runtime smoke timeout does not wait forever on a live open process", async () => {
     const fixture = createInstallerFixture();
     const app = join(fixture.root, "smoke-timeout", "Recordings.app");
     createApp(app, "app");
@@ -3685,7 +3705,7 @@ while [ ! -e "$acknowledgement" ]; do /bin/sleep 0.01; done
     expect(await new Response(smoke.stderr).text()).toContain("timed out");
   });
 
-  test("runtime smoke binds evidence to a canonical process path despite symlink drift", async () => {
+  testOnNonDarwin("runtime smoke binds evidence to a canonical process path despite symlink drift", async () => {
     const fixture = createInstallerFixture();
     const physicalRelease = join(fixture.root, "physical", "release");
     const driftRelease = join(fixture.root, "drift", "release");
@@ -4436,7 +4456,7 @@ fi
     return { exitCode, stdout, stderr };
   }
 
-  test("debug builds ad-hoc locally without release credentials", async () => {
+  testOnNonDarwin("debug builds ad-hoc locally without release credentials", async () => {
     const fixture = createBuildFixture();
     const result = await runDebugBuild(fixture, {
       SIGNING_FLAGS: "0x10002(adhoc,runtime)",
@@ -4455,7 +4475,7 @@ fi
     expect(existsSync(join(fixture.native, ".build", "debug", "Recordings-0.2.12-macos.zip"))).toBeFalse();
   });
 
-  test("local-only build is explicit, target-bound, ad-hoc, and non-notarized", async () => {
+  testOnNonDarwin("local-only build is explicit, target-bound, ad-hoc, and non-notarized", async () => {
     const fixture = createBuildFixture();
     const result = await runLocalBuild(fixture);
     expect(result.exitCode, result.stderr).toBe(0);
@@ -4480,7 +4500,7 @@ fi
     expect(existsSync(join(fixture.native, ".build", "release", "Recordings-0.2.12-macos-station06-local-only.manifest.json"))).toBeTrue();
   });
 
-  test("local-only build accepts every target the policy file declares, not just the first", async () => {
+  testOnNonDarwin("local-only build accepts every target the policy file declares, not just the first", async () => {
     // The whole point of the policy file: a second approved Mac builds identically,
     // with the target name carried through to the artifact, manifest, and provenance.
     const fixture = createBuildFixture();
@@ -4503,7 +4523,7 @@ fi
     ).toBeTrue();
   });
 
-  test("local-station build signs with the supplied Developer ID instead of ad-hoc", async () => {
+  testOnNonDarwin("local-station build signs with the supplied Developer ID instead of ad-hoc", async () => {
     // Regression (station03, 2026-07-30): the Fn/Globe push-to-talk was permanently dead.
     // FnKeyMonitor.swift creates a CGEventTap, which macOS only permits with Accessibility,
     // and TCC keys that grant to bundle-id + code-signing identity. Every local-station
@@ -4544,7 +4564,7 @@ fi
     ).toBeTrue();
   });
 
-  test("local-station Developer ID build refuses an identity without a pinned team", async () => {
+  testOnNonDarwin("local-station Developer ID build refuses an identity without a pinned team", async () => {
     const fixture = createBuildFixture();
     const result = await runLocalBuild(fixture, {
       RECORDINGS_LOCAL_APPROVED_TARGET: "station03",
@@ -4555,7 +4575,7 @@ fi
     expect(result.stderr).toContain("RECORDINGS_EXPECTED_TEAM_IDENTIFIER");
   });
 
-  test("local-station build refuses a signing identity that is not a Developer ID Application", async () => {
+  testOnNonDarwin("local-station build refuses a signing identity that is not a Developer ID Application", async () => {
     const fixture = createBuildFixture();
     const result = await runLocalBuild(fixture, {
       RECORDINGS_LOCAL_APPROVED_TARGET: "station03",
@@ -4566,7 +4586,7 @@ fi
     expect(result.stderr).toContain("Developer ID Application");
   });
 
-  test("local-only build fails closed when the approved-target policy is absent", async () => {
+  testOnNonDarwin("local-only build fails closed when the approved-target policy is absent", async () => {
     const fixture = createBuildFixture();
     rmSync(join(fixture.root, "scripts", "policy", "local-only-approved-targets.txt"));
     const missingPolicy = await runLocalBuild(fixture);
@@ -4582,7 +4602,7 @@ fi
     expect(existsSync(join(noReader.native, ".build"))).toBeFalse();
   });
 
-  test("local-only build uses the standard Tailscale app CLI fallback", async () => {
+  testOnNonDarwin("local-only build uses the standard Tailscale app CLI fallback", async () => {
     const fixture = createBuildFixture();
     const fallback = join(fixture.root, "Applications", "Tailscale.app", "Contents", "MacOS", "Tailscale");
     mkdirSync(dirname(fallback), { recursive: true });
@@ -4599,7 +4619,7 @@ fi
     expect(executedCli).not.toBe(fallback);
   });
 
-  test("local-only build fails closed when no executable Tailscale CLI exists", async () => {
+  testOnNonDarwin("local-only build fails closed when no executable Tailscale CLI exists", async () => {
     const fixture = createBuildFixture();
     const missingFallback = join(fixture.root, "missing", "Tailscale.app");
     rmSync(join(fixture.bin, "tailscale"));
@@ -4612,7 +4632,7 @@ fi
     expect(existsSync(join(fixture.native, ".build"))).toBeFalse();
   });
 
-  test("local-only build fails closed before compilation when identity status or resolver fails", async () => {
+  testOnNonDarwin("local-only build fails closed before compilation when identity status or resolver fails", async () => {
     const failedStatus = createBuildFixture();
     const statusResult = await runLocalBuild(failedStatus, { FAIL_BUILDER_TAILSCALE_STATUS: "1" });
     expect(statusResult.exitCode).not.toBe(0);
@@ -4627,7 +4647,7 @@ fi
     expect(existsSync(join(missingResolver.native, ".build"))).toBeFalse();
   });
 
-  test("local-only build rejects missing or same-host target scope", async () => {
+  testOnNonDarwin("local-only build rejects missing or same-host target scope", async () => {
     const missing = createBuildFixture();
     const missingResult = await runLocalBuild(missing, { RECORDINGS_LOCAL_APPROVED_TARGET: "" });
     expect(missingResult.exitCode).not.toBe(0);
@@ -4663,7 +4683,7 @@ fi
     expect(missingKindResult.stderr).toContain("RECORDINGS_LOCAL_APPROVED_TARGET_IDENTITY_KIND");
   });
 
-  test("local-only build requires a distinct authenticated online builder node", async () => {
+  testOnNonDarwin("local-only build requires a distinct authenticated online builder node", async () => {
     const buildScript = readFileSync(
       join(repositoryRoot, "src", "native", "Recordings", "build.sh"),
       "utf8",

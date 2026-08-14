@@ -15,6 +15,17 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expectOrder, sliceBetween, sliceBetweenUnique } from "./helpers/source-assertions";
+// Gated to non-Darwin hosts with a recorded reason. This suite drives the real
+// install_macos_app.sh / build.sh / macos_artifact.ts fixture seams (tool overrides,
+// recovery/transition/crash hooks, Tailscale overrides) that the production code
+// deliberately refuses on a real Darwin host — documented in the installer header
+// ("The test overrides are accepted only when the real host kernel is not Darwin"),
+// test_fault_hooks_enabled (false on Darwin), installTransitionTestPoint (early return
+// on darwin), and resolve_tailscale_cli.sh ("structurally unreachable on Darwin").
+// These tests are the Linux CI gate's coverage; on macOS the seams they depend on are
+// closed by documented design, so they skip there. Pure source assertions run everywhere.
+const testOnNonDarwin = process.platform === "darwin" ? test.skip : test;
+
 
 const buildScript = readFileSync("src/native/Recordings/build.sh", "utf8");
 const companionScript = readFileSync("scripts/build_companion_cli.sh", "utf8");
@@ -249,7 +260,7 @@ describe("native release build hardening contract", () => {
     expect(companionScript).not.toContain("-verify_arch arm64 x86_64\n");
   });
 
-  test("normalizes umask-077 staging before nested signing and finalizes data before app signing", () => {
+  testOnNonDarwin("normalizes umask-077 staging before nested signing and finalizes data before app signing", () => {
     const launchFileNormalizer = buildScript.match(
       /normalize_unsigned_launch_file_mode\(\) \{[\s\S]*?\n\}/,
     )?.[0];

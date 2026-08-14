@@ -12,6 +12,17 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { sliceBetween, sliceBetweenUnique } from "./helpers/source-assertions";
+// Gated to non-Darwin hosts with a recorded reason. This suite drives the real
+// install_macos_app.sh / build.sh / macos_artifact.ts fixture seams (tool overrides,
+// recovery/transition/crash hooks, Tailscale overrides) that the production code
+// deliberately refuses on a real Darwin host — documented in the installer header
+// ("The test overrides are accepted only when the real host kernel is not Darwin"),
+// test_fault_hooks_enabled (false on Darwin), installTransitionTestPoint (early return
+// on darwin), and resolve_tailscale_cli.sh ("structurally unreachable on Darwin").
+// These tests are the Linux CI gate's coverage; on macOS the seams they depend on are
+// closed by documented design, so they skip there. Pure source assertions run everywhere.
+const testOnNonDarwin = process.platform === "darwin" ? test.skip : test;
+
 
 const repositoryRoot = resolve(import.meta.dir, "../..");
 const resolver = join(repositoryRoot, "scripts", "resolve_tailscale_cli.sh");
@@ -339,7 +350,7 @@ describe("Tailscale CLI resolution", () => {
     },
   );
 
-  test("snapshots the complete authenticated official app and executes only the verified copy", async () => {
+  testOnNonDarwin("snapshots the complete authenticated official app and executes only the verified copy", async () => {
     const result = await trustedSnapshotWith({ replaceSourceBeforeStatus: true });
     expect(result.exitCode, result.stderr).toBe(0);
     const snapshotCli = join(
