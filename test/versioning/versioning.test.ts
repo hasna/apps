@@ -32,12 +32,12 @@ const KNOWN_RUNTIME_MISMATCHES = new Map([
   ["@hasna/treasury", { packageVersion: "0.1.1", runtimeVersion: "0.1.0" }],
 ]);
 
+// The pre-import census entries for apps/{economy,events,feedback,recordings} were
+// pruned 2026-08-14 (reviewer P2): those packages are not members of this repo, so the
+// entries could never fire. The @hasna/repos entry was pruned as inert: registry 0.1.46
+// now equals main. Measured live: npm view @hasna/loops version --json -> "0.5.0".
 const KNOWN_NPM_DRIFT = new Map([
-  ["@hasna/economy", { registryVersion: "0.3.8", mainVersion: "0.3.9", source: "pre-import drift census" }],
-  ["@hasna/events", { registryVersion: "0.1.14", mainVersion: "0.1.15", source: "pre-import drift census" }],
-  ["@hasna/feedback", { registryVersion: "0.2.0", mainVersion: "0.3.0", source: "pre-import drift census" }],
-  ["@hasna/recordings", { registryVersion: "0.2.14", mainVersion: "0.3.0", source: "pre-import drift census" }],
-  ["@hasna/repos", { registryVersion: "0.1.45", mainVersion: "0.1.46", source: "pre-import drift census" }],
+  ["@hasna/loops", { registryVersion: "0.5.0", mainVersion: "0.4.42", source: "publish lane released 0.5.0 ahead of main; reconcile task 69e8b5dd-15cd-4f45-8739-c0edf6720773" }],
 ]);
 
 describe("hasna/apps versioning integrity", () => {
