@@ -1,0 +1,64 @@
+{
+  "$schema": "./node_modules/@hasna/contracts/dist/hasna.contract.schema.json",
+  "schema": "hasna.service_contract.v1",
+  "name": "signatures",
+  "class": "cli-with-store",
+  "contractVersion": "v1",
+  "kitVersion": "0.8.5",
+  "description": "Open-source agreement and e-signature workflows for Markdown and PDFs: local signing, provider evidence, CLI, MCP, and an HTTP surface over a local SQLite store.",
+  "bins": [
+    "signatures",
+    "signatures-mcp",
+    "signatures-serve"
+  ],
+  "hosting": [
+    "user-hosted"
+  ],
+  "storage": {
+    "mode": "sqlite",
+    "engines": [
+      "sqlite"
+    ],
+    "envPrefix": "HASNA_SIGNATURES_",
+    "aliasEnvPrefix": "SIGNATURES_",
+    "sqlitePath": "~/.hasna/signatures/signatures.db"
+  },
+  "serviceSurfaces": [
+    {
+      "name": "signatures-cli",
+      "kind": "cli",
+      "status": "supported",
+      "bin": "signatures",
+      "authMode": "local-only"
+    },
+    {
+      "name": "signatures-mcp",
+      "kind": "mcp",
+      "status": "supported",
+      "mcpBin": "signatures-mcp",
+      "authMode": "local-only"
+    },
+    {
+      "name": "signatures-sdk",
+      "kind": "sdk",
+      "status": "supported",
+      "authMode": "none",
+      "exportSubpath": "."
+    },
+    {
+      "name": "signatures-api",
+      "kind": "api",
+      "status": "deferred",
+      "bin": "signatures-serve",
+      "authMode": "api-key",
+      "deferReason": "signatures-serve exposes a local /api surface only. It implements GET /health but not GET /ready, GET /version, a /v1 base path, or an OpenAPI document, so declaring the API supported would assert a topology the server does not have."
+    }
+  ],
+  "metadata": {
+    "release": {
+      "artifactScan": {
+        "script": "scan:artifact"
+      }
+    }
+  }
+}
