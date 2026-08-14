@@ -1,0 +1,593 @@
+#!/usr/bin/env bun
+
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { join } from "node:path";
+import { Command, CommanderError } from "commander";
+import {
+  CONTRACTS_PACKAGE_VERSION,
+  ContractSchemaRegistry,
+  type KnownSchemaId
+} from "../schemas";
+import { scanNoCloudTarget } from "../no-cloud";
+import { runRepoConformance } from "../conformance";
+import { getEmbeddedSchemaId, validateContract } from "../validators";
+import { secureLocalStorePolicy } from "../secure-local-store";
+import { runVendorKit } from "./kit-runner";
+import { runIssueKey } from "./issue-key";
+import { formatArtifactScanReport, resolveAssetInventoryWaivers, scanPublishedArtifact } from "../artifact-scan";
+import { runSafeReadCli } from "./read";
+import { runVerifyWriteCli } from "./verify-write";
+
+function collectJsonFiles(root: string): string[] {
+  const stat = statSync(root);
+  if (stat.isFile()) {
+    return root.endsWith(".json") ? [root] : [];
+  }
+  const files: string[] = [];
+  for (const entry of readdirSync(root).sort()) {
+    files.push(...collectJsonFiles(join(root, entry)));
+  }
+  return files;
+}
+
+function readJsonFile(file: string): { ok: true; value: unknown } | { ok: false; error: string } {
+  try {
+    return { ok: true, value: JSON.parse(readFileSync(file, "utf8")) };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { ok: false, error: message };
+  }
+}
+
+function reportCliError(options: { json?: boolean }, error: string, details: Record<string, unknown> = {}) {
+  if (options.json) {
+    console.log(JSON.stringify({ ok: false, error, ...details }, null, 2));
+  } else {
+    console.error(error);
+  }
+  process.exitCode = 2;
+}
+
+function argvRequestsJson(argv: string[]) {
+  return argv.includes("--json") || argv.includes("-j");
+}
+
+function reportParserJsonError(code: string, error: string) {
+  console.log(JSON.stringify({ ok: false, code, error }, null, 2));
+  process.exitCode = 1;
+  return true;
+}
+
+function preflightJsonUsageErrors(argv: string[]) {
+  if (!argvRequestsJson(argv)) {
+    return false;
+  }
+
+  const args = argv.slice(2);
+  const command = args[0];
+  if (!command) {
+    return false;
+  }
+
+  if (!["schemas", "validate", "conformance", "no-cloud-scan", "repo-conformance", "vendor-kit", "issue-key", "artifact-scan", "secure-local-store", "read", "verify-write"].includes(command)) {
+    return reportParserJsonError("commander.unknownCommand", `unknown command '${command}'`);
+  }
+
+  // issue-key has rich value-taking options; let commander parse it (its
+  // CommanderError is already rendered as JSON by main()).
+  if (command === "issue-key") {
+    return false;
+  }
+
+  // `read` carries an entire foreign command line after `--`, including that
+  // command's own flags. Preflighting those against this program's option set
+  // would reject `contracts read -- todos list --limit 5` for an option that is
+  // not ours to validate. Commander handles it.
+  if (command === "read" || command === "verify-write") {
+    return false;
+  }
+
+  const allowedOptionsByCommand: Record<string, Set<string>> = {
+    schemas: new Set(["--json", "-j"]),
+    validate: new Set(["--json", "-j", "--schema"]),
+    conformance: new Set(["--json", "-j"]),
+    "no-cloud-scan": new Set(["--json", "-j", "--manifest"]),
+    "repo-conformance": new Set(["--json", "-j"]),
+    "vendor-kit": new Set(["--json", "-j", "--check", "--kit-version", "--no-contract"]),
+    "artifact-scan": new Set([
+      "--json",
+      "-j",
+      "--manifest",
+      "--domain-threshold",
+      "--host-threshold",
+      "--ip-threshold",
+      "--email-threshold"
+    ]),
+    "secure-local-store": new Set(["--json", "-j", "--store"])
+  };
+  const allowedOptions = allowedOptionsByCommand[command] ?? new Set<string>();
+  const positionals: string[] = [];
+
+  for (let index = 1; index < args.length; index += 1) {
+    const arg = args[index];
+    if (!arg) {
+      continue;
+    }
+    if (arg.startsWith("--schema=")) {
+      if (arg.slice("--schema=".length).length === 0) {
+        return reportParserJsonError("commander.optionMissingArgument", "option '--schema <id>' argument missing");
+      }
+      continue;
+    }
+    if (arg === "--schema") {
+      const schemaValue = args[index + 1];
+      if (!schemaValue || schemaValue.startsWith("-")) {
+        return reportParserJsonError("commander.optionMissingArgument", "option '--schema <id>' argument missing");
+      }
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith("--manifest=")) {
+      if (arg.slice("--manifest=".length).length === 0) {
+        return reportParserJsonError("commander.optionMissingArgument", "option '--manifest <file>' argument missing");
+      }
+      continue;
+    }
+    if (arg === "--manifest") {
+      const manifestValue = args[index + 1];
+      if (!manifestValue || manifestValue.startsWith("-")) {
+        return reportParserJsonError("commander.optionMissingArgument", "option '--manifest <file>' argument missing");
+      }
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith("--store=")) {
+      if (arg.slice("--store=".length).length === 0) {
+        return reportParserJsonError("commander.optionMissingArgument", "option '--store <id>' argument missing");
+      }
+      continue;
+    }
+    if (arg === "--store") {
+      const storeValue = args[index + 1];
+      if (!storeValue || storeValue.startsWith("-")) {
+        return reportParserJsonError("commander.optionMissingArgument", "option '--store <id>' argument missing");
+      }
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith("-")) {
+      if (!allowedOptions.has(arg)) {
+        return reportParserJsonError("commander.unknownOption", `unknown option '${arg}'`);
+      }
+      continue;
+    }
+    positionals.push(arg);
+  }
+
+  if (command === "validate" && positionals.length === 0) {
+    return reportParserJsonError("commander.missingArgument", "missing required argument 'file'");
+  }
+
+  return false;
+}
+
+function collectOption(value: string, previous: string[] = []): string[] {
+  return [...previous, value];
+}
+
+function printSecureLocalStoreText(payload: ReturnType<typeof secureLocalStorePolicy>) {
+  console.log(`ok ${payload.schema} ${payload.id}`);
+  for (const store of payload.stores) {
+    console.log(`  ${store.storeId} ${store.packageName} ${store.root}/${store.relativePath}`);
+  }
+}
+
+export function createContractsProgram() {
+  const program = new Command();
+
+  program
+    .name("contracts")
+    .description("Validate Hasna shared contract JSON files")
+    .version(CONTRACTS_PACKAGE_VERSION);
+
+  program
+    .command("schemas")
+    .description("List known contract schema ids")
+    .option("-j, --json", "Output JSON")
+    .action((options: { json?: boolean }) => {
+      const schemas = Object.keys(ContractSchemaRegistry);
+      if (options.json) {
+        console.log(JSON.stringify({ version: CONTRACTS_PACKAGE_VERSION, schemas }, null, 2));
+        return;
+      }
+      for (const schema of schemas) {
+        console.log(schema);
+      }
+    });
+
+  program
+    .command("validate")
+    .description("Validate a JSON file against a contract schema")
+    .argument("<file>", "JSON file path")
+    .option("--schema <id>", "Contract schema id. Defaults to the file's embedded schema field")
+    .option("-j, --json", "Output JSON")
+    .action((file: string, options: { schema?: string; json?: boolean }) => {
+      const loaded = readJsonFile(file);
+      if (!loaded.ok) {
+        reportCliError(options, `Could not read or parse ${file}: ${loaded.error}`, { file, code: "read_or_parse_error" });
+        return;
+      }
+
+      const schemaId = options.schema ? (options.schema as KnownSchemaId) : getEmbeddedSchemaId(loaded.value);
+      if (!schemaId || !(schemaId in ContractSchemaRegistry)) {
+        const error = options.schema
+          ? `Unknown schema: ${options.schema}`
+          : "No schema provided and file does not include a known embedded schema field";
+        reportCliError(options, error, { file, schema: options.schema ?? null, code: "unknown_schema" });
+        return;
+      }
+
+      const result = validateContract(schemaId, loaded.value);
+      if (result.success) {
+        if (options.json) {
+          console.log(JSON.stringify({ ok: true, schema: schemaId, file }, null, 2));
+        } else {
+          console.log(`ok ${schemaId} ${file}`);
+        }
+        return;
+      }
+
+      if (options.json) {
+        console.log(JSON.stringify({ ok: false, schema: schemaId, file, issues: result.error.issues }, null, 2));
+      } else {
+        console.error(`invalid ${schemaId} ${file}`);
+        for (const issue of result.error.issues) {
+          console.error(`- ${issue.path.join(".") || "<root>"}: ${issue.message}`);
+        }
+      }
+      process.exitCode = 1;
+    });
+
+  program
+    .command("conformance")
+    .description("Validate example fixtures. *.valid.json must pass; *.invalid.json must fail")
+    .argument("[path]", "Examples path", "examples")
+    .option("-j, --json", "Output JSON")
+    .action((root: string, options: { json?: boolean }) => {
+      let files: string[];
+      try {
+        files = collectJsonFiles(root).filter((file) => file.endsWith(".valid.json") || file.endsWith(".invalid.json"));
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        reportCliError(options, `Could not read examples path ${root}: ${message}`, { path: root, code: "examples_path_error" });
+        return;
+      }
+
+      if (files.length === 0) {
+        reportCliError(options, `No conformance fixtures found in ${root}`, { path: root, checked: 0, code: "no_fixtures" });
+        return;
+      }
+
+      const results = files.map((file) => {
+        const expectedValid = file.endsWith(".valid.json");
+        const loaded = readJsonFile(file);
+        if (!loaded.ok) {
+          return { file, expectedValid, ok: false, schema: null, error: loaded.error };
+        }
+        const schemaId = getEmbeddedSchemaId(loaded.value);
+        if (!schemaId) {
+          return { file, expectedValid, ok: false, schema: null, error: "missing or unknown embedded schema" };
+        }
+        const result = validateContract(schemaId, loaded.value);
+        const valid = result.success;
+        return {
+          file,
+          expectedValid,
+          ok: expectedValid ? valid : !valid,
+          schema: schemaId,
+          error: result.success ? null : result.error.issues.map((issue) => `${issue.path.join(".") || "<root>"}: ${issue.message}`).join("; ")
+        };
+      });
+
+      const failed = results.filter((result) => !result.ok);
+      if (options.json) {
+        console.log(JSON.stringify({ ok: failed.length === 0, checked: results.length, failed: failed.length, results }, null, 2));
+      } else {
+        for (const result of results) {
+          console.log(`${result.ok ? "ok" : "fail"} ${result.expectedValid ? "valid" : "invalid"} ${result.schema ?? "unknown"} ${result.file}`);
+          if (!result.ok && result.error) {
+            console.log(`  ${result.error}`);
+          }
+        }
+      }
+      if (failed.length > 0) {
+        process.exitCode = 1;
+      }
+    });
+
+  program
+    .command("no-cloud-scan")
+    .description("Scan a source tree or packed tarball for forbidden shared cloud runtime edges")
+    .argument("[path]", "Directory, .tgz, or .tar.gz path", ".")
+    .option("--manifest <file>", "Optional app cloud manifest JSON file to validate")
+    .option("-j, --json", "Output JSON evidence pack")
+    .action((target: string, options: { manifest?: string; json?: boolean }) => {
+      let manifest: unknown | undefined;
+      const manifestSupplied = Object.prototype.hasOwnProperty.call(options, "manifest") && options.manifest !== undefined;
+      if (manifestSupplied) {
+        if (!options.manifest) {
+          reportCliError(options, "option '--manifest <file>' argument missing", {
+            code: "manifest_missing_argument"
+          });
+          return;
+        }
+        const loaded = readJsonFile(options.manifest);
+        if (!loaded.ok) {
+          reportCliError(options, `Could not read or parse ${options.manifest}: ${loaded.error}`, {
+            file: options.manifest,
+            code: "manifest_read_or_parse_error"
+          });
+          return;
+        }
+        manifest = loaded.value;
+      }
+
+      let evidence;
+      try {
+        evidence = scanNoCloudTarget(target, manifestSupplied ? { manifest } : {});
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        reportCliError(options, `No-cloud scan failed for ${target}: ${message}`, { path: target, code: "no_cloud_scan_error" });
+        return;
+      }
+
+      if (options.json) {
+        console.log(JSON.stringify(evidence, null, 2));
+      } else {
+        console.log(`${evidence.verdict === "passed" ? "ok" : "fail"} ${evidence.schema} ${target}`);
+        for (const finding of evidence.findings) {
+          console.log(`- ${finding.severity} ${finding.kind} ${finding.path ?? "<manifest>"}: ${finding.message}`);
+        }
+      }
+      if (evidence.verdict !== "passed") {
+        process.exitCode = 1;
+      }
+    });
+
+  program
+    .command("secure-local-store")
+    .description("Print the execution-free .hasna/.codewith secure local-store policy")
+    .option("--store <id>", "Limit to a store id; repeat for multiple stores", collectOption, [])
+    .option("-j, --json", "Output JSON")
+    .action((options: { store?: string[]; json?: boolean }) => {
+      const stores = options.store && options.store.length > 0 ? options.store : undefined;
+      let policy;
+      try {
+        policy = secureLocalStorePolicy(stores);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        reportCliError(options, `secure-local-store failed: ${message}`, { code: "secure_local_store_error" });
+        return;
+      }
+      if (options.json) {
+        console.log(JSON.stringify(policy, null, 2));
+      } else {
+        printSecureLocalStoreText(policy);
+      }
+    });
+
+  program
+    .command("repo-conformance")
+    .description("Check a repo against the Hasna Service Contract v1 using its hasna.contract.json")
+    .argument("[path]", "Repo root path", ".")
+    .option("-j, --json", "Output JSON report")
+    .action((target: string, options: { json?: boolean }) => {
+      let report;
+      try {
+        report = runRepoConformance(target);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        reportCliError(options, `Repo conformance failed for ${target}: ${message}`, { path: target, code: "repo_conformance_error" });
+        return;
+      }
+
+      if (options.json) {
+        console.log(JSON.stringify(report, null, 2));
+      } else {
+        console.log(`${report.ok ? "ok" : "fail"} hasna.service_contract.v1 ${report.name ?? "?"} (${report.class ?? "?"}) ${target}`);
+        for (const check of report.checks) {
+          console.log(`  ${check.status} ${check.id}: ${check.detail}`);
+        }
+      }
+      if (!report.ok) {
+        process.exitCode = 1;
+      }
+    });
+
+  program
+    .command("vendor-kit")
+    .description("Stamp the canonical Postgres storage kit into a repo at src/generated/storage-kit/")
+    .argument("[path]", "Target repo root", ".")
+    .option("--check", "Verify the vendored kit matches the generator (CI mode); exit 1 if stale/hand-edited")
+    .option("--kit-version <version>", "Override the stamped kit version (defaults to @hasna/contracts version)")
+    .option("--no-contract", "Do not update hasna.contract.json kitVersion")
+    .option("-j, --json", "Output JSON")
+    .action((target: string, options: { check?: boolean; kitVersion?: string; contract?: boolean; json?: boolean }) => {
+      try {
+        runVendorKit(target, options);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        reportCliError(options, `vendor-kit failed for ${target}: ${message}`, { path: target, code: "vendor_kit_error" });
+      }
+    });
+
+  program
+    .command("artifact-scan")
+    .description("Scan a PACKED artifact (.tgz) for bulk asset inventories — run this from prepack, never against src/")
+    .argument("<target>", "Path to a packed .tgz/.tar.gz, or a directory for local iteration")
+    .option("--domain-threshold <n>", "Distinct registrable domains in one file that constitute an inventory")
+    .option("--host-threshold <n>", "Distinct hostnames in one file that constitute an inventory")
+    .option("--ip-threshold <n>", "Distinct public IPv4 addresses in one file that constitute an inventory")
+    .option("--email-threshold <n>", "Distinct email addresses in one file that constitute an inventory")
+    .option(
+      "--manifest <file>",
+      "Contract manifest declaring metadata.conformance.waivedAssetInventories (default ./hasna.contract.json)"
+    )
+    .option("-j, --json", "Output JSON")
+    .action((target: string, options: Record<string, unknown>) => {
+      const thresholds: Record<string, number> = {};
+      for (const [flag, kind] of [
+        ["domainThreshold", "domain"],
+        ["hostThreshold", "host"],
+        ["ipThreshold", "ip"],
+        ["emailThreshold", "email"]
+      ] as const) {
+        const raw = options[flag];
+        if (raw === undefined) continue;
+        const parsed = Number(raw);
+        if (!Number.isInteger(parsed) || parsed < 1) {
+          reportCliError(options, `--${kind}-threshold must be a positive integer`, { code: "bad_threshold" });
+          return;
+        }
+        thresholds[kind] = parsed;
+      }
+      // A waiver is declared in the manifest, so the gate reads the manifest.
+      // Defaulting to the repo's own manifest keeps the prepack invocation
+      // (`contracts artifact-scan <tarball>`, run from the repo root) honest
+      // without every repo having to remember a flag.
+      const manifestSupplied = Object.prototype.hasOwnProperty.call(options, "manifest");
+      if (manifestSupplied && !options.manifest) {
+        reportCliError(options, "option '--manifest <file>' argument missing", {
+          code: "manifest_missing_argument"
+        });
+        return;
+      }
+      const manifestPath = manifestSupplied ? String(options.manifest) : join(process.cwd(), "hasna.contract.json");
+      if (manifestSupplied && !existsSync(manifestPath)) {
+        reportCliError(options, `Could not read or parse ${manifestPath}: no such file`, {
+          file: manifestPath,
+          code: "manifest_read_or_parse_error"
+        });
+        return;
+      }
+      try {
+        const waivers = resolveAssetInventoryWaivers(manifestPath);
+        const report = scanPublishedArtifact(target, { thresholds, waivedKinds: waivers.kinds });
+        if (options.json) {
+          console.log(JSON.stringify({ ...report, waiverNotes: waivers.notes }, null, 2));
+        } else {
+          for (const note of waivers.notes) console.log(`waiver: ${note}`);
+          console.log(formatArtifactScanReport(report));
+        }
+        if (!report.ok) process.exitCode = 1;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        reportCliError(options, `artifact-scan failed for ${target}: ${message}`, { path: target, code: "artifact_scan_error" });
+      }
+    });
+
+  program
+    .command("read")
+    .description("Run a Hasna collection read and either prove it complete or REFUSE (exit 2)")
+    .argument("[command...]", "The command to run, after --. e.g. contracts read -- todos list --json")
+    .option("--rows-key <key>", "Key holding the row array (auto-detected when omitted)")
+    .option("--total-key <key>", "Key holding a self-declared population size")
+    .option("--limit-flag <flag>", "Flag the target uses to bound rows (default --limit)")
+    .option("--limit <n>", "Bound to pass on the first read; enables the widening proof")
+    .option("--widen-to <n>", "Bound for the widening probe (default limit * 4)")
+    .option("--known-clamp <n>", "The server cap this surface really imposes, if you have established it")
+    .option("--cursor-flag <flag>", "Flag the target uses to page, e.g. --cursor")
+    .option("--max-pages <n>", "Refuse rather than page beyond this many pages (default 200)")
+    .option("--sibling-arg <arg>", "Repeatable: argv of a sibling verb carrying an aggregate", collectOption)
+    .option("--sibling-path <path>", "Dotted path to the aggregate, e.g. by_scope.global")
+    .option("--probe-positive-arg <arg>", "Repeatable: tokens forming a query that MUST match something", collectOption)
+    .option("--probe-negative-arg <arg>", "Repeatable: tokens forming a query that MUST match nothing", collectOption)
+    .option("--allow-empty", "An empty result is a legitimate answer here")
+    .option("--assume-complete", "Waive proof; recorded in the evidence and never silent")
+    .option("--scope-ack <why>", "Record the narrower default scope as a deliberate choice, and say why")
+    .option("-j, --json", "Output JSON")
+    .action((command: string[], options: Record<string, unknown>) => {
+      process.exitCode = runSafeReadCli(command ?? [], options as never);
+    });
+
+  program
+    .command("verify-write")
+    .description(
+      "Cheaper than rendering a stored body: compare byte length and SHA-256; prevents appended capability content from reaching output"
+    )
+    .argument("<target>", "Exact object ID requested from the fetch command")
+    .argument("[command...]", "The fetch command to run after --; it must return one JSON object")
+    .requiredOption("--authored <file>", "File containing the exact payload the caller authored")
+    .option("--id-path <path>", "Dotted path to the fetched object's ID", "id")
+    .option("--content-path <path>", "Dotted path to the fetched stored content", "body")
+    .option("-j, --json", "Output metadata-only JSON")
+    .action((target: string, command: string[], options: Record<string, unknown>) => {
+      process.exitCode = runVerifyWriteCli(target, command ?? [], options as never);
+    });
+
+  program
+    .command("issue-key")
+    .description("Mint an API key: disclose it once, or deliver it silently to an exact Hasna Secrets reference")
+    .requiredOption("--app <app>", "App slug the key authenticates (e.g. todos)")
+    .option("--agent <agent>", "Issued-to agent/subject (informational)")
+    .option("--tid <tenant>", "Tenant/organization the key acts for (UUID, ULID, slug, or prefixed id). Omit for an untenanted key")
+    .option("--scopes <csv>", "Comma-separated scopes, e.g. 'todos:read,todos:write' or 'todos:*'")
+    .option("--ttl-days <days>", "Days until expiry (default 90)")
+    .option("--no-expiry", "Mint a non-expiring key")
+    .option("--bootstrap", "Mint a bootstrap admin key (scopes default to '<app>:*', agent 'bootstrap')")
+    .option("--signing-secret-env <name>", "Env var holding the HMAC signing secret (default HASNA_<APP>_API_SIGNING_KEY, then HASNA_API_SIGNING_KEY)")
+    .option("--database-url-env <name>", "Env var holding the Postgres URL for the record store (default HASNA_<APP>_DATABASE_URL)")
+    .option("--table <name>", "api-keys table name (default api_keys)")
+    .option(
+      "--secrets-ref <template>",
+      "Deliver without plaintext output; template must contain separate {agent} and {kid} path segments",
+    )
+    .option("--issuance-id <id>", "Stable key id for idempotent retry with --secrets-ref")
+    .option("--no-store", "Do not persist the hashed record (print secret + hash only)")
+    .option("-j, --json", "Output JSON")
+    .action(async (options: Record<string, unknown>) => {
+      await runIssueKey(options, { report: reportCliError });
+    });
+
+  return program;
+}
+
+export async function main(argv = process.argv) {
+  if (preflightJsonUsageErrors(argv)) {
+    return;
+  }
+  const program = createContractsProgram();
+  const wantsJson = argvRequestsJson(argv);
+  if (wantsJson) {
+    program.configureOutput({
+      writeErr: () => {}
+    });
+  }
+  program.exitOverride();
+  try {
+    await program.parseAsync(argv);
+  } catch (error) {
+    const commanderError = error as Partial<CommanderError> & { message?: string };
+    if (error instanceof CommanderError || typeof commanderError.code === "string" || typeof commanderError.exitCode === "number") {
+      const exitCode = commanderError.exitCode ?? 2;
+      if (exitCode === 0) {
+        process.exitCode = 0;
+        return;
+      }
+      const code = commanderError.code || "commander_error";
+      const message = commanderError.message || "Command failed";
+      if (wantsJson) {
+        console.log(JSON.stringify({ ok: false, code, error: message }, null, 2));
+      } else {
+        console.error(message);
+      }
+      process.exitCode = exitCode;
+      return;
+    }
+    throw error;
+  }
+}
+
+if (import.meta.main) {
+  await main();
+}
