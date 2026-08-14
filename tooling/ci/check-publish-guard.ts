@@ -161,7 +161,15 @@ function packFileNames(pkgDir: string): string[] {
       .split("\n")
       .slice(-3)
       .join("\n");
-    throw new Error(`npm pack --dry-run --json failed in ${pkgDir}${tail ? ":\n  " + tail : ""}`);
+    const stdoutTail = String(e?.stdout ?? "")
+      .trim()
+      .split("\n")
+      .slice(-25)
+      .join("\n");
+    throw new Error(
+      `npm pack --dry-run --json failed in ${pkgDir}${tail ? ":\n  " + tail : ""}` +
+        (stdoutTail ? `\n  --- prepack stdout tail (DIAG) ---\n  ${stdoutTail.split("\n").join("\n  ")}` : ""),
+    );
   }
   const { files } = parsePackJson(out);
   return files.map((f) => f.path ?? "");
