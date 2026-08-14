@@ -187,8 +187,8 @@ export interface V1Stub {
    * undoes its own edits. Call in `afterEach`.
    */
   clearEnv(): void;
-  /** Kill the subprocess. Call in `afterAll`. */
-  stop(): void;
+  /** Kill the subprocess and wait for it to exit. Call in `afterAll`. */
+  stop(): Promise<void>;
 }
 
 const DEFAULT_API_KEY = "hasna_emails_stub_key_0123456789";
@@ -263,6 +263,14 @@ const V1_STUB_RESOURCE_DEFAULTS: Record<string, Record<string, unknown>> = {
     important_email_ids_json: [],
     label_counts_json: {},
   },
+  "mailbox-filters": {
+    name: "",
+    normalized_name: "",
+    mailbox: "inbox",
+    criteria: {},
+    created_at: NOW_DEFAULT,
+    updated_at: NOW_DEFAULT,
+  },
   "group-members": { vars: "{}", added_at: NOW_DEFAULT },
   "sequence-steps": {
     step_number: 0,
@@ -286,6 +294,7 @@ const V1_STUB_RESOURCE_DEFAULTS: Record<string, Record<string, unknown>> = {
     headers_json: "{}",
     created_at: NOW_DEFAULT,
   },
+  "priority-sender-rules": {},
 };
 
 const missingResourceDefaults = SELF_HOSTED_RESOURCES
@@ -410,6 +419,31 @@ function hasLabel(row, label) {
   return Array.isArray(row.labels) && row.labels.some(function (v) { return String(v).toLowerCase() === label; });
 }
 function isOutbound(row) { return String(row.direction || "").toLowerCase() === "outbound"; }
+function normalizedSenderEmail(value) {
+  const trimmed = String(value == null ? "" : value).trim();
+  const angled = trimmed.match(/^.+<([^<>]+)>$/);
+  const address = (angled ? angled[1] : trimmed).trim().toLowerCase();
+  const at = address.lastIndexOf("@");
+  if (at <= 0 || at !== address.indexOf("@")) return null;
+  return address;
+}
+function isPriority(row) {
+  if (
+    isOutbound(row)
+    || hasLabel(row, "archived")
+    || hasLabel(row, "spam")
+    || String(row.status || "").toLowerCase() === "spam"
+    || hasLabel(row, "trash")
+  ) return false;
+  const sender = normalizedSenderEmail(row.from_addr);
+  if (!sender) return false;
+  const domain = sender.slice(sender.lastIndexOf("@") + 1);
+  return rowsFor("priority-sender-rules").some(function (rule) {
+    const kind = String(rule.kind || "").trim().toLowerCase();
+    const value = String(rule.value || "").trim().toLowerCase();
+    return (kind === "address" && value === sender) || (kind === "domain" && value === domain);
+  });
+}
 function normalizeMessageRow(row) {
   const source = row || {};
   const now = source.created_at || new Date().toISOString();
@@ -738,6 +772,39 @@ function listMessages(params) {
   };
 }
 
+function mailboxFilterMatches(row, filter) {
+  const criteria = filter && filter.criteria && typeof filter.criteria === "object" ? filter.criteria : {};
+  const inbound = !isOutbound(row);
+  const labels = Array.isArray(row.labels) ? row.labels.map(function (v) { return String(v).toLowerCase(); }) : [];
+  const folder = String(filter && filter.mailbox || "inbox").toLowerCase();
+  const ordinaryInbox = inbound && labels.indexOf("archived") < 0 && labels.indexOf("spam") < 0 && labels.indexOf("trash") < 0;
+  if (folder === "inbox" && !ordinaryInbox) return false;
+  if (folder === "unread" && (!ordinaryInbox || row.is_read)) return false;
+  if (folder === "starred" && (!ordinaryInbox || !row.is_starred)) return false;
+  if (folder === "archived" && (!inbound || labels.indexOf("archived") < 0)) return false;
+  if (folder === "spam" && (!inbound || labels.indexOf("spam") < 0)) return false;
+  if (folder === "trash" && (!inbound || labels.indexOf("trash") < 0)) return false;
+  if (folder === "sent" && !isOutbound(row)) return false;
+  if (criteria.search && !includesText([row.from_addr, row.to_addrs, row.subject, row.body_text].join(" "), criteria.search)) return false;
+  if (criteria.from && !includesText(row.from_addr, criteria.from)) return false;
+  if (criteria.to && !includesText(row.to_addrs, criteria.to)) return false;
+  if (criteria.address && !includesText([row.from_addr, row.to_addrs].join(" "), criteria.address)) return false;
+  if (criteria.subject && !includesText(row.subject, criteria.subject)) return false;
+  if (criteria.domain) {
+    const hay = [row.from_addr, row.to_addrs].join(" ").toLowerCase();
+    if (!hay.split(/[^a-z0-9.-]+/).some(function (part) { return part === String(criteria.domain).toLowerCase(); })) return false;
+  }
+  if (criteria.label && labels.indexOf(String(criteria.label).toLowerCase()) < 0) return false;
+  if (criteria.read === true && !row.is_read && !isOutbound(row)) return false;
+  if (criteria.unread === true && (row.is_read || isOutbound(row))) return false;
+  if (criteria.starred === true && !row.is_starred) return false;
+  if (criteria.archived === true && labels.indexOf("archived") < 0) return false;
+  const timestamp = Date.parse(String(row.received_at || row.created_at || ""));
+  if (criteria.since && timestamp < Date.parse(String(criteria.since))) return false;
+  if (criteria.until && timestamp > Date.parse(String(criteria.until))) return false;
+  return true;
+}
+
 // A /v1 list row as the self-hosted serve actually returns it: bodies, headers
 // and the attachments array are NOT on list rows — only a snippet and an
 // attachment_count integer. Modelling the full row here let a client that counts
@@ -809,6 +876,7 @@ function messageCounts() {
   return {
     inbox: inboxRows.length,
     unread: inboxRows.filter(function (r) { return !r.is_read; }).length,
+    priority: messages.filter(isPriority).length,
     starred: messages.filter(function (r) {
       return !isOutbound(r) && Boolean(r.is_starred) && !hasLabel(r, "archived") && !hasLabel(r, "spam") && !hasLabel(r, "trash");
     }).length,
@@ -1286,6 +1354,31 @@ const server = Bun.serve({
       return json({ valid: true, authorized: isOwnerAuthorizedFrom(key.owner_id, from), key: key });
     }
 
+    // Saved-filter apply is a bespoke route in production. Keep this fixture
+    // server-side as well so TUI tests exercise the same request boundary.
+    if (resource === "mailbox-filters" && id !== undefined && parts[3] === "apply" && req.method === "POST") {
+      const filters = rowsFor(resource);
+      const filter = filters.find(function (row) { return String(row.id) === id || String(row.normalized_name) === id; });
+      if (!filter) return json({ error: "mailbox filter not found", code: "not_found" }, 404);
+      const rawLimit = Number(new URL(req.url).searchParams.get("limit") || "100");
+      const limit = !rawLimit || Number.isNaN(rawLimit) ? 100 : Math.min(Math.max(1, Math.floor(rawLimit)), 1000);
+      const rawOffset = Number(new URL(req.url).searchParams.get("offset") || "0");
+      const offset = !Number.isFinite(rawOffset) || rawOffset < 0 ? 0 : Math.floor(rawOffset);
+      const ordered = rowsFor("messages").slice().sort(function (a, b) {
+        return String(b.received_at || b.created_at || "").localeCompare(String(a.received_at || a.created_at || ""))
+          || String(b.id || "").localeCompare(String(a.id || ""));
+      });
+      const matches = ordered.filter(function (row) { return mailboxFilterMatches(row, filter); });
+      const page = matches.slice(offset, offset + limit + 1);
+      return json({
+        filter: { name: filter.name, criteria: filter.criteria },
+        items: page.slice(0, limit).map(leanListRow),
+        limit: limit,
+        offset: offset,
+        truncated: page.length > limit,
+      });
+    }
+
     const rows = rowsFor(resource);
 
     if (id === undefined && req.method === "GET") {
@@ -1466,6 +1559,7 @@ export async function startV1Stub(options: V1StubOptions = {}): Promise<V1Stub> 
   reader.releaseLock();
   if (!baseUrl) {
     proc.kill();
+    await proc.exited;
     throw new Error("v1-stub server did not report a port within 10s");
   }
 
@@ -1587,8 +1681,9 @@ export async function startV1Stub(options: V1StubOptions = {}): Promise<V1Stub> 
       resetSelfHostedConfigCache();
       resetMailDataSource();
     },
-    stop() {
+    async stop() {
       proc.kill();
+      await proc.exited;
     },
   };
 

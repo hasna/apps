@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.microservices/
+*.db
+*.db-shm
+*.db-wal
+.takumi/
+.codewith/
+.hasna/
+.env
+.env.*
+hasna-domains-*.tgz
+.pipe-e2e/
+.pipe-e2e-fixture/
