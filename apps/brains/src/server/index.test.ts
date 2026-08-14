@@ -158,4 +158,36 @@ describe("brains server", () => {
     const updated = await patchResp.json() as { displayName: string };
     expect(updated.displayName).toBe("Updated Name");
   });
+
+  test("read-after-write stays consistent when BRAINS_DB_PATH is a private in-memory store", async () => {
+    // Regression for the recurring CI flake: a sibling test file ran
+    // `process.env.BRAINS_DB_PATH = ":memory:"` at module top and bun's
+    // worker pool reused that process for this file, so every getDb() call
+    // resolved to a PRIVATE per-connection in-memory database. The insert
+    // "succeeded" on connection A while the GET handler read connection B —
+    // a different, empty database — and returned 404. getDb() now shares one
+    // connection per resolved path, so the write and the read are the same
+    // database by construction.
+    process.env.BRAINS_DB_PATH = ":memory:";
+    try {
+      const { getDb, fineTunedModels } = await import("../db/index.js");
+      const db = getDb();
+      const id = `test-server-memory-${Date.now()}`;
+      const now = Date.now();
+      await db.insert(fineTunedModels).values({
+        id,
+        baseModel: "gpt-4o-mini",
+        name: "test",
+        provider: "openai",
+        status: "pending",
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      const getResp = await get(`/models/${id}`);
+      expect(getResp.status).toBe(200);
+    } finally {
+      delete process.env.BRAINS_DB_PATH;
+    }
+  });
 });

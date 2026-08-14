@@ -1,4 +1,5 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { ZodRawShapeCompat } from "@modelcontextprotocol/sdk/server/zod-compat.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { generateChangelogMarkdown } from "../markdown.js";
@@ -299,7 +300,7 @@ export function buildChangelogMcpTools(store: ChangelogStore = new LocalChangelo
 export function registerChangelogMcpTools(server: McpServer, store?: ChangelogStore): ChangelogMcpToolDefinition[] {
   const tools = buildChangelogMcpTools(store);
   for (const tool of tools) {
-    server.tool(tool.name, tool.description, tool.paramsSchema, async (input) => tool.run(readRecord(input)));
+    server.tool(tool.name, tool.description, tool.paramsSchema as unknown as ZodRawShapeCompat, async (input: unknown) => tool.run(readRecord(input)));
   }
   return tools;
 }
