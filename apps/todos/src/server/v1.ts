@@ -1,0 +1,1817 @@
+/**
+ * Versioned `/v1` HTTP API for `todos-serve` (A1 pure-remote).
+ *
+ * Every handler goes through the repo-native Postgres storage adapter
+ * (`getCloudStorageAdapter`) which reads/writes the shared RDS directly. Auth is
+ * enforced by the contracts API-key verifier: reads require `todos:read`, writes
+ * require `todos:write` (a `todos:*` key satisfies both). This is a real wrapper
+ * over the core storage lib — there are NO stubs; unimplemented routes 404.
+ */
+import { LockError, PlanNotFoundError, PlanRevisionConflictError, ProjectNotFoundError, ResourceConflictError, StaleLockHandoffError, TaskNotFoundError, TaskNotStartableError, TaskReferenceAmbiguousError, VersionConflictError, TASK_PRIORITIES, TASK_STATUSES } from "../types/index.js";
+import { collapseEnumValues, resolveEnumVocabulary } from "../lib/enum-vocabulary.js";
+import type { CreatePlanInput, CreateProjectInput, CreateTaskInput, CreateTaskListInput, CreateTemplateInput, RenameProjectInput, TaskComment, TemplateTaskInput, UpdateTaskInput, UpdateTaskListInput } from "../types/index.js";
+import type { TodosStorageContext, TodosStorageSnapshot, TodosTaskCompletionOptions, UpdateTemplateInput } from "../storage/interfaces.js";
+import {
+  ensureCloudSchema,
+  getCloudPrGroupLedger,
+  getCloudProjectRegistrationAuthority,
+  getCloudStorageAdapter,
+  getCloudTaskManifestAuthority,
+  getCloudVerifier,
+} from "./cloud.js";
+import { handlePrGroupHttpRequest } from "./pr-groups.js";
+import { handleTodosProjectRegistrationHttpRequest } from "../project-registration/index.js";
+import { handleTodosTaskManifestHttpRequest } from "../task-manifest/index.js";
+import { redactEvidenceText } from "../lib/redaction.js";
+import { isCanonicalSlug, normalizeSlug } from "../lib/slugs.js";
+import { decodeCommentCursor, encodeCommentCursor } from "../lib/comment-cursor.js";
+import {
+  ProjectTaskListEnsureError,
+  applyProjectTaskListEnsure,
+  planProjectTaskListEnsure,
+  rollbackProjectTaskListEnsure,
+} from "../lib/project-task-list-ensure.js";
+import {
+  PlanProjectLinkError,
+  applyPlanProjectLink,
+  planPlanProjectLink,
+  rollbackPlanProjectLink,
+} from "../lib/plan-project-link.js";
+import { normalizeExactTaskId } from "../lib/stale-lock-handoff.js";
+import {
+  AUDIT_HISTORY_TOMBSTONE_FORBIDDEN,
+  forbiddenAuditHistoryTombstoneError,
+  parseAuditHistoryImportFailure,
+} from "../storage/audit-history-import.js";
+
+export interface V1RequestDependencies {
+  getVerifier?: typeof getCloudVerifier;
+  ensureSchema?: typeof ensureCloudSchema;
+  getStorageAdapter?: typeof getCloudStorageAdapter;
+  getPrGroupLedger?: typeof getCloudPrGroupLedger;
+  getProjectRegistrationAuthority?: typeof getCloudProjectRegistrationAuthority;
+  getTaskManifestAuthority?: typeof getCloudTaskManifestAuthority;
+}
+
+const JSON_HEADERS = { "Content-Type": "application/json" } as const;
+const DEFAULT_COMMENT_PAGE_SIZE = 100;
+const MAX_COMMENT_PAGE_SIZE = 500;
+const LEGACY_COMMENT_RESPONSE_LIMIT = 500;
+
+function json(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), { status, headers: JSON_HEADERS });
+}
+
+function error(status: number, message: string, extra?: Record<string, unknown>): Response {
+  return json({ error: message, ...(extra ?? {}) }, status);
+}
+
+/**
+ * Validate a closed-vocabulary query param, or 400.
+ *
+ * `status` and `priority` used to be cast `as never` and handed to the store
+ * unchecked, so `GET /v1/tasks?status=open` returned `{"tasks":[],"count":0}` with
+ * HTTP 200 — an authoritative-looking "there is nothing" for a value the API does
+ * not have. Comma-separated multi-values are supported, and EVERY element is
+ * validated: one bad element fails the request rather than being dropped from the
+ * `IN (...)` set, which would answer a different question than the one asked.
+ *
+ * Unlike the CLI this applies no aliasing and no case folding: the vocabulary in
+ * the OpenAPI enum is the contract, and clients that want ergonomics (the `todos`
+ * CLI included) canonicalize before they call. `undefined` means "param absent".
+ */
+function enumQueryParam<T extends string>(
+  url: URL,
+  name: string,
+  vocabulary: readonly T[],
+): { ok: true; value: T | T[] | undefined } | { ok: false; response: Response } {
+  const raw = url.searchParams.get(name);
+  if (raw === null || raw === "") return { ok: true, value: undefined };
+  const result = resolveEnumVocabulary(raw, { name, vocabulary });
+  if (!result.ok) return { ok: false, response: error(400, result.message) };
+  return { ok: true, value: collapseEnumValues(result.values) };
+}
+
+/**
+ * Strict RFC 3339 date-time, normalised to one canonical spelling.
+ *
+ * THE VALIDATOR AND THE COMPARATOR MUST ACCEPT THE SAME LANGUAGE. They did not.
+ * `Date.parse` guarded the door while SQLite `julianday()` did the comparing,
+ * and the two disagree about what a string means — measured 2026-08-07:
+ *
+ *     st=200 rows=3 total=3   ?updated_after=2026            <- THE WHOLE TABLE
+ *     st=200 rows=0 total=0   ?updated_after=2026-08
+ *     st=200 rows=0 total=0   ?updated_after=March 5, 2026
+ *
+ * `Date.parse("2026")` is a valid year, so the request passed validation; SQLite
+ * reads a bare number as a raw Julian Day, so the predicate matched everything
+ * and the caller got the entire table back under a 200 — the precise defect this
+ * parameter was added to end, reintroduced through the front door. `2026-08` and
+ * `March 5, 2026` fail the other way, silently returning nothing.
+ *
+ * So: accept exactly RFC 3339 (date, `T`, time, and a MANDATORY `Z` or numeric
+ * offset), then hand every backend one grammar by normalising to
+ * `YYYY-MM-DDTHH:MM:SS.sssZ`. A reduced-precision value is refused rather than
+ * guessed at, because guessing is what produced the two rows above.
+ */
+const RFC3339_DATE_TIME = /^(\d{4})-(\d{2})-(\d{2})[Tt]\d{2}:\d{2}:\d{2}(\.\d+)?([Zz]|[+-]\d{2}:\d{2})$/;
+
+function parseSinceCursor(raw: string):
+  | { ok: true; value: string }
+  | { ok: false; message: string } {
+  const shape = `updated_after must be an RFC 3339 date-time with an explicit offset, `
+    + `e.g. 2026-08-07T12:00:00Z or 2026-08-07T12:00:00+03:00; got ${JSON.stringify(raw)}`;
+  const match = RFC3339_DATE_TIME.exec(raw);
+  if (!match) return { ok: false, message: shape };
+  const parsed = Date.parse(raw);
+  if (Number.isNaN(parsed)) return { ok: false, message: shape };
+  // The regex proves the SHAPE; it cannot prove the date EXISTS. `2026-02-30`
+  // satisfies it and `Date.parse` silently rolls it forward to 2026-03-02, so a
+  // caller asking for a day that is not on the calendar would be answered from a
+  // different instant than the one they named, with no way to tell.
+  const [, year, month, day] = match as unknown as [string, string, string, string];
+  const probe = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)));
+  if (
+    probe.getUTCFullYear() !== Number(year)
+    || probe.getUTCMonth() !== Number(month) - 1
+    || probe.getUTCDate() !== Number(day)
+  ) {
+    return { ok: false, message: `updated_after names a date that does not exist: ${JSON.stringify(raw)}` };
+  }
+  return { ok: true, value: new Date(parsed).toISOString() };
+}
+
+function validateTaskCompletion(value: unknown):
+  | { ok: true; agentId?: string; options: TodosTaskCompletionOptions }
+  | { ok: false; message: string } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return { ok: false, message: "completion body must be an object" };
+  const body = value as Record<string, unknown>;
+  const allowed = new Set(["agent_id", "attachment_ids", "files_changed", "test_results", "commit_hash", "notes", "confidence"]);
+  const unknown = Object.keys(body).find((key) => !allowed.has(key));
+  if (unknown) return { ok: false, message: `unknown completion field: ${unknown}` };
+  if (body.agent_id !== undefined && (typeof body.agent_id !== "string" || !body.agent_id.trim())) {
+    return { ok: false, message: "agent_id must be a non-empty string" };
+  }
+  for (const field of ["attachment_ids", "files_changed"] as const) {
+    const value = body[field];
+    if (value !== undefined && (!Array.isArray(value) || value.some((item) => typeof item !== "string" || !item.trim()))) {
+      return { ok: false, message: `${field} must be an array of non-empty strings` };
+    }
+  }
+  for (const field of ["test_results", "commit_hash", "notes"] as const) {
+    if (body[field] !== undefined && typeof body[field] !== "string") {
+      return { ok: false, message: `${field} must be a string` };
+    }
+  }
+  if (body.confidence !== undefined &&
+      (typeof body.confidence !== "number" || !Number.isFinite(body.confidence) || body.confidence < 0 || body.confidence > 1)) {
+    return { ok: false, message: "confidence must be a number between 0 and 1" };
+  }
+  return {
+    ok: true,
+    ...(typeof body.agent_id === "string" ? { agentId: body.agent_id } : {}),
+    options: {
+      ...(Array.isArray(body.attachment_ids) ? { attachment_ids: body.attachment_ids as string[] } : {}),
+      ...(Array.isArray(body.files_changed) ? { files_changed: body.files_changed as string[] } : {}),
+      ...(typeof body.test_results === "string" ? { test_results: body.test_results } : {}),
+      ...(typeof body.commit_hash === "string" ? { commit_hash: body.commit_hash } : {}),
+      ...(typeof body.notes === "string" ? { notes: body.notes } : {}),
+      ...(typeof body.confidence === "number" ? { confidence: body.confidence } : {}),
+    },
+  };
+}
+
+function validateTaskFailure(value: unknown):
+  | { ok: true; agentId?: string; reason: string; retry: boolean }
+  | { ok: false; message: string } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return { ok: false, message: "failure body must be an object" };
+  const body = value as Record<string, unknown>;
+  const allowed = new Set(["agent_id", "reason", "retry"]);
+  const unknown = Object.keys(body).find((key) => !allowed.has(key));
+  if (unknown) return { ok: false, message: `unknown failure field: ${unknown}` };
+  if (body.agent_id !== undefined && (typeof body.agent_id !== "string" || !body.agent_id.trim())) {
+    return { ok: false, message: "agent_id must be a non-empty string" };
+  }
+  if (body.reason !== undefined && typeof body.reason !== "string") return { ok: false, message: "reason must be a string" };
+  if (body.retry !== undefined && typeof body.retry !== "boolean") return { ok: false, message: "retry must be a boolean" };
+  return {
+    ok: true,
+    ...(typeof body.agent_id === "string" ? { agentId: body.agent_id } : {}),
+    reason: typeof body.reason === "string" && body.reason ? body.reason : "Unknown failure",
+    retry: body.retry === true,
+  };
+}
+
+function validateTaskPatchVocabulary(value: unknown):
+  | { ok: true; patch: Partial<UpdateTaskInput> }
+  | { ok: false; message: string } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return { ok: false, message: "task patch must be an object" };
+  const body = value as Record<string, unknown>;
+  for (const [name, vocabulary] of [["status", TASK_STATUSES], ["priority", TASK_PRIORITIES]] as const) {
+    const raw = body[name];
+    if (raw === undefined) continue;
+    if (typeof raw !== "string") return { ok: false, message: `${name} must be a string. Allowed values: ${vocabulary.join(", ")}.` };
+    const parsed = resolveEnumVocabulary(raw, { name, vocabulary, allowList: false });
+    if (!parsed.ok) return { ok: false, message: parsed.message };
+  }
+  if (
+    body.parent_id !== undefined
+    && body.parent_id !== null
+    && (typeof body.parent_id !== "string" || !body.parent_id.trim())
+  ) {
+    return { ok: false, message: "parent_id must be a non-empty task id or null" };
+  }
+  return { ok: true, patch: body as Partial<UpdateTaskInput> };
+}
+
+function validateProjectPatch(value: unknown):
+  | { ok: true; patch: Partial<Pick<CreateProjectInput, "name" | "path" | "description">> }
+  | { ok: false; message: string } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return { ok: false, message: "project patch must be an object" };
+  const body = value as Record<string, unknown>;
+  const allowed = new Set(["name", "path", "description"]);
+  const unknown = Object.keys(body).find((key) => !allowed.has(key));
+  if (unknown) return { ok: false, message: `unknown project field: ${unknown}` };
+  if (Object.keys(body).length === 0) return { ok: false, message: "project patch must not be empty" };
+  if (body["name"] !== undefined && (typeof body["name"] !== "string" || !body["name"].trim())) return { ok: false, message: "name must be a non-empty string" };
+  if (body["path"] !== undefined && (typeof body["path"] !== "string" || !body["path"].trim())) return { ok: false, message: "path must be a non-empty string" };
+  if (body["description"] !== undefined && body["description"] !== null && typeof body["description"] !== "string") return { ok: false, message: "description must be a string or null" };
+  return { ok: true, patch: body as never };
+}
+
+function validateProjectCreate(value: unknown):
+  | { ok: true; input: Pick<CreateProjectInput, "name" | "path" | "description" | "task_list_id" | "task_prefix"> }
+  | { ok: false; message: string } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return { ok: false, message: "project body must be an object" };
+  const body = value as Record<string, unknown>;
+  const allowed = new Set(["name", "path", "description", "task_list_id", "task_prefix"]);
+  const unknown = Object.keys(body).find((key) => !allowed.has(key));
+  if (unknown) return { ok: false, message: `unknown project field: ${unknown}` };
+  if (typeof body["name"] !== "string" || !body["name"].trim()) return { ok: false, message: "name must be a non-empty string" };
+  if (!normalizeSlug(body["name"])) return { ok: false, message: "name must produce a non-empty canonical slug" };
+  if (typeof body["path"] !== "string" || !body["path"].trim()) return { ok: false, message: "path must be a non-empty string" };
+  if (body["description"] !== undefined && typeof body["description"] !== "string") return { ok: false, message: "description must be a string" };
+  if (body["task_list_id"] !== undefined && !isCanonicalSlug(body["task_list_id"])) {
+    return { ok: false, message: "task_list_id must be non-empty canonical kebab-case" };
+  }
+  if (body["task_prefix"] !== undefined && (typeof body["task_prefix"] !== "string" || !body["task_prefix"].trim())) {
+    return { ok: false, message: "task_prefix must be a non-empty string" };
+  }
+  return { ok: true, input: body as never };
+}
+
+function validatePlanCreate(value: unknown):
+  | { ok: true; input: CreatePlanInput }
+  | { ok: false; message: string } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return { ok: false, message: "plan body must be an object" };
+  const body = value as Record<string, unknown>;
+  const allowed = new Set(["title", "name", "slug", "description", "project_id", "task_list_id", "agent_id", "status"]);
+  const unknown = Object.keys(body).find((key) => !allowed.has(key));
+  if (unknown) return { ok: false, message: `unknown plan field: ${unknown}` };
+  if (body.name !== undefined && (typeof body.name !== "string" || !body.name.trim())) return { ok: false, message: "name must be a non-empty string" };
+  if (body.title !== undefined && (typeof body.title !== "string" || !body.title.trim())) return { ok: false, message: "title must be a non-empty string" };
+  if (typeof body.name === "string" && typeof body.title === "string" && body.name !== body.title) {
+    return { ok: false, message: "name and title must match when both are provided" };
+  }
+  const name = (body.name ?? body.title) as string | undefined;
+  if (!name) return { ok: false, message: "name is required" };
+  for (const field of ["slug", "project_id", "task_list_id", "agent_id"] as const) {
+    if (body[field] !== undefined && (typeof body[field] !== "string" || !body[field].trim())) {
+      return { ok: false, message: `${field} must be a non-empty string` };
+    }
+  }
+  const slug = typeof body.slug === "string" ? normalizeSlug(body.slug) : undefined;
+  if (body.slug !== undefined && !slug) return { ok: false, message: "slug must produce a non-empty canonical slug" };
+  if (body.description !== undefined && typeof body.description !== "string") return { ok: false, message: "description must be a string" };
+  if (body.status !== undefined &&
+      (typeof body.status !== "string" || !["active", "completed", "archived"].includes(body.status))) {
+    return { ok: false, message: "status must be active, completed, or archived" };
+  }
+  return {
+    ok: true,
+    input: {
+      name,
+      ...(slug ? { slug } : {}),
+      ...(typeof body.description === "string" ? { description: body.description } : {}),
+      ...(typeof body.project_id === "string" ? { project_id: body.project_id } : {}),
+      ...(typeof body.task_list_id === "string" ? { task_list_id: body.task_list_id } : {}),
+      ...(typeof body.agent_id === "string" ? { agent_id: body.agent_id } : {}),
+      ...(typeof body.status === "string" ? { status: body.status as CreatePlanInput["status"] } : {}),
+    },
+  };
+}
+
+function validateTemplateTask(value: unknown): TemplateTaskInput | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const body = value as Record<string, unknown>;
+  const allowed = new Set(["position", "title_pattern", "description", "priority", "tags", "task_type", "condition", "include_template_id", "depends_on", "depends_on_positions", "metadata"]);
+  if (Object.keys(body).some((key) => !allowed.has(key))) return null;
+  if (typeof body.title_pattern !== "string" || !body.title_pattern.trim()) return null;
+  if (body.position !== undefined && (typeof body.position !== "number" || !Number.isSafeInteger(body.position) || body.position < 0)) return null;
+  if (body.description !== undefined && body.description !== null && typeof body.description !== "string") return null;
+  if (body.priority !== undefined && (typeof body.priority !== "string" || !["low", "medium", "high", "critical"].includes(body.priority))) return null;
+  if (body.tags !== undefined && (!Array.isArray(body.tags) || body.tags.some((tag) => typeof tag !== "string" || !tag.trim()))) return null;
+  for (const field of ["task_type", "condition", "include_template_id"] as const) {
+    if (body[field] !== undefined && body[field] !== null && (typeof body[field] !== "string" || !body[field].trim())) return null;
+  }
+  if (body.depends_on !== undefined && body.depends_on_positions !== undefined) return null;
+  const dependencies = body.depends_on ?? body.depends_on_positions;
+  if (dependencies !== undefined && (!Array.isArray(dependencies) || dependencies.some((position) => !Number.isSafeInteger(position) || position < 0))) return null;
+  if (body.metadata !== undefined && (!body.metadata || typeof body.metadata !== "object" || Array.isArray(body.metadata))) return null;
+  return {
+    title_pattern: body.title_pattern,
+    ...(typeof body.description === "string" ? { description: body.description } : {}),
+    ...(typeof body.priority === "string" ? { priority: body.priority as TemplateTaskInput["priority"] } : {}),
+    ...(Array.isArray(body.tags) ? { tags: body.tags as string[] } : {}),
+    ...(typeof body.task_type === "string" ? { task_type: body.task_type } : {}),
+    ...(typeof body.condition === "string" ? { condition: body.condition } : {}),
+    ...(typeof body.include_template_id === "string" ? { include_template_id: body.include_template_id } : {}),
+    ...(Array.isArray(dependencies) ? { depends_on: dependencies as number[] } : {}),
+    ...(body.metadata && typeof body.metadata === "object" && !Array.isArray(body.metadata) ? { metadata: body.metadata as Record<string, unknown> } : {}),
+  };
+}
+
+function validateTemplateCreate(value: unknown):
+  | { ok: true; input: CreateTemplateInput }
+  | { ok: false; message: string } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return { ok: false, message: "template body must be an object" };
+  const body = value as Record<string, unknown>;
+  const allowed = new Set(["name", "title_pattern", "description", "priority", "tags", "variables", "project_id", "plan_id", "metadata", "tasks"]);
+  const unknown = Object.keys(body).find((key) => !allowed.has(key));
+  if (unknown) return { ok: false, message: `unknown template field: ${unknown}` };
+  if (typeof body.name !== "string" || !body.name.trim()) return { ok: false, message: "name must be a non-empty string" };
+  if (typeof body.title_pattern !== "string" || !body.title_pattern.trim()) return { ok: false, message: "title_pattern must be a non-empty string" };
+  if (body.description !== undefined && body.description !== null && typeof body.description !== "string") return { ok: false, message: "description must be a string or null" };
+  if (body.priority !== undefined && (typeof body.priority !== "string" || !["low", "medium", "high", "critical"].includes(body.priority))) return { ok: false, message: "priority must be low, medium, high, or critical" };
+  if (body.tags !== undefined && (!Array.isArray(body.tags) || body.tags.some((tag) => typeof tag !== "string" || !tag.trim()))) return { ok: false, message: "tags must be an array of non-empty strings" };
+  if (body.variables !== undefined && (!Array.isArray(body.variables) || body.variables.some((variable) => !variable || typeof variable !== "object" || Array.isArray(variable) ||
+    typeof (variable as Record<string, unknown>).name !== "string" || !(variable as Record<string, unknown>).name ||
+    typeof (variable as Record<string, unknown>).required !== "boolean" ||
+    ((variable as Record<string, unknown>).default !== undefined && typeof (variable as Record<string, unknown>).default !== "string") ||
+    ((variable as Record<string, unknown>).description !== undefined && typeof (variable as Record<string, unknown>).description !== "string")))) {
+    return { ok: false, message: "variables must be valid template variable objects" };
+  }
+  for (const field of ["project_id", "plan_id"] as const) {
+    if (body[field] !== undefined && body[field] !== null && (typeof body[field] !== "string" || !body[field].trim())) return { ok: false, message: `${field} must be a non-empty string or null` };
+  }
+  if (body.metadata !== undefined && (!body.metadata || typeof body.metadata !== "object" || Array.isArray(body.metadata))) return { ok: false, message: "metadata must be an object" };
+  const tasks = body.tasks === undefined ? [] : Array.isArray(body.tasks) ? body.tasks.map(validateTemplateTask) : null;
+  if (tasks === null || tasks.some((task) => task === null)) return { ok: false, message: "tasks must be valid template task objects" };
+  const taskInputs = tasks as TemplateTaskInput[];
+  for (const [position, task] of taskInputs.entries()) {
+    if ((task.depends_on ?? []).some((dependency) => dependency >= position)) {
+      return { ok: false, message: "template task dependencies must reference earlier task positions" };
+    }
+  }
+  return {
+    ok: true,
+    input: {
+      name: body.name,
+      title_pattern: body.title_pattern,
+      ...(typeof body.description === "string" ? { description: body.description } : {}),
+      ...(typeof body.priority === "string" ? { priority: body.priority as CreateTemplateInput["priority"] } : {}),
+      ...(Array.isArray(body.tags) ? { tags: body.tags as string[] } : {}),
+      ...(Array.isArray(body.variables) ? { variables: body.variables as CreateTemplateInput["variables"] } : {}),
+      ...(typeof body.project_id === "string" ? { project_id: body.project_id } : {}),
+      ...(typeof body.plan_id === "string" ? { plan_id: body.plan_id } : {}),
+      ...(body.metadata && typeof body.metadata === "object" && !Array.isArray(body.metadata) ? { metadata: body.metadata as Record<string, unknown> } : {}),
+      tasks: taskInputs,
+    },
+  };
+}
+
+function validateTemplatePatch(value: unknown):
+  | { ok: true; patch: UpdateTemplateInput }
+  | { ok: false; message: string } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return { ok: false, message: "template patch must be an object" };
+  const body = value as Record<string, unknown>;
+  const allowed = new Set(["name", "title_pattern", "description", "priority", "tags", "variables", "project_id", "plan_id", "metadata"]);
+  const unknown = Object.keys(body).find((key) => !allowed.has(key));
+  if (unknown) return { ok: false, message: `unknown template field: ${unknown}` };
+  if (Object.keys(body).length === 0) return { ok: false, message: "template patch must not be empty" };
+  const templateLike = { name: body.name ?? "template", title_pattern: body.title_pattern ?? "template", ...body };
+  const validated = validateTemplateCreate(templateLike);
+  if (!validated.ok) return validated;
+  const { name: _name, title_pattern: _title, tasks: _tasks, ...patch } = validated.input;
+  return { ok: true, patch: {
+    ...(body.name !== undefined ? { name: validated.input.name } : {}),
+    ...(body.title_pattern !== undefined ? { title_pattern: validated.input.title_pattern } : {}),
+    ...patch,
+    // Preserve an explicitly requested clear. Create validation intentionally
+    // normalizes optional nulls away, but PATCH must distinguish null from an
+    // omitted field or it would acknowledge a clear while retaining stale data.
+    ...(body.description === null ? { description: null } : {}),
+    ...(body.project_id === null ? { project_id: null } : {}),
+    ...(body.plan_id === null ? { plan_id: null } : {}),
+  } };
+}
+
+async function readJson<T>(req: Request): Promise<T | null> {
+  try {
+    const text = await req.text();
+    if (!text) return {} as T;
+    return JSON.parse(text) as T;
+  } catch {
+    return null;
+  }
+}
+
+async function readOptionalJson(req: Request): Promise<{ ok: true; value: unknown } | { ok: false }> {
+  try {
+    const text = await req.text();
+    if (!text.trim()) return { ok: true, value: {} };
+    return { ok: true, value: JSON.parse(text) as unknown };
+  } catch {
+    return { ok: false };
+  }
+}
+
+function contextFromPrincipal(principal: { agent: string | null }, body?: { agent_id?: string }): TodosStorageContext {
+  const agentId = body?.agent_id || principal.agent || undefined;
+  return agentId ? { agentId } : {};
+}
+
+function redactComment(comment: TaskComment): TaskComment {
+  return { ...comment, content: redactEvidenceText(comment.content) };
+}
+
+// The comment cursor codec moved to src/lib/comment-cursor.ts so the CLI can
+// decode the very cursors this endpoint mints. Imported at the top of the file.
+
+/**
+ * Coerce an arbitrary request body into a well-formed {@link TodosStorageSnapshot}.
+ *
+ * Every record array is optional and defaults to `[]`, so a caller can backfill a
+ * single object type (e.g. just `tasks`) or a full snapshot. Non-array values for
+ * a record key are treated as empty rather than throwing, keeping partial-chunk
+ * ingest robust. The returned snapshot is safe to hand straight to
+ * `storage.sync.importSnapshot`, which upserts every row by primary key (idempotent).
+ */
+export function normalizeImportSnapshot(raw: unknown): TodosStorageSnapshot {
+  const body = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+  const arr = <T>(v: unknown): T[] => (Array.isArray(v) ? (v as T[]) : []);
+  return {
+    exportedAt: typeof body["exportedAt"] === "string" ? (body["exportedAt"] as string) : new Date().toISOString(),
+    source: (typeof body["source"] === "string" ? body["source"] : "sqlite") as TodosStorageSnapshot["source"],
+    tasks: arr(body["tasks"]),
+    projects: arr(body["projects"]),
+    projectMachinePaths: arr(body["projectMachinePaths"]),
+    plans: arr(body["plans"]),
+    agents: arr(body["agents"]),
+    taskLists: arr(body["taskLists"]),
+    templates: arr(body["templates"]),
+    templateTasks: arr(body["templateTasks"]),
+    auditHistory: arr(body["auditHistory"]),
+    tombstones: arr(body["tombstones"]),
+  };
+}
+
+/** Total number of records (across every object type) carried by a snapshot. */
+export function countSnapshotRecords(s: TodosStorageSnapshot): number {
+  return (
+    s.tasks.length +
+    s.projects.length +
+    (s.projectMachinePaths?.length ?? 0) +
+    s.plans.length +
+    s.agents.length +
+    s.taskLists.length +
+    s.templates.length +
+    s.templateTasks.length +
+    s.auditHistory.length +
+    (s.tombstones?.length ?? 0)
+  );
+}
+
+interface PlanCompletionImport {
+  id: string;
+  expected_updated_at: string;
+  status: "completed";
+}
+
+function validatePlanCompletionImports(raw: unknown):
+  | { present: false; operations: [] }
+  | { present: true; operations: PlanCompletionImport[]; error?: string } {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return { present: false, operations: [] };
+  }
+  const body = raw as Record<string, unknown>;
+  if (!Object.prototype.hasOwnProperty.call(body, "planCompletions")) {
+    return { present: false, operations: [] };
+  }
+  if (!Array.isArray(body["planCompletions"]) || body["planCompletions"].length !== 1) {
+    return {
+      present: true,
+      operations: [],
+      error: "planCompletions must contain exactly one completion operation",
+    };
+  }
+  const operation = body["planCompletions"][0];
+  if (!operation || typeof operation !== "object" || Array.isArray(operation)) {
+    return { present: true, operations: [], error: "plan completion must be an object" };
+  }
+  const record = operation as Record<string, unknown>;
+  const allowed = new Set(["id", "expected_updated_at", "status"]);
+  const unknown = Object.keys(record).find((key) => !allowed.has(key));
+  if (unknown) {
+    return { present: true, operations: [], error: `unknown plan completion field: ${unknown}` };
+  }
+  if (typeof record["id"] !== "string" || !record["id"].trim()) {
+    return { present: true, operations: [], error: "plan completion id must be a non-empty string" };
+  }
+  if (record["status"] !== "completed") {
+    return { present: true, operations: [], error: "plan completion status must be completed" };
+  }
+  const expectedUpdatedAt = typeof record["expected_updated_at"] === "string"
+    ? record["expected_updated_at"]
+    : "";
+  const timestampMatch = RFC3339_DATE_TIME.exec(expectedUpdatedAt);
+  const parsedTimestamp = Date.parse(expectedUpdatedAt);
+  if (!timestampMatch || Number.isNaN(parsedTimestamp)) {
+    return {
+      present: true,
+      operations: [],
+      error: "plan completion expected_updated_at must be an RFC 3339 date-time with an explicit offset",
+    };
+  }
+  const [, year, month, day] = timestampMatch as unknown as [string, string, string, string];
+  const calendarProbe = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)));
+  if (
+    calendarProbe.getUTCFullYear() !== Number(year)
+    || calendarProbe.getUTCMonth() !== Number(month) - 1
+    || calendarProbe.getUTCDate() !== Number(day)
+  ) {
+    return {
+      present: true,
+      operations: [],
+      error: "plan completion expected_updated_at names a date that does not exist",
+    };
+  }
+  return {
+    present: true,
+    operations: [{
+      id: record["id"],
+      expected_updated_at: expectedUpdatedAt,
+      status: "completed",
+    }],
+  };
+}
+
+/**
+ * Handle a `/v1/*` request. Returns `null` when the path is not a `/v1` route so
+ * the caller can fall through to other handlers.
+ */
+export async function handleV1Request(
+  req: Request,
+  url: URL,
+  dependencies: V1RequestDependencies = {},
+): Promise<Response | null> {
+  const path = url.pathname;
+  if (path !== "/v1" && !path.startsWith("/v1/")) return null;
+
+  const method = req.method.toUpperCase();
+  const isWrite = method !== "GET" && method !== "HEAD";
+  const requiredScopes = [isWrite ? "todos:write" : "todos:read"];
+
+  // ── Auth (contracts API-key verifier) ──
+  let verifier;
+  try {
+    verifier = (dependencies.getVerifier ?? getCloudVerifier)();
+  } catch (e) {
+    return error(503, (e as Error).message);
+  }
+  const decision = await verifier.authenticate(req.headers, { method, path, requiredScopes });
+  if (!decision.ok) {
+    return error(decision.status, decision.message, { reason: decision.reason });
+  }
+  const principal = decision.principal;
+
+  // Schema is idempotently ensured on the first authenticated request.
+  await (dependencies.ensureSchema ?? ensureCloudSchema)();
+  if (path === "/v1/pr-groups" || path.startsWith("/v1/pr-groups/")) {
+    return handlePrGroupHttpRequest(
+      req,
+      url,
+      (dependencies.getPrGroupLedger ?? getCloudPrGroupLedger)(),
+      "/v1/pr-groups",
+      { actor_id: principal.agent, actor_run_id: principal.kid },
+    );
+  }
+  if (
+    path === "/v1/project-registration"
+    || path.startsWith("/v1/project-registration/")
+  ) {
+    return handleTodosProjectRegistrationHttpRequest(
+      req,
+      url,
+      (dependencies.getProjectRegistrationAuthority
+        ?? getCloudProjectRegistrationAuthority)(),
+    );
+  }
+  if (path === "/v1/task-manifest" || path.startsWith("/v1/task-manifest/")) {
+    return handleTodosTaskManifestHttpRequest(
+      req,
+      url,
+      (dependencies.getTaskManifestAuthority ?? getCloudTaskManifestAuthority)(),
+    );
+  }
+  const store = (dependencies.getStorageAdapter ?? getCloudStorageAdapter)();
+
+  const segments = path.split("/").filter(Boolean); // ["v1", resource, id?, action?, subId?]
+  const resource = segments[1];
+  const id = segments[2];
+  const action = segments[3];
+  const subId = segments[4];
+
+  try {
+    // ── /v1/tasks ──
+    if (resource === "tasks") {
+      // ── POST /v1/tasks/exists — bulk existence check for parity verification ──
+      // Body: { ids: string[] }. Returns which task ids are present (live, NOT
+      // tombstoned) in cloud vs missing, in a SINGLE SQL `payload->>'id' IN (...)`
+      // query (include_subtasks so parent tasks AND subtasks are both counted).
+      // This lets a fleet-union backfill be proven complete without thousands of
+      // rate-limited GET-by-id calls (the previous verify approach hit HTTP 429).
+      if (id === "exists" && !action) {
+        if (method !== "POST") return error(405, `method ${method} not allowed on /v1/tasks/exists`);
+        const body = await readJson<{ ids?: unknown }>(req);
+        const ids = Array.isArray(body?.ids)
+          ? Array.from(new Set(body!.ids.filter((v): v is string => typeof v === "string" && v.length > 0)))
+          : [];
+        if (ids.length === 0) return error(400, "provide a non-empty string array `ids`");
+        if (ids.length > 5000) return error(400, `too many ids (${ids.length}); max 5000 per request`);
+        const found = await store.tasks.list({ ids, include_subtasks: true, limit: ids.length } as never);
+        const presentSet = new Set(found.map((t) => t.id));
+        const present = ids.filter((i) => presentSet.has(i));
+        const missing = ids.filter((i) => !presentSet.has(i));
+        return json({
+          requested: ids.length,
+          present_count: present.length,
+          missing_count: missing.length,
+          missing,
+        });
+      }
+      // ── POST /v1/tasks/upsert — idempotent create-or-update by fingerprint ──
+      // The CLI `task upsert` previously wrote the task to this machine's LOCAL
+      // sqlite by fingerprint, so on a flipped (cloud) machine the row was absent
+      // from the shared /v1 dataset — a split-brain write. Routing the dedupe here
+      // resolves the fingerprint against the SHARED dataset so create-or-update is
+      // authoritative for every agent.
+      if (id === "upsert" && !action) {
+        if (method !== "POST") return error(405, `method ${method} not allowed on /v1/tasks/upsert`);
+        if (typeof store.tasks.getByFingerprint !== "function") {
+          return error(501, "fingerprint upsert is not supported by this storage backend");
+        }
+        const body = ((await readJson<CreateTaskInput & { fingerprint?: string; version?: number }>(req)) ??
+          {}) as CreateTaskInput & { fingerprint?: string; version?: number };
+        const fingerprint = typeof body.fingerprint === "string" ? body.fingerprint.trim() : "";
+        if (!fingerprint) return error(400, "fingerprint is required");
+        if (typeof body.title !== "string" || !body.title.trim()) return error(400, "title is required");
+        const existing = await store.tasks.getByFingerprint(fingerprint);
+        const metadata = {
+          ...(existing?.metadata ?? {}),
+          ...(body.metadata ?? {}),
+          fingerprint,
+        };
+        // Only pass through fields the caller actually set so an update never
+        // clobbers a stored value with an accidental undefined→default.
+        const fields: Record<string, unknown> = { metadata };
+        for (const key of [
+          "title", "description", "priority", "status", "project_id", "assigned_to",
+          "working_dir", "plan_id", "task_list_id", "tags", "due_at", "estimated_minutes",
+          "sla_minutes", "requires_approval", "recurrence_rule", "task_type",
+        ] as const) {
+          const bag = body as unknown as Record<string, unknown>;
+          if (bag[key] !== undefined) fields[key] = bag[key];
+        }
+        if (!existing) {
+          const task = await store.tasks.create(
+            { ...(fields as unknown as CreateTaskInput), title: body.title },
+            contextFromPrincipal(principal, body),
+          );
+          return json({ task, created: true }, 201);
+        }
+        try {
+          const task = await store.tasks.update(
+            existing.id,
+            { ...(fields as unknown as UpdateTaskInput), version: existing.version as number },
+            contextFromPrincipal(principal, body),
+          );
+          return json({ task, created: false });
+        } catch (e) {
+          const msg = (e as Error).message || "";
+          if (msg.includes("version conflict")) return error(409, msg);
+          throw e;
+        }
+      }
+      if (!id) {
+        if (method === "GET") {
+          const includeSubtasks = url.searchParams.get("include_subtasks");
+          if (includeSubtasks !== null && includeSubtasks !== "true" && includeSubtasks !== "false") {
+            return error(400, "include_subtasks must be true or false");
+          }
+          const hasParentFilter = url.searchParams.has("parent_id");
+          // Reject an out-of-vocabulary status/priority here rather than casting it
+          // `as never` into the store, where it matched nothing and the endpoint
+          // answered 200 with an empty task list.
+          const statusParam = enumQueryParam(url, "status", TASK_STATUSES);
+          if (!statusParam.ok) return statusParam.response;
+          const priorityParam = enumQueryParam(url, "priority", TASK_PRIORITIES);
+          if (!priorityParam.ok) return priorityParam.response;
+          // Since-cursor. Reject a malformed value with 400 rather than dropping
+          // it: an ignored cursor answers 200 with the ENTIRE table while the
+          // caller believes the read was bounded, which is the exact failure this
+          // parameter exists to end.
+          const updatedAfterRaw = url.searchParams.get("updated_after");
+          const updatedAfter = updatedAfterRaw === null ? null : parseSinceCursor(updatedAfterRaw);
+          if (updatedAfter !== null && !updatedAfter.ok) {
+            return error(400, updatedAfter.message);
+          }
+          const filter = {
+            ...(updatedAfter !== null && updatedAfter.ok ? { updated_after: updatedAfter.value } : {}),
+            ...(url.searchParams.get("q") ? { query: url.searchParams.get("q")! } : {}),
+            ...(statusParam.value !== undefined ? { status: statusParam.value } : {}),
+            ...(priorityParam.value !== undefined ? { priority: priorityParam.value } : {}),
+            ...(url.searchParams.get("project_id") ? { project_id: url.searchParams.get("project_id")! } : {}),
+            ...(hasParentFilter
+              ? { parent_id: url.searchParams.get("parent_id") || null, include_subtasks: true }
+              : includeSubtasks !== null ? { include_subtasks: includeSubtasks === "true" } : {}),
+            ...(url.searchParams.get("plan_id") ? { plan_id: url.searchParams.get("plan_id")! } : {}),
+            ...(url.searchParams.get("task_list_id") ? { task_list_id: url.searchParams.get("task_list_id")! } : {}),
+            ...(url.searchParams.get("assigned_to") ? { assigned_to: url.searchParams.get("assigned_to")! } : {}),
+            ...(url.searchParams.get("agent_id") ? { agent_id: url.searchParams.get("agent_id")! } : {}),
+            ...(url.searchParams.get("created_by") ? { created_by: url.searchParams.get("created_by")! } : {}),
+            // `assigned_to=<me>&not_created_by=<me>` is the inbox query operating rule 29
+            // requires: work routed to me by someone ELSE, with my own filings dropped.
+            ...(url.searchParams.get("not_created_by") ? { not_created_by: url.searchParams.get("not_created_by")! } : {}),
+            // Comma-separated tags; matches tasks carrying ANY of the requested
+            // tags (parity with the local CLI's `list --tags`).
+            ...(url.searchParams.get("tags") ? {
+              tags: url.searchParams.get("tags")!.split(",").map((tag) => tag.trim()).filter(Boolean),
+            } : {}),
+            ...(url.searchParams.get("limit") ? { limit: Number(url.searchParams.get("limit")) } : {}),
+            ...(url.searchParams.get("offset") ? { offset: Number(url.searchParams.get("offset")) } : {}),
+          };
+          const tasks = await store.tasks.list(filter);
+          // `total` is the full match count for the filter (ignoring limit/offset),
+          // so clients can paginate without pulling the whole result set. Both the
+          // list and the count are SQL-side now — no O(n) JS materialization.
+          const { limit: _l, offset: _o, ...countFilter } = filter;
+          const total = await store.tasks.count(countFilter);
+          return json({ tasks, count: tasks.length, total });
+        }
+        if (method === "POST") {
+          const body = await readJson<CreateTaskInput>(req);
+          if (!body || typeof body.title !== "string" || !body.title.trim()) {
+            return error(400, "title is required");
+          }
+          const storageContext = contextFromPrincipal(principal, body);
+          if (body.parent_id !== undefined) {
+            if (typeof body.parent_id !== "string" || !body.parent_id.trim()) {
+              return error(400, "parent_id must be a non-empty task id", {
+                code: "PARENT_TASK_ID_INVALID",
+              });
+            }
+            if (!(await store.tasks.get(body.parent_id, storageContext))) {
+              return error(404, `parent task not found: ${body.parent_id}`, {
+                code: "PARENT_TASK_NOT_FOUND",
+              });
+            }
+          }
+
+          const created = await store.tasks.create(body, storageContext);
+          const persisted = created?.id
+            ? await store.tasks.get(created.id, storageContext)
+            : null;
+          if (
+            !persisted
+            || persisted.id !== created.id
+            || (persisted.parent_id ?? null) !== (body.parent_id ?? null)
+            || (persisted.plan_id ?? null) !== (body.plan_id ?? null)
+            || (body.created_by !== undefined && persisted.created_by !== body.created_by)
+          ) {
+            return error(
+              500,
+              "TASK_CREATE_PERSISTENCE_UNVERIFIED: task create was acknowledged but authoritative readback did not return the same stored task id, parent_id, plan_id, and explicit created_by",
+              { code: "TASK_CREATE_PERSISTENCE_UNVERIFIED" },
+            );
+          }
+          return json({ task: persisted }, 201);
+        }
+        return error(405, `method ${method} not allowed on /v1/tasks`);
+      }
+      // /v1/tasks/:id[/action]
+      if (action) {
+        // ── POST /v1/tasks/:id/stale-lock-handoff — exact stale-lock CAS ──
+        // This route deliberately does NOT use resolveRef: a short id or UUID
+        // prefix must never select a "best" task for a lock mutation.
+        if (action === "stale-lock-handoff") {
+          if (method !== "POST") {
+            return error(405, "method must be POST on /v1/tasks/:id/stale-lock-handoff");
+          }
+          const exactId = normalizeExactTaskId(id);
+          if (!principal.agent) {
+            return error(403, "stale-lock handoff requires an authenticated agent-bound key", {
+              code: "STALE_LOCK_HANDOFF_ACTOR_MISMATCH",
+            });
+          }
+          if (typeof store.tasks.handoffStaleLock !== "function") {
+            return error(501, "stale-lock handoff is not supported by this storage backend");
+          }
+          const body = (await readJson<Record<string, unknown>>(req)) ?? {};
+          const allowed = new Set([
+            "expected_holder",
+            "expected_lock_version",
+            "stale_after_seconds",
+            "new_holder",
+            "reason",
+          ]);
+          const unknown = Object.keys(body).find((key) => !allowed.has(key));
+          if (unknown) {
+            return error(400, `unknown stale-lock handoff field: ${unknown}`, {
+              code: "STALE_LOCK_HANDOFF_INVALID_INPUT",
+              field: unknown,
+            });
+          }
+          const receipt = await store.tasks.handoffStaleLock(
+            {
+              task_id: exactId,
+              actor: principal.agent,
+              expected_holder: body.expected_holder as string,
+              expected_lock_version: body.expected_lock_version as string,
+              stale_after_seconds: body.stale_after_seconds as number,
+              new_holder: body.new_holder as string,
+              reason: body.reason as string,
+            },
+            contextFromPrincipal(principal),
+          );
+          return json({ receipt });
+        }
+        // ── /v1/tasks/:id/comments — task comments (add/list) ──
+        // The comment path is the only task sub-resource that carries a richer body
+        // (content/type/progress) and must validate the parent task exists so a
+        // comment on a missing cloud task 404s loudly (parity with local, which
+        // throws TaskNotFoundError) instead of silently writing an orphan row.
+        if (action === "comments") {
+          if (method === "GET") {
+            if (!(await store.tasks.get(id))) return error(404, "task not found");
+            const rawLimit = url.searchParams.get("limit");
+            const cursor = url.searchParams.get("cursor");
+            // Mixed-version bridge: predecessor clients send neither `limit`
+            // nor `cursor` and cannot understand truncation metadata. Preserve
+            // their complete response only while it remains bounded; otherwise
+            // fail loudly instead of presenting an incomplete history. Rollout
+            // upgrades clients first, then the server (see the operator runbook).
+            if (rawLimit === null && cursor === null) {
+              const storageContext = contextFromPrincipal(principal);
+              const legacyPage = (await (store.audit.getCommentsPage
+                ? store.audit.getCommentsPage(id, { limit: LEGACY_COMMENT_RESPONSE_LIMIT + 1 }, storageContext)
+                : store.audit.getComments(id, storageContext))).map(redactComment);
+              if (legacyPage.length > LEGACY_COMMENT_RESPONSE_LIMIT) {
+                return error(
+                  426,
+                  "task has too many comments for this client; upgrade @hasna/todos to use cursor pagination",
+                );
+              }
+              return json({
+                comments: legacyPage,
+                count: legacyPage.length,
+                has_more: false,
+                next_cursor: null,
+              });
+            }
+            const limit = rawLimit === null ? DEFAULT_COMMENT_PAGE_SIZE : Number(rawLimit);
+            if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_COMMENT_PAGE_SIZE) {
+              return error(400, `limit must be an integer between 1 and ${MAX_COMMENT_PAGE_SIZE}`);
+            }
+            let before: { created_at: string; id: string } | undefined;
+            if (cursor) {
+              try {
+                before = decodeCommentCursor(cursor);
+              } catch {
+                return error(400, "invalid comment cursor");
+              }
+            }
+            if (!store.audit.getCommentsPage) {
+              return error(426, "storage adapter must be upgraded to support cursor-paginated comments");
+            }
+            const page = (await store.audit.getCommentsPage(
+              id,
+              { limit: limit + 1, ...(before ? { before } : {}) },
+              contextFromPrincipal(principal),
+            )).map(redactComment);
+            const hasMore = page.length > limit;
+            const comments = hasMore ? page.slice(1) : page;
+            return json({
+              comments,
+              count: comments.length,
+              has_more: hasMore,
+              next_cursor: hasMore && comments[0] ? encodeCommentCursor(comments[0]) : null,
+            });
+          }
+          if (method === "POST") {
+            const body = (await readJson<{
+              content?: string;
+              agent_id?: string;
+              session_id?: string;
+              type?: TaskComment["type"];
+              progress_pct?: number;
+            }>(req)) ?? {};
+            if (typeof body.content !== "string" || !body.content.trim()) {
+              return error(400, "content is required");
+            }
+            const target = await store.tasks.get(id);
+            if (!target) return error(404, "task not found");
+            const comment = await store.audit.addComment(
+              {
+                task_id: id,
+                content: body.content,
+                agent_id: body.agent_id ?? principal.agent ?? undefined,
+                session_id: body.session_id,
+                type: body.type,
+                progress_pct: body.progress_pct,
+              },
+              contextFromPrincipal(principal, body),
+            );
+            return json({ comment: redactComment(comment) }, 201);
+          }
+          return error(405, `method ${method} not allowed on /v1/tasks/:id/comments`);
+        }
+        // ── /v1/tasks/:id/history — per-task audit trail ──
+        // The CLI `history` command read this machine's LOCAL sqlite task_history,
+        // so a flipped (cloud) machine reported "No history" for a cloud task whose
+        // audit trail lives in the shared dataset. Serve the shared history here.
+        if (action === "history") {
+          if (method !== "GET") return error(405, `method ${method} not allowed on /v1/tasks/:id/history`);
+          if (!(await store.tasks.get(id))) return error(404, "task not found");
+          const history = await store.audit.getTaskHistory(id);
+          return json({ history, count: history.length });
+        }
+        // ── /v1/tasks/:id/lock and /unlock — exclusive task locking ──
+        // Locking is a task-field (`locked_by`/`locked_at`) operation resolved on
+        // the shared cloud dataset so a flipped machine coordinates on the SAME
+        // lock as every other agent. The previous CLI/MCP path read LOCAL sqlite
+        // and 404'd cloud tasks ("Task not found").
+        if (action === "lock" || action === "unlock") {
+          if (method !== "POST") return error(405, `method ${method} not allowed on /v1/tasks/:id/${action}`);
+          const body = (await readJson<{ agent_id?: string; force?: boolean }>(req)) ?? {};
+          if (!(await store.tasks.get(id))) return error(404, "task not found");
+          if (action === "lock") {
+            if (typeof store.tasks.lock !== "function") return error(501, "task locking is not supported by this storage backend");
+            const agentId = body.agent_id || principal.agent || "todos-serve";
+            return json({ result: await store.tasks.lock(id, agentId) });
+          }
+          if (typeof store.tasks.unlock !== "function") return error(501, "task unlocking is not supported by this storage backend");
+          if (body.force === true) {
+            if (!principal.scopes.includes("todos:*")) return error(403, "force unlock requires todos:* scope");
+            const released = await store.tasks.unlock(id);
+            return json({ success: released });
+          }
+          // Authorize with the PRINCIPAL, but compare the holder against the agent the
+          // caller NAMED — the same precedence the lock branch above uses. Resolving
+          // `principal.agent || body.agent_id` here threw the named value away, and since
+          // every station key binds to one shared principal agent ("fleet") the holder was
+          // never the value compared: a named agent could take a lock and never release it.
+          // The gate below is the entitlement check and it fires whenever a caller names an
+          // agent that is not its own principal; todos:* is the delegation scope, and it
+          // already authorizes the strictly stronger force branch above, which releases any
+          // holder's lock without naming one at all.
+          if (body.agent_id && body.agent_id !== principal.agent && !principal.scopes.includes("todos:*")) {
+            return error(403, "unlock agent_id must match the authenticated agent");
+          }
+          const agentId = body.agent_id || principal.agent;
+          if (!agentId) return error(403, "unlock requires an agent-bound key or force=true");
+          const released = await store.tasks.unlock(id, agentId);
+          return json({ success: released });
+        }
+        // ── /v1/tasks/:id/dependencies[/:dep] — dependency edges ──
+        if (action === "dependencies") {
+          if (!store.dependencies) return error(501, "dependencies are not supported by this storage backend");
+          if (method === "GET") {
+            if (!(await store.tasks.get(id))) return error(404, "task not found");
+            const edges = await store.dependencies.list(id);
+            return json(edges);
+          }
+          if (method === "POST") {
+            const body = (await readJson<{ depends_on?: string }>(req)) ?? {};
+            if (typeof body.depends_on !== "string" || !body.depends_on.trim()) {
+              return error(400, "depends_on is required");
+            }
+            try {
+              const dependency = await store.dependencies.add(id, body.depends_on, contextFromPrincipal(principal));
+              return json({ dependency }, 201);
+            } catch (e) {
+              const msg = (e as Error).message || "";
+              if (msg.includes("not found")) return error(404, msg);
+              if (msg.includes("cycle") || msg.includes("itself")) return error(409, msg);
+              throw e;
+            }
+          }
+          if (method === "DELETE") {
+            if (!subId) return error(400, "dependency target id is required (/v1/tasks/:id/dependencies/:dep)");
+            const removed = await store.dependencies.remove(id, subId);
+            return json({ removed });
+          }
+          return error(405, `method ${method} not allowed on /v1/tasks/:id/dependencies`);
+        }
+        // ── /v1/tasks/:id/verifications — verification records ──
+        if (action === "verifications") {
+          if (!store.verifications) return error(501, "verifications are not supported by this storage backend");
+          if (method === "GET") {
+            if (!(await store.tasks.get(id))) return error(404, "task not found");
+            const verifications = await store.verifications.list(id);
+            return json({ verifications, count: verifications.length });
+          }
+          if (method === "POST") {
+            const body = (await readJson<{
+              command?: string;
+              status?: "passed" | "failed" | "unknown";
+              output_summary?: string;
+              artifact_path?: string;
+              agent_id?: string;
+            }>(req)) ?? {};
+            if (typeof body.command !== "string" || !body.command.trim()) {
+              return error(400, "command is required");
+            }
+            try {
+              const verification = await store.verifications.add(
+                {
+                  task_id: id,
+                  command: body.command,
+                  status: body.status,
+                  output_summary: body.output_summary,
+                  artifact_path: body.artifact_path,
+                  agent_id: body.agent_id,
+                },
+                contextFromPrincipal(principal, body),
+              );
+              return json({ verification }, 201);
+            } catch (e) {
+              const msg = (e as Error).message || "";
+              if (msg.includes("not found")) return error(404, msg);
+              throw e;
+            }
+          }
+          return error(405, `method ${method} not allowed on /v1/tasks/:id/verifications`);
+        }
+        // ── /v1/tasks/:id/commits — git commit links ──
+        // The previous CLI/MCP `link-commit` wrote to LOCAL sqlite where the cloud
+        // task does not exist, tripping a FOREIGN KEY constraint. Routing here
+        // attaches the link to the REAL task in the shared dataset.
+        if (action === "commits") {
+          if (!store.commits) return error(501, "commit links are not supported by this storage backend");
+          if (method === "GET") {
+            if (!(await store.tasks.get(id))) return error(404, "task not found");
+            const commits = await store.commits.list(id);
+            return json({ commits, count: commits.length });
+          }
+          if (method === "POST") {
+            const body = (await readJson<{
+              sha?: string;
+              message?: string;
+              author?: string;
+              files_changed?: string[];
+            }>(req)) ?? {};
+            if (typeof body.sha !== "string" || !body.sha.trim()) return error(400, "sha is required");
+            try {
+              const commit = await store.commits.add(
+                {
+                  task_id: id,
+                  sha: body.sha,
+                  message: body.message,
+                  author: body.author,
+                  files_changed: Array.isArray(body.files_changed) ? body.files_changed : undefined,
+                },
+                contextFromPrincipal(principal),
+              );
+              return json({ commit }, 201);
+            } catch (e) {
+              const msg = (e as Error).message || "";
+              if (msg.includes("not found")) return error(404, msg);
+              throw e;
+            }
+          }
+          return error(405, `method ${method} not allowed on /v1/tasks/:id/commits`);
+        }
+        // ── /v1/tasks/:id/refs — git branch / pull-request links ──
+        if (action === "refs") {
+          if (!store.gitRefs) return error(501, "git ref links are not supported by this storage backend");
+          if (method === "GET") {
+            if (!(await store.tasks.get(id))) return error(404, "task not found");
+            const refs = await store.gitRefs.list(id);
+            return json({ refs, count: refs.length });
+          }
+          if (method === "POST") {
+            const body = (await readJson<{
+              ref_type?: string;
+              name?: string;
+              url?: string;
+              provider?: string;
+              metadata?: Record<string, unknown>;
+            }>(req)) ?? {};
+            const refType = body.ref_type === "pull_request" || body.ref_type === "branch" ? body.ref_type : "branch";
+            if (typeof body.name !== "string" || !body.name.trim()) return error(400, "name is required");
+            try {
+              const ref = await store.gitRefs.add(
+                {
+                  task_id: id,
+                  ref_type: refType,
+                  name: body.name,
+                  url: body.url,
+                  provider: body.provider,
+                  metadata: body.metadata,
+                },
+                contextFromPrincipal(principal),
+              );
+              return json({ ref }, 201);
+            } catch (e) {
+              const msg = (e as Error).message || "";
+              if (msg.includes("not found")) return error(404, msg);
+              throw e;
+            }
+          }
+          return error(405, `method ${method} not allowed on /v1/tasks/:id/refs`);
+        }
+        const actionJson = await readOptionalJson(req);
+        if (!actionJson.ok) return error(400, "invalid JSON body");
+        const body = actionJson.value && typeof actionJson.value === "object" && !Array.isArray(actionJson.value)
+          ? actionJson.value as Record<string, unknown>
+          : {};
+        const agentId = typeof body.agent_id === "string" ? body.agent_id : principal.agent || "todos-serve";
+        if (action === "start" && method === "POST") {
+          return json({ task: await store.tasks.start(id, agentId) });
+        }
+        if (action === "complete" && method === "POST") {
+          const parsed = validateTaskCompletion(actionJson.value);
+          if (!parsed.ok) return error(400, parsed.message);
+          return json({
+            task: await store.tasks.complete(
+              id,
+              parsed.agentId || principal.agent || "todos-serve",
+              parsed.options,
+              contextFromPrincipal(principal, body),
+            ),
+          });
+        }
+        if (action === "fail" && method === "POST") {
+          const parsed = validateTaskFailure(actionJson.value);
+          if (!parsed.ok) return error(400, parsed.message);
+          return json({
+            result: await store.tasks.fail(
+              id,
+              parsed.agentId || principal.agent || "todos-serve",
+              parsed.reason,
+              { retry: parsed.retry },
+              contextFromPrincipal(principal, body),
+            ),
+          });
+        }
+        if (action === "claim" && method === "POST") {
+          return json({ task: await store.tasks.claimNext(agentId, {}) });
+        }
+        return error(404, `unknown task action: ${action}`);
+      }
+      if (method === "GET") {
+        let task = await store.tasks.get(id);
+        // Bounded server-side resolution of a non-UUID reference (exact short_id or
+        // a unique task-id prefix). Without this the CLI paged every task over HTTP
+        // to expand a short ref, which hung on large shared datasets. resolveRef is
+        // a single indexed lookup; it is only consulted when the exact-id get misses.
+        if (!task && typeof store.tasks.resolveRef === "function") {
+          try {
+            task = await store.tasks.resolveRef(id);
+          } catch (e) {
+            if (e instanceof TaskReferenceAmbiguousError) {
+              return error(409, e.message, {
+                code: TaskReferenceAmbiguousError.code,
+                candidate_project_ids: e.candidateProjectIds,
+                candidate_task_ids: e.candidateTaskIds,
+              });
+            }
+            const msg = (e as Error).message || "";
+            if (/ambiguous/i.test(msg)) return error(409, msg);
+            throw e;
+          }
+        }
+        return task ? json({ task }) : error(404, "task not found");
+      }
+      if (method === "PATCH" || method === "PUT") {
+        const rawBody = await readJson<unknown>(req);
+        if (!rawBody) return error(400, "invalid JSON body");
+        const validated = validateTaskPatchVocabulary(rawBody);
+        if (!validated.ok) return error(400, validated.message);
+        const body = validated.patch;
+        const current = await store.tasks.get(id);
+        if (!current) return error(404, "task not found");
+        // Optimistic concurrency: honor a client-supplied version, else default
+        // to the current record's version (convenience last-write-wins).
+        const patch: UpdateTaskInput = {
+          ...body,
+          version: typeof body.version === "number" ? body.version : (current.version as number),
+        };
+        try {
+          const task = await store.tasks.update(id, patch);
+          return task ? json({ task }) : error(404, "task not found");
+        } catch (e) {
+          const msg = (e as Error).message || "";
+          if (msg.includes("version conflict")) return error(409, msg);
+          throw e;
+        }
+      }
+      if (method === "DELETE") {
+        await store.tasks.delete(id, contextFromPrincipal(principal));
+        return json({ deleted: true, id });
+      }
+      return error(405, `method ${method} not allowed on /v1/tasks/:id`);
+    }
+
+    // ── /v1/projects ──
+    if (resource === "projects") {
+      if (!id) {
+        if (method === "GET") {
+          const projects = await store.projects.list();
+          return json({ projects, count: projects.length });
+        }
+        if (method === "POST") {
+          const body = await readJson<unknown>(req);
+          if (!body) return error(400, "invalid JSON body");
+          const validated = validateProjectCreate(body);
+          if (!validated.ok) return error(400, validated.message);
+          const project = await store.projects.create(validated.input, contextFromPrincipal(principal));
+          return json({ project }, 201);
+        }
+        return error(405, `method ${method} not allowed on /v1/projects`);
+      }
+      if (action === "task-list" && subId === "ensure") {
+        if (method === "GET") {
+          return json(await planProjectTaskListEnsure(store, id));
+        }
+        if (method !== "POST") {
+          return error(405, `method ${method} not allowed on /v1/projects/:id/task-list/ensure`);
+        }
+        const body = await readJson<Record<string, unknown>>(req);
+        if (!body) return error(400, "invalid JSON body");
+        const unknown = Object.keys(body).find((key) =>
+          !["expected_project_revision", "idempotency_key"].includes(key)
+        );
+        if (unknown) return error(400, `unknown task-list ensure field: ${unknown}`);
+        if (typeof body.expected_project_revision !== "string" || !body.expected_project_revision.trim()) {
+          return error(400, "expected_project_revision must be a non-empty string from a fresh ensure plan");
+        }
+        if (body.idempotency_key !== undefined && typeof body.idempotency_key !== "string") {
+          return error(400, "idempotency_key must be a string");
+        }
+        const result = await applyProjectTaskListEnsure(store, id, {
+          expected_project_revision: body.expected_project_revision,
+          ...(typeof body.idempotency_key === "string" ? { idempotency_key: body.idempotency_key } : {}),
+        });
+        return json(result, result.action === "created" ? 201 : 200);
+      }
+      if (action === "task-list" && subId === "rollback") {
+        if (method !== "POST") {
+          return error(405, `method ${method} not allowed on /v1/projects/:id/task-list/rollback`);
+        }
+        const body = await readJson<Record<string, unknown>>(req);
+        if (!body) return error(400, "invalid JSON body");
+        const unknown = Object.keys(body).find((key) =>
+          !["receipt_id", "expected_task_list_revision"].includes(key)
+        );
+        if (unknown) return error(400, `unknown task-list rollback field: ${unknown}`);
+        if (typeof body.receipt_id !== "string" || !body.receipt_id.trim()) {
+          return error(400, "receipt_id must be a non-empty string");
+        }
+        if (typeof body.expected_task_list_revision !== "string" || !body.expected_task_list_revision.trim()) {
+          return error(400, "expected_task_list_revision must be a non-empty string from the accepted receipt");
+        }
+        return json(await rollbackProjectTaskListEnsure(store, id, {
+          receipt_id: body.receipt_id,
+          expected_task_list_revision: body.expected_task_list_revision,
+        }));
+      }
+      if (action === "rename") {
+        if (method !== "POST") return error(405, `method ${method} not allowed on /v1/projects/:id/rename`);
+        const body = await readJson<RenameProjectInput>(req);
+        if (!body || typeof body.new_slug !== "string" || !body.new_slug.trim() || !normalizeSlug(body.new_slug)) {
+          return error(400, "new_slug must be a non-empty string");
+        }
+        if (body.name !== undefined && (typeof body.name !== "string" || !body.name.trim())) {
+          return error(400, "name must be a non-empty string");
+        }
+        const unknownField = Object.keys(body).find((key) => !["new_slug", "name"].includes(key));
+        if (unknownField) return error(400, `unknown project rename field: ${unknownField}`);
+        return json(await store.projects.rename(id, body, contextFromPrincipal(principal)));
+      }
+      if (method === "GET") {
+        const project = await store.projects.get(id);
+        return project ? json({ project }) : error(404, "project not found");
+      }
+      if (method === "PATCH" || method === "PUT") {
+        const body = await readJson<unknown>(req);
+        if (!body) return error(400, "invalid JSON body");
+        const validated = validateProjectPatch(body);
+        if (!validated.ok) return error(400, validated.message);
+        if (!(await store.projects.get(id))) return error(404, "project not found");
+        const project = await store.projects.update(id, validated.patch);
+        return json({ project });
+      }
+      if (method === "DELETE") {
+        await store.projects.delete(id, contextFromPrincipal(principal));
+        return json({ deleted: true, id });
+      }
+      return error(405, `method ${method} not allowed on /v1/projects/:id`);
+    }
+
+    // ── /v1/plans ──
+    if (resource === "plans") {
+      if (!id && method === "GET") {
+        const plans = await store.plans.list(url.searchParams.get("project_id") ?? undefined);
+        return json({ plans, count: plans.length });
+      }
+      if (!id && method === "POST") {
+        const body = await readJson<unknown>(req);
+        const validated = validatePlanCreate(body);
+        if (!validated.ok) return error(400, validated.message);
+        if (validated.input.slug) {
+          const scope = validated.input.project_id ?? null;
+          const duplicate = (await store.plans.list(validated.input.project_id))
+            .find((plan) => plan.project_id === scope && plan.slug === validated.input.slug);
+          if (duplicate) {
+            return error(409, `Plan slug already exists in this scope: ${validated.input.slug}`, {
+              code: "PLAN_SLUG_CONFLICT",
+              conflict: true,
+            });
+          }
+        }
+        const plan = await store.plans.create(validated.input, contextFromPrincipal(principal, validated.input));
+        return json({ plan }, 201);
+      }
+      if (id && action === "project-link" && !subId) {
+        if (method === "GET") {
+          const projectId = url.searchParams.get("project_id");
+          if (!projectId?.trim()) return error(400, "project_id query parameter is required");
+          return json(await planPlanProjectLink(store, id, projectId));
+        }
+        if (method !== "POST") return error(405, `method ${method} not allowed on /v1/plans/:id/project-link`);
+        const body = await readJson<Record<string, unknown>>(req);
+        if (!body) return error(400, "invalid JSON body");
+        const allowed = new Set(["project_id", "expected_plan_revision", "expected_project_revision", "idempotency_key"]);
+        const unknown = Object.keys(body).find((key) => !allowed.has(key));
+        if (unknown) return error(400, `unknown plan-project-link field: ${unknown}`);
+        for (const field of ["project_id", "expected_plan_revision", "expected_project_revision", "idempotency_key"] as const) {
+          if (typeof body[field] !== "string" || !body[field].trim()) {
+            return error(400, `${field} must be a non-empty string`);
+          }
+        }
+        const result = await applyPlanProjectLink(store, id, body.project_id as string, {
+          expected_plan_revision: body.expected_plan_revision as string,
+          expected_project_revision: body.expected_project_revision as string,
+          idempotency_key: body.idempotency_key as string,
+        });
+        return json(result, result.action === "linked" ? 201 : 200);
+      }
+      if (id && action === "project-link" && subId === "rollback") {
+        if (method !== "POST") return error(405, `method ${method} not allowed on /v1/plans/:id/project-link/rollback`);
+        const body = await readJson<Record<string, unknown>>(req);
+        if (!body) return error(400, "invalid JSON body");
+        const allowed = new Set(["project_id", "receipt_id", "expected_plan_revision"]);
+        const unknown = Object.keys(body).find((key) => !allowed.has(key));
+        if (unknown) return error(400, `unknown plan-project-link rollback field: ${unknown}`);
+        for (const field of ["project_id", "receipt_id", "expected_plan_revision"] as const) {
+          if (typeof body[field] !== "string" || !body[field].trim()) {
+            return error(400, `${field} must be a non-empty string`);
+          }
+        }
+        return json(await rollbackPlanProjectLink(store, id, body.project_id as string, {
+          receipt_id: body.receipt_id as string,
+          expected_plan_revision: body.expected_plan_revision as string,
+        }));
+      }
+      if (id && method === "GET") {
+        const plan = await store.plans.get(id);
+        return plan ? json({ plan }) : error(404, "plan not found");
+      }
+      if (id && (method === "PATCH" || method === "PUT")) {
+        const body = await readJson<Record<string, unknown>>(req);
+        if (!body || Object.keys(body).length === 0) return error(400, "plan patch is required");
+        const allowed = new Set(["name", "slug", "description", "status", "task_list_id", "agent_id"]);
+        const unknownField = Object.keys(body).find((key) => !allowed.has(key));
+        if (unknownField) return error(400, `unknown plan field: ${unknownField}`);
+        for (const field of ["name", "slug", "task_list_id", "agent_id"] as const) {
+          if (body[field] !== undefined && (typeof body[field] !== "string" || !body[field].trim())) {
+            return error(400, `${field} must be a non-empty string`);
+          }
+        }
+        if (typeof body.slug === "string") {
+          const slug = normalizeSlug(body.slug);
+          if (!slug) return error(400, "slug must produce a non-empty canonical slug");
+          body.slug = slug;
+        }
+        if (body.description !== undefined && typeof body.description !== "string") {
+          return error(400, "description must be a string");
+        }
+        if (body.status !== undefined &&
+            (typeof body.status !== "string" || !["active", "completed", "archived"].includes(body.status))) {
+          return error(400, "status must be active, completed, or archived");
+        }
+        const existing = await store.plans.get(id);
+        if (!existing) return error(404, "plan not found");
+        if (typeof body.slug === "string") {
+          const duplicate = (await store.plans.list(existing.project_id ?? undefined))
+            .find((plan) => plan.id !== id && plan.project_id === existing.project_id && plan.slug === body.slug);
+          if (duplicate) {
+            return error(409, `Plan slug already exists in this scope: ${body.slug}`, {
+              code: "PLAN_SLUG_CONFLICT",
+              conflict: true,
+            });
+          }
+        }
+        const plan = await store.plans.update(id, body as never);
+        return json({ plan });
+      }
+      if (id && method === "DELETE") {
+        if (!(await store.plans.delete(id, contextFromPrincipal(principal)))) return error(404, "plan not found");
+        return json({ deleted: true, id });
+      }
+      if (id) return error(405, `method ${method} not allowed on /v1/plans/:id`);
+    }
+
+    // ── /v1/templates ──
+    if (resource === "templates") {
+      if (!id && method === "GET") {
+        const projectId = url.searchParams.get("project_id");
+        const templates = (await store.templates.list()).filter((template) => projectId === null || template.project_id === projectId);
+        return json({ templates, count: templates.length });
+      }
+      if (!id && method === "POST") {
+        const body = await readJson<unknown>(req);
+        const validated = validateTemplateCreate(body);
+        if (!validated.ok) return error(400, validated.message);
+        const template = await store.templates.create(validated.input, contextFromPrincipal(principal));
+        return json({ template: await store.templates.getWithTasks(template.id) }, 201);
+      }
+      if (!id) return error(405, `method ${method} not allowed on /v1/templates`);
+      if (method === "GET") {
+        const template = await store.templates.getWithTasks(id);
+        return template ? json({ template }) : error(404, "template not found");
+      }
+      if (method === "PATCH" || method === "PUT") {
+        const body = await readJson<unknown>(req);
+        const validated = validateTemplatePatch(body);
+        if (!validated.ok) return error(400, validated.message);
+        const template = await store.templates.update(id, validated.patch, contextFromPrincipal(principal));
+        return template ? json({ template: await store.templates.getWithTasks(id) }) : error(404, "template not found");
+      }
+      if (method === "DELETE") {
+        const deleted = await store.templates.delete(id, contextFromPrincipal(principal));
+        return deleted ? json({ deleted: true, id }) : error(404, "template not found");
+      }
+      return error(405, `method ${method} not allowed on /v1/templates/:id`);
+    }
+
+    // ── /v1/agents ──
+    if (resource === "agents") {
+      if (!id && method === "GET") {
+        const agents = await store.agents.list();
+        return json({ agents, count: agents.length });
+      }
+      if (!id && method === "POST") {
+        const body = await readJson<{ name?: string }>(req);
+        if (!body || typeof body.name !== "string" || !body.name.trim()) return error(400, "name is required");
+        const result = await store.agents.register(body as never, contextFromPrincipal(principal));
+        // register() returns a conflict envelope when the name is actively held by
+        // another session — surface it as 409 so the client sees a real conflict
+        // instead of a 201 wrapping a non-agent object.
+        if (result && typeof result === "object" && "conflict" in result) {
+          return error(409, (result as { message?: string }).message ?? "agent name conflict", { conflict: true });
+        }
+        return json({ agent: result }, 201);
+      }
+      // ── /v1/agents/:id/heartbeat and /release — session lifecycle ──
+      // Resolved against the SHARED cloud roster (by id OR name) so a flipped
+      // machine heartbeats/releases the same agent every other agent sees. The
+      // previous CLI/MCP path read LOCAL sqlite and 404'd cloud-only agents
+      // ("Agent not found").
+      if (id && action === "heartbeat") {
+        if (method !== "POST") return error(405, `method ${method} not allowed on /v1/agents/:id/heartbeat`);
+        if (typeof store.agents.heartbeat !== "function") {
+          return error(501, "agent heartbeat is not supported by this storage backend");
+        }
+        const agent = await store.agents.heartbeat(id, contextFromPrincipal(principal));
+        return agent ? json({ agent }) : error(404, "agent not found");
+      }
+      if (id && action === "release") {
+        if (method !== "POST") return error(405, `method ${method} not allowed on /v1/agents/:id/release`);
+        if (typeof store.agents.release !== "function") {
+          return error(501, "agent release is not supported by this storage backend");
+        }
+        const body = (await readJson<{ session_id?: string }>(req)) ?? {};
+        const result = await store.agents.release(id, body.session_id, contextFromPrincipal(principal));
+        if (!result) return error(404, "agent not found");
+        if (!result.released) {
+          return error(409, "release denied: session_id does not match agent's current session", { released: false });
+        }
+        return json({ agent: result.agent, released: true });
+      }
+      if (id && method === "GET") {
+        const agent = await store.agents.get(id);
+        return agent ? json({ agent }) : error(404, "agent not found");
+      }
+    }
+
+    // ── /v1/activity — recent task-history entries ──
+    // Read-only feed powering the CLI `log` and `burndown` views on a flipped
+    // machine. Previously those read this box's local sqlite task_history, so a
+    // http-routed box reported its private island instead of the shared ledger.
+    if (resource === "activity" && !id) {
+      if (method !== "GET") return error(405, `method ${method} not allowed on /v1/activity`);
+      const limitParam = url.searchParams.get("limit");
+      const limit = limitParam ? Math.max(1, Math.min(10000, Number(limitParam) || 50)) : 50;
+      const activity = await store.audit.getRecentActivity(limit);
+      return json({ activity, count: activity.length });
+    }
+
+    // ── /v1/task-lists — task lists (optionally scoped to a project) ──
+    if (resource === "task-lists") {
+      if (!id && method === "GET") {
+        const projectId = url.searchParams.get("project_id") ?? undefined;
+        const taskLists = await store.taskLists.list(projectId);
+        return json({ task_lists: taskLists, count: taskLists.length });
+      }
+      if (!id && method === "POST") {
+        const body = await readJson<CreateTaskListInput>(req);
+        if (!body || typeof body.name !== "string" || !body.name.trim()) return error(400, "name is required");
+        const unknownField = Object.keys(body).find((key) => !["name", "slug", "project_id", "description", "metadata"].includes(key));
+        if (unknownField) return error(400, `unsupported task-list create field: ${unknownField}`);
+        if (body.slug !== undefined && typeof body.slug !== "string") return error(400, "slug must be a string");
+        if (body.project_id !== undefined && (typeof body.project_id !== "string" || !body.project_id.trim())) return error(400, "project_id must be a non-empty string");
+        if (body.description !== undefined && typeof body.description !== "string") return error(400, "description must be a string");
+        if (body.metadata !== undefined && (!body.metadata || typeof body.metadata !== "object" || Array.isArray(body.metadata))) {
+          return error(400, "metadata must be an object");
+        }
+        if (!normalizeSlug(body.slug === undefined ? body.name : body.slug)) {
+          return error(400, "task-list slug must be non-empty kebab-case");
+        }
+        const taskList = await store.taskLists.create(body, contextFromPrincipal(principal));
+        return json({ task_list: taskList }, 201);
+      }
+      if (id && method === "GET") {
+        const taskList = await store.taskLists.get(id);
+        return taskList ? json({ task_list: taskList }) : error(404, "task list not found");
+      }
+      if (id && (method === "PATCH" || method === "PUT")) {
+        const body = await readJson<UpdateTaskListInput>(req);
+        if (!body) return error(400, "invalid JSON body");
+        const unknownField = Object.keys(body).find((key) => !["slug", "name", "description", "metadata"].includes(key));
+        if (unknownField) return error(400, `unsupported task-list update field: ${unknownField}`);
+        if (Object.keys(body).length === 0) return error(400, "task-list update must not be empty");
+        if (body.slug !== undefined && (typeof body.slug !== "string" || !normalizeSlug(body.slug))) return error(400, "slug must be a non-empty string");
+        if (body.name !== undefined && (typeof body.name !== "string" || !body.name.trim())) return error(400, "name must be a non-empty string");
+        if (body.description !== undefined && typeof body.description !== "string") return error(400, "description must be a string");
+        if (body.metadata !== undefined && (!body.metadata || typeof body.metadata !== "object" || Array.isArray(body.metadata))) {
+          return error(400, "metadata must be an object");
+        }
+        if (!await store.taskLists.get(id)) return error(404, "task list not found");
+        const taskList = await store.taskLists.update(id, body);
+        return json({ task_list: taskList });
+      }
+      if (id && method === "DELETE") {
+        const deleted = await store.taskLists.delete(id, contextFromPrincipal(principal));
+        return deleted ? json({ deleted: true, id }) : error(404, "task list not found");
+      }
+      return error(405, `method ${method} not allowed on /v1/task-lists${id ? "/:id" : ""}`);
+    }
+
+    // ── /v1/dependencies — every dependency edge in the dataset ──
+    // Edges are far fewer than tasks, so the whole set is cheap to return; the CLI
+    // derives blocked/ready/sprint/recap dependency analytics from it client-side
+    // instead of reading local sqlite.
+    if (resource === "dependencies" && !id) {
+      if (method !== "GET") return error(405, `method ${method} not allowed on /v1/dependencies`);
+      if (typeof store.dependencies?.listAll !== "function") {
+        return error(501, "dependency edge listing is not supported by this storage backend");
+      }
+      const dependencies = await store.dependencies.listAll();
+      return json({ dependencies, count: dependencies.length });
+    }
+
+    // ── /v1/commits/:sha — find the task that explains a commit SHA ──
+    if (resource === "commits" && id) {
+      if (method !== "GET") return error(405, `method ${method} not allowed on /v1/commits/:sha`);
+      if (!store.commits) return error(501, "commit links are not supported by this storage backend");
+      const commit = await store.commits.find(id);
+      return json({ commit: commit ?? null });
+    }
+
+    // ── /v1/refs/:ref — find tasks linked to a branch / pull request ──
+    if (resource === "refs" && id) {
+      if (method !== "GET") return error(405, `method ${method} not allowed on /v1/refs/:ref`);
+      if (!store.gitRefs) return error(501, "git ref links are not supported by this storage backend");
+      let decodedRef: string;
+      try {
+        // URL.pathname keeps escaped delimiters escaped. Ref names routinely
+        // contain `/` and `#`, so decode this opaque lookup segment only after
+        // splitting the route; decoding the whole pathname first would turn a
+        // ref's slash into a route separator.
+        decodedRef = decodeURIComponent(id);
+      } catch {
+        return error(400, "ref path segment has invalid percent encoding");
+      }
+      const refs = await store.gitRefs.find(decodedRef);
+      return json({ refs, count: refs.length });
+    }
+
+    // ── /v1/next — the best pending task to work on next ──
+    // Priority-ranked pick from the shared queue (parity with the CLI `next`
+    // command's local getNextTask). Returns `{ task: null }` when the queue is empty.
+    if (resource === "next" && !id) {
+      if (method !== "GET") return error(405, `method ${method} not allowed on /v1/next`);
+      const agent = url.searchParams.get("agent") ?? undefined;
+      const filters = {
+        ...(url.searchParams.get("project_id") ? { project_id: url.searchParams.get("project_id")! } : {}),
+        ...(url.searchParams.get("task_list_id") ? { task_list_id: url.searchParams.get("task_list_id")! } : {}),
+        ...(url.searchParams.get("plan_id") ? { plan_id: url.searchParams.get("plan_id")! } : {}),
+      };
+      const task = await store.tasks.getNext(agent, filters as never);
+      return json({ task: task ?? null });
+    }
+
+    // ── /v1/stats ──
+    // `tasks` keeps its historical meaning (top-level tasks, subtasks excluded) for
+    // back-compat, while `tasks_all` is the TRUE row count including subtasks —
+    // the number to compare against a local sqlite `count(*) from tasks` when
+    // proving fleet-union parity (the top-level count structurally under-reports).
+    if (resource === "stats" && method === "GET") {
+      const [tasks, tasksAll, projects] = await Promise.all([
+        store.tasks.count(),
+        store.tasks.count({ include_subtasks: true } as never),
+        store.projects.list(),
+      ]);
+      return json({ tasks, tasks_all: tasksAll, subtasks: tasksAll - tasks, projects: projects.length });
+    }
+
+    // ── /v1/integrity — referential-integrity counts for `todos doctor` ──
+    // The remote doctor path used to validate auth + route availability and print
+    // three green check marks, so a dataset carrying five figures of orphaned rows
+    // reported healthy. This route is the aggregate the CLI needs to be honest: one
+    // SQL COUNT per condition, computed by the backing engine (Postgres or SQLite),
+    // never a client-side sample. Read-only — it counts, it never repairs.
+    if (resource === "integrity" && !id) {
+      if (method !== "GET") return error(405, `method ${method} not allowed on /v1/integrity`);
+      if (typeof store.integrity?.report !== "function") {
+        return error(501, "referential-integrity reporting is not supported by this storage backend");
+      }
+      const integrity = await store.integrity.report();
+      return json({ integrity });
+    }
+
+    // ── /v1/import (bulk snapshot ingest / backfill) ──
+    // Accepts a full or partial TodosStorageSnapshot. Mutable records use the
+    // storage adapter's guarded upsert path; audit history is append-only, so
+    // exact replay skips while divergent same-ID rows and every audit tombstone
+    // reject before mutation. Requires `todos:write` (enforced above).
+    if (resource === "import") {
+      if (method !== "POST") return error(405, `method ${method} not allowed on /v1/import`);
+      if (typeof store.sync.importSnapshot !== "function") {
+        return error(501, "snapshot import is not supported by this storage backend");
+      }
+      const raw = await readJson<unknown>(req);
+      if (raw === null) return error(400, "invalid JSON body");
+      const snapshot = normalizeImportSnapshot(raw);
+      const received = countSnapshotRecords(snapshot);
+      const completionImports = validatePlanCompletionImports(raw);
+      if (completionImports.present) {
+        if (completionImports.error) return error(400, completionImports.error);
+        if (received !== 0) {
+          return error(400, "planCompletions cannot be combined with snapshot record arrays");
+        }
+        if (typeof store.plans.completeAtRevision !== "function") {
+          return error(501, "atomic plan completion is not supported by this storage backend");
+        }
+        const operation = completionImports.operations[0]!;
+        const completed = await store.plans.completeAtRevision(
+          operation.id,
+          operation.expected_updated_at,
+          contextFromPrincipal(principal),
+        );
+        return json({
+          result: {
+            inserted: 0,
+            updated: completed.applied ? 1 : 0,
+            deleted: 0,
+            skipped: completed.applied ? 0 : 1,
+            errors: [],
+          },
+          received: 1,
+          planCompletions: [{
+            id: operation.id,
+            status: "completed",
+            expected_updated_at: operation.expected_updated_at,
+            result_updated_at: completed.plan.updated_at,
+            applied: completed.applied,
+          }],
+        });
+      }
+      if (received === 0) {
+        return error(400, "empty snapshot: provide at least one record array (tasks/projects/plans/...)");
+      }
+      const forbiddenAuditTombstone = (snapshot.tombstones ?? [])
+        .find((tombstone) => (tombstone.object_type as string) === "audit_history");
+      if (forbiddenAuditTombstone) {
+        return error(
+          400,
+          forbiddenAuditHistoryTombstoneError(forbiddenAuditTombstone.object_id),
+          {
+            code: AUDIT_HISTORY_TOMBSTONE_FORBIDDEN,
+            conflict: false,
+            audit_history_id: forbiddenAuditTombstone.object_id,
+          },
+        );
+      }
+      const result = await store.sync.importSnapshot(snapshot, contextFromPrincipal(principal));
+      const auditFailureMessage = result.errors.find((message) => parseAuditHistoryImportFailure(message) !== null);
+      if (auditFailureMessage) {
+        const failure = parseAuditHistoryImportFailure(auditFailureMessage)!;
+        return error(failure.status, auditFailureMessage, {
+          code: failure.code,
+          conflict: failure.conflict,
+          audit_history_id: failure.auditHistoryId,
+        });
+      }
+      return json({ result, received });
+    }
+
+    return error(404, `unknown /v1 resource: ${resource ?? "(root)"}`);
+  } catch (e) {
+    if (e instanceof PlanProjectLinkError) {
+      const status = e.code === "PLAN_PROJECT_LINK_PLAN_NOT_FOUND"
+        || e.code === "PLAN_PROJECT_LINK_PROJECT_NOT_FOUND"
+        || e.code === "PLAN_PROJECT_LINK_RECEIPT_NOT_FOUND"
+        ? 404
+        : e.code === "PLAN_PROJECT_LINK_IDEMPOTENCY_KEY_INVALID"
+          ? 400
+          : e.code === "PLAN_PROJECT_LINK_UNSUPPORTED"
+            ? 501
+            : 409;
+      return error(status, e.message, { code: e.code, conflict: status === 409, ...e.details });
+    }
+    if (e instanceof ProjectTaskListEnsureError) {
+      const status = e.code === "PROJECT_NOT_FOUND"
+        || e.code === "PROJECT_TASK_LIST_RECEIPT_NOT_FOUND"
+        ? 404
+        : e.code === "PROJECT_TASK_LIST_IDEMPOTENCY_KEY_INVALID"
+          ? 400
+          : 409;
+      return error(status, e.message, { code: e.code, conflict: status === 409, ...e.details });
+    }
+    if (e instanceof TaskReferenceAmbiguousError) {
+      return error(409, e.message, {
+        code: TaskReferenceAmbiguousError.code,
+        candidate_project_ids: e.candidateProjectIds,
+        candidate_task_ids: e.candidateTaskIds,
+      });
+    }
+    if (e instanceof TaskNotFoundError) {
+      return error(404, e.message, { code: TaskNotFoundError.code });
+    }
+    if (e instanceof VersionConflictError) {
+      return error(409, e.message, {
+        code: VersionConflictError.code,
+        conflict: true,
+        task_id: e.taskId,
+        expected_version: e.expectedVersion,
+        current_version: e.actualVersion,
+      });
+    }
+    if (e instanceof StaleLockHandoffError) {
+      const status = e.code === "STALE_LOCK_HANDOFF_INVALID_TASK_ID"
+        || e.code === "STALE_LOCK_HANDOFF_INVALID_INPUT"
+        ? 400
+        : e.code === "STALE_LOCK_HANDOFF_ACTOR_MISMATCH"
+          ? 403
+          : 409;
+      return error(status, e.message, {
+        code: e.code,
+        conflict: status === 409,
+        ...e.details,
+      });
+    }
+    if (e instanceof PlanNotFoundError) {
+      return error(404, e.message, { code: PlanNotFoundError.code });
+    }
+    if (e instanceof PlanRevisionConflictError) {
+      return error(409, e.message, {
+        code: PlanRevisionConflictError.code,
+        conflict: true,
+        plan_id: e.planId,
+        expected_updated_at: e.expectedUpdatedAt,
+        current_updated_at: e.currentUpdatedAt,
+      });
+    }
+    if (e instanceof LockError) return error(409, e.message, { code: LockError.code });
+    if (e instanceof TaskNotStartableError) {
+      return error(409, e.message, { code: TaskNotStartableError.code });
+    }
+    if (e instanceof ResourceConflictError) return error(409, e.message, { code: e.code, conflict: true });
+    if (e instanceof ProjectNotFoundError) return error(404, e.message, { code: ProjectNotFoundError.code });
+    return error(500, (e as Error).message || "internal error");
+  }
+}

@@ -1,0 +1,16 @@
+node_modules/
+dist/
+dashboard/dist/
+*.db
+*.db-shm
+*.db-wal
+.env
+.secrets/
+.codewith/codewith.db
+.codewith/private-artifacts/
+.hasna/
+.takumi/
+5MiB
+25MiB
+__pycache__/
+*.pyc
