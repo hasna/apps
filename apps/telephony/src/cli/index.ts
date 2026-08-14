@@ -3,11 +3,11 @@ import { registerEventsCommands } from "@hasna/events/commander";
 import { Command } from "commander";
 import pkg from "../../package.json";
 // The single Store abstraction: routes every read+write to the server's /v1 API
-// when HASNA_TELEPHONY_STORAGE_MODE=postgres + API_URL + API_KEY are set,
-// otherwise to the on-box SQLite store. No CLI command touches sqlite or fetch
-// directly. See ../lib/store/index.ts.
+// when HASNA_TELEPHONY_API_URL + HASNA_TELEPHONY_API_KEY are set, otherwise to
+// the on-box SQLite store. No CLI command touches sqlite or fetch directly.
+// See ../lib/store/index.ts.
 import { getStore } from "../lib/store/index.js";
-import { HasnaHttpError } from "../generated/storage-client/index.js";
+import { HasnaHttpError } from "@hasna/contracts";
 import { sendSms } from "../lib/sms.js";
 import { sendWhatsApp, sendWhatsAppAudio } from "../lib/whatsapp.js";
 import { makeCall } from "../lib/voice.js";
@@ -559,7 +559,7 @@ function formatCliError(err: unknown): string {
   }
   if (err && typeof err === "object") {
     const e = err as { status?: number; code?: number | string; message?: string };
-    // Twilio REST exceptions (local mode direct provider call) carry code+status.
+    // Twilio REST exceptions (local transport direct provider call) carry code+status.
     if (e.code !== undefined && e.status !== undefined && e.message) {
       return `telephony: Twilio error ${e.code} (HTTP ${e.status}): ${e.message}`;
     }

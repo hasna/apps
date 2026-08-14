@@ -1,5 +1,6 @@
-// Outbound webhook dispatch goes through the Store so cloud/self_hosted webhook
-// receivers use cloud-registered targets, while public webhook DTOs stay redacted.
+// Outbound webhook dispatch goes through the Store so HTTP API transport
+// webhook receivers use server-registered targets, while public webhook DTOs
+// stay redacted.
 
 import { getStore } from "./store/index.js";
 

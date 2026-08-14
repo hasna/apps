@@ -19,25 +19,21 @@
  * gate that silently skips is the hole this closes.
  *
  * The `@hasna/contracts` dependency is pinned rather than ranged on purpose:
- * 0.8.4 is the newest kit whose checks this repo actually satisfies. 0.8.5 adds
- * `credential_seam_compliance`, which requires importing the client credential
- * seam (`transport.ts` / `storage.ts`) from `@hasna/contracts/client` instead of
- * the vendored copy in `src/generated/storage-client/`. Un-vendoring that seam
- * changes how a CLI opens and authenticates a server connection, so it is a
- * behavioural migration tracked separately, not a dependency bump. Bump the pin
- * and `kitVersion` together when that lands — the version assertion below makes
- * bumping one without the other fail loudly.
+ * the pin and the manifest `kitVersion` must move together, and the conformance
+ * layer below grades the repo with `bunx @hasna/contracts@<kitVersion>` so the
+ * validator is the exact version the manifest declares. The client credential
+ * seam is NOT vendored: the app imports `@hasna/contracts` (root), so it
+ * inherits the package's credential-resolution fixes and keeps the
+ * credential_seam_compliance check green.
  *
- * The mode enum is NOT part of that deferral: `storage-client/mode.ts` re-exports
- * `@hasna/contracts/mode`, so the vocabulary the CLI accepts cannot drift from
- * the vocabulary the manifest declares. That drift is what this suite's
- * kit-lockstep test below now pins on the server side too.
+ * There is no mode enum anywhere in this repo — the client selects transport by
+ * API-pair presence and the server backend by DATABASE_URL presence, so the
+ * removed placement vocabulary has no parser that could accept it.
  */
 import { describe, expect, it } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { KIT_VERSION, STORAGE_MODES, normalizeStorageMode } from "./generated/storage-kit/index.js";
-import { normalizeStorageMode as normalizeClientStorageMode } from "./generated/storage-client/index.js";
+import { KIT_VERSION, SERVER_DATA_BACKENDS, assertNoLegacyStorageMode } from "./generated/storage-kit/index.js";
 
 const repoRoot = join(import.meta.dir, "..");
 const manifest = JSON.parse(readFileSync(join(repoRoot, "hasna.contract.json"), "utf8"));
@@ -62,8 +58,9 @@ function reachableScripts(entry: string): Set<string> {
 describe("hasna.contract.json", () => {
   it("declares both storage engines the repo actually ships", () => {
     // src/db/sqlite-adapter.ts and src/db/remote-storage.ts + the vendored
-    // storage kit are both shipped code paths; the manifest must say so.
-    expect(manifest.storage.engines).toEqual(["sqlite", "postgres"]);
+    // storage kit are both shipped code paths; the manifest must say so. The
+    // schema's long spelling is `postgresql`.
+    expect(manifest.storage.engines).toEqual(["sqlite", "postgresql"]);
   });
 
   it("claims no storage-engine waiver", () => {
@@ -110,7 +107,7 @@ describe("hasna.contract.json", () => {
  * `files[]`, so that mismatch was a published false claim, not an internal
  * inconsistency.
  *
- * These assertions read the runtime enums, not a copy of them, so re-opening the
+ * These assertions read the runtime constants, not a copy of them, so re-opening the
  * gap fails here rather than in an operator's terminal.
  */
 describe("declared storage backends match the shipped runtime", () => {
@@ -126,23 +123,25 @@ describe("declared storage backends match the shipped runtime", () => {
     expect(KIT_VERSION).toBe(manifest.kitVersion);
   });
 
-  it("resolves every engine the manifest declares, on the server and the client", () => {
-    expect(manifest.storage.engines).toEqual([...STORAGE_MODES]);
+  it("resolves every engine the manifest declares on the server", () => {
+    expect(manifest.storage.engines).toEqual([...SERVER_DATA_BACKENDS]);
     for (const engine of manifest.storage.engines as string[]) {
-      expect(normalizeStorageMode(engine).mode).toBe(engine);
-      expect(normalizeClientStorageMode(engine).mode).toBe(engine);
+      expect(SERVER_DATA_BACKENDS).toContain(engine);
     }
   });
 
   it("resolves the default backend the manifest declares", () => {
-    expect(normalizeStorageMode(manifest.storage.mode).mode).toBe(manifest.storage.mode);
-    expect(normalizeClientStorageMode(manifest.storage.mode).mode).toBe(manifest.storage.mode);
+    expect(SERVER_DATA_BACKENDS).toContain(manifest.storage.backend);
   });
 
-  it("rejects the removed placement vocabulary on the server and the client", () => {
+  it("rejects the removed placement vocabulary via the storage-mode ratchet", () => {
     for (const removed of ["local", "cloud", "self_hosted", "remote", "hybrid"]) {
-      expect(() => normalizeStorageMode(removed)).toThrow(/Unknown storage mode/);
-      expect(() => normalizeClientStorageMode(removed)).toThrow(/Unknown storage mode/);
+      expect(() => assertNoLegacyStorageMode("telephony", { HASNA_TELEPHONY_STORAGE_MODE: removed })).toThrow(
+        /HASNA_TELEPHONY_STORAGE_MODE was removed/,
+      );
+    }
+    for (const removed of ["local", "cloud", "self_hosted", "remote", "hybrid"]) {
+      expect(SERVER_DATA_BACKENDS).not.toContain(removed);
     }
   });
 });

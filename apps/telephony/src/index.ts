@@ -64,8 +64,8 @@ export { saveAudio, loadAudio, encodeBase64, audioExists, generateAudioFilename,
 // Lib: Cerebras AI
 export { generateSchedule, generateMessage, analyzeIncomingMessage } from "./lib/cerebras.js";
 
-// Lib: Realtime (public webhook mode)
-export { isCloudMode, createRealtimeSession, connectOpenAI, handleTwilioMediaStream, closeSession as closeRealtimeSession, generateRealtimeTwiml } from "./lib/realtime.js";
+// Lib: Realtime (public webhook URL required)
+export { hasWebhookBaseUrl, createRealtimeSession, connectOpenAI, handleTwilioMediaStream, closeSession as closeRealtimeSession, generateRealtimeTwiml } from "./lib/realtime.js";
 
 // Lib: Scheduler
 export { runSchedule, tick, startScheduler, stopScheduler } from "./lib/scheduler.js";
