@@ -1,14 +1,14 @@
 /**
  * Synchronous root exports are frozen v1 compatibility only.
  *
- * They can never select the async hosted registry, so under hosted/self-hosted
+ * They can never select the async HTTP API registry, so under API transport
  * authority they cannot answer for the authoritative store. New integrations
  * must use resolveStore() (v1) or AccountsRegistry (v2).
  *
  * Two different hazards live behind that one sentence, and they get two
  * different answers:
  *
- *   WRITES fail closed. A synchronous root write under hosted authority lands
+ *   WRITES fail closed. A synchronous root write under API authority lands
  *   in the machine's local JSON file while the registry of record is elsewhere,
  *   so it silently diverges the two. There is no correct local answer to give,
  *   and no measured consumer performs one, so these throw.
@@ -16,7 +16,7 @@
  *   READS warn and answer. Making them throw was tried and measured on the
  *   fleet, and it was worse: @hasna/economy's resolveAccountForAgent wraps every
  *   accounts call in `try {} catch {}`, so the intended loud failure arrived as
- *   a silent `null` and zeroed per-account cost attribution on every cloud-mode
+ *   a silent `null` and zeroed per-account cost attribution on every API-mode
  *   machine — no error, no log, no alert. Reads therefore return the same
  *   machine-local answer they returned before this compatibility layer existed,
  *   and announce themselves once per operation through `process.emitWarning`,
@@ -63,14 +63,14 @@ import {
   type UpdateOptions,
 } from "./profiles.js";
 
-/** Opt into the end-state behaviour: hosted authority makes reads throw too. */
+/** Opt into the end-state behaviour: HTTP API authority makes reads throw too. */
 const STRICT_ENV_KEY = "HASNA_ACCOUNTS_STRICT_ROOT_COMPAT";
 
 /** Warning code so consumers and log pipelines can match on it structurally. */
 export const ROOT_COMPAT_READ_WARNING_CODE = "HASNA_ACCOUNTS_LOCAL_COMPAT_READ";
 
 const UNAVAILABLE_MESSAGE =
-  "synchronous @hasna/accounts registry exports are local-only compatibility and are unavailable when hosted authority is configured; use resolveStore() or @hasna/accounts/v2";
+  "synchronous @hasna/accounts registry exports are local-only compatibility and are unavailable when the HTTP API registry is configured; use resolveStore() or @hasna/accounts/v2";
 
 const warnedOperations = new Set<string>();
 
@@ -85,9 +85,9 @@ function strictModeEnabled(env: NodeJS.ProcessEnv): boolean {
 }
 
 /**
- * Fail closed for a synchronous root WRITE whenever hosted authority is
- * configured. Resolving the authority also surfaces a misconfigured hosted
- * setup (missing URL/key, invalid mode word) before any local I/O.
+ * Fail closed for a synchronous root WRITE whenever the HTTP API registry is
+ * configured. Resolving the authority also surfaces a retired storage-mode
+ * variable before any local I/O.
  */
 export function assertRootCompatibilityIsLocal(env: NodeJS.ProcessEnv = process.env): void {
   const authority = resolveAccountsCloud(env);
@@ -95,8 +95,8 @@ export function assertRootCompatibilityIsLocal(env: NodeJS.ProcessEnv = process.
 }
 
 /**
- * Announce (or, in strict mode, refuse) a synchronous root READ whenever hosted
- * authority is configured. The warning is emitted once per operation per
+ * Announce (or, in strict mode, refuse) a synchronous root READ whenever the
+ * HTTP API registry is configured. The warning is emitted once per operation per
  * process so a polling caller cannot flood stderr, and `process.emitWarning`
  * is deliberately used instead of a thrown error because the measured consumers
  * swallow throws.
@@ -111,7 +111,7 @@ export function noteRootCompatibilityRead(
   if (warnedOperations.has(operation)) return;
   warnedOperations.add(operation);
   process.emitWarning(
-    `${operation}() from the @hasna/accounts package root answered from this machine's local registry while hosted authority is configured; the authoritative registry is reachable only through resolveStore() or @hasna/accounts/v2. Set ${STRICT_ENV_KEY}=1 to make this throw instead.`,
+    `${operation}() from the @hasna/accounts package root answered from this machine's local registry while the HTTP API registry is configured; the authoritative registry is reachable only through resolveStore() or @hasna/accounts/v2. Set ${STRICT_ENV_KEY}=1 to make this throw instead.`,
     "DeprecationWarning",
     ROOT_COMPAT_READ_WARNING_CODE,
   );

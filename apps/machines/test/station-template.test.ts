@@ -211,7 +211,7 @@ describe("overlay merge", () => {
     expect(agentsSlice?.content).toContain("MemoryHigh=54G");
     expect(agentsSlice?.content).toContain("MemoryMax=60G");
     const rosterUnit = effective.files.find((file) => file.target.endsWith("machines-roster.service"));
-    expect(rosterUnit?.content).toContain("/home/hasna/.bun/bin/machines-agent roster daemon");
+    expect(rosterUnit?.content).toContain("/home/hasna/.bun/bin/machines-daemon roster daemon");
     expect(rosterUnit?.content).not.toContain("/opt/fixture");
     expect(effective.services).toContainEqual({
       name: "machines-roster.service",

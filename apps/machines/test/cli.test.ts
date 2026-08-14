@@ -557,7 +557,6 @@ describe("cli command handling", () => {
         ...process.env,
         HASNA_MACHINES_API_URL: "",
         HASNA_MACHINES_API_KEY: "",
-        HASNA_MACHINES_STORAGE_MODE: "local",
         HASNA_MACHINES_MANIFEST_PATH: join(dir, "machines.json"),
         HASNA_MACHINES_DB_PATH: join(dir, "machines.db"),
         HASNA_MACHINES_MACHINE_ID: "control-node",
@@ -1435,7 +1434,6 @@ describe("cli command handling", () => {
         // Force the failing states deterministically regardless of host env.
         HASNA_MACHINES_S3_BUCKET: "",
         MACHINES_S3_BUCKET: "",
-        HASNA_MACHINES_STORAGE_MODE: "cloud",
         HASNA_MACHINES_DATABASE_URL: "",
         MACHINES_DATABASE_URL: "",
         HASNA_MACHINES_DATABASE_URL_OWNER: "",
@@ -1474,7 +1472,7 @@ describe("cli command handling", () => {
         error: expect.stringContaining("Missing S3 backup bucket"),
       });
 
-      // 4) Async business-logic throw (cloud mode without a database URL).
+      // 4) Async business-logic throw (postgresql backend without a database URL).
       const migrate = runCli(["db", "migrate", "--dry-run", "--json"], env);
       expect(migrate.status).toBe(1);
       expect(migrate.stderr).toBe("");

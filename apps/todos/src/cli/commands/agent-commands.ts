@@ -1,0 +1,674 @@
+import type { Command } from "commander";
+import chalk from "chalk";
+import { execSync } from "node:child_process";
+import { getDatabase, resolvePartialId } from "../../db/database.js";
+import { releaseAgent, listAgents, normalizeGeneratedAgentNames, suggestAgentNames } from "../../db/agents.js";
+import { normalizeAgentNameInput } from "../../lib/agent-name-normalize.js";
+import { createTaskList, getTaskList, listTaskLists, updateTaskList, deleteTaskList } from "../../db/task-lists.js";
+import { listTasks } from "../../db/tasks.js";
+import { getPackageVersion, handleError, autoProject, output, outputRecord } from "../helpers.js";
+import { clearPersistedIdentity, detectIdentityCollision, persistIdentity, readPersistedIdentity } from "../../lib/creator-identity.js";
+import {
+  getTodosCloudClient,
+  cloudCreateTaskList,
+  cloudDeleteTaskList,
+  cloudGetTaskList,
+  cloudUpdateTaskList,
+  cloudHeartbeatAgent,
+  cloudListAgents,
+  cloudListTaskLists,
+  cloudListTasks,
+  cloudRegisterAgent,
+  cloudReleaseAgent,
+  cloudResolveProjectRef,
+  cloudResolveTaskListRef,
+} from "../cloud-router.js";
+
+/**
+ * Resolve an agent from the shared cloud roster by id, or by name
+ * case-insensitively — preferring the freshest record when historical rows hold
+ * more than one spelling of the same identity (todos task 0bf5d979).
+ *
+ * `todos agent <name>` is the surface a coordinator reads to decide whether a
+ * dispatched agent is still alive, so landing on a stale case-variant here is
+ * what turns "check on the worker" into "kill the live worker".
+ */
+function resolveCloudAgentByNameOrId<T extends { id: string; name: string; last_seen_at: string }>(
+  agents: readonly T[],
+  nameOrId: string,
+): T | null {
+  const byId = agents.find((agent) => agent.id === nameOrId);
+  if (byId) return byId;
+  const target = normalizeAgentNameInput(nameOrId);
+  const matches = agents.filter((agent) => normalizeAgentNameInput(agent.name) === target);
+  if (matches.length === 0) return null;
+  return matches.reduce((freshest, candidate) =>
+    new Date(candidate.last_seen_at).getTime() > new Date(freshest.last_seen_at).getTime()
+      ? candidate
+      : freshest,
+  );
+}
+
+
+/**
+ * Rows that are the SAME identity as `requested` under the canonical
+ * case-insensitive rule, but are spelled differently — i.e. the rows that
+ * registering `requested` would turn into a case-variant clash.
+ *
+ * WHY THIS GUARD IS ON THE CLOUD BRANCH AND NOT SHARED (todos task 1170f87b).
+ * `init` has two branches. The LOCAL one goes through `db/agents.ts`, whose
+ * `validateAgentName` RETURNS the lower-cased name, so a case variant cannot
+ * be created there. The CLOUD one posts the raw argument straight to
+ * `/v1/agents`. Every station on this fleet is cloud-routed, so 100% of
+ * registrations took the unnormalised branch and the shared normaliser —
+ * documented in `lib/agent-name-normalize.ts` as "the single source of truth"
+ * for `fabricius`, `Fabricius` and `FABRICIUS` being ONE agent — was never
+ * consulted. Measured on the live roster 2026-08-02: 1291 rows, 75 names held
+ * in two or more capitalisations, 7 of those clashes minted since 07-29.
+ *
+ * WHY IT REFUSES RATHER THAN SILENTLY LOWER-CASING. Normalising here would
+ * redirect a session that registers as `Silvanus` onto the existing
+ * `silvanus` row — merging two mailboxes with nothing on screen to say so.
+ * The live consequence of these split identities is that
+ * `todos list --assigned Silvanus` and `--assigned silvanus` return disjoint
+ * sets (28 and 29 rows, intersection 0), so silently moving an agent between
+ * them would change which queue a running watcher reads. A refusal is
+ * visible; a silent redirect is another instance of the defect being fixed.
+ *
+ * WHY IT DOES NOT CALL `validateAgentName` FOR SYMMETRY WITH THE LOCAL PATH.
+ * That validator enforces `/^[a-z]+$/` — letters only. 283 of the 1291 live
+ * names (21.9%) fail it, including every seat (`agent-ceo`,
+ * `agent-chief-staff`, ...). Applying it here would make registration fail for
+ * a fifth of the fleet. Only the trim-and-lower-case normaliser is safe.
+ *
+ * An EXACT-spelling row is deliberately NOT a conflict: re-registering an
+ * identity that already exists is the ordinary restart path, and refusing it
+ * would break every agent on the fleet rather than only the typos.
+ */
+export function findCaseVariantRows<T extends { id: string; name: string }>(
+  agents: readonly T[],
+  requested: string,
+): T[] {
+  const raw = requested.trim();
+  const target = normalizeAgentNameInput(raw);
+  if (!target) return [];
+  if (agents.some((agent) => agent.name === raw)) return [];
+  return agents.filter((agent) => normalizeAgentNameInput(agent.name) === target);
+}
+
+/** Drop the persisted identity only when the agent being released IS the persisted one —
+ *  releasing some other agent must not silently un-identify this session. */
+function clearIdentityIfMine(agentId: string, agentName?: string): void {
+  const persisted = readPersistedIdentity();
+  if (!persisted) return;
+  if (persisted.agent_id === agentId || (agentName && persisted.agent_name === agentName)) {
+    clearPersistedIdentity();
+  }
+}
+
+export function registerAgentCommands(program: Command) {
+  // init
+  program
+    .command("init <name>")
+    // `register` mirrors the MCP `register_agent` verb.
+    .alias("register")
+    .description("Register an agent and get a short UUID (alias: register)")
+    .option("-d, --description <text>", "Agent description")
+    .option("--force", "Take over the machine-wide persisted identity even if another session holds it")
+    .action(async (name: string, opts) => {
+      const globalOpts = program.opts();
+      try {
+        // http authority routing: register into the SHARED cloud roster so the
+        // agent identity lives in /v1/agents (not this machine's local sqlite).
+        // This is the agent-identity misroute fix — a flipped machine's `init`
+        // used to write the agent locally only, invisible to the cloud fleet.
+        const cloud = getTodosCloudClient();
+        // The guard compares the trimmed spelling, so registration must send
+        // that same spelling. Sending the original value would let an exact
+        // restart such as `  zoilus  ` pass the guard and mint a whitespace
+        // variant on an older exact-match cloud authority.
+        const registrationName = name.trim();
+        if (cloud) {
+          // Degrade OPEN on a roster read failure, with the cost stated on
+          // stderr. Same precedent as `loadSeatSlugs` in assignee-validation:
+          // a guard that refuses every registration when it cannot reach its
+          // own reference data is a worse defect than the one it prevents.
+          let roster: Awaited<ReturnType<typeof cloudListAgents>> | null = null;
+          try {
+            roster = await cloudListAgents(cloud);
+          } catch {
+            console.error(chalk.yellow(
+              "Warning: could not read the shared roster, so the case-variant check was skipped for this registration.",
+            ));
+          }
+          const variants = roster ? findCaseVariantRows(roster, registrationName) : [];
+          if (variants.length > 0) {
+            const listed = variants.map((a) => `${a.name} (${a.id})`).join(", ");
+            console.error(chalk.red(
+              `'${name}' is a case variant of an agent that already exists: ${listed}. ` +
+              `Agent names are ONE case-insensitive identity, so registering this spelling would create a second row ` +
+              `and split the identity in two — tasks assigned to one spelling are invisible to the other. ` +
+              `Register with the existing spelling instead.`,
+            ));
+            process.exit(1);
+          }
+        }
+        const result = cloud
+          ? await cloudRegisterAgent(cloud, { name: registrationName, description: opts.description })
+          : (await import("../../db/agents.js")).registerAgent({ name: registrationName, description: opts.description });
+        const { isAgentConflict } = await import("../../db/agents.js");
+        if (isAgentConflict(result)) {
+          console.error(chalk.red("CONFLICT:"), result.message);
+          process.exit(1);
+        }
+        // Persist the identity. Without this, `init` printed "use --agent <id>"
+        // and every later command had to re-supply it by hand — which nothing did,
+        // leaving creator attribution empty on 92% of rows.
+        //
+        // Refuse to silently replace a DIFFERENT identity: many named sessions share
+        // one HOME on this fleet, and a clobber would leave the other session quietly
+        // attributing its work to this one.
+        const collision = detectIdentityCollision(result.id, result.name);
+        if (collision && !opts.force) {
+          const held = collision.existing.agent_name || collision.existing.agent_id;
+          console.error(chalk.red(`This machine already has a persisted todos identity: ${held} (registered ${collision.existing.registered_at}).`));
+          console.error(chalk.yellow(
+            "Overwriting it would make that session attribute its tasks to you.\n" +
+            `For a concurrent session, set a per-process identity instead — it outranks the file and cannot collide:\n` +
+            `  export TODOS_AGENT_ID=${result.name}\n` +
+            "Or pass --force to take over the machine-wide identity.",
+          ));
+          process.exit(2);
+        }
+        persistIdentity({ agent_id: result.id, agent_name: result.name, ...(globalOpts.session ? { session_id: globalOpts.session } : {}) });
+        if (globalOpts.json) {
+          output({ ...result, identity_persisted: true }, true);
+        } else {
+          console.log(chalk.green("Agent registered:"));
+          console.log(`  ${chalk.dim("ID:")}   ${result.id}`);
+          console.log(`  ${chalk.dim("Name:")} ${result.name}`);
+          // #192 made the persisted file read-only for DISPLAY and diagnostics
+          // (`--inbox`, `resolveCreatorIdentity`) — it is never written into a
+          // task's created_by/agent_id/assigned_to (see resolveWritableIdentity
+          // in lib/creator-identity.ts). The line this replaces claimed the
+          // opposite ("later commands attribute to this agent automatically"),
+          // which is false on every column since #192. The collision path
+          // (exit 2, above) already prints the correct escape hatch; the
+          // success path — the one every fresh session hits — must say the
+          // same thing instead of the opposite (todos task a3f4bb1a, F2).
+          console.log(
+            `\n${chalk.dim("Identity saved for diagnostics and --inbox — it is not attribution.")}\n` +
+            `${chalk.dim("For per-session attribution, set a per-process identity — it outranks this file and cannot collide with another session on the same machine:")}\n` +
+            `  ${chalk.dim(`export TODOS_AGENT_ID=${result.name}`)}\n` +
+            `${chalk.dim(`Or pass --agent ${result.name} on each command.`)}`,
+          );
+        }
+      } catch (e) {
+        handleError(e);
+      }
+    });
+
+  // heartbeat
+  program
+    .command("heartbeat [agent]")
+    .description("Update last_seen_at to signal you're still active")
+    .action(async (agent?: string) => {
+      const globalOpts = program.opts();
+      const agentId = agent || globalOpts.agent;
+      if (!agentId) { handleError(new Error("Agent ID required. Use --agent or pass as argument.")); }
+      try {
+        // http authority routing: heartbeat the SHARED cloud roster so a flipped
+        // machine refreshes the same agent every other agent sees. The local path
+        // 404'd cloud-only agents ("Agent not found").
+        const cloud = getTodosCloudClient();
+        if (cloud) {
+          const a = await cloudHeartbeatAgent(cloud, agentId);
+          if (!a) { handleError(new Error(`Agent not found: ${agentId}`)); }
+          if (globalOpts.json) { console.log(JSON.stringify({ agent_id: a.id, name: a.name, last_seen_at: a.last_seen_at })); }
+          else { console.log(chalk.green(`♥ ${a.name} (${a.id.slice(0, 8)}) — heartbeat sent`)); }
+          return;
+        }
+        const { updateAgentActivity, getAgent, getAgentByName } = await import("../../db/agents.js");
+        const a = getAgent(agentId) || getAgentByName(agentId);
+        if (!a) { handleError(new Error(`Agent not found: ${agentId}`)); }
+        updateAgentActivity(a.id);
+        if (globalOpts.json) { console.log(JSON.stringify({ agent_id: a.id, name: a.name, last_seen_at: new Date().toISOString() })); }
+        else { console.log(chalk.green(`♥ ${a.name} (${a.id.slice(0, 8)}) — heartbeat sent`)); }
+      } catch (e) {
+        handleError(e);
+      }
+    });
+
+  // release
+  program
+    .command("release [agent]")
+    .description("Release/logout an agent — clears session binding so the name is immediately available")
+    .option("--session-id <id>", "Only release if session ID matches")
+    .action(async (agent?: string, opts?: { sessionId?: string }) => {
+      const globalOpts = program.opts();
+      const agentId = agent || globalOpts.agent;
+      if (!agentId) { handleError(new Error("Agent ID or name required. Use --agent or pass as argument.")); }
+      try {
+        // http authority routing: release in the SHARED cloud roster so the name
+        // frees up for every agent. The local path 404'd cloud-only agents.
+        const cloud = getTodosCloudClient();
+        if (cloud) {
+          const result = await cloudReleaseAgent(cloud, agentId, opts?.sessionId);
+          if (!result.agent) { handleError(new Error(`Agent not found: ${agentId}`)); }
+          if (!result.released) {
+            handleError(new Error("Release denied: session_id does not match agent's current session."));
+          }
+          clearIdentityIfMine(result.agent.id, result.agent.name);
+          if (globalOpts.json) {
+            console.log(JSON.stringify({ agent_id: result.agent.id, name: result.agent.name, released: true }));
+          } else {
+            console.log(chalk.green(`✓ ${result.agent.name} (${result.agent.id}) released — name is now available.`));
+          }
+          return;
+        }
+        const { getAgent, getAgentByName } = await import("../../db/agents.js");
+        const a = getAgent(agentId) || getAgentByName(agentId);
+        if (!a) { handleError(new Error(`Agent not found: ${agentId}`)); }
+        const released = releaseAgent(a.id, opts?.sessionId);
+        if (!released) {
+          handleError(new Error("Release denied: session_id does not match agent's current session."));
+        }
+        clearIdentityIfMine(a.id, a.name);
+        if (globalOpts.json) {
+          console.log(JSON.stringify({ agent_id: a.id, name: a.name, released: true }));
+        } else {
+          console.log(chalk.green(`✓ ${a.name} (${a.id}) released — name is now available.`));
+        }
+      } catch (e) {
+        handleError(e);
+      }
+    });
+
+  // focus
+  program
+    .command("focus [project]")
+    .description("Focus on a project (or clear focus if no project given)")
+    .action(async (project?: string) => {
+      const globalOpts = program.opts();
+      const agentId = globalOpts.agent;
+      if (!agentId) { handleError(new Error("Agent ID required. Use --agent.")); }
+      const db = getDatabase();
+      if (project) {
+        const { getProjectByPath } = await import("../../db/projects.js");
+        const p = getProjectByPath(project, db)
+          || (() => { const id = resolvePartialId(db, "projects", project); return id ? db.query("SELECT * FROM projects WHERE id = ?").get(id) : null; })()
+          || (db.query("SELECT * FROM projects WHERE name = ? OR task_list_id = ?").get(project, project) as any);
+        const projectId = p?.id || project;
+        db.run("UPDATE agents SET active_project_id = ? WHERE id = ? OR name = ?", [projectId, agentId, agentId]);
+        console.log(chalk.green(`Focused on: ${p?.name || projectId}`));
+      } else {
+        db.run("UPDATE agents SET active_project_id = NULL WHERE id = ? OR name = ?", [agentId, agentId]);
+        console.log(chalk.dim("Focus cleared."));
+      }
+    });
+
+  // agents
+  program
+    .command("agents")
+    .description("List registered agents")
+    .action(async () => {
+      const globalOpts = program.opts();
+      try {
+        const cloud = getTodosCloudClient();
+        const agents = cloud ? await cloudListAgents(cloud) : listAgents();
+        if (globalOpts.json) {
+          output(agents, true);
+          return;
+        }
+        if (agents.length === 0) {
+          console.log(chalk.dim("No agents registered. Use 'todos init <name>' to register."));
+          return;
+        }
+        for (const a of agents) {
+          console.log(`  ${chalk.cyan(a.id)} ${chalk.bold(a.name)} ${chalk.dim(a.last_seen_at)}`);
+        }
+      } catch (e) {
+        handleError(e);
+      }
+    });
+
+  program
+    .command("agents-normalize")
+    .alias("normalize-agents")
+    .description("Plan safe replacement labels for invalid/generated agent names (non-mutating: candidates are quarantined, existing names and references are left unchanged)")
+    .action(async () => {
+      const globalOpts = program.opts();
+      try {
+        const db = getDatabase();
+        const planned = normalizeGeneratedAgentNames(db);
+        if (globalOpts.json) {
+          output({ planned, applied: false, suggestions: suggestAgentNames(listAgents().map((agent) => agent.name)).slice(0, 5) }, true);
+          return;
+        }
+        if (planned.length === 0) {
+          console.log(chalk.green("No invalid or generated agent names found."));
+          return;
+        }
+        console.log(chalk.yellow(`Planned ${planned.length} candidate rename(s) (quarantined, not applied):`));
+        for (const item of planned) {
+          console.log(`  ${chalk.cyan(item.id)} ${chalk.red(item.old_name)} ${chalk.dim("->")} ${chalk.bold(item.new_name)} ${chalk.dim(`(${item.status}; names left unchanged)`)}`);
+        }
+        console.log(chalk.dim("Names remain display-only; applying a candidate requires a separate explicit reconciliation action."));
+      } catch (e) {
+        handleError(e);
+      }
+    });
+
+  // agent-update <name>
+  program
+    .command("agent-update <name>")
+    .alias("agents-update")
+    .description("Update an agent's description, role, or other fields")
+    .option("--description <text>", "New description")
+    .option("--role <role>", "New role")
+    .option("--title <title>", "New title")
+    .action(async (name: string, opts) => {
+      const globalOpts = program.opts();
+      try {
+        const { getAgentByName: findByName, updateAgent: doUpdate } = await import("../../db/agents.js");
+        const agent = findByName(name);
+        if (!agent) {
+          handleError(new Error(`Agent not found: ${name}`));
+        }
+        const updates: Record<string, unknown> = {};
+        if (opts.description !== undefined) updates.description = opts.description;
+        if (opts.role !== undefined) updates.role = opts.role;
+        if (opts.title !== undefined) updates.title = opts.title;
+        const updated = doUpdate(agent.id, updates);
+        if (globalOpts.json) {
+          output(updated, true);
+        } else {
+          console.log(chalk.green(`Updated agent: ${updated.name} (${updated.id.slice(0, 8)})`));
+          if (updated.description) console.log(chalk.dim(`  Description: ${updated.description}`));
+          if (updated.role) console.log(chalk.dim(`  Role: ${updated.role}`));
+        }
+      } catch (e) {
+        handleError(e);
+      }
+    });
+
+  // agent <name> — rich single-agent view
+  program
+    .command("agent <name>")
+    .description("Show all info about an agent: tasks, status, last seen, stats")
+    .option("-j, --json", "Output as JSON")
+    .action(async (name: string, opts) => {
+      const globalOpts = program.opts();
+      const cloud = getTodosCloudClient();
+      const { getAgentByName: findByName } = await import("../../db/agents.js");
+      // In cloud mode resolve the agent from the SHARED /v1/agents roster (a
+      // cloud-only agent is invisible to this box's local sqlite), then read that
+      // agent's tasks from the cloud too.
+      const agent = cloud
+        ? resolveCloudAgentByNameOrId(await cloudListAgents(cloud), name)
+        : findByName(name);
+
+      if (!agent) {
+        handleError(new Error(`Agent not found: ${name}`));
+      }
+
+      const byAssigned = cloud ? await cloudListTasks(cloud, { assigned_to: agent.name }) : listTasks({ assigned_to: agent.name });
+      const byId = cloud ? await cloudListTasks(cloud, { agent_id: agent.id }) : listTasks({ agent_id: agent.id });
+      const seen = new Set<string>();
+      const allTasks = [...byAssigned, ...byId].filter(t => {
+        if (seen.has(t.id)) return false;
+        seen.add(t.id); return true;
+      });
+
+      const pending = allTasks.filter(t => t.status === "pending");
+      const inProgress = allTasks.filter(t => t.status === "in_progress");
+      const completed = allTasks.filter(t => t.status === "completed");
+      const failed = allTasks.filter(t => t.status === "failed");
+      const rate = allTasks.length > 0 ? Math.round((completed.length / allTasks.length) * 100) : 0;
+
+      const lastSeenMs = Date.now() - new Date(agent.last_seen_at).getTime();
+      const lastSeenMins = Math.floor(lastSeenMs / 60000);
+      const lastSeenStr = lastSeenMins < 2 ? chalk.green("just now")
+        : lastSeenMins < 60 ? chalk.yellow(`${lastSeenMins}m ago`)
+        : lastSeenMins < 1440 ? chalk.yellow(`${Math.floor(lastSeenMins / 60)}h ago`)
+        : chalk.dim(`${Math.floor(lastSeenMins / 1440)}d ago`);
+
+      const isOnline = lastSeenMins < 5;
+
+      if (opts.json || globalOpts.json) {
+        console.log(JSON.stringify({ agent, tasks: { pending: pending.length, in_progress: inProgress.length, completed: completed.length, failed: failed.length, total: allTasks.length, completion_rate: rate }, all_tasks: allTasks }, null, 2));
+        return;
+      }
+
+      console.log(`\n${isOnline ? chalk.green("●") : chalk.dim("○")} ${chalk.bold(agent.name)} ${chalk.dim(`(${agent.id})`)}  ${lastSeenStr}`);
+      if (agent.description) console.log(chalk.dim(`  ${agent.description}`));
+      if (agent.role) console.log(chalk.dim(`  Role: ${agent.role}`));
+      console.log();
+
+      console.log(`  ${chalk.yellow(String(pending.length))} pending  ${chalk.blue(String(inProgress.length))} active  ${chalk.green(String(completed.length))} done  ${chalk.dim(`${rate}% rate`)}`);
+      console.log();
+
+      if (inProgress.length > 0) {
+        console.log(chalk.bold("  In progress:"));
+        for (const t of inProgress) {
+          const id = t.short_id || t.id.slice(0, 8);
+          const staleFlag = new Date(t.updated_at).getTime() < Date.now() - 30 * 60 * 1000 ? chalk.red(" [stale]") : "";
+          console.log(`    ${chalk.cyan(id)} ${chalk.yellow(t.priority)} ${t.title}${staleFlag}`);
+        }
+        console.log();
+      }
+
+      if (pending.length > 0) {
+        console.log(chalk.bold(`  Pending (${pending.length}):`));
+        for (const t of pending.slice(0, 5)) {
+          const id = t.short_id || t.id.slice(0, 8);
+          const due = t.due_at ? chalk.dim(` due:${t.due_at.slice(0, 10)}`) : "";
+          console.log(`    ${chalk.dim(id)} ${t.priority.padEnd(8)} ${t.title}${due}`);
+        }
+        if (pending.length > 5) console.log(chalk.dim(`    ... and ${pending.length - 5} more`));
+        console.log();
+      }
+
+      const recentDone = completed.filter(t => t.completed_at).sort((a, b) => new Date(b.completed_at!).getTime() - new Date(a.completed_at!).getTime()).slice(0, 3);
+      if (recentDone.length > 0) {
+        console.log(chalk.bold("  Recently completed:"));
+        for (const t of recentDone) {
+          const id = t.short_id || t.id.slice(0, 8);
+          const when = t.completed_at ? chalk.dim(new Date(t.completed_at).toLocaleDateString()) : "";
+          console.log(`    ${chalk.green("✓")} ${chalk.dim(id)} ${t.title} ${when}`);
+        }
+        console.log();
+      }
+
+      if (allTasks.length === 0) {
+        console.log(chalk.dim("  No tasks assigned to this agent."));
+      }
+    });
+
+  // org
+  program
+    .command("org")
+    .description("Show agent org chart — who reports to who")
+    .option("--set <agent=manager>", "Set reporting: 'seneca=julius' or 'seneca=' to clear")
+    .action(async (opts) => {
+      const globalOpts = program.opts();
+      const { getOrgChart, getAgentByName: getByName, updateAgent: update } = await import("../../db/agents.js");
+
+      if (opts.set) {
+        const [agentName, managerName] = opts.set.split("=");
+        const agent = getByName(agentName);
+        if (!agent) { handleError(new Error(`Agent not found: ${agentName}`)); }
+        let managerId: string | null = null;
+        if (managerName) {
+          const manager = getByName(managerName);
+          if (!manager) { handleError(new Error(`Manager not found: ${managerName}`)); }
+          managerId = manager.id;
+        }
+        update(agent.id, { reports_to: managerId });
+        if (globalOpts.json) { output({ agent: agentName, reports_to: managerName || null }, true); }
+        else { console.log(chalk.green(managerId ? `${agentName} → ${managerName}` : `${agentName} → (top-level)`)); }
+        return;
+      }
+
+      const tree = getOrgChart();
+      if (globalOpts.json) { output(tree, true); return; }
+      if (tree.length === 0) { console.log(chalk.dim("No agents registered.")); return; }
+
+      function render(nodes: any[], indent = 0): void {
+        for (const n of nodes) {
+          const prefix = "  ".repeat(indent);
+          const title = n.agent.title ? chalk.cyan(` — ${n.agent.title}`) : "";
+          const level = n.agent.level ? chalk.dim(` (${n.agent.level})`) : "";
+          console.log(`${prefix}${indent > 0 ? "├── " : ""}${chalk.bold(n.agent.name)}${title}${level}`);
+          render(n.reports, indent + 1);
+        }
+      }
+      render(tree);
+    });
+
+  // lists
+  program
+    .command("lists")
+    .aliases(["task-lists", "tl"])
+    .description("List and manage task lists")
+    .option("--add <name>", "Create a task list")
+    .option("--show <id>", "Resolve and show a task list")
+    .option("--update <id>", "Update a task list")
+    .option("--name <name>", "Name (with --update)")
+    .option("--slug <slug>", "Custom slug (with --add or --update)")
+    .option("-d, --description <text>", "Description (with --add or --update)")
+    .option("--delete <id>", "Delete a task list")
+    .action(async (opts) => {
+      try {
+        const globalOpts = program.opts();
+        const cloud = getTodosCloudClient();
+        const projectId = cloud
+          ? (globalOpts.project ? await cloudResolveProjectRef(cloud, globalOpts.project) : undefined)
+          : autoProject(globalOpts);
+
+        if (opts.add) {
+          const input = { name: opts.add, slug: opts.slug, description: opts.description, project_id: projectId };
+          const list = cloud ? await cloudCreateTaskList(cloud, input) : createTaskList(input);
+          if (globalOpts.json) {
+            output(list, true);
+            return;
+          }
+          console.log(chalk.green("Task list created:"));
+          console.log(`  ${chalk.dim("ID:")}   ${list.id.slice(0, 8)}`);
+          console.log(`  ${chalk.dim("Slug:")} ${list.slug}`);
+          console.log(`  ${chalk.dim("Name:")} ${list.name}`);
+          return;
+        }
+
+        if (opts.show || opts.update) {
+          const ref = opts.show || opts.update;
+          const resolved = cloud
+            ? await cloudResolveTaskListRef(cloud, ref, projectId ?? undefined)
+            : resolvePartialId(getDatabase(), "task_lists", ref);
+          if (!resolved) throw new Error(`Task list not found or ambiguous: ${ref}`);
+          if (opts.show) {
+            const list = cloud ? await cloudGetTaskList(cloud, resolved) : getTaskList(resolved);
+            if (!list) throw new Error(`Task list not found: ${ref}`);
+            // outputRecord, not output: `output` prints only under --json, so this
+            // exited 0 with completely empty stdout in human mode.
+            outputRecord(list, Boolean(globalOpts.json), "Task list:");
+            return;
+          }
+          const patch = {
+            ...(opts.name !== undefined ? { name: opts.name } : {}),
+            ...(opts.slug !== undefined ? { slug: opts.slug } : {}),
+            ...(opts.description !== undefined ? { description: opts.description } : {}),
+          };
+          if (Object.keys(patch).length === 0) throw new Error("lists --update requires --name, --slug, or --description");
+          const list = cloud
+            ? await cloudUpdateTaskList(cloud, resolved, patch)
+            : updateTaskList(resolved, patch);
+          // A successful mutation must say so; this printed nothing in human mode.
+          outputRecord(list, Boolean(globalOpts.json), "Task list updated:");
+          return;
+        }
+
+        if (opts.delete) {
+          if (cloud) {
+            const resolved = await cloudResolveTaskListRef(cloud, opts.delete, projectId ?? undefined);
+            if (!resolved) throw new Error(`Task list not found or ambiguous: ${opts.delete}`);
+            const deleted = await cloudDeleteTaskList(cloud, resolved);
+            if (globalOpts.json) {
+              output({ deleted }, true);
+              if (!deleted) process.exitCode = 1;
+            } else if (deleted) {
+              console.log(chalk.green("Task list deleted."));
+            } else {
+              handleError(new Error("Task list not found"));
+            }
+            return;
+          }
+          const db = getDatabase();
+          const resolved = resolvePartialId(db, "task_lists", opts.delete);
+          if (!resolved) {
+            handleError(new Error("Task list not found"));
+          }
+          deleteTaskList(resolved);
+          console.log(chalk.green("Task list deleted."));
+          return;
+        }
+
+        const lists = cloud ? await cloudListTaskLists(cloud, projectId ?? undefined) : listTaskLists(projectId);
+        if (globalOpts.json) {
+          output(lists, true);
+          return;
+        }
+        if (lists.length === 0) {
+          console.log(chalk.dim("No task lists. Use 'todos lists --add <name>' to create one."));
+          return;
+        }
+        for (const l of lists) {
+          console.log(`  ${chalk.dim(l.id.slice(0, 8))} ${chalk.bold(l.name)} ${chalk.dim(`(${l.slug})`)}`);
+        }
+      } catch (e) {
+        handleError(e);
+      }
+    });
+
+  // upgrade (self-update)
+  program
+    .command("upgrade")
+    .alias("self-update")
+    .description("Update todos to the latest version")
+    .option("--check", "Only check for updates, don't install")
+    .action(async (opts) => {
+      try {
+        const currentVersion = getPackageVersion();
+
+        const res = await fetch("https://registry.npmjs.org/@hasna/todos/latest");
+        if (!res.ok) {
+          handleError(new Error("Failed to check for updates."));
+        }
+        const data = (await res.json()) as { version: string };
+        const latestVersion = data.version;
+
+        console.log(`  Current: ${chalk.dim(currentVersion)}`);
+        console.log(`  Latest:  ${chalk.green(latestVersion)}`);
+
+        if (currentVersion === latestVersion) {
+          console.log(chalk.green("\nAlready up to date!"));
+          return;
+        }
+
+        if (opts.check) {
+          console.log(
+            chalk.yellow(`\nUpdate available: ${currentVersion} → ${latestVersion}`),
+          );
+          return;
+        }
+
+        const cmd = "bun install -g @hasna/todos@latest";
+
+        console.log(chalk.dim(`\nRunning: ${cmd}`));
+        execSync(cmd, { stdio: "inherit" });
+        console.log(chalk.green(`\nUpdated to ${latestVersion}!`));
+      } catch (e) {
+        handleError(e);
+      }
+    });
+}

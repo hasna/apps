@@ -1,11 +1,9 @@
 #!/usr/bin/env bun
 /**
- * Apply the @hasna/telephony cloud-mode Postgres schema via the vendored
+ * Apply the @hasna/telephony server Postgres schema via the vendored
  * storage kit's MigrationLedger (checksum ledger + drift/downgrade guards).
  *
- * PURE REMOTE (Amendment A1): runs against the shared cloud Postgres only.
- * Requires:
- *   HASNA_TELEPHONY_STORAGE_MODE=postgres
+ * Runs against the PostgreSQL backend only. Requires:
  *   HASNA_TELEPHONY_DATABASE_URL=postgres://...   (never logged)
  *
  * Usage:
@@ -47,8 +45,8 @@ const asJson = process.argv.includes("--json");
     }
     process.env[key] = url;
   }
-  // Migrations always target the PostgreSQL backend.
-  process.env.HASNA_TELEPHONY_STORAGE_MODE = "postgres";
+  // Migrations always target the PostgreSQL backend; the kit resolves it from
+  // DATABASE_URL presence (any retired STORAGE_MODE variable throws).
 }
 
 // The extension migration must run before table DDL that relies on

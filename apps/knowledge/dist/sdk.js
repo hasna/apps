@@ -1,0 +1,22668 @@
+// @bun
+var __defProp = Object.defineProperty;
+var __returnValue = (v) => v;
+function __exportSetter(name, newValue) {
+  this[name] = __returnValue.bind(null, newValue);
+}
+var __export = (target, all) => {
+  for (var name in all)
+    __defProp(target, name, {
+      get: all[name],
+      enumerable: true,
+      configurable: true,
+      set: __exportSetter.bind(all, name)
+    });
+};
+var __esm = (fn, res) => () => (fn && (res = fn(fn = 0)), res);
+var __require = import.meta.require;
+
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v3/helpers/util.js
+var util, objectUtil, ZodParsedType, getParsedType = (data) => {
+  const t = typeof data;
+  switch (t) {
+    case "undefined":
+      return ZodParsedType.undefined;
+    case "string":
+      return ZodParsedType.string;
+    case "number":
+      return Number.isNaN(data) ? ZodParsedType.nan : ZodParsedType.number;
+    case "boolean":
+      return ZodParsedType.boolean;
+    case "function":
+      return ZodParsedType.function;
+    case "bigint":
+      return ZodParsedType.bigint;
+    case "symbol":
+      return ZodParsedType.symbol;
+    case "object":
+      if (Array.isArray(data)) {
+        return ZodParsedType.array;
+      }
+      if (data === null) {
+        return ZodParsedType.null;
+      }
+      if (data.then && typeof data.then === "function" && data.catch && typeof data.catch === "function") {
+        return ZodParsedType.promise;
+      }
+      if (typeof Map !== "undefined" && data instanceof Map) {
+        return ZodParsedType.map;
+      }
+      if (typeof Set !== "undefined" && data instanceof Set) {
+        return ZodParsedType.set;
+      }
+      if (typeof Date !== "undefined" && data instanceof Date) {
+        return ZodParsedType.date;
+      }
+      return ZodParsedType.object;
+    default:
+      return ZodParsedType.unknown;
+  }
+};
+var init_util = __esm(() => {
+  (function(util2) {
+    util2.assertEqual = (_) => {};
+    function assertIs(_arg) {}
+    util2.assertIs = assertIs;
+    function assertNever(_x) {
+      throw new Error;
+    }
+    util2.assertNever = assertNever;
+    util2.arrayToEnum = (items) => {
+      const obj = {};
+      for (const item of items) {
+        obj[item] = item;
+      }
+      return obj;
+    };
+    util2.getValidEnumValues = (obj) => {
+      const validKeys = util2.objectKeys(obj).filter((k) => typeof obj[obj[k]] !== "number");
+      const filtered = {};
+      for (const k of validKeys) {
+        filtered[k] = obj[k];
+      }
+      return util2.objectValues(filtered);
+    };
+    util2.objectValues = (obj) => {
+      return util2.objectKeys(obj).map(function(e) {
+        return obj[e];
+      });
+    };
+    util2.objectKeys = typeof Object.keys === "function" ? (obj) => Object.keys(obj) : (object) => {
+      const keys = [];
+      for (const key in object) {
+        if (Object.prototype.hasOwnProperty.call(object, key)) {
+          keys.push(key);
+        }
+      }
+      return keys;
+    };
+    util2.find = (arr, checker) => {
+      for (const item of arr) {
+        if (checker(item))
+          return item;
+      }
+      return;
+    };
+    util2.isInteger = typeof Number.isInteger === "function" ? (val) => Number.isInteger(val) : (val) => typeof val === "number" && Number.isFinite(val) && Math.floor(val) === val;
+    function joinValues(array, separator = " | ") {
+      return array.map((val) => typeof val === "string" ? `'${val}'` : val).join(separator);
+    }
+    util2.joinValues = joinValues;
+    util2.jsonStringifyReplacer = (_, value) => {
+      if (typeof value === "bigint") {
+        return value.toString();
+      }
+      return value;
+    };
+  })(util || (util = {}));
+  (function(objectUtil2) {
+    objectUtil2.mergeShapes = (first, second) => {
+      return {
+        ...first,
+        ...second
+      };
+    };
+  })(objectUtil || (objectUtil = {}));
+  ZodParsedType = util.arrayToEnum([
+    "string",
+    "nan",
+    "number",
+    "integer",
+    "float",
+    "boolean",
+    "date",
+    "bigint",
+    "symbol",
+    "function",
+    "undefined",
+    "null",
+    "array",
+    "object",
+    "unknown",
+    "promise",
+    "void",
+    "never",
+    "map",
+    "set"
+  ]);
+});
+
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v3/ZodError.js
+var ZodIssueCode, quotelessJson = (obj) => {
+  const json = JSON.stringify(obj, null, 2);
+  return json.replace(/"([^"]+)":/g, "$1:");
+}, ZodError;
+var init_ZodError = __esm(() => {
+  init_util();
+  ZodIssueCode = util.arrayToEnum([
+    "invalid_type",
+    "invalid_literal",
+    "custom",
+    "invalid_union",
+    "invalid_union_discriminator",
+    "invalid_enum_value",
+    "unrecognized_keys",
+    "invalid_arguments",
+    "invalid_return_type",
+    "invalid_date",
+    "invalid_string",
+    "too_small",
+    "too_big",
+    "invalid_intersection_types",
+    "not_multiple_of",
+    "not_finite"
+  ]);
+  ZodError = class ZodError extends Error {
+    get errors() {
+      return this.issues;
+    }
+    constructor(issues) {
+      super();
+      this.issues = [];
+      this.addIssue = (sub) => {
+        this.issues = [...this.issues, sub];
+      };
+      this.addIssues = (subs = []) => {
+        this.issues = [...this.issues, ...subs];
+      };
+      const actualProto = new.target.prototype;
+      if (Object.setPrototypeOf) {
+        Object.setPrototypeOf(this, actualProto);
+      } else {
+        this.__proto__ = actualProto;
+      }
+      this.name = "ZodError";
+      this.issues = issues;
+    }
+    format(_mapper) {
+      const mapper = _mapper || function(issue) {
+        return issue.message;
+      };
+      const fieldErrors = { _errors: [] };
+      const processError = (error) => {
+        for (const issue of error.issues) {
+          if (issue.code === "invalid_union") {
+            issue.unionErrors.map(processError);
+          } else if (issue.code === "invalid_return_type") {
+            processError(issue.returnTypeError);
+          } else if (issue.code === "invalid_arguments") {
+            processError(issue.argumentsError);
+          } else if (issue.path.length === 0) {
+            fieldErrors._errors.push(mapper(issue));
+          } else {
+            let curr = fieldErrors;
+            let i = 0;
+            while (i < issue.path.length) {
+              const el = issue.path[i];
+              const terminal = i === issue.path.length - 1;
+              if (!terminal) {
+                curr[el] = curr[el] || { _errors: [] };
+              } else {
+                curr[el] = curr[el] || { _errors: [] };
+                curr[el]._errors.push(mapper(issue));
+              }
+              curr = curr[el];
+              i++;
+            }
+          }
+        }
+      };
+      processError(this);
+      return fieldErrors;
+    }
+    static assert(value) {
+      if (!(value instanceof ZodError)) {
+        throw new Error(`Not a ZodError: ${value}`);
+      }
+    }
+    toString() {
+      return this.message;
+    }
+    get message() {
+      return JSON.stringify(this.issues, util.jsonStringifyReplacer, 2);
+    }
+    get isEmpty() {
+      return this.issues.length === 0;
+    }
+    flatten(mapper = (issue) => issue.message) {
+      const fieldErrors = {};
+      const formErrors = [];
+      for (const sub of this.issues) {
+        if (sub.path.length > 0) {
+          const firstEl = sub.path[0];
+          fieldErrors[firstEl] = fieldErrors[firstEl] || [];
+          fieldErrors[firstEl].push(mapper(sub));
+        } else {
+          formErrors.push(mapper(sub));
+        }
+      }
+      return { formErrors, fieldErrors };
+    }
+    get formErrors() {
+      return this.flatten();
+    }
+  };
+  ZodError.create = (issues) => {
+    const error = new ZodError(issues);
+    return error;
+  };
+});
+
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v3/locales/en.js
+var errorMap = (issue, _ctx) => {
+  let message;
+  switch (issue.code) {
+    case ZodIssueCode.invalid_type:
+      if (issue.received === ZodParsedType.undefined) {
+        message = "Required";
+      } else {
+        message = `Expected ${issue.expected}, received ${issue.received}`;
+      }
+      break;
+    case ZodIssueCode.invalid_literal:
+      message = `Invalid literal value, expected ${JSON.stringify(issue.expected, util.jsonStringifyReplacer)}`;
+      break;
+    case ZodIssueCode.unrecognized_keys:
+      message = `Unrecognized key(s) in object: ${util.joinValues(issue.keys, ", ")}`;
+      break;
+    case ZodIssueCode.invalid_union:
+      message = `Invalid input`;
+      break;
+    case ZodIssueCode.invalid_union_discriminator:
+      message = `Invalid discriminator value. Expected ${util.joinValues(issue.options)}`;
+      break;
+    case ZodIssueCode.invalid_enum_value:
+      message = `Invalid enum value. Expected ${util.joinValues(issue.options)}, received '${issue.received}'`;
+      break;
+    case ZodIssueCode.invalid_arguments:
+      message = `Invalid function arguments`;
+      break;
+    case ZodIssueCode.invalid_return_type:
+      message = `Invalid function return type`;
+      break;
+    case ZodIssueCode.invalid_date:
+      message = `Invalid date`;
+      break;
+    case ZodIssueCode.invalid_string:
+      if (typeof issue.validation === "object") {
+        if ("includes" in issue.validation) {
+          message = `Invalid input: must include "${issue.validation.includes}"`;
+          if (typeof issue.validation.position === "number") {
+            message = `${message} at one or more positions greater than or equal to ${issue.validation.position}`;
+          }
+        } else if ("startsWith" in issue.validation) {
+          message = `Invalid input: must start with "${issue.validation.startsWith}"`;
+        } else if ("endsWith" in issue.validation) {
+          message = `Invalid input: must end with "${issue.validation.endsWith}"`;
+        } else {
+          util.assertNever(issue.validation);
+        }
+      } else if (issue.validation !== "regex") {
+        message = `Invalid ${issue.validation}`;
+      } else {
+        message = "Invalid";
+      }
+      break;
+    case ZodIssueCode.too_small:
+      if (issue.type === "array")
+        message = `Array must contain ${issue.exact ? "exactly" : issue.inclusive ? `at least` : `more than`} ${issue.minimum} element(s)`;
+      else if (issue.type === "string")
+        message = `String must contain ${issue.exact ? "exactly" : issue.inclusive ? `at least` : `over`} ${issue.minimum} character(s)`;
+      else if (issue.type === "number")
+        message = `Number must be ${issue.exact ? `exactly equal to ` : issue.inclusive ? `greater than or equal to ` : `greater than `}${issue.minimum}`;
+      else if (issue.type === "bigint")
+        message = `Number must be ${issue.exact ? `exactly equal to ` : issue.inclusive ? `greater than or equal to ` : `greater than `}${issue.minimum}`;
+      else if (issue.type === "date")
+        message = `Date must be ${issue.exact ? `exactly equal to ` : issue.inclusive ? `greater than or equal to ` : `greater than `}${new Date(Number(issue.minimum))}`;
+      else
+        message = "Invalid input";
+      break;
+    case ZodIssueCode.too_big:
+      if (issue.type === "array")
+        message = `Array must contain ${issue.exact ? `exactly` : issue.inclusive ? `at most` : `less than`} ${issue.maximum} element(s)`;
+      else if (issue.type === "string")
+        message = `String must contain ${issue.exact ? `exactly` : issue.inclusive ? `at most` : `under`} ${issue.maximum} character(s)`;
+      else if (issue.type === "number")
+        message = `Number must be ${issue.exact ? `exactly` : issue.inclusive ? `less than or equal to` : `less than`} ${issue.maximum}`;
+      else if (issue.type === "bigint")
+        message = `BigInt must be ${issue.exact ? `exactly` : issue.inclusive ? `less than or equal to` : `less than`} ${issue.maximum}`;
+      else if (issue.type === "date")
+        message = `Date must be ${issue.exact ? `exactly` : issue.inclusive ? `smaller than or equal to` : `smaller than`} ${new Date(Number(issue.maximum))}`;
+      else
+        message = "Invalid input";
+      break;
+    case ZodIssueCode.custom:
+      message = `Invalid input`;
+      break;
+    case ZodIssueCode.invalid_intersection_types:
+      message = `Intersection results could not be merged`;
+      break;
+    case ZodIssueCode.not_multiple_of:
+      message = `Number must be a multiple of ${issue.multipleOf}`;
+      break;
+    case ZodIssueCode.not_finite:
+      message = "Number must be finite";
+      break;
+    default:
+      message = _ctx.defaultError;
+      util.assertNever(issue);
+  }
+  return { message };
+}, en_default;
+var init_en = __esm(() => {
+  init_ZodError();
+  init_util();
+  en_default = errorMap;
+});
+
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v3/errors.js
+function setErrorMap(map) {
+  overrideErrorMap = map;
+}
+function getErrorMap() {
+  return overrideErrorMap;
+}
+var overrideErrorMap;
+var init_errors = __esm(() => {
+  init_en();
+  overrideErrorMap = en_default;
+});
+
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v3/helpers/parseUtil.js
+function addIssueToContext(ctx, issueData) {
+  const overrideMap = getErrorMap();
+  const issue = makeIssue({
+    issueData,
+    data: ctx.data,
+    path: ctx.path,
+    errorMaps: [
+      ctx.common.contextualErrorMap,
+      ctx.schemaErrorMap,
+      overrideMap,
+      overrideMap === en_default ? undefined : en_default
+    ].filter((x) => !!x)
+  });
+  ctx.common.issues.push(issue);
+}
+
+class ParseStatus {
+  constructor() {
+    this.value = "valid";
+  }
+  dirty() {
+    if (this.value === "valid")
+      this.value = "dirty";
+  }
+  abort() {
+    if (this.value !== "aborted")
+      this.value = "aborted";
+  }
+  static mergeArray(status, results) {
+    const arrayValue = [];
+    for (const s of results) {
+      if (s.status === "aborted")
+        return INVALID;
+      if (s.status === "dirty")
+        status.dirty();
+      arrayValue.push(s.value);
+    }
+    return { status: status.value, value: arrayValue };
+  }
+  static async mergeObjectAsync(status, pairs) {
+    const syncPairs = [];
+    for (const pair of pairs) {
+      const key = await pair.key;
+      const value = await pair.value;
+      syncPairs.push({
+        key,
+        value
+      });
+    }
+    return ParseStatus.mergeObjectSync(status, syncPairs);
+  }
+  static mergeObjectSync(status, pairs) {
+    const finalObject = {};
+    for (const pair of pairs) {
+      const { key, value } = pair;
+      if (key.status === "aborted")
+        return INVALID;
+      if (value.status === "aborted")
+        return INVALID;
+      if (key.status === "dirty")
+        status.dirty();
+      if (value.status === "dirty")
+        status.dirty();
+      if (key.value !== "__proto__" && (typeof value.value !== "undefined" || pair.alwaysSet)) {
+        finalObject[key.value] = value.value;
+      }
+    }
+    return { status: status.value, value: finalObject };
+  }
+}
+var makeIssue = (params) => {
+  const { data, path, errorMaps, issueData } = params;
+  const fullPath = [...path, ...issueData.path || []];
+  const fullIssue = {
+    ...issueData,
+    path: fullPath
+  };
+  if (issueData.message !== undefined) {
+    return {
+      ...issueData,
+      path: fullPath,
+      message: issueData.message
+    };
+  }
+  let errorMessage = "";
+  const maps = errorMaps.filter((m) => !!m).slice().reverse();
+  for (const map of maps) {
+    errorMessage = map(fullIssue, { data, defaultError: errorMessage }).message;
+  }
+  return {
+    ...issueData,
+    path: fullPath,
+    message: errorMessage
+  };
+}, EMPTY_PATH, INVALID, DIRTY = (value) => ({ status: "dirty", value }), OK = (value) => ({ status: "valid", value }), isAborted = (x) => x.status === "aborted", isDirty = (x) => x.status === "dirty", isValid = (x) => x.status === "valid", isAsync = (x) => typeof Promise !== "undefined" && x instanceof Promise;
+var init_parseUtil = __esm(() => {
+  init_errors();
+  init_en();
+  EMPTY_PATH = [];
+  INVALID = Object.freeze({
+    status: "aborted"
+  });
+});
+
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v3/helpers/typeAliases.js
+var init_typeAliases = () => {};
+
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v3/helpers/errorUtil.js
+var errorUtil;
+var init_errorUtil = __esm(() => {
+  (function(errorUtil2) {
+    errorUtil2.errToObj = (message) => typeof message === "string" ? { message } : message || {};
+    errorUtil2.toString = (message) => typeof message === "string" ? message : message?.message;
+  })(errorUtil || (errorUtil = {}));
+});
+
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v3/types.js
+class ParseInputLazyPath {
+  constructor(parent, value, path, key) {
+    this._cachedPath = [];
+    this.parent = parent;
+    this.data = value;
+    this._path = path;
+    this._key = key;
+  }
+  get path() {
+    if (!this._cachedPath.length) {
+      if (Array.isArray(this._key)) {
+        this._cachedPath.push(...this._path, ...this._key);
+      } else {
+        this._cachedPath.push(...this._path, this._key);
+      }
+    }
+    return this._cachedPath;
+  }
+}
+function processCreateParams(params) {
+  if (!params)
+    return {};
+  const { errorMap: errorMap2, invalid_type_error, required_error, description } = params;
+  if (errorMap2 && (invalid_type_error || required_error)) {
+    throw new Error(`Can't use "invalid_type_error" or "required_error" in conjunction with custom error map.`);
+  }
+  if (errorMap2)
+    return { errorMap: errorMap2, description };
+  const customMap = (iss, ctx) => {
+    const { message } = params;
+    if (iss.code === "invalid_enum_value") {
+      return { message: message ?? ctx.defaultError };
+    }
+    if (typeof ctx.data === "undefined") {
+      return { message: message ?? required_error ?? ctx.defaultError };
+    }
+    if (iss.code !== "invalid_type")
+      return { message: ctx.defaultError };
+    return { message: message ?? invalid_type_error ?? ctx.defaultError };
+  };
+  return { errorMap: customMap, description };
+}
+
+class ZodType {
+  get description() {
+    return this._def.description;
+  }
+  _getType(input) {
+    return getParsedType(input.data);
+  }
+  _getOrReturnCtx(input, ctx) {
+    return ctx || {
+      common: input.parent.common,
+      data: input.data,
+      parsedType: getParsedType(input.data),
+      schemaErrorMap: this._def.errorMap,
+      path: input.path,
+      parent: input.parent
+    };
+  }
+  _processInputParams(input) {
+    return {
+      status: new ParseStatus,
+      ctx: {
+        common: input.parent.common,
+        data: input.data,
+        parsedType: getParsedType(input.data),
+        schemaErrorMap: this._def.errorMap,
+        path: input.path,
+        parent: input.parent
+      }
+    };
+  }
+  _parseSync(input) {
+    const result = this._parse(input);
+    if (isAsync(result)) {
+      throw new Error("Synchronous parse encountered promise.");
+    }
+    return result;
+  }
+  _parseAsync(input) {
+    const result = this._parse(input);
+    return Promise.resolve(result);
+  }
+  parse(data, params) {
+    const result = this.safeParse(data, params);
+    if (result.success)
+      return result.data;
+    throw result.error;
+  }
+  safeParse(data, params) {
+    const ctx = {
+      common: {
+        issues: [],
+        async: params?.async ?? false,
+        contextualErrorMap: params?.errorMap
+      },
+      path: params?.path || [],
+      schemaErrorMap: this._def.errorMap,
+      parent: null,
+      data,
+      parsedType: getParsedType(data)
+    };
+    const result = this._parseSync({ data, path: ctx.path, parent: ctx });
+    return handleResult(ctx, result);
+  }
+  "~validate"(data) {
+    const ctx = {
+      common: {
+        issues: [],
+        async: !!this["~standard"].async
+      },
+      path: [],
+      schemaErrorMap: this._def.errorMap,
+      parent: null,
+      data,
+      parsedType: getParsedType(data)
+    };
+    if (!this["~standard"].async) {
+      try {
+        const result = this._parseSync({ data, path: [], parent: ctx });
+        return isValid(result) ? {
+          value: result.value
+        } : {
+          issues: ctx.common.issues
+        };
+      } catch (err) {
+        if (err?.message?.toLowerCase()?.includes("encountered")) {
+          this["~standard"].async = true;
+        }
+        ctx.common = {
+          issues: [],
+          async: true
+        };
+      }
+    }
+    return this._parseAsync({ data, path: [], parent: ctx }).then((result) => isValid(result) ? {
+      value: result.value
+    } : {
+      issues: ctx.common.issues
+    });
+  }
+  async parseAsync(data, params) {
+    const result = await this.safeParseAsync(data, params);
+    if (result.success)
+      return result.data;
+    throw result.error;
+  }
+  async safeParseAsync(data, params) {
+    const ctx = {
+      common: {
+        issues: [],
+        contextualErrorMap: params?.errorMap,
+        async: true
+      },
+      path: params?.path || [],
+      schemaErrorMap: this._def.errorMap,
+      parent: null,
+      data,
+      parsedType: getParsedType(data)
+    };
+    const maybeAsyncResult = this._parse({ data, path: ctx.path, parent: ctx });
+    const result = await (isAsync(maybeAsyncResult) ? maybeAsyncResult : Promise.resolve(maybeAsyncResult));
+    return handleResult(ctx, result);
+  }
+  refine(check, message) {
+    const getIssueProperties = (val) => {
+      if (typeof message === "string" || typeof message === "undefined") {
+        return { message };
+      } else if (typeof message === "function") {
+        return message(val);
+      } else {
+        return message;
+      }
+    };
+    return this._refinement((val, ctx) => {
+      const result = check(val);
+      const setError = () => ctx.addIssue({
+        code: ZodIssueCode.custom,
+        ...getIssueProperties(val)
+      });
+      if (typeof Promise !== "undefined" && result instanceof Promise) {
+        return result.then((data) => {
+          if (!data) {
+            setError();
+            return false;
+          } else {
+            return true;
+          }
+        });
+      }
+      if (!result) {
+        setError();
+        return false;
+      } else {
+        return true;
+      }
+    });
+  }
+  refinement(check, refinementData) {
+    return this._refinement((val, ctx) => {
+      if (!check(val)) {
+        ctx.addIssue(typeof refinementData === "function" ? refinementData(val, ctx) : refinementData);
+        return false;
+      } else {
+        return true;
+      }
+    });
+  }
+  _refinement(refinement) {
+    return new ZodEffects({
+      schema: this,
+      typeName: ZodFirstPartyTypeKind.ZodEffects,
+      effect: { type: "refinement", refinement }
+    });
+  }
+  superRefine(refinement) {
+    return this._refinement(refinement);
+  }
+  constructor(def) {
+    this.spa = this.safeParseAsync;
+    this._def = def;
+    this.parse = this.parse.bind(this);
+    this.safeParse = this.safeParse.bind(this);
+    this.parseAsync = this.parseAsync.bind(this);
+    this.safeParseAsync = this.safeParseAsync.bind(this);
+    this.spa = this.spa.bind(this);
+    this.refine = this.refine.bind(this);
+    this.refinement = this.refinement.bind(this);
+    this.superRefine = this.superRefine.bind(this);
+    this.optional = this.optional.bind(this);
+    this.nullable = this.nullable.bind(this);
+    this.nullish = this.nullish.bind(this);
+    this.array = this.array.bind(this);
+    this.promise = this.promise.bind(this);
+    this.or = this.or.bind(this);
+    this.and = this.and.bind(this);
+    this.transform = this.transform.bind(this);
+    this.brand = this.brand.bind(this);
+    this.default = this.default.bind(this);
+    this.catch = this.catch.bind(this);
+    this.describe = this.describe.bind(this);
+    this.pipe = this.pipe.bind(this);
+    this.readonly = this.readonly.bind(this);
+    this.isNullable = this.isNullable.bind(this);
+    this.isOptional = this.isOptional.bind(this);
+    this["~standard"] = {
+      version: 1,
+      vendor: "zod",
+      validate: (data) => this["~validate"](data)
+    };
+  }
+  optional() {
+    return ZodOptional.create(this, this._def);
+  }
+  nullable() {
+    return ZodNullable.create(this, this._def);
+  }
+  nullish() {
+    return this.nullable().optional();
+  }
+  array() {
+    return ZodArray.create(this);
+  }
+  promise() {
+    return ZodPromise.create(this, this._def);
+  }
+  or(option) {
+    return ZodUnion.create([this, option], this._def);
+  }
+  and(incoming) {
+    return ZodIntersection.create(this, incoming, this._def);
+  }
+  transform(transform) {
+    return new ZodEffects({
+      ...processCreateParams(this._def),
+      schema: this,
+      typeName: ZodFirstPartyTypeKind.ZodEffects,
+      effect: { type: "transform", transform }
+    });
+  }
+  default(def) {
+    const defaultValueFunc = typeof def === "function" ? def : () => def;
+    return new ZodDefault({
+      ...processCreateParams(this._def),
+      innerType: this,
+      defaultValue: defaultValueFunc,
+      typeName: ZodFirstPartyTypeKind.ZodDefault
+    });
+  }
+  brand() {
+    return new ZodBranded({
+      typeName: ZodFirstPartyTypeKind.ZodBranded,
+      type: this,
+      ...processCreateParams(this._def)
+    });
+  }
+  catch(def) {
+    const catchValueFunc = typeof def === "function" ? def : () => def;
+    return new ZodCatch({
+      ...processCreateParams(this._def),
+      innerType: this,
+      catchValue: catchValueFunc,
+      typeName: ZodFirstPartyTypeKind.ZodCatch
+    });
+  }
+  describe(description) {
+    const This = this.constructor;
+    return new This({
+      ...this._def,
+      description
+    });
+  }
+  pipe(target) {
+    return ZodPipeline.create(this, target);
+  }
+  readonly() {
+    return ZodReadonly.create(this);
+  }
+  isOptional() {
+    return this.safeParse(undefined).success;
+  }
+  isNullable() {
+    return this.safeParse(null).success;
+  }
+}
+function timeRegexSource(args) {
+  let secondsRegexSource = `[0-5]\\d`;
+  if (args.precision) {
+    secondsRegexSource = `${secondsRegexSource}\\.\\d{${args.precision}}`;
+  } else if (args.precision == null) {
+    secondsRegexSource = `${secondsRegexSource}(\\.\\d+)?`;
+  }
+  const secondsQuantifier = args.precision ? "+" : "?";
+  return `([01]\\d|2[0-3]):[0-5]\\d(:${secondsRegexSource})${secondsQuantifier}`;
+}
+function timeRegex(args) {
+  return new RegExp(`^${timeRegexSource(args)}$`);
+}
+function datetimeRegex(args) {
+  let regex = `${dateRegexSource}T${timeRegexSource(args)}`;
+  const opts = [];
+  opts.push(args.local ? `Z?` : `Z`);
+  if (args.offset)
+    opts.push(`([+-]\\d{2}:?\\d{2})`);
+  regex = `${regex}(${opts.join("|")})`;
+  return new RegExp(`^${regex}$`);
+}
+function isValidIP(ip, version) {
+  if ((version === "v4" || !version) && ipv4Regex.test(ip)) {
+    return true;
+  }
+  if ((version === "v6" || !version) && ipv6Regex.test(ip)) {
+    return true;
+  }
+  return false;
+}
+function isValidJWT(jwt, alg) {
+  if (!jwtRegex.test(jwt))
+    return false;
+  try {
+    const [header] = jwt.split(".");
+    if (!header)
+      return false;
+    const base64 = header.replace(/-/g, "+").replace(/_/g, "/").padEnd(header.length + (4 - header.length % 4) % 4, "=");
+    const decoded = JSON.parse(atob(base64));
+    if (typeof decoded !== "object" || decoded === null)
+      return false;
+    if ("typ" in decoded && decoded?.typ !== "JWT")
+      return false;
+    if (!decoded.alg)
+      return false;
+    if (alg && decoded.alg !== alg)
+      return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+function isValidCidr(ip, version) {
+  if ((version === "v4" || !version) && ipv4CidrRegex.test(ip)) {
+    return true;
+  }
+  if ((version === "v6" || !version) && ipv6CidrRegex.test(ip)) {
+    return true;
+  }
+  return false;
+}
+function floatSafeRemainder(val, step) {
+  const valDecCount = (val.toString().split(".")[1] || "").length;
+  const stepDecCount = (step.toString().split(".")[1] || "").length;
+  const decCount = valDecCount > stepDecCount ? valDecCount : stepDecCount;
+  const valInt = Number.parseInt(val.toFixed(decCount).replace(".", ""));
+  const stepInt = Number.parseInt(step.toFixed(decCount).replace(".", ""));
+  return valInt % stepInt / 10 ** decCount;
+}
+function deepPartialify(schema) {
+  if (schema instanceof ZodObject) {
+    const newShape = {};
+    for (const key in schema.shape) {
+      const fieldSchema = schema.shape[key];
+      newShape[key] = ZodOptional.create(deepPartialify(fieldSchema));
+    }
+    return new ZodObject({
+      ...schema._def,
+      shape: () => newShape
+    });
+  } else if (schema instanceof ZodArray) {
+    return new ZodArray({
+      ...schema._def,
+      type: deepPartialify(schema.element)
+    });
+  } else if (schema instanceof ZodOptional) {
+    return ZodOptional.create(deepPartialify(schema.unwrap()));
+  } else if (schema instanceof ZodNullable) {
+    return ZodNullable.create(deepPartialify(schema.unwrap()));
+  } else if (schema instanceof ZodTuple) {
+    return ZodTuple.create(schema.items.map((item) => deepPartialify(item)));
+  } else {
+    return schema;
+  }
+}
+function mergeValues(a, b) {
+  const aType = getParsedType(a);
+  const bType = getParsedType(b);
+  if (a === b) {
+    return { valid: true, data: a };
+  } else if (aType === ZodParsedType.object && bType === ZodParsedType.object) {
+    const bKeys = util.objectKeys(b);
+    const sharedKeys = util.objectKeys(a).filter((key) => bKeys.indexOf(key) !== -1);
+    const newObj = { ...a, ...b };
+    for (const key of sharedKeys) {
+      const sharedValue = mergeValues(a[key], b[key]);
+      if (!sharedValue.valid) {
+        return { valid: false };
+      }
+      newObj[key] = sharedValue.data;
+    }
+    return { valid: true, data: newObj };
+  } else if (aType === ZodParsedType.array && bType === ZodParsedType.array) {
+    if (a.length !== b.length) {
+      return { valid: false };
+    }
+    const newArray = [];
+    for (let index = 0;index < a.length; index++) {
+      const itemA = a[index];
+      const itemB = b[index];
+      const sharedValue = mergeValues(itemA, itemB);
+      if (!sharedValue.valid) {
+        return { valid: false };
+      }
+      newArray.push(sharedValue.data);
+    }
+    return { valid: true, data: newArray };
+  } else if (aType === ZodParsedType.date && bType === ZodParsedType.date && +a === +b) {
+    return { valid: true, data: a };
+  } else {
+    return { valid: false };
+  }
+}
+function createZodEnum(values, params) {
+  return new ZodEnum({
+    values,
+    typeName: ZodFirstPartyTypeKind.ZodEnum,
+    ...processCreateParams(params)
+  });
+}
+function cleanParams(params, data) {
+  const p = typeof params === "function" ? params(data) : typeof params === "string" ? { message: params } : params;
+  const p2 = typeof p === "string" ? { message: p } : p;
+  return p2;
+}
+function custom(check, _params = {}, fatal) {
+  if (check)
+    return ZodAny.create().superRefine((data, ctx) => {
+      const r = check(data);
+      if (r instanceof Promise) {
+        return r.then((r2) => {
+          if (!r2) {
+            const params = cleanParams(_params, data);
+            const _fatal = params.fatal ?? fatal ?? true;
+            ctx.addIssue({ code: "custom", ...params, fatal: _fatal });
+          }
+        });
+      }
+      if (!r) {
+        const params = cleanParams(_params, data);
+        const _fatal = params.fatal ?? fatal ?? true;
+        ctx.addIssue({ code: "custom", ...params, fatal: _fatal });
+      }
+      return;
+    });
+  return ZodAny.create();
+}
+var handleResult = (ctx, result) => {
+  if (isValid(result)) {
+    return { success: true, data: result.value };
+  } else {
+    if (!ctx.common.issues.length) {
+      throw new Error("Validation failed but no issues detected.");
+    }
+    return {
+      success: false,
+      get error() {
+        if (this._error)
+          return this._error;
+        const error = new ZodError(ctx.common.issues);
+        this._error = error;
+        return this._error;
+      }
+    };
+  }
+}, cuidRegex, cuid2Regex, ulidRegex, uuidRegex, nanoidRegex, jwtRegex, durationRegex, emailRegex, _emojiRegex = `^(\\p{Extended_Pictographic}|\\p{Emoji_Component})+$`, emojiRegex, ipv4Regex, ipv4CidrRegex, ipv6Regex, ipv6CidrRegex, base64Regex, base64urlRegex, dateRegexSource = `((\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-((0[13578]|1[02])-(0[1-9]|[12]\\d|3[01])|(0[469]|11)-(0[1-9]|[12]\\d|30)|(02)-(0[1-9]|1\\d|2[0-8])))`, dateRegex, ZodString, ZodNumber, ZodBigInt, ZodBoolean, ZodDate, ZodSymbol, ZodUndefined, ZodNull, ZodAny, ZodUnknown, ZodNever, ZodVoid, ZodArray, ZodObject, ZodUnion, getDiscriminator = (type) => {
+  if (type instanceof ZodLazy) {
+    return getDiscriminator(type.schema);
+  } else if (type instanceof ZodEffects) {
+    return getDiscriminator(type.innerType());
+  } else if (type instanceof ZodLiteral) {
+    return [type.value];
+  } else if (type instanceof ZodEnum) {
+    return type.options;
+  } else if (type instanceof ZodNativeEnum) {
+    return util.objectValues(type.enum);
+  } else if (type instanceof ZodDefault) {
+    return getDiscriminator(type._def.innerType);
+  } else if (type instanceof ZodUndefined) {
+    return [undefined];
+  } else if (type instanceof ZodNull) {
+    return [null];
+  } else if (type instanceof ZodOptional) {
+    return [undefined, ...getDiscriminator(type.unwrap())];
+  } else if (type instanceof ZodNullable) {
+    return [null, ...getDiscriminator(type.unwrap())];
+  } else if (type instanceof ZodBranded) {
+    return getDiscriminator(type.unwrap());
+  } else if (type instanceof ZodReadonly) {
+    return getDiscriminator(type.unwrap());
+  } else if (type instanceof ZodCatch) {
+    return getDiscriminator(type._def.innerType);
+  } else {
+    return [];
+  }
+}, ZodDiscriminatedUnion, ZodIntersection, ZodTuple, ZodRecord, ZodMap, ZodSet, ZodFunction, ZodLazy, ZodLiteral, ZodEnum, ZodNativeEnum, ZodPromise, ZodEffects, ZodOptional, ZodNullable, ZodDefault, ZodCatch, ZodNaN, BRAND, ZodBranded, ZodPipeline, ZodReadonly, late, ZodFirstPartyTypeKind, instanceOfType = (cls, params = {
+  message: `Input not instance of ${cls.name}`
+}) => custom((data) => data instanceof cls, params), stringType, numberType, nanType, bigIntType, booleanType, dateType, symbolType, undefinedType, nullType, anyType, unknownType, neverType, voidType, arrayType, objectType, strictObjectType, unionType, discriminatedUnionType, intersectionType, tupleType, recordType, mapType, setType, functionType, lazyType, literalType, enumType, nativeEnumType, promiseType, effectsType, optionalType, nullableType, preprocessType, pipelineType, ostring = () => stringType().optional(), onumber = () => numberType().optional(), oboolean = () => booleanType().optional(), coerce, NEVER;
+var init_types = __esm(() => {
+  init_ZodError();
+  init_errors();
+  init_errorUtil();
+  init_parseUtil();
+  init_util();
+  cuidRegex = /^c[^\s-]{8,}$/i;
+  cuid2Regex = /^[0-9a-z]+$/;
+  ulidRegex = /^[0-9A-HJKMNP-TV-Z]{26}$/i;
+  uuidRegex = /^[0-9a-fA-F]{8}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{12}$/i;
+  nanoidRegex = /^[a-z0-9_-]{21}$/i;
+  jwtRegex = /^[A-Za-z0-9-_]+\.[A-Za-z0-9-_]+\.[A-Za-z0-9-_]*$/;
+  durationRegex = /^[-+]?P(?!$)(?:(?:[-+]?\d+Y)|(?:[-+]?\d+[.,]\d+Y$))?(?:(?:[-+]?\d+M)|(?:[-+]?\d+[.,]\d+M$))?(?:(?:[-+]?\d+W)|(?:[-+]?\d+[.,]\d+W$))?(?:(?:[-+]?\d+D)|(?:[-+]?\d+[.,]\d+D$))?(?:T(?=[\d+-])(?:(?:[-+]?\d+H)|(?:[-+]?\d+[.,]\d+H$))?(?:(?:[-+]?\d+M)|(?:[-+]?\d+[.,]\d+M$))?(?:[-+]?\d+(?:[.,]\d+)?S)?)??$/;
+  emailRegex = /^(?!\.)(?!.*\.\.)([A-Z0-9_'+\-\.]*)[A-Z0-9_+-]@([A-Z0-9][A-Z0-9\-]*\.)+[A-Z]{2,}$/i;
+  ipv4Regex = /^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])$/;
+  ipv4CidrRegex = /^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])\/(3[0-2]|[12]?[0-9])$/;
+  ipv6Regex = /^(([0-9a-fA-F]{1,4}:){7,7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,7}|:)|fe80:(:[0-9a-fA-F]{0,4}){0,4}%[0-9a-zA-Z]{1,}|::(ffff(:0{1,4}){0,1}:){0,1}((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])|([0-9a-fA-F]{1,4}:){1,4}:((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9]))$/;
+  ipv6CidrRegex = /^(([0-9a-fA-F]{1,4}:){7,7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,7}|:)|fe80:(:[0-9a-fA-F]{0,4}){0,4}%[0-9a-zA-Z]{1,}|::(ffff(:0{1,4}){0,1}:){0,1}((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])|([0-9a-fA-F]{1,4}:){1,4}:((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9]))\/(12[0-8]|1[01][0-9]|[1-9]?[0-9])$/;
+  base64Regex = /^([0-9a-zA-Z+/]{4})*(([0-9a-zA-Z+/]{2}==)|([0-9a-zA-Z+/]{3}=))?$/;
+  base64urlRegex = /^([0-9a-zA-Z-_]{4})*(([0-9a-zA-Z-_]{2}(==)?)|([0-9a-zA-Z-_]{3}(=)?))?$/;
+  dateRegex = new RegExp(`^${dateRegexSource}$`);
+  ZodString = class ZodString extends ZodType {
+    _parse(input) {
+      if (this._def.coerce) {
+        input.data = String(input.data);
+      }
+      const parsedType = this._getType(input);
+      if (parsedType !== ZodParsedType.string) {
+        const ctx2 = this._getOrReturnCtx(input);
+        addIssueToContext(ctx2, {
+          code: ZodIssueCode.invalid_type,
+          expected: ZodParsedType.string,
+          received: ctx2.parsedType
+        });
+        return INVALID;
+      }
+      const status = new ParseStatus;
+      let ctx = undefined;
+      for (const check of this._def.checks) {
+        if (check.kind === "min") {
+          if (input.data.length < check.value) {
+            ctx = this._getOrReturnCtx(input, ctx);
+            addIssueToContext(ctx, {
+              code: ZodIssueCode.too_small,
+              minimum: check.value,
+              type: "string",
+              inclusive: true,
+              exact: false,
+              message: check.message
+            });
+            status.dirty();
+          }
+        } else if (check.kind === "max") {
+          if (input.data.length > check.value) {
+            ctx = this._getOrReturnCtx(input, ctx);
+            addIssueToContext(ctx, {
+              code: ZodIssueCode.too_big,
+              maximum: check.value,
+              type: "string",
+              inclusive: true,
+              exact: false,
+              message: check.message
+            });
+            status.dirty();
+          }
+        } else if (check.kind === "length") {
+          const tooBig = input.data.length > check.value;
+          const tooSmall = input.data.length < check.value;
+          if (tooBig || tooSmall) {
+            ctx = this._getOrReturnCtx(input, ctx);
+            if (tooBig) {
+              addIssueToContext(ctx, {
+                code: ZodIssueCode.too_big,
+                maximum: check.value,
+                type: "string",
+                inclusive: true,
+                exact: true,
+                message: check.message
+              });
+            } else if (tooSmall) {
+              addIssueToContext(ctx, {
+                code: ZodIssueCode.too_small,
+                minimum: check.value,
+                type: "string",
+                inclusive: true,
+                exact: true,
+                message: check.message
+              });
+            }
+            status.dirty();
+          }
+        } else if (check.kind === "email") {
+          if (!emailRegex.test(input.data)) {
+            ctx = this._getOrReturnCtx(input, ctx);
+            addIssueToContext(ctx, {
+              validation: "email",
+              code: ZodIssueCode.invalid_string,
+              message: check.message
+            });
+            status.dirty();
+          }
+        } else if (check.kind === "emoji") {
+          if (!emojiRegex) {
+            emojiRegex = new RegExp(_emojiRegex, "u");
+          }
+          if (!emojiRegex.test(input.data)) {
+            ctx = this._getOrReturnCtx(input, ctx);
+            addIssueToContext(ctx, {
+              validation: "emoji",
+              code: ZodIssueCode.invalid_string,
+              message: check.message
+            });
+            status.dirty();
+          }
+        } else if (check.kind === "uuid") {
+          if (!uuidRegex.test(input.data)) {
+            ctx = this._getOrReturnCtx(input, ctx);
+            addIssueToContext(ctx, {
+              validation: "uuid",
+              code: ZodIssueCode.invalid_string,
+              message: check.message
+            });
+            status.dirty();
+          }
+        } else if (check.kind === "nanoid") {
+          if (!nanoidRegex.test(input.data)) {
+            ctx = this._getOrReturnCtx(input, ctx);
+            addIssueToContext(ctx, {
+              validation: "nanoid",
+              code: ZodIssueCode.invalid_string,
+              message: check.message
+            });
+            status.dirty();
+          }
+        } else if (check.kind === "cuid") {
+          if (!cuidRegex.test(input.data)) {
+            ctx = this._getOrReturnCtx(input, ctx);
+            addIssueToContext(ctx, {
+              validation: "cuid",
+              code: ZodIssueCode.invalid_string,
+              message: check.message
+            });
+            status.dirty();
+          }
+        } else if (check.kind === "cuid2") {
+          if (!cuid2Regex.test(input.data)) {
+            ctx = this._getOrReturnCtx(input, ctx);
+            addIssueToContext(ctx, {
+              validation: "cuid2",
+              code: ZodIssueCode.invalid_string,
+              message: check.message
+            });
+            status.dirty();
+          }
+        } else if (check.kind === "ulid") {
+          if (!ulidRegex.test(input.data)) {
+            ctx = this._getOrReturnCtx(input, ctx);
+            addIssueToContext(ctx, {
+              validation: "ulid",
+              code: ZodIssueCode.invalid_string,
+              message: check.message
+            });
+            status.dirty();
+          }
+        } else if (check.kind === "url") {
+          try {
+            new URL(input.data);
+          } catch {
+            ctx = this._getOrReturnCtx(input, ctx);
+            addIssueToContext(ctx, {
+              validation: "url",
+              code: ZodIssueCode.invalid_string,
+              message: check.message
+            });
+            status.dirty();
+          }
+        } else if (check.kind === "regex") {
+          check.regex.lastIndex = 0;
+          const testResult = check.regex.test(input.data);
+          if (!testResult) {
+            ctx = this._getOrReturnCtx(input, ctx);
+            addIssueToContext(ctx, {
+              validation: "regex",
+              code: ZodIssueCode.invalid_string,
+              message: check.message
+            });
+            status.dirty();
+          }
+        } else if (check.kind === "trim") {
+          input.data = input.data.trim();
+        } else if (check.kind === "includes") {
+          if (!input.data.includes(check.value, check.position)) {
+            ctx = this._getOrReturnCtx(input, ctx);
+            addIssueToContext(ctx, {
+              code: ZodIssueCode.invalid_string,
+              validation: { includes: check.value, position: check.position },
+              message: check.message
+            });
+            status.dirty();
+          }
+        } else if (check.kind === "toLowerCase") {
+          input.data = input.data.toLowerCase();
+        } else if (check.kind === "toUpperCase") {
+          input.data = input.data.toUpperCase();
+        } else if (check.kind === "startsWith") {
+          if (!input.data.startsWith(check.value)) {
+            ctx = this._getOrReturnCtx(input, ctx);
+            addIssueToContext(ctx, {
+              code: ZodIssueCode.invalid_string,
+              validation: { startsWith: check.value },
+              message: check.message
+            });
+            status.dirty();
+          }
+        } else if (check.kind === "endsWith") {
+          if (!input.data.endsWith(check.value)) {
+            ctx = this._getOrReturnCtx(input, ctx);
+            addIssueToContext(ctx, {
+              code: ZodIssueCode.invalid_string,
+              validation: { endsWith: check.value },
+              message: check.message
+            });
+            status.dirty();
+          }
+        } else if (check.kind === "datetime") {
+          const regex = datetimeRegex(check);
+          if (!regex.test(input.data)) {
+            ctx = this._getOrReturnCtx(input, ctx);
+            addIssueToContext(ctx, {
+              code: ZodIssueCode.invalid_string,
+              validation: "datetime",
+              message: check.message
+            });
+            status.dirty();
+          }
+        } else if (check.kind === "date") {
+          const regex = dateRegex;
+          if (!regex.test(input.data)) {
+            ctx = this._getOrReturnCtx(input, ctx);
+            addIssueToContext(ctx, {
+              code: ZodIssueCode.invalid_string,
+              validation: "date",
+              message: check.message
+            });
+            status.dirty();
+          }
+        } else if (check.kind === "time") {
+          const regex = timeRegex(check);
+          if (!regex.test(input.data)) {
+            ctx = this._getOrReturnCtx(input, ctx);
+            addIssueToContext(ctx, {
+              code: ZodIssueCode.invalid_string,
+              validation: "time",
+              message: check.message
+            });
+            status.dirty();
+          }
+        } else if (check.kind === "duration") {
+          if (!durationRegex.test(input.data)) {
+            ctx = this._getOrReturnCtx(input, ctx);
+            addIssueToContext(ctx, {
+              validation: "duration",
+              code: ZodIssueCode.invalid_string,
+              message: check.message
+            });
+            status.dirty();
+          }
+        } else if (check.kind === "ip") {
+          if (!isValidIP(input.data, check.version)) {
+            ctx = this._getOrReturnCtx(input, ctx);
+            addIssueToContext(ctx, {
+              validation: "ip",
+              code: ZodIssueCode.invalid_string,
+              message: check.message
+            });
+            status.dirty();
+          }
+        } else if (check.kind === "jwt") {
+          if (!isValidJWT(input.data, check.alg)) {
+            ctx = this._getOrReturnCtx(input, ctx);
+            addIssueToContext(ctx, {
+              validation: "jwt",
+              code: ZodIssueCode.invalid_string,
+              message: check.message
+            });
+            status.dirty();
+          }
+        } else if (check.kind === "cidr") {
+          if (!isValidCidr(input.data, check.version)) {
+            ctx = this._getOrReturnCtx(input, ctx);
+            addIssueToContext(ctx, {
+              validation: "cidr",
+              code: ZodIssueCode.invalid_string,
+              message: check.message
+            });
+            status.dirty();
+          }
+        } else if (check.kind === "base64") {
+          if (!base64Regex.test(input.data)) {
+            ctx = this._getOrReturnCtx(input, ctx);
+            addIssueToContext(ctx, {
+              validation: "base64",
+              code: ZodIssueCode.invalid_string,
+              message: check.message
+            });
+            status.dirty();
+          }
+        } else if (check.kind === "base64url") {
+          if (!base64urlRegex.test(input.data)) {
+            ctx = this._getOrReturnCtx(input, ctx);
+            addIssueToContext(ctx, {
+              validation: "base64url",
+              code: ZodIssueCode.invalid_string,
+              message: check.message
+            });
+            status.dirty();
+          }
+        } else {
+          util.assertNever(check);
+        }
+      }
+      return { status: status.value, value: input.data };
+    }
+    _regex(regex, validation, message) {
+      return this.refinement((data) => regex.test(data), {
+        validation,
+        code: ZodIssueCode.invalid_string,
+        ...errorUtil.errToObj(message)
+      });
+    }
+    _addCheck(check) {
+      return new ZodString({
+        ...this._def,
+        checks: [...this._def.checks, check]
+      });
+    }
+    email(message) {
+      return this._addCheck({ kind: "email", ...errorUtil.errToObj(message) });
+    }
+    url(message) {
+      return this._addCheck({ kind: "url", ...errorUtil.errToObj(message) });
+    }
+    emoji(message) {
+      return this._addCheck({ kind: "emoji", ...errorUtil.errToObj(message) });
+    }
+    uuid(message) {
+      return this._addCheck({ kind: "uuid", ...errorUtil.errToObj(message) });
+    }
+    nanoid(message) {
+      return this._addCheck({ kind: "nanoid", ...errorUtil.errToObj(message) });
+    }
+    cuid(message) {
+      return this._addCheck({ kind: "cuid", ...errorUtil.errToObj(message) });
+    }
+    cuid2(message) {
+      return this._addCheck({ kind: "cuid2", ...errorUtil.errToObj(message) });
+    }
+    ulid(message) {
+      return this._addCheck({ kind: "ulid", ...errorUtil.errToObj(message) });
+    }
+    base64(message) {
+      return this._addCheck({ kind: "base64", ...errorUtil.errToObj(message) });
+    }
+    base64url(message) {
+      return this._addCheck({
+        kind: "base64url",
+        ...errorUtil.errToObj(message)
+      });
+    }
+    jwt(options) {
+      return this._addCheck({ kind: "jwt", ...errorUtil.errToObj(options) });
+    }
+    ip(options) {
+      return this._addCheck({ kind: "ip", ...errorUtil.errToObj(options) });
+    }
+    cidr(options) {
+      return this._addCheck({ kind: "cidr", ...errorUtil.errToObj(options) });
+    }
+    datetime(options) {
+      if (typeof options === "string") {
+        return this._addCheck({
+          kind: "datetime",
+          precision: null,
+          offset: false,
+          local: false,
+          message: options
+        });
+      }
+      return this._addCheck({
+        kind: "datetime",
+        precision: typeof options?.precision === "undefined" ? null : options?.precision,
+        offset: options?.offset ?? false,
+        local: options?.local ?? false,
+        ...errorUtil.errToObj(options?.message)
+      });
+    }
+    date(message) {
+      return this._addCheck({ kind: "date", message });
+    }
+    time(options) {
+      if (typeof options === "string") {
+        return this._addCheck({
+          kind: "time",
+          precision: null,
+          message: options
+        });
+      }
+      return this._addCheck({
+        kind: "time",
+        precision: typeof options?.precision === "undefined" ? null : options?.precision,
+        ...errorUtil.errToObj(options?.message)
+      });
+    }
+    duration(message) {
+      return this._addCheck({ kind: "duration", ...errorUtil.errToObj(message) });
+    }
+    regex(regex, message) {
+      return this._addCheck({
+        kind: "regex",
+        regex,
+        ...errorUtil.errToObj(message)
+      });
+    }
+    includes(value, options) {
+      return this._addCheck({
+        kind: "includes",
+        value,
+        position: options?.position,
+        ...errorUtil.errToObj(options?.message)
+      });
+    }
+    startsWith(value, message) {
+      return this._addCheck({
+        kind: "startsWith",
+        value,
+        ...errorUtil.errToObj(message)
+      });
+    }
+    endsWith(value, message) {
+      return this._addCheck({
+        kind: "endsWith",
+        value,
+        ...errorUtil.errToObj(message)
+      });
+    }
+    min(minLength, message) {
+      return this._addCheck({
+        kind: "min",
+        value: minLength,
+        ...errorUtil.errToObj(message)
+      });
+    }
+    max(maxLength, message) {
+      return this._addCheck({
+        kind: "max",
+        value: maxLength,
+        ...errorUtil.errToObj(message)
+      });
+    }
+    length(len, message) {
+      return this._addCheck({
+        kind: "length",
+        value: len,
+        ...errorUtil.errToObj(message)
+      });
+    }
+    nonempty(message) {
+      return this.min(1, errorUtil.errToObj(message));
+    }
+    trim() {
+      return new ZodString({
+        ...this._def,
+        checks: [...this._def.checks, { kind: "trim" }]
+      });
+    }
+    toLowerCase() {
+      return new ZodString({
+        ...this._def,
+        checks: [...this._def.checks, { kind: "toLowerCase" }]
+      });
+    }
+    toUpperCase() {
+      return new ZodString({
+        ...this._def,
+        checks: [...this._def.checks, { kind: "toUpperCase" }]
+      });
+    }
+    get isDatetime() {
+      return !!this._def.checks.find((ch) => ch.kind === "datetime");
+    }
+    get isDate() {
+      return !!this._def.checks.find((ch) => ch.kind === "date");
+    }
+    get isTime() {
+      return !!this._def.checks.find((ch) => ch.kind === "time");
+    }
+    get isDuration() {
+      return !!this._def.checks.find((ch) => ch.kind === "duration");
+    }
+    get isEmail() {
+      return !!this._def.checks.find((ch) => ch.kind === "email");
+    }
+    get isURL() {
+      return !!this._def.checks.find((ch) => ch.kind === "url");
+    }
+    get isEmoji() {
+      return !!this._def.checks.find((ch) => ch.kind === "emoji");
+    }
+    get isUUID() {
+      return !!this._def.checks.find((ch) => ch.kind === "uuid");
+    }
+    get isNANOID() {
+      return !!this._def.checks.find((ch) => ch.kind === "nanoid");
+    }
+    get isCUID() {
+      return !!this._def.checks.find((ch) => ch.kind === "cuid");
+    }
+    get isCUID2() {
+      return !!this._def.checks.find((ch) => ch.kind === "cuid2");
+    }
+    get isULID() {
+      return !!this._def.checks.find((ch) => ch.kind === "ulid");
+    }
+    get isIP() {
+      return !!this._def.checks.find((ch) => ch.kind === "ip");
+    }
+    get isCIDR() {
+      return !!this._def.checks.find((ch) => ch.kind === "cidr");
+    }
+    get isBase64() {
+      return !!this._def.checks.find((ch) => ch.kind === "base64");
+    }
+    get isBase64url() {
+      return !!this._def.checks.find((ch) => ch.kind === "base64url");
+    }
+    get minLength() {
+      let min = null;
+      for (const ch of this._def.checks) {
+        if (ch.kind === "min") {
+          if (min === null || ch.value > min)
+            min = ch.value;
+        }
+      }
+      return min;
+    }
+    get maxLength() {
+      let max = null;
+      for (const ch of this._def.checks) {
+        if (ch.kind === "max") {
+          if (max === null || ch.value < max)
+            max = ch.value;
+        }
+      }
+      return max;
+    }
+  };
+  ZodString.create = (params) => {
+    return new ZodString({
+      checks: [],
+      typeName: ZodFirstPartyTypeKind.ZodString,
+      coerce: params?.coerce ?? false,
+      ...processCreateParams(params)
+    });
+  };
+  ZodNumber = class ZodNumber extends ZodType {
+    constructor() {
+      super(...arguments);
+      this.min = this.gte;
+      this.max = this.lte;
+      this.step = this.multipleOf;
+    }
+    _parse(input) {
+      if (this._def.coerce) {
+        input.data = Number(input.data);
+      }
+      const parsedType = this._getType(input);
+      if (parsedType !== ZodParsedType.number) {
+        const ctx2 = this._getOrReturnCtx(input);
+        addIssueToContext(ctx2, {
+          code: ZodIssueCode.invalid_type,
+          expected: ZodParsedType.number,
+          received: ctx2.parsedType
+        });
+        return INVALID;
+      }
+      let ctx = undefined;
+      const status = new ParseStatus;
+      for (const check of this._def.checks) {
+        if (check.kind === "int") {
+          if (!util.isInteger(input.data)) {
+            ctx = this._getOrReturnCtx(input, ctx);
+            addIssueToContext(ctx, {
+              code: ZodIssueCode.invalid_type,
+              expected: "integer",
+              received: "float",
+              message: check.message
+            });
+            status.dirty();
+          }
+        } else if (check.kind === "min") {
+          const tooSmall = check.inclusive ? input.data < check.value : input.data <= check.value;
+          if (tooSmall) {
+            ctx = this._getOrReturnCtx(input, ctx);
+            addIssueToContext(ctx, {
+              code: ZodIssueCode.too_small,
+              minimum: check.value,
+              type: "number",
+              inclusive: check.inclusive,
+              exact: false,
+              message: check.message
+            });
+            status.dirty();
+          }
+        } else if (check.kind === "max") {
+          const tooBig = check.inclusive ? input.data > check.value : input.data >= check.value;
+          if (tooBig) {
+            ctx = this._getOrReturnCtx(input, ctx);
+            addIssueToContext(ctx, {
+              code: ZodIssueCode.too_big,
+              maximum: check.value,
+              type: "number",
+              inclusive: check.inclusive,
+              exact: false,
+              message: check.message
+            });
+            status.dirty();
+          }
+        } else if (check.kind === "multipleOf") {
+          if (floatSafeRemainder(input.data, check.value) !== 0) {
+            ctx = this._getOrReturnCtx(input, ctx);
+            addIssueToContext(ctx, {
+              code: ZodIssueCode.not_multiple_of,
+              multipleOf: check.value,
+              message: check.message
+            });
+            status.dirty();
+          }
+        } else if (check.kind === "finite") {
+          if (!Number.isFinite(input.data)) {
+            ctx = this._getOrReturnCtx(input, ctx);
+            addIssueToContext(ctx, {
+              code: ZodIssueCode.not_finite,
+              message: check.message
+            });
+            status.dirty();
+          }
+        } else {
+          util.assertNever(check);
+        }
+      }
+      return { status: status.value, value: input.data };
+    }
+    gte(value, message) {
+      return this.setLimit("min", value, true, errorUtil.toString(message));
+    }
+    gt(value, message) {
+      return this.setLimit("min", value, false, errorUtil.toString(message));
+    }
+    lte(value, message) {
+      return this.setLimit("max", value, true, errorUtil.toString(message));
+    }
+    lt(value, message) {
+      return this.setLimit("max", value, false, errorUtil.toString(message));
+    }
+    setLimit(kind, value, inclusive, message) {
+      return new ZodNumber({
+        ...this._def,
+        checks: [
+          ...this._def.checks,
+          {
+            kind,
+            value,
+            inclusive,
+            message: errorUtil.toString(message)
+          }
+        ]
+      });
+    }
+    _addCheck(check) {
+      return new ZodNumber({
+        ...this._def,
+        checks: [...this._def.checks, check]
+      });
+    }
+    int(message) {
+      return this._addCheck({
+        kind: "int",
+        message: errorUtil.toString(message)
+      });
+    }
+    positive(message) {
+      return this._addCheck({
+        kind: "min",
+        value: 0,
+        inclusive: false,
+        message: errorUtil.toString(message)
+      });
+    }
+    negative(message) {
+      return this._addCheck({
+        kind: "max",
+        value: 0,
+        inclusive: false,
+        message: errorUtil.toString(message)
+      });
+    }
+    nonpositive(message) {
+      return this._addCheck({
+        kind: "max",
+        value: 0,
+        inclusive: true,
+        message: errorUtil.toString(message)
+      });
+    }
+    nonnegative(message) {
+      return this._addCheck({
+        kind: "min",
+        value: 0,
+        inclusive: true,
+        message: errorUtil.toString(message)
+      });
+    }
+    multipleOf(value, message) {
+      return this._addCheck({
+        kind: "multipleOf",
+        value,
+        message: errorUtil.toString(message)
+      });
+    }
+    finite(message) {
+      return this._addCheck({
+        kind: "finite",
+        message: errorUtil.toString(message)
+      });
+    }
+    safe(message) {
+      return this._addCheck({
+        kind: "min",
+        inclusive: true,
+        value: Number.MIN_SAFE_INTEGER,
+        message: errorUtil.toString(message)
+      })._addCheck({
+        kind: "max",
+        inclusive: true,
+        value: Number.MAX_SAFE_INTEGER,
+        message: errorUtil.toString(message)
+      });
+    }
+    get minValue() {
+      let min = null;
+      for (const ch of this._def.checks) {
+        if (ch.kind === "min") {
+          if (min === null || ch.value > min)
+            min = ch.value;
+        }
+      }
+      return min;
+    }
+    get maxValue() {
+      let max = null;
+      for (const ch of this._def.checks) {
+        if (ch.kind === "max") {
+          if (max === null || ch.value < max)
+            max = ch.value;
+        }
+      }
+      return max;
+    }
+    get isInt() {
+      return !!this._def.checks.find((ch) => ch.kind === "int" || ch.kind === "multipleOf" && util.isInteger(ch.value));
+    }
+    get isFinite() {
+      let max = null;
+      let min = null;
+      for (const ch of this._def.checks) {
+        if (ch.kind === "finite" || ch.kind === "int" || ch.kind === "multipleOf") {
+          return true;
+        } else if (ch.kind === "min") {
+          if (min === null || ch.value > min)
+            min = ch.value;
+        } else if (ch.kind === "max") {
+          if (max === null || ch.value < max)
+            max = ch.value;
+        }
+      }
+      return Number.isFinite(min) && Number.isFinite(max);
+    }
+  };
+  ZodNumber.create = (params) => {
+    return new ZodNumber({
+      checks: [],
+      typeName: ZodFirstPartyTypeKind.ZodNumber,
+      coerce: params?.coerce || false,
+      ...processCreateParams(params)
+    });
+  };
+  ZodBigInt = class ZodBigInt extends ZodType {
+    constructor() {
+      super(...arguments);
+      this.min = this.gte;
+      this.max = this.lte;
+    }
+    _parse(input) {
+      if (this._def.coerce) {
+        try {
+          input.data = BigInt(input.data);
+        } catch {
+          return this._getInvalidInput(input);
+        }
+      }
+      const parsedType = this._getType(input);
+      if (parsedType !== ZodParsedType.bigint) {
+        return this._getInvalidInput(input);
+      }
+      let ctx = undefined;
+      const status = new ParseStatus;
+      for (const check of this._def.checks) {
+        if (check.kind === "min") {
+          const tooSmall = check.inclusive ? input.data < check.value : input.data <= check.value;
+          if (tooSmall) {
+            ctx = this._getOrReturnCtx(input, ctx);
+            addIssueToContext(ctx, {
+              code: ZodIssueCode.too_small,
+              type: "bigint",
+              minimum: check.value,
+              inclusive: check.inclusive,
+              message: check.message
+            });
+            status.dirty();
+          }
+        } else if (check.kind === "max") {
+          const tooBig = check.inclusive ? input.data > check.value : input.data >= check.value;
+          if (tooBig) {
+            ctx = this._getOrReturnCtx(input, ctx);
+            addIssueToContext(ctx, {
+              code: ZodIssueCode.too_big,
+              type: "bigint",
+              maximum: check.value,
+              inclusive: check.inclusive,
+              message: check.message
+            });
+            status.dirty();
+          }
+        } else if (check.kind === "multipleOf") {
+          if (input.data % check.value !== BigInt(0)) {
+            ctx = this._getOrReturnCtx(input, ctx);
+            addIssueToContext(ctx, {
+              code: ZodIssueCode.not_multiple_of,
+              multipleOf: check.value,
+              message: check.message
+            });
+            status.dirty();
+          }
+        } else {
+          util.assertNever(check);
+        }
+      }
+      return { status: status.value, value: input.data };
+    }
+    _getInvalidInput(input) {
+      const ctx = this._getOrReturnCtx(input);
+      addIssueToContext(ctx, {
+        code: ZodIssueCode.invalid_type,
+        expected: ZodParsedType.bigint,
+        received: ctx.parsedType
+      });
+      return INVALID;
+    }
+    gte(value, message) {
+      return this.setLimit("min", value, true, errorUtil.toString(message));
+    }
+    gt(value, message) {
+      return this.setLimit("min", value, false, errorUtil.toString(message));
+    }
+    lte(value, message) {
+      return this.setLimit("max", value, true, errorUtil.toString(message));
+    }
+    lt(value, message) {
+      return this.setLimit("max", value, false, errorUtil.toString(message));
+    }
+    setLimit(kind, value, inclusive, message) {
+      return new ZodBigInt({
+        ...this._def,
+        checks: [
+          ...this._def.checks,
+          {
+            kind,
+            value,
+            inclusive,
+            message: errorUtil.toString(message)
+          }
+        ]
+      });
+    }
+    _addCheck(check) {
+      return new ZodBigInt({
+        ...this._def,
+        checks: [...this._def.checks, check]
+      });
+    }
+    positive(message) {
+      return this._addCheck({
+        kind: "min",
+        value: BigInt(0),
+        inclusive: false,
+        message: errorUtil.toString(message)
+      });
+    }
+    negative(message) {
+      return this._addCheck({
+        kind: "max",
+        value: BigInt(0),
+        inclusive: false,
+        message: errorUtil.toString(message)
+      });
+    }
+    nonpositive(message) {
+      return this._addCheck({
+        kind: "max",
+        value: BigInt(0),
+        inclusive: true,
+        message: errorUtil.toString(message)
+      });
+    }
+    nonnegative(message) {
+      return this._addCheck({
+        kind: "min",
+        value: BigInt(0),
+        inclusive: true,
+        message: errorUtil.toString(message)
+      });
+    }
+    multipleOf(value, message) {
+      return this._addCheck({
+        kind: "multipleOf",
+        value,
+        message: errorUtil.toString(message)
+      });
+    }
+    get minValue() {
+      let min = null;
+      for (const ch of this._def.checks) {
+        if (ch.kind === "min") {
+          if (min === null || ch.value > min)
+            min = ch.value;
+        }
+      }
+      return min;
+    }
+    get maxValue() {
+      let max = null;
+      for (const ch of this._def.checks) {
+        if (ch.kind === "max") {
+          if (max === null || ch.value < max)
+            max = ch.value;
+        }
+      }
+      return max;
+    }
+  };
+  ZodBigInt.create = (params) => {
+    return new ZodBigInt({
+      checks: [],
+      typeName: ZodFirstPartyTypeKind.ZodBigInt,
+      coerce: params?.coerce ?? false,
+      ...processCreateParams(params)
+    });
+  };
+  ZodBoolean = class ZodBoolean extends ZodType {
+    _parse(input) {
+      if (this._def.coerce) {
+        input.data = Boolean(input.data);
+      }
+      const parsedType = this._getType(input);
+      if (parsedType !== ZodParsedType.boolean) {
+        const ctx = this._getOrReturnCtx(input);
+        addIssueToContext(ctx, {
+          code: ZodIssueCode.invalid_type,
+          expected: ZodParsedType.boolean,
+          received: ctx.parsedType
+        });
+        return INVALID;
+      }
+      return OK(input.data);
+    }
+  };
+  ZodBoolean.create = (params) => {
+    return new ZodBoolean({
+      typeName: ZodFirstPartyTypeKind.ZodBoolean,
+      coerce: params?.coerce || false,
+      ...processCreateParams(params)
+    });
+  };
+  ZodDate = class ZodDate extends ZodType {
+    _parse(input) {
+      if (this._def.coerce) {
+        input.data = new Date(input.data);
+      }
+      const parsedType = this._getType(input);
+      if (parsedType !== ZodParsedType.date) {
+        const ctx2 = this._getOrReturnCtx(input);
+        addIssueToContext(ctx2, {
+          code: ZodIssueCode.invalid_type,
+          expected: ZodParsedType.date,
+          received: ctx2.parsedType
+        });
+        return INVALID;
+      }
+      if (Number.isNaN(input.data.getTime())) {
+        const ctx2 = this._getOrReturnCtx(input);
+        addIssueToContext(ctx2, {
+          code: ZodIssueCode.invalid_date
+        });
+        return INVALID;
+      }
+      const status = new ParseStatus;
+      let ctx = undefined;
+      for (const check of this._def.checks) {
+        if (check.kind === "min") {
+          if (input.data.getTime() < check.value) {
+            ctx = this._getOrReturnCtx(input, ctx);
+            addIssueToContext(ctx, {
+              code: ZodIssueCode.too_small,
+              message: check.message,
+              inclusive: true,
+              exact: false,
+              minimum: check.value,
+              type: "date"
+            });
+            status.dirty();
+          }
+        } else if (check.kind === "max") {
+          if (input.data.getTime() > check.value) {
+            ctx = this._getOrReturnCtx(input, ctx);
+            addIssueToContext(ctx, {
+              code: ZodIssueCode.too_big,
+              message: check.message,
+              inclusive: true,
+              exact: false,
+              maximum: check.value,
+              type: "date"
+            });
+            status.dirty();
+          }
+        } else {
+          util.assertNever(check);
+        }
+      }
+      return {
+        status: status.value,
+        value: new Date(input.data.getTime())
+      };
+    }
+    _addCheck(check) {
+      return new ZodDate({
+        ...this._def,
+        checks: [...this._def.checks, check]
+      });
+    }
+    min(minDate, message) {
+      return this._addCheck({
+        kind: "min",
+        value: minDate.getTime(),
+        message: errorUtil.toString(message)
+      });
+    }
+    max(maxDate, message) {
+      return this._addCheck({
+        kind: "max",
+        value: maxDate.getTime(),
+        message: errorUtil.toString(message)
+      });
+    }
+    get minDate() {
+      let min = null;
+      for (const ch of this._def.checks) {
+        if (ch.kind === "min") {
+          if (min === null || ch.value > min)
+            min = ch.value;
+        }
+      }
+      return min != null ? new Date(min) : null;
+    }
+    get maxDate() {
+      let max = null;
+      for (const ch of this._def.checks) {
+        if (ch.kind === "max") {
+          if (max === null || ch.value < max)
+            max = ch.value;
+        }
+      }
+      return max != null ? new Date(max) : null;
+    }
+  };
+  ZodDate.create = (params) => {
+    return new ZodDate({
+      checks: [],
+      coerce: params?.coerce || false,
+      typeName: ZodFirstPartyTypeKind.ZodDate,
+      ...processCreateParams(params)
+    });
+  };
+  ZodSymbol = class ZodSymbol extends ZodType {
+    _parse(input) {
+      const parsedType = this._getType(input);
+      if (parsedType !== ZodParsedType.symbol) {
+        const ctx = this._getOrReturnCtx(input);
+        addIssueToContext(ctx, {
+          code: ZodIssueCode.invalid_type,
+          expected: ZodParsedType.symbol,
+          received: ctx.parsedType
+        });
+        return INVALID;
+      }
+      return OK(input.data);
+    }
+  };
+  ZodSymbol.create = (params) => {
+    return new ZodSymbol({
+      typeName: ZodFirstPartyTypeKind.ZodSymbol,
+      ...processCreateParams(params)
+    });
+  };
+  ZodUndefined = class ZodUndefined extends ZodType {
+    _parse(input) {
+      const parsedType = this._getType(input);
+      if (parsedType !== ZodParsedType.undefined) {
+        const ctx = this._getOrReturnCtx(input);
+        addIssueToContext(ctx, {
+          code: ZodIssueCode.invalid_type,
+          expected: ZodParsedType.undefined,
+          received: ctx.parsedType
+        });
+        return INVALID;
+      }
+      return OK(input.data);
+    }
+  };
+  ZodUndefined.create = (params) => {
+    return new ZodUndefined({
+      typeName: ZodFirstPartyTypeKind.ZodUndefined,
+      ...processCreateParams(params)
+    });
+  };
+  ZodNull = class ZodNull extends ZodType {
+    _parse(input) {
+      const parsedType = this._getType(input);
+      if (parsedType !== ZodParsedType.null) {
+        const ctx = this._getOrReturnCtx(input);
+        addIssueToContext(ctx, {
+          code: ZodIssueCode.invalid_type,
+          expected: ZodParsedType.null,
+          received: ctx.parsedType
+        });
+        return INVALID;
+      }
+      return OK(input.data);
+    }
+  };
+  ZodNull.create = (params) => {
+    return new ZodNull({
+      typeName: ZodFirstPartyTypeKind.ZodNull,
+      ...processCreateParams(params)
+    });
+  };
+  ZodAny = class ZodAny extends ZodType {
+    constructor() {
+      super(...arguments);
+      this._any = true;
+    }
+    _parse(input) {
+      return OK(input.data);
+    }
+  };
+  ZodAny.create = (params) => {
+    return new ZodAny({
+      typeName: ZodFirstPartyTypeKind.ZodAny,
+      ...processCreateParams(params)
+    });
+  };
+  ZodUnknown = class ZodUnknown extends ZodType {
+    constructor() {
+      super(...arguments);
+      this._unknown = true;
+    }
+    _parse(input) {
+      return OK(input.data);
+    }
+  };
+  ZodUnknown.create = (params) => {
+    return new ZodUnknown({
+      typeName: ZodFirstPartyTypeKind.ZodUnknown,
+      ...processCreateParams(params)
+    });
+  };
+  ZodNever = class ZodNever extends ZodType {
+    _parse(input) {
+      const ctx = this._getOrReturnCtx(input);
+      addIssueToContext(ctx, {
+        code: ZodIssueCode.invalid_type,
+        expected: ZodParsedType.never,
+        received: ctx.parsedType
+      });
+      return INVALID;
+    }
+  };
+  ZodNever.create = (params) => {
+    return new ZodNever({
+      typeName: ZodFirstPartyTypeKind.ZodNever,
+      ...processCreateParams(params)
+    });
+  };
+  ZodVoid = class ZodVoid extends ZodType {
+    _parse(input) {
+      const parsedType = this._getType(input);
+      if (parsedType !== ZodParsedType.undefined) {
+        const ctx = this._getOrReturnCtx(input);
+        addIssueToContext(ctx, {
+          code: ZodIssueCode.invalid_type,
+          expected: ZodParsedType.void,
+          received: ctx.parsedType
+        });
+        return INVALID;
+      }
+      return OK(input.data);
+    }
+  };
+  ZodVoid.create = (params) => {
+    return new ZodVoid({
+      typeName: ZodFirstPartyTypeKind.ZodVoid,
+      ...processCreateParams(params)
+    });
+  };
+  ZodArray = class ZodArray extends ZodType {
+    _parse(input) {
+      const { ctx, status } = this._processInputParams(input);
+      const def = this._def;
+      if (ctx.parsedType !== ZodParsedType.array) {
+        addIssueToContext(ctx, {
+          code: ZodIssueCode.invalid_type,
+          expected: ZodParsedType.array,
+          received: ctx.parsedType
+        });
+        return INVALID;
+      }
+      if (def.exactLength !== null) {
+        const tooBig = ctx.data.length > def.exactLength.value;
+        const tooSmall = ctx.data.length < def.exactLength.value;
+        if (tooBig || tooSmall) {
+          addIssueToContext(ctx, {
+            code: tooBig ? ZodIssueCode.too_big : ZodIssueCode.too_small,
+            minimum: tooSmall ? def.exactLength.value : undefined,
+            maximum: tooBig ? def.exactLength.value : undefined,
+            type: "array",
+            inclusive: true,
+            exact: true,
+            message: def.exactLength.message
+          });
+          status.dirty();
+        }
+      }
+      if (def.minLength !== null) {
+        if (ctx.data.length < def.minLength.value) {
+          addIssueToContext(ctx, {
+            code: ZodIssueCode.too_small,
+            minimum: def.minLength.value,
+            type: "array",
+            inclusive: true,
+            exact: false,
+            message: def.minLength.message
+          });
+          status.dirty();
+        }
+      }
+      if (def.maxLength !== null) {
+        if (ctx.data.length > def.maxLength.value) {
+          addIssueToContext(ctx, {
+            code: ZodIssueCode.too_big,
+            maximum: def.maxLength.value,
+            type: "array",
+            inclusive: true,
+            exact: false,
+            message: def.maxLength.message
+          });
+          status.dirty();
+        }
+      }
+      if (ctx.common.async) {
+        return Promise.all([...ctx.data].map((item, i) => {
+          return def.type._parseAsync(new ParseInputLazyPath(ctx, item, ctx.path, i));
+        })).then((result2) => {
+          return ParseStatus.mergeArray(status, result2);
+        });
+      }
+      const result = [...ctx.data].map((item, i) => {
+        return def.type._parseSync(new ParseInputLazyPath(ctx, item, ctx.path, i));
+      });
+      return ParseStatus.mergeArray(status, result);
+    }
+    get element() {
+      return this._def.type;
+    }
+    min(minLength, message) {
+      return new ZodArray({
+        ...this._def,
+        minLength: { value: minLength, message: errorUtil.toString(message) }
+      });
+    }
+    max(maxLength, message) {
+      return new ZodArray({
+        ...this._def,
+        maxLength: { value: maxLength, message: errorUtil.toString(message) }
+      });
+    }
+    length(len, message) {
+      return new ZodArray({
+        ...this._def,
+        exactLength: { value: len, message: errorUtil.toString(message) }
+      });
+    }
+    nonempty(message) {
+      return this.min(1, message);
+    }
+  };
+  ZodArray.create = (schema, params) => {
+    return new ZodArray({
+      type: schema,
+      minLength: null,
+      maxLength: null,
+      exactLength: null,
+      typeName: ZodFirstPartyTypeKind.ZodArray,
+      ...processCreateParams(params)
+    });
+  };
+  ZodObject = class ZodObject extends ZodType {
+    constructor() {
+      super(...arguments);
+      this._cached = null;
+      this.nonstrict = this.passthrough;
+      this.augment = this.extend;
+    }
+    _getCached() {
+      if (this._cached !== null)
+        return this._cached;
+      const shape = this._def.shape();
+      const keys = util.objectKeys(shape);
+      this._cached = { shape, keys };
+      return this._cached;
+    }
+    _parse(input) {
+      const parsedType = this._getType(input);
+      if (parsedType !== ZodParsedType.object) {
+        const ctx2 = this._getOrReturnCtx(input);
+        addIssueToContext(ctx2, {
+          code: ZodIssueCode.invalid_type,
+          expected: ZodParsedType.object,
+          received: ctx2.parsedType
+        });
+        return INVALID;
+      }
+      const { status, ctx } = this._processInputParams(input);
+      const { shape, keys: shapeKeys } = this._getCached();
+      const extraKeys = [];
+      if (!(this._def.catchall instanceof ZodNever && this._def.unknownKeys === "strip")) {
+        for (const key in ctx.data) {
+          if (!shapeKeys.includes(key)) {
+            extraKeys.push(key);
+          }
+        }
+      }
+      const pairs = [];
+      for (const key of shapeKeys) {
+        const keyValidator = shape[key];
+        const value = ctx.data[key];
+        pairs.push({
+          key: { status: "valid", value: key },
+          value: keyValidator._parse(new ParseInputLazyPath(ctx, value, ctx.path, key)),
+          alwaysSet: key in ctx.data
+        });
+      }
+      if (this._def.catchall instanceof ZodNever) {
+        const unknownKeys = this._def.unknownKeys;
+        if (unknownKeys === "passthrough") {
+          for (const key of extraKeys) {
+            pairs.push({
+              key: { status: "valid", value: key },
+              value: { status: "valid", value: ctx.data[key] }
+            });
+          }
+        } else if (unknownKeys === "strict") {
+          if (extraKeys.length > 0) {
+            addIssueToContext(ctx, {
+              code: ZodIssueCode.unrecognized_keys,
+              keys: extraKeys
+            });
+            status.dirty();
+          }
+        } else if (unknownKeys === "strip") {} else {
+          throw new Error(`Internal ZodObject error: invalid unknownKeys value.`);
+        }
+      } else {
+        const catchall = this._def.catchall;
+        for (const key of extraKeys) {
+          const value = ctx.data[key];
+          pairs.push({
+            key: { status: "valid", value: key },
+            value: catchall._parse(new ParseInputLazyPath(ctx, value, ctx.path, key)),
+            alwaysSet: key in ctx.data
+          });
+        }
+      }
+      if (ctx.common.async) {
+        return Promise.resolve().then(async () => {
+          const syncPairs = [];
+          for (const pair of pairs) {
+            const key = await pair.key;
+            const value = await pair.value;
+            syncPairs.push({
+              key,
+              value,
+              alwaysSet: pair.alwaysSet
+            });
+          }
+          return syncPairs;
+        }).then((syncPairs) => {
+          return ParseStatus.mergeObjectSync(status, syncPairs);
+        });
+      } else {
+        return ParseStatus.mergeObjectSync(status, pairs);
+      }
+    }
+    get shape() {
+      return this._def.shape();
+    }
+    strict(message) {
+      errorUtil.errToObj;
+      return new ZodObject({
+        ...this._def,
+        unknownKeys: "strict",
+        ...message !== undefined ? {
+          errorMap: (issue, ctx) => {
+            const defaultError = this._def.errorMap?.(issue, ctx).message ?? ctx.defaultError;
+            if (issue.code === "unrecognized_keys")
+              return {
+                message: errorUtil.errToObj(message).message ?? defaultError
+              };
+            return {
+              message: defaultError
+            };
+          }
+        } : {}
+      });
+    }
+    strip() {
+      return new ZodObject({
+        ...this._def,
+        unknownKeys: "strip"
+      });
+    }
+    passthrough() {
+      return new ZodObject({
+        ...this._def,
+        unknownKeys: "passthrough"
+      });
+    }
+    extend(augmentation) {
+      return new ZodObject({
+        ...this._def,
+        shape: () => ({
+          ...this._def.shape(),
+          ...augmentation
+        })
+      });
+    }
+    merge(merging) {
+      const merged = new ZodObject({
+        unknownKeys: merging._def.unknownKeys,
+        catchall: merging._def.catchall,
+        shape: () => ({
+          ...this._def.shape(),
+          ...merging._def.shape()
+        }),
+        typeName: ZodFirstPartyTypeKind.ZodObject
+      });
+      return merged;
+    }
+    setKey(key, schema) {
+      return this.augment({ [key]: schema });
+    }
+    catchall(index) {
+      return new ZodObject({
+        ...this._def,
+        catchall: index
+      });
+    }
+    pick(mask) {
+      const shape = {};
+      for (const key of util.objectKeys(mask)) {
+        if (mask[key] && this.shape[key]) {
+          shape[key] = this.shape[key];
+        }
+      }
+      return new ZodObject({
+        ...this._def,
+        shape: () => shape
+      });
+    }
+    omit(mask) {
+      const shape = {};
+      for (const key of util.objectKeys(this.shape)) {
+        if (!mask[key]) {
+          shape[key] = this.shape[key];
+        }
+      }
+      return new ZodObject({
+        ...this._def,
+        shape: () => shape
+      });
+    }
+    deepPartial() {
+      return deepPartialify(this);
+    }
+    partial(mask) {
+      const newShape = {};
+      for (const key of util.objectKeys(this.shape)) {
+        const fieldSchema = this.shape[key];
+        if (mask && !mask[key]) {
+          newShape[key] = fieldSchema;
+        } else {
+          newShape[key] = fieldSchema.optional();
+        }
+      }
+      return new ZodObject({
+        ...this._def,
+        shape: () => newShape
+      });
+    }
+    required(mask) {
+      const newShape = {};
+      for (const key of util.objectKeys(this.shape)) {
+        if (mask && !mask[key]) {
+          newShape[key] = this.shape[key];
+        } else {
+          const fieldSchema = this.shape[key];
+          let newField = fieldSchema;
+          while (newField instanceof ZodOptional) {
+            newField = newField._def.innerType;
+          }
+          newShape[key] = newField;
+        }
+      }
+      return new ZodObject({
+        ...this._def,
+        shape: () => newShape
+      });
+    }
+    keyof() {
+      return createZodEnum(util.objectKeys(this.shape));
+    }
+  };
+  ZodObject.create = (shape, params) => {
+    return new ZodObject({
+      shape: () => shape,
+      unknownKeys: "strip",
+      catchall: ZodNever.create(),
+      typeName: ZodFirstPartyTypeKind.ZodObject,
+      ...processCreateParams(params)
+    });
+  };
+  ZodObject.strictCreate = (shape, params) => {
+    return new ZodObject({
+      shape: () => shape,
+      unknownKeys: "strict",
+      catchall: ZodNever.create(),
+      typeName: ZodFirstPartyTypeKind.ZodObject,
+      ...processCreateParams(params)
+    });
+  };
+  ZodObject.lazycreate = (shape, params) => {
+    return new ZodObject({
+      shape,
+      unknownKeys: "strip",
+      catchall: ZodNever.create(),
+      typeName: ZodFirstPartyTypeKind.ZodObject,
+      ...processCreateParams(params)
+    });
+  };
+  ZodUnion = class ZodUnion extends ZodType {
+    _parse(input) {
+      const { ctx } = this._processInputParams(input);
+      const options = this._def.options;
+      function handleResults(results) {
+        for (const result of results) {
+          if (result.result.status === "valid") {
+            return result.result;
+          }
+        }
+        for (const result of results) {
+          if (result.result.status === "dirty") {
+            ctx.common.issues.push(...result.ctx.common.issues);
+            return result.result;
+          }
+        }
+        const unionErrors = results.map((result) => new ZodError(result.ctx.common.issues));
+        addIssueToContext(ctx, {
+          code: ZodIssueCode.invalid_union,
+          unionErrors
+        });
+        return INVALID;
+      }
+      if (ctx.common.async) {
+        return Promise.all(options.map(async (option) => {
+          const childCtx = {
+            ...ctx,
+            common: {
+              ...ctx.common,
+              issues: []
+            },
+            parent: null
+          };
+          return {
+            result: await option._parseAsync({
+              data: ctx.data,
+              path: ctx.path,
+              parent: childCtx
+            }),
+            ctx: childCtx
+          };
+        })).then(handleResults);
+      } else {
+        let dirty = undefined;
+        const issues = [];
+        for (const option of options) {
+          const childCtx = {
+            ...ctx,
+            common: {
+              ...ctx.common,
+              issues: []
+            },
+            parent: null
+          };
+          const result = option._parseSync({
+            data: ctx.data,
+            path: ctx.path,
+            parent: childCtx
+          });
+          if (result.status === "valid") {
+            return result;
+          } else if (result.status === "dirty" && !dirty) {
+            dirty = { result, ctx: childCtx };
+          }
+          if (childCtx.common.issues.length) {
+            issues.push(childCtx.common.issues);
+          }
+        }
+        if (dirty) {
+          ctx.common.issues.push(...dirty.ctx.common.issues);
+          return dirty.result;
+        }
+        const unionErrors = issues.map((issues2) => new ZodError(issues2));
+        addIssueToContext(ctx, {
+          code: ZodIssueCode.invalid_union,
+          unionErrors
+        });
+        return INVALID;
+      }
+    }
+    get options() {
+      return this._def.options;
+    }
+  };
+  ZodUnion.create = (types, params) => {
+    return new ZodUnion({
+      options: types,
+      typeName: ZodFirstPartyTypeKind.ZodUnion,
+      ...processCreateParams(params)
+    });
+  };
+  ZodDiscriminatedUnion = class ZodDiscriminatedUnion extends ZodType {
+    _parse(input) {
+      const { ctx } = this._processInputParams(input);
+      if (ctx.parsedType !== ZodParsedType.object) {
+        addIssueToContext(ctx, {
+          code: ZodIssueCode.invalid_type,
+          expected: ZodParsedType.object,
+          received: ctx.parsedType
+        });
+        return INVALID;
+      }
+      const discriminator = this.discriminator;
+      const discriminatorValue = ctx.data[discriminator];
+      const option = this.optionsMap.get(discriminatorValue);
+      if (!option) {
+        addIssueToContext(ctx, {
+          code: ZodIssueCode.invalid_union_discriminator,
+          options: Array.from(this.optionsMap.keys()),
+          path: [discriminator]
+        });
+        return INVALID;
+      }
+      if (ctx.common.async) {
+        return option._parseAsync({
+          data: ctx.data,
+          path: ctx.path,
+          parent: ctx
+        });
+      } else {
+        return option._parseSync({
+          data: ctx.data,
+          path: ctx.path,
+          parent: ctx
+        });
+      }
+    }
+    get discriminator() {
+      return this._def.discriminator;
+    }
+    get options() {
+      return this._def.options;
+    }
+    get optionsMap() {
+      return this._def.optionsMap;
+    }
+    static create(discriminator, options, params) {
+      const optionsMap = new Map;
+      for (const type of options) {
+        const discriminatorValues = getDiscriminator(type.shape[discriminator]);
+        if (!discriminatorValues.length) {
+          throw new Error(`A discriminator value for key \`${discriminator}\` could not be extracted from all schema options`);
+        }
+        for (const value of discriminatorValues) {
+          if (optionsMap.has(value)) {
+            throw new Error(`Discriminator property ${String(discriminator)} has duplicate value ${String(value)}`);
+          }
+          optionsMap.set(value, type);
+        }
+      }
+      return new ZodDiscriminatedUnion({
+        typeName: ZodFirstPartyTypeKind.ZodDiscriminatedUnion,
+        discriminator,
+        options,
+        optionsMap,
+        ...processCreateParams(params)
+      });
+    }
+  };
+  ZodIntersection = class ZodIntersection extends ZodType {
+    _parse(input) {
+      const { status, ctx } = this._processInputParams(input);
+      const handleParsed = (parsedLeft, parsedRight) => {
+        if (isAborted(parsedLeft) || isAborted(parsedRight)) {
+          return INVALID;
+        }
+        const merged = mergeValues(parsedLeft.value, parsedRight.value);
+        if (!merged.valid) {
+          addIssueToContext(ctx, {
+            code: ZodIssueCode.invalid_intersection_types
+          });
+          return INVALID;
+        }
+        if (isDirty(parsedLeft) || isDirty(parsedRight)) {
+          status.dirty();
+        }
+        return { status: status.value, value: merged.data };
+      };
+      if (ctx.common.async) {
+        return Promise.all([
+          this._def.left._parseAsync({
+            data: ctx.data,
+            path: ctx.path,
+            parent: ctx
+          }),
+          this._def.right._parseAsync({
+            data: ctx.data,
+            path: ctx.path,
+            parent: ctx
+          })
+        ]).then(([left, right]) => handleParsed(left, right));
+      } else {
+        return handleParsed(this._def.left._parseSync({
+          data: ctx.data,
+          path: ctx.path,
+          parent: ctx
+        }), this._def.right._parseSync({
+          data: ctx.data,
+          path: ctx.path,
+          parent: ctx
+        }));
+      }
+    }
+  };
+  ZodIntersection.create = (left, right, params) => {
+    return new ZodIntersection({
+      left,
+      right,
+      typeName: ZodFirstPartyTypeKind.ZodIntersection,
+      ...processCreateParams(params)
+    });
+  };
+  ZodTuple = class ZodTuple extends ZodType {
+    _parse(input) {
+      const { status, ctx } = this._processInputParams(input);
+      if (ctx.parsedType !== ZodParsedType.array) {
+        addIssueToContext(ctx, {
+          code: ZodIssueCode.invalid_type,
+          expected: ZodParsedType.array,
+          received: ctx.parsedType
+        });
+        return INVALID;
+      }
+      if (ctx.data.length < this._def.items.length) {
+        addIssueToContext(ctx, {
+          code: ZodIssueCode.too_small,
+          minimum: this._def.items.length,
+          inclusive: true,
+          exact: false,
+          type: "array"
+        });
+        return INVALID;
+      }
+      const rest = this._def.rest;
+      if (!rest && ctx.data.length > this._def.items.length) {
+        addIssueToContext(ctx, {
+          code: ZodIssueCode.too_big,
+          maximum: this._def.items.length,
+          inclusive: true,
+          exact: false,
+          type: "array"
+        });
+        status.dirty();
+      }
+      const items = [...ctx.data].map((item, itemIndex) => {
+        const schema = this._def.items[itemIndex] || this._def.rest;
+        if (!schema)
+          return null;
+        return schema._parse(new ParseInputLazyPath(ctx, item, ctx.path, itemIndex));
+      }).filter((x) => !!x);
+      if (ctx.common.async) {
+        return Promise.all(items).then((results) => {
+          return ParseStatus.mergeArray(status, results);
+        });
+      } else {
+        return ParseStatus.mergeArray(status, items);
+      }
+    }
+    get items() {
+      return this._def.items;
+    }
+    rest(rest) {
+      return new ZodTuple({
+        ...this._def,
+        rest
+      });
+    }
+  };
+  ZodTuple.create = (schemas, params) => {
+    if (!Array.isArray(schemas)) {
+      throw new Error("You must pass an array of schemas to z.tuple([ ... ])");
+    }
+    return new ZodTuple({
+      items: schemas,
+      typeName: ZodFirstPartyTypeKind.ZodTuple,
+      rest: null,
+      ...processCreateParams(params)
+    });
+  };
+  ZodRecord = class ZodRecord extends ZodType {
+    get keySchema() {
+      return this._def.keyType;
+    }
+    get valueSchema() {
+      return this._def.valueType;
+    }
+    _parse(input) {
+      const { status, ctx } = this._processInputParams(input);
+      if (ctx.parsedType !== ZodParsedType.object) {
+        addIssueToContext(ctx, {
+          code: ZodIssueCode.invalid_type,
+          expected: ZodParsedType.object,
+          received: ctx.parsedType
+        });
+        return INVALID;
+      }
+      const pairs = [];
+      const keyType = this._def.keyType;
+      const valueType = this._def.valueType;
+      for (const key in ctx.data) {
+        pairs.push({
+          key: keyType._parse(new ParseInputLazyPath(ctx, key, ctx.path, key)),
+          value: valueType._parse(new ParseInputLazyPath(ctx, ctx.data[key], ctx.path, key)),
+          alwaysSet: key in ctx.data
+        });
+      }
+      if (ctx.common.async) {
+        return ParseStatus.mergeObjectAsync(status, pairs);
+      } else {
+        return ParseStatus.mergeObjectSync(status, pairs);
+      }
+    }
+    get element() {
+      return this._def.valueType;
+    }
+    static create(first, second, third) {
+      if (second instanceof ZodType) {
+        return new ZodRecord({
+          keyType: first,
+          valueType: second,
+          typeName: ZodFirstPartyTypeKind.ZodRecord,
+          ...processCreateParams(third)
+        });
+      }
+      return new ZodRecord({
+        keyType: ZodString.create(),
+        valueType: first,
+        typeName: ZodFirstPartyTypeKind.ZodRecord,
+        ...processCreateParams(second)
+      });
+    }
+  };
+  ZodMap = class ZodMap extends ZodType {
+    get keySchema() {
+      return this._def.keyType;
+    }
+    get valueSchema() {
+      return this._def.valueType;
+    }
+    _parse(input) {
+      const { status, ctx } = this._processInputParams(input);
+      if (ctx.parsedType !== ZodParsedType.map) {
+        addIssueToContext(ctx, {
+          code: ZodIssueCode.invalid_type,
+          expected: ZodParsedType.map,
+          received: ctx.parsedType
+        });
+        return INVALID;
+      }
+      const keyType = this._def.keyType;
+      const valueType = this._def.valueType;
+      const pairs = [...ctx.data.entries()].map(([key, value], index) => {
+        return {
+          key: keyType._parse(new ParseInputLazyPath(ctx, key, ctx.path, [index, "key"])),
+          value: valueType._parse(new ParseInputLazyPath(ctx, value, ctx.path, [index, "value"]))
+        };
+      });
+      if (ctx.common.async) {
+        const finalMap = new Map;
+        return Promise.resolve().then(async () => {
+          for (const pair of pairs) {
+            const key = await pair.key;
+            const value = await pair.value;
+            if (key.status === "aborted" || value.status === "aborted") {
+              return INVALID;
+            }
+            if (key.status === "dirty" || value.status === "dirty") {
+              status.dirty();
+            }
+            finalMap.set(key.value, value.value);
+          }
+          return { status: status.value, value: finalMap };
+        });
+      } else {
+        const finalMap = new Map;
+        for (const pair of pairs) {
+          const key = pair.key;
+          const value = pair.value;
+          if (key.status === "aborted" || value.status === "aborted") {
+            return INVALID;
+          }
+          if (key.status === "dirty" || value.status === "dirty") {
+            status.dirty();
+          }
+          finalMap.set(key.value, value.value);
+        }
+        return { status: status.value, value: finalMap };
+      }
+    }
+  };
+  ZodMap.create = (keyType, valueType, params) => {
+    return new ZodMap({
+      valueType,
+      keyType,
+      typeName: ZodFirstPartyTypeKind.ZodMap,
+      ...processCreateParams(params)
+    });
+  };
+  ZodSet = class ZodSet extends ZodType {
+    _parse(input) {
+      const { status, ctx } = this._processInputParams(input);
+      if (ctx.parsedType !== ZodParsedType.set) {
+        addIssueToContext(ctx, {
+          code: ZodIssueCode.invalid_type,
+          expected: ZodParsedType.set,
+          received: ctx.parsedType
+        });
+        return INVALID;
+      }
+      const def = this._def;
+      if (def.minSize !== null) {
+        if (ctx.data.size < def.minSize.value) {
+          addIssueToContext(ctx, {
+            code: ZodIssueCode.too_small,
+            minimum: def.minSize.value,
+            type: "set",
+            inclusive: true,
+            exact: false,
+            message: def.minSize.message
+          });
+          status.dirty();
+        }
+      }
+      if (def.maxSize !== null) {
+        if (ctx.data.size > def.maxSize.value) {
+          addIssueToContext(ctx, {
+            code: ZodIssueCode.too_big,
+            maximum: def.maxSize.value,
+            type: "set",
+            inclusive: true,
+            exact: false,
+            message: def.maxSize.message
+          });
+          status.dirty();
+        }
+      }
+      const valueType = this._def.valueType;
+      function finalizeSet(elements2) {
+        const parsedSet = new Set;
+        for (const element of elements2) {
+          if (element.status === "aborted")
+            return INVALID;
+          if (element.status === "dirty")
+            status.dirty();
+          parsedSet.add(element.value);
+        }
+        return { status: status.value, value: parsedSet };
+      }
+      const elements = [...ctx.data.values()].map((item, i) => valueType._parse(new ParseInputLazyPath(ctx, item, ctx.path, i)));
+      if (ctx.common.async) {
+        return Promise.all(elements).then((elements2) => finalizeSet(elements2));
+      } else {
+        return finalizeSet(elements);
+      }
+    }
+    min(minSize, message) {
+      return new ZodSet({
+        ...this._def,
+        minSize: { value: minSize, message: errorUtil.toString(message) }
+      });
+    }
+    max(maxSize, message) {
+      return new ZodSet({
+        ...this._def,
+        maxSize: { value: maxSize, message: errorUtil.toString(message) }
+      });
+    }
+    size(size, message) {
+      return this.min(size, message).max(size, message);
+    }
+    nonempty(message) {
+      return this.min(1, message);
+    }
+  };
+  ZodSet.create = (valueType, params) => {
+    return new ZodSet({
+      valueType,
+      minSize: null,
+      maxSize: null,
+      typeName: ZodFirstPartyTypeKind.ZodSet,
+      ...processCreateParams(params)
+    });
+  };
+  ZodFunction = class ZodFunction extends ZodType {
+    constructor() {
+      super(...arguments);
+      this.validate = this.implement;
+    }
+    _parse(input) {
+      const { ctx } = this._processInputParams(input);
+      if (ctx.parsedType !== ZodParsedType.function) {
+        addIssueToContext(ctx, {
+          code: ZodIssueCode.invalid_type,
+          expected: ZodParsedType.function,
+          received: ctx.parsedType
+        });
+        return INVALID;
+      }
+      function makeArgsIssue(args, error) {
+        return makeIssue({
+          data: args,
+          path: ctx.path,
+          errorMaps: [ctx.common.contextualErrorMap, ctx.schemaErrorMap, getErrorMap(), en_default].filter((x) => !!x),
+          issueData: {
+            code: ZodIssueCode.invalid_arguments,
+            argumentsError: error
+          }
+        });
+      }
+      function makeReturnsIssue(returns, error) {
+        return makeIssue({
+          data: returns,
+          path: ctx.path,
+          errorMaps: [ctx.common.contextualErrorMap, ctx.schemaErrorMap, getErrorMap(), en_default].filter((x) => !!x),
+          issueData: {
+            code: ZodIssueCode.invalid_return_type,
+            returnTypeError: error
+          }
+        });
+      }
+      const params = { errorMap: ctx.common.contextualErrorMap };
+      const fn = ctx.data;
+      if (this._def.returns instanceof ZodPromise) {
+        const me = this;
+        return OK(async function(...args) {
+          const error = new ZodError([]);
+          const parsedArgs = await me._def.args.parseAsync(args, params).catch((e) => {
+            error.addIssue(makeArgsIssue(args, e));
+            throw error;
+          });
+          const result = await Reflect.apply(fn, this, parsedArgs);
+          const parsedReturns = await me._def.returns._def.type.parseAsync(result, params).catch((e) => {
+            error.addIssue(makeReturnsIssue(result, e));
+            throw error;
+          });
+          return parsedReturns;
+        });
+      } else {
+        const me = this;
+        return OK(function(...args) {
+          const parsedArgs = me._def.args.safeParse(args, params);
+          if (!parsedArgs.success) {
+            throw new ZodError([makeArgsIssue(args, parsedArgs.error)]);
+          }
+          const result = Reflect.apply(fn, this, parsedArgs.data);
+          const parsedReturns = me._def.returns.safeParse(result, params);
+          if (!parsedReturns.success) {
+            throw new ZodError([makeReturnsIssue(result, parsedReturns.error)]);
+          }
+          return parsedReturns.data;
+        });
+      }
+    }
+    parameters() {
+      return this._def.args;
+    }
+    returnType() {
+      return this._def.returns;
+    }
+    args(...items) {
+      return new ZodFunction({
+        ...this._def,
+        args: ZodTuple.create(items).rest(ZodUnknown.create())
+      });
+    }
+    returns(returnType) {
+      return new ZodFunction({
+        ...this._def,
+        returns: returnType
+      });
+    }
+    implement(func) {
+      const validatedFunc = this.parse(func);
+      return validatedFunc;
+    }
+    strictImplement(func) {
+      const validatedFunc = this.parse(func);
+      return validatedFunc;
+    }
+    static create(args, returns, params) {
+      return new ZodFunction({
+        args: args ? args : ZodTuple.create([]).rest(ZodUnknown.create()),
+        returns: returns || ZodUnknown.create(),
+        typeName: ZodFirstPartyTypeKind.ZodFunction,
+        ...processCreateParams(params)
+      });
+    }
+  };
+  ZodLazy = class ZodLazy extends ZodType {
+    get schema() {
+      return this._def.getter();
+    }
+    _parse(input) {
+      const { ctx } = this._processInputParams(input);
+      const lazySchema = this._def.getter();
+      return lazySchema._parse({ data: ctx.data, path: ctx.path, parent: ctx });
+    }
+  };
+  ZodLazy.create = (getter, params) => {
+    return new ZodLazy({
+      getter,
+      typeName: ZodFirstPartyTypeKind.ZodLazy,
+      ...processCreateParams(params)
+    });
+  };
+  ZodLiteral = class ZodLiteral extends ZodType {
+    _parse(input) {
+      if (input.data !== this._def.value) {
+        const ctx = this._getOrReturnCtx(input);
+        addIssueToContext(ctx, {
+          received: ctx.data,
+          code: ZodIssueCode.invalid_literal,
+          expected: this._def.value
+        });
+        return INVALID;
+      }
+      return { status: "valid", value: input.data };
+    }
+    get value() {
+      return this._def.value;
+    }
+  };
+  ZodLiteral.create = (value, params) => {
+    return new ZodLiteral({
+      value,
+      typeName: ZodFirstPartyTypeKind.ZodLiteral,
+      ...processCreateParams(params)
+    });
+  };
+  ZodEnum = class ZodEnum extends ZodType {
+    _parse(input) {
+      if (typeof input.data !== "string") {
+        const ctx = this._getOrReturnCtx(input);
+        const expectedValues = this._def.values;
+        addIssueToContext(ctx, {
+          expected: util.joinValues(expectedValues),
+          received: ctx.parsedType,
+          code: ZodIssueCode.invalid_type
+        });
+        return INVALID;
+      }
+      if (!this._cache) {
+        this._cache = new Set(this._def.values);
+      }
+      if (!this._cache.has(input.data)) {
+        const ctx = this._getOrReturnCtx(input);
+        const expectedValues = this._def.values;
+        addIssueToContext(ctx, {
+          received: ctx.data,
+          code: ZodIssueCode.invalid_enum_value,
+          options: expectedValues
+        });
+        return INVALID;
+      }
+      return OK(input.data);
+    }
+    get options() {
+      return this._def.values;
+    }
+    get enum() {
+      const enumValues = {};
+      for (const val of this._def.values) {
+        enumValues[val] = val;
+      }
+      return enumValues;
+    }
+    get Values() {
+      const enumValues = {};
+      for (const val of this._def.values) {
+        enumValues[val] = val;
+      }
+      return enumValues;
+    }
+    get Enum() {
+      const enumValues = {};
+      for (const val of this._def.values) {
+        enumValues[val] = val;
+      }
+      return enumValues;
+    }
+    extract(values, newDef = this._def) {
+      return ZodEnum.create(values, {
+        ...this._def,
+        ...newDef
+      });
+    }
+    exclude(values, newDef = this._def) {
+      return ZodEnum.create(this.options.filter((opt) => !values.includes(opt)), {
+        ...this._def,
+        ...newDef
+      });
+    }
+  };
+  ZodEnum.create = createZodEnum;
+  ZodNativeEnum = class ZodNativeEnum extends ZodType {
+    _parse(input) {
+      const nativeEnumValues = util.getValidEnumValues(this._def.values);
+      const ctx = this._getOrReturnCtx(input);
+      if (ctx.parsedType !== ZodParsedType.string && ctx.parsedType !== ZodParsedType.number) {
+        const expectedValues = util.objectValues(nativeEnumValues);
+        addIssueToContext(ctx, {
+          expected: util.joinValues(expectedValues),
+          received: ctx.parsedType,
+          code: ZodIssueCode.invalid_type
+        });
+        return INVALID;
+      }
+      if (!this._cache) {
+        this._cache = new Set(util.getValidEnumValues(this._def.values));
+      }
+      if (!this._cache.has(input.data)) {
+        const expectedValues = util.objectValues(nativeEnumValues);
+        addIssueToContext(ctx, {
+          received: ctx.data,
+          code: ZodIssueCode.invalid_enum_value,
+          options: expectedValues
+        });
+        return INVALID;
+      }
+      return OK(input.data);
+    }
+    get enum() {
+      return this._def.values;
+    }
+  };
+  ZodNativeEnum.create = (values, params) => {
+    return new ZodNativeEnum({
+      values,
+      typeName: ZodFirstPartyTypeKind.ZodNativeEnum,
+      ...processCreateParams(params)
+    });
+  };
+  ZodPromise = class ZodPromise extends ZodType {
+    unwrap() {
+      return this._def.type;
+    }
+    _parse(input) {
+      const { ctx } = this._processInputParams(input);
+      if (ctx.parsedType !== ZodParsedType.promise && ctx.common.async === false) {
+        addIssueToContext(ctx, {
+          code: ZodIssueCode.invalid_type,
+          expected: ZodParsedType.promise,
+          received: ctx.parsedType
+        });
+        return INVALID;
+      }
+      const promisified = ctx.parsedType === ZodParsedType.promise ? ctx.data : Promise.resolve(ctx.data);
+      return OK(promisified.then((data) => {
+        return this._def.type.parseAsync(data, {
+          path: ctx.path,
+          errorMap: ctx.common.contextualErrorMap
+        });
+      }));
+    }
+  };
+  ZodPromise.create = (schema, params) => {
+    return new ZodPromise({
+      type: schema,
+      typeName: ZodFirstPartyTypeKind.ZodPromise,
+      ...processCreateParams(params)
+    });
+  };
+  ZodEffects = class ZodEffects extends ZodType {
+    innerType() {
+      return this._def.schema;
+    }
+    sourceType() {
+      return this._def.schema._def.typeName === ZodFirstPartyTypeKind.ZodEffects ? this._def.schema.sourceType() : this._def.schema;
+    }
+    _parse(input) {
+      const { status, ctx } = this._processInputParams(input);
+      const effect = this._def.effect || null;
+      const checkCtx = {
+        addIssue: (arg) => {
+          addIssueToContext(ctx, arg);
+          if (arg.fatal) {
+            status.abort();
+          } else {
+            status.dirty();
+          }
+        },
+        get path() {
+          return ctx.path;
+        }
+      };
+      checkCtx.addIssue = checkCtx.addIssue.bind(checkCtx);
+      if (effect.type === "preprocess") {
+        const processed = effect.transform(ctx.data, checkCtx);
+        if (ctx.common.async) {
+          return Promise.resolve(processed).then(async (processed2) => {
+            if (status.value === "aborted")
+              return INVALID;
+            const result = await this._def.schema._parseAsync({
+              data: processed2,
+              path: ctx.path,
+              parent: ctx
+            });
+            if (result.status === "aborted")
+              return INVALID;
+            if (result.status === "dirty")
+              return DIRTY(result.value);
+            if (status.value === "dirty")
+              return DIRTY(result.value);
+            return result;
+          });
+        } else {
+          if (status.value === "aborted")
+            return INVALID;
+          const result = this._def.schema._parseSync({
+            data: processed,
+            path: ctx.path,
+            parent: ctx
+          });
+          if (result.status === "aborted")
+            return INVALID;
+          if (result.status === "dirty")
+            return DIRTY(result.value);
+          if (status.value === "dirty")
+            return DIRTY(result.value);
+          return result;
+        }
+      }
+      if (effect.type === "refinement") {
+        const executeRefinement = (acc) => {
+          const result = effect.refinement(acc, checkCtx);
+          if (ctx.common.async) {
+            return Promise.resolve(result);
+          }
+          if (result instanceof Promise) {
+            throw new Error("Async refinement encountered during synchronous parse operation. Use .parseAsync instead.");
+          }
+          return acc;
+        };
+        if (ctx.common.async === false) {
+          const inner = this._def.schema._parseSync({
+            data: ctx.data,
+            path: ctx.path,
+            parent: ctx
+          });
+          if (inner.status === "aborted")
+            return INVALID;
+          if (inner.status === "dirty")
+            status.dirty();
+          executeRefinement(inner.value);
+          return { status: status.value, value: inner.value };
+        } else {
+          return this._def.schema._parseAsync({ data: ctx.data, path: ctx.path, parent: ctx }).then((inner) => {
+            if (inner.status === "aborted")
+              return INVALID;
+            if (inner.status === "dirty")
+              status.dirty();
+            return executeRefinement(inner.value).then(() => {
+              return { status: status.value, value: inner.value };
+            });
+          });
+        }
+      }
+      if (effect.type === "transform") {
+        if (ctx.common.async === false) {
+          const base = this._def.schema._parseSync({
+            data: ctx.data,
+            path: ctx.path,
+            parent: ctx
+          });
+          if (!isValid(base))
+            return INVALID;
+          const result = effect.transform(base.value, checkCtx);
+          if (result instanceof Promise) {
+            throw new Error(`Asynchronous transform encountered during synchronous parse operation. Use .parseAsync instead.`);
+          }
+          return { status: status.value, value: result };
+        } else {
+          return this._def.schema._parseAsync({ data: ctx.data, path: ctx.path, parent: ctx }).then((base) => {
+            if (!isValid(base))
+              return INVALID;
+            return Promise.resolve(effect.transform(base.value, checkCtx)).then((result) => ({
+              status: status.value,
+              value: result
+            }));
+          });
+        }
+      }
+      util.assertNever(effect);
+    }
+  };
+  ZodEffects.create = (schema, effect, params) => {
+    return new ZodEffects({
+      schema,
+      typeName: ZodFirstPartyTypeKind.ZodEffects,
+      effect,
+      ...processCreateParams(params)
+    });
+  };
+  ZodEffects.createWithPreprocess = (preprocess, schema, params) => {
+    return new ZodEffects({
+      schema,
+      effect: { type: "preprocess", transform: preprocess },
+      typeName: ZodFirstPartyTypeKind.ZodEffects,
+      ...processCreateParams(params)
+    });
+  };
+  ZodOptional = class ZodOptional extends ZodType {
+    _parse(input) {
+      const parsedType = this._getType(input);
+      if (parsedType === ZodParsedType.undefined) {
+        return OK(undefined);
+      }
+      return this._def.innerType._parse(input);
+    }
+    unwrap() {
+      return this._def.innerType;
+    }
+  };
+  ZodOptional.create = (type, params) => {
+    return new ZodOptional({
+      innerType: type,
+      typeName: ZodFirstPartyTypeKind.ZodOptional,
+      ...processCreateParams(params)
+    });
+  };
+  ZodNullable = class ZodNullable extends ZodType {
+    _parse(input) {
+      const parsedType = this._getType(input);
+      if (parsedType === ZodParsedType.null) {
+        return OK(null);
+      }
+      return this._def.innerType._parse(input);
+    }
+    unwrap() {
+      return this._def.innerType;
+    }
+  };
+  ZodNullable.create = (type, params) => {
+    return new ZodNullable({
+      innerType: type,
+      typeName: ZodFirstPartyTypeKind.ZodNullable,
+      ...processCreateParams(params)
+    });
+  };
+  ZodDefault = class ZodDefault extends ZodType {
+    _parse(input) {
+      const { ctx } = this._processInputParams(input);
+      let data = ctx.data;
+      if (ctx.parsedType === ZodParsedType.undefined) {
+        data = this._def.defaultValue();
+      }
+      return this._def.innerType._parse({
+        data,
+        path: ctx.path,
+        parent: ctx
+      });
+    }
+    removeDefault() {
+      return this._def.innerType;
+    }
+  };
+  ZodDefault.create = (type, params) => {
+    return new ZodDefault({
+      innerType: type,
+      typeName: ZodFirstPartyTypeKind.ZodDefault,
+      defaultValue: typeof params.default === "function" ? params.default : () => params.default,
+      ...processCreateParams(params)
+    });
+  };
+  ZodCatch = class ZodCatch extends ZodType {
+    _parse(input) {
+      const { ctx } = this._processInputParams(input);
+      const newCtx = {
+        ...ctx,
+        common: {
+          ...ctx.common,
+          issues: []
+        }
+      };
+      const result = this._def.innerType._parse({
+        data: newCtx.data,
+        path: newCtx.path,
+        parent: {
+          ...newCtx
+        }
+      });
+      if (isAsync(result)) {
+        return result.then((result2) => {
+          return {
+            status: "valid",
+            value: result2.status === "valid" ? result2.value : this._def.catchValue({
+              get error() {
+                return new ZodError(newCtx.common.issues);
+              },
+              input: newCtx.data
+            })
+          };
+        });
+      } else {
+        return {
+          status: "valid",
+          value: result.status === "valid" ? result.value : this._def.catchValue({
+            get error() {
+              return new ZodError(newCtx.common.issues);
+            },
+            input: newCtx.data
+          })
+        };
+      }
+    }
+    removeCatch() {
+      return this._def.innerType;
+    }
+  };
+  ZodCatch.create = (type, params) => {
+    return new ZodCatch({
+      innerType: type,
+      typeName: ZodFirstPartyTypeKind.ZodCatch,
+      catchValue: typeof params.catch === "function" ? params.catch : () => params.catch,
+      ...processCreateParams(params)
+    });
+  };
+  ZodNaN = class ZodNaN extends ZodType {
+    _parse(input) {
+      const parsedType = this._getType(input);
+      if (parsedType !== ZodParsedType.nan) {
+        const ctx = this._getOrReturnCtx(input);
+        addIssueToContext(ctx, {
+          code: ZodIssueCode.invalid_type,
+          expected: ZodParsedType.nan,
+          received: ctx.parsedType
+        });
+        return INVALID;
+      }
+      return { status: "valid", value: input.data };
+    }
+  };
+  ZodNaN.create = (params) => {
+    return new ZodNaN({
+      typeName: ZodFirstPartyTypeKind.ZodNaN,
+      ...processCreateParams(params)
+    });
+  };
+  BRAND = Symbol("zod_brand");
+  ZodBranded = class ZodBranded extends ZodType {
+    _parse(input) {
+      const { ctx } = this._processInputParams(input);
+      const data = ctx.data;
+      return this._def.type._parse({
+        data,
+        path: ctx.path,
+        parent: ctx
+      });
+    }
+    unwrap() {
+      return this._def.type;
+    }
+  };
+  ZodPipeline = class ZodPipeline extends ZodType {
+    _parse(input) {
+      const { status, ctx } = this._processInputParams(input);
+      if (ctx.common.async) {
+        const handleAsync = async () => {
+          const inResult = await this._def.in._parseAsync({
+            data: ctx.data,
+            path: ctx.path,
+            parent: ctx
+          });
+          if (inResult.status === "aborted")
+            return INVALID;
+          if (inResult.status === "dirty") {
+            status.dirty();
+            return DIRTY(inResult.value);
+          } else {
+            return this._def.out._parseAsync({
+              data: inResult.value,
+              path: ctx.path,
+              parent: ctx
+            });
+          }
+        };
+        return handleAsync();
+      } else {
+        const inResult = this._def.in._parseSync({
+          data: ctx.data,
+          path: ctx.path,
+          parent: ctx
+        });
+        if (inResult.status === "aborted")
+          return INVALID;
+        if (inResult.status === "dirty") {
+          status.dirty();
+          return {
+            status: "dirty",
+            value: inResult.value
+          };
+        } else {
+          return this._def.out._parseSync({
+            data: inResult.value,
+            path: ctx.path,
+            parent: ctx
+          });
+        }
+      }
+    }
+    static create(a, b) {
+      return new ZodPipeline({
+        in: a,
+        out: b,
+        typeName: ZodFirstPartyTypeKind.ZodPipeline
+      });
+    }
+  };
+  ZodReadonly = class ZodReadonly extends ZodType {
+    _parse(input) {
+      const result = this._def.innerType._parse(input);
+      const freeze = (data) => {
+        if (isValid(data)) {
+          data.value = Object.freeze(data.value);
+        }
+        return data;
+      };
+      return isAsync(result) ? result.then((data) => freeze(data)) : freeze(result);
+    }
+    unwrap() {
+      return this._def.innerType;
+    }
+  };
+  ZodReadonly.create = (type, params) => {
+    return new ZodReadonly({
+      innerType: type,
+      typeName: ZodFirstPartyTypeKind.ZodReadonly,
+      ...processCreateParams(params)
+    });
+  };
+  late = {
+    object: ZodObject.lazycreate
+  };
+  (function(ZodFirstPartyTypeKind2) {
+    ZodFirstPartyTypeKind2["ZodString"] = "ZodString";
+    ZodFirstPartyTypeKind2["ZodNumber"] = "ZodNumber";
+    ZodFirstPartyTypeKind2["ZodNaN"] = "ZodNaN";
+    ZodFirstPartyTypeKind2["ZodBigInt"] = "ZodBigInt";
+    ZodFirstPartyTypeKind2["ZodBoolean"] = "ZodBoolean";
+    ZodFirstPartyTypeKind2["ZodDate"] = "ZodDate";
+    ZodFirstPartyTypeKind2["ZodSymbol"] = "ZodSymbol";
+    ZodFirstPartyTypeKind2["ZodUndefined"] = "ZodUndefined";
+    ZodFirstPartyTypeKind2["ZodNull"] = "ZodNull";
+    ZodFirstPartyTypeKind2["ZodAny"] = "ZodAny";
+    ZodFirstPartyTypeKind2["ZodUnknown"] = "ZodUnknown";
+    ZodFirstPartyTypeKind2["ZodNever"] = "ZodNever";
+    ZodFirstPartyTypeKind2["ZodVoid"] = "ZodVoid";
+    ZodFirstPartyTypeKind2["ZodArray"] = "ZodArray";
+    ZodFirstPartyTypeKind2["ZodObject"] = "ZodObject";
+    ZodFirstPartyTypeKind2["ZodUnion"] = "ZodUnion";
+    ZodFirstPartyTypeKind2["ZodDiscriminatedUnion"] = "ZodDiscriminatedUnion";
+    ZodFirstPartyTypeKind2["ZodIntersection"] = "ZodIntersection";
+    ZodFirstPartyTypeKind2["ZodTuple"] = "ZodTuple";
+    ZodFirstPartyTypeKind2["ZodRecord"] = "ZodRecord";
+    ZodFirstPartyTypeKind2["ZodMap"] = "ZodMap";
+    ZodFirstPartyTypeKind2["ZodSet"] = "ZodSet";
+    ZodFirstPartyTypeKind2["ZodFunction"] = "ZodFunction";
+    ZodFirstPartyTypeKind2["ZodLazy"] = "ZodLazy";
+    ZodFirstPartyTypeKind2["ZodLiteral"] = "ZodLiteral";
+    ZodFirstPartyTypeKind2["ZodEnum"] = "ZodEnum";
+    ZodFirstPartyTypeKind2["ZodEffects"] = "ZodEffects";
+    ZodFirstPartyTypeKind2["ZodNativeEnum"] = "ZodNativeEnum";
+    ZodFirstPartyTypeKind2["ZodOptional"] = "ZodOptional";
+    ZodFirstPartyTypeKind2["ZodNullable"] = "ZodNullable";
+    ZodFirstPartyTypeKind2["ZodDefault"] = "ZodDefault";
+    ZodFirstPartyTypeKind2["ZodCatch"] = "ZodCatch";
+    ZodFirstPartyTypeKind2["ZodPromise"] = "ZodPromise";
+    ZodFirstPartyTypeKind2["ZodBranded"] = "ZodBranded";
+    ZodFirstPartyTypeKind2["ZodPipeline"] = "ZodPipeline";
+    ZodFirstPartyTypeKind2["ZodReadonly"] = "ZodReadonly";
+  })(ZodFirstPartyTypeKind || (ZodFirstPartyTypeKind = {}));
+  stringType = ZodString.create;
+  numberType = ZodNumber.create;
+  nanType = ZodNaN.create;
+  bigIntType = ZodBigInt.create;
+  booleanType = ZodBoolean.create;
+  dateType = ZodDate.create;
+  symbolType = ZodSymbol.create;
+  undefinedType = ZodUndefined.create;
+  nullType = ZodNull.create;
+  anyType = ZodAny.create;
+  unknownType = ZodUnknown.create;
+  neverType = ZodNever.create;
+  voidType = ZodVoid.create;
+  arrayType = ZodArray.create;
+  objectType = ZodObject.create;
+  strictObjectType = ZodObject.strictCreate;
+  unionType = ZodUnion.create;
+  discriminatedUnionType = ZodDiscriminatedUnion.create;
+  intersectionType = ZodIntersection.create;
+  tupleType = ZodTuple.create;
+  recordType = ZodRecord.create;
+  mapType = ZodMap.create;
+  setType = ZodSet.create;
+  functionType = ZodFunction.create;
+  lazyType = ZodLazy.create;
+  literalType = ZodLiteral.create;
+  enumType = ZodEnum.create;
+  nativeEnumType = ZodNativeEnum.create;
+  promiseType = ZodPromise.create;
+  effectsType = ZodEffects.create;
+  optionalType = ZodOptional.create;
+  nullableType = ZodNullable.create;
+  preprocessType = ZodEffects.createWithPreprocess;
+  pipelineType = ZodPipeline.create;
+  coerce = {
+    string: (arg) => ZodString.create({ ...arg, coerce: true }),
+    number: (arg) => ZodNumber.create({ ...arg, coerce: true }),
+    boolean: (arg) => ZodBoolean.create({
+      ...arg,
+      coerce: true
+    }),
+    bigint: (arg) => ZodBigInt.create({ ...arg, coerce: true }),
+    date: (arg) => ZodDate.create({ ...arg, coerce: true })
+  };
+  NEVER = INVALID;
+});
+
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v3/external.js
+var exports_external = {};
+__export(exports_external, {
+  void: () => voidType,
+  util: () => util,
+  unknown: () => unknownType,
+  union: () => unionType,
+  undefined: () => undefinedType,
+  tuple: () => tupleType,
+  transformer: () => effectsType,
+  symbol: () => symbolType,
+  string: () => stringType,
+  strictObject: () => strictObjectType,
+  setErrorMap: () => setErrorMap,
+  set: () => setType,
+  record: () => recordType,
+  quotelessJson: () => quotelessJson,
+  promise: () => promiseType,
+  preprocess: () => preprocessType,
+  pipeline: () => pipelineType,
+  ostring: () => ostring,
+  optional: () => optionalType,
+  onumber: () => onumber,
+  oboolean: () => oboolean,
+  objectUtil: () => objectUtil,
+  object: () => objectType,
+  number: () => numberType,
+  nullable: () => nullableType,
+  null: () => nullType,
+  never: () => neverType,
+  nativeEnum: () => nativeEnumType,
+  nan: () => nanType,
+  map: () => mapType,
+  makeIssue: () => makeIssue,
+  literal: () => literalType,
+  lazy: () => lazyType,
+  late: () => late,
+  isValid: () => isValid,
+  isDirty: () => isDirty,
+  isAsync: () => isAsync,
+  isAborted: () => isAborted,
+  intersection: () => intersectionType,
+  instanceof: () => instanceOfType,
+  getParsedType: () => getParsedType,
+  getErrorMap: () => getErrorMap,
+  function: () => functionType,
+  enum: () => enumType,
+  effect: () => effectsType,
+  discriminatedUnion: () => discriminatedUnionType,
+  defaultErrorMap: () => en_default,
+  datetimeRegex: () => datetimeRegex,
+  date: () => dateType,
+  custom: () => custom,
+  coerce: () => coerce,
+  boolean: () => booleanType,
+  bigint: () => bigIntType,
+  array: () => arrayType,
+  any: () => anyType,
+  addIssueToContext: () => addIssueToContext,
+  ZodVoid: () => ZodVoid,
+  ZodUnknown: () => ZodUnknown,
+  ZodUnion: () => ZodUnion,
+  ZodUndefined: () => ZodUndefined,
+  ZodType: () => ZodType,
+  ZodTuple: () => ZodTuple,
+  ZodTransformer: () => ZodEffects,
+  ZodSymbol: () => ZodSymbol,
+  ZodString: () => ZodString,
+  ZodSet: () => ZodSet,
+  ZodSchema: () => ZodType,
+  ZodRecord: () => ZodRecord,
+  ZodReadonly: () => ZodReadonly,
+  ZodPromise: () => ZodPromise,
+  ZodPipeline: () => ZodPipeline,
+  ZodParsedType: () => ZodParsedType,
+  ZodOptional: () => ZodOptional,
+  ZodObject: () => ZodObject,
+  ZodNumber: () => ZodNumber,
+  ZodNullable: () => ZodNullable,
+  ZodNull: () => ZodNull,
+  ZodNever: () => ZodNever,
+  ZodNativeEnum: () => ZodNativeEnum,
+  ZodNaN: () => ZodNaN,
+  ZodMap: () => ZodMap,
+  ZodLiteral: () => ZodLiteral,
+  ZodLazy: () => ZodLazy,
+  ZodIssueCode: () => ZodIssueCode,
+  ZodIntersection: () => ZodIntersection,
+  ZodFunction: () => ZodFunction,
+  ZodFirstPartyTypeKind: () => ZodFirstPartyTypeKind,
+  ZodError: () => ZodError,
+  ZodEnum: () => ZodEnum,
+  ZodEffects: () => ZodEffects,
+  ZodDiscriminatedUnion: () => ZodDiscriminatedUnion,
+  ZodDefault: () => ZodDefault,
+  ZodDate: () => ZodDate,
+  ZodCatch: () => ZodCatch,
+  ZodBranded: () => ZodBranded,
+  ZodBoolean: () => ZodBoolean,
+  ZodBigInt: () => ZodBigInt,
+  ZodArray: () => ZodArray,
+  ZodAny: () => ZodAny,
+  Schema: () => ZodType,
+  ParseStatus: () => ParseStatus,
+  OK: () => OK,
+  NEVER: () => NEVER,
+  INVALID: () => INVALID,
+  EMPTY_PATH: () => EMPTY_PATH,
+  DIRTY: () => DIRTY,
+  BRAND: () => BRAND
+});
+var init_external = __esm(() => {
+  init_errors();
+  init_parseUtil();
+  init_typeAliases();
+  init_util();
+  init_types();
+  init_ZodError();
+});
+
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/index.js
+var exports_zod = {};
+__export(exports_zod, {
+  z: () => exports_external,
+  void: () => voidType,
+  util: () => util,
+  unknown: () => unknownType,
+  union: () => unionType,
+  undefined: () => undefinedType,
+  tuple: () => tupleType,
+  transformer: () => effectsType,
+  symbol: () => symbolType,
+  string: () => stringType,
+  strictObject: () => strictObjectType,
+  setErrorMap: () => setErrorMap,
+  set: () => setType,
+  record: () => recordType,
+  quotelessJson: () => quotelessJson,
+  promise: () => promiseType,
+  preprocess: () => preprocessType,
+  pipeline: () => pipelineType,
+  ostring: () => ostring,
+  optional: () => optionalType,
+  onumber: () => onumber,
+  oboolean: () => oboolean,
+  objectUtil: () => objectUtil,
+  object: () => objectType,
+  number: () => numberType,
+  nullable: () => nullableType,
+  null: () => nullType,
+  never: () => neverType,
+  nativeEnum: () => nativeEnumType,
+  nan: () => nanType,
+  map: () => mapType,
+  makeIssue: () => makeIssue,
+  literal: () => literalType,
+  lazy: () => lazyType,
+  late: () => late,
+  isValid: () => isValid,
+  isDirty: () => isDirty,
+  isAsync: () => isAsync,
+  isAborted: () => isAborted,
+  intersection: () => intersectionType,
+  instanceof: () => instanceOfType,
+  getParsedType: () => getParsedType,
+  getErrorMap: () => getErrorMap,
+  function: () => functionType,
+  enum: () => enumType,
+  effect: () => effectsType,
+  discriminatedUnion: () => discriminatedUnionType,
+  defaultErrorMap: () => en_default,
+  default: () => zod_default,
+  datetimeRegex: () => datetimeRegex,
+  date: () => dateType,
+  custom: () => custom,
+  coerce: () => coerce,
+  boolean: () => booleanType,
+  bigint: () => bigIntType,
+  array: () => arrayType,
+  any: () => anyType,
+  addIssueToContext: () => addIssueToContext,
+  ZodVoid: () => ZodVoid,
+  ZodUnknown: () => ZodUnknown,
+  ZodUnion: () => ZodUnion,
+  ZodUndefined: () => ZodUndefined,
+  ZodType: () => ZodType,
+  ZodTuple: () => ZodTuple,
+  ZodTransformer: () => ZodEffects,
+  ZodSymbol: () => ZodSymbol,
+  ZodString: () => ZodString,
+  ZodSet: () => ZodSet,
+  ZodSchema: () => ZodType,
+  ZodRecord: () => ZodRecord,
+  ZodReadonly: () => ZodReadonly,
+  ZodPromise: () => ZodPromise,
+  ZodPipeline: () => ZodPipeline,
+  ZodParsedType: () => ZodParsedType,
+  ZodOptional: () => ZodOptional,
+  ZodObject: () => ZodObject,
+  ZodNumber: () => ZodNumber,
+  ZodNullable: () => ZodNullable,
+  ZodNull: () => ZodNull,
+  ZodNever: () => ZodNever,
+  ZodNativeEnum: () => ZodNativeEnum,
+  ZodNaN: () => ZodNaN,
+  ZodMap: () => ZodMap,
+  ZodLiteral: () => ZodLiteral,
+  ZodLazy: () => ZodLazy,
+  ZodIssueCode: () => ZodIssueCode,
+  ZodIntersection: () => ZodIntersection,
+  ZodFunction: () => ZodFunction,
+  ZodFirstPartyTypeKind: () => ZodFirstPartyTypeKind,
+  ZodError: () => ZodError,
+  ZodEnum: () => ZodEnum,
+  ZodEffects: () => ZodEffects,
+  ZodDiscriminatedUnion: () => ZodDiscriminatedUnion,
+  ZodDefault: () => ZodDefault,
+  ZodDate: () => ZodDate,
+  ZodCatch: () => ZodCatch,
+  ZodBranded: () => ZodBranded,
+  ZodBoolean: () => ZodBoolean,
+  ZodBigInt: () => ZodBigInt,
+  ZodArray: () => ZodArray,
+  ZodAny: () => ZodAny,
+  Schema: () => ZodType,
+  ParseStatus: () => ParseStatus,
+  OK: () => OK,
+  NEVER: () => NEVER,
+  INVALID: () => INVALID,
+  EMPTY_PATH: () => EMPTY_PATH,
+  DIRTY: () => DIRTY,
+  BRAND: () => BRAND
+});
+var zod_default;
+var init_zod = __esm(() => {
+  init_external();
+  init_external();
+  zod_default = exports_external;
+});
+
+// src/artifact-store.ts
+import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "fs";
+import { dirname, join, relative, sep } from "path";
+import { pathToFileURL } from "url";
+function normalizeArtifactKey(key) {
+  const raw = key.replace(/\\/g, "/").trim();
+  if (!raw || raw.startsWith("/")) {
+    throw new Error(`Invalid artifact key: ${key}`);
+  }
+  const segments = raw.split("/").filter(Boolean);
+  if (segments.length === 0 || segments.some((segment) => segment === "." || segment === "..")) {
+    throw new Error(`Invalid artifact key: ${key}`);
+  }
+  return segments.join("/");
+}
+function assertInside(root, target) {
+  const rel = relative(root, target);
+  if (rel.startsWith("..") || rel === ".." || rel.startsWith(`..${sep}`)) {
+    throw new Error(`Artifact path escapes root: ${target}`);
+  }
+}
+function s3UserMetadata(metadata) {
+  if (!metadata)
+    return;
+  const output = {};
+  for (const [key, value] of Object.entries(metadata)) {
+    if (typeof value === "string")
+      output[key] = value;
+    else if (typeof value === "number" || typeof value === "boolean")
+      output[key] = String(value);
+  }
+  return Object.keys(output).length > 0 ? output : undefined;
+}
+
+class LocalArtifactStore {
+  root;
+  type = "local";
+  canRead = true;
+  canWrite = true;
+  constructor(root) {
+    this.root = root;
+    mkdirSync(root, { recursive: true, mode: 448 });
+  }
+  async put(entry) {
+    const key = normalizeArtifactKey(entry.key);
+    const path = join(this.root, key);
+    assertInside(this.root, path);
+    mkdirSync(dirname(path), { recursive: true, mode: 448 });
+    writeFileSync(path, entry.body, { mode: 384 });
+    chmodSync(path, 384);
+    return { key, uri: pathToFileURL(path).href, modified_at: statSync(path).mtime.toISOString() };
+  }
+  async getText(key) {
+    const normalizedKey = normalizeArtifactKey(key);
+    const path = join(this.root, normalizedKey);
+    assertInside(this.root, path);
+    return readFileSync(path, "utf8");
+  }
+  async exists(key) {
+    const normalizedKey = normalizeArtifactKey(key);
+    const path = join(this.root, normalizedKey);
+    assertInside(this.root, path);
+    return existsSync(path);
+  }
+}
+
+class S3ArtifactStore {
+  options;
+  type = "s3";
+  canRead = true;
+  canWrite = true;
+  client;
+  constructor(options) {
+    this.options = options;
+    this.client = options.client;
+  }
+  async getClient() {
+    if (this.client)
+      return this.client;
+    const [{ S3Client }, { fromIni }] = await Promise.all([
+      import("@aws-sdk/client-s3"),
+      import("@aws-sdk/credential-providers")
+    ]);
+    this.client = new S3Client({
+      region: this.options.region,
+      credentials: this.options.profile ? fromIni({ profile: this.options.profile }) : undefined,
+      maxAttempts: this.options.max_attempts
+    });
+    return this.client;
+  }
+  objectKey(key) {
+    const normalizedKey = normalizeArtifactKey(key);
+    const prefix = this.options.prefix ? normalizeArtifactKey(this.options.prefix) : "";
+    return prefix ? `${prefix}/${normalizedKey}` : normalizedKey;
+  }
+  async put(entry) {
+    const [{ PutObjectCommand }, client] = await Promise.all([
+      import("@aws-sdk/client-s3"),
+      this.getClient()
+    ]);
+    const logicalKey = normalizeArtifactKey(entry.key);
+    const key = this.objectKey(logicalKey);
+    await client.send(new PutObjectCommand({
+      Bucket: this.options.bucket,
+      Key: key,
+      Body: entry.body,
+      ContentType: entry.content_type,
+      Metadata: s3UserMetadata(entry.metadata),
+      ServerSideEncryption: this.options.server_side_encryption,
+      SSEKMSKeyId: this.options.kms_key_id
+    }));
+    return { key: logicalKey, uri: `s3://${this.options.bucket}/${key}`, modified_at: new Date().toISOString() };
+  }
+  async getText(key) {
+    const [{ GetObjectCommand }, client] = await Promise.all([
+      import("@aws-sdk/client-s3"),
+      this.getClient()
+    ]);
+    const objectKey = this.objectKey(key);
+    const response = await client.send(new GetObjectCommand({
+      Bucket: this.options.bucket,
+      Key: objectKey
+    }));
+    if (!response.Body)
+      return "";
+    return await response.Body.transformToString();
+  }
+  async exists(key) {
+    const [{ HeadObjectCommand }, client] = await Promise.all([
+      import("@aws-sdk/client-s3"),
+      this.getClient()
+    ]);
+    const objectKey = this.objectKey(key);
+    try {
+      await client.send(new HeadObjectCommand({
+        Bucket: this.options.bucket,
+        Key: objectKey
+      }));
+      return true;
+    } catch (error) {
+      const name = error instanceof Error ? error.name : "";
+      if (name === "NotFound" || name === "NoSuchKey" || name === "NotFoundError")
+        return false;
+      throw error;
+    }
+  }
+}
+function createArtifactStore(config, workspace) {
+  if (config.storage.type === "s3") {
+    if (!config.storage.s3?.bucket)
+      throw new Error("S3 artifact storage requires storage.s3.bucket");
+    return new S3ArtifactStore({
+      bucket: config.storage.s3.bucket,
+      prefix: config.storage.s3.prefix,
+      region: config.storage.s3.region,
+      profile: config.storage.s3.profile,
+      max_attempts: config.storage.s3.max_attempts,
+      server_side_encryption: config.storage.s3.server_side_encryption,
+      kms_key_id: config.storage.s3.kms_key_id
+    });
+  }
+  return new LocalArtifactStore(workspace.artifactsDir);
+}
+
+// src/service.ts
+import { createHash as createHash20 } from "crypto";
+import { spawnSync as spawnSync2 } from "child_process";
+import { existsSync as existsSync14, readFileSync as readFileSync12 } from "fs";
+import { hostname as hostname3 } from "os";
+import { join as join8, resolve as resolve5 } from "path";
+
+// src/app-wiki.ts
+import { createHash as createHash6, randomUUID as randomUUID3 } from "crypto";
+
+// src/storage-contract.ts
+import { createHash, randomUUID } from "crypto";
+import { existsSync as existsSync3, readdirSync } from "fs";
+import { join as join3 } from "path";
+import { pathToFileURL as pathToFileURL2 } from "url";
+
+// src/workspace.ts
+import { chmodSync as chmodSync2, existsSync as existsSync2, mkdirSync as mkdirSync2, readFileSync as readFileSync2, writeFileSync as writeFileSync2 } from "fs";
+import { homedir } from "os";
+import { dirname as dirname2, join as join2, resolve } from "path";
+var HASNA_KNOWLEDGE_APP_PATH = join2(".hasna", "knowledge");
+var LEGACY_HASNA_KNOWLEDGE_APP_PATH = join2(".hasna", "apps", "knowledge");
+var EXAMPLE_KNOWLEDGE_CANONICAL = {
+  division: "xyz",
+  app_type: "opensource",
+  app: "knowledge",
+  env: "prod",
+  local_path: HASNA_KNOWLEDGE_APP_PATH,
+  s3: {
+    bucket: "example-knowledge-prod",
+    region: "us-east-1",
+    profile: "example-infra",
+    prefix: ".hasna/knowledge",
+    server_side_encryption: "AES256"
+  },
+  secrets: {
+    env: "example/knowledge/prod/env",
+    aws: "example/knowledge/prod/aws",
+    s3: "example/knowledge/prod/s3",
+    rds: null,
+    future_rds: "example/knowledge/prod/rds"
+  },
+  source_owner: "open-files",
+  evidence_doc: "docs/canonical-secrets-bootstrap-2026-06-08.md"
+};
+function canonicalExampleKnowledgeStorage() {
+  return {
+    type: "s3",
+    artifacts_root: "artifacts",
+    s3: {
+      bucket: EXAMPLE_KNOWLEDGE_CANONICAL.s3.bucket,
+      prefix: EXAMPLE_KNOWLEDGE_CANONICAL.s3.prefix,
+      region: EXAMPLE_KNOWLEDGE_CANONICAL.s3.region,
+      profile: EXAMPLE_KNOWLEDGE_CANONICAL.s3.profile,
+      server_side_encryption: EXAMPLE_KNOWLEDGE_CANONICAL.s3.server_side_encryption
+    }
+  };
+}
+function legacyGlobalStorePath() {
+  return join2(homedir(), ".open-knowledge", "db.json");
+}
+function globalKnowledgeHome() {
+  return join2(homedir(), ".hasna", "knowledge");
+}
+function projectKnowledgeHome(cwd = process.cwd()) {
+  return resolve(cwd, HASNA_KNOWLEDGE_APP_PATH);
+}
+function legacyGlobalKnowledgeHome() {
+  return join2(homedir(), LEGACY_HASNA_KNOWLEDGE_APP_PATH);
+}
+function legacyProjectKnowledgeHome(cwd = process.cwd()) {
+  return resolve(cwd, LEGACY_HASNA_KNOWLEDGE_APP_PATH);
+}
+function resolveLegacyScopedWorkspace(scope, cwd = process.cwd()) {
+  if (scope === "project" || scope === "local") {
+    return workspaceForHome(legacyProjectKnowledgeHome(cwd));
+  }
+  return workspaceForHome(legacyGlobalKnowledgeHome());
+}
+function workspaceForHome(home) {
+  return {
+    home,
+    configPath: join2(home, "config.json"),
+    jsonStorePath: join2(home, "db.json"),
+    knowledgeDbPath: join2(home, "knowledge.db"),
+    artifactsDir: join2(home, "artifacts"),
+    cacheDir: join2(home, "cache"),
+    exportsDir: join2(home, "exports"),
+    indexesDir: join2(home, "indexes"),
+    logsDir: join2(home, "logs"),
+    runsDir: join2(home, "runs"),
+    schemasDir: join2(home, "schemas"),
+    wikiDir: join2(home, "wiki")
+  };
+}
+function defaultKnowledgeConfig() {
+  return {
+    version: 1,
+    storage: {
+      type: "local",
+      artifacts_root: "artifacts"
+    },
+    sources: {
+      preferred_ref: "open-files",
+      allowed_schemes: ["open-files", "s3", "file", "https", "http"]
+    },
+    providers: {
+      default_model: "openai:gpt-5.2",
+      aliases: {
+        fast: "openai:gpt-5-mini",
+        reasoning: "anthropic:claude-opus-4-6",
+        sonnet: "anthropic:claude-sonnet-4-6",
+        deepseek: "deepseek:deepseek-chat",
+        "deepseek-reasoning": "deepseek:deepseek-reasoner"
+      },
+      openai: {
+        api_key_env: "OPENAI_API_KEY",
+        default_model: "gpt-5.2"
+      },
+      anthropic: {
+        api_key_env: "ANTHROPIC_API_KEY",
+        default_model: "claude-sonnet-4-6"
+      },
+      deepseek: {
+        api_key_env: "DEEPSEEK_API_KEY",
+        default_model: "deepseek-chat"
+      }
+    },
+    embeddings: {
+      default_model: "openai:text-embedding-3-small",
+      dimensions: 1536,
+      batch_size: 64,
+      max_parallel_calls: 4
+    },
+    safety: {
+      network: {
+        web_search_enabled: false,
+        s3_reads_enabled: false,
+        allowed_s3_buckets: []
+      },
+      redaction: {
+        enabled: true
+      },
+      approvals: {
+        generated_writes_require_approval: true
+      }
+    }
+  };
+}
+function ensureKnowledgeWorkspace(home) {
+  const workspace = workspaceForHome(home);
+  mkdirSync2(workspace.home, { recursive: true, mode: 448 });
+  for (const dir of [
+    workspace.artifactsDir,
+    workspace.cacheDir,
+    workspace.exportsDir,
+    workspace.indexesDir,
+    workspace.logsDir,
+    workspace.runsDir,
+    workspace.schemasDir,
+    workspace.wikiDir
+  ]) {
+    mkdirSync2(dir, { recursive: true, mode: 448 });
+  }
+  if (!existsSync2(workspace.configPath)) {
+    writeFileSync2(workspace.configPath, `${JSON.stringify(defaultKnowledgeConfig(), null, 2)}
+`, { mode: 384 });
+    chmodSync2(workspace.configPath, 384);
+  }
+  return workspace;
+}
+function resolveScopedWorkspace(scope, cwd = process.cwd()) {
+  if (scope === "project" || scope === "local") {
+    return workspaceForHome(projectKnowledgeHome(cwd));
+  }
+  return workspaceForHome(globalKnowledgeHome());
+}
+function ensureParentDir(path) {
+  mkdirSync2(dirname2(path), { recursive: true });
+}
+function readKnowledgeConfig(path) {
+  const raw = readFileSync2(path, "utf8");
+  const parsed = JSON.parse(raw);
+  const { mode: _retiredMode, hosted: _retiredHostedConfig, ...config } = parsed;
+  return config;
+}
+function writeKnowledgeConfig(path, config) {
+  ensureParentDir(path);
+  const { mode: _retiredMode, hosted: _retiredHostedConfig, ...sanitized } = config;
+  writeFileSync2(path, `${JSON.stringify(sanitized, null, 2)}
+`, { mode: 384 });
+  chmodSync2(path, 384);
+}
+
+// src/storage-contract.ts
+var GENERATED_ARTIFACTS = [
+  {
+    kind: "schema",
+    prefix: "schemas/",
+    description: "Machine-readable agent schemas and source rules."
+  },
+  {
+    kind: "index",
+    prefix: "indexes/",
+    description: "Small orientation indexes and future shard manifests."
+  },
+  {
+    kind: "log",
+    prefix: "logs/",
+    description: "Append-only JSONL run and wiki-maintenance log partitions."
+  },
+  {
+    kind: "run",
+    prefix: "runs/",
+    description: "Prompt/tool/cost ledgers and generated output records."
+  },
+  {
+    kind: "wiki_page",
+    prefix: "wiki/",
+    description: "Generated cited Markdown pages, not raw source files."
+  },
+  {
+    kind: "export",
+    prefix: "exports/",
+    description: "Portable exports and snapshots of derived knowledge state."
+  }
+];
+var FORBIDDEN_WORKSPACE_FILES = [
+  "cloud.env",
+  "knowledge.db.pre-cloud-*.bak",
+  "db.json.pre-cloud-*.bak",
+  "migration-exports"
+];
+function forbiddenWorkspaceFilesPresent(workspace) {
+  const present = [];
+  if (existsSync3(join3(workspace.home, "cloud.env")))
+    present.push("cloud.env");
+  if (existsSync3(join3(workspace.home, "migration-exports")))
+    present.push("migration-exports");
+  if (existsSync3(workspace.home)) {
+    for (const entry of readdirSync(workspace.home)) {
+      if (/^(?:knowledge\.db|db\.json)\.pre-cloud-.+\.bak$/i.test(entry))
+        present.push(entry);
+    }
+  }
+  return present;
+}
+function hashArtifactBody(body) {
+  const bytes = typeof body === "string" ? Buffer.from(body) : Buffer.from(body);
+  return {
+    hash: `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
+    size_bytes: bytes.byteLength
+  };
+}
+function artifactKindForKey(key) {
+  const match = GENERATED_ARTIFACTS.find((entry) => key.startsWith(entry.prefix));
+  return match?.kind ?? "artifact";
+}
+function resolveStorageContract(config, workspace, scope = "global") {
+  const validation = validateStorageConfig(config, workspace);
+  const s3 = config.storage.s3 ?? null;
+  const prefix = s3?.prefix?.replace(/^\/+|\/+$/g, "") ?? "";
+  const s3UriPrefix = s3 ? `s3://${s3.bucket}/${prefix ? `${prefix}/` : ""}` : "";
+  const canonicalPrefix = EXAMPLE_KNOWLEDGE_CANONICAL.s3.prefix.replace(/^\/+|\/+$/g, "");
+  const canonicalS3UriPrefix = `s3://${EXAMPLE_KNOWLEDGE_CANONICAL.s3.bucket}/${canonicalPrefix}/`;
+  const canonicalActive = config.storage.type === "s3" && s3?.bucket === EXAMPLE_KNOWLEDGE_CANONICAL.s3.bucket && (s3.region ?? null) === EXAMPLE_KNOWLEDGE_CANONICAL.s3.region;
+  return {
+    scope,
+    storage_type: config.storage.type,
+    workspace_home: workspace.home,
+    local_layout: {
+      app_path: HASNA_KNOWLEDGE_APP_PATH,
+      config_path: workspace.configPath,
+      json_store_path: workspace.jsonStorePath,
+      knowledge_db_path: workspace.knowledgeDbPath,
+      directories: {
+        artifacts: workspace.artifactsDir,
+        cache: workspace.cacheDir,
+        exports: workspace.exportsDir,
+        indexes: workspace.indexesDir,
+        logs: workspace.logsDir,
+        runs: workspace.runsDir,
+        schemas: workspace.schemasDir,
+        wiki: workspace.wikiDir
+      }
+    },
+    artifact_store: {
+      type: config.storage.type,
+      artifacts_root: config.storage.artifacts_root,
+      uri_prefix: config.storage.type === "s3" ? s3UriPrefix : pathToFileURL2(`${workspace.artifactsDir}/`).href,
+      s3: s3 ? {
+        bucket: s3.bucket,
+        prefix,
+        region: s3.region ?? null,
+        profile: s3.profile ?? null,
+        server_side_encryption: s3.server_side_encryption ?? null,
+        kms_key_configured: Boolean(s3.kms_key_id)
+      } : null
+    },
+    canonical_example: {
+      division: EXAMPLE_KNOWLEDGE_CANONICAL.division,
+      app_type: EXAMPLE_KNOWLEDGE_CANONICAL.app_type,
+      app: EXAMPLE_KNOWLEDGE_CANONICAL.app,
+      env: EXAMPLE_KNOWLEDGE_CANONICAL.env,
+      active: canonicalActive,
+      local_path: EXAMPLE_KNOWLEDGE_CANONICAL.local_path,
+      s3: {
+        bucket: EXAMPLE_KNOWLEDGE_CANONICAL.s3.bucket,
+        region: EXAMPLE_KNOWLEDGE_CANONICAL.s3.region,
+        profile: EXAMPLE_KNOWLEDGE_CANONICAL.s3.profile,
+        prefix: canonicalPrefix,
+        uri_prefix: canonicalS3UriPrefix,
+        server_side_encryption: EXAMPLE_KNOWLEDGE_CANONICAL.s3.server_side_encryption
+      },
+      secrets: {
+        env: EXAMPLE_KNOWLEDGE_CANONICAL.secrets.env,
+        aws: EXAMPLE_KNOWLEDGE_CANONICAL.secrets.aws,
+        s3: EXAMPLE_KNOWLEDGE_CANONICAL.secrets.s3,
+        rds: EXAMPLE_KNOWLEDGE_CANONICAL.secrets.rds,
+        future_rds: EXAMPLE_KNOWLEDGE_CANONICAL.secrets.future_rds
+      },
+      evidence_doc: EXAMPLE_KNOWLEDGE_CANONICAL.evidence_doc
+    },
+    secret_handling: {
+      workspace_env_files_supported: false,
+      forbidden_workspace_files: FORBIDDEN_WORKSPACE_FILES,
+      forbidden_workspace_files_present: forbiddenWorkspaceFilesPresent(workspace),
+      runtime_env_keys: [
+        "HASNA_KNOWLEDGE_API_URL",
+        "HASNA_KNOWLEDGE_API_KEY",
+        "HASNA_KNOWLEDGE_DATABASE_URL"
+      ],
+      secret_ref_authority: "open-secrets",
+      approved_secret_refs: {
+        env: EXAMPLE_KNOWLEDGE_CANONICAL.secrets.env,
+        aws: EXAMPLE_KNOWLEDGE_CANONICAL.secrets.aws,
+        s3: EXAMPLE_KNOWLEDGE_CANONICAL.secrets.s3,
+        rds: EXAMPLE_KNOWLEDGE_CANONICAL.secrets.rds
+      },
+      db_url_rotation_decision: {
+        status: "blocked_without_secret_authority",
+        reason: "No live secret mutation authority is available in @hasna/knowledge. Rotate the DB URL only through the approved secret authority if separate evidence proves the URL propagated to backups, exports, sync bundles, reports, or copied artifacts.",
+        authority_required: true
+      }
+    },
+    source_ownership: {
+      owner: "open-files",
+      preferred_ref: config.sources.preferred_ref,
+      allowed_schemes: config.sources.allowed_schemes,
+      raw_source_bytes_stored_in_open_knowledge: false,
+      stores: [
+        "source refs",
+        "source revisions and hashes",
+        "citation spans",
+        "redacted extracted chunks",
+        "embeddings",
+        "generated wiki artifacts",
+        "indexes",
+        "run ledgers"
+      ],
+      does_not_store: [
+        "raw open-files bytes",
+        "S3 object credentials",
+        "connector secrets",
+        "hosted tenant ownership state"
+      ]
+    },
+    private_fleet_boundary: {
+      manifest_authority: "open-machines",
+      source_ref_authority: "open-files",
+      secret_ref_authority: "open-secrets",
+      raw_private_manifest_bytes_stored_in_open_knowledge: false,
+      accepted_source_ref_schemes: config.sources.allowed_schemes.filter((scheme) => ["open-files", "s3", "file"].includes(scheme)),
+      stores: [
+        "source refs for private manifests",
+        "redacted setup decisions",
+        "runbook summaries",
+        "citation spans into approved knowledge sources",
+        "machine setup evidence hashes"
+      ],
+      does_not_store: [
+        "private fleet manifests",
+        "machine hostnames",
+        "machine serial numbers",
+        "sudo passwords",
+        "VNC passwords",
+        "SSH private keys",
+        "GitHub App private keys",
+        "secret values"
+      ],
+      example_manifest_ref: "open-files://source/private-fleet-manifest/path/machines.json"
+    },
+    generated_artifacts: GENERATED_ARTIFACTS,
+    scalability: {
+      catalog: "knowledge.db tracks sources, revisions, chunks, citations, indexes, runs, and storage_objects.",
+      indexes: "Indexes are cataloged DB rows plus sharded artifacts, not one giant index.md.",
+      logs: "Logs use dated JSONL partitions under logs/yyyy/mm/dd.jsonl.",
+      markdown: "Markdown pages are the readable wiki layer over DB/object-store state."
+    },
+    warnings: validation.warnings
+  };
+}
+function validateStorageConfig(config, workspace) {
+  const errors = [];
+  const warnings = [];
+  const forbiddenFiles = forbiddenWorkspaceFilesPresent(workspace);
+  for (const file of forbiddenFiles) {
+    errors.push(`Forbidden Knowledge workspace file present: ${file}. Move secrets to open-secrets/runtime env and remove or replace legacy backups/exports with redacted owner-only artifacts.`);
+  }
+  if (!workspace.home.endsWith(HASNA_KNOWLEDGE_APP_PATH)) {
+    warnings.push(`Workspace home does not end with ${HASNA_KNOWLEDGE_APP_PATH}: ${workspace.home}`);
+  }
+  if (config.storage.type === "s3") {
+    if (!config.storage.s3?.bucket)
+      errors.push("storage.s3.bucket is required when storage.type is s3.");
+    if (!config.storage.s3?.prefix)
+      warnings.push("storage.s3.prefix is empty; generated knowledge artifacts will be written at the bucket root.");
+  }
+  if (config.storage.type === "local" && config.storage.s3) {
+    warnings.push("storage.s3 is configured but ignored while storage.type is local.");
+  }
+  if (config.sources.preferred_ref !== "open-files") {
+    warnings.push("sources.preferred_ref should stay open-files for durable company knowledge.");
+  }
+  if (!config.sources.allowed_schemes.includes("open-files")) {
+    errors.push("sources.allowed_schemes must include open-files.");
+  }
+  return {
+    ok: errors.length === 0,
+    errors,
+    warnings
+  };
+}
+function recordStorageObjects(db, objects, now = new Date) {
+  const timestamp = now.toISOString();
+  const statement = db.prepare(`
+    INSERT INTO storage_objects (
+      id, artifact_uri, kind, content_type, hash, size_bytes, metadata_json, created_at, updated_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(artifact_uri) DO UPDATE SET
+      kind = excluded.kind,
+      content_type = excluded.content_type,
+      hash = excluded.hash,
+      size_bytes = excluded.size_bytes,
+      metadata_json = excluded.metadata_json,
+      updated_at = excluded.updated_at
+  `);
+  const insert = db.transaction((entries) => {
+    for (const entry of entries) {
+      const metadata = {
+        key: entry.key,
+        ...entry.modified_at ? { artifact_modified_at: entry.modified_at } : {},
+        ...entry.metadata ?? {}
+      };
+      statement.run(randomUUID(), entry.uri, entry.kind, entry.content_type ?? null, entry.hash ?? null, entry.size_bytes ?? null, JSON.stringify(metadata), timestamp, timestamp);
+    }
+  });
+  insert(objects);
+}
+
+// src/knowledge-db.ts
+import { Database } from "bun:sqlite";
+
+// ../../node_modules/.bun/@hasna+contracts@0.10.6/node_modules/@hasna/contracts/dist/client/storage.js
+var MAX_CREDENTIAL_FILE_BYTES = 64 * 1024;
+var INSPECT_CUSTOM = Symbol.for("nodejs.util.inspect.custom");
+var CREDENTIAL_SEAL = Symbol.for("hasna:contracts:sealedCredential");
+var DEPRECATION_REGISTRY = Symbol.for("hasna:contracts:credentialDeprecationNotices");
+class HasnaHttpError extends Error {
+  status;
+  method;
+  path;
+  body;
+  credentialSource;
+  credentialTier;
+  constructor(method, path, status, body, credential) {
+    const guidance = credential ? `. ${credential.guidance}` : "";
+    super(`Hasna cloud request failed: ${method} ${path} -> ${status}${guidance}`);
+    this.name = "HasnaHttpError";
+    this.status = status;
+    this.method = method;
+    this.path = path;
+    this.body = body;
+    this.credentialSource = credential?.source ?? null;
+    this.credentialTier = credential?.tier ?? null;
+  }
+}
+var IDEMPOTENT_METHODS = new Set(["GET", "HEAD", "PUT", "DELETE", "OPTIONS"]);
+var AUTHORITY_OVERRIDE_HEADERS = new Set([
+  "host",
+  ":authority",
+  "forwarded",
+  "x-forwarded-host",
+  "x-original-host"
+]);
+function resourcePath(resource) {
+  const trimmed = resource.replace(/^\/+|\/+$/g, "");
+  if (!trimmed)
+    throw new Error("resource must be a non-empty path segment");
+  return `/${trimmed}`;
+}
+function entityPath(resource, id) {
+  if (id === undefined || id === null || `${id}`.length === 0) {
+    throw new Error("id must be a non-empty string");
+  }
+  return `${resourcePath(resource)}/${encodeURIComponent(String(id))}`;
+}
+function newIdempotencyKey() {
+  const g = globalThis;
+  if (g.crypto?.randomUUID)
+    return g.crypto.randomUUID();
+  return `idmp_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 12)}`;
+}
+function extractItems(raw) {
+  if (Array.isArray(raw))
+    return raw;
+  if (raw && typeof raw === "object") {
+    const obj = raw;
+    for (const key of ["items", "data", "results", "rows", "records"]) {
+      if (Array.isArray(obj[key]))
+        return obj[key];
+    }
+  }
+  return [];
+}
+function extractTotal(raw) {
+  if (raw && typeof raw === "object") {
+    const obj = raw;
+    for (const key of ["total", "count", "totalCount", "total_count"]) {
+      if (typeof obj[key] === "number")
+        return obj[key];
+    }
+  }
+  return null;
+}
+function extractCursor(raw) {
+  if (raw && typeof raw === "object") {
+    const obj = raw;
+    for (const key of ["cursor", "nextCursor", "next_cursor", "next"]) {
+      if (typeof obj[key] === "string")
+        return obj[key];
+    }
+  }
+  return null;
+}
+function createHasnaStorageClient(name, transport) {
+  return {
+    name,
+    baseUrl: transport.baseUrl,
+    transport,
+    async list(resource, options = {}) {
+      const raw = await transport.get(resourcePath(resource), options);
+      return {
+        items: extractItems(raw),
+        total: extractTotal(raw),
+        cursor: extractCursor(raw),
+        raw
+      };
+    },
+    async get(resource, id, options = {}) {
+      try {
+        return await transport.get(entityPath(resource, id), options);
+      } catch (error) {
+        if (error instanceof HasnaHttpError && error.status === 404)
+          return null;
+        throw error;
+      }
+    },
+    async create(resource, body, options = {}) {
+      const { idempotencyKey, ...rest } = options;
+      return transport.post(resourcePath(resource), body, {
+        ...rest,
+        idempotencyKey: idempotencyKey ?? newIdempotencyKey()
+      });
+    },
+    async update(resource, id, patch, options = {}) {
+      const { method = "PATCH", idempotencyKey, ...rest } = options;
+      const call = method === "PUT" ? transport.put : transport.patch;
+      return call(entityPath(resource, id), patch, { ...rest, ...idempotencyKey ? { idempotencyKey } : {} });
+    },
+    async delete(resource, id, options = {}) {
+      try {
+        await transport.del(entityPath(resource, id), undefined, options);
+      } catch (error) {
+        if (error instanceof HasnaHttpError && error.status === 404)
+          return;
+        throw error;
+      }
+    }
+  };
+}
+
+// ../../node_modules/.bun/@hasna+contracts@0.10.6/node_modules/@hasna/contracts/dist/client/transport.js
+import { isIP } from "net";
+function envToken(name) {
+  return name.toUpperCase().replace(/-/g, "_");
+}
+function credentialOverrideEnvKey(name) {
+  return `HASNA_${envToken(name)}_API_KEY_OVERRIDE`;
+}
+var CREDENTIAL_PROFILE_ENV_KEY = "HASNA_PROFILE";
+
+class CredentialResolutionError extends Error {
+  appName;
+  attempted;
+  constructor(appName, message, attempted) {
+    super(message);
+    this.name = "CredentialResolutionError";
+    this.appName = appName;
+    this.attempted = attempted;
+  }
+}
+var MAX_CREDENTIAL_FILE_BYTES2 = 64 * 1024;
+var ILLEGAL_IN_HEADER_VALUE = /[^\t\x20-\x7e]/;
+function assertUsableCredential(appName, source, value) {
+  if (!ILLEGAL_IN_HEADER_VALUE.test(value))
+    return;
+  throw new CredentialResolutionError(appName, `The credential from ${source} contains characters that cannot be sent in an HTTP header ` + `(a control character or non-ASCII byte). A file written with CR-only line endings is the usual ` + `cause. Rewrite that credential file with one LF-terminated KEY=value line. ` + `The value is not shown here, and is deliberately never logged.`, [source]);
+}
+var INSPECT_CUSTOM2 = Symbol.for("nodejs.util.inspect.custom");
+var CREDENTIAL_SEAL2 = Symbol.for("hasna:contracts:sealedCredential");
+var CALLER_SUPPLIED_CREDENTIAL_PROVIDER_SOURCE = "caller-supplied CredentialProvider";
+function sealCredential(fields) {
+  const { apiKey } = fields;
+  const visible = {
+    tier: fields.tier,
+    source: fields.source,
+    deliberate: fields.deliberate,
+    deprecated: fields.deprecated,
+    diskCandidates: Object.freeze([...fields.diskCandidates]),
+    warning: fields.warning
+  };
+  const sealed = { ...visible };
+  Object.defineProperty(sealed, "apiKey", {
+    value: apiKey,
+    enumerable: false,
+    writable: false,
+    configurable: false
+  });
+  Object.defineProperty(sealed, INSPECT_CUSTOM2, {
+    value: () => ({ ...visible, apiKey: "[redacted]" }),
+    enumerable: false,
+    writable: false,
+    configurable: false
+  });
+  Object.defineProperty(sealed, CREDENTIAL_SEAL2, {
+    value: true,
+    enumerable: false,
+    writable: false,
+    configurable: false
+  });
+  return Object.freeze(sealed);
+}
+function isSealedCredential(credential) {
+  return credential[CREDENTIAL_SEAL2] === true;
+}
+function explicitCredential(appName, apiKey) {
+  const source = "explicit apiKey option";
+  assertUsableCredential(appName, source, apiKey);
+  return sealCredential({
+    apiKey,
+    tier: "argument",
+    source,
+    deliberate: true,
+    deprecated: false,
+    diskCandidates: [],
+    warning: null
+  });
+}
+function validateAndSealResolvedCredential(appName, credential) {
+  const apiKey = credential.apiKey;
+  assertUsableCredential(appName, CALLER_SUPPLIED_CREDENTIAL_PROVIDER_SOURCE, apiKey);
+  if (!isSealedCredential(credential)) {
+    return sealCredential({
+      apiKey,
+      tier: "argument",
+      source: CALLER_SUPPLIED_CREDENTIAL_PROVIDER_SOURCE,
+      deliberate: true,
+      deprecated: false,
+      diskCandidates: [],
+      warning: null
+    });
+  }
+  return sealCredential({
+    apiKey,
+    tier: credential.tier,
+    source: credential.source,
+    deliberate: credential.deliberate,
+    deprecated: credential.deprecated,
+    diskCandidates: credential.diskCandidates,
+    warning: credential.warning
+  });
+}
+var DEPRECATION_REGISTRY2 = Symbol.for("hasna:contracts:credentialDeprecationNotices");
+var ASCII_CONTROL_PATTERN = /[\u0000-\u001f\u007f]/;
+var DNS_LABEL_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
+function isValidDnsDomain(value) {
+  if (value.length === 0 || value.length > 253 || ASCII_CONTROL_PATTERN.test(value) || /[^\x00-\x7f]/.test(value)) {
+    return false;
+  }
+  return value.split(".").every((label) => label.length <= 63 && !label.startsWith("xn--") && DNS_LABEL_PATTERN.test(label));
+}
+function rawAuthority(value) {
+  const match = /^[a-z][a-z0-9+.-]*:\/\//i.exec(value);
+  if (!match)
+    throw new Error("API URL must be absolute.");
+  const afterScheme = value.slice(match[0].length);
+  const boundary = afterScheme.search(/[/?#]/);
+  const authority = boundary === -1 ? afterScheme : afterScheme.slice(0, boundary);
+  if (!authority)
+    throw new Error("API URL must include a hostname.");
+  return authority;
+}
+function assertCanonicalPort(port) {
+  if (!/^[0-9]+$/.test(port) || port.length > 1 && port.startsWith("0")) {
+    throw new Error("API URL authority must contain a canonical port between 1 and 65535.");
+  }
+  const numericPort = Number(port);
+  if (!Number.isSafeInteger(numericPort) || numericPort < 1 || numericPort > 65535) {
+    throw new Error("API URL authority must contain a canonical port between 1 and 65535.");
+  }
+}
+function canonicalAuthorityHostname(authority) {
+  let rawHostname;
+  if (authority.startsWith("[")) {
+    const closingBracket = authority.indexOf("]");
+    if (closingBracket === -1) {
+      throw new Error("API URL authority must contain a canonical hostname.");
+    }
+    rawHostname = authority.slice(0, closingBracket + 1);
+    const portSuffix = authority.slice(closingBracket + 1);
+    if (portSuffix) {
+      if (!portSuffix.startsWith(":")) {
+        throw new Error("API URL authority must contain a canonical hostname and port.");
+      }
+      assertCanonicalPort(portSuffix.slice(1));
+    }
+    if (isIP(rawHostname.slice(1, -1)) !== 6) {
+      throw new Error("API URL authority must contain a canonical IPv6 literal.");
+    }
+  } else {
+    const firstColon = authority.indexOf(":");
+    const lastColon = authority.lastIndexOf(":");
+    if (firstColon !== lastColon) {
+      throw new Error("IPv6 API URL authorities must use brackets.");
+    }
+    if (lastColon !== -1) {
+      const port = authority.slice(lastColon + 1);
+      assertCanonicalPort(port);
+      rawHostname = authority.slice(0, lastColon);
+    } else {
+      rawHostname = authority;
+    }
+    const ipVersion = isIP(rawHostname);
+    const numericAddressParts = rawHostname.split(".");
+    const looksLikeNonCanonicalIpv4 = numericAddressParts.every((part) => /^(?:0x[0-9a-f]+|[0-9]+)$/i.test(part));
+    if (ipVersion !== 4 && looksLikeNonCanonicalIpv4 || ipVersion !== 4 && !isValidDnsDomain(rawHostname.toLowerCase())) {
+      throw new Error("API URL authority must contain a canonical ASCII hostname.");
+    }
+  }
+  return rawHostname.toLowerCase();
+}
+function isDeliberateLoopbackHttpAuthority(authority) {
+  return /^(?:localhost|127\.0\.0\.1|\[::1\])(?::[0-9]+)?$/i.test(authority);
+}
+function toV1BaseUrl(apiUrl) {
+  if (ASCII_CONTROL_PATTERN.test(apiUrl)) {
+    throw new Error("API URL must not contain ASCII control characters.");
+  }
+  const input = apiUrl.trim();
+  const authority = rawAuthority(input);
+  if (authority.includes("@") || authority.includes("\\") || authority.includes("%") || /[^\x00-\x7f]/.test(authority)) {
+    throw new Error("API URL authority must be canonical ASCII without credentials.");
+  }
+  const canonicalHostname = canonicalAuthorityHostname(authority);
+  const url = new URL(input);
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error("API URL must use http or https.");
+  }
+  if (url.username || url.password) {
+    throw new Error("API URL must not include credentials.");
+  }
+  if (!url.hostname || url.hostname.endsWith(".")) {
+    throw new Error("API URL must include a canonical hostname.");
+  }
+  if (url.hostname.toLowerCase() !== canonicalHostname) {
+    throw new Error("API URL authority must not rely on parser hostname normalization.");
+  }
+  if (url.hostname.split(".").some((label) => label.toLowerCase().startsWith("xn--"))) {
+    throw new Error("API URL must not use IDN or punycode hostnames.");
+  }
+  if (url.protocol === "http:" && !isDeliberateLoopbackHttpAuthority(authority)) {
+    throw new Error("API URL may use http only for an exact loopback authority.");
+  }
+  if (url.search || url.hash) {
+    throw new Error("API URL must not include a query string or fragment.");
+  }
+  let path = url.pathname.replace(/\/+$/, "");
+  if (path.endsWith("/v1"))
+    path = path.slice(0, -"/v1".length);
+  url.pathname = `${path}/v1`;
+  return url.toString().replace(/\/+$/, "");
+}
+class HasnaHttpError2 extends Error {
+  status;
+  method;
+  path;
+  body;
+  credentialSource;
+  credentialTier;
+  constructor(method, path, status, body, credential) {
+    const guidance = credential ? `. ${credential.guidance}` : "";
+    super(`Hasna cloud request failed: ${method} ${path} -> ${status}${guidance}`);
+    this.name = "HasnaHttpError";
+    this.status = status;
+    this.method = method;
+    this.path = path;
+    this.body = body;
+    this.credentialSource = credential?.source ?? null;
+    this.credentialTier = credential?.tier ?? null;
+  }
+}
+function currentCredential(name, apiKey) {
+  if (typeof apiKey === "function") {
+    return validateAndSealResolvedCredential(name, apiKey());
+  }
+  return explicitCredential(name, apiKey);
+}
+function authFailureGuidance(credential) {
+  const origin = `The API key for this request came from ${credential.source}`;
+  if (credential.deliberate) {
+    const remedy = credential.source === CALLER_SUPPLIED_CREDENTIAL_PROVIDER_SOURCE ? `Fix that provider so it returns the current key, or replace it with resolveCredential() ` + `so diagnostics can name the original source.` : `Rotate that key, or unset the override to use the credential on disk.`;
+    return `${origin} \u2014 a credential you selected deliberately. It was NOT substituted with any other key: ` + `falling back here would authenticate as a different principal than the one you named, which is ` + `exactly the failure an override exists to prevent. ${remedy}`;
+  }
+  if (credential.deprecated) {
+    const target = credential.diskCandidates[0];
+    const remedy = target ? `Write the CURRENT key to ${target} \u2014 that file is re-read on every call, so rotations take ` + `effect immediately and in every shell. Do not simply unset ${credential.source}: nothing was ` + `found on disk, so that would leave this client with no credential at all.` : `This environment has no HOME, so no credential file could be consulted; the disk tier is ` + `unavailable here and there is nothing to fall back to. Set HOME, or supply the key explicitly.`;
+    return `${origin}, a variable in this process's environment \u2014 which is a snapshot taken when the process ` + `started. A STALE SHELL is the most common cause of this error: this shell exported the key before ` + `it was rotated, and will keep sending the old one until it exits. ${remedy}`;
+  }
+  return `${origin}, which was re-read from disk on this very call \u2014 so a stale shell is NOT the cause here. ` + `The stored credential is genuinely being rejected: rotate it, or re-run the fleet key distribution ` + `so this machine gets the current key.`;
+}
+var DEFAULT_RETRY_STATUSES = [408, 425, 429, 500, 502, 503, 504];
+var IDEMPOTENT_METHODS2 = new Set(["GET", "HEAD", "PUT", "DELETE", "OPTIONS"]);
+var AUTHORITY_OVERRIDE_HEADERS2 = new Set([
+  "host",
+  ":authority",
+  "forwarded",
+  "x-forwarded-host",
+  "x-original-host"
+]);
+function assertNoAuthorityOverrideHeaders(headers, source) {
+  if (!headers)
+    return;
+  const forbidden = Object.keys(headers).find((name) => AUTHORITY_OVERRIDE_HEADERS2.has(name.trim().toLowerCase()));
+  if (forbidden) {
+    throw new Error(`Authenticated ${source} headers must not set authority header '${forbidden}'.`);
+  }
+}
+function appendQuery(path, query) {
+  if (!query)
+    return path;
+  const params = query instanceof URLSearchParams ? query : new URLSearchParams;
+  if (!(query instanceof URLSearchParams)) {
+    for (const [key, value] of Object.entries(query)) {
+      if (value === null || value === undefined)
+        continue;
+      if (Array.isArray(value)) {
+        for (const v of value)
+          params.append(key, String(v));
+      } else {
+        params.append(key, String(value));
+      }
+    }
+  }
+  const qs = params.toString();
+  if (!qs)
+    return path;
+  return `${path}${path.includes("?") ? "&" : "?"}${qs}`;
+}
+var defaultSleep = (ms) => new Promise((resolve2) => setTimeout(resolve2, ms));
+function createHasnaHttpTransport(options) {
+  const fetchImpl = options.fetchImpl ?? ((input, init) => fetch(input, init));
+  const base = toV1BaseUrl(options.baseUrl);
+  const timeoutMs = options.timeoutMs ?? 30000;
+  const sleep = options.sleepImpl ?? defaultSleep;
+  const defaultRetry = options.retry;
+  function resolveRetry(callRetry) {
+    const chosen = callRetry !== undefined ? callRetry : defaultRetry;
+    if (chosen === false)
+      return null;
+    const r = chosen ?? {};
+    return {
+      retries: r.retries ?? 2,
+      baseDelayMs: r.baseDelayMs ?? 200,
+      maxDelayMs: r.maxDelayMs ?? 2000,
+      retryStatuses: r.retryStatuses ?? [...DEFAULT_RETRY_STATUSES]
+    };
+  }
+  async function once(method, rel, url, body, opts, credential) {
+    assertNoAuthorityOverrideHeaders(options.headers, "transport");
+    assertNoAuthorityOverrideHeaders(opts.headers, "request");
+    const headers = {
+      "x-api-key": credential.apiKey,
+      Authorization: `Bearer ${credential.apiKey}`,
+      Accept: "application/json",
+      ...options.headers ?? {},
+      ...opts.headers ?? {}
+    };
+    if (opts.idempotencyKey)
+      headers["Idempotency-Key"] = opts.idempotencyKey;
+    const init = {
+      method,
+      headers,
+      redirect: "manual"
+    };
+    if (body !== undefined) {
+      headers["Content-Type"] = "application/json";
+      init.body = JSON.stringify(body);
+    }
+    const controller = new AbortController;
+    const onAbort = () => controller.abort();
+    if (opts.signal) {
+      if (opts.signal.aborted)
+        controller.abort();
+      else
+        opts.signal.addEventListener("abort", onAbort, { once: true });
+    }
+    const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? timeoutMs);
+    init.signal = controller.signal;
+    let response;
+    try {
+      response = await fetchImpl(url, init);
+    } catch (error) {
+      const err = error instanceof Error ? error : new Error(String(error));
+      if (opts.signal?.aborted)
+        return { ok: false, retryable: false, error: err };
+      return { ok: false, retryable: true, error: err };
+    } finally {
+      clearTimeout(timer);
+      if (opts.signal)
+        opts.signal.removeEventListener("abort", onAbort);
+    }
+    const text = await response.text();
+    let parsed = undefined;
+    if (text.length > 0) {
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        parsed = text;
+      }
+    }
+    if (!response.ok) {
+      if (response.status >= 300 && response.status < 400) {
+        return {
+          ok: false,
+          retryable: false,
+          error: new HasnaHttpError2(method, rel, response.status, parsed)
+        };
+      }
+      if (response.status === 401 || response.status === 403) {
+        return {
+          ok: false,
+          retryable: false,
+          error: new HasnaHttpError2(method, rel, response.status, parsed, {
+            source: credential.source,
+            tier: credential.tier,
+            guidance: authFailureGuidance(credential)
+          })
+        };
+      }
+      const retry = resolveRetry(opts.retry);
+      const retryable = retry ? retry.retryStatuses.includes(response.status) : false;
+      return { ok: false, retryable, error: new HasnaHttpError2(method, rel, response.status, parsed) };
+    }
+    return { ok: true, value: parsed };
+  }
+  async function request(method, path, body, opts = {}) {
+    const upper = method.toUpperCase();
+    const rel = appendQuery(path.startsWith("/") ? path : `/${path}`, opts.query);
+    const url = `${base}${rel}`;
+    const retry = resolveRetry(opts.retry);
+    const methodRetryable = IDEMPOTENT_METHODS2.has(upper) || Boolean(opts.idempotencyKey);
+    const maxAttempts = retry && methodRetryable ? retry.retries + 1 : 1;
+    const credential = currentCredential(options.name, options.apiKey);
+    let last = null;
+    for (let attempt = 1;attempt <= maxAttempts; attempt++) {
+      const result = await once(upper, rel, url, body, opts, credential);
+      if (result.ok)
+        return result.value;
+      last = result;
+      const canRetry = retry !== null && methodRetryable && result.retryable && attempt < maxAttempts;
+      if (!canRetry)
+        break;
+      const backoff = Math.min(retry.maxDelayMs, retry.baseDelayMs * 2 ** (attempt - 1));
+      const jitter = Math.floor(Math.random() * (backoff / 2 + 1));
+      await sleep(backoff + jitter);
+    }
+    throw last.error;
+  }
+  return {
+    baseUrl: base,
+    request,
+    get: (path, opts) => request("GET", path, undefined, opts),
+    post: (path, body, opts) => request("POST", path, body, opts),
+    put: (path, body, opts) => request("PUT", path, body, opts),
+    patch: (path, body, opts) => request("PATCH", path, body, opts),
+    del: (path, body, opts) => request("DELETE", path, body, opts)
+  };
+}
+
+// src/net-guard.ts
+var NETWORK_GUARD_ENV = "NODE_ENV";
+
+class KnowledgeNetworkGuardError extends Error {
+  scheme;
+  port;
+  constructor(message, details) {
+    super(message);
+    this.name = "KnowledgeNetworkGuardError";
+    this.scheme = details.scheme;
+    this.port = details.port;
+  }
+}
+function isNetworkGuardActive(env = process.env) {
+  return (env[NETWORK_GUARD_ENV] ?? "").trim().toLowerCase() === "test";
+}
+function isIpv4Loopback(hostname) {
+  const parts = hostname.split(".");
+  if (parts.length !== 4)
+    return false;
+  if (!parts.every((part) => /^\d{1,3}$/.test(part) && Number(part) <= 255))
+    return false;
+  return parts[0] === "127";
+}
+function isLoopbackHostname(hostname) {
+  const host = hostname.trim().toLowerCase();
+  if (host.length === 0)
+    return false;
+  if (host === "localhost" || host.endsWith(".localhost"))
+    return true;
+  if (isIpv4Loopback(host))
+    return true;
+  if (!host.startsWith("[") || !host.endsWith("]"))
+    return false;
+  const v6 = host.slice(1, -1);
+  if (v6 === "::1" || /^(0:){7}1$/.test(v6))
+    return true;
+  const tail = v6.split(":").pop() ?? "";
+  if (/^(::ffff:|::)/.test(v6) && isIpv4Loopback(tail))
+    return true;
+  return /^::(ffff:)?7f[0-9a-f]{2}:[0-9a-f]{1,4}$/.test(v6);
+}
+function targetUrl(input) {
+  if (typeof input === "string")
+    return input;
+  if (input instanceof URL)
+    return input.href;
+  return input.url;
+}
+function assertOutboundRequestAllowed(input, env = process.env) {
+  if (!isNetworkGuardActive(env))
+    return;
+  const raw = targetUrl(input);
+  let url;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new KnowledgeNetworkGuardError(`knowledge: refused an outbound request with an unparseable target while ${NETWORK_GUARD_ENV}=test. ` + "Under test, only loopback requests are permitted.", { scheme: "unknown", port: "" });
+  }
+  if (isLoopbackHostname(url.hostname))
+    return;
+  throw new KnowledgeNetworkGuardError(`knowledge: refused a non-loopback ${url.protocol.replace(":", "")} request while ${NETWORK_GUARD_ENV}=test ` + "(target host withheld on purpose). This process selected the HTTP API under test, which means a " + "read or write was about to leave the machine and reach the live store. Unset HASNA_KNOWLEDGE_API_URL " + "to use the on-box store, or point it at 127.0.0.1 for a hermetic test.", { scheme: url.protocol.replace(":", ""), port: url.port });
+}
+var REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+var MAX_GUARDED_REDIRECTS = 5;
+function requestMethod(input, init) {
+  if (init?.method)
+    return init.method.toUpperCase();
+  if (typeof input !== "string" && !(input instanceof URL))
+    return input.method.toUpperCase();
+  return "GET";
+}
+async function guardedFetch(input, init) {
+  assertOutboundRequestAllowed(input);
+  if (!isNetworkGuardActive() || init?.redirect !== undefined) {
+    return fetch(input, init);
+  }
+  let from = targetUrl(input);
+  let method = requestMethod(input, init);
+  let body = init?.body;
+  let response = await fetch(input, { ...init ?? {}, redirect: "manual" });
+  for (let hop = 0;REDIRECT_STATUSES.has(response.status); hop++) {
+    const location = response.headers.get("location");
+    if (!location)
+      return response;
+    const next = new URL(location, from).href;
+    assertOutboundRequestAllowed(next);
+    if (hop >= MAX_GUARDED_REDIRECTS) {
+      const url = new URL(next);
+      throw new KnowledgeNetworkGuardError(`knowledge: refused to follow more than ${MAX_GUARDED_REDIRECTS} redirects while ${NETWORK_GUARD_ENV}=test ` + "(target host withheld on purpose). Under test the guard follows redirects itself so every hop is " + "checked, and a chain this long is a loop, not a route.", { scheme: url.protocol.replace(":", ""), port: url.port });
+    }
+    if (response.status === 303 || (response.status === 301 || response.status === 302) && method !== "GET" && method !== "HEAD") {
+      method = "GET";
+      body = undefined;
+    }
+    const hopInit = { ...init ?? {}, method, redirect: "manual" };
+    if (body === undefined)
+      delete hopInit.body;
+    else
+      hopInit.body = body;
+    response = await fetch(next, hopInit);
+    from = next;
+  }
+  return response;
+}
+
+// src/client-transport.ts
+var KNOWLEDGE_APP_SLUG = "knowledge";
+var KNOWLEDGE_API_URL_ENV = "HASNA_KNOWLEDGE_API_URL";
+var KNOWLEDGE_API_KEY_ENV = "HASNA_KNOWLEDGE_API_KEY";
+var KNOWLEDGE_DATABASE_URL_ENV = "HASNA_KNOWLEDGE_DATABASE_URL";
+var KNOWLEDGE_API_URL_ENV_KEYS = [KNOWLEDGE_API_URL_ENV];
+var KNOWLEDGE_API_KEY_ENV_KEYS = [KNOWLEDGE_API_KEY_ENV];
+var RETIRED_KNOWLEDGE_SELECTOR_ENV_KEYS = [
+  "HASNA_KNOWLEDGE_STORAGE_MODE",
+  "HASNA_KNOWLEDGE_MODE",
+  "KNOWLEDGE_STORAGE_MODE",
+  "KNOWLEDGE_MODE"
+];
+function isPresent(env, key) {
+  if (!Object.prototype.hasOwnProperty.call(env, key))
+    return false;
+  return (env[key] ?? "").trim().length > 0;
+}
+function firstDefined(env, keys) {
+  for (const key of keys) {
+    if (Object.prototype.hasOwnProperty.call(env, key) && env[key] !== undefined)
+      return key;
+  }
+  return null;
+}
+
+class RetiredKnowledgeStorageSelectorError extends Error {
+  envKey;
+  code = "retired_knowledge_storage_selector";
+  constructor(envKey) {
+    super(`knowledge: ${envKey} was retired and must be unset. ` + `Clients select the HTTP API when ${KNOWLEDGE_API_URL_ENV} and ${KNOWLEDGE_API_KEY_ENV} are set; ` + `without ${KNOWLEDGE_API_URL_ENV} they use local SQLite. ` + `Servers select PostgreSQL with ${KNOWLEDGE_DATABASE_URL_ENV}.`);
+    this.envKey = envKey;
+    this.name = "RetiredKnowledgeStorageSelectorError";
+  }
+}
+function assertNoRetiredKnowledgeStorageSelector(env = process.env) {
+  const retired = firstDefined(env, RETIRED_KNOWLEDGE_SELECTOR_ENV_KEYS);
+  if (retired)
+    throw new RetiredKnowledgeStorageSelectorError(retired);
+}
+function resolveKnowledgeClientTransport(env = process.env) {
+  assertNoRetiredKnowledgeStorageSelector(env);
+  const apiUrlPresent = isPresent(env, KNOWLEDGE_API_URL_ENV);
+  const apiKeyPresent = isPresent(env, KNOWLEDGE_API_KEY_ENV);
+  if (apiUrlPresent && !apiKeyPresent) {
+    throw new Error(`knowledge: ${KNOWLEDGE_API_URL_ENV} selects the HTTP API, but ${KNOWLEDGE_API_KEY_ENV} is missing. ` + `Set ${KNOWLEDGE_API_KEY_ENV}, or unset ${KNOWLEDGE_API_URL_ENV} to use local SQLite.`);
+  }
+  return {
+    transport: apiUrlPresent ? "http" : "sqlite",
+    source: apiUrlPresent ? KNOWLEDGE_API_URL_ENV : "default",
+    api_url_present: apiUrlPresent,
+    api_key_present: apiKeyPresent,
+    network_guard_active: isNetworkGuardActive(env)
+  };
+}
+
+// src/query-contract.ts
+var KNOWLEDGE_BOUNDED_QUERY_CAPABILITY = "hasna.knowledge.bounded-query.v1";
+function hasKnowledgeBoundedQueryCapability(value) {
+  return Boolean(value && typeof value === "object" && value.query_capability === KNOWLEDGE_BOUNDED_QUERY_CAPABILITY);
+}
+
+// src/http-store.ts
+function transportOverrides(env) {
+  return {
+    fetchImpl: guardedFetch,
+    ...isNetworkGuardActive(env) ? { retry: false } : {}
+  };
+}
+var KNOWLEDGE_RESOURCE = "notes";
+
+class KnowledgeVersionConflictError extends Error {
+  expected;
+  current;
+  code = "version_conflict";
+  constructor(expected, current) {
+    super(`version_conflict: this edit was written against version ${expected} but the stored entry is now at version ${current}. ` + "Nothing was written. Re-read the entry and re-apply only if the fields you are changing are untouched between the two versions.");
+    this.expected = expected;
+    this.current = current;
+    this.name = "KnowledgeVersionConflictError";
+  }
+}
+
+class KnowledgeBoundedQueryCapabilityError extends Error {
+  operation;
+  fields;
+  code = "bounded_query_capability_required";
+  constructor(operation, fields) {
+    super(`bounded_query_capability_required: the Knowledge server did not prove support for ${operation} field(s): ` + `${fields.join(", ")}. Refusing to accept a possibly unfiltered response; update the server and retry.`);
+    this.operation = operation;
+    this.fields = fields;
+    this.name = "KnowledgeBoundedQueryCapabilityError";
+  }
+}
+function toQuery(options) {
+  const q = {};
+  if (options.search) {
+    q.filter = options.search;
+    q.search = options.search;
+  }
+  if (options.tags?.length)
+    q.tags = options.tags;
+  if (options.archive) {
+    q.archive = options.archive;
+    if (options.archive === "all")
+      q.includeArchived = true;
+  }
+  if (options.sort)
+    q.sort = options.sort;
+  if (options.direction)
+    q.direction = options.direction;
+  if (options.limit !== undefined)
+    q.limit = options.limit;
+  if (options.offset !== undefined)
+    q.offset = options.offset;
+  return q;
+}
+function listFieldsRequiringCapability(options) {
+  const fields = [];
+  if (options.tags?.length)
+    fields.push("tags");
+  if (options.sort !== undefined)
+    fields.push("sort");
+  if (options.direction !== undefined)
+    fields.push("direction");
+  if (options.archive === "archived")
+    fields.push("archive=archived");
+  return fields;
+}
+function boundedQueryInteger(value, fallback, field, minimum, maximum) {
+  const resolved = value ?? fallback;
+  if (!Number.isFinite(resolved) || !Number.isInteger(resolved) || resolved < minimum || resolved > maximum) {
+    throw new Error(`${field} must be an integer between ${minimum} and ${maximum}.`);
+  }
+  return resolved;
+}
+function wrap(client) {
+  return {
+    baseUrl: client.baseUrl,
+    async list(options = {}) {
+      const limit = boundedQueryInteger(options.limit, 200, "limit", 1, 200);
+      const offset = boundedQueryInteger(options.offset, 0, "offset", 0, 1e4);
+      const query = toQuery({ ...options, limit, offset });
+      const res = await client.list(KNOWLEDGE_RESOURCE, { query });
+      if (!Number.isInteger(res.total) || Number(res.total) < 0) {
+        throw new Error("knowledge HTTP list response is missing a valid producer total.");
+      }
+      const requiredFields = listFieldsRequiringCapability(options);
+      if (requiredFields.length > 0 && !hasKnowledgeBoundedQueryCapability(res.raw)) {
+        throw new KnowledgeBoundedQueryCapabilityError("list", requiredFields);
+      }
+      return { items: res.items, total: Number(res.total) };
+    },
+    async search(options) {
+      const limit = boundedQueryInteger(options.limit, 20, "limit", 1, 200);
+      const offset = boundedQueryInteger(options.offset, 0, "offset", 0, 1e4);
+      const response = await client.transport.get(`/${KNOWLEDGE_RESOURCE}/search`, {
+        query: {
+          q: options.query,
+          archive: options.archive ?? "active",
+          limit,
+          offset
+        }
+      });
+      if (!Number.isInteger(response.total) || response.total < 0 || !Array.isArray(response.items) || response.items.some((hit) => !hit || typeof hit !== "object" || !hit.item || typeof hit.rank !== "number" || !Number.isFinite(hit.rank))) {
+        throw new Error("knowledge HTTP search response is missing producer rank or total evidence.");
+      }
+      if (!hasKnowledgeBoundedQueryCapability(response)) {
+        throw new KnowledgeBoundedQueryCapabilityError("search", ["q", "rank", "total"]);
+      }
+      return { items: response.items, total: response.total };
+    },
+    async get(idOrShort) {
+      return client.get(KNOWLEDGE_RESOURCE, idOrShort);
+    },
+    async create(input) {
+      return client.create(KNOWLEDGE_RESOURCE, {
+        ...input.id ? { id: input.id } : {},
+        title: input.title,
+        content: input.content,
+        url: input.url ?? null,
+        tags: input.tags ?? [],
+        ...input.metadata ? { metadata: input.metadata } : {}
+      });
+    },
+    async update(idOrShort, patch, options = {}) {
+      try {
+        return await client.update(KNOWLEDGE_RESOURCE, idOrShort, patch, {
+          ...options.expectedVersion !== undefined ? { headers: { "if-match": String(options.expectedVersion) } } : {}
+        });
+      } catch (error) {
+        if (isNotFound(error))
+          return null;
+        const conflict = asVersionConflict(error);
+        if (conflict)
+          throw conflict;
+        throw error;
+      }
+    },
+    async delete(idOrShort) {
+      const existing = await client.get(KNOWLEDGE_RESOURCE, idOrShort);
+      if (!existing)
+        return false;
+      await client.delete(KNOWLEDGE_RESOURCE, existing.id);
+      return true;
+    },
+    async listVersions(idOrShort, options = {}) {
+      try {
+        return await client.transport.get(`/${KNOWLEDGE_RESOURCE}/${encodeURIComponent(idOrShort)}/versions`, { query: { limit: options.limit, offset: options.offset } });
+      } catch (error) {
+        if (isNotFound(error))
+          return null;
+        throw error;
+      }
+    },
+    async getVersion(idOrShort, version) {
+      try {
+        return await client.transport.get(`/${KNOWLEDGE_RESOURCE}/${encodeURIComponent(idOrShort)}/versions/${version}`);
+      } catch (error) {
+        if (isNotFound(error))
+          return null;
+        throw error;
+      }
+    }
+  };
+}
+function asVersionConflict(error) {
+  if (!error || typeof error !== "object")
+    return null;
+  if (error.status !== 409)
+    return null;
+  const body = error.body;
+  const parsed = typeof body === "string" ? safeJson(body) : body;
+  const shape = parsed ?? {};
+  if (shape.error !== "version_conflict")
+    return null;
+  return new KnowledgeVersionConflictError(Number(shape.expected ?? 0), Number(shape.current ?? 0));
+}
+function safeJson(value) {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+function isNotFound(error) {
+  return Boolean(error && typeof error === "object" && error.status === 404);
+}
+function resolveKnowledgeHttpStore(env = process.env) {
+  const client = resolveKnowledgeHttpClient(env);
+  return client ? wrap(client) : null;
+}
+function resolveKnowledgeGuardedTransport(env = process.env) {
+  return resolveKnowledgeHttpClient(env, { guarded: true })?.transport ?? null;
+}
+function guardedTransportEnv(env) {
+  const guardedEnv = { ...env };
+  delete guardedEnv.HOME;
+  delete guardedEnv.USERPROFILE;
+  delete guardedEnv[CREDENTIAL_PROFILE_ENV_KEY];
+  delete guardedEnv[credentialOverrideEnvKey(KNOWLEDGE_APP_SLUG)];
+  return guardedEnv;
+}
+function resolveKnowledgeHttpClient(env, options = {}) {
+  if (resolveKnowledgeClientTransport(env).transport !== "http")
+    return null;
+  const transportEnv = options.guarded ? guardedTransportEnv(env) : env;
+  const apiUrl = transportEnv[KNOWLEDGE_API_URL_ENV]?.trim();
+  const apiKey = transportEnv[KNOWLEDGE_API_KEY_ENV]?.trim();
+  if (!apiUrl || !apiKey) {
+    throw new Error("knowledge HTTP transport configuration changed during resolution");
+  }
+  return createHasnaStorageClient(KNOWLEDGE_APP_SLUG, createHasnaHttpTransport({
+    name: KNOWLEDGE_APP_SLUG,
+    baseUrl: apiUrl,
+    apiKey,
+    ...transportOverrides(transportEnv)
+  }));
+}
+function usesKnowledgeHttpTransport(env = process.env) {
+  return resolveKnowledgeClientTransport(env).transport === "http";
+}
+async function fetchAllHttpItems(store) {
+  const pageSize = 200;
+  const all = [];
+  for (let offset = 0;; offset += pageSize) {
+    const { items } = await store.list({ archive: "all", limit: pageSize, offset });
+    all.push(...items);
+    if (items.length < pageSize)
+      break;
+    if (offset > 1e5)
+      break;
+  }
+  return all;
+}
+
+// src/knowledge-db.ts
+function assertSqliteClientTransport(operation = "catalog") {
+  if (usesKnowledgeHttpTransport()) {
+    throw new Error(`knowledge: ${operation} builds/reads the on-box sqlite RAG catalog (source ingestion, chunk embeddings, ` + `wiki compilation, cross-machine sync, machine registry). That local indexing pipeline is not available in ` + `the HTTP client. Shared item commands route through the server API. Unset ${KNOWLEDGE_API_URL_ENV} ` + `to use the full on-box catalog pipeline; run 'knowledge transport' to inspect the current route.`);
+  }
+}
+var CURRENT_SCHEMA_VERSION = 10;
+var CHUNKS_FTS_TOKENIZE = "porter unicode61 remove_diacritics 2";
+var MIGRATION_1 = `
+PRAGMA journal_mode = WAL;
+PRAGMA foreign_keys = ON;
+
+CREATE TABLE IF NOT EXISTS schema_versions (
+  version INTEGER PRIMARY KEY,
+  applied_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS sources (
+  id TEXT PRIMARY KEY,
+  uri TEXT NOT NULL UNIQUE,
+  kind TEXT NOT NULL,
+  title TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  acl_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS source_revisions (
+  id TEXT PRIMARY KEY,
+  source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+  revision TEXT NOT NULL,
+  hash TEXT,
+  extracted_text_uri TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  UNIQUE(source_id, revision)
+);
+
+CREATE TABLE IF NOT EXISTS chunks (
+  id TEXT PRIMARY KEY,
+  source_revision_id TEXT REFERENCES source_revisions(id) ON DELETE CASCADE,
+  wiki_page_id TEXT,
+  kind TEXT NOT NULL,
+  ordinal INTEGER NOT NULL,
+  text TEXT NOT NULL,
+  token_count INTEGER,
+  start_offset INTEGER,
+  end_offset INTEGER,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS chunk_embeddings (
+  id TEXT PRIMARY KEY,
+  chunk_id TEXT NOT NULL REFERENCES chunks(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL,
+  model TEXT NOT NULL,
+  dimensions INTEGER NOT NULL,
+  vector_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE(chunk_id, provider, model)
+);
+
+CREATE TABLE IF NOT EXISTS wiki_pages (
+  id TEXT PRIMARY KEY,
+  path TEXT NOT NULL UNIQUE,
+  title TEXT NOT NULL,
+  artifact_uri TEXT,
+  content_hash TEXT,
+  status TEXT NOT NULL DEFAULT 'active',
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS wiki_backlinks (
+  from_page_id TEXT NOT NULL REFERENCES wiki_pages(id) ON DELETE CASCADE,
+  to_page_id TEXT NOT NULL REFERENCES wiki_pages(id) ON DELETE CASCADE,
+  label TEXT,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(from_page_id, to_page_id)
+);
+
+CREATE TABLE IF NOT EXISTS citations (
+  id TEXT PRIMARY KEY,
+  wiki_page_id TEXT REFERENCES wiki_pages(id) ON DELETE CASCADE,
+  chunk_id TEXT REFERENCES chunks(id) ON DELETE SET NULL,
+  source_uri TEXT NOT NULL,
+  quote TEXT,
+  start_offset INTEGER,
+  end_offset INTEGER,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS knowledge_indexes (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  name TEXT NOT NULL,
+  artifact_uri TEXT,
+  shard_key TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(kind, name, shard_key)
+);
+
+CREATE TABLE IF NOT EXISTS runs (
+  id TEXT PRIMARY KEY,
+  type TEXT NOT NULL,
+  prompt TEXT,
+  status TEXT NOT NULL,
+  provider TEXT,
+  model TEXT,
+  cost_tokens INTEGER NOT NULL DEFAULT 0,
+  cost_usd REAL NOT NULL DEFAULT 0,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS run_events (
+  id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+  level TEXT NOT NULL,
+  event TEXT NOT NULL,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS provider_usage (
+  id TEXT PRIMARY KEY,
+  run_id TEXT REFERENCES runs(id) ON DELETE SET NULL,
+  provider TEXT NOT NULL,
+  model TEXT NOT NULL,
+  input_tokens INTEGER NOT NULL DEFAULT 0,
+  output_tokens INTEGER NOT NULL DEFAULT 0,
+  cost_usd REAL NOT NULL DEFAULT 0,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS redaction_findings (
+  id TEXT PRIMARY KEY,
+  source_uri TEXT,
+  run_id TEXT REFERENCES runs(id) ON DELETE SET NULL,
+  severity TEXT NOT NULL,
+  finding_type TEXT NOT NULL,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS storage_objects (
+  id TEXT PRIMARY KEY,
+  artifact_uri TEXT NOT NULL UNIQUE,
+  kind TEXT NOT NULL,
+  content_type TEXT,
+  hash TEXT,
+  size_bytes INTEGER,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+  text,
+  title,
+  source_uri,
+  content='',
+  tokenize='porter unicode61'
+);
+
+INSERT OR IGNORE INTO schema_versions(version, applied_at)
+VALUES (1, datetime('now'));
+`;
+var MIGRATION_2 = `
+DROP TABLE IF EXISTS chunks_fts;
+
+CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+  chunk_id UNINDEXED,
+  text,
+  title,
+  source_uri,
+  tokenize='porter unicode61'
+);
+
+INSERT OR IGNORE INTO schema_versions(version, applied_at)
+VALUES (2, datetime('now'));
+`;
+var MIGRATION_3 = `
+CREATE TABLE IF NOT EXISTS audit_events (
+  id TEXT PRIMARY KEY,
+  event_type TEXT NOT NULL,
+  action TEXT NOT NULL,
+  target_uri TEXT,
+  decision TEXT NOT NULL,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS approval_gates (
+  id TEXT PRIMARY KEY,
+  action TEXT NOT NULL,
+  target_uri TEXT,
+  status TEXT NOT NULL,
+  reason TEXT,
+  approved_by TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_events_action ON audit_events(action);
+CREATE INDEX IF NOT EXISTS idx_audit_events_target ON audit_events(target_uri);
+CREATE INDEX IF NOT EXISTS idx_audit_events_created ON audit_events(created_at);
+CREATE INDEX IF NOT EXISTS idx_approval_gates_action ON approval_gates(action);
+CREATE INDEX IF NOT EXISTS idx_approval_gates_status ON approval_gates(status);
+
+INSERT OR IGNORE INTO schema_versions(version, applied_at)
+VALUES (3, datetime('now'));
+`;
+var MIGRATION_4 = `
+CREATE TABLE IF NOT EXISTS vector_index_entries (
+  id TEXT PRIMARY KEY,
+  chunk_id TEXT NOT NULL REFERENCES chunks(id) ON DELETE CASCADE,
+  source_revision_id TEXT REFERENCES source_revisions(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL,
+  model TEXT NOT NULL,
+  dimensions INTEGER NOT NULL,
+  vector_json TEXT NOT NULL,
+  vector_norm REAL NOT NULL,
+  source_uri TEXT,
+  source_ref TEXT,
+  revision TEXT,
+  hash TEXT,
+  start_offset INTEGER,
+  end_offset INTEGER,
+  token_count INTEGER,
+  status TEXT NOT NULL DEFAULT 'active',
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(chunk_id, provider, model)
+);
+
+CREATE INDEX IF NOT EXISTS idx_vector_index_provider_model ON vector_index_entries(provider, model);
+CREATE INDEX IF NOT EXISTS idx_vector_index_source_revision ON vector_index_entries(source_revision_id);
+CREATE INDEX IF NOT EXISTS idx_vector_index_source_uri ON vector_index_entries(source_uri);
+CREATE INDEX IF NOT EXISTS idx_vector_index_status ON vector_index_entries(status);
+
+INSERT OR IGNORE INTO schema_versions(version, applied_at)
+VALUES (4, datetime('now'));
+`;
+var MIGRATION_5 = `
+CREATE TABLE IF NOT EXISTS reindex_queue (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  target_id TEXT NOT NULL,
+  source_uri TEXT,
+  reason TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  attempts INTEGER NOT NULL DEFAULT 0,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(kind, target_id, reason)
+);
+
+CREATE INDEX IF NOT EXISTS idx_reindex_queue_status ON reindex_queue(status);
+CREATE INDEX IF NOT EXISTS idx_reindex_queue_kind_target ON reindex_queue(kind, target_id);
+CREATE INDEX IF NOT EXISTS idx_reindex_queue_source_uri ON reindex_queue(source_uri);
+
+INSERT OR IGNORE INTO schema_versions(version, applied_at)
+VALUES (5, datetime('now'));
+`;
+var MIGRATION_6 = `
+CREATE TABLE IF NOT EXISTS knowledge_machines (
+  machine_id TEXT PRIMARY KEY,
+  hostname TEXT,
+  platform TEXT,
+  user_label TEXT,
+  workspace_home TEXT,
+  tailscale_dns TEXT,
+  tailscale_ips_json TEXT NOT NULL DEFAULT '[]',
+  ssh_target TEXT,
+  last_seen_at TEXT,
+  capabilities_json TEXT NOT NULL DEFAULT '{}',
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS knowledge_sync_snapshots (
+  id TEXT PRIMARY KEY,
+  machine_id TEXT NOT NULL,
+  scope TEXT NOT NULL,
+  workspace_home TEXT NOT NULL,
+  sqlite_schema_version INTEGER NOT NULL,
+  artifact_root_uri TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  tables_json TEXT NOT NULL,
+  artifact_hashes_json TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS knowledge_sync_changes (
+  id TEXT PRIMARY KEY,
+  origin_machine_id TEXT NOT NULL,
+  updated_by_machine_id TEXT NOT NULL,
+  entity_kind TEXT NOT NULL,
+  entity_id TEXT NOT NULL,
+  operation TEXT NOT NULL,
+  base_hash TEXT,
+  next_hash TEXT,
+  source_ref TEXT,
+  source_revision_id TEXT,
+  artifact_uri TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS knowledge_sync_conflicts (
+  id TEXT PRIMARY KEY,
+  entity_kind TEXT NOT NULL,
+  entity_id TEXT NOT NULL,
+  local_machine_id TEXT NOT NULL,
+  remote_machine_id TEXT NOT NULL,
+  local_hash TEXT,
+  remote_hash TEXT,
+  base_hash TEXT,
+  status TEXT NOT NULL,
+  resolution_strategy TEXT,
+  proposed_patch_uri TEXT,
+  approved_by TEXT,
+  resolved_at TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_knowledge_machines_last_seen ON knowledge_machines(last_seen_at);
+CREATE INDEX IF NOT EXISTS idx_sync_snapshots_machine_created ON knowledge_sync_snapshots(machine_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_sync_snapshots_hash ON knowledge_sync_snapshots(content_hash);
+CREATE INDEX IF NOT EXISTS idx_sync_changes_entity ON knowledge_sync_changes(entity_kind, entity_id);
+CREATE INDEX IF NOT EXISTS idx_sync_changes_origin ON knowledge_sync_changes(origin_machine_id);
+CREATE INDEX IF NOT EXISTS idx_sync_changes_created ON knowledge_sync_changes(created_at);
+CREATE INDEX IF NOT EXISTS idx_sync_conflicts_status ON knowledge_sync_conflicts(status);
+CREATE INDEX IF NOT EXISTS idx_sync_conflicts_entity ON knowledge_sync_conflicts(entity_kind, entity_id);
+
+INSERT OR IGNORE INTO schema_versions(version, applied_at)
+VALUES (6, datetime('now'));
+`;
+var MIGRATION_7_TABLES_AND_INDEXES = `
+CREATE TABLE IF NOT EXISTS knowledge_sync_table_clocks (
+  table_name TEXT NOT NULL,
+  machine_id TEXT NOT NULL,
+  logical_clock INTEGER NOT NULL DEFAULT 0,
+  high_water_hash TEXT,
+  high_water_bundle_id TEXT,
+  origin_machine_id TEXT,
+  updated_by_machine_id TEXT,
+  last_applied_at TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(table_name, machine_id)
+);
+
+CREATE TABLE IF NOT EXISTS knowledge_sync_imports (
+  bundle_id TEXT PRIMARY KEY,
+  source_machine_id TEXT NOT NULL,
+  target_machine_id TEXT NOT NULL,
+  direction TEXT NOT NULL,
+  status TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  table_clocks_json TEXT NOT NULL,
+  tables_json TEXT NOT NULL,
+  generated_at TEXT NOT NULL,
+  applied_at TEXT NOT NULL,
+  metadata_json TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE INDEX IF NOT EXISTS idx_sync_changes_bundle ON knowledge_sync_changes(bundle_id);
+CREATE INDEX IF NOT EXISTS idx_sync_changes_clock ON knowledge_sync_changes(entity_kind, logical_clock);
+CREATE INDEX IF NOT EXISTS idx_sync_table_clocks_machine ON knowledge_sync_table_clocks(machine_id);
+CREATE INDEX IF NOT EXISTS idx_sync_table_clocks_updated ON knowledge_sync_table_clocks(updated_at);
+CREATE INDEX IF NOT EXISTS idx_sync_imports_source ON knowledge_sync_imports(source_machine_id, applied_at);
+CREATE INDEX IF NOT EXISTS idx_sync_imports_target ON knowledge_sync_imports(target_machine_id, applied_at);
+CREATE INDEX IF NOT EXISTS idx_sync_imports_status ON knowledge_sync_imports(status);
+
+INSERT OR IGNORE INTO schema_versions(version, applied_at)
+VALUES (7, datetime('now'));
+`;
+var MIGRATION_8_TABLES_AND_INDEXES = `
+CREATE INDEX IF NOT EXISTS idx_wiki_pages_lifecycle_status ON wiki_pages(status, valid_to);
+CREATE INDEX IF NOT EXISTS idx_wiki_pages_last_verified ON wiki_pages(last_verified_at);
+CREATE INDEX IF NOT EXISTS idx_wiki_pages_supersedes ON wiki_pages(supersedes);
+CREATE INDEX IF NOT EXISTS idx_wiki_pages_superseded_by ON wiki_pages(superseded_by);
+
+INSERT OR IGNORE INTO schema_versions(version, applied_at)
+VALUES (8, datetime('now'));
+`;
+var MIGRATION_9_REBUILD_FTS = `
+BEGIN;
+
+CREATE TEMP TABLE _chunks_fts_backup AS
+  SELECT chunk_id, text, title, source_uri FROM chunks_fts;
+
+DROP TABLE chunks_fts;
+
+CREATE VIRTUAL TABLE chunks_fts USING fts5(
+  chunk_id UNINDEXED,
+  text,
+  title,
+  source_uri,
+  tokenize='${CHUNKS_FTS_TOKENIZE}'
+);
+
+INSERT INTO chunks_fts (chunk_id, text, title, source_uri)
+  SELECT chunk_id, text, title, source_uri FROM _chunks_fts_backup;
+
+DROP TABLE _chunks_fts_backup;
+
+INSERT OR IGNORE INTO schema_versions(version, applied_at)
+VALUES (9, datetime('now'));
+
+COMMIT;
+`;
+var MIGRATION_10_PROMOTION_INBOX = `
+CREATE TABLE IF NOT EXISTS knowledge_promotion_candidates (
+  id TEXT PRIMARY KEY,
+  record_kind TEXT NOT NULL,
+  title TEXT NOT NULL,
+  content TEXT NOT NULL,
+  canonical_key TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  source_kind TEXT NOT NULL,
+  source_refs_json TEXT NOT NULL DEFAULT '[]',
+  evidence_refs_json TEXT NOT NULL DEFAULT '[]',
+  status TEXT NOT NULL DEFAULT 'pending',
+  requires_approval INTEGER NOT NULL DEFAULT 0,
+  checks_json TEXT NOT NULL DEFAULT '{}',
+  idempotency_key TEXT NOT NULL UNIQUE,
+  duplicate_of TEXT,
+  approved_by TEXT,
+  promoted_record_id TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  reviewed_at TEXT,
+  promoted_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS durable_knowledge_records (
+  id TEXT PRIMARY KEY,
+  record_kind TEXT NOT NULL,
+  title TEXT NOT NULL,
+  content TEXT NOT NULL,
+  canonical_key TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active',
+  source_refs_json TEXT NOT NULL DEFAULT '[]',
+  evidence_refs_json TEXT NOT NULL DEFAULT '[]',
+  confidence REAL,
+  valid_from TEXT NOT NULL,
+  valid_to TEXT,
+  promoted_from_candidate_id TEXT NOT NULL UNIQUE
+    REFERENCES knowledge_promotion_candidates(id) ON DELETE RESTRICT,
+  approved_by TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_promotion_candidates_status
+  ON knowledge_promotion_candidates(status, updated_at);
+CREATE INDEX IF NOT EXISTS idx_promotion_candidates_kind_key
+  ON knowledge_promotion_candidates(record_kind, canonical_key);
+CREATE INDEX IF NOT EXISTS idx_promotion_candidates_hash
+  ON knowledge_promotion_candidates(record_kind, content_hash);
+CREATE INDEX IF NOT EXISTS idx_durable_records_kind_key
+  ON durable_knowledge_records(record_kind, canonical_key, status);
+CREATE INDEX IF NOT EXISTS idx_durable_records_hash
+  ON durable_knowledge_records(record_kind, content_hash, status);
+CREATE INDEX IF NOT EXISTS idx_durable_records_validity
+  ON durable_knowledge_records(status, valid_to);
+
+INSERT OR IGNORE INTO schema_versions(version, applied_at)
+VALUES (10, datetime('now'));
+`;
+function openKnowledgeDb(path) {
+  assertSqliteClientTransport("opening the local knowledge.db catalog");
+  ensureParentDir(path);
+  const db = new Database(path);
+  db.exec("PRAGMA foreign_keys = ON;");
+  db.exec("PRAGMA busy_timeout = 5000;");
+  return db;
+}
+function openKnowledgeDbReadonly(path) {
+  assertSqliteClientTransport("reading the local knowledge.db catalog");
+  return new Database(path, { readonly: true });
+}
+function migrateKnowledgeDb(path) {
+  const db = openKnowledgeDb(path);
+  try {
+    db.exec(MIGRATION_1);
+    if (getSchemaVersion(db) < 2)
+      db.exec(MIGRATION_2);
+    if (getSchemaVersion(db) < 3)
+      db.exec(MIGRATION_3);
+    if (getSchemaVersion(db) < 4)
+      db.exec(MIGRATION_4);
+    if (getSchemaVersion(db) < 5)
+      db.exec(MIGRATION_5);
+    if (getSchemaVersion(db) < 6)
+      db.exec(MIGRATION_6);
+    if (needsMigration7(db))
+      applyMigration7(db);
+    if (needsMigration8(db))
+      applyMigration8(db);
+    if (needsMigration9(db))
+      applyMigration9(db);
+    if (needsMigration10(db))
+      applyMigration10(db);
+    return { path, schema_version: getSchemaVersion(db) };
+  } finally {
+    db.close();
+  }
+}
+function getSchemaVersion(db) {
+  const row = db.query("SELECT MAX(version) AS version FROM schema_versions").get();
+  return row?.version ?? 0;
+}
+function count(db, table) {
+  const row = db.query(`SELECT COUNT(*) AS n FROM ${table}`).get();
+  return row?.n ?? 0;
+}
+function quoteIdentifier(identifier) {
+  return `"${identifier.replaceAll('"', '""')}"`;
+}
+function tableExists(db, table) {
+  const row = db.query("SELECT name FROM sqlite_master WHERE type IN ('table', 'virtual') AND name = ?").get(table);
+  return Boolean(row);
+}
+function columnExists(db, table, column) {
+  if (!tableExists(db, table))
+    return false;
+  const columns = db.query(`PRAGMA table_info(${quoteIdentifier(table)})`).all();
+  return columns.some((row) => row.name === column);
+}
+function ensureColumn(db, table, column, definition) {
+  if (!columnExists(db, table, column)) {
+    db.exec(`ALTER TABLE ${quoteIdentifier(table)} ADD COLUMN ${quoteIdentifier(column)} ${definition};`);
+  }
+}
+function needsMigration7(db) {
+  return getSchemaVersion(db) < 7 || !columnExists(db, "knowledge_sync_changes", "logical_clock") || !columnExists(db, "knowledge_sync_changes", "bundle_id") || !tableExists(db, "knowledge_sync_table_clocks") || !tableExists(db, "knowledge_sync_imports");
+}
+function applyMigration7(db) {
+  if (!tableExists(db, "knowledge_sync_changes"))
+    db.exec(MIGRATION_6);
+  ensureColumn(db, "knowledge_sync_changes", "logical_clock", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn(db, "knowledge_sync_changes", "bundle_id", "TEXT");
+  db.exec(MIGRATION_7_TABLES_AND_INDEXES);
+}
+function needsMigration8(db) {
+  return getSchemaVersion(db) < 8 || !columnExists(db, "wiki_pages", "valid_from") || !columnExists(db, "wiki_pages", "valid_to") || !columnExists(db, "wiki_pages", "supersedes") || !columnExists(db, "wiki_pages", "superseded_by") || !columnExists(db, "wiki_pages", "confidence") || !columnExists(db, "wiki_pages", "last_verified_at");
+}
+function applyMigration8(db) {
+  if (!tableExists(db, "wiki_pages"))
+    db.exec(MIGRATION_1);
+  ensureColumn(db, "wiki_pages", "valid_from", "TEXT");
+  ensureColumn(db, "wiki_pages", "valid_to", "TEXT");
+  ensureColumn(db, "wiki_pages", "supersedes", "TEXT");
+  ensureColumn(db, "wiki_pages", "superseded_by", "TEXT");
+  ensureColumn(db, "wiki_pages", "confidence", "REAL");
+  ensureColumn(db, "wiki_pages", "last_verified_at", "TEXT");
+  db.exec(`
+    UPDATE wiki_pages
+    SET valid_from = COALESCE(valid_from, created_at),
+        last_verified_at = COALESCE(last_verified_at, updated_at),
+        confidence = COALESCE(confidence, 0.8)
+    WHERE valid_from IS NULL OR last_verified_at IS NULL OR confidence IS NULL;
+  `);
+  db.exec(MIGRATION_8_TABLES_AND_INDEXES);
+}
+function ftsUsesDiacriticFolding(db) {
+  const row = db.query("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?").get("chunks_fts");
+  return Boolean(row?.sql && row.sql.includes("remove_diacritics"));
+}
+function needsMigration9(db) {
+  if (!tableExists(db, "chunks_fts"))
+    return false;
+  return getSchemaVersion(db) < 9 || !ftsUsesDiacriticFolding(db);
+}
+function applyMigration9(db) {
+  if (!tableExists(db, "chunks_fts"))
+    return;
+  if (ftsUsesDiacriticFolding(db)) {
+    db.exec("INSERT OR IGNORE INTO schema_versions(version, applied_at) VALUES (9, datetime('now'));");
+    return;
+  }
+  db.exec(MIGRATION_9_REBUILD_FTS);
+}
+function needsMigration10(db) {
+  return getSchemaVersion(db) < 10 || !tableExists(db, "knowledge_promotion_candidates") || !tableExists(db, "durable_knowledge_records");
+}
+function applyMigration10(db) {
+  db.exec(MIGRATION_10_PROMOTION_INBOX);
+}
+function getKnowledgeDbStats(path) {
+  const db = openKnowledgeDb(path);
+  try {
+    return {
+      schema_version: getSchemaVersion(db),
+      sources: count(db, "sources"),
+      source_revisions: count(db, "source_revisions"),
+      chunks: count(db, "chunks"),
+      wiki_pages: count(db, "wiki_pages"),
+      citations: count(db, "citations"),
+      indexes: count(db, "knowledge_indexes"),
+      runs: count(db, "runs"),
+      run_events: count(db, "run_events"),
+      redaction_findings: count(db, "redaction_findings"),
+      audit_events: count(db, "audit_events"),
+      approval_gates: count(db, "approval_gates"),
+      storage_objects: count(db, "storage_objects"),
+      embeddings: count(db, "chunk_embeddings"),
+      vector_entries: count(db, "vector_index_entries"),
+      reindex_queue: count(db, "reindex_queue"),
+      knowledge_machines: count(db, "knowledge_machines"),
+      sync_snapshots: count(db, "knowledge_sync_snapshots"),
+      sync_changes: count(db, "knowledge_sync_changes"),
+      sync_conflicts: count(db, "knowledge_sync_conflicts"),
+      sync_table_clocks: count(db, "knowledge_sync_table_clocks"),
+      sync_imports: count(db, "knowledge_sync_imports"),
+      promotion_candidates: count(db, "knowledge_promotion_candidates"),
+      durable_records: count(db, "durable_knowledge_records")
+    };
+  } finally {
+    db.close();
+  }
+}
+
+// src/provenance.ts
+function isStaleStatus(status) {
+  return ["deleted", "stale", "invalidated", "reindex_required"].includes((status ?? "").toLowerCase());
+}
+function sourceProvenance(input) {
+  const status = input.status ?? null;
+  return {
+    source_owner: "open-files",
+    source_ref: input.source_ref ?? null,
+    source_uri: input.source_uri ?? null,
+    source_kind: input.source_kind ?? null,
+    source_revision_id: input.source_revision_id ?? null,
+    revision: input.revision ?? null,
+    hash: input.hash ?? null,
+    chunk_id: input.chunk_id ?? null,
+    start_offset: input.start_offset ?? null,
+    end_offset: input.end_offset ?? null,
+    status,
+    read_only: true,
+    citation_required: true,
+    resolver: input.resolver ?? null,
+    stale: isStaleStatus(status)
+  };
+}
+function generatedArtifactProvenance(input) {
+  return {
+    source_owner: "open-files",
+    generated_from: input.generated_from,
+    artifact_key: input.artifact_key,
+    source_refs: input.source_refs ?? [],
+    read_only_sources: true,
+    citation_required: input.citation_required ?? true,
+    raw_source_bytes_stored_in_open_knowledge: false
+  };
+}
+function withProvenance(metadata, provenance) {
+  return {
+    ...metadata,
+    provenance
+  };
+}
+
+// src/source-ingest.ts
+import { createHash as createHash5 } from "crypto";
+import { existsSync as existsSync5, readFileSync as readFileSync4 } from "fs";
+import { basename as basename2 } from "path";
+
+// src/manifest-ingest.ts
+import { createHash as createHash4 } from "crypto";
+import { existsSync as existsSync4, readFileSync as readFileSync3 } from "fs";
+import { basename } from "path";
+
+// src/source-ref.ts
+import { fileURLToPath } from "url";
+function assertNonEmpty(value, message) {
+  if (!value)
+    throw new Error(message);
+  return value;
+}
+function parseOpenFilesRef(uri) {
+  const withoutScheme = uri.slice("open-files://".length);
+  const parts = withoutScheme.split("/").filter(Boolean);
+  const entity = parts[0];
+  if (entity !== "file" && entity !== "source") {
+    throw new Error("Invalid open-files ref. Expected open-files://file/<id>, open-files://file/<id>/revision/<revision_id>, or open-files://source/<id>/path/<path>.");
+  }
+  const id = assertNonEmpty(parts[1], "Invalid open-files ref. Missing id.");
+  if (entity === "file") {
+    if (parts.length === 2)
+      return { kind: "open-files", uri, entity, id };
+    if (parts[2] === "revision" && parts[3] && parts.length === 4) {
+      return { kind: "open-files", uri, entity, id, revision_id: decodeURIComponent(parts[3]) };
+    }
+    throw new Error("Invalid open-files file ref. Expected open-files://file/<id>/revision/<revision_id>.");
+  }
+  const pathIndex = parts.indexOf("path");
+  const path = pathIndex >= 0 ? decodeURIComponent(parts.slice(pathIndex + 1).join("/")) : undefined;
+  return { kind: "open-files", uri, entity, id, path };
+}
+function parseS3Ref(uri) {
+  const parsed = new URL(uri);
+  const bucket = assertNonEmpty(parsed.hostname, "Invalid s3 ref. Missing bucket.");
+  const key = decodeURIComponent(parsed.pathname.replace(/^\/+/, ""));
+  if (!key)
+    throw new Error("Invalid s3 ref. Missing object key.");
+  return { kind: "s3", uri, bucket, key };
+}
+function parseFileRef(uri) {
+  return { kind: "file", uri, path: fileURLToPath(uri) };
+}
+function parseWebRef(uri) {
+  const parsed = new URL(uri);
+  return { kind: "web", uri, url: parsed.toString() };
+}
+function parseSourceRef(uri) {
+  if (uri.startsWith("open-files://"))
+    return parseOpenFilesRef(uri);
+  if (uri.startsWith("s3://"))
+    return parseS3Ref(uri);
+  if (uri.startsWith("file://"))
+    return parseFileRef(uri);
+  if (uri.startsWith("https://") || uri.startsWith("http://"))
+    return parseWebRef(uri);
+  throw new Error(`Unsupported source ref scheme: ${uri}`);
+}
+function catalogSourceUriForRef(uri, parsed = parseSourceRef(uri)) {
+  if (parsed.kind === "open-files" && parsed.entity === "file" && parsed.revision_id) {
+    return uri.replace(/\/revision\/[^/]+$/, "");
+  }
+  return uri;
+}
+function revisionIdForSourceRef(uri) {
+  const parsed = parseSourceRef(uri);
+  return parsed.kind === "open-files" && parsed.entity === "file" ? parsed.revision_id ?? null : null;
+}
+function isSupportedSourceRef(uri) {
+  try {
+    parseSourceRef(uri);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// src/safety.ts
+import { createHash as createHash2, randomUUID as randomUUID2 } from "crypto";
+import { relative as relative2, resolve as resolve2, sep as sep2 } from "path";
+function envEnabled(name) {
+  const value = process.env[name];
+  return value === "1" || value === "true" || value === "yes";
+}
+function resolveSafetyPolicy(config, workspace) {
+  const extended = config;
+  const configuredBuckets = new Set(extended.safety?.network?.allowed_s3_buckets ?? []);
+  if (config.storage.type === "s3" && config.storage.s3?.bucket)
+    configuredBuckets.add(config.storage.s3.bucket);
+  if (process.env.HASNA_KNOWLEDGE_ALLOWED_S3_BUCKETS) {
+    for (const bucket of process.env.HASNA_KNOWLEDGE_ALLOWED_S3_BUCKETS.split(",").map((entry) => entry.trim()).filter(Boolean)) {
+      configuredBuckets.add(bucket);
+    }
+  }
+  return {
+    allowWriteRoots: [
+      workspace.home,
+      workspace.artifactsDir,
+      workspace.cacheDir,
+      workspace.exportsDir,
+      workspace.indexesDir,
+      workspace.logsDir,
+      workspace.runsDir,
+      workspace.schemasDir,
+      workspace.wikiDir
+    ].map((entry) => resolve2(entry)),
+    readOnlySourceAccess: true,
+    network: {
+      webSearchEnabled: extended.safety?.network?.web_search_enabled ?? envEnabled("HASNA_KNOWLEDGE_WEB_SEARCH"),
+      s3ReadsEnabled: extended.safety?.network?.s3_reads_enabled ?? envEnabled("HASNA_KNOWLEDGE_ALLOW_S3_READS"),
+      allowedS3Buckets: [...configuredBuckets].sort()
+    },
+    redaction: {
+      enabled: extended.safety?.redaction?.enabled ?? true
+    },
+    approvals: {
+      generatedWritesRequireApproval: extended.safety?.approvals?.generated_writes_require_approval ?? true
+    }
+  };
+}
+function isInside(root, target) {
+  const rel = relative2(root, target);
+  return rel === "" || !rel.startsWith("..") && rel !== ".." && !rel.startsWith(`..${sep2}`);
+}
+function assertWriteAllowed(targetPath, policy) {
+  const resolved = resolve2(targetPath);
+  if (!policy.allowWriteRoots.some((root) => isInside(root, resolved))) {
+    throw new Error(`Safety policy denied write outside .hasna/knowledge: ${targetPath}`);
+  }
+}
+function assertS3ReadAllowed(uri, policy) {
+  const parsed = new URL(uri);
+  const bucket = parsed.hostname;
+  if (!policy.network.s3ReadsEnabled) {
+    throw new Error("Safety policy denied S3 read. Set safety.network.s3_reads_enabled=true or HASNA_KNOWLEDGE_ALLOW_S3_READS=1.");
+  }
+  if (!policy.network.allowedS3Buckets.includes(bucket)) {
+    throw new Error(`Safety policy denied S3 bucket "${bucket}". Add it to safety.network.allowed_s3_buckets or HASNA_KNOWLEDGE_ALLOWED_S3_BUCKETS.`);
+  }
+}
+function assertWebSearchAllowed(policy) {
+  if (!policy.network.webSearchEnabled) {
+    throw new Error("Safety policy denied web search. Set safety.network.web_search_enabled=true or HASNA_KNOWLEDGE_WEB_SEARCH=1.");
+  }
+}
+var REDACTION_PATTERNS = [
+  { type: "private_key_block", severity: "high", regex: /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, replacement: "[REDACTED:private_key_block]" },
+  { type: "secret_assignment", severity: "high", regex: /\b(?:api[_-]?key|secret|token|password)\s*[:=]\s*['"]?[^'"\s]{8,}/gi, replacement: "[REDACTED:secret_assignment]" },
+  { type: "openai_api_key", severity: "high", regex: /\bsk-[A-Za-z0-9_-]{20,}\b/g, replacement: "[REDACTED:openai_api_key]" },
+  { type: "anthropic_api_key", severity: "high", regex: new RegExp(`\\b${["sk", "ant"].join("-")}-[A-Za-z0-9_-]{20,}\\b`, "g"), replacement: "[REDACTED:anthropic_api_key]" },
+  { type: "aws_access_key_id", severity: "high", regex: /\bA(?:KIA|SIA)[A-Z0-9]{16}\b/g, replacement: "[REDACTED:aws_access_key_id]" }
+];
+function redactSecrets(text, policy) {
+  if (policy && !policy.redaction.enabled)
+    return { text, findings: [] };
+  let output = text;
+  const findings = [];
+  for (const pattern of REDACTION_PATTERNS) {
+    output = output.replace(pattern.regex, (match, ...args) => {
+      const offset = typeof args.at(-2) === "number" ? args.at(-2) : output.indexOf(match);
+      findings.push({
+        type: pattern.type,
+        severity: pattern.severity,
+        start: Math.max(0, offset),
+        end: Math.max(0, offset + match.length)
+      });
+      return pattern.replacement;
+    });
+  }
+  return { text: output, findings };
+}
+function auditId(input) {
+  return `audit_${createHash2("sha256").update(`${input.event_type}\x00${input.action}\x00${input.target_uri ?? ""}\x00${input.created_at ?? ""}\x00${JSON.stringify(input.metadata ?? {})}\x00${randomUUID2()}`).digest("hex").slice(0, 24)}`;
+}
+function truncateAuditMetadata(value, depth = 0) {
+  if (depth > 6)
+    return "[Truncated:depth]";
+  if (typeof value === "string") {
+    return value.length > 1000 ? `${value.slice(0, 1000)}...[Truncated:${value.length - 1000} chars]` : value;
+  }
+  if (typeof value === "number" || typeof value === "boolean" || value === null || value === undefined)
+    return value;
+  if (Array.isArray(value)) {
+    const entries = value.slice(0, 25).map((entry) => truncateAuditMetadata(entry, depth + 1));
+    if (value.length > 25)
+      entries.push(`[Truncated:${value.length - 25} items]`);
+    return entries;
+  }
+  if (typeof value === "object") {
+    const output = {};
+    const entries = Object.entries(value).slice(0, 50);
+    for (const [key, entry] of entries)
+      output[key] = truncateAuditMetadata(entry, depth + 1);
+    const total = Object.keys(value).length;
+    if (total > entries.length)
+      output.__truncated_keys = total - entries.length;
+    return output;
+  }
+  return String(value);
+}
+function recordAuditEvent(db, input) {
+  const createdAt = input.created_at ?? new Date().toISOString();
+  const metadata = truncateAuditMetadata(input.metadata ?? {});
+  const id = auditId({ ...input, metadata, created_at: createdAt });
+  db.run(`INSERT INTO audit_events (id, event_type, action, target_uri, decision, metadata_json, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`, [
+    id,
+    input.event_type,
+    input.action,
+    input.target_uri ?? null,
+    input.decision,
+    JSON.stringify(metadata),
+    createdAt
+  ]);
+  return id;
+}
+function recordRedactionFindings(db, input) {
+  const createdAt = input.created_at ?? new Date().toISOString();
+  for (const finding of input.findings) {
+    db.run(`INSERT INTO redaction_findings (id, source_uri, run_id, severity, finding_type, metadata_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`, [
+      `redact_${randomUUID2()}`,
+      input.source_uri ?? null,
+      input.run_id ?? null,
+      finding.severity,
+      finding.type,
+      JSON.stringify({ ...input.metadata ?? {}, start: finding.start, end: finding.end }),
+      createdAt
+    ]);
+  }
+  return input.findings.length;
+}
+function createApprovalGate(db, input) {
+  const now = input.created_at ?? new Date().toISOString();
+  const id = `approval_${randomUUID2()}`;
+  db.run(`INSERT INTO approval_gates (id, action, target_uri, status, reason, approved_by, metadata_json, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
+    id,
+    input.action,
+    input.target_uri ?? null,
+    "approved",
+    input.reason ?? null,
+    input.approved_by ?? "local-cli",
+    JSON.stringify(input.metadata ?? {}),
+    now,
+    now
+  ]);
+  return { id, status: "approved" };
+}
+var COMMON_BARE_TOKEN_PATTERNS = [
+  { type: "github_token", severity: "high", regex: /\bgh[pousr]_[A-Za-z0-9_]{20,}\b/g, replacement: "[REDACTED:github_token]" },
+  { type: "github_pat_token", severity: "high", regex: /\bgithub[_]pat[_][A-Za-z0-9_]{20,}\b/g, replacement: "[REDACTED:github_pat_token]" },
+  { type: "package_registry_token", severity: "high", regex: /\bnpm_[A-Za-z0-9_-]{20,}\b/g, replacement: "[REDACTED:package_registry_token]" },
+  { type: "context7_token", severity: "high", regex: /\bctx7sk[-][A-Za-z0-9_-]{10,}\b/g, replacement: "[REDACTED:context7_token]" },
+  { type: "xai_api_key", severity: "high", regex: /\bxai[-][A-Za-z0-9_-]{20,}\b/g, replacement: "[REDACTED:xai_api_key]" },
+  { type: "google_api_key", severity: "high", regex: /\bAIza[A-Za-z0-9_-]{20,}\b/g, replacement: "[REDACTED:google_api_key]" }
+];
+REDACTION_PATTERNS.push(...COMMON_BARE_TOKEN_PATTERNS);
+
+// src/private-ref.ts
+import { createHash as createHash3 } from "crypto";
+import { realpathSync } from "fs";
+import { homedir as homedir2, tmpdir } from "os";
+var PATH_TAIL = String.raw`[^\s"'<>),\]}]`;
+var PATH_SEGMENT = String.raw`[^/\\\s"'<>]+`;
+var FILE_URI_RE = /file:\/\/[^\s"'<>),\]}]+/gi;
+var ABSOLUTE_HASNA_PATH_RE = /\/[^\s"'<>),\]}]*\.hasna\/[^\s"'<>),\]}]*/g;
+var HASNA_PATH_RE = /(?:~|\/(?:home|Users)\/[^/\s"'<>]+)?\/?\.hasna(?:\/[^\s"'<>),\]}]*)?/gi;
+var PRIVATE_WORKSPACE_PATH_RE = new RegExp(String.raw`/(?:home|Users)/${PATH_SEGMENT}/(?:workspace|Workspace)/${PATH_TAIL}*`, "g");
+var LOCAL_PATH_PATTERNS = [
+  new RegExp(String.raw`/(?:home|Users)/${PATH_SEGMENT}(?:/${PATH_TAIL}*)?`, "g"),
+  new RegExp(String.raw`(?:/private)?/var/(?:folders|tmp)/${PATH_TAIL}+`, "g"),
+  new RegExp(String.raw`(?:/private)?/tmp/${PATH_TAIL}+`, "g"),
+  new RegExp(String.raw`(?<![A-Za-z0-9])[A-Za-z]:[\\/]${PATH_TAIL}+`, "g"),
+  new RegExp(String.raw`\\\\${PATH_SEGMENT}\\${PATH_TAIL}+`, "g")
+];
+var RAW_DB_OR_ENV_RE = /\b(?:knowledge\.db(?:[-.][A-Za-z0-9_-]+)?|db\.json(?:[-.][A-Za-z0-9_-]+)?|cloud\.env|migration-exports\/[^\s"'<>),\]}]+)\b/gi;
+var DATABASE_URL_RE = /\b(?:postgres(?:ql)?|mysql|mariadb):\/\/[^\s"'<>),\]}]+/gi;
+var OPAQUE_EXPORT_KEYS = new Set(["content_base64"]);
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+function isUsableRoot(root) {
+  return root.length >= 4 && root !== "/" && !/^[A-Za-z]:[\\/]?$/.test(root);
+}
+var hostRootCacheKey = null;
+var hostRootCache = [];
+function hostRootPatterns() {
+  const roots = new Set;
+  for (const root of [homedir2(), tmpdir()]) {
+    if (!root)
+      continue;
+    roots.add(root);
+    try {
+      roots.add(realpathSync(root));
+    } catch {}
+  }
+  const key = [...roots].sort().join("\x00");
+  if (key === hostRootCacheKey)
+    return hostRootCache;
+  hostRootCacheKey = key;
+  hostRootCache = [...roots].filter(isUsableRoot).sort((a, b) => b.length - a.length).map((root) => new RegExp(`${escapeRegExp(root)}(?:[/\\\\]${PATH_TAIL}*)?`, "g"));
+  return hostRootCache;
+}
+function fingerprint(value) {
+  return createHash3("sha256").update(value).digest("hex").slice(0, 12);
+}
+function preview(value) {
+  return value.length <= 80 ? value : `${value.slice(0, 77)}...`;
+}
+function includesPrivateKnowledgeArtifact(value) {
+  return /(?:^|\/)\.hasna(?:\/|$)/i.test(value) || /\b(?:knowledge\.db|db\.json|cloud\.env)\b/i.test(value) || /\bmigration-exports\//i.test(value);
+}
+function addStringIssues(value, path, options, issues) {
+  for (const match of value.matchAll(FILE_URI_RE)) {
+    const uri = match[0];
+    if (!options.allowFileSourceRefs || includesPrivateKnowledgeArtifact(uri)) {
+      issues.push({
+        type: includesPrivateKnowledgeArtifact(uri) ? "private_file_uri" : "local_file_uri",
+        severity: "high",
+        path,
+        preview: preview(uri.replace(/^file:\/\/.*/, `[redacted:file-uri:${fingerprint(uri)}]`))
+      });
+    }
+  }
+  for (const match of value.matchAll(HASNA_PATH_RE)) {
+    issues.push({
+      type: "private_hasna_path",
+      severity: "high",
+      path,
+      preview: `[redacted:.hasna:${fingerprint(match[0])}]`
+    });
+  }
+  for (const match of value.matchAll(RAW_DB_OR_ENV_RE)) {
+    issues.push({
+      type: match[0].toLowerCase() === "cloud.env" ? "workspace_env_file" : "raw_database_or_export_ref",
+      severity: "high",
+      path,
+      preview: `[redacted:${fingerprint(match[0])}]`
+    });
+  }
+  for (const match of value.matchAll(DATABASE_URL_RE)) {
+    issues.push({
+      type: "database_url",
+      severity: "high",
+      path,
+      preview: `[redacted:database-url:${fingerprint(match[0])}]`
+    });
+  }
+  if (!options.allowPrivateWorkspaceRefs) {
+    for (const match of value.matchAll(PRIVATE_WORKSPACE_PATH_RE)) {
+      issues.push({
+        type: "private_workspace_path",
+        severity: "medium",
+        path,
+        preview: `[redacted:workspace:${fingerprint(match[0])}]`
+      });
+    }
+  }
+}
+function lintPrivateRefs(value, options = {}, path = "$") {
+  const issues = [];
+  const visit = (entry, entryPath) => {
+    if (typeof entry === "string") {
+      addStringIssues(entry, entryPath, options, issues);
+      return;
+    }
+    if (!entry || typeof entry !== "object")
+      return;
+    if (Array.isArray(entry)) {
+      entry.forEach((item, index) => visit(item, `${entryPath}[${index}]`));
+      return;
+    }
+    for (const [key, item] of Object.entries(entry)) {
+      visit(item, `${entryPath}.${key}`);
+    }
+  };
+  visit(value, path);
+  return issues;
+}
+function assertNoPrivateRefs(value, options = {}) {
+  const issues = lintPrivateRefs(value, options);
+  if (issues.length === 0)
+    return;
+  const counts = new Map;
+  for (const issue of issues)
+    counts.set(issue.type, (counts.get(issue.type) ?? 0) + 1);
+  const summary = [...counts.entries()].map(([type, count2]) => `${type}:${count2}`).join(", ");
+  throw new Error(`Knowledge private-ref lint failed (${summary}). Store open-files/s3 refs or approved runtime secret refs instead of private .hasna, file://, raw DB/export, or cloud.env refs.`);
+}
+function redactString(value) {
+  let text = redactSecrets(value).text.replace(DATABASE_URL_RE, (match) => `[REDACTED:database-url:${fingerprint(match)}]`).replace(FILE_URI_RE, (match) => `[REDACTED:local-file-uri:${fingerprint(match)}]`).replace(ABSOLUTE_HASNA_PATH_RE, (match) => `[REDACTED:local-hasna-path:${fingerprint(match)}]`).replace(PRIVATE_WORKSPACE_PATH_RE, (match) => `[REDACTED:private-workspace:${fingerprint(match)}]`);
+  for (const pattern of [...hostRootPatterns(), ...LOCAL_PATH_PATTERNS]) {
+    text = text.replace(pattern, (match) => `[REDACTED:local-path:${fingerprint(match)}]`);
+  }
+  return text.replace(HASNA_PATH_RE, (match) => `[REDACTED:hasna-path:${fingerprint(match)}]`).replace(RAW_DB_OR_ENV_RE, (match) => `[REDACTED:private-artifact:${fingerprint(match)}]`);
+}
+function redactPrivateRefs(value) {
+  if (typeof value === "string")
+    return redactString(value);
+  if (!value || typeof value !== "object")
+    return value;
+  if (Array.isArray(value))
+    return value.map((entry) => redactPrivateRefs(entry));
+  const output = {};
+  for (const [key, entry] of Object.entries(value)) {
+    output[key] = OPAQUE_EXPORT_KEYS.has(key) ? entry : redactPrivateRefs(entry);
+  }
+  return output;
+}
+
+// src/manifest-ingest.ts
+var DEFAULT_MAX_MANIFEST_INPUT_BYTES = 20 * 1024 * 1024;
+var DEFAULT_MAX_MANIFEST_ITEMS = 1e4;
+var DEFAULT_MANIFEST_PREVIEW_ITEMS = 10;
+function stableId(prefix, value) {
+  return `${prefix}_${createHash4("sha256").update(value).digest("hex").slice(0, 20)}`;
+}
+function asObject(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : undefined;
+}
+function asString(value) {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+function asNumber(value) {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+function buildSourceRefFromItem(item) {
+  const explicit = asString(item.source_ref) ?? asString(item.source_uri) ?? asString(item.uri);
+  if (explicit)
+    return explicit;
+  const fileId = asString(item.file_id);
+  if (fileId) {
+    const revision = asString(item.revision_id) ?? asString(item.revision);
+    const fileRef = `open-files://file/${encodeURIComponent(fileId)}`;
+    return revision ? `${fileRef}/revision/${encodeURIComponent(revision)}` : fileRef;
+  }
+  const sourceId = asString(item.source_id);
+  const path = asString(item.path);
+  if (sourceId && path) {
+    return `open-files://source/${encodeURIComponent(sourceId)}/path/${encodeURIComponent(path)}`;
+  }
+  throw new Error("Manifest item is missing source_ref, file_id, or source_id/path.");
+}
+function baseSourceUri(sourceRef, parsed) {
+  if (parsed.kind === "open-files" && parsed.entity === "file" && parsed.revision_id) {
+    return sourceRef.replace(/\/revision\/[^/]+$/, "");
+  }
+  return sourceRef;
+}
+function textFromItem(item) {
+  const direct = asString(item.extracted_text) ?? asString(item.text) ?? asString(item.content_text) ?? asString(item.markdown);
+  if (direct !== undefined)
+    return direct;
+  const content = item.content;
+  return typeof content === "string" ? content : null;
+}
+function extractedTextUriFromItem(item) {
+  const direct = asString(item.extracted_text_ref) ?? asString(item.extracted_text_uri) ?? asString(item.text_ref);
+  if (direct)
+    return direct;
+  const content = asObject(item.content);
+  return asString(content?.extracted_text_ref) ?? asString(content?.extracted_text_uri) ?? null;
+}
+function titleFromItem(item) {
+  const path = asString(item.path);
+  return asString(item.title) ?? asString(item.name) ?? (path ? basename(path) : null);
+}
+function hashFromItem(item) {
+  return asString(item.hash) ?? asString(item.checksum) ?? asString(item.sha256) ?? null;
+}
+var OMIT_MANIFEST_METADATA_KEYS = new Set([
+  "text",
+  "content",
+  "content_text",
+  "extracted_text",
+  "markdown",
+  "raw",
+  "raw_text",
+  "raw_bytes",
+  "raw_content",
+  "raw_body",
+  "raw_file",
+  "source_raw",
+  "source_raw_bytes",
+  "source_bytes",
+  "source_content",
+  "source_body",
+  "file_bytes",
+  "file_content",
+  "content_bytes",
+  "content_base64",
+  "document_bytes",
+  "document_content",
+  "document_base64",
+  "binary",
+  "binary_content",
+  "binary_base64",
+  "bytes",
+  "body",
+  "blob",
+  "data",
+  "payload"
+]);
+function normalizeMetadataKey(key) {
+  return key.toLowerCase().replace(/[\s-]+/g, "_");
+}
+function sanitizeManifestMetadataValue(value) {
+  if (Array.isArray(value))
+    return value.map((entry) => sanitizeManifestMetadataValue(entry));
+  const object = asObject(value);
+  if (!object)
+    return value;
+  const sanitized = {};
+  for (const [key, nestedValue] of Object.entries(object)) {
+    if (OMIT_MANIFEST_METADATA_KEYS.has(normalizeMetadataKey(key)))
+      continue;
+    sanitized[key] = sanitizeManifestMetadataValue(nestedValue);
+  }
+  return sanitized;
+}
+function revisionFromItem(item, parsed, hash) {
+  const revision = asString(item.revision_id) ?? asString(item.revision) ?? asString(item.version_id) ?? (parsed.kind === "open-files" ? parsed.revision_id : undefined) ?? hash ?? asString(item.updated_at);
+  return revision ?? "current";
+}
+function metadataFromItem(item, normalized) {
+  const metadata = {};
+  for (const [key, value] of Object.entries(item)) {
+    if (OMIT_MANIFEST_METADATA_KEYS.has(normalizeMetadataKey(key)))
+      continue;
+    metadata[key] = redactPrivateRefs(sanitizeManifestMetadataValue(value));
+  }
+  metadata.source_ref = normalized.sourceRef;
+  metadata.source_uri = normalized.sourceUri;
+  metadata.status = normalized.status;
+  return metadata;
+}
+function normalizeManifestItem(item, now, options = {}) {
+  const sourceRef = buildSourceRefFromItem(item);
+  assertNoPrivateRefs(sourceRef, { allowFileSourceRefs: options.allowFileSourceRefs === true });
+  const parsed = parseSourceRef(sourceRef);
+  const sourceUri = baseSourceUri(sourceRef, parsed);
+  const hash = hashFromItem(item);
+  const status = asString(item.status) ?? "active";
+  return {
+    raw: item,
+    sourceRef,
+    sourceUri,
+    kind: parsed.kind,
+    title: titleFromItem(item),
+    revision: revisionFromItem(item, parsed, hash),
+    hash,
+    extractedTextUri: extractedTextUriFromItem(item),
+    text: textFromItem(item),
+    metadata: metadataFromItem(item, { sourceRef, sourceUri, status }),
+    acl: item.permissions ?? item.acl ?? {},
+    status,
+    updatedAt: asString(item.updated_at) ?? now
+  };
+}
+function parseManifestText(text) {
+  const trimmed = text.trim();
+  if (!trimmed)
+    return [];
+  if (trimmed.startsWith("[")) {
+    const parsed = JSON.parse(trimmed);
+    if (!Array.isArray(parsed))
+      throw new Error("Manifest array parse failed.");
+    return parsed.map((entry) => {
+      const item = asObject(entry);
+      if (!item)
+        throw new Error("Manifest array entries must be objects.");
+      return item;
+    });
+  }
+  if (trimmed.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      const object = asObject(parsed);
+      if (!object)
+        throw new Error("Manifest object parse failed.");
+      if (Array.isArray(object.items)) {
+        return object.items.map((entry) => {
+          const item = asObject(entry);
+          if (!item)
+            throw new Error("Manifest items entries must be objects.");
+          return item;
+        });
+      }
+      if ("source_ref" in object || "source_uri" in object || "file_id" in object)
+        return [object];
+    } catch (error) {
+      const lines = trimmed.split(/\r?\n/).filter((line) => line.trim().length > 0);
+      if (lines.length <= 1)
+        throw error;
+      return lines.map((line) => {
+        const item = asObject(JSON.parse(line));
+        if (!item)
+          throw new Error("Manifest JSONL entries must be objects.");
+        return item;
+      });
+    }
+  }
+  return trimmed.split(/\r?\n/).filter((line) => line.trim().length > 0).map((line) => {
+    const item = asObject(JSON.parse(line));
+    if (!item)
+      throw new Error("Manifest JSONL entries must be objects.");
+    return item;
+  });
+}
+async function readS3Text(uri, config, safetyPolicy) {
+  const parsed = new URL(uri);
+  const bucket = parsed.hostname;
+  const key = decodeURIComponent(parsed.pathname.replace(/^\/+/, ""));
+  if (!bucket || !key)
+    throw new Error(`Invalid S3 manifest URI: ${uri}`);
+  if (safetyPolicy)
+    assertS3ReadAllowed(uri, safetyPolicy);
+  const [{ S3Client, GetObjectCommand }, { fromIni }] = await Promise.all([
+    import("@aws-sdk/client-s3"),
+    import("@aws-sdk/credential-providers")
+  ]);
+  const s3Config = config?.storage.type === "s3" && config.storage.s3?.bucket === bucket ? config.storage.s3 : undefined;
+  const client = new S3Client({
+    region: s3Config?.region,
+    credentials: s3Config?.profile ? fromIni({ profile: s3Config.profile }) : undefined,
+    maxAttempts: s3Config?.max_attempts
+  });
+  const response = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+  if (!response.Body)
+    return "";
+  return await response.Body.transformToString();
+}
+async function readManifestInput(input, config, safetyPolicy, maxInputBytes = DEFAULT_MAX_MANIFEST_INPUT_BYTES) {
+  const text = input.startsWith("s3://") ? await readS3Text(input, config, safetyPolicy) : (() => {
+    if (!existsSync4(input))
+      throw new Error(`Manifest not found: ${input}`);
+    return readFileSync3(input, "utf8");
+  })();
+  const bytes = Buffer.byteLength(text);
+  if (bytes > maxInputBytes) {
+    throw new Error(`Manifest input is too large: ${bytes} bytes exceeds ${maxInputBytes} byte limit.`);
+  }
+  return text;
+}
+function chunkText(text, maxChars, overlapChars) {
+  const normalized = text.replace(/\r\n/g, `
+`);
+  if (!normalized.trim())
+    return [];
+  const chunks = [];
+  let start = 0;
+  while (start < normalized.length) {
+    const hardEnd = Math.min(normalized.length, start + maxChars);
+    let end = hardEnd;
+    if (hardEnd < normalized.length) {
+      const paragraphBreak = normalized.lastIndexOf(`
+
+`, hardEnd);
+      const sentenceBreak = normalized.lastIndexOf(". ", hardEnd);
+      const candidate = Math.max(paragraphBreak, sentenceBreak);
+      if (candidate > start + Math.floor(maxChars * 0.5))
+        end = candidate + (candidate === paragraphBreak ? 2 : 1);
+    }
+    const chunk = normalized.slice(start, end).trim();
+    if (chunk) {
+      chunks.push({
+        ordinal: chunks.length,
+        text: chunk,
+        startOffset: start,
+        endOffset: end
+      });
+    }
+    if (end >= normalized.length)
+      break;
+    start = Math.max(0, end - overlapChars);
+  }
+  return chunks;
+}
+function estimateTokenCount(text) {
+  const words = text.trim().split(/\s+/).filter(Boolean).length;
+  return Math.max(1, Math.ceil(words * 1.25));
+}
+function deleteChunksForRevision(db, sourceRevisionId) {
+  const rows = db.query("SELECT id FROM chunks WHERE source_revision_id = ?").all(sourceRevisionId);
+  for (const row of rows) {
+    db.run("DELETE FROM chunks_fts WHERE chunk_id = ?", [row.id]);
+  }
+  db.run("DELETE FROM chunks WHERE source_revision_id = ?", [sourceRevisionId]);
+  return rows.length;
+}
+function upsertSource(db, item, now) {
+  const sourceId = stableId("src", item.sourceUri);
+  db.run(`INSERT INTO sources (id, uri, kind, title, metadata_json, acl_json, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(uri) DO UPDATE SET
+       kind = excluded.kind,
+       title = excluded.title,
+       metadata_json = excluded.metadata_json,
+       acl_json = excluded.acl_json,
+       updated_at = excluded.updated_at`, [
+    sourceId,
+    item.sourceUri,
+    item.kind,
+    item.title,
+    JSON.stringify(item.metadata),
+    JSON.stringify(item.acl ?? {}),
+    now,
+    item.updatedAt
+  ]);
+  const row = db.query("SELECT id FROM sources WHERE uri = ?").get(item.sourceUri);
+  if (!row)
+    throw new Error(`Failed to upsert source: ${item.sourceUri}`);
+  return row.id;
+}
+function upsertRevision(db, sourceId, item, now) {
+  const revisionId = stableId("rev", `${sourceId}\x00${item.revision}`);
+  db.run(`INSERT INTO source_revisions (id, source_id, revision, hash, extracted_text_uri, metadata_json, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(source_id, revision) DO UPDATE SET
+       hash = excluded.hash,
+       extracted_text_uri = excluded.extracted_text_uri,
+       metadata_json = excluded.metadata_json`, [
+    revisionId,
+    sourceId,
+    item.revision,
+    item.hash,
+    item.extractedTextUri,
+    JSON.stringify(item.metadata),
+    now
+  ]);
+  const row = db.query("SELECT id FROM source_revisions WHERE source_id = ? AND revision = ?").get(sourceId, item.revision);
+  if (!row)
+    throw new Error(`Failed to upsert source revision: ${item.sourceRef}`);
+  return row.id;
+}
+function insertChunks(db, sourceRevisionId, item, now, maxChars, overlapChars, safetyPolicy) {
+  if (!item.text || item.status.toLowerCase() === "deleted")
+    return { chunksInserted: 0, redactions: 0 };
+  const redacted = redactSecrets(item.text, safetyPolicy);
+  if (redacted.findings.length > 0) {
+    recordRedactionFindings(db, {
+      source_uri: item.sourceUri,
+      findings: redacted.findings,
+      metadata: { source_ref: item.sourceRef, revision: item.revision },
+      created_at: now
+    });
+    recordAuditEvent(db, {
+      event_type: "redaction",
+      action: "source_text_redact",
+      target_uri: item.sourceUri,
+      decision: "redacted",
+      metadata: { findings: redacted.findings.length, source_ref: item.sourceRef, revision: item.revision },
+      created_at: now
+    });
+  }
+  const chunks = chunkText(redacted.text, maxChars, overlapChars);
+  for (const chunk of chunks) {
+    const chunkId = stableId("chk", `${sourceRevisionId}\x00${chunk.ordinal}\x00${chunk.text}`);
+    const provenance = sourceProvenance({
+      source_ref: item.sourceRef,
+      source_uri: item.sourceUri,
+      source_kind: item.kind,
+      source_revision_id: sourceRevisionId,
+      revision: item.revision,
+      hash: item.hash,
+      chunk_id: chunkId,
+      start_offset: chunk.startOffset,
+      end_offset: chunk.endOffset,
+      status: item.status,
+      resolver: "open-files-read-only"
+    });
+    const metadata = withProvenance({
+      source_ref: item.sourceRef,
+      source_uri: item.sourceUri,
+      source_kind: item.kind,
+      source_revision_id: sourceRevisionId,
+      revision: item.revision,
+      hash: item.hash,
+      status: item.status,
+      path: asString(item.raw.path) ?? null,
+      mime: asString(item.raw.mime) ?? asString(item.raw.content_type) ?? null,
+      size: asNumber(item.raw.size) ?? null
+    }, provenance);
+    db.run(`INSERT INTO chunks (id, source_revision_id, kind, ordinal, text, token_count, start_offset, end_offset, metadata_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
+      chunkId,
+      sourceRevisionId,
+      "source",
+      chunk.ordinal,
+      chunk.text,
+      estimateTokenCount(chunk.text),
+      chunk.startOffset,
+      chunk.endOffset,
+      JSON.stringify(metadata),
+      now
+    ]);
+    db.run("INSERT INTO chunks_fts (chunk_id, text, title, source_uri) VALUES (?, ?, ?, ?)", [chunkId, chunk.text, item.title ?? "", item.sourceUri]);
+  }
+  return { chunksInserted: chunks.length, redactions: redacted.findings.length };
+}
+async function ingestOpenFilesManifest(options) {
+  const now = options.now ?? new Date;
+  if (options.safetyPolicy)
+    assertWriteAllowed(options.dbPath, options.safetyPolicy);
+  migrateKnowledgeDb(options.dbPath);
+  const text = await readManifestInput(options.input, options.config, options.safetyPolicy, options.maxInputBytes);
+  const items = parseManifestText(text);
+  const maxItems = options.maxItems ?? DEFAULT_MAX_MANIFEST_ITEMS;
+  if (items.length > maxItems) {
+    throw new Error(`Manifest contains too many items: ${items.length} exceeds ${maxItems} item limit.`);
+  }
+  return ingestOpenFilesManifestItems({
+    dbPath: options.dbPath,
+    items,
+    sourceLabel: options.input,
+    allowFileSourceRefs: options.config?.sources.allowed_schemes.includes("file") === true,
+    safetyPolicy: options.safetyPolicy,
+    now,
+    maxChunkChars: options.maxChunkChars,
+    chunkOverlapChars: options.chunkOverlapChars,
+    maxItems: options.maxItems
+  });
+}
+async function ingestOpenFilesManifestItems(options) {
+  const now = (options.now ?? new Date).toISOString();
+  const maxChunkChars = options.maxChunkChars ?? 4000;
+  const chunkOverlapChars = options.chunkOverlapChars ?? 200;
+  const maxItems = options.maxItems ?? DEFAULT_MAX_MANIFEST_ITEMS;
+  if (maxChunkChars < 500)
+    throw new Error("maxChunkChars must be at least 500.");
+  if (chunkOverlapChars < 0 || chunkOverlapChars >= maxChunkChars)
+    throw new Error("chunkOverlapChars must be less than maxChunkChars.");
+  if (options.items.length > maxItems) {
+    throw new Error(`Manifest contains too many items: ${options.items.length} exceeds ${maxItems} item limit.`);
+  }
+  if (options.safetyPolicy)
+    assertWriteAllowed(options.dbPath, options.safetyPolicy);
+  migrateKnowledgeDb(options.dbPath);
+  const db = openKnowledgeDb(options.dbPath);
+  try {
+    const result = db.transaction(() => {
+      const seenSources = new Set;
+      const seenRevisions = new Set;
+      let chunksInserted = 0;
+      let chunksDeleted = 0;
+      let redactions = 0;
+      let skipped = 0;
+      const preview2 = [];
+      recordAuditEvent(db, {
+        event_type: "source_read",
+        action: options.readAction ?? (options.sourceLabel.startsWith("s3://") ? "s3_manifest_read" : "local_manifest_read"),
+        target_uri: options.sourceLabel,
+        decision: "allow",
+        metadata: { items: options.items.length, read_only: true },
+        created_at: now
+      });
+      for (const raw of options.items) {
+        const item = normalizeManifestItem(raw, now, { allowFileSourceRefs: options.allowFileSourceRefs });
+        if (preview2.length < DEFAULT_MANIFEST_PREVIEW_ITEMS) {
+          preview2.push({
+            source_ref: item.sourceRef,
+            title: item.title,
+            status: item.status,
+            has_text: Boolean(item.text)
+          });
+        }
+        const sourceId = upsertSource(db, item, now);
+        const revisionId = upsertRevision(db, sourceId, item, now);
+        seenSources.add(sourceId);
+        seenRevisions.add(revisionId);
+        if (item.text || item.status.toLowerCase() === "deleted") {
+          chunksDeleted += deleteChunksForRevision(db, revisionId);
+        }
+        const inserted = insertChunks(db, revisionId, item, now, maxChunkChars, chunkOverlapChars, options.safetyPolicy);
+        chunksInserted += inserted.chunksInserted;
+        redactions += inserted.redactions;
+      }
+      recordAuditEvent(db, {
+        event_type: "write",
+        action: "knowledge_manifest_ingest",
+        target_uri: options.dbPath,
+        decision: "allow",
+        metadata: { items: options.items.length, sources: seenSources.size, revisions: seenRevisions.size, chunks_inserted: chunksInserted, redactions },
+        created_at: now
+      });
+      return {
+        path: options.sourceLabel,
+        db_path: options.dbPath,
+        items_seen: options.items.length,
+        sources_upserted: seenSources.size,
+        revisions_upserted: seenRevisions.size,
+        chunks_inserted: chunksInserted,
+        chunks_deleted: chunksDeleted,
+        redactions,
+        skipped,
+        items_preview: preview2
+      };
+    })();
+    return result;
+  } finally {
+    db.close();
+  }
+}
+
+// src/source-resolver.ts
+function parseJsonObject(value) {
+  if (!value)
+    return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+function metadataString(metadata, keys) {
+  for (const key of keys) {
+    const value = metadata[key];
+    if (typeof value === "string" && value.length > 0)
+      return value;
+  }
+  return null;
+}
+function metadataNumber(metadata, keys) {
+  for (const key of keys) {
+    const value = metadata[key];
+    if (typeof value === "number" && Number.isFinite(value))
+      return value;
+  }
+  return null;
+}
+function assertPurposeAllowed(permissions, purpose) {
+  const mode = permissions.mode;
+  if (typeof mode === "string" && mode !== "read_only") {
+    throw new Error(`Source resolver denied ${purpose}. Permission mode is ${mode}, expected read_only.`);
+  }
+  const denied = permissions.denied_purposes;
+  if (Array.isArray(denied) && denied.includes(purpose)) {
+    throw new Error(`Source resolver denied ${purpose}. Purpose is explicitly denied.`);
+  }
+  const allowed = permissions.allowed_purposes;
+  if (Array.isArray(allowed) && allowed.length > 0 && !allowed.includes(purpose)) {
+    throw new Error(`Source resolver denied ${purpose}. Allowed purposes: ${allowed.join(", ")}`);
+  }
+}
+function sourceRevisionRef(sourceUri, revision, fallback) {
+  if (!revision)
+    return fallback;
+  try {
+    const parsed = parseSourceRef(sourceUri);
+    if (parsed.kind === "open-files" && parsed.entity === "file") {
+      return `${sourceUri}/revision/${encodeURIComponent(revision.revision)}`;
+    }
+  } catch {
+    return fallback;
+  }
+  return fallback;
+}
+function selectSource(db, sourceUri, requestedRef) {
+  return db.query(`SELECT id, uri, kind, title, metadata_json, acl_json, updated_at
+     FROM sources
+     WHERE uri = ? OR uri = ?
+     ORDER BY CASE WHEN uri = ? THEN 0 ELSE 1 END
+     LIMIT 1`).get(sourceUri, requestedRef, sourceUri) ?? null;
+}
+function selectRevision(db, sourceId, revisionId) {
+  if (revisionId) {
+    return db.query(`SELECT id, revision, hash, extracted_text_uri, metadata_json, created_at
+       FROM source_revisions
+       WHERE source_id = ? AND revision = ?
+       LIMIT 1`).get(sourceId, revisionId) ?? null;
+  }
+  return db.query(`SELECT id, revision, hash, extracted_text_uri, metadata_json, created_at
+     FROM source_revisions
+     WHERE source_id = ?
+     ORDER BY created_at DESC, revision DESC
+     LIMIT 1`).get(sourceId) ?? null;
+}
+function countChunks(db, revisionId) {
+  if (!revisionId)
+    return 0;
+  const row = db.query("SELECT COUNT(*) AS n FROM chunks WHERE source_revision_id = ?").get(revisionId);
+  return row?.n ?? 0;
+}
+function selectChunks(db, revisionId, limit) {
+  if (!revisionId || limit <= 0)
+    return [];
+  return db.query(`SELECT id, kind, ordinal, text, token_count, start_offset, end_offset, metadata_json
+     FROM chunks
+     WHERE source_revision_id = ?
+     ORDER BY ordinal ASC
+     LIMIT ?`).all(revisionId, limit);
+}
+async function resolveOpenFilesSource(options) {
+  const purpose = options.purpose ?? "knowledge_answer";
+  const limit = Math.max(0, Math.min(options.limit ?? 10, 100));
+  const resolvedAt = (options.now ?? new Date).toISOString();
+  const parsed = parseSourceRef(options.sourceRef);
+  const sourceUri = catalogSourceUriForRef(options.sourceRef, parsed);
+  const requestedRevision = revisionIdForSourceRef(options.sourceRef);
+  if (options.safetyPolicy) {
+    if (!options.safetyPolicy.readOnlySourceAccess)
+      throw new Error("Safety policy denied source resolution.");
+    assertWriteAllowed(options.dbPath, options.safetyPolicy);
+  }
+  migrateKnowledgeDb(options.dbPath);
+  const db = openKnowledgeDb(options.dbPath);
+  try {
+    return db.transaction(() => {
+      const source = selectSource(db, sourceUri, options.sourceRef);
+      if (!source) {
+        recordAuditEvent(db, {
+          event_type: "source_read",
+          action: "open_files_resolve_missing",
+          target_uri: options.sourceRef,
+          decision: "allow",
+          metadata: { purpose, read_only: true, source_uri: sourceUri },
+          created_at: resolvedAt
+        });
+        return {
+          source_ref: options.sourceRef,
+          source_uri: sourceUri,
+          purpose,
+          read_only: true,
+          resolved: false,
+          resolver: {
+            name: "open-files-read-only",
+            mode: "local_catalog",
+            contract: "open-files-knowledge-source-v1"
+          },
+          source: null,
+          revision: null,
+          content: {
+            mime: null,
+            size: null,
+            hash: null,
+            text_available: false,
+            chunks_total: 0,
+            chunks_returned: 0,
+            char_count_returned: 0,
+            extracted_text_ref: null,
+            bytes_available: false,
+            bytes_exposed: false
+          },
+          chunks: [],
+          citations: []
+        };
+      }
+      const sourceMetadata = parseJsonObject(source.metadata_json);
+      const permissions = parseJsonObject(source.acl_json);
+      try {
+        assertPurposeAllowed(permissions, purpose);
+      } catch (error) {
+        recordAuditEvent(db, {
+          event_type: "source_read",
+          action: "open_files_resolve",
+          target_uri: options.sourceRef,
+          decision: "deny",
+          metadata: {
+            purpose,
+            read_only: true,
+            source_uri: source.uri,
+            error: error instanceof Error ? error.message : String(error)
+          },
+          created_at: resolvedAt
+        });
+        throw error;
+      }
+      const revision = selectRevision(db, source.id, requestedRevision);
+      const revisionMetadata = parseJsonObject(revision?.metadata_json);
+      const totalChunks = countChunks(db, revision?.id ?? null);
+      const rows = selectChunks(db, revision?.id ?? null, limit);
+      const effectiveSourceRef = sourceRevisionRef(source.uri, revision, options.sourceRef);
+      const chunks = rows.map((row) => {
+        const metadata = parseJsonObject(row.metadata_json);
+        const evidence = {
+          resolver: "open-files-read-only",
+          mode: "local_catalog",
+          purpose,
+          read_only: true,
+          source_ref: metadataString(metadata, ["source_ref"]) ?? effectiveSourceRef,
+          source_uri: source.uri,
+          source_revision_id: revision?.id ?? null,
+          revision: revision?.revision ?? null,
+          hash: revision?.hash ?? metadataString(metadata, ["hash"]),
+          chunk_id: row.id,
+          start_offset: row.start_offset,
+          end_offset: row.end_offset,
+          resolved_at: resolvedAt
+        };
+        const provenance = sourceProvenance({
+          source_ref: evidence.source_ref,
+          source_uri: evidence.source_uri,
+          source_kind: source.kind,
+          source_revision_id: evidence.source_revision_id,
+          revision: evidence.revision,
+          hash: evidence.hash,
+          chunk_id: row.id,
+          start_offset: row.start_offset,
+          end_offset: row.end_offset,
+          status: metadataString(metadata, ["status"]),
+          resolver: evidence.resolver
+        });
+        return {
+          id: row.id,
+          kind: row.kind,
+          ordinal: row.ordinal,
+          text: row.text,
+          token_count: row.token_count,
+          start_offset: row.start_offset,
+          end_offset: row.end_offset,
+          metadata,
+          evidence,
+          provenance
+        };
+      });
+      const citations = chunks.map((chunk) => ({
+        source_ref: chunk.evidence.source_ref,
+        source_uri: source.uri,
+        chunk_id: chunk.id,
+        quote: chunk.text.slice(0, 500),
+        start_offset: chunk.start_offset,
+        end_offset: chunk.end_offset,
+        evidence: chunk.evidence,
+        provenance: chunk.provenance
+      }));
+      recordAuditEvent(db, {
+        event_type: "source_read",
+        action: "open_files_resolve",
+        target_uri: options.sourceRef,
+        decision: "allow",
+        metadata: {
+          purpose,
+          read_only: true,
+          source_uri: source.uri,
+          revision: revision?.revision ?? null,
+          chunks_returned: chunks.length,
+          chunks_total: totalChunks
+        },
+        created_at: resolvedAt
+      });
+      const mime = metadataString(sourceMetadata, ["mime", "content_type"]) ?? metadataString(revisionMetadata, ["mime", "content_type"]);
+      const size = metadataNumber(sourceMetadata, ["size", "size_bytes"]) ?? metadataNumber(revisionMetadata, ["size", "size_bytes"]);
+      return {
+        source_ref: effectiveSourceRef,
+        source_uri: source.uri,
+        purpose,
+        read_only: true,
+        resolved: true,
+        resolver: {
+          name: "open-files-read-only",
+          mode: "local_catalog",
+          contract: "open-files-knowledge-source-v1"
+        },
+        source: {
+          id: source.id,
+          uri: source.uri,
+          kind: source.kind,
+          title: source.title,
+          metadata: sourceMetadata,
+          permissions,
+          updated_at: source.updated_at
+        },
+        revision: revision ? {
+          id: revision.id,
+          revision: revision.revision,
+          hash: revision.hash,
+          extracted_text_uri: revision.extracted_text_uri,
+          metadata: revisionMetadata,
+          created_at: revision.created_at,
+          reindex_required: revisionMetadata.reindex_required === true
+        } : null,
+        content: {
+          mime,
+          size,
+          hash: revision?.hash ?? metadataString(sourceMetadata, ["hash", "checksum", "sha256"]),
+          text_available: totalChunks > 0,
+          chunks_total: totalChunks,
+          chunks_returned: chunks.length,
+          char_count_returned: chunks.reduce((sum, chunk) => sum + chunk.text.length, 0),
+          extracted_text_ref: revision?.extracted_text_uri ?? metadataString(revisionMetadata, ["extracted_text_ref", "extracted_text_uri"]),
+          bytes_available: false,
+          bytes_exposed: false
+        },
+        chunks,
+        citations
+      };
+    })();
+  } finally {
+    db.close();
+  }
+}
+
+// src/source-ingest.ts
+function sha256Text(text) {
+  return `sha256:${createHash5("sha256").update(text).digest("hex")}`;
+}
+function stripHtml(html) {
+  return html.replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/\s+\n/g, `
+`).replace(/\n\s+/g, `
+`).replace(/[ \t]{2,}/g, " ").trim();
+}
+async function readS3Text2(uri, config, safetyPolicy) {
+  const parsed = new URL(uri);
+  const bucket = parsed.hostname;
+  const key = decodeURIComponent(parsed.pathname.replace(/^\/+/, ""));
+  if (!bucket || !key)
+    throw new Error(`Invalid S3 source URI: ${uri}`);
+  if (safetyPolicy)
+    assertS3ReadAllowed(uri, safetyPolicy);
+  const [{ S3Client, GetObjectCommand }, { fromIni }] = await Promise.all([
+    import("@aws-sdk/client-s3"),
+    import("@aws-sdk/credential-providers")
+  ]);
+  const s3Config = config?.storage.type === "s3" && config.storage.s3?.bucket === bucket ? config.storage.s3 : undefined;
+  const client = new S3Client({
+    region: s3Config?.region,
+    credentials: s3Config?.profile ? fromIni({ profile: s3Config.profile }) : undefined,
+    maxAttempts: s3Config?.max_attempts
+  });
+  const response = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+  if (!response.Body)
+    return "";
+  return await response.Body.transformToString();
+}
+async function readWebText(uri, safetyPolicy) {
+  if (safetyPolicy)
+    assertWebSearchAllowed(safetyPolicy);
+  const response = await guardedFetch(uri, {
+    headers: {
+      accept: "text/markdown,text/plain,text/html,application/json;q=0.8,*/*;q=0.5",
+      "user-agent": "@hasna/knowledge source-ingest"
+    }
+  });
+  if (!response.ok)
+    throw new Error(`Web source read failed ${response.status}: ${uri}`);
+  const mime = response.headers.get("content-type");
+  const body = await response.text();
+  return { text: mime?.includes("html") ? stripHtml(body) : body, mime };
+}
+function titleForRef(parsed) {
+  if (parsed.kind === "file")
+    return basename2(parsed.path);
+  if (parsed.kind === "s3")
+    return basename2(parsed.key);
+  if (parsed.kind === "web")
+    return basename2(new URL(parsed.url).pathname) || parsed.url;
+  return parsed.path ? basename2(parsed.path) : parsed.id;
+}
+async function readDirectSourceText(parsed, config, safetyPolicy) {
+  if (parsed.kind === "file") {
+    if (!existsSync5(parsed.path))
+      throw new Error(`Source file not found: ${parsed.path}`);
+    const text = readFileSync4(parsed.path, "utf8");
+    return {
+      text,
+      contentSource: "file",
+      title: titleForRef(parsed),
+      mime: "text/plain",
+      size: text.length,
+      hash: sha256Text(text),
+      revision: null,
+      extractedTextRef: null,
+      metadata: { path: parsed.path },
+      permissions: { mode: "read_only" }
+    };
+  }
+  if (parsed.kind === "s3") {
+    const text = await readS3Text2(parsed.uri, config, safetyPolicy);
+    return {
+      text,
+      contentSource: "s3",
+      title: titleForRef(parsed),
+      mime: "text/plain",
+      size: text.length,
+      hash: sha256Text(text),
+      revision: null,
+      extractedTextRef: null,
+      metadata: { bucket: parsed.bucket, key: parsed.key },
+      permissions: { mode: "read_only" }
+    };
+  }
+  if (parsed.kind === "web") {
+    const web = await readWebText(parsed.url, safetyPolicy);
+    return {
+      text: web.text,
+      contentSource: "web",
+      title: titleForRef(parsed),
+      mime: web.mime,
+      size: web.text.length,
+      hash: sha256Text(web.text),
+      revision: null,
+      extractedTextRef: null,
+      metadata: { url: parsed.url },
+      permissions: { mode: "read_only" }
+    };
+  }
+  throw new Error(`Direct source reading is not available for ${parsed.uri}`);
+}
+async function readTextRef(uri, config, safetyPolicy) {
+  if (uri.startsWith("open-files://")) {
+    throw new Error("Open-files extracted text refs require an open-files resolver API. Ingest an open-files manifest with extracted_text or an extracted_text_ref using file://, s3://, or https://.");
+  }
+  const parsed = parseSourceRef(uri);
+  const direct = await readDirectSourceText(parsed, config, safetyPolicy);
+  return { text: direct.text, contentSource: "extracted_text_ref" };
+}
+async function readOpenFilesSourceText(options) {
+  const resolved = await resolveOpenFilesSource({
+    dbPath: options.dbPath,
+    sourceRef: options.sourceRef,
+    purpose: options.purpose ?? "knowledge_index",
+    limit: 100,
+    safetyPolicy: options.safetyPolicy,
+    now: options.now
+  });
+  if (!resolved.resolved) {
+    throw new Error("Open-files source is not in the local knowledge catalog. Ingest an open-files manifest first or use the open-files resolver API.");
+  }
+  if (resolved.revision?.extracted_text_uri && !resolved.content.text_available) {
+    const textRef = await readTextRef(resolved.revision.extracted_text_uri, options.config, options.safetyPolicy);
+    return {
+      text: textRef.text,
+      contentSource: textRef.contentSource,
+      title: resolved.source?.title ?? null,
+      mime: resolved.content.mime,
+      size: textRef.text.length,
+      hash: resolved.revision.hash ?? sha256Text(textRef.text),
+      revision: resolved.revision.revision,
+      extractedTextRef: resolved.revision.extracted_text_uri,
+      metadata: resolved.source?.metadata ?? {},
+      permissions: resolved.source?.permissions ?? { mode: "read_only" }
+    };
+  }
+  if (resolved.chunks.length === 0) {
+    throw new Error("Open-files source has no extracted text chunks yet. Ingest an open-files manifest with extracted_text or extracted_text_ref first.");
+  }
+  const text = resolved.chunks.map((chunk) => chunk.text).join(`
+
+`);
+  return {
+    text,
+    contentSource: "catalog_chunks",
+    title: resolved.source?.title ?? null,
+    mime: resolved.content.mime,
+    size: text.length,
+    hash: resolved.revision?.hash ?? sha256Text(text),
+    revision: resolved.revision?.revision ?? null,
+    extractedTextRef: resolved.revision?.extracted_text_uri ?? null,
+    metadata: resolved.source?.metadata ?? {},
+    permissions: resolved.source?.permissions ?? { mode: "read_only" }
+  };
+}
+function manifestItemForSource(sourceRef, parsed, resolved, purpose) {
+  const hash = resolved.hash ?? sha256Text(resolved.text);
+  const metadata = {
+    ...redactPrivateRefs(resolved.metadata),
+    source_ref: sourceRef,
+    content_source: resolved.contentSource,
+    read_only: true
+  };
+  const item = {
+    source_ref: sourceRef,
+    name: resolved.title ?? titleForRef(parsed),
+    mime: resolved.mime ?? "text/plain",
+    size: resolved.size ?? resolved.text.length,
+    hash,
+    revision: resolved.revision ?? hash,
+    status: "active",
+    updated_at: new Date().toISOString(),
+    permissions: {
+      mode: "read_only",
+      allowed_purposes: [purpose],
+      ...resolved.permissions
+    },
+    metadata,
+    extracted_text_ref: resolved.extractedTextRef,
+    extracted_text: resolved.text
+  };
+  if (parsed.kind === "open-files") {
+    if (parsed.entity === "file")
+      item.file_id = parsed.id;
+    if (parsed.entity === "source") {
+      item.source_id = parsed.id;
+      item.path = parsed.path;
+    }
+  }
+  if (parsed.kind === "file")
+    item.path = parsed.path;
+  if (parsed.kind === "s3")
+    item.path = parsed.key;
+  if (parsed.kind === "web")
+    item.url = parsed.url;
+  return item;
+}
+async function ingestSourceRef(options) {
+  const purpose = options.purpose ?? "knowledge_index";
+  assertNoPrivateRefs(options.sourceRef, {
+    allowFileSourceRefs: options.config?.sources.allowed_schemes.includes("file") !== false
+  });
+  const parsed = parseSourceRef(options.sourceRef);
+  const resolved = parsed.kind === "open-files" ? await readOpenFilesSourceText(options) : await readDirectSourceText(parsed, options.config, options.safetyPolicy);
+  const item = manifestItemForSource(options.sourceRef, parsed, resolved, purpose);
+  const result = await ingestOpenFilesManifestItems({
+    dbPath: options.dbPath,
+    items: [item],
+    sourceLabel: options.sourceRef,
+    readAction: "source_ref_ingest_read",
+    allowFileSourceRefs: options.config?.sources.allowed_schemes.includes("file") !== false,
+    safetyPolicy: options.safetyPolicy,
+    now: options.now
+  });
+  return {
+    ...result,
+    source_ref: options.sourceRef,
+    content_source: resolved.contentSource,
+    read_only: true,
+    hash: String(item.hash)
+  };
+}
+
+// src/app-wiki.ts
+function stableId2(prefix, value) {
+  return `${prefix}_${createHash6("sha256").update(value).digest("hex").slice(0, 20)}`;
+}
+function slugify(value) {
+  const slug = value.normalize("NFKC").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80);
+  return slug || "note";
+}
+function parseJsonObject2(value) {
+  if (!value)
+    return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+function estimateTokenCount2(text) {
+  const words = text.trim().split(/\s+/).filter(Boolean).length;
+  return Math.max(1, Math.ceil(words * 1.25));
+}
+function uniqueStrings(values) {
+  return Array.from(new Set((values ?? []).map((value) => value.trim()).filter(Boolean)));
+}
+function normalizeNotePath(input) {
+  const raw = input.path?.trim() || `wiki/notes/${slugify(input.title)}.md`;
+  const normalized = raw.replace(/\\/g, "/");
+  if (!normalized.startsWith("wiki/notes/") || !normalized.endsWith(".md")) {
+    throw new Error("App wiki note paths must be relative wiki/notes/*.md artifact keys.");
+  }
+  if (normalized.startsWith("/") || normalized.split("/").some((segment) => segment === ".." || segment === ".")) {
+    throw new Error(`Invalid app wiki note path: ${raw}`);
+  }
+  return normalized;
+}
+function noteBody(input) {
+  const sections = [
+    `# ${input.title}`,
+    "",
+    input.content.trim(),
+    "",
+    `Updated: ${input.now}`
+  ];
+  if (input.tags.length > 0) {
+    sections.push("", "Tags:", ...input.tags.map((tag) => `- ${tag}`));
+  }
+  if (input.sourceRefs.length > 0) {
+    sections.push("", "Source refs:", ...input.sourceRefs.map((ref) => `- ${ref}`));
+  }
+  sections.push("");
+  return sections.join(`
+`);
+}
+async function writeArtifact(store, entry) {
+  const written = await store.put(entry);
+  return {
+    key: written.key,
+    uri: written.uri,
+    kind: entry.key.startsWith("logs/") ? "log" : "wiki_page",
+    content_type: entry.content_type,
+    modified_at: written.modified_at,
+    ...hashArtifactBody(entry.body),
+    metadata: {
+      ...entry.metadata ?? {}
+    }
+  };
+}
+async function appendLog(store, event, now) {
+  const year = String(now.getUTCFullYear());
+  const month = String(now.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(now.getUTCDate()).padStart(2, "0");
+  const key = `logs/${year}/${month}/${day}.jsonl`;
+  let existing = "";
+  try {
+    existing = await store.getText(key);
+  } catch {
+    existing = "";
+  }
+  return writeArtifact(store, {
+    key,
+    body: `${existing}${JSON.stringify(event)}
+`,
+    content_type: "application/x-ndjson",
+    metadata: {
+      provenance: generatedArtifactProvenance({
+        generated_from: String(event.event ?? "app_wiki_log"),
+        artifact_key: key
+      })
+    }
+  });
+}
+function noteMetadata(input) {
+  return {
+    ...redactPrivateRefs(input.metadata ?? {}),
+    app_wiki: true,
+    note: true,
+    artifact_key: input.path,
+    tags: input.tags,
+    source_refs: input.sourceRefs,
+    provenance: input.provenance
+  };
+}
+function noteRecord(row) {
+  const metadata = parseJsonObject2(row.metadata_json);
+  return {
+    id: row.id,
+    path: row.path,
+    title: row.title,
+    artifact_uri: row.artifact_uri,
+    content_hash: row.content_hash,
+    tags: Array.isArray(metadata.tags) ? metadata.tags.filter((tag) => typeof tag === "string") : [],
+    source_refs: Array.isArray(metadata.source_refs) ? metadata.source_refs.filter((ref) => typeof ref === "string") : [],
+    created_at: row.created_at,
+    updated_at: row.updated_at
+  };
+}
+function sourceCitationRows(db, sourceRefs) {
+  return sourceRefs.map((sourceRef) => {
+    const row = db.query(`SELECT
+         s.uri AS source_uri,
+         c.id AS chunk_id,
+         c.text,
+         c.start_offset,
+         c.end_offset,
+         sr.revision,
+         sr.hash,
+         c.metadata_json
+       FROM sources s
+       LEFT JOIN source_revisions sr ON sr.source_id = s.id
+       LEFT JOIN chunks c ON c.source_revision_id = sr.id
+       WHERE s.uri = ? OR s.metadata_json LIKE ?
+       ORDER BY sr.created_at DESC, c.ordinal ASC
+       LIMIT 1`).get(sourceRef, `%${sourceRef}%`);
+    const metadata = parseJsonObject2(row?.metadata_json);
+    return {
+      source_ref: sourceRef,
+      source_uri: row?.source_uri ?? sourceRef,
+      chunk_id: row?.chunk_id ?? null,
+      quote: row?.text ? row.text.replace(/\s+/g, " ").slice(0, 240) : null,
+      start_offset: row?.start_offset ?? null,
+      end_offset: row?.end_offset ?? null,
+      metadata: {
+        source_ref: sourceRef,
+        revision: row?.revision ?? metadata.revision,
+        hash: row?.hash ?? metadata.hash
+      }
+    };
+  });
+}
+function replaceNoteCitations(db, pageId, sourceRefs, now) {
+  db.run("DELETE FROM citations WHERE wiki_page_id = ?", [pageId]);
+  const citations = sourceCitationRows(db, sourceRefs);
+  for (const citation of citations) {
+    db.run(`INSERT INTO citations (id, wiki_page_id, chunk_id, source_uri, quote, start_offset, end_offset, metadata_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
+      stableId2("cit", `${pageId}\x00${citation.source_uri}\x00${citation.chunk_id ?? randomUUID3()}`),
+      pageId,
+      citation.chunk_id,
+      citation.source_uri,
+      citation.quote,
+      citation.start_offset,
+      citation.end_offset,
+      JSON.stringify(citation.metadata),
+      now
+    ]);
+  }
+  return citations.length;
+}
+function upsertNoteIndex(db, input) {
+  db.run(`INSERT INTO knowledge_indexes (id, kind, name, artifact_uri, shard_key, metadata_json, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(kind, name, shard_key) DO UPDATE SET
+       artifact_uri = excluded.artifact_uri,
+       metadata_json = excluded.metadata_json,
+       updated_at = excluded.updated_at`, [
+    stableId2("idx", `app-wiki-note\x00${input.path}`),
+    "app_wiki_note",
+    input.title,
+    input.artifactUri,
+    input.path,
+    JSON.stringify({
+      artifact_key: input.path,
+      content_hash: input.contentHash,
+      tags: input.tags,
+      source_refs: input.sourceRefs
+    }),
+    input.now,
+    input.now
+  ]);
+}
+function upsertNotePage(db, input) {
+  db.run(`INSERT INTO wiki_pages (id, path, title, artifact_uri, content_hash, status, metadata_json, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(path) DO UPDATE SET
+       title = excluded.title,
+       artifact_uri = excluded.artifact_uri,
+       content_hash = excluded.content_hash,
+       status = excluded.status,
+       metadata_json = excluded.metadata_json,
+       updated_at = excluded.updated_at`, [
+    input.pageId,
+    input.path,
+    input.title,
+    input.artifactUri,
+    input.contentHash,
+    "active",
+    JSON.stringify(input.metadata),
+    input.now,
+    input.now
+  ]);
+  const existing = db.query("SELECT id FROM chunks WHERE wiki_page_id = ?").all(input.pageId);
+  for (const row of existing)
+    db.run("DELETE FROM chunks_fts WHERE chunk_id = ?", [row.id]);
+  db.run("DELETE FROM chunks WHERE wiki_page_id = ?", [input.pageId]);
+  const chunkId = stableId2("chk", `${input.pageId}\x00${input.contentHash}`);
+  db.run(`INSERT INTO chunks (id, wiki_page_id, kind, ordinal, text, token_count, start_offset, end_offset, metadata_json, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
+    chunkId,
+    input.pageId,
+    "wiki",
+    0,
+    input.body,
+    estimateTokenCount2(input.body),
+    0,
+    input.body.length,
+    JSON.stringify({
+      ...input.metadata,
+      artifact_uri: input.artifactUri,
+      content_hash: input.contentHash
+    }),
+    input.now
+  ]);
+  db.run("INSERT INTO chunks_fts (chunk_id, text, title, source_uri) VALUES (?, ?, ?, ?)", [
+    chunkId,
+    input.body,
+    input.title,
+    input.artifactUri
+  ]);
+}
+function assertAppWikiWriteAllowed(options) {
+  if (options.scope === "global" && options.allowGlobal !== true) {
+    throw new Error("Global app-wiki writes require allowGlobal=true or CLI --allow-global.");
+  }
+  if (options.workspace.home.includes("/.husna/") || options.workspace.home.endsWith("/.husna")) {
+    throw new Error(`Refusing app-wiki writes to legacy .husna path: ${options.workspace.home}`);
+  }
+  if (options.workspace.home.includes("/.hasna/apps/knowledge")) {
+    throw new Error(`Refusing app-wiki writes to legacy .hasna/apps/knowledge path: ${options.workspace.home}`);
+  }
+  if (options.safetyPolicy)
+    assertWriteAllowed(options.workspace.knowledgeDbPath, options.safetyPolicy);
+}
+async function initAppWikiScope(options) {
+  assertAppWikiWriteAllowed(options);
+  const migration = migrateKnowledgeDb(options.workspace.knowledgeDbPath);
+  const db = openKnowledgeDb(options.workspace.knowledgeDbPath);
+  try {
+    recordAuditEvent(db, {
+      event_type: "write",
+      action: "app_wiki_init",
+      target_uri: options.workspace.home,
+      decision: "allow",
+      metadata: {
+        scope: options.scope,
+        store_type: options.store.type,
+        app_path: ".hasna/knowledge"
+      },
+      created_at: (options.now ?? new Date).toISOString()
+    });
+  } finally {
+    db.close();
+  }
+  return {
+    ok: true,
+    scope: options.scope,
+    workspace_home: options.workspace.home,
+    knowledge_db_path: options.workspace.knowledgeDbPath,
+    schema_version: migration.schema_version,
+    store_type: options.store.type,
+    global_write_allowed: options.scope === "global" && options.allowGlobal === true,
+    message: `Initialized app wiki scope at ${options.workspace.home}`
+  };
+}
+async function writeAppWikiNote(options) {
+  assertAppWikiWriteAllowed(options);
+  const nowDate = options.now ?? new Date;
+  const now = nowDate.toISOString();
+  const tags = uniqueStrings(options.tags);
+  const sourceRefs = uniqueStrings(options.sourceRefs);
+  for (const sourceRef of sourceRefs) {
+    assertNoPrivateRefs(sourceRef, { allowFileSourceRefs: options.safetyPolicy?.readOnlySourceAccess === true });
+  }
+  const path = normalizeNotePath(options);
+  const body = noteBody({
+    title: options.title,
+    content: options.content,
+    tags,
+    sourceRefs,
+    now
+  });
+  const provenance = generatedArtifactProvenance({
+    generated_from: "app_wiki_note",
+    artifact_key: path,
+    source_refs: sourceRefs
+  });
+  const artifact = await writeArtifact(options.store, {
+    key: path,
+    body,
+    content_type: "text/markdown",
+    metadata: {
+      generated_from: "app_wiki_note",
+      provenance,
+      scope: options.scope,
+      tags: tags.join(","),
+      source_refs: sourceRefs.join(",")
+    }
+  });
+  const log = await appendLog(options.store, {
+    ts: now,
+    event: "app_wiki_note_written",
+    page_key: path,
+    source_refs: sourceRefs,
+    tags
+  }, nowDate);
+  migrateKnowledgeDb(options.workspace.knowledgeDbPath);
+  const db = openKnowledgeDb(options.workspace.knowledgeDbPath);
+  try {
+    const pageId = stableId2("wiki", path);
+    const metadata = noteMetadata({
+      path,
+      tags,
+      sourceRefs,
+      provenance,
+      metadata: options.metadata
+    });
+    recordStorageObjects(db, [artifact, log], nowDate);
+    upsertNotePage(db, {
+      pageId,
+      path,
+      title: options.title,
+      artifactUri: artifact.uri,
+      contentHash: artifact.hash ?? "",
+      body,
+      metadata,
+      now
+    });
+    const citationsWritten = replaceNoteCitations(db, pageId, sourceRefs, now);
+    upsertNoteIndex(db, {
+      title: options.title,
+      path,
+      artifactUri: artifact.uri,
+      contentHash: artifact.hash ?? "",
+      tags,
+      sourceRefs,
+      now
+    });
+    recordAuditEvent(db, {
+      event_type: "write",
+      action: "app_wiki_note_write",
+      target_uri: artifact.uri,
+      decision: "allow",
+      metadata: {
+        scope: options.scope,
+        path,
+        source_refs: sourceRefs,
+        tags
+      },
+      created_at: now
+    });
+    const row = db.query("SELECT id, path, title, artifact_uri, content_hash, metadata_json, created_at, updated_at FROM wiki_pages WHERE id = ?").get(pageId);
+    if (!row)
+      throw new Error(`Failed to write app wiki note: ${path}`);
+    return {
+      ok: true,
+      scope: options.scope,
+      workspace_home: options.workspace.home,
+      note: noteRecord(row),
+      artifact_uri: artifact.uri,
+      content_hash: artifact.hash ?? "",
+      citations_written: citationsWritten,
+      chunks_written: 1,
+      storage_objects_written: 2,
+      message: `Wrote app wiki note ${path}`
+    };
+  } finally {
+    db.close();
+  }
+}
+function listAppWikiNotes(options) {
+  const limit = Math.max(1, Math.min(options.limit ?? 50, 200));
+  if (!options.dbPath)
+    return [];
+  migrateKnowledgeDb(options.dbPath);
+  const db = openKnowledgeDb(options.dbPath);
+  try {
+    return db.query(`SELECT id, path, title, artifact_uri, content_hash, metadata_json, created_at, updated_at
+       FROM wiki_pages
+       WHERE status = 'active'
+         AND path LIKE 'wiki/notes/%'
+         AND metadata_json LIKE '%"app_wiki":true%'
+       ORDER BY updated_at DESC, created_at DESC
+       LIMIT ?`).all(limit).map(noteRecord);
+  } finally {
+    db.close();
+  }
+}
+async function getAppWikiNote(options) {
+  migrateKnowledgeDb(options.dbPath);
+  const db = openKnowledgeDb(options.dbPath);
+  try {
+    const row = db.query(`SELECT id, path, title, artifact_uri, content_hash, metadata_json, created_at, updated_at
+       FROM wiki_pages
+       WHERE (id = ? OR path = ?)
+         AND path LIKE 'wiki/notes/%'
+         AND metadata_json LIKE '%"app_wiki":true%'`).get(options.id, options.id);
+    if (!row)
+      return null;
+    const citations = db.query(`SELECT id, chunk_id, source_uri, quote, start_offset, end_offset, metadata_json, created_at
+       FROM citations
+       WHERE wiki_page_id = ?
+       ORDER BY created_at ASC`).all(row.id).map((citation) => ({
+      ...citation,
+      metadata: parseJsonObject2(citation.metadata_json),
+      metadata_json: undefined
+    }));
+    let content = null;
+    if (options.includeContent !== false) {
+      try {
+        content = await options.store.getText(row.path);
+      } catch {
+        content = null;
+      }
+    }
+    return {
+      ok: true,
+      note: noteRecord(row),
+      citations,
+      content
+    };
+  } finally {
+    db.close();
+  }
+}
+async function ingestAppWikiSourceRef(options) {
+  assertAppWikiWriteAllowed(options);
+  assertNoPrivateRefs(options.sourceRef, {
+    allowFileSourceRefs: options.config?.sources.allowed_schemes.includes("file") !== false
+  });
+  return ingestSourceRef({
+    dbPath: options.workspace.knowledgeDbPath,
+    sourceRef: options.sourceRef,
+    purpose: options.purpose ?? "knowledge_index",
+    config: options.config,
+    safetyPolicy: options.safetyPolicy
+  });
+}
+
+// src/auth.ts
+import { existsSync as existsSync6, mkdirSync as mkdirSync3, readFileSync as readFileSync5, unlinkSync, writeFileSync as writeFileSync3 } from "fs";
+import { homedir as homedir3 } from "os";
+import { dirname as dirname3, join as join4 } from "path";
+var DEFAULT_KNOWLEDGE_API_URL = "https://knowledge.md";
+function normalizeKnowledgeApiOrigin(apiUrl) {
+  const url = new URL(apiUrl);
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error("Knowledge API URL must use http or https.");
+  }
+  const pathname = url.pathname.replace(/\/+$/, "");
+  if (pathname === "/api" || pathname === "/api/v1") {
+    url.pathname = "/";
+  } else if (pathname.endsWith("/api/v1")) {
+    url.pathname = pathname.slice(0, -"/api/v1".length) || "/";
+  } else if (pathname.endsWith("/api")) {
+    url.pathname = pathname.slice(0, -"/api".length) || "/";
+  }
+  return url.toString().replace(/\/+$/, "");
+}
+function knowledgeAuthPath(env = process.env) {
+  if (env.HASNA_KNOWLEDGE_AUTH_PATH)
+    return env.HASNA_KNOWLEDGE_AUTH_PATH;
+  const root = env.HASNA_KNOWLEDGE_AUTH_DIR ?? join4(homedir3(), ".hasna", "knowledge");
+  return join4(root, "auth.json");
+}
+function resolveKnowledgeApiUrl(env = process.env) {
+  const envApiUrl = KNOWLEDGE_API_URL_ENV_KEYS.map((key) => env[key]?.trim()).find((value) => Boolean(value));
+  return normalizeKnowledgeApiOrigin(envApiUrl ?? DEFAULT_KNOWLEDGE_API_URL);
+}
+function getKnowledgeAuth(env = process.env) {
+  try {
+    const path = knowledgeAuthPath(env);
+    if (!existsSync6(path))
+      return null;
+    const parsed = JSON.parse(readFileSync5(path, "utf8"));
+    return typeof parsed.api_key === "string" && parsed.api_key.length > 0 ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+function saveKnowledgeAuth(auth, env = process.env) {
+  const path = knowledgeAuthPath(env);
+  const stored = {
+    ...auth,
+    api_url: auth.api_url ? normalizeKnowledgeApiOrigin(auth.api_url) : undefined,
+    created_at: auth.created_at ?? new Date().toISOString()
+  };
+  mkdirSync3(dirname3(path), { recursive: true, mode: 448 });
+  writeFileSync3(path, `${JSON.stringify(stored, null, 2)}
+`, { mode: 384 });
+  return stored;
+}
+function clearKnowledgeAuth(env = process.env) {
+  try {
+    unlinkSync(knowledgeAuthPath(env));
+    return true;
+  } catch {
+    return false;
+  }
+}
+function getKnowledgeApiKey(env = process.env) {
+  const envApiKey = KNOWLEDGE_API_KEY_ENV_KEYS.map((key) => env[key]).find((value) => Boolean(value));
+  if (envApiKey)
+    return { apiKey: envApiKey, source: "env" };
+  const auth = getKnowledgeAuth(env);
+  return auth?.api_key ? { apiKey: auth.api_key, source: "file" } : { apiKey: null, source: "none" };
+}
+function knowledgeAuthStatus(env = process.env) {
+  const auth = getKnowledgeAuth(env);
+  const key = getKnowledgeApiKey(env);
+  const hasEnvApiUrl = KNOWLEDGE_API_URL_ENV_KEYS.some((name) => Boolean(env[name]?.trim()));
+  const apiUrl = hasEnvApiUrl ? resolveKnowledgeApiUrl(env) : auth?.api_url ? normalizeKnowledgeApiOrigin(auth.api_url) : resolveKnowledgeApiUrl(env);
+  return {
+    authenticated: Boolean(key.apiKey),
+    source: key.source,
+    api_url: apiUrl,
+    auth_path: knowledgeAuthPath(env),
+    email: key.source === "file" ? auth?.email ?? null : null,
+    org_id: key.source === "file" ? auth?.org_id ?? null : null,
+    org_slug: key.source === "file" ? auth?.org_slug ?? null : null,
+    user_id: key.source === "file" ? auth?.user_id ?? null : null,
+    api_key_present: Boolean(key.apiKey)
+  };
+}
+
+// src/agent.ts
+import { randomUUID as randomUUID5 } from "crypto";
+
+// src/providers.ts
+import { randomUUID as randomUUID4 } from "crypto";
+var DEFAULT_PROVIDER_SETTINGS = {
+  openai: {
+    api_key_env: "OPENAI_API_KEY",
+    default_model: "gpt-5.2"
+  },
+  anthropic: {
+    api_key_env: "ANTHROPIC_API_KEY",
+    default_model: "claude-sonnet-4-6"
+  },
+  deepseek: {
+    api_key_env: "DEEPSEEK_API_KEY",
+    default_model: "deepseek-chat"
+  }
+};
+var PROVIDER_CAPABILITIES = {
+  openai: {
+    text_generation: true,
+    structured_output: true,
+    tool_usage: true,
+    tool_streaming: true,
+    image_input: true,
+    native_web_search: true,
+    reasoning: true,
+    embeddings: true
+  },
+  anthropic: {
+    text_generation: true,
+    structured_output: true,
+    tool_usage: true,
+    tool_streaming: true,
+    image_input: true,
+    native_web_search: false,
+    reasoning: true,
+    embeddings: false
+  },
+  deepseek: {
+    text_generation: true,
+    structured_output: true,
+    tool_usage: true,
+    tool_streaming: true,
+    image_input: false,
+    native_web_search: false,
+    reasoning: true,
+    embeddings: false
+  }
+};
+var BUILTIN_ALIASES = {
+  default: "openai:gpt-5.2",
+  fast: "openai:gpt-5-mini",
+  reasoning: "anthropic:claude-opus-4-6",
+  sonnet: "anthropic:claude-sonnet-4-6",
+  deepseek: "deepseek:deepseek-chat",
+  "deepseek-reasoning": "deepseek:deepseek-reasoner"
+};
+function providerConfig(config) {
+  return config?.providers ?? {};
+}
+function providerSettings(config, provider) {
+  const configured = providerConfig(config)[provider] ?? {};
+  return {
+    ...DEFAULT_PROVIDER_SETTINGS[provider],
+    ...configured
+  };
+}
+function modelAliases(config) {
+  const configured = providerConfig(config);
+  return {
+    ...BUILTIN_ALIASES,
+    ...configured.default_model ? { default: configured.default_model } : {},
+    ...configured.aliases ?? {}
+  };
+}
+function parseModelRef(modelRef) {
+  const [provider, ...rest] = modelRef.split(":");
+  const model = rest.join(":");
+  if (provider !== "openai" && provider !== "anthropic" && provider !== "deepseek") {
+    throw new Error(`Unsupported AI provider: ${provider}`);
+  }
+  if (!model)
+    throw new Error(`Invalid model ref: ${modelRef}. Expected provider:model.`);
+  return { provider, model };
+}
+function resolveModelRef(aliasOrRef, config) {
+  const aliases = modelAliases(config);
+  return aliases[aliasOrRef] ?? aliasOrRef;
+}
+function listModelRegistry(config) {
+  const aliases = modelAliases(config);
+  return Object.entries(aliases).map(([alias, modelRef]) => {
+    const parsed = parseModelRef(modelRef);
+    return {
+      alias,
+      model_ref: modelRef,
+      provider: parsed.provider,
+      model: parsed.model,
+      default: alias === "default",
+      capabilities: PROVIDER_CAPABILITIES[parsed.provider]
+    };
+  });
+}
+function providerCredentialStatus(config, env = process.env) {
+  return Object.keys(DEFAULT_PROVIDER_SETTINGS).map((provider) => {
+    const settings = providerSettings(config, provider);
+    const configured = Boolean(env[settings.api_key_env]);
+    return {
+      provider,
+      api_key_env: settings.api_key_env,
+      configured,
+      source: configured ? "env" : "missing",
+      base_url: settings.base_url ?? null,
+      default_model: settings.default_model
+    };
+  });
+}
+function providerStatus(config, env = process.env) {
+  return {
+    default_model: resolveModelRef("default", config),
+    providers: providerCredentialStatus(config, env),
+    models: listModelRegistry(config)
+  };
+}
+function assertProviderCredentials(provider, config, env = process.env) {
+  const status = providerCredentialStatus(config, env).find((entry) => entry.provider === provider);
+  if (!status)
+    throw new Error(`Unsupported AI provider: ${provider}`);
+  if (!status.configured)
+    throw new Error(`Missing ${status.api_key_env} for ${provider}. Set the env var to use this provider.`);
+  return status;
+}
+async function defaultFactory(provider) {
+  if (provider === "openai") {
+    const { createOpenAI } = await import("@ai-sdk/openai");
+    return createOpenAI;
+  }
+  if (provider === "anthropic") {
+    const { createAnthropic } = await import("@ai-sdk/anthropic");
+    return createAnthropic;
+  }
+  const { createDeepSeek } = await import("@ai-sdk/deepseek");
+  return createDeepSeek;
+}
+async function createAiSdkProviderRegistry(options = {}) {
+  const { createProviderRegistry } = await import("ai");
+  const env = options.env ?? process.env;
+  const providers = {};
+  for (const provider of Object.keys(DEFAULT_PROVIDER_SETTINGS)) {
+    const settings = providerSettings(options.config, provider);
+    const apiKey = env[settings.api_key_env];
+    if (!apiKey)
+      continue;
+    const factory = options.factories?.[provider] ?? await defaultFactory(provider);
+    providers[provider] = factory({ apiKey, baseURL: settings.base_url });
+  }
+  return createProviderRegistry(providers);
+}
+async function languageModelFor(aliasOrRef, options = {}) {
+  const modelRef = resolveModelRef(aliasOrRef, options.config);
+  const parsed = parseModelRef(modelRef);
+  assertProviderCredentials(parsed.provider, options.config, options.env);
+  const registry = await createAiSdkProviderRegistry(options);
+  return registry.languageModel(modelRef);
+}
+function usageNumber(usage, keys) {
+  for (const key of keys) {
+    const value = usage[key];
+    if (typeof value === "number" && Number.isFinite(value))
+      return value;
+  }
+  return 0;
+}
+function normalizeAiSdkUsage(input) {
+  const usage = input.usage ?? {};
+  return {
+    provider: input.provider,
+    model: input.model,
+    input_tokens: usageNumber(usage, ["inputTokens", "promptTokens", "input_tokens", "prompt_tokens"]),
+    output_tokens: usageNumber(usage, ["outputTokens", "completionTokens", "output_tokens", "completion_tokens"]),
+    cost_usd: input.costUsd ?? 0,
+    metadata: {
+      usage,
+      provider_metadata: input.providerMetadata ?? {}
+    }
+  };
+}
+function recordProviderUsage(db, input) {
+  const id = `usage_${randomUUID4()}`;
+  db.run(`INSERT INTO provider_usage (id, run_id, provider, model, input_tokens, output_tokens, cost_usd, metadata_json, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
+    id,
+    input.run_id ?? null,
+    input.provider,
+    input.model,
+    input.input_tokens,
+    input.output_tokens,
+    input.cost_usd,
+    JSON.stringify(input.metadata),
+    input.created_at ?? new Date().toISOString()
+  ]);
+  return id;
+}
+
+// src/retrieval.ts
+import { createHash as createHash8 } from "crypto";
+
+// src/search.ts
+import { existsSync as existsSync7, readFileSync as readFileSync6 } from "fs";
+
+// src/embeddings.ts
+import { createHash as createHash7 } from "crypto";
+var DEFAULT_EMBEDDING_MODEL_REF = "openai:text-embedding-3-small";
+var DEFAULT_EMBEDDING_DIMENSIONS = 1536;
+function embeddingConfig(config) {
+  return config?.embeddings ?? {};
+}
+function stableId3(prefix, value) {
+  return `${prefix}_${createHash7("sha256").update(value).digest("hex").slice(0, 20)}`;
+}
+function parseJsonObject3(value) {
+  if (!value)
+    return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+function metadataString2(metadata, keys) {
+  for (const key of keys) {
+    const value = metadata[key];
+    if (typeof value === "string" && value.length > 0)
+      return value;
+  }
+  return null;
+}
+function metadataNumber2(metadata, keys) {
+  for (const key of keys) {
+    const value = metadata[key];
+    if (typeof value === "number" && Number.isFinite(value))
+      return value;
+  }
+  return null;
+}
+function vectorNorm(vector) {
+  return Math.sqrt(vector.reduce((sum, value) => sum + value * value, 0));
+}
+function cosineSimilarity(a, b, bNorm = vectorNorm(b)) {
+  const aNorm = vectorNorm(a);
+  if (aNorm === 0 || bNorm === 0)
+    return 0;
+  const length = Math.min(a.length, b.length);
+  let dot = 0;
+  for (let i = 0;i < length; i += 1)
+    dot += a[i] * b[i];
+  return dot / (aNorm * bNorm);
+}
+function deterministicVector(text, dimensions) {
+  const bytes = createHash7("sha256").update(text).digest();
+  return Array.from({ length: dimensions }, (_, index) => {
+    const value = bytes[index % bytes.length] / 255;
+    return Number((value * 2 - 1).toFixed(6));
+  });
+}
+async function openAiEmbeddingModel(model, config, env = process.env) {
+  assertProviderCredentials("openai", config, env);
+  const settings = providerSettings(config, "openai");
+  const { createOpenAI } = await import("@ai-sdk/openai");
+  const openai = createOpenAI({
+    apiKey: env[settings.api_key_env],
+    baseURL: settings.base_url
+  });
+  if (openai.embeddingModel)
+    return openai.embeddingModel(model);
+  if (openai.textEmbedding)
+    return openai.textEmbedding(model);
+  if (openai.textEmbeddingModel)
+    return openai.textEmbeddingModel(model);
+  throw new Error("OpenAI provider does not expose an embedding model factory.");
+}
+function resolveEmbeddingModelRef(modelRef, config) {
+  if (!modelRef || modelRef === "default" || modelRef === "embedding") {
+    return embeddingConfig(config).default_model ?? DEFAULT_EMBEDDING_MODEL_REF;
+  }
+  return modelRef;
+}
+async function embedTexts(texts, options = {}) {
+  const modelRef = resolveEmbeddingModelRef(options.modelRef, options.config);
+  const parsed = parseModelRef(modelRef);
+  if (parsed.provider !== "openai") {
+    throw new Error(`Embedding provider ${parsed.provider} is not supported yet. Use openai:text-embedding-3-small.`);
+  }
+  const dimensions = options.dimensions ?? embeddingConfig(options.config).dimensions ?? DEFAULT_EMBEDDING_DIMENSIONS;
+  if (options.fake) {
+    return {
+      provider: parsed.provider,
+      model: parsed.model,
+      dimensions,
+      vectors: texts.map((text) => deterministicVector(text, dimensions)),
+      usage: { input_tokens: texts.reduce((sum, text) => sum + Math.max(1, Math.ceil(text.split(/\s+/).filter(Boolean).length * 1.25)), 0) }
+    };
+  }
+  const { embedMany } = await import("ai");
+  const model = await openAiEmbeddingModel(parsed.model, options.config, options.env);
+  const result = await embedMany({
+    model,
+    values: texts,
+    maxParallelCalls: options.maxParallelCalls ?? embeddingConfig(options.config).max_parallel_calls,
+    providerOptions: {
+      openai: {
+        dimensions
+      }
+    }
+  });
+  const vectors = result.embeddings;
+  return {
+    provider: parsed.provider,
+    model: parsed.model,
+    dimensions: vectors[0]?.length ?? dimensions,
+    vectors,
+    usage: { input_tokens: result.usage?.tokens ?? 0 }
+  };
+}
+function selectCandidateChunks(db, options) {
+  const baseQuery = `SELECT
+       c.id,
+       c.text,
+       c.token_count,
+       c.start_offset,
+       c.end_offset,
+       c.metadata_json,
+       c.source_revision_id,
+       sr.revision,
+       sr.hash,
+       s.uri AS source_uri,
+       s.kind AS source_kind
+     FROM chunks c
+     LEFT JOIN source_revisions sr ON sr.id = c.source_revision_id
+     LEFT JOIN sources s ON s.id = sr.source_id
+     LEFT JOIN vector_index_entries v
+       ON v.chunk_id = c.id AND v.provider = ? AND v.model = ?
+     WHERE v.id IS NULL`;
+  const suffix = `
+     ORDER BY c.created_at ASC, c.ordinal ASC
+     LIMIT ?`;
+  if (options.sourceRevisionId) {
+    return db.query(`${baseQuery} AND c.source_revision_id = ?${suffix}`).all(options.provider, options.model, options.sourceRevisionId, options.limit);
+  }
+  return db.query(`${baseQuery}${suffix}`).all(options.provider, options.model, options.limit);
+}
+function provenanceForChunk(row) {
+  const metadata = parseJsonObject3(row.metadata_json);
+  const existing = metadata.provenance;
+  if (existing && typeof existing === "object" && !Array.isArray(existing))
+    return existing;
+  return sourceProvenance({
+    source_ref: metadataString2(metadata, ["source_ref"]),
+    source_uri: row.source_uri ?? metadataString2(metadata, ["source_uri"]),
+    source_kind: row.source_kind ?? metadataString2(metadata, ["source_kind"]),
+    source_revision_id: row.source_revision_id,
+    revision: row.revision ?? metadataString2(metadata, ["revision"]),
+    hash: row.hash ?? metadataString2(metadata, ["hash"]),
+    chunk_id: row.id,
+    start_offset: row.start_offset ?? metadataNumber2(metadata, ["start_offset"]),
+    end_offset: row.end_offset ?? metadataNumber2(metadata, ["end_offset"]),
+    status: metadataString2(metadata, ["status"]),
+    resolver: "open-files-read-only"
+  });
+}
+function upsertVectors(db, rows, embedding, now) {
+  const insertEmbedding = db.prepare(`
+    INSERT INTO chunk_embeddings (id, chunk_id, provider, model, dimensions, vector_json, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(chunk_id, provider, model) DO UPDATE SET
+      dimensions = excluded.dimensions,
+      vector_json = excluded.vector_json,
+      created_at = excluded.created_at
+  `);
+  const insertVector = db.prepare(`
+    INSERT INTO vector_index_entries (
+      id, chunk_id, source_revision_id, provider, model, dimensions, vector_json, vector_norm,
+      source_uri, source_ref, revision, hash, start_offset, end_offset, token_count, status,
+      metadata_json, created_at, updated_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(chunk_id, provider, model) DO UPDATE SET
+      source_revision_id = excluded.source_revision_id,
+      dimensions = excluded.dimensions,
+      vector_json = excluded.vector_json,
+      vector_norm = excluded.vector_norm,
+      source_uri = excluded.source_uri,
+      source_ref = excluded.source_ref,
+      revision = excluded.revision,
+      hash = excluded.hash,
+      start_offset = excluded.start_offset,
+      end_offset = excluded.end_offset,
+      token_count = excluded.token_count,
+      status = excluded.status,
+      metadata_json = excluded.metadata_json,
+      updated_at = excluded.updated_at
+  `);
+  const write = db.transaction(() => {
+    for (let index = 0;index < rows.length; index += 1) {
+      const row = rows[index];
+      const vector = embedding.vectors[index];
+      if (!vector)
+        continue;
+      const metadata = parseJsonObject3(row.metadata_json);
+      const provenance = provenanceForChunk(row);
+      const sourceRef = provenance.source_ref ?? metadataString2(metadata, ["source_ref"]);
+      const sourceUri = provenance.source_uri ?? row.source_uri ?? metadataString2(metadata, ["source_uri"]);
+      const revision = provenance.revision ?? row.revision ?? metadataString2(metadata, ["revision"]);
+      const hash = provenance.hash ?? row.hash ?? metadataString2(metadata, ["hash"]);
+      const status = provenance.status ?? metadataString2(metadata, ["status"]) ?? "active";
+      const vectorJson = JSON.stringify(vector);
+      insertEmbedding.run(stableId3("emb", `${row.id}\x00${embedding.provider}\x00${embedding.model}`), row.id, embedding.provider, embedding.model, embedding.dimensions, vectorJson, now);
+      insertVector.run(stableId3("vec", `${row.id}\x00${embedding.provider}\x00${embedding.model}`), row.id, row.source_revision_id, embedding.provider, embedding.model, embedding.dimensions, vectorJson, vectorNorm(vector), sourceUri, sourceRef, revision, hash, provenance.start_offset, provenance.end_offset, row.token_count, status, JSON.stringify({
+        ...metadata,
+        provenance,
+        embedded_at: now
+      }), now, now);
+    }
+  });
+  write();
+  return rows.length;
+}
+async function indexKnowledgeEmbeddings(options) {
+  const modelRef = resolveEmbeddingModelRef(options.modelRef, options.config);
+  const parsed = parseModelRef(modelRef);
+  if (parsed.provider !== "openai")
+    throw new Error(`Embedding provider ${parsed.provider} is not supported yet.`);
+  const now = (options.now ?? new Date).toISOString();
+  const limit = Math.max(1, Math.min(options.limit ?? 100, 1000));
+  migrateKnowledgeDb(options.dbPath);
+  const readDb = openKnowledgeDb(options.dbPath);
+  let rows;
+  try {
+    rows = selectCandidateChunks(readDb, {
+      provider: parsed.provider,
+      model: parsed.model,
+      limit,
+      sourceRevisionId: options.sourceRevisionId
+    });
+  } finally {
+    readDb.close();
+  }
+  if (rows.length === 0) {
+    return {
+      provider: parsed.provider,
+      model: parsed.model,
+      dimensions: options.dimensions ?? embeddingConfig(options.config).dimensions ?? DEFAULT_EMBEDDING_DIMENSIONS,
+      chunks_seen: 0,
+      chunks_embedded: 0,
+      embeddings_upserted: 0,
+      vector_entries_upserted: 0,
+      usage: { input_tokens: 0 }
+    };
+  }
+  const embedding = await embedTexts(rows.map((row) => row.text), options);
+  const writeDb = openKnowledgeDb(options.dbPath);
+  try {
+    const upserted = upsertVectors(writeDb, rows, embedding, now);
+    return {
+      provider: embedding.provider,
+      model: embedding.model,
+      dimensions: embedding.dimensions,
+      chunks_seen: rows.length,
+      chunks_embedded: rows.length,
+      embeddings_upserted: upserted,
+      vector_entries_upserted: upserted,
+      usage: embedding.usage
+    };
+  } finally {
+    writeDb.close();
+  }
+}
+function embeddingIndexStatus(dbPath) {
+  migrateKnowledgeDb(dbPath);
+  const db = openKnowledgeDb(dbPath);
+  try {
+    const totalEmbeddings = db.query("SELECT COUNT(*) AS n FROM chunk_embeddings").get()?.n ?? 0;
+    const totalVectorEntries = db.query("SELECT COUNT(*) AS n FROM vector_index_entries").get()?.n ?? 0;
+    const indexes = db.query(`SELECT provider, model, dimensions, COUNT(*) AS entries, MAX(updated_at) AS updated_at
+       FROM vector_index_entries
+       GROUP BY provider, model, dimensions
+       ORDER BY provider, model`).all();
+    return {
+      total_embeddings: totalEmbeddings,
+      total_vector_entries: totalVectorEntries,
+      indexes
+    };
+  } finally {
+    db.close();
+  }
+}
+async function searchVectorIndex(options) {
+  const modelRef = resolveEmbeddingModelRef(options.modelRef, options.config);
+  const parsed = parseModelRef(modelRef);
+  const limit = Math.max(1, Math.min(options.limit ?? 10, 100));
+  const embedded = await embedTexts([options.query], options);
+  const queryVector = embedded.vectors[0] ?? [];
+  migrateKnowledgeDb(options.dbPath);
+  const db = openKnowledgeDb(options.dbPath);
+  try {
+    const rows = db.query(`SELECT
+         v.chunk_id,
+         c.text,
+         v.vector_json,
+         v.vector_norm,
+         v.source_uri,
+         v.source_ref,
+         v.revision,
+         v.hash,
+         v.metadata_json
+       FROM vector_index_entries v
+       JOIN chunks c ON c.id = v.chunk_id
+       WHERE v.provider = ? AND v.model = ? AND v.status = 'active'`).all(parsed.provider, parsed.model);
+    const scored = rows.map((row) => {
+      const vector = JSON.parse(row.vector_json);
+      const metadata = parseJsonObject3(row.metadata_json);
+      const provenance = metadata.provenance && typeof metadata.provenance === "object" && !Array.isArray(metadata.provenance) ? metadata.provenance : null;
+      return {
+        chunk_id: row.chunk_id,
+        score: cosineSimilarity(queryVector, vector, row.vector_norm),
+        text: row.text,
+        source_uri: row.source_uri,
+        source_ref: row.source_ref,
+        revision: row.revision,
+        hash: row.hash,
+        provenance
+      };
+    }).sort((a, b) => b.score - a.score).slice(0, limit);
+    return {
+      provider: parsed.provider,
+      model: parsed.model,
+      dimensions: embedded.dimensions,
+      query: options.query,
+      results: scored
+    };
+  } finally {
+    db.close();
+  }
+}
+
+// src/search.ts
+function parseJsonObject4(value) {
+  if (!value)
+    return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+function metadataString3(metadata, keys) {
+  for (const key of keys) {
+    const value = metadata[key];
+    if (typeof value === "string" && value.length > 0)
+      return value;
+  }
+  return null;
+}
+function metadataNumber3(metadata, keys) {
+  for (const key of keys) {
+    const value = metadata[key];
+    if (typeof value === "number" && Number.isFinite(value))
+      return value;
+  }
+  return null;
+}
+function unique(values) {
+  return Array.from(new Set(values));
+}
+function queryTerms(query) {
+  const terms = query.normalize("NFKC").toLowerCase().match(/[\p{L}\p{N}_]+/gu) ?? [];
+  return unique(terms.filter((term) => term.length > 0)).slice(0, 16);
+}
+function normalizeWords(raw) {
+  return raw.normalize("NFKC").toLowerCase().match(/[\p{L}\p{N}_]+/gu) ?? [];
+}
+function parseSearchQuery(query) {
+  const tokens = [];
+  const segment = /"([^"]*)"|(\S+)/g;
+  let match;
+  let pendingNegate = false;
+  while ((match = segment.exec(query)) !== null) {
+    if (match[1] !== undefined) {
+      const words2 = normalizeWords(match[1]);
+      if (words2.length > 0) {
+        tokens.push({ type: "phrase", value: words2.join(" "), negate: pendingNegate, prefix: false });
+      }
+      pendingNegate = false;
+      continue;
+    }
+    let raw = match[2] ?? "";
+    if (raw === "OR" || raw === "||" || raw === "|") {
+      tokens.push({ type: "or", value: "", negate: false, prefix: false });
+      continue;
+    }
+    if (raw === "AND" || raw === "&&")
+      continue;
+    if (raw === "NOT") {
+      pendingNegate = true;
+      continue;
+    }
+    let negate = pendingNegate;
+    pendingNegate = false;
+    if (raw.startsWith("-") && raw.length > 1) {
+      negate = true;
+      raw = raw.slice(1);
+    }
+    let prefix = false;
+    if (raw.endsWith("*")) {
+      prefix = true;
+      raw = raw.slice(0, -1);
+    }
+    const words = normalizeWords(raw);
+    if (words.length === 0)
+      continue;
+    tokens.push({
+      type: words.length > 1 ? "phrase" : "term",
+      value: words.join(" "),
+      negate,
+      prefix
+    });
+  }
+  return tokens.slice(0, 24);
+}
+function tokenToFragment(token) {
+  if (token.type === "phrase")
+    return `"${token.value}"`;
+  return `"${token.value}"*`;
+}
+function buildFtsMatch(query) {
+  const tokens = parseSearchQuery(query);
+  const positives = tokens.filter((t) => t.type !== "or" && !t.negate);
+  if (positives.length === 0)
+    return { and: null, or: null };
+  const compose = (defaultOp) => {
+    let expr = "";
+    let pendingOr = false;
+    const negations = [];
+    for (const token of tokens) {
+      if (token.type === "or") {
+        pendingOr = true;
+        continue;
+      }
+      const fragment = tokenToFragment(token);
+      if (token.negate) {
+        negations.push(fragment);
+        continue;
+      }
+      if (expr.length === 0)
+        expr = fragment;
+      else
+        expr = pendingOr ? `${expr} OR ${fragment}` : `${expr} ${defaultOp} ${fragment}`;
+      pendingOr = false;
+    }
+    for (const negation of negations)
+      expr = `(${expr}) NOT ${negation}`;
+    return expr.length > 0 ? expr : null;
+  };
+  const and = compose("AND");
+  const or = compose("OR");
+  return { and, or: or !== and ? or : null };
+}
+function escapeLikeTerm(term) {
+  return term.replace(/[\\%_]/g, (char) => `\\${char}`);
+}
+function likeParams(terms, fieldsPerTerm) {
+  return terms.flatMap((term) => Array.from({ length: fieldsPerTerm }, () => `%${escapeLikeTerm(term)}%`));
+}
+function scoreFromRank(rank, index) {
+  const rankScore = Number.isFinite(rank) ? 1 / (1 + Math.abs(rank)) : 0;
+  const orderScore = 1 / (1 + index);
+  return roundScore(Math.max(rankScore, orderScore));
+}
+function catalogScore(haystack, terms) {
+  if (terms.length === 0)
+    return 0;
+  const matched = terms.filter((term) => haystack.includes(term)).length;
+  if (matched === 0)
+    return 0;
+  return roundScore(Math.min(0.85, 0.35 + matched / terms.length * 0.5));
+}
+function semanticScore(score) {
+  return roundScore(Math.max(0, Math.min(1, (score + 1) / 2)));
+}
+function roundScore(score) {
+  return Number(score.toFixed(6));
+}
+function combinedScore(scores, citation) {
+  const keyword = scores.keyword ?? 0;
+  const semantic = scores.semantic ?? 0;
+  const catalog = scores.catalog ?? 0;
+  const citationBoost = citation?.chunk_id ? 0.05 : 0;
+  return roundScore(Math.min(1, keyword * 0.55 + semantic * 0.4 + catalog * 0.35 + citationBoost));
+}
+function existingProvenance(metadata) {
+  const provenance = metadata.provenance;
+  return provenance && typeof provenance === "object" && !Array.isArray(provenance) ? provenance : null;
+}
+function provenanceForChunk2(row) {
+  const metadata = parseJsonObject4(row.chunk_metadata_json);
+  const existing = existingProvenance(metadata);
+  if (existing)
+    return existing;
+  if (!row.source_revision_id && !row.source_uri)
+    return null;
+  return sourceProvenance({
+    source_ref: metadataString3(metadata, ["source_ref"]),
+    source_uri: row.source_uri ?? metadataString3(metadata, ["source_uri"]),
+    source_kind: row.source_kind ?? metadataString3(metadata, ["source_kind"]),
+    source_revision_id: row.source_revision_id,
+    revision: row.revision ?? metadataString3(metadata, ["revision"]),
+    hash: row.hash ?? metadataString3(metadata, ["hash"]),
+    chunk_id: row.chunk_id,
+    start_offset: row.start_offset ?? metadataNumber3(metadata, ["start_offset"]),
+    end_offset: row.end_offset ?? metadataNumber3(metadata, ["end_offset"]),
+    status: metadataString3(metadata, ["status"]),
+    resolver: "open-files-read-only"
+  });
+}
+function selectFtsChunks(db, ftsQuery, limit) {
+  if (!ftsQuery)
+    return [];
+  try {
+    return runFtsChunkQuery(db, ftsQuery, limit);
+  } catch {
+    return [];
+  }
+}
+function runFtsChunkQuery(db, ftsQuery, limit) {
+  return db.query(`SELECT
+       chunks_fts.chunk_id,
+       c.kind AS chunk_kind,
+       c.wiki_page_id,
+       c.text,
+       c.token_count,
+       c.start_offset,
+       c.end_offset,
+       c.metadata_json AS chunk_metadata_json,
+       c.source_revision_id,
+       sr.revision,
+       sr.hash,
+       s.uri AS source_uri,
+       s.kind AS source_kind,
+       s.title AS source_title,
+       wp.path AS wiki_path,
+       wp.title AS wiki_title,
+       wp.artifact_uri AS wiki_artifact_uri,
+       wp.content_hash AS wiki_content_hash,
+       wp.status AS wiki_status,
+       wp.metadata_json AS wiki_metadata_json,
+       bm25(chunks_fts, 0.0, 1.0, 5.0, 3.0) AS rank
+     FROM chunks_fts
+     JOIN chunks c ON c.id = chunks_fts.chunk_id
+     LEFT JOIN source_revisions sr ON sr.id = c.source_revision_id
+     LEFT JOIN sources s ON s.id = sr.source_id
+     LEFT JOIN wiki_pages wp ON wp.id = c.wiki_page_id
+     WHERE chunks_fts MATCH ?
+     ORDER BY rank ASC
+     LIMIT ?`).all(ftsQuery, limit);
+}
+function catalogWhere(fields, terms) {
+  if (terms.length === 0)
+    return "1 = 0";
+  const clauses = terms.map(() => `(${fields.map((field) => `lower(COALESCE(${field}, '')) LIKE ? ESCAPE '\\'`).join(" OR ")})`);
+  return clauses.join(" OR ");
+}
+function selectWikiPages(db, terms, limit) {
+  const fields = ["path", "title", "artifact_uri", "metadata_json"];
+  return db.query(`SELECT id, path, title, artifact_uri, content_hash, status, metadata_json
+     FROM wiki_pages
+     WHERE status = 'active' AND (${catalogWhere(fields, terms)})
+     ORDER BY updated_at DESC
+     LIMIT ?`).all(...likeParams(terms, fields.length), limit);
+}
+function selectKnowledgeIndexes(db, terms, limit) {
+  const fields = ["kind", "name", "shard_key", "artifact_uri", "metadata_json"];
+  return db.query(`SELECT id, kind, name, artifact_uri, shard_key, metadata_json
+     FROM knowledge_indexes
+     WHERE ${catalogWhere(fields, terms)}
+     ORDER BY updated_at DESC
+     LIMIT ?`).all(...likeParams(terms, fields.length), limit);
+}
+function readLegacyItems(path) {
+  if (!path || !existsSync7(path))
+    return [];
+  try {
+    const parsed = JSON.parse(readFileSync6(path, "utf8"));
+    if (!parsed || !Array.isArray(parsed.items))
+      return [];
+    return parsed.items.filter((item) => {
+      return Boolean(item && typeof item === "object" && typeof item.id === "string" && typeof item.title === "string" && typeof item.content === "string");
+    });
+  } catch {
+    return [];
+  }
+}
+function legacyItemHaystack(item) {
+  return [
+    item.id,
+    item.short_id,
+    item.title,
+    item.content,
+    item.url,
+    ...item.tags ?? []
+  ].filter((value) => typeof value === "string" && value.length > 0).join(" ").toLowerCase();
+}
+function selectItems(items, terms, limit) {
+  if (terms.length === 0)
+    return [];
+  return items.filter((item) => item.archived !== true).map((item) => ({ item, haystack: legacyItemHaystack(item) })).filter(({ haystack }) => terms.some((term) => haystack.includes(term))).map(({ item, haystack }) => ({ item, score: catalogScore(haystack, terms) })).sort((a, b) => b.score - a.score || a.item.id.localeCompare(b.item.id)).slice(0, limit);
+}
+function selectLegacyItems(path, terms, limit) {
+  return selectItems(readLegacyItems(path), terms, limit);
+}
+function chunkResult(row, keywordScore) {
+  const metadata = parseJsonObject4(row.chunk_metadata_json);
+  const provenance = provenanceForChunk2(row);
+  const sourceRef = metadataString3(metadata, ["source_ref"]);
+  const sourceUri = row.source_uri ?? metadataString3(metadata, ["source_uri"]);
+  const isWiki = Boolean(row.wiki_page_id);
+  const result = {
+    kind: isWiki ? "wiki_chunk" : "source_chunk",
+    id: row.chunk_id,
+    title: isWiki ? row.wiki_title : row.source_title,
+    text: row.text,
+    score: 0,
+    scores: { keyword: keywordScore },
+    source: sourceUri || sourceRef ? {
+      uri: sourceUri,
+      ref: sourceRef,
+      kind: row.source_kind ?? metadataString3(metadata, ["source_kind"]),
+      revision: row.revision ?? metadataString3(metadata, ["revision"]),
+      hash: row.hash ?? metadataString3(metadata, ["hash"])
+    } : null,
+    citation: {
+      chunk_id: row.chunk_id,
+      start_offset: row.start_offset,
+      end_offset: row.end_offset
+    },
+    artifact: isWiki ? {
+      uri: row.wiki_artifact_uri,
+      path: row.wiki_path,
+      hash: row.wiki_content_hash,
+      shard_key: row.wiki_path
+    } : null,
+    provenance,
+    reasons: ["keyword_match"]
+  };
+  result.score = combinedScore(result.scores, result.citation);
+  return result;
+}
+function legacyItemResult(item, keywordScore) {
+  const uri = `knowledge://item/${encodeURIComponent(item.id)}`;
+  const result = {
+    kind: "legacy_item",
+    id: item.id,
+    title: item.title,
+    text: item.content,
+    score: 0,
+    scores: { keyword: keywordScore },
+    source: {
+      uri,
+      ref: uri,
+      kind: "legacy_item",
+      revision: null,
+      hash: null
+    },
+    citation: null,
+    artifact: null,
+    provenance: null,
+    reasons: ["legacy_note_match", "keyword_match"]
+  };
+  result.score = combinedScore(result.scores, result.citation);
+  return result;
+}
+function wikiPageResult(row, terms) {
+  const metadata = parseJsonObject4(row.metadata_json);
+  const score = catalogScore(`${row.path} ${row.title} ${row.artifact_uri ?? ""} ${row.metadata_json}`.toLowerCase(), terms);
+  const result = {
+    kind: "wiki_page",
+    id: row.id,
+    title: row.title,
+    text: null,
+    score: 0,
+    scores: { catalog: score },
+    source: null,
+    citation: null,
+    artifact: {
+      uri: row.artifact_uri,
+      path: row.path,
+      hash: row.content_hash,
+      shard_key: row.path
+    },
+    provenance: existingProvenance(metadata),
+    reasons: ["wiki_catalog_match"]
+  };
+  result.score = combinedScore(result.scores, result.citation);
+  return result;
+}
+function indexResult(row, terms) {
+  const metadata = parseJsonObject4(row.metadata_json);
+  const score = catalogScore(`${row.kind} ${row.name} ${row.shard_key ?? ""} ${row.artifact_uri ?? ""} ${row.metadata_json}`.toLowerCase(), terms);
+  const result = {
+    kind: "knowledge_index",
+    id: row.id,
+    title: row.name,
+    text: null,
+    score: 0,
+    scores: { catalog: score },
+    source: null,
+    citation: null,
+    artifact: {
+      uri: row.artifact_uri,
+      path: metadataString3(metadata, ["artifact_key"]),
+      hash: metadataString3(metadata, ["content_hash"]),
+      shard_key: row.shard_key
+    },
+    provenance: existingProvenance(metadata),
+    reasons: ["index_catalog_match"]
+  };
+  result.score = combinedScore(result.scores, result.citation);
+  return result;
+}
+function mergeResult(results, entry) {
+  const key = `${entry.kind}:${entry.id}`;
+  const existing = results.get(key);
+  if (!existing) {
+    results.set(key, entry);
+    return;
+  }
+  existing.scores = {
+    keyword: Math.max(existing.scores.keyword ?? 0, entry.scores.keyword ?? 0) || undefined,
+    semantic: Math.max(existing.scores.semantic ?? 0, entry.scores.semantic ?? 0) || undefined,
+    catalog: Math.max(existing.scores.catalog ?? 0, entry.scores.catalog ?? 0) || undefined
+  };
+  existing.reasons = unique([...existing.reasons, ...entry.reasons]);
+  existing.text = existing.text ?? entry.text;
+  existing.title = existing.title ?? entry.title;
+  existing.source = existing.source ?? entry.source;
+  existing.citation = existing.citation ?? entry.citation;
+  existing.artifact = existing.artifact ?? entry.artifact;
+  existing.provenance = existing.provenance ?? entry.provenance;
+  existing.score = combinedScore(existing.scores, existing.citation);
+}
+function sortResults(results) {
+  const kindOrder = {
+    source_chunk: 0,
+    wiki_chunk: 1,
+    legacy_item: 2,
+    wiki_page: 3,
+    knowledge_index: 4
+  };
+  return results.sort((a, b) => {
+    if (b.score !== a.score)
+      return b.score - a.score;
+    return kindOrder[a.kind] - kindOrder[b.kind] || a.id.localeCompare(b.id);
+  });
+}
+async function hybridSearch(options) {
+  const query = options.query.trim();
+  if (!query)
+    throw new Error("Search query is required.");
+  const limit = Math.max(1, Math.min(options.limit ?? 10, 100));
+  const offset = Math.max(0, Math.floor(options.offset ?? 0));
+  const window = offset + limit;
+  const terms = queryTerms(query);
+  const ftsMatch = buildFtsMatch(query);
+  const semanticEnabled = options.semantic === true || options.fake === true || Boolean(options.modelRef);
+  const warnings = [];
+  let semanticProvider = null;
+  let semanticModel = null;
+  let semanticDimensions = null;
+  let keywordCount = 0;
+  let catalogCount = 0;
+  let semanticCount = 0;
+  const merged = new Map;
+  migrateKnowledgeDb(options.dbPath);
+  const db = openKnowledgeDb(options.dbPath);
+  try {
+    const ftsDepth = Math.max(window * 3, 20);
+    let ftsRows = selectFtsChunks(db, ftsMatch.and, ftsDepth);
+    if (ftsRows.length === 0 && ftsMatch.or) {
+      ftsRows = selectFtsChunks(db, ftsMatch.or, ftsDepth);
+    }
+    keywordCount = ftsRows.length;
+    ftsRows.forEach((row, index) => mergeResult(merged, chunkResult(row, scoreFromRank(row.rank, index))));
+    const wikiRows = selectWikiPages(db, terms, Math.max(window, 10));
+    const indexRows = selectKnowledgeIndexes(db, terms, Math.max(window, 10));
+    const legacyRows = selectLegacyItems(options.legacyStorePath, terms, Math.max(window, 10));
+    catalogCount = wikiRows.length + indexRows.length;
+    keywordCount += legacyRows.length;
+    legacyRows.forEach(({ item, score }) => mergeResult(merged, legacyItemResult(item, score)));
+    wikiRows.forEach((row) => mergeResult(merged, wikiPageResult(row, terms)));
+    indexRows.forEach((row) => mergeResult(merged, indexResult(row, terms)));
+  } finally {
+    db.close();
+  }
+  if (semanticEnabled) {
+    try {
+      const semantic = await searchVectorIndex({
+        dbPath: options.dbPath,
+        query,
+        limit: Math.max(window * 3, 20),
+        config: options.config,
+        env: options.env,
+        modelRef: options.modelRef,
+        dimensions: options.dimensions,
+        fake: options.fake,
+        batchSize: options.batchSize,
+        maxParallelCalls: options.maxParallelCalls
+      });
+      semanticProvider = semantic.provider;
+      semanticModel = semantic.model;
+      semanticDimensions = semantic.dimensions;
+      semanticCount = semantic.results.length;
+      for (const row of semantic.results) {
+        const result = {
+          kind: "source_chunk",
+          id: row.chunk_id,
+          title: null,
+          text: row.text,
+          score: 0,
+          scores: { semantic: semanticScore(row.score) },
+          source: {
+            uri: row.source_uri,
+            ref: row.source_ref,
+            kind: row.provenance?.source_kind ?? null,
+            revision: row.revision,
+            hash: row.hash
+          },
+          citation: {
+            chunk_id: row.chunk_id,
+            start_offset: row.provenance?.start_offset ?? null,
+            end_offset: row.provenance?.end_offset ?? null
+          },
+          artifact: null,
+          provenance: row.provenance,
+          reasons: ["semantic_match"]
+        };
+        result.score = combinedScore(result.scores, result.citation);
+        mergeResult(merged, result);
+      }
+    } catch (error) {
+      warnings.push(`semantic_search_failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  const ranked = sortResults(Array.from(merged.values()));
+  const results = ranked.slice(offset, offset + limit);
+  return {
+    query,
+    limit,
+    offset,
+    mode: {
+      keyword: true,
+      catalog: true,
+      semantic: semanticEnabled
+    },
+    semantic_provider: semanticProvider,
+    semantic_model: semanticModel,
+    semantic_dimensions: semanticDimensions,
+    counts: {
+      keyword_results: keywordCount,
+      catalog_results: catalogCount,
+      semantic_results: semanticCount,
+      merged_results: results.length
+    },
+    warnings,
+    results
+  };
+}
+async function hybridSearchLegacyStore(options) {
+  return hybridSearchItems(readLegacyItems(options.legacyStorePath), options, ["knowledge_db_missing"]);
+}
+async function hybridSearchItems(items, options, baseWarnings = []) {
+  const query = options.query.trim();
+  if (!query)
+    throw new Error("Search query is required.");
+  const limit = Math.max(1, Math.min(options.limit ?? 10, 100));
+  const offset = Math.max(0, Math.floor(options.offset ?? 0));
+  const terms = queryTerms(query);
+  const semanticEnabled = options.semantic === true || options.fake === true || Boolean(options.modelRef);
+  const merged = new Map;
+  const itemRows = selectItems(items, terms, Math.max(offset + limit, 10));
+  itemRows.forEach(({ item, score }) => mergeResult(merged, legacyItemResult(item, score)));
+  const warnings = [...baseWarnings];
+  if (semanticEnabled)
+    warnings.push("semantic_search_requires_local_catalog");
+  const results = sortResults(Array.from(merged.values())).slice(offset, offset + limit);
+  return {
+    query,
+    limit,
+    offset,
+    mode: {
+      keyword: true,
+      catalog: true,
+      semantic: semanticEnabled
+    },
+    semantic_provider: null,
+    semantic_model: null,
+    semantic_dimensions: null,
+    counts: {
+      keyword_results: itemRows.length,
+      catalog_results: 0,
+      semantic_results: 0,
+      merged_results: results.length
+    },
+    warnings,
+    results
+  };
+}
+function hybridSearchFromProducerPage(hits, options, warnings = [], producerTotal = hits.length) {
+  const query = options.query.trim();
+  if (!query)
+    throw new Error("Search query is required.");
+  const limit = Math.max(1, Math.min(options.limit ?? 10, 100));
+  const offset = Math.max(0, Math.floor(options.offset ?? 0));
+  const results = hits.map(({ item, rank }) => legacyItemResult(item, rank));
+  return {
+    query,
+    limit,
+    offset,
+    mode: {
+      keyword: true,
+      catalog: true,
+      semantic: options.semantic === true
+    },
+    semantic_provider: null,
+    semantic_model: null,
+    semantic_dimensions: null,
+    counts: {
+      keyword_results: producerTotal,
+      catalog_results: 0,
+      semantic_results: 0,
+      merged_results: results.length
+    },
+    warnings,
+    results
+  };
+}
+
+// src/retrieval.ts
+function stableId4(prefix, value) {
+  return `${prefix}_${createHash8("sha256").update(value).digest("hex").slice(0, 20)}`;
+}
+function normalizeQuery(query) {
+  return query.normalize("NFKC").trim().replace(/\s+/g, " ").toLowerCase();
+}
+function queryTerms2(query) {
+  return Array.from(new Set(normalizeQuery(query).match(/[\p{L}\p{N}_]+/gu) ?? [])).slice(0, 16);
+}
+function textForResult(result) {
+  return [result.title, result.text].filter(Boolean).join(" ").toLowerCase();
+}
+function exactScore(result, terms) {
+  if (terms.length === 0)
+    return 0;
+  const text = textForResult(result);
+  const matched = terms.filter((term) => text.includes(term)).length;
+  return Number((matched / terms.length).toFixed(6));
+}
+function hasReadOnlyProvenance(provenance) {
+  if (!provenance)
+    return true;
+  if ("read_only" in provenance)
+    return provenance.read_only === true;
+  if ("read_only_sources" in provenance)
+    return provenance.read_only_sources === true;
+  return true;
+}
+function isStale(provenance) {
+  if (!provenance)
+    return false;
+  if ("stale" in provenance && provenance.stale)
+    return true;
+  if ("status" in provenance)
+    return isStaleStatus(provenance.status);
+  return false;
+}
+function freshnessScore(result) {
+  if (isStale(result.provenance))
+    return 0;
+  if (result.source?.hash || result.source?.revision)
+    return 1;
+  if (result.artifact?.hash)
+    return 0.85;
+  if (result.provenance && "source_refs" in result.provenance && result.provenance.source_refs.length > 0)
+    return 0.75;
+  return 0.55;
+}
+function citationScore(result) {
+  if (result.citation?.chunk_id && (result.source?.uri || result.artifact?.uri))
+    return 1;
+  if (result.provenance && "citation_required" in result.provenance && result.provenance.citation_required)
+    return 0.75;
+  if (result.artifact?.uri)
+    return 0.65;
+  return 0.35;
+}
+function authorityScore(result) {
+  if (result.kind === "wiki_chunk")
+    return 0.85;
+  if (result.kind === "source_chunk")
+    return 0.8;
+  if (result.kind === "legacy_item")
+    return 0.6;
+  if (result.kind === "wiki_page")
+    return 0.65;
+  return 0.55;
+}
+function rerank(result, terms) {
+  const scores = {
+    base_score: result.score,
+    exact_score: exactScore(result, terms),
+    citation_score: citationScore(result),
+    freshness_score: freshnessScore(result),
+    authority_score: authorityScore(result)
+  };
+  const final = Math.min(1, scores.base_score * 0.65 + scores.exact_score * 0.1 + scores.citation_score * 0.1 + scores.freshness_score * 0.1 + scores.authority_score * 0.05);
+  const reasons = new Set(result.reasons);
+  if (scores.exact_score > 0.5)
+    reasons.add("exact_term");
+  if (scores.citation_score >= 0.75)
+    reasons.add("cited_source");
+  if (scores.freshness_score >= 0.85)
+    reasons.add("fresh_source");
+  return {
+    ...result,
+    score: Number(final.toFixed(6)),
+    reasons: Array.from(reasons),
+    rerank: {
+      ...scores,
+      final_score: Number(final.toFixed(6))
+    }
+  };
+}
+function quoteFor(result, maxChars) {
+  const source = result.text ?? result.title;
+  if (!source)
+    return null;
+  const normalized = source.replace(/\s+/g, " ").trim();
+  return normalized.length <= maxChars ? normalized : `${normalized.slice(0, Math.max(0, maxChars - 1)).trim()}...`;
+}
+function citationFor(result) {
+  const id = stableId4("cite", `${result.kind}\x00${result.id}\x00${result.source?.uri ?? ""}\x00${result.artifact?.uri ?? ""}`);
+  return {
+    id,
+    result_id: result.id,
+    kind: result.kind,
+    source_uri: result.source?.uri ?? null,
+    source_ref: result.source?.ref ?? null,
+    artifact_uri: result.artifact?.uri ?? null,
+    artifact_path: result.artifact?.path ?? null,
+    revision: result.source?.revision ?? null,
+    hash: result.source?.hash ?? result.artifact?.hash ?? null,
+    chunk_id: result.citation?.chunk_id ?? null,
+    start_offset: result.citation?.start_offset ?? null,
+    end_offset: result.citation?.end_offset ?? null,
+    quote: quoteFor(result, 500),
+    provenance: result.provenance
+  };
+}
+function excerptFor(result, citation, contextChars) {
+  const text = quoteFor(result, contextChars);
+  if (!text)
+    return null;
+  return {
+    id: stableId4("excerpt", `${result.kind}\x00${result.id}`),
+    result_id: result.id,
+    citation_id: citation.id,
+    kind: result.kind,
+    text,
+    score: result.score
+  };
+}
+function placeholders(values) {
+  return values.map(() => "?").join(", ");
+}
+function loadGraphEvidence(dbPath, results) {
+  const chunkIds = results.map((result) => result.citation?.chunk_id).filter((id) => Boolean(id));
+  const wikiPageIds = results.filter((result) => result.kind === "wiki_page").map((result) => result.id);
+  const citations = [];
+  const backlinks = [];
+  if (chunkIds.length === 0 && wikiPageIds.length === 0)
+    return { citations, backlinks };
+  const db = openKnowledgeDb(dbPath);
+  try {
+    if (chunkIds.length > 0) {
+      citations.push(...db.query(`SELECT id, wiki_page_id, chunk_id, source_uri, quote, start_offset, end_offset
+         FROM citations
+         WHERE chunk_id IN (${placeholders(chunkIds)})
+         ORDER BY created_at DESC
+         LIMIT 50`).all(...chunkIds));
+    }
+    if (wikiPageIds.length > 0) {
+      citations.push(...db.query(`SELECT id, wiki_page_id, chunk_id, source_uri, quote, start_offset, end_offset
+         FROM citations
+         WHERE wiki_page_id IN (${placeholders(wikiPageIds)})
+         ORDER BY created_at DESC
+         LIMIT 50`).all(...wikiPageIds));
+      backlinks.push(...db.query(`SELECT from_page_id, to_page_id, label
+         FROM wiki_backlinks
+         WHERE from_page_id IN (${placeholders(wikiPageIds)}) OR to_page_id IN (${placeholders(wikiPageIds)})
+         LIMIT 50`).all(...wikiPageIds, ...wikiPageIds));
+    }
+  } finally {
+    db.close();
+  }
+  return { citations, backlinks };
+}
+function retrieveKnowledgeContextFromSearch(search, options = {}) {
+  const contextChars = Math.max(200, Math.min(options.contextChars ?? 1200, 4000));
+  const terms = queryTerms2(search.query);
+  const warnings = [...search.warnings];
+  const permissionNotes = new Set;
+  const freshnessNotes = new Set;
+  const filtered = search.results.filter((result) => {
+    if (!hasReadOnlyProvenance(result.provenance)) {
+      warnings.push(`permission_filtered: ${result.kind}:${result.id}`);
+      permissionNotes.add("Dropped a result because provenance was not read-only.");
+      return false;
+    }
+    if (isStale(result.provenance)) {
+      warnings.push(`stale_filtered: ${result.kind}:${result.id}`);
+      freshnessNotes.add("Dropped a stale result whose source status requires reindexing.");
+      return false;
+    }
+    return true;
+  });
+  const results = filtered.map((result) => rerank(result, terms)).sort((a, b) => b.score - a.score || a.id.localeCompare(b.id)).slice(0, search.limit);
+  const citations = results.map(citationFor);
+  const excerpts = results.map((result, index) => excerptFor(result, citations[index], contextChars)).filter((entry) => Boolean(entry));
+  for (const result of results) {
+    if (result.provenance && "read_only" in result.provenance && result.provenance.read_only) {
+      permissionNotes.add("All source-backed excerpts are read-only and citation-required.");
+    }
+    if (result.rerank.freshness_score >= 0.85) {
+      freshnessNotes.add("Fresh source revision/hash or artifact hash is present for top context.");
+    }
+  }
+  return {
+    query: search.query,
+    normalized_query: normalizeQuery(search.query),
+    created_at: new Date().toISOString(),
+    mode: search.mode,
+    warnings,
+    search_counts: search.counts,
+    results,
+    citations,
+    excerpts,
+    graph: options.dbPath ? loadGraphEvidence(options.dbPath, results) : { citations: [], backlinks: [] },
+    notes: {
+      permissions: Array.from(permissionNotes),
+      freshness: Array.from(freshnessNotes)
+    }
+  };
+}
+async function retrieveKnowledgeContext(options) {
+  const search = await hybridSearch(options);
+  return retrieveKnowledgeContextFromSearch(search, {
+    dbPath: options.dbPath,
+    contextChars: options.contextChars
+  });
+}
+async function retrieveKnowledgeContextFromItems(items, options) {
+  const search = await hybridSearchItems(items, options);
+  return retrieveKnowledgeContextFromSearch(search, { contextChars: options.contextChars });
+}
+
+// src/agent.ts
+function estimateTokens(text) {
+  const words = text.trim().split(/\s+/).filter(Boolean).length;
+  return Math.max(1, Math.ceil(words * 1.25));
+}
+function citationLabel(index) {
+  return `C${index + 1}`;
+}
+function localAnswer(prompt, context) {
+  if (context.excerpts.length === 0) {
+    return `No indexed knowledge matched the prompt: ${prompt}`;
+  }
+  const lines = [
+    `Found ${context.excerpts.length} relevant knowledge excerpt(s) for: ${prompt}`,
+    "",
+    ...context.excerpts.slice(0, 5).map((excerpt, index) => {
+      const citation = context.citations.find((entry) => entry.id === excerpt.citation_id);
+      const ref = citation?.source_ref ?? citation?.source_uri ?? citation?.artifact_path ?? citation?.artifact_uri ?? "unknown source";
+      return `[${citationLabel(index)}] ${excerpt.text} (${ref})`;
+    })
+  ];
+  return lines.join(`
+`);
+}
+function promptForModel(prompt, context) {
+  const citations = context.citations.map((citation, index) => ({
+    id: citationLabel(index),
+    source_ref: citation.source_ref,
+    source_uri: citation.source_uri,
+    artifact_path: citation.artifact_path,
+    revision: citation.revision,
+    hash: citation.hash,
+    quote: citation.quote
+  }));
+  const excerpts = context.excerpts.map((excerpt, index) => ({
+    id: citationLabel(index),
+    kind: excerpt.kind,
+    text: excerpt.text,
+    score: excerpt.score
+  }));
+  return [
+    `Prompt: ${prompt}`,
+    "",
+    "Use only the provided context. Cite claims with citation ids like [C1]. If context is insufficient, say what is missing.",
+    "",
+    `Context excerpts:
+${JSON.stringify(excerpts, null, 2)}`,
+    "",
+    `Citations:
+${JSON.stringify(citations, null, 2)}`
+  ].join(`
+`);
+}
+function proposedUpdates(prompt, context) {
+  if (context.citations.length === 0)
+    return [];
+  return [{
+    kind: "answer_note",
+    title: prompt.length > 80 ? `${prompt.slice(0, 77)}...` : prompt,
+    citations: context.citations.map((citation) => citation.id),
+    requires_approval: true
+  }];
+}
+function insertRun(dbPath, input) {
+  const db = openKnowledgeDb(dbPath);
+  try {
+    db.run(`INSERT INTO runs (id, type, prompt, status, provider, model, metadata_json, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
+      input.runId,
+      "knowledge-prompt",
+      input.prompt,
+      input.status,
+      input.provider,
+      input.model,
+      JSON.stringify(input.metadata),
+      input.now,
+      input.now
+    ]);
+  } finally {
+    db.close();
+  }
+}
+function addRunEvent(dbPath, input) {
+  const db = openKnowledgeDb(dbPath);
+  try {
+    db.run(`INSERT INTO run_events (id, run_id, level, event, metadata_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`, [
+      `evt_${randomUUID5()}`,
+      input.runId,
+      input.level,
+      input.event,
+      JSON.stringify(input.metadata),
+      input.now
+    ]);
+  } finally {
+    db.close();
+  }
+}
+function updateRun(dbPath, input) {
+  const db = openKnowledgeDb(dbPath);
+  try {
+    db.run(`UPDATE runs
+       SET status = ?, provider = ?, model = ?, metadata_json = ?, updated_at = ?
+       WHERE id = ?`, [
+      input.status,
+      input.provider,
+      input.model,
+      JSON.stringify(input.metadata),
+      input.now,
+      input.runId
+    ]);
+  } finally {
+    db.close();
+  }
+}
+function recordUsage(dbPath, runId, usage, provider, model, now, metadata = {}) {
+  const db = openKnowledgeDb(dbPath);
+  try {
+    recordProviderUsage(db, {
+      run_id: runId,
+      provider,
+      model,
+      input_tokens: usage.input_tokens,
+      output_tokens: usage.output_tokens,
+      cost_usd: usage.cost_usd,
+      metadata,
+      created_at: now
+    });
+  } finally {
+    db.close();
+  }
+}
+async function runKnowledgePrompt(options) {
+  const prompt = options.prompt.trim();
+  if (!prompt)
+    throw new Error("Knowledge prompt is required.");
+  const now = (options.now ?? new Date).toISOString();
+  const runId = `run_${randomUUID5()}`;
+  const modelRef = resolveModelRef(options.modelRef ?? "default", options.config);
+  const parsed = parseModelRef(modelRef);
+  migrateKnowledgeDb(options.dbPath);
+  insertRun(options.dbPath, {
+    runId,
+    prompt,
+    status: options.generate ? "running" : "dry_run",
+    provider: options.generate ? parsed.provider : "local",
+    model: options.generate ? parsed.model : "context-draft",
+    metadata: {
+      semantic: options.semantic === true || options.fake === true || Boolean(options.modelRef),
+      approve_write: options.approveWrite === true,
+      generated: options.generate === true
+    },
+    now
+  });
+  const { prompt: _prompt, generate: _generate, approveWrite: _approveWrite, now: _now, ...retrievalOptions } = options;
+  const context = await retrieveKnowledgeContext({
+    ...retrievalOptions,
+    query: prompt
+  });
+  addRunEvent(options.dbPath, {
+    runId,
+    level: "info",
+    event: "context_retrieved",
+    metadata: {
+      results: context.results.length,
+      citations: context.citations.length,
+      warnings: context.warnings
+    },
+    now
+  });
+  let answer = localAnswer(prompt, context);
+  let generated = false;
+  let provider = "local";
+  let model = "context-draft";
+  let usage = {
+    input_tokens: estimateTokens(prompt) + context.excerpts.reduce((sum, excerpt) => sum + estimateTokens(excerpt.text), 0),
+    output_tokens: estimateTokens(answer),
+    cost_usd: 0
+  };
+  const warnings = [...context.warnings];
+  if (options.generate) {
+    try {
+      if (options.fake) {
+        generated = true;
+        provider = parsed.provider;
+        model = parsed.model;
+        answer = `Fake generated answer for: ${prompt}
+
+${answer}`;
+      } else {
+        const { generateText } = await import("ai");
+        const languageModel = await languageModelFor(modelRef, {
+          config: options.config,
+          env: options.env
+        });
+        const result = await generateText({
+          model: languageModel,
+          system: "You answer company knowledge-base prompts using only provided context and citation ids.",
+          prompt: promptForModel(prompt, context)
+        });
+        generated = true;
+        provider = parsed.provider;
+        model = parsed.model;
+        answer = result.text;
+        const normalized = normalizeAiSdkUsage({
+          provider,
+          model,
+          usage: result.usage,
+          providerMetadata: result.providerMetadata
+        });
+        usage = {
+          input_tokens: normalized.input_tokens,
+          output_tokens: normalized.output_tokens,
+          cost_usd: normalized.cost_usd
+        };
+      }
+    } catch (error) {
+      addRunEvent(options.dbPath, {
+        runId,
+        level: "error",
+        event: "answer_generation_failed",
+        metadata: { message: error instanceof Error ? error.message : String(error) },
+        now
+      });
+      updateRun(options.dbPath, {
+        runId,
+        status: "failed",
+        provider: parsed.provider,
+        model: parsed.model,
+        metadata: {
+          generated: false,
+          error: error instanceof Error ? error.message : String(error)
+        },
+        now
+      });
+      throw error;
+    }
+  }
+  const updates = proposedUpdates(prompt, context);
+  const writePolicy = {
+    approved: options.approveWrite === true,
+    durable_writes_performed: false,
+    reason: options.approveWrite ? "Approval flag recorded; durable wiki writing is deferred to the wiki compile task." : "Dry-run mode: proposed wiki updates require approval before durable writes."
+  };
+  addRunEvent(options.dbPath, {
+    runId,
+    level: "info",
+    event: generated ? "answer_generated" : "answer_drafted",
+    metadata: {
+      provider,
+      model,
+      proposed_updates: updates.length,
+      durable_writes_performed: false
+    },
+    now
+  });
+  recordUsage(options.dbPath, runId, usage, provider, model, now, {
+    generated,
+    citations: context.citations.length
+  });
+  updateRun(options.dbPath, {
+    runId,
+    status: generated ? "completed" : "dry_run",
+    provider,
+    model,
+    metadata: {
+      generated,
+      citations: context.citations.length,
+      proposed_updates: updates.length,
+      approve_write: options.approveWrite === true
+    },
+    now
+  });
+  return {
+    run_id: runId,
+    prompt,
+    generated,
+    provider,
+    model,
+    answer,
+    context,
+    citations: context.citations,
+    proposed_wiki_updates: updates,
+    write_policy: writePolicy,
+    usage,
+    warnings
+  };
+}
+async function runKnowledgePromptOverItems(items, options, producerSearch) {
+  const prompt = options.prompt.trim();
+  if (!prompt)
+    throw new Error("Knowledge prompt is required.");
+  const runId = `run_${randomUUID5()}`;
+  const modelRef = resolveModelRef(options.modelRef ?? "default", options.config);
+  const parsed = parseModelRef(modelRef);
+  const { prompt: _p, generate: _g, approveWrite: _a, now: _n, ...retrievalOptions } = options;
+  const context = producerSearch ? retrieveKnowledgeContextFromSearch(producerSearch, { contextChars: options.contextChars }) : await retrieveKnowledgeContextFromItems(items, {
+    ...retrievalOptions,
+    query: prompt
+  });
+  let answer = localAnswer(prompt, context);
+  let generated = false;
+  let provider = "local";
+  let model = "context-draft";
+  let usage = {
+    input_tokens: estimateTokens(prompt) + context.excerpts.reduce((sum, excerpt) => sum + estimateTokens(excerpt.text), 0),
+    output_tokens: estimateTokens(answer),
+    cost_usd: 0
+  };
+  const warnings = [...context.warnings];
+  if (options.generate) {
+    if (options.fake) {
+      generated = true;
+      provider = parsed.provider;
+      model = parsed.model;
+      answer = `Fake generated answer for: ${prompt}
+
+${answer}`;
+    } else {
+      const { generateText } = await import("ai");
+      const languageModel = await languageModelFor(modelRef, {
+        config: options.config,
+        env: options.env
+      });
+      const result = await generateText({
+        model: languageModel,
+        system: "You answer company knowledge-base prompts using only provided context and citation ids.",
+        prompt: promptForModel(prompt, context)
+      });
+      generated = true;
+      provider = parsed.provider;
+      model = parsed.model;
+      answer = result.text;
+      const normalized = normalizeAiSdkUsage({
+        provider,
+        model,
+        usage: result.usage,
+        providerMetadata: result.providerMetadata
+      });
+      usage = {
+        input_tokens: normalized.input_tokens,
+        output_tokens: normalized.output_tokens,
+        cost_usd: normalized.cost_usd
+      };
+    }
+  }
+  const updates = proposedUpdates(prompt, context);
+  const writePolicy = {
+    approved: options.approveWrite === true,
+    durable_writes_performed: false,
+    reason: options.approveWrite ? "Approval flag recorded; durable wiki writes require the on-box catalog (wiki compile) and are not available through the HTTP client." : "Dry-run mode: proposed wiki updates require approval before durable writes."
+  };
+  return {
+    run_id: runId,
+    prompt,
+    generated,
+    provider,
+    model,
+    answer,
+    context,
+    citations: context.citations,
+    proposed_wiki_updates: updates,
+    write_policy: writePolicy,
+    usage,
+    warnings
+  };
+}
+
+// src/context-pack.ts
+import { createHash as createHash9 } from "crypto";
+var DEFAULT_MAX_TOKENS = 1200;
+var DEFAULT_MAX_ITEMS = 6;
+var MAX_MAX_TOKENS = 12000;
+var MAX_MAX_ITEMS = 50;
+var MIN_MAX_TOKENS = 800;
+function stableId5(prefix, value, size = 16) {
+  return `${prefix}_${createHash9("sha256").update(value).digest("hex").slice(0, size)}`;
+}
+function normalizeText(value) {
+  return value.normalize("NFKC").trim().replace(/\s+/g, " ");
+}
+function normalizedSearchText(value) {
+  return normalizeText(value).toLowerCase();
+}
+function termsFor(value) {
+  return Array.from(new Set(normalizedSearchText(value).match(/[\p{L}\p{N}_]+/gu) ?? [])).slice(0, 24);
+}
+function truncateText(value, maxChars) {
+  const normalized = normalizeText(value);
+  if (normalized.length <= maxChars)
+    return normalized;
+  const ellipsis = "...";
+  if (maxChars <= ellipsis.length)
+    return normalized.slice(0, Math.max(0, maxChars));
+  return `${normalized.slice(0, maxChars - ellipsis.length).trim()}${ellipsis}`;
+}
+function parseJsonObject5(value) {
+  if (!value)
+    return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+function isSecretishKey(key) {
+  return /(?:api[_-]?key|secret|token|password|private[_-]?key|credential)/i.test(key);
+}
+function metadataKeys(metadata) {
+  return Object.keys(metadata).filter((key) => !isSecretishKey(key)).sort().slice(0, 12);
+}
+function rawMetadataRef(metadata, keys) {
+  for (const key of keys) {
+    if (isSecretishKey(key))
+      continue;
+    const value = metadata[key];
+    if (typeof value === "string" && value.trim())
+      return value.trim();
+  }
+  return null;
+}
+function safeRef(value, policy) {
+  if (!value)
+    return null;
+  const redacted = redactSecrets(value, policy).text;
+  try {
+    const parsed = new URL(redacted);
+    const secretParams = ["token", "access_token", "api_key", "apikey", "key", "secret", "password", "signature", "sig"];
+    for (const param of secretParams)
+      parsed.searchParams.delete(param);
+    for (const [key] of parsed.searchParams) {
+      if (isSecretishKey(key))
+        parsed.searchParams.delete(key);
+    }
+    return parsed.toString();
+  } catch {
+    return redacted;
+  }
+}
+function metadataRef(metadata, keys, policy) {
+  return safeRef(rawMetadataRef(metadata, keys), policy);
+}
+function summarizeMetadata(metadata) {
+  const parts = [];
+  for (const key of metadataKeys(metadata).slice(0, 6)) {
+    const value = metadata[key];
+    if (typeof value === "string" && value.trim())
+      parts.push(`${key}=${truncateText(value, 80)}`);
+    else if (typeof value === "number" || typeof value === "boolean")
+      parts.push(`${key}=${String(value)}`);
+    else if (value && typeof value === "object")
+      parts.push(`${key}={...}`);
+  }
+  return parts.join("; ");
+}
+function estimateTokensForText(text) {
+  if (!text.trim())
+    return 0;
+  return Math.max(1, Math.ceil(text.length / 4));
+}
+function estimateTokensForValue(value) {
+  return estimateTokensForText(JSON.stringify(value));
+}
+function coerceMaxTokens(value) {
+  if (!Number.isFinite(value ?? NaN))
+    return DEFAULT_MAX_TOKENS;
+  const floor = Math.floor(value);
+  if (floor < MIN_MAX_TOKENS)
+    throw new Error(`--max-tokens must be at least ${MIN_MAX_TOKENS} for the stable context-pack schema.`);
+  return Math.min(floor, MAX_MAX_TOKENS);
+}
+function coerceMaxItems(value, limit) {
+  const raw = Number.isFinite(value ?? NaN) ? value : limit;
+  if (!Number.isFinite(raw ?? NaN))
+    return DEFAULT_MAX_ITEMS;
+  return Math.max(1, Math.min(Math.floor(raw), MAX_MAX_ITEMS));
+}
+function parseSince(value, now) {
+  if (!value)
+    return { cutoff: null, warning: null };
+  const trimmed = value.trim();
+  const duration = /^(\d+)\s*([mhdw])$/i.exec(trimmed);
+  if (duration) {
+    const amount = Number(duration[1]);
+    const unit = duration[2].toLowerCase();
+    const multiplier = unit === "m" ? 60000 : unit === "h" ? 3600000 : unit === "d" ? 86400000 : 604800000;
+    return { cutoff: new Date(now.getTime() - amount * multiplier).toISOString(), warning: null };
+  }
+  const parsed = new Date(trimmed);
+  if (!Number.isNaN(parsed.getTime()))
+    return { cutoff: parsed.toISOString(), warning: null };
+  return { cutoff: null, warning: `invalid_since_ignored: ${trimmed}` };
+}
+function redactPreview(text, policy, maxChars) {
+  const redacted = redactSecrets(text, policy);
+  return {
+    text: truncateText(redacted.text, maxChars),
+    redactions: redacted.findings.length
+  };
+}
+function scoreAgainstTopic(text, terms) {
+  if (terms.length === 0)
+    return 0.5;
+  const haystack = normalizedSearchText(text);
+  const matched = terms.filter((term) => haystack.includes(term)).length;
+  return Number((matched / terms.length).toFixed(6));
+}
+function baseSafetyReminders(source) {
+  return [
+    "This pack is read-only and performs no durable writes.",
+    "Use citation ids and refs instead of pasting raw artifacts into prompts.",
+    "Resolve source or artifact refs explicitly only when raw content is needed and allowed.",
+    "Run generated knowledge writes through approval-gated commands before applying.",
+    source === "loops" || source === "runs" ? "Run evidence is summarized from knowledge run ledgers; raw run artifacts remain referenced, not embedded." : "Search evidence is derived from indexed chunks/wiki catalog rows with citation metadata."
+  ];
+}
+function citationFromRetrieval(index, citation, policy) {
+  const sourceRef = safeRef(citation.source_ref, policy);
+  const sourceUri = safeRef(citation.source_uri, policy);
+  const artifactUri = safeRef(citation.artifact_uri, policy);
+  const artifactPath = safeRef(citation.artifact_path, policy);
+  const ref = sourceRef ?? sourceUri ?? artifactPath ?? artifactUri ?? citation.id;
+  const quote = citation.quote ? redactPreview(citation.quote, policy, index < 3 ? 220 : 140) : null;
+  return {
+    citation: {
+      id: stableId5("cite", `${citation.id}\x00${ref}`, 12),
+      kind: citation.artifact_uri || citation.artifact_path ? "artifact" : "source",
+      ref,
+      source_ref: sourceRef,
+      source_uri: sourceUri,
+      artifact_uri: artifactUri,
+      artifact_path: artifactPath,
+      run_id: null,
+      run_event_id: null,
+      revision: citation.revision ?? null,
+      hash: citation.hash ?? null,
+      chunk_id: citation.chunk_id ?? null,
+      offsets: {
+        start: citation.start_offset ?? null,
+        end: citation.end_offset ?? null
+      },
+      quote_preview: quote?.text ?? null
+    },
+    redactions: quote?.redactions ?? 0
+  };
+}
+async function buildSearchDraft(options, maxItems) {
+  const query = (options.query ?? options.topic ?? "").trim();
+  if (!query)
+    throw new Error("Context pack query is required for search source.");
+  const {
+    config,
+    dbPath,
+    limit,
+    semantic,
+    modelRef,
+    dimensions,
+    fake,
+    env,
+    batchSize,
+    maxParallelCalls,
+    legacyStorePath
+  } = options;
+  const context = await retrieveKnowledgeContext({
+    dbPath,
+    config,
+    legacyStorePath,
+    query,
+    limit: Math.max(maxItems, limit ?? maxItems),
+    semantic,
+    modelRef,
+    dimensions,
+    fake,
+    env,
+    batchSize,
+    maxParallelCalls,
+    contextChars: Math.min(options.contextChars ?? 700, 1200)
+  });
+  const citationMap = new Map;
+  let redactions = 0;
+  context.citations.forEach((citation, index) => {
+    const item = citationFromRetrieval(index, citation, options.safetyPolicy);
+    redactions += item.redactions;
+    citationMap.set(citation.id, item.citation);
+  });
+  const evidence = context.excerpts.slice(0, Math.max(maxItems * 2, maxItems)).map((excerpt) => {
+    const result = context.results.find((entry) => entry.id === excerpt.result_id);
+    const citation = excerpt.citation_id ? citationMap.get(excerpt.citation_id) : null;
+    const redacted = redactPreview(excerpt.text, options.safetyPolicy, 520);
+    redactions += redacted.redactions;
+    const title = result?.title ?? citation?.ref ?? excerpt.kind;
+    return {
+      id: stableId5("ev", `${excerpt.kind}\x00${excerpt.result_id}\x00${excerpt.citation_id ?? ""}`, 14),
+      kind: excerpt.kind,
+      title: truncateText(title, 100),
+      text_preview: redacted.text,
+      score: Number(excerpt.score.toFixed(6)),
+      citation_ids: citation ? [citation.id] : [],
+      provenance: {
+        source: "search",
+        record_ref: `${excerpt.kind}:${excerpt.result_id}`,
+        created_at: context.created_at,
+        updated_at: null,
+        metadata_keys: []
+      }
+    };
+  });
+  const usedCitationIds = new Set(evidence.flatMap((entry) => entry.citation_ids));
+  const citations = Array.from(citationMap.values()).filter((citation) => usedCitationIds.has(citation.id));
+  return {
+    citations,
+    evidence,
+    duplicateCandidates: [],
+    redactions,
+    warnings: context.warnings,
+    available: context.excerpts.length
+  };
+}
+function loadRunRows(db, cutoff, limit) {
+  if (cutoff) {
+    return db.query(`SELECT id, type, prompt, status, provider, model, cost_tokens, cost_usd, metadata_json, created_at, updated_at
+       FROM runs
+       WHERE updated_at >= ? OR created_at >= ?
+       ORDER BY updated_at DESC, created_at DESC
+       LIMIT ?`).all(cutoff, cutoff, limit);
+  }
+  return db.query(`SELECT id, type, prompt, status, provider, model, cost_tokens, cost_usd, metadata_json, created_at, updated_at
+     FROM runs
+     ORDER BY updated_at DESC, created_at DESC
+     LIMIT ?`).all(limit);
+}
+function loadRunEvents(db, runIds, limit) {
+  if (runIds.length === 0)
+    return [];
+  const placeholders2 = runIds.map(() => "?").join(", ");
+  return db.query(`SELECT id, run_id, level, event, metadata_json, created_at
+     FROM run_events
+     WHERE run_id IN (${placeholders2})
+     ORDER BY created_at DESC
+     LIMIT ?`).all(...runIds, limit);
+}
+function rowMentionsLoop(row, events) {
+  const text = `${row.type} ${row.metadata_json} ${events.map((event) => `${event.event} ${event.metadata_json}`).join(" ")}`.toLowerCase();
+  return text.includes("loop");
+}
+function citationForRun(row, metadata, policy) {
+  const sourceRef = metadataRef(metadata, ["source_ref", "source_uri", "evidence_uri", "receipt_uri"], policy);
+  const artifactUri = metadataRef(metadata, ["artifact_uri"], policy);
+  const artifactPath = metadataRef(metadata, ["artifact_path", "artifact_key"], policy);
+  const ref = sourceRef ?? artifactUri ?? artifactPath ?? `knowledge://project/runs/${row.id}`;
+  const quote = row.prompt ? redactPreview(row.prompt, policy, 180).text : null;
+  return {
+    id: stableId5("cite", `run\x00${row.id}\x00${ref}`, 12),
+    kind: artifactUri || artifactPath ? "artifact" : "run",
+    ref,
+    source_ref: sourceRef?.startsWith("open-files://") ? sourceRef : null,
+    source_uri: sourceRef && !sourceRef.startsWith("open-files://") ? sourceRef : null,
+    artifact_uri: artifactUri,
+    artifact_path: artifactPath,
+    run_id: row.id,
+    run_event_id: null,
+    revision: metadataRef(metadata, ["revision"], policy),
+    hash: metadataRef(metadata, ["hash", "content_hash"], policy),
+    chunk_id: null,
+    offsets: { start: null, end: null },
+    quote_preview: quote
+  };
+}
+function citationForEvent(row, metadata, policy) {
+  const sourceRef = metadataRef(metadata, ["source_ref", "source_uri", "evidence_uri", "receipt_uri"], policy);
+  const artifactUri = metadataRef(metadata, ["artifact_uri"], policy);
+  const artifactPath = metadataRef(metadata, ["artifact_path", "artifact_key"], policy);
+  const ref = sourceRef ?? artifactUri ?? artifactPath ?? `knowledge://project/runs/${row.run_id}`;
+  const quote = redactPreview(row.event, policy, 160).text;
+  return {
+    id: stableId5("cite", `event\x00${row.id}\x00${ref}`, 12),
+    kind: artifactUri || artifactPath ? "artifact" : "run_event",
+    ref,
+    source_ref: sourceRef?.startsWith("open-files://") ? sourceRef : null,
+    source_uri: sourceRef && !sourceRef.startsWith("open-files://") ? sourceRef : null,
+    artifact_uri: artifactUri,
+    artifact_path: artifactPath,
+    run_id: row.run_id,
+    run_event_id: row.id,
+    revision: metadataRef(metadata, ["revision"], policy),
+    hash: metadataRef(metadata, ["hash", "content_hash"], policy),
+    chunk_id: null,
+    offsets: { start: null, end: null },
+    quote_preview: quote
+  };
+}
+function duplicateCandidatesFor(evidence) {
+  const groups = new Map;
+  for (const entry of evidence) {
+    const key = normalizedSearchText(`${entry.title} ${entry.text_preview}`).replace(/\b(?:file|https?|s3):\/\/\S+/g, "").replace(/\b(?:run|evt|task|loop)_[a-z0-9_]+\b/g, "").replace(/[^a-z0-9 ]+/g, "").replace(/\b(?:run|event|completed|dry_run|pending)\b/g, "").replace(/\s+/g, " ").trim().slice(0, 220);
+    if (!key)
+      continue;
+    groups.set(key, [...groups.get(key) ?? [], entry.id]);
+  }
+  return Array.from(groups.entries()).filter(([, ids]) => ids.length > 1).map(([key, ids]) => ({
+    id: stableId5("dup", key, 12),
+    reason: "normalized_text_match",
+    evidence_ids: ids,
+    confidence: ids.length > 2 ? "high" : "medium"
+  }));
+}
+async function buildRunDraft(options, maxItems, now) {
+  const source = options.source === "loops" ? "loops" : "runs";
+  const topic = (options.topic ?? options.query ?? "").trim();
+  const topicTerms = termsFor(topic);
+  const since = parseSince(options.since, now);
+  const warnings = since.warning ? [since.warning] : [];
+  migrateKnowledgeDb(options.dbPath);
+  const db = openKnowledgeDb(options.dbPath);
+  try {
+    const runRows = loadRunRows(db, since.cutoff, Math.max(maxItems * 8, 40));
+    const allEvents = loadRunEvents(db, runRows.map((row) => row.id), Math.max(maxItems * 12, 80));
+    const eventsByRun = new Map;
+    for (const event of allEvents)
+      eventsByRun.set(event.run_id, [...eventsByRun.get(event.run_id) ?? [], event]);
+    const filteredRuns = source === "loops" ? runRows.filter((row) => rowMentionsLoop(row, eventsByRun.get(row.id) ?? [])) : runRows;
+    const scoredRuns = filteredRuns.map((row) => {
+      const metadata = parseJsonObject5(row.metadata_json);
+      const text = `${row.type} ${row.status} ${row.prompt ?? ""} ${summarizeMetadata(metadata)} ${(eventsByRun.get(row.id) ?? []).map((event) => `${event.event} ${event.metadata_json}`).join(" ")}`;
+      return { row, metadata, score: scoreAgainstTopic(text, topicTerms), text };
+    }).filter((entry) => topicTerms.length === 0 || entry.score > 0).sort((a, b) => b.score - a.score || b.row.updated_at.localeCompare(a.row.updated_at) || a.row.id.localeCompare(b.row.id));
+    const citations = [];
+    const evidence = [];
+    let redactions = 0;
+    for (const entry of scoredRuns.slice(0, Math.max(maxItems * 2, maxItems))) {
+      const citation = citationForRun(entry.row, entry.metadata, options.safetyPolicy);
+      citations.push(citation);
+      const metadataSummary = summarizeMetadata(entry.metadata);
+      const previewInput = [entry.row.prompt, metadataSummary].filter(Boolean).join(" | ") || `${entry.row.type} ${entry.row.status}`;
+      const preview2 = redactPreview(previewInput, options.safetyPolicy, 420);
+      redactions += preview2.redactions;
+      evidence.push({
+        id: `run:${entry.row.id}`,
+        kind: entry.row.type,
+        title: truncateText(`${entry.row.type}: ${entry.row.status}`, 100),
+        text_preview: preview2.text,
+        score: entry.score,
+        citation_ids: [citation.id],
+        provenance: {
+          source,
+          record_ref: `knowledge://project/runs/${entry.row.id}`,
+          created_at: entry.row.created_at,
+          updated_at: entry.row.updated_at,
+          metadata_keys: metadataKeys(entry.metadata)
+        }
+      });
+      const eventRows = (eventsByRun.get(entry.row.id) ?? []).map((event) => {
+        const metadata = parseJsonObject5(event.metadata_json);
+        const text = `${event.event} ${summarizeMetadata(metadata)} ${event.metadata_json}`;
+        return { event, metadata, score: scoreAgainstTopic(text, topicTerms), text };
+      }).filter((eventEntry) => topicTerms.length === 0 || eventEntry.score > 0).sort((a, b) => b.score - a.score || b.event.created_at.localeCompare(a.event.created_at) || a.event.id.localeCompare(b.event.id)).slice(0, 2);
+      for (const eventEntry of eventRows) {
+        const eventCitation = citationForEvent(eventEntry.event, eventEntry.metadata, options.safetyPolicy);
+        citations.push(eventCitation);
+        const preview3 = redactPreview(`${eventEntry.event}: ${summarizeMetadata(eventEntry.metadata)}`, options.safetyPolicy, 320);
+        redactions += preview3.redactions;
+        evidence.push({
+          id: `event:${eventEntry.event.id}`,
+          kind: `run_event:${eventEntry.event.level}`,
+          title: truncateText(eventEntry.event.event, 100),
+          text_preview: preview3.text,
+          score: eventEntry.score,
+          citation_ids: [eventCitation.id],
+          provenance: {
+            source,
+            record_ref: `knowledge://project/runs/${eventEntry.event.run_id}`,
+            created_at: eventEntry.event.created_at,
+            updated_at: null,
+            metadata_keys: metadataKeys(eventEntry.metadata)
+          }
+        });
+      }
+    }
+    return {
+      citations,
+      evidence,
+      duplicateCandidates: options.dedupe ? duplicateCandidatesFor(evidence) : [],
+      redactions,
+      warnings,
+      available: scoredRuns.length
+    };
+  } finally {
+    db.close();
+  }
+}
+function outlineFor(input) {
+  const title = input.purpose === "proposal" ? `Proposal context: ${truncateText(input.query || "loop evidence", 80)}` : `Knowledge context: ${truncateText(input.query, 80)}`;
+  const evidenceIds = input.evidence.slice(0, 8).map((entry) => entry.id);
+  const duplicateIds = input.duplicates.slice(0, 5).map((entry) => entry.id);
+  const bullets = input.evidence.slice(0, 5).map((entry) => `${entry.id}: ${entry.title}`);
+  if (input.evidence.length === 0)
+    bullets.push("No matching bounded evidence was found.");
+  return {
+    title,
+    bullets,
+    evidence_ids: evidenceIds,
+    duplicate_candidate_ids: duplicateIds,
+    next_actions: input.source === "loops" ? [
+      "Review duplicate_candidates before drafting a new proposal.",
+      "Use cited run refs for provenance; inspect a run only when more detail is needed.",
+      "Keep proposal writes approval-gated and idempotent."
+    ] : [
+      "Use evidence_ids and citation_ids in prompts instead of raw excerpts when possible.",
+      "Inspect cited refs only if the bounded preview is insufficient.",
+      "Use knowledge build/file-answer only with explicit approval for durable writes."
+    ]
+  };
+}
+function pruneCitations(pack) {
+  const used = new Set(pack.evidence.flatMap((entry) => entry.citation_ids));
+  pack.citations = pack.citations.filter((citation) => used.has(citation.id));
+}
+function syncOutline(pack) {
+  pack.outline.evidence_ids = pack.evidence.slice(0, 8).map((entry) => entry.id);
+  pack.outline.bullets = pack.evidence.length > 0 ? pack.evidence.slice(0, 5).map((entry) => `${entry.id}: ${entry.title}`) : ["No matching bounded evidence was found."];
+  pack.outline.duplicate_candidate_ids = pack.duplicate_candidates.slice(0, 5).map((entry) => entry.id);
+}
+function fitPackToBudget(pack) {
+  const maxTokens = pack.budgets.max_tokens;
+  const warnings = new Set(pack.warnings);
+  while (estimateTokensForValue(pack) > maxTokens) {
+    const longest = pack.evidence.map((entry, index) => ({ entry, index })).filter(({ entry }) => entry.text_preview.length > 180).sort((a, b) => b.entry.text_preview.length - a.entry.text_preview.length)[0];
+    if (longest) {
+      longest.entry.text_preview = truncateText(longest.entry.text_preview, 180);
+      warnings.add("text_preview_truncated_for_token_budget");
+      continue;
+    }
+    const longCitation = pack.citations.filter((citation) => (citation.quote_preview?.length ?? 0) > 120).sort((a, b) => (b.quote_preview?.length ?? 0) - (a.quote_preview?.length ?? 0))[0];
+    if (longCitation?.quote_preview) {
+      longCitation.quote_preview = truncateText(longCitation.quote_preview, 120);
+      warnings.add("citation_quote_truncated_for_token_budget");
+      continue;
+    }
+    if (pack.evidence.length > 0) {
+      pack.evidence.pop();
+      pack.budgets.items_truncated += 1;
+      pack.duplicate_candidates = pack.duplicate_candidates.map((candidate) => ({
+        ...candidate,
+        evidence_ids: candidate.evidence_ids.filter((id) => pack.evidence.some((entry) => entry.id === id))
+      })).filter((candidate) => candidate.evidence_ids.length > 1);
+      syncOutline(pack);
+      warnings.add("evidence_truncated_for_token_budget");
+      pruneCitations(pack);
+      continue;
+    }
+    if (pack.outline.next_actions.length > 1) {
+      pack.outline.next_actions.pop();
+      warnings.add("outline_truncated_for_token_budget");
+      continue;
+    }
+    warnings.add("token_budget_floor_exceeded");
+    break;
+  }
+  pack.warnings = Array.from(warnings).sort();
+  pack.budgets.items_included = pack.evidence.length;
+  syncOutline(pack);
+  pack.budgets.estimated_tokens = estimateTokensForValue(pack);
+  pack.budgets.token_budget_exceeded = pack.budgets.estimated_tokens > maxTokens;
+  if (pack.budgets.token_budget_exceeded) {
+    throw new Error(`Unable to build context pack within ${maxTokens} token budget; increase --max-tokens.`);
+  }
+  pack.message = `${pack.evidence.length} bounded evidence item(s), estimated ${pack.budgets.estimated_tokens}/${maxTokens} token(s)`;
+  return pack;
+}
+async function buildKnowledgeAgentContextPack(options) {
+  const now = options.now ?? new Date;
+  const source = options.source ?? "search";
+  const purpose = options.purpose ?? (source === "loops" || source === "runs" ? "proposal" : "agent_context");
+  const maxTokens = coerceMaxTokens(options.maxTokens);
+  const maxItems = coerceMaxItems(options.maxItems, options.limit);
+  const query = normalizeText(options.query ?? options.topic ?? "");
+  if (purpose === "proposal" && source !== "search" && !query) {
+    throw new Error("Proposal context requires --topic <text> or a positional topic.");
+  }
+  if (source !== "search")
+    migrateKnowledgeDb(options.dbPath);
+  const sinceForKey = parseSince(options.since, now).cutoff ?? options.since ?? "";
+  const draft = source === "search" ? await buildSearchDraft(options, maxItems) : await buildRunDraft(options, maxItems, now);
+  const sortedEvidence = draft.evidence.sort((a, b) => b.score - a.score || a.id.localeCompare(b.id)).slice(0, maxItems);
+  const sortedCitations = draft.citations.filter((citation, index, rows) => rows.findIndex((entry) => entry.id === citation.id) === index).sort((a, b) => a.id.localeCompare(b.id));
+  const duplicateCandidates = options.dedupe ? duplicateCandidatesFor(sortedEvidence) : draft.duplicateCandidates.filter((candidate) => candidate.evidence_ids.every((id) => sortedEvidence.some((entry) => entry.id === id)));
+  const outline = outlineFor({
+    source,
+    purpose,
+    query,
+    evidence: sortedEvidence,
+    duplicates: duplicateCandidates
+  });
+  const pack = {
+    ok: true,
+    format: "knowledge-agent-context-pack",
+    version: 1,
+    created_at: now.toISOString(),
+    source,
+    purpose,
+    query,
+    topic: options.topic ?? null,
+    since: options.since ?? null,
+    dry_run: true,
+    idempotency_key: stableId5("ctx", [
+      source,
+      purpose,
+      query,
+      sinceForKey,
+      options.dedupe === true ? "dedupe" : "no-dedupe",
+      options.semantic === true ? "semantic" : "keyword",
+      options.modelRef ?? "",
+      options.limit ?? "",
+      maxTokens,
+      maxItems,
+      sortedEvidence.map((entry) => entry.id).join(","),
+      sortedCitations.map((entry) => entry.id).join(",")
+    ].join("\x00"), 20),
+    budgets: {
+      max_tokens: maxTokens,
+      estimated_tokens: 0,
+      max_items: maxItems,
+      items_included: sortedEvidence.length,
+      items_available: draft.available,
+      items_truncated: Math.max(0, draft.available - sortedEvidence.length),
+      token_budget_exceeded: false
+    },
+    safety: {
+      raw_artifact_content_included: false,
+      durable_writes_performed: false,
+      redactions: draft.redactions,
+      reminders: baseSafetyReminders(source)
+    },
+    citations: sortedCitations,
+    evidence: sortedEvidence,
+    duplicate_candidates: duplicateCandidates,
+    outline,
+    warnings: draft.warnings,
+    message: `${sortedEvidence.length} bounded evidence item(s), estimated under ${maxTokens} token(s)`
+  };
+  pruneCitations(pack);
+  return fitPackToBudget(pack);
+}
+
+// src/conflict-agent.ts
+import { randomUUID as randomUUID7 } from "crypto";
+
+// src/sync.ts
+import { createHash as createHash10, randomUUID as randomUUID6 } from "crypto";
+import { existsSync as existsSync8, readFileSync as readFileSync7 } from "fs";
+import { hostname } from "os";
+import { fileURLToPath as fileURLToPath2 } from "url";
+import { extname, relative as relative3, resolve as resolve3, sep as sep3 } from "path";
+var KNOWLEDGE_SYNC_TABLES = [
+  "sources",
+  "wiki_pages",
+  "source_revisions",
+  "chunks",
+  "chunk_embeddings",
+  "wiki_backlinks",
+  "citations",
+  "knowledge_indexes",
+  "runs",
+  "run_events",
+  "provider_usage",
+  "redaction_findings",
+  "storage_objects",
+  "audit_events",
+  "approval_gates",
+  "vector_index_entries",
+  "reindex_queue",
+  "knowledge_machines",
+  "knowledge_sync_snapshots",
+  "knowledge_sync_changes",
+  "knowledge_sync_conflicts",
+  "knowledge_sync_table_clocks",
+  "knowledge_sync_imports"
+];
+var KNOWLEDGE_SYNC_PROTOCOL_VERSION = 2;
+var KNOWLEDGE_SYNC_MIN_PROTOCOL_VERSION = 1;
+var PRIMARY_KEYS = {
+  sources: ["id"],
+  wiki_pages: ["id"],
+  source_revisions: ["id"],
+  chunks: ["id"],
+  chunk_embeddings: ["id"],
+  wiki_backlinks: ["from_page_id", "to_page_id"],
+  citations: ["id"],
+  knowledge_indexes: ["id"],
+  runs: ["id"],
+  run_events: ["id"],
+  provider_usage: ["id"],
+  redaction_findings: ["id"],
+  storage_objects: ["id"],
+  audit_events: ["id"],
+  approval_gates: ["id"],
+  vector_index_entries: ["id"],
+  reindex_queue: ["id"],
+  knowledge_machines: ["machine_id"],
+  knowledge_sync_snapshots: ["id"],
+  knowledge_sync_changes: ["id"],
+  knowledge_sync_conflicts: ["id"],
+  knowledge_sync_table_clocks: ["table_name", "machine_id"],
+  knowledge_sync_imports: ["bundle_id"]
+};
+var TABLE_SYNC_EXCLUDES = new Set([
+  "storage_objects",
+  "knowledge_sync_changes",
+  "knowledge_sync_table_clocks",
+  "knowledge_sync_imports"
+]);
+function nowIso(now = new Date) {
+  return now.toISOString();
+}
+function makeSyncId(prefix) {
+  return `${prefix}_${Date.now().toString(36)}_${randomUUID6().slice(0, 8)}`;
+}
+function defaultSyncMachineId(input) {
+  const explicit = input?.trim();
+  if (explicit)
+    return explicit;
+  return process.env.HASNA_MACHINE_ID ?? process.env.OPEN_MACHINES_MACHINE_ID ?? process.env.MACHINE_ID ?? hostname();
+}
+function stableJson(value) {
+  if (Array.isArray(value))
+    return `[${value.map(stableJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    const record = value;
+    return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+function sha256(value) {
+  return `sha256:${createHash10("sha256").update(value).digest("hex")}`;
+}
+function count2(db, table) {
+  const row = db.query(`SELECT COUNT(*) AS n FROM ${table}`).get();
+  return row?.n ?? 0;
+}
+function parseJson(value, fallback) {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return fallback;
+  }
+}
+function quoteIdent(identifier) {
+  return `"${identifier.replace(/"/g, '""')}"`;
+}
+function coerceForSqlite(value) {
+  if (value === undefined || value === null)
+    return null;
+  if (typeof value === "string" || typeof value === "number" || typeof value === "bigint" || typeof value === "boolean")
+    return value;
+  if (value instanceof Date)
+    return value.toISOString();
+  if (Buffer.isBuffer(value) || value instanceof Uint8Array)
+    return value;
+  if (typeof value === "object")
+    return JSON.stringify(value);
+  return String(value);
+}
+function filterExistingTables(db, tables) {
+  return tables.filter((table) => tableExists2(db, table));
+}
+function tableExists2(db, table) {
+  const row = db.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(table);
+  return Boolean(row);
+}
+function localColumns(db, table) {
+  const rows = db.query(`PRAGMA table_info(${quoteIdent(table)})`).all();
+  return new Set(rows.map((row) => row.name));
+}
+function filterLocalColumns(db, table, columns) {
+  const allowed = localColumns(db, table);
+  return columns.filter((column) => allowed.has(column));
+}
+function resolveSyncTables(tables) {
+  if (!tables || tables.length === 0)
+    return [...KNOWLEDGE_SYNC_TABLES];
+  const allowed = new Set(KNOWLEDGE_SYNC_TABLES);
+  const requested = tables.map((table) => table.trim()).filter(Boolean);
+  const invalid = requested.filter((table) => !allowed.has(table));
+  if (invalid.length > 0)
+    throw new Error(`Unknown knowledge sync table(s): ${invalid.join(", ")}`);
+  return requested;
+}
+function rowKey(table, row) {
+  const primaryKeys = PRIMARY_KEYS[table];
+  return primaryKeys.map((key) => `${key}=${JSON.stringify(row[key] ?? null)}`).join("&");
+}
+var RAW_PAYLOAD_METADATA_KEYS = new Set([
+  "raw",
+  "raw_bytes",
+  "raw_content",
+  "content_base64",
+  "source_bytes",
+  "source_content",
+  "body_bytes"
+]);
+function sanitizeConflictEvidenceValue(value, depth = 0) {
+  if (depth > 8)
+    return "[truncated-depth]";
+  if (typeof value === "string")
+    return value.length > 4000 ? `${value.slice(0, 4000)}...[truncated]` : value;
+  if (value === null || typeof value !== "object")
+    return value;
+  if (Array.isArray(value))
+    return value.slice(0, 50).map((entry) => sanitizeConflictEvidenceValue(entry, depth + 1));
+  const output = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (RAW_PAYLOAD_METADATA_KEYS.has(key.toLowerCase()))
+      continue;
+    output[key] = sanitizeConflictEvidenceValue(entry, depth + 1);
+  }
+  return output;
+}
+function sanitizeConflictEvidenceRow(row) {
+  if (!row)
+    return null;
+  return sanitizeConflictEvidenceValue(row);
+}
+function hashValue(value) {
+  return sha256(stableJson(value));
+}
+function normalizeRowForHash(row, artifactUriToKey) {
+  const normalized = {};
+  for (const [key, value] of Object.entries(row)) {
+    if (key === "artifact_uri" && typeof value === "string" && artifactUriToKey.has(value)) {
+      normalized[key] = `artifact:${artifactUriToKey.get(value)}`;
+    } else {
+      normalized[key] = value;
+    }
+  }
+  return normalized;
+}
+function rowHash(row, artifactUriToKey = new Map) {
+  return hashValue(normalizeRowForHash(row, artifactUriToKey));
+}
+function tableRows(db, table) {
+  if (!tableExists2(db, table))
+    return [];
+  return db.query(`SELECT * FROM ${quoteIdent(table)} ORDER BY rowid ASC`).all();
+}
+function tableContentHash(table, rows, artifactUriToKey = new Map) {
+  return hashValue(rows.map((row) => ({
+    key: rowKey(table, row),
+    hash: rowHash(row, artifactUriToKey)
+  })).sort((a, b) => a.key.localeCompare(b.key)));
+}
+function tableClock(db, table, machineId) {
+  return db.query("SELECT * FROM knowledge_sync_table_clocks WHERE table_name = ? AND machine_id = ?").get(table, machineId) ?? null;
+}
+function listTableClocks(db) {
+  if (!tableExists2(db, "knowledge_sync_table_clocks"))
+    return [];
+  return db.query("SELECT * FROM knowledge_sync_table_clocks ORDER BY table_name ASC, machine_id ASC").all();
+}
+function updateTableClock(db, input) {
+  const now = input.now ?? nowIso();
+  const existing = tableClock(db, input.table, input.machineId);
+  const createdAt = existing?.created_at ?? now;
+  db.query(`
+    INSERT INTO knowledge_sync_table_clocks (
+      table_name, machine_id, logical_clock, high_water_hash, high_water_bundle_id,
+      origin_machine_id, updated_by_machine_id, last_applied_at, metadata_json,
+      created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(table_name, machine_id) DO UPDATE SET
+      logical_clock = excluded.logical_clock,
+      high_water_hash = excluded.high_water_hash,
+      high_water_bundle_id = excluded.high_water_bundle_id,
+      origin_machine_id = excluded.origin_machine_id,
+      updated_by_machine_id = excluded.updated_by_machine_id,
+      last_applied_at = excluded.last_applied_at,
+      metadata_json = excluded.metadata_json,
+      updated_at = excluded.updated_at
+  `).run(input.table, input.machineId, input.logicalClock, input.highWaterHash, input.highWaterBundleId ?? null, input.originMachineId ?? input.machineId, input.updatedByMachineId ?? input.machineId, input.lastAppliedAt ?? now, JSON.stringify(input.metadata ?? {}), createdAt, now);
+  const row = tableClock(db, input.table, input.machineId);
+  if (!row)
+    throw new Error(`Failed to record sync clock for ${input.table}:${input.machineId}`);
+  return row;
+}
+function prepareExportTableClock(db, input) {
+  const existing = tableClock(db, input.table, input.machineId);
+  const logicalClock = existing?.high_water_hash === input.highWaterHash ? existing.logical_clock : (existing?.logical_clock ?? 0) + 1;
+  const row = input.record ? updateTableClock(db, {
+    table: input.table,
+    machineId: input.machineId,
+    logicalClock,
+    highWaterHash: input.highWaterHash,
+    highWaterBundleId: null,
+    originMachineId: existing?.origin_machine_id ?? input.machineId,
+    updatedByMachineId: input.machineId,
+    lastAppliedAt: input.now,
+    metadata: {
+      source: "export",
+      row_count: input.rowCount
+    },
+    now: input.now
+  }) : {
+    table_name: input.table,
+    machine_id: input.machineId,
+    logical_clock: logicalClock,
+    high_water_hash: input.highWaterHash,
+    high_water_bundle_id: existing?.high_water_bundle_id ?? null,
+    origin_machine_id: existing?.origin_machine_id ?? input.machineId,
+    updated_by_machine_id: input.machineId,
+    last_applied_at: input.now,
+    metadata_json: "{}",
+    created_at: existing?.created_at ?? input.now,
+    updated_at: input.now
+  };
+  return {
+    table: input.table,
+    machine_id: input.machineId,
+    logical_clock: row.logical_clock,
+    high_water_hash: input.highWaterHash,
+    high_water_bundle_id: row.high_water_bundle_id,
+    row_count: input.rowCount,
+    updated_at: row.updated_at
+  };
+}
+function finalizeExportTableClock(db, clock, bundleId, record, now) {
+  clock.high_water_bundle_id = bundleId;
+  if (!record)
+    return;
+  updateTableClock(db, {
+    table: clock.table,
+    machineId: clock.machine_id,
+    logicalClock: clock.logical_clock,
+    highWaterHash: clock.high_water_hash,
+    highWaterBundleId: bundleId,
+    originMachineId: clock.machine_id,
+    updatedByMachineId: clock.machine_id,
+    lastAppliedAt: now,
+    metadata: {
+      source: "export",
+      row_count: clock.row_count
+    },
+    now
+  });
+}
+function bundleTableClock(bundle, table) {
+  return bundle.table_clocks?.find((clock) => clock.table === table) ?? null;
+}
+function staleIncomingClock(existing, incoming) {
+  if (!existing || !incoming)
+    return false;
+  return incoming.logical_clock < existing.logical_clock;
+}
+function upsertSqliteRows(db, table, rows) {
+  if (rows.length === 0)
+    return 0;
+  const columns = filterLocalColumns(db, table, Object.keys(rows[0]));
+  if (columns.length === 0)
+    return 0;
+  const primaryKeys = PRIMARY_KEYS[table];
+  const columnList = columns.map(quoteIdent).join(", ");
+  const placeholders2 = columns.map(() => "?").join(", ");
+  const keyList = primaryKeys.map(quoteIdent).join(", ");
+  const updateColumns = columns.filter((column) => !primaryKeys.includes(column));
+  const fallbackKey = primaryKeys[0];
+  const setClause = updateColumns.length > 0 ? updateColumns.map((column) => `${quoteIdent(column)} = excluded.${quoteIdent(column)}`).join(", ") : `${quoteIdent(fallbackKey)} = excluded.${quoteIdent(fallbackKey)}`;
+  const statement = db.query(`INSERT INTO ${quoteIdent(table)} (${columnList}) VALUES (${placeholders2})
+     ON CONFLICT (${keyList}) DO UPDATE SET ${setClause}`);
+  const insert = db.transaction((batch) => {
+    for (const row of batch)
+      statement.run(...columns.map((column) => coerceForSqlite(row[column])));
+  });
+  insert(rows);
+  return rows.length;
+}
+function parseRowKeyValues(table, key) {
+  const primaryKeys = PRIMARY_KEYS[table];
+  const values = [];
+  let rest = key;
+  for (let index = 0;index < primaryKeys.length; index += 1) {
+    const primaryKey = primaryKeys[index];
+    const prefix = `${primaryKey}=`;
+    if (!rest.startsWith(prefix))
+      return null;
+    const remaining = rest.slice(prefix.length);
+    const nextPrimaryKey = primaryKeys[index + 1];
+    const marker = nextPrimaryKey ? `&${nextPrimaryKey}=` : null;
+    const markerIndex = marker ? remaining.indexOf(marker) : -1;
+    const encoded = markerIndex >= 0 ? remaining.slice(0, markerIndex) : remaining;
+    try {
+      values.push(JSON.parse(encoded));
+    } catch {
+      return null;
+    }
+    rest = markerIndex >= 0 && marker ? remaining.slice(markerIndex + 1) : "";
+  }
+  return rest.length === 0 ? values : null;
+}
+function primaryKeyWhereClause(table) {
+  return PRIMARY_KEYS[table].map((key) => `${quoteIdent(key)} = ?`).join(" AND ");
+}
+function latestImportedRowHashes(db, table, sourceMachineId) {
+  if (!tableExists2(db, "knowledge_sync_changes"))
+    return new Map;
+  const rows = db.query(`SELECT entity_id, next_hash
+     FROM knowledge_sync_changes
+     WHERE origin_machine_id = ? AND entity_kind = ?
+     ORDER BY created_at ASC, id ASC`).all(sourceMachineId, table);
+  const latest = new Map;
+  for (const row of rows)
+    latest.set(row.entity_id, row.next_hash);
+  return latest;
+}
+function removeChunkDerivedRows(db, chunkId) {
+  if (tableExists2(db, "chunks_fts"))
+    db.query("DELETE FROM chunks_fts WHERE chunk_id = ?").run(chunkId);
+  if (tableExists2(db, "chunk_embeddings"))
+    db.query("DELETE FROM chunk_embeddings WHERE chunk_id = ?").run(chunkId);
+  if (tableExists2(db, "vector_index_entries"))
+    db.query("DELETE FROM vector_index_entries WHERE chunk_id = ?").run(chunkId);
+  if (tableExists2(db, "citations"))
+    db.query("DELETE FROM citations WHERE chunk_id = ?").run(chunkId);
+}
+function deleteSqliteRowByKey(db, table, key) {
+  const values = parseRowKeyValues(table, key);
+  if (!values)
+    return false;
+  const where = primaryKeyWhereClause(table);
+  const existing = db.query(`SELECT * FROM ${quoteIdent(table)} WHERE ${where} LIMIT 1`).get(...values);
+  if (!existing)
+    return false;
+  if (table === "chunks" && typeof existing.id === "string")
+    removeChunkDerivedRows(db, existing.id);
+  db.query(`DELETE FROM ${quoteIdent(table)} WHERE ${where}`).run(...values);
+  return true;
+}
+function refreshChunkFtsRows(db, rows) {
+  if (!tableExists2(db, "chunks_fts"))
+    return;
+  for (const row of rows) {
+    const chunkId = typeof row.id === "string" ? row.id : null;
+    const text = typeof row.text === "string" ? row.text : null;
+    if (!chunkId || text === null)
+      continue;
+    let title = "";
+    let sourceUri = "";
+    const sourceRevisionId = typeof row.source_revision_id === "string" ? row.source_revision_id : null;
+    if (sourceRevisionId) {
+      const source = db.query(`SELECT s.title, s.uri
+         FROM source_revisions sr
+         JOIN sources s ON s.id = sr.source_id
+         WHERE sr.id = ?
+         LIMIT 1`).get(sourceRevisionId);
+      title = source?.title ?? "";
+      sourceUri = source?.uri ?? "";
+    }
+    if (!sourceUri && typeof row.metadata_json === "string") {
+      const metadata = parseJson(row.metadata_json, {});
+      sourceUri = typeof metadata.source_uri === "string" ? metadata.source_uri : "";
+    }
+    db.query("DELETE FROM chunks_fts WHERE chunk_id = ?").run(chunkId);
+    db.query("INSERT INTO chunks_fts (chunk_id, text, title, source_uri) VALUES (?, ?, ?, ?)").run(chunkId, text, title, sourceUri);
+  }
+}
+function refreshDerivedRowsForImport(db, table, rows) {
+  if (table === "chunks")
+    refreshChunkFtsRows(db, rows);
+}
+function assertInside2(root, target) {
+  const rel = relative3(root, target);
+  return rel !== ".." && !rel.startsWith("..") && !rel.startsWith(`..${sep3}`);
+}
+function keyForArtifactRow(row, artifactsDir) {
+  const metadata = parseJson(row.metadata_json, {});
+  if (typeof metadata.key === "string")
+    return metadata.key;
+  if (!row.artifact_uri.startsWith("file://"))
+    return null;
+  try {
+    const path = fileURLToPath2(row.artifact_uri);
+    const root = resolve3(artifactsDir);
+    const target = resolve3(path);
+    if (!assertInside2(root, target))
+      return null;
+    const rel = relative3(root, target).replace(/\\/g, "/");
+    return rel ? normalizeArtifactKey(rel) : null;
+  } catch {
+    return null;
+  }
+}
+var TEXT_ARTIFACT_EXTENSIONS = new Set([".csv", ".html", ".json", ".jsonl", ".log", ".md", ".txt", ".xml", ".yaml", ".yml"]);
+function isTextArtifact(contentType, key) {
+  const normalized = contentType?.toLowerCase() ?? "";
+  if (normalized.startsWith("text/"))
+    return true;
+  if (/(json|markdown|xml|yaml|csv)/.test(normalized))
+    return true;
+  return key ? TEXT_ARTIFACT_EXTENSIONS.has(extname(key).toLowerCase()) : false;
+}
+function artifactUriToKey(artifacts) {
+  const map = new Map;
+  for (const artifact of artifacts) {
+    if (artifact.key)
+      map.set(artifact.artifact_uri, artifact.key);
+  }
+  return map;
+}
+function artifactFingerprint(artifact) {
+  return hashValue({
+    key: artifact.key,
+    kind: artifact.kind,
+    hash: artifact.hash,
+    size_bytes: artifact.size_bytes
+  });
+}
+function artifactIdentity(artifact) {
+  return artifact.key ?? artifact.artifact_uri;
+}
+function canReferenceExistingS3Artifact(artifact, targetStorage) {
+  return artifact.artifact_uri.startsWith("s3://") && targetStorage.artifact_store.type === "s3" && artifact.artifact_uri.startsWith(targetStorage.artifact_store.uri_prefix);
+}
+function tableCounts(db) {
+  return Object.fromEntries(KNOWLEDGE_SYNC_TABLES.map((table) => [table, tableExists2(db, table) ? count2(db, table) : 0]));
+}
+function artifactHashes(db) {
+  return db.query(`SELECT artifact_uri, kind, hash, size_bytes
+     FROM storage_objects
+     ORDER BY artifact_uri ASC`).all();
+}
+function machineFromTopologyEntry(entry, now) {
+  return {
+    machine_id: entry.machine_id,
+    hostname: entry.hostname,
+    platform: entry.platform,
+    user_label: entry.user,
+    workspace_home: entry.workspace_path,
+    tailscale_dns: entry.tailscale.dns_name,
+    tailscale_ips_json: JSON.stringify(entry.tailscale.ips),
+    ssh_target: entry.ssh.command_target,
+    last_seen_at: entry.local || entry.tailscale.online === true || entry.heartbeat_status === "online" ? now : entry.last_heartbeat_at,
+    capabilities_json: JSON.stringify({
+      route_hints: entry.route_hints,
+      heartbeat_status: entry.heartbeat_status,
+      manifest_declared: entry.manifest_declared
+    }),
+    metadata_json: JSON.stringify({
+      ...entry.metadata,
+      source: entry.source,
+      tags: entry.tags,
+      tailscale: entry.tailscale,
+      ssh: entry.ssh
+    }),
+    created_at: now,
+    updated_at: now
+  };
+}
+function parseJsonRecord(value) {
+  if (!value)
+    return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+function parseJsonArray(value) {
+  if (!value)
+    return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+function recordFromUnknown(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+function compactRecord(input) {
+  return Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined));
+}
+function canonicalJson(value) {
+  if (Array.isArray(value))
+    return `[${value.map(canonicalJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.entries(value).filter(([, entry]) => entry !== undefined).sort(([left], [right]) => left.localeCompare(right)).map(([key, entry]) => `${JSON.stringify(key)}:${canonicalJson(entry)}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+function stableResolverEvidence(value) {
+  const { recorded_at: _recordedAt, ...stable } = value;
+  return stable;
+}
+function stringFromUnknown(value) {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+function numberFromUnknown(value) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+function booleanFromUnknown(value) {
+  return typeof value === "boolean" ? value : null;
+}
+function stringArrayFromUnknown(value) {
+  return Array.isArray(value) ? value.filter((entry) => typeof entry === "string") : [];
+}
+function cacheabilityFromUnknown(value) {
+  const raw = recordFromUnknown(value);
+  const observedAt = stringFromUnknown(raw.observed_at);
+  const sourceAuthority = stringFromUnknown(raw.source_authority);
+  if (!observedAt || !sourceAuthority)
+    return null;
+  return {
+    observed_at: observedAt,
+    verified_at: stringFromUnknown(raw.verified_at),
+    expires_at: stringFromUnknown(raw.expires_at),
+    ttl_ms: numberFromUnknown(raw.ttl_ms),
+    source_authority: sourceAuthority,
+    confidence: stringFromUnknown(raw.confidence),
+    cacheable: raw.cacheable === true,
+    stale: raw.stale === true,
+    reasons: stringArrayFromUnknown(raw.reasons)
+  };
+}
+function cacheabilityIsFresh(cacheability, now) {
+  if (!cacheability || cacheability.stale)
+    return false;
+  if (!cacheability.expires_at)
+    return true;
+  const expires = Date.parse(cacheability.expires_at);
+  const observed = Date.parse(now);
+  return Number.isNaN(expires) || Number.isNaN(observed) || expires > observed;
+}
+function routeMatchesResolverEvidence(route, previous) {
+  return stringFromUnknown(previous.source) === route.source && stringFromUnknown(previous.target) === route.target && stringFromUnknown(previous.route) === route.route && stringFromUnknown(previous.target_kind) === route.targetKind && stringFromUnknown(previous.confidence) === route.confidence;
+}
+function workspaceMatchesResolverEvidence(workspace, previous) {
+  return stringFromUnknown(previous.source) === workspace.source && stringFromUnknown(previous.requested_machine_id) === workspace.requested_machine_id && stringFromUnknown(previous.machine_id) === workspace.machine_id && stringFromUnknown(previous.project_id) === workspace.project_id && stringFromUnknown(previous.repo_name) === workspace.repo_name && stringFromUnknown(previous.project_root) === workspace.project_root && stringFromUnknown(previous.project_root_source) === workspace.project_root_source && stringFromUnknown(previous.workspace_root) === workspace.workspace_root && stringFromUnknown(previous.workspace_root_source) === workspace.workspace_root_source && stringFromUnknown(previous.open_files_root) === workspace.open_files_root && stringFromUnknown(previous.open_files_root_source) === workspace.open_files_root_source && stringFromUnknown(previous.trust_status) === workspace.trust_status && stringFromUnknown(previous.auth_status) === workspace.auth_status && booleanFromUnknown(previous.current) === workspace.current && booleanFromUnknown(previous.primary) === workspace.primary;
+}
+function routeWithStableCacheability(route, previous, now) {
+  if (!route)
+    return null;
+  const previousCacheability = cacheabilityFromUnknown(previous.cacheability);
+  if (previousCacheability && cacheabilityIsFresh(previousCacheability, now) && routeMatchesResolverEvidence(route, previous)) {
+    return { ...route, cacheability: previousCacheability };
+  }
+  return route;
+}
+function workspaceWithStableCacheability(workspace, previous, now) {
+  if (!workspace)
+    return null;
+  const previousCacheability = cacheabilityFromUnknown(previous.cacheability);
+  if (previousCacheability && cacheabilityIsFresh(previousCacheability, now) && workspaceMatchesResolverEvidence(workspace, previous)) {
+    return { ...workspace, cacheability: previousCacheability };
+  }
+  return workspace;
+}
+function resolverMachineId(input) {
+  return input.workspace?.machine_id ?? input.workspace?.requested_machine_id ?? input.machineId ?? input.route?.target ?? hostname();
+}
+function resolverSources(input, existing) {
+  const sources = new Set;
+  const existingSources = Array.isArray(existing.sources) ? existing.sources : [];
+  for (const source of existingSources)
+    if (typeof source === "string")
+      sources.add(source);
+  if (typeof existing.source === "string")
+    sources.add(existing.source);
+  if (input.route?.source)
+    sources.add(input.route.source);
+  if (input.workspace?.source)
+    sources.add(input.workspace.source);
+  sources.add("knowledge");
+  return [...sources].sort();
+}
+function resolverTailscaleDns(existing, route) {
+  if (route?.target && (route.route === "tailscale" || route.targetKind === "tailscale"))
+    return route.target;
+  return existing?.tailscale_dns ?? null;
+}
+function resolverEvidenceMetadata(input, existing, now) {
+  const previous = recordFromUnknown(existing.resolver_evidence);
+  const route = input.route ? compactRecord({
+    source: input.route.source,
+    target: input.route.target,
+    route: input.route.route,
+    target_kind: input.route.targetKind,
+    confidence: input.route.confidence,
+    adapter: input.route.adapter,
+    evidence: input.route.evidence,
+    cacheability: input.route.cacheability,
+    warnings: input.route.warnings
+  }) : recordFromUnknown(previous.route);
+  const workspace = input.workspace ? compactRecord({
+    source: input.workspace.source,
+    requested_machine_id: input.workspace.requested_machine_id,
+    machine_id: input.workspace.machine_id,
+    project_id: input.workspace.project_id,
+    repo_name: input.workspace.repo_name,
+    project_root: input.workspace.project_root,
+    project_root_source: input.workspace.project_root_source,
+    workspace_root: input.workspace.workspace_root,
+    workspace_root_source: input.workspace.workspace_root_source,
+    open_files_root: input.workspace.open_files_root,
+    open_files_root_source: input.workspace.open_files_root_source,
+    trust_status: input.workspace.trust_status,
+    auth_status: input.workspace.auth_status,
+    current: input.workspace.current,
+    primary: input.workspace.primary,
+    diagnostics: input.workspace.diagnostics,
+    repair_hints: input.workspace.repair_hints,
+    evidence: input.workspace.evidence,
+    cacheability: input.workspace.cacheability,
+    warnings: input.workspace.warnings
+  }) : recordFromUnknown(previous.workspace);
+  return compactRecord({
+    ...previous,
+    recorded_at: now,
+    route,
+    workspace
+  });
+}
+function recordKnowledgeMachineResolverEvidence(dbPath, input) {
+  migrateKnowledgeDb(dbPath);
+  const db = openKnowledgeDb(dbPath);
+  try {
+    const machineId = resolverMachineId(input);
+    const existing = db.query("SELECT * FROM knowledge_machines WHERE machine_id = ?").get(machineId) ?? null;
+    const now = nowIso(input.now);
+    const capabilities = parseJsonRecord(existing?.capabilities_json);
+    const metadata = parseJsonRecord(existing?.metadata_json);
+    const resolverCapabilities = recordFromUnknown(capabilities.resolver);
+    const previousResolverEvidence = recordFromUnknown(metadata.resolver_evidence);
+    const previousRouteEvidence = recordFromUnknown(previousResolverEvidence.route);
+    const previousWorkspaceEvidence = recordFromUnknown(previousResolverEvidence.workspace);
+    const route = routeWithStableCacheability(input.route?.source === "registry" ? null : input.route ?? null, previousRouteEvidence, now);
+    const workspace = workspaceWithStableCacheability(input.workspace?.source === "registry" ? null : input.workspace ?? null, previousWorkspaceEvidence, now);
+    const stableInput = { ...input, route, workspace };
+    const nextCapabilities = {
+      ...capabilities,
+      resolver: compactRecord({
+        ...resolverCapabilities,
+        route_source: route?.source ?? resolverCapabilities.route_source,
+        route_kind: route?.route ?? resolverCapabilities.route_kind,
+        route_target_kind: route?.targetKind ?? resolverCapabilities.route_target_kind,
+        route_confidence: route?.confidence ?? resolverCapabilities.route_confidence,
+        route_cacheable: route?.cacheability?.cacheable ?? resolverCapabilities.route_cacheable,
+        route_stale: route?.cacheability?.stale ?? resolverCapabilities.route_stale,
+        route_expires_at: route?.cacheability?.expires_at ?? resolverCapabilities.route_expires_at,
+        route_observed_at: route?.cacheability?.observed_at ?? resolverCapabilities.route_observed_at,
+        route_source_authority: route?.cacheability?.source_authority ?? resolverCapabilities.route_source_authority,
+        workspace_source: workspace?.source ?? resolverCapabilities.workspace_source,
+        project_root_source: workspace?.project_root_source ?? resolverCapabilities.project_root_source,
+        workspace_root_source: workspace?.workspace_root_source ?? resolverCapabilities.workspace_root_source,
+        open_files_root_source: workspace?.open_files_root_source ?? resolverCapabilities.open_files_root_source,
+        trust_status: workspace?.trust_status ?? resolverCapabilities.trust_status,
+        auth_status: workspace?.auth_status ?? resolverCapabilities.auth_status,
+        workspace_cacheable: workspace?.cacheability?.cacheable ?? resolverCapabilities.workspace_cacheable,
+        workspace_stale: workspace?.cacheability?.stale ?? resolverCapabilities.workspace_stale,
+        workspace_expires_at: workspace?.cacheability?.expires_at ?? resolverCapabilities.workspace_expires_at,
+        workspace_observed_at: workspace?.cacheability?.observed_at ?? resolverCapabilities.workspace_observed_at,
+        workspace_source_authority: workspace?.cacheability?.source_authority ?? resolverCapabilities.workspace_source_authority
+      }),
+      route_fallback: Boolean(route?.target ?? existing?.ssh_target),
+      workspace_fallback: Boolean(workspace?.project_root ?? existing?.workspace_home)
+    };
+    const nextResolverEvidence = resolverEvidenceMetadata(stableInput, metadata, now);
+    if (existing) {
+      const existingResolverEvidence = previousResolverEvidence;
+      const unchanged = existing.workspace_home === (workspace?.project_root ?? existing.workspace_home ?? null) && existing.tailscale_dns === resolverTailscaleDns(existing, route) && existing.ssh_target === (route?.target ?? existing.ssh_target ?? null) && canonicalJson(parseJsonRecord(existing.capabilities_json)) === canonicalJson(nextCapabilities) && canonicalJson(stableResolverEvidence(existingResolverEvidence)) === canonicalJson(stableResolverEvidence(nextResolverEvidence));
+      if (unchanged)
+        return existing;
+    }
+    const row = {
+      machine_id: machineId,
+      hostname: existing?.hostname ?? null,
+      platform: existing?.platform ?? null,
+      user_label: existing?.user_label ?? null,
+      workspace_home: workspace?.project_root ?? existing?.workspace_home ?? null,
+      tailscale_dns: resolverTailscaleDns(existing, route),
+      tailscale_ips_json: JSON.stringify(parseJsonArray(existing?.tailscale_ips_json)),
+      ssh_target: route?.target ?? existing?.ssh_target ?? null,
+      last_seen_at: now,
+      capabilities_json: JSON.stringify(nextCapabilities),
+      metadata_json: JSON.stringify({
+        ...metadata,
+        source: "knowledge",
+        sources: resolverSources(stableInput, metadata),
+        resolver_evidence: nextResolverEvidence
+      }),
+      created_at: existing?.created_at ?? now,
+      updated_at: now
+    };
+    upsertKnowledgeMachine(db, row);
+    return row;
+  } finally {
+    db.close();
+  }
+}
+function upsertKnowledgeMachine(db, input) {
+  db.query(`
+    INSERT INTO knowledge_machines (
+      machine_id, hostname, platform, user_label, workspace_home, tailscale_dns,
+      tailscale_ips_json, ssh_target, last_seen_at, capabilities_json,
+      metadata_json, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(machine_id) DO UPDATE SET
+      hostname = excluded.hostname,
+      platform = excluded.platform,
+      user_label = excluded.user_label,
+      workspace_home = excluded.workspace_home,
+      tailscale_dns = excluded.tailscale_dns,
+      tailscale_ips_json = excluded.tailscale_ips_json,
+      ssh_target = excluded.ssh_target,
+      last_seen_at = excluded.last_seen_at,
+      capabilities_json = excluded.capabilities_json,
+      metadata_json = excluded.metadata_json,
+      updated_at = excluded.updated_at
+  `).run(input.machine_id, input.hostname, input.platform, input.user_label, input.workspace_home, input.tailscale_dns, input.tailscale_ips_json, input.ssh_target, input.last_seen_at, input.capabilities_json, input.metadata_json, input.created_at, input.updated_at);
+}
+function refreshMachineRegistryFromTopology(db, topology, now = nowIso()) {
+  for (const entry of topology.machines)
+    upsertKnowledgeMachine(db, machineFromTopologyEntry(entry, now));
+  return topology.machines.length;
+}
+function listKnowledgeMachines(dbPath) {
+  migrateKnowledgeDb(dbPath);
+  const db = openKnowledgeDb(dbPath);
+  try {
+    return db.query("SELECT * FROM knowledge_machines ORDER BY machine_id ASC").all();
+  } finally {
+    db.close();
+  }
+}
+function createKnowledgeSyncBundle(options) {
+  migrateKnowledgeDb(options.dbPath);
+  const db = openKnowledgeDb(options.dbPath);
+  const warnings = [];
+  const generatedAt = nowIso(options.now);
+  const sourceMachineId = defaultSyncMachineId(options.machineId);
+  const recordClocks = options.recordClocks !== false;
+  try {
+    const requestedTables = filterExistingTables(db, resolveSyncTables(options.tables));
+    const artifactRows = db.query(`SELECT id, artifact_uri, kind, content_type, hash, size_bytes, metadata_json
+       FROM storage_objects
+       ORDER BY artifact_uri ASC`).all();
+    const artifacts = artifactRows.map((row) => {
+      const key = keyForArtifactRow(row, options.storage.local_layout.directories.artifacts);
+      let artifact = { ...row, key };
+      if (options.includeArtifactContent !== false && key && row.artifact_uri.startsWith("file://")) {
+        try {
+          const path = fileURLToPath2(row.artifact_uri);
+          if (existsSync8(path)) {
+            if (!isTextArtifact(row.content_type, key)) {
+              warnings.push(`artifact_content_not_embedded_binary:${row.id}`);
+            } else {
+              const text = readFileSync7(path, "utf8");
+              const redactedText = redactPrivateRefs(text);
+              if (redactedText !== text)
+                warnings.push(`artifact_content_redacted:${row.id}`);
+              artifact.content_base64 = Buffer.from(redactedText, "utf8").toString("base64");
+              artifact.hash = sha256(redactedText);
+              artifact.size_bytes = Buffer.byteLength(redactedText);
+            }
+          } else {
+            warnings.push(`artifact_missing:${row.artifact_uri}`);
+          }
+        } catch (error) {
+          warnings.push(`artifact_read_failed:${row.artifact_uri}:${error instanceof Error ? error.message : String(error)}`);
+        }
+      } else if (options.includeArtifactContent !== false && row.artifact_uri.startsWith("s3://")) {
+        warnings.push(`artifact_content_not_embedded:${row.artifact_uri}`);
+      }
+      artifact = redactPrivateRefs(artifact);
+      return artifact;
+    });
+    const sourceArtifactUriToKey = artifactUriToKey(artifacts);
+    const tables = requestedTables.filter((table) => !TABLE_SYNC_EXCLUDES.has(table)).map((table) => ({
+      table,
+      primary_keys: PRIMARY_KEYS[table],
+      rows: tableRows(db, table).map((row) => redactPrivateRefs(row))
+    }));
+    const tableClocks = tables.map((table) => prepareExportTableClock(db, {
+      table: table.table,
+      machineId: sourceMachineId,
+      highWaterHash: tableContentHash(table.table, table.rows, sourceArtifactUriToKey),
+      rowCount: table.rows.length,
+      record: recordClocks,
+      now: generatedAt
+    }));
+    const contentHash = sha256(stableJson({
+      source: {
+        scope: options.scope,
+        workspace_home: redactPrivateRefs(options.workspaceHome),
+        sqlite_schema_version: getSchemaVersion(db),
+        machine_id: sourceMachineId,
+        artifact_root_uri: redactPrivateRefs(options.storage.artifact_store.uri_prefix)
+      },
+      tables: tables.map((table) => ({
+        table: table.table,
+        primary_keys: table.primary_keys,
+        rows: table.rows.map((row) => ({
+          key: rowKey(table.table, row),
+          hash: rowHash(row, sourceArtifactUriToKey)
+        })).sort((a, b) => a.key.localeCompare(b.key))
+      })),
+      table_clocks: tableClocks.map((clock) => ({
+        table: clock.table,
+        machine_id: clock.machine_id,
+        logical_clock: clock.logical_clock,
+        high_water_hash: clock.high_water_hash,
+        row_count: clock.row_count
+      })),
+      artifacts: artifacts.map((artifact) => ({
+        identity: artifactIdentity(artifact),
+        fingerprint: artifactFingerprint(artifact)
+      })).sort((a, b) => a.identity.localeCompare(b.identity))
+    }));
+    const bundleId = `syncbundle_${contentHash.replace("sha256:", "").slice(0, 32)}`;
+    for (const clock of tableClocks)
+      finalizeExportTableClock(db, clock, bundleId, recordClocks, generatedAt);
+    return {
+      ok: true,
+      format: "knowledge-sync-bundle",
+      version: 1,
+      protocol_version: KNOWLEDGE_SYNC_PROTOCOL_VERSION,
+      min_protocol_version: KNOWLEDGE_SYNC_MIN_PROTOCOL_VERSION,
+      bundle_id: bundleId,
+      content_hash: contentHash,
+      generated_at: generatedAt,
+      source: {
+        scope: options.scope,
+        workspace_home: redactPrivateRefs(options.workspaceHome),
+        sqlite_schema_version: getSchemaVersion(db),
+        machine_id: sourceMachineId,
+        artifact_root_uri: redactPrivateRefs(options.storage.artifact_store.uri_prefix)
+      },
+      table_clocks: tableClocks,
+      tables,
+      artifacts,
+      warnings: redactPrivateRefs(warnings),
+      message: `${tables.reduce((sum, table) => sum + table.rows.length, 0)} row(s), ${artifacts.length} artifact(s) exported`
+    };
+  } finally {
+    db.close();
+  }
+}
+function validateSyncProtocol(input, label) {
+  const protocolVersion = typeof input.protocol_version === "number" ? input.protocol_version : null;
+  const minProtocolVersion = typeof input.min_protocol_version === "number" ? input.min_protocol_version : null;
+  if (protocolVersion === null || minProtocolVersion === null || protocolVersion < KNOWLEDGE_SYNC_MIN_PROTOCOL_VERSION || minProtocolVersion > KNOWLEDGE_SYNC_PROTOCOL_VERSION) {
+    throw new Error(`Unsupported ${label} protocol. Expected knowledge sync protocol v${KNOWLEDGE_SYNC_PROTOCOL_VERSION} with min v${KNOWLEDGE_SYNC_MIN_PROTOCOL_VERSION}.`);
+  }
+}
+function validateBundle(bundle) {
+  if (!bundle || bundle.format !== "knowledge-sync-bundle" || bundle.version !== 1) {
+    throw new Error("Invalid knowledge sync bundle.");
+  }
+  validateSyncProtocol(bundle, "knowledge sync bundle");
+}
+function getBundleTable(bundle, table) {
+  return bundle.tables.find((entry) => entry.table === table) ?? null;
+}
+function syncBundleContentHash(bundle) {
+  if (typeof bundle.content_hash === "string" && bundle.content_hash.length > 0)
+    return bundle.content_hash;
+  return sha256(stableJson({
+    source: bundle.source,
+    tables: bundle.tables.map((table) => ({
+      table: table.table,
+      rows: table.rows.map((row) => ({
+        key: rowKey(table.table, row),
+        hash: rowHash(row, artifactUriToKey(bundle.artifacts))
+      })).sort((a, b) => a.key.localeCompare(b.key))
+    })),
+    artifacts: bundle.artifacts.map((artifact) => ({
+      identity: artifactIdentity(artifact),
+      fingerprint: artifactFingerprint(artifact)
+    })).sort((a, b) => a.identity.localeCompare(b.identity))
+  }));
+}
+function syncBundleId(bundle) {
+  if (typeof bundle.bundle_id === "string" && bundle.bundle_id.length > 0)
+    return bundle.bundle_id;
+  return `syncbundle_${syncBundleContentHash(bundle).replace("sha256:", "").slice(0, 32)}`;
+}
+function tableRowMap(table, rows) {
+  return new Map(rows.map((row) => [rowKey(table, row), row]));
+}
+function bundleArtifactMap(bundle) {
+  return new Map(bundle.artifacts.map((artifact) => [artifactIdentity(artifact), artifact]));
+}
+async function materializeArtifacts(options) {
+  const targetArtifacts = bundleArtifactMap(options.targetBundle);
+  const uriMap = new Map;
+  const conflicts = [];
+  const result = {
+    source_artifacts: options.bundle.artifacts.length,
+    target_artifacts: options.targetBundle.artifacts.length,
+    copied: 0,
+    skipped: 0,
+    conflicts: 0,
+    missing_content: 0
+  };
+  for (const artifact of options.bundle.artifacts) {
+    const identity = artifactIdentity(artifact);
+    const target = targetArtifacts.get(identity);
+    if (target && artifactFingerprint(target) === artifactFingerprint(artifact)) {
+      if (target.artifact_uri)
+        uriMap.set(artifact.artifact_uri, target.artifact_uri);
+      result.skipped += 1;
+      continue;
+    }
+    if (target && artifactFingerprint(target) !== artifactFingerprint(artifact)) {
+      const conflict = {
+        entityKind: "storage_object",
+        entityId: identity,
+        localMachineId: options.localMachineId,
+        remoteMachineId: options.bundle.source.machine_id ?? "unknown",
+        localHash: artifactFingerprint(target),
+        remoteHash: artifactFingerprint(artifact),
+        metadata: {
+          direction: options.direction,
+          target_artifact_uri: target.artifact_uri,
+          source_artifact_uri: artifact.artifact_uri,
+          local_artifact: sanitizeConflictEvidenceValue(target),
+          remote_artifact: sanitizeConflictEvidenceValue(artifact)
+        }
+      };
+      if (hasResolvedConflictFingerprint(options.db, conflict)) {
+        result.skipped += 1;
+        continue;
+      }
+      result.conflicts += 1;
+      conflicts.push(conflict);
+      continue;
+    }
+    const hasEmbeddedContent = Boolean(artifact.key && artifact.content_base64);
+    const canReferenceExistingS3 = canReferenceExistingS3Artifact(artifact, options.targetStorage);
+    if (!hasEmbeddedContent && !canReferenceExistingS3) {
+      result.missing_content += 1;
+      options.warnings.push(`artifact_content_missing:${artifact.artifact_uri}`);
+      continue;
+    }
+    if (options.dryRun) {
+      result.copied += 1;
+      continue;
+    }
+    let nextUri = artifact.artifact_uri;
+    if (hasEmbeddedContent && artifact.key && artifact.content_base64) {
+      const write = await options.targetStore.put({
+        key: artifact.key,
+        body: Buffer.from(artifact.content_base64, "base64"),
+        content_type: artifact.content_type ?? undefined
+      });
+      nextUri = write.uri;
+      uriMap.set(artifact.artifact_uri, nextUri);
+    } else if (canReferenceExistingS3) {
+      uriMap.set(artifact.artifact_uri, nextUri);
+    }
+    const metadata = parseJson(artifact.metadata_json, {});
+    const modifiedAt = typeof metadata.artifact_modified_at === "string" ? metadata.artifact_modified_at : undefined;
+    const object = {
+      uri: nextUri,
+      key: artifact.key ?? metadata.key ?? artifact.artifact_uri,
+      kind: artifact.kind,
+      content_type: artifact.content_type ?? undefined,
+      hash: artifact.hash ?? undefined,
+      size_bytes: artifact.size_bytes ?? undefined,
+      modified_at: modifiedAt,
+      metadata: {
+        ...metadata,
+        synced_from_artifact_uri: artifact.artifact_uri,
+        synced_from_machine_id: options.bundle.source.machine_id ?? undefined
+      }
+    };
+    recordStorageObjects(options.db, [object]);
+    result.copied += 1;
+  }
+  return { result, uriMap, conflicts };
+}
+function transformImportedRow(row, artifactUriMap) {
+  const next = { ...row };
+  if (typeof next.artifact_uri === "string" && artifactUriMap.has(next.artifact_uri)) {
+    next.artifact_uri = artifactUriMap.get(next.artifact_uri);
+  }
+  return next;
+}
+function insertSyncChange(db, input) {
+  const now = nowIso();
+  db.query(`
+    INSERT INTO knowledge_sync_changes (
+      id, origin_machine_id, updated_by_machine_id, entity_kind, entity_id,
+      operation, base_hash, next_hash, source_ref, source_revision_id,
+      artifact_uri, logical_clock, bundle_id, metadata_json, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(makeSyncId("syncchg"), input.sourceMachineId, input.localMachineId, input.entityKind, input.entityId, input.direction, null, input.nextHash, typeof input.row?.source_ref === "string" ? input.row.source_ref : typeof input.row?.source_uri === "string" ? input.row.source_uri : null, typeof input.row?.source_revision_id === "string" ? input.row.source_revision_id : null, typeof input.row?.artifact_uri === "string" ? input.row.artifact_uri : null, input.logicalClock, input.bundleId, JSON.stringify({ source_machine_id: input.sourceMachineId, bundle_id: input.bundleId }), now);
+}
+function hasResolvedConflictFingerprint(db, input) {
+  const localHash = input.localHash ?? "";
+  const remoteHash = input.remoteHash ?? "";
+  const exact = db.query(`
+    SELECT id FROM knowledge_sync_conflicts
+    WHERE entity_kind = ?
+      AND entity_id = ?
+      AND local_machine_id = ?
+      AND remote_machine_id = ?
+      AND COALESCE(local_hash, '') = ?
+      AND COALESCE(remote_hash, '') = ?
+      AND status IN ('resolved', 'ignored')
+      AND resolved_at IS NOT NULL
+    LIMIT 1
+  `).get(input.entityKind, input.entityId, input.localMachineId, input.remoteMachineId, localHash, remoteHash);
+  if (exact)
+    return true;
+  const reversed = db.query(`
+    SELECT id FROM knowledge_sync_conflicts
+    WHERE entity_kind = ?
+      AND entity_id = ?
+      AND local_machine_id = ?
+      AND remote_machine_id = ?
+      AND COALESCE(local_hash, '') = ?
+      AND COALESCE(remote_hash, '') = ?
+      AND status IN ('resolved', 'ignored')
+      AND resolved_at IS NOT NULL
+    LIMIT 1
+  `).get(input.entityKind, input.entityId, input.remoteMachineId, input.localMachineId, remoteHash, localHash);
+  return Boolean(reversed);
+}
+function insertConflict(db, input) {
+  const duplicate = db.query(`
+    SELECT id FROM knowledge_sync_conflicts
+    WHERE entity_kind = ?
+      AND entity_id = ?
+      AND local_machine_id = ?
+      AND remote_machine_id = ?
+      AND COALESCE(local_hash, '') = COALESCE(?, '')
+      AND COALESCE(remote_hash, '') = COALESCE(?, '')
+      AND COALESCE(base_hash, '') = COALESCE(?, '')
+      AND status = 'open'
+    LIMIT 1
+  `).get(input.entityKind, input.entityId, input.localMachineId, input.remoteMachineId, input.localHash ?? null, input.remoteHash ?? null, input.baseHash ?? null);
+  if (duplicate)
+    return false;
+  const now = nowIso();
+  db.query(`
+    INSERT INTO knowledge_sync_conflicts (
+      id, entity_kind, entity_id, local_machine_id, remote_machine_id,
+      local_hash, remote_hash, base_hash, status, resolution_strategy,
+      proposed_patch_uri, approved_by, resolved_at, metadata_json, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(makeSyncId("syncconf"), input.entityKind, input.entityId, input.localMachineId, input.remoteMachineId, input.localHash ?? null, input.remoteHash ?? null, input.baseHash ?? null, input.status ?? "open", input.resolutionStrategy ?? null, input.proposedPatchUri ?? null, input.approvedBy ?? null, input.resolvedAt ?? null, JSON.stringify(input.metadata ?? {}), now);
+  return true;
+}
+function getSyncImport(db, bundleId) {
+  return db.query("SELECT * FROM knowledge_sync_imports WHERE bundle_id = ?").get(bundleId) ?? null;
+}
+function recordSyncImport(db, input) {
+  const now = input.now ?? nowIso();
+  db.query(`
+    INSERT INTO knowledge_sync_imports (
+      bundle_id, source_machine_id, target_machine_id, direction, status,
+      content_hash, table_clocks_json, tables_json, generated_at, applied_at,
+      metadata_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(bundle_id) DO UPDATE SET
+      status = excluded.status,
+      applied_at = excluded.applied_at,
+      metadata_json = excluded.metadata_json
+  `).run(input.bundleId, input.sourceMachineId, input.targetMachineId, input.direction, input.status, input.contentHash, JSON.stringify(input.bundle.table_clocks ?? []), JSON.stringify(input.tableResults), input.bundle.generated_at, now, JSON.stringify({
+    conflicts: input.conflicts,
+    artifacts: input.artifacts,
+    source_workspace_home: input.bundle.source.workspace_home
+  }));
+}
+function replayedApplyResult(options) {
+  return {
+    ok: true,
+    protocol_version: KNOWLEDGE_SYNC_PROTOCOL_VERSION,
+    min_protocol_version: KNOWLEDGE_SYNC_MIN_PROTOCOL_VERSION,
+    dry_run: false,
+    direction: options.direction,
+    source: options.bundle.source,
+    target: {
+      scope: options.targetScope,
+      workspace_home: options.targetWorkspaceHome,
+      sqlite_schema_version: options.targetBundle.source.sqlite_schema_version,
+      artifact_root_uri: options.targetStorage.artifact_store.uri_prefix
+    },
+    tables: options.bundle.tables.filter((table) => !TABLE_SYNC_EXCLUDES.has(table.table)).map((table) => ({
+      table: table.table,
+      source_rows: table.rows.length,
+      target_rows: getBundleTable(options.targetBundle, table.table)?.rows.length ?? 0,
+      inserted: 0,
+      updated: 0,
+      deleted: 0,
+      skipped: table.rows.length,
+      conflicts: 0,
+      stale_skipped: 0
+    })),
+    artifacts: {
+      source_artifacts: options.bundle.artifacts.length,
+      target_artifacts: options.targetBundle.artifacts.length,
+      copied: 0,
+      skipped: options.bundle.artifacts.length,
+      conflicts: 0,
+      missing_content: 0
+    },
+    conflicts_created: 0,
+    bundle_id: options.bundleId,
+    replayed: true,
+    clocks: {
+      advanced: 0,
+      stale_tables: 0
+    },
+    warnings: [...options.warnings, `bundle_replay_skipped:${options.bundleId}`],
+    message: `Skipped already-applied bundle ${options.bundleId}`
+  };
+}
+function canSkipBundleReplay(bundle, targetBundle) {
+  const sourceArtifactUriToKey = artifactUriToKey(bundle.artifacts);
+  const targetArtifactUriToKey = artifactUriToKey(targetBundle.artifacts);
+  for (const sourceTable of bundle.tables) {
+    if (TABLE_SYNC_EXCLUDES.has(sourceTable.table))
+      continue;
+    const targetTable = getBundleTable(targetBundle, sourceTable.table);
+    const incomingClock = bundleTableClock(bundle, sourceTable.table);
+    const incomingHash = incomingClock?.high_water_hash ?? tableContentHash(sourceTable.table, sourceTable.rows, sourceArtifactUriToKey);
+    const currentHash = tableContentHash(sourceTable.table, targetTable?.rows ?? [], targetArtifactUriToKey);
+    if (currentHash !== incomingHash)
+      return false;
+  }
+  return true;
+}
+async function applyKnowledgeSyncBundle(options) {
+  validateBundle(options.bundle);
+  migrateKnowledgeDb(options.targetDbPath);
+  const warnings = [...options.bundle.warnings];
+  const dryRun = options.dryRun === true;
+  const localMachineId = defaultSyncMachineId(options.localMachineId);
+  const sourceMachineId = options.bundle.source.machine_id ?? "unknown";
+  const bundleId = syncBundleId(options.bundle);
+  const contentHash = syncBundleContentHash(options.bundle);
+  const targetBundle = options.targetBundle ?? createKnowledgeSyncBundle({
+    dbPath: options.targetDbPath,
+    scope: options.targetScope,
+    workspaceHome: options.targetWorkspaceHome,
+    storage: options.targetStorage,
+    machineId: localMachineId,
+    includeArtifactContent: false,
+    recordClocks: !dryRun
+  });
+  const db = openKnowledgeDb(options.targetDbPath);
+  try {
+    if (!dryRun && getSyncImport(db, bundleId) && canSkipBundleReplay(options.bundle, targetBundle)) {
+      return replayedApplyResult({
+        bundle: options.bundle,
+        targetBundle,
+        targetScope: options.targetScope,
+        targetWorkspaceHome: options.targetWorkspaceHome,
+        targetStorage: options.targetStorage,
+        direction: options.direction,
+        warnings,
+        bundleId
+      });
+    }
+    const artifactResult = await materializeArtifacts({
+      db,
+      bundle: options.bundle,
+      targetBundle,
+      targetStorage: options.targetStorage,
+      targetStore: options.targetStore,
+      dryRun,
+      direction: options.direction,
+      localMachineId,
+      warnings
+    });
+    const sourceArtifactUriToKey = artifactUriToKey(options.bundle.artifacts);
+    const targetArtifactUriToKey = artifactUriToKey(targetBundle.artifacts);
+    const tableResults = [];
+    let conflictsCreated = 0;
+    let clocksAdvanced = 0;
+    let staleTables = 0;
+    for (const sourceTable of options.bundle.tables) {
+      if (sourceTable.table === "storage_objects" || TABLE_SYNC_EXCLUDES.has(sourceTable.table))
+        continue;
+      if (!tableExists2(db, sourceTable.table))
+        continue;
+      const incomingClock = bundleTableClock(options.bundle, sourceTable.table);
+      const existingClock = tableClock(db, sourceTable.table, sourceMachineId);
+      const targetTable = getBundleTable(targetBundle, sourceTable.table);
+      const targetRows = tableRowMap(sourceTable.table, targetTable?.rows ?? []);
+      const incomingRowKeys = new Set(sourceTable.rows.map((row) => rowKey(sourceTable.table, row)));
+      const importedRowHashes = latestImportedRowHashes(db, sourceTable.table, sourceMachineId);
+      const rowsToWrite = [];
+      const result = {
+        table: sourceTable.table,
+        source_rows: sourceTable.rows.length,
+        target_rows: targetTable?.rows.length ?? 0,
+        inserted: 0,
+        updated: 0,
+        deleted: 0,
+        skipped: 0,
+        conflicts: 0,
+        stale_skipped: 0
+      };
+      if (!incomingClock) {
+        warnings.push(`legacy_clock_missing:${sourceTable.table}`);
+      } else if (staleIncomingClock(existingClock, incomingClock)) {
+        staleTables += 1;
+        result.skipped += sourceTable.rows.length;
+        result.stale_skipped = sourceTable.rows.length;
+        warnings.push(`stale_table_skipped:${sourceTable.table}:${sourceMachineId}:${incomingClock.logical_clock}`);
+        tableResults.push(result);
+        continue;
+      }
+      for (const sourceRow of sourceTable.rows) {
+        const key = rowKey(sourceTable.table, sourceRow);
+        const targetRow = targetRows.get(key);
+        const incomingHash = rowHash(sourceRow, sourceArtifactUriToKey);
+        if (!targetRow) {
+          result.inserted += 1;
+          rowsToWrite.push(transformImportedRow(sourceRow, artifactResult.uriMap));
+          continue;
+        }
+        const currentHash = rowHash(targetRow, targetArtifactUriToKey);
+        if (currentHash === incomingHash) {
+          result.skipped += 1;
+          continue;
+        }
+        const importedHash = importedRowHashes.get(key);
+        if (importedRowHashes.has(key) && importedHash === currentHash) {
+          result.updated += 1;
+          rowsToWrite.push(transformImportedRow(sourceRow, artifactResult.uriMap));
+          continue;
+        }
+        const conflict = {
+          entityKind: sourceTable.table,
+          entityId: key,
+          localMachineId,
+          remoteMachineId: sourceMachineId,
+          localHash: currentHash,
+          remoteHash: incomingHash,
+          baseHash: existingClock?.high_water_hash ?? null,
+          metadata: {
+            direction: options.direction,
+            bundle_id: bundleId,
+            incoming_logical_clock: incomingClock?.logical_clock ?? null,
+            current_logical_clock: existingClock?.logical_clock ?? null,
+            source_workspace_home: options.bundle.source.workspace_home,
+            target_workspace_home: options.targetWorkspaceHome,
+            local_row: sanitizeConflictEvidenceRow(targetRow),
+            remote_row: sanitizeConflictEvidenceRow(sourceRow)
+          }
+        };
+        if (hasResolvedConflictFingerprint(db, conflict)) {
+          result.skipped += 1;
+          continue;
+        }
+        result.conflicts += 1;
+        if (!dryRun && insertConflict(db, conflict))
+          conflictsCreated += 1;
+      }
+      if (!dryRun && rowsToWrite.length > 0) {
+        const writtenRows = rowsToWrite.map((row) => transformImportedRow(row, artifactResult.uriMap));
+        upsertSqliteRows(db, sourceTable.table, writtenRows);
+        refreshDerivedRowsForImport(db, sourceTable.table, writtenRows);
+        for (const row of writtenRows) {
+          insertSyncChange(db, {
+            direction: options.direction,
+            sourceMachineId: options.bundle.source.machine_id ?? "unknown",
+            localMachineId,
+            entityKind: sourceTable.table,
+            entityId: rowKey(sourceTable.table, row),
+            nextHash: rowHash(row, artifactUriToKey(options.bundle.artifacts)),
+            logicalClock: incomingClock?.logical_clock ?? 0,
+            bundleId,
+            row
+          });
+        }
+      }
+      for (const [key, importedHash] of importedRowHashes) {
+        if (incomingRowKeys.has(key))
+          continue;
+        const targetRow = targetRows.get(key);
+        if (!targetRow)
+          continue;
+        const currentHash = rowHash(targetRow, targetArtifactUriToKey);
+        if (importedHash && currentHash !== importedHash) {
+          const conflict = {
+            entityKind: sourceTable.table,
+            entityId: key,
+            localMachineId,
+            remoteMachineId: sourceMachineId,
+            localHash: currentHash,
+            remoteHash: null,
+            baseHash: importedHash,
+            metadata: {
+              direction: options.direction,
+              bundle_id: bundleId,
+              reason: "remote_owned_row_missing_from_incoming_bundle",
+              source_workspace_home: options.bundle.source.workspace_home,
+              target_workspace_home: options.targetWorkspaceHome,
+              local_row: sanitizeConflictEvidenceRow(targetRow),
+              remote_row: null
+            }
+          };
+          if (hasResolvedConflictFingerprint(db, conflict)) {
+            result.skipped += 1;
+            continue;
+          }
+          result.conflicts += 1;
+          if (!dryRun && insertConflict(db, conflict))
+            conflictsCreated += 1;
+          continue;
+        }
+        result.deleted += 1;
+        if (!dryRun)
+          deleteSqliteRowByKey(db, sourceTable.table, key);
+      }
+      if (!dryRun && incomingClock) {
+        updateTableClock(db, {
+          table: sourceTable.table,
+          machineId: sourceMachineId,
+          logicalClock: incomingClock.logical_clock,
+          highWaterHash: incomingClock.high_water_hash,
+          highWaterBundleId: bundleId,
+          originMachineId: sourceMachineId,
+          updatedByMachineId: localMachineId,
+          lastAppliedAt: nowIso(),
+          metadata: {
+            source: "import",
+            direction: options.direction,
+            row_count: sourceTable.rows.length,
+            inserted: result.inserted,
+            updated: result.updated,
+            deleted: result.deleted,
+            skipped: result.skipped,
+            conflicts: result.conflicts
+          }
+        });
+        clocksAdvanced += 1;
+      }
+      tableResults.push(result);
+    }
+    for (const conflict of artifactResult.conflicts) {
+      if (!dryRun) {
+        if (insertConflict(db, {
+          ...conflict,
+          baseHash: conflict.baseHash ?? null,
+          metadata: {
+            ...conflict.metadata,
+            bundle_id: bundleId
+          }
+        }))
+          conflictsCreated += 1;
+      }
+    }
+    const inserted = tableResults.reduce((sum, table) => sum + table.inserted, 0);
+    const conflicts = tableResults.reduce((sum, table) => sum + table.conflicts, 0) + artifactResult.result.conflicts;
+    if (!dryRun) {
+      recordSyncImport(db, {
+        bundle: options.bundle,
+        bundleId,
+        contentHash,
+        sourceMachineId,
+        targetMachineId: localMachineId,
+        direction: options.direction,
+        status: conflicts === 0 ? "applied" : "conflicted",
+        tableResults,
+        conflicts,
+        artifacts: artifactResult.result
+      });
+    }
+    return {
+      ok: conflicts === 0,
+      protocol_version: KNOWLEDGE_SYNC_PROTOCOL_VERSION,
+      min_protocol_version: KNOWLEDGE_SYNC_MIN_PROTOCOL_VERSION,
+      dry_run: dryRun,
+      direction: options.direction,
+      source: options.bundle.source,
+      target: {
+        scope: options.targetScope,
+        workspace_home: options.targetWorkspaceHome,
+        sqlite_schema_version: getSchemaVersion(db),
+        artifact_root_uri: options.targetStorage.artifact_store.uri_prefix
+      },
+      tables: tableResults,
+      artifacts: artifactResult.result,
+      conflicts_created: conflictsCreated,
+      bundle_id: bundleId,
+      replayed: false,
+      clocks: {
+        advanced: clocksAdvanced,
+        stale_tables: staleTables
+      },
+      warnings,
+      message: `${options.dryRun ? "Would import" : "Imported"} ${inserted} row(s), copied ${artifactResult.result.copied} artifact(s), ${conflicts} conflict(s)`
+    };
+  } finally {
+    db.close();
+  }
+}
+function createKnowledgeSyncSnapshot(options) {
+  migrateKnowledgeDb(options.dbPath);
+  const db = openKnowledgeDb(options.dbPath);
+  const createdAt = nowIso(options.now);
+  try {
+    const machinesUpserted = options.topology ? refreshMachineRegistryFromTopology(db, options.topology, createdAt) : 0;
+    const tables = tableCounts(db);
+    const artifacts = redactPrivateRefs(artifactHashes(db));
+    const machineId = options.machineId ?? options.topology?.local_machine_id ?? "unknown";
+    const artifactRootUri = redactPrivateRefs(options.storage.artifact_store.uri_prefix);
+    const workspaceHome = redactPrivateRefs(options.workspaceHome);
+    const contentHash = sha256(stableJson({
+      machine_id: machineId,
+      scope: options.scope,
+      workspace_home: workspaceHome,
+      sqlite_schema_version: getSchemaVersion(db),
+      artifact_root_uri: artifactRootUri,
+      tables,
+      artifacts
+    }));
+    const row = {
+      id: makeSyncId("syncsnap"),
+      machine_id: machineId,
+      scope: options.scope,
+      workspace_home: workspaceHome,
+      sqlite_schema_version: getSchemaVersion(db),
+      artifact_root_uri: artifactRootUri,
+      content_hash: contentHash,
+      tables_json: JSON.stringify(tables),
+      artifact_hashes_json: JSON.stringify(artifacts),
+      created_at: createdAt
+    };
+    db.query(`
+      INSERT INTO knowledge_sync_snapshots (
+        id, machine_id, scope, workspace_home, sqlite_schema_version,
+        artifact_root_uri, content_hash, tables_json, artifact_hashes_json, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(row.id, row.machine_id, row.scope, row.workspace_home, row.sqlite_schema_version, row.artifact_root_uri, row.content_hash, row.tables_json, row.artifact_hashes_json, row.created_at);
+    const artifactUriMap = new Map;
+    for (const table of filterExistingTables(db, resolveSyncTables()).filter((entry) => !TABLE_SYNC_EXCLUDES.has(entry))) {
+      const rows = tableRows(db, table).map((entry) => redactPrivateRefs(entry));
+      const highWaterHash = tableContentHash(table, rows, artifactUriMap);
+      const existing = tableClock(db, table, machineId);
+      const logicalClock = existing?.high_water_hash === highWaterHash ? existing.logical_clock : (existing?.logical_clock ?? 0) + 1;
+      updateTableClock(db, {
+        table,
+        machineId,
+        logicalClock,
+        highWaterHash,
+        highWaterBundleId: row.id,
+        originMachineId: existing?.origin_machine_id ?? machineId,
+        updatedByMachineId: machineId,
+        lastAppliedAt: createdAt,
+        metadata: {
+          source: "snapshot",
+          row_count: rows.length
+        },
+        now: createdAt
+      });
+    }
+    return {
+      ok: true,
+      snapshot: {
+        ...row,
+        tables,
+        artifact_hashes: artifacts
+      },
+      machines_upserted: machinesUpserted,
+      message: `Recorded sync snapshot ${row.id}`
+    };
+  } finally {
+    db.close();
+  }
+}
+function getKnowledgeSyncStatus(options) {
+  migrateKnowledgeDb(options.dbPath);
+  const db = openKnowledgeDb(options.dbPath);
+  try {
+    const machines = db.query("SELECT * FROM knowledge_machines ORDER BY machine_id ASC").all();
+    const latest = db.query("SELECT * FROM knowledge_sync_snapshots ORDER BY created_at DESC LIMIT 1").get() ?? null;
+    const conflictStatuses = db.query("SELECT status, COUNT(*) AS count FROM knowledge_sync_conflicts GROUP BY status ORDER BY status").all();
+    const changeOps = db.query("SELECT operation, COUNT(*) AS count FROM knowledge_sync_changes GROUP BY operation ORDER BY operation").all();
+    const clocks = listTableClocks(db);
+    const latestImport = db.query("SELECT * FROM knowledge_sync_imports ORDER BY applied_at DESC LIMIT 1").get() ?? null;
+    const totalConflicts = conflictStatuses.reduce((sum, row) => sum + row.count, 0);
+    const openConflicts = conflictStatuses.filter((row) => row.status !== "resolved" && row.status !== "ignored").reduce((sum, row) => sum + row.count, 0);
+    return {
+      ok: true,
+      scope: options.scope,
+      workspace_home: redactPrivateRefs(options.workspaceHome),
+      sqlite_schema_version: getSchemaVersion(db),
+      local_machine_id: options.localMachineId ?? null,
+      machines: {
+        total: machines.length,
+        rows: redactPrivateRefs(machines)
+      },
+      snapshots: {
+        total: count2(db, "knowledge_sync_snapshots"),
+        latest: redactPrivateRefs(latest)
+      },
+      changes: {
+        total: count2(db, "knowledge_sync_changes"),
+        by_operation: changeOps
+      },
+      clocks: {
+        total: clocks.length,
+        rows: clocks
+      },
+      imports: {
+        total: count2(db, "knowledge_sync_imports"),
+        latest: redactPrivateRefs(latestImport)
+      },
+      conflicts: {
+        total: totalConflicts,
+        by_status: conflictStatuses,
+        open: openConflicts
+      },
+      table_counts: tableCounts(db),
+      message: `${machines.length} machine(s), ${openConflicts} open sync conflict(s)`
+    };
+  } finally {
+    db.close();
+  }
+}
+function recordKnowledgeSyncConflict(dbPath, input) {
+  migrateKnowledgeDb(dbPath);
+  const db = openKnowledgeDb(dbPath);
+  const now = nowIso();
+  const row = {
+    id: makeSyncId("syncconf"),
+    entity_kind: input.entityKind,
+    entity_id: input.entityId,
+    local_machine_id: input.localMachineId,
+    remote_machine_id: input.remoteMachineId,
+    local_hash: input.localHash ?? null,
+    remote_hash: input.remoteHash ?? null,
+    base_hash: input.baseHash ?? null,
+    status: input.status ?? "open",
+    resolution_strategy: input.resolutionStrategy ?? null,
+    proposed_patch_uri: input.proposedPatchUri ?? null,
+    approved_by: input.approvedBy ?? null,
+    resolved_at: input.resolvedAt ?? null,
+    metadata_json: JSON.stringify(input.metadata ?? {}),
+    created_at: now
+  };
+  try {
+    db.query(`
+      INSERT INTO knowledge_sync_conflicts (
+        id, entity_kind, entity_id, local_machine_id, remote_machine_id,
+        local_hash, remote_hash, base_hash, status, resolution_strategy,
+        proposed_patch_uri, approved_by, resolved_at, metadata_json, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(row.id, row.entity_kind, row.entity_id, row.local_machine_id, row.remote_machine_id, row.local_hash, row.remote_hash, row.base_hash, row.status, row.resolution_strategy, row.proposed_patch_uri, row.approved_by, row.resolved_at, row.metadata_json, row.created_at);
+    return row;
+  } finally {
+    db.close();
+  }
+}
+function hydrateConflict(row) {
+  return {
+    ...row,
+    metadata: parseJson(row.metadata_json, {})
+  };
+}
+function getKnowledgeSyncConflict(dbPath, id) {
+  migrateKnowledgeDb(dbPath);
+  const db = openKnowledgeDb(dbPath);
+  try {
+    const row = db.query("SELECT * FROM knowledge_sync_conflicts WHERE id = ?").get(id);
+    return row ? hydrateConflict(row) : null;
+  } finally {
+    db.close();
+  }
+}
+function listKnowledgeSyncConflicts(dbPath, options = {}) {
+  migrateKnowledgeDb(dbPath);
+  const db = openKnowledgeDb(dbPath);
+  const limit = Math.max(1, Math.min(options.limit ?? 50, 200));
+  try {
+    const rows = options.status ? db.query("SELECT * FROM knowledge_sync_conflicts WHERE status = ? ORDER BY created_at DESC LIMIT ?").all(options.status, limit) : db.query("SELECT * FROM knowledge_sync_conflicts ORDER BY created_at DESC LIMIT ?").all(limit);
+    return rows.map(hydrateConflict);
+  } finally {
+    db.close();
+  }
+}
+function conflictTable(value) {
+  return KNOWLEDGE_SYNC_TABLES.includes(value) ? value : null;
+}
+function catalogRowForConflict(db, conflict) {
+  const table = conflictTable(conflict.entity_kind);
+  if (!table || !tableExists2(db, table))
+    return null;
+  const values = parseRowKeyValues(table, conflict.entity_id);
+  if (!values)
+    return null;
+  const where = primaryKeyWhereClause(table);
+  return db.query(`SELECT * FROM ${quoteIdent(table)} WHERE ${where} LIMIT 1`).get(...values);
+}
+function rowFromMetadata(metadata, keys) {
+  for (const key of keys) {
+    const value = metadata[key];
+    if (value && typeof value === "object" && !Array.isArray(value))
+      return sanitizeConflictEvidenceRow(value);
+  }
+  return null;
+}
+function addSourceRef(refs, value) {
+  if (typeof value !== "string")
+    return;
+  const trimmed = value.trim();
+  if (!trimmed)
+    return;
+  if (trimmed.startsWith("open-files://") || trimmed.startsWith("s3://") || trimmed.startsWith("file://") || trimmed.startsWith("https://") || trimmed.startsWith("http://"))
+    refs.add(trimmed);
+}
+function collectSourceRefs(value, refs = new Set, depth = 0) {
+  if (depth > 8 || value === null || value === undefined)
+    return refs;
+  if (typeof value === "string") {
+    addSourceRef(refs, value);
+    return refs;
+  }
+  if (Array.isArray(value)) {
+    for (const entry of value)
+      collectSourceRefs(entry, refs, depth + 1);
+    return refs;
+  }
+  if (typeof value === "object") {
+    for (const [key, entry] of Object.entries(value)) {
+      if (key === "source_ref" || key === "source_uri" || key === "artifact_uri" || key.endsWith("_uri"))
+        addSourceRef(refs, entry);
+      collectSourceRefs(entry, refs, depth + 1);
+    }
+  }
+  return refs;
+}
+function conflictCitations(input) {
+  const citations = [{
+    id: "conflict",
+    kind: "metadata",
+    ref: `knowledge-sync-conflict://${input.conflict.id}`,
+    hash: input.conflict.base_hash,
+    quote: `Conflict on ${input.conflict.entity_kind}:${input.conflict.entity_id}`
+  }];
+  if (input.localRow) {
+    citations.push({
+      id: "local-row",
+      kind: "row",
+      ref: `${input.conflict.entity_kind}:${input.conflict.entity_id}:local`,
+      hash: input.conflict.local_hash,
+      quote: JSON.stringify(input.localRow).slice(0, 300)
+    });
+  }
+  if (input.remoteRow) {
+    citations.push({
+      id: "remote-row",
+      kind: "row",
+      ref: `${input.conflict.entity_kind}:${input.conflict.entity_id}:remote`,
+      hash: input.conflict.remote_hash,
+      quote: JSON.stringify(input.remoteRow).slice(0, 300)
+    });
+  }
+  input.sourceRefs.slice(0, 10).forEach((ref, index) => {
+    citations.push({
+      id: `source-${index + 1}`,
+      kind: ref.startsWith("file://") || ref.startsWith("s3://") ? "artifact" : "source_ref",
+      ref,
+      hash: null,
+      quote: null
+    });
+  });
+  return citations;
+}
+function getKnowledgeSyncConflictEvidence(dbPath, id) {
+  const conflict = getKnowledgeSyncConflict(dbPath, id);
+  if (!conflict)
+    throw new Error(`Sync conflict not found: ${id}`);
+  migrateKnowledgeDb(dbPath);
+  const db = openKnowledgeDb(dbPath);
+  try {
+    const localRow = sanitizeConflictEvidenceRow(catalogRowForConflict(db, conflict));
+    const remoteRow = rowFromMetadata(conflict.metadata, ["remote_row", "source_row", "incoming_row"]);
+    const refs = collectSourceRefs({
+      conflict: {
+        entity_kind: conflict.entity_kind,
+        entity_id: conflict.entity_id,
+        metadata: conflict.metadata
+      },
+      local_row: localRow,
+      remote_row: remoteRow
+    });
+    const sourceRefs = [...refs].slice(0, 25);
+    const readOnlyTools = [
+      {
+        name: "knowledge_sync_conflict_get",
+        input: { id },
+        output_summary: `${conflict.entity_kind}:${conflict.entity_id} status=${conflict.status}`
+      },
+      {
+        name: "knowledge_catalog_row_get",
+        input: { table: conflict.entity_kind, key: conflict.entity_id },
+        output_summary: localRow ? "local row found" : "local row unavailable"
+      },
+      {
+        name: "knowledge_source_ref_extract",
+        input: { id },
+        output_summary: `${sourceRefs.length} source/artifact ref(s) found`
+      }
+    ];
+    return {
+      conflict,
+      local_row: localRow,
+      remote_row: remoteRow,
+      source_refs: sourceRefs,
+      citations: conflictCitations({ conflict, localRow, remoteRow, sourceRefs }),
+      read_only_tools: readOnlyTools
+    };
+  } finally {
+    db.close();
+  }
+}
+function proposeKnowledgeSyncConflictResolution(dbPath, id) {
+  const conflict = getKnowledgeSyncConflict(dbPath, id);
+  if (!conflict)
+    throw new Error(`Sync conflict not found: ${id}`);
+  const proposedStrategy = conflict.entity_kind === "wiki_pages" ? "manual-merge" : "review-and-select";
+  const summary = [
+    `Conflict ${conflict.id} affects ${conflict.entity_kind}:${conflict.entity_id}.`,
+    `Local machine ${conflict.local_machine_id} has ${conflict.local_hash ?? "unknown hash"}.`,
+    `Remote machine ${conflict.remote_machine_id} has ${conflict.remote_hash ?? "unknown hash"}.`
+  ].join(" ");
+  const mergePrompt = [
+    "Review this knowledge sync conflict before any durable write.",
+    `Entity: ${conflict.entity_kind}:${conflict.entity_id}`,
+    `Local machine/hash: ${conflict.local_machine_id} / ${conflict.local_hash ?? "unknown"}`,
+    `Remote machine/hash: ${conflict.remote_machine_id} / ${conflict.remote_hash ?? "unknown"}`,
+    `Base hash: ${conflict.base_hash ?? "unknown"}`,
+    `Metadata: ${JSON.stringify(conflict.metadata)}`,
+    "Return a concise merge recommendation with citations to the competing records. Do not write changes without approval."
+  ].join(`
+`);
+  return {
+    ok: true,
+    conflict,
+    requires_approval: true,
+    mode: "deterministic",
+    proposed_strategy: proposedStrategy,
+    summary,
+    merge_prompt: mergePrompt,
+    proposed_patch: null,
+    citations: conflictCitations({ conflict, localRow: null, remoteRow: null, sourceRefs: [] }),
+    confidence: null,
+    agent: null,
+    warnings: conflict.status === "resolved" ? ["conflict_already_resolved"] : [],
+    message: `Prepared approval-gated merge proposal for ${conflict.id}`
+  };
+}
+function resolveKnowledgeSyncConflict(dbPath, input) {
+  migrateKnowledgeDb(dbPath);
+  const db = openKnowledgeDb(dbPath);
+  const now = nowIso();
+  try {
+    const existing = db.query("SELECT * FROM knowledge_sync_conflicts WHERE id = ?").get(input.id);
+    if (!existing)
+      throw new Error(`Sync conflict not found: ${input.id}`);
+    db.query(`
+      UPDATE knowledge_sync_conflicts
+      SET status = 'resolved',
+          resolution_strategy = ?,
+          proposed_patch_uri = ?,
+          approved_by = ?,
+          resolved_at = ?
+      WHERE id = ?
+    `).run(input.strategy, input.proposedPatchUri ?? existing.proposed_patch_uri, input.approvedBy, now, input.id);
+    const row = db.query("SELECT * FROM knowledge_sync_conflicts WHERE id = ?").get(input.id);
+    if (!row)
+      throw new Error(`Sync conflict not found after resolve: ${input.id}`);
+    return hydrateConflict(row);
+  } finally {
+    db.close();
+  }
+}
+function syncTablesFromSnapshot(snapshot) {
+  return parseJson(snapshot.tables_json, {});
+}
+function syncArtifactsFromSnapshot(snapshot) {
+  return parseJson(snapshot.artifact_hashes_json, []);
+}
+
+// src/conflict-agent.ts
+function estimateTokens2(value) {
+  const text = typeof value === "string" ? value : JSON.stringify(value);
+  const words = text.trim().split(/\s+/).filter(Boolean).length;
+  return Math.max(1, Math.ceil(words * 1.25));
+}
+function insertConflictRun(options) {
+  const db = openKnowledgeDb(options.dbPath);
+  try {
+    db.run(`INSERT INTO runs (id, type, prompt, status, provider, model, metadata_json, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
+      options.runId,
+      "sync-conflict-proposal",
+      options.prompt,
+      options.status,
+      options.provider,
+      options.model,
+      JSON.stringify(options.metadata),
+      options.now,
+      options.now
+    ]);
+  } finally {
+    db.close();
+  }
+}
+function updateConflictRun(options) {
+  const db = openKnowledgeDb(options.dbPath);
+  try {
+    db.run(`UPDATE runs
+       SET status = ?, provider = ?, model = ?, cost_tokens = ?, cost_usd = ?, metadata_json = ?, updated_at = ?
+       WHERE id = ?`, [
+      options.status,
+      options.provider,
+      options.model,
+      options.usage.input_tokens + options.usage.output_tokens,
+      options.usage.cost_usd,
+      JSON.stringify(options.metadata),
+      options.now,
+      options.runId
+    ]);
+  } finally {
+    db.close();
+  }
+}
+function addConflictRunEvent(options) {
+  const db = openKnowledgeDb(options.dbPath);
+  try {
+    db.run(`INSERT INTO run_events (id, run_id, level, event, metadata_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`, [
+      `event_${randomUUID7()}`,
+      options.runId,
+      options.level,
+      options.event,
+      JSON.stringify(options.metadata),
+      options.now
+    ]);
+  } finally {
+    db.close();
+  }
+}
+function recordUsage2(dbPath, runId, usage, now) {
+  const db = openKnowledgeDb(dbPath);
+  try {
+    recordProviderUsage(db, {
+      ...usage,
+      run_id: runId,
+      created_at: now
+    });
+  } finally {
+    db.close();
+  }
+}
+function promptForConflict(input) {
+  return [
+    "Build an approval-gated merge proposal for this knowledge sync conflict.",
+    "Use only the supplied JSON evidence. Do not claim to inspect external files or write changes.",
+    "Return a patch recommendation that a human can review before approval.",
+    "",
+    `Deterministic proposal:
+${JSON.stringify({
+      proposed_strategy: input.deterministic.proposed_strategy,
+      summary: input.deterministic.summary,
+      warnings: input.deterministic.warnings
+    }, null, 2)}`,
+    "",
+    `Conflict evidence:
+${JSON.stringify(input.evidence, null, 2)}`
+  ].join(`
+`);
+}
+function normalizeConfidence(value) {
+  const number = typeof value === "number" && Number.isFinite(value) ? value : 0.5;
+  return Math.max(0, Math.min(1, number));
+}
+function normalizePatch(value, conflictTarget) {
+  const kind = value.kind === "choose_local" || value.kind === "choose_remote" || value.kind === "no_op" || value.kind === "custom" || value.kind === "manual_merge" ? value.kind : "manual_merge";
+  return {
+    kind,
+    target: typeof value.target === "string" && value.target ? value.target : conflictTarget,
+    strategy: typeof value.strategy === "string" && value.strategy ? value.strategy : kind.replace("_", "-"),
+    summary: typeof value.summary === "string" && value.summary ? value.summary : "Review both sides before applying a merge.",
+    diff: typeof value.diff === "string" && value.diff ? value.diff : null,
+    metadata: value.metadata && typeof value.metadata === "object" && !Array.isArray(value.metadata) ? value.metadata : {}
+  };
+}
+function fakePatch(input) {
+  const target = `${input.conflict.entity_kind}:${input.conflict.entity_id}`;
+  const hasBothRows = Boolean(input.local_row && input.remote_row);
+  return {
+    kind: hasBothRows ? "manual_merge" : "custom",
+    target,
+    strategy: hasBothRows ? "manual-merge" : "review-and-select",
+    summary: hasBothRows ? `Fake AI proposal: compare local and remote ${target} row snapshots, then apply a reviewed manual merge.` : `Fake AI proposal: inspect ${target} with available conflict metadata before selecting a side.`,
+    diff: hasBothRows ? [
+      `--- ${target} local`,
+      `+++ ${target} remote`,
+      "@@ review-required @@",
+      JSON.stringify({ local: input.local_row, remote: input.remote_row }, null, 2).slice(0, 1200)
+    ].join(`
+`) : null,
+    metadata: {
+      fake: true,
+      local_hash: input.conflict.local_hash,
+      remote_hash: input.conflict.remote_hash,
+      source_refs: input.source_refs
+    }
+  };
+}
+async function proposeKnowledgeSyncConflictResolutionWithAi(options) {
+  const now = (options.now ?? new Date).toISOString();
+  migrateKnowledgeDb(options.dbPath);
+  const deterministic = proposeKnowledgeSyncConflictResolution(options.dbPath, options.id);
+  const evidence = getKnowledgeSyncConflictEvidence(options.dbPath, options.id);
+  const resolvedModelRef = resolveModelRef(options.modelRef ?? "default", options.config);
+  const parsed = parseModelRef(resolvedModelRef);
+  const runId = `run_${randomUUID7()}`;
+  const prompt = promptForConflict({ deterministic, evidence });
+  insertConflictRun({
+    dbPath: options.dbPath,
+    runId,
+    prompt,
+    provider: parsed.provider,
+    model: parsed.model,
+    status: options.fake ? "dry_run" : "running",
+    metadata: {
+      conflict_id: options.id,
+      mode: "ai",
+      fake: options.fake === true,
+      read_only_tools: evidence.read_only_tools.map((tool) => tool.name)
+    },
+    now
+  });
+  addConflictRunEvent({
+    dbPath: options.dbPath,
+    runId,
+    level: "info",
+    event: "conflict_evidence_retrieved",
+    metadata: {
+      citations: evidence.citations.length,
+      source_refs: evidence.source_refs.length,
+      read_only_tools: evidence.read_only_tools
+    },
+    now
+  });
+  let patch;
+  let summary;
+  let confidence = 0.5;
+  let usage = {
+    input_tokens: estimateTokens2(prompt),
+    output_tokens: 0,
+    cost_usd: 0
+  };
+  if (options.fake) {
+    patch = fakePatch(evidence);
+    summary = patch.summary;
+    usage.output_tokens = estimateTokens2(summary) + estimateTokens2(patch.diff ?? "");
+  } else {
+    try {
+      const { generateObject } = await import("ai");
+      const { z } = await Promise.resolve().then(() => (init_zod(), exports_zod));
+      const model = await languageModelFor(resolvedModelRef, {
+        config: options.config,
+        env: options.env
+      });
+      const schema = z.object({
+        summary: z.string(),
+        confidence: z.number().min(0).max(1),
+        proposed_patch: z.object({
+          kind: z.enum(["manual_merge", "choose_local", "choose_remote", "no_op", "custom"]),
+          target: z.string(),
+          strategy: z.string(),
+          summary: z.string(),
+          diff: z.string().nullable(),
+          metadata: z.record(z.string(), z.unknown()).default({})
+        })
+      });
+      const result = await generateObject({
+        model,
+        schema,
+        system: "You are a read-only knowledge sync conflict proposal agent. You produce reviewable proposals only; never approve or apply writes.",
+        prompt
+      });
+      summary = result.object.summary;
+      confidence = normalizeConfidence(result.object.confidence);
+      patch = normalizePatch(result.object.proposed_patch, `${evidence.conflict.entity_kind}:${evidence.conflict.entity_id}`);
+      const normalized = normalizeAiSdkUsage({
+        provider: parsed.provider,
+        model: parsed.model,
+        usage: result.usage,
+        providerMetadata: result.providerMetadata
+      });
+      usage = {
+        input_tokens: normalized.input_tokens,
+        output_tokens: normalized.output_tokens,
+        cost_usd: normalized.cost_usd
+      };
+      recordUsage2(options.dbPath, runId, normalized, now);
+    } catch (error) {
+      addConflictRunEvent({
+        dbPath: options.dbPath,
+        runId,
+        level: "error",
+        event: "conflict_proposal_generation_failed",
+        metadata: { message: error instanceof Error ? error.message : String(error) },
+        now
+      });
+      updateConflictRun({
+        dbPath: options.dbPath,
+        runId,
+        status: "failed",
+        provider: parsed.provider,
+        model: parsed.model,
+        usage,
+        metadata: {
+          conflict_id: options.id,
+          mode: "ai",
+          error: error instanceof Error ? error.message : String(error)
+        },
+        now
+      });
+      throw error;
+    }
+  }
+  updateConflictRun({
+    dbPath: options.dbPath,
+    runId,
+    status: options.fake ? "dry_run" : "completed",
+    provider: parsed.provider,
+    model: parsed.model,
+    usage,
+    metadata: {
+      conflict_id: options.id,
+      mode: "ai",
+      fake: options.fake === true,
+      confidence,
+      proposed_strategy: patch.strategy,
+      citation_count: evidence.citations.length
+    },
+    now
+  });
+  addConflictRunEvent({
+    dbPath: options.dbPath,
+    runId,
+    level: "info",
+    event: options.fake ? "fake_conflict_proposal_generated" : "conflict_proposal_generated",
+    metadata: {
+      strategy: patch.strategy,
+      confidence,
+      patch_kind: patch.kind
+    },
+    now
+  });
+  return {
+    ...deterministic,
+    mode: "ai",
+    proposed_strategy: patch.strategy,
+    summary,
+    proposed_patch: patch,
+    citations: evidence.citations,
+    confidence,
+    agent: {
+      generated: true,
+      provider: parsed.provider,
+      model: parsed.model,
+      run_id: runId,
+      read_only_tools: evidence.read_only_tools,
+      usage
+    },
+    warnings: [
+      ...deterministic.warnings,
+      ...evidence.remote_row ? [] : ["remote_row_snapshot_unavailable"]
+    ],
+    message: `Prepared AI SDK approval-gated merge proposal for ${options.id}`
+  };
+}
+
+// src/outbox-consume.ts
+import { createHash as createHash11, randomUUID as randomUUID8 } from "crypto";
+import { existsSync as existsSync9, readFileSync as readFileSync8 } from "fs";
+import { basename as basename3 } from "path";
+function stableId6(prefix, value) {
+  return `${prefix}_${createHash11("sha256").update(value).digest("hex").slice(0, 20)}`;
+}
+function asObject2(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : undefined;
+}
+function asString2(value) {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+function buildSourceRef(event) {
+  const explicit = asString2(event.source_ref) ?? asString2(event.source_uri) ?? asString2(event.uri);
+  if (explicit)
+    return explicit;
+  const fileId = asString2(event.file_id);
+  if (fileId) {
+    const revision = asString2(event.revision_id) ?? asString2(event.revision);
+    const fileRef = `open-files://file/${encodeURIComponent(fileId)}`;
+    return revision ? `${fileRef}/revision/${encodeURIComponent(revision)}` : fileRef;
+  }
+  const sourceId = asString2(event.source_id);
+  const path = asString2(event.path);
+  if (sourceId && path) {
+    return `open-files://source/${encodeURIComponent(sourceId)}/path/${encodeURIComponent(path)}`;
+  }
+  throw new Error("Outbox event is missing source_ref, file_id, or source_id/path.");
+}
+function baseSourceUri2(sourceRef, parsed) {
+  if (parsed.kind === "open-files" && parsed.entity === "file" && parsed.revision_id) {
+    return sourceRef.replace(/\/revision\/[^/]+$/, "");
+  }
+  return sourceRef;
+}
+function hashFromEvent(event) {
+  return asString2(event.hash) ?? asString2(event.checksum) ?? asString2(event.sha256) ?? null;
+}
+function revisionFromEvent(event, parsed, hash) {
+  return asString2(event.revision_id) ?? asString2(event.revision) ?? asString2(event.version_id) ?? (parsed.kind === "open-files" ? parsed.revision_id : undefined) ?? hash ?? null;
+}
+function previousRevisionFromEvent(event) {
+  return asString2(event.previous_revision_id) ?? asString2(event.previous_revision) ?? asString2(event.previous_version_id) ?? null;
+}
+function eventType(event) {
+  return (asString2(event.event_type) ?? asString2(event.event) ?? asString2(event.type) ?? asString2(event.action) ?? asString2(event.change_type) ?? "changed").toLowerCase();
+}
+function titleFromEvent(event) {
+  const path = asString2(event.path);
+  return asString2(event.title) ?? asString2(event.name) ?? (path ? basename3(path) : null);
+}
+function normalizeEvent(event, now) {
+  const sourceRef = buildSourceRef(event);
+  const parsed = parseSourceRef(sourceRef);
+  const hash = hashFromEvent(event);
+  return {
+    raw: event,
+    eventType: eventType(event),
+    sourceRef,
+    sourceUri: baseSourceUri2(sourceRef, parsed),
+    kind: parsed.kind,
+    title: titleFromEvent(event),
+    revision: revisionFromEvent(event, parsed, hash),
+    previousRevision: previousRevisionFromEvent(event),
+    hash,
+    status: asString2(event.status)?.toLowerCase() ?? null,
+    updatedAt: asString2(event.updated_at) ?? now,
+    acl: event.permissions ?? event.acl ?? undefined
+  };
+}
+function parseOutboxText(text) {
+  const trimmed = text.trim();
+  if (!trimmed)
+    return [];
+  if (trimmed.startsWith("[")) {
+    const parsed = JSON.parse(trimmed);
+    if (!Array.isArray(parsed))
+      throw new Error("Outbox array parse failed.");
+    return parsed.map((entry) => {
+      const event = asObject2(entry);
+      if (!event)
+        throw new Error("Outbox array entries must be objects.");
+      return event;
+    });
+  }
+  if (trimmed.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      const object = asObject2(parsed);
+      if (!object)
+        throw new Error("Outbox object parse failed.");
+      if (Array.isArray(object.events)) {
+        return object.events.map((entry) => {
+          const event = asObject2(entry);
+          if (!event)
+            throw new Error("Outbox events entries must be objects.");
+          return event;
+        });
+      }
+      if ("source_ref" in object || "source_uri" in object || "file_id" in object)
+        return [object];
+    } catch (error) {
+      const lines = trimmed.split(/\r?\n/).filter((line) => line.trim().length > 0);
+      if (lines.length <= 1)
+        throw error;
+      return lines.map((line) => {
+        const event = asObject2(JSON.parse(line));
+        if (!event)
+          throw new Error("Outbox JSONL entries must be objects.");
+        return event;
+      });
+    }
+  }
+  return trimmed.split(/\r?\n/).filter((line) => line.trim().length > 0).map((line) => {
+    const event = asObject2(JSON.parse(line));
+    if (!event)
+      throw new Error("Outbox JSONL entries must be objects.");
+    return event;
+  });
+}
+async function readS3Text3(uri, config, safetyPolicy) {
+  const parsed = new URL(uri);
+  const bucket = parsed.hostname;
+  const key = decodeURIComponent(parsed.pathname.replace(/^\/+/, ""));
+  if (!bucket || !key)
+    throw new Error(`Invalid S3 outbox URI: ${uri}`);
+  if (safetyPolicy)
+    assertS3ReadAllowed(uri, safetyPolicy);
+  const [{ S3Client, GetObjectCommand }, { fromIni }] = await Promise.all([
+    import("@aws-sdk/client-s3"),
+    import("@aws-sdk/credential-providers")
+  ]);
+  const s3Config = config?.storage.type === "s3" && config.storage.s3?.bucket === bucket ? config.storage.s3 : undefined;
+  const client = new S3Client({
+    region: s3Config?.region,
+    credentials: s3Config?.profile ? fromIni({ profile: s3Config.profile }) : undefined,
+    maxAttempts: s3Config?.max_attempts
+  });
+  const response = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+  if (!response.Body)
+    return "";
+  return await response.Body.transformToString();
+}
+async function readOutboxInput(input, config, safetyPolicy) {
+  if (input.startsWith("s3://"))
+    return readS3Text3(input, config, safetyPolicy);
+  if (!existsSync9(input))
+    throw new Error(`Outbox not found: ${input}`);
+  return readFileSync8(input, "utf8");
+}
+function mergeJson(existing, patch) {
+  let base = {};
+  if (existing) {
+    try {
+      base = asObject2(JSON.parse(existing)) ?? {};
+    } catch {
+      base = {};
+    }
+  }
+  return JSON.stringify({ ...base, ...patch });
+}
+function ensureSource(db, event, now) {
+  const id = stableId6("src", event.sourceUri);
+  db.run(`INSERT INTO sources (id, uri, kind, title, metadata_json, acl_json, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(uri) DO UPDATE SET
+       kind = excluded.kind,
+       title = COALESCE(excluded.title, sources.title),
+       updated_at = excluded.updated_at`, [
+    id,
+    event.sourceUri,
+    event.kind,
+    event.title,
+    JSON.stringify({ source_ref: event.sourceRef, source_uri: event.sourceUri, status: event.status, last_outbox_event: event.eventType }),
+    JSON.stringify(event.acl ?? {}),
+    now,
+    event.updatedAt
+  ]);
+  const row = db.query("SELECT id, metadata_json, acl_json FROM sources WHERE uri = ?").get(event.sourceUri);
+  if (!row)
+    throw new Error(`Failed to upsert source for outbox event: ${event.sourceUri}`);
+  const patch = {
+    source_ref: event.sourceRef,
+    source_uri: event.sourceUri,
+    last_outbox_event: event.eventType,
+    last_outbox_at: event.updatedAt
+  };
+  if (event.status)
+    patch.status = event.status;
+  if (asString2(event.raw.path))
+    patch.path = event.raw.path;
+  db.run("UPDATE sources SET metadata_json = ?, acl_json = CASE WHEN ? IS NULL THEN acl_json ELSE ? END, updated_at = ? WHERE id = ?", [
+    mergeJson(row.metadata_json, patch),
+    event.acl === undefined ? null : JSON.stringify(event.acl),
+    event.acl === undefined ? null : JSON.stringify(event.acl),
+    event.updatedAt,
+    row.id
+  ]);
+  return row.id;
+}
+function ensureRevision(db, sourceId, event, now) {
+  if (!event.revision)
+    return null;
+  const id = stableId6("rev", `${sourceId}\x00${event.revision}`);
+  const metadata = {
+    source_ref: event.sourceRef,
+    source_uri: event.sourceUri,
+    status: event.status,
+    last_outbox_event: event.eventType,
+    reindex_required: true
+  };
+  db.run(`INSERT INTO source_revisions (id, source_id, revision, hash, extracted_text_uri, metadata_json, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(source_id, revision) DO UPDATE SET
+       hash = COALESCE(excluded.hash, source_revisions.hash),
+       metadata_json = excluded.metadata_json`, [id, sourceId, event.revision, event.hash, asString2(event.raw.extracted_text_ref) ?? null, JSON.stringify(metadata), now]);
+  const row = db.query("SELECT id FROM source_revisions WHERE source_id = ? AND revision = ?").get(sourceId, event.revision);
+  return row?.id ?? null;
+}
+function revisionIdsForEvent(db, sourceId, event) {
+  if (event.previousRevision) {
+    const previous = db.query("SELECT id FROM source_revisions WHERE source_id = ? AND revision = ?").all(sourceId, event.previousRevision).map((row) => row.id);
+    if (previous.length > 0)
+      return previous;
+  }
+  if (event.revision) {
+    return db.query("SELECT id FROM source_revisions WHERE source_id = ? AND revision = ?").all(sourceId, event.revision).map((row) => row.id);
+  }
+  if (event.hash) {
+    return db.query("SELECT id FROM source_revisions WHERE source_id = ? AND hash = ?").all(sourceId, event.hash).map((row) => row.id);
+  }
+  return db.query("SELECT id FROM source_revisions WHERE source_id = ?").all(sourceId).map((row) => row.id);
+}
+function invalidateRevision(db, revisionId) {
+  const chunks = db.query("SELECT id FROM chunks WHERE source_revision_id = ?").all(revisionId);
+  let embeddingsDeleted = 0;
+  let vectorEntriesDeleted = 0;
+  for (const chunk of chunks) {
+    const row = db.query("SELECT COUNT(*) AS n FROM chunk_embeddings WHERE chunk_id = ?").get(chunk.id);
+    embeddingsDeleted += row?.n ?? 0;
+    const vectorRow = db.query("SELECT COUNT(*) AS n FROM vector_index_entries WHERE chunk_id = ?").get(chunk.id);
+    vectorEntriesDeleted += vectorRow?.n ?? 0;
+    db.run("DELETE FROM vector_index_entries WHERE chunk_id = ?", [chunk.id]);
+    db.run("DELETE FROM chunk_embeddings WHERE chunk_id = ?", [chunk.id]);
+    db.run("DELETE FROM chunks_fts WHERE chunk_id = ?", [chunk.id]);
+  }
+  db.run("DELETE FROM chunks WHERE source_revision_id = ?", [revisionId]);
+  const revision = db.query("SELECT metadata_json FROM source_revisions WHERE id = ?").get(revisionId);
+  db.run("UPDATE source_revisions SET metadata_json = ? WHERE id = ?", [mergeJson(revision?.metadata_json, { reindex_required: true, invalidated_at: new Date().toISOString() }), revisionId]);
+  return { chunksDeleted: chunks.length, embeddingsDeleted, vectorEntriesDeleted };
+}
+function isDeleteEvent(eventType2, status) {
+  return status === "deleted" || ["delete", "deleted", "remove", "removed"].includes(eventType2);
+}
+function isMoveEvent(eventType2) {
+  return ["move", "moved", "rename", "renamed", "path_changed", "canonical_key_changed"].includes(eventType2);
+}
+function isPermissionEvent(eventType2) {
+  return ["permission", "permissions", "permission_changed", "acl_changed", "acl_revoked"].includes(eventType2);
+}
+async function consumeOpenFilesOutbox(options) {
+  const now = (options.now ?? new Date).toISOString();
+  if (options.safetyPolicy)
+    assertWriteAllowed(options.dbPath, options.safetyPolicy);
+  migrateKnowledgeDb(options.dbPath);
+  const text = await readOutboxInput(options.input, options.config, options.safetyPolicy);
+  const events = parseOutboxText(text);
+  const db = openKnowledgeDb(options.dbPath);
+  const runId = `run_${randomUUID8()}`;
+  try {
+    return db.transaction(() => {
+      db.run(`INSERT INTO runs (id, type, prompt, status, provider, model, metadata_json, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
+        runId,
+        "open-files-outbox",
+        options.input,
+        "completed",
+        "local",
+        "open-files-outbox",
+        JSON.stringify({ path: options.input, events: events.length }),
+        now,
+        now
+      ]);
+      const sourcesTouched = new Set;
+      const revisionsTouched = new Set;
+      let chunksDeleted = 0;
+      let embeddingsDeleted = 0;
+      let vectorEntriesDeleted = 0;
+      let staleRevisions = 0;
+      let deletedSources = 0;
+      let movedSources = 0;
+      let permissionUpdates = 0;
+      recordAuditEvent(db, {
+        event_type: "source_read",
+        action: options.input.startsWith("s3://") ? "s3_outbox_read" : "local_outbox_read",
+        target_uri: options.input,
+        decision: "allow",
+        metadata: { events: events.length, read_only: true },
+        created_at: now
+      });
+      events.forEach((raw, index) => {
+        const event = normalizeEvent(raw, now);
+        const sourceId = ensureSource(db, event, now);
+        sourcesTouched.add(sourceId);
+        const createdRevisionId = ensureRevision(db, sourceId, event, now);
+        if (createdRevisionId)
+          revisionsTouched.add(createdRevisionId);
+        const affectedRevisionIds = revisionIdsForEvent(db, sourceId, event);
+        for (const revisionId of affectedRevisionIds) {
+          revisionsTouched.add(revisionId);
+          const invalidation = invalidateRevision(db, revisionId);
+          chunksDeleted += invalidation.chunksDeleted;
+          embeddingsDeleted += invalidation.embeddingsDeleted;
+          vectorEntriesDeleted += invalidation.vectorEntriesDeleted;
+          staleRevisions += 1;
+        }
+        if (isDeleteEvent(event.eventType, event.status))
+          deletedSources += 1;
+        if (isMoveEvent(event.eventType))
+          movedSources += 1;
+        if (isPermissionEvent(event.eventType) || event.acl !== undefined)
+          permissionUpdates += 1;
+        db.run(`INSERT INTO run_events (id, run_id, level, event, metadata_json, created_at)
+           VALUES (?, ?, ?, ?, ?, ?)`, [
+          stableId6("evt", `${runId}\x00${index}\x00${event.sourceRef}\x00${event.eventType}`),
+          runId,
+          "info",
+          event.eventType,
+          JSON.stringify({
+            source_ref: event.sourceRef,
+            source_uri: event.sourceUri,
+            revision: event.revision,
+            hash: event.hash,
+            status: event.status,
+            affected_revisions: affectedRevisionIds.length
+          }),
+          event.updatedAt
+        ]);
+      });
+      db.run(`INSERT INTO provider_usage (id, run_id, provider, model, input_tokens, output_tokens, cost_usd, metadata_json, created_at)
+         VALUES (?, ?, ?, ?, 0, 0, 0, ?, ?)`, [
+        stableId6("usage", runId),
+        runId,
+        "local",
+        "open-files-outbox",
+        JSON.stringify({ note: "No model provider used for outbox invalidation." }),
+        now
+      ]);
+      recordAuditEvent(db, {
+        event_type: "write",
+        action: "knowledge_outbox_invalidation",
+        target_uri: options.dbPath,
+        decision: "allow",
+        metadata: {
+          run_id: runId,
+          events: events.length,
+          sources: sourcesTouched.size,
+          revisions: revisionsTouched.size,
+          chunks_deleted: chunksDeleted,
+          embeddings_deleted: embeddingsDeleted,
+          vector_entries_deleted: vectorEntriesDeleted
+        },
+        created_at: now
+      });
+      return {
+        path: options.input,
+        db_path: options.dbPath,
+        run_id: runId,
+        events_seen: events.length,
+        sources_touched: sourcesTouched.size,
+        revisions_touched: revisionsTouched.size,
+        chunks_deleted: chunksDeleted,
+        embeddings_deleted: embeddingsDeleted,
+        vector_entries_deleted: vectorEntriesDeleted,
+        stale_revisions: staleRevisions,
+        deleted_sources: deletedSources,
+        moved_sources: movedSources,
+        permission_updates: permissionUpdates
+      };
+    })();
+  } finally {
+    db.close();
+  }
+}
+
+// src/machines.ts
+import { spawnSync } from "child_process";
+import { hostname as hostname2, platform, userInfo } from "os";
+var KNOWLEDGE_MACHINES_ADAPTER_CONTRACT_VERSION = 1;
+var KNOWLEDGE_MACHINES_ADAPTER_PACKAGE = "@hasna/machines";
+var KNOWLEDGE_MACHINES_ADAPTER_ENTRYPOINT = "@hasna/machines/consumer";
+function asString3(value) {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+function asStringArray(value) {
+  return Array.isArray(value) ? value.filter((item) => typeof item === "string") : [];
+}
+function asRecord(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+function asBooleanOrNull(value) {
+  return typeof value === "boolean" ? value : null;
+}
+function asNumberOrNull(value) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+function normalizePlatform(value = platform()) {
+  const normalized = value.toLowerCase();
+  if (normalized === "darwin" || normalized === "macos")
+    return "macos";
+  if (normalized === "win32" || normalized === "windows")
+    return "windows";
+  if (normalized === "linux")
+    return "linux";
+  return value;
+}
+function defaultRunner(command) {
+  const result = spawnSync("bash", ["-c", command], {
+    encoding: "utf8",
+    env: process.env
+  });
+  return {
+    stdout: result.stdout || "",
+    stderr: result.stderr || "",
+    exitCode: result.status ?? 1
+  };
+}
+async function runCommand(runner, command) {
+  return await runner(command);
+}
+async function hasCommand(command, runner) {
+  const result = await runCommand(runner, `command -v ${command} >/dev/null 2>&1`);
+  return result.exitCode === 0;
+}
+function parseTailscaleStatus(raw) {
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object")
+      return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+function peerKey(peer) {
+  if (!peer)
+    return null;
+  return peer.HostName ?? peer.DNSName?.split(".")[0] ?? null;
+}
+async function loadTailscalePeers(runner, warnings) {
+  const peers = new Map;
+  if (!await hasCommand("tailscale", runner)) {
+    warnings.push("tailscale_not_available");
+    return { peers, selfKey: null };
+  }
+  const result = await runCommand(runner, "tailscale status --json");
+  if (result.exitCode !== 0) {
+    warnings.push(`tailscale_status_failed:${result.stderr.trim() || result.exitCode}`);
+    return { peers, selfKey: null };
+  }
+  const status = parseTailscaleStatus(result.stdout);
+  if (!status) {
+    warnings.push("tailscale_status_invalid_json");
+    return { peers, selfKey: null };
+  }
+  const addPeer = (peer) => {
+    const key = peerKey(peer);
+    if (key && peer)
+      peers.set(key, peer);
+  };
+  addPeer(status.Self);
+  for (const peer of Object.values(status.Peer ?? {}))
+    addPeer(peer);
+  return { peers, selfKey: peerKey(status.Self) };
+}
+function localMachineId(fallback) {
+  return process.env.HASNA_MACHINE_ID ?? process.env.OPEN_MACHINES_MACHINE_ID ?? process.env.MACHINE_ID ?? fallback ?? hostname2();
+}
+function buildLocalEntry(input) {
+  const local = input.machineId === input.localMachineId || input.machineId === hostname2();
+  const dnsName = input.peer?.DNSName?.replace(/\.$/, "") ?? null;
+  const tailscaleTarget = dnsName ?? input.peer?.TailscaleIPs?.[0] ?? null;
+  const hints = [];
+  if (local)
+    hints.push({ kind: "local", target: "localhost", reachable: true });
+  if (tailscaleTarget)
+    hints.push({ kind: "tailscale", target: tailscaleTarget, reachable: input.peer?.Online ?? null });
+  const selectedRoute = hints.find((hint) => hint.kind === "local") ?? hints.find((hint) => hint.kind === "tailscale") ?? null;
+  return {
+    machine_id: input.machineId,
+    hostname: input.peer?.HostName ?? (local ? hostname2() : input.machineId),
+    local,
+    platform: input.peer?.OS ? normalizePlatform(input.peer.OS) : local ? normalizePlatform() : null,
+    os: input.peer?.OS ?? (local ? platform() : null),
+    user: local ? userInfo().username : null,
+    workspace_path: null,
+    manifest_declared: false,
+    heartbeat_status: "unknown",
+    last_heartbeat_at: null,
+    tailscale: {
+      dns_name: dnsName,
+      ips: input.peer?.TailscaleIPs ?? [],
+      online: input.peer?.Online ?? null,
+      active: input.peer?.Active ?? null,
+      last_seen: input.peer?.LastSeen ?? null
+    },
+    ssh: {
+      address: null,
+      route: selectedRoute?.kind === "local" ? "local" : selectedRoute?.kind === "tailscale" ? "tailscale" : "unknown",
+      command_target: selectedRoute?.target ?? null
+    },
+    route_hints: hints,
+    tags: [],
+    metadata: {},
+    source: "local"
+  };
+}
+function normalizeRouteHints(value) {
+  if (!Array.isArray(value))
+    return [];
+  return value.map((entry) => {
+    const record = asRecord(entry);
+    const kind = asString3(record.kind) ?? "unknown";
+    const routeKind = kind === "local" || kind === "lan" || kind === "tailscale" || kind === "ssh" ? kind : "unknown";
+    return {
+      kind: routeKind,
+      target: asString3(record.target) ?? "",
+      reachable: asBooleanOrNull(record.reachable)
+    };
+  }).filter((entry) => entry.target.length > 0);
+}
+function normalizeOpenMachinesEntry(entry, localMachineId2) {
+  const machineId = asString3(entry.machine_id) ?? asString3(entry.hostname) ?? "unknown";
+  const tailscale = asRecord(entry.tailscale);
+  const ssh = asRecord(entry.ssh);
+  const heartbeatStatus = asString3(entry.heartbeat_status);
+  const route = asString3(ssh.route);
+  return {
+    machine_id: machineId,
+    hostname: asString3(entry.hostname),
+    local: machineId === localMachineId2,
+    platform: asString3(entry.platform),
+    os: asString3(entry.os),
+    user: asString3(entry.user),
+    workspace_path: asString3(entry.workspace_path),
+    manifest_declared: entry.manifest_declared === true,
+    heartbeat_status: heartbeatStatus === "online" || heartbeatStatus === "offline" ? heartbeatStatus : "unknown",
+    last_heartbeat_at: asString3(entry.last_heartbeat_at),
+    tailscale: {
+      dns_name: asString3(tailscale.dns_name),
+      ips: asStringArray(tailscale.ips),
+      online: asBooleanOrNull(tailscale.online),
+      active: asBooleanOrNull(tailscale.active),
+      last_seen: asString3(tailscale.last_seen)
+    },
+    ssh: {
+      address: asString3(ssh.address),
+      route: route === "local" || route === "lan" || route === "tailscale" ? route : "unknown",
+      command_target: asString3(ssh.command_target)
+    },
+    route_hints: normalizeRouteHints(entry.route_hints),
+    tags: asStringArray(entry.tags),
+    metadata: asRecord(entry.metadata),
+    source: "open-machines"
+  };
+}
+function topologyMessage(source, count3) {
+  return `${count3} machine${count3 === 1 ? "" : "s"} discovered via ${source}`;
+}
+function optionalModuleError(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("Cannot find module '@hasna/machines'") || message.includes("Cannot find module '@hasna/machines/consumer'") ? "module_not_found" : message;
+}
+function adapterMode(options) {
+  return options.adapterMode ?? "auto";
+}
+function contractVersion(mod) {
+  const fromContract = mod?.MACHINES_CONSUMER_CONTRACT?.schema_version;
+  if (typeof fromContract === "number")
+    return fromContract;
+  const direct = mod?.MACHINES_CONSUMER_CONTRACT_VERSION;
+  return typeof direct === "number" ? direct : null;
+}
+function payloadContractVersion(value) {
+  return typeof value.schema_version === "number" ? value.schema_version : null;
+}
+function unsupportedContractVersion(version) {
+  return typeof version === "number" && version > KNOWLEDGE_MACHINES_ADAPTER_CONTRACT_VERSION ? version : null;
+}
+function adapterStatus(input) {
+  return {
+    package: KNOWLEDGE_MACHINES_ADAPTER_PACKAGE,
+    entrypoint: KNOWLEDGE_MACHINES_ADAPTER_ENTRYPOINT,
+    mode: input.mode,
+    implementation: input.implementation,
+    contract_version: input.contractVersion ?? null,
+    available: input.available,
+    error: input.error ?? null
+  };
+}
+function disabledAdapterStatus(mode, error = "adapter_disabled") {
+  return adapterStatus({
+    mode,
+    implementation: "disabled",
+    available: false,
+    error
+  });
+}
+function unsupportedContractAdapterStatus(mode, mod) {
+  const version = unsupportedContractVersion(contractVersion(mod));
+  if (!version)
+    return null;
+  return adapterStatus({
+    mode,
+    implementation: "disabled",
+    available: false,
+    error: `unsupported_contract_version:${version}`,
+    contractVersion: version
+  });
+}
+function cliAdapterStatus(mode) {
+  return adapterStatus({
+    mode,
+    implementation: "cli",
+    available: true
+  });
+}
+function sdkAdapterStatus(mode, mod) {
+  return adapterStatus({
+    mode,
+    implementation: "sdk",
+    available: true,
+    contractVersion: contractVersion(mod)
+  });
+}
+function parseJson2(value) {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+function shellQuote(value) {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+function machinesCliCommand(args) {
+  return ["machines", ...args].map(shellQuote).join(" ");
+}
+function preflightTargetIsLocal(machineId) {
+  return machineId === "local" || machineId === "localhost" || machineId === hostname2() || machineId === process.env.HASNA_MACHINE_ID || machineId === process.env.OPEN_MACHINES_MACHINE_ID || machineId === process.env.MACHINE_ID;
+}
+function defaultPreflightRunner(machineId, command) {
+  const local = preflightTargetIsLocal(machineId);
+  const shellCommand = local ? command : `ssh ${shellQuote(machineId)} ${shellQuote(command)}`;
+  const result = spawnSync("bash", ["-c", shellCommand], {
+    encoding: "utf8",
+    env: process.env
+  });
+  return {
+    stdout: result.stdout || "",
+    stderr: result.stderr || "",
+    exitCode: result.status ?? 1,
+    source: local ? "local" : "ssh"
+  };
+}
+async function runPreflightCommand(runner, machineId, command) {
+  return await runner(machineId, command);
+}
+function preflightStatus(required, ok) {
+  if (ok)
+    return "ok";
+  return required === false ? "warn" : "fail";
+}
+function preflightId(value) {
+  return value.replace(/[^a-zA-Z0-9_.@/-]+/g, "-").replace(/^-+|-+$/g, "");
+}
+function packageCommand(name) {
+  if (name === "@hasna/knowledge")
+    return "knowledge";
+  if (name === "@hasna/machines")
+    return "machines";
+  return name.split("/").pop() ?? name;
+}
+function firstLine(value) {
+  return value.trim().split(/\r?\n/).find(Boolean) ?? "";
+}
+function extractVersion(value) {
+  const match = value.match(/\b\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?\b/);
+  return match?.[0] ?? null;
+}
+function parseKeyValue(stdout) {
+  const result = {};
+  for (const line of stdout.split(/\r?\n/)) {
+    const idx = line.indexOf("=");
+    if (idx <= 0)
+      continue;
+    result[line.slice(0, idx)] = line.slice(idx + 1);
+  }
+  return result;
+}
+function makePreflightCheck(input) {
+  return {
+    id: input.id,
+    kind: input.kind,
+    status: input.status,
+    target: input.target,
+    expected: input.expected ?? null,
+    actual: input.actual ?? null,
+    detail: input.detail,
+    source: input.source
+  };
+}
+async function inspectPreflightCommand(machineId, spec, runner) {
+  const script = [
+    `cmd=${shellQuote(spec.command)}`,
+    'path="$(command -v "$cmd" 2>/dev/null || true)"',
+    'printf "path=%s\\n" "$path"',
+    `if [ -n "$path" ]; then version="$("$cmd" ${spec.versionArgs ?? "--version"} 2>/dev/null || true)"; printf "version=%s\\n" "$version"; fi`
+  ].join("; ");
+  const result = await runPreflightCommand(runner, machineId, script);
+  const parsed = parseKeyValue(result.stdout);
+  return {
+    path: parsed.path || null,
+    version: parsed.version ? firstLine(parsed.version) : null,
+    stderr: result.stderr,
+    source: result.source ?? (preflightTargetIsLocal(machineId) ? "local" : "ssh")
+  };
+}
+function jsonFieldCommand(field) {
+  const regex = field === "name" ? String.raw`s/.*"name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p` : String.raw`s/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p`;
+  return [
+    `if command -v bun >/dev/null 2>&1; then bun -e "const p=JSON.parse(await Bun.file(process.argv[1]).text()); console.log(p.${field} ?? '')" "$pkg" 2>/dev/null`,
+    `elif command -v node >/dev/null 2>&1; then node -e "const fs=require('fs'); const p=JSON.parse(fs.readFileSync(process.argv[1], 'utf8')); console.log(p.${field} || '')" "$pkg" 2>/dev/null`,
+    `else sed -n '${regex}' "$pkg" | head -n 1`,
+    "fi"
+  ].join("; ");
+}
+async function inspectPreflightWorkspace(machineId, spec, runner) {
+  const script = [
+    `path=${shellQuote(spec.path)}`,
+    'printf "exists=%s\\n" "$(test -d "$path" && printf yes || printf no)"',
+    'pkg="$path/package.json"',
+    'printf "package_json=%s\\n" "$(test -f "$pkg" && printf yes || printf no)"',
+    `if [ -f "$pkg" ]; then printf "package_name=%s\\n" "$(${jsonFieldCommand("name")})"; printf "version=%s\\n" "$(${jsonFieldCommand("version")})"; fi`
+  ].join("; ");
+  const result = await runPreflightCommand(runner, machineId, script);
+  const parsed = parseKeyValue(result.stdout);
+  return {
+    exists: parsed.exists === "yes",
+    packageJson: parsed.package_json === "yes",
+    packageName: parsed.package_name || null,
+    version: parsed.version || null,
+    stderr: result.stderr,
+    source: result.source ?? (preflightTargetIsLocal(machineId) ? "local" : "ssh")
+  };
+}
+async function fallbackCommandChecks(machineId, spec, runner) {
+  const inspection = await inspectPreflightCommand(machineId, spec, runner);
+  const found = Boolean(inspection.path);
+  const checks = [
+    makePreflightCheck({
+      id: `command:${preflightId(spec.command)}:path`,
+      kind: "command",
+      status: preflightStatus(spec.required, found),
+      target: spec.command,
+      expected: "available",
+      actual: inspection.path ?? "missing",
+      detail: found ? `found at ${inspection.path}` : inspection.stderr || "command missing",
+      source: inspection.source
+    })
+  ];
+  if (spec.expectedVersion) {
+    const actualVersion = extractVersion(inspection.version ?? "");
+    checks.push(makePreflightCheck({
+      id: `command:${preflightId(spec.command)}:version`,
+      kind: "command",
+      status: actualVersion === spec.expectedVersion ? "ok" : preflightStatus(spec.required, false),
+      target: spec.command,
+      expected: spec.expectedVersion,
+      actual: actualVersion ?? inspection.version ?? "missing",
+      detail: actualVersion ? `version output: ${inspection.version}` : "version unavailable",
+      source: inspection.source
+    }));
+  }
+  return checks;
+}
+async function fallbackPackageChecks(machineId, spec, runner) {
+  const command = spec.command ?? packageCommand(spec.name);
+  const inspection = await inspectPreflightCommand(machineId, { command, expectedVersion: spec.expectedVersion, required: spec.required }, runner);
+  const found = Boolean(inspection.path);
+  const checks = [
+    makePreflightCheck({
+      id: `package:${preflightId(spec.name)}:command`,
+      kind: "package",
+      status: preflightStatus(spec.required, found),
+      target: spec.name,
+      expected: command,
+      actual: inspection.path ?? "missing",
+      detail: found ? `${command} found at ${inspection.path}` : `${command} command missing`,
+      source: inspection.source
+    })
+  ];
+  if (spec.expectedVersion) {
+    const actualVersion = extractVersion(inspection.version ?? "");
+    checks.push(makePreflightCheck({
+      id: `package:${preflightId(spec.name)}:version`,
+      kind: "package",
+      status: actualVersion === spec.expectedVersion ? "ok" : preflightStatus(spec.required, false),
+      target: spec.name,
+      expected: spec.expectedVersion,
+      actual: actualVersion ?? inspection.version ?? "missing",
+      detail: actualVersion ? `version output: ${inspection.version}` : "version unavailable",
+      source: inspection.source
+    }));
+  }
+  return checks;
+}
+async function fallbackWorkspaceChecks(machineId, spec, runner) {
+  const inspection = await inspectPreflightWorkspace(machineId, spec, runner);
+  const target = spec.label ?? spec.path;
+  const checks = [
+    makePreflightCheck({
+      id: `workspace:${preflightId(target)}:path`,
+      kind: "workspace",
+      status: preflightStatus(spec.required, inspection.exists),
+      target,
+      expected: spec.path,
+      actual: inspection.exists ? "exists" : "missing",
+      detail: inspection.exists ? `workspace exists at ${spec.path}` : inspection.stderr || `workspace missing at ${spec.path}`,
+      source: inspection.source
+    })
+  ];
+  if (spec.expectedPackageName) {
+    checks.push(makePreflightCheck({
+      id: `workspace:${preflightId(target)}:package-name`,
+      kind: "workspace",
+      status: inspection.packageName === spec.expectedPackageName ? "ok" : preflightStatus(spec.required, false),
+      target,
+      expected: spec.expectedPackageName,
+      actual: inspection.packageName ?? (inspection.packageJson ? "missing-name" : "missing-package-json"),
+      detail: inspection.packageJson ? "package.json inspected" : "package.json missing",
+      source: inspection.source
+    }));
+  }
+  if (spec.expectedVersion) {
+    checks.push(makePreflightCheck({
+      id: `workspace:${preflightId(target)}:version`,
+      kind: "workspace",
+      status: inspection.version === spec.expectedVersion ? "ok" : preflightStatus(spec.required, false),
+      target,
+      expected: spec.expectedVersion,
+      actual: inspection.version ?? (inspection.packageJson ? "missing-version" : "missing-package-json"),
+      detail: inspection.packageJson ? "package.json inspected" : "package.json missing",
+      source: inspection.source
+    }));
+  }
+  return checks;
+}
+function withKnowledgeContext(topology, options) {
+  return {
+    ...topology,
+    knowledge: {
+      scope: options.knowledge?.scope ?? "global",
+      app_path: HASNA_KNOWLEDGE_APP_PATH,
+      workspace_home: options.knowledge?.workspace_home ?? null
+    },
+    message: topologyMessage(topology.source, topology.machines.length)
+  };
+}
+async function loadOpenMachinesModule() {
+  try {
+    const specifier = "@hasna/machines/consumer";
+    return await import(specifier);
+  } catch (error) {
+    if (optionalModuleError(error) !== "module_not_found")
+      throw error;
+    const specifier = "@hasna/machines";
+    return await import(specifier);
+  }
+}
+function normalizeOpenMachinesTopology(value, options, adapter) {
+  const raw = asRecord(value);
+  if (unsupportedContractVersion(payloadContractVersion(raw)))
+    return null;
+  const machines = Array.isArray(raw.machines) ? raw.machines : null;
+  const localMachine = asString3(raw.local_machine_id);
+  if (!machines || !localMachine)
+    return null;
+  const topology = {
+    ok: true,
+    source: "open-machines",
+    generated_at: asString3(raw.generated_at) ?? (options.now ?? new Date).toISOString(),
+    local_machine_id: localMachine,
+    local_hostname: asString3(raw.local_hostname) ?? hostname2(),
+    current_platform: asString3(raw.current_platform) ?? normalizePlatform(),
+    machines: machines.map((machine) => normalizeOpenMachinesEntry(machine, localMachine)),
+    warnings: asStringArray(raw.warnings),
+    adapter
+  };
+  return withKnowledgeContext(topology, options);
+}
+function normalizeRouteKind(value) {
+  return value === "local" || value === "lan" || value === "tailscale" || value === "ssh" || value === "unknown" ? value : null;
+}
+function normalizeResolverCacheability(value) {
+  const raw = asRecord(value);
+  const observedAt = asString3(raw.observed_at);
+  const sourceAuthority = asString3(raw.source_authority);
+  if (!observedAt || !sourceAuthority)
+    return null;
+  return {
+    observed_at: observedAt,
+    verified_at: asString3(raw.verified_at),
+    expires_at: asString3(raw.expires_at),
+    ttl_ms: asNumberOrNull(raw.ttl_ms),
+    source_authority: sourceAuthority,
+    confidence: asString3(raw.confidence),
+    cacheable: raw.cacheable === true,
+    stale: raw.stale === true,
+    reasons: asStringArray(raw.reasons)
+  };
+}
+function normalizeOpenMachinesRoute(value, adapter) {
+  const raw = asRecord(value);
+  if (unsupportedContractVersion(payloadContractVersion(raw)))
+    return null;
+  const target = asString3(raw.target) ?? asString3(raw.command_target);
+  if (raw.ok !== true || !target)
+    return null;
+  const evidence = typeof raw.evidence === "object" && raw.evidence !== null ? raw.evidence : null;
+  const selectedHint = typeof evidence?.selected_hint === "object" && evidence.selected_hint !== null ? evidence.selected_hint : null;
+  return {
+    target,
+    route: normalizeRouteKind(raw.route),
+    targetKind: normalizeRouteKind(selectedHint?.kind) ?? normalizeRouteKind(raw.source) ?? normalizeRouteKind(raw.route),
+    confidence: asString3(raw.confidence),
+    source: "open-machines",
+    adapter,
+    evidence,
+    cacheability: normalizeResolverCacheability(raw.cacheability),
+    warnings: asStringArray(raw.warnings)
+  };
+}
+function pathRecord(value) {
+  const raw = asRecord(value);
+  return {
+    path: asString3(raw.path),
+    source: asString3(raw.source) ?? "unresolved"
+  };
+}
+function normalizeWorkspaceDiagnostics(value) {
+  if (!Array.isArray(value))
+    return [];
+  return value.flatMap((entry) => {
+    const raw = asRecord(entry);
+    const id = asString3(raw.id);
+    const status = asString3(raw.status);
+    const severity = asString3(raw.severity);
+    const message = asString3(raw.message);
+    if (!id || !status || !severity || !message)
+      return [];
+    return [{
+      id,
+      status,
+      severity,
+      message,
+      path: asString3(raw.path),
+      source: asString3(raw.source) ?? "unknown",
+      path_exists: asBooleanOrNull(raw.path_exists)
+    }];
+  });
+}
+function normalizeWorkspaceRepairHints(value) {
+  if (!Array.isArray(value))
+    return [];
+  return value.flatMap((entry) => {
+    const raw = asRecord(entry);
+    const id = asString3(raw.id);
+    const reason = asString3(raw.reason);
+    const command = asStringArray(raw.command);
+    const shellCommand = asString3(raw.shell_command);
+    const applyCommand = asStringArray(raw.apply_command);
+    const applyShellCommand = asString3(raw.apply_shell_command);
+    if (!id || !reason || !command.length || !shellCommand || !applyCommand.length || !applyShellCommand)
+      return [];
+    return [{
+      id,
+      reason,
+      command,
+      shell_command: shellCommand,
+      apply_command: applyCommand,
+      apply_shell_command: applyShellCommand
+    }];
+  });
+}
+function fallbackWorkspaceRepairHints(input) {
+  const needsRepair = input.projectRootSource === "inferred" || input.openFilesRootSource === "inferred" || input.trustStatus === "untrusted" || input.authStatus === "unknown" || input.warnings.some((warning) => warning.includes("inferred") || warning.includes("untrusted") || warning.includes("unknown_auth") || warning.includes("missing"));
+  if (!needsRepair)
+    return [];
+  const command = [
+    "machines",
+    "workspace",
+    "repair",
+    "--machine",
+    input.requestedMachineId,
+    "--project",
+    input.projectId,
+    "--repo",
+    input.repoName,
+    "--open-files-repo",
+    input.openFilesRepoName ?? "open-files",
+    "--json"
+  ];
+  const applyCommand = [...command, "--apply"];
+  return [{
+    id: "machines_workspace_repair",
+    reason: "Workspace paths or trust metadata need confirmation before remote knowledge sync.",
+    command,
+    shell_command: command.map(shellQuote).join(" "),
+    apply_command: applyCommand,
+    apply_shell_command: applyCommand.map(shellQuote).join(" ")
+  }];
+}
+function normalizeOpenMachinesWorkspace(value, options, adapter) {
+  const raw = asRecord(value);
+  if (unsupportedContractVersion(payloadContractVersion(raw)))
+    return null;
+  const paths = asRecord(raw.paths);
+  const project = asRecord(raw.project);
+  const machine = asRecord(raw.machine);
+  const projectRoot = pathRecord(paths.project_root);
+  const workspaceRoot = pathRecord(paths.workspace_root);
+  const openFilesRoot = pathRecord(paths.open_files_root);
+  if (raw.ok !== true || !projectRoot.path)
+    return null;
+  const evidence = typeof raw.evidence === "object" && raw.evidence !== null ? raw.evidence : null;
+  const requestedMachineId = asString3(raw.requested_machine_id) ?? options.machineId;
+  const projectId = asString3(project.project_id) ?? options.projectId ?? "open-knowledge";
+  const repoName = asString3(project.repo_name) ?? options.repoName ?? options.projectId ?? "open-knowledge";
+  const trustStatus = asString3(machine.trust_status) ?? "unknown";
+  const authStatus = asString3(machine.auth_status) ?? "unknown";
+  const warnings = asStringArray(raw.warnings);
+  const diagnostics = normalizeWorkspaceDiagnostics(raw.diagnostics);
+  const repairHints = normalizeWorkspaceRepairHints(raw.repair_hints);
+  return {
+    ok: true,
+    source: "open-machines",
+    adapter,
+    requested_machine_id: requestedMachineId,
+    machine_id: asString3(raw.machine_id),
+    project_id: projectId,
+    repo_name: repoName,
+    project_root: projectRoot.path,
+    project_root_source: projectRoot.source,
+    workspace_root: workspaceRoot.path,
+    workspace_root_source: workspaceRoot.source,
+    open_files_root: openFilesRoot.path,
+    open_files_root_source: openFilesRoot.source,
+    trust_status: trustStatus,
+    auth_status: authStatus,
+    current: machine.current === true,
+    primary: machine.primary === true,
+    diagnostics,
+    repair_hints: repairHints.length ? repairHints : fallbackWorkspaceRepairHints({
+      requestedMachineId,
+      projectId,
+      repoName,
+      openFilesRepoName: options.openFilesRepoName,
+      warnings,
+      projectRootSource: projectRoot.source,
+      openFilesRootSource: openFilesRoot.source,
+      trustStatus,
+      authStatus
+    }),
+    evidence,
+    cacheability: normalizeResolverCacheability(raw.cacheability),
+    warnings
+  };
+}
+async function discoverOpenMachinesCliTopology(options, adapter) {
+  const runner = options.runner ?? defaultRunner;
+  if (!await hasCommand("machines", runner))
+    return null;
+  const args = ["topology", "--json"];
+  if (options.includeTailscale === false)
+    args.push("--no-tailscale");
+  const result = await runCommand(runner, machinesCliCommand(args));
+  if (result.exitCode !== 0)
+    return null;
+  return normalizeOpenMachinesTopology(parseJson2(result.stdout), options, adapter);
+}
+async function discoverLocalTopology(options, adapter) {
+  const warnings = [];
+  if (adapter.error)
+    warnings.push(`open_machines_unavailable:${adapter.error}`);
+  const runner = options.runner ?? defaultRunner;
+  const tailscale = options.includeTailscale === false ? { peers: new Map, selfKey: null } : await loadTailscalePeers(runner, warnings);
+  const localId = localMachineId(tailscale.selfKey);
+  const machineIds = new Set([localId, ...tailscale.peers.keys()]);
+  const machines = [...machineIds].sort().map((machineId) => buildLocalEntry({
+    machineId,
+    localMachineId: localId,
+    peer: tailscale.peers.get(machineId)
+  }));
+  return withKnowledgeContext({
+    ok: true,
+    source: "local",
+    generated_at: (options.now ?? new Date).toISOString(),
+    local_machine_id: localId,
+    local_hostname: hostname2(),
+    current_platform: normalizePlatform(),
+    machines,
+    warnings,
+    adapter
+  }, options);
+}
+async function discoverKnowledgeMachineTopology(options = {}) {
+  const mode = adapterMode(options);
+  if (mode === "disabled")
+    return await discoverLocalTopology(options, disabledAdapterStatus(mode));
+  const cliStatus = cliAdapterStatus(mode);
+  try {
+    if (mode !== "cli") {
+      const loader = options.loadOpenMachines ?? loadOpenMachinesModule;
+      const mod = await loader();
+      const unsupportedStatus = unsupportedContractAdapterStatus(mode, mod);
+      if (unsupportedStatus)
+        return await discoverLocalTopology(options, unsupportedStatus);
+      const sdkStatus = sdkAdapterStatus(mode, mod);
+      if (mod?.discoverMachineTopology) {
+        const topology = mod.discoverMachineTopology({
+          includeTailscale: options.includeTailscale,
+          runner: options.runner,
+          now: options.now
+        });
+        const normalized = normalizeOpenMachinesTopology(topology, options, sdkStatus);
+        if (normalized)
+          return normalized;
+        if (mode === "sdk")
+          return await discoverLocalTopology(options, disabledAdapterStatus(mode, "invalid_topology_shape"));
+        return await discoverOpenMachinesCliTopology(options, cliStatus) ?? await discoverLocalTopology(options, disabledAdapterStatus(mode, "invalid_topology_shape"));
+      }
+      if (mode === "sdk")
+        return await discoverLocalTopology(options, disabledAdapterStatus(mode, "missing_discoverMachineTopology"));
+      return await discoverOpenMachinesCliTopology(options, cliStatus) ?? await discoverLocalTopology(options, disabledAdapterStatus(mode, "missing_discoverMachineTopology"));
+    }
+    return await discoverOpenMachinesCliTopology(options, cliStatus) ?? await discoverLocalTopology(options, disabledAdapterStatus(mode, "machines_cli_unavailable"));
+  } catch (error) {
+    if (mode === "sdk")
+      return await discoverLocalTopology(options, disabledAdapterStatus(mode, optionalModuleError(error)));
+    return await discoverOpenMachinesCliTopology(options, cliStatus) ?? await discoverLocalTopology(options, disabledAdapterStatus(mode, optionalModuleError(error)));
+  }
+}
+async function resolveOpenMachinesCliRoute(options, adapter) {
+  const runner = options.runner ?? defaultRunner;
+  if (!await hasCommand("machines", runner))
+    return null;
+  const args = ["route", "--machine", options.machineId, "--json"];
+  if (options.includeTailscale === false)
+    args.push("--no-tailscale");
+  const result = await runCommand(runner, machinesCliCommand(args));
+  if (result.exitCode !== 0)
+    return null;
+  return normalizeOpenMachinesRoute(parseJson2(result.stdout), adapter);
+}
+function rawMachineRoute(machineId, adapter) {
+  return {
+    target: machineId,
+    route: null,
+    targetKind: null,
+    confidence: null,
+    source: "raw",
+    adapter,
+    evidence: null,
+    cacheability: null,
+    warnings: []
+  };
+}
+async function resolveKnowledgeMachineRoute(options) {
+  const mode = adapterMode(options);
+  if (mode === "disabled")
+    return rawMachineRoute(options.machineId, disabledAdapterStatus(mode));
+  const cliStatus = cliAdapterStatus(mode);
+  try {
+    if (mode !== "cli") {
+      const loader = options.loadOpenMachines ?? loadOpenMachinesModule;
+      const mod = await loader();
+      const unsupportedStatus = unsupportedContractAdapterStatus(mode, mod);
+      if (unsupportedStatus)
+        return rawMachineRoute(options.machineId, unsupportedStatus);
+      const sdkStatus = sdkAdapterStatus(mode, mod);
+      if (mod?.resolveMachineRoute) {
+        const normalized = normalizeOpenMachinesRoute(mod.resolveMachineRoute(options.machineId, {
+          includeTailscale: options.includeTailscale,
+          runner: options.runner,
+          now: options.now
+        }), sdkStatus);
+        if (normalized)
+          return normalized;
+        if (mode === "sdk")
+          return rawMachineRoute(options.machineId, disabledAdapterStatus(mode, "invalid_route_shape"));
+        return await resolveOpenMachinesCliRoute(options, cliStatus) ?? rawMachineRoute(options.machineId, disabledAdapterStatus(mode, "invalid_route_shape"));
+      }
+      if (mode === "sdk")
+        return rawMachineRoute(options.machineId, disabledAdapterStatus(mode, "missing_resolveMachineRoute"));
+      return await resolveOpenMachinesCliRoute(options, cliStatus) ?? rawMachineRoute(options.machineId, disabledAdapterStatus(mode, "missing_resolveMachineRoute"));
+    }
+    return await resolveOpenMachinesCliRoute(options, cliStatus) ?? rawMachineRoute(options.machineId, disabledAdapterStatus(mode, "machines_cli_unavailable"));
+  } catch (error) {
+    if (mode === "sdk") {
+      return {
+        ...rawMachineRoute(options.machineId, disabledAdapterStatus(mode, optionalModuleError(error))),
+        warnings: [optionalModuleError(error)]
+      };
+    }
+    return await resolveOpenMachinesCliRoute(options, cliStatus) ?? {
+      ...rawMachineRoute(options.machineId, disabledAdapterStatus(mode, optionalModuleError(error))),
+      warnings: [optionalModuleError(error)]
+    };
+  }
+}
+async function resolveOpenMachinesCliWorkspace(options, adapter) {
+  const runner = options.runner ?? defaultRunner;
+  if (!await hasCommand("machines", runner))
+    return null;
+  const projectId = options.projectId ?? "open-knowledge";
+  const repoName = options.repoName ?? "open-knowledge";
+  const args = [
+    "workspace",
+    "resolve",
+    "--machine",
+    options.machineId,
+    "--project",
+    projectId,
+    "--repo",
+    repoName,
+    "--open-files-repo",
+    options.openFilesRepoName ?? "open-files",
+    "--json"
+  ];
+  if (options.includeTailscale === false)
+    args.push("--no-tailscale");
+  const result = await runCommand(runner, machinesCliCommand(args));
+  if (result.exitCode !== 0)
+    return null;
+  return normalizeOpenMachinesWorkspace(parseJson2(result.stdout), options, adapter);
+}
+function argumentMachineWorkspace(options) {
+  const peerWorkspace = options.peerWorkspace?.trim();
+  if (!peerWorkspace)
+    return null;
+  const adapter = disabledAdapterStatus(adapterMode(options), "argument_override");
+  return {
+    ok: true,
+    source: "argument",
+    adapter,
+    requested_machine_id: options.machineId,
+    machine_id: options.machineId,
+    project_id: options.projectId ?? "open-knowledge",
+    repo_name: options.repoName ?? "open-knowledge",
+    project_root: peerWorkspace,
+    project_root_source: "argument",
+    workspace_root: null,
+    workspace_root_source: "unresolved",
+    open_files_root: null,
+    open_files_root_source: "unresolved",
+    trust_status: "unknown",
+    auth_status: "unknown",
+    current: false,
+    primary: false,
+    diagnostics: [],
+    repair_hints: [],
+    evidence: null,
+    cacheability: null,
+    warnings: []
+  };
+}
+function unresolvedMachineWorkspace(options, warnings, adapter) {
+  return {
+    ok: false,
+    source: "raw",
+    adapter,
+    requested_machine_id: options.machineId,
+    machine_id: null,
+    project_id: options.projectId ?? "open-knowledge",
+    repo_name: options.repoName ?? "open-knowledge",
+    project_root: null,
+    project_root_source: "unresolved",
+    workspace_root: null,
+    workspace_root_source: "unresolved",
+    open_files_root: null,
+    open_files_root_source: "unresolved",
+    trust_status: "unknown",
+    auth_status: "unknown",
+    current: false,
+    primary: false,
+    diagnostics: [],
+    repair_hints: [],
+    evidence: null,
+    cacheability: null,
+    warnings
+  };
+}
+async function resolveKnowledgeMachineWorkspace(options) {
+  const argument = argumentMachineWorkspace(options);
+  if (argument)
+    return argument;
+  const mode = adapterMode(options);
+  if (mode === "disabled")
+    return unresolvedMachineWorkspace(options, ["adapter_disabled"], disabledAdapterStatus(mode));
+  const cliStatus = cliAdapterStatus(mode);
+  try {
+    if (mode !== "cli") {
+      const loader = options.loadOpenMachines ?? loadOpenMachinesModule;
+      const mod = await loader();
+      const unsupportedStatus = unsupportedContractAdapterStatus(mode, mod);
+      if (unsupportedStatus)
+        return unresolvedMachineWorkspace(options, [`unsupported_contract_version:${unsupportedStatus.contract_version}`], unsupportedStatus);
+      const sdkStatus = sdkAdapterStatus(mode, mod);
+      if (mod?.resolveMachineWorkspace) {
+        const normalized = normalizeOpenMachinesWorkspace(mod.resolveMachineWorkspace({
+          machineId: options.machineId,
+          projectId: options.projectId ?? "open-knowledge",
+          repoName: options.repoName ?? "open-knowledge",
+          openFilesRepoName: options.openFilesRepoName ?? "open-files",
+          includeTailscale: options.includeTailscale,
+          runner: options.runner,
+          now: options.now
+        }), options, sdkStatus);
+        if (normalized)
+          return normalized;
+        if (mode === "sdk")
+          return unresolvedMachineWorkspace(options, ["invalid_workspace_shape"], disabledAdapterStatus(mode, "invalid_workspace_shape"));
+        return await resolveOpenMachinesCliWorkspace(options, cliStatus) ?? unresolvedMachineWorkspace(options, ["invalid_workspace_shape"], disabledAdapterStatus(mode, "invalid_workspace_shape"));
+      }
+      if (mode === "sdk")
+        return unresolvedMachineWorkspace(options, ["missing_resolveMachineWorkspace"], disabledAdapterStatus(mode, "missing_resolveMachineWorkspace"));
+      return await resolveOpenMachinesCliWorkspace(options, cliStatus) ?? unresolvedMachineWorkspace(options, ["missing_resolveMachineWorkspace"], disabledAdapterStatus(mode, "missing_resolveMachineWorkspace"));
+    }
+    return await resolveOpenMachinesCliWorkspace(options, cliStatus) ?? unresolvedMachineWorkspace(options, ["machines_cli_unavailable"], disabledAdapterStatus(mode, "machines_cli_unavailable"));
+  } catch (error) {
+    if (mode === "sdk")
+      return unresolvedMachineWorkspace(options, [optionalModuleError(error)], disabledAdapterStatus(mode, optionalModuleError(error)));
+    return await resolveOpenMachinesCliWorkspace(options, cliStatus) ?? unresolvedMachineWorkspace(options, [optionalModuleError(error)], disabledAdapterStatus(mode, optionalModuleError(error)));
+  }
+}
+function withPreflightKnowledgeContext(report, options) {
+  return {
+    ...report,
+    knowledge: {
+      scope: options.knowledge?.scope ?? "global",
+      app_path: HASNA_KNOWLEDGE_APP_PATH,
+      workspace_home: options.knowledge?.workspace_home ?? null
+    },
+    message: report.ok ? `Machine ${report.machine_id} passed knowledge preflight` : `Machine ${report.machine_id} failed knowledge preflight: ${report.summary.fail} failing check(s)`
+  };
+}
+function normalizeOpenMachinesPreflight(value, options, adapter) {
+  const raw = asRecord(value);
+  if (unsupportedContractVersion(payloadContractVersion(raw)))
+    return null;
+  const checksRaw = Array.isArray(raw.checks) ? raw.checks : null;
+  const machineId = asString3(raw.machine_id) ?? asString3(raw.machineId);
+  if (!checksRaw || !machineId)
+    return null;
+  const checks = checksRaw.map((entry) => {
+    const record = asRecord(entry);
+    const status = asString3(record.status);
+    const kind = asString3(record.kind);
+    const source = asString3(record.source);
+    return makePreflightCheck({
+      id: asString3(record.id) ?? "unknown",
+      kind: kind === "command" || kind === "package" || kind === "workspace" ? kind : "command",
+      status: status === "ok" || status === "warn" || status === "fail" ? status : "fail",
+      target: asString3(record.target) ?? "unknown",
+      expected: asString3(record.expected),
+      actual: asString3(record.actual),
+      detail: asString3(record.detail) ?? "",
+      source: source === "local" || source === "ssh" || source === "open-machines" ? source : "open-machines"
+    });
+  });
+  const summary = {
+    ok: checks.filter((check) => check.status === "ok").length,
+    warn: checks.filter((check) => check.status === "warn").length,
+    fail: checks.filter((check) => check.status === "fail").length
+  };
+  return withPreflightKnowledgeContext({
+    ok: summary.fail === 0,
+    source: "open-machines",
+    machine_id: machineId,
+    generated_at: asString3(raw.generated_at) ?? (options.now ?? new Date).toISOString(),
+    checks,
+    summary,
+    adapter
+  }, options);
+}
+function machinesCliPreflightRunner(options) {
+  if (!options.runner)
+    return defaultRunner;
+  return async (command) => {
+    const result = await options.runner?.("local", command);
+    return {
+      stdout: result?.stdout ?? "",
+      stderr: result?.stderr ?? "",
+      exitCode: result?.exitCode ?? 1
+    };
+  };
+}
+function machinesCliPackageSpec(spec) {
+  return [spec.name, spec.command, spec.expectedVersion].filter((value) => Boolean(value)).join(":");
+}
+function machinesCliWorkspaceSpec(spec) {
+  const suffix = [spec.expectedPackageName, spec.expectedVersion].filter((value) => Boolean(value)).join(":");
+  const path = suffix ? `${spec.path}:${suffix}` : spec.path;
+  return spec.label ? `${spec.label}=${path}` : path;
+}
+async function preflightOpenMachinesCli(options, adapter) {
+  const runner = machinesCliPreflightRunner(options);
+  if (!await hasCommand("machines", runner))
+    return null;
+  const args = [
+    "compatibility",
+    "--json",
+    "--machine",
+    options.machineId ?? "local"
+  ];
+  for (const spec of options.commands ?? []) {
+    args.push("--command", spec.expectedVersion ? `${spec.command}:${spec.expectedVersion}` : spec.command);
+  }
+  for (const spec of options.packages ?? [])
+    args.push("--package", machinesCliPackageSpec(spec));
+  for (const spec of options.workspaces ?? [])
+    args.push("--workspace", machinesCliWorkspaceSpec(spec));
+  const result = await runCommand(runner, machinesCliCommand(args));
+  if (result.exitCode !== 0)
+    return null;
+  return normalizeOpenMachinesPreflight(parseJson2(result.stdout), options, adapter);
+}
+async function fallbackPreflight(options, adapter) {
+  const machineId = options.machineId ?? hostname2();
+  const runner = options.runner ?? defaultPreflightRunner;
+  const commands = options.commands ?? [{ command: "bun", required: true }, { command: "knowledge", required: true }];
+  const packages = options.packages ?? [{ name: "@hasna/knowledge", command: "knowledge", required: true }];
+  const workspaces = options.workspaces ?? [];
+  const checks = [];
+  for (const spec of commands)
+    checks.push(...await fallbackCommandChecks(machineId, spec, runner));
+  for (const spec of packages)
+    checks.push(...await fallbackPackageChecks(machineId, spec, runner));
+  for (const spec of workspaces)
+    checks.push(...await fallbackWorkspaceChecks(machineId, spec, runner));
+  if (adapter.error) {
+    checks.push(makePreflightCheck({
+      id: "adapter:@hasna/machines",
+      kind: "package",
+      status: "warn",
+      target: "@hasna/machines",
+      expected: "optional",
+      actual: adapter.error,
+      detail: "Using knowledge local/ssh compatibility fallback",
+      source: preflightTargetIsLocal(machineId) ? "local" : "ssh"
+    }));
+  }
+  const summary = {
+    ok: checks.filter((check) => check.status === "ok").length,
+    warn: checks.filter((check) => check.status === "warn").length,
+    fail: checks.filter((check) => check.status === "fail").length
+  };
+  return withPreflightKnowledgeContext({
+    ok: summary.fail === 0,
+    source: "local",
+    machine_id: machineId,
+    generated_at: (options.now ?? new Date).toISOString(),
+    checks,
+    summary,
+    adapter
+  }, options);
+}
+async function preflightKnowledgeMachine(options = {}) {
+  const mode = adapterMode(options);
+  if (mode === "disabled")
+    return await fallbackPreflight(options, disabledAdapterStatus(mode));
+  const cliStatus = cliAdapterStatus(mode);
+  try {
+    if (mode !== "cli") {
+      const loader = options.loadOpenMachines ?? loadOpenMachinesModule;
+      const mod = await loader();
+      const unsupportedStatus = unsupportedContractAdapterStatus(mode, mod);
+      if (unsupportedStatus)
+        return await fallbackPreflight(options, unsupportedStatus);
+      const sdkStatus = sdkAdapterStatus(mode, mod);
+      if (mod?.checkMachineCompatibility) {
+        const report = mod.checkMachineCompatibility({
+          machineId: options.machineId,
+          commands: options.commands,
+          packages: options.packages,
+          workspaces: options.workspaces,
+          runner: options.runner,
+          now: options.now
+        });
+        const normalized = normalizeOpenMachinesPreflight(report, options, sdkStatus);
+        if (normalized)
+          return normalized;
+        if (mode === "sdk")
+          return await fallbackPreflight(options, disabledAdapterStatus(mode, "invalid_compatibility_shape"));
+        return await preflightOpenMachinesCli(options, cliStatus) ?? await fallbackPreflight(options, disabledAdapterStatus(mode, "invalid_compatibility_shape"));
+      }
+      if (mode === "sdk")
+        return await fallbackPreflight(options, disabledAdapterStatus(mode, "missing_checkMachineCompatibility"));
+      return await preflightOpenMachinesCli(options, cliStatus) ?? await fallbackPreflight(options, disabledAdapterStatus(mode, "missing_checkMachineCompatibility"));
+    }
+    return await preflightOpenMachinesCli(options, cliStatus) ?? await fallbackPreflight(options, disabledAdapterStatus(mode, "machines_cli_unavailable"));
+  } catch (error) {
+    if (mode === "sdk")
+      return await fallbackPreflight(options, disabledAdapterStatus(mode, optionalModuleError(error)));
+    return await preflightOpenMachinesCli(options, cliStatus) ?? await fallbackPreflight(options, disabledAdapterStatus(mode, optionalModuleError(error)));
+  }
+}
+function mergeAdapterTopologyOptions(defaults, options = {}) {
+  return {
+    ...options,
+    adapterMode: defaults.mode ?? "auto",
+    includeTailscale: options.includeTailscale ?? defaults.includeTailscale,
+    runner: options.runner ?? defaults.runner,
+    now: options.now ?? defaults.now,
+    loadOpenMachines: options.loadOpenMachines ?? defaults.loadOpenMachines
+  };
+}
+function mergeAdapterRouteOptions(defaults, options) {
+  return {
+    ...options,
+    adapterMode: defaults.mode ?? "auto",
+    includeTailscale: options.includeTailscale ?? defaults.includeTailscale,
+    runner: options.runner ?? defaults.runner,
+    now: options.now ?? defaults.now,
+    loadOpenMachines: options.loadOpenMachines ?? defaults.loadOpenMachines
+  };
+}
+function mergeAdapterWorkspaceOptions(defaults, options) {
+  return {
+    ...options,
+    adapterMode: defaults.mode ?? "auto",
+    includeTailscale: options.includeTailscale ?? defaults.includeTailscale,
+    runner: options.runner ?? defaults.runner,
+    now: options.now ?? defaults.now,
+    loadOpenMachines: options.loadOpenMachines ?? defaults.loadOpenMachines
+  };
+}
+function mergeAdapterPreflightOptions(defaults, options = {}) {
+  return {
+    ...options,
+    adapterMode: defaults.mode ?? "auto",
+    commands: options.commands,
+    packages: options.packages,
+    workspaces: options.workspaces,
+    runner: options.runner ?? defaults.preflightRunner,
+    now: options.now ?? defaults.now,
+    loadOpenMachines: options.loadOpenMachines ?? defaults.loadOpenMachines
+  };
+}
+function createKnowledgeMachinesAdapter(defaults = {}) {
+  const mode = defaults.mode ?? "auto";
+  return {
+    mode,
+    async status() {
+      if (mode === "disabled")
+        return disabledAdapterStatus(mode);
+      if (mode === "cli")
+        return cliAdapterStatus(mode);
+      try {
+        const loader = defaults.loadOpenMachines ?? loadOpenMachinesModule;
+        const mod = await loader();
+        const unsupportedStatus = unsupportedContractAdapterStatus(mode, mod);
+        if (unsupportedStatus)
+          return unsupportedStatus;
+        if (mod)
+          return sdkAdapterStatus(mode, mod);
+        if (mode === "sdk")
+          return disabledAdapterStatus(mode, "module_not_found");
+        return cliAdapterStatus(mode);
+      } catch (error) {
+        return disabledAdapterStatus(mode, optionalModuleError(error));
+      }
+    },
+    topology(options = {}) {
+      return discoverKnowledgeMachineTopology(mergeAdapterTopologyOptions(defaults, options));
+    },
+    route(options) {
+      return resolveKnowledgeMachineRoute(mergeAdapterRouteOptions(defaults, options));
+    },
+    workspace(options) {
+      return resolveKnowledgeMachineWorkspace(mergeAdapterWorkspaceOptions(defaults, options));
+    },
+    preflight(options = {}) {
+      return preflightKnowledgeMachine(mergeAdapterPreflightOptions(defaults, options));
+    }
+  };
+}
+
+// src/promotion-inbox.ts
+import { createHash as createHash12 } from "crypto";
+function stableId7(prefix, value, length = 24) {
+  return `${prefix}_${createHash12("sha256").update(value).digest("hex").slice(0, length)}`;
+}
+function normalizedText(value) {
+  return value.normalize("NFKC").trim().replace(/\s+/g, " ");
+}
+function normalizedKey(value) {
+  return normalizedText(value).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "-").replace(/^-+|-+$/g, "");
+}
+function parseJson3(value, fallback) {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return fallback;
+  }
+}
+function asCandidate(row) {
+  return {
+    ...row,
+    record_kind: row.record_kind,
+    source_kind: row.source_kind,
+    status: row.status,
+    source_refs: parseJson3(row.source_refs_json, []),
+    evidence_refs: parseJson3(row.evidence_refs_json, []),
+    requires_approval: row.requires_approval === 1,
+    checks: parseJson3(row.checks_json, emptyChecks()),
+    metadata: parseJson3(row.metadata_json, {})
+  };
+}
+function asDurableRecord(row) {
+  return {
+    ...row,
+    record_kind: row.record_kind,
+    source_refs: parseJson3(row.source_refs_json, []),
+    evidence_refs: parseJson3(row.evidence_refs_json, []),
+    metadata: parseJson3(row.metadata_json, {})
+  };
+}
+function emptyChecks() {
+  return {
+    citations: { provided: 0, valid: 0, invalid: 0, entries: [] },
+    invalid_source_refs: [],
+    stale_refs: [],
+    duplicate_record_ids: [],
+    duplicate_candidate_ids: [],
+    conflicting_record_ids: [],
+    conflicting_candidate_ids: [],
+    approval_reasons: []
+  };
+}
+function normalizeEvidenceRef(input) {
+  const value = typeof input === "string" ? { ref: input } : input;
+  return {
+    ref: normalizedText(value.ref),
+    citation_id: value.citation_id ?? null,
+    chunk_id: value.chunk_id ?? null,
+    revision: value.revision ?? null,
+    hash: value.hash ?? null,
+    observed_at: value.observed_at ?? null,
+    expires_at: value.expires_at ?? null,
+    status: value.status ?? null
+  };
+}
+function validReference(ref) {
+  try {
+    const parsed = new URL(ref);
+    return parsed.protocol.length > 1 && (parsed.hostname.length > 0 || parsed.pathname.length > 0);
+  } catch {
+    return /^(?:cite|citation|chunk|run):[A-Za-z0-9._:-]+$/.test(ref);
+  }
+}
+function staleStatus(status) {
+  return ["deleted", "stale", "invalidated", "reindex_required", "expired", "superseded"].includes((status ?? "").toLowerCase());
+}
+function metadataStatus(value) {
+  if (!value)
+    return null;
+  const metadata = parseJson3(value, {});
+  if (metadata.stale === true)
+    return "stale";
+  return typeof metadata.status === "string" ? metadata.status : null;
+}
+function citationIdentifier(evidence) {
+  if (evidence.citation_id)
+    return evidence.citation_id;
+  const match = evidence.ref.match(/^(?:cite|citation):(.+)$/);
+  return match?.[1] ?? null;
+}
+function chunkIdentifier(evidence) {
+  if (evidence.chunk_id)
+    return evidence.chunk_id;
+  const match = evidence.ref.match(/^chunk:(.+)$/);
+  return match?.[1] ?? null;
+}
+function inspectCitation(db, evidence, now) {
+  const explicitStale = staleStatus(evidence.status) || Boolean(evidence.expires_at && evidence.expires_at <= now);
+  if (!evidence.ref || !validReference(evidence.ref)) {
+    return { ref: evidence.ref, valid: false, resolved_by: "none", stale: explicitStale, reason: "invalid_reference" };
+  }
+  const citationId = citationIdentifier(evidence);
+  const citation = db.query(`SELECT c.id, c.source_uri, c.chunk_id, ch.metadata_json AS chunk_metadata_json,
+            sr.hash AS revision_hash, sr.revision, sr.id AS source_revision_id,
+            sr.source_id, sr.created_at AS revision_created_at,
+            (SELECT MAX(newest.created_at) FROM source_revisions newest WHERE newest.source_id = sr.source_id) AS latest_revision_at
+     FROM citations c
+     LEFT JOIN chunks ch ON ch.id = c.chunk_id
+     LEFT JOIN source_revisions sr ON sr.id = ch.source_revision_id
+     WHERE c.id = ? OR c.source_uri = ?
+     ORDER BY c.created_at DESC
+     LIMIT 1`).get(citationId, evidence.ref);
+  if (citation) {
+    const hashMismatch = Boolean(evidence.hash && citation.revision_hash && evidence.hash !== citation.revision_hash);
+    const revisionMismatch = Boolean(evidence.revision && citation.revision && evidence.revision !== citation.revision);
+    const oldRevision = Boolean(citation.revision_created_at && citation.latest_revision_at && citation.revision_created_at < citation.latest_revision_at);
+    const stale = explicitStale || staleStatus(metadataStatus(citation.chunk_metadata_json)) || hashMismatch || revisionMismatch || oldRevision;
+    return {
+      ref: evidence.ref,
+      valid: true,
+      resolved_by: "citation",
+      stale,
+      reason: hashMismatch ? "hash_mismatch" : revisionMismatch ? "revision_mismatch" : oldRevision ? "newer_source_revision" : stale ? "stale_citation" : null
+    };
+  }
+  const chunkId = chunkIdentifier(evidence);
+  if (chunkId) {
+    const chunk = db.query(`SELECT ch.metadata_json, sr.hash, sr.revision
+       FROM chunks ch LEFT JOIN source_revisions sr ON sr.id = ch.source_revision_id
+       WHERE ch.id = ?`).get(chunkId);
+    if (!chunk)
+      return { ref: evidence.ref, valid: false, resolved_by: "none", stale: explicitStale, reason: "chunk_not_found" };
+    const mismatch = Boolean(evidence.hash && chunk.hash && evidence.hash !== chunk.hash || evidence.revision && chunk.revision && evidence.revision !== chunk.revision);
+    const stale = explicitStale || staleStatus(metadataStatus(chunk.metadata_json)) || mismatch;
+    return { ref: evidence.ref, valid: true, resolved_by: "chunk", stale, reason: mismatch ? "source_version_mismatch" : stale ? "stale_chunk" : null };
+  }
+  const source = db.query("SELECT metadata_json FROM sources WHERE uri = ? LIMIT 1").get(evidence.ref);
+  if (source) {
+    const stale = explicitStale || staleStatus(metadataStatus(source.metadata_json));
+    return { ref: evidence.ref, valid: true, resolved_by: "source", stale, reason: stale ? "stale_source" : null };
+  }
+  const runMatch = evidence.ref.match(/^knowledge:\/\/project\/runs\/([^/?#]+)/);
+  if (runMatch) {
+    const run = db.query("SELECT id FROM runs WHERE id = ?").get(decodeURIComponent(runMatch[1]));
+    if (!run)
+      return { ref: evidence.ref, valid: false, resolved_by: "none", stale: explicitStale, reason: "run_not_found" };
+    return { ref: evidence.ref, valid: true, resolved_by: "run", stale: explicitStale, reason: explicitStale ? "expired_evidence" : null };
+  }
+  return {
+    ref: evidence.ref,
+    valid: true,
+    resolved_by: "external_uri",
+    stale: explicitStale,
+    reason: explicitStale ? "expired_evidence" : null
+  };
+}
+function candidateById(db, id) {
+  return db.query("SELECT * FROM knowledge_promotion_candidates WHERE id = ?").get(id) ?? null;
+}
+function assessCandidate(db, row, now) {
+  const evidence = parseJson3(row.evidence_refs_json, []);
+  const sourceRefs = parseJson3(row.source_refs_json, []);
+  const metadata = parseJson3(row.metadata_json, {});
+  const checks = emptyChecks();
+  checks.invalid_source_refs = sourceRefs.filter((ref) => !validReference(ref));
+  checks.citations.entries = evidence.map((entry) => inspectCitation(db, entry, now));
+  checks.citations.provided = evidence.length;
+  checks.citations.valid = checks.citations.entries.filter((entry) => entry.valid).length;
+  checks.citations.invalid = checks.citations.entries.length - checks.citations.valid;
+  checks.stale_refs = checks.citations.entries.filter((entry) => entry.stale).map((entry) => entry.ref);
+  checks.duplicate_record_ids = db.query(`SELECT id FROM durable_knowledge_records
+     WHERE record_kind = ? AND content_hash = ? AND status IN ('active', 'conflicted')
+     ORDER BY created_at`).all(row.record_kind, row.content_hash).map((entry) => entry.id);
+  checks.duplicate_candidate_ids = db.query(`SELECT id FROM knowledge_promotion_candidates
+     WHERE id <> ? AND record_kind = ? AND content_hash = ? AND status NOT IN ('rejected')
+     ORDER BY created_at`).all(row.id, row.record_kind, row.content_hash).map((entry) => entry.id);
+  checks.conflicting_record_ids = db.query(`SELECT id FROM durable_knowledge_records
+     WHERE record_kind = ? AND canonical_key = ? AND content_hash <> ? AND status IN ('active', 'conflicted')
+     ORDER BY created_at`).all(row.record_kind, row.canonical_key, row.content_hash).map((entry) => entry.id);
+  checks.conflicting_candidate_ids = db.query(`SELECT id FROM knowledge_promotion_candidates
+     WHERE id <> ? AND record_kind = ? AND canonical_key = ? AND content_hash <> ?
+       AND status IN ('ready', 'needs_approval', 'promoted')
+     ORDER BY created_at`).all(row.id, row.record_kind, row.canonical_key, row.content_hash).map((entry) => entry.id);
+  const duplicateOf = checks.duplicate_record_ids[0] ?? checks.duplicate_candidate_ids[0] ?? null;
+  const blocked = sourceRefs.length === 0 || evidence.length === 0 || checks.invalid_source_refs.length > 0 || checks.citations.invalid > 0;
+  if (row.record_kind === "decision" || row.record_kind === "claim")
+    checks.approval_reasons.push(`${row.record_kind}_requires_review`);
+  if (metadata.requested_approval === true)
+    checks.approval_reasons.push("explicit_approval_request");
+  if (checks.stale_refs.length > 0)
+    checks.approval_reasons.push("stale_evidence");
+  if (checks.conflicting_record_ids.length > 0 || checks.conflicting_candidate_ids.length > 0) {
+    checks.approval_reasons.push("conflicting_knowledge");
+  }
+  const requiresApproval = checks.approval_reasons.length > 0;
+  const status = duplicateOf ? "duplicate" : blocked ? "blocked" : requiresApproval ? "needs_approval" : "ready";
+  db.run(`UPDATE knowledge_promotion_candidates
+     SET status = ?, requires_approval = ?, checks_json = ?, duplicate_of = ?, updated_at = ?, reviewed_at = ?
+     WHERE id = ?`, [status, requiresApproval ? 1 : 0, JSON.stringify(checks), duplicateOf, now, now, row.id]);
+  return asCandidate(candidateById(db, row.id));
+}
+function enqueueKnowledgePromotion(dbPath, input) {
+  const kinds = ["lesson", "decision", "claim"];
+  const sourceKinds = ["memento", "session", "report"];
+  if (!kinds.includes(input.kind))
+    throw new Error("Promotion kind must be lesson, decision, or claim.");
+  if (!sourceKinds.includes(input.sourceKind))
+    throw new Error("Promotion source kind must be memento, session, or report.");
+  const titleResult = redactSecrets(normalizedText(input.title));
+  const contentResult = redactSecrets(normalizedText(input.content));
+  if (!titleResult.text)
+    throw new Error("Promotion title is required.");
+  if (!contentResult.text)
+    throw new Error("Promotion content is required.");
+  const sourceRefs = Array.from(new Set(input.sourceRefs.map(normalizedText).filter(Boolean))).sort();
+  const evidenceRefs = input.evidenceRefs.map(normalizeEvidenceRef).filter((entry) => entry.ref.length > 0).sort((a, b) => a.ref.localeCompare(b.ref));
+  const canonicalKey = normalizedKey(input.canonicalKey ?? titleResult.text);
+  if (!canonicalKey)
+    throw new Error("Promotion canonical key is empty after normalization.");
+  const contentHash = `sha256:${createHash12("sha256").update(`${input.kind}\x00${normalizedText(contentResult.text).toLowerCase()}`).digest("hex")}`;
+  const idempotencyKey = stableId7("promote", [
+    input.sourceKind,
+    input.kind,
+    canonicalKey,
+    contentHash,
+    ...sourceRefs
+  ].join("\x00"));
+  const id = stableId7("promotion", idempotencyKey);
+  const now = (input.now ?? new Date).toISOString();
+  const metadata = {
+    ...input.metadata ?? {},
+    requested_approval: input.requiresApproval === true,
+    confidence: input.confidence ?? null,
+    valid_from: input.validFrom ?? now,
+    valid_to: input.validTo ?? null,
+    redactions: titleResult.findings.length + contentResult.findings.length
+  };
+  migrateKnowledgeDb(dbPath);
+  const db = openKnowledgeDb(dbPath);
+  try {
+    const existing = db.query("SELECT * FROM knowledge_promotion_candidates WHERE idempotency_key = ?").get(idempotencyKey);
+    if (existing)
+      return { created: false, candidate: asCandidate(existing) };
+    db.run(`INSERT INTO knowledge_promotion_candidates (
+        id, record_kind, title, content, canonical_key, content_hash, source_kind,
+        source_refs_json, evidence_refs_json, status, requires_approval, checks_json,
+        idempotency_key, metadata_json, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, '{}', ?, ?, ?, ?)`, [
+      id,
+      input.kind,
+      titleResult.text,
+      contentResult.text,
+      canonicalKey,
+      contentHash,
+      input.sourceKind,
+      JSON.stringify(sourceRefs),
+      JSON.stringify(evidenceRefs),
+      idempotencyKey,
+      JSON.stringify(metadata),
+      now,
+      now
+    ]);
+    const findings = [...titleResult.findings, ...contentResult.findings];
+    if (findings.length > 0) {
+      recordRedactionFindings(db, {
+        source_uri: sourceRefs[0] ?? `knowledge://promotion/${id}`,
+        findings,
+        metadata: { promotion_candidate_id: id },
+        created_at: now
+      });
+    }
+    recordAuditEvent(db, {
+      event_type: "knowledge_promotion",
+      action: "enqueue_promotion",
+      target_uri: `knowledge://promotion/${id}`,
+      decision: "info",
+      metadata: { record_kind: input.kind, source_kind: input.sourceKind, source_refs: sourceRefs },
+      created_at: now
+    });
+    return { created: true, candidate: assessCandidate(db, candidateById(db, id), now) };
+  } finally {
+    db.close();
+  }
+}
+function getKnowledgePromotion(dbPath, id) {
+  migrateKnowledgeDb(dbPath);
+  const db = openKnowledgeDb(dbPath);
+  try {
+    const row = candidateById(db, id);
+    return row ? asCandidate(row) : null;
+  } finally {
+    db.close();
+  }
+}
+function listKnowledgePromotions(dbPath, options = {}) {
+  migrateKnowledgeDb(dbPath);
+  const limit = Math.max(1, Math.min(options.limit ?? 50, 200));
+  const conditions = [];
+  const params = [];
+  if (options.status === "inbox" || !options.status) {
+    conditions.push("status IN ('ready', 'needs_approval', 'blocked')");
+  } else {
+    conditions.push("status = ?");
+    params.push(options.status);
+  }
+  if (options.kind) {
+    conditions.push("record_kind = ?");
+    params.push(options.kind);
+  }
+  const db = openKnowledgeDb(dbPath);
+  try {
+    return db.query(`SELECT * FROM knowledge_promotion_candidates
+       WHERE ${conditions.join(" AND ")}
+       ORDER BY updated_at DESC, created_at DESC
+       LIMIT ?`).all(...params, limit).map(asCandidate);
+  } finally {
+    db.close();
+  }
+}
+function reviewKnowledgePromotion(dbPath, id, now = new Date) {
+  migrateKnowledgeDb(dbPath);
+  const db = openKnowledgeDb(dbPath);
+  try {
+    const row = candidateById(db, id);
+    if (!row)
+      throw new Error(`Promotion candidate not found: ${id}`);
+    if (row.status === "promoted" || row.status === "rejected")
+      return asCandidate(row);
+    return assessCandidate(db, row, now.toISOString());
+  } finally {
+    db.close();
+  }
+}
+function promoteKnowledgeCandidate(dbPath, id, options = {}) {
+  migrateKnowledgeDb(dbPath);
+  const db = openKnowledgeDb(dbPath);
+  const now = (options.now ?? new Date).toISOString();
+  try {
+    const row = candidateById(db, id);
+    if (!row)
+      throw new Error(`Promotion candidate not found: ${id}`);
+    if (row.status === "promoted" && row.promoted_record_id) {
+      const existingRecord = db.query("SELECT * FROM durable_knowledge_records WHERE id = ?").get(row.promoted_record_id);
+      return {
+        ok: true,
+        promoted: false,
+        requires_approval: row.requires_approval === 1,
+        candidate: asCandidate(row),
+        record: existingRecord ? asDurableRecord(existingRecord) : null,
+        approval_id: null,
+        reason: "already_promoted"
+      };
+    }
+    if (row.status === "rejected")
+      throw new Error(`Promotion candidate ${id} was rejected.`);
+    const candidate = assessCandidate(db, row, now);
+    if (candidate.status === "duplicate") {
+      return { ok: true, promoted: false, requires_approval: false, candidate, record: null, approval_id: null, reason: "duplicate" };
+    }
+    if (candidate.status === "blocked") {
+      return { ok: false, promoted: false, requires_approval: false, candidate, record: null, approval_id: null, reason: "citation_check_failed" };
+    }
+    if (candidate.requires_approval && !options.approveWrite) {
+      return { ok: false, promoted: false, requires_approval: true, candidate, record: null, approval_id: null, reason: "approval_required" };
+    }
+    if (candidate.requires_approval && !options.approvedBy?.trim()) {
+      throw new Error("Promotion approval requires --approved-by <name>.");
+    }
+    const approvedBy = candidate.requires_approval ? options.approvedBy.trim() : null;
+    let approvalId = null;
+    if (candidate.requires_approval) {
+      approvalId = createApprovalGate(db, {
+        action: "promote_durable_knowledge",
+        target_uri: `knowledge://promotion/${candidate.id}`,
+        reason: candidate.checks.approval_reasons.join(", "),
+        approved_by: approvedBy,
+        metadata: { promotion_candidate_id: candidate.id, checks: candidate.checks },
+        created_at: now
+      }).id;
+    }
+    const recordId = stableId7("durable", candidate.id);
+    const metadata = {
+      ...candidate.metadata,
+      promotion_candidate_id: candidate.id,
+      source_kind: candidate.source_kind,
+      checks: candidate.checks,
+      approval_id: approvalId,
+      provenance: generatedArtifactProvenance({
+        generated_from: `knowledge://promotion/${candidate.id}`,
+        artifact_key: `durable/${candidate.record_kind}/${candidate.canonical_key}`,
+        source_refs: candidate.source_refs,
+        citation_required: true
+      })
+    };
+    db.run(`INSERT INTO durable_knowledge_records (
+        id, record_kind, title, content, canonical_key, content_hash, status,
+        source_refs_json, evidence_refs_json, confidence, valid_from, valid_to,
+        promoted_from_candidate_id, approved_by, metadata_json, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
+      recordId,
+      candidate.record_kind,
+      candidate.title,
+      candidate.content,
+      candidate.canonical_key,
+      candidate.content_hash,
+      candidate.checks.conflicting_record_ids.length > 0 ? "conflicted" : "active",
+      JSON.stringify(candidate.source_refs),
+      JSON.stringify(candidate.evidence_refs),
+      typeof candidate.metadata.confidence === "number" ? candidate.metadata.confidence : null,
+      typeof candidate.metadata.valid_from === "string" ? candidate.metadata.valid_from : now,
+      typeof candidate.metadata.valid_to === "string" ? candidate.metadata.valid_to : null,
+      candidate.id,
+      approvedBy,
+      JSON.stringify(metadata),
+      now,
+      now
+    ]);
+    db.run(`UPDATE knowledge_promotion_candidates
+       SET status = 'promoted', approved_by = ?, promoted_record_id = ?, promoted_at = ?, updated_at = ?
+       WHERE id = ?`, [approvedBy, recordId, now, now, candidate.id]);
+    recordAuditEvent(db, {
+      event_type: "knowledge_promotion",
+      action: "promote_durable_knowledge",
+      target_uri: `knowledge://durable/${recordId}`,
+      decision: "allow",
+      metadata: { promotion_candidate_id: candidate.id, approval_id: approvalId, source_refs: candidate.source_refs },
+      created_at: now
+    });
+    const promotedCandidate = asCandidate(candidateById(db, candidate.id));
+    const record = db.query("SELECT * FROM durable_knowledge_records WHERE id = ?").get(recordId);
+    return {
+      ok: true,
+      promoted: true,
+      requires_approval: candidate.requires_approval,
+      candidate: promotedCandidate,
+      record: asDurableRecord(record),
+      approval_id: approvalId,
+      reason: null
+    };
+  } finally {
+    db.close();
+  }
+}
+function rejectKnowledgePromotion(dbPath, id, options = {}) {
+  migrateKnowledgeDb(dbPath);
+  const db = openKnowledgeDb(dbPath);
+  const now = (options.now ?? new Date).toISOString();
+  try {
+    const row = candidateById(db, id);
+    if (!row)
+      throw new Error(`Promotion candidate not found: ${id}`);
+    if (row.status === "promoted")
+      throw new Error(`Promotion candidate ${id} is already promoted.`);
+    db.run(`UPDATE knowledge_promotion_candidates
+       SET status = 'rejected', approved_by = ?, updated_at = ?, reviewed_at = ?
+       WHERE id = ?`, [options.rejectedBy?.trim() || null, now, now, id]);
+    recordAuditEvent(db, {
+      event_type: "knowledge_promotion",
+      action: "reject_promotion",
+      target_uri: `knowledge://promotion/${id}`,
+      decision: "deny",
+      metadata: { rejected_by: options.rejectedBy ?? null },
+      created_at: now
+    });
+    return asCandidate(candidateById(db, id));
+  } finally {
+    db.close();
+  }
+}
+function listDurableKnowledgeRecords(dbPath, options = {}) {
+  migrateKnowledgeDb(dbPath);
+  const conditions = [];
+  const params = [];
+  if (options.kind) {
+    conditions.push("record_kind = ?");
+    params.push(options.kind);
+  }
+  if (options.status) {
+    conditions.push("status = ?");
+    params.push(options.status);
+  }
+  const limit = Math.max(1, Math.min(options.limit ?? 50, 200));
+  const db = openKnowledgeDb(dbPath);
+  try {
+    return db.query(`SELECT * FROM durable_knowledge_records
+       ${conditions.length ? `WHERE ${conditions.join(" AND ")}` : ""}
+       ORDER BY updated_at DESC, created_at DESC
+       LIMIT ?`).all(...params, limit).map(asDurableRecord);
+  } finally {
+    db.close();
+  }
+}
+
+// src/reindex.ts
+import { createHash as createHash13, randomUUID as randomUUID9 } from "crypto";
+function stableId8(prefix, value) {
+  return `${prefix}_${createHash13("sha256").update(value).digest("hex").slice(0, 20)}`;
+}
+function queueCounts(dbPath) {
+  const db = openKnowledgeDb(dbPath);
+  try {
+    const rows = db.query(`SELECT status, COUNT(*) AS n FROM reindex_queue GROUP BY status ORDER BY status`).all();
+    return Object.fromEntries(rows.map((row) => [row.status, row.n]));
+  } finally {
+    db.close();
+  }
+}
+function missingEmbeddingRows(dbPath, options) {
+  const modelRef = resolveEmbeddingModelRef(options.modelRef, options.config);
+  const parsed = parseModelRef(modelRef);
+  const db = openKnowledgeDb(dbPath);
+  try {
+    return db.query(`SELECT c.id AS chunk_id, c.source_revision_id, s.uri AS source_uri
+       FROM chunks c
+       LEFT JOIN source_revisions sr ON sr.id = c.source_revision_id
+       LEFT JOIN sources s ON s.id = sr.source_id
+       LEFT JOIN vector_index_entries v ON v.chunk_id = c.id AND v.provider = ? AND v.model = ?
+       WHERE v.id IS NULL
+       ORDER BY c.created_at ASC, c.ordinal ASC`).all(parsed.provider, parsed.model);
+  } finally {
+    db.close();
+  }
+}
+function reindexHealth(options) {
+  migrateKnowledgeDb(options.dbPath);
+  const db = openKnowledgeDb(options.dbPath);
+  try {
+    const version = db.query("SELECT MAX(version) AS version FROM schema_versions").get()?.version ?? 0;
+    const chunks = db.query("SELECT COUNT(*) AS n FROM chunks").get()?.n ?? 0;
+    const vectorEntries = db.query("SELECT COUNT(*) AS n FROM vector_index_entries").get()?.n ?? 0;
+    const missing = missingEmbeddingRows(options.dbPath, options).length;
+    const stale = db.query(`SELECT COUNT(*) AS n FROM source_revisions
+       WHERE metadata_json LIKE '%"reindex_required":true%' OR metadata_json LIKE '%"status":"stale"%'`).get()?.n ?? 0;
+    return {
+      schema_version: version,
+      chunks,
+      vector_entries: vectorEntries,
+      missing_embeddings: missing,
+      queued: queueCounts(options.dbPath),
+      stale_revisions: stale
+    };
+  } finally {
+    db.close();
+  }
+}
+function enqueueMissingEmbeddings(options) {
+  migrateKnowledgeDb(options.dbPath);
+  const now = (options.now ?? new Date).toISOString();
+  const reason = options.reason ?? "missing_embedding";
+  const rows = missingEmbeddingRows(options.dbPath, options);
+  const db = openKnowledgeDb(options.dbPath);
+  let enqueued = 0;
+  let alreadyQueued = 0;
+  try {
+    const write = db.transaction(() => {
+      for (const row of rows) {
+        const id = stableId8("rq", `embedding\x00${row.chunk_id}\x00${reason}`);
+        const before = db.query("SELECT id FROM reindex_queue WHERE kind = ? AND target_id = ? AND reason = ?").get("embedding", row.chunk_id, reason);
+        if (before) {
+          alreadyQueued += 1;
+          continue;
+        }
+        db.run(`INSERT INTO reindex_queue (id, kind, target_id, source_uri, reason, status, metadata_json, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
+          id,
+          "embedding",
+          row.chunk_id,
+          row.source_uri,
+          reason,
+          "pending",
+          JSON.stringify({ source_revision_id: row.source_revision_id }),
+          now,
+          now
+        ]);
+        enqueued += 1;
+      }
+    });
+    write();
+  } finally {
+    db.close();
+  }
+  return { enqueued, already_queued: alreadyQueued, reason };
+}
+function clearEmbeddingIndex(dbPath) {
+  const db = openKnowledgeDb(dbPath);
+  try {
+    const embeddings = db.query("SELECT COUNT(*) AS n FROM chunk_embeddings").get()?.n ?? 0;
+    const vectorEntries = db.query("SELECT COUNT(*) AS n FROM vector_index_entries").get()?.n ?? 0;
+    db.run("DELETE FROM vector_index_entries");
+    db.run("DELETE FROM chunk_embeddings");
+    return { embeddings, vectorEntries };
+  } finally {
+    db.close();
+  }
+}
+function completeIndexedQueueItems(dbPath, options, now) {
+  const modelRef = resolveEmbeddingModelRef(options.modelRef, options.config);
+  const parsed = parseModelRef(modelRef);
+  const db = openKnowledgeDb(dbPath);
+  try {
+    const result = db.run(`UPDATE reindex_queue
+       SET status = ?, updated_at = ?
+       WHERE kind = ?
+         AND status = ?
+         AND EXISTS (
+           SELECT 1 FROM vector_index_entries v
+           WHERE v.chunk_id = reindex_queue.target_id
+             AND v.provider = ?
+             AND v.model = ?
+         )`, ["completed", now, "embedding", "pending", parsed.provider, parsed.model]);
+    return result.changes;
+  } finally {
+    db.close();
+  }
+}
+async function refreshEmbeddingIndex(options) {
+  migrateKnowledgeDb(options.dbPath);
+  const now = (options.now ?? new Date).toISOString();
+  const runId = `run_${randomUUID9()}`;
+  const deleted = options.full ? clearEmbeddingIndex(options.dbPath) : { embeddings: 0, vectorEntries: 0 };
+  const queued = enqueueMissingEmbeddings({ ...options, reason: options.full ? "full_embedding_rebuild" : "missing_embedding" });
+  const db = openKnowledgeDb(options.dbPath);
+  try {
+    db.run(`INSERT INTO runs (id, type, prompt, status, provider, model, metadata_json, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
+      runId,
+      "embedding-refresh",
+      options.full ? "full" : "incremental",
+      "running",
+      "local",
+      resolveEmbeddingModelRef(options.modelRef, options.config),
+      JSON.stringify({ full: options.full === true, queued }),
+      now,
+      now
+    ]);
+  } finally {
+    db.close();
+  }
+  const indexed = await indexKnowledgeEmbeddings({
+    dbPath: options.dbPath,
+    config: options.config,
+    env: options.env,
+    modelRef: options.modelRef,
+    dimensions: options.dimensions,
+    fake: options.fake,
+    limit: options.limit,
+    now: options.now
+  });
+  const completedQueueItems = completeIndexedQueueItems(options.dbPath, options, now);
+  const doneDb = openKnowledgeDb(options.dbPath);
+  try {
+    doneDb.run(`UPDATE runs SET status = ?, metadata_json = ?, updated_at = ? WHERE id = ?`, [
+      "completed",
+      JSON.stringify({ full: options.full === true, queued, indexed, completed_queue_items: completedQueueItems }),
+      now,
+      runId
+    ]);
+    doneDb.run(`INSERT INTO run_events (id, run_id, level, event, metadata_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`, [
+      `evt_${randomUUID9()}`,
+      runId,
+      "info",
+      "embedding_refresh_completed",
+      JSON.stringify({ queued, indexed, completed_queue_items: completedQueueItems }),
+      now
+    ]);
+  } finally {
+    doneDb.close();
+  }
+  return {
+    run_id: runId,
+    full: options.full === true,
+    deleted_embeddings: deleted.embeddings,
+    deleted_vector_entries: deleted.vectorEntries,
+    queued,
+    indexed,
+    completed_queue_items: completedQueueItems
+  };
+}
+
+// src/rules-provenance.ts
+import { createHash as createHash14 } from "crypto";
+import { existsSync as existsSync11, lstatSync as lstatSync2, readdirSync as readdirSync2, readFileSync as readFileSync10, statSync as statSync2 } from "fs";
+import { basename as basename5, extname as extname2, join as join6, relative as relative4, resolve as resolve4, sep as sep4 } from "path";
+import { pathToFileURL as pathToFileURL3 } from "url";
+
+// src/store.ts
+import {
+  chmodSync as chmodSync3,
+  closeSync,
+  existsSync as existsSync10,
+  fsyncSync,
+  lstatSync,
+  openSync,
+  readFileSync as readFileSync9,
+  renameSync,
+  unlinkSync as unlinkSync2,
+  writeFileSync as writeFileSync4
+} from "fs";
+import { randomUUID as randomUUID10 } from "crypto";
+import { basename as basename4, dirname as dirname4, join as join5 } from "path";
+function defaultStorePath() {
+  return workspaceForHome(globalKnowledgeHome()).jsonStorePath;
+}
+function ensureStore(path) {
+  if (path === defaultStorePath() && existsSync10(legacyGlobalStorePath())) {
+    importLegacyGlobalStore();
+  }
+  if (!existsSync10(path)) {
+    ensureParentDir(path);
+    writeFileAtomic(path, `${JSON.stringify({ items: [] }, null, 2)}
+`);
+  }
+}
+function timestampForPath(now) {
+  return now.toISOString().replace(/[:.]/g, "-");
+}
+function storeIdentityKeys(item) {
+  const keys = [`id:${item.id}`];
+  if (typeof item.short_id === "string" && item.short_id.length > 0) {
+    keys.push(`short_id:${item.short_id}`);
+  }
+  return keys;
+}
+function indexStoreItems(items) {
+  const index = new Set;
+  for (const item of items) {
+    for (const key of storeIdentityKeys(item))
+      index.add(key);
+  }
+  return index;
+}
+function storeContainsItem(index, item) {
+  return storeIdentityKeys(item).some((key) => index.has(key));
+}
+function writeJsonFile(path, value) {
+  ensureParentDir(path);
+  writeFileSync4(path, `${JSON.stringify(value, null, 2)}
+`, { mode: 384 });
+  chmodSync3(path, 384);
+}
+function readStoreFileForImport(path) {
+  const value = JSON.parse(readFileSync9(path, "utf8"));
+  if (!value || typeof value !== "object" || !Array.isArray(value.items)) {
+    return { store: { items: [] }, skippedInvalid: 0 };
+  }
+  const store = { items: [] };
+  let skippedInvalid = 0;
+  for (const item of value.items) {
+    if (item && typeof item === "object" && typeof item.id === "string" && item.id.length > 0) {
+      store.items.push(item);
+    } else {
+      skippedInvalid += 1;
+    }
+  }
+  return { store, skippedInvalid };
+}
+function importLegacyGlobalStore(options = {}) {
+  if (options.dryRun === true)
+    return importLegacyGlobalStoreUnlocked(options);
+  return withLock(defaultStorePath(), () => importLegacyGlobalStoreUnlocked(options), { createParent: true });
+}
+function importLegacyGlobalStoreUnlocked(options = {}) {
+  const dryRun = options.dryRun === true;
+  const now = options.now ?? new Date;
+  const workspace = workspaceForHome(globalKnowledgeHome());
+  const legacyPath = legacyGlobalStorePath();
+  const canonicalPath = workspace.jsonStorePath;
+  const legacyExists = existsSync10(legacyPath);
+  const canonicalExisted = existsSync10(canonicalPath);
+  const result = {
+    ok: true,
+    dry_run: dryRun,
+    legacy_path: legacyPath,
+    canonical_path: canonicalPath,
+    legacy_exists: legacyExists,
+    canonical_existed: canonicalExisted,
+    canonical_created: false,
+    would_create_canonical: false,
+    imported: 0,
+    skipped_existing: 0,
+    skipped_invalid: 0,
+    backup_path: null,
+    report_path: null,
+    errors: [],
+    message: legacyExists ? "Legacy global store already imported" : "No legacy global store found"
+  };
+  if (!legacyExists)
+    return result;
+  let legacyStore;
+  try {
+    const legacy = readStoreFileForImport(legacyPath);
+    legacyStore = legacy.store;
+    result.skipped_invalid = legacy.skippedInvalid;
+  } catch (error) {
+    result.ok = false;
+    result.errors.push(`Could not read legacy store: ${error instanceof Error ? error.message : String(error)}`);
+    result.message = "Legacy global store import failed";
+    return result;
+  }
+  let canonicalStore = { items: [] };
+  if (canonicalExisted) {
+    try {
+      canonicalStore = readStoreFileForImport(canonicalPath).store;
+    } catch (error) {
+      result.ok = false;
+      result.errors.push(`Could not read canonical store: ${error instanceof Error ? error.message : String(error)}`);
+      result.message = "Legacy global store import failed";
+      return result;
+    }
+  }
+  const index = indexStoreItems(canonicalStore.items);
+  const merged = { items: [...canonicalStore.items] };
+  for (const item of legacyStore.items) {
+    if (!item?.id) {
+      result.skipped_invalid += 1;
+      continue;
+    }
+    if (storeContainsItem(index, item)) {
+      result.skipped_existing += 1;
+      continue;
+    }
+    merged.items.push(item);
+    for (const key of storeIdentityKeys(item))
+      index.add(key);
+    result.imported += 1;
+  }
+  result.would_create_canonical = !canonicalExisted && result.imported > 0;
+  result.canonical_created = !dryRun && result.would_create_canonical;
+  result.message = result.imported > 0 ? `Imported ${result.imported} legacy item(s) into canonical knowledge store` : "Legacy global store already imported";
+  if (dryRun || result.imported === 0)
+    return result;
+  const suffix = `${timestampForPath(now)}-${randomUUID10().slice(0, 8)}`;
+  if (canonicalExisted) {
+    result.backup_path = join5(workspace.exportsDir, `legacy-open-knowledge-db-before-import-${suffix}.json`);
+    writeJsonFile(result.backup_path, canonicalStore);
+  }
+  writeJsonFile(canonicalPath, merged);
+  result.report_path = join5(workspace.runsDir, `legacy-open-knowledge-import-${suffix}.json`);
+  writeJsonFile(result.report_path, result);
+  return result;
+}
+function loadStoreIfExists(path) {
+  if (!existsSync10(path))
+    return { exists: false, items: [] };
+  const raw = readFileSync9(path, "utf8");
+  const parsed = JSON.parse(raw);
+  if (!parsed || !Array.isArray(parsed.items)) {
+    return { exists: true, items: [] };
+  }
+  return { exists: true, items: parsed.items };
+}
+function lockPath(path) {
+  return `${path}.lock`;
+}
+var LOCK_MAX_WAIT_MS = 1e4;
+var LOCK_RETRY_MS = 25;
+var LOCK_STALE_MS = 120000;
+var SLEEP_BUFFER = new Int32Array(new SharedArrayBuffer(4));
+function errCode(error) {
+  return typeof error === "object" && error !== null && "code" in error ? String(error.code) : undefined;
+}
+function syncParentDir(path) {
+  let fd = null;
+  try {
+    fd = openSync(dirname4(path), "r");
+    fsyncSync(fd);
+  } catch {} finally {
+    if (fd !== null) {
+      try {
+        closeSync(fd);
+      } catch {}
+    }
+  }
+}
+var heldLockPaths = new Set;
+function writeFileAtomic(path, contents) {
+  ensureParentDir(path);
+  const tmp = join5(dirname4(path), `.${basename4(path)}.tmp.${randomUUID10()}`);
+  let fd = null;
+  try {
+    fd = openSync(tmp, "wx", 384);
+    writeFileSync4(fd, contents);
+    fsyncSync(fd);
+    closeSync(fd);
+    fd = null;
+    renameSync(tmp, path);
+    try {
+      chmodSync3(path, 384);
+    } catch {}
+    syncParentDir(path);
+  } catch (error) {
+    if (fd !== null) {
+      try {
+        closeSync(fd);
+      } catch {}
+    }
+    try {
+      unlinkSync2(tmp);
+    } catch {}
+    throw error;
+  }
+}
+function sleepSync(ms) {
+  Atomics.wait(SLEEP_BUFFER, 0, 0, ms);
+}
+function processIsAlive(pid) {
+  if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0)
+    return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return errCode(error) !== "ESRCH";
+  }
+}
+function lockIsStale(path, now) {
+  try {
+    const raw = readFileSync9(path, "utf8");
+    const lock = JSON.parse(raw);
+    if (typeof lock.ts === "number") {
+      return now - lock.ts > LOCK_STALE_MS && !processIsAlive(lock.pid);
+    }
+  } catch {}
+  try {
+    return now - lstatSync(path).mtimeMs > LOCK_STALE_MS;
+  } catch {
+    return false;
+  }
+}
+function moveStaleLock(path) {
+  const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
+  const stalePath = `${path}.stale.${stamp}.${randomUUID10()}`;
+  try {
+    renameSync(path, stalePath);
+  } catch (error) {
+    if (errCode(error) !== "ENOENT")
+      throw error;
+    return;
+  }
+}
+function breakStaleLock(lockPath2) {
+  const owner = randomUUID10();
+  const breakerPath = `${lockPath2}.breaker`;
+  const start = Date.now();
+  while (Date.now() - start < LOCK_MAX_WAIT_MS) {
+    if (tryAcquireLock(breakerPath, owner)) {
+      try {
+        if (lockIsStale(lockPath2, Date.now())) {
+          moveStaleLock(lockPath2);
+        }
+      } finally {
+        releaseLock(breakerPath, owner);
+      }
+      return;
+    }
+    sleepSync(LOCK_RETRY_MS);
+  }
+  throw new Error(`Could not acquire stale-lock breaker on ${breakerPath} after ${LOCK_MAX_WAIT_MS}ms`);
+}
+var LOCK_CONTENTION_CODES = new Set(["EEXIST", "EPERM", "EBUSY"]);
+function isLockContentionCode(code) {
+  return code !== undefined && LOCK_CONTENTION_CODES.has(code);
+}
+function tryAcquireLock(path, ownerId, onContention) {
+  let fd = null;
+  let created = false;
+  try {
+    fd = openSync(path, "wx", 384);
+    created = true;
+    writeFileSync4(fd, `${JSON.stringify({ owner: ownerId, pid: process.pid, ts: Date.now() })}
+`);
+    fsyncSync(fd);
+    closeSync(fd);
+    fd = null;
+    syncParentDir(path);
+    return true;
+  } catch (error) {
+    if (fd !== null) {
+      try {
+        closeSync(fd);
+      } catch {}
+    }
+    if (created) {
+      try {
+        unlinkSync2(path);
+      } catch {}
+    }
+    const code = errCode(error);
+    if (isLockContentionCode(code)) {
+      onContention?.(code);
+      return false;
+    }
+    throw error;
+  }
+}
+function acquireLock(lockPath2, ownerId) {
+  const start = Date.now();
+  let lastContention;
+  const note = (code) => {
+    lastContention = code;
+  };
+  while (Date.now() - start < LOCK_MAX_WAIT_MS) {
+    if (tryAcquireLock(lockPath2, ownerId, note))
+      return;
+    if (lockIsStale(lockPath2, Date.now())) {
+      breakStaleLock(lockPath2);
+    }
+    sleepSync(LOCK_RETRY_MS);
+  }
+  throw new Error(`Could not acquire lock on ${lockPath2} after ${LOCK_MAX_WAIT_MS}ms` + (lastContention ? ` (last contention: ${lastContention})` : ""));
+}
+function releaseLock(lockPath2, ownerId) {
+  try {
+    if (existsSync10(lockPath2)) {
+      const lock = JSON.parse(readFileSync9(lockPath2, "utf8"));
+      if (lock.owner === ownerId) {
+        unlinkSync2(lockPath2);
+      }
+    }
+  } catch {}
+}
+function loadStore(path) {
+  ensureStore(path);
+  const raw = readFileSync9(path, "utf8");
+  const parsed = JSON.parse(raw);
+  if (!parsed || !Array.isArray(parsed.items)) {
+    return { items: [] };
+  }
+  return parsed;
+}
+function saveStore(path, store) {
+  writeFileAtomic(path, `${JSON.stringify(store, null, 2)}
+`);
+}
+function withLock(path, fn, options = {}) {
+  const owner = randomUUID10();
+  const lpath = lockPath(path);
+  if (heldLockPaths.has(lpath))
+    return fn();
+  if (options.createParent)
+    ensureParentDir(lpath);
+  acquireLock(lpath, owner);
+  heldLockPaths.add(lpath);
+  try {
+    return fn();
+  } finally {
+    heldLockPaths.delete(lpath);
+    releaseLock(lpath, owner);
+  }
+}
+function makeId() {
+  return `k_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+function makeShortId(id) {
+  return id.replace(/^k_/, "").slice(0, 12);
+}
+
+// src/rules-provenance.ts
+var DEFAULT_MAX_ITEMS2 = 100;
+var DEFAULT_EVIDENCE_LIMIT = 25;
+var DEFAULT_MAX_BYTES_PER_FILE = 256 * 1024;
+var WALK_MAX_DEPTH = 5;
+var TEXT_EXTENSIONS = new Set([".md", ".mdx", ".txt", ".json", ".jsonc", ".toml", ".yaml", ".yml"]);
+var ROOT_RULE_DOCS = new Set(["CODEWITH.md", "AGENTS.md", "CLAUDE.md", "RULES.md", "INSTRUCTIONS.md"]);
+var SKIP_DIRECTORIES = new Set([
+  ".git",
+  "node_modules",
+  "dist",
+  "build",
+  ".codewith-worktrees",
+  ".connect",
+  ".secrets",
+  ".tmp",
+  "tmp",
+  "auth_profiles",
+  "profiles",
+  "preserved",
+  "backup",
+  "backups",
+  "cache",
+  "logs",
+  "runs"
+]);
+var SENSITIVE_PATH_RE = /(^|[._-])(secret|secrets|token|tokens|credential|credentials|password|passwd|private[_-]?key|id_rsa)([._-]|$)/i;
+var SELECTED_PROMPT_OR_PLAN_RE = /(agent|rule|rules|instruction|instructions|global|operating|standard|knowledge)/i;
+function sha256Text2(text) {
+  return `sha256:${createHash14("sha256").update(text).digest("hex")}`;
+}
+function sha256Bytes(bytes) {
+  return `sha256:${createHash14("sha256").update(bytes).digest("hex")}`;
+}
+function normalizePath(value) {
+  return value.split(sep4).join("/");
+}
+function relativePath(root, absPath) {
+  const rel = relative4(root, absPath);
+  return rel ? normalizePath(rel) : basename5(absPath);
+}
+function isTextSource(path) {
+  return TEXT_EXTENSIONS.has(extname2(path).toLowerCase());
+}
+function hasSensitivePathPart(path) {
+  return normalizePath(path).split("/").some((part) => SENSITIVE_PATH_RE.test(part));
+}
+function boundedPreview(text, max = 220) {
+  const normalized = text.normalize("NFKC").trim().replace(/\s+/g, " ");
+  if (normalized.length <= max)
+    return normalized;
+  return `${normalized.slice(0, Math.max(0, max - 1)).trim()}...`;
+}
+function lineCount(text) {
+  if (!text)
+    return 0;
+  return text.split(/\r\n|\n|\r/).length;
+}
+function citationFor2(input) {
+  return {
+    source_ref: input.sourceRef,
+    source_path: input.sourcePath,
+    line_start: input.lineCount > 0 ? 1 : 0,
+    line_end: input.lineCount,
+    content_hash: input.contentHash
+  };
+}
+function ruleSpecs() {
+  return [
+    {
+      base: ".",
+      maxDepth: 0,
+      spec: {
+        family: "rule_doc",
+        owner: "repository",
+        scope: "global",
+        precedence: { rank: 10, label: "root-rule-doc" },
+        tags: ["global-rules", "rule-doc"],
+        include: (path) => ROOT_RULE_DOCS.has(path)
+      }
+    },
+    {
+      base: ".codewith",
+      spec: {
+        family: "codewith",
+        owner: "codewith",
+        scope: "global",
+        precedence: { rank: 20, label: "codewith" },
+        tags: ["global-rules", "codewith", "agent-instructions"],
+        include: (path) => {
+          const normalized = normalizePath(path);
+          const name = basename5(normalized);
+          if (ROOT_RULE_DOCS.has(name) || normalized === "config.toml")
+            return true;
+          if (normalized.endsWith("/SKILL.md"))
+            return true;
+          if (/^(rules|instructions|prompts|plans)\//.test(normalized) && isTextSource(normalized))
+            return true;
+          return false;
+        }
+      }
+    },
+    {
+      base: ".claude",
+      spec: {
+        family: "claude",
+        owner: "claude",
+        scope: "global",
+        precedence: { rank: 30, label: "claude-rules" },
+        tags: ["global-rules", "claude", "agent-instructions"],
+        include: (path) => {
+          const normalized = normalizePath(path);
+          return normalized === "CLAUDE.md" || /^rules\//.test(normalized) && isTextSource(normalized);
+        }
+      }
+    },
+    {
+      base: ".codex",
+      spec: {
+        family: "codex",
+        owner: "codex",
+        scope: "global",
+        precedence: { rank: 40, label: "codex" },
+        tags: ["global-rules", "codex", "agent-instructions"],
+        include: (path) => {
+          const normalized = normalizePath(path);
+          const name = basename5(normalized);
+          if (ROOT_RULE_DOCS.has(name) || name === "config.toml")
+            return true;
+          return /^(rules|instructions|prompts)\//.test(normalized) && isTextSource(normalized);
+        }
+      }
+    },
+    {
+      base: ".opencode",
+      spec: {
+        family: "opencode",
+        owner: "opencode",
+        scope: "global",
+        precedence: { rank: 50, label: "opencode" },
+        tags: ["global-rules", "opencode", "agent-instructions"],
+        include: (path) => SELECTED_PROMPT_OR_PLAN_RE.test(path) && isTextSource(path)
+      }
+    },
+    {
+      base: ".",
+      maxDepth: 0,
+      spec: {
+        family: "opencode",
+        owner: "opencode",
+        scope: "global",
+        precedence: { rank: 50, label: "opencode-config" },
+        tags: ["global-rules", "opencode", "config"],
+        include: (path) => ["opencode.json", "opencode.jsonc", "opencode.toml", "opencode.yaml", "opencode.yml"].includes(path)
+      }
+    },
+    {
+      base: ".hasna/prompts",
+      spec: {
+        family: "prompt",
+        owner: "hasna",
+        scope: "global",
+        precedence: { rank: 60, label: "selected-prompts" },
+        tags: ["global-rules", "prompt"],
+        include: (path) => SELECTED_PROMPT_OR_PLAN_RE.test(path) && isTextSource(path)
+      }
+    },
+    {
+      base: ".hasna/plans",
+      spec: {
+        family: "plan",
+        owner: "hasna",
+        scope: "global",
+        precedence: { rank: 65, label: "selected-plans" },
+        tags: ["global-rules", "plan"],
+        include: (path) => SELECTED_PROMPT_OR_PLAN_RE.test(path) && isTextSource(path)
+      }
+    },
+    {
+      base: "docs",
+      spec: {
+        family: "rule_doc",
+        owner: "repository",
+        scope: "global",
+        precedence: { rank: 70, label: "rule-docs" },
+        tags: ["global-rules", "rule-doc"],
+        include: (path) => SELECTED_PROMPT_OR_PLAN_RE.test(path) && isTextSource(path)
+      }
+    }
+  ];
+}
+function collectFiles(root, skipped) {
+  const candidates = new Map;
+  for (const entry of ruleSpecs()) {
+    const basePath = resolve4(root, entry.base);
+    if (!existsSync11(basePath))
+      continue;
+    const rootStats = statSync2(basePath);
+    if (rootStats.isFile()) {
+      const rel = basename5(basePath);
+      if (entry.spec.include(rel)) {
+        candidates.set(basePath, {
+          ...entry.spec,
+          absPath: basePath
+        });
+      }
+      continue;
+    }
+    walkRuleDirectory({
+      basePath,
+      depth: 0,
+      maxDepth: entry.maxDepth ?? WALK_MAX_DEPTH,
+      spec: entry.spec,
+      candidates,
+      skipped
+    });
+  }
+  return [...candidates.values()].sort((a, b) => {
+    if (a.precedence.rank !== b.precedence.rank)
+      return a.precedence.rank - b.precedence.rank;
+    return a.absPath.localeCompare(b.absPath);
+  });
+}
+function walkRuleDirectory(input) {
+  const rootBasePath = input.rootBasePath ?? input.basePath;
+  if (input.depth > input.maxDepth)
+    return;
+  for (const dirent of readdirSync2(input.basePath, { withFileTypes: true })) {
+    const absPath = join6(input.basePath, dirent.name);
+    const rel = relativePath(rootBasePath, absPath);
+    if (dirent.isSymbolicLink())
+      continue;
+    if (dirent.isDirectory()) {
+      if (SKIP_DIRECTORIES.has(dirent.name)) {
+        continue;
+      }
+      if (hasSensitivePathPart(rel)) {
+        input.skipped.push({ source_family: input.spec.family, source_path: absPath, reason: "sensitive_path" });
+        continue;
+      }
+      walkRuleDirectory({
+        ...input,
+        rootBasePath,
+        basePath: absPath,
+        depth: input.depth + 1
+      });
+      continue;
+    }
+    if (!dirent.isFile())
+      continue;
+    const sourceRelativePath = relativePath(resolve4(rootBasePath), absPath);
+    if (hasSensitivePathPart(sourceRelativePath)) {
+      input.skipped.push({ source_family: input.spec.family, source_path: absPath, reason: "sensitive_path" });
+      continue;
+    }
+    if (!input.spec.include(sourceRelativePath))
+      continue;
+    if (!isTextSource(absPath))
+      continue;
+    input.candidates.set(absPath, {
+      ...input.spec,
+      absPath
+    });
+  }
+}
+function legacyRuleLike(item) {
+  const tags = (item.tags ?? []).map((tag) => tag.toLowerCase());
+  if (tags.some((tag) => ["rule", "rules", "agent", "instructions", "global-rules", "global-agent-rules"].includes(tag))) {
+    return true;
+  }
+  const haystack = `${item.title}
+${item.content.slice(0, 500)}`.toLowerCase();
+  return /\b(agent|rule|rules|instruction|instructions|codewith|claude|codex|opencode)\b/.test(haystack);
+}
+function manifestItemForRecord(record, text) {
+  const ruleProvenance = {
+    source_path: record.source_path,
+    source_path_ref: record.source_path_ref,
+    source_ref: record.source_ref,
+    owner: record.owner,
+    scope: record.scope,
+    precedence: record.precedence,
+    source_hash: record.source_hash,
+    content_hash: record.content_hash,
+    discovered_at: record.discovered_at,
+    tags: record.tags,
+    redaction_status: record.redaction_status,
+    citations: record.citations
+  };
+  return {
+    source_ref: record.source_ref,
+    name: record.title,
+    mime: "text/markdown",
+    size: Buffer.byteLength(text),
+    hash: record.content_hash,
+    revision: record.content_hash,
+    status: "active",
+    updated_at: record.discovered_at,
+    permissions: {
+      mode: "read_only",
+      allowed_purposes: ["knowledge_index", "knowledge_answer", "agent_context"]
+    },
+    rule_provenance: ruleProvenance,
+    source_family: record.source_family,
+    source_path_ref: record.source_path_ref,
+    owner: record.owner,
+    scope: record.scope,
+    precedence: record.precedence,
+    tags: record.tags,
+    redaction_status: record.redaction_status,
+    legacy_json_id: record.legacy_json_id ?? null,
+    extracted_text: text
+  };
+}
+function prepareFileRecord(input) {
+  const stats = lstatSync2(input.candidate.absPath);
+  const sourcePath = input.candidate.absPath;
+  const sourcePathRef = relativePath(input.root, sourcePath);
+  if (stats.size > input.maxBytesPerFile) {
+    const sourceRef2 = pathToFileURL3(sourcePath).href;
+    const evidence2 = {
+      source_family: input.candidate.family,
+      title: basename5(sourcePath),
+      source_path: sourcePath,
+      source_path_ref: sourcePathRef,
+      source_ref: sourceRef2,
+      owner: input.candidate.owner,
+      scope: input.candidate.scope,
+      precedence: input.candidate.precedence,
+      source_hash: "sha256:skipped-too-large",
+      content_hash: "sha256:skipped-too-large",
+      discovered_at: input.discoveredAt,
+      tags: [...input.candidate.tags, "skipped"],
+      redaction_status: "refused",
+      redactions: [],
+      citations: [],
+      bytes: stats.size,
+      line_count: 0,
+      importable: false,
+      skipped_reason: "max_bytes_exceeded",
+      preview: null
+    };
+    return { evidence: evidence2, text: "", manifest: null };
+  }
+  const bytes = readFileSync10(sourcePath);
+  const rawText = bytes.toString("utf8");
+  const redacted = redactSecrets(rawText, input.safetyPolicy);
+  const highSeverity = redacted.findings.some((finding) => finding.severity === "high");
+  const redactionStatus = highSeverity ? "refused" : redacted.findings.length > 0 ? "redacted" : "clean";
+  const contentHash = sha256Text2(redacted.text);
+  const sourceRef = pathToFileURL3(sourcePath).href;
+  const lines = lineCount(redacted.text);
+  const evidence = {
+    source_family: input.candidate.family,
+    title: basename5(sourcePath),
+    source_path: sourcePath,
+    source_path_ref: sourcePathRef,
+    source_ref: sourceRef,
+    owner: input.candidate.owner,
+    scope: input.candidate.scope,
+    precedence: input.candidate.precedence,
+    source_hash: sha256Bytes(bytes),
+    content_hash: contentHash,
+    discovered_at: input.discoveredAt,
+    tags: [...input.candidate.tags],
+    redaction_status: redactionStatus,
+    redactions: redacted.findings.map((finding) => ({ type: finding.type, severity: finding.severity })),
+    citations: [citationFor2({ sourceRef, sourcePath, lineCount: lines, contentHash })],
+    bytes: bytes.byteLength,
+    line_count: lines,
+    importable: redactionStatus !== "refused",
+    skipped_reason: redactionStatus === "refused" ? "secret_refused" : null,
+    preview: redactionStatus === "refused" ? null : boundedPreview(redacted.text)
+  };
+  return {
+    evidence,
+    text: redacted.text,
+    manifest: evidence.importable ? manifestItemForRecord(evidence, redacted.text) : null
+  };
+}
+function prepareLegacyRecord(input) {
+  const redacted = redactSecrets(input.item.content, input.safetyPolicy);
+  const highSeverity = redacted.findings.some((finding) => finding.severity === "high");
+  const redactionStatus = highSeverity ? "refused" : redacted.findings.length > 0 ? "redacted" : "clean";
+  const sourceRef = `open-files://source/legacy-json/path/${encodeURIComponent(input.item.id)}`;
+  const contentHash = sha256Text2(redacted.text);
+  const sourceHash = sha256Text2(input.item.content);
+  const lines = lineCount(redacted.text);
+  const evidence = {
+    source_family: "legacy_json",
+    title: input.item.title,
+    source_path: input.legacyStorePath,
+    source_path_ref: `legacy-json:${input.item.id}`,
+    source_ref: sourceRef,
+    owner: "legacy-json",
+    scope: input.scope,
+    precedence: { rank: 90, label: "legacy-json-note" },
+    source_hash: sourceHash,
+    content_hash: contentHash,
+    discovered_at: input.discoveredAt,
+    tags: [...new Set(["global-rules", "legacy-json", ...input.item.tags ?? []])],
+    redaction_status: redactionStatus,
+    redactions: redacted.findings.map((finding) => ({ type: finding.type, severity: finding.severity })),
+    citations: [citationFor2({ sourceRef, sourcePath: input.legacyStorePath, lineCount: lines, contentHash })],
+    bytes: Buffer.byteLength(input.item.content),
+    line_count: lines,
+    importable: redactionStatus !== "refused",
+    skipped_reason: redactionStatus === "refused" ? "secret_refused" : null,
+    preview: redactionStatus === "refused" ? null : boundedPreview(redacted.text),
+    legacy_json_id: input.item.id
+  };
+  return {
+    evidence,
+    text: redacted.text,
+    manifest: evidence.importable ? manifestItemForRecord(evidence, redacted.text) : null
+  };
+}
+function deprecateLegacyNotes(input) {
+  if (!input.legacyStorePath || !existsSync11(input.legacyStorePath))
+    return 0;
+  const byId = new Map(input.records.filter((record) => record.legacy_json_id && record.importable).map((record) => [record.legacy_json_id, record]));
+  if (byId.size === 0)
+    return 0;
+  return withLock(input.legacyStorePath, () => {
+    const store = loadStoreIfExists(input.legacyStorePath);
+    if (!store.exists)
+      return 0;
+    let deprecated = 0;
+    for (const item of store.items) {
+      const record = byId.get(item.id);
+      if (!record)
+        continue;
+      const metadata = item.metadata ?? {};
+      item.archived = true;
+      item.metadata = {
+        ...metadata,
+        knowledge_rules_import: {
+          status: "deprecated_after_source_backed_promotion",
+          deprecated_at: input.now,
+          source_ref: record.source_ref,
+          source_hash: record.source_hash,
+          content_hash: record.content_hash,
+          data_loss: false
+        }
+      };
+      item.tags = [...new Set([...item.tags ?? [], "deprecated:knowledge-rules-import"])];
+      item.updated_at = input.now;
+      deprecated += 1;
+    }
+    if (deprecated > 0)
+      saveStore(input.legacyStorePath, { items: store.items });
+    return deprecated;
+  });
+}
+async function importRulesProvenance(options = {}) {
+  const root = resolve4(options.root ?? process.cwd());
+  const scope = options.scope ?? "global";
+  const owner = options.owner ?? "global-agent-rules-standard";
+  const dryRun = options.dryRun !== false;
+  const discoveredAt = (options.now ?? new Date).toISOString();
+  const maxItems = Math.max(1, Math.min(options.maxItems ?? DEFAULT_MAX_ITEMS2, 1000));
+  const evidenceLimit = Math.max(1, Math.min(options.limit ?? DEFAULT_EVIDENCE_LIMIT, 100));
+  const maxBytesPerFile = Math.max(1024, Math.min(options.maxBytesPerFile ?? DEFAULT_MAX_BYTES_PER_FILE, 2 * 1024 * 1024));
+  const skipped = [];
+  const files = collectFiles(root, skipped).slice(0, maxItems);
+  const fileRecords = files.map((candidate) => prepareFileRecord({
+    root,
+    candidate: {
+      ...candidate,
+      owner: candidate.owner === "repository" ? owner : candidate.owner,
+      scope
+    },
+    discoveredAt,
+    maxBytesPerFile,
+    safetyPolicy: options.safetyPolicy
+  }));
+  const legacyStore = options.includeLegacy === false || !options.legacyStorePath ? { exists: false, items: [] } : loadStoreIfExists(options.legacyStorePath);
+  const legacyItems = legacyStore.items.filter((item) => item.archived !== true && legacyRuleLike(item)).slice(0, maxItems);
+  const legacyRecords = legacyItems.map((item) => prepareLegacyRecord({
+    item,
+    legacyStorePath: options.legacyStorePath,
+    discoveredAt,
+    scope,
+    safetyPolicy: options.safetyPolicy
+  }));
+  const prepared = [...fileRecords, ...legacyRecords].slice(0, maxItems);
+  const allEvidence = prepared.map((record) => record.evidence);
+  const importableRecords = prepared.filter((record) => record.manifest);
+  const manifests = importableRecords.map((record) => record.manifest);
+  const refused = allEvidence.filter((record) => record.redaction_status === "refused").length;
+  const evidence = allEvidence.slice(0, evidenceLimit);
+  const boundedSkipped = skipped.slice(0, evidenceLimit);
+  let importResult = null;
+  let deprecated = 0;
+  if (!dryRun) {
+    if (!options.dbPath)
+      throw new Error("rules provenance apply mode requires dbPath.");
+    if (manifests.length > 0) {
+      importResult = await ingestOpenFilesManifestItems({
+        dbPath: options.dbPath,
+        items: manifests,
+        sourceLabel: "knowledge://rules-provenance/global-agent-rules",
+        readAction: "rules_provenance_import",
+        allowFileSourceRefs: true,
+        safetyPolicy: options.safetyPolicy,
+        now: options.now,
+        maxItems
+      });
+    }
+    if (options.deprecateLegacy !== false) {
+      deprecated = deprecateLegacyNotes({
+        legacyStorePath: options.legacyStorePath,
+        records: allEvidence,
+        now: discoveredAt
+      });
+    }
+  }
+  return {
+    ok: refused === 0 || manifests.length > 0 || dryRun,
+    workflow: "global-rules-provenance-import",
+    dry_run: dryRun,
+    writes_performed: !dryRun,
+    root,
+    scope,
+    owner,
+    discovered_at: discoveredAt,
+    max_items: maxItems,
+    evidence_limit: evidenceLimit,
+    records_seen: allEvidence.length,
+    records_importable: manifests.length,
+    records_refused: refused,
+    records_skipped: skipped.length,
+    evidence_truncated: allEvidence.length > evidence.length,
+    skipped_truncated: skipped.length > boundedSkipped.length,
+    evidence,
+    skipped: boundedSkipped,
+    import_result: importResult,
+    legacy: {
+      store_path: options.legacyStorePath ?? null,
+      candidates: legacyItems.length,
+      promoted: legacyRecords.filter((record) => record.manifest).length,
+      deprecated,
+      data_loss: false
+    },
+    message: dryRun ? `Discovered ${allEvidence.length} rule source(s); ${manifests.length} importable, ${refused} refused` : `Imported ${importResult?.items_seen ?? 0} rule source(s); ${deprecated} legacy note(s) deprecated`
+  };
+}
+
+// src/web-search.ts
+import { createHash as createHash15, randomUUID as randomUUID11 } from "crypto";
+function stableHash(value) {
+  return `sha256:${createHash15("sha256").update(value).digest("hex")}`;
+}
+function estimateTokens3(text) {
+  const words = text.trim().split(/\s+/).filter(Boolean).length;
+  return Math.max(1, Math.ceil(words * 1.25));
+}
+function asRecord2(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+function asString4(value) {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+function sourceFromRecord(value) {
+  const record = asRecord2(value);
+  const url = asString4(record.url) ?? asString4(record.uri) ?? asString4(record.sourceUrl);
+  if (!url)
+    return null;
+  return {
+    url,
+    title: asString4(record.title) ?? asString4(record.name),
+    snippet: asString4(record.snippet) ?? asString4(record.text) ?? asString4(record.description),
+    provider_metadata: record
+  };
+}
+function collectSources(value, output) {
+  if (Array.isArray(value)) {
+    for (const entry of value)
+      collectSources(entry, output);
+    return;
+  }
+  const source = sourceFromRecord(value);
+  if (source)
+    output.set(source.url, source);
+  const record = asRecord2(value);
+  for (const key of ["sources", "results", "citations", "annotations", "output"]) {
+    if (record[key])
+      collectSources(record[key], output);
+  }
+}
+function fakeSources(query, limit) {
+  return Array.from({ length: Math.min(limit, 3) }, (_, index) => ({
+    url: `https://example.com/knowledge-web-${index + 1}`,
+    title: `Fake web source ${index + 1}`,
+    snippet: `Deterministic web-search fixture for "${query}"`,
+    provider_metadata: { fake: true, rank: index + 1 }
+  }));
+}
+async function openAiWebSearch(input) {
+  const { generateText } = await import("ai");
+  const { createOpenAI } = await import("@ai-sdk/openai");
+  const settings = providerSettings(input.config, "openai");
+  const openai = createOpenAI({
+    apiKey: input.env[settings.api_key_env],
+    baseURL: settings.base_url
+  });
+  const webSearch = openai.tools?.webSearch;
+  if (!webSearch)
+    throw new Error("OpenAI provider does not expose tools.webSearch.");
+  return generateText({
+    model: openai(input.model),
+    prompt: input.query,
+    tools: {
+      web_search: webSearch({
+        externalWebAccess: true,
+        searchContextSize: "medium",
+        ...input.domains.length > 0 ? { allowedDomains: input.domains } : {}
+      })
+    },
+    toolChoice: { type: "tool", toolName: "web_search" }
+  });
+}
+async function anthropicWebSearch(input) {
+  const { generateText } = await import("ai");
+  const { createAnthropic } = await import("@ai-sdk/anthropic");
+  const settings = providerSettings(input.config, "anthropic");
+  const anthropic = createAnthropic({
+    apiKey: input.env[settings.api_key_env],
+    baseURL: settings.base_url
+  });
+  const factory = anthropic.tools?.webSearch_20250305 ?? anthropic.tools?.webSearch;
+  if (!factory)
+    throw new Error("Anthropic provider does not expose a web search tool.");
+  return generateText({
+    model: anthropic(input.model),
+    prompt: input.query,
+    tools: {
+      web_search: factory({
+        maxUses: input.maxUses,
+        ...input.domains.length > 0 ? { allowedDomains: input.domains } : {}
+      })
+    }
+  });
+}
+async function fileWebSources(options, sources, now) {
+  if (!options.fileResults || sources.length === 0)
+    return 0;
+  const items = sources.map((source) => {
+    const text = [source.title, source.snippet, source.url].filter(Boolean).join(`
+`);
+    const hash = stableHash(text);
+    return {
+      source_ref: source.url,
+      name: source.title ?? source.url,
+      url: source.url,
+      mime: "text/plain",
+      hash,
+      revision: hash,
+      status: "active",
+      updated_at: now,
+      permissions: { mode: "read_only", allowed_purposes: ["knowledge_answer", "knowledge_index"] },
+      metadata: {
+        source_ref: source.url,
+        content_source: "provider_web_search",
+        provider_metadata: source.provider_metadata
+      },
+      extracted_text: text
+    };
+  });
+  const result = await ingestOpenFilesManifestItems({
+    dbPath: options.dbPath,
+    items,
+    sourceLabel: `web-search:${options.query}`,
+    readAction: "provider_web_search_file_results",
+    safetyPolicy: options.safetyPolicy,
+    now: new Date(now)
+  });
+  return result.sources_upserted;
+}
+async function runProviderWebSearch(options) {
+  const query = options.query.trim();
+  if (!query)
+    throw new Error("Web search query is required.");
+  const env = options.env ?? process.env;
+  const now = (options.now ?? new Date).toISOString();
+  const limit = Math.max(1, Math.min(options.limit ?? 5, 20));
+  const maxUses = Math.max(1, Math.min(options.maxUses ?? 3, 10));
+  const domains = options.domains ?? [];
+  const modelRef = resolveModelRef(options.modelRef ?? (options.provider ? `${options.provider}:${providerSettings(options.config, options.provider).default_model}` : "default"), options.config);
+  const parsed = parseModelRef(modelRef);
+  const provider = options.provider ?? parsed.provider;
+  const model = parsed.provider === provider ? parsed.model : providerSettings(options.config, provider).default_model;
+  const runId = `run_${randomUUID11()}`;
+  if (!options.fake && options.safetyPolicy)
+    assertWebSearchAllowed(options.safetyPolicy);
+  if (!options.fake && provider !== "openai" && provider !== "anthropic") {
+    throw new Error(`Provider ${provider} does not expose native web search yet.`);
+  }
+  if (!options.fake)
+    assertProviderCredentials(provider, options.config, env);
+  migrateKnowledgeDb(options.dbPath);
+  const db = openKnowledgeDb(options.dbPath);
+  try {
+    db.run(`INSERT INTO runs (id, type, prompt, status, provider, model, metadata_json, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
+      runId,
+      "provider-web-search",
+      query,
+      "running",
+      provider,
+      model,
+      JSON.stringify({ domains, max_uses: maxUses, fake: options.fake === true }),
+      now,
+      now
+    ]);
+    recordAuditEvent(db, {
+      event_type: "source_read",
+      action: options.fake ? "fake_provider_web_search" : "provider_web_search",
+      target_uri: query,
+      decision: "allow",
+      metadata: { provider, model, domains, max_uses: maxUses },
+      created_at: now
+    });
+  } finally {
+    db.close();
+  }
+  let answer = "";
+  let sources = [];
+  let usage = { input_tokens: estimateTokens3(query), output_tokens: 0, cost_usd: 0 };
+  const warnings = [];
+  if (options.fake) {
+    sources = fakeSources(query, limit);
+    answer = `Fake web search answer for: ${query}`;
+    usage.output_tokens = estimateTokens3(answer);
+  } else {
+    const result = provider === "openai" ? await openAiWebSearch({ query, model, config: options.config, env, maxUses, domains }) : await anthropicWebSearch({ query, model, config: options.config, env, maxUses, domains });
+    answer = result.text;
+    const collected = new Map;
+    collectSources(result.sources, collected);
+    collectSources(result.toolResults, collected);
+    sources = Array.from(collected.values()).slice(0, limit);
+    const normalized = normalizeAiSdkUsage({
+      provider,
+      model,
+      usage: result.usage,
+      providerMetadata: result.providerMetadata
+    });
+    usage = {
+      input_tokens: normalized.input_tokens,
+      output_tokens: normalized.output_tokens,
+      cost_usd: normalized.cost_usd
+    };
+  }
+  const filedSources = await fileWebSources(options, sources, now);
+  const writeDb = openKnowledgeDb(options.dbPath);
+  try {
+    writeDb.run(`UPDATE runs SET status = ?, metadata_json = ?, updated_at = ? WHERE id = ?`, [
+      "completed",
+      JSON.stringify({ domains, max_uses: maxUses, sources: sources.length, filed_sources: filedSources, fake: options.fake === true }),
+      now,
+      runId
+    ]);
+    writeDb.run(`INSERT INTO run_events (id, run_id, level, event, metadata_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`, [
+      `evt_${randomUUID11()}`,
+      runId,
+      "info",
+      "provider_web_search_completed",
+      JSON.stringify({ sources: sources.length, filed_sources: filedSources }),
+      now
+    ]);
+    recordProviderUsage(writeDb, {
+      run_id: runId,
+      provider,
+      model,
+      input_tokens: usage.input_tokens,
+      output_tokens: usage.output_tokens,
+      cost_usd: usage.cost_usd,
+      metadata: { web_search: true, sources: sources.length, filed_sources: filedSources },
+      created_at: now
+    });
+  } finally {
+    writeDb.close();
+  }
+  if (sources.length === 0)
+    warnings.push("no_web_sources_returned");
+  return {
+    run_id: runId,
+    query,
+    provider,
+    model,
+    answer,
+    sources,
+    filed_sources: filedSources,
+    usage,
+    warnings
+  };
+}
+
+// src/wiki-compiler.ts
+import { createHash as createHash16, randomUUID as randomUUID12 } from "crypto";
+function stableId9(prefix, value) {
+  return `${prefix}_${createHash16("sha256").update(value).digest("hex").slice(0, 20)}`;
+}
+function slugify2(value) {
+  const slug = value.normalize("NFKC").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80);
+  return slug || "knowledge-page";
+}
+function todayParts(now) {
+  return {
+    year: String(now.getUTCFullYear()),
+    month: String(now.getUTCMonth() + 1).padStart(2, "0"),
+    day: String(now.getUTCDate()).padStart(2, "0")
+  };
+}
+function estimateTokenCount3(text) {
+  const words = text.trim().split(/\s+/).filter(Boolean).length;
+  return Math.max(1, Math.ceil(words * 1.25));
+}
+function parseJsonObject6(value) {
+  if (!value)
+    return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+function queryTerms3(query) {
+  return Array.from(new Set((query ?? "").toLowerCase().match(/[\p{L}\p{N}_]+/gu) ?? [])).slice(0, 12);
+}
+function escapeLike(value) {
+  return value.replace(/[\\%_]/g, (char) => `\\${char}`);
+}
+function selectSourceChunks(db, options) {
+  const limit = Math.max(1, Math.min(options.limit ?? 10, 50));
+  const sourceRefs = options.sourceRefs ?? [];
+  const terms = queryTerms3(options.query);
+  const where = ["c.kind = 'source'"];
+  const params = [];
+  if (sourceRefs.length > 0) {
+    where.push(`(${sourceRefs.map(() => "(s.uri = ? OR c.metadata_json LIKE ?)").join(" OR ")})`);
+    for (const ref of sourceRefs) {
+      params.push(ref, `%${escapeLike(ref)}%`);
+    }
+  }
+  if (terms.length > 0) {
+    where.push(`(${terms.map(() => "lower(c.text) LIKE ? ESCAPE '\\'").join(" OR ")})`);
+    for (const term of terms)
+      params.push(`%${escapeLike(term)}%`);
+  }
+  params.push(limit);
+  return db.query(`SELECT
+       c.id AS chunk_id,
+       c.text,
+       c.start_offset,
+       c.end_offset,
+       c.metadata_json,
+       c.source_revision_id,
+       sr.revision,
+       sr.hash,
+       s.uri AS source_uri,
+       s.title AS source_title
+     FROM chunks c
+     JOIN source_revisions sr ON sr.id = c.source_revision_id
+     JOIN sources s ON s.id = sr.source_id
+     WHERE ${where.join(" AND ")}
+     ORDER BY c.created_at ASC, c.ordinal ASC
+     LIMIT ?`).all(...params);
+}
+function excerpt(text, max = 420) {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  return normalized.length <= max ? normalized : `${normalized.slice(0, max - 1).trim()}...`;
+}
+function titleFor(options, rows) {
+  if (options.title?.trim())
+    return options.title.trim();
+  if (options.query?.trim())
+    return options.query.trim();
+  return rows[0]?.source_title ?? "Compiled Knowledge";
+}
+function compileBody(title, rows, now) {
+  const sourceLines = rows.map((row, index) => {
+    const label = `S${index + 1}`;
+    return `- [${label}] ${row.source_title ?? row.source_uri ?? "Source"} (${row.source_uri ?? "unknown"}, revision ${row.revision ?? "unknown"}, hash ${row.hash ?? "unknown"})`;
+  });
+  const noteLines = rows.map((row, index) => {
+    const label = `S${index + 1}`;
+    return [
+      `## ${row.source_title ?? `Source ${index + 1}`}`,
+      "",
+      excerpt(row.text),
+      "",
+      `Citation: [${label}]`
+    ].join(`
+`);
+  });
+  return [
+    `# ${title}`,
+    "",
+    `Generated at: ${now}`,
+    "",
+    "## Sources",
+    "",
+    ...sourceLines,
+    "",
+    ...noteLines,
+    ""
+  ].join(`
+`);
+}
+async function writeArtifact2(store, entry) {
+  const written = await store.put(entry);
+  return {
+    key: written.key,
+    uri: written.uri,
+    kind: entry.key.startsWith("logs/") ? "log" : "wiki_page",
+    content_type: entry.content_type,
+    modified_at: written.modified_at,
+    ...hashArtifactBody(entry.body),
+    metadata: {
+      ...entry.metadata ?? {}
+    }
+  };
+}
+async function appendLog2(store, event, now) {
+  const { year, month, day } = todayParts(now);
+  const key = `logs/${year}/${month}/${day}.jsonl`;
+  let existing = "";
+  try {
+    existing = await store.getText(key);
+  } catch {
+    existing = "";
+  }
+  return writeArtifact2(store, {
+    key,
+    body: `${existing}${JSON.stringify(event)}
+`,
+    content_type: "application/x-ndjson",
+    metadata: {
+      provenance: generatedArtifactProvenance({
+        generated_from: String(event.event ?? "wiki_log"),
+        artifact_key: key
+      })
+    }
+  });
+}
+function upsertWikiPage(db, input) {
+  db.run(`INSERT INTO wiki_pages (id, path, title, artifact_uri, content_hash, status, metadata_json, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(path) DO UPDATE SET
+       title = excluded.title,
+       artifact_uri = excluded.artifact_uri,
+       content_hash = excluded.content_hash,
+       status = excluded.status,
+       metadata_json = excluded.metadata_json,
+       updated_at = excluded.updated_at`, [
+    input.pageId,
+    input.path,
+    input.title,
+    input.artifactUri,
+    input.contentHash,
+    "active",
+    JSON.stringify({
+      artifact_key: input.path,
+      provenance: input.provenance
+    }),
+    input.now,
+    input.now
+  ]);
+  const existing = db.query("SELECT id FROM chunks WHERE wiki_page_id = ?").all(input.pageId);
+  for (const row of existing)
+    db.run("DELETE FROM chunks_fts WHERE chunk_id = ?", [row.id]);
+  db.run("DELETE FROM chunks WHERE wiki_page_id = ?", [input.pageId]);
+  const chunkId = stableId9("chk", `${input.pageId}\x00${input.contentHash}`);
+  db.run(`INSERT INTO chunks (id, wiki_page_id, kind, ordinal, text, token_count, start_offset, end_offset, metadata_json, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
+    chunkId,
+    input.pageId,
+    "wiki",
+    0,
+    input.body,
+    estimateTokenCount3(input.body),
+    0,
+    input.body.length,
+    JSON.stringify({
+      artifact_key: input.path,
+      artifact_uri: input.artifactUri,
+      content_hash: input.contentHash,
+      provenance: input.provenance
+    }),
+    input.now
+  ]);
+  db.run("INSERT INTO chunks_fts (chunk_id, text, title, source_uri) VALUES (?, ?, ?, ?)", [
+    chunkId,
+    input.body,
+    input.title,
+    input.artifactUri
+  ]);
+}
+function replacePageCitations(db, pageId, citations, now) {
+  db.run("DELETE FROM citations WHERE wiki_page_id = ?", [pageId]);
+  for (const citation of citations) {
+    db.run(`INSERT INTO citations (id, wiki_page_id, chunk_id, source_uri, quote, start_offset, end_offset, metadata_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
+      stableId9("cit", `${pageId}\x00${citation.source_uri}\x00${citation.chunk_id ?? randomUUID12()}`),
+      pageId,
+      citation.chunk_id,
+      citation.source_uri,
+      citation.quote,
+      citation.start_offset,
+      citation.end_offset,
+      JSON.stringify(citation.metadata),
+      now
+    ]);
+  }
+  return citations.length;
+}
+function upsertIndex(db, input) {
+  db.run(`INSERT INTO knowledge_indexes (id, kind, name, artifact_uri, shard_key, metadata_json, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(kind, name, shard_key) DO UPDATE SET
+       artifact_uri = excluded.artifact_uri,
+       metadata_json = excluded.metadata_json,
+       updated_at = excluded.updated_at`, [
+    stableId9("idx", `wiki-topic\x00${input.path}`),
+    "wiki_topic",
+    input.title,
+    input.artifactUri,
+    input.path,
+    JSON.stringify({
+      artifact_key: input.path,
+      content_hash: input.contentHash
+    }),
+    input.now,
+    input.now
+  ]);
+  return 1;
+}
+function firstConcept(title) {
+  return title.toLowerCase().match(/[a-z0-9][a-z0-9-]{2,}/)?.[0] ?? "knowledge";
+}
+async function compileWikiPage(options) {
+  const nowDate = options.now ?? new Date;
+  const now = nowDate.toISOString();
+  migrateKnowledgeDb(options.dbPath);
+  const readDb = openKnowledgeDb(options.dbPath);
+  let rows;
+  try {
+    rows = selectSourceChunks(readDb, options);
+  } finally {
+    readDb.close();
+  }
+  if (rows.length === 0)
+    throw new Error("No source chunks matched wiki compile input.");
+  const title = titleFor(options, rows);
+  const slug = slugify2(title);
+  const path = `wiki/generated/${slug}.md`;
+  const body = compileBody(title, rows, now);
+  const sourceRefs = rows.map((row) => {
+    const metadata = parseJsonObject6(row.metadata_json);
+    return typeof metadata.source_ref === "string" ? metadata.source_ref : row.source_uri;
+  }).filter((ref) => Boolean(ref));
+  const provenance = generatedArtifactProvenance({
+    generated_from: "wiki_compile",
+    artifact_key: path,
+    source_refs: sourceRefs
+  });
+  const pageArtifact = await writeArtifact2(options.store, {
+    key: path,
+    body,
+    content_type: "text/markdown",
+    metadata: { generated_from: "wiki_compile" }
+  });
+  const pageId = stableId9("wiki", path);
+  const citations = rows.map((row) => ({
+    chunk_id: row.chunk_id,
+    source_uri: row.source_uri ?? "unknown",
+    quote: excerpt(row.text, 240),
+    start_offset: row.start_offset,
+    end_offset: row.end_offset,
+    metadata: {
+      source_revision_id: row.source_revision_id,
+      revision: row.revision,
+      hash: row.hash,
+      source_ref: parseJsonObject6(row.metadata_json).source_ref ?? row.source_uri
+    }
+  }));
+  const concept = firstConcept(title);
+  const conceptPath = `wiki/concepts/${slugify2(concept)}.md`;
+  const conceptBody = [`# ${concept}`, "", `Related page: [[${path}]]`, ""].join(`
+`);
+  const conceptProvenance = generatedArtifactProvenance({
+    generated_from: "wiki_compile_concept",
+    artifact_key: conceptPath,
+    source_refs: sourceRefs
+  });
+  const conceptArtifact = await writeArtifact2(options.store, {
+    key: conceptPath,
+    body: conceptBody,
+    content_type: "text/markdown",
+    metadata: { generated_from: "wiki_compile_concept" }
+  });
+  const conceptPageId = stableId9("wiki", conceptPath);
+  const log = await appendLog2(options.store, {
+    ts: now,
+    event: "wiki_compile_completed",
+    page_key: path,
+    source_refs: sourceRefs,
+    chunks_seen: rows.length
+  }, nowDate);
+  const db = openKnowledgeDb(options.dbPath);
+  try {
+    recordStorageObjects(db, [pageArtifact, conceptArtifact, log], nowDate);
+    upsertWikiPage(db, {
+      pageId,
+      path,
+      title,
+      artifactUri: pageArtifact.uri,
+      contentHash: pageArtifact.hash ?? "",
+      body,
+      provenance,
+      now
+    });
+    upsertWikiPage(db, {
+      pageId: conceptPageId,
+      path: conceptPath,
+      title: concept,
+      artifactUri: conceptArtifact.uri,
+      contentHash: conceptArtifact.hash ?? "",
+      body: conceptBody,
+      provenance: conceptProvenance,
+      now
+    });
+    db.run(`INSERT OR REPLACE INTO wiki_backlinks (from_page_id, to_page_id, label, created_at)
+       VALUES (?, ?, ?, ?)`, [pageId, conceptPageId, "concept", now]);
+    const citationsWritten = replacePageCitations(db, pageId, citations, now);
+    const indexesUpdated = upsertIndex(db, {
+      title,
+      path,
+      artifactUri: pageArtifact.uri,
+      contentHash: pageArtifact.hash ?? "",
+      now
+    });
+    return {
+      page_id: pageId,
+      path,
+      artifact_uri: pageArtifact.uri,
+      content_hash: pageArtifact.hash ?? "",
+      chunks_seen: rows.length,
+      citations_written: citationsWritten,
+      concept_page_id: conceptPageId,
+      indexes_updated: indexesUpdated,
+      log_key: log.key,
+      warnings: []
+    };
+  } finally {
+    db.close();
+  }
+}
+async function fileAnswerToWiki(options) {
+  if (!options.approveWrite) {
+    return {
+      approved: false,
+      durable_writes_performed: false,
+      page_id: null,
+      path: null,
+      artifact_uri: null,
+      citations_written: 0,
+      log_key: null,
+      message: "Dry-run: answer filing requires --approve-write."
+    };
+  }
+  const nowDate = options.now ?? new Date;
+  const now = nowDate.toISOString();
+  const title = options.prompt.length > 80 ? `${options.prompt.slice(0, 77)}...` : options.prompt;
+  const slug = slugify2(title);
+  const path = `wiki/answers/${slug}.md`;
+  const citations = options.context.citations;
+  const body = [
+    `# ${title}`,
+    "",
+    options.answer,
+    "",
+    "## Citations",
+    "",
+    ...citations.map((citation, index) => `- [C${index + 1}] ${citation.source_ref ?? citation.source_uri ?? citation.artifact_path ?? citation.artifact_uri ?? "unknown"} ${citation.hash ? `(hash ${citation.hash})` : ""}`),
+    ""
+  ].join(`
+`);
+  const sourceRefs = citations.map((citation) => citation.source_ref ?? citation.source_uri).filter((ref) => Boolean(ref));
+  const provenance = generatedArtifactProvenance({
+    generated_from: "knowledge_answer",
+    artifact_key: path,
+    source_refs: sourceRefs
+  });
+  const artifact = await writeArtifact2(options.store, {
+    key: path,
+    body,
+    content_type: "text/markdown",
+    metadata: { generated_from: "knowledge_answer" }
+  });
+  const log = await appendLog2(options.store, {
+    ts: now,
+    event: "wiki_answer_filed",
+    page_key: path,
+    prompt: options.prompt,
+    citations: citations.length
+  }, nowDate);
+  const pageId = stableId9("wiki", path);
+  const db = openKnowledgeDb(options.dbPath);
+  try {
+    recordStorageObjects(db, [artifact, log], nowDate);
+    upsertWikiPage(db, {
+      pageId,
+      path,
+      title,
+      artifactUri: artifact.uri,
+      contentHash: artifact.hash ?? "",
+      body,
+      provenance,
+      now
+    });
+    const written = replacePageCitations(db, pageId, citations.map((citation) => ({
+      chunk_id: citation.chunk_id,
+      source_uri: citation.source_uri ?? citation.artifact_uri ?? "unknown",
+      quote: citation.quote,
+      start_offset: citation.start_offset,
+      end_offset: citation.end_offset,
+      metadata: {
+        source_ref: citation.source_ref,
+        artifact_path: citation.artifact_path,
+        revision: citation.revision,
+        hash: citation.hash
+      }
+    })), now);
+    upsertIndex(db, {
+      title,
+      path,
+      artifactUri: artifact.uri,
+      contentHash: artifact.hash ?? "",
+      now
+    });
+    return {
+      approved: true,
+      durable_writes_performed: true,
+      page_id: pageId,
+      path,
+      artifact_uri: artifact.uri,
+      citations_written: written,
+      log_key: log.key,
+      message: `Filed answer to ${path}`
+    };
+  } finally {
+    db.close();
+  }
+}
+function addIssue(issues, issue) {
+  issues.push(issue);
+}
+function lintWiki(options) {
+  migrateKnowledgeDb(options.dbPath);
+  const db = openKnowledgeDb(options.dbPath);
+  const issues = [];
+  try {
+    const activePages = db.query("SELECT COUNT(*) AS n FROM wiki_pages WHERE status = 'active'").get()?.n ?? 0;
+    const citationCount = db.query("SELECT COUNT(*) AS n FROM citations").get()?.n ?? 0;
+    const backlinkCount = db.query("SELECT COUNT(*) AS n FROM wiki_backlinks").get()?.n ?? 0;
+    const missingCitations = db.query(`SELECT wp.id, wp.path
+       FROM wiki_pages wp
+       LEFT JOIN citations c ON c.wiki_page_id = wp.id
+       WHERE wp.status = 'active' AND wp.path LIKE 'wiki/generated/%'
+       GROUP BY wp.id
+       HAVING COUNT(c.id) = 0`).all();
+    for (const page of missingCitations) {
+      addIssue(issues, { type: "missing_citation", severity: "error", page_id: page.id, path: page.path, message: "Generated wiki page has no citations." });
+    }
+    const stale = db.query(`SELECT wp.id AS page_id, wp.path, c.source_uri, c.chunk_id
+       FROM citations c
+       JOIN wiki_pages wp ON wp.id = c.wiki_page_id
+       LEFT JOIN chunks ch ON ch.id = c.chunk_id
+       WHERE ch.metadata_json LIKE '%"stale":true%' OR ch.metadata_json LIKE '%"status":"stale"%' OR ch.metadata_json LIKE '%"status":"deleted"%'`).all();
+    for (const row of stale) {
+      addIssue(issues, { type: "stale_citation", severity: "warn", page_id: row.page_id, path: row.path, source_uri: row.source_uri, chunk_id: row.chunk_id ?? undefined, message: "Page cites a stale or deleted source chunk." });
+    }
+    const duplicates = db.query(`SELECT lower(title) AS title, COUNT(*) AS n
+       FROM wiki_pages
+       WHERE status = 'active'
+       GROUP BY lower(title)
+       HAVING COUNT(*) > 1`).all();
+    for (const row of duplicates) {
+      addIssue(issues, { type: "duplicate_page", severity: "warn", message: `Duplicate active wiki title: ${row.title} (${row.n} pages).` });
+    }
+    const orphans = db.query(`SELECT wp.id, wp.path
+       FROM wiki_pages wp
+       LEFT JOIN wiki_backlinks wb1 ON wb1.from_page_id = wp.id
+       LEFT JOIN wiki_backlinks wb2 ON wb2.to_page_id = wp.id
+       WHERE wp.status = 'active'
+         AND wp.path NOT IN ('wiki/README.md')
+       GROUP BY wp.id
+       HAVING COUNT(wb1.to_page_id) = 0 AND COUNT(wb2.from_page_id) = 0`).all();
+    for (const page of orphans) {
+      addIssue(issues, { type: "orphan_page", severity: "info", page_id: page.id, path: page.path, message: "Wiki page has no backlinks." });
+    }
+    const unresolved = db.query(`SELECT wp.id AS page_id, wp.path, c.source_uri
+       FROM citations c
+       JOIN wiki_pages wp ON wp.id = c.wiki_page_id
+       LEFT JOIN sources s ON s.uri = c.source_uri
+       WHERE s.id IS NULL AND c.source_uri NOT LIKE 'file://%' AND c.source_uri NOT LIKE 's3://%' AND c.source_uri NOT LIKE 'https://%' AND c.source_uri NOT LIKE 'open-files://%'`).all();
+    for (const row of unresolved) {
+      addIssue(issues, { type: "unresolved_source_ref", severity: "error", page_id: row.page_id, path: row.path, source_uri: row.source_uri, message: "Citation source URI cannot be resolved to a known or allowed source ref." });
+    }
+    const contradictions = db.query(`SELECT id, path FROM wiki_pages WHERE lower(metadata_json) LIKE '%contradiction%'`).all();
+    for (const page of contradictions) {
+      addIssue(issues, { type: "contradiction_marker", severity: "warn", page_id: page.id, path: page.path, message: "Page metadata contains a contradiction marker." });
+    }
+    const newArticleCandidates = db.query(`SELECT c.id AS chunk_id, s.uri AS source_uri
+       FROM chunks c
+       JOIN source_revisions sr ON sr.id = c.source_revision_id
+       JOIN sources s ON s.id = sr.source_id
+       LEFT JOIN citations cit ON cit.chunk_id = c.id
+       WHERE c.kind = 'source'
+       GROUP BY c.id
+       HAVING COUNT(cit.id) = 0
+       LIMIT 25`).all();
+    for (const row of newArticleCandidates) {
+      addIssue(issues, { type: "new_article_candidate", severity: "info", chunk_id: row.chunk_id, source_uri: row.source_uri ?? undefined, message: "Source chunk is indexed but not cited by any wiki page yet." });
+    }
+    return {
+      ok: issues.every((issue) => issue.severity !== "error"),
+      issue_count: issues.length,
+      issues,
+      counts: {
+        active_pages: activePages,
+        citations: citationCount,
+        backlinks: backlinkCount,
+        new_article_candidates: newArticleCandidates.length
+      }
+    };
+  } finally {
+    db.close();
+  }
+}
+
+// src/item-store.ts
+import { existsSync as existsSync12 } from "fs";
+class VersionHistoryUnsupportedError extends Error {
+  location;
+  code = "version_history_unsupported";
+  constructor(location) {
+    super("Version history is not kept by the local JSON knowledge store " + `(${location}). It has no version line, so an empty history here would be a claim, not a measurement. ` + "Entry versioning lives behind the server API: set HASNA_KNOWLEDGE_API_URL " + "and HASNA_KNOWLEDGE_API_KEY, then re-run.");
+    this.location = location;
+    this.name = "VersionHistoryUnsupportedError";
+  }
+}
+function matchesId(item, idOrShort) {
+  return item.id === idOrShort || item.short_id === idOrShort;
+}
+function itemMatchesLiteralSearch(item, search) {
+  const query = search.trim().toLowerCase();
+  if (!query)
+    return true;
+  return item.id.toLowerCase().includes(query) || item.title.toLowerCase().includes(query) || item.content.toLowerCase().includes(query);
+}
+function itemMatchesTagFilters(item, rawFilters) {
+  if (rawFilters.length === 0)
+    return true;
+  const itemTags = new Set((item.tags ?? []).map((tag) => tag.toLowerCase()));
+  return rawFilters.every((raw) => {
+    const whole = raw.trim().toLowerCase();
+    const parts = raw.split(",").map((tag) => tag.trim().toLowerCase()).filter(Boolean);
+    return whole.length > 0 && itemTags.has(whole) || parts.length > 0 && parts.every((tag) => itemTags.has(tag));
+  });
+}
+function compareItems(left, right, sort, direction) {
+  const primary = sort === "title" ? left.title.localeCompare(right.title) : left.created_at.localeCompare(right.created_at);
+  const deterministic = primary === 0 ? left.id.localeCompare(right.id) : primary;
+  return direction === "desc" ? -deterministic : deterministic;
+}
+function boundedListInteger(value, fallback, field, minimum, maximum) {
+  const resolved = value ?? fallback;
+  if (!Number.isFinite(resolved) || !Number.isInteger(resolved) || resolved < minimum || resolved > maximum) {
+    throw new Error(`${field} must be an integer between ${minimum} and ${maximum}.`);
+  }
+  return resolved;
+}
+function boundedLocalList(items, options) {
+  const archive = options.archive ?? "active";
+  const sort = options.sort ?? "created";
+  const direction = options.direction ?? "asc";
+  const limit = boundedListInteger(options.limit, 50, "limit", 1, 200);
+  const offset = boundedListInteger(options.offset, 0, "offset", 0, 1e4);
+  let filtered = items.filter((item) => archive === "all" || (archive === "archived" ? item.archived === true : item.archived !== true));
+  if (options.search) {
+    filtered = filtered.filter((item) => itemMatchesLiteralSearch(item, options.search));
+  }
+  if (options.tags?.length) {
+    filtered = filtered.filter((item) => itemMatchesTagFilters(item, options.tags));
+  }
+  filtered.sort((left, right) => compareItems(left, right, sort, direction));
+  return {
+    total: filtered.length,
+    items: filtered.slice(offset, offset + limit)
+  };
+}
+
+class LocalItemStore {
+  storePath;
+  kind = "local";
+  supportsVersions = false;
+  constructor(storePath) {
+    this.storePath = storePath;
+  }
+  async listVersions() {
+    throw new VersionHistoryUnsupportedError(this.storePath);
+  }
+  async getVersion() {
+    throw new VersionHistoryUnsupportedError(this.storePath);
+  }
+  get location() {
+    return this.storePath;
+  }
+  get exists() {
+    return existsSync12(this.storePath);
+  }
+  async list(options = {}) {
+    const store = loadStoreIfExists(this.storePath);
+    const result = boundedLocalList(store.items, options);
+    return { ...result, exists: store.exists };
+  }
+  async listAll() {
+    const store = loadStoreIfExists(this.storePath);
+    return { items: store.items, total: store.items.length, exists: store.exists };
+  }
+  async get(idOrShort) {
+    const store = loadStoreIfExists(this.storePath);
+    return store.items.find((item) => matchesId(item, idOrShort)) ?? null;
+  }
+  async create(input) {
+    return withLock(this.storePath, () => {
+      const db = loadStore(this.storePath);
+      const now = new Date().toISOString();
+      const id = input.id ?? makeId();
+      const item = {
+        id,
+        short_id: makeShortId(id),
+        title: input.title,
+        content: input.content,
+        url: input.url ?? null,
+        tags: input.tags ?? [],
+        metadata: input.metadata ?? {},
+        archived: false,
+        created_at: now,
+        updated_at: now,
+        version: 1
+      };
+      db.items.push(item);
+      saveStore(this.storePath, db);
+      return item;
+    }, { createParent: true });
+  }
+  async update(idOrShort, patch, options = {}) {
+    return withLock(this.storePath, () => {
+      const db = loadStore(this.storePath);
+      const idx = db.items.findIndex((item2) => matchesId(item2, idOrShort));
+      if (idx === -1)
+        return null;
+      const item = db.items[idx];
+      const storedVersion = item.version ?? 1;
+      if (options.expectedVersion !== undefined && options.expectedVersion !== storedVersion) {
+        throw new KnowledgeVersionConflictError(options.expectedVersion, storedVersion);
+      }
+      if (patch.title !== undefined)
+        item.title = patch.title;
+      if (patch.content !== undefined)
+        item.content = patch.content;
+      if (patch.url !== undefined)
+        item.url = patch.url;
+      if (patch.tags !== undefined)
+        item.tags = patch.tags;
+      if (patch.metadata !== undefined)
+        item.metadata = patch.metadata;
+      if (patch.archived !== undefined)
+        item.archived = patch.archived;
+      item.updated_at = new Date().toISOString();
+      item.version = storedVersion + 1;
+      db.items[idx] = item;
+      saveStore(this.storePath, db);
+      return item;
+    }, { createParent: true });
+  }
+  async delete(idOrShort) {
+    return withLock(this.storePath, () => {
+      const db = loadStore(this.storePath);
+      const before = db.items.length;
+      db.items = db.items.filter((item) => !matchesId(item, idOrShort));
+      const removed = before !== db.items.length;
+      if (removed)
+        saveStore(this.storePath, db);
+      return removed;
+    }, { createParent: true });
+  }
+  async deleteMany(idsOrShorts) {
+    if (idsOrShorts.length === 0)
+      return 0;
+    const targets = new Set(idsOrShorts);
+    return withLock(this.storePath, () => {
+      const db = loadStore(this.storePath);
+      const before = db.items.length;
+      db.items = db.items.filter((item) => !targets.has(item.id) && !(item.short_id != null && targets.has(item.short_id)));
+      const removed = before - db.items.length;
+      if (removed > 0)
+        saveStore(this.storePath, db);
+      return removed;
+    }, { createParent: true });
+  }
+}
+
+class ApiItemStore {
+  http;
+  kind = "api";
+  exists = true;
+  supportsVersions = true;
+  constructor(http) {
+    this.http = http;
+  }
+  async listVersions(idOrShort, options = {}) {
+    return this.http.listVersions(idOrShort, options);
+  }
+  async getVersion(idOrShort, version) {
+    return this.http.getVersion(idOrShort, version);
+  }
+  get location() {
+    return this.http.baseUrl;
+  }
+  async list(options = {}) {
+    const result = await this.http.list({
+      search: options.search,
+      tags: options.tags,
+      archive: options.archive,
+      sort: options.sort,
+      direction: options.direction,
+      limit: options.limit,
+      offset: options.offset
+    });
+    return {
+      items: result.items,
+      total: result.total,
+      exists: true
+    };
+  }
+  async listAll() {
+    const items = await fetchAllHttpItems(this.http);
+    return { items, total: items.length, exists: true };
+  }
+  async get(idOrShort) {
+    return this.http.get(idOrShort);
+  }
+  async create(input) {
+    return this.http.create({
+      ...input.id ? { id: input.id } : {},
+      title: input.title,
+      content: input.content,
+      url: input.url ?? null,
+      tags: input.tags ?? [],
+      ...input.metadata ? { metadata: input.metadata } : {}
+    });
+  }
+  async update(idOrShort, patch, options = {}) {
+    return this.http.update(idOrShort, patch, { expectedVersion: options.expectedVersion });
+  }
+  async delete(idOrShort) {
+    return this.http.delete(idOrShort);
+  }
+  async deleteMany(idsOrShorts) {
+    let removed = 0;
+    for (const id of idsOrShorts) {
+      if (await this.http.delete(id))
+        removed += 1;
+    }
+    return removed;
+  }
+}
+function resolveItemStore(options) {
+  const http = options.storePathOverridden ? null : resolveKnowledgeHttpStore(options.env ?? process.env);
+  if (http)
+    return new ApiItemStore(http);
+  return new LocalItemStore(options.storePath);
+}
+
+// src/wiki-layout.ts
+import { createHash as createHash17 } from "crypto";
+function todayParts2(now) {
+  const year = String(now.getUTCFullYear());
+  const month = String(now.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(now.getUTCDate()).padStart(2, "0");
+  return { year, month, day };
+}
+function stableId10(prefix, value) {
+  return `${prefix}_${createHash17("sha256").update(value).digest("hex").slice(0, 20)}`;
+}
+function estimateTokenCount4(text) {
+  const words = text.trim().split(/\s+/).filter(Boolean).length;
+  return Math.max(1, Math.ceil(words * 1.25));
+}
+function agentSchemaTemplate() {
+  return `# Knowledge Agent Schema v1
+
+## Source Rules
+
+- Treat open-files source references as the preferred source of truth.
+- Do not copy raw source files into knowledge.
+- Cite every durable fact with a source URI, revision/hash when available, and optional span.
+- Mark uncertainty explicitly when sources disagree or are incomplete.
+
+## Wiki Rules
+
+- Write generated knowledge as Markdown pages under wiki/.
+- Keep root indexes small; use topic, team, project, and machine-readable shards for scale.
+- Preserve backlinks between related pages and decisions.
+- Prefer updating existing pages over creating near-duplicates.
+
+## Query Rules
+
+- Search wiki pages first, then source chunks, then deeper read-only source refs.
+- Use web search only when requested or when current external context is required.
+- File useful answers back into the wiki only after approval or approved auto-write mode.
+
+## Lint Rules
+
+- Flag stale pages, missing citations, contradictions, orphan pages, duplicate pages, and unresolved source refs.
+`;
+}
+function rootIndexTemplate() {
+  return `# Knowledge Index
+
+This is a compact orientation index for agents. It is not the full search index.
+
+## Shards
+
+- wiki/
+- indexes/
+- schemas/
+- logs/
+
+## Source Ownership
+
+Raw source files are resolved through open-files. This app stores source refs,
+citations, chunks, generated wiki artifacts, indexes, and run records.
+`;
+}
+function wikiReadmeTemplate() {
+  return `# Wiki
+
+Generated durable knowledge pages live here.
+
+Pages should be concise, cited, and organized for both humans and agents.
+`;
+}
+async function initializeWikiLayout(store, now = new Date) {
+  const { year, month, day } = todayParts2(now);
+  const schemaKey = "schemas/v1.md";
+  const rootIndexKey = "indexes/root.md";
+  const wikiReadmeKey = "wiki/README.md";
+  const logKey = `logs/${year}/${month}/${day}.jsonl`;
+  const event = {
+    ts: now.toISOString(),
+    event: "wiki_layout_initialized",
+    schema_key: schemaKey,
+    root_index_key: rootIndexKey,
+    wiki_readme_key: wikiReadmeKey
+  };
+  const entries = [
+    { key: schemaKey, body: agentSchemaTemplate(), content_type: "text/markdown" },
+    { key: rootIndexKey, body: rootIndexTemplate(), content_type: "text/markdown" },
+    { key: wikiReadmeKey, body: wikiReadmeTemplate(), content_type: "text/markdown" },
+    { key: logKey, body: `${JSON.stringify(event)}
+`, content_type: "application/x-ndjson" }
+  ];
+  const artifacts = await Promise.all(entries.map(async (entry) => {
+    const result = await store.put(entry);
+    return {
+      key: result.key,
+      uri: result.uri,
+      kind: artifactKindForKey(entry.key),
+      content_type: entry.content_type,
+      modified_at: result.modified_at,
+      metadata: {
+        provenance: generatedArtifactProvenance({
+          generated_from: "wiki_layout_init",
+          artifact_key: entry.key,
+          citation_required: entry.key.startsWith("wiki/") || entry.key.startsWith("indexes/")
+        })
+      },
+      ...hashArtifactBody(entry.body)
+    };
+  }));
+  return {
+    schema_key: schemaKey,
+    root_index_key: rootIndexKey,
+    wiki_readme_key: wikiReadmeKey,
+    log_key: logKey,
+    artifacts,
+    written: [schemaKey, rootIndexKey, wikiReadmeKey, logKey]
+  };
+}
+function provenanceFor(artifact) {
+  const existing = artifact.metadata?.provenance;
+  if (existing && typeof existing === "object" && !Array.isArray(existing)) {
+    return existing;
+  }
+  return generatedArtifactProvenance({
+    generated_from: "wiki_layout_init",
+    artifact_key: artifact.key
+  });
+}
+function recordWikiChunk(db, pageId, title, artifact, body, now) {
+  const provenance = provenanceFor(artifact);
+  const chunkId = stableId10("chk", `${pageId}\x00${artifact.hash ?? artifact.uri}`);
+  const existing = db.query("SELECT id FROM chunks WHERE wiki_page_id = ?").all(pageId);
+  for (const row of existing)
+    db.run("DELETE FROM chunks_fts WHERE chunk_id = ?", [row.id]);
+  db.run("DELETE FROM chunks WHERE wiki_page_id = ?", [pageId]);
+  db.run(`INSERT INTO chunks (id, wiki_page_id, kind, ordinal, text, token_count, start_offset, end_offset, metadata_json, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
+    chunkId,
+    pageId,
+    "wiki",
+    0,
+    body,
+    estimateTokenCount4(body),
+    0,
+    body.length,
+    JSON.stringify({
+      artifact_key: artifact.key,
+      artifact_uri: artifact.uri,
+      content_hash: artifact.hash ?? null,
+      provenance
+    }),
+    now
+  ]);
+  db.run("INSERT INTO chunks_fts (chunk_id, text, title, source_uri) VALUES (?, ?, ?, ?)", [chunkId, body, title, artifact.uri]);
+}
+function recordWikiLayoutCatalog(db, artifacts, now = new Date) {
+  const timestamp = now.toISOString();
+  const rootIndex = artifacts.find((artifact) => artifact.key.endsWith("indexes/root.md"));
+  const wikiReadme = artifacts.find((artifact) => artifact.key.endsWith("wiki/README.md"));
+  if (rootIndex) {
+    db.run(`INSERT INTO knowledge_indexes (id, kind, name, artifact_uri, shard_key, metadata_json, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(kind, name, shard_key) DO UPDATE SET
+         artifact_uri = excluded.artifact_uri,
+         metadata_json = excluded.metadata_json,
+         updated_at = excluded.updated_at`, [
+      stableId10("idx", "root:indexes/root.md"),
+      "root",
+      "root",
+      rootIndex.uri,
+      "root",
+      JSON.stringify({
+        artifact_key: rootIndex.key,
+        content_hash: rootIndex.hash ?? null,
+        provenance: provenanceFor(rootIndex)
+      }),
+      timestamp,
+      timestamp
+    ]);
+  }
+  if (wikiReadme) {
+    const wikiPageId = stableId10("wiki", "wiki/README.md");
+    db.run(`INSERT INTO wiki_pages (id, path, title, artifact_uri, content_hash, status, metadata_json, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(path) DO UPDATE SET
+         title = excluded.title,
+         artifact_uri = excluded.artifact_uri,
+         content_hash = excluded.content_hash,
+         status = excluded.status,
+         metadata_json = excluded.metadata_json,
+         updated_at = excluded.updated_at`, [
+      wikiPageId,
+      "wiki/README.md",
+      "Wiki",
+      wikiReadme.uri,
+      wikiReadme.hash ?? null,
+      "active",
+      JSON.stringify({
+        artifact_key: wikiReadme.key,
+        provenance: provenanceFor(wikiReadme)
+      }),
+      timestamp,
+      timestamp
+    ]);
+    recordWikiChunk(db, wikiPageId, "Wiki", wikiReadme, wikiReadmeTemplate(), timestamp);
+  }
+}
+
+// src/workspace-migration.ts
+import { createHash as createHash18 } from "crypto";
+import {
+  cpSync,
+  chmodSync as chmodSync4,
+  existsSync as existsSync13,
+  lstatSync as lstatSync3,
+  mkdirSync as mkdirSync4,
+  readdirSync as readdirSync3,
+  readFileSync as readFileSync11,
+  renameSync as renameSync2,
+  rmSync,
+  writeFileSync as writeFileSync5
+} from "fs";
+import { dirname as dirname5, join as join7, relative as relative5 } from "path";
+function walkFiles(root, base = root) {
+  if (!existsSync13(root))
+    return [];
+  const stat = lstatSync3(root);
+  if (stat.isFile())
+    return [relative5(base, root) || "."];
+  if (!stat.isDirectory())
+    return [];
+  return readdirSync3(root).flatMap((entry) => walkFiles(join7(root, entry), base)).sort();
+}
+function hashFiles(root, files) {
+  if (files.length === 0)
+    return { sha256: null, bytes: 0 };
+  const tree = createHash18("sha256");
+  let bytes = 0;
+  for (const file of files) {
+    const path = join7(root, file);
+    const body = readFileSync11(path);
+    const fileHash = createHash18("sha256").update(body).digest("hex");
+    bytes += body.byteLength;
+    tree.update(file);
+    tree.update("\x00");
+    tree.update(fileHash);
+    tree.update("\x00");
+  }
+  return { sha256: tree.digest("hex"), bytes };
+}
+function jsonItemCount(path) {
+  if (!existsSync13(path))
+    return null;
+  const parsed = JSON.parse(readFileSync11(path, "utf8"));
+  return Array.isArray(parsed.items) ? parsed.items.length : null;
+}
+function sqliteSummary(path) {
+  if (!existsSync13(path)) {
+    return { exists: false, integrity_check: null, table_counts: {} };
+  }
+  const db = openKnowledgeDbReadonly(path);
+  try {
+    const integrity = db.query("PRAGMA integrity_check").get();
+    const integrityCheck = integrity ? Object.values(integrity)[0] ?? null : null;
+    const tables = db.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all();
+    const tableCounts2 = {};
+    for (const table of tables) {
+      const quoted = `"${table.name.replaceAll('"', '""')}"`;
+      const count3 = db.query(`SELECT COUNT(*) AS n FROM ${quoted}`).get();
+      tableCounts2[table.name] = count3?.n ?? 0;
+    }
+    return { exists: true, integrity_check: integrityCheck, table_counts: tableCounts2 };
+  } finally {
+    db.close();
+  }
+}
+function summarizeWorkspaceTree(workspace, options = {}) {
+  const files = walkFiles(workspace.home);
+  const treeHash = hashFiles(workspace.home, files);
+  const artifactFiles = walkFiles(workspace.artifactsDir);
+  const artifactHash = hashFiles(workspace.artifactsDir, artifactFiles);
+  const sqliteExists = existsSync13(workspace.knowledgeDbPath);
+  return {
+    path: workspace.home,
+    exists: existsSync13(workspace.home),
+    file_count: files.length,
+    total_bytes: treeHash.bytes,
+    tree_sha256: treeHash.sha256,
+    json_items: jsonItemCount(workspace.jsonStorePath),
+    sqlite: options.includeSqlite === false ? { exists: sqliteExists, integrity_check: null, table_counts: {} } : sqliteSummary(workspace.knowledgeDbPath),
+    artifacts: {
+      exists: existsSync13(workspace.artifactsDir),
+      file_count: artifactFiles.length,
+      total_bytes: artifactHash.bytes,
+      tree_sha256: artifactHash.sha256
+    },
+    files
+  };
+}
+function isDefaultScaffold(workspace, summary) {
+  if (!summary.exists)
+    return true;
+  const materialFiles = summary.files.filter((file) => file !== "config.json");
+  if (materialFiles.length > 0)
+    return false;
+  if (!summary.files.includes("config.json"))
+    return true;
+  try {
+    return JSON.stringify(JSON.parse(readFileSync11(workspace.configPath, "utf8"))) === JSON.stringify(defaultKnowledgeConfig());
+  } catch {
+    return false;
+  }
+}
+function summariesMatch(left, right) {
+  return left.file_count === right.file_count && left.total_bytes === right.total_bytes && left.tree_sha256 === right.tree_sha256 && left.json_items === right.json_items && left.sqlite.integrity_check === right.sqlite.integrity_check && JSON.stringify(left.sqlite.table_counts) === JSON.stringify(right.sqlite.table_counts) && left.artifacts.file_count === right.artifacts.file_count && left.artifacts.total_bytes === right.artifacts.total_bytes && left.artifacts.tree_sha256 === right.artifacts.tree_sha256;
+}
+function migrationTimestamp(now) {
+  return now.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
+}
+function stableJson2(value) {
+  if (Array.isArray(value))
+    return `[${value.map(stableJson2).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.entries(value).sort(([left], [right]) => left.localeCompare(right)).map(([key, entry]) => `${JSON.stringify(key)}:${stableJson2(entry)}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+function itemSignature(item) {
+  return stableJson2(item);
+}
+function itemShortId(item) {
+  return typeof item.short_id === "string" && item.short_id.trim().length > 0 ? item.short_id : null;
+}
+function readMergeStore(path) {
+  if (!existsSync13(path))
+    return { items: [] };
+  const parsed = JSON.parse(readFileSync11(path, "utf8"));
+  if (!parsed || !Array.isArray(parsed.items)) {
+    throw new Error(`Invalid knowledge JSON store shape at ${path}`);
+  }
+  return { items: parsed.items };
+}
+function mergeStats(currentStore, legacyStore) {
+  const currentById = new Map(currentStore.items.map((item) => [item.id, item]));
+  const reservedKeys = new Map;
+  for (const item of currentStore.items) {
+    const existingId = reservedKeys.get(item.id);
+    if (existingId && existingId.item.id !== item.id) {}
+    reservedKeys.set(item.id, { item, keyKind: "id", source: "current" });
+    const shortId = itemShortId(item);
+    if (shortId && !reservedKeys.has(shortId)) {
+      reservedKeys.set(shortId, { item, keyKind: "short_id", source: "current" });
+    }
+  }
+  const conflicts = [];
+  let duplicateIdsIdentical = 0;
+  let duplicateIdsConflicting = 0;
+  let shortIdConflicts = 0;
+  const stranded = [];
+  for (const legacyItem of legacyStore.items) {
+    const currentItem = currentById.get(legacyItem.id);
+    if (currentItem) {
+      if (itemSignature(currentItem) === itemSignature(legacyItem)) {
+        duplicateIdsIdentical += 1;
+      } else {
+        duplicateIdsConflicting += 1;
+        conflicts.push({
+          type: "id_conflict",
+          id: legacyItem.id,
+          legacy_title: legacyItem.title,
+          current_title: currentItem.title
+        });
+      }
+      continue;
+    }
+    const keys = [
+      { key: legacyItem.id, keyKind: "id" },
+      ...itemShortId(legacyItem) ? [{ key: itemShortId(legacyItem), keyKind: "short_id" }] : []
+    ];
+    let itemHasConflict = false;
+    for (const { key, keyKind } of keys) {
+      const existing = reservedKeys.get(key);
+      if (!existing)
+        continue;
+      if (keyKind === "id" && existing.keyKind === "id") {
+        duplicateIdsConflicting += 1;
+        conflicts.push({
+          type: "id_conflict",
+          id: key,
+          legacy_id: legacyItem.id,
+          current_id: existing.item.id,
+          legacy_title: legacyItem.title,
+          current_title: existing.item.title
+        });
+      } else {
+        shortIdConflicts += 1;
+        conflicts.push({
+          type: "short_id_conflict",
+          id: key,
+          legacy_id: legacyItem.id,
+          current_id: existing.item.id,
+          legacy_title: legacyItem.title,
+          current_title: existing.item.title
+        });
+      }
+      itemHasConflict = true;
+    }
+    if (itemHasConflict) {
+      continue;
+    }
+    stranded.push(legacyItem);
+    for (const { key, keyKind } of keys) {
+      reservedKeys.set(key, { item: legacyItem, keyKind, source: "legacy" });
+    }
+  }
+  const mergedStore = { items: [...currentStore.items, ...stranded] };
+  return {
+    stats: {
+      current_items: currentStore.items.length,
+      legacy_items: legacyStore.items.length,
+      duplicate_ids_identical: duplicateIdsIdentical,
+      duplicate_ids_conflicting: duplicateIdsConflicting,
+      short_id_conflicts: shortIdConflicts,
+      stranded_items: stranded.length,
+      merged_items: conflicts.length === 0 ? stranded.length : 0,
+      expected_total_items: currentStore.items.length + stranded.length,
+      final_items: null
+    },
+    conflicts,
+    mergedStore
+  };
+}
+function withStoreLocks(paths, fn) {
+  const uniquePaths = [...new Set(paths)].sort();
+  const run = (index) => {
+    if (index >= uniquePaths.length)
+      return fn();
+    return withLock(uniquePaths[index], () => run(index + 1), { createParent: true });
+  };
+  return run(0);
+}
+function mergeLegacyKnowledgeWorkspace(options) {
+  const now = options.now ?? new Date;
+  const dryRun = options.approveWrite !== true;
+  const legacyBefore = summarizeWorkspaceTree(options.legacy);
+  const currentBefore = summarizeWorkspaceTree(options.current);
+  const checks = {
+    legacy_exists: legacyBefore.exists,
+    legacy_store_exists: existsSync13(options.legacy.jsonStorePath),
+    current_store_exists: existsSync13(options.current.jsonStorePath),
+    approval_present: options.approveWrite === true && Boolean(options.approvedBy),
+    legacy_backup_written: false,
+    no_conflicts: false,
+    final_count_matches_expected: false
+  };
+  const warnings = [];
+  if (!legacyBefore.exists || !checks.legacy_store_exists) {
+    return {
+      ok: true,
+      dry_run: dryRun,
+      approval_required: false,
+      scope: options.scope,
+      current_home: options.current.home,
+      legacy_home: options.legacy.home,
+      backup_home: null,
+      legacy_before: legacyBefore,
+      current_before: currentBefore,
+      backup_after: null,
+      current_after: currentBefore,
+      merge: {
+        current_items: readMergeStore(options.current.jsonStorePath).items.length,
+        legacy_items: 0,
+        duplicate_ids_identical: 0,
+        duplicate_ids_conflicting: 0,
+        short_id_conflicts: 0,
+        stranded_items: 0,
+        merged_items: 0,
+        expected_total_items: readMergeStore(options.current.jsonStorePath).items.length,
+        final_items: currentBefore.json_items
+      },
+      conflicts: [],
+      checks: {
+        ...checks,
+        no_conflicts: true,
+        final_count_matches_expected: true
+      },
+      warnings,
+      message: `No legacy knowledge JSON store found at ${options.legacy.jsonStorePath}`
+    };
+  }
+  const currentStore = readMergeStore(options.current.jsonStorePath);
+  const legacyStore = readMergeStore(options.legacy.jsonStorePath);
+  const planned = mergeStats(currentStore, legacyStore);
+  checks.no_conflicts = planned.conflicts.length === 0;
+  if (planned.conflicts.length > 0)
+    warnings.push("merge_conflicts_detected");
+  if (!checks.approval_present)
+    warnings.push("write_approval_required");
+  if (dryRun || !checks.approval_present || planned.conflicts.length > 0) {
+    return {
+      ok: planned.conflicts.length === 0,
+      dry_run: true,
+      approval_required: !checks.approval_present,
+      scope: options.scope,
+      current_home: options.current.home,
+      legacy_home: options.legacy.home,
+      backup_home: `${options.legacy.home}.merge-backup-${migrationTimestamp(now)}`,
+      legacy_before: legacyBefore,
+      current_before: currentBefore,
+      backup_after: null,
+      current_after: null,
+      merge: planned.stats,
+      conflicts: planned.conflicts,
+      checks,
+      warnings,
+      message: planned.conflicts.length === 0 ? `Dry run: would merge ${planned.stats.stranded_items} legacy item(s) into ${options.current.jsonStorePath}` : `Refusing legacy merge with ${planned.conflicts.length} conflict(s)`
+    };
+  }
+  return withStoreLocks([options.current.jsonStorePath, options.legacy.jsonStorePath], () => {
+    const lockedCurrentStore = readMergeStore(options.current.jsonStorePath);
+    const lockedLegacyStore = readMergeStore(options.legacy.jsonStorePath);
+    const lockedPlan = mergeStats(lockedCurrentStore, lockedLegacyStore);
+    checks.no_conflicts = lockedPlan.conflicts.length === 0;
+    if (lockedPlan.conflicts.length > 0) {
+      return {
+        ok: false,
+        dry_run: true,
+        approval_required: false,
+        scope: options.scope,
+        current_home: options.current.home,
+        legacy_home: options.legacy.home,
+        backup_home: null,
+        legacy_before: summarizeWorkspaceTree(options.legacy),
+        current_before: summarizeWorkspaceTree(options.current),
+        backup_after: null,
+        current_after: null,
+        merge: lockedPlan.stats,
+        conflicts: lockedPlan.conflicts,
+        checks,
+        warnings: [...warnings, "merge_conflicts_detected_after_lock"],
+        message: `Refusing legacy merge with ${lockedPlan.conflicts.length} conflict(s)`
+      };
+    }
+    if (lockedPlan.stats.stranded_items === 0) {
+      lockedPlan.stats.final_items = lockedCurrentStore.items.length;
+      checks.final_count_matches_expected = lockedCurrentStore.items.length === lockedPlan.stats.expected_total_items;
+      return {
+        ok: checks.no_conflicts && checks.final_count_matches_expected,
+        dry_run: false,
+        approval_required: false,
+        scope: options.scope,
+        current_home: options.current.home,
+        legacy_home: options.legacy.home,
+        backup_home: null,
+        legacy_before: summarizeWorkspaceTree(options.legacy),
+        current_before: summarizeWorkspaceTree(options.current),
+        backup_after: null,
+        current_after: summarizeWorkspaceTree(options.current),
+        merge: lockedPlan.stats,
+        conflicts: [],
+        checks,
+        warnings,
+        message: `Legacy merge already up to date for ${options.current.jsonStorePath}`
+      };
+    }
+    const backupHome = `${options.legacy.home}.merge-backup-${migrationTimestamp(now)}`;
+    mkdirSync4(dirname5(backupHome), { recursive: true });
+    cpSync(options.legacy.home, backupHome, {
+      recursive: true,
+      force: false,
+      errorOnExist: true,
+      preserveTimestamps: true
+    });
+    const backupWorkspace = workspaceForHome(backupHome);
+    const backupAfter = summarizeWorkspaceTree(backupWorkspace);
+    checks.legacy_backup_written = summariesMatch(summarizeWorkspaceTree(options.legacy), backupAfter);
+    if (!checks.legacy_backup_written) {
+      throw new Error(`Legacy knowledge merge backup verification failed: ${backupHome}`);
+    }
+    saveStore(options.current.jsonStorePath, lockedPlan.mergedStore);
+    const finalStore = readMergeStore(options.current.jsonStorePath);
+    lockedPlan.stats.final_items = finalStore.items.length;
+    checks.final_count_matches_expected = finalStore.items.length === lockedPlan.stats.expected_total_items;
+    const currentAfter = summarizeWorkspaceTree(options.current);
+    const ok = checks.legacy_backup_written && checks.no_conflicts && checks.final_count_matches_expected;
+    return {
+      ok,
+      dry_run: false,
+      approval_required: false,
+      scope: options.scope,
+      current_home: options.current.home,
+      legacy_home: options.legacy.home,
+      backup_home: backupHome,
+      legacy_before: legacyBefore,
+      current_before: currentBefore,
+      backup_after: backupAfter,
+      current_after: currentAfter,
+      merge: lockedPlan.stats,
+      conflicts: [],
+      checks,
+      warnings,
+      message: ok ? `Merged ${lockedPlan.stats.merged_items} legacy item(s) into ${options.current.jsonStorePath}` : `Merged legacy knowledge store, but verification failed for ${options.current.jsonStorePath}`
+    };
+  });
+}
+function sleepSync2(milliseconds) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
+}
+function isRetriableFsLock(error) {
+  return error instanceof Error && /\b(EBUSY|EPERM)\b/.test(error.message);
+}
+function removeWorkspaceWithRetries(path) {
+  let lastError;
+  for (let attempt = 0;attempt < 8; attempt += 1) {
+    try {
+      rmSync(path, { recursive: true, force: false });
+      return;
+    } catch (error) {
+      lastError = error;
+      if (!isRetriableFsLock(error))
+        throw error;
+      sleepSync2(50 * (attempt + 1));
+    }
+  }
+  throw lastError;
+}
+function chmodOwnerOnlyTree(path) {
+  if (!existsSync13(path))
+    return;
+  const stat = lstatSync3(path);
+  chmodSync4(path, stat.isDirectory() ? 448 : 384);
+  if (!stat.isDirectory())
+    return;
+  for (const entry of readdirSync3(path))
+    chmodOwnerOnlyTree(join7(path, entry));
+}
+function isRetainedTombstoneFile(file) {
+  return file === "TOMBSTONE.md" || file === "migration.json" || file === "knowledge.db" || file === "knowledge.db-shm" || file === "knowledge.db-wal" || file === "knowledge.db-journal";
+}
+function prepareLegacyTombstoneDirectory(home) {
+  for (const file of readdirSync3(home)) {
+    if (file === "TOMBSTONE.md" || file === "migration.json")
+      continue;
+    try {
+      rmSync(join7(home, file), { recursive: true, force: false });
+    } catch (error) {
+      if (!isRetriableFsLock(error) || !file.startsWith("knowledge.db"))
+        throw error;
+    }
+  }
+}
+function moveWorkspace(sourceHome, targetHome) {
+  try {
+    renameSync2(sourceHome, targetHome);
+    return;
+  } catch (error) {
+    cpSync(sourceHome, targetHome, {
+      recursive: true,
+      force: false,
+      errorOnExist: true,
+      preserveTimestamps: true
+    });
+    try {
+      removeWorkspaceWithRetries(sourceHome);
+    } catch (removeError) {
+      if (isRetriableFsLock(removeError)) {
+        prepareLegacyTombstoneDirectory(sourceHome);
+        return;
+      }
+      rmSync(targetHome, { recursive: true, force: true });
+      throw removeError;
+    }
+    if (error instanceof Error && error.message.includes("EXDEV"))
+      return;
+  }
+}
+function isMigrationTombstone(workspace, summary, currentHome) {
+  if (!summary.exists)
+    return false;
+  if (!summary.files.includes("TOMBSTONE.md") || !summary.files.includes("migration.json"))
+    return false;
+  if (summary.files.some((file) => !isRetainedTombstoneFile(file)))
+    return false;
+  try {
+    const metadata = JSON.parse(readFileSync11(join7(workspace.home, "migration.json"), "utf8"));
+    return metadata.new_path === currentHome && typeof metadata.backup_path === "string";
+  } catch {
+    return false;
+  }
+}
+function migrateLegacyKnowledgeWorkspace(options) {
+  const now = options.now ?? new Date;
+  const dryRun = options.approveWrite !== true;
+  const currentBefore = summarizeWorkspaceTree(options.current);
+  const currentIsDefaultScaffold = isDefaultScaffold(options.current, currentBefore);
+  const willMutateLegacy = options.approveWrite === true && Boolean(options.approvedBy) && (!currentBefore.exists || currentIsDefaultScaffold);
+  const legacyBefore = summarizeWorkspaceTree(options.legacy, { includeSqlite: !willMutateLegacy });
+  const checks = {
+    legacy_exists: legacyBefore.exists,
+    current_absent_or_default_scaffold: !currentBefore.exists || currentIsDefaultScaffold,
+    approval_present: options.approveWrite === true && Boolean(options.approvedBy),
+    legacy_is_tombstone: false,
+    backup_matches_legacy: false,
+    migrated_matches_backup: false,
+    tombstone_written: false
+  };
+  const warnings = [];
+  if (!legacyBefore.exists) {
+    return {
+      ok: true,
+      dry_run: dryRun,
+      approval_required: false,
+      scope: options.scope,
+      current_home: options.current.home,
+      legacy_home: options.legacy.home,
+      backup_home: null,
+      tombstone_path: null,
+      legacy_before: legacyBefore,
+      current_before: currentBefore,
+      backup_after: null,
+      current_after: null,
+      checks,
+      warnings,
+      message: `No legacy knowledge workspace found at ${options.legacy.home}`
+    };
+  }
+  checks.legacy_is_tombstone = isMigrationTombstone(options.legacy, legacyBefore, options.current.home);
+  if (checks.legacy_is_tombstone) {
+    return {
+      ok: true,
+      dry_run: dryRun,
+      approval_required: false,
+      scope: options.scope,
+      current_home: options.current.home,
+      legacy_home: options.legacy.home,
+      backup_home: null,
+      tombstone_path: join7(options.legacy.home, "TOMBSTONE.md"),
+      legacy_before: legacyBefore,
+      current_before: currentBefore,
+      backup_after: null,
+      current_after: currentBefore,
+      checks: {
+        ...checks,
+        tombstone_written: true
+      },
+      warnings,
+      message: `Legacy knowledge workspace already migrated to ${options.current.home}`
+    };
+  }
+  if (!checks.current_absent_or_default_scaffold) {
+    warnings.push("current_workspace_contains_data");
+  }
+  if (!checks.approval_present) {
+    warnings.push("write_approval_required");
+  }
+  if (dryRun || !checks.current_absent_or_default_scaffold || !checks.approval_present) {
+    return {
+      ok: checks.current_absent_or_default_scaffold,
+      dry_run: true,
+      approval_required: true,
+      scope: options.scope,
+      current_home: options.current.home,
+      legacy_home: options.legacy.home,
+      backup_home: `${options.legacy.home}.backup-${migrationTimestamp(now)}`,
+      tombstone_path: join7(options.legacy.home, "TOMBSTONE.md"),
+      legacy_before: legacyBefore,
+      current_before: currentBefore,
+      backup_after: null,
+      current_after: null,
+      checks,
+      warnings,
+      message: checks.current_absent_or_default_scaffold ? `Dry run: would migrate ${options.legacy.home} to ${options.current.home}` : `Cannot migrate while ${options.current.home} contains data`
+    };
+  }
+  const backupHome = `${options.legacy.home}.backup-${migrationTimestamp(now)}`;
+  mkdirSync4(dirname5(options.current.home), { recursive: true });
+  mkdirSync4(dirname5(backupHome), { recursive: true });
+  cpSync(options.legacy.home, backupHome, {
+    recursive: true,
+    force: false,
+    errorOnExist: true,
+    preserveTimestamps: true
+  });
+  chmodOwnerOnlyTree(backupHome);
+  const backupWorkspace = workspaceForHome(backupHome);
+  const backupSnapshot = summarizeWorkspaceTree(backupWorkspace, { includeSqlite: false });
+  checks.backup_matches_legacy = summariesMatch(legacyBefore, backupSnapshot);
+  if (!checks.backup_matches_legacy) {
+    throw new Error(`Legacy knowledge backup verification failed: ${backupHome}`);
+  }
+  if (currentBefore.exists && currentIsDefaultScaffold) {
+    rmSync(options.current.home, { recursive: true, force: true });
+  }
+  moveWorkspace(options.legacy.home, options.current.home);
+  const currentSnapshot = summarizeWorkspaceTree(options.current, { includeSqlite: false });
+  checks.migrated_matches_backup = summariesMatch(backupSnapshot, currentSnapshot);
+  const backupAfter = summarizeWorkspaceTree(backupWorkspace);
+  const currentAfter = summarizeWorkspaceTree(options.current);
+  const legacyBeforeOutput = { ...backupAfter, path: options.legacy.home };
+  mkdirSync4(options.legacy.home, { recursive: true });
+  const tombstonePath = join7(options.legacy.home, "TOMBSTONE.md");
+  writeFileSync5(tombstonePath, [
+    "# Migrated OpenKnowledge Workspace",
+    "",
+    `Migrated at: ${now.toISOString()}`,
+    `Approved by: ${options.approvedBy}`,
+    `New path: ${options.current.home}`,
+    `Backup path: ${backupHome}`,
+    "",
+    "This directory is a diagnostic tombstone only. OpenKnowledge reads and writes the canonical .hasna/knowledge workspace.",
+    ""
+  ].join(`
+`), { mode: 384 });
+  chmodSync4(tombstonePath, 384);
+  const migrationJsonPath = join7(options.legacy.home, "migration.json");
+  writeFileSync5(migrationJsonPath, `${JSON.stringify({
+    migrated_at: now.toISOString(),
+    approved_by: options.approvedBy,
+    new_path: options.current.home,
+    backup_path: backupHome,
+    legacy_before: legacyBeforeOutput,
+    backup_after: backupAfter,
+    current_after: currentAfter
+  }, null, 2)}
+`, { mode: 384 });
+  chmodSync4(migrationJsonPath, 384);
+  checks.tombstone_written = existsSync13(tombstonePath);
+  const ok = checks.backup_matches_legacy && checks.migrated_matches_backup && checks.tombstone_written;
+  return {
+    ok,
+    dry_run: false,
+    approval_required: false,
+    scope: options.scope,
+    current_home: options.current.home,
+    legacy_home: options.legacy.home,
+    backup_home: backupHome,
+    tombstone_path: tombstonePath,
+    legacy_before: legacyBeforeOutput,
+    current_before: currentBefore,
+    backup_after: backupAfter,
+    current_after: currentAfter,
+    checks,
+    warnings,
+    message: ok ? `Migrated legacy knowledge workspace to ${options.current.home}` : `Migrated legacy knowledge workspace, but verification failed for ${options.current.home}`
+  };
+}
+
+// src/project-links.ts
+import { createHash as createHash19 } from "crypto";
+var KNOWLEDGE_PROJECT_REGISTRATION_ROUTE = "knowledge.project-registration.v1";
+var KNOWLEDGE_PROJECT_RESOURCES_ROUTE = "knowledge.project-resources.v1";
+var KNOWLEDGE_PROJECT_REGISTRATION_SCHEMA_VERSION = 1;
+var KNOWLEDGE_PROJECT_MEMBERSHIP_RULE = "explicit_collection_binding";
+var KNOWLEDGE_PROJECT_RESOURCE_PAGE_LOOKAHEAD = 1;
+
+class KnowledgeProjectLinksError extends Error {
+  code;
+  details;
+  constructor(code, message, details = {}) {
+    super(message);
+    this.code = code;
+    this.details = details;
+    this.name = "KnowledgeProjectLinksError";
+  }
+}
+function postgresSql(sql) {
+  let index = 0;
+  return sql.replace(/\?/g, () => `$${++index}`);
+}
+
+class PostgresProjectLinksSql {
+  client;
+  transactionClient;
+  kind = "postgres";
+  constructor(client, transactionClient) {
+    this.client = client;
+    this.transactionClient = transactionClient;
+  }
+  async close() {}
+  async get(sql, params = []) {
+    return this.client.get(postgresSql(sql), params);
+  }
+  async many(sql, params = []) {
+    return this.client.many(postgresSql(sql), params);
+  }
+  async run(sql, params = []) {
+    const result = await this.client.query(postgresSql(sql), params);
+    return { changes: result.rowCount };
+  }
+  async lock(key) {
+    await this.client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [key]);
+  }
+  async transaction(fn) {
+    if (!this.transactionClient)
+      return fn(this);
+    return this.transactionClient.transaction((tx) => fn(new PostgresProjectLinksSql(tx)));
+  }
+}
+
+class SqliteProjectLinksSql {
+  db;
+  kind = "sqlite";
+  tail = Promise.resolve();
+  closed = false;
+  constructor(db) {
+    this.db = db;
+  }
+  async close() {
+    await this.tail;
+    if (this.closed)
+      return;
+    this.closed = true;
+    this.db.close();
+  }
+  async get(sql, params = []) {
+    return this.db.query(sql).get(...params) ?? null;
+  }
+  async many(sql, params = []) {
+    return this.db.query(sql).all(...params);
+  }
+  async run(sql, params = []) {
+    const result = this.db.query(sql).run(...params);
+    return { changes: Number(result.changes) };
+  }
+  async lock(_key) {}
+  transaction(fn) {
+    const run = this.tail.then(async () => {
+      this.db.exec("BEGIN IMMEDIATE");
+      try {
+        const result = await fn(this);
+        this.db.exec("COMMIT");
+        return result;
+      } catch (error) {
+        this.db.exec("ROLLBACK");
+        throw error;
+      }
+    });
+    this.tail = run.then(() => {
+      return;
+    }, () => {
+      return;
+    });
+    return run;
+  }
+}
+function sqliteKnowledgeProjectLinksSchemaSql() {
+  return `
+    PRAGMA foreign_keys = ON;
+    CREATE TABLE IF NOT EXISTS knowledge_projects (
+      authority_id TEXT NOT NULL,
+      tenant_id TEXT NOT NULL,
+      corpus_id TEXT NOT NULL,
+      source_project_id TEXT NOT NULL,
+      project_id TEXT NOT NULL,
+      project_slug TEXT NOT NULL,
+      project_name TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY(authority_id, tenant_id, corpus_id, project_id),
+      UNIQUE(authority_id, tenant_id, corpus_id, source_project_id)
+    );
+    CREATE TABLE IF NOT EXISTS knowledge_project_collections (
+      authority_id TEXT NOT NULL,
+      tenant_id TEXT NOT NULL,
+      corpus_id TEXT NOT NULL,
+      collection_id TEXT NOT NULL,
+      project_id TEXT NOT NULL,
+      collection_slug TEXT NOT NULL,
+      collection_name TEXT NOT NULL,
+      membership_rule TEXT NOT NULL CHECK(membership_rule = 'explicit_collection_binding'),
+      revision INTEGER NOT NULL DEFAULT 1 CHECK(revision > 0),
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY(authority_id, tenant_id, corpus_id, collection_id),
+      UNIQUE(authority_id, tenant_id, corpus_id, project_id, collection_slug),
+      FOREIGN KEY(authority_id, tenant_id, corpus_id, project_id)
+        REFERENCES knowledge_projects(authority_id, tenant_id, corpus_id, project_id)
+        ON DELETE CASCADE
+    );
+    CREATE TABLE IF NOT EXISTS knowledge_project_collection_memberships (
+      authority_id TEXT NOT NULL,
+      tenant_id TEXT NOT NULL,
+      corpus_id TEXT NOT NULL,
+      collection_id TEXT NOT NULL,
+      item_id TEXT NOT NULL,
+      bound_receipt_id TEXT NOT NULL,
+      created_by_operation INTEGER NOT NULL CHECK(created_by_operation IN (0, 1)),
+      bound_at TEXT NOT NULL,
+      PRIMARY KEY(authority_id, tenant_id, corpus_id, collection_id, item_id),
+      FOREIGN KEY(authority_id, tenant_id, corpus_id, collection_id)
+        REFERENCES knowledge_project_collections(authority_id, tenant_id, corpus_id, collection_id)
+        ON DELETE CASCADE
+    );
+    CREATE TABLE IF NOT EXISTS knowledge_project_link_receipts (
+      receipt_id TEXT PRIMARY KEY,
+      authority TEXT NOT NULL CHECK(authority = 'knowledge'),
+      route TEXT NOT NULL CHECK(route = 'knowledge.project-registration.v1'),
+      package_version TEXT NOT NULL,
+      authority_id TEXT NOT NULL,
+      tenant_id TEXT NOT NULL,
+      corpus_id TEXT NOT NULL,
+      operation_id TEXT NOT NULL,
+      step_id TEXT NOT NULL,
+      action TEXT NOT NULL CHECK(action IN ('register_collection', 'bind_item')),
+      resource_kind TEXT NOT NULL CHECK(resource_kind IN ('collection', 'item')),
+      direction TEXT NOT NULL CHECK(direction IN ('forward', 'inverse')),
+      idempotency_key TEXT NOT NULL,
+      request_digest TEXT NOT NULL,
+      precondition_digest TEXT NOT NULL,
+      outcome TEXT NOT NULL CHECK(outcome IN ('accepted', 'terminal_nonacceptance')),
+      reason TEXT,
+      source_project_id TEXT,
+      project_id TEXT,
+      collection_id TEXT,
+      item_id TEXT,
+      result_revision TEXT,
+      result_digest TEXT,
+      accepted_receipt_id TEXT,
+      created_by_operation INTEGER NOT NULL CHECK(created_by_operation IN (0, 1)),
+      created_at TEXT NOT NULL,
+      UNIQUE(authority_id, tenant_id, corpus_id, operation_id, step_id, action, direction)
+    );
+    CREATE INDEX IF NOT EXISTS idx_knowledge_project_link_receipts_lookup
+      ON knowledge_project_link_receipts (
+        authority_id, tenant_id, corpus_id, operation_id, step_id,
+        action, direction, idempotency_key
+      );
+    CREATE TRIGGER IF NOT EXISTS knowledge_project_link_receipts_immutable_update
+      BEFORE UPDATE ON knowledge_project_link_receipts
+      BEGIN
+        SELECT RAISE(ABORT, 'knowledge project link receipts are immutable');
+      END;
+    CREATE TRIGGER IF NOT EXISTS knowledge_project_link_receipts_immutable_delete
+      BEFORE DELETE ON knowledge_project_link_receipts
+      BEGIN
+        SELECT RAISE(ABORT, 'knowledge project link receipts are immutable');
+      END;
+  `;
+}
+function postgresKnowledgeProjectLinksSchemaStatements() {
+  return [
+    `CREATE TABLE IF NOT EXISTS knowledge_projects (
+      authority_id TEXT NOT NULL,
+      tenant_id TEXT NOT NULL,
+      corpus_id TEXT NOT NULL,
+      source_project_id TEXT NOT NULL,
+      project_id TEXT NOT NULL,
+      project_slug TEXT NOT NULL,
+      project_name TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY(authority_id, tenant_id, corpus_id, project_id),
+      UNIQUE(authority_id, tenant_id, corpus_id, source_project_id)
+    )`,
+    `CREATE TABLE IF NOT EXISTS knowledge_project_collections (
+      authority_id TEXT NOT NULL,
+      tenant_id TEXT NOT NULL,
+      corpus_id TEXT NOT NULL,
+      collection_id TEXT NOT NULL,
+      project_id TEXT NOT NULL,
+      collection_slug TEXT NOT NULL,
+      collection_name TEXT NOT NULL,
+      membership_rule TEXT NOT NULL CHECK(membership_rule = 'explicit_collection_binding'),
+      revision INTEGER NOT NULL DEFAULT 1 CHECK(revision > 0),
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY(authority_id, tenant_id, corpus_id, collection_id),
+      UNIQUE(authority_id, tenant_id, corpus_id, project_id, collection_slug),
+      FOREIGN KEY(authority_id, tenant_id, corpus_id, project_id)
+        REFERENCES knowledge_projects(authority_id, tenant_id, corpus_id, project_id)
+        ON DELETE CASCADE
+    )`,
+    `CREATE TABLE IF NOT EXISTS knowledge_project_collection_memberships (
+      authority_id TEXT NOT NULL,
+      tenant_id TEXT NOT NULL,
+      corpus_id TEXT NOT NULL,
+      collection_id TEXT NOT NULL,
+      item_id TEXT NOT NULL,
+      bound_receipt_id TEXT NOT NULL,
+      created_by_operation INTEGER NOT NULL CHECK(created_by_operation IN (0, 1)),
+      bound_at TEXT NOT NULL,
+      PRIMARY KEY(authority_id, tenant_id, corpus_id, collection_id, item_id),
+      FOREIGN KEY(authority_id, tenant_id, corpus_id, collection_id)
+        REFERENCES knowledge_project_collections(authority_id, tenant_id, corpus_id, collection_id)
+        ON DELETE CASCADE
+    )`,
+    `CREATE TABLE IF NOT EXISTS knowledge_project_link_receipts (
+      receipt_id TEXT PRIMARY KEY,
+      authority TEXT NOT NULL CHECK(authority = 'knowledge'),
+      route TEXT NOT NULL CHECK(route = 'knowledge.project-registration.v1'),
+      package_version TEXT NOT NULL,
+      authority_id TEXT NOT NULL,
+      tenant_id TEXT NOT NULL,
+      corpus_id TEXT NOT NULL,
+      operation_id TEXT NOT NULL,
+      step_id TEXT NOT NULL,
+      action TEXT NOT NULL CHECK(action IN ('register_collection', 'bind_item')),
+      resource_kind TEXT NOT NULL CHECK(resource_kind IN ('collection', 'item')),
+      direction TEXT NOT NULL CHECK(direction IN ('forward', 'inverse')),
+      idempotency_key TEXT NOT NULL,
+      request_digest TEXT NOT NULL,
+      precondition_digest TEXT NOT NULL,
+      outcome TEXT NOT NULL CHECK(outcome IN ('accepted', 'terminal_nonacceptance')),
+      reason TEXT,
+      source_project_id TEXT,
+      project_id TEXT,
+      collection_id TEXT,
+      item_id TEXT,
+      result_revision TEXT,
+      result_digest TEXT,
+      accepted_receipt_id TEXT,
+      created_by_operation INTEGER NOT NULL CHECK(created_by_operation IN (0, 1)),
+      created_at TEXT NOT NULL,
+      UNIQUE(authority_id, tenant_id, corpus_id, operation_id, step_id, action, direction)
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_knowledge_project_link_receipts_lookup
+      ON knowledge_project_link_receipts (
+        authority_id, tenant_id, corpus_id, operation_id, step_id,
+        action, direction, idempotency_key
+      )`,
+    `CREATE OR REPLACE FUNCTION knowledge_project_link_receipts_immutable()
+      RETURNS trigger
+      LANGUAGE plpgsql
+      AS $$
+      BEGIN
+        RAISE EXCEPTION 'knowledge project link receipts are immutable';
+      END;
+      $$`,
+    `DROP TRIGGER IF EXISTS knowledge_project_link_receipts_immutable
+      ON knowledge_project_link_receipts`,
+    `CREATE TRIGGER knowledge_project_link_receipts_immutable
+      BEFORE UPDATE OR DELETE ON knowledge_project_link_receipts
+      FOR EACH ROW EXECUTE FUNCTION knowledge_project_link_receipts_immutable()`
+  ];
+}
+function canonicalize(value) {
+  if (Array.isArray(value))
+    return value.map(canonicalize);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined).sort(([left], [right]) => left.localeCompare(right)).map(([key, item]) => [key, canonicalize(item)]));
+  }
+  return value;
+}
+function canonicalKnowledgeProjectLinksJson(value) {
+  return JSON.stringify(canonicalize(value));
+}
+function digestKnowledgeProjectLinksValue(value) {
+  return createHash19("sha256").update(canonicalKnowledgeProjectLinksJson(value)).digest("hex");
+}
+function stableUuid(namespace) {
+  const hex = createHash19("sha256").update(namespace).digest("hex").slice(0, 32).split("");
+  hex[12] = "5";
+  hex[16] = (Number.parseInt(hex[16], 16) & 3 | 8).toString(16);
+  const value = hex.join("");
+  return `${value.slice(0, 8)}-${value.slice(8, 12)}-${value.slice(12, 16)}-${value.slice(16, 20)}-${value.slice(20)}`;
+}
+function requiredString(value, field) {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_INVALID_INPUT", `${field} must be a non-empty string.`);
+  }
+  return value.trim();
+}
+function boundedLimit(value) {
+  const resolved = value ?? 100;
+  if (!Number.isInteger(resolved) || resolved < 1 || resolved > 200) {
+    throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_INVALID_INPUT", "limit must be an integer between 1 and 200.");
+  }
+  return resolved;
+}
+function normalizeKinds(kinds) {
+  const supported = ["project", "collection", "item", "taxonomy"];
+  if (!kinds || kinds.length === 0)
+    return supported;
+  const unique2 = [...new Set(kinds)];
+  for (const kind of unique2) {
+    if (!supported.includes(kind)) {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_INVALID_INPUT", `unsupported project resource kind: ${kind}`);
+    }
+  }
+  return unique2.sort((left, right) => supported.indexOf(left) - supported.indexOf(right));
+}
+function toReceipt(row) {
+  return {
+    receipt_id: row.receipt_id,
+    authority: "knowledge",
+    route: KNOWLEDGE_PROJECT_REGISTRATION_ROUTE,
+    package_version: row.package_version,
+    authority_id: row.authority_id,
+    tenant_id: row.tenant_id,
+    corpus_id: row.corpus_id,
+    operation_id: row.operation_id,
+    step_id: row.step_id,
+    action: row.action,
+    resource_kind: row.resource_kind,
+    direction: row.direction,
+    idempotency_key: row.idempotency_key,
+    request_digest: row.request_digest,
+    precondition_digest: row.precondition_digest,
+    outcome: row.outcome,
+    reason: row.reason,
+    source_project_id: row.source_project_id,
+    project_id: row.project_id,
+    collection_id: row.collection_id,
+    item_id: row.item_id,
+    result_revision: row.result_revision,
+    result_digest: row.result_digest,
+    accepted_receipt_id: row.accepted_receipt_id,
+    created_by_operation: Number(row.created_by_operation) === 1,
+    created_at: row.created_at
+  };
+}
+function aggregateRecord(row) {
+  const record = {
+    source_project_id: row.source_project_id,
+    project_id: row.project_id,
+    project_slug: row.project_slug,
+    project_name: row.project_name,
+    collection_id: row.collection_id,
+    collection_slug: row.collection_slug,
+    collection_name: row.collection_name,
+    membership_rule: KNOWLEDGE_PROJECT_MEMBERSHIP_RULE,
+    revision: `r${Number(row.revision)}`,
+    created_at: row.created_at,
+    updated_at: row.updated_at
+  };
+  return { ...record, digest: digestKnowledgeProjectLinksValue(record) };
+}
+function receiptInsertParams(receipt) {
+  return [
+    receipt.receipt_id,
+    receipt.authority,
+    receipt.route,
+    receipt.package_version,
+    receipt.authority_id,
+    receipt.tenant_id,
+    receipt.corpus_id,
+    receipt.operation_id,
+    receipt.step_id,
+    receipt.action,
+    receipt.resource_kind,
+    receipt.direction,
+    receipt.idempotency_key,
+    receipt.request_digest,
+    receipt.precondition_digest,
+    receipt.outcome,
+    receipt.reason,
+    receipt.source_project_id,
+    receipt.project_id,
+    receipt.collection_id,
+    receipt.item_id,
+    receipt.result_revision,
+    receipt.result_digest,
+    receipt.accepted_receipt_id,
+    receipt.created_by_operation ? 1 : 0,
+    receipt.created_at
+  ];
+}
+var RECEIPT_INSERT_SQL = `INSERT INTO knowledge_project_link_receipts (
+  receipt_id, authority, route, package_version, authority_id, tenant_id, corpus_id,
+  operation_id, step_id, action, resource_kind, direction, idempotency_key,
+  request_digest, precondition_digest, outcome, reason, source_project_id,
+  project_id, collection_id, item_id, result_revision, result_digest,
+  accepted_receipt_id, created_by_operation, created_at
+) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`;
+
+class PackageOwnedKnowledgeProjectLinksAuthority {
+  sql;
+  itemResolver;
+  options;
+  identity;
+  now;
+  constructor(sql, itemResolver, options) {
+    this.sql = sql;
+    this.itemResolver = itemResolver;
+    this.options = options;
+    this.identity = {
+      authority_id: requiredString(options.authorityId, "authority_id"),
+      tenant_id: requiredString(options.tenantId, "tenant_id"),
+      corpus_id: requiredString(options.corpusId, "corpus_id")
+    };
+    this.now = options.now ?? (() => new Date().toISOString());
+  }
+  async close() {
+    await this.sql.close();
+  }
+  capabilityValue() {
+    return {
+      authority: "knowledge",
+      route: KNOWLEDGE_PROJECT_REGISTRATION_ROUTE,
+      resource_route: KNOWLEDGE_PROJECT_RESOURCES_ROUTE,
+      package_version: this.options.packageVersion,
+      schema_version: KNOWLEDGE_PROJECT_REGISTRATION_SCHEMA_VERSION,
+      ...this.identity,
+      registration_resource: "collection",
+      supported_resources: ["project", "collection", "item", "taxonomy"],
+      stable_project_ids: true,
+      stable_collection_ids: true,
+      explicit_membership: true,
+      membership_rule: KNOWLEDGE_PROJECT_MEMBERSHIP_RULE,
+      later_child_binding_required: true,
+      bind_existing_items: true,
+      immutable_receipts: true,
+      exact_terminal_lookup: true,
+      exact_readback: true,
+      conditional_inverse: true,
+      complete_keyset_pagination: true,
+      revision_bound_cursors: true
+    };
+  }
+  async capability() {
+    return this.capabilityValue();
+  }
+  assertIdentity(request) {
+    const capability = this.capabilityValue();
+    if (request.authority_route !== capability.route || request.package_version !== capability.package_version || request.authority_id !== capability.authority_id || request.tenant_id !== capability.tenant_id || request.corpus_id !== capability.corpus_id) {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_CAPABILITY_MISMATCH", "request does not match the current Knowledge project-registration capability identity.");
+    }
+  }
+  stableProjectId(sourceProjectId) {
+    return stableUuid(`${this.identity.authority_id}\x00${this.identity.tenant_id}\x00${this.identity.corpus_id}\x00project\x00${sourceProjectId}`);
+  }
+  stableCollectionId(sourceProjectId, collectionSlug) {
+    return stableUuid(`${this.identity.authority_id}\x00${this.identity.tenant_id}\x00${this.identity.corpus_id}\x00collection\x00${sourceProjectId}\x00${collectionSlug}`);
+  }
+  collectionFence(collectionId) {
+    return [
+      "knowledge-project-links",
+      this.identity.authority_id,
+      this.identity.tenant_id,
+      this.identity.corpus_id,
+      "collection",
+      collectionId
+    ].join("\x1F");
+  }
+  membershipFence(collectionId, itemId) {
+    return [
+      "knowledge-project-links",
+      this.identity.authority_id,
+      this.identity.tenant_id,
+      this.identity.corpus_id,
+      "membership",
+      collectionId,
+      itemId
+    ].join("\x1F");
+  }
+  stableReceiptId(operationId, stepId, action, direction) {
+    return stableUuid(`${this.identity.authority_id}\x00${this.identity.tenant_id}\x00${this.identity.corpus_id}\x00receipt\x00${operationId}\x00${stepId}\x00${action}\x00${direction}`);
+  }
+  async getAggregateBySource(sql, sourceProjectId) {
+    return sql.get(`SELECT p.source_project_id, p.project_id, p.project_slug, p.project_name,
+              c.collection_id, c.collection_slug, c.collection_name,
+              c.membership_rule, c.revision, c.created_at, c.updated_at
+         FROM knowledge_projects p
+         JOIN knowledge_project_collections c
+           ON c.authority_id = p.authority_id
+          AND c.tenant_id = p.tenant_id
+          AND c.corpus_id = p.corpus_id
+          AND c.project_id = p.project_id
+        WHERE p.authority_id = ? AND p.tenant_id = ? AND p.corpus_id = ?
+          AND p.source_project_id = ?`, [this.identity.authority_id, this.identity.tenant_id, this.identity.corpus_id, sourceProjectId]);
+  }
+  async getAggregateByCollection(sql, collectionId) {
+    return sql.get(`SELECT p.source_project_id, p.project_id, p.project_slug, p.project_name,
+              c.collection_id, c.collection_slug, c.collection_name,
+              c.membership_rule, c.revision, c.created_at, c.updated_at
+         FROM knowledge_projects p
+         JOIN knowledge_project_collections c
+           ON c.authority_id = p.authority_id
+          AND c.tenant_id = p.tenant_id
+          AND c.corpus_id = p.corpus_id
+          AND c.project_id = p.project_id
+        WHERE c.authority_id = ? AND c.tenant_id = ? AND c.corpus_id = ?
+          AND c.collection_id = ?`, [this.identity.authority_id, this.identity.tenant_id, this.identity.corpus_id, collectionId]);
+  }
+  async getAggregateByProject(sql, projectId) {
+    return sql.get(`SELECT p.source_project_id, p.project_id, p.project_slug, p.project_name,
+              c.collection_id, c.collection_slug, c.collection_name,
+              c.membership_rule, c.revision, c.created_at, c.updated_at
+         FROM knowledge_projects p
+         JOIN knowledge_project_collections c
+           ON c.authority_id = p.authority_id
+          AND c.tenant_id = p.tenant_id
+          AND c.corpus_id = p.corpus_id
+          AND c.project_id = p.project_id
+        WHERE p.authority_id = ? AND p.tenant_id = ? AND p.corpus_id = ?
+          AND (p.source_project_id = ? OR p.project_id = ?)`, [
+      this.identity.authority_id,
+      this.identity.tenant_id,
+      this.identity.corpus_id,
+      projectId,
+      projectId
+    ]);
+  }
+  async getReceiptByAttempt(sql, input) {
+    const row = await sql.get(`SELECT * FROM knowledge_project_link_receipts
+        WHERE authority_id = ? AND tenant_id = ? AND corpus_id = ?
+          AND operation_id = ? AND step_id = ? AND action = ? AND direction = ?`, [
+      this.identity.authority_id,
+      this.identity.tenant_id,
+      this.identity.corpus_id,
+      input.operation_id,
+      input.step_id,
+      input.action,
+      input.direction
+    ]);
+    return row ? toReceipt(row) : null;
+  }
+  assertIdempotent(existing, input) {
+    if (existing.idempotency_key !== input.idempotency_key || input.request_digest !== undefined && existing.request_digest !== input.request_digest || input.precondition_digest !== undefined && existing.precondition_digest !== input.precondition_digest || input.accepted_receipt_id !== undefined && existing.accepted_receipt_id !== input.accepted_receipt_id) {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_IDEMPOTENCY_MISMATCH", "operation and step identity are already bound to a different Knowledge project-link request.", { receipt_id: existing.receipt_id });
+    }
+  }
+  async registerCollection(request) {
+    this.assertIdentity(request);
+    if (request.resource_kind !== "collection" || request.direction !== "forward") {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_INVALID_INPUT", "collection registration requires resource_kind=collection and direction=forward.");
+    }
+    const sourceProjectId = requiredString(request.project_id, "project_id");
+    const projectSlug = requiredString(request.project_slug, "project_slug");
+    const projectName = requiredString(request.project_name, "project_name");
+    const targetSelector = requiredString(request.target_selector, "target_selector");
+    if (targetSelector !== sourceProjectId) {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_INVALID_INPUT", "target_selector must equal the exact source project id.");
+    }
+    const collectionSlug = requiredString(request.desired.collection_slug ?? `${projectSlug}-knowledge`, "desired.collection_slug");
+    const collectionName = requiredString(request.desired.collection_name ?? `${projectName} Knowledge`, "desired.collection_name");
+    const expectedRequestDigest = digestKnowledgeProjectLinksValue({
+      action: "register_collection",
+      source_project_id: sourceProjectId,
+      project_slug: projectSlug,
+      project_name: projectName,
+      collection_slug: collectionSlug,
+      collection_name: collectionName,
+      membership_rule: KNOWLEDGE_PROJECT_MEMBERSHIP_RULE
+    });
+    if (request.request_digest !== expectedRequestDigest) {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_DIGEST_MISMATCH", "request_digest does not bind the normalized collection-registration request.", { expected_request_digest: expectedRequestDigest });
+    }
+    const stableCollectionId = this.stableCollectionId(sourceProjectId, collectionSlug);
+    return this.sql.transaction(async (tx) => {
+      const duplicate = await this.getReceiptByAttempt(tx, {
+        operation_id: request.operation_id,
+        step_id: request.step_id,
+        action: "register_collection",
+        direction: "forward"
+      });
+      if (duplicate) {
+        this.assertIdempotent(duplicate, request);
+        return duplicate;
+      }
+      await tx.lock(this.collectionFence(stableCollectionId));
+      let aggregate = await this.getAggregateBySource(tx, sourceProjectId);
+      const createdByOperation = aggregate === null;
+      if (!aggregate) {
+        const now = this.now();
+        const projectId = this.stableProjectId(sourceProjectId);
+        const collectionId = stableCollectionId;
+        await tx.run(`INSERT INTO knowledge_projects (
+            authority_id, tenant_id, corpus_id, source_project_id, project_id,
+            project_slug, project_name, created_at, updated_at
+          ) VALUES (?,?,?,?,?,?,?,?,?)`, [
+          this.identity.authority_id,
+          this.identity.tenant_id,
+          this.identity.corpus_id,
+          sourceProjectId,
+          projectId,
+          projectSlug,
+          projectName,
+          now,
+          now
+        ]);
+        await tx.run(`INSERT INTO knowledge_project_collections (
+            authority_id, tenant_id, corpus_id, collection_id, project_id,
+            collection_slug, collection_name, membership_rule, revision,
+            created_at, updated_at
+          ) VALUES (?,?,?,?,?,?,?,?,?,?,?)`, [
+          this.identity.authority_id,
+          this.identity.tenant_id,
+          this.identity.corpus_id,
+          collectionId,
+          projectId,
+          collectionSlug,
+          collectionName,
+          KNOWLEDGE_PROJECT_MEMBERSHIP_RULE,
+          1,
+          now,
+          now
+        ]);
+        aggregate = await this.getAggregateByCollection(tx, collectionId);
+      } else if (aggregate.project_slug !== projectSlug || aggregate.project_name !== projectName || aggregate.collection_slug !== collectionSlug || aggregate.collection_name !== collectionName || aggregate.membership_rule !== KNOWLEDGE_PROJECT_MEMBERSHIP_RULE) {
+        throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_CONFLICT", "the source project is already bound to a different Knowledge collection aggregate.", {
+          source_project_id: sourceProjectId,
+          collection_id: aggregate.collection_id
+        });
+      }
+      if (!aggregate) {
+        throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_INCOMPLETE_POPULATION", "collection registration committed but exact aggregate readback was unavailable.");
+      }
+      const record = aggregateRecord(aggregate);
+      const receipt = {
+        receipt_id: this.stableReceiptId(request.operation_id, request.step_id, "register_collection", "forward"),
+        authority: "knowledge",
+        route: KNOWLEDGE_PROJECT_REGISTRATION_ROUTE,
+        package_version: this.options.packageVersion,
+        ...this.identity,
+        operation_id: request.operation_id,
+        step_id: request.step_id,
+        action: "register_collection",
+        resource_kind: "collection",
+        direction: "forward",
+        idempotency_key: requiredString(request.idempotency_key, "idempotency_key"),
+        request_digest: request.request_digest,
+        precondition_digest: requiredString(request.precondition_digest, "precondition_digest"),
+        outcome: "accepted",
+        reason: createdByOperation ? null : "adopted_existing_collection",
+        source_project_id: record.source_project_id,
+        project_id: record.project_id,
+        collection_id: record.collection_id,
+        item_id: null,
+        result_revision: record.revision,
+        result_digest: record.digest,
+        accepted_receipt_id: null,
+        created_by_operation: createdByOperation,
+        created_at: this.now()
+      };
+      await tx.run(RECEIPT_INSERT_SQL, receiptInsertParams(receipt));
+      return receipt;
+    });
+  }
+  async readCollection(collectionId) {
+    const aggregate = await this.getAggregateByCollection(this.sql, requiredString(collectionId, "collection_id"));
+    if (!aggregate) {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_NOT_FOUND", "Knowledge collection was not found by exact id.");
+    }
+    return aggregateRecord(aggregate);
+  }
+  async lookupReceipt(request) {
+    if (request.max_items !== 1) {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_INVALID_INPUT", "exact terminal receipt lookup requires max_items=1.");
+    }
+    if (request.authority_id !== this.identity.authority_id || request.tenant_id !== this.identity.tenant_id || request.corpus_id !== this.identity.corpus_id) {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_CAPABILITY_MISMATCH", "receipt lookup does not match this authority identity.");
+    }
+    const receipt = await this.getReceiptByAttempt(this.sql, request);
+    if (!receipt || receipt.idempotency_key !== request.idempotency_key) {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_NOT_FOUND", "exact Knowledge project-link receipt was not found.");
+    }
+    return receipt;
+  }
+  async receiptById(sql, receiptId) {
+    const row = await sql.get(`SELECT * FROM knowledge_project_link_receipts
+        WHERE receipt_id = ? AND authority_id = ? AND tenant_id = ? AND corpus_id = ?`, [
+      receiptId,
+      this.identity.authority_id,
+      this.identity.tenant_id,
+      this.identity.corpus_id
+    ]);
+    return row ? toReceipt(row) : null;
+  }
+  async hasOtherAcceptedForwardReceipt(sql, accepted) {
+    const itemPredicate = accepted.action === "bind_item" ? "AND item_id = ?" : "AND item_id IS NULL";
+    const row = await sql.get(`SELECT receipt_id
+         FROM knowledge_project_link_receipts
+        WHERE authority_id = ? AND tenant_id = ? AND corpus_id = ?
+          AND action = ? AND direction = 'forward' AND outcome = 'accepted'
+          AND collection_id = ? AND receipt_id <> ?
+          ${itemPredicate}
+        LIMIT 1`, [
+      this.identity.authority_id,
+      this.identity.tenant_id,
+      this.identity.corpus_id,
+      accepted.action,
+      accepted.collection_id,
+      accepted.receipt_id,
+      ...accepted.action === "bind_item" ? [accepted.item_id] : []
+    ]);
+    return row !== null;
+  }
+  assertInverseIdentity(request) {
+    this.assertIdentity(request);
+    requiredString(request.accepted_receipt_id, "accepted_receipt_id");
+    requiredString(request.idempotency_key, "idempotency_key");
+  }
+  async compensateRegistration(request) {
+    this.assertInverseIdentity(request);
+    return this.sql.transaction(async (tx) => {
+      const duplicate = await this.getReceiptByAttempt(tx, {
+        operation_id: request.operation_id,
+        step_id: request.step_id,
+        action: "register_collection",
+        direction: "inverse"
+      });
+      if (duplicate) {
+        this.assertIdempotent(duplicate, request);
+        return duplicate;
+      }
+      const accepted = await this.receiptById(tx, request.accepted_receipt_id);
+      if (!accepted || accepted.action !== "register_collection" || accepted.direction !== "forward" || accepted.outcome !== "accepted") {
+        throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_NOT_FOUND", "accepted collection-registration receipt was not found.");
+      }
+      if (accepted.collection_id) {
+        await tx.lock(this.collectionFence(accepted.collection_id));
+      }
+      const aggregate = accepted.collection_id ? await this.getAggregateByCollection(tx, accepted.collection_id) : null;
+      let outcome = "accepted";
+      let reason = null;
+      if (!accepted.created_by_operation) {
+        outcome = "terminal_nonacceptance";
+        reason = "adopted_collection_is_not_inverse_owned";
+      } else if (!aggregate) {
+        outcome = "terminal_nonacceptance";
+        reason = "accepted_collection_is_already_absent";
+      } else if (await this.hasOtherAcceptedForwardReceipt(tx, accepted)) {
+        outcome = "terminal_nonacceptance";
+        reason = "collection_has_later_accepted_adopter";
+      } else {
+        const membership = await tx.get(`SELECT COUNT(*) AS count
+             FROM knowledge_project_collection_memberships
+            WHERE authority_id = ? AND tenant_id = ? AND corpus_id = ? AND collection_id = ?`, [
+          this.identity.authority_id,
+          this.identity.tenant_id,
+          this.identity.corpus_id,
+          aggregate.collection_id
+        ]);
+        if (Number(membership?.count ?? 0) > 0) {
+          outcome = "terminal_nonacceptance";
+          reason = "collection_has_bound_items";
+        } else {
+          await tx.run(`DELETE FROM knowledge_project_collections
+              WHERE authority_id = ? AND tenant_id = ? AND corpus_id = ? AND collection_id = ?`, [
+            this.identity.authority_id,
+            this.identity.tenant_id,
+            this.identity.corpus_id,
+            aggregate.collection_id
+          ]);
+          await tx.run(`DELETE FROM knowledge_projects
+              WHERE authority_id = ? AND tenant_id = ? AND corpus_id = ? AND project_id = ?
+                AND NOT EXISTS (
+                  SELECT 1 FROM knowledge_project_collections c
+                   WHERE c.authority_id = knowledge_projects.authority_id
+                     AND c.tenant_id = knowledge_projects.tenant_id
+                     AND c.corpus_id = knowledge_projects.corpus_id
+                     AND c.project_id = knowledge_projects.project_id
+                )`, [
+            this.identity.authority_id,
+            this.identity.tenant_id,
+            this.identity.corpus_id,
+            aggregate.project_id
+          ]);
+        }
+      }
+      const absent = {
+        accepted_receipt_id: accepted.receipt_id,
+        collection_id: accepted.collection_id,
+        absent: outcome === "accepted"
+      };
+      const receipt = {
+        receipt_id: this.stableReceiptId(request.operation_id, request.step_id, "register_collection", "inverse"),
+        authority: "knowledge",
+        route: KNOWLEDGE_PROJECT_REGISTRATION_ROUTE,
+        package_version: this.options.packageVersion,
+        ...this.identity,
+        operation_id: request.operation_id,
+        step_id: request.step_id,
+        action: "register_collection",
+        resource_kind: "collection",
+        direction: "inverse",
+        idempotency_key: request.idempotency_key,
+        request_digest: digestKnowledgeProjectLinksValue({
+          accepted_receipt_id: accepted.receipt_id,
+          collection_id: accepted.collection_id
+        }),
+        precondition_digest: accepted.result_digest ?? "",
+        outcome,
+        reason,
+        source_project_id: accepted.source_project_id,
+        project_id: accepted.project_id,
+        collection_id: accepted.collection_id,
+        item_id: null,
+        result_revision: outcome === "accepted" ? "absent" : accepted.result_revision,
+        result_digest: digestKnowledgeProjectLinksValue(absent),
+        accepted_receipt_id: accepted.receipt_id,
+        created_by_operation: false,
+        created_at: this.now()
+      };
+      await tx.run(RECEIPT_INSERT_SQL, receiptInsertParams(receipt));
+      return receipt;
+    });
+  }
+  async verifyRegistrationInverse(request) {
+    this.assertInverseIdentity(request);
+    const inverse = await this.getReceiptByAttempt(this.sql, {
+      operation_id: request.operation_id,
+      step_id: request.step_id,
+      action: "register_collection",
+      direction: "inverse"
+    });
+    if (!inverse || inverse.outcome !== "accepted" || inverse.accepted_receipt_id !== request.accepted_receipt_id) {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_NOT_FOUND", "accepted collection inverse receipt was not found.");
+    }
+    const aggregate = inverse.collection_id ? await this.getAggregateByCollection(this.sql, inverse.collection_id) : null;
+    if (aggregate) {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_CONFLICT", "collection inverse verification found the target still present.");
+    }
+    const verification = {
+      accepted_receipt_id: request.accepted_receipt_id,
+      target_id: inverse.collection_id,
+      absent: true,
+      digest: inverse.result_digest
+    };
+    return verification;
+  }
+  async bindItem(request) {
+    this.assertIdentity(request);
+    if (request.direction !== "forward") {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_INVALID_INPUT", "item binding requires direction=forward.");
+    }
+    const collectionId = requiredString(request.collection_id, "collection_id");
+    const itemId = requiredString(request.item_id, "item_id");
+    const item = await this.itemResolver(itemId);
+    if (!item || item.id !== itemId) {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_NOT_FOUND", "bind-existing requires an exact existing Knowledge item id.", { item_id: itemId });
+    }
+    const expectedRequestDigest = digestKnowledgeProjectLinksValue({
+      action: "bind_item",
+      collection_id: collectionId,
+      item_id: itemId
+    });
+    if (request.request_digest !== expectedRequestDigest) {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_DIGEST_MISMATCH", "request_digest does not bind the normalized item-membership request.", { expected_request_digest: expectedRequestDigest });
+    }
+    return this.sql.transaction(async (tx) => {
+      const duplicate = await this.getReceiptByAttempt(tx, {
+        operation_id: request.operation_id,
+        step_id: request.step_id,
+        action: "bind_item",
+        direction: "forward"
+      });
+      if (duplicate) {
+        this.assertIdempotent(duplicate, request);
+        return duplicate;
+      }
+      await tx.lock(this.collectionFence(collectionId));
+      await tx.lock(this.membershipFence(collectionId, itemId));
+      const aggregate = await this.getAggregateByCollection(tx, collectionId);
+      if (!aggregate) {
+        throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_NOT_FOUND", "Knowledge collection was not found by exact id.");
+      }
+      const existing = await tx.get(`SELECT * FROM knowledge_project_collection_memberships
+          WHERE authority_id = ? AND tenant_id = ? AND corpus_id = ?
+            AND collection_id = ? AND item_id = ?`, [
+        this.identity.authority_id,
+        this.identity.tenant_id,
+        this.identity.corpus_id,
+        collectionId,
+        itemId
+      ]);
+      const createdByOperation = existing === null;
+      const now = this.now();
+      const receiptId = this.stableReceiptId(request.operation_id, request.step_id, "bind_item", "forward");
+      if (!existing) {
+        await tx.run(`INSERT INTO knowledge_project_collection_memberships (
+            authority_id, tenant_id, corpus_id, collection_id, item_id,
+            bound_receipt_id, created_by_operation, bound_at
+          ) VALUES (?,?,?,?,?,?,?,?)`, [
+          this.identity.authority_id,
+          this.identity.tenant_id,
+          this.identity.corpus_id,
+          collectionId,
+          itemId,
+          receiptId,
+          1,
+          now
+        ]);
+        await tx.run(`UPDATE knowledge_project_collections
+              SET revision = revision + 1, updated_at = ?
+            WHERE authority_id = ? AND tenant_id = ? AND corpus_id = ? AND collection_id = ?`, [
+          now,
+          this.identity.authority_id,
+          this.identity.tenant_id,
+          this.identity.corpus_id,
+          collectionId
+        ]);
+      }
+      const current = await this.getAggregateByCollection(tx, collectionId);
+      if (!current) {
+        throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_INCOMPLETE_POPULATION", "item binding committed but collection readback was unavailable.");
+      }
+      const binding = {
+        collection_id: collectionId,
+        item_id: itemId,
+        collection_revision: `r${Number(current.revision)}`,
+        item_revision: `v${item.version ?? 1}`
+      };
+      const receipt = {
+        receipt_id: receiptId,
+        authority: "knowledge",
+        route: KNOWLEDGE_PROJECT_REGISTRATION_ROUTE,
+        package_version: this.options.packageVersion,
+        ...this.identity,
+        operation_id: request.operation_id,
+        step_id: request.step_id,
+        action: "bind_item",
+        resource_kind: "item",
+        direction: "forward",
+        idempotency_key: requiredString(request.idempotency_key, "idempotency_key"),
+        request_digest: request.request_digest,
+        precondition_digest: requiredString(request.precondition_digest, "precondition_digest"),
+        outcome: "accepted",
+        reason: createdByOperation ? null : "adopted_existing_membership",
+        source_project_id: current.source_project_id,
+        project_id: current.project_id,
+        collection_id: collectionId,
+        item_id: itemId,
+        result_revision: binding.collection_revision,
+        result_digest: digestKnowledgeProjectLinksValue(binding),
+        accepted_receipt_id: null,
+        created_by_operation: createdByOperation,
+        created_at: now
+      };
+      await tx.run(RECEIPT_INSERT_SQL, receiptInsertParams(receipt));
+      return receipt;
+    });
+  }
+  async readItemBinding(collectionId, itemId) {
+    const membership = await this.sql.get(`SELECT * FROM knowledge_project_collection_memberships
+        WHERE authority_id = ? AND tenant_id = ? AND corpus_id = ?
+          AND collection_id = ? AND item_id = ?`, [
+      this.identity.authority_id,
+      this.identity.tenant_id,
+      this.identity.corpus_id,
+      requiredString(collectionId, "collection_id"),
+      requiredString(itemId, "item_id")
+    ]);
+    if (!membership) {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_NOT_FOUND", "Knowledge collection membership was not found by exact ids.");
+    }
+    const aggregate = await this.getAggregateByCollection(this.sql, collectionId);
+    if (!aggregate) {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_INCOMPLETE_POPULATION", "membership exists without its collection aggregate.");
+    }
+    const record = {
+      collection_id: collectionId,
+      item_id: itemId,
+      revision: `r${Number(aggregate.revision)}`,
+      bound_at: membership.bound_at
+    };
+    return { ...record, digest: digestKnowledgeProjectLinksValue(record) };
+  }
+  async compensateItemBinding(request) {
+    this.assertInverseIdentity(request);
+    return this.sql.transaction(async (tx) => {
+      const duplicate = await this.getReceiptByAttempt(tx, {
+        operation_id: request.operation_id,
+        step_id: request.step_id,
+        action: "bind_item",
+        direction: "inverse"
+      });
+      if (duplicate) {
+        this.assertIdempotent(duplicate, request);
+        return duplicate;
+      }
+      const accepted = await this.receiptById(tx, request.accepted_receipt_id);
+      if (!accepted || accepted.action !== "bind_item" || accepted.direction !== "forward" || accepted.outcome !== "accepted") {
+        throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_NOT_FOUND", "accepted item-binding receipt was not found.");
+      }
+      if (accepted.collection_id) {
+        await tx.lock(this.collectionFence(accepted.collection_id));
+      }
+      if (accepted.collection_id && accepted.item_id) {
+        await tx.lock(this.membershipFence(accepted.collection_id, accepted.item_id));
+      }
+      let outcome = "accepted";
+      let reason = null;
+      const membership = await tx.get(`SELECT * FROM knowledge_project_collection_memberships
+          WHERE authority_id = ? AND tenant_id = ? AND corpus_id = ?
+            AND collection_id = ? AND item_id = ?`, [
+        this.identity.authority_id,
+        this.identity.tenant_id,
+        this.identity.corpus_id,
+        accepted.collection_id,
+        accepted.item_id
+      ]);
+      if (!accepted.created_by_operation) {
+        outcome = "terminal_nonacceptance";
+        reason = "adopted_membership_is_not_inverse_owned";
+      } else if (!membership) {
+        outcome = "terminal_nonacceptance";
+        reason = "accepted_membership_is_already_absent";
+      } else if (await this.hasOtherAcceptedForwardReceipt(tx, accepted)) {
+        outcome = "terminal_nonacceptance";
+        reason = "membership_has_later_accepted_adopter";
+      } else if (membership.bound_receipt_id !== accepted.receipt_id || Number(membership.created_by_operation) !== 1) {
+        outcome = "terminal_nonacceptance";
+        reason = "membership_is_owned_by_a_different_receipt";
+      } else {
+        await tx.run(`DELETE FROM knowledge_project_collection_memberships
+            WHERE authority_id = ? AND tenant_id = ? AND corpus_id = ?
+              AND collection_id = ? AND item_id = ? AND bound_receipt_id = ?`, [
+          this.identity.authority_id,
+          this.identity.tenant_id,
+          this.identity.corpus_id,
+          accepted.collection_id,
+          accepted.item_id,
+          accepted.receipt_id
+        ]);
+        await tx.run(`UPDATE knowledge_project_collections
+              SET revision = revision + 1, updated_at = ?
+            WHERE authority_id = ? AND tenant_id = ? AND corpus_id = ? AND collection_id = ?`, [
+          this.now(),
+          this.identity.authority_id,
+          this.identity.tenant_id,
+          this.identity.corpus_id,
+          accepted.collection_id
+        ]);
+      }
+      const aggregate = accepted.collection_id ? await this.getAggregateByCollection(tx, accepted.collection_id) : null;
+      const absent = {
+        accepted_receipt_id: accepted.receipt_id,
+        collection_id: accepted.collection_id,
+        item_id: accepted.item_id,
+        absent: outcome === "accepted"
+      };
+      const receipt = {
+        receipt_id: this.stableReceiptId(request.operation_id, request.step_id, "bind_item", "inverse"),
+        authority: "knowledge",
+        route: KNOWLEDGE_PROJECT_REGISTRATION_ROUTE,
+        package_version: this.options.packageVersion,
+        ...this.identity,
+        operation_id: request.operation_id,
+        step_id: request.step_id,
+        action: "bind_item",
+        resource_kind: "item",
+        direction: "inverse",
+        idempotency_key: request.idempotency_key,
+        request_digest: digestKnowledgeProjectLinksValue({
+          accepted_receipt_id: accepted.receipt_id,
+          collection_id: accepted.collection_id,
+          item_id: accepted.item_id
+        }),
+        precondition_digest: accepted.result_digest ?? "",
+        outcome,
+        reason,
+        source_project_id: accepted.source_project_id,
+        project_id: accepted.project_id,
+        collection_id: accepted.collection_id,
+        item_id: accepted.item_id,
+        result_revision: outcome === "accepted" && aggregate ? `r${Number(aggregate.revision)}` : accepted.result_revision,
+        result_digest: digestKnowledgeProjectLinksValue(absent),
+        accepted_receipt_id: accepted.receipt_id,
+        created_by_operation: false,
+        created_at: this.now()
+      };
+      await tx.run(RECEIPT_INSERT_SQL, receiptInsertParams(receipt));
+      return receipt;
+    });
+  }
+  async verifyItemBindingInverse(request) {
+    this.assertInverseIdentity(request);
+    const inverse = await this.getReceiptByAttempt(this.sql, {
+      operation_id: request.operation_id,
+      step_id: request.step_id,
+      action: "bind_item",
+      direction: "inverse"
+    });
+    if (!inverse || inverse.outcome !== "accepted" || inverse.accepted_receipt_id !== request.accepted_receipt_id) {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_NOT_FOUND", "accepted item-binding inverse receipt was not found.");
+    }
+    const membership = await this.sql.get(`SELECT item_id FROM knowledge_project_collection_memberships
+        WHERE authority_id = ? AND tenant_id = ? AND corpus_id = ?
+          AND collection_id = ? AND item_id = ?`, [
+      this.identity.authority_id,
+      this.identity.tenant_id,
+      this.identity.corpus_id,
+      inverse.collection_id,
+      inverse.item_id
+    ]);
+    if (membership) {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_CONFLICT", "item-binding inverse verification found the membership still present.");
+    }
+    return {
+      accepted_receipt_id: request.accepted_receipt_id,
+      target_id: inverse.item_id,
+      absent: true,
+      digest: inverse.result_digest
+    };
+  }
+  resourceBase(aggregate) {
+    return {
+      project_id: aggregate.project_id,
+      source_project_id: aggregate.source_project_id,
+      collection_id: aggregate.collection_id,
+      revision: `r${Number(aggregate.revision)}`
+    };
+  }
+  projectResource(aggregate) {
+    const body = {
+      ...this.resourceBase(aggregate),
+      kind: "project",
+      id: aggregate.project_id,
+      title: aggregate.project_name,
+      locator: { kind: "canonical_uri", value: `knowledge:project:${aggregate.project_id}` },
+      metadata: {
+        source_project_id: aggregate.source_project_id,
+        slug: aggregate.project_slug,
+        collection_count: 1
+      }
+    };
+    return {
+      ...body,
+      key: `project:${aggregate.project_id}`,
+      digest: digestKnowledgeProjectLinksValue(body)
+    };
+  }
+  collectionResource(aggregate, memberCount) {
+    const body = {
+      ...this.resourceBase(aggregate),
+      kind: "collection",
+      id: aggregate.collection_id,
+      title: aggregate.collection_name,
+      locator: { kind: "external_uuid", value: aggregate.collection_id },
+      metadata: {
+        slug: aggregate.collection_slug,
+        membership_rule: KNOWLEDGE_PROJECT_MEMBERSHIP_RULE,
+        member_count: memberCount
+      }
+    };
+    return {
+      ...body,
+      key: `collection:${aggregate.collection_id}`,
+      digest: digestKnowledgeProjectLinksValue(body)
+    };
+  }
+  itemResource(aggregate, item) {
+    const body = {
+      ...this.resourceBase(aggregate),
+      kind: "item",
+      id: item.id,
+      revision: `v${item.version ?? 1}`,
+      title: item.title,
+      locator: { kind: "canonical_uri", value: `knowledge:item:${encodeURIComponent(item.id)}` },
+      metadata: {
+        tags: [...item.tags ?? []],
+        archived: item.archived === true,
+        updated_at: item.updated_at
+      }
+    };
+    return {
+      ...body,
+      key: `item:${item.id}`,
+      digest: digestKnowledgeProjectLinksValue(body)
+    };
+  }
+  taxonomyResource(aggregate, normalized, input) {
+    const taxonomyId = stableUuid(`${aggregate.collection_id}\x00taxonomy\x00${normalized}`);
+    const body = {
+      ...this.resourceBase(aggregate),
+      kind: "taxonomy",
+      id: taxonomyId,
+      title: input.label,
+      locator: { kind: "external_uuid", value: taxonomyId },
+      metadata: {
+        tag: input.label,
+        normalized_tag: normalized,
+        item_count: input.itemCount,
+        member_digest: input.memberDigest
+      }
+    };
+    return {
+      ...body,
+      key: `taxonomy:${taxonomyId}`,
+      digest: digestKnowledgeProjectLinksValue(body)
+    };
+  }
+  postgresItem(row) {
+    const parseJson4 = (value, fallback) => {
+      if (value == null)
+        return fallback;
+      if (typeof value === "string") {
+        try {
+          return JSON.parse(value);
+        } catch {
+          return fallback;
+        }
+      }
+      return value;
+    };
+    return {
+      id: String(row.id),
+      short_id: row.short_id ?? null,
+      title: String(row.title ?? ""),
+      content: String(row.content ?? ""),
+      url: row.url ?? null,
+      tags: parseJson4(row.tags, []),
+      metadata: parseJson4(row.metadata, {}),
+      archived: Boolean(row.archived),
+      created_at: String(row.created_at),
+      updated_at: String(row.updated_at),
+      version: row.version == null ? 1 : Number(row.version)
+    };
+  }
+  resourceCursorAfter(input) {
+    if (!input.cursor)
+      return "";
+    let decoded;
+    try {
+      decoded = JSON.parse(Buffer.from(input.cursor, "base64url").toString("utf8"));
+    } catch {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_INVALID_INPUT", "cursor is not a valid Knowledge project-resources cursor.");
+    }
+    if (decoded.version !== 1 || decoded.project_id !== input.aggregate.project_id || decoded.collection_id !== input.aggregate.collection_id || decoded.collection_revision !== input.revision || decoded.population_digest !== input.populationDigest || canonicalKnowledgeProjectLinksJson(decoded.kinds) !== canonicalKnowledgeProjectLinksJson(input.kinds) || typeof decoded.after !== "string") {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_CURSOR_STALE", "project resources changed or the cursor belongs to a different project/kind selection; restart from the first page.");
+    }
+    return decoded.after;
+  }
+  async listPostgresProjectResources(projectId, options, limit, kinds) {
+    const aggregate = await this.getAggregateByProject(this.sql, requiredString(projectId, "project_id"));
+    if (!aggregate) {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_NOT_FOUND", "Knowledge project aggregate was not found by source or stable project id.");
+    }
+    const identityParams = [
+      this.identity.tenant_id,
+      this.identity.authority_id,
+      this.identity.tenant_id,
+      this.identity.corpus_id,
+      aggregate.collection_id
+    ];
+    const population = await this.sql.get(`SELECT
+         COUNT(*)::text AS membership_count,
+         COUNT(i.id)::text AS visible_item_count,
+         encode(sha256(convert_to(COALESCE(string_agg(
+             m.item_id || E'\\x1f'
+             || COALESCE(i.title, '') || E'\\x1f'
+             || COALESCE(i.updated_at, '') || E'\\x1f'
+             || COALESCE(i.version::text, '1') || E'\\x1f'
+             || COALESCE(i.tags::text, '[]') || E'\\x1f'
+             || COALESCE(i.archived::text, 'false'),
+             E'\\x1e' ORDER BY m.item_id
+           ), ''), 'UTF8')), 'hex') AS item_snapshot_digest
+       FROM knowledge_project_collection_memberships m
+       LEFT JOIN knowledge_items i
+         ON i.id = m.item_id
+        AND (i.authority_classification IS NULL OR i.tenant_id::text = ?)
+      WHERE m.authority_id = ? AND m.tenant_id = ? AND m.corpus_id = ?
+        AND m.collection_id = ?`, [
+      this.identity.tenant_id,
+      this.identity.authority_id,
+      this.identity.tenant_id,
+      this.identity.corpus_id,
+      aggregate.collection_id
+    ]);
+    const membershipCount = Number(population?.membership_count ?? 0);
+    const visibleItemCount = Number(population?.visible_item_count ?? 0);
+    if (membershipCount !== visibleItemCount) {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_INCOMPLETE_POPULATION", "collection membership points at a missing or inaccessible Knowledge item; refusing a partial resource population.", {
+        collection_id: aggregate.collection_id,
+        membership_count: membershipCount,
+        visible_item_count: visibleItemCount
+      });
+    }
+    const taxonomyCountRow = await this.sql.get(`SELECT COUNT(*)::text AS taxonomy_count
+         FROM (
+           SELECT LOWER(BTRIM(tag.value)) AS normalized_tag
+             FROM knowledge_project_collection_memberships m
+             JOIN knowledge_items i
+               ON i.id = m.item_id
+              AND (i.authority_classification IS NULL OR i.tenant_id::text = ?)
+             CROSS JOIN LATERAL jsonb_array_elements_text(i.tags) AS tag(value)
+            WHERE m.authority_id = ? AND m.tenant_id = ? AND m.corpus_id = ?
+              AND m.collection_id = ?
+              AND BTRIM(tag.value) <> ''
+            GROUP BY LOWER(BTRIM(tag.value))
+         ) taxonomy`, identityParams);
+    const taxonomyCount = Number(taxonomyCountRow?.taxonomy_count ?? 0);
+    const revision = `r${Number(aggregate.revision)}`;
+    const populationDigest = digestKnowledgeProjectLinksValue({
+      collection_revision: revision,
+      kinds,
+      item_snapshot_digest: kinds.includes("item") || kinds.includes("taxonomy") ? population?.item_snapshot_digest ?? "" : null,
+      taxonomy_count: kinds.includes("taxonomy") ? taxonomyCount : null
+    });
+    const after = this.resourceCursorAfter({
+      cursor: options.cursor,
+      aggregate,
+      revision,
+      populationDigest,
+      kinds
+    });
+    const targetCount = limit + KNOWLEDGE_PROJECT_RESOURCE_PAGE_LOOKAHEAD;
+    const candidates = [];
+    const append = (resource) => {
+      if (candidates.length < targetCount && kinds.includes(resource.kind) && resource.key > after) {
+        candidates.push(resource);
+      }
+    };
+    append(this.collectionResource(aggregate, membershipCount));
+    if (kinds.includes("item") && candidates.length < targetCount && after < "project:") {
+      const itemAfter = after.startsWith("item:") ? after.slice("item:".length) : "";
+      const rows = await this.sql.many(`SELECT i.*
+           FROM knowledge_project_collection_memberships m
+           JOIN knowledge_items i
+             ON i.id = m.item_id
+            AND (i.authority_classification IS NULL OR i.tenant_id::text = ?)
+          WHERE m.authority_id = ? AND m.tenant_id = ? AND m.corpus_id = ?
+            AND m.collection_id = ? AND m.item_id > ?
+          ORDER BY m.item_id ASC
+          LIMIT ${targetCount - candidates.length}`, [...identityParams, itemAfter]);
+      for (const row of rows)
+        append(this.itemResource(aggregate, this.postgresItem(row)));
+    }
+    append(this.projectResource(aggregate));
+    if (kinds.includes("taxonomy") && candidates.length < targetCount) {
+      const taxonomyAfter = after.startsWith("taxonomy:") ? after : "taxonomy:";
+      const rows = await this.sql.many(`WITH tagged AS (
+           SELECT
+             m.item_id,
+             BTRIM(tag.value) AS label,
+             LOWER(BTRIM(tag.value)) AS normalized_tag,
+             tag.ordinality
+           FROM knowledge_project_collection_memberships m
+           JOIN knowledge_items i
+             ON i.id = m.item_id
+            AND (i.authority_classification IS NULL OR i.tenant_id::text = ?)
+           CROSS JOIN LATERAL jsonb_array_elements_text(i.tags)
+             WITH ORDINALITY AS tag(value, ordinality)
+           WHERE m.authority_id = ? AND m.tenant_id = ? AND m.corpus_id = ?
+             AND m.collection_id = ?
+             AND BTRIM(tag.value) <> ''
+         ),
+         grouped AS (
+           SELECT
+             normalized_tag,
+             (array_agg(label ORDER BY item_id, ordinality))[1] AS label,
+             COUNT(*)::text AS item_count,
+             encode(sha256(convert_to(
+               '[' || string_agg(
+                 to_json(item_id)::text,
+                 ',' ORDER BY item_id, ordinality
+               ) || ']',
+               'UTF8'
+             )), 'hex') AS member_digest,
+             encode(sha256(
+               convert_to(?, 'UTF8')
+               || decode('00', 'hex')
+               || convert_to('taxonomy', 'UTF8')
+               || decode('00', 'hex')
+               || convert_to(normalized_tag, 'UTF8')
+             ), 'hex') AS stable_hex
+           FROM tagged
+           GROUP BY normalized_tag
+         ),
+         mutated AS (
+           SELECT
+             *,
+             overlay(
+               overlay(substr(stable_hex, 1, 32) placing '5' from 13 for 1)
+               placing substr(
+                 '89ab',
+                 ((strpos('0123456789abcdef', substr(stable_hex, 17, 1)) - 1) % 4) + 1,
+                 1
+               )
+               from 17 for 1
+             ) AS stable_uuid_hex
+           FROM grouped
+         ),
+         keyed AS (
+           SELECT
+             normalized_tag,
+             label,
+             item_count,
+             member_digest,
+             substr(stable_uuid_hex, 1, 8)
+               || '-' || substr(stable_uuid_hex, 9, 4)
+               || '-' || substr(stable_uuid_hex, 13, 4)
+               || '-' || substr(stable_uuid_hex, 17, 4)
+               || '-' || substr(stable_uuid_hex, 21, 12) AS taxonomy_id
+           FROM mutated
+         )
+         SELECT normalized_tag, label, item_count, member_digest
+           FROM keyed
+          WHERE 'taxonomy:' || taxonomy_id > ?
+          ORDER BY taxonomy_id ASC
+         LIMIT ${targetCount - candidates.length}`, [...identityParams, aggregate.collection_id, taxonomyAfter]);
+      for (const row of rows) {
+        append(this.taxonomyResource(aggregate, row.normalized_tag, {
+          label: row.label,
+          itemCount: Number(row.item_count),
+          memberDigest: row.member_digest
+        }));
+      }
+    }
+    const total = (kinds.includes("collection") ? 1 : 0) + (kinds.includes("item") ? membershipCount : 0) + (kinds.includes("project") ? 1 : 0) + (kinds.includes("taxonomy") ? taxonomyCount : 0);
+    const pageResources = candidates.slice(0, limit);
+    const hasMore = candidates.length > pageResources.length;
+    const nextCursor = hasMore && pageResources.length > 0 ? Buffer.from(JSON.stringify({
+      version: 1,
+      project_id: aggregate.project_id,
+      collection_id: aggregate.collection_id,
+      collection_revision: revision,
+      population_digest: populationDigest,
+      kinds,
+      after: pageResources.at(-1).key
+    })).toString("base64url") : null;
+    return {
+      schema: "knowledge.project-resources.page.v1",
+      authority: "knowledge",
+      route: KNOWLEDGE_PROJECT_RESOURCES_ROUTE,
+      ...this.identity,
+      project_id: aggregate.project_id,
+      source_project_id: aggregate.source_project_id,
+      collection_id: aggregate.collection_id,
+      collection_revision: revision,
+      population_digest: populationDigest,
+      resource_kinds: kinds,
+      resources: pageResources,
+      count: pageResources.length,
+      total,
+      limit,
+      cursor: options.cursor ?? null,
+      next_cursor: nextCursor,
+      has_more: hasMore,
+      complete: !hasMore,
+      truncated: false
+    };
+  }
+  async buildResources(projectId) {
+    const aggregate = await this.getAggregateByProject(this.sql, requiredString(projectId, "project_id"));
+    if (!aggregate) {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_NOT_FOUND", "Knowledge project aggregate was not found by source or stable project id.");
+    }
+    const memberships = await this.sql.many(`SELECT * FROM knowledge_project_collection_memberships
+        WHERE authority_id = ? AND tenant_id = ? AND corpus_id = ? AND collection_id = ?
+        ORDER BY item_id ASC`, [
+      this.identity.authority_id,
+      this.identity.tenant_id,
+      this.identity.corpus_id,
+      aggregate.collection_id
+    ]);
+    const items = await Promise.all(memberships.map(async (membership) => {
+      const item = await this.itemResolver(membership.item_id);
+      if (!item || item.id !== membership.item_id) {
+        throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_INCOMPLETE_POPULATION", "collection membership points at a missing Knowledge item; refusing a partial resource population.", { collection_id: aggregate.collection_id, item_id: membership.item_id });
+      }
+      return item;
+    }));
+    const revision = `r${Number(aggregate.revision)}`;
+    const base = {
+      project_id: aggregate.project_id,
+      source_project_id: aggregate.source_project_id,
+      collection_id: aggregate.collection_id,
+      revision
+    };
+    const resources = [];
+    const projectBody = {
+      ...base,
+      kind: "project",
+      id: aggregate.project_id,
+      title: aggregate.project_name,
+      locator: { kind: "canonical_uri", value: `knowledge:project:${aggregate.project_id}` },
+      metadata: {
+        source_project_id: aggregate.source_project_id,
+        slug: aggregate.project_slug,
+        collection_count: 1
+      }
+    };
+    resources.push({
+      ...projectBody,
+      key: `project:${aggregate.project_id}`,
+      digest: digestKnowledgeProjectLinksValue(projectBody)
+    });
+    const collectionBody = {
+      ...base,
+      kind: "collection",
+      id: aggregate.collection_id,
+      title: aggregate.collection_name,
+      locator: { kind: "external_uuid", value: aggregate.collection_id },
+      metadata: {
+        slug: aggregate.collection_slug,
+        membership_rule: KNOWLEDGE_PROJECT_MEMBERSHIP_RULE,
+        member_count: items.length
+      }
+    };
+    resources.push({
+      ...collectionBody,
+      key: `collection:${aggregate.collection_id}`,
+      digest: digestKnowledgeProjectLinksValue(collectionBody)
+    });
+    for (const item of items) {
+      const itemBody = {
+        ...base,
+        kind: "item",
+        id: item.id,
+        revision: `v${item.version ?? 1}`,
+        title: item.title,
+        locator: { kind: "canonical_uri", value: `knowledge:item:${encodeURIComponent(item.id)}` },
+        metadata: {
+          tags: [...item.tags ?? []],
+          archived: item.archived === true,
+          updated_at: item.updated_at
+        }
+      };
+      resources.push({
+        ...itemBody,
+        key: `item:${item.id}`,
+        digest: digestKnowledgeProjectLinksValue(itemBody)
+      });
+    }
+    const taxonomy = new Map;
+    for (const item of items) {
+      for (const rawTag of item.tags ?? []) {
+        const normalized = rawTag.trim().toLowerCase();
+        if (!normalized)
+          continue;
+        const entry = taxonomy.get(normalized) ?? { label: rawTag.trim(), itemIds: [] };
+        entry.itemIds.push(item.id);
+        taxonomy.set(normalized, entry);
+      }
+    }
+    for (const [normalized, entry] of [...taxonomy.entries()].sort(([left], [right]) => left.localeCompare(right))) {
+      const taxonomyId = stableUuid(`${aggregate.collection_id}\x00taxonomy\x00${normalized}`);
+      const taxonomyBody = {
+        ...base,
+        kind: "taxonomy",
+        id: taxonomyId,
+        title: entry.label,
+        locator: { kind: "external_uuid", value: taxonomyId },
+        metadata: {
+          tag: entry.label,
+          normalized_tag: normalized,
+          item_count: entry.itemIds.length,
+          member_digest: digestKnowledgeProjectLinksValue([...entry.itemIds].sort())
+        }
+      };
+      resources.push({
+        ...taxonomyBody,
+        key: `taxonomy:${taxonomyId}`,
+        digest: digestKnowledgeProjectLinksValue(taxonomyBody)
+      });
+    }
+    resources.sort((left, right) => left.key.localeCompare(right.key));
+    return { aggregate, resources };
+  }
+  async listProjectResources(projectId, options = {}) {
+    const limit = boundedLimit(options.limit);
+    const kinds = normalizeKinds(options.kinds);
+    if (this.sql.kind === "postgres") {
+      return this.listPostgresProjectResources(projectId, options, limit, kinds);
+    }
+    const { aggregate, resources } = await this.buildResources(projectId);
+    const revision = `r${Number(aggregate.revision)}`;
+    const population = resources.filter((resource) => kinds.includes(resource.kind));
+    const populationDigest = digestKnowledgeProjectLinksValue(population.map((resource) => ({ key: resource.key, digest: resource.digest })));
+    let after = "";
+    if (options.cursor) {
+      let decoded;
+      try {
+        decoded = JSON.parse(Buffer.from(options.cursor, "base64url").toString("utf8"));
+      } catch {
+        throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_INVALID_INPUT", "cursor is not a valid Knowledge project-resources cursor.");
+      }
+      if (decoded.version !== 1 || decoded.project_id !== aggregate.project_id || decoded.collection_id !== aggregate.collection_id || decoded.collection_revision !== revision || decoded.population_digest !== populationDigest || canonicalKnowledgeProjectLinksJson(decoded.kinds) !== canonicalKnowledgeProjectLinksJson(kinds) || typeof decoded.after !== "string") {
+        throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_CURSOR_STALE", "project resources changed or the cursor belongs to a different project/kind selection; restart from the first page.");
+      }
+      after = decoded.after;
+    }
+    const remaining = after ? population.filter((resource) => resource.key > after) : population;
+    const pageResources = remaining.slice(0, limit);
+    const hasMore = remaining.length > pageResources.length;
+    const nextCursor = hasMore && pageResources.length > 0 ? Buffer.from(JSON.stringify({
+      version: 1,
+      project_id: aggregate.project_id,
+      collection_id: aggregate.collection_id,
+      collection_revision: revision,
+      population_digest: populationDigest,
+      kinds,
+      after: pageResources.at(-1).key
+    })).toString("base64url") : null;
+    return {
+      schema: "knowledge.project-resources.page.v1",
+      authority: "knowledge",
+      route: KNOWLEDGE_PROJECT_RESOURCES_ROUTE,
+      ...this.identity,
+      project_id: aggregate.project_id,
+      source_project_id: aggregate.source_project_id,
+      collection_id: aggregate.collection_id,
+      collection_revision: revision,
+      population_digest: populationDigest,
+      resource_kinds: kinds,
+      resources: pageResources,
+      count: pageResources.length,
+      total: population.length,
+      limit,
+      cursor: options.cursor ?? null,
+      next_cursor: nextCursor,
+      has_more: hasMore,
+      complete: !hasMore,
+      truncated: false
+    };
+  }
+  async readProjectResource(projectId, kind, resourceId) {
+    const { resources } = await this.buildResources(projectId);
+    const resource = resources.find((candidate) => candidate.kind === kind && candidate.id === resourceId);
+    if (!resource) {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_NOT_FOUND", "Knowledge project resource was not found by exact kind and id.");
+    }
+    return resource;
+  }
+  async readAllProjectResources(projectId, options = {}) {
+    const resources = [];
+    const seen = new Set;
+    let cursor = null;
+    let expected = null;
+    do {
+      const page = await this.listProjectResources(projectId, { ...options, cursor });
+      const identity = {
+        project_id: page.project_id,
+        collection_id: page.collection_id,
+        collection_revision: page.collection_revision,
+        population_digest: page.population_digest,
+        total: page.total,
+        kinds: canonicalKnowledgeProjectLinksJson(page.resource_kinds)
+      };
+      if (expected && canonicalKnowledgeProjectLinksJson(expected) !== canonicalKnowledgeProjectLinksJson(identity)) {
+        throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_CURSOR_STALE", "project resources changed while the complete population was being read.");
+      }
+      expected ??= identity;
+      for (const resource of page.resources) {
+        if (seen.has(resource.key)) {
+          throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_INCOMPLETE_POPULATION", "project resource pagination returned a duplicate stable resource key.", { key: resource.key });
+        }
+        seen.add(resource.key);
+        resources.push(resource);
+      }
+      if (page.has_more && !page.next_cursor) {
+        throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_INCOMPLETE_POPULATION", "project resource page claims more data without a continuation cursor.");
+      }
+      cursor = page.next_cursor;
+    } while (cursor);
+    if (!expected || resources.length !== expected.total) {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_INCOMPLETE_POPULATION", "complete project resource enumeration did not match the producer total.", { expected_total: expected?.total ?? null, received: resources.length });
+    }
+    return resources;
+  }
+}
+function createLocalKnowledgeProjectLinksAuthority(input) {
+  if (input.databasePath !== ":memory:") {
+    ensureParentDir(input.databasePath);
+  }
+  const require2 = import.meta.require;
+  if (typeof require2 !== "function") {
+    throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_CONFLICT", "the local Knowledge project-links authority requires the Bun runtime.");
+  }
+  const { Database: BunDatabase } = require2("bun:sqlite");
+  const db = new BunDatabase(input.databasePath, { create: true });
+  db.exec(sqliteKnowledgeProjectLinksSchemaSql());
+  return new PackageOwnedKnowledgeProjectLinksAuthority(new SqliteProjectLinksSql(db), (id) => input.itemStore.get(id), input.options);
+}
+function createPostgresKnowledgeProjectLinksAuthority(input) {
+  return new PackageOwnedKnowledgeProjectLinksAuthority(new PostgresProjectLinksSql(input.client, input.client), input.itemResolver, input.options);
+}
+function wireErrorStatus(error) {
+  if (error.code === "KNOWLEDGE_PROJECT_LINKS_NOT_FOUND")
+    return 404;
+  if (error.code === "KNOWLEDGE_PROJECT_LINKS_CONFLICT" || error.code === "KNOWLEDGE_PROJECT_LINKS_CURSOR_STALE" || error.code === "KNOWLEDGE_PROJECT_LINKS_IDEMPOTENCY_MISMATCH")
+    return 409;
+  if (error.code === "KNOWLEDGE_PROJECT_LINKS_INCOMPLETE_POPULATION")
+    return 503;
+  return 400;
+}
+function knowledgeProjectLinksErrorResponse(error) {
+  if (error instanceof KnowledgeProjectLinksError) {
+    return Response.json({ error: error.code, message: error.message, details: error.details }, { status: wireErrorStatus(error) });
+  }
+  throw error;
+}
+var KNOWLEDGE_PROJECT_LINKS_ERROR_CODES = new Set([
+  "KNOWLEDGE_PROJECT_LINKS_INVALID_INPUT",
+  "KNOWLEDGE_PROJECT_LINKS_CAPABILITY_MISMATCH",
+  "KNOWLEDGE_PROJECT_LINKS_DIGEST_MISMATCH",
+  "KNOWLEDGE_PROJECT_LINKS_IDEMPOTENCY_MISMATCH",
+  "KNOWLEDGE_PROJECT_LINKS_CONFLICT",
+  "KNOWLEDGE_PROJECT_LINKS_NOT_FOUND",
+  "KNOWLEDGE_PROJECT_LINKS_CURSOR_STALE",
+  "KNOWLEDGE_PROJECT_LINKS_INCOMPLETE_POPULATION",
+  "KNOWLEDGE_PROJECT_LINKS_INVALID_RESPONSE"
+]);
+function isRecord(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+function isResourceKind(value) {
+  return value === "project" || value === "collection" || value === "item" || value === "taxonomy";
+}
+function invalidProjectLinksResponse(message, details = {}) {
+  throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_INVALID_RESPONSE", message, details);
+}
+function assertProjectResource(value, context) {
+  if (!isRecord(value)) {
+    invalidProjectLinksResponse(`${context} is not an object.`);
+  }
+  const requiredStrings = [
+    "key",
+    "id",
+    "project_id",
+    "source_project_id",
+    "collection_id",
+    "revision",
+    "digest",
+    "title"
+  ];
+  for (const field of requiredStrings) {
+    if (typeof value[field] !== "string") {
+      invalidProjectLinksResponse(`${context}.${field} is not a string.`);
+    }
+  }
+  if (!isResourceKind(value.kind)) {
+    invalidProjectLinksResponse(`${context}.kind is not a supported resource kind.`);
+  }
+  if (!isRecord(value.locator) || value.locator.kind !== "external_uuid" && value.locator.kind !== "canonical_uri" || typeof value.locator.value !== "string") {
+    invalidProjectLinksResponse(`${context}.locator is not a valid stable locator.`);
+  }
+  if (!isRecord(value.metadata)) {
+    invalidProjectLinksResponse(`${context}.metadata is not an object.`);
+  }
+  return value;
+}
+function assertProjectResourcePage(value) {
+  if (!isRecord(value)) {
+    invalidProjectLinksResponse("Knowledge project-resources response is not an object.");
+  }
+  if (value.schema !== "knowledge.project-resources.page.v1" || value.authority !== "knowledge" || value.route !== KNOWLEDGE_PROJECT_RESOURCES_ROUTE) {
+    invalidProjectLinksResponse("Knowledge project-resources response does not carry the expected producer contract.");
+  }
+  for (const field of [
+    "authority_id",
+    "tenant_id",
+    "corpus_id",
+    "project_id",
+    "source_project_id",
+    "collection_id",
+    "collection_revision",
+    "population_digest"
+  ]) {
+    if (typeof value[field] !== "string") {
+      invalidProjectLinksResponse(`Knowledge project-resources response.${field} is not a string.`);
+    }
+  }
+  if (!Array.isArray(value.resource_kinds) || !value.resource_kinds.every(isResourceKind)) {
+    invalidProjectLinksResponse("Knowledge project-resources response.resource_kinds is invalid.");
+  }
+  if (!Array.isArray(value.resources)) {
+    invalidProjectLinksResponse("Knowledge project-resources response.resources is not an array.");
+  }
+  const resources = value.resources.map((resource, index) => assertProjectResource(resource, `Knowledge project-resources response.resources[${index}]`));
+  if (!Number.isInteger(value.count) || value.count !== resources.length || !Number.isInteger(value.total) || Number(value.total) < resources.length || !Number.isInteger(value.limit) || Number(value.limit) < 1) {
+    invalidProjectLinksResponse("Knowledge project-resources response pagination counts are invalid.");
+  }
+  if (value.cursor !== null && typeof value.cursor !== "string" || value.next_cursor !== null && typeof value.next_cursor !== "string" || typeof value.has_more !== "boolean" || typeof value.complete !== "boolean" || value.truncated !== false) {
+    invalidProjectLinksResponse("Knowledge project-resources response pagination state is invalid.");
+  }
+  if (value.has_more && (typeof value.next_cursor !== "string" || value.next_cursor.length === 0)) {
+    invalidProjectLinksResponse("Knowledge project-resources response claims more data without a continuation cursor.");
+  }
+  return { ...value, resources };
+}
+
+class KnowledgeProjectLinksHttpClient {
+  options;
+  fetchImpl;
+  root;
+  constructor(options) {
+    this.options = options;
+    this.fetchImpl = options.fetch ?? guardedFetch;
+    this.root = options.baseUrl.replace(/\/+$/, "");
+  }
+  async close() {}
+  headers(extra = {}) {
+    const headers = new Headers(this.options.headers);
+    headers.set("accept", "application/json");
+    if (this.options.apiKey)
+      headers.set("x-api-key", this.options.apiKey);
+    for (const [key, value] of Object.entries(extra))
+      headers.set(key, value);
+    return headers;
+  }
+  async request(path, init = {}) {
+    const response = await this.fetchImpl(`${this.root}${path}`, {
+      ...init,
+      headers: this.headers(init.body ? { "content-type": "application/json" } : {})
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const upstreamError = typeof body.error === "string" ? body.error : null;
+      const code = upstreamError && KNOWLEDGE_PROJECT_LINKS_ERROR_CODES.has(upstreamError) ? upstreamError : response.status === 404 ? "KNOWLEDGE_PROJECT_LINKS_NOT_FOUND" : "KNOWLEDGE_PROJECT_LINKS_CONFLICT";
+      throw new KnowledgeProjectLinksError(code, typeof body.message === "string" ? body.message : `Knowledge project-links HTTP ${response.status}`, {
+        ...isRecord(body.details) ? body.details : {},
+        http_status: response.status,
+        ...upstreamError && upstreamError !== code ? { upstream_error: upstreamError } : {}
+      });
+    }
+    return body;
+  }
+  async capability() {
+    const body = await this.request("/v1/project-registration/capability");
+    return body.capability;
+  }
+  async registerCollection(request) {
+    const body = await this.request("/v1/project-registration/create", { method: "POST", body: JSON.stringify(request) });
+    return body.receipt;
+  }
+  async readCollection(collectionId) {
+    const body = await this.request("/v1/project-registration/read-exact", { method: "POST", body: JSON.stringify({ collection_id: collectionId }) });
+    return body.record;
+  }
+  async lookupReceipt(request) {
+    const body = await this.request("/v1/project-registration/receipts/lookup", { method: "POST", body: JSON.stringify(request) });
+    return body.receipt;
+  }
+  async compensateRegistration(request) {
+    const body = await this.request("/v1/project-registration/compensate", { method: "POST", body: JSON.stringify(request) });
+    return body.receipt;
+  }
+  async verifyRegistrationInverse(request) {
+    const body = await this.request("/v1/project-registration/verify-inverse", { method: "POST", body: JSON.stringify(request) });
+    return body.verification;
+  }
+  async bindItem(request) {
+    const body = await this.request("/v1/project-registration/items/bind", { method: "POST", body: JSON.stringify(request) });
+    return body.receipt;
+  }
+  async readItemBinding(collectionId, itemId) {
+    const body = await this.request("/v1/project-registration/items/read-exact", { method: "POST", body: JSON.stringify({ collection_id: collectionId, item_id: itemId }) });
+    return body.record;
+  }
+  async compensateItemBinding(request) {
+    const body = await this.request("/v1/project-registration/items/compensate", { method: "POST", body: JSON.stringify(request) });
+    return body.receipt;
+  }
+  async verifyItemBindingInverse(request) {
+    const body = await this.request("/v1/project-registration/items/verify-inverse", { method: "POST", body: JSON.stringify(request) });
+    return body.verification;
+  }
+  async listProjectResources(projectId, options = {}) {
+    const query = new URLSearchParams;
+    if (options.limit !== undefined)
+      query.set("limit", String(options.limit));
+    if (options.cursor)
+      query.set("cursor", options.cursor);
+    for (const kind of options.kinds ?? [])
+      query.append("kind", kind);
+    const suffix = query.size > 0 ? `?${query.toString()}` : "";
+    return assertProjectResourcePage(await this.request(`/v1/projects/${encodeURIComponent(projectId)}/resources${suffix}`));
+  }
+  async readProjectResource(projectId, kind, resourceId) {
+    const body = await this.request(`/v1/projects/${encodeURIComponent(projectId)}/resources/${kind}/${encodeURIComponent(resourceId)}`);
+    if (!isRecord(body) || !Object.hasOwn(body, "resource")) {
+      invalidProjectLinksResponse("Knowledge project-resource response does not contain a resource envelope.");
+    }
+    return assertProjectResource(body.resource, "Knowledge project-resource response.resource");
+  }
+  async readAllProjectResources(projectId, options = {}) {
+    const resources = [];
+    const seen = new Set;
+    let cursor = null;
+    let expectedTotal = null;
+    let expectedRevision = null;
+    let expectedPopulationDigest = null;
+    do {
+      const page = await this.listProjectResources(projectId, { ...options, cursor });
+      expectedTotal ??= page.total;
+      expectedRevision ??= page.collection_revision;
+      expectedPopulationDigest ??= page.population_digest;
+      if (page.total !== expectedTotal || page.collection_revision !== expectedRevision || page.population_digest !== expectedPopulationDigest) {
+        throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_CURSOR_STALE", "project resources changed while the complete HTTP population was being read.");
+      }
+      for (const resource of page.resources) {
+        if (seen.has(resource.key)) {
+          throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_INCOMPLETE_POPULATION", "project resources HTTP pagination returned a duplicate stable key.");
+        }
+        seen.add(resource.key);
+        resources.push(resource);
+      }
+      if (page.has_more && !page.next_cursor) {
+        throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_INCOMPLETE_POPULATION", "project resources HTTP page claims more data without a cursor.");
+      }
+      cursor = page.next_cursor;
+    } while (cursor);
+    if (expectedTotal === null || resources.length !== expectedTotal) {
+      throw new KnowledgeProjectLinksError("KNOWLEDGE_PROJECT_LINKS_INCOMPLETE_POPULATION", "complete HTTP resource enumeration did not match the producer total.");
+    }
+    return resources;
+  }
+}
+function createKnowledgeProjectLinksHttpClient(options) {
+  return new KnowledgeProjectLinksHttpClient(options);
+}
+// package.json
+var package_default = {
+  name: "@hasna/knowledge",
+  version: "0.2.105",
+  description: "Agent-friendly local knowledge CLI with JSON output, pagination, and safe destructive actions",
+  type: "module",
+  exports: {
+    ".": {
+      import: "./dist/index.js",
+      types: "./dist/index.d.ts"
+    },
+    "./sdk": {
+      import: "./dist/sdk.js",
+      types: "./dist/sdk.d.ts"
+    },
+    "./storage": {
+      import: "./dist/storage.js",
+      types: "./dist/storage.d.ts"
+    },
+    "./serve": {
+      import: "./dist/serve.js",
+      types: "./dist/serve.d.ts"
+    }
+  },
+  main: "./dist/index.js",
+  types: "./dist/index.d.ts",
+  bin: {
+    knowledge: "bin/knowledge.js",
+    "knowledge-mcp": "bin/knowledge-mcp.js",
+    "knowledge-serve": "bin/knowledge-serve.js"
+  },
+  files: [
+    "bin",
+    "dist",
+    "scripts/apply-postgres-migrations.mjs",
+    "scripts/live-private-query.mjs",
+    "scripts/lib/remote-temp-dir.mjs",
+    "scripts/smoke-machine-sync-release.mjs",
+    "scripts/smoke-machines-adapter.mjs",
+    "scripts/smoke-open-files-installed-boundary.mjs",
+    "scripts/strip-generated-trailing-whitespace.mjs",
+    "scripts/verify-generated-artifacts.mjs",
+    "docs/architecture/ai-native-knowledge-base.md",
+    "docs/architecture/hosted-wrapper-responsibilities.md",
+    "docs/architecture/hybrid-semantic-search.md",
+    "docs/architecture/machine-sync-schema.md",
+    "docs/examples/app-project-wiki-standard.md",
+    "docs/examples/company-wiki-workflow.md",
+    "docs/migration/global-rules-provenance-import.md",
+    "docs/migration/json-to-sqlite.md",
+    "LICENSE",
+    "README.md"
+  ],
+  scripts: {
+    test: "bun test",
+    "test:cli": "bun test tests/cli.test.ts",
+    "test:package": "bun test tests/package-release.test.ts",
+    "release:pack:check": "node scripts/validate-public-package.mjs",
+    "smoke:machines-adapter": "bun scripts/smoke-machines-adapter.mjs",
+    "smoke:machine-sync-release": "bun scripts/smoke-machine-sync-release.mjs",
+    "smoke:open-files-installed-boundary": "bun scripts/smoke-open-files-installed-boundary.mjs",
+    "migrate:postgres": "bun scripts/apply-postgres-migrations.mjs",
+    "live:private-query": "bun scripts/live-private-query.mjs",
+    serve: "bun src/serve-entry.ts",
+    "verify:generated": "bun scripts/verify-generated-artifacts.mjs",
+    "contracts:conformance": "contracts conformance fixtures",
+    build: "rm -rf dist && bun build --target=bun --outfile=bin/knowledge.js --minify --external pg --external @hasna/machines --external @hasna/machines/consumer --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/cli.ts && bun build --target=bun --outfile=bin/knowledge-mcp.js --external pg --external @hasna/machines --external @hasna/machines/consumer --external @modelcontextprotocol/sdk --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/mcp.js && bun build --target=bun --outfile=bin/knowledge-serve.js --external pg --external @hasna/machines --external @hasna/machines/consumer --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/serve-entry.ts && bun build ./src/index.ts ./src/storage.ts ./src/serve.ts ./src/sdk.ts --outdir ./dist --target bun --external pg --external @hasna/machines --external @hasna/machines/consumer --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek && bun scripts/strip-generated-trailing-whitespace.mjs && bun run tsc -p tsconfig.build.json",
+    prepublishOnly: "bun run contracts:conformance && contracts no-cloud-scan . && bun run build && node scripts/validate-public-package.mjs"
+  },
+  keywords: [
+    "knowledge",
+    "cli",
+    "agents",
+    "json",
+    "notes",
+    "local",
+    "store"
+  ],
+  license: "Apache-2.0",
+  publishConfig: {
+    registry: "https://registry.npmjs.org",
+    access: "public"
+  },
+  repository: {
+    type: "git",
+    url: "git+https://github.com/hasna/knowledge.git"
+  },
+  bugs: {
+    url: "https://github.com/hasna/knowledge/issues"
+  },
+  author: "Hasna Inc. <hasna@example.com>",
+  engines: {
+    bun: ">=1.0",
+    node: ">=18"
+  },
+  dependencies: {
+    "@ai-sdk/anthropic": "^3.0.81",
+    "@ai-sdk/deepseek": "^2.0.35",
+    "@ai-sdk/openai": "^3.0.68",
+    "@aws-sdk/client-s3": "^3.1063.0",
+    "@aws-sdk/credential-providers": "^3.1063.0",
+    "@hasna/events": "0.1.14",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@types/json-schema": "^7.0.15",
+    ai: "^6.0.197",
+    commander: "^13.1.0",
+    pg: "^8.16.3",
+    zod: "^4.3.6"
+  },
+  devDependencies: {
+    "@electric-sql/pglite": "^0.5.4",
+    "@hasna/contracts": "0.10.6",
+    "@types/bun": "^1.3.14",
+    "@types/pg": "^8.15.6",
+    typescript: "5.9.3"
+  }
+};
+
+// src/service.ts
+function resolvePeerWorkspace(input) {
+  const target = resolve5(input);
+  if (existsSync14(join8(target, "knowledge.db")) || existsSync14(join8(target, "config.json"))) {
+    return ensureKnowledgeWorkspace(target);
+  }
+  return ensureKnowledgeWorkspace(workspaceForHome(projectKnowledgeHome(target)).home);
+}
+function workspaceMachineId(workspace) {
+  return `${hostname3()}:${createHash20("sha256").update(workspace.home).digest("hex").slice(0, 12)}`;
+}
+function shellQuote2(value) {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+function knowledgeCliCommand(args) {
+  return ["knowledge", ...args].map(shellQuote2).join(" ");
+}
+function remoteKnowledgeCommand(peerWorkspace, args) {
+  return `cd ${shellQuote2(peerWorkspace)} && knowledge ${args.map(shellQuote2).join(" ")}`;
+}
+function serviceMachineIsLocal(machine) {
+  return !machine || machine === "local" || machine === "localhost";
+}
+function workspaceSummary(resolvedWorkspace, projectRoot) {
+  return {
+    source: resolvedWorkspace.source,
+    adapter: resolvedWorkspace.adapter,
+    project_root: projectRoot,
+    project_root_source: resolvedWorkspace.project_root_source,
+    workspace_root: resolvedWorkspace.workspace_root,
+    workspace_root_source: resolvedWorkspace.workspace_root_source,
+    open_files_root: resolvedWorkspace.open_files_root,
+    open_files_root_source: resolvedWorkspace.open_files_root_source,
+    trust_status: resolvedWorkspace.trust_status,
+    auth_status: resolvedWorkspace.auth_status,
+    current: resolvedWorkspace.current,
+    primary: resolvedWorkspace.primary,
+    diagnostics: resolvedWorkspace.diagnostics,
+    repair_hints: resolvedWorkspace.repair_hints,
+    evidence: resolvedWorkspace.evidence,
+    cacheability: resolvedWorkspace.cacheability,
+    warnings: resolvedWorkspace.warnings
+  };
+}
+function routeSummary(resolvedMachine) {
+  return {
+    source: resolvedMachine.source,
+    adapter: resolvedMachine.adapter,
+    target: resolvedMachine.target,
+    route: resolvedMachine.route,
+    target_kind: resolvedMachine.targetKind,
+    confidence: resolvedMachine.confidence,
+    evidence: resolvedMachine.evidence,
+    cacheability: resolvedMachine.cacheability
+  };
+}
+function parseJsonStringArray(value) {
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.filter((entry) => typeof entry === "string") : [];
+  } catch {
+    return [];
+  }
+}
+function recordValue(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+function stringValue(value) {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+function numberValue(value) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+function booleanValue(value) {
+  return typeof value === "boolean" ? value : null;
+}
+function stringArrayValue(value) {
+  return Array.isArray(value) ? value.filter((entry) => typeof entry === "string") : [];
+}
+function registryCacheability(value, resolver, prefix) {
+  const raw = recordValue(value);
+  const observedAt = stringValue(raw.observed_at) ?? stringValue(resolver[`${prefix}_observed_at`]);
+  const sourceAuthority = stringValue(raw.source_authority) ?? stringValue(resolver[`${prefix}_source_authority`]);
+  if (!observedAt || !sourceAuthority)
+    return null;
+  return {
+    observed_at: observedAt,
+    verified_at: stringValue(raw.verified_at),
+    expires_at: stringValue(raw.expires_at) ?? stringValue(resolver[`${prefix}_expires_at`]),
+    ttl_ms: numberValue(raw.ttl_ms),
+    source_authority: sourceAuthority,
+    confidence: stringValue(raw.confidence) ?? (prefix === "route" ? stringValue(resolver.route_confidence) : null),
+    cacheable: booleanValue(raw.cacheable) ?? booleanValue(resolver[`${prefix}_cacheable`]) ?? false,
+    stale: booleanValue(raw.stale) ?? booleanValue(resolver[`${prefix}_stale`]) ?? false,
+    reasons: stringArrayValue(raw.reasons)
+  };
+}
+function registryMachineMatches(row, machine) {
+  return row.machine_id === machine || row.hostname === machine || row.ssh_target === machine || row.tailscale_dns === machine || parseJsonStringArray(row.tailscale_ips_json).includes(machine);
+}
+function findRegistryMachine(dbPath, machine) {
+  return listKnowledgeMachines(dbPath).find((row) => registryMachineMatches(row, machine)) ?? null;
+}
+function registryResolverEvidence(row) {
+  return recordValue(parseMetadataJson(row.metadata_json).resolver_evidence);
+}
+function registryResolverCapabilities(row) {
+  return recordValue(parseMetadataJson(row.capabilities_json).resolver);
+}
+function registryRouteKind(row) {
+  const resolver = registryResolverCapabilities(row);
+  const kind = stringValue(resolver.route_kind);
+  if (kind === "local" || kind === "lan" || kind === "tailscale" || kind === "ssh" || kind === "unknown")
+    return kind;
+  if (row.tailscale_dns && row.ssh_target === row.tailscale_dns)
+    return "tailscale";
+  return row.ssh_target ? "ssh" : "unknown";
+}
+function registryRouteTargetKind(row) {
+  const resolver = registryResolverCapabilities(row);
+  const kind = stringValue(resolver.route_target_kind);
+  if (kind === "local" || kind === "lan" || kind === "tailscale" || kind === "ssh" || kind === "unknown")
+    return kind;
+  return registryRouteKind(row);
+}
+function registryRouteConfidence(row) {
+  return stringValue(registryResolverCapabilities(row).route_confidence) ?? "medium";
+}
+function routeFromRegistry(row, machine, fallback) {
+  const evidence = registryResolverEvidence(row);
+  const routeEvidence = recordValue(evidence.route);
+  const resolver = registryResolverCapabilities(row);
+  return {
+    target: row.ssh_target ?? row.tailscale_dns ?? row.hostname ?? row.machine_id,
+    route: registryRouteKind(row),
+    targetKind: registryRouteTargetKind(row),
+    confidence: registryRouteConfidence(row),
+    source: "registry",
+    adapter: fallback.adapter,
+    evidence: {
+      registry: true,
+      requested_machine_id: machine,
+      machine_id: row.machine_id,
+      recorded_at: row.updated_at,
+      route: routeEvidence
+    },
+    cacheability: registryCacheability(routeEvidence.cacheability, resolver, "route") ?? fallback.cacheability,
+    warnings: [...new Set([...fallback.warnings, "registry_route_fallback"])]
+  };
+}
+function workspaceFromRegistry(row, machine, fallback) {
+  if (!row.workspace_home)
+    return null;
+  const evidence = registryResolverEvidence(row);
+  const workspaceEvidence = recordValue(evidence.workspace);
+  const resolver = registryResolverCapabilities(row);
+  return {
+    ok: true,
+    source: "registry",
+    adapter: fallback.adapter,
+    requested_machine_id: machine,
+    machine_id: row.machine_id,
+    project_id: stringValue(workspaceEvidence.project_id) ?? fallback.project_id,
+    repo_name: stringValue(workspaceEvidence.repo_name) ?? fallback.repo_name,
+    project_root: row.workspace_home,
+    project_root_source: stringValue(resolver.project_root_source) ?? "registry",
+    workspace_root: stringValue(workspaceEvidence.workspace_root),
+    workspace_root_source: stringValue(resolver.workspace_root_source) ?? "registry",
+    open_files_root: stringValue(workspaceEvidence.open_files_root),
+    open_files_root_source: stringValue(resolver.open_files_root_source) ?? "registry",
+    trust_status: stringValue(resolver.trust_status) ?? "unknown",
+    auth_status: stringValue(resolver.auth_status) ?? "unknown",
+    current: false,
+    primary: false,
+    diagnostics: [],
+    repair_hints: [],
+    evidence: {
+      registry: true,
+      requested_machine_id: machine,
+      machine_id: row.machine_id,
+      recorded_at: row.updated_at,
+      workspace: workspaceEvidence
+    },
+    cacheability: registryCacheability(workspaceEvidence.cacheability, resolver, "workspace") ?? fallback.cacheability,
+    warnings: [...new Set([...fallback.warnings, "registry_workspace_fallback"])]
+  };
+}
+function workspaceReadinessMessage(resolvedWorkspace) {
+  if (!resolvedWorkspace)
+    return null;
+  const nonOkDiagnostics = resolvedWorkspace.diagnostics.filter((entry) => entry.severity !== "ok");
+  const firstRepair = resolvedWorkspace.repair_hints[0];
+  if (!nonOkDiagnostics.length && !resolvedWorkspace.warnings.length && !firstRepair)
+    return null;
+  return [
+    nonOkDiagnostics.length ? `workspace diagnostics: ${nonOkDiagnostics.map((entry) => `${entry.id}=${entry.status}`).join(", ")}` : null,
+    resolvedWorkspace.warnings.length ? `warnings: ${resolvedWorkspace.warnings.join(", ")}` : null,
+    firstRepair ? `repair: ${firstRepair.shell_command}` : null
+  ].filter(Boolean).join("; ");
+}
+function syncCommand(input) {
+  return {
+    id: input.id,
+    reason: input.reason,
+    command: ["knowledge", ...input.args],
+    shell_command: knowledgeCliCommand(input.args)
+  };
+}
+function countQuery(dbPath, sql) {
+  const db = openKnowledgeDb(dbPath);
+  try {
+    return Number(db.query(sql).get()?.count ?? 0);
+  } finally {
+    db.close();
+  }
+}
+function openFilesBoundaryStatus(dbPath, resolvedWorkspace) {
+  const openFilesRefs = countQuery(dbPath, "SELECT COUNT(*) AS count FROM sources WHERE uri LIKE 'open-files://%'");
+  const metadataMentions = countQuery(dbPath, "SELECT COUNT(*) AS count FROM sources WHERE metadata_json LIKE '%open-files://%' OR metadata_json LIKE '%source_ref%'");
+  const extractedTextArtifacts = countQuery(dbPath, "SELECT COUNT(*) AS count FROM source_revisions WHERE extracted_text_uri IS NOT NULL");
+  const rawPayloadSentinelHits = countQuery(dbPath, [
+    "SELECT COUNT(*) AS count FROM sources",
+    "WHERE metadata_json LIKE '%raw_bytes%'",
+    "OR metadata_json LIKE '%raw_content%'",
+    "OR metadata_json LIKE '%content_base64%'",
+    "OR metadata_json LIKE '%source_bytes%'"
+  ].join(" "));
+  const ok = rawPayloadSentinelHits === 0;
+  return {
+    ok,
+    source_of_truth: "open-files",
+    configured_root: resolvedWorkspace?.open_files_root ?? null,
+    configured_root_source: resolvedWorkspace?.open_files_root_source ?? null,
+    source_refs: {
+      open_files: openFilesRefs,
+      metadata_mentions: metadataMentions
+    },
+    extracted_text_artifacts: extractedTextArtifacts,
+    raw_source_bytes_owned_by: "open-files",
+    raw_payload_sentinel_hits: rawPayloadSentinelHits,
+    message: ok ? `${openFilesRefs} open-files source ref(s); raw source bytes remain owned by open-files` : `${rawPayloadSentinelHits} raw source payload metadata sentinel(s) found`
+  };
+}
+var RAW_ARTIFACT_PAYLOAD_METADATA_KEYS = new Set([
+  "raw",
+  "raw_bytes",
+  "raw_content",
+  "content_base64",
+  "source_bytes",
+  "source_content",
+  "body",
+  "body_bytes"
+]);
+function metadataHasRawPayloadSentinel(value, depth = 0) {
+  if (depth > 8)
+    return false;
+  if (!value || typeof value !== "object")
+    return false;
+  if (Array.isArray(value))
+    return value.some((entry) => metadataHasRawPayloadSentinel(entry, depth + 1));
+  for (const [key, entry] of Object.entries(value)) {
+    if (RAW_ARTIFACT_PAYLOAD_METADATA_KEYS.has(key.toLowerCase()))
+      return true;
+    if (metadataHasRawPayloadSentinel(entry, depth + 1))
+      return true;
+  }
+  return false;
+}
+function parseMetadataJson(value) {
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+function inventoryLimit(value, fallback = 20, max = 200) {
+  if (!Number.isFinite(value) || value <= 0)
+    return fallback;
+  return Math.min(Math.floor(value), max);
+}
+function previewText(value, max = 220) {
+  const text = value ?? "";
+  return text.length > max ? `${text.slice(0, max)}...` : text;
+}
+function rowsWithJsonFields(rows, fields = ["metadata_json"]) {
+  return rows.map((row) => {
+    const next = { ...row };
+    for (const field of fields) {
+      const raw = next[field];
+      if (typeof raw === "string") {
+        const parsedField = field.endsWith("_json") ? field.slice(0, -5) : field;
+        next[parsedField] = parseMetadataJson(raw);
+        delete next[field];
+      }
+    }
+    return next;
+  });
+}
+function parseInventoryJsonArray(value) {
+  if (typeof value !== "string")
+    return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+function parseInventoryJsonObject(value) {
+  if (typeof value !== "string")
+    return {};
+  return parseMetadataJson(value);
+}
+function promotionCandidateInventoryRow(row) {
+  const next = { ...row };
+  next.source_refs = parseInventoryJsonArray(next.source_refs_json);
+  next.evidence_refs = parseInventoryJsonArray(next.evidence_refs_json);
+  next.requires_approval = next.requires_approval === 1 || next.requires_approval === true;
+  next.checks = parseInventoryJsonObject(next.checks_json);
+  next.metadata = parseInventoryJsonObject(next.metadata_json);
+  delete next.source_refs_json;
+  delete next.evidence_refs_json;
+  delete next.checks_json;
+  delete next.metadata_json;
+  return next;
+}
+function durableRecordInventoryRow(row) {
+  const next = { ...row };
+  next.source_refs = parseInventoryJsonArray(next.source_refs_json);
+  next.evidence_refs = parseInventoryJsonArray(next.evidence_refs_json);
+  next.metadata = parseInventoryJsonObject(next.metadata_json);
+  delete next.source_refs_json;
+  delete next.evidence_refs_json;
+  delete next.metadata_json;
+  return next;
+}
+function selectInventoryRows(db, sql, params = []) {
+  return db.query(sql).all(...params);
+}
+function readLegacyInventoryStore(path) {
+  if (!existsSync14(path))
+    return { exists: false, read_error: null, items: [] };
+  try {
+    const parsed = JSON.parse(readFileSync12(path, "utf8"));
+    if (!parsed || !Array.isArray(parsed.items)) {
+      return { exists: true, read_error: "invalid_store_shape", items: [] };
+    }
+    return { exists: true, read_error: null, items: parsed.items };
+  } catch (error) {
+    return {
+      exists: true,
+      read_error: error instanceof Error ? error.message : String(error),
+      items: []
+    };
+  }
+}
+function legacyInventoryItem(item) {
+  return {
+    id: item.id,
+    short_id: item.short_id ?? null,
+    title: item.title,
+    content_preview: previewText(item.content),
+    url: item.url ?? null,
+    tags: item.tags ?? [],
+    metadata: item.metadata ?? {},
+    archived: item.archived === true,
+    created_at: item.created_at,
+    updated_at: item.updated_at
+  };
+}
+function emptyKnowledgeDbStats() {
+  return {
+    schema_version: 0,
+    sources: 0,
+    source_revisions: 0,
+    chunks: 0,
+    wiki_pages: 0,
+    citations: 0,
+    indexes: 0,
+    runs: 0,
+    run_events: 0,
+    redaction_findings: 0,
+    audit_events: 0,
+    approval_gates: 0,
+    storage_objects: 0,
+    embeddings: 0,
+    vector_entries: 0,
+    reindex_queue: 0,
+    knowledge_machines: 0,
+    sync_snapshots: 0,
+    sync_changes: 0,
+    sync_conflicts: 0,
+    sync_table_clocks: 0,
+    sync_imports: 0,
+    promotion_candidates: 0,
+    durable_records: 0
+  };
+}
+function emptySearchResult(query, limit, semantic = false) {
+  return {
+    query,
+    limit,
+    offset: 0,
+    mode: {
+      keyword: true,
+      catalog: true,
+      semantic
+    },
+    semantic_provider: null,
+    semantic_model: null,
+    semantic_dimensions: null,
+    counts: {
+      keyword_results: 0,
+      catalog_results: 0,
+      semantic_results: 0,
+      merged_results: 0
+    },
+    warnings: ["knowledge_db_missing"],
+    results: []
+  };
+}
+function normalizeContextQuery(query) {
+  return query.normalize("NFKC").trim().replace(/\s+/g, " ").toLowerCase();
+}
+function emptyContextPack(query, limit, semantic = false) {
+  const search = emptySearchResult(query, limit, semantic);
+  return {
+    query,
+    normalized_query: normalizeContextQuery(query),
+    created_at: new Date().toISOString(),
+    mode: search.mode,
+    warnings: search.warnings,
+    search_counts: search.counts,
+    results: [],
+    citations: [],
+    excerpts: [],
+    graph: {
+      citations: [],
+      backlinks: []
+    },
+    notes: {
+      permissions: [],
+      freshness: []
+    }
+  };
+}
+function legacyStorePathForRead(scope, workspace, preferred) {
+  const current = preferred ?? workspace.jsonStorePath;
+  if (existsSync14(current))
+    return current;
+  if (scope === "global") {
+    const legacy = legacyGlobalStorePath();
+    if (existsSync14(legacy))
+      return legacy;
+  }
+  return current;
+}
+function estimateTokensForValue2(value) {
+  const text = JSON.stringify(value);
+  return Math.max(1, Math.ceil(text.length / 4));
+}
+function compactText(value, maxChars) {
+  const normalized = (value ?? "").normalize("NFKC").trim().replace(/\s+/g, " ");
+  if (normalized.length <= maxChars)
+    return normalized;
+  return `${normalized.slice(0, Math.max(0, maxChars - 1)).trim()}...`;
+}
+function redactPreviewForPack(value, policy, maxChars) {
+  const redacted = redactSecrets(compactText(value, maxChars), policy);
+  return { text: redacted.text, redactions: redacted.findings.length };
+}
+function legacyAgentContextPack(options, context, policy) {
+  const now = options.now ?? new Date;
+  const source = options.source ?? "search";
+  const purpose = options.purpose ?? (source === "loops" || source === "runs" ? "proposal" : "agent_context");
+  const query = (options.query ?? options.topic ?? context.query).normalize("NFKC").trim().replace(/\s+/g, " ");
+  const maxItems = Math.max(1, Math.min(options.maxItems ?? options.limit ?? 8, 50));
+  const maxTokens = Math.max(500, Math.min(options.maxTokens ?? 6000, 1e5));
+  let redactions = 0;
+  const citations = context.citations.slice(0, Math.max(maxItems * 2, maxItems)).map((citation, index) => {
+    const quote = redactPreviewForPack(citation.quote, policy, index < 3 ? 220 : 140);
+    redactions += quote.redactions;
+    const ref = citation.source_ref ?? citation.source_uri ?? citation.artifact_path ?? citation.artifact_uri ?? citation.id;
+    return {
+      id: `cite_${createHash20("sha256").update(`${citation.id}\x00${ref}`).digest("hex").slice(0, 12)}`,
+      kind: citation.artifact_uri || citation.artifact_path ? "artifact" : "source",
+      ref,
+      source_ref: citation.source_ref,
+      source_uri: citation.source_uri,
+      artifact_uri: citation.artifact_uri,
+      artifact_path: citation.artifact_path,
+      run_id: null,
+      run_event_id: null,
+      revision: citation.revision,
+      hash: citation.hash,
+      chunk_id: citation.chunk_id,
+      offsets: {
+        start: citation.start_offset,
+        end: citation.end_offset
+      },
+      quote_preview: quote.text
+    };
+  });
+  const citationByRetrievalId = new Map(context.citations.map((citation, index) => [citation.id, citations[index]]));
+  const evidence = context.excerpts.slice(0, Math.max(maxItems * 2, maxItems)).map((excerpt2) => {
+    const result = context.results.find((entry) => entry.id === excerpt2.result_id);
+    const citation = excerpt2.citation_id ? citationByRetrievalId.get(excerpt2.citation_id) : undefined;
+    const preview2 = redactPreviewForPack(excerpt2.text, policy, 520);
+    redactions += preview2.redactions;
+    return {
+      id: `ev_${createHash20("sha256").update(`${excerpt2.kind}\x00${excerpt2.result_id}\x00${excerpt2.citation_id ?? ""}`).digest("hex").slice(0, 14)}`,
+      kind: excerpt2.kind,
+      title: compactText(result?.title ?? citation?.ref ?? excerpt2.kind, 100),
+      text_preview: preview2.text,
+      score: Number(excerpt2.score.toFixed(6)),
+      citation_ids: citation ? [citation.id] : [],
+      provenance: {
+        source,
+        record_ref: `${excerpt2.kind}:${excerpt2.result_id}`,
+        created_at: context.created_at,
+        updated_at: null,
+        metadata_keys: []
+      }
+    };
+  }).sort((a, b) => b.score - a.score || a.id.localeCompare(b.id)).slice(0, maxItems);
+  const usedCitationIds = new Set(evidence.flatMap((entry) => entry.citation_ids));
+  const usedCitations = citations.filter((citation) => usedCitationIds.has(citation.id));
+  const warnings = Array.from(new Set(context.warnings));
+  const idempotencyKey = `ctx_${createHash20("sha256").update([source, purpose, query, warnings.join(","), evidence.map((entry) => entry.id).join(",")].join("\x00")).digest("hex").slice(0, 20)}`;
+  const pack = {
+    ok: true,
+    format: "knowledge-agent-context-pack",
+    version: 1,
+    created_at: now.toISOString(),
+    source,
+    purpose,
+    query,
+    topic: options.topic ?? null,
+    since: options.since ?? null,
+    dry_run: true,
+    idempotency_key: idempotencyKey,
+    budgets: {
+      max_tokens: maxTokens,
+      estimated_tokens: 0,
+      max_items: maxItems,
+      items_included: evidence.length,
+      items_available: context.excerpts.length,
+      items_truncated: Math.max(0, context.excerpts.length - evidence.length),
+      token_budget_exceeded: false
+    },
+    safety: {
+      raw_artifact_content_included: false,
+      durable_writes_performed: false,
+      redactions,
+      reminders: [
+        "This pack is read-only and performs no durable writes.",
+        "Legacy JSON note evidence is bounded and redacted before inclusion."
+      ]
+    },
+    citations: usedCitations,
+    evidence,
+    duplicate_candidates: [],
+    outline: {
+      title: query ? `Knowledge context: ${compactText(query, 80)}` : "Knowledge context",
+      bullets: evidence.length > 0 ? evidence.slice(0, 5).map((entry) => `${entry.id}: ${entry.title}`) : ["No matching bounded evidence was found."],
+      evidence_ids: evidence.slice(0, 8).map((entry) => entry.id),
+      duplicate_candidate_ids: [],
+      next_actions: [
+        "Use evidence_ids and citation_ids in prompts instead of raw excerpts when possible.",
+        "Inspect cited refs only if the bounded preview is insufficient.",
+        "Use knowledge build/file-answer only with explicit approval for durable writes."
+      ]
+    },
+    warnings,
+    message: `${evidence.length} bounded evidence item(s), estimated under ${maxTokens} token(s)`
+  };
+  pack.budgets.estimated_tokens = estimateTokensForValue2(pack);
+  pack.budgets.token_budget_exceeded = pack.budgets.estimated_tokens > maxTokens;
+  pack.message = `${pack.evidence.length} bounded evidence item(s), estimated ${pack.budgets.estimated_tokens}/${maxTokens} token(s)`;
+  return pack;
+}
+function emptyReindexHealth() {
+  return {
+    schema_version: 0,
+    chunks: 0,
+    vector_entries: 0,
+    missing_embeddings: 0,
+    queued: {},
+    stale_revisions: 0
+  };
+}
+function emptyEmbeddingStatus() {
+  return {
+    total_embeddings: 0,
+    total_vector_entries: 0,
+    indexes: []
+  };
+}
+function emptySyncStatus(input) {
+  return {
+    ok: true,
+    scope: input.scope,
+    workspace_home: input.workspaceHome,
+    sqlite_schema_version: 0,
+    local_machine_id: input.localMachineId ?? null,
+    machines: {
+      total: 0,
+      rows: []
+    },
+    snapshots: {
+      total: 0,
+      latest: null
+    },
+    changes: {
+      total: 0,
+      by_operation: []
+    },
+    clocks: {
+      total: 0,
+      rows: []
+    },
+    imports: {
+      total: 0,
+      latest: null
+    },
+    conflicts: {
+      total: 0,
+      by_status: [],
+      open: 0
+    },
+    table_counts: {},
+    message: "0 machine(s), 0 open sync conflict(s)"
+  };
+}
+function emptyAgentContextPack(options) {
+  const now = options.now ?? new Date;
+  const source = options.source ?? "search";
+  const purpose = options.purpose ?? (source === "loops" || source === "runs" ? "proposal" : "agent_context");
+  const query = (options.query ?? options.topic ?? "").normalize("NFKC").trim().replace(/\s+/g, " ");
+  const maxItems = Math.max(1, Math.min(options.maxItems ?? options.limit ?? 8, 50));
+  const maxTokens = Math.max(500, Math.min(options.maxTokens ?? 6000, 1e5));
+  const idempotencyKey = `ctx_${createHash20("sha256").update(["empty", source, purpose, query, options.topic ?? "", options.since ?? ""].join("\x00")).digest("hex").slice(0, 20)}`;
+  return {
+    ok: true,
+    format: "knowledge-agent-context-pack",
+    version: 1,
+    created_at: now.toISOString(),
+    source,
+    purpose,
+    query,
+    topic: options.topic ?? null,
+    since: options.since ?? null,
+    dry_run: true,
+    idempotency_key: idempotencyKey,
+    budgets: {
+      max_tokens: maxTokens,
+      estimated_tokens: 0,
+      max_items: maxItems,
+      items_included: 0,
+      items_available: 0,
+      items_truncated: 0,
+      token_budget_exceeded: false
+    },
+    safety: {
+      raw_artifact_content_included: false,
+      durable_writes_performed: false,
+      redactions: 0,
+      reminders: [
+        "This pack is read-only and performs no durable writes.",
+        "No knowledge.db exists for this scope yet."
+      ]
+    },
+    citations: [],
+    evidence: [],
+    duplicate_candidates: [],
+    outline: {
+      title: query ? `Context for ${query}` : "Knowledge context",
+      bullets: [],
+      evidence_ids: [],
+      duplicate_candidate_ids: [],
+      next_actions: []
+    },
+    warnings: ["knowledge_db_missing"],
+    message: `0 bounded evidence item(s), estimated 0/${maxTokens} token(s)`
+  };
+}
+function storagePrefixKey(storage) {
+  const prefix = storage.artifact_store.s3?.prefix?.replace(/^\/+|\/+$/g, "");
+  return prefix ? `${prefix}/` : null;
+}
+function artifactManifestStatus(dbPath, storage) {
+  const db = openKnowledgeDb(dbPath);
+  try {
+    const rows = db.query(`SELECT artifact_uri, kind, hash, size_bytes, metadata_json
+       FROM storage_objects
+       ORDER BY artifact_uri ASC`).all();
+    const byKind = new Map;
+    let withHash = 0;
+    let withSize = 0;
+    let totalSizeBytes = 0;
+    let matchingPrefix = 0;
+    let missingKey = 0;
+    let prefixedKey = 0;
+    let rawPayloadSentinelHits = 0;
+    let withModifiedAt = 0;
+    let invalidModifiedAt = 0;
+    let withProvenance2 = 0;
+    let withProvenanceArtifactKey = 0;
+    let provenanceArtifactKeyMismatches = 0;
+    const generatedFrom = new Map;
+    const mismatchedExamples = [];
+    const prefixedExamples = [];
+    const invalidModifiedExamples = [];
+    const provenanceExamples = [];
+    const expectedPrefix = storage.artifact_store.uri_prefix;
+    const s3StoragePrefix = storagePrefixKey(storage);
+    for (const row of rows) {
+      byKind.set(row.kind, (byKind.get(row.kind) ?? 0) + 1);
+      if (row.hash?.startsWith("sha256:"))
+        withHash += 1;
+      if (typeof row.size_bytes === "number" && row.size_bytes >= 0) {
+        withSize += 1;
+        totalSizeBytes += row.size_bytes;
+      }
+      if (row.artifact_uri.startsWith(expectedPrefix)) {
+        matchingPrefix += 1;
+      } else if (mismatchedExamples.length < 5) {
+        mismatchedExamples.push(row.artifact_uri);
+      }
+      const metadata = parseMetadataJson(row.metadata_json);
+      if (metadataHasRawPayloadSentinel(metadata))
+        rawPayloadSentinelHits += 1;
+      const key = typeof metadata.key === "string" ? metadata.key : null;
+      if (!key) {
+        missingKey += 1;
+      } else if (s3StoragePrefix && key.startsWith(s3StoragePrefix)) {
+        prefixedKey += 1;
+        if (prefixedExamples.length < 5)
+          prefixedExamples.push(key);
+      }
+      const modifiedAt = typeof metadata.artifact_modified_at === "string" ? metadata.artifact_modified_at : null;
+      if (modifiedAt) {
+        if (Number.isNaN(Date.parse(modifiedAt))) {
+          invalidModifiedAt += 1;
+          if (invalidModifiedExamples.length < 5)
+            invalidModifiedExamples.push(row.artifact_uri);
+        } else {
+          withModifiedAt += 1;
+        }
+      }
+      const provenance = metadata.provenance && typeof metadata.provenance === "object" && !Array.isArray(metadata.provenance) ? metadata.provenance : null;
+      if (provenance) {
+        withProvenance2 += 1;
+        const artifactKey = typeof provenance.artifact_key === "string" ? provenance.artifact_key : null;
+        const generated = typeof provenance.generated_from === "string" ? provenance.generated_from : "unknown";
+        generatedFrom.set(generated, (generatedFrom.get(generated) ?? 0) + 1);
+        if (artifactKey) {
+          withProvenanceArtifactKey += 1;
+          if (key && artifactKey !== key) {
+            provenanceArtifactKeyMismatches += 1;
+            if (provenanceExamples.length < 5)
+              provenanceExamples.push(`${row.artifact_uri}:provenance.artifact_key=${artifactKey}:key=${key}`);
+          }
+        } else if (provenanceExamples.length < 5) {
+          provenanceExamples.push(`${row.artifact_uri}:missing_provenance_artifact_key`);
+        }
+      } else if (provenanceExamples.length < 5) {
+        provenanceExamples.push(`${row.artifact_uri}:missing_provenance`);
+      }
+    }
+    const missingHash = rows.length - withHash;
+    const missingSize = rows.length - withSize;
+    const missingModifiedAt = rows.length - withModifiedAt - invalidModifiedAt;
+    const missingProvenance = rows.length - withProvenance2;
+    const missingProvenanceArtifactKey = withProvenance2 - withProvenanceArtifactKey;
+    const mismatchedPrefix = rows.length - matchingPrefix;
+    const warnings = [
+      missingHash > 0 ? `artifact_manifest_missing_hash:${missingHash}` : null,
+      missingSize > 0 ? `artifact_manifest_missing_size:${missingSize}` : null,
+      missingKey > 0 ? `artifact_manifest_missing_key:${missingKey}` : null,
+      mismatchedPrefix > 0 ? `artifact_manifest_uri_prefix_mismatch:${mismatchedPrefix}` : null,
+      prefixedKey > 0 ? `artifact_manifest_s3_key_contains_storage_prefix:${prefixedKey}` : null,
+      invalidModifiedAt > 0 ? `artifact_manifest_invalid_modified_at:${invalidModifiedAt}` : null,
+      missingProvenance > 0 ? `artifact_manifest_missing_provenance:${missingProvenance}` : null,
+      missingProvenanceArtifactKey > 0 ? `artifact_manifest_missing_provenance_artifact_key:${missingProvenanceArtifactKey}` : null,
+      provenanceArtifactKeyMismatches > 0 ? `artifact_manifest_provenance_key_mismatch:${provenanceArtifactKeyMismatches}` : null,
+      rawPayloadSentinelHits > 0 ? `artifact_manifest_raw_payload_sentinels:${rawPayloadSentinelHits}` : null
+    ].filter((entry) => Boolean(entry));
+    const ok = warnings.length === 0;
+    return {
+      ok,
+      read_only: true,
+      storage_type: storage.storage_type,
+      artifact_uri_prefix: expectedPrefix,
+      s3: storage.artifact_store.s3,
+      artifacts: {
+        total: rows.length,
+        by_kind: [...byKind.entries()].map(([kind, count3]) => ({ kind, count: count3 })).sort((a, b) => a.kind.localeCompare(b.kind)),
+        with_hash: withHash,
+        missing_hash: missingHash,
+        with_size: withSize,
+        missing_size: missingSize,
+        total_size_bytes: totalSizeBytes
+      },
+      modified_time: {
+        with_modified_at: withModifiedAt,
+        missing_modified_at: missingModifiedAt,
+        invalid_modified_at: invalidModifiedAt,
+        examples: invalidModifiedExamples
+      },
+      provenance: {
+        with_provenance: withProvenance2,
+        missing_provenance: missingProvenance,
+        with_artifact_key: withProvenanceArtifactKey,
+        missing_artifact_key: missingProvenanceArtifactKey,
+        artifact_key_mismatches: provenanceArtifactKeyMismatches,
+        generated_from: [...generatedFrom.entries()].map(([value, count3]) => ({ value, count: count3 })).sort((a, b) => a.value.localeCompare(b.value)),
+        examples: provenanceExamples
+      },
+      uri_prefix: {
+        matching: matchingPrefix,
+        mismatched: mismatchedPrefix,
+        examples: mismatchedExamples
+      },
+      keys: {
+        with_key: rows.length - missingKey,
+        missing_key: missingKey,
+        prefixed_with_storage_prefix: prefixedKey,
+        prefixed_examples: prefixedExamples
+      },
+      sync_manifest: {
+        copied_by_sync: true,
+        generated_artifacts_only: true,
+        includes_raw_source_bytes: false,
+        hash_algorithm: "sha256",
+        portable_keys: prefixedKey === 0 && missingKey === 0,
+        tracks_modified_time: withModifiedAt > 0 && invalidModifiedAt === 0,
+        preserves_provenance: missingProvenance === 0 && missingProvenanceArtifactKey === 0 && provenanceArtifactKeyMismatches === 0
+      },
+      raw_payload_sentinel_hits: rawPayloadSentinelHits,
+      warnings,
+      message: ok ? `${rows.length} generated artifact manifest row(s) ready for ${storage.storage_type} sync` : `Generated artifact manifest needs attention: ${warnings.join(", ")}`
+    };
+  } finally {
+    db.close();
+  }
+}
+function artifactManifestKeyRepairCandidates(dbPath, storage) {
+  const prefix = storagePrefixKey(storage);
+  if (!prefix)
+    return [];
+  const db = openKnowledgeDb(dbPath);
+  try {
+    const rows = db.query(`SELECT id, artifact_uri, kind, hash, size_bytes, metadata_json
+       FROM storage_objects
+       ORDER BY artifact_uri ASC`).all();
+    const candidates = [];
+    for (const row of rows) {
+      const metadata = parseMetadataJson(row.metadata_json);
+      const currentKey = typeof metadata.key === "string" ? metadata.key : null;
+      if (!currentKey?.startsWith(prefix))
+        continue;
+      const repaired = currentKey.slice(prefix.length);
+      if (!repaired)
+        continue;
+      candidates.push({
+        id: row.id,
+        artifact_uri: row.artifact_uri,
+        kind: row.kind,
+        current_key: currentKey,
+        repaired_key: normalizeArtifactKey(repaired),
+        hash: row.hash,
+        size_bytes: row.size_bytes
+      });
+    }
+    return candidates;
+  } finally {
+    db.close();
+  }
+}
+function doctorRecommendations(input) {
+  const scopeArgs = ["--scope", input.scope, "--json"];
+  const tableArgs = input.tables?.length ? ["--tables", input.tables.join(",")] : [];
+  const commands = [
+    syncCommand({
+      id: "sync_status",
+      reason: "Inspect local sync registry, clocks, snapshots, and conflicts.",
+      args: ["sync", "status", ...scopeArgs]
+    })
+  ];
+  if (input.machine && !serviceMachineIsLocal(input.machine)) {
+    commands.push(syncCommand({
+      id: "sync_dry_run_remote",
+      reason: "Preview remote machine sync before changing either workspace.",
+      args: [
+        "sync",
+        "dry-run",
+        "--machine",
+        input.machine,
+        ...input.peerWorkspace ? ["--peer-workspace", input.peerWorkspace] : [],
+        ...tableArgs,
+        ...scopeArgs
+      ]
+    }));
+  } else if (input.peerWorkspace) {
+    commands.push(syncCommand({
+      id: "sync_dry_run_peer",
+      reason: "Preview local peer sync before changing either workspace.",
+      args: ["sync", "dry-run", "--peer-workspace", input.peerWorkspace, ...tableArgs, ...scopeArgs]
+    }));
+  }
+  for (const hint of input.resolvedWorkspace?.repair_hints ?? []) {
+    commands.push({
+      id: hint.id,
+      reason: hint.reason,
+      command: hint.command,
+      shell_command: hint.shell_command
+    });
+  }
+  if (input.openConflicts > 0) {
+    commands.push(syncCommand({
+      id: "sync_conflicts",
+      reason: "Review open conflicts before relying on bidirectional sync.",
+      args: ["sync", "conflicts", ...scopeArgs]
+    }));
+  }
+  return commands;
+}
+function resolveSshSpawnSpec() {
+  const command = process.env.KNOWLEDGE_SSH_COMMAND?.trim() || "ssh";
+  const rawArgs = process.env.KNOWLEDGE_SSH_COMMAND_ARGS_JSON;
+  if (!rawArgs)
+    return { command, argsPrefix: [] };
+  let parsed;
+  try {
+    parsed = JSON.parse(rawArgs);
+  } catch (error) {
+    throw new Error(`KNOWLEDGE_SSH_COMMAND_ARGS_JSON must be a JSON string array: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (!Array.isArray(parsed) || !parsed.every((arg) => typeof arg === "string")) {
+    throw new Error("KNOWLEDGE_SSH_COMMAND_ARGS_JSON must be a JSON string array.");
+  }
+  return { command, argsPrefix: parsed };
+}
+function runSshCommand(machine, command, input, resolved) {
+  const ssh = resolveSshSpawnSpec();
+  const result = spawnSync2(ssh.command, [...ssh.argsPrefix, resolved.target, command], {
+    encoding: "utf8",
+    env: process.env,
+    input,
+    maxBuffer: 64 * 1024 * 1024
+  });
+  if ((result.status ?? 1) !== 0) {
+    const route = resolved.source === "open-machines" ? ` via ${resolved.route ?? "resolved"}:${resolved.target}` : "";
+    throw new Error(`ssh ${machine}${route} failed: ${(result.stderr || result.stdout || String(result.status)).trim()}`);
+  }
+  return result.stdout || "";
+}
+function parseRemoteJson(machine, action, raw) {
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    const preview2 = raw.trim().slice(0, 240);
+    throw new Error(`Remote knowledge ${action} on ${machine} did not return JSON. Install a compatible @hasna/knowledge CLI on the remote machine. Output: ${preview2 || String(error)}`);
+  }
+}
+function assertRemoteSyncBundle(machine, value) {
+  if (typeof value !== "object" || value === null || !("format" in value) || value.format !== "knowledge-sync-bundle") {
+    throw new Error(`Remote knowledge sync export on ${machine} did not return a knowledge sync bundle. Install @hasna/knowledge 0.2.32 or newer on the remote machine.`);
+  }
+  const protocolVersion = value.protocol_version;
+  const minProtocolVersion = value.min_protocol_version;
+  if (typeof protocolVersion !== "number" || typeof minProtocolVersion !== "number" || protocolVersion < KNOWLEDGE_SYNC_MIN_PROTOCOL_VERSION || minProtocolVersion > KNOWLEDGE_SYNC_PROTOCOL_VERSION) {
+    throw new Error(`Remote knowledge sync export on ${machine} uses an unsupported sync protocol. Install @hasna/knowledge 0.2.32 or newer on both machines.`);
+  }
+}
+function assertRemoteSyncApplyResult(machine, value) {
+  if (typeof value !== "object" || value === null || !("ok" in value) || !("target" in value) || !("tables" in value) || !("artifacts" in value) || !("conflicts_created" in value)) {
+    throw new Error(`Remote knowledge sync import on ${machine} did not return a sync import result. Install @hasna/knowledge 0.2.32 or newer on the remote machine.`);
+  }
+  const protocolVersion = value.protocol_version;
+  const minProtocolVersion = value.min_protocol_version;
+  if (typeof protocolVersion !== "number" || typeof minProtocolVersion !== "number" || protocolVersion < KNOWLEDGE_SYNC_MIN_PROTOCOL_VERSION || minProtocolVersion > KNOWLEDGE_SYNC_PROTOCOL_VERSION) {
+    throw new Error(`Remote knowledge sync import on ${machine} uses an unsupported sync protocol. Install @hasna/knowledge 0.2.32 or newer on both machines.`);
+  }
+}
+
+class KnowledgeSemanticSearchUnavailableError extends Error {
+  code = "semantic_query_unavailable";
+  constructor() {
+    super("semantic_query_unavailable: the HTTP Knowledge item store has no configured vector index.");
+    this.name = "KnowledgeSemanticSearchUnavailableError";
+  }
+}
+
+class KnowledgeService {
+  options;
+  ensuredWorkspace;
+  cachedConfig;
+  cachedProjectLinksAuthority;
+  constructor(options = {}) {
+    this.options = options;
+    assertNoRetiredKnowledgeStorageSelector(process.env);
+  }
+  get scope() {
+    return this.options.scope ?? "global";
+  }
+  get workspace() {
+    return this.ensuredWorkspace ?? resolveScopedWorkspace(this.options.scope, this.options.cwd);
+  }
+  ensureWorkspace() {
+    if (!this.ensuredWorkspace)
+      this.ensuredWorkspace = ensureKnowledgeWorkspace(this.workspace.home);
+    return this.ensuredWorkspace;
+  }
+  jsonStorePath() {
+    return this.ensureWorkspace().jsonStorePath;
+  }
+  itemStore() {
+    const workspace = this.ensureWorkspace();
+    return resolveItemStore({
+      storePath: workspace.jsonStorePath,
+      storePathOverridden: false
+    });
+  }
+  projectLinksAuthority() {
+    if (this.options.projectLinksAuthority)
+      return this.options.projectLinksAuthority;
+    if (this.cachedProjectLinksAuthority)
+      return this.cachedProjectLinksAuthority;
+    if (usesKnowledgeHttpTransport()) {
+      const { apiKey } = getKnowledgeApiKey(process.env);
+      if (!apiKey) {
+        throw new Error("Knowledge project links require the configured API credential when using HTTP.");
+      }
+      this.cachedProjectLinksAuthority = createKnowledgeProjectLinksHttpClient({
+        baseUrl: resolveKnowledgeApiUrl(process.env),
+        apiKey
+      });
+      return this.cachedProjectLinksAuthority;
+    }
+    const workspace = this.ensureWorkspace();
+    this.cachedProjectLinksAuthority = createLocalKnowledgeProjectLinksAuthority({
+      databasePath: workspace.knowledgeDbPath,
+      itemStore: this.itemStore(),
+      options: {
+        packageVersion: package_default.version,
+        authorityId: this.options.projectLinksIdentity?.authorityId ?? process.env.HASNA_KNOWLEDGE_PROJECT_AUTHORITY_ID ?? "knowledge",
+        tenantId: this.options.projectLinksIdentity?.tenantId ?? process.env.HASNA_KNOWLEDGE_PROJECT_TENANT_ID ?? "local",
+        corpusId: this.options.projectLinksIdentity?.corpusId ?? process.env.HASNA_KNOWLEDGE_PROJECT_CORPUS_ID ?? "knowledge"
+      }
+    });
+    return this.cachedProjectLinksAuthority;
+  }
+  async close() {
+    const authority = this.cachedProjectLinksAuthority;
+    this.cachedProjectLinksAuthority = undefined;
+    await authority?.close();
+  }
+  async listItems(options = {}) {
+    return this.itemStore().list(options);
+  }
+  async getItem(idOrShort) {
+    return this.itemStore().get(idOrShort);
+  }
+  async createItem(input) {
+    return this.itemStore().create(input);
+  }
+  async updateItem(idOrShort, patch) {
+    return this.itemStore().update(idOrShort, patch);
+  }
+  async deleteItem(idOrShort) {
+    return this.itemStore().delete(idOrShort);
+  }
+  async deleteItems(idsOrShorts) {
+    return this.itemStore().deleteMany(idsOrShorts);
+  }
+  async resolveInventory(options = {}) {
+    if (this.usesHttpTransport())
+      return this.httpInventory(options);
+    return this.inventory(options);
+  }
+  config(options = {}) {
+    const workspace = options.ensure ? this.ensureWorkspace() : this.workspace;
+    if (!this.cachedConfig || options.ensure || existsSync14(workspace.configPath)) {
+      this.cachedConfig = existsSync14(workspace.configPath) ? readKnowledgeConfig(workspace.configPath) : defaultKnowledgeConfig();
+    }
+    return this.cachedConfig;
+  }
+  safetyPolicy() {
+    return resolveSafetyPolicy(this.config(), this.workspace);
+  }
+  artifactStore() {
+    return createArtifactStore(this.config(), this.ensureWorkspace());
+  }
+  storageContract() {
+    return resolveStorageContract(this.config(), this.workspace, this.scope);
+  }
+  validateStorage() {
+    return validateStorageConfig(this.config(), this.workspace);
+  }
+  assertStorageValid(action) {
+    const validation = this.validateStorage();
+    if (!validation.ok) {
+      throw new Error(`Storage contract invalid before ${action}: ${validation.errors.join("; ")}`);
+    }
+  }
+  migrateLegacyPath(options = {}) {
+    const current = this.workspace;
+    const legacy = resolveLegacyScopedWorkspace(this.options.scope, this.options.cwd);
+    const result = migrateLegacyKnowledgeWorkspace({
+      scope: this.scope,
+      current,
+      legacy,
+      approveWrite: options.approveWrite,
+      approvedBy: options.approvedBy
+    });
+    if (!result.dry_run && result.ok) {
+      this.ensuredWorkspace = undefined;
+      this.cachedConfig = undefined;
+    }
+    return result;
+  }
+  mergeLegacyPath(options = {}) {
+    const current = this.workspace;
+    const legacy = resolveLegacyScopedWorkspace(this.options.scope, this.options.cwd);
+    const result = mergeLegacyKnowledgeWorkspace({
+      scope: this.scope,
+      current,
+      legacy,
+      approveWrite: options.approveWrite,
+      approvedBy: options.approvedBy
+    });
+    if (!result.dry_run && result.ok) {
+      this.ensuredWorkspace = undefined;
+      this.cachedConfig = undefined;
+    }
+    return result;
+  }
+  setup(options = {}) {
+    const workspace = this.ensureWorkspace();
+    const current = this.config({ ensure: true });
+    const nextConfig = {
+      ...current,
+      storage: options.canonicalExample ? canonicalExampleKnowledgeStorage() : current.storage
+    };
+    writeKnowledgeConfig(workspace.configPath, nextConfig);
+    this.cachedConfig = nextConfig;
+    const storage = resolveStorageContract(nextConfig, workspace, this.scope);
+    return {
+      ok: true,
+      storage_type: nextConfig.storage.type,
+      artifact_uri_prefix: storage.artifact_store.uri_prefix,
+      canonical_example: storage.canonical_example,
+      config_path: workspace.configPath,
+      next: ["knowledge search <query>", "knowledge <prompt>", "knowledge transport --json"],
+      message: "Knowledge workspace initialized"
+    };
+  }
+  authStatus(env = process.env) {
+    return knowledgeAuthStatus(env);
+  }
+  saveAuth(input, env = process.env) {
+    const apiUrl = input.apiUrl ?? resolveKnowledgeApiUrl(env);
+    return saveKnowledgeAuth({
+      api_key: input.apiKey,
+      email: input.email,
+      org_id: input.orgId,
+      org_slug: input.orgSlug,
+      user_id: input.userId,
+      api_url: apiUrl
+    }, env);
+  }
+  clearAuth(env = process.env) {
+    return clearKnowledgeAuth(env);
+  }
+  paths() {
+    const workspace = this.workspace;
+    return {
+      ok: true,
+      scope: this.scope,
+      home: workspace.home,
+      exists: existsSync14(workspace.home),
+      config_path: workspace.configPath,
+      config_exists: existsSync14(workspace.configPath),
+      json_store_path: workspace.jsonStorePath,
+      json_store_exists: existsSync14(workspace.jsonStorePath),
+      knowledge_db_path: workspace.knowledgeDbPath,
+      knowledge_db_exists: existsSync14(workspace.knowledgeDbPath),
+      artifacts_dir: workspace.artifactsDir,
+      indexes_dir: workspace.indexesDir,
+      logs_dir: workspace.logsDir,
+      runs_dir: workspace.runsDir,
+      schemas_dir: workspace.schemasDir,
+      wiki_dir: workspace.wikiDir,
+      config: this.config(),
+      message: workspace.home
+    };
+  }
+  initDb() {
+    return migrateKnowledgeDb(this.ensureWorkspace().knowledgeDbPath);
+  }
+  dbStats() {
+    assertSqliteClientTransport("reading knowledge.db stats");
+    const workspace = this.workspace;
+    if (!existsSync14(workspace.knowledgeDbPath))
+      return emptyKnowledgeDbStats();
+    return getKnowledgeDbStats(workspace.knowledgeDbPath);
+  }
+  enqueuePromotion(input) {
+    return enqueueKnowledgePromotion(this.ensureWorkspace().knowledgeDbPath, input);
+  }
+  promotionInbox(options = {}) {
+    return listKnowledgePromotions(this.ensureWorkspace().knowledgeDbPath, options);
+  }
+  getPromotion(id) {
+    return getKnowledgePromotion(this.ensureWorkspace().knowledgeDbPath, id);
+  }
+  reviewPromotion(id, now) {
+    return reviewKnowledgePromotion(this.ensureWorkspace().knowledgeDbPath, id, now);
+  }
+  promoteCandidate(id, options = {}) {
+    return promoteKnowledgeCandidate(this.ensureWorkspace().knowledgeDbPath, id, options);
+  }
+  rejectPromotion(id, options = {}) {
+    return rejectKnowledgePromotion(this.ensureWorkspace().knowledgeDbPath, id, options);
+  }
+  durableRecords(options = {}) {
+    return listDurableKnowledgeRecords(this.ensureWorkspace().knowledgeDbPath, options);
+  }
+  itemOnlyInventory(params) {
+    const workspace = this.workspace;
+    const { items, limit, includeArchived, storePath, storeExists, storeReadError } = params;
+    const activeItems = items.filter((item) => item.archived !== true);
+    const visibleItems = includeArchived ? items : activeItems;
+    const stats = emptyKnowledgeDbStats();
+    const summary = {
+      legacy_items: items.length,
+      active_items: activeItems.length,
+      archived_items: items.length - activeItems.length,
+      schema_version: stats.schema_version,
+      sources: stats.sources,
+      source_revisions: stats.source_revisions,
+      chunks: stats.chunks,
+      wiki_pages: stats.wiki_pages,
+      citations: stats.citations,
+      indexes: stats.indexes,
+      runs: stats.runs,
+      run_events: stats.run_events,
+      storage_objects: stats.storage_objects,
+      embeddings: stats.embeddings,
+      vector_entries: stats.vector_entries,
+      reindex_queue: stats.reindex_queue,
+      redaction_findings: stats.redaction_findings,
+      audit_events: stats.audit_events,
+      approval_gates: stats.approval_gates,
+      knowledge_machines: stats.knowledge_machines,
+      sync_snapshots: stats.sync_snapshots,
+      sync_changes: stats.sync_changes,
+      sync_conflicts: stats.sync_conflicts,
+      sync_table_clocks: stats.sync_table_clocks,
+      sync_imports: stats.sync_imports,
+      promotion_candidates: stats.promotion_candidates,
+      durable_records: stats.durable_records
+    };
+    return {
+      ok: true,
+      scope: this.scope,
+      home: workspace.home,
+      limit,
+      paths: {
+        json_store_path: workspace.jsonStorePath,
+        json_store_exists: existsSync14(workspace.jsonStorePath),
+        knowledge_db_path: workspace.knowledgeDbPath,
+        knowledge_db_exists: existsSync14(workspace.knowledgeDbPath),
+        artifacts_dir: workspace.artifactsDir,
+        indexes_dir: workspace.indexesDir,
+        logs_dir: workspace.logsDir,
+        wiki_dir: workspace.wikiDir
+      },
+      summary,
+      legacy_store: {
+        path: storePath,
+        exists: storeExists,
+        read_error: storeReadError,
+        total_items: items.length,
+        active_items: activeItems.length,
+        archived_items: items.length - activeItems.length,
+        items_returned: Math.min(visibleItems.length, limit)
+      },
+      items: visibleItems.slice(0, limit).map(legacyInventoryItem),
+      sources: [],
+      source_revisions: [],
+      chunks: [],
+      wiki_pages: [],
+      indexes: [],
+      storage_objects: [],
+      runs: [],
+      vector_indexes: [],
+      reindex_queue: [],
+      machines: [],
+      sync_conflicts: [],
+      approval_gates: [],
+      audit_events: [],
+      promotion_candidates: [],
+      durable_records: [],
+      message: `${items.length} item(s), 0 source(s), 0 chunk(s), 0 wiki page(s), 0 artifact(s)`
+    };
+  }
+  async httpInventory(options = {}) {
+    const limit = inventoryLimit(options.limit);
+    const items = await this.fetchHttpItems();
+    const http = resolveKnowledgeHttpStore();
+    return this.itemOnlyInventory({
+      items,
+      limit,
+      includeArchived: options.includeArchived ?? false,
+      storePath: http?.baseUrl ?? "http",
+      storeExists: true,
+      storeReadError: null
+    });
+  }
+  inventory(options = {}) {
+    const workspace = this.workspace;
+    const limit = inventoryLimit(options.limit);
+    const storePath = options.storePath ?? workspace.jsonStorePath;
+    const legacyStore = readLegacyInventoryStore(storePath);
+    const activeItems = legacyStore.items.filter((item) => item.archived !== true);
+    const visibleItems = options.includeArchived ? legacyStore.items : activeItems;
+    const dbExists = existsSync14(workspace.knowledgeDbPath);
+    if (!dbExists) {
+      return this.itemOnlyInventory({
+        items: legacyStore.items,
+        limit,
+        includeArchived: options.includeArchived ?? false,
+        storePath,
+        storeExists: legacyStore.exists,
+        storeReadError: legacyStore.read_error
+      });
+    }
+    migrateKnowledgeDb(workspace.knowledgeDbPath);
+    const stats = getKnowledgeDbStats(workspace.knowledgeDbPath);
+    const db = openKnowledgeDb(workspace.knowledgeDbPath);
+    try {
+      const sources = rowsWithJsonFields(selectInventoryRows(db, `
+        SELECT
+          s.id,
+          s.uri,
+          s.kind,
+          s.title,
+          s.metadata_json,
+          s.acl_json,
+          s.created_at,
+          s.updated_at,
+          COUNT(DISTINCT sr.id) AS revisions,
+          COUNT(DISTINCT c.id) AS chunks
+        FROM sources s
+        LEFT JOIN source_revisions sr ON sr.source_id = s.id
+        LEFT JOIN chunks c ON c.source_revision_id = sr.id
+        GROUP BY s.id
+        ORDER BY s.updated_at DESC, s.created_at DESC
+        LIMIT ?
+      `, [limit]), ["metadata_json", "acl_json"]);
+      const sourceRevisions = rowsWithJsonFields(selectInventoryRows(db, `
+        SELECT
+          sr.id,
+          s.uri AS source_uri,
+          sr.revision,
+          sr.hash,
+          sr.extracted_text_uri,
+          sr.metadata_json,
+          sr.created_at
+        FROM source_revisions sr
+        JOIN sources s ON s.id = sr.source_id
+        ORDER BY sr.created_at DESC
+        LIMIT ?
+      `, [limit]));
+      const chunks = rowsWithJsonFields(selectInventoryRows(db, `
+        SELECT
+          c.id,
+          c.kind,
+          c.ordinal,
+          substr(c.text, 1, 220) AS text_preview,
+          c.token_count,
+          c.start_offset,
+          c.end_offset,
+          c.metadata_json,
+          c.created_at,
+          s.uri AS source_uri,
+          sr.revision AS source_revision,
+          wp.path AS wiki_path,
+          wp.title AS wiki_title
+        FROM chunks c
+        LEFT JOIN source_revisions sr ON sr.id = c.source_revision_id
+        LEFT JOIN sources s ON s.id = sr.source_id
+        LEFT JOIN wiki_pages wp ON wp.id = c.wiki_page_id
+        ORDER BY c.created_at DESC, c.ordinal ASC
+        LIMIT ?
+      `, [limit]));
+      const wikiPages = rowsWithJsonFields(selectInventoryRows(db, `
+        SELECT id, path, title, artifact_uri, content_hash, status, metadata_json, created_at, updated_at
+        FROM wiki_pages
+        ORDER BY updated_at DESC, created_at DESC
+        LIMIT ?
+      `, [limit]));
+      const indexes = rowsWithJsonFields(selectInventoryRows(db, `
+        SELECT id, kind, name, artifact_uri, shard_key, metadata_json, created_at, updated_at
+        FROM knowledge_indexes
+        ORDER BY updated_at DESC, created_at DESC
+        LIMIT ?
+      `, [limit]));
+      const storageObjects = rowsWithJsonFields(selectInventoryRows(db, `
+        SELECT id, artifact_uri, kind, content_type, hash, size_bytes, metadata_json, created_at, updated_at
+        FROM storage_objects
+        ORDER BY updated_at DESC, created_at DESC
+        LIMIT ?
+      `, [limit]));
+      const runs = rowsWithJsonFields(selectInventoryRows(db, `
+        SELECT
+          id,
+          type,
+          substr(prompt, 1, 220) AS prompt_preview,
+          status,
+          provider,
+          model,
+          cost_tokens,
+          cost_usd,
+          metadata_json,
+          created_at,
+          updated_at
+        FROM runs
+        ORDER BY updated_at DESC, created_at DESC
+        LIMIT ?
+      `, [limit]));
+      const vectorIndexes = selectInventoryRows(db, `
+        SELECT provider, model, dimensions, status, COUNT(*) AS entries
+        FROM vector_index_entries
+        GROUP BY provider, model, dimensions, status
+        ORDER BY entries DESC
+        LIMIT ?
+      `, [limit]);
+      const reindexQueue = rowsWithJsonFields(selectInventoryRows(db, `
+        SELECT id, kind, target_id, source_uri, reason, status, attempts, metadata_json, created_at, updated_at
+        FROM reindex_queue
+        ORDER BY updated_at DESC, created_at DESC
+        LIMIT ?
+      `, [limit]));
+      const machines = rowsWithJsonFields(selectInventoryRows(db, `
+        SELECT
+          machine_id,
+          hostname,
+          platform,
+          user_label,
+          workspace_home,
+          tailscale_dns,
+          tailscale_ips_json,
+          ssh_target,
+          last_seen_at,
+          capabilities_json,
+          metadata_json,
+          created_at,
+          updated_at
+        FROM knowledge_machines
+        ORDER BY updated_at DESC, created_at DESC
+        LIMIT ?
+      `, [limit]), ["tailscale_ips_json", "capabilities_json", "metadata_json"]);
+      const syncConflicts = rowsWithJsonFields(selectInventoryRows(db, `
+        SELECT
+          id,
+          entity_kind,
+          entity_id,
+          local_machine_id,
+          remote_machine_id,
+          status,
+          resolution_strategy,
+          proposed_patch_uri,
+          approved_by,
+          resolved_at,
+          metadata_json,
+          created_at
+        FROM knowledge_sync_conflicts
+        ORDER BY created_at DESC
+        LIMIT ?
+      `, [limit]));
+      const approvalGates = rowsWithJsonFields(selectInventoryRows(db, `
+        SELECT id, action, target_uri, status, reason, approved_by, metadata_json, created_at, updated_at
+        FROM approval_gates
+        ORDER BY updated_at DESC, created_at DESC
+        LIMIT ?
+      `, [limit]));
+      const auditEvents = rowsWithJsonFields(selectInventoryRows(db, `
+        SELECT id, event_type, action, target_uri, decision, metadata_json, created_at
+        FROM audit_events
+        ORDER BY created_at DESC
+        LIMIT ?
+      `, [limit]));
+      const promotionCandidates = selectInventoryRows(db, `
+        SELECT
+          id,
+          record_kind,
+          title,
+          substr(content, 1, 220) AS content_preview,
+          canonical_key,
+          content_hash,
+          source_kind,
+          source_refs_json,
+          evidence_refs_json,
+          status,
+          requires_approval,
+          checks_json,
+          duplicate_of,
+          approved_by,
+          promoted_record_id,
+          metadata_json,
+          created_at,
+          updated_at,
+          reviewed_at,
+          promoted_at
+        FROM knowledge_promotion_candidates
+        ORDER BY updated_at DESC, created_at DESC
+        LIMIT ?
+      `, [limit]).map(promotionCandidateInventoryRow);
+      const durableRecords = selectInventoryRows(db, `
+        SELECT
+          id,
+          record_kind,
+          title,
+          substr(content, 1, 220) AS content_preview,
+          canonical_key,
+          content_hash,
+          status,
+          source_refs_json,
+          evidence_refs_json,
+          confidence,
+          valid_from,
+          valid_to,
+          promoted_from_candidate_id,
+          approved_by,
+          metadata_json,
+          created_at,
+          updated_at
+        FROM durable_knowledge_records
+        ORDER BY updated_at DESC, created_at DESC
+        LIMIT ?
+      `, [limit]).map(durableRecordInventoryRow);
+      const summary = {
+        legacy_items: legacyStore.items.length,
+        active_items: activeItems.length,
+        archived_items: legacyStore.items.length - activeItems.length,
+        schema_version: stats.schema_version,
+        sources: stats.sources,
+        source_revisions: stats.source_revisions,
+        chunks: stats.chunks,
+        wiki_pages: stats.wiki_pages,
+        citations: stats.citations,
+        indexes: stats.indexes,
+        runs: stats.runs,
+        run_events: stats.run_events,
+        storage_objects: stats.storage_objects,
+        embeddings: stats.embeddings,
+        vector_entries: stats.vector_entries,
+        reindex_queue: stats.reindex_queue,
+        redaction_findings: stats.redaction_findings,
+        audit_events: stats.audit_events,
+        approval_gates: stats.approval_gates,
+        knowledge_machines: stats.knowledge_machines,
+        sync_snapshots: stats.sync_snapshots,
+        sync_changes: stats.sync_changes,
+        sync_conflicts: stats.sync_conflicts,
+        sync_table_clocks: stats.sync_table_clocks,
+        sync_imports: stats.sync_imports,
+        promotion_candidates: stats.promotion_candidates,
+        durable_records: stats.durable_records
+      };
+      return {
+        ok: true,
+        scope: this.scope,
+        home: workspace.home,
+        limit,
+        paths: {
+          json_store_path: storePath,
+          json_store_exists: legacyStore.exists,
+          knowledge_db_path: workspace.knowledgeDbPath,
+          knowledge_db_exists: true,
+          artifacts_dir: workspace.artifactsDir,
+          indexes_dir: workspace.indexesDir,
+          logs_dir: workspace.logsDir,
+          wiki_dir: workspace.wikiDir
+        },
+        summary,
+        legacy_store: {
+          path: storePath,
+          exists: legacyStore.exists,
+          read_error: legacyStore.read_error,
+          total_items: legacyStore.items.length,
+          active_items: activeItems.length,
+          archived_items: legacyStore.items.length - activeItems.length,
+          items_returned: Math.min(visibleItems.length, limit)
+        },
+        items: visibleItems.slice(0, limit).map(legacyInventoryItem),
+        sources,
+        source_revisions: sourceRevisions,
+        chunks,
+        wiki_pages: wikiPages,
+        indexes,
+        storage_objects: storageObjects,
+        runs,
+        vector_indexes: vectorIndexes,
+        reindex_queue: reindexQueue,
+        machines,
+        sync_conflicts: syncConflicts,
+        approval_gates: approvalGates,
+        audit_events: auditEvents,
+        promotion_candidates: promotionCandidates,
+        durable_records: durableRecords,
+        message: `${legacyStore.items.length} item(s), ${stats.sources} source(s), ${stats.chunks} chunk(s), ${stats.wiki_pages} wiki page(s), ${stats.storage_objects} artifact(s)`
+      };
+    } finally {
+      db.close();
+    }
+  }
+  assertAppWikiWrite(allowGlobal) {
+    assertAppWikiWriteAllowed({
+      scope: this.scope,
+      workspace: this.workspace,
+      safetyPolicy: this.safetyPolicy(),
+      allowGlobal
+    });
+  }
+  async initAppWiki(options = {}) {
+    this.assertAppWikiWrite(options.allowGlobal);
+    const workspace = this.ensureWorkspace();
+    return initAppWikiScope({
+      scope: this.scope,
+      workspace,
+      store: this.artifactStore(),
+      safetyPolicy: this.safetyPolicy(),
+      allowGlobal: options.allowGlobal
+    });
+  }
+  async addAppWikiNote(options) {
+    this.assertAppWikiWrite(options.allowGlobal);
+    const workspace = this.ensureWorkspace();
+    return writeAppWikiNote({
+      scope: this.scope,
+      workspace,
+      store: this.artifactStore(),
+      safetyPolicy: this.safetyPolicy(),
+      allowGlobal: options.allowGlobal,
+      title: options.title,
+      content: options.content,
+      tags: options.tags,
+      sourceRefs: options.sourceRefs,
+      path: options.path,
+      metadata: options.metadata
+    });
+  }
+  listAppWikiNotes(options = {}) {
+    const workspace = this.workspace;
+    if (!existsSync14(workspace.knowledgeDbPath))
+      return [];
+    return listAppWikiNotes({
+      dbPath: workspace.knowledgeDbPath,
+      limit: options.limit
+    });
+  }
+  async getAppWikiNote(id, options = {}) {
+    const workspace = this.workspace;
+    if (!existsSync14(workspace.knowledgeDbPath))
+      return null;
+    return getAppWikiNote({
+      dbPath: workspace.knowledgeDbPath,
+      store: this.artifactStore(),
+      id,
+      includeContent: options.includeContent
+    });
+  }
+  async addAppWikiSourceRef(options) {
+    this.assertAppWikiWrite(options.allowGlobal);
+    const workspace = this.ensureWorkspace();
+    return ingestAppWikiSourceRef({
+      scope: this.scope,
+      workspace,
+      sourceRef: options.sourceRef,
+      purpose: options.purpose,
+      config: this.config(),
+      safetyPolicy: this.safetyPolicy(),
+      allowGlobal: options.allowGlobal
+    });
+  }
+  async searchAppWiki(options) {
+    return this.search(options);
+  }
+  async queryAppWiki(options) {
+    return this.retrieveContext(options);
+  }
+  async initWiki() {
+    const workspace = this.ensureWorkspace();
+    migrateKnowledgeDb(workspace.knowledgeDbPath);
+    const result = await initializeWikiLayout(this.artifactStore());
+    const db = openKnowledgeDb(workspace.knowledgeDbPath);
+    try {
+      recordStorageObjects(db, result.artifacts);
+      recordWikiLayoutCatalog(db, result.artifacts);
+    } finally {
+      db.close();
+    }
+    return result;
+  }
+  async compileWiki(options = {}) {
+    const workspace = this.ensureWorkspace();
+    return compileWikiPage({
+      ...options,
+      dbPath: workspace.knowledgeDbPath,
+      store: this.artifactStore()
+    });
+  }
+  async fileAnswer(options) {
+    const workspace = this.ensureWorkspace();
+    const context = await this.retrieveContext({
+      query: options.prompt,
+      limit: options.limit,
+      semantic: options.semantic,
+      modelRef: options.modelRef,
+      dimensions: options.dimensions,
+      fake: options.fake
+    });
+    return fileAnswerToWiki({
+      dbPath: workspace.knowledgeDbPath,
+      store: this.artifactStore(),
+      prompt: options.prompt,
+      answer: options.answer,
+      context,
+      approveWrite: options.approveWrite
+    });
+  }
+  lintWiki() {
+    const workspace = this.ensureWorkspace();
+    return lintWiki({ dbPath: workspace.knowledgeDbPath });
+  }
+  async ingestManifest(input) {
+    const workspace = this.ensureWorkspace();
+    return ingestOpenFilesManifest({
+      dbPath: workspace.knowledgeDbPath,
+      input,
+      config: this.config(),
+      safetyPolicy: this.safetyPolicy()
+    });
+  }
+  async ingestSource(sourceRef, purpose) {
+    const workspace = this.ensureWorkspace();
+    return ingestSourceRef({
+      dbPath: workspace.knowledgeDbPath,
+      sourceRef,
+      purpose,
+      config: this.config(),
+      safetyPolicy: this.safetyPolicy()
+    });
+  }
+  async importRulesProvenance(options = {}) {
+    const dryRun = options.dryRun !== false;
+    const workspace = dryRun ? this.workspace : this.ensureWorkspace();
+    return importRulesProvenance({
+      root: options.root ?? this.options.cwd ?? process.cwd(),
+      scope: this.scope,
+      owner: options.owner,
+      dryRun,
+      deprecateLegacy: options.deprecateLegacy,
+      includeLegacy: options.includeLegacy,
+      legacyStorePath: workspace.jsonStorePath,
+      dbPath: workspace.knowledgeDbPath,
+      safetyPolicy: this.safetyPolicy(),
+      maxItems: options.maxItems,
+      limit: options.limit
+    });
+  }
+  async resolveSource(sourceRef, options = {}) {
+    const workspace = this.ensureWorkspace();
+    return resolveOpenFilesSource({
+      dbPath: workspace.knowledgeDbPath,
+      sourceRef,
+      purpose: options.purpose,
+      limit: options.limit,
+      safetyPolicy: this.safetyPolicy()
+    });
+  }
+  async consumeOutbox(input) {
+    const workspace = this.ensureWorkspace();
+    return consumeOpenFilesOutbox({
+      dbPath: workspace.knowledgeDbPath,
+      input,
+      config: this.config(),
+      safetyPolicy: this.safetyPolicy()
+    });
+  }
+  reindexHealth(options = {}) {
+    const workspace = this.workspace;
+    if (!existsSync14(workspace.knowledgeDbPath))
+      return emptyReindexHealth();
+    return reindexHealth({
+      ...options,
+      dbPath: workspace.knowledgeDbPath,
+      config: this.config()
+    });
+  }
+  enqueueReindex(options = {}) {
+    const workspace = this.ensureWorkspace();
+    return enqueueMissingEmbeddings({
+      ...options,
+      dbPath: workspace.knowledgeDbPath,
+      config: this.config()
+    });
+  }
+  async refreshEmbeddings(options = {}) {
+    const workspace = this.ensureWorkspace();
+    return refreshEmbeddingIndex({
+      ...options,
+      dbPath: workspace.knowledgeDbPath,
+      config: this.config()
+    });
+  }
+  providerStatus(env = process.env) {
+    return providerStatus(this.config(), env);
+  }
+  modelRegistry() {
+    return listModelRegistry(this.config());
+  }
+  embeddingStatus() {
+    const workspace = this.workspace;
+    if (!existsSync14(workspace.knowledgeDbPath))
+      return emptyEmbeddingStatus();
+    return embeddingIndexStatus(workspace.knowledgeDbPath);
+  }
+  async indexEmbeddings(options = {}) {
+    const workspace = this.ensureWorkspace();
+    return indexKnowledgeEmbeddings({
+      ...options,
+      dbPath: workspace.knowledgeDbPath,
+      config: this.config()
+    });
+  }
+  usesHttpTransport() {
+    return usesKnowledgeHttpTransport();
+  }
+  httpStore() {
+    const http = resolveKnowledgeHttpStore();
+    if (!http) {
+      throw new Error("knowledge: HTTP store requested but not resolvable " + "(check HASNA_KNOWLEDGE_API_URL + HASNA_KNOWLEDGE_API_KEY).");
+    }
+    return http;
+  }
+  async fetchHttpItems() {
+    return fetchAllHttpItems(this.httpStore());
+  }
+  async semanticSearch(options) {
+    const workspace = this.workspace;
+    if (this.usesHttpTransport()) {
+      throw new KnowledgeSemanticSearchUnavailableError;
+    }
+    if (!existsSync14(workspace.knowledgeDbPath)) {
+      return {
+        provider: "openai",
+        model: "text-embedding-3-small",
+        dimensions: options.dimensions ?? 1536,
+        query: options.query,
+        results: []
+      };
+    }
+    return searchVectorIndex({
+      ...options,
+      dbPath: workspace.knowledgeDbPath,
+      config: this.config()
+    });
+  }
+  async search(options) {
+    const workspace = this.workspace;
+    if (this.usesHttpTransport()) {
+      if (options.semantic === true || options.fake === true || Boolean(options.modelRef)) {
+        throw new KnowledgeSemanticSearchUnavailableError;
+      }
+      const producer = await this.httpStore().search({
+        query: options.query,
+        archive: "active",
+        limit: options.limit,
+        offset: options.offset
+      });
+      return hybridSearchFromProducerPage(producer.items, options, [], producer.total);
+    }
+    const legacyStorePath = legacyStorePathForRead(this.scope, workspace, options.legacyStorePath);
+    if (!existsSync14(workspace.knowledgeDbPath)) {
+      if (existsSync14(legacyStorePath)) {
+        return hybridSearchLegacyStore({
+          ...options,
+          legacyStorePath,
+          config: this.config()
+        });
+      }
+      return emptySearchResult(options.query, Math.max(1, Math.min(options.limit ?? 10, 100)), options.semantic === true || options.fake === true || Boolean(options.modelRef));
+    }
+    return hybridSearch({
+      ...options,
+      dbPath: workspace.knowledgeDbPath,
+      legacyStorePath,
+      config: this.config()
+    });
+  }
+  async retrieveContext(options) {
+    const workspace = this.workspace;
+    if (this.usesHttpTransport()) {
+      const search = await this.search(options);
+      return retrieveKnowledgeContextFromSearch(search, {
+        contextChars: options.contextChars
+      });
+    }
+    const legacyStorePath = legacyStorePathForRead(this.scope, workspace, options.legacyStorePath);
+    if (!existsSync14(workspace.knowledgeDbPath)) {
+      if (existsSync14(legacyStorePath)) {
+        const search = await hybridSearchLegacyStore({
+          ...options,
+          legacyStorePath,
+          config: this.config()
+        });
+        return retrieveKnowledgeContextFromSearch(search, {
+          contextChars: options.contextChars
+        });
+      }
+      return emptyContextPack(options.query, Math.max(1, Math.min(options.limit ?? 10, 100)), options.semantic === true || options.fake === true || Boolean(options.modelRef));
+    }
+    return retrieveKnowledgeContext({
+      ...options,
+      dbPath: workspace.knowledgeDbPath,
+      legacyStorePath,
+      config: this.config()
+    });
+  }
+  async contextPack(options) {
+    const workspace = this.workspace;
+    if (this.usesHttpTransport()) {
+      const query = (options.query ?? options.topic ?? "").trim();
+      if (query && options.source !== "loops" && options.source !== "runs") {
+        const search = await this.search({ ...options, query });
+        const context = retrieveKnowledgeContextFromSearch(search, { contextChars: options.contextChars });
+        return legacyAgentContextPack(options, context, this.safetyPolicy());
+      }
+      return emptyAgentContextPack(options);
+    }
+    const legacyStorePath = legacyStorePathForRead(this.scope, workspace, options.legacyStorePath);
+    if (!existsSync14(workspace.knowledgeDbPath)) {
+      const query = (options.query ?? options.topic ?? "").trim();
+      if (query && options.source !== "loops" && options.source !== "runs" && existsSync14(legacyStorePath)) {
+        const search = await hybridSearchLegacyStore({
+          ...options,
+          query,
+          legacyStorePath,
+          config: this.config()
+        });
+        const context = retrieveKnowledgeContextFromSearch(search, {
+          contextChars: options.contextChars
+        });
+        return legacyAgentContextPack(options, context, this.safetyPolicy());
+      }
+      return emptyAgentContextPack(options);
+    }
+    return buildKnowledgeAgentContextPack({
+      ...options,
+      dbPath: workspace.knowledgeDbPath,
+      legacyStorePath,
+      config: this.config(),
+      safetyPolicy: this.safetyPolicy()
+    });
+  }
+  async runPrompt(options) {
+    if (this.usesHttpTransport()) {
+      if (options.semantic === true || options.fake === true || Boolean(options.modelRef)) {
+        throw new KnowledgeSemanticSearchUnavailableError;
+      }
+      const producer = await this.httpStore().search({
+        query: options.prompt,
+        archive: "active",
+        limit: options.limit,
+        offset: options.offset
+      });
+      const producerSearch = hybridSearchFromProducerPage(producer.items, {
+        query: options.prompt,
+        limit: options.limit,
+        offset: options.offset,
+        semantic: false
+      }, [], producer.total);
+      return runKnowledgePromptOverItems(producer.items.map((hit) => hit.item), { ...options, config: this.config() }, producerSearch);
+    }
+    const workspace = this.ensureWorkspace();
+    const legacyStorePath = options.legacyStorePath ?? workspace.jsonStorePath;
+    if (!options.legacyStorePath)
+      ensureStore(legacyStorePath);
+    return runKnowledgePrompt({
+      ...options,
+      dbPath: workspace.knowledgeDbPath,
+      legacyStorePath,
+      config: this.config()
+    });
+  }
+  async webSearch(options) {
+    const workspace = this.ensureWorkspace();
+    return runProviderWebSearch({
+      ...options,
+      dbPath: workspace.knowledgeDbPath,
+      config: this.config(),
+      safetyPolicy: this.safetyPolicy()
+    });
+  }
+  async machineTopology(options = {}) {
+    const workspace = this.workspace;
+    return discoverKnowledgeMachineTopology({
+      ...options,
+      knowledge: {
+        scope: this.scope,
+        workspace_home: workspace.home
+      }
+    });
+  }
+  async machinePreflight(options = {}) {
+    const workspace = this.workspace;
+    return preflightKnowledgeMachine({
+      ...options,
+      knowledge: {
+        scope: this.scope,
+        workspace_home: workspace.home
+      }
+    });
+  }
+  syncStatus() {
+    const workspace = this.workspace;
+    if (!existsSync14(workspace.knowledgeDbPath)) {
+      return emptySyncStatus({
+        scope: this.scope,
+        workspaceHome: workspace.home
+      });
+    }
+    return getKnowledgeSyncStatus({
+      dbPath: workspace.knowledgeDbPath,
+      scope: this.scope,
+      workspaceHome: workspace.home
+    });
+  }
+  async syncDoctor(options = {}) {
+    const workspace = this.ensureWorkspace();
+    migrateKnowledgeDb(workspace.knowledgeDbPath);
+    const status = this.syncStatus();
+    const storage = this.storageContract();
+    const validation = this.validateStorage();
+    const artifactManifest = artifactManifestStatus(workspace.knowledgeDbPath, storage);
+    const machine = options.machine?.trim() || null;
+    const peerWorkspace = options.peerWorkspace?.trim() || null;
+    const warnings = [];
+    let resolvedRoute = null;
+    let resolvedWorkspace = null;
+    if (machine && !serviceMachineIsLocal(machine)) {
+      const route = await resolveKnowledgeMachineRoute({
+        machineId: machine,
+        includeTailscale: options.includeTailscale
+      });
+      resolvedRoute = routeSummary(route);
+      warnings.push(...route.warnings);
+    }
+    if (machine || peerWorkspace) {
+      const workspaceResolution = await resolveKnowledgeMachineWorkspace({
+        machineId: machine ?? workspaceMachineId(workspace),
+        peerWorkspace,
+        includeTailscale: options.includeTailscale
+      });
+      if (machine && !peerWorkspace && (resolvedRoute?.source === "raw" || !workspaceResolution.ok || !workspaceResolution.project_root)) {
+        const registryRow = findRegistryMachine(workspace.knowledgeDbPath, machine);
+        if (registryRow) {
+          if (resolvedRoute?.source === "raw" && registryRow.ssh_target) {
+            resolvedRoute = routeSummary(routeFromRegistry(registryRow, machine, {
+              target: resolvedRoute.target,
+              route: resolvedRoute.route,
+              targetKind: resolvedRoute.target_kind,
+              confidence: resolvedRoute.confidence,
+              source: resolvedRoute.source,
+              adapter: resolvedRoute.adapter,
+              evidence: resolvedRoute.evidence,
+              cacheability: resolvedRoute.cacheability,
+              warnings: []
+            }));
+          }
+          if (!workspaceResolution.ok || !workspaceResolution.project_root) {
+            const registryWorkspace = workspaceFromRegistry(registryRow, machine, workspaceResolution);
+            if (registryWorkspace) {
+              resolvedWorkspace = workspaceSummary(registryWorkspace, registryWorkspace.project_root);
+              warnings.push(...registryWorkspace.warnings);
+            }
+          }
+        }
+      }
+      resolvedWorkspace = workspaceResolution.ok && workspaceResolution.project_root ? workspaceSummary(workspaceResolution, workspaceResolution.project_root) : resolvedWorkspace ?? {
+        ...workspaceSummary(workspaceResolution, peerWorkspace ?? ""),
+        project_root: workspaceResolution.project_root ?? peerWorkspace ?? ""
+      };
+      warnings.push(...workspaceResolution.warnings);
+    }
+    if (!validation.ok)
+      warnings.push(...validation.errors.map((error) => `storage:${error}`));
+    const openFiles = openFilesBoundaryStatus(workspace.knowledgeDbPath, resolvedWorkspace);
+    if (!openFiles.ok)
+      warnings.push("open_files_boundary_raw_payload_sentinels");
+    if (!artifactManifest.ok)
+      warnings.push(...artifactManifest.warnings);
+    const diagnosticFailures = resolvedWorkspace?.diagnostics.filter((entry) => entry.severity === "fail") ?? [];
+    const ok = validation.ok && artifactManifest.ok && openFiles.ok && diagnosticFailures.length === 0 && (resolvedWorkspace?.project_root !== "" || !resolvedWorkspace);
+    const recommendedCommands = doctorRecommendations({
+      scope: this.scope,
+      machine,
+      peerWorkspace,
+      tables: options.tables,
+      resolvedWorkspace,
+      openConflicts: status.conflicts.open
+    });
+    return {
+      ok,
+      read_only: true,
+      generated_at: new Date().toISOString(),
+      scope: this.scope,
+      workspace_home: workspace.home,
+      database: {
+        sqlite_schema_version: status.sqlite_schema_version,
+        table_counts: status.table_counts
+      },
+      storage: {
+        contract: storage,
+        validation,
+        artifact_manifest: artifactManifest
+      },
+      sync: {
+        machines: status.machines.total,
+        snapshots: status.snapshots.total,
+        clocks: status.clocks.total,
+        imports: status.imports.total,
+        open_conflicts: status.conflicts.open,
+        table_clocks: status.clocks.rows
+      },
+      open_files: openFiles,
+      resolved_route: resolvedRoute,
+      resolved_workspace: resolvedWorkspace,
+      recommended_commands: recommendedCommands,
+      warnings: [...new Set(warnings)],
+      message: ok ? `Sync readiness ok: ${status.clocks.total} table clock(s), ${status.conflicts.open} open conflict(s)` : `Sync readiness needs attention: ${[...new Set(warnings)].join(", ") || "workspace diagnostics failed"}`
+    };
+  }
+  repairArtifactManifestKeys(options = {}) {
+    const workspace = this.ensureWorkspace();
+    migrateKnowledgeDb(workspace.knowledgeDbPath);
+    const storage = this.storageContract();
+    const storagePrefix = storagePrefixKey(storage);
+    const candidates = artifactManifestKeyRepairCandidates(workspace.knowledgeDbPath, storage);
+    const dryRun = options.dryRun === true || options.approveWrite !== true;
+    if (candidates.length === 0) {
+      return {
+        ok: true,
+        dry_run: dryRun,
+        approval_required: false,
+        storage_type: storage.storage_type,
+        storage_prefix: storagePrefix,
+        candidates,
+        repaired: 0,
+        audit_event_id: null,
+        message: "No legacy S3 artifact manifest keys found"
+      };
+    }
+    if (options.dryRun === true) {
+      return {
+        ok: true,
+        dry_run: true,
+        approval_required: false,
+        storage_type: storage.storage_type,
+        storage_prefix: storagePrefix,
+        candidates,
+        repaired: 0,
+        audit_event_id: null,
+        message: `Would repair ${candidates.length} legacy S3 artifact manifest key(s)`
+      };
+    }
+    if (options.approveWrite !== true || !options.approvedBy) {
+      return {
+        ok: false,
+        dry_run: true,
+        approval_required: true,
+        storage_type: storage.storage_type,
+        storage_prefix: storagePrefix,
+        candidates,
+        repaired: 0,
+        audit_event_id: null,
+        message: "Artifact key repair requires --approve-write and --approved-by <name>"
+      };
+    }
+    const db = openKnowledgeDb(workspace.knowledgeDbPath);
+    try {
+      const now = new Date().toISOString();
+      const update = db.transaction((entries) => {
+        const statement = db.query("UPDATE storage_objects SET metadata_json = ?, updated_at = ? WHERE id = ?");
+        const currentRows = db.query("SELECT id, metadata_json FROM storage_objects").all();
+        const metadataById = new Map(currentRows.map((row) => [row.id, parseMetadataJson(row.metadata_json)]));
+        for (const entry of entries) {
+          const metadata = metadataById.get(entry.id) ?? {};
+          metadata.key = entry.repaired_key;
+          statement.run(JSON.stringify(metadata), now, entry.id);
+        }
+      });
+      update(candidates);
+      const auditEventId = recordAuditEvent(db, {
+        event_type: "artifact_manifest_key_repair",
+        action: "storage.artifact_manifest.repair_keys",
+        target_uri: `knowledge-storage://${workspace.home}/storage_objects`,
+        decision: "allow",
+        metadata: {
+          approved_by: options.approvedBy,
+          repaired: candidates.length,
+          storage_type: storage.storage_type,
+          storage_prefix: storagePrefix,
+          artifact_uris: candidates.map((entry) => entry.artifact_uri)
+        }
+      });
+      return {
+        ok: true,
+        dry_run: false,
+        approval_required: false,
+        storage_type: storage.storage_type,
+        storage_prefix: storagePrefix,
+        candidates,
+        repaired: candidates.length,
+        audit_event_id: auditEventId,
+        message: `Repaired ${candidates.length} legacy S3 artifact manifest key(s)`
+      };
+    } finally {
+      db.close();
+    }
+  }
+  async createSyncSnapshot(options = {}) {
+    const workspace = this.ensureWorkspace();
+    const topology = await this.machineTopology({
+      includeTailscale: options.includeTailscale !== false
+    });
+    return createKnowledgeSyncSnapshot({
+      dbPath: workspace.knowledgeDbPath,
+      scope: this.scope,
+      workspaceHome: workspace.home,
+      storage: this.storageContract(),
+      topology,
+      machineId: options.machineId
+    });
+  }
+  syncConflicts(options = {}) {
+    const workspace = this.workspace;
+    if (!existsSync14(workspace.knowledgeDbPath))
+      return [];
+    return listKnowledgeSyncConflicts(workspace.knowledgeDbPath, options);
+  }
+  syncConflict(id) {
+    const workspace = this.ensureWorkspace();
+    const conflict = getKnowledgeSyncConflict(workspace.knowledgeDbPath, id);
+    if (!conflict)
+      throw new Error(`Sync conflict not found: ${id}`);
+    return conflict;
+  }
+  proposeSyncConflictResolution(id) {
+    const workspace = this.ensureWorkspace();
+    return proposeKnowledgeSyncConflictResolution(workspace.knowledgeDbPath, id);
+  }
+  async proposeSyncConflictResolutionWithAi(options) {
+    const workspace = this.ensureWorkspace();
+    return proposeKnowledgeSyncConflictResolutionWithAi({
+      dbPath: workspace.knowledgeDbPath,
+      id: options.id,
+      config: this.config(),
+      modelRef: options.modelRef,
+      fake: options.fake,
+      env: options.env
+    });
+  }
+  resolveSyncConflict(options) {
+    const workspace = this.ensureWorkspace();
+    const proposal = proposeKnowledgeSyncConflictResolution(workspace.knowledgeDbPath, options.id);
+    if (options.approveWrite !== true || !options.approvedBy) {
+      return {
+        ok: false,
+        approval_required: true,
+        conflict: proposal.conflict,
+        proposal,
+        message: "Sync conflict resolution requires --approve-write and --approved-by <name>"
+      };
+    }
+    const conflict = resolveKnowledgeSyncConflict(workspace.knowledgeDbPath, {
+      id: options.id,
+      strategy: options.strategy ?? proposal.proposed_strategy,
+      approvedBy: options.approvedBy,
+      proposedPatchUri: options.proposedPatchUri
+    });
+    const db = openKnowledgeDb(workspace.knowledgeDbPath);
+    try {
+      const auditEventId = recordAuditEvent(db, {
+        event_type: "sync_conflict_resolution",
+        action: "sync.conflict.resolve",
+        target_uri: `knowledge-sync-conflict://${options.id}`,
+        decision: "allow",
+        metadata: {
+          conflict_id: options.id,
+          entity_kind: conflict.entity_kind,
+          entity_id: conflict.entity_id,
+          strategy: conflict.resolution_strategy,
+          approved_by: conflict.approved_by,
+          proposed_patch_uri: conflict.proposed_patch_uri
+        }
+      });
+      return {
+        ok: true,
+        approval_required: false,
+        conflict,
+        audit_event_id: auditEventId,
+        message: `Resolved sync conflict ${options.id}`
+      };
+    } finally {
+      db.close();
+    }
+  }
+  syncMachines() {
+    const workspace = this.workspace;
+    if (!existsSync14(workspace.knowledgeDbPath))
+      return [];
+    return listKnowledgeMachines(workspace.knowledgeDbPath);
+  }
+  exportSyncBundle(options = {}) {
+    const workspace = this.ensureWorkspace();
+    this.assertStorageValid("sync export");
+    migrateKnowledgeDb(workspace.knowledgeDbPath);
+    return createKnowledgeSyncBundle({
+      dbPath: workspace.knowledgeDbPath,
+      scope: this.scope,
+      workspaceHome: workspace.home,
+      storage: this.storageContract(),
+      machineId: options.machineId ?? null,
+      tables: options.tables,
+      includeArtifactContent: options.includeArtifactContent,
+      recordClocks: options.recordClocks !== false
+    });
+  }
+  async importSyncBundle(options) {
+    const workspace = this.ensureWorkspace();
+    this.assertStorageValid("sync import");
+    migrateKnowledgeDb(workspace.knowledgeDbPath);
+    return applyKnowledgeSyncBundle({
+      targetDbPath: workspace.knowledgeDbPath,
+      targetScope: this.scope,
+      targetWorkspaceHome: workspace.home,
+      targetStorage: this.storageContract(),
+      targetStore: this.artifactStore(),
+      bundle: options.bundle,
+      direction: options.direction ?? "import",
+      dryRun: options.dryRun,
+      localMachineId: options.machineId ?? null
+    });
+  }
+  async syncRemotePeer(options) {
+    const direction = options.direction ?? "both";
+    const dryRun = options.dryRun === true;
+    const localWorkspace = this.ensureWorkspace();
+    migrateKnowledgeDb(localWorkspace.knowledgeDbPath);
+    const tableArgs = options.tables?.length ? ["--tables", options.tables.join(",")] : [];
+    const artifactArgs = options.includeArtifactContent === false ? ["--no-artifact-content"] : [];
+    const scopeArgs = ["--scope", this.scope, "--json"];
+    let resolvedMachine = await resolveKnowledgeMachineRoute({
+      machineId: options.machine,
+      includeTailscale: options.includeTailscale
+    });
+    let resolvedWorkspace = await resolveKnowledgeMachineWorkspace({
+      machineId: options.machine,
+      peerWorkspace: options.peerWorkspace,
+      includeTailscale: options.includeTailscale
+    });
+    if (!options.peerWorkspace && resolvedMachine.source === "raw" || !resolvedWorkspace.ok || !resolvedWorkspace.project_root) {
+      const registryRow = findRegistryMachine(localWorkspace.knowledgeDbPath, options.machine);
+      if (registryRow) {
+        if (!options.peerWorkspace && resolvedMachine.source === "raw" && registryRow.ssh_target) {
+          resolvedMachine = routeFromRegistry(registryRow, options.machine, resolvedMachine);
+        }
+        if (!resolvedWorkspace.ok || !resolvedWorkspace.project_root) {
+          const registryWorkspace = workspaceFromRegistry(registryRow, options.machine, resolvedWorkspace);
+          if (registryWorkspace)
+            resolvedWorkspace = registryWorkspace;
+        }
+      }
+    }
+    if (!resolvedWorkspace.ok || !resolvedWorkspace.project_root) {
+      throw new Error([
+        `Unable to resolve peer workspace for ${options.machine}.`,
+        `Pass --peer-workspace <repo-or-knowledge-home> or configure workspace path mapping in machines.`,
+        resolvedWorkspace.warnings.length ? `Warnings: ${resolvedWorkspace.warnings.join(", ")}` : null
+      ].filter(Boolean).join(" "));
+    }
+    const peerWorkspace = resolvedWorkspace.project_root;
+    const result = {
+      ok: true,
+      dry_run: dryRun,
+      direction,
+      transport: "ssh",
+      machine: options.machine,
+      resolved_machine: resolvedMachine.target,
+      resolved_route: routeSummary(resolvedMachine),
+      resolved_workspace: workspaceSummary(resolvedWorkspace, resolvedWorkspace.project_root),
+      peer_workspace: peerWorkspace,
+      message: ""
+    };
+    let resolverEvidenceRecorded = false;
+    const recordResolverEvidence = () => {
+      if (dryRun || resolverEvidenceRecorded)
+        return;
+      recordKnowledgeMachineResolverEvidence(localWorkspace.knowledgeDbPath, {
+        machineId: options.machine,
+        route: resolvedMachine,
+        workspace: resolvedWorkspace
+      });
+      resolverEvidenceRecorded = true;
+    };
+    if (direction === "pull" || direction === "both") {
+      const remoteExport = remoteKnowledgeCommand(peerWorkspace, [
+        "sync",
+        "export",
+        ...scopeArgs,
+        ...tableArgs,
+        ...artifactArgs
+      ]);
+      const raw = runSshCommand(options.machine, remoteExport, undefined, resolvedMachine);
+      const bundle = parseRemoteJson(options.machine, "sync export", raw);
+      assertRemoteSyncBundle(options.machine, bundle);
+      result.pull = await this.importSyncBundle({
+        bundle,
+        dryRun,
+        direction: "pull",
+        machineId: options.machineId ?? null
+      });
+    }
+    if (direction === "push" || direction === "both") {
+      recordResolverEvidence();
+      const bundle = this.exportSyncBundle({
+        machineId: options.machineId ?? null,
+        tables: options.tables,
+        includeArtifactContent: options.includeArtifactContent,
+        recordClocks: !dryRun
+      });
+      const remoteImport = remoteKnowledgeCommand(peerWorkspace, [
+        "sync",
+        "import",
+        ...scopeArgs,
+        ...dryRun ? ["--dry-run"] : []
+      ]);
+      const applyResult = parseRemoteJson(options.machine, "sync import", runSshCommand(options.machine, remoteImport, JSON.stringify(bundle), resolvedMachine));
+      assertRemoteSyncApplyResult(options.machine, applyResult);
+      result.push = applyResult;
+    }
+    result.ok = (result.pull?.ok ?? true) && (result.push?.ok ?? true);
+    recordResolverEvidence();
+    result.message = [
+      workspaceReadinessMessage(result.resolved_workspace),
+      result.pull ? `pull: ${result.pull.message}` : null,
+      result.push ? `push: ${result.push.message}` : null
+    ].filter(Boolean).join("; ");
+    return result;
+  }
+  async syncPeer(options) {
+    const direction = options.direction ?? "both";
+    const localWorkspace = this.ensureWorkspace();
+    migrateKnowledgeDb(localWorkspace.knowledgeDbPath);
+    const peerWorkspaceInput = resolve5(options.peerWorkspace);
+    const peerWorkspace = resolvePeerWorkspace(peerWorkspaceInput);
+    migrateKnowledgeDb(peerWorkspace.knowledgeDbPath);
+    const peerConfig = readKnowledgeConfig(peerWorkspace.configPath);
+    const peerStorage = resolveStorageContract(peerConfig, peerWorkspace, this.scope);
+    const peerStore = createArtifactStore(peerConfig, peerWorkspace);
+    const localMachineId2 = options.machineId ?? workspaceMachineId(localWorkspace);
+    const peerMachineId = workspaceMachineId(peerWorkspace);
+    const resolvedWorkspace = await resolveKnowledgeMachineWorkspace({
+      machineId: options.machineId ?? peerMachineId,
+      peerWorkspace: peerWorkspaceInput,
+      includeTailscale: false
+    });
+    const localBundle = () => createKnowledgeSyncBundle({
+      dbPath: localWorkspace.knowledgeDbPath,
+      scope: this.scope,
+      workspaceHome: localWorkspace.home,
+      storage: this.storageContract(),
+      machineId: localMachineId2,
+      tables: options.tables,
+      includeArtifactContent: options.includeArtifactContent,
+      recordClocks: options.dryRun !== true
+    });
+    const peerBundle = () => createKnowledgeSyncBundle({
+      dbPath: peerWorkspace.knowledgeDbPath,
+      scope: this.scope,
+      workspaceHome: peerWorkspace.home,
+      storage: peerStorage,
+      machineId: peerMachineId,
+      tables: options.tables,
+      includeArtifactContent: options.includeArtifactContent,
+      recordClocks: options.dryRun !== true
+    });
+    const result = {
+      ok: true,
+      dry_run: options.dryRun === true,
+      direction,
+      resolved_workspace: workspaceSummary(resolvedWorkspace, resolvedWorkspace.project_root ?? peerWorkspaceInput),
+      message: ""
+    };
+    if (direction === "pull" || direction === "both") {
+      result.pull = await applyKnowledgeSyncBundle({
+        targetDbPath: localWorkspace.knowledgeDbPath,
+        targetScope: this.scope,
+        targetWorkspaceHome: localWorkspace.home,
+        targetStorage: this.storageContract(),
+        targetStore: this.artifactStore(),
+        bundle: peerBundle(),
+        targetBundle: localBundle(),
+        direction: "pull",
+        dryRun: options.dryRun,
+        localMachineId: localMachineId2
+      });
+    }
+    if (direction === "push" || direction === "both") {
+      result.push = await applyKnowledgeSyncBundle({
+        targetDbPath: peerWorkspace.knowledgeDbPath,
+        targetScope: this.scope,
+        targetWorkspaceHome: peerWorkspace.home,
+        targetStorage: peerStorage,
+        targetStore: peerStore,
+        bundle: localBundle(),
+        targetBundle: peerBundle(),
+        direction: "push",
+        dryRun: options.dryRun,
+        localMachineId: peerMachineId
+      });
+    }
+    result.ok = (result.pull?.ok ?? true) && (result.push?.ok ?? true);
+    result.message = [
+      workspaceReadinessMessage(result.resolved_workspace),
+      result.pull ? `pull: ${result.pull.message}` : null,
+      result.push ? `push: ${result.push.message}` : null
+    ].filter(Boolean).join("; ");
+    return result;
+  }
+}
+function createKnowledgeService(options = {}) {
+  return new KnowledgeService(options);
+}
+
+// src/sdk.ts
+function createKnowledgeClient(options = {}) {
+  const service = createKnowledgeService(options);
+  return {
+    unstable_service: service,
+    paths: () => service.paths(),
+    setup: (input = {}) => service.setup(input),
+    auth: {
+      status: (env = process.env) => service.authStatus(env),
+      login: (input, env = process.env) => service.saveAuth(input, env),
+      logout: (env = process.env) => service.clearAuth(env)
+    },
+    storage: {
+      status: () => service.storageContract(),
+      validate: () => service.validateStorage(),
+      migrateLegacyPath: (input = {}) => service.migrateLegacyPath(input),
+      mergeLegacyPath: (input = {}) => service.mergeLegacyPath(input),
+      artifactStore: () => service.artifactStore()
+    },
+    sync: {
+      status: () => service.syncStatus(),
+      doctor: (input = {}) => service.syncDoctor(input),
+      snapshot: (input = {}) => service.createSyncSnapshot(input),
+      conflicts: (input = {}) => service.syncConflicts(input),
+      conflict: (id) => service.syncConflict(id),
+      proposeConflictResolution: (id) => service.proposeSyncConflictResolution(id),
+      proposeConflictResolutionAi: (input) => service.proposeSyncConflictResolutionWithAi(input),
+      resolveConflict: (input) => service.resolveSyncConflict(input),
+      machines: () => service.syncMachines(),
+      exportBundle: (input = {}) => service.exportSyncBundle(input),
+      importBundle: (input) => service.importSyncBundle(input),
+      peer: (input) => service.syncPeer(input),
+      remotePeer: (input) => service.syncRemotePeer(input)
+    },
+    items: {
+      store: () => service.itemStore(),
+      list: (options2 = {}) => service.listItems(options2),
+      get: (idOrShort) => service.getItem(idOrShort),
+      create: (input) => service.createItem(input),
+      update: (idOrShort, patch) => service.updateItem(idOrShort, patch),
+      delete: (idOrShort) => service.deleteItem(idOrShort),
+      deleteMany: (idsOrShorts) => service.deleteItems(idsOrShorts)
+    },
+    projectLinks: {
+      capability: () => service.projectLinksAuthority().capability(),
+      registerCollection: (request) => service.projectLinksAuthority().registerCollection(request),
+      readCollection: (collectionId) => service.projectLinksAuthority().readCollection(collectionId),
+      lookupReceipt: (request) => service.projectLinksAuthority().lookupReceipt(request),
+      compensateRegistration: (request) => service.projectLinksAuthority().compensateRegistration(request),
+      verifyRegistrationInverse: (request) => service.projectLinksAuthority().verifyRegistrationInverse(request),
+      bindItem: (request) => service.projectLinksAuthority().bindItem(request),
+      readItemBinding: (collectionId, itemId) => service.projectLinksAuthority().readItemBinding(collectionId, itemId),
+      compensateItemBinding: (request) => service.projectLinksAuthority().compensateItemBinding(request),
+      verifyItemBindingInverse: (request) => service.projectLinksAuthority().verifyItemBindingInverse(request),
+      listResources: (projectId, input = {}) => service.projectLinksAuthority().listProjectResources(projectId, input),
+      readResource: (projectId, kind, resourceId) => service.projectLinksAuthority().readProjectResource(projectId, kind, resourceId),
+      readAllResources: (projectId, input = {}) => service.projectLinksAuthority().readAllProjectResources(projectId, input)
+    },
+    inventory: (input = {}) => service.resolveInventory(input),
+    db: {
+      init: () => service.initDb(),
+      stats: () => service.dbStats()
+    },
+    wiki: {
+      init: () => service.initWiki(),
+      compile: (input = {}) => service.compileWiki(input),
+      fileAnswer: (input) => service.fileAnswer(input),
+      lint: () => service.lintWiki()
+    },
+    appWiki: {
+      paths: () => service.paths(),
+      init: (input = {}) => service.initAppWiki(input),
+      notes: {
+        add: (input) => service.addAppWikiNote(input),
+        list: (input = {}) => service.listAppWikiNotes(input),
+        get: (id, input = {}) => service.getAppWikiNote(id, input)
+      },
+      sources: {
+        add: (input) => service.addAppWikiSourceRef(input)
+      },
+      search: (input) => service.searchAppWiki(input),
+      query: (input) => service.queryAppWiki(input)
+    },
+    ingest: {
+      manifest: (input) => service.ingestManifest(input),
+      source: (sourceRef, purpose) => service.ingestSource(sourceRef, purpose),
+      rules: (input = {}) => service.importRulesProvenance(input)
+    },
+    sources: {
+      resolve: (sourceRef, input = {}) => service.resolveSource(sourceRef, input),
+      consumeOutbox: (input) => service.consumeOutbox(input)
+    },
+    reindex: {
+      health: (input = {}) => service.reindexHealth(input),
+      enqueue: (input = {}) => service.enqueueReindex(input),
+      refreshEmbeddings: (input = {}) => service.refreshEmbeddings(input)
+    },
+    providers: {
+      status: (env = process.env) => service.providerStatus(env),
+      models: () => service.modelRegistry()
+    },
+    embeddings: {
+      status: () => service.embeddingStatus(),
+      index: (input = {}) => service.indexEmbeddings(input),
+      search: (input) => service.semanticSearch(input)
+    },
+    search: (input) => service.search(input),
+    retrieveContext: (input) => service.retrieveContext(input),
+    contextPack: (input) => service.contextPack(input),
+    context: {
+      pack: (input) => service.contextPack(input)
+    },
+    ask: (prompt, input = {}) => service.runPrompt({ ...input, prompt }),
+    build: (prompt, input = {}) => service.runPrompt({ ...input, prompt }),
+    web: {
+      search: (input) => service.webSearch(input)
+    }
+  };
+}
+var createKnowledgeSdk = createKnowledgeClient;
+function withDefaultAllowGlobal(input, allowGlobal) {
+  if (allowGlobal !== true)
+    return input;
+  return { ...input ?? {}, allowGlobal: input?.allowGlobal ?? true };
+}
+function createAppWikiScope(options = {}) {
+  const { allowGlobal, ...clientOptions } = options;
+  const client = createKnowledgeClient({
+    ...clientOptions,
+    scope: clientOptions.scope ?? "project"
+  });
+  return {
+    paths: () => client.appWiki.paths(),
+    init: (input = {}) => client.appWiki.init(withDefaultAllowGlobal(input, allowGlobal)),
+    notes: {
+      add: (input) => client.appWiki.notes.add(withDefaultAllowGlobal(input, allowGlobal)),
+      list: (input = {}) => client.appWiki.notes.list(input),
+      get: (id, input = {}) => client.appWiki.notes.get(id, input)
+    },
+    sources: {
+      add: (input) => client.appWiki.sources.add(withDefaultAllowGlobal(input, allowGlobal))
+    },
+    search: (input) => client.appWiki.search(input),
+    query: (input) => client.appWiki.query(input)
+  };
+}
+function openProjectWiki(options = {}) {
+  return createAppWikiScope({ ...options, scope: "project" });
+}
+function openGlobalWiki(options) {
+  return createAppWikiScope({ ...options, scope: "global", allowGlobal: true });
+}
+export {
+  openProjectWiki,
+  openGlobalWiki,
+  createKnowledgeSdk,
+  createKnowledgeClient,
+  createAppWikiScope
+};

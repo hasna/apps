@@ -392,14 +392,12 @@ test("sweep refuses --delete while any registered profile's binding is unresolva
   expect(existsSync(centralCredentialsSnapshot(UUID_A))).toBe(true);
 });
 
-test("sweep refuses outright in api storage mode", () => {
-  process.env.HASNA_ACCOUNTS_STORAGE_MODE = "cloud";
+test("sweep refuses outright in api transport", () => {
   process.env.HASNA_ACCOUNTS_API_URL = "https://accounts.example.com";
   process.env.HASNA_ACCOUNTS_API_KEY = "test-placeholder";
   try {
-    expect(() => sweepCentralAuth()).toThrow(/local storage mode/);
+    expect(() => sweepCentralAuth()).toThrow(/local registry/);
   } finally {
-    process.env.HASNA_ACCOUNTS_STORAGE_MODE = "local";
     delete process.env.HASNA_ACCOUNTS_API_URL;
     delete process.env.HASNA_ACCOUNTS_API_KEY;
   }

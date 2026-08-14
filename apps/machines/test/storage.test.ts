@@ -39,7 +39,7 @@ afterEach(() => {
 });
 
 describe("machines storage config", () => {
-  test("resolves canonical database env, fallback env, and storage mode", () => {
+  test("resolves canonical database env and fallback env; storage mode is never env-selected", () => {
     for (const key of ENV_KEYS) delete process.env[key];
     expect(getStorageDatabaseEnv()).toBeNull();
     expect(getStorageDatabaseUrl()).toBeNull();
@@ -56,14 +56,18 @@ describe("machines storage config", () => {
     expect(getStorageDatabaseEnv()?.name).toBe(MACHINES_STORAGE_ENV);
     expect(getStorageDatabaseUrl()).toBe("postgres://primary/machines");
 
+    // A set storage-mode variable is an error, never a mode selector —
+    // whatever its value (deployment modes were removed, owner directive
+    // 2026-07-29).
     process.env[MACHINES_STORAGE_MODE_ENV] = "cloud";
-    expect(getStorageMode()).toBe("cloud");
+    expect(() => getStorageMode()).toThrow(MACHINES_STORAGE_MODE_ENV);
   });
 
-  test("retired deployment-mode words and junk values throw, naming the variable", () => {
+  test("any storage-mode variable value throws, naming the variable", () => {
     // Deployment modes were removed (owner directive 2026-07-29). A silent
-    // fallback here flips which store a process reads — always fail loudly.
-    for (const value of ["remote", "hybrid", "self_hosted", "invalid"]) {
+    // fallback here flips which store a process reads — always fail loudly,
+    // whatever the value (the retired deployment words, junk, or local/cloud).
+    for (const value of ["remote", "hybrid", "self_hosted", "invalid", "cloud", "local"]) {
       process.env[MACHINES_STORAGE_MODE_ENV] = value;
       expect(() => getStorageMode()).toThrow(MACHINES_STORAGE_MODE_ENV);
     }

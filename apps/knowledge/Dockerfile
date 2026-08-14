@@ -1,8 +1,7 @@
 # syntax=docker/dockerfile:1
 # =============================================================================
-# @hasna/knowledge — knowledge-serve (self-hosted HTTP API) image.
-# ARM64 / Bun. PURE REMOTE per Amendment A1: the service reads/writes the shared
-# cloud Postgres directly and stores artifacts in S3. No local state.
+# @hasna/knowledge — knowledge-serve HTTP API image.
+# ARM64 / Bun. The service reads/writes PostgreSQL and stores artifacts in S3.
 # =============================================================================
 FROM --platform=linux/arm64 oven/bun:1-alpine AS build
 WORKDIR /app
@@ -20,8 +19,7 @@ RUN bun run build
 FROM --platform=linux/arm64 oven/bun:1-alpine AS runtime
 WORKDIR /app
 ENV NODE_ENV=production \
-    PORT=8080 \
-    HASNA_KNOWLEDGE_STORAGE_MODE=cloud
+    PORT=8080
 
 # App code, deps, and the migration runner (owner-scoped migrations run as a
 # one-shot task; the service itself runs as the app role).
@@ -42,5 +40,5 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
   CMD wget -qO- "http://127.0.0.1:${PORT}/health" || exit 1
 
 # Default command: start the HTTP service. The migration task overrides the
-# command with: bun scripts/apply-cloud-migrations.mjs
+# command with: bun scripts/apply-postgres-migrations.mjs
 CMD ["bun", "bin/knowledge-serve.js"]

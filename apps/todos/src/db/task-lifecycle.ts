@@ -1,0 +1,865 @@
+import type { Database, SQLQueryBindings } from "bun:sqlite";
+import type {
+  LockResult,
+  StaleLockHandoffInput,
+  StaleLockHandoffReceipt,
+  Task,
+  TaskRow,
+} from "../types/index.js";
+import {
+  LockError,
+  TaskNotStartableError,
+  TaskNotFoundError,
+  VersionConflictError,
+} from "../types/index.js";
+import { LOCK_EXPIRY_MINUTES, clearExpiredLocks, getDatabase, isLockExpired, lockExpiryCutoff, lowerInClause, now, resolveAssignedToAliases } from "./database.js";
+import { canonicalAgentRef } from "../lib/creator-identity.js";
+
+import { checkCompletionGuard } from "../lib/completion-guard.js";
+import { databasePathFromDatabase } from "../lib/event-emission-safety.js";
+import { emitLocalEventHooksQuiet } from "../lib/event-hooks.js";
+import { emitSharedTaskEventQuiet, taskEventData } from "../lib/shared-events.js";
+import { insertTaskHistory, logTaskChange } from "./audit.js";
+import { nextOccurrence } from "../lib/recurrence.js";
+import { dispatchWebhook } from "./webhooks.js";
+import { taskFromTemplate } from "./templates.js";
+import { createTask, getTask, rowToTask } from "./task-crud.js";
+import { getTaskDependencies } from "./task-graph.js";
+import { sanitizePreWriteText, sanitizePreWriteValue } from "../lib/prewrite-secrets.js";
+import {
+  buildStaleLockHandoffReceipt,
+  prepareStaleLockHandoff,
+  staleLockHandoffHistory,
+  throwStaleLockHandoffConflict,
+} from "../lib/stale-lock-handoff.js";
+
+// Maximum depth for template-spawned task chains to prevent infinite loops
+const MAX_SPAWN_DEPTH = 10;
+
+/**
+ * Do these two strings name the SAME lock holder?
+ *
+ * Lock ownership is compared HERE, at the store, rather than trusted to each
+ * writer, because not every writer arrives through the CLI's `--agent` flag.
+ * `claim <agent>` and `steal <agent>` take the agent POSITIONALLY, the MCP tools
+ * pass `"mcp"`, the TUI passes `"tui"` and the dashboard routes pass
+ * `"dashboard"` — so a fold applied at the flag reaches none of them, and a
+ * capitalised holder written by any of them becomes unreleasable by a folded
+ * caller. Measured: `todos claim Cassius` stored `locked_by='Cassius'`, after
+ * which `--agent Cassius unlock` and `done` both failed with "is locked by
+ * Cassius", permanently for `unlock`, which has no expiry term.
+ *
+ * This also repairs the legacy rows nobody can rewrite: 10 of 357 non-null
+ * `locked_by` values on the live store are capitalised (a floor — that read was
+ * page-capped), and they become releasable by their named owner again.
+ *
+ * Comparison is canonicalised, and the STORED value is left as the caller wrote
+ * it: folding what is written would rewrite display case on every claim, while
+ * folding what is compared is all that lock correctness needs.
+ *
+ * Note the SQL side uses `LOWER(TRIM(...))`, which is ASCII-only in SQLite,
+ * whereas `canonicalAgentRef` uses JS `toLowerCase()`. Agent names on this fleet
+ * are ASCII, so the two agree; a non-ASCII agent name would be the case where
+ * they could diverge.
+ */
+function sameHolder(stored: string | null | undefined, incoming: string | null | undefined): boolean {
+  if (!stored || !incoming) return false;
+  return canonicalAgentRef(stored) === canonicalAgentRef(incoming);
+}
+function lockExpiresAt(lockedAt: string | null): string | null {
+  if (!lockedAt) return null;
+  return new Date(new Date(lockedAt).getTime() + LOCK_EXPIRY_MINUTES * 60 * 1000).toISOString();
+}
+
+function assertStartable(task: Task, agentId: string): void {
+  if (task.status === "pending") return;
+  if (task.status === "in_progress") return;
+  throw new TaskNotStartableError(task.id, task.status, agentId);
+}
+
+export function getBlockingDeps(id: string, db?: Database): Task[] {
+  const d = db || getDatabase();
+  const deps = getTaskDependencies(id, d);
+  if (deps.length === 0) return [];
+  const blocking: Task[] = [];
+  for (const dep of deps) {
+    const task = getTask(dep.depends_on, d);
+    if (task && task.status !== "completed") blocking.push(task);
+  }
+  return blocking;
+}
+
+export function startTask(
+  id: string,
+  agentId: string,
+  db?: Database,
+): Task {
+  const d = db || getDatabase();
+  const databasePath = databasePathFromDatabase(d);
+  const task = getTask(id, d);
+  if (!task) throw new TaskNotFoundError(id);
+  assertStartable(task, agentId);
+
+  // Check blocking dependencies
+  const blocking = getBlockingDeps(id, d);
+  if (blocking.length > 0) {
+    const blockerIds = blocking.map(b => b.id.slice(0, 8)).join(", ");
+    emitLocalEventHooksQuiet({
+      type: "task.blocked",
+      payload: {
+        id,
+        agent_id: agentId,
+        title: task.title,
+        blockers: blocking.map((b) => ({ id: b.id, short_id: b.short_id, title: b.title, status: b.status })),
+      },
+      databasePath,
+    });
+    throw new Error(`Task is blocked by ${blocking.length} unfinished dependency(ies): ${blockerIds}`);
+  }
+
+  const cutoff = lockExpiryCutoff();
+  const timestamp = now();
+  const result = d.run(
+    `UPDATE tasks SET status = 'in_progress', assigned_to = ?, locked_by = ?, locked_at = ?, started_at = COALESCE(started_at, ?), version = version + 1, updated_at = ?
+     WHERE id = ? AND status IN ('pending', 'in_progress') AND (locked_by IS NULL OR LOWER(TRIM(locked_by)) = LOWER(TRIM(?)) OR locked_at < ?)`,
+    [agentId, agentId, timestamp, timestamp, timestamp, id, agentId, cutoff],
+  );
+
+  if (result.changes === 0) {
+    const current = getTask(id, d);
+    if (!current) throw new TaskNotFoundError(id);
+    assertStartable(current, agentId);
+    if (current.locked_by && !sameHolder(current.locked_by, agentId) && !isLockExpired(current.locked_at)) {
+      throw new LockError(id, current.locked_by);
+    }
+    throw new Error(`Task ${id} could not be started because it changed during claim`);
+  }
+
+  logTaskChange(id, "start", "status", "pending", "in_progress", agentId, d);
+  const startedTask = { ...task, status: "in_progress" as const, assigned_to: agentId, locked_by: agentId, locked_at: timestamp, started_at: task.started_at || timestamp, version: task.version + 1, updated_at: timestamp };
+  const payload = taskEventData(startedTask, { agent_id: agentId });
+  dispatchWebhook("task.started", payload, d).catch(() => {});
+  emitLocalEventHooksQuiet({ type: "task.started", payload, databasePath });
+  emitSharedTaskEventQuiet({ type: "task.started", task: startedTask, data: { agent_id: agentId }, databasePath });
+
+  // Return constructed result — no re-fetch
+  return startedTask;
+}
+
+export function completeTask(
+  id: string,
+  agentId?: string,
+  db?: Database,
+  options?: { files_changed?: string[]; test_results?: string; commit_hash?: string; notes?: string; attachment_ids?: string[]; skip_recurrence?: boolean; confidence?: number; completed_at?: string },
+): Task {
+  const d = db || getDatabase();
+  const databasePath = databasePathFromDatabase(d);
+  const task = getTask(id, d);
+  if (!task) throw new TaskNotFoundError(id);
+
+  // Idempotency (H3): re-completing an already-completed task must NOT re-run
+  // side effects (recurrence spawn, template spawn, unblock events). Return the
+  // task as-is. A cancelled task cannot be completed.
+  if (task.status === "completed") {
+    return task;
+  }
+  if (task.status === "cancelled") {
+    throw new Error(`Task ${id} is cancelled and cannot be completed`);
+  }
+
+  // A live lock may be completed only by its holder. Missing identity is not
+  // authority to clear somebody else's lock.
+  if (
+    task.locked_by &&
+    !sameHolder(task.locked_by, agentId) &&
+    !isLockExpired(task.locked_at)
+  ) {
+    throw new LockError(id, task.locked_by);
+  }
+
+  // Completion guard: rate limit, min work time, cooldown
+  checkCompletionGuard(task, agentId || null, d);
+
+  // Extract evidence fields (everything except skip_recurrence and confidence)
+  const evidence = options ? sanitizePreWriteValue({
+    files_changed: options.files_changed,
+    test_results: options.test_results,
+    commit_hash: options.commit_hash,
+    notes: options.notes,
+    attachment_ids: options.attachment_ids,
+  }, "task.completion_evidence") : undefined;
+  const hasEvidence = evidence && (evidence.files_changed || evidence.test_results || evidence.commit_hash || evidence.notes || evidence.attachment_ids);
+
+  // Build completion metadata (evidence + confidence)
+  const completionMeta: Record<string, unknown> = {};
+  if (hasEvidence) completionMeta._evidence = evidence;
+  if (options?.confidence !== undefined) {
+    completionMeta._completion = { confidence: options.confidence };
+  }
+  const hasMeta = Object.keys(completionMeta).length > 0;
+
+  const timestamp = options?.completed_at || now();
+  // M2: don't wipe a previously-stored confidence when the caller doesn't pass one.
+  const confidence = options?.confidence !== undefined ? options.confidence : task.confidence;
+
+  // The transaction bumps version once for the (optional) metadata UPDATE and
+  // once for the status UPDATE. Track the true post-commit version so callers
+  // holding the returned task don't hit spurious VersionConflictError (H2).
+  const versionBeforeStatus = task.version + (hasMeta ? 1 : 0);
+  const finalVersion = versionBeforeStatus + 1;
+
+  // Perform both updates atomically in a transaction with optimistic locking
+  const tx = d.transaction(() => {
+    if (hasMeta) {
+      const meta = sanitizePreWriteValue({ ...task.metadata, ...completionMeta }, "task.metadata");
+      const metaResult = d.run(
+        "UPDATE tasks SET metadata = ?, version = version + 1, updated_at = ? WHERE id = ? AND version = ?",
+        [JSON.stringify(meta), timestamp, id, task.version],
+      );
+      if (metaResult.changes === 0) {
+        const current = getTask(id, d);
+        throw new VersionConflictError(id, task.version, current?.version ?? -1);
+      }
+    }
+
+    // M4: guard the status write with the expected version so a concurrent
+    // mutation between read and write is detected instead of silently clobbered.
+    const statusResult = d.run(
+      `UPDATE tasks SET status = 'completed', locked_by = NULL, locked_at = NULL, completed_at = ?, confidence = ?, version = version + 1, updated_at = ?
+       WHERE id = ? AND version = ?`,
+      [timestamp, confidence, timestamp, id, versionBeforeStatus],
+    );
+    if (statusResult.changes === 0) {
+      const current = getTask(id, d);
+      throw new VersionConflictError(id, versionBeforeStatus, current?.version ?? -1);
+    }
+  });
+
+  tx();
+
+  logTaskChange(id, "complete", "status", task.status, "completed", agentId || null, d);
+  const completedTaskForEvent = {
+    ...task,
+    status: "completed" as const,
+    locked_by: null,
+    locked_at: null,
+    completed_at: timestamp,
+    confidence,
+    version: finalVersion,
+    updated_at: timestamp,
+    metadata: hasMeta ? { ...task.metadata, ...completionMeta } : task.metadata,
+  };
+  const completionPayload = taskEventData(completedTaskForEvent, { agent_id: agentId, completed_at: timestamp });
+  dispatchWebhook("task.completed", completionPayload, d).catch(() => {});
+  emitLocalEventHooksQuiet({ type: "task.completed", payload: completionPayload, databasePath });
+  emitSharedTaskEventQuiet({ type: "task.completed", task: completedTaskForEvent, data: { agent_id: agentId, completed_at: timestamp }, databasePath });
+
+  // Auto-spawn next recurring task
+  let spawnedTask: Task | null = null;
+  if (task.recurrence_rule && !options?.skip_recurrence) {
+    try {
+      spawnedTask = spawnNextRecurrence(task, d, timestamp);
+    } catch (e) {
+      // Defensive (#3): a malformed recurrence_rule makes nextOccurrence throw
+      // AFTER the status is already committed. Log and skip rather than throwing
+      // post-commit (which would leave the task completed but surface an error).
+      spawnedTask = null;
+      console.warn(`[tasks] failed to spawn next recurrence for ${id}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  // Auto-spawn next task from template (pipeline/handoff chains)
+  let spawnedFromTemplate: Task | null = null;
+  if (task.spawns_template_id) {
+    // Prevent infinite spawn chains: track depth via metadata
+    const spawnDepth = (task.metadata as Record<string, unknown> | null)?._spawn_depth as number || 0;
+    if (spawnDepth >= MAX_SPAWN_DEPTH) {
+      console.warn(`[tasks] Task ${id} exceeded max spawn depth (${MAX_SPAWN_DEPTH}), skipping template spawn`);
+    } else {
+      try {
+        const input = taskFromTemplate(task.spawns_template_id, {
+          project_id: task.project_id ?? undefined,
+          plan_id: task.plan_id ?? undefined,
+          task_list_id: task.task_list_id ?? undefined,
+          assigned_to: task.assigned_to ?? undefined,
+        }, d);
+        // Set spawn depth on the new task
+        input.metadata = { ...(input.metadata || {}), _spawn_depth: spawnDepth + 1 };
+        spawnedFromTemplate = createTask(input, d);
+      } catch {
+        // Template may have been deleted; skip silently
+      }
+    }
+  }
+
+  // Return constructed result — no re-fetch
+  const meta = hasMeta ? { ...task.metadata, ...completionMeta } : task.metadata;
+  if (spawnedTask) {
+    (meta as Record<string, unknown>)._next_recurrence = { id: spawnedTask.id, short_id: spawnedTask.short_id, due_at: spawnedTask.due_at };
+  }
+  if (spawnedFromTemplate) {
+    (meta as Record<string, unknown>)._spawned_task = { id: spawnedFromTemplate.id, short_id: spawnedFromTemplate.short_id, title: spawnedFromTemplate.title };
+  }
+
+  // Check for newly unblocked dependents
+  const unblockedDeps = d.query(
+    `SELECT DISTINCT t.id, t.short_id, t.title FROM tasks t
+     JOIN task_dependencies td ON td.task_id = t.id
+     WHERE td.depends_on = ? AND t.status = 'pending'
+     AND NOT EXISTS (
+       SELECT 1 FROM task_dependencies td2
+       JOIN tasks dep2 ON dep2.id = td2.depends_on
+       WHERE td2.task_id = t.id AND dep2.status NOT IN ('completed', 'cancelled') AND dep2.id != ?
+     )`
+  ).all(id, id) as { id: string; short_id: string | null; title: string }[];
+
+  if (unblockedDeps.length > 0) {
+    (meta as Record<string, unknown>)._unblocked = unblockedDeps.map(d => ({ id: d.id, short_id: d.short_id, title: d.title }));
+    for (const dep of unblockedDeps) {
+      const depTask = getTask(dep.id, d);
+      const payload = depTask ? taskEventData(depTask, { unblocked_by: id }) : { id: dep.id, unblocked_by: id, title: dep.title };
+      dispatchWebhook("task.unblocked", payload, d).catch(() => {});
+      emitLocalEventHooksQuiet({ type: "task.unblocked", payload, databasePath });
+      if (depTask) emitSharedTaskEventQuiet({ type: "task.unblocked", task: depTask, data: { unblocked_by: id }, databasePath });
+    }
+  }
+
+  return { ...task, status: "completed" as const, locked_by: null, locked_at: null, completed_at: timestamp, confidence, version: finalVersion, updated_at: timestamp, metadata: meta };
+}
+
+export function lockTask(
+  id: string,
+  agentId: string,
+  db?: Database,
+): LockResult {
+  const d = db || getDatabase();
+  const task = getTask(id, d);
+  if (!task) throw new TaskNotFoundError(id);
+  if (task.status === "completed" || task.status === "cancelled") {
+    return {
+      success: false,
+      error: `Task is ${task.status} and cannot be locked`,
+    };
+  }
+
+  // Same-agent locking is a lease renewal: refresh locked_at so long-running
+  // local agents can keep ownership by periodically re-locking.
+  if (sameHolder(task.locked_by, agentId) && !isLockExpired(task.locked_at)) {
+    const timestamp = now();
+    d.run(
+      `UPDATE tasks SET locked_at = ?, updated_at = ?, version = version + 1 WHERE id = ? AND LOWER(TRIM(locked_by)) = LOWER(TRIM(?))`,
+      [timestamp, timestamp, id, agentId],
+    );
+    logTaskChange(id, "lock_renew", "locked_by", agentId, agentId, agentId, d);
+    return { success: true, locked_by: agentId, locked_at: timestamp, expires_at: lockExpiresAt(timestamp)! };
+  }
+
+  // Acquire lock (atomically if not locked or expired)
+  const cutoff = lockExpiryCutoff();
+  const timestamp = now();
+  const result = d.run(
+    `UPDATE tasks SET locked_by = ?, locked_at = ?, version = version + 1, updated_at = ?
+     WHERE id = ? AND status NOT IN ('completed', 'cancelled') AND (locked_by IS NULL OR LOWER(TRIM(locked_by)) = LOWER(TRIM(?)) OR locked_at < ?)`,
+    [agentId, timestamp, timestamp, id, agentId, cutoff],
+  );
+
+  if (result.changes === 0) {
+    const current = getTask(id, d);
+    if (!current) throw new TaskNotFoundError(id);
+    if (current.status === "completed" || current.status === "cancelled") {
+      return {
+        success: false,
+        error: `Task is ${current.status} and cannot be locked`,
+      };
+    }
+    if (current.locked_by && !isLockExpired(current.locked_at)) {
+      return {
+        success: false,
+        locked_by: current.locked_by,
+        locked_at: current.locked_at!,
+        error: `Task is locked by ${current.locked_by}`,
+      };
+    }
+    return {
+      success: false,
+      error: `Task ${id} could not be locked because it changed during lock acquisition`,
+    };
+  }
+
+  logTaskChange(id, "lock", "locked_by", task.locked_by, agentId, agentId, d);
+  return { success: true, locked_by: agentId, locked_at: timestamp, expires_at: lockExpiresAt(timestamp)! };
+}
+
+export function unlockTask(
+  id: string,
+  agentId?: string,
+  db?: Database,
+): boolean {
+  const d = db || getDatabase();
+  const task = getTask(id, d);
+  if (!task) throw new TaskNotFoundError(id);
+
+  // Only unlock if same agent or force (no agentId)
+  if (agentId && task.locked_by && !sameHolder(task.locked_by, agentId)) {
+    throw new LockError(id, task.locked_by);
+  }
+
+  const timestamp = now();
+  d.run(
+    `UPDATE tasks SET locked_by = NULL, locked_at = NULL, version = version + 1, updated_at = ?
+     WHERE id = ?`,
+    [timestamp, id],
+  );
+
+  return true;
+}
+
+/**
+ * Atomically transfer exactly one stale lock from its observed holder/version
+ * to the authenticated new holder, and persist the immutable receipt in the
+ * owning task_history table inside the same SQLite transaction.
+ */
+export function handoffStaleTaskLock(
+  input: StaleLockHandoffInput,
+  db?: Database,
+): StaleLockHandoffReceipt {
+  const d = db || getDatabase();
+  const prepared = prepareStaleLockHandoff(input);
+  const receipt = buildStaleLockHandoffReceipt(prepared);
+  const history = staleLockHandoffHistory(receipt, null);
+
+  const transfer = d.transaction(() => {
+    const result = d.run(
+      `UPDATE tasks
+       SET locked_by = ?, locked_at = ?, updated_at = ?, version = version + 1
+       WHERE id = ?
+         AND locked_by = ?
+         AND locked_at = ?
+         AND julianday(locked_at) < julianday(?)
+         AND status NOT IN ('completed', 'failed', 'cancelled')`,
+      [
+        prepared.new_holder,
+        prepared.operation_timestamp,
+        prepared.operation_timestamp,
+        prepared.task_id,
+        prepared.expected_holder,
+        prepared.expected_lock_version,
+        prepared.stale_cutoff,
+      ],
+    );
+
+    if (result.changes === 0) {
+      const current = getTask(prepared.task_id, d);
+      if (!current) throw new TaskNotFoundError(prepared.task_id);
+      throwStaleLockHandoffConflict(current, prepared);
+    }
+
+    insertTaskHistory(history, d);
+  });
+  transfer();
+  return receipt;
+}
+
+export interface TaskLockStatus {
+  task_id: string;
+  locked: boolean;
+  locked_by: string | null;
+  locked_at: string | null;
+  expires_at: string | null;
+  expired: boolean;
+}
+
+export function getTaskLockStatus(id: string, db?: Database): TaskLockStatus {
+  const d = db || getDatabase();
+  const task = getTask(id, d);
+  if (!task) throw new TaskNotFoundError(id);
+  const expired = isLockExpired(task.locked_at);
+  return {
+    task_id: id,
+    locked: !!task.locked_by && !expired,
+    locked_by: task.locked_by,
+    locked_at: task.locked_at,
+    expires_at: lockExpiresAt(task.locked_at),
+    expired,
+  };
+}
+
+export function claimNextTask(
+  agentId: string,
+  filters?: { project_id?: string; task_list_id?: string; plan_id?: string; tags?: string[] },
+  db?: Database,
+): Task | null {
+  const d = db || getDatabase();
+
+  // M7: If another process wins the race between getNextTask and startTask,
+  // startTask throws ("changed during claim" / LockError). Instead of failing
+  // the whole claim, move on to the next candidate. Each attempt is atomic.
+  const MAX_ATTEMPTS = 25;
+  const tried = new Set<string>();
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    const outcome = d.transaction((): { done: boolean; task: Task | null } => {
+      const task = getNextTask(agentId, filters, d);
+      if (!task) return { done: true, task: null };
+      // Safety net: if getNextTask keeps returning the same contended task,
+      // stop rather than spin.
+      if (tried.has(task.id)) return { done: true, task: null };
+      tried.add(task.id);
+      try {
+        return { done: true, task: startTask(task.id, agentId, d) };
+      } catch {
+        // Lost the race for this candidate — try the next pending task.
+        return { done: false, task: null };
+      }
+    })();
+    if (outcome.done) return outcome.task;
+  }
+  return null;
+}
+
+export function getNextTask(
+  agentId?: string,
+  filters?: { project_id?: string; task_list_id?: string; plan_id?: string; tags?: string[] },
+  db?: Database,
+): Task | null {
+  const d = db || getDatabase();
+  clearExpiredLocks(d);
+
+  const conditions: string[] = ["status = 'pending'", "(locked_by IS NULL OR locked_at < ?)"];
+  const params: SQLQueryBindings[] = [lockExpiryCutoff()];
+
+  if (filters?.project_id) { conditions.push("project_id = ?"); params.push(filters.project_id); }
+  if (filters?.task_list_id) { conditions.push("task_list_id = ?"); params.push(filters.task_list_id); }
+  if (filters?.plan_id) { conditions.push("plan_id = ?"); params.push(filters.plan_id); }
+  if (filters?.tags && filters.tags.length > 0) {
+    const placeholders = filters.tags.map(() => "?").join(",");
+    conditions.push(`id IN (SELECT task_id FROM task_tags WHERE tag IN (${placeholders}))`);
+    params.push(...filters.tags);
+  }
+
+  // Exclude blocked tasks (those with incomplete dependencies)
+  conditions.push("id NOT IN (SELECT td.task_id FROM task_dependencies td JOIN tasks dep ON dep.id = td.depends_on WHERE dep.status != 'completed')");
+
+  const where = conditions.join(" AND ");
+
+  // Agent affinity: boost tasks in projects where agent recently completed
+  // work. Alias-resolved (task 84c77210) — see database.ts for the root
+  // cause. This is an ORDERING heuristic, not a correctness gate: getting it
+  // wrong degrades the boost rather than losing or leaking a task, but it is
+  // fixed for consistency with every other exact-match `assigned_to` site.
+  let recentProjectIds: string[] = [];
+  const assignedAliasParams: SQLQueryBindings[] = [];
+  const assignedInClause = agentId ? lowerInClause("assigned_to", resolveAssignedToAliases(d, agentId), assignedAliasParams) : "";
+  if (agentId) {
+    const recentRows = d.query(
+      `SELECT DISTINCT project_id FROM tasks WHERE ${assignedInClause} AND status = 'completed' AND project_id IS NOT NULL ORDER BY completed_at DESC LIMIT 3`
+    ).all(...assignedAliasParams) as { project_id: string }[];
+    recentProjectIds = recentRows.map(r => r.project_id);
+  }
+
+  let sql = `SELECT * FROM tasks WHERE ${where} ORDER BY `;
+  if (agentId) {
+    sql += `CASE WHEN ${assignedInClause} THEN 0 WHEN assigned_to IS NULL THEN 1 ELSE 2 END, `;
+    params.push(...assignedAliasParams);
+  }
+  if (recentProjectIds.length > 0) {
+    const placeholders = recentProjectIds.map(() => "?").join(",");
+    sql += `CASE WHEN project_id IN (${placeholders}) THEN 0 ELSE 1 END, `;
+    params.push(...recentProjectIds);
+  }
+  sql += `CASE priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 END, created_at ASC LIMIT 1`;
+
+  const row = d.query(sql).get(...params) as TaskRow | null;
+  return row ? rowToTask(row) : null;
+}
+
+export interface ActiveWorkItem {
+  id: string;
+  short_id: string | null;
+  title: string;
+  priority: string;
+  assigned_to: string | null;
+  locked_by: string | null;
+  locked_at: string | null;
+  updated_at: string;
+}
+
+export function getActiveWork(
+  filters?: { project_id?: string; task_list_id?: string },
+  db?: Database,
+): ActiveWorkItem[] {
+  const d = db || getDatabase();
+  clearExpiredLocks(d);
+  const conditions: string[] = ["status = 'in_progress'"];
+  const params: SQLQueryBindings[] = [];
+
+  if (filters?.project_id) { conditions.push("project_id = ?"); params.push(filters.project_id); }
+  if (filters?.task_list_id) { conditions.push("task_list_id = ?"); params.push(filters.task_list_id); }
+
+  const where = conditions.join(" AND ");
+  const rows = d.query(
+    `SELECT id, short_id, title, priority, assigned_to, locked_by, locked_at, updated_at FROM tasks WHERE ${where} ORDER BY
+    CASE priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 END,
+    updated_at DESC`
+  ).all(...params) as ActiveWorkItem[];
+
+  return rows;
+}
+
+export function getTasksChangedSince(
+  since: string,
+  filters?: { project_id?: string; task_list_id?: string },
+  db?: Database,
+): Task[] {
+  const d = db || getDatabase();
+  const conditions: string[] = ["updated_at > ?"];
+  const params: SQLQueryBindings[] = [since];
+
+  if (filters?.project_id) { conditions.push("project_id = ?"); params.push(filters.project_id); }
+  if (filters?.task_list_id) { conditions.push("task_list_id = ?"); params.push(filters.task_list_id); }
+
+  const where = conditions.join(" AND ");
+  const rows = d.query(`SELECT * FROM tasks WHERE ${where} ORDER BY updated_at DESC`).all(...params) as TaskRow[];
+  return rows.map(rowToTask);
+}
+
+export function failTask(
+  id: string,
+  agentId?: string,
+  reason?: string,
+  options?: { retry?: boolean; retry_after?: string; error_code?: string },
+  db?: Database,
+): { task: Task; retryTask?: Task } {
+  const d = db || getDatabase();
+  const databasePath = databasePathFromDatabase(d);
+  const task = getTask(id, d);
+  if (!task) throw new TaskNotFoundError(id);
+  const safeReason = sanitizePreWriteText(reason || "Unknown failure", "task.failure.reason");
+  const safeErrorCode = options?.error_code ? sanitizePreWriteText(options.error_code, "task.failure.error_code") : null;
+
+  // Store failure info in metadata
+  const meta: Record<string, unknown> = {
+    ...task.metadata,
+    _failure: {
+      reason: safeReason,
+      error_code: safeErrorCode,
+      failed_by: agentId || null,
+      failed_at: now(),
+      retry_requested: options?.retry || false,
+    },
+  };
+  const safeMeta = sanitizePreWriteValue(meta, "task.failure.metadata");
+
+  const timestamp = now();
+  // M4: guard the write with the expected version (optimistic lock) so a
+  // concurrent mutation is detected rather than silently overwritten. The
+  // metadata read-modify-write and the status write happen atomically.
+  const failTx = d.transaction(() => {
+    const res = d.run(
+      `UPDATE tasks SET status = 'failed', reason = ?, locked_by = NULL, locked_at = NULL, metadata = ?, version = version + 1, updated_at = ?
+       WHERE id = ? AND version = ?`,
+      [safeReason, JSON.stringify(safeMeta), timestamp, id, task.version],
+    );
+    if (res.changes === 0) {
+      const current = getTask(id, d);
+      throw new VersionConflictError(id, task.version, current?.version ?? -1);
+    }
+  });
+  failTx();
+
+  const failedTask: Task = {
+    ...task,
+    status: "failed" as const,
+    locked_by: null,
+    locked_at: null,
+    reason: safeReason,
+    metadata: safeMeta,
+    version: task.version + 1,
+    updated_at: timestamp,
+  };
+  logTaskChange(id, "fail", "status", task.status, "failed", agentId || null, d);
+  const failurePayload = taskEventData(failedTask, { reason: safeReason, error_code: safeErrorCode, agent_id: agentId });
+  dispatchWebhook("task.failed", failurePayload, d).catch(() => {});
+  emitLocalEventHooksQuiet({ type: "task.failed", payload: failurePayload, databasePath });
+  emitSharedTaskEventQuiet({ type: "task.failed", task: failedTask, data: { reason: safeReason, error_code: safeErrorCode, agent_id: agentId }, severity: "warning", databasePath });
+
+  // Auto-retry: create a new pending copy with exponential backoff
+  let retryTask: Task | undefined;
+  if (options?.retry) {
+    const retryCount = (task.retry_count || 0) + 1;
+    const maxRetries = task.max_retries || 3;
+
+    if (retryCount > maxRetries) {
+      // Exceeded max retries — don't create retry copy, add to metadata
+      d.run("UPDATE tasks SET metadata = ? WHERE id = ?", [
+        JSON.stringify(sanitizePreWriteValue({ ...safeMeta, _retry_exhausted: { retry_count: retryCount - 1, max_retries: maxRetries } }, "task.retry_exhausted.metadata")),
+        id,
+      ]);
+    } else {
+      // Exponential backoff: 1min, 5min, 25min, 125min...
+      const backoffMinutes = Math.pow(5, retryCount - 1);
+      const retryAfter = options.retry_after || new Date(Date.now() + backoffMinutes * 60 * 1000).toISOString();
+
+      // Strip short_id prefix from title
+      let title = task.title;
+      if (task.short_id && title.startsWith(task.short_id + ": ")) {
+        title = title.slice(task.short_id.length + 2);
+      }
+
+      retryTask = createTask({
+        title,
+        description: task.description ?? undefined,
+        priority: task.priority,
+        project_id: task.project_id ?? undefined,
+        task_list_id: task.task_list_id ?? undefined,
+        plan_id: task.plan_id ?? undefined,
+        assigned_to: task.assigned_to ?? undefined,
+        tags: task.tags,
+        metadata: { ...task.metadata, _retry: { original_id: task.id, retry_count: retryCount, max_retries: maxRetries, retry_after: retryAfter, failure_reason: safeReason } },
+        estimated_minutes: task.estimated_minutes ?? undefined,
+        recurrence_rule: task.recurrence_rule ?? undefined,
+        due_at: retryAfter,
+      }, d);
+
+      // Set retry fields on the new task
+      d.run("UPDATE tasks SET retry_count = ?, max_retries = ?, retry_after = ? WHERE id = ?",
+        [retryCount, maxRetries, retryAfter, retryTask.id]);
+    }
+  }
+
+  return { task: failedTask, retryTask };
+}
+
+export type StaleTaskQuery = number | {
+  minutes?: number;
+  hours?: number;
+  project_id?: string;
+  task_list_id?: string;
+};
+
+export function getStaleTasks(
+  staleQuery: StaleTaskQuery = 30,
+  filters?: { project_id?: string; task_list_id?: string },
+  db?: Database,
+): Task[] {
+  const d = db || getDatabase();
+  const staleMinutes = typeof staleQuery === "number"
+    ? staleQuery
+    : staleQuery.minutes ?? (staleQuery.hours !== undefined ? staleQuery.hours * 60 : 30);
+  const effectiveFilters = typeof staleQuery === "number"
+    ? filters
+    : { project_id: staleQuery.project_id, task_list_id: staleQuery.task_list_id };
+  const cutoff = new Date(Date.now() - staleMinutes * 60 * 1000).toISOString();
+
+  const conditions: string[] = [
+    "status = 'in_progress'",
+    "(updated_at < ? OR (locked_at IS NOT NULL AND locked_at < ?))",
+  ];
+  const params: SQLQueryBindings[] = [cutoff, cutoff];
+
+  if (effectiveFilters?.project_id) { conditions.push("project_id = ?"); params.push(effectiveFilters.project_id); }
+  if (effectiveFilters?.task_list_id) { conditions.push("task_list_id = ?"); params.push(effectiveFilters.task_list_id); }
+
+  const where = conditions.join(" AND ");
+  const rows = d.query(
+    `SELECT * FROM tasks WHERE ${where} ORDER BY updated_at ASC`
+  ).all(...params) as TaskRow[];
+
+  return rows.map(rowToTask);
+}
+
+/**
+ * Work-stealing: find the highest-priority stale in_progress task and reassign it to the given agent.
+ * A task is stealable if it's in_progress and its lock/update is older than staleMinutes.
+ */
+export function stealTask(
+  agentId: string,
+  opts?: { stale_minutes?: number; project_id?: string; task_list_id?: string },
+  db?: Database,
+): Task | null {
+  const d = db || getDatabase();
+  const databasePath = databasePathFromDatabase(d);
+  const staleMinutes = opts?.stale_minutes ?? 30;
+  const staleTasks = getStaleTasks(staleMinutes, { project_id: opts?.project_id, task_list_id: opts?.task_list_id }, d);
+  if (staleTasks.length === 0) return null;
+
+  // Pick highest priority stale task
+  const priorityOrder: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
+  staleTasks.sort((a, b) => (priorityOrder[a.priority] ?? 9) - (priorityOrder[b.priority] ?? 9));
+  const target = staleTasks[0]!;
+
+  const timestamp = now();
+  const cutoff = new Date(Date.now() - staleMinutes * 60 * 1000).toISOString();
+  const result = d.run(
+    `UPDATE tasks SET assigned_to = ?, locked_by = ?, locked_at = ?, updated_at = ?, version = version + 1
+     WHERE id = ? AND status = 'in_progress' AND (updated_at < ? OR (locked_at IS NOT NULL AND locked_at < ?))`,
+    [agentId, agentId, timestamp, timestamp, target.id, cutoff, cutoff],
+  );
+  if (result.changes === 0) return null;
+
+  logTaskChange(target.id, "steal", "assigned_to", target.assigned_to, agentId, agentId, d);
+  logTaskChange(target.id, "steal", "locked_by", target.locked_by, agentId, agentId, d);
+  const stolenTask = { ...target, assigned_to: agentId, locked_by: agentId, locked_at: timestamp, updated_at: timestamp, version: target.version + 1 };
+  const payload = taskEventData(stolenTask, { agent_id: agentId, stolen_from: target.assigned_to });
+  dispatchWebhook("task.assigned", payload, d).catch(() => {});
+  emitLocalEventHooksQuiet({ type: "task.assigned", payload, databasePath });
+  emitSharedTaskEventQuiet({ type: "task.assigned", task: stolenTask, data: { agent_id: agentId, stolen_from: target.assigned_to }, databasePath });
+
+  return stolenTask;
+}
+
+/**
+ * Enhanced claim: try pending queue first, then steal from stale agents if nothing pending.
+ */
+export function claimOrSteal(
+  agentId: string,
+  filters?: { project_id?: string; task_list_id?: string; plan_id?: string; tags?: string[]; stale_minutes?: number },
+  db?: Database,
+): { task: Task; stolen: boolean } | null {
+  const d = db || getDatabase();
+  const tx = d.transaction(() => {
+    // Try normal claim first
+    const next = getNextTask(agentId, filters, d);
+    if (next) {
+      const started = startTask(next.id, agentId, d);
+      return { task: started, stolen: false };
+    }
+    // Fall back to work-stealing
+    const stolen = stealTask(agentId, { stale_minutes: filters?.stale_minutes, project_id: filters?.project_id, task_list_id: filters?.task_list_id }, d);
+    if (stolen) return { task: stolen, stolen: true };
+    return null;
+  });
+  return tx();
+}
+
+// Spawn next recurring task. Exported so the generic updateTask path
+// (dashboard PATCH / CLI update) can continue a recurring chain too.
+export function spawnNextRecurrence(completedTask: Task, db: Database, completedAt: string): Task {
+  const recurrenceBase = completedTask.due_at ? new Date(completedTask.due_at) : new Date(completedAt);
+  const dueAt = nextOccurrence(completedTask.recurrence_rule!, recurrenceBase);
+
+  // Strip short_id prefix from title if present
+  let title = completedTask.title;
+  if (completedTask.short_id && title.startsWith(completedTask.short_id + ": ")) {
+    title = title.slice(completedTask.short_id.length + 2);
+  }
+
+  // The recurrence_parent_id chains back to the original recurring task
+  const recurrenceParentId = completedTask.recurrence_parent_id || completedTask.id;
+
+  return createTask({
+    title,
+    description: completedTask.description ?? undefined,
+    priority: completedTask.priority,
+    project_id: completedTask.project_id ?? undefined,
+    task_list_id: completedTask.task_list_id ?? undefined,
+    plan_id: completedTask.plan_id ?? undefined,
+    assigned_to: completedTask.assigned_to ?? undefined,
+    tags: completedTask.tags,
+    metadata: completedTask.metadata,
+    estimated_minutes: completedTask.estimated_minutes ?? undefined,
+    sla_minutes: completedTask.sla_minutes ?? undefined,
+    recurrence_rule: completedTask.recurrence_rule!,
+    recurrence_parent_id: recurrenceParentId,
+    due_at: dueAt,
+  }, db);
+}

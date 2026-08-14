@@ -1,0 +1,55 @@
+{
+  "name": "chief-routing-remediation",
+  "description": "Multi-step agentic routing remediation: plan -> apply-safe-only -> adversarial verify. Consumes `todos doctor routing --json`, applies ONLY doctor-classified safe_auto repairs via supported CLI (todos doctor routing --apply / todos update), files deduped blocker tasks for cross-repo/invalid-path/unsupported/human cases, and never rewrites intent or edits the DB directly. Bounded per shard. codewith moderate effort (set --variant medium at loop-create time; never fast/xhigh).",
+  "version": 1,
+  "steps": [
+    {
+      "id": "planner",
+      "name": "Planner",
+      "description": "Plan the bounded remediation cycle from the doctor JSON.",
+      "dependsOn": [],
+      "continueOnFailure": false,
+      "target": {
+        "type": "agent",
+        "provider": "codewith",
+        "authProfile": "account004",
+        "configIsolation": "safe",
+        "permissionMode": "bypass",
+        "sandbox": "read-only",
+        "prompt": "You are the PLANNER for routing remediation on shard ${SHARD}. Run `todos doctor routing --json --shard ${SHARD}` (read-only) and parse the JSON contract todos.routing_doctor.v1. Produce a bounded plan: (1) the count of safe_auto findings to apply this cycle (cap at ${MAX_REPAIRS} — do NOT exceed); (2) the blocker findings (blocker_cross_repo, blocker_invalid_path, blocker_human, unsupported) that must become deduped tasks, each with source task id + category + owner. Do NOT apply anything. Do NOT rewrite intent. Write the plan and the raw doctor summary to your handoff for the worker. Start a goal plan (a chain of goals with adversarial reviews)."
+      }
+    },
+    {
+      "id": "worker",
+      "name": "Worker",
+      "description": "Apply ONLY safe_auto repairs via supported CLI; file deduped blockers.",
+      "dependsOn": ["planner"],
+      "continueOnFailure": false,
+      "target": {
+        "type": "agent",
+        "provider": "codewith",
+        "authProfile": "account004",
+        "configIsolation": "safe",
+        "permissionMode": "bypass",
+        "sandbox": "danger-full-access",
+        "prompt": "You are the WORKER for routing remediation on shard ${SHARD}, executing the planner's bounded plan. Apply ONLY safe_auto repairs by running `todos doctor routing --apply --shard ${SHARD} --undo-record ${UNDO_DIR}/routing-remediation-${SHARD}.json` (this mutates only safe_auto findings via supported updateTask calls, writes a DB backup + undo record, comments old/new/source/command per task, and leaves every blocker untouched). You MUST NOT edit the database directly, MUST NOT change cross_repo_intent tasks, and MUST NOT touch any blocker_* or unsupported finding. Then, for each blocker the planner listed, upsert a deduped Todos task (todos task upsert --fingerprint routing-health:blocker:<sourceTaskId>:<category> --tag routing-health,from-kai --title ...) carrying the source task id, finding category, owner repo/project, and next supported action. Record the repaired count, the undo-record path, the DB backup path, and the post-apply route_recheck for a sample of repaired tasks. Start a goal plan (a chain of goals with adversarial reviews)."
+      }
+    },
+    {
+      "id": "reviewer",
+      "name": "Adversarial reviewer",
+      "description": "Adversarially verify the remediation: safe_auto dropped, blockers untouched, evidence complete.",
+      "dependsOn": ["worker"],
+      "continueOnFailure": false,
+      "target": {
+        "type": "agent",
+        "provider": "codewith",
+        "authProfile": "account006",
+        "configIsolation": "safe",
+        "permissionMode": "bypass",
+        "sandbox": "read-only",
+        "prompt": "You are the ADVERSARIAL REVIEWER for routing remediation on shard ${SHARD}, and you must be independent of the worker. Independently re-run `todos doctor routing --json --shard ${SHARD}` and verify: (1) the safe_auto finding count DROPPED by the worker's claimed repaired count (ideally to 0 for this shard); (2) NO blocker finding (cross_repo/invalid_path/unsupported/human) was mutated — compare the blocker task ids/working_dir/task_list_id before vs after; (3) the undo record ${UNDO_DIR}/routing-remediation-${SHARD}.json exists and lists every applied repair with an undo_command, and the DB backup exists; (4) each repaired task carries a [routing-doctor] evidence comment; (5) the blocker tasks were filed/deduped, not left silent. Try to break the claim. Emit PASS only if all hold; otherwise FAIL with the specific violation. Do not fix anything yourself."
+      }
+    }
+  ]
+}

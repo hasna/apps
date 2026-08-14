@@ -2,8 +2,8 @@ import { afterAll } from 'bun:test';
 import {
   KNOWLEDGE_API_KEY_ENV_KEYS,
   KNOWLEDGE_API_URL_ENV_KEYS,
-  KNOWLEDGE_MODE_ENV_KEYS,
-} from '../src/knowledge-mode';
+  RETIRED_KNOWLEDGE_SELECTOR_ENV_KEYS,
+} from '../src/client-transport';
 
 /**
  * Bun loads this module before every test file through bunfig.toml. Keep the
@@ -18,9 +18,8 @@ import {
 export const KNOWLEDGE_TEST_ROUTE_ENV_KEYS = [
   ...KNOWLEDGE_API_URL_ENV_KEYS,
   ...KNOWLEDGE_API_KEY_ENV_KEYS,
-  ...KNOWLEDGE_MODE_ENV_KEYS,
+  ...RETIRED_KNOWLEDGE_SELECTOR_ENV_KEYS,
   'HASNA_KNOWLEDGE_DATABASE_URL',
-  'KNOWLEDGE_DATABASE_URL',
 ] as const;
 
 export function knowledgeTestEnv(

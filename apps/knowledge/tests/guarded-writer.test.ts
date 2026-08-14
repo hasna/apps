@@ -109,7 +109,7 @@ beforeAll(async () => {
   const verifier = verifyApiKey({
     app: 'knowledge',
     signingSecret: SIGNING,
-    isRevoked: store.isRevoked,
+    keyStatus: () => Promise.resolve('active' as const),
   });
   const handler = createServeHandler({
     client,
@@ -121,7 +121,6 @@ beforeAll(async () => {
   server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: handler });
   env = {
     NODE_ENV: 'test',
-    HASNA_KNOWLEDGE_STORAGE_MODE: 'postgres',
     HASNA_KNOWLEDGE_API_URL: `http://127.0.0.1:${server.port}`,
     HASNA_KNOWLEDGE_API_KEY: mintApiKey({
       app: 'knowledge',
@@ -186,7 +185,6 @@ async function itemSnapshot(id: string) {
 test('REGRESSION: guarded writer uses the supplied env endpoint and credential, not ambient credentials', async () => {
   const originalFetch = globalThis.fetch;
   const savedAmbient = {
-    mode: process.env.HASNA_KNOWLEDGE_STORAGE_MODE,
     url: process.env.HASNA_KNOWLEDGE_API_URL,
     key: process.env.HASNA_KNOWLEDGE_API_KEY,
   };
@@ -218,14 +216,12 @@ test('REGRESSION: guarded writer uses the supplied env endpoint and credential, 
   }) as typeof fetch;
 
   try {
-    process.env.HASNA_KNOWLEDGE_STORAGE_MODE = 'postgres';
     process.env.HASNA_KNOWLEDGE_API_URL = 'http://127.0.0.1:65530/ambient';
     process.env.HASNA_KNOWLEDGE_API_KEY = AMBIENT_SENTINEL_KEY;
 
     const suppliedEnv = {
       ...process.env,
       HOME: home,
-      HASNA_KNOWLEDGE_STORAGE_MODE: 'postgres',
       HASNA_KNOWLEDGE_API_URL: 'http://127.0.0.1:65531/supplied',
       HASNA_KNOWLEDGE_API_KEY: SUPPLIED_SENTINEL_KEY,
       KNOWLEDGE_API_KEY: SUPPLIED_SENTINEL_KEY,
@@ -242,8 +238,6 @@ test('REGRESSION: guarded writer uses the supplied env endpoint and credential, 
   } finally {
     globalThis.fetch = originalFetch;
     rmSync(home, { recursive: true, force: true });
-    if (savedAmbient.mode === undefined) delete process.env.HASNA_KNOWLEDGE_STORAGE_MODE;
-    else process.env.HASNA_KNOWLEDGE_STORAGE_MODE = savedAmbient.mode;
     if (savedAmbient.url === undefined) delete process.env.HASNA_KNOWLEDGE_API_URL;
     else process.env.HASNA_KNOWLEDGE_API_URL = savedAmbient.url;
     if (savedAmbient.key === undefined) delete process.env.HASNA_KNOWLEDGE_API_KEY;
@@ -257,7 +251,6 @@ test('private query transport failures are controlled and never disclose selecto
   const guarded = createKnowledgeGuardedWriter({
     binding: BINDING,
     env: {
-      HASNA_KNOWLEDGE_STORAGE_MODE: 'postgres',
       HASNA_KNOWLEDGE_API_URL: 'http://127.0.0.1:65532',
       HASNA_KNOWLEDGE_API_KEY: SUPPLIED_SENTINEL_KEY,
     },
@@ -275,7 +268,7 @@ test('private query transport failures are controlled and never disclose selecto
       status: 200,
       headers: { 'content-type': 'application/json' },
     })]) {
-      globalThis.fetch = (async () => response as Response) as typeof fetch;
+      globalThis.fetch = (async () => response as Response) as unknown as typeof fetch;
       let caught: unknown;
       try {
         await guarded.query(query);
@@ -1391,7 +1384,7 @@ describe('FCAME-1 guarded Knowledge writer', () => {
       const verifier = verifyApiKey({
         app: 'knowledge',
         signingSecret: SIGNING,
-        isRevoked: store.isRevoked,
+        keyStatus: () => Promise.resolve('active' as const),
       });
       const binding: KnowledgeGuardedBinding = {
         ...BINDING,
@@ -1413,7 +1406,6 @@ describe('FCAME-1 guarded Knowledge writer', () => {
           binding,
           env: {
             NODE_ENV: 'test',
-            HASNA_KNOWLEDGE_STORAGE_MODE: 'postgres',
             HASNA_KNOWLEDGE_API_URL: `http://127.0.0.1:${variantServer.port}`,
             HASNA_KNOWLEDGE_API_KEY: mintApiKey({
               app: 'knowledge',
@@ -1476,7 +1468,7 @@ describe('FCAME-1 guarded Knowledge writer', () => {
       const verifier = verifyApiKey({
         app: 'knowledge',
         signingSecret: SIGNING,
-        isRevoked: store.isRevoked,
+        keyStatus: () => Promise.resolve('active' as const),
       });
       const binding: KnowledgeGuardedBinding = {
         ...BINDING,
@@ -1513,7 +1505,6 @@ describe('FCAME-1 guarded Knowledge writer', () => {
           binding,
           env: {
             NODE_ENV: 'test',
-            HASNA_KNOWLEDGE_STORAGE_MODE: 'postgres',
             HASNA_KNOWLEDGE_API_URL: `http://127.0.0.1:${variantServer.port}`,
             HASNA_KNOWLEDGE_API_KEY: mintApiKey({
               app: 'knowledge',
@@ -1658,7 +1649,8 @@ describe('FCAME-1 guarded Knowledge writer', () => {
     const proof = inspectKnowledgePrivateResult(result);
     expect(proof.kind).toBe('title_lookup');
     expect(proof.item_count).toBe(1);
-    expect(proof.items[0]?.id).toBe(targetId);
+    const firstProofItem = proof.items[0];
+    expect(firstProofItem && 'id' in firstProofItem ? firstProofItem.id : undefined).toBe(targetId);
     expect(proof.items[0]?.title_sha256).toBe(lookup.title_digest);
     expect(JSON.stringify(result)).not.toContain(title);
     expect(JSON.stringify(proof)).not.toContain(title);
@@ -2570,7 +2562,6 @@ describe('FCAME-1 guarded Knowledge writer', () => {
       binding: BINDING,
       env: {
         NODE_ENV: 'test',
-        HASNA_KNOWLEDGE_STORAGE_MODE: 'sqlite',
       },
     })).toThrow(/local JSON, SQLite, and raw-store fallbacks are refused/);
   });

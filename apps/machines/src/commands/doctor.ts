@@ -76,7 +76,7 @@ function buildDoctorCommand(): string {
     "printf 'bun=%s\\n' \"$(bun --version 2>/dev/null || printf missing)\"",
     "printf 'ssh=%s\\n' \"$(command -v ssh >/dev/null 2>&1 && printf ok || printf missing)\"",
     "printf 'machines=%s\\n' \"$(command -v machines 2>/dev/null || printf missing)\"",
-    "printf 'machines_agent=%s\\n' \"$(command -v machines-agent 2>/dev/null || printf missing)\"",
+    "printf 'machines_daemon=%s\\n' \"$(command -v machines-daemon 2>/dev/null || printf missing)\"",
     "printf 'machines_mcp=%s\\n' \"$(command -v machines-mcp 2>/dev/null || printf missing)\"",
     "printf 'sudo_noninteractive=%s\\n' \"$(sudo -n true >/dev/null 2>&1 && printf ok || printf unavailable)\"",
     "printf 'ssh_cert_support=%s\\n' \"$(ssh -Q key-cert 2>/dev/null | grep -q 'ssh-ed25519-cert-v01@openssh.com' && printf ok || printf unavailable)\"",
@@ -104,7 +104,7 @@ const PROBE_BOUND_CHECK_IDS = new Set([
   "notifications-path",
   "bun",
   "machines-cli",
-  "machines-agent-cli",
+  "machines-daemon-cli",
   "machines-mcp-cli",
   "ssh",
   "sudo-noninteractive",
@@ -327,10 +327,10 @@ export function runDoctor(machineId?: string, options: DoctorOptions = {}): Doct
       details["machines"] || "missing"
     ),
     makeCheck(
-      "machines-agent-cli",
-      details["machines_agent"] && details["machines_agent"] !== "missing" ? "ok" : "warn",
-      "machines-agent availability",
-      details["machines_agent"] || "missing"
+      "machines-daemon-cli",
+      details["machines_daemon"] && details["machines_daemon"] !== "missing" ? "ok" : "warn",
+      "machines-daemon availability",
+      details["machines_daemon"] || "missing"
     ),
     makeCheck(
       "machines-mcp-cli",

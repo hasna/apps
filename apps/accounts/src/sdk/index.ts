@@ -1,8 +1,8 @@
 // Public SDK surface for @hasna/accounts, generated from the accounts-serve
 // OpenAPI document (see src/server/openapi.ts). Import via `@hasna/accounts/sdk`.
 //
-// self_hosted client convention: ACCOUNTS_API_URL + ACCOUNTS_API_KEY (never a
-// DSN). The generated client speaks the Hasna auth convention (x-api-key).
+// Client convention: ACCOUNTS_API_URL + ACCOUNTS_API_KEY (never a DSN). The
+// generated client speaks the Hasna auth convention (x-api-key).
 
 export * from "./client.js";
 import { AccountsClient, type AccountsClientOptions } from "./client.js";
@@ -21,6 +21,7 @@ export function createAccountsClientFromEnv(options: AccountsClientEnvOptions = 
   if (!baseUrl) {
     throw new Error("createAccountsClientFromEnv requires ACCOUNTS_API_URL (or options.baseUrl).");
   }
+  // hasna-credential-seam-waiver: SDK factory hands the key to the generated AccountsClient (x-api-key header); the contracts-client seam migration is a tracked follow-up requiring a contracts runtime upgrade.
   const apiKey = options.apiKey ?? env.ACCOUNTS_API_KEY;
   return new AccountsClient({
     baseUrl,

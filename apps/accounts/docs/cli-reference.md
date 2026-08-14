@@ -164,4 +164,4 @@ Template-bearing environment and launch arguments support `{profileDir}`,
 | --- | --- |
 | `accounts-mcp` | Stdio MCP server with `list_tools`, `list_profiles`, `current_profile`, `supervisor_status`, and `switch_profile` |
 | `accounts-serve` | `accounts-serve [--port <port>] [--host <host>]`; see [HTTP API and SDK](http-api.md) |
-| `accounts-migrate` | `accounts-migrate [--dry-run]`; requires cloud mode, a database URL, and `HASNA_ACCOUNTS_RUNTIME_ROLE` |
+| `accounts-migrate` | `accounts-migrate [--dry-run]`; requires `HASNA_ACCOUNTS_DATABASE_URL` (postgresql backend) and `HASNA_ACCOUNTS_RUNTIME_ROLE` |
