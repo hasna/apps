@@ -78,6 +78,8 @@ function isBlocked(result: { output: { decision?: string; reason?: string } }): 
         `touch ~/workspace/repos/hasna/apps/foo.md`,
         `echo x > ~/workspace/repos/hasnaxyz/iapp-probe/notes.md`,
         `mkdir -p "${HOME}/workspace/repos/hasna-internal/platform/apps"`,
+        `touch "$HOME"/workspace/repos/hasna/apps/x.txt`,
+        `echo x > "\${HOME}"/workspace/repos/hasnaxyz/iapp-probe/notes.md`,
       ];
       for (const command of commands) {
         const result = evaluate(preToolUse("Bash", { command }));
@@ -90,6 +92,7 @@ function isBlocked(result: { output: { decision?: string; reason?: string } }): 
         evaluate(preToolUse("Write", { file_path: `~/workspace/repos/hasna/apps/src/x.ts` })),
         evaluate(preToolUse("Edit", { file_path: `$HOME/workspace/repos/hasnaxyz/iapp-probe/n.ipynb` })),
         evaluate(preToolUse("Write", { file_path: `"${HOME}/workspace/repos/hasna/apps/notes.md"` })),
+        evaluate(preToolUse("Write", { file_path: `"$HOME"/workspace/repos/hasna/apps/notes2.md` })),
       ];
       for (const result of results) {
         expect(result.output.continue).toBe(true);
@@ -208,6 +211,10 @@ function isBlocked(result: { output: { decision?: string; reason?: string } }): 
         `rm -rf ~/workspace/repos/hasna/apps`,
         `rm -rf $HOME/workspace/repos/hasna`,
         `rm -rf "${HOME}/workspace/repos"`,
+        `rm -rf "$HOME"/workspace/repos`,
+        `rm -rf "$HOME"/workspace/repos/hasna/apps`,
+        `rm -rf "\${HOME}"/workspace/repos/hasna`,
+        `rm -rf "${HOME}"/workspace/repos/hasna`,
         `touch ~/workspace/repos/stray.txt`,
         `mkdir -p ~/workspace/repos/notanorg`,
         `echo x > ~/workspace/repos/notanorg/f.ts`,
@@ -228,6 +235,7 @@ function isBlocked(result: { output: { decision?: string; reason?: string } }): 
         evaluate(preToolUse("Write", { file_path: `$HOME/workspace/repos/notanorg/f.ts` })),
         evaluate(preToolUse("Edit", { file_path: `~/workspace/repos/hasna` })),
         evaluate(preToolUse("Write", { file_path: `~/workspace/repos` })),
+        evaluate(preToolUse("Write", { file_path: `"$HOME"/workspace/repos/stray.txt` })),
       ];
       for (const result of results) {
         expect(isBlocked(result)).not.toBeNull();

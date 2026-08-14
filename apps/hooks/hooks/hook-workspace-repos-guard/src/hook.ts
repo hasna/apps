@@ -164,18 +164,28 @@ interface PathTarget {
 /**
  * Expand one token's home spelling (`~`, `~/...`, `$HOME`, `$HOME/...`,
  * `${HOME}`, `${HOME}/...`) to the resolved home, tolerating a single layer
- * of wrapping single/double quotes. Non-home spellings are returned
- * unchanged.
+ * of wrapping single/double quotes and a closing quote between the home
+ * token and its path suffix (`"$HOME"/x`, `"${HOME}"/x` — Bash treats these
+ * identically to the unquoted form, because double quotes allow parameter
+ * expansion and adjacent quoted/unquoted parts concatenate into one word).
+ * Non-home spellings are returned unchanged.
  */
 export function expandHomeSpelling(token: string, home: string): string {
   let body = token.trim();
   const quoted = body.match(/^(['"])([\s\S]*)\1$/);
   if (quoted) body = quoted[2];
+  // Split-quote forms — `"$HOME"/x`, `"${HOME}"/x`, `"/home/hasna"/x`: the
+  // quotes wrap only the home token, and Bash concatenates the adjacent
+  // quoted and unquoted parts into the same word as the unquoted spelling.
+  body = body.replace(/^"*\$HOME"*\//, "$HOME/");
+  body = body.replace(/^"*\$\{HOME\}"*\//, "${HOME}/");
   if (body === "~") return home;
   if (body.startsWith("~/")) return join(home, body.slice(2));
   if (body === "$HOME" || body === "${HOME}") return home;
   if (body.startsWith("$HOME/")) return join(home, body.slice("$HOME/".length));
   if (body.startsWith("${HOME}/")) return join(home, body.slice("${HOME}/".length));
+  const homeMatch = body.match(new RegExp(`^"*${regexEscape(home)}"*/`));
+  if (homeMatch) return home + "/" + body.slice(homeMatch[0].length);
   return token;
 }
 
@@ -222,7 +232,7 @@ export function bashTargets(command: string, home: string, cwd: string): PathTar
     }
 
     const homeLiteral = regexEscape(home);
-    const prefixRe = new RegExp(`(?:~|\\$HOME|\\$\\{HOME\\}|${homeLiteral})/workspace/repos`);
+    const prefixRe = new RegExp(`(?:~|\\$HOME"*|\\$\\{HOME\\}"*|${homeLiteral}"*)/workspace/repos`);
     const re = new RegExp(`(${prefixRe.source})([^\\s"';&|<>()\x60]*|$)`, "g");
     let m: RegExpExecArray | null;
     let foundExplicit = false;
