@@ -24,15 +24,19 @@ import {
   type ApiKeyRecord,
   type AuthQueryClient,
 } from "../auth/store";
-import { createSecretsClientFromEnv, type SecretsClient, type SecretsClientOptions } from "@hasna/secrets";
+import {
+  createSecretsBridgeClient,
+  type SecretsBridgeClient,
+  type SecretsBridgeClientOptions,
+} from "./secrets-bridge";
 
 type IssueKeyStore = Pick<ApiKeyStore, "ensureSchema" | "insertMinted"> &
   Partial<Pick<ApiKeyStore, "revoke" | "insertMintedPending" | "activatePending" | "findByKid">>;
 type IssueKeyStoreHandle = { store: IssueKeyStore; close: () => Promise<void> };
 type IssueKeyConnectStore = (connectionString: string, table: string) => Promise<IssueKeyStoreHandle>;
-type IssueKeySecretsClient = Pick<SecretsClient, "putSecret" | "deleteSecret"> &
-  Partial<Pick<SecretsClient, "listSecrets">>;
-type SecretsServiceConfig = Required<Pick<SecretsClientOptions, "baseUrl" | "apiKey">>;
+type IssueKeySecretsClient = Pick<SecretsBridgeClient, "putSecret" | "deleteSecret"> &
+  Partial<Pick<SecretsBridgeClient, "listSecrets">>;
+type SecretsServiceConfig = Required<Pick<SecretsBridgeClientOptions, "baseUrl" | "apiKey">>;
 type IssueKeyConnectSecrets = (config: SecretsServiceConfig) => Promise<IssueKeySecretsClient>;
 
 export interface IssueKeyDeps {
@@ -174,7 +178,7 @@ function resolveSecretsServiceConfig(env: NodeJS.ProcessEnv): SecretsServiceConf
 async function connectSecrets(config: SecretsServiceConfig): Promise<IssueKeySecretsClient> {
   // Empty env plus explicit overrides prevents the SDK's legacy-first ambient
   // resolver from selecting a different URL/key pair after validation.
-  return createSecretsClientFromEnv({}, config);
+  return createSecretsBridgeClient(config);
 }
 
 async function closeQuietly(handle: IssueKeyStoreHandle | undefined): Promise<void> {
