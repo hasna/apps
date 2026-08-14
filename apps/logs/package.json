@@ -1,0 +1,94 @@
+{
+  "name": "@hasna/logs",
+  "version": "0.4.5",
+  "description": "Log aggregation + browser script + headless page scanner + performance monitoring for AI agents",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./storage": {
+      "types": "./dist/storage.d.ts",
+      "import": "./dist/storage.js"
+    },
+    "./api": {
+      "types": "./dist/api.d.ts",
+      "import": "./dist/api.js"
+    }
+  },
+  "bin": {
+    "logs": "./dist/cli/index.js",
+    "logs-mcp": "./dist/mcp/index.js",
+    "logs-serve": "./dist/server/index.js"
+  },
+  "files": [
+    "dist",
+    "dashboard/dist"
+  ],
+  "scripts": {
+    "build": "bun run build:js && bun run build:types",
+    "build:js": "rm -rf dist && bun build src/cli/index.ts src/mcp/index.ts src/server/index.ts src/index.ts src/storage.ts src/api.ts --outdir dist --target bun --splitting --external pg --external playwright --external playwright-core --external electron --external chromium-bidi",
+    "generate:sdk": "bun scripts/generate-sdk-api.ts",
+    "kit:check": "contracts vendor-kit --check",
+    "build:types": "tsc -p tsconfig.build.json --emitDeclarationOnly && rm -rf dist/.sdk-types && tsc -p sdk/tsconfig.json --emitDeclarationOnly --declaration --rootDir sdk/src --outDir dist/.sdk-types && cp dist/.sdk-types/*.d.ts dist/ && rm -rf dist/.sdk-types",
+    "build:dashboard": "cd dashboard && bun run build",
+    "build:all": "bun run build:dashboard && bun run build",
+    "dev": "bun run src/server/index.ts",
+    "test": "bun test",
+    "test:coverage": "bun test --coverage",
+    "validate:dashboard-stream": "bun scripts/dashboard-stream-validation-lab.ts",
+    "validate:browser-runtime": "bun scripts/browser-runtime-validation-lab.ts",
+    "validate:browser-spool": "bun scripts/browser-spool-validation-lab.ts",
+    "validate:logger-packages": "bun scripts/logger-package-validation-lab.ts",
+    "validate:real-life": "bun scripts/real-life-validation-lab.ts",
+    "validate:stress": "bun scripts/high-volume-ingest-stress.ts",
+    "validate:structured-logs": "bun scripts/structured-log-validation-lab.ts",
+    "validate:streams": "bun scripts/stream-load-validation.ts",
+    "lint": "biome check src/",
+    "postinstall": "install -d -m 700 \"$HOME/.hasna/logs\" 2>/dev/null || true"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hasna/logs.git"
+  },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org",
+    "access": "public"
+  },
+  "keywords": [
+    "logs",
+    "monitoring",
+    "mcp",
+    "ai-agents",
+    "sentry",
+    "performance",
+    "lighthouse"
+  ],
+  "author": "Andrei Hasna <andrei@hasna.com>",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@hasna/events": "^0.1.6",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "commander": "^14.0.0",
+    "fast-xml-parser": "^5.8.0",
+    "hono": "^4.7.11",
+    "node-cron": "^3.0.3",
+    "pg": "^8.20.0",
+    "playwright": "^1.52.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.4",
+    "@hasna/agent-registry": "^0.1.0",
+    "@hasna/contracts": "^0.5.2",
+    "@hasna/mcp-harness": "^0.1.0",
+    "@types/bun": "latest",
+    "@types/node-cron": "^3.0.11",
+    "@types/pg": "^8.20.0",
+    "pino": "10.3.1",
+    "typescript": "^5.9.3",
+    "winston": "3.19.0"
+  }
+}
