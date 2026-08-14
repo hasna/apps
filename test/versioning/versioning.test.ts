@@ -44,10 +44,18 @@ const KNOWN_RUNTIME_MISMATCHES = new Map([
 // fixer re-ran the complete 65-member census at the merged head 2026-08-14: exactly the
 // three recorded drifts below, no fourth drift (instructions 0.4.34/0.4.33 recorded
 // 2026-08-14T12:41:38Z publish; reconcile task 8f8063c9-33af-4af7-b0d1-bdb25c481791).
+// Cycle-2 fixer re-ran the complete census at the fresh merge of current main
+// (8e19eaadf) 2026-08-14: exactly the five recorded drifts below, no sixth drift
+// (contracts 0.11.0 imported in-tree by #81 while the registry still holds 0.10.6,
+// reconcile task 48a6ef7f-0919-470d-99f4-59817a01c647; hooks 0.6.0 published
+// 2026-08-14T13:26:52Z ahead of main 0.5.0, reconcile task
+// d1ee99b5-5ba5-46a5-acdd-bb27fec9058f).
 const KNOWN_NPM_DRIFT = new Map([
   ["@hasna/loops", { registryVersion: "0.5.0", mainVersion: "0.4.42", source: "publish lane released 0.5.0 ahead of main; reconcile task 69e8b5dd-15cd-4f45-8739-c0edf6720773" }],
   ["@hasna/emails", { registryVersion: "1.3.15", mainVersion: "1.3.14", source: "release lane published 1.3.15 ahead of main (2026-08-14T11:48:46Z); reconcile task 78c66e3c-baba-4ba6-9295-99b4df7ebc25" }],
   ["@hasna/instructions", { registryVersion: "0.4.34", mainVersion: "0.4.33", source: "release lane published 0.4.34 ahead of main (2026-08-14T12:41:38Z); reconcile task 8f8063c9-33af-4af7-b0d1-bdb25c481791" }],
+  ["@hasna/contracts", { registryVersion: "0.10.6", mainVersion: "0.11.0", source: "import #81 landed contracts 0.11.0 ahead of the registry; reconcile task 48a6ef7f-0919-470d-99f4-59817a01c647" }],
+  ["@hasna/hooks", { registryVersion: "0.6.0", mainVersion: "0.5.0", source: "release lane published 0.6.0 ahead of main (2026-08-14T13:26:52Z); reconcile task d1ee99b5-5ba5-46a5-acdd-bb27fec9058f" }],
 ]);
 
 describe("hasna/apps versioning integrity", () => {
