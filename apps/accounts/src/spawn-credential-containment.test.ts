@@ -138,15 +138,14 @@ function baseEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
     ...process.env,
     NODE_ENV: "test",
     ACCOUNTS_HOME: home,
-    // Registry-authority canaries WITHOUT a complete API pair. Deployment modes
-    // no longer exist and transport is selected by the API pair alone
-    // (cloud-accounts.ts): a complete URL+KEY pair would make these launches
-    // dial the sentinel endpoint for real, so the sentinel here carries the
-    // URL WITHOUT the key (plus the signing/DSN sentinels, which never affect
-    // client transport). The launched tool must not inherit ANY of these, and
-    // the negative control below proves the probe would see them if it did.
-    HASNA_ACCOUNTS_API_URL: "https://accounts.invalid",
-    ACCOUNTS_API_URL: "https://accounts.invalid",
+    // Transport-neutral registry-authority canaries. The URL/KEY canaries
+    // cannot be carried in a local launch env anymore: a partial API pair now
+    // THROWS (P1-1 remediation, cloud-accounts.ts — no silent local drift),
+    // and a complete pair would make these launches dial the sentinel
+    // endpoint for real. URL/KEY containment at the spawn boundary is proven
+    // by the negative control below, which hands the probe the FULL sentinel
+    // set; the signing/DSN sentinels never affect client transport, so they
+    // ride the live launches. The launched tool must not inherit ANY of these.
     HASNA_ACCOUNTS_API_SIGNING_KEY: "synthetic-sentinel-signing",
     HASNA_API_SIGNING_KEY: "synthetic-sentinel-signing",
     HASNA_ACCOUNTS_DATABASE_URL: "postgres://synthetic.invalid/db",
@@ -246,8 +245,8 @@ test("the probe itself can observe a leak — negative control for the whole fil
   // Proves the probe is capable of REPORTING a canary when one is genuinely present,
   // so the ABSENT results above are observations rather than an artifact of a probe
   // that cannot see. Spawns the same binary directly with the FULL sentinel set
-  // (including the API keys baseEnv deliberately omits) applied and no accounts
-  // boundary in between.
+  // (including the API URL/KEY sentinels baseEnv deliberately omits) applied and no
+  // accounts boundary in between.
   const result = spawnSync(process.execPath, ["run", join(binDir, "fake-claude.ts")], {
     cwd: launchCwd,
     encoding: "utf8",

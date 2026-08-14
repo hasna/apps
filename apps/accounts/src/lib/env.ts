@@ -180,7 +180,8 @@ export function providerLaunchEnv(
  * they type `exit`; accounts removing them in between prevents nothing that the
  * operator could not trivially do anyway, while breaking the ordinary case of
  * running an `accounts` command inside the subshell — which, with the API key
- * absent but the API URL present, fails loudly, and with neither set reads the
+ * absent but the API URL present, fails loudly (the partial API pair throws
+ * naming the missing variable), and with neither set reads the
  * local registry. A control the constrained party can bypass in one command,
  * whose cost is a broken subshell, is not containment.
  *

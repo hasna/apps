@@ -32,12 +32,16 @@ describe("resolveAccountsCloud", () => {
     expect(resolveAccountsCloud({} as NodeJS.ProcessEnv).transport).toBe("local");
   });
 
-  test("local when only URL set", () => {
-    expect(resolveAccountsCloud({ HASNA_ACCOUNTS_API_URL: BASE } as NodeJS.ProcessEnv).transport).toBe("local");
+  test("URL only set -> throws naming the missing key (no silent local drift)", () => {
+    expect(() => resolveAccountsCloud({ HASNA_ACCOUNTS_API_URL: BASE } as NodeJS.ProcessEnv)).toThrow(
+      /API mode requires BOTH HASNA_ACCOUNTS_API_URL and HASNA_ACCOUNTS_API_KEY; only HASNA_ACCOUNTS_API_URL is set/,
+    );
   });
 
-  test("local when only KEY set", () => {
-    expect(resolveAccountsCloud({ HASNA_ACCOUNTS_API_KEY: KEY } as NodeJS.ProcessEnv).transport).toBe("local");
+  test("KEY only set -> throws naming the missing URL (no silent local drift)", () => {
+    expect(() => resolveAccountsCloud({ HASNA_ACCOUNTS_API_KEY: KEY } as NodeJS.ProcessEnv)).toThrow(
+      /only HASNA_ACCOUNTS_API_KEY is set/,
+    );
   });
 
   test("cloud-http when URL+KEY set; baseUrl is <url>/v1", () => {

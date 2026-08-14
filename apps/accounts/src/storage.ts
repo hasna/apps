@@ -288,7 +288,18 @@ function accountsTransport(env: NodeJS.ProcessEnv): AccountsStorageTransport {
   const url = env.HASNA_ACCOUNTS_API_URL || env.ACCOUNTS_API_URL;
   // hasna-credential-seam-waiver: deprecated compat shim checks key PRESENCE only to name the transport; the value is never read, logged, or forwarded — consumption stays inside the @hasna/contracts transport.
   const key = env.HASNA_ACCOUNTS_API_KEY || env.ACCOUNTS_API_KEY;
-  return url && key ? "api" : "local";
+  if (!url && !key) return "local";
+  if (!url || !key) {
+    // Partial API pair -> throw, never silent local (mirrors
+    // resolveAccountsCloud): the compat shim must not drift to the local
+    // registry on a misconfigured client.
+    throw new Error(
+      `API mode requires BOTH HASNA_ACCOUNTS_API_URL and HASNA_ACCOUNTS_API_KEY; only ` +
+        `${url ? "HASNA_ACCOUNTS_API_URL" : "HASNA_ACCOUNTS_API_KEY"} is set. Set both to use the HTTP API, ` +
+        `or unset both to use the local registry.`,
+    );
+  }
+  return "api";
 }
 
 /** @deprecated Use resolveStore() and AccountsStore.transport. */

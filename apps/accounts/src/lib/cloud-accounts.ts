@@ -129,7 +129,9 @@ function toProfile(account: CloudAccount): Profile {
 /**
  * Resolve the accounts registry backend for this process. Returns a `cloud-http`
  * API wired to `<API_URL>/v1` when both `HASNA_ACCOUNTS_API_URL` and
- * `HASNA_ACCOUNTS_API_KEY` are set, else `{ transport: 'local' }`. Any retired
+ * `HASNA_ACCOUNTS_API_KEY` are set, `{ transport: 'local' }` when neither is
+ * set, and throws when exactly one of the pair is set (no silent local drift,
+ * mirroring the instructions app's `resolveCloudConfig`). Any retired
  * storage-mode variable throws first via `assertNoLegacyStorageMode`, so a
  * client never silently drifts between stores on stale mode vocabulary.
  */
@@ -141,7 +143,17 @@ export function resolveAccountsCloud(
   const url = env.HASNA_ACCOUNTS_API_URL || env.ACCOUNTS_API_URL;
   // hasna-credential-seam-waiver: the pinned @hasna/contracts 0.5.2 transport re-reads HASNA_ACCOUNTS_API_KEY from the environment itself when selecting the client; the seam migration (contracts client resolveCredential) requires a contracts runtime upgrade and is tracked as a follow-up.
   const key = env.HASNA_ACCOUNTS_API_KEY || env.ACCOUNTS_API_KEY;
-  if (!url || !key) return { transport: "local", api: null };
+  if (!url && !key) return { transport: "local", api: null };
+  if (!url || !key) {
+    // Partial API pair -> throw, never silent local: a client with only one
+    // side of the pair set is misconfigured, and falling back would read the
+    // wrong registry without saying so.
+    throw new Error(
+      `API mode requires BOTH HASNA_ACCOUNTS_API_URL and HASNA_ACCOUNTS_API_KEY; only ` +
+        `${url ? "HASNA_ACCOUNTS_API_URL" : "HASNA_ACCOUNTS_API_KEY"} is set. Set both to use the HTTP API, ` +
+        `or unset both to use the local registry.`,
+    );
+  }
   // Hand the contracts resolver only the pair that selects the transport; the
   // mode vocabulary is dead and must not reach it.
   const resolved = resolveStorageClient(

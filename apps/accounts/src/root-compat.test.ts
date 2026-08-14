@@ -49,10 +49,11 @@ describe("root synchronous compatibility exports", () => {
     }
   });
 
-  test("an incomplete retained API configuration resolves to local authority", () => {
+  test("an incomplete retained API configuration throws (no silent local drift)", () => {
     process.env.HASNA_ACCOUNTS_API_URL = "https://accounts.example.test";
-    expect(loadStore().version).toBe(1);
-    expect(addProfile({ name: "still-local", tool: "claude" }).name).toBe("still-local");
+    expect(() => loadStore()).toThrow(
+      /API mode requires BOTH HASNA_ACCOUNTS_API_URL and HASNA_ACCOUNTS_API_KEY; only HASNA_ACCOUNTS_API_URL is set/,
+    );
   });
 
   test("writes fail closed while reads stay answerable under API authority", () => {
@@ -140,26 +141,27 @@ describe("root synchronous compatibility exports", () => {
     },
   );
 
-  test.each([
-    ["default local", {}],
-    [
-      "implicit local with only a hosted URL",
-      {
-        HASNA_ACCOUNTS_API_URL: "https://accounts.example.test",
-      },
-    ],
-    [
-      "implicit local with only a hosted key",
-      {
-        HASNA_ACCOUNTS_API_KEY: "fixture-authority",
-      },
-    ],
-  ])("ensureProfileForLogin preserves the documented v1 local boundary for %s", (_label, env) => {
-    Object.assign(process.env, env);
+  test("ensureProfileForLogin preserves the documented v1 local boundary for default local env", () => {
     const profile = ensureProfileForLogin("login-local");
     expect(profile).toMatchObject({ name: "login-local", tool: "claude" });
     expect(existsSync(join(home, "accounts.json"))).toBe(true);
     expect(existsSync(join(home, "profiles"))).toBe(true);
+  });
+
+  test.each([
+    [
+      "implicit local with only a hosted URL",
+      { HASNA_ACCOUNTS_API_URL: "https://accounts.example.test" },
+      /only HASNA_ACCOUNTS_API_URL is set/,
+    ],
+    [
+      "implicit local with only a hosted key",
+      { HASNA_ACCOUNTS_API_KEY: "fixture-authority" },
+      /only HASNA_ACCOUNTS_API_KEY is set/,
+    ],
+  ])("ensureProfileForLogin throws for a partial API pair (%s) — no silent local drift", (_label, env, re) => {
+    Object.assign(process.env, env);
+    expect(() => ensureProfileForLogin("login-local")).toThrow(re);
   });
 
   test.each([
