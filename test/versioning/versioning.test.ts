@@ -25,8 +25,13 @@ const membersByName = new Map(members.map((member) => [member.name, member]));
 // matches its changelog heading after #117/#121 landed on main — record removed),
 // and instructions gained a release-lane mismatch (package 0.4.35 from release
 // #119, changelog heading still 0.4.33; reconcile task 1bb8cf0a).
+// conversations gained a record at import #100 (landing lane, 2026-08-15): the
+// imported tree carries package 0.6.1 (release #167) while its CHANGELOG heading
+// is 0.6.0 — a release-lane mismatch pre-existing in hasna/conversations, carried
+// into the mono by the import; reconcile task tracked on the import row.
 const KNOWN_CHANGELOG_MISMATCHES = new Map([
   ["@hasna/calendar", { packageVersion: "0.3.1", changelogVersion: "0.3.0" }],
+  ["@hasna/conversations", { packageVersion: "0.6.1", changelogVersion: "0.6.0" }],
   ["@hasna/instructions", { packageVersion: "0.4.35", changelogVersion: "0.4.33" }],
   ["@hasna/loops", { packageVersion: "0.4.42", changelogVersion: "0.4.41" }],
   ["@hasna/secrets", { packageVersion: "0.2.22", changelogVersion: "0.2.21" }],
