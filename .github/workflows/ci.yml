@@ -77,6 +77,40 @@ jobs:
         run: bun tooling/ci/check-manifests.ts
 
   # ---------------------------------------------------------------------------------
+  # test-suites: the versioning + standard-adherence suites, wired as a HARD gate.
+  #   test:versioning — hermetic versioning-integrity suite (test/versioning): package
+  #       identity/semver, pending changesets, version-without-changeset, workspace
+  #       reference rewrites, changelog/runtime metadata, Bun quarantine coverage. The
+  #       npm-parity lane is opt-in (VERSIONING_NPM_PARITY=1) and reads the public
+  #       registry; CI runs the offline default, which skips it explicitly
+  #       ([SKIP versioning] marker) instead of failing without network.
+  #   test:standard — standard-adherence suite (tooling/ci/tests/standard): contracts
+  #       conformance, publishConfig, four-surface, license, dist hygiene, each with a
+  #       two-sided self-test and a measured exception registry.
+  # Both suites intentionally FAIL on violations — that is the point of the job. There
+  # is deliberately NO continue-on-error here; a red suite is a red PR.
+  test-suites:
+    name: test-suites (versioning + standard-adherence)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the versioning suite diffs package versions against a base ref
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14 # in lockstep with package.json "packageManager"
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Versioning integrity suite (offline default)
+        run: bun run test:versioning
+
+      - name: Standard-adherence suite
+        run: bun run test:standard
+
+  # ---------------------------------------------------------------------------------
   build-test:
     name: build + test (affected)
     runs-on: ubuntu-latest
