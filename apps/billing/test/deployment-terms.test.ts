@@ -1,13 +1,30 @@
 import { describe, expect, it } from "bun:test";
 import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { resolveServerDataBackend } from "../src/generated/storage-kit/backend.js";
 
 const ROOT = new URL("../", import.meta.url).pathname;
+
+/**
+ * Deterministic PATH for spawned binaries, independent of the invocation
+ * context. `Bun.spawnSync` resolves bare command names against PATH, and
+ * `bun test` does not put `node_modules/.bin` there: direct `bun test`
+ * (and CI contexts where PATH is not augmented) fail with
+ * "Executable not found in $PATH: contracts" even though the pinned
+ * @hasna/contracts devDependency is installed. Prepend the package's own
+ * .bin so the test resolves the exact pinned version under every runner.
+ */
+function binPath(): string {
+  const bins = join(ROOT, "node_modules", ".bin");
+  const rest = process.env.PATH ?? "";
+  return rest ? `${bins}:${rest}` : bins;
+}
 
 function trackedFiles(): string[] {
   const result = Bun.spawnSync({
     cmd: ["git", "ls-files"],
     cwd: ROOT,
+    env: { ...process.env, PATH: binPath() },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -32,6 +49,7 @@ describe("deployment and data-backend terms", () => {
     const result = Bun.spawnSync({
       cmd: ["contracts", "validate", "hasna.contract.json", "--json"],
       cwd: ROOT,
+      env: { ...process.env, PATH: binPath() },
       stdout: "pipe",
       stderr: "pipe",
     });
