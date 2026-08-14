@@ -8,8 +8,8 @@ Thank you for your interest in contributing. Here is everything you need to get 
 
 ```bash
 # 1. Fork and clone the repository
-git clone https://github.com/hasnaxyz/open-attachments.git
-cd open-attachments
+git clone https://github.com/hasna/apps.git
+cd apps/attachments
 
 # 2. Install dependencies
 bun install
