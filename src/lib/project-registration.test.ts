@@ -3690,7 +3690,7 @@ describe("full project registration transaction", () => {
         expect.objectContaining({
           step_id: "projects_goals",
           status: "skipped",
-          reason_code: "preexisting_resource_preserved",
+          reason_code: "adopted_existing_file",
         }),
       ]));
       expect(readFileSync(join(target.path, PROJECT_REGISTRATION_GOALS_FILENAME), "utf8"))
@@ -3804,12 +3804,13 @@ describe("full project registration transaction", () => {
         artifacts: [expect.objectContaining({
           kind: "project_worklog",
           authority: "projects-files",
-          adopted: false,
-          expected_digest: sha256("# Worklog\n\n- Registration requested.\n"),
+          digest: sha256("# Worklog\n\n- Registration requested.\n"),
         })],
         rollback: [expect.objectContaining({
           action: "unlink_if_digest_matches",
-          target_id: result.project_id,
+          project_id: result.project_id,
+          filename: PROJECT_REGISTRATION_WORKLOG_FILENAME,
+          expected_digest: sha256("# Worklog\n\n- Registration requested.\n"),
         })],
       });
       expect(result.receipts.at(-1)?.step_id).toBe("registration_terminal");
