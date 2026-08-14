@@ -28,7 +28,7 @@ Filed 2026-08-14 in todos project `5e44770b-694c-46a3-864f-20a2b9ec1de2`
 
 - `router` (`452b7a32`), `slides` (`62ec9dbc`) — missing the HARD `<name>`
   CLI bin (per-member tasks; bins are never invented in-suite).
-- 22 contracts-conformance failures (automations `99f670fe`, calendar
+- 23 contracts-conformance failures (accounts `f6869bad`, automations `99f670fe`, calendar
   `a967c9bd`, catalog `e4d8cd62`, docs `6818348f`, draw `5698b7d3`, emails
   `e0ef3e32`, gateway `9dc0ee28`, instructions `c15cca18`, knowledge
   `a8c97621`, logs `d166125e`, machines `6ab8775b`, mementos `5695459d`,

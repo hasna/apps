@@ -189,8 +189,12 @@ describe("standard-adherence: contracts conformance", () => {
       const apps = path.join(root, "apps");
       fs.mkdirSync(path.join(apps, "good"), { recursive: true });
       fs.mkdirSync(path.join(apps, "bad"), { recursive: true });
-      fs.copyFileSync(path.join(APPS_DIR, "accounts", "hasna.contract.json"), path.join(apps, "good", "hasna.contract.json"));
-      fs.copyFileSync(path.join(APPS_DIR, "accounts", "package.json"), path.join(apps, "good", "package.json"));
+      fs.copyFileSync(path.join(APPS_DIR, "shortlinks", "hasna.contract.json"), path.join(apps, "good", "hasna.contract.json"));
+      fs.copyFileSync(path.join(APPS_DIR, "shortlinks", "package.json"), path.join(apps, "good", "package.json"));
+      // The good fixture is shortlinks (validates clean at 0.5.2); accounts was
+      // the original fixture but #122 moved its manifest to the recorded
+      // pre-backend-schema failure class (f6869bad), which would break this
+      // positive control.
       // A manifest that cannot validate against the 0.5.2 schema: wrong schema id.
       fs.writeFileSync(path.join(apps, "bad", "hasna.contract.json"), JSON.stringify({ schema: "not.a.known.schema", name: "bad" }, null, 2));
       fs.writeFileSync(path.join(apps, "bad", "package.json"), JSON.stringify({ name: "@hasna/self-test-bad", version: "0.0.0" }, null, 2));

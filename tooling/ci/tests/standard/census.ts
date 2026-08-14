@@ -297,6 +297,11 @@ export const MANIFEST_MISSING_EXCEPTIONS: Array<{ member: string; reason: string
  * carries the measured failure cause and the filed remediation task. */
 export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: string }> = [
   {
+    member: "accounts",
+    cause: "manifest_valid: pre-backend-schema-era manifest after #122 (deployment-mode vocabulary removal) validated at pinned 0.5.2 — storage.mode Required; storage Unrecognized key(s) in object: 'backend','engines','pgTestGate'; serviceSurfaces.*.deploymentModes Required; serviceSurfaces.* Unrecognized key(s) in object: 'kind'/'exportSubpath'/'generatedFrom'.",
+    task: "todos f6869bad-0aa9-466a-824b-b4a76a0b9b7b (contracts task — accounts)",
+  },
+  {
     member: "automations",
     cause: "Pinned @hasna/contracts 0.8.1 predates the manifest shape (storage.backend, no deploymentModes); manifest validates clean at 0.9.0. Pinned kit is stale.",
     task: "todos 99f670fe-246a-48be-80dc-46457d4fc013 (contracts task — automations)",
@@ -411,6 +416,7 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
 /** kitVersion must match the member's pinned @hasna/contracts version
  * (normalized). Recorded mismatches: */
 export const KIT_VERSION_EXCEPTIONS: Array<{ member: string; kitVersion: string; pinned: string }> = [
+  { member: "accounts", kitVersion: "0.10.6", pinned: "0.5.2" },
   { member: "calendar", kitVersion: "0.8.4", pinned: "0.4.2" },
   { member: "domains", kitVersion: "0.4.2", pinned: "0.5.2" },
   { member: "files", kitVersion: "0.4.2", pinned: "0.5.2" },
