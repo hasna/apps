@@ -1,0 +1,127 @@
+import type { Command } from "commander";
+import chalk from "chalk";
+import { getStorageConnectionString } from "../../storage.js";
+
+export function registerMiscCommands(program: Command): void {
+
+  // ============================================================================
+  // migrate-pg command
+  // ============================================================================
+
+  program
+    .command("migrate-pg")
+    .description("Apply PostgreSQL migrations to the configured RDS instance")
+    .option("--connection-string <url>", "PostgreSQL connection string (overrides storage config)")
+    .option("--dry-run", "Print safe PostgreSQL/RDS migration diagnostics without connecting")
+    .option("--json", "Output as JSON")
+    .action(async (opts) => {
+      const globalOpts = program.opts();
+      const useJson = opts.json || globalOpts.json;
+
+      const { applyPgMigrations, getPgMigrationDiagnostics } = await import("../../db/pg-migrate.js");
+      if (opts.dryRun) {
+        const diagnostics = getPgMigrationDiagnostics(opts.connectionString);
+        if (useJson) {
+          console.log(JSON.stringify(diagnostics, null, 2));
+        } else {
+          console.log(`Target: ${diagnostics.target}`);
+          console.log(`Configured: ${diagnostics.configured ? "yes" : "no"}`);
+          console.log(`Total migrations: ${diagnostics.total_migrations}`);
+          console.log("Network: not contacted");
+          console.log("Production approval: required before live apply");
+          for (const issue of diagnostics.issues) {
+            console.error(chalk.red(`Issue: ${issue}`));
+          }
+          for (const warning of diagnostics.warnings) {
+            console.error(chalk.yellow(`Warning: ${warning}`));
+          }
+        }
+        if (!diagnostics.ok) {
+          process.exit(1);
+        }
+        return;
+      }
+
+      let connStr: string;
+      if (opts.connectionString) {
+        connStr = opts.connectionString;
+      } else {
+        try {
+          connStr = getStorageConnectionString("mementos");
+        } catch {
+          const msg = "Remote storage database is not configured. Use --connection-string or set HASNA_MEMENTOS_DATABASE_URL.";
+          if (useJson) {
+            console.log(JSON.stringify({ error: msg }));
+          } else {
+            console.error(chalk.red(msg));
+          }
+          process.exit(1);
+        }
+      }
+
+      try {
+        const result = await applyPgMigrations(connStr);
+
+        if (useJson) {
+          console.log(JSON.stringify(result, null, 2));
+          return;
+        }
+
+        if (result.applied.length > 0) {
+          console.log(chalk.green(`Applied ${result.applied.length} migration(s): ${result.applied.join(", ")}`));
+        }
+        if (result.alreadyApplied.length > 0) {
+          console.log(chalk.dim(`Already applied: ${result.alreadyApplied.length} migration(s)`));
+        }
+        if (result.errors.length > 0) {
+          for (const err of result.errors) {
+            console.error(chalk.red(`  Error: ${err}`));
+          }
+          process.exit(1);
+        }
+        if (result.applied.length === 0 && result.errors.length === 0) {
+          console.log(chalk.dim("Schema is up to date."));
+        }
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        if (useJson) {
+          console.log(JSON.stringify({ error: msg }));
+        } else {
+          console.error(chalk.red(`Migration failed: ${msg}`));
+        }
+        process.exit(1);
+      }
+    });
+
+  // ============================================================================
+  // feedback command
+  // ============================================================================
+
+  program
+    .command("feedback")
+    .description("Send feedback about mementos")
+    .argument("<message>", "Feedback message")
+    .option("--email <email>", "Your email (optional)")
+    .option("--category <category>", "Category: bug, feature, general", "general")
+    .action(async (message: string, opts) => {
+      try {
+        const { fileURLToPath: _ftu } = await import("node:url");
+        const { dirname: _dir, join: _join } = await import("node:path");
+        const { readFileSync: _rfs } = await import("node:fs");
+        const pkg = JSON.parse(_rfs(_join(_dir(_ftu(import.meta.url)), "../../package.json"), "utf-8"));
+        // Route through the Store: api mode POSTs /feedback to the shared cloud;
+        // local mode inserts into SQLite. Never touch the DB directly here.
+        const { saveFeedback } = await import("../../db/feedback.js");
+        saveFeedback({
+          message,
+          email: opts.email || null,
+          category: opts.category || "general",
+          version: pkg.version,
+        });
+        console.log(chalk.green("Feedback saved. Thank you!"));
+      } catch (e) {
+        console.error(chalk.red(`Failed to save feedback: ${e instanceof Error ? e.message : String(e)}`));
+        process.exit(1);
+      }
+    });
+}

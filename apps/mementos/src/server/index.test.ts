@@ -1,0 +1,970 @@
+// Set in-memory DB before any imports
+process.env["MEMENTOS_DB_PATH"] = ":memory:";
+
+import { describe, test, expect, beforeAll, afterAll } from "bun:test";
+import { projectAuthorityTestEnv } from "../test-support/project-authority-identity.js";
+import { isolatedStoreEnv } from "../test-support/store-isolation.js";
+
+const PORT = 19400 + Math.floor(Math.random() * 100);
+const BASE = `http://localhost:${PORT}`;
+
+let serverProc: ReturnType<typeof Bun.spawn>;
+
+beforeAll(async () => {
+  serverProc = Bun.spawn(
+    ["bun", "run", "src/server/index.ts", "--port", String(PORT)],
+    {
+      env: isolatedStoreEnv(":memory:", { extra: projectAuthorityTestEnv() }),
+      stdout: "pipe",
+      stderr: "pipe",
+      cwd: new URL("../../", import.meta.url).pathname.replace(/\/$/, ""),
+    }
+  );
+  // Wait for server to start
+  let ready = false;
+  for (let i = 0; i < 30; i++) {
+    try {
+      const res = await fetch(`${BASE}/api/health`);
+      if (res.ok) { ready = true; break; }
+    } catch { /* not ready yet */ }
+    await Bun.sleep(200);
+  }
+  if (!ready) throw new Error("Server failed to start");
+});
+
+afterAll(() => {
+  serverProc.kill();
+});
+
+// ============================================================================
+// Helper
+// ============================================================================
+
+async function api(
+  path: string,
+  options?: RequestInit
+): Promise<{ status: number; data: any }> {
+  const res = await fetch(`${BASE}${path}`, {
+    headers: { "Content-Type": "application/json" },
+    ...options,
+  });
+  const data = await res.json();
+  return { status: res.status, data };
+}
+
+// ============================================================================
+// Health check
+// ============================================================================
+
+describe("Server health", () => {
+  test("GET /api/health returns ok with memory metrics", async () => {
+    const { status, data } = await api("/api/health");
+    expect(status).toBe(200);
+    expect(["ok", "warn"]).toContain(data.status);
+    expect(typeof data.version).toBe("string");
+    expect(typeof data.memories.total).toBe("number");
+    expect(typeof data.memories.expired).toBe("number");
+    expect(typeof data.memories.pinned).toBe("number");
+    expect(typeof data.agents).toBe("number");
+    expect(typeof data.projects).toBe("number");
+  });
+});
+
+// ============================================================================
+// POST /api/memories — create memory
+// ============================================================================
+
+describe("POST /api/memories", () => {
+  test("creates a memory", async () => {
+    const { status, data } = await api("/api/memories", {
+      method: "POST",
+      body: JSON.stringify({ key: "rest-key", value: "rest-value", scope: "global" }),
+    });
+    expect(status).toBe(201);
+    expect(data.key).toBe("rest-key");
+    expect(data.value).toBe("rest-value");
+    expect(data.id).toBeDefined();
+  });
+
+  test("creates a memory with category and importance", async () => {
+    const { status, data } = await api("/api/memories", {
+      method: "POST",
+      body: JSON.stringify({
+        key: "fact-key",
+        value: "fact-value",
+        category: "fact",
+        scope: "global",
+        importance: 8,
+      }),
+    });
+    expect(status).toBe(201);
+    expect(data.category).toBe("fact");
+    expect(data.importance).toBe(8);
+  });
+
+  test("returns 400 for missing fields", async () => {
+    const { status } = await api("/api/memories", {
+      method: "POST",
+      body: JSON.stringify({ key: "no-value" }),
+    });
+    expect(status).toBe(400);
+  });
+
+  test("returns 400 for invalid JSON", async () => {
+    const res = await fetch(`${BASE}/api/memories`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "not-json",
+    });
+    expect(res.status).toBe(400);
+  });
+});
+
+// ============================================================================
+// GET /api/memories — list memories
+// ============================================================================
+
+describe("GET /api/memories", () => {
+  test("lists memories", async () => {
+    const { status, data } = await api("/api/memories");
+    expect(status).toBe(200);
+    expect(Array.isArray(data.memories)).toBe(true);
+    expect(typeof data.count).toBe("number");
+  });
+});
+
+// ============================================================================
+// GET /api/memories/:id — get single memory
+// ============================================================================
+
+describe("GET /api/memories/:id", () => {
+  test("gets a single memory by ID", async () => {
+    const createRes = await api("/api/memories", {
+      method: "POST",
+      body: JSON.stringify({ key: "get-key", value: "get-value" }),
+    });
+    const id = createRes.data.id;
+
+    const { status, data } = await api(`/api/memories/${id}`);
+    expect(status).toBe(200);
+    expect(data.key).toBe("get-key");
+  });
+
+  test("returns 404 for non-existent memory", async () => {
+    const { status, data } = await api(
+      "/api/memories/00000000-0000-0000-0000-000000000000"
+    );
+    expect(status).toBe(404);
+    expect(data.error).toBeDefined();
+  });
+});
+
+// ============================================================================
+// PATCH /api/memories/:id — update memory
+// ============================================================================
+
+describe("PATCH /api/memories/:id", () => {
+  test("updates a memory", async () => {
+    const createRes = await api("/api/memories", {
+      method: "POST",
+      body: JSON.stringify({ key: "patch-key", value: "old-value" }),
+    });
+    const id = createRes.data.id;
+
+    const { status, data } = await api(`/api/memories/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ value: "new-value", version: 1 }),
+    });
+    expect(status).toBe(200);
+    expect(data.value).toBe("new-value");
+    expect(data.version).toBe(2);
+  });
+
+  test("succeeds when version is omitted (auto-fetched)", async () => {
+    const createRes = await api("/api/memories", {
+      method: "POST",
+      body: JSON.stringify({ key: "patch-no-ver", value: "val" }),
+    });
+    const id = createRes.data.id;
+
+    // version is now optional — should succeed by auto-fetching current version
+    const { status, data } = await api(`/api/memories/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ value: "new-val-auto" }),
+    });
+    expect(status).toBe(200);
+    expect(data.value).toBe("new-val-auto");
+  });
+
+  test("returns 409 on version conflict", async () => {
+    const createRes = await api("/api/memories", {
+      method: "POST",
+      body: JSON.stringify({ key: "patch-conflict", value: "val" }),
+    });
+    const id = createRes.data.id;
+
+    // First update succeeds
+    await api(`/api/memories/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ value: "updated", version: 1 }),
+    });
+
+    // Second update with stale version fails
+    const { status } = await api(`/api/memories/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ value: "conflict", version: 1 }),
+    });
+    expect(status).toBe(409);
+  });
+});
+
+// ============================================================================
+// DELETE /api/memories/:id — delete memory
+// ============================================================================
+
+describe("DELETE /api/memories/:id", () => {
+  test("deletes a memory", async () => {
+    const createRes = await api("/api/memories", {
+      method: "POST",
+      body: JSON.stringify({ key: "delete-key", value: "delete-value" }),
+    });
+    const id = createRes.data.id;
+
+    const { status, data } = await api(`/api/memories/${id}`, {
+      method: "DELETE",
+    });
+    expect(status).toBe(200);
+    expect(data.deleted).toBe(true);
+
+    const getRes = await api(`/api/memories/${id}`);
+    expect(getRes.status).toBe(404);
+  });
+
+  test("returns 404 when deleting non-existent memory", async () => {
+    const { status } = await api(
+      "/api/memories/00000000-0000-0000-0000-000000000001",
+      { method: "DELETE" }
+    );
+    expect(status).toBe(404);
+  });
+});
+
+// ============================================================================
+// POST /api/memories/search — search
+// ============================================================================
+
+describe("POST /api/memories/search", () => {
+  test("returns search results", async () => {
+    await api("/api/memories", {
+      method: "POST",
+      body: JSON.stringify({
+        key: "searchable-srv",
+        value: "searchable content",
+      }),
+    });
+
+    const { status, data } = await api("/api/memories/search", {
+      method: "POST",
+      body: JSON.stringify({ query: "searchable" }),
+    });
+    expect(status).toBe(200);
+    expect(Array.isArray(data.results)).toBe(true);
+    expect(data.count).toBeGreaterThanOrEqual(1);
+  });
+
+  test("returns 400 when query is missing", async () => {
+    const { status } = await api("/api/memories/search", {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+    expect(status).toBe(400);
+  });
+});
+
+// ============================================================================
+// POST /api/consolidate — memory consolidation
+// ============================================================================
+
+describe("POST /api/consolidate", () => {
+  test("dry-run returns planned consolidation actions", async () => {
+    await api("/api/memories", {
+      method: "POST",
+      body: JSON.stringify({
+        key: "srv-consolidate-a",
+        value: "Server route should keep CLI and MCP parity visible.",
+        category: "history",
+        scope: "shared",
+      }),
+    });
+    await api("/api/memories", {
+      method: "POST",
+      body: JSON.stringify({
+        key: "srv-consolidate-b",
+        value: "Server route should keep CLI and MCP parity visible for features.",
+        category: "history",
+        scope: "shared",
+      }),
+    });
+
+    const { status, data } = await api("/api/consolidate", {
+      method: "POST",
+      body: JSON.stringify({ dry_run: true, scope: "shared", duplicate_threshold: 0.5 }),
+    });
+
+    expect(status).toBe(200);
+    expect(data.dryRun).toBe(true);
+    expect(Array.isArray(data.actions)).toBe(true);
+    expect(data.actions.some((action: { type: string }) => action.type === "merge_duplicate")).toBe(true);
+  });
+});
+
+// ============================================================================
+// POST /api/reflect — trajectory reflection
+// ============================================================================
+
+describe("POST /api/reflect", () => {
+  test("dry-run returns structured lessons for a session", async () => {
+    await api("/api/memories", {
+      method: "POST",
+      body: JSON.stringify({
+        key: "srv-reflect-step",
+        value: "The server reflection test wrote a trajectory memory first.",
+        category: "history",
+        scope: "shared",
+        session_id: "srv-reflect-session",
+      }),
+    });
+
+    const { status, data } = await api("/api/reflect", {
+      method: "POST",
+      body: JSON.stringify({ on: "session", source: "srv-reflect-session", dry_run: true }),
+    });
+
+    expect(status).toBe(200);
+    expect(data.dryRun).toBe(true);
+    expect(Array.isArray(data.lessons)).toBe(true);
+    expect(data.lessons.length).toBeGreaterThan(0);
+  });
+});
+
+// ============================================================================
+// GET /api/memories/stats — statistics
+// ============================================================================
+
+describe("GET /api/memories/stats", () => {
+  test("returns stats object", async () => {
+    const { status, data } = await api("/api/memories/stats");
+    expect(status).toBe(200);
+    expect(typeof data.total).toBe("number");
+    expect(data.by_scope).toBeDefined();
+    expect(data.by_category).toBeDefined();
+    expect(data.by_status).toBeDefined();
+    expect(typeof data.pinned_count).toBe("number");
+    expect(typeof data.expired_count).toBe("number");
+  });
+});
+
+// ============================================================================
+// POST /api/agents — register agent
+// ============================================================================
+
+describe("POST /api/agents", () => {
+  test("registers an agent", async () => {
+    const { status, data } = await api("/api/agents", {
+      method: "POST",
+      body: JSON.stringify({ name: "rest-agent", description: "test" }),
+    });
+    expect(status).toBe(201);
+    expect(data.name).toBe("rest-agent");
+    expect(data.id).toBeDefined();
+  });
+
+  test("returns 400 when name is missing", async () => {
+    const { status } = await api("/api/agents", {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+    expect(status).toBe(400);
+  });
+});
+
+// ============================================================================
+// GET /api/agents — list agents
+// ============================================================================
+
+describe("GET /api/agents", () => {
+  test("lists agents", async () => {
+    const { status, data } = await api("/api/agents");
+    expect(status).toBe(200);
+    expect(Array.isArray(data.agents)).toBe(true);
+    expect(typeof data.count).toBe("number");
+  });
+
+  test("honors limit, cursor, offset, and an empty terminal page", async () => {
+    await api("/api/agents", {
+      method: "POST",
+      body: JSON.stringify({ name: `pagination-rest-a-${Date.now()}` }),
+    });
+    await api("/api/agents", {
+      method: "POST",
+      body: JSON.stringify({ name: `pagination-rest-b-${Date.now()}` }),
+    });
+
+    const all = await api("/api/agents");
+    const first = await api("/api/agents?limit=1&cursor=0");
+    const second = await api("/api/agents?limit=1&cursor=1");
+    const offset = await api("/api/agents?limit=1&offset=1");
+    const offsetOnly = await api("/api/agents?offset=1");
+    const terminal = await api(`/api/agents?limit=1&cursor=${all.data.agents.length}`);
+
+    expect(first.data.agents).toHaveLength(1);
+    expect(second.data.agents).toHaveLength(1);
+    expect(second.data.agents[0].id).not.toBe(first.data.agents[0].id);
+    expect(offset.data.agents[0].id).toBe(second.data.agents[0].id);
+    expect(offsetOnly.data.agents.map((agent: { id: string }) => agent.id)).toEqual(
+      all.data.agents.slice(1).map((agent: { id: string }) => agent.id)
+    );
+    expect(terminal.data.agents).toEqual([]);
+  });
+});
+
+// ============================================================================
+// POST /api/projects — register project
+// ============================================================================
+
+describe("POST /api/projects", () => {
+  test("registers a project", async () => {
+    const { status, data } = await api("/api/projects", {
+      method: "POST",
+      body: JSON.stringify({
+        name: "test-project",
+        path: "/tmp/test-project-srv",
+        description: "A test project",
+      }),
+    });
+    expect(status).toBe(201);
+    expect(data.name).toBe("test-project");
+  });
+
+  test("returns 400 when name or path is missing", async () => {
+    const { status } = await api("/api/projects", {
+      method: "POST",
+      body: JSON.stringify({ name: "missing-path" }),
+    });
+    expect(status).toBe(400);
+  });
+});
+
+// ============================================================================
+// POST /api/memories/clean — cleanup
+// ============================================================================
+
+describe("POST /api/memories/clean", () => {
+  test("runs cleanup", async () => {
+    const { status, data } = await api("/api/memories/clean", {
+      method: "POST",
+    });
+    expect(status).toBe(200);
+    expect(typeof data.cleaned).toBe("number");
+  });
+});
+
+// ============================================================================
+// Bulk operations
+// ============================================================================
+
+describe("POST /api/memories/bulk-forget", () => {
+  test("deletes multiple memories", async () => {
+    const a = await api("/api/memories", { method: "POST", body: JSON.stringify({ key: "bulk-del-a", value: "val-a" }) });
+    const b = await api("/api/memories", { method: "POST", body: JSON.stringify({ key: "bulk-del-b", value: "val-b" }) });
+    const { status, data } = await api("/api/memories/bulk-forget", {
+      method: "POST",
+      body: JSON.stringify({ ids: [a.data.id, b.data.id] }),
+    });
+    expect(status).toBe(200);
+    expect(data.deleted).toBe(2);
+    expect(data.total).toBe(2);
+  });
+
+  test("returns 400 without ids", async () => {
+    const { status } = await api("/api/memories/bulk-forget", { method: "POST", body: JSON.stringify({}) });
+    expect(status).toBe(400);
+  });
+});
+
+describe("POST /api/memories/bulk-update", () => {
+  test("updates multiple memories", async () => {
+    const a = await api("/api/memories", { method: "POST", body: JSON.stringify({ key: "bulk-upd-a", value: "orig" }) });
+    const b = await api("/api/memories", { method: "POST", body: JSON.stringify({ key: "bulk-upd-b", value: "orig" }) });
+    const { status, data } = await api("/api/memories/bulk-update", {
+      method: "POST",
+      body: JSON.stringify({ ids: [a.data.id, b.data.id], importance: 9 }),
+    });
+    expect(status).toBe(200);
+    expect(data.updated).toBe(2);
+  });
+
+  test("returns 400 without ids", async () => {
+    const { status } = await api("/api/memories/bulk-update", { method: "POST", body: JSON.stringify({}) });
+    expect(status).toBe(400);
+  });
+});
+
+// ============================================================================
+// Agent update and project agents
+// ============================================================================
+
+describe("PATCH /api/agents/:id", () => {
+  test("updates agent role", async () => {
+    const { data: agent } = await api("/api/agents", { method: "POST", body: JSON.stringify({ name: "patch-test-agent" }) });
+    const { status, data } = await api(`/api/agents/${agent.id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ role: "senior-developer" }),
+    });
+    expect(status).toBe(200);
+    expect(data.role).toBe("senior-developer");
+  });
+
+  test("returns 404 for unknown agent", async () => {
+    const { status } = await api("/api/agents/nonexistent-id", { method: "PATCH", body: JSON.stringify({ role: "x" }) });
+    expect(status).toBe(404);
+  });
+});
+
+describe("GET /api/agents?project_id", () => {
+  test("filters agents by project", async () => {
+    const { data: proj } = await api("/api/projects", { method: "POST", body: JSON.stringify({ name: "filter-proj", path: "/tmp/filter-proj" }) });
+    const { data: agent } = await api("/api/agents", { method: "POST", body: JSON.stringify({ name: "proj-bound-agent" }) });
+    await api(`/api/agents/${agent.id}`, { method: "PATCH", body: JSON.stringify({ active_project_id: proj.id }) });
+    const { status, data } = await api(`/api/agents?project_id=${proj.id}`);
+    expect(status).toBe(200);
+    expect(data.agents.some((a: { name: string }) => a.name === "proj-bound-agent")).toBe(true);
+  });
+});
+
+describe("GET /api/projects/:id", () => {
+  test("gets project by id", async () => {
+    const { data: proj } = await api("/api/projects", { method: "POST", body: JSON.stringify({ name: "get-by-id-proj", path: "/tmp/get-by-id-proj" }) });
+    const { status, data } = await api(`/api/projects/${proj.id}`);
+    expect(status).toBe(200);
+    expect(data.name).toBe("get-by-id-proj");
+  });
+
+  test("gets project by name", async () => {
+    await api("/api/projects", { method: "POST", body: JSON.stringify({ name: "get-by-name-proj", path: "/tmp/get-by-name-proj" }) });
+    const { status, data } = await api(`/api/projects/get-by-name-proj`);
+    expect(status).toBe(200);
+    expect(data.name).toBe("get-by-name-proj");
+  });
+
+  test("returns 404 for unknown project", async () => {
+    const { status } = await api("/api/projects/definitely-does-not-exist");
+    expect(status).toBe(404);
+  });
+});
+
+describe("POST /api/projects/:id/guarded-update", () => {
+  test("is exposed by the live OpenAPI route table and the old direct PATCH is guarded", async () => {
+    const { status, data } = await api("/openapi.json");
+    expect(status).toBe(200);
+    expect(data.paths["/v1/projects/{id}/guarded-update"].post).toMatchObject({
+      operationId: "post_v1_projects_id_guarded_update",
+    });
+    const direct = await api("/api/projects/project-1", {
+      method: "PATCH",
+      body: JSON.stringify({ name: "unsafe" }),
+    });
+    expect(direct.status).toBe(428);
+  });
+
+  test("renames and repaths a project without changing its stable ID", async () => {
+    const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const oldName = `iproj-api-${suffix}`;
+    const oldPath = `/tmp/iproj-api-${suffix}`;
+    const { data: project } = await api("/api/projects", {
+      method: "POST",
+      body: JSON.stringify({ name: oldName, path: oldPath }),
+    });
+
+    const { status, data } = await api(`/api/projects/${project.id}/guarded-update`, {
+      method: "POST",
+      body: JSON.stringify({
+        authority_id: "mementos",
+        tenant_id: "default",
+        corpus_id: "default",
+        operation_id: `api-project-update-${suffix}`,
+        step_id: "mementos_project_update",
+        idempotency_key: `api-project-update-request-${suffix}`,
+        expected_revision: project.updated_at,
+        updates: {
+          name: `API Project ${suffix}`,
+          path: `/tmp/api-project-${suffix}`,
+        },
+      }),
+    });
+
+    expect(status).toBe(200);
+    expect(data.project.id).toBe(project.id);
+    expect(data.project.name).toBe(`API Project ${suffix}`);
+    expect(data.project.path).toBe(`/tmp/api-project-${suffix}`);
+    expect(data.receipt).toMatchObject({ direction: "forward", target_id: project.id });
+
+    const staleName = await api(`/api/projects/${encodeURIComponent(oldName)}`);
+    const stalePath = await api(`/api/projects/${encodeURIComponent(oldPath)}`);
+    expect(staleName.status).toBe(404);
+    expect(stalePath.status).toBe(404);
+  });
+
+  test("returns 409 for project name and path collisions", async () => {
+    const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const { data: source } = await api("/api/projects", {
+      method: "POST",
+      body: JSON.stringify({ name: `Source ${suffix}`, path: `/tmp/source-${suffix}` }),
+    });
+    const { data: target } = await api("/api/projects", {
+      method: "POST",
+      body: JSON.stringify({ name: `Target ${suffix}`, path: `/tmp/target-${suffix}` }),
+    });
+
+    const common = {
+      authority_id: "mementos",
+      tenant_id: "default",
+      corpus_id: "default",
+      operation_id: `api-project-collision-${suffix}`,
+      step_id: "mementos_project_update",
+      expected_revision: source.updated_at,
+    };
+    const nameCollision = await api(`/api/projects/${source.id}/guarded-update`, {
+      method: "POST",
+      body: JSON.stringify({
+        ...common,
+        idempotency_key: `api-project-name-collision-${suffix}`,
+        updates: { name: `target ${suffix}` },
+      }),
+    });
+    const pathCollision = await api(`/api/projects/${source.id}/guarded-update`, {
+      method: "POST",
+      body: JSON.stringify({
+        ...common,
+        idempotency_key: `api-project-path-collision-${suffix}`,
+        updates: { path: target.path },
+      }),
+    });
+
+    expect(nameCollision.status).toBe(409);
+    expect(pathCollision.status).toBe(409);
+  });
+
+  test("returns 404 for a missing stable project ID", async () => {
+    const { status } = await api(
+      "/api/projects/00000000-0000-0000-0000-000000000000/guarded-update",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          authority_id: "mementos",
+          tenant_id: "default",
+          corpus_id: "default",
+          operation_id: "api-project-missing-operation-v1",
+          step_id: "mementos_project_update",
+          idempotency_key: "api-project-missing-request-0001",
+          expected_revision: "2026-08-07T00:00:00.000Z",
+          updates: { name: "Missing Project" },
+        }),
+      },
+    );
+    expect(status).toBe(404);
+  });
+});
+
+describe("GET /api/projects/:id/agents", () => {
+  test("lists agents active on project", async () => {
+    const { data: proj } = await api("/api/projects", { method: "POST", body: JSON.stringify({ name: "agents-proj", path: "/tmp/agents-proj" }) });
+    const { data: agent } = await api("/api/agents", { method: "POST", body: JSON.stringify({ name: "agents-proj-agent" }) });
+    await api(`/api/agents/${agent.id}`, { method: "PATCH", body: JSON.stringify({ active_project_id: proj.id }) });
+    const { status, data } = await api(`/api/projects/${proj.id}/agents`);
+    expect(status).toBe(200);
+    expect(data.agents.some((a: { name: string }) => a.name === "agents-proj-agent")).toBe(true);
+  });
+});
+
+describe("POST /api/memories/extract", () => {
+  test("creates memories from session summary", async () => {
+    const { status, data } = await api("/api/memories/extract", {
+      method: "POST",
+      body: JSON.stringify({
+        session_id: "test-session-extract-001",
+        title: "Fix auth middleware",
+        project: "alumia",
+        model: "claude-opus-4-5",
+        messages: 100,
+        key_topics: ["jwt", "compliance", "middleware"],
+        summary: "Rewrote auth to comply with new legal requirements",
+      }),
+    });
+    expect(status).toBe(201);
+    expect(data.created).toBeGreaterThan(0);
+    expect(data.session_id).toBe("test-session-extract-001");
+    expect(Array.isArray(data.memory_ids)).toBe(true);
+  });
+
+  test("memories are queryable by session_id", async () => {
+    const sessId = "test-session-query-002";
+    await api("/api/memories/extract", {
+      method: "POST",
+      body: JSON.stringify({ session_id: sessId, title: "Query test session" }),
+    });
+    const { status, data } = await api(`/api/memories?session_id=${sessId}`);
+    expect(status).toBe(200);
+    expect(data.memories.length).toBeGreaterThan(0);
+    expect(data.memories.every((m: { session_id: string }) => m.session_id === sessId)).toBe(true);
+  });
+
+  test("accepts custom memories array", async () => {
+    const { status, data } = await api("/api/memories/extract", {
+      method: "POST",
+      body: JSON.stringify({
+        session_id: "test-session-custom-003",
+        memories: [
+          { key: "custom-extract-key", value: "custom value", category: "fact", importance: 8 },
+        ],
+      }),
+    });
+    expect(status).toBe(201);
+    expect(data.created).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("GET /api/memories?session_id", () => {
+  test("filters memories by session_id", async () => {
+    const sessId = "filter-session-test-004";
+    await api("/api/memories", {
+      method: "POST",
+      body: JSON.stringify({ key: "sess-filtered-key", value: "val", session_id: sessId }),
+    });
+    const { status, data } = await api(`/api/memories?session_id=${sessId}`);
+    expect(status).toBe(200);
+    expect(data.memories.every((m: { session_id: string }) => m.session_id === sessId)).toBe(true);
+  });
+});
+
+describe("GET /api/inject format", () => {
+  test("returns compact format", async () => {
+    await api("/api/memories", { method: "POST", body: JSON.stringify({ key: "fmt-test", value: "hello world", scope: "global", importance: 8 }) });
+    const { status, data } = await api("/api/inject?format=compact");
+    expect(status).toBe(200);
+    expect(typeof data.context).toBe("string");
+    if (data.memories_count > 0) {
+      expect(data.context).not.toContain("<agent-memories>");
+      expect(data.context).not.toContain("##");
+    }
+  });
+
+  test("returns markdown format", async () => {
+    const { data } = await api("/api/inject?format=markdown");
+    if (data.memories_count > 0) {
+      expect(data.context).toContain("## Agent Memories");
+    }
+  });
+
+  test("returns xml format by default", async () => {
+    const { data } = await api("/api/inject");
+    if (data.memories_count > 0) {
+      expect(data.context).toContain("<agent-memories>");
+    }
+  });
+});
+
+// ============================================================================
+// 404 for unknown routes
+// ============================================================================
+
+describe("404 handling", () => {
+  test("returns 404 for unknown routes", async () => {
+    const { status, data } = await api("/api/nonexistent");
+    expect(status).toBe(404);
+    expect(data.error).toBe("Not found");
+  });
+});
+
+// ============================================================================
+// Security: path traversal prevention
+// ============================================================================
+
+describe("GET /api/report", () => {
+  test("returns report shape", async () => {
+    await api("/api/memories", { method: "POST", body: JSON.stringify({ key: "report-mem", value: "test value", scope: "global", importance: 7 }) });
+    const { status, data } = await api("/api/report?days=7");
+    expect(status).toBe(200);
+    expect(typeof data.total).toBe("number");
+    expect(typeof data.pinned).toBe("number");
+    expect(data.days).toBe(7);
+    expect(typeof data.recent.total).toBe("number");
+    expect(Array.isArray(data.recent.activity)).toBe(true);
+    expect(typeof data.by_scope).toBe("object");
+    expect(typeof data.by_category).toBe("object");
+    expect(Array.isArray(data.top_memories)).toBe(true);
+  });
+
+  test("accepts project_id filter", async () => {
+    const { status, data } = await api("/api/report?days=7&project_id=nonexistent");
+    expect(status).toBe(200);
+    expect(data.total).toBe(0);
+  });
+});
+
+describe("GET /api/activity", () => {
+  test("returns activity array and total", async () => {
+    await api("/api/memories", { method: "POST", body: JSON.stringify({ key: "activity-test-mem", value: "val", scope: "global" }) });
+    const { status, data } = await api("/api/activity?days=30");
+    expect(status).toBe(200);
+    expect(Array.isArray(data.activity)).toBe(true);
+    expect(typeof data.total).toBe("number");
+    expect(data.days).toBe(30);
+  });
+
+  test("accepts days param", async () => {
+    const { status, data } = await api("/api/activity?days=7");
+    expect(status).toBe(200);
+    expect(data.days).toBe(7);
+  });
+});
+
+describe("path traversal prevention", () => {
+  test("traversal attempt does not return /etc/passwd contents", async () => {
+    // URL parser normalizes ../../ before reaching the handler.
+    // The response may be 404 (no dashboard) or 200 (SPA index.html) but must NOT be /etc/passwd.
+    const res = await fetch(`${BASE}/../../etc/passwd`);
+    const text = await res.text();
+    // /etc/passwd always starts with "root:" — if we see that, traversal succeeded
+    expect(text).not.toContain("root:");
+    expect(text).not.toContain("/bin/bash");
+  });
+
+  test("encoded traversal attempt does not expose system files", async () => {
+    const res = await fetch(`${BASE}/..%2F..%2Fetc%2Fpasswd`);
+    const text = await res.text();
+    expect(text).not.toContain("root:");
+    expect(text).not.toContain("/bin/bash");
+  });
+
+  test("health endpoint includes hostname", async () => {
+    const { status, data } = await api("/api/health");
+    expect(status).toBe(200);
+    expect(typeof data.hostname).toBe("string");
+  });
+});
+
+// ============================================================================
+// CORS preflight
+// ============================================================================
+
+describe("CORS", () => {
+  test("handles OPTIONS preflight", async () => {
+    const res = await fetch(`${BASE}/api/memories`, {
+      method: "OPTIONS",
+    });
+    expect(res.status).toBe(204);
+  });
+});
+
+// ============================================================================
+// Tasks API
+// ============================================================================
+
+describe("Tasks API", () => {
+  test("POST /api/tasks creates a task", async () => {
+    const { status, data } = await api("/api/tasks", {
+      method: "POST",
+      body: JSON.stringify({ subject: "REST task", priority: "high", tags: ["api"] }),
+    });
+    expect(status).toBe(201);
+    expect(data.subject).toBe("REST task");
+    expect(data.priority).toBe("high");
+    expect(data.status).toBe("pending");
+    expect(data.id).toBeDefined();
+  });
+
+  test("POST /api/tasks requires subject", async () => {
+    const { status } = await api("/api/tasks", {
+      method: "POST",
+      body: JSON.stringify({ description: "no subject" }),
+    });
+    expect(status).toBe(400);
+  });
+
+  test("GET /api/tasks lists tasks with filters", async () => {
+    await api("/api/tasks", {
+      method: "POST",
+      body: JSON.stringify({ subject: "List me", priority: "low" }),
+    });
+
+    const { status, data } = await api("/api/tasks?status=pending&limit=10");
+    expect(status).toBe(200);
+    expect(Array.isArray(data.tasks)).toBe(true);
+    expect(typeof data.count).toBe("number");
+    expect(data.tasks.some((t: { subject: string }) => t.subject === "List me")).toBe(true);
+  });
+
+  test("GET /api/tasks/stats returns aggregates", async () => {
+    const { status, data } = await api("/api/tasks/stats");
+    expect(status).toBe(200);
+    expect(typeof data.total).toBe("number");
+    expect(typeof data.by_status).toBe("object");
+    expect(typeof data.by_priority).toBe("object");
+    expect(typeof data.overdue).toBe("number");
+  });
+
+  test("GET/PATCH/DELETE /api/tasks/:id lifecycle", async () => {
+    const created = await api("/api/tasks", {
+      method: "POST",
+      body: JSON.stringify({ subject: "Lifecycle task" }),
+    });
+    const id = created.data.id as string;
+
+    const fetched = await api(`/api/tasks/${id}`);
+    expect(fetched.status).toBe(200);
+    expect(fetched.data.id).toBe(id);
+
+    const updated = await api(`/api/tasks/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ status: "in_progress", progress: 0.25 }),
+    });
+    expect(updated.status).toBe(200);
+    expect(updated.data.status).toBe("in_progress");
+
+    const missing = await api("/api/tasks/nonexistent-id");
+    expect(missing.status).toBe(404);
+
+    const deleted = await api(`/api/tasks/${id}`, { method: "DELETE" });
+    expect(deleted.status).toBe(200);
+    expect(deleted.data.deleted).toBe(true);
+
+    const gone = await api(`/api/tasks/${id}`);
+    expect(gone.status).toBe(404);
+  });
+
+  test("task comments CRUD", async () => {
+    const created = await api("/api/tasks", {
+      method: "POST",
+      body: JSON.stringify({ subject: "Commented via API" }),
+    });
+    const id = created.data.id as string;
+
+    const added = await api(`/api/tasks/${id}/comments`, {
+      method: "POST",
+      body: JSON.stringify({ body: "Looks good" }),
+    });
+    expect(added.status).toBe(201);
+    expect(added.data.body).toBe("Looks good");
+
+    const listed = await api(`/api/tasks/${id}/comments`);
+    expect(listed.status).toBe(200);
+    expect(listed.data.count).toBeGreaterThanOrEqual(1);
+
+    const deleted = await api(`/api/tasks/${id}/comments/${added.data.id}`, {
+      method: "DELETE",
+    });
+    expect(deleted.status).toBe(200);
+    expect(deleted.data.deleted).toBe(true);
+  });
+});
