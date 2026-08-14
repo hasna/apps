@@ -4,7 +4,7 @@ This file guides AI coding agents working with `@hasna/emails` - an email manage
 
 ## Naming (read before "fixing" any Mailery reference)
 
-This product is **open-emails**: repo `hasna/emails`, package `@hasna/emails`,
+This product is **open-emails**: repo `hasna/apps` (member `apps/emails`), package `@hasna/emails`,
 bins `emails*`, env prefix `EMAILS_*`. **Mailery is a separate, unrelated
 product and is not a name for this one** (owner ruling 2026-07-27).
 
