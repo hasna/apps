@@ -1,6 +1,6 @@
 {
   "name": "@hasna/gateway",
-  "version": "0.1.6",
+  "version": "0.1.8",
   "description": "Open-source AI model gateway core for one-key, multi-provider routing across Hasna apps and self-hosted deployments",
   "type": "module",
   "main": "dist/index.js",
@@ -46,7 +46,8 @@
     "test": "bun test",
     "contracts:validate": "contracts conformance fixtures/contracts",
     "dev": "bun run src/cli/index.ts serve --config gateway.config.example.json",
-    "prepublishOnly": "bun run typecheck && bun run build && bun run test"
+    "verify:version-parity": "bun scripts/verify-version-parity.mjs",
+    "prepublishOnly": "bun run verify:version-parity && bun run typecheck && bun run build && bun run test"
   },
   "keywords": [
     "ai",

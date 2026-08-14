@@ -2,7 +2,7 @@
 
 ## Compatibility Principle
 
-The public API should be OpenAI-compatible where possible. Existing OpenAI SDK clients should be able to point `baseURL` at the gateway and keep using `chat.completions.create`.
+The public API is OpenAI-compatible where possible. Existing OpenAI SDK clients can point `baseURL` at the gateway and use chat completions and embeddings.
 
 Compatibility does not mean hiding provider differences. If a provider cannot support a feature, the gateway should return a clear capability error or route to an allowed provider that can support it.
 
@@ -20,7 +20,7 @@ Hosted Hasna mode:
 Authorization: Bearer <hasna-api-key>
 ```
 
-Provider keys are never sent by the client unless explicit BYOK request support is added. Initial BYOK should be configured through server-side environment variables.
+Built-in provider credentials are configured through server-side environment variables. Custom provider headers may be static or environment-derived, but client request bodies never supply provider credentials.
 
 ## `GET /health`
 
@@ -29,7 +29,7 @@ Returns service status. In `local` runtime mode this is a lightweight liveness c
 ```json
 {
   "status": "ok",
-  "version": "0.1.0",
+  "version": "0.1.6",
   "runtime": {
     "mode": "production-cloud"
   },
@@ -39,7 +39,15 @@ Returns service status. In `local` runtime mode this is a lightweight liveness c
 }
 ```
 
-Readiness responses must not include secret values or environment variable names.
+Health responses must not include secret values or environment variable names.
+
+## `GET /version`
+
+Returns `{ "name": "@hasna/gateway", "version": "<current version>" }`. This endpoint is public.
+
+## `GET /ready`
+
+Returns authenticated operational checks for runtime config, gateway auth, providers, routes, and usage-ledger availability. The response status is `200` when ready and `503` when runtime validation fails. A missing cumulative ledger is reported as `deferred` because per-request budgets remain usable.
 
 ## `GET /v1/models`
 
@@ -62,7 +70,7 @@ Returns configured gateway models and aliases, including provider and capability
 
 ## `POST /v1/chat/completions`
 
-The initial critical endpoint. It should support:
+Supports:
 
 - `model`
 - `messages`
@@ -73,8 +81,12 @@ The initial critical endpoint. It should support:
 - `temperature`
 - `top_p`
 - `max_tokens`
+- `max_completion_tokens`
 - `stop`
 - `seed` when provider supports it
+- `n`, `presence_penalty`, and `frequency_penalty`
+- `parallel_tool_calls`, `logprobs`, and `top_logprobs`
+- `metadata`, `store`, `reasoning_effort`, `modalities`, `audio`, `prediction`, `service_tier`, and `user`
 
 Example:
 
@@ -109,6 +121,24 @@ The optional `gateway` field is a gateway-specific extension. It is ignored befo
 Unsupported gateway-only fields and secrets are stripped.
 
 Smart routing fields include `task`, `priority`, `cost_quality_tradeoff`, `sticky_session_id`, `min_quality`, `min_context_tokens`, `expected_input_tokens`, `required_capabilities`, `provider_order`, `provider_only`, and `provider_ignore`. Policy is applied before scoring.
+
+Successful non-streaming chat responses can use the optional process-local response cache. Streaming responses, embeddings, and errors are not cached. Sending a truthy value in the configured cache bypass header skips lookup.
+
+## `POST /v1/embeddings`
+
+Accepts OpenAI-compatible `model` and `input` fields. `input` may be a string, string array, token array, or array of token arrays. Optional forwarded fields are `encoding_format`, `dimensions`, and `user`. The gateway-only `gateway` field may narrow route policy but is stripped before provider forwarding.
+
+Embedding route candidates must declare the `embeddings` capability. The gateway applies the same auth, policy, budget, fallback, rate-limit, usage-ledger, and metadata rules as non-streaming chat requests. Route filtering checks the model capability only, never the provider adapter, so a candidate whose adapter cannot embed is selected rather than skipped and then fails the whole request with a non-retryable `400 provider_embeddings_unsupported`; remaining fallback candidates are not attempted. Only the OpenAI-compatible adapter implements embeddings today, so order embeddings routes so that every eligible candidate is served by that adapter. Dynamic `provider/model` passthrough ids get the `embeddings` capability synthesized for any provider and fail the same way. Streaming and response caching do not apply.
+
+```json
+{
+  "model": "embeddings",
+  "input": ["first document", "second document"],
+  "encoding_format": "float"
+}
+```
+
+The response preserves the provider's OpenAI-compatible `data` array, rewrites `model` to the configured gateway model id, normalizes usage to `prompt_tokens` and `total_tokens`, and includes `gateway` metadata when enabled.
 
 ## Response Shape
 

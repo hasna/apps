@@ -1,5 +1,6 @@
 import { unlink } from "node:fs/promises";
 import { describe, expect, test } from "bun:test";
+import { getBudgetStatuses } from "../src/budget";
 import { GatewayHttpError } from "../src/errors";
 import {
   createChatCompletion,
@@ -7,6 +8,7 @@ import {
   createEmbeddings,
   providerErrorMessageFromBody,
 } from "../src/gateway";
+import type { GatewayUsage } from "../src/types";
 import { testConfig, jsonResponse } from "./helpers";
 
 const env = {
@@ -463,6 +465,65 @@ describe("chat completion lifecycle", () => {
 
     expect(callCount).toBe(1);
     expect(second.body.id).toBe("provider-cached-1");
+  });
+
+  test("does not meter cache hits into the ledger, budget, or token rate limit", async () => {
+    const path = `/tmp/hasna-gateway-cache-accounting-${crypto.randomUUID()}.jsonl`;
+    const config = testConfig();
+    config.storage.usageLedgerPath = path;
+    config.server.responseCache = {
+      ...config.server.responseCache,
+      enabled: true,
+      ttlMs: 60_000,
+    };
+    config.budgets = [
+      {
+        id: "tenant-lifetime",
+        window: "lifetime",
+        mode: "hard",
+        scope: { tenant: "tenant-a" },
+        maxTotalTokens: 20,
+      },
+    ];
+    let callCount = 0;
+    const fetchImpl = async (): Promise<Response> => {
+      callCount += 1;
+      return providerResponse(`accounted-${callCount}`);
+    };
+    const rateLimitedUsage: number[] = [];
+    const request = {
+      model: "coding",
+      messages: [{ role: "user" as const, content: "same prompt" }],
+    };
+    const options = {
+      config,
+      env,
+      fetchImpl,
+      budgetContext: { gatewayKey: "key-a", tenant: "tenant-a" },
+      rateLimit: {
+        onUsage: (usage: GatewayUsage) => {
+          rateLimitedUsage.push(usage.totalTokens);
+        },
+      },
+    };
+
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      await createChatCompletion(options, request);
+    }
+
+    const ledgerLines = (await Bun.file(path).text()).trim().split("\n").filter(Boolean);
+    const [budgetStatus] = await getBudgetStatuses(config, {
+      tenant: "tenant-a",
+      requestedModel: "coding",
+      selectedModel: "openai/gpt-4.1-mini",
+    });
+
+    expect(callCount).toBe(1);
+    expect(ledgerLines).toHaveLength(1);
+    expect(rateLimitedUsage).toEqual([15]);
+    expect(budgetStatus?.spent.totalTokens).toBe(15);
+    expect(budgetStatus?.remaining.totalTokens).toBe(5);
+    await unlink(path);
   });
 
   test("normalizes message object key order for cache keys", async () => {
@@ -984,5 +1045,71 @@ describe("chat completion lifecycle", () => {
     const ledgerText = await Bun.file(path).text();
     expect(ledgerText).toContain('"totalTokens":2');
     await unlink(path);
+  });
+
+  test("fails the request when the routed embeddings adapter cannot embed instead of falling back", async () => {
+    const config = testConfig();
+    config.providers.push({
+      id: "anthropic",
+      displayName: "Anthropic",
+      kind: "anthropic",
+      baseUrl: "https://api.anthropic.test",
+      apiKeyEnv: "ANTHROPIC_API_KEY",
+      enabled: true,
+      regions: ["us"],
+      dataPolicy: {
+        allowTraining: false,
+        allowLogging: false,
+        byokOnly: true,
+        zeroDataRetentionAvailable: false,
+      },
+    });
+    config.models.push({
+      id: "anthropic/embed-v1",
+      providerId: "anthropic",
+      providerModel: "embed-v1",
+      aliases: ["embeddings"],
+      capabilities: ["embeddings"],
+    });
+    const route = config.routes.find((entry) => entry.id === "embeddings");
+    expect(route).toBeDefined();
+    route!.fallbackModelIds = ["anthropic/embed-v1", "openai/text-embedding-3-small"];
+
+    const calls: string[] = [];
+    let thrown: unknown;
+    try {
+      await createEmbeddings(
+        {
+          config,
+          env: {
+            GATEWAY_API_KEY: "gateway",
+            OPENAI_API_KEY: "openai",
+            ANTHROPIC_API_KEY: "anthropic",
+          },
+          fetchImpl: async (url: string | URL | Request): Promise<Response> => {
+            calls.push(String(url));
+            return jsonResponse({
+              object: "list",
+              data: [{ object: "embedding", index: 0, embedding: [0.1] }],
+              usage: { prompt_tokens: 1, total_tokens: 1 },
+            });
+          },
+        },
+        {
+          model: "embeddings",
+          input: "unreachable fallback",
+        },
+      );
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(GatewayHttpError);
+    expect(thrown).toMatchObject({
+      status: 400,
+      code: "provider_embeddings_unsupported",
+      retryable: false,
+    });
+    expect(calls).toEqual([]);
   });
 });

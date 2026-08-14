@@ -9,6 +9,7 @@ import {
   toProviderChatBody,
   toProviderEmbeddingsBody,
 } from "../src/providers";
+import { providerBaseUrl } from "../src/provider-config";
 import { testConfig } from "./helpers";
 
 describe("OpenAI-compatible provider adapter", () => {
@@ -542,5 +543,40 @@ describe("Google Gemini provider adapter", () => {
         { role: "user", content: "hi" },
       ],
     });
+  });
+});
+
+describe("provider base URL resolution", () => {
+  const baseProvider = {
+    id: "example",
+    displayName: "Example",
+    kind: "openai-compatible" as const,
+    apiKeyEnv: "EXAMPLE_API_KEY",
+    enabled: true,
+    regions: ["us"],
+    dataPolicy: {
+      allowTraining: false,
+      allowLogging: false,
+      byokOnly: true,
+      zeroDataRetentionAvailable: false,
+    },
+  };
+
+  test("prefers baseUrl over baseUrlEnv", () => {
+    const resolved = providerBaseUrl(
+      { ...baseProvider, baseUrl: "https://api.example.test/v1", baseUrlEnv: "EXAMPLE_BASE_URL" },
+      { EXAMPLE_BASE_URL: "https://proxy.example.test/v1" },
+    );
+
+    expect(resolved).toBe("https://api.example.test/v1");
+  });
+
+  test("falls back to baseUrlEnv only when baseUrl is absent", () => {
+    const resolved = providerBaseUrl(
+      { ...baseProvider, baseUrlEnv: "EXAMPLE_BASE_URL" },
+      { EXAMPLE_BASE_URL: "https://proxy.example.test/v1" },
+    );
+
+    expect(resolved).toBe("https://proxy.example.test/v1");
   });
 });
