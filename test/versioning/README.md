@@ -28,7 +28,7 @@ bun run test/versioning/run.ts --strict
 The runner rejects unknown options and forwards the exact test exit code.
 
 The suite keeps exact, measured baseline exceptions in the test source rather
-than weakening the comparison generally. The current exceptions are four
+than weakening the comparison generally. The current exceptions are five
 changelog headings, two literal runtime version exports, two npm/main drift
 records (the @hasna/loops release-lane drift, reconcile task
 69e8b5dd-15cd-4f45-8739-c0edf6720773, and the @hasna/emails release-lane
@@ -38,6 +38,9 @@ exception fails the relevant gate. The pre-import drift census entries for
 apps/{economy,events,feedback,recordings} (non-members of this repo) and the
 @hasna/repos entry (registry == main) were pruned 2026-08-14.
 Member-owned metadata repairs are tracked separately from this test-only PR.
+The @hasna/hooks changelog heading exception was recorded at the merge ref
+2026-08-14 (package 0.5.0 imported by #91, changelog latest 0.4.1);
+reconcile task 5e8fe7a0-1d13-4a54-8500-c34e4cdeaf91.
 
 The package-version/change-set check intentionally uses a static diff against
 `VERSIONING_BASE_REF` (default `origin/main`), so the test never mutates a
