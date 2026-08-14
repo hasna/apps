@@ -1,0 +1,7 @@
+node_modules/
+.secrets/
+.connect/
+.env
+.env.local
+*.log
+.DS_Store
