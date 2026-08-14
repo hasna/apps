@@ -19,7 +19,11 @@ const packageRecord = JSON.parse(readFileSync(resolve("package.json"), "utf8")) 
 };
 const executablePath = resolve("dist/cli/index.js");
 const executable = readFileSync(executablePath);
-const sourceStatus = git("status", "--porcelain", "--untracked-files=all");
+// Scoped to this package's own subtree: in the monorepo, sibling members'
+// builds legitimately regenerate their own tracked artifacts (e.g. apps/knowledge
+// bins), and a whole-repo status would refuse provenance for a source tree that
+// is clean where it matters.
+const sourceStatus = git("status", "--porcelain", "--untracked-files=all", "--", ".");
 if (sourceStatus !== "") {
   throw new Error("refusing to write release provenance from a dirty source tree");
 }
