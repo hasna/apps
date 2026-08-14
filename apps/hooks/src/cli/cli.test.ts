@@ -324,6 +324,30 @@ describe("CLI", () => {
       expect(Array.isArray(data.healthy_hooks)).toBe(true);
       expect(Array.isArray(data.issues)).toBe(true);
     });
+
+    test("doctor reports a healthy custom hook from the custom dir", async () => {
+      backupSettings();
+      try {
+        const hookDir = join(TEST_HOME, ".hasna", "hooks", "hooks", "mycustom");
+        mkdirSync(hookDir, { recursive: true });
+        writeFileSync(
+          join(hookDir, "manifest.json"),
+          JSON.stringify({ name: "mycustom", version: "1.0.0", events: ["PreToolUse"], script: "script.ts" }),
+        );
+        writeFileSync(join(hookDir, "script.ts"), `console.log(JSON.stringify({ decision: "approve" }));`);
+        mkdirSync(join(TEST_HOME, ".claude"), { recursive: true });
+        writeFileSync(
+          SETTINGS_PATH,
+          JSON.stringify({ hooks: { PreToolUse: [{ hooks: [{ type: "command", command: "hooks run mycustom" }] }] } }),
+        );
+        const data = await runJson("doctor");
+        expect(data.healthy).toBe(true);
+        expect(data.healthy_hooks).toContain("mycustom");
+        expect(data.issues).toHaveLength(0);
+      } finally {
+        restoreSettings();
+      }
+    });
   });
 
   describe("hooks update", () => {
