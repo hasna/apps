@@ -20,11 +20,14 @@ const membersByName = new Map(members.map((member) => [member.name, member]));
 
 // These are measured import/release-line mismatches on the 2026-08-14 main base.
 // They are exceptions, not a general relaxation: a different value remains a failure.
+// Refreshed 2026-08-14 at the fresh merge of current main (a7d60a96) by the
+// ci/test-suites iterate-to-green fixer: hooks went clean (package 0.6.3 now
+// matches its changelog heading after #117/#121 landed on main — record removed),
+// and instructions gained a release-lane mismatch (package 0.4.35 from release
+// #119, changelog heading still 0.4.33; reconcile task 1bb8cf0a).
 const KNOWN_CHANGELOG_MISMATCHES = new Map([
   ["@hasna/calendar", { packageVersion: "0.3.1", changelogVersion: "0.3.0" }],
-  // Landing-state (merge-ref) drift from import #91: package 0.5.0 landed without a
-  // matching changelog release. Reconcile task 5e8fe7a0-1d13-4a54-8500-c34e4cdeaf91.
-  ["@hasna/hooks", { packageVersion: "0.5.0", changelogVersion: "0.4.1" }],
+  ["@hasna/instructions", { packageVersion: "0.4.35", changelogVersion: "0.4.33" }],
   ["@hasna/loops", { packageVersion: "0.4.42", changelogVersion: "0.4.41" }],
   ["@hasna/secrets", { packageVersion: "0.2.22", changelogVersion: "0.2.21" }],
   ["@hasna/signatures", { packageVersion: "0.1.14", changelogVersion: "0.1.12" }],
@@ -50,12 +53,18 @@ const KNOWN_RUNTIME_MISMATCHES = new Map([
 // reconcile task 48a6ef7f-0919-470d-99f4-59817a01c647; hooks 0.6.0 published
 // 2026-08-14T13:26:52Z ahead of main 0.5.0, reconcile task
 // d1ee99b5-5ba5-46a5-acdd-bb27fec9058f).
+// Iterate-to-green fixer re-ran the complete member census at the fresh merge of
+// current main (a7d60a96) 2026-08-14: exactly the four drifts below, no fifth drift —
+// instructions (0.4.35) and hooks (0.6.3) registry versions now equal main after
+// #119/#117/#121 merged, so their records were removed (reconcile tasks 8f8063c9 and
+// d1ee99b5 stay open for their remaining drift history), and @hasna/secrets gained a
+// release-lane drift (registry 0.3.0 vs main 0.2.22, reconcile task
+// 3ab02291-58b0-40c7-b96f-958ee1ef4a61).
 const KNOWN_NPM_DRIFT = new Map([
   ["@hasna/loops", { registryVersion: "0.5.0", mainVersion: "0.4.42", source: "publish lane released 0.5.0 ahead of main; reconcile task 69e8b5dd-15cd-4f45-8739-c0edf6720773" }],
   ["@hasna/emails", { registryVersion: "1.3.15", mainVersion: "1.3.14", source: "release lane published 1.3.15 ahead of main (2026-08-14T11:48:46Z); reconcile task 78c66e3c-baba-4ba6-9295-99b4df7ebc25" }],
-  ["@hasna/instructions", { registryVersion: "0.4.34", mainVersion: "0.4.33", source: "release lane published 0.4.34 ahead of main (2026-08-14T12:41:38Z); reconcile task 8f8063c9-33af-4af7-b0d1-bdb25c481791" }],
   ["@hasna/contracts", { registryVersion: "0.10.6", mainVersion: "0.11.0", source: "import #81 landed contracts 0.11.0 ahead of the registry; reconcile task 48a6ef7f-0919-470d-99f4-59817a01c647" }],
-  ["@hasna/hooks", { registryVersion: "0.6.0", mainVersion: "0.5.0", source: "release lane published 0.6.0 ahead of main (2026-08-14T13:26:52Z); reconcile task d1ee99b5-5ba5-46a5-acdd-bb27fec9058f" }],
+  ["@hasna/secrets", { registryVersion: "0.3.0", mainVersion: "0.2.22", source: "release lane published 0.3.0 ahead of main (2026-08-14); reconcile task 3ab02291-58b0-40c7-b96f-958ee1ef4a61" }],
 ]);
 
 describe("hasna/apps versioning integrity", () => {

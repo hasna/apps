@@ -29,24 +29,27 @@ The runner rejects unknown options and forwards the exact test exit code.
 
 The suite keeps exact, measured baseline exceptions in the test source rather
 than weakening the comparison generally. The current exceptions are five
-changelog headings, two literal runtime version exports, five npm/main drift
+changelog headings (calendar 0.3.1/0.3.0, instructions 0.4.35/0.4.33 —
+release-lane mismatch from #119, reconcile task 1bb8cf0a, loops 0.4.42/0.4.41,
+secrets 0.2.22/0.2.21, signatures 0.1.14/0.1.12), two literal runtime version
+exports (catalog 0.2.0/0.1.0, treasury 0.1.1/0.1.0), four npm/main drift
 records (the @hasna/loops release-lane drift, reconcile task
 69e8b5dd-15cd-4f45-8739-c0edf6720773, the @hasna/emails release-lane
 drift, reconcile task 78c66e3c-baba-4ba6-9295-99b4df7ebc25, the
-@hasna/instructions release-lane drift 0.4.34/0.4.33, reconcile task
-8f8063c9-33af-4af7-b0d1-bdb25c481791, the @hasna/contracts
-import drift 0.11.0/0.10.6, reconcile task
-48a6ef7f-0919-470d-99f4-59817a01c647, and the @hasna/hooks
-release-lane drift 0.6.0/0.5.0, reconcile task
-d1ee99b5-5ba5-46a5-acdd-bb27fec9058f), and five package
+@hasna/contracts import drift 0.11.0/0.10.6, reconcile task
+48a6ef7f-0919-470d-99f4-59817a01c647, and the @hasna/secrets
+release-lane drift 0.3.0/0.2.22, reconcile task
+3ab02291-58b0-40c7-b96f-958ee1ef4a61), and five package
 names absent from the local Bun quarantine list. Any changed value or new
 exception fails the relevant gate. The pre-import drift census entries for
 apps/{economy,events,feedback,recordings} (non-members of this repo) and the
-@hasna/repos entry (registry == main) were pruned 2026-08-14.
+@hasna/repos entry (registry == main) were pruned 2026-08-14. The
+@hasna/instructions and @hasna/hooks npm-drift records were removed
+2026-08-14 when the registry caught up to main (0.4.35 and 0.6.3
+respectively, after #119/#117/#121 merged); the @hasna/hooks changelog
+heading exception was removed the same day because package 0.6.3 now matches
+its changelog heading.
 Member-owned metadata repairs are tracked separately from this test-only PR.
-The @hasna/hooks changelog heading exception was recorded at the merge ref
-2026-08-14 (package 0.5.0 imported by #91, changelog latest 0.4.1);
-reconcile task 5e8fe7a0-1d13-4a54-8500-c34e4cdeaf91.
 
 The package-version/change-set check intentionally uses a static diff against
 `VERSIONING_BASE_REF` (default `origin/main`), so the test never mutates a
