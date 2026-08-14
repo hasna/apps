@@ -11,6 +11,7 @@ import { listCustomHooks, shortManifestName } from "./lib/manifest.js";
 import { readLock, sha256File, retrustHook } from "./lib/store.js";
 import { resolveHook } from "./lib/resolve.js";
 import { resolveApiKey } from "./config.js";
+import { secureEqual } from "./lib/secure-compare.js";
 
 // Distinct from the MCP SSE default (39427) so `hooks serve` and
 // `hooks mcp --sse` can run on the same machine without colliding.
@@ -89,8 +90,8 @@ async function artifactFor(name: string, version: string): Promise<ArtifactPaylo
 function authorized(req: Request, apiKey: string | undefined): boolean {
   if (!apiKey) return false;
   const header = req.headers.get("authorization") ?? "";
-  if (header.startsWith("Bearer ")) return header.slice("Bearer ".length) === apiKey;
-  return req.headers.get("x-api-key") === apiKey;
+  if (header.startsWith("Bearer ")) return secureEqual(header.slice("Bearer ".length), apiKey);
+  return secureEqual(req.headers.get("x-api-key") ?? "", apiKey);
 }
 
 function json(body: unknown, status = 200, headers: Record<string, string> = {}): Response {

@@ -3,8 +3,9 @@
  * A custom hook that collides with a bundled name shadows it.
  */
 
-import { join } from "path";
+import { dirname, join } from "path";
 import { existsSync } from "fs";
+import { fileURLToPath } from "url";
 import { getHook, type HookEvent, type HookMeta } from "./registry.js";
 import { customHookDir, readCustomManifest, shortManifestName } from "./manifest.js";
 
@@ -20,13 +21,26 @@ export interface ResolvedHook {
   meta: HookMeta;
 }
 
+/**
+ * Locate the bundled hooks directory at runtime from the executing module's
+ * own location. A bare `__dirname` is baked to the builder's path at bundle
+ * time, so bundled hooks resolve only on the machine that built the package
+ * (0.6.0/0.6.1 regression); `import.meta.url` is preserved at runtime by the
+ * bun build target, so resolution follows the installed package instead.
+ */
+export function resolveBundledHooksDir(moduleDir: string = dirname(fileURLToPath(import.meta.url))): string {
+  const sourceLayout = join(moduleDir, "..", "..", "hooks");
+  if (existsSync(join(sourceLayout, "hook-gitguard"))) return sourceLayout;
+  return join(moduleDir, "..", "hooks");
+}
+
 export function resolveHookDir(name: string): string | undefined {
   const custom = readCustomManifest(name);
   if (custom) return customHookDir(name);
   const meta = getHook(shortManifestName(name));
   if (!meta) return undefined;
   const short = shortManifestName(name);
-  const bundledBase = join(__dirname, "..", "..", "hooks");
+  const bundledBase = resolveBundledHooksDir();
   const direct = join(bundledBase, short);
   if (existsSync(direct)) return direct;
   const prefixed = join(bundledBase, `hook-${short}`);

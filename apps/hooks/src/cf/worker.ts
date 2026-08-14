@@ -6,7 +6,13 @@
  * hook_artifacts/<name>/<version>.json; hook rows live in D1.
  *
  * Bindings: HOOKS_D1 (D1), HOOKS_R2 (R2), HOOKS_API_KEY (secret).
+ *
+ * Privacy lock-down: when HOOKS_API_KEY is set, every route except /health
+ * requires the API key. Without the binding, reads stay open (OSS default) —
+ * the behavior is config-driven.
  */
+
+import { secureEqual } from "../lib/secure-compare.js";
 
 interface D1Result {
   results?: unknown[];
@@ -73,8 +79,8 @@ const json = (body: unknown, status = 200, headers: Record<string, string> = {})
 function authorized(req: Request, env: Env): boolean {
   if (!env.HOOKS_API_KEY) return false;
   const header = req.headers.get("authorization") ?? "";
-  if (header.startsWith("Bearer ")) return header.slice("Bearer ".length) === env.HOOKS_API_KEY;
-  return req.headers.get("x-api-key") === env.HOOKS_API_KEY;
+  if (header.startsWith("Bearer ")) return secureEqual(header.slice("Bearer ".length), env.HOOKS_API_KEY);
+  return secureEqual(req.headers.get("x-api-key") ?? "", env.HOOKS_API_KEY);
 }
 
 async function listRows(env: Env): Promise<HookRow[]> {
@@ -106,6 +112,12 @@ export default {
 
     if (url.pathname === "/health" && req.method === "GET") {
       return json({ status: "ok", name: "hooks-registry" });
+    }
+
+    // Privacy lock-down: a configured API key gates every route except
+    // /health (which stays open for probes). No binding -> reads stay open.
+    if (env.HOOKS_API_KEY && !authorized(req, env)) {
+      return json({ error: "unauthorized: valid API key required" }, 401);
     }
 
     if (url.pathname === "/api/v1/catalog" && req.method === "GET") {
