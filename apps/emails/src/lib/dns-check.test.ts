@@ -1,0 +1,204 @@
+import { describe, it, expect, mock, beforeEach } from "bun:test";
+import { checkDnsRecords, checkDomainAuthentication, formatDnsCheck } from "./dns-check.js";
+import type { DnsRecord } from "../types/index.js";
+
+// Mock dns/promises
+const mockResolve = mock(() => Promise.resolve([]));
+
+mock.module("dns/promises", () => ({
+  resolve: mockResolve,
+}));
+
+beforeEach(() => {
+  mockResolve.mockReset();
+});
+
+describe("checkDnsRecords", () => {
+  it("returns match=true when DNS record contains expected value", async () => {
+    const records: DnsRecord[] = [
+      { type: "TXT", name: "example.com", value: "v=spf1 include:amazonses.com", purpose: "SPF" },
+    ];
+    mockResolve.mockResolvedValueOnce([["v=spf1 include:amazonses.com include:sendgrid.net ~all"]]);
+
+    const results = await checkDnsRecords("example.com", records);
+    expect(results).toHaveLength(1);
+    expect(results[0]!.match).toBe(true);
+    expect(results[0]!.found).toContain("v=spf1 include:amazonses.com include:sendgrid.net ~all");
+  });
+
+  it("returns match=false when DNS record does not contain expected value", async () => {
+    const records: DnsRecord[] = [
+      { type: "TXT", name: "example.com", value: "v=spf1 include:amazonses.com", purpose: "SPF" },
+    ];
+    mockResolve.mockResolvedValueOnce([["v=spf1 include:other.com ~all"]]);
+
+    const results = await checkDnsRecords("example.com", records);
+    expect(results).toHaveLength(1);
+    expect(results[0]!.match).toBe(false);
+  });
+
+  it("returns match=false and empty found when DNS lookup fails", async () => {
+    const records: DnsRecord[] = [
+      { type: "TXT", name: "_dmarc.example.com", value: "v=DMARC1", purpose: "DMARC" },
+    ];
+    mockResolve.mockRejectedValueOnce(new Error("NXDOMAIN"));
+
+    const results = await checkDnsRecords("example.com", records);
+    expect(results).toHaveLength(1);
+    expect(results[0]!.match).toBe(false);
+    expect(results[0]!.found).toEqual([]);
+  });
+
+  it("handles multiple records", async () => {
+    const records: DnsRecord[] = [
+      { type: "TXT", name: "example.com", value: "v=spf1", purpose: "SPF" },
+      { type: "CNAME", name: "dkim._domainkey.example.com", value: "dkim.resend.com", purpose: "DKIM" },
+    ];
+    mockResolve.mockResolvedValueOnce([["v=spf1 include:test ~all"]]);
+    mockResolve.mockResolvedValueOnce(["dkim.resend.com"]);
+
+    const results = await checkDnsRecords("example.com", records);
+    expect(results).toHaveLength(2);
+    expect(results[0]!.match).toBe(true);
+    expect(results[1]!.match).toBe(true);
+  });
+
+  it("matches SPF when the live record has extra authorized senders", async () => {
+    const records: DnsRecord[] = [
+      { type: "TXT", name: "example.com", value: "v=spf1 include:amazonses.com ~all", purpose: "SPF" },
+    ];
+    mockResolve.mockResolvedValueOnce([["v=spf1 include:amazonses.com include:_spf.google.com ~all"]]);
+
+    const results = await checkDnsRecords("example.com", records);
+
+    expect(results[0]!.match).toBe(true);
+  });
+
+  it("matches DMARC when the live policy is stricter than expected", async () => {
+    const records: DnsRecord[] = [
+      { type: "TXT", name: "_dmarc.example.com", value: "v=DMARC1; p=none; rua=mailto:dmarc@example.com", purpose: "DMARC" },
+    ];
+    mockResolve.mockResolvedValueOnce([["v=DMARC1; p=quarantine; rua=mailto:dmarc@example.com"]]);
+
+    const results = await checkDnsRecords("example.com", records);
+
+    expect(results[0]!.match).toBe(true);
+  });
+
+  it("checks MX hosts by exchange value", async () => {
+    const records: DnsRecord[] = [
+      { type: "MX", name: "example.com", value: "inbound-smtp.us-east-1.amazonaws.com", purpose: "MX" },
+    ];
+    mockResolve.mockResolvedValueOnce([{ priority: 10, exchange: "inbound-smtp.us-east-1.amazonaws.com" }]);
+
+    const results = await checkDnsRecords("example.com", records);
+
+    expect(results[0]!.match).toBe(true);
+    expect(results[0]!.found).toEqual(["10 inbound-smtp.us-east-1.amazonaws.com"]);
+  });
+
+  it("uses CNAME resolver for CNAME records", async () => {
+    const records: DnsRecord[] = [
+      { type: "CNAME", name: "dkim._domainkey.example.com", value: "dkim.resend.com", purpose: "DKIM" },
+    ];
+    mockResolve.mockResolvedValueOnce(["dkim.resend.com"]);
+
+    const results = await checkDnsRecords("example.com", records);
+    expect(results[0]!.match).toBe(true);
+    expect(mockResolve).toHaveBeenCalledWith("dkim._domainkey.example.com", "CNAME");
+  });
+});
+
+describe("checkDomainAuthentication", () => {
+  it("summarizes per-domain outbound, inbound, and DMARC monitoring readiness", async () => {
+    const records: DnsRecord[] = [
+      { type: "TXT", name: "_amazonses.example.com", value: "verify-token", purpose: "SES_IDENTITY" },
+      { type: "CNAME", name: "a._domainkey.example.com", value: "a.dkim.amazonses.com", purpose: "DKIM" },
+      { type: "TXT", name: "example.com", value: "v=spf1 include:amazonses.com ~all", purpose: "SPF" },
+      { type: "TXT", name: "_dmarc.example.com", value: "v=DMARC1; p=none; rua=mailto:dmarc@example.com", purpose: "DMARC" },
+      { type: "MX", name: "example.com", value: "10 inbound-smtp.us-east-1.amazonaws.com", purpose: "MX" },
+    ];
+    mockResolve
+      .mockResolvedValueOnce([["verify-token"]])
+      .mockResolvedValueOnce(["a.dkim.amazonses.com"])
+      .mockResolvedValueOnce([["v=spf1 include:amazonses.com ~all"]])
+      .mockResolvedValueOnce([["v=DMARC1; p=none; rua=mailto:dmarc@example.com"]])
+      .mockResolvedValueOnce([{ priority: 10, exchange: "inbound-smtp.us-east-1.amazonaws.com" }]);
+
+    const result = await checkDomainAuthentication("example.com", records);
+
+    expect(result.outbound_ready).toBe(true);
+    expect(result.inbound_ready).toBe(true);
+    expect(result.dmarc_monitoring_ready).toBe(true);
+    expect(result.signals.dkim.status).toBe("verified");
+    expect(result.signals.spf.status).toBe("verified");
+    expect(result.signals.dmarc.status).toBe("verified");
+    expect(result.missing_requirements).toEqual([]);
+  });
+
+  it("does not make DMARC a hard outbound readiness blocker", async () => {
+    const records: DnsRecord[] = [
+      { type: "CNAME", name: "a._domainkey.example.com", value: "a.dkim.amazonses.com", purpose: "DKIM" },
+      { type: "TXT", name: "example.com", value: "v=spf1 include:amazonses.com ~all", purpose: "SPF" },
+      { type: "TXT", name: "_dmarc.example.com", value: "v=DMARC1; p=none", purpose: "DMARC" },
+    ];
+    mockResolve
+      .mockResolvedValueOnce(["a.dkim.amazonses.com"])
+      .mockResolvedValueOnce([["v=spf1 include:amazonses.com ~all"]])
+      .mockRejectedValueOnce(new Error("NXDOMAIN"));
+
+    const result = await checkDomainAuthentication("example.com", records);
+
+    expect(result.outbound_ready).toBe(true);
+    expect(result.dmarc_monitoring_ready).toBe(false);
+    expect(result.signals.dmarc.status).toBe("missing");
+    expect(result.warnings.join(" ")).toContain("DMARC");
+  });
+
+  it("blocks outbound readiness when custom MAIL FROM DNS is expected but missing", async () => {
+    const records: DnsRecord[] = [
+      { type: "CNAME", name: "a._domainkey.example.com", value: "a.dkim.amazonses.com", purpose: "DKIM" },
+      { type: "TXT", name: "example.com", value: "v=spf1 include:amazonses.com ~all", purpose: "SPF" },
+      { type: "MX", name: "bounce.example.com", value: "feedback-smtp.us-east-1.amazonses.com", purpose: "MAIL_FROM" },
+    ];
+    mockResolve
+      .mockResolvedValueOnce(["a.dkim.amazonses.com"])
+      .mockResolvedValueOnce([["v=spf1 include:amazonses.com ~all"]])
+      .mockRejectedValueOnce(new Error("NXDOMAIN"));
+
+    const result = await checkDomainAuthentication("example.com", records);
+
+    expect(result.outbound_ready).toBe(false);
+    expect(result.signals.mail_from.status).toBe("missing");
+    expect(result.missing_requirements).toContain("custom MAIL FROM DNS is missing");
+  });
+});
+
+describe("formatDnsCheck", () => {
+  it("returns empty message for no results", () => {
+    expect(formatDnsCheck([])).toBe("No DNS records to check.\n");
+  });
+
+  it("formats results into a table", () => {
+    const results = [
+      {
+        record: { type: "TXT" as const, name: "example.com", value: "v=spf1", purpose: "SPF" as const },
+        expected: "v=spf1",
+        found: ["v=spf1 include:test"],
+        match: true,
+      },
+      {
+        record: { type: "TXT" as const, name: "_dmarc.example.com", value: "v=DMARC1", purpose: "DMARC" as const },
+        expected: "v=DMARC1",
+        found: [],
+        match: false,
+      },
+    ];
+    const output = formatDnsCheck(results);
+    expect(output).toContain("Type");
+    expect(output).toContain("Name");
+    expect(output).toContain("Expected");
+    expect(output).toContain("Found");
+    expect(output).toContain("Status");
+  });
+});

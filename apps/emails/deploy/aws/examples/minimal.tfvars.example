@@ -1,0 +1,41 @@
+# Copy to a private, ignored location. Never commit real account IDs or image
+# registries if they identify private infrastructure.
+aws_region         = "us-east-1"
+expected_account_id = "111122223333"
+container_image    = "registry.example/emails@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+# Safe defaults are repeated for clarity. The plan provisions infrastructure
+# but starts no application tasks and does not activate SES receiving.
+api_desired_count    = 0
+worker_desired_count = 0
+secrets_ready        = false
+migrations_complete  = false
+enable_ses_inbound   = false
+enable_public_endpoint = false
+enable_private_endpoint = false
+enable_nat_gateway      = false
+# Keep false through migration 0016 and the first tenant-aware deployment.
+# Set true only after both API and worker have a verified tenant-aware completed deployment.
+enable_automatic_deployment_rollback = false
+
+# Auth configuration for the API task. Both are REQUIRED before api_desired_count
+# can be raised above 0 (enforced by a precondition on aws_ecs_service.api): the API
+# fails closed at boot without them and this module ships neither a domain nor a
+# sender of its own. In the allowlist, `*` matches exactly one DNS label — so
+# "example.*" allows example.com and example.org but not sub.example.com, and
+# "*.*" is effectively permit-all.
+auth_allowed_email_domains = "example.com"
+auth_from_email            = "no-reply@example.com"
+
+# Optional one-time primary-super-admin bootstrap guard. Set both to operator-
+# approved values; the KID is an identifier, never the API token itself.
+# primary_super_admin_email         = "owner@example.com"
+# primary_super_admin_bootstrap_kid = "operator-key-id"
+
+# Required privacy decision before enable_ses_inbound can become true.
+# inbound_object_retention_days = 30
+
+tags = {
+  Environment = "production"
+  Owner       = "email-platform"
+}

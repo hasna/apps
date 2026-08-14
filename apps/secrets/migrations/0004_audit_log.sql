@@ -1,0 +1,7 @@
+CREATE TABLE IF NOT EXISTS audit_log (
+  id BIGSERIAL PRIMARY KEY,
+  action TEXT NOT NULL,
+  key TEXT NOT NULL,
+  agent TEXT NOT NULL,
+  timestamp TEXT NOT NULL
+);
