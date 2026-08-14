@@ -48,8 +48,10 @@ are useful for integration tests and targeted embedding, but future expansion
 should avoid turning CLI or daemon internals into a broad compatibility
 promise. Add new subpaths only when they map to a stable integration boundary.
 
-Package repository, homepage, and bugs metadata use the canonical
-`https://github.com/hasna/apps` repository.
+The canonical repository is https://github.com/hasna/apps (member
+`apps/automations`). Package repository, homepage, and bugs metadata
+fields still carry the pre-monorepo URLs and are migrated in a separate
+reviewed change.
 
 ## CLI Bin Surface
 

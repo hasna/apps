@@ -6,8 +6,8 @@ Thank you for your interest in contributing!
 
 ```bash
 # Clone the repo
-git clone https://github.com/hasna/apps.git
-cd apps/knowledge
+git clone https://github.com/hasna/knowledge.git
+cd knowledge
 
 # Install dependencies (Bun)
 bun install
