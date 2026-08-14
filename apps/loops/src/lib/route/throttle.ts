@@ -1,0 +1,213 @@
+import { realpathSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { resolve } from "node:path";
+import type { Store } from "../store.js";
+import { ValidationError } from "../errors.js";
+import { taskEventField, taskEventRecords } from "./fields.js";
+import { nonNegativeInteger, positiveInteger } from "./parse.js";
+
+/** Active-workflow admission throttles and canonical project-path handling. */
+
+export interface RouteThrottleLimits {
+  maxActive?: number;
+  maxActiveScope?: string;
+  maxActivePerProject?: number;
+  maxActivePerProjectGroup?: number;
+  maxPerProfile?: number;
+}
+
+export interface RouteThrottleDecision {
+  allowed: boolean;
+  reason?: string;
+  projectPath: string;
+  projectGroup?: string;
+  limits: RouteThrottleLimits;
+  counts: {
+    global: number;
+    project: number;
+    projectGroup?: number;
+  };
+}
+
+export function routeThrottleLimitsFromOpts(opts: {
+  maxActive?: string;
+  maxActiveScope?: string;
+  maxActivePerProject?: string;
+  maxActivePerProjectGroup?: string;
+  maxPerProfile?: string;
+}): RouteThrottleLimits {
+  return {
+    maxActive: positiveInteger(opts.maxActive, "--max-active"),
+    maxActiveScope: opts.maxActiveScope?.trim() || undefined,
+    maxActivePerProject: positiveInteger(opts.maxActivePerProject, "--max-active-per-project"),
+    maxActivePerProjectGroup: positiveInteger(opts.maxActivePerProjectGroup, "--max-active-per-project-group"),
+    maxPerProfile: nonNegativeInteger(opts.maxPerProfile, "--max-per-profile"),
+  };
+}
+
+function positiveMetadataInteger(value: unknown): number | undefined {
+  if (typeof value === "number") return Number.isInteger(value) && value > 0 ? value : undefined;
+  if (typeof value !== "string" || value.trim() === "") return undefined;
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function routeThrottleMetadataLimit(
+  data: Record<string, unknown>,
+  metadata: Record<string, unknown>,
+  keys: string[],
+): number | undefined {
+  for (const record of taskEventRecords(data, metadata)) {
+    for (const key of keys) {
+      const value = positiveMetadataInteger(record[key]);
+      if (value !== undefined) return value;
+    }
+  }
+  return undefined;
+}
+
+function tightenConfiguredLimit(
+  configured: number | undefined,
+  data: Record<string, unknown>,
+  metadata: Record<string, unknown>,
+  keys: string[],
+): number | undefined {
+  // Task/event payloads are untrusted route inputs. They may request a lower
+  // effective cap for this admission attempt, but cannot create or raise the
+  // operator/policy ceiling.
+  if (configured === undefined) return undefined;
+  const requested = routeThrottleMetadataLimit(data, metadata, keys);
+  return requested === undefined ? configured : Math.min(configured, requested);
+}
+
+export function routeThrottleLimitsFromInputs(
+  opts: {
+    maxActive?: string;
+    maxActiveScope?: string;
+    maxActivePerProject?: string;
+    maxActivePerProjectGroup?: string;
+    maxPerProfile?: string;
+  },
+  data: Record<string, unknown>,
+  metadata: Record<string, unknown>,
+): RouteThrottleLimits {
+  const configured = routeThrottleLimitsFromOpts(opts);
+  return {
+    maxActive: tightenConfiguredLimit(configured.maxActive, data, metadata, [
+      "max_active",
+      "maxActive",
+      "route_max_active",
+      "routeMaxActive",
+    ]),
+    maxActiveScope: configured.maxActiveScope,
+    maxActivePerProject: tightenConfiguredLimit(configured.maxActivePerProject, data, metadata, [
+      "max_active_per_project",
+      "maxActivePerProject",
+      "route_max_active_per_project",
+      "routeMaxActivePerProject",
+    ]),
+    maxActivePerProjectGroup: tightenConfiguredLimit(configured.maxActivePerProjectGroup, data, metadata, [
+      "max_active_per_project_group",
+      "maxActivePerProjectGroup",
+      "max_active_per_group",
+      "maxActivePerGroup",
+      "project_group_max_active",
+      "projectGroupMaxActive",
+      "route_max_active_per_project_group",
+      "routeMaxActivePerProjectGroup",
+    ]),
+    maxPerProfile: configured.maxPerProfile,
+  };
+}
+
+export function hasThrottleLimits(limits: RouteThrottleLimits): boolean {
+  return limits.maxActive !== undefined ||
+    limits.maxActivePerProject !== undefined ||
+    limits.maxActivePerProjectGroup !== undefined;
+}
+
+export function normalizeRoutePath(value: string | undefined): string | undefined {
+  if (!value?.trim()) return undefined;
+  const resolved = resolve(value.trim());
+  let canonical = resolved;
+  try {
+    canonical = realpathSync(resolved);
+  } catch {
+    return canonical;
+  }
+  const gitRoot = spawnSync("git", ["-C", canonical, "rev-parse", "--show-toplevel"], { encoding: "utf8" });
+  if (gitRoot.status === 0 && gitRoot.stdout.trim()) {
+    try {
+      return realpathSync(gitRoot.stdout.trim());
+    } catch {
+      return resolve(gitRoot.stdout.trim());
+    }
+  }
+  return canonical;
+}
+
+export function routeProjectGroup(optsGroup: string | undefined, data: Record<string, unknown>, metadata: Record<string, unknown>): string | undefined {
+  return optsGroup?.trim() ||
+    taskEventField(data, ["project_group", "projectGroup", "repo_group", "repoGroup", "workspace_group", "workspaceGroup"]) ||
+    taskEventField(metadata, ["project_group", "projectGroup", "repo_group", "repoGroup", "workspace_group", "workspaceGroup"]);
+}
+
+export function routeThrottleDecision(
+  store: Store,
+  args: { projectPath: string; projectGroup?: string; routeScope?: string; limits: RouteThrottleLimits },
+): RouteThrottleDecision {
+  const projectPath = normalizeRoutePath(args.projectPath) ?? resolve(args.projectPath);
+  const projectGroup = args.projectGroup?.trim() || undefined;
+  const routeScope = args.routeScope?.trim() || undefined;
+  const counts = store.countActiveWorkflowWorkItems({ projectKey: projectPath, projectGroup, routeScope });
+  const base = {
+    projectPath,
+    ...(projectGroup ? { projectGroup } : {}),
+    limits: args.limits,
+    counts,
+  };
+  if (args.limits.maxActive !== undefined && counts.global >= args.limits.maxActive) {
+    const scopeLabel = routeScope ? `scope ${routeScope}` : "global";
+    return { ...base, allowed: false, reason: `${scopeLabel} active workflow limit reached (${counts.global}/${args.limits.maxActive})` };
+  }
+  if (args.limits.maxActivePerProject !== undefined && counts.project >= args.limits.maxActivePerProject) {
+    return { ...base, allowed: false, reason: `project active workflow limit reached (${counts.project}/${args.limits.maxActivePerProject})` };
+  }
+  if (
+    projectGroup &&
+    args.limits.maxActivePerProjectGroup !== undefined &&
+    counts.projectGroup !== undefined &&
+    counts.projectGroup >= args.limits.maxActivePerProjectGroup
+  ) {
+    return {
+      ...base,
+      allowed: false,
+      reason: `project-group active workflow limit reached (${counts.projectGroup}/${args.limits.maxActivePerProjectGroup})`,
+    };
+  }
+  return { ...base, allowed: true };
+}
+
+export function routeThrottleDryRunPreview(args: { projectPath: string; projectGroup?: string; limits: RouteThrottleLimits }) {
+  const projectPath = normalizeRoutePath(args.projectPath) ?? resolve(args.projectPath);
+  const projectGroup = args.projectGroup?.trim() || undefined;
+  return {
+    evaluated: false,
+    reason: "not evaluated in dry-run because opening the live loop store may create or migrate the database",
+    projectPath,
+    ...(projectGroup ? { projectGroup } : {}),
+    limits: args.limits,
+  };
+}
+
+export function isExistingGitProjectPath(path: string): boolean {
+  const result = spawnSync("git", ["-C", path, "rev-parse", "--is-inside-work-tree"], { encoding: "utf8" });
+  return result.status === 0;
+}
+
+export function validateRequiredRouteWorktreeProjectPath(opts: { worktreeMode?: string }, projectPath: string): void {
+  if ((opts.worktreeMode ?? "auto") !== "required") return;
+  if (!isExistingGitProjectPath(projectPath)) {
+    throw new ValidationError(`worktreeMode=required but projectPath is not an existing git repository: ${projectPath}`);
+  }
+}
