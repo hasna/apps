@@ -32,9 +32,12 @@ hooks init --cloudflare \
   this in `config.json` (`api_url`) — or it can be supplied per-run via the
   `HASNA_HOOKS_API_URL` environment variable, which takes precedence.
 - `--api-key <key-name-reference>` is the **name** of a key, not the key
-  value. The client resolves the value through the environment or the Hasna
-  secrets CLI at the moment it is needed, and `config.json` stores only the
-  name. See §6.
+  value. `config.json` stores only the name, for reference — the CLI never
+  reads it back. At call time the CLI reads the value from the
+  `HASNA_HOOKS_API_KEY` (or `HOOKS_API_KEY`) environment variable, so the
+  operator supplies it with
+  `secrets exec <vault-ref> --as HASNA_HOOKS_API_KEY -- hooks <command>`.
+  See §6.
 
 After init, `hooks list`, `hooks search`, `hooks install <name>`, and
 `hooks sync` operate against the remote registry while the API URL is
@@ -125,8 +128,11 @@ The API key is a credential. The rules:
    process — never write the value into `config.json`, a shell history, a
    task comment, a transcript, or a commit.
 2. **`config.json` stores the key name only.** `--api-key <name>` writes a
-   reference; the CLI resolves the name through the environment variable
-   `HOOKS_API_KEY` or the configured secrets provider at call time.
+   reference that is never read back. At call time the CLI reads the value
+   from the `HASNA_HOOKS_API_KEY` (or `HOOKS_API_KEY`) environment variable;
+   there is no secrets-provider resolution in the CLI. The operator supplies
+   the value with
+   `secrets exec <vault-ref> --as HASNA_HOOKS_API_KEY -- hooks <command>`.
 3. **Never print or log the value.** If you need to verify presence, test
    whether the variable is set (`[ -n "$HOOKS_API_KEY" ] && echo set`) or use
    `secrets get <key> --check` — both emit no value.
@@ -162,5 +168,5 @@ cheap optimisation is Cloudflare's cache on `/api/v1/catalog` and
 | `sync` fails closed, API unreachable | `curl -sS <api-url>/health`; token/account scope; worker deployed? |
 | `401 Unauthorized` on `PUT /api/v1/hooks` | key name resolution failed or wrong key; re-check `--api-key` reference and env; `wrangler secret put HOOKS_API_KEY` run? |
 | published artifact differs from what you uploaded | re-publishing the same `name@version` overwrites silently — bump the version to keep history |
-| worker 500 on catalog | D1 binding missing or wrong `--bindings` in the printed wrangler command |
+| worker 500 on catalog | D1 binding missing or wrong in `wrangler.toml` (the printed commands carry no `--bindings` flag — the binding lives in the config file) |
 | artifacts 404 but catalog lists them | R2 binding wrong, or the object key differs from `hook_artifacts/<name>/<version>.json` |
