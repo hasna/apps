@@ -1,0 +1,50 @@
+{
+  "name": "@hasna/connect-vercel-api-platform",
+  "version": "0.0.1",
+  "description": "Vercel Api Platform REST connector - items, events, search, and raw requests",
+  "type": "module",
+  "bin": {
+    "connect-vercel-api-platform": "./bin/index.js"
+  },
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "bun build ./src/index.ts --outdir ./dist --target bun && bun build ./src/cli/index.ts --outdir ./bin --target bun",
+    "dev": "bun run ./src/cli/index.ts",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "bun run build",
+    "release": "bun run scripts/release.ts",
+    "release:dry": "bun run scripts/release.ts --dry-run"
+  },
+  "keywords": [
+    "vercel",
+    "api-platform",
+    "hosting",
+    "connector",
+    "api",
+    "cli"
+  ],
+  "author": "Hasna",
+  "license": "Apache-2.0",
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "commander": "^12.1.0",
+    "chalk": "^5.3.0"
+  },
+  "engines": {
+    "bun": ">=1.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hasna/connect-vercel-api-platform.git"
+  }
+}

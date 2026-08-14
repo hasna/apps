@@ -1,0 +1,43 @@
+# Source files (compiled to dist/ and bin/)
+
+# TypeScript config
+
+# Development
+node_modules/
+bun.lockb
+*.log
+
+# Environment and secrets
+.env
+.env.local
+.env.*.local
+.secrets/
+.connect/
+
+# Runtime user data — NEVER ship these
+profiles/
+current_profile
+tokens.json
+config.json
+contacts/
+settings.json
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS specific
+.DS_Store
+
+# Tests
+tests/
+*.test.ts
+*.spec.ts
+
+# Scripts
+scripts/
+
+# Git
+.gitignore

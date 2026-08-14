@@ -1,0 +1,37 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+bin/
+
+# Bun
+bun.lock
+
+# OS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+
+# Environment
+.env
+.env.local
+
+# Test coverage
+coverage/
+
+# Per-connector test HOME sandboxes (bun install cache blobs land here)
+.test-home/
+
+# Local connector installs
+.connectors/
+.playwright-mcp/
+
+# Local tool artifacts
+.codewith/
+.takumi/
+
+# Duplicate connector build output
+connectors/connect-imessage/

@@ -1,0 +1,43 @@
+# Security Policy
+
+## Reporting a Vulnerability
+
+If you discover a security vulnerability, please report it responsibly:
+
+1. **Do not** open a public issue.
+2. Open a private report through
+   [GitHub Security Advisories](https://github.com/hasna/connectors/security/advisories/new).
+   Private vulnerability reporting is enabled on this repository, so any signed-in
+   GitHub user can file a report and only the maintainers can read it. Include:
+   - A description of the vulnerability
+   - Steps to reproduce
+   - Potential impact
+3. You will receive an acknowledgment within 48 hours.
+4. We will work with you to understand and address the issue before any public disclosure.
+
+If the advisory form is ever unreachable, open a public issue requesting a private
+contact channel — with **no** vulnerability details in it — and a maintainer will
+follow up privately.
+
+## Supported Versions
+
+| Version | Supported |
+|---------|-----------|
+| 1.4.x   | Yes       |
+| < 1.4   | No        |
+
+## Security Measures
+
+This project implements the following security measures:
+
+- **CSRF protection** on OAuth flows via state tokens
+- **Path traversal prevention** on connector name validation (`/^[a-z0-9-]+$/`)
+- **Scoped CORS** to `localhost` (not wildcard)
+- **Security headers** (`X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`)
+- **Request body size limits** (1MB max)
+- **Fetch timeouts** (10s) on external HTTP requests
+- **No secrets in source** — credentials stored in `~/.hasna/connectors/` only
+
+## Credential Storage
+
+Connector credentials are stored locally at `~/.hasna/connectors/connect-{name}/`. OAuth tokens are written with `0o600` permissions. No credentials are ever sent to our servers or included in the npm package.
