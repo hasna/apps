@@ -1,0 +1,643 @@
+// ============================================================================
+// Enumerated memory columns — SINGLE SOURCE OF TRUTH.
+//
+// These arrays are the one place the accepted values live. The string-union
+// types below are derived from them, and the runtime validators (CLI args,
+// REST request bodies) read the same arrays, so a value that typechecks is a
+// value the API accepts is a value the DB CHECK constraint allows. Adding a
+// value here is not enough on its own: the matching CHECK constraint in
+// src/db/migrations.ts must be widened by a migration in the same change.
+// ============================================================================
+
+export const MEMORY_SCOPES = ["global", "shared", "private", "working"] as const;
+export type MemoryScope = (typeof MEMORY_SCOPES)[number];
+
+export const MEMORY_CATEGORIES = [
+  "preference",
+  "fact",
+  "knowledge",
+  "history",
+  "procedural",
+  "resource",
+] as const;
+export type MemoryCategory = (typeof MEMORY_CATEGORIES)[number];
+
+export const MEMORY_SOURCES = ["user", "agent", "system", "auto", "imported"] as const;
+export type MemorySource = (typeof MEMORY_SOURCES)[number];
+
+export const MEMORY_STATUSES = ["active", "archived", "expired"] as const;
+export type MemoryStatus = (typeof MEMORY_STATUSES)[number];
+
+// ============================================================================
+// Core Memory interface
+// ============================================================================
+
+export interface Memory {
+  id: string;
+  key: string;
+  value: string;
+  category: MemoryCategory;
+  scope: MemoryScope;
+  summary: string | null;
+  tags: string[];
+  importance: number; // 1-10
+  source: MemorySource;
+  status: MemoryStatus;
+  pinned: boolean;
+  agent_id: string | null;
+  project_id: string | null;
+  session_id: string | null;
+  machine_id?: string | null;
+  flag?: string | null;
+  when_to_use?: string | null;
+  sequence_group?: string | null;
+  sequence_order?: number | null;
+  content_type?: "text" | "code" | "image" | "resource";
+  namespace?: string | null;
+  created_by_agent?: string | null;
+  updated_by_agent?: string | null;
+  trust_score?: number | null;
+  metadata: Record<string, unknown>;
+  access_count: number;
+  version: number;
+  expires_at: string | null;
+  valid_from: string | null;
+  valid_until: string | null;
+  ingested_at: string | null;
+  created_at: string;
+  updated_at: string;
+  accessed_at: string | null;
+}
+
+// ============================================================================
+// Memory with relations
+// ============================================================================
+
+export interface MemoryWithRelations extends Memory {
+  agent: Agent | null;
+  project: Project | null;
+}
+
+// ============================================================================
+// Create / Update inputs
+// ============================================================================
+
+export interface CreateMemoryInput {
+  key: string;
+  value: string;
+  category?: MemoryCategory;
+  scope?: MemoryScope;
+  summary?: string;
+  tags?: string[];
+  importance?: number;
+  source?: MemorySource;
+  agent_id?: string;
+  project_id?: string;
+  session_id?: string;
+  metadata?: Record<string, unknown>;
+  expires_at?: string;
+  ttl_ms?: number;
+  machine_id?: string;
+  flag?: string;
+  when_to_use?: string;
+  sequence_group?: string;
+  sequence_order?: number;
+  namespace?: string;
+  content_type?: "text" | "code" | "image" | "resource";
+}
+
+export interface UpdateMemoryInput {
+  value?: string;
+  category?: MemoryCategory;
+  scope?: MemoryScope;
+  summary?: string | null;
+  tags?: string[];
+  importance?: number;
+  pinned?: boolean;
+  status?: MemoryStatus;
+  metadata?: Record<string, unknown>;
+  expires_at?: string | null;
+  flag?: string | null;
+  when_to_use?: string | null;
+  version: number; // required for optimistic locking
+}
+
+// ============================================================================
+// Filter / Search
+// ============================================================================
+
+export interface MemoryFilter {
+  key?: string;
+  scope?: MemoryScope | MemoryScope[];
+  category?: MemoryCategory | MemoryCategory[];
+  source?: MemorySource | MemorySource[];
+  status?: MemoryStatus | MemoryStatus[];
+  project_id?: string;
+  agent_id?: string;
+  session_id?: string;
+  machine_id?: string | null;
+  visible_to_machine_id?: string | null;
+  tags?: string[];
+  min_importance?: number;
+  pinned?: boolean;
+  search?: string;
+  namespace?: string;
+  as_of?: string; // ISO8601 date — return memories valid at this point in time
+  limit?: number;
+  offset?: number;
+}
+
+export interface MemorySearchResult {
+  memory: Memory;
+  score: number;
+  match_type: "exact" | "fuzzy" | "tag";
+  highlights?: { field: string; snippet: string }[];
+  /**
+   * Confidence margin 0.0–1.0 (borrowed from nuggets).
+   * High (>0.7) = top result clearly best. Low (<0.3) = several similar matches.
+   * Derived from FTS5 rank spread: (score_rank1 - score_rank2) / score_rank1.
+   * Only present on the first result.
+   */
+  confidence?: number;
+}
+
+// ============================================================================
+// Agent
+// ============================================================================
+
+export interface Agent {
+  id: string; // 8-char UUID
+  name: string;
+  session_id: string | null;
+  description: string | null;
+  role: string | null;
+  metadata: Record<string, unknown>;
+  active_project_id: string | null;
+  created_at: string;
+  last_seen_at: string;
+}
+
+export class AgentConflictError extends Error {
+  public readonly conflict = true as const;
+  public readonly existing_id: string;
+  public readonly existing_name: string;
+  public readonly last_seen_at: string;
+  public readonly session_hint: string | null;
+  public readonly working_dir: string | null;
+
+  constructor(opts: {
+    existing_id: string;
+    existing_name: string;
+    last_seen_at: string;
+    session_hint: string | null;
+    working_dir?: string | null;
+  }) {
+    const msg = `Agent "${opts.existing_name}" is already active (session hint: ${opts.session_hint ?? "unknown"}, last seen ${opts.last_seen_at}). Wait 30 minutes or use a different name.`;
+    super(msg);
+    this.name = "AgentConflictError";
+    this.existing_id = opts.existing_id;
+    this.existing_name = opts.existing_name;
+    this.last_seen_at = opts.last_seen_at;
+    this.session_hint = opts.session_hint;
+    this.working_dir = opts.working_dir ?? null;
+  }
+}
+
+export function isAgentConflict(result: unknown): result is AgentConflictError {
+  return (result as AgentConflictError)?.conflict === true;
+}
+
+// ============================================================================
+// Project
+// ============================================================================
+
+export interface Project {
+  id: string;
+  name: string;
+  path: string;
+  description: string | null;
+  memory_prefix: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface UpdateProjectInput {
+  name?: string;
+  path?: string;
+  description?: string | null;
+  memory_prefix?: string | null;
+}
+
+export interface ProjectAuthorityIdentity {
+  authority_id: string;
+  tenant_id: string;
+  corpus_id: string;
+}
+
+export interface ProjectGuardedUpdateRequest extends ProjectAuthorityIdentity {
+  operation_id: string;
+  step_id: string;
+  idempotency_key: string;
+  expected_revision: string;
+  updates: UpdateProjectInput;
+}
+
+export interface ProjectGuardedRollbackRequest extends ProjectAuthorityIdentity {
+  operation_id: string;
+  step_id: string;
+  idempotency_key: string;
+  expected_revision: string;
+  accepted_receipt_id: string;
+}
+
+export interface ProjectUpdateReceipt {
+  receipt_id: string;
+  authority: "mementos";
+  route: "mementos.project-guarded-update.v1";
+  package_version: string;
+  authority_id: string;
+  tenant_id: string;
+  corpus_id: string;
+  operation_id: string;
+  step_id: string;
+  direction: "forward" | "rollback";
+  idempotency_key: string;
+  request_digest: string;
+  outcome: "accepted";
+  target_id: string;
+  expected_revision: string;
+  result_revision: string;
+  result_digest: string;
+  accepted_receipt_id: string | null;
+  before_project: Project;
+  after_project: Project;
+  created_at: string;
+}
+
+export interface ProjectGuardedUpdateResult {
+  dry_run: boolean;
+  applied: boolean;
+  project: Project;
+  receipt: ProjectUpdateReceipt | null;
+}
+
+// ============================================================================
+// Guarded existing-memory project linkage
+// ============================================================================
+
+export interface MemoryProjectLinkSnapshot {
+  memory_id: string;
+  project_id: string | null;
+  memory_version: number;
+  memory_revision: string;
+  memory_digest: string;
+}
+
+export interface MemoryProjectLinkRequest extends ProjectAuthorityIdentity {
+  operation_id: string;
+  step_id: string;
+  idempotency_key: string;
+  expected_memory_version: number;
+  expected_memory_revision: string;
+  target_project_id: string;
+  expected_project_revision: string;
+}
+
+export interface MemoryProjectLinkRollbackRequest extends ProjectAuthorityIdentity {
+  operation_id: string;
+  step_id: string;
+  idempotency_key: string;
+  expected_memory_version: number;
+  expected_memory_revision: string;
+  accepted_receipt_id: string;
+}
+
+export interface MemoryProjectLinkReceipt {
+  receipt_id: string;
+  authority: "mementos";
+  route: "mementos.memory-project-link.v1";
+  package_version: string;
+  authority_id: string;
+  tenant_id: string;
+  corpus_id: string;
+  operation_id: string;
+  step_id: string;
+  direction: "forward" | "rollback";
+  idempotency_key: string;
+  request_digest: string;
+  outcome: "accepted" | "no_change";
+  target_memory_id: string;
+  requested_project_id: string;
+  expected_memory_version: number;
+  expected_memory_revision: string;
+  expected_project_revision: string | null;
+  result_memory_version: number;
+  result_memory_revision: string;
+  result_memory_digest: string;
+  result_project_revision: string | null;
+  result_project_digest: string | null;
+  accepted_receipt_id: string | null;
+  before_link: MemoryProjectLinkSnapshot;
+  after_link: MemoryProjectLinkSnapshot;
+  before_project_revision: string | null;
+  before_project_digest: string | null;
+  after_project_revision: string | null;
+  after_project_digest: string | null;
+  created_at: string;
+}
+
+export interface MemoryProjectLinkResult {
+  dry_run: boolean;
+  applied: boolean;
+  no_change: boolean;
+  memory: Memory;
+  project: Project | null;
+  receipt: MemoryProjectLinkReceipt | null;
+}
+
+// ============================================================================
+// Stats
+// ============================================================================
+
+export interface MemoryStats {
+  total: number;
+  by_scope: Record<MemoryScope, number>;
+  by_category: Record<MemoryCategory, number>;
+  by_status: Record<MemoryStatus, number>;
+  by_agent: Record<string, number>;
+  pinned_count: number;
+  expired_count: number;
+}
+
+// ============================================================================
+// Config
+// ============================================================================
+
+export interface MementosConfig {
+  default_scope: MemoryScope;
+  default_category: MemoryCategory;
+  default_importance: number;
+  max_entries: number;
+  max_entries_per_scope: Record<MemoryScope, number>;
+  injection: {
+    max_tokens: number;
+    min_importance: number;
+    categories: MemoryCategory[];
+    refresh_interval: number;
+  };
+  extraction: {
+    enabled: boolean;
+    min_confidence: number;
+  };
+  sync_agents: string[];
+  auto_cleanup: {
+    enabled: boolean;
+    expired_check_interval: number;
+    unused_archive_days: number;
+    stale_deprioritize_days: number;
+  };
+}
+
+// ============================================================================
+// Dedupe mode for upsert
+// ============================================================================
+
+export type DedupeMode =
+  | "merge"       // upsert: update existing if same key+scope+agent+project match
+  | "create"      // always insert a new row (no deduplication)
+  | "overwrite"   // alias for merge (backward-compat, same behaviour)
+  | "error"       // fail with MemoryConflictError if key already exists for this scope
+  | "version-fork"; // keep both — create a new record alongside existing (same as create)
+
+// ============================================================================
+// Sync
+// ============================================================================
+
+export type SyncDirection = "push" | "pull" | "both";
+
+export type ConflictResolution = "prefer-local" | "prefer-remote" | "prefer-newer";
+
+export interface SyncOptions {
+  direction: SyncDirection;
+  conflict_resolution?: ConflictResolution;
+  agent_id?: string;
+  project_id?: string;
+}
+
+export interface SyncResult {
+  pushed: number;
+  pulled: number;
+  conflicts: number;
+  errors: string[];
+}
+
+// ============================================================================
+// Knowledge Graph types
+// ============================================================================
+
+export type EntityType = 'person' | 'project' | 'tool' | 'concept' | 'file' | 'api' | 'pattern' | 'organization';
+export type RelationType = 'uses' | 'knows' | 'depends_on' | 'created_by' | 'related_to' | 'contradicts' | 'part_of' | 'implements' | 'happened_before' | 'happened_after' | 'caused_by' | 'resulted_in' | 'supersedes' | 'version_of';
+export type EntityRole = 'subject' | 'object' | 'context';
+
+export interface Entity {
+  id: string;
+  name: string;
+  type: EntityType;
+  description: string | null;
+  metadata: Record<string, unknown>;
+  project_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Relation {
+  id: string;
+  source_entity_id: string;
+  target_entity_id: string;
+  relation_type: RelationType;
+  weight: number;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface EntityMemory {
+  entity_id: string;
+  memory_id: string;
+  role: EntityRole;
+  created_at: string;
+}
+
+export interface EntityWithRelations extends Entity {
+  relations: Relation[];
+  memories: Memory[];
+}
+
+export interface CreateEntityInput {
+  name: string;
+  type: EntityType;
+  description?: string;
+  metadata?: Record<string, unknown>;
+  project_id?: string;
+}
+
+export interface UpdateEntityInput {
+  name?: string;
+  type?: EntityType;
+  description?: string | null;
+  metadata?: Record<string, unknown>;
+}
+
+export interface CreateRelationInput {
+  source_entity_id: string;
+  target_entity_id: string;
+  relation_type: RelationType;
+  weight?: number;
+  metadata?: Record<string, unknown>;
+}
+
+export class EntityNotFoundError extends Error {
+  constructor(id: string) {
+    super(`Entity not found: ${id}`);
+    this.name = "EntityNotFoundError";
+  }
+}
+
+// ============================================================================
+// Custom Errors
+// ============================================================================
+
+// ============================================================================
+// Memory Version (for diff/history tracking)
+// ============================================================================
+
+export interface MemoryVersion {
+  id: string;
+  memory_id: string;
+  version: number;
+  value: string;
+  importance: number;
+  scope: MemoryScope;
+  category: MemoryCategory;
+  tags: string[];
+  summary: string | null;
+  pinned: boolean;
+  status: MemoryStatus;
+  when_to_use?: string | null;
+  created_at: string;
+}
+
+// ============================================================================
+// Custom Errors
+// ============================================================================
+
+export class MemoryNotFoundError extends Error {
+  constructor(id: string) {
+    super(`Memory not found: ${id}`);
+    this.name = "MemoryNotFoundError";
+  }
+}
+
+export class DuplicateMemoryError extends Error {
+  constructor(key: string, scope: MemoryScope) {
+    super(`Memory already exists with key "${key}" in scope "${scope}"`);
+    this.name = "DuplicateMemoryError";
+  }
+}
+
+export class MemoryExpiredError extends Error {
+  constructor(id: string) {
+    super(`Memory has expired: ${id}`);
+    this.name = "MemoryExpiredError";
+  }
+}
+
+export class InvalidScopeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "InvalidScopeError";
+  }
+}
+
+export class VersionConflictError extends Error {
+  public expected: number;
+  public actual: number;
+
+  constructor(id: string, expected: number, actual: number) {
+    super(
+      `Version conflict for memory ${id}: expected ${expected}, got ${actual}`
+    );
+    this.name = "VersionConflictError";
+    this.expected = expected;
+    this.actual = actual;
+  }
+}
+
+export class MemoryConflictError extends Error {
+  public existingId: string;
+  public existingAgentId: string | null;
+  public existingUpdatedAt: string;
+
+  constructor(key: string, existing: { id: string; agent_id: string | null; updated_at: string }) {
+    super(
+      `Memory conflict: key "${key}" already exists (last written by ${existing.agent_id ?? "unknown"} at ${existing.updated_at}). Use conflict:"overwrite" to replace it.`
+    );
+    this.name = "MemoryConflictError";
+    this.existingId = existing.id;
+    this.existingAgentId = existing.agent_id;
+    this.existingUpdatedAt = existing.updated_at;
+  }
+}
+
+// ============================================================================
+// Tool Events (ReMe-inspired tool memory)
+// ============================================================================
+
+export type ToolErrorType = 'timeout' | 'permission' | 'not_found' | 'syntax' | 'rate_limit' | 'other';
+
+export interface ToolEvent {
+  id: string;
+  tool_name: string;
+  action: string | null;
+  success: boolean;
+  error_type: ToolErrorType | null;
+  error_message: string | null;
+  tokens_used: number | null;
+  latency_ms: number | null;
+  context: string | null;
+  lesson: string | null;
+  when_to_use: string | null;
+  agent_id: string | null;
+  project_id: string | null;
+  session_id: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface CreateToolEventInput {
+  tool_name: string;
+  action?: string;
+  success: boolean;
+  error_type?: ToolErrorType;
+  error_message?: string;
+  tokens_used?: number;
+  latency_ms?: number;
+  context?: string;
+  lesson?: string;
+  when_to_use?: string;
+  agent_id?: string;
+  project_id?: string;
+  session_id?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface ToolStats {
+  tool_name: string;
+  total_calls: number;
+  success_count: number;
+  failure_count: number;
+  success_rate: number;
+  avg_tokens: number | null;
+  avg_latency_ms: number | null;
+  common_errors: { error_type: string; count: number }[];
+  last_used: string;
+}

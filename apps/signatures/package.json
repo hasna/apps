@@ -1,0 +1,105 @@
+{
+  "name": "@hasna/signatures",
+  "version": "0.1.14",
+  "description": "Open-source agreement and e-signature workflows for Markdown, PDFs, local signing, providers, CLI, API, and MCP",
+  "type": "module",
+  "bin": {
+    "signatures": "dist/cli/launcher.js",
+    "signatures-mcp": "dist/mcp/index.js",
+    "signatures-serve": "dist/server/index.js"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "clean": "rm -rf dist",
+    "build:js": "bun build src/cli/index.tsx --outdir dist/cli --target bun --external @hasna/attachments && bun build src/cli/launcher.ts --outdir dist/cli --target node && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @hasna/attachments && bun build src/server/index.ts --outdir dist/server --target bun --external @hasna/attachments && bun build src/index.ts --outdir dist --target bun --external @hasna/attachments",
+    "build:types": "tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist",
+    "build": "bun run clean && bun run build:js && bun run build:types",
+    "dev:serve": "bun run src/server/index.ts",
+    "dev:mcp": "bun run src/mcp/index.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "contracts:conformance": "bunx @hasna/contracts@0.8.5 repo-conformance .",
+    "scan:artifact": "bun scripts/scan-artifact.ts",
+    "prepack": "bun run scan:artifact",
+    "prepublishOnly": "bun test && bun run build",
+    "postinstall": "mkdir -p $HOME/.hasna/signatures/{documents,signed,signatures,cache} 2>/dev/null || true"
+  },
+  "dependencies": {
+    "@hasna/connectors-sdk": "^0.1.5",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@pdf-lib/fontkit": "^1.1.1",
+    "chalk": "^5.6.2",
+    "commander": "^12.1.0",
+    "marked": "^18.0.5",
+    "nanoid": "^5.1.11",
+    "pdf-lib": "^1.17.1",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@hasna/contracts": "0.8.5",
+    "@types/bun": "^1.3.14",
+    "@types/node": "^25.9.2",
+    "typescript": "^5.9.3",
+    "bun-types": "1.3.14"
+  },
+  "peerDependencies": {
+    "@hasna/attachments": ">=1.0.16"
+  },
+  "peerDependenciesMeta": {
+    "@hasna/attachments": {
+      "optional": true
+    }
+  },
+  "overrides": {
+    "@hono/node-server": "1.19.14",
+    "fast-uri": "3.1.2",
+    "hono": "4.12.25",
+    "ip-address": "10.2.0",
+    "path-to-regexp": "8.4.2",
+    "qs": "6.15.2"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
+  },
+  "engines": {
+    "bun": ">=1.0.0"
+  },
+  "files": [
+    "dist",
+    "hasna.contract.json",
+    "LICENSE",
+    "README.md",
+    "CHANGELOG.md",
+    "SECURITY.md",
+    "NOTICE"
+  ],
+  "keywords": [
+    "agreements",
+    "contracts",
+    "signatures",
+    "esignature",
+    "pdf",
+    "markdown",
+    "mcp",
+    "cli",
+    "open-source"
+  ],
+  "license": "Apache-2.0",
+  "author": "Andrei Hasna <andrei@hasna.com>",
+  "homepage": "https://github.com/hasna/signatures#readme",
+  "bugs": {
+    "url": "https://github.com/hasna/signatures/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hasna/signatures.git"
+  }
+}
