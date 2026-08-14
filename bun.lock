@@ -1073,6 +1073,33 @@
         "typescript": "5.6.3",
       },
     },
+    "apps/workforce": {
+      "name": "@hasna/workforce",
+      "version": "0.1.2",
+      "bin": {
+        "workforce": "dist/cli/index.js",
+        "workforce-mcp": "dist/mcp/index.js",
+        "workforce-serve": "dist/server/index.js",
+      },
+      "dependencies": {
+        "@modelcontextprotocol/sdk": "^1.12.1",
+        "chalk": "^5.4.1",
+        "commander": "^13.1.0",
+        "hono": "^4.6.0",
+        "ink": "^5.2.0",
+        "pg": "^8.13.0",
+        "react": "^18.3.1",
+        "zod": "^3.24.2",
+      },
+      "devDependencies": {
+        "@hasna/contracts": "0.4.1",
+        "@types/bun": "^1.2.4",
+        "@types/pg": "^8.11.10",
+        "@types/react": "^18.3.18",
+        "bun-types": "1.3.14",
+        "typescript": "^5.7.3",
+      },
+    },
   },
   "overrides": {
     "zod": "3.25.76",
@@ -1465,6 +1492,8 @@
     "@hasna/treasury": ["@hasna/treasury@workspace:apps/treasury"],
 
     "@hasna/ui": ["@hasna/ui@workspace:apps/ui"],
+
+    "@hasna/workforce": ["@hasna/workforce@workspace:apps/workforce"],
 
     "@hono/node-server": ["@hono/node-server@1.19.17", "", { "peerDependencies": { "hono": "^4" } }, "sha512-dSneS5qhiauZWGDCeK4o695Xd9nUNjviSZCMQrj10eetr8Uln1ucn6bbphOM6UynAMMtNIzZNSpL9vnASJwrPQ=="],
 
@@ -3401,6 +3430,8 @@
     "@hasna/treasury/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
 
     "@hasna/ui/@hasna/events": ["@hasna/events@0.1.6", "", { "dependencies": { "commander": "^13.1.0" }, "bin": { "events": "dist/cli/index.js", "hasna-events": "dist/cli/index.js" } }, "sha512-rKLxjBIat45UxciUwh9hKM63l/mcurJXAhgVkYHvrsGnOK9HwExrwgOlylNzDBDb+huiQw9DWdLb31q5oWDfIw=="],
+
+    "@hasna/workforce/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
 
     "@img/sharp-wasm32/@emnapi/runtime": ["@emnapi/runtime@1.11.3", "", { "dependencies": { "tslib": "^2.4.0" } }, "sha512-Xz4Tpyki7XyrpbUK1jR1AhdAdaXyhhY4lZ3neLodmhpuWfy2PAQN5B46sAiU4liOXGLkHypn/qU+jvfWSCYYLA=="],
 
