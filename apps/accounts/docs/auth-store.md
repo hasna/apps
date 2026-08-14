@@ -138,8 +138,8 @@ accounts auth sweep            # dry-run: list orphaned central entries
 accounts auth sweep --delete   # MOVE them to ~/.hasna/accounts/auth-trash/<ts>/ (no rm)
 ```
 
-Sweep safety posture: it **refuses in api/cloud storage mode** (profile
-records live in the cloud registry there, so the local registry cannot prove
+Sweep safety posture: it **refuses in API transport** (profile records live
+in the server registry there, so the local registry cannot prove
 non-reference), and a registered profile whose dir is missing — or whose dir
 carries auth material without a resolvable uuid — is reported as `unresolved`
 and **blocks `--delete`** entirely: unknown is not unreferenced.
@@ -182,8 +182,8 @@ Scope and semantics notes:
 - **Claude accounts only today.** The central layout has no tool dimension;
   other tools have no account-uuid concept here yet. Extending to another
   tool is a deliberate layout decision, not a drop-in.
-- **Profile bindings come from the machine-local registry.** In api/cloud
-  storage mode, cloud-registered profiles are not reflected in `profiles`.
+- **Profile bindings come from the machine-local registry.** In API
+  transport, server-registered profiles are not reflected in `profiles`.
 - **Switch markers fail closed.** Any existing `switched-account.json` file —
   even one that no longer parses — excludes the dir's live files as identity
   and credential sources; only the owner-true snapshot syncs.

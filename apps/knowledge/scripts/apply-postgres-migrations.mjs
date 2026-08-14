@@ -1,26 +1,23 @@
 #!/usr/bin/env bun
 /**
- * Apply the @hasna/knowledge cloud-mode Postgres schema via the vendored
+ * Apply the @hasna/knowledge PostgreSQL schema via the vendored
  * storage kit's MigrationLedger (checksum ledger + drift/downgrade guards).
  *
- * PURE REMOTE (Amendment A1): runs against the cloud Postgres only. Requires:
- *   HASNA_KNOWLEDGE_STORAGE_MODE=postgres
+ * Runs against the server PostgreSQL database only. Requires:
  *   HASNA_KNOWLEDGE_DATABASE_URL=postgres://...   (never logged)
  *
  * Usage:
- *   bun scripts/apply-cloud-migrations.mjs [--dry-run] [--json]
+ *   bun scripts/apply-postgres-migrations.mjs [--dry-run] [--json]
  *
- * The DATABASE_URL value is never printed. Fetch it into the environment from
- * Secrets Manager without echoing, e.g.:
- *   export HASNA_KNOWLEDGE_DATABASE_URL="$(aws secretsmanager get-secret-value \
- *     --secret-id hasna/oss/knowledge/database-url --query SecretString --output text)"
+ * The DATABASE_URL value is never printed or captured. Inject it through the
+ * runtime's credential consumer before starting this script.
  */
 import {
   PG_MIGRATIONS,
   MigrationLedger,
   defineMigration,
-  createKnowledgeCloudClient,
-} from '../src/storage.ts';
+  createKnowledgeDatabaseClient,
+} from '../dist/serve.js';
 import { apiKeyMigrations } from '@hasna/contracts/auth';
 
 const dryRun = process.argv.includes('--dry-run');
@@ -29,9 +26,9 @@ const asJson = process.argv.includes('--json');
 // Migrations run DDL and therefore need the DB OWNER role. Prefer an
 // owner-scoped DSN when one is injected (HASNA_KNOWLEDGE_DATABASE_URL_OWNER),
 // falling back to the standard app DSN for local/dev runs. The resolved value
-// is written to HASNA_KNOWLEDGE_DATABASE_URL so the cloud client picks it up.
+// is written to HASNA_KNOWLEDGE_DATABASE_URL so the database client picks it up.
 // Also restore kit-intended sslmode=require semantics under node-postgres
-// >= 8.22 (see src/serve.ts::normalizeCloudDatabaseUrl). Never logs the URL.
+// >= 8.22 (see src/serve.ts::normalizePostgresDatabaseUrl). Never logs the URL.
 {
   const key = 'HASNA_KNOWLEDGE_DATABASE_URL';
   let url = process.env.HASNA_KNOWLEDGE_DATABASE_URL_OWNER ?? process.env[key];
@@ -61,7 +58,7 @@ const migrations = [
   ...apiKeyMigrations().map((m) => defineMigration(m.id, m.sql)),
 ];
 
-const client = createKnowledgeCloudClient();
+const client = createKnowledgeDatabaseClient();
 try {
   const ledger = new MigrationLedger(client, migrations);
   const result = await ledger.migrate({ dryRun });

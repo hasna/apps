@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// accounts-serve — HTTP API for @hasna/accounts (PURE REMOTE, cloud Postgres).
+// accounts-serve — HTTP API for @hasna/accounts (postgresql server backend).
 //
 // GET /health, /ready, /version + authenticated /v1 CRUD. Binds 0.0.0.0:PORT
 // (PORT env or --port, default 8080). Runs on Bun.
@@ -34,8 +34,7 @@ Usage: accounts-serve [--port <port>] [--host <host>]
 
 Environment:
   PORT / ACCOUNTS_SERVE_PORT           HTTP port (default ${DEFAULT_SERVE_PORT})
-  HASNA_ACCOUNTS_STORAGE_MODE=cloud    required (PURE REMOTE)
-  HASNA_ACCOUNTS_DATABASE_URL          cloud Postgres DSN
+  HASNA_ACCOUNTS_DATABASE_URL          selects the postgresql server backend
   HASNA_ACCOUNTS_API_SIGNING_KEY       API-key HMAC signing secret`);
     return;
   }
@@ -58,7 +57,7 @@ Environment:
     },
   });
 
-  console.log(JSON.stringify({ evt: "listening", host: server.hostname, port: server.port, version: ctx.version, mode: ctx.mode }));
+  console.log(JSON.stringify({ evt: "listening", host: server.hostname, port: server.port, version: ctx.version, backend: ctx.backend }));
 
   const shutdown = async (signal: string) => {
     console.log(JSON.stringify({ evt: "shutdown", signal }));

@@ -3,18 +3,13 @@
   "name": "accounts",
   "class": "service",
   "contractVersion": "v1",
-  "kitVersion": "0.5.2",
-  "description": "Manage and switch between multiple AI coding tool profiles/accounts. Local mode keeps the registry at ~/.hasna/accounts/accounts.json; self-hosted/cloud modes use the authenticated accounts-serve HTTP API and PostgreSQL.",
+  "kitVersion": "0.10.6",
+  "description": "Manage and switch between multiple AI coding tool profiles/accounts. The client uses the local registry at ~/.hasna/accounts/accounts.json, or the HTTP API selected by HASNA_ACCOUNTS_API_URL + HASNA_ACCOUNTS_API_KEY. The accounts-serve server data backend is postgresql when HASNA_ACCOUNTS_DATABASE_URL is set.",
   "bins": [
     "accounts",
     "accounts-mcp",
     "accounts-serve",
     "accounts-migrate"
-  ],
-  "deploymentModes": [
-    "local",
-    "self-hosted",
-    "cloud"
   ],
   "serviceSurfaces": [
     {
@@ -23,10 +18,6 @@
       "bin": "accounts-serve",
       "mcpBin": "accounts-mcp",
       "authMode": "api-key",
-      "deploymentModes": [
-        "self-hosted",
-        "cloud"
-      ],
       "health": {
         "method": "GET",
         "path": "/health",
@@ -51,14 +42,43 @@
           "command": "accounts-migrate",
           "status": "pending"
         }
-      ]
+      ],
+      "openApiPath": "/openapi.json"
+    },
+    {
+      "name": "accounts-sdk",
+      "kind": "sdk",
+      "status": "supported",
+      "authMode": "api-key",
+      "exportSubpath": "./sdk",
+      "generatedFrom": "/openapi.json"
+    },
+    {
+      "name": "accounts-cli",
+      "kind": "cli",
+      "status": "supported",
+      "bin": "accounts",
+      "authMode": "none"
     }
   ],
   "storage": {
-    "mode": "local",
+    "backend": "postgresql",
+    "engines": [
+      "json",
+      "postgresql"
+    ],
     "envPrefix": "HASNA_ACCOUNTS_",
     "aliasEnvPrefix": "ACCOUNTS_",
-    "databaseUrlSecretRef": "hasna/oss/accounts/database-url",
-    "sqlitePath": "~/.hasna/accounts/accounts.json"
+    "pgTestGate": {
+      "envVar": "HASNA_ACCOUNTS_TEST_DATABASE_URL",
+      "command": "bun run test:postgres"
+    }
+  },
+  "metadata": {
+    "release": {
+      "artifactScan": {
+        "script": "verify:pack"
+      }
+    }
   }
 }

@@ -1,42 +1,34 @@
 /**
- * @hasna/knowledge — cloud (self_hosted) storage resolver.
+ * @hasna/knowledge — HTTP API storage resolver.
  * Copyright 2026 Hasna Inc.
  * Licensed under the Apache License, Version 2.0
  *
- * This is the client-side piece that makes `mode=cloud` real for the knowledge
- * CLI/MCP. When the mode resolves to cloud, ALL knowledge-item reads and writes
- * are routed to the app's HTTP API (`/v1/notes`) with the bearer key — NOT the
- * local db.json store, NOT a raw DSN. Otherwise this returns `null` and the CLI
- * uses its local db.json store (fully reversible: set the mode back to local).
- *
- * MODE SELECTION LIVES IN knowledge-mode.ts AND IS EXPLICIT-ONLY. The presence
- * of `HASNA_KNOWLEDGE_API_URL` / `HASNA_KNOWLEDGE_API_KEY` does NOT select the
- * cloud backend — those two are pointers, and treating them as a selector is
- * what let an ambient pair of exported shell variables route a test suite's
- * writes to the live store. Every entry point below resolves the mode first and
- * hands the contracts resolver a mode-PINNED env, so the presence-inference
- * inside @hasna/contracts cannot pick a backend behind us either.
+ * When the canonical API URL and key are present, all knowledge-item reads and
+ * writes use the server HTTP API. Without the canonical URL, callers use the
+ * on-box store. A client never opens PostgreSQL directly.
  *
  * SAFETY: never logs, returns, or embeds the API key. The key lives only inside
  * the HTTP transport created by @hasna/contracts. Every transport this module
- * builds has the outbound request guard in front of its fetch, so a cloud
+ * builds has the outbound request guard in front of its fetch, so an HTTP
  * request that somehow resolves under `NODE_ENV=test` is refused at the socket
  * boundary instead of reaching the live store.
  */
 import {
-  resolveStorageClient,
+  createHasnaStorageClient,
   type HasnaStorageClient,
 } from '@hasna/contracts/client/storage';
 import {
+  createHasnaHttpTransport,
   CREDENTIAL_PROFILE_ENV_KEY,
   credentialOverrideEnvKey,
 } from '@hasna/contracts/client';
 import type { KnowledgeItem, KnowledgeItemVersion, KnowledgeItemVersionList } from './store';
 import {
+  KNOWLEDGE_API_KEY_ENV,
+  KNOWLEDGE_API_URL_ENV,
   KNOWLEDGE_APP_SLUG,
-  pinnedTransportEnv,
-  resolveKnowledgeModeSelection,
-} from './knowledge-mode.js';
+  resolveKnowledgeClientTransport,
+} from './client-transport.js';
 import { guardedFetch, isNetworkGuardActive } from './net-guard.js';
 import {
   KNOWLEDGE_BOUNDED_QUERY_CAPABILITY,
@@ -46,7 +38,7 @@ import {
 export { KNOWLEDGE_APP_SLUG, KNOWLEDGE_BOUNDED_QUERY_CAPABILITY };
 
 /**
- * Transport overrides applied to every cloud client this module builds.
+ * Transport overrides applied to every HTTP client this module builds.
  *
  * `fetchImpl` is the request-boundary guard and is installed unconditionally —
  * it decides per request, so a client constructed before `NODE_ENV` is set is
@@ -62,10 +54,10 @@ function transportOverrides(env: NodeJS.ProcessEnv) {
   };
 }
 
-/** Cloud resource path served under /v1 by knowledge-serve. */
+/** Resource path served under /v1 by knowledge-serve. */
 export const KNOWLEDGE_RESOURCE = 'notes';
 
-export interface KnowledgeCloudListOptions {
+export interface KnowledgeHttpListOptions {
   /** Literal id/title/content filter used by `knowledge list`. */
   search?: string;
   tags?: string[];
@@ -76,20 +68,20 @@ export interface KnowledgeCloudListOptions {
   offset?: number;
 }
 
-export interface KnowledgeCloudSearchOptions {
+export interface KnowledgeHttpSearchOptions {
   query: string;
   archive?: 'active' | 'archived' | 'all';
   limit?: number;
   offset?: number;
 }
 
-export interface KnowledgeCloudSearchHit {
+export interface KnowledgeHttpSearchHit {
   item: KnowledgeItem;
   /** Producer-computed PostgreSQL ts_rank_cd score. */
   rank: number;
 }
 
-export interface KnowledgeCloudCreateInput {
+export interface KnowledgeHttpCreateInput {
   /** Optional caller-supplied stable id. Forwarded to the server, which upserts
    * on it — giving `upsert --id`/import the same idempotency as the local store. */
   id?: string;
@@ -100,7 +92,7 @@ export interface KnowledgeCloudCreateInput {
   metadata?: Record<string, unknown>;
 }
 
-export interface KnowledgeCloudPatch {
+export interface KnowledgeHttpPatch {
   title?: string;
   content?: string;
   url?: string | null;
@@ -109,7 +101,7 @@ export interface KnowledgeCloudPatch {
   archived?: boolean;
 }
 
-export interface KnowledgeCloudUpdateOptions {
+export interface KnowledgeHttpUpdateOptions {
   /**
    * Optimistic concurrency: send the version this caller last read, as
    * `If-Match`. The server applies the write only if the stored entry is still
@@ -153,21 +145,21 @@ export class KnowledgeBoundedQueryCapabilityError extends Error {
 }
 
 /**
- * The knowledge-item storage surface, cloud edition. Mirrors the operations the
+ * The knowledge-item HTTP storage surface. Mirrors the operations the
  * local db.json store supports so the CLI can call either behind one shape.
  */
-export interface KnowledgeCloudStore {
+export interface KnowledgeHttpStore {
   /** `<origin>/v1` base URL the client targets. */
   readonly baseUrl: string;
-  list(options?: KnowledgeCloudListOptions): Promise<{ items: KnowledgeItem[]; total: number }>;
+  list(options?: KnowledgeHttpListOptions): Promise<{ items: KnowledgeItem[]; total: number }>;
   /** Ranked producer-side PostgreSQL full-text query. */
-  search(options: KnowledgeCloudSearchOptions): Promise<{ items: KnowledgeCloudSearchHit[]; total: number }>;
+  search(options: KnowledgeHttpSearchOptions): Promise<{ items: KnowledgeHttpSearchHit[]; total: number }>;
   get(idOrShort: string): Promise<KnowledgeItem | null>;
-  create(input: KnowledgeCloudCreateInput): Promise<KnowledgeItem>;
+  create(input: KnowledgeHttpCreateInput): Promise<KnowledgeItem>;
   update(
     idOrShort: string,
-    patch: KnowledgeCloudPatch,
-    options?: KnowledgeCloudUpdateOptions,
+    patch: KnowledgeHttpPatch,
+    options?: KnowledgeHttpUpdateOptions,
   ): Promise<KnowledgeItem | null>;
   delete(idOrShort: string): Promise<boolean>;
   /** Prior versions of an entry, newest first. `null` when the entry is absent. */
@@ -179,7 +171,7 @@ export interface KnowledgeCloudStore {
   getVersion(idOrShort: string, version: number): Promise<KnowledgeItemVersion | null>;
 }
 
-function toQuery(options: KnowledgeCloudListOptions): Record<
+function toQuery(options: KnowledgeHttpListOptions): Record<
   string,
   string | number | boolean | undefined | ReadonlyArray<string | number | boolean>
 > {
@@ -206,7 +198,7 @@ function toQuery(options: KnowledgeCloudListOptions): Record<
   return q;
 }
 
-function listFieldsRequiringCapability(options: KnowledgeCloudListOptions): string[] {
+function listFieldsRequiringCapability(options: KnowledgeHttpListOptions): string[] {
   const fields: string[] = [];
   if (options.tags?.length) fields.push('tags');
   if (options.sort !== undefined) fields.push('sort');
@@ -229,17 +221,17 @@ function boundedQueryInteger(
   return resolved;
 }
 
-function wrap(client: HasnaStorageClient): KnowledgeCloudStore {
+function wrap(client: HasnaStorageClient): KnowledgeHttpStore {
   return {
     baseUrl: client.baseUrl,
 
-    async list(options: KnowledgeCloudListOptions = {}) {
+    async list(options: KnowledgeHttpListOptions = {}) {
       const limit = boundedQueryInteger(options.limit, 200, 'limit', 1, 200);
       const offset = boundedQueryInteger(options.offset, 0, 'offset', 0, 10_000);
       const query = toQuery({ ...options, limit, offset });
       const res = await client.list<KnowledgeItem>(KNOWLEDGE_RESOURCE, { query });
       if (!Number.isInteger(res.total) || Number(res.total) < 0) {
-        throw new Error('knowledge cloud list response is missing a valid producer total.');
+        throw new Error('knowledge HTTP list response is missing a valid producer total.');
       }
       const requiredFields = listFieldsRequiringCapability(options);
       if (requiredFields.length > 0 && !hasKnowledgeBoundedQueryCapability(res.raw)) {
@@ -248,11 +240,11 @@ function wrap(client: HasnaStorageClient): KnowledgeCloudStore {
       return { items: res.items, total: Number(res.total) };
     },
 
-    async search(options: KnowledgeCloudSearchOptions) {
+    async search(options: KnowledgeHttpSearchOptions) {
       const limit = boundedQueryInteger(options.limit, 20, 'limit', 1, 200);
       const offset = boundedQueryInteger(options.offset, 0, 'offset', 0, 10_000);
       const response = await client.transport.get<{
-        items: KnowledgeCloudSearchHit[];
+        items: KnowledgeHttpSearchHit[];
         total: number;
         query_capability?: string;
       }>(
@@ -278,7 +270,7 @@ function wrap(client: HasnaStorageClient): KnowledgeCloudStore {
           || !Number.isFinite(hit.rank)
         ))
       ) {
-        throw new Error('knowledge cloud search response is missing producer rank or total evidence.');
+        throw new Error('knowledge HTTP search response is missing producer rank or total evidence.');
       }
       if (!hasKnowledgeBoundedQueryCapability(response)) {
         throw new KnowledgeBoundedQueryCapabilityError('search', ['q', 'rank', 'total']);
@@ -290,7 +282,7 @@ function wrap(client: HasnaStorageClient): KnowledgeCloudStore {
       return client.get<KnowledgeItem>(KNOWLEDGE_RESOURCE, idOrShort);
     },
 
-    async create(input: KnowledgeCloudCreateInput) {
+    async create(input: KnowledgeHttpCreateInput) {
       return client.create<KnowledgeItem>(KNOWLEDGE_RESOURCE, {
         ...(input.id ? { id: input.id } : {}),
         title: input.title,
@@ -301,7 +293,7 @@ function wrap(client: HasnaStorageClient): KnowledgeCloudStore {
       });
     },
 
-    async update(idOrShort: string, patch: KnowledgeCloudPatch, options: KnowledgeCloudUpdateOptions = {}) {
+    async update(idOrShort: string, patch: KnowledgeHttpPatch, options: KnowledgeHttpUpdateOptions = {}) {
       try {
         return await client.update<KnowledgeItem>(KNOWLEDGE_RESOURCE, idOrShort, patch, {
           ...(options.expectedVersion !== undefined
@@ -385,17 +377,12 @@ function isNotFound(error: unknown): boolean {
 }
 
 /**
- * Resolve the cloud knowledge store from the environment. Returns a ready
- * {@link KnowledgeCloudStore} when the backend is explicitly postgres, else
- * `null` so the caller uses the local db.json store. Throws if postgres was
- * requested but
- * misconfigured (never silent local drift).
- *
- * On the local path the contracts resolver is not called at all: no transport is
- * built, no key is read, and there is nothing for a second layer to infer from.
+ * Resolve the HTTP knowledge store from the environment. The canonical API URL
+ * selects HTTP; without it the caller uses the on-box db.json store. An API URL
+ * without its key fails closed.
  */
-export function resolveKnowledgeCloudStore(env: NodeJS.ProcessEnv = process.env): KnowledgeCloudStore | null {
-  const client = resolveKnowledgeCloudClient(env);
+export function resolveKnowledgeHttpStore(env: NodeJS.ProcessEnv = process.env): KnowledgeHttpStore | null {
+  const client = resolveKnowledgeHttpClient(env);
   return client ? wrap(client) : null;
 }
 
@@ -411,7 +398,7 @@ export function resolveKnowledgeCloudStore(env: NodeJS.ProcessEnv = process.env)
 export function resolveKnowledgeGuardedTransport(
   env: NodeJS.ProcessEnv = process.env,
 ): HasnaStorageClient['transport'] | null {
-  return resolveKnowledgeCloudClient(env, { guarded: true })?.transport ?? null;
+  return resolveKnowledgeHttpClient(env, { guarded: true })?.transport ?? null;
 }
 
 function guardedTransportEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
@@ -426,40 +413,40 @@ function guardedTransportEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return guardedEnv;
 }
 
-function resolveKnowledgeCloudClient(env: NodeJS.ProcessEnv, options: { guarded?: boolean } = {}): HasnaStorageClient | null {
-  if (resolveKnowledgeModeSelection(env).mode !== 'postgres') return null;
+function resolveKnowledgeHttpClient(env: NodeJS.ProcessEnv, options: { guarded?: boolean } = {}): HasnaStorageClient | null {
+  if (resolveKnowledgeClientTransport(env).transport !== 'http') return null;
   const transportEnv = options.guarded ? guardedTransportEnv(env) : env;
-  const resolved = resolveStorageClient(
+  const apiUrl = transportEnv[KNOWLEDGE_API_URL_ENV]?.trim();
+  const apiKey = transportEnv[KNOWLEDGE_API_KEY_ENV]?.trim();
+  if (!apiUrl || !apiKey) {
+    throw new Error('knowledge HTTP transport configuration changed during resolution');
+  }
+  return createHasnaStorageClient(
     KNOWLEDGE_APP_SLUG,
-    pinnedTransportEnv(transportEnv, 'postgres'),
-    transportOverrides(transportEnv),
+    createHasnaHttpTransport({
+      name: KNOWLEDGE_APP_SLUG,
+      baseUrl: apiUrl,
+      apiKey,
+      ...transportOverrides(transportEnv),
+    }),
   );
-  if (resolved.transport !== 'http') return null;
-  return resolved.client;
 }
 
 /**
- * True when this process routes knowledge items to the cloud HTTP transport.
- * The single mode signal the whole client uses: item commands route to the
- * ApiStore, and the local sqlite catalog is refused (never a silent split-brain
- * write). Local — the default, and the answer whenever no mode var says
- * otherwise — returns false. Throws only when postgres was explicitly requested
- * but misconfigured, matching the item Store: never silent drift.
+ * True when this process routes knowledge items through the server HTTP API.
+ * This is the single client transport signal used by item commands and the
+ * local-catalog guard.
  */
-export function isKnowledgeApiMode(env: NodeJS.ProcessEnv = process.env): boolean {
-  if (resolveKnowledgeModeSelection(env).mode !== 'postgres') return false;
-  return (
-    resolveStorageClient(KNOWLEDGE_APP_SLUG, pinnedTransportEnv(env, 'postgres'), transportOverrides(env)).transport
-    === 'http'
-  );
+export function usesKnowledgeHttpTransport(env: NodeJS.ProcessEnv = process.env): boolean {
+  return resolveKnowledgeClientTransport(env).transport === 'http';
 }
 
 /**
- * Fetch every knowledge item from the cloud (including archived), paging through
+ * Fetch every knowledge item through HTTP (including archived), paging through
  * the server's 200-row cap. Used by list/export/stats which then filter/sort
  * client-side exactly as the local store path does.
  */
-export async function fetchAllCloudItems(store: KnowledgeCloudStore): Promise<KnowledgeItem[]> {
+export async function fetchAllHttpItems(store: KnowledgeHttpStore): Promise<KnowledgeItem[]> {
   const pageSize = 200;
   const all: KnowledgeItem[] = [];
   for (let offset = 0; ; offset += pageSize) {

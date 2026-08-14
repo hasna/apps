@@ -43,7 +43,7 @@ if (BOOTSTRAP_PROBE) {
     expect(process.env.PGPORT).toBeUndefined();
     expect(process.env.PGSSLROOTCERT).toBeUndefined();
     expect(process.env.NODE_EXTRA_CA_CERTS).toBeUndefined();
-    expect(process.env.HASNA_ACCOUNTS_STORAGE_MODE).toBe("local");
+    expect(process.env.HASNA_ACCOUNTS_STORAGE_MODE).toBeUndefined();
   });
 }
 
@@ -224,7 +224,7 @@ describePostgres("PostgreSQL migration and repository integration", () => {
       verifier: verifyApiKey({ app: "accounts", signingSecret }),
       health: async () => ({ ok: true }),
       ready: async () => ({ ready: true }),
-      mode: "cloud",
+      backend: "postgresql",
       version: "postgres-integration",
       close: async () => {},
     };

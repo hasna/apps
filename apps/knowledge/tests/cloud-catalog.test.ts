@@ -5,10 +5,10 @@ import { runKnowledgePromptOverItems } from '../src/agent';
 import type { KnowledgeItem } from '../src/store';
 
 /**
- * Cloud (self_hosted / api) mode has NO local sqlite catalog — the shared corpus
+ * The HTTP client has no on-box sqlite catalog — the shared corpus
  * is the cloud knowledge-items fetched through the item Store. These tests prove
  * that search / context / ask route over that in-memory item corpus and return
- * cited results instead of throwing (the pre-fix behaviour via assertLocalCatalogMode).
+ * cited results instead of throwing (the pre-fix behaviour via assertSqliteClientTransport).
  */
 const now = new Date().toISOString();
 const CORPUS: KnowledgeItem[] = [
@@ -50,7 +50,7 @@ const CORPUS: KnowledgeItem[] = [
   },
 ];
 
-describe('cloud-mode catalog over the shared item corpus', () => {
+describe('HTTP catalog over the shared item corpus', () => {
   test('hybridSearchItems ranks matching non-archived items and skips archived', async () => {
     const result = await hybridSearchItems(CORPUS, { query: 'fargate' });
     const ids = result.results.map((r) => r.id);

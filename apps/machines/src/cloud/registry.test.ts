@@ -24,27 +24,37 @@ describe("resolveCloudStorage (machines)", () => {
     expect(r.transport).toBe("cloud-http");
     if (r.transport === "cloud-http") expect(r.baseUrl).toBe("https://machines.example.test/v1");
   });
-  test("explicit mode=local forces local even with API vars", () => {
-    expect(
-      resolveCloudStorage("machines", {
-        HASNA_MACHINES_STORAGE_MODE: "local",
-        HASNA_MACHINES_API_URL: "https://machines.example.test",
-        HASNA_MACHINES_API_KEY: "k",
-      }).transport,
-    ).toBe("local");
+  test("exactly one of the API pair throws naming the missing variable", () => {
+    // A partial pair must never silently fall back to local data.
+    const missingKey = () =>
+      resolveCloudStorage("machines", { HASNA_MACHINES_API_URL: "https://machines.example.test" });
+    expect(missingKey).toThrow(/HASNA_MACHINES_API_KEY/);
+    const missingUrl = () =>
+      resolveCloudStorage("machines", { HASNA_MACHINES_API_KEY: "k" });
+    expect(missingUrl).toThrow(/HASNA_MACHINES_API_URL/);
   });
-  test("retired deployment-mode words in the mode env are rejected loudly", () => {
+  test("any set storage-mode variable throws naming the variable", () => {
     // Deployment modes were removed (owner directive 2026-07-29): a stale
-    // HASNA_MACHINES_STORAGE_MODE=self_hosted must fail naming the fix, not be
-    // silently remapped to another backend.
-    for (const retired of ["self_hosted", "self-hosted", "remote", "hybrid"]) {
+    // storage-mode variable is an error, never a hint — whatever its value.
+    const cases: Array<[string, string]> = [
+      ["HASNA_MACHINES_STORAGE_MODE", "cloud"],
+      ["HASNA_MACHINES_STORAGE_MODE", "local"],
+      ["HASNA_MACHINES_STORAGE_MODE", "self_hosted"],
+      ["HASNA_MACHINES_STORAGE_MODE", "self-hosted"],
+      ["HASNA_MACHINES_STORAGE_MODE", "remote"],
+      ["HASNA_MACHINES_STORAGE_MODE", "hybrid"],
+      ["HASNA_MACHINES_MODE", "cloud"],
+      ["MACHINES_STORAGE_MODE", "cloud"],
+      ["MACHINES_MODE", "cloud"],
+    ];
+    for (const [key, value] of cases) {
       expect(() =>
         resolveCloudStorage("machines", {
-          HASNA_MACHINES_STORAGE_MODE: retired,
+          [key]: value,
           HASNA_MACHINES_API_URL: "https://machines.example.test",
           HASNA_MACHINES_API_KEY: "k",
         }),
-      ).toThrow(/use local \(on-box store\) or cloud/);
+      ).toThrow(new RegExp(key));
     }
   });
 });

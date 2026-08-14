@@ -2,7 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:tes
 import { createKnowledgeService } from '../src/service';
 
 /**
- * Postgres/API mode `inventory` must route through the API item transport and
+ * HTTP `inventory` must route through the API item transport and
  * report the shared corpus — NOT read the local db.json and NOT
  * open the local sqlite catalog (which would throw the local-catalog guard on a
  * flipped fleet machine that still has a leftover knowledge.db). This proves the
@@ -37,7 +37,7 @@ beforeAll(() => {
       return new Response(JSON.stringify({ error: 'not_found' }), { status: 404, headers: { 'content-type': 'application/json' } });
     },
   });
-  for (const k of ['HASNA_KNOWLEDGE_API_URL', 'HASNA_KNOWLEDGE_API_KEY', 'HASNA_KNOWLEDGE_STORAGE_MODE']) savedEnv[k] = process.env[k];
+  for (const k of ['HASNA_KNOWLEDGE_API_URL', 'HASNA_KNOWLEDGE_API_KEY']) savedEnv[k] = process.env[k];
   process.env.HASNA_KNOWLEDGE_API_URL = `http://127.0.0.1:${server.port}`;
   const apiKeyEnv = ['HASNA_KNOWLEDGE_API', 'KEY'].join('_');
   process.env[apiKeyEnv] = ['fixture', 'credential'].join('-');
@@ -45,7 +45,6 @@ beforeAll(() => {
   // The endpoint is 127.0.0.1, so the outbound guard permits these requests —
   // this test doubles as the positive control that hermetic postgres/API traffic
   // still flows while the guard is armed.
-  process.env.HASNA_KNOWLEDGE_STORAGE_MODE = 'postgres';
 });
 
 afterAll(() => {
@@ -60,9 +59,9 @@ beforeEach(() => {
 });
 
 describe('postgres/API inventory over the shared item corpus', () => {
-  test('cloudInventory reports API items with empty local catalog sections', async () => {
+  test('httpInventory reports API items with empty local catalog sections', async () => {
     const service = createKnowledgeService({ scope: 'global' });
-    const inv = await service.cloudInventory({});
+    const inv = await service.httpInventory({});
     expect(inv.ok).toBe(true);
     // legacy_items is the total corpus (incl archived), matching local semantics;
     // the visible `items` list is active-only unless includeArchived is set.
@@ -79,7 +78,7 @@ describe('postgres/API inventory over the shared item corpus', () => {
     expect(inv.chunks).toEqual([]);
     expect(inv.wiki_pages).toEqual([]);
     // The `paths` block reports the real on-box workspace layout and MUST agree
-    // with the `paths` command even in postgres/API mode — it is NOT the item transport
+    // with the `paths` command even over HTTP — it is NOT the item transport
     // location. The cloud source is surfaced via `legacy_store` instead.
     const paths = service.paths();
     expect(inv.paths.json_store_path).toBe(paths.json_store_path);
@@ -91,9 +90,9 @@ describe('postgres/API inventory over the shared item corpus', () => {
     expect(inv.legacy_store.path).toContain('/v1');
   });
 
-  test('cloudInventory includes archived items when requested', async () => {
+  test('httpInventory includes archived items when requested', async () => {
     const service = createKnowledgeService({ scope: 'global' });
-    const inv = await service.cloudInventory({ includeArchived: true });
+    const inv = await service.httpInventory({ includeArchived: true });
     expect(inv.summary.legacy_items).toBe(3);
     expect(inv.summary.archived_items).toBe(1);
     expect(inv.items.map((i) => i.id)).toContain('k_arch');

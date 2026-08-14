@@ -1,8 +1,8 @@
-// Postgres-backed accounts repository for the cloud service.
+// Postgres-backed accounts repository for the accounts server service.
 //
-// PURE REMOTE (Amendment A1): every method reads/writes the cloud Postgres
-// directly through the vendored kit's typed client — no cache, no local mirror.
-// Domain semantics mirror the local library (src/lib/profiles.ts): duplicate
+// Every method reads/writes the PostgreSQL backend directly through the
+// vendored kit's typed client — no cache, no local mirror. Domain semantics
+// mirror the local library (src/lib/profiles.ts): duplicate
 // (tool,name) rejected, delete clears the current selection, set-current
 // requires the account to exist and stamps last_used_at.
 

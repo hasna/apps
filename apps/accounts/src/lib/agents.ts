@@ -1574,7 +1574,7 @@ export interface ListAgentsOptions {
   /**
    * Registered profiles for the tool, resolved by the caller through the Store
    * (`resolveStore().listProfiles(tool)`). This module never reads the local
-   * registry directly, so in self_hosted/cloud mode the cloud registry drives
+   * registry directly, so in API transport the server registry drives
    * the listing. Defaults to none.
    */
   profiles?: ProfileLike[];

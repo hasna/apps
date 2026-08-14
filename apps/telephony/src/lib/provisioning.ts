@@ -6,8 +6,8 @@ import type { PhoneNumber, PhoneNumberCapability } from "../types/index.js";
 export type { AvailableNumber, TwilioNumberRef } from "./store/index.js";
 
 // Twilio provider passthrough is routed through the Store so it obeys the
-// 3-mode standard: cloud/self_hosted mode goes through the server-side `/v1`
-// proxy (credential stays on the server), local mode calls Twilio directly.
+// transport selection: HTTP API transport goes through the server-side `/v1`
+// proxy (credential stays on the server), local transport calls Twilio directly.
 export async function searchAvailableNumbers(options: SearchAvailableOptions): Promise<AvailableNumber[]> {
   return getStore().searchAvailableNumbers(options);
 }

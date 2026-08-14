@@ -228,7 +228,6 @@ function baseEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
     ...process.env,
     NODE_ENV: "test",
     ACCOUNTS_HOME: home,
-    HASNA_ACCOUNTS_STORAGE_MODE: "local",
     HASNA_ACCOUNTS_API_URL: "",
     HASNA_ACCOUNTS_API_KEY: "",
     FAKE_CLAUDE_LOG: claudeLog,

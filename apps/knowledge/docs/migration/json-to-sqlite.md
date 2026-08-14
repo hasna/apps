@@ -136,13 +136,13 @@ knowledge web search "current policy source" --provider openai --json
 
 - Use `--approve-write` only when a generated wiki artifact should be durable.
 
-## Hosted Migration
+## HTTP API migration
 
-Hosted mode should not change local migration semantics. It only records a
-remote API boundary:
+The HTTP client does not change on-box migration semantics. Configure the
+canonical API boundary explicitly:
 
 ```bash
-knowledge setup --mode hosted --api-url https://knowledge.md --scope project --json
+HASNA_KNOWLEDGE_API_URL=https://knowledge.md HASNA_KNOWLEDGE_API_KEY='<api-key>' knowledge transport --json
 knowledge remote contracts --scope project --json
 ```
 

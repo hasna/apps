@@ -16,10 +16,6 @@ export interface KnowledgeWorkspace {
 }
 export interface KnowledgeConfig {
     version: 1;
-    mode: 'local' | 'hosted';
-    hosted?: {
-        api_url?: string;
-    };
     storage: {
         type: 'local' | 's3';
         artifacts_root: string;

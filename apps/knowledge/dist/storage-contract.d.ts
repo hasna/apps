@@ -1,5 +1,4 @@
 import type { Database } from 'bun:sqlite';
-import { KNOWLEDGE_REGISTRY_CONTRACT_VERSION } from './registry-contract';
 import type { KnowledgeConfig, KnowledgeWorkspace } from './workspace';
 import { EXAMPLE_KNOWLEDGE_CANONICAL } from './workspace';
 export interface StorageArtifactClass {
@@ -9,7 +8,6 @@ export interface StorageArtifactClass {
 }
 export interface StorageContract {
     scope: string;
-    mode: KnowledgeConfig['mode'];
     storage_type: KnowledgeConfig['storage']['type'];
     workspace_home: string;
     local_layout: {
@@ -73,15 +71,6 @@ export interface StorageContract {
             reason: string;
             authority_required: true;
         };
-    };
-    hosted: {
-        enabled: boolean;
-        api_url: string;
-        api_url_env: 'KNOWLEDGE_API_URL';
-        api_key_env: 'KNOWLEDGE_API_KEY';
-        auth_storage: '~/.hasna/knowledge/auth.json';
-        registry_contract_version: typeof KNOWLEDGE_REGISTRY_CONTRACT_VERSION;
-        requires_hosted_account_for_local_use: false;
     };
     source_ownership: {
         owner: 'open-files';

@@ -1,5 +1,5 @@
-export declare const KIT_VERSION = "0.8.5";
-export * from "./mode.js";
+export declare const KIT_VERSION = "0.10.6";
+export * from "./backend.js";
 export * from "./tls.js";
 export * from "./query.js";
 export * from "./pool.js";

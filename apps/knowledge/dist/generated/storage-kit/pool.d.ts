@@ -28,7 +28,7 @@ export interface ServerPoolFromEnv {
  * Resolve backend + database URL from the environment and build the server's
  * PostgreSQL pool.
  *
- * Throws when the resolved backend is not `postgres` (the sqlite backend has
- * no Postgres pool) or when the database URL is missing. Never logs the URL.
+ * Throws when no database URL selects the `postgresql` backend. Never logs the
+ * URL.
  */
 export declare function createServerPoolFromEnv(appName: string, options?: CreateServerPoolFromEnvOptions): ServerPoolFromEnv;

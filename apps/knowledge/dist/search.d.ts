@@ -82,11 +82,11 @@ export interface FtsMatchExpressions {
 export declare function hybridSearch(options: HybridSearchOptions): Promise<HybridSearchResult>;
 export declare function hybridSearchLegacyStore(options: Omit<HybridSearchOptions, 'dbPath'>): Promise<HybridSearchResult>;
 /**
- * Lexical search over an in-memory knowledge-item corpus. In api (self_hosted /
- * cloud) mode the client has no local sqlite catalog; the shared corpus is the
- * cloud knowledge-items fetched through the item Store. Both `search` and `ask`
- * route their retrieval here so cloud mode is first-class instead of throwing.
- * Semantic ranking (vector index) lives only in the local sqlite catalog, so it
+ * Lexical search over an in-memory knowledge-item corpus. The HTTP client has
+ * no on-box sqlite catalog; the shared corpus is fetched through the item Store.
+ * Both `search` and `ask`
+ * route their retrieval here so the HTTP transport is first-class instead of throwing.
+ * Semantic ranking (vector index) lives only in the on-box sqlite catalog, so it
  * is reported as skipped rather than silently ignored.
  */
 export declare function hybridSearchItems(items: KnowledgeItem[], options: Omit<HybridSearchOptions, 'dbPath' | 'legacyStorePath'>, baseWarnings?: string[]): Promise<HybridSearchResult>;

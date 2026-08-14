@@ -155,7 +155,7 @@ describe("heartbeat collection", () => {
         expect(machineId).toBe("demo-node-01");
         expect(command).not.toContain("HASNA_MACHINES_MACHINE_ID='demo-node-01'");
         expect(command).toContain("unset HASNA_MACHINES_MACHINE_ID");
-        expect(command).toContain("machines-agent --once");
+        expect(command).toContain("machines-daemon --once");
         return {
           machineId,
           source: "ssh",
@@ -211,7 +211,7 @@ describe("heartbeat collection", () => {
         machineId,
         source: "ssh",
         stdout: "",
-        stderr: "machines-agent not found",
+        stderr: "machines-daemon not found",
         exitCode: 127,
       });
 
@@ -221,7 +221,7 @@ describe("heartbeat collection", () => {
         machineId: "demo-node-01",
         status: "failed",
         source: "ssh",
-        error: "machines-agent not found",
+        error: "machines-daemon not found",
       });
       expect(listHeartbeats("demo-node-01")).toEqual([]);
     } finally {
