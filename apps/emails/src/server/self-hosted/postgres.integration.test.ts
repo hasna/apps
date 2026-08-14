@@ -16,6 +16,7 @@ import {
   type TenantScopedStore,
 } from "./store.js";
 import { resourceSpecForPath, SELF_HOSTED_RESOURCES } from "./resources.js";
+import { normalizePriorityRuleInput, prioritySenderRuleId } from "../../lib/priority-senders.js";
 
 const databaseUrl = process.env["EMAILS_TEST_POSTGRES_URL"];
 const client = databaseUrl
@@ -549,6 +550,100 @@ describe("self-hosted Postgres integration", () => {
     const whSpec = resourceSpecForPath("webhook-receipts")!;
     const wh = await store.createResource(whSpec, { provider: "ses", event_id: "e9", resource_id: "m1", completed_at: "2026-07-13T00:00:00.000Z" });
     expect(wh["provider"]).toBe("ses");
+  });
+
+  it.skipIf(!client)("0026 saved filters resolve, apply, update and delete BY NAME without a uuid cast error", async () => {
+    await resetPublicSchema();
+    await new MigrationLedger(client!, emailsSelfHostedMigrations()).migrate();
+    const store = new EmailsSelfHostedStore(client!).forTenant(DEFAULT_TENANT_ID);
+
+    const created = await store.createMailboxFilter({
+      name: "Support Queue", mailbox: "inbox", criteria: { from: "support@example.test" },
+    });
+    expect(created.normalized_name).toBe("support-queue");
+
+    // Lookup by NAME (a non-UUID): before the id-branch guard this bound the
+    // name to the uuid `id` column, raised 22P02, and 500'd apply/show/update/
+    // delete by name. The id branch is now UUID-guarded; names resolve through
+    // normalized_name and a missing name is a plain not-found.
+    const byName = await store.getMailboxFilter("Support Queue");
+    expect(byName?.id).toBe(created.id);
+    expect(byName?.criteria.from).toBe("support@example.test");
+
+    const support = await store.createMessage({
+      direction: "inbound", from_addr: "support@example.test", to_addrs: ["owner@example.test"], subject: "hello",
+    });
+    const noise = await store.createMessage({
+      direction: "inbound", from_addr: "other@example.test", to_addrs: ["owner@example.test"], subject: "noise",
+    });
+
+    const applied = await store.applyMailboxFilter("support queue", { limit: 10 });
+    expect(applied.filter.name).toBe("Support Queue");
+    expect(applied.page.items.map((m) => m.id)).toEqual([support.id]);
+
+    // Missing names are not-found, never 500.
+    expect(await store.getMailboxFilter("does-not-exist")).toBeNull();
+    await expect(store.applyMailboxFilter("does-not-exist")).rejects.toThrow(/not found/);
+
+    const updated = await store.updateMailboxFilter("Support Queue", { criteria: { from: "other@example.test" } });
+    expect(updated.criteria.from).toBe("other@example.test");
+    const reApplied = await store.applyMailboxFilter("support queue", { limit: 10 });
+    expect(reApplied.page.items.map((m) => m.id)).toEqual([noise.id]);
+
+    // LIKE metacharacters in criteria values match literally (likeContains) —
+    // the same rows the local SQLite store returns for the same criterion.
+    await store.createMailboxFilter({ name: "Percent", mailbox: "inbox", criteria: { from: "100%_off@example.test" } });
+    const literal = await store.createMessage({
+      direction: "inbound", from_addr: "100%_off@example.test", to_addrs: ["owner@example.test"], subject: "sale",
+    });
+    await store.createMessage({
+      direction: "inbound", from_addr: "100xoff@example.test", to_addrs: ["owner@example.test"], subject: "noise2",
+    });
+    const literalApplied = await store.applyMailboxFilter("Percent", { limit: 10 });
+    expect(literalApplied.page.items.map((m) => m.id)).toEqual([literal.id]);
+
+    expect(await store.deleteMailboxFilter("Support Queue")).toBe(true);
+    expect(await store.getMailboxFilter("support queue")).toBeNull();
+    expect(await store.deleteMailboxFilter("support queue")).toBe(false);
+    await expect(store.updateMailboxFilter("support queue", { mailbox: "inbox" })).rejects.toThrow(/not found/);
+  });
+
+  it.skipIf(!client)("0027 domain criteria match the SENDER domain and to/cc recipient domains (SQLite-local parity)", async () => {
+    await resetPublicSchema();
+    await new MigrationLedger(client!, emailsSelfHostedMigrations()).migrate();
+    const store = new EmailsSelfHostedStore(client!).forTenant(DEFAULT_TENANT_ID);
+
+    // SENDER-domain match: no to/cc recipient is at the criterion domain.
+    // message_recipients spans only to/cc, so a recipient-only pushdown dropped
+    // this row while SQLite-local (from OR recipients) returns it — regression.
+    const senderDomain = await store.createMessage({
+      direction: "inbound", from_addr: "alice@sender.example.test", to_addrs: ["owner@other.example.test"], subject: "sender-domain",
+    });
+    // Recipient-domain match via `to`.
+    const toDomain = await store.createMessage({
+      direction: "inbound", from_addr: "bob@other.example.test", to_addrs: ["owner@recipient.example.test"], subject: "to-domain",
+    });
+    // Recipient-domain match via `cc` — the pushdown's message_recipients spans to+cc.
+    const ccDomain = await store.createMessage({
+      direction: "inbound", from_addr: "carol@other.example.test", to_addrs: ["owner@other.example.test"], cc_addrs: ["cc@recipient.example.test"], subject: "cc-domain",
+    });
+    // No match: neither sender nor any recipient is at the criterion domain.
+    await store.createMessage({
+      direction: "inbound", from_addr: "dave@other.example.test", to_addrs: ["owner@other.example.test"], subject: "no-match",
+    });
+
+    await store.createMailboxFilter({ name: "Sender Domain", mailbox: "inbox", criteria: { domain: "sender.example.test" } });
+    const senderApplied = await store.applyMailboxFilter("Sender Domain", { limit: 10 });
+    expect(senderApplied.page.items.map((m) => m.id)).toEqual([senderDomain.id]);
+
+    await store.createMailboxFilter({ name: "Recipient Domain", mailbox: "inbox", criteria: { domain: "recipient.example.test" } });
+    const recipientApplied = await store.applyMailboxFilter("Recipient Domain", { limit: 10 });
+    expect(recipientApplied.page.items.map((m) => m.id).sort()).toEqual([ccDomain.id, toDomain.id].sort());
+
+    // A domain with no matching sender or recipient returns an empty page.
+    const otherDomain = await store.createMailboxFilter({ name: "Other Domain", mailbox: "inbox", criteria: { domain: "missing.example.test" } });
+    const emptyApplied = await store.applyMailboxFilter(otherDomain.id, { limit: 10 });
+    expect(emptyApplied.page.items).toEqual([]);
   });
 
   it.skipIf(!client)("round-2 parity: send-key mint/verify/revoke + address ownership authorization", async () => {
@@ -1838,5 +1933,99 @@ describe("self-hosted Postgres integration", () => {
       `SELECT count(*)::int AS n FROM messages WHERE tenant_id = $1 AND source_id = $2`,
       [tenantA, rollbackKey],
     )).n).toBe(0);
+  });
+
+  it.skipIf(!client)("priority sender rules persist, dedupe, remove, and drive the priority count", async () => {
+    await resetPublicSchema();
+    await new MigrationLedger(client!, emailsSelfHostedMigrations()).migrate();
+
+    const priorityRulesSpec = resourceSpecForPath("priority-sender-rules")!;
+    const store = new EmailsSelfHostedStore(client!).forTenant(DEFAULT_TENANT_ID);
+
+    // Persistence through the same normalized input the /v1 handler produces.
+    const addressRule = await store.createResource(priorityRulesSpec, {
+      id: prioritySenderRuleId("address", "person@example.org"),
+      kind: "address",
+      value: "person@example.org",
+    });
+    const domainRule = await store.createResource(priorityRulesSpec, {
+      id: prioritySenderRuleId("domain", "example.com"),
+      kind: "domain",
+      value: "example.com",
+    });
+    expect(addressRule).toMatchObject({ kind: "address", value: "person@example.org" });
+    expect(domainRule).toMatchObject({ kind: "domain", value: "example.com" });
+    expect(String(addressRule["id"])).not.toBe(String(domainRule["id"]));
+    expect(await store.getResource(priorityRulesSpec, String(addressRule["id"]))).toMatchObject({
+      kind: "address",
+      value: "person@example.org",
+    });
+
+    // Overlap: the same sender can match BOTH an exact-address rule and a
+    // domain rule; the two rows coexist.
+    const overlapRule = await store.createResource(priorityRulesSpec, {
+      id: prioritySenderRuleId("address", "team@example.com"),
+      kind: "address",
+      value: "team@example.com",
+    });
+    expect(String(overlapRule["id"])).toBe("priority:address:team@example.com");
+
+    // Duplicate: the same (kind, value) is an idempotent ensure — same id,
+    // still one row.
+    const duplicate = await store.createResource(priorityRulesSpec, {
+      id: prioritySenderRuleId("address", "person@example.org"),
+      kind: "address",
+      value: "person@example.org",
+    });
+    expect(String(duplicate["id"])).toBe(String(addressRule["id"]));
+    expect(await store.listResource(priorityRulesSpec)).toHaveLength(3);
+
+    // Normalization is load-bearing: the raw form the service never produces is
+    // rejected by the DB's `value = lower(btrim(value))` CHECK, and the
+    // normalizer the /v1 handler applies yields exactly the stored form.
+    await expect(
+      store.createResource(priorityRulesSpec, {
+        id: "priority:address:unnormalized",
+        kind: "ADDRESS",
+        value: " Person@Example.COM ",
+      }),
+    ).rejects.toThrow(/priority_sender_rules/);
+    expect(normalizePriorityRuleInput("ADDRESS", " Person@Example.COM "))
+      .toEqual({ kind: "address", value: "person@example.com" });
+
+    // One message per priority class. `exact` lives on a DIFFERENT domain than
+    // the domain rule, so it is priority ONLY via the address rule. `evil` is a
+    // suffix twin of the address rule's value and of the domain rule's value —
+    // it must never match either. `dot-domain` / `dot-address` carry a trailing
+    // FQDN dot, which the client matcher strips before comparing — the server
+    // count must do the same (parity, P3-1).
+    await client!.execute(
+      `INSERT INTO messages (id, from_addr, direction, received_at, tenant_id) VALUES
+         ('exact',       '"Boss" <person@example.org>',        'inbound',  '2026-08-01T00:00:00Z', $1),
+         ('domain',      '"Team" <other@example.com>',         'inbound',  '2026-08-01T00:00:01Z', $1),
+         ('overlap',     '"Team" <team@example.com>',          'inbound',  '2026-08-01T00:00:02Z', $1),
+         ('plain',       '"Other" <other@example.net>',        'inbound',  '2026-08-01T00:00:03Z', $1),
+         ('evil',        '"Evil" <person@example.com.evil>',   'inbound',  '2026-08-01T00:00:04Z', $1),
+         ('sent',        '"Boss" <person@example.com>',        'outbound', '2026-08-01T00:00:05Z', $1),
+         ('dot-domain',  '"Dot" <dot@example.com.>',           'inbound',  '2026-08-01T00:00:06Z', $1),
+         ('dot-address', '"Dot" <person@example.org.>',        'inbound',  '2026-08-01T00:00:07Z', $1)`,
+      [DEFAULT_TENANT_ID],
+    );
+
+    // Inclusion: exact + domain + overlap + the two trailing-dot senders count
+    // as priority. Exclusion: the evil-suffix twin, the non-matching sender,
+    // and the outbound row do not.
+    expect((await store.messageCounts()).priority).toBe(5);
+
+    // Removal: deleting an existing rule returns true; deleting the same id
+    // again (missing -> not_found) returns false and reads back null.
+    expect(await store.deleteResource(priorityRulesSpec, String(addressRule["id"]))).toBe(true);
+    expect(await store.deleteResource(priorityRulesSpec, String(addressRule["id"]))).toBe(false);
+    expect(await store.getResource(priorityRulesSpec, String(addressRule["id"]))).toBeNull();
+    expect((await store.messageCounts()).priority).toBe(3); // domain + overlap + dot-domain
+    expect((await store.listResource(priorityRulesSpec)).map((row) => String(row["id"]))).toEqual([
+      "priority:address:team@example.com",
+      "priority:domain:example.com",
+    ]);
   });
 });

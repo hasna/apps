@@ -14,6 +14,8 @@
 
 export interface ResourceColumn {
   name: string;
+  /** Response-only column; never accepted from generic write bodies. */
+  readOnly?: boolean;
   /** JSONB column: value is JSON-encoded and cast with ::jsonb. */
   json?: boolean;
   /** BOOLEAN column: value coerced to a real boolean. */
@@ -45,7 +47,7 @@ export interface SelfHostedResourceSpec {
   path: string;
   /** Postgres table name. */
   table: string;
-  /** Writable columns (id/created_at/updated_at are handled separately). */
+  /** Columns exposed in rows (read-only columns are omitted from write bodies). */
   columns: ResourceColumn[];
   /** ORDER BY clause for list (trusted). */
   orderBy: string;
@@ -91,9 +93,39 @@ export interface SelfHostedResourceSpec {
    * Reads stay on `emails:read` — this is about authority, not confidentiality.
    */
   writeRequiresOperator?: boolean;
+  /**
+   * Columns a write body MUST carry. The generic resource routes do not enforce
+   * required fields (they insert what they are given), so the generated OpenAPI
+   * request schema only declares `required` where a bespoke handler does —
+   * this is that declaration, kept beside the handler's own check rather than
+   * restated in the OpenAPI generator.
+   */
+  requiredColumns?: string[];
 }
 
 export const SELF_HOSTED_RESOURCES: SelfHostedResourceSpec[] = [
+  {
+    path: "mailbox-filters",
+    table: "mailbox_filters",
+    orderBy: "updated_at DESC",
+    filters: ["normalized_name", "mailbox"],
+    columns: [
+      { name: "name" },
+      { name: "normalized_name", readOnly: true },
+      { name: "mailbox" },
+      { name: "criteria", json: true },
+    ],
+    requiredColumns: ["name", "mailbox", "criteria"],
+  },
+  {
+    path: "priority-sender-rules",
+    table: "priority_sender_rules",
+    idColumn: "id",
+    compositeKey: true,
+    orderBy: "kind ASC, value ASC",
+    filters: ["kind", "value"],
+    columns: [{ name: "id" }, { name: "kind" }, { name: "value" }],
+  },
   {
     path: "contacts",
     table: "contacts",

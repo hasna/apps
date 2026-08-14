@@ -520,6 +520,21 @@ describe("Emails self-hosted client resolver", () => {
     expect(store.del("missing")).toBe(false);
   });
 
+  test("priority-sender-rules get and delete of a missing rule return absence, not a throw", () => {
+    // Regression: the serve's 404 text used to diverge from the declared
+    // contract ("priority sender rule not found" vs the generated
+    // "priority-sender-rules not found"), so the strict 404-body validation
+    // made the client THROW on a missing rule instead of returning null/false.
+    process.env[PRIMARY_MODE_KEY] = "self_hosted";
+    process.env["EMAILS_SELF_HOSTED_URL"] = "https://emails.example";
+    process.env["EMAILS_SELF_HOSTED_API_KEY"] = "test-key";
+    installFakeCurl({ status: 404, body: '{"error":"priority-sender-rules not found"}' });
+
+    const store = selfHostedStoreFor("priority-sender-rules");
+    expect(store.get("priority:address:missing@example.com")).toBeNull();
+    expect(store.del("priority:address:missing@example.com")).toBe(false);
+  });
+
   for (const [label, body] of [
     ["HTML", "<html>response-secret-html-marker</html>"],
     ["malformed JSON", '{"error":"response-secret-json-marker"'],

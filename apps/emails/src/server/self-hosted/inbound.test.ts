@@ -217,10 +217,18 @@ describe("Emails self-hosted inbound messages", () => {
     expect(ids).toContain("0023_webhook_event_idempotency");
     expect(ids).toContain("0024_idp_principal_tenants_multi_grant");
     expect(ids).toContain("0025_address_provider_binding");
+    expect(ids).toContain("0026_mailbox_filters");
     expect(ids.indexOf("0025_address_provider_binding")).toBeGreaterThan(
       ids.indexOf("0024_idp_principal_tenants_multi_grant"),
     );
-    expect(ids.at(-1)).toBe("0025_address_provider_binding");
+    expect(ids.indexOf("0026_mailbox_filters")).toBeGreaterThan(
+      ids.indexOf("0025_address_provider_binding"),
+    );
+    expect(ids).toContain("0026_priority_sender_rules");
+    expect(ids.indexOf("0026_priority_sender_rules")).toBeGreaterThan(
+      ids.indexOf("0026_mailbox_filters"),
+    );
+    expect(ids.at(-1)).toBe("0026_priority_sender_rules");
   });
 
   test("POST inbound preserves all fields and returns 201", async () => {

@@ -456,8 +456,49 @@ describe("self-hosted OpenAPI identity and authorization contract", () => {
       expect(collection?.get?.operationId, resource.path).toBeDefined();
       expect(collection?.post?.operationId, resource.path).toBeDefined();
       expect(item?.get?.operationId, resource.path).toBeDefined();
-      expect(item?.patch?.operationId, resource.path).toBeDefined();
+      if (resource.path === "priority-sender-rules") {
+        expect(item?.patch, resource.path).toBeUndefined();
+        expect(item?.put, resource.path).toBeUndefined();
+      } else {
+        expect(item?.patch?.operationId, resource.path).toBeDefined();
+      }
       expect(item?.delete?.operationId, resource.path).toBeDefined();
+    }
+  });
+
+  it("publishes the saved-filter apply operation separately from generic CRUD", () => {
+    const collection = paths["/v1/mailbox-filters"];
+    const listParameters = collection?.get?.parameters?.map((parameter) => parameter.name);
+    expect(listParameters).toContain("normalized_name");
+    expect(listParameters).toContain("mailbox");
+
+    const item = paths["/v1/mailbox-filters/{id}"];
+    const itemSchema = item?.get?.responses?.["200"]?.content?.["application/json"]?.schema as {
+      required?: string[];
+    } | undefined;
+    expect(itemSchema?.required).toContain("tenant_id");
+    const replaceSchema = item?.put?.requestBody?.content?.["application/json"]?.schema;
+    expect(replaceSchema?.required).toEqual(["name", "mailbox", "criteria"]);
+    expect(replaceSchema?.properties).not.toHaveProperty("normalized_name");
+
+    const apply = paths["/v1/mailbox-filters/{id}/apply"]?.post;
+    expect(apply?.operationId).toBe("applyMailboxFilter");
+    expect(apply?.parameters?.map((parameter) => parameter.name)).toEqual(["id", "limit", "offset"]);
+    expect(apply?.responses?.["200"]?.content?.["application/json"]?.schema?.required)
+      .toEqual(["filter", "items", "limit", "offset", "truncated"]);
+  });
+
+  it("documents every /v1/messages read filter on listMessages", () => {
+    const listMessages = paths["/v1/messages"]?.get;
+    const names = new Set((listMessages?.parameters ?? []).map((parameter) => parameter.name));
+    // Every query parameter the service accepts (service.ts GET /v1/messages)
+    // must be declared so generated SDK clients know the contract.
+    for (const expected of [
+      "limit", "offset", "cursor", "direction", "folder", "domain", "to", "from",
+      "address", "subject", "q", "search", "since", "until", "read", "unread",
+      "starred", "archived", "label",
+    ]) {
+      expect(names.has(expected), `listMessages is missing the ${expected} parameter`).toBe(true);
     }
   });
 });
