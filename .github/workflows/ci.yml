@@ -133,7 +133,12 @@ jobs:
           TURBO_SCM_BASE: ${{ steps.affected.outputs.base }}
 
       - name: Test (affected)
-        run: bunx turbo run test --affected
+        # --concurrency=2: the runner (4 cores) kills test-spawned subprocesses
+        # (null status / SIGTERM) when several spawn-heavy suites run in
+        # parallel with the skills suite in the sweep. Measured on the skills
+        # import PR (5/5 fails on the runner; 0 fails in a clean local
+        # replica). The cap is the minimal deterministic mitigation.
+        run: bunx turbo run test --affected --concurrency=2
         env:
           TURBO_SCM_BASE: ${{ steps.affected.outputs.base }}
 

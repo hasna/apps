@@ -49,8 +49,15 @@ export function computeRowHash(fields: Parameters<typeof canonical>[0]): string 
   return createHash("sha256").update(canonical(fields)).digest("hex");
 }
 
+// The chain is defined by append order. created_at is ms-precision ISO text and
+// id is a random UUID, so (created_at, id) does not order same-millisecond rows
+// in append order — two appends in one ms with the second UUID sorting smaller
+// previously linked the chain in append order and walked it in id order,
+// breaking verification (~1/256, nondeterministic). audit_log's implicit SQLite
+// rowid is assigned monotonically per INSERT, and the append-only triggers
+// forbid DELETE, so rowid is the stable chain-order key.
 function latestHash(db: Database): string {
-  const row = db.query("SELECT row_hash FROM audit_log ORDER BY created_at DESC, id DESC LIMIT 1").get() as
+  const row = db.query("SELECT row_hash FROM audit_log ORDER BY rowid DESC LIMIT 1").get() as
     | { row_hash: string }
     | null;
   return row?.row_hash ?? AUDIT_GENESIS_HASH;
@@ -81,7 +88,7 @@ export function appendAudit(db: Database, input: AuditInput): AuditRow {
 }
 
 export function listAudit(db: Database, entityIds?: string[]): AuditRow[] {
-  const rows = db.query("SELECT * FROM audit_log ORDER BY created_at ASC, id ASC").all() as AuditRow[];
+  const rows = db.query("SELECT * FROM audit_log ORDER BY rowid ASC").all() as AuditRow[];
   if (!entityIds) return rows;
   const allowed = new Set(entityIds);
   return rows.filter((r) => r.entity_id === null || allowed.has(r.entity_id));
@@ -95,7 +102,7 @@ export interface ChainVerification {
 
 /** Recompute the chain and report the first row whose hash does not match. */
 export function verifyAuditChain(db: Database): ChainVerification {
-  const rows = db.query("SELECT * FROM audit_log ORDER BY created_at ASC, id ASC").all() as AuditRow[];
+  const rows = db.query("SELECT * FROM audit_log ORDER BY rowid ASC").all() as AuditRow[];
   let prev = AUDIT_GENESIS_HASH;
   for (const row of rows) {
     const expected = computeRowHash({
