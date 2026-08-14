@@ -1,0 +1,80 @@
+{
+  "schema": "hasna.project_panel.v1",
+  "id": "files_panel_contract_fixture",
+  "createdAt": "2026-08-01T12:00:00.000Z",
+  "projectId": "contract-fixture",
+  "provider": {
+    "kind": "files",
+    "id": "files_contract_fixture",
+    "name": "Files",
+    "sourcePackage": "@hasna/files",
+    "externalId": "contract-fixture"
+  },
+  "kind": "files",
+  "title": "Files",
+  "summary": "One indexed file is available for the contract fixture.",
+  "state": "ready",
+  "generatedAt": "2026-08-01T12:00:00.000Z",
+  "freshness": "fresh",
+  "metrics": [
+    {
+      "id": "total_files",
+      "label": "Files",
+      "value": 1,
+      "status": "good"
+    }
+  ],
+  "items": [
+    {
+      "id": "file_contract_fixture",
+      "title": "contract-fixture.txt",
+      "summary": "text/plain · 16 B",
+      "status": "active",
+      "priority": "unknown",
+      "timestamp": "2026-08-01T11:55:00.000Z",
+      "resourceRefs": [
+        {
+          "kind": "file",
+          "id": "file_contract_fixture",
+          "name": "contract-fixture.txt",
+          "uri": "files://file/file_contract_fixture",
+          "externalId": "file_contract_fixture",
+          "sourcePackage": "@hasna/files",
+          "tags": [
+            "contract-fixture"
+          ]
+        }
+      ]
+    }
+  ],
+  "actions": [
+    {
+      "kind": "action",
+      "id": "files:search",
+      "name": "Search files",
+      "sourcePackage": "@hasna/files",
+      "externalId": "search"
+    }
+  ],
+  "resourceRefs": [
+    {
+      "kind": "project",
+      "id": "contract-fixture",
+      "name": "Contract fixture",
+      "uri": "project://contract-fixture",
+      "externalId": "contract-fixture",
+      "sourcePackage": "@hasna/files"
+    }
+  ],
+  "renderFragment": {
+    "renderer": "json_render",
+    "title": "Files",
+    "spec": {
+      "component": "project.files.summary",
+      "metrics": [
+        "total_files"
+      ],
+      "itemLimit": 5
+    }
+  }
+}

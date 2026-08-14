@@ -14,3 +14,5 @@ dashboard/dist/
 dashboard/node_modules/
 sdk/dist/
 sdk/node_modules/
+# tsc -b build-mode cache, regenerated on every dashboard build
+dashboard/tsconfig.tsbuildinfo
