@@ -239,8 +239,9 @@ export const CLI_EXCEPTIONS: Array<{ member: string; reason: string; task: strin
 ];
 
 /** hasna.contract.json must exist for every publishable member. Members
- * measured without one (26 — 24 at the original census, connectors + terminal
- * added by the integrator lane for imports #80/#88) — each recorded with the
+ * measured without one (25 — 24 at the original census, connectors +
+ * terminal added by the integrator lane for imports #80/#88, hooks removed
+ * when #102 added its manifest on 2026-08-14) — each recorded with the
  * manifest lane pointer (aggregate task; see README). */
 export const MANIFEST_MISSING_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "announce", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
@@ -253,7 +254,6 @@ export const MANIFEST_MISSING_EXCEPTIONS: Array<{ member: string; reason: string
   { member: "crawl", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "datasets", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "evals", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
-  { member: "hooks", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "markdown", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "orgs", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
   { member: "releases", reason: "No hasna.contract.json; manifest lane (todos 41208cbe)." },
@@ -309,6 +309,11 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
     member: "gateway",
     cause: "kitVersion 0.4.1 predates the manifest shape (deploymentModes/serviceSurfaces); validates clean at 0.5.2. kitVersion claim is stale; pinned dep 0.2.2 lacks repo-conformance.",
     task: "todos 9dc0ee28 (contracts task — gateway)",
+  },
+  {
+    member: "hooks",
+    cause: "manifest_valid: manifest added by #102 (2026-08-14) is pre-backend-schema era — storage.mode Required, storage.engines.1 'postgresql' invalid (expected sqlite|postgres), storage.backend unrecognized. Validated at pinned 0.8.4.",
+    task: "todos 03d497e8-adff-4226-9f78-903f1c17645b (contracts task — hooks)",
   },
   {
     member: "instructions",
@@ -393,6 +398,7 @@ export const NO_VALIDATOR_PIN: string[] = [
   "docs",
   "draw",
   "guardrails",
+  "hooks",
   "sheets",
   "slides",
   "tables",
