@@ -1,0 +1,10 @@
+{
+  "name": "seo-content-pack",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Hosted skill metadata for seo-content-pack",
+  "type": "module",
+  "skills": {
+    "kind": "instruction"
+  }
+}
