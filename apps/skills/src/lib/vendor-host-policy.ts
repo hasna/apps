@@ -152,6 +152,7 @@ export const TEMPLATE_HOST_FILES: readonly { file: string; reason: string }[] = 
   { file: "bin/migrate.js", reason: "Bundles the AWS SDK endpoint-rule tables via the storage module." },
   { file: "dist/index.js", reason: "Bundles the AWS SDK endpoint-rule tables via the storage module." },
   { file: "dist/storage.js", reason: "Bundles the AWS SDK endpoint-rule tables." },
+  { file: "dist/sdk/index.js", reason: "Bundles the AWS SDK endpoint-rule tables via the sdk server + storage seams." },
 ];
 
 export function allowsTemplateHost(file: string): boolean {
@@ -246,6 +247,18 @@ export const DYNAMIC_HOST_SITES: readonly { file: string; path: string; expr: st
     path: "",
     expr: "DEFAULT_LINK_LOCAL_HOST",
     reason: "Bundled AWS SDK appends a relative path to the ECS link-local credentials address.",
+  },
+  {
+    file: "dist/sdk/index.js",
+    path: "",
+    expr: "DEFAULT_LINK_LOCAL_HOST",
+    reason: "Bundled AWS SDK appends a relative path to the ECS link-local credentials address.",
+  },
+  {
+    file: "dist/sdk/index.js",
+    path: "",
+    expr: "hostname.includes",
+    reason: "Bundled copy of the server's own-origin derivation.",
   },
   {
     file: "skills/brand-assets/src/cli.ts",

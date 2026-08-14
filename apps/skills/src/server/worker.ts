@@ -1,12 +1,9 @@
 #!/usr/bin/env bun
 import { randomUUID } from "node:crypto";
-import { assertDurableStore } from "./app.js";
-import { ArtifactStorage } from "./artifact-storage.js";
-import { resolveServerConfig } from "./config.js";
-import { executeRun } from "./handlers.js";
-import { resolveDatabaseTarget } from "./database-url.js";
-import { createStore } from "./store.js";
-import type { SkillsProductStore } from "./types.js";
+import { assertDurableStore, resolveServerConfig } from "../sdk/server.js";
+import { executeRun } from "../sdk/executor.js";
+import { ArtifactStorage, createStore, resolveDatabaseTarget } from "../sdk/storage.js";
+import type { SkillsProductStore } from "../sdk/storage.js";
 
 export async function runWorkerOnce(
   store: SkillsProductStore,

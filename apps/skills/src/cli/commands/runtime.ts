@@ -14,7 +14,7 @@ import {
   validateBlogArticleRunOptions,
 } from "../../lib/blog-article.js";
 import { loadConfig, saveConfig, type ConfigScope } from "../../lib/config.js";
-import { REMOTE_SKILL_RUN_CONTRACT_VERSION } from "../../lib/remote-run-contract.js";
+import { REMOTE_SKILL_RUN_CONTRACT_VERSION } from "../../sdk/runs.js";
 import {
   completeSkillRun,
   createSkillRun,
