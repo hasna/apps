@@ -49,20 +49,16 @@ base_dirs="$tmp_dir/base_dirs.txt"
 registry_names="$tmp_dir/registry_names.txt"
 registry_dirs="$tmp_dir/registry_dirs.txt"
 
-pkg_root="$(pwd)"
-repo_root="$(git rev-parse --show-toplevel)"
-if [[ "$pkg_root" != "$repo_root" ]]; then
-  # Monorepo layout: git paths are repo-root-relative, the corpus is nested.
-  prefix="${pkg_root#"$repo_root"/}/"
-else
-  prefix=""
-fi
-
 find skills -maxdepth 1 -mindepth 1 -type d -printf '%f\n' \
   | sed 's/^skill-//' \
   | grep -v '^_' \
   | sort > "$local_dirs"
-git ls-tree -d --name-only "${base_ref}:${prefix}skills" \
+# Pathspecs are cwd-relative, so `skills` resolves to the corpus whether the
+# package root is the git repo root (standalone) or nested (monorepo). -r -d
+# with a depth-1 filter lists the immediate corpus directories.
+git ls-tree -r -d --name-only "${base_ref}" -- skills \
+  | grep -E '^skills/[^/]+$' \
+  | sed 's|^skills/||' \
   | sed 's/^skill-//' \
   | grep -v '^_' \
   | sort > "$base_dirs"
@@ -131,7 +127,7 @@ if [[ -n "$duplicate_registry" ]]; then
   failed=1
 fi
 
-modified="$(git diff --name-status "$base_ref"..HEAD -- "${prefix}skills" "${prefix}src/lib/registry.ts" || true)"
+modified="$(git diff --name-status "$base_ref"..HEAD -- skills src/lib/registry.ts || true)"
 if [[ -n "$modified" ]]; then
   echo
   echo "Tracked corpus/registry modifications against ${base_ref}:"
