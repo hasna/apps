@@ -1,0 +1,126 @@
+{
+  "accessClass": "private-service",
+  "alarmClass": "service-slo",
+  "backupClass": "daily-snapshot",
+  "commitSha": "0123456789abcdef0123456789abcdef01234567",
+  "configurationRequirements": [
+    {
+      "kind": "secret_reference",
+      "name": "APP_DATABASE_REF",
+      "referenceClass": "vault-reference",
+      "required": true
+    }
+  ],
+  "createdAt": "2026-08-09T09:00:00.000Z",
+  "digest": "6bc75f992f681a5cf96083897b0bfffdd3bb9304b4ec32891c944ecb3af522b9",
+  "evidenceRefs": [
+    {
+      "id": "intent-evidence",
+      "kind": "report",
+      "sha256": "f00eae14e40e96fd35f4747f41aa0bb36862620cd3426e8f76663a4e540a75cf",
+      "summary": "Bounded evidence for intent-evidence",
+      "uri": "artifact://deployment-fixture/intent-evidence"
+    }
+  ],
+  "id": "intent-example-app",
+  "intentDocument": {
+    "digest": "509bffa5170ea51bba03de7bc52e83c69563d4fd92e933037f8ac68089706a5c",
+    "path": "deploy/intent.json"
+  },
+  "migration": {
+    "compatibility": "backward_compatible",
+    "order": "before_workload",
+    "rollbackClass": "restore-snapshot"
+  },
+  "networkClass": "private-egress-fenced",
+  "processes": [
+    {
+      "id": "web",
+      "liveness": {
+        "expectedStatuses": [
+          200
+        ],
+        "path": "/health",
+        "protocol": "https"
+      },
+      "ports": [
+        8080
+      ],
+      "readiness": {
+        "expectedStatuses": [
+          200
+        ],
+        "path": "/ready",
+        "protocol": "https"
+      },
+      "resources": {
+        "cpuMillicores": 250,
+        "maxReplicas": 3,
+        "memoryMiB": 512,
+        "minReplicas": 1
+      },
+      "role": "web",
+      "version": {
+        "expectedStatuses": [
+          200
+        ],
+        "path": "/version",
+        "protocol": "https"
+      }
+    }
+  ],
+  "producer": {
+    "id": "agent-builder",
+    "kind": "agent",
+    "name": "Deployment Builder"
+  },
+  "product": {
+    "digest": "53497f71c3fd58dac6c1d32b77c126de3d132ffeac28a4494abc1fae2f6e5556",
+    "id": "product-example-app",
+    "revision": 1,
+    "schema": "hasna.product_projection.v1"
+  },
+  "repositoryRef": {
+    "id": "repo-contract-fixture",
+    "kind": "repo",
+    "tags": [
+      "deployment-fixture"
+    ],
+    "uri": "repo://hasna/example-app"
+  },
+  "restoreClass": "point-in-time",
+  "rollbackClass": "prior-artifact",
+  "schema": "hasna.intent_snapshot.v1",
+  "serviceRequirements": [
+    {
+      "class": "postgresql",
+      "id": "primary-database",
+      "kind": "database",
+      "required": true
+    }
+  ],
+  "treeSha": "89abcdef0123456789abcdef0123456789abcdef",
+  "validationPlan": {
+    "checks": [
+      {
+        "expected": "Immutable evidence reviewed",
+        "id": "evidence-review",
+        "kind": "manual",
+        "required": true,
+        "resourceRefs": []
+      }
+    ],
+    "createdAt": "2026-08-09T09:00:00.000Z",
+    "id": "validation-intent",
+    "objective": "Verify immutable deployment inputs and observable outcomes",
+    "requiredEvidenceKinds": [
+      "test_result"
+    ],
+    "schema": "hasna.validation_plan.v1",
+    "verifier": {
+      "id": "agent-verifier",
+      "kind": "agent",
+      "name": "Independent Verifier"
+    }
+  }
+}
