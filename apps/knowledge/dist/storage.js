@@ -197,9 +197,10 @@ function writeKnowledgeConfig(path, config) {
   chmodSync(path, 384);
 }
 
-// ../../../release-instructions-0435/node_modules/.bun/@hasna+contracts@0.8.5/node_modules/@hasna/contracts/dist/client/storage.js
+// ../../node_modules/.bun/@hasna+contracts@0.10.6/node_modules/@hasna/contracts/dist/client/storage.js
 var MAX_CREDENTIAL_FILE_BYTES = 64 * 1024;
 var INSPECT_CUSTOM = Symbol.for("nodejs.util.inspect.custom");
+var CREDENTIAL_SEAL = Symbol.for("hasna:contracts:sealedCredential");
 var DEPRECATION_REGISTRY = Symbol.for("hasna:contracts:credentialDeprecationNotices");
 class HasnaHttpError extends Error {
   status;
@@ -325,7 +326,7 @@ function createHasnaStorageClient(name, transport) {
   };
 }
 
-// ../../../release-instructions-0435/node_modules/.bun/@hasna+contracts@0.8.5/node_modules/@hasna/contracts/dist/client/transport.js
+// ../../node_modules/.bun/@hasna+contracts@0.10.6/node_modules/@hasna/contracts/dist/client/transport.js
 import { isIP } from "net";
 function envToken(name) {
   return name.toUpperCase().replace(/-/g, "_");
@@ -353,8 +354,18 @@ function assertUsableCredential(appName, source, value) {
   throw new CredentialResolutionError(appName, `The credential from ${source} contains characters that cannot be sent in an HTTP header ` + `(a control character or non-ASCII byte). A file written with CR-only line endings is the usual ` + `cause. Rewrite that credential file with one LF-terminated KEY=value line. ` + `The value is not shown here, and is deliberately never logged.`, [source]);
 }
 var INSPECT_CUSTOM2 = Symbol.for("nodejs.util.inspect.custom");
+var CREDENTIAL_SEAL2 = Symbol.for("hasna:contracts:sealedCredential");
+var CALLER_SUPPLIED_CREDENTIAL_PROVIDER_SOURCE = "caller-supplied CredentialProvider";
 function sealCredential(fields) {
-  const { apiKey, ...visible } = fields;
+  const { apiKey } = fields;
+  const visible = {
+    tier: fields.tier,
+    source: fields.source,
+    deliberate: fields.deliberate,
+    deprecated: fields.deprecated,
+    diskCandidates: Object.freeze([...fields.diskCandidates]),
+    warning: fields.warning
+  };
   const sealed = { ...visible };
   Object.defineProperty(sealed, "apiKey", {
     value: apiKey,
@@ -368,7 +379,16 @@ function sealCredential(fields) {
     writable: false,
     configurable: false
   });
-  return sealed;
+  Object.defineProperty(sealed, CREDENTIAL_SEAL2, {
+    value: true,
+    enumerable: false,
+    writable: false,
+    configurable: false
+  });
+  return Object.freeze(sealed);
+}
+function isSealedCredential(credential) {
+  return credential[CREDENTIAL_SEAL2] === true;
 }
 function explicitCredential(appName, apiKey) {
   const source = "explicit apiKey option";
@@ -381,6 +401,30 @@ function explicitCredential(appName, apiKey) {
     deprecated: false,
     diskCandidates: [],
     warning: null
+  });
+}
+function validateAndSealResolvedCredential(appName, credential) {
+  const apiKey = credential.apiKey;
+  assertUsableCredential(appName, CALLER_SUPPLIED_CREDENTIAL_PROVIDER_SOURCE, apiKey);
+  if (!isSealedCredential(credential)) {
+    return sealCredential({
+      apiKey,
+      tier: "argument",
+      source: CALLER_SUPPLIED_CREDENTIAL_PROVIDER_SOURCE,
+      deliberate: true,
+      deprecated: false,
+      diskCandidates: [],
+      warning: null
+    });
+  }
+  return sealCredential({
+    apiKey,
+    tier: credential.tier,
+    source: credential.source,
+    deliberate: credential.deliberate,
+    deprecated: credential.deprecated,
+    diskCandidates: credential.diskCandidates,
+    warning: credential.warning
   });
 }
 var DEPRECATION_REGISTRY2 = Symbol.for("hasna:contracts:credentialDeprecationNotices");
@@ -513,14 +557,16 @@ class HasnaHttpError2 extends Error {
   }
 }
 function currentCredential(name, apiKey) {
-  if (typeof apiKey === "function")
-    return apiKey();
+  if (typeof apiKey === "function") {
+    return validateAndSealResolvedCredential(name, apiKey());
+  }
   return explicitCredential(name, apiKey);
 }
 function authFailureGuidance(credential) {
   const origin = `The API key for this request came from ${credential.source}`;
   if (credential.deliberate) {
-    return `${origin} \u2014 a credential you selected deliberately. It was NOT substituted with any other key: ` + `falling back here would authenticate as a different principal than the one you named, which is ` + `exactly the failure an override exists to prevent. Rotate that key, or unset the override to use ` + `the credential on disk.`;
+    const remedy = credential.source === CALLER_SUPPLIED_CREDENTIAL_PROVIDER_SOURCE ? `Fix that provider so it returns the current key, or replace it with resolveCredential() ` + `so diagnostics can name the original source.` : `Rotate that key, or unset the override to use the credential on disk.`;
+    return `${origin} \u2014 a credential you selected deliberately. It was NOT substituted with any other key: ` + `falling back here would authenticate as a different principal than the one you named, which is ` + `exactly the failure an override exists to prevent. ${remedy}`;
   }
   if (credential.deprecated) {
     const target = credential.diskCandidates[0];

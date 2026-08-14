@@ -19,12 +19,11 @@ A canonical Postgres storage kit shared across the Hasna fleet:
 | `migrations.ts` | `schema_migrations` ledger with sha256 checksums                     |
 | `health.ts`     | `checkHealth` (SELECT 1) and `checkReady` (migrated?) probes         |
 
-## Server data backends
+## PURE REMOTE (Amendment A1)
 
-The server uses SQLite when its canonical app database URL is absent and
-PostgreSQL when that URL is present. This kit contains **no sync engine, no
-client-side PostgreSQL path, and no merge logic**. Clients use either their
-local SQLite store or the server HTTP API; they never open PostgreSQL directly.
+Cloud mode = reads **and** writes go directly to cloud Postgres. This kit
+contains **no sync engine, no cache-as-mode, and no merge logic**. In `local`
+mode there is no Postgres pool at all; SQLite is authoritative.
 
 ## TLS
 

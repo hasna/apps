@@ -1,4 +1,4 @@
-export declare const KIT_VERSION = "0.11.0";
+export declare const KIT_VERSION = "0.10.6";
 export * from "./backend.js";
 export * from "./tls.js";
 export * from "./query.js";

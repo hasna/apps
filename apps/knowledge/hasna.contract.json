@@ -3,7 +3,7 @@
   "name": "knowledge",
   "class": "service",
   "contractVersion": "v1",
-  "kitVersion": "0.11.0",
+  "kitVersion": "0.10.6",
   "description": "Agent-friendly knowledge store. CLI + MCP + HTTP API (knowledge-serve) + generated SDK. Clients use local SQLite or the HTTP API selected by HASNA_KNOWLEDGE_API_URL; knowledge-serve reads PostgreSQL selected by HASNA_KNOWLEDGE_DATABASE_URL.",
   "bins": [
     "knowledge",

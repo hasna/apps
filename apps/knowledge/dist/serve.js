@@ -19,7 +19,7 @@ var __require = import.meta.require;
 // src/serve.ts
 import { readFileSync as readFileSync4 } from "fs";
 
-// ../../../release-instructions-0435/node_modules/.bun/@hasna+contracts@0.8.5/node_modules/@hasna/contracts/dist/auth/index.js
+// ../../node_modules/.bun/@hasna+contracts@0.10.6/node_modules/@hasna/contracts/dist/auth/index.js
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "crypto";
 var MAX_TENANT_ID_LENGTH = 64;
 var TENANT_ID_PATTERN = new RegExp(`^[A-Za-z0-9][A-Za-z0-9._-]{0,${MAX_TENANT_ID_LENGTH - 1}}$`);
@@ -64,8 +64,45 @@ var API_KEY_NAMESPACE = "hasna";
 var API_KEY_TOKEN_PATTERN = /^hasna_([a-z][a-z0-9-]*)_([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)$/;
 var TOKEN_PATTERN = API_KEY_TOKEN_PATTERN;
 var DEFAULT_API_KEY_TTL_SECONDS = 90 * 24 * 60 * 60;
+function ownAgentClaim(source) {
+  return Object.hasOwn(source, "agent") && typeof source.agent === "string" ? source.agent : null;
+}
+function ownScopesClaim(source) {
+  return Object.hasOwn(source, "scopes") && Array.isArray(source.scopes) ? source.scopes : null;
+}
+function ownOption(options, name) {
+  return Object.hasOwn(options, name) ? options[name] : undefined;
+}
+var typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype);
+var intrinsicViewBuffer = Object.getOwnPropertyDescriptor(typedArrayPrototype, "buffer").get;
+var intrinsicViewByteOffset = Object.getOwnPropertyDescriptor(typedArrayPrototype, "byteOffset").get;
+var intrinsicViewByteLength = Object.getOwnPropertyDescriptor(typedArrayPrototype, "byteLength").get;
+var intrinsicDataViewBuffer = Object.getOwnPropertyDescriptor(DataView.prototype, "buffer").get;
+var intrinsicDataViewByteOffset = Object.getOwnPropertyDescriptor(DataView.prototype, "byteOffset").get;
+var intrinsicDataViewByteLength = Object.getOwnPropertyDescriptor(DataView.prototype, "byteLength").get;
+function viewWindow(view) {
+  try {
+    return [
+      intrinsicViewBuffer.call(view),
+      intrinsicViewByteOffset.call(view),
+      intrinsicViewByteLength.call(view)
+    ];
+  } catch {
+    return [
+      intrinsicDataViewBuffer.call(view),
+      intrinsicDataViewByteOffset.call(view),
+      intrinsicDataViewByteLength.call(view)
+    ];
+  }
+}
 function toBuffer(secret) {
-  return typeof secret === "string" ? Buffer.from(secret, "utf8") : secret;
+  if (typeof secret === "string")
+    return Buffer.from(secret, "utf8");
+  if (ArrayBuffer.isView(secret)) {
+    const [store, byteOffset, byteLength] = viewWindow(secret);
+    return Buffer.from(store, byteOffset, byteLength);
+  }
+  return Buffer.from(secret);
 }
 function hmac(signingSecret, message) {
   return createHmac("sha256", toBuffer(signingSecret)).update(message, "utf8").digest();
@@ -88,7 +125,7 @@ function parseApiKey(token) {
   } catch {
     return null;
   }
-  if (typeof claims !== "object" || claims === null || typeof claims.kid !== "string" || typeof claims.app !== "string" || !Array.isArray(claims.scopes)) {
+  if (typeof claims !== "object" || claims === null || typeof claims.kid !== "string" || typeof claims.app !== "string" || ownScopesClaim(claims) === null) {
     return null;
   }
   const claimedTid = ownTenantId(claims);
@@ -98,6 +135,13 @@ function parseApiKey(token) {
   return { app, body, sig, claims };
 }
 function verifyApiKeyToken(token, options) {
+  const optSigningSecret = ownOption(options, "signingSecret");
+  const optExpectedApp = ownOption(options, "expectedApp");
+  const optNowMs = ownOption(options, "nowMs");
+  const optLeewaySeconds = ownOption(options, "leewaySeconds");
+  const optRequiredScopes = ownOption(options, "requiredScopes");
+  const optRequireTenant = ownOption(options, "requireTenant");
+  const optExpectedTid = ownOption(options, "expectedTid");
   const parsed = parseApiKey(token);
   if (!parsed) {
     return { ok: false, reason: "malformed", message: "Token is malformed." };
@@ -109,10 +153,10 @@ function verifyApiKeyToken(token, options) {
   if (claims.app !== app) {
     return { ok: false, reason: "app_mismatch", message: "Token prefix app does not match claims." };
   }
-  if (options.expectedApp !== undefined && app !== options.expectedApp) {
-    return { ok: false, reason: "app_mismatch", message: `Token is for app '${app}', expected '${options.expectedApp}'.` };
+  if (optExpectedApp !== undefined && app !== optExpectedApp) {
+    return { ok: false, reason: "app_mismatch", message: `Token is for app '${app}', expected '${optExpectedApp}'.` };
   }
-  const expected = hmac(options.signingSecret, `${apiKeyPrefix(app)}${body}`);
+  const expected = hmac(optSigningSecret, `${apiKeyPrefix(app)}${body}`);
   let provided;
   try {
     provided = Buffer.from(sig, "base64url");
@@ -122,38 +166,41 @@ function verifyApiKeyToken(token, options) {
   if (provided.length !== expected.length || !timingSafeEqual(provided, expected)) {
     return { ok: false, reason: "bad_signature", message: "Signature verification failed." };
   }
-  const now = Math.floor((options.nowMs ?? Date.now()) / 1000);
-  const leeway = options.leewaySeconds ?? 0;
+  const agent = ownAgentClaim(claims);
+  const now = Math.floor((optNowMs ?? Date.now()) / 1000);
+  const leeway = optLeewaySeconds ?? 0;
   if (typeof claims.iat === "number" && now + leeway < claims.iat) {
-    return { ok: false, reason: "not_yet_valid", message: "Token is not yet valid." };
+    return { ok: false, reason: "not_yet_valid", message: "Token is not yet valid.", agent };
   }
   if (claims.exp !== null && typeof claims.exp === "number" && now - leeway >= claims.exp) {
-    return { ok: false, reason: "expired", message: "Token has expired." };
+    return { ok: false, reason: "expired", message: "Token has expired.", agent };
   }
   const verifiedTid = ownTenantId(claims);
   const tid = verifiedTid === undefined ? null : canonicalizeTenantId(verifiedTid);
-  const tenantRequired = Boolean(options.requireTenant) || options.expectedTid !== undefined;
+  const tenantRequired = Boolean(optRequireTenant) || optExpectedTid !== undefined;
   if (tenantRequired && tid === null) {
     return {
       ok: false,
       reason: "tenant_required",
       message: "Token carries no tenant id ('tid') and this service requires one.",
       kid: claims.kid,
-      tid: null
+      tid: null,
+      agent
     };
   }
-  if (options.expectedTid !== undefined && !tenantIdsEqual(tid, options.expectedTid)) {
-    const expectationIsWellFormed = typeof options.expectedTid === "string" && isValidTenantId(options.expectedTid.trim());
+  if (optExpectedTid !== undefined && !tenantIdsEqual(tid, optExpectedTid)) {
+    const expectationIsWellFormed = typeof optExpectedTid === "string" && isValidTenantId(optExpectedTid.trim());
     return {
       ok: false,
       reason: "tenant_mismatch",
       message: expectationIsWellFormed ? "Token is for a different tenant than the one this service accepts." : "Token tenant cannot be checked: the expected tenant id is not a valid tenant id.",
       kid: claims.kid,
-      tid
+      tid,
+      agent
     };
   }
-  if (options.requiredScopes && options.requiredScopes.length > 0) {
-    const granted = claims.scopes;
+  if (optRequiredScopes && optRequiredScopes.length > 0) {
+    const granted = ownScopesClaim(claims) ?? [];
     const satisfies = (required) => granted.some((g) => {
       if (g === "*")
         return true;
@@ -167,15 +214,16 @@ function verifyApiKeyToken(token, options) {
       const rAction = required.slice(ri + 1);
       return (gApp === "*" || gApp === rApp) && (gAction === "*" || gAction === rAction);
     });
-    for (const required of options.requiredScopes) {
+    for (const required of optRequiredScopes) {
       if (!satisfies(required)) {
-        return { ok: false, reason: "insufficient_scope", message: `Missing required scope '${required}'.` };
+        return { ok: false, reason: "insufficient_scope", message: `Missing required scope '${required}'.`, agent };
       }
     }
   }
-  return { ok: true, claims, kid: claims.kid, app, tid };
+  return { ok: true, claims, kid: claims.kid, app, tid, agent };
 }
 var DEFAULT_API_KEYS_TABLE = "api_keys";
+var API_KEY_ISSUANCE_PENDING_REASON = "credential_delivery_pending";
 function createTableSql(table) {
   return `CREATE TABLE IF NOT EXISTS ${table} (
     kid TEXT PRIMARY KEY,
@@ -229,10 +277,11 @@ function parseScopes(value) {
 }
 function rowToRecord(row) {
   const tid = ownTenantId(row);
+  const agentValue = Object.hasOwn(row, "agent") ? row.agent : null;
   return {
     kid: String(row.kid),
     app: String(row.app),
-    agent: row.agent === null || row.agent === undefined ? null : String(row.agent),
+    agent: agentValue === null || agentValue === undefined ? null : String(agentValue),
     tid: tid === null || tid === undefined ? null : String(tid),
     scopes: parseScopes(row.scopes),
     tokenHash: String(row.token_hash),
@@ -264,34 +313,63 @@ class ApiKeyStore {
     }
   }
   async insert(input) {
+    await this.insertWithLifecycle(input, null, null);
+  }
+  async insertWithLifecycle(input, revokedAt, revokedReason) {
     const tid = ownTenantId(input);
+    const agent = ownAgentClaim(input);
     await this.client.execute(`INSERT INTO ${this.table}
-         (kid, app, agent, tid, scopes, token_hash, issued_at, expires_at, created_by)
-       VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9)`, [
+         (kid, app, agent, tid, scopes, token_hash, issued_at, expires_at, created_by, revoked_at, revoked_reason)
+       VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9, $10, $11)`, [
       input.kid,
       input.app,
-      input.agent ?? null,
+      agent,
       tid === undefined || tid === null ? null : normalizeTenantId(tid),
       JSON.stringify(input.scopes),
       input.tokenHash,
       input.issuedAt.toISOString(),
       input.expiresAt ? input.expiresAt.toISOString() : null,
-      input.createdBy ?? null
+      input.createdBy ?? null,
+      revokedAt,
+      revokedReason
     ]);
   }
-  async insertMinted(minted, createdBy) {
+  mintedInput(minted, createdBy) {
     const claims = minted.claims;
-    await this.insert({
+    return {
       kid: minted.kid,
       app: claims.app,
-      agent: claims.agent ?? null,
+      agent: ownAgentClaim(claims),
       tid: ownTenantId(claims) ?? null,
       scopes: claims.scopes,
       tokenHash: minted.tokenHash,
       issuedAt: new Date(claims.iat * 1000),
       expiresAt: claims.exp === null ? null : new Date(claims.exp * 1000),
       createdBy: createdBy ?? null
-    });
+    };
+  }
+  async insertMinted(minted, createdBy) {
+    await this.insert(this.mintedInput(minted, createdBy));
+  }
+  async insertMintedPending(minted, createdBy, atMs = Date.now()) {
+    await this.insertWithLifecycle(this.mintedInput(minted, createdBy), new Date(atMs).toISOString(), API_KEY_ISSUANCE_PENDING_REASON);
+  }
+  async activatePending(kid, tokenHash) {
+    const row = await this.client.get(`UPDATE ${this.table}
+          SET revoked_at = NULL, revoked_reason = NULL
+        WHERE kid = $1
+          AND revoked_at IS NOT NULL
+          AND revoked_reason = $2
+          AND token_hash = $3
+      RETURNING kid`, [kid, API_KEY_ISSUANCE_PENDING_REASON, tokenHash]);
+    if (row)
+      return true;
+    const active = await this.client.get(`SELECT kid FROM ${this.table}
+        WHERE kid = $1
+          AND token_hash = $2
+          AND revoked_at IS NULL
+          AND revoked_reason IS NULL`, [kid, tokenHash]);
+    return active !== null;
   }
   async findByKid(kid) {
     const row = await this.client.get(`SELECT * FROM ${this.table} WHERE kid = $1`, [kid]);
@@ -317,6 +395,9 @@ class ApiKeyStore {
       return "expired";
     return "active";
   }
+  keyStatus = async (kid) => {
+    return this.status(kid);
+  };
   statusChecker() {
     return async (kid) => {
       const status = await this.status(kid);
@@ -389,34 +470,58 @@ function extractToken(source, headerName = "x-api-key", scheme = "Bearer") {
   }
   return null;
 }
+function ownOption2(bag, name) {
+  return Object.hasOwn(bag, name) ? bag[name] : undefined;
+}
 function verifyApiKey(options) {
-  if (!options.app)
+  const optionApp = ownOption2(options, "app");
+  const optionSigningSecret = ownOption2(options, "signingSecret");
+  const optionExpectedTid = ownOption2(options, "expectedTid");
+  const optionRequiredScopes = ownOption2(options, "requiredScopes");
+  const optionRequireTenant = ownOption2(options, "requireTenant");
+  const optionLeewaySeconds = ownOption2(options, "leewaySeconds");
+  const audit = ownOption2(options, "audit");
+  const headerName = ownOption2(options, "headerName") ?? "x-api-key";
+  const scheme = ownOption2(options, "scheme") ?? "Bearer";
+  const clock = ownOption2(options, "nowMs") ?? (() => Date.now());
+  if (!optionApp)
     throw new Error("verifyApiKey requires an 'app' slug.");
-  if (!options.signingSecret) {
+  if (!optionSigningSecret) {
     throw new Error("verifyApiKey requires a 'signingSecret'. Set it from HASNA_<APP>_API_SIGNING_KEY.");
   }
-  if (options.expectedTid !== undefined && !isValidTenantId(options.expectedTid)) {
-    throw new Error(`verifyApiKey received an invalid 'expectedTid': '${options.expectedTid}'.`);
+  if (optionExpectedTid !== undefined && !isValidTenantId(optionExpectedTid)) {
+    throw new Error(`verifyApiKey received an invalid 'expectedTid': '${optionExpectedTid}'.`);
   }
-  const headerName = options.headerName ?? "x-api-key";
-  const scheme = options.scheme ?? "Bearer";
-  const clock = options.nowMs ?? (() => Date.now());
+  const app = optionApp;
+  const signingSecret = optionSigningSecret;
+  const ownKeyStatus = ownOption2(options, "keyStatus");
+  const ownIsRevoked = ownOption2(options, "isRevoked");
+  const allowUnregistered = ownOption2(options, "allowUnregisteredKeys") === true;
+  if (ownKeyStatus && ownIsRevoked) {
+    throw new Error("verifyApiKey received both 'keyStatus' and 'isRevoked'. Supply exactly one \u2014 " + "letting one silently win would hide which check is actually guarding the service. " + "Use 'keyStatus' (store.keyStatus); drop 'isRevoked'.");
+  }
+  if (!ownKeyStatus && !allowUnregistered) {
+    throw new Error(ownIsRevoked ? "verifyApiKey was given only 'isRevoked', which cannot refuse a key this service has " + "no record of: it returns false both for an active key and for one that was never " + "registered, so an unregistered key is irrevocable. Wire 'keyStatus: store.keyStatus' " + "(or 'isRevoked: store.statusChecker()'), or set 'allowUnregisteredKeys: true' to " + "accept that risk explicitly." : "verifyApiKey requires a key-status hook. Without one this service performs NO " + "revocation check and cannot turn any of its keys off. Wire " + "'keyStatus: store.keyStatus', or set 'allowUnregisteredKeys: true' to declare that " + "this service intentionally cannot revoke keys.");
+  }
   async function emit(event) {
-    if (!options.audit)
+    if (!audit)
       return;
     try {
-      await options.audit(event);
+      await audit(event);
     } catch {}
   }
   async function authenticate(headers, context = {}) {
-    const method = context.method ?? null;
-    const path = context.path ?? null;
-    const requiredScopes = [...options.requiredScopes ?? [], ...context.requiredScopes ?? []];
+    const method = ownOption2(context, "method") ?? null;
+    const path = ownOption2(context, "path") ?? null;
+    const requiredScopes = [
+      ...optionRequiredScopes ?? [],
+      ...ownOption2(context, "requiredScopes") ?? []
+    ];
     const at = new Date(clock()).toISOString();
-    const perCallTid = Object.hasOwn(context, "expectedTid") ? context.expectedTid : undefined;
-    const expectedTid = perCallTid !== undefined ? perCallTid : options.expectedTid;
-    if (perCallTid !== undefined && options.expectedTid !== undefined && !tenantIdsEqual(perCallTid, options.expectedTid)) {
-      await emit({ outcome: "deny", app: options.app, kid: null, tid: null, reason: "tenant_mismatch", scopesRequired: requiredScopes, method, path, status: 403, at });
+    const perCallTid = ownOption2(context, "expectedTid");
+    const expectedTid = perCallTid !== undefined ? perCallTid : optionExpectedTid;
+    if (perCallTid !== undefined && optionExpectedTid !== undefined && !tenantIdsEqual(perCallTid, optionExpectedTid)) {
+      await emit({ outcome: "deny", app, kid: null, tid: null, reason: "tenant_mismatch", scopesRequired: requiredScopes, method, path, status: 403, at });
       return {
         ok: false,
         status: 403,
@@ -432,27 +537,72 @@ function verifyApiKey(options) {
         reason: "missing_token",
         message: `Missing API key. Send it as '${headerName}: <key>' or 'Authorization: ${scheme} <key>'.`
       };
-      await emit({ outcome: "deny", app: options.app, kid: null, tid: null, reason: "missing_token", scopesRequired: requiredScopes, method, path, status: 401, at });
+      await emit({ outcome: "deny", app, kid: null, tid: null, reason: "missing_token", scopesRequired: requiredScopes, method, path, status: 401, at });
       return decision;
     }
     const verified = verifyApiKeyToken(token, {
-      signingSecret: options.signingSecret,
-      expectedApp: options.app,
+      signingSecret,
+      expectedApp: app,
       nowMs: clock(),
-      ...options.leewaySeconds !== undefined ? { leewaySeconds: options.leewaySeconds } : {},
-      ...options.requireTenant !== undefined ? { requireTenant: options.requireTenant } : {},
+      ...optionLeewaySeconds !== undefined ? { leewaySeconds: optionLeewaySeconds } : {},
+      ...optionRequireTenant !== undefined ? { requireTenant: optionRequireTenant } : {},
       ...expectedTid !== undefined ? { expectedTid } : {},
       requiredScopes
     });
     if (!verified.ok) {
       const status = verified.reason === "insufficient_scope" || verified.reason === "tenant_mismatch" || verified.reason === "tenant_required" ? 403 : 401;
-      await emit({ outcome: "deny", app: options.app, kid: verified.kid ?? null, tid: ownTenantId(verified) ?? null, reason: verified.reason, scopesRequired: requiredScopes, method, path, status, at });
+      await emit({
+        outcome: "deny",
+        app,
+        kid: ownOption2(verified, "kid") ?? null,
+        tid: ownTenantId(verified) ?? null,
+        ...Object.hasOwn(verified, "agent") ? { agent: verified.agent } : {},
+        reason: verified.reason,
+        scopesRequired: requiredScopes,
+        method,
+        path,
+        status,
+        at
+      });
       return { ok: false, status, reason: verified.reason, message: verified.message };
     }
-    if (options.isRevoked) {
-      const revoked = await options.isRevoked(verified.kid);
+    if (ownKeyStatus) {
+      let status;
+      try {
+        status = await ownKeyStatus(verified.kid);
+      } catch {
+        await emit({ outcome: "deny", app, kid: verified.kid, tid: verified.tid, agent: verified.agent, reason: "status_unavailable", scopesRequired: requiredScopes, method, path, status: 503, at });
+        return {
+          ok: false,
+          status: 503,
+          reason: "status_unavailable",
+          message: "Could not verify API key status. Try again shortly."
+        };
+      }
+      if (status !== "active") {
+        const known = status === "revoked" || status === "expired" || status === "unknown";
+        if (!(status === "unknown" && allowUnregistered)) {
+          const reason = status === "revoked" || status === "expired" ? status : "unknown_key";
+          const message = reason === "unknown_key" ? known ? "API key is not registered with this service." : "API key status could not be recognized." : status === "expired" ? "API key has expired." : "API key has been revoked.";
+          await emit({ outcome: "deny", app, kid: verified.kid, tid: verified.tid, agent: verified.agent, reason, scopesRequired: requiredScopes, method, path, status: 401, at });
+          return { ok: false, status: 401, reason, message };
+        }
+      }
+    } else if (ownIsRevoked) {
+      let revoked;
+      try {
+        revoked = await ownIsRevoked(verified.kid);
+      } catch {
+        await emit({ outcome: "deny", app, kid: verified.kid, tid: verified.tid, agent: verified.agent, reason: "status_unavailable", scopesRequired: requiredScopes, method, path, status: 503, at });
+        return {
+          ok: false,
+          status: 503,
+          reason: "status_unavailable",
+          message: "Could not verify API key status. Try again shortly."
+        };
+      }
       if (revoked) {
-        await emit({ outcome: "deny", app: options.app, kid: verified.kid, tid: verified.tid, reason: "revoked", scopesRequired: requiredScopes, method, path, status: 401, at });
+        await emit({ outcome: "deny", app, kid: verified.kid, tid: verified.tid, agent: verified.agent, reason: "revoked", scopesRequired: requiredScopes, method, path, status: 401, at });
         return { ok: false, status: 401, reason: "revoked", message: "API key has been revoked." };
       }
     }
@@ -460,14 +610,14 @@ function verifyApiKey(options) {
       kid: verified.kid,
       app: verified.app,
       scopes: verified.claims.scopes,
-      agent: verified.claims.agent ?? null,
+      agent: verified.agent,
       tid: verified.tid,
       claims: verified.claims
     };
-    await emit({ outcome: "allow", app: options.app, kid: verified.kid, tid: verified.tid, reason: null, scopesRequired: requiredScopes, method, path, status: 200, at });
+    await emit({ outcome: "allow", app, kid: verified.kid, tid: verified.tid, agent: verified.agent, reason: null, scopesRequired: requiredScopes, method, path, status: 200, at });
     return { ok: true, status: 200, principal };
   }
-  return { authenticate, app: options.app };
+  return { authenticate, app };
 }
 var MAX_FLEET_TOKEN_TTL_SECONDS = 24 * 60 * 60;
 
