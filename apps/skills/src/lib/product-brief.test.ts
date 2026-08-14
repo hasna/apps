@@ -1,0 +1,55 @@
+import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
+import { useDefaultTestTimeout } from "../test-preload.js";
+
+useDefaultTestTimeout();
+
+describe("@hasna/skills product brief", () => {
+  const brief = readFileSync(join(process.cwd(), "docs/product/product-brief.md"), "utf8");
+  const cloudPackage = "@hasna" + "/cloud";
+
+  test("defines target users, use cases, v1 scope, and non-goals", () => {
+    for (const section of [
+      "## Target Users",
+      "## Core Use Cases",
+      "## V1 Scope",
+      "## Non-Goals",
+    ]) {
+      expect(brief).toContain(section);
+    }
+  });
+
+  test("defines pricing principles and trust model", () => {
+    expect(brief).toContain("## Pricing Principles");
+    expect(brief).toContain("## Trust Model");
+    expect(brief).toContain("Billing, payment methods, credits");
+    expect(brief).toContain("Server-executed skills expose public docs");
+    expect(brief).toContain("Local skills should remain runnable");
+  });
+
+  test("keeps agent-native surfaces ahead of future dashboards", () => {
+    expect(brief).toContain("CLI and MCP");
+    expect(brief).toContain("Future operator dashboards");
+    expect(brief).toContain("same API contracts used by CLI and\nMCP");
+    expect(brief).toContain("without making the agent workflow dependent on a browser");
+  });
+
+  test("anchors product to public package and operator-supplied Skills API", () => {
+    expect(brief).toContain("hasna/skills");
+    expect(brief).toContain("@hasna/skills");
+    expect(brief).toContain("local-only");
+    expect(brief).not.toContain(cloudPackage);
+  });
+
+  // Inverted from "brief contains https://skills.md". The brief used to present a
+  // vendor endpoint as the product's API address, which is the narrative that
+  // justified shipping that host as the unconfigured default. The brief must now
+  // describe the endpoint as operator-supplied configuration with no default.
+  test("describes the API endpoint as operator-supplied with no shipped default", () => {
+    expect(brief).toContain("no default endpoint");
+    expect(brief).toContain("SKILLS_API_URL");
+    expect(brief).toMatch(/unconfigured install never sends credentials/);
+  });
+});

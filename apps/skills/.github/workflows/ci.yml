@@ -1,0 +1,267 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  secret-scan:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Check out the exact candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install pinned gitleaks
+        env:
+          GITLEAKS_VERSION: 8.30.1
+          GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/gitleaks.tar.gz"
+          install_dir="$RUNNER_TEMP/gitleaks-bin"
+          mkdir -p "$install_dir"
+          curl -fsSL --proto '=https' --tlsv1.2 --retry 3 \
+            -o "$archive" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          printf '%s  %s\n' "$GITLEAKS_SHA256" "$archive" | sha256sum --check -
+          tar -xzf "$archive" -C "$install_dir" gitleaks
+          chmod 0755 "$install_dir/gitleaks"
+      - name: Verify merge-result-only secret coverage
+        run: |
+          set -euo pipefail
+          control_root="$(mktemp -d "$RUNNER_TEMP/gitleaks-merge-control.XXXXXX")"
+          trap 'rm -rf "$control_root"' EXIT
+          control_repo="$control_root/repo"
+          archive_tree="$control_root/archive-tree"
+          blob_tree="$control_root/blob-tree"
+          control_archive="$control_root/tree.tar"
+          tree_listing="$control_root/tree.lst"
+          mkdir -p "$control_repo" "$archive_tree" "$blob_tree"
+
+          git -C "$control_repo" init --quiet
+          git -C "$control_repo" config user.name "Gitleaks control"
+          git -C "$control_repo" config user.email "gitleaks-control@example.invalid"
+          printf 'base\n' > "$control_repo/base.txt"
+          git -C "$control_repo" add base.txt
+          git -C "$control_repo" commit --quiet -m "base"
+          base_sha="$(git -C "$control_repo" rev-parse HEAD)"
+
+          git -C "$control_repo" switch --quiet -c left
+          printf 'left\n' > "$control_repo/left.txt"
+          git -C "$control_repo" add left.txt
+          git -C "$control_repo" commit --quiet -m "left"
+          left_sha="$(git -C "$control_repo" rev-parse HEAD)"
+
+          git -C "$control_repo" switch --quiet -c right "$base_sha"
+          printf 'right\n' > "$control_repo/right.txt"
+          git -C "$control_repo" add right.txt
+          git -C "$control_repo" commit --quiet -m "right"
+          right_sha="$(git -C "$control_repo" rev-parse HEAD)"
+
+          git -C "$control_repo" merge --quiet --no-ff --no-commit left
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 \
+            -out "$control_repo/merge-only-private-key.pem" 2>/dev/null
+          printf 'merge-only-private-key.pem export-ignore\n' > "$control_repo/.gitattributes"
+          git -C "$control_repo" add .gitattributes merge-only-private-key.pem
+          merge_tree="$(git -C "$control_repo" write-tree)"
+          printf 'merge result\n' > "$control_root/commit-message"
+          merge_sha="$(
+            git -C "$control_repo" commit-tree "$merge_tree" \
+              -p "$right_sha" \
+              -p "$left_sha" \
+              < "$control_root/commit-message"
+          )"
+          git -C "$control_repo" update-ref refs/heads/right "$merge_sha"
+          git -C "$control_repo" reset --quiet --hard "$merge_sha"
+
+          if git -C "$control_repo" cat-file -e "$left_sha:merge-only-private-key.pem" 2>/dev/null ||
+            git -C "$control_repo" cat-file -e "$right_sha:merge-only-private-key.pem" 2>/dev/null; then
+            echo "Merge-result control leaked into a parent" >&2
+            exit 2
+          fi
+
+          set +e
+          "$RUNNER_TEMP/gitleaks-bin/gitleaks" git "$control_repo" \
+            --log-opts="$base_sha..$merge_sha" \
+            --redact \
+            --no-banner \
+            --exit-code 1 \
+            > "$control_root/history.out" 2> "$control_root/history.err"
+          history_control_rc=$?
+
+          git -C "$control_repo" archive --format=tar --output="$control_archive" "$merge_sha"
+          tar -xf "$control_archive" -C "$archive_tree"
+          "$RUNNER_TEMP/gitleaks-bin/gitleaks" dir "$archive_tree" \
+            --redact \
+            --no-banner \
+            --exit-code 1 \
+            > "$control_root/archive.out" 2> "$control_root/archive.err"
+          archive_control_rc=$?
+
+          set -e
+          git -C "$control_repo" ls-tree -rz --full-tree "$merge_sha" > "$tree_listing"
+          blob_count=0
+          while IFS= read -r -d '' tree_entry; do
+            metadata="${tree_entry%%$'\t'*}"
+            path="${tree_entry#*$'\t'}"
+            read -r object_mode object_type object_id <<< "$metadata"
+            if [[ "$object_type" != "blob" ]]; then
+              continue
+            fi
+            destination="$blob_tree/$path"
+            if [[ "$path" == */* ]]; then
+              mkdir -p "$blob_tree/${path%/*}"
+            fi
+            git -C "$control_repo" cat-file blob "$object_id" > "$destination"
+            if [[ "$object_mode" == "100755" ]]; then
+              chmod 0755 "$destination"
+            fi
+            blob_count=$((blob_count + 1))
+          done < "$tree_listing"
+          if [[ "$blob_count" -eq 0 ]]; then
+            echo "Gitleaks blob-tree control materialized no blobs" >&2
+            exit 2
+          fi
+          set +e
+          "$RUNNER_TEMP/gitleaks-bin/gitleaks" dir "$blob_tree" \
+            --redact \
+            --no-banner \
+            --exit-code 1 \
+            > "$control_root/blob-tree.out" 2> "$control_root/blob-tree.err"
+          blob_tree_control_rc=$?
+          set -e
+
+          printf 'HISTORY_CONTROL_RC=%s\n' "$history_control_rc"
+          printf 'ARCHIVE_CONTROL_RC=%s\n' "$archive_control_rc"
+          printf 'BLOB_TREE_CONTROL_RC=%s\n' "$blob_tree_control_rc"
+          if [[ "$history_control_rc" -ne 0 || "$archive_control_rc" -ne 0 || "$blob_tree_control_rc" -ne 1 ]]; then
+            echo "Gitleaks merge-result coverage control failed" >&2
+            exit 2
+          fi
+      - name: Scan the exact range and checked-out head tree
+        env:
+          GITLEAKS_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          GITLEAKS_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GITLEAKS_PUSH_BASE_SHA: ${{ github.event.before }}
+          GITLEAKS_PUSH_HEAD_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
+            base_sha="$GITLEAKS_PR_BASE_SHA"
+            head_sha="$GITLEAKS_PR_HEAD_SHA"
+          else
+            base_sha="$GITLEAKS_PUSH_BASE_SHA"
+            head_sha="$GITLEAKS_PUSH_HEAD_SHA"
+          fi
+          sha_pattern='^[0-9a-f]{40}$'
+          if [[ ! "$base_sha" =~ $sha_pattern || ! "$head_sha" =~ $sha_pattern ]]; then
+            echo "Invalid gitleaks commit range" >&2
+            exit 2
+          fi
+          git checkout --detach --quiet "$head_sha"
+          actual_head="$(git rev-parse HEAD)"
+          if [[ "$actual_head" != "$head_sha" ]]; then
+            echo "Gitleaks checkout does not match the candidate head" >&2
+            exit 2
+          fi
+          if [[ "$base_sha" == "0000000000000000000000000000000000000000" ]]; then
+            GITLEAKS_LOG_OPTS="$head_sha"
+          else
+            GITLEAKS_LOG_OPTS="$base_sha..$head_sha"
+          fi
+          export GITLEAKS_LOG_OPTS
+          "$RUNNER_TEMP/gitleaks-bin/gitleaks" git . \
+            --log-opts="$GITLEAKS_LOG_OPTS" \
+            --redact \
+            --no-banner \
+            --platform github \
+            --exit-code 1
+
+          head_tree="$RUNNER_TEMP/gitleaks-head-tree"
+          tree_listing="$RUNNER_TEMP/gitleaks-head-tree.lst"
+          mkdir -p "$head_tree"
+          git ls-tree -rz --full-tree "$actual_head" > "$tree_listing"
+          blob_count=0
+          while IFS= read -r -d '' tree_entry; do
+            metadata="${tree_entry%%$'\t'*}"
+            path="${tree_entry#*$'\t'}"
+            read -r object_mode object_type object_id <<< "$metadata"
+            if [[ "$object_type" != "blob" ]]; then
+              continue
+            fi
+            destination="$head_tree/$path"
+            if [[ "$path" == */* ]]; then
+              mkdir -p "$head_tree/${path%/*}"
+            fi
+            git cat-file blob "$object_id" > "$destination"
+            if [[ "$object_mode" == "100755" ]]; then
+              chmod 0755 "$destination"
+            fi
+            blob_count=$((blob_count + 1))
+          done < "$tree_listing"
+          if [[ "$blob_count" -eq 0 ]]; then
+            echo "Gitleaks exact-head materialization produced no blobs" >&2
+            exit 2
+          fi
+          "$RUNNER_TEMP/gitleaks-bin/gitleaks" dir "$head_tree" \
+            --redact \
+            --no-banner \
+            --exit-code 1
+
+  ci:
+    runs-on: ubuntu-latest
+
+    # The server store has two durable backends and the suite is parameterised over
+    # whichever ones are reachable. Without a Postgres here, CI silently exercised only
+    # memory and sqlite and reported green for a backend it never touched - which is
+    # exactly the coverage gap the parameterisation exists to close.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # Names the maintenance database. Each fixture creates and drops its own database
+      # under it, so test files can run concurrently without sharing a run queue.
+      HASNA_SKILLS_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+
+    steps:
+      - uses: actions/checkout@v6
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Typecheck
+        run: bun run typecheck
+      # Build BEFORE test, on purpose. The boundary guards scan the packed file
+      # list, and `bin/` and `dist/` only exist after a build. Running tests
+      # first meant they scanned a package with no executable code in it: 471
+      # skill files, and nothing built from `src/` — so the guards certified a
+      # tree they had never read. Tests now assert per-entry-point coverage and
+      # will fail loudly if this order is reversed again.
+      - name: Build
+        run: bun run build
+      - name: Test
+        run: bun run test
+      # The release guard is the only gate that runs at publish time. Running it
+      # in CI too means a boundary violation fails the PR rather than the
+      # release.
+      - name: Release guard
+        run: bun run verify:release
