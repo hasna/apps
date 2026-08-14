@@ -529,7 +529,7 @@ function dirHasAuthMaterial(dir: string, tool?: ToolDef): boolean {
  * through explicit removals — and are only ever cleaned by this explicit verb.
  *
  * Safety posture (this is credential data):
- * - refuses outright in api/cloud storage mode — profile records live in the
+ * - refuses outright in API transport — profile records live in the
  *   cloud registry there, so the LOCAL registry cannot prove non-reference;
  * - a registered claude profile whose dir is missing, or whose dir carries
  *   auth material without a resolvable uuid, is UNRESOLVED — listed in the
@@ -540,7 +540,7 @@ function dirHasAuthMaterial(dir: string, tool?: ToolDef): boolean {
 export function sweepCentralAuth(opts: { delete?: boolean } = {}): SweepResult {
   if (resolveStore().transport !== "local") {
     throw new AccountsError(
-      "auth sweep requires local storage mode: in api mode profile records live in the cloud registry, so the local registry cannot prove a central entry is unreferenced",
+      "auth sweep requires the local registry: in API transport profile records live in the server registry, so the local registry cannot prove a central entry is unreferenced",
     );
   }
 

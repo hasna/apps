@@ -222,7 +222,7 @@ export interface BrokerOptions {
    * Omitted, `convergeDirCredential` resolves the UNION of the active
    * registry (via `resolveStore()`, bounded by `ACTIVE_REGISTRY_TIMEOUT_MS`)
    * and the local file — see `allowlistProfiles`. Through 0.2.32 it read the
-   * LOCAL file unconditionally, so on a cloud-mode machine every cloud-only
+   * LOCAL file unconditionally, so in API transport every server-only
    * profile dir was refused as unregistered and per-session convergence
    * silently died (bug 2865f9f5). The SYNC identity-level entry points
    * (`convergeIdentityCredential`) still default to the local file: they
@@ -555,10 +555,10 @@ export function assertRegisteredConfigDir(
 
 /**
  * The allowlist for dir-level convergence: the UNION of the ACTIVE registry
- * (via `resolveStore()` — the cloud ApiStore when configured, the local file
+ * (via `resolveStore()` — the HTTP ApiStore when configured, the local file
  * otherwise) and the LOCAL file.
  *
- * Not the local file alone: that is bug 2865f9f5 — on a cloud-mode machine it
+ * Not the local file alone: that is bug 2865f9f5 — in API transport it
  * describes a fraction of the fleet, so every cloud-only profile dir was
  * refused as unregistered and the hook's per-session convergence silently
  * died.

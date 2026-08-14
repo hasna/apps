@@ -36,71 +36,8 @@ describe("resolveAccountsCloud", () => {
     expect(resolveAccountsCloud({ HASNA_ACCOUNTS_API_URL: BASE } as NodeJS.ProcessEnv).transport).toBe("local");
   });
 
-  for (const mode of ["cloud", "self_hosted"]) {
-    test(`explicit ${mode} fails closed when URL and key are missing`, () => {
-      expect(() =>
-        resolveAccountsCloud({ HASNA_ACCOUNTS_STORAGE_MODE: mode } as NodeJS.ProcessEnv),
-      ).toThrow(/requires HASNA_ACCOUNTS_API_URL and HASNA_ACCOUNTS_API_KEY/);
-    });
-
-    test(`explicit ${mode} fails closed when only URL is configured`, () => {
-      expect(() =>
-        resolveAccountsCloud({
-          HASNA_ACCOUNTS_STORAGE_MODE: mode,
-          HASNA_ACCOUNTS_API_URL: BASE,
-        } as NodeJS.ProcessEnv),
-      ).toThrow(/requires HASNA_ACCOUNTS_API_KEY/);
-    });
-  }
-
-  test("only retired storage aliases are silently ignored", () => {
-    for (const mode of ["remote", "hybrid", "s3"]) {
-      expect(
-        resolveAccountsCloud({ HASNA_ACCOUNTS_STORAGE_MODE: mode } as NodeJS.ProcessEnv).transport,
-      ).toBe("local");
-    }
-    expect(() =>
-      resolveAccountsCloud({ HASNA_ACCOUNTS_STORAGE_MODE: "typo" } as NodeJS.ProcessEnv),
-    ).toThrow(/invalid accounts storage mode/);
-  });
-
-  test("retired aliases do not mask a lower canonical hosted authority", () => {
-    expect(() =>
-      resolveAccountsCloud({
-        HASNA_ACCOUNTS_STORAGE_MODE: "remote",
-        ACCOUNTS_STORAGE_MODE: "hybrid",
-        HASNA_ACCOUNTS_MODE: "cloud",
-        HASNA_ACCOUNTS_API_URL: BASE,
-      } as NodeJS.ProcessEnv),
-    ).toThrow(/cloud storage mode requires HASNA_ACCOUNTS_API_KEY/);
-
-    expect(() =>
-      resolveAccountsCloud({
-        HASNA_ACCOUNTS_STORAGE_MODE: "s3",
-        ACCOUNTS_STORAGE_MODE: "self_hosted",
-        HASNA_ACCOUNTS_API_KEY: KEY,
-      } as NodeJS.ProcessEnv),
-    ).toThrow(/self_hosted storage mode requires HASNA_ACCOUNTS_API_URL/);
-  });
-
-  test("retired aliases do not mask a lower explicit local authority", () => {
-    expect(
-      resolveAccountsCloud({
-        ...cloudEnv,
-        HASNA_ACCOUNTS_STORAGE_MODE: "remote",
-        ACCOUNTS_STORAGE_MODE: "hybrid",
-        HASNA_ACCOUNTS_MODE: "local",
-      } as NodeJS.ProcessEnv).transport,
-    ).toBe("local");
-  });
-
-  test("retired aliases do not mask an invalid lower authority", () => {
-    expect(() =>
-      resolveAccountsCloud({
-        HASNA_ACCOUNTS_STORAGE_MODE: "remote",
-        ACCOUNTS_STORAGE_MODE: "typo",
-      } as NodeJS.ProcessEnv),
-    ).toThrow(/invalid accounts storage mode/);
+  test("local when only KEY set", () => {
+    expect(resolveAccountsCloud({ HASNA_ACCOUNTS_API_KEY: KEY } as NodeJS.ProcessEnv).transport).toBe("local");
   });
 
   test("cloud-http when URL+KEY set; baseUrl is <url>/v1", () => {
@@ -109,25 +46,45 @@ describe("resolveAccountsCloud", () => {
     if (r.transport === "cloud-http") expect(r.api.baseUrl).toBe(`${BASE}/v1`);
   });
 
-  test("ACCOUNTS_HOME forces local when URL+KEY are inherited", () => {
+  test("ACCOUNTS_HOME does not override the API pair: URL+KEY still select the HTTP transport", () => {
     expect(
       resolveAccountsCloud({ ...cloudEnv, ACCOUNTS_HOME: "/tmp/accounts-probe" } as NodeJS.ProcessEnv)
         .transport,
-    ).toBe("local");
-  });
-
-  test("explicit hosted mode wins over ACCOUNTS_HOME", () => {
-    expect(
-      resolveAccountsCloud({
-        ...cloudEnv,
-        ACCOUNTS_HOME: "/tmp/accounts-machine-state",
-        HASNA_ACCOUNTS_STORAGE_MODE: "cloud",
-      } as NodeJS.ProcessEnv).transport,
     ).toBe("cloud-http");
   });
 
-  test("explicit STORAGE_MODE=local forces local even with URL+KEY", () => {
-    expect(resolveAccountsCloud({ ...cloudEnv, HASNA_ACCOUNTS_STORAGE_MODE: "local" } as NodeJS.ProcessEnv).transport).toBe("local");
+  // Deployment modes no longer exist (owner directive 2026-07-29; knowledge
+  // k_ms5wv466_u0jidq): any retired storage-mode variable, whatever its value,
+  // throws naming the variable instead of steering the transport.
+  for (const [key, value] of [
+    ["HASNA_ACCOUNTS_STORAGE_MODE", "cloud"],
+    ["HASNA_ACCOUNTS_STORAGE_MODE", "local"],
+    ["HASNA_ACCOUNTS_STORAGE_MODE", "self_hosted"],
+    ["HASNA_ACCOUNTS_STORAGE_MODE", "remote"],
+    ["HASNA_ACCOUNTS_STORAGE_MODE", "hybrid"],
+    ["HASNA_ACCOUNTS_STORAGE_MODE", "s3"],
+    ["HASNA_ACCOUNTS_STORAGE_MODE", "typo"],
+    ["ACCOUNTS_STORAGE_MODE", "cloud"],
+    ["HASNA_ACCOUNTS_MODE", "local"],
+    ["ACCOUNTS_MODE", "cloud"],
+  ] as const) {
+    test(`retired variable ${key}=${value} throws naming the variable`, () => {
+      expect(() => resolveAccountsCloud({ [key]: value } as NodeJS.ProcessEnv)).toThrow(
+        new RegExp(`${key} was removed`),
+      );
+    });
+  }
+
+  test("retired variables throw even when URL+KEY are present", () => {
+    expect(() =>
+      resolveAccountsCloud({ ...cloudEnv, HASNA_ACCOUNTS_STORAGE_MODE: "cloud" } as NodeJS.ProcessEnv),
+    ).toThrow(/HASNA_ACCOUNTS_STORAGE_MODE was removed/);
+  });
+
+  test("retired variables throw even when ACCOUNTS_HOME is overridden", () => {
+    expect(() =>
+      resolveAccountsCloud({ ACCOUNTS_HOME: "/tmp/accounts-probe", HASNA_ACCOUNTS_STORAGE_MODE: "local" } as NodeJS.ProcessEnv),
+    ).toThrow(/HASNA_ACCOUNTS_STORAGE_MODE was removed/);
   });
 
   test("list GETs /v1/accounts (with tool filter) and maps accounts->profiles", async () => {

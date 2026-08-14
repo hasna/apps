@@ -5,8 +5,10 @@
 // filesystem backend behind `LocalStore` in `./lib/store.ts`. There is no S3 /
 // "remote" / "hybrid" storage tier here: the single storage abstraction is the
 // `AccountsStore` in `./lib/store.ts`, whose only two transports are LocalStore
-// (these primitives) and ApiStore (the `<API_URL>/v1` HTTP client). Self-hosted
-// and cloud both route through ApiStore; nothing bypasses the Store.
+// (these primitives) and ApiStore (the `<API_URL>/v1` HTTP client). Transport
+// selection is the presence of `HASNA_ACCOUNTS_API_URL` +
+// `HASNA_ACCOUNTS_API_KEY`; deployment modes no longer exist, and any retired
+// storage-mode variable throws via `assertNoLegacyStorageMode`.
 
 import { homedir, hostname } from "node:os";
 import { join } from "node:path";
@@ -14,6 +16,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { type Store, storeSchema, AccountsError, profileNameSchema } from "./types.js";
 import { writeFileAtomic } from "./lib/safe-path.js";
 import { crossProviderCollisions } from "./lib/name-invariant.js";
+import { assertNoLegacyStorageMode } from "./lib/retired-storage-mode.js";
 
 function validateEnvPath(value: string, label: string): string {
   const trimmed = value.trim();
@@ -94,7 +97,7 @@ export function loadMachineStore(): Store {
  * The machine-local `applied` pointer map (toolId -> profile name): which
  * profile's auth is currently restored to each tool's live default paths on
  * THIS machine. This is genuinely machine-local state (never in the shared
- * cloud registry), so readiness/doctor read it here regardless of storage mode.
+ * server registry), so readiness/doctor read it here regardless of transport.
  * Entries are validated for name shape only — a pointer to a profile that no
  * longer exists is preserved so `accounts doctor` can flag it as stale.
  */
@@ -242,56 +245,25 @@ export function saveStore(store: Store): void {
 
 /**
  * Deprecated source-compatibility shims for the pre-AccountsStore storage API.
- * They intentionally contain no cloud-provider implementation.
+ * They intentionally contain no cloud-provider implementation. Deployment-mode
+ * vocabulary is dead: any retired STORAGE_MODE variable throws via
+ * `assertNoLegacyStorageMode`, and the only transport switch is the presence
+ * of `HASNA_ACCOUNTS_API_URL` + `HASNA_ACCOUNTS_API_KEY`.
  */
-export const ACCOUNTS_STORAGE_ENV = {
-  mode: "HASNA_ACCOUNTS_STORAGE_MODE",
-  s3Bucket: "HASNA_ACCOUNTS_S3_BUCKET",
-  s3Prefix: "HASNA_ACCOUNTS_S3_PREFIX",
-  awsRegion: "HASNA_ACCOUNTS_AWS_REGION",
-  s3Endpoint: "HASNA_ACCOUNTS_S3_ENDPOINT",
-  s3ForcePathStyle: "HASNA_ACCOUNTS_S3_FORCE_PATH_STYLE",
-  machineId: "HASNA_ACCOUNTS_MACHINE_ID",
-} as const;
 
-export const ACCOUNTS_STORAGE_FALLBACK_ENV = {
-  mode: "ACCOUNTS_STORAGE_MODE",
-  s3Bucket: "ACCOUNTS_S3_BUCKET",
-  s3Prefix: "ACCOUNTS_S3_PREFIX",
-  awsRegion: "ACCOUNTS_AWS_REGION",
-  s3Endpoint: "ACCOUNTS_S3_ENDPOINT",
-  s3ForcePathStyle: "ACCOUNTS_S3_FORCE_PATH_STYLE",
-  machineId: "ACCOUNTS_MACHINE_ID",
-} as const;
+export type AccountsStorageTransport = "local" | "api";
 
-export const STORAGE_MODE_ENV = ACCOUNTS_STORAGE_ENV.mode;
 export const STORAGE_TABLES = [] as const;
-export type AccountsStorageMode = "local" | "self_hosted" | "cloud" | "remote" | "hybrid";
 
 export interface AccountsStorageConfig {
-  mode: AccountsStorageMode;
-  s3Bucket?: string;
-  s3Prefix: string;
-  awsRegion?: string;
-  s3Endpoint?: string;
-  s3ForcePathStyle?: boolean;
+  transport: AccountsStorageTransport;
   machineId: string;
 }
 
 export interface AccountsStorageStatus {
   configured: boolean;
-  mode: AccountsStorageMode;
+  transport: AccountsStorageTransport;
   local: { home: string; storePath: string; profilesDir: string };
-  remote: {
-    configured: boolean;
-    bucketEnv: string;
-    bucket?: string;
-    prefix: string;
-    regionEnv: string;
-    endpointConfigured: boolean;
-  };
-  env: typeof ACCOUNTS_STORAGE_ENV;
-  fallbackEnv: typeof ACCOUNTS_STORAGE_FALLBACK_ENV;
   tables: readonly [];
 }
 
@@ -304,7 +276,7 @@ export interface AccountsStorageSnapshot {
 }
 
 export interface AccountsStorageSyncResult {
-  mode: AccountsStorageMode;
+  transport: AccountsStorageTransport;
   pushed: number;
   pulled: number;
   skipped: boolean;
@@ -312,17 +284,18 @@ export interface AccountsStorageSyncResult {
   reason?: string;
 }
 
-function compatibilityMode(env: NodeJS.ProcessEnv): AccountsStorageMode {
-  const value = (env.HASNA_ACCOUNTS_STORAGE_MODE || env.ACCOUNTS_STORAGE_MODE || "").trim().toLowerCase();
-  if (value === "cloud" || value === "self_hosted") return value;
-  return "local";
+function accountsTransport(env: NodeJS.ProcessEnv): AccountsStorageTransport {
+  const url = env.HASNA_ACCOUNTS_API_URL || env.ACCOUNTS_API_URL;
+  // hasna-credential-seam-waiver: deprecated compat shim checks key PRESENCE only to name the transport; the value is never read, logged, or forwarded — consumption stays inside the @hasna/contracts transport.
+  const key = env.HASNA_ACCOUNTS_API_KEY || env.ACCOUNTS_API_KEY;
+  return url && key ? "api" : "local";
 }
 
 /** @deprecated Use resolveStore() and AccountsStore.transport. */
 export function getAccountsStorageConfig(env: NodeJS.ProcessEnv = process.env): AccountsStorageConfig {
+  assertNoLegacyStorageMode(env);
   return {
-    mode: compatibilityMode(env),
-    s3Prefix: "accounts/",
+    transport: accountsTransport(env),
     machineId: env.HASNA_ACCOUNTS_MACHINE_ID || env.ACCOUNTS_MACHINE_ID || hostname(),
   };
 }
@@ -330,23 +303,10 @@ export function getAccountsStorageConfig(env: NodeJS.ProcessEnv = process.env): 
 /** @deprecated Use resolveStore(), health, or readiness. */
 export function getAccountsStorageStatus(env: NodeJS.ProcessEnv = process.env): AccountsStorageStatus {
   const config = getAccountsStorageConfig(env);
-  const apiConfigured = Boolean(
-    (env.HASNA_ACCOUNTS_API_URL || env.ACCOUNTS_API_URL) &&
-    (env.HASNA_ACCOUNTS_API_KEY || env.ACCOUNTS_API_KEY),
-  );
   return {
-    configured: config.mode === "local" || apiConfigured,
-    mode: config.mode,
+    configured: true,
+    transport: config.transport,
     local: { home: accountsHome(), storePath: storePath(), profilesDir: profilesDir() },
-    remote: {
-      configured: false,
-      bucketEnv: ACCOUNTS_STORAGE_ENV.s3Bucket,
-      prefix: config.s3Prefix,
-      regionEnv: ACCOUNTS_STORAGE_ENV.awsRegion,
-      endpointConfigured: false,
-    },
-    env: ACCOUNTS_STORAGE_ENV,
-    fallbackEnv: ACCOUNTS_STORAGE_FALLBACK_ENV,
     tables: STORAGE_TABLES,
   };
 }
@@ -377,7 +337,7 @@ export function accountsStorageSnapshotKey(_env: NodeJS.ProcessEnv = process.env
 
 function retiredSyncError(): AccountsError {
   return new AccountsError(
-    "legacy storage sync was retired; use local mode or configure the Accounts API for self_hosted/cloud mode",
+    "legacy storage sync was retired; use the local store, or the HTTP API selected by HASNA_ACCOUNTS_API_URL + HASNA_ACCOUNTS_API_KEY",
   );
 }
 

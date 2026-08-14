@@ -39,18 +39,13 @@ describe("resolveStore transport selection", () => {
     expect(resolveStore(cloudEnv).transport).toBe("api");
   });
 
-  test("ACCOUNTS_HOME uses LocalStore even with inherited API URL+KEY", () => {
+  test("ACCOUNTS_HOME does not override the API pair: URL+KEY still use ApiStore", () => {
     expect(
       resolveStore({ ...cloudEnv, ACCOUNTS_HOME: "/tmp/accounts-probe" } as NodeJS.ProcessEnv)
         .transport,
-    ).toBe("local");
+    ).toBe("api");
   });
 
-  test("forced local mode uses LocalStore even with URL+KEY", () => {
-    expect(
-      resolveStore({ ...cloudEnv, HASNA_ACCOUNTS_STORAGE_MODE: "local" } as NodeJS.ProcessEnv).transport,
-    ).toBe("local");
-  });
 });
 
 describe("ApiStore routes registry ops to /v1", () => {
@@ -440,7 +435,6 @@ describe("ApiStore routes registry ops to /v1", () => {
 
       const localStore = resolveStore({
         ACCOUNTS_HOME: home,
-        HASNA_ACCOUNTS_STORAGE_MODE: "local",
       } as NodeJS.ProcessEnv);
       expect((await localStore.listTools()).some((tool) => tool.id === "acme")).toBe(false);
     });
@@ -518,7 +512,6 @@ describe("resolveLocalStore (the usage-hook's local view) unions on-disk profile
     // Control: the ordinary registry-backed store cannot see it.
     const registryStore = resolveStore({
       ACCOUNTS_HOME: home,
-      HASNA_ACCOUNTS_STORAGE_MODE: "local",
     } as NodeJS.ProcessEnv);
     expect((await registryStore.listProfiles("claude")).map((p) => p.name)).not.toContain(
       "account037",

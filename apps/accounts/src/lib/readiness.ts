@@ -106,8 +106,6 @@ export interface AccountsSupervisorReadiness {
 
 export interface AccountsStorageReadiness {
   status: AccountsReadinessStatus;
-  /** `local` (on-box JSON registry) or `self_hosted` (cloud HTTP `/v1` API). */
-  mode: "local" | "self_hosted";
   /** Store transport in effect: `local` (fs) or `api` (contracts HTTP client). */
   transport: "local" | "api";
   configured: boolean;
@@ -117,7 +115,7 @@ export interface AccountsStorageReadiness {
     profilesDir: string;
     storeExists: boolean;
   };
-  /** Present only in api mode: the `<url>/v1` base the client reads/writes. */
+  /** Present only in api transport: the `<url>/v1` base the client reads/writes. */
   api?: {
     baseUrl: string;
   };
@@ -417,16 +415,15 @@ function storageReadiness(env: NodeJS.ProcessEnv): AccountsStorageReadiness {
   try {
     cloud = resolveAccountsCloud(env);
   } catch (err) {
-    // Cloud was requested but is misconfigured (e.g. URL without a key). Surface
-    // it without leaking the key or a raw stack trace.
+    // Transport resolution failed (retired storage-mode variable set, or API
+    // misconfiguration). Surface it without leaking the key or a raw stack.
     const message = err instanceof Error ? err.message : String(err);
     return {
       status: "unavailable",
-      mode: "self_hosted",
       transport: "api",
       configured: false,
       local,
-      reasons: [`self_hosted storage is misconfigured: ${message}`],
+      reasons: [`accounts storage is misconfigured: ${message}`],
       nextActions: [
         "Set both HASNA_ACCOUNTS_API_URL and HASNA_ACCOUNTS_API_KEY, or unset them to use local storage.",
       ],
@@ -436,7 +433,6 @@ function storageReadiness(env: NodeJS.ProcessEnv): AccountsStorageReadiness {
   if (cloud.transport === "cloud-http") {
     return {
       status: "ok",
-      mode: "self_hosted",
       transport: "api",
       configured: true,
       local,
@@ -448,7 +444,6 @@ function storageReadiness(env: NodeJS.ProcessEnv): AccountsStorageReadiness {
 
   return {
     status: "ok",
-    mode: "local",
     transport: "local",
     configured: true,
     local,
@@ -489,7 +484,7 @@ function unavailableReadiness(generatedAt: string, env: NodeJS.ProcessEnv, err: 
   const storage = storageReadiness(env);
   const checks = [
     check("store", "Profile registry", "unavailable", "accounts store could not be loaded", [message], ["Fix the accounts store JSON before checking readiness again."]),
-    check("storage", "Registry storage", storage.status, storage.status === "ok" ? `registry storage is ${storage.mode}` : "registry storage is misconfigured", storage.reasons, storage.nextActions),
+    check("storage", "Registry storage", storage.status, storage.status === "ok" ? `registry storage is ${storage.transport}` : "registry storage is misconfigured", storage.reasons, storage.nextActions),
   ];
   const status = worst(checks.map((item) => item.status));
   return {
@@ -511,11 +506,11 @@ export async function getAccountsReadiness(opts: AccountsReadinessOptions = {}):
   const env = opts.env ?? process.env;
   const generatedAt = (opts.now ?? new Date()).toISOString();
 
-  // Route the shared registry (profiles, custom tools, and the cloud-owned
-  // `current` selection) through the Store so api mode reads the cloud, not a
-  // stale local file. `applied` is genuinely machine-local (which profile's
+  // Route the shared registry (profiles, custom tools, and the API-owned
+  // `current` selection) through the Store so api transport reads the API, not
+  // a stale local file. `applied` is genuinely machine-local (which profile's
   // auth is restored to the tool's live paths on THIS box), so it is read from
-  // the on-box registry regardless of mode.
+  // the on-box registry regardless of transport.
   let allProfiles: Profile[];
   let tools: ToolDef[];
   let current: Record<string, string>;
@@ -589,7 +584,7 @@ export async function getAccountsReadiness(opts: AccountsReadinessOptions = {}):
       "storage",
       "Registry storage",
       storage.status,
-      storage.status === "ok" ? `registry storage is ${storage.mode}` : "registry storage is misconfigured",
+      storage.status === "ok" ? `registry storage is ${storage.transport}` : "registry storage is misconfigured",
       storage.reasons,
       storage.nextActions,
     ),

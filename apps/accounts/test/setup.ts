@@ -101,6 +101,10 @@ const remoteConfigurationKeys = [
   "APP_API_KEY",
   "HASNA_ACCOUNTS_DATABASE_URL",
   "ACCOUNTS_DATABASE_URL",
+  "HASNA_ACCOUNTS_STORAGE_MODE",
+  "HASNA_ACCOUNTS_MODE",
+  "ACCOUNTS_STORAGE_MODE",
+  "ACCOUNTS_MODE",
   "HASNA_ACCOUNTS_S3_BUCKET",
   "HASNA_ACCOUNTS_S3_PREFIX",
   "HASNA_ACCOUNTS_AWS_REGION",
@@ -219,9 +223,6 @@ function resetTestEnvironment(): void {
   }
 
   process.env.NODE_ENV = "test";
-  process.env.HASNA_ACCOUNTS_STORAGE_MODE = "local";
-  process.env.ACCOUNTS_STORAGE_MODE = "local";
-  process.env.HASNA_ACCOUNTS_MODE = "local";
   process.env.HASNA_ACCOUNTS_MACHINE_ID = "accounts-test-worker";
   process.env.ACCOUNTS_MACHINE_ID = "accounts-test-worker";
 

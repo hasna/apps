@@ -49,49 +49,15 @@ describe("root synchronous compatibility exports", () => {
     }
   });
 
-  test("explicit local authority wins over retained hosted URL and key", () => {
-    process.env.HASNA_ACCOUNTS_STORAGE_MODE = "local";
-    process.env.HASNA_ACCOUNTS_API_URL = "https://accounts.example.test";
-    process.env.HASNA_ACCOUNTS_API_KEY = "fixture-authority";
-    expect(loadStore().version).toBe(1);
-    expect(listTools().some((tool) => tool.id === "claude")).toBe(true);
-    expect(listProfiles()).toEqual([]);
-    expect(addProfile({ name: "local-only", tool: "claude" }).name).toBe("local-only");
-    expect(listProfiles().map((profile) => profile.name)).toEqual(["local-only"]);
-  });
-
-  test("an incomplete retained hosted configuration resolves to local authority", () => {
+  test("an incomplete retained API configuration resolves to local authority", () => {
     process.env.HASNA_ACCOUNTS_API_URL = "https://accounts.example.test";
     expect(loadStore().version).toBe(1);
     expect(addProfile({ name: "still-local", tool: "claude" }).name).toBe("still-local");
   });
 
-  test("ACCOUNTS_HOME wins over retained hosted URL and key", () => {
+  test("writes fail closed while reads stay answerable under API authority", () => {
     process.env.HASNA_ACCOUNTS_API_URL = "https://accounts.example.test";
     process.env.HASNA_ACCOUNTS_API_KEY = "fixture-authority";
-    expect(loadStore().version).toBe(1);
-    expect(addProfile({ name: "scoped-local", tool: "claude" }).name).toBe("scoped-local");
-  });
-
-  test.each([
-    [
-      "cloud mode",
-      {
-        HASNA_ACCOUNTS_STORAGE_MODE: "cloud",
-        HASNA_ACCOUNTS_API_URL: "https://accounts.example.test",
-        HASNA_ACCOUNTS_API_KEY: "fixture-authority",
-      },
-    ],
-    [
-      "self-hosted mode",
-      {
-        HASNA_ACCOUNTS_STORAGE_MODE: "self_hosted",
-        HASNA_ACCOUNTS_API_URL: "https://accounts.example.test",
-        HASNA_ACCOUNTS_API_KEY: "fixture-authority",
-      },
-    ],
-  ])("writes fail closed for %s while reads stay answerable", (_label, env) => {
-    Object.assign(process.env, env);
     expect(() => addProfile({ name: "must-not-write" })).toThrow(/local-only compatibility/);
     expect(() => saveStore(emptyStore())).toThrow(/local-only compatibility/);
     expect(() =>
@@ -115,79 +81,35 @@ describe("root synchronous compatibility exports", () => {
     expect(existsSync(join(home, "profiles"))).toBe(false);
   });
 
+  // Deployment modes no longer exist (owner directive 2026-07-29; knowledge
+  // k_ms5wv466_u0jidq): any retired storage-mode variable, whatever its value,
+  // fails loud naming the variable, and no root export can route around it.
   test.each([
+    ["explicit cloud mode", { HASNA_ACCOUNTS_STORAGE_MODE: "cloud" }, /HASNA_ACCOUNTS_STORAGE_MODE was removed/],
+    ["explicit self-hosted mode", { HASNA_ACCOUNTS_STORAGE_MODE: "self_hosted" }, /HASNA_ACCOUNTS_STORAGE_MODE was removed/],
+    ["unknown mode", { HASNA_ACCOUNTS_STORAGE_MODE: "typo" }, /HASNA_ACCOUNTS_STORAGE_MODE was removed/],
+    ["retired alias", { HASNA_ACCOUNTS_STORAGE_MODE: "remote" }, /HASNA_ACCOUNTS_STORAGE_MODE was removed/],
     [
-      "incomplete explicit cloud",
-      {
-        HASNA_ACCOUNTS_STORAGE_MODE: "cloud",
-        HASNA_ACCOUNTS_API_URL: "https://accounts.example.test",
-      },
-      /requires HASNA_ACCOUNTS_API_KEY/,
+      "retired alias before lower-priority mode",
+      { HASNA_ACCOUNTS_STORAGE_MODE: "remote", ACCOUNTS_STORAGE_MODE: "typo" },
+      /HASNA_ACCOUNTS_STORAGE_MODE was removed/,
     ],
-    ["unknown mode", { HASNA_ACCOUNTS_STORAGE_MODE: "typo" }, /invalid accounts storage mode/],
     [
-      "retired alias before unknown mode",
-      {
-        HASNA_ACCOUNTS_STORAGE_MODE: "remote",
-        ACCOUNTS_STORAGE_MODE: "typo",
-      },
-      /invalid accounts storage mode/,
+      "mode alias key",
+      { HASNA_ACCOUNTS_MODE: "cloud", HASNA_ACCOUNTS_API_URL: "https://accounts.example.test", HASNA_ACCOUNTS_API_KEY: "fixture-authority" },
+      /HASNA_ACCOUNTS_MODE was removed/,
     ],
-  ])("propagates canonical resolver errors for %s", (_label, env, error) => {
+  ])("propagates the retired storage-mode refusal for %s", (_label, env, error) => {
     Object.assign(process.env, env);
     expect(() => listProfiles()).toThrow(error);
-    expect(existsSync(join(home, "accounts.json"))).toBe(false);
-  });
-
-  test.each([
-    [
-      "retired storage aliases before canonical cloud",
-      {
-        HASNA_ACCOUNTS_STORAGE_MODE: "remote",
-        ACCOUNTS_STORAGE_MODE: "hybrid",
-        HASNA_ACCOUNTS_MODE: "cloud",
-        HASNA_ACCOUNTS_API_URL: "https://accounts.example.test",
-      },
-      /requires HASNA_ACCOUNTS_API_KEY/,
-    ],
-    [
-      "retired storage alias before canonical self-hosted",
-      {
-        HASNA_ACCOUNTS_STORAGE_MODE: "s3",
-        ACCOUNTS_STORAGE_MODE: "self_hosted",
-        HASNA_ACCOUNTS_API_KEY: "fixture-authority",
-      },
-      /requires HASNA_ACCOUNTS_API_URL/,
-    ],
-  ])("retired aliases cannot mask hosted authority for %s", (_label, env, error) => {
-    Object.assign(process.env, env);
-    expect(() => ensureProfileForLogin("must-not-write")).toThrow(error);
     expect(() => addProfile({ name: "must-not-write" })).toThrow(error);
     expect(existsSync(join(home, "accounts.json"))).toBe(false);
-    expect(existsSync(join(home, "profiles"))).toBe(false);
-  });
-
-  test("retired aliases cannot mask a lower explicit local authority", () => {
-    Object.assign(process.env, {
-      HASNA_ACCOUNTS_STORAGE_MODE: "remote",
-      ACCOUNTS_STORAGE_MODE: "hybrid",
-      HASNA_ACCOUNTS_MODE: "local",
-      HASNA_ACCOUNTS_API_URL: "https://accounts.example.test",
-      HASNA_ACCOUNTS_API_KEY: "fixture-authority",
-    });
-    expect(ensureProfileForLogin("local-after-retired")).toMatchObject({
-      name: "local-after-retired",
-      tool: "claude",
-    });
-    expect(existsSync(join(home, "accounts.json"))).toBe(true);
-    expect(existsSync(join(home, "profiles"))).toBe(true);
   });
 
   test.each([
     [
-      "cloud mode",
+      "API authority",
       {
-        HASNA_ACCOUNTS_STORAGE_MODE: "cloud",
         HASNA_ACCOUNTS_API_URL: "https://accounts.example.test",
         HASNA_ACCOUNTS_API_KEY: "fixture-authority",
       },
@@ -199,7 +121,7 @@ describe("root synchronous compatibility exports", () => {
       expect(appliedProfile("claude")).toMatchObject({ name: "ghost-local", tool: "claude" });
 
       Object.assign(process.env, env);
-      // The registry record behind the pointer belongs to the hosted registry,
+      // The registry record behind the pointer belongs to the server registry,
       // so this answer is machine-local and is announced as such (see
       // root-compat-consumer.test.ts). It is not withheld: the consumers that
       // read it wrap every call in try/catch, so withholding it produced a
@@ -221,20 +143,6 @@ describe("root synchronous compatibility exports", () => {
   test.each([
     ["default local", {}],
     [
-      "explicit local",
-      {
-        HASNA_ACCOUNTS_MODE: "local",
-      },
-    ],
-    [
-      "explicit local with retained hosted URL and key",
-      {
-        HASNA_ACCOUNTS_MODE: "local",
-        HASNA_ACCOUNTS_API_URL: "https://accounts.example.test",
-        HASNA_ACCOUNTS_API_KEY: "fixture-authority",
-      },
-    ],
-    [
       "implicit local with only a hosted URL",
       {
         HASNA_ACCOUNTS_API_URL: "https://accounts.example.test",
@@ -243,13 +151,6 @@ describe("root synchronous compatibility exports", () => {
     [
       "implicit local with only a hosted key",
       {
-        HASNA_ACCOUNTS_API_KEY: "fixture-authority",
-      },
-    ],
-    [
-      "ACCOUNTS_HOME with retained hosted URL and key",
-      {
-        HASNA_ACCOUNTS_API_URL: "https://accounts.example.test",
         HASNA_ACCOUNTS_API_KEY: "fixture-authority",
       },
     ],
@@ -263,45 +164,37 @@ describe("root synchronous compatibility exports", () => {
 
   test.each([
     [
-      "explicit cloud with URL and key",
+      // ACCOUNTS_HOME is set by beforeEach for this suite: the API pair selects
+      // the transport regardless, so the write still fails closed.
+      "API authority with URL and key (ACCOUNTS_HOME set)",
       {
-        HASNA_ACCOUNTS_MODE: "cloud",
         HASNA_ACCOUNTS_API_URL: "https://accounts.example.test",
         HASNA_ACCOUNTS_API_KEY: "fixture-authority",
       },
       /local-only compatibility/,
     ],
     [
-      "explicit self-hosted with URL and key",
-      {
-        HASNA_ACCOUNTS_MODE: "self_hosted",
-        HASNA_ACCOUNTS_API_URL: "https://accounts.example.test",
-        HASNA_ACCOUNTS_API_KEY: "fixture-authority",
-      },
-      /local-only compatibility/,
-    ],
-    [
-      "incomplete explicit cloud",
+      "retired mode with URL and key",
       {
         HASNA_ACCOUNTS_MODE: "cloud",
         HASNA_ACCOUNTS_API_URL: "https://accounts.example.test",
-      },
-      /requires HASNA_ACCOUNTS_API_KEY/,
-    ],
-    [
-      "incomplete explicit self-hosted",
-      {
-        HASNA_ACCOUNTS_MODE: "self_hosted",
         HASNA_ACCOUNTS_API_KEY: "fixture-authority",
       },
-      /requires HASNA_ACCOUNTS_API_URL/,
+      /HASNA_ACCOUNTS_MODE was removed/,
+    ],
+    [
+      "retired mode alone",
+      {
+        HASNA_ACCOUNTS_MODE: "cloud",
+      },
+      /HASNA_ACCOUNTS_MODE was removed/,
     ],
     [
       "invalid explicit mode",
       {
         HASNA_ACCOUNTS_MODE: "typo",
       },
-      /invalid accounts storage mode/,
+      /HASNA_ACCOUNTS_MODE was removed/,
     ],
   ])("ensureProfileForLogin fails closed without local writes for %s", (_label, env, error) => {
     Object.assign(process.env, env);
