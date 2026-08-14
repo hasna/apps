@@ -25,6 +25,17 @@ import {
   sha256File as fileDigest,
   tailscaleNodeIdSha256,
 } from "../../scripts/macos_artifact";
+// Gated to non-Darwin hosts with a recorded reason. This suite drives the real
+// install_macos_app.sh / build.sh / macos_artifact.ts fixture seams (tool overrides,
+// recovery/transition/crash hooks, Tailscale overrides) that the production code
+// deliberately refuses on a real Darwin host — documented in the installer header
+// ("The test overrides are accepted only when the real host kernel is not Darwin"),
+// test_fault_hooks_enabled (false on Darwin), installTransitionTestPoint (early return
+// on darwin), and resolve_tailscale_cli.sh ("structurally unreachable on Darwin").
+// These tests are the Linux CI gate's coverage; on macOS the seams they depend on are
+// closed by documented design, so they skip there. Pure source assertions run everywhere.
+const testOnNonDarwin = process.platform === "darwin" ? test.skip : test;
+
 
 process.env.RECORDINGS_TEST_FS_GUARD_ADDON = ensureNativeFsGuardAddon();
 
@@ -997,7 +1008,7 @@ describe("macOS install journal compatibility", () => {
     ];
   }
 
-  test("replays a pre-rename journal crash and removes only its safe stale temporary", () => {
+  testOnNonDarwin("replays a pre-rename journal crash and removes only its safe stale temporary", () => {
     const root = mkdtempSync(join(tmpdir(), "recordings-journal-pre-rename-"));
     temporaryDirectories.push(root);
     const applications = join(root, "home", "Applications");

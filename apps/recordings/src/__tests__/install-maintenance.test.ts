@@ -16,6 +16,17 @@ import {
   acquireLocalStoreReaderLease,
   withLocalStoreReaderLease,
 } from "../lib/install-maintenance.js";
+// Gated to non-Darwin hosts with a recorded reason. This suite drives the real
+// install_macos_app.sh / build.sh / macos_artifact.ts fixture seams (tool overrides,
+// recovery/transition/crash hooks, Tailscale overrides) that the production code
+// deliberately refuses on a real Darwin host — documented in the installer header
+// ("The test overrides are accepted only when the real host kernel is not Darwin"),
+// test_fault_hooks_enabled (false on Darwin), installTransitionTestPoint (early return
+// on darwin), and resolve_tailscale_cli.sh ("structurally unreachable on Darwin").
+// These tests are the Linux CI gate's coverage; on macOS the seams they depend on are
+// closed by documented design, so they skip there. Pure source assertions run everywhere.
+const testOnNonDarwin = process.platform === "darwin" ? test.skip : test;
+
 
 const repositoryRoot = resolve(import.meta.dir, "../..");
 const installer = join(repositoryRoot, "scripts", "install_macos_app.sh");
@@ -312,7 +323,7 @@ describe("installer maintenance marker", () => {
     expect(existsSync(fixture.lock)).toBeFalse();
   });
 
-  test("leaves the marker after a crash and the next lock owner safely reclaims it", async () => {
+  testOnNonDarwin("leaves the marker after a crash and the next lock owner safely reclaims it", async () => {
     const fixture = createEarlyInstallerFixture();
     const crashed = Bun.spawn(installerArguments(fixture), {
       env: installerEnvironment(fixture, { RECORDINGS_TEST_HOLD_AFTER_LOCK_SECONDS: "30" }),
