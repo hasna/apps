@@ -211,6 +211,12 @@ Its default store is `~/.hasna/events`.
 
 | Command | Options |
 |---|---|
+| `repos channels add <target>` | Required `--id`; `--transport`, `--name`, `--type`, `--source`, `--subject`, `--severity`, repeatable `--data`, repeatable `--metadata`, repeatable `--data-json`, repeatable `--metadata-json`, `--secret`, repeatable `--header`, repeatable `--arg`, `--timeout-ms`, `--retry-attempts`, `--retry-backoff-ms`, repeatable `--redact`, `--disabled`, `-j/--json` |
+| `repos channels list` | `-j/--json` |
+| `repos channels status` | `-j/--json` |
+| `repos channels remove <id>` | `-j/--json` |
+| `repos channels test <id>` | `--source`, `--type`, `--subject`, `--message`, `--data`, `--metadata`, `--honor-filters`, `-j/--json` |
+| `repos channels match <id>` | `--source`, `--type`, `--subject`, `--message`, `--data`, `--metadata`, `--honor-filters`, `-j/--json` |
 | `repos events emit <type>` | `--source`, `--subject`, `--severity`, `--message`, `--dedupe-key`, `--data`, `--metadata`, `--no-deliver`, `--no-dedupe`, `-j/--json` |
 | `repos events list` | `--source`, `--type`, `--limit`, `-j/--json` |
 | `repos events replay` | `--id`, `--source`, `--type`, `--dry-run`, `-j/--json` |
