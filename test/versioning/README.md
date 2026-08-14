@@ -29,12 +29,16 @@ The runner rejects unknown options and forwards the exact test exit code.
 
 The suite keeps exact, measured baseline exceptions in the test source rather
 than weakening the comparison generally. The current exceptions are five
-changelog headings, two literal runtime version exports, three npm/main drift
+changelog headings, two literal runtime version exports, five npm/main drift
 records (the @hasna/loops release-lane drift, reconcile task
 69e8b5dd-15cd-4f45-8739-c0edf6720773, the @hasna/emails release-lane
-drift, reconcile task 78c66e3c-baba-4ba6-9295-99b4df7ebc25, and the
+drift, reconcile task 78c66e3c-baba-4ba6-9295-99b4df7ebc25, the
 @hasna/instructions release-lane drift 0.4.34/0.4.33, reconcile task
-8f8063c9-33af-4af7-b0d1-bdb25c481791), and five package
+8f8063c9-33af-4af7-b0d1-bdb25c481791, the @hasna/contracts
+import drift 0.11.0/0.10.6, reconcile task
+48a6ef7f-0919-470d-99f4-59817a01c647, and the @hasna/hooks
+release-lane drift 0.6.0/0.5.0, reconcile task
+d1ee99b5-5ba5-46a5-acdd-bb27fec9058f), and five package
 names absent from the local Bun quarantine list. Any changed value or new
 exception fails the relevant gate. The pre-import drift census entries for
 apps/{economy,events,feedback,recordings} (non-members of this repo) and the
