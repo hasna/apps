@@ -20,16 +20,15 @@ function runCli(args: string[], env: Record<string, string | undefined> = {}) {
     encoding: "utf8",
     env: {
       ...process.env,
-      // Isolation is the point of this file: an ambient cloud-mode credential
+      // Isolation is the point of this file: an ambient API credential
       // silently overrides HASNA_INSTRUCTIONS_DB_PATH below and every write
       // this test makes would land in the shared fleet store instead of the
-      // temp sqlite file. Clearing all three here, not just the DB path, is
+      // temp sqlite file. Clearing both here, not just the DB path, is
       // load-bearing — confirmed the hard way while writing this fix, on the
       // live store, and cleaned up immediately (todos 757cefdb).
       HASNA_INSTRUCTIONS_API_URL: undefined,
       HASNA_INSTRUCTIONS_API_KEY: undefined,
-      HASNA_INSTRUCTIONS_STORAGE_MODE: undefined,
-      ...env,
+            ...env,
       NO_COLOR: "1",
       FORCE_COLOR: "0",
     },
@@ -71,7 +70,7 @@ describe("instructions doctor — reference-name duplicates", () => {
         createConfig({ name: "Twin Rule", category: "rules", content: "two", kind: "reference" });
         `,
       ],
-      { cwd: repoRoot, encoding: "utf8", env: { ...process.env, ...isolatedEnv(root), HASNA_INSTRUCTIONS_API_URL: undefined, HASNA_INSTRUCTIONS_API_KEY: undefined, HASNA_INSTRUCTIONS_STORAGE_MODE: undefined } },
+      { cwd: repoRoot, encoding: "utf8", env: { ...process.env, ...isolatedEnv(root), HASNA_INSTRUCTIONS_API_URL: undefined, HASNA_INSTRUCTIONS_API_KEY: undefined } },
     );
     expect(seed.status).toBe(0);
 
@@ -102,7 +101,7 @@ describe("instructions doctor — reference-name duplicates", () => {
         createConfig({ name: "sample rule", category: "rules", content: "two", kind: "reference" });
         `,
       ],
-      { cwd: repoRoot, encoding: "utf8", env: { ...process.env, ...isolatedEnv(root), HASNA_INSTRUCTIONS_API_URL: undefined, HASNA_INSTRUCTIONS_API_KEY: undefined, HASNA_INSTRUCTIONS_STORAGE_MODE: undefined } },
+      { cwd: repoRoot, encoding: "utf8", env: { ...process.env, ...isolatedEnv(root), HASNA_INSTRUCTIONS_API_URL: undefined, HASNA_INSTRUCTIONS_API_KEY: undefined } },
     );
     expect(seed.status).toBe(0);
 
