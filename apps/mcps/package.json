@@ -51,7 +51,7 @@
     "dev:mcp": "bun run src/mcp/index.ts",
     "dev:dashboard": "cd dashboard && bun run dev",
     "serve": "bun run src/cli/index.tsx serve",
-    "test": "bun test",
+    "test": "bun test --isolate",
     "contract:check": "npx -y @hasna/contracts@0.8.5 repo-conformance .",
     "artifact-scan": "bun scripts/no-cloud-artifact-scan.mjs",
     "no-cloud:source": "bun test src/no-cloud-boundary.test.ts",

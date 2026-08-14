@@ -210,6 +210,14 @@ describe("Emails Solid TUI", () => {
     seedMessage("hello inbox", new Date().toISOString(), "long.recipient@example.com");
     await renderApp();
 
+    // The initial mailbox scan is a real /v1 round-trip against the stub;
+    // a single event-loop yield can finish before it lands under CI load.
+    // Wait for the seeded message, bounded, instead of racing the fetch.
+    for (let attempt = 0; attempt < 100 && !frame().includes("hello inbox"); attempt++) {
+      await Bun.sleep(25);
+      await setup?.flush();
+    }
+
     expect(frame()).toContain("Emails");
     expect(frame()).toContain("Mail");
     expect(frame()).toContain("Labels");
