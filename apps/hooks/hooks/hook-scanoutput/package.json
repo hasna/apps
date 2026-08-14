@@ -1,0 +1,12 @@
+{
+  "name": "hook-scanoutput",
+  "version": "0.1.0",
+  "description": "Claude Code hook that scans tool output for credential shapes and warns — detection after the fact, never prevention",
+  "type": "module",
+  "main": "./src/hook.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "author": "Hasna",
+  "license": "Apache-2.0"
+}
