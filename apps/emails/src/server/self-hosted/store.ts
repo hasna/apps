@@ -802,7 +802,7 @@ export interface InboundSourceProvenance {
   bucket: string;
   object_key: string;
   raw_sha256: string;
-  established_via: "normal_ingest" | "canonical_replay";
+  established_via: "normal_ingest" | "canonical_replay" | "gmail_replay";
 }
 
 /** Complete tenant/message state bound to one persisted inbound object key. */
@@ -813,12 +813,35 @@ export interface InboundAttachmentRepairBinding {
   provenance: InboundSourceProvenance;
 }
 
-/** One attachment-only compare-and-swap within a complete object repair. */
+/**
+ * One attachment-only compare-and-swap within a complete object repair.
+ */
 export interface InboundAttachmentRepairUpdate {
   tenantId: string;
   messageId: string;
   expected: unknown[];
   replacement: unknown[];
+}
+
+/**
+ * A legacy-inbound message whose attachment rows carry metadata with no
+ * payload bytes (migration 0007 imported the legacy Gmail-synced store). There
+ * is no `inbound_message_sources` row for these messages, so the canonical S3
+ * replay path cannot bind them; recovery is a bounded Gmail re-fetch keyed by
+ * the retained provider/message id (issue hasna/emails#52).
+ */
+export interface LegacyInboundPayloadRow {
+  tenant_id: string;
+  message_id: string;
+  provider_message_id: string | null;
+  message_id_column: string | null;
+  attachments: unknown[];
+}
+
+/** Bounded page of legacy-inbound payload-missing rows, keyset on (tenant, id). */
+export interface LegacyInboundPayloadPage {
+  rows: LegacyInboundPayloadRow[];
+  has_more: boolean;
 }
 
 /** Privacy-safe aggregate result for the post-fence, all-tenant S3 audit. */
@@ -977,7 +1000,7 @@ function toObject(value: unknown): Record<string, unknown> {
   return {};
 }
 
-function canonicalJson(value: unknown): string {
+export function canonicalJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
   if (value && typeof value === "object") {
     const entries = Object.entries(value as Record<string, unknown>)
@@ -1068,7 +1091,7 @@ async function listAttachmentRepairBindingsInTransaction(
       bucket: string | null;
       object_key: string | null;
       raw_sha256: string | null;
-      established_via: "normal_ingest" | "canonical_replay" | null;
+      established_via: "normal_ingest" | "canonical_replay" | "gmail_replay" | null;
       attachments: unknown;
     }>(
       `SELECT m.tenant_id::text AS tenant_id, m.id AS message_id, m.attachments,
@@ -1564,6 +1587,31 @@ export class InboundDomainRouteConflictError extends Error {
 }
 
 /**
+ * Census scan for legacy-inbound messages whose attachment rows carry metadata
+ * but no payload bytes (issue hasna/emails#52). Exported so the FORCE RLS
+ * integration test executes the EXACT production query shape.
+ *
+ * The query is subject to the fail-closed tenant policy (migration 0013):
+ * with the `app.current_tenant` GUC unset the policy is `tenant_id = NULL` and
+ * the census returns a confident zero. Every caller MUST set the GUC to the
+ * tenant being scanned; `listLegacyInboundMissingPayloadBindings` does, exactly
+ * like the replay lookup.
+ */
+export const LEGACY_INBOUND_MISSING_PAYLOAD_SCAN_SQL = `SELECT m.id AS message_id, m.provider_message_id, m.message_id AS message_id_column,
+                  m.attachments
+           FROM messages m
+           WHERE m.tenant_id = $1::uuid
+             AND m.source_id LIKE 'legacy:inbound_emails:%'
+             AND ($2::text IS NULL OR m.id > $2)
+             AND jsonb_typeof(COALESCE(m.attachments, '[]'::jsonb)) = 'array'
+             AND EXISTS (
+               SELECT 1 FROM jsonb_array_elements(COALESCE(m.attachments, '[]'::jsonb)) AS a(item)
+               WHERE jsonb_typeof(a.item -> 'content_base64') IS DISTINCT FROM 'string'
+             )
+           ORDER BY m.id
+           LIMIT $3`;
+
+/**
  * Unscoped root store. Holds `forTenant()` plus global pre-tenant resolution
  * primitives for inbound routing. It deliberately exposes NO
  * tenant-scoped data CRUD: a request handler is only ever handed a
@@ -1857,6 +1905,219 @@ export class EmailsSelfHostedStore {
           if (result.rowCount !== 1) {
             throw new AttachmentRepairConcurrentChangeError("attachment row changed concurrently");
           }
+        }
+        return true;
+      });
+    } catch (error) {
+      if (error instanceof AttachmentRepairConcurrentChangeError || isSerializationFailure(error)) {
+        return false;
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Read-only keyset-paged scan of legacy-inbound messages whose attachment
+   * rows carry metadata but no payload bytes (issue hasna/emails#52). FORCE RLS
+   * stays enabled: one read-only transaction visits each tenant scope, setting
+   * `app.current_tenant` per tenant exactly like the replay lookup — with the
+   * GUC unset the policy (migration 0013) is `tenant_id = NULL` and this census
+   * would return a confident zero. Rows carry identifiers and attachment
+   * METADATA only — payload bytes never leave the store through this method.
+   */
+  async listLegacyInboundMissingPayloadBindings(
+    cursor: { tenantId: string; messageId: string } | null,
+    limit: number,
+  ): Promise<LegacyInboundPayloadPage> {
+    if (!Number.isSafeInteger(limit) || limit <= 0) {
+      throw new Error("legacy payload scan requires a positive page limit");
+    }
+    if (!isTransactional(this.client)) {
+      throw new Error("legacy payload scan requires a transactional store");
+    }
+    const page: LegacyInboundPayloadRow[] = [];
+    let hasMore = false;
+    await this.client.transaction(async (tx) => {
+      await tx.execute(`SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY`);
+      const tenants = await tx.many<{ id: string }>(`SELECT id::text AS id FROM tenants ORDER BY id`);
+      for (const tenant of tenants) {
+        if (cursor && tenant.id < cursor.tenantId) continue;
+        await tx.execute(`SELECT set_config('app.current_tenant', $1, true)`, [tenant.id]);
+        const rows = await tx.many<{
+          message_id: string;
+          provider_message_id: string | null;
+          message_id_column: string | null;
+          attachments: unknown;
+        }>(
+          LEGACY_INBOUND_MISSING_PAYLOAD_SCAN_SQL,
+          [tenant.id, cursor && tenant.id === cursor.tenantId ? cursor.messageId : null, limit - page.length],
+        );
+        for (const row of rows) {
+          if (page.length >= limit) {
+            hasMore = true;
+            break;
+          }
+          const attachments = typeof row.attachments === "string"
+            ? JSON.parse(row.attachments)
+            : row.attachments;
+          if (!Array.isArray(attachments)) continue;
+          page.push({
+            tenant_id: tenant.id,
+            message_id: row.message_id,
+            provider_message_id: row.provider_message_id,
+            message_id_column: row.message_id_column,
+            attachments,
+          });
+        }
+        if (page.length >= limit) {
+          hasMore = true;
+          break;
+        }
+      }
+    });
+    return { rows: page, has_more: hasMore };
+  }
+
+  /**
+   * Exact message-id lookup of every legacy-inbound payload-missing row across
+   * tenants (FORCE RLS: each tenant scope is visited separately). More than one
+   * row is ambiguous and reported as such by the replay caller.
+   */
+  async getLegacyInboundPayloadBindings(
+    messageId: string,
+  ): Promise<LegacyInboundPayloadRow[]> {
+    if (!messageId) return [];
+    if (!isTransactional(this.client)) {
+      throw new Error("legacy payload lookup requires a transactional store");
+    }
+    const bindings: LegacyInboundPayloadRow[] = [];
+    await this.client.transaction(async (tx) => {
+      await tx.execute(`SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY`);
+      const tenants = await tx.many<{ id: string }>(`SELECT id::text AS id FROM tenants ORDER BY id`);
+      for (const tenant of tenants) {
+        await tx.execute(`SELECT set_config('app.current_tenant', $1, true)`, [tenant.id]);
+        const row = await tx.get<{
+          message_id: string;
+          provider_message_id: string | null;
+          message_id_column: string | null;
+          attachments: unknown;
+        }>(
+          `SELECT m.id AS message_id, m.provider_message_id, m.message_id AS message_id_column,
+                  m.attachments
+           FROM messages m
+           WHERE m.tenant_id = $1::uuid AND m.id = $2
+             AND m.source_id LIKE 'legacy:inbound_emails:%'
+             AND jsonb_typeof(COALESCE(m.attachments, '[]'::jsonb)) = 'array'
+             AND EXISTS (
+               SELECT 1 FROM jsonb_array_elements(COALESCE(m.attachments, '[]'::jsonb)) AS a(item)
+               WHERE jsonb_typeof(a.item -> 'content_base64') IS DISTINCT FROM 'string'
+             )`,
+          [tenant.id, messageId],
+        );
+        if (!row) continue;
+        const attachments = typeof row.attachments === "string"
+          ? JSON.parse(row.attachments)
+          : row.attachments;
+        if (!Array.isArray(attachments)) continue;
+        bindings.push({
+          tenant_id: tenant.id,
+          message_id: row.message_id,
+          provider_message_id: row.provider_message_id,
+          message_id_column: row.message_id_column,
+          attachments,
+        });
+      }
+    });
+    return bindings;
+  }
+
+  /**
+   * Attachment-only compare-and-swap for ONE legacy-inbound message, with the
+   * immutable Gmail-replay provenance row established in the SAME serializable
+   * transaction. The advisory lock and the `attachments = expected` predicate
+   * make a concurrent change fail closed; the legacy source_id predicate keeps
+   * the CAS scoped to the population this path may touch.
+   */
+  async replaceLegacyAttachmentPayloadAndProvenance(input: {
+    tenantId: string;
+    messageId: string;
+    expectedAttachments: unknown[];
+    replacementAttachments: unknown[];
+    provenance: {
+      bucket: string;
+      objectKey: string;
+      rawSha256: string;
+      establishedVia: "gmail_replay";
+    };
+  }): Promise<boolean> {
+    if (!input.messageId
+      || !input.tenantId
+      || !input.provenance.bucket
+      || !input.provenance.objectKey
+      || !/^[0-9a-f]{64}$/.test(input.provenance.rawSha256)) {
+      return false;
+    }
+    if (canonicalJson(input.expectedAttachments) === canonicalJson(input.replacementAttachments)) {
+      return false;
+    }
+    if (!isTransactional(this.client)) {
+      throw new Error("legacy payload replacement requires a transactional store");
+    }
+    try {
+      return await this.client.transaction(async (tx) => {
+        await tx.execute(`SET TRANSACTION ISOLATION LEVEL SERIALIZABLE`);
+        await tx.execute(
+          `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`,
+          [Buffer.from(`legacy-gmail-replay\0${input.tenantId}\0${input.messageId}`, "utf8")],
+        );
+        await tx.execute(`SELECT set_config('app.current_tenant', $1, true)`, [input.tenantId]);
+        const current = await tx.get<{ attachments: unknown }>(
+          `SELECT m.attachments
+           FROM messages m
+           WHERE m.tenant_id = $1::uuid AND m.id = $2
+             AND m.source_id LIKE 'legacy:inbound_emails:%'`,
+          [input.tenantId, input.messageId],
+        );
+        if (!current) return false;
+        const attachments = typeof current.attachments === "string"
+          ? JSON.parse(current.attachments)
+          : current.attachments;
+        if (!Array.isArray(attachments)
+          || canonicalJson(attachments) !== canonicalJson(input.expectedAttachments)) {
+          return false;
+        }
+        const updated = await tx.query<{ id: string }>(
+          `UPDATE messages SET attachments = $1::jsonb
+           WHERE tenant_id = $2::uuid AND id = $3
+             AND source_id LIKE 'legacy:inbound_emails:%'
+             AND attachments = $4::jsonb
+           RETURNING id`,
+          [
+            JSON.stringify(input.replacementAttachments),
+            input.tenantId,
+            input.messageId,
+            JSON.stringify(input.expectedAttachments),
+          ],
+        );
+        if (updated.rowCount !== 1) return false;
+        const provenance = await tx.query<{ message_id: string }>(
+          `INSERT INTO inbound_message_sources (
+             tenant_id, message_id, bucket, object_key, raw_sha256, established_via
+           )
+           VALUES ($1, $2, $3, $4, $5, $6)
+           ON CONFLICT (tenant_id, message_id) DO NOTHING
+           RETURNING message_id`,
+          [
+            input.tenantId,
+            input.messageId,
+            input.provenance.bucket,
+            input.provenance.objectKey,
+            input.provenance.rawSha256,
+            input.provenance.establishedVia,
+          ],
+        );
+        if (provenance.rowCount !== 1) {
+          throw new AttachmentRepairConcurrentChangeError("legacy message already has provenance");
         }
         return true;
       });
@@ -3829,7 +4090,7 @@ export class TenantScopedStore {
     bucket: string;
     objectKey: string;
     rawSha256: string;
-    establishedVia: "normal_ingest" | "canonical_replay";
+    establishedVia: "normal_ingest" | "canonical_replay" | "gmail_replay";
   }): Promise<RecordInboundSourceProvenanceResult> {
     if (!input.messageId || !input.bucket || !input.objectKey || !/^[0-9a-f]{64}$/.test(input.rawSha256)) {
       return "not_found";
@@ -3875,7 +4136,7 @@ export class TenantScopedStore {
       bucket: string | null;
       object_key: string | null;
       raw_sha256: string | null;
-      established_via: "normal_ingest" | "canonical_replay" | null;
+      established_via: "normal_ingest" | "canonical_replay" | "gmail_replay" | null;
     }>(
       `SELECT m.attachments,
               s.tenant_id AS source_tenant_id, s.message_id AS source_message_id,
