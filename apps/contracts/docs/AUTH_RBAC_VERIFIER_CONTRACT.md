@@ -1,8 +1,8 @@
 # Auth And RBAC Verifier Contract
 
-This contract defines the shared verifier model for built `open-*` and `iapp-*`
-server, MCP, CLI-token, API-key, dashboard, worker, and provider webhook
-surfaces.
+This contract defines the shared verifier model for built `open-*` and
+internal packages' server, MCP, CLI-token, API-key, dashboard, worker, and
+provider webhook surfaces.
 
 It extends the existing `@hasna/contracts/auth` API-key kit. App adoption may
 use that kit directly or bridge another session/token provider into the same
@@ -12,15 +12,15 @@ auth context and negative-test matrix.
 
 First adoption targets:
 
-- `iapp-access`
+- the internal access app
 - `open-feedback`
 - `open-telephony`
 - `open-contacts`
 - `open-calendar`
-- `iapp-data`
+- the internal data app
 
 Broader affected packages include finance, customer-data, file/search,
-infra-control, and multi-tenant iapps that expose HTTP, MCP, dashboard, worker,
+infra-control, and multi-tenant internal apps that expose HTTP, MCP, dashboard, worker,
 sync, export, provider, or destructive-action surfaces.
 
 Excluded:
@@ -471,8 +471,8 @@ redacted evidence.
 
 ## First Adoption Notes
 
-- `iapp-access`: should issue and verify shared access tokens, revocation
-  events, review state, and offboarding fanout.
+- The internal access app: should issue and verify shared access tokens,
+  revocation events, review state, and offboarding fanout.
 - `open-feedback`: split submit/read/export scopes and fail closed for
   non-local reads/mutations.
 - `open-telephony`: require API auth, Twilio signature/replay checks, and
@@ -480,8 +480,8 @@ redacted evidence.
 - `open-contacts`: enforce export/document controls, tenant/entity predicates,
   and merge/rollback operator roles.
 - `open-calendar`: enforce calendar roles on sampled routes and provider sync.
-- `iapp-data`: enforce tenant isolation, backup/export/import privileges, and
-  PII redaction roles.
+- The internal data app: enforce tenant isolation, backup/export/import
+  privileges, and PII redaction roles.
 
 ## Reviewer Mapping
 

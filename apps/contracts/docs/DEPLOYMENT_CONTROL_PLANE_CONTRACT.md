@@ -920,7 +920,7 @@ Raw session:
 This absolute JSONL path is a current-machine locator only, not a portable
 durable identifier. Before using it, validate the top-level `session_meta`
 fields: `id` is `019f8f76-fb12-7330-a863-1a51f6967d6d`, `cwd` is
-`/home/hasna/workspace/hasnaxyz/internalapp/iapp-deployment`, `source` is
+`<internal-app-workspace-path>`, `source` is
 `cli`, and `thread_source` is `user`.
 
 The JSONL is append-only and may grow. Provenance MUST never be anchored to a

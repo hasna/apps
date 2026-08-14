@@ -320,7 +320,7 @@ regenerate instead.
 
 ## Service/API Baseline
 
-Built `open-*` and `iapp-*` packages that expose a server, MCP server,
+Built `open-*` and internal packages that expose a server, MCP server,
 dashboard, worker, or externally documented API follow the shared
 [Service/API Baseline](docs/SERVICE_API_BASELINE.md). The baseline ties
 `hasna.contract.json` to serve binaries, lifecycle endpoints, `/v1` policy,
@@ -956,11 +956,11 @@ helpers. Owning packages still own storage and behavior.
 - `open-evals` owns evaluation execution and scored validation results.
 - `open-economy` owns budget, cost, and usage policy decisions.
 - `open-monitor` owns fleet health classification and alerting.
-- `iapp-scaffolds` owns scaffold templates, registry behavior, install/setup
-  behavior, MCP tools, CLI UX, and private/internal scaffold metadata. It should
-  validate public scaffold manifests and install records with
-  `@hasna/contracts`, but `@hasna/contracts` must not import or execute
-  `iapp-scaffolds`.
+- The internal scaffold package owns scaffold templates, registry behavior,
+  install/setup behavior, MCP tools, CLI UX, and private/internal scaffold
+  metadata. It should validate public scaffold manifests and install records
+  with `@hasna/contracts`, but `@hasna/contracts` must not import or execute
+  it.
 - Each open-source app that needs cloud support owns that cloud integration in
   its own package and can publish an `AppCloudManifest`. `@hasna/contracts`
   validates the boundary, but it must not become a shared cloud runtime.
@@ -1009,10 +1009,10 @@ native domain objects immediately.
 - `open-actions`: keep domain action manifests, but expose shared `ActorRef`,
   `EvidenceRef`, `CapabilityCard`, `DecisionEnvelope`, and `WorkRun` adapter
   views.
-- `iapp-scaffolds`: emit `ScaffoldManifest` documents for bundled templates,
-  write schema-tagged `ScaffoldInstallRecord` receipts for installs, and keep
-  template copying, setup wizards, source paths, and private metadata inside the
-  scaffold package.
+- Internal scaffold package: emit `ScaffoldManifest` documents for bundled
+  templates, write schema-tagged `ScaffoldInstallRecord` receipts for installs,
+  and keep template copying, setup wizards, source paths, and private metadata
+  inside the scaffold package.
 - `open-automations`: keep deterministic app/product automation recipes and
   connector/action recipes. Agentic task, PR, and review flows hand off to the
   canonical Todos/Codewith/Repos owners rather than creating a second queue.

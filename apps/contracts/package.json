@@ -1,6 +1,6 @@
 {
   "name": "@hasna/contracts",
-  "version": "0.10.6",
+  "version": "0.11.0",
   "description": "Shared schemas and validators for Hasna open-source agent infrastructure contracts.",
   "type": "module",
   "license": "Apache-2.0",
@@ -134,7 +134,8 @@
     "dev:cli": "bun run src/cli/index.ts",
     "prepack": "bun run verify:release",
     "prepublishOnly": "bun run verify:release",
-    "scan:artifact": "bun scripts/scan-artifact.ts"
+    "scan:artifact": "bun scripts/scan-artifact.ts",
+    "prepare": "bun run build"
   },
   "keywords": [
     "contracts",

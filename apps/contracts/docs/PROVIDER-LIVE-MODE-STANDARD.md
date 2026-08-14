@@ -3,7 +3,7 @@
 Date: 2026-07-06
 
 This standard applies to provider adapters in built or partially built `open-*`
-and `iapp-*` apps. It excludes platform apps, empty apps, README-only apps,
+and internal apps. It excludes platform apps, empty apps, README-only apps,
 scaffold-only apps, stale clone-only roots, and license-only repos.
 
 Provider work must default to no side effects. Live mutation is allowed only

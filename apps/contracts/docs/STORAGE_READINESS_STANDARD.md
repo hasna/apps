@@ -1,7 +1,7 @@
 # Durable Storage Readiness Standard
 
 This standard defines the minimum durable-storage evidence required before a
-built `open-*` or `iapp-*` package can claim shared, operator-run,
+built `open-*` or internal package can claim shared, operator-run,
 multi-tenant, provider-live, finance, or production readiness.
 
 Static source presence is not enough. Each supported data backend must have
@@ -177,10 +177,10 @@ evidence.
 | Domain | First apps | Required emphasis |
 | --- | --- | --- |
 | Data/project | `open-knowledge`, `open-mementos`, `open-projects`, `open-todos`, `open-files` | Local/source drift, migrations, backup/restore, export/delete, sync conflicts, redaction. |
-| Finance | `open-banking`, `open-accounting`, `iapp-accounting`, `iapp-payments`, `iapp-billing`, `iapp-treasury`, `iapp-wallets`, `iapp-payroll` | Postgres transactions, outbox, idempotency, immutable posted records, reconciliation, approvals. |
+| Finance | `open-banking`, `open-accounting`, and the internal finance apps | Postgres transactions, outbox, idempotency, immutable posted records, reconciliation, approvals. |
 | Comms/customer | `open-mailery`, `open-telephony`, `open-feedback`, `open-contacts`, `open-calendar`, `open-tickets` | Provider event storage, retention/export/delete, webhooks, tenant/entity boundaries. |
 | Infra/control | `open-backup`, `open-deployment`, `open-domains`, `open-gateway`, `open-machines`, `open-sandboxes`, `open-secrets` | Credential references, RLS where shared, backup restore, operator readiness, deployment-state audit. |
-| Iapp data/org | `iapp-data`, `iapp-access`, `iapp-controls`, `iapp-workforce`, `iapp-companies`, `iapp-entities` | Tenant/entity boundaries, access review durability, offboarding fanout, audit export. |
+| Internal data/org | the internal data, access, controls, workforce, companies, and entities apps | Tenant/entity boundaries, access review durability, offboarding fanout, audit export. |
 
 ## Reviewer Mapping
 

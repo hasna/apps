@@ -14,23 +14,10 @@ adapters, tests, or releases in this repository.
 
 Follow-up working base / provider snapshot:
 
-- canonical checkout: `/home/hasna/workspace/hasna/opensource/open-contracts`
-- canonical worktree root: `/home/hasna/.hasna/repos/worktrees/open-contracts`
-- provider-snapshot main target: `4470cec9e7163fad00f60d1abefae9d0972b6e81`
-- parent of snapshot main merge commit: `0e2fbe01b35d913c97f316d5219e5484963032ef`
-
-## Canonical source references
-
-ADR 0002 is directly inspectable and included in this remediation:
-
-- Factory PR 7 (merged): `https://github.com/hasnaxyz/iapp-factory/pull/7`
-- merge commit: `3846dc4d3e30dbef4ee50dc1983a712de8d2d531`
-- reviewed head: `9a01f66293527a13fff724f663edf989b13dbcf3`
-- check command used for direct proof:
-  `git -C /home/hasna/workspace/hasnaxyz/internalapp/iapp-factory show 3846dc4d3e30dbef4ee50dc1983a712de8d2d531:docs/architecture/adr-0002-production-internal-iapp.md`
-
-This review is for the merged Factory PR 7.
-This is treated as the controlling architecture reference for the current document.
+- canonical source: the merged Factory PR 7 (architecture ADR 0002 for the
+  internal app factory runtime), verified from the repository's own docs
+  directory; machine-specific checkout paths and commit shas are not
+  reproduced here.
 
 ## External effect kinds (exactly fifteen)
 

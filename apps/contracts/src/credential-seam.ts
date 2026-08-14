@@ -96,9 +96,8 @@ const SKIP_DIRS = new Set([
  * only location can.
  *
  * Measured across the fleet, every one of these is a constant-time comparison
- * against an inbound header: `iapp-factory/src/api/index.ts` (`secureCompare`),
- * `iapp-sandboxes/src/http/auth.ts` (`safeEqual`), `open-todos/src/server/serve.ts`
- * (`safeEqualStrings`), `open-machines/src/mcp/http.ts`. Flagging them made the
+ * against an inbound header (implemented as `secureCompare`/`safeEqual`
+ * variants across several fleet packages). Flagging them made the
  * gate red on 7 of 24 repos on day one, and a gate that is red on compliant code
  * gets switched off.
  *
@@ -371,7 +370,7 @@ export function scanCredentialSeam(repoRoot: string, options: CredentialSeamScan
     // A vendored copy of the seam is the LOUDEST possible bypass, and it is
     // invisible to a rule that looks for literal key names: a fork builds its
     // names by template (`HASNA_${token}_API_KEY`) and reads them through a
-    // computed loop, so no literal ever appears. Measured: `iapp-telephony`
+    // computed loop, so no literal ever appears. Measured: one fleet package
     // scored ZERO findings while shipping a complete copy of the pre-fix
     // resolver on its live storage path. Left unchecked, the cheapest way to
     // turn this gate green is to fork the transport — the gate would reward

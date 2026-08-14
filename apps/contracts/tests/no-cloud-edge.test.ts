@@ -9,7 +9,7 @@
 // The reference cases are real. `@hasna/connectors@1.4.0` is the one repo
 // already remediated and published; it failed this gate on a JSDoc comment and
 // on the guard test the remediation pattern itself mandates. `hasna/logs`
-// failed on a lockfile entry that resolves nothing. `hasnaxyz/iapp-files`
+// failed on a lockfile entry that resolves nothing. An internal files package
 // failed on two functions it defines itself. All four shapes are below.
 
 import { describe, expect, test } from "bun:test";
@@ -566,7 +566,8 @@ describe("no-cloud gate: the mandated guard test", () => {
 });
 
 describe("no-cloud gate: symbols are scoped to their import", () => {
-  // iapp-files' real shape: defined locally, routed at the self-hosted service.
+  // The internal files package's real shape: defined locally, routed at the
+  // self-hosted service.
   const localDefinition =
     'import type { Command } from "commander";\n' +
     "export function registerCloudTools(register: unknown): void { void register; }\n" +

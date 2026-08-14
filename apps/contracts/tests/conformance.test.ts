@@ -921,8 +921,8 @@ describe("repo conformance kit", () => {
 
   test("section 3 and section 6 agree: contract-mandated env NAMES are not credential values", () => {
     // These were flagged as leaked credentials by the previous detector,
-    // case-insensitively, on live manifests (open-loops, open-sessions,
-    // iapp-sessions, iapp-domains): `HASNA_LOOPS_DATABASE_URL` matched because
+    // case-insensitively, on live manifests of several fleet packages:
+    // `HASNA_LOOPS_DATABASE_URL` matched because
     // `DATABASE_URL` is exactly 12 characters. Section 3 REQUIRES those names.
     // A mandatory gate that fires on compliant repos gets switched off, and
     // then it protects nothing.

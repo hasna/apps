@@ -1,7 +1,7 @@
 # Hasna Service/API Baseline
 
 This standard defines the minimum service, API, schema, smoke, and evidence
-surface for built `open-*` and `iapp-*` packages that expose a server, MCP
+surface for built `open-*` and internal packages that expose a server, MCP
 server, dashboard, worker, or externally documented API.
 
 It is intentionally stricter than source presence. A package is not service
@@ -11,7 +11,7 @@ ready until the installed artifact passes the relevant checks below.
 
 Included packages:
 
-- Built or partially built `open-*` and `iapp-*` apps.
+- Built or partially built `open-*` and internal apps.
 - Server, MCP, CLI-token, SDK, dashboard, worker, and provider surfaces.
 
 Excluded packages:
@@ -260,7 +260,7 @@ Duplicate roots and package identity collisions are flagged, not counted twice.
 | Infra services | `open-backup`, `open-bridge`, `open-domains`, `open-gateway`, `open-hooks`, `open-machines`, `open-releases`, `open-secrets`, `open-servers`, `open-uptime`, `open-monitor`, `open-logs`, `open-repos`, `open-sandboxes`, `open-sessions`, `open-shield`, `open-security` | Serve bins, lifecycle, deployment contracts, auth-negative gates. |
 | Finance/comms/customer | `open-accounting`, `open-banking`, `open-economy`, `open-conversations`, `open-mailery`, `open-telephony`, `open-tickets`, `open-feedback`, `open-contacts`, `open-calendar`, `open-shortlinks` | `/v1`, OpenAPI, webhooks, provider safety, queues, auth. |
 | Data/AI/control | `open-attachments`, `open-files`, `open-knowledge`, `open-mementos`, `open-projects`, `open-search`, `open-todos`, `open-coders`, `open-codewith`, `open-connectors`, `open-dispatch`, `open-mcps`, `open-prompts`, `open-swarm`, `open-testers`, `open-browser`, `open-computer`, `open-terminal` | Parity, provenance, package smoke, operator status. |
-| Internal iapps | `iapp-accounting`, `iapp-billing`, `iapp-payments`, `iapp-payroll`, `iapp-treasury`, `iapp-wallets`, `iapp-invoices`, `iapp-tax`, `iapp-access`, `iapp-controls`, `iapp-fleet`, `iapp-workforce`, `iapp-email`, `iapp-leads`, `iapp-ads`, `iapp-data`, `iapp-notes`, `iapp-signatures`, `iapp-sourcing`, `iapp-trademarks`, `iapp-transcriber`, `iapp-researcher` | Mode declarations, approvals, audit, reconciliation, provider and cost controls. |
+| Internal apps | (internal app catalog — not enumerated here) | Mode declarations, approvals, audit, reconciliation, provider and cost controls. |
 
 ## Reviewer Mapping
 

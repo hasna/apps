@@ -210,8 +210,8 @@ function credentialKeyFinding(key: string): PublicManifestFinding["category"] | 
  * CASE-INSENSITIVE, and with no requirement for the signature segment. CONTRACT
  * section 3 mandates env keys of the form `HASNA_<NAME>_DATABASE_URL`, so
  * section 6 was flagging as a leaked credential the exact variable name section
- * 3 requires the manifest to use. Live on `open-loops`, `open-sessions`,
- * `iapp-sessions` and `iapp-domains`: `HASNA_LOOPS_DATABASE_URL` matched
+ * 3 requires the manifest to use. Live on several fleet packages:
+ * `HASNA_LOOPS_DATABASE_URL` matched
  * because `DATABASE_URL` is exactly 12 characters.
  *
  * A mandatory gate that fires on compliant repos gets switched off, and then it

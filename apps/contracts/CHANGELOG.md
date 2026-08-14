@@ -2,6 +2,13 @@
 
 All notable changes to `@hasna/contracts` are documented here.
 
+## [0.11.0] - unreleased
+
+- Mono absorption: member version bumped past dependent ranges so dependents
+  keep their registry pins (datasets' `^0.10.6` resolves the published
+  0.10.6 instead of the workspace member).
+- Adds `prepare: bun run build` so the workspace member builds during install.
+
 ## [0.10.6] - 2026-08-11
 
 - Adds the fail-closed `safe-read` collection helper, including complete
@@ -281,7 +288,7 @@ unrelated grounds: every one spells the engine `postgres` where
 Something already red cannot go from passing to failing.
 
 Counterfactually, if those manifests were repaired, exactly one would flip:
-`iapp-factory`, which declares an `http` surface with `kind: "api"` and
+an internal factory app, which declares an `http` surface with `kind: "api"` and
 `status: "supported"` while shipping `factory` and `factory-mcp` and no
 `factory-serve`. That is precisely the misnamed-bin evasion this arm was
 written for. `catalog` declares an `api` surface at `status: "deferred"` and
