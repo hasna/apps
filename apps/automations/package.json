@@ -1,0 +1,115 @@
+{
+  "name": "@hasna/automations",
+  "version": "0.2.0",
+  "description": "Deterministic automation control plane and daemon for Hasna open-source apps",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "automations": "dist/cli/index.js",
+    "automations-daemon": "dist/daemon/index.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./store": {
+      "types": "./dist/lib/store.d.ts",
+      "import": "./dist/lib/store.js"
+    },
+    "./paths": {
+      "types": "./dist/lib/paths.d.ts",
+      "import": "./dist/lib/paths.js"
+    },
+    "./runtime": {
+      "types": "./dist/lib/runtime.d.ts",
+      "import": "./dist/lib/runtime.js"
+    },
+    "./contracts": {
+      "types": "./dist/lib/contracts.d.ts",
+      "import": "./dist/lib/contracts.js"
+    },
+    "./recipes": {
+      "types": "./dist/recipes/launch-followup.d.ts",
+      "import": "./dist/recipes/launch-followup.js"
+    },
+    "./cli": {
+      "types": "./dist/cli/index.d.ts",
+      "import": "./dist/cli/index.js"
+    },
+    "./daemon": {
+      "types": "./dist/daemon/index.d.ts",
+      "import": "./dist/daemon/index.js"
+    },
+    "./worker": {
+      "types": "./dist/worker/index.d.ts",
+      "import": "./dist/worker/index.js"
+    },
+    "./server": {
+      "types": "./dist/server/index.d.ts",
+      "import": "./dist/server/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "hasna.contract.json",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "SECURITY.md",
+    "CONTRIBUTING.md"
+  ],
+  "scripts": {
+    "build": "rm -rf dist && bun build src/cli/index.ts src/daemon/index.ts src/index.ts src/types.ts src/worker/index.ts src/server/index.ts src/lib/store.ts src/lib/paths.ts src/lib/runtime.ts src/lib/contracts.ts src/recipes/launch-followup.ts --root src --outdir dist --target bun --packages external && chmod +x dist/cli/index.js dist/daemon/index.js && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist",
+    "smoke:webhook-release": "bun run scripts/release-webhook-smoke.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "test:postgres": "HASNA_AUTOMATIONS_REQUIRE_POSTGRES_TEST=1 bun test src/server/postgresql/store.integration.test.ts",
+    "contracts:conformance": "contracts conformance examples && contracts repo-conformance .",
+    "conformance": "bun run contracts:conformance",
+    "scan:artifact": "bun scripts/scan-artifact.ts",
+    "prepack": "bun run build && bun run scan:artifact",
+    "prepublishOnly": "bun run test && bun run contracts:conformance && bun run prepack"
+  },
+  "keywords": [
+    "automations",
+    "daemon",
+    "actions",
+    "events",
+    "queue",
+    "dlq",
+    "typescript",
+    "bun",
+    "hasna"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hasna/automations.git"
+  },
+  "homepage": "https://github.com/hasna/automations#readme",
+  "bugs": {
+    "url": "https://github.com/hasna/automations/issues"
+  },
+  "engines": {
+    "bun": ">=1.0.0"
+  },
+  "author": "Hasna",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@hasna/contracts": "^0.8.1",
+    "postgres": "^3.4.7"
+  },
+  "peerDependencies": {
+    "@hasna/actions": "^0.1.4"
+  },
+  "devDependencies": {
+    "@hasna/actions": "^0.1.4",
+    "@types/bun": "latest",
+    "typescript": "^5.7.3"
+  },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org",
+    "access": "public"
+  }
+}
