@@ -39,6 +39,32 @@ describe("fleet status", () => {
     expect(status.machines.some((machine) => machine.machineId === "demo-node-01")).toBe(true);
   });
 
+  test("merges alias-keyed heartbeats into the canonical manifest machine", () => {
+    const dir = mkdtempSync(join(tmpdir(), "machines-status-alias-"));
+    process.env["HASNA_MACHINES_DB_PATH"] = join(dir, "machines.db");
+    process.env["HASNA_MACHINES_MANIFEST_PATH"] = join(dir, "machines.json");
+    process.env["HASNA_MACHINES_MACHINE_ID"] = "apple03";
+    manifestInit();
+    manifestAdd({
+      id: "station03",
+      aliases: ["apple03"],
+      platform: "linux",
+      workspacePath: "/home/operator/workspace",
+    });
+
+    upsertHeartbeat("apple03", 103, "online", { daemonVersion: "0.0.103" });
+
+    const status = getStatus({ privateMetadata: true, heartbeatTtlMs: null });
+    expect(status.machineId).toBe("station03");
+    expect(status.machines).toHaveLength(1);
+    expect(status.machines[0]).toMatchObject({
+      machineId: "station03",
+      manifestDeclared: true,
+      heartbeatStatus: "online",
+      daemonVersion: "0.0.103",
+    });
+  });
+
   test("uses the latest heartbeat row for status summaries", () => {
     const dir = mkdtempSync(join(tmpdir(), "machines-status-latest-"));
     process.env["HASNA_MACHINES_DB_PATH"] = join(dir, "machines.db");

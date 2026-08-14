@@ -1,5 +1,5 @@
 import { countRuns, getLocalMachineId, latestHeartbeatByMachine, listHeartbeats } from "../db.js";
-import { machineDisplayName, normalizeFriendlyName, readManifest } from "../manifests.js";
+import { findManifestMachine, machineDisplayName, normalizeFriendlyName, readManifest } from "../manifests.js";
 import { getManifestPath, getDbPath, getNotificationsPath } from "../paths.js";
 import { REDACTED_VALUE } from "../redaction.js";
 import { DEFAULT_HEARTBEAT_ONLINE_TTL_MS } from "../topology.js";
@@ -57,11 +57,17 @@ export function getStatus(options: FleetStatusOptions = {}): FleetStatus {
   const heartbeatTtlMs = options.heartbeatTtlMs === undefined ? DEFAULT_HEARTBEAT_ONLINE_TTL_MS : options.heartbeatTtlMs;
   const manifest = readManifest();
   const heartbeats = listHeartbeats();
-  const heartbeatByMachine = latestHeartbeatByMachine(heartbeats);
+  const canonicalMachineId = (machineId: string): string => findManifestMachine(manifest, machineId)?.id ?? machineId;
+  const localMachineId = canonicalMachineId(getLocalMachineId());
+  const canonicalHeartbeats = heartbeats.map((heartbeat) => ({
+    ...heartbeat,
+    machine_id: canonicalMachineId(heartbeat.machine_id),
+  }));
+  const heartbeatByMachine = latestHeartbeatByMachine(canonicalHeartbeats);
   const manifestByMachine = new Map(manifest.machines.map((machine) => [machine.id, machine]));
   const machineIds = new Set([
     ...manifest.machines.map((machine) => machine.id),
-    ...heartbeats.map((heartbeat) => heartbeat.machine_id),
+    ...canonicalHeartbeats.map((heartbeat) => heartbeat.machine_id),
   ]);
   const rows = [...machineIds].map((machineId) => {
     const declared = manifestByMachine.get(machineId);
@@ -89,7 +95,7 @@ export function getStatus(options: FleetStatusOptions = {}): FleetStatus {
   });
 
   return {
-    machineId: privateMetadata ? getLocalMachineId() : REDACTED_VALUE,
+    machineId: privateMetadata ? localMachineId : REDACTED_VALUE,
     manifestPath: privateMetadata ? getManifestPath() : REDACTED_VALUE,
     dbPath: privateMetadata ? getDbPath() : REDACTED_VALUE,
     notificationsPath: privateMetadata ? getNotificationsPath() : REDACTED_VALUE,
