@@ -6,6 +6,7 @@ import { Client } from "@modelcontextprotocol/sdk/client";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createHooksServer, MCP_PORT } from "./server.js";
 import { closeDb, getDb } from "../db/index.js";
+import { getHook } from "../lib/registry.js";
 
 const TEST_HOME = join(process.cwd(), ".tmp-mcp-home");
 const SETTINGS_PATH = join(TEST_HOME, ".claude", "settings.json");
@@ -15,6 +16,20 @@ const originalClaudeSettingsPath = process.env.HASNA_HOOKS_CLAUDE_SETTINGS_PATH;
 const settingsBackups: Array<string | null> = [];
 
 process.env.HASNA_HOOKS_CLAUDE_SETTINGS_PATH = SETTINGS_PATH;
+
+// The run tools now verify hashes against the trust store, so the whole
+// suite must use an isolated store instead of the machine's real hooks DB.
+const TEST_DATA_DIR = join(tmpdir(), `hooks-mcp-data-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+const originalDataDir = process.env.HASNA_HOOKS_DATA_DIR;
+const originalDbPath = process.env.HASNA_HOOKS_DB_PATH;
+const originalLockPath = process.env.HASNA_HOOKS_LOCK_PATH;
+
+beforeAll(() => {
+  closeDb();
+  process.env.HASNA_HOOKS_DATA_DIR = TEST_DATA_DIR;
+  process.env.HASNA_HOOKS_DB_PATH = join(TEST_DATA_DIR, "hooks.db");
+  process.env.HASNA_HOOKS_LOCK_PATH = join(TEST_DATA_DIR, "hooks.lock");
+});
 
 function backupSettings(): void {
   if (existsSync(SETTINGS_PATH)) {
@@ -35,9 +50,17 @@ function restoreSettings(): void {
 }
 
 afterAll(() => {
+  closeDb();
+  if (originalDataDir === undefined) delete process.env.HASNA_HOOKS_DATA_DIR;
+  else process.env.HASNA_HOOKS_DATA_DIR = originalDataDir;
+  if (originalDbPath === undefined) delete process.env.HASNA_HOOKS_DB_PATH;
+  else process.env.HASNA_HOOKS_DB_PATH = originalDbPath;
+  if (originalLockPath === undefined) delete process.env.HASNA_HOOKS_LOCK_PATH;
+  else process.env.HASNA_HOOKS_LOCK_PATH = originalLockPath;
   if (originalClaudeSettingsPath === undefined) delete process.env.HASNA_HOOKS_CLAUDE_SETTINGS_PATH;
   else process.env.HASNA_HOOKS_CLAUDE_SETTINGS_PATH = originalClaudeSettingsPath;
   rmSync(TEST_HOME, { recursive: true, force: true });
+  rmSync(TEST_DATA_DIR, { recursive: true, force: true });
 });
 
 function parseResult(result: any): any {
@@ -385,6 +408,30 @@ describe("MCP server", () => {
       restoreSettings();
     });
 
+    test("hooks_doctor reports a healthy custom hook from the custom dir", async () => {
+      backupSettings();
+      try {
+        const hookDir = join(TEST_DATA_DIR, "hooks", "mycustom");
+        mkdirSync(hookDir, { recursive: true });
+        writeFileSync(
+          join(hookDir, "manifest.json"),
+          JSON.stringify({ name: "mycustom", version: "1.0.0", events: ["PreToolUse"], script: "script.ts" }),
+        );
+        writeFileSync(join(hookDir, "script.ts"), `console.log(JSON.stringify({ decision: "approve" }));`);
+        mkdirSync(join(TEST_HOME, ".claude"), { recursive: true });
+        writeFileSync(
+          SETTINGS_PATH,
+          JSON.stringify({ hooks: { PreToolUse: [{ hooks: [{ type: "command", command: "hooks run mycustom" }] }] } }),
+        );
+        const data = parseResult(await client.callTool({ name: "hooks_doctor", arguments: {} }));
+        expect(data.healthy).toBe(true);
+        expect(data.healthy_hooks).toContain("mycustom");
+        expect(data.issues).toHaveLength(0);
+      } finally {
+        restoreSettings();
+      }
+    });
+
     // --- hooks_categories ---
 
     test("hooks_categories returns all 5", async () => {
@@ -706,6 +753,39 @@ describe("MCP server", () => {
         arguments: { name: "nonexistent-hook-xyz", input: {} },
       }));
       expect(data.error).toContain("not found");
+    });
+
+    test("hooks_run refuses a tampered hook (trust failure is fail-closed)", async () => {
+      // Seed the trust store with a hash that does not match gitguard's
+      // actual content — the equivalent of the script changing after trust.
+      const { upsertHookRecord, sha256File } = await import("../lib/store.js");
+      const { resolveScriptPath } = await import("../lib/resolve.js");
+      const meta = getHook("gitguard")!;
+      upsertHookRecord(getDb(), {
+        name: "gitguard",
+        version: meta.version,
+        sha256: "f".repeat(64),
+        source_type: "local",
+      });
+      try {
+        const data = parseResult(await client.callTool({
+          name: "hooks_run",
+          arguments: { name: "gitguard", input: {} },
+        }));
+        expect(data.trust_failed).toBe(true);
+        expect(data.error).toContain("changed since it was trusted");
+      } finally {
+        // Restore the real record so later tests can still run gitguard.
+        const scriptPath = resolveScriptPath("gitguard");
+        if (scriptPath) {
+          upsertHookRecord(getDb(), {
+            name: "gitguard",
+            version: meta.version,
+            sha256: await sha256File(scriptPath),
+            source_type: "local",
+          });
+        }
+      }
     });
 
     // --- hooks_context ---

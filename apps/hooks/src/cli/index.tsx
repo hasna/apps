@@ -45,6 +45,8 @@ import {
   exportProfiles,
   importProfiles,
 } from "../lib/profiles.js";
+import { readCustomManifest } from "../lib/manifest.js";
+import { resolveHookMeta } from "../lib/resolve.js";
 
 const program = new Command();
 
@@ -91,6 +93,17 @@ function truncateText(value: string | undefined, max = 96): string {
   const text = (value ?? "").replace(/\s+/g, " ").trim();
   if (text.length <= max) return text;
   return `${text.slice(0, Math.max(0, max - 3))}...`;
+}
+
+function readToken(tokenFile: string | undefined): string | undefined {
+  if (tokenFile) {
+    try {
+      return readFileSync(tokenFile, "utf-8").trim();
+    } catch {
+      return undefined;
+    }
+  }
+  return process.env.CF_API_TOKEN;
 }
 
 function readmePreview(readme: string, max = 280): string | undefined {
@@ -166,7 +179,38 @@ program
   .option("-a, --agent <type>", "Agent type: claude, gemini, custom", "claude")
   .option("-n, --name <name>", "Optional display name for the agent")
   .option("-j, --json", "Output as JSON", false)
-  .action((options: { agent: string; name?: string; json: boolean }) => {
+  .option("--cloudflare", "Configure a remote registry (Cloudflare worker)", false)
+  .option("--api-url <url>", "Remote registry API URL (with --cloudflare)")
+  .option("--api-key <ref>", "Vault key NAME for the registry API key (never the value; with --cloudflare)")
+  .action(async (options: { agent: string; name?: string; json: boolean; cloudflare: boolean; apiUrl?: string; apiKey?: string }) => {
+    if (options.cloudflare) {
+      const { writeConfig } = await import("../config.js");
+      if (!options.apiUrl) {
+        const message = "--cloudflare requires --api-url <url>";
+        if (options.json) console.log(JSON.stringify({ error: message }));
+        else console.log(chalk.red(message));
+        return;
+      }
+      const config = { api_url: options.apiUrl.replace(/\/+$/, ""), api_key_ref: options.apiKey };
+      const path = writeConfig(config);
+      if (options.json) {
+        console.log(JSON.stringify({ ok: true, api_url: config.api_url, api_key_ref: config.api_key_ref ?? null, config_path: path }));
+        return;
+      }
+      console.log(chalk.green(`\n✓ Remote registry configured\n`));
+      console.log(`  ${chalk.dim("API URL:")}    ${config.api_url}`);
+      console.log(`  ${chalk.dim("API key ref:")} ${config.api_key_ref ?? "(none; serve will refuse publishes)"}`);
+      console.log(`  ${chalk.dim("Config:")}      ${path}`);
+      console.log();
+      console.log(chalk.dim("  Presence of an API URL selects the remote registry; absence means local."));
+      if (config.api_key_ref) {
+        console.log(chalk.dim(`  Run the server with the key resolved from the vault, never the value:`));
+        console.log(`    secrets exec ${config.api_key_ref} --as HASNA_HOOKS_API_KEY -- hooks serve`);
+      }
+      console.log();
+      return;
+    }
+
     const agentType = options.agent as "claude" | "gemini" | "custom";
     if (!["claude", "gemini", "custom"].includes(agentType)) {
       if (options.json) {
@@ -205,17 +249,33 @@ program
   .option("--profile <id>", "Agent profile ID")
   .description("Execute a hook (called by AI coding agents)")
   .action(async (hook: string, options: { profile?: string }) => {
-    const meta = getHook(hook);
-    if (!meta) {
+    const { resolveHook, resolveScriptPath } = await import("../lib/resolve.js");
+    const { sha256Of, checkScriptHash } = await import("../lib/store.js");
+    const resolved = resolveHook(hook);
+    if (!resolved) {
       console.error(JSON.stringify({ error: `Hook '${hook}' not found` }));
       process.exit(1);
     }
 
-    const hookDir = getHookPath(hook);
-    const hookScript = join(hookDir, "src", "hook.ts");
+    const hookScript = resolveScriptPath(hook);
+    if (!hookScript || !existsSync(hookScript)) {
+      console.error(JSON.stringify({ error: `Hook script not found: ${hookScript ?? hook}` }));
+      process.exit(1);
+    }
 
-    if (!existsSync(hookScript)) {
-      console.error(JSON.stringify({ error: `Hook script not found: ${hookScript}` }));
+    // Read the bytes ONCE. The verified bytes are the executed bytes: the
+    // path is never re-opened for execution after the trust check (TOCTOU).
+    const content = readFileSync(hookScript);
+    const check = checkScriptHash(hook, sha256Of(content));
+    if (!check.ok) {
+      console.error(
+        JSON.stringify({
+          error: `Hook '${hook}' script changed since it was trusted (sha256 ${check.expected} != ${check.actual}). Run 'hooks trust ${hook}' to trust the new content.`,
+          hook,
+          expected_sha256: check.expected,
+          actual_sha256: check.actual,
+        }),
+      );
       process.exit(1);
     }
 
@@ -243,17 +303,21 @@ program
       }
     }
 
-    // Execute the hook script with bun, passing stdin through
-    const proc = Bun.spawn(["bun", "run", hookScript], {
-      stdin: new Response(hookStdin),
-      stdout: "pipe",
-      stderr: "pipe",
+    // Execute the verified bytes with bun, passing stdin through
+    const { readCustomManifest } = await import("../lib/manifest.js");
+    const { executeVerifiedScript } = await import("../lib/run.js");
+    const custom = readCustomManifest(hook);
+    const args = custom?.manifest.args ?? [];
+    const timeout = custom?.manifest.timeout_ms;
+    const { stdout, stderr, exitCode } = await executeVerifiedScript({
+      name: hook,
+      scriptPath: hookScript,
+      content,
+      args,
+      stdin: hookStdin,
       env: process.env,
+      timeout,
     });
-
-    const stdout = await new Response(proc.stdout).text();
-    const stderr = await new Response(proc.stderr).text();
-    const exitCode = await proc.exited;
 
     if (stdout) process.stdout.write(stdout);
     if (stderr) process.stderr.write(stderr);
@@ -276,8 +340,8 @@ program
   .option("--apply-codewith", "Explicitly append Codewith TOML to a config file (prefer open-configs for managed configs)", false)
   .option("--codewith-config <path>", "Explicit Codewith config path required with --apply-codewith")
   .option("-j, --json", "Output as JSON", false)
-  .description("Install one or more hooks")
-  .action((hooks: string[], options) => {
+  .description("Install one or more hooks (registry names, local paths, git URLs, or manifest URLs)")
+  .action(async (hooks: string[], options) => {
     const scope = resolveScope(options);
     const target = resolveTarget(options);
     let toInstall: string[] = hooks;
@@ -315,18 +379,32 @@ program
       return;
     }
 
+    const { isCustomSource, installCustomSource } = await import("../lib/custom-install.js");
+    const customSources = toInstall.filter((n) => !getHook(n) && isCustomSource(n));
+
     // Dry-run: preview what would be installed
     if (options.dryRun) {
       const known = toInstall.filter((n) => getHook(n));
-      const unknown = toInstall.filter((n) => !getHook(n));
+      const unknown = toInstall.filter((n) => !getHook(n) && !isCustomSource(n));
       if (options.json) {
-        console.log(JSON.stringify({ dryRun: true, would_install: known, unknown, scope, target, mode: target === "codewith" ? "fragment" : "write" }));
+        console.log(JSON.stringify({
+          dryRun: true,
+          would_install: known,
+          custom_sources: customSources,
+          unknown,
+          scope,
+          target,
+          mode: target === "codewith" ? "fragment" : "write",
+        }));
         return;
       }
       console.log(chalk.bold(`\nDry run — would install (${scope}, ${target}):\n`));
       for (const name of known) {
         const meta = getHook(name)!;
         console.log(chalk.cyan(`  ${name}`) + chalk.dim(` [${meta.event}${meta.matcher ? ` ${meta.matcher}` : ""}]`));
+      }
+      for (const source of customSources) {
+        console.log(chalk.cyan(`  ${source}`) + chalk.dim(" [custom source: would fetch and install]"));
       }
       if (unknown.length > 0) {
         console.log();
@@ -339,9 +417,31 @@ program
     }
 
     const results = [];
-    for (const name of toInstall) {
+    const installedCustom: string[] = [];
+    for (const source of customSources) {
+      try {
+        const custom = await installCustomSource(source);
+        installedCustom.push(custom.name);
+        if (options.json) {
+          console.log(JSON.stringify({ custom: { source, name: custom.name, version: custom.version } }));
+        } else {
+          console.log(chalk.green(`✓ Installed custom hook '${custom.name}' v${custom.version} from ${source}`));
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        results.push({ hook: source, success: false, error: message });
+        if (options.json) {
+          console.log(JSON.stringify({ error: `Custom hook install failed for ${source}: ${message}` }));
+        } else {
+          console.log(chalk.red(`✗ ${message}`));
+        }
+      }
+    }
+    const namesToRegister = [...new Set([...toInstall.filter((n) => !isCustomSource(n)), ...installedCustom])];
+
+    for (const name of namesToRegister) {
       // Did-you-mean for unknown hooks
-      if (!getHook(name)) {
+      if (!getHook(name) && !installedCustom.includes(name)) {
         const suggestions = suggestHooks(name);
         const hint = suggestions.length ? ` — did you mean: ${suggestions.join(", ")}?` : "";
         results.push({ hook: name, success: false, error: `Hook '${name}' not found${hint}` });
@@ -575,8 +675,9 @@ program
   .argument("<hook>", "Hook name")
   .option("-j, --json", "Output as JSON", false)
   .description("Show detailed info about a hook")
-  .action((hook: string, options: { json: boolean }) => {
-    const meta = getHook(hook);
+  .action(async (hook: string, options: { json: boolean }) => {
+    const { resolveHookMeta } = await import("../lib/resolve.js");
+    const meta = resolveHookMeta(hook) ?? getHook(hook);
     if (!meta) {
       const suggestions = suggestHooks(hook);
       const hint = suggestions.length ? ` — did you mean: ${suggestions.join(", ")}?` : "";
@@ -590,9 +691,13 @@ program
 
     const globalInstalled = getRegisteredHooks("global").includes(meta.name);
     const projectInstalled = getRegisteredHooks("project").includes(meta.name);
+    const { readCustomManifest } = await import("../lib/manifest.js");
+    const custom = readCustomManifest(meta.name);
+    const source = custom ? "custom" : "bundled";
+    const sourceNote = custom ? "custom (~/.hasna/hooks/hooks/) overrides the bundled registry" : "bundled registry";
 
     if (options.json) {
-      console.log(JSON.stringify({ ...meta, global: globalInstalled, project: projectInstalled }));
+      console.log(JSON.stringify({ ...meta, source, source_note: sourceNote, global: globalInstalled, project: projectInstalled }));
       return;
     }
 
@@ -604,6 +709,7 @@ program
     console.log(`  ${chalk.dim("Event:")}     ${meta.event}`);
     console.log(`  ${chalk.dim("Matcher:")}   ${meta.matcher || "(none)"}`);
     console.log(`  ${chalk.dim("Tags:")}      ${meta.tags.join(", ")}`);
+    console.log(`  ${chalk.dim("Source:")}    ${source} (${sourceNote})`);
     console.log(`  ${chalk.dim("Command:")}   hooks run ${meta.name}`);
     console.log();
 
@@ -641,22 +747,31 @@ program
     const registered = getRegisteredHooks(scope);
 
     for (const name of registered) {
-      const meta = getHook(name);
+      const custom = readCustomManifest(name);
+      const meta = custom ? resolveHookMeta(name) : getHook(name);
       let hookHealthy = true;
 
-      // Check hook exists in the package
-      if (!hookExists(name)) {
-        issues.push({ hook: name, issue: "Hook not found in @hasna/hooks package", severity: "error" });
-        hookHealthy = false;
-        continue;
-      }
+      if (custom) {
+        // Custom hook from the custom dir: healthy when its script exists.
+        if (!existsSync(custom.scriptPath)) {
+          issues.push({ hook: name, issue: `Custom hook script missing: ${custom.scriptPath}`, severity: "error" });
+          hookHealthy = false;
+        }
+      } else {
+        // Check hook exists in the package
+        if (!hookExists(name)) {
+          issues.push({ hook: name, issue: "Hook not found in @hasna/hooks package", severity: "error" });
+          hookHealthy = false;
+          continue;
+        }
 
-      // Check hook has source
-      const hookDir = getHookPath(name);
-      const hookScript = join(hookDir, "src", "hook.ts");
-      if (!existsSync(hookScript)) {
-        issues.push({ hook: name, issue: "Missing src/hook.ts in package", severity: "error" });
-        hookHealthy = false;
+        // Check hook has source
+        const hookDir = getHookPath(name);
+        const hookScript = join(hookDir, "src", "hook.ts");
+        if (!existsSync(hookScript)) {
+          issues.push({ hook: name, issue: "Missing src/hook.ts in package", severity: "error" });
+          hookHealthy = false;
+        }
       }
 
       // Verify correct event registration
@@ -724,8 +839,8 @@ program
   .option("-g, --global", "Update global hooks", false)
   .option("-p, --project", "Update project hooks", false)
   .option("-j, --json", "Output as JSON", false)
-  .description("Re-register hooks (picks up new package version)")
-  .action((hooks: string[], options: { global?: boolean; project?: boolean; json: boolean }) => {
+  .description("Re-register hooks (picks up new package version) and refresh the lock pins")
+  .action(async (hooks: string[], options: { global?: boolean; project?: boolean; json: boolean }) => {
     const scope = resolveScope(options);
     const installed = getInstalledHooks(scope);
     const toUpdate = hooks.length > 0 ? hooks : installed;
@@ -739,13 +854,31 @@ program
       return;
     }
 
-    const results = [];
+    const { resolveHook } = await import("../lib/resolve.js");
+    const { sha256File, setPinnedHook, upsertHookRecord } = await import("../lib/store.js");
+    const { getDb } = await import("../db/index.js");
+
+    const results: any[] = [];
     for (const name of toUpdate) {
       if (!installed.includes(name)) {
         results.push({ hook: name, success: false, error: "Not installed" });
         continue;
       }
       const result = installHook(name, { scope, overwrite: true });
+      const resolved = resolveHook(name);
+      if (result.success && resolved) {
+        const hash = await sha256File(resolved.scriptPath);
+        setPinnedHook(resolved.name, { version: resolved.version, sha256: hash, source: resolved.source });
+        upsertHookRecord(getDb(), {
+          name: resolved.name,
+          version: resolved.version,
+          sha256: hash,
+          source_type: resolved.source,
+          last_verified_at: new Date().toISOString(),
+        });
+        results.push({ ...result, pinned: { version: resolved.version, sha256: hash } });
+        continue;
+      }
       results.push(result);
     }
 
@@ -760,7 +893,7 @@ program
     console.log(chalk.bold("\nUpdating hooks...\n"));
     for (const result of results) {
       if (result.success) {
-        console.log(chalk.green(`✓ ${result.hook} updated`));
+        console.log(chalk.green(`✓ ${result.hook} updated`) + (result.pinned ? chalk.dim(` (pinned ${result.pinned.version})`) : ""));
       } else {
         console.log(chalk.red(`✗ ${result.hook}: ${result.error}`));
       }
@@ -1300,6 +1433,145 @@ storageCmd
       else console.error(chalk.red(`✗ ${message}`));
       process.exitCode = 1;
     }
+  });
+
+// Trust command — re-pin a hook's script hash after a mismatch refusal
+program
+  .command("trust")
+  .argument("<hook>", "Hook to trust")
+  .option("-j, --json", "Output as JSON", false)
+  .description("Trust the current script content of a hook (re-pins its sha256)")
+  .action(async (hook: string, options: { json: boolean }) => {
+    const { resolveHook } = await import("../lib/resolve.js");
+    const { retrustHook } = await import("../lib/store.js");
+    const resolved = resolveHook(hook);
+    if (!resolved) {
+      if (options.json) console.log(JSON.stringify({ error: `Hook '${hook}' not found` }));
+      else console.log(chalk.red(`Hook '${hook}' not found`));
+      return;
+    }
+    const result = retrustHook(resolved.name, resolved.scriptPath, resolved.version, resolved.source);
+    if (options.json) {
+      console.log(JSON.stringify({ ok: true, hook: resolved.name, version: resolved.version, sha256: result.actual, source: resolved.source }));
+      return;
+    }
+    console.log(chalk.green(`✓ Trusted '${resolved.name}' v${resolved.version} (${resolved.source})`));
+    console.log(chalk.dim(`  sha256 ${result.actual}`));
+  });
+
+// Serve command — local registry HTTP API
+program
+  .command("serve")
+  .option("-p, --port <port>", "Port (default 39428)")
+  .option("--host <host>", "Host to bind (default 127.0.0.1)")
+  .option("--api-key <key>", "API key for publish (defaults to HASNA_HOOKS_API_KEY / HOOKS_API_KEY)")
+  .description("Serve the local hook registry over HTTP (catalog, artifacts, lock)")
+  .action(async (options: { port?: string; host?: string; apiKey?: string }) => {
+    const { startServeServer } = await import("../serve.js");
+    startServeServer({
+      port: options.port ? parseInt(options.port, 10) : undefined,
+      host: options.host,
+      apiKey: options.apiKey,
+    });
+  });
+
+// Sync command — reconcile the local store against the registry
+program
+  .command("sync")
+  .option("--dry-run", "Print the plan without changing anything", false)
+  .option("-j, --json", "Output as JSON", false)
+  .description("Sync local hooks with the remote registry (or bundled registry when no API URL is configured)")
+  .action(async (options: { dryRun: boolean; json: boolean }) => {
+    const { syncHooks, planSync } = await import("../lib/sync.js");
+    try {
+      const plan = options.dryRun ? await planSync() : await syncHooks();
+      const diff = plan.diff;
+      if (options.json) {
+        console.log(JSON.stringify({ dry_run: plan.dryRun, api_url: plan.apiUrl ?? null, diff }));
+        return;
+      }
+      const source = plan.apiUrl ? plan.apiUrl : "bundled registry";
+      console.log(chalk.bold(`\nHook sync (${source})${plan.dryRun ? " — dry run" : ""}\n`));
+      if (diff.added.length > 0) {
+        console.log(chalk.green(`  + ${diff.added.length} to add:`));
+        for (const name of diff.added) console.log(chalk.green(`    ${name}`));
+      }
+      if (diff.updated.length > 0) {
+        console.log(chalk.yellow(`  ~ ${diff.updated.length} to update:`));
+        for (const name of diff.updated) console.log(chalk.yellow(`    ${name}`));
+      }
+      if (diff.skipped.length > 0) {
+        console.log(chalk.dim(`  - ${diff.skipped.length} not in remote lock (left untouched)`));
+      }
+      console.log(chalk.dim(`  = ${diff.unchanged.length} unchanged`));
+      if (plan.dryRun) console.log(chalk.dim("\n  Dry run: nothing was written."));
+      else console.log(chalk.green(`\n✓ Synced (${diff.added.length} added, ${diff.updated.length} updated, ${diff.unchanged.length} unchanged)`));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (options.json) {
+        console.log(JSON.stringify({ error: message, changed: false }));
+      } else {
+        console.error(chalk.red(`✗ ${message}`));
+        console.error(chalk.dim("  Nothing was changed (fail-closed)."));
+      }
+      process.exitCode = 1;
+    }
+  });
+
+// cf command — Cloudflare registry provisioning
+program
+  .command("cf")
+  .description("Provision and deploy the hooks registry to Cloudflare")
+  .option("--deploy", "Provision D1 + R2 via the Cloudflare API", true)
+  .option("--dry-run", "Print the plan without calling the Cloudflare API", false)
+  .option("--account-id <id>", "Cloudflare account id (defaults to CF_ACCOUNT_ID env)")
+  .option("--database-name <name>", "D1 database name (default hooks-registry)")
+  .option("--bucket-name <name>", "R2 bucket name (default hooks-registry-artifacts)")
+  .option("--token-file <path>", "Read the API token from a file (defaults to CF_API_TOKEN env)")
+  .option("-j, --json", "Output as JSON", false)
+  .action(async (options: { dryRun: boolean; accountId?: string; databaseName?: string; bucketName?: string; tokenFile?: string; json: boolean }) => {
+    const token = readToken(options.tokenFile);
+    const accountId = options.accountId ?? process.env.CF_ACCOUNT_ID;
+    if (!options.dryRun) {
+      if (!token) {
+        console.error(chalk.red("CF_API_TOKEN is not set (or --token-file path is unreadable)."));
+        console.error(chalk.dim("  Resolve it from the vault, never paste the value:"));
+        console.error(chalk.dim("    secrets exec <vault-key> --as CF_API_TOKEN -- hooks cf deploy"));
+        process.exit(1);
+      }
+      if (!accountId) {
+        console.error(chalk.red("CF_ACCOUNT_ID is not set (or pass --account-id)."));
+        process.exit(1);
+      }
+    }
+    const { provisionCloudflareResources } = await import("../cf/provision.js");
+    const result = await provisionCloudflareResources({
+      token: token ?? "",
+      accountId: accountId ?? "",
+      databaseName: options.databaseName ?? "hooks-registry",
+      bucketName: options.bucketName ?? "hooks-registry-artifacts",
+      dryRun: options.dryRun,
+    });
+    if (options.json) {
+      console.log(JSON.stringify({ dry_run: options.dryRun, ...result }));
+      return;
+    }
+    if (options.dryRun) {
+      console.log(chalk.bold("\ncf deploy dry run — would provision:\n"));
+    } else {
+      console.log(chalk.bold("\nCloudflare provisioning complete:\n"));
+      console.log(`  ${chalk.dim("D1:")}    ${result.d1Created ? chalk.green(`created '${options.databaseName ?? "hooks-registry"}'`) : chalk.dim(`exists (${result.d1DatabaseId})`)}`);
+      console.log(`  ${chalk.dim("R2:")}    ${result.r2Created ? chalk.green(`created '${options.bucketName ?? "hooks-registry-artifacts"}'`) : chalk.dim("exists")}`);
+    }
+    console.log(`\n  ${chalk.bold("Worker upload (run these with wrangler):")}`);
+    for (const cmd of result.commands) {
+      console.log(`    ${cmd}`);
+    }
+    console.log();
+    console.log(chalk.dim("  Worker upload is not performed by this command — the worker needs the workerd"));
+    console.log(chalk.dim("  target, which only wrangler can bundle. Copy src/cf/wrangler.toml.example to"));
+    console.log(chalk.dim("  wrangler.toml, fill in the D1 database id, then run the commands above."));
+    console.log();
   });
 
 // MCP server command
