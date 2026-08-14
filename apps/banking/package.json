@@ -47,7 +47,7 @@
     "smoke:dist": "bun scripts/smoke-dist.ts",
     "smoke:mercury:live": "bun scripts/smoke-mercury-live.ts",
     "contracts:check": "bunx @hasna/contracts@0.8.5 repo-conformance .",
-    "artifact-scan": "bun pm pack --ignore-scripts --quiet --filename banking-artifact-scan.tgz && bunx @hasna/contracts@0.8.5 artifact-scan banking-artifact-scan.tgz && rm -f banking-artifact-scan.tgz",
+    "artifact-scan": "bun pm pack --ignore-scripts --quiet --filename \"$PWD/banking-artifact-scan.tgz\" && bunx @hasna/contracts@0.8.5 artifact-scan banking-artifact-scan.tgz; rc=$?; rm -f \"$PWD/banking-artifact-scan.tgz\"; exit $rc",
     "pack:check": "bun pm pack --dry-run --ignore-scripts",
     "verify:release": "bun run typecheck && bun test && bun run build && bun run smoke:dist && bun run pack:check",
     "dev:cli": "bun run src/cli/index.ts",

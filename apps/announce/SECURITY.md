@@ -1,0 +1,13 @@
+# Security
+
+Open Announce stores local JSONL data in `~/.hasna/announce` by default. Set `ANNOUNCE_DATA_DIR` to use a project-specific or ephemeral data directory.
+
+The package redacts obvious secret-shaped values from submitted text and metadata before writing entries. This is a best-effort safety layer, not a substitute for avoiding secrets in announce text.
+
+If `CHANGELOG_API_TOKEN` is configured, the HTTP API requires a bearer token or `x-announce-token` header. API publish write mode is disabled unless `CHANGELOG_API_TOKEN` is configured and supplied. Do not expose the server on an untrusted network without token auth.
+
+Publishing is dry-run by default. A target file is written only when `write: true` is supplied through the SDK/API/MCP tool or `--write` is supplied through the CLI.
+
+When publishing overwrites an existing file, Open Announce stores a local backup under `~/.hasna/announce/backups` by default. Treat backups as local artifacts and do not commit them.
+
+Report security issues privately to Hasna maintainers before opening public issues.
