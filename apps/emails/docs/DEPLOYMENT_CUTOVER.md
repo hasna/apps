@@ -219,8 +219,8 @@ printf '%s' "$RELEASE_COMMIT" | grep -Eq '^[0-9a-f]{40}$'
 
 SOURCE_ORIGIN_URL="$(git -C "$SOURCE_CHECKOUT" remote get-url origin)"
 case "$SOURCE_ORIGIN_URL" in
-  "https://github.com/hasna/emails.git"|"git@github.com:hasna/emails.git") ;;
-  *) printf '%s\n' "source origin is not the canonical hasna/emails repository" >&2; exit 64 ;;
+  "https://github.com/hasna/apps.git"|"git@github.com:hasna/apps.git") ;;
+  *) printf '%s\n' "source origin is not the canonical hasna/apps repository" >&2; exit 64 ;;
 esac
 git -C "$SOURCE_CHECKOUT" fetch --quiet --no-tags origin main
 ORIGIN_MAIN_COMMIT="$(git -C "$SOURCE_CHECKOUT" rev-parse --verify 'refs/remotes/origin/main^{commit}')"

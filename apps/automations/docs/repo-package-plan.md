@@ -49,7 +49,7 @@ should avoid turning CLI or daemon internals into a broad compatibility
 promise. Add new subpaths only when they map to a stable integration boundary.
 
 Package repository, homepage, and bugs metadata use the canonical
-`https://github.com/hasna/automations` repository.
+`https://github.com/hasna/apps` repository.
 
 ## CLI Bin Surface
 
