@@ -1,0 +1,61 @@
+{
+  "schema": "hasna.service_contract.v1",
+  "name": "hooks",
+  "class": "cli-with-store",
+  "contractVersion": "v1",
+  "kitVersion": "0.8.4",
+  "description": "Open source hooks library for AI coding agents. Storage is a data-backend switch, never a deployment mode: local SQLite at ~/.hasna/hooks/hooks.db by default, or PostgreSQL when HASNA_HOOKS_DATABASE_URL is set with HASNA_HOOKS_STORAGE_BACKEND=postgresql. The retired HASNA_HOOKS_STORAGE_MODE / HOOKS_STORAGE_MODE deployment-mode variables are read as errors, not no-ops. MCP is served by the `hooks mcp` subcommand (no separate mcp bin).",
+  "bins": [
+    "hooks"
+  ],
+  "hosting": [
+    "user-hosted"
+  ],
+  "serviceSurfaces": [
+    {
+      "name": "cli",
+      "kind": "cli",
+      "status": "supported",
+      "bin": "hooks",
+      "authMode": "local-only"
+    },
+    {
+      "name": "mcp",
+      "kind": "mcp",
+      "status": "supported",
+      "mcpBin": "hooks",
+      "authMode": "local-only"
+    },
+    {
+      "name": "serve",
+      "kind": "api",
+      "status": "deferred",
+      "deferReason": "The monorepo four-surface law requires a -serve server bin, and `hooks serve` does not exist on main. It is in flight in lane L1 of the hooks unification (todos cfbd9c0d-63b7-41d3-bd3c-fc0b9fa67864). Flip this surface to supported and add the bin when it lands.",
+      "authMode": "none"
+    },
+    {
+      "name": "typescript-sdk",
+      "kind": "sdk",
+      "status": "supported",
+      "authMode": "local-only",
+      "exportSubpath": "."
+    }
+  ],
+  "storage": {
+    "mode": "sqlite",
+    "engines": [
+      "sqlite",
+      "postgresql"
+    ],
+    "envPrefix": "HASNA_HOOKS_",
+    "sqlitePath": "~/.hasna/hooks/hooks.db"
+  },
+  "metadata": {
+    "databaseUrlEnv": "HASNA_HOOKS_DATABASE_URL",
+    "storageBackendEnv": "HASNA_HOOKS_STORAGE_BACKEND",
+    "retiredStorageModeEnv": [
+      "HASNA_HOOKS_STORAGE_MODE",
+      "HOOKS_STORAGE_MODE"
+    ]
+  }
+}
