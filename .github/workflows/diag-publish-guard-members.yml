@@ -1,0 +1,74 @@
+# TEMPORARY DIAGNOSTIC workflow (publish-guard prepack flake, task 92e14208).
+# REMOVE BEFORE MERGE. The fail-loud guard reports only npm's stderr tail on
+# failure; the inner failing step of accounts/computers/contracts prepacks is
+# invisible in CI logs. This workflow replicates the guard's exact invocation
+# on a real runner, loops 10x per member, and prints the captured prepack
+# output + npm debug log on failure, plus per-step timings.
+name: diag-publish-guard-members
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  diagnose:
+    name: diagnose accounts/computers/contracts pack flakes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - name: Install
+        run: bun install --frozen-lockfile
+      - name: Environment fingerprint
+        run: |
+          echo "node: $(node --version)"
+          echo "npm: $(npm --version)"
+          echo "bun: $(bun --version)"
+          echo "nproc: $(nproc)"
+          free -m | head -2
+          echo "PATH:"; echo "$PATH" | tr ':' '\n' | head -20
+      - name: Reproduce guard packs (10x each member)
+        run: |
+          set +e
+          for m in accounts computers contracts; do
+            echo "===== MEMBER $m ====="
+            for i in $(seq 1 10); do
+              start=$(date +%s.%N)
+              (cd apps/$m && npm pack --dry-run --json > /tmp/pack-$m-$i.out 2> /tmp/pack-$m-$i.err)
+              rc=$?
+              end=$(date +%s.%N)
+              dur=$(echo "$end $start" | awk '{printf "%.1f", $1-$2}')
+              echo "iter $i: rc=$rc dur=${dur}s"
+              if [ $rc -ne 0 ]; then
+                echo "--- stderr tail ---"; tail -5 /tmp/pack-$m-$i.err
+                echo "--- stdout tail (prepack logs) ---"; tail -60 /tmp/pack-$m-$i.out
+                LOG=$(ls -t "$HOME/.npm/_logs" 2>/dev/null | head -1)
+                if [ -n "$LOG" ]; then echo "--- npm debug log: $LOG ---"; tail -60 "$HOME/.npm/_logs/$LOG"; fi
+              fi
+            done
+          done
+      - name: Per-step timings (identify failing step)
+        run: |
+          set +e
+          echo "===== accounts steps ====="
+          (cd apps/accounts && for s in "bun run build" "bun run scripts/release-provenance.ts pack"; do
+            t0=$(date +%s.%N); eval "$s" > /tmp/acc.log 2>&1; r=$?; t1=$(date +%s.%N)
+            echo "step [$s]: rc=$r dur=$(echo "$t1 $t0" | awk '{printf "%.1f", $1-$2}')s"
+            if [ $r -ne 0 ]; then tail -25 /tmp/acc.log; fi
+          done)
+          echo "===== computers steps ====="
+          (cd apps/computers && for s in "bun run typecheck" "bun test" "bun run lint" "bun run check:schemas" "bun run check:surfaces" "bun run build"; do
+            t0=$(date +%s.%N); eval "$s" > /tmp/cmp.log 2>&1; r=$?; t1=$(date +%s.%N)
+            echo "step [$s]: rc=$r dur=$(echo "$t1 $t0" | awk '{printf "%.1f", $1-$2}')s"
+            if [ $r -ne 0 ]; then tail -25 /tmp/cmp.log; fi
+          done)
+          echo "===== contracts steps ====="
+          (cd apps/contracts && for s in "bun run todos:hygiene" "bun run typecheck" "bun run test" "bun run conformance" "bun run build" "bun run smoke:dist" "bun run smoke:todos-pack" "bun run pack:check" "bun run scan:artifact"; do
+            t0=$(date +%s.%N); eval "$s" > /tmp/ctr.log 2>&1; r=$?; t1=$(date +%s.%N)
+            echo "step [$s]: rc=$r dur=$(echo "$t1 $t0" | awk '{printf "%.1f", $1-$2}')s"
+            if [ $r -ne 0 ]; then tail -25 /tmp/ctr.log; fi
+          done)
+          exit 0
