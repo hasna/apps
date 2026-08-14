@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.3] - 2026-08-14
+
+### Fixed
+
+- **`hooks run` executes .sh hooks under bash** (bug e0cd726c): `executeVerifiedScript` unconditionally spawned `bun run <tempfile>`, and bun's parser is a partial bash subset that rejects real bash (measured on env-dump-guard: `Unexpected ')'` on escaped-paren regexes). The runner now picks the interpreter from the verified bytes — a recognized shebang wins (`bash`/`sh` → `/bin/bash`, `node`/`bun` → bun), otherwise `.sh`/`.bash` run under `/bin/bash` and known JS/TS extensions under bun; unknown extensions and unknown shebangs are refused with an error naming them. The temp-file extension follows the interpreter (bun routes by extension, so a node-shebang `.sh` file gets a `.ts` temp name). The verified-bytes property is unchanged: the temp file still holds exactly the hashed content, read-once-verify-execute, and hash refusal now covers `.sh` hooks too.
+
+## [0.6.2] - 2026-08-14
+
+### Changed
+
+- **Registry privacy lock-down.** When the worker `HOOKS_API_KEY` binding is set, every registry route except `/health` requires a valid API key (`X-API-Key` or `Bearer`); `/health` stays open for probes. Without the binding, reads stay open — the behavior is config-driven, preserving the OSS default.
+- API key comparison is now timing-safe (`secureEqual`, constant-time) instead of a plain string compare.
+
+### Fixed
+
+- **Bundled-hook runtime resolution** (bug 3e69199c): a hook installed at runtime from the bundled set now resolves to its own bundled copy instead of failing or resolving to the wrong location.
+- **`hooks doctor` matcher fix**: hook matching no longer misclassifies hooks when matching against the registry.
+
 ## [Unreleased]
 
 ### Added

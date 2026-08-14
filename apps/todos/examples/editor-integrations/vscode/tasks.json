@@ -1,0 +1,44 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "todos: ready",
+      "type": "shell",
+      "command": "todos",
+      "args": ["--json", "ready"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": []
+    },
+    {
+      "label": "todos: active",
+      "type": "shell",
+      "command": "todos",
+      "args": ["--json", "active"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": []
+    },
+    {
+      "label": "todos: extract source TODOs",
+      "type": "shell",
+      "command": "todos",
+      "args": ["--json", "extract", "${workspaceFolder}", "--dry-run", "--index"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": []
+    },
+    {
+      "label": "todos: context pack",
+      "type": "shell",
+      "command": "todos",
+      "args": ["context-pack", "${input:taskId}", "--format", "markdown"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": []
+    }
+  ],
+  "inputs": [
+    {
+      "id": "taskId",
+      "type": "promptString",
+      "description": "Task ID or short ID"
+    }
+  ]
+}

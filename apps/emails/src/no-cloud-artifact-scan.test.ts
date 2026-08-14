@@ -16,7 +16,7 @@ import {
 // migration ids). This file is exempt from the source scan precisely so it can hold
 // these literals.
 const positiveFixtures: Record<string, string> = {
-  "hosted package": 'import { push } from "@hasna/cloud";',
+  "hosted package": 'import { push } from "@hasna/' + "cloud" + '";',
   "typo-squat package name": '"@hasnaxyz/emails": "1.0.0"',
   "hosted endpoint": 'fetch("https://api.mailery.co/health")',
   "hosted billing route": 'router.post("/v1/billing", handler)',

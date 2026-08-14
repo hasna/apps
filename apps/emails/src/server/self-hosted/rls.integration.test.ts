@@ -25,6 +25,7 @@ import { createPgPool, createQueryClient, MigrationLedger } from "../../storage-
 import type { PoolQueryClient, TypedQueryClient } from "../../storage-kit/index.js";
 import { DEFAULT_TENANT_ID, emailsSelfHostedMigrations } from "./migrations.js";
 import { assertServingRoleCannotBypassRls } from "./serve.js";
+import { EmailsSelfHostedStore, LEGACY_INBOUND_MISSING_PAYLOAD_SCAN_SQL } from "./store.js";
 
 const databaseUrl = process.env["EMAILS_TEST_POSTGRES_URL"];
 const pg: PoolQueryClient | null = databaseUrl
@@ -161,6 +162,10 @@ beforeAll(async () => {
   // non-superuser needs USAGE on the schema to resolve unqualified names.
   await pg.execute(`CREATE ROLE ${PROBE} NOLOGIN NOSUPERUSER NOBYPASSRLS`);
   await pg.execute(`GRANT USAGE ON SCHEMA public TO ${PROBE}`);
+  // The all-tenant census enumerates `tenants` (the registry, no RLS); in
+  // production `emails_app` owns that table, so the probe needs the read grant
+  // to stand in for it.
+  await pg.execute(`GRANT SELECT ON tenants TO ${PROBE}`);
   for (const t of [...TABLES, ...ROLLUP_TABLES, ...REPAIR_TABLES, ...REPAIR_ALIAS_TABLES]) {
     await pg.execute(`ALTER TABLE ${t} OWNER TO ${PROBE}`);
   }
@@ -355,6 +360,81 @@ describe.skipIf(!pg)("Row-Level Security backstop (Layer 2, migration 0013)", ()
     expect(
       await asProbe(TENANT_B, (tx) => tx.get<{ id: string }>(`SELECT id FROM messages WHERE source_id = 'obj-key-1'`)),
     ).toBeNull();
+  });
+
+  it("legacy-inbound census: the real scan query fails closed with no GUC, and the store sets the GUC per tenant", async () => {
+    // Seed one census-matching row (metadata-only attachment) per tenant plus
+    // one non-matching row per tenant (payload present). Seeded as superuser,
+    // which is not what this test measures — the assertions run as the probe.
+    await pg!.execute(
+      `INSERT INTO messages (id, from_addr, source_id, attachments, tenant_id) VALUES
+         ($1, 'legacy@a.example', 'legacy:inbound_emails:a-example', $3, $4),
+         ($2, 'legacy@b.example', 'legacy:inbound_emails:b-example', $5, $6),
+         ($7, 'legacy@a.example', 'legacy:inbound_emails:a-ok', $8, $4),
+         ($9, 'legacy@b.example', 'legacy:inbound_emails:b-ok', $10, $6)`,
+      [
+        "legacy-msg-a",
+        "legacy-msg-b",
+        JSON.stringify([{ filename: "a.txt", size: 3 }]),
+        TENANT_A,
+        JSON.stringify([{ filename: "b.txt", size: 3 }]),
+        TENANT_B,
+        "legacy-ok-a",
+        JSON.stringify([{ filename: "ok.txt", size: 3, content_base64: "aGk=" }]),
+        "legacy-ok-b",
+        JSON.stringify([{ filename: "ok.txt", size: 3, content_base64: "aGk=" }]),
+      ],
+    );
+    try {
+      // Fail-closed control: the EXACT production query shape with NO GUC
+      // returns zero — the vacuous census the omitted set_config produced
+      // (confident zero, rc=0, recovery never starts).
+      const unset = await asProbe(null, (tx) =>
+        tx.many<{ message_id: string }>(LEGACY_INBOUND_MISSING_PAYLOAD_SCAN_SQL, [TENANT_A, null, 100]),
+      );
+      expect(unset, "census query with NO app.current_tenant GUC").toEqual([]);
+
+      // GUC set per tenant: the same query sees exactly that tenant's row.
+      const aRows = await asProbe(TENANT_A, (tx) =>
+        tx.many<{ message_id: string }>(LEGACY_INBOUND_MISSING_PAYLOAD_SCAN_SQL, [TENANT_A, null, 100]),
+      );
+      const bRows = await asProbe(TENANT_B, (tx) =>
+        tx.many<{ message_id: string }>(LEGACY_INBOUND_MISSING_PAYLOAD_SCAN_SQL, [TENANT_B, null, 100]),
+      );
+      expect(aRows.map((r) => r.message_id)).toEqual(["legacy-msg-a"]);
+      expect(bRows.map((r) => r.message_id)).toEqual(["legacy-msg-b"]);
+
+      // Cross-tenant control: A's GUC + B's row predicate -> zero (RLS agrees
+      // with Layer 1; the fail-closed semantics are unchanged by the fix).
+      const cross = await asProbe(TENANT_A, (tx) =>
+        tx.many<{ message_id: string }>(LEGACY_INBOUND_MISSING_PAYLOAD_SCAN_SQL, [TENANT_B, null, 100]),
+      );
+      expect(cross, "census query with A's GUC cannot see B's rows").toEqual([]);
+
+      // The fixed store method under the production serving posture
+      // (NOBYPASSRLS + FORCE RLS + GUC set per tenant) finds both legacy rows
+      // and only them.
+      const probeClient: PoolQueryClient = {
+        ...pg!,
+        async transaction<T>(fn: (tx: TypedQueryClient) => Promise<T>): Promise<T> {
+          return pg!.transaction(async (tx) => {
+            await tx.execute(`SET LOCAL ROLE ${PROBE}`);
+            return fn(tx);
+          });
+        },
+      };
+      const store = new EmailsSelfHostedStore(probeClient);
+      const page = await store.listLegacyInboundMissingPayloadBindings(null, 100);
+      expect(page.rows.map((r) => r.message_id).sort()).toEqual(["legacy-msg-a", "legacy-msg-b"]);
+      expect(page.has_more).toBe(false);
+      // The replay lookup (the pattern the scan now copies) is equally visible.
+      const replay = await store.getLegacyInboundPayloadBindings("legacy-msg-a");
+      expect(replay.map((r) => r.message_id)).toEqual(["legacy-msg-a"]);
+    } finally {
+      await pg!.execute(`DELETE FROM messages WHERE id = ANY($1)`, [
+        ["legacy-msg-a", "legacy-msg-b", "legacy-ok-a", "legacy-ok-b"],
+      ]);
+    }
   });
 
   it("boot assertion: rejects a role that can bypass RLS, accepts one that cannot", async () => {

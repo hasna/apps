@@ -1,0 +1,1365 @@
+{
+  "contractVersion": "1.0.0",
+  "fixtureDigest": "51c1a8d58f9fc725bdd51a3ff757415efb5a61bb8da13fb14d34d06927d7479c",
+  "fixtures": {
+    "artifactAttestations": [
+      {
+        "artifact": {
+          "digest": "4aab79eca4eca7079eb990dbb8c31f94b5ea784fb34d0dd7619f307136ea2fcb",
+          "id": "artifact-example-app",
+          "schema": "hasna.build_artifact.v1"
+        },
+        "artifactDigest": "9f57aeb5d9ea4e151380cfb3889d40b5cdac9747dd85c89921237df22f7aa29b",
+        "createdAt": "2026-08-09T09:10:00.000Z",
+        "digest": "e8227f0a659ad3224a6f0c6c5d96e2fb41ea18000b14c09c060f33c1da45cd55",
+        "evidenceRefs": [
+          {
+            "id": "attestation-policy-result",
+            "kind": "test_result",
+            "sha256": "3a1bef67d71fd247cb5deca3e72af7972c2079b44262110743d92bd04b2700dd",
+            "summary": "Bounded evidence for attestation-policy-result",
+            "uri": "artifact://deployment-fixture/attestation-policy-result"
+          }
+        ],
+        "expiresAt": "2026-08-10T09:00:00.000Z",
+        "id": "attestation-example-app",
+        "issuer": {
+          "id": "agent-verifier",
+          "kind": "agent",
+          "name": "Independent Verifier"
+        },
+        "keyRef": {
+          "id": "signing-key-reference",
+          "kind": "integration",
+          "tags": [
+            "deployment-fixture"
+          ],
+          "uri": "integration://deployment-fixture/signing-key-reference"
+        },
+        "policyResult": "passed",
+        "policyRevision": 3,
+        "predicateKind": "slsa-provenance",
+        "predicateSchemaVersion": "v1.0",
+        "producer": {
+          "id": "agent-verifier",
+          "kind": "agent",
+          "name": "Independent Verifier"
+        },
+        "schema": "hasna.artifact_attestation.v1",
+        "signatureRef": {
+          "id": "attestation-signature",
+          "kind": "artifact",
+          "sha256": "588d4b8435249c69b44b89619956817e6928293a1d75d0db7408c8476805712f",
+          "summary": "Bounded evidence for attestation-signature",
+          "uri": "artifact://deployment-fixture/attestation-signature"
+        }
+      }
+    ],
+    "buildArtifacts": [
+      {
+        "artifactDigest": "9f57aeb5d9ea4e151380cfb3889d40b5cdac9747dd85c89921237df22f7aa29b",
+        "buildRun": {
+          "actor": {
+            "id": "agent-builder",
+            "kind": "agent",
+            "name": "Deployment Builder"
+          },
+          "constraints": [
+            "credential-zero execution"
+          ],
+          "costEstimates": [],
+          "createdAt": "2026-08-09T09:00:00.000Z",
+          "decisions": [],
+          "evidenceRefs": [
+            {
+              "id": "build-run-evidence",
+              "kind": "test_result",
+              "sha256": "cee6797059a4b2d4bdd5a78ec5ea58ac3760f50b720efdabfe95f3ff7b60b8e5",
+              "summary": "Bounded evidence for build-run-evidence",
+              "uri": "artifact://deployment-fixture/build-run-evidence"
+            }
+          ],
+          "finishedAt": "2026-08-09T09:05:00.000Z",
+          "id": "build-run",
+          "objective": "Produce verified deployment evidence",
+          "proofBundleRefs": [],
+          "resourceRefs": [],
+          "schema": "hasna.work_run.v1",
+          "startedAt": "2026-08-09T09:00:00.000Z",
+          "status": "succeeded",
+          "validationPlanRefs": []
+        },
+        "buildWorkflowRef": {
+          "id": "build-workflow",
+          "kind": "workflow",
+          "tags": [
+            "deployment-fixture"
+          ],
+          "uri": "artifact://deployment-fixture/build-workflow"
+        },
+        "builder": {
+          "id": "agent-builder",
+          "kind": "agent",
+          "name": "Deployment Builder"
+        },
+        "createdAt": "2026-08-09T09:10:00.000Z",
+        "digest": "4aab79eca4eca7079eb990dbb8c31f94b5ea784fb34d0dd7619f307136ea2fcb",
+        "id": "artifact-example-app",
+        "kind": "oci_image",
+        "mediaType": "application/vnd.oci.image.manifest.v1+json",
+        "producer": {
+          "id": "agent-builder",
+          "kind": "agent",
+          "name": "Deployment Builder"
+        },
+        "provenanceRefs": [
+          {
+            "id": "artifact-provenance",
+            "kind": "artifact",
+            "sha256": "03b81cbf545913af8d9f70c9a3643ec3ae0338d0c02854e73a6f16014d4532ec",
+            "summary": "Bounded evidence for artifact-provenance",
+            "uri": "artifact://deployment-fixture/artifact-provenance"
+          }
+        ],
+        "repositoryCommitSha": "0123456789abcdef0123456789abcdef01234567",
+        "repositoryTreeSha": "89abcdef0123456789abcdef0123456789abcdef",
+        "sbomRefs": [
+          {
+            "id": "artifact-sbom",
+            "kind": "artifact",
+            "sha256": "b4f783391e4b7ab46fdb49d5808cd389e1340173eab6afb1a80528664f778ae4",
+            "summary": "Bounded evidence for artifact-sbom",
+            "uri": "artifact://deployment-fixture/artifact-sbom"
+          }
+        ],
+        "scanRefs": [
+          {
+            "id": "artifact-scan",
+            "kind": "test_result",
+            "sha256": "b5932ac32cf213f10bbaea588f83e9e3dfb0978adce936d8a347f806d6429b73",
+            "summary": "Bounded evidence for artifact-scan",
+            "uri": "artifact://deployment-fixture/artifact-scan"
+          }
+        ],
+        "schema": "hasna.build_artifact.v1",
+        "signatureRefs": [
+          {
+            "id": "artifact-signature",
+            "kind": "artifact",
+            "sha256": "75ecda7b490798542b3f6dbd5de7addd705bdefeacb678981545b6a8a916d759",
+            "summary": "Bounded evidence for artifact-signature",
+            "uri": "artifact://deployment-fixture/artifact-signature"
+          }
+        ],
+        "sourceCandidate": {
+          "digest": "ae0668664ad166aec5e57a7990ce41b611cfa74f478a7e56a95a1a93f4bd70f0",
+          "id": "source-candidate-example-app",
+          "schema": "hasna.verified_source_candidate.v1"
+        },
+        "status": "active",
+        "uri": "artifact://deployment-fixture/example-app-image"
+      }
+    ],
+    "deploymentApprovalDecisions": [
+      {
+        "actionId": null,
+        "actorRole": "approver",
+        "attemptScope": {
+          "maximum": 2,
+          "minimum": 1
+        },
+        "authorizationPolicyRevision": 4,
+        "boundInputDigests": [
+          {
+            "digest": "083e9014634a6c88119a5d0e541cc404cf494a171584573851f78c92ba48f0aa",
+            "kind": "request"
+          },
+          {
+            "digest": "ac1168d43503c1d1505c3271ceb4a92a9803af75ac37739c5e46ea540d036274",
+            "kind": "plan"
+          },
+          {
+            "digest": "6bc75f992f681a5cf96083897b0bfffdd3bb9304b4ec32891c944ecb3af522b9",
+            "kind": "intent"
+          }
+        ],
+        "createdAt": "2026-08-09T09:10:00.000Z",
+        "decision": {
+          "actor": {
+            "id": "owner-approver",
+            "kind": "human",
+            "name": "Deployment Approver"
+          },
+          "createdAt": "2026-08-09T09:10:00.000Z",
+          "decisionType": "approval",
+          "evidenceRefs": [
+            {
+              "id": "approval-envelope-evidence",
+              "kind": "report",
+              "sha256": "69f3bf4095c3714596d75471fd55a0660b985bbe757d9f8ad682c0db5c89b1d3",
+              "summary": "Bounded evidence for approval-envelope-evidence",
+              "uri": "artifact://deployment-fixture/approval-envelope-evidence"
+            }
+          ],
+          "id": "approval-envelope-example-app",
+          "obligations": [
+            "retain immutable receipts",
+            "verify live outcome"
+          ],
+          "reason": "Approved after policy and evidence review",
+          "redactions": [],
+          "schema": "hasna.decision_envelope.v1",
+          "selected": [],
+          "skipped": [],
+          "status": "allowed"
+        },
+        "digest": "41a0daa144612fdd8d0862c93f22ad0378951a8b25fe2212052bb6f3505f77cb",
+        "environment": {
+          "digest": "9760cb4f172b160d2c3257a63e8ad94683a45c985ed62511a1a2c01740636278",
+          "id": "environment-production",
+          "revision": 2,
+          "schema": "hasna.environment_binding.v1"
+        },
+        "evidenceRefs": [
+          {
+            "id": "deployment-approval-evidence",
+            "kind": "report",
+            "sha256": "e3548ec1c75b17714a582350203a9dc66142ef9433bcfe69f256b0ef23d75e0d",
+            "summary": "Bounded evidence for deployment-approval-evidence",
+            "uri": "artifact://deployment-fixture/deployment-approval-evidence"
+          }
+        ],
+        "expiresAt": "2026-08-10T09:00:00.000Z",
+        "id": "deployment-approval-example-app",
+        "issuedAt": "2026-08-09T09:10:00.000Z",
+        "phaseId": null,
+        "plan": {
+          "digest": "ac1168d43503c1d1505c3271ceb4a92a9803af75ac37739c5e46ea540d036274",
+          "id": "deployment-plan-example-app",
+          "schema": "hasna.deployment_plan.v1"
+        },
+        "producer": {
+          "id": "owner-approver",
+          "kind": "human",
+          "name": "Deployment Approver"
+        },
+        "runtimeMaterial": null,
+        "schema": "hasna.deployment_approval_decision.v1",
+        "scope": "plan",
+        "separationOfDutiesPassed": true,
+        "unchangedRetryPolicy": "allowed"
+      }
+    ],
+    "deploymentAttempts": [
+      {
+        "actionSteps": [
+          {
+            "actionId": "apply-workload",
+            "evidenceRefs": [
+              {
+                "id": "attempt-action-evidence",
+                "kind": "test_result",
+                "sha256": "4af04476abe762b8d7a3c55cbb03107ecd1ee3311716216c2731b728ec938eba",
+                "summary": "Bounded evidence for attempt-action-evidence",
+                "uri": "artifact://deployment-fixture/attempt-action-evidence"
+              }
+            ],
+            "finishedAt": "2026-08-09T09:18:00.000Z",
+            "providerCorrelationId": "provider-operation-example-app",
+            "sequence": 1,
+            "startedAt": "2026-08-09T09:11:00.000Z",
+            "state": "succeeded"
+          }
+        ],
+        "approvals": [
+          {
+            "actionId": null,
+            "decision": {
+              "digest": "41a0daa144612fdd8d0862c93f22ad0378951a8b25fe2212052bb6f3505f77cb",
+              "id": "deployment-approval-example-app",
+              "schema": "hasna.deployment_approval_decision.v1"
+            },
+            "phaseId": null,
+            "runtimeMaterialDigest": null,
+            "scope": "plan"
+          }
+        ],
+        "attemptNumber": 1,
+        "createdAt": "2026-08-09T09:10:00.000Z",
+        "decisionActors": [
+          {
+            "id": "owner-approver",
+            "kind": "human",
+            "name": "Deployment Approver"
+          }
+        ],
+        "digest": "c5b700016c1e1453be1c295e44ba6e92af39cc685942a510d35a9ef691a953a4",
+        "environmentLock": {
+          "fencingToken": 19,
+          "id": "environment-production-lock"
+        },
+        "evidenceRefs": [
+          {
+            "id": "attempt-evidence",
+            "kind": "report",
+            "sha256": "1bf89d5d5cfa2f47a382b6e1b2baf416291269eb2c8612692014b10db274c7d1",
+            "summary": "Bounded evidence for attempt-evidence",
+            "uri": "artifact://deployment-fixture/attempt-evidence"
+          }
+        ],
+        "executorActors": [
+          {
+            "id": "deployment-executor",
+            "kind": "service",
+            "name": "Deployment Executor"
+          }
+        ],
+        "failureReason": null,
+        "finalReceipt": null,
+        "id": "deployment-attempt-example-app",
+        "inboxCorrelationRef": {
+          "id": "inbox-correlation",
+          "kind": "integration",
+          "tags": [
+            "deployment-fixture"
+          ],
+          "uri": "integration://deployment-fixture/inbox-correlation"
+        },
+        "outboxCorrelationRef": {
+          "id": "outbox-correlation",
+          "kind": "integration",
+          "tags": [
+            "deployment-fixture"
+          ],
+          "uri": "integration://deployment-fixture/outbox-correlation"
+        },
+        "plan": {
+          "digest": "ac1168d43503c1d1505c3271ceb4a92a9803af75ac37739c5e46ea540d036274",
+          "id": "deployment-plan-example-app",
+          "schema": "hasna.deployment_plan.v1"
+        },
+        "producer": {
+          "id": "deployment-executor",
+          "kind": "service",
+          "name": "Deployment Executor"
+        },
+        "providerReceipts": [],
+        "requester": {
+          "id": "agent-builder",
+          "kind": "agent",
+          "name": "Deployment Builder"
+        },
+        "retryOf": null,
+        "revision": 1,
+        "schema": "hasna.deployment_attempt.v1",
+        "state": "succeeded",
+        "updatedAt": "2026-08-09T09:20:00.000Z"
+      }
+    ],
+    "deploymentPlans": [
+      {
+        "actions": [
+          {
+            "approvalScope": "plan",
+            "compensationOperationId": "provider.rollback",
+            "dependsOn": [],
+            "evidenceRequirements": [
+              "provider-receipt",
+              "health-check"
+            ],
+            "fencingRequired": true,
+            "id": "apply-workload",
+            "idempotencyRequired": true,
+            "inputs": [
+              {
+                "digest": "4aab79eca4eca7079eb990dbb8c31f94b5ea784fb34d0dd7619f307136ea2fcb",
+                "id": "artifact-example-app",
+                "schema": "hasna.build_artifact.v1"
+              },
+              {
+                "digest": "9760cb4f172b160d2c3257a63e8ad94683a45c985ed62511a1a2c01740636278",
+                "id": "environment-production",
+                "revision": 2,
+                "schema": "hasna.environment_binding.v1"
+              }
+            ],
+            "lockClass": "environment-exclusive",
+            "maxAttempts": 2,
+            "operationId": "provider.deploy",
+            "operationVersion": 1,
+            "outputSchema": "hasna.provider_receipt.v1",
+            "postconditions": [
+              "provider-observed",
+              "health-verified"
+            ],
+            "preconditions": [
+              "immutable-inputs",
+              "approval-valid"
+            ],
+            "providerCapabilityDigest": "59b4a5db6aaa44ef1e38cdbc6ef31fc0690e178c066a68d249ce1bb23856e283",
+            "providerOperation": "provider.deploy",
+            "reconciliationRequired": true,
+            "retryClass": "reconcile_first",
+            "riskClass": "high",
+            "runtimeMaterialKind": null,
+            "sideEffectClass": "compute_or_infra_mutation",
+            "timeoutClass": "deployment-standard"
+          }
+        ],
+        "authorizationRequirements": [
+          "production-deployer"
+        ],
+        "compiler": {
+          "actor": {
+            "id": "agent-builder",
+            "kind": "agent",
+            "name": "Deployment Builder"
+          },
+          "contractKitVersion": "1.0.0",
+          "version": "1.0.0"
+        },
+        "createdAt": "2026-08-09T09:10:00.000Z",
+        "digest": "ac1168d43503c1d1505c3271ceb4a92a9803af75ac37739c5e46ea540d036274",
+        "estimatedCost": {
+          "amountMicros": 125000,
+          "basis": "estimated",
+          "createdAt": "2026-08-09T09:00:00.000Z",
+          "currency": "USD",
+          "id": "cost-deployment-fixture",
+          "provider": "fixture-provider",
+          "resourceRefs": [],
+          "schema": "hasna.cost_estimate.v1"
+        },
+        "evidenceRequirements": [
+          "provider-receipt",
+          "live-verification"
+        ],
+        "expectedStateDigest": "2552b3bff4aa513c329bf2d5c0edd0d68714ed6c3c6adeaa358934f0e779f56c",
+        "expiresAt": "2026-08-10T09:00:00.000Z",
+        "id": "deployment-plan-example-app",
+        "inputs": [
+          {
+            "digest": "53497f71c3fd58dac6c1d32b77c126de3d132ffeac28a4494abc1fae2f6e5556",
+            "id": "product-example-app",
+            "revision": 1,
+            "schema": "hasna.product_projection.v1"
+          },
+          {
+            "digest": "6bc75f992f681a5cf96083897b0bfffdd3bb9304b4ec32891c944ecb3af522b9",
+            "id": "intent-example-app",
+            "schema": "hasna.intent_snapshot.v1"
+          },
+          {
+            "digest": "4aab79eca4eca7079eb990dbb8c31f94b5ea784fb34d0dd7619f307136ea2fcb",
+            "id": "artifact-example-app",
+            "schema": "hasna.build_artifact.v1"
+          },
+          {
+            "digest": "9760cb4f172b160d2c3257a63e8ad94683a45c985ed62511a1a2c01740636278",
+            "id": "environment-production",
+            "revision": 2,
+            "schema": "hasna.environment_binding.v1"
+          }
+        ],
+        "issuedAt": "2026-08-09T09:10:00.000Z",
+        "kind": "deployment",
+        "policyRequirements": [
+          "production-policy"
+        ],
+        "producer": {
+          "id": "agent-builder",
+          "kind": "agent",
+          "name": "Deployment Builder"
+        },
+        "providerCapabilityDigests": [
+          "59b4a5db6aaa44ef1e38cdbc6ef31fc0690e178c066a68d249ce1bb23856e283"
+        ],
+        "request": {
+          "digest": "083e9014634a6c88119a5d0e541cc404cf494a171584573851f78c92ba48f0aa",
+          "id": "deployment-request-example-app",
+          "schema": "hasna.deployment_request.v1"
+        },
+        "riskClass": "high",
+        "rollbackInputs": [],
+        "schema": "hasna.deployment_plan.v1",
+        "verificationCriteria": [
+          "health",
+          "readiness",
+          "version"
+        ]
+      }
+    ],
+    "deploymentReceipts": [
+      {
+        "approvals": [
+          {
+            "digest": "41a0daa144612fdd8d0862c93f22ad0378951a8b25fe2212052bb6f3505f77cb",
+            "id": "deployment-approval-example-app",
+            "schema": "hasna.deployment_approval_decision.v1"
+          }
+        ],
+        "artifact": {
+          "digest": "4aab79eca4eca7079eb990dbb8c31f94b5ea784fb34d0dd7619f307136ea2fcb",
+          "id": "artifact-example-app",
+          "schema": "hasna.build_artifact.v1"
+        },
+        "attempt": {
+          "digest": "c5b700016c1e1453be1c295e44ba6e92af39cc685942a510d35a9ef691a953a4",
+          "id": "deployment-attempt-example-app",
+          "revision": 1,
+          "schema": "hasna.deployment_attempt.v1"
+        },
+        "attestations": [
+          {
+            "digest": "e8227f0a659ad3224a6f0c6c5d96e2fb41ea18000b14c09c060f33c1da45cd55",
+            "id": "attestation-example-app",
+            "schema": "hasna.artifact_attestation.v1"
+          }
+        ],
+        "createdAt": "2026-08-09T09:20:00.000Z",
+        "desiredStateDigest": "2552b3bff4aa513c329bf2d5c0edd0d68714ed6c3c6adeaa358934f0e779f56c",
+        "digest": "5ac775c2791b494ee5f9753c9433a962747d122b255e3e70c6f90bb3657e51ec",
+        "environment": {
+          "digest": "9760cb4f172b160d2c3257a63e8ad94683a45c985ed62511a1a2c01740636278",
+          "id": "environment-production",
+          "revision": 2,
+          "schema": "hasna.environment_binding.v1"
+        },
+        "evidenceRefs": [
+          {
+            "id": "deployment-receipt-evidence",
+            "kind": "report",
+            "sha256": "43000f198554ad25fae77c3183d3d94c05337ce86583c49496a2c9908753d191",
+            "summary": "Bounded evidence for deployment-receipt-evidence",
+            "uri": "artifact://deployment-fixture/deployment-receipt-evidence"
+          }
+        ],
+        "id": "deployment-receipt-example-app",
+        "infrastructurePlanRef": {
+          "id": "infrastructure-plan",
+          "kind": "artifact",
+          "sha256": "69729e2f9a9f80c6628533f90f5a7d2a2b74e4c679d5f951993d7e43779a4687",
+          "summary": "Bounded evidence for infrastructure-plan",
+          "uri": "artifact://deployment-fixture/infrastructure-plan"
+        },
+        "infrastructureStateLineageRef": {
+          "id": "infrastructure-state-lineage",
+          "kind": "artifact",
+          "tags": [
+            "deployment-fixture"
+          ],
+          "uri": "artifact://deployment-fixture/infrastructure-state-lineage"
+        },
+        "intent": {
+          "digest": "6bc75f992f681a5cf96083897b0bfffdd3bb9304b4ec32891c944ecb3af522b9",
+          "id": "intent-example-app",
+          "schema": "hasna.intent_snapshot.v1"
+        },
+        "observedStateDigest": "2552b3bff4aa513c329bf2d5c0edd0d68714ed6c3c6adeaa358934f0e779f56c",
+        "outcome": "succeeded",
+        "plan": {
+          "digest": "ac1168d43503c1d1505c3271ceb4a92a9803af75ac37739c5e46ea540d036274",
+          "id": "deployment-plan-example-app",
+          "schema": "hasna.deployment_plan.v1"
+        },
+        "producer": {
+          "id": "agent-verifier",
+          "kind": "agent",
+          "name": "Independent Verifier"
+        },
+        "product": {
+          "digest": "53497f71c3fd58dac6c1d32b77c126de3d132ffeac28a4494abc1fae2f6e5556",
+          "id": "product-example-app",
+          "revision": 1,
+          "schema": "hasna.product_projection.v1"
+        },
+        "providerReceipts": [
+          {
+            "digest": "d1bac8566b71d857174f3d12fd955618b60d8e41583a19779e6f769df5e27f2f",
+            "id": "provider-receipt-example-app",
+            "schema": "hasna.provider_receipt.v1"
+          }
+        ],
+        "request": {
+          "digest": "083e9014634a6c88119a5d0e541cc404cf494a171584573851f78c92ba48f0aa",
+          "id": "deployment-request-example-app",
+          "schema": "hasna.deployment_request.v1"
+        },
+        "schema": "hasna.deployment_receipt.v1",
+        "verification": [
+          {
+            "evidenceRefs": [
+              {
+                "id": "health-evidence",
+                "kind": "test_result",
+                "sha256": "2c71b1cac3f7d547901e9770c7d83e53fd42c3a1d19aca13a5a6803c99b538c9",
+                "summary": "Bounded evidence for health-evidence",
+                "uri": "artifact://deployment-fixture/health-evidence"
+              }
+            ],
+            "id": "health",
+            "kind": "health",
+            "status": "passed"
+          },
+          {
+            "evidenceRefs": [
+              {
+                "id": "readiness-evidence",
+                "kind": "test_result",
+                "sha256": "72dcfffdba62e929fbbf8694685a95b63a13fd80fb8e0c76cbad3c99520212b1",
+                "summary": "Bounded evidence for readiness-evidence",
+                "uri": "artifact://deployment-fixture/readiness-evidence"
+              }
+            ],
+            "id": "readiness",
+            "kind": "readiness",
+            "status": "passed"
+          },
+          {
+            "evidenceRefs": [
+              {
+                "id": "version-evidence",
+                "kind": "test_result",
+                "sha256": "b167aee71fede4fff20a9877818c55560eea193018efbd52fd309e04acc70142",
+                "summary": "Bounded evidence for version-evidence",
+                "uri": "artifact://deployment-fixture/version-evidence"
+              }
+            ],
+            "id": "version",
+            "kind": "version",
+            "status": "passed"
+          }
+        ],
+        "verifiers": [
+          {
+            "id": "agent-verifier",
+            "kind": "agent",
+            "name": "Independent Verifier"
+          }
+        ]
+      }
+    ],
+    "deploymentRequests": [
+      {
+        "artifact": {
+          "digest": "4aab79eca4eca7079eb990dbb8c31f94b5ea784fb34d0dd7619f307136ea2fcb",
+          "id": "artifact-example-app",
+          "schema": "hasna.build_artifact.v1"
+        },
+        "attestations": [
+          {
+            "digest": "e8227f0a659ad3224a6f0c6c5d96e2fb41ea18000b14c09c060f33c1da45cd55",
+            "id": "attestation-example-app",
+            "schema": "hasna.artifact_attestation.v1"
+          }
+        ],
+        "auditCorrelationId": "audit-correlation-example-app",
+        "costEstimate": {
+          "amountMicros": 125000,
+          "basis": "estimated",
+          "createdAt": "2026-08-09T09:00:00.000Z",
+          "currency": "USD",
+          "id": "cost-deployment-fixture",
+          "provider": "fixture-provider",
+          "resourceRefs": [],
+          "schema": "hasna.cost_estimate.v1"
+        },
+        "createdAt": "2026-08-09T09:10:00.000Z",
+        "digest": "083e9014634a6c88119a5d0e541cc404cf494a171584573851f78c92ba48f0aa",
+        "environment": {
+          "digest": "9760cb4f172b160d2c3257a63e8ad94683a45c985ed62511a1a2c01740636278",
+          "id": "environment-production",
+          "revision": 2,
+          "schema": "hasna.environment_binding.v1"
+        },
+        "evidenceRefs": [
+          {
+            "id": "deployment-request-evidence",
+            "kind": "report",
+            "sha256": "c49d9e0621a055a25676566c00cfcb0c62fa95ffb7d76dde3e3fde8ac38158ab",
+            "summary": "Bounded evidence for deployment-request-evidence",
+            "uri": "artifact://deployment-fixture/deployment-request-evidence"
+          }
+        ],
+        "expiresAt": "2026-08-10T09:00:00.000Z",
+        "id": "deployment-request-example-app",
+        "idempotencyKeyFingerprint": "e479de86d15e079ff8c219763d1e022f828eaa2444e68dbd7d9e4286acabed37",
+        "intent": {
+          "digest": "6bc75f992f681a5cf96083897b0bfffdd3bb9304b4ec32891c944ecb3af522b9",
+          "id": "intent-example-app",
+          "schema": "hasna.intent_snapshot.v1"
+        },
+        "kind": "deployment",
+        "policyProfile": "production-policy",
+        "producer": {
+          "id": "agent-builder",
+          "kind": "agent",
+          "name": "Deployment Builder"
+        },
+        "product": {
+          "digest": "53497f71c3fd58dac6c1d32b77c126de3d132ffeac28a4494abc1fae2f6e5556",
+          "id": "product-example-app",
+          "revision": 1,
+          "schema": "hasna.product_projection.v1"
+        },
+        "requestAt": "2026-08-09T09:10:00.000Z",
+        "requester": {
+          "id": "agent-builder",
+          "kind": "agent",
+          "name": "Deployment Builder"
+        },
+        "schema": "hasna.deployment_request.v1",
+        "sourceRequestId": "source-request-example-app"
+      }
+    ],
+    "environmentBindings": [
+      {
+        "authorizationProfile": "production-authorization",
+        "backupProfile": "daily-snapshot",
+        "changeEvidenceRefs": [
+          {
+            "id": "environment-change-evidence",
+            "kind": "report",
+            "sha256": "b8b88001421f6a0d07ad16ca06326ee476bf409e362b67a17c2bcbb60809d38b",
+            "summary": "Bounded evidence for environment-change-evidence",
+            "uri": "artifact://deployment-fixture/environment-change-evidence"
+          }
+        ],
+        "commercialBindingRef": {
+          "id": "commercial-binding",
+          "kind": "integration",
+          "tags": [
+            "deployment-fixture"
+          ],
+          "uri": "integration://deployment-fixture/commercial-binding"
+        },
+        "createdAt": "2026-08-09T09:00:00.000Z",
+        "dataBackend": "postgresql",
+        "dataClassification": "private",
+        "digest": "9760cb4f172b160d2c3257a63e8ad94683a45c985ed62511a1a2c01740636278",
+        "environment": {
+          "classification": "production",
+          "id": "production"
+        },
+        "etag": "65b1cd6489c7c3ec86bee822ab666f6cb33efceaac938a75b53f94f21ef65909",
+        "id": "environment-production",
+        "intent": {
+          "digest": "6bc75f992f681a5cf96083897b0bfffdd3bb9304b4ec32891c944ecb3af522b9",
+          "id": "intent-example-app",
+          "schema": "hasna.intent_snapshot.v1"
+        },
+        "policyProfile": "production-policy",
+        "producer": {
+          "id": "agent-builder",
+          "kind": "agent",
+          "name": "Deployment Builder"
+        },
+        "product": {
+          "digest": "53497f71c3fd58dac6c1d32b77c126de3d132ffeac28a4494abc1fae2f6e5556",
+          "id": "product-example-app",
+          "revision": 1,
+          "schema": "hasna.product_projection.v1"
+        },
+        "providerCapabilityCard": {
+          "adapterId": "fixture-adapter",
+          "appId": "example-app",
+          "auditEvents": [
+            "deployment.requested",
+            "deployment.observed"
+          ],
+          "costPosture": "pre-authorized estimate required",
+          "credentialRequirements": [
+            {
+              "allowedSecretInputs": [
+                "credential_ref"
+              ],
+              "failClosedDiagnostic": "Provider credential reference is unavailable",
+              "refName": "deployment-credential-reference",
+              "requiredForModes": [
+                "live_mutating"
+              ],
+              "revocationCheck": true
+            }
+          ],
+          "defaultMode": "sandbox",
+          "evidenceRefs": [
+            {
+              "id": "provider-capability-evidence",
+              "kind": "report",
+              "sha256": "0ab44bc669befdb8ef57aacad9443cef9fffb1f0aa8bf0cf7006c682fad4f7f0",
+              "summary": "Bounded evidence for provider-capability-evidence",
+              "uri": "artifact://deployment-fixture/provider-capability-evidence"
+            }
+          ],
+          "modes": [
+            "sandbox",
+            "live_mutating"
+          ],
+          "operations": [
+            {
+              "noSideEffectSmoke": "provider.observe",
+              "operation": "provider.deploy",
+              "reconciliation": "provider.reconcile",
+              "requiresApproval": true,
+              "requiresIdempotencyKey": true,
+              "requiresRollbackOrRevocation": true,
+              "requiresSandboxEvidence": true,
+              "rollbackOrRevocation": "provider.rollback",
+              "sideEffectClass": "compute_or_infra_mutation",
+              "supportedModes": [
+                "sandbox",
+                "live_mutating"
+              ]
+            }
+          ],
+          "ownerPackage": "@hasna/contracts",
+          "providerId": "fixture-provider",
+          "rateLimitPosture": "bounded",
+          "redactionRules": [
+            "opaque references only"
+          ]
+        },
+        "providerCapabilityDigest": "59b4a5db6aaa44ef1e38cdbc6ef31fc0690e178c066a68d249ce1bb23856e283",
+        "providerConnectionRef": {
+          "id": "provider-connection",
+          "kind": "integration",
+          "tags": [
+            "deployment-fixture"
+          ],
+          "uri": "integration://deployment-fixture/provider-connection"
+        },
+        "providerIdentity": {
+          "accountId": "account-production",
+          "clusterId": "provider-cluster-production",
+          "networkId": "provider-network-production",
+          "projectId": "provider-project-example-app",
+          "region": "eu-central-1",
+          "routingId": "provider-routing-production",
+          "storageId": "provider-storage-production"
+        },
+        "revision": 2,
+        "rollbackProfile": "prior-artifact",
+        "schema": "hasna.environment_binding.v1",
+        "updatedAt": "2026-08-09T09:05:00.000Z",
+        "writer": {
+          "id": "agent-builder",
+          "kind": "agent",
+          "name": "Deployment Builder"
+        }
+      }
+    ],
+    "intentSnapshots": [
+      {
+        "accessClass": "private-service",
+        "alarmClass": "service-slo",
+        "backupClass": "daily-snapshot",
+        "commitSha": "0123456789abcdef0123456789abcdef01234567",
+        "configurationRequirements": [
+          {
+            "kind": "secret_reference",
+            "name": "APP_DATABASE_REF",
+            "referenceClass": "vault-reference",
+            "required": true
+          }
+        ],
+        "createdAt": "2026-08-09T09:00:00.000Z",
+        "digest": "6bc75f992f681a5cf96083897b0bfffdd3bb9304b4ec32891c944ecb3af522b9",
+        "evidenceRefs": [
+          {
+            "id": "intent-evidence",
+            "kind": "report",
+            "sha256": "f00eae14e40e96fd35f4747f41aa0bb36862620cd3426e8f76663a4e540a75cf",
+            "summary": "Bounded evidence for intent-evidence",
+            "uri": "artifact://deployment-fixture/intent-evidence"
+          }
+        ],
+        "id": "intent-example-app",
+        "intentDocument": {
+          "digest": "509bffa5170ea51bba03de7bc52e83c69563d4fd92e933037f8ac68089706a5c",
+          "path": "deploy/intent.json"
+        },
+        "migration": {
+          "compatibility": "backward_compatible",
+          "order": "before_workload",
+          "rollbackClass": "restore-snapshot"
+        },
+        "networkClass": "private-egress-fenced",
+        "processes": [
+          {
+            "id": "web",
+            "liveness": {
+              "expectedStatuses": [
+                200
+              ],
+              "path": "/health",
+              "protocol": "https"
+            },
+            "ports": [
+              8080
+            ],
+            "readiness": {
+              "expectedStatuses": [
+                200
+              ],
+              "path": "/ready",
+              "protocol": "https"
+            },
+            "resources": {
+              "cpuMillicores": 250,
+              "maxReplicas": 3,
+              "memoryMiB": 512,
+              "minReplicas": 1
+            },
+            "role": "web",
+            "version": {
+              "expectedStatuses": [
+                200
+              ],
+              "path": "/version",
+              "protocol": "https"
+            }
+          }
+        ],
+        "producer": {
+          "id": "agent-builder",
+          "kind": "agent",
+          "name": "Deployment Builder"
+        },
+        "product": {
+          "digest": "53497f71c3fd58dac6c1d32b77c126de3d132ffeac28a4494abc1fae2f6e5556",
+          "id": "product-example-app",
+          "revision": 1,
+          "schema": "hasna.product_projection.v1"
+        },
+        "repositoryRef": {
+          "id": "repo-contract-fixture",
+          "kind": "repo",
+          "tags": [
+            "deployment-fixture"
+          ],
+          "uri": "repo://hasna/example-app"
+        },
+        "restoreClass": "point-in-time",
+        "rollbackClass": "prior-artifact",
+        "schema": "hasna.intent_snapshot.v1",
+        "serviceRequirements": [
+          {
+            "class": "postgresql",
+            "id": "primary-database",
+            "kind": "database",
+            "required": true
+          }
+        ],
+        "treeSha": "89abcdef0123456789abcdef0123456789abcdef",
+        "validationPlan": {
+          "checks": [
+            {
+              "expected": "Immutable evidence reviewed",
+              "id": "evidence-review",
+              "kind": "manual",
+              "required": true,
+              "resourceRefs": []
+            }
+          ],
+          "createdAt": "2026-08-09T09:00:00.000Z",
+          "id": "validation-intent",
+          "objective": "Verify immutable deployment inputs and observable outcomes",
+          "requiredEvidenceKinds": [
+            "test_result"
+          ],
+          "schema": "hasna.validation_plan.v1",
+          "verifier": {
+            "id": "agent-verifier",
+            "kind": "agent",
+            "name": "Independent Verifier"
+          }
+        }
+      }
+    ],
+    "launchEvidence": [
+      {
+        "compiledAt": "2026-08-09T09:25:00.000Z",
+        "createdAt": "2026-08-09T09:25:00.000Z",
+        "deploymentReceipt": {
+          "digest": "5ac775c2791b494ee5f9753c9433a962747d122b255e3e70c6f90bb3657e51ec",
+          "id": "deployment-receipt-example-app",
+          "schema": "hasna.deployment_receipt.v1"
+        },
+        "digest": "0a5f3b4b9ff46b9f01996845c0164f94099e6a2203c8800567927190254cfd98",
+        "environment": {
+          "digest": "9760cb4f172b160d2c3257a63e8ad94683a45c985ed62511a1a2c01740636278",
+          "id": "environment-production",
+          "revision": 2,
+          "schema": "hasna.environment_binding.v1"
+        },
+        "expiresAt": "2026-08-10T09:00:00.000Z",
+        "findings": [
+          {
+            "evidenceRefs": [
+              {
+                "id": "launch-follow-up-evidence",
+                "kind": "report",
+                "sha256": "b0423bd973dc39dad4635fd501014890d054d806e490821ceb1147222d9827bd",
+                "summary": "Bounded evidence for launch-follow-up-evidence",
+                "uri": "artifact://deployment-fixture/launch-follow-up-evidence"
+              }
+            ],
+            "id": "documentation-follow-up",
+            "severity": "p3",
+            "status": "accepted"
+          }
+        ],
+        "id": "launch-evidence-example-app",
+        "independentReview": true,
+        "producer": {
+          "id": "agent-verifier",
+          "kind": "agent",
+          "name": "Independent Verifier"
+        },
+        "product": {
+          "digest": "53497f71c3fd58dac6c1d32b77c126de3d132ffeac28a4494abc1fae2f6e5556",
+          "id": "product-example-app",
+          "revision": 1,
+          "schema": "hasna.product_projection.v1"
+        },
+        "proofBundleRefs": [
+          {
+            "id": "launch-proof-bundle",
+            "kind": "proof_bundle",
+            "tags": [
+              "deployment-fixture"
+            ],
+            "uri": "artifact://deployment-fixture/launch-proof-bundle"
+          }
+        ],
+        "requiredChecks": [
+          {
+            "evidenceRefs": [
+              {
+                "id": "health-evidence",
+                "kind": "test_result",
+                "sha256": "2c71b1cac3f7d547901e9770c7d83e53fd42c3a1d19aca13a5a6803c99b538c9",
+                "summary": "Bounded evidence for health-evidence",
+                "uri": "artifact://deployment-fixture/health-evidence"
+              }
+            ],
+            "id": "health",
+            "kind": "health",
+            "status": "passed"
+          },
+          {
+            "evidenceRefs": [
+              {
+                "id": "readiness-evidence",
+                "kind": "test_result",
+                "sha256": "72dcfffdba62e929fbbf8694685a95b63a13fd80fb8e0c76cbad3c99520212b1",
+                "summary": "Bounded evidence for readiness-evidence",
+                "uri": "artifact://deployment-fixture/readiness-evidence"
+              }
+            ],
+            "id": "readiness",
+            "kind": "readiness",
+            "status": "passed"
+          },
+          {
+            "evidenceRefs": [
+              {
+                "id": "version-evidence",
+                "kind": "test_result",
+                "sha256": "b167aee71fede4fff20a9877818c55560eea193018efbd52fd309e04acc70142",
+                "summary": "Bounded evidence for version-evidence",
+                "uri": "artifact://deployment-fixture/version-evidence"
+              }
+            ],
+            "id": "version",
+            "kind": "version",
+            "status": "passed"
+          }
+        ],
+        "schema": "hasna.launch_evidence.v1",
+        "status": "launched",
+        "verifiers": [
+          {
+            "id": "agent-verifier",
+            "kind": "agent",
+            "name": "Independent Verifier"
+          }
+        ]
+      }
+    ],
+    "productProjections": [
+      {
+        "createdAt": "2026-08-09T09:00:00.000Z",
+        "digest": "53497f71c3fd58dac6c1d32b77c126de3d132ffeac28a4494abc1fae2f6e5556",
+        "displayName": "Example App",
+        "id": "product-example-app",
+        "lifecycle": "active",
+        "ownerRefs": [
+          {
+            "id": "owner-approver",
+            "kind": "human",
+            "name": "Deployment Approver"
+          }
+        ],
+        "producer": {
+          "id": "agent-builder",
+          "kind": "agent",
+          "name": "Deployment Builder"
+        },
+        "projectedAt": "2026-08-09T09:00:00.000Z",
+        "repositoryRef": {
+          "id": "repo-contract-fixture",
+          "kind": "repo",
+          "tags": [
+            "deployment-fixture"
+          ],
+          "uri": "repo://hasna/example-app"
+        },
+        "revision": 1,
+        "schema": "hasna.product_projection.v1",
+        "slug": "example-app",
+        "sourceEvidenceRefs": [
+          {
+            "id": "product-projection-source",
+            "kind": "report",
+            "sha256": "ff6415fb8dc367fce3945c107dc3322c63adaa35265dea3b4fc8e3d4e323f772",
+            "summary": "Bounded evidence for product-projection-source",
+            "uri": "artifact://deployment-fixture/product-projection-source"
+          }
+        ],
+        "sourceProjectRef": {
+          "id": "project-contract-fixture",
+          "kind": "project",
+          "tags": [
+            "deployment-fixture"
+          ],
+          "uri": "project://example-app"
+        },
+        "sourceRevision": 7,
+        "workspaceRef": {
+          "id": "project-contract-fixture",
+          "kind": "project",
+          "tags": [
+            "deployment-fixture"
+          ],
+          "uri": "project://example-app"
+        }
+      }
+    ],
+    "providerReceipts": [
+      {
+        "adapter": "fixture-adapter",
+        "attempt": {
+          "digest": "c5b700016c1e1453be1c295e44ba6e92af39cc685942a510d35a9ef691a953a4",
+          "id": "deployment-attempt-example-app",
+          "revision": 1,
+          "schema": "hasna.deployment_attempt.v1"
+        },
+        "capabilityDigest": "59b4a5db6aaa44ef1e38cdbc6ef31fc0690e178c066a68d249ce1bb23856e283",
+        "connectionRef": {
+          "id": "provider-connection",
+          "kind": "integration",
+          "tags": [
+            "deployment-fixture"
+          ],
+          "uri": "integration://deployment-fixture/provider-connection"
+        },
+        "createdAt": "2026-08-09T09:18:00.000Z",
+        "digest": "d1bac8566b71d857174f3d12fd955618b60d8e41583a19779e6f769df5e27f2f",
+        "id": "provider-receipt-example-app",
+        "normalizedResult": "succeeded",
+        "observationEvidenceRefs": [
+          {
+            "id": "provider-observation-evidence",
+            "kind": "test_result",
+            "sha256": "415be35f669a860a71be2e6c80d391eaf62fe048c2bc51b04cd9827c4b11815d",
+            "summary": "Bounded evidence for provider-observation-evidence",
+            "uri": "artifact://deployment-fixture/provider-observation-evidence"
+          }
+        ],
+        "observedAt": "2026-08-09T09:19:00.000Z",
+        "observedProviderRevision": "provider-revision-19",
+        "operationId": "provider.deploy",
+        "operationVersion": 1,
+        "producer": {
+          "id": "deployment-executor",
+          "kind": "service",
+          "name": "Deployment Executor"
+        },
+        "provider": "fixture-provider",
+        "providerIdentity": {
+          "deploymentId": "provider-deployment-example-app",
+          "eventId": "provider-event-example-app",
+          "operationId": "provider-operation-example-app",
+          "projectId": "provider-project-example-app",
+          "resourceIds": [
+            "provider-service-example-app"
+          ]
+        },
+        "providerStatus": "ready",
+        "reconciliationState": "confirmed",
+        "redaction": "full",
+        "requestFingerprint": "e479de86d15e079ff8c219763d1e022f828eaa2444e68dbd7d9e4286acabed37",
+        "responseEvidenceRefs": [
+          {
+            "id": "provider-response-evidence",
+            "kind": "report",
+            "sha256": "9114b94c75d69425bc62fe93e08fdf2d7ca4cc5b4b911f11833214a256daafae",
+            "summary": "Bounded evidence for provider-response-evidence",
+            "uri": "artifact://deployment-fixture/provider-response-evidence"
+          }
+        ],
+        "retryClass": "reconcile_first",
+        "schema": "hasna.provider_receipt.v1",
+        "unknownOutcome": false
+      }
+    ],
+    "verifiedSourceCandidates": [
+      {
+        "branchRef": {
+          "id": "branch-release",
+          "kind": "artifact",
+          "tags": [
+            "deployment-fixture"
+          ],
+          "uri": "artifact://deployment-fixture/branch-release"
+        },
+        "commitSha": "0123456789abcdef0123456789abcdef01234567",
+        "createdAt": "2026-08-09T09:00:00.000Z",
+        "digest": "ae0668664ad166aec5e57a7990ce41b611cfa74f478a7e56a95a1a93f4bd70f0",
+        "evidenceRefs": [
+          {
+            "id": "verified-source-evidence",
+            "kind": "test_result",
+            "sha256": "6a23b335f15d09227dd883fe55efdea5febf6fb1ad360ab9d0af5e5a209ea3ec",
+            "summary": "Bounded evidence for verified-source-evidence",
+            "uri": "artifact://deployment-fixture/verified-source-evidence"
+          }
+        ],
+        "id": "source-candidate-example-app",
+        "intent": {
+          "digest": "6bc75f992f681a5cf96083897b0bfffdd3bb9304b4ec32891c944ecb3af522b9",
+          "id": "intent-example-app",
+          "schema": "hasna.intent_snapshot.v1"
+        },
+        "producer": {
+          "id": "agent-builder",
+          "kind": "agent",
+          "name": "Deployment Builder"
+        },
+        "pullRequestRef": {
+          "id": "pull-request-42",
+          "kind": "artifact",
+          "tags": [
+            "deployment-fixture"
+          ],
+          "uri": "artifact://deployment-fixture/pull-request-42"
+        },
+        "repositoryRef": {
+          "id": "repo-contract-fixture",
+          "kind": "repo",
+          "tags": [
+            "deployment-fixture"
+          ],
+          "uri": "repo://hasna/example-app"
+        },
+        "results": [
+          {
+            "evidenceRefs": [
+              {
+                "id": "source-integrity-result",
+                "kind": "test_result",
+                "sha256": "2d547e433715c3c6462aad9ea126032b600a244626cd38a8f2f65f829fd5e069",
+                "summary": "Bounded evidence for source-integrity-result",
+                "uri": "artifact://deployment-fixture/source-integrity-result"
+              }
+            ],
+            "id": "source-integrity",
+            "kind": "source_integrity",
+            "status": "passed"
+          },
+          {
+            "evidenceRefs": [
+              {
+                "id": "source-review-result",
+                "kind": "test_result",
+                "sha256": "5858811c63f859f6062e26d72d4969afa6a24e1278e8247d832186a1bd6e9263",
+                "summary": "Bounded evidence for source-review-result",
+                "uri": "artifact://deployment-fixture/source-review-result"
+              }
+            ],
+            "id": "independent-review",
+            "kind": "review",
+            "status": "passed"
+          }
+        ],
+        "schema": "hasna.verified_source_candidate.v1",
+        "status": "verified",
+        "treeSha": "89abcdef0123456789abcdef0123456789abcdef",
+        "validationPlan": {
+          "checks": [
+            {
+              "expected": "Immutable evidence reviewed",
+              "id": "evidence-review",
+              "kind": "manual",
+              "required": true,
+              "resourceRefs": []
+            }
+          ],
+          "createdAt": "2026-08-09T09:00:00.000Z",
+          "id": "validation-source",
+          "objective": "Verify immutable deployment inputs and observable outcomes",
+          "requiredEvidenceKinds": [
+            "test_result"
+          ],
+          "schema": "hasna.validation_plan.v1",
+          "verifier": {
+            "id": "agent-verifier",
+            "kind": "agent",
+            "name": "Independent Verifier"
+          }
+        },
+        "verificationRun": {
+          "actor": {
+            "id": "agent-verifier",
+            "kind": "agent",
+            "name": "Independent Verifier"
+          },
+          "constraints": [
+            "credential-zero execution"
+          ],
+          "costEstimates": [],
+          "createdAt": "2026-08-09T09:00:00.000Z",
+          "decisions": [],
+          "evidenceRefs": [
+            {
+              "id": "verification-run-evidence",
+              "kind": "test_result",
+              "sha256": "8f1d2268bd8998f5c15af7b1de37de301238114e3f69d85de0f7f712ddcdeb25",
+              "summary": "Bounded evidence for verification-run-evidence",
+              "uri": "artifact://deployment-fixture/verification-run-evidence"
+            }
+          ],
+          "finishedAt": "2026-08-09T09:05:00.000Z",
+          "id": "verification-run",
+          "objective": "Produce verified deployment evidence",
+          "proofBundleRefs": [],
+          "resourceRefs": [],
+          "schema": "hasna.work_run.v1",
+          "startedAt": "2026-08-09T09:00:00.000Z",
+          "status": "succeeded",
+          "validationPlanRefs": []
+        },
+        "verifiedAt": "2026-08-09T09:10:00.000Z",
+        "verifiers": [
+          {
+            "id": "agent-verifier",
+            "kind": "agent",
+            "name": "Independent Verifier"
+          }
+        ]
+      }
+    ]
+  },
+  "schema": "hasna.deployment.fixture_bundle.v1"
+}

@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+bin/index.js
+
+# Logs
+logs/
+*.log
+
+# Environment
+.env*
+
+# MacOS
+.DS_Store
+
+# Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Bun
+bun.lockb

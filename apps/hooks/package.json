@@ -1,10 +1,11 @@
 {
   "name": "@hasna/hooks",
-  "version": "0.5.0",
+  "version": "0.6.3",
   "description": "Open source hooks library for AI coding agents - Install safety, quality, and automation hooks with a single command",
   "type": "module",
   "bin": {
-    "hooks": "bin/index.js"
+    "hooks": "bin/index.js",
+    "hooks-serve": "bin/serve.js"
   },
   "exports": {
     ".": {
@@ -19,7 +20,7 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "scripts": {
-    "build": "rm -rf dist && bun build ./src/cli/index.tsx --outdir ./bin --target bun --external pg --external ink --external react --external chalk --external conf --external @modelcontextprotocol/sdk --external zod && bun build ./src/index.ts ./src/storage.ts --outdir ./dist --target bun --external pg && bun run build:types",
+    "build": "rm -rf dist bin && bun build ./src/cli/index.tsx --outdir ./bin --target bun --external pg --external ink --external react --external chalk --external conf --external @modelcontextprotocol/sdk --external zod && bun build ./src/serve.ts --outdir ./bin --target bun --external pg && bun build ./src/index.ts ./src/storage.ts --outdir ./dist --target bun --external pg && bun run build:types",
     "build:types": "tsc -p tsconfig.build.json",
     "dev": "bun run ./src/cli/index.tsx",
     "test": "bun test",
