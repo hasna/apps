@@ -975,6 +975,33 @@
         "@hasna/machines": "0.0.49",
       },
     },
+    "apps/machines": {
+      "name": "@hasna/machines",
+      "version": "0.2.25",
+      "bin": {
+        "machines": "dist/cli/index.js",
+        "machines-mcp": "dist/mcp/index.js",
+        "machines-agent": "dist/agent/index.js",
+        "machines-serve": "dist/server/index.js",
+      },
+      "dependencies": {
+        "@hasna/contracts": "^0.4.2",
+        "@hasna/events": "^0.1.7",
+        "@hasna/mcp-harness": "^0.1.0",
+        "@modelcontextprotocol/sdk": "^1.26.0",
+        "chalk": "^5.6.2",
+        "commander": "^13.1.0",
+        "pg": "^8.16.3",
+        "zod": "^3.24.2",
+      },
+      "devDependencies": {
+        "@types/bun": "latest",
+        "@types/node": "^20.14.0",
+        "@types/pg": "^8.15.6",
+        "bun-types": "1.3.14",
+        "typescript": "^5.7.3",
+      },
+    },
     "apps/markdown": {
       "name": "@hasna/markdown",
       "version": "0.1.18",
@@ -2062,7 +2089,7 @@
 
     "@hasna/loops": ["@hasna/loops@workspace:apps/loops"],
 
-    "@hasna/machines": ["@hasna/machines@0.0.24", "", { "dependencies": { "@modelcontextprotocol/sdk": "^1.26.0", "chalk": "^5.6.2", "commander": "^13.1.0", "pg": "^8.16.3", "zod": "^3.24.2" }, "bin": { "machines": "dist/cli/index.js", "machines-mcp": "dist/mcp/index.js", "machines-agent": "dist/agent/index.js" } }, "sha512-sCCe6mrBkHZG1mW0+HQl89GNbASnhSXfmjO9sr1zQ0+f0oKQWx9I8H1funjxdMwVrSwDFLFq9+Jmu2E869I78Q=="],
+    "@hasna/machines": ["@hasna/machines@workspace:apps/machines"],
 
     "@hasna/markdown": ["@hasna/markdown@workspace:apps/markdown"],
 
@@ -4070,6 +4097,8 @@
 
     "@hasna/dispatch/@hasna/contracts": ["@hasna/contracts@0.8.1", "", { "dependencies": { "commander": "^13.1.0", "zod": "^3.25.76" }, "bin": { "contracts": "dist/cli/index.js", "contracts-cli": "dist/cli/contracts-cli.js" } }, "sha512-cocuXS4XfEly3GMOhDesYFNZs2rMhEkJlw+Kb5SzvEIuFpahE+jkAChGx1Gov3pSGZqq/RSM8EMtQQJbuOU4xQ=="],
 
+    "@hasna/dispatch/@hasna/machines": ["@hasna/machines@0.0.24", "", { "dependencies": { "@modelcontextprotocol/sdk": "^1.26.0", "chalk": "^5.6.2", "commander": "^13.1.0", "pg": "^8.16.3", "zod": "^3.24.2" }, "bin": { "machines": "dist/cli/index.js", "machines-mcp": "dist/mcp/index.js", "machines-agent": "dist/agent/index.js" } }, "sha512-sCCe6mrBkHZG1mW0+HQl89GNbASnhSXfmjO9sr1zQ0+f0oKQWx9I8H1funjxdMwVrSwDFLFq9+Jmu2E869I78Q=="],
+
     "@hasna/dispatch/bun-types": ["bun-types@1.3.9", "", { "dependencies": { "@types/node": "*" } }, "sha512-+UBWWOakIP4Tswh0Bt0QD0alpTY8cb5hvgiYeWCMet9YukHbzuruIEeXC2D7nMJPB12kbh8C7XJykSexEqGKJg=="],
 
     "@hasna/dispatch/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
@@ -4163,6 +4192,14 @@
     "@hasna/loops/ai": ["ai@6.0.204", "", { "dependencies": { "@ai-sdk/gateway": "3.0.130", "@ai-sdk/provider": "3.0.10", "@ai-sdk/provider-utils": "4.0.29", "@opentelemetry/api": "^1.9.0" }, "peerDependencies": { "zod": "^3.25.76 || ^4.1.8" } }, "sha512-SudB8rUwaVhpWF8+qTJcxUptXPIdN9rWMknzTT3WbKa2QwiGRshyepFKNkDILWm882LgqlEyRZgKhNT14j0jpQ=="],
 
     "@hasna/loops/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
+
+    "@hasna/machines/@hasna/contracts": ["@hasna/contracts@0.4.2", "", { "dependencies": { "commander": "^13.1.0", "zod": "^3.25.76" }, "bin": { "contracts": "dist/cli/index.js", "contracts-cli": "dist/cli/index.js" } }, "sha512-xD7ZWQXR+AjYAJVpaMsQ+8V0SABiJSKVeI0B1WbPByYeGz6daDtgyZ6c3q0c2S6uzIEtUxlGHPundr675636ew=="],
+
+    "@hasna/machines/@hasna/events": ["@hasna/events@0.1.15", "", { "dependencies": { "commander": "^13.1.0" }, "bin": { "events": "dist/cli/index.js", "hasna-events": "dist/cli/index.js" } }, "sha512-q4lVzv4n9a9C2zQDZVe/KXy6ZA+y5HRCOL6sG+xc3adHrVKJz0wW8JococwbldfgQhyYmnOloLSoy+B1MNUVZQ=="],
+
+    "@hasna/machines/@types/node": ["@types/node@20.19.43", "", { "dependencies": { "undici-types": "~6.21.0" } }, "sha512-6oYBAi5ikg4Pl+kGsoYtawUMBT2zZMCvPNF7pVLnHZfd1zf38DRiWn/gT01RYCdUqkv7Fhr+C9ot4/tb+2sVvA=="],
+
+    "@hasna/machines/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
 
     "@hasna/markdown/@hasna/events": ["@hasna/events@0.1.15", "", { "dependencies": { "commander": "^13.1.0" }, "bin": { "events": "dist/cli/index.js", "hasna-events": "dist/cli/index.js" } }, "sha512-q4lVzv4n9a9C2zQDZVe/KXy6ZA+y5HRCOL6sG+xc3adHrVKJz0wW8JococwbldfgQhyYmnOloLSoy+B1MNUVZQ=="],
 
@@ -4613,6 +4650,8 @@
     "@hasna/loops/ai/@ai-sdk/provider": ["@ai-sdk/provider@3.0.10", "", { "dependencies": { "json-schema": "^0.4.0" } }, "sha512-Q3BZ27qfpYqnCYGvE3vt+Qi6LGOF9R5Nmzn+9JoM1lCRsD9mYaIhfJLkSunN48nfGXJ6n+XNV0J/XVpqGQl7Dw=="],
 
     "@hasna/loops/ai/@ai-sdk/provider-utils": ["@ai-sdk/provider-utils@4.0.29", "", { "dependencies": { "@ai-sdk/provider": "3.0.10", "@standard-schema/spec": "^1.1.0", "eventsource-parser": "^3.0.8" }, "peerDependencies": { "zod": "^3.25.76 || ^4.1.8" } }, "sha512-uhukHaCBvqkwBHkT8C2PrnqKTCoLn3pdHXqtcR9I8ErH+flbzgW4o7VHSNIup9LRu+WBvZIZDQLsx6rwl2tiOA=="],
+
+    "@hasna/machines/@types/node/undici-types": ["undici-types@6.21.0", "", {}, "sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ=="],
 
     "@hasna/mcps/@hasna/contracts/commander": ["commander@13.1.0", "", {}, "sha512-/rFeCpNJQbhSZjGVwO9RFV3xPqbnERS8MmIQzCtD/zl6gpJuV/bMLuN92oG3F7d8oDEHHRrujSXNUr8fpjntKw=="],
 
