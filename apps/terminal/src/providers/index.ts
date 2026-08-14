@@ -94,10 +94,10 @@ function resolveProvider(config: ProviderConfig): LLMProvider {
 
   throw new Error(
     "No API key found. Set one of:\n" +
-    "  export CEREBRAS_API_KEY=your-key  (free, open-source)\n" +
-    "  export GROQ_API_KEY=your-key      (free, fast)\n" +
-    "  export XAI_API_KEY=your-key       (Grok, code-optimized)\n" +
-    "  export ANTHROPIC_API_KEY=your-key  (Claude)"
+    "  export CEREBRAS_API_KEY=<your-key>  (free, open-source)\n" +
+    "  export GROQ_API_KEY=<your-key>      (free, fast)\n" +
+    "  export XAI_API_KEY=<your-key>       (Grok, code-optimized)\n" +
+    "  export ANTHROPIC_API_KEY=<your-key>  (Claude)"
   );
 }
 

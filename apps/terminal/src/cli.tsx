@@ -877,10 +877,10 @@ else {
   if (!process.env.ANTHROPIC_API_KEY && !process.env.CEREBRAS_API_KEY && !process.env.GROQ_API_KEY && !process.env.XAI_API_KEY) {
     console.error("terminal: No API key found.");
     console.error("Set one of:");
-    console.error("  export XAI_API_KEY=your_key        (Grok, code-optimized — default)");
-    console.error("  export CEREBRAS_API_KEY=your_key   (free, open-source)");
-    console.error("  export GROQ_API_KEY=your_key       (free, ultra-fast)");
-    console.error("  export ANTHROPIC_API_KEY=your_key   (Claude)");
+    console.error("  export XAI_API_KEY=<your-key>        (Grok, code-optimized — default)");
+    console.error("  export CEREBRAS_API_KEY=<your-key>   (free, open-source)");
+    console.error("  export GROQ_API_KEY=<your-key>       (free, ultra-fast)");
+    console.error("  export ANTHROPIC_API_KEY=<your-key>   (Claude)");
     process.exit(1);
   }
 

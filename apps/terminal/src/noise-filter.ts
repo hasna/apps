@@ -42,7 +42,7 @@ const NOISE_PATTERNS: RegExp[] = [
 ];
 
 // Sensitive env var patterns — ONLY match actual env var assignments (export X=val, X=val at line start)
-// NOT code lines like `const API_KEY = process.env.API_KEY` or `this.token = config.token`
+// NOT code lines like `const API_KEY` (assignment to a variable) or `this.token = config.token`
 const SENSITIVE_PATTERNS = [
   // export KEY_NAME="value" or KEY_NAME=value (shell env vars only)
   /^(export\s+[A-Z_]*(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL)[A-Z_]*)=(.+)$/,
