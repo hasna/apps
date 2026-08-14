@@ -2313,6 +2313,17 @@ describe("remote CLI entrypoint authority boundary", () => {
         await runRemoteOk(invocation);
       }
 
+      // health/doctor JSON label the transport with the canonical token: the
+      // retired "remote-http" mode vocabulary is gone from user-visible output
+      // (k_ms5wv466_u0jidq). The `mode` key stays, so existing field readers
+      // keep working; only the value changed.
+      const healthReport = JSON.parse(await runRemoteOk(["--json", "health"])) as {
+        ok: boolean;
+        mode: string;
+        checks: unknown[];
+      };
+      expect(healthReport).toMatchObject({ ok: true, mode: "http" });
+
       const upserted = JSON.parse(await runRemoteOk([
         "--json", "task", "upsert",
         "--fingerprint", "incident-593127",
@@ -2336,10 +2347,11 @@ describe("remote CLI entrypoint authority boundary", () => {
       expect({ exitCode: doctorIncomplete.exitCode, stderr: doctorIncomplete.stderr }).toEqual({ exitCode: 2, stderr: "" });
       const doctorReport = JSON.parse(doctorIncomplete.stdout) as {
         ok: boolean;
+        mode: string;
         exit_code: number;
         integrity: { summary: { ok: boolean; findings: number; unverified: number; complete: boolean } };
       };
-      expect(doctorReport).toMatchObject({ ok: false, exit_code: 2 });
+      expect(doctorReport).toMatchObject({ ok: false, mode: "http", exit_code: 2 });
       expect(doctorReport.integrity.summary).toMatchObject({ ok: false, findings: 0, unverified: 4, complete: false });
       expectNoLocalDatabase(root, localDbPath);
 

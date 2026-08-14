@@ -986,7 +986,7 @@ export function registerQueryCommands(program: Command) {
           verdict_exit_code: verdict.verdict,
           fail_on_findings: verdict.fail_on_findings,
           dry_run: true,
-          mode: "remote-http",
+          mode: "http",
           authority: { v1_base_url: cloud.baseUrl, local_fallback: false },
           routes: {
             stats: true,
@@ -1224,7 +1224,7 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
         checks.push({ name: "Version", ok: true, message: `v${getPackageVersion()} · remote HTTP client` });
         const ok = checks.every((check) => check.ok);
         if (opts.json || globalOpts.json) {
-          console.log(JSON.stringify({ ok, mode: "remote-http", checks }));
+          console.log(JSON.stringify({ ok, mode: "http", checks }));
         } else {
           console.log(chalk.bold("todos health\n"));
           for (const check of checks) {
