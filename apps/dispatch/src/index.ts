@@ -1,0 +1,103 @@
+/**
+ * @hasna/dispatch — programmatic root exports.
+ *
+ * Dispatch prompts to coding agents running in tmux windows, locally and across
+ * machines, with reliable auto-submit, long-prompt support, delivery
+ * confirmation, scheduled dispatches, and a live daemon.
+ */
+export * from "./types.js";
+export { DispatchClient, createDispatchClientFromEnv, dispatch, dispatchExec, dispatchKey, dispatchCapture, dispatchTriage, dispatchRecover, dispatchBulk } from "./sdk/index.js";
+export type { DispatchClientFromEnvOptions, DispatchClientLike, DispatchClientOptions } from "./sdk/index.js";
+
+// Building blocks (advanced / programmatic use).
+export { performDispatch, chooseMode, applyGoalPrefix, PASTE_LENGTH_THRESHOLD } from "./lib/engine.js";
+export { performExec, buildExecPlan } from "./lib/exec.js";
+export { performKeyDispatch, normalizeSpecialKey, ALLOWED_SPECIAL_KEYS } from "./lib/key.js";
+export {
+  performCapture,
+  normalizeCaptureLines,
+  preflightCaptureAi,
+  stripTerminalControl,
+  redactSecrets,
+  buildAiTransformPrompt,
+  DEFAULT_CAPTURE_LINES,
+  MAX_CAPTURE_LINES,
+} from "./lib/capture.js";
+export {
+  performAgentTriage,
+  performAgentRecovery,
+  recommendRecoveryAction,
+  normalizeTriageExcerptChars,
+  AGENT_TRIAGE_SCHEMA_VERSION,
+  AGENT_RECOVER_SCHEMA_VERSION,
+  DEFAULT_TRIAGE_EXCERPT_CHARS,
+  MAX_TRIAGE_EXCERPT_CHARS,
+} from "./lib/agent-recovery.js";
+export { performBulkDispatch } from "./lib/bulk.js";
+export {
+  performFleetSummary,
+  classifyFleetPane,
+  normalizeTargetGlobs,
+  FLEET_SUMMARY_SCHEMA_VERSION,
+  DEFAULT_FLEET_SUMMARY_LIMIT,
+  MAX_FLEET_SUMMARY_LIMIT,
+  DEFAULT_FLEET_MAX_PANE_CHARS,
+  MAX_FLEET_MAX_PANE_CHARS,
+} from "./lib/fleet-summary.js";
+export {
+  Mosaic,
+  MosaicControlError,
+  MOSAIC_SCHEMA_VERSION,
+  parseMosaicTarget,
+  performMosaicCapture,
+  performMosaicDispatch,
+} from "./lib/mosaic.js";
+export { normalizeBackend } from "./lib/backend.js";
+export {
+  DispatchApiClient,
+  DispatchApiEmptyResponseError,
+  DispatchApiError,
+  DispatchApiMalformedResponseError,
+  getDispatchApiClient,
+  getDispatchApiConfigStatus,
+} from "./lib/api-client.js";
+export type {
+  DispatchApiClientOptions,
+  DispatchApiConfigStatus,
+  DispatchApiRouteResult,
+  DispatchClientRoute,
+  DispatchTargetsOptions,
+  FetchLike,
+} from "./lib/api-client.js";
+export { parseSessionsTargets, resolveSessionsTargets } from "./lib/sessions-source.js";
+export {
+  classifyPaneCommand,
+  detectAgentActivity,
+  detectAgentKindFromCommand,
+  detectAgentKindFromProcessTree,
+  detectAgentKindFromText,
+  detectAgentTargetFromSignals,
+  evaluateExecPolicy,
+  hashCommand,
+  loadExecPolicy,
+} from "./lib/exec-policy.js";
+export { inspectAgentTarget, validateAgentComposerTarget } from "./lib/agent-target.js";
+export { computeSubmitDelay, countWords } from "./lib/delay.js";
+export {
+  evaluateDelivery,
+  confirmDelivery,
+  detectWorking,
+  detectQueued,
+  detectActionNeeded,
+  DEFAULT_WORKING_PATTERNS,
+  DEFAULT_QUEUED_PATTERNS,
+  DEFAULT_ACTION_NEEDED_PATTERNS,
+} from "./lib/confirm.js";
+export { computeNextRun, parseCron, parseDurationMs, nextCronRun } from "./lib/schedule.js";
+export { tick } from "./lib/scheduler.js";
+export type { SchedulerDeps, TickResult } from "./lib/scheduler.js";
+export { RemoteTargetEnumerationError, Tmux, parseTarget, formatTarget } from "./lib/tmux.js";
+export type { RemoteTargetEnumerationErrorCategory } from "./lib/tmux.js";
+export { Store } from "./lib/store.js";
+export { createRunner, LocalRunner, RemoteRunner } from "./lib/runner.js";
+export { getPackageVersion } from "./lib/version.js";
