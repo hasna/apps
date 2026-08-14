@@ -128,9 +128,9 @@ describe("installer", () => {
       expect(hookExists("nonexistent")).toBe(false);
     });
 
-    test("returns true for all 49 registered hooks", () => {
+    test("returns true for all 50 registered hooks", () => {
       const names = HOOKS.map((hook) => hook.name);
-      expect(names).toHaveLength(49);
+      expect(names).toHaveLength(50);
       for (const name of names) {
         expect(hookExists(name)).toBe(true);
       }
@@ -366,7 +366,7 @@ describe("installer", () => {
       const allNames = HOOKS
         .filter((hook) => getHookEvents(hook).every((event) => isEventSupported(event, "claude")))
         .map((hook) => hook.name);
-      expect(allNames).toHaveLength(47);
+      expect(allNames).toHaveLength(48);
       const results = installHooks(allNames);
       expect(results.every((r) => r.success)).toBe(true);
       expect(getRegisteredHooks().length).toBeGreaterThanOrEqual(47);

@@ -92,6 +92,16 @@ export const HOOKS: HookMeta[] = [
     matcher: "^(Bash|Write|Edit|MultiEdit|NotebookEdit|apply_patch|ApplyPatch|functions\\.apply_patch|mcp__.*)$",
     tags: ["git", "worktree", "repos", "multi-agent", "safety", "dangerous-ops"],
   },
+  {
+    name: "workspace-repos-guard",
+    displayName: "Workspace Repos Guard",
+    description: "Blocks writes and deletes that break the ~/workspace/repos structure: writes to the repos root, top-level entry creation, non-org folders, and any delete under repos",
+    version: "0.1.0",
+    category: "Git Safety",
+    event: "PreToolUse",
+    matcher: "^(Bash|Write|Edit|MultiEdit|NotebookEdit|apply_patch|ApplyPatch|functions\\.apply_patch)$",
+    tags: ["workspace", "repos", "structure", "guard", "safety", "orgs", "multi-agent"],
+  },
 
   // Code Quality
   {

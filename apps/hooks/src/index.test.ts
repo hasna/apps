@@ -38,9 +38,9 @@ import {
 } from "./index.js";
 
 describe("library exports", () => {
-  test("HOOKS is an array of 49 hooks", () => {
+  test("HOOKS is an array of 50 hooks", () => {
     expect(Array.isArray(HOOKS)).toBe(true);
-    expect(HOOKS).toHaveLength(49);
+    expect(HOOKS).toHaveLength(50);
   });
 
   test("CATEGORIES is an array of 10 categories", () => {
@@ -54,7 +54,7 @@ describe("library exports", () => {
 
   test("getHooksByCategory is a function", () => {
     expect(typeof getHooksByCategory).toBe("function");
-    expect(getHooksByCategory("Git Safety")).toHaveLength(5);
+    expect(getHooksByCategory("Git Safety")).toHaveLength(6);
   });
 
   test("searchHooks is a function", () => {
