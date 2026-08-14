@@ -46,6 +46,7 @@ import {
 import { getPackageVersion } from "../lib/package.js";
 import type { Session } from "../types/index.js";
 import type { SessionStore } from "../db/session-store.js";
+import type { WatchStatus } from "../lib/watch.js";
 import {
   formatLivePaneTable,
   listLivePanes,
@@ -64,6 +65,28 @@ const program = new Command();
 
 function printJson(value: unknown): void {
   writeStdoutFully(`${JSON.stringify(value, null, 2)}\n`);
+}
+
+function printProviderWatchStatus(status: WatchStatus, commandName: string): void {
+  console.log(`${commandName} status`);
+  console.log(`  sources:  ${status.sources.join(", ") || "(no provider dirs found)"}`);
+  console.log(`  debounce: ${status.debounceMs}ms`);
+  console.log(`  poll:     ${status.pollMs}ms`);
+  console.log("  state source  lag(s) skipped last attempt             last success             last error root");
+  for (const root of status.roots) {
+    const lag = String(root.lagSeconds ?? "-").padStart(6);
+    const skipped = String(root.skippedFiles).padStart(7);
+    const attempt = (root.lastAttemptAt ?? "-").padEnd(24);
+    const success = (root.lastSuccessAt ?? "-").padEnd(24);
+    const error = root.lastError ?? "-";
+    console.log(`  ${root.exists ? "ok  " : "miss"}  ${root.source.padEnd(7)} ${lag} ${skipped} ${attempt} ${success} ${error} ${root.root}`);
+  }
+}
+
+function failCli(error: unknown): never {
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(`Error: ${message}`);
+  process.exit(1);
 }
 
 function writeStdoutFully(text: string): void {
@@ -782,7 +805,7 @@ program
 
 program
   .command("list")
-  .description("List known sessions from the active store (local index, or the self_hosted /v1 API when HASNA_SESSIONS_API_URL + HASNA_SESSIONS_API_KEY are set)")
+  .description("List known sessions from the active store (local SQLite store, or the configured server HTTP API when HASNA_SESSIONS_API_URL + HASNA_SESSIONS_API_KEY are set)")
   .option("-p, --project <value>", "Filter by project name or path")
   .option("-l, --limit <n>", "Maximum results", "50")
   .option("--json", "Output as JSON")
@@ -802,7 +825,8 @@ program
 
 program
   .command("rename <id-or-prefix> <title>")
-  .description("Set a session's title in the active store (local index, or the self_hosted /v1 API when HASNA_SESSIONS_API_URL + HASNA_SESSIONS_API_KEY are set)")
+  .description("Set a session's title in the active store (local SQLite store, or the configured server HTTP API when HASNA_SESSIONS_API_URL + HASNA_SESSIONS_API_KEY are set)")
+  .option("-s, --source <source>", "Resolve the identifier as a native source id for this source")
   .option("--json", "Output as JSON")
   .action(async (identifier: string, title: string, opts: any) => {
     const trimmed = title.trim();
@@ -811,7 +835,12 @@ program
       process.exit(1);
     }
     const { resolveSessionStore } = await import("../db/session-store.js");
-    const session = await resolveSessionStore().rename(identifier, trimmed);
+    let session: Session | null;
+    try {
+      session = await resolveSessionStore().rename(identifier, trimmed, { source: opts.source });
+    } catch (error) {
+      failCli(error);
+    }
     if (!session) {
       console.error(`Error: session not found (or ambiguous prefix): ${identifier}`);
       process.exit(1);
@@ -827,6 +856,7 @@ program
   .command("resume [id-or-prefix]")
   .description("Resume a session by id/prefix, latest project session, or the most recent session (resolved via the active store)")
   .option("-p, --project <value>", "Resume the most recent session for a project")
+  .option("-s, --source <source>", "Resolve the identifier as a native source id for this source")
   .option("--last", "Resume the most recently active session")
   .option("--pick", "Interactively pick a session from the most recent results")
   .option("--print-command", "Print the underlying resume command without executing it")
@@ -844,7 +874,7 @@ program
       } else if (opts.last || !identifier) {
         session = (await store.recent(1))[0] ?? null;
       } else {
-        session = await store.get(identifier);
+        session = await store.get(identifier, { source: opts.source });
       }
 
       if (!session) {
@@ -920,7 +950,7 @@ program
 program
   .command("transcript-search <query>")
   .alias("registry-search")
-  .description("Full-text search across indexed session transcripts via the active store (local index, or the self_hosted /v1 API)")
+  .description("Full-text search across indexed session transcripts via the active store (local SQLite store, or the configured server HTTP API)")
   .option("-p, --project <value>", "Filter by project name or path")
   .option("--limit <count>", "Maximum matches to return", "20")
   .option("--json", "Output as JSON")
@@ -1189,6 +1219,90 @@ program
     }
   });
 
+interface BackfillCliOptions {
+  apply?: boolean;
+  confirmApply?: string;
+  allowProduction?: boolean;
+  batchSize?: string;
+  concurrency?: string;
+  source?: string;
+  pilot?: string;
+  rangeStart?: string;
+  rangeEnd?: string;
+  allSources?: boolean;
+  knownId?: string[];
+  checkpoint?: string;
+  backupCommand?: string;
+  maxSessionBytes?: string;
+  maxTotalBytes?: string;
+  json?: boolean;
+}
+
+function printBackfillSummary(result: Awaited<ReturnType<typeof import("../lib/backfill.js").runSessionBackfill>>): void {
+  console.log(`backfill ${result.mode}`);
+  console.log(`  files:      ${result.inventory.files}`);
+  console.log(`  inventory:  ${result.inventory.selectableSessions} selectable session(s), ${result.inventory.duplicates} duplicate(s), ${result.inventory.errors} error(s)`);
+  console.log(`  selected:   ${result.selection.selected} session(s), ${formatBytes(result.selection.selectedEstimatedBytes)} estimated`);
+  console.log(`  content:    ${result.selection.selectedMessages} messages, ${result.selection.selectedToolCalls} tool calls`);
+  console.log(`  limits:     batch=${result.limits.batchSize}, concurrency=${result.limits.concurrency}, max-session=${formatBytes(result.limits.maxSessionBytes)}`);
+  console.log(`  checkpoint: ${result.checkpoint.path}`);
+  if (result.dryRun) {
+    console.log("  apply:      not run (dry-run/inventory mode)");
+  } else {
+    console.log(`  applied:    ${result.applied.pushed} pushed, ${result.applied.skipped} skipped, ${result.applied.failed} failed`);
+  }
+  for (const warning of result.warnings) console.log(`  warning:    ${warning}`);
+  for (const error of result.errors.slice(0, 8)) console.error(`  error:      ${error}`);
+  if (result.errors.length > 8) console.error(`  error:      ... ${result.errors.length - 8} more`);
+}
+
+program
+  .command("backfill")
+  .description("Inventory or explicitly apply a bounded, checkpointed session-content backfill to the configured server HTTP API")
+  .option("--apply", "Apply the selected backfill to the configured server HTTP API (default is inventory/dry-run)")
+  .option("--confirm-apply <token>", "Required with --apply; pass BACKFILL_APPLY")
+  .option("--allow-production", "Permit production-like API URLs after separate out-of-band user approval")
+  .option("-s, --source <source>", "Only backfill one provider: claude, codex, codewith, gemini")
+  .option("--pilot <n>", "Deterministically select the first n sessions after sorting by source/source_id")
+  .option("--range-start <source:id>", "Inclusive deterministic range start")
+  .option("--range-end <source:id>", "Inclusive deterministic range end")
+  .option("--all-sources", "With --apply, explicitly acknowledge selecting every non-duplicate inventoried session")
+  .option("--known-id <source:id>", "Require and verify a known source-qualified id; with --apply and no pilot/range, selects only known ids", collectRepeatableOption, [])
+  .option("--batch-size <n>", "Maximum staged child records materialized per parser batch", "128")
+  .option("--concurrency <n>", "Maximum concurrent session payload imports", "1")
+  .option("--max-session-bytes <n>", "Fail closed if any selected session estimate exceeds this many bytes", String(64 * 1024 * 1024))
+  .option("--max-total-bytes <n>", "Required with --apply; fail closed if selected estimate exceeds this many bytes")
+  .option("--checkpoint <path>", "Durable checkpoint JSON path")
+  .option("--backup-command <command>", "Required with --apply; output is suppressed")
+  .option("--json", "Output machine-readable JSON")
+  .action(async (opts: BackfillCliOptions) => {
+    try {
+      const { runSessionBackfill } = await import("../lib/backfill.js");
+      const result = await runSessionBackfill({
+        apply: Boolean(opts.apply),
+        confirmApply: opts.confirmApply,
+        allowProduction: Boolean(opts.allowProduction),
+        source: opts.source,
+        pilot: opts.pilot == null ? undefined : parseNonNegativeIntOption(opts.pilot, 0, "--pilot"),
+        rangeStart: opts.rangeStart,
+        rangeEnd: opts.rangeEnd,
+        allSources: Boolean(opts.allSources),
+        knownIds: opts.knownId ?? [],
+        batchSize: parsePositiveIntOption(opts.batchSize, 128, "--batch-size"),
+        concurrency: parsePositiveIntOption(opts.concurrency, 1, "--concurrency"),
+        maxSessionBytes: parsePositiveIntOption(opts.maxSessionBytes, 64 * 1024 * 1024, "--max-session-bytes"),
+        maxTotalBytes: opts.maxTotalBytes == null ? undefined : parsePositiveIntOption(opts.maxTotalBytes, 0, "--max-total-bytes"),
+        checkpointPath: opts.checkpoint,
+        backupCommand: opts.backupCommand,
+      });
+      if (opts.json) printJson(result);
+      else printBackfillSummary(result);
+      if (result.errors.length > 0 || result.applied.failed > 0) process.exit(1);
+    } catch (error) {
+      failCli(error);
+    }
+  });
+
 interface ApiSyncCliOptions {
   dryRun?: boolean;
   watch?: boolean;
@@ -1201,6 +1315,7 @@ interface ApiSyncCliOptions {
   interval?: string;
   maxIterations?: string;
   backupCommand?: string;
+  status?: boolean;
 }
 
 interface ContentSyncResult {
@@ -1230,6 +1345,12 @@ interface ContentSyncResult {
 
 const CLOUD_SYNC_BACKUP_GUIDANCE =
   "Live self_hosted pushes require a successful --backup-command. Raw SQLite file copies are not treated as a safe backup while the DB may be active.";
+
+// Default number of local sessions scanned per content-sync cycle. A bare `sessions sync`
+// on a large store (~13k sessions) would otherwise scan and parse every session and hang
+// with no progress; both `sync` and `daemon` share this bounded default so a single command
+// completes promptly. Pass --limit to scan more.
+const DEFAULT_SYNC_LIMIT = 500;
 
 function runBackupCommand(command: string | undefined, dryRun: boolean): ContentSyncResult["backup"]["hook"] {
   const trimmed = command?.trim();
@@ -1286,7 +1407,7 @@ function printContentSyncResult(result: ContentSyncResult, prefix = "sync"): voi
 async function runContentSyncOnce(opts: ApiSyncCliOptions): Promise<ContentSyncResult> {
   const { resolveSessionStore, getLocalStore } = await import("../db/session-store.js");
   const dryRun = Boolean(opts.dryRun);
-  const limit = parsePositiveIntOption(opts.limit, opts.watch ? 500 : 100000, "--limit");
+  const limit = parsePositiveIntOption(opts.limit, DEFAULT_SYNC_LIMIT, "--limit");
   const local = getLocalStore();
   const result: ContentSyncResult = {
     target: "self_hosted_api",
@@ -1465,17 +1586,17 @@ async function runContentSyncCli(opts: ApiSyncCliOptions, commandName = "sync"):
 
 program
   .command("sync")
-  .description("Ingest local sessions; in self_hosted (api) mode, push sessions/messages/tool calls to the shared cloud registry")
+  .description("Ingest local sessions and push sessions/messages/tool calls to the configured server HTTP API")
   .option("--no-ingest", "Skip the local ingest before pushing")
   .option("-n, --dry-run", "Plan content sync without creating backups or pushing to the API")
   .option("--watch", "Run content sync repeatedly as a bounded-poll daemon")
-  .option("-s, --source <source>", "Only sync one provider: claude, codex, gemini")
+  .option("-s, --source <source>", "Only sync one provider: claude, codex, codewith, gemini")
   .option("-p, --project <value>", "Only sync sessions for this project path/name")
   .option("-m, --machine <name>", "Only sync sessions from this machine")
-  .option("-l, --limit <n>", "Maximum local sessions to scan per cycle")
+  .option("-l, --limit <n>", "Maximum local sessions to scan per cycle", String(DEFAULT_SYNC_LIMIT))
   .option("--interval <seconds>", "Watch interval in seconds (minimum 5)")
   .option("--max-iterations <n>", "Stop watch mode after n cycles", "60")
-  .option("--backup-command <command>", "Required for live self_hosted pushes; output is suppressed")
+  .option("--backup-command <command>", "Required for live server HTTP API pushes; output is suppressed")
   .option("--json", "Output as JSON")
   .action(async (opts: ApiSyncCliOptions) => {
     await runContentSyncCli(opts);
@@ -1483,18 +1604,26 @@ program
 
 program
   .command("daemon")
-  .description("Watch local session changes and periodically push session content to the self_hosted /v1 API")
+  .description("Watch local session changes and periodically push session content to the configured server HTTP API")
   .option("--no-ingest", "Skip the local ingest before each sync cycle")
   .option("-n, --dry-run", "Plan each sync cycle without creating backups or pushing to the API")
-  .option("-s, --source <source>", "Only sync one provider: claude, codex, gemini")
+  .option("-s, --source <source>", "Only sync one provider: claude, codex, codewith, gemini")
   .option("-p, --project <value>", "Only sync sessions for this project path/name")
   .option("-m, --machine <name>", "Only sync sessions from this machine")
-  .option("-l, --limit <n>", "Maximum local sessions to scan per cycle", "500")
+  .option("-l, --limit <n>", "Maximum local sessions to scan per cycle", String(DEFAULT_SYNC_LIMIT))
   .option("--interval <seconds>", "Watch interval in seconds (minimum 5)", "60")
   .option("--max-iterations <n>", "Stop after n cycles; pass a larger value for longer supervised runs", "60")
-  .option("--backup-command <command>", "Required for live self_hosted pushes; output is suppressed")
+  .option("--backup-command <command>", "Required for live server HTTP API pushes; output is suppressed")
+  .option("--status", "Print provider ingest-watch roots and persisted metrics, then exit")
   .option("--json", "Emit one JSON object per cycle")
   .action(async (opts: ApiSyncCliOptions) => {
+    if (opts.status) {
+      const { getWatchStatus } = await import("../lib/watch.js");
+      const status = getWatchStatus({ sources: opts.source ? [opts.source] : undefined });
+      if (opts.json) printJson(status);
+      else printProviderWatchStatus(status, "daemon");
+      return;
+    }
     await runContentSyncCli({ ...opts, watch: true }, "daemon");
   });
 
@@ -1518,7 +1647,7 @@ program
   .command("ingest-watch")
   .alias("watch-ingest")
   .description("Continuously index new/changed sessions as they happen (Ctrl-C to stop)")
-  .option("-s, --source <source...>", "Only watch one or more providers: claude, codex, gemini")
+  .option("-s, --source <source...>", "Only watch one or more providers: claude, codex, codewith, gemini")
   .option("--no-initial", "Skip the startup ingest and only ingest future changes/poll ticks")
   .option("--debounce <ms>", "Debounce window after a change before ingesting", "2000")
   .option("--poll <ms>", "Safety-net poll interval; set 0 to disable", "10000")
@@ -1533,13 +1662,7 @@ program
     if (opts.status) {
       const status = getWatchStatus({ sources, debounceMs, pollMs });
       if (opts.json) return void printJson(status);
-      console.log("watch-ingest status");
-      console.log(`  sources:  ${status.sources.join(", ") || "(no provider dirs found)"}`);
-      console.log(`  debounce: ${status.debounceMs}ms`);
-      console.log(`  poll:     ${status.pollMs}ms`);
-      for (const root of status.roots) {
-        console.log(`  ${root.exists ? "ok " : "miss"} ${root.source.padEnd(7)} ${root.root}`);
-      }
+      printProviderWatchStatus(status, "watch-ingest");
       return;
     }
     if (opts.initial !== false) {
@@ -1614,21 +1737,27 @@ program
 program
   .command("show <id>")
   .description("Show a session's details and message previews (id or unique prefix)")
+  .option("-s, --source <source>", "Resolve the id as a native source id for this source")
   .option("-m, --messages <n>", "How many messages to preview", "12")
   .option("--json", "Output as JSON")
-  .action(async (id: string, opts: { messages?: string; json?: boolean }) => {
+  .action(async (id: string, opts: { source?: string; messages?: string; json?: boolean }) => {
     const { resolveSessionStore } = await import("../db/session-store.js");
     const store = resolveSessionStore();
-    const s = await store.get(id);
+    let s: Session | null;
+    try {
+      s = await store.get(id, { source: opts.source });
+    } catch (error) {
+      failCli(error);
+    }
     if (!s) {
       console.error(`Session not found (or ambiguous prefix): ${id}`);
       process.exit(1);
     }
     // Message/tool-call bodies come through the Store: local SQLite in local mode
     // or the authenticated /v1 content endpoints in self_hosted mode.
-    const messages = await store.messages(s.id);
+    const n = parseNonNegativeIntOption(opts.messages, 12, "--messages");
+    const messages = n === 0 ? [] : await store.messages(s.id);
     const tools = await store.toolCalls(s.id);
-    const n = parsePositiveIntOption(opts.messages, 12, "--messages");
     const previewMessages = messages.slice(0, n);
     if (opts.json) return void printJson({ session: s, messages: previewMessages, tools });
     console.log(`${s.title ?? "(untitled)"}`);
@@ -1666,8 +1795,8 @@ program
 
 program
   .command("create")
-  .description("Create a session record in the active store (local index, or the self_hosted /v1 API when HASNA_SESSIONS_API_URL + HASNA_SESSIONS_API_KEY are set)")
-  .requiredOption("--source <source>", "Session source: claude, codex, or gemini")
+  .description("Create a session record in the active store (local SQLite store, or the configured server HTTP API when HASNA_SESSIONS_API_URL + HASNA_SESSIONS_API_KEY are set)")
+  .requiredOption("--source <source>", "Session source: claude, codex, codewith, or gemini")
   .requiredOption("--source-id <id>", "Provider-native session id")
   .option("--title <title>", "Session title")
   .option("--project-path <path>", "Project path")
@@ -1701,7 +1830,7 @@ program
 
 program
   .command("delete <id>")
-  .description("Delete a session record from the active store (local index, or the self_hosted /v1 API when HASNA_SESSIONS_API_URL + HASNA_SESSIONS_API_KEY are set)")
+  .description("Delete a session record from the active store (local SQLite store, or the configured server HTTP API when HASNA_SESSIONS_API_URL + HASNA_SESSIONS_API_KEY are set)")
   .option("--json", "Output as JSON")
   .action(async (id: string, opts: { json?: boolean }) => {
     const { resolveSessionStore } = await import("../db/session-store.js");
@@ -1720,9 +1849,10 @@ program
   .option("-t, --type <type>", "List one entity type: project, tool, model, provider, repo")
   .option("-r, --related <type:name>", "Sessions related to an entity, e.g. tool:Bash or project:infra")
   .option("--session <id>", "Show a single session's entity neighborhood")
+  .option("-s, --source <source>", "Resolve --session as a native source id for this source")
   .option("-l, --limit <n>", "Max results", "50")
   .option("--json", "Output as JSON")
-  .action(async (opts: { type?: string; related?: string; session?: string; limit?: string; json?: boolean }) => {
+  .action(async (opts: { type?: string; related?: string; session?: string; source?: string; limit?: string; json?: boolean }) => {
     const { resolveSessionStore } = await import("../db/session-store.js");
     const store = resolveSessionStore();
     type EntityType = "project" | "tool" | "model" | "provider" | "repo";
@@ -1730,7 +1860,12 @@ program
     const limit = parseInt(opts.limit ?? "50", 10) || 50;
 
     if (opts.session) {
-      const g = await store.graphSession(opts.session);
+      let g;
+      try {
+        g = await store.graphSession(opts.session, { source: opts.source });
+      } catch (error) {
+        failCli(error);
+      }
       if (!g) {
         console.error(`Session not found: ${opts.session}`);
         process.exit(1);
@@ -1796,7 +1931,7 @@ program
   .command("search-indexed <query>")
   .aliases(["search", "indexed-search"])
   .description("Full-text search across your indexed AI coding sessions")
-  .option("-s, --source <source>", "Filter by provider: claude, codex, or gemini")
+  .option("-s, --source <source>", "Filter by provider: claude, codex, codewith, or gemini")
   .option("-p, --project <value>", "Filter by project name or path")
   .option("-m, --machine <name>", "Filter by machine (laptop-a, workstation-b, ...)")
   .option("-l, --limit <n>", "Maximum results", "20")
@@ -1850,8 +1985,8 @@ program
 
 program
   .command("recall <query>")
-  .description("Recall a coding session by natural language, with evidence, touched files, graph context, and resume metadata")
-  .option("-s, --source <source>", "Filter by provider: claude, codex, or gemini")
+  .description("Local-only recall by natural language, with evidence, touched files, graph context, and resume metadata")
+  .option("-s, --source <source>", "Filter by provider: claude, codex, codewith, or gemini")
   .option("-p, --project <value>", "Filter by project name or path")
   .option("-m, --machine <name>", "Filter by machine")
   .option("-l, --limit <n>", "Maximum results", "10")
@@ -1937,14 +2072,14 @@ function addIngestCommand(name: string, description: string) {
   program
     .command(name)
     .description(description)
-    .option("-s, --source <source>", "Only ingest one provider: claude, codex, or gemini")
+    .option("-s, --source <source>", "Only ingest one provider: claude, codex, codewith, or gemini")
     .option("-f, --force", "Re-ingest even files that are unchanged since last run")
     .option("-v, --verbose", "Print each file as it is ingested")
     .option("--json", "Output the result as JSON")
     .action(runIngestCommand);
 }
 
-addIngestCommand("ingest", "Index AI coding sessions (claude, codex, gemini) into the searchable database");
+addIngestCommand("ingest", "Index AI coding sessions (claude, codex, codewith, gemini) into the searchable database");
 addIngestCommand("reindex", "Alias for ingest; refresh the searchable session index");
 
 // Use parseAsync + a single top-level catch so async command actions that throw

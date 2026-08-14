@@ -4,7 +4,8 @@
 // client-flip resolves to `cloud-http` — HASNA_SESSIONS_MODE=self_hosted (or
 // cloud) AND HASNA_SESSIONS_API_URL + HASNA_SESSIONS_API_KEY are set — every
 // read and write is routed to the app's cloud `/v1` HTTP API
-// (https://sessions.hasna.xyz/v1) with the bearer key, using the
+// (the configured HASNA_SESSIONS_API_URL, e.g. https://sessions.your-deployment.example/v1)
+// with the bearer key, using the
 // @hasna/contracts HTTP storage client's transport. NO SQLite, NO DSN, NO raw
 // RDS from a client.
 //
@@ -15,7 +16,15 @@
 
 import { resolveStorageClient } from "@hasna/contracts/client/storage";
 import type { HasnaStorageClient } from "@hasna/contracts/client/storage";
-import type { Machine, Message, Session, SessionContentImport, ToolCall } from "../types/index.js";
+import { normalizeStorageMode } from "@hasna/contracts/mode";
+import type {
+  Machine,
+  Message,
+  Session,
+  SessionContentImport,
+  SessionLookupOptions,
+  ToolCall,
+} from "../types/index.js";
 import type { SessionContentImportResult, UpsertSessionInput } from "./cloud/store.js";
 import type { SearchHit, ToolCallHit } from "../lib/search.js";
 import type { Entity, EntityType, RelatedSession, SessionGraph } from "../lib/graph.js";
@@ -26,7 +35,7 @@ import type { IngestResult } from "../lib/ingest/index.js";
 import { contentShrinkError } from "../lib/content-import-safety.js";
 
 export interface IngestStoreOptions {
-  /** Ingest only this provider (claude | codex | gemini). */
+  /** Ingest only this provider (claude | codex | codewith | gemini). */
   source?: string;
   /** Ingest only these providers. Ignored when `source` is set. */
   sources?: string[];
@@ -63,7 +72,7 @@ export interface SessionStore {
   readonly mode: "local" | "cloud";
   list(opts: ListOptions): Promise<Session[]>;
   recent(limit: number): Promise<Session[]>;
-  get(idOrPrefix: string): Promise<Session | null>;
+  get(idOrPrefix: string, opts?: SessionLookupOptions): Promise<Session | null>;
   create(input: UpsertSessionInput): Promise<Session>;
   /** Idempotently import/upsert a session with messages and tool calls. */
   importContent(input: SessionContentImport): Promise<SessionContentImportResult>;
@@ -74,7 +83,7 @@ export interface SessionStore {
    * self_hosted mode PATCHes `/v1/sessions/{id}` so the shared cloud registry is
    * what actually changes. Returns the updated session, or null if not found.
    */
-  rename(idOrPrefix: string, title: string): Promise<Session | null>;
+  rename(idOrPrefix: string, title: string, opts?: SessionLookupOptions): Promise<Session | null>;
   /**
    * Rewrite session paths after a project directory move (old -> new): updates
    * project_path / source_path in the active index. Local mode touches the
@@ -104,7 +113,7 @@ export interface SessionStore {
   /** Sessions related to a graph entity. */
   graphRelated(type: EntityType, name: string, limit: number): Promise<RelatedSession[]>;
   /** The entity neighborhood of a single session. */
-  graphSession(idOrPrefix: string): Promise<SessionGraph | null>;
+  graphSession(idOrPrefix: string, opts?: SessionLookupOptions): Promise<SessionGraph | null>;
   /** Generate embeddings for indexed messages (index maintenance). */
   embed(opts: { limit?: number }): Promise<EmbedResult>;
   /** Merge another machine's local sessions DB into this one (local-to-local sync). */
@@ -122,6 +131,106 @@ export interface SessionStore {
 }
 
 const APP = "sessions";
+
+// -- Explicit mode selection -------------------------------------------------
+//
+// This client PINS the storage mode before calling the contracts resolver. It
+// must never depend on that resolver inferring a cloud transition from the mere
+// presence of an API URL (or of a credential the resolver can find on disk).
+//
+// Owner ruling 2026-07-29: a local->network transition must be explicitly
+// signalled, never inferred from a credential file appearing on disk. The
+// contracts client still infers today, and hasna/contracts#51 removes it. When
+// that lands, a consumer that passes `process.env` straight through gets the
+// LOCAL SQLite store for a fully-configured cloud client -- silently, at exit 0,
+// which is the exact silent-degrade this fleet has spent the day chasing.
+//
+// Measured 2026-07-30: of the five repos importing the contracts client at
+// runtime, `domains`, `logs` and `todos` already pin; `files` and `sessions` did
+// not, and were the two that #51 would strand. This is the `sessions` pin, and it
+// deliberately mirrors `withImpliedSelfHostedMode` in @hasna/logs so the fleet
+// converges on one shape rather than five.
+//
+// Pinning is also what makes this client immune to WHICH inference is live
+// upstream -- env pair, URL alone, or disk credential. The mode is ours to state.
+
+const MODE_KEYS = [
+  "HASNA_SESSIONS_STORAGE_MODE",
+  "HASNA_SESSIONS_MODE",
+  "SESSIONS_STORAGE_MODE",
+  "SESSIONS_MODE",
+] as const;
+const API_URL_KEYS = ["HASNA_SESSIONS_API_URL", "SESSIONS_API_URL"] as const;
+const API_KEY_KEYS = ["HASNA_SESSIONS_API_KEY", "SESSIONS_API_KEY"] as const;
+
+/** True when any of `keys` carries a non-blank value. The value is never read out. */
+function anySet(source: Env, keys: readonly string[]): boolean {
+  return keys.some((k) => (source[k]?.trim() ?? "") !== "");
+}
+
+/**
+ * The value that means "use the server" in the INSTALLED @hasna/contracts.
+ *
+ * Derived, never hardcoded, and that is load-bearing rather than tidy. The
+ * storage-mode enum has already changed once: contracts <=0.8.5 accepts `cloud`
+ * plus the deprecated aliases `self_hosted`/`remote`/`hybrid`, while contracts
+ * after the inference removal accepts ONLY `sqlite`/`postgres` and THROWS on
+ * everything else. The two valid sets are DISJOINT, so any literal pinned here
+ * is a bet on which side of that change a machine is on, and the bet loses on
+ * one side or the other.
+ *
+ * Measured 2026-07-30 against contracts 0.5.2: `postgres` throws, `self_hosted`
+ * normalizes. Against contracts main (0.8.6): `postgres` normalizes,
+ * `self_hosted` throws. Probing newest-first therefore yields the right token on
+ * both generations, and on the next one provided it keeps a server token here.
+ *
+ * The probe runs through the library's own `normalizeStorageMode`, so the answer
+ * comes from the installed code rather than from our belief about it.
+ */
+export const SERVER_MODE_CANDIDATES = ["postgres", "self_hosted", "cloud"] as const;
+
+/** Accepts a mode token or throws. Injectable so both enum generations are testable. */
+export type ModeNormalizer = (value: string) => unknown;
+
+let cachedServerMode: string | null = null;
+
+export function serverStorageMode(normalize: ModeNormalizer = normalizeStorageMode): string {
+  const useCache = normalize === (normalizeStorageMode as ModeNormalizer);
+  if (useCache && cachedServerMode !== null) return cachedServerMode;
+  for (const candidate of SERVER_MODE_CANDIDATES) {
+    try {
+      normalize(candidate);
+      if (useCache) cachedServerMode = candidate;
+      return candidate;
+    } catch {
+      // Not a token this generation of @hasna/contracts understands.
+    }
+  }
+  // Every candidate was rejected: the enum changed again and this list is stale.
+  // Fail loudly rather than guess -- guessing is the defect class this pin exists
+  // to remove, and a wrong mode silently reads the wrong dataset.
+  throw new Error(
+    `No known server storage mode is accepted by the installed @hasna/contracts ` +
+      `(tried ${SERVER_MODE_CANDIDATES.join(", ")}). The storage-mode enum has changed; ` +
+      `add the new server token to SERVER_MODE_CANDIDATES in src/db/session-store.ts.`,
+  );
+}
+
+/**
+ * Return an env whose storage mode is explicit.
+ *
+ * An already-set mode -- through any of the four documented variables -- is left
+ * exactly as it is, so an operator pinning `local` is never overridden. Only the
+ * complete API url + key pair implies `self_hosted`; half a pair implies nothing,
+ * because half a pair is not a statement of intent.
+ */
+export function sessionsCloudEnv(source: Env = process.env): Env {
+  if (anySet(source, MODE_KEYS)) return source;
+  if (anySet(source, API_URL_KEYS) && anySet(source, API_KEY_KEYS)) {
+    return { ...source, HASNA_SESSIONS_STORAGE_MODE: serverStorageMode() };
+  }
+  return source;
+}
 
 function isNotFound(error: unknown): boolean {
   return (
@@ -143,6 +252,11 @@ function cloudStore(client: HasnaStorageClient): SessionStore {
     if (opts.limit !== undefined) q.limit = opts.limit;
     return q;
   };
+  const lookupQuery = (opts: SessionLookupOptions = {}): Record<string, string> => {
+    const q: Record<string, string> = {};
+    if (opts.source) q.source = opts.source;
+    return q;
+  };
   return {
     mode: "cloud",
     async list(opts) {
@@ -153,9 +267,11 @@ function cloudStore(client: HasnaStorageClient): SessionStore {
       const res = await t.get<{ sessions: Session[] }>("/recent", { query: { limit } });
       return res.sessions ?? [];
     },
-    async get(idOrPrefix) {
+    async get(idOrPrefix, opts = {}) {
       try {
-        const res = await t.get<{ session: Session }>(`/sessions/${encodeURIComponent(idOrPrefix)}`);
+        const res = await t.get<{ session: Session }>(`/sessions/${encodeURIComponent(idOrPrefix)}`, {
+          query: lookupQuery(opts),
+        });
         return res.session ?? null;
       } catch (error) {
         if (isNotFound(error)) return null;
@@ -191,11 +307,12 @@ function cloudStore(client: HasnaStorageClient): SessionStore {
         throw error;
       }
     },
-    async rename(idOrPrefix, title) {
+    async rename(idOrPrefix, title, opts = {}) {
       try {
         const res = await t.patch<{ session: Session }>(
           `/sessions/${encodeURIComponent(idOrPrefix)}`,
           { title },
+          { query: lookupQuery(opts) },
         );
         return res.session ?? null;
       } catch (error) {
@@ -226,7 +343,9 @@ function cloudStore(client: HasnaStorageClient): SessionStore {
       return stats;
     },
     async messages(sessionId) {
-      const res = await t.get<{ messages: Message[] }>(`/sessions/${encodeURIComponent(sessionId)}/messages`);
+      const res = await t.get<{ messages: Message[] }>(
+        `/sessions/${encodeURIComponent(sessionId)}/messages`,
+      );
       return res.messages ?? [];
     },
     async toolCalls(sessionId) {
@@ -257,10 +376,10 @@ function cloudStore(client: HasnaStorageClient): SessionStore {
       });
       return res.sessions ?? [];
     },
-    async graphSession(idOrPrefix) {
+    async graphSession(idOrPrefix, opts = {}) {
       try {
         const res = await t.get<{ graph: SessionGraph | null }>("/graph", {
-          query: { session: idOrPrefix },
+          query: { session: idOrPrefix, ...lookupQuery(opts) },
         });
         return res.graph ?? null;
       } catch (error) {
@@ -268,17 +387,17 @@ function cloudStore(client: HasnaStorageClient): SessionStore {
         throw error;
       }
     },
-    // Not yet available server-side: these require the local embedding/FTS index
-    // or a local-to-local DB merge. Fail loudly instead of silently reading the
-    // local SQLite island (that was the split-brain bug).
+    // These require the local embedding/FTS index or a local-to-local DB merge;
+    // recall is intentionally local-only. Fail loudly instead of silently
+    // reading the local SQLite island (that was the split-brain bug).
     semanticSearch() {
       return notAvailableInCloud("semantic search");
     },
     hybridSearch() {
       return notAvailableInCloud("hybrid search");
     },
-    recall() {
-      return notAvailableInCloud("recall");
+    async recall() {
+      return recallNotAvailableInCloud();
     },
     embed() {
       return notAvailableInCloud("embed");
@@ -308,6 +427,14 @@ function notAvailableInCloud(op: string): never {
   );
 }
 
+function recallNotAvailableInCloud(): never {
+  throw new Error(
+    `'recall' is local-only and is not available in hosted/self-hosted mode. ` +
+      `Use 'sessions list', 'sessions show <id>', or 'sessions search <query>' against the hosted store, ` +
+      `or run recall on a machine in local mode.`,
+  );
+}
+
 /** Local store: SQLite index, loaded lazily so cloud-only runs never open the DB. */
 function localStore(): SessionStore {
   return {
@@ -320,9 +447,9 @@ function localStore(): SessionStore {
       const { getRecentSessions } = await import("./sessions.js");
       return getRecentSessions(limit);
     },
-    async get(idOrPrefix) {
+    async get(idOrPrefix, opts = {}) {
       const { getSessionByPrefix } = await import("./sessions.js");
-      return getSessionByPrefix(idOrPrefix);
+      return getSessionByPrefix(idOrPrefix, opts);
     },
     async create(input) {
       const { upsertSession } = await import("./sessions.js");
@@ -360,9 +487,9 @@ function localStore(): SessionStore {
       deleteSession(id);
       return true;
     },
-    async rename(idOrPrefix, title) {
+    async rename(idOrPrefix, title, opts = {}) {
       const { updateSessionTitle } = await import("./sessions.js");
-      return updateSessionTitle(idOrPrefix, title);
+      return updateSessionTitle(idOrPrefix, title, opts);
     },
     async relocatePaths(oldPath, newPath) {
       const { relocatePathsInDb } = await import("./sessions.js");
@@ -439,10 +566,10 @@ function localStore(): SessionStore {
       const { relatedSessions } = await import("../lib/graph.js");
       return relatedSessions(type, name, limit);
     },
-    async graphSession(idOrPrefix) {
+    async graphSession(idOrPrefix, opts = {}) {
       const { sessionGraph } = await import("../lib/graph.js");
       const { getSessionByPrefix } = await import("./sessions.js");
-      const session = getSessionByPrefix(idOrPrefix);
+      const session = getSessionByPrefix(idOrPrefix, opts);
       if (!session) return null;
       return sessionGraph(session.id);
     },
@@ -477,7 +604,7 @@ export function resolveSessionStore(
   env: Env = process.env,
   overrides?: Parameters<typeof resolveStorageClient>[2],
 ): SessionStore {
-  const resolved = resolveStorageClient(APP, env, overrides);
+  const resolved = resolveStorageClient(APP, sessionsCloudEnv(env), overrides);
   if (resolved.transport === "cloud-http") return cloudStore(resolved.client);
   return localStore();
 }

@@ -1,14 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdtempSync, mkdirSync, statSync, writeFileSync, rmSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { ClaudeParser } from "../src/lib/ingest/claude.js";
 import { CodexParser } from "../src/lib/ingest/codex.js";
+import { CodewithParser } from "../src/lib/ingest/codewith.js";
 import { GeminiParser } from "../src/lib/ingest/gemini.js";
 import { flattenContent } from "../src/lib/ingest/types.js";
 import { getParser, listParsers } from "../src/lib/ingest/index.js";
 import { getDatabase, resetDatabase, closeDatabase } from "../src/db/database.js";
-import { saveParsedSession, getMessages, getToolCalls } from "../src/db/sessions.js";
+import { saveParsedSession, saveStagedParsedSession, getMessages, getToolCalls } from "../src/db/sessions.js";
 
 let root: string;
 
@@ -77,6 +78,33 @@ const CODEX_LINES = [
   }),
 ].join("\n");
 
+const CODEWITH_LINES = [
+  JSON.stringify({
+    timestamp: "2026-05-02T12:00:00Z",
+    type: "session_meta",
+    payload: {
+      id: "sess-codex-1",
+      cwd: "/Users/h/Workspace/codewith-app",
+      cli_version: "0.12.0-codewith",
+      model_provider: "openai",
+      auth_profile: "personal",
+      authProfile: "work",
+      credential_metadata: { vault: "should-not-emit" },
+      git: { branch: "feature/codewith", commit_hash: "def456", repository_url: "https://github.com/h/codewith-app" },
+    },
+  }),
+  JSON.stringify({
+    timestamp: "2026-05-02T12:00:01Z",
+    type: "response_item",
+    payload: { type: "message", role: "user", content: [{ type: "input_text", text: "index the Codewith rollout" }] },
+  }),
+  JSON.stringify({
+    timestamp: "2026-05-02T12:00:02Z",
+    type: "response_item",
+    payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "Indexed." }] },
+  }),
+].join("\n");
+
 const GEMINI_LOGS = JSON.stringify([
   { sessionId: "g1", messageId: 0, type: "user", message: "hello gemini", timestamp: "2026-05-03T08:00:00Z" },
   { sessionId: "g1", messageId: 1, type: "user", message: "second prompt", timestamp: "2026-05-03T08:01:00Z" },
@@ -85,6 +113,7 @@ const GEMINI_LOGS = JSON.stringify([
 
 let claudeFile: string;
 let codexFile: string;
+let codewithFile: string;
 let geminiFile: string;
 
 beforeEach(() => {
@@ -103,6 +132,13 @@ beforeEach(() => {
   writeFileSync(codexFile, CODEX_LINES);
   process.env.CODEX_PATH = join(root, "codex");
 
+  // Codewith has the same rollout format as Codex, but separate storage and provenance.
+  const cwdir = join(root, "codewith", "sessions", "2026", "05", "02");
+  mkdirSync(cwdir, { recursive: true });
+  codewithFile = join(cwdir, "rollout-2026-05-02T12-00-00-sess-codex-1.jsonl");
+  writeFileSync(codewithFile, CODEWITH_LINES);
+  process.env.CODEWITH_PATH = join(root, "codewith");
+
   // Gemini layout: <GEMINI_PATH>/tmp/<hash>/logs.json
   const gdir = join(root, "gemini", "tmp", "abc123hash");
   mkdirSync(gdir, { recursive: true });
@@ -115,6 +151,7 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true });
   delete process.env.CLAUDE_PATH;
   delete process.env.CODEX_PATH;
+  delete process.env.CODEWITH_PATH;
   delete process.env.GEMINI_PATH;
 });
 
@@ -152,6 +189,50 @@ describe("ClaudeParser", () => {
   it("listSessionFiles finds the fixture under CLAUDE_PATH", () => {
     const files = new ClaudeParser().listSessionFiles();
     expect(files.some((f) => f.endsWith("sess-claude-1.jsonl"))).toBe(true);
+  });
+
+  it("exposes bounded parseFileResult metadata for safe backfill", () => {
+    const result = new ClaudeParser().parseFileResult(claudeFile, { maxBufferedBytes: 1024 * 1024 });
+    expect(result.sessions).toHaveLength(1);
+    expect(result.malformedRecordCount).toBe(0);
+    expect(result.incompleteTrailingRecord).toBe(false);
+    expect(result.maxBufferedLineBytes).toBeGreaterThan(0);
+    expect(result.sourceContentDigest).toMatch(/^sha256:/);
+  });
+
+  it("rejects oversized Claude files before buffering while preserving normal bounded parses", () => {
+    const file = join(root, "claude", "projects", "-Users-h-Workspace-myapp", "oversized-claude.jsonl");
+    writeFileSync(
+      file,
+      [
+        JSON.stringify({ type: "user", message: { role: "user", content: "normal" }, uuid: "u", timestamp: "2026-05-01T10:00:00Z" }),
+        JSON.stringify({ type: "assistant", message: { role: "assistant", content: "x".repeat(2048) }, uuid: "a", timestamp: "2026-05-01T10:00:01Z" }),
+      ].join("\n"),
+    );
+
+    expect(() => new ClaudeParser().parseFileResult(file, { maxBufferedBytes: 128 })).toThrow(
+      /exceeds max buffered bytes 128/,
+    );
+    const result = new ClaudeParser().parseFileResult(file, { maxBufferedBytes: 4096 });
+    expect(result.sessions).toHaveLength(1);
+    expect(result.malformedRecordCount).toBe(0);
+    expect(result.sourceContentDigest).toMatch(/^sha256:/);
+  });
+
+  it("accounts for malformed Claude JSONL records", () => {
+    const file = join(root, "claude", "projects", "-Users-h-Workspace-myapp", "malformed-claude.jsonl");
+    writeFileSync(
+      file,
+      [
+        JSON.stringify({ type: "user", message: { role: "user", content: "before" }, uuid: "u", timestamp: "2026-05-01T10:00:00Z" }),
+        '{"type":"assistant","message":',
+        JSON.stringify({ type: "assistant", message: { role: "assistant", content: "after" }, uuid: "a", timestamp: "2026-05-01T10:00:01Z" }),
+      ].join("\n"),
+    );
+
+    const result = new ClaudeParser().parseFileResult(file);
+    expect(result.malformedRecordCount).toBe(1);
+    expect(result.incompleteTrailingRecord).toBe(false);
   });
 
   it("uses the filename (not the in-file sessionId) as source_id, so files sharing a sessionId don't collapse", () => {
@@ -326,6 +407,141 @@ describe("CodexParser", () => {
     const [ps] = new CodexParser().parseFile(file);
     expect(ps.session.title).toBe("finish the launch checklist and publish the release notes");
   });
+
+  it("stages and persists generated large rollout files with bounded normalized batches", () => {
+    process.env.SESSIONS_DB_PATH = ":memory:";
+    resetDatabase();
+    getDatabase();
+    const file = join(root, "codex", "sessions", "2026", "05", "02", "rollout-2026-05-02T13-00-00-large.jsonl");
+    const lines = [CODEX_LINES.split("\n")[0]];
+    const largeChunk = "x".repeat(7_000);
+    for (let i = 0; i < 320; i++) {
+      lines.push(
+        JSON.stringify({
+          timestamp: "2026-05-02T13:00:01Z",
+          type: "response_item",
+          payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: `chunk ${i} ${largeChunk}` }] },
+        })
+      );
+    }
+    writeFileSync(file, `${lines.join("\n")}\n`);
+
+    const result = new CodexParser().parseFileResult(file, { preferStaging: true });
+    try {
+      expect(statSync(file).size).toBeGreaterThan(2_000_000);
+      expect(result.incompleteTrailingRecord).toBe(false);
+      expect(result.maxBufferedLineBytes).toBeLessThan(8_192);
+      expect(result.maxNormalizedBatchRecords).toBe(1);
+      expect(result.sessions).toHaveLength(0);
+      expect(result.stagedSessions).toHaveLength(1);
+      expect(result.stagedSessions?.[0].messageCount).toBe(320);
+
+      const saved = saveStagedParsedSession(result.stagedSessions![0], { batchSize: 128 });
+      expect(saved.maxBatchRecords).toBeLessThanOrEqual(128);
+      expect(saved.session.message_count).toBe(320);
+      expect(getMessages(saved.session.id)).toHaveLength(320);
+    } finally {
+      for (const staged of result.stagedSessions ?? []) {
+        staged.cleanup();
+      }
+      closeDatabase();
+      delete process.env.SESSIONS_DB_PATH;
+    }
+  }, 10_000);
+
+  it("reports incomplete trailing rollout records without throwing", () => {
+    const file = join(root, "codex", "sessions", "2026", "05", "02", "rollout-2026-05-02T14-00-00-partial.jsonl");
+    writeFileSync(
+      file,
+      [
+        CODEX_LINES.split("\n")[0],
+        JSON.stringify({
+          timestamp: "2026-05-02T14:00:01Z",
+          type: "response_item",
+          payload: { type: "message", role: "user", content: [{ type: "input_text", text: "complete" }] },
+        }),
+        '{"timestamp":"2026-05-02T14:00:02Z","type":"response_item","payload":',
+      ].join("\n")
+    );
+
+    const result = new CodexParser().parseFileResult(file);
+    expect(result.incompleteTrailingRecord).toBe(true);
+    expect(result.sessions[0].messages.map((m) => m.content)).toEqual(["complete"]);
+  });
+
+  it("accounts for malformed non-trailing rollout records without silently dropping them", () => {
+    const file = join(root, "codex", "sessions", "2026", "05", "02", "rollout-2026-05-02T15-00-00-malformed.jsonl");
+    writeFileSync(
+      file,
+      [
+        CODEX_LINES.split("\n")[0],
+        JSON.stringify({
+          timestamp: "2026-05-02T15:00:01Z",
+          type: "response_item",
+          payload: { type: "message", role: "user", content: [{ type: "input_text", text: "before corruption" }] },
+        }),
+        '{"timestamp":"2026-05-02T15:00:02Z","type":"response_item","payload":',
+        JSON.stringify({
+          timestamp: "2026-05-02T15:00:03Z",
+          type: "response_item",
+          payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "after corruption" }] },
+        }),
+      ].join("\n"),
+    );
+
+    const result = new CodexParser().parseFileResult(file);
+    expect(result.incompleteTrailingRecord).toBe(false);
+    expect(result.malformedRecordCount).toBe(1);
+    expect(result.sessions[0].messages.map((m) => m.content)).toEqual(["before corruption", "after corruption"]);
+  });
+});
+
+describe("CodewithParser", () => {
+  it("defaults to ~/.codewith/sessions when CODEWITH_PATH is unset", () => {
+    delete process.env.CODEWITH_PATH;
+    expect(new CodewithParser().sessionRoots()).toEqual([join(homedir(), ".codewith", "sessions")]);
+  });
+
+  it("treats CODEWITH_PATH as the Codewith home and scans its sessions directory", () => {
+    process.env.CODEWITH_PATH = join(root, "codewith");
+    expect(new CodewithParser().sessionRoots()).toEqual([join(root, "codewith", "sessions")]);
+  });
+
+  it("parses rollout files with codewith provenance and excludes auth-profile fields", () => {
+    const [ps] = new CodewithParser().parseFile(codewithFile);
+    expect(ps.session.source).toBe("codewith");
+    expect(ps.session.source_id).toBe("sess-codex-1");
+    expect(ps.session.project_name).toBe("codewith-app");
+    expect(ps.session.cli_version).toBe("0.12.0-codewith");
+    expect(ps.session.git_branch).toBe("feature/codewith");
+    expect(ps.session.title).toBe("index the Codewith rollout");
+    const serialized = JSON.stringify(ps);
+    expect(serialized).not.toContain("auth_profile");
+    expect(serialized).not.toContain("authProfile");
+    expect(serialized).not.toContain("credential_metadata");
+  });
+
+  it("discovers only CODEWITH_PATH rollout files without using CODEX_PATH", () => {
+    process.env.CODEWITH_PATH = join(root, "codewith");
+    const codexFiles = new CodexParser().listSessionFiles();
+    const codewithFiles = new CodewithParser().listSessionFiles();
+    expect(codexFiles).toContain(codexFile);
+    expect(codexFiles).not.toContain(codewithFile);
+    expect(codewithFiles).toContain(codewithFile);
+    expect(codewithFiles).not.toContain(codexFile);
+  });
+
+  it("keeps matching Codex and Codewith native source IDs under distinct provenance", () => {
+    const [codex] = new CodexParser().parseFile(codexFile);
+    const [codewith] = new CodewithParser().parseFile(codewithFile);
+
+    expect(codex.session.source_id).toBe(codewith.session.source_id);
+    expect(codex.session.source).toBe("codex");
+    expect(codewith.session.source).toBe("codewith");
+    expect(codex.session.source_path).toBe(codexFile);
+    expect(codewith.session.source_path).toBe(codewithFile);
+  });
+
 });
 
 describe("GeminiParser", () => {
@@ -337,13 +553,51 @@ describe("GeminiParser", () => {
     expect(g1?.session.title).toBe("hello gemini");
     expect(g1?.session.model_provider).toBe("google");
   });
+
+  it("exposes bounded parseFileResult metadata for safe backfill", () => {
+    const result = new GeminiParser().parseFileResult(geminiFile, { maxBufferedBytes: 1024 * 1024 });
+    expect(result.sessions).toHaveLength(2);
+    expect(result.malformedRecordCount).toBe(0);
+    expect(result.incompleteTrailingRecord).toBe(false);
+    expect(result.maxBufferedLineBytes).toBeGreaterThan(0);
+    expect(result.sourceContentDigest).toMatch(/^sha256:/);
+  });
+
+  it("rejects oversized Gemini logs before buffering while preserving normal bounded parses", () => {
+    const file = join(root, "gemini", "tmp", "abc123hash", "oversized-logs.json");
+    writeFileSync(
+      file,
+      JSON.stringify([
+        { sessionId: "oversized", messageId: 1, role: "user", message: "normal", timestamp: "2026-05-03T10:00:00Z" },
+        { sessionId: "oversized", messageId: 2, role: "model", message: "x".repeat(2048), timestamp: "2026-05-03T10:00:01Z" },
+      ]),
+    );
+
+    expect(() => new GeminiParser().parseFileResult(file, { maxBufferedBytes: 128 })).toThrow(
+      /exceeds max buffered bytes 128/,
+    );
+    const result = new GeminiParser().parseFileResult(file, { maxBufferedBytes: 4096 });
+    expect(result.sessions).toHaveLength(1);
+    expect(result.malformedRecordCount).toBe(0);
+    expect(result.sourceContentDigest).toMatch(/^sha256:/);
+  });
+
+  it("accounts for malformed Gemini logs", () => {
+    const file = join(root, "gemini", "tmp", "abc123hash", "logs.json");
+    writeFileSync(file, "{not valid json");
+    const result = new GeminiParser().parseFileResult(file);
+    expect(result.sessions).toHaveLength(0);
+    expect(result.malformedRecordCount).toBe(1);
+    expect(result.incompleteTrailingRecord).toBe(false);
+  });
 });
 
 describe("registry", () => {
-  it("registers all three built-in parsers", () => {
+  it("registers all built-in parsers", () => {
     const names = listParsers().map((p) => p.source).sort();
-    expect(names).toEqual(["claude", "codex", "gemini"]);
+    expect(names).toEqual(["claude", "codewith", "codex", "gemini"]);
     expect(getParser("claude")?.source).toBe("claude");
+    expect(getParser("codewith")?.source).toBe("codewith");
   });
 });
 

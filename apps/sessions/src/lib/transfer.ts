@@ -127,7 +127,25 @@ export function exportSessions(options: ExportOptions = {}): ExportResult {
   let targetDirs: string[];
 
   if (projectPath) {
-    targetDirs = findMatchingProjectDirs(allDirs, projectPath);
+    const encodedMatches = new Set(
+      findMatchingProjectDirs(allDirs, projectPath)
+    );
+    targetDirs = allDirs.filter((dir) => {
+      if (encodedMatches.has(dir)) return true;
+
+      const srcDir = join(projectsDir, dir);
+      try {
+        if (!statSync(srcDir).isDirectory()) return false;
+      } catch {
+        return false;
+      }
+
+      // The manifest path is resolved from session metadata and can name a
+      // nested working directory even when Claude stores the transcript under
+      // the project root. Match that exact advertised path back to the
+      // directory that produced it so every manifest entry is selectable.
+      return resolveProjectPath(projectsDir, dir) === projectPath;
+    });
     if (targetDirs.length === 0) {
       result.errors.push({
         file: projectPath,

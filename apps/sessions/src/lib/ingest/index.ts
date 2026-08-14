@@ -3,21 +3,24 @@ import { join } from "node:path";
 import { registerParser, getParser, listParsers } from "./registry.js";
 import { ClaudeParser } from "./claude.js";
 import { CodexParser } from "./codex.js";
+import { CodewithParser } from "./codewith.js";
 import { GeminiParser } from "./gemini.js";
-import { saveParsedSession } from "../../db/sessions.js";
+import { saveParsedSession, saveStagedParsedSession } from "../../db/sessions.js";
 import { getFileState, setFileState, updateIngestionStats } from "../../db/ingestion.js";
 import { registerMachine, recomputeMachineCounts } from "../../db/machines.js";
 import { getSessionsDir } from "../paths.js";
+import { ingestionStateMtime, type SessionParser } from "./types.js";
 
 // Register the built-in parsers on import.
 registerParser(new ClaudeParser());
 registerParser(new CodexParser());
+registerParser(new CodewithParser());
 registerParser(new GeminiParser());
 
 export { registerParser, getParser, listParsers };
 export type { SessionParser } from "./types.js";
 export { flattenContent } from "./types.js";
-export { ClaudeParser, CodexParser, GeminiParser };
+export { ClaudeParser, CodexParser, CodewithParser, GeminiParser };
 
 export interface IngestResult {
   source: string;
@@ -33,6 +36,8 @@ export interface IngestOptions {
   force?: boolean;
   /** Progress callback (one line per event). */
   onProgress?: (message: string) => void;
+  /** Called for each file that fails to ingest. */
+  onError?: (error: Error) => void;
 }
 
 const INGEST_LOCK_DIR = "ingest.lock";
@@ -41,6 +46,11 @@ const STALE_LOCK_MS = 6 * 60 * 60 * 1000;
 interface IngestLockInfo {
   pid: number;
   started_at: string;
+}
+
+interface FileSnapshot {
+  size: number;
+  stateMtime: string;
 }
 
 function ingestLockPath(): string {
@@ -110,6 +120,21 @@ function withIngestLock<T>(fn: () => T): T {
   }
 }
 
+function snapshotFile(parser: SessionParser, file: string): FileSnapshot | null {
+  try {
+    const st = statSync(file);
+    const mtime = st.mtime.toISOString();
+    const auxiliarySignature = parser.auxiliaryIngestionSignature?.(file) ?? null;
+    return { size: st.size, stateMtime: ingestionStateMtime(mtime, auxiliarySignature) };
+  } catch {
+    return null;
+  }
+}
+
+function sameSnapshot(a: FileSnapshot, b: FileSnapshot): boolean {
+  return a.stateMtime === b.stateMtime && a.size === b.size;
+}
+
 function ingestSourceUnlocked(source: string, opts: IngestOptions = {}): IngestResult {
   const parser = getParser(source);
   if (!parser) throw new Error(`No parser registered for source: ${source}`);
@@ -120,38 +145,67 @@ function ingestSourceUnlocked(source: string, opts: IngestOptions = {}): IngestR
 
   for (const file of files) {
     result.scanned++;
-    let mtime: string | null = null;
-    let size: number | null = null;
-    try {
-      const st = statSync(file);
-      mtime = st.mtime.toISOString();
-      size = st.size;
-    } catch {
+    const before = snapshotFile(parser, file);
+    if (!before) {
       // File vanished between listing and stat — skip.
       continue;
     }
 
     if (!opts.force) {
       const state = getFileState(source, file);
-      if (state && state.status === "ok" && state.file_mtime === mtime) {
+      if (state && state.status === "ok" && state.file_mtime === before.stateMtime && state.file_size === before.size) {
         result.skipped++;
         continue;
       }
     }
 
     try {
-      const parsed = parser.parseFile(file);
-      for (const ps of parsed) {
-        saveParsedSession(ps);
-        result.sessions++;
+      const parsed = parser.parseFileResult?.(file, { preferStaging: true }) ?? { sessions: parser.parseFile(file) };
+      const after = snapshotFile(parser, file);
+      try {
+        if (!after) {
+          setFileState(source, file, before.stateMtime, before.size, "pending", "file vanished after parsing");
+          opts.onProgress?.(`[${source}] deferred ${file}: file vanished after parsing`);
+          continue;
+        }
+        if (parsed.incompleteTrailingRecord) {
+          setFileState(source, file, after.stateMtime, after.size, "pending", "incomplete trailing JSONL record");
+          opts.onProgress?.(`[${source}] deferred ${file}: incomplete trailing JSONL record`);
+          continue;
+        }
+        if (!sameSnapshot(before, after)) {
+          setFileState(source, file, after.stateMtime, after.size, "pending", "file changed during parsing");
+          opts.onProgress?.(`[${source}] deferred ${file}: file changed during parsing`);
+          continue;
+        }
+
+        let fileSessions = 0;
+        for (const ps of parsed.sessions) {
+          saveParsedSession(ps, { preservePreferredSnapshot: parser.preservePreferredSnapshots });
+          result.sessions++;
+          fileSessions++;
+        }
+        for (const staged of parsed.stagedSessions ?? []) {
+          saveStagedParsedSession(staged, {
+            preservePreferredSnapshot: parser.preservePreferredSnapshots,
+          });
+          result.sessions++;
+          fileSessions++;
+        }
+        setFileState(source, file, after.stateMtime, after.size, "ok");
+        result.ingested++;
+        opts.onProgress?.(`[${source}] ingested ${file} (${fileSessions} session${fileSessions === 1 ? "" : "s"})`);
+      } finally {
+        for (const staged of parsed.stagedSessions ?? []) {
+          staged.cleanup();
+        }
       }
-      setFileState(source, file, mtime, size, "ok");
-      result.ingested++;
-      opts.onProgress?.(`[${source}] ingested ${file} (${parsed.length} session${parsed.length === 1 ? "" : "s"})`);
     } catch (err) {
+      const error = err as Error;
       result.errors++;
-      setFileState(source, file, mtime, size, "error", (err as Error).message);
-      opts.onProgress?.(`[${source}] ERROR ${file}: ${(err as Error).message}`);
+      setFileState(source, file, before.stateMtime, before.size, "error", error.message);
+      opts.onProgress?.(`[${source}] ERROR ${file}: ${error.message}`);
+      opts.onError?.(error);
     }
   }
 

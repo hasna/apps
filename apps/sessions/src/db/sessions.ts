@@ -3,7 +3,11 @@ import { getMachineName } from "../lib/machine.js";
 import { appendProjectFilter } from "../lib/project-filter.js";
 import { encodePath } from "../lib/paths.js";
 import {
+  SESSION_SOURCES,
+  SessionAmbiguousError,
+  SessionInvalidIdentifierError,
   SessionNotFoundError,
+  type SessionLookupOptions,
   type Session,
   type SessionInsert,
   type Message,
@@ -11,6 +15,7 @@ import {
   type ToolCall,
   type ToolCallInsert,
   type ParsedSession,
+  type StagedParsedSession,
 } from "../types/index.js";
 
 function uuid(): string {
@@ -100,6 +105,69 @@ function rowToToolCall(row: Record<string, unknown>): ToolCall {
     timestamp: (row.timestamp as string) ?? null,
     metadata: parseMeta(row.metadata),
   };
+}
+
+function parseQualifiedSessionIdentifier(
+  idOrPrefix: string,
+  opts: SessionLookupOptions = {},
+): { source: string | null; identifier: string } {
+  if (opts.source) return { source: opts.source, identifier: idOrPrefix };
+  const colon = idOrPrefix.indexOf(":");
+  if (colon > 0) {
+    const source = idOrPrefix.slice(0, colon);
+    if ((SESSION_SOURCES as readonly string[]).includes(source)) {
+      return { source, identifier: idOrPrefix.slice(colon + 1) };
+    }
+  }
+  return { source: null, identifier: idOrPrefix };
+}
+
+function candidatesFromRows(rows: Record<string, unknown>[]) {
+  return rows.map((row) => ({
+    id: row.id as string,
+    source: row.source as string,
+    source_id: row.source_id as string,
+  }));
+}
+
+function uniqueSessionOrThrow(
+  displayIdentifier: string,
+  rows: Record<string, unknown>[],
+): Session | null {
+  const unique = new Map<string, Record<string, unknown>>();
+  for (const row of rows) unique.set(row.id as string, row);
+  const deduped = [...unique.values()];
+  if (deduped.length === 0) return null;
+  if (deduped.length === 1) return rowToSession(deduped[0]);
+  throw new SessionAmbiguousError(displayIdentifier, candidatesFromRows(deduped));
+}
+
+function escapedLikePrefix(value: string): string {
+  return `${value.replace(/[\\%_]/g, "\\$&")}%`;
+}
+
+function rejectEmptySourceQualifiedIdentifier(displayIdentifier: string, identifier: string): void {
+  if (identifier.length === 0) {
+    throw new SessionInvalidIdentifierError(
+      displayIdentifier,
+      "source-qualified identifiers must include a non-empty source id",
+    );
+  }
+}
+
+function shouldReplaceSessionSnapshot(existing: Session, incoming: SessionInsert): boolean {
+  const incomingMessages = incoming.message_count ?? 0;
+  const incomingToolCalls = incoming.tool_call_count ?? 0;
+  const incomingRecords = incomingMessages + incomingToolCalls;
+  const existingRecords = existing.message_count + existing.tool_call_count;
+  if (incomingRecords !== existingRecords) return incomingRecords > existingRecords;
+  if (incomingMessages !== existing.message_count) return incomingMessages > existing.message_count;
+
+  const incomingModifiedAt = incoming.source_modified_at ?? "";
+  const existingModifiedAt = existing.source_modified_at ?? "";
+  if (incomingModifiedAt !== existingModifiedAt) return incomingModifiedAt > existingModifiedAt;
+
+  return (incoming.source_path ?? "") >= (existing.source_path ?? "");
 }
 
 /** Upsert a session keyed by (source, source_id). Returns the stored row. */
@@ -211,18 +279,49 @@ export function getSessionBySource(source: string, sourceId: string): Session | 
   return row ? rowToSession(row) : null;
 }
 
-/** Resolve a session by full id or a unique id/source_id prefix (null if none or ambiguous). */
-export function getSessionByPrefix(idOrPrefix: string): Session | null {
+/** Resolve a session by full id or a unique id/source_id prefix. Throws on ambiguous matches. */
+export function getSessionByPrefix(
+  idOrPrefix: string,
+  opts: SessionLookupOptions = {},
+): Session | null {
   const db = getDatabase();
-  const exact = db.prepare("SELECT * FROM sessions WHERE id = ? OR source_id = ?").get(idOrPrefix, idOrPrefix) as
-    | Record<string, unknown>
-    | undefined;
-  if (exact) return rowToSession(exact);
+  const lookup = parseQualifiedSessionIdentifier(idOrPrefix, opts);
+  if (!lookup.source) {
+    const exactId = db.prepare("SELECT * FROM sessions WHERE id = ?").get(idOrPrefix) as
+      | Record<string, unknown>
+      | undefined;
+    if (exactId) return rowToSession(exactId);
+  }
+
+  if (lookup.source) {
+    rejectEmptySourceQualifiedIdentifier(idOrPrefix, lookup.identifier);
+    const exactSource = db
+      .prepare("SELECT * FROM sessions WHERE source = ? AND source_id = ?")
+      .all(lookup.source, lookup.identifier) as Record<string, unknown>[];
+    const exact = uniqueSessionOrThrow(idOrPrefix, exactSource);
+    if (exact) return exact;
+    const prefix = escapedLikePrefix(lookup.identifier);
+    const rows = db
+      .prepare(
+        "SELECT * FROM sessions WHERE source = ? AND source_id LIKE ? ESCAPE '\\' ORDER BY source_id, id LIMIT 6",
+      )
+      .all(lookup.source, prefix) as Record<string, unknown>[];
+    return uniqueSessionOrThrow(idOrPrefix, rows);
+  }
+
+  const exactNative = db
+    .prepare("SELECT * FROM sessions WHERE source_id = ? ORDER BY source, id LIMIT 6")
+    .all(idOrPrefix) as Record<string, unknown>[];
+  const exact = uniqueSessionOrThrow(idOrPrefix, exactNative);
+  if (exact) return exact;
+
+  const prefix = escapedLikePrefix(idOrPrefix);
   const rows = db
-    .prepare("SELECT * FROM sessions WHERE id LIKE ? OR source_id LIKE ? LIMIT 2")
-    .all(`${idOrPrefix}%`, `${idOrPrefix}%`) as Record<string, unknown>[];
-  if (rows.length === 1) return rowToSession(rows[0]);
-  return null;
+    .prepare(
+      "SELECT * FROM sessions WHERE id LIKE ? ESCAPE '\\' OR source_id LIKE ? ESCAPE '\\' ORDER BY id LIMIT 6",
+    )
+    .all(prefix, prefix) as Record<string, unknown>[];
+  return uniqueSessionOrThrow(idOrPrefix, rows);
 }
 
 /**
@@ -230,9 +329,13 @@ export function getSessionByPrefix(idOrPrefix: string): Session | null {
  * unique id/source_id prefix. Updates both the `sessions` row and the FTS index.
  * Returns the updated Session, or null when no unique match exists.
  */
-export function updateSessionTitle(idOrPrefix: string, title: string): Session | null {
+export function updateSessionTitle(
+  idOrPrefix: string,
+  title: string,
+  opts: SessionLookupOptions = {},
+): Session | null {
   const db = getDatabase();
-  const target = getSessionByPrefix(idOrPrefix);
+  const target = getSessionByPrefix(idOrPrefix, opts);
   if (!target) return null;
   db.prepare("UPDATE sessions SET title = ?, updated_at = ? WHERE id = ?").run(
     title,
@@ -452,7 +555,10 @@ function insertToolCall(sessionId: string, input: ToolCallInsert): void {
  * and tool calls, and recompute aggregate counts/token totals. Idempotent —
  * re-ingesting the same session replaces its children rather than duplicating.
  */
-export function saveParsedSession(parsed: ParsedSession): Session {
+export function saveParsedSession(
+  parsed: ParsedSession,
+  opts: { preservePreferredSnapshot?: boolean } = {},
+): Session {
   const db = getDatabase();
   return db.transaction(() => {
     const inputTokens = sum(parsed.messages, "input_tokens");
@@ -461,7 +567,7 @@ export function saveParsedSession(parsed: ParsedSession): Session {
     const cacheWrite = sum(parsed.messages, "cache_write_tokens");
     const thinking = sum(parsed.messages, "thinking_tokens");
 
-    const session = upsertSession({
+    const sessionInput: SessionInsert = {
       ...parsed.session,
       message_count: parsed.messages.length,
       tool_call_count: parsed.toolCalls.length,
@@ -470,7 +576,12 @@ export function saveParsedSession(parsed: ParsedSession): Session {
       total_cache_read_tokens: parsed.session.total_cache_read_tokens ?? cacheRead,
       total_cache_write_tokens: parsed.session.total_cache_write_tokens ?? cacheWrite,
       total_thinking_tokens: parsed.session.total_thinking_tokens ?? thinking,
-    });
+    };
+    const existing = getSessionBySource(sessionInput.source, sessionInput.source_id);
+    if (opts.preservePreferredSnapshot && existing && !shouldReplaceSessionSnapshot(existing, sessionInput)) {
+      return existing;
+    }
+    const session = upsertSession(sessionInput);
 
     db.prepare("DELETE FROM tool_calls_fts WHERE rowid IN (SELECT rowid FROM tool_calls_fts_refs WHERE session_id = ?)").run(session.id);
     db.prepare("DELETE FROM messages_fts WHERE rowid IN (SELECT rowid FROM messages_fts_refs WHERE session_id = ?)").run(session.id);
@@ -508,6 +619,88 @@ export function saveParsedSession(parsed: ParsedSession): Session {
 
     return getSession(session.id);
   });
+}
+
+export interface SaveStagedParsedSessionResult {
+  session: Session;
+  maxBatchRecords: number;
+}
+
+/**
+ * Persist a disk-staged session by replacing its visible children inside one
+ * transaction while reading bounded batches from the staging store.
+ */
+export function saveStagedParsedSession(
+  staged: StagedParsedSession,
+  opts: { batchSize?: number; preservePreferredSnapshot?: boolean } = {}
+): SaveStagedParsedSessionResult {
+  const db = getDatabase();
+  const batchSize = opts.batchSize ?? 128;
+  let maxBatchRecords = 0;
+
+  const session = db.transaction(() => {
+    const sessionInput: SessionInsert = {
+      ...staged.session,
+      message_count: staged.messageCount,
+      tool_call_count: staged.toolCallCount,
+      total_input_tokens: staged.session.total_input_tokens ?? staged.totalInputTokens,
+      total_output_tokens: staged.session.total_output_tokens ?? staged.totalOutputTokens,
+      total_cache_read_tokens: staged.session.total_cache_read_tokens ?? staged.totalCacheReadTokens,
+      total_cache_write_tokens: staged.session.total_cache_write_tokens ?? staged.totalCacheWriteTokens,
+      total_thinking_tokens: staged.session.total_thinking_tokens ?? staged.totalThinkingTokens,
+    };
+    const existing = getSessionBySource(sessionInput.source, sessionInput.source_id);
+    if (opts.preservePreferredSnapshot && existing && !shouldReplaceSessionSnapshot(existing, sessionInput)) {
+      return existing;
+    }
+    const stored = upsertSession(sessionInput);
+
+    db.prepare("DELETE FROM tool_calls_fts WHERE rowid IN (SELECT rowid FROM tool_calls_fts_refs WHERE session_id = ?)").run(stored.id);
+    db.prepare("DELETE FROM messages_fts WHERE rowid IN (SELECT rowid FROM messages_fts_refs WHERE session_id = ?)").run(stored.id);
+    db.prepare("DELETE FROM tool_calls_fts_refs WHERE session_id = ?").run(stored.id);
+    db.prepare("DELETE FROM messages_fts_refs WHERE session_id = ?").run(stored.id);
+    db.prepare("DELETE FROM tool_calls WHERE session_id = ?").run(stored.id);
+    db.prepare("DELETE FROM messages WHERE session_id = ?").run(stored.id);
+
+    const insertMessageStmt = db.prepare(INSERT_MESSAGE_SQL);
+    const insertToolCallStmt = db.prepare(INSERT_TOOL_CALL_SQL);
+    const insertMessageFtsRefStmt = db.prepare(INSERT_MESSAGE_FTS_REF_SQL);
+    const insertToolCallFtsRefStmt = db.prepare(INSERT_TOOL_CALL_FTS_REF_SQL);
+    const insertMessageFtsStmt = db.prepare(
+      `INSERT INTO messages_fts(rowid, message_id, session_id, content)
+       VALUES (?, ?, ?, ?)`
+    );
+    const insertToolCallFtsStmt = db.prepare(
+      `INSERT INTO tool_calls_fts(rowid, tool_call_id, session_id, tool_name, tool_input, tool_output)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    );
+
+    staged.forEachMessageBatch(batchSize, (batch) => {
+      maxBatchRecords = Math.max(maxBatchRecords, batch.length);
+      for (const msg of batch) {
+        const values = messageInsertValues(stored.id, msg);
+        insertMessageStmt.run(...values);
+        const ref = insertMessageFtsRefStmt.run(stored.id, values[0]) as { lastInsertRowid?: number | bigint };
+        if (ref.lastInsertRowid == null) throw new Error("failed to allocate messages_fts rowid");
+        insertMessageFtsStmt.run(ref.lastInsertRowid, values[0], stored.id, values[5]);
+      }
+    });
+
+    staged.forEachToolCallBatch(batchSize, (batch) => {
+      maxBatchRecords = Math.max(maxBatchRecords, batch.length);
+      for (const tc of batch) {
+        const values = toolCallInsertValues(stored.id, tc);
+        insertToolCallStmt.run(...values);
+        const ref = insertToolCallFtsRefStmt.run(stored.id, values[0]) as { lastInsertRowid?: number | bigint };
+        if (ref.lastInsertRowid == null) throw new Error("failed to allocate tool_calls_fts rowid");
+        insertToolCallFtsStmt.run(ref.lastInsertRowid, values[0], stored.id, values[3], values[4], values[5]);
+      }
+    });
+
+    return getSession(stored.id);
+  });
+
+  return { session, maxBatchRecords };
 }
 
 function sum(messages: MessageInsert[], key: keyof MessageInsert): number {

@@ -1,11 +1,11 @@
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
-// Source: SessionsApi 0.12.8
+// Source: SessionsApi 0.12.10
 
-export interface Session { "id": string; "source": "claude" | "codex" | "gemini"; "source_id": string; "source_path"?: string | null; "title"?: string | null; "project_path"?: string | null; "project_name"?: string | null; "model"?: string | null; "model_provider"?: string | null; "git_branch"?: string | null; "git_sha"?: string | null; "git_origin_url"?: string | null; "cli_version"?: string | null; "is_subagent": boolean; "parent_session_id"?: string | null; "total_input_tokens"?: number; "total_output_tokens"?: number; "total_cache_read_tokens"?: number; "total_cache_write_tokens"?: number; "total_thinking_tokens"?: number; "message_count"?: number; "tool_call_count"?: number; "started_at"?: string | null; "ended_at"?: string | null; "duration_seconds"?: number | null; "ingested_at"?: string; "updated_at"?: string; "source_modified_at"?: string | null; "machine"?: string | null; "metadata"?: Record<string, unknown> }
+export interface Session { "id": string; "source": "claude" | "codex" | "codewith" | "gemini"; "source_id": string; "source_path"?: string | null; "title"?: string | null; "project_path"?: string | null; "project_name"?: string | null; "model"?: string | null; "model_provider"?: string | null; "git_branch"?: string | null; "git_sha"?: string | null; "git_origin_url"?: string | null; "cli_version"?: string | null; "is_subagent": boolean; "parent_session_id"?: string | null; "total_input_tokens"?: number; "total_output_tokens"?: number; "total_cache_read_tokens"?: number; "total_cache_write_tokens"?: number; "total_thinking_tokens"?: number; "message_count"?: number; "tool_call_count"?: number; "started_at"?: string | null; "ended_at"?: string | null; "duration_seconds"?: number | null; "ingested_at"?: string; "updated_at"?: string; "source_modified_at"?: string | null; "machine"?: string | null; "metadata"?: Record<string, unknown> }
 
 export interface Machine { "name": string; "hostname"?: string | null; "platform"?: string | null; "first_seen_at"?: string; "last_seen_at"?: string; "session_count"?: number }
 
-export interface SessionCreate { "id"?: string; "source": "claude" | "codex" | "gemini"; "source_id": string; "source_path"?: string | null; "title"?: string | null; "project_path"?: string | null; "project_name"?: string | null; "model"?: string | null; "model_provider"?: string | null; "git_branch"?: string | null; "git_sha"?: string | null; "git_origin_url"?: string | null; "cli_version"?: string | null; "is_subagent"?: boolean; "parent_session_id"?: string | null; "total_input_tokens"?: number; "total_output_tokens"?: number; "total_cache_read_tokens"?: number; "total_cache_write_tokens"?: number; "total_thinking_tokens"?: number; "message_count"?: number; "tool_call_count"?: number; "machine"?: string | null; "started_at"?: string | null; "ended_at"?: string | null; "duration_seconds"?: number | null; "source_modified_at"?: string | null; "metadata"?: Record<string, unknown> }
+export interface SessionCreate { "id"?: string; "source": "claude" | "codex" | "codewith" | "gemini"; "source_id": string; "source_path"?: string | null; "title"?: string | null; "project_path"?: string | null; "project_name"?: string | null; "model"?: string | null; "model_provider"?: string | null; "git_branch"?: string | null; "git_sha"?: string | null; "git_origin_url"?: string | null; "cli_version"?: string | null; "is_subagent"?: boolean; "parent_session_id"?: string | null; "total_input_tokens"?: number; "total_output_tokens"?: number; "total_cache_read_tokens"?: number; "total_cache_write_tokens"?: number; "total_thinking_tokens"?: number; "message_count"?: number; "tool_call_count"?: number; "machine"?: string | null; "started_at"?: string | null; "ended_at"?: string | null; "duration_seconds"?: number | null; "source_modified_at"?: string | null; "metadata"?: Record<string, unknown> }
 
 export interface Message { "id": string; "session_id": string; "source_id"?: string | null; "parent_message_id"?: string | null; "role": "user" | "assistant" | "system" | "tool" | "info" | "thinking"; "content"?: string | null; "content_preview"?: string | null; "model"?: string | null; "is_sidechain"?: boolean; "sequence_num"?: number | null; "input_tokens"?: number; "output_tokens"?: number; "cache_read_tokens"?: number; "cache_write_tokens"?: number; "thinking_tokens"?: number; "timestamp"?: string | null; "metadata"?: Record<string, unknown> }
 
@@ -39,6 +39,8 @@ export interface DeleteResponse { "ok": boolean; "deleted": boolean; "id"?: stri
 
 export interface ErrorResponse { "ok": boolean; "error": string }
 
+export interface SessionAmbiguousResponse { "ok": false; "error": string; "code": "session_ambiguous"; "candidates": Array<{ "id": string; "source": string; "source_id": string }> }
+
 export interface SessionsApiOptions {
   /** Base URL, e.g. process.env.APP_API_URL. */
   baseUrl: string;
@@ -55,6 +57,34 @@ export class ApiError extends Error {
     super(message);
     this.name = "ApiError";
   }
+}
+
+type SourceLookupQuery = { "source"?: string };
+
+function isRequestInit(value: SourceLookupQuery | RequestInit | undefined): value is RequestInit {
+  if (value === undefined) return false;
+  return (
+    "headers" in value ||
+    "signal" in value ||
+    "method" in value ||
+    "body" in value ||
+    "cache" in value ||
+    "credentials" in value ||
+    "integrity" in value ||
+    "keepalive" in value ||
+    "mode" in value ||
+    "redirect" in value ||
+    "referrer" in value ||
+    "referrerPolicy" in value ||
+    "window" in value
+  );
+}
+
+function splitSourceLookupArgs(
+  queryOrInit?: SourceLookupQuery | RequestInit,
+  init?: RequestInit,
+): { query?: SourceLookupQuery; init?: RequestInit } {
+  return isRequestInit(queryOrInit) ? { init: queryOrInit } : { query: queryOrInit, init };
 }
 
 export class SessionsApi {
@@ -166,12 +196,15 @@ export class SessionsApi {
       });
     }
 
-    /** Get a session by id or id prefix */
-    async getSession(id: string, init?: RequestInit): Promise<SessionResponse> {
+    /** Get a session by internal id, source-qualified id, or unique prefix */
+    async getSession(id: string, init?: RequestInit): Promise<SessionResponse>;
+    async getSession(id: string, query?: SourceLookupQuery, init?: RequestInit): Promise<SessionResponse>;
+    async getSession(id: string, queryOrInit?: SourceLookupQuery | RequestInit, init?: RequestInit): Promise<SessionResponse> {
+      const args = splitSourceLookupArgs(queryOrInit, init);
       return this.request("GET", `/v1/sessions/${encodeURIComponent(String(id))}`, {
         body: undefined,
-        query: undefined,
-        init,
+        query: args.query,
+        init: args.init,
       });
     }
 
@@ -185,29 +218,38 @@ export class SessionsApi {
     }
 
     /** Set a session title */
-    async renameSession(id: string, body: { "title": string }, init?: RequestInit): Promise<SessionResponse> {
+    async renameSession(id: string, body: { "title": string }, init?: RequestInit): Promise<SessionResponse>;
+    async renameSession(id: string, body: { "title": string }, query?: SourceLookupQuery, init?: RequestInit): Promise<SessionResponse>;
+    async renameSession(id: string, body: { "title": string }, queryOrInit?: SourceLookupQuery | RequestInit, init?: RequestInit): Promise<SessionResponse> {
+      const args = splitSourceLookupArgs(queryOrInit, init);
       return this.request("PATCH", `/v1/sessions/${encodeURIComponent(String(id))}`, {
         body,
-        query: undefined,
-        init,
+        query: args.query,
+        init: args.init,
       });
     }
 
     /** List messages for a session */
-    async listSessionMessages(id: string, init?: RequestInit): Promise<MessageListResponse> {
+    async listSessionMessages(id: string, init?: RequestInit): Promise<MessageListResponse>;
+    async listSessionMessages(id: string, query?: SourceLookupQuery, init?: RequestInit): Promise<MessageListResponse>;
+    async listSessionMessages(id: string, queryOrInit?: SourceLookupQuery | RequestInit, init?: RequestInit): Promise<MessageListResponse> {
+      const args = splitSourceLookupArgs(queryOrInit, init);
       return this.request("GET", `/v1/sessions/${encodeURIComponent(String(id))}/messages`, {
         body: undefined,
-        query: undefined,
-        init,
+        query: args.query,
+        init: args.init,
       });
     }
 
     /** List tool calls for a session */
-    async listSessionToolCalls(id: string, init?: RequestInit): Promise<ToolCallListResponse> {
+    async listSessionToolCalls(id: string, init?: RequestInit): Promise<ToolCallListResponse>;
+    async listSessionToolCalls(id: string, query?: SourceLookupQuery, init?: RequestInit): Promise<ToolCallListResponse>;
+    async listSessionToolCalls(id: string, queryOrInit?: SourceLookupQuery | RequestInit, init?: RequestInit): Promise<ToolCallListResponse> {
+      const args = splitSourceLookupArgs(queryOrInit, init);
       return this.request("GET", `/v1/sessions/${encodeURIComponent(String(id))}/tool-calls`, {
         body: undefined,
-        query: undefined,
-        init,
+        query: args.query,
+        init: args.init,
       });
     }
 

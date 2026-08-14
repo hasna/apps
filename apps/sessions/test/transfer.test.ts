@@ -144,6 +144,75 @@ describe("exportSessions", () => {
     );
     expect(hyphenProject?.originalPath).toBe("/Users/alice/my-project");
   });
+
+  it("re-exports an advertised project by its resolved originalPath", () => {
+    const projectDir = join(PROJECTS_DIR, "-Users-alice-project");
+    const nestedProjectPath = "/Users/alice/project/packages/api";
+
+    writeFileSync(
+      join(projectDir, "sessions-index.json"),
+      JSON.stringify({
+        version: 1,
+        entries: [
+          {
+            sessionId: "sess-001",
+            fullPath: `${PROJECTS_DIR}/-Users-alice-project/sess-001.jsonl`,
+            projectPath: nestedProjectPath,
+          },
+        ],
+      }),
+      "utf-8"
+    );
+
+    writeFileSync(
+      join(projectDir, "sess-001.jsonl"),
+      JSON.stringify({
+        type: "user",
+        cwd: nestedProjectPath,
+        message: { role: "user", content: "nested working directory" },
+      }),
+      "utf-8"
+    );
+
+    const origEnv = process.env.CLAUDE_PATH;
+    process.env.CLAUDE_PATH = TEST_DIR;
+
+    const dryRun = exportSessions({
+      outputDir: EXPORT_DIR,
+      outputName: "all-projects-dry-run",
+      dryRun: true,
+    });
+    const advertised = dryRun.manifest.projects.find(
+      (project) => project.encodedDir === "-Users-alice-project"
+    );
+
+    expect(advertised?.originalPath).toBe(nestedProjectPath);
+    expect(advertised?.jsonlCount).toBeGreaterThan(0);
+
+    const result = exportSessions({
+      projectPath: advertised!.originalPath,
+      outputDir: EXPORT_DIR,
+      outputName: "selected-export",
+    });
+
+    process.env.CLAUDE_PATH = origEnv;
+
+    expect(result.errors).toHaveLength(0);
+    expect(result.manifest.projects.map((project) => project.encodedDir)).toContain(
+      "-Users-alice-project"
+    );
+    expect(
+      existsSync(
+        join(
+          EXPORT_DIR,
+          "selected-export",
+          "projects",
+          "-Users-alice-project",
+          "sess-001.jsonl"
+        )
+      )
+    ).toBe(true);
+  });
 });
 
 describe("importSessions", () => {

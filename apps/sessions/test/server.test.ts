@@ -1,13 +1,109 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createSessionsServer } from "../src/server/app";
+import {
+  createSessionsServer,
+  DEFAULT_SERVER_IDLE_TIMEOUT_SECONDS,
+  MAX_REQUEST_BODY_SIZE_ENV,
+  resolveServerIdleTimeoutSeconds,
+  resolveMaxRequestBodySize,
+  SERVER_IDLE_TIMEOUT_ENV,
+  SELF_HOSTED_DEFAULT_MAX_REQUEST_BODY_SIZE,
+} from "../src/server/app";
 import { getPackageInfo } from "../src/lib/package";
 import { getDatabase, resetDatabase, closeDatabase } from "../src/db/database";
 import { saveParsedSession } from "../src/db/sessions";
 
 describe("createSessionsServer", () => {
+  it("keeps slow in-flight requests alive past Bun's 10-second default", () => {
+    let serveOptions: Record<string, unknown> | undefined;
+    const serveSpy = spyOn(Bun, "serve").mockImplementation((options: Record<string, unknown>) => {
+      serveOptions = options;
+      return { port: 0, stop() {} } as never;
+    });
+
+    try {
+      createSessionsServer({ hostname: "127.0.0.1", port: 0 });
+      expect(serveOptions?.idleTimeout).toBe(DEFAULT_SERVER_IDLE_TIMEOUT_SECONDS);
+    } finally {
+      serveSpy.mockRestore();
+    }
+  });
+
+  it("accepts explicit idle-timeout overrides and rejects values Bun cannot serve", () => {
+    expect(resolveServerIdleTimeoutSeconds({ [SERVER_IDLE_TIMEOUT_ENV]: "0" })).toBe(0);
+    expect(resolveServerIdleTimeoutSeconds({ [SERVER_IDLE_TIMEOUT_ENV]: "255" })).toBe(255);
+    expect(() =>
+      resolveServerIdleTimeoutSeconds({ [SERVER_IDLE_TIMEOUT_ENV]: "256" }),
+    ).toThrow(SERVER_IDLE_TIMEOUT_ENV);
+    expect(() =>
+      resolveServerIdleTimeoutSeconds({ [SERVER_IDLE_TIMEOUT_ENV]: "10.5" }),
+    ).toThrow(SERVER_IDLE_TIMEOUT_ENV);
+  });
+
+  it("preserves Bun's default body limit in local mode unless configured", () => {
+    expect(resolveMaxRequestBodySize({ HASNA_SESSIONS_STORAGE_MODE: "local" })).toBeUndefined();
+  });
+
+  it("uses a self-hosted/cloud default request body limit for large imports", () => {
+    expect(resolveMaxRequestBodySize({ HASNA_SESSIONS_STORAGE_MODE: "cloud" })).toBe(
+      SELF_HOSTED_DEFAULT_MAX_REQUEST_BODY_SIZE,
+    );
+  });
+
+  it("accepts byte and unit overrides for the request body limit", () => {
+    expect(resolveMaxRequestBodySize({ [MAX_REQUEST_BODY_SIZE_ENV]: "1048576" })).toBe(1024 * 1024);
+    expect(resolveMaxRequestBodySize({ [MAX_REQUEST_BODY_SIZE_ENV]: "2MiB" })).toBe(2 * 1024 * 1024);
+  });
+
+  it("rejects invalid request body limit configuration at startup", () => {
+    expect(() => resolveMaxRequestBodySize({ [MAX_REQUEST_BODY_SIZE_ENV]: "not-a-size" })).toThrow(
+      MAX_REQUEST_BODY_SIZE_ENV,
+    );
+  });
+
+  it("applies the configured Bun request body limit before route handling", async () => {
+    const server = createSessionsServer({
+      hostname: "127.0.0.1",
+      port: 0,
+      maxRequestBodySize: 64,
+    });
+
+    try {
+      const baseUrl = `http://127.0.0.1:${server.port}`;
+      const response = await fetch(`${baseUrl}/v1/sessions/import`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ messages: ["x".repeat(128)], toolCalls: [] }),
+      });
+      expect(response.status).toBe(413);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  it("allows larger bodies to reach existing validation when the limit is raised", async () => {
+    const server = createSessionsServer({
+      hostname: "127.0.0.1",
+      port: 0,
+      maxRequestBodySize: 16 * 1024,
+    });
+
+    try {
+      const baseUrl = `http://127.0.0.1:${server.port}`;
+      const response = await fetch(`${baseUrl}/v1/sessions/import`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ messages: ["x".repeat(128)], toolCalls: [] }),
+      });
+      expect(response.status).toBe(503);
+      expect((await response.json()).error).toContain("API auth not configured");
+    } finally {
+      server.stop(true);
+    }
+  });
+
   it("serves health and info endpoints", async () => {
     const pkg = getPackageInfo();
     const server = createSessionsServer({ hostname: "127.0.0.1", port: 0 });

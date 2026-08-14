@@ -63,6 +63,25 @@ export type {
 } from "./lib/live.js";
 
 export {
+  parseWatchdogPaneLine,
+  scanWatchdogFromTmuxOutput,
+  scanWatchdogSessions,
+  sessionsWatchdogRestart,
+  sessionsWatchdogRestartAll,
+  watchdogSessionPrefix,
+} from "./lib/watchdog.js";
+export type {
+  WatchdogCandidate,
+  WatchdogPaneRecord,
+  WatchdogRestartEntry,
+  WatchdogRestartOptions,
+  WatchdogRestartOutcome,
+  WatchdogRestartResult,
+  WatchdogScanOptions,
+  WatchdogStatus,
+} from "./lib/watchdog.js";
+
+export {
   BULK_SESSION_ACTIONS,
   buildBulkGuardDecision,
   buildBulkSessionPlan,
@@ -100,6 +119,16 @@ export type {
   RecallResume,
   RecallToolCall,
 } from "./lib/recall.js";
+
+export { APPLY_CONFIRMATION, runSessionBackfill } from "./lib/backfill.js";
+export type {
+  BackfillCheckpoint,
+  BackfillCheckpointEntry,
+  BackfillInventoryEntry,
+  BackfillKey,
+  BackfillRunOptions,
+  BackfillRunResult,
+} from "./lib/backfill.js";
 
 // NOTE: the raw SQLite escape hatch (SqliteAdapter / getDatabase / closeDatabase /
 // resetDatabase / initSchema) is intentionally NOT re-exported from the package

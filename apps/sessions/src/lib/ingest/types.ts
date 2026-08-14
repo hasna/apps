@@ -1,14 +1,51 @@
-import type { ParsedSession, SessionSource } from "../../types/index.js";
+import type { ParsedSession, SessionSource, StagedParsedSession } from "../../types/index.js";
+
+export interface ParseFileOptions {
+  /**
+   * Prefer a bounded staging result when the parser supports it. `parseFile()`
+   * remains array-based for generic callers.
+   */
+  preferStaging?: boolean;
+  /** Maximum raw JSONL line or whole-file bytes the parser may buffer. */
+  maxBufferedBytes?: number;
+}
+
+export interface ParseFileResult {
+  sessions: ParsedSession[];
+  stagedSessions?: StagedParsedSession[];
+  /** True when the file ended with a syntactically incomplete JSON object. */
+  incompleteTrailingRecord?: boolean;
+  /** Count of syntactically malformed non-empty JSONL records before the trailing record. */
+  malformedRecordCount?: number;
+  /** Largest raw JSONL line buffered while parsing, excluding normalized output. */
+  maxBufferedLineBytes?: number;
+  /** Largest normalized record batch held before handing data to storage. */
+  maxNormalizedBatchRecords?: number;
+  /** Digest of the bounded source content used to build this result. */
+  sourceContentDigest?: string;
+}
 
 export interface SessionParser {
-  /** Provider identifier (claude, codex, gemini, …). */
+  /** Provider identifier (claude, codex, codewith, gemini, …). */
   readonly source: SessionSource;
+  readonly preservePreferredSnapshots?: boolean;
   /** Root directories where this provider stores session files. */
   sessionRoots(): string[];
   /** Enumerate absolute paths of session files under the roots. */
   listSessionFiles(): string[];
+  /** Signature of auxiliary parser input that must invalidate stored file state. */
+  auxiliaryIngestionSignature?(filePath: string): string | null;
   /** Parse a session file into normalized sessions. Most providers yield one per file; some (gemini logs.json) yield many. Returns [] if none. */
   parseFile(filePath: string): ParsedSession[];
+  /** Parse a session file and return parser state useful to safe ingestion. */
+  parseFileResult?(filePath: string, opts?: ParseFileOptions): ParseFileResult;
+}
+
+/** Preserve legacy mtime state unless a parser has an auxiliary ingestion input. */
+export function ingestionStateMtime(fileMtime: string, auxiliarySignature: string | null): string {
+  return auxiliarySignature === null
+    ? fileMtime
+    : JSON.stringify([fileMtime, auxiliarySignature]);
 }
 
 /** Flatten a Claude/Codex content value (string or array of blocks) into plain text. */

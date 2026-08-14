@@ -5,10 +5,20 @@ import { getVerifier } from "./auth.js";
 import { buildOpenApiDocument } from "./openapi.js";
 import { checkHealth } from "../generated/storage-kit/index.js";
 import { checkCloudReady } from "../db/cloud/migrate.js";
+import {
+  SessionAmbiguousError,
+  SessionInvalidIdentifierError,
+  type SessionLookupOptions,
+} from "../types/index.js";
 
 const jsonHeaders = {
   "content-type": "application/json; charset=utf-8",
 };
+
+export const MAX_REQUEST_BODY_SIZE_ENV = "HASNA_SESSIONS_MAX_REQUEST_BODY_SIZE";
+export const SELF_HOSTED_DEFAULT_MAX_REQUEST_BODY_SIZE = 512 * 1024 * 1024;
+export const SERVER_IDLE_TIMEOUT_ENV = "HASNA_SESSIONS_IDLE_TIMEOUT_SECONDS";
+export const DEFAULT_SERVER_IDLE_TIMEOUT_SECONDS = 60;
 
 function json(payload: Record<string, unknown>, status = 200): Response {
   return new Response(JSON.stringify(payload, null, 2), { status, headers: jsonHeaders });
@@ -49,6 +59,79 @@ function listOptionsFromUrl(url: URL, defaultLimit: number): ListOptions {
   if (project) opts.project_path = project;
   if (machine) opts.machine = machine;
   return opts;
+}
+
+function lookupOptionsFromUrl(url: URL): SessionLookupOptions {
+  const source = url.searchParams.get("source");
+  return source ? { source } : {};
+}
+
+function ambiguityResponse(error: unknown): Response | null {
+  if (error instanceof SessionInvalidIdentifierError) {
+    return json({ ok: false, error: error.message, code: error.code }, 400);
+  }
+  if (error instanceof SessionAmbiguousError) {
+    return json(
+      {
+        ok: false,
+        error: error.message,
+        code: "session_ambiguous",
+        candidates: error.candidates,
+      },
+      409,
+    );
+  }
+  return null;
+}
+
+function parseByteSize(value: string): number | undefined {
+  const match = value
+    .trim()
+    .match(/^(\d+(?:\.\d+)?)\s*(b|kb|kib|mb|mib|gb|gib)?$/i);
+  if (!match) return undefined;
+
+  const amount = Number.parseFloat(match[1] ?? "");
+  if (!Number.isFinite(amount) || amount <= 0) return undefined;
+
+  const unit = (match[2] ?? "b").toLowerCase();
+  const multiplier =
+    unit === "gb" || unit === "gib"
+      ? 1024 * 1024 * 1024
+      : unit === "mb" || unit === "mib"
+        ? 1024 * 1024
+        : unit === "kb" || unit === "kib"
+          ? 1024
+          : 1;
+  const bytes = Math.floor(amount * multiplier);
+  return Number.isSafeInteger(bytes) && bytes > 0 ? bytes : undefined;
+}
+
+export function resolveMaxRequestBodySize(env: NodeJS.ProcessEnv = process.env): number | undefined {
+  const configured = env[MAX_REQUEST_BODY_SIZE_ENV];
+  if (configured !== undefined) {
+    const parsed = parseByteSize(configured);
+    if (parsed !== undefined) return parsed;
+    throw new Error(
+      `${MAX_REQUEST_BODY_SIZE_ENV} must be a positive byte size, e.g. 536870912 or 512MiB.`,
+    );
+  }
+
+  return isCloudMode(env) ? SELF_HOSTED_DEFAULT_MAX_REQUEST_BODY_SIZE : undefined;
+}
+
+export function resolveServerIdleTimeoutSeconds(
+  env: NodeJS.ProcessEnv = process.env,
+): number {
+  const configured = env[SERVER_IDLE_TIMEOUT_ENV]?.trim();
+  if (!configured) return DEFAULT_SERVER_IDLE_TIMEOUT_SECONDS;
+
+  const seconds = Number(configured);
+  if (!Number.isInteger(seconds) || seconds < 0 || seconds > 255) {
+    throw new Error(
+      `${SERVER_IDLE_TIMEOUT_ENV} must be an integer from 0 through 255 seconds.`,
+    );
+  }
+  return seconds;
 }
 
 /** Serve mode string for the health/version contract. */
@@ -145,11 +228,19 @@ async function handleV1(url: URL, request: Request): Promise<Response> {
     const parts = rest.split("/");
     const id = decodeURIComponent(parts[0] ?? "");
     if (!id) return json({ ok: false, error: "missing session id" }, 400);
+    const lookupOpts = lookupOptionsFromUrl(url);
     if (parts.length === 2 && parts[1] === "messages") {
       if (method !== "GET") {
         return json({ ok: false, error: "Method not allowed", allowedMethods: ["GET"] }, 405);
       }
-      const session = await source.get(id);
+      let session;
+      try {
+        session = await source.get(id, lookupOpts);
+      } catch (error) {
+        const response = ambiguityResponse(error);
+        if (response) return response;
+        throw error;
+      }
       if (!session) return json({ ok: false, error: `session not found: ${id}` }, 404);
       const messages = await source.messages(session.id);
       return json({ ok: true, count: messages.length, messages });
@@ -158,7 +249,14 @@ async function handleV1(url: URL, request: Request): Promise<Response> {
       if (method !== "GET") {
         return json({ ok: false, error: "Method not allowed", allowedMethods: ["GET"] }, 405);
       }
-      const session = await source.get(id);
+      let session;
+      try {
+        session = await source.get(id, lookupOpts);
+      } catch (error) {
+        const response = ambiguityResponse(error);
+        if (response) return response;
+        throw error;
+      }
       if (!session) return json({ ok: false, error: `session not found: ${id}` }, 404);
       const toolCalls = await source.toolCalls(session.id);
       return json({ ok: true, count: toolCalls.length, toolCalls });
@@ -167,7 +265,14 @@ async function handleV1(url: URL, request: Request): Promise<Response> {
       return json({ ok: false, error: "Not found", endpoints: ENDPOINTS }, 404);
     }
     if (method === "GET") {
-      const session = await source.get(id);
+      let session;
+      try {
+        session = await source.get(id, lookupOpts);
+      } catch (error) {
+        const response = ambiguityResponse(error);
+        if (response) return response;
+        throw error;
+      }
       if (!session) return json({ ok: false, error: `session not found: ${id}` }, 404);
       return json({ ok: true, session });
     }
@@ -188,7 +293,14 @@ async function handleV1(url: URL, request: Request): Promise<Response> {
       if (!title) {
         return json({ ok: false, error: "title is required and must be a non-empty string" }, 400);
       }
-      const session = await source.rename(id, title);
+      let session;
+      try {
+        session = await source.rename(id, title, lookupOpts);
+      } catch (error) {
+        const response = ambiguityResponse(error);
+        if (response) return response;
+        throw error;
+      }
       if (!session) return json({ ok: false, error: `session not found: ${id}` }, 404);
       return json({ ok: true, session });
     }
@@ -227,7 +339,14 @@ async function handleV1(url: URL, request: Request): Promise<Response> {
     const TYPES = ["project", "tool", "model", "provider", "repo"];
     const sessionId = url.searchParams.get("session");
     if (sessionId) {
-      const graph = await source.graphSession(sessionId);
+      let graph;
+      try {
+        graph = await source.graphSession(sessionId, lookupOptionsFromUrl(url));
+      } catch (error) {
+        const response = ambiguityResponse(error);
+        if (response) return response;
+        throw error;
+      }
       if (!graph) return json({ ok: false, error: `session not found: ${sessionId}` }, 404);
       return json({ ok: true, graph });
     }
@@ -270,16 +389,22 @@ export function createSessionsServer(options: {
   port?: number;
   hostname?: string;
   enableMcp?: boolean;
+  maxRequestBodySize?: number;
+  idleTimeout?: number;
 } = {}) {
   const pkg = getPackageInfo();
   const hostname = options.hostname ?? process.env.HOST ?? "127.0.0.1";
   const port = Number.isFinite(options.port)
     ? options.port
     : Number.parseInt(process.env.PORT || "3456", 10);
+  const maxRequestBodySize = options.maxRequestBodySize ?? resolveMaxRequestBodySize();
+  const idleTimeout = options.idleTimeout ?? resolveServerIdleTimeoutSeconds();
 
   return Bun.serve({
     hostname,
     port: Number.isFinite(port) ? port : 3456,
+    idleTimeout,
+    ...(maxRequestBodySize === undefined ? {} : { maxRequestBodySize }),
     async fetch(request) {
       if (options.enableMcp) {
         const { handleMcpHttpFetch } = await import("../mcp/http.js");

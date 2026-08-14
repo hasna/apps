@@ -1,10 +1,14 @@
 # @hasna/sessions
 
 Search and resume your AI coding sessions — a unified, full-text searchable index
-of every Claude Code, OpenAI Codex, and Gemini session on your machine.
+of every Claude Code, OpenAI Codex, Codewith, and Gemini session on your machine.
 
 [![npm](https://img.shields.io/npm/v/@hasna/sessions)](https://www.npmjs.com/package/@hasna/sessions)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
+
+Documentation: [CLI reference](docs/cli-reference.md) ·
+[Configuration](docs/configuration.md) ·
+[Live status contract](docs/live-status-contract.md)
 
 ## Install
 
@@ -15,7 +19,7 @@ bun install -g @hasna/sessions
 ## What it does
 
 `sessions` reads the session files written by your coding agents
-(`~/.claude/projects`, `~/.codex/sessions`, `~/.gemini`), normalizes them into a
+(`~/.claude/projects`, `~/.codex/sessions`, `~/.codewith/sessions`, `~/.gemini`), normalizes them into a
 single SQLite database, and makes them full-text searchable — across providers,
 projects, and time.
 
@@ -25,6 +29,7 @@ projects, and time.
 # Index sessions into the searchable DB (incremental; skips unchanged files)
 sessions ingest                # all providers
 sessions ingest --source codex # one provider
+sessions ingest --source codewith
 sessions ingest --force        # re-index everything
 sessions sync --json           # ingest locally; pushes content when self_hosted API env is set
 sessions sync --dry-run --json # plan a self_hosted /v1 content push
@@ -51,7 +56,7 @@ sessions graph --session <id>                # a session's neighborhood
 
 # Browse
 sessions recent                # most recently active sessions
-sessions indexed-list --project app    # filter indexed sessions by project name or path
+sessions list-indexed --project app    # alias: indexed-list
 sessions show <id>             # full details + message previews
 sessions stats                 # per-source + top-project counts
 
@@ -75,19 +80,29 @@ sessions sync --watch --interval 60 --max-iterations 3
 sessions reindex
 ```
 
-## Friendly names & resume
+Codex and Codewith rollout files are enumerated in path order. When multiple
+files have the same session ID, ingest keeps the snapshot with the most total
+messages and tool calls; ties prefer more messages, then the newer source
+modification time, then the lexicographically later path. A stale partial copy
+therefore cannot replace a fuller snapshot, and live and archived copies share
+one session row.
+
+## Session titles & resume
 
 ```bash
 sessions list --json
 sessions history --today
-sessions transcript-search "raw Claude-only query"
-sessions rename <id-or-name> "my friendly name"
+sessions transcript-search "search every indexed transcript"
+sessions rename <id-or-prefix> "a clearer title"
 sessions resume --last --print-command
-sessions resume <friendly-name-or-id>
+sessions resume <id-or-prefix>
 ```
 
-`sessions list` is the friendly-name registry used for resume workflows.
-Use `sessions indexed-list` to browse the SQLite search index.
+`sessions list`, `rename`, and `resume` use the active store: the local SQLite
+index by default or the authenticated self-hosted `/v1` API when configured.
+Only Claude sessions currently produce an executable resume command. Use
+`sessions list-indexed` (alias `indexed-list`) when you need source and machine
+filters in addition to project filtering.
 Use `sessions live` when you need current tmux/Codewith pane state; it reports
 active, idle, needs_attention, and dead panes from tmux even when no indexed
 session history exists yet.
@@ -141,16 +156,17 @@ sessions-mcp
 ```
 
 Exposes session tools for agents/orchestrators: `search_sessions`,
-`search_tool_calls`, `recall_session`, `semantic_search`, `recent_sessions`, `list_sessions`,
-`get_session`, `ingest`, `embed`, `session_stats`, `knowledge_graph`, plus
-registry-backed tools (`sessions_list`, `sessions_history`, `sessions_search`,
-`sessions_resume`, `sessions_rename`, `sessions_watch`, `sessions_stats`),
+`search_tool_calls`, `recall_session`, `semantic_search`, `recent_sessions`,
+`list_sessions`, `machines`, `get_session`, `ingest`, `embed`, `session_stats`,
+`knowledge_graph`, active-store tools (`sessions_list`, `sessions_history`,
+`sessions_search`, `sessions_resume`, `sessions_rename`, `sessions_watch`,
+`sessions_watchdog_restart`, `sessions_watchdog_restart_all`, `sessions_stats`),
 cross-adapter import tools, and agent registry tools. MCP no longer exposes the
 removed DSN-on-client push/pull tools or direct feedback write tool.
 
 ## HTTP mode
 
-Long-lived Streamable HTTP transport (default port **8835**, bind `127.0.0.1` only):
+Long-lived Streamable HTTP transport (default port **8877**, bind `127.0.0.1` only):
 
 ```bash
 sessions-mcp --http
@@ -158,13 +174,15 @@ sessions-mcp --http
 MCP_HTTP=1 sessions-mcp
 
 # override port
-sessions-mcp --http --port 8835
-MCP_HTTP_PORT=8835 sessions-mcp --http
+sessions-mcp --http --port 8877
+MCP_HTTP_PORT=8877 sessions-mcp --http
 ```
 
 Endpoints: `GET /health` → `{"status":"ok","name":"sessions"}`, MCP at `/mcp`.
 Uses stateless `StreamableHTTPServerTransport` (shared process, many clients).
-`sessions-mcp` without flags still uses stdio (unchanged).
+HTTP is the default transport. Use `sessions-mcp --stdio` or `MCP_STDIO=1` for
+stdio clients; `--http` and `MCP_HTTP=1` remain available as explicit HTTP
+selectors.
 
 ## Local and self-hosted registry mode
 
@@ -179,6 +197,15 @@ session metadata and content to the authenticated `/v1` API. Clients do not
 open a Postgres DSN, and the former client-side storage subcommand family has
 been removed.
 
+`sessions recall` is local-only because its combined FTS, semantic, tool-call,
+and graph ranking uses the on-box index. In hosted/self-hosted mode, use
+`sessions list`, `sessions show <id>`, and `sessions search <query>` against the
+active hosted store instead. Run `sessions recall` on a machine in local mode
+when the richer recall result is required; the CLI and public storage SDK fail
+before making a hosted recall request. No `/v1/recall` endpoint is provided;
+generated HTTP SDK consumers can use `listSessions`, `getSession` with
+`listSessionMessages`, and `searchSessions`.
+
 ## Self-Hosted API Sync
 
 Use API sync when this machine should push local indexed sessions, messages, and
@@ -187,7 +214,7 @@ writing directly to a database. Configure:
 
 ```bash
 export HASNA_SESSIONS_MODE=self_hosted
-export HASNA_SESSIONS_API_URL=https://sessions.hasna.xyz
+export HASNA_SESSIONS_API_URL=https://sessions.your-deployment.example
 export HASNA_SESSIONS_API_KEY=...
 ```
 
@@ -219,7 +246,70 @@ larger value for a longer supervised run.
 
 ```bash
 sessions daemon --interval 60 --backup-command 'sessions transfer export --output ~/.hasna/sessions/backups'
-sessions sync --watch --interval 60 --max-iterations 10
+sessions sync --watch --interval 60 --max-iterations 10 \
+  --backup-command 'sessions transfer export --output ~/.hasna/sessions/backups'
+```
+
+Supervise continuous local ingestion as a long-running service and let its
+10-second poll recover writes missed by filesystem notifications. For example,
+a systemd user service can run `sessions ingest-watch --no-initial --poll 10000`
+with `Restart=on-failure` and `RestartSec=5`; set provider path environment
+variables in the supervisor rather than embedding machine-specific paths in the
+unit. After starting or restarting it, verify both the configured Codewith root
+and persisted ingest health with `sessions daemon --status` (or `--json` for a
+health probe). A healthy active root has a recent last attempt and success, zero
+lag, and no last error; skipped files normally increase on unchanged poll ticks.
+
+To roll back, stop and disable the supervisor unit, restore the previously
+installed package version, and run one `sessions ingest --source codewith`
+before re-enabling the old unit. Keep the sessions database and
+`watch-status.json`: ingestion is mtime-gated and session writes are upserts, so
+restarts and version rollback do not require deleting state or rebuilding the
+index. If the restored version cannot read the existing database, leave the
+service stopped and restore the database from the pre-upgrade backup instead.
+
+For one-time historical content backfills, use the explicit backfill workflow
+instead of an unbounded live sync. It defaults to inventory/dry-run JSON and
+reports selected sessions, duplicate source IDs, message/tool-call counts, byte
+estimates, parser memory bounds, and checkpoint state.
+
+```bash
+sessions backfill --source codewith --pilot 25 --json
+sessions backfill \
+  --source codewith \
+  --range-start codewith:01aaa \
+  --range-end codewith:01azz \
+  --known-id codewith:01abc \
+  --checkpoint ~/.hasna/sessions/backfill/codewith-range.json \
+  --json
+```
+
+Live apply is fail-closed: it requires a self-hosted API store, an explicit
+selection boundary (`--source` plus `--pilot`, a range, or a `--known-id`; or
+the conspicuous `--all-sources` acknowledgement), a capacity ceiling, a
+successful backup hook, durable checkpointing, and the literal confirmation
+token. Production-like API URLs also require `--allow-production`, but that
+flag is only a technical gate: actual production apply still requires separate
+out-of-band user approval before running the command.
+When `--known-id` is the only apply boundary beyond `--source`, only those known
+IDs are selected. Do not combine `--all-sources` with `--known-id`: that mixes a
+broad acknowledgement with a narrow selector and fails closed. An API URL is
+only auto-detected as production-like against host suffixes you configure via
+`HASNA_SESSIONS_PRODUCTION_HOSTS` (comma/space separated, e.g. your own root
+domain) — this package does not ship a built-in production hostname. If you'd
+rather force the gate unconditionally regardless of URL, set
+`HASNA_SESSIONS_PRODUCTION=1`.
+
+```bash
+sessions backfill \
+  --apply \
+  --confirm-apply BACKFILL_APPLY \
+  --source codewith \
+  --pilot 25 \
+  --max-total-bytes 1073741824 \
+  --backup-command 'sessions transfer export --output ~/.hasna/sessions/backups' \
+  --checkpoint ~/.hasna/sessions/backfill/codewith-pilot.json \
+  --json
 ```
 
 Run the service-side Postgres schema with `sessions-serve migrate` using the
@@ -231,7 +321,7 @@ server, and clients talk to its `/v1` API.
 ## Adapter notes
 
 Indexed ingestion currently uses stable local files for Claude Code, local Codex
-JSONL, and Gemini. Cursor/cloud Codex/cloud Claude sources should be added
+JSONL, local Codewith JSONL, and Gemini. Cursor/cloud Codex/cloud Claude sources should be added
 through the existing `SessionParser`/`SessionAdapter` interfaces when they expose
 a durable local export or API; avoid scraping transient cloud/cache formats.
 
@@ -265,6 +355,9 @@ In self-hosted server mode (`HASNA_SESSIONS_STORAGE_MODE=cloud` +
 client-side DSN sync engine and no service-side cache. Apply the schema with
 `sessions-serve migrate` (run with the owner DSN). See `docker-compose.yml` for
 a self-hosted stack (serve + Postgres) and `Dockerfile` for the ARM64 image.
+Self-hosted mode raises Bun's request body limit to 512 MiB for large
+`/v1/sessions/import` payloads; override with
+`HASNA_SESSIONS_MAX_REQUEST_BODY_SIZE` using bytes or units such as `768MiB`.
 
 The generated, dependency-free SDK is published at `@hasna/sessions/sdk`:
 

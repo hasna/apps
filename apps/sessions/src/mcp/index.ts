@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 /**
  * MCP server for sessions.
- * Provides indexed search/ingest tools, friendly-name registry tools, and cross-adapter import.
+ * Provides indexed search/ingest tools, active-store tools, and cross-adapter import.
  */
 
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -11,6 +11,11 @@ import { getPackageInfo, getPackageVersion } from "../lib/package.js";
 import { listAdapters, getAdapter } from "../lib/adapters/index.js";
 import type { CanonicalSession } from "../lib/adapters/types.js";
 import { importCanonicalSessions } from "../lib/adapters/import.js";
+import {
+  scanWatchdogSessions,
+  sessionsWatchdogRestart,
+  sessionsWatchdogRestartAll,
+} from "../lib/watchdog.js";
 import { resolveSessionStore, getLocalStore } from "../db/session-store.js";
 import type { Session } from "../types/index.js";
 
@@ -28,7 +33,7 @@ function buildResumeCommand(session: Session): string[] {
 // Session-record store seam (SAME resolver the CLI uses). When the client-flip
 // resolves to cloud-http — HASNA_SESSIONS_API_URL + HASNA_SESSIONS_API_KEY set
 // (self_hosted) — the core session-record read tools (recent/list/get/machines/
-// stats/search) route to https://sessions.hasna.xyz/v1 with the bearer key so
+// stats/search) route to the configured self-hosted `/v1` API with the bearer key so
 // every machine's MCP sees the ONE shared cloud session registry. Env unset =>
 // local SQLite index exactly as before (no regression). Analytical/local-only
 // tools (ingest, embed, semantic/graph/recall, tool-call search, adapters) have
@@ -56,10 +61,13 @@ MCP server for ${packageInfo.name}
 Options:
   -V, --version  output the version number
   -h, --help     display help for command
-  --http         run Streamable HTTP transport on 127.0.0.1 (default port 8877)
-  --port <n>     HTTP port (--http or MCP_HTTP=1)
+  --http         explicitly select Streamable HTTP transport (the default)
+  --stdio        run the MCP server over stdio
+  --port <n>     HTTP port (default: 8877)
 
-Runs a stdio MCP server with session discovery, resume, search, stats, and feedback tools.`);
+Runs Streamable HTTP on 127.0.0.1 by default. Set MCP_STDIO=1 or pass --stdio
+for stdio clients. MCP_HTTP=1 explicitly selects HTTP; MCP_HTTP_PORT sets its
+port.`);
 }
 
 const args = process.argv.slice(2);
@@ -217,10 +225,10 @@ server.tool(
 
 server.tool(
   "search_sessions",
-  "Full-text search across indexed AI coding sessions (claude/codex/gemini). Returns matching sessions with snippets.",
+  "Full-text search across indexed AI coding sessions (claude/codex/codewith/gemini). Returns matching sessions with snippets.",
   {
     query: z.string().describe("Search query"),
-    source: z.string().optional().describe("Filter by provider: claude, codex, gemini"),
+    source: z.string().optional().describe("Filter by provider: claude, codex, codewith, gemini"),
     project_path: z.string().optional().describe("Filter by project name or path"),
     machine: z.string().optional().describe("Filter by machine (laptop-a, workstation-b, ...)"),
     limit: z.number().optional().describe("Max results (default 20)"),
@@ -256,7 +264,7 @@ server.tool(
   "High-level recall for coding threads. Combines FTS, optional semantic search, tool calls, graph context, touched files, evidence snippets, and resume metadata.",
   {
     query: z.string().describe("Natural-language recall query, e.g. 'find the thread where we implemented stripe webhook'"),
-    source: z.string().optional().describe("Filter by provider: claude, codex, gemini"),
+    source: z.string().optional().describe("Filter by provider: claude, codex, codewith, gemini"),
     project_path: z.string().optional().describe("Filter by project name or path"),
     machine: z.string().optional().describe("Filter by machine"),
     limit: z.number().optional().describe("Max results (default 10)"),
@@ -323,18 +331,19 @@ server.tool(
 
 server.tool(
   "get_session",
-  "Get a session's full details, messages, and tool calls by id or unique id prefix.",
+  "Get a session's full details, messages, and tool calls by internal id, source-qualified id, or unique prefix.",
   {
     id: z.string().describe("Session id or unique prefix"),
+    source: z.string().optional().describe("Resolve id as a provider-native source id within this source"),
     message_limit: z.number().optional().describe("Cap messages returned (default all)"),
   },
-  async (a: { id: string; message_limit?: number }) => {
+  async (a: { id: string; source?: string; message_limit?: number }) => {
     try {
       const store = sessionStore();
       // Everything routes through the Store (LocalStore | ApiStore). In
       // self_hosted mode, message/tool transcripts come from authenticated /v1
       // content endpoints populated by `sessions sync`.
-      const session = await store.get(a.id);
+      const session = await store.get(a.id, { source: a.source });
       if (!session) return fail(`Session not found (or ambiguous prefix): ${a.id}`);
       let messages = await store.messages(session.id);
       if (a.message_limit) messages = messages.slice(0, a.message_limit);
@@ -354,7 +363,7 @@ server.tool(
   "ingest",
   "Index session files into the database (mtime-gated). Run before searching to pick up new sessions.",
   {
-    source: z.string().optional().describe("Only this provider: claude, codex, gemini"),
+    source: z.string().optional().describe("Only this provider: claude, codex, codewith, gemini"),
     force: z.boolean().optional().describe("Re-ingest unchanged files"),
   },
   async (a: { source?: string; force?: boolean }) => {
@@ -426,6 +435,7 @@ server.tool(
     related_type: z.enum(["project", "tool", "model", "provider", "repo"]).optional(),
     related_name: z.string().optional().describe("With related_type: sessions linked to this entity"),
     session_id: z.string().optional().describe("A session's entity neighborhood"),
+    session_source: z.string().optional().describe("Resolve session_id as a provider-native source id within this source"),
     limit: z.number().optional(),
   },
   async (a: {
@@ -433,11 +443,12 @@ server.tool(
     related_type?: "project" | "tool" | "model" | "provider" | "repo";
     related_name?: string;
     session_id?: string;
+    session_source?: string;
     limit?: number;
   }) => {
     try {
       const store = sessionStore();
-      if (a.session_id) return ok(await store.graphSession(a.session_id));
+      if (a.session_id) return ok(await store.graphSession(a.session_id, { source: a.session_source }));
       if (a.related_type && a.related_name) return ok(await store.graphRelated(a.related_type, a.related_name, a.limit ?? 50));
       return ok(await store.graphEntities(a.type));
     } catch (e) {
@@ -520,10 +531,11 @@ server.tool(
   "Resolve a session by id/prefix, latest project session, or the most recent session, and return the underlying Claude resume command.",
   {
     identifier: z.string().optional(),
+    source: z.string().optional().describe("Resolve identifier as a provider-native source id within this source"),
     project: z.string().optional(),
     latest: z.boolean().optional(),
   },
-  async (args: { identifier?: string; project?: string; latest?: boolean }) => {
+  async (args: { identifier?: string; source?: string; project?: string; latest?: boolean }) => {
     try {
       const store = sessionStore();
       let session: Session | null = null;
@@ -532,7 +544,7 @@ server.tool(
       } else if (args.latest || !args.identifier) {
         session = (await store.recent(1))[0] ?? null;
       } else {
-        session = await store.get(args.identifier);
+        session = await store.get(args.identifier, { source: args.source });
       }
 
       if (!session) {
@@ -549,12 +561,16 @@ server.tool(
 server.tool(
   "sessions_rename",
   "Set a session's title in the active store (local index, or the shared self_hosted /v1 registry).",
-  { identifier: z.string(), title: z.string() },
-  async (args: { identifier: string; title: string }) => {
+  {
+    identifier: z.string(),
+    source: z.string().optional().describe("Resolve identifier as a provider-native source id within this source"),
+    title: z.string(),
+  },
+  async (args: { identifier: string; source?: string; title: string }) => {
     try {
       const title = args.title.trim();
       if (!title) return fail("title cannot be empty");
-      const session = await sessionStore().rename(args.identifier, title);
+      const session = await sessionStore().rename(args.identifier, title, { source: args.source });
       if (!session) return fail(`session not found (or ambiguous prefix): ${args.identifier}`);
       return textJson(session);
     } catch (e) {
@@ -573,6 +589,45 @@ server.tool(
         generated_at: new Date().toISOString(),
         sessions: await sessionStore().list({ project_path: args.project }),
       });
+    } catch (e) {
+      return fail(e);
+    }
+  }
+);
+
+server.tool(
+  "sessions_watchdog_scan",
+  "Find dead or crashed Claude panes in primary tmux windows when a healthy sibling agent session confirms the session group.",
+  {},
+  async () => {
+    try {
+      return textJson(scanWatchdogSessions());
+    } catch (e) {
+      return fail(e);
+    }
+  }
+);
+
+server.tool(
+  "sessions_watchdog_restart",
+  "Respawn crashed panes for one tmux session, resume its named Claude session, and wait for Claude to start.",
+  { session_name: z.string().min(1).describe("Exact tmux and Claude session name") },
+  async (args: { session_name: string }) => {
+    try {
+      return textJson(await sessionsWatchdogRestart(args.session_name));
+    } catch (e) {
+      return fail(e);
+    }
+  }
+);
+
+server.tool(
+  "sessions_watchdog_restart_all",
+  "Respawn all crashed tmux panes, resuming each named Claude session when a healthy sibling provides its working directory.",
+  {},
+  async () => {
+    try {
+      return textJson(await sessionsWatchdogRestartAll());
     } catch (e) {
       return fail(e);
     }
