@@ -174,12 +174,16 @@ jobs:
           TURBO_SCM_BASE: ${{ steps.affected.outputs.base }}
 
       - name: Test (affected)
-        # --concurrency=2: the runner (4 cores) kills test-spawned subprocesses
+        # Serial execution: the runner (4 cores) kills test-spawned subprocesses
         # (null status / SIGTERM) when several spawn-heavy suites run in
-        # parallel with the skills suite in the sweep. Measured on the skills
-        # import PR (5/5 fails on the runner; 0 fails in a clean local
-        # replica). The cap is the minimal deterministic mitigation.
-        run: bunx turbo run test --affected --concurrency=2
+        # parallel in the sweep. Measured on the skills import PR (5/5 fails on
+        # the runner; 0 fails in a clean local replica), and again on
+        # ci/test-suites PR #114 2026-08-14: the full 74-member sweep at
+        # --concurrency=2 failed the test phase on a rotating spawn-heavy
+        # member per run (mementos, automations, knowledge, shield — each
+        # passes locally). --concurrency=1 runs every suite to completion,
+        # serially; it slows the lane, it does not skip anything.
+        run: bunx turbo run test --affected --concurrency=1
         env:
           TURBO_SCM_BASE: ${{ steps.affected.outputs.base }}
 
