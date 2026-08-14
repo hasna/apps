@@ -47,8 +47,8 @@ let probeLog: string;
  *   HASNA_ACCOUNTS_API_URL / ACCOUNTS_API_URL  -> lib/cloud-accounts.ts (deriveEnv)
  *   HASNA_ACCOUNTS_API_SIGNING_KEY             -> server/config.ts (resolveSigningSecret)
  *   HASNA_API_SIGNING_KEY                      -> server/config.ts (resolveSigningSecret)
- *   HASNA_ACCOUNTS_DATABASE_URL                -> generated/storage-kit/mode.ts
- *   ACCOUNTS_DATABASE_URL                      -> generated/storage-kit/mode.ts
+ *   HASNA_ACCOUNTS_DATABASE_URL                -> generated/storage-kit/backend.ts
+ *   ACCOUNTS_DATABASE_URL                      -> generated/storage-kit/backend.ts
  *
  * The last two are written as LITERALS here on purpose, even though the deny list
  * now derives them from storageEnvKeys("accounts").databaseUrlKeys. If the test
@@ -138,20 +138,19 @@ function baseEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
     ...process.env,
     NODE_ENV: "test",
     ACCOUNTS_HOME: home,
-    // PIN THE STORAGE MODE EXPLICITLY rather than relying on test/setup.ts having
-    // pinned it in process.env. ACCOUNTS_HOME alone does NOT isolate: in
-    // lib/cloud-accounts.ts deriveEnv(), an explicit cloud/self_hosted mode is
-    // checked BEFORE the home override, so an ambient
-    // HASNA_ACCOUNTS_STORAGE_MODE=cloud (which is the real setting on a fleet
-    // machine) wins and the sentinel API_URL below would be dialled for real.
-    // Measured: with only ACCOUNTS_HOME set, `accounts add` attempts
-    // https://accounts.invalid/v1/accounts and fails ConnectionRefused. An
-    // explicit local mode is step 1 of deriveEnv and cannot be overridden.
-    HASNA_ACCOUNTS_STORAGE_MODE: "local",
-    ACCOUNTS_STORAGE_MODE: "local",
-    HASNA_ACCOUNTS_MODE: "local",
+    // Transport-neutral registry-authority canaries. The URL/KEY canaries
+    // cannot be carried in a local launch env anymore: a partial API pair now
+    // THROWS (P1-1 remediation, cloud-accounts.ts — no silent local drift),
+    // and a complete pair would make these launches dial the sentinel
+    // endpoint for real. URL/KEY containment at the spawn boundary is proven
+    // by the negative control below, which hands the probe the FULL sentinel
+    // set; the signing/DSN sentinels never affect client transport, so they
+    // ride the live launches. The launched tool must not inherit ANY of these.
+    HASNA_ACCOUNTS_API_SIGNING_KEY: "synthetic-sentinel-signing",
+    HASNA_API_SIGNING_KEY: "synthetic-sentinel-signing",
+    HASNA_ACCOUNTS_DATABASE_URL: "postgres://synthetic.invalid/db",
+    ACCOUNTS_DATABASE_URL: "postgres://synthetic.invalid/db",
     PROBE_LOG: probeLog,
-    ...SENTINEL_ENV,
     ...extra,
   };
   const inheritedPath = Object.entries(process.env).find(([k]) => k.toLowerCase() === "path")?.[1] ?? "";
@@ -245,12 +244,13 @@ test("run --headless does not hand registry authority to the tool binary", () =>
 test("the probe itself can observe a leak — negative control for the whole file", () => {
   // Proves the probe is capable of REPORTING a canary when one is genuinely present,
   // so the ABSENT results above are observations rather than an artifact of a probe
-  // that cannot see. Spawns the same binary directly with the sentinels applied and
-  // no accounts boundary in between.
+  // that cannot see. Spawns the same binary directly with the FULL sentinel set
+  // (including the API URL/KEY sentinels baseEnv deliberately omits) applied and no
+  // accounts boundary in between.
   const result = spawnSync(process.execPath, ["run", join(binDir, "fake-claude.ts")], {
     cwd: launchCwd,
     encoding: "utf8",
-    env: { ...baseEnv(), CLAUDE_CONFIG_DIR: home },
+    env: { ...baseEnv(), ...SENTINEL_ENV, CLAUDE_CONFIG_DIR: home },
   });
   expect(result.status).toBe(0);
   const probe = readProbe();

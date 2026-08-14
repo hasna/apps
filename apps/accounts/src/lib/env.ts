@@ -8,7 +8,7 @@ import {
 } from "./claude-auth.js";
 import { convergeDirCredential } from "./credential-broker.js";
 import { ensureCodexAppProfileConfig } from "./codex-app.js";
-import { storageEnvKeys } from "../generated/storage-kit/mode.js";
+import { serverDataBackendEnvKeys } from "../generated/storage-kit/backend.js";
 import { redactText } from "./redaction.js";
 import { assertProfileGuarded, ensureSharedCapabilities } from "./shared-capabilities.js";
 import { ensureSharedClaudeSessions } from "./claude-session-registry.js";
@@ -54,9 +54,9 @@ const UNSAFE_PROVIDER_REQUEST_DEBUG_ENV_KEY_SET = new Set(
  *        keys — strictly more powerful than the bearer token above. Note the
  *        fallback's prefix is HASNA_, not HASNA_ACCOUNTS_.
  *   HASNA_ACCOUNTS_DATABASE_URL, ACCOUNTS_DATABASE_URL
- *     -> NOT hand-listed. Taken from storageEnvKeys("accounts").databaseUrlKeys in
- *        src/generated/storage-kit/mode.ts, which is the same spec
- *        resolveDatabaseUrl()/createCloudPoolFromEnv() consult for server/app.ts
+ *     -> NOT hand-listed. Taken from serverDataBackendEnvKeys("accounts").databaseUrlKeys in
+ *        src/generated/storage-kit/backend.ts, which is the same spec
+ *        resolveDatabaseUrl()/createServerPoolFromEnv() consult for server/app.ts
  *        and server/migrate.ts. A direct DSN carries its own password and is
  *        unscoped SQL access to the whole registry — strictly worse than the
  *        bearer token, which is at least bound to the /v1 API's own authz.
@@ -69,11 +69,13 @@ const UNSAFE_PROVIDER_REQUEST_DEBUG_ENV_KEY_SET = new Set(
  *        fix for it. Deriving from the resolver's own spec means the deny list
  *        cannot drift from what the resolver accepts.
  *
- * DELIBERATELY NOT DENIED: the storage-MODE keys — including the bare
- * `ACCOUNTS_STORAGE_MODE` alias from that same spec. When a mode is explicitly
- * `cloud`/`self_hosted`, deriveEnv() THROWS on the now-absent key rather than
- * silently reading a different store — a loud failure is the one we want, and
- * stripping the mode would convert it into a silent fallback to a local registry.
+ * DELIBERATELY NOT DENIED: the retired storage-MODE keys. A launched session
+ * that inherits a stale `HASNA_ACCOUNTS_STORAGE_MODE` (or alias) must FAIL
+ * LOUDLY via `assertNoLegacyStorageMode` rather than silently read a different
+ * store — stripping the variable would convert the loud failure into a silent
+ * local fallback, which is the split-brain drift the mode vocabulary caused.
+ * The usage-hook's local-only path (`resolveLocalStore`) deliberately does not
+ * consult the resolver, so it never throws on a stale variable (f70e8357).
  * Also not denied: PATH, proxy, TLS, Bedrock/Vertex and cloud-SDK environment,
  * which this module's existing policy keeps inside the caller's trust binding.
  */
@@ -84,7 +86,7 @@ export const REGISTRY_AUTHORITY_ENV_KEYS: readonly string[] = [
   "ACCOUNTS_API_URL",
   "HASNA_ACCOUNTS_API_SIGNING_KEY",
   "HASNA_API_SIGNING_KEY",
-  ...storageEnvKeys("accounts").databaseUrlKeys,
+  ...serverDataBackendEnvKeys("accounts").databaseUrlKeys,
 ];
 
 const REGISTRY_AUTHORITY_ENV_KEY_SET = new Set(
@@ -178,9 +180,10 @@ export function providerLaunchEnv(
  * they type `exit`; accounts removing them in between prevents nothing that the
  * operator could not trivially do anyway, while breaking the ordinary case of
  * running an `accounts` command inside the subshell — which, with the API key
- * absent but a storage mode set, fails loudly, and with no mode set silently reads
- * a DIFFERENT local registry. A control the constrained party can bypass in one
- * command, whose cost is a silent wrong-store read, is not containment.
+ * absent but the API URL present, fails loudly (the partial API pair throws
+ * naming the missing variable), and with neither set reads the
+ * local registry. A control the constrained party can bypass in one command,
+ * whose cost is a broken subshell, is not containment.
  *
  * The real boundary is the one `accounts launch` / `accounts run` cross: there
  * accounts execs an untrusted binary directly, and that binary has no route to the
