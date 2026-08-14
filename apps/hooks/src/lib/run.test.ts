@@ -67,6 +67,103 @@ describe("executeVerifiedScript", () => {
     const output = JSON.parse(stdout);
     expect(output.marker).toBe("ORIGINAL");
   });
+
+  test("runs a .sh hook under bash even when bun's parser rejects the syntax", async () => {
+    // The escaped-paren regex shape is the measured failing construct from
+    // env-dump-guard (bun 1.3.14: "Unexpected token: `(`"). bash must run it.
+    const scriptPath = installCustomHook(
+      "bash-demo",
+      `#!/bin/bash
+PATTERN='(^|[^\\\\])\\\\$\\([[:space:]]*(/usr/bin/)?(env|printenv)([[:space:]]+(-0|--null))?[[:space:]]*(\\\\||\\\\))'
+printf '%s\\n' "BASH-REGEX-OK"
+`,
+      "script.sh",
+    );
+    const { stdout, stderr, exitCode } = await executeVerifiedScript({
+      name: "bash-demo",
+      scriptPath,
+      content: readFileSync(scriptPath),
+      args: [],
+      stdin: "{}",
+    });
+    expect(stderr).toBe("");
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("BASH-REGEX-OK");
+  });
+
+  test("honors a node shebang over a .sh extension", async () => {
+    const scriptPath = installCustomHook(
+      "node-shebang-demo",
+      `#!/usr/bin/env node
+console.log("NODE-VIA-SHEBANG");
+`,
+      "script.sh",
+    );
+    const { stdout, exitCode } = await executeVerifiedScript({
+      name: "node-shebang-demo",
+      scriptPath,
+      content: readFileSync(scriptPath),
+      args: [],
+      stdin: "{}",
+    });
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("NODE-VIA-SHEBANG");
+  });
+
+  test("honors a bash shebang over a .ts extension", async () => {
+    const scriptPath = installCustomHook(
+      "bash-shebang-demo",
+      `#!/bin/bash
+printf '%s\\n' "BASH-VIA-SHEBANG"
+`,
+      "script.ts",
+    );
+    const { stdout, exitCode } = await executeVerifiedScript({
+      name: "bash-shebang-demo",
+      scriptPath,
+      content: readFileSync(scriptPath),
+      args: [],
+      stdin: "{}",
+    });
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("BASH-VIA-SHEBANG");
+  });
+
+  test("refuses an unknown extension with an error naming it", async () => {
+    const scriptPath = installCustomHook(
+      "py-demo",
+      `print("nope")`,
+      "script.py",
+    );
+    await expect(
+      executeVerifiedScript({
+        name: "py-demo",
+        scriptPath,
+        content: readFileSync(scriptPath),
+        args: [],
+        stdin: "{}",
+      }),
+    ).rejects.toThrow(/unsupported script extension '\.py'/);
+  });
+
+  test("refuses an unknown shebang with an error naming it", async () => {
+    const scriptPath = installCustomHook(
+      "python-shebang-demo",
+      `#!/usr/bin/env python3
+print("nope")
+`,
+      "script.sh",
+    );
+    await expect(
+      executeVerifiedScript({
+        name: "python-shebang-demo",
+        scriptPath,
+        content: readFileSync(scriptPath),
+        args: [],
+        stdin: "{}",
+      }),
+    ).rejects.toThrow(/shebang '.*python3.*' is not a recognized interpreter/);
+  });
 });
 
 describe("runHook verified execution", () => {
@@ -90,6 +187,22 @@ describe("runHook verified execution", () => {
 
     writeFileSync(scriptPath, TAMPERED_SCRIPT);
     await expect(runHook("tamper-demo", { session_id: "s3" })).rejects.toThrow(/changed since it was trusted/);
+  });
+
+  test("a tampered .sh script whose hash no longer matches the pin refuses to run", async () => {
+    const scriptPath = installCustomHook(
+      "tamper-sh-demo",
+      `#!/bin/bash
+printf '%s\\n' "SH-FIRST"
+`,
+      "script.sh",
+    );
+    const first = await runHook("tamper-sh-demo", { session_id: "s4" });
+    expect(first.exitCode).toBe(0);
+    expect(first.output.raw).toContain("SH-FIRST");
+
+    writeFileSync(scriptPath, `#!/bin/bash\nprintf '%s\\n' "SH-TAMPERED"\n`);
+    await expect(runHook("tamper-sh-demo", { session_id: "s5" })).rejects.toThrow(/changed since it was trusted/);
   });
 });
 

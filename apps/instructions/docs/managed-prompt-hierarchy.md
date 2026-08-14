@@ -22,7 +22,7 @@ Render sources are composed in this order:
 | `machine` | Host-specific rules for machines such as `spark01`, Apple laptops, or fleet nodes. |
 | `division` | Area-level rules for repo families such as `opensource`, `hasnastudio`, `hasnatools`, or `infra`. |
 | `workspace` | Rules for ephemeral or project workspaces such as `~/.hasna/projects/workspaces/wks_*`. |
-| `repo` | Repository purpose, commands, ownership, deployment mode, boundaries, and validation. |
+| `repo` | Repository purpose, commands, ownership, deployment, boundaries, and validation. |
 | `path` | Subfolder/module rules for large repos. |
 | `agent` | Persona or named-agent behavior. |
 | `session` | Temporary task/session-specific overlays. |

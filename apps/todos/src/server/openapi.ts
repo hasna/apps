@@ -1,0 +1,2991 @@
+/**
+ * OpenAPI 3.1 document for the versioned `/v1` cloud API. This is the SINGLE
+ * source of truth the typed SDK is generated from (see scripts/generate-sdk.ts)
+ * and is served live at `GET /openapi.json` and `GET /v1/openapi.json`.
+ */
+import { getPackageVersion } from "../lib/package-version.js";
+import { TASK_PRIORITIES, TASK_STATUSES } from "../types/index.js";
+
+const taskSchema = {
+  type: "object",
+  properties: {
+    id: { type: "string" },
+    title: { type: "string" },
+    description: { type: "string" },
+    status: { type: "string", enum: [...TASK_STATUSES] },
+    priority: { type: "string", enum: [...TASK_PRIORITIES] },
+    project_id: { type: "string", nullable: true },
+    parent_id: { type: "string", nullable: true },
+    assigned_to: { type: "string", nullable: true },
+    agent_id: { type: "string", nullable: true },
+    created_by: { type: "string", nullable: true },
+    reason: { type: "string", nullable: true },
+    tags: { type: "array", items: { type: "string" } },
+    version: { type: "number" },
+    locked_by: { type: "string", nullable: true },
+    locked_at: { type: "string", format: "date-time", nullable: true },
+    created_at: { type: "string" },
+    updated_at: { type: "string" },
+  },
+} as const;
+
+const taskManifestBoundsSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "tasks",
+    "dependencies",
+    "comments",
+    "verifications",
+    "effects",
+    "metadata_fields",
+    "effect_payload_fields",
+    "request_bytes",
+    "response_bytes",
+  ],
+  properties: {
+    tasks: { type: "integer", minimum: 1 },
+    dependencies: { type: "integer", minimum: 1 },
+    comments: { type: "integer", minimum: 1 },
+    verifications: { type: "integer", minimum: 1 },
+    effects: { type: "integer", minimum: 1 },
+    metadata_fields: { type: "integer", minimum: 1 },
+    effect_payload_fields: { type: "integer", minimum: 1 },
+    request_bytes: { type: "integer", minimum: 1 },
+    response_bytes: { type: "integer", minimum: 1 },
+  },
+} as const;
+
+const taskManifestCapabilitySchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "authority",
+    "route",
+    "schema_version",
+    "tenant_id",
+    "backend",
+    "deterministic_ids",
+    "operation_step_identity",
+    "deterministic_idempotency_keys",
+    "terminal_nonacceptance_receipts",
+    "plan_slug_provenance",
+    "immutable_receipts",
+    "transactional_outbox",
+    "idempotent_outbox_delivery",
+    "exact_bounded_readback",
+    "conditional_compensation",
+    "transcript_safe",
+    "bounds",
+  ],
+  properties: {
+    authority: { type: "string", enum: ["todos"] },
+    route: { type: "string", enum: ["todos.task-manifest.v1"] },
+    schema_version: { type: "integer", enum: [1] },
+    tenant_id: { type: "string", minLength: 1, maxLength: 200 },
+    backend: { type: "string", enum: ["sqlite", "postgresql", "http"] },
+    deterministic_ids: { type: "boolean", enum: [true] },
+    operation_step_identity: { type: "boolean", enum: [true] },
+    deterministic_idempotency_keys: { type: "boolean", enum: [true] },
+    terminal_nonacceptance_receipts: { type: "boolean", enum: [true] },
+    plan_slug_provenance: { type: "string", enum: ["deterministic-v1"] },
+    immutable_receipts: { type: "boolean", enum: [true] },
+    transactional_outbox: { type: "boolean", enum: [true] },
+    idempotent_outbox_delivery: { type: "boolean", enum: [true] },
+    exact_bounded_readback: { type: "boolean", enum: [true] },
+    conditional_compensation: { type: "boolean", enum: [true] },
+    transcript_safe: { type: "boolean", enum: [false] },
+    bounds: { $ref: "#/components/schemas/TaskManifestBounds" },
+  },
+} as const;
+
+const taskManifestCapabilityResponseSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["capability"],
+  properties: {
+    capability: { $ref: "#/components/schemas/TaskManifestCapability" },
+  },
+} as const;
+
+const projectSchema = {
+  type: "object",
+  properties: {
+    id: { type: "string" },
+    name: { type: "string" },
+    path: { type: "string" },
+    description: { type: "string", nullable: true },
+    task_list_id: { type: "string", nullable: true },
+    task_prefix: { type: "string", nullable: true },
+    task_counter: { type: "number" },
+    created_at: { type: "string" },
+    updated_at: { type: "string" },
+  },
+} as const;
+
+const taskManifestBindingLookupRequestSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["authority", "route", "schema_version", "tenant_id", "plan_id", "max_items"],
+  properties: {
+    authority: { type: "string", enum: ["todos"] },
+    route: { type: "string", enum: ["todos.task-manifest.v1"] },
+    schema_version: { type: "integer", enum: [1] },
+    tenant_id: { type: "string", minLength: 1, maxLength: 200 },
+    plan_id: { type: "string", format: "uuid" },
+    max_items: { type: "integer", enum: [1] },
+  },
+} as const;
+
+const taskManifestBindingLookupResultSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "authority",
+    "route",
+    "schema_version",
+    "tenant_id",
+    "plan_id",
+    "operation_id",
+    "step_id",
+    "apply_receipt_id",
+    "binding_version",
+    "state",
+  ],
+  properties: {
+    authority: { type: "string", enum: ["todos"] },
+    route: { type: "string", enum: ["todos.task-manifest.v1"] },
+    schema_version: { type: "integer", enum: [1] },
+    tenant_id: { type: "string" },
+    plan_id: { type: "string", format: "uuid" },
+    operation_id: { type: "string", minLength: 1, maxLength: 200 },
+    step_id: { type: "string", minLength: 1, maxLength: 200 },
+    apply_receipt_id: { type: "string", format: "uuid" },
+    binding_version: { type: "integer", minimum: 1 },
+    state: { type: "string", enum: ["applied", "compensated"] },
+  },
+} as const;
+
+const taskManifestSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "version", "operation_id", "step_id", "idempotency_key", "precondition_digest",
+    "project_id", "plan", "tasks",
+  ],
+  properties: {
+    version: { type: "integer", enum: [1] },
+    operation_id: { type: "string", minLength: 1, maxLength: 200 },
+    step_id: { type: "string", minLength: 1, maxLength: 200 },
+    idempotency_key: { type: "string", pattern: "^tmk_[0-9a-f]{48}$" },
+    precondition_digest: { type: "string", pattern: "^[0-9a-f]{64}$" },
+    project_id: { type: "string", format: "uuid" },
+    task_list_id: { type: "string", format: "uuid" },
+    if_binding_version: { type: "integer", minimum: 0 },
+    plan: {
+      type: "object",
+      additionalProperties: false,
+      required: ["key", "name"],
+      properties: {
+        key: { type: "string", minLength: 1, maxLength: 200 },
+        name: { type: "string", minLength: 1, maxLength: 200 },
+        description: { type: "string" },
+        status: { type: "string", enum: ["active", "completed", "archived"] },
+      },
+    },
+    tasks: {
+      type: "array",
+      minItems: 1,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["key", "title"],
+        properties: {
+          key: { type: "string", minLength: 1, maxLength: 200 },
+          title: { type: "string", minLength: 1, maxLength: 200 },
+          description: { type: "string" },
+          status: { type: "string", enum: ["pending", "in_progress", "completed", "failed", "cancelled"] },
+          priority: { type: "string", enum: ["low", "medium", "high", "critical"] },
+          assigned_to: { type: "string" },
+          created_by: { type: "string" },
+          tags: { type: "array", items: { type: "string" } },
+          metadata: { type: "object", additionalProperties: true },
+          comments: { type: "array", items: { type: "object", additionalProperties: true } },
+          verifications: { type: "array", items: { type: "object", additionalProperties: true } },
+        },
+      },
+    },
+    dependencies: { type: "array", items: { type: "object", additionalProperties: true } },
+    effects: { type: "array", items: { type: "object", additionalProperties: true } },
+  },
+} as const;
+
+const taskManifestReceiptSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "receipt_id", "authority", "route", "schema_version", "kind", "operation_id",
+    "step_id", "idempotency_key", "request_digest", "precondition_digest",
+    "result_digest", "outcome", "reason", "duplicate_of_receipt_id",
+    "binding_version", "apply_receipt_id", "created_at",
+  ],
+  properties: {
+    receipt_id: { type: "string", format: "uuid" },
+    authority: { type: "string", enum: ["todos"] },
+    route: { type: "string", enum: ["todos.task-manifest.v1"] },
+    schema_version: { type: "integer", enum: [1] },
+    kind: { type: "string", enum: ["apply", "compensate"] },
+    operation_id: { type: "string" },
+    step_id: { type: "string" },
+    idempotency_key: { type: "string" },
+    request_digest: { type: "string", pattern: "^[0-9a-f]{64}$" },
+    precondition_digest: { type: "string", pattern: "^[0-9a-f]{64}$" },
+    result_digest: { type: "string", pattern: "^[0-9a-f]{64}$" },
+    outcome: { type: "string", enum: ["accepted", "duplicate_of_accepted", "terminal_nonacceptance"] },
+    reason: { type: "string", nullable: true },
+    duplicate_of_receipt_id: { type: "string", nullable: true },
+    binding_version: { type: "integer", minimum: 0 },
+    apply_receipt_id: { type: "string", nullable: true },
+    created_at: { type: "string", format: "date-time" },
+  },
+} as const;
+
+const taskManifestApplyResultSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["duplicate", "receipt", "graph", "readback", "outbox_ids", "result_digest"],
+  properties: {
+    duplicate: { type: "boolean" },
+    receipt: { $ref: "#/components/schemas/TaskManifestReceipt" },
+    graph: { type: "object", additionalProperties: true },
+    readback: { type: "object", additionalProperties: true },
+    outbox_ids: { type: "array", items: { type: "string", format: "uuid" } },
+    result_digest: { type: "string", pattern: "^[0-9a-f]{64}$" },
+  },
+} as const;
+
+const taskManifestApplyResponseSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["result"],
+  properties: { result: { $ref: "#/components/schemas/TaskManifestApplyResult" } },
+} as const;
+
+const taskManifestCompensateRequestSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["receipt_id", "operation_id", "step_id", "idempotency_key", "precondition_digest", "if_binding_version"],
+  properties: {
+    receipt_id: { type: "string", format: "uuid" },
+    operation_id: { type: "string" },
+    step_id: { type: "string" },
+    idempotency_key: { type: "string", pattern: "^tmk_[0-9a-f]{48}$" },
+    precondition_digest: { type: "string", pattern: "^[0-9a-f]{64}$" },
+    if_binding_version: { type: "integer", minimum: 1 },
+  },
+} as const;
+
+const taskManifestCompensationResultSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["duplicate", "receipt", "absent", "readback"],
+  properties: {
+    duplicate: { type: "boolean" },
+    receipt: { $ref: "#/components/schemas/TaskManifestReceipt" },
+    absent: { type: "boolean", enum: [true] },
+    readback: { type: "object", additionalProperties: true },
+  },
+} as const;
+
+const taskManifestCompensateResponseSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["result"],
+  properties: { result: { $ref: "#/components/schemas/TaskManifestCompensationResult" } },
+} as const;
+
+const taskManifestReadExactRequestSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["receipt_id"],
+  properties: { receipt_id: { type: "string", format: "uuid" } },
+} as const;
+
+const taskManifestBindingLookupResponseSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["result"],
+  properties: {
+    result: { $ref: "#/components/schemas/TaskManifestBindingLookupResult" },
+  },
+} as const;
+
+const taskListSchema = {
+  type: "object",
+  properties: {
+    id: { type: "string" },
+    project_id: { type: "string", nullable: true },
+    slug: { type: "string" },
+    name: { type: "string" },
+    description: { type: "string", nullable: true },
+    metadata: { type: "object", additionalProperties: true },
+    created_at: { type: "string" },
+    updated_at: { type: "string" },
+  },
+} as const;
+
+const projectTaskListEnsureReceiptSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "schema_version",
+    "receipt_id",
+    "idempotency_key",
+    "project_id",
+    "task_list_id",
+    "slug",
+    "created_by_operation",
+    "result_revision",
+    "result_digest",
+    "rollback_supported",
+    "created_at",
+  ],
+  properties: {
+    schema_version: { type: "string", enum: ["todos.project-task-list-ensure.v1"] },
+    receipt_id: { type: "string" },
+    idempotency_key: { type: "string" },
+    project_id: { type: "string" },
+    task_list_id: { type: "string" },
+    slug: { type: "string" },
+    created_by_operation: { type: "boolean" },
+    result_revision: { type: "string" },
+    result_digest: { type: "string" },
+    rollback_supported: { type: "boolean" },
+    created_at: { type: "string", format: "date-time" },
+  },
+} as const;
+
+const projectTaskListEnsureResultSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["mode", "action", "project", "task_list", "receipt"],
+  properties: {
+    mode: { type: "string", enum: ["plan", "apply"] },
+    action: { type: "string", enum: ["would_create", "created", "already_present"] },
+    project: { $ref: "#/components/schemas/Project" },
+    task_list: {
+      oneOf: [
+        { $ref: "#/components/schemas/TaskList" },
+        { type: "null" },
+      ],
+    },
+    receipt: {
+      oneOf: [
+        { $ref: "#/components/schemas/ProjectTaskListEnsureReceipt" },
+        { type: "null" },
+      ],
+    },
+  },
+} as const;
+
+const projectTaskListRollbackResultSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "schema_version",
+    "action",
+    "project_id",
+    "task_list_id",
+    "accepted_receipt_id",
+    "rollback_receipt_id",
+    "removed_at",
+  ],
+  properties: {
+    schema_version: { type: "string", enum: ["todos.project-task-list-ensure.v1"] },
+    action: { type: "string", enum: ["removed"] },
+    project_id: { type: "string" },
+    task_list_id: { type: "string" },
+    accepted_receipt_id: { type: "string" },
+    rollback_receipt_id: { type: "string" },
+    removed_at: { type: "string", format: "date-time" },
+  },
+} as const;
+
+const taskCommentSchema = {
+  type: "object",
+  required: ["id", "task_id", "agent_id", "session_id", "content", "type", "progress_pct", "created_at"],
+  properties: {
+    id: { type: "string" },
+    task_id: { type: "string" },
+    agent_id: { type: "string", nullable: true },
+    session_id: { type: "string", nullable: true },
+    content: { type: "string" },
+    type: { type: "string", enum: ["comment", "progress", "note"] },
+    progress_pct: { type: "number", nullable: true },
+    created_at: { type: "string", format: "date-time" },
+  },
+} as const;
+
+const staleLockHandoffInputSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "expected_holder",
+    "expected_lock_version",
+    "stale_after_seconds",
+    "new_holder",
+    "reason",
+  ],
+  properties: {
+    expected_holder: { type: "string", minLength: 1 },
+    expected_lock_version: {
+      type: "string",
+      format: "date-time",
+      pattern: "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+      description: "Exact authoritative locked_at token read from the task; no default or normalization is applied.",
+    },
+    stale_after_seconds: {
+      type: "integer",
+      minimum: 1,
+      description: "Lock age threshold supplied by the caller. The lock must be strictly older at the CAS instant.",
+    },
+    new_holder: {
+      type: "string",
+      minLength: 1,
+      description: "Must match the agent bound to the authenticated API key.",
+    },
+    reason: { type: "string", minLength: 1, maxLength: 4096 },
+  },
+} as const;
+
+const staleLockHandoffReceiptSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "schema_version",
+    "receipt_id",
+    "task_id",
+    "actor",
+    "previous_holder",
+    "previous_lock_version",
+    "new_holder",
+    "new_lock_version",
+    "stale_after_seconds",
+    "stale_cutoff",
+    "reason",
+    "created_at",
+  ],
+  properties: {
+    schema_version: { type: "string", enum: ["todos.stale-lock-handoff.v1"] },
+    receipt_id: { type: "string", format: "uuid" },
+    task_id: { type: "string", format: "uuid" },
+    actor: { type: "string" },
+    previous_holder: { type: "string" },
+    previous_lock_version: { type: "string", format: "date-time" },
+    new_holder: { type: "string" },
+    new_lock_version: { type: "string", format: "date-time" },
+    stale_after_seconds: { type: "integer", minimum: 1 },
+    stale_cutoff: { type: "string", format: "date-time" },
+    reason: { type: "string" },
+    created_at: { type: "string", format: "date-time" },
+  },
+} as const;
+
+const taskGitRefSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "id", "task_id", "ref_type", "name", "url", "provider", "metadata",
+    "created_at", "updated_at",
+  ],
+  properties: {
+    id: { type: "string", minLength: 1 },
+    task_id: { type: "string", minLength: 1 },
+    ref_type: { type: "string", enum: ["branch", "pull_request"] },
+    name: { type: "string", minLength: 1 },
+    url: { type: "string", nullable: true },
+    provider: { type: "string", nullable: true },
+    metadata: { type: "object", additionalProperties: true },
+    created_at: { type: "string", format: "date-time" },
+    updated_at: { type: "string", format: "date-time" },
+  },
+} as const;
+
+const planSchema = {
+  type: "object",
+  required: ["id", "slug", "name", "status", "created_at", "updated_at"],
+  properties: {
+    id: { type: "string" },
+    slug: { type: "string", nullable: true },
+    project_id: { type: "string", nullable: true },
+    task_list_id: { type: "string", nullable: true },
+    agent_id: { type: "string", nullable: true },
+    name: { type: "string" },
+    description: { type: "string", nullable: true },
+    status: { type: "string", enum: ["active", "completed", "archived"] },
+    created_at: { type: "string", format: "date-time" },
+    updated_at: { type: "string", format: "date-time" },
+  },
+} as const;
+
+const planProjectLinkReceiptSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "schema_version", "receipt_id", "idempotency_key", "plan_id", "project_id",
+    "prior_plan_project_id", "prior_task_project_ids", "task_ids", "task_count",
+    "result_plan_revision", "result_digest", "rollback_supported", "created_at",
+  ],
+  properties: {
+    schema_version: { type: "string", enum: ["todos.plan-project-link.v1"] },
+    receipt_id: { type: "string" },
+    idempotency_key: { type: "string" },
+    plan_id: { type: "string" },
+    project_id: { type: "string" },
+    prior_plan_project_id: { type: "string", nullable: true },
+    prior_task_project_ids: {
+      type: "object",
+      additionalProperties: { type: "string", nullable: true },
+    },
+    task_ids: { type: "array", items: { type: "string" } },
+    task_count: { type: "integer", minimum: 0 },
+    result_plan_revision: { type: "string" },
+    result_digest: { type: "string" },
+    rollback_supported: { type: "boolean", enum: [true] },
+    created_at: { type: "string", format: "date-time" },
+  },
+} as const;
+
+const planProjectLinkResultSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["mode", "action", "plan", "project", "tasks", "receipt"],
+  properties: {
+    mode: { type: "string", enum: ["plan", "apply"] },
+    action: { type: "string", enum: ["would_link", "linked", "already_linked"] },
+    plan: { $ref: "#/components/schemas/Plan" },
+    project: { $ref: "#/components/schemas/Project" },
+    tasks: { type: "array", items: { $ref: "#/components/schemas/Task" } },
+    receipt: {
+      oneOf: [
+        { $ref: "#/components/schemas/PlanProjectLinkReceipt" },
+        { type: "null" },
+      ],
+    },
+  },
+} as const;
+
+const planProjectLinkRollbackResultSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["schema_version", "action", "plan", "tasks", "accepted_receipt_id", "rollback_receipt_id", "restored_at"],
+  properties: {
+    schema_version: { type: "string", enum: ["todos.plan-project-link.v1"] },
+    action: { type: "string", enum: ["restored"] },
+    plan: { $ref: "#/components/schemas/Plan" },
+    tasks: { type: "array", items: { $ref: "#/components/schemas/Task" } },
+    accepted_receipt_id: { type: "string" },
+    rollback_receipt_id: { type: "string" },
+    restored_at: { type: "string", format: "date-time" },
+  },
+} as const;
+
+const templateTaskSchema = {
+  type: "object",
+  required: ["id", "template_id", "position", "title_pattern", "priority", "tags", "depends_on_positions", "metadata", "created_at"],
+  properties: {
+    id: { type: "string" },
+    template_id: { type: "string" },
+    position: { type: "integer", minimum: 0 },
+    title_pattern: { type: "string" },
+    description: { type: "string", nullable: true },
+    priority: { type: "string", enum: ["low", "medium", "high", "critical"] },
+    tags: { type: "array", items: { type: "string" } },
+    task_type: { type: "string", nullable: true },
+    condition: { type: "string", nullable: true },
+    include_template_id: { type: "string", nullable: true },
+    depends_on_positions: { type: "array", items: { type: "integer", minimum: 0 } },
+    metadata: { type: "object", additionalProperties: true },
+    created_at: { type: "string", format: "date-time" },
+  },
+} as const;
+
+const templateSchema = {
+  type: "object",
+  required: ["id", "name", "title_pattern", "priority", "tags", "variables", "version", "metadata", "created_at"],
+  properties: {
+    id: { type: "string" },
+    name: { type: "string" },
+    title_pattern: { type: "string" },
+    description: { type: "string", nullable: true },
+    priority: { type: "string", enum: ["low", "medium", "high", "critical"] },
+    tags: { type: "array", items: { type: "string" } },
+    variables: { type: "array", items: { type: "object", properties: { name: { type: "string" }, required: { type: "boolean" }, default: { type: "string" }, description: { type: "string" } } } },
+    version: { type: "integer", minimum: 1 },
+    project_id: { type: "string", nullable: true },
+    plan_id: { type: "string", nullable: true },
+    metadata: { type: "object", additionalProperties: true },
+    created_at: { type: "string", format: "date-time" },
+    tasks: { type: "array", items: { $ref: "#/components/schemas/TemplateTask" } },
+  },
+} as const;
+
+const templateVariableSchema = {
+  type: "object",
+  required: ["name", "required"],
+  properties: {
+    name: { type: "string" },
+    required: { type: "boolean" },
+    default: { type: "string" },
+    description: { type: "string" },
+  },
+} as const;
+
+const createTemplateTaskInputSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["title_pattern"],
+  properties: {
+    // position and depends_on_positions are emitted by template-export;
+    // depends_on remains the concise authoring form accepted by the API.
+    position: { type: "integer", minimum: 0 },
+    title_pattern: { type: "string", minLength: 1 },
+    description: { type: "string", nullable: true },
+    priority: { type: "string", enum: ["low", "medium", "high", "critical"] },
+    tags: { type: "array", items: { type: "string", minLength: 1 } },
+    task_type: { type: "string", nullable: true },
+    condition: { type: "string", nullable: true },
+    include_template_id: { type: "string", nullable: true },
+    depends_on: { type: "array", items: { type: "integer", minimum: 0 } },
+    depends_on_positions: { type: "array", items: { type: "integer", minimum: 0 } },
+    metadata: { type: "object", additionalProperties: true },
+  },
+} as const;
+
+const projectRegistrationBoundsProperties = {
+  response_byte_limit: { type: "integer", minimum: 1 },
+  time_budget_ms: { type: "integer", minimum: 1 },
+} as const;
+
+const projectRegistrationReceiptSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "receipt_id", "authority", "route", "package_version", "authority_id",
+    "tenant_id", "corpus_id", "operation_id", "step_id", "resource_kind",
+    "direction", "idempotency_key", "request_digest", "precondition_digest",
+    "outcome", "reason", "target_id", "result_revision", "result_digest",
+    "duplicate_of_receipt_id", "accepted_receipt_id", "created_by_operation",
+    "created_at",
+  ],
+  properties: {
+    receipt_id: { type: "string" },
+    authority: { type: "string", enum: ["todos"] },
+    route: { type: "string", enum: ["todos.project-registration.v1"] },
+    package_version: { type: "string" },
+    authority_id: { type: "string" },
+    tenant_id: { type: "string" },
+    corpus_id: { type: "string" },
+    operation_id: { type: "string" },
+    step_id: { type: "string" },
+    resource_kind: { type: "string", enum: ["project", "task_list"] },
+    direction: { type: "string", enum: ["forward", "inverse"] },
+    idempotency_key: { type: "string" },
+    request_digest: { type: "string" },
+    precondition_digest: { type: "string" },
+    outcome: {
+      type: "string",
+      enum: ["accepted", "duplicate_of_accepted", "terminal_nonacceptance"],
+    },
+    reason: { type: "string", nullable: true },
+    target_id: { type: "string", format: "uuid", nullable: true },
+    result_revision: { type: "string", nullable: true },
+    result_digest: { type: "string", nullable: true },
+    duplicate_of_receipt_id: { type: "string", nullable: true },
+    accepted_receipt_id: { type: "string", nullable: true },
+    created_by_operation: { type: "boolean" },
+    created_at: { type: "string", format: "date-time" },
+  },
+} as const;
+
+const projectRegistrationCapabilitySchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "authority", "route", "package_version", "authority_id", "tenant_id",
+    "corpus_id", "supported_resources", "conditional_create",
+    "immutable_receipts", "exact_terminal_lookup", "exact_readback",
+    "bind_existing_adoption", "prior_registration_adoption_validation",
+    "project_resource_enumeration",
+    "project_resource_page_limit", "conditional_inverse",
+    "ambiguous_outcome_reconciliation",
+  ],
+  properties: {
+    authority: { type: "string", enum: ["todos"] },
+    route: { type: "string", enum: ["todos.project-registration.v1"] },
+    package_version: { type: "string" },
+    authority_id: { type: "string" },
+    tenant_id: { type: "string" },
+    corpus_id: { type: "string" },
+    supported_resources: {
+      type: "array",
+      items: { type: "string", enum: ["project", "task_list"] },
+    },
+    conditional_create: { type: "boolean", enum: [true] },
+    immutable_receipts: { type: "boolean", enum: [true] },
+    exact_terminal_lookup: { type: "boolean", enum: [true] },
+    exact_readback: { type: "boolean", enum: [true] },
+    bind_existing_adoption: { type: "boolean", enum: [true] },
+    prior_registration_adoption_validation: { type: "boolean", enum: [true] },
+    project_resource_enumeration: { type: "boolean", enum: [true] },
+    project_resource_page_limit: { type: "integer", minimum: 1 },
+    conditional_inverse: { type: "boolean", enum: [true] },
+    ambiguous_outcome_reconciliation: { type: "boolean", enum: [true] },
+  },
+} as const;
+
+const projectRegistrationRequestSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "operation_id", "step_id", "resource_kind", "direction",
+    "authority_route", "package_version", "authority_id", "tenant_id",
+    "corpus_id", "target_selector", "idempotency_key", "request_digest",
+    "precondition_digest", "project_id", "project_slug", "project_name",
+    "desired", "response_byte_limit", "time_budget_ms",
+  ],
+  properties: {
+    operation_id: { type: "string" },
+    step_id: { type: "string" },
+    resource_kind: { type: "string", enum: ["project", "task_list"] },
+    direction: { type: "string", enum: ["forward", "inverse"] },
+    authority_route: { type: "string" },
+    package_version: { type: "string" },
+    authority_id: { type: "string" },
+    tenant_id: { type: "string" },
+    corpus_id: { type: "string" },
+    target_selector: { type: "string" },
+    idempotency_key: { type: "string" },
+    request_digest: { type: "string" },
+    precondition_digest: { type: "string" },
+    project_id: { type: "string" },
+    project_slug: { type: "string" },
+    project_name: { type: "string" },
+    desired: { type: "object", additionalProperties: true },
+    bind_existing: { type: "boolean" },
+    accepted_receipt: { $ref: "#/components/schemas/ProjectRegistrationReceipt" },
+    ...projectRegistrationBoundsProperties,
+  },
+} as const;
+
+const projectRegistrationLookupRequestSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "operation_id", "step_id", "resource_kind", "direction", "authority",
+    "authority_route", "package_version", "authority_id", "tenant_id",
+    "corpus_id", "target_selector", "idempotency_key", "max_items",
+    "response_byte_limit", "time_budget_ms",
+  ],
+  properties: {
+    operation_id: { type: "string" },
+    step_id: { type: "string" },
+    resource_kind: { type: "string", enum: ["project", "task_list"] },
+    direction: { type: "string", enum: ["forward", "inverse"] },
+    authority: { type: "string", enum: ["todos"] },
+    authority_route: { type: "string" },
+    package_version: { type: "string" },
+    authority_id: { type: "string" },
+    tenant_id: { type: "string" },
+    corpus_id: { type: "string" },
+    target_selector: { type: "string" },
+    idempotency_key: { type: "string" },
+    target_id: { type: "string", format: "uuid" },
+    max_items: { type: "integer", enum: [1] },
+    ...projectRegistrationBoundsProperties,
+  },
+} as const;
+
+const priorRegistrationAdoptionValidationSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "valid", "resource_kind", "target_id", "source_receipt_id",
+    "accepted_receipt_id", "source_outcome", "created_at",
+    "current_revision", "accepted_result_digest",
+  ],
+  properties: {
+    valid: { type: "boolean", enum: [true] },
+    resource_kind: { type: "string", enum: ["project", "task_list"] },
+    target_id: { type: "string", format: "uuid" },
+    source_receipt_id: { type: "string" },
+    accepted_receipt_id: { type: "string" },
+    source_outcome: { type: "string", enum: ["accepted", "duplicate_of_accepted"] },
+    created_at: { type: "string", format: "date-time" },
+    current_revision: { type: "string", format: "date-time" },
+    accepted_result_digest: { type: "string" },
+  },
+} as const;
+
+const projectResourceSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "source_project_id", "kind", "scope", "target_id", "parent_id",
+    "revision", "digest",
+  ],
+  properties: {
+    source_project_id: { type: "string" },
+    kind: { type: "string", enum: ["project", "task_list", "plan", "task"] },
+    scope: { type: "string", enum: ["collection", "resource"] },
+    target_id: { type: "string", format: "uuid" },
+    parent_id: { type: "string", format: "uuid", nullable: true },
+    revision: { type: "string" },
+    digest: { type: "string" },
+  },
+} as const;
+
+const projectResourcePageSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "authority", "route", "package_version", "authority_id", "tenant_id",
+    "corpus_id", "source_project_id", "todos_project_id", "task_list_id",
+    "include_anchors", "collection_revision", "limit", "count", "resources", "has_more",
+    "next_cursor", "complete", "truncated",
+  ],
+  properties: {
+    authority: { type: "string", enum: ["todos"] },
+    route: { type: "string", enum: ["todos.project-registration.v1"] },
+    package_version: { type: "string" },
+    authority_id: { type: "string" },
+    tenant_id: { type: "string" },
+    corpus_id: { type: "string" },
+    source_project_id: { type: "string" },
+    todos_project_id: { type: "string", format: "uuid" },
+    task_list_id: { type: "string", format: "uuid" },
+    include_anchors: { type: "boolean" },
+    collection_revision: { type: "string" },
+    limit: { type: "integer", minimum: 1, maximum: 500 },
+    count: { type: "integer", minimum: 0 },
+    resources: {
+      type: "array",
+      items: { $ref: "#/components/schemas/ProjectResource" },
+    },
+    has_more: { type: "boolean" },
+    next_cursor: { type: "string", nullable: true },
+    complete: { type: "boolean" },
+    truncated: { type: "boolean", enum: [false] },
+  },
+} as const;
+
+export function buildV1OpenApiDocument(version = getPackageVersion()) {
+  return structuredClone({
+    openapi: "3.1.0",
+    info: {
+      title: "Todos V1 API",
+      version,
+      description:
+        "Versioned cloud API for @hasna/todos (A1 pure-remote). Authenticate with an API key via the `x-api-key` header or `Authorization: Bearer <token>`.",
+    },
+    servers: [{ url: "/" }],
+    components: {
+      securitySchemes: {
+        apiKey: { type: "apiKey", in: "header", name: "x-api-key" },
+      },
+      schemas: {
+        Task: taskSchema,
+        Project: projectSchema,
+        TaskManifestBounds: taskManifestBoundsSchema,
+        TaskManifestCapability: taskManifestCapabilitySchema,
+        TaskManifestCapabilityResponse: taskManifestCapabilityResponseSchema,
+        TaskManifest: taskManifestSchema,
+        TaskManifestReceipt: taskManifestReceiptSchema,
+        TaskManifestApplyResult: taskManifestApplyResultSchema,
+        TaskManifestApplyResponse: taskManifestApplyResponseSchema,
+        TaskManifestCompensateRequest: taskManifestCompensateRequestSchema,
+        TaskManifestCompensationResult: taskManifestCompensationResultSchema,
+        TaskManifestCompensateResponse: taskManifestCompensateResponseSchema,
+        TaskManifestReadExactRequest: taskManifestReadExactRequestSchema,
+        TaskManifestBindingLookupRequest: taskManifestBindingLookupRequestSchema,
+        TaskManifestBindingLookupResult: taskManifestBindingLookupResultSchema,
+        TaskManifestBindingLookupResponse: taskManifestBindingLookupResponseSchema,
+        ProjectRegistrationCapability: projectRegistrationCapabilitySchema,
+        ProjectRegistrationReceipt: projectRegistrationReceiptSchema,
+        ProjectRegistrationRequest: projectRegistrationRequestSchema,
+        ProjectRegistrationLookupRequest: projectRegistrationLookupRequestSchema,
+        PriorRegistrationAdoptionValidation: priorRegistrationAdoptionValidationSchema,
+        ProjectResource: projectResourceSchema,
+        ProjectResourcePage: projectResourcePageSchema,
+        TaskList: taskListSchema,
+        ProjectTaskListEnsureReceipt: projectTaskListEnsureReceiptSchema,
+        ProjectTaskListEnsureResult: projectTaskListEnsureResultSchema,
+        ProjectTaskListRollbackResult: projectTaskListRollbackResultSchema,
+        TaskComment: taskCommentSchema,
+        StaleLockHandoffInput: staleLockHandoffInputSchema,
+        StaleLockHandoffReceipt: staleLockHandoffReceiptSchema,
+        TaskGitRef: taskGitRefSchema,
+        Plan: planSchema,
+        PlanProjectLinkReceipt: planProjectLinkReceiptSchema,
+        PlanProjectLinkResult: planProjectLinkResultSchema,
+        PlanProjectLinkRollbackResult: planProjectLinkRollbackResultSchema,
+        Template: templateSchema,
+        TemplateTask: templateTaskSchema,
+        TemplateVariable: templateVariableSchema,
+        CreateTemplateTaskInput: createTemplateTaskInputSchema,
+        CreateTaskInput: {
+          type: "object",
+          required: ["title"],
+          properties: {
+            title: { type: "string" },
+            description: { type: "string", nullable: true },
+            status: { type: "string", enum: [...TASK_STATUSES] },
+            priority: { type: "string", enum: [...TASK_PRIORITIES] },
+            project_id: { type: "string" },
+            parent_id: { type: "string" },
+            plan_id: { type: "string" },
+            assigned_to: { type: "string" },
+            agent_id: { type: "string" },
+            created_by: { type: "string" },
+            tags: { type: "array", items: { type: "string" } },
+          },
+        },
+        UpdateTaskInput: {
+          type: "object",
+          properties: {
+            title: { type: "string" },
+            description: { type: "string" },
+            status: { type: "string", enum: [...TASK_STATUSES] },
+            priority: { type: "string", enum: [...TASK_PRIORITIES] },
+            assigned_to: { type: "string" },
+            project_id: { type: "string", nullable: true },
+            parent_id: { type: "string", nullable: true },
+            plan_id: { type: "string", nullable: true },
+            task_list_id: { type: "string", nullable: true },
+            version: { type: "number" },
+          },
+        },
+        CompleteTaskInput: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            agent_id: { type: "string", minLength: 1 },
+            attachment_ids: { type: "array", items: { type: "string", minLength: 1 } },
+            files_changed: { type: "array", items: { type: "string", minLength: 1 } },
+            test_results: { type: "string" },
+            commit_hash: { type: "string" },
+            notes: { type: "string" },
+            confidence: { type: "number", minimum: 0, maximum: 1 },
+          },
+        },
+        FailTaskInput: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            agent_id: { type: "string", minLength: 1 },
+            reason: { type: "string" },
+            retry: { type: "boolean" },
+          },
+        },
+        TaskFailureResult: {
+          type: "object",
+          additionalProperties: false,
+          required: ["task"],
+          properties: {
+            task: { $ref: "#/components/schemas/Task" },
+            retryTask: { $ref: "#/components/schemas/Task" },
+          },
+        },
+        CreateProjectInput: {
+          type: "object",
+          additionalProperties: false,
+          required: ["name", "path"],
+          properties: {
+            name: { type: "string", minLength: 1, pattern: ".*[A-Za-z0-9].*" },
+            path: { type: "string", minLength: 1 },
+            description: { type: "string" },
+            task_list_id: { type: "string", minLength: 1, pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
+            task_prefix: { type: "string", minLength: 1 },
+          },
+        },
+        UpdateProjectInput: {
+          type: "object",
+          additionalProperties: false,
+          minProperties: 1,
+          properties: {
+            name: { type: "string", minLength: 1 },
+            path: { type: "string", minLength: 1 },
+            description: { type: "string", nullable: true },
+          },
+        },
+        RenameProjectInput: {
+          type: "object",
+          additionalProperties: false,
+          required: ["new_slug"],
+          properties: {
+            new_slug: { type: "string", minLength: 1, pattern: ".*[A-Za-z0-9].*" },
+            name: { type: "string", minLength: 1 },
+          },
+        },
+        ProjectTaskListEnsureApplyInput: {
+          type: "object",
+          additionalProperties: false,
+          required: ["expected_project_revision"],
+          properties: {
+            expected_project_revision: { type: "string", minLength: 1 },
+            idempotency_key: {
+              type: "string",
+              minLength: 8,
+              maxLength: 128,
+              pattern: "^[A-Za-z0-9._:-]+$",
+            },
+          },
+        },
+        ProjectTaskListRollbackInput: {
+          type: "object",
+          additionalProperties: false,
+          required: ["receipt_id", "expected_task_list_revision"],
+          properties: {
+            receipt_id: { type: "string", minLength: 1 },
+            expected_task_list_revision: { type: "string", minLength: 1 },
+          },
+        },
+        PlanProjectLinkApplyInput: {
+          type: "object",
+          additionalProperties: false,
+          required: ["project_id", "expected_plan_revision", "expected_project_revision", "idempotency_key"],
+          properties: {
+            project_id: { type: "string", minLength: 1 },
+            expected_plan_revision: { type: "string", minLength: 1 },
+            expected_project_revision: { type: "string", minLength: 1 },
+            idempotency_key: {
+              type: "string",
+              minLength: 8,
+              maxLength: 128,
+              pattern: "^[A-Za-z0-9._:-]+$",
+            },
+          },
+        },
+        PlanProjectLinkRollbackInput: {
+          type: "object",
+          additionalProperties: false,
+          required: ["project_id", "receipt_id", "expected_plan_revision"],
+          properties: {
+            project_id: { type: "string", minLength: 1 },
+            receipt_id: { type: "string", minLength: 1 },
+            expected_plan_revision: { type: "string", minLength: 1 },
+          },
+        },
+        ErrorResponse: {
+          type: "object",
+          required: ["error"],
+          properties: {
+            error: { type: "string" },
+            code: { type: "string" },
+            conflict: { type: "boolean" },
+          },
+        },
+        CreateTaskListInput: {
+          type: "object",
+          additionalProperties: false,
+          required: ["name"],
+          properties: {
+            name: { type: "string", minLength: 1, pattern: ".*[A-Za-z0-9].*" },
+            slug: { type: "string", minLength: 1, pattern: ".*[A-Za-z0-9].*" },
+            project_id: { type: "string" },
+            description: { type: "string" },
+            metadata: { type: "object", additionalProperties: true },
+          },
+        },
+        UpdateTaskListInput: {
+          type: "object",
+          additionalProperties: false,
+          minProperties: 1,
+          properties: {
+            slug: { type: "string", minLength: 1, pattern: ".*[A-Za-z0-9].*" },
+            name: { type: "string" },
+            description: { type: "string" },
+            metadata: { type: "object", additionalProperties: true },
+          },
+        },
+        CreateTaskCommentInput: {
+          type: "object",
+          required: ["content"],
+          properties: {
+            content: { type: "string", minLength: 1 },
+            agent_id: { type: "string" },
+            session_id: { type: "string" },
+            type: { type: "string", enum: ["comment", "progress", "note"] },
+            progress_pct: { type: "number" },
+          },
+        },
+        CreatePlanInput: {
+          type: "object",
+          additionalProperties: false,
+          required: ["name"],
+          properties: {
+            name: { type: "string", minLength: 1 },
+            slug: { type: "string", minLength: 1, pattern: ".*[A-Za-z0-9].*" },
+            description: { type: "string" },
+            project_id: { type: "string", minLength: 1 },
+            task_list_id: { type: "string", minLength: 1 },
+            agent_id: { type: "string", minLength: 1 },
+            status: { type: "string", enum: ["active", "completed", "archived"] },
+          },
+        },
+        UpdatePlanInput: {
+          type: "object",
+          additionalProperties: false,
+          minProperties: 1,
+          properties: {
+            name: { type: "string", minLength: 1 },
+            slug: { type: "string", minLength: 1, pattern: ".*[A-Za-z0-9].*" },
+            description: { type: "string" },
+            task_list_id: { type: "string", minLength: 1 },
+            agent_id: { type: "string", minLength: 1 },
+            status: { type: "string", enum: ["active", "completed", "archived"] },
+          },
+        },
+        CreateTemplateInput: {
+          type: "object",
+          additionalProperties: false,
+          required: ["name", "title_pattern"],
+          properties: {
+            name: { type: "string", minLength: 1 },
+            title_pattern: { type: "string", minLength: 1 },
+            description: { type: "string", nullable: true },
+            priority: { type: "string", enum: ["low", "medium", "high", "critical"] },
+            tags: { type: "array", items: { type: "string", minLength: 1 } },
+            variables: { type: "array", items: { $ref: "#/components/schemas/TemplateVariable" } },
+            project_id: { type: "string", minLength: 1, nullable: true },
+            plan_id: { type: "string", minLength: 1, nullable: true },
+            metadata: { type: "object", additionalProperties: true },
+            tasks: { type: "array", items: { $ref: "#/components/schemas/CreateTemplateTaskInput" } },
+          },
+        },
+        UpdateTemplateInput: {
+          type: "object",
+          additionalProperties: false,
+          minProperties: 1,
+          properties: {
+            name: { type: "string", minLength: 1 },
+            title_pattern: { type: "string", minLength: 1 },
+            description: { type: "string", nullable: true },
+            priority: { type: "string", enum: ["low", "medium", "high", "critical"] },
+            tags: { type: "array", items: { type: "string", minLength: 1 } },
+            variables: { type: "array", items: { type: "object" } },
+            project_id: { type: "string", nullable: true },
+            plan_id: { type: "string", nullable: true },
+            metadata: { type: "object", additionalProperties: true },
+          },
+        },
+        PrGroupCiProof: {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "provider", "provider_run_id", "status", "repository",
+            "pr_number", "base_sha", "head_sha",
+          ],
+          properties: {
+            provider: { type: "string", minLength: 1 },
+            provider_run_id: { type: "string", minLength: 1 },
+            status: { type: "string", enum: ["success"] },
+            repository: { type: "string", minLength: 3 },
+            pr_number: { type: "integer", minimum: 1 },
+            base_sha: { type: "string", pattern: "^[0-9a-f]{40}$" },
+            head_sha: { type: "string", pattern: "^[0-9a-f]{40}$" },
+          },
+        },
+        PrGroupCleanupProof: {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "worktree_clean", "provider_reachable", "provider_head_sha",
+            "pr_policy_satisfied", "terminal_disposition", "writer_retired",
+            "review_receipt_key", "conditional_merge_receipt_key", "merge_receipt_key",
+          ],
+          properties: {
+            worktree_clean: { type: "boolean", const: true },
+            provider_reachable: { type: "boolean", const: true },
+            provider_head_sha: { type: "string", pattern: "^[0-9a-f]{40}$" },
+            pr_policy_satisfied: { type: "boolean", const: true },
+            terminal_disposition: { type: "string", enum: ["merged", "cancelled", "failed", "no_go"] },
+            writer_retired: { type: "boolean", const: true },
+            review_receipt_key: { type: "string", nullable: true },
+            conditional_merge_receipt_key: { type: "string", nullable: true },
+            merge_receipt_key: { type: "string", nullable: true },
+          },
+        },
+        PrGroupRecord: {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "schema_version", "id", "identity_key", "root_request_id", "repository",
+            "leaf_task_id", "branch", "pr_number", "base_sha", "state",
+            "active_attempt_id", "active_generation", "repair_cycle_count", "repair_cycle_limit",
+            "terminal_attempt_id", "terminal_generation", "terminal_outcome",
+            "terminal_head_sha", "terminal_at", "cleanup_eligible_at", "revision",
+            "created_at", "updated_at",
+          ],
+          properties: {
+            schema_version: { type: "integer", const: 1 },
+            id: { type: "string" },
+            identity_key: { type: "string" },
+            root_request_id: { type: "string" },
+            repository: { type: "string" },
+            leaf_task_id: { type: "string" },
+            branch: { type: "string" },
+            pr_number: { type: "integer", nullable: true },
+            base_sha: { type: "string", nullable: true },
+            state: {
+              type: "string",
+              enum: [
+                "admitted", "started", "in_progress", "handed_off", "review_requested",
+                "reviewed", "repair", "merge_ready", "merge_not_merged", "merged",
+                "cancelled", "failed", "no_go", "cleanup_eligible",
+              ],
+            },
+            active_attempt_id: { type: "string", nullable: true },
+            active_generation: { type: "string", nullable: true },
+            repair_cycle_count: { type: "integer", minimum: 0, maximum: 2 },
+            repair_cycle_limit: { type: "integer", const: 2 },
+            terminal_attempt_id: { type: "string", nullable: true },
+            terminal_generation: { type: "string", nullable: true },
+            terminal_outcome: {
+              type: "string",
+              nullable: true,
+              enum: ["merged", "cancelled", "failed", "no_go", null],
+            },
+            terminal_head_sha: { type: "string", nullable: true },
+            terminal_at: { type: "string", nullable: true },
+            cleanup_eligible_at: { type: "string", nullable: true },
+            revision: { type: "integer", minimum: 1 },
+            created_at: { type: "string" },
+            updated_at: { type: "string" },
+          },
+        },
+        PrGroupAttemptRecord: {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "schema_version", "id", "group_id", "leaf_task_id", "dispatch_attempt",
+            "writer_generation", "previous_attempt_id", "worktree", "branch", "repository",
+            "pr_number", "base_sha", "provider", "provider_run_id", "profile_alias",
+            "status", "admitted_at", "started_at", "last_heartbeat_at", "handed_off_at",
+            "fenced_at", "terminal_at", "created_at", "updated_at",
+          ],
+          properties: {
+            schema_version: { type: "integer", const: 1 },
+            id: { type: "string" },
+            group_id: { type: "string" },
+            leaf_task_id: { type: "string" },
+            dispatch_attempt: { type: "string" },
+            writer_generation: { type: "string" },
+            previous_attempt_id: { type: "string", nullable: true },
+            worktree: { type: "string" },
+            branch: { type: "string" },
+            repository: { type: "string" },
+            pr_number: { type: "integer", nullable: true },
+            base_sha: { type: "string", nullable: true },
+            provider: { type: "string", nullable: true },
+            provider_run_id: { type: "string", nullable: true },
+            profile_alias: { type: "string", nullable: true },
+            status: {
+              type: "string",
+              enum: [
+                "admitted", "started", "in_progress", "handed_off", "reviewing",
+                "repair", "merge_ready", "fenced", "merged", "cancelled", "failed", "no_go",
+              ],
+            },
+            admitted_at: { type: "string" },
+            started_at: { type: "string", nullable: true },
+            last_heartbeat_at: { type: "string", nullable: true },
+            handed_off_at: { type: "string", nullable: true },
+            fenced_at: { type: "string", nullable: true },
+            terminal_at: { type: "string", nullable: true },
+            created_at: { type: "string" },
+            updated_at: { type: "string" },
+          },
+        },
+        PrGroupEventRecord: {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "schema_version", "id", "group_id", "attempt_id", "writer_generation",
+            "sequence", "idempotency_key", "event_type", "state", "message", "head_sha",
+            "receipt_key", "review_receipt_key", "conditional_merge_receipt_key", "outcome",
+            "repository", "pr_number", "base_sha", "actor_id", "actor_run_id",
+            "expected_reviewer_id", "expected_reviewer_run_id", "repair_cycle",
+            "ci_proof", "cleanup_proof", "metadata", "payload_hash", "created_at",
+          ],
+          properties: {
+            schema_version: { type: "integer", const: 1 },
+            id: { type: "string" },
+            group_id: { type: "string" },
+            attempt_id: { type: "string" },
+            writer_generation: { type: "string" },
+            sequence: { type: "integer", minimum: 1 },
+            idempotency_key: { type: "string" },
+            event_type: {
+              type: "string",
+              enum: [
+                "admission", "started", "progress", "heartbeat", "handoff",
+                "review_requested", "review_receipt", "repair_accepted", "repair_rejected",
+                "conditional_merge_receipt", "merge_outcome", "recovery", "cancellation",
+                "failure", "cleanup_eligible", "terminal_outcome",
+              ],
+            },
+            state: {
+              type: "string",
+              enum: [
+                "admitted", "started", "in_progress", "handed_off", "review_requested",
+                "reviewed", "repair", "merge_ready", "merge_not_merged", "merged",
+                "cancelled", "failed", "no_go", "cleanup_eligible",
+              ],
+            },
+            message: { type: "string", nullable: true },
+            head_sha: { type: "string", nullable: true },
+            receipt_key: { type: "string", nullable: true },
+            review_receipt_key: { type: "string", nullable: true },
+            conditional_merge_receipt_key: { type: "string", nullable: true },
+            outcome: {
+              type: "string",
+              nullable: true,
+              enum: [
+                "approved", "changes_requested", "dismissed", "accepted", "rejected",
+                "merged", "not_merged", "cancelled", "failed", "no_go", null,
+              ],
+            },
+            repository: { type: "string" },
+            pr_number: { type: "integer", nullable: true },
+            base_sha: { type: "string", nullable: true },
+            actor_id: { type: "string", nullable: true },
+            actor_run_id: { type: "string", nullable: true },
+            expected_reviewer_id: { type: "string", nullable: true },
+            expected_reviewer_run_id: { type: "string", nullable: true },
+            repair_cycle: { type: "integer", nullable: true },
+            ci_proof: {
+              oneOf: [
+                { $ref: "#/components/schemas/PrGroupCiProof" },
+                { type: "null" },
+              ],
+            },
+            cleanup_proof: {
+              oneOf: [
+                { $ref: "#/components/schemas/PrGroupCleanupProof" },
+                { type: "null" },
+              ],
+            },
+            metadata: { type: "object", additionalProperties: true },
+            payload_hash: { type: "string" },
+            created_at: { type: "string" },
+          },
+        },
+        PrGroupWorkRunAdapter: {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "kind", "id", "group_id", "task_id", "dispatch_attempt", "writer_generation",
+            "previous_run_id", "worktree", "branch", "repository", "pr_number", "base_sha",
+            "provider", "provider_run_id", "profile_alias", "status", "admitted_at", "terminal_at",
+          ],
+          properties: {
+            kind: { type: "string", const: "WorkRun" },
+            id: { type: "string" },
+            group_id: { type: "string" },
+            task_id: { type: "string" },
+            dispatch_attempt: { type: "string" },
+            writer_generation: { type: "string" },
+            previous_run_id: { type: "string", nullable: true },
+            worktree: { type: "string" },
+            branch: { type: "string" },
+            repository: { type: "string" },
+            pr_number: { type: "integer", nullable: true },
+            base_sha: { type: "string", nullable: true },
+            provider: { type: "string", nullable: true },
+            provider_run_id: { type: "string", nullable: true },
+            profile_alias: { type: "string", nullable: true },
+            status: { type: "string" },
+            admitted_at: { type: "string" },
+            terminal_at: { type: "string", nullable: true },
+          },
+        },
+        PrGroupEvidenceRefAdapter: {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "kind", "id", "group_id", "work_run_id", "sequence", "evidence_type",
+            "repository", "pr_number", "base_sha", "head_sha", "receipt_key",
+            "outcome", "actor_id", "actor_run_id", "payload_hash", "created_at",
+          ],
+          properties: {
+            kind: { type: "string", const: "EvidenceRef" },
+            id: { type: "string" },
+            group_id: { type: "string" },
+            work_run_id: { type: "string" },
+            sequence: { type: "integer", minimum: 1 },
+            evidence_type: { type: "string" },
+            repository: { type: "string" },
+            pr_number: { type: "integer", nullable: true },
+            base_sha: { type: "string", nullable: true },
+            head_sha: { type: "string", nullable: true },
+            receipt_key: { type: "string", nullable: true },
+            outcome: {
+              type: "string",
+              nullable: true,
+              enum: [
+                "approved", "changes_requested", "dismissed", "accepted", "rejected",
+                "merged", "not_merged", "cancelled", "failed", "no_go", null,
+              ],
+            },
+            actor_id: { type: "string", nullable: true },
+            actor_run_id: { type: "string", nullable: true },
+            payload_hash: { type: "string" },
+            created_at: { type: "string" },
+          },
+        },
+        PrGroupProofBundleAdapter: {
+          type: "object",
+          additionalProperties: false,
+          required: ["kind", "id", "group_id", "revision", "evidence_ref_ids", "exact_head", "complete"],
+          properties: {
+            kind: { type: "string", const: "ProofBundle" },
+            id: { type: "string" },
+            group_id: { type: "string" },
+            revision: { type: "integer", minimum: 1 },
+            evidence_ref_ids: { type: "array", items: { type: "string" } },
+            exact_head: { type: "string", nullable: true },
+            complete: { type: "boolean" },
+          },
+        },
+        PrGroupDecisionEnvelopeAdapter: {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "kind", "id", "group_id", "state", "active_work_run_id",
+            "active_writer_generation", "repair_cycle_count", "repair_cycle_limit",
+            "terminal_outcome", "terminal_head_sha", "cleanup_eligible", "revision",
+          ],
+          properties: {
+            kind: { type: "string", const: "DecisionEnvelope" },
+            id: { type: "string" },
+            group_id: { type: "string" },
+            state: { type: "string" },
+            active_work_run_id: { type: "string", nullable: true },
+            active_writer_generation: { type: "string", nullable: true },
+            repair_cycle_count: { type: "integer", minimum: 0, maximum: 2 },
+            repair_cycle_limit: { type: "integer", const: 2 },
+            terminal_outcome: {
+              type: "string",
+              nullable: true,
+              enum: ["merged", "cancelled", "failed", "no_go", null],
+            },
+            terminal_head_sha: { type: "string", nullable: true },
+            cleanup_eligible: { type: "boolean" },
+            revision: { type: "integer", minimum: 1 },
+          },
+        },
+        PrGroupStateView: {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "schema_version", "authoritative", "authority", "group", "attempts",
+            "latest_event", "review_receipts", "conditional_merge_receipts",
+            "merge_receipts", "cleanup_receipts", "cleanup_eligible", "adapters", "diagnostics",
+          ],
+          properties: {
+            schema_version: { type: "integer", const: 1 },
+            authoritative: { type: "boolean", const: true },
+            authority: { type: "string", enum: ["local", "remote"] },
+            group: { $ref: "#/components/schemas/PrGroupRecord" },
+            attempts: { type: "array", maxItems: 100, items: { $ref: "#/components/schemas/PrGroupAttemptRecord" } },
+            latest_event: {
+              oneOf: [
+                { $ref: "#/components/schemas/PrGroupEventRecord" },
+                { type: "null" },
+              ],
+            },
+            review_receipts: { type: "array", maxItems: 500, items: { $ref: "#/components/schemas/PrGroupEventRecord" } },
+            conditional_merge_receipts: { type: "array", maxItems: 500, items: { $ref: "#/components/schemas/PrGroupEventRecord" } },
+            merge_receipts: { type: "array", maxItems: 500, items: { $ref: "#/components/schemas/PrGroupEventRecord" } },
+            cleanup_receipts: { type: "array", maxItems: 500, items: { $ref: "#/components/schemas/PrGroupEventRecord" } },
+            cleanup_eligible: { type: "boolean" },
+            adapters: {
+              type: "object",
+              additionalProperties: false,
+              required: ["work_runs", "evidence_refs", "proof_bundle", "decision_envelope"],
+              properties: {
+                work_runs: { type: "array", maxItems: 100, items: { $ref: "#/components/schemas/PrGroupWorkRunAdapter" } },
+                evidence_refs: { type: "array", maxItems: 500, items: { $ref: "#/components/schemas/PrGroupEvidenceRefAdapter" } },
+                proof_bundle: { $ref: "#/components/schemas/PrGroupProofBundleAdapter" },
+                decision_envelope: { $ref: "#/components/schemas/PrGroupDecisionEnvelopeAdapter" },
+              },
+            },
+            diagnostics: {
+              type: "object",
+              additionalProperties: false,
+              required: ["event_count", "attempts_omitted", "receipt_history_complete", "projection_limits"],
+              properties: {
+                event_count: { type: "integer", minimum: 0 },
+                attempts_omitted: { type: "boolean" },
+                receipt_history_complete: { type: "boolean" },
+                projection_limits: {
+                  type: "object",
+                  additionalProperties: false,
+                  required: ["attempts", "receipts"],
+                  properties: {
+                    attempts: { type: "integer", minimum: 1 },
+                    receipts: { type: "integer", minimum: 1 },
+                  },
+                },
+              },
+            },
+          },
+        },
+        PrGroupStateResponse: {
+          type: "object",
+          additionalProperties: false,
+          required: ["view"],
+          properties: { view: { $ref: "#/components/schemas/PrGroupStateView" } },
+        },
+        PrGroupEventPage: {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "schema_version", "authoritative", "authority", "group_id", "events",
+            "count", "has_more", "next_sequence",
+          ],
+          properties: {
+            schema_version: { type: "integer", const: 1 },
+            authoritative: { type: "boolean", const: true },
+            authority: { type: "string", enum: ["local", "remote"] },
+            group_id: { type: "string" },
+            events: { type: "array", maxItems: 500, items: { $ref: "#/components/schemas/PrGroupEventRecord" } },
+            count: { type: "integer", minimum: 0, maximum: 500 },
+            has_more: { type: "boolean" },
+            next_sequence: { type: "integer", nullable: true },
+          },
+        },
+        PrGroupEventHistoryResponse: {
+          type: "object",
+          additionalProperties: false,
+          required: ["history"],
+          properties: { history: { $ref: "#/components/schemas/PrGroupEventPage" } },
+        },
+        AdmitPrGroupInput: {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "root_request_id", "repository", "leaf_task_id", "dispatch_attempt",
+            "writer_generation", "worktree", "branch",
+          ],
+          properties: {
+            root_request_id: { type: "string", minLength: 1 },
+            repository: { type: "string", minLength: 3 },
+            leaf_task_id: { type: "string", minLength: 1 },
+            dispatch_attempt: { type: "string", minLength: 1 },
+            writer_generation: { type: "string", minLength: 1 },
+            worktree: { type: "string", minLength: 1 },
+            branch: { type: "string", minLength: 1 },
+            pr_number: { type: "integer", nullable: true },
+            base_sha: { type: "string", nullable: true },
+            provider: { type: "string", nullable: true },
+            provider_run_id: { type: "string", nullable: true },
+            profile_alias: { type: "string", nullable: true },
+            admitted_at: { type: "string" },
+          },
+        },
+        RecoverPrGroupInput: {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "root_request_id", "repository", "leaf_task_id", "expected_attempt_id",
+            "dispatch_attempt", "expected_generation", "writer_generation",
+            "worktree", "branch", "pr_number", "base_sha", "provider",
+            "provider_run_id", "profile_alias", "idempotency_key",
+          ],
+          properties: {
+            root_request_id: { type: "string" },
+            repository: { type: "string" },
+            leaf_task_id: { type: "string" },
+            expected_attempt_id: { type: "string" },
+            dispatch_attempt: { type: "string" },
+            expected_generation: { type: "string" },
+            writer_generation: { type: "string" },
+            worktree: { type: "string" },
+            branch: { type: "string" },
+            pr_number: { type: "integer", nullable: true },
+            base_sha: { type: "string", nullable: true },
+            provider: { type: "string", nullable: true },
+            provider_run_id: { type: "string", nullable: true },
+            profile_alias: { type: "string", nullable: true },
+            idempotency_key: { type: "string" },
+            message: { type: "string", nullable: true },
+            metadata: { type: "object", additionalProperties: true },
+            recovered_at: { type: "string" },
+          },
+        },
+        AppendPrGroupEventInput: {
+          type: "object",
+          additionalProperties: false,
+          required: ["attempt_id", "writer_generation", "idempotency_key", "event_type"],
+          properties: {
+            attempt_id: { type: "string" },
+            writer_generation: { type: "string" },
+            idempotency_key: { type: "string" },
+            event_type: {
+              type: "string",
+              enum: [
+                "started", "progress", "heartbeat", "handoff", "review_requested",
+                "review_receipt", "repair_accepted", "repair_rejected",
+                "conditional_merge_receipt", "merge_outcome", "cancellation",
+                "failure", "cleanup_eligible", "terminal_outcome",
+              ],
+            },
+            message: { type: "string", nullable: true },
+            head_sha: { type: "string", nullable: true },
+            receipt_key: { type: "string", nullable: true },
+            review_receipt_key: { type: "string", nullable: true },
+            conditional_merge_receipt_key: { type: "string", nullable: true },
+            outcome: {
+              type: "string",
+              nullable: true,
+              enum: [
+                "approved", "changes_requested", "dismissed", "accepted", "rejected",
+                "merged", "not_merged", "cancelled", "failed", "no_go", null,
+              ],
+            },
+            repository: { type: "string" },
+            pr_number: { type: "integer", nullable: true },
+            base_sha: { type: "string", nullable: true },
+            actor_id: { type: "string", nullable: true },
+            actor_run_id: { type: "string", nullable: true },
+            expected_reviewer_id: { type: "string", nullable: true },
+            expected_reviewer_run_id: { type: "string", nullable: true },
+            repair_cycle: { type: "integer", nullable: true },
+            ci_proof: {
+              oneOf: [
+                { $ref: "#/components/schemas/PrGroupCiProof" },
+                { type: "null" },
+              ],
+            },
+            cleanup_proof: {
+              oneOf: [
+                { $ref: "#/components/schemas/PrGroupCleanupProof" },
+                { type: "null" },
+              ],
+            },
+            metadata: { type: "object", additionalProperties: true },
+            created_at: { type: "string" },
+          },
+        },
+        PrGroupMutationResult: {
+          type: "object",
+          additionalProperties: false,
+          required: ["created", "adopted", "appended", "view", "event"],
+          properties: {
+            created: { type: "boolean" },
+            adopted: { type: "boolean" },
+            appended: { type: "boolean" },
+            view: { $ref: "#/components/schemas/PrGroupStateView" },
+            event: { $ref: "#/components/schemas/PrGroupEventRecord" },
+          },
+        },
+      },
+    },
+    security: [{ apiKey: [] }],
+    paths: {
+      "/v1/project-registration/capability": {
+        get: {
+          operationId: "getProjectRegistrationCapability",
+          summary: "Read the live package-owned Projects to Todos registration capability",
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["capability"],
+                    properties: {
+                      capability: {
+                        $ref: "#/components/schemas/ProjectRegistrationCapability",
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      "/v1/project-registration/resources": {
+        get: {
+          operationId: "listProjectRegistrationResources",
+          summary: "List one bounded page of stable Todos identities for an exact Projects workspace id",
+          parameters: [
+            {
+              name: "source_project_id",
+              in: "query",
+              required: true,
+              schema: { type: "string" },
+            },
+            {
+              name: "include_anchors",
+              in: "query",
+              schema: { type: "boolean", default: false },
+            },
+            {
+              name: "limit",
+              in: "query",
+              schema: { type: "integer", minimum: 1, maximum: 500, default: 100 },
+            },
+            {
+              name: "cursor",
+              in: "query",
+              schema: { type: "string" },
+            },
+          ],
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["page"],
+                    properties: {
+                      page: { $ref: "#/components/schemas/ProjectResourcePage" },
+                    },
+                  },
+                },
+              },
+            },
+            "400": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "404": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "409": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
+        },
+      },
+      "/v1/project-registration/create": {
+        post: {
+          operationId: "createProjectRegistrationResource",
+          summary: "Create or deterministically bind one Projects to Todos resource",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/ProjectRegistrationRequest" },
+              },
+            },
+          },
+          responses: {
+            "201": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["receipt"],
+                    properties: {
+                      receipt: { $ref: "#/components/schemas/ProjectRegistrationReceipt" },
+                    },
+                  },
+                },
+              },
+            },
+            "400": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "409": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
+        },
+      },
+      "/v1/project-registration/read-exact": {
+        post: {
+          operationId: "readExactProjectRegistrationResource",
+          summary: "Read one registered project or task list by exact full UUID",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  additionalProperties: false,
+                  required: [
+                    "resource_kind", "target_id", "response_byte_limit",
+                    "time_budget_ms",
+                  ],
+                  properties: {
+                    resource_kind: { type: "string", enum: ["project", "task_list"] },
+                    target_id: { type: "string", format: "uuid" },
+                    ...projectRegistrationBoundsProperties,
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["record"],
+                    properties: {
+                      record: {
+                        type: "object",
+                        additionalProperties: false,
+                        required: ["target_id", "revision", "digest"],
+                        properties: {
+                          target_id: { type: "string", format: "uuid" },
+                          revision: { type: "string" },
+                          digest: { type: "string" },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            "400": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "404": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
+        },
+      },
+      "/v1/project-registration/receipts/lookup": {
+        post: {
+          operationId: "lookupProjectRegistrationReceipt",
+          summary: "Recover one exact immutable terminal registration receipt",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/ProjectRegistrationLookupRequest" },
+              },
+            },
+          },
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["receipt", "response_control"],
+                    properties: {
+                      receipt: { $ref: "#/components/schemas/ProjectRegistrationReceipt" },
+                      response_control: {
+                        type: "object",
+                        additionalProperties: false,
+                        required: [
+                          "response_byte_limit", "time_budget_ms", "response_bytes",
+                          "elapsed_ms", "complete", "truncated",
+                        ],
+                        properties: {
+                          ...projectRegistrationBoundsProperties,
+                          response_bytes: { type: "integer", minimum: 0 },
+                          elapsed_ms: { type: "integer", minimum: 0 },
+                          complete: { type: "boolean", enum: [true] },
+                          truncated: { type: "boolean", enum: [false] },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            "400": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "404": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
+        },
+      },
+      "/v1/project-registration/validate-prior-adoption": {
+        post: {
+          operationId: "validatePriorRegistrationAdoption",
+          summary: "Fail closed unless one prior accepted registration still matches its exact current resource",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  additionalProperties: false,
+                  required: ["source_request", "source_receipt", "current_record"],
+                  properties: {
+                    source_request: { $ref: "#/components/schemas/ProjectRegistrationRequest" },
+                    source_receipt: { $ref: "#/components/schemas/ProjectRegistrationReceipt" },
+                    current_record: {
+                      oneOf: [
+                        { $ref: "#/components/schemas/Project" },
+                        { $ref: "#/components/schemas/TaskList" },
+                      ],
+                    },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["validation"],
+                    properties: {
+                      validation: {
+                        $ref: "#/components/schemas/PriorRegistrationAdoptionValidation",
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            "400": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "404": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "409": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
+        },
+      },
+      "/v1/project-registration/compensate": {
+        post: {
+          operationId: "compensateProjectRegistrationResource",
+          summary: "Conditionally remove an unchanged receipt-owned registration resource",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/ProjectRegistrationRequest" },
+              },
+            },
+          },
+          responses: {
+            "201": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["receipt"],
+                    properties: {
+                      receipt: { $ref: "#/components/schemas/ProjectRegistrationReceipt" },
+                    },
+                  },
+                },
+              },
+            },
+            "400": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "404": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "409": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
+        },
+      },
+      "/v1/project-registration/verify-inverse": {
+        post: {
+          operationId: "verifyInverseProjectRegistrationResource",
+          summary: "Verify exact absence after conditional registration compensation",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/ProjectRegistrationRequest" },
+              },
+            },
+          },
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["verification"],
+                    properties: {
+                      verification: {
+                        type: "object",
+                        additionalProperties: false,
+                        required: ["target_id", "accepted_receipt_id", "absent", "digest"],
+                        properties: {
+                          target_id: { type: "string", format: "uuid" },
+                          accepted_receipt_id: { type: "string" },
+                          absent: { type: "boolean", enum: [true] },
+                          digest: { type: "string" },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            "400": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "404": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "409": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
+        },
+      },
+      "/v1/task-manifest/capability": {
+        get: {
+          operationId: "getTaskManifestCapability",
+          summary: "Read the current task-manifest authority capability and tenant",
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/TaskManifestCapabilityResponse" },
+                },
+              },
+            },
+            "401": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "503": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
+        },
+      },
+      "/v1/task-manifest/apply": {
+        post: {
+          operationId: "applyTaskManifest",
+          summary: "Apply one exact task-manifest graph through the Todos authority",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/TaskManifest" },
+              },
+            },
+          },
+          responses: {
+            "201": {
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/TaskManifestApplyResponse" },
+                },
+              },
+            },
+            "400": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "409": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "503": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
+        },
+      },
+      "/v1/task-manifest/read-exact": {
+        post: {
+          operationId: "readExactTaskManifest",
+          summary: "Read one exact immutable task-manifest apply receipt",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/TaskManifestReadExactRequest" },
+              },
+            },
+          },
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/TaskManifestApplyResponse" },
+                },
+              },
+            },
+            "404": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
+        },
+      },
+      "/v1/task-manifest/compensate": {
+        post: {
+          operationId: "compensateTaskManifest",
+          summary: "Compensate one exact untouched task-manifest graph with CAS protection",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/TaskManifestCompensateRequest" },
+              },
+            },
+          },
+          responses: {
+            "201": {
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/TaskManifestCompensateResponse" },
+                },
+              },
+            },
+            "400": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "404": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "409": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
+        },
+      },
+      "/v1/task-manifest/bindings/lookup": {
+        post: {
+          operationId: "lookupTaskManifestBinding",
+          summary: "Recover one exact task-manifest apply receipt from its managed plan id",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/TaskManifestBindingLookupRequest" },
+              },
+            },
+          },
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/TaskManifestBindingLookupResponse" },
+                },
+              },
+            },
+            "400": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "404": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "409": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
+        },
+      },
+      "/v1/tasks": {
+        get: {
+          operationId: "listTasks",
+          summary: "List tasks",
+          parameters: [
+            // Enumerated so the contract is machine-visible: an out-of-vocabulary
+            // value is a 400, not a 200 with an empty task list. Comma-separated
+            // multi-values are accepted and every element must be a member.
+            {
+              name: "status",
+              in: "query",
+              description: `Task status, or a comma-separated list of statuses. Allowed values: ${TASK_STATUSES.join(", ")}.`,
+              style: "form",
+              explode: false,
+              schema: {
+                oneOf: [
+                  { type: "string", enum: [...TASK_STATUSES] },
+                  {
+                    type: "array",
+                    items: { type: "string", enum: [...TASK_STATUSES] },
+                  },
+                ],
+              },
+            },
+            {
+              name: "priority",
+              in: "query",
+              description: `Task priority, or a comma-separated list of priorities. Allowed values: ${TASK_PRIORITIES.join(", ")}.`,
+              style: "form",
+              explode: false,
+              schema: {
+                oneOf: [
+                  { type: "string", enum: [...TASK_PRIORITIES] },
+                  {
+                    type: "array",
+                    items: { type: "string", enum: [...TASK_PRIORITIES] },
+                  },
+                ],
+              },
+            },
+            { name: "project_id", in: "query", schema: { type: "string" } },
+            { name: "parent_id", in: "query", schema: { type: "string", nullable: true } },
+            { name: "include_subtasks", in: "query", schema: { type: "boolean" } },
+            { name: "plan_id", in: "query", schema: { type: "string" } },
+            { name: "task_list_id", in: "query", schema: { type: "string" } },
+            { name: "assigned_to", in: "query", schema: { type: "string" } },
+            { name: "agent_id", in: "query", schema: { type: "string" } },
+            { name: "tags", in: "query", schema: { type: "string" }, description: "Comma-separated tags; matches tasks carrying any of them" },
+            {
+              name: "updated_after",
+              in: "query",
+              schema: { type: "string", format: "date-time" },
+              description:
+                "Since-cursor. Returns only tasks whose updated_at is strictly after this instant, and `total` respects it too. "
+                + "Intended for pollers: re-read what changed instead of the whole table. Must be a full RFC 3339 date-time with "
+                + "an explicit offset (e.g. 2026-08-07T12:00:00Z or 2026-08-07T12:00:00+03:00); a reduced-precision value such as "
+                + "`2026` or `2026-08`, or any other malformed value, is rejected with 400 rather than ignored. Timestamps stored "
+                + "without an offset are read as UTC on every backend.",
+            },
+            { name: "limit", in: "query", schema: { type: "integer", minimum: 1 } },
+            { name: "offset", in: "query", schema: { type: "integer", minimum: 0 } },
+          ],
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    required: ["tasks", "count", "total"],
+                    properties: {
+                      tasks: { type: "array", items: { $ref: "#/components/schemas/Task" } },
+                      count: { type: "integer", minimum: 0 },
+                      total: { type: "integer", minimum: 0 },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+        post: {
+          operationId: "createTask",
+          summary: "Create a task",
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: { $ref: "#/components/schemas/CreateTaskInput" } } },
+          },
+          responses: {
+            "201": {
+              content: {
+                "application/json": {
+                  schema: { type: "object", properties: { task: { $ref: "#/components/schemas/Task" } } },
+                },
+              },
+            },
+          },
+        },
+      },
+      "/v1/tasks/{id}": {
+        get: {
+          operationId: "getTask",
+          summary: "Get a task by id",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: { type: "object", properties: { task: { $ref: "#/components/schemas/Task" } } },
+                },
+              },
+            },
+          },
+        },
+        patch: {
+          operationId: "updateTask",
+          summary: "Update a task",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: { $ref: "#/components/schemas/UpdateTaskInput" } } },
+          },
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: { type: "object", properties: { task: { $ref: "#/components/schemas/Task" } } },
+                },
+              },
+            },
+          },
+        },
+        delete: {
+          operationId: "deleteTask",
+          summary: "Delete a task",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: { type: "object", properties: { deleted: { type: "boolean" }, id: { type: "string" } } },
+                },
+              },
+            },
+          },
+        },
+      },
+      "/v1/tasks/{id}/comments": {
+        get: {
+          operationId: "listTaskComments",
+          summary: "List a bounded page of task comments",
+          description:
+            "Returns the newest page in oldest-to-newest display order. Use next_cursor to request older pages; count is the page size, not a total. Pagination-aware clients must send limit during the mixed-version rollout.",
+          parameters: [
+            { name: "id", in: "path", required: true, schema: { type: "string" } },
+            { name: "limit", in: "query", required: true, schema: { type: "integer", minimum: 1, maximum: 500, default: 100 } },
+            { name: "cursor", in: "query", schema: { type: "string" } },
+          ],
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    required: ["comments", "count", "has_more", "next_cursor"],
+                    properties: {
+                      comments: { type: "array", maxItems: 500, items: { $ref: "#/components/schemas/TaskComment" } },
+                      count: { type: "integer", minimum: 0, maximum: 500 },
+                      has_more: { type: "boolean" },
+                      next_cursor: { type: "string", nullable: true },
+                    },
+                  },
+                },
+              },
+            },
+            "426": {
+              description:
+                "Upgrade required: a predecessor client omitted limit and the complete legacy history exceeds 500 comments, or the configured storage adapter lacks cursor pagination support.",
+            },
+          },
+        },
+        post: {
+          operationId: "createTaskComment",
+          summary: "Create a task comment",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: { $ref: "#/components/schemas/CreateTaskCommentInput" } } },
+          },
+          responses: {
+            "201": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    required: ["comment"],
+                    properties: { comment: { $ref: "#/components/schemas/TaskComment" } },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      "/v1/tasks/{id}/stale-lock-handoff": {
+        post: {
+          operationId: "handoffStaleTaskLock",
+          summary: "Atomically transfer one exact stale task lock",
+          description:
+            "Compares one full task UUID, current holder, and exact locked_at version, verifies the lock is strictly older than the supplied threshold, then transfers it directly and writes an immutable task-history receipt in the same backend transaction.",
+          parameters: [
+            {
+              name: "id",
+              in: "path",
+              required: true,
+              schema: { type: "string", format: "uuid" },
+              description: "Exact full task UUID. Short ids and prefixes are rejected.",
+            },
+          ],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/StaleLockHandoffInput" },
+              },
+            },
+          },
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["receipt"],
+                    properties: {
+                      receipt: { $ref: "#/components/schemas/StaleLockHandoffReceipt" },
+                    },
+                  },
+                },
+              },
+            },
+            "400": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "403": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "404": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "409": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "501": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
+        },
+      },
+      "/v1/tasks/{id}/refs": {
+        get: {
+          operationId: "listTaskGitRefs",
+          summary: "List git branch and pull-request refs linked to a task",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["refs", "count"],
+                    properties: {
+                      refs: { type: "array", items: { $ref: "#/components/schemas/TaskGitRef" } },
+                      count: { type: "integer", minimum: 0 },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+        post: {
+          operationId: "linkTaskGitRef",
+          summary: "Link a git branch or pull-request ref to a task",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  additionalProperties: false,
+                  required: ["ref_type", "name"],
+                  properties: {
+                    ref_type: { type: "string", enum: ["branch", "pull_request"] },
+                    name: { type: "string", minLength: 1 },
+                    url: { type: "string" },
+                    provider: { type: "string" },
+                    metadata: { type: "object", additionalProperties: true },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            "201": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["ref"],
+                    properties: { ref: { $ref: "#/components/schemas/TaskGitRef" } },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      "/v1/refs/{ref}": {
+        get: {
+          operationId: "findTaskGitRefs",
+          summary: "Find task links by git branch or pull-request ref",
+          parameters: [{ name: "ref", in: "path", required: true, schema: { type: "string" } }],
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["refs", "count"],
+                    properties: {
+                      refs: { type: "array", items: { $ref: "#/components/schemas/TaskGitRef" } },
+                      count: { type: "integer", minimum: 0 },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      "/v1/tasks/{id}/start": {
+        post: {
+          operationId: "startTask",
+          summary: "Start a task",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          responses: { "200": { content: { "application/json": { schema: { type: "object", properties: { task: { $ref: "#/components/schemas/Task" } } } } } } },
+        },
+      },
+      "/v1/tasks/{id}/complete": {
+        post: {
+          operationId: "completeTask",
+          summary: "Complete a task",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          requestBody: {
+            required: false,
+            content: { "application/json": { schema: { $ref: "#/components/schemas/CompleteTaskInput" } } },
+          },
+          responses: { "200": { content: { "application/json": { schema: { type: "object", properties: { task: { $ref: "#/components/schemas/Task" } } } } } } },
+        },
+      },
+      "/v1/tasks/{id}/fail": {
+        post: {
+          operationId: "failTask",
+          summary: "Fail a task with an optional reason and retry copy",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          requestBody: {
+            required: false,
+            content: { "application/json": { schema: { $ref: "#/components/schemas/FailTaskInput" } } },
+          },
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    required: ["result"],
+                    properties: { result: { $ref: "#/components/schemas/TaskFailureResult" } },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      "/v1/projects": {
+        get: {
+          operationId: "listProjects",
+          summary: "List projects",
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      projects: { type: "array", items: { $ref: "#/components/schemas/Project" } },
+                      count: { type: "number" },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+        post: {
+          operationId: "createProject",
+          summary: "Create a project",
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: { $ref: "#/components/schemas/CreateProjectInput" } } },
+          },
+          responses: {
+            "201": { content: { "application/json": { schema: { type: "object", properties: { project: { $ref: "#/components/schemas/Project" } } } } } },
+            "409": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
+        },
+      },
+      "/v1/projects/{id}": {
+        get: {
+          operationId: "getProject",
+          summary: "Get a project by id",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          responses: { "200": { content: { "application/json": { schema: { type: "object", properties: { project: { $ref: "#/components/schemas/Project" } } } } } } },
+        },
+        patch: {
+          operationId: "updateProject",
+          summary: "Update a project",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: { $ref: "#/components/schemas/UpdateProjectInput" } } },
+          },
+          responses: { "200": { content: { "application/json": { schema: { type: "object", properties: { project: { $ref: "#/components/schemas/Project" } } } } } } },
+        },
+        delete: {
+          operationId: "deleteProject",
+          summary: "Delete a project",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          responses: { "200": { content: { "application/json": { schema: { type: "object", properties: { deleted: { type: "boolean" }, id: { type: "string" } } } } } } },
+        },
+      },
+      "/v1/projects/{id}/task-list/ensure": {
+        get: {
+          operationId: "planProjectTaskListEnsure",
+          summary: "Plan a non-mutating repair of a project's declared task list",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          responses: {
+            "200": { content: { "application/json": { schema: { $ref: "#/components/schemas/ProjectTaskListEnsureResult" } } } },
+            "404": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "409": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
+        },
+        post: {
+          operationId: "ensureProjectTaskList",
+          summary: "Idempotently create an existing project's declared task list",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: { $ref: "#/components/schemas/ProjectTaskListEnsureApplyInput" } } },
+          },
+          responses: {
+            "200": { content: { "application/json": { schema: { $ref: "#/components/schemas/ProjectTaskListEnsureResult" } } } },
+            "201": { content: { "application/json": { schema: { $ref: "#/components/schemas/ProjectTaskListEnsureResult" } } } },
+            "400": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "404": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "409": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
+        },
+      },
+      "/v1/projects/{id}/task-list/rollback": {
+        post: {
+          operationId: "rollbackProjectTaskListEnsure",
+          summary: "Conditionally remove an unchanged task list created by an accepted ensure receipt",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: { $ref: "#/components/schemas/ProjectTaskListRollbackInput" } } },
+          },
+          responses: {
+            "200": { content: { "application/json": { schema: { $ref: "#/components/schemas/ProjectTaskListRollbackResult" } } } },
+            "400": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "404": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "409": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
+        },
+      },
+      "/v1/projects/{id}/rename": {
+        post: {
+          operationId: "renameProject",
+          summary: "Atomically rename a project and its canonical task list",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: { $ref: "#/components/schemas/RenameProjectInput" } } },
+          },
+          responses: {
+            "200": { content: { "application/json": { schema: { type: "object", properties: { project: { $ref: "#/components/schemas/Project" }, task_lists_updated: { type: "number" } } } } } },
+            "409": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
+        },
+      },
+      "/v1/plans": {
+        get: {
+          operationId: "listPlans",
+          summary: "List plans",
+          parameters: [{ name: "project_id", in: "query", schema: { type: "string" } }],
+          responses: {
+            "200": { content: { "application/json": { schema: { type: "object", properties: { plans: { type: "array", items: { $ref: "#/components/schemas/Plan" } }, count: { type: "number" } } } } } },
+          },
+        },
+        post: {
+          operationId: "createPlan",
+          summary: "Create a plan",
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: { $ref: "#/components/schemas/CreatePlanInput" } } },
+          },
+          responses: {
+            "201": { content: { "application/json": { schema: { type: "object", properties: { plan: { $ref: "#/components/schemas/Plan" } } } } } },
+            "409": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
+        },
+      },
+      "/v1/plans/{id}": {
+        get: {
+          operationId: "getPlan",
+          summary: "Get a plan by id",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          responses: { "200": { content: { "application/json": { schema: { type: "object", properties: { plan: { $ref: "#/components/schemas/Plan" } } } } } } },
+        },
+        patch: {
+          operationId: "updatePlan",
+          summary: "Update a plan",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: { $ref: "#/components/schemas/UpdatePlanInput" } } },
+          },
+          responses: {
+            "200": { content: { "application/json": { schema: { type: "object", properties: { plan: { $ref: "#/components/schemas/Plan" } } } } } },
+            "409": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
+        },
+        delete: {
+          operationId: "deletePlan",
+          summary: "Delete a plan and detach its tasks",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          responses: { "200": { content: { "application/json": { schema: { type: "object", properties: { deleted: { type: "boolean" }, id: { type: "string" } } } } } } },
+        },
+      },
+      "/v1/plans/{id}/project-link": {
+        get: {
+          operationId: "planPlanProjectLink",
+          summary: "Plan atomic linkage of an existing plan and every current member task to a project",
+          parameters: [
+            { name: "id", in: "path", required: true, schema: { type: "string" } },
+            { name: "project_id", in: "query", required: true, schema: { type: "string" } },
+          ],
+          responses: {
+            "200": { content: { "application/json": { schema: { $ref: "#/components/schemas/PlanProjectLinkResult" } } } },
+            "404": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "409": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
+        },
+        post: {
+          operationId: "applyPlanProjectLink",
+          summary: "Atomically and idempotently link an existing plan and every current member task to a project",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: { $ref: "#/components/schemas/PlanProjectLinkApplyInput" } } },
+          },
+          responses: {
+            "200": { content: { "application/json": { schema: { $ref: "#/components/schemas/PlanProjectLinkResult" } } } },
+            "201": { content: { "application/json": { schema: { $ref: "#/components/schemas/PlanProjectLinkResult" } } } },
+            "400": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "404": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "409": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
+        },
+      },
+      "/v1/plans/{id}/project-link/rollback": {
+        post: {
+          operationId: "rollbackPlanProjectLink",
+          summary: "Conditionally restore every exact prior project link from an accepted receipt",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: { $ref: "#/components/schemas/PlanProjectLinkRollbackInput" } } },
+          },
+          responses: {
+            "200": { content: { "application/json": { schema: { $ref: "#/components/schemas/PlanProjectLinkRollbackResult" } } } },
+            "400": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "404": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "409": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
+        },
+      },
+      "/v1/templates": {
+        get: {
+          operationId: "listTemplates",
+          summary: "List reusable task templates",
+          parameters: [{ name: "project_id", in: "query", schema: { type: "string" } }],
+          responses: { "200": { content: { "application/json": { schema: { type: "object", properties: { templates: { type: "array", items: { $ref: "#/components/schemas/Template" } }, count: { type: "number" } } } } } } },
+        },
+        post: {
+          operationId: "createTemplate",
+          summary: "Create a reusable task template",
+          requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/CreateTemplateInput" } } } },
+          responses: { "201": { content: { "application/json": { schema: { type: "object", properties: { template: { $ref: "#/components/schemas/Template" } } } } } } },
+        },
+      },
+      "/v1/templates/{id}": {
+        get: {
+          operationId: "getTemplate",
+          summary: "Get one reusable task template with its checklist steps",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          responses: { "200": { content: { "application/json": { schema: { type: "object", properties: { template: { $ref: "#/components/schemas/Template" } } } } } } },
+        },
+        patch: {
+          operationId: "updateTemplate",
+          summary: "Update reusable template metadata and defaults",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/UpdateTemplateInput" } } } },
+          responses: { "200": { content: { "application/json": { schema: { type: "object", properties: { template: { $ref: "#/components/schemas/Template" } } } } } } },
+        },
+        delete: {
+          operationId: "deleteTemplate",
+          summary: "Delete a reusable task template and its checklist steps",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          responses: { "200": { content: { "application/json": { schema: { type: "object", properties: { deleted: { type: "boolean" }, id: { type: "string" } } } } } } },
+        },
+      },
+      "/v1/task-lists": {
+        get: {
+          operationId: "listTaskLists",
+          summary: "List task lists",
+          parameters: [{ name: "project_id", in: "query", schema: { type: "string" } }],
+          responses: { "200": { content: { "application/json": { schema: { type: "object", properties: { task_lists: { type: "array", items: { $ref: "#/components/schemas/TaskList" } }, count: { type: "number" } } } } } } },
+        },
+        post: {
+          operationId: "createTaskList",
+          summary: "Create a task list",
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: { $ref: "#/components/schemas/CreateTaskListInput" } } },
+          },
+          responses: {
+            "201": { content: { "application/json": { schema: { type: "object", properties: { task_list: { $ref: "#/components/schemas/TaskList" } } } } } },
+            "409": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
+        },
+      },
+      "/v1/task-lists/{id}": {
+        get: {
+          operationId: "getTaskList",
+          summary: "Get a task list by id",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          responses: {
+            "200": { content: { "application/json": { schema: { type: "object", properties: { task_list: { $ref: "#/components/schemas/TaskList" } } } } } },
+          },
+        },
+        patch: {
+          operationId: "updateTaskList",
+          summary: "Update a task list",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: { $ref: "#/components/schemas/UpdateTaskListInput" } } },
+          },
+          responses: {
+            "200": { content: { "application/json": { schema: { type: "object", properties: { task_list: { $ref: "#/components/schemas/TaskList" } } } } } },
+            "409": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
+        },
+        delete: {
+          operationId: "deleteTaskList",
+          summary: "Delete a task list",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          responses: { "200": { content: { "application/json": { schema: { type: "object", properties: { deleted: { type: "boolean" }, id: { type: "string" } } } } } } },
+        },
+      },
+      "/v1/pr-groups/admit": {
+        post: {
+          operationId: "admitPrGroup",
+          summary: "Create or idempotently adopt a deterministic PR group attempt",
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: { $ref: "#/components/schemas/AdmitPrGroupInput" } } },
+          },
+          responses: {
+            "201": { content: { "application/json": { schema: { $ref: "#/components/schemas/PrGroupMutationResult" } } } },
+            "409": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
+        },
+      },
+      "/v1/pr-groups/{id}": {
+        get: {
+          operationId: "getPrGroupState",
+          summary: "Get the authoritative current state of a PR group",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          responses: {
+            "200": { content: { "application/json": { schema: { $ref: "#/components/schemas/PrGroupStateResponse" } } } },
+            "404": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
+        },
+      },
+      "/v1/pr-groups/{id}/events": {
+        get: {
+          operationId: "getPrGroupEvents",
+          summary: "Get a bounded page of authoritative PR group events",
+          parameters: [
+            { name: "id", in: "path", required: true, schema: { type: "string" } },
+            { name: "after_sequence", in: "query", schema: { type: "integer", minimum: 0 } },
+            { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 500 } },
+          ],
+          responses: {
+            "200": { content: { "application/json": { schema: { $ref: "#/components/schemas/PrGroupEventHistoryResponse" } } } },
+            "404": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
+        },
+        post: {
+          operationId: "appendPrGroupEvent",
+          summary: "Append a fenced lifecycle event or receipt",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: { $ref: "#/components/schemas/AppendPrGroupEventInput" } } },
+          },
+          responses: {
+            "201": { content: { "application/json": { schema: { $ref: "#/components/schemas/PrGroupMutationResult" } } } },
+            "409": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
+        },
+      },
+      "/v1/pr-groups/{id}/recover": {
+        post: {
+          operationId: "recoverPrGroup",
+          summary: "Fence the prior attempt and create or adopt a recovery generation",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: { $ref: "#/components/schemas/RecoverPrGroupInput" } } },
+          },
+          responses: {
+            "201": { content: { "application/json": { schema: { $ref: "#/components/schemas/PrGroupMutationResult" } } } },
+            "409": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
+        },
+      },
+      "/v1/stats": {
+        get: {
+          operationId: "getStats",
+          summary: "Aggregate counts",
+          responses: { "200": { content: { "application/json": { schema: { type: "object", properties: { tasks: { type: "number" }, projects: { type: "number" } } } } } } },
+        },
+      },
+      "/v1/import": {
+        post: {
+          operationId: "importSnapshot",
+          summary: "Bulk-ingest a snapshot or atomically complete one observed plan",
+          description:
+            "Upserts every snapshot record by primary key, or accepts exactly one planCompletions operation that changes only plan status under an expected_updated_at CAS. Snapshot records and planCompletions are mutually exclusive. Requires the todos:write scope.",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    exportedAt: { type: "string" },
+                    source: { type: "string" },
+                    tasks: { type: "array", items: { $ref: "#/components/schemas/Task" } },
+                    projects: { type: "array", items: { $ref: "#/components/schemas/Project" } },
+                    projectMachinePaths: { type: "array", items: { type: "object" } },
+                    plans: { type: "array", items: { type: "object" } },
+                    agents: { type: "array", items: { type: "object" } },
+                    taskLists: { type: "array", items: { type: "object" } },
+                    templates: { type: "array", items: { type: "object" } },
+                    templateTasks: { type: "array", items: { $ref: "#/components/schemas/TemplateTask" } },
+                    auditHistory: { type: "array", items: { type: "object" } },
+                    tombstones: { type: "array", items: { type: "object" } },
+                    planCompletions: {
+                      type: "array",
+                      minItems: 1,
+                      maxItems: 1,
+                      items: {
+                        type: "object",
+                        additionalProperties: false,
+                        required: ["id", "expected_updated_at", "status"],
+                        properties: {
+                          id: { type: "string" },
+                          expected_updated_at: { type: "string", format: "date-time" },
+                          status: { type: "string", enum: ["completed"] },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      received: { type: "number" },
+                      result: {
+                        type: "object",
+                        properties: {
+                          inserted: { type: "number" },
+                          updated: { type: "number" },
+                          deleted: { type: "number" },
+                          skipped: { type: "number" },
+                          errors: { type: "array", items: { type: "string" } },
+                        },
+                      },
+                      planCompletions: {
+                        type: "array",
+                        items: {
+                          type: "object",
+                          required: [
+                            "id",
+                            "status",
+                            "expected_updated_at",
+                            "result_updated_at",
+                            "applied",
+                          ],
+                          properties: {
+                            id: { type: "string" },
+                            status: { type: "string", enum: ["completed"] },
+                            expected_updated_at: { type: "string", format: "date-time" },
+                            result_updated_at: { type: "string", format: "date-time" },
+                            applied: { type: "boolean" },
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  });
+}
