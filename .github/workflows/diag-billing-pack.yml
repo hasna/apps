@@ -1,11 +1,8 @@
 # TEMPORARY DIAGNOSTIC workflow (billing publish-guard flake, task 40ce31ad).
-# REMOVE BEFORE MERGE. The fail-loud guard reports only npm's stderr tail on
-# failure; the inner failing step of billing's prepack is invisible in CI logs.
-# Phase 1 found: direct `bun test` on the runner fails `contracts` PATH
-# resolution (deployment-terms test spawns node_modules/.bin/contracts). The
-# guard chain goes npm -> sh -> bun run verify -> bun run test -> bun test, and
-# `bun run` prepends node_modules/.bin to PATH. Decisive test: run the EXACT
-# guard chain (npm pack 10x) + bun run test 10x + PATH/.bin facts.
+# REMOVE BEFORE MERGE. Phase 3: replicate the guard's EXACT npm-pack invocation
+# (execFileSync, pipe stdio) on the runner in a loop, and dump the FULL
+# captured prepack stdout + npm debug log on failure, so the inner failing
+# step of billing's prepack becomes visible.
 name: diagnose-billing-pack
 
 on:
@@ -24,42 +21,43 @@ jobs:
           bun-version: 1.3.14
       - name: Install
         run: bun install --frozen-lockfile
-      - name: Facts (PATH, .bin links, versions)
+      - name: Replicate guard invocation (25x, full prepack output on failure)
         run: |
           set +e
-          echo "nproc: $(nproc)"
-          echo "bun: $(bun --version) npm: $(npm --version)"
-          echo "PATH=$PATH"
-          echo "billing .bin:"; ls -la apps/billing/node_modules/.bin/ 2>&1
-          echo "billing .bin contracts resolve:"; test -x apps/billing/node_modules/.bin/contracts && echo PRESENT || echo MISSING
-      - name: Guard chain — bun run test (10x)
-        run: |
-          set +e
-          for i in $(seq 1 10); do
-            start=$(date +%s.%N)
-            (cd apps/billing && bun run test > /tmp/brt-$i.log 2>&1)
-            rc=$?
-            end=$(date +%s.%N)
-            dur=$(echo "$end $start" | awk '{printf "%.1f", $1-$2}')
-            echo "bun run test iter $i: rc=$rc dur=${dur}s"
-            if [ $rc -ne 0 ]; then echo "===== FAILURE iter $i ====="; cat /tmp/brt-$i.log; fi
-          done
-          exit 0
-      - name: Guard chain — npm pack (10x, full output on failure)
-        run: |
-          set +e
-          for i in $(seq 1 10); do
-            start=$(date +%s.%N)
-            (cd apps/billing && npm pack --dry-run --json > /tmp/pack-$i.out 2> /tmp/pack-$i.err)
-            rc=$?
-            end=$(date +%s.%N)
-            dur=$(echo "$end $start" | awk '{printf "%.1f", $1-$2}')
-            echo "pack iter $i: rc=$rc dur=${dur}s"
-            if [ $rc -ne 0 ]; then
-              echo "--- stderr ---"; cat /tmp/pack-$i.err
-              echo "--- stdout (prepack) tail ---"; tail -60 /tmp/pack-$i.out
-              LOG=$(ls -t "$HOME/.npm/_logs" 2>/dev/null | head -1)
-              if [ -n "$LOG" ]; then echo "--- npm debug log: $LOG ---"; tail -80 "$HOME/.npm/_logs/$LOG"; fi
-            fi
-          done
+          cat > /tmp/guard-repro.ts <<'EOF'
+import { execFileSync } from "node:child_process";
+const pkgDir = process.argv[2];
+const n = parseInt(process.argv[3] ?? "10", 10);
+let failures = 0;
+for (let i = 1; i <= n; i++) {
+  const start = Date.now();
+  let out: string;
+  try {
+    out = execFileSync("npm", ["pack", "--dry-run", "--json"], {
+      cwd: pkgDir,
+      encoding: "utf8",
+      maxBuffer: 16 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const dur = ((Date.now() - start) / 1000).toFixed(1);
+    const m = out.match(/"entryCount":\s*(\d+)/);
+    console.log(`run ${i}: PASS dur=${dur}s entryCount=${m?.[1] ?? "?"}`);
+  } catch (e: any) {
+    failures++;
+    const dur = ((Date.now() - start) / 1000).toFixed(1);
+    const tail = String(e?.stderr ?? e?.message ?? "").trim().split("\n").slice(-3).join("\n");
+    console.log(`run ${i}: FAIL dur=${dur}s`);
+    console.log("  stderr tail:", tail);
+    const stdoutTail = String(e?.stdout ?? "").trim().split("\n").slice(-40).join("\n");
+    console.log("  stdout tail (prepack):");
+    console.log(stdoutTail);
+  }
+}
+console.log(`\nDONE: ${n - failures}/${n} passed`);
+process.exit(failures ? 1 : 0);
+EOF
+          bun /tmp/guard-repro.ts "$PWD/apps/billing" 25
+          echo "--- npm debug log tail ---"
+          LOG=$(ls -t "$HOME/.npm/_logs" 2>/dev/null | head -1)
+          if [ -n "$LOG" ]; then tail -100 "$HOME/.npm/_logs/$LOG"; fi
           exit 0
