@@ -35,11 +35,11 @@ export interface StuckRunReconciliationResponse { "ok": boolean; "reconciliation
 
 export interface Foundation { "status": string; "version": string; "mode": string; "service"?: string; "detail"?: string }
 
-export interface Loop { "id": string; "name": string; "description"?: string | null; "labels": Array<string>; "status": "active" | "paused" | "stopped" | "expired"; "schedule"?: Record<string, unknown>; "target"?: Record<string, unknown>; "nextRunAt"?: string | null; "createdAt"?: string; "updatedAt"?: string }
+export interface Loop { "id": string; "name": string; "description"?: string | null; "labels": Array<string>; "status": "active" | "paused" | "stopped" | "expired"; "schedule"?: Record<string, unknown>; "target"?: Record<string, unknown>; "nextRunAt"?: string | null; "expiresAfterRuns"?: number | null; "createdAt"?: string; "updatedAt"?: string }
 
-export interface CreateLoopInput { "name": string; "description"?: string; "labels"?: Array<string>; "schedule": Record<string, unknown>; "target": Record<string, unknown> }
+export interface CreateLoopInput { "name": string; "description"?: string; "labels"?: Array<string>; "schedule": Record<string, unknown>; "target": Record<string, unknown>; "expiresAfterRuns"?: number | null }
 
-export interface UpdateLoopInput { "status"?: "active" | "paused" | "stopped" | "expired"; "nextRunAt"?: string | null; "retryScheduledFor"?: string | null; "expiresAt"?: string | null; "maxAttempts"?: number; "labels"?: Array<string> }
+export interface UpdateLoopInput { "status"?: "active" | "paused" | "stopped" | "expired"; "nextRunAt"?: string | null; "retryScheduledFor"?: string | null; "expiresAt"?: string | null; "expiresAfterRuns"?: number | null; "maxAttempts"?: number; "labels"?: Array<string> }
 
 export interface LoopMutationEnvelope { "schema": string; "operationId": string; "stepId": string; "targetId": string; "action": "pause" | "resume" | "stop"; "expectedRevision": string; "approvedPlanDigest": string; "manifestDigest": string; "descriptorRef": string; "descriptorDigest": string; "dryRun"?: boolean }
 

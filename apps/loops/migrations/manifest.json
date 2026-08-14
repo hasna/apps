@@ -65,6 +65,11 @@
       "id": "0013_loop_mutation_contract",
       "file": "0013_loop_mutation_contract.sql",
       "checksum": "sha256:eb35e8d593628f2d7a2449dddf60b28e6ffc42f87ff694441262aa2794e78913"
+    },
+    {
+      "id": "0014_loop_expires_after_runs",
+      "file": "0014_loop_expires_after_runs.sql",
+      "checksum": "sha256:4c60d6c900c2f3146bd20da3bc3665a0a40e1b7e145433d8944d663da57460d7"
     }
   ]
 }

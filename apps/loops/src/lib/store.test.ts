@@ -2471,6 +2471,7 @@ exit 0
         "0013_loop_labels",
         "0014_run_defer_ceiling_and_step_process_fingerprint",
         "0015_loop_mutation_contract",
+        "0016_loop_expires_after_runs",
       ]);
       const version = store["db"].query("PRAGMA user_version").get() as { user_version: number };
       // 0011/0012/0014 are additive and deliberately do NOT bump

@@ -604,6 +604,10 @@ function baseCreateInput(name: string, opts: LoopCreateOptions, target: LoopTarg
     machine: typeof opts.machine === "string" ? resolveLoopMachine(opts.machine) : undefined,
     ...policy,
     expiresAt: typeof opts.expiresAt === "string" ? new Date(opts.expiresAt).toISOString() : undefined,
+    expiresAfterRuns: positiveInteger(
+      typeof opts.expiresAfterRuns === "string" ? opts.expiresAfterRuns : undefined,
+      "--expires-after-runs",
+    ),
   };
 }
 
@@ -620,6 +624,7 @@ function addScheduleOptions(command: Command): Command {
     .option("--retry-delay <duration>", "delay between retries", "1m")
     .option("--lease <duration>", "running lease timeout", "30m")
     .option("--expires-at <time>", "stop scheduling after this time")
+    .option("--expires-after-runs <n>", "expire the loop after this many consecutive successful runs")
     .option("-d, --description <text>", "description");
 }
 

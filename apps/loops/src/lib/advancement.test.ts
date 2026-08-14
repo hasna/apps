@@ -2,8 +2,10 @@ import { describe, expect, test } from "bun:test";
 import type { Loop, LoopRun } from "../types.js";
 import {
   CIRCUIT_BREAKER_REASON_PREFIX,
+  EXPIRY_REASON_PREFIX,
   MAX_RETRY_DELAY_MS,
   consecutiveFailureCountFromRuns,
+  consecutiveSuccessCountFromRuns,
   planLoopAdvancement,
   retryBackoffDelayMs,
 } from "./advancement.js";
@@ -380,5 +382,107 @@ describe("shared loop advancement policy", () => {
       reason: "recurrence",
       patch: { status: "active" },
     });
+  });
+
+  test("counts consecutive successes, resets on a final failure, and keeps retryable/skipped runs neutral", () => {
+    const successes = [
+      runFixture({ id: "s3", status: "succeeded", scheduledFor: "2026-01-01T00:02:00.000Z" }),
+      runFixture({ id: "s2", status: "succeeded", scheduledFor: "2026-01-01T00:01:00.000Z" }),
+      runFixture({ id: "s1", status: "succeeded", scheduledFor: "2026-01-01T00:00:00.000Z" }),
+    ];
+    expect(consecutiveSuccessCountFromRuns(successes, 1)).toBe(3);
+    expect(consecutiveSuccessCountFromRuns(successes, 2)).toBe(3);
+
+    // A final failure (attempt >= maxAttempts) resets the streak when it is
+    // the newest run; an older failure does not retroactively break a streak
+    // that has since resumed.
+    const failure = runFixture({ id: "f1", attempt: 2, scheduledFor: "2026-01-01T00:03:00.000Z" });
+    expect(consecutiveSuccessCountFromRuns([failure, successes[0]!, successes[1]!], 2)).toBe(0);
+    expect(consecutiveSuccessCountFromRuns([successes[0]!, successes[1]!, failure], 2)).toBe(2);
+
+    // A retryable failure (attempt < maxAttempts) is neutral and keeps counting.
+    const retryable = runFixture({ id: "r1", attempt: 1, scheduledFor: "2026-01-01T00:01:00.000Z" });
+    expect(consecutiveSuccessCountFromRuns([successes[0]!, retryable, successes[1]!], 2)).toBe(2);
+
+    // Skipped runs are neutral: they neither count nor reset.
+    const skipped = runFixture({ id: "skip", status: "skipped", scheduledFor: "2026-01-01T00:01:00.000Z" });
+    expect(consecutiveSuccessCountFromRuns([successes[0]!, skipped, successes[1]!], 2)).toBe(2);
+
+    // The expiry marker is a watermark: a manual resume starts a fresh streak.
+    const marker = runFixture({
+      id: "expiry-marker",
+      status: "skipped",
+      scheduledFor: "2026-01-01T00:02:10.000Z",
+      error: `${EXPIRY_REASON_PREFIX}: prior`,
+    });
+    expect(consecutiveSuccessCountFromRuns([marker, ...successes], 2)).toBe(0);
+  });
+
+  test("plans expiry after N consecutive successful runs and keeps recurrence otherwise", () => {
+    const successes = [
+      runFixture({ id: "s3", status: "succeeded", scheduledFor: "2026-01-01T00:02:00.000Z" }),
+      runFixture({ id: "s2", status: "succeeded", scheduledFor: "2026-01-01T00:01:00.000Z" }),
+      runFixture({ id: "s1", status: "succeeded", scheduledFor: "2026-01-01T00:00:00.000Z" }),
+    ];
+    const plan = planLoopAdvancement({
+      current: loopFixture({ expiresAfterRuns: 3, maxAttempts: 1, nextRunAt: "2026-01-01T00:02:00.000Z" }),
+      run: successes[0]!,
+      finishedAt: new Date("2026-01-01T00:02:10.000Z"),
+      succeeded: true,
+      recentRuns: successes,
+    });
+    expect(plan).toMatchObject({
+      kind: "expires_after_runs",
+      successes: 3,
+      markerScheduledFor: "2026-01-01T00:02:10.000Z",
+      patch: { status: "expired", nextRunAt: undefined, retryScheduledFor: undefined },
+    });
+    expect(plan.kind === "expires_after_runs" && plan.reason).toContain(EXPIRY_REASON_PREFIX);
+
+    // Below the ceiling the loop keeps recurring.
+    const below = planLoopAdvancement({
+      current: loopFixture({ expiresAfterRuns: 3, maxAttempts: 1, nextRunAt: "2026-01-01T00:02:00.000Z" }),
+      run: successes[0]!,
+      finishedAt: new Date("2026-01-01T00:02:10.000Z"),
+      succeeded: true,
+      recentRuns: successes.slice(0, 2),
+    });
+    expect(below).toMatchObject({
+      kind: "update",
+      reason: "recurrence",
+      patch: { status: "active", nextRunAt: "2026-01-01T00:03:00.000Z" },
+    });
+
+    // Without expiresAfterRuns, successes never expire the loop.
+    const unset = planLoopAdvancement({
+      current: loopFixture({ maxAttempts: 1, nextRunAt: "2026-01-01T00:02:00.000Z" }),
+      run: successes[0]!,
+      finishedAt: new Date("2026-01-01T00:02:10.000Z"),
+      succeeded: true,
+      recentRuns: successes,
+    });
+    expect(unset).toMatchObject({ kind: "update", reason: "recurrence" });
+
+    // A skipped run is neutral for expiry: the plan stays a recurrence.
+    const skipped = runFixture({ id: "skip", status: "skipped", scheduledFor: "2026-01-01T00:02:00.000Z" });
+    const skippedPlan = planLoopAdvancement({
+      current: loopFixture({ expiresAfterRuns: 1, maxAttempts: 1, nextRunAt: "2026-01-01T00:02:00.000Z" }),
+      run: skipped,
+      finishedAt: new Date("2026-01-01T00:02:10.000Z"),
+      succeeded: false,
+      recentRuns: [skipped],
+    });
+    expect(skippedPlan).toMatchObject({ kind: "update", reason: "recurrence" });
+
+    // A failure on the final run resets the streak instead of expiring.
+    const failed = runFixture({ id: "f3", attempt: 1, scheduledFor: "2026-01-01T00:02:00.000Z" });
+    const failedPlan = planLoopAdvancement({
+      current: loopFixture({ expiresAfterRuns: 3, maxAttempts: 1, nextRunAt: "2026-01-01T00:02:00.000Z" }),
+      run: failed,
+      finishedAt: new Date("2026-01-01T00:02:10.000Z"),
+      succeeded: false,
+      recentRuns: [failed, ...successes],
+    });
+    expect(failedPlan).toMatchObject({ kind: "update", reason: "recurrence" });
   });
 });

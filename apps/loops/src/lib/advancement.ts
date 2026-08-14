@@ -5,6 +5,7 @@ import { computeNextAfter } from "./recurrence.js";
 export const MAX_RETRY_DELAY_MS = 6 * 60 * 60 * 1000;
 export const DEFAULT_CIRCUIT_BREAKER_THRESHOLD = 5;
 export const CIRCUIT_BREAKER_REASON_PREFIX = "circuit breaker open";
+export const EXPIRY_REASON_PREFIX = "expired after consecutive successful runs";
 const THROTTLED_RETRY_MULTIPLIER = 4;
 const MAX_RETRY_EXPONENT = 20;
 
@@ -23,6 +24,13 @@ export type LoopAdvancementPlan =
   | {
       kind: "circuit_breaker";
       failures: number;
+      reason: string;
+      markerScheduledFor: string;
+      patch: LoopAdvancementPatch;
+    }
+  | {
+      kind: "expires_after_runs";
+      successes: number;
       reason: string;
       markerScheduledFor: string;
       patch: LoopAdvancementPatch;
@@ -106,6 +114,46 @@ export function consecutiveFailureCountFromRuns(
     if (run.attempt < maxAttempts) continue;
     if (isTransientSignalExitInteropFailure(run)) continue;
     count += 1;
+  }
+  return count;
+}
+
+/**
+ * Count consecutive successful runs from newest-first run history.
+ *
+ * Mirrors {@link consecutiveFailureCountFromRuns} with inverted polarity:
+ * a final failure (or timeout/abandonment) resets the streak, a success
+ * advances it, and retryable failures (attempt < maxAttempts) plus the
+ * known transient Bun/signal-exit loader mismatch are neutral. Skipped runs
+ * are neutral (they carry no outcome signal). The newest expiry marker is a
+ * watermark so a manual resume starts a fresh streak.
+ *
+ * "Success" is run status `succeeded` (provider exited 0 with output).
+ * Findings are not representable in the run record today, so a no-findings
+ * check loop that exits 0 counts as successful — a deliberate, documented
+ * approximation (a clean check loop expires after N runs).
+ */
+export function consecutiveSuccessCountFromRuns(
+  runs: readonly LoopRun[],
+  maxAttempts = 1,
+): number {
+  let watermark: number | undefined;
+  for (const run of runs) {
+    if (run.status !== "skipped" || !run.error?.startsWith(EXPIRY_REASON_PREFIX)) continue;
+    const at = new Date(run.scheduledFor).getTime();
+    if (watermark === undefined || at > watermark) watermark = at;
+  }
+  let count = 0;
+  for (const run of runs) {
+    if (run.status === "running" || run.status === "skipped") continue;
+    if (watermark !== undefined && new Date(run.scheduledFor).getTime() <= watermark) continue;
+    if (run.status === "succeeded") {
+      count += 1;
+      continue;
+    }
+    if (run.attempt < maxAttempts) continue;
+    if (isTransientSignalExitInteropFailure(run)) continue;
+    break;
   }
   return count;
 }
@@ -219,6 +267,31 @@ export function planLoopAdvancement(input: {
           },
         };
       }
+    }
+  }
+
+  // Expiry after N consecutive successful runs (--expires-after-runs). Mirrors
+  // the circuit breaker: the streak counter resets on any final failure, treats
+  // retryable failures and skipped runs as neutral, and the marker written by
+  // the store transition is a watermark so a manual resume starts a fresh
+  // streak. Independent of the time-based expiresAt.
+  const expiresAfterRuns =
+    typeof current.expiresAfterRuns === "number" ? Math.floor(current.expiresAfterRuns) : 0;
+  if (run.status === "succeeded" && expiresAfterRuns > 0) {
+    const successes = consecutiveSuccessCountFromRuns(input.recentRuns ?? [], current.maxAttempts);
+    if (successes >= expiresAfterRuns) {
+      const reason = `${EXPIRY_REASON_PREFIX}: ${successes} consecutive successful runs; loop expired (resume with 'loops resume ${current.name}' to start a fresh streak)`;
+      return {
+        kind: "expires_after_runs",
+        successes,
+        reason,
+        markerScheduledFor: finishedAt.toISOString(),
+        patch: {
+          status: "expired",
+          nextRunAt: undefined,
+          retryScheduledFor: undefined,
+        },
+      };
     }
   }
 

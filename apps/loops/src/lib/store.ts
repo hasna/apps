@@ -68,7 +68,7 @@ import {
 } from "./run-artifacts.js";
 import { normalizeRunReceipt } from "./run-receipts.js";
 import { normalizeLoopLabels } from "./labels.js";
-import { assertLoopStatus, assertMaxAttempts } from "./loop-status.js";
+import { assertExpiresAfterRuns, assertLoopStatus, assertMaxAttempts } from "./loop-status.js";
 import { normalizeRunCompletion } from "./run-completion.js";
 import { runLocalCommand, todosCliArgs, todosMutationSummary } from "./route/todos-cli.js";
 import {
@@ -178,6 +178,7 @@ export interface LoopRow {
   retry_delay_ms: number;
   lease_ms: number;
   expires_at: string | null;
+  expires_after_runs: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -451,6 +452,7 @@ export function rowToLoop(row: LoopRow): Loop {
     retryDelayMs: row.retry_delay_ms,
     leaseMs: row.lease_ms,
     expiresAt: row.expires_at ?? undefined,
+    expiresAfterRuns: row.expires_after_runs ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -1289,6 +1291,15 @@ export class Store {
         id: "0015_loop_mutation_contract",
         apply: () => this.createLoopMutationSchema(),
       },
+      {
+        id: "0016_loop_expires_after_runs",
+        apply: () => {
+          // Additive run-count expiry ceiling (--expires-after-runs): the loop
+          // expires after N consecutive successful runs. Old binaries ignore
+          // the column and keep running forever — no user_version bump.
+          this.addColumnIfMissing("loops", "expires_after_runs", "INTEGER");
+        },
+      },
     ];
   }
 
@@ -1315,6 +1326,7 @@ export class Store {
         retry_delay_ms INTEGER NOT NULL,
         lease_ms INTEGER NOT NULL,
         expires_at TEXT,
+        expires_after_runs INTEGER,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -1769,15 +1781,16 @@ export class Store {
       retryDelayMs: input.retryDelayMs ?? 60_000,
       leaseMs: input.leaseMs ?? 30 * 60_000,
       expiresAt: input.expiresAt,
+      expiresAfterRuns: input.expiresAfterRuns,
       createdAt: now,
       updatedAt: now,
     };
     this.db
       .query(
         `INSERT INTO loops (id, name, description, labels_json, status, schedule_json, target_json, machine_json, next_run_at, retry_scheduled_for,
-          goal_json, catch_up, catch_up_limit, overlap, max_attempts, retry_delay_ms, lease_ms, expires_at, created_at, updated_at)
+          goal_json, catch_up, catch_up_limit, overlap, max_attempts, retry_delay_ms, lease_ms, expires_at, expires_after_runs, created_at, updated_at)
          VALUES ($id, $name, $description, $labels, $status, $schedule, $target, $machine, $nextRun, NULL, $goal, $catchUp, $catchUpLimit,
-          $overlap, $maxAttempts, $retryDelay, $leaseMs, $expiresAt, $created, $updated)`,
+          $overlap, $maxAttempts, $retryDelay, $leaseMs, $expiresAt, $expiresAfterRuns, $created, $updated)`,
       )
       .run({
         $id: loop.id,
@@ -1797,6 +1810,7 @@ export class Store {
         $retryDelay: loop.retryDelayMs,
         $leaseMs: loop.leaseMs,
         $expiresAt: loop.expiresAt ?? null,
+        $expiresAfterRuns: loop.expiresAfterRuns ?? null,
         $created: loop.createdAt,
         $updated: loop.updatedAt,
       });
@@ -1947,12 +1961,13 @@ export class Store {
 
   updateLoop(
     id: string,
-    patch: Partial<Pick<Loop, "status" | "nextRunAt" | "retryScheduledFor" | "expiresAt" | "labels" | "maxAttempts">>,
+    patch: Partial<Pick<Loop, "status" | "nextRunAt" | "retryScheduledFor" | "expiresAt" | "expiresAfterRuns" | "labels" | "maxAttempts">>,
     opts: DaemonLeaseFence = {},
   ): Loop {
     const updated = (opts.now ?? new Date()).toISOString();
     if ("status" in patch && patch.status !== undefined) assertLoopStatus(patch.status);
     if ("maxAttempts" in patch && patch.maxAttempts !== undefined) assertMaxAttempts(patch.maxAttempts);
+    if ("expiresAfterRuns" in patch && patch.expiresAfterRuns !== undefined) assertExpiresAfterRuns(patch.expiresAfterRuns);
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const current = this.getLoop(id);
@@ -1969,7 +1984,7 @@ export class Store {
       const res = this.db
         .query(
           `UPDATE loops SET status=$status, labels_json=$labels, next_run_at=$nextRun, retry_scheduled_for=$retrySlot,
-           expires_at=$expiresAt, max_attempts=$maxAttempts, updated_at=$updated
+           expires_at=$expiresAt, expires_after_runs=$expiresAfterRuns, max_attempts=$maxAttempts, updated_at=$updated
            WHERE id=$id
              AND ($daemonLeaseId IS NULL OR EXISTS (
                SELECT 1 FROM daemon_lease WHERE id=$daemonLeaseId AND expires_at > $now
@@ -1982,6 +1997,7 @@ export class Store {
           $nextRun: merged.nextRunAt ?? null,
           $retrySlot: merged.retryScheduledFor ?? null,
           $expiresAt: merged.expiresAt ?? null,
+          $expiresAfterRuns: merged.expiresAfterRuns ?? null,
           $maxAttempts: merged.maxAttempts,
           $updated: merged.updatedAt,
           $daemonLeaseId: opts.daemonLeaseId ?? null,
@@ -5602,6 +5618,110 @@ export class Store {
     return { abandoned: recovered, deferred, operationReconciliationRequired };
   }
 
+  /**
+   * Atomically transition a loop to "expired" after N consecutive successful
+   * runs and write the expiry marker run (status "skipped", error = reason).
+   *
+   * Mirrors {@link tripCircuitBreakerIfCurrent}: the expected-state guard makes
+   * a concurrent conflicting mutation a no-op, and the marker is the watermark
+   * that gives a manual resume a fresh success streak. Guarded by the daemon
+   * lease fence like every scheduler transition.
+   */
+  expireLoopIfCurrent(
+    id: string,
+    expected: LoopSchedulingState,
+    patch: Partial<Pick<Loop, "status" | "nextRunAt" | "retryScheduledFor">>,
+    marker: { scheduledFor: string; reason: string },
+    opts: DaemonLeaseFence = {},
+  ): CircuitBreakerTransitionResult | undefined {
+    const updated = (opts.now ?? new Date()).toISOString();
+    const scrubbedReason = scrubbedOrNull(marker.reason) ?? "";
+    if ("status" in patch && patch.status !== undefined) assertLoopStatus(patch.status);
+    this.db.exec("BEGIN IMMEDIATE");
+    let markerScheduledFor = marker.scheduledFor;
+    try {
+      const current = this.getLoop(id);
+      if (
+        !current ||
+        current.archivedAt ||
+        current.status !== expected.status ||
+        current.nextRunAt !== expected.nextRunAt ||
+        current.retryScheduledFor !== expected.retryScheduledFor
+      ) {
+        this.db.exec("COMMIT");
+        return undefined;
+      }
+      const merged: Loop = { ...current, ...patch, updatedAt: updated };
+      const res = this.db
+        .query(
+          `UPDATE loops SET status=$status, next_run_at=$nextRun, retry_scheduled_for=$retrySlot, updated_at=$updated
+           WHERE id=$id
+             AND archived_at IS NULL
+             AND status=$expectedStatus
+             AND next_run_at IS $expectedNextRun
+             AND retry_scheduled_for IS $expectedRetrySlot
+             AND ($daemonLeaseId IS NULL OR EXISTS (
+               SELECT 1 FROM daemon_lease WHERE id=$daemonLeaseId AND expires_at > $now
+             ))`,
+        )
+        .run({
+          $id: id,
+          $status: merged.status,
+          $nextRun: merged.nextRunAt ?? null,
+          $retrySlot: merged.retryScheduledFor ?? null,
+          $updated: updated,
+          $expectedStatus: expected.status,
+          $expectedNextRun: expected.nextRunAt ?? null,
+          $expectedRetrySlot: expected.retryScheduledFor ?? null,
+          $daemonLeaseId: opts.daemonLeaseId ?? null,
+          $now: updated,
+        });
+      if (res.changes !== 1) {
+        this.db.exec("COMMIT");
+        return undefined;
+      }
+      let markerAtMs = new Date(markerScheduledFor).getTime();
+      for (let probe = 0; probe < 1_000 && this.getRunBySlot(id, new Date(markerAtMs).toISOString()); probe += 1) {
+        markerAtMs += 1;
+      }
+      markerScheduledFor = new Date(markerAtMs).toISOString();
+      const markerId = genId();
+      this.db
+        .query(
+          `INSERT INTO loop_runs (id, loop_id, loop_name, scheduled_for, attempt, status, started_at, finished_at,
+            claimed_by, lease_expires_at, pid, exit_code, duration_ms, stdout, stderr, error, created_at, updated_at)
+           VALUES ($id, $loopId, $loopName, $scheduledFor, 1, 'skipped', NULL, $finished, NULL, NULL, NULL, NULL, NULL,
+            NULL, NULL, $error, $created, $updated)`,
+        )
+        .run({
+          $id: markerId,
+          $loopId: current.id,
+          $loopName: current.name,
+          $scheduledFor: markerScheduledFor,
+          $finished: updated,
+          $error: scrubbedReason,
+          $created: updated,
+          $updated: updated,
+        });
+      if (patch.status && patch.status !== "active") {
+        const status: WorkflowWorkItemStatus = patch.status === "paused" ? "deferred" : "cancelled";
+        this.setWorkflowWorkItemsForLoop(id, status, `loop ${patch.status}`, updated);
+      }
+      this.db.exec("COMMIT");
+    } catch (error) {
+      try {
+        this.db.exec("ROLLBACK");
+      } catch {
+        /* transaction may already be closed */
+      }
+      throw error;
+    }
+    const loop = this.getLoop(id);
+    const createdMarker = this.getRunBySlot(id, markerScheduledFor);
+    if (!loop || !createdMarker) throw new Error(`expiry transition missing committed rows: ${id}`);
+    return { loop, marker: createdMarker };
+  }
+
   expireLoops(now: Date = new Date(), opts: DaemonLeaseFence = {}): Loop[] {
     const rows = this.db
       .query<LoopRow, [string]>(
@@ -5758,10 +5878,10 @@ export class Store {
       .query(
         `INSERT INTO loops (id, name, description, labels_json, status, archived_at, archived_from_status, schedule_json, target_json,
           goal_json, machine_json, next_run_at, retry_scheduled_for, catch_up, catch_up_limit, overlap, max_attempts,
-          retry_delay_ms, lease_ms, expires_at, created_at, updated_at)
+          retry_delay_ms, lease_ms, expires_at, expires_after_runs, created_at, updated_at)
          VALUES ($id, $name, $description, $labels, $status, $archivedAt, $archivedFromStatus, $schedule, $target,
           $goal, $machine, $nextRun, $retrySlot, $catchUp, $catchUpLimit, $overlap, $maxAttempts,
-          $retryDelay, $leaseMs, $expiresAt, $created, $updated)
+          $retryDelay, $leaseMs, $expiresAt, $expiresAfterRuns, $created, $updated)
          ON CONFLICT(id) DO UPDATE SET
            name=$name,
            description=$description,
@@ -5782,6 +5902,7 @@ export class Store {
            retry_delay_ms=$retryDelay,
            lease_ms=$leaseMs,
            expires_at=$expiresAt,
+           expires_after_runs=$expiresAfterRuns,
            created_at=$created,
            updated_at=$updated`,
       )
@@ -5806,6 +5927,7 @@ export class Store {
         $retryDelay: loop.retryDelayMs,
         $leaseMs: loop.leaseMs,
         $expiresAt: loop.expiresAt ?? null,
+        $expiresAfterRuns: loop.expiresAfterRuns ?? null,
         $created: loop.createdAt,
         $updated: loop.updatedAt,
       });
