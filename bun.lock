@@ -846,7 +846,7 @@
     },
     "apps/hooks": {
       "name": "@hasna/hooks",
-      "version": "0.5.1",
+      "version": "0.6.1",
       "bin": {
         "hooks": "bin/index.js",
       },
