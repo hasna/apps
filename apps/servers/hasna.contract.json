@@ -1,0 +1,55 @@
+{
+  "schema": "hasna.service_contract.v1",
+  "name": "servers",
+  "class": "cli-with-store",
+  "contractVersion": "v1",
+  "kitVersion": "0.8.5",
+  "description": "Server management for AI coding agents — CLI + MCP server over a local SQLite store.",
+  "bins": ["servers", "servers-mcp"],
+  "hosting": ["user-hosted"],
+  "serviceSurfaces": [
+    {
+      "name": "servers-cli",
+      "kind": "cli",
+      "status": "supported",
+      "bin": "servers",
+      "authMode": "local-only"
+    },
+    {
+      "name": "servers-mcp",
+      "kind": "mcp",
+      "status": "supported",
+      "mcpBin": "servers-mcp",
+      "authMode": "local-only"
+    },
+    {
+      "name": "package-sdk",
+      "kind": "sdk",
+      "status": "supported",
+      "authMode": "none",
+      "exportSubpath": "."
+    }
+  ],
+  "storage": {
+    "mode": "sqlite",
+    "engines": ["sqlite"],
+    "envPrefix": "HASNA_SERVERS_",
+    "aliasEnvPrefix": "SERVERS_",
+    "sqlitePath": "~/.hasna/servers/servers.db"
+  },
+  "metadata": {
+    "release": {
+      "artifactScan": {
+        "script": "artifact-scan"
+      }
+    },
+    "conformance": {
+      "waivedStorageEngines": [
+        {
+          "engine": "postgres",
+          "reason": "@hasna/servers is a CLI-only local coordinator: it manages dev/app server processes on one machine and persists that state in SQLite. See docs/database.md."
+        }
+      ]
+    }
+  }
+}

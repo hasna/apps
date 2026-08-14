@@ -1,0 +1,362 @@
+import {
+  SqliteAdapter as Database,
+  PgAdapter,
+  getStorageMode,
+  getStorageConnectionString,
+  isServerContext,
+} from "../storage.js";
+import { DB_PATH_ENV_KEYS, isApiMode } from "./api-mode.js";
+import { existsSync, mkdirSync, cpSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { MIGRATIONS } from "./migrations.js";
+
+// ============================================================================
+// Path resolution
+// ============================================================================
+
+function isInMemoryDb(path: string): boolean {
+  return path === ":memory:" || path.startsWith("file::memory:");
+}
+
+function findNearestMementosDb(startDir: string): string | null {
+  let dir = resolve(startDir);
+  const home = process.env["HOME"] || process.env["USERPROFILE"] || "~";
+  const legacyHomeDb = resolve(home, ".mementos", "mementos.db");
+  while (true) {
+    const candidate = join(dir, ".mementos", "mementos.db");
+    if (existsSync(candidate) && resolve(candidate) !== legacyHomeDb) return candidate;
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return null;
+}
+
+function findGitRoot(startDir: string): string | null {
+  let dir = resolve(startDir);
+  while (true) {
+    if (existsSync(join(dir, ".git"))) return dir;
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return null;
+}
+
+function migrateGlobalDir(): void {
+  const home = process.env["HOME"] || process.env["USERPROFILE"] || "~";
+  const newDir = join(home, ".hasna", "mementos");
+  const oldDir = join(home, ".mementos");
+
+  if (!existsSync(newDir) && existsSync(oldDir)) {
+    mkdirSync(join(home, ".hasna"), { recursive: true });
+    cpSync(oldDir, newDir, { recursive: true });
+  }
+}
+
+export function getDbPath(): string {
+  // Use the API resolver's canonical key order and nonempty semantics. Routing
+  // treats a blank/whitespace preferred key as absent and may select the alias;
+  // resolving the actual SQLite path differently would silently open another
+  // dataset after API mode had already been disabled by that alias.
+  for (const key of DB_PATH_ENV_KEYS) {
+    const envPath = process.env[key]?.trim();
+    if (envPath) return envPath;
+  }
+
+  const cwd = process.cwd();
+  const nearest = findNearestMementosDb(cwd);
+  if (nearest) return nearest;
+
+  if (process.env["MEMENTOS_DB_SCOPE"] === "project") {
+    const gitRoot = findGitRoot(cwd);
+    if (gitRoot) {
+      return join(gitRoot, ".mementos", "mementos.db");
+    }
+  }
+
+  migrateGlobalDir();
+  const home = process.env["HOME"] || process.env["USERPROFILE"] || "~";
+  return join(home, ".hasna", "mementos", "mementos.db");
+}
+
+function ensureDir(filePath: string): void {
+  if (isInMemoryDb(filePath)) return;
+  const dir = dirname(resolve(filePath));
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true });
+  }
+}
+
+// ============================================================================
+// Database singleton
+// ============================================================================
+
+let _db: Database | null = null;
+let _dbPath: string | null = null;
+let _pg: Database | null = null;
+
+/**
+ * Amendment A1 — PURE REMOTE cloud store.
+ *
+ * When `HASNA_MEMENTOS_STORAGE_MODE=cloud` (aliases `remote`/`hybrid` also map
+ * to `cloud`), ALL runtime paths (CLI, MCP, serve) read AND write directly to
+ * cloud Postgres. No SQLite database is ever opened in cloud mode: no PRAGMAs,
+ * no local migrations, no local schema/DDL. The cloud schema is applied
+ * out-of-band (migration runbook). This is fail-closed: if no connection string
+ * is configured, {@link getStorageConnectionString} throws rather than silently
+ * falling back to SQLite.
+ *
+ * An explicit `dbPath` argument (tests, tooling, import/export against a file)
+ * always uses local SQLite regardless of mode.
+ */
+function getCloudDatabase(): Database {
+  if (_pg) return _pg;
+  // Server-only. A client CLI/MCP/SDK process must never open a direct Postgres
+  // connection — it routes to the self-hosted HTTP API instead (CLAUDE.md §2).
+  if (!isServerContext()) {
+    throw new Error(
+      "Direct Postgres (cloud) storage is server-only. A client must use the " +
+        "self-hosted HTTP API (HASNA_MEMENTOS_API_URL + HASNA_MEMENTOS_API_KEY), " +
+        "never a database DSN. Unset HASNA_MEMENTOS_DATABASE_URL / HASNA_MEMENTOS_STORAGE_MODE " +
+        "on this machine to use local SQLite, or configure the API client to reach the cloud."
+    );
+  }
+  const connectionString = getStorageConnectionString();
+  // Cast: PgAdapter implements the same DbAdapter surface (run/get/all/exec/
+  // prepare/query/transaction/close) that call sites use. Structural `raw`
+  // differs (Pool vs bun:sqlite Database) so we bridge via `unknown`.
+  _pg = new PgAdapter(connectionString) as unknown as Database;
+  return _pg;
+}
+
+export function getDatabase(dbPath?: string): Database {
+  if (!dbPath) {
+    if (_pg) return _pg;
+    // ── Split-brain guard (fail-closed) ─────────────────────────────────────
+    // In API mode the ONLY sanctioned transport is the self-hosted HTTP API
+    // (HASNA_MEMENTOS_API_URL + HASNA_MEMENTOS_API_KEY). No client code path —
+    // domain module, MCP tool, CLI command, or lib helper — may open a local
+    // SQLite file, because a silent local island IS the split-brain this
+    // mission exists to eliminate. Any op that reaches here in API mode without
+    // an explicit dbPath either (a) forgot to route through the API client, or
+    // (b) has no cloud endpoint yet; in both cases we FAIL LOUDLY rather than
+    // silently read/write a divergent local database. An explicit dbPath
+    // (tests/tooling/import-export against a file) is always honored below.
+    if (isApiMode()) {
+      throw new Error(
+        "mementos is in API mode (HASNA_MEMENTOS_API_URL + HASNA_MEMENTOS_API_KEY set) " +
+          "but this operation tried to open a local SQLite database. That would create a " +
+          "split-brain local island instead of using the shared cloud store. This op must " +
+          "route through the API client (src/db/api-mode.ts); if it needs a server endpoint " +
+          "that does not exist yet, add it to src/server and redeploy. To use local storage " +
+          "instead, unset HASNA_MEMENTOS_API_URL / HASNA_MEMENTOS_API_KEY."
+      );
+    }
+    if (getStorageMode() === "cloud") {
+      return getCloudDatabase();
+    }
+    // ── Unpinned-test-open guard (fail-closed) ──────────────────────────────
+    // Todos 57b8b8c5. `if (!db && isApiMode())` gates 30+ domain call sites
+    // (src/db/{memories,agents,entities,...}.ts) onto the API transport when
+    // API mode is on — but with API mode correctly disabled (as the test
+    // preload, src/test-support/preload-local-store.ts, guarantees under
+    // `bun test`), an in-process test that reaches this function without an
+    // explicit `dbPath` and without a DB_PATH env key resolves to whatever
+    // getDbPath() picks by default, which under `bun test` is the real,
+    // shared, on-disk local store — silently, with no error. This is the
+    // in-process mirror of the split-brain guard above: that one stops a
+    // local write from happening in API mode, this one stops a live-store
+    // write from happening in a TEST process that forgot to pin a path.
+    //
+    // Scoped to NODE_ENV === "test" so CLI/MCP/server processes are
+    // unaffected: an operator running the real CLI with no pin is supposed
+    // to get the real store. It only READS the DB_PATH env keys in this
+    // condition and never sets them, so it cannot interact with the
+    // getApiConfig() DB_PATH precedence guard in either direction.
+    //
+    // NAMED RESIDUAL: this is not a complete chokepoint for local opens.
+    // src/lib/storage-sync.ts:616 and :697 construct
+    // `new SqliteAdapter(getDbPath())` directly and bypass getDatabase()
+    // entirely; an unpinned test reaching the local branch of a storage-sync
+    // merge/pull is not covered by this guard.
+    if (process.env["NODE_ENV"] === "test") {
+      const hasExplicitDbPath = DB_PATH_ENV_KEYS.some(
+        (key) => process.env[key]?.trim()
+      );
+      if (!hasExplicitDbPath) {
+        throw new Error(
+          "REFUSING-UNPINNED-TEST-OPEN: a test process tried to open the default local " +
+            `SQLite store (${getDbPath()}) with no explicit dbPath argument and no ` +
+            `${DB_PATH_ENV_KEYS.join("/")} set. Pass an explicit dbPath (e.g. ":memory:" ` +
+            "or a scratch file), or set one of those env keys to a scratch path, before " +
+            "calling getDatabase(). This guard exists because an unpinned test process " +
+            "would otherwise silently read and write the real, shared, on-disk memory " +
+            "store (todos 57b8b8c5)."
+        );
+      }
+    }
+  }
+
+  const path = dbPath || getDbPath();
+
+  if (_db) {
+    if (_dbPath === path) return _db;
+    // Path changed — close old instance and reopen
+    _db.close();
+    _db = null;
+  }
+
+  _dbPath = path;
+  ensureDir(path);
+
+  _db = new Database(path);
+
+  _db.run("PRAGMA journal_mode = WAL");
+  _db.run("PRAGMA busy_timeout = 5000");
+  _db.run("PRAGMA foreign_keys = ON");
+  _db.run("PRAGMA wal_autocheckpoint = 100"); // checkpoint every 100 pages (~400KB)
+
+  runMigrations(_db);
+
+  _db.run(`CREATE TABLE IF NOT EXISTS feedback (
+    id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+    message TEXT NOT NULL,
+    email TEXT,
+    category TEXT DEFAULT 'general',
+    version TEXT,
+    machine_id TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  )`);
+
+  return _db;
+}
+
+function runMigrations(db: Database): void {
+  try {
+    const result = db
+      .query("SELECT MAX(id) as max_id FROM _migrations")
+      .get() as { max_id: number | null } | null;
+    const currentLevel = result?.max_id ?? 0;
+
+    for (let i = currentLevel; i < MIGRATIONS.length; i++) {
+      try {
+        applyMigration(db, i);
+      } catch (e) {
+        console.warn(`[mementos] Migration ${i + 1} failed: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+  } catch {
+    for (let i = 0; i < MIGRATIONS.length; i++) {
+      try {
+        applyMigration(db, i);
+      } catch (e) {
+        console.warn(`[mementos] Migration ${i + 1} failed: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+  }
+}
+
+function applyMigration(db: Database, index: number): void {
+  if (index === 32) {
+    ensureMachinePrimaryColumn(db);
+  }
+  db.exec(MIGRATIONS[index]!);
+}
+
+function ensureMachinePrimaryColumn(db: Database): void {
+  const columns = db
+    .query("PRAGMA table_info(machines)")
+    .all() as Array<{ name: string }>;
+  if (columns.length === 0 || columns.some((column) => column.name === "is_primary")) {
+    return;
+  }
+  db.exec("ALTER TABLE machines ADD COLUMN is_primary INTEGER NOT NULL DEFAULT 0");
+}
+
+// ============================================================================
+// Utilities
+// ============================================================================
+
+export function closeDatabase(): void {
+  if (_db) {
+    _db.close();
+    _db = null;
+  }
+  if (_pg) {
+    _pg.close();
+    _pg = null;
+  }
+}
+
+export function resetDatabase(): void {
+  _db = null;
+  _pg = null;
+}
+
+export function now(): string {
+  return new Date().toISOString();
+}
+
+export function uuid(): string {
+  return crypto.randomUUID();
+}
+
+export function shortUuid(): string {
+  return crypto.randomUUID().slice(0, 8);
+}
+
+const ALLOWED_TABLES = new Set([
+  "memories", "agents", "entities", "projects", "relations",
+  "memory_audit_log", "locks", "sessions", "session_memory_jobs",
+  "synthesis_runs", "synthesis_proposals", "tool_events",
+  "webhook_hooks",
+]);
+
+/**
+ * Escape the SQL `LIKE` metacharacters so a caller-supplied id prefix is matched
+ * LITERALLY rather than as a pattern.
+ *
+ * `\` is replaced FIRST, or the backslashes this function itself introduces
+ * would be escaped a second time and the pattern would match nothing.
+ *
+ * Escaping is the right remedy here rather than rejecting any prefix outside the
+ * UUID charset `[0-9a-f-]`, because the id space is not UUID-only in practice:
+ * `bulkUpsertMemories` writes a caller-supplied `id` verbatim and validates no
+ * charset, so an imported row can legitimately carry `_` or `%` in its id. A
+ * charset rejection would make exactly those rows unaddressable by prefix, which
+ * trades a wrong-row deletion for a silent inability to reach a real row.
+ * Escaping fixes the injection at the root while keeping every id addressable.
+ */
+export function escapeLikePrefix(s: string): string {
+  return s.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
+}
+
+export function resolvePartialId(
+  db: Database,
+  table: string,
+  partialId: string
+): string | null {
+  if (!ALLOWED_TABLES.has(table)) {
+    throw new Error(`Invalid table name: ${table}`);
+  }
+  // An empty prefix must never resolve. `LIKE '%'` matches every row, so on a
+  // single-row table an empty id resolved to that row — which turned
+  // `delete("")` into "delete the only record". Harmless-looking, and the one
+  // input most likely to arrive from an unchecked argv or a trimmed field.
+  if (partialId === "") return null;
+  if (partialId.length >= 36) {
+    const row = db
+      .query(`SELECT id FROM ${table} WHERE id = ?`)
+      .get(partialId) as { id: string } | null;
+    return row?.id ?? null;
+  }
+
+  const rows = db
+    .query(`SELECT id FROM ${table} WHERE id LIKE ? ESCAPE '\\'`)
+    .all(`${escapeLikePrefix(partialId)}%`) as { id: string }[];
+  if (rows.length === 1) {
+    return rows[0]!.id;
+  }
+  return null;
+}
