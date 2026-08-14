@@ -1,0 +1,20 @@
+{
+  "schema": "hasna.service_contract.v1",
+  "name": "holdings",
+  "class": "cli-with-store",
+  "contractVersion": "v1",
+  "kitVersion": "0.4.1",
+  "description": "IP portfolio system-of-record CLI + MCP + serve. Local mode uses SQLite at ~/.hasna/holdings/holdings.db; cloud mode (HASNA_HOLDINGS_STORAGE_MODE=cloud) is PURE REMOTE per Amendment A1 with all reads/writes hitting the shared cloud Postgres.",
+  "bins": [
+    "holdings",
+    "holdings-mcp",
+    "holdings-serve"
+  ],
+  "storage": {
+    "mode": "local",
+    "envPrefix": "HASNA_HOLDINGS_",
+    "aliasEnvPrefix": "HOLDINGS_",
+    "databaseUrlSecretRef": "hasna/oss/holdings/database-url",
+    "sqlitePath": "~/.hasna/holdings/holdings.db"
+  }
+}
