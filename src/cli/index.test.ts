@@ -1686,15 +1686,19 @@ describe("project-first CLI surface", () => {
         workspace_location_count: 1,
       });
 
-      const quarantine = await runWorkspaceCommandInProcess([
+      const quarantineArgs = (
+        operationId: string,
+        expectedRevision: string,
+        extra: string[] = [],
+      ) => [
         "duplicate-quarantine",
         created.project.id,
         "--operation-id",
-        "cli-duplicate-quarantine",
+        operationId,
         "--step-id",
         "retire-duplicate",
         "--expected-revision",
-        preimage.current_revision,
+        expectedRevision,
         "--expected-project-digest",
         preimage.snapshot.project_digest,
         "--expected-resource-link-collection-digest",
@@ -1718,7 +1722,47 @@ describe("project-first CLI surface", () => {
         "--time-budget-ms",
         "5000",
         "--json",
-      ], env);
+        ...extra,
+      ];
+      const staleDryRunArgs = quarantineArgs(
+        "cli-duplicate-quarantine-stale-dry-run",
+        "2026-01-01 00:00:00",
+        ["--dry-run"],
+      );
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const staleDryRun = await runWorkspaceCommandInProcess(staleDryRunArgs, env);
+        expect(staleDryRun.exitCode).toBe(0);
+        expect(JSON.parse(text(staleDryRun.stdout))).toMatchObject({
+          ok: false,
+          dry_run: true,
+          outcome: "terminal_nonacceptance",
+          receipt: null,
+          rollback: null,
+        });
+      }
+      const staleApplied = await runWorkspaceCommandInProcess(
+        quarantineArgs(
+          "cli-duplicate-quarantine-stale-dry-run",
+          "2026-01-01 00:00:00",
+        ),
+        env,
+      );
+      expect(staleApplied.exitCode).toBe(0);
+      expect(JSON.parse(text(staleApplied.stdout))).toMatchObject({
+        ok: false,
+        dry_run: false,
+        outcome: "terminal_nonacceptance",
+        receipt: {
+          operation_id: "cli-duplicate-quarantine-stale-dry-run",
+          reason: "stale_revision",
+        },
+        rollback: null,
+      });
+
+      const quarantine = await runWorkspaceCommandInProcess(
+        quarantineArgs("cli-duplicate-quarantine", preimage.current_revision),
+        env,
+      );
       expect(quarantine.exitCode).toBe(0);
       const quarantined = JSON.parse(text(quarantine.stdout)) as {
         outcome: string;

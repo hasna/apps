@@ -1232,22 +1232,39 @@ describe("projects-serve auth", () => {
       complete: true,
       truncated: false,
     };
-    const result = (input: Record<string, unknown>) => ({
-      ok: true,
-      dry_run: false,
-      outcome: "accepted",
-      idempotency_key: "gpm_http_quarantine",
-      request_digest: "request",
-      precondition_digest: "precondition",
-      project_id: projectId,
-      expected_revision: input.expected_revision ?? input.expected_current_revision,
-      current_revision: project.updated_at,
-      before: snapshot,
-      after: snapshot,
-      receipt: { receipt_id: "gpmr_http_quarantine" },
-      rollback: null,
-      response_control: responseControl,
-    });
+    const result = (input: Record<string, unknown>) => input.dry_run === true
+      ? {
+          ok: false,
+          dry_run: true,
+          outcome: "terminal_nonacceptance",
+          idempotency_key: "gpm_http_quarantine_preview",
+          request_digest: "request-preview",
+          precondition_digest: "precondition-preview",
+          project_id: projectId,
+          expected_revision: input.expected_revision,
+          current_revision: project.updated_at,
+          before: snapshot,
+          after: null,
+          receipt: null,
+          rollback: null,
+          response_control: responseControl,
+        }
+      : {
+          ok: true,
+          dry_run: false,
+          outcome: "accepted",
+          idempotency_key: "gpm_http_quarantine",
+          request_digest: "request",
+          precondition_digest: "precondition",
+          project_id: projectId,
+          expected_revision: input.expected_revision ?? input.expected_current_revision,
+          current_revision: project.updated_at,
+          before: snapshot,
+          after: snapshot,
+          receipt: { receipt_id: "gpmr_http_quarantine" },
+          rollback: null,
+          response_control: responseControl,
+        };
     const store = {
       ...fakeStore(),
       async readDuplicateProjectQuarantinePreimage(input: Record<string, unknown>) {
@@ -1305,6 +1322,29 @@ describe("projects-serve auth", () => {
       response_byte_limit: 100_000,
       time_budget_ms: 5_000,
     };
+    const dryRunBody = {
+      ...forwardBody,
+      operation_id: "http-quarantine-stale-preview",
+      expected_revision: "2026-01-01 00:00:00",
+      dry_run: true,
+    };
+    const dryRun = await h(new Request(
+      `http://x/v1/projects/${projectId}/duplicate-quarantine`,
+      {
+        method: "POST",
+        headers: { ...headers, "content-type": "application/json" },
+        body: JSON.stringify(dryRunBody),
+      },
+    ));
+    expect(dryRun.status).toBe(200);
+    expect(await dryRun.json()).toMatchObject({
+      ok: false,
+      dry_run: true,
+      outcome: "terminal_nonacceptance",
+      receipt: null,
+      rollback: null,
+    });
+
     const forward = await h(new Request(
       `http://x/v1/projects/${projectId}/duplicate-quarantine`,
       {
@@ -1345,6 +1385,7 @@ describe("projects-serve auth", () => {
           time_budget_ms: 5_000,
         },
       },
+      { operation: "forward", input: { ...dryRunBody, project_id: projectId } },
       { operation: "forward", input: { ...forwardBody, project_id: projectId } },
       { operation: "inverse", input: { ...inverseBody, project_id: projectId } },
     ]);
