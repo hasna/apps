@@ -211,7 +211,7 @@ function metadata(value: unknown): AttachmentMetadata | null {
   };
 }
 
-function sameMetadata(left: unknown[], right: unknown[]): boolean {
+export function sameMetadata(left: unknown[], right: unknown[]): boolean {
   if (left.length !== right.length || left.length === 0) return false;
   return left.every((value, index) => {
     const a = metadata(value);
@@ -220,7 +220,7 @@ function sameMetadata(left: unknown[], right: unknown[]): boolean {
   });
 }
 
-function contentState(attachments: unknown[]): "complete" | "missing" | "invalid" {
+export function contentState(attachments: unknown[]): "complete" | "missing" | "invalid" {
   if (attachments.length === 0) return "invalid";
   let missing = false;
   for (let index = 0; index < attachments.length; index++) {
@@ -247,7 +247,9 @@ function missingAttachmentPayloadCount(attachments: unknown[]): number {
   }, 0);
 }
 
-function replacementPayload(existing: unknown[], parsed: unknown[]): unknown[] | null {
+export { missingAttachmentPayloadCount };
+
+export function replacementPayload(existing: unknown[], parsed: unknown[]): unknown[] | null {
   if (!sameMetadata(existing, parsed)) return null;
   const replacement: unknown[] = [];
   for (let index = 0; index < existing.length; index++) {

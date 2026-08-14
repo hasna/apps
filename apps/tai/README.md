@@ -106,4 +106,4 @@ bun test
 
 ## GitHub Status
 
-Canonical public repository: https://github.com/hasna/tai. `@hasna/tai` is published to npm; releases are cut by maintainers.
+Canonical public repository: https://github.com/hasna/apps. `@hasna/tai` is published to npm; releases are cut by maintainers.

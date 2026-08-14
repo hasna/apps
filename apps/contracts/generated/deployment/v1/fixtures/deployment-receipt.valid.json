@@ -1,0 +1,148 @@
+{
+  "approvals": [
+    {
+      "digest": "41a0daa144612fdd8d0862c93f22ad0378951a8b25fe2212052bb6f3505f77cb",
+      "id": "deployment-approval-example-app",
+      "schema": "hasna.deployment_approval_decision.v1"
+    }
+  ],
+  "artifact": {
+    "digest": "4aab79eca4eca7079eb990dbb8c31f94b5ea784fb34d0dd7619f307136ea2fcb",
+    "id": "artifact-example-app",
+    "schema": "hasna.build_artifact.v1"
+  },
+  "attempt": {
+    "digest": "c5b700016c1e1453be1c295e44ba6e92af39cc685942a510d35a9ef691a953a4",
+    "id": "deployment-attempt-example-app",
+    "revision": 1,
+    "schema": "hasna.deployment_attempt.v1"
+  },
+  "attestations": [
+    {
+      "digest": "e8227f0a659ad3224a6f0c6c5d96e2fb41ea18000b14c09c060f33c1da45cd55",
+      "id": "attestation-example-app",
+      "schema": "hasna.artifact_attestation.v1"
+    }
+  ],
+  "createdAt": "2026-08-09T09:20:00.000Z",
+  "desiredStateDigest": "2552b3bff4aa513c329bf2d5c0edd0d68714ed6c3c6adeaa358934f0e779f56c",
+  "digest": "5ac775c2791b494ee5f9753c9433a962747d122b255e3e70c6f90bb3657e51ec",
+  "environment": {
+    "digest": "9760cb4f172b160d2c3257a63e8ad94683a45c985ed62511a1a2c01740636278",
+    "id": "environment-production",
+    "revision": 2,
+    "schema": "hasna.environment_binding.v1"
+  },
+  "evidenceRefs": [
+    {
+      "id": "deployment-receipt-evidence",
+      "kind": "report",
+      "sha256": "43000f198554ad25fae77c3183d3d94c05337ce86583c49496a2c9908753d191",
+      "summary": "Bounded evidence for deployment-receipt-evidence",
+      "uri": "artifact://deployment-fixture/deployment-receipt-evidence"
+    }
+  ],
+  "id": "deployment-receipt-example-app",
+  "infrastructurePlanRef": {
+    "id": "infrastructure-plan",
+    "kind": "artifact",
+    "sha256": "69729e2f9a9f80c6628533f90f5a7d2a2b74e4c679d5f951993d7e43779a4687",
+    "summary": "Bounded evidence for infrastructure-plan",
+    "uri": "artifact://deployment-fixture/infrastructure-plan"
+  },
+  "infrastructureStateLineageRef": {
+    "id": "infrastructure-state-lineage",
+    "kind": "artifact",
+    "tags": [
+      "deployment-fixture"
+    ],
+    "uri": "artifact://deployment-fixture/infrastructure-state-lineage"
+  },
+  "intent": {
+    "digest": "6bc75f992f681a5cf96083897b0bfffdd3bb9304b4ec32891c944ecb3af522b9",
+    "id": "intent-example-app",
+    "schema": "hasna.intent_snapshot.v1"
+  },
+  "observedStateDigest": "2552b3bff4aa513c329bf2d5c0edd0d68714ed6c3c6adeaa358934f0e779f56c",
+  "outcome": "succeeded",
+  "plan": {
+    "digest": "ac1168d43503c1d1505c3271ceb4a92a9803af75ac37739c5e46ea540d036274",
+    "id": "deployment-plan-example-app",
+    "schema": "hasna.deployment_plan.v1"
+  },
+  "producer": {
+    "id": "agent-verifier",
+    "kind": "agent",
+    "name": "Independent Verifier"
+  },
+  "product": {
+    "digest": "53497f71c3fd58dac6c1d32b77c126de3d132ffeac28a4494abc1fae2f6e5556",
+    "id": "product-example-app",
+    "revision": 1,
+    "schema": "hasna.product_projection.v1"
+  },
+  "providerReceipts": [
+    {
+      "digest": "d1bac8566b71d857174f3d12fd955618b60d8e41583a19779e6f769df5e27f2f",
+      "id": "provider-receipt-example-app",
+      "schema": "hasna.provider_receipt.v1"
+    }
+  ],
+  "request": {
+    "digest": "083e9014634a6c88119a5d0e541cc404cf494a171584573851f78c92ba48f0aa",
+    "id": "deployment-request-example-app",
+    "schema": "hasna.deployment_request.v1"
+  },
+  "schema": "hasna.deployment_receipt.v1",
+  "verification": [
+    {
+      "evidenceRefs": [
+        {
+          "id": "health-evidence",
+          "kind": "test_result",
+          "sha256": "2c71b1cac3f7d547901e9770c7d83e53fd42c3a1d19aca13a5a6803c99b538c9",
+          "summary": "Bounded evidence for health-evidence",
+          "uri": "artifact://deployment-fixture/health-evidence"
+        }
+      ],
+      "id": "health",
+      "kind": "health",
+      "status": "passed"
+    },
+    {
+      "evidenceRefs": [
+        {
+          "id": "readiness-evidence",
+          "kind": "test_result",
+          "sha256": "72dcfffdba62e929fbbf8694685a95b63a13fd80fb8e0c76cbad3c99520212b1",
+          "summary": "Bounded evidence for readiness-evidence",
+          "uri": "artifact://deployment-fixture/readiness-evidence"
+        }
+      ],
+      "id": "readiness",
+      "kind": "readiness",
+      "status": "passed"
+    },
+    {
+      "evidenceRefs": [
+        {
+          "id": "version-evidence",
+          "kind": "test_result",
+          "sha256": "b167aee71fede4fff20a9877818c55560eea193018efbd52fd309e04acc70142",
+          "summary": "Bounded evidence for version-evidence",
+          "uri": "artifact://deployment-fixture/version-evidence"
+        }
+      ],
+      "id": "version",
+      "kind": "version",
+      "status": "passed"
+    }
+  ],
+  "verifiers": [
+    {
+      "id": "agent-verifier",
+      "kind": "agent",
+      "name": "Independent Verifier"
+    }
+  ]
+}

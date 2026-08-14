@@ -322,7 +322,7 @@ rc=1
 # on stderr:
 Registry row 'repos' points at a path that is not a usable git checkout (missing-path).
   /home/.../opensourcedev/open-repos/repos does not exist
-  The path is gone. Re-clone it with: git clone https://github.com/hasna/repos <path>
+  The path is gone. Re-clone it with: git clone https://github.com/hasna/apps <path>
 ```
 
 The record is still printed, because diagnosing the row needs the remote and the

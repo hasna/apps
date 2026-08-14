@@ -22,6 +22,11 @@ import {
   setInboundReadFlag, setInboundArchivedFlag, setInboundStarredFlag,
   addInboundLabelSummary, removeInboundLabelSummary,
 } from "../../db/inbound.js";
+import {
+  addPrioritySenderRuleRemote,
+  listPrioritySenderRulesRemote,
+  removePrioritySenderRuleRemote,
+} from "../../db/priority-senders.js";
 import { listDomains } from "../../db/domains.js";
 import { findAddressesByEmail, listAddresses } from "../../db/addresses.js";
 import { getLatestActiveProviderId } from "../../db/providers.js";
@@ -63,6 +68,7 @@ import {
   snippetOf,
   threadItemToMessage,
 } from "../../lib/mail-types.js";
+import { priorityRuleMatchesSender, type PrioritySenderRule } from "../../lib/priority-senders.js";
 
 // Re-export the shared mail vocabulary (DTOs + pure helpers) for existing
 // importers of ../../cli/tui/data.js.
@@ -77,6 +83,7 @@ const SELF_HOSTED_MAIL_SCAN_CAP = 5000;
 const SELF_HOSTED_MAIL_SCAN_TTL_MS = 4000;
 
 let mailScanCache: { at: number; rows: Record<string, unknown>[] } | null = null;
+let priorityRuleCache: { at: number; rules: PrioritySenderRule[] } | null = null;
 
 function messagesStore(): SelfHostedResourceStore {
   return selfHostedStoreFor(MESSAGE_RESOURCE);
@@ -115,6 +122,14 @@ function getMessageRow(id: string): Record<string, unknown> | null {
 
 function invalidateMailScan(): void {
   mailScanCache = null;
+}
+
+function currentPrioritySenderRules(): PrioritySenderRule[] {
+  const cached = priorityRuleCache;
+  if (cached && Date.now() - cached.at < SELF_HOSTED_MAIL_SCAN_TTL_MS) return cached.rules;
+  const rules = listPrioritySenderRulesRemote();
+  priorityRuleCache = { at: Date.now(), rules };
+  return rules;
 }
 
 // ── /v1 message row helpers ────────────────────────────────────────────────
@@ -157,7 +172,7 @@ function v1AttachmentInfos(row: Record<string, unknown>): AttachmentInfo[] {
   });
 }
 
-function v1RowToTuiMessage(row: Record<string, unknown>): TuiMessage {
+function v1RowToTuiMessage(row: Record<string, unknown>, rules: PrioritySenderRule[]): TuiMessage {
   const isRead = cbool(row["is_read"]);
   const outbound = v1IsOutbound(row);
   const labels = v1Labels(row);
@@ -180,6 +195,7 @@ function v1RowToTuiMessage(row: Record<string, unknown>): TuiMessage {
       ? row["attachment_count"]
       : v1AttachmentInfos(row).length,
     sentByMe: outbound || labels.some((l) => l.trim().toLowerCase() === "sent"),
+    is_priority: !outbound && priorityRuleMatchesSender(cstr(row["from_addr"]), rules),
   };
 }
 
@@ -195,13 +211,15 @@ function v1RowToThreadMessage(row: Record<string, unknown>): TuiThreadMessage {
 }
 
 // Which folder(s) a message belongs to (a message can count toward several).
-function v1FolderMatch(row: Record<string, unknown>, folder: Mailbox): boolean {
+function v1FolderMatch(row: Record<string, unknown>, folder: Mailbox, rules: PrioritySenderRule[] = []): boolean {
   const outbound = v1IsOutbound(row);
   const archived = v1HasLabel(row, "archived");
   const spam = v1HasLabel(row, "spam") || cstr(row["status"]).toLowerCase() === "spam";
   const trash = v1HasLabel(row, "trash");
   switch (folder) {
     case "inbox": return !outbound && !archived && !spam && !trash;
+    case "priority": return !outbound && !archived && !spam && !trash
+      && priorityRuleMatchesSender(cstr(row["from_addr"]), rules);
     case "unread": return !outbound && !cbool(row["is_read"]) && !archived && !spam && !trash;
     case "starred": return !outbound && cbool(row["is_starred"]) && !archived && !spam && !trash;
     case "sent": return outbound;
@@ -338,15 +356,16 @@ export function listMailbox(mailbox: Mailbox, opts?: MailboxListOptions): TuiMes
   const offset = nonNegativeInt(opts?.offset, 0);
   const since = normalizeIsoDate(opts?.since);
   const label = opts?.label?.trim().toLowerCase();
+  const rules = currentPrioritySenderRules();
   const rows = scanAllMessages().filter((row) =>
-    v1FolderMatch(row, selectedMailbox)
+    v1FolderMatch(row, selectedMailbox, rules)
     && v1SourceMatch(row, source)
     && v1SinceMatch(row, since)
     && (!label || v1Labels(row).some((l) => l.trim().toLowerCase() === label))
     && v1SearchMatch(row, opts?.search),
   );
   rows.sort((a, b) => opts?.sort === "oldest" ? v1Date(a).localeCompare(v1Date(b)) : v1Date(b).localeCompare(v1Date(a)));
-  return rows.slice(offset, offset + limit).map(v1RowToTuiMessage);
+  return rows.slice(offset, offset + limit).map((row) => v1RowToTuiMessage(row, rules));
 }
 
 interface MailboxStats {
@@ -359,11 +378,12 @@ interface MailboxStats {
 function scanMailboxStats(source?: MailboxSource): MailboxStats {
   const counts = emptyMailboxCounts();
   if (sourceMatchesNothing(source)) return { counts, total: 0, unread: 0, latestReceivedAt: null };
+  const rules = currentPrioritySenderRules();
   let latest: string | null = null;
   for (const row of scanAllMessages()) {
     if (!v1SourceMatch(row, source)) continue;
     for (const folder of MAILBOXES) {
-      if (v1FolderMatch(row, folder)) counts[folder] += 1;
+      if (v1FolderMatch(row, folder, rules)) counts[folder] += 1;
     }
     if (!v1IsOutbound(row)) {
       const d = v1Date(row);
@@ -438,6 +458,8 @@ export async function getMessageBody(msg: TuiMessage): Promise<MessageBody | nul
   const text = cstrOrNull(row["body_text"]);
   const html = cstrOrNull(row["body_html"]);
   const subject = cstr(row["subject"]) || "(no subject)";
+  const isPriority = !v1IsOutbound(row)
+    && priorityRuleMatchesSender(cstr(row["from_addr"]), currentPrioritySenderRules());
   return {
     from: cstr(row["from_addr"]),
     to: cstrArray(row["to_addrs"]).join(", "),
@@ -447,10 +469,33 @@ export async function getMessageBody(msg: TuiMessage): Promise<MessageBody | nul
     text,
     html,
     summary: fallbackMessageSummary(subject, text, html),
-    flags: [isRead ? "read" : "unread", cbool(row["is_starred"]) && "starred", archived && "archived", ...labels].filter(Boolean) as string[],
+    flags: [isRead ? "read" : "unread", cbool(row["is_starred"]) && "starred", archived && "archived", isPriority && "priority", ...labels].filter(Boolean) as string[],
+    is_priority: isPriority,
     attachments: v1AttachmentInfos(row),
   };
 }
+
+export function listPrioritySenderRules(): PrioritySenderRule[] {
+  return listPrioritySenderRulesRemote();
+}
+
+export function addPrioritySenderRule(kind: unknown, value: unknown): PrioritySenderRule {
+  const added = addPrioritySenderRuleRemote(kind, value);
+  priorityRuleCache = null;
+  return added;
+}
+
+export function removePrioritySenderRule(id: string): boolean {
+  const removed = removePrioritySenderRuleRemote(id);
+  priorityRuleCache = null;
+  return removed;
+}
+
+export const prioritySenderRules = {
+  list: listPrioritySenderRules,
+  add: addPrioritySenderRule,
+  remove: removePrioritySenderRule,
+} as const;
 
 /** The conversation for a message, grouped by normalized subject (server model). */
 export function getConversation(msg: TuiMessage): TuiThreadMessage[] {

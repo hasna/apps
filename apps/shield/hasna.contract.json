@@ -1,0 +1,59 @@
+{
+  "schema": "hasna.service_contract.v1",
+  "name": "shield",
+  "class": "cli-with-store",
+  "contractVersion": "v1",
+  "kitVersion": "0.8.5",
+  "description": "AI-powered security scanner for git repos. Ships the shield CLI, an MCP server, and a REST/dashboard server over a package-owned local SQLite store.",
+  "bins": [
+    "shield",
+    "shield-mcp",
+    "shield-serve"
+  ],
+  "hosting": [
+    "user-hosted"
+  ],
+  "storage": {
+    "mode": "sqlite",
+    "envPrefix": "HASNA_SHIELD_",
+    "sqlitePath": "~/.hasna/security/shield.db"
+  },
+  "serviceSurfaces": [
+    {
+      "name": "shield-cli",
+      "kind": "cli",
+      "status": "supported",
+      "bin": "shield",
+      "authMode": "local-only"
+    },
+    {
+      "name": "shield-mcp",
+      "kind": "mcp",
+      "status": "supported",
+      "mcpBin": "shield-mcp",
+      "authMode": "local-only"
+    },
+    {
+      "name": "shield-sdk",
+      "kind": "sdk",
+      "status": "supported",
+      "exportSubpath": "./sdk",
+      "authMode": "local-only"
+    },
+    {
+      "name": "shield-api",
+      "kind": "api",
+      "status": "deferred",
+      "bin": "shield-serve",
+      "authMode": "local-only",
+      "deferReason": "shield-serve exposes /api/* over localhost only and does not yet serve the contract topology (GET /health, GET /ready, GET /version) or publish an OpenAPI document. Declaring it supported would assert endpoints this build does not answer."
+    }
+  ],
+  "metadata": {
+    "release": {
+      "artifactScan": {
+        "script": "artifact-scan"
+      }
+    }
+  }
+}

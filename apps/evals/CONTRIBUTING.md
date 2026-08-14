@@ -6,8 +6,8 @@ Thank you for your interest in contributing! This guide will help you get starte
 
 ```bash
 # Clone the repository
-git clone https://github.com/hasna/open-evals.git
-cd open-evals
+git clone https://github.com/hasna/apps.git
+cd apps/evals
 
 # Install dependencies — the root install covers the CLI, MCP, HTTP server
 # and the dashboard's build tooling (declared in this package's devDependencies)
@@ -89,7 +89,7 @@ bun test --watch                        # Watch mode
 
 ## Reporting Issues
 
-Use [GitHub Issues](https://github.com/hasna/open-evals/issues) to report bugs or request features. Please include:
+Use [GitHub Issues](https://github.com/hasna/apps/issues) to report bugs or request features. Please include:
 
 - Steps to reproduce
 - Expected vs actual behavior

@@ -1,0 +1,26 @@
+{
+  "schema": "hasna.release-review-trust/v1",
+  "generation": 2,
+  "repository": "hasna/accounts",
+  "reviewer": {
+    "type": "coding-agent",
+    "agent": "Fable Accounts Release Reviewer 2026-08-10",
+    "id": "4e38a26f-cb70-4418-8bd8-84ef440fa334"
+  },
+  "publicKey": {
+    "algorithm": "ed25519",
+    "encoding": "base64-spki-der",
+    "value": "MCowBQYDK2VwAyEAbNaUg0vPVuiwIkRYKndTxIgIVL2BphVGFRKriDpq2G4=",
+    "sha256": "a2b07141ddfe888f05b21d1693a8dca5eb70a2bfda9bdec4fdcb1fb42426f104"
+  },
+  "signer": {
+    "secretRef": "hasna/accounts/npm-release/reviewer-ed25519-private-key-g2-20260810"
+  },
+  "rotation": {
+    "payload": "eyJzY2hlbWEiOiJoYXNuYS5yZWxlYXNlLXJldmlldy10cnVzdC1yb3RhdGlvbi92MSIsInByZXZpb3VzUmVsZWFzZSI6eyJwYWNrYWdlIjoiQGhhc25hL2FjY291bnRzIiwidmVyc2lvbiI6IjAuMi40MiIsInJlZ2lzdHJ5IjoiaHR0cHM6Ly9yZWdpc3RyeS5ucG1qcy5vcmciLCJ0cnVzdFNoYTI1NiI6IjEzMmE5OTlhOTRkYjJkZTY2YzE0MjkzYzQ1NjM4ZmI5YThhOGQzNTJiNzIwNjdlZWY4Yjc2ZmMwNjRiMzBiNDYifSwibmV4dFRydXN0Ijp7InNjaGVtYSI6Imhhc25hLnJlbGVhc2UtcmV2aWV3LXRydXN0L3YxIiwiZ2VuZXJhdGlvbiI6MiwicmVwb3NpdG9yeSI6Imhhc25hL2FjY291bnRzIiwicmV2aWV3ZXIiOnsidHlwZSI6ImNvZGluZy1hZ2VudCIsImFnZW50IjoiRmFibGUgQWNjb3VudHMgUmVsZWFzZSBSZXZpZXdlciAyMDI2LTA4LTEwIiwiaWQiOiI0ZTM4YTI2Zi1jYjcwLTQ0MTgtOGJkOC04NGVmNDQwZmEzMzQifSwicHVibGljS2V5Ijp7ImFsZ29yaXRobSI6ImVkMjU1MTkiLCJlbmNvZGluZyI6ImJhc2U2NC1zcGtpLWRlciIsInZhbHVlIjoiTUNvd0JRWURLMlZ3QXlFQWJOYVVnMHZQVnVpd0lrUllLbmRUeElnSVZMMkJwaFZHRlJLcmlEcHEyRzQ9Iiwic2hhMjU2IjoiYTJiMDcxNDFkZGZlODg4ZjA1YjIxZDE2OTNhOGRjYTVlYjcwYTJiZmRhOWJkZWM0ZmRjYjFmYjQyNDI2ZjEwNCJ9LCJzaWduZXIiOnsic2VjcmV0UmVmIjoiaGFzbmEvYWNjb3VudHMvbnBtLXJlbGVhc2UvcmV2aWV3ZXItZWQyNTUxOS1wcml2YXRlLWtleS1nMi0yMDI2MDgxMCJ9fX0=",
+    "signature": {
+      "algorithm": "ed25519",
+      "value": "CLOXfL8/OXon2Yp53uu8aOvt8g72BAo0eWsbdp1N15GYhsJ3HndEqxgpHo91n0rqmgPyvpYXrh8yWWIDwI2hDQ=="
+    }
+  }
+}
