@@ -11,6 +11,12 @@
  * kitVersion advanced to 0.10.6 by #111 (record added, task 8417a133),
  * and todos (#105) gained a pre-backend-schema-era manifest validated at
  * pinned 0.5.2 (conformance + kitVersion records added, task 0ad82b16).
+ * The telephony conformance record was REMOVED 2026-08-14 after CI
+ * (clean environment, no HASNA_TELEPHONY_STORAGE_MODE) reported it as a
+ * recorded exception that now passes: the mode_enum_compliance violation
+ * fires only where the removed runtime-placement env var is still set
+ * (station01 deployment state; remediation task 26ad6a16 stays open for
+ * the deployment-side cleanup).
  * The exception registry is DATA, not prose: every entry
  * is keyed to a measured violation class and carries the reason and the
  * tracked remediation task. When a violation is fixed, DELETE its exception
@@ -376,11 +382,6 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
     member: "tables",
     cause: "kitVersion 0.1.0 predates repo-conformance; no @hasna/contracts dep pinned; validated at latest, manifest is pre-backend-schema era.",
     task: "todos daaa2841 (contracts task — tables)",
-  },
-  {
-    member: "telephony",
-    cause: "mode_enum_compliance: HASNA_TELEPHONY_STORAGE_MODE='cloud' — the runtime-placement axis was removed; must be sqlite/postgres.",
-    task: "todos 26ad6a16 (contracts task — telephony)",
   },
   {
     member: "shield",

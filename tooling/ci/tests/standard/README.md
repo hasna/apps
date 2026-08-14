@@ -28,12 +28,12 @@ Filed 2026-08-14 in todos project `5e44770b-694c-46a3-864f-20a2b9ec1de2`
 
 - `router` (`452b7a32`), `slides` (`62ec9dbc`) — missing the HARD `<name>`
   CLI bin (per-member tasks; bins are never invented in-suite).
-- 20 contracts-conformance failures (automations `99f670fe`, calendar
+- 21 contracts-conformance failures (automations `99f670fe`, calendar
   `a967c9bd`, catalog `e4d8cd62`, docs `6818348f`, draw `5698b7d3`, emails
   `e0ef3e32`, gateway `9dc0ee28`, instructions `c15cca18`, knowledge
   `a8c97621`, logs `d166125e`, machines `6ab8775b`, mementos `5695459d`,
   prompts `eb3f331d`, sheets `d766ac9c`, signatures `7001d8d7`, slides
-  `ccc2e931`, tables `daaa2841`, telephony `26ad6a16`) plus `shield`
+  `ccc2e931`, tables `daaa2841`) plus `shield`
   (`2aceeb94`, added by the integrator lane for import #74), `hooks`
   (`03d497e8`, added by the integrator lane when #102's manifest landed),
   `files` (`b0845699`, added by the iterate-to-green fixer when #90's
