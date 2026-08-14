@@ -10,6 +10,7 @@ import {
   createLocalTodosProjectRegistrationAuthority,
   deriveTodosProjectRegistrationIdempotencyKey,
   digestProjectRegistrationValue,
+  type TodosProjectRegistrationRequest,
 } from "../project-registration/index.js";
 import {
   createSqliteTodosTaskManifestAuthority,
@@ -649,11 +650,13 @@ describe("/v1 task-list cloud parity", () => {
 
   test("routes exact historical registration receipt identity through authenticated v1", async () => {
     const historicalPackageVersion = "1.0.0-rc.3";
+    const historicalCorpusId =
+      "todos:adfd95c7-ee8b-52cb-ae47-4ae65dae3313:postgresql";
     const historicalAuthority = createLocalTodosProjectRegistrationAuthority(db, {
       packageVersion: historicalPackageVersion,
       authorityId: "todos-v1-test",
       tenantId: "tenant-v1-test",
-      corpusId: "corpus-v1-test",
+      corpusId: historicalCorpusId,
     });
     const desired = {
       source_project_id: "wks_fleetresourceshistoryv1",
@@ -675,7 +678,7 @@ describe("/v1 task-list cloud parity", () => {
       request_digest: requestDigest,
       precondition_digest: preconditionDigest,
     });
-    const receipt = await historicalAuthority.create({
+    const sourceRequest: TodosProjectRegistrationRequest = {
       operation_id: operationId,
       step_id: "todos_project",
       resource_kind: "project",
@@ -684,7 +687,7 @@ describe("/v1 task-list cloud parity", () => {
       package_version: historicalPackageVersion,
       authority_id: "todos-v1-test",
       tenant_id: "tenant-v1-test",
-      corpus_id: "corpus-v1-test",
+      corpus_id: historicalCorpusId,
       target_selector: targetSelector,
       idempotency_key: idempotencyKey,
       request_digest: requestDigest,
@@ -696,7 +699,8 @@ describe("/v1 task-list cloud parity", () => {
       target: null,
       response_byte_limit: 65_536,
       time_budget_ms: 5_000,
-    });
+    };
+    const receipt = await historicalAuthority.create(sourceRequest);
     const lookupRequest = {
       operation_id: operationId,
       step_id: "todos_project",
@@ -707,7 +711,7 @@ describe("/v1 task-list cloud parity", () => {
       package_version: historicalPackageVersion,
       authority_id: "todos-v1-test",
       tenant_id: "tenant-v1-test",
-      corpus_id: "corpus-v1-test",
+      corpus_id: historicalCorpusId,
       target_selector: targetSelector,
       idempotency_key: idempotencyKey,
       target_id: receipt.target_id,
@@ -743,6 +747,16 @@ describe("/v1 task-list cloud parity", () => {
       body: { code: "TODOS_PROJECT_REGISTRATION_RECEIPT_NOT_FOUND" },
     });
 
+    const currentCorpus = await request(
+      "/v1/project-registration/receipts/lookup",
+      "POST",
+      { ...lookupRequest, corpus_id: "corpus-v1-test" },
+    );
+    expect({ status: currentCorpus?.status, body: await currentCorpus!.json() }).toMatchObject({
+      status: 404,
+      body: { code: "TODOS_PROJECT_REGISTRATION_RECEIPT_NOT_FOUND" },
+    });
+
     const wrongRoute = await request(
       "/v1/project-registration/receipts/lookup",
       "POST",
@@ -761,6 +775,27 @@ describe("/v1 task-list cloud parity", () => {
     expect({ status: wrongTenant?.status, body: await wrongTenant!.json() }).toMatchObject({
       status: 400,
       body: { code: "TODOS_PROJECT_REGISTRATION_CAPABILITY_MISMATCH" },
+    });
+
+    const currentRecord = await store.projects.get(receipt.target_id!);
+    const validated = await request(
+      "/v1/project-registration/validate-prior-adoption",
+      "POST",
+      {
+        source_request: sourceRequest,
+        source_receipt: receipt,
+        current_record: currentRecord,
+      },
+    );
+    expect({ status: validated?.status, body: await validated!.json() }).toMatchObject({
+      status: 200,
+      body: {
+        validation: {
+          valid: true,
+          source_receipt_id: receipt.receipt_id,
+          target_id: receipt.target_id,
+        },
+      },
     });
   });
 
