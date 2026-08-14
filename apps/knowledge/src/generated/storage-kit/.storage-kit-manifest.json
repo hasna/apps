@@ -1,0 +1,14 @@
+{
+  "generator": "@hasna/contracts vendor-kit",
+  "kitVersion": "0.8.5",
+  "files": {
+    "mode.ts": "sha256:91822faf87dc03701a2e74d9cfc8ab18b000fc6f749f80dd3a2198dc31182a62",
+    "tls.ts": "sha256:8c11e27ff44b832c06a40d01da8bc4d23095ad3aacc8c806f36483448075ba30",
+    "query.ts": "sha256:a86a9810c1d8a928f68d4b96b9f0453c0efe67b06192850a27a5b38af510a7c6",
+    "pool.ts": "sha256:b8e39280d111bc8e5fc0ef6292ad22dc7c5ac9cfd18de686b53bd930025ef124",
+    "migrations.ts": "sha256:eca739920d392872b9051c727c2ebd239ff03fcf92b3e6229f9db21fb8585dbd",
+    "health.ts": "sha256:4afb410db7c516da5bee2174770bc3a31d8afa7efb27992e147c3e611b461777",
+    "index.ts": "sha256:75e9b19e1fd25bee25eec185f472792cd5e3806b6194b8485a8ccb07d40e9689",
+    "README.md": "sha256:0886dbdf751597bfc8f23d2e72f233d6c3516b478925c8118b93d9d06a4eaa66"
+  }
+}

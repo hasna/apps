@@ -1,0 +1,595 @@
+import { describe, expect, test } from 'bun:test';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { CURRENT_SCHEMA_VERSION, getKnowledgeDbStats, migrateKnowledgeDb, openKnowledgeDb } from '../src/knowledge-db';
+import { ingestOpenFilesManifest } from '../src/manifest-ingest';
+import { ingestSourceRef } from '../src/source-ingest';
+import { consumeOpenFilesOutbox } from '../src/outbox-consume';
+import { resolveOpenFilesSource } from '../src/source-resolver';
+import { createApprovalGate, hasApproval, redactSecrets, resolveSafetyPolicy } from '../src/safety';
+import { defaultKnowledgeConfig, workspaceForHome } from '../src/workspace';
+
+function rewriteWikiPagesAsSchema7(dbPath: string): void {
+  const db = openKnowledgeDb(dbPath);
+  try {
+    db.exec(`
+      PRAGMA foreign_keys = OFF;
+      DROP TABLE IF EXISTS wiki_pages_v7;
+      CREATE TABLE wiki_pages_v7 (
+        id TEXT PRIMARY KEY,
+        path TEXT NOT NULL UNIQUE,
+        title TEXT NOT NULL,
+        artifact_uri TEXT,
+        content_hash TEXT,
+        status TEXT NOT NULL DEFAULT 'active',
+        metadata_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      INSERT INTO wiki_pages_v7 (
+        id, path, title, artifact_uri, content_hash, status, metadata_json, created_at, updated_at
+      )
+      SELECT id, path, title, artifact_uri, content_hash, status, metadata_json, created_at, updated_at
+      FROM wiki_pages;
+      DROP TABLE wiki_pages;
+      ALTER TABLE wiki_pages_v7 RENAME TO wiki_pages;
+      DELETE FROM schema_versions WHERE version >= 8;
+      PRAGMA foreign_keys = ON;
+    `);
+  } finally {
+    db.close();
+  }
+}
+
+describe('knowledge sqlite store', () => {
+  test('migrates versioned schema and creates core catalog tables', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-db-'));
+    const dbPath = join(dir, 'knowledge.db');
+
+    const migration = migrateKnowledgeDb(dbPath);
+    expect(migration.schema_version).toBe(CURRENT_SCHEMA_VERSION);
+
+    const db = openKnowledgeDb(dbPath);
+    try {
+      const tables = db.query<{ name: string }, []>(
+        "SELECT name FROM sqlite_master WHERE type IN ('table', 'virtual') ORDER BY name",
+      ).all().map((row) => row.name);
+      expect(tables).toContain('sources');
+      expect(tables).toContain('source_revisions');
+      expect(tables).toContain('chunks');
+      expect(tables).toContain('chunk_embeddings');
+      expect(tables).toContain('wiki_pages');
+      expect(tables).toContain('citations');
+      expect(tables).toContain('knowledge_indexes');
+      expect(tables).toContain('runs');
+      expect(tables).toContain('provider_usage');
+      expect(tables).toContain('redaction_findings');
+      expect(tables).toContain('storage_objects');
+      expect(tables).toContain('audit_events');
+      expect(tables).toContain('approval_gates');
+      expect(tables).toContain('reindex_queue');
+      expect(tables).toContain('knowledge_machines');
+      expect(tables).toContain('knowledge_sync_snapshots');
+      expect(tables).toContain('knowledge_sync_changes');
+      expect(tables).toContain('knowledge_sync_conflicts');
+      expect(tables).toContain('knowledge_sync_table_clocks');
+      expect(tables).toContain('knowledge_sync_imports');
+      expect(tables).toContain('knowledge_promotion_candidates');
+      expect(tables).toContain('durable_knowledge_records');
+      const wikiColumns = db.query<{ name: string }, []>('PRAGMA table_info(wiki_pages)').all()
+        .map((row) => row.name);
+      expect(wikiColumns).toContain('valid_from');
+      expect(wikiColumns).toContain('valid_to');
+      expect(wikiColumns).toContain('supersedes');
+      expect(wikiColumns).toContain('superseded_by');
+      expect(wikiColumns).toContain('confidence');
+      expect(wikiColumns).toContain('last_verified_at');
+    } finally {
+      db.close();
+    }
+
+    const stats = getKnowledgeDbStats(dbPath);
+    expect(stats.schema_version).toBe(CURRENT_SCHEMA_VERSION);
+    expect(stats.sources).toBe(0);
+    expect(stats.runs).toBe(0);
+    expect(stats.redaction_findings).toBe(0);
+    expect(stats.audit_events).toBe(0);
+    expect(stats.approval_gates).toBe(0);
+    expect(stats.reindex_queue).toBe(0);
+    expect(stats.knowledge_machines).toBe(0);
+    expect(stats.sync_snapshots).toBe(0);
+    expect(stats.sync_changes).toBe(0);
+    expect(stats.sync_conflicts).toBe(0);
+    expect(stats.sync_table_clocks).toBe(0);
+    expect(stats.sync_imports).toBe(0);
+  });
+
+  test('migrates existing schema v7 wiki catalog to schema v8 lifecycle metadata', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-db-v7-to-v8-'));
+    const dbPath = join(dir, 'knowledge.db');
+    migrateKnowledgeDb(dbPath);
+    rewriteWikiPagesAsSchema7(dbPath);
+
+    const before = openKnowledgeDb(dbPath);
+    try {
+      before.run(`
+        INSERT INTO wiki_pages (
+          id, path, title, artifact_uri, content_hash, status, metadata_json, created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [
+        'wiki_legacy',
+        'wiki/legacy.md',
+        'Legacy Wiki Page',
+        'file:///tmp/wiki/legacy.md',
+        'sha256:legacy',
+        'active',
+        '{}',
+        '2026-06-30T10:00:00.000Z',
+        '2026-06-30T11:00:00.000Z',
+      ]);
+      const version = before.query<{ version: number }, []>('SELECT MAX(version) AS version FROM schema_versions').get();
+      expect(version?.version).toBe(7);
+      const columns = before.query<{ name: string }, []>('PRAGMA table_info(wiki_pages)').all()
+        .map((row) => row.name);
+      expect(columns).not.toContain('valid_from');
+    } finally {
+      before.close();
+    }
+
+    const migration = migrateKnowledgeDb(dbPath);
+    expect(migration.schema_version).toBe(CURRENT_SCHEMA_VERSION);
+
+    const migrated = openKnowledgeDb(dbPath);
+    try {
+      const columns = migrated.query<{ name: string }, []>('PRAGMA table_info(wiki_pages)').all()
+        .map((row) => row.name);
+      expect(columns).toContain('valid_from');
+      expect(columns).toContain('valid_to');
+      expect(columns).toContain('supersedes');
+      expect(columns).toContain('superseded_by');
+      expect(columns).toContain('confidence');
+      expect(columns).toContain('last_verified_at');
+
+      const page = migrated.query<{
+        valid_from: string;
+        valid_to: string | null;
+        confidence: number;
+        last_verified_at: string;
+      }, [string]>('SELECT valid_from, valid_to, confidence, last_verified_at FROM wiki_pages WHERE id = ?').get('wiki_legacy');
+      expect(page).toMatchObject({
+        valid_from: '2026-06-30T10:00:00.000Z',
+        valid_to: null,
+        confidence: 0.8,
+        last_verified_at: '2026-06-30T11:00:00.000Z',
+      });
+
+      const indexes = migrated.query<{ name: string }, []>(
+        "SELECT name FROM sqlite_master WHERE type = 'index'",
+      ).all().map((row) => row.name);
+      expect(indexes).toContain('idx_wiki_pages_lifecycle_status');
+      expect(indexes).toContain('idx_wiki_pages_last_verified');
+    } finally {
+      migrated.close();
+    }
+  });
+
+  test('recovers v7 artifacts and advances to schema v8 when the v7 marker is missing', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-db-v7-replay-'));
+    const dbPath = join(dir, 'knowledge.db');
+    migrateKnowledgeDb(dbPath);
+
+    const db = openKnowledgeDb(dbPath);
+    try {
+      db.run(`
+        INSERT INTO knowledge_sync_changes (
+          id,
+          origin_machine_id,
+          updated_by_machine_id,
+          entity_kind,
+          entity_id,
+          operation,
+          metadata_json,
+          created_at,
+          logical_clock,
+          bundle_id
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [
+        'change_partial_v7',
+        'linux-node-b',
+        'linux-node-a',
+        'wiki_pages',
+        'wiki_home',
+        'upsert',
+        '{}',
+        '2026-06-09T00:00:00.000Z',
+        42,
+        'syncbundle_partial',
+      ]);
+      db.run(`
+        INSERT INTO knowledge_sync_table_clocks (
+          table_name,
+          machine_id,
+          logical_clock,
+          high_water_hash,
+          high_water_bundle_id,
+          origin_machine_id,
+          updated_by_machine_id,
+          last_applied_at,
+          metadata_json,
+          created_at,
+          updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [
+        'wiki_pages',
+        'linux-node-b',
+        42,
+        'sha256:partial',
+        'syncbundle_partial',
+        'linux-node-b',
+        'linux-node-a',
+        '2026-06-09T00:00:01.000Z',
+        '{}',
+        '2026-06-09T00:00:01.000Z',
+        '2026-06-09T00:00:01.000Z',
+      ]);
+      db.run(`
+        INSERT INTO knowledge_sync_imports (
+          bundle_id,
+          source_machine_id,
+          target_machine_id,
+          direction,
+          status,
+          content_hash,
+          table_clocks_json,
+          tables_json,
+          generated_at,
+          applied_at,
+          metadata_json
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [
+        'syncbundle_partial',
+        'linux-node-b',
+        'linux-node-a',
+        'import',
+        'applied',
+        'sha256:bundle',
+        '[]',
+        '[]',
+        '2026-06-09T00:00:00.000Z',
+        '2026-06-09T00:00:01.000Z',
+        '{}',
+      ]);
+      db.run('DELETE FROM schema_versions WHERE version = 7');
+    } finally {
+      db.close();
+    }
+
+    const migration = migrateKnowledgeDb(dbPath);
+    expect(migration.schema_version).toBe(CURRENT_SCHEMA_VERSION);
+
+    const recovered = openKnowledgeDb(dbPath);
+    try {
+      const change = recovered.query<{ logical_clock: number; bundle_id: string }, [string]>(
+        'SELECT logical_clock, bundle_id FROM knowledge_sync_changes WHERE id = ?',
+      ).get('change_partial_v7');
+      expect(change).toMatchObject({ logical_clock: 42, bundle_id: 'syncbundle_partial' });
+
+      const clock = recovered.query<{ logical_clock: number; high_water_bundle_id: string }, [string, string]>(
+        'SELECT logical_clock, high_water_bundle_id FROM knowledge_sync_table_clocks WHERE table_name = ? AND machine_id = ?',
+      ).get('wiki_pages', 'linux-node-b');
+      expect(clock).toMatchObject({ logical_clock: 42, high_water_bundle_id: 'syncbundle_partial' });
+
+      const importRow = recovered.query<{ status: string }, [string]>(
+        'SELECT status FROM knowledge_sync_imports WHERE bundle_id = ?',
+      ).get('syncbundle_partial');
+      expect(importRow).toMatchObject({ status: 'applied' });
+    } finally {
+      recovered.close();
+    }
+  });
+
+  test('recovers partial v7 sync artifacts and advances to schema v8', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-db-v7-tables-'));
+    const dbPath = join(dir, 'knowledge.db');
+    migrateKnowledgeDb(dbPath);
+
+    const db = openKnowledgeDb(dbPath);
+    try {
+      db.run('DROP TABLE knowledge_sync_table_clocks');
+      db.run('DROP TABLE knowledge_sync_imports');
+      db.run('DELETE FROM schema_versions WHERE version = 7');
+    } finally {
+      db.close();
+    }
+
+    const migration = migrateKnowledgeDb(dbPath);
+    expect(migration.schema_version).toBe(CURRENT_SCHEMA_VERSION);
+
+    const stats = getKnowledgeDbStats(dbPath);
+    expect(stats.sync_table_clocks).toBe(0);
+    expect(stats.sync_imports).toBe(0);
+
+    const recovered = openKnowledgeDb(dbPath);
+    try {
+      const columns = recovered.query<{ name: string }, []>('PRAGMA table_info(knowledge_sync_changes)').all()
+        .map((row) => row.name);
+      expect(columns).toContain('logical_clock');
+      expect(columns).toContain('bundle_id');
+
+      const indexes = recovered.query<{ name: string }, []>(
+        "SELECT name FROM sqlite_master WHERE type = 'index'",
+      ).all().map((row) => row.name);
+      expect(indexes).toContain('idx_sync_changes_bundle');
+      expect(indexes).toContain('idx_sync_imports_status');
+    } finally {
+      recovered.close();
+    }
+  });
+
+  test('ingests open-files manifests into sources, revisions, chunks, and FTS', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-manifest-'));
+    const dbPath = join(dir, 'knowledge.db');
+    const manifestPath = join(dir, 'manifest.jsonl');
+    const rows = [
+      {
+        source_ref: 'open-files://file/file_123/revision/rev_001',
+        file_id: 'file_123',
+        source_id: 'src_drive',
+        path: 'Team Drive/Knowledge/Handbook.md',
+        name: 'Handbook.md',
+        mime: 'text/markdown',
+        size: 128,
+        hash: 'sha256:abc123',
+        status: 'active',
+        updated_at: '2026-06-08T00:00:00.000Z',
+        permissions: { mode: 'read_only', allowed_purposes: ['knowledge_index'] },
+        extracted_text: 'Company handbook\n\nSemantic search should find this source. token=sk-testsecretkeyvalue1234567890',
+      },
+      {
+        source_ref: 'open-files://file/file_456',
+        revision_id: 'rev_current',
+        name: 'No text yet.pdf',
+        mime: 'application/pdf',
+        size: 256,
+        hash: 'sha256:def456',
+        status: 'active',
+      },
+    ];
+    writeFileSync(manifestPath, rows.map((row) => JSON.stringify(row)).join('\n'));
+
+    const result = await ingestOpenFilesManifest({ dbPath, input: manifestPath });
+    expect(result).toMatchObject({
+      items_seen: 2,
+      sources_upserted: 2,
+      revisions_upserted: 2,
+      chunks_inserted: 1,
+      chunks_deleted: 0,
+    });
+
+    const stats = getKnowledgeDbStats(dbPath);
+    expect(stats.schema_version).toBe(CURRENT_SCHEMA_VERSION);
+    expect(stats.sources).toBe(2);
+    expect(stats.source_revisions).toBe(2);
+    expect(stats.chunks).toBe(1);
+    expect(stats.redaction_findings).toBeGreaterThanOrEqual(1);
+    expect(stats.audit_events).toBeGreaterThanOrEqual(3);
+
+    const resolved = await resolveOpenFilesSource({
+      dbPath,
+      sourceRef: 'open-files://file/file_123/revision/rev_001',
+      purpose: 'knowledge_index',
+      limit: 5,
+    });
+    expect(resolved.resolved).toBe(true);
+    expect(resolved.read_only).toBe(true);
+    expect(resolved.source?.uri).toBe('open-files://file/file_123');
+    expect(resolved.revision?.revision).toBe('rev_001');
+    expect(resolved.content.text_available).toBe(true);
+    expect(resolved.content.bytes_exposed).toBe(false);
+    expect(resolved.chunks).toHaveLength(1);
+    expect(resolved.chunks[0].evidence).toMatchObject({
+      resolver: 'open-files-read-only',
+      mode: 'local_catalog',
+      purpose: 'knowledge_index',
+      read_only: true,
+      source_uri: 'open-files://file/file_123',
+      revision: 'rev_001',
+    });
+    expect(resolved.chunks[0].provenance).toMatchObject({
+      source_owner: 'open-files',
+      source_ref: 'open-files://file/file_123/revision/rev_001',
+      source_uri: 'open-files://file/file_123',
+      source_kind: 'open-files',
+      revision: 'rev_001',
+      hash: 'sha256:abc123',
+      read_only: true,
+      citation_required: true,
+      stale: false,
+    });
+    expect(resolved.citations[0].evidence.chunk_id).toBe(resolved.chunks[0].id);
+    expect(resolved.citations[0].provenance.chunk_id).toBe(resolved.chunks[0].id);
+    const sourceIngest = await ingestSourceRef({
+      dbPath,
+      sourceRef: 'open-files://file/file_123/revision/rev_001',
+      purpose: 'knowledge_index',
+    });
+    expect(sourceIngest.content_source).toBe('catalog_chunks');
+    expect(sourceIngest.chunks_inserted).toBe(1);
+    await expect(resolveOpenFilesSource({
+      dbPath,
+      sourceRef: 'open-files://file/file_123/revision/rev_001',
+      purpose: 'knowledge_answer',
+    })).rejects.toThrow('Allowed purposes: knowledge_index');
+
+    migrateKnowledgeDb(dbPath);
+
+    const db = openKnowledgeDb(dbPath);
+    try {
+      const source = db.query<{ uri: string; title: string; acl_json: string }, []>('SELECT uri, title, acl_json FROM sources ORDER BY title LIMIT 1').get();
+      expect(source?.uri).toBe('open-files://file/file_123');
+      expect(source?.title).toBe('Handbook.md');
+      expect(JSON.parse(source?.acl_json ?? '{}')).toMatchObject({ mode: 'read_only' });
+
+      const revision = db.query<{ revision: string; hash: string }, [string]>(
+        'SELECT revision, hash FROM source_revisions WHERE hash = ?',
+      ).get('sha256:abc123');
+      expect(revision).toMatchObject({ revision: 'rev_001', hash: 'sha256:abc123' });
+
+      const fts = db.query<{ chunk_id: string }, [string]>(
+        'SELECT chunk_id FROM chunks_fts WHERE chunks_fts MATCH ? LIMIT 1',
+      ).get('semantic');
+      expect(fts?.chunk_id).toStartWith('chk_');
+
+      const chunk = db.query<{ text: string; metadata_json: string }, []>('SELECT text, metadata_json FROM chunks LIMIT 1').get();
+      expect(chunk?.text).toContain('[REDACTED:secret_assignment]');
+      expect(chunk?.text).not.toContain('sk-testsecretkeyvalue');
+      expect(JSON.parse(chunk?.metadata_json ?? '{}').provenance).toMatchObject({
+        source_owner: 'open-files',
+        source_uri: 'open-files://file/file_123',
+        revision: 'rev_001',
+        hash: 'sha256:abc123',
+      });
+
+      const redactions = db.query<{ n: number }, []>('SELECT COUNT(*) AS n FROM redaction_findings').get();
+      expect(redactions?.n).toBeGreaterThanOrEqual(1);
+    } finally {
+      db.close();
+    }
+  });
+
+  test('consumes open-files outbox events and invalidates chunks with a run ledger', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-outbox-'));
+    const dbPath = join(dir, 'knowledge.db');
+    const manifestPath = join(dir, 'manifest.jsonl');
+    const outboxPath = join(dir, 'outbox.jsonl');
+    writeFileSync(manifestPath, `${JSON.stringify({
+      source_ref: 'open-files://file/file_789/revision/rev_before',
+      file_id: 'file_789',
+      source_id: 'src_drive',
+      path: 'Team Drive/Knowledge/Policy.md',
+      name: 'Policy.md',
+      mime: 'text/markdown',
+      size: 128,
+      hash: 'sha256:before',
+      status: 'active',
+      permissions: { mode: 'read_only' },
+      extracted_text: 'Policy text that should be invalidated by the outbox.',
+    })}\n`);
+    await ingestOpenFilesManifest({ dbPath, input: manifestPath });
+    expect(getKnowledgeDbStats(dbPath).chunks).toBe(1);
+
+    writeFileSync(outboxPath, `${JSON.stringify({
+      event: 'deleted',
+      source_ref: 'open-files://file/file_789/revision/rev_before',
+      status: 'deleted',
+      hash: 'sha256:before',
+      updated_at: '2026-06-08T01:00:00.000Z',
+      permissions: { mode: 'read_only', allowed_purposes: [] },
+    })}\n`);
+
+    const result = await consumeOpenFilesOutbox({ dbPath, input: outboxPath });
+    expect(result.events_seen).toBe(1);
+    expect(result.sources_touched).toBe(1);
+    expect(result.revisions_touched).toBe(1);
+    expect(result.chunks_deleted).toBe(1);
+    expect(result.deleted_sources).toBe(1);
+    expect(result.permission_updates).toBe(1);
+
+    const stats = getKnowledgeDbStats(dbPath);
+    expect(stats.chunks).toBe(0);
+    expect(stats.runs).toBe(1);
+    expect(stats.run_events).toBe(1);
+    expect(stats.audit_events).toBeGreaterThanOrEqual(2);
+
+    const db = openKnowledgeDb(dbPath);
+    try {
+      const fts = db.query<{ chunk_id: string }, [string]>(
+        'SELECT chunk_id FROM chunks_fts WHERE chunks_fts MATCH ? LIMIT 1',
+      ).get('policy');
+      expect(fts).toBeNull();
+
+      const source = db.query<{ metadata_json: string; acl_json: string }, []>('SELECT metadata_json, acl_json FROM sources LIMIT 1').get();
+      expect(JSON.parse(source?.metadata_json ?? '{}')).toMatchObject({
+        status: 'deleted',
+        last_outbox_event: 'deleted',
+      });
+      expect(JSON.parse(source?.acl_json ?? '{}')).toMatchObject({ allowed_purposes: [] });
+
+      const usage = db.query<{ n: number }, []>('SELECT COUNT(*) AS n FROM provider_usage').get();
+      expect(usage?.n).toBe(1);
+    } finally {
+      db.close();
+    }
+  });
+
+  test('ingests direct read-only file source refs with redaction and provenance', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-source-ingest-'));
+    const dbPath = join(dir, 'knowledge.db');
+    const sourcePath = join(dir, 'source.md');
+    writeFileSync(sourcePath, 'Direct file source for knowledge_index. token=sk-testsecretkeyvalue1234567890');
+
+    const result = await ingestSourceRef({
+      dbPath,
+      sourceRef: `file://${sourcePath}`,
+      purpose: 'knowledge_index',
+    });
+    expect(result.items_seen).toBe(1);
+    expect(result.sources_upserted).toBe(1);
+    expect(result.revisions_upserted).toBe(1);
+    expect(result.chunks_inserted).toBe(1);
+    expect(result.redactions).toBe(1);
+    expect(result.content_source).toBe('file');
+    expect(result.hash).toStartWith('sha256:');
+
+    const resolved = await resolveOpenFilesSource({
+      dbPath,
+      sourceRef: `file://${sourcePath}`,
+      purpose: 'knowledge_index',
+    });
+    expect(resolved.resolved).toBe(true);
+    expect(resolved.source?.kind).toBe('file');
+    expect(resolved.chunks[0].text).toContain('[REDACTED:secret_assignment]');
+    expect(resolved.chunks[0].text).not.toContain('sk-testsecretkeyvalue');
+    expect(resolved.chunks[0].evidence.source_uri).toBe(`file://${sourcePath}`);
+    expect(resolved.chunks[0].provenance).toMatchObject({
+      source_owner: 'open-files',
+      source_uri: `file://${sourcePath}`,
+      source_kind: 'file',
+      read_only: true,
+      citation_required: true,
+    });
+  });
+
+  test('supports safety policy defaults and local approval gates', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-safety-'));
+    const dbPath = join(dir, 'knowledge.db');
+    migrateKnowledgeDb(dbPath);
+    const workspace = workspaceForHome(join(dir, '.hasna', 'knowledge'));
+    const policy = resolveSafetyPolicy(defaultKnowledgeConfig(), workspace);
+    expect(policy.network.webSearchEnabled).toBe(false);
+    expect(policy.network.s3ReadsEnabled).toBe(false);
+    expect(policy.redaction.enabled).toBe(true);
+
+    const redacted = redactSecrets('token=sk-testsecretkeyvalue1234567890');
+    expect(redacted.text).toBe('[REDACTED:secret_assignment]');
+    expect(redacted.findings).toHaveLength(1);
+
+    const db = openKnowledgeDb(dbPath);
+    try {
+      expect(hasApproval(db, 'generated_write', 'wiki://answer')).toBe(false);
+      createApprovalGate(db, {
+        action: 'generated_write',
+        target_uri: 'wiki://answer',
+        reason: 'test approval',
+      });
+      expect(hasApproval(db, 'generated_write', 'wiki://answer')).toBe(true);
+    } finally {
+      db.close();
+    }
+  });
+});
