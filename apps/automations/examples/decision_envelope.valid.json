@@ -1,0 +1,29 @@
+{
+  "schema": "hasna.decision_envelope.v1",
+  "id": "approval_decision_decision_pending",
+  "createdAt": "2026-07-07T10:00:00.000Z",
+  "decisionType": "approval",
+  "status": "approval_required",
+  "actor": {
+    "kind": "service",
+    "id": "service_hasna_automations",
+    "name": "@hasna/automations"
+  },
+  "traceId": "run_example",
+  "reason": "External write requires review.",
+  "obligations": [
+    "approval required: manual"
+  ],
+  "evidenceRefs": [
+    {
+      "id": "evidence_artifact:-approvals-decision.txt",
+      "kind": "artifact",
+      "uri": "artifact://approvals/decision.txt",
+      "summary": "Approval decision evidence"
+    }
+  ],
+  "metadata": {
+    "sourcePackage": "@hasna/automations",
+    "originalApprovalStatus": "pending"
+  }
+}

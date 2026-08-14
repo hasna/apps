@@ -30,7 +30,7 @@
     "build": "bun run clean && NODE_ENV=production bun build src/index.ts --outdir dist --target bun && NODE_ENV=production bun build src/react/index.ts --outdir dist/react --target bun --external react --external react-dom --external @glideapps/glide-data-grid && NODE_ENV=production bun build src/cli/index.ts --outdir dist/cli --target bun && bun run build:types",
     "build:types": "tsc --emitDeclarationOnly --outDir dist",
     "build:dashboard": "cd dashboard && bun run build",
-    "prepack": "bun run build && bun run build:dashboard",
+    "prepack": "bun run build >&2 && bun run build:dashboard >&2",
     "prepublishOnly": "bun run typecheck && bun test",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
@@ -90,11 +90,17 @@
   },
   "devDependencies": {
     "@glideapps/glide-data-grid": "^6.0.3",
+    "@tailwindcss/vite": "4.3.2",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "4.7.0",
     "bun-types": "latest",
+    "clsx": "2.1.1",
+    "lucide-react": "0.468.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "typescript": "^5.8.2"
+    "tailwindcss": "4.3.2",
+    "typescript": "^5.8.2",
+    "vite": "6.4.3"
   }
 }
