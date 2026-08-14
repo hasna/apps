@@ -1,0 +1,103 @@
+import type { ConnectorMeta } from "../registry.js";
+
+// Database
+export const connectors: ConnectorMeta[] = [
+  {
+    name: "microsoftsql",
+    displayName: "Microsoft SQL Server",
+    description: "Microsoft SQL Server database connectivity and queries",
+    category: "Database",
+    tags: ["database", "sql", "mssql", "microsoft"],
+  },
+  {
+    name: "mysql",
+    displayName: "MySQL",
+    description: "MySQL database connectivity and query execution",
+    category: "Database",
+    tags: ["database", "sql", "mysql", "relational"],
+  },
+  {
+    name: "nocodb",
+    displayName: "NocoDB",
+    description: "Open-source Airtable alternative and spreadsheet-database platform",
+    category: "Database",
+    tags: ["database", "spreadsheet", "no-code", "open-source", "airtable"],
+  },
+  {
+    name: "oracledatabase",
+    displayName: "Oracle Database",
+    description: "Oracle Database connectivity and SQL query execution",
+    category: "Database",
+    tags: ["oracle", "database", "sql", "enterprise", "relational"],
+  },
+  {
+    name: "postgres",
+    displayName: "PostgreSQL",
+    description: "PostgreSQL relational database connector",
+    category: "Database",
+    tags: ["database", "sql", "postgres", "relational", "queries"],
+  },
+  {
+    name: "questdb",
+    displayName: "QuestDB",
+    description: "High-performance time-series database with SQL support",
+    category: "Database",
+    tags: ["time-series", "database", "sql", "analytics", "performance"],
+  },
+  {
+    name: "quintadb",
+    displayName: "QuintaDB",
+    description: "Online database and web form builder for data collection",
+    category: "Database",
+    tags: ["database", "forms", "data-collection", "web", "no-code"],
+  },
+  {
+    name: "redis",
+    displayName: "Redis",
+    description: "In-memory data structure store used as database, cache, and message broker",
+    category: "Database",
+    tags: ["cache", "database", "key-value", "message-broker", "in-memory"],
+  },
+  {
+    name: "seatable",
+    displayName: "SeaTable",
+    description: "No-code database and collaborative spreadsheet platform",
+    category: "Database",
+    tags: ["database", "spreadsheet", "no-code", "collaboration", "tables"],
+  },
+  {
+    name: "tidbcloud",
+    displayName: "TiDB Cloud",
+    description: "Serverless distributed SQL database platform with MySQL compatibility",
+    category: "Database",
+    tags: ["database", "sql", "mysql", "serverless", "distributed"],
+  },
+  {
+    name: "upstash",
+    displayName: "Upstash",
+    description: "Serverless Redis and Kafka control-plane management via Upstash Developer API",
+    category: "Database",
+    tags: ["redis", "serverless", "kafka", "database"],
+  },
+  {
+    name: "timescaledb",
+    displayName: "TimescaleDB",
+    description: "Time-series SQL database built on PostgreSQL for high-performance analytics",
+    category: "Database",
+    tags: ["database", "time-series", "postgresql", "analytics", "sql"],
+  },
+  {
+    name: "turso",
+    displayName: "Turso",
+    description: "Serverless SQLite platform for edge databases with libSQL",
+    category: "Database",
+    tags: ["sqlite", "serverless", "database", "libsql", "edge"],
+  },
+  {
+    name: "turso-api-platform",
+    displayName: "Turso Api Platform",
+    description: "Serverless database API platform for items, events, and search",
+    category: "Database",
+    tags: ["turso", "database", "api", "serverless"],
+  },
+];

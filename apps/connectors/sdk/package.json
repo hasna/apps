@@ -1,0 +1,34 @@
+{
+  "name": "@hasna/connectors-sdk",
+  "version": "0.1.4",
+  "description": "Zero-dependency TypeScript SDK for @hasna/connectors REST API",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist/",
+    "README.md"
+  ],
+  "sideEffects": false,
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hasna/connectors.git",
+    "directory": "sdk"
+  },
+  "scripts": {
+    "build": "bun build src/index.ts --outdir dist --target browser && tsc -p tsconfig.json",
+    "test": "bun test src/"
+  }
+}

@@ -1,0 +1,55 @@
+{
+  "name": "@hasna/connect-clickbank",
+  "version": "0.0.2",
+  "description": "ClickBank API connector CLI - A TypeScript wrapper for the ClickBank API",
+  "type": "module",
+  "bin": {
+    "connect-clickbank": "./bin/index.js"
+  },
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "bun build ./src/index.ts --outdir ./dist --target bun && bun build ./src/cli/index.ts --outdir ./bin --target bun",
+    "build:server": "bun build ./src/server/index.ts --outdir ./server --target bun",
+    "build:all": "bun run build && bun run build:server",
+    "dev": "bun run ./src/cli/index.ts",
+    "dev:server": "bun run ./src/server/index.ts",
+    "start": "bun run ./server/index.js",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "bun run build:all",
+    "release": "bun run ./scripts/publish.ts",
+    "release:patch": "bun run ./scripts/publish.ts patch",
+    "release:minor": "bun run ./scripts/publish.ts minor",
+    "release:major": "bun run ./scripts/publish.ts major",
+    "release:dry": "bun run ./scripts/publish.ts --dry-run"
+  },
+  "keywords": [
+    "clickbank",
+    "api",
+    "connector",
+    "cli",
+    "typescript",
+    "bun"
+  ],
+  "author": "",
+  "license": "Apache-2.0",
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "chalk": "^5.3.0",
+    "commander": "^12.1.0",
+    "dotenv": "^16.4.5",
+    "hono": "^4.11.0"
+  },
+  "engines": {
+    "bun": ">=1.0.0"
+  }
+}
