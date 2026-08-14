@@ -1,0 +1,185 @@
+import { chmodSync, existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync } from 'fs';
+import { homedir } from 'os';
+import { join } from 'path';
+
+const CONNECTOR_NAME = 'connect-wrike';
+const DEFAULT_PROFILE = 'default';
+const DEFAULT_HOST = 'www.wrike.com';
+
+export interface ProfileConfig {
+  apiToken?: string;
+  host?: string;
+}
+
+let profileOverride: string | undefined;
+
+const CONFIG_DIR = join(homedir(), '.hasna', 'connectors', CONNECTOR_NAME);
+const PROFILES_DIR = join(CONFIG_DIR, 'profiles');
+const CURRENT_PROFILE_FILE = join(CONFIG_DIR, 'current_profile');
+
+export function setProfileOverride(profile: string | undefined): void {
+  profileOverride = profile;
+}
+
+export function ensureConfigDir(): void {
+  if (!existsSync(CONFIG_DIR)) {
+    mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
+  }
+  if (!existsSync(PROFILES_DIR)) {
+    mkdirSync(PROFILES_DIR, { recursive: true, mode: 0o700 });
+  }
+  for (const dir of [CONFIG_DIR, PROFILES_DIR]) {
+    try {
+      chmodSync(dir, 0o700);
+    } catch {
+      // Best effort on filesystems that do not support POSIX modes.
+    }
+  }
+}
+
+function writePrivateFile(path: string, value: string): void {
+  writeFileSync(path, value, { mode: 0o600 });
+  try {
+    chmodSync(path, 0o600);
+  } catch {
+    // Best effort on filesystems that do not support POSIX modes.
+  }
+}
+
+function getProfilePath(profile: string): string {
+  return join(PROFILES_DIR, `${profile}.json`);
+}
+
+export function getCurrentProfile(): string {
+  if (profileOverride) {
+    return profileOverride;
+  }
+
+  ensureConfigDir();
+
+  if (existsSync(CURRENT_PROFILE_FILE)) {
+    try {
+      const profile = readFileSync(CURRENT_PROFILE_FILE, 'utf-8').trim();
+      if (profile && profileExists(profile)) {
+        return profile;
+      }
+    } catch {
+      // Fall through to default
+    }
+  }
+
+  return DEFAULT_PROFILE;
+}
+
+export function setCurrentProfile(profile: string): void {
+  ensureConfigDir();
+
+  if (!profileExists(profile) && profile !== DEFAULT_PROFILE) {
+    throw new Error(`Profile "${profile}" does not exist`);
+  }
+
+  writePrivateFile(CURRENT_PROFILE_FILE, profile);
+}
+
+export function profileExists(profile: string): boolean {
+  return existsSync(getProfilePath(profile));
+}
+
+export function listProfiles(): string[] {
+  ensureConfigDir();
+
+  if (!existsSync(PROFILES_DIR)) {
+    return [];
+  }
+
+  return readdirSync(PROFILES_DIR)
+    .filter(f => f.endsWith('.json'))
+    .map(f => f.replace('.json', ''))
+    .sort();
+}
+
+export function createProfile(profile: string, config: ProfileConfig = {}): boolean {
+  ensureConfigDir();
+
+  if (profileExists(profile)) {
+    return false;
+  }
+
+  if (!/^[a-zA-Z0-9_-]+$/.test(profile)) {
+    throw new Error('Profile name can only contain letters, numbers, hyphens, and underscores');
+  }
+
+  writePrivateFile(getProfilePath(profile), JSON.stringify(config, null, 2));
+  return true;
+}
+
+export function deleteProfile(profile: string): boolean {
+  if (profile === DEFAULT_PROFILE) {
+    return false;
+  }
+
+  if (!profileExists(profile)) {
+    return false;
+  }
+
+  if (getCurrentProfile() === profile) {
+    setCurrentProfile(DEFAULT_PROFILE);
+  }
+
+  rmSync(getProfilePath(profile));
+  return true;
+}
+
+export function loadProfile(profile?: string): ProfileConfig {
+  ensureConfigDir();
+  const profileName = profile || getCurrentProfile();
+  const profilePath = getProfilePath(profileName);
+
+  if (!existsSync(profilePath)) {
+    return {};
+  }
+
+  try {
+    return JSON.parse(readFileSync(profilePath, 'utf-8'));
+  } catch {
+    return {};
+  }
+}
+
+export function saveProfile(config: ProfileConfig, profile?: string): void {
+  ensureConfigDir();
+  const profileName = profile || getCurrentProfile();
+  writePrivateFile(getProfilePath(profileName), JSON.stringify(config, null, 2));
+}
+
+export function getApiToken(): string | undefined {
+  return process.env.WRIKE_API_TOKEN || loadProfile().apiToken;
+}
+
+export function setApiToken(apiToken: string): void {
+  const config = loadProfile();
+  config.apiToken = apiToken;
+  saveProfile(config);
+}
+
+export function getHost(): string {
+  return process.env.WRIKE_HOST || loadProfile().host || DEFAULT_HOST;
+}
+
+export function setHost(host: string): void {
+  const config = loadProfile();
+  config.host = host.replace(/^https?:\/\//, '').replace(/\/+$/, '');
+  saveProfile(config);
+}
+
+export function clearConfig(): void {
+  saveProfile({});
+}
+
+export function getConfigDir(): string {
+  return CONFIG_DIR;
+}
+
+export function getActiveProfileName(): string {
+  return getCurrentProfile();
+}

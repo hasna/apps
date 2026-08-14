@@ -1,0 +1,11 @@
+.git
+node_modules
+dist
+dashboard/dist
+dashboard/node_modules
+**/*.test.ts
+.takumi
+.codewith
+.github
+docs
+*.md

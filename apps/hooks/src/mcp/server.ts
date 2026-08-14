@@ -51,6 +51,10 @@ import {
   listProfiles,
   type AgentProfile,
 } from "../lib/profiles.js";
+import { readCustomManifest } from "../lib/manifest.js";
+import { resolveHookMeta } from "../lib/resolve.js";
+import { hookRegisteredInSettings } from "../lib/registration.js";
+import { sha256Of, checkScriptHash } from "../lib/store.js";
 import {
   getStorageStatus,
   storagePull,
@@ -59,6 +63,29 @@ import {
 } from "../storage.js";
 
 export const MCP_PORT = 39427;
+
+/**
+ * Verified-bytes hook execution — the MCP run tools use the same trust path
+ * as runHook: read the script bytes once, check their hash against the trust
+ * store, and execute exactly those verified bytes (never re-open the path).
+ * Throws on trust refusal so callers can fail closed.
+ */
+async function runVerifiedHook(
+  name: string,
+  scriptPath: string,
+  stdin: string,
+  timeoutMs: number,
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  const content = readFileSync(scriptPath);
+  const check = checkScriptHash(name, sha256Of(content));
+  if (!check.ok) {
+    throw new Error(
+      `Hook '${name}' script changed since it was trusted (sha256 ${check.expected} != ${check.actual}). Run 'hooks trust ${name}' to trust the new content.`,
+    );
+  }
+  const { executeVerifiedScript } = await import("../lib/run.js");
+  return executeVerifiedScript({ name, scriptPath, content, stdin, env: process.env, timeout: timeoutMs });
+}
 
 function formatInstallResults(results: InstallResult[], extra?: Record<string, any>) {
   const installed = results.filter((r) => r.success).map((r) => r.hook);
@@ -269,32 +296,35 @@ export function createHooksServer(): McpServer {
 
       const registered = getRegisteredHooks(scope);
       for (const name of registered) {
-        const meta = getHook(name);
+        const custom = readCustomManifest(name);
+        const meta = custom ? resolveHookMeta(name) : getHook(name);
         let hookHealthy = true;
 
-        if (!hookExists(name)) {
-          issues.push({ hook: name, issue: "Hook not found in @hasna/hooks package", severity: "error" });
-          continue;
-        }
+        if (custom) {
+          // Custom hook from the custom dir: healthy when its script exists.
+          if (!existsSync(custom.scriptPath)) {
+            issues.push({ hook: name, issue: `Custom hook script missing: ${custom.scriptPath}`, severity: "error" });
+            hookHealthy = false;
+          }
+        } else {
+          if (!hookExists(name)) {
+            issues.push({ hook: name, issue: "Hook not found in @hasna/hooks package", severity: "error" });
+            continue;
+          }
 
-        const hookDir = getHookPath(name);
-        if (!existsSync(join(hookDir, "src", "hook.ts"))) {
-          issues.push({ hook: name, issue: "Missing src/hook.ts in package", severity: "error" });
-          hookHealthy = false;
+          const hookDir = getHookPath(name);
+          if (!existsSync(join(hookDir, "src", "hook.ts"))) {
+            issues.push({ hook: name, issue: "Missing src/hook.ts in package", severity: "error" });
+            hookHealthy = false;
+          }
         }
 
         if (meta && settingsExist) {
           try {
             const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
-            const eventHooks = settings.hooks?.[meta.event] || [];
-            const found = eventHooks.some((entry: any) =>
-              entry.hooks?.some((h: any) => {
-                const match = h.command?.match(/^hooks run ([\w-]+)/);
-                return match && match[1] === name;
-              })
-            );
-            if (!found) {
-              issues.push({ hook: name, issue: `Not registered under correct event (${meta.event})`, severity: "error" });
+            if (!hookRegisteredInSettings(settings, name, meta.event, meta.matcher)) {
+              const eventName = meta.event.split(":")[0];
+              issues.push({ hook: name, issue: `Not registered under correct event (${eventName})`, severity: "error" });
               hookHealthy = false;
             }
           } catch {}
@@ -457,26 +487,27 @@ export function createHooksServer(): McpServer {
         }
       }
 
-      const proc = Bun.spawn(["bun", "run", hookScript], {
-        stdin: new Response(JSON.stringify(hookInput)),
-        stdout: "pipe",
-        stderr: "pipe",
-        env: process.env,
-      });
+      let ran: { stdout: string; stderr: string; exitCode: number } | null = null;
+      try {
+        ran = await Promise.race([
+          runVerifiedHook(name, hookScript, JSON.stringify(hookInput), timeout_ms),
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), timeout_ms)),
+        ]);
+      } catch (err) {
+        return {
+          content: [{
+            type: "text" as const,
+            text: JSON.stringify({ hook: name, error: err instanceof Error ? err.message : String(err), trust_failed: true }),
+          }],
+        };
+      }
 
-      const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), timeout_ms));
-
-      const result = await Promise.race([
-        Promise.all([
-          new Response(proc.stdout).text(),
-          new Response(proc.stderr).text(),
-          proc.exited,
-        ]).then(([stdout, stderr, exitCode]) => ({ stdout, stderr, exitCode, timedOut: false })),
-        timeoutPromise.then(() => { proc.kill(); return { stdout: "", stderr: "", exitCode: -1, timedOut: true }; }),
-      ]);
+      const timedOut = ran === null;
+      const stdoutText = ran?.stdout ?? "";
+      const stderrText = ran?.stderr ?? "";
 
       let output: unknown = {};
-      try { output = JSON.parse(result.stdout); } catch { output = result.stdout ? { raw: result.stdout } : {}; }
+      try { output = JSON.parse(stdoutText); } catch { output = stdoutText ? { raw: stdoutText } : {}; }
 
       return {
         content: [{
@@ -484,9 +515,9 @@ export function createHooksServer(): McpServer {
           text: JSON.stringify({
             hook: name,
             output,
-            stderr: result.stderr || undefined,
-            exitCode: result.exitCode,
-            ...(result.timedOut ? { timedOut: true, timeout_ms } : {}),
+            stderr: stderrText || undefined,
+            exitCode: ran?.exitCode ?? -1,
+            ...(timedOut ? { timedOut: true, timeout_ms } : {}),
           }),
         }],
       };
@@ -597,20 +628,22 @@ export function createHooksServer(): McpServer {
         const hookScript = join(hookDir, "src", "hook.ts");
         if (!existsSync(hookScript)) return { name, decision: "approve", error: "script not found" };
 
-        const proc = Bun.spawn(["bun", "run", hookScript], {
-          stdin: new Response(JSON.stringify(input)),
-          stdout: "pipe", stderr: "pipe", env: process.env,
-        });
-        const timeout = new Promise<null>((r) => setTimeout(() => r(null), timeout_ms));
-        const res = await Promise.race([
-          Promise.all([new Response(proc.stdout).text(), proc.exited])
-            .then(([stdout]) => ({ stdout, timedOut: false })),
-          timeout.then(() => { proc.kill(); return { stdout: "", timedOut: true }; }),
-        ]);
+        let ran: { stdout: string; stderr: string; exitCode: number } | null = null;
+        try {
+          ran = await Promise.race([
+            runVerifiedHook(name, hookScript, JSON.stringify(input), timeout_ms),
+            new Promise<null>((r) => setTimeout(() => r(null), timeout_ms)),
+          ]);
+        } catch (err) {
+          // Trust refusal is fail-closed: a hook whose content cannot be
+          // verified is never allowed to run, so the simulated decision
+          // blocks instead of approving.
+          return { name, decision: "block", error: err instanceof Error ? err.message : String(err) };
+        }
 
-        if (res.timedOut) return { name, decision: "approve", timedOut: true };
+        if (ran === null) return { name, decision: "approve", timedOut: true };
         let output: any = {};
-        try { output = JSON.parse(res.stdout); } catch {}
+        try { output = JSON.parse(ran.stdout); } catch {}
         return { name, decision: output.decision ?? "approve", reason: output.reason, raw: output };
       }));
 
@@ -674,20 +707,21 @@ export function createHooksServer(): McpServer {
         const hookScript = join(getHookPath(name), "src", "hook.ts");
         if (!existsSync(hookScript)) return { name, error: "script not found" };
 
-        const proc = Bun.spawn(["bun", "run", hookScript], {
-          stdin: new Response(JSON.stringify(input)),
-          stdout: "pipe", stderr: "pipe", env: process.env,
-        });
-        const timeout = new Promise<null>((r) => setTimeout(() => r(null), timeout_ms));
-        const res = await Promise.race([
-          Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited])
-            .then(([stdout, stderr, exitCode]) => ({ stdout, stderr, exitCode, timedOut: false })),
-          timeout.then(() => { proc.kill(); return { stdout: "", stderr: "", exitCode: -1, timedOut: true }; }),
-        ]);
+        let ran: { stdout: string; stderr: string; exitCode: number } | null = null;
+        try {
+          ran = await Promise.race([
+            runVerifiedHook(name, hookScript, JSON.stringify(input), timeout_ms),
+            new Promise<null>((r) => setTimeout(() => r(null), timeout_ms)),
+          ]);
+        } catch (err) {
+          return { name, error: err instanceof Error ? err.message : String(err) };
+        }
 
+        const stdoutText = ran?.stdout ?? "";
+        const timedOut = ran === null;
         let output: any = {};
-        try { output = JSON.parse(res.stdout); } catch { output = res.stdout ? { raw: res.stdout } : {}; }
-        return { name, output, exitCode: res.exitCode, ...(res.timedOut ? { timedOut: true } : {}) };
+        try { output = JSON.parse(stdoutText); } catch { output = stdoutText ? { raw: stdoutText } : {}; }
+        return { name, output, exitCode: ran?.exitCode ?? -1, ...(timedOut ? { timedOut: true } : {}) };
       }));
 
       return { content: [{ type: "text", text: JSON.stringify({ results, count: results.length }) }] };

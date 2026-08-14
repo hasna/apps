@@ -1,0 +1,5 @@
+export interface InvoicedConfig { apiKey: string; sandbox?: boolean; baseUrl?: string; }
+export interface InvoicedCustomer { id: number; name: string; email: string | null; number: string | null; balance: number; currency: string; phone: string | null; created_at: number; }
+export interface InvoicedInvoice { id: number; customer: number; number: string; date: number; due_date: number | null; status: 'draft' | 'not_sent' | 'sent' | 'viewed' | 'partial' | 'paid' | 'voided' | 'late' | 'past_due'; total: number; balance: number; currency: string; pdf_url: string; url: string; }
+export interface InvoicedPayment { id: number; customer: number; amount: number; currency: string; method: string; date: number; reference: string | null; applied_to: Array<{ type: string; invoice: number; amount: number }>; }
+export class InvoicedApiError extends Error { public readonly statusCode: number; constructor(message: string, statusCode: number) { super(message); this.name = 'InvoicedApiError'; this.statusCode = statusCode; } }

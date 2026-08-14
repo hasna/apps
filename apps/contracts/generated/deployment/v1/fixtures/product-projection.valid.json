@@ -1,0 +1,57 @@
+{
+  "createdAt": "2026-08-09T09:00:00.000Z",
+  "digest": "53497f71c3fd58dac6c1d32b77c126de3d132ffeac28a4494abc1fae2f6e5556",
+  "displayName": "Example App",
+  "id": "product-example-app",
+  "lifecycle": "active",
+  "ownerRefs": [
+    {
+      "id": "owner-approver",
+      "kind": "human",
+      "name": "Deployment Approver"
+    }
+  ],
+  "producer": {
+    "id": "agent-builder",
+    "kind": "agent",
+    "name": "Deployment Builder"
+  },
+  "projectedAt": "2026-08-09T09:00:00.000Z",
+  "repositoryRef": {
+    "id": "repo-contract-fixture",
+    "kind": "repo",
+    "tags": [
+      "deployment-fixture"
+    ],
+    "uri": "repo://hasna/example-app"
+  },
+  "revision": 1,
+  "schema": "hasna.product_projection.v1",
+  "slug": "example-app",
+  "sourceEvidenceRefs": [
+    {
+      "id": "product-projection-source",
+      "kind": "report",
+      "sha256": "ff6415fb8dc367fce3945c107dc3322c63adaa35265dea3b4fc8e3d4e323f772",
+      "summary": "Bounded evidence for product-projection-source",
+      "uri": "artifact://deployment-fixture/product-projection-source"
+    }
+  ],
+  "sourceProjectRef": {
+    "id": "project-contract-fixture",
+    "kind": "project",
+    "tags": [
+      "deployment-fixture"
+    ],
+    "uri": "project://example-app"
+  },
+  "sourceRevision": 7,
+  "workspaceRef": {
+    "id": "project-contract-fixture",
+    "kind": "project",
+    "tags": [
+      "deployment-fixture"
+    ],
+    "uri": "project://example-app"
+  }
+}

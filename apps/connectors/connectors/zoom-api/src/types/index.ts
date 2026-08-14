@@ -1,0 +1,35 @@
+export type JsonPrimitive = string | number | boolean | null;
+export type JsonValue = JsonPrimitive | JsonObject | JsonValue[];
+
+export interface JsonObject {
+  [key: string]: JsonValue | undefined;
+}
+
+export type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+export type OutputFormat = "json" | "pretty";
+export type QueryValue = JsonPrimitive | (JsonPrimitive | undefined)[] | undefined;
+export type QueryParams = Record<string, QueryValue>;
+
+export interface ZoomApiConfig {
+  apiKey?: string;
+  baseUrl?: string;
+}
+
+export interface RequestOptions {
+  method?: HttpMethod;
+  body?: JsonValue | string;
+  headers?: Record<string, string>;
+  query?: QueryParams;
+  auth?: boolean;
+}
+
+export class ZoomApiApiError extends Error {
+  constructor(
+    message: string,
+    public readonly status: number,
+    public readonly details?: unknown,
+  ) {
+    super(message);
+    this.name = "ZoomApiApiError";
+  }
+}
