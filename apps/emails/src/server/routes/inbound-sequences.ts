@@ -9,6 +9,7 @@ import { updateEmailStatus } from '../../db/emails.js';
 import { upsertEvent } from '../../db/events.js';
 import { getDatabase } from '../../db/database.js';
 import { getLatestEmailDigest, normalizeEmailDigestPeriod } from '../../db/email-digests.js';
+import { addPrioritySenderRuleLocal, listPrioritySenderRulesLocal, removePrioritySenderRuleLocal } from '../../db/priority-senders.js';
 import { json, notFound, badRequest, internalError, resolveId, resolveIdStrict, resolveOptionalId, parseBody, checkRateLimit, tooManyRequests, queryInteger, queryPage } from './helpers.js';
 import {
   MAILBOXES,
@@ -139,6 +140,24 @@ async function mailboxListPayload(mailbox: Mailbox, url: URL, source?: MailboxSo
 }
 
 export async function handle(req: Request, url: URL, path: string, method: string): Promise<Response | null> {
+// GET/POST /api/priority-sender-rules and DELETE /api/priority-sender-rules/:id
+if (path === "/api/priority-sender-rules" && method === "GET") {
+  try { return json({ items: listPrioritySenderRulesLocal() }); } catch (e) { return internalError(e); }
+}
+if (path === "/api/priority-sender-rules" && method === "POST") {
+  try {
+    const body = await parseBody(req) as Record<string, unknown>;
+    return json(addPrioritySenderRuleLocal(body.kind, body.value), 201);
+  } catch (e) { return e instanceof RangeError ? badRequest(e.message) : internalError(e); }
+}
+const priorityRuleMatch = path.match(/^\/api\/priority-sender-rules\/([^/]+)$/);
+if (priorityRuleMatch && method === "DELETE") {
+  try {
+    const id = decodeURIComponent(priorityRuleMatch[1]!);
+    return removePrioritySenderRuleLocal(id) ? json({ deleted: true, id }) : notFound("Priority sender rule not found");
+  } catch (e) { return internalError(e); }
+}
+
 // ─── INBOUND EMAILS ────────────────────────────────────────────────────
 
 // GET /api/inbound?provider_id=x&limit=50&since=...

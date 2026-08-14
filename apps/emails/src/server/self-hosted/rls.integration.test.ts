@@ -35,8 +35,9 @@ const PROBE = "emails_rls_probe";
 const TENANT_A = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
 const TENANT_B = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
 // Representative of every access shape: hand-written domains/messages, a generic
-// registry resource (contacts), and the composite-PK resource (email_agent_settings).
-const TABLES = ["domains", "contacts", "messages", "email_agent_settings", "send_intent_tombstones"] as const;
+// registry resource (contacts), a saved-filter resource, composite-PK resources,
+// and the natural-key composite resource (priority_sender_rules, migration 0026).
+const TABLES = ["domains", "contacts", "messages", "mailbox_filters", "email_agent_settings", "send_intent_tombstones", "priority_sender_rules"] as const;
 // message_recipients/message_counters (0019) are trigger-maintained from
 // messages writes, so any role that can write messages must own/write them
 // too — and they must fail closed exactly like the tables they mirror. They
@@ -91,6 +92,11 @@ beforeAll(async () => {
     [TENANT_A, TENANT_B],
   );
   await pg.execute(
+    `INSERT INTO mailbox_filters (id, tenant_id, name, normalized_name, mailbox, criteria)
+     VALUES ('11111111-1111-4111-8111-111111111111','${TENANT_A}','A filter','a-filter','inbox','{}'),
+            ('22222222-2222-4222-8222-222222222222','${TENANT_B}','B filter','b-filter','inbox','{}')`,
+  );
+  await pg.execute(
     `INSERT INTO email_agent_settings (tenant_id, agent_key, model) VALUES ($1,'labeler','m'), ($2,'labeler','m')`,
     [TENANT_A, TENANT_B],
   );
@@ -98,6 +104,12 @@ beforeAll(async () => {
     `INSERT INTO send_intent_tombstones (tenant_id, idempotency_key_hash) VALUES
        ($1, $3), ($2, $4)`,
     [TENANT_A, TENANT_B, "a".repeat(64), "b".repeat(64)],
+  );
+  await pg.execute(
+    `INSERT INTO priority_sender_rules (tenant_id, id, kind, value) VALUES
+       ($1, 'priority:address:a@a.example', 'address', 'a@a.example'),
+       ($2, 'priority:address:b@b.example', 'address', 'b@b.example')`,
+    [TENANT_A, TENANT_B],
   );
   await pg.execute(
     `INSERT INTO attachment_repair_runs (
@@ -240,6 +252,18 @@ describe.skipIf(!pg)("Row-Level Security backstop (Layer 2, migration 0013)", ()
     expect(bDomain).toBeNull();
     const bContact = await asProbe(TENANT_A, (tx) => tx.get<{ id: string }>(`SELECT id FROM contacts WHERE id = 'con-b'`));
     expect(bContact).toBeNull();
+    // Priority rules (0026) isolate exactly like the other tables: A sees only
+    // its own rule, never B's.
+    const rules = await asProbe(TENANT_A, (tx) =>
+      tx.many<{ id: string; value: string }>(
+        `SELECT id, value FROM priority_sender_rules ORDER BY id`,
+      ),
+    );
+    expect(rules).toEqual([{ id: "priority:address:a@a.example", value: "a@a.example" }]);
+    const bRule = await asProbe(TENANT_A, (tx) =>
+      tx.get<{ id: string }>(`SELECT id FROM priority_sender_rules WHERE id = 'priority:address:b@b.example'`),
+    );
+    expect(bRule).toBeNull();
   });
 
   it("blocks a cross-tenant WRITE at the DB layer even if Layer 1 were forgotten", async () => {
@@ -262,6 +286,15 @@ describe.skipIf(!pg)("Row-Level Security backstop (Layer 2, migration 0013)", ()
         tx.execute(
           `INSERT INTO send_intent_tombstones (tenant_id, idempotency_key_hash) VALUES ($1, $2)`,
           [TENANT_B, "c".repeat(64)],
+        ),
+      ),
+    ).rejects.toThrow(rls);
+    await expect(
+      asProbe(TENANT_A, (tx) =>
+        tx.execute(
+          `INSERT INTO priority_sender_rules (tenant_id, id, kind, value)
+           VALUES ($1, 'priority:address:x@x.example', 'address', 'x@x.example')`,
+          [TENANT_B],
         ),
       ),
     ).rejects.toThrow(rls);
@@ -353,7 +386,7 @@ describe.skipIf(!pg)("Row-Level Security backstop (Layer 2, migration 0013)", ()
     expect(await countAsProbe(null, "contacts")).toBe(0);
   });
 
-  it("every one of the 28 tenant tables is RLS-enabled + FORCEd with a tenant policy", async () => {
+  it("every one of the 29 tenant tables is RLS-enabled + FORCEd with a tenant policy", async () => {
     // Guards the hand-maintained table list in migration 0013: a dropped/misspelled
     // entry would leave a table un-forced (a silent hole) with no other failing test.
     const ALL_TENANT_TABLES = [
@@ -362,7 +395,7 @@ describe.skipIf(!pg)("Row-Level Security backstop (Layer 2, migration 0013)", ()
       "forwarding_rules", "warming_schedules", "email_triage", "provisioning_events",
       "mailbox_sources", "events", "email_agent_settings", "email_agent_runs", "email_digests",
       "group_members", "sequence_steps", "sequence_enrollments", "address_ownership_events",
-      "webhook_receipts", "sandbox_emails", "send_intent_tombstones",
+      "webhook_receipts", "sandbox_emails", "send_intent_tombstones", "mailbox_filters",
     ];
     const flags = await pg!.many<{ relname: string; en: boolean; force: boolean }>(
       `SELECT c.relname, c.relrowsecurity AS en, c.relforcerowsecurity AS force
@@ -382,7 +415,7 @@ describe.skipIf(!pg)("Row-Level Security backstop (Layer 2, migration 0013)", ()
     );
     const noPolicy = ALL_TENANT_TABLES.filter((t) => !pols.find((p) => p.tablename === t));
     expect(noPolicy, "tables without a tenant policy").toEqual([]);
-    expect(ALL_TENANT_TABLES).toHaveLength(28);
+    expect(ALL_TENANT_TABLES).toHaveLength(29);
   });
 
   it("migration 0018 is internally idempotent and keeps explicit USING/WITH CHECK policy", async () => {

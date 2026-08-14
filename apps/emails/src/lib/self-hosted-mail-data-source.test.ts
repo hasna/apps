@@ -160,6 +160,9 @@ function compactCursorServe(
     requests.push(`${method} ${u.pathname}${u.search}`);
     const ok = (body: unknown, status = 200) => ({ status, async text() { return JSON.stringify(body); } });
     const idMatch = u.pathname.match(/^\/v1\/messages\/([^/]+)$/);
+    if (method === "GET" && u.pathname === "/v1/priority-sender-rules") {
+      return ok({ items: [] });
+    }
     if (idMatch && method === "DELETE") {
       const id = decodeURIComponent(idMatch[1]!);
       deleted.push(id);
@@ -198,6 +201,9 @@ function legacyOffsetServe(
     requests.push(`${method} ${u.pathname}${u.search}`);
     const ok = (body: unknown, status = 200) => ({ status, async text() { return JSON.stringify(body); } });
     const idMatch = u.pathname.match(/^\/v1\/messages\/([^/]+)$/);
+    if (method === "GET" && u.pathname === "/v1/priority-sender-rules") {
+      return ok({ items: [] });
+    }
     if (idMatch && method === "DELETE") {
       const id = decodeURIComponent(idMatch[1]!);
       const had = rows.delete(id);
@@ -259,7 +265,12 @@ function legacyOffsetServe(
 // A fake self-hosted /v1 serve backed by an in-memory row list.
 function fakeServe(
   initial: Array<Record<string, unknown>>,
-  options: { ignoreListFilters?: boolean; leanList?: boolean; partialAttachmentList?: boolean } = {},
+  options: {
+    ignoreListFilters?: boolean;
+    leanList?: boolean;
+    partialAttachmentList?: boolean;
+    priorityRules?: Array<Record<string, unknown>>;
+  } = {},
 ): { fetchImpl: SelfHostedFetch; rows: Map<string, Record<string, unknown>>; posted: unknown[]; deleted: string[]; requests: string[] } {
   const rows = new Map(initial.map((r) => [r["id"] as string, r]));
   const posted: unknown[] = [];
@@ -358,6 +369,9 @@ function fakeServe(
     };
     const attachmentMatch = u.pathname.match(/^\/v1\/messages\/(.+)\/attachments\/(\d+)$/);
     const idMatch = u.pathname.match(/^\/v1\/messages\/([^/]+)$/);
+    if (method === "GET" && u.pathname === "/v1/priority-sender-rules") {
+      return ok({ items: options.priorityRules ?? [] });
+    }
     if (u.pathname === "/v1/messages" && method === "GET") {
       const page = list();
       return ok({ messages: page.messages, next_cursor: page.nextCursor });
@@ -490,6 +504,98 @@ describe("SelfHostedMailDataSource — /v1 resource mapping", () => {
     expect(top.date).toBe("2026-06-15T08:00:00.000Z");
     expect(top.is_read).toBe(false);
     expect(top.kind).toBe("inbound");
+  });
+
+  it("classifies Priority Inbox rows from served rules and excludes non-matches", async () => {
+    const { ds, serve } = make(
+      [
+        v1("exact", { from_addr: `"Boss" <person@example.com>` }),
+        v1("domain", { from_addr: `"Team" <team@example.com>` }),
+        v1("plain", { from_addr: `"Other" <other@example.net>` }),
+        v1("evil-suffix", { from_addr: `"Evil" <person@example.com.evil>` }),
+        v1("case-fold", { from_addr: `"Boss" <PERSON@Example.COM>` }),
+      ],
+      {
+        priorityRules: [
+          {
+            id: "priority:address:person@example.com",
+            kind: "address",
+            value: "person@example.com",
+            tenant_id: "00000000-0000-4000-8000-000000000001",
+            created_at: "2026-08-01T00:00:00.000Z",
+            updated_at: "2026-08-01T00:00:00.000Z",
+          },
+          {
+            id: "priority:domain:example.com",
+            kind: "domain",
+            value: "example.com",
+            tenant_id: "00000000-0000-4000-8000-000000000001",
+            created_at: "2026-08-01T00:00:00.000Z",
+            updated_at: "2026-08-01T00:00:00.000Z",
+          },
+        ],
+      },
+    );
+
+    const priority = await ds.listMailbox("priority");
+    expect(priority.map((m) => m.id).sort()).toEqual(["case-fold", "domain", "exact"]);
+    expect(priority.every((m) => m.is_priority)).toBe(true);
+    expect(priority.some((m) => m.id === "plain")).toBe(false);
+    expect(priority.some((m) => m.id === "evil-suffix")).toBe(false);
+
+    const inbox = await ds.listMailbox("inbox");
+    expect(inbox.find((m) => m.id === "exact")?.is_priority).toBe(true);
+    expect(inbox.find((m) => m.id === "plain")?.is_priority).toBe(false);
+    expect(serve.requests.filter((request) => request.startsWith("GET /v1/priority-sender-rules"))).toHaveLength(1);
+  });
+
+  it("degrades to an empty rule set when an old serve 404s the rules endpoint with an undeclared body", async () => {
+    // An old serve that predates the Priority Inbox answers GET
+    // /v1/priority-sender-rules with a generic 404 whose body is NOT the
+    // declared contract for this route. The strict wire client rejects that
+    // body — and the data source must degrade to "no rules" (an empty
+    // Priority Inbox) rather than break every mailbox against the older
+    // serve.
+    const requests: string[] = [];
+    const fetchImpl: SelfHostedFetch = async (url, init) => {
+      const u = new URL(url);
+      const method = (init.method ?? "GET").toUpperCase();
+      requests.push(`${method} ${u.pathname}${u.search}`);
+      if (u.pathname === "/v1/priority-sender-rules" && method === "GET") {
+        return {
+          status: 404,
+          async text() { return JSON.stringify({ error: "not found" }); },
+        };
+      }
+      if (method !== "GET" || u.pathname !== "/v1/messages") {
+        return {
+          status: 404,
+          async text() { return JSON.stringify({ error: "not found" }); },
+        };
+      }
+      return {
+        status: 200,
+        async text() {
+          return JSON.stringify({
+            messages: [listV1(v1("legacy-1", { from_addr: `"Boss" <person@example.com>` }))],
+            next_cursor: null,
+          });
+        },
+      };
+    };
+    const ds = new SelfHostedMailDataSource({
+      baseUrl: "https://emails.example/v1",
+      apiKey: "test-key",
+      fetchImpl,
+    });
+
+    // The 404 rule read is attempted once, degrades silently, and the mailbox
+    // still lists with no row flagged as priority.
+    const inbox = await ds.listMailbox("inbox");
+    expect(inbox).toHaveLength(1);
+    expect(inbox[0]!.is_priority).toBe(false);
+    expect((await ds.listMailbox("priority"))).toHaveLength(0);
+    expect(requests.filter((request) => request.startsWith("GET /v1/priority-sender-rules"))).toHaveLength(1);
   });
 
   // Regression guard for the list/detail attachment contract. The serve stopped
@@ -800,6 +906,7 @@ describe("SelfHostedMailDataSource — /v1 resource mapping", () => {
     expect(messages.map((message) => message.id)).toEqual(["oldest", "middle", "newest"]);
     expect(new Set(messages.map((message) => message.id)).size).toBe(3);
     expect(serve.requests).toEqual([
+      "GET /v1/priority-sender-rules?limit=1000",
       "GET /v1/messages?limit=500&folder=inbox&direction=inbound",
       "GET /v1/messages?limit=500&cursor=after-50000&folder=inbox&direction=inbound",
       "GET /v1/messages?limit=500&cursor=after-100000&folder=inbox&direction=inbound",
@@ -948,6 +1055,12 @@ describe("SelfHostedMailDataSource — /v1 resource mapping", () => {
       const method = (init.method ?? "GET").toUpperCase();
       requests.push(`${method} ${u.pathname}${u.search}`);
       const idMatch = u.pathname.match(/^\/v1\/messages\/([^/]+)$/);
+      if (u.pathname === "/v1/priority-sender-rules" && method === "GET") {
+        return {
+          status: 200,
+          async text() { return JSON.stringify({ items: [] }); },
+        };
+      }
       if (idMatch && method === "DELETE") {
         const id = decodeURIComponent(idMatch[1]!);
         deleted.push(id);
@@ -977,7 +1090,10 @@ describe("SelfHostedMailDataSource — /v1 resource mapping", () => {
     });
 
     await expect(ds.clear({ mailbox: "inbox" })).rejects.toThrow(/next_cursor is required/i);
-    expect(requests).toEqual(["GET /v1/messages?limit=500"]);
+    expect(requests).toEqual([
+      "GET /v1/priority-sender-rules?limit=1000",
+      "GET /v1/messages?limit=500",
+    ]);
     expect(deleted).toEqual([]);
   });
 
@@ -1012,6 +1128,7 @@ describe("SelfHostedMailDataSource — /v1 resource mapping", () => {
     expect(Array.isArray(messages)).toBe(true);
     expect(messages.map((message) => message.id)).toEqual(["older-hit"]);
     expect(serve.requests).toEqual([
+      "GET /v1/priority-sender-rules?limit=1000",
       "GET /v1/messages?limit=50&folder=inbox&direction=inbound&search=needle",
       "GET /v1/messages/newer-miss",
       "GET /v1/messages?limit=50&cursor=after-100000&folder=inbox&direction=inbound&search=needle",
@@ -1046,6 +1163,7 @@ describe("SelfHostedMailDataSource — /v1 resource mapping", () => {
     expect("changesSince" in ds).toBe(false);
     expect(serve.requests).toEqual([
       "GET /v1/messages?limit=1&since=2026-07-13T00%3A00%3A00.000Z",
+      "GET /v1/priority-sender-rules?limit=1000",
     ]);
   });
 
@@ -1084,6 +1202,7 @@ describe("SelfHostedMailDataSource — /v1 resource mapping", () => {
     expect(second.cursor).toBeNull();
     expect(serve.requests).toEqual([
       "GET /v1/messages?limit=1&since=2026-07-13T00%3A00%3A00.000Z",
+      "GET /v1/priority-sender-rules?limit=1000",
       "GET /v1/messages?limit=1&cursor=next-page&since=2026-07-13T00%3A00%3A00.000Z",
     ]);
   });
@@ -1117,6 +1236,7 @@ describe("SelfHostedMailDataSource — /v1 resource mapping", () => {
 
     expect(serve.requests).toEqual([
       "GET /v1/messages?limit=1&since=2026-07-13T00%3A00%3A00.000Z",
+      "GET /v1/priority-sender-rules?limit=1000",
     ]);
   });
 
@@ -1153,6 +1273,7 @@ describe("SelfHostedMailDataSource — /v1 resource mapping", () => {
     expect(second.insertions.map((message) => message.id)).toEqual(["oldest"]);
     expect(serve.requests).toEqual([
       "GET /v1/messages?limit=1&cursor=raw-server-cursor&since=2026-07-13T00%3A00%3A00.000Z",
+      "GET /v1/priority-sender-rules?limit=1000",
       "GET /v1/messages?limit=1&cursor=next-server-cursor&since=2026-07-13T00%3A00%3A00.000Z",
     ]);
   });
@@ -1271,6 +1392,7 @@ describe("SelfHostedMailDataSource — /v1 resource mapping", () => {
     expect(result.cursor).toBeNull();
     expect(serve.requests).toEqual([
       "GET /v1/messages?limit=1&cursor=legacy-server-cursor&since=2026-07-13T00%3A00%3A00.000Z",
+      "GET /v1/priority-sender-rules?limit=1000",
     ]);
   });
 
@@ -1281,6 +1403,12 @@ describe("SelfHostedMailDataSource — /v1 resource mapping", () => {
     const fetchImpl: SelfHostedFetch = async (url) => {
       const u = new URL(url);
       requests.push(`${u.pathname}${u.search}`);
+      if (u.pathname === "/v1/priority-sender-rules") {
+        return {
+          status: 200,
+          async text() { return JSON.stringify({ items: [] }); },
+        };
+      }
       const rawCursor = u.searchParams.get("cursor");
       const page = rawCursor ? cursorPositions.get(rawCursor)! : 0;
       const nextCursor = uniqueCursors[page] ?? null;
@@ -1311,7 +1439,7 @@ describe("SelfHostedMailDataSource — /v1 resource mapping", () => {
       lengths.push(cursor!.length);
     }
 
-    expect(requests).toHaveLength(uniqueCursors.length);
+    expect(requests).toHaveLength(uniqueCursors.length + 1);
     expect(new Set(uniqueCursors).size).toBe(uniqueCursors.length);
     expect(Math.max(...lengths)).toBeLessThanOrEqual(8192);
   });
@@ -1348,6 +1476,7 @@ describe("SelfHostedMailDataSource — /v1 resource mapping", () => {
     expect(third.insertions.map((message) => message.id)).toEqual(["duplicate-first"]);
     expect(serve.requests).toEqual([
       "GET /v1/messages?limit=1",
+      "GET /v1/priority-sender-rules?limit=1000",
       "GET /v1/messages?limit=1&cursor=cursor-a",
       "GET /v1/messages?limit=1&cursor=cursor-b",
       "GET /v1/messages?limit=1&cursor=cursor-a",
@@ -1709,7 +1838,10 @@ describe("SelfHostedMailDataSource — /v1 resource mapping", () => {
     expect(result?.body.text).toBe("hello world");
     expect(result?.body.cc).toBe("cc@x.com");
     // One and only one row read — not getMessage()+getMessageBody() (two).
-    expect(serve.requests).toEqual(["GET /v1/messages/5"]);
+    expect(serve.requests).toEqual([
+      "GET /v1/messages/5",
+      "GET /v1/priority-sender-rules?limit=1000",
+    ]);
   });
 
   it("getMessageWithBody resolves a short id prefix and returns null on no match", async () => {
@@ -1728,6 +1860,7 @@ describe("SelfHostedMailDataSource — /v1 resource mapping", () => {
     expect((await ds.getMessage(prefixed))?.subject).toBe("prefixed direct");
     expect(serve.requests).toEqual([
       "GET /v1/messages/legacy-inbound%3A31f40200-dc2c-48ba-a348-ed7d4414381e",
+      "GET /v1/priority-sender-rules?limit=1000",
     ]);
   });
 
@@ -2246,7 +2379,7 @@ describe("SelfHostedMailDataSource — /v1 resource mapping", () => {
 
   it("falls back to the API key after a selected session token needs reauthentication", async () => {
     const authorizations: string[] = [];
-    const fetchImpl: SelfHostedFetch = async (_url, init) => {
+    const fetchImpl: SelfHostedFetch = async (url, init) => {
       const headers = init.headers as Record<string, string>;
       authorizations.push(headers.Authorization ?? "");
       if (authorizations.length === 1) {
@@ -2254,6 +2387,10 @@ describe("SelfHostedMailDataSource — /v1 resource mapping", () => {
           { error: "session is invalid or expired", reason: "reauthenticate" },
           { status: 401 },
         );
+      }
+      const pathname = new URL(url).pathname;
+      if (pathname === "/v1/priority-sender-rules") {
+        return Response.json({ items: [] });
       }
       return Response.json({ messages: [], next_cursor: null });
     };
@@ -2272,6 +2409,7 @@ describe("SelfHostedMailDataSource — /v1 resource mapping", () => {
     expect(authorizations).toEqual([
       "Bearer session-token-placeholder",
       "Bearer api-key-placeholder",
+      "Bearer session-token-placeholder",
     ]);
   });
 
@@ -2518,6 +2656,25 @@ describe("SelfHostedMailDataSource — source scoping", () => {
     expect((await ds.listMailbox("inbox", { source: { domain: "elsewhere.com" } })).map((m) => m.id)).toEqual(["5"]);
   });
 
+  // Regression (review 1a9f20c9): a domain criterion must match the SENDER
+  // domain too, not only recipients — SQLite-local matches from OR recipients,
+  // while the self-hosted pushdown's message_recipients spans only to/cc. The
+  // fake serve does not push domain down, so this exercises the bounded local
+  // matcher, which must accept from/to/cc and never drop a row the server
+  // already returned.
+  it("matches domain criteria against sender, to and cc addresses", async () => {
+    const { ds } = make([
+      v1("sender", { from_addr: "alice@sender.example", to_addrs: ["owner@other.example"] }),
+      v1("to", { from_addr: "bob@other.example", to_addrs: ["owner@recipient.example"] }),
+      v1("cc", { from_addr: "carol@other.example", to_addrs: ["owner@other.example"], cc_addrs: ["cc@recipient.example"] }),
+      v1("none", { from_addr: "dave@other.example", to_addrs: ["owner@other.example"] }),
+    ]);
+
+    expect((await ds.listMailbox("inbox", { domain: "sender.example" })).map((m) => m.id)).toEqual(["sender"]);
+    expect((await ds.listMailbox("inbox", { domain: "recipient.example" })).map((m) => m.id).sort()).toEqual(["cc", "to"]);
+    expect((await ds.listMailbox("inbox", { domain: "other.example" })).map((m) => m.id).sort()).toEqual(["cc", "none", "sender", "to"]);
+  });
+
   it("honors the --search and --limit it is handed on listMailboxSources", async () => {
     const { ds } = make([v1("2")]);
     expect((await ds.listMailboxSources({ search: "self-hosted" })).map((s) => s.id)).toEqual(["self_hosted"]);
@@ -2544,6 +2701,25 @@ describe("SelfHostedMailDataSource — read filter", () => {
     const page = await ds.listMailbox("inbox", { read: true, limit: 2 });
     expect(page.map((m) => m.id)).toEqual(["read-new", "read-old"]);
     expect(page.every((m) => m.is_read)).toBe(true);
+  });
+
+  it("keeps outbound rows in a read:true list because they render as read", async () => {
+    const { ds } = make([
+      v1("sent-unread-flag", { direction: "outbound", is_read: false, received_at: "2026-07-05T08:00:00.000Z" }),
+      v1("sent-read-flag", { direction: "outbound", is_read: true, received_at: "2026-07-04T08:00:00.000Z" }),
+      v1("inbound-unread", { direction: "inbound", is_read: false, received_at: "2026-07-03T08:00:00.000Z" }),
+      v1("inbound-read", { direction: "inbound", is_read: true, received_at: "2026-07-02T08:00:00.000Z" }),
+    ]);
+
+    // Regression: the local read filter used to drop the unread-flagged outbound
+    // row even though the very same listing renders it as read (is_read: true
+    // in the projection) and the server pushdown accepts it.
+    const read = await ds.listMailbox("sent", { read: true });
+    expect(read.map((m) => m.id).sort()).toEqual(["sent-read-flag", "sent-unread-flag"]);
+    expect(read.every((m) => m.is_read)).toBe(true);
+
+    const unread = await ds.listMailbox("sent", { unread: true });
+    expect(unread).toEqual([]);
   });
 });
 
@@ -2986,6 +3162,9 @@ describe("SelfHostedMailDataSource — scoped mailboxCounts scan budget", () => 
     const fetchImpl: SelfHostedFetch = async (url, init) => {
       const u = new URL(url);
       requests.push(`${(init.method ?? "GET").toUpperCase()} ${u.pathname}`);
+      if (u.pathname === "/v1/priority-sender-rules") {
+        return { status: 200, async text() { return JSON.stringify({ items: [] }); } };
+      }
       if (failing) return { status: 503, async text() { return JSON.stringify({ error: "upstream unavailable" }); } };
       return { status: 200, async text() { return JSON.stringify({ messages: page, next_cursor: null }); } };
     };
@@ -3300,7 +3479,7 @@ describe("SelfHostedMailDataSource — scoped mailboxCounts scan budget", () => 
     });
 
     expect(await ds.mailboxCounts({ source: source(SCOPED) })).toEqual({
-      inbox: 2, unread: 1, starred: 1, sent: 1, archived: 1, spam: 0, trash: 0,
+      inbox: 2, unread: 1, priority: 0, starred: 1, sent: 1, archived: 1, spam: 0, trash: 0,
     });
   });
 

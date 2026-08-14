@@ -1,0 +1,16 @@
+node_modules/
+dist/
+*.db
+*.db-wal
+*.db-shm
+.tickets/
+.env
+.env.local
+.DS_Store
+*.tgz
+.secrets/
+coverage/
+dashboard/dist/
+dashboard/node_modules/
+sdk/dist/
+sdk/node_modules/

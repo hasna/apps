@@ -24,6 +24,12 @@ import { getLatestActiveProviderId, listProviderSummaries, listProviderNamesById
 import { listDomains } from "../../db/domains.local.js";
 import { findAddressesByEmail, getPreferredActiveAddressEmail, listActiveAddressCountsByDomains } from "../../db/addresses.local.js";
 import { listDomainProvisioningByIds, listReadyAddressCountsByDomains } from "../../db/provisioning.js";
+import {
+  addPrioritySenderRuleLocal,
+  listPrioritySenderRulesLocal,
+  removePrioritySenderRuleLocal,
+} from "../../db/priority-senders.js";
+import { priorityRuleMatchesSender } from "../../lib/priority-senders.js";
 import { createSqliteEmailStore } from "../../store-sqlite/index.js";
 import { getInboundBuckets, loadConfig, saveConfig } from "../../lib/config.js";
 import { assessDomainReadiness } from "../../lib/domain-readiness.js";
@@ -35,15 +41,16 @@ import { buildThreadingHeaders, generateMessageId, parseReferences } from "../..
 import { marked } from "marked";
 import { normalizeThemeMode, type TuiThemeMode } from "./theme.js";
 
-export type Folder = "inbox" | "unread" | "starred" | "sent" | "archived" | "spam" | "trash";
+export type Folder = "inbox" | "priority" | "unread" | "starred" | "sent" | "archived" | "spam" | "trash";
 export type Mailbox = Folder;
 
-export const FOLDERS: Folder[] = ["inbox", "unread", "starred", "sent", "archived", "spam", "trash"];
+export const FOLDERS: Folder[] = ["inbox", "priority", "unread", "starred", "sent", "archived", "spam", "trash"];
 export const MAILBOXES: Mailbox[] = FOLDERS;
 
 export function mailboxLabel(m: Mailbox): string {
   return {
     inbox: "Inbox",
+    priority: "Priority Inbox",
     unread: "Unread",
     starred: "Starred",
     sent: "Sent",
@@ -113,6 +120,7 @@ export interface TuiMessage {
   attachments: number;
   /** True if I sent it (app-sent, or imported mail labelled SENT). */
   sentByMe: boolean;
+  is_priority?: boolean;
 }
 
 export interface TuiThreadMessage {
@@ -141,10 +149,16 @@ function snippetOf(text: string | null | undefined): string {
   return text.replace(/\s+/g, " ").trim().slice(0, 100);
 }
 
+const PRIORITY_MATCH_SQL = `EXISTS (
+  SELECT 1 FROM priority_sender_rules rule
+   WHERE (rule.kind = 'address' AND rule.value = ${sqlEmailAddress("inbound_emails.from_address")})
+      OR (rule.kind = 'domain' AND rule.value = ${sqlEmailDomain("inbound_emails.from_address")})
+)`;
+
 interface LiteRow {
   id: string; from_address: string; to_addresses: string; subject: string; date: string;
   is_read?: number; is_starred?: number; label_ids_json?: string | null; thread_id?: string | null; provider_thread_id?: string | null; snippet?: string | null;
-  attachments?: number;
+  attachments?: number; is_priority?: number;
 }
 
 interface MailboxUnionRow extends LiteRow {
@@ -164,15 +178,17 @@ function liteToMessage(r: LiteRow, kind: "inbound" | "sent"): TuiMessage {
     labels, snippet: snippetOf(r.snippet), thread_id: r.thread_id ?? null, provider_thread_id: r.provider_thread_id ?? null,
     attachments: r.attachments ?? 0,
     sentByMe: kind === "sent" || labels.some((label) => label.trim().toLowerCase() === "sent"),
+    is_priority: kind === "inbound" && !!r.is_priority,
   };
 }
 
 // Lean inbound projection columns (no html_body). Reused across folder queries.
 const INBOUND_LITE_COLS = `id, from_address, to_addresses, subject, received_at AS date,
   is_read, is_starred, label_ids_json, thread_id, provider_thread_id, substr(text_body, 1, 140) AS snippet,
+  CASE WHEN ${PRIORITY_MATCH_SQL} THEN 1 ELSE 0 END AS is_priority,
   (CASE WHEN attachments_json IS NULL OR attachments_json = '[]' THEN 0
         ELSE (LENGTH(attachments_json) - LENGTH(REPLACE(attachments_json, '"filename"', ''))) / LENGTH('"filename"') END) AS attachments`;
-const MAILBOX_UNION_COLS = "kind, id, from_address, to_addresses, subject, date, is_read, is_starred, label_ids_json, thread_id, provider_thread_id, snippet, attachments";
+const MAILBOX_UNION_COLS = "kind, id, from_address, to_addresses, subject, date, is_read, is_starred, label_ids_json, thread_id, provider_thread_id, snippet, is_priority, attachments";
 
 // The receiving folders use denormalized, indexed flags so the UI never scans
 // label_ids_json on large stores.
@@ -182,6 +198,7 @@ const NOT_SPAM_OR_TRASH_SQL = "is_spam = 0 AND is_trash = 0";
 
 const FOLDER_WHERE: Record<Exclude<Mailbox, "sent">, string> = {
   inbox: `is_sent = 0 AND is_archived = 0 AND ${NOT_SPAM_OR_TRASH_SQL}`,
+  priority: `is_sent = 0 AND is_archived = 0 AND ${NOT_SPAM_OR_TRASH_SQL} AND ${PRIORITY_MATCH_SQL}`,
   unread: `is_sent = 0 AND is_read = 0 AND is_archived = 0 AND ${NOT_SPAM_OR_TRASH_SQL}`,
   starred: `is_sent = 0 AND is_starred = 1 AND is_archived = 0 AND ${NOT_SPAM_OR_TRASH_SQL}`,
   archived: `is_sent = 0 AND is_archived = 1 AND ${NOT_SPAM_OR_TRASH_SQL}`,
@@ -352,11 +369,21 @@ function senderSourceClause(src?: MailboxSource): SqlClause {
 function searchClause(search: string | undefined, columns: string[]): SqlClause {
   const q = search?.trim().toLowerCase();
   if (!q) return { sql: "", params: [] };
-  const like = `%${q}%`;
+  const like = `%${escapeLike(q)}%`;
   return {
-    sql: ` AND (${columns.map((column) => `LOWER(COALESCE(${column}, '')) LIKE ?`).join(" OR ")})`,
+    sql: ` AND (${columns.map((column) => `LOWER(COALESCE(${column}, '')) LIKE ? ESCAPE '\\'`).join(" OR ")})`,
     params: columns.map(() => like),
   };
+}
+
+/**
+ * Escape LIKE metacharacters so a term matches literally, mirroring the
+ * self-hosted store's likeContains (src/server/self-hosted/store.ts). SQLite
+ * has NO default LIKE escape character, so every pattern built here must also
+ * be paired with an explicit `ESCAPE '\'` clause.
+ */
+function escapeLike(value: string): string {
+  return value.replace(/[\\%_]/g, (match) => `\\${match}`);
 }
 
 function labelClause(label: string | undefined): SqlClause {
@@ -373,6 +400,89 @@ function labelClause(label: string | undefined): SqlClause {
   };
 }
 
+function mailboxCriteriaClause(
+  opts: MailboxListOptions | undefined,
+  alias = "",
+  receivedColumn = "received_at",
+  includeFlags = true,
+  includeRecipients = true,
+): SqlClause {
+  const prefix = alias ? `${alias}.` : "";
+  const params: string[] = [];
+  const clauses: string[] = [];
+  const contains = (column: string, value: string | undefined) => {
+    const q = value?.trim().toLowerCase();
+    if (!q) return;
+    clauses.push(`LOWER(COALESCE(${column}, '')) LIKE ? ESCAPE '\\'`);
+    params.push(`%${escapeLike(q)}%`);
+  };
+  contains(`${prefix}from_address`, opts?.from);
+  contains(`${prefix}subject`, opts?.subject);
+  // `to` is an exact recipient-address criterion, matching the CLI's --to
+  // semantics (exact address or domain via mailbox scope): a partial address
+  // must NOT match. Recipients resolve through inbound_recipients for inbound
+  // rows and through a per-element json_each scan for the app-sent ledger.
+  if (opts?.to?.trim()) {
+    const to = opts.to.trim().toLowerCase();
+    if (includeRecipients) {
+      clauses.push(`EXISTS (
+        SELECT 1 FROM inbound_recipients filter_recipient
+         WHERE filter_recipient.inbound_email_id = ${prefix}id
+           AND filter_recipient.address = ?
+      )`);
+    } else {
+      clauses.push(`EXISTS (
+        SELECT 1 FROM json_each(CASE WHEN json_valid(${prefix}to_addresses) THEN ${prefix}to_addresses ELSE '[]' END) AS filter_recipient
+         WHERE ${sqlEmailAddress("json_extract(filter_recipient.value, '$')")} = ?
+      )`);
+    }
+    params.push(to);
+  }
+  if (opts?.address?.trim()) {
+    const address = opts.address.trim().toLowerCase();
+    if (includeRecipients) {
+      clauses.push(`(${sqlEmailAddress(`${prefix}from_address`)} = ? OR EXISTS (
+        SELECT 1 FROM inbound_recipients filter_recipient
+         WHERE filter_recipient.inbound_email_id = ${prefix}id
+           AND filter_recipient.address = ?
+      ))`);
+    } else {
+      clauses.push(`(${sqlEmailAddress(`${prefix}from_address`)} = ? OR EXISTS (
+        SELECT 1 FROM json_each(CASE WHEN json_valid(${prefix}to_addresses) THEN ${prefix}to_addresses ELSE '[]' END) AS filter_recipient
+         WHERE ${sqlEmailAddress("json_extract(filter_recipient.value, '$')")} = ?
+      ))`);
+    }
+    params.push(address, address);
+  }
+  if (opts?.domain?.trim()) {
+    const domain = opts.domain.trim().toLowerCase();
+    if (includeRecipients) {
+      clauses.push(`(${addressDomainSql(`${prefix}from_address`)} OR EXISTS (
+        SELECT 1 FROM inbound_recipients filter_recipient
+         WHERE filter_recipient.inbound_email_id = ${prefix}id
+           AND filter_recipient.domain = ?
+      ))`);
+      params.push(...addressDomainParams(domain), domain);
+    } else {
+      clauses.push(`(${addressDomainSql(`${prefix}from_address`)} OR ${sqlEmailDomain(`${prefix}to_addresses`)} = ?)`);
+      params.push(...addressDomainParams(domain), ...addressDomainParams(domain));
+    }
+  }
+  if (includeFlags) {
+    if (opts?.read === true) clauses.push(`${prefix}is_read = 1`);
+    if (opts?.unread === true) clauses.push(`${prefix}is_read = 0`);
+    if (opts?.starred === true) clauses.push(`${prefix}is_starred = 1`);
+    if (opts?.archived === true) clauses.push(`${prefix}is_archived = 1`);
+  } else if (opts?.unread === true || opts?.starred === true || opts?.archived === true) {
+    clauses.push("0 = 1");
+  }
+  const since = normalizeIsoDate(opts?.since);
+  const until = normalizeIsoDate(opts?.until);
+  if (since) { clauses.push(`${prefix}${receivedColumn} >= ?`); params.push(since); }
+  if (until) { clauses.push(`${prefix}${receivedColumn} <= ?`); params.push(until); }
+  return clauses.length ? { sql: ` AND ${clauses.map((clause) => `(${clause})`).join(" AND ")}`, params } : { sql: "", params: [] };
+}
+
 function appSentSourceClause(src?: MailboxSource, search?: string, includeAppSent = true): SqlClause {
   const normalized = mailboxSourceFromRef(src);
   const params: string[] = [];
@@ -385,8 +495,8 @@ function appSentSourceClause(src?: MailboxSource, search?: string, includeAppSen
   if (normalized?.domain) { where.push(addressDomainSql("e.from_address")); params.push(...addressDomainParams(normalized.domain)); }
   const searchTerm = search?.trim().toLowerCase();
   if (searchTerm) {
-    const like = `%${searchTerm}%`;
-    where.push("(LOWER(COALESCE(e.subject, '')) LIKE ? OR LOWER(COALESCE(e.from_address, '')) LIKE ? OR LOWER(COALESCE(e.to_addresses, '')) LIKE ? OR LOWER(COALESCE(c.text_body, '')) LIKE ?)");
+    const like = `%${escapeLike(searchTerm)}%`;
+    where.push("(LOWER(COALESCE(e.subject, '')) LIKE ? ESCAPE '\\' OR LOWER(COALESCE(e.from_address, '')) LIKE ? ESCAPE '\\' OR LOWER(COALESCE(e.to_addresses, '')) LIKE ? ESCAPE '\\' OR LOWER(COALESCE(c.text_body, '')) LIKE ? ESCAPE '\\')");
     params.push(like, like, like, like);
   }
   return { sql: where.length ? ` WHERE ${where.join(" AND ")}` : "", params };
@@ -396,10 +506,20 @@ export interface MailboxListOptions {
   limit?: number;
   offset?: number;
   since?: string;
+  until?: string;
   search?: string;
+  from?: string;
+  to?: string;
+  domain?: string;
+  address?: string;
+  subject?: string;
   label?: string;
   source?: MailboxSource;
   sort?: "newest" | "oldest";
+  read?: boolean;
+  unread?: boolean;
+  starred?: boolean;
+  archived?: boolean;
 }
 
 export function listMailbox(mailbox: Mailbox, opts?: MailboxListOptions, db?: Database): TuiMessage[] {
@@ -422,22 +542,25 @@ export function listMailbox(mailbox: Mailbox, opts?: MailboxListOptions, db?: Da
     const sentSearch = searchClause(opts?.search, ["subject", "from_address", "to_addresses", "text_body"]);
     const sentLabel = labelClause(opts?.label);
     const syncedSinceSql = since ? ` AND ${sincePredicate("received_at")}` : "";
+    const appCriteria = mailboxCriteriaClause(opts, "e", "sent_at", false, false);
+    const syncedCriteria = mailboxCriteriaClause(opts, "inbound_emails", "received_at");
     const branchLimit = limit + offset;
     const rows = d.query(
       `WITH app_sent AS (
          SELECT 'sent' AS kind, e.id, e.from_address, e.to_addresses, e.subject, e.sent_at AS date,
                 1 AS is_read, 0 AS is_starred, '[]' AS label_ids_json, e.thread_id, NULL AS provider_thread_id,
-                substr(c.text_body, 1, 140) AS snippet, e.attachment_count AS attachments
-         FROM emails e LEFT JOIN email_content c ON c.email_id = e.id${appSrc.sql}
+                substr(c.text_body, 1, 140) AS snippet, 0 AS is_priority, e.attachment_count AS attachments
+         FROM emails e LEFT JOIN email_content c ON c.email_id = e.id${appSrc.sql}${appCriteria.sql}
          ORDER BY e.sent_at ${order}
          LIMIT ?
        ),
        synced_sent AS (
          SELECT 'inbound' AS kind, id, from_address, to_addresses, subject, received_at AS date,
                 is_read, is_starred, label_ids_json, thread_id, provider_thread_id, substr(text_body, 1, 140) AS snippet,
+                0 AS is_priority,
                 (CASE WHEN attachments_json IS NULL OR attachments_json = '[]' THEN 0
                       ELSE (LENGTH(attachments_json) - LENGTH(REPLACE(attachments_json, '"filename"', ''))) / LENGTH('"filename"') END) AS attachments
-         FROM inbound_emails WHERE is_sent = 1${senderSrc.sql}${sentSearch.sql}${sentLabel.sql}${syncedSinceSql}
+         FROM inbound_emails WHERE is_sent = 1${senderSrc.sql}${sentSearch.sql}${sentLabel.sql}${syncedSinceSql}${syncedCriteria.sql}
          ORDER BY received_at ${order}
          LIMIT ?
        )
@@ -446,14 +569,15 @@ export function listMailbox(mailbox: Mailbox, opts?: MailboxListOptions, db?: Da
          UNION ALL
          SELECT ${MAILBOX_UNION_COLS} FROM synced_sent
        ) ORDER BY date ${order} LIMIT ? OFFSET ?`,
-    ).all(...appSrc.params, branchLimit, ...senderSrc.params, ...sentSearch.params, ...sentLabel.params, ...(since ? [since] : []), branchLimit, limit, offset) as MailboxUnionRow[];
+    ).all(...appSrc.params, ...appCriteria.params, branchLimit, ...senderSrc.params, ...sentSearch.params, ...sentLabel.params, ...(since ? [since] : []), ...syncedCriteria.params, branchLimit, limit, offset) as MailboxUnionRow[];
     messages = rows.map((r) => liteToMessage(r, r.kind));
   } else {
     const inboundLabel = labelClause(opts?.label);
     const sinceSql = since ? ` AND ${sincePredicate("received_at")}` : "";
+    const inboundCriteria = mailboxCriteriaClause(opts);
     const rows = d.query(
-      `SELECT ${INBOUND_LITE_COLS} FROM inbound_emails WHERE ${FOLDER_WHERE[selectedMailbox]}${recipientSrc.sql}${inboundSearch.sql}${inboundLabel.sql}${sinceSql} ORDER BY received_at ${order} LIMIT ? OFFSET ?`,
-    ).all(...recipientSrc.params, ...inboundSearch.params, ...inboundLabel.params, ...(since ? [since] : []), limit, offset) as LiteRow[];
+      `SELECT ${INBOUND_LITE_COLS} FROM inbound_emails WHERE ${FOLDER_WHERE[selectedMailbox]}${recipientSrc.sql}${inboundSearch.sql}${inboundLabel.sql}${sinceSql}${inboundCriteria.sql} ORDER BY received_at ${order} LIMIT ? OFFSET ?`,
+    ).all(...recipientSrc.params, ...inboundSearch.params, ...inboundLabel.params, ...(since ? [since] : []), ...inboundCriteria.params, limit, offset) as LiteRow[];
     messages = rows.map((r) => liteToMessage(r, "inbound"));
   }
 
@@ -463,6 +587,7 @@ export function listMailbox(mailbox: Mailbox, opts?: MailboxListOptions, db?: Da
 export interface MailboxCounts {
   inbox: number;
   unread: number;
+  priority: number;
   starred: number;
   sent: number;
   archived: number;
@@ -478,6 +603,7 @@ function unscopedMailboxCounts(db: Database): MailboxCounts {
   const row = db.query(
     `SELECT
        (SELECT COUNT(*) FROM inbound_emails WHERE ${FOLDER_WHERE.inbox}) AS inbox,
+       (SELECT COUNT(*) FROM inbound_emails WHERE ${FOLDER_WHERE.priority}) AS priority,
        (SELECT COUNT(*) FROM inbound_emails WHERE ${FOLDER_WHERE.unread}) AS unread,
        (SELECT COUNT(*) FROM inbound_emails WHERE ${FOLDER_WHERE.starred}) AS starred,
        (SELECT COUNT(*) FROM inbound_emails WHERE ${FOLDER_WHERE.archived}) AS archived,
@@ -488,6 +614,7 @@ function unscopedMailboxCounts(db: Database): MailboxCounts {
   ).get() as Partial<Record<keyof MailboxCounts, unknown>> | null;
   return {
     inbox: countValue(row?.inbox),
+    priority: countValue(row?.priority),
     unread: countValue(row?.unread),
     starred: countValue(row?.starred),
     sent: countValue(row?.sent),
@@ -513,6 +640,7 @@ export function mailboxCounts(optsOrDb?: Database | { source?: MailboxSource }, 
   const row = d.query(
     `SELECT
        COALESCE(inbound.inbox, 0) AS inbox,
+       COALESCE(inbound.priority, 0) AS priority,
        COALESCE(inbound.unread, 0) AS unread,
        COALESCE(inbound.starred, 0) AS starred,
        COALESCE(inbound.archived, 0) AS archived,
@@ -523,6 +651,7 @@ export function mailboxCounts(optsOrDb?: Database | { source?: MailboxSource }, 
      FROM (
        SELECT
          SUM(CASE WHEN ${FOLDER_WHERE.inbox} THEN 1 ELSE 0 END) AS inbox,
+         SUM(CASE WHEN ${FOLDER_WHERE.priority} THEN 1 ELSE 0 END) AS priority,
          SUM(CASE WHEN ${FOLDER_WHERE.unread} THEN 1 ELSE 0 END) AS unread,
          SUM(CASE WHEN ${FOLDER_WHERE.starred} THEN 1 ELSE 0 END) AS starred,
          SUM(CASE WHEN ${FOLDER_WHERE.archived} THEN 1 ELSE 0 END) AS archived,
@@ -534,6 +663,7 @@ export function mailboxCounts(optsOrDb?: Database | { source?: MailboxSource }, 
   ).get(...appSrc.params, ...senderSrc.params, ...recipientSrc.params) as Partial<Record<keyof MailboxCounts, unknown>> | null;
   return {
     inbox: countValue(row?.inbox),
+    priority: countValue(row?.priority),
     unread: countValue(row?.unread),
     starred: countValue(row?.starred),
     sent: countValue(row?.sent),
@@ -803,6 +933,7 @@ export interface MessageBody {
   html: string | null;
   summary: string;
   flags: string[];
+  is_priority?: boolean;
   attachments: AttachmentInfo[];
 }
 
@@ -905,6 +1036,7 @@ export async function getMessageBody(msg: TuiMessage, db?: Database): Promise<Me
     ).get(msg.id) as InboundBodyRow | null;
     if (!e) return null;
     const labels = parseJsonArray<string>(e.label_ids_json);
+    const isPriority = priorityRuleMatchesSender(e.from_address, listPrioritySenderRulesLocal(d));
     const summary = normalizeSummary(e.summary) ?? fallbackMessageSummary(e.subject || "(no subject)", e.text_body, e.html_body);
     return {
       from: e.from_address,
@@ -913,7 +1045,8 @@ export async function getMessageBody(msg: TuiMessage, db?: Database): Promise<Me
       subject: e.subject || "(no subject)", date: e.received_at,
       text: e.text_body, html: e.html_body,
       summary,
-      flags: [e.is_read ? "read" : "unread", e.is_starred && "starred", e.is_archived && "archived", ...labels].filter(Boolean) as string[],
+      flags: [e.is_read ? "read" : "unread", e.is_starred && "starred", e.is_archived && "archived", isPriority && "priority", ...labels].filter(Boolean) as string[],
+      is_priority: isPriority,
       attachments: mergeAttachments(parseJsonArray(e.attachments_json), parseJsonArray(e.attachment_paths)),
     };
   }
@@ -946,9 +1079,21 @@ export async function getMessageBody(msg: TuiMessage, db?: Database): Promise<Me
     text: content?.text_body ?? null, html: content?.html ?? null,
     summary,
     flags: ["sent", e.status].filter(Boolean) as string[],
+    is_priority: false,
     attachments: [],
   };
 }
+
+export {
+  addPrioritySenderRuleLocal as addPrioritySenderRule,
+  listPrioritySenderRulesLocal as listPrioritySenderRules,
+  removePrioritySenderRuleLocal as removePrioritySenderRule,
+};
+export const prioritySenderRules = {
+  list: listPrioritySenderRulesLocal,
+  add: addPrioritySenderRuleLocal,
+  remove: removePrioritySenderRuleLocal,
+} as const;
 
 /** The full conversation (sent + received) for a message's thread, oldest first. */
 export function getConversation(msg: TuiMessage, db?: Database): TuiThreadMessage[] {
@@ -1185,8 +1330,10 @@ export function isImportantLabel(label: string): boolean {
     || normalized === "customer";
 }
 
-export function isImportantMessage(message: Pick<TuiMessage, "is_starred" | "labels">): boolean {
-  return message.is_starred || message.labels.some(isImportantLabel);
+export function isImportantMessage(
+  message: Pick<TuiMessage, "is_starred" | "labels"> & Partial<Pick<TuiMessage, "is_priority">>,
+): boolean {
+  return message.is_priority === true || message.is_starred || message.labels.some(isImportantLabel);
 }
 
 function messageCategory(message: TuiMessage): string {

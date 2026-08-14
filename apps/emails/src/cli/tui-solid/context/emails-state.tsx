@@ -35,9 +35,10 @@ import { resolveMailDataSource } from "../../../lib/mail-data-source.js";
 import { extractEmailLinks, type ExtractedEmailLink } from "../../../lib/email-links.js";
 import { loadEmailDigest } from "../../../lib/email-digest.js";
 import type { EmailDigest, EmailDigestPeriod } from "../../../db/email-digests.js";
+import type { MailboxFilter } from "../../../lib/mailbox-filters.js";
 
 export type RouteName = "mailbox" | "reader" | "domains";
-export type DialogName = "commands" | "address" | "source" | "filter" | "search" | "group" | "digest" | "domains" | "settings" | "labels" | "links" | "attachments" | "raw" | null;
+export type DialogName = "commands" | "address" | "source" | "filter" | "search" | "group" | "digest" | "domains" | "settings" | "labels" | "links" | "attachments" | "raw" | "saved-filters" | "save-filter" | null;
 export type ComposeMode = "new" | "reply" | "forward";
 export type ComposeField = "from" | "to" | "subject" | "body";
 
@@ -72,6 +73,8 @@ export interface EmailsState {
   domainsHasMore: boolean;
   labels: LabelSummary[];
   activeLabel: string | null;
+  savedFilters: MailboxFilter[];
+  activeFilterId: string | null;
   labelSearch: string;
   commandSearch: string;
   linkIndex: number;
@@ -96,7 +99,7 @@ const REFRESH_MS = 30000;
 const PULL_MS = 45000;
 
 function emptyCounts(): MailboxCounts {
-  return { inbox: 0, unread: 0, starred: 0, sent: 0, archived: 0, spam: 0, trash: 0 };
+  return { inbox: 0, unread: 0, priority: 0, starred: 0, sent: 0, archived: 0, spam: 0, trash: 0 };
 }
 
 function sourceForSelection(address: InboxAddressChoice | undefined, sourceId: string | undefined): MailboxSource | undefined {
@@ -187,6 +190,8 @@ function createEmailsStore(initialMailbox?: Mailbox) {
     domainsHasMore: false,
     labels: [],
     activeLabel: null,
+    savedFilters: [],
+    activeFilterId: null,
     labelSearch: "",
     commandSearch: "",
     linkIndex: 0,
@@ -221,6 +226,14 @@ function createEmailsStore(initialMailbox?: Mailbox) {
     return body ? extractEmailLinks({ text: body.text, html: body.html, includeNonWeb: true, max: 200 }) : [];
   });
   const groupedMessages = createMemo<TuiMessageGroup[]>(() => groupMailboxMessages(state.messages, state.groupMode));
+
+  const loadSavedFilters = async () => {
+    try {
+      setState("savedFilters", await ds.listMailboxFilters({ limit: 1000, offset: 0 }));
+    } catch (error) {
+      setState("lastError", error instanceof Error ? error.message : String(error));
+    }
+  };
 
   const loadDigestSnapshot = async (period = state.digestPeriod, options?: { fresh?: boolean; local?: boolean }) => {
     setState("digestLoading", true);
@@ -290,14 +303,19 @@ function createEmailsStore(initialMailbox?: Mailbox) {
 	      const selected = resolveAddressChoice(state.selectedAddressId, state.addresses);
 	      const selectedSrc = selectedSource(state);
 	      const source = sourceForSelection(selected, selectedSrc.id);
-      const messages = await ds.listMailbox(state.mailbox, {
-        limit: PAGE_SIZE + 1,
-        offset: pageOffset(state.page),
-        search: state.search,
-        label: state.activeLabel ?? undefined,
-        source,
-        sort: state.sort,
-      });
+      const applied = state.activeFilterId
+        ? await ds.applyMailboxFilter(state.activeFilterId, { limit: PAGE_SIZE, offset: pageOffset(state.page) })
+        : null;
+      const messages = applied
+        ? applied.items
+        : await ds.listMailbox(state.mailbox, {
+          limit: PAGE_SIZE + 1,
+          offset: pageOffset(state.page),
+          search: state.search,
+          label: state.activeLabel ?? undefined,
+          source,
+          sort: state.sort,
+        });
       const visible = messages.slice(0, PAGE_SIZE);
       const selectedId = preserveSelection && state.selectedMessageId && visible.some((message) => message.id === state.selectedMessageId)
         ? state.selectedMessageId
@@ -306,7 +324,7 @@ function createEmailsStore(initialMailbox?: Mailbox) {
 	        selectedAddressId: selected.id,
 	        selectedSourceId: selectedSrc.id,
         messages: visible,
-        hasMore: messages.length > PAGE_SIZE,
+        hasMore: applied ? applied.truncated : messages.length > PAGE_SIZE,
         selectedMessageId: selectedId,
         lastError: null,
       });
@@ -447,6 +465,7 @@ function createEmailsStore(initialMailbox?: Mailbox) {
         setState("addresses", loadAddresses());
       }
       if (dialog === "filter" || dialog === "search") setState("searchDraft", state.search);
+      if (dialog === "saved-filters" || dialog === "save-filter") void loadSavedFilters();
       if (dialog === "digest") void loadDigestSnapshot(state.digestPeriod, { local: true });
       // Same sequencing as `openRoute`, for the same reason.
       if (dialog === "domains") {
@@ -463,7 +482,7 @@ function createEmailsStore(initialMailbox?: Mailbox) {
       setState("labelSearch", "");
     },
     setMailbox(mailbox: Mailbox) {
-      setState({ mailbox, activeLabel: null, page: 0, route: "mailbox", selectedMessageId: null });
+      setState({ mailbox, activeLabel: null, activeFilterId: null, page: 0, route: "mailbox", selectedMessageId: null });
       reload({ preserveSelection: false });
     },
     filterLabel(label: string | null) {
@@ -471,6 +490,7 @@ function createEmailsStore(initialMailbox?: Mailbox) {
       const active = nextLabel && state.activeLabel && labelNameKey(nextLabel) === labelNameKey(state.activeLabel);
       setState({
         activeLabel: active ? null : nextLabel,
+        activeFilterId: null,
         mailbox: "inbox",
         page: 0,
         route: "mailbox",
@@ -529,17 +549,18 @@ function createEmailsStore(initialMailbox?: Mailbox) {
 	      reload({ preserveSelection: false });
 	    },
 	    setSource(id: string) {
-	      setState({ selectedSourceId: id || "all", page: 0, selectedMessageId: null });
+	      setState({ selectedSourceId: id || "all", activeFilterId: null, page: 0, selectedMessageId: null });
 	      reload({ preserveSelection: false });
 	    },
     search(value: string) {
-      setState({ search: value, searchDraft: value, page: 0, selectedMessageId: null });
+      setState({ search: value, searchDraft: value, activeFilterId: null, page: 0, selectedMessageId: null });
       reload({ preserveSelection: false });
     },
     clearFilters() {
       setState({
         mailbox: "inbox",
         activeLabel: null,
+	        activeFilterId: null,
 	        search: "",
 	        searchDraft: "",
 	        selectedSourceId: "all",
@@ -551,6 +572,47 @@ function createEmailsStore(initialMailbox?: Mailbox) {
     },
     setSearchDraft(value: string) {
       setState("searchDraft", value);
+    },
+    async applySavedFilter(identifier: string) {
+      const filter = await ds.getMailboxFilter(identifier);
+      if (!filter) throw new Error(`mailbox filter not found: ${identifier}`);
+      setState({
+        activeFilterId: filter.id,
+        mailbox: filter.mailbox,
+        activeLabel: null,
+        search: "",
+        searchDraft: "",
+        page: 0,
+        route: "mailbox",
+        selectedMessageId: null,
+      });
+      await reload({ preserveSelection: false });
+    },
+    async saveCurrentFilter(name: string) {
+      const mailbox = state.mailbox;
+      const criteria = {
+        search: state.search || undefined,
+        label: state.activeLabel || undefined,
+        unread: mailbox === "unread" || undefined,
+        starred: mailbox === "starred" || undefined,
+        archived: mailbox === "archived" || undefined,
+      };
+      const filter = await ds.createMailboxFilter({ name, mailbox, criteria });
+      setState("savedFilters", (items) => [...items.filter((item) => item.id !== filter.id), filter]);
+      setState("activeFilterId", filter.id);
+      await reload({ preserveSelection: false });
+      return filter;
+    },
+    async deleteSavedFilter(identifier: string) {
+      const current = await ds.getMailboxFilter(identifier);
+      if (!current) throw new Error(`mailbox filter not found: ${identifier}`);
+      await ds.deleteMailboxFilter(current.id);
+      const active = state.activeFilterId === current.id;
+      setState("savedFilters", (items) => items.filter((item) => item.id !== current.id));
+      if (active) {
+        setState({ activeFilterId: null, mailbox: "inbox", page: 0, selectedMessageId: null });
+        await reload({ preserveSelection: false });
+      }
     },
     setCommandSearch(value: string) {
       setState("commandSearch", value);
@@ -641,6 +703,7 @@ function createEmailsStore(initialMailbox?: Mailbox) {
   };
 
   onMount(() => {
+    void loadSavedFilters();
     reload({ preserveSelection: false });
     void reloadWorkspace();
     const clock = setInterval(() => setState("now", Date.now()), CLOCK_MS);

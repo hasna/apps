@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SEDOSEARCH ver="1.0">
+<item>
+<domain type="xsd:string">cloud.biz</domain>
+<type type="xsd:string">D</type>
+<price type="xsd:double">200000</price>
+<currency type="xsd:int">0</currency>
+<rank type="xsd:int">1</rank>
+<url type="xsd:string">https://sedo.com/search/details.php4?domain=cloud.biz&amp;partnerid=0000&amp;trackingRequestId=0&amp;origin=api&amp;p=1</url>
+</item>
+<item>
+<domain type="xsd:string">cloud.de</domain>
+<type type="xsd:string">D</type>
+<price type="xsd:double">300000</price>
+<currency type="xsd:int">0</currency>
+<rank type="xsd:int">1</rank>
+<url type="xsd:string">https://sedo.com/search/details.php4?domain=cloud.de&amp;partnerid=0000&amp;trackingRequestId=0&amp;origin=api&amp;p=2</url>
+</item>
+<item>
+<domain type="xsd:string">clouds.io</domain>
+<type type="xsd:string">D</type>
+<price type="xsd:double">60500</price>
+<currency type="xsd:int">1</currency>
+<rank type="xsd:int">2</rank>
+<url type="xsd:string">https://sedo.com/search/details.php4?domain=clouds.io&amp;partnerid=0000&amp;trackingRequestId=0&amp;origin=api&amp;p=3</url>
+</item>
+</SEDOSEARCH>

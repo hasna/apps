@@ -1,0 +1,400 @@
+// Local, on-box primitives for the accounts registry file.
+//
+// This module owns ONLY the machine-local JSON registry at
+// `~/.hasna/accounts/accounts.json` (and the managed profiles dir). It is the
+// filesystem backend behind `LocalStore` in `./lib/store.ts`. There is no S3 /
+// "remote" / "hybrid" storage tier here: the single storage abstraction is the
+// `AccountsStore` in `./lib/store.ts`, whose only two transports are LocalStore
+// (these primitives) and ApiStore (the `<API_URL>/v1` HTTP client). Self-hosted
+// and cloud both route through ApiStore; nothing bypasses the Store.
+
+import { homedir, hostname } from "node:os";
+import { join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { type Store, storeSchema, AccountsError, profileNameSchema } from "./types.js";
+import { writeFileAtomic } from "./lib/safe-path.js";
+import { crossProviderCollisions } from "./lib/name-invariant.js";
+
+function validateEnvPath(value: string, label: string): string {
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.includes("\0") || /[\r\n]/.test(trimmed)) {
+    throw new AccountsError(`invalid ${label}`);
+  }
+  return trimmed;
+}
+
+/** Base directory for all accounts state. Override with `ACCOUNTS_HOME`. */
+export function accountsHome(): string {
+  const override = process.env.ACCOUNTS_HOME;
+  if (override && override.trim()) return validateEnvPath(override, "ACCOUNTS_HOME");
+  return join(homedir(), ".hasna", "accounts");
+}
+
+/** Path to the registry file. Override with `ACCOUNTS_STORE_PATH`. */
+export function storePath(): string {
+  const override = process.env.ACCOUNTS_STORE_PATH;
+  if (override && override.trim()) return validateEnvPath(override, "ACCOUNTS_STORE_PATH");
+  return join(accountsHome(), "accounts.json");
+}
+
+/** Base directory under which managed profile config dirs are created. */
+export function profilesDir(): string {
+  return join(accountsHome(), "profiles");
+}
+
+/**
+ * The ONE machine-level home for Claude Code's live-session registry
+ * (`sessions/<pid>.json`). Every Claude profile's `sessions/` directory is a
+ * symlink here (see `lib/claude-session-registry.ts`), so native cross-session
+ * discovery (ListAgents/SendMessage) sees sessions across ALL profiles.
+ *
+ * STRICTLY MACHINE-LOCAL. Entries are keyed by pid and carry `/tmp` socket
+ * paths — both meaningless on any other machine — so this directory must never
+ * be synced, backed up cross-machine, or shipped by any cloud path. It sits
+ * beside `auth/` (the per-account credential store from the single-inode
+ * broker) but shares nothing with it: no credential material lives here.
+ */
+export function sharedClaudeSessionsDir(): string {
+  return join(accountsHome(), "shared", "claude-sessions");
+}
+
+const EMPTY_STORE: Store = { version: 1, current: {}, applied: {}, toolLocks: {}, profiles: [], tools: [] };
+
+/**
+ * Parse and schema-validate the on-box registry file WITHOUT the profile
+ * cross-pruning that `loadStore()` applies. Returns the empty store when the
+ * file is absent. Used by both `loadStore()` (which then prunes against the
+ * local profile list) and the machine-local pointer readers, which must NOT
+ * prune: in api mode the profile records live in the cloud, so pruning a
+ * machine-local `applied`/`current` pointer against the (empty) local profile
+ * list would wrongly erase a valid pointer.
+ */
+function parseStoreFile(): Store {
+  const path = storePath();
+  if (!existsSync(path)) return structuredClone(EMPTY_STORE);
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(path, "utf8"));
+  } catch (err) {
+    throw new AccountsError(`could not parse store at ${path}: ${(err as Error).message}`);
+  }
+  const parsed = storeSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new AccountsError(`invalid store at ${path}: ${parsed.error.issues.map((i) => i.message).join("; ")}`);
+  }
+  return parsed.data;
+}
+
+/** Raw validated machine state without pruning pointers against local profiles. */
+export function loadMachineStore(): Store {
+  return parseStoreFile();
+}
+
+/**
+ * The machine-local `applied` pointer map (toolId -> profile name): which
+ * profile's auth is currently restored to each tool's live default paths on
+ * THIS machine. This is genuinely machine-local state (never in the shared
+ * cloud registry), so readiness/doctor read it here regardless of storage mode.
+ * Entries are validated for name shape only — a pointer to a profile that no
+ * longer exists is preserved so `accounts doctor` can flag it as stale.
+ */
+export function loadAppliedMap(): Record<string, string> {
+  const applied: Record<string, string> = {};
+  for (const [toolId, name] of Object.entries(parseStoreFile().applied)) {
+    if (name && profileNameSchema.safeParse(name).success) applied[toolId] = name;
+  }
+  return applied;
+}
+
+export function loadCurrentMap(): Record<string, string> {
+  const current: Record<string, string> = {};
+  for (const [toolId, name] of Object.entries(parseStoreFile().current)) {
+    if (name && profileNameSchema.safeParse(name).success) current[toolId] = name;
+  }
+  return current;
+}
+
+export function reconcileMachineProfileRename(toolId: string, oldName: string, newName: string): void {
+  const store = parseStoreFile();
+  let changed = false;
+  if (store.current[toolId] === oldName) {
+    store.current[toolId] = newName;
+    changed = true;
+  }
+  if (store.applied[toolId] === oldName) {
+    store.applied[toolId] = newName;
+    changed = true;
+  }
+  if (store.toolLocks[oldName] === toolId) {
+    delete store.toolLocks[oldName];
+    store.toolLocks[newName] = toolId;
+    changed = true;
+  }
+  if (changed) saveStore(store);
+}
+
+export function reconcileMachineProfileRemove(toolId: string, name: string): void {
+  const store = parseStoreFile();
+  let changed = false;
+  if (store.current[toolId] === name) {
+    delete store.current[toolId];
+    changed = true;
+  }
+  if (store.applied[toolId] === name) {
+    delete store.applied[toolId];
+    changed = true;
+  }
+  if (store.toolLocks[name] === toolId) {
+    delete store.toolLocks[name];
+    changed = true;
+  }
+  if (changed) saveStore(store);
+}
+
+export function loadStore(): Store {
+  const store = parseStoreFile();
+  for (const p of store.profiles) {
+    const check = profileNameSchema.safeParse(p.name);
+    if (!check.success) {
+      throw new AccountsError(`invalid profile name in store "${p.name}": ${check.error.issues[0]?.message}`);
+    }
+  }
+  for (const toolId of Object.keys(store.current)) {
+    const name = store.current[toolId];
+    if (!name || !profileNameSchema.safeParse(name).success) delete store.current[toolId];
+    else if (!store.profiles.some((p) => p.name === name && p.tool === toolId)) delete store.current[toolId];
+  }
+  for (const toolId of Object.keys(store.applied)) {
+    const name = store.applied[toolId];
+    if (!name || !profileNameSchema.safeParse(name).success) delete store.applied[toolId];
+    else if (!store.profiles.some((p) => p.name === name && p.tool === toolId)) delete store.applied[toolId];
+  }
+  for (const name of Object.keys(store.toolLocks)) {
+    const toolId = store.toolLocks[name];
+    if (!profileNameSchema.safeParse(name).success || !toolId) delete store.toolLocks[name];
+    else if (!store.profiles.some((p) => p.name === name && p.tool === toolId)) delete store.toolLocks[name];
+  }
+  reportCrossProviderCollisions(store);
+  return store;
+}
+
+/** Suppress the load-time integrity warning (scripted consumers, test rigs). */
+export const INVARIANT_QUIET_ENV = "HASNA_ACCOUNTS_INVARIANT_QUIET";
+
+/**
+ * Collision signatures already reported by this process.
+ *
+ * `loadStore()` runs many times per command, so an un-deduped warning would
+ * print the same line a dozen times and train every reader to ignore it. Keyed
+ * on the signature rather than a boolean so a store that changes mid-process
+ * still reports its NEW collisions.
+ */
+const reportedCollisionSignatures = new Set<string>();
+
+/** Exposed for tests, which need a fresh process-level state per case. */
+export function resetCollisionReportState(): void {
+  reportedCollisionSignatures.clear();
+}
+
+/**
+ * WARN MODE (PR-1). Report names held by more than one provider; never throw.
+ *
+ * A hard failure here would brick every `accounts` command on today's data —
+ * 23 records currently violate this — so the failing state must only become
+ * reachable after PR-2's migration cleans the data. That is the whole reason
+ * this is a report and not a refusal, and PR-2 flips it by raising
+ * `NAME_INVARIANT_MODE`, not by editing this function's callers.
+ *
+ * Scope note, stated so nobody reads more into a clean run than it supports:
+ * this sees only THIS FILE. accounts.json holds 14 of the 23 colliding records
+ * and cannot see `account01` or `account024` at all, which live solely as
+ * server rows. Silence here is not evidence that the merged view is clean —
+ * `accounts registry --invariant` reads the merged universe and is the gate.
+ */
+function reportCrossProviderCollisions(store: Store): void {
+  if (process.env[INVARIANT_QUIET_ENV] === "1") return;
+  const collisions = crossProviderCollisions(
+    store.profiles.map((p) => ({ name: p.name, provider: p.tool })),
+  );
+  if (collisions.length === 0) return;
+  const signature = collisions.map((c) => `${c.name}:${c.providers.join("+")}`).join(",");
+  if (reportedCollisionSignatures.has(signature)) return;
+  reportedCollisionSignatures.add(signature);
+  const detail = collisions.map((c) => `${c.name} (${c.providers.join(", ")})`).join("; ");
+  process.stderr.write(
+    `accounts: name-invariant warning: ${collisions.length} name(s) held by more than one provider ` +
+      `in ${storePath()}: ${detail}. Names become provider-unique in a later release; ` +
+      `run \`accounts registry --invariant\` for the merged view.\n`,
+  );
+}
+
+export function saveStore(store: Store): void {
+  const path = storePath();
+  const parsed = storeSchema.safeParse(store);
+  if (!parsed.success) {
+    throw new AccountsError(`invalid store: ${parsed.error.issues.map((i) => i.message).join("; ")}`);
+  }
+  writeFileAtomic(path, JSON.stringify(parsed.data, null, 2) + "\n", {
+    mode: 0o600,
+    mustStayUnder: accountsHome(),
+  });
+}
+
+/**
+ * Deprecated source-compatibility shims for the pre-AccountsStore storage API.
+ * They intentionally contain no cloud-provider implementation.
+ */
+export const ACCOUNTS_STORAGE_ENV = {
+  mode: "HASNA_ACCOUNTS_STORAGE_MODE",
+  s3Bucket: "HASNA_ACCOUNTS_S3_BUCKET",
+  s3Prefix: "HASNA_ACCOUNTS_S3_PREFIX",
+  awsRegion: "HASNA_ACCOUNTS_AWS_REGION",
+  s3Endpoint: "HASNA_ACCOUNTS_S3_ENDPOINT",
+  s3ForcePathStyle: "HASNA_ACCOUNTS_S3_FORCE_PATH_STYLE",
+  machineId: "HASNA_ACCOUNTS_MACHINE_ID",
+} as const;
+
+export const ACCOUNTS_STORAGE_FALLBACK_ENV = {
+  mode: "ACCOUNTS_STORAGE_MODE",
+  s3Bucket: "ACCOUNTS_S3_BUCKET",
+  s3Prefix: "ACCOUNTS_S3_PREFIX",
+  awsRegion: "ACCOUNTS_AWS_REGION",
+  s3Endpoint: "ACCOUNTS_S3_ENDPOINT",
+  s3ForcePathStyle: "ACCOUNTS_S3_FORCE_PATH_STYLE",
+  machineId: "ACCOUNTS_MACHINE_ID",
+} as const;
+
+export const STORAGE_MODE_ENV = ACCOUNTS_STORAGE_ENV.mode;
+export const STORAGE_TABLES = [] as const;
+export type AccountsStorageMode = "local" | "self_hosted" | "cloud" | "remote" | "hybrid";
+
+export interface AccountsStorageConfig {
+  mode: AccountsStorageMode;
+  s3Bucket?: string;
+  s3Prefix: string;
+  awsRegion?: string;
+  s3Endpoint?: string;
+  s3ForcePathStyle?: boolean;
+  machineId: string;
+}
+
+export interface AccountsStorageStatus {
+  configured: boolean;
+  mode: AccountsStorageMode;
+  local: { home: string; storePath: string; profilesDir: string };
+  remote: {
+    configured: boolean;
+    bucketEnv: string;
+    bucket?: string;
+    prefix: string;
+    regionEnv: string;
+    endpointConfigured: boolean;
+  };
+  env: typeof ACCOUNTS_STORAGE_ENV;
+  fallbackEnv: typeof ACCOUNTS_STORAGE_FALLBACK_ENV;
+  tables: readonly [];
+}
+
+export interface AccountsStorageSnapshot {
+  schemaVersion: 1;
+  source: "accounts";
+  createdAt: string;
+  machineId: string;
+  store: Store;
+}
+
+export interface AccountsStorageSyncResult {
+  mode: AccountsStorageMode;
+  pushed: number;
+  pulled: number;
+  skipped: boolean;
+  key: string;
+  reason?: string;
+}
+
+function compatibilityMode(env: NodeJS.ProcessEnv): AccountsStorageMode {
+  const value = (env.HASNA_ACCOUNTS_STORAGE_MODE || env.ACCOUNTS_STORAGE_MODE || "").trim().toLowerCase();
+  if (value === "cloud" || value === "self_hosted") return value;
+  return "local";
+}
+
+/** @deprecated Use resolveStore() and AccountsStore.transport. */
+export function getAccountsStorageConfig(env: NodeJS.ProcessEnv = process.env): AccountsStorageConfig {
+  return {
+    mode: compatibilityMode(env),
+    s3Prefix: "accounts/",
+    machineId: env.HASNA_ACCOUNTS_MACHINE_ID || env.ACCOUNTS_MACHINE_ID || hostname(),
+  };
+}
+
+/** @deprecated Use resolveStore(), health, or readiness. */
+export function getAccountsStorageStatus(env: NodeJS.ProcessEnv = process.env): AccountsStorageStatus {
+  const config = getAccountsStorageConfig(env);
+  const apiConfigured = Boolean(
+    (env.HASNA_ACCOUNTS_API_URL || env.ACCOUNTS_API_URL) &&
+    (env.HASNA_ACCOUNTS_API_KEY || env.ACCOUNTS_API_KEY),
+  );
+  return {
+    configured: config.mode === "local" || apiConfigured,
+    mode: config.mode,
+    local: { home: accountsHome(), storePath: storePath(), profilesDir: profilesDir() },
+    remote: {
+      configured: false,
+      bucketEnv: ACCOUNTS_STORAGE_ENV.s3Bucket,
+      prefix: config.s3Prefix,
+      regionEnv: ACCOUNTS_STORAGE_ENV.awsRegion,
+      endpointConfigured: false,
+    },
+    env: ACCOUNTS_STORAGE_ENV,
+    fallbackEnv: ACCOUNTS_STORAGE_FALLBACK_ENV,
+    tables: STORAGE_TABLES,
+  };
+}
+
+/** @deprecated Local snapshot compatibility only. */
+export function createAccountsStorageSnapshot(env: NodeJS.ProcessEnv = process.env): AccountsStorageSnapshot {
+  return {
+    schemaVersion: 1,
+    source: "accounts",
+    createdAt: new Date().toISOString(),
+    machineId: getAccountsStorageConfig(env).machineId,
+    store: loadMachineStore(),
+  };
+}
+
+/** @deprecated Local snapshot compatibility only. */
+export function restoreAccountsStorageSnapshot(snapshot: AccountsStorageSnapshot): void {
+  if (snapshot.schemaVersion !== 1 || snapshot.source !== "accounts") {
+    throw new AccountsError("invalid accounts storage snapshot");
+  }
+  saveStore(snapshot.store);
+}
+
+/** @deprecated The provider-backed snapshot transport was retired. */
+export function accountsStorageSnapshotKey(_env: NodeJS.ProcessEnv = process.env): string {
+  return "accounts/accounts.json";
+}
+
+function retiredSyncError(): AccountsError {
+  return new AccountsError(
+    "legacy storage sync was retired; use local mode or configure the Accounts API for self_hosted/cloud mode",
+  );
+}
+
+/** @deprecated Always rejects; provider-backed sync was retired. */
+export async function storagePush(_env: NodeJS.ProcessEnv = process.env): Promise<AccountsStorageSyncResult> {
+  throw retiredSyncError();
+}
+
+/** @deprecated Always rejects; provider-backed sync was retired. */
+export async function storagePull(_env: NodeJS.ProcessEnv = process.env): Promise<AccountsStorageSyncResult> {
+  throw retiredSyncError();
+}
+
+/** @deprecated Always rejects; provider-backed sync was retired. */
+export async function storageSync(_env: NodeJS.ProcessEnv = process.env): Promise<AccountsStorageSyncResult> {
+  throw retiredSyncError();
+}
+
+/** @deprecated Alias retained for source compatibility. */
+export const getStorageStatus = getAccountsStorageStatus;
