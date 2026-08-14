@@ -25,37 +25,37 @@ jobs:
         run: |
           set +e
           cat > /tmp/guard-repro.ts <<'EOF'
-import { execFileSync } from "node:child_process";
-const pkgDir = process.argv[2];
-const n = parseInt(process.argv[3] ?? "10", 10);
-let failures = 0;
-for (let i = 1; i <= n; i++) {
-  const start = Date.now();
-  let out: string;
-  try {
-    out = execFileSync("npm", ["pack", "--dry-run", "--json"], {
-      cwd: pkgDir,
-      encoding: "utf8",
-      maxBuffer: 16 * 1024 * 1024,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    const dur = ((Date.now() - start) / 1000).toFixed(1);
-    const m = out.match(/"entryCount":\s*(\d+)/);
-    console.log(`run ${i}: PASS dur=${dur}s entryCount=${m?.[1] ?? "?"}`);
-  } catch (e: any) {
-    failures++;
-    const dur = ((Date.now() - start) / 1000).toFixed(1);
-    const tail = String(e?.stderr ?? e?.message ?? "").trim().split("\n").slice(-3).join("\n");
-    console.log(`run ${i}: FAIL dur=${dur}s`);
-    console.log("  stderr tail:", tail);
-    const stdoutTail = String(e?.stdout ?? "").trim().split("\n").slice(-40).join("\n");
-    console.log("  stdout tail (prepack):");
-    console.log(stdoutTail);
-  }
-}
-console.log(`\nDONE: ${n - failures}/${n} passed`);
-process.exit(failures ? 1 : 0);
-EOF
+          import { execFileSync } from "node:child_process";
+          const pkgDir = process.argv[2];
+          const n = parseInt(process.argv[3] ?? "10", 10);
+          let failures = 0;
+          for (let i = 1; i <= n; i++) {
+            const start = Date.now();
+            let out: string;
+            try {
+              out = execFileSync("npm", ["pack", "--dry-run", "--json"], {
+                cwd: pkgDir,
+                encoding: "utf8",
+                maxBuffer: 16 * 1024 * 1024,
+                stdio: ["ignore", "pipe", "pipe"],
+              });
+              const dur = ((Date.now() - start) / 1000).toFixed(1);
+              const m = out.match(/"entryCount":\s*(\d+)/);
+              console.log(`run ${i}: PASS dur=${dur}s entryCount=${m?.[1] ?? "?"}`);
+            } catch (e: any) {
+              failures++;
+              const dur = ((Date.now() - start) / 1000).toFixed(1);
+              const tail = String(e?.stderr ?? e?.message ?? "").trim().split("\n").slice(-3).join("\n");
+              console.log(`run ${i}: FAIL dur=${dur}s`);
+              console.log("  stderr tail:", tail);
+              const stdoutTail = String(e?.stdout ?? "").trim().split("\n").slice(-40).join("\n");
+              console.log("  stdout tail (prepack):");
+              console.log(stdoutTail);
+            }
+          }
+          console.log(`\nDONE: ${n - failures}/${n} passed`);
+          process.exit(failures ? 1 : 0);
+          EOF
           bun /tmp/guard-repro.ts "$PWD/apps/billing" 25
           echo "--- npm debug log tail ---"
           LOG=$(ls -t "$HOME/.npm/_logs" 2>/dev/null | head -1)
