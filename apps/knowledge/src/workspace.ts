@@ -22,10 +22,6 @@ export interface KnowledgeWorkspace {
 
 export interface KnowledgeConfig {
   version: 1;
-  mode: 'local' | 'hosted';
-  hosted?: {
-    api_url?: string;
-  };
   storage: {
     type: 'local' | 's3';
     artifacts_root: string;
@@ -168,10 +164,6 @@ export function workspaceForHome(home: string): KnowledgeWorkspace {
 export function defaultKnowledgeConfig(): KnowledgeConfig {
   return {
     version: 1,
-    mode: 'local',
-    hosted: {
-      api_url: 'https://knowledge.md',
-    },
     storage: {
       type: 'local',
       artifacts_root: 'artifacts',
@@ -259,11 +251,20 @@ export function ensureParentDir(path: string): void {
 
 export function readKnowledgeConfig(path: string): KnowledgeConfig {
   const raw = readFileSync(path, 'utf8');
-  return JSON.parse(raw) as KnowledgeConfig;
+  const parsed = JSON.parse(raw) as KnowledgeConfig & {
+    mode?: unknown;
+    hosted?: unknown;
+  };
+  const { mode: _retiredMode, hosted: _retiredHostedConfig, ...config } = parsed;
+  return config;
 }
 
 export function writeKnowledgeConfig(path: string, config: KnowledgeConfig): void {
   ensureParentDir(path);
-  writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
+  const { mode: _retiredMode, hosted: _retiredHostedConfig, ...sanitized } = config as KnowledgeConfig & {
+    mode?: unknown;
+    hosted?: unknown;
+  };
+  writeFileSync(path, `${JSON.stringify(sanitized, null, 2)}\n`, { mode: 0o600 });
   chmodSync(path, 0o600);
 }

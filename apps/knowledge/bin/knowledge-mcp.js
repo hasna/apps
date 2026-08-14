@@ -17,7 +17,7 @@ var __export = (target, all) => {
 var __esm = (fn, res) => () => (fn && (res = fn(fn = 0)), res);
 var __require = import.meta.require;
 
-// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v3/helpers/util.js
+// ../../../release-instructions-0435/node_modules/.bun/zod@3.25.76/node_modules/zod/v3/helpers/util.js
 var util, objectUtil, ZodParsedType, getParsedType = (data) => {
   const t = typeof data;
   switch (t) {
@@ -148,7 +148,7 @@ var init_util = __esm(() => {
   ]);
 });
 
-// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v3/ZodError.js
+// ../../../release-instructions-0435/node_modules/.bun/zod@3.25.76/node_modules/zod/v3/ZodError.js
 var ZodIssueCode, quotelessJson = (obj) => {
   const json = JSON.stringify(obj, null, 2);
   return json.replace(/"([^"]+)":/g, "$1:");
@@ -269,7 +269,7 @@ var init_ZodError = __esm(() => {
   };
 });
 
-// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v3/locales/en.js
+// ../../../release-instructions-0435/node_modules/.bun/zod@3.25.76/node_modules/zod/v3/locales/en.js
 var errorMap = (issue, _ctx) => {
   let message;
   switch (issue.code) {
@@ -376,7 +376,7 @@ var init_en = __esm(() => {
   en_default = errorMap;
 });
 
-// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v3/errors.js
+// ../../../release-instructions-0435/node_modules/.bun/zod@3.25.76/node_modules/zod/v3/errors.js
 function setErrorMap(map) {
   overrideErrorMap = map;
 }
@@ -389,7 +389,7 @@ var init_errors = __esm(() => {
   overrideErrorMap = en_default;
 });
 
-// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v3/helpers/parseUtil.js
+// ../../../release-instructions-0435/node_modules/.bun/zod@3.25.76/node_modules/zod/v3/helpers/parseUtil.js
 function addIssueToContext(ctx, issueData) {
   const overrideMap = getErrorMap();
   const issue = makeIssue({
@@ -494,10 +494,10 @@ var init_parseUtil = __esm(() => {
   });
 });
 
-// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v3/helpers/typeAliases.js
+// ../../../release-instructions-0435/node_modules/.bun/zod@3.25.76/node_modules/zod/v3/helpers/typeAliases.js
 var init_typeAliases = () => {};
 
-// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v3/helpers/errorUtil.js
+// ../../../release-instructions-0435/node_modules/.bun/zod@3.25.76/node_modules/zod/v3/helpers/errorUtil.js
 var errorUtil;
 var init_errorUtil = __esm(() => {
   (function(errorUtil2) {
@@ -506,7 +506,7 @@ var init_errorUtil = __esm(() => {
   })(errorUtil || (errorUtil = {}));
 });
 
-// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v3/types.js
+// ../../../release-instructions-0435/node_modules/.bun/zod@3.25.76/node_modules/zod/v3/types.js
 class ParseInputLazyPath {
   constructor(parent, value, path, key) {
     this._cachedPath = [];
@@ -3857,7 +3857,7 @@ var init_types = __esm(() => {
   NEVER = INVALID;
 });
 
-// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v3/external.js
+// ../../../release-instructions-0435/node_modules/.bun/zod@3.25.76/node_modules/zod/v3/external.js
 var exports_external = {};
 __export(exports_external, {
   void: () => voidType,
@@ -3977,7 +3977,7 @@ var init_external = __esm(() => {
   init_ZodError();
 });
 
-// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/index.js
+// ../../../release-instructions-0435/node_modules/.bun/zod@3.25.76/node_modules/zod/index.js
 var exports_zod = {};
 __export(exports_zod, {
   z: () => exports_external,
@@ -4203,7 +4203,7 @@ var init_mcp_http = () => {};
 init_zod();
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { existsSync as existsSync15, readFileSync as readFileSync14, writeFileSync as writeFileSync6 } from "fs";
+import { existsSync as existsSync15, readFileSync as readFileSync13, writeFileSync as writeFileSync6 } from "fs";
 // package.json
 var package_default = {
   name: "@hasna/knowledge",
@@ -4238,7 +4238,7 @@ var package_default = {
   files: [
     "bin",
     "dist",
-    "scripts/apply-cloud-migrations.mjs",
+    "scripts/apply-postgres-migrations.mjs",
     "scripts/live-private-query.mjs",
     "scripts/lib/remote-temp-dir.mjs",
     "scripts/smoke-machine-sync-release.mjs",
@@ -4265,7 +4265,7 @@ var package_default = {
     "smoke:machines-adapter": "bun scripts/smoke-machines-adapter.mjs",
     "smoke:machine-sync-release": "bun scripts/smoke-machine-sync-release.mjs",
     "smoke:open-files-installed-boundary": "bun scripts/smoke-open-files-installed-boundary.mjs",
-    "migrate:cloud": "bun scripts/apply-cloud-migrations.mjs",
+    "migrate:postgres": "bun scripts/apply-postgres-migrations.mjs",
     "live:private-query": "bun scripts/live-private-query.mjs",
     serve: "bun src/serve-entry.ts",
     "verify:generated": "bun scripts/verify-generated-artifacts.mjs",
@@ -4407,10 +4407,6 @@ function workspaceForHome(home) {
 function defaultKnowledgeConfig() {
   return {
     version: 1,
-    mode: "local",
-    hosted: {
-      api_url: "https://knowledge.md"
-    },
     storage: {
       type: "local",
       artifacts_root: "artifacts"
@@ -4495,42 +4491,150 @@ function ensureParentDir(path) {
 }
 function readKnowledgeConfig(path) {
   const raw = readFileSync(path, "utf8");
-  return JSON.parse(raw);
+  const parsed = JSON.parse(raw);
+  const { mode: _retiredMode, hosted: _retiredHostedConfig, ...config } = parsed;
+  return config;
 }
 function writeKnowledgeConfig(path, config) {
   ensureParentDir(path);
-  writeFileSync(path, `${JSON.stringify(config, null, 2)}
+  const { mode: _retiredMode, hosted: _retiredHostedConfig, ...sanitized } = config;
+  writeFileSync(path, `${JSON.stringify(sanitized, null, 2)}
 `, { mode: 384 });
   chmodSync(path, 384);
 }
 
-// ../../node_modules/.bun/@hasna+contracts@0.8.5/node_modules/@hasna/contracts/dist/client/storage.js
+// ../../../release-instructions-0435/node_modules/.bun/@hasna+contracts@0.8.5/node_modules/@hasna/contracts/dist/client/storage.js
+var MAX_CREDENTIAL_FILE_BYTES = 64 * 1024;
+var INSPECT_CUSTOM = Symbol.for("nodejs.util.inspect.custom");
+var DEPRECATION_REGISTRY = Symbol.for("hasna:contracts:credentialDeprecationNotices");
+class HasnaHttpError extends Error {
+  status;
+  method;
+  path;
+  body;
+  credentialSource;
+  credentialTier;
+  constructor(method, path, status, body, credential) {
+    const guidance = credential ? `. ${credential.guidance}` : "";
+    super(`Hasna cloud request failed: ${method} ${path} -> ${status}${guidance}`);
+    this.name = "HasnaHttpError";
+    this.status = status;
+    this.method = method;
+    this.path = path;
+    this.body = body;
+    this.credentialSource = credential?.source ?? null;
+    this.credentialTier = credential?.tier ?? null;
+  }
+}
+var IDEMPOTENT_METHODS = new Set(["GET", "HEAD", "PUT", "DELETE", "OPTIONS"]);
+var AUTHORITY_OVERRIDE_HEADERS = new Set([
+  "host",
+  ":authority",
+  "forwarded",
+  "x-forwarded-host",
+  "x-original-host"
+]);
+function resourcePath(resource) {
+  const trimmed = resource.replace(/^\/+|\/+$/g, "");
+  if (!trimmed)
+    throw new Error("resource must be a non-empty path segment");
+  return `/${trimmed}`;
+}
+function entityPath(resource, id) {
+  if (id === undefined || id === null || `${id}`.length === 0) {
+    throw new Error("id must be a non-empty string");
+  }
+  return `${resourcePath(resource)}/${encodeURIComponent(String(id))}`;
+}
+function newIdempotencyKey() {
+  const g = globalThis;
+  if (g.crypto?.randomUUID)
+    return g.crypto.randomUUID();
+  return `idmp_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 12)}`;
+}
+function extractItems(raw) {
+  if (Array.isArray(raw))
+    return raw;
+  if (raw && typeof raw === "object") {
+    const obj = raw;
+    for (const key of ["items", "data", "results", "rows", "records"]) {
+      if (Array.isArray(obj[key]))
+        return obj[key];
+    }
+  }
+  return [];
+}
+function extractTotal(raw) {
+  if (raw && typeof raw === "object") {
+    const obj = raw;
+    for (const key of ["total", "count", "totalCount", "total_count"]) {
+      if (typeof obj[key] === "number")
+        return obj[key];
+    }
+  }
+  return null;
+}
+function extractCursor(raw) {
+  if (raw && typeof raw === "object") {
+    const obj = raw;
+    for (const key of ["cursor", "nextCursor", "next_cursor", "next"]) {
+      if (typeof obj[key] === "string")
+        return obj[key];
+    }
+  }
+  return null;
+}
+function createHasnaStorageClient(name, transport) {
+  return {
+    name,
+    baseUrl: transport.baseUrl,
+    transport,
+    async list(resource, options = {}) {
+      const raw = await transport.get(resourcePath(resource), options);
+      return {
+        items: extractItems(raw),
+        total: extractTotal(raw),
+        cursor: extractCursor(raw),
+        raw
+      };
+    },
+    async get(resource, id, options = {}) {
+      try {
+        return await transport.get(entityPath(resource, id), options);
+      } catch (error) {
+        if (error instanceof HasnaHttpError && error.status === 404)
+          return null;
+        throw error;
+      }
+    },
+    async create(resource, body, options = {}) {
+      const { idempotencyKey, ...rest } = options;
+      return transport.post(resourcePath(resource), body, {
+        ...rest,
+        idempotencyKey: idempotencyKey ?? newIdempotencyKey()
+      });
+    },
+    async update(resource, id, patch, options = {}) {
+      const { method = "PATCH", idempotencyKey, ...rest } = options;
+      const call = method === "PUT" ? transport.put : transport.patch;
+      return call(entityPath(resource, id), patch, { ...rest, ...idempotencyKey ? { idempotencyKey } : {} });
+    },
+    async delete(resource, id, options = {}) {
+      try {
+        await transport.del(entityPath(resource, id), undefined, options);
+      } catch (error) {
+        if (error instanceof HasnaHttpError && error.status === 404)
+          return;
+        throw error;
+      }
+    }
+  };
+}
+
+// ../../../release-instructions-0435/node_modules/.bun/@hasna+contracts@0.8.5/node_modules/@hasna/contracts/dist/client/transport.js
 import { isIP } from "net";
-import { readFileSync as readFileSync2, statSync } from "fs";
-import { join as join2 } from "path";
 function envToken(name) {
   return name.toUpperCase().replace(/-/g, "_");
-}
-function normalizeStorageMode(value) {
-  const normalized = value.trim().toLowerCase().replace(/-/g, "_");
-  if (normalized === "sqlite")
-    return { mode: "sqlite" };
-  if (normalized === "postgres" || normalized === "postgresql")
-    return { mode: "postgres" };
-  throw new Error(`Unknown storage mode '${value}'. The runtime-placement axis was removed; ` + `set sqlite for the on-box SQLite file or postgres for a PostgreSQL server (DATABASE_URL).`);
-}
-function clientTransportEnvKeys(name) {
-  const envSegment = envToken(name);
-  return {
-    modeKeys: [
-      `HASNA_${envSegment}_STORAGE_MODE`,
-      `HASNA_${envSegment}_MODE`,
-      `${envSegment}_STORAGE_MODE`,
-      `${envSegment}_MODE`
-    ],
-    apiUrlKeys: [`HASNA_${envSegment}_API_URL`, `${envSegment}_API_URL`],
-    apiKeyKeys: [`HASNA_${envSegment}_API_KEY`, `${envSegment}_API_KEY`]
-  };
 }
 function credentialOverrideEnvKey(name) {
   return `HASNA_${envToken(name)}_API_KEY_OVERRIDE`;
@@ -4547,82 +4651,14 @@ class CredentialResolutionError extends Error {
     this.attempted = attempted;
   }
 }
-var HASNA_STATE_DIR = ".hasna";
-var FLEET_CREDENTIAL_DIR = "cloud";
-var CONFIG_DIR = ".config";
-var CONFIG_NAMESPACE = "hasna";
-var MAX_CREDENTIAL_FILE_BYTES = 64 * 1024;
-var SAFE_APP_SLUG = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
-var SAFE_PROFILE = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/;
+var MAX_CREDENTIAL_FILE_BYTES2 = 64 * 1024;
 var ILLEGAL_IN_HEADER_VALUE = /[^\t\x20-\x7e]/;
-function homeDir(env) {
-  const home = env.HOME?.trim();
-  return home ? home : null;
-}
-function credentialDiskSources(name, env) {
-  return profileDiskSources(name, env, null);
-}
-function profileDiskSources(name, env, profile) {
-  const home = homeDir(env);
-  if (!home || !SAFE_APP_SLUG.test(name))
-    return [];
-  const stem = profile ? `${name}.${profile}` : name;
-  const configStem = profile ? `${name}-${profile}` : name;
-  return [
-    join2(home, HASNA_STATE_DIR, FLEET_CREDENTIAL_DIR, `${stem}.env`),
-    join2(home, CONFIG_DIR, CONFIG_NAMESPACE, `${configStem}-cloud.env`)
-  ];
-}
-function parseEnvFile(text) {
-  const values = new Map;
-  for (const rawLine of text.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (line.length === 0 || line.startsWith("#"))
-      continue;
-    const withoutExport = line.startsWith("export ") ? line.slice("export ".length).trim() : line;
-    const equals = withoutExport.indexOf("=");
-    if (equals <= 0)
-      continue;
-    const key = withoutExport.slice(0, equals).trim();
-    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key))
-      continue;
-    let value = withoutExport.slice(equals + 1).trim();
-    const quote = value[0];
-    if (quote === '"' || quote === "'") {
-      if (value.length < 2 || !value.endsWith(quote))
-        continue;
-      value = value.slice(1, -1);
-    }
-    if (value.length === 0)
-      continue;
-    values.set(key, value);
-  }
-  return values;
-}
-function readCredentialFile(path, apiKeyKeys) {
-  let text;
-  try {
-    const stats = statSync(path);
-    if (!stats.isFile() || stats.size > MAX_CREDENTIAL_FILE_BYTES)
-      return null;
-    text = readFileSync2(path, "utf8");
-  } catch {
-    return null;
-  }
-  const values = parseEnvFile(text);
-  for (const key of apiKeyKeys) {
-    const value = values.get(key)?.trim();
-    if (value)
-      return value;
-  }
-  return null;
-}
 function assertUsableCredential(appName, source, value) {
   if (!ILLEGAL_IN_HEADER_VALUE.test(value))
     return;
   throw new CredentialResolutionError(appName, `The credential from ${source} contains characters that cannot be sent in an HTTP header ` + `(a control character or non-ASCII byte). A file written with CR-only line endings is the usual ` + `cause. Rewrite that credential file with one LF-terminated KEY=value line. ` + `The value is not shown here, and is deliberately never logged.`, [source]);
 }
-var INSPECT_CUSTOM = Symbol.for("nodejs.util.inspect.custom");
+var INSPECT_CUSTOM2 = Symbol.for("nodejs.util.inspect.custom");
 function sealCredential(fields) {
   const { apiKey, ...visible } = fields;
   const sealed = { ...visible };
@@ -4632,7 +4668,7 @@ function sealCredential(fields) {
     writable: false,
     configurable: false
   });
-  Object.defineProperty(sealed, INSPECT_CUSTOM, {
+  Object.defineProperty(sealed, INSPECT_CUSTOM2, {
     value: () => ({ ...visible, apiKey: "[redacted]" }),
     enumerable: false,
     writable: false,
@@ -4653,135 +4689,7 @@ function explicitCredential(appName, apiKey) {
     warning: null
   });
 }
-function firstEnvValue(env, keys) {
-  for (const key of keys) {
-    const value = env[key]?.trim();
-    if (value)
-      return { key, value };
-  }
-  return null;
-}
-var DEPRECATION_REGISTRY = Symbol.for("hasna:contracts:credentialDeprecationNotices");
-function deprecationNotified() {
-  const host = globalThis;
-  const existing = host[DEPRECATION_REGISTRY];
-  if (existing instanceof Set)
-    return existing;
-  const created = new Set;
-  host[DEPRECATION_REGISTRY] = created;
-  return created;
-}
-function defaultDeprecationSink(message) {
-  if (typeof process !== "undefined" && process.stderr) {
-    process.stderr.write(`${message}
-`);
-  }
-}
-function resolveCredential(name, env, options = {}) {
-  const { apiKeyKeys } = clientTransportEnvKeys(name);
-  const diskPaths = credentialDiskSources(name, env);
-  const explicitKey = options.apiKey?.trim();
-  if (explicitKey) {
-    assertUsableCredential(name, "the explicit apiKey argument", explicitKey);
-    return sealCredential({
-      apiKey: explicitKey,
-      tier: "argument",
-      source: "explicit apiKey argument",
-      deliberate: true,
-      deprecated: false,
-      diskCandidates: diskPaths,
-      warning: null
-    });
-  }
-  const overrideKeyName = credentialOverrideEnvKey(name);
-  const overrideRaw = env[overrideKeyName];
-  if (overrideRaw !== undefined) {
-    const override = overrideRaw.trim();
-    if (!override) {
-      throw new CredentialResolutionError(name, `${overrideKeyName} is set but empty. It is a deliberate override, so it is not resolved around: ` + `either give it a real key or unset it to fall back to the credential on disk.`, [overrideKeyName]);
-    }
-    assertUsableCredential(name, overrideKeyName, override);
-    return sealCredential({
-      apiKey: override,
-      tier: "override",
-      source: overrideKeyName,
-      deliberate: true,
-      deprecated: false,
-      diskCandidates: diskPaths,
-      warning: null
-    });
-  }
-  const profile = options.profile?.trim() || env[CREDENTIAL_PROFILE_ENV_KEY]?.trim();
-  if (profile) {
-    const profileSource = options.profile?.trim() ? "explicit profile argument" : CREDENTIAL_PROFILE_ENV_KEY;
-    if (!SAFE_PROFILE.test(profile)) {
-      throw new CredentialResolutionError(name, `Profile name from ${profileSource} is not usable in a path. ` + `Use letters, digits, dot, dash, or underscore.`, [profileSource]);
-    }
-    const paths = profileDiskSources(name, env, profile);
-    for (const path of paths) {
-      const value = readCredentialFile(path, apiKeyKeys);
-      if (value) {
-        assertUsableCredential(name, path, value);
-        return sealCredential({
-          apiKey: value,
-          tier: "profile",
-          source: path,
-          deliberate: true,
-          deprecated: false,
-          diskCandidates: paths,
-          warning: null
-        });
-      }
-    }
-    throw new CredentialResolutionError(name, `Profile '${profile}' (from ${profileSource}) has no ${apiKeyKeys[0]} for '${name}'. ` + `Looked in: ${paths.join(", ") || "<no HOME in this environment>"}. ` + `A profile names WHICH identity to use, so it is never resolved around \u2014 ` + `create the profile's credential file or unset ${CREDENTIAL_PROFILE_ENV_KEY}.`, paths);
-  }
-  const diskHits = diskPaths.map((path) => ({ path, value: readCredentialFile(path, apiKeyKeys) })).filter((hit) => hit.value !== null);
-  if (diskHits.length > 0) {
-    const winner = diskHits[0];
-    assertUsableCredential(name, winner.path, winner.value);
-    const divergentSources = [
-      ...diskHits.slice(1).filter((hit) => hit.value !== winner.value).map((hit) => hit.path),
-      ...(() => {
-        const legacyHit = firstEnvValue(env, apiKeyKeys);
-        return legacyHit && legacyHit.value !== winner.value ? [legacyHit.key] : [];
-      })()
-    ];
-    const warning = divergentSources.length > 0 ? `Credential sources disagree for '${name}': ${winner.path} and ` + `${divergentSources.join(", ")} hold different keys. ${winner.path} wins, because a file on ` + `disk is re-read on every call while an environment variable is a snapshot. Reconcile them \u2014 ` + `a rotation that updated only one leaves the other to fail 401 wherever it is loaded first.` : null;
-    return sealCredential({
-      apiKey: winner.value,
-      tier: "disk",
-      source: winner.path,
-      deliberate: false,
-      deprecated: false,
-      diskCandidates: diskPaths,
-      warning
-    });
-  }
-  const legacy = firstEnvValue(env, apiKeyKeys);
-  if (legacy) {
-    assertUsableCredential(name, legacy.key, legacy.value);
-    const where = diskPaths.length > 0 ? `Put the current key in ${diskPaths[0]} \u2014 it is re-read on every call, so rotations take effect immediately.` : `This environment has no HOME, so no credential file could be consulted at all; the disk tier is ` + `unavailable here and this process will keep using the environment snapshot.`;
-    const message = `[${name}] DEPRECATED: the API key came from ${legacy.key} in this process's environment. ` + `Environment variables are a snapshot taken when this process started, so a shell that started ` + `before a key rotation keeps using the old key until it exits. ${where}`;
-    const sink = options.onDeprecation ?? defaultDeprecationSink;
-    const notified = deprecationNotified();
-    if (!notified.has(name)) {
-      notified.add(name);
-      sink(message);
-    }
-    return sealCredential({
-      apiKey: legacy.value,
-      tier: "legacy-env",
-      source: legacy.key,
-      deliberate: false,
-      deprecated: true,
-      diskCandidates: diskPaths,
-      warning: message
-    });
-  }
-  return null;
-}
-var FLEET_API_DOMAIN_ENV_KEY = "HASNA_FLEET_API_DOMAIN";
-var NEUTRAL_FLEET_API_DOMAIN = "your-deployment.example";
+var DEPRECATION_REGISTRY2 = Symbol.for("hasna:contracts:credentialDeprecationNotices");
 var ASCII_CONTROL_PATTERN = /[\u0000-\u001f\u007f]/;
 var DNS_LABEL_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 function isValidDnsDomain(value) {
@@ -4789,74 +4697,6 @@ function isValidDnsDomain(value) {
     return false;
   }
   return value.split(".").every((label) => label.length <= 63 && !label.startsWith("xn--") && DNS_LABEL_PATTERN.test(label));
-}
-function resolveFleetApiDomain(env) {
-  const raw = env[FLEET_API_DOMAIN_ENV_KEY];
-  if (raw === undefined) {
-    return {
-      domain: NEUTRAL_FLEET_API_DOMAIN,
-      source: "default",
-      misconfigured: true,
-      warning: `${FLEET_API_DOMAIN_ENV_KEY} is not set; using the non-resolving ${NEUTRAL_FLEET_API_DOMAIN} fallback.`
-    };
-  }
-  const configured = raw.trim().toLowerCase();
-  if (ASCII_CONTROL_PATTERN.test(raw) || !isValidDnsDomain(configured)) {
-    return {
-      domain: NEUTRAL_FLEET_API_DOMAIN,
-      source: FLEET_API_DOMAIN_ENV_KEY,
-      misconfigured: true,
-      warning: `${FLEET_API_DOMAIN_ENV_KEY} is blank or invalid; using the non-resolving ${NEUTRAL_FLEET_API_DOMAIN} fallback.`
-    };
-  }
-  return {
-    domain: configured,
-    source: FLEET_API_DOMAIN_ENV_KEY,
-    misconfigured: false,
-    warning: null
-  };
-}
-function validateAppSlug(name) {
-  if (name.length > 63 || !DNS_LABEL_PATTERN.test(name)) {
-    throw new Error("App name must be one lowercase DNS label.");
-  }
-  return name;
-}
-function composeCloudHostname(name, domain) {
-  const hostname = `${validateAppSlug(name)}.${domain}`;
-  if (!isValidDnsDomain(hostname)) {
-    throw new Error("Composed cloud hostname must be a valid DNS domain");
-  }
-  return hostname;
-}
-function resolveDefaultCloudBaseUrl(name, env) {
-  const appSlug = validateAppSlug(name);
-  const fleetDomain = resolveFleetApiDomain(env);
-  const configuredHostname = `${appSlug}.${fleetDomain.domain}`;
-  if (isValidDnsDomain(configuredHostname)) {
-    return {
-      baseUrl: `https://${configuredHostname}`,
-      source: fleetDomain.source,
-      misconfigured: fleetDomain.misconfigured,
-      warning: fleetDomain.warning
-    };
-  }
-  const fallbackHostname = composeCloudHostname(appSlug, NEUTRAL_FLEET_API_DOMAIN);
-  return {
-    baseUrl: `https://${fallbackHostname}`,
-    source: fleetDomain.source,
-    misconfigured: true,
-    warning: `${FLEET_API_DOMAIN_ENV_KEY} cannot form a valid composed cloud hostname for app '${appSlug}'; using the non-resolving ${NEUTRAL_FLEET_API_DOMAIN} fallback.`
-  };
-}
-function firstEnv2(env, keys, options = {}) {
-  for (const key of keys) {
-    const raw = env[key];
-    const value = raw?.trim();
-    if (value)
-      return { key, value: options.preserveRaw ? raw : value };
-  }
-  return null;
 }
 function rawAuthority(value) {
   const match = /^[a-z][a-z0-9+.-]*:\/\//i.exec(value);
@@ -4959,106 +4799,7 @@ function toV1BaseUrl(apiUrl) {
   url.pathname = `${path}/v1`;
   return url.toString().replace(/\/+$/, "");
 }
-function resolveClientTransport(name, env = process.env, options = {}) {
-  const keys = clientTransportEnvKeys(name);
-  const modeHit = firstEnv2(env, keys.modeKeys);
-  const urlHit = firstEnv2(env, keys.apiUrlKeys, { preserveRaw: true });
-  const keyHit = firstEnv2(env, keys.apiKeyKeys);
-  let mode = "sqlite";
-  let modeSource = "default";
-  const warnings = [];
-  let credential;
-  if (modeHit) {
-    mode = normalizeStorageMode(modeHit.value).mode;
-    modeSource = modeHit.key;
-  } else if (urlHit) {
-    credential = resolveCredential(name, env, options.credentials);
-    if (credential) {
-      mode = "postgres";
-      modeSource = `${urlHit.key}+${credential.source}`;
-    }
-  }
-  if (mode === "sqlite") {
-    return {
-      transport: "sqlite",
-      mode,
-      modeSource,
-      baseUrl: null,
-      apiUrlSource: null,
-      apiKeyPresent: Boolean(keyHit),
-      apiKeySource: keyHit ? keyHit.key : null,
-      apiKeyTier: null,
-      misconfigured: false,
-      warning: warnings.length > 0 ? warnings.join(" ") : null
-    };
-  }
-  if (credential === undefined)
-    credential = resolveCredential(name, env, options.credentials);
-  if (!credential) {
-    const diskHint = credentialDiskSourcesForMessage(name, env);
-    warnings.push(`${modeSource}=postgres but no API key could be resolved for '${name}'. A client reaches server data ` + `over HTTP only; refusing to route. Using the local sqlite store. ` + `Looked for a credential file at ${diskHint}, then for ${keys.apiKeyKeys[0]} in the environment.`);
-    return {
-      transport: "sqlite",
-      mode,
-      modeSource,
-      baseUrl: null,
-      apiUrlSource: null,
-      apiKeyPresent: false,
-      apiKeySource: null,
-      apiKeyTier: null,
-      misconfigured: true,
-      warning: warnings.join(" ")
-    };
-  }
-  if (credential.warning)
-    warnings.push(credential.warning);
-  let defaultBaseUrl = null;
-  let apiUrlSource = urlHit?.key ?? (env[FLEET_API_DOMAIN_ENV_KEY] === undefined ? "default" : FLEET_API_DOMAIN_ENV_KEY);
-  let baseUrl;
-  try {
-    if (!urlHit) {
-      defaultBaseUrl = resolveDefaultCloudBaseUrl(name, env);
-      apiUrlSource = defaultBaseUrl.source;
-    }
-    const rawUrl = urlHit?.value ?? defaultBaseUrl.baseUrl;
-    baseUrl = toV1BaseUrl(rawUrl);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    warnings.push(`Invalid API URL from ${apiUrlSource}: ${message}. Using local store.`);
-    return {
-      transport: "sqlite",
-      mode,
-      modeSource,
-      baseUrl: null,
-      apiUrlSource: null,
-      apiKeyPresent: true,
-      apiKeySource: credential.source,
-      apiKeyTier: credential.tier,
-      misconfigured: true,
-      warning: warnings.join(" ")
-    };
-  }
-  if (defaultBaseUrl?.warning)
-    warnings.push(defaultBaseUrl.warning);
-  return {
-    transport: "http",
-    mode,
-    modeSource,
-    baseUrl,
-    apiUrlSource,
-    apiKeyPresent: true,
-    apiKeySource: credential.source,
-    apiKeyTier: credential.tier,
-    misconfigured: defaultBaseUrl?.misconfigured ?? false,
-    warning: warnings.length > 0 ? warnings.join(" ") : null
-  };
-}
-function credentialDiskSourcesForMessage(name, env) {
-  const paths = credentialDiskSources(name, env);
-  return paths.length > 0 ? paths.join(" or ") : "<no HOME set in this environment, so no credential file was consulted>";
-}
-
-class HasnaHttpError extends Error {
+class HasnaHttpError2 extends Error {
   status;
   method;
   path;
@@ -5095,8 +4836,8 @@ function authFailureGuidance(credential) {
   return `${origin}, which was re-read from disk on this very call \u2014 so a stale shell is NOT the cause here. ` + `The stored credential is genuinely being rejected: rotate it, or re-run the fleet key distribution ` + `so this machine gets the current key.`;
 }
 var DEFAULT_RETRY_STATUSES = [408, 425, 429, 500, 502, 503, 504];
-var IDEMPOTENT_METHODS = new Set(["GET", "HEAD", "PUT", "DELETE", "OPTIONS"]);
-var AUTHORITY_OVERRIDE_HEADERS = new Set([
+var IDEMPOTENT_METHODS2 = new Set(["GET", "HEAD", "PUT", "DELETE", "OPTIONS"]);
+var AUTHORITY_OVERRIDE_HEADERS2 = new Set([
   "host",
   ":authority",
   "forwarded",
@@ -5106,7 +4847,7 @@ var AUTHORITY_OVERRIDE_HEADERS = new Set([
 function assertNoAuthorityOverrideHeaders(headers, source) {
   if (!headers)
     return;
-  const forbidden = Object.keys(headers).find((name) => AUTHORITY_OVERRIDE_HEADERS.has(name.trim().toLowerCase()));
+  const forbidden = Object.keys(headers).find((name) => AUTHORITY_OVERRIDE_HEADERS2.has(name.trim().toLowerCase()));
   if (forbidden) {
     throw new Error(`Authenticated ${source} headers must not set authority header '${forbidden}'.`);
   }
@@ -5209,14 +4950,14 @@ function createHasnaHttpTransport(options) {
         return {
           ok: false,
           retryable: false,
-          error: new HasnaHttpError(method, rel, response.status, parsed)
+          error: new HasnaHttpError2(method, rel, response.status, parsed)
         };
       }
       if (response.status === 401 || response.status === 403) {
         return {
           ok: false,
           retryable: false,
-          error: new HasnaHttpError(method, rel, response.status, parsed, {
+          error: new HasnaHttpError2(method, rel, response.status, parsed, {
             source: credential.source,
             tier: credential.tier,
             guidance: authFailureGuidance(credential)
@@ -5225,7 +4966,7 @@ function createHasnaHttpTransport(options) {
       }
       const retry = resolveRetry(opts.retry);
       const retryable = retry ? retry.retryStatuses.includes(response.status) : false;
-      return { ok: false, retryable, error: new HasnaHttpError(method, rel, response.status, parsed) };
+      return { ok: false, retryable, error: new HasnaHttpError2(method, rel, response.status, parsed) };
     }
     return { ok: true, value: parsed };
   }
@@ -5234,7 +4975,7 @@ function createHasnaHttpTransport(options) {
     const rel = appendQuery(path.startsWith("/") ? path : `/${path}`, opts.query);
     const url = `${base}${rel}`;
     const retry = resolveRetry(opts.retry);
-    const methodRetryable = IDEMPOTENT_METHODS.has(upper) || Boolean(opts.idempotencyKey);
+    const methodRetryable = IDEMPOTENT_METHODS2.has(upper) || Boolean(opts.idempotencyKey);
     const maxAttempts = retry && methodRetryable ? retry.retries + 1 : 1;
     const credential = currentCredential(options.name, options.apiKey);
     let last = null;
@@ -5262,195 +5003,7 @@ function createHasnaHttpTransport(options) {
     del: (path, body, opts) => request("DELETE", path, body, opts)
   };
 }
-function createClientTransport(name, env = process.env, overrides) {
-  const credentialOptions = overrides?.credentials;
-  const resolution = resolveClientTransport(name, env, { ...credentialOptions ? { credentials: credentialOptions } : {} });
-  if (resolution.misconfigured) {
-    throw new Error(resolution.warning ?? `Client for '${name}' is misconfigured for the API client.`);
-  }
-  if (resolution.transport === "sqlite" || !resolution.baseUrl) {
-    return { transport: "sqlite", client: null, resolution };
-  }
-  const credentialProvider = () => {
-    const resolved = resolveCredential(name, env, credentialOptions);
-    if (!resolved) {
-      throw new Error(`Client for '${name}' resolved to the http transport but no API key is available any more. ` + `Looked at ${credentialDiskSourcesForMessage(name, env)}, then the environment. ` + `A credential file that was removed after this client was built is the usual cause.`);
-    }
-    return resolved;
-  };
-  return {
-    transport: "http",
-    client: createHasnaHttpTransport({
-      name,
-      baseUrl: resolution.baseUrl,
-      apiKey: credentialProvider,
-      ...overrides?.fetchImpl ? { fetchImpl: overrides.fetchImpl } : {},
-      ...overrides?.headers ? { headers: overrides.headers } : {},
-      ...overrides?.timeoutMs ? { timeoutMs: overrides.timeoutMs } : {},
-      ...overrides?.retry !== undefined ? { retry: overrides.retry } : {},
-      ...overrides?.sleepImpl ? { sleepImpl: overrides.sleepImpl } : {}
-    }),
-    resolution
-  };
-}
-function resourcePath(resource) {
-  const trimmed = resource.replace(/^\/+|\/+$/g, "");
-  if (!trimmed)
-    throw new Error("resource must be a non-empty path segment");
-  return `/${trimmed}`;
-}
-function entityPath(resource, id) {
-  if (id === undefined || id === null || `${id}`.length === 0) {
-    throw new Error("id must be a non-empty string");
-  }
-  return `${resourcePath(resource)}/${encodeURIComponent(String(id))}`;
-}
-function newIdempotencyKey() {
-  const g = globalThis;
-  if (g.crypto?.randomUUID)
-    return g.crypto.randomUUID();
-  return `idmp_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 12)}`;
-}
-function extractItems(raw) {
-  if (Array.isArray(raw))
-    return raw;
-  if (raw && typeof raw === "object") {
-    const obj = raw;
-    for (const key of ["items", "data", "results", "rows", "records"]) {
-      if (Array.isArray(obj[key]))
-        return obj[key];
-    }
-  }
-  return [];
-}
-function extractTotal(raw) {
-  if (raw && typeof raw === "object") {
-    const obj = raw;
-    for (const key of ["total", "count", "totalCount", "total_count"]) {
-      if (typeof obj[key] === "number")
-        return obj[key];
-    }
-  }
-  return null;
-}
-function extractCursor(raw) {
-  if (raw && typeof raw === "object") {
-    const obj = raw;
-    for (const key of ["cursor", "nextCursor", "next_cursor", "next"]) {
-      if (typeof obj[key] === "string")
-        return obj[key];
-    }
-  }
-  return null;
-}
-function createHasnaStorageClient(name, transport) {
-  return {
-    name,
-    baseUrl: transport.baseUrl,
-    transport,
-    async list(resource, options = {}) {
-      const raw = await transport.get(resourcePath(resource), options);
-      return {
-        items: extractItems(raw),
-        total: extractTotal(raw),
-        cursor: extractCursor(raw),
-        raw
-      };
-    },
-    async get(resource, id, options = {}) {
-      try {
-        return await transport.get(entityPath(resource, id), options);
-      } catch (error) {
-        if (error instanceof HasnaHttpError && error.status === 404)
-          return null;
-        throw error;
-      }
-    },
-    async create(resource, body, options = {}) {
-      const { idempotencyKey, ...rest } = options;
-      return transport.post(resourcePath(resource), body, {
-        ...rest,
-        idempotencyKey: idempotencyKey ?? newIdempotencyKey()
-      });
-    },
-    async update(resource, id, patch, options = {}) {
-      const { method = "PATCH", idempotencyKey, ...rest } = options;
-      const call = method === "PUT" ? transport.put : transport.patch;
-      return call(entityPath(resource, id), patch, { ...rest, ...idempotencyKey ? { idempotencyKey } : {} });
-    },
-    async delete(resource, id, options = {}) {
-      try {
-        await transport.del(entityPath(resource, id), undefined, options);
-      } catch (error) {
-        if (error instanceof HasnaHttpError && error.status === 404)
-          return;
-        throw error;
-      }
-    }
-  };
-}
-function resolveStorageClient(name, env = process.env, overrides) {
-  const wired = createClientTransport(name, env, overrides);
-  if (wired.transport === "http") {
-    return { transport: "http", client: createHasnaStorageClient(name, wired.client) };
-  }
-  return { transport: "sqlite", client: null };
-}
 
-// ../../node_modules/.bun/@hasna+contracts@0.8.5/node_modules/@hasna/contracts/dist/client/transport.js
-function envToken2(name) {
-  return name.toUpperCase().replace(/-/g, "_");
-}
-function clientTransportEnvKeys2(name) {
-  const envSegment = envToken2(name);
-  return {
-    modeKeys: [
-      `HASNA_${envSegment}_STORAGE_MODE`,
-      `HASNA_${envSegment}_MODE`,
-      `${envSegment}_STORAGE_MODE`,
-      `${envSegment}_MODE`
-    ],
-    apiUrlKeys: [`HASNA_${envSegment}_API_URL`, `${envSegment}_API_URL`],
-    apiKeyKeys: [`HASNA_${envSegment}_API_KEY`, `${envSegment}_API_KEY`]
-  };
-}
-function credentialOverrideEnvKey2(name) {
-  return `HASNA_${envToken2(name)}_API_KEY_OVERRIDE`;
-}
-var CREDENTIAL_PROFILE_ENV_KEY2 = "HASNA_PROFILE";
-var MAX_CREDENTIAL_FILE_BYTES2 = 64 * 1024;
-var INSPECT_CUSTOM2 = Symbol.for("nodejs.util.inspect.custom");
-var DEPRECATION_REGISTRY2 = Symbol.for("hasna:contracts:credentialDeprecationNotices");
-var IDEMPOTENT_METHODS2 = new Set(["GET", "HEAD", "PUT", "DELETE", "OPTIONS"]);
-var AUTHORITY_OVERRIDE_HEADERS2 = new Set([
-  "host",
-  ":authority",
-  "forwarded",
-  "x-forwarded-host",
-  "x-original-host"
-]);
-
-// ../../node_modules/.bun/@hasna+contracts@0.8.5/node_modules/@hasna/contracts/dist/mode.js
-function normalizeStorageMode2(value) {
-  const normalized = value.trim().toLowerCase().replace(/-/g, "_");
-  if (normalized === "sqlite")
-    return { mode: "sqlite" };
-  if (normalized === "postgres" || normalized === "postgresql")
-    return { mode: "postgres" };
-  throw new Error(`Unknown storage mode '${value}'. The runtime-placement axis was removed; ` + `set sqlite for the on-box SQLite file or postgres for a PostgreSQL server (DATABASE_URL).`);
-}
-
-// src/generated/storage-kit/mode.ts
-function normalizeStorageMode3(value) {
-  const normalized = value.trim().toLowerCase().replace(/-/g, "_");
-  if (normalized === "sqlite")
-    return { mode: "sqlite" };
-  if (normalized === "postgres" || normalized === "postgresql")
-    return { mode: "postgres" };
-  throw new Error(`Unknown storage mode '${value}'. The runtime-placement axis was removed; ` + `set sqlite for the on-box SQLite file or postgres for a PostgreSQL server (DATABASE_URL).`);
-}
-// src/generated/storage-kit/pool.ts
-import pg from "pg";
 // src/net-guard.ts
 var NETWORK_GUARD_ENV = "NODE_ENV";
 
@@ -5512,7 +5065,7 @@ function assertOutboundRequestAllowed(input, env = process.env) {
   }
   if (isLoopbackHostname(url.hostname))
     return;
-  throw new KnowledgeNetworkGuardError(`knowledge: refused a non-loopback ${url.protocol.replace(":", "")} request while ${NETWORK_GUARD_ENV}=test ` + "(target host withheld on purpose). This process resolved to the cloud backend under test, which means a " + "read or write was about to leave the machine and reach the live store. Select the mode explicitly " + `(${"HASNA_KNOWLEDGE_STORAGE_MODE"}=sqlite) or point the API URL at 127.0.0.1 for a hermetic test.`, { scheme: url.protocol.replace(":", ""), port: url.port });
+  throw new KnowledgeNetworkGuardError(`knowledge: refused a non-loopback ${url.protocol.replace(":", "")} request while ${NETWORK_GUARD_ENV}=test ` + "(target host withheld on purpose). This process selected the HTTP API under test, which means a " + "read or write was about to leave the machine and reach the live store. Unset HASNA_KNOWLEDGE_API_URL " + "to use the on-box store, or point it at 127.0.0.1 for a hermetic test.", { scheme: url.protocol.replace(":", ""), port: url.port });
 }
 var REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 var MAX_GUARDED_REDIRECTS = 5;
@@ -5557,106 +5110,60 @@ async function guardedFetch(input, init) {
   return response;
 }
 
-// src/knowledge-mode.ts
+// src/client-transport.ts
 var KNOWLEDGE_APP_SLUG = "knowledge";
-var ENV_KEYS = clientTransportEnvKeys2(KNOWLEDGE_APP_SLUG);
-var KNOWLEDGE_MODE_ENV_KEYS = ENV_KEYS.modeKeys;
-var KNOWLEDGE_API_URL_ENV_KEYS = ENV_KEYS.apiUrlKeys;
-var KNOWLEDGE_API_KEY_ENV_KEYS = ENV_KEYS.apiKeyKeys;
-function presentEnvNames(env, keys) {
-  return keys.filter((key) => (env[key] ?? "").trim().length > 0);
+var KNOWLEDGE_API_URL_ENV = "HASNA_KNOWLEDGE_API_URL";
+var KNOWLEDGE_API_KEY_ENV = "HASNA_KNOWLEDGE_API_KEY";
+var KNOWLEDGE_DATABASE_URL_ENV = "HASNA_KNOWLEDGE_DATABASE_URL";
+var KNOWLEDGE_API_URL_ENV_KEYS = [KNOWLEDGE_API_URL_ENV];
+var KNOWLEDGE_API_KEY_ENV_KEYS = [KNOWLEDGE_API_KEY_ENV];
+var RETIRED_KNOWLEDGE_SELECTOR_ENV_KEYS = [
+  "HASNA_KNOWLEDGE_STORAGE_MODE",
+  "HASNA_KNOWLEDGE_MODE",
+  "KNOWLEDGE_STORAGE_MODE",
+  "KNOWLEDGE_MODE"
+];
+function isPresent(env, key) {
+  if (!Object.prototype.hasOwnProperty.call(env, key))
+    return false;
+  return (env[key] ?? "").trim().length > 0;
 }
-function resolveKnowledgeModeSelection(env = process.env) {
-  const pointers = [
-    ...presentEnvNames(env, KNOWLEDGE_API_URL_ENV_KEYS),
-    ...presentEnvNames(env, KNOWLEDGE_API_KEY_ENV_KEYS)
-  ];
-  const canonicalModeKey = KNOWLEDGE_MODE_ENV_KEYS[0];
-  for (const name of KNOWLEDGE_MODE_ENV_KEYS) {
-    const value = env[name]?.trim();
-    if (!value)
-      continue;
-    let normalized;
-    try {
-      normalized = normalizeStorageMode3(value);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      throw new Error(`knowledge: ${name}=${value} is not a valid mode. ${message} ` + `Unset ${name} to use the default sqlite backend, or set ${name}=sqlite or ${name}=postgres.`);
-    }
-    const warnings = [];
-    if (name !== canonicalModeKey) {
-      warnings.push(`Using alias env ${name}; the canonical key is ${canonicalModeKey}.`);
-    }
-    if (normalized.mode === "sqlite" && pointers.length > 0) {
-      warnings.push(`${name}=sqlite pins the on-box store; ${pointers.join(", ")} are set but ignored.`);
-    }
-    return {
-      mode: normalized.mode,
-      source: { kind: "env", name, value },
-      pointer_env_present: pointers,
-      pointer_ignored: normalized.mode === "sqlite" && pointers.length > 0,
-      warning: warnings.length > 0 ? warnings.join(" ") : null
-    };
+function firstDefined(env, keys) {
+  for (const key of keys) {
+    if (Object.prototype.hasOwnProperty.call(env, key) && env[key] !== undefined)
+      return key;
   }
-  return {
-    mode: "sqlite",
-    source: { kind: "default", name: null, value: null },
-    pointer_env_present: pointers,
-    pointer_ignored: pointers.length > 0,
-    warning: pointers.length > 0 ? `${pointers.join(", ")} are set but do NOT select a backend: mode is sqlite by default. ` + `Set ${canonicalModeKey}=postgres to route reads and writes to the API, or unset those vars to silence this note.` : null
-  };
-}
-var SERVER_MODE_CANDIDATES = ["postgres"];
-var LOCAL_MODE_CANDIDATES = ["sqlite"];
-var derivedTokenCache = new Map;
-function deriveToken(candidates, normalize, constantName) {
-  const useCache = normalize === normalizeStorageMode2;
-  if (useCache) {
-    const hit = derivedTokenCache.get(candidates);
-    if (hit !== undefined)
-      return hit;
-  }
-  for (const candidate of candidates) {
-    try {
-      normalize(candidate);
-      if (useCache)
-        derivedTokenCache.set(candidates, candidate);
-      return candidate;
-    } catch {}
-  }
-  throw new Error(`knowledge: no known storage token is accepted by the installed @hasna/contracts ` + `(tried ${candidates.join(", ")}). The storage-mode enum has changed; add the new ` + `token to ${constantName} in src/knowledge-mode.ts.`);
-}
-function serverStorageMode(normalize = normalizeStorageMode2) {
-  return deriveToken(SERVER_MODE_CANDIDATES, normalize, "SERVER_MODE_CANDIDATES");
-}
-function localStorageMode(normalize = normalizeStorageMode2) {
-  return deriveToken(LOCAL_MODE_CANDIDATES, normalize, "LOCAL_MODE_CANDIDATES");
-}
-function contractsStorageModeFor(mode2, normalize = normalizeStorageMode2) {
-  return mode2 === "postgres" ? serverStorageMode(normalize) : localStorageMode(normalize);
-}
-function pinnedTransportEnv(env, mode2) {
-  return { ...env, [KNOWLEDGE_MODE_ENV_KEYS[0]]: contractsStorageModeFor(mode2) };
+  return null;
 }
 
-class HalfConfiguredKnowledgeClientError extends Error {
-  code = "knowledge_mode_unset_with_api_url";
-  constructor(urlKeysPresent) {
-    const canonical = KNOWLEDGE_MODE_ENV_KEYS[0];
-    super(`knowledge: ${urlKeysPresent.join(", ")} names an API store, but no mode variable says to use it, ` + "so this command would silently read and write the on-box store instead. " + `Set ${canonical}=postgres to use the API, or ${canonical}=sqlite to confirm you want the on-box store. ` + `Run 'knowledge mode' to see the full resolution.`);
-    this.name = "HalfConfiguredKnowledgeClientError";
+class RetiredKnowledgeStorageSelectorError extends Error {
+  envKey;
+  code = "retired_knowledge_storage_selector";
+  constructor(envKey) {
+    super(`knowledge: ${envKey} was retired and must be unset. ` + `Clients select the HTTP API when ${KNOWLEDGE_API_URL_ENV} and ${KNOWLEDGE_API_KEY_ENV} are set; ` + `without ${KNOWLEDGE_API_URL_ENV} they use local SQLite. ` + `Servers select PostgreSQL with ${KNOWLEDGE_DATABASE_URL_ENV}.`);
+    this.envKey = envKey;
+    this.name = "RetiredKnowledgeStorageSelectorError";
   }
 }
-function assertKnowledgeModeSelected(env = process.env, options = {}) {
-  const resolution = resolveKnowledgeModeSelection(env);
-  if (options.storePathOverridden)
-    return resolution;
-  if (resolution.source.kind !== "default")
-    return resolution;
-  const urlKeysPresent = presentEnvNames(env, KNOWLEDGE_API_URL_ENV_KEYS);
-  if (urlKeysPresent.length === 0)
-    return resolution;
-  throw new HalfConfiguredKnowledgeClientError(urlKeysPresent);
+function assertNoRetiredKnowledgeStorageSelector(env = process.env) {
+  const retired = firstDefined(env, RETIRED_KNOWLEDGE_SELECTOR_ENV_KEYS);
+  if (retired)
+    throw new RetiredKnowledgeStorageSelectorError(retired);
+}
+function resolveKnowledgeClientTransport(env = process.env) {
+  assertNoRetiredKnowledgeStorageSelector(env);
+  const apiUrlPresent = isPresent(env, KNOWLEDGE_API_URL_ENV);
+  const apiKeyPresent = isPresent(env, KNOWLEDGE_API_KEY_ENV);
+  if (apiUrlPresent && !apiKeyPresent) {
+    throw new Error(`knowledge: ${KNOWLEDGE_API_URL_ENV} selects the HTTP API, but ${KNOWLEDGE_API_KEY_ENV} is missing. ` + `Set ${KNOWLEDGE_API_KEY_ENV}, or unset ${KNOWLEDGE_API_URL_ENV} to use local SQLite.`);
+  }
+  return {
+    transport: apiUrlPresent ? "http" : "sqlite",
+    source: apiUrlPresent ? KNOWLEDGE_API_URL_ENV : "default",
+    api_url_present: apiUrlPresent,
+    api_key_present: apiKeyPresent,
+    network_guard_active: isNetworkGuardActive(env)
+  };
 }
 
 // src/query-contract.ts
@@ -5665,7 +5172,7 @@ function hasKnowledgeBoundedQueryCapability(value) {
   return Boolean(value && typeof value === "object" && value.query_capability === KNOWLEDGE_BOUNDED_QUERY_CAPABILITY);
 }
 
-// src/cloud-store.ts
+// src/http-store.ts
 function transportOverrides(env) {
   return {
     fetchImpl: guardedFetch,
@@ -5745,10 +5252,10 @@ function wrap(client) {
     async list(options = {}) {
       const limit = boundedQueryInteger(options.limit, 200, "limit", 1, 200);
       const offset = boundedQueryInteger(options.offset, 0, "offset", 0, 1e4);
-      const query2 = toQuery({ ...options, limit, offset });
-      const res = await client.list(KNOWLEDGE_RESOURCE, { query: query2 });
+      const query = toQuery({ ...options, limit, offset });
+      const res = await client.list(KNOWLEDGE_RESOURCE, { query });
       if (!Number.isInteger(res.total) || Number(res.total) < 0) {
-        throw new Error("knowledge cloud list response is missing a valid producer total.");
+        throw new Error("knowledge HTTP list response is missing a valid producer total.");
       }
       const requiredFields = listFieldsRequiringCapability(options);
       if (requiredFields.length > 0 && !hasKnowledgeBoundedQueryCapability(res.raw)) {
@@ -5768,7 +5275,7 @@ function wrap(client) {
         }
       });
       if (!Number.isInteger(response.total) || response.total < 0 || !Array.isArray(response.items) || response.items.some((hit) => !hit || typeof hit !== "object" || !hit.item || typeof hit.rank !== "number" || !Number.isFinite(hit.rank))) {
-        throw new Error("knowledge cloud search response is missing producer rank or total evidence.");
+        throw new Error("knowledge HTTP search response is missing producer rank or total evidence.");
       }
       if (!hasKnowledgeBoundedQueryCapability(response)) {
         throw new KnowledgeBoundedQueryCapabilityError("search", ["q", "rank", "total"]);
@@ -5851,33 +5358,38 @@ function safeJson(value) {
 function isNotFound(error) {
   return Boolean(error && typeof error === "object" && error.status === 404);
 }
-function resolveKnowledgeCloudStore(env = process.env) {
-  const client = resolveKnowledgeCloudClient(env);
+function resolveKnowledgeHttpStore(env = process.env) {
+  const client = resolveKnowledgeHttpClient(env);
   return client ? wrap(client) : null;
 }
 function guardedTransportEnv(env) {
   const guardedEnv = { ...env };
   delete guardedEnv.HOME;
   delete guardedEnv.USERPROFILE;
-  delete guardedEnv[CREDENTIAL_PROFILE_ENV_KEY2];
-  delete guardedEnv[credentialOverrideEnvKey2(KNOWLEDGE_APP_SLUG)];
+  delete guardedEnv[CREDENTIAL_PROFILE_ENV_KEY];
+  delete guardedEnv[credentialOverrideEnvKey(KNOWLEDGE_APP_SLUG)];
   return guardedEnv;
 }
-function resolveKnowledgeCloudClient(env, options = {}) {
-  if (resolveKnowledgeModeSelection(env).mode !== "postgres")
+function resolveKnowledgeHttpClient(env, options = {}) {
+  if (resolveKnowledgeClientTransport(env).transport !== "http")
     return null;
   const transportEnv = options.guarded ? guardedTransportEnv(env) : env;
-  const resolved = resolveStorageClient(KNOWLEDGE_APP_SLUG, pinnedTransportEnv(transportEnv, "postgres"), transportOverrides(transportEnv));
-  if (resolved.transport !== "http")
-    return null;
-  return resolved.client;
+  const apiUrl = transportEnv[KNOWLEDGE_API_URL_ENV]?.trim();
+  const apiKey = transportEnv[KNOWLEDGE_API_KEY_ENV]?.trim();
+  if (!apiUrl || !apiKey) {
+    throw new Error("knowledge HTTP transport configuration changed during resolution");
+  }
+  return createHasnaStorageClient(KNOWLEDGE_APP_SLUG, createHasnaHttpTransport({
+    name: KNOWLEDGE_APP_SLUG,
+    baseUrl: apiUrl,
+    apiKey,
+    ...transportOverrides(transportEnv)
+  }));
 }
-function isKnowledgeApiMode(env = process.env) {
-  if (resolveKnowledgeModeSelection(env).mode !== "postgres")
-    return false;
-  return resolveStorageClient(KNOWLEDGE_APP_SLUG, pinnedTransportEnv(env, "postgres"), transportOverrides(env)).transport === "http";
+function usesKnowledgeHttpTransport(env = process.env) {
+  return resolveKnowledgeClientTransport(env).transport === "http";
 }
-async function fetchAllCloudItems(store) {
+async function fetchAllHttpItems(store) {
   const pageSize = 200;
   const all = [];
   for (let offset = 0;; offset += pageSize) {
@@ -5892,10 +5404,9 @@ async function fetchAllCloudItems(store) {
 }
 
 // src/knowledge-db.ts
-function assertLocalCatalogMode(operation = "catalog") {
-  if (isKnowledgeApiMode()) {
-    const modeKey = KNOWLEDGE_MODE_ENV_KEYS[0];
-    throw new Error(`knowledge: ${operation} builds/reads the on-box sqlite RAG catalog (source ingestion, chunk embeddings, ` + `wiki compilation, cross-machine sync, machine registry). That local indexing pipeline is not available in ` + `cloud mode. In cloud mode the shared corpus is the cloud knowledge-items: 'add/list/get/update/delete' item ` + `commands AND 'search/ask/build/context' over that shared corpus all route to the cloud. Set ${modeKey}=local ` + `(or unset it \u2014 local is the default) to use the full local catalog pipeline; run 'knowledge mode' to see ` + `which variable selected the current backend.`);
+function assertSqliteClientTransport(operation = "catalog") {
+  if (usesKnowledgeHttpTransport()) {
+    throw new Error(`knowledge: ${operation} builds/reads the on-box sqlite RAG catalog (source ingestion, chunk embeddings, ` + `wiki compilation, cross-machine sync, machine registry). That local indexing pipeline is not available in ` + `the HTTP client. Shared item commands route through the server API. Unset ${KNOWLEDGE_API_URL_ENV} ` + `to use the full on-box catalog pipeline; run 'knowledge transport' to inspect the current route.`);
   }
 }
 var CHUNKS_FTS_TOKENIZE = "porter unicode61 remove_diacritics 2";
@@ -6382,7 +5893,7 @@ INSERT OR IGNORE INTO schema_versions(version, applied_at)
 VALUES (10, datetime('now'));
 `;
 function openKnowledgeDb(path) {
-  assertLocalCatalogMode("opening the local knowledge.db catalog");
+  assertSqliteClientTransport("opening the local knowledge.db catalog");
   ensureParentDir(path);
   const db = new Database(path);
   db.exec("PRAGMA foreign_keys = ON;");
@@ -6390,7 +5901,7 @@ function openKnowledgeDb(path) {
   return db;
 }
 function openKnowledgeDbReadonly(path) {
-  assertLocalCatalogMode("reading the local knowledge.db catalog");
+  assertSqliteClientTransport("reading the local knowledge.db catalog");
   return new Database(path, { readonly: true });
 }
 function migrateKnowledgeDb(path) {
@@ -6543,13 +6054,13 @@ import {
   fsyncSync,
   lstatSync,
   openSync,
-  readFileSync as readFileSync3,
+  readFileSync as readFileSync2,
   renameSync,
   unlinkSync,
   writeFileSync as writeFileSync2
 } from "fs";
 import { randomUUID } from "crypto";
-import { basename, dirname as dirname2, join as join3 } from "path";
+import { basename, dirname as dirname2, join as join2 } from "path";
 function defaultStorePath() {
   return workspaceForHome(globalKnowledgeHome()).jsonStorePath;
 }
@@ -6591,7 +6102,7 @@ function writeJsonFile(path, value) {
   chmodSync2(path, 384);
 }
 function readStoreFileForImport(path) {
-  const value = JSON.parse(readFileSync3(path, "utf8"));
+  const value = JSON.parse(readFileSync2(path, "utf8"));
   if (!value || typeof value !== "object" || !Array.isArray(value.items)) {
     return { store: { items: [] }, skippedInvalid: 0 };
   }
@@ -6683,18 +6194,18 @@ function importLegacyGlobalStoreUnlocked(options = {}) {
     return result;
   const suffix = `${timestampForPath(now)}-${randomUUID().slice(0, 8)}`;
   if (canonicalExisted) {
-    result.backup_path = join3(workspace.exportsDir, `legacy-open-knowledge-db-before-import-${suffix}.json`);
+    result.backup_path = join2(workspace.exportsDir, `legacy-open-knowledge-db-before-import-${suffix}.json`);
     writeJsonFile(result.backup_path, canonicalStore);
   }
   writeJsonFile(canonicalPath, merged);
-  result.report_path = join3(workspace.runsDir, `legacy-open-knowledge-import-${suffix}.json`);
+  result.report_path = join2(workspace.runsDir, `legacy-open-knowledge-import-${suffix}.json`);
   writeJsonFile(result.report_path, result);
   return result;
 }
 function loadStoreIfExists(path) {
   if (!existsSync2(path))
     return { exists: false, items: [] };
-  const raw = readFileSync3(path, "utf8");
+  const raw = readFileSync2(path, "utf8");
   const parsed = JSON.parse(raw);
   if (!parsed || !Array.isArray(parsed.items)) {
     return { exists: true, items: [] };
@@ -6727,7 +6238,7 @@ function syncParentDir(path) {
 var heldLockPaths = new Set;
 function writeFileAtomic(path, contents) {
   ensureParentDir(path);
-  const tmp = join3(dirname2(path), `.${basename(path)}.tmp.${randomUUID()}`);
+  const tmp = join2(dirname2(path), `.${basename(path)}.tmp.${randomUUID()}`);
   let fd = null;
   try {
     fd = openSync(tmp, "wx", 384);
@@ -6767,7 +6278,7 @@ function processIsAlive(pid) {
 }
 function lockIsStale(path, now) {
   try {
-    const raw = readFileSync3(path, "utf8");
+    const raw = readFileSync2(path, "utf8");
     const lock = JSON.parse(raw);
     if (typeof lock.ts === "number") {
       return now - lock.ts > LOCK_STALE_MS && !processIsAlive(lock.pid);
@@ -6864,7 +6375,7 @@ function acquireLock(lockPath2, ownerId) {
 function releaseLock(lockPath2, ownerId) {
   try {
     if (existsSync2(lockPath2)) {
-      const lock = JSON.parse(readFileSync3(lockPath2, "utf8"));
+      const lock = JSON.parse(readFileSync2(lockPath2, "utf8"));
       if (lock.owner === ownerId) {
         unlinkSync(lockPath2);
       }
@@ -6873,7 +6384,7 @@ function releaseLock(lockPath2, ownerId) {
 }
 function loadStore(path) {
   ensureStore(path);
-  const raw = readFileSync3(path, "utf8");
+  const raw = readFileSync2(path, "utf8");
   const parsed = JSON.parse(raw);
   if (!parsed || !Array.isArray(parsed.items)) {
     return { items: [] };
@@ -6913,7 +6424,7 @@ class VersionHistoryUnsupportedError extends Error {
   location;
   code = "version_history_unsupported";
   constructor(location) {
-    super("Version history is not kept by the local JSON knowledge store " + `(${location}). It has no version line, so an empty history here would be a claim, not a measurement. ` + "Entry versioning lives in the Postgres-backed store: point this CLI at it " + "(HASNA_KNOWLEDGE_STORAGE_MODE=postgres plus the API url/key) and re-run.");
+    super("Version history is not kept by the local JSON knowledge store " + `(${location}). It has no version line, so an empty history here would be a claim, not a measurement. ` + "Entry versioning lives behind the server API: set HASNA_KNOWLEDGE_API_URL " + "and HASNA_KNOWLEDGE_API_KEY, then re-run.");
     this.location = location;
     this.name = "VersionHistoryUnsupportedError";
   }
@@ -6922,10 +6433,10 @@ function matchesId(item, idOrShort) {
   return item.id === idOrShort || item.short_id === idOrShort;
 }
 function itemMatchesLiteralSearch(item, search) {
-  const query2 = search.trim().toLowerCase();
-  if (!query2)
+  const query = search.trim().toLowerCase();
+  if (!query)
     return true;
-  return item.id.toLowerCase().includes(query2) || item.title.toLowerCase().includes(query2) || item.content.toLowerCase().includes(query2);
+  return item.id.toLowerCase().includes(query) || item.title.toLowerCase().includes(query) || item.content.toLowerCase().includes(query);
 }
 function itemMatchesTagFilters(item, rawFilters) {
   if (rawFilters.length === 0)
@@ -7082,24 +6593,24 @@ class LocalItemStore {
 }
 
 class ApiItemStore {
-  cloud;
+  http;
   kind = "api";
   exists = true;
   supportsVersions = true;
-  constructor(cloud) {
-    this.cloud = cloud;
+  constructor(http) {
+    this.http = http;
   }
   async listVersions(idOrShort, options = {}) {
-    return this.cloud.listVersions(idOrShort, options);
+    return this.http.listVersions(idOrShort, options);
   }
   async getVersion(idOrShort, version) {
-    return this.cloud.getVersion(idOrShort, version);
+    return this.http.getVersion(idOrShort, version);
   }
   get location() {
-    return this.cloud.baseUrl;
+    return this.http.baseUrl;
   }
   async list(options = {}) {
-    const result = await this.cloud.list({
+    const result = await this.http.list({
       search: options.search,
       tags: options.tags,
       archive: options.archive,
@@ -7115,14 +6626,14 @@ class ApiItemStore {
     };
   }
   async listAll() {
-    const items = await fetchAllCloudItems(this.cloud);
+    const items = await fetchAllHttpItems(this.http);
     return { items, total: items.length, exists: true };
   }
   async get(idOrShort) {
-    return this.cloud.get(idOrShort);
+    return this.http.get(idOrShort);
   }
   async create(input) {
-    return this.cloud.create({
+    return this.http.create({
       ...input.id ? { id: input.id } : {},
       title: input.title,
       content: input.content,
@@ -7132,24 +6643,24 @@ class ApiItemStore {
     });
   }
   async update(idOrShort, patch, options = {}) {
-    return this.cloud.update(idOrShort, patch, { expectedVersion: options.expectedVersion });
+    return this.http.update(idOrShort, patch, { expectedVersion: options.expectedVersion });
   }
   async delete(idOrShort) {
-    return this.cloud.delete(idOrShort);
+    return this.http.delete(idOrShort);
   }
   async deleteMany(idsOrShorts) {
     let removed = 0;
     for (const id of idsOrShorts) {
-      if (await this.cloud.delete(id))
+      if (await this.http.delete(id))
         removed += 1;
     }
     return removed;
   }
 }
 function resolveItemStore(options) {
-  const cloud = options.storePathOverridden ? null : resolveKnowledgeCloudStore(options.env ?? process.env);
-  if (cloud)
-    return new ApiItemStore(cloud);
+  const http = options.storePathOverridden ? null : resolveKnowledgeHttpStore(options.env ?? process.env);
+  if (http)
+    return new ApiItemStore(http);
   return new LocalItemStore(options.storePath);
 }
 
@@ -7218,8 +6729,8 @@ function revisionIdForSourceRef(uri) {
 }
 
 // src/artifact-store.ts
-import { chmodSync as chmodSync3, existsSync as existsSync4, mkdirSync as mkdirSync2, readFileSync as readFileSync4, statSync as statSync2, writeFileSync as writeFileSync3 } from "fs";
-import { dirname as dirname3, join as join4, relative, sep } from "path";
+import { chmodSync as chmodSync3, existsSync as existsSync4, mkdirSync as mkdirSync2, readFileSync as readFileSync3, statSync, writeFileSync as writeFileSync3 } from "fs";
+import { dirname as dirname3, join as join3, relative, sep } from "path";
 import { pathToFileURL } from "url";
 function normalizeArtifactKey(key) {
   const raw = key.replace(/\\/g, "/").trim();
@@ -7262,22 +6773,22 @@ class LocalArtifactStore {
   }
   async put(entry) {
     const key = normalizeArtifactKey(entry.key);
-    const path = join4(this.root, key);
+    const path = join3(this.root, key);
     assertInside(this.root, path);
     mkdirSync2(dirname3(path), { recursive: true, mode: 448 });
     writeFileSync3(path, entry.body, { mode: 384 });
     chmodSync3(path, 384);
-    return { key, uri: pathToFileURL(path).href, modified_at: statSync2(path).mtime.toISOString() };
+    return { key, uri: pathToFileURL(path).href, modified_at: statSync(path).mtime.toISOString() };
   }
   async getText(key) {
     const normalizedKey = normalizeArtifactKey(key);
-    const path = join4(this.root, normalizedKey);
+    const path = join3(this.root, normalizedKey);
     assertInside(this.root, path);
-    return readFileSync4(path, "utf8");
+    return readFileSync3(path, "utf8");
   }
   async exists(key) {
     const normalizedKey = normalizeArtifactKey(key);
-    const path = join4(this.root, normalizedKey);
+    const path = join3(this.root, normalizedKey);
     assertInside(this.root, path);
     return existsSync4(path);
   }
@@ -7384,109 +6895,18 @@ function createArtifactStore(config, workspace) {
 // src/service.ts
 import { createHash as createHash20 } from "crypto";
 import { spawnSync as spawnSync2 } from "child_process";
-import { existsSync as existsSync14, readFileSync as readFileSync13 } from "fs";
+import { existsSync as existsSync14, readFileSync as readFileSync12 } from "fs";
 import { hostname as hostname3 } from "os";
-import { join as join9, resolve as resolve5 } from "path";
+import { join as join8, resolve as resolve5 } from "path";
 
 // src/app-wiki.ts
 import { createHash as createHash6, randomUUID as randomUUID4 } from "crypto";
 
 // src/storage-contract.ts
 import { createHash, randomUUID as randomUUID2 } from "crypto";
-import { existsSync as existsSync6, readdirSync } from "fs";
-import { join as join6 } from "path";
+import { existsSync as existsSync5, readdirSync } from "fs";
+import { join as join4 } from "path";
 import { pathToFileURL as pathToFileURL2 } from "url";
-
-// src/auth.ts
-import { existsSync as existsSync5, mkdirSync as mkdirSync3, readFileSync as readFileSync5, unlinkSync as unlinkSync2, writeFileSync as writeFileSync4 } from "fs";
-import { homedir as homedir2 } from "os";
-import { dirname as dirname4, join as join5 } from "path";
-var DEFAULT_KNOWLEDGE_API_URL = "https://knowledge.md";
-function normalizeKnowledgeApiOrigin(apiUrl) {
-  const url = new URL(apiUrl);
-  if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw new Error("Knowledge API URL must use http or https.");
-  }
-  const pathname = url.pathname.replace(/\/+$/, "");
-  if (pathname === "/api" || pathname === "/api/v1") {
-    url.pathname = "/";
-  } else if (pathname.endsWith("/api/v1")) {
-    url.pathname = pathname.slice(0, -"/api/v1".length) || "/";
-  } else if (pathname.endsWith("/api")) {
-    url.pathname = pathname.slice(0, -"/api".length) || "/";
-  }
-  return url.toString().replace(/\/+$/, "");
-}
-function knowledgeAuthPath(env = process.env) {
-  if (env.HASNA_KNOWLEDGE_AUTH_PATH)
-    return env.HASNA_KNOWLEDGE_AUTH_PATH;
-  const root = env.HASNA_KNOWLEDGE_AUTH_DIR ?? join5(homedir2(), ".hasna", "knowledge");
-  return join5(root, "auth.json");
-}
-function resolveKnowledgeApiUrl(config, env = process.env) {
-  const envApiUrl = KNOWLEDGE_API_URL_ENV_KEYS.map((key) => env[key]?.trim()).find((value) => Boolean(value));
-  return normalizeKnowledgeApiOrigin(envApiUrl ?? config?.hosted?.api_url ?? DEFAULT_KNOWLEDGE_API_URL);
-}
-function getKnowledgeAuth(env = process.env) {
-  try {
-    const path = knowledgeAuthPath(env);
-    if (!existsSync5(path))
-      return null;
-    const parsed = JSON.parse(readFileSync5(path, "utf8"));
-    return typeof parsed.api_key === "string" && parsed.api_key.length > 0 ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-function saveKnowledgeAuth(auth, env = process.env) {
-  const path = knowledgeAuthPath(env);
-  const stored = {
-    ...auth,
-    api_url: auth.api_url ? normalizeKnowledgeApiOrigin(auth.api_url) : undefined,
-    created_at: auth.created_at ?? new Date().toISOString()
-  };
-  mkdirSync3(dirname4(path), { recursive: true, mode: 448 });
-  writeFileSync4(path, `${JSON.stringify(stored, null, 2)}
-`, { mode: 384 });
-  return stored;
-}
-function clearKnowledgeAuth(env = process.env) {
-  try {
-    unlinkSync2(knowledgeAuthPath(env));
-    return true;
-  } catch {
-    return false;
-  }
-}
-function getKnowledgeApiKey(env = process.env) {
-  const envApiKey = KNOWLEDGE_API_KEY_ENV_KEYS.map((key) => env[key]).find((value) => Boolean(value));
-  if (envApiKey)
-    return { apiKey: envApiKey, source: "env" };
-  const auth = getKnowledgeAuth(env);
-  return auth?.api_key ? { apiKey: auth.api_key, source: "file" } : { apiKey: null, source: "none" };
-}
-function knowledgeAuthStatus(config, env = process.env) {
-  const auth = getKnowledgeAuth(env);
-  const key = getKnowledgeApiKey(env);
-  const hasEnvApiUrl = KNOWLEDGE_API_URL_ENV_KEYS.some((name) => Boolean(env[name]?.trim()));
-  const apiUrl = hasEnvApiUrl ? resolveKnowledgeApiUrl(config, env) : auth?.api_url ? normalizeKnowledgeApiOrigin(auth.api_url) : resolveKnowledgeApiUrl(config, env);
-  return {
-    authenticated: Boolean(key.apiKey),
-    source: key.source,
-    api_url: apiUrl,
-    auth_path: knowledgeAuthPath(env),
-    email: key.source === "file" ? auth?.email ?? null : null,
-    org_id: key.source === "file" ? auth?.org_id ?? null : null,
-    org_slug: key.source === "file" ? auth?.org_slug ?? null : null,
-    user_id: key.source === "file" ? auth?.user_id ?? null : null,
-    api_key_present: Boolean(key.apiKey)
-  };
-}
-
-// src/registry-contract.ts
-var KNOWLEDGE_REGISTRY_CONTRACT_VERSION = 2;
-
-// src/storage-contract.ts
 var GENERATED_ARTIFACTS = [
   {
     kind: "schema",
@@ -7527,11 +6947,11 @@ var FORBIDDEN_WORKSPACE_FILES = [
 ];
 function forbiddenWorkspaceFilesPresent(workspace) {
   const present = [];
-  if (existsSync6(join6(workspace.home, "cloud.env")))
+  if (existsSync5(join4(workspace.home, "cloud.env")))
     present.push("cloud.env");
-  if (existsSync6(join6(workspace.home, "migration-exports")))
+  if (existsSync5(join4(workspace.home, "migration-exports")))
     present.push("migration-exports");
-  if (existsSync6(workspace.home)) {
+  if (existsSync5(workspace.home)) {
     for (const entry of readdirSync(workspace.home)) {
       if (/^(?:knowledge\.db|db\.json)\.pre-cloud-.+\.bak$/i.test(entry))
         present.push(entry);
@@ -7560,7 +6980,6 @@ function resolveStorageContract(config, workspace, scope = "global") {
   const canonicalActive = config.storage.type === "s3" && s3?.bucket === EXAMPLE_KNOWLEDGE_CANONICAL.s3.bucket && (s3.region ?? null) === EXAMPLE_KNOWLEDGE_CANONICAL.s3.region;
   return {
     scope,
-    mode: config.mode,
     storage_type: config.storage.type,
     workspace_home: workspace.home,
     local_layout: {
@@ -7616,24 +7035,14 @@ function resolveStorageContract(config, workspace, scope = "global") {
       },
       evidence_doc: EXAMPLE_KNOWLEDGE_CANONICAL.evidence_doc
     },
-    hosted: {
-      enabled: config.mode === "hosted",
-      api_url: normalizeKnowledgeApiOrigin(config.hosted?.api_url ?? DEFAULT_KNOWLEDGE_API_URL),
-      api_url_env: "KNOWLEDGE_API_URL",
-      api_key_env: "KNOWLEDGE_API_KEY",
-      auth_storage: "~/.hasna/knowledge/auth.json",
-      registry_contract_version: KNOWLEDGE_REGISTRY_CONTRACT_VERSION,
-      requires_hosted_account_for_local_use: false
-    },
     secret_handling: {
       workspace_env_files_supported: false,
       forbidden_workspace_files: FORBIDDEN_WORKSPACE_FILES,
       forbidden_workspace_files_present: forbiddenWorkspaceFilesPresent(workspace),
       runtime_env_keys: [
-        "HASNA_KNOWLEDGE_STORAGE_MODE",
-        "KNOWLEDGE_STORAGE_MODE",
-        "HASNA_KNOWLEDGE_DATABASE_URL",
-        "KNOWLEDGE_DATABASE_URL"
+        "HASNA_KNOWLEDGE_API_URL",
+        "HASNA_KNOWLEDGE_API_KEY",
+        "HASNA_KNOWLEDGE_DATABASE_URL"
       ],
       secret_ref_authority: "open-secrets",
       approved_secret_refs: {
@@ -7720,8 +7129,6 @@ function validateStorageConfig(config, workspace) {
       errors2.push("storage.s3.bucket is required when storage.type is s3.");
     if (!config.storage.s3?.prefix)
       warnings.push("storage.s3.prefix is empty; generated knowledge artifacts will be written at the bucket root.");
-    if (config.mode === "local")
-      warnings.push("storage.type is s3 while mode is local; this is valid for BYO S3, but hosted wrappers should set mode to hosted.");
   }
   if (config.storage.type === "local" && config.storage.s3) {
     warnings.push("storage.s3 is configured but ignored while storage.type is local.");
@@ -7731,13 +7138,6 @@ function validateStorageConfig(config, workspace) {
   }
   if (!config.sources.allowed_schemes.includes("open-files")) {
     errors2.push("sources.allowed_schemes must include open-files.");
-  }
-  if (config.mode === "hosted" && config.hosted?.api_url) {
-    try {
-      normalizeKnowledgeApiOrigin(config.hosted.api_url);
-    } catch {
-      errors2.push("hosted.api_url must be an http(s) URL when mode is hosted.");
-    }
   }
   return {
     ok: errors2.length === 0,
@@ -7817,12 +7217,12 @@ function withProvenance(metadata, provenance) {
 
 // src/source-ingest.ts
 import { createHash as createHash5 } from "crypto";
-import { existsSync as existsSync8, readFileSync as readFileSync7 } from "fs";
+import { existsSync as existsSync7, readFileSync as readFileSync5 } from "fs";
 import { basename as basename3 } from "path";
 
 // src/manifest-ingest.ts
 import { createHash as createHash4 } from "crypto";
-import { existsSync as existsSync7, readFileSync as readFileSync6 } from "fs";
+import { existsSync as existsSync6, readFileSync as readFileSync4 } from "fs";
 import { basename as basename2 } from "path";
 
 // src/safety.ts
@@ -7843,7 +7243,6 @@ function resolveSafetyPolicy(config, workspace) {
     }
   }
   return {
-    mode: config.mode,
     allowWriteRoots: [
       workspace.home,
       workspace.artifactsDir,
@@ -8011,7 +7410,7 @@ REDACTION_PATTERNS.push(...COMMON_BARE_TOKEN_PATTERNS);
 // src/private-ref.ts
 import { createHash as createHash3 } from "crypto";
 import { realpathSync } from "fs";
-import { homedir as homedir3, tmpdir } from "os";
+import { homedir as homedir2, tmpdir } from "os";
 var PATH_TAIL = String.raw`[^\s"'<>),\]}]`;
 var PATH_SEGMENT = String.raw`[^/\\\s"'<>]+`;
 var FILE_URI_RE = /file:\/\/[^\s"'<>),\]}]+/gi;
@@ -8038,7 +7437,7 @@ var hostRootCacheKey = null;
 var hostRootCache = [];
 function hostRootPatterns() {
   const roots = new Set;
-  for (const root of [homedir3(), tmpdir()]) {
+  for (const root of [homedir2(), tmpdir()]) {
     if (!root)
       continue;
     roots.add(root);
@@ -8384,9 +7783,9 @@ async function readS3Text(uri, config, safetyPolicy) {
 }
 async function readManifestInput(input, config, safetyPolicy, maxInputBytes = DEFAULT_MAX_MANIFEST_INPUT_BYTES) {
   const text = input.startsWith("s3://") ? await readS3Text(input, config, safetyPolicy) : (() => {
-    if (!existsSync7(input))
+    if (!existsSync6(input))
       throw new Error(`Manifest not found: ${input}`);
-    return readFileSync6(input, "utf8");
+    return readFileSync4(input, "utf8");
   })();
   const bytes = Buffer.byteLength(text);
   if (bytes > maxInputBytes) {
@@ -8682,9 +8081,9 @@ function metadataNumber(metadata, keys) {
   return null;
 }
 function assertPurposeAllowed(permissions, purpose) {
-  const mode2 = permissions.mode;
-  if (typeof mode2 === "string" && mode2 !== "read_only") {
-    throw new Error(`Source resolver denied ${purpose}. Permission mode is ${mode2}, expected read_only.`);
+  const mode = permissions.mode;
+  if (typeof mode === "string" && mode !== "read_only") {
+    throw new Error(`Source resolver denied ${purpose}. Permission mode is ${mode}, expected read_only.`);
   }
   const denied = permissions.denied_purposes;
   if (Array.isArray(denied) && denied.includes(purpose)) {
@@ -9001,9 +8400,9 @@ function titleForRef(parsed) {
 }
 async function readDirectSourceText(parsed, config, safetyPolicy) {
   if (parsed.kind === "file") {
-    if (!existsSync8(parsed.path))
+    if (!existsSync7(parsed.path))
       throw new Error(`Source file not found: ${parsed.path}`);
-    const text = readFileSync7(parsed.path, "utf8");
+    const text = readFileSync5(parsed.path, "utf8");
     return {
       text,
       contentSource: "file",
@@ -9629,6 +9028,92 @@ async function ingestAppWikiSourceRef(options) {
   });
 }
 
+// src/auth.ts
+import { existsSync as existsSync8, mkdirSync as mkdirSync3, readFileSync as readFileSync6, unlinkSync as unlinkSync2, writeFileSync as writeFileSync4 } from "fs";
+import { homedir as homedir3 } from "os";
+import { dirname as dirname4, join as join5 } from "path";
+var DEFAULT_KNOWLEDGE_API_URL = "https://knowledge.md";
+function normalizeKnowledgeApiOrigin(apiUrl) {
+  const url = new URL(apiUrl);
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error("Knowledge API URL must use http or https.");
+  }
+  const pathname = url.pathname.replace(/\/+$/, "");
+  if (pathname === "/api" || pathname === "/api/v1") {
+    url.pathname = "/";
+  } else if (pathname.endsWith("/api/v1")) {
+    url.pathname = pathname.slice(0, -"/api/v1".length) || "/";
+  } else if (pathname.endsWith("/api")) {
+    url.pathname = pathname.slice(0, -"/api".length) || "/";
+  }
+  return url.toString().replace(/\/+$/, "");
+}
+function knowledgeAuthPath(env = process.env) {
+  if (env.HASNA_KNOWLEDGE_AUTH_PATH)
+    return env.HASNA_KNOWLEDGE_AUTH_PATH;
+  const root = env.HASNA_KNOWLEDGE_AUTH_DIR ?? join5(homedir3(), ".hasna", "knowledge");
+  return join5(root, "auth.json");
+}
+function resolveKnowledgeApiUrl(env = process.env) {
+  const envApiUrl = KNOWLEDGE_API_URL_ENV_KEYS.map((key) => env[key]?.trim()).find((value) => Boolean(value));
+  return normalizeKnowledgeApiOrigin(envApiUrl ?? DEFAULT_KNOWLEDGE_API_URL);
+}
+function getKnowledgeAuth(env = process.env) {
+  try {
+    const path = knowledgeAuthPath(env);
+    if (!existsSync8(path))
+      return null;
+    const parsed = JSON.parse(readFileSync6(path, "utf8"));
+    return typeof parsed.api_key === "string" && parsed.api_key.length > 0 ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+function saveKnowledgeAuth(auth, env = process.env) {
+  const path = knowledgeAuthPath(env);
+  const stored = {
+    ...auth,
+    api_url: auth.api_url ? normalizeKnowledgeApiOrigin(auth.api_url) : undefined,
+    created_at: auth.created_at ?? new Date().toISOString()
+  };
+  mkdirSync3(dirname4(path), { recursive: true, mode: 448 });
+  writeFileSync4(path, `${JSON.stringify(stored, null, 2)}
+`, { mode: 384 });
+  return stored;
+}
+function clearKnowledgeAuth(env = process.env) {
+  try {
+    unlinkSync2(knowledgeAuthPath(env));
+    return true;
+  } catch {
+    return false;
+  }
+}
+function getKnowledgeApiKey(env = process.env) {
+  const envApiKey = KNOWLEDGE_API_KEY_ENV_KEYS.map((key) => env[key]).find((value) => Boolean(value));
+  if (envApiKey)
+    return { apiKey: envApiKey, source: "env" };
+  const auth = getKnowledgeAuth(env);
+  return auth?.api_key ? { apiKey: auth.api_key, source: "file" } : { apiKey: null, source: "none" };
+}
+function knowledgeAuthStatus(env = process.env) {
+  const auth = getKnowledgeAuth(env);
+  const key = getKnowledgeApiKey(env);
+  const hasEnvApiUrl = KNOWLEDGE_API_URL_ENV_KEYS.some((name) => Boolean(env[name]?.trim()));
+  const apiUrl = hasEnvApiUrl ? resolveKnowledgeApiUrl(env) : auth?.api_url ? normalizeKnowledgeApiOrigin(auth.api_url) : resolveKnowledgeApiUrl(env);
+  return {
+    authenticated: Boolean(key.apiKey),
+    source: key.source,
+    api_url: apiUrl,
+    auth_path: knowledgeAuthPath(env),
+    email: key.source === "file" ? auth?.email ?? null : null,
+    org_id: key.source === "file" ? auth?.org_id ?? null : null,
+    org_slug: key.source === "file" ? auth?.org_slug ?? null : null,
+    user_id: key.source === "file" ? auth?.user_id ?? null : null,
+    api_key_present: Boolean(key.apiKey)
+  };
+}
+
 // src/agent.ts
 import { randomUUID as randomUUID6 } from "crypto";
 
@@ -9839,7 +9324,7 @@ function recordProviderUsage(db, input) {
 import { createHash as createHash8 } from "crypto";
 
 // src/search.ts
-import { existsSync as existsSync9, readFileSync as readFileSync8 } from "fs";
+import { existsSync as existsSync9, readFileSync as readFileSync7 } from "fs";
 
 // src/embeddings.ts
 import { createHash as createHash7 } from "crypto";
@@ -10207,19 +9692,19 @@ function metadataNumber3(metadata, keys) {
 function unique(values) {
   return Array.from(new Set(values));
 }
-function queryTerms(query2) {
-  const terms = query2.normalize("NFKC").toLowerCase().match(/[\p{L}\p{N}_]+/gu) ?? [];
+function queryTerms(query) {
+  const terms = query.normalize("NFKC").toLowerCase().match(/[\p{L}\p{N}_]+/gu) ?? [];
   return unique(terms.filter((term) => term.length > 0)).slice(0, 16);
 }
 function normalizeWords(raw) {
   return raw.normalize("NFKC").toLowerCase().match(/[\p{L}\p{N}_]+/gu) ?? [];
 }
-function parseSearchQuery(query2) {
+function parseSearchQuery(query) {
   const tokens = [];
   const segment = /"([^"]*)"|(\S+)/g;
   let match;
   let pendingNegate = false;
-  while ((match = segment.exec(query2)) !== null) {
+  while ((match = segment.exec(query)) !== null) {
     if (match[1] !== undefined) {
       const words2 = normalizeWords(match[1]);
       if (words2.length > 0) {
@@ -10267,8 +9752,8 @@ function tokenToFragment(token) {
     return `"${token.value}"`;
   return `"${token.value}"*`;
 }
-function buildFtsMatch(query2) {
-  const tokens = parseSearchQuery(query2);
+function buildFtsMatch(query) {
+  const tokens = parseSearchQuery(query);
   const positives = tokens.filter((t) => t.type !== "or" && !t.negate);
   if (positives.length === 0)
     return { and: null, or: null };
@@ -10424,7 +9909,7 @@ function readLegacyItems(path) {
   if (!path || !existsSync9(path))
     return [];
   try {
-    const parsed = JSON.parse(readFileSync8(path, "utf8"));
+    const parsed = JSON.parse(readFileSync7(path, "utf8"));
     if (!parsed || !Array.isArray(parsed.items))
       return [];
     return parsed.items.filter((item) => {
@@ -10597,14 +10082,14 @@ function sortResults(results) {
   });
 }
 async function hybridSearch(options) {
-  const query2 = options.query.trim();
-  if (!query2)
+  const query = options.query.trim();
+  if (!query)
     throw new Error("Search query is required.");
   const limit = Math.max(1, Math.min(options.limit ?? 10, 100));
   const offset = Math.max(0, Math.floor(options.offset ?? 0));
   const window = offset + limit;
-  const terms = queryTerms(query2);
-  const ftsMatch = buildFtsMatch(query2);
+  const terms = queryTerms(query);
+  const ftsMatch = buildFtsMatch(query);
   const semanticEnabled = options.semantic === true || options.fake === true || Boolean(options.modelRef);
   const warnings = [];
   let semanticProvider = null;
@@ -10639,7 +10124,7 @@ async function hybridSearch(options) {
     try {
       const semantic = await searchVectorIndex({
         dbPath: options.dbPath,
-        query: query2,
+        query,
         limit: Math.max(window * 3, 20),
         config: options.config,
         env: options.env,
@@ -10687,7 +10172,7 @@ async function hybridSearch(options) {
   const ranked = sortResults(Array.from(merged.values()));
   const results = ranked.slice(offset, offset + limit);
   return {
-    query: query2,
+    query,
     limit,
     offset,
     mode: {
@@ -10712,12 +10197,12 @@ async function hybridSearchLegacyStore(options) {
   return hybridSearchItems(readLegacyItems(options.legacyStorePath), options, ["knowledge_db_missing"]);
 }
 async function hybridSearchItems(items, options, baseWarnings = []) {
-  const query2 = options.query.trim();
-  if (!query2)
+  const query = options.query.trim();
+  if (!query)
     throw new Error("Search query is required.");
   const limit = Math.max(1, Math.min(options.limit ?? 10, 100));
   const offset = Math.max(0, Math.floor(options.offset ?? 0));
-  const terms = queryTerms(query2);
+  const terms = queryTerms(query);
   const semanticEnabled = options.semantic === true || options.fake === true || Boolean(options.modelRef);
   const merged = new Map;
   const itemRows = selectItems(items, terms, Math.max(offset + limit, 10));
@@ -10727,7 +10212,7 @@ async function hybridSearchItems(items, options, baseWarnings = []) {
     warnings.push("semantic_search_requires_local_catalog");
   const results = sortResults(Array.from(merged.values())).slice(offset, offset + limit);
   return {
-    query: query2,
+    query,
     limit,
     offset,
     mode: {
@@ -10749,14 +10234,14 @@ async function hybridSearchItems(items, options, baseWarnings = []) {
   };
 }
 function hybridSearchFromProducerPage(hits, options, warnings = [], producerTotal = hits.length) {
-  const query2 = options.query.trim();
-  if (!query2)
+  const query = options.query.trim();
+  if (!query)
     throw new Error("Search query is required.");
   const limit = Math.max(1, Math.min(options.limit ?? 10, 100));
   const offset = Math.max(0, Math.floor(options.offset ?? 0));
   const results = hits.map(({ item, rank }) => legacyItemResult(item, rank));
   return {
-    query: query2,
+    query,
     limit,
     offset,
     mode: {
@@ -10782,11 +10267,11 @@ function hybridSearchFromProducerPage(hits, options, warnings = [], producerTota
 function stableId4(prefix, value) {
   return `${prefix}_${createHash8("sha256").update(value).digest("hex").slice(0, 20)}`;
 }
-function normalizeQuery(query2) {
-  return query2.normalize("NFKC").trim().replace(/\s+/g, " ").toLowerCase();
+function normalizeQuery(query) {
+  return query.normalize("NFKC").trim().replace(/\s+/g, " ").toLowerCase();
 }
-function queryTerms2(query2) {
-  return Array.from(new Set(normalizeQuery(query2).match(/[\p{L}\p{N}_]+/gu) ?? [])).slice(0, 16);
+function queryTerms2(query) {
+  return Array.from(new Set(normalizeQuery(query).match(/[\p{L}\p{N}_]+/gu) ?? [])).slice(0, 16);
 }
 function textForResult(result) {
   return [result.title, result.text].filter(Boolean).join(" ").toLowerCase();
@@ -11356,7 +10841,7 @@ ${answer}`;
   const writePolicy = {
     approved: options.approveWrite === true,
     durable_writes_performed: false,
-    reason: options.approveWrite ? "Approval flag recorded; durable wiki writes require the local catalog (wiki compile) and are not available in cloud mode." : "Dry-run mode: proposed wiki updates require approval before durable writes."
+    reason: options.approveWrite ? "Approval flag recorded; durable wiki writes require the on-box catalog (wiki compile) and are not available through the HTTP client." : "Dry-run mode: proposed wiki updates require approval before durable writes."
   };
   return {
     run_id: runId,
@@ -11554,8 +11039,8 @@ function citationFromRetrieval(index, citation, policy) {
   };
 }
 async function buildSearchDraft(options, maxItems) {
-  const query2 = (options.query ?? options.topic ?? "").trim();
-  if (!query2)
+  const query = (options.query ?? options.topic ?? "").trim();
+  if (!query)
     throw new Error("Context pack query is required for search source.");
   const {
     config,
@@ -11574,7 +11059,7 @@ async function buildSearchDraft(options, maxItems) {
     dbPath,
     config,
     legacyStorePath,
-    query: query2,
+    query,
     limit: Math.max(maxItems, limit ?? maxItems),
     semantic,
     modelRef,
@@ -11882,8 +11367,8 @@ async function buildKnowledgeAgentContextPack(options) {
   const purpose = options.purpose ?? (source === "loops" || source === "runs" ? "proposal" : "agent_context");
   const maxTokens = coerceMaxTokens(options.maxTokens);
   const maxItems = coerceMaxItems(options.maxItems, options.limit);
-  const query2 = normalizeText(options.query ?? options.topic ?? "");
-  if (purpose === "proposal" && source !== "search" && !query2) {
+  const query = normalizeText(options.query ?? options.topic ?? "");
+  if (purpose === "proposal" && source !== "search" && !query) {
     throw new Error("Proposal context requires --topic <text> or a positional topic.");
   }
   if (source !== "search")
@@ -11896,7 +11381,7 @@ async function buildKnowledgeAgentContextPack(options) {
   const outline = outlineFor({
     source,
     purpose,
-    query: query2,
+    query,
     evidence: sortedEvidence,
     duplicates: duplicateCandidates
   });
@@ -11907,14 +11392,14 @@ async function buildKnowledgeAgentContextPack(options) {
     created_at: now.toISOString(),
     source,
     purpose,
-    query: query2,
+    query,
     topic: options.topic ?? null,
     since: options.since ?? null,
     dry_run: true,
     idempotency_key: stableId5("ctx", [
       source,
       purpose,
-      query2,
+      query,
       sinceForKey,
       options.dedupe === true ? "dedupe" : "no-dedupe",
       options.semantic === true ? "semantic" : "keyword",
@@ -11956,7 +11441,7 @@ import { randomUUID as randomUUID8 } from "crypto";
 
 // src/sync.ts
 import { createHash as createHash10, randomUUID as randomUUID7 } from "crypto";
-import { existsSync as existsSync10, readFileSync as readFileSync9 } from "fs";
+import { existsSync as existsSync10, readFileSync as readFileSync8 } from "fs";
 import { hostname } from "os";
 import { fileURLToPath as fileURLToPath2 } from "url";
 import { extname, relative as relative3, resolve as resolve3, sep as sep3 } from "path";
@@ -12761,7 +12246,7 @@ function createKnowledgeSyncBundle(options) {
             if (!isTextArtifact(row.content_type, key)) {
               warnings.push(`artifact_content_not_embedded_binary:${row.id}`);
             } else {
-              const text = readFileSync9(path, "utf8");
+              const text = readFileSync8(path, "utf8");
               const redactedText = redactPrivateRefs(text);
               if (redactedText !== text)
                 warnings.push(`artifact_content_redacted:${row.id}`);
@@ -14055,7 +13540,7 @@ async function proposeKnowledgeSyncConflictResolutionWithAi(options) {
 
 // src/outbox-consume.ts
 import { createHash as createHash11, randomUUID as randomUUID9 } from "crypto";
-import { existsSync as existsSync11, readFileSync as readFileSync10 } from "fs";
+import { existsSync as existsSync11, readFileSync as readFileSync9 } from "fs";
 import { basename as basename4 } from "path";
 function stableId6(prefix, value) {
   return `${prefix}_${createHash11("sha256").update(value).digest("hex").slice(0, 20)}`;
@@ -14202,7 +13687,7 @@ async function readOutboxInput(input, config, safetyPolicy) {
     return readS3Text3(input, config, safetyPolicy);
   if (!existsSync11(input))
     throw new Error(`Outbox not found: ${input}`);
-  return readFileSync10(input, "utf8");
+  return readFileSync9(input, "utf8");
 }
 function mergeJson(existing, patch) {
   let base = {};
@@ -14654,36 +14139,36 @@ function adapterStatus(input) {
     error: input.error ?? null
   };
 }
-function disabledAdapterStatus(mode2, error = "adapter_disabled") {
+function disabledAdapterStatus(mode, error = "adapter_disabled") {
   return adapterStatus({
-    mode: mode2,
+    mode,
     implementation: "disabled",
     available: false,
     error
   });
 }
-function unsupportedContractAdapterStatus(mode2, mod) {
+function unsupportedContractAdapterStatus(mode, mod) {
   const version = unsupportedContractVersion(contractVersion(mod));
   if (!version)
     return null;
   return adapterStatus({
-    mode: mode2,
+    mode,
     implementation: "disabled",
     available: false,
     error: `unsupported_contract_version:${version}`,
     contractVersion: version
   });
 }
-function cliAdapterStatus(mode2) {
+function cliAdapterStatus(mode) {
   return adapterStatus({
-    mode: mode2,
+    mode,
     implementation: "cli",
     available: true
   });
 }
-function sdkAdapterStatus(mode2, mod) {
+function sdkAdapterStatus(mode, mod) {
   return adapterStatus({
-    mode: mode2,
+    mode,
     implementation: "sdk",
     available: true,
     contractVersion: contractVersion(mod)
@@ -15171,18 +14656,18 @@ async function discoverLocalTopology(options, adapter) {
   }, options);
 }
 async function discoverKnowledgeMachineTopology(options = {}) {
-  const mode2 = adapterMode(options);
-  if (mode2 === "disabled")
-    return await discoverLocalTopology(options, disabledAdapterStatus(mode2));
-  const cliStatus = cliAdapterStatus(mode2);
+  const mode = adapterMode(options);
+  if (mode === "disabled")
+    return await discoverLocalTopology(options, disabledAdapterStatus(mode));
+  const cliStatus = cliAdapterStatus(mode);
   try {
-    if (mode2 !== "cli") {
+    if (mode !== "cli") {
       const loader = options.loadOpenMachines ?? loadOpenMachinesModule;
       const mod = await loader();
-      const unsupportedStatus = unsupportedContractAdapterStatus(mode2, mod);
+      const unsupportedStatus = unsupportedContractAdapterStatus(mode, mod);
       if (unsupportedStatus)
         return await discoverLocalTopology(options, unsupportedStatus);
-      const sdkStatus = sdkAdapterStatus(mode2, mod);
+      const sdkStatus = sdkAdapterStatus(mode, mod);
       if (mod?.discoverMachineTopology) {
         const topology = mod.discoverMachineTopology({
           includeTailscale: options.includeTailscale,
@@ -15192,19 +14677,19 @@ async function discoverKnowledgeMachineTopology(options = {}) {
         const normalized = normalizeOpenMachinesTopology(topology, options, sdkStatus);
         if (normalized)
           return normalized;
-        if (mode2 === "sdk")
-          return await discoverLocalTopology(options, disabledAdapterStatus(mode2, "invalid_topology_shape"));
-        return await discoverOpenMachinesCliTopology(options, cliStatus) ?? await discoverLocalTopology(options, disabledAdapterStatus(mode2, "invalid_topology_shape"));
+        if (mode === "sdk")
+          return await discoverLocalTopology(options, disabledAdapterStatus(mode, "invalid_topology_shape"));
+        return await discoverOpenMachinesCliTopology(options, cliStatus) ?? await discoverLocalTopology(options, disabledAdapterStatus(mode, "invalid_topology_shape"));
       }
-      if (mode2 === "sdk")
-        return await discoverLocalTopology(options, disabledAdapterStatus(mode2, "missing_discoverMachineTopology"));
-      return await discoverOpenMachinesCliTopology(options, cliStatus) ?? await discoverLocalTopology(options, disabledAdapterStatus(mode2, "missing_discoverMachineTopology"));
+      if (mode === "sdk")
+        return await discoverLocalTopology(options, disabledAdapterStatus(mode, "missing_discoverMachineTopology"));
+      return await discoverOpenMachinesCliTopology(options, cliStatus) ?? await discoverLocalTopology(options, disabledAdapterStatus(mode, "missing_discoverMachineTopology"));
     }
-    return await discoverOpenMachinesCliTopology(options, cliStatus) ?? await discoverLocalTopology(options, disabledAdapterStatus(mode2, "machines_cli_unavailable"));
+    return await discoverOpenMachinesCliTopology(options, cliStatus) ?? await discoverLocalTopology(options, disabledAdapterStatus(mode, "machines_cli_unavailable"));
   } catch (error) {
-    if (mode2 === "sdk")
-      return await discoverLocalTopology(options, disabledAdapterStatus(mode2, optionalModuleError(error)));
-    return await discoverOpenMachinesCliTopology(options, cliStatus) ?? await discoverLocalTopology(options, disabledAdapterStatus(mode2, optionalModuleError(error)));
+    if (mode === "sdk")
+      return await discoverLocalTopology(options, disabledAdapterStatus(mode, optionalModuleError(error)));
+    return await discoverOpenMachinesCliTopology(options, cliStatus) ?? await discoverLocalTopology(options, disabledAdapterStatus(mode, optionalModuleError(error)));
   }
 }
 async function resolveOpenMachinesCliRoute(options, adapter) {
@@ -15233,18 +14718,18 @@ function rawMachineRoute(machineId, adapter) {
   };
 }
 async function resolveKnowledgeMachineRoute(options) {
-  const mode2 = adapterMode(options);
-  if (mode2 === "disabled")
-    return rawMachineRoute(options.machineId, disabledAdapterStatus(mode2));
-  const cliStatus = cliAdapterStatus(mode2);
+  const mode = adapterMode(options);
+  if (mode === "disabled")
+    return rawMachineRoute(options.machineId, disabledAdapterStatus(mode));
+  const cliStatus = cliAdapterStatus(mode);
   try {
-    if (mode2 !== "cli") {
+    if (mode !== "cli") {
       const loader = options.loadOpenMachines ?? loadOpenMachinesModule;
       const mod = await loader();
-      const unsupportedStatus = unsupportedContractAdapterStatus(mode2, mod);
+      const unsupportedStatus = unsupportedContractAdapterStatus(mode, mod);
       if (unsupportedStatus)
         return rawMachineRoute(options.machineId, unsupportedStatus);
-      const sdkStatus = sdkAdapterStatus(mode2, mod);
+      const sdkStatus = sdkAdapterStatus(mode, mod);
       if (mod?.resolveMachineRoute) {
         const normalized = normalizeOpenMachinesRoute(mod.resolveMachineRoute(options.machineId, {
           includeTailscale: options.includeTailscale,
@@ -15253,24 +14738,24 @@ async function resolveKnowledgeMachineRoute(options) {
         }), sdkStatus);
         if (normalized)
           return normalized;
-        if (mode2 === "sdk")
-          return rawMachineRoute(options.machineId, disabledAdapterStatus(mode2, "invalid_route_shape"));
-        return await resolveOpenMachinesCliRoute(options, cliStatus) ?? rawMachineRoute(options.machineId, disabledAdapterStatus(mode2, "invalid_route_shape"));
+        if (mode === "sdk")
+          return rawMachineRoute(options.machineId, disabledAdapterStatus(mode, "invalid_route_shape"));
+        return await resolveOpenMachinesCliRoute(options, cliStatus) ?? rawMachineRoute(options.machineId, disabledAdapterStatus(mode, "invalid_route_shape"));
       }
-      if (mode2 === "sdk")
-        return rawMachineRoute(options.machineId, disabledAdapterStatus(mode2, "missing_resolveMachineRoute"));
-      return await resolveOpenMachinesCliRoute(options, cliStatus) ?? rawMachineRoute(options.machineId, disabledAdapterStatus(mode2, "missing_resolveMachineRoute"));
+      if (mode === "sdk")
+        return rawMachineRoute(options.machineId, disabledAdapterStatus(mode, "missing_resolveMachineRoute"));
+      return await resolveOpenMachinesCliRoute(options, cliStatus) ?? rawMachineRoute(options.machineId, disabledAdapterStatus(mode, "missing_resolveMachineRoute"));
     }
-    return await resolveOpenMachinesCliRoute(options, cliStatus) ?? rawMachineRoute(options.machineId, disabledAdapterStatus(mode2, "machines_cli_unavailable"));
+    return await resolveOpenMachinesCliRoute(options, cliStatus) ?? rawMachineRoute(options.machineId, disabledAdapterStatus(mode, "machines_cli_unavailable"));
   } catch (error) {
-    if (mode2 === "sdk") {
+    if (mode === "sdk") {
       return {
-        ...rawMachineRoute(options.machineId, disabledAdapterStatus(mode2, optionalModuleError(error))),
+        ...rawMachineRoute(options.machineId, disabledAdapterStatus(mode, optionalModuleError(error))),
         warnings: [optionalModuleError(error)]
       };
     }
     return await resolveOpenMachinesCliRoute(options, cliStatus) ?? {
-      ...rawMachineRoute(options.machineId, disabledAdapterStatus(mode2, optionalModuleError(error))),
+      ...rawMachineRoute(options.machineId, disabledAdapterStatus(mode, optionalModuleError(error))),
       warnings: [optionalModuleError(error)]
     };
   }
@@ -15361,18 +14846,18 @@ async function resolveKnowledgeMachineWorkspace(options) {
   const argument = argumentMachineWorkspace(options);
   if (argument)
     return argument;
-  const mode2 = adapterMode(options);
-  if (mode2 === "disabled")
-    return unresolvedMachineWorkspace(options, ["adapter_disabled"], disabledAdapterStatus(mode2));
-  const cliStatus = cliAdapterStatus(mode2);
+  const mode = adapterMode(options);
+  if (mode === "disabled")
+    return unresolvedMachineWorkspace(options, ["adapter_disabled"], disabledAdapterStatus(mode));
+  const cliStatus = cliAdapterStatus(mode);
   try {
-    if (mode2 !== "cli") {
+    if (mode !== "cli") {
       const loader = options.loadOpenMachines ?? loadOpenMachinesModule;
       const mod = await loader();
-      const unsupportedStatus = unsupportedContractAdapterStatus(mode2, mod);
+      const unsupportedStatus = unsupportedContractAdapterStatus(mode, mod);
       if (unsupportedStatus)
         return unresolvedMachineWorkspace(options, [`unsupported_contract_version:${unsupportedStatus.contract_version}`], unsupportedStatus);
-      const sdkStatus = sdkAdapterStatus(mode2, mod);
+      const sdkStatus = sdkAdapterStatus(mode, mod);
       if (mod?.resolveMachineWorkspace) {
         const normalized = normalizeOpenMachinesWorkspace(mod.resolveMachineWorkspace({
           machineId: options.machineId,
@@ -15385,19 +14870,19 @@ async function resolveKnowledgeMachineWorkspace(options) {
         }), options, sdkStatus);
         if (normalized)
           return normalized;
-        if (mode2 === "sdk")
-          return unresolvedMachineWorkspace(options, ["invalid_workspace_shape"], disabledAdapterStatus(mode2, "invalid_workspace_shape"));
-        return await resolveOpenMachinesCliWorkspace(options, cliStatus) ?? unresolvedMachineWorkspace(options, ["invalid_workspace_shape"], disabledAdapterStatus(mode2, "invalid_workspace_shape"));
+        if (mode === "sdk")
+          return unresolvedMachineWorkspace(options, ["invalid_workspace_shape"], disabledAdapterStatus(mode, "invalid_workspace_shape"));
+        return await resolveOpenMachinesCliWorkspace(options, cliStatus) ?? unresolvedMachineWorkspace(options, ["invalid_workspace_shape"], disabledAdapterStatus(mode, "invalid_workspace_shape"));
       }
-      if (mode2 === "sdk")
-        return unresolvedMachineWorkspace(options, ["missing_resolveMachineWorkspace"], disabledAdapterStatus(mode2, "missing_resolveMachineWorkspace"));
-      return await resolveOpenMachinesCliWorkspace(options, cliStatus) ?? unresolvedMachineWorkspace(options, ["missing_resolveMachineWorkspace"], disabledAdapterStatus(mode2, "missing_resolveMachineWorkspace"));
+      if (mode === "sdk")
+        return unresolvedMachineWorkspace(options, ["missing_resolveMachineWorkspace"], disabledAdapterStatus(mode, "missing_resolveMachineWorkspace"));
+      return await resolveOpenMachinesCliWorkspace(options, cliStatus) ?? unresolvedMachineWorkspace(options, ["missing_resolveMachineWorkspace"], disabledAdapterStatus(mode, "missing_resolveMachineWorkspace"));
     }
-    return await resolveOpenMachinesCliWorkspace(options, cliStatus) ?? unresolvedMachineWorkspace(options, ["machines_cli_unavailable"], disabledAdapterStatus(mode2, "machines_cli_unavailable"));
+    return await resolveOpenMachinesCliWorkspace(options, cliStatus) ?? unresolvedMachineWorkspace(options, ["machines_cli_unavailable"], disabledAdapterStatus(mode, "machines_cli_unavailable"));
   } catch (error) {
-    if (mode2 === "sdk")
-      return unresolvedMachineWorkspace(options, [optionalModuleError(error)], disabledAdapterStatus(mode2, optionalModuleError(error)));
-    return await resolveOpenMachinesCliWorkspace(options, cliStatus) ?? unresolvedMachineWorkspace(options, [optionalModuleError(error)], disabledAdapterStatus(mode2, optionalModuleError(error)));
+    if (mode === "sdk")
+      return unresolvedMachineWorkspace(options, [optionalModuleError(error)], disabledAdapterStatus(mode, optionalModuleError(error)));
+    return await resolveOpenMachinesCliWorkspace(options, cliStatus) ?? unresolvedMachineWorkspace(options, [optionalModuleError(error)], disabledAdapterStatus(mode, optionalModuleError(error)));
   }
 }
 function withPreflightKnowledgeContext(report, options) {
@@ -15533,18 +15018,18 @@ async function fallbackPreflight(options, adapter) {
   }, options);
 }
 async function preflightKnowledgeMachine(options = {}) {
-  const mode2 = adapterMode(options);
-  if (mode2 === "disabled")
-    return await fallbackPreflight(options, disabledAdapterStatus(mode2));
-  const cliStatus = cliAdapterStatus(mode2);
+  const mode = adapterMode(options);
+  if (mode === "disabled")
+    return await fallbackPreflight(options, disabledAdapterStatus(mode));
+  const cliStatus = cliAdapterStatus(mode);
   try {
-    if (mode2 !== "cli") {
+    if (mode !== "cli") {
       const loader = options.loadOpenMachines ?? loadOpenMachinesModule;
       const mod = await loader();
-      const unsupportedStatus = unsupportedContractAdapterStatus(mode2, mod);
+      const unsupportedStatus = unsupportedContractAdapterStatus(mode, mod);
       if (unsupportedStatus)
         return await fallbackPreflight(options, unsupportedStatus);
-      const sdkStatus = sdkAdapterStatus(mode2, mod);
+      const sdkStatus = sdkAdapterStatus(mode, mod);
       if (mod?.checkMachineCompatibility) {
         const report = mod.checkMachineCompatibility({
           machineId: options.machineId,
@@ -15557,19 +15042,19 @@ async function preflightKnowledgeMachine(options = {}) {
         const normalized = normalizeOpenMachinesPreflight(report, options, sdkStatus);
         if (normalized)
           return normalized;
-        if (mode2 === "sdk")
-          return await fallbackPreflight(options, disabledAdapterStatus(mode2, "invalid_compatibility_shape"));
-        return await preflightOpenMachinesCli(options, cliStatus) ?? await fallbackPreflight(options, disabledAdapterStatus(mode2, "invalid_compatibility_shape"));
+        if (mode === "sdk")
+          return await fallbackPreflight(options, disabledAdapterStatus(mode, "invalid_compatibility_shape"));
+        return await preflightOpenMachinesCli(options, cliStatus) ?? await fallbackPreflight(options, disabledAdapterStatus(mode, "invalid_compatibility_shape"));
       }
-      if (mode2 === "sdk")
-        return await fallbackPreflight(options, disabledAdapterStatus(mode2, "missing_checkMachineCompatibility"));
-      return await preflightOpenMachinesCli(options, cliStatus) ?? await fallbackPreflight(options, disabledAdapterStatus(mode2, "missing_checkMachineCompatibility"));
+      if (mode === "sdk")
+        return await fallbackPreflight(options, disabledAdapterStatus(mode, "missing_checkMachineCompatibility"));
+      return await preflightOpenMachinesCli(options, cliStatus) ?? await fallbackPreflight(options, disabledAdapterStatus(mode, "missing_checkMachineCompatibility"));
     }
-    return await preflightOpenMachinesCli(options, cliStatus) ?? await fallbackPreflight(options, disabledAdapterStatus(mode2, "machines_cli_unavailable"));
+    return await preflightOpenMachinesCli(options, cliStatus) ?? await fallbackPreflight(options, disabledAdapterStatus(mode, "machines_cli_unavailable"));
   } catch (error) {
-    if (mode2 === "sdk")
-      return await fallbackPreflight(options, disabledAdapterStatus(mode2, optionalModuleError(error)));
-    return await preflightOpenMachinesCli(options, cliStatus) ?? await fallbackPreflight(options, disabledAdapterStatus(mode2, optionalModuleError(error)));
+    if (mode === "sdk")
+      return await fallbackPreflight(options, disabledAdapterStatus(mode, optionalModuleError(error)));
+    return await preflightOpenMachinesCli(options, cliStatus) ?? await fallbackPreflight(options, disabledAdapterStatus(mode, optionalModuleError(error)));
   }
 }
 
@@ -16255,8 +15740,8 @@ async function refreshEmbeddingIndex(options) {
 
 // src/rules-provenance.ts
 import { createHash as createHash14 } from "crypto";
-import { existsSync as existsSync12, lstatSync as lstatSync2, readdirSync as readdirSync2, readFileSync as readFileSync11, statSync as statSync3 } from "fs";
-import { basename as basename5, extname as extname2, join as join7, relative as relative4, resolve as resolve4, sep as sep4 } from "path";
+import { existsSync as existsSync12, lstatSync as lstatSync2, readdirSync as readdirSync2, readFileSync as readFileSync10, statSync as statSync2 } from "fs";
+import { basename as basename5, extname as extname2, join as join6, relative as relative4, resolve as resolve4, sep as sep4 } from "path";
 import { pathToFileURL as pathToFileURL3 } from "url";
 var DEFAULT_MAX_ITEMS2 = 100;
 var DEFAULT_EVIDENCE_LIMIT = 25;
@@ -16454,7 +15939,7 @@ function collectFiles(root, skipped) {
     const basePath = resolve4(root, entry.base);
     if (!existsSync12(basePath))
       continue;
-    const rootStats = statSync3(basePath);
+    const rootStats = statSync2(basePath);
     if (rootStats.isFile()) {
       const rel = basename5(basePath);
       if (entry.spec.include(rel)) {
@@ -16485,7 +15970,7 @@ function walkRuleDirectory(input) {
   if (input.depth > input.maxDepth)
     return;
   for (const dirent of readdirSync2(input.basePath, { withFileTypes: true })) {
-    const absPath = join7(input.basePath, dirent.name);
+    const absPath = join6(input.basePath, dirent.name);
     const rel = relativePath(rootBasePath, absPath);
     if (dirent.isSymbolicLink())
       continue;
@@ -16601,7 +16086,7 @@ function prepareFileRecord(input) {
     };
     return { evidence: evidence2, text: "", manifest: null };
   }
-  const bytes = readFileSync11(sourcePath);
+  const bytes = readFileSync10(sourcePath);
   const rawText = bytes.toString("utf8");
   const redacted = redactSecrets(rawText, input.safetyPolicy);
   const highSeverity = redacted.findings.some((finding) => finding.severity === "high");
@@ -16847,11 +16332,11 @@ function collectSources(value, output) {
       collectSources(record[key], output);
   }
 }
-function fakeSources(query2, limit) {
+function fakeSources(query, limit) {
   return Array.from({ length: Math.min(limit, 3) }, (_, index) => ({
     url: `https://example.com/knowledge-web-${index + 1}`,
     title: `Fake web source ${index + 1}`,
-    snippet: `Deterministic web-search fixture for "${query2}"`,
+    snippet: `Deterministic web-search fixture for "${query}"`,
     provider_metadata: { fake: true, rank: index + 1 }
   }));
 }
@@ -16937,8 +16422,8 @@ async function fileWebSources(options, sources, now) {
   return result.sources_upserted;
 }
 async function runProviderWebSearch(options) {
-  const query2 = options.query.trim();
-  if (!query2)
+  const query = options.query.trim();
+  if (!query)
     throw new Error("Web search query is required.");
   const env = options.env ?? process.env;
   const now = (options.now ?? new Date).toISOString();
@@ -16964,7 +16449,7 @@ async function runProviderWebSearch(options) {
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
       runId,
       "provider-web-search",
-      query2,
+      query,
       "running",
       provider,
       model,
@@ -16975,7 +16460,7 @@ async function runProviderWebSearch(options) {
     recordAuditEvent(db, {
       event_type: "source_read",
       action: options.fake ? "fake_provider_web_search" : "provider_web_search",
-      target_uri: query2,
+      target_uri: query,
       decision: "allow",
       metadata: { provider, model, domains, max_uses: maxUses },
       created_at: now
@@ -16985,14 +16470,14 @@ async function runProviderWebSearch(options) {
   }
   let answer = "";
   let sources = [];
-  let usage = { input_tokens: estimateTokens3(query2), output_tokens: 0, cost_usd: 0 };
+  let usage = { input_tokens: estimateTokens3(query), output_tokens: 0, cost_usd: 0 };
   const warnings = [];
   if (options.fake) {
-    sources = fakeSources(query2, limit);
-    answer = `Fake web search answer for: ${query2}`;
+    sources = fakeSources(query, limit);
+    answer = `Fake web search answer for: ${query}`;
     usage.output_tokens = estimateTokens3(answer);
   } else {
-    const result = provider === "openai" ? await openAiWebSearch({ query: query2, model, config: options.config, env, maxUses, domains }) : await anthropicWebSearch({ query: query2, model, config: options.config, env, maxUses, domains });
+    const result = provider === "openai" ? await openAiWebSearch({ query, model, config: options.config, env, maxUses, domains }) : await anthropicWebSearch({ query, model, config: options.config, env, maxUses, domains });
     answer = result.text;
     const collected = new Map;
     collectSources(result.sources, collected);
@@ -17045,7 +16530,7 @@ async function runProviderWebSearch(options) {
     warnings.push("no_web_sources_returned");
   return {
     run_id: runId,
-    query: query2,
+    query,
     provider,
     model,
     answer,
@@ -17086,8 +16571,8 @@ function parseJsonObject6(value) {
     return {};
   }
 }
-function queryTerms3(query2) {
-  return Array.from(new Set((query2 ?? "").toLowerCase().match(/[\p{L}\p{N}_]+/gu) ?? [])).slice(0, 12);
+function queryTerms3(query) {
+  return Array.from(new Set((query ?? "").toLowerCase().match(/[\p{L}\p{N}_]+/gu) ?? [])).slice(0, 12);
 }
 function escapeLike(value) {
   return value.replace(/[\\%_]/g, (char) => `\\${char}`);
@@ -17817,12 +17302,12 @@ import {
   lstatSync as lstatSync3,
   mkdirSync as mkdirSync4,
   readdirSync as readdirSync3,
-  readFileSync as readFileSync12,
+  readFileSync as readFileSync11,
   renameSync as renameSync2,
   rmSync,
   writeFileSync as writeFileSync5
 } from "fs";
-import { dirname as dirname5, join as join8, relative as relative5 } from "path";
+import { dirname as dirname5, join as join7, relative as relative5 } from "path";
 function walkFiles(root, base = root) {
   if (!existsSync13(root))
     return [];
@@ -17831,7 +17316,7 @@ function walkFiles(root, base = root) {
     return [relative5(base, root) || "."];
   if (!stat.isDirectory())
     return [];
-  return readdirSync3(root).flatMap((entry) => walkFiles(join8(root, entry), base)).sort();
+  return readdirSync3(root).flatMap((entry) => walkFiles(join7(root, entry), base)).sort();
 }
 function hashFiles(root, files) {
   if (files.length === 0)
@@ -17839,8 +17324,8 @@ function hashFiles(root, files) {
   const tree = createHash18("sha256");
   let bytes = 0;
   for (const file of files) {
-    const path = join8(root, file);
-    const body = readFileSync12(path);
+    const path = join7(root, file);
+    const body = readFileSync11(path);
     const fileHash = createHash18("sha256").update(body).digest("hex");
     bytes += body.byteLength;
     tree.update(file);
@@ -17853,7 +17338,7 @@ function hashFiles(root, files) {
 function jsonItemCount(path) {
   if (!existsSync13(path))
     return null;
-  const parsed = JSON.parse(readFileSync12(path, "utf8"));
+  const parsed = JSON.parse(readFileSync11(path, "utf8"));
   return Array.isArray(parsed.items) ? parsed.items.length : null;
 }
 function sqliteSummary(path) {
@@ -17908,7 +17393,7 @@ function isDefaultScaffold(workspace, summary) {
   if (!summary.files.includes("config.json"))
     return true;
   try {
-    return JSON.stringify(JSON.parse(readFileSync12(workspace.configPath, "utf8"))) === JSON.stringify(defaultKnowledgeConfig());
+    return JSON.stringify(JSON.parse(readFileSync11(workspace.configPath, "utf8"))) === JSON.stringify(defaultKnowledgeConfig());
   } catch {
     return false;
   }
@@ -17936,7 +17421,7 @@ function itemShortId(item) {
 function readMergeStore(path) {
   if (!existsSync13(path))
     return { items: [] };
-  const parsed = JSON.parse(readFileSync12(path, "utf8"));
+  const parsed = JSON.parse(readFileSync11(path, "utf8"));
   if (!parsed || !Array.isArray(parsed.items)) {
     throw new Error(`Invalid knowledge JSON store shape at ${path}`);
   }
@@ -18234,7 +17719,7 @@ function chmodOwnerOnlyTree(path) {
   if (!stat.isDirectory())
     return;
   for (const entry of readdirSync3(path))
-    chmodOwnerOnlyTree(join8(path, entry));
+    chmodOwnerOnlyTree(join7(path, entry));
 }
 function isRetainedTombstoneFile(file) {
   return file === "TOMBSTONE.md" || file === "migration.json" || file === "knowledge.db" || file === "knowledge.db-shm" || file === "knowledge.db-wal" || file === "knowledge.db-journal";
@@ -18244,7 +17729,7 @@ function prepareLegacyTombstoneDirectory(home) {
     if (file === "TOMBSTONE.md" || file === "migration.json")
       continue;
     try {
-      rmSync(join8(home, file), { recursive: true, force: false });
+      rmSync(join7(home, file), { recursive: true, force: false });
     } catch (error) {
       if (!isRetriableFsLock(error) || !file.startsWith("knowledge.db"))
         throw error;
@@ -18284,7 +17769,7 @@ function isMigrationTombstone(workspace, summary, currentHome) {
   if (summary.files.some((file) => !isRetainedTombstoneFile(file)))
     return false;
   try {
-    const metadata = JSON.parse(readFileSync12(join8(workspace.home, "migration.json"), "utf8"));
+    const metadata = JSON.parse(readFileSync11(join7(workspace.home, "migration.json"), "utf8"));
     return metadata.new_path === currentHome && typeof metadata.backup_path === "string";
   } catch {
     return false;
@@ -18336,7 +17821,7 @@ function migrateLegacyKnowledgeWorkspace(options) {
       current_home: options.current.home,
       legacy_home: options.legacy.home,
       backup_home: null,
-      tombstone_path: join8(options.legacy.home, "TOMBSTONE.md"),
+      tombstone_path: join7(options.legacy.home, "TOMBSTONE.md"),
       legacy_before: legacyBefore,
       current_before: currentBefore,
       backup_after: null,
@@ -18364,7 +17849,7 @@ function migrateLegacyKnowledgeWorkspace(options) {
       current_home: options.current.home,
       legacy_home: options.legacy.home,
       backup_home: `${options.legacy.home}.backup-${migrationTimestamp(now)}`,
-      tombstone_path: join8(options.legacy.home, "TOMBSTONE.md"),
+      tombstone_path: join7(options.legacy.home, "TOMBSTONE.md"),
       legacy_before: legacyBefore,
       current_before: currentBefore,
       backup_after: null,
@@ -18400,7 +17885,7 @@ function migrateLegacyKnowledgeWorkspace(options) {
   const currentAfter = summarizeWorkspaceTree(options.current);
   const legacyBeforeOutput = { ...backupAfter, path: options.legacy.home };
   mkdirSync4(options.legacy.home, { recursive: true });
-  const tombstonePath = join8(options.legacy.home, "TOMBSTONE.md");
+  const tombstonePath = join7(options.legacy.home, "TOMBSTONE.md");
   writeFileSync5(tombstonePath, [
     "# Migrated OpenKnowledge Workspace",
     "",
@@ -18414,7 +17899,7 @@ function migrateLegacyKnowledgeWorkspace(options) {
   ].join(`
 `), { mode: 384 });
   chmodSync4(tombstonePath, 384);
-  const migrationJsonPath = join8(options.legacy.home, "migration.json");
+  const migrationJsonPath = join7(options.legacy.home, "migration.json");
   writeFileSync5(migrationJsonPath, `${JSON.stringify({
     migrated_at: now.toISOString(),
     approved_by: options.approvedBy,
@@ -18604,102 +18089,6 @@ function sqliteKnowledgeProjectLinksSchemaSql() {
         SELECT RAISE(ABORT, 'knowledge project link receipts are immutable');
       END;
   `;
-}
-function postgresKnowledgeProjectLinksSchemaStatements() {
-  return [
-    `CREATE TABLE IF NOT EXISTS knowledge_projects (
-      authority_id TEXT NOT NULL,
-      tenant_id TEXT NOT NULL,
-      corpus_id TEXT NOT NULL,
-      source_project_id TEXT NOT NULL,
-      project_id TEXT NOT NULL,
-      project_slug TEXT NOT NULL,
-      project_name TEXT NOT NULL,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      PRIMARY KEY(authority_id, tenant_id, corpus_id, project_id),
-      UNIQUE(authority_id, tenant_id, corpus_id, source_project_id)
-    )`,
-    `CREATE TABLE IF NOT EXISTS knowledge_project_collections (
-      authority_id TEXT NOT NULL,
-      tenant_id TEXT NOT NULL,
-      corpus_id TEXT NOT NULL,
-      collection_id TEXT NOT NULL,
-      project_id TEXT NOT NULL,
-      collection_slug TEXT NOT NULL,
-      collection_name TEXT NOT NULL,
-      membership_rule TEXT NOT NULL CHECK(membership_rule = 'explicit_collection_binding'),
-      revision INTEGER NOT NULL DEFAULT 1 CHECK(revision > 0),
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      PRIMARY KEY(authority_id, tenant_id, corpus_id, collection_id),
-      UNIQUE(authority_id, tenant_id, corpus_id, project_id, collection_slug),
-      FOREIGN KEY(authority_id, tenant_id, corpus_id, project_id)
-        REFERENCES knowledge_projects(authority_id, tenant_id, corpus_id, project_id)
-        ON DELETE CASCADE
-    )`,
-    `CREATE TABLE IF NOT EXISTS knowledge_project_collection_memberships (
-      authority_id TEXT NOT NULL,
-      tenant_id TEXT NOT NULL,
-      corpus_id TEXT NOT NULL,
-      collection_id TEXT NOT NULL,
-      item_id TEXT NOT NULL,
-      bound_receipt_id TEXT NOT NULL,
-      created_by_operation INTEGER NOT NULL CHECK(created_by_operation IN (0, 1)),
-      bound_at TEXT NOT NULL,
-      PRIMARY KEY(authority_id, tenant_id, corpus_id, collection_id, item_id),
-      FOREIGN KEY(authority_id, tenant_id, corpus_id, collection_id)
-        REFERENCES knowledge_project_collections(authority_id, tenant_id, corpus_id, collection_id)
-        ON DELETE CASCADE
-    )`,
-    `CREATE TABLE IF NOT EXISTS knowledge_project_link_receipts (
-      receipt_id TEXT PRIMARY KEY,
-      authority TEXT NOT NULL CHECK(authority = 'knowledge'),
-      route TEXT NOT NULL CHECK(route = 'knowledge.project-registration.v1'),
-      package_version TEXT NOT NULL,
-      authority_id TEXT NOT NULL,
-      tenant_id TEXT NOT NULL,
-      corpus_id TEXT NOT NULL,
-      operation_id TEXT NOT NULL,
-      step_id TEXT NOT NULL,
-      action TEXT NOT NULL CHECK(action IN ('register_collection', 'bind_item')),
-      resource_kind TEXT NOT NULL CHECK(resource_kind IN ('collection', 'item')),
-      direction TEXT NOT NULL CHECK(direction IN ('forward', 'inverse')),
-      idempotency_key TEXT NOT NULL,
-      request_digest TEXT NOT NULL,
-      precondition_digest TEXT NOT NULL,
-      outcome TEXT NOT NULL CHECK(outcome IN ('accepted', 'terminal_nonacceptance')),
-      reason TEXT,
-      source_project_id TEXT,
-      project_id TEXT,
-      collection_id TEXT,
-      item_id TEXT,
-      result_revision TEXT,
-      result_digest TEXT,
-      accepted_receipt_id TEXT,
-      created_by_operation INTEGER NOT NULL CHECK(created_by_operation IN (0, 1)),
-      created_at TEXT NOT NULL,
-      UNIQUE(authority_id, tenant_id, corpus_id, operation_id, step_id, action, direction)
-    )`,
-    `CREATE INDEX IF NOT EXISTS idx_knowledge_project_link_receipts_lookup
-      ON knowledge_project_link_receipts (
-        authority_id, tenant_id, corpus_id, operation_id, step_id,
-        action, direction, idempotency_key
-      )`,
-    `CREATE OR REPLACE FUNCTION knowledge_project_link_receipts_immutable()
-      RETURNS trigger
-      LANGUAGE plpgsql
-      AS $$
-      BEGIN
-        RAISE EXCEPTION 'knowledge project link receipts are immutable';
-      END;
-      $$`,
-    `DROP TRIGGER IF EXISTS knowledge_project_link_receipts_immutable
-      ON knowledge_project_link_receipts`,
-    `CREATE TRIGGER knowledge_project_link_receipts_immutable
-      BEFORE UPDATE OR DELETE ON knowledge_project_link_receipts
-      FOR EACH ROW EXECUTE FUNCTION knowledge_project_link_receipts_immutable()`
-  ];
 }
 function canonicalize(value) {
   if (Array.isArray(value))
@@ -20290,14 +19679,14 @@ class KnowledgeProjectLinksHttpClient {
     return body.verification;
   }
   async listProjectResources(projectId, options = {}) {
-    const query2 = new URLSearchParams;
+    const query = new URLSearchParams;
     if (options.limit !== undefined)
-      query2.set("limit", String(options.limit));
+      query.set("limit", String(options.limit));
     if (options.cursor)
-      query2.set("cursor", options.cursor);
+      query.set("cursor", options.cursor);
     for (const kind of options.kinds ?? [])
-      query2.append("kind", kind);
-    const suffix = query2.size > 0 ? `?${query2.toString()}` : "";
+      query.append("kind", kind);
+    const suffix = query.size > 0 ? `?${query.toString()}` : "";
     return assertProjectResourcePage(await this.request(`/v1/projects/${encodeURIComponent(projectId)}/resources${suffix}`));
   }
   async readProjectResource(projectId, kind, resourceId) {
@@ -20347,7 +19736,7 @@ function createKnowledgeProjectLinksHttpClient(options) {
 // src/service.ts
 function resolvePeerWorkspace(input) {
   const target = resolve5(input);
-  if (existsSync14(join9(target, "knowledge.db")) || existsSync14(join9(target, "config.json"))) {
+  if (existsSync14(join8(target, "knowledge.db")) || existsSync14(join8(target, "config.json"))) {
     return ensureKnowledgeWorkspace(target);
   }
   return ensureKnowledgeWorkspace(workspaceForHome(projectKnowledgeHome(target)).home);
@@ -20688,7 +20077,7 @@ function readLegacyInventoryStore(path) {
   if (!existsSync14(path))
     return { exists: false, read_error: null, items: [] };
   try {
-    const parsed = JSON.parse(readFileSync13(path, "utf8"));
+    const parsed = JSON.parse(readFileSync12(path, "utf8"));
     if (!parsed || !Array.isArray(parsed.items)) {
       return { exists: true, read_error: "invalid_store_shape", items: [] };
     }
@@ -20743,9 +20132,9 @@ function emptyKnowledgeDbStats() {
     durable_records: 0
   };
 }
-function emptySearchResult(query2, limit, semantic = false) {
+function emptySearchResult(query, limit, semantic = false) {
   return {
-    query: query2,
+    query,
     limit,
     offset: 0,
     mode: {
@@ -20766,14 +20155,14 @@ function emptySearchResult(query2, limit, semantic = false) {
     results: []
   };
 }
-function normalizeContextQuery(query2) {
-  return query2.normalize("NFKC").trim().replace(/\s+/g, " ").toLowerCase();
+function normalizeContextQuery(query) {
+  return query.normalize("NFKC").trim().replace(/\s+/g, " ").toLowerCase();
 }
-function emptyContextPack(query2, limit, semantic = false) {
-  const search = emptySearchResult(query2, limit, semantic);
+function emptyContextPack(query, limit, semantic = false) {
+  const search = emptySearchResult(query, limit, semantic);
   return {
-    query: query2,
-    normalized_query: normalizeContextQuery(query2),
+    query,
+    normalized_query: normalizeContextQuery(query),
     created_at: new Date().toISOString(),
     mode: search.mode,
     warnings: search.warnings,
@@ -20820,7 +20209,7 @@ function legacyAgentContextPack(options, context, policy) {
   const now = options.now ?? new Date;
   const source = options.source ?? "search";
   const purpose = options.purpose ?? (source === "loops" || source === "runs" ? "proposal" : "agent_context");
-  const query2 = (options.query ?? options.topic ?? context.query).normalize("NFKC").trim().replace(/\s+/g, " ");
+  const query = (options.query ?? options.topic ?? context.query).normalize("NFKC").trim().replace(/\s+/g, " ");
   const maxItems = Math.max(1, Math.min(options.maxItems ?? options.limit ?? 8, 50));
   const maxTokens = Math.max(500, Math.min(options.maxTokens ?? 6000, 1e5));
   let redactions = 0;
@@ -20873,7 +20262,7 @@ function legacyAgentContextPack(options, context, policy) {
   const usedCitationIds = new Set(evidence.flatMap((entry) => entry.citation_ids));
   const usedCitations = citations.filter((citation) => usedCitationIds.has(citation.id));
   const warnings = Array.from(new Set(context.warnings));
-  const idempotencyKey = `ctx_${createHash20("sha256").update([source, purpose, query2, warnings.join(","), evidence.map((entry) => entry.id).join(",")].join("\x00")).digest("hex").slice(0, 20)}`;
+  const idempotencyKey = `ctx_${createHash20("sha256").update([source, purpose, query, warnings.join(","), evidence.map((entry) => entry.id).join(",")].join("\x00")).digest("hex").slice(0, 20)}`;
   const pack = {
     ok: true,
     format: "knowledge-agent-context-pack",
@@ -20881,7 +20270,7 @@ function legacyAgentContextPack(options, context, policy) {
     created_at: now.toISOString(),
     source,
     purpose,
-    query: query2,
+    query,
     topic: options.topic ?? null,
     since: options.since ?? null,
     dry_run: true,
@@ -20908,7 +20297,7 @@ function legacyAgentContextPack(options, context, policy) {
     evidence,
     duplicate_candidates: [],
     outline: {
-      title: query2 ? `Knowledge context: ${compactText(query2, 80)}` : "Knowledge context",
+      title: query ? `Knowledge context: ${compactText(query, 80)}` : "Knowledge context",
       bullets: evidence.length > 0 ? evidence.slice(0, 5).map((entry) => `${entry.id}: ${entry.title}`) : ["No matching bounded evidence was found."],
       evidence_ids: evidence.slice(0, 8).map((entry) => entry.id),
       duplicate_candidate_ids: [],
@@ -20983,10 +20372,10 @@ function emptyAgentContextPack(options) {
   const now = options.now ?? new Date;
   const source = options.source ?? "search";
   const purpose = options.purpose ?? (source === "loops" || source === "runs" ? "proposal" : "agent_context");
-  const query2 = (options.query ?? options.topic ?? "").normalize("NFKC").trim().replace(/\s+/g, " ");
+  const query = (options.query ?? options.topic ?? "").normalize("NFKC").trim().replace(/\s+/g, " ");
   const maxItems = Math.max(1, Math.min(options.maxItems ?? options.limit ?? 8, 50));
   const maxTokens = Math.max(500, Math.min(options.maxTokens ?? 6000, 1e5));
-  const idempotencyKey = `ctx_${createHash20("sha256").update(["empty", source, purpose, query2, options.topic ?? "", options.since ?? ""].join("\x00")).digest("hex").slice(0, 20)}`;
+  const idempotencyKey = `ctx_${createHash20("sha256").update(["empty", source, purpose, query, options.topic ?? "", options.since ?? ""].join("\x00")).digest("hex").slice(0, 20)}`;
   return {
     ok: true,
     format: "knowledge-agent-context-pack",
@@ -20994,7 +20383,7 @@ function emptyAgentContextPack(options) {
     created_at: now.toISOString(),
     source,
     purpose,
-    query: query2,
+    query,
     topic: options.topic ?? null,
     since: options.since ?? null,
     dry_run: true,
@@ -21021,7 +20410,7 @@ function emptyAgentContextPack(options) {
     evidence: [],
     duplicate_candidates: [],
     outline: {
-      title: query2 ? `Context for ${query2}` : "Knowledge context",
+      title: query ? `Context for ${query}` : "Knowledge context",
       bullets: [],
       evidence_ids: [],
       duplicate_candidate_ids: [],
@@ -21331,21 +20720,11 @@ function assertRemoteSyncApplyResult(machine, value) {
     throw new Error(`Remote knowledge sync import on ${machine} uses an unsupported sync protocol. Install @hasna/knowledge 0.2.32 or newer on both machines.`);
   }
 }
-function normalizeMode(value) {
-  if (!value)
-    return;
-  const normalized = value.trim().toLowerCase();
-  if (normalized === "local" || normalized === "offline")
-    return "local";
-  if (normalized === "hosted" || normalized === "remote" || normalized === "knowledge.md")
-    return "hosted";
-  throw new Error("Invalid setup mode. Use hosted or local.");
-}
 
 class KnowledgeSemanticSearchUnavailableError extends Error {
   code = "semantic_query_unavailable";
   constructor() {
-    super("semantic_query_unavailable: the hosted Knowledge item store has no configured vector index.");
+    super("semantic_query_unavailable: the HTTP Knowledge item store has no configured vector index.");
     this.name = "KnowledgeSemanticSearchUnavailableError";
   }
 }
@@ -21357,6 +20736,7 @@ class KnowledgeService {
   cachedProjectLinksAuthority;
   constructor(options = {}) {
     this.options = options;
+    assertNoRetiredKnowledgeStorageSelector(process.env);
   }
   get scope() {
     return this.options.scope ?? "global";
@@ -21384,13 +20764,13 @@ class KnowledgeService {
       return this.options.projectLinksAuthority;
     if (this.cachedProjectLinksAuthority)
       return this.cachedProjectLinksAuthority;
-    if (isKnowledgeApiMode()) {
+    if (usesKnowledgeHttpTransport()) {
       const { apiKey } = getKnowledgeApiKey(process.env);
       if (!apiKey) {
-        throw new Error("Knowledge project links require the configured API credential in postgres mode.");
+        throw new Error("Knowledge project links require the configured API credential when using HTTP.");
       }
       this.cachedProjectLinksAuthority = createKnowledgeProjectLinksHttpClient({
-        baseUrl: resolveKnowledgeApiUrl(this.config(), process.env),
+        baseUrl: resolveKnowledgeApiUrl(process.env),
         apiKey
       });
       return this.cachedProjectLinksAuthority;
@@ -21432,8 +20812,8 @@ class KnowledgeService {
     return this.itemStore().deleteMany(idsOrShorts);
   }
   async resolveInventory(options = {}) {
-    if (this.isApiMode())
-      return this.cloudInventory(options);
+    if (this.usesHttpTransport())
+      return this.httpInventory(options);
     return this.inventory(options);
   }
   config(options = {}) {
@@ -21496,15 +20876,8 @@ class KnowledgeService {
   setup(options = {}) {
     const workspace = this.ensureWorkspace();
     const current = this.config({ ensure: true });
-    const mode2 = normalizeMode(options.mode) ?? current.mode;
-    const apiUrl = options.apiUrl ? normalizeKnowledgeApiOrigin(options.apiUrl) : current.hosted?.api_url ? normalizeKnowledgeApiOrigin(current.hosted.api_url) : null;
     const nextConfig = {
       ...current,
-      mode: mode2,
-      hosted: {
-        ...current.hosted ?? {},
-        ...apiUrl ? { api_url: apiUrl } : {}
-      },
       storage: options.canonicalExample ? canonicalExampleKnowledgeStorage() : current.storage
     };
     writeKnowledgeConfig(workspace.configPath, nextConfig);
@@ -21512,21 +20885,19 @@ class KnowledgeService {
     const storage = resolveStorageContract(nextConfig, workspace, this.scope);
     return {
       ok: true,
-      mode: mode2,
-      api_url: nextConfig.hosted?.api_url ?? null,
       storage_type: nextConfig.storage.type,
       artifact_uri_prefix: storage.artifact_store.uri_prefix,
       canonical_example: storage.canonical_example,
       config_path: workspace.configPath,
-      next: mode2 === "hosted" ? ["knowledge auth login --api-key <key>", "knowledge storage status --json"] : ["knowledge search <query>", "knowledge <prompt>"],
-      message: `Set knowledge mode to ${mode2}`
+      next: ["knowledge search <query>", "knowledge <prompt>", "knowledge transport --json"],
+      message: "Knowledge workspace initialized"
     };
   }
   authStatus(env = process.env) {
-    return knowledgeAuthStatus(this.config(), env);
+    return knowledgeAuthStatus(env);
   }
   saveAuth(input, env = process.env) {
-    const apiUrl = input.apiUrl ?? this.config().hosted?.api_url;
+    const apiUrl = input.apiUrl ?? resolveKnowledgeApiUrl(env);
     return saveKnowledgeAuth({
       api_key: input.apiKey,
       email: input.email,
@@ -21566,7 +20937,7 @@ class KnowledgeService {
     return migrateKnowledgeDb(this.ensureWorkspace().knowledgeDbPath);
   }
   dbStats() {
-    assertLocalCatalogMode("reading knowledge.db stats");
+    assertSqliteClientTransport("reading knowledge.db stats");
     const workspace = this.workspace;
     if (!existsSync14(workspace.knowledgeDbPath))
       return emptyKnowledgeDbStats();
@@ -21672,15 +21043,15 @@ class KnowledgeService {
       message: `${items.length} item(s), 0 source(s), 0 chunk(s), 0 wiki page(s), 0 artifact(s)`
     };
   }
-  async cloudInventory(options = {}) {
+  async httpInventory(options = {}) {
     const limit = inventoryLimit(options.limit);
-    const items = await this.fetchCloudItems();
-    const cloud = resolveKnowledgeCloudStore();
+    const items = await this.fetchHttpItems();
+    const http = resolveKnowledgeHttpStore();
     return this.itemOnlyInventory({
       items,
       limit,
       includeArchived: options.includeArchived ?? false,
-      storePath: cloud?.baseUrl ?? "cloud",
+      storePath: http?.baseUrl ?? "http",
       storeExists: true,
       storeReadError: null
     });
@@ -22204,22 +21575,22 @@ class KnowledgeService {
       config: this.config()
     });
   }
-  isApiMode() {
-    return isKnowledgeApiMode();
+  usesHttpTransport() {
+    return usesKnowledgeHttpTransport();
   }
-  cloudStore() {
-    const cloud = resolveKnowledgeCloudStore();
-    if (!cloud) {
-      throw new Error("knowledge: cloud store requested but not resolvable " + "(check HASNA_KNOWLEDGE_API_URL + HASNA_KNOWLEDGE_API_KEY).");
+  httpStore() {
+    const http = resolveKnowledgeHttpStore();
+    if (!http) {
+      throw new Error("knowledge: HTTP store requested but not resolvable " + "(check HASNA_KNOWLEDGE_API_URL + HASNA_KNOWLEDGE_API_KEY).");
     }
-    return cloud;
+    return http;
   }
-  async fetchCloudItems() {
-    return fetchAllCloudItems(this.cloudStore());
+  async fetchHttpItems() {
+    return fetchAllHttpItems(this.httpStore());
   }
   async semanticSearch(options) {
     const workspace = this.workspace;
-    if (this.isApiMode()) {
+    if (this.usesHttpTransport()) {
       throw new KnowledgeSemanticSearchUnavailableError;
     }
     if (!existsSync14(workspace.knowledgeDbPath)) {
@@ -22239,11 +21610,11 @@ class KnowledgeService {
   }
   async search(options) {
     const workspace = this.workspace;
-    if (this.isApiMode()) {
+    if (this.usesHttpTransport()) {
       if (options.semantic === true || options.fake === true || Boolean(options.modelRef)) {
         throw new KnowledgeSemanticSearchUnavailableError;
       }
-      const producer = await this.cloudStore().search({
+      const producer = await this.httpStore().search({
         query: options.query,
         archive: "active",
         limit: options.limit,
@@ -22271,7 +21642,7 @@ class KnowledgeService {
   }
   async retrieveContext(options) {
     const workspace = this.workspace;
-    if (this.isApiMode()) {
+    if (this.usesHttpTransport()) {
       const search = await this.search(options);
       return retrieveKnowledgeContextFromSearch(search, {
         contextChars: options.contextChars
@@ -22300,10 +21671,10 @@ class KnowledgeService {
   }
   async contextPack(options) {
     const workspace = this.workspace;
-    if (this.isApiMode()) {
-      const query2 = (options.query ?? options.topic ?? "").trim();
-      if (query2 && options.source !== "loops" && options.source !== "runs") {
-        const search = await this.search({ ...options, query: query2 });
+    if (this.usesHttpTransport()) {
+      const query = (options.query ?? options.topic ?? "").trim();
+      if (query && options.source !== "loops" && options.source !== "runs") {
+        const search = await this.search({ ...options, query });
         const context = retrieveKnowledgeContextFromSearch(search, { contextChars: options.contextChars });
         return legacyAgentContextPack(options, context, this.safetyPolicy());
       }
@@ -22311,11 +21682,11 @@ class KnowledgeService {
     }
     const legacyStorePath = legacyStorePathForRead(this.scope, workspace, options.legacyStorePath);
     if (!existsSync14(workspace.knowledgeDbPath)) {
-      const query2 = (options.query ?? options.topic ?? "").trim();
-      if (query2 && options.source !== "loops" && options.source !== "runs" && existsSync14(legacyStorePath)) {
+      const query = (options.query ?? options.topic ?? "").trim();
+      if (query && options.source !== "loops" && options.source !== "runs" && existsSync14(legacyStorePath)) {
         const search = await hybridSearchLegacyStore({
           ...options,
-          query: query2,
+          query,
           legacyStorePath,
           config: this.config()
         });
@@ -22335,11 +21706,11 @@ class KnowledgeService {
     });
   }
   async runPrompt(options) {
-    if (this.isApiMode()) {
+    if (this.usesHttpTransport()) {
       if (options.semantic === true || options.fake === true || Boolean(options.modelRef)) {
         throw new KnowledgeSemanticSearchUnavailableError;
       }
-      const producer = await this.cloudStore().search({
+      const producer = await this.httpStore().search({
         query: options.prompt,
         archive: "active",
         limit: options.limit,
@@ -22941,20 +22312,6 @@ var STORAGE_TABLES = [
   "knowledge_sync_table_clocks",
   "knowledge_sync_imports"
 ];
-var KNOWLEDGE_STORAGE_MODE_ENV = "HASNA_KNOWLEDGE_STORAGE_MODE";
-var KNOWLEDGE_STORAGE_MODE_FALLBACK_ENV = "KNOWLEDGE_STORAGE_MODE";
-function readEnv(name) {
-  const value = process.env[name]?.trim();
-  return value || undefined;
-}
-function normalizeStorageMode4(value) {
-  const normalized = value?.trim().toLowerCase().replace(/-/g, "_");
-  if (normalized === "sqlite")
-    return "sqlite";
-  if (normalized === "postgres" || normalized === "postgresql")
-    return "postgres";
-  return;
-}
 function openScopedDb(options = {}) {
   const workspace = ensureKnowledgeWorkspace(resolveScopedWorkspace(options.scope, options.cwd).home);
   migrateKnowledgeDb(workspace.knowledgeDbPath);
@@ -22964,19 +22321,13 @@ function openScopedDb(options = {}) {
     scope: options.scope ?? "global"
   };
 }
-function getStorageMode() {
-  const mode2 = normalizeStorageMode4(readEnv(KNOWLEDGE_STORAGE_MODE_ENV)) ?? normalizeStorageMode4(readEnv(KNOWLEDGE_STORAGE_MODE_FALLBACK_ENV));
-  if (mode2)
-    return mode2;
-  return "sqlite";
-}
 function getStorageStatus(options = {}) {
   const local = openScopedDb(options);
   try {
     ensureSyncMetaTable(local.db);
     const sync = local.db.query("SELECT table_name, last_synced_at, direction FROM _knowledge_sync_meta ORDER BY table_name, direction").all();
     return {
-      mode: getStorageMode(),
+      backend: "sqlite",
       service: "knowledge",
       scope: local.scope,
       databasePath: local.path,
@@ -22997,1294 +22348,6 @@ function ensureSyncMetaTable(db) {
     )
   `);
 }
-// src/db/pg-migrations.ts
-var PG_MIGRATIONS = [
-  `CREATE TABLE IF NOT EXISTS sources (
-    id TEXT PRIMARY KEY,
-    uri TEXT NOT NULL UNIQUE,
-    kind TEXT NOT NULL,
-    title TEXT,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    acl_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text,
-    updated_at TEXT NOT NULL DEFAULT NOW()::text
-  )`,
-  `CREATE TABLE IF NOT EXISTS wiki_pages (
-    id TEXT PRIMARY KEY,
-    path TEXT NOT NULL UNIQUE,
-    title TEXT NOT NULL,
-    artifact_uri TEXT,
-    content_hash TEXT,
-    status TEXT NOT NULL DEFAULT 'active',
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text,
-    updated_at TEXT NOT NULL DEFAULT NOW()::text
-  )`,
-  `CREATE TABLE IF NOT EXISTS source_revisions (
-    id TEXT PRIMARY KEY,
-    source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
-    revision TEXT NOT NULL,
-    hash TEXT,
-    extracted_text_uri TEXT,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text,
-    UNIQUE(source_id, revision)
-  )`,
-  `CREATE TABLE IF NOT EXISTS chunks (
-    id TEXT PRIMARY KEY,
-    source_revision_id TEXT REFERENCES source_revisions(id) ON DELETE CASCADE,
-    wiki_page_id TEXT REFERENCES wiki_pages(id) ON DELETE CASCADE,
-    kind TEXT NOT NULL,
-    ordinal INTEGER NOT NULL,
-    text TEXT NOT NULL,
-    token_count INTEGER,
-    start_offset INTEGER,
-    end_offset INTEGER,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text
-  )`,
-  `CREATE TABLE IF NOT EXISTS chunk_embeddings (
-    id TEXT PRIMARY KEY,
-    chunk_id TEXT NOT NULL REFERENCES chunks(id) ON DELETE CASCADE,
-    provider TEXT NOT NULL,
-    model TEXT NOT NULL,
-    dimensions INTEGER NOT NULL,
-    vector_json TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT NOW()::text,
-    UNIQUE(chunk_id, provider, model)
-  )`,
-  `CREATE TABLE IF NOT EXISTS wiki_backlinks (
-    from_page_id TEXT NOT NULL REFERENCES wiki_pages(id) ON DELETE CASCADE,
-    to_page_id TEXT NOT NULL REFERENCES wiki_pages(id) ON DELETE CASCADE,
-    label TEXT,
-    created_at TEXT NOT NULL DEFAULT NOW()::text,
-    PRIMARY KEY(from_page_id, to_page_id)
-  )`,
-  `CREATE TABLE IF NOT EXISTS citations (
-    id TEXT PRIMARY KEY,
-    wiki_page_id TEXT REFERENCES wiki_pages(id) ON DELETE CASCADE,
-    chunk_id TEXT REFERENCES chunks(id) ON DELETE SET NULL,
-    source_uri TEXT NOT NULL,
-    quote TEXT,
-    start_offset INTEGER,
-    end_offset INTEGER,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text
-  )`,
-  `CREATE TABLE IF NOT EXISTS knowledge_indexes (
-    id TEXT PRIMARY KEY,
-    kind TEXT NOT NULL,
-    name TEXT NOT NULL,
-    artifact_uri TEXT,
-    shard_key TEXT,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text,
-    updated_at TEXT NOT NULL DEFAULT NOW()::text,
-    UNIQUE(kind, name, shard_key)
-  )`,
-  `CREATE TABLE IF NOT EXISTS runs (
-    id TEXT PRIMARY KEY,
-    type TEXT NOT NULL,
-    prompt TEXT,
-    status TEXT NOT NULL,
-    provider TEXT,
-    model TEXT,
-    cost_tokens INTEGER NOT NULL DEFAULT 0,
-    cost_usd DOUBLE PRECISION NOT NULL DEFAULT 0,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text,
-    updated_at TEXT NOT NULL DEFAULT NOW()::text
-  )`,
-  `CREATE TABLE IF NOT EXISTS run_events (
-    id TEXT PRIMARY KEY,
-    run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
-    level TEXT NOT NULL,
-    event TEXT NOT NULL,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text
-  )`,
-  `CREATE TABLE IF NOT EXISTS provider_usage (
-    id TEXT PRIMARY KEY,
-    run_id TEXT REFERENCES runs(id) ON DELETE SET NULL,
-    provider TEXT NOT NULL,
-    model TEXT NOT NULL,
-    input_tokens INTEGER NOT NULL DEFAULT 0,
-    output_tokens INTEGER NOT NULL DEFAULT 0,
-    cost_usd DOUBLE PRECISION NOT NULL DEFAULT 0,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text
-  )`,
-  `CREATE TABLE IF NOT EXISTS redaction_findings (
-    id TEXT PRIMARY KEY,
-    source_uri TEXT,
-    run_id TEXT REFERENCES runs(id) ON DELETE SET NULL,
-    severity TEXT NOT NULL,
-    finding_type TEXT NOT NULL,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text
-  )`,
-  `CREATE TABLE IF NOT EXISTS storage_objects (
-    id TEXT PRIMARY KEY,
-    artifact_uri TEXT NOT NULL UNIQUE,
-    kind TEXT NOT NULL,
-    content_type TEXT,
-    hash TEXT,
-    size_bytes INTEGER,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text,
-    updated_at TEXT NOT NULL DEFAULT NOW()::text
-  )`,
-  `CREATE TABLE IF NOT EXISTS audit_events (
-    id TEXT PRIMARY KEY,
-    event_type TEXT NOT NULL,
-    action TEXT NOT NULL,
-    target_uri TEXT,
-    decision TEXT NOT NULL,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text
-  )`,
-  `CREATE TABLE IF NOT EXISTS approval_gates (
-    id TEXT PRIMARY KEY,
-    action TEXT NOT NULL,
-    target_uri TEXT,
-    status TEXT NOT NULL,
-    reason TEXT,
-    approved_by TEXT,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text,
-    updated_at TEXT NOT NULL DEFAULT NOW()::text
-  )`,
-  `CREATE TABLE IF NOT EXISTS vector_index_entries (
-    id TEXT PRIMARY KEY,
-    chunk_id TEXT NOT NULL REFERENCES chunks(id) ON DELETE CASCADE,
-    source_revision_id TEXT REFERENCES source_revisions(id) ON DELETE CASCADE,
-    provider TEXT NOT NULL,
-    model TEXT NOT NULL,
-    dimensions INTEGER NOT NULL,
-    vector_json TEXT NOT NULL,
-    vector_norm DOUBLE PRECISION NOT NULL,
-    source_uri TEXT,
-    source_ref TEXT,
-    revision TEXT,
-    hash TEXT,
-    start_offset INTEGER,
-    end_offset INTEGER,
-    token_count INTEGER,
-    status TEXT NOT NULL DEFAULT 'active',
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text,
-    updated_at TEXT NOT NULL DEFAULT NOW()::text,
-    UNIQUE(chunk_id, provider, model)
-  )`,
-  `CREATE TABLE IF NOT EXISTS reindex_queue (
-    id TEXT PRIMARY KEY,
-    kind TEXT NOT NULL,
-    target_id TEXT NOT NULL,
-    source_uri TEXT,
-    reason TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'pending',
-    attempts INTEGER NOT NULL DEFAULT 0,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text,
-    updated_at TEXT NOT NULL DEFAULT NOW()::text,
-    UNIQUE(kind, target_id, reason)
-  )`,
-  `CREATE TABLE IF NOT EXISTS knowledge_machines (
-    machine_id TEXT PRIMARY KEY,
-    hostname TEXT,
-    platform TEXT,
-    user_label TEXT,
-    workspace_home TEXT,
-    tailscale_dns TEXT,
-    tailscale_ips_json TEXT NOT NULL DEFAULT '[]',
-    ssh_target TEXT,
-    last_seen_at TEXT,
-    capabilities_json TEXT NOT NULL DEFAULT '{}',
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text,
-    updated_at TEXT NOT NULL DEFAULT NOW()::text
-  )`,
-  `CREATE TABLE IF NOT EXISTS knowledge_sync_snapshots (
-    id TEXT PRIMARY KEY,
-    machine_id TEXT NOT NULL,
-    scope TEXT NOT NULL,
-    workspace_home TEXT NOT NULL,
-    sqlite_schema_version INTEGER NOT NULL,
-    artifact_root_uri TEXT NOT NULL,
-    content_hash TEXT NOT NULL,
-    tables_json TEXT NOT NULL,
-    artifact_hashes_json TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT NOW()::text
-  )`,
-  `CREATE TABLE IF NOT EXISTS knowledge_sync_changes (
-    id TEXT PRIMARY KEY,
-    origin_machine_id TEXT NOT NULL,
-    updated_by_machine_id TEXT NOT NULL,
-    entity_kind TEXT NOT NULL,
-    entity_id TEXT NOT NULL,
-    operation TEXT NOT NULL,
-    base_hash TEXT,
-    next_hash TEXT,
-    source_ref TEXT,
-    source_revision_id TEXT,
-    artifact_uri TEXT,
-    logical_clock INTEGER NOT NULL DEFAULT 0,
-    bundle_id TEXT,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text
-  )`,
-  `ALTER TABLE knowledge_sync_changes ADD COLUMN IF NOT EXISTS logical_clock INTEGER NOT NULL DEFAULT 0`,
-  `ALTER TABLE knowledge_sync_changes ADD COLUMN IF NOT EXISTS bundle_id TEXT`,
-  `CREATE TABLE IF NOT EXISTS knowledge_sync_conflicts (
-    id TEXT PRIMARY KEY,
-    entity_kind TEXT NOT NULL,
-    entity_id TEXT NOT NULL,
-    local_machine_id TEXT NOT NULL,
-    remote_machine_id TEXT NOT NULL,
-    local_hash TEXT,
-    remote_hash TEXT,
-    base_hash TEXT,
-    status TEXT NOT NULL,
-    resolution_strategy TEXT,
-    proposed_patch_uri TEXT,
-    approved_by TEXT,
-    resolved_at TEXT,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text
-  )`,
-  `CREATE TABLE IF NOT EXISTS knowledge_sync_table_clocks (
-    table_name TEXT NOT NULL,
-    machine_id TEXT NOT NULL,
-    logical_clock INTEGER NOT NULL DEFAULT 0,
-    high_water_hash TEXT,
-    high_water_bundle_id TEXT,
-    origin_machine_id TEXT,
-    updated_by_machine_id TEXT,
-    last_applied_at TEXT,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT NOW()::text,
-    updated_at TEXT NOT NULL DEFAULT NOW()::text,
-    PRIMARY KEY(table_name, machine_id)
-  )`,
-  `CREATE TABLE IF NOT EXISTS knowledge_sync_imports (
-    bundle_id TEXT PRIMARY KEY,
-    source_machine_id TEXT NOT NULL,
-    target_machine_id TEXT NOT NULL,
-    direction TEXT NOT NULL,
-    status TEXT NOT NULL,
-    content_hash TEXT NOT NULL,
-    table_clocks_json TEXT NOT NULL,
-    tables_json TEXT NOT NULL,
-    generated_at TEXT NOT NULL,
-    applied_at TEXT NOT NULL,
-    metadata_json TEXT NOT NULL DEFAULT '{}'
-  )`,
-  `CREATE INDEX IF NOT EXISTS idx_source_revisions_source ON source_revisions(source_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_chunks_source_revision ON chunks(source_revision_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_chunks_wiki_page ON chunks(wiki_page_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_citations_wiki_page ON citations(wiki_page_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_citations_chunk ON citations(chunk_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_run_events_run ON run_events(run_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_provider_usage_run ON provider_usage(run_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_audit_events_action ON audit_events(action)`,
-  `CREATE INDEX IF NOT EXISTS idx_audit_events_target ON audit_events(target_uri)`,
-  `CREATE INDEX IF NOT EXISTS idx_audit_events_created ON audit_events(created_at)`,
-  `CREATE INDEX IF NOT EXISTS idx_approval_gates_action ON approval_gates(action)`,
-  `CREATE INDEX IF NOT EXISTS idx_approval_gates_status ON approval_gates(status)`,
-  `CREATE INDEX IF NOT EXISTS idx_vector_index_provider_model ON vector_index_entries(provider, model)`,
-  `CREATE INDEX IF NOT EXISTS idx_vector_index_source_revision ON vector_index_entries(source_revision_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_vector_index_source_uri ON vector_index_entries(source_uri)`,
-  `CREATE INDEX IF NOT EXISTS idx_vector_index_status ON vector_index_entries(status)`,
-  `CREATE INDEX IF NOT EXISTS idx_reindex_queue_status ON reindex_queue(status)`,
-  `CREATE INDEX IF NOT EXISTS idx_reindex_queue_kind_target ON reindex_queue(kind, target_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_reindex_queue_source_uri ON reindex_queue(source_uri)`,
-  `CREATE INDEX IF NOT EXISTS idx_knowledge_machines_last_seen ON knowledge_machines(last_seen_at)`,
-  `CREATE INDEX IF NOT EXISTS idx_sync_snapshots_machine_created ON knowledge_sync_snapshots(machine_id, created_at)`,
-  `CREATE INDEX IF NOT EXISTS idx_sync_snapshots_hash ON knowledge_sync_snapshots(content_hash)`,
-  `CREATE INDEX IF NOT EXISTS idx_sync_changes_entity ON knowledge_sync_changes(entity_kind, entity_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_sync_changes_origin ON knowledge_sync_changes(origin_machine_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_sync_changes_created ON knowledge_sync_changes(created_at)`,
-  `CREATE INDEX IF NOT EXISTS idx_sync_changes_bundle ON knowledge_sync_changes(bundle_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_sync_changes_clock ON knowledge_sync_changes(entity_kind, logical_clock)`,
-  `CREATE INDEX IF NOT EXISTS idx_sync_conflicts_status ON knowledge_sync_conflicts(status)`,
-  `CREATE INDEX IF NOT EXISTS idx_sync_conflicts_entity ON knowledge_sync_conflicts(entity_kind, entity_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_sync_table_clocks_machine ON knowledge_sync_table_clocks(machine_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_sync_table_clocks_updated ON knowledge_sync_table_clocks(updated_at)`,
-  `CREATE INDEX IF NOT EXISTS idx_sync_imports_source ON knowledge_sync_imports(source_machine_id, applied_at)`,
-  `CREATE INDEX IF NOT EXISTS idx_sync_imports_target ON knowledge_sync_imports(target_machine_id, applied_at)`,
-  `CREATE INDEX IF NOT EXISTS idx_sync_imports_status ON knowledge_sync_imports(status)`,
-  `CREATE TABLE IF NOT EXISTS knowledge_items (
-    id TEXT PRIMARY KEY,
-    short_id TEXT,
-    title TEXT NOT NULL,
-    content TEXT NOT NULL DEFAULT '',
-    url TEXT,
-    tags JSONB NOT NULL DEFAULT '[]'::jsonb,
-    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
-    archived BOOLEAN NOT NULL DEFAULT FALSE,
-    created_at TEXT NOT NULL DEFAULT NOW()::text,
-    updated_at TEXT NOT NULL DEFAULT NOW()::text
-  )`,
-  `CREATE INDEX IF NOT EXISTS idx_knowledge_items_short_id ON knowledge_items(short_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_knowledge_items_archived ON knowledge_items(archived)`,
-  `CREATE INDEX IF NOT EXISTS idx_knowledge_items_created ON knowledge_items(created_at)`,
-  `ALTER TABLE knowledge_items
-     ADD COLUMN IF NOT EXISTS search_vector tsvector
-     GENERATED ALWAYS AS (
-       setweight(to_tsvector('english', coalesce(title, '')), 'A') ||
-       setweight(to_tsvector('english', coalesce(content, '')), 'B')
-     ) STORED`,
-  `CREATE INDEX IF NOT EXISTS idx_knowledge_items_search_vector
-     ON knowledge_items USING GIN (search_vector)`,
-  `ALTER TABLE knowledge_items ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1`,
-  `CREATE TABLE IF NOT EXISTS knowledge_item_versions (
-    id TEXT PRIMARY KEY,
-    item_id TEXT NOT NULL REFERENCES knowledge_items(id) ON DELETE CASCADE,
-    tenant_id TEXT,
-    version INTEGER NOT NULL,
-    title TEXT NOT NULL,
-    content TEXT,
-    body_uri TEXT,
-    content_hash TEXT NOT NULL,
-    content_bytes INTEGER NOT NULL,
-    url TEXT,
-    tags JSONB NOT NULL DEFAULT '[]'::jsonb,
-    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
-    archived BOOLEAN NOT NULL DEFAULT FALSE,
-    actor TEXT,
-    reason TEXT,
-    valid_from TEXT,
-    valid_to TEXT NOT NULL DEFAULT to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
-    UNIQUE(item_id, version)
-  )`,
-  `CREATE INDEX IF NOT EXISTS idx_knowledge_item_versions_item
-     ON knowledge_item_versions(item_id, version DESC)`,
-  `CREATE INDEX IF NOT EXISTS idx_knowledge_item_versions_hash
-     ON knowledge_item_versions(content_hash)`,
-  `CREATE OR REPLACE FUNCTION knowledge_items_version_snapshot()
-   RETURNS TRIGGER AS $knowledge_item_version$
-   BEGIN
-     IF (OLD.title, OLD.content, OLD.url, OLD.tags, OLD.metadata, OLD.archived)
-        IS NOT DISTINCT FROM
-        (NEW.title, NEW.content, NEW.url, NEW.tags, NEW.metadata, NEW.archived) THEN
-       -- No content-bearing change: no version, no snapshot. Pin the counter so
-       -- a caller cannot move it on a write the trigger otherwise ignores.
-       NEW.version := OLD.version;
-       RETURN NEW;
-     END IF;
-
-     INSERT INTO knowledge_item_versions
-       (id, item_id, tenant_id, version, title, content, content_hash, content_bytes,
-        url, tags, metadata, archived, actor, reason, valid_from, valid_to)
-     VALUES
-       (gen_random_uuid()::text,
-        OLD.id,
-        to_jsonb(OLD)->>'tenant_id',
-        OLD.version,
-        OLD.title,
-        OLD.content,
-        encode(sha256(convert_to(coalesce(OLD.content, ''), 'UTF8')), 'hex'),
-        octet_length(coalesce(OLD.content, '')),
-        OLD.url,
-        OLD.tags,
-        OLD.metadata,
-        OLD.archived,
-        NULLIF(current_setting('hasna.actor', true), ''),
-        NULLIF(current_setting('hasna.reason', true), ''),
-        OLD.updated_at,
-        to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'));
-
-     -- The bump and the snapshot are ONE write. The counter advances by exactly
-     -- one and only here, so a caller can neither skip it nor forge it.
-     NEW.version := OLD.version + 1;
-
-     -- updated_at is TEXT and the application fills it with toISOString(), so
-     -- the trigger must write the SAME shape. NOW()::text renders as
-     -- '2026-07-28 21:29:56.01+00'; space (0x20) sorts below 'T' (0x54), so a
-     -- column carrying both formats orders every trigger-written row before
-     -- every application-written one regardless of actual time, and valid_from
-     -- (copied verbatim from the row below) would stop being comparable with
-     -- valid_to. One format, no casts needed at read time.
-     --
-     -- Only stamped when the caller did NOT set it. Import, sync replay, and
-     -- backfill carry a SOURCE timestamp and kept it before this trigger
-     -- existed; silently replacing it would be a regression. A writer that says
-     -- nothing still gets a truthful advance.
-     IF NEW.updated_at IS NOT DISTINCT FROM OLD.updated_at THEN
-       NEW.updated_at := to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"');
-     END IF;
-     RETURN NEW;
-   END
-   $knowledge_item_version$ LANGUAGE plpgsql`,
-  `DO $knowledge_item_version_trigger$
-   BEGIN
-     IF NOT EXISTS (
-       SELECT 1 FROM pg_trigger
-        WHERE tgname = 'trg_knowledge_items_version'
-          AND tgrelid = 'knowledge_items'::regclass
-     ) THEN
-       CREATE TRIGGER trg_knowledge_items_version
-         BEFORE UPDATE ON knowledge_items
-         FOR EACH ROW EXECUTE FUNCTION knowledge_items_version_snapshot();
-     END IF;
-   END
-   $knowledge_item_version_trigger$`,
-  `ALTER TABLE knowledge_items ENABLE ALWAYS TRIGGER trg_knowledge_items_version`,
-  `CREATE OR REPLACE FUNCTION knowledge_item_versions_append_only()
-   RETURNS TRIGGER AS $knowledge_item_versions_append_only$
-   BEGIN
-     RAISE EXCEPTION 'knowledge_item_versions is append-only: version % of item % cannot be rewritten',
-       OLD.version, OLD.item_id
-       USING ERRCODE = 'restrict_violation';
-   END
-   $knowledge_item_versions_append_only$ LANGUAGE plpgsql`,
-  `DO $knowledge_item_versions_guard$
-   BEGIN
-     IF NOT EXISTS (
-       SELECT 1 FROM pg_trigger
-        WHERE tgname = 'trg_knowledge_item_versions_append_only'
-          AND tgrelid = 'knowledge_item_versions'::regclass
-     ) THEN
-       CREATE TRIGGER trg_knowledge_item_versions_append_only
-         BEFORE UPDATE ON knowledge_item_versions
-         FOR EACH ROW EXECUTE FUNCTION knowledge_item_versions_append_only();
-     END IF;
-   END
-   $knowledge_item_versions_guard$`,
-  `ALTER TABLE knowledge_item_versions ENABLE ALWAYS TRIGGER trg_knowledge_item_versions_append_only`,
-  `ALTER TABLE knowledge_items
-     ADD COLUMN IF NOT EXISTS authority_classification TEXT,
-     ADD COLUMN IF NOT EXISTS authority_id TEXT,
-     ADD COLUMN IF NOT EXISTS tenant_id TEXT,
-     ADD COLUMN IF NOT EXISTS scope TEXT,
-     ADD COLUMN IF NOT EXISTS parent_id TEXT`,
-  `CREATE INDEX IF NOT EXISTS idx_knowledge_items_guarded_binding
-     ON knowledge_items(authority_classification, authority_id, tenant_id, scope, parent_id, id)`,
-  `CREATE TABLE IF NOT EXISTS knowledge_guarded_write_manifests (
-    manifest_id TEXT PRIMARY KEY,
-    manifest_receipt_id TEXT NOT NULL UNIQUE,
-    deterministic_key TEXT NOT NULL UNIQUE,
-    operation_id TEXT NOT NULL,
-    manifest_digest TEXT NOT NULL,
-    maintainer_authority_classification TEXT NOT NULL,
-    maintainer_authority_id TEXT NOT NULL,
-    maintainer_tenant_id TEXT NOT NULL,
-    maintainer_scope TEXT NOT NULL,
-    maintainer_parent_id TEXT NOT NULL,
-    step_count INTEGER NOT NULL,
-    created_at TEXT NOT NULL DEFAULT to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
-    CHECK (maintainer_authority_classification IN ('user_hosted', 'hasna_saas')),
-    CHECK (step_count BETWEEN 2 AND 64)
-  )`,
-  `CREATE TABLE IF NOT EXISTS knowledge_guarded_write_manifest_steps (
-    manifest_id TEXT NOT NULL REFERENCES knowledge_guarded_write_manifests(manifest_id),
-    ordinal INTEGER NOT NULL,
-    operation_id TEXT NOT NULL,
-    step_id TEXT NOT NULL,
-    deterministic_key TEXT NOT NULL,
-    verb TEXT NOT NULL,
-    target_id TEXT NOT NULL,
-    semantic_digest TEXT NOT NULL,
-    precondition_kind TEXT NOT NULL,
-    expected_version INTEGER,
-    dependencies JSONB NOT NULL,
-    limits JSONB NOT NULL,
-    authority_classification TEXT NOT NULL,
-    authority_id TEXT NOT NULL,
-    tenant_id TEXT NOT NULL,
-    scope TEXT NOT NULL,
-    parent_id TEXT NOT NULL,
-    recovery_strategy TEXT NOT NULL,
-    recovery_operation_id TEXT NOT NULL,
-    recovery_step_id TEXT NOT NULL,
-    recovery_deterministic_key TEXT NOT NULL,
-    recovery_verb TEXT NOT NULL,
-    recovery_target_id TEXT NOT NULL,
-    recovery_semantic_digest TEXT NOT NULL,
-    recovery_precondition_kind TEXT NOT NULL,
-    recovery_expected_version INTEGER,
-    recovery_authority_classification TEXT NOT NULL,
-    recovery_authority_id TEXT NOT NULL,
-    recovery_tenant_id TEXT NOT NULL,
-    recovery_scope TEXT NOT NULL,
-    recovery_parent_id TEXT NOT NULL,
-    recovery_limits JSONB NOT NULL,
-    recovery_receipt_scope TEXT,
-    recovery_compensates_receipt_id TEXT,
-    PRIMARY KEY (manifest_id, ordinal),
-    UNIQUE (manifest_id, deterministic_key),
-    CHECK (ordinal >= 0),
-    CHECK (authority_classification IN ('user_hosted', 'hasna_saas')),
-    CHECK (recovery_authority_classification IN ('user_hosted', 'hasna_saas')),
-    CHECK (verb IN ('create', 'update')),
-    CHECK (recovery_verb IN ('create', 'update')),
-    CHECK (
-      (verb = 'create' AND precondition_kind = 'absent' AND expected_version IS NULL)
-      OR
-      (verb = 'update' AND precondition_kind = 'version' AND expected_version >= 1)
-    ),
-    CHECK (
-      (
-        recovery_verb = 'create'
-        AND recovery_precondition_kind = 'absent'
-        AND recovery_expected_version IS NULL
-      )
-      OR
-      (
-        recovery_verb = 'update'
-        AND recovery_precondition_kind = 'version'
-        AND recovery_expected_version >= 1
-      )
-    ),
-    CHECK (recovery_strategy IN ('forward_repair', 'receipt_scoped_compensation')),
-    CHECK (
-      (recovery_strategy = 'forward_repair' AND recovery_receipt_scope IS NULL)
-      OR
-      (
-        recovery_strategy = 'receipt_scoped_compensation'
-        AND recovery_receipt_scope = 'accepted_step_receipt'
-        AND recovery_compensates_receipt_id IS NOT NULL
-      )
-    ),
-    CHECK (
-      recovery_strategy = 'receipt_scoped_compensation'
-      OR recovery_compensates_receipt_id IS NULL
-    )
-  )`,
-  `CREATE INDEX IF NOT EXISTS idx_knowledge_guarded_manifest_step_operation
-     ON knowledge_guarded_write_manifest_steps(
-       authority_classification, authority_id, tenant_id, scope, parent_id, operation_id, step_id
-     )`,
-  `CREATE OR REPLACE FUNCTION knowledge_guarded_manifest_immutable()
-   RETURNS TRIGGER AS $knowledge_guarded_manifest_immutable$
-   BEGIN
-     RAISE EXCEPTION 'knowledge guarded workflow manifests are immutable'
-       USING ERRCODE = 'restrict_violation';
-   END
-   $knowledge_guarded_manifest_immutable$ LANGUAGE plpgsql`,
-  `DROP TRIGGER IF EXISTS trg_knowledge_guarded_manifest_immutable ON knowledge_guarded_write_manifests`,
-  `CREATE TRIGGER trg_knowledge_guarded_manifest_immutable
-     BEFORE UPDATE OR DELETE ON knowledge_guarded_write_manifests
-     FOR EACH ROW EXECUTE FUNCTION knowledge_guarded_manifest_immutable()`,
-  `ALTER TABLE knowledge_guarded_write_manifests ENABLE ALWAYS TRIGGER trg_knowledge_guarded_manifest_immutable`,
-  `DROP TRIGGER IF EXISTS trg_knowledge_guarded_manifest_steps_immutable
-     ON knowledge_guarded_write_manifest_steps`,
-  `CREATE TRIGGER trg_knowledge_guarded_manifest_steps_immutable
-     BEFORE UPDATE OR DELETE ON knowledge_guarded_write_manifest_steps
-     FOR EACH ROW EXECUTE FUNCTION knowledge_guarded_manifest_immutable()`,
-  `ALTER TABLE knowledge_guarded_write_manifest_steps
-     ENABLE ALWAYS TRIGGER trg_knowledge_guarded_manifest_steps_immutable`,
-  `CREATE TABLE IF NOT EXISTS knowledge_guarded_write_claims (
-    deterministic_key TEXT PRIMARY KEY,
-    operation_id TEXT NOT NULL,
-    step_id TEXT NOT NULL,
-    authority_classification TEXT NOT NULL,
-    authority_id TEXT NOT NULL,
-    tenant_id TEXT NOT NULL,
-    scope TEXT NOT NULL,
-    parent_id TEXT NOT NULL,
-    verb TEXT NOT NULL,
-    target_id TEXT NOT NULL,
-    payload_digest TEXT NOT NULL,
-    precondition_kind TEXT NOT NULL,
-    expected_version INTEGER,
-    manifest_id TEXT,
-    manifest_ordinal INTEGER,
-    manifest_phase TEXT,
-    compensates_receipt_id TEXT,
-    receipt_id TEXT,
-    created_at TEXT NOT NULL DEFAULT to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
-    FOREIGN KEY (manifest_id, manifest_ordinal)
-      REFERENCES knowledge_guarded_write_manifest_steps(manifest_id, ordinal),
-    CHECK (authority_classification IN ('user_hosted', 'hasna_saas')),
-    CHECK (verb IN ('create', 'update')),
-    CHECK (
-      (verb = 'create' AND precondition_kind = 'absent' AND expected_version IS NULL)
-      OR
-      (verb = 'update' AND precondition_kind = 'version' AND expected_version >= 1)
-    ),
-    CHECK (
-      (
-        manifest_id IS NULL AND manifest_ordinal IS NULL
-        AND manifest_phase IS NULL AND compensates_receipt_id IS NULL
-      )
-      OR (
-        manifest_id IS NOT NULL AND manifest_ordinal IS NOT NULL
-        AND manifest_phase IN ('primary', 'recovery')
-        AND (
-          (manifest_phase = 'primary' AND compensates_receipt_id IS NULL)
-          OR manifest_phase = 'recovery'
-        )
-      )
-    ),
-    UNIQUE(authority_classification, authority_id, tenant_id, scope, parent_id, operation_id, step_id)
-  )`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS idx_knowledge_guarded_claim_receipt
-     ON knowledge_guarded_write_claims(receipt_id) WHERE receipt_id IS NOT NULL`,
-  `CREATE TABLE IF NOT EXISTS knowledge_guarded_write_receipts (
-    receipt_id TEXT PRIMARY KEY,
-    deterministic_key TEXT NOT NULL UNIQUE,
-    operation_id TEXT NOT NULL,
-    step_id TEXT NOT NULL,
-    verb TEXT NOT NULL,
-    target_id TEXT NOT NULL,
-    authority_classification TEXT NOT NULL,
-    authority_id TEXT NOT NULL,
-    tenant_id TEXT NOT NULL,
-    scope TEXT NOT NULL,
-    parent_id TEXT NOT NULL,
-    payload_digest TEXT NOT NULL,
-    precondition_kind TEXT NOT NULL,
-    expected_version INTEGER,
-    manifest_id TEXT,
-    manifest_ordinal INTEGER,
-    manifest_phase TEXT,
-    compensates_receipt_id TEXT,
-    status TEXT NOT NULL,
-    code TEXT NOT NULL,
-    effect_count INTEGER NOT NULL,
-    result_id TEXT,
-    result_version INTEGER,
-    created_at TEXT NOT NULL DEFAULT to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
-    FOREIGN KEY (manifest_id, manifest_ordinal)
-      REFERENCES knowledge_guarded_write_manifest_steps(manifest_id, ordinal),
-    CHECK (authority_classification IN ('user_hosted', 'hasna_saas')),
-    CHECK (verb IN ('create', 'update')),
-    CHECK (
-      (verb = 'create' AND precondition_kind = 'absent' AND expected_version IS NULL)
-      OR
-      (verb = 'update' AND precondition_kind = 'version' AND expected_version >= 1)
-    ),
-    CHECK (
-      (
-        manifest_id IS NULL AND manifest_ordinal IS NULL
-        AND manifest_phase IS NULL AND compensates_receipt_id IS NULL
-      )
-      OR (
-        manifest_id IS NOT NULL AND manifest_ordinal IS NOT NULL
-        AND manifest_phase IN ('primary', 'recovery')
-        AND (
-          (manifest_phase = 'primary' AND compensates_receipt_id IS NULL)
-          OR manifest_phase = 'recovery'
-        )
-      )
-    ),
-    CHECK (status IN ('accepted', 'rejected')),
-    CHECK (effect_count IN (0, 1)),
-    CHECK (
-      (status = 'accepted' AND effect_count = 1 AND result_id IS NOT NULL AND result_version IS NOT NULL)
-      OR
-      (status = 'rejected' AND effect_count = 0 AND result_id IS NULL AND result_version IS NULL)
-    )
-  )`,
-  `CREATE INDEX IF NOT EXISTS idx_knowledge_guarded_receipt_operation
-     ON knowledge_guarded_write_receipts(
-       authority_classification, authority_id, tenant_id, scope, parent_id, operation_id, step_id
-     )`,
-  `CREATE OR REPLACE FUNCTION knowledge_guarded_claim_once()
-   RETURNS TRIGGER AS $knowledge_guarded_claim_once$
-   BEGIN
-     IF TG_OP = 'DELETE' THEN
-       RAISE EXCEPTION 'knowledge guarded write claims are immutable'
-         USING ERRCODE = 'restrict_violation';
-     END IF;
-     IF (OLD.deterministic_key, OLD.operation_id, OLD.step_id,
-         OLD.authority_classification, OLD.authority_id, OLD.tenant_id,
-         OLD.scope, OLD.parent_id, OLD.verb, OLD.target_id,
-         OLD.payload_digest, OLD.precondition_kind, OLD.expected_version,
-         OLD.manifest_id, OLD.manifest_ordinal, OLD.manifest_phase,
-         OLD.compensates_receipt_id, OLD.created_at)
-        IS DISTINCT FROM
-        (NEW.deterministic_key, NEW.operation_id, NEW.step_id,
-         NEW.authority_classification, NEW.authority_id, NEW.tenant_id,
-         NEW.scope, NEW.parent_id, NEW.verb, NEW.target_id,
-         NEW.payload_digest, NEW.precondition_kind, NEW.expected_version,
-         NEW.manifest_id, NEW.manifest_ordinal, NEW.manifest_phase,
-         NEW.compensates_receipt_id, NEW.created_at)
-        OR OLD.receipt_id IS NOT NULL
-        OR NEW.receipt_id IS NULL THEN
-       RAISE EXCEPTION 'knowledge guarded write claim may only bind one terminal receipt'
-         USING ERRCODE = 'restrict_violation';
-     END IF;
-     RETURN NEW;
-   END
-   $knowledge_guarded_claim_once$ LANGUAGE plpgsql`,
-  `DROP TRIGGER IF EXISTS trg_knowledge_guarded_claim_once ON knowledge_guarded_write_claims`,
-  `CREATE TRIGGER trg_knowledge_guarded_claim_once
-     BEFORE UPDATE OR DELETE ON knowledge_guarded_write_claims
-     FOR EACH ROW EXECUTE FUNCTION knowledge_guarded_claim_once()`,
-  `ALTER TABLE knowledge_guarded_write_claims ENABLE ALWAYS TRIGGER trg_knowledge_guarded_claim_once`,
-  `CREATE OR REPLACE FUNCTION knowledge_guarded_receipts_immutable()
-   RETURNS TRIGGER AS $knowledge_guarded_receipts_immutable$
-   BEGIN
-     RAISE EXCEPTION 'knowledge guarded write receipts are immutable'
-       USING ERRCODE = 'restrict_violation';
-   END
-   $knowledge_guarded_receipts_immutable$ LANGUAGE plpgsql`,
-  `DROP TRIGGER IF EXISTS trg_knowledge_guarded_receipts_immutable ON knowledge_guarded_write_receipts`,
-  `CREATE TRIGGER trg_knowledge_guarded_receipts_immutable
-     BEFORE UPDATE OR DELETE ON knowledge_guarded_write_receipts
-     FOR EACH ROW EXECUTE FUNCTION knowledge_guarded_receipts_immutable()`,
-  `ALTER TABLE knowledge_guarded_write_receipts ENABLE ALWAYS TRIGGER trg_knowledge_guarded_receipts_immutable`,
-  `CREATE OR REPLACE FUNCTION knowledge_guarded_item_authority()
-   RETURNS TRIGGER AS $knowledge_guarded_item_authority$
-   DECLARE
-     claim_key TEXT;
-     claim_matches BOOLEAN;
-   BEGIN
-     IF TG_OP = 'DELETE' THEN
-       IF OLD.authority_classification IS NULL THEN
-         RETURN OLD;
-       END IF;
-       RAISE EXCEPTION 'guarded knowledge items cannot be deleted outside a declared FCAME-1 action'
-         USING ERRCODE = 'restrict_violation';
-     END IF;
-
-     IF TG_OP = 'INSERT' AND NEW.authority_classification IS NULL THEN
-       RETURN NEW;
-     END IF;
-
-     IF TG_OP = 'UPDATE'
-        AND OLD.authority_classification IS NULL
-        AND NEW.authority_classification IS NULL THEN
-       RETURN NEW;
-     END IF;
-
-     IF NEW.authority_classification IS NULL OR NEW.authority_id IS NULL
-        OR NEW.tenant_id IS NULL OR NEW.scope IS NULL OR NEW.parent_id IS NULL THEN
-       RAISE EXCEPTION 'guarded knowledge item binding must be complete'
-         USING ERRCODE = 'check_violation';
-     END IF;
-
-     IF TG_OP = 'UPDATE' AND (
-       OLD.id IS DISTINCT FROM NEW.id
-       OR OLD.authority_classification IS DISTINCT FROM NEW.authority_classification
-       OR OLD.authority_id IS DISTINCT FROM NEW.authority_id
-       OR OLD.tenant_id IS DISTINCT FROM NEW.tenant_id
-       OR OLD.scope IS DISTINCT FROM NEW.scope
-       OR OLD.parent_id IS DISTINCT FROM NEW.parent_id
-     ) THEN
-       RAISE EXCEPTION 'guarded knowledge item identity and binding are immutable'
-         USING ERRCODE = 'restrict_violation';
-     END IF;
-
-     claim_key := NULLIF(
-       current_setting('hasna.knowledge_guarded_deterministic_key', true),
-       ''
-     );
-     IF claim_key IS NULL THEN
-       RAISE EXCEPTION 'guarded knowledge item mutation requires an FCAME-1 operation claim'
-         USING ERRCODE = 'insufficient_privilege';
-     END IF;
-
-     SELECT EXISTS (
-       SELECT 1
-         FROM knowledge_guarded_write_claims AS claim
-        WHERE claim.deterministic_key = claim_key
-          AND claim.receipt_id IS NULL
-          AND claim.target_id = NEW.id
-          AND claim.authority_classification = NEW.authority_classification
-          AND claim.authority_id = NEW.authority_id
-          AND claim.tenant_id = NEW.tenant_id
-          AND claim.scope = NEW.scope
-          AND claim.parent_id = NEW.parent_id
-          AND (
-            (
-              TG_OP = 'INSERT'
-              AND claim.verb = 'create'
-              AND claim.precondition_kind = 'absent'
-            )
-            OR (
-              TG_OP = 'UPDATE'
-              AND claim.verb = 'update'
-              AND claim.precondition_kind = 'version'
-              AND claim.expected_version = OLD.version
-            )
-          )
-     ) INTO claim_matches;
-     IF NOT claim_matches THEN
-       RAISE EXCEPTION 'guarded knowledge item mutation does not match its live FCAME-1 operation claim'
-         USING ERRCODE = 'insufficient_privilege';
-     END IF;
-     RETURN NEW;
-   END
-   $knowledge_guarded_item_authority$ LANGUAGE plpgsql`,
-  `DROP TRIGGER IF EXISTS trg_knowledge_items_00_guarded_authority ON knowledge_items`,
-  `CREATE TRIGGER trg_knowledge_items_00_guarded_authority
-     BEFORE INSERT OR UPDATE OR DELETE ON knowledge_items
-     FOR EACH ROW EXECUTE FUNCTION knowledge_guarded_item_authority()`,
-  `ALTER TABLE knowledge_items ENABLE ALWAYS TRIGGER trg_knowledge_items_00_guarded_authority`,
-  `CREATE OR REPLACE FUNCTION knowledge_guarded_item_authority()
-   RETURNS TRIGGER AS $knowledge_guarded_item_authority$
-   DECLARE
-     claim_key TEXT;
-     claim_matches BOOLEAN;
-   BEGIN
-     IF TG_OP = 'DELETE' THEN
-       IF OLD.authority_classification IS NULL THEN
-         RETURN OLD;
-       END IF;
-       RAISE EXCEPTION 'guarded knowledge items cannot be deleted outside a declared FCAME-1 action'
-         USING ERRCODE = 'restrict_violation';
-     END IF;
-
-     IF TG_OP = 'INSERT' AND NEW.authority_classification IS NULL THEN
-       RETURN NEW;
-     END IF;
-
-     IF TG_OP = 'UPDATE'
-        AND OLD.authority_classification IS NULL
-        AND NEW.authority_classification IS NULL THEN
-       RETURN NEW;
-     END IF;
-
-     IF NEW.authority_classification IS NULL OR NEW.authority_id IS NULL
-        OR NEW.tenant_id IS NULL OR NEW.scope IS NULL OR NEW.parent_id IS NULL THEN
-       RAISE EXCEPTION 'guarded knowledge item binding must be complete'
-         USING ERRCODE = 'check_violation';
-     END IF;
-
-     IF TG_OP = 'UPDATE' AND (
-       OLD.id IS DISTINCT FROM NEW.id
-       OR OLD.authority_classification IS DISTINCT FROM NEW.authority_classification
-       OR OLD.authority_id IS DISTINCT FROM NEW.authority_id
-       OR OLD.tenant_id IS DISTINCT FROM NEW.tenant_id
-       OR OLD.scope IS DISTINCT FROM NEW.scope
-       OR OLD.parent_id IS DISTINCT FROM NEW.parent_id
-     ) THEN
-       RAISE EXCEPTION 'guarded knowledge item identity and binding are immutable'
-         USING ERRCODE = 'restrict_violation';
-     END IF;
-
-     claim_key := NULLIF(
-       current_setting('hasna.knowledge_guarded_deterministic_key', true),
-       ''
-     );
-     IF claim_key IS NULL THEN
-       RAISE EXCEPTION 'guarded knowledge item mutation requires an FCAME-1 operation claim'
-         USING ERRCODE = 'insufficient_privilege';
-     END IF;
-
-     SELECT EXISTS (
-       SELECT 1
-         FROM knowledge_guarded_write_claims AS claim
-        WHERE claim.deterministic_key = claim_key
-          AND claim.receipt_id IS NULL
-          AND claim.target_id = NEW.id
-          AND claim.authority_classification = NEW.authority_classification
-          AND claim.authority_id = NEW.authority_id
-          AND claim.tenant_id = NEW.tenant_id::text
-          AND claim.scope = NEW.scope
-          AND claim.parent_id = NEW.parent_id
-          AND (
-            (
-              TG_OP = 'INSERT'
-              AND claim.verb = 'create'
-              AND claim.precondition_kind = 'absent'
-            )
-            OR (
-              TG_OP = 'UPDATE'
-              AND claim.verb = 'update'
-              AND claim.precondition_kind = 'version'
-              AND claim.expected_version = OLD.version
-            )
-          )
-     ) INTO claim_matches;
-     IF NOT claim_matches THEN
-       RAISE EXCEPTION 'guarded knowledge item mutation does not match its live FCAME-1 operation claim'
-         USING ERRCODE = 'insufficient_privilege';
-     END IF;
-     RETURN NEW;
-   END
-   $knowledge_guarded_item_authority$ LANGUAGE plpgsql`,
-  `ALTER TABLE knowledge_items
-     ADD COLUMN IF NOT EXISTS guarded_adoption_receipt_id TEXT`,
-  `CREATE TABLE IF NOT EXISTS knowledge_guarded_adoption_claims (
-    deterministic_key TEXT PRIMARY KEY,
-    planned_receipt_id TEXT NOT NULL UNIQUE,
-    operation_id TEXT NOT NULL,
-    step_id TEXT NOT NULL,
-    action TEXT NOT NULL,
-    target_id TEXT NOT NULL,
-    authority_classification TEXT NOT NULL,
-    authority_id TEXT NOT NULL,
-    tenant_id TEXT NOT NULL,
-    scope TEXT NOT NULL,
-    parent_id TEXT NOT NULL,
-    expected_version INTEGER NOT NULL,
-    expected_content_sha256 TEXT NOT NULL,
-    adoption_receipt_id TEXT,
-    receipt_id TEXT,
-    created_at TEXT NOT NULL DEFAULT to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
-    CHECK (action IN ('adopt', 'rollback')),
-    CHECK (authority_classification IN ('user_hosted', 'hasna_saas')),
-    CHECK (expected_version >= 1),
-    CHECK (expected_content_sha256 ~ '^[0-9a-f]{64}$'),
-    CHECK (
-      (action = 'adopt' AND adoption_receipt_id IS NULL)
-      OR (action = 'rollback' AND adoption_receipt_id IS NOT NULL)
-    ),
-    UNIQUE(authority_classification, authority_id, tenant_id, scope, parent_id, operation_id, step_id)
-  )`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS idx_knowledge_guarded_adoption_claim_receipt
-     ON knowledge_guarded_adoption_claims(receipt_id) WHERE receipt_id IS NOT NULL`,
-  `CREATE TABLE IF NOT EXISTS knowledge_guarded_adoption_receipts (
-    receipt_id TEXT PRIMARY KEY,
-    deterministic_key TEXT NOT NULL UNIQUE,
-    operation_id TEXT NOT NULL,
-    step_id TEXT NOT NULL,
-    action TEXT NOT NULL,
-    target_id TEXT NOT NULL,
-    authority_classification TEXT NOT NULL,
-    authority_id TEXT NOT NULL,
-    tenant_id TEXT NOT NULL,
-    scope TEXT NOT NULL,
-    parent_id TEXT NOT NULL,
-    expected_version INTEGER NOT NULL,
-    expected_content_sha256 TEXT NOT NULL,
-    adoption_receipt_id TEXT,
-    prior_tenant_id TEXT,
-    status TEXT NOT NULL,
-    code TEXT NOT NULL,
-    effect_count INTEGER NOT NULL,
-    result_version INTEGER,
-    result_content_sha256 TEXT,
-    created_at TEXT NOT NULL DEFAULT to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
-    CHECK (action IN ('adopt', 'rollback')),
-    CHECK (authority_classification IN ('user_hosted', 'hasna_saas')),
-    CHECK (expected_version >= 1),
-    CHECK (expected_content_sha256 ~ '^[0-9a-f]{64}$'),
-    CHECK (
-      (action = 'adopt' AND adoption_receipt_id IS NULL)
-      OR (action = 'rollback' AND adoption_receipt_id IS NOT NULL)
-    ),
-    CHECK (status IN ('accepted', 'rejected')),
-    CHECK (effect_count IN (0, 1)),
-    CHECK (
-      (
-        status = 'accepted' AND effect_count = 1
-        AND result_version IS NOT NULL AND result_content_sha256 IS NOT NULL
-      )
-      OR (
-        status = 'rejected' AND effect_count = 0
-        AND result_version IS NULL AND result_content_sha256 IS NULL
-      )
-    )
-  )`,
-  `CREATE INDEX IF NOT EXISTS idx_knowledge_guarded_adoption_receipt_operation
-     ON knowledge_guarded_adoption_receipts(
-       authority_classification, authority_id, tenant_id, scope, parent_id, operation_id, step_id
-     )`,
-  `CREATE OR REPLACE FUNCTION knowledge_guarded_adoption_claim_once()
-   RETURNS TRIGGER AS $knowledge_guarded_adoption_claim_once$
-   BEGIN
-     IF TG_OP = 'DELETE' THEN
-       RAISE EXCEPTION 'knowledge guarded adoption claims are immutable'
-         USING ERRCODE = 'restrict_violation';
-     END IF;
-    IF (OLD.deterministic_key, OLD.planned_receipt_id,
-         OLD.operation_id, OLD.step_id, OLD.action,
-         OLD.target_id, OLD.authority_classification, OLD.authority_id,
-         OLD.tenant_id, OLD.scope, OLD.parent_id, OLD.expected_version,
-         OLD.expected_content_sha256, OLD.adoption_receipt_id, OLD.created_at)
-        IS DISTINCT FROM
-        (NEW.deterministic_key, NEW.planned_receipt_id,
-         NEW.operation_id, NEW.step_id, NEW.action,
-         NEW.target_id, NEW.authority_classification, NEW.authority_id,
-         NEW.tenant_id, NEW.scope, NEW.parent_id, NEW.expected_version,
-         NEW.expected_content_sha256, NEW.adoption_receipt_id, NEW.created_at)
-        OR OLD.receipt_id IS NOT NULL
-        OR NEW.receipt_id IS NULL THEN
-       RAISE EXCEPTION 'knowledge guarded adoption claim may only bind one terminal receipt'
-         USING ERRCODE = 'restrict_violation';
-     END IF;
-     RETURN NEW;
-   END
-   $knowledge_guarded_adoption_claim_once$ LANGUAGE plpgsql`,
-  `DROP TRIGGER IF EXISTS trg_knowledge_guarded_adoption_claim_once
-     ON knowledge_guarded_adoption_claims`,
-  `CREATE TRIGGER trg_knowledge_guarded_adoption_claim_once
-     BEFORE UPDATE OR DELETE ON knowledge_guarded_adoption_claims
-     FOR EACH ROW EXECUTE FUNCTION knowledge_guarded_adoption_claim_once()`,
-  `ALTER TABLE knowledge_guarded_adoption_claims
-     ENABLE ALWAYS TRIGGER trg_knowledge_guarded_adoption_claim_once`,
-  `CREATE OR REPLACE FUNCTION knowledge_guarded_adoption_receipts_immutable()
-   RETURNS TRIGGER AS $knowledge_guarded_adoption_receipts_immutable$
-   BEGIN
-     RAISE EXCEPTION 'knowledge guarded adoption receipts are immutable'
-       USING ERRCODE = 'restrict_violation';
-   END
-   $knowledge_guarded_adoption_receipts_immutable$ LANGUAGE plpgsql`,
-  `DROP TRIGGER IF EXISTS trg_knowledge_guarded_adoption_receipts_immutable
-     ON knowledge_guarded_adoption_receipts`,
-  `CREATE TRIGGER trg_knowledge_guarded_adoption_receipts_immutable
-     BEFORE UPDATE OR DELETE ON knowledge_guarded_adoption_receipts
-     FOR EACH ROW EXECUTE FUNCTION knowledge_guarded_adoption_receipts_immutable()`,
-  `ALTER TABLE knowledge_guarded_adoption_receipts
-     ENABLE ALWAYS TRIGGER trg_knowledge_guarded_adoption_receipts_immutable`,
-  `CREATE OR REPLACE FUNCTION knowledge_guarded_item_authority()
-   RETURNS TRIGGER AS $knowledge_guarded_item_authority$
-   DECLARE
-     claim_key TEXT;
-     adoption_key TEXT;
-     claim_matches BOOLEAN;
-     binding_changed BOOLEAN;
-   BEGIN
-     IF TG_OP = 'DELETE' THEN
-       IF OLD.authority_classification IS NULL THEN
-         RETURN OLD;
-       END IF;
-       RAISE EXCEPTION 'guarded knowledge items cannot be deleted outside a declared FCAME-1 action'
-         USING ERRCODE = 'restrict_violation';
-     END IF;
-
-     IF TG_OP = 'INSERT' AND NEW.authority_classification IS NULL THEN
-       RETURN NEW;
-     END IF;
-
-     IF TG_OP = 'UPDATE'
-        AND OLD.authority_classification IS NULL
-        AND NEW.authority_classification IS NULL THEN
-       RETURN NEW;
-     END IF;
-
-     binding_changed := TG_OP = 'UPDATE' AND (
-       OLD.id IS DISTINCT FROM NEW.id
-       OR OLD.authority_classification IS DISTINCT FROM NEW.authority_classification
-       OR OLD.authority_id IS DISTINCT FROM NEW.authority_id
-       OR OLD.tenant_id IS DISTINCT FROM NEW.tenant_id
-       OR OLD.scope IS DISTINCT FROM NEW.scope
-       OR OLD.parent_id IS DISTINCT FROM NEW.parent_id
-     );
-
-     IF binding_changed THEN
-       adoption_key := NULLIF(
-         current_setting('hasna.knowledge_guarded_adoption_key', true),
-         ''
-       );
-       IF adoption_key IS NULL THEN
-         RAISE EXCEPTION 'guarded knowledge item identity and binding are immutable'
-           USING ERRCODE = 'restrict_violation';
-       END IF;
-       SELECT EXISTS (
-         SELECT 1
-           FROM knowledge_guarded_adoption_claims AS claim
-          WHERE claim.deterministic_key = adoption_key
-            AND claim.receipt_id IS NULL
-            AND claim.target_id = OLD.id
-            AND claim.expected_version = OLD.version
-            AND claim.expected_content_sha256 =
-              encode(sha256(convert_to(coalesce(OLD.content, ''), 'UTF8')), 'hex')
-            AND (
-              OLD.short_id, OLD.title, OLD.content, OLD.url, OLD.tags,
-              OLD.metadata, OLD.archived, OLD.created_at, OLD.updated_at, OLD.version
-            ) IS NOT DISTINCT FROM (
-              NEW.short_id, NEW.title, NEW.content, NEW.url, NEW.tags,
-              NEW.metadata, NEW.archived, NEW.created_at, NEW.updated_at, NEW.version
-            )
-            AND (
-              (
-                claim.action = 'adopt'
-                AND OLD.authority_classification IS NULL
-                AND OLD.authority_id IS NULL
-                AND OLD.scope IS NULL
-                AND OLD.parent_id IS NULL
-                AND (
-                  OLD.tenant_id IS NULL
-                  OR OLD.tenant_id::text = claim.tenant_id
-                )
-                AND NEW.authority_classification = claim.authority_classification
-                AND NEW.authority_id = claim.authority_id
-                AND NEW.tenant_id::text = claim.tenant_id
-                AND NEW.scope = claim.scope
-                AND NEW.parent_id = claim.parent_id
-                AND NEW.guarded_adoption_receipt_id = claim.planned_receipt_id
-              )
-              OR (
-                claim.action = 'rollback'
-                AND claim.adoption_receipt_id IS NOT NULL
-                AND OLD.authority_classification = claim.authority_classification
-                AND OLD.authority_id = claim.authority_id
-                AND OLD.tenant_id::text = claim.tenant_id
-                AND OLD.scope = claim.scope
-                AND OLD.parent_id = claim.parent_id
-                AND OLD.guarded_adoption_receipt_id = claim.adoption_receipt_id
-                AND NEW.authority_classification IS NULL
-                AND NEW.authority_id IS NULL
-                AND NEW.scope IS NULL
-                AND NEW.parent_id IS NULL
-                AND NEW.guarded_adoption_receipt_id IS NULL
-                AND NEW.tenant_id::text IS NOT DISTINCT FROM (
-                  SELECT receipt.prior_tenant_id
-                    FROM knowledge_guarded_adoption_receipts AS receipt
-                   WHERE receipt.receipt_id = claim.adoption_receipt_id
-                     AND receipt.action = 'adopt'
-                     AND receipt.status = 'accepted'
-                     AND receipt.effect_count = 1
-                )
-              )
-            )
-       ) INTO claim_matches;
-       IF NOT claim_matches THEN
-         RAISE EXCEPTION 'guarded knowledge item binding transition does not match its live adoption claim'
-           USING ERRCODE = 'insufficient_privilege';
-       END IF;
-       RETURN NEW;
-     END IF;
-
-     IF NEW.authority_classification IS NULL OR NEW.authority_id IS NULL
-        OR NEW.tenant_id IS NULL OR NEW.scope IS NULL OR NEW.parent_id IS NULL THEN
-       RAISE EXCEPTION 'guarded knowledge item binding must be complete'
-         USING ERRCODE = 'check_violation';
-     END IF;
-
-     claim_key := NULLIF(
-       current_setting('hasna.knowledge_guarded_deterministic_key', true),
-       ''
-     );
-     IF claim_key IS NULL THEN
-       RAISE EXCEPTION 'guarded knowledge item mutation requires an FCAME-1 operation claim'
-         USING ERRCODE = 'insufficient_privilege';
-     END IF;
-
-     SELECT EXISTS (
-       SELECT 1
-         FROM knowledge_guarded_write_claims AS claim
-        WHERE claim.deterministic_key = claim_key
-          AND claim.receipt_id IS NULL
-          AND claim.target_id = NEW.id
-          AND claim.authority_classification = NEW.authority_classification
-          AND claim.authority_id = NEW.authority_id
-          AND claim.tenant_id = NEW.tenant_id::text
-          AND claim.scope = NEW.scope
-          AND claim.parent_id = NEW.parent_id
-          AND (
-            (
-              TG_OP = 'INSERT'
-              AND claim.verb = 'create'
-              AND claim.precondition_kind = 'absent'
-            )
-            OR (
-              TG_OP = 'UPDATE'
-              AND claim.verb = 'update'
-              AND claim.precondition_kind = 'version'
-              AND claim.expected_version = OLD.version
-            )
-          )
-     ) INTO claim_matches;
-     IF NOT claim_matches THEN
-       RAISE EXCEPTION 'guarded knowledge item mutation does not match its live FCAME-1 operation claim'
-         USING ERRCODE = 'insufficient_privilege';
-     END IF;
-     RETURN NEW;
-   END
-   $knowledge_guarded_item_authority$ LANGUAGE plpgsql`,
-  `CREATE OR REPLACE FUNCTION knowledge_guarded_adoption_claim_once()
-   RETURNS TRIGGER AS $knowledge_guarded_adoption_claim_once$
-   BEGIN
-     IF TG_OP = 'DELETE' THEN
-       RAISE EXCEPTION 'knowledge guarded adoption claims are immutable'
-         USING ERRCODE = 'restrict_violation';
-     END IF;
-     IF (OLD.deterministic_key, OLD.planned_receipt_id,
-         OLD.operation_id, OLD.step_id, OLD.action,
-         OLD.target_id, OLD.authority_classification, OLD.authority_id,
-         OLD.tenant_id, OLD.scope, OLD.parent_id, OLD.expected_version,
-         OLD.expected_content_sha256, OLD.adoption_receipt_id, OLD.created_at)
-        IS DISTINCT FROM
-        (NEW.deterministic_key, NEW.planned_receipt_id,
-         NEW.operation_id, NEW.step_id, NEW.action,
-         NEW.target_id, NEW.authority_classification, NEW.authority_id,
-         NEW.tenant_id, NEW.scope, NEW.parent_id, NEW.expected_version,
-         NEW.expected_content_sha256, NEW.adoption_receipt_id, NEW.created_at)
-        OR OLD.receipt_id IS NOT NULL
-        OR NEW.receipt_id IS NULL THEN
-       RAISE EXCEPTION 'knowledge guarded adoption claim may only bind one terminal receipt'
-         USING ERRCODE = 'restrict_violation';
-     END IF;
-     IF NEW.receipt_id IS DISTINCT FROM OLD.planned_receipt_id THEN
-       RAISE EXCEPTION 'knowledge guarded adoption claim receipt must match its planned terminal receipt'
-         USING ERRCODE = 'restrict_violation';
-     END IF;
-     RETURN NEW;
-   END
-   $knowledge_guarded_adoption_claim_once$ LANGUAGE plpgsql`,
-  `CREATE OR REPLACE FUNCTION knowledge_guarded_item_id_immutable()
-   RETURNS TRIGGER AS $knowledge_guarded_item_id_immutable$
-   BEGIN
-     IF OLD.id IS DISTINCT FROM NEW.id
-        AND NULLIF(
-          current_setting('hasna.knowledge_guarded_adoption_key', true),
-          ''
-        ) IS NOT NULL THEN
-       RAISE EXCEPTION 'guarded knowledge item identity and binding are immutable'
-         USING ERRCODE = 'restrict_violation';
-     END IF;
-     RETURN NEW;
-   END
-   $knowledge_guarded_item_id_immutable$ LANGUAGE plpgsql`,
-  `DROP TRIGGER IF EXISTS trg_knowledge_guarded_00_item_id_immutable
-     ON knowledge_items`,
-  `CREATE TRIGGER trg_knowledge_guarded_00_item_id_immutable
-     BEFORE UPDATE OF id ON knowledge_items
-     FOR EACH ROW EXECUTE FUNCTION knowledge_guarded_item_id_immutable()`,
-  `ALTER TABLE knowledge_items
-     ENABLE ALWAYS TRIGGER trg_knowledge_guarded_00_item_id_immutable`,
-  `ALTER TABLE knowledge_items
-     DROP CONSTRAINT IF EXISTS knowledge_items_relation_metadata_contract`,
-  `ALTER TABLE knowledge_items
-     ADD CONSTRAINT knowledge_items_relation_metadata_contract CHECK (
-       metadata -> 'hasna_knowledge_relations' IS NULL
-       OR (
-         jsonb_typeof(metadata -> 'hasna_knowledge_relations') = 'object'
-         AND metadata #>> '{hasna_knowledge_relations,schema}' = 'hasna.knowledge.relations.v1'
-         AND (
-           metadata #>> '{hasna_knowledge_relations,supersedes_item_id}' IS NOT NULL
-           OR metadata #>> '{hasna_knowledge_relations,canonical_item_id}' IS NOT NULL
-         )
-         AND (
-           (metadata -> 'hasna_knowledge_relations')
-           - ARRAY['schema', 'supersedes_item_id', 'canonical_item_id']
-         ) = '{}'::jsonb
-         AND (
-           metadata #>> '{hasna_knowledge_relations,supersedes_item_id}' IS NULL
-           OR (
-             btrim(metadata #>> '{hasna_knowledge_relations,supersedes_item_id}') <> ''
-             AND metadata #>> '{hasna_knowledge_relations,supersedes_item_id}' <> id
-           )
-         )
-         AND (
-           metadata #>> '{hasna_knowledge_relations,canonical_item_id}' IS NULL
-           OR (
-             btrim(metadata #>> '{hasna_knowledge_relations,canonical_item_id}') <> ''
-             AND metadata #>> '{hasna_knowledge_relations,canonical_item_id}' <> id
-           )
-         )
-       )
-     )`,
-  `CREATE INDEX IF NOT EXISTS idx_knowledge_items_guarded_title
-     ON knowledge_items (
-       authority_classification, authority_id, tenant_id, scope, parent_id,
-       title, archived, id
-     )`,
-  `CREATE INDEX IF NOT EXISTS idx_knowledge_items_guarded_supersedes
-     ON knowledge_items (
-       authority_classification, authority_id, tenant_id, scope, parent_id,
-       (metadata #>> '{hasna_knowledge_relations,supersedes_item_id}'),
-       archived, id
-     )
-     WHERE metadata #>> '{hasna_knowledge_relations,schema}'
-       = 'hasna.knowledge.relations.v1'`,
-  `CREATE INDEX IF NOT EXISTS idx_knowledge_items_guarded_canonical
-     ON knowledge_items (
-       authority_classification, authority_id, tenant_id, scope, parent_id,
-       (metadata #>> '{hasna_knowledge_relations,canonical_item_id}'),
-       archived, id
-     )
-     WHERE metadata #>> '{hasna_knowledge_relations,schema}'
-       = 'hasna.knowledge.relations.v1'`,
-  ...postgresKnowledgeProjectLinksSchemaStatements()
-];
 // src/mcp.js
 var storePathField = exports_external.string().optional().describe("Path to the JSON store file");
 var scopeField = exports_external.enum(["local", "global", "project"]).optional().describe("Workspace scope");
@@ -24306,7 +22369,7 @@ function resolveStorePath(storePath, scope) {
   return defaultStorePath();
 }
 function itemStoreFor(storePath, scope) {
-  assertKnowledgeModeSelected(process.env, { storePathOverridden: Boolean(storePath) });
+  assertNoRetiredKnowledgeStorageSelector(process.env);
   const resolved = resolveStorePath(storePath, scope);
   return resolveItemStore({ storePath: resolved, storePathOverridden: Boolean(storePath) });
 }
@@ -24726,9 +22789,9 @@ function decisionSnapshot(id, service = projectService()) {
 async function getKnowledgeRecord(kind, id, options = {}) {
   const normalized = kind ?? "auto";
   const service = createKnowledgeService({ scope: options.scope });
-  if (isKnowledgeApiMode()) {
+  if (usesKnowledgeHttpTransport()) {
     if (normalized !== "auto" && normalized !== "item") {
-      throw new Error(`knowledge: reading a '${normalized}' record targets the on-box sqlite RAG catalog, which is not available in cloud mode ` + `(HASNA_KNOWLEDGE_API_URL + HASNA_KNOWLEDGE_API_KEY set). In cloud mode the shared corpus is the cloud knowledge-items; ` + `use kind 'item' (or 'auto'). Unset the API env to read the full local catalog.`);
+      throw new Error(`knowledge: reading a '${normalized}' record targets the on-box sqlite RAG catalog, which is not available to the HTTP client ` + `(HASNA_KNOWLEDGE_API_URL + HASNA_KNOWLEDGE_API_KEY set). The shared corpus is the server knowledge-items; ` + `use kind 'item' (or 'auto'). Unset the API env to read the full local catalog.`);
     }
     const store = itemStoreFor(options.store_path, options.scope);
     const item = await store.get(id);
@@ -24866,6 +22929,7 @@ function registerKnowledgeResources(server) {
   });
 }
 function buildServer() {
+  assertNoRetiredKnowledgeStorageSelector(process.env);
   const server = new McpServer({
     name: "knowledge",
     version: package_default.version
@@ -24887,7 +22951,7 @@ function buildServer() {
       const inventory = await service.resolveInventory({
         limit,
         includeArchived: include_archived,
-        storePath: isKnowledgeApiMode() ? undefined : store_path
+        storePath: usesKnowledgeHttpTransport() ? undefined : store_path
       });
       return jsonText(inventory);
     } catch (error) {
@@ -24962,11 +23026,11 @@ function buildServer() {
     model: exports_external.string().optional().describe("Embedding model ref"),
     dimensions: exports_external.number().optional().describe("Embedding dimensions for deterministic fake mode"),
     fake: exports_external.boolean().optional().describe("Use deterministic fake embeddings")
-  }, async ({ scope, query: query2, limit, semantic, model, dimensions, fake }) => {
+  }, async ({ scope, query, limit, semantic, model, dimensions, fake }) => {
     const service = createKnowledgeService({ scope: scope ?? "project" });
     try {
       return jsonText({ ok: true, ...await service.searchAppWiki({
-        query: query2,
+        query,
         limit,
         semantic,
         modelRef: model,
@@ -24985,11 +23049,11 @@ function buildServer() {
     model: exports_external.string().optional().describe("Embedding model ref"),
     dimensions: exports_external.number().optional().describe("Embedding dimensions for deterministic fake mode"),
     fake: exports_external.boolean().optional().describe("Use deterministic fake embeddings")
-  }, async ({ scope, query: query2, limit, semantic, model, dimensions, fake }) => {
+  }, async ({ scope, query, limit, semantic, model, dimensions, fake }) => {
     const service = createKnowledgeService({ scope: scope ?? "project" });
     try {
       return jsonText({ ok: true, ...await service.queryAppWiki({
-        query: query2,
+        query,
         limit,
         semantic,
         modelRef: model,
@@ -25123,10 +23187,10 @@ function buildServer() {
     mode: exports_external.enum(["deterministic", "ai"]).optional().describe("Proposal mode; ai uses configured AI SDK provider and remains read-only"),
     model: exports_external.string().optional().describe("Model alias/ref for AI mode"),
     fake: exports_external.boolean().optional().describe("Use deterministic fake AI proposal output for local tests")
-  }, async ({ scope, id, mode: mode2, model, fake }) => {
+  }, async ({ scope, id, mode, model, fake }) => {
     const service = createKnowledgeService({ scope });
     try {
-      return jsonText(mode2 === "ai" ? await service.proposeSyncConflictResolutionWithAi({ id, modelRef: model, fake }) : service.proposeSyncConflictResolution(id));
+      return jsonText(mode === "ai" ? await service.proposeSyncConflictResolutionWithAi({ id, modelRef: model, fake }) : service.proposeSyncConflictResolution(id));
     } catch (error) {
       return errorText(error instanceof Error ? error.message : String(error));
     }
@@ -25297,10 +23361,10 @@ function buildServer() {
     model: exports_external.string().optional().describe("Embedding model ref, default openai:text-embedding-3-small"),
     dimensions: exports_external.number().optional().describe("Embedding dimensions for deterministic fake mode"),
     fake: exports_external.boolean().optional().describe("Use deterministic fake embeddings for local tests")
-  }, async ({ scope, query: query2, limit, model, dimensions, fake }) => {
+  }, async ({ scope, query, limit, model, dimensions, fake }) => {
     const service = createKnowledgeService({ scope });
     try {
-      return jsonText({ ok: true, ...await service.semanticSearch({ query: query2, limit, modelRef: model, dimensions, fake }) });
+      return jsonText({ ok: true, ...await service.semanticSearch({ query, limit, modelRef: model, dimensions, fake }) });
     } catch (error) {
       return errorText(error instanceof Error ? error.message : String(error));
     }
@@ -25313,10 +23377,10 @@ function buildServer() {
     model: exports_external.string().optional().describe("Embedding model ref, default openai:text-embedding-3-small"),
     dimensions: exports_external.number().optional().describe("Embedding dimensions for deterministic fake mode"),
     fake: exports_external.boolean().optional().describe("Use deterministic fake embeddings for local tests")
-  }, async ({ scope, query: query2, limit, semantic, model, dimensions, fake }) => {
+  }, async ({ scope, query, limit, semantic, model, dimensions, fake }) => {
     const service = createKnowledgeService({ scope });
     try {
-      return jsonText({ ok: true, ...await service.search({ query: query2, limit, semantic, modelRef: model, dimensions, fake }) });
+      return jsonText({ ok: true, ...await service.search({ query, limit, semantic, modelRef: model, dimensions, fake }) });
     } catch (error) {
       return errorText(error instanceof Error ? error.message : String(error));
     }
@@ -25329,10 +23393,10 @@ function buildServer() {
     model: exports_external.string().optional().describe("Embedding model ref, default openai:text-embedding-3-small"),
     dimensions: exports_external.number().optional().describe("Embedding dimensions for deterministic fake mode"),
     fake: exports_external.boolean().optional().describe("Use deterministic fake embeddings for local tests")
-  }, async ({ scope, query: query2, limit, semantic, model, dimensions, fake }) => {
+  }, async ({ scope, query, limit, semantic, model, dimensions, fake }) => {
     const service = createKnowledgeService({ scope });
     try {
-      return jsonText({ ok: true, ...await service.retrieveContext({ query: query2, limit, semantic, modelRef: model, dimensions, fake }) });
+      return jsonText({ ok: true, ...await service.retrieveContext({ query, limit, semantic, modelRef: model, dimensions, fake }) });
     } catch (error) {
       return errorText(error instanceof Error ? error.message : String(error));
     }
@@ -25351,7 +23415,7 @@ function buildServer() {
     model: exports_external.string().optional().describe("Embedding model ref, default openai:text-embedding-3-small"),
     dimensions: exports_external.number().optional().describe("Embedding dimensions for deterministic fake mode"),
     fake: exports_external.boolean().optional().describe("Use deterministic fake embeddings for local tests")
-  }, async ({ scope, query: query2, topic, from, since, max_tokens, max_items, limit, semantic, dedupe, model, dimensions, fake }) => {
+  }, async ({ scope, query, topic, from, since, max_tokens, max_items, limit, semantic, dedupe, model, dimensions, fake }) => {
     const service = createKnowledgeService({ scope });
     try {
       return compactJsonText({
@@ -25359,7 +23423,7 @@ function buildServer() {
         ...await service.contextPack({
           source: from ?? "search",
           purpose: from === "loops" || from === "runs" ? "proposal" : "agent_context",
-          query: query2 ?? topic ?? "",
+          query: query ?? topic ?? "",
           topic,
           since,
           maxTokens: max_tokens,
@@ -25474,10 +23538,10 @@ function buildServer() {
     domains: exports_external.array(exports_external.string()).optional().describe("Allowed domains"),
     fake: exports_external.boolean().optional().describe("Use deterministic fake web results"),
     file_results: exports_external.boolean().optional().describe("File web snippets as web source refs")
-  }, async ({ scope, query: query2, limit, provider, model, domains, fake, file_results }) => {
+  }, async ({ scope, query, limit, provider, model, domains, fake, file_results }) => {
     const service = createKnowledgeService({ scope });
     try {
-      return jsonText({ ok: true, ...await service.webSearch({ query: query2, limit, provider, modelRef: model, domains, fake, fileResults: file_results }) });
+      return jsonText({ ok: true, ...await service.webSearch({ query, limit, provider, modelRef: model, domains, fake, fileResults: file_results }) });
     } catch (error) {
       return errorText(error instanceof Error ? error.message : String(error));
     }
@@ -25508,7 +23572,7 @@ function buildServer() {
       return errorText(error instanceof Error ? error.message : String(error));
     }
   });
-  registerTool(server, "knowledge_storage", "Knowledge storage contract", "Inspect local/S3 artifact storage, source ownership, and hosted/SaaS boundary metadata", {
+  registerTool(server, "knowledge_storage", "Knowledge storage contract", "Inspect filesystem/S3 artifact storage and source ownership", {
     scope: scopeField
   }, async ({ scope }) => {
     const service = createKnowledgeService({ scope });
@@ -25546,10 +23610,10 @@ function buildServer() {
     domains: exports_external.array(exports_external.string()).optional().describe("Allowed domains"),
     fake: exports_external.boolean().optional().describe("Use deterministic fake web results"),
     file_results: exports_external.boolean().optional().describe("File web snippets as web source refs")
-  }, async ({ scope, query: query2, limit, provider, model, domains, fake, file_results }) => {
+  }, async ({ scope, query, limit, provider, model, domains, fake, file_results }) => {
     const service = createKnowledgeService({ scope });
     try {
-      return jsonText({ ok: true, ...await service.webSearch({ query: query2, limit, provider, modelRef: model, domains, fake, fileResults: file_results }) });
+      return jsonText({ ok: true, ...await service.webSearch({ query, limit, provider, modelRef: model, domains, fake, fileResults: file_results }) });
     } catch (error) {
       return errorText(error instanceof Error ? error.message : String(error));
     }
@@ -25857,7 +23921,7 @@ function buildServer() {
   }, async ({ file, store_path, scope }) => {
     if (!existsSync15(file))
       return errorText(`File not found: ${file}`);
-    const imported = JSON.parse(readFileSync14(file, "utf8"));
+    const imported = JSON.parse(readFileSync13(file, "utf8"));
     if (!imported || !Array.isArray(imported.items))
       return errorText('Invalid import file: expected {"items": [...]}');
     const store = itemStoreFor(store_path, scope);

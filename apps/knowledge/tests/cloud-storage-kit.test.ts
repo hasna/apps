@@ -1,22 +1,18 @@
 import { describe, expect, test } from 'bun:test';
 import {
   KIT_VERSION,
-  createKnowledgeCloudClient,
+  assertNoLegacyStorageMode,
   defineMigration,
-  normalizeStorageMode,
   MigrationLedger,
+  resolveServerDataBackend,
   resolveTlsConfig,
-  resolveStorageMode,
-  storageEnvKeys,
+  serverDataBackendEnvKeys,
   wrapExecutor,
-  type TypedQueryClient,
   type PgExecutor,
-} from '../src/storage';
+  type TypedQueryClient,
+} from '../src/generated/storage-kit';
+import { createKnowledgeDatabaseClient } from '../src/db/remote-storage';
 
-/**
- * A tiny in-memory executor shim so the kit's typed query surface can be
- * exercised without a live Postgres. Mirrors the shape pg.Pool returns.
- */
 class FakeExecutor implements PgExecutor {
   constructor(private readonly rows: Record<string, unknown>[]) {}
   async query<T>(_sql: string, _params?: readonly unknown[]): Promise<{ rows: T[]; rowCount: number | null }> {
@@ -62,12 +58,12 @@ class FakeMigrationClient implements TypedQueryClient {
   }
 }
 
-describe('vendored cloud storage kit surface', () => {
+describe('vendored server storage kit surface', () => {
   test('exposes a stamped kit version', () => {
     expect(KIT_VERSION).toMatch(/^\d+\.\d+\.\d+/);
   });
 
-  test('restores the dropped single-row get() helper', async () => {
+  test('restores the single-row get() helper', async () => {
     const populated = wrapExecutor(new FakeExecutor([{ id: 'a' }, { id: 'b' }]));
     expect(await populated.get<{ id: string }>('SELECT ...')).toEqual({ id: 'a' });
 
@@ -82,31 +78,27 @@ describe('vendored cloud storage kit surface', () => {
     await expect(empty.one('SELECT ...')).rejects.toThrow('exactly one row');
   });
 
-  test('resolves the canonical HASNA_KNOWLEDGE_* env contract', () => {
-    const keys = storageEnvKeys('knowledge');
-    expect(keys.modeKeys[0]).toBe('HASNA_KNOWLEDGE_STORAGE_MODE');
+  test('resolves the canonical server database URL contract', () => {
+    const keys = serverDataBackendEnvKeys('knowledge');
     expect(keys.databaseUrlKeys[0]).toBe('HASNA_KNOWLEDGE_DATABASE_URL');
-
-    expect(resolveStorageMode('knowledge', {}).mode).toBe('sqlite');
-    expect(
-      resolveStorageMode('knowledge', {
-        HASNA_KNOWLEDGE_STORAGE_MODE: 'postgres',
-        HASNA_KNOWLEDGE_DATABASE_URL: 'postgres://x/y',
-      }).mode,
-    ).toBe('postgres');
-    expect(resolveStorageMode('knowledge', { HASNA_KNOWLEDGE_DATABASE_URL: 'postgres://x/y' }).mode).toBe(
-      'postgres',
-    );
+    expect(resolveServerDataBackend('knowledge', {}).backend).toBe('sqlite');
+    expect(resolveServerDataBackend('knowledge', {
+      HASNA_KNOWLEDGE_DATABASE_URL: 'postgres://x/y',
+    }).backend).toBe('postgresql');
   });
 
   test('maps sslmode according to the generated TLS contract', () => {
     const env = {};
     expect(resolveTlsConfig('postgres://user:pass@example.test/db', { env })).toBeUndefined();
-    expect(resolveTlsConfig('postgres://user:pass@example.test/db?sslmode=disable', { env })).toBeUndefined();
-    expect(resolveTlsConfig('postgres://user:pass@example.test/db?sslmode=prefer', { env })).toBeUndefined();
-    expect(resolveTlsConfig('postgres://user:pass@example.test/db?sslmode=allow', { env })).toBeUndefined();
+    expect(resolveTlsConfig('postgres://user:pass@example.test/db?sslmode=disable', { env })).toBe(false);
+    expect(resolveTlsConfig('postgres://user:pass@example.test/db?sslmode=prefer', { env })).toEqual({
+      rejectUnauthorized: true,
+    });
+    expect(resolveTlsConfig('postgres://user:pass@example.test/db?sslmode=allow', { env })).toEqual({
+      rejectUnauthorized: true,
+    });
     expect(resolveTlsConfig('postgres://user:pass@example.test/db?sslmode=require', { env })).toEqual({
-      rejectUnauthorized: false,
+      rejectUnauthorized: true,
     });
     expect(() => resolveTlsConfig('postgres://user:pass@example.test/db?sslmode=verify-full', { env })).toThrow(
       'requires a CA bundle',
@@ -129,33 +121,17 @@ describe('vendored cloud storage kit surface', () => {
     ]);
   });
 
-  test('normalizes backend spellings and rejects removed placement aliases', () => {
-    expect(normalizeStorageMode('sqlite').mode).toBe('sqlite');
-    expect(normalizeStorageMode('postgres').mode).toBe('postgres');
-    expect(normalizeStorageMode('postgresql').mode).toBe('postgres');
-    expect(() => normalizeStorageMode('remote')).toThrow(/runtime-placement axis was removed/);
-    expect(() => normalizeStorageMode('hybrid')).toThrow(/runtime-placement axis was removed/);
-    expect(() => normalizeStorageMode('self_hosted')).toThrow(/runtime-placement axis was removed/);
-    expect(() => normalizeStorageMode('local')).toThrow(/runtime-placement axis was removed/);
+  test('retired server selector is a fail-loud ratchet', () => {
+    expect(() => assertNoLegacyStorageMode('knowledge', {
+      HASNA_KNOWLEDGE_STORAGE_MODE: '',
+    })).toThrow(/HASNA_KNOWLEDGE_STORAGE_MODE.*HASNA_KNOWLEDGE_DATABASE_URL/s);
   });
 
-  test('createKnowledgeCloudClient refuses non-postgres mode without leaking the URL', () => {
-    const priorMode = process.env.HASNA_KNOWLEDGE_STORAGE_MODE;
-    const priorUrl = process.env.HASNA_KNOWLEDGE_DATABASE_URL;
-    try {
-      process.env.HASNA_KNOWLEDGE_STORAGE_MODE = 'sqlite';
-      process.env.HASNA_KNOWLEDGE_DATABASE_URL = 'postgres://secret:secret@host/db';
-      expect(() => createKnowledgeCloudClient()).toThrow(/storage mode 'postgres'/);
-      try {
-        createKnowledgeCloudClient();
-      } catch (error) {
-        expect(String(error)).not.toContain('secret');
-      }
-    } finally {
-      if (priorMode === undefined) delete process.env.HASNA_KNOWLEDGE_STORAGE_MODE;
-      else process.env.HASNA_KNOWLEDGE_STORAGE_MODE = priorMode;
-      if (priorUrl === undefined) delete process.env.HASNA_KNOWLEDGE_DATABASE_URL;
-      else process.env.HASNA_KNOWLEDGE_DATABASE_URL = priorUrl;
-    }
+  test('createKnowledgeDatabaseClient requires only the canonical database URL', () => {
+    const client = createKnowledgeDatabaseClient({
+      HASNA_KNOWLEDGE_DATABASE_URL: 'postgres://user:redacted@example.test/db?sslmode=disable',
+    });
+    expect(client).toBeDefined();
+    expect(() => createKnowledgeDatabaseClient({})).toThrow(/HASNA_KNOWLEDGE_DATABASE_URL/);
   });
 });

@@ -28,10 +28,9 @@ The hosted wrapper owns:
   storage, web UI, billing, rate limits, moderation, observability, and admin
   operations.
 
-Local mode must not require hosted identity, billing, queue workers, or hosted
-object storage. Hosted mode is an explicit remote boundary selected through
-`knowledge setup --mode hosted` plus `KNOWLEDGE_API_URL` and
-`KNOWLEDGE_API_KEY`.
+On-box use must not require hosted identity, billing, queue workers, or hosted
+object storage. The HTTP boundary is selected through
+`HASNA_KNOWLEDGE_API_URL` plus `HASNA_KNOWLEDGE_API_KEY`.
 
 ## Identity And Access
 

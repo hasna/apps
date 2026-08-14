@@ -3,8 +3,6 @@ import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { Database } from 'bun:sqlite';
-import { DEFAULT_KNOWLEDGE_API_URL, normalizeKnowledgeApiOrigin } from './auth';
-import { KNOWLEDGE_REGISTRY_CONTRACT_VERSION } from './registry-contract';
 import type { KnowledgeConfig, KnowledgeWorkspace } from './workspace';
 import { HASNA_KNOWLEDGE_APP_PATH, EXAMPLE_KNOWLEDGE_CANONICAL } from './workspace';
 
@@ -16,7 +14,6 @@ export interface StorageArtifactClass {
 
 export interface StorageContract {
   scope: string;
-  mode: KnowledgeConfig['mode'];
   storage_type: KnowledgeConfig['storage']['type'];
   workspace_home: string;
   local_layout: {
@@ -80,15 +77,6 @@ export interface StorageContract {
       reason: string;
       authority_required: true;
     };
-  };
-  hosted: {
-    enabled: boolean;
-    api_url: string;
-    api_url_env: 'KNOWLEDGE_API_URL';
-    api_key_env: 'KNOWLEDGE_API_KEY';
-    auth_storage: '~/.hasna/knowledge/auth.json';
-    registry_contract_version: typeof KNOWLEDGE_REGISTRY_CONTRACT_VERSION;
-    requires_hosted_account_for_local_use: false;
   };
   source_ownership: {
     owner: 'open-files';
@@ -217,7 +205,6 @@ export function resolveStorageContract(
 
   return {
     scope,
-    mode: config.mode,
     storage_type: config.storage.type,
     workspace_home: workspace.home,
     local_layout: {
@@ -275,24 +262,14 @@ export function resolveStorageContract(
       },
       evidence_doc: EXAMPLE_KNOWLEDGE_CANONICAL.evidence_doc,
     },
-    hosted: {
-      enabled: config.mode === 'hosted',
-      api_url: normalizeKnowledgeApiOrigin(config.hosted?.api_url ?? DEFAULT_KNOWLEDGE_API_URL),
-      api_url_env: 'KNOWLEDGE_API_URL',
-      api_key_env: 'KNOWLEDGE_API_KEY',
-      auth_storage: '~/.hasna/knowledge/auth.json',
-      registry_contract_version: KNOWLEDGE_REGISTRY_CONTRACT_VERSION,
-      requires_hosted_account_for_local_use: false,
-    },
     secret_handling: {
       workspace_env_files_supported: false,
       forbidden_workspace_files: FORBIDDEN_WORKSPACE_FILES,
       forbidden_workspace_files_present: forbiddenWorkspaceFilesPresent(workspace),
       runtime_env_keys: [
-        'HASNA_KNOWLEDGE_STORAGE_MODE',
-        'KNOWLEDGE_STORAGE_MODE',
+        'HASNA_KNOWLEDGE_API_URL',
+        'HASNA_KNOWLEDGE_API_KEY',
         'HASNA_KNOWLEDGE_DATABASE_URL',
-        'KNOWLEDGE_DATABASE_URL',
       ],
       secret_ref_authority: 'open-secrets',
       approved_secret_refs: {
@@ -381,7 +358,6 @@ export function validateStorageConfig(config: KnowledgeConfig, workspace: Knowle
   if (config.storage.type === 's3') {
     if (!config.storage.s3?.bucket) errors.push('storage.s3.bucket is required when storage.type is s3.');
     if (!config.storage.s3?.prefix) warnings.push('storage.s3.prefix is empty; generated knowledge artifacts will be written at the bucket root.');
-    if (config.mode === 'local') warnings.push('storage.type is s3 while mode is local; this is valid for BYO S3, but hosted wrappers should set mode to hosted.');
   }
 
   if (config.storage.type === 'local' && config.storage.s3) {
@@ -394,14 +370,6 @@ export function validateStorageConfig(config: KnowledgeConfig, workspace: Knowle
 
   if (!config.sources.allowed_schemes.includes('open-files')) {
     errors.push('sources.allowed_schemes must include open-files.');
-  }
-
-  if (config.mode === 'hosted' && config.hosted?.api_url) {
-    try {
-      normalizeKnowledgeApiOrigin(config.hosted.api_url);
-    } catch {
-      errors.push('hosted.api_url must be an http(s) URL when mode is hosted.');
-    }
   }
 
   return {

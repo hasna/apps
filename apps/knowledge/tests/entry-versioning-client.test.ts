@@ -21,7 +21,7 @@ import { join } from 'node:path';
 import { ApiKeyStore, mintApiKey, verifyApiKey } from '@hasna/contracts/auth';
 import type { PGlite } from '@electric-sql/pglite';
 import { createServeHandler } from '../src/serve';
-import { KnowledgeVersionConflictError } from '../src/cloud-store';
+import { KnowledgeVersionConflictError } from '../src/http-store';
 import { resolveItemStore, VersionHistoryUnsupportedError, type ItemStore } from '../src/item-store';
 import { createMigratedPglite } from './fixtures/pglite-client';
 import { budget } from './support/budget';
@@ -42,7 +42,6 @@ beforeAll(async () => {
 
   cloudEnv = {
     HOME: mkdtempSync(join(tmpdir(), 'ok-versions-home-')),
-    HASNA_KNOWLEDGE_STORAGE_MODE: 'postgres',
     HASNA_KNOWLEDGE_API_URL: `http://127.0.0.1:${server.port}`,
     HASNA_KNOWLEDGE_API_KEY: mintApiKey({
       app: 'knowledge',
@@ -58,19 +57,19 @@ afterAll(async () => {
   await db?.close().catch(() => {});
 });
 
-function cloudStore(): ItemStore {
+function httpStore(): ItemStore {
   return resolveItemStore({ storePath: join(tmpdir(), 'never-used-db.json'), storePathOverridden: false, env: cloudEnv });
 }
 
 describe('ItemStore (api transport) — versioning over real HTTP', () => {
   test('resolves to the api transport and reports that it keeps history', () => {
-    const store = cloudStore();
+    const store = httpStore();
     expect(store.kind).toBe('api');
     expect(store.supportsVersions).toBe(true);
   });
 
   test('history round-trips: prior bodies come back through the HTTP surface', async () => {
-    const store = cloudStore();
+    const store = httpStore();
     const created = await store.create({ title: 'Round trip', content: 'body v1' });
     await store.update(created.id, { content: 'body v2' });
     await store.update(created.id, { content: 'body v3' });
@@ -89,7 +88,7 @@ describe('ItemStore (api transport) — versioning over real HTTP', () => {
   });
 
   test('an entry that exists but was never edited returns an EMPTY history, not null', async () => {
-    const store = cloudStore();
+    const store = httpStore();
     const created = await store.create({ title: 'Untouched', content: 'only body' });
     const history = await store.listVersions(created.id);
     expect(history).not.toBeNull();
@@ -98,11 +97,11 @@ describe('ItemStore (api transport) — versioning over real HTTP', () => {
   });
 
   test('an absent entry returns null — the two answers stay distinguishable', async () => {
-    expect(await cloudStore().listVersions('k_definitely_absent')).toBeNull();
+    expect(await httpStore().listVersions('k_definitely_absent')).toBeNull();
   });
 
   test('a stale expectedVersion raises a typed conflict carrying both numbers', async () => {
-    const store = cloudStore();
+    const store = httpStore();
     const created = await store.create({ title: 'Contended', content: 'shared' });
     await store.update(created.id, { content: 'winner' }, { expectedVersion: created.version });
 
@@ -124,7 +123,7 @@ describe('ItemStore (api transport) — versioning over real HTTP', () => {
   test('a fresh expectedVersion is accepted, so the guard is not simply always-on', async () => {
     // Positive control for the test above: same code path, same store, a
     // current version instead of a stale one, and the write lands.
-    const store = cloudStore();
+    const store = httpStore();
     const created = await store.create({ title: 'Uncontended', content: 'a' });
     const updated = await store.update(created.id, { content: 'b' }, { expectedVersion: created.version });
     expect(updated!.version).toBe(2);
@@ -164,7 +163,7 @@ async function runCli(args: string[], extraEnv: Record<string, string> = {}) {
 
 describe('knowledge versions / diff — CLI against the live server', () => {
   test('versions and diff report a real edit end to end', async () => {
-    const store = cloudStore();
+    const store = httpStore();
     const created = await store.create({ title: 'CLI subject', content: 'line one\nline two', tags: ['x'] });
     await store.update(created.id, { content: 'line one\nline two changed', tags: ['x', 'y'] });
 
@@ -203,7 +202,7 @@ describe('knowledge versions / diff — CLI against the live server', () => {
   }, budget(60_000));
 
   test('an entry with no edits prints an empty history at exit 0, and diff refuses at exit 1', async () => {
-    const created = await cloudStore().create({ title: 'Never edited', content: 'only' });
+    const created = await httpStore().create({ title: 'Never edited', content: 'only' });
     const cliEnv = cloudEnv as Record<string, string>;
 
     const versions = await runCli(['versions', '--id', created.id, '--json'], cliEnv);
@@ -222,7 +221,7 @@ describe('knowledge versions / diff — CLI against the live server', () => {
     // retained versions than that reports them in `total` and can never return
     // them — a retrieval hole, not a display one. Proven here at limit 1 so the
     // assertion needs three edits rather than two hundred.
-    const store = cloudStore();
+    const store = httpStore();
     const created = await store.create({ title: 'Paged', content: 'v1' });
     await store.update(created.id, { content: 'v2' });
     await store.update(created.id, { content: 'v3' });
@@ -293,7 +292,7 @@ describe('ItemStore (local transport) — a store with no history says so', () =
       message = (error as Error).message;
     }
     expect(message).toContain('db.json');
-    expect(message).toContain('HASNA_KNOWLEDGE_STORAGE_MODE=postgres');
+    expect(message).toContain('HASNA_KNOWLEDGE_API_URL');
   });
 });
 
@@ -316,7 +315,7 @@ describe('ItemStore (local transport) — a store with no history says so', () =
 
 describe('knowledge update --if-version — caller-supplied concurrency guard', () => {
   test('a writer holding a stale read is REFUSED instead of silently clobbering', async () => {
-    const store = cloudStore();
+    const store = httpStore();
     const created = await store.create({ title: 'Contended entry', content: 'BASE-LINE-ZERO' });
     const cliEnv = cloudEnv as Record<string, string>;
 
@@ -354,7 +353,7 @@ describe('knowledge update --if-version — caller-supplied concurrency guard', 
   test('a matching --if-version is accepted, so the guard is not simply always-on', async () => {
     // Positive control for the test above: same flag, same path, a current
     // version instead of a stale one, and the write must land.
-    const store = cloudStore();
+    const store = httpStore();
     const created = await store.create({ title: 'Uncontended entry', content: 'first' });
     const cliEnv = cloudEnv as Record<string, string>;
 
@@ -372,7 +371,7 @@ describe('knowledge update --if-version — caller-supplied concurrency guard', 
   test('OMITTING --if-version leaves existing callers working exactly as before', async () => {
     // Back-compat is the reason the flag is opt-in. Many installed callers pass
     // nothing, and this asserts they are not broken by the addition.
-    const store = cloudStore();
+    const store = httpStore();
     const created = await store.create({ title: 'Unguarded entry', content: 'first' });
     const cliEnv = cloudEnv as Record<string, string>;
 
@@ -385,7 +384,7 @@ describe('knowledge update --if-version — caller-supplied concurrency guard', 
   }, budget(60_000));
 
   test('a non-numeric --if-version is rejected before anything is written', async () => {
-    const store = cloudStore();
+    const store = httpStore();
     const created = await store.create({ title: 'Bad guard', content: 'untouched' });
     const cliEnv = cloudEnv as Record<string, string>;
 
