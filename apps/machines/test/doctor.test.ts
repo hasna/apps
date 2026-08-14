@@ -116,7 +116,7 @@ describe("doctor", () => {
       "notifications-path",
       "bun",
       "machines-cli",
-      "machines-agent-cli",
+      "machines-daemon-cli",
       "machines-mcp-cli",
       "ssh",
       "sudo-noninteractive",

@@ -89,8 +89,8 @@ interface ResolvedDaemonServiceOptions {
   warnings: string[];
 }
 
-const DEFAULT_SERVICE_NAME = "machines-agent";
-const DEFAULT_EXECUTABLE = "/usr/local/bin/machines-agent";
+const DEFAULT_SERVICE_NAME = "machines-daemon";
+const DEFAULT_EXECUTABLE = "/usr/local/bin/machines-daemon";
 const DEFAULT_INTERVAL_MS = 30000;
 const ENV_NAME_PATTERN = /^[A-Z_][A-Z0-9_]*$/;
 const SERVICE_NAME_PATTERN = /^[A-Za-z0-9_.-]+$/;
@@ -356,7 +356,7 @@ function buildServiceFile(options: ResolvedDaemonServiceOptions): DaemonServiceF
   if (options.platform === "macos") {
     return {
       id: "launchd-plist",
-      description: "launchd property list for machines-agent",
+      description: "launchd property list for machines-daemon",
       path: launchdPlistPath(options),
       mode: "0644",
       content: launchdPlist(options),
@@ -364,7 +364,7 @@ function buildServiceFile(options: ResolvedDaemonServiceOptions): DaemonServiceF
   }
   return {
     id: "systemd-unit",
-    description: "systemd unit for machines-agent",
+    description: "systemd unit for machines-daemon",
     path: systemdUnitPath(options),
     mode: "0644",
     content: systemdUnit(options),
@@ -409,7 +409,7 @@ function buildLaunchdCommands(options: ResolvedDaemonServiceOptions): DaemonServ
   return [
     command(
       "launchd-logs",
-      "Stream logs for machines-agent.",
+      "Stream logs for machines-daemon.",
       "log",
       ["stream", "--style", "compact", "--predicate", `process == "${basename(options.executable)}" OR eventMessage CONTAINS "${options.serviceId}"`],
       false,

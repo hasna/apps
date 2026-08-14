@@ -6,7 +6,7 @@ Machine fleet management for developers — provision, sync, inspect, and operat
 
 - `machines`: Commander-based CLI for manifest, setup, sync, inspection, and dashboard commands
 - `machines-mcp`: MCP server exposing fleet tools to AI agents
-- `machines-agent`: lightweight local daemon for heartbeats and runtime reporting
+- `machines-daemon`: lightweight local daemon for heartbeats and runtime reporting
 
 ## HTTP mode
 
@@ -742,15 +742,15 @@ non-verified TLS.
 
 ## Fleet daemon
 
-`machines-agent` can run as a managed heartbeat daemon. The daemon writes local
+`machines-daemon` can run as a managed heartbeat daemon. The daemon writes local
 SQLite heartbeat rows and can optionally push those rows to PostgreSQL storage
 for cross-network fleet dashboards.
 
 ```bash
-machines-agent --once --json
-machines-agent --interval-ms 30000
-HASNA_MACHINES_DATABASE_URL=postgres://... machines-agent --storage-push --interval-ms 30000
-machines-agent --doctor-summary --once --json
+machines-daemon --once --json
+machines-daemon --interval-ms 30000
+HASNA_MACHINES_DATABASE_URL=postgres://... machines-daemon --storage-push --interval-ms 30000
+machines-daemon --doctor-summary --once --json
 ```
 
 For a simple phase-one fleet without PostgreSQL storage, the primary machine can
@@ -762,7 +762,7 @@ machines heartbeat collect --machine spark02 --machine machine001 --json
 machines heartbeat collector-command --machine spark01 --machine spark02
 ```
 
-This runs `machines-agent --once` on each target using the normal route
+This runs `machines-daemon --once` on each target using the normal route
 resolver. It does not install or start persistent services. `machines topology`
 treats stale `online` heartbeat rows as offline, so a one-time import is not
 allowed to look live forever. If a target reports a stable local hostname

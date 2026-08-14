@@ -878,8 +878,8 @@ const eventsCommand = program.command("events").description("Emit, list, and rep
 const runtimeCommand = program.command("runtime").description("Watch runtime conditions and emit shared events");
 const clipboardCommand = program.command("clipboard").description("Real-time clipboard sync across fleet machines");
 const installClaudeCommand = program.command("install-claude").description("Install or inspect Claude, Codex, and Gemini CLIs");
-const daemonCommand = program.command("daemon").description("Install and inspect the machines-agent fleet daemon service");
-const heartbeatCommand = program.command("heartbeat").description("Collect and inspect machines-agent heartbeat rows");
+const daemonCommand = program.command("daemon").description("Install and inspect the machines-daemon fleet daemon service");
+const heartbeatCommand = program.command("heartbeat").description("Collect and inspect machines-daemon heartbeat rows");
 const projectsCommand = program.command("projects").description("Expose machine/project assignments for @hasna/projects");
 const notesCommand = program.command("notes").description("Expose note ownership, provenance, and per-machine trash contracts");
 const browserPlanCommand = program.command("browserplan").description("Expose BrowserPlan fleet contracts for open-chrome");
@@ -1337,8 +1337,8 @@ function addDaemonLifecycleCommand(action: DaemonServiceAction, description: str
     .description(description)
     .option("--platform <platform>", "Service platform to plan for (macos, linux)")
     .option("--mode <mode>", "Service mode (user, system)", "user")
-    .option("--service-name <name>", "Service name/label", "machines-agent")
-    .option("--executable <path>", "Absolute machines-agent executable path")
+    .option("--service-name <name>", "Service name/label", "machines-daemon")
+    .option("--executable <path>", "Absolute machines-daemon executable path")
     .option("--interval-ms <ms>", "Heartbeat interval in milliseconds")
     .option("--storage-push", "Configure daemon to push heartbeat rows to storage", false)
     .option("--doctor-summary", "Configure daemon to include lightweight doctor summaries", false)
@@ -1377,9 +1377,9 @@ function addDaemonLifecycleCommand(action: DaemonServiceAction, description: str
     });
 }
 
-addDaemonLifecycleCommand("install", "Plan or install the machines-agent daemon service");
-addDaemonLifecycleCommand("uninstall", "Plan or uninstall the machines-agent daemon service");
-addDaemonLifecycleCommand("restart", "Plan or restart the machines-agent daemon service");
+addDaemonLifecycleCommand("install", "Plan or install the machines-daemon daemon service");
+addDaemonLifecycleCommand("uninstall", "Plan or uninstall the machines-daemon daemon service");
+addDaemonLifecycleCommand("restart", "Plan or restart the machines-daemon daemon service");
 addDaemonLifecycleCommand("status", "Plan a daemon service status command");
 addDaemonLifecycleCommand("logs", "Plan a daemon service log command");
 
@@ -1401,7 +1401,7 @@ heartbeatCommand
 
 heartbeatCommand
   .command("collect")
-  .description("Run one-shot machines-agent heartbeats over machine routes and import public rows locally")
+  .description("Run one-shot machines-daemon heartbeats over machine routes and import public rows locally")
   .option("--machine <id...>", "Machine identifier to collect; repeat for multiple machines", collectOptionValues, [])
   .option("--timeout-ms <ms>", "Per-machine command timeout in milliseconds")
   .option("--no-doctor-summary", "Skip doctor summary collection even when the remote agent supports it")

@@ -7,6 +7,7 @@
 import { getDb } from "../db.js";
 import { resolveCloudStorage } from "./resolve.js";
 import type { HasnaStorageClient } from "./storage.js";
+import { HasnaHttpError } from "./transport.js";
 
 export interface MachineRecord {
   id: string;
@@ -68,7 +69,17 @@ class CloudMachineRegistryStore implements MachineRegistryStore {
   }
 
   async get(id: string): Promise<MachineRecord | null> {
-    return (await this.client.get<MachineRecord>(RESOURCE, id)) ?? null;
+    try {
+      return (await this.client.get<MachineRecord>(RESOURCE, id)) ?? null;
+    } catch (error) {
+      // @hasna/contracts 0.10.6 bundles a second HasnaHttpError class inside
+      // `client/storage`, so its own 404->null conversion never fires for
+      // transports built from `@hasna/contracts/client`. Match on the
+      // transport's class (re-exported here) so a missing entity reads as
+      // absent rather than crashing the caller.
+      if (error instanceof HasnaHttpError && error.status === 404) return null;
+      throw error;
+    }
   }
 
   async upsert(input: UpsertMachineInput): Promise<MachineRecord> {
