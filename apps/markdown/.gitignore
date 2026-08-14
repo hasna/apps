@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.connectors/
+*.db
+*.db-shm
+*.db-wal
+.env
+.secrets/
+.DS_Store
+OMP-APPROACHES-*.md
