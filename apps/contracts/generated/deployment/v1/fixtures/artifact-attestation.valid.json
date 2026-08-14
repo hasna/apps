@@ -1,0 +1,51 @@
+{
+  "artifact": {
+    "digest": "4aab79eca4eca7079eb990dbb8c31f94b5ea784fb34d0dd7619f307136ea2fcb",
+    "id": "artifact-example-app",
+    "schema": "hasna.build_artifact.v1"
+  },
+  "artifactDigest": "9f57aeb5d9ea4e151380cfb3889d40b5cdac9747dd85c89921237df22f7aa29b",
+  "createdAt": "2026-08-09T09:10:00.000Z",
+  "digest": "e8227f0a659ad3224a6f0c6c5d96e2fb41ea18000b14c09c060f33c1da45cd55",
+  "evidenceRefs": [
+    {
+      "id": "attestation-policy-result",
+      "kind": "test_result",
+      "sha256": "3a1bef67d71fd247cb5deca3e72af7972c2079b44262110743d92bd04b2700dd",
+      "summary": "Bounded evidence for attestation-policy-result",
+      "uri": "artifact://deployment-fixture/attestation-policy-result"
+    }
+  ],
+  "expiresAt": "2026-08-10T09:00:00.000Z",
+  "id": "attestation-example-app",
+  "issuer": {
+    "id": "agent-verifier",
+    "kind": "agent",
+    "name": "Independent Verifier"
+  },
+  "keyRef": {
+    "id": "signing-key-reference",
+    "kind": "integration",
+    "tags": [
+      "deployment-fixture"
+    ],
+    "uri": "integration://deployment-fixture/signing-key-reference"
+  },
+  "policyResult": "passed",
+  "policyRevision": 3,
+  "predicateKind": "slsa-provenance",
+  "predicateSchemaVersion": "v1.0",
+  "producer": {
+    "id": "agent-verifier",
+    "kind": "agent",
+    "name": "Independent Verifier"
+  },
+  "schema": "hasna.artifact_attestation.v1",
+  "signatureRef": {
+    "id": "attestation-signature",
+    "kind": "artifact",
+    "sha256": "588d4b8435249c69b44b89619956817e6928293a1d75d0db7408c8476805712f",
+    "summary": "Bounded evidence for attestation-signature",
+    "uri": "artifact://deployment-fixture/attestation-signature"
+  }
+}
