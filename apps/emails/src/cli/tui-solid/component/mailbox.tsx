@@ -29,7 +29,7 @@ function MessageRow(props: { message: ReturnType<typeof useEmails>["state"]["mes
       <box flexDirection="row" width="100%" columnGap={1} backgroundColor={rowBg()}>
         <box width={2} flexShrink={0}>
           <Show when={isImportantMessage(message())}>
-            <text fg={props.selected ? rowFg() : theme.warning}>■</text>
+            <text fg={props.selected ? rowFg() : theme.warning}>{message().is_priority ? "★" : "■"}</text>
           </Show>
         </box>
         <box width={props.columns.from} flexShrink={0}>
@@ -70,17 +70,22 @@ export function MailboxRoute() {
   const columns = (): MailboxColumns => {
     const width = contentWidth();
     const date = 10;
+    // A live search is a subject-first view: the query was matched against
+    // subject, sender and body, so the subject deserves the room the From/To
+    // pair would otherwise take. Only the search state does this — the plain
+    // mailbox layout (and its truncation) is unchanged.
+    const searching = emails.state.search !== "";
     if (!showTo()) {
       const targetFrom = width < 64 ? 20 : width < 82 ? 32 : width < 110 ? 40 : 48;
       const from = Math.max(16, Math.min(targetFrom, width - date - 17));
       return {
         from,
         to: 0,
-        subject: Math.max(14, width - from - date - 5),
+        subject: Math.max(searching ? 20 : 14, width - from - date - 5),
         date,
       };
     }
-    const minSubject = 14;
+    const minSubject = searching ? 22 : 14;
     const availableForAddresses = Math.max(34, width - date - minSubject - 6);
     const targetFrom = width < 76 ? 24 : width < 96 ? 28 : 36;
     const targetTo = width < 76 ? 24 : width < 96 ? 28 : 34;
@@ -89,7 +94,7 @@ export function MailboxRoute() {
     return {
       from,
       to,
-      subject: Math.max(14, width - from - to - date - 6),
+      subject: Math.max(minSubject, width - from - to - date - 6),
       date,
     };
   };
@@ -100,7 +105,7 @@ export function MailboxRoute() {
           <Button label={emails.state.sort === "newest" ? "Newest first" : "Oldest first"} onPress={() => emails.actions.cycleSort()} />
 	          <Button
 	            label="Filter"
-	            active={!!emails.state.search || !!emails.state.activeLabel || emails.state.mailbox !== "inbox" || emails.state.selectedSourceId !== "all"}
+	            active={!!emails.state.search || !!emails.state.activeLabel || !!emails.state.activeFilterId || emails.state.mailbox !== "inbox" || emails.state.selectedSourceId !== "all"}
 	            onPress={() => emails.actions.openDialog("filter")}
 	          />
           <Button
@@ -166,12 +171,18 @@ export function MailboxRoute() {
         <Button label="Previous page" onPress={() => emails.actions.page(-1)} />
         <Button label="Next page" active={emails.state.hasMore} onPress={() => emails.actions.page(1)} />
         <Button label="Open" onPress={() => emails.actions.openMessage()} />
-        <Button label="Label" onPress={() => emails.actions.openDialog("labels")} />
-        <Show when={emails.state.search}>
+	        <Button label="Label" onPress={() => emails.actions.openDialog("labels")} />
+	        <Button label="Save filter" active={!!emails.state.activeFilterId} onPress={() => emails.actions.openDialog("save-filter")} />
+      </box>
+      <box height={1} flexDirection="row" columnGap={1}>
+        <Show when={emails.state.search && !emails.state.activeFilterId}>
           <text fg={theme.textMuted}>Search: {emails.state.search}</text>
         </Show>
-        <Show when={emails.state.activeLabel}>
+        <Show when={emails.state.activeLabel && !emails.state.activeFilterId}>
           <text fg={theme.textMuted}>Label: {labelDisplayName(emails.state.activeLabel!)}</text>
+        </Show>
+        <Show when={emails.state.activeFilterId}>
+          <text fg={theme.primary}>Saved filter: {emails.state.savedFilters.find((item) => item.id === emails.state.activeFilterId)?.name ?? emails.state.activeFilterId}</text>
         </Show>
         <Show when={emails.state.groupMode !== "none"}>
           <text fg={theme.textMuted}>Group: {mailboxGroupModeLabel(emails.state.groupMode)}</text>

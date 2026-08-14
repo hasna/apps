@@ -1,0 +1,778 @@
+import { z } from "zod";
+import type { ZodRawShape } from "zod";
+import type { DispatchClientLike } from "../sdk/index.js";
+import { Store } from "../lib/store.js";
+import { Tmux } from "../lib/tmux.js";
+import { createRunner } from "../lib/runner.js";
+import { loadExecPolicy } from "../lib/exec-policy.js";
+import { inspectListedAgentTarget } from "../lib/agent-target.js";
+import { daemonStatus, stopDaemon } from "../daemon/control.js";
+import { startDaemon } from "../daemon/daemon.js";
+import { serviceAction } from "../daemon/service.js";
+import { summarizeBulk, summarizeRecord, summarizeSchedule } from "../cli/format.js";
+import { normalizeBackend } from "../lib/backend.js";
+import { Mosaic } from "../lib/mosaic.js";
+import { SELF_HEAL_MAX_DIRECT_INPUT_CHARS, diagnoseDispatchSelfHeal } from "../lib/self-heal.js";
+import { MAX_FLEET_MAX_PANE_CHARS, MAX_FLEET_SUMMARY_LIMIT, performFleetSummary } from "../lib/fleet-summary.js";
+import { DispatchApiClient } from "../lib/api-client.js";
+import type { DispatchRecord, ScheduledDispatch } from "../types.js";
+
+export interface ToolDeps {
+  client: DispatchClientLike;
+  store?: Store;
+  /** Build a Tmux for a machine (defaults to a real runner). */
+  makeTmux?: (machine?: string) => Promise<Tmux>;
+  /** Build a Mosaic controller for a machine (defaults to a real runner). */
+  makeMosaic?: (machine?: string) => Promise<Mosaic>;
+  /** Resolve the entry used to launch the daemon (defaults to the daemon bin). */
+  daemonEntry?: () => string;
+}
+
+export interface ToolDef {
+  /** Tool name as exposed over MCP (dispatch_<verb>). */
+  name: string;
+  /** The underlying verb, shared with the CLI for parity. */
+  verb: string;
+  title: string;
+  description: string;
+  inputSchema: ZodRawShape;
+  handler: (deps: ToolDeps, args: Record<string, unknown>) => Promise<unknown>;
+}
+
+async function tmuxFor(deps: ToolDeps, machine?: string): Promise<Tmux> {
+  if (deps.makeTmux) return deps.makeTmux(machine);
+  return new Tmux(await createRunner(machine));
+}
+
+function compactRecordResult(record: DispatchRecord, hint = "pass verbose:true for the full record") {
+  const summary = summarizeRecord(record);
+  return { id: summary.id, kind: summary.kind, status: summary.status, record: summary, compact: true, hint };
+}
+
+function compactScheduleResult(schedule: ScheduledDispatch, hint = "pass verbose:true for the full schedule") {
+  const summary = summarizeSchedule(schedule);
+  return { id: summary.id, kind: summary.kind, status: summary.status, schedule: summary, compact: true, hint };
+}
+
+function apiClient(deps: ToolDeps): DispatchApiClient | undefined {
+  return deps.client instanceof DispatchApiClient ? deps.client : undefined;
+}
+
+function requireStore(deps: ToolDeps): Store {
+  if (!deps.store) throw new Error("local daemon tools require a local dispatch store");
+  return deps.store;
+}
+
+async function mosaicFor(deps: ToolDeps, machine?: string): Promise<Mosaic> {
+  if (deps.makeMosaic) return deps.makeMosaic(machine);
+  return new Mosaic(await createRunner(machine));
+}
+
+export const TOOLS: ToolDef[] = [
+  {
+    name: "dispatch_send",
+    verb: "send",
+    title: "Dispatch a prompt",
+    description:
+      "Type a prompt into a dispatch target and reliably submit it. tmux is default; backend=mosaic uses native Mosaic prompt receipts.",
+    inputSchema: {
+      target: z.string().optional().describe("dispatch target, e.g. tmux session:window.pane or Mosaic session:pane_id"),
+      prompt: z.string().describe("the prompt text to deliver"),
+      backend: z.enum(["tmux", "mosaic"]).optional().describe("backend; defaults to DISPATCH_BACKEND or tmux"),
+      promptFile: z.string().optional().describe("original prompt file path; Mosaic can send files natively"),
+      machine: z.string().optional().describe("target machine id (local when omitted)"),
+      source: z.enum(["sessions-query"]).optional().describe("target source; sessions-query probes sessions live/status JSON"),
+      sessionsQuery: z.string().optional().describe("filter sessions-query target JSON by text"),
+      targets: z.array(z.object({ target: z.string(), machine: z.string().optional() })).optional(),
+      ifIdle: z.boolean().optional().describe("refuse delivery unless target looks idle"),
+      queue: z.boolean().optional().describe("allow active targets and rely on the agent queue"),
+      forceActive: z.boolean().optional().describe("explicitly override active/unknown target refusal"),
+      submitKey: z.enum(["Enter", "Tab"]).optional().describe("prompt submit key"),
+      dryRun: z.boolean().optional().describe("validate target/guards without typing"),
+      captureBeforeLines: z.number().optional().describe("capture redacted transcript lines before delivery"),
+      maxConcurrency: z.number().optional().describe("bulk max concurrent dispatches"),
+      jitterMs: z.number().optional().describe("bulk random delay before each dispatch"),
+      perMachineLimit: z.number().optional().describe("bulk max concurrent dispatches per machine"),
+      submit: z.boolean().optional().describe("press Enter to submit (default true)"),
+      confirm: z.boolean().optional().describe("verify delivery (default true)"),
+      delayMs: z.number().optional().describe("override the auto-computed pre-Enter delay"),
+      retries: z.number().optional().describe("max Enter retries if not confirmed; queued delivery is single-shot"),
+      mode: z.enum(["auto", "paste", "literal"]).optional().describe("delivery mode"),
+      goal: z.boolean().optional().describe("prefix prompt with /goal unless it already starts with /goal"),
+      verbose: z.boolean().optional().describe("return full records instead of compact summaries"),
+    },
+    handler: (deps, a) => {
+      if (a.source || a.targets) {
+        return deps.client.bulkSend({
+          source: a.source as never,
+          targets: a.targets as never,
+          sessionsQuery: a.sessionsQuery as string | undefined,
+          prompt: a.prompt as string,
+          promptFile: a.promptFile as string | undefined,
+          backend: normalizeBackend(a.backend as string | undefined),
+          goal: a.goal as boolean | undefined,
+          machine: a.machine as string | undefined,
+          submit: a.submit as boolean | undefined,
+          submitKey: a.submitKey as "Enter" | "Tab" | undefined,
+          confirm: a.confirm as boolean | undefined,
+          submitDelayMs: a.delayMs as number | undefined,
+          maxSubmitRetries: a.retries as number | undefined,
+          mode: a.mode as "auto" | "paste" | "literal" | undefined,
+          ifIdle: (a.ifIdle as boolean | undefined) ?? (a.queue !== true && a.forceActive !== true),
+          queue: a.queue as boolean | undefined,
+          forceActive: a.forceActive as boolean | undefined,
+          dryRun: a.dryRun as boolean | undefined,
+          captureBeforeLines: a.captureBeforeLines as number | undefined,
+          maxConcurrency: a.maxConcurrency as number | undefined,
+          jitterMs: a.jitterMs as number | undefined,
+          perMachineLimit: a.perMachineLimit as number | undefined,
+        }).then((result) => (a.verbose === true ? result : summarizeBulk(result)));
+      }
+      if (typeof a.target !== "string" || a.target.trim().length === 0) {
+        throw new Error("dispatch_send requires target, targets, or source=sessions-query");
+      }
+      return deps.client.send({
+        target: a.target as string,
+        prompt: a.prompt as string,
+        promptFile: a.promptFile as string | undefined,
+        backend: normalizeBackend(a.backend as string | undefined),
+        goal: a.goal as boolean | undefined,
+        machine: a.machine as string | undefined,
+        submitKey: a.submitKey as "Enter" | "Tab" | undefined,
+        ifIdle: a.ifIdle as boolean | undefined,
+        queue: a.queue as boolean | undefined,
+        forceActive: a.forceActive as boolean | undefined,
+        dryRun: a.dryRun as boolean | undefined,
+        captureBeforeLines: a.captureBeforeLines as number | undefined,
+        submit: a.submit as boolean | undefined,
+        confirm: a.confirm as boolean | undefined,
+        submitDelayMs: a.delayMs as number | undefined,
+        maxSubmitRetries: a.retries as number | undefined,
+        mode: a.mode as "auto" | "paste" | "literal" | undefined,
+      }).then((record) => (a.verbose === true ? record : compactRecordResult(record)));
+    },
+  },
+  {
+    name: "dispatch_key",
+    verb: "key",
+    title: "Dispatch a special key",
+    description:
+      "Send one allowlisted special key (Enter, Tab, Escape, arrows, Backspace/Delete, Home/End, PageUp/PageDown) to a recognized agent composer. Refuses shells and arbitrary node/bun panes.",
+    inputSchema: {
+      target: z.string().describe("tmux target, e.g. session:window or session:window.pane"),
+      key: z.string().describe("allowlisted special key name"),
+      machine: z.string().optional().describe("target machine id (local when omitted)"),
+      verbose: z.boolean().optional().describe("return the full record instead of a compact summary"),
+    },
+    handler: (deps, a) =>
+      deps.client.key({
+        target: a.target as string,
+        key: a.key as string,
+        machine: a.machine as string | undefined,
+      }).then((record) => (a.verbose === true ? record : compactRecordResult(record))),
+  },
+  {
+    name: "dispatch_capture",
+    verb: "capture",
+    title: "Capture a pane transcript",
+    description:
+      "Capture a bounded, redacted pane transcript locally or on a remote machine. Optionally run a provider-configured AI transform over tmux captures.",
+    inputSchema: {
+      target: z.string().describe("dispatch target, e.g. tmux session:window.pane or Mosaic session:pane_id"),
+      backend: z.enum(["tmux", "mosaic"]).optional().describe("backend; defaults to DISPATCH_BACKEND or tmux"),
+      machine: z.string().optional().describe("target machine id (local when omitted)"),
+      lines: z.number().optional().describe("recent line count (default 200, max 2000)"),
+      ai: z.boolean().optional().describe("run an AI transform"),
+      transform: z.enum(["summary", "blockers", "changes", "next-steps"]).optional(),
+      prompt: z.string().optional().describe("custom AI transform prompt"),
+      provider: z.enum(["groq", "cerebras", "openai", "none"]).optional(),
+      model: z.string().optional(),
+    },
+    handler: (deps, a) =>
+      deps.client.capture({
+        target: a.target as string,
+        backend: normalizeBackend(a.backend as string | undefined),
+        machine: a.machine as string | undefined,
+        lines: a.lines as number | undefined,
+        ai:
+          a.ai || a.transform || a.prompt
+            ? {
+                enabled: true,
+                transform: a.transform as never,
+                prompt: a.prompt as string | undefined,
+                provider: a.provider as never,
+                model: a.model as string | undefined,
+              }
+            : undefined,
+      }),
+  },
+  {
+    name: "dispatch_triage",
+    verb: "triage",
+    title: "Triage an agent target",
+    description:
+      "Classify a tmux agent target, capture a bounded redacted excerpt, and recommend a guarded recovery route. Compact deterministic schema by default.",
+    inputSchema: {
+      target: z.string().describe("tmux target, e.g. session:window or session:window.pane"),
+      machine: z.string().optional().describe("target machine id (local when omitted)"),
+      lines: z.number().optional().describe("recent line count to capture (default 200, max 2000)"),
+      excerptChars: z.number().optional().describe("max redacted transcript chars in output (default 1200, max 4000)"),
+      includeExcerpt: z.boolean().optional().describe("include the bounded excerpt (default true)"),
+      artifactPath: z.string().optional().describe("relative path under the dispatch artifacts directory for the full bounded redacted capture"),
+      queue: z.boolean().optional().describe("allow queued-delivery recovery recommendation for active queue-capable agents"),
+    },
+    handler: (deps, a) =>
+      deps.client.triage({
+        target: a.target as string,
+        machine: a.machine as string | undefined,
+        lines: a.lines as number | undefined,
+        excerptChars: a.excerptChars as number | undefined,
+        includeExcerpt: a.includeExcerpt as boolean | undefined,
+        artifactPath: a.artifactPath as string | undefined,
+        queue: a.queue as boolean | undefined,
+      }),
+  },
+  {
+    name: "dispatch_recover",
+    verb: "recover",
+    title: "Recover an agent target",
+    description:
+      "Plan or apply a guarded recovery prompt for a tmux agent target. Defaults to dry-run; set apply=true to route through dispatch_send safety checks.",
+    inputSchema: {
+      target: z.string().describe("tmux target, e.g. session:window or session:window.pane"),
+      prompt: z.string().describe("recovery prompt text"),
+      promptFile: z.string().optional().describe("original prompt file path for audit context"),
+      goal: z.boolean().optional().describe("prefix prompt with /goal unless it already starts with /goal"),
+      apply: z.boolean().optional().describe("apply the guarded recovery; default false returns only a dry-run plan"),
+      machine: z.string().optional().describe("target machine id (local when omitted)"),
+      lines: z.number().optional().describe("recent line count to capture (default 200, max 2000)"),
+      excerptChars: z.number().optional().describe("max redacted transcript chars in output (default 1200, max 4000)"),
+      includeExcerpt: z.boolean().optional().describe("include the bounded excerpt (default true)"),
+      artifactPath: z.string().optional().describe("relative path under the dispatch artifacts directory for the full bounded redacted capture"),
+      queue: z.boolean().optional().describe("allow queued-delivery recovery for active queue-capable agents"),
+      confirm: z.boolean().optional().describe("verify delivery when apply=true"),
+      delayMs: z.number().optional().describe("override the auto-computed pre-Enter delay"),
+      retries: z.number().optional().describe("max Enter retries if not confirmed"),
+      mode: z.enum(["auto", "paste", "literal"]).optional().describe("delivery mode"),
+    },
+    handler: (deps, a) =>
+      deps.client.recover({
+        target: a.target as string,
+        prompt: a.prompt as string,
+        promptFile: a.promptFile as string | undefined,
+        goal: a.goal as boolean | undefined,
+        apply: a.apply as boolean | undefined,
+        machine: a.machine as string | undefined,
+        lines: a.lines as number | undefined,
+        excerptChars: a.excerptChars as number | undefined,
+        includeExcerpt: a.includeExcerpt as boolean | undefined,
+        artifactPath: a.artifactPath as string | undefined,
+        queue: a.queue as boolean | undefined,
+        confirm: a.confirm as boolean | undefined,
+        submitDelayMs: a.delayMs as number | undefined,
+        maxSubmitRetries: a.retries as number | undefined,
+        mode: a.mode as "auto" | "paste" | "literal" | undefined,
+      }),
+  },
+  {
+    name: "dispatch_exec",
+    verb: "exec",
+    title: "Dispatch a shell command",
+    description:
+      "Validate a single-line shell command with the exec security filter, require a detected shell tmux target, then submit it safely via tmux paste-buffer + Enter. Supports dry-run and explicit force-interrupt.",
+    inputSchema: {
+      target: z.string().describe("tmux target, e.g. session:window or session:window.pane"),
+      command: z.string().describe("single-line shell command to deliver"),
+      machine: z.string().optional().describe("target machine id (local when omitted)"),
+      dryRun: z.boolean().optional().describe("validate and record without sending tmux input"),
+      forceInterrupt: z.boolean().optional().describe("send C-c before the command (default false)"),
+      policyFile: z.string().optional().describe("reviewed JSON exec policy file, equivalent to CLI --allow"),
+      verbose: z.boolean().optional().describe("return the full record instead of a compact summary"),
+    },
+    handler: (deps, a) =>
+      deps.client.exec({
+        target: a.target as string,
+        command: a.command as string,
+        machine: a.machine as string | undefined,
+        dryRun: a.dryRun as boolean | undefined,
+        forceInterrupt: a.forceInterrupt as boolean | undefined,
+        policy: a.policyFile ? loadExecPolicy(a.policyFile as string) : undefined,
+      }).then((record) => (a.verbose === true ? record : compactRecordResult(record))),
+  },
+  {
+    name: "dispatch_self_heal_diagnose",
+    verb: "self_heal_diagnose",
+    title: "Diagnose dispatch failure",
+    description:
+      "Read-only dispatch failure diagnosis. Redacts common credential shapes, classifies the failure, and recommends the next safe repair action without mutating repos, daemons, packages, or machines.",
+    inputSchema: {
+      target: z.string().max(SELF_HEAL_MAX_DIRECT_INPUT_CHARS).optional().describe("original dispatch target"),
+      machine: z.string().max(SELF_HEAL_MAX_DIRECT_INPUT_CHARS).optional().describe("original machine id"),
+      route: z.string().max(SELF_HEAL_MAX_DIRECT_INPUT_CHARS).optional().describe("short route/source description"),
+      errorText: z.string().max(SELF_HEAL_MAX_DIRECT_INPUT_CHARS).optional().describe("bounded failure text to classify"),
+      statusText: z.string().max(SELF_HEAL_MAX_DIRECT_INPUT_CHARS).optional().describe("bounded status JSON/text to classify"),
+      legacyHandoffAuthorized: z.boolean().optional().describe("true only when the user explicitly authorized legacy/emergency tmux paste handoff"),
+    },
+    handler: async (_deps, a) =>
+      diagnoseDispatchSelfHeal({
+        target: a.target as string | undefined,
+        machine: a.machine as string | undefined,
+        route: a.route as string | undefined,
+        errorText: a.errorText as string | undefined,
+        statusText: a.statusText as string | undefined,
+        legacyHandoffAuthorized: a.legacyHandoffAuthorized === true,
+      }),
+  },
+  {
+    name: "dispatch_status",
+    verb: "status",
+    title: "Get a dispatch",
+    description: "Look up a previously-recorded dispatch or scheduled dispatch/loop by id.",
+    inputSchema: {
+      id: z.string().describe("dispatch id"),
+      verbose: z.boolean().optional().describe("return the full stored object instead of a compact summary"),
+    },
+    handler: async (deps, a) => {
+      const rec = await deps.client.status(a.id as string);
+      if (rec) return a.verbose === true ? rec : { ...compactRecordResult(rec), resultKind: "dispatch" };
+      const sched = await deps.client.scheduleStatus(a.id as string);
+      if (sched) return a.verbose === true ? sched : { ...compactScheduleResult(sched), resultKind: "schedule" };
+      return { error: "not found", id: a.id };
+    },
+  },
+  {
+    name: "dispatch_show",
+    verb: "show",
+    title: "Show dispatch details",
+    description: "Show a dispatch/schedule/loop by id. Compact by default; pass verbose=true for the full stored object.",
+    inputSchema: {
+      id: z.string().describe("dispatch or schedule id"),
+      verbose: z.boolean().optional().describe("return the full stored object instead of compact details"),
+    },
+    handler: async (deps, a) => {
+      const rec = await deps.client.status(a.id as string);
+      if (rec) {
+        const summary = summarizeRecord(rec, { previewChars: 500 });
+        return a.verbose === true ? rec : { id: summary.id, kind: summary.kind, status: summary.status, resultKind: "dispatch", record: summary, compact: true, hint: "pass verbose:true for the full record including full prompt" };
+      }
+      const sched = await deps.client.scheduleStatus(a.id as string);
+      if (sched) {
+        const summary = summarizeSchedule(sched, { previewChars: 500 });
+        return a.verbose === true ? sched : { id: summary.id, kind: summary.kind, status: summary.status, resultKind: "schedule", schedule: summary, compact: true, hint: "pass verbose:true for the full schedule including full prompt" };
+      }
+      return { error: "not found", id: a.id };
+    },
+  },
+  {
+    name: "dispatch_list",
+    verb: "list",
+    title: "List dispatches",
+    description: "List recorded dispatches, newest first.",
+    inputSchema: {
+      status: z.string().optional().describe("filter by status"),
+      limit: z.number().optional().describe("max rows (default 20)"),
+      verbose: z.boolean().optional().describe("return full records instead of compact summaries"),
+    },
+    handler: async (deps, a) => {
+      const limit = (a.limit as number | undefined) ?? 20;
+      const rows = await deps.client.list({ status: a.status as never, limit: a.verbose === true ? limit : limit + 1 });
+      const shown = rows.slice(0, limit);
+      return a.verbose === true
+        ? rows
+        : { items: shown.map((row) => summarizeRecord(row)), count: shown.length, limit, hasMore: rows.length > limit, compact: true, hint: "pass verbose:true for full records" };
+    },
+  },
+  {
+    name: "dispatch_schedule",
+    verb: "schedule",
+    title: "Schedule a dispatch",
+    description: "Queue a dispatch to fire later: one-shot `at`/`in`, recurring `cron`, or interval `every`.",
+    inputSchema: {
+      target: z.string(),
+      prompt: z.string(),
+      backend: z.enum(["tmux", "mosaic"]).optional(),
+      promptFile: z.string().optional(),
+      machine: z.string().optional(),
+      goal: z.boolean().optional(),
+      name: z.string().optional(),
+      at: z.string().optional().describe("one-shot ISO 8601 time"),
+      in: z.string().optional().describe("one-shot relative delay, e.g. 30m or 5 minutes"),
+      cron: z.string().optional().describe("5-field cron expression"),
+      every: z.string().optional().describe("recurring interval, e.g. 5m or 1 hour"),
+      ifIdle: z.boolean().optional().describe("refuse delivery unless target looks idle when fired"),
+      queue: z.boolean().optional().describe("queue on active agents that prove queued-message support when fired"),
+      forceActive: z.boolean().optional().describe("explicitly override active/unknown target refusal when fired"),
+      verbose: z.boolean().optional().describe("return the full schedule instead of a compact summary"),
+    },
+    handler: async (deps, a) => {
+      const sched = await deps.client.schedule({
+        options: {
+          target: a.target as string,
+          prompt: a.prompt as string,
+          promptFile: a.promptFile as string | undefined,
+          backend: normalizeBackend(a.backend as string | undefined),
+          goal: a.goal as boolean | undefined,
+          machine: a.machine as string | undefined,
+          ifIdle: a.ifIdle as boolean | undefined,
+          queue: a.queue as boolean | undefined,
+          forceActive: a.forceActive as boolean | undefined,
+        },
+        name: a.name as string | undefined,
+        at: a.at as string | undefined,
+        in: a.in as string | undefined,
+        cron: a.cron as string | undefined,
+        every: a.every as string | undefined,
+      });
+      return a.verbose === true ? sched : compactScheduleResult(sched);
+    },
+  },
+  {
+    name: "dispatch_loop",
+    verb: "loop",
+    title: "Create a dispatch loop",
+    description: "Create a recurring interval dispatch loop such as every 5 minutes.",
+    inputSchema: {
+      target: z.string(),
+      prompt: z.string(),
+      every: z.string().describe("recurring interval, e.g. 5m or 1 hour"),
+      backend: z.enum(["tmux", "mosaic"]).optional(),
+      promptFile: z.string().optional(),
+      machine: z.string().optional(),
+      goal: z.boolean().optional(),
+      name: z.string().optional(),
+      ifIdle: z.boolean().optional(),
+      queue: z.boolean().optional(),
+      forceActive: z.boolean().optional(),
+      verbose: z.boolean().optional().describe("return the full loop instead of a compact summary"),
+    },
+    handler: async (deps, a) => {
+      const loop = await deps.client.loop({
+        options: {
+          target: a.target as string,
+          prompt: a.prompt as string,
+          promptFile: a.promptFile as string | undefined,
+          backend: normalizeBackend(a.backend as string | undefined),
+          goal: a.goal as boolean | undefined,
+          machine: a.machine as string | undefined,
+          ifIdle: a.ifIdle as boolean | undefined,
+          queue: a.queue as boolean | undefined,
+          forceActive: a.forceActive as boolean | undefined,
+        },
+        every: a.every as string,
+        name: a.name as string | undefined,
+      });
+      return a.verbose === true ? loop : compactScheduleResult(loop, "pass verbose:true for the full loop");
+    },
+  },
+  {
+    name: "dispatch_schedules",
+    verb: "schedules",
+    title: "List scheduled dispatches",
+    description: "List scheduled dispatches (optionally filter by status).",
+    inputSchema: {
+      status: z.enum(["scheduled", "paused", "fired", "cancelled", "failed"]).optional(),
+      kind: z.enum(["schedule", "loop"]).optional(),
+      limit: z.number().optional().describe("max rows (default 20)"),
+      verbose: z.boolean().optional().describe("return full schedules instead of compact summaries"),
+    },
+    handler: async (deps, a) => {
+      const limit = (a.limit as number | undefined) ?? 20;
+      const rows = await deps.client.listSchedules({ status: a.status as never, kind: a.kind as never, limit: a.verbose === true ? limit : limit + 1 });
+      const shown = rows.slice(0, limit);
+      return a.verbose === true
+        ? rows
+        : { items: shown.map((row) => summarizeSchedule(row)), count: shown.length, limit, hasMore: rows.length > limit, compact: true, hint: "pass verbose:true for full schedules" };
+    },
+  },
+  {
+    name: "dispatch_loops",
+    verb: "loops",
+    title: "List dispatch loops",
+    description: "List recurring interval dispatch loops.",
+    inputSchema: {
+      status: z.enum(["scheduled", "paused", "cancelled", "failed"]).optional(),
+      limit: z.number().optional().describe("max rows (default 20)"),
+      verbose: z.boolean().optional().describe("return full loops instead of compact summaries"),
+    },
+    handler: async (deps, a) => {
+      const limit = (a.limit as number | undefined) ?? 20;
+      const rows = await deps.client.listLoops({ status: a.status as never, limit: a.verbose === true ? limit : limit + 1 });
+      const shown = rows.slice(0, limit);
+      return a.verbose === true
+        ? rows
+        : { items: shown.map((row) => summarizeSchedule(row)), count: shown.length, limit, hasMore: rows.length > limit, compact: true, hint: "pass verbose:true for full loops" };
+    },
+  },
+  {
+    name: "dispatch_cancel",
+    verb: "cancel",
+    title: "Cancel a scheduled dispatch",
+    description: "Cancel a scheduled dispatch by id.",
+    inputSchema: { id: z.string() },
+    handler: async (deps, a) => ({ cancelled: await deps.client.cancelSchedule(a.id as string) }),
+  },
+  {
+    name: "dispatch_pause",
+    verb: "pause",
+    title: "Pause a scheduled dispatch or loop",
+    description: "Pause a scheduled dispatch or loop so it will not fire until resumed.",
+    inputSchema: { id: z.string() },
+    handler: async (deps, a) => ({ paused: await deps.client.pauseSchedule(a.id as string) }),
+  },
+  {
+    name: "dispatch_resume",
+    verb: "resume",
+    title: "Resume a scheduled dispatch or loop",
+    description: "Resume a paused scheduled dispatch or loop.",
+    inputSchema: { id: z.string() },
+    handler: async (deps, a) => ({ resumed: await deps.client.resumeSchedule(a.id as string) }),
+  },
+  {
+    name: "dispatch_clear",
+    verb: "clear",
+    title: "Clear a scheduled dispatch or loop",
+    description: "Delete a scheduled dispatch or loop from the store.",
+    inputSchema: { id: z.string() },
+    handler: async (deps, a) => ({ cleared: await deps.client.clearSchedule(a.id as string) }),
+  },
+  {
+    name: "dispatch_targets",
+    verb: "targets",
+    title: "List dispatch targets",
+    description: "Enumerate dispatchable tmux or Mosaic targets (panes) on a machine, so you can discover where to send.",
+    inputSchema: {
+      machine: z.string().optional(),
+      backend: z.enum(["tmux", "mosaic"]).optional(),
+      limit: z.number().optional().describe("max rows (default 50)"),
+      verbose: z.boolean().optional().describe("include full detection metadata"),
+      includeDetection: z.boolean().optional().describe("alias for verbose on tmux targets"),
+    },
+    handler: async (deps, a) => {
+      // Resolved before the branch so the authority is bounded by the same default
+      // as a local fleet capture; an unbounded remote request would dump the whole
+      // fleet for a caller that simply omitted `limit`.
+      const limit = (a.limit as number | undefined) ?? 50;
+      const fullDetection = a.verbose === true || a.includeDetection === true;
+      const api = apiClient(deps);
+      if (api) {
+        // One row beyond the bound, so truncation is measured rather than guessed;
+        // this mirrors dispatch_schedules/dispatch_loops. No `total` is reported:
+        // a truncated page cannot know the authority's full target count, and
+        // echoing the page length as a total would be a fabricated number.
+        const rows = await api.targets({
+          machine: a.machine as string | undefined,
+          backend: normalizeBackend(a.backend as string | undefined),
+          limit: limit + 1,
+          verbose: fullDetection,
+        });
+        const items = rows.slice(0, limit);
+        return {
+          items,
+          count: items.length,
+          limit,
+          hasMore: rows.length > limit,
+          compact: !fullDetection,
+          hint: "pass verbose:true for full target metadata",
+        };
+      }
+      const backend = normalizeBackend(a.backend as string | undefined);
+      if (backend === "mosaic") {
+        const targets = (await mosaicFor(deps, a.machine as string | undefined)).listTargets();
+        const items = targets.slice(0, limit);
+        return { items, count: items.length, total: targets.length, limit, compact: a.verbose !== true, hint: "pass verbose:true for full target metadata" };
+      }
+      const tmux = await tmuxFor(deps, a.machine as string | undefined);
+      const targets = tmux.listTargets();
+      const items = targets.slice(0, limit).map((target) => {
+        const detection = inspectListedAgentTarget(tmux, target.target, {
+          assumeExists: true,
+          paneCommand: target.paneCommand,
+          cwd: target.cwd,
+          panePid: target.panePid,
+        }).detection;
+        return fullDetection
+          ? { ...target, detection }
+          : {
+              target: target.target,
+              window: target.window,
+              active: target.active,
+              paneCommand: target.paneCommand,
+              agentKind: detection?.agentKind,
+              composerState: detection?.composerState,
+              canReceivePrompt: detection?.canReceivePrompt,
+              canQueuePrompt: detection?.canQueuePrompt,
+            };
+      });
+      return { items, count: items.length, total: targets.length, limit, compact: !fullDetection, hint: "pass verbose:true for full target detection metadata" };
+    },
+  },
+  {
+    name: "dispatch_fleet_summary",
+    verb: "fleet_summary",
+    title: "Summarize fleet state",
+    description:
+      "Build a bounded tmux target summary with pane classification, redacted excerpts, target globs, and optional AI provider preflight.",
+    inputSchema: {
+      machine: z.string().optional().describe("machine to inspect (local when omitted)"),
+      targets: z
+        .union([z.string(), z.array(z.string())])
+        .optional()
+        .describe("target glob(s) or comma-separated globs matched against target and machine/target"),
+      changedSince: z.string().optional().describe("duration threshold, e.g. 5m, for classifying visible active panes as stuck"),
+      changedSinceMs: z.number().int().positive().optional().describe("already-parsed changed-since threshold in milliseconds"),
+      maxPaneChars: z
+        .number()
+        .int()
+        .positive()
+        .max(MAX_FLEET_MAX_PANE_CHARS)
+        .optional()
+        .describe("max redacted excerpt characters per pane (default 1200, capped)"),
+      limit: z
+        .number()
+        .int()
+        .positive()
+        .max(MAX_FLEET_SUMMARY_LIMIT)
+        .optional()
+        .describe("max matched panes to inspect (default 50, capped)"),
+      preflightAi: z.boolean().optional().describe("fail before tmux probing unless an AI transform provider is configured"),
+      provider: z.enum(["groq", "cerebras", "openai", "none"]).optional().describe("AI provider for preflight"),
+      model: z.string().optional().describe("AI model override for preflight"),
+    },
+    handler: async (deps, a) => {
+      const options = {
+        machine: a.machine as string | undefined,
+        targets: a.targets as string | string[] | undefined,
+        changedSince: a.changedSince as string | undefined,
+        changedSinceMs: a.changedSinceMs as number | undefined,
+        maxPaneChars: a.maxPaneChars as number | undefined,
+        limit: a.limit as number | undefined,
+        preflightAi: a.preflightAi as boolean | undefined,
+        ai:
+          a.preflightAi || a.provider || a.model
+            ? {
+                enabled: true,
+                provider: a.provider as never,
+                model: a.model as string | undefined,
+              }
+            : undefined,
+      };
+      const api = apiClient(deps);
+      if (api) return api.fleetSummary(options);
+      return performFleetSummary(options, { tmux: await tmuxFor(deps, a.machine as string | undefined) });
+    },
+  },
+  {
+    name: "dispatch_daemon_start",
+    verb: "daemon_start",
+    title: "Start the daemon",
+    description: "Start the dispatch daemon (scheduled-dispatch queue) in the background.",
+    inputSchema: {},
+    handler: async (deps) => {
+      const api = apiClient(deps);
+      if (api) return api.daemonStart();
+      const entry = deps.daemonEntry ? deps.daemonEntry() : defaultDaemonEntry();
+      return startDaemon({ cliEntry: entry, args: [] });
+    },
+  },
+  {
+    name: "dispatch_daemon_stop",
+    verb: "daemon_stop",
+    title: "Stop the daemon",
+    description: "Stop the running dispatch daemon.",
+    inputSchema: {},
+    handler: async (deps) => apiClient(deps)?.daemonStop() ?? stopDaemon(),
+  },
+  {
+    name: "dispatch_daemon_ensure",
+    verb: "daemon_ensure",
+    title: "Ensure the daemon",
+    description: "Idempotently ensure the dispatch daemon is running; recover stale state.",
+    inputSchema: {},
+    handler: async (deps) => {
+      const api = apiClient(deps);
+      if (api) return api.daemonEnsure();
+      const store = requireStore(deps);
+      const before = daemonStatus(store);
+      if (before.health === "alive") return { ok: true, started: false, alreadyRunning: true, before, after: before };
+      if (before.running || before.stale) await stopDaemon();
+      const entry = deps.daemonEntry ? deps.daemonEntry() : defaultDaemonEntry();
+      const started = await startDaemon({ cliEntry: entry, args: [] });
+      const after = daemonStatus(store);
+      return { ok: after.running, started: started.started, alreadyRunning: started.alreadyRunning, before, after };
+    },
+  },
+  {
+    name: "dispatch_daemon_restart",
+    verb: "daemon_restart",
+    title: "Restart the daemon",
+    description: "Stop and restart the dispatch daemon.",
+    inputSchema: {},
+    handler: async (deps) => {
+      const api = apiClient(deps);
+      if (api) return api.daemonRestart();
+      const stopped = await stopDaemon();
+      const entry = deps.daemonEntry ? deps.daemonEntry() : defaultDaemonEntry();
+      const started = await startDaemon({ cliEntry: entry, args: [] });
+      return { ok: started.started || started.alreadyRunning, stopped, started };
+    },
+  },
+  {
+    name: "dispatch_daemon_status",
+    verb: "daemon_status",
+    title: "Daemon status",
+    description: "Report daemon + queue status (running, scheduled, fired, dispatch counts).",
+    inputSchema: {},
+    handler: async (deps) => apiClient(deps)?.daemonStatus() ?? daemonStatus(requireStore(deps)),
+  },
+  {
+    name: "dispatch_daemon_doctor",
+    verb: "daemon_doctor",
+    title: "Daemon doctor",
+    description: "Return lightweight daemon health diagnostics.",
+    inputSchema: {},
+    handler: async (deps) => {
+      const api = apiClient(deps);
+      if (api) return api.daemonDoctor();
+      const status = daemonStatus(requireStore(deps));
+      const findings: string[] = [];
+      if (status.health === "dead") findings.push("daemon is not running");
+      if (status.health === "stale") findings.push("daemon health is stale");
+      if (status.scheduled > 0 && status.health !== "alive") findings.push("scheduled items cannot fire until daemon is alive");
+      if (status.recentFailures.length > 0) findings.push("recent schedule/loop failures recorded");
+      return { ok: findings.length === 0, status, findings };
+    },
+  },
+  {
+    name: "dispatch_daemon_service",
+    verb: "daemon_service",
+    title: "Manage daemon service",
+    description: "Manage the user-level systemd service for the dispatch daemon.",
+    inputSchema: {
+      action: z.enum(["install", "start", "stop", "restart", "status", "uninstall"]),
+      start: z.boolean().optional(),
+    },
+    handler: async (deps, a) => {
+      const action = a.action as never;
+      const api = apiClient(deps);
+      if (api) return api.daemonService({ action, start: a.start === true });
+      return serviceAction(action, {
+        execPath: process.execPath,
+        cliEntry: deps.daemonEntry ? deps.daemonEntry() : defaultDaemonEntry(),
+        startAfterInstall: a.start === true,
+      });
+    },
+  },
+];
+
+/** Canonical verb set, shared with the CLI for parity checks. */
+export const VERBS = TOOLS.map((t) => t.verb);
+
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+/** Resolve the daemon entry next to this module (dev .ts / dist .js). */
+export function defaultDaemonEntry(): string {
+  const here = fileURLToPath(import.meta.url); // .../mcp/tools.(ts|js)
+  const ext = here.endsWith(".ts") ? ".ts" : ".js";
+  return join(dirname(dirname(here)), "daemon", `index${ext}`);
+}

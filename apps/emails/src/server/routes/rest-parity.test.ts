@@ -53,6 +53,10 @@ function postJson(path: string, body: unknown): RequestInit {
 beforeEach(() => {
   captureInheritedProcessEnv();
   process.env["EMAILS_DB_PATH"] = ":memory:";
+  // The ambient machine may point EMAILS_CLIENT_ENV_SECRET at a client env; the
+  // API routes under test configure the local database, so the pointer must not
+  // leak into store resolution (same convention as local-mail-data-source.test.ts).
+  delete process.env["EMAILS_CLIENT_ENV_SECRET"];
   resetDatabase();
 });
 
@@ -63,6 +67,142 @@ afterEach(() => {
 });
 
 describe("emails serve REST parity smoke", () => {
+  it("persists, applies, and removes saved filters without padding non-matches", async () => {
+    storeInboundEmail({
+      provider_id: null,
+      message_id: "<saved-filter-match@example.com>",
+      from_address: "sender@example.com",
+      to_addresses: ["ops@example.com"],
+      cc_addresses: [],
+      subject: "saved-filter needle",
+      text_body: "body",
+      html_body: null,
+      attachments: [],
+      headers: {},
+      raw_size: 1,
+      received_at: "2026-01-01T10:00:00.000Z",
+    });
+    storeInboundEmail({
+      provider_id: null,
+      message_id: "<saved-filter-non-match@example.com>",
+      from_address: "sender@example.com",
+      to_addresses: ["ops@example.com"],
+      cc_addresses: [],
+      subject: "saved-filter other",
+      text_body: "body",
+      html_body: null,
+      attachments: [],
+      headers: {},
+      raw_size: 1,
+      received_at: "2026-01-02T10:00:00.000Z",
+    });
+
+    const created = await json<{ id: string; name: string; normalized_name: string; criteria: { subject: string } }>(
+      "/api/mailbox-filters",
+      postJson("/api/mailbox-filters", { name: "  Saved_Filter  ", mailbox: "inbox", criteria: { subject: " NEEDLE " } }),
+    );
+    expect(created).toMatchObject({
+      name: "Saved_Filter",
+      normalized_name: "saved-filter",
+      criteria: { subject: "needle" },
+    });
+
+    const applied = await json<{ items: Array<{ subject: string }>; truncated: boolean }>(
+      `/api/mailbox-filters/${created.id}/apply?limit=10`,
+      { method: "POST" },
+    );
+    expect(applied.items.map((item) => item.subject)).toEqual(["saved-filter needle"]);
+    expect(applied.truncated).toBe(false);
+
+    const listed = await json<{ items: Array<{ id: string }> }>("/api/mailbox-filters");
+    expect(listed.items.map((item) => item.id)).toEqual([created.id]);
+
+    const removed = await call(`/api/mailbox-filters/${created.id}`, { method: "DELETE" });
+    expect(removed.status).toBe(200);
+    const missingDelete = await call(`/api/mailbox-filters/${created.id}`, { method: "DELETE" });
+    expect(missingDelete.status).toBe(404);
+    expect(await missingDelete.json()).toMatchObject({ code: "not_found" });
+    const missing = await call(`/api/mailbox-filters/${created.id}`);
+    expect(missing.status).toBe(404);
+    expect(await missing.json()).toMatchObject({ code: "not_found" });
+  });
+
+  it("replaces a saved filter wholesale on PUT and rejects a partial PUT", async () => {
+    const created = await json<{ id: string; name: string; criteria: { subject?: string; from?: string } }>(
+      "/api/mailbox-filters",
+      postJson("/api/mailbox-filters", { name: "replace-me", mailbox: "inbox", criteria: { subject: "needle", from: "sender@example.com" } }),
+    );
+
+    const replaced = await json<{ id: string; name: string; mailbox: string; criteria: { subject?: string; from?: string } }>(
+      `/api/mailbox-filters/${created.id}`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "replaced", mailbox: "sent", criteria: { from: "other@example.com" } }),
+      },
+    );
+    expect(replaced).toMatchObject({
+      id: created.id,
+      name: "replaced",
+      normalized_name: "replaced",
+      mailbox: "sent",
+      criteria: { from: "other@example.com" },
+    });
+    // PUT replaces, it does not merge: the old subject criterion is gone.
+    expect(replaced.criteria.subject).toBeUndefined();
+
+    const partial = await call(`/api/mailbox-filters/${created.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "partial" }),
+    });
+    expect(partial.status).toBe(400);
+    expect(await partial.json()).toMatchObject({ code: "invalid_input" });
+
+    const stored = await json<{ name: string; mailbox: string; criteria: { subject?: string; from?: string } }>(`/api/mailbox-filters/${created.id}`);
+    expect(stored.name).toBe("replaced");
+    expect(stored.mailbox).toBe("sent");
+    expect(stored.criteria).toEqual({ from: "other@example.com" });
+  });
+
+  it("rejects non-object JSON bodies on mailbox-filter writes with 400 invalid_input (self-hosted parity)", async () => {
+    const created = await json<{ id: string; name: string }>(
+      "/api/mailbox-filters",
+      postJson("/api/mailbox-filters", { name: "object-only", mailbox: "inbox", criteria: { subject: "x" } }),
+    );
+
+    // Primitive bodies used to TypeError into a 500 (PUT) or a silent no-op
+    // (PATCH); the self-hosted server rejects them with 400 invalid_input.
+    const stringPut = await call(`/api/mailbox-filters/${created.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify("a primitive body"),
+    });
+    expect(stringPut.status).toBe(400);
+    expect(await stringPut.json()).toMatchObject({ code: "invalid_input" });
+
+    const arrayPatch = await call(`/api/mailbox-filters/${created.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify([{ name: "x" }]),
+    });
+    expect(arrayPatch.status).toBe(400);
+    expect(await arrayPatch.json()).toMatchObject({ code: "invalid_input" });
+
+    const numberPost = await call("/api/mailbox-filters", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(42),
+    });
+    expect(numberPost.status).toBe(400);
+    expect(await numberPost.json()).toMatchObject({ code: "invalid_input" });
+
+    // None of the rejected writes landed: the stored filter is unchanged.
+    const stored = await json<{ name: string; criteria: { subject?: string } }>(`/api/mailbox-filters/${created.id}`);
+    expect(stored.name).toBe("object-only");
+    expect(stored.criteria).toEqual({ subject: "x" });
+  });
+
   it("serves mailbox/source surfaces with source-aware filtering and visible legacy mail", async () => {
     const primary = createProvider({ name: "Primary SES", type: "ses", active: true });
     const secondary = createProvider({ name: "Secondary Resend", type: "resend", active: true });
@@ -191,6 +331,32 @@ describe("emails serve REST parity smoke", () => {
     expect(digest).toMatchObject({ period: "today", provider: "local", status: "ok" });
     expect(digest.summary).toContain("1 inbound message");
     expect(digest.message_count).toBe(1);
+  });
+
+  it("serves priority sender rules through the dashboard API with normalized readback", async () => {
+    const created = await json<{ id: string; kind: string; value: string }>(
+      "/api/priority-sender-rules",
+      postJson("/api/priority-sender-rules", { kind: "ADDRESS", value: " Person@Example.COM " }),
+    );
+    expect(created).toMatchObject({ kind: "address", value: "person@example.com" });
+    expect(created.id).toBe("priority:address:person@example.com");
+
+    const duplicate = await json<{ id: string; kind: string; value: string }>(
+      "/api/priority-sender-rules",
+      postJson("/api/priority-sender-rules", { kind: "address", value: "person@example.com" }),
+    );
+    expect(duplicate.id).toBe(created.id);
+
+    const listed = await json<{ items: Array<{ id: string; kind: string; value: string }> }>("/api/priority-sender-rules");
+    expect(listed.items).toEqual([created]);
+
+    const removed = await call(`/api/priority-sender-rules/${encodeURIComponent(created.id)}`, { method: "DELETE" });
+    expect(removed.status).toBe(200);
+    expect(await json<{ items: Array<{ id: string; kind: string; value: string }> }>("/api/priority-sender-rules")).toEqual({ items: [] });
+    expect((await call(`/api/priority-sender-rules/${encodeURIComponent(created.id)}`, { method: "DELETE" })).status).toBe(404);
+
+    const invalid = await call("/api/priority-sender-rules", postJson("/api/priority-sender-rules", { kind: "domain", value: "not a domain" }));
+    expect(invalid.status).toBe(400);
   });
 
   it("serves core dashboard APIs without leaking provider credentials", async () => {

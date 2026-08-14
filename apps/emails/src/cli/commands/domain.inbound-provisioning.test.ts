@@ -117,8 +117,8 @@ beforeAll(async () => {
   mkdirSync(scratchHome, { recursive: true, mode: 0o700 });
 });
 
-afterAll(() => {
-  stub.stop();
+afterAll(async () => {
+  await stub.stop();
   rmSync(scratchHome, { recursive: true, force: true });
 });
 

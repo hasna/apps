@@ -2059,6 +2059,24 @@ const MIGRATIONS = [
   );
   CREATE INDEX IF NOT EXISTS idx_provider_secrets_root_key ON provider_secrets(root_key_id);
   `,
+
+  // Migration 50: persisted, tenant-scoped saved inbox filters.
+  `
+  CREATE TABLE IF NOT EXISTS mailbox_filters (
+    id TEXT PRIMARY KEY NOT NULL,
+    tenant_id TEXT NOT NULL DEFAULT 'local',
+    name TEXT NOT NULL,
+    normalized_name TEXT NOT NULL,
+    mailbox TEXT NOT NULL,
+    criteria_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(tenant_id, normalized_name)
+  );
+  CREATE INDEX IF NOT EXISTS idx_mailbox_filters_tenant_updated
+    ON mailbox_filters(tenant_id, updated_at DESC);
+  INSERT OR IGNORE INTO _migrations (id) VALUES (50);
+  `,
 ];
 
 let _db: Database | null = null;
@@ -2422,6 +2440,18 @@ function ensureSchema(db: Database): void {
   )`);
   ensureProvTable("CREATE INDEX IF NOT EXISTS idx_send_keys_owner ON send_keys(owner_id)");
   ensureProvTable("CREATE INDEX IF NOT EXISTS idx_send_keys_hash ON send_keys(key_hash)");
+
+  // Priority Inbox rules are mailbox-local, so this table inherits the
+  // database's mailbox isolation boundary. The composite key keeps exact
+  // address/domain overlap deterministic while allowing both rule kinds.
+  ensureProvTable(`CREATE TABLE IF NOT EXISTS priority_sender_rules (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL CHECK(kind IN ('address', 'domain')),
+    value TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(kind, value)
+  )`);
+  ensureProvTable("CREATE INDEX IF NOT EXISTS idx_priority_sender_rules_value ON priority_sender_rules(kind, value)");
 
   // Migration 26 idempotent guarantee: composite mailbox-list indexes.
   ensureProvTable("CREATE INDEX IF NOT EXISTS idx_inbound_arch_recv ON inbound_emails(is_archived, received_at)");

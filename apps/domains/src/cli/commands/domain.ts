@@ -1,0 +1,1029 @@
+import type { Command } from "commander";
+import {
+  DOMAIN_EMAIL_TYPES,
+  DOMAIN_OFFER_STATUSES,
+  DOMAIN_STATUSES,
+  createDomain,
+  getDomainDetails,
+  getDomainByName,
+  getDomainByIdentifier,
+  listDomains,
+  updateDomain,
+  deleteDomain,
+  searchDomains,
+  getDomainStats,
+  listExpiring,
+  markDomainPremium,
+  createDomainOffer,
+  updateDomainLifecycleStatus,
+  listDomainEmailLinks,
+  linkDomainEmail,
+  recordDomainPurchase,
+  exportPortfolio, whoisLookup,
+} from "../../db/domains.js";
+import { getAvailableProviders, getRegistrarProvider, getDnsProvider, getDomainInventoryProvider, providerHasInventory, autoDetectRegistrar } from "../../lib/registrar.js";
+import { loadConfig, resolveContact, applyPurchaseProfile } from "../../lib/config.js";
+import { registerDomain, checkAvailability, getRegistrationStatus, createHostedZone, updateNameservers } from "../../lib/route53.js";
+import { createZone as cfCreateZone, ensureZone as cfEnsureZone } from "../../lib/cloudflare.js";
+import { delegateDomainToCloudflare } from "../../lib/delegate.js";
+import { getCapability } from "../../lib/capability.js";
+import { compactHint, formatDate, pageItemsOrExit, parseLimit, parseOffset, truncateText } from "../../lib/compact-output.js";
+import { freshnessSuffix, isLapsed as isLapsedAt, lapsedSplit } from "../../lib/freshness.js";
+
+import { printLine, printErrorLine, writeStdout } from "../../lib/stdout.js";
+const DOMAIN_STATUS_HELP = DOMAIN_STATUSES.join("/");
+const DOMAIN_OFFER_STATUS_HELP = DOMAIN_OFFER_STATUSES.join("/");
+const DOMAIN_EMAIL_TYPE_HELP = DOMAIN_EMAIL_TYPES.join("/");
+
+function parseOptionalNumber(value: string | undefined, flagName: string): number | undefined {
+  if (value === undefined) return undefined;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new Error(`${flagName} must be a non-negative number`);
+  }
+  return parsed;
+}
+
+async function createDnsZoneForProvider(domain: string, provider: string): Promise<{ zoneId: string; nameservers: string[] }> {
+  if (provider === "cloudflare") {
+    const zone = await cfEnsureZone(domain);
+    return { zoneId: zone.id, nameservers: zone.nameservers ?? [] };
+  }
+  if (provider === "route53") {
+    const zone = await createHostedZone(domain, "Managed by domains CLI");
+    return { zoneId: zone.id, nameservers: zone.name_servers ?? [] };
+  }
+  throw new Error(`DNS provider '${provider}' is not supported by domain purchase delegation yet`);
+}
+
+async function requireDomain(identifier: string) {
+  const details = await getDomainDetails(identifier);
+  if (!details) {
+    printErrorLine(`Domain '${identifier}' not found.`);
+    process.exit(1);
+  }
+  return details;
+}
+
+export function registerDomainCommand(program: Command): void {
+  const domain = program.command("domain").description("Domain portfolio management");
+
+  // ── list ────────────────────────────────────────────────────────────────
+
+  domain
+    .command("list")
+    .description("List all domains in the portfolio")
+    .option("--status <status>", `Filter by status (${DOMAIN_STATUS_HELP})`)
+    .option("--registrar <name>", "Filter by registrar")
+    .option("--premium", "Only show premium domains")
+    .option("--limit <n>", "Limit number of displayed domains")
+    .option("--offset <n>", "Skip first N domains", "0")
+    .option("--all", "Show all matching domains")
+    .option("--verbose", "Show registrar, expiry, and notes columns")
+    .option("-j, --json", "Output JSON")
+    .action(async (opts: { status?: string; registrar?: string; premium?: boolean; limit?: string; offset?: string; all?: boolean; verbose?: boolean; json?: boolean }) => {
+      let limit: number | undefined;
+      let jsonLimit: number | undefined;
+      let offset: number;
+      try {
+        // Human output keeps the MAX_LIST_LIMIT display cap. JSON must not clamp:
+        // echoing a clamped limit back asserts a bound the caller never requested.
+        limit = opts.limit === undefined ? undefined : parseLimit(opts.limit);
+        jsonLimit = opts.limit === undefined ? undefined : parseLimit(opts.limit, undefined, Infinity);
+        offset = parseOffset(opts.offset);
+      } catch (error) {
+        printErrorLine(error instanceof Error ? error.message : String(error));
+        process.exit(1);
+      }
+
+      const filters = {
+        status: opts.status as (typeof DOMAIN_STATUSES)[number] | undefined,
+        registrar: opts.registrar,
+        is_premium: opts.premium ? true : undefined,
+      };
+      // Always read the full filtered set so `total` is the real population rather
+      // than the size of the page we happened to ask for, then page in process.
+      const domains = await listDomains(filters);
+
+      if (opts.json) {
+        const jsonPage = pageItemsOrExit(domains, {
+          limit: jsonLimit,
+          offset,
+          all: opts.all,
+          fallbackLimit: Infinity,
+          maxLimit: Infinity,
+        });
+        printLine(
+          JSON.stringify(
+            {
+              domains: jsonPage.items,
+              count: jsonPage.shown,
+              total: jsonPage.total,
+              shown: jsonPage.shown,
+              // null is a positive signal: no bound was applied.
+              limit: opts.all ? null : (jsonLimit ?? null),
+              offset: jsonPage.offset,
+              has_more: jsonPage.hasMore,
+            },
+            null,
+            2
+          )
+        );
+        return;
+      }
+      const page = pageItemsOrExit(domains, { limit, offset, all: opts.all });
+      if (page.items.length === 0) { printLine("No domains found."); return; }
+      for (const d of page.items) {
+        const exp = d.expires_at ? ` exp:${formatDate(d.expires_at)}` : "";
+        const premium = d.is_premium ? " premium" : "";
+        if (opts.verbose) {
+          const registrar = d.registrar ? ` reg:${truncateText(d.registrar, 24)}` : "";
+          const notes = d.notes ? ` notes:${truncateText(d.notes, 60)}` : "";
+          printLine(`  ${d.name} [${d.status}]${registrar}${exp}${premium}${notes}`);
+        } else {
+          printLine(`  ${d.name} [${d.status}]${exp}${premium}`);
+        }
+      }
+      printLine(`\n${compactHint(page, "domain(s)", "Use --verbose for registrar/notes or domain get <id|name> for details.")}`);
+    });
+  // ── get ─────────────────────────────────────────────────────────────────
+
+  domain
+    .command("get <identifier>")
+    .description("Get a domain by ID or name")
+    .option("-j, --json", "Output JSON")
+    .action(async (identifier: string, opts: { json?: boolean }) => {
+      const details = await getDomainDetails(identifier);
+      if (!details) { printErrorLine(`Domain '${identifier}' not found.`); process.exit(1); }
+      if (opts.json) { printLine(JSON.stringify(details, null, 2)); return; }
+      const d = details.domain;
+      printLine(`\n${d.name} [${d.status}]`);
+      if (d.registrar) printLine(`  Registrar:      ${d.registrar}`);
+      if (d.expires_at) printLine(`  Expires:        ${formatDate(d.expires_at)} ${freshnessSuffix(d.expiry_synced_at)}`);
+      if (d.purchase_date) printLine(`  Purchased:      ${formatDate(d.purchase_date)}`);
+      if (d.purchase_price !== null) printLine(`  Purchase price: ${d.purchase_price}`);
+      // Rendered with its provenance: read from a registrar sync, or never confirmed.
+      printLine(`  Auto-renew:     ${d.auto_renew ? "yes" : "no"} ${freshnessSuffix(d.expiry_synced_at)}`);
+      printLine(`  Registrar sync: ${d.expiry_synced_at ?? "never"}`);
+      if (d.is_premium) {
+        printLine(`  Premium:        yes`);
+        if (d.premium_price !== null) printLine(`  Premium ask:    ${d.premium_price}`);
+      }
+      if (d.standard_price !== null) printLine(`  Standard price: ${d.standard_price}`);
+      if (d.notes) printLine(`  Notes:          ${truncateText(d.notes, 160)}`);
+      if (details.offers.length > 0) {
+        printLine("\nOffers:");
+        const offerPage = pageItemsOrExit(details.offers, { fallbackLimit: 5 });
+        for (const offer of offerPage.items) {
+          const parts = [
+            offer.created_at.split(" ")[0],
+            offer.status,
+            offer.our_offer !== null ? `our=${offer.our_offer}` : null,
+            offer.their_ask !== null ? `their=${offer.their_ask}` : null,
+            offer.notes,
+          ].filter(Boolean);
+          printLine(`  - ${parts.join(" | ")}`);
+        }
+        if (offerPage.hasMore) printLine(`  ${compactHint(offerPage, "offer(s)", "Use --json for the full offer history.", { paging: "none" })}`);
+      }
+      if (details.emails.length > 0) {
+        printLine("\nEmails:");
+        const emailPage = pageItemsOrExit(details.emails, { fallbackLimit: 5 });
+        for (const email of emailPage.items) {
+          const threadPart = email.thread_id ? ` thread=${email.thread_id}` : "";
+          printLine(`  - ${email.type}: ${email.email_id}${threadPart}`);
+        }
+        if (emailPage.hasMore) printLine(`  ${compactHint(emailPage, "email link(s)", "Use --json for the full email list.", { paging: "none" })}`);
+      }
+      printLine();
+    });
+
+  // ── add ─────────────────────────────────────────────────────────────────
+
+  domain
+    .command("add")
+    .description("Add a domain to the portfolio")
+    .requiredOption("--name <name>", "Domain name")
+    .option("--registrar <name>", "Registrar name")
+    .option("--status <s>", `Status (${DOMAIN_STATUS_HELP})`, "active")
+    .option("--expires <date>", "Expiry date (YYYY-MM-DD)")
+    .option("--premium", "Mark the domain as premium")
+    .option("--premium-price <price>", "Premium asking price")
+    .option("--standard-price <price>", "Standard registration price")
+    .option("--purchase-price <price>", "Acquisition price paid")
+    .option("--purchase-date <date>", "Purchase date (ISO or YYYY-MM-DD)")
+    .option("--notes <text>", "Notes")
+    .option("-j, --json", "Output JSON")
+    .action(async (opts: {
+      name: string;
+      registrar?: string;
+      status: string;
+      expires?: string;
+      premium?: boolean;
+      premiumPrice?: string;
+      standardPrice?: string;
+      purchasePrice?: string;
+      purchaseDate?: string;
+      notes?: string;
+      json?: boolean;
+    }) => {
+      const premiumPrice = parseOptionalNumber(opts.premiumPrice, "--premium-price");
+      const standardPrice = parseOptionalNumber(opts.standardPrice, "--standard-price");
+      const purchasePrice = parseOptionalNumber(opts.purchasePrice, "--purchase-price");
+      const d = await createDomain({
+        name: opts.name, registrar: opts.registrar,
+        status: opts.status as (typeof DOMAIN_STATUSES)[number],
+        expires_at: opts.expires,
+        is_premium: opts.premium || premiumPrice !== undefined,
+        premium_price: premiumPrice,
+        standard_price: standardPrice,
+        purchase_price: purchasePrice,
+        purchase_date: opts.purchaseDate,
+        notes: opts.notes,
+      });
+      if (opts.json) { printLine(JSON.stringify(d, null, 2)); return; }
+      printLine(`Created domain: ${d.name} (${d.id})`);
+    });
+
+  // ── update ──────────────────────────────────────────────────────────────
+
+  domain
+    .command("update <id>")
+    .description("Update a domain")
+    .option("--registrar <name>", "Registrar")
+    .option("--status <s>", `Status (${DOMAIN_STATUS_HELP})`)
+    .option("--expires <date>", "Expiry date")
+    .option("--premium <bool>", "Premium flag (true/false)")
+    .option("--premium-price <price>", "Premium asking price")
+    .option("--standard-price <price>", "Standard registration price")
+    .option("--purchase-price <price>", "Purchase price paid")
+    .option("--purchase-date <date>", "Purchase date")
+    .option("--notes <text>", "Notes")
+    .option("-j, --json", "Output JSON")
+    .action(async (id: string, opts: {
+      registrar?: string;
+      status?: string;
+      expires?: string;
+      premium?: string;
+      premiumPrice?: string;
+      standardPrice?: string;
+      purchasePrice?: string;
+      purchaseDate?: string;
+      notes?: string;
+      json?: boolean;
+    }) => {
+      const premiumPrice = parseOptionalNumber(opts.premiumPrice, "--premium-price");
+      const standardPrice = parseOptionalNumber(opts.standardPrice, "--standard-price");
+      const purchasePrice = parseOptionalNumber(opts.purchasePrice, "--purchase-price");
+      const d = await updateDomain(id, {
+        registrar: opts.registrar,
+        status: opts.status as (typeof DOMAIN_STATUSES)[number] | undefined,
+        expires_at: opts.expires,
+        is_premium: opts.premium !== undefined ? opts.premium === "true" : undefined,
+        premium_price: premiumPrice,
+        standard_price: standardPrice,
+        purchase_price: purchasePrice,
+        purchase_date: opts.purchaseDate,
+        notes: opts.notes,
+      });
+      if (!d) { printErrorLine(`Domain '${id}' not found.`); process.exit(1); }
+      if (opts.json) { printLine(JSON.stringify(d, null, 2)); return; }
+      printLine(`Updated: ${d.name}`);
+    });
+
+  // ── delete ──────────────────────────────────────────────────────────────
+
+  domain
+    .command("delete <id>")
+    .description("Delete a domain from the portfolio")
+    .option("-f, --force", "Required confirmation for destructive delete")
+    .option("-j, --json", "Output JSON")
+    .action(async (id: string, opts: { force?: boolean; json?: boolean }) => {
+      if (!opts.force) {
+        const message = `Refusing to delete domain '${id}' without --force.`;
+        if (opts.json) {
+          printLine(JSON.stringify({ deleted: false, id, error: message }, null, 2));
+        } else {
+          printErrorLine(message);
+          printErrorLine("Re-run with --force to confirm deletion.");
+        }
+        process.exit(1);
+      }
+
+      const deleted = await deleteDomain(id);
+      if (!deleted) {
+        const message = `Domain '${id}' not found.`;
+        if (opts.json) {
+          printLine(JSON.stringify({ deleted: false, id, error: message }, null, 2));
+        } else {
+          printErrorLine(message);
+        }
+        process.exit(1);
+      }
+
+      if (opts.json) {
+        printLine(JSON.stringify({ deleted: true, id }, null, 2));
+        return;
+      }
+
+      printLine(`Deleted domain ${id}`);
+    });
+
+  // ── search ──────────────────────────────────────────────────────────────
+
+  domain
+    .command("search <query>")
+    .description("Search domains by name, registrar, or notes")
+    .option("--limit <n>", "Limit number of displayed domains")
+    .option("--offset <n>", "Skip first N domains", "0")
+    .option("--all", "Show all matching domains")
+    .option("--verbose", "Show registrar and truncated notes")
+    .option("-j, --json", "Output JSON")
+    .action(async (query: string, opts: { limit?: string; offset?: string; all?: boolean; verbose?: boolean; json?: boolean }) => {
+      const results = await searchDomains(query);
+      if (opts.json) { printLine(JSON.stringify({ results, count: results.length }, null, 2)); return; }
+      let page;
+      try {
+        page = pageItemsOrExit(results, { limit: opts.limit, offset: opts.offset, all: opts.all });
+      } catch (error) {
+        printErrorLine(error instanceof Error ? error.message : String(error));
+        process.exit(1);
+      }
+      for (const d of page.items) {
+        const notes = opts.verbose && d.notes ? ` — ${truncateText(d.notes, 80)}` : "";
+        printLine(`  ${d.name} [${d.status}]${notes}`);
+      }
+      if (results.length === 0) printLine("No results.");
+      else printLine(`\n${compactHint(page, "result(s)", "Use --verbose for notes or domain get <id|name> for details.")}`);
+    });
+
+  // ── expiring ────────────────────────────────────────────────────────────
+
+  domain
+    .command("expiring")
+    .description("List domains already past expiry, plus those expiring soon")
+    .option("--days <n>", "Days threshold", "30")
+    .option("--forward-only", "Exclude already-lapsed names (the pre-fix behaviour)")
+    .option("--limit <n>", "Limit number of displayed domains")
+    .option("--all", "Show all matching domains")
+    .option("-j, --json", "Output JSON")
+    .action(async (opts: { days: string; limit?: string; all?: boolean; json?: boolean; forwardOnly?: boolean }) => {
+      const includeLapsed = !opts.forwardOnly;
+      const domains = await listExpiring(parseInt(opts.days), { includeLapsed });
+      if (opts.json) { printLine(JSON.stringify(domains, null, 2)); return; }
+
+      const page = pageItemsOrExit(domains, { limit: opts.limit, all: opts.all });
+      if (page.items.length === 0) {
+        printLine(
+          includeLapsed
+            ? `No domains past expiry, and none expiring within ${opts.days} days.`
+            : `No domains expiring within ${opts.days} days.`
+        );
+        return;
+      }
+
+      // Counts come from the FULL result, never from the page. The default page
+      // is 20 rows, so counting the page would print a bounded read as though it
+      // were a population — the same class of defect this command was fixed for.
+      // Display still comes from the page.
+      const split = lapsedSplit(domains, page.items);
+      const lapsedTotal = split.lapsedTotal;
+      const lapsed = page.items.filter((d) => isLapsedAt(d.expires_at));
+      const upcoming = page.items.filter((d) => !isLapsedAt(d.expires_at));
+
+      // Lapsed names lead. They were invisible to this command before, and they
+      // are the ones already costing something.
+      if (lapsed.length > 0) {
+        printLine(`\nALREADY PAST EXPIRY (${split.label}) — still recorded as active:`);
+        for (const d of lapsed) {
+          printLine(
+            `  ${d.name.padEnd(40)} expired ${formatDate(d.expires_at)} ${freshnessSuffix(d.expiry_synced_at)}`
+          );
+        }
+      }
+
+      if (upcoming.length > 0) {
+        printLine(`\nExpiring within ${opts.days} days:`);
+        for (const d of upcoming) {
+          printLine(
+            `  ${d.name.padEnd(40)} expires ${formatDate(d.expires_at)} ${freshnessSuffix(d.expiry_synced_at)}`
+          );
+        }
+      }
+
+      // Lapsed names sort first, so a default-limited page can push every
+      // upcoming name off the listing. Say so rather than letting the absence
+      // read as "nothing is due".
+      if (lapsedTotal > 0 && upcoming.length === 0 && page.hasMore) {
+        printLine(
+          `\n(${lapsedTotal} past-expiry names fill this page; upcoming expiries are not shown — use --all)`
+        );
+      }
+
+      printLine(`\n${compactHint(page, "domain(s)", "Use --all to display every expiring domain.", { paging: "limit" })}`);
+    });
+
+  // ── stats ───────────────────────────────────────────────────────────────
+
+  domain
+    .command("stats")
+    .description("Show portfolio statistics")
+    .option("-j, --json", "Output JSON")
+    .action(async (opts: { json?: boolean }) => {
+      const stats = await getDomainStats();
+      if (opts.json) { printLine(JSON.stringify(stats, null, 2)); return; }
+      printLine("Domain Portfolio Stats:");
+      for (const [k, v] of Object.entries(stats)) {
+        printLine(`  ${k.replace(/_/g, " ")}: ${v}`);
+      }
+    });
+
+  // ── whois ───────────────────────────────────────────────────────────────
+
+  domain
+    .command("whois <name>")
+    .description("Run WHOIS lookup and update local DB record")
+    .option("-j, --json", "Output JSON")
+    .action(async (name: string, opts: { json?: boolean }) => {
+      try {
+        const result = await whoisLookup(name);
+        if (opts.json) { printLine(JSON.stringify(result, null, 2)); return; }
+        printLine(`\nWHOIS for ${result.domain} [${result.source}]:`);
+        printLine(`  Registrar: ${result.registrar ?? "unknown"}`);
+        printLine(`  Expires:   ${result.expires_at ?? "unknown"}`);
+        if (result.nameservers.length) { printLine(`  NS: ${result.nameservers.join(", ")}`); }
+        const r = result.registrant;
+        if (r?.name || r?.email || r?.organization) {
+          printLine(`  Registrant:`);
+          if (r.name) printLine(`    Name: ${r.name}`);
+          if (r.email) printLine(`    Email: ${r.email}`);
+          if (r.phone) printLine(`    Phone: ${r.phone}`);
+          if (r.organization) printLine(`    Org: ${r.organization}`);
+        }
+        printLine();
+      } catch (error: unknown) {
+        printErrorLine(`WHOIS lookup failed: ${error instanceof Error ? error.message : String(error)}`);
+        process.exit(1);
+      }
+    });
+
+  // ── export ──────────────────────────────────────────────────────────────
+
+  domain
+    .command("export")
+    .description("Export all domains as CSV or JSON")
+    .option("--format <fmt>", "Format: csv or json", "json")
+    .action(async (opts: { format: string }) => {
+      const output = await exportPortfolio(opts.format as "csv" | "json");
+      printLine(output);
+    });
+
+  // ── check ───────────────────────────────────────────────────────────────
+
+  domain
+    .command("check <domains...>")
+    .description("Check domain availability via configured registrar")
+    .option("--provider <name>", "Registrar provider to use")
+    .option("-j, --json", "Output JSON")
+    .action(async (domains: string[], opts: { provider?: string; json?: boolean }) => {
+      const cfg = loadConfig();
+      const providerName = opts.provider ?? cfg.default_registrar ?? "route53";
+      const results = await Promise.allSettled(
+        domains.map(async (d) => {
+          const provider = getRegistrarProvider(providerName);
+          return provider.checkAvailability(d);
+        })
+      );
+
+      let anyError = false;
+      const output: Array<{
+        domain: string;
+        available?: boolean;
+        is_premium?: boolean;
+        premium_price?: number;
+        standard_price?: number;
+        currency?: string;
+        error?: string;
+      }> = [];
+
+      for (let i = 0; i < domains.length; i++) {
+        const r = results[i]!;
+        if (r.status === "rejected") {
+          const reason = (r as PromiseRejectedResult).reason;
+          const error = reason instanceof Error ? reason.message : String(reason);
+          output.push({ domain: domains[i]!, error });
+          if (!opts.json) {
+            printErrorLine(`✗ ${domains[i]}: ${error}`);
+          }
+          anyError = true;
+        } else {
+          const result = (r as PromiseFulfilledResult<{ domain: string; available: boolean }>).value;
+          output.push({ domain: result.domain, available: result.available });
+          if (!opts.json) {
+            printLine(`${result.available ? "✓" : "✗"} ${result.domain} is ${result.available ? "available" : "not available"}`);
+          }
+        }
+      }
+
+      if (opts.json) {
+        printLine(
+          JSON.stringify(
+            {
+              provider: providerName,
+              count: output.length,
+              ok: !anyError,
+              results: output,
+            },
+            null,
+            2
+          )
+        );
+      } else {
+        for (const result of output) {
+          if (result.available !== undefined && "is_premium" in result && result.is_premium) {
+            printLine(`  Premium ask: ${result.premium_price ?? "unknown"}`);
+          }
+          if ("standard_price" in result && result.standard_price !== undefined) {
+            const currency = "currency" in result && result.currency ? ` ${result.currency}` : "";
+            printLine(`  Standard price: ${result.standard_price}${currency}`);
+          }
+        }
+      }
+
+      for (const result of output) {
+        if (result.error) continue;
+        const existing = await getDomainByName(result.domain);
+        if (!existing) continue;
+        await updateDomain(existing.id, {
+          is_premium: "is_premium" in result ? Boolean(result.is_premium) : existing.is_premium,
+          premium_price: "premium_price" in result ? result.premium_price ?? existing.premium_price : existing.premium_price,
+          standard_price: "standard_price" in result ? result.standard_price ?? existing.standard_price : existing.standard_price,
+          status: result.available ? existing.status : ("is_premium" in result && result.is_premium ? "premium_only" : "not_available"),
+        });
+      }
+
+      if (anyError) process.exit(1);
+    });
+  // ── sync ────────────────────────────────────────────────────────────────
+
+  domain
+    .command("sync")
+    .description("Sync domains from a provider to the local DB")
+    .option("--provider <name>", "Provider name (default: all configured)")
+    .action(async (opts: { provider?: string }) => {
+      const providers = opts.provider
+        ? [opts.provider]
+        : getAvailableProviders().filter((p) => p.configured && providerHasInventory(p.name)).map((p) => p.name);
+
+      for (const name of providers) {
+        try {
+          const provider = getDomainInventoryProvider(name);
+          const result = await provider.syncToLocalDb({ getDomainByName, createDomain, updateDomain });
+          printLine(`✓ [${name}] Synced ${result.synced} (${result.created} new, ${result.updated} updated)`);
+          if (result.errors.length > 0) printLine(`  Errors: ${result.errors.join(", ")}`);
+        } catch (e) {
+          printErrorLine(`✗ [${name}] ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
+    });
+
+  // ── renew ───────────────────────────────────────────────────────────────
+
+  domain
+    .command("premium <identifier>")
+    .description("Mark a tracked domain as premium-priced")
+    .requiredOption("--ask <price>", "Premium asking price")
+    .option("--standard <price>", "Standard registration price")
+    .option("-j, --json", "Output JSON")
+    .action(async (identifier: string, opts: { ask: string; standard?: string; json?: boolean }) => {
+      const premiumPrice = parseOptionalNumber(opts.ask, "--ask");
+      const standardPrice = parseOptionalNumber(opts.standard, "--standard");
+      const updated = await markDomainPremium(identifier, premiumPrice!, standardPrice);
+      if (!updated) { printErrorLine(`Domain '${identifier}' not found.`); process.exit(1); }
+      if (opts.json) { printLine(JSON.stringify(updated, null, 2)); return; }
+      printLine(`Marked ${updated.name} as premium at ${premiumPrice}`);
+    });
+
+  domain
+    .command("offer <identifier>")
+    .description("Record a negotiation step for a domain")
+    .option("--our <price>", "Our offer")
+    .option("--their <price>", "Their asking price")
+    .option("--status <status>", `Offer status (${DOMAIN_OFFER_STATUS_HELP})`, "pending")
+    .option("--notes <text>", "Negotiation notes")
+    .option("-j, --json", "Output JSON")
+    .action(async (identifier: string, opts: { our?: string; their?: string; status: string; notes?: string; json?: boolean }) => {
+      const details = await requireDomain(identifier);
+      const offer = await createDomainOffer({
+        domain_id: details.domain.id,
+        our_offer: parseOptionalNumber(opts.our, "--our"),
+        their_ask: parseOptionalNumber(opts.their, "--their"),
+        status: opts.status as (typeof DOMAIN_OFFER_STATUSES)[number],
+        notes: opts.notes,
+      });
+      if (details.domain.status === "discovered" || details.domain.status === "researching" || details.domain.status === "offered") {
+        await updateDomainLifecycleStatus(details.domain.id, opts.their || opts.our ? "negotiating" : "offered");
+      }
+      if (opts.json) { printLine(JSON.stringify(offer, null, 2)); return; }
+      printLine(`Logged offer for ${details.domain.name}: ${offer.status}`);
+    });
+
+  domain
+    .command("status <identifier> <status>")
+    .description("Update the lifecycle status of a domain")
+    .option("--notes <text>", "Optional note to store with the status change")
+    .option("-j, --json", "Output JSON")
+    .action(async (identifier: string, status: string, opts: { notes?: string; json?: boolean }) => {
+      const updated = await updateDomainLifecycleStatus(identifier, status as (typeof DOMAIN_STATUSES)[number], opts.notes);
+      if (!updated) { printErrorLine(`Domain '${identifier}' not found.`); process.exit(1); }
+      if (opts.json) { printLine(JSON.stringify(updated, null, 2)); return; }
+      printLine(`Updated ${updated.name} to ${updated.status}`);
+    });
+
+  domain
+    .command("emails <identifier>")
+    .description("Show email threads linked to a domain")
+    .option("-j, --json", "Output JSON")
+    .action(async (identifier: string, opts: { json?: boolean }) => {
+      const details = await requireDomain(identifier);
+      const emails = await listDomainEmailLinks(details.domain.id);
+      if (opts.json) {
+        printLine(JSON.stringify({ domain: details.domain.name, emails, count: emails.length }, null, 2));
+        return;
+      }
+      if (emails.length === 0) {
+        printLine(`No linked emails for ${details.domain.name}.`);
+        return;
+      }
+      for (const email of emails) {
+        const threadPart = email.thread_id ? ` (${email.thread_id})` : "";
+        printLine(`  ${email.type}: ${email.email_id}${threadPart}`);
+      }
+    });
+
+  domain
+    .command("link-email <identifier> <emailId>")
+    .description("Link an email or email thread to a domain")
+    .requiredOption("--type <type>", `Link type (${DOMAIN_EMAIL_TYPE_HELP})`)
+    .option("--thread-id <threadId>", "Email thread ID")
+    .option("-j, --json", "Output JSON")
+    .action(async (identifier: string, emailId: string, opts: { type: string; threadId?: string; json?: boolean }) => {
+      const details = await requireDomain(identifier);
+      const link = await linkDomainEmail({
+        domain_id: details.domain.id,
+        email_id: emailId,
+        thread_id: opts.threadId,
+        type: opts.type as (typeof DOMAIN_EMAIL_TYPES)[number],
+      });
+      if (opts.json) { printLine(JSON.stringify(link, null, 2)); return; }
+      printLine(`Linked ${emailId} to ${details.domain.name}`);
+    });
+
+  domain
+    .command("renew <name>")
+    .description("Renew a domain via its registrar provider")
+    .option("--provider <name>", "Override provider")
+    .option("--years <n>", "Number of years to renew", "1")
+    .action(async (name: string, opts: { provider?: string; years: string }) => {
+      const providerName = opts.provider ?? (await autoDetectRegistrar(name, getDomainByName)) ?? loadConfig().default_registrar;
+      if (!providerName) { printErrorLine("Could not detect provider. Use --provider."); process.exit(1); }
+      const provider = getRegistrarProvider(providerName);
+      const result = await provider.renewDomain(name, parseInt(opts.years, 10));
+      if (result.success) {
+        printLine(`✓ Renewed: ${name}`);
+        if (result.orderId) printLine(`  Order: ${result.orderId}`);
+      } else {
+        printErrorLine(`✗ Renewal failed or not supported for ${providerName}`);
+        process.exit(1);
+      }
+    });
+
+  // ── buy ─────────────────────────────────────────────────────────────────
+
+  domain
+    .command("buy <name>")
+    .description("Purchase or record a domain via registrar provider (contact defaults from: domains config set contact.*)")
+    .option("--provider <name>", "Registrar provider (default: config default-registrar or route53)")
+    .option("--registrar <name>", "Registrar/seller for recorded purchases (alias of --provider)")
+    .option("--email <email>", "Registrant email")
+    .option("--first-name <n>", "First name")
+    .option("--last-name <n>", "Last name")
+    .option("--phone <p>", "Phone")
+    .option("--address <a>", "Street address")
+    .option("--city <c>", "City")
+    .option("--state <s>", "State/province")
+    .option("--country <c>", "Country code")
+    .option("--zip <z>", "ZIP code")
+    .option("--org <o>", "Organization")
+    .option("--price <amount>", "Record a completed purchase instead of registering via Route 53")
+    .option("--expires <date>", "Expiry date for recorded purchases")
+    .option("--auto-renew <bool>", "Auto-renew for recorded purchases (true/false)")
+    .option("--years <n>", "Years", "1")
+    .option("--wait", "Poll until registration completes")
+    .option("--dns <provider>", "DNS provider to delegate to after purchase (default: config default-dns or cloudflare)")
+    .option("--no-delegate", "Skip nameserver delegation after purchase")
+    .option("--allow-gated", "Allow gated/contract-only registrar purchase path when the provider API supports it")
+    .action(async (name: string, opts: {
+      provider?: string; registrar?: string; email?: string; firstName?: string; lastName?: string;
+      phone?: string; address?: string; city?: string; state?: string;
+      country?: string; zip?: string; org?: string; price?: string; expires?: string; autoRenew?: string;
+      years: string; wait?: boolean; dns?: string; delegate?: boolean; allowGated?: boolean;
+    }) => {
+      const recordedPrice = parseOptionalNumber(opts.price, "--price");
+      if (recordedPrice !== undefined) {
+        const registrarName = opts.registrar ?? opts.provider ?? "manual";
+        const existing = await getDomainByName(name);
+        const domainRecord = existing ?? (await createDomain({ name, status: "discovered" }));
+        const purchased = await recordDomainPurchase(domainRecord.id, {
+          price: recordedPrice,
+          registrar: registrarName,
+          expires_at: opts.expires,
+          auto_renew: opts.autoRenew ? opts.autoRenew === "true" : domainRecord.auto_renew,
+        });
+        if (!purchased) { printErrorLine(`Domain '${name}' not found.`); process.exit(1); }
+        if (opts.wait) {
+          await updateDomainLifecycleStatus(purchased.id, "active");
+        }
+        printLine(`Recorded purchase for ${purchased.name} at ${recordedPrice}`);
+        return;
+      }
+
+      const cfg = loadConfig();
+      const providerName = opts.registrar ?? opts.provider ?? cfg.default_registrar ?? "route53";
+      const dnsProvider = opts.dns ?? cfg.default_dns ?? "cloudflare";
+
+      // Use the configured purchase AWS profile unless explicit AWS
+      // creds/profile are already set in the environment.
+      const purchaseProfile = providerName === "route53" ? applyPurchaseProfile() : undefined;
+      if (purchaseProfile) printLine(`Using purchase AWS profile: ${purchaseProfile}`);
+
+      if (providerName !== "route53") {
+        try {
+          const capability = getCapability(providerName);
+          if (!capability.canBuy) {
+            printErrorLine(`Direct domain purchase is not supported for ${providerName}. ${capability.notes} Use route53 or record a marketplace/manual purchase with --price.`);
+            process.exit(1);
+          }
+          if (capability.gated && !opts.allowGated) {
+            printErrorLine(`Registrar '${providerName}' is gated/enterprise-only. Pass --allow-gated only when this account is contract-approved. ${capability.notes}`);
+            process.exit(1);
+          }
+
+          const provider = getRegistrarProvider(providerName);
+          if (!provider.registerDomain) {
+            printErrorLine(`Direct domain purchase is not supported for ${providerName}. Use route53 or record a marketplace/manual purchase with --price.`);
+            process.exit(1);
+          }
+
+          const avail = await provider.checkAvailability(name);
+          if (!avail.available) { printErrorLine(`✗ ${name} is not available`); process.exit(1); }
+          printLine(`✓ Available via ${providerName}`);
+
+          let contact;
+          try { contact = resolveContact(opts); } catch (e) { printErrorLine(`Error: ${e instanceof Error ? e.message : String(e)}`); process.exit(1); }
+
+          printLine(`Registering ${name} via ${providerName}...`);
+          const reg = await provider.registerDomain(name, contact, {
+            years: parseInt(opts.years, 10),
+            premiumPrice: avail.premium_price,
+            autoRenew: opts.autoRenew ? opts.autoRenew === "true" : true,
+          });
+          if (!reg.success) { printErrorLine(`✗ Registration failed via ${providerName}`); process.exit(1); }
+
+          const existing = await getDomainByName(name);
+          const dbInput = {
+            registrar: providerName,
+            status: "active" as const,
+            auto_renew: opts.autoRenew ? opts.autoRenew === "true" : true,
+            purchase_price: reg.chargedAmount ? Number(reg.chargedAmount) : avail.standard_price,
+            purchase_date: new Date().toISOString(),
+            standard_price: avail.standard_price,
+            is_premium: avail.is_premium,
+            premium_price: avail.premium_price,
+          };
+          if (existing) await updateDomain(existing.id, dbInput);
+          else await createDomain({ name, ...dbInput });
+          printLine(`✓ Registered and added to portfolio`);
+          if (reg.orderId) printLine(`  Order: ${reg.orderId}`);
+
+          if (opts.delegate !== false) {
+            if (!provider.updateNameservers) {
+              printLine(`  DNS: ${providerName} registration succeeded, but nameserver updates are not implemented for this provider.`);
+            } else {
+              const zone = await createDnsZoneForProvider(name, dnsProvider);
+              const nsUpdate = await provider.updateNameservers(name, zone.nameservers);
+              const existing2 = await getDomainByName(name);
+              if (existing2) await updateDomain(existing2.id, { nameservers: zone.nameservers });
+              printLine(`✓ ${dnsProvider} zone ${zone.zoneId}; nameservers updated${nsUpdate.operationId ? ` (op ${nsUpdate.operationId})` : ""}`);
+            }
+          }
+          return;
+        } catch (e) {
+          printErrorLine(`Error: ${e instanceof Error ? e.message : String(e)}`);
+          process.exit(1);
+        }
+      }
+
+      try {
+        const avail = await checkAvailability(name);
+        if (!avail.available) { printErrorLine(`✗ ${name} is not available`); process.exit(1); }
+        const price = avail.price ? ` (USD ${avail.price}/yr)` : "";
+        printLine(`✓ Available${price}`);
+
+        let contact;
+        try { contact = resolveContact(opts); } catch (e) { printErrorLine(`Error: ${e instanceof Error ? e.message : String(e)}`); process.exit(1); }
+
+        printLine(`Registering ${name}...`);
+        const reg = await registerDomain(name, contact, parseInt(opts.years));
+        printLine(`✓ Submitted (operation: ${reg.operationId})`);
+
+        if (opts.wait) {
+          let status = "IN_PROGRESS";
+          while (status === "IN_PROGRESS" || status === "SUBMITTED") {
+            await new Promise((r) => setTimeout(r, 10_000));
+            const s = await getRegistrationStatus(reg.operationId);
+            status = s.status;
+            writeStdout(`  Status: ${status}\r`);
+          }
+          printLine();
+          if (status !== "SUCCESSFUL") { printErrorLine(`✗ Registration ${status}`); process.exit(1); }
+          printLine(`✓ Registration complete`);
+        }
+
+        const existing = await getDomainByName(name);
+        if (existing) {
+          await updateDomain(existing.id, {
+            registrar: "AWS Route 53",
+            status: "active",
+            auto_renew: true,
+            purchase_price: avail.price ? Number(avail.price) : existing.purchase_price,
+            purchase_date: new Date().toISOString(),
+            standard_price: avail.price ? Number(avail.price) : existing.standard_price,
+          });
+        } else {
+          await createDomain({
+            name,
+            registrar: "AWS Route 53",
+            status: "active",
+            auto_renew: true,
+            purchase_price: avail.price ? Number(avail.price) : undefined,
+            purchase_date: new Date().toISOString(),
+            standard_price: avail.price ? Number(avail.price) : undefined,
+          });
+        }
+        printLine(`✓ Added to portfolio`);
+
+        // Nameserver updates require registration to have completed, so only
+        // delegate in this flow when --wait is set.
+        if (opts.delegate !== false) {
+          if (!opts.wait) {
+            printLine(`  DNS: run 'domains domain buy ${name} --wait' or delegate later — registration must finish before NS can change.`);
+          } else {
+            try {
+              printLine(`Delegating DNS to ${dnsProvider}...`);
+              const del = dnsProvider === "cloudflare"
+                ? await delegateDomainToCloudflare(name, {
+                    createCloudflareZone: async (d) => {
+                      const z = await cfEnsureZone(d);
+                      return { id: z.id, nameservers: z.nameservers };
+                    },
+                    updateNameservers: (d, ns) => updateNameservers(d, ns),
+                  })
+                : await (async () => {
+                    const zone = await createDnsZoneForProvider(name, dnsProvider);
+                    const nsUpdate = await updateNameservers(name, zone.nameservers);
+                    return { zoneId: zone.zoneId, nameservers: zone.nameservers, operationId: nsUpdate.operationId };
+                  })();
+              const existing2 = await getDomainByName(name);
+              if (existing2) await updateDomain(existing2.id, { nameservers: del.nameservers });
+              printLine(`✓ ${dnsProvider} zone ${del.zoneId}; nameservers → ${del.nameservers.join(", ")} (op ${del.operationId})`);
+            } catch (e) {
+              printErrorLine(`⚠ DNS delegation failed (domain is registered): ${e instanceof Error ? e.message : String(e)}`);
+              printErrorLine(`  Retry: create the DNS zone and point Route53 NS at it.`);
+            }
+          }
+        }
+        if (!opts.wait) printLine(`  Check: domains r53 status ${reg.operationId}`);
+      } catch (e) {
+        printErrorLine(`Error: ${e instanceof Error ? e.message : String(e)}`);
+        process.exit(1);
+      }
+    });
+
+  // ── setup ────────────────────────────────────────────────────────────────
+  // Full flow: buy → create DNS zone → update nameservers → sync to DB
+
+  domain
+    .command("setup <name>")
+    .description("Full setup: buy domain + create DNS zone + point nameservers (contact defaults from config)")
+    .option("--registrar <n>", "Registrar provider (default: config default-registrar or route53)")
+    .option("--dns <n>", "DNS provider (default: config default-dns or cloudflare)")
+    .option("--email <e>", "Registrant email")
+    .option("--first-name <n>", "First name")
+    .option("--last-name <n>", "Last name")
+    .option("--phone <p>", "Phone")
+    .option("--address <a>", "Street address")
+    .option("--city <c>", "City")
+    .option("--state <s>", "State/province")
+    .option("--country <c>", "Country code")
+    .option("--zip <z>", "ZIP code")
+    .option("--org <o>", "Organization")
+    .option("--years <n>", "Years", "1")
+    .option("--wait", "Poll until registration completes before creating DNS zone")
+    .action(async (name: string, opts: {
+      registrar?: string; dns?: string; email?: string; firstName?: string; lastName?: string;
+      phone?: string; address?: string; city?: string; state?: string;
+      country?: string; zip?: string; org?: string; years: string; wait?: boolean;
+    }) => {
+      const cfg = loadConfig();
+      const registrarName = opts.registrar ?? cfg.default_registrar ?? "route53";
+      const dnsName = opts.dns ?? cfg.default_dns ?? "cloudflare";
+
+      printLine(`\nSetting up ${name}`);
+      printLine(`  Registrar: ${registrarName}  |  DNS: ${dnsName}\n`);
+
+      try {
+        // 1. Check availability
+        writeStdout(opts.wait ? "[1/5] Checking availability... " : "[1/4] Checking availability... ");
+        const avail = await checkAvailability(name);
+        if (!avail.available) { printLine("not available"); printErrorLine(`✗ ${name} is not available`); process.exit(1); }
+        const price = avail.price ? `(USD ${avail.price}/yr)` : "";
+        printLine(`available ${price}`);
+
+        // 2. Buy domain
+        if (registrarName !== "route53") {
+          printErrorLine("Direct domain purchase currently only supported via route53.");
+          process.exit(1);
+        }
+        let contact;
+        try { contact = resolveContact(opts); } catch (e) { printErrorLine(`Error: ${e instanceof Error ? e.message : String(e)}`); process.exit(1); }
+
+        writeStdout(opts.wait ? "[2/5] Registering domain... " : "[2/4] Registering domain... ");
+        const reg = await registerDomain(name, contact, parseInt(opts.years));
+        printLine(`submitted (${reg.operationId})`);
+
+        if (opts.wait) {
+          let status = "IN_PROGRESS";
+          while (status === "IN_PROGRESS" || status === "SUBMITTED") {
+            await new Promise((r) => setTimeout(r, 10_000));
+            const s = await getRegistrationStatus(reg.operationId);
+            status = s.status;
+            writeStdout(`  Waiting: ${status}...\r`);
+          }
+          printLine();
+          if (status !== "SUCCESSFUL") { printErrorLine(`✗ Registration ${status}`); process.exit(1); }
+          printLine("  Registration confirmed");
+        }
+
+        // 3. Create DNS zone
+        writeStdout(opts.wait ? "[3/5] Creating DNS zone... " : "[3/4] Creating DNS zone... ");
+        let nameservers: string[] = [];
+        if (dnsName === "cloudflare") {
+          const zone = await cfEnsureZone(name);
+          nameservers = zone.nameservers ?? [];
+          printLine("ready (" + zone.id + ")");
+        } else {
+          const zone = await createHostedZone(name, "Managed by domains CLI");
+          nameservers = zone.name_servers ?? [];
+          printLine(`created (${zone.id})`);
+        }
+
+        if (nameservers.length > 0) {
+          if (opts.wait) {
+            writeStdout("[4/5] Updating registrar nameservers... ");
+            if (registrarName !== "route53") {
+              printLine("skipped");
+              printErrorLine("Only Route53 nameserver delegation is currently implemented for setup.");
+              process.exit(1);
+            }
+            const nsUpdate = await updateNameservers(name, nameservers);
+            printLine("submitted (" + nsUpdate.operationId + ")");
+          } else {
+            printLine("  Nameserver delegation skipped until registration completes; re-run with --wait or use domains r53 domain-info/status first.");
+          }
+        }
+
+        // 5. Sync to local DB
+        writeStdout(opts.wait ? "[5/5] Adding to portfolio... " : "[4/4] Adding to portfolio... ");
+        const existing = await getDomainByName(name);
+        const dbInput = { registrar: `AWS Route 53`, status: "active" as const, auto_renew: true, nameservers };
+        if (existing) await updateDomain(existing.id, dbInput);
+        else await createDomain({ name, ...dbInput });
+        printLine("done");
+
+        printLine(`\n✓ Setup complete for ${name}`);
+        if (!opts.wait) {
+          printLine(`  ⚠ Registration pending — check: domains r53 status ${reg.operationId}`);
+          printLine(`  ⚠ If registration fails, clean up: domains zone delete <zoneId> --force`);
+        }
+        if (nameservers.length > 0) {
+          printLine(`\n  Point your registrar to these name servers:`);
+          for (const ns of nameservers) printLine(`    ${ns}`);
+        }
+        printLine();
+      } catch (e) {
+        printErrorLine(`Error: ${e instanceof Error ? e.message : String(e)}`);
+        process.exit(1);
+      }
+    });
+}
