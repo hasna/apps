@@ -478,7 +478,7 @@ tree is in [CLI reference](docs/cli-reference.md) and is also available from
 | `accounts health` (`readiness`) | Print the sanitized account/provider readiness contract. Use `--json` for automation. |
 | `accounts detect <name>` | Re-detect email from config dir. |
 | `accounts doctor` | Check registry and dirs (exits 1 on errors). |
-| `accounts-serve` | Start the Bun HTTP API for the cloud storage mode. Supports `--port`, `--host`, public probes, and authenticated `/v1` account routes. |
+| `accounts-serve` | Start the Bun HTTP API (postgresql server backend via `HASNA_ACCOUNTS_DATABASE_URL`). Supports `--port`, `--host`, public probes, and authenticated `/v1` account routes. |
 | `accounts-migrate` | Check or apply the cloud Postgres schema migrations. Use `--dry-run` to print the pending migration plan without mutating the database. |
 
 See the [CLI reference](docs/cli-reference.md) for `set`, `rename`, `remove`,
@@ -551,12 +551,11 @@ stack trace.
 The published package also includes two operator entrypoints for the
 Postgres-backed API runtime. They are separate from the local-first `accounts`
 CLI and are intended for service deployments, one-shot migration jobs, and local
-ops against the same cloud storage mode.
+ops against the same PostgreSQL backend.
 
 Start the HTTP service with:
 
 ```bash
-HASNA_ACCOUNTS_STORAGE_MODE=cloud \
 HASNA_ACCOUNTS_DATABASE_URL=postgres://... \
 HASNA_ACCOUNTS_API_SIGNING_KEY=... \
 accounts-serve --port 8080 --host 0.0.0.0
@@ -564,9 +563,9 @@ accounts-serve --port 8080 --host 0.0.0.0
 
 `accounts-serve` runs on Bun. It reads `PORT` or `ACCOUNTS_SERVE_PORT` when
 `--port` is omitted, defaults to port `8080`, and defaults to host `0.0.0.0`.
-It requires `HASNA_ACCOUNTS_STORAGE_MODE=cloud`,
-`HASNA_ACCOUNTS_DATABASE_URL`, and an API signing key from
-`HASNA_ACCOUNTS_API_SIGNING_KEY` or the shared `HASNA_API_SIGNING_KEY` fallback.
+It requires `HASNA_ACCOUNTS_DATABASE_URL` (selecting the postgresql server
+backend) and an API signing key from `HASNA_ACCOUNTS_API_SIGNING_KEY` or the
+shared `HASNA_API_SIGNING_KEY` fallback.
 
 The public probes are:
 
@@ -580,7 +579,6 @@ Authenticated `/v1` account routes require API keys with the `accounts:read` or
 Run migrations before serving, or as a deployment one-shot:
 
 ```bash
-HASNA_ACCOUNTS_STORAGE_MODE=cloud \
 HASNA_ACCOUNTS_DATABASE_URL=postgres://... \
 HASNA_ACCOUNTS_RUNTIME_ROLE=accounts_app \
 accounts-migrate --dry-run
@@ -784,14 +782,12 @@ Custom tool homes submitted to the API use the same persistence/home checks. See
 
 Registry access is selected through `AccountsStore`:
 
-- `local` uses the atomic on-machine JSON registry.
-- `self_hosted` and `cloud` use the authenticated Accounts HTTP API.
-- `ACCOUNTS_HOME` selects an isolated local registry even when API URL/key are
-  inherited; set an explicit `self_hosted`/`cloud` mode to override it.
-- Explicit `self_hosted`/`cloud` modes fail closed unless both the API URL
-  and key are configured.
-- Retired `remote`, `hybrid`, and `s3` aliases are ignored for migration
-  safety; any other unknown mode is rejected.
+- `local` transport uses the atomic on-machine JSON registry.
+- `api` transport uses the authenticated Accounts HTTP API, selected by the
+  presence of both `HASNA_ACCOUNTS_API_URL` and `HASNA_ACCOUNTS_API_KEY`.
+- Deployment modes no longer exist (owner directive 2026-07-29; knowledge
+  k_ms5wv466_u0jidq). Any retired `*_STORAGE_MODE` / `*_MODE` variable still
+  set is a fail-loud error naming the variable, never a transport hint.
 
 ```ts
 import { resolveStore } from "@hasna/accounts";
@@ -803,7 +799,6 @@ console.log(await store.listProfiles());
 
 Configure API mode with:
 
-- `HASNA_ACCOUNTS_STORAGE_MODE=local|self_hosted|cloud`
 - `HASNA_ACCOUNTS_API_URL=https://accounts.example.com`
 - `HASNA_ACCOUNTS_API_KEY` from the service operator
 

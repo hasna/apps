@@ -36,7 +36,7 @@ export function buildOpenApiDoc(version: string): OpenApiDoc {
       title: "Accounts",
       version,
       description:
-        "Cloud API for @hasna/accounts: manage AI coding tool profiles/accounts. API-key auth (x-api-key or Authorization: Bearer). PURE REMOTE per Amendment A1.",
+        "API for @hasna/accounts: manage AI coding tool profiles/accounts. API-key auth (x-api-key or Authorization: Bearer). Server data backend is postgresql when HASNA_ACCOUNTS_DATABASE_URL is set.",
     },
     components: {
       securitySchemes: {
@@ -45,11 +45,11 @@ export function buildOpenApiDoc(version: string): OpenApiDoc {
       schemas: {
         HealthResponse: {
           type: "object",
-          required: ["status", "version", "mode"],
+          required: ["status", "version", "backend"],
           properties: {
             status: { type: "string", enum: ["ok", "degraded", "unavailable"] },
             version: { type: "string" },
-            mode: { type: "string", enum: ["local", "cloud"] },
+            backend: { type: "string", enum: ["postgresql"] },
           },
         },
         ReadyResponse: {
