@@ -60,8 +60,9 @@
 // on purpose — blank reads as unset — and points its child at a `127.0.0.1` fixture,
 // which `isLoopbackApiUrl` exempts by design. The fourth is the deliberate residual
 // below. Five further sites are outside the invariant entirely because their child
-// never imports the store: the four `bun -e` probes in redaction-notice.e2e.test.ts
-// and the `bash` resolver in scripts/ci/deploy-workflow.test.ts.
+// never imports the store: the four `bun -e` probes in redaction-notice.e2e.test.ts.
+// (The former `bash` resolver in the removed scripts/ci/deploy-workflow.test.ts —
+// deleted with the internal deploy lane — never imported the store either.)
 //
 // SO: IF YOU ADD A SPAWNER WHOSE CHILD TOUCHES THE STORE, PUT A DB-PATH KEY IN THE
 // ENV YOU BUILD. Copying the surrounding `...process.env` and omitting that key is a
