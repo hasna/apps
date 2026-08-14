@@ -38,13 +38,20 @@ function canonical(payload: HashPayload): string {
   return JSON.stringify(keys.map((k) => [k, payload[k]]));
 }
 
-function computeRowHash(prevHash: string, payload: HashPayload): string {
+export function computeRowHash(prevHash: string, payload: HashPayload): string {
   return createHash("sha256").update(prevHash + "|" + canonical(payload)).digest("hex");
 }
 
+// The chain is defined by append order. recorded_at is ms-precision ISO text
+// and id is a random UUID, so (recorded_at, id) does not order same-millisecond
+// rows in append order — two appends in one ms with the second UUID sorting
+// smaller previously linked the chain in append order and walked it in id order,
+// breaking verification (~1/256, nondeterministic). lifecycle_events's implicit
+// SQLite rowid is assigned monotonically per INSERT, and the append-only
+// triggers forbid DELETE, so rowid is the stable chain-order key.
 function latestHash(db: Database): string {
   const row = db
-    .query("SELECT row_hash FROM lifecycle_events ORDER BY recorded_at DESC, id DESC LIMIT 1")
+    .query("SELECT row_hash FROM lifecycle_events ORDER BY rowid DESC LIMIT 1")
     .get() as { row_hash: string } | null;
   return row?.row_hash ?? GENESIS_HASH;
 }
@@ -85,8 +92,8 @@ export function appendLifecycleEvent(db: Database, input: AppendLifecycleInput):
 
 export function listLifecycleEvents(db: Database, memberId?: string): LifecycleEvent[] {
   const rows = memberId
-    ? db.query("SELECT * FROM lifecycle_events WHERE member_id = ? ORDER BY recorded_at ASC, id ASC").all(memberId)
-    : db.query("SELECT * FROM lifecycle_events ORDER BY recorded_at ASC, id ASC").all();
+    ? db.query("SELECT * FROM lifecycle_events WHERE member_id = ? ORDER BY rowid ASC").all(memberId)
+    : db.query("SELECT * FROM lifecycle_events ORDER BY rowid ASC").all();
   return rows as LifecycleEvent[];
 }
 
@@ -99,9 +106,7 @@ export interface ChainVerification {
 
 /** Recompute the full hash chain and report the first break (if any). */
 export function verifyLifecycleChain(db: Database): ChainVerification {
-  const rows = db
-    .query("SELECT * FROM lifecycle_events ORDER BY recorded_at ASC, id ASC")
-    .all() as LifecycleEvent[];
+  const rows = db.query("SELECT * FROM lifecycle_events ORDER BY rowid ASC").all() as LifecycleEvent[];
   let prev = GENESIS_HASH;
   let checked = 0;
   for (const row of rows) {

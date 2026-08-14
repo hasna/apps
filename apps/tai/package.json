@@ -25,6 +25,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./sdk": {
+      "types": "./dist/sdk.d.ts",
+      "import": "./dist/sdk.js"
     }
   },
   "bin": {
@@ -32,7 +36,7 @@
     "tai-mcp": "./dist/mcp/index.js"
   },
   "scripts": {
-    "build": "rm -rf dist && bun build src/index.ts src/cli/index.ts src/mcp/index.ts --outdir dist --target node && tsc -p tsconfig.build.json",
+    "build": "rm -rf dist && bun build src/index.ts src/sdk.ts src/cli/index.ts src/mcp/index.ts --outdir dist --target node && tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "prepack": "bun run build",
     "prepublishOnly": "bun run typecheck && bun run test",
