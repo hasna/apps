@@ -1,0 +1,278 @@
+import pkg from "../../package.json";
+import { getStore } from "../lib/store/index.js";
+import { sendSms } from "../lib/sms.js";
+import { sendWhatsApp, sendWhatsAppAudio } from "../lib/whatsapp.js";
+import { makeCall } from "../lib/voice.js";
+import { searchAvailableNumbers, provisionNumber, releaseNumber } from "../lib/provisioning.js";
+import { generateSpeech, listVoices } from "../lib/tts.js";
+import { generateSchedule, generateMessage, analyzeIncomingMessage } from "../lib/cerebras.js";
+import { startScheduler } from "../lib/scheduler.js";
+import {
+  enforceTelephonyMutationGate,
+  listQueuedTelephonyMutations,
+  requireRestApiAuth,
+  retryQueuedTelephonyMutation,
+  TelephonySafetyError,
+  telephonyProviderSmoke,
+  validateOutboundTarget,
+  validateProvisioningCountry,
+  verifyTwilioWebhookRequest,
+} from "../lib/safety.js";
+import {
+  handleSmsWebhook,
+  handleWhatsAppWebhook,
+  handleVoiceWebhook,
+  handleVoicemailRecordingWebhook,
+  handleStatusWebhook,
+} from "./webhooks.js";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+
+function json(data: unknown, status = 200): Response {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
+  });
+}
+
+function twiml(xml: string): Response {
+  return new Response(xml, {
+    headers: { "Content-Type": "application/xml" },
+  });
+}
+
+class HttpError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+  }
+}
+
+async function parseBody(req: Request): Promise<Record<string, unknown>> {
+  const ct = (req.headers.get("content-type") || "").toLowerCase();
+  if (ct.includes("application/json")) {
+    let body: unknown;
+    try {
+      body = await req.json();
+    } catch {
+      throw new HttpError("Invalid JSON request body", 400);
+    }
+    if (body === null || typeof body !== "object" || Array.isArray(body)) {
+      throw new HttpError("JSON request body must be an object", 400);
+    }
+    return body as Record<string, unknown>;
+  }
+  return {};
+}
+
+// Dashboard static file serving
+const dashboardDir = join(import.meta.dir, "../../dashboard/dist");
+const hasDashboard = existsSync(dashboardDir);
+
+export function createServer(port: number = 19451) {
+  // Start scheduler
+  startScheduler();
+
+  return Bun.serve({
+    port,
+    async fetch(req) {
+      const url = new URL(req.url);
+      const path = url.pathname;
+
+      // CORS preflight
+      if (req.method === "OPTIONS") {
+        return new Response(null, {
+          headers: {
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+            "Access-Control-Allow-Headers":
+              "Content-Type, Authorization, Idempotency-Key, X-Idempotency-Key, X-Telephony-Api-Key, X-Telephony-Provider-Mode, X-Telephony-Live-Execution, X-Telephony-Operator-Approval, X-Telephony-Sandbox-Smoke, X-Telephony-Live-Smoke",
+          },
+        });
+      }
+
+      try {
+        // --- Twilio Webhooks ---
+        if (path === "/webhooks/sms/inbound" && req.method === "POST") {
+          const body = await req.text();
+          const gate = verifyTwilioWebhookRequest(req, body);
+          if (gate) return gate;
+          return twiml(await handleSmsWebhook(body));
+        }
+        if (path === "/webhooks/whatsapp/inbound" && req.method === "POST") {
+          const body = await req.text();
+          const gate = verifyTwilioWebhookRequest(req, body);
+          if (gate) return gate;
+          return twiml(await handleWhatsAppWebhook(body));
+        }
+        if (path === "/webhooks/voice/inbound" && req.method === "POST") {
+          const body = await req.text();
+          const gate = verifyTwilioWebhookRequest(req, body);
+          if (gate) return gate;
+          return twiml(await handleVoiceWebhook(body));
+        }
+        if (path === "/webhooks/voicemail/recording" && req.method === "POST") {
+          const body = await req.text();
+          const gate = verifyTwilioWebhookRequest(req, body);
+          if (gate) return gate;
+          return twiml(await handleVoicemailRecordingWebhook(body));
+        }
+        if (path === "/webhooks/status" && req.method === "POST") {
+          const body = await req.text();
+          const gate = verifyTwilioWebhookRequest(req, body);
+          if (gate) return gate;
+          return twiml(await handleStatusWebhook(body));
+        }
+
+        // --- Health ---
+        if (path === "/health") return json({ status: "ok", version: pkg.version });
+
+        // --- API Routes ---
+        if (path.startsWith("/api/")) {
+          const gate = requireRestApiAuth(req);
+          if (gate) return gate;
+        }
+
+        if (path === "/api/sms/send" && req.method === "POST") {
+          const body = await parseBody(req);
+          validateOutboundTarget(body.to, "sms");
+          const safetyGate = enforceTelephonyMutationGate(req, "send_sms", body.to);
+          if (safetyGate) return safetyGate;
+          return json(await sendSms(body as any));
+        }
+        if (path === "/api/whatsapp/send" && req.method === "POST") {
+          const body = await parseBody(req);
+          validateOutboundTarget(body.to, "whatsapp");
+          const safetyGate = enforceTelephonyMutationGate(req, "send_whatsapp", body.to);
+          if (safetyGate) return safetyGate;
+          return json(await sendWhatsApp(body as any));
+        }
+        if (path === "/api/whatsapp/send-audio" && req.method === "POST") {
+          const body = await parseBody(req);
+          validateOutboundTarget(body.to, "whatsapp");
+          const safetyGate = enforceTelephonyMutationGate(req, "send_whatsapp", body.to);
+          if (safetyGate) return safetyGate;
+          return json(await sendWhatsAppAudio(body as any));
+        }
+        if (path === "/api/call/make" && req.method === "POST") {
+          const body = await parseBody(req);
+          validateOutboundTarget(body.to, "call");
+          const safetyGate = enforceTelephonyMutationGate(req, "make_call", body.to);
+          if (safetyGate) return safetyGate;
+          return json(await makeCall(body as any));
+        }
+        if (path === "/api/messages") return json(await getStore().listMessages({ limit: 50 }));
+        if (path === "/api/messages/search") {
+          const q = url.searchParams.get("q") || "";
+          return json(await getStore().searchMessages(q));
+        }
+        if (path.startsWith("/api/conversation/")) {
+          const phone = decodeURIComponent(path.slice("/api/conversation/".length));
+          return json(await getStore().getConversation(phone));
+        }
+        if (path === "/api/calls") return json(await getStore().listCalls());
+        if (path === "/api/voicemails") return json(await getStore().listVoicemails());
+        if (path === "/api/numbers") return json(await getStore().listPhoneNumbers());
+        if (path === "/api/numbers/search" && req.method === "POST") {
+          const body = await parseBody(req);
+          validateProvisioningCountry(body.country);
+          return json(await searchAvailableNumbers(body as any));
+        }
+        if (path === "/api/numbers/provision" && req.method === "POST") {
+          const body = await parseBody(req);
+          validateProvisioningCountry(body.country);
+          validateOutboundTarget(body.phone_number, "number");
+          const safetyGate = enforceTelephonyMutationGate(req, "provision_number", body.phone_number);
+          if (safetyGate) return safetyGate;
+          return json(await provisionNumber(body as any));
+        }
+        if (path === "/api/numbers/release" && req.method === "POST") {
+          const body = await parseBody(req);
+          validateOutboundTarget(body.number, "number");
+          const safetyGate = enforceTelephonyMutationGate(req, "release_number", body.number);
+          if (safetyGate) return safetyGate;
+          return json(await releaseNumber(body.number as string));
+        }
+        if (path === "/api/safety/queue" && req.method === "GET") return json(listQueuedTelephonyMutations());
+        if (path.startsWith("/api/safety/queue/") && path.endsWith("/retry") && req.method === "POST") {
+          const id = decodeURIComponent(path.slice("/api/safety/queue/".length, -"/retry".length));
+          const retry = retryQueuedTelephonyMutation(id);
+          if (!retry) return json({ error: "Queued telephony mutation not found." }, 404);
+          return json(retry);
+        }
+        if (path === "/api/safety/smoke" && req.method === "POST") {
+          const body = await parseBody(req);
+          return telephonyProviderSmoke(req, body);
+        }
+        if (path === "/api/agents" && req.method === "GET") return json(await getStore().listAgents());
+        if (path === "/api/agents/register" && req.method === "POST") {
+          const body = await parseBody(req);
+          return json(await getStore().registerAgent(body as any));
+        }
+        if (path === "/api/agents/heartbeat" && req.method === "POST") {
+          const body = await parseBody(req);
+          return json(await getStore().heartbeat(body.agent_id as string));
+        }
+        if (path === "/api/projects" && req.method === "GET") return json(await getStore().listProjects());
+        if (path === "/api/projects" && req.method === "POST") {
+          const body = await parseBody(req);
+          return json(await getStore().createProject(body as any));
+        }
+        if (path === "/api/contacts" && req.method === "GET") return json(await getStore().listContacts());
+        if (path === "/api/contacts" && req.method === "POST") {
+          const body = await parseBody(req);
+          return json(await getStore().createContact(body as any));
+        }
+        if (path === "/api/contacts/search") {
+          const q = url.searchParams.get("q") || "";
+          return json(await getStore().searchContacts(q));
+        }
+        if (path === "/api/schedules" && req.method === "GET") return json(await getStore().listSchedules());
+        if (path === "/api/schedules" && req.method === "POST") {
+          const body = await parseBody(req);
+          return json(await getStore().createSchedule(body as any));
+        }
+        if (path === "/api/schedules/ai" && req.method === "POST") {
+          const body = await parseBody(req);
+          return json(await generateSchedule(body.description as string));
+        }
+        if (path === "/api/webhooks" && req.method === "GET") return json(await getStore().listWebhooks());
+        if (path === "/api/webhooks" && req.method === "POST") {
+          const body = await parseBody(req);
+          return json(await getStore().createWebhook(body as any));
+        }
+        if (path === "/api/tts" && req.method === "POST") {
+          const body = await parseBody(req);
+          return json(await generateSpeech(body as any));
+        }
+        if (path === "/api/voices") return json(await listVoices());
+        if (path === "/api/ai/message" && req.method === "POST") {
+          const body = await parseBody(req);
+          return json({ message: await generateMessage(body as any) });
+        }
+        if (path === "/api/ai/analyze" && req.method === "POST") {
+          const body = await parseBody(req);
+          return json(await analyzeIncomingMessage(body.message as string));
+        }
+
+        // --- Dashboard ---
+        if (hasDashboard) {
+          const filePath = path === "/" ? "/index.html" : path;
+          const file = Bun.file(join(dashboardDir, filePath));
+          if (await file.exists()) return new Response(file);
+          // SPA fallback
+          const index = Bun.file(join(dashboardDir, "index.html"));
+          if (await index.exists()) return new Response(index);
+        }
+
+        return json({ error: "Not found" }, 404);
+      } catch (err: any) {
+        if (err instanceof HttpError) return json({ error: err.message }, err.status);
+        if (err instanceof TelephonySafetyError) return json({ error: err.message }, err.status);
+        return json({ error: err.message }, 500);
+      }
+    },
+  });
+}

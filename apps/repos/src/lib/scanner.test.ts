@@ -1,0 +1,391 @@
+import { describe, it, expect, beforeEach, afterAll } from "bun:test";
+import { execFileSync, execSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { closeDb, getDb } from "../db/database";
+import { scanRepoPaths, scanRepos } from "./scanner";
+import { listRepos, listCommits, listBranches, listTags, listRemotes } from "../db/repos";
+
+// A temp dir, never a checkout-relative path: on the fleet this repo is developed
+// from checkouts under ~/.hasna/repos/worktrees/<repo>/<task>, and the derived-
+// checkout admission gate would refuse fixtures placed beneath that segment.
+// realpathSync so platforms where tmpdir() is a symlink (macOS /var -> /private/var)
+// compare equal to the realpaths the scanner records.
+const TEST_DIR = realpathSync(mkdtempSync(join(tmpdir(), "repos-scanner-test-")));
+
+function createTestRepo(name: string, commits = 1): string {
+  const repoPath = join(TEST_DIR, name);
+  mkdirSync(repoPath, { recursive: true });
+  execSync(`git init`, { cwd: repoPath, stdio: "pipe" });
+  execSync(`git config user.email "test@test.com"`, { cwd: repoPath, stdio: "pipe" });
+  execSync(`git config user.name "Test User"`, { cwd: repoPath, stdio: "pipe" });
+
+  for (let i = 0; i < commits; i++) {
+    writeFileSync(join(repoPath, `file-${i}.txt`), `content ${i}`);
+    execSync(`git add .`, { cwd: repoPath, stdio: "pipe" });
+    execSync(`git commit -m "commit ${i}"`, { cwd: repoPath, stdio: "pipe" });
+  }
+
+  return repoPath;
+}
+
+beforeEach(() => {
+  closeDb();
+  process.env["HASNA_REPOS_DB_PATH"] = ":memory:";
+  getDb(":memory:");
+  rmSync(TEST_DIR, { recursive: true, force: true });
+  mkdirSync(TEST_DIR, { recursive: true });
+});
+
+afterAll(() => {
+  closeDb();
+  rmSync(TEST_DIR, { recursive: true, force: true });
+  delete process.env["HASNA_REPOS_DB_PATH"];
+});
+
+describe("scanner", () => {
+  it("should discover repos in a directory", async () => {
+    createTestRepo("repo-a", 2);
+    createTestRepo("repo-b", 1);
+    const result = await scanRepos([TEST_DIR]);
+    expect(result.repos_found).toBe(2);
+    expect(result.repos_new).toBe(2);
+  });
+
+  it("does not admit linked worktrees discovered beneath or passed as the scan root", async () => {
+    const primary = createTestRepo("primary-checkout", 1);
+    const worktree = join(TEST_DIR, "worktrees", "primary-checkout", "task-a");
+    mkdirSync(join(worktree, ".."), { recursive: true });
+    execFileSync("git", ["worktree", "add", "-b", "task-a", worktree], {
+      cwd: primary,
+      stdio: "pipe",
+    });
+
+    const discovered = await scanRepos([TEST_DIR]);
+    expect(discovered.repos_found).toBe(1);
+    expect(listRepos().map((repo) => repo.path)).toEqual([primary]);
+
+    const rootedAtWorktree = await scanRepos([worktree]);
+    expect(rootedAtWorktree.repos_found).toBe(0);
+
+    const directlyPassed = await scanRepoPaths([worktree]);
+    expect(directlyPassed.repos_found).toBe(0);
+    expect(listRepos().map((repo) => repo.path)).toEqual([primary]);
+  });
+
+  it("should index commits from discovered repos", async () => {
+    createTestRepo("repo-with-commits", 3);
+    await scanRepos([TEST_DIR]);
+    const repos = listRepos();
+    expect(repos.length).toBe(1);
+    const commits = listCommits({ repo_id: repos[0]!.id });
+    expect(commits.length).toBe(3);
+  });
+
+  it("should index branches", async () => {
+    const repoPath = createTestRepo("repo-with-branch", 1);
+    execSync(`git checkout -b feature-branch`, { cwd: repoPath, stdio: "pipe" });
+    writeFileSync(join(repoPath, "feature.txt"), "feature");
+    execSync(`git add . && git commit -m "feature commit"`, { cwd: repoPath, stdio: "pipe" });
+
+    await scanRepos([TEST_DIR]);
+    const repos = listRepos();
+    const branches = listBranches({ repo_id: repos[0]!.id });
+    expect(branches.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("classifies slash branches from their full ref namespace", async () => {
+    const repoPath = createTestRepo("repo-with-local-and-remote-slash-branches", 1);
+    execFileSync("git", ["checkout", "-b", "build/accounts-v1"], { cwd: repoPath, stdio: "pipe" });
+    execFileSync("git", ["remote", "add", "origin", "https://github.com/hasna/accounts.git"], {
+      cwd: repoPath,
+      stdio: "pipe",
+    });
+    const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoPath, encoding: "utf8" }).trim();
+    execFileSync("git", ["update-ref", "refs/remotes/origin/build/accounts-v1", head], {
+      cwd: repoPath,
+      stdio: "pipe",
+    });
+
+    await scanRepos([TEST_DIR]);
+    const [repo] = listRepos();
+    const branches = listBranches({ repo_id: repo!.id });
+
+    expect(branches).toContainEqual(expect.objectContaining({
+      name: "build/accounts-v1",
+      is_remote: 0,
+    }));
+    expect(branches).toContainEqual(expect.objectContaining({
+      name: "origin/build/accounts-v1",
+      is_remote: 1,
+    }));
+  });
+
+  it("persists local and remote refs with the same display name", async () => {
+    const repoPath = createTestRepo("repo-with-same-name-local-and-remote-branches", 1);
+    execFileSync("git", ["remote", "add", "origin", "https://github.com/hasna/accounts.git"], {
+      cwd: repoPath,
+      stdio: "pipe",
+    });
+    const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoPath, encoding: "utf8" }).trim();
+    execFileSync("git", ["update-ref", "refs/heads/origin/main", head], { cwd: repoPath, stdio: "pipe" });
+    execFileSync("git", ["update-ref", "refs/remotes/origin/main", head], { cwd: repoPath, stdio: "pipe" });
+
+    await scanRepos([TEST_DIR]);
+    const [repo] = listRepos();
+    const matching = listBranches({ repo_id: repo!.id }).filter(({ name }) => name === "origin/main");
+
+    expect(matching).toHaveLength(2);
+    expect(matching.map(({ is_remote }) => is_remote).sort()).toEqual([0, 1]);
+  });
+
+  it("removes stale origin remote branch rows on rescan", async () => {
+    const repoPath = createTestRepo("repo-with-pruned-origin-branch", 1);
+    execFileSync("git", ["remote", "add", "origin", "https://github.com/hasna/accounts.git"], {
+      cwd: repoPath,
+      stdio: "pipe",
+    });
+    const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoPath, encoding: "utf8" }).trim();
+    execFileSync("git", ["update-ref", "refs/remotes/origin/main", head], { cwd: repoPath, stdio: "pipe" });
+
+    await scanRepos([TEST_DIR]);
+    const [repo] = listRepos();
+    expect(listBranches({ repo_id: repo!.id })).toContainEqual(expect.objectContaining({
+      name: "origin/main",
+      is_remote: 1,
+    }));
+
+    execFileSync("git", ["update-ref", "-d", "refs/remotes/origin/main"], { cwd: repoPath, stdio: "pipe" });
+    await scanRepos([TEST_DIR]);
+
+    expect(listBranches({ repo_id: repo!.id })).not.toContainEqual(expect.objectContaining({
+      name: "origin/main",
+      is_remote: 1,
+    }));
+  });
+
+  it("preserves existing branch rows when branch enumeration fails", async () => {
+    const repoPath = createTestRepo("repo-with-failed-branch-enumeration", 1);
+    execFileSync("git", ["checkout", "-b", "feature/preserved"], { cwd: repoPath, stdio: "pipe" });
+
+    await scanRepos([TEST_DIR]);
+    const [repo] = listRepos();
+    const branchesBeforeFailure = listBranches({ repo_id: repo!.id });
+    expect(branchesBeforeFailure).toContainEqual(expect.objectContaining({
+      name: "feature/preserved",
+      is_remote: 0,
+    }));
+
+    execFileSync("git", ["pack-refs", "--all"], { cwd: repoPath, stdio: "pipe" });
+    writeFileSync(join(repoPath, ".git", "packed-refs"), "not-a-valid-packed-ref\n");
+
+    await scanRepos([TEST_DIR]);
+
+    expect(listBranches({ repo_id: repo!.id })).toEqual(branchesBeforeFailure);
+  });
+
+  it("replaces existing branch rows when branch enumeration succeeds with no refs", async () => {
+    const repoPath = createTestRepo("repo-with-successful-empty-branch-enumeration", 1);
+
+    await scanRepos([TEST_DIR]);
+    const [repo] = listRepos();
+    expect(listBranches({ repo_id: repo!.id })).not.toHaveLength(0);
+
+    const branchName = execFileSync("git", ["branch", "--show-current"], {
+      cwd: repoPath,
+      encoding: "utf8",
+    }).trim();
+    execFileSync("git", ["update-ref", "-d", `refs/heads/${branchName}`], {
+      cwd: repoPath,
+      stdio: "pipe",
+    });
+
+    await scanRepos([TEST_DIR]);
+
+    expect(listBranches({ repo_id: repo!.id })).toHaveLength(0);
+  });
+
+  it("skips symbolic remote HEAD refs", async () => {
+    const repoPath = createTestRepo("repo-with-symbolic-remote-head", 1);
+    execFileSync("git", ["remote", "add", "origin", "https://github.com/hasna/accounts.git"], {
+      cwd: repoPath,
+      stdio: "pipe",
+    });
+    const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoPath, encoding: "utf8" }).trim();
+    execFileSync("git", ["update-ref", "refs/remotes/origin/main", head], { cwd: repoPath, stdio: "pipe" });
+    execFileSync("git", ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"], {
+      cwd: repoPath,
+      stdio: "pipe",
+    });
+
+    await scanRepos([TEST_DIR]);
+    const [repo] = listRepos();
+    const branches = listBranches({ repo_id: repo!.id });
+
+    expect(branches).toContainEqual(expect.objectContaining({ name: "origin/main", is_remote: 1 }));
+    expect(branches).not.toContainEqual(expect.objectContaining({ name: "origin", is_remote: 1 }));
+    expect(branches).not.toContainEqual(expect.objectContaining({ name: "origin/HEAD", is_remote: 1 }));
+  });
+
+  it("preserves apostrophes and pipe characters in branch names", async () => {
+    const repoPath = createTestRepo("repo-with-delimiter-branch", 1);
+    const branchName = "feature/o'hare|pipe";
+    execFileSync("git", ["checkout", "-b", branchName], { cwd: repoPath, stdio: "pipe" });
+    const sha = execFileSync("git", ["rev-parse", "--short", "HEAD"], {
+      cwd: repoPath,
+      encoding: "utf8",
+    }).trim();
+    const date = execFileSync("git", ["show", "-s", "--format=%ci", "HEAD"], {
+      cwd: repoPath,
+      encoding: "utf8",
+    }).trim();
+
+    await scanRepos([TEST_DIR]);
+    const [repo] = listRepos();
+    const branches = listBranches({ repo_id: repo!.id });
+
+    expect(branches).toContainEqual(expect.objectContaining({
+      name: branchName,
+      is_remote: 0,
+      last_commit_sha: sha,
+      last_commit_date: date,
+    }));
+  });
+
+  it("should index tags", async () => {
+    const repoPath = createTestRepo("repo-with-tag", 1);
+    execSync(`git tag v1.0.0`, { cwd: repoPath, stdio: "pipe" });
+
+    await scanRepos([TEST_DIR]);
+    const repos = listRepos();
+    const tags = listTags({ repo_id: repos[0]!.id });
+    expect(tags.length).toBe(1);
+    expect(tags[0]!.name).toBe("v1.0.0");
+  });
+
+  it("should report scan duration", async () => {
+    createTestRepo("timing-test", 1);
+    const result = await scanRepos([TEST_DIR]);
+    expect(result.duration_ms).toBeGreaterThan(0);
+  });
+
+  it("should skip non-git directories", async () => {
+    mkdirSync(join(TEST_DIR, "not-a-repo"), { recursive: true });
+    writeFileSync(join(TEST_DIR, "not-a-repo", "file.txt"), "test");
+    createTestRepo("real-repo", 1);
+
+    const result = await scanRepos([TEST_DIR]);
+    expect(result.repos_found).toBe(1);
+  });
+
+  it("should skip node_modules", async () => {
+    mkdirSync(join(TEST_DIR, "node_modules", "some-pkg"), { recursive: true });
+    createTestRepo("actual-repo", 1);
+
+    const result = await scanRepos([TEST_DIR]);
+    expect(result.repos_found).toBe(1);
+  });
+
+  it("should call onProgress callback", async () => {
+    createTestRepo("progress-test", 1);
+    const messages: string[] = [];
+    await scanRepos([TEST_DIR], { onProgress: (msg) => messages.push(msg) });
+    expect(messages.length).toBeGreaterThan(0);
+    expect(messages.some((m) => m.includes("Discovering"))).toBe(true);
+    expect(messages.some((m) => m.includes("Found"))).toBe(true);
+  });
+
+  it("should handle empty directories", async () => {
+    const result = await scanRepos([TEST_DIR]);
+    expect(result.repos_found).toBe(0);
+  });
+
+  it("should extract repo name from path", async () => {
+    createTestRepo("my-awesome-repo", 1);
+    await scanRepos([TEST_DIR]);
+    const repos = listRepos();
+    expect(repos[0]!.name).toBe("my-awesome-repo");
+  });
+
+  it("should handle repos with no commits gracefully", async () => {
+    const repoPath = join(TEST_DIR, "empty-repo");
+    mkdirSync(repoPath, { recursive: true });
+    execSync(`git init`, { cwd: repoPath, stdio: "pipe" });
+
+    const result = await scanRepos([TEST_DIR]);
+    expect(result.repos_found).toBe(1);
+    expect(result.commits_indexed).toBe(0);
+  });
+
+  it("should scan repos whose paths contain shell metacharacters without executing them", async () => {
+    const markerName = `scanner-injection-marker-${process.pid}`;
+    const markerPath = join(process.cwd(), markerName);
+    const repoName = `quoted"; touch ${markerName}; #`;
+    createTestRepo(repoName, 1);
+
+    try {
+      const result = await scanRepos([TEST_DIR]);
+      expect(result.repos_found).toBe(1);
+      expect(result.commits_indexed).toBe(1);
+      expect(existsSync(markerPath)).toBe(false);
+    } finally {
+      rmSync(markerPath, { force: true });
+    }
+  });
+
+  it("should set default branch", async () => {
+    createTestRepo("branch-check", 1);
+    await scanRepos([TEST_DIR]);
+    const repos = listRepos();
+    expect(repos[0]!.default_branch).toBeTruthy();
+  });
+
+  it("normalizes credential-bearing Git remotes before scanner persistence", async () => {
+    const repoPath = createTestRepo("remote-sanitize", 1);
+    const unsafe = `https://${["member", "phrase"].join(":")}@git.example.test/team/tool.git?query=marker`;
+    execFileSync("git", ["remote", "add", "origin", unsafe], { cwd: repoPath, stdio: "pipe" });
+
+    await scanRepos([TEST_DIR]);
+    const repo = listRepos()[0]!;
+    expect(repo.remote_url).toBe("git.example.test/team/tool");
+    expect(listRemotes(repo.id)).toEqual([expect.objectContaining({
+      name: "origin",
+      url: "git.example.test/team/tool",
+      fetch_url: "git.example.test/team/tool",
+    })]);
+    expect(JSON.stringify({ repo, remotes: listRemotes(repo.id) })).not.toContain(unsafe);
+  });
+
+  it("does not index a hollow .git as a repository", async () => {
+    // `existsSync(dir + "/.git")` accepted a directory stripped to hooks/ and
+    // worktrees/ as a checkout. That is how 65 gutted paths became registry rows
+    // and kept being refreshed as though they were repositories, which is the
+    // supply side of the "lookup returns an unusable path" defect.
+    const hollow = createTestRepo("hollow-skeleton", 1);
+    rmSync(join(hollow, ".git"), { recursive: true, force: true });
+    mkdirSync(join(hollow, ".git", "hooks"), { recursive: true });
+    mkdirSync(join(hollow, ".git", "worktrees"), { recursive: true });
+    createTestRepo("healthy-sibling", 1);
+
+    await scanRepos([TEST_DIR]);
+    const names = listRepos().map((repo) => repo.name);
+    expect(names).toContain("healthy-sibling");
+    expect(names).not.toContain("hollow-skeleton");
+  });
+
+  it("descends past a hollow .git instead of stopping at it", async () => {
+    // The old predicate also ended the walk: a gutted directory was treated as a
+    // repository and never entered, so anything checked out below it was invisible
+    // to every scan.
+    const shell = join(TEST_DIR, "gutted-parent");
+    mkdirSync(join(shell, ".git", "hooks"), { recursive: true });
+    mkdirSync(join(shell, ".git", "worktrees"), { recursive: true });
+    createTestRepo(join("gutted-parent", "nested-real"), 1);
+
+    await scanRepos([TEST_DIR]);
+    const names = listRepos().map((repo) => repo.name);
+    expect(names).toContain("nested-real");
+    expect(names).not.toContain("gutted-parent");
+  });
+});
