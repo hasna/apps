@@ -1,0 +1,43 @@
+{
+  "name": "@hasna/connect-zoho-cliq",
+  "version": "0.0.1",
+  "description": "Zoho Cliq team chat and messaging API connector",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "connect-zoho-cliq": "bin/index.js"
+  },
+  "scripts": {
+    "dev": "bun run ./src/cli/index.ts",
+    "build": "bun build ./src/index.ts --outdir ./dist --target bun && bun build ./src/cli/index.ts --outdir ./bin --target bun",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "bun run build"
+  },
+  "keywords": [
+    "zoho",
+    "cliq",
+    "chat",
+    "messaging",
+    "api",
+    "cli",
+    "connector"
+  ],
+  "author": "Hasna",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "chalk": "^5.3.0",
+    "commander": "^12.1.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.0.0"
+  },
+  "files": [
+    "dist",
+    "bin",
+    "src",
+    "README.md",
+    "CLAUDE.md"
+  ]
+}

@@ -1,0 +1,88 @@
+{
+  "actionId": null,
+  "actorRole": "approver",
+  "attemptScope": {
+    "maximum": 2,
+    "minimum": 1
+  },
+  "authorizationPolicyRevision": 4,
+  "boundInputDigests": [
+    {
+      "digest": "083e9014634a6c88119a5d0e541cc404cf494a171584573851f78c92ba48f0aa",
+      "kind": "request"
+    },
+    {
+      "digest": "ac1168d43503c1d1505c3271ceb4a92a9803af75ac37739c5e46ea540d036274",
+      "kind": "plan"
+    },
+    {
+      "digest": "6bc75f992f681a5cf96083897b0bfffdd3bb9304b4ec32891c944ecb3af522b9",
+      "kind": "intent"
+    }
+  ],
+  "createdAt": "2026-08-09T09:10:00.000Z",
+  "decision": {
+    "actor": {
+      "id": "owner-approver",
+      "kind": "human",
+      "name": "Deployment Approver"
+    },
+    "createdAt": "2026-08-09T09:10:00.000Z",
+    "decisionType": "approval",
+    "evidenceRefs": [
+      {
+        "id": "approval-envelope-evidence",
+        "kind": "report",
+        "sha256": "69f3bf4095c3714596d75471fd55a0660b985bbe757d9f8ad682c0db5c89b1d3",
+        "summary": "Bounded evidence for approval-envelope-evidence",
+        "uri": "artifact://deployment-fixture/approval-envelope-evidence"
+      }
+    ],
+    "id": "approval-envelope-example-app",
+    "obligations": [
+      "retain immutable receipts",
+      "verify live outcome"
+    ],
+    "reason": "Approved after policy and evidence review",
+    "redactions": [],
+    "schema": "hasna.decision_envelope.v1",
+    "selected": [],
+    "skipped": [],
+    "status": "allowed"
+  },
+  "digest": "41a0daa144612fdd8d0862c93f22ad0378951a8b25fe2212052bb6f3505f77cb",
+  "environment": {
+    "digest": "9760cb4f172b160d2c3257a63e8ad94683a45c985ed62511a1a2c01740636278",
+    "id": "environment-production",
+    "revision": 2,
+    "schema": "hasna.environment_binding.v1"
+  },
+  "evidenceRefs": [
+    {
+      "id": "deployment-approval-evidence",
+      "kind": "report",
+      "sha256": "e3548ec1c75b17714a582350203a9dc66142ef9433bcfe69f256b0ef23d75e0d",
+      "summary": "Bounded evidence for deployment-approval-evidence",
+      "uri": "artifact://deployment-fixture/deployment-approval-evidence"
+    }
+  ],
+  "expiresAt": "2026-08-10T09:00:00.000Z",
+  "id": "deployment-approval-example-app",
+  "issuedAt": "2026-08-09T09:10:00.000Z",
+  "phaseId": null,
+  "plan": {
+    "digest": "ac1168d43503c1d1505c3271ceb4a92a9803af75ac37739c5e46ea540d036274",
+    "id": "deployment-plan-example-app",
+    "schema": "hasna.deployment_plan.v1"
+  },
+  "producer": {
+    "id": "owner-approver",
+    "kind": "human",
+    "name": "Deployment Approver"
+  },
+  "runtimeMaterial": null,
+  "schema": "hasna.deployment_approval_decision.v1",
+  "scope": "plan",
+  "separationOfDutiesPassed": true,
+  "unchangedRetryPolicy": "allowed"
+}

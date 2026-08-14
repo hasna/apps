@@ -263,6 +263,70 @@ describe.skipIf(!pgClient)("tenant isolation matrix (WI-5c, Layer 1)", () => {
     expect(bThreads.body.threads).toHaveLength(0);
   });
 
+  it("priority sender rules normalize, dedupe, isolate per tenant, and 404 with the declared body", async () => {
+    const { deps } = makeDeps();
+    const a = await makeTenant("rule-a");
+    const b = await makeTenant("rule-b");
+
+    // POST runs the /v1 handler's normalization: mixed-case kind and padded
+    // value are stored lowercased and trimmed (migration 0026 CHECK enforces
+    // `value = lower(btrim(value))` at the DB layer as the backstop).
+    const created = await call(deps, "POST", "/v1/priority-sender-rules", {
+      token: a.token,
+      body: { kind: "ADDRESS", value: " Person@Example.COM " },
+    });
+    expect(created.status).toBe(201);
+    expect(created.body).toMatchObject({
+      id: "priority:address:person@example.com",
+      kind: "address",
+      value: "person@example.com",
+    });
+
+    // The same (kind, value) again is an idempotent ensure — same id, one row.
+    const duplicate = await call(deps, "POST", "/v1/priority-sender-rules", {
+      token: a.token,
+      body: { kind: "address", value: "person@example.com" },
+    });
+    expect(duplicate.status).toBe(201);
+    expect(duplicate.body.id).toBe("priority:address:person@example.com");
+
+    // A domain rule coexists; the same sender can match both (overlap).
+    const domain = await call(deps, "POST", "/v1/priority-sender-rules", {
+      token: a.token,
+      body: { kind: "domain", value: "Example.COM" },
+    });
+    expect(domain.status).toBe(201);
+    expect(domain.body).toMatchObject({
+      id: "priority:domain:example.com",
+      kind: "domain",
+      value: "example.com",
+    });
+    expect((await call(deps, "GET", "/v1/priority-sender-rules", { token: a.token })).body.items).toHaveLength(2);
+
+    // GET and DELETE of a MISSING rule id return the 404 body the generated
+    // contract declares, so strict SDK clients return null/false instead of
+    // throwing (regression for the serve/client text divergence).
+    const missingId = "priority:address:nobody@example.org";
+    const missingGet = await call(deps, "GET", `/v1/priority-sender-rules/${missingId}`, { token: a.token });
+    expect(missingGet.status).toBe(404);
+    expect(missingGet.body).toEqual({ error: "priority-sender-rules not found" });
+    const missingDelete = await call(deps, "DELETE", `/v1/priority-sender-rules/${missingId}`, { token: a.token });
+    expect(missingDelete.status).toBe(404);
+    expect(missingDelete.body).toEqual({ error: "priority-sender-rules not found" });
+
+    // Tenant isolation at the API layer: B sees none of A's rules, cannot GET
+    // or DELETE them (404, no cross-tenant existence leak).
+    expect((await call(deps, "GET", "/v1/priority-sender-rules", { token: b.token })).body.items).toHaveLength(0);
+    expect((await call(deps, "GET", "/v1/priority-sender-rules/priority:address:person@example.com", { token: b.token })).status).toBe(404);
+    expect((await call(deps, "DELETE", "/v1/priority-sender-rules/priority:address:person@example.com", { token: b.token })).status).toBe(404);
+
+    // A still owns its rules and can remove one (200 + delete receipt).
+    const removed = await call(deps, "DELETE", "/v1/priority-sender-rules/priority:address:person@example.com", { token: a.token });
+    expect(removed.status).toBe(200);
+    expect(removed.body).toEqual({ deleted: true, id: "priority:address:person@example.com" });
+    expect((await call(deps, "GET", "/v1/priority-sender-rules", { token: a.token })).body.items).toHaveLength(1);
+  });
+
   // NOTE: this exercises the Layer-1 (application) M4 control on the RLS-BYPASSED
   // path — EMAILS_TEST_POSTGRES_URL connects as a superuser, which bypasses RLS, so
   // assertNotOtherTenant can see the foreign-tenant row and return 404. Under

@@ -75,6 +75,8 @@ export const RESOURCE_PATHS: Readonly<Record<string, string>> = Object.freeze({
   emailDigests: "email-digests",
   webhookReceipts: "webhook-receipts",
   sandbox: "sandbox-emails",
+  mailboxFilters: "mailbox-filters",
+  prioritySenderRules: "priority-sender-rules",
   /**
    * NOT a seam family. `provisioning` is the resource the provisioning-event log is
    * served through, and `ProvisioningRepository` reaches it for
@@ -104,7 +106,9 @@ function resourceRoutes(): RouteUse[] {
     { method: "GET" as const, template: `/v1/${path}`, operations: [`${path}.list`] },
     { method: "POST" as const, template: `/v1/${path}`, operations: [`${path}.create`] },
     { method: "GET" as const, template: `/v1/${path}/{id}`, operations: [`${path}.get`] },
-    { method: "PATCH" as const, template: `/v1/${path}/{id}`, operations: [`${path}.update`] },
+    ...(path === "priority-sender-rules"
+      ? []
+      : [{ method: "PATCH" as const, template: `/v1/${path}/{id}`, operations: [`${path}.update`] }]),
     { method: "DELETE" as const, template: `/v1/${path}/{id}`, operations: [`${path}.remove`] },
   ]);
 }

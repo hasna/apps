@@ -1,4 +1,4 @@
-# Local development stack for @hasna/instructions in cloud (PURE REMOTE) mode.
+# Local development stack for @hasna/instructions (postgresql server backend).
 #   docker compose run --rm instructions-migrate     # apply schema first
 #   docker compose up --build instructions-serve
 # Auth: mint a key with
@@ -23,7 +23,6 @@ services:
     build: .
     command: ["bun", "dist/server/index.js", "migrate"]
     environment:
-      HASNA_INSTRUCTIONS_STORAGE_MODE: cloud
       HASNA_INSTRUCTIONS_DATABASE_URL: postgres://instructions:instructions@postgres:5432/instructions?sslmode=disable
       HASNA_INSTRUCTIONS_API_SIGNING_KEY: dev-signing-secret-change-me
     depends_on:
@@ -38,7 +37,6 @@ services:
       PORT: "8080"
       HOST: 0.0.0.0
       INSTRUCTIONS_NO_OPEN: "true"
-      HASNA_INSTRUCTIONS_STORAGE_MODE: cloud
       HASNA_INSTRUCTIONS_DATABASE_URL: postgres://instructions:instructions@postgres:5432/instructions?sslmode=disable
       HASNA_INSTRUCTIONS_API_SIGNING_KEY: dev-signing-secret-change-me
     depends_on:

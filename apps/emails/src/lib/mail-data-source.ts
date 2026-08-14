@@ -34,6 +34,17 @@ import {
   mailboxCounts as localMailboxCounts,
   sendComposed as localSendComposed,
 } from "../cli/tui/data.local.js";
+import {
+  applyMailboxFilter as localApplyMailboxFilter,
+  createMailboxFilter as localCreateMailboxFilter,
+  deleteMailboxFilter as localDeleteMailboxFilter,
+  getMailboxFilter as localGetMailboxFilter,
+  listMailboxFilters as localListMailboxFilters,
+  updateMailboxFilter as localUpdateMailboxFilter,
+} from "../db/mailbox-filters.local.js";
+import { MailboxFilterNotFoundError, type MailboxFilter, type MailboxFilterInput } from "./mailbox-filters.js";
+import { listPrioritySenderRulesLocal } from "../db/priority-senders.js";
+import { priorityRuleMatchesSender } from "./priority-senders.js";
 import type {
   AttachmentPath,
   ConversationBodyOptions,
@@ -114,6 +125,14 @@ export interface MailBulkResult {
   matched: number;
   hasMore: boolean;
   nextCursor: string | null;
+}
+
+export interface MailboxFilterApplyResult {
+  filter: Pick<MailboxFilter, "name" | "criteria">;
+  items: TuiMessage[];
+  limit: number;
+  offset: number;
+  truncated: boolean;
 }
 
 /** A base64 inline attachment for local/provider or bounded self-hosted send. */
@@ -204,6 +223,12 @@ export interface MailDataSource {
   mailboxCounts(opts?: { source?: MailboxSource }): Promise<MailboxCounts>;
   listMailboxStatus(opts?: MailboxStatusOptions): Promise<MailboxStatusSummary>;
   listMailboxSources(opts?: ListMailboxSourcesOptions): Promise<MailboxSourceSummary[]>;
+  listMailboxFilters(options?: { limit?: number; offset?: number }): Promise<MailboxFilter[]>;
+  getMailboxFilter(identifier: string): Promise<MailboxFilter | null>;
+  createMailboxFilter(input: MailboxFilterInput): Promise<MailboxFilter>;
+  updateMailboxFilter(identifier: string, input: Partial<MailboxFilterInput>): Promise<MailboxFilter>;
+  deleteMailboxFilter(identifier: string): Promise<void>;
+  applyMailboxFilter(identifier: string, options?: { limit?: number; offset?: number }): Promise<MailboxFilterApplyResult>;
   getMessage(id: string): Promise<TuiMessage | null>;
   getMessageBody(msg: TuiMessage): Promise<MessageBody | null>;
   /**
@@ -244,6 +269,7 @@ export interface MailDataSource {
 
 function summaryToTuiMessage(summary: InboundEmailSummary): TuiMessage {
   const labels = summary.label_ids ?? [];
+  const isPriority = !summary.is_sent && priorityRuleMatchesSender(summary.from_address, listPrioritySenderRulesLocal());
   return {
     kind: summary.is_sent ? "sent" : "inbound",
     id: summary.id,
@@ -259,6 +285,7 @@ function summaryToTuiMessage(summary: InboundEmailSummary): TuiMessage {
     provider_thread_id: summary.provider_thread_id ?? null,
     attachments: summary.attachments?.length ?? 0,
     sentByMe: summary.is_sent || labels.some((label) => label.trim().toLowerCase() === "sent"),
+    is_priority: isPriority,
   };
 }
 
@@ -295,6 +322,32 @@ export class SqliteMailDataSource implements MailDataSource {
 
   async listMailboxSources(opts?: ListMailboxSourcesOptions): Promise<MailboxSourceSummary[]> {
     return localListMailboxSources(opts);
+  }
+
+  async listMailboxFilters(options?: { limit?: number; offset?: number }): Promise<MailboxFilter[]> {
+    return localListMailboxFilters(options);
+  }
+
+  async getMailboxFilter(identifier: string): Promise<MailboxFilter | null> {
+    return localGetMailboxFilter(identifier);
+  }
+
+  async createMailboxFilter(input: MailboxFilterInput): Promise<MailboxFilter> {
+    return localCreateMailboxFilter(input);
+  }
+
+  async updateMailboxFilter(identifier: string, input: Partial<MailboxFilterInput>): Promise<MailboxFilter> {
+    return localUpdateMailboxFilter(identifier, input);
+  }
+
+  async deleteMailboxFilter(identifier: string): Promise<void> {
+    localDeleteMailboxFilter(identifier);
+  }
+
+  async applyMailboxFilter(identifier: string, options?: { limit?: number; offset?: number }): Promise<MailboxFilterApplyResult> {
+    const filter = localGetMailboxFilter(identifier);
+    if (!filter) throw new MailboxFilterNotFoundError(identifier);
+    return localApplyMailboxFilter(filter, options);
   }
 
   async getMessage(id: string): Promise<TuiMessage | null> {

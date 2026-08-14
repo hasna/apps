@@ -1,0 +1,234 @@
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [0.6.3] - 2026-08-14
+
+### Fixed
+
+- **`hooks run` executes .sh hooks under bash** (bug e0cd726c): `executeVerifiedScript` unconditionally spawned `bun run <tempfile>`, and bun's parser is a partial bash subset that rejects real bash (measured on env-dump-guard: `Unexpected ')'` on escaped-paren regexes). The runner now picks the interpreter from the verified bytes — a recognized shebang wins (`bash`/`sh` → `/bin/bash`, `node`/`bun` → bun), otherwise `.sh`/`.bash` run under `/bin/bash` and known JS/TS extensions under bun; unknown extensions and unknown shebangs are refused with an error naming them. The temp-file extension follows the interpreter (bun routes by extension, so a node-shebang `.sh` file gets a `.ts` temp name). The verified-bytes property is unchanged: the temp file still holds exactly the hashed content, read-once-verify-execute, and hash refusal now covers `.sh` hooks too.
+
+## [0.6.2] - 2026-08-14
+
+### Changed
+
+- **Registry privacy lock-down.** When the worker `HOOKS_API_KEY` binding is set, every registry route except `/health` requires a valid API key (`X-API-Key` or `Bearer`); `/health` stays open for probes. Without the binding, reads stay open — the behavior is config-driven, preserving the OSS default.
+- API key comparison is now timing-safe (`secureEqual`, constant-time) instead of a plain string compare.
+
+### Fixed
+
+- **Bundled-hook runtime resolution** (bug 3e69199c): a hook installed at runtime from the bundled set now resolves to its own bundled copy instead of failing or resolving to the wrong location.
+- **`hooks doctor` matcher fix**: hook matching no longer misclassifies hooks when matching against the registry.
+
+## [Unreleased]
+
+### Added
+
+- Added unit coverage for SQLite/PostgreSQL storage synchronization and one-time legacy flat-file imports, including empty, malformed, and permission-refusal paths.
+
+### Changed
+
+- **BREAKING: deployment modes are gone; hooks storage is a two-value data-backend switch.** `StorageMode = "local" | "hybrid" | "remote"` described *where* something ran, which was never a property of the data layer, and nothing in the codebase ever branched on it — it was reported by `hooks storage status` and the `storage_status` MCP tool and otherwise decorative. It is replaced by `StorageBackend = "sqlite" | "postgresql"`.
+  - `HASNA_HOOKS_STORAGE_MODE` and `HOOKS_STORAGE_MODE` are retired and are **no longer read**. Setting either now raises an error naming the replacement variable and the backend to use, instead of being quietly ignored: `local` became `sqlite`, and `hybrid` / `remote` / `self_hosted` / `self-hosted` / `cloud` all became `postgresql`.
+  - New `HASNA_HOOKS_STORAGE_BACKEND` (fallback `HOOKS_STORAGE_BACKEND`) accepts `sqlite` or `postgresql` (`sqlite3`, `postgres` and `pg` are accepted aliases). **An unrecognised value now throws.** Previously any unknown value — including a typo — fell through `normalizeStorageMode` to `undefined` and then silently to `local`, so a misconfigured mode looked like a working local one. That silent normalisation was the actual defect; the vocabulary was its symptom.
+  - Backend inference is unchanged: with the variable unset, a configured `HASNA_HOOKS_DATABASE_URL` / `HOOKS_DATABASE_URL` yields `postgresql` (previously reported as `hybrid`) and its absence yields `sqlite` (previously `local`).
+  - `StorageStatus.mode` is renamed to `StorageStatus.backend`, and `hooks storage status` prints `Backend:` in place of `Mode:`. Removed from the package's public exports: `StorageMode`, `getStorageMode`, `HOOKS_STORAGE_MODE_ENV`, `HOOKS_STORAGE_MODE_FALLBACK_ENV`, `STORAGE_MODE_ENV`. Added: `StorageBackend`, `getStorageBackend`, `STORAGE_BACKENDS`, `HOOKS_STORAGE_BACKEND_ENV`, `HOOKS_STORAGE_BACKEND_FALLBACK_ENV`, `STORAGE_BACKEND_ENV`, `RETIRED_STORAGE_MODE_ENV`.
+  - Hook evaluation is untouched: no hook, and no part of the prompt path, reads the backend. `getStorageBackend()` is reached only from `getStorageStatus()`.
+
+### Fixed
+
+- **`pre-bash` / `worktree-guard` destructive-shell guard no longer lets a filesystem-root wipe through.** `rm -rf /*` and `rm -rf "$(cmd)"/*` both returned `{"continue":true}` before this change; only `rm -rf /` blocked, and only incidentally, because `~/.hasna` sits under it. Two complementary rules close the class:
+  - **System roots are protected.** `/` and the FHS/macOS system directories (`/usr`, `/etc`, `/bin`, `/lib`, `/var`, `/boot`, `/home`, `/Users`, …) are now protected roots in `root` mode, so wiping a root or its contents blocks while a targeted delete beneath one (`rm -rf /usr/local/lib/my-build`) still passes. Extend per machine with `HASNA_PROTECTED_SYSTEM_ROOTS`. `/tmp` is deliberately excluded.
+  - **Expansions that can collapse to empty are blocked by shape.** Every destructive target containing a command substitution, backtick substitution or variable expansion is re-checked as the shell would render it if the expansion came back empty. `rm -rf "$(anything)"/*`, `` rm -rf `cmd`/* ``, `rm -rf "$VAR"/*` and `rm -rf "${VAR}"/*` all block regardless of what the expansion is. `${VAR:?}` is exempt — POSIX guarantees it non-empty. The bare `rm -rf "$(cmd)"` form (no trailing separator) stays allowed: it degrades to `rm -rf ""`, which rm rejects without deleting anything.
+  - A wholesale content glob (`dir/*`) is now matched against protected roots nested *under* `dir`, not just against `dir` itself. This is the asymmetry that let `rm -rf /*` through while `rm -rf /` blocked. Narrower globs (`dir/build-*`) keep their previous, weaker check.
+  - Wrapped and relocated commands are unwrapped before scanning: `bash -c`/`sh -c`/`zsh -c`, `su -c`, `runuser -c`, `eval`, and `ssh host '…'` including nested combinations. Remote layers only consider absolute targets, since a remote relative path cannot be resolved locally.
+  - `cd` is tracked within a command, so `cd / && rm -rf *` and `cd "$(cmd)"/ && rm -rf ./*` block.
+  - A `for VAR in <root-glob>` binding is followed into `rm -rf "$VAR"`.
+  - Block messages now name a safe alternative instead of only refusing.
+  - Glob targets are matched per path component, so a trailing literal bounds the delete: `rm -rf */node_modules` at a monorepo root is allowed while `rm -rf /*/*`, `rm -rf /*/bin` and `rm -rf /home/*/.hasna` are not. A glob directly under a protected root is refused only when *unanchored* — no literal text survives once wildcards are removed — so `[a-z]*`, `?*`, `.??*` and `*.*` block while `*.log`, `tmp-*`, `.turbo*` and `snapshot-[0-9]*` are allowed.
+  - Bracket expressions the matcher does not model exactly (POSIX `[:class:]`, `[=equiv=]`, `[.collate.]`, backslash escapes, unterminated) are treated as matching rather than as not-matching. An under-match leaves a protected root unmatched and allows the delete.
+  - Working-directory tracking covers `cd`, `cd -`, `pushd`, `pushd -n`, `popd` and a per-subshell directory stack; a `cd` in a subshell or pipeline stage no longer escapes it.
+  - The non-empty guarantee used by the expansion rule is withdrawn by `unset`, by `export`/`declare`/`typeset`/`readonly`/`local` assignments, by `read`/`getopts`/`mapfile`/`printf -v`, by `for NAME in`, by `declare -n` namerefs, and entirely by `eval`/`source`/`.`/`trap`/`coproc` and arithmetic assignment. `export X` with no value does not withdraw it.
+  - A glob in **any** path component counts, not only the last: `rm -rf /*/*` destroys `/usr/*`, `/etc/*` and `/home/*` and is now blocked. A bounded glob (`~/proj*/dist`, `/var/log/*.gz`) keeps its narrower check and stays allowed.
+  - Brace alternations are expanded, so `rm -rf /{bin,etc,home}` is seen as the root deletes it performs.
+  - Command-substitution **bodies** are scanned as scripts: `echo $(rm -rf /)` runs the delete and discards only its output.
+  - `cd` inside `( … )` or a pipeline stage no longer moves the guard's working directory, and `cd -` returns to the previous one.
+  - Expansion nesting has no depth limit (`$(dirname "$(dirname "$(cmd)")")`, `${A:-${B}}`), and expansions the shell cannot return empty — `$(pwd)`, `$PWD`, `${VAR:-nonempty}`, and variables assigned a non-empty literal earlier in the same command — are not treated as collapsible.
+
+  Remediates the 2026-07-24 data-destruction incident in which `rm -rf "$(bun pm cache)"/*`, sent over ssh inside `bash -c`, ran as `rm -rf /*` (`bun pm cache` exits non-zero with empty stdout when no `package.json` is found walking up from cwd), freeing ~700 GB and permanently destroying one repository's only source copy.
+
+## [0.4.1] - 2026-07-26
+
+### Fixed
+
+- `worktree-guard` / `managedWorktreeInfo()` now classify worktrees against the canonical path shape from Hasna Agent Operating Rules rule 8, as published by the `@hasna/identities` 0.4.4 global agent rules: `$HOME/.hasna/repos/worktrees/<repo-name>/<worktree-name>`. The guard previously required a 3-segment `<station-id>/<repo-slug>-<hex>/wt_<hex>` lease layout, so every rule-8-compliant worktree was classified UNMANAGED — blocking `git commit`/`git push` from it, and denying it the scoped `~/.hasna` write carve-out so that `Write`/`Edit`/`apply_patch` into a canonical worktree was blocked as a dangerous operation.
+- Non-canonical shapes are now rejected with a specific reason instead of a generic "not deep enough": flat single-segment worktrees under the worktrees root, station-id/machine segments in front of the repo name, and nesting deeper than the canonical shape. Subdirectories of a canonical worktree are correctly accepted.
+- The restored `~/.hasna` write carve-out covers canonical paths that are *linked* git worktrees. A canonical path holding a standalone clone (a `.git` directory) is now allowed to `git commit` but still cannot be written to by file tools, because the carve-out's anti-forgery proof requires linked-worktree provenance. That proof is deliberately unchanged; on the reference fleet this affects 38 of 203 accepted paths, which should be created with `git worktree add`.
+- Classification is grounded in verified git provenance, not path shape. A path is canonical only if it is a real worktree root, no segment is a symlink, and its `.git` proves ownership of its own history — a `.git` file's `gitdir:` target must live under its repository's `worktrees/` directory and point back at this control file, and a `.git` directory must be self-contained, with no `commondir` and with real `objects`/`refs` of its own. Without those proofs, `<worktrees-root>/<flat-worktree>/<subdir>` let a single `cd` launder a forbidden flat worktree into a compliant one, and a symlink, a two-line forged `.git` file, or a `.git` directory with symlinked object storage pointed a compliant-looking path at a shared checkout, so `git commit`/`git push` landed on that checkout — exactly what rule 10 forbids. The same grounding gates the deprecated-layout tolerance, so its name pattern cannot be used as a forgery kit.
+- Hook verdicts are written synchronously. `process.stdout.write` is asynchronous on a pipe, so a verdict larger than the pipe buffer could be truncated when the hook exited, and a truncated verdict is unparseable — the caller would see no decision at all.
+- On the reference fleet the guard's verdict now agrees with git's own verdict for 207 of 207 canonical-path checkouts: every path it rejects is one where `git` itself refuses to operate (pruned or half-pruned worktrees), and every path it accepts is one where git works.
+- Repo and worktree path segments are no longer restricted to an allowlist that rejected legal directory names (long names, `+`, `~`, spaces, non-ASCII). Segments are bounded by the filesystem limit and still refuse a leading `.` or `-` and control characters.
+- Guard messages cite the canonical path template and the rule-8 remediation (`git worktree add` at the canonical path, then `repos scan`) instead of the stale `repos worktrees claim` command; the repos CLI has no worktree verb.
+- The `<repo-name>` segment in guard remediation is now resolved with the exact repos CLI lookup rule 8 mandates (`repos repo --remote <host/org/name> --json`), falling back to the local checkout directory. It was previously derived from the git remote basename, which names a *different* directory for 46 of 50 indexed repos (`open-hooks` is `github.com/hasna/hooks`), so the guard used to point agents at a path that does not exist. The suggested base branch now comes from the repo's real `default_branch`. The lookup is best-effort: a missing or failing repos CLI degrades to local information.
+- Worktree/repo path segments may start with an underscore (e.g. `connectors/_base`), while a leading `.` or `-` is still refused.
+
+### Deprecated
+
+- The pre-rule-8 station-id lease layout `<station-id>/<repo-slug>-<hex>/wt_<hex>` is no longer a compliant worktree shape and is reported as unmanaged with a migration reason. Two scoped, temporary tolerances keep existing worktrees usable while they are re-homed: git work there warns instead of being blocked, and the layout is retained read-only for the scoped dangerous-operation carve-out so it keeps its `~/.hasna` write exemption. Set `HASNA_HOOKS_LEGACY_WORKTREE_TOLERANCE=0` to turn both off once those worktrees are re-homed; the branch is removed after that. While the tolerance is on it keys off the path name, so a worktree deliberately named to match also gets the warn tier — an opt-out from a guardrail, not a hole in the provenance proof, which applies to both tiers. The write carve-out's own verification is unchanged: standalone repos, forged worktree metadata, symlink/hardlink escapes, and Git metadata targets still fail closed at either depth.
+
+  Measured against the 764 real worktrees on the reference fleet machine, the guard's verdicts move as: 189 block → allow (rule-8-canonical worktrees that 0.4.0 wrongly blocked), 70 allow → warn (station-id lease layouts, now on the migration path), 502 block → block (already non-compliant), and 3 allow → block. Those 3 are worktrees whose repository has been pruned, where `git` itself already refuses to operate, so no working setup is stranded by the change.
+
+## [0.4.0] - 2026-07-24
+
+### Added
+
+- Gradual-disclosure output flags on the CLI: `--limit`, `--all`, `--verbose` (alongside existing `--json`), plus `hooks info <name>` and `hooks docs <name> --verbose` for full detail on demand (#2).
+
+### Changed
+
+- Compact output by default across noisy surfaces: `hooks list`, `hooks search`, `hooks docs`, and log list/search/tail/errors now render capped, scannable summaries with hints to the detail paths. MCP list/search/docs/registered/profile/log/agent tools are also compact by default, with explicit `compact:false` / `verbose:true` escape hatches. Machine-readable `--json` paths remain full detail, and the legacy 50-row default for full MCP log rows is preserved (#2).
+
+### Fixed
+
+- Cross-cwd managed worktree patches: recognize absolute file-tool targets inside a different verified linked managed worktree, while failing closed for malformed/standalone repos, Git metadata, roots, symlink/hardlink escapes, and forged worktree provenance; managed-root discovery is cached across multi-file patches (#7).
+
+## [0.3.11] - 2026-07-20
+
+### Fixed
+
+- `fleet-blockers-gate`: made the brake owner-scoped and reliable. It now denies mutating tools on a real code-flagged blocker (`blocking=1`) returned by `conversations blockers` — the correctly-retrieved, tamper-resistant signal — instead of scanning message text for `[FREEZE]`. Freeze TEXT in channels is now informational and never stops work, killing the phantom-freeze bug where any `[FREEZE]` string from any author wedged the fleet; and a real `blocking=1` blocker that lacked `[FREEZE]` text is no longer ignored.
+- Author (`from_agent`) is unauthenticated, so it is treated as advisory context in the deny reason only and is never used as a security gate (avoids false assurance from a spoofable field).
+- Raised the per-check exec timeout default from 500ms to 1500ms: the `conversations` CLI has a ~0.5s cold start, so the old budget flaked and the gate silently failed open.
+- Hardened the CLI invocation (`execFileSync` with an argument array plus a leading-dash/shell-metacharacter guard) and made the freeze state engage fast while disengaging slowly via an asymmetric TTL cache.
+
+## [0.3.10] - 2026-07-13
+
+### Fixed
+
+- Allowed normal child cleanup and file edits inside the current git repo root under managed `~/.hasna/repos/worktrees` paths, including fallback-shaped worktrees, while still blocking managed repo root wipes, managed worktrees root wipes, protected Hasna state, workspace roots, Hasna scope roots, and active roots.
+
+## [0.3.9] - 2026-07-13
+
+### Added
+
+- Added scoped dangerous-operation blocking for Codewith-native `pre-bash` and `worktree-guard` surfaces covering protected Hasna state, workspace roots, active repo roots, and managed worktrees without banning ordinary cleanup like `rm -rf dist`.
+- Added Codewith apply-patch tool coverage for `apply_patch`, `ApplyPatch`, and `functions.apply_patch` payloads, including canonical `tool_input.command` patch bodies.
+
+### Changed
+
+- `hooks install --target all` now excludes obsolete Gemini and targets the active supported agent set.
+
+## [0.3.8] - 2026-07-10
+
+### Changed
+
+- Removed the standalone npm package manifest for `knowledge-context`; the hook is now distributed only inside `@hasna/hooks`.
+- Kept `knowledge-context` available as a catalog hook via `hooks run knowledge-context`.
+
+## [0.3.7] - 2026-07-09
+
+### Fixed
+
+- Filtered `knowledge-context` matches that mark themselves as historical/reference-only or not suitable for auto-loading, preventing archived startup files from being injected into normal agent context.
+- `knowledge-context` now fetches extra bounded candidates internally while still rendering only the configured top item budget, so filtering stale matches can reveal useful Knowledge without bloating context.
+
+## [0.3.6] - 2026-07-09
+
+### Changed
+
+- Compact `knowledge-context` citation output further by printing the full-item read command once and formatting Knowledge bullets as `item_id=... cite=...`.
+- Added deterministic high-signal gating for `UserPromptSubmit` so low-signal prompts fail open instead of injecting Knowledge matches on every short user message.
+
+## [0.3.5] - 2026-07-09
+
+### Fixed
+
+- Fixed `knowledge-context` helper imports so importing exported helpers does not trip the executable-entrypoint guard.
+
+## [0.3.4] - 2026-07-09
+
+### Changed
+
+- Reduced `knowledge-context`'s default context pack budget to the top 3 items to keep hook-added context compact.
+- Compact Knowledge citation output by omitting repeated `knowledge://item/...` source URIs when the `knowledge get --id ... --json` follow-up command already identifies the item.
+
+## [0.3.3] - 2026-07-09
+
+### Changed
+
+- Improved `knowledge-context` progressive context output by surfacing Knowledge citation previews as bounded blurbs and adding `knowledge get --id ... --json` read hints for full-item follow-up.
+
+## [0.3.2] - 2026-07-09
+
+### Changed
+
+- Raised `knowledge-context`'s default Knowledge CLI timeout to 5000ms and generated Codewith hook timeout to 6s so deterministic context packs can finish reliably by default.
+
+## [0.3.1] - 2026-07-09
+
+### Added
+
+- `knowledge-context` catalog hook for Codewith `SessionStart`, `UserPromptSubmit`, and `SubagentStart` context injection using deterministic `knowledge context pack --from search` reads
+- Codewith installer target support via `--target codewith`, emitting renderer-safe TOML fragments by default and writing Codewith config only with an explicit `--apply-codewith --codewith-config <path>`
+- Multi-event registry metadata so one hook can register across multiple lifecycle events
+
+### Changed
+
+- Extended hook event typing with Codewith `UserPromptSubmit` and `SubagentStart` lifecycle events while preserving existing Claude/Gemini target behavior
+
+## [0.3.0] - 2026-07-06
+
+### Added
+
+- SessionStart and SessionEnd hook events across the catalog, schema, installer, and docs (fleet comms Phase 0)
+- `fleet-catchup` hook (SessionStart): injects unread blockers, channel notifications since last catchup, and the bounded announcements digest into agent context — deterministic CLI reads, fail-open
+- `agent-rules-version-check` hook (SessionStart): compares the rendered `hasna:agent-operating-rules` sentinel version against configs state and warns on drift
+- `fleet-blockers-gate` hook (PreToolUse): denies mutating tools while an unread `[FREEZE]` blocking message is active — TTL-cached, hard 500ms fail-open timeout
+- SQLite migration `002_session_events` rebuilding the `hook_events` CHECK constraint (with PostgreSQL parity statements)
+- `isEventSupported()` installer API; installs for targets without a session-event surface (Gemini) fail with a clear error instead of writing dead settings keys
+
+### Changed
+
+- `announce-start` rebound from Notification (which never fired at session start) to SessionStart; context now injected via `hookSpecificOutput.additionalContext` (0.2.0)
+- Reinstalling a hook now removes its entries from every event key, migrating settings entries when a hook is rebound to a new event
+
+### Fixed
+
+- Hyphenated hook names (`announce-start`, `dm-inject`, `typecheck-gate`, …) were invisible to `list --installed`, `remove`, and `doctor` due to a `\w+`-only command regex
+- Shell-unsafe values from env/hook input are no longer interpolated into announce/catchup CLI commands
+
+## [0.1.1] - 2026-02-14
+
+### Changed
+
+- Multi-agent support, remove brand-specific mentions
+
+## [0.1.0] - 2026-02-14
+
+### Added
+
+- Update registry to 30 hooks across 10 categories
+- 15 new hooks across 5 new categories
+- 253 tests with 1,023 assertions across all modules
+- MCP server for AI agent integration
+- CLI with interactive UI and non-interactive commands
+- Core library with registry and installer
+- 15 initial hook packages
+- Initial project setup
+
+[0.3.10]: https://github.com/hasna/hooks/compare/v0.3.9...v0.3.10
+[0.3.9]: https://github.com/hasna/hooks/compare/v0.3.8...v0.3.9
+[0.3.8]: https://github.com/hasna/hooks/compare/v0.3.7...v0.3.8
+[0.3.7]: https://github.com/hasna/hooks/compare/v0.3.6...v0.3.7
+[0.3.6]: https://github.com/hasna/hooks/compare/v0.3.5...v0.3.6
+[0.3.5]: https://github.com/hasna/hooks/compare/v0.3.4...v0.3.5
+[0.3.4]: https://github.com/hasna/hooks/compare/v0.3.3...v0.3.4
+[0.3.3]: https://github.com/hasna/hooks/compare/v0.3.2...v0.3.3
+[0.3.2]: https://github.com/hasna/hooks/compare/v0.3.1...v0.3.2
+[0.3.1]: https://github.com/hasna/hooks/compare/v0.3.0...v0.3.1
+[0.3.0]: https://github.com/hasna/hooks/compare/v0.1.1...v0.3.0
+[0.1.1]: https://github.com/hasna/hooks/compare/v0.1.0...v0.1.1
+[0.1.0]: https://github.com/hasna/hooks/releases/tag/v0.1.0

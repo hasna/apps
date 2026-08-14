@@ -126,10 +126,10 @@ Surfaces:
 - `/v1/*` — versioned cloud API (configs, profiles, snapshots, stats).
 - `/api/*` — the local dashboard/REST surface.
 
-### Cloud mode (self-hosted, Amendment A1 pure-remote)
+### Server data backend (postgresql)
 
 When `HASNA_INSTRUCTIONS_DATABASE_URL` is set the `/v1` API reads/writes the
-shared cloud Postgres **directly** (no local sync/cache in the service) and every
+shared Postgres **directly** (no local sync/cache in the service) and every
 `/v1` request is authenticated with a `@hasna/contracts` API key
 (`x-api-key` or `Authorization: Bearer`). Reads need `instructions:read`, writes
 need `instructions:write` (an `instructions:*` key satisfies both).
@@ -153,20 +153,19 @@ and `API_KEY_SIGNING_SECRET` are also accepted). Client apps use
 `InstructionsV1Client` is generated from the serve OpenAPI document
 (`bun run generate:sdk`).
 
-## Storage Modes
+## Client transports
 
 Every CLI command, MCP tool, and SDK method routes through a single `ConfigStore`
 abstraction with two transports:
 
 - **local** — on-box SQLite (`LocalConfigStore`), fully first-class. Used when no
   API env vars are set.
-- **api** (self_hosted / cloud) — HTTP `/v1` + bearer key (`CloudConfigStore`).
+- **api** — HTTP `/v1` + bearer key (`CloudConfigStore`).
   Activated by setting **both** `HASNA_INSTRUCTIONS_API_URL` and
-  `HASNA_INSTRUCTIONS_API_KEY`. Identical client code; only the URL/key differ,
-  and the self_hosted/cloud distinction is enforced server-side by tenancy.
+  `HASNA_INSTRUCTIONS_API_KEY`.
 
 Clients never hold a database DSN. The raw Postgres connection is a server-only
-concern (`instructions-serve`).
+concern (`instructions-serve`), selected by `HASNA_INSTRUCTIONS_DATABASE_URL`.
 
 ## Data Directory
 

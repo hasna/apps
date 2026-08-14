@@ -1,0 +1,103 @@
+{
+  "artifactDigest": "9f57aeb5d9ea4e151380cfb3889d40b5cdac9747dd85c89921237df22f7aa29b",
+  "buildRun": {
+    "actor": {
+      "id": "agent-builder",
+      "kind": "agent",
+      "name": "Deployment Builder"
+    },
+    "constraints": [
+      "credential-zero execution"
+    ],
+    "costEstimates": [],
+    "createdAt": "2026-08-09T09:00:00.000Z",
+    "decisions": [],
+    "evidenceRefs": [
+      {
+        "id": "build-run-evidence",
+        "kind": "test_result",
+        "sha256": "cee6797059a4b2d4bdd5a78ec5ea58ac3760f50b720efdabfe95f3ff7b60b8e5",
+        "summary": "Bounded evidence for build-run-evidence",
+        "uri": "artifact://deployment-fixture/build-run-evidence"
+      }
+    ],
+    "finishedAt": "2026-08-09T09:05:00.000Z",
+    "id": "build-run",
+    "objective": "Produce verified deployment evidence",
+    "proofBundleRefs": [],
+    "resourceRefs": [],
+    "schema": "hasna.work_run.v1",
+    "startedAt": "2026-08-09T09:00:00.000Z",
+    "status": "succeeded",
+    "validationPlanRefs": []
+  },
+  "buildWorkflowRef": {
+    "id": "build-workflow",
+    "kind": "workflow",
+    "tags": [
+      "deployment-fixture"
+    ],
+    "uri": "artifact://deployment-fixture/build-workflow"
+  },
+  "builder": {
+    "id": "agent-builder",
+    "kind": "agent",
+    "name": "Deployment Builder"
+  },
+  "createdAt": "2026-08-09T09:10:00.000Z",
+  "digest": "4aab79eca4eca7079eb990dbb8c31f94b5ea784fb34d0dd7619f307136ea2fcb",
+  "id": "artifact-example-app",
+  "kind": "oci_image",
+  "mediaType": "application/vnd.oci.image.manifest.v1+json",
+  "producer": {
+    "id": "agent-builder",
+    "kind": "agent",
+    "name": "Deployment Builder"
+  },
+  "provenanceRefs": [
+    {
+      "id": "artifact-provenance",
+      "kind": "artifact",
+      "sha256": "03b81cbf545913af8d9f70c9a3643ec3ae0338d0c02854e73a6f16014d4532ec",
+      "summary": "Bounded evidence for artifact-provenance",
+      "uri": "artifact://deployment-fixture/artifact-provenance"
+    }
+  ],
+  "repositoryCommitSha": "0123456789abcdef0123456789abcdef01234567",
+  "repositoryTreeSha": "89abcdef0123456789abcdef0123456789abcdef",
+  "sbomRefs": [
+    {
+      "id": "artifact-sbom",
+      "kind": "artifact",
+      "sha256": "b4f783391e4b7ab46fdb49d5808cd389e1340173eab6afb1a80528664f778ae4",
+      "summary": "Bounded evidence for artifact-sbom",
+      "uri": "artifact://deployment-fixture/artifact-sbom"
+    }
+  ],
+  "scanRefs": [
+    {
+      "id": "artifact-scan",
+      "kind": "test_result",
+      "sha256": "b5932ac32cf213f10bbaea588f83e9e3dfb0978adce936d8a347f806d6429b73",
+      "summary": "Bounded evidence for artifact-scan",
+      "uri": "artifact://deployment-fixture/artifact-scan"
+    }
+  ],
+  "schema": "hasna.build_artifact.v1",
+  "signatureRefs": [
+    {
+      "id": "artifact-signature",
+      "kind": "artifact",
+      "sha256": "75ecda7b490798542b3f6dbd5de7addd705bdefeacb678981545b6a8a916d759",
+      "summary": "Bounded evidence for artifact-signature",
+      "uri": "artifact://deployment-fixture/artifact-signature"
+    }
+  ],
+  "sourceCandidate": {
+    "digest": "ae0668664ad166aec5e57a7990ce41b611cfa74f478a7e56a95a1a93f4bd70f0",
+    "id": "source-candidate-example-app",
+    "schema": "hasna.verified_source_candidate.v1"
+  },
+  "status": "active",
+  "uri": "artifact://deployment-fixture/example-app-image"
+}

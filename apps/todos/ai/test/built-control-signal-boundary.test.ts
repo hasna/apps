@@ -1,0 +1,558 @@
+import { beforeAll, describe, expect, test } from "bun:test";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
+import { generateText, streamText } from "ai";
+import { MockLanguageModelV3, simulateReadableStream } from "ai/test";
+import {
+  TodosAiNeedsApprovalSignal,
+  TodosAiNeedsInputSignal,
+  type TodosAiRunRequest,
+  type TodosAiRuntimeEvent,
+  type TodosAiRuntimeHostContext,
+} from "@hasna/todos";
+import { createTodosAiToolSource } from "../../src/ai-tools.js";
+import type {
+  CreateGroqAdapterOptions,
+  GroqSdkDependencies,
+} from "../src/providers/groq";
+import { normalizeTodosAiControlSignal } from "../src/control-signals";
+import type { TodosAiRuntimeDependencies } from "../src/types";
+
+const packageRoot = join(import.meta.dir, "..");
+const hostContext: TodosAiRuntimeHostContext = {
+  package_name: "@hasna/todos",
+  package_version: "0.15.25",
+  protocol_version: 1,
+};
+
+let builtRuntime: typeof import("../src/runtime");
+let builtGroq: typeof import("../src/providers/groq");
+
+beforeAll(async () => {
+  const build = Bun.spawn(["bun", "run", "build"], {
+    cwd: packageRoot,
+    stdout: "ignore",
+    stderr: "pipe",
+  });
+  const [exitCode, stderr] = await Promise.all([
+    build.exited,
+    new Response(build.stderr).text(),
+  ]);
+  if (exitCode !== 0) {
+    throw new Error(`companion build failed (${exitCode}): ${stderr}`);
+  }
+
+  const cacheKey = crypto.randomUUID();
+  builtRuntime = await import(
+    `${pathToFileURL(join(packageRoot, "dist/runtime.js")).href}?boundary=${cacheKey}`
+  ) as typeof import("../src/runtime");
+  builtGroq = await import(
+    `${pathToFileURL(join(packageRoot, "dist/providers/groq.js")).href}?boundary=${cacheKey}`
+  ) as typeof import("../src/providers/groq");
+}, 30_000);
+
+function request(): TodosAiRunRequest {
+  return {
+    schema_version: 1,
+    prompt: "Exercise one host control signal.",
+    input: null,
+    variables: {},
+    output_schema: null,
+    provider: "groq",
+    model: "openai/gpt-oss-120b",
+    profile: null,
+    format: "text",
+    interactive: false,
+    context: {
+      project: null,
+      agent: null,
+      session: null,
+    },
+    authority: {
+      write_mode: "read-only",
+      approval_mode: "deny",
+      approval_refs: [],
+      dry_run: false,
+    },
+    limits: {
+      max_steps: 4,
+      timeout_ms: 60_000,
+    },
+    resume_run_id: "built-boundary-run",
+  };
+}
+
+function sdkThatCapturesToolFailure(): GroqSdkDependencies {
+  const createGroq = (() => () => ({ fixture: "model" })) as unknown as
+    GroqSdkDependencies["createGroq"];
+  const generateText = (async (options: Record<string, unknown>) => {
+    const tools = options["tools"] as Record<string, {
+      execute(input: unknown, options: {
+        toolCallId: string;
+        messages: unknown[];
+        abortSignal?: AbortSignal;
+        context: Record<string, never>;
+      }): Promise<unknown>;
+    }>;
+    try {
+      await tools["control"]!.execute({}, {
+        toolCallId: "built-boundary-control",
+        messages: [],
+        abortSignal: options["abortSignal"] as AbortSignal,
+        context: {},
+      });
+    } catch {
+      // The real SDK captures tool failures for the model. The adapter must
+      // retain control signals outside that model-visible error path.
+    }
+    return {
+      text: "The provider continued after the tool failure.",
+      usage: {
+        inputTokens: 1,
+        outputTokens: 1,
+        totalTokens: 2,
+      },
+      steps: [{}],
+    };
+  }) as unknown as GroqSdkDependencies["generateText"];
+  const streamText = (() => {
+    throw new Error("streaming is outside this regression");
+  }) as unknown as GroqSdkDependencies["streamText"];
+  return { createGroq, generateText, streamText };
+}
+
+function realSdkToolLoop(
+  toolName = "control",
+  toolInput: Record<string, unknown> = {},
+): GroqSdkDependencies {
+  const usage = {
+    inputTokens: {
+      total: 1,
+      noCache: 1,
+      cacheRead: 0,
+      cacheWrite: 0,
+    },
+    outputTokens: {
+      total: 1,
+      text: 1,
+      reasoning: 0,
+    },
+  } as const;
+  const model = new MockLanguageModelV3({
+    doGenerate: async () => ({
+      content: [{
+        type: "tool-call",
+        toolCallId: "production-loop-control",
+        toolName,
+        input: JSON.stringify(toolInput),
+      }],
+      finishReason: { unified: "tool-calls", raw: "tool_calls" },
+      usage,
+      warnings: [],
+    }),
+    doStream: async () => ({
+      stream: simulateReadableStream({
+        chunks: [
+          { type: "stream-start", warnings: [] },
+          {
+            type: "tool-call",
+            toolCallId: "production-loop-control",
+            toolName,
+            input: JSON.stringify(toolInput),
+          },
+          {
+            type: "finish",
+            finishReason: { unified: "tool-calls", raw: "tool_calls" },
+            usage,
+          },
+        ],
+      }),
+    }),
+  });
+
+  return {
+    createGroq: (() => () => model) as unknown as GroqSdkDependencies["createGroq"],
+    generateText,
+    streamText,
+  };
+}
+
+async function runAcrossBuiltBoundary(signal: Error) {
+  const adapter = builtGroq.createGroqAdapter({
+    apiKey: "fixture",
+    model: "openai/gpt-oss-120b",
+    sdk: sdkThatCapturesToolFailure(),
+  } satisfies CreateGroqAdapterOptions);
+  const dependencies: TodosAiRuntimeDependencies = {
+    providers: {
+      groq: () => adapter,
+    },
+    toolSource: async () => [{
+      name: "control",
+      description: "Throw one host-created control signal.",
+      effect: "control",
+      inputSchema: { type: "object" },
+      execute: async () => {
+        throw signal;
+      },
+    }],
+    createRunId: () => "unexpected-new-run",
+    now: () => new Date("2026-08-11T12:00:00.000Z"),
+  };
+  const runtime = builtRuntime.createTodosAiRuntimeWithDependencies(
+    hostContext,
+    dependencies,
+  );
+  const events: TodosAiRuntimeEvent[] = [];
+  const result = await runtime.run(request(), {
+    signal: new AbortController().signal,
+    emit(event) {
+      events.push(event);
+    },
+  });
+  return { events, result };
+}
+
+async function runAcrossProductionSdkLoop(signal: Error) {
+  const adapter = builtGroq.createGroqAdapter({
+    apiKey: "fixture",
+    model: "openai/gpt-oss-120b",
+    sdk: realSdkToolLoop(),
+  } satisfies CreateGroqAdapterOptions);
+  const dependencies: TodosAiRuntimeDependencies = {
+    providers: {
+      groq: () => adapter,
+    },
+    toolSource: async () => [{
+      name: "control",
+      description: "Throw one host-created control signal.",
+      effect: "control",
+      inputSchema: { type: "object" },
+      execute: async () => {
+        throw signal;
+      },
+    }],
+    createRunId: () => "unexpected-new-run",
+    now: () => new Date("2026-08-11T12:00:00.000Z"),
+  };
+  const runtime = builtRuntime.createTodosAiRuntimeWithDependencies(
+    hostContext,
+    dependencies,
+  );
+  const events: TodosAiRuntimeEvent[] = [];
+  const result = await runtime.run({
+    ...request(),
+    format: "stream-json",
+  }, {
+    signal: new AbortController().signal,
+    emit(event) {
+      events.push(event);
+    },
+  });
+  return { events, result };
+}
+
+async function runRequestInputAcrossProductionSdkLoop() {
+  const prompt = "Which task should be inspected?";
+  const adapter = builtGroq.createGroqAdapter({
+    apiKey: "fixture",
+    model: "openai/gpt-oss-120b",
+    sdk: realSdkToolLoop("request_input", {
+      prompt,
+      fields: ["task_id"],
+    }),
+  } satisfies CreateGroqAdapterOptions);
+  const hostToolSource = createTodosAiToolSource({
+    accessProfile: "minimal",
+    adapter: {
+      source: "sqlite",
+      getTask: async () => null,
+      listTasks: async () => [],
+      listProjects: async () => [],
+      listPlans: async () => [],
+    },
+    workspacePermission: () => true,
+  });
+  let registeredTools: string[] = [];
+  const dependencies: TodosAiRuntimeDependencies = {
+    providers: {
+      groq: () => adapter,
+    },
+    toolSource: async (context) => {
+      const tools = await hostToolSource(context);
+      registeredTools = tools.map((tool) => tool.name);
+      return tools;
+    },
+    createRunId: () => "unexpected-new-run",
+    now: () => new Date("2026-08-11T12:00:00.000Z"),
+  };
+  const runtime = builtRuntime.createTodosAiRuntimeWithDependencies(
+    hostContext,
+    dependencies,
+  );
+  const events: TodosAiRuntimeEvent[] = [];
+  const result = await runtime.run({
+    ...request(),
+    format: "stream-json",
+  }, {
+    signal: new AbortController().signal,
+    emit(event) {
+      events.push(event);
+    },
+  });
+  return { events, prompt, registeredTools, result };
+}
+
+function trappingProxy<T extends object>(target: T, onTrap: () => void): T {
+  return new Proxy(target, {
+    getPrototypeOf(wrapped) {
+      onTrap();
+      return Reflect.getPrototypeOf(wrapped);
+    },
+    ownKeys(wrapped) {
+      onTrap();
+      return Reflect.ownKeys(wrapped);
+    },
+    getOwnPropertyDescriptor(wrapped, property) {
+      onTrap();
+      return Reflect.getOwnPropertyDescriptor(wrapped, property);
+    },
+    get(wrapped, property, receiver) {
+      onTrap();
+      return Reflect.get(wrapped, property, receiver);
+    },
+  });
+}
+
+describe("built companion control-signal boundary", () => {
+  test("normalizer rejects Proxy-wrapped outer errors before trap-triggering checks", () => {
+    let traps = 0;
+    const outer = new Error("Todos AI input required");
+    outer.name = "TodosAiNeedsInputSignal";
+    Object.defineProperty(outer, "pending_input", {
+      value: { prompt: "Must not be read.", fields: ["task_id"] },
+    });
+
+    const signal = normalizeTodosAiControlSignal(
+      trappingProxy(outer, () => {
+        traps += 1;
+      }),
+    );
+
+    expect({ traps, signal }).toEqual({
+      traps: 0,
+      signal: null,
+    });
+  });
+
+  test("recognizes host clarification and approval signals across bundled constructors", async () => {
+    const cases = [
+      {
+        signal: new TodosAiNeedsInputSignal({
+          prompt: "Which exact task should be updated?",
+          fields: ["task_id"],
+        }),
+        status: "needs_input",
+        event: "input.required",
+      },
+      {
+        signal: new TodosAiNeedsApprovalSignal({
+          id: "approval-built-boundary",
+          summary: "Approve one exact task update.",
+          operations: [{
+            operation: "update_task",
+            task_id: "10000000-0000-4000-8000-000000000001",
+          }],
+        }),
+        status: "needs_approval",
+        event: "approval.required",
+      },
+    ] as const;
+
+    for (const item of cases) {
+      const { events, result } = await runAcrossBuiltBoundary(item.signal);
+      expect(result.status).toBe(item.status);
+      expect(result.run_id).toBe("built-boundary-run");
+      expect(events.at(-1)?.type).toBe(item.event);
+    }
+  }, 30_000);
+
+  test("preserves host control signals through the production AI SDK streaming tool loop", async () => {
+    const input = await runRequestInputAcrossProductionSdkLoop();
+    expect(input.registeredTools).toEqual(["get_task", "request_input"]);
+    expect(input.result).toMatchObject({
+      status: "needs_input",
+      run_id: "built-boundary-run",
+      pending_input: {
+        prompt: input.prompt,
+        fields: ["task_id"],
+      },
+      pending_approval: null,
+    });
+    expect(input.events.map((event) => event.type)).toEqual([
+      "run.started",
+      "run.progress",
+      "tool.started",
+      "tool.completed",
+      "input.required",
+    ]);
+    expect(input.events.filter((event) => event.type === "input.required")).toHaveLength(1);
+
+    const approval = await runAcrossProductionSdkLoop(
+      new TodosAiNeedsApprovalSignal({
+        id: "approval-production-loop",
+        summary: "Approve one exact task update.",
+        operations: [{
+          operation: "update_task",
+          task_id: "10000000-0000-4000-8000-000000000001",
+        }],
+      }),
+    );
+    expect(approval.result).toMatchObject({
+      status: "needs_approval",
+      run_id: "built-boundary-run",
+      pending_input: null,
+      pending_approval: {
+        id: "approval-production-loop",
+        summary: "Approve one exact task update.",
+      },
+    });
+    expect(approval.events.map((event) => event.type)).toEqual([
+      "run.started",
+      "run.progress",
+      "tool.started",
+      "tool.completed",
+      "approval.required",
+    ]);
+    expect(
+      approval.events.filter((event) => event.type === "approval.required"),
+    ).toHaveLength(1);
+
+    const ordinary = await runAcrossProductionSdkLoop(
+      new Error("ordinary tool failure"),
+    );
+    expect(ordinary.result).toMatchObject({
+      status: "answered",
+      pending_input: null,
+      pending_approval: null,
+    });
+    expect(
+      ordinary.events.filter((event) => event.type === "tool.completed"),
+    ).toHaveLength(request().limits.max_steps);
+    expect(ordinary.events.some((event) =>
+      event.type === "input.required" || event.type === "approval.required"
+    )).toBe(false);
+  }, 30_000);
+
+  test("does not treat arbitrary or accessor-backed errors as control signals", async () => {
+    const malformed = new Error("Todos AI input required");
+    malformed.name = "TodosAiNeedsInputSignal";
+    Object.defineProperty(malformed, "pending_input", {
+      value: { prompt: "Which task?", fields: [] },
+    });
+    expect((await runAcrossBuiltBoundary(malformed)).result).toMatchObject({
+      status: "answered",
+      pending_input: null,
+      pending_approval: null,
+    });
+
+    let accessorCalls = 0;
+    const accessorBacked = new Error("Todos AI approval required");
+    accessorBacked.name = "TodosAiNeedsApprovalSignal";
+    Object.defineProperty(accessorBacked, "pending_approval", {
+      get() {
+        accessorCalls += 1;
+        return {
+          id: "approval-accessor",
+          summary: "Must not be read.",
+          operations: [{ operation: "update_task" }],
+        };
+      },
+    });
+    expect((await runAcrossBuiltBoundary(accessorBacked)).result).toMatchObject({
+      status: "answered",
+      pending_input: null,
+      pending_approval: null,
+    });
+    expect(accessorCalls).toBe(0);
+  }, 30_000);
+
+  test("does not inspect Proxy-backed payloads on ordinary errors", async () => {
+    let payloadGets = 0;
+    const pendingInput = new Proxy(
+      { prompt: "Must not be read.", fields: ["task_id"] },
+      {
+        get(target, property, receiver) {
+          payloadGets += 1;
+          return Reflect.get(target, property, receiver);
+        },
+      },
+    );
+    const proxyBacked = new Error("Todos AI input required");
+    proxyBacked.name = "TodosAiNeedsInputSignal";
+    Object.defineProperty(proxyBacked, "pending_input", {
+      value: pendingInput,
+    });
+
+    const { result } = await runAcrossBuiltBoundary(proxyBacked);
+    expect({ payloadGets, result }).toMatchObject({
+      payloadGets: 0,
+      result: {
+        status: "answered",
+        pending_input: null,
+        pending_approval: null,
+      },
+    });
+  }, 30_000);
+
+  test("rejects nested Proxy control payloads before invoking constructors", async () => {
+    const cases = [
+      {
+        key: "pending_input",
+        signalName: "TodosAiNeedsInputSignal",
+        signalMessage: "Todos AI input required",
+        payload: (onTrap: () => void) => ({
+          prompt: "Which exact task?",
+          fields: trappingProxy(["task_id"], onTrap),
+        }),
+      },
+      {
+        key: "pending_approval",
+        signalName: "TodosAiNeedsApprovalSignal",
+        signalMessage: "Todos AI approval required",
+        payload: (onTrap: () => void) => ({
+          id: "approval-nested-proxy",
+          summary: "Approve one exact task update.",
+          operations: [
+            trappingProxy({
+              operation: "update_task",
+              task_id: "10000000-0000-4000-8000-000000000001",
+            }, onTrap),
+          ],
+        }),
+      },
+    ] as const;
+
+    for (const item of cases) {
+      let traps = 0;
+      const signal = new Error(item.signalMessage);
+      signal.name = item.signalName;
+      Object.defineProperty(signal, item.key, {
+        value: item.payload(() => {
+          traps += 1;
+        }),
+      });
+
+      const { result } = await runAcrossBuiltBoundary(signal);
+
+      expect({ traps, result }).toMatchObject({
+        traps: 0,
+        result: {
+          status: "answered",
+          pending_input: null,
+          pending_approval: null,
+        },
+      });
+    }
+  }, 30_000);
+});

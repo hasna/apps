@@ -129,7 +129,7 @@ function seedMessage(
 async function renderApp(initialMailbox?: "inbox" | "unread" | "starred" | "sent" | "archived" | "spam" | "trash") {
   setup = await testRender(() => <Harness initialMailbox={initialMailbox} />, {
     width: 120,
-    height: 32,
+    height: 33,
     exitOnCtrlC: false,
     consoleMode: "disabled",
     openConsoleOnError: false,
@@ -209,6 +209,14 @@ describe("Emails Solid TUI", () => {
   it("renders the Solid/OpenTUI mailbox with open-aicopilot-style structure", async () => {
     seedMessage("hello inbox", new Date().toISOString(), "long.recipient@example.com");
     await renderApp();
+
+    // The initial mailbox scan is a real /v1 round-trip against the stub;
+    // a single event-loop yield can finish before it lands under CI load.
+    // Wait for the seeded message, bounded, instead of racing the fetch.
+    for (let attempt = 0; attempt < 100 && !frame().includes("hello inbox"); attempt++) {
+      await Bun.sleep(25);
+      await setup?.flush();
+    }
 
     expect(frame()).toContain("Emails");
     expect(frame()).toContain("Mail");
@@ -346,6 +354,34 @@ describe("Emails Solid TUI", () => {
     expect(frame()).toContain("updates messa");
     expect(frame()).not.toContain("urgent message");
     expect(frame()).not.toContain("plain message");
+  });
+
+  it("saves, applies, reads back, and removes a saved inbox filter", async () => {
+    seedMessage("support request", "2026-01-03T10:00:00.000Z");
+    seedMessage("product newsletter", "2026-01-02T10:00:00.000Z");
+    await renderApp();
+
+    await clickText("Filter");
+    await typeText("support");
+    setup?.mockInput.pressEnter();
+    await flush();
+    expect(frame()).toContain("support request");
+    expect(frame()).not.toContain("product newsletter");
+
+    await clickText("Save filter");
+    expect(frame()).toContain("Save Filter");
+    await typeText("Support queue");
+    setup?.mockInput.pressEnter();
+    await flush();
+    expect(frame()).toContain("Saved filter: Support queue");
+    expect(await stub.list("mailbox-filters")).toHaveLength(1);
+
+    await clickText("Manage saved filters");
+    expect(frame()).toContain("Support queue");
+    await clickText("Delete");
+    await flush();
+    expect(await stub.list("mailbox-filters")).toHaveLength(0);
+    expect(frame()).not.toContain("Saved filter: Support queue");
   });
 
   it("opens inbox picker, compose, domains dialog, and settings dialog from visible buttons", async () => {
