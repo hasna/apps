@@ -21,10 +21,16 @@ function writeFailure(prefix, result) {
 }
 
 function packWithNpm(destination) {
+  // This scan runs from `prepack`, which the publish guard triggers through
+  // `npm pack --dry-run --json`. npm forwards its config to lifecycle scripts
+  // as env vars, so the nested pack inherits the outer dry-run env flag and
+  // silently dry-runs (rc=0, zero tarballs) unless that flag is stripped.
+  const env = { ...process.env }
+  delete env[["npm_", "config_", "dry_run"].join("")]
   const result = spawnSync(
     "npm",
     ["pack", "--ignore-scripts", "--pack-destination", destination],
-    { encoding: "utf8" },
+    { encoding: "utf8", env },
   )
 
   if (result.error?.code === "ENOENT") return null
