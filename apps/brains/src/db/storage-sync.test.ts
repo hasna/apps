@@ -1,6 +1,4 @@
-process.env.BRAINS_DB_PATH = ":memory:";
-
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import {
   STORAGE_DATABASE_ENV,
   STORAGE_MODE_ENV,
@@ -13,6 +11,14 @@ const ENV_NAMES = [
   ...STORAGE_DATABASE_ENV,
   ...STORAGE_MODE_ENV,
 ] as const;
+
+beforeAll(() => {
+  process.env.BRAINS_DB_PATH = ":memory:";
+});
+
+afterAll(() => {
+  delete process.env.BRAINS_DB_PATH;
+});
 
 afterEach(() => {
   for (const name of ENV_NAMES) {
