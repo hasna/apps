@@ -555,12 +555,14 @@ export function selfHostedApiRequest(
  *
  * These live at the service root, NOT under `/v1`, so they cannot be reached via
  * selfHostedApiRequest (whose base URL already ends in `/v1`). Read-only and
- * bounded by the same curl timeouts as every other call.
+ * bounded by the same curl timeouts as every other call. The credential
+ * fallback loop applies unchanged: an expired session token that the server
+ * answers `reauthenticate` to must not shadow a valid API key here either.
  */
 export function selfHostedProbe(path: string): SelfHostedApiResult {
   const config = resolveSelfHostedConfig();
   const origin = config.baseUrl.replace(/\/v1$/, "");
-  const { status, body } = httpRequest({ baseUrl: origin, credential: config.credential }, "GET", path);
+  const { status, body } = httpRequest({ ...config, baseUrl: origin }, "GET", path);
   const json = status >= 200 && status < 300
     ? parseSelfHostedSuccessJson(body, { status, method: "GET", path })
     : projectSelfHostedErrorBody(

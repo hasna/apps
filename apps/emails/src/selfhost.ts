@@ -44,7 +44,7 @@ export interface MessageListItem { "id": string; "direction": string; "from_addr
 
 export interface Message { "id": string; "direction": string; "from_addr": string; "to_addrs": Array<string>; "cc_addrs": Array<string>; "subject": string | null; "body_text": string | null; "body_html": string | null; "status": string; "provider_message_id": string | null; "message_id": string | null; "in_reply_to": string | null; "received_at": string | null; "is_read": boolean; "is_starred": boolean; "labels": Array<string>; "headers": Record<string, unknown>; "attachments": Array<AttachmentMeta | null>; "source_id": string | null; "send_state": string; "send_started_at": string | null; "created_at": string; "updated_at": string }
 
-export interface MessageCounts { "inbox": number; "unread": number; "starred": number; "sent": number; "archived": number; "spam": number; "trash": number; "total": number; "latest_received_at": string | null }
+export interface MessageCounts { "inbox": number; "unread": number; "priority"?: number; "starred": number; "sent": number; "archived": number; "spam": number; "trash": number; "total": number; "latest_received_at": string | null }
 
 export interface SendIntentMessage { "id": string; "send_state": "none" | "pending" | "blocked" | "cancelled" | "sending" | "sent" | "failed" | "uncertain" }
 
@@ -1136,6 +1136,69 @@ export class EmailsSelfHostClient {
       });
     }
 
+    /** List tenant-scoped mailbox-filters */
+    async listResourceMailboxFilters(query?: { "limit"?: number; "offset"?: number; "normalized_name"?: string | null; "mailbox"?: string | null }, init?: RequestInit): Promise<{ "items": Array<{ "name": string | null; "normalized_name": string | null; "mailbox": string | null; "criteria": unknown; "id": string; "tenant_id": string; "created_at": string; "updated_at": string }> }> {
+      return this.request("GET", `/v1/mailbox-filters`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
+    /** Create a tenant-scoped mailbox-filters row */
+    async createResourceMailboxFilters(body: { "name": string | null; "mailbox": string | null; "criteria": unknown }, init?: RequestInit): Promise<{ "name": string | null; "normalized_name": string | null; "mailbox": string | null; "criteria": unknown; "id": string; "tenant_id": string; "created_at": string; "updated_at": string }> {
+      return this.request("POST", `/v1/mailbox-filters`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Get a tenant-scoped mailbox-filters row */
+    async getResourceMailboxFilters(id: string, init?: RequestInit): Promise<{ "name": string | null; "normalized_name": string | null; "mailbox": string | null; "criteria": unknown; "id": string; "tenant_id": string; "created_at": string; "updated_at": string }> {
+      return this.request("GET", `/v1/mailbox-filters/${encodeURIComponent(String(id))}`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Replace mutable fields on a tenant-scoped mailbox-filters row */
+    async replaceResourceMailboxFilters(id: string, body: { "name": string | null; "mailbox": string | null; "criteria": unknown }, init?: RequestInit): Promise<{ "name": string | null; "normalized_name": string | null; "mailbox": string | null; "criteria": unknown; "id": string; "tenant_id": string; "created_at": string; "updated_at": string }> {
+      return this.request("PUT", `/v1/mailbox-filters/${encodeURIComponent(String(id))}`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Delete a tenant-scoped mailbox-filters row */
+    async deleteResourceMailboxFilters(id: string, init?: RequestInit): Promise<{ "deleted": true; "id": string }> {
+      return this.request("DELETE", `/v1/mailbox-filters/${encodeURIComponent(String(id))}`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Update a tenant-scoped mailbox-filters row */
+    async updateResourceMailboxFilters(id: string, body: { "name": string | null; "mailbox": string | null; "criteria": unknown }, init?: RequestInit): Promise<{ "name": string | null; "normalized_name": string | null; "mailbox": string | null; "criteria": unknown; "id": string; "tenant_id": string; "created_at": string; "updated_at": string }> {
+      return this.request("PATCH", `/v1/mailbox-filters/${encodeURIComponent(String(id))}`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Apply a saved mailbox filter */
+    async applyMailboxFilter(id: string, query?: { "limit"?: number; "offset"?: number }, init?: RequestInit): Promise<{ "filter": Record<string, unknown>; "items": Array<MessageListItem>; "limit": number; "offset": number; "truncated": boolean }> {
+      return this.request("POST", `/v1/mailbox-filters/${encodeURIComponent(String(id))}/apply`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
     /** Mail-view: registered addresses as mailboxes plus global folder counts */
     async listMailboxes(init?: RequestInit): Promise<{ "mailboxes": Array<Mailbox>; "counts": MessageCounts }> {
       return this.request("GET", `/v1/mailboxes`, {
@@ -1217,7 +1280,7 @@ export class EmailsSelfHostClient {
       });
     }
 
-    async listMessages(query?: { "limit"?: number; "offset"?: number; "cursor"?: string; "direction"?: "inbound" | "outbound"; "folder"?: "inbox" | "starred" | "sent" | "archived" | "spam" | "trash"; "domain"?: Array<string>; "to"?: string; "from"?: string; "subject"?: string; "q"?: string; "search"?: string; "since"?: string }, init?: RequestInit): Promise<{ "messages": Array<MessageListItem>; "next_cursor": string | null }> {
+    async listMessages(query?: { "limit"?: number; "offset"?: number; "cursor"?: string; "direction"?: "inbound" | "outbound"; "folder"?: "inbox" | "starred" | "sent" | "archived" | "spam" | "trash"; "domain"?: Array<string>; "to"?: string; "from"?: string; "subject"?: string; "q"?: string; "search"?: string; "since"?: string; "until"?: string; "read"?: boolean; "unread"?: boolean; "starred"?: boolean; "archived"?: boolean; "address"?: string; "label"?: string }, init?: RequestInit): Promise<{ "messages": Array<MessageListItem>; "next_cursor": string | null }> {
       return this.request("GET", `/v1/messages`, {
         body: undefined,
         query,
@@ -1422,6 +1485,42 @@ export class EmailsSelfHostClient {
     async updateResourceOwners(id: string, body: { "type"?: string | null; "name"?: string | null; "contact_email"?: string | null; "external_id"?: string | null }, init?: RequestInit): Promise<{ "type": string | null; "name": string | null; "contact_email": string | null; "external_id": string | null; "id": string; "tenant_id": string; "created_at": string; "updated_at": string }> {
       return this.request("PATCH", `/v1/owners/${encodeURIComponent(String(id))}`, {
         body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** List tenant-scoped priority-sender-rules */
+    async listResourcePrioritySenderRules(query?: { "limit"?: number; "offset"?: number; "kind"?: string | null; "value"?: string | null }, init?: RequestInit): Promise<{ "items": Array<{ "id": string; "kind": string | null; "value": string | null; "tenant_id": string; "created_at": string; "updated_at": string }> }> {
+      return this.request("GET", `/v1/priority-sender-rules`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
+    /** Create a tenant-scoped priority-sender-rules row */
+    async createResourcePrioritySenderRules(body: { "id"?: string | null; "kind"?: string | null; "value"?: string | null }, init?: RequestInit): Promise<{ "id": string; "kind": string | null; "value": string | null; "tenant_id": string; "created_at": string; "updated_at": string }> {
+      return this.request("POST", `/v1/priority-sender-rules`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Get a tenant-scoped priority-sender-rules row */
+    async getResourcePrioritySenderRules(id: string, init?: RequestInit): Promise<{ "id": string; "kind": string | null; "value": string | null; "tenant_id": string; "created_at": string; "updated_at": string }> {
+      return this.request("GET", `/v1/priority-sender-rules/${encodeURIComponent(String(id))}`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Delete a tenant-scoped priority-sender-rules row */
+    async deleteResourcePrioritySenderRules(id: string, init?: RequestInit): Promise<{ "deleted": true; "id": string }> {
+      return this.request("DELETE", `/v1/priority-sender-rules/${encodeURIComponent(String(id))}`, {
+        body: undefined,
         query: undefined,
         init,
       });

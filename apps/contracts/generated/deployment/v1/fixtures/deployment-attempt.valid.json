@@ -1,0 +1,104 @@
+{
+  "actionSteps": [
+    {
+      "actionId": "apply-workload",
+      "evidenceRefs": [
+        {
+          "id": "attempt-action-evidence",
+          "kind": "test_result",
+          "sha256": "4af04476abe762b8d7a3c55cbb03107ecd1ee3311716216c2731b728ec938eba",
+          "summary": "Bounded evidence for attempt-action-evidence",
+          "uri": "artifact://deployment-fixture/attempt-action-evidence"
+        }
+      ],
+      "finishedAt": "2026-08-09T09:18:00.000Z",
+      "providerCorrelationId": "provider-operation-example-app",
+      "sequence": 1,
+      "startedAt": "2026-08-09T09:11:00.000Z",
+      "state": "succeeded"
+    }
+  ],
+  "approvals": [
+    {
+      "actionId": null,
+      "decision": {
+        "digest": "41a0daa144612fdd8d0862c93f22ad0378951a8b25fe2212052bb6f3505f77cb",
+        "id": "deployment-approval-example-app",
+        "schema": "hasna.deployment_approval_decision.v1"
+      },
+      "phaseId": null,
+      "runtimeMaterialDigest": null,
+      "scope": "plan"
+    }
+  ],
+  "attemptNumber": 1,
+  "createdAt": "2026-08-09T09:10:00.000Z",
+  "decisionActors": [
+    {
+      "id": "owner-approver",
+      "kind": "human",
+      "name": "Deployment Approver"
+    }
+  ],
+  "digest": "c5b700016c1e1453be1c295e44ba6e92af39cc685942a510d35a9ef691a953a4",
+  "environmentLock": {
+    "fencingToken": 19,
+    "id": "environment-production-lock"
+  },
+  "evidenceRefs": [
+    {
+      "id": "attempt-evidence",
+      "kind": "report",
+      "sha256": "1bf89d5d5cfa2f47a382b6e1b2baf416291269eb2c8612692014b10db274c7d1",
+      "summary": "Bounded evidence for attempt-evidence",
+      "uri": "artifact://deployment-fixture/attempt-evidence"
+    }
+  ],
+  "executorActors": [
+    {
+      "id": "deployment-executor",
+      "kind": "service",
+      "name": "Deployment Executor"
+    }
+  ],
+  "failureReason": null,
+  "finalReceipt": null,
+  "id": "deployment-attempt-example-app",
+  "inboxCorrelationRef": {
+    "id": "inbox-correlation",
+    "kind": "integration",
+    "tags": [
+      "deployment-fixture"
+    ],
+    "uri": "integration://deployment-fixture/inbox-correlation"
+  },
+  "outboxCorrelationRef": {
+    "id": "outbox-correlation",
+    "kind": "integration",
+    "tags": [
+      "deployment-fixture"
+    ],
+    "uri": "integration://deployment-fixture/outbox-correlation"
+  },
+  "plan": {
+    "digest": "ac1168d43503c1d1505c3271ceb4a92a9803af75ac37739c5e46ea540d036274",
+    "id": "deployment-plan-example-app",
+    "schema": "hasna.deployment_plan.v1"
+  },
+  "producer": {
+    "id": "deployment-executor",
+    "kind": "service",
+    "name": "Deployment Executor"
+  },
+  "providerReceipts": [],
+  "requester": {
+    "id": "agent-builder",
+    "kind": "agent",
+    "name": "Deployment Builder"
+  },
+  "retryOf": null,
+  "revision": 1,
+  "schema": "hasna.deployment_attempt.v1",
+  "state": "succeeded",
+  "updatedAt": "2026-08-09T09:20:00.000Z"
+}

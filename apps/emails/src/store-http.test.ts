@@ -211,7 +211,9 @@ describe("HttpEmailStore conformance", () => {
       ["events", () => subject.events.list()],
       ["emailDigests", () => subject.emailDigests.list()],
       ["webhookReceipts", () => subject.webhookReceipts.list()],
+      ["mailboxFilters", () => subject.mailboxFilters.list()],
       ["sandbox", () => subject.sandbox.list()],
+      ["prioritySenderRules", () => subject.prioritySenderRules.list()],
     ];
     // Every declared family is wired; nothing missing and nothing extra claimed.
     expect(families.map(([family]) => family).sort()).toEqual([...RESOURCE_FAMILIES].sort());

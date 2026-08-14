@@ -1,0 +1,131 @@
+{
+  "actions": [
+    {
+      "approvalScope": "plan",
+      "compensationOperationId": "provider.rollback",
+      "dependsOn": [],
+      "evidenceRequirements": [
+        "provider-receipt",
+        "health-check"
+      ],
+      "fencingRequired": true,
+      "id": "apply-workload",
+      "idempotencyRequired": true,
+      "inputs": [
+        {
+          "digest": "4aab79eca4eca7079eb990dbb8c31f94b5ea784fb34d0dd7619f307136ea2fcb",
+          "id": "artifact-example-app",
+          "schema": "hasna.build_artifact.v1"
+        },
+        {
+          "digest": "9760cb4f172b160d2c3257a63e8ad94683a45c985ed62511a1a2c01740636278",
+          "id": "environment-production",
+          "revision": 2,
+          "schema": "hasna.environment_binding.v1"
+        }
+      ],
+      "lockClass": "environment-exclusive",
+      "maxAttempts": 2,
+      "operationId": "provider.deploy",
+      "operationVersion": 1,
+      "outputSchema": "hasna.provider_receipt.v1",
+      "postconditions": [
+        "provider-observed",
+        "health-verified"
+      ],
+      "preconditions": [
+        "immutable-inputs",
+        "approval-valid"
+      ],
+      "providerCapabilityDigest": "59b4a5db6aaa44ef1e38cdbc6ef31fc0690e178c066a68d249ce1bb23856e283",
+      "providerOperation": "provider.deploy",
+      "reconciliationRequired": true,
+      "retryClass": "reconcile_first",
+      "riskClass": "high",
+      "runtimeMaterialKind": null,
+      "sideEffectClass": "compute_or_infra_mutation",
+      "timeoutClass": "deployment-standard"
+    }
+  ],
+  "authorizationRequirements": [
+    "production-deployer"
+  ],
+  "compiler": {
+    "actor": {
+      "id": "agent-builder",
+      "kind": "agent",
+      "name": "Deployment Builder"
+    },
+    "contractKitVersion": "1.0.0",
+    "version": "1.0.0"
+  },
+  "createdAt": "2026-08-09T09:10:00.000Z",
+  "digest": "ac1168d43503c1d1505c3271ceb4a92a9803af75ac37739c5e46ea540d036274",
+  "estimatedCost": {
+    "amountMicros": 125000,
+    "basis": "estimated",
+    "createdAt": "2026-08-09T09:00:00.000Z",
+    "currency": "USD",
+    "id": "cost-deployment-fixture",
+    "provider": "fixture-provider",
+    "resourceRefs": [],
+    "schema": "hasna.cost_estimate.v1"
+  },
+  "evidenceRequirements": [
+    "provider-receipt",
+    "live-verification"
+  ],
+  "expectedStateDigest": "2552b3bff4aa513c329bf2d5c0edd0d68714ed6c3c6adeaa358934f0e779f56c",
+  "expiresAt": "2026-08-10T09:00:00.000Z",
+  "id": "deployment-plan-example-app",
+  "inputs": [
+    {
+      "digest": "53497f71c3fd58dac6c1d32b77c126de3d132ffeac28a4494abc1fae2f6e5556",
+      "id": "product-example-app",
+      "revision": 1,
+      "schema": "hasna.product_projection.v1"
+    },
+    {
+      "digest": "6bc75f992f681a5cf96083897b0bfffdd3bb9304b4ec32891c944ecb3af522b9",
+      "id": "intent-example-app",
+      "schema": "hasna.intent_snapshot.v1"
+    },
+    {
+      "digest": "4aab79eca4eca7079eb990dbb8c31f94b5ea784fb34d0dd7619f307136ea2fcb",
+      "id": "artifact-example-app",
+      "schema": "hasna.build_artifact.v1"
+    },
+    {
+      "digest": "9760cb4f172b160d2c3257a63e8ad94683a45c985ed62511a1a2c01740636278",
+      "id": "environment-production",
+      "revision": 2,
+      "schema": "hasna.environment_binding.v1"
+    }
+  ],
+  "issuedAt": "2026-08-09T09:10:00.000Z",
+  "kind": "deployment",
+  "policyRequirements": [
+    "production-policy"
+  ],
+  "producer": {
+    "id": "agent-builder",
+    "kind": "agent",
+    "name": "Deployment Builder"
+  },
+  "providerCapabilityDigests": [
+    "59b4a5db6aaa44ef1e38cdbc6ef31fc0690e178c066a68d249ce1bb23856e283"
+  ],
+  "request": {
+    "digest": "083e9014634a6c88119a5d0e541cc404cf494a171584573851f78c92ba48f0aa",
+    "id": "deployment-request-example-app",
+    "schema": "hasna.deployment_request.v1"
+  },
+  "riskClass": "high",
+  "rollbackInputs": [],
+  "schema": "hasna.deployment_plan.v1",
+  "verificationCriteria": [
+    "health",
+    "readiness",
+    "version"
+  ]
+}

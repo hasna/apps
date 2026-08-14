@@ -311,6 +311,10 @@ function familyFor(store: EmailStore, path: string): ResourceRepository<Record<s
     "email-digests": store.emailDigests,
     "webhook-receipts": store.webhookReceipts,
     "sandbox-emails": store.sandbox,
+    "mailbox-filters": store.mailboxFilters,
+    ...(store.prioritySenderRules === undefined
+      ? {}
+      : { "priority-sender-rules": store.prioritySenderRules }),
   };
   return families[path] ?? null;
 }
