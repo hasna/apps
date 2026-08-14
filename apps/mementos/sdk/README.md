@@ -1,7 +1,7 @@
 # @hasna/mementos-sdk
 
 Zero-dependency TypeScript client for the
-[@hasna/mementos](https://github.com/hasna/mementos) REST API. It works in
+[@hasna/mementos](https://github.com/hasna/apps) REST API. It works in
 Node.js, Bun, Deno, and browsers and requires only `fetch`.
 
 This package is the separately versioned standalone client in `sdk/`. It is not

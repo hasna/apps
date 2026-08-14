@@ -11,8 +11,8 @@ Thank you for your interest in contributing. This guide covers everything you ne
 
 ```bash
 # Clone the repository
-git clone https://github.com/hasna/skills.git
-cd skills
+git clone https://github.com/hasna/apps.git
+cd apps/skills
 
 # Install dependencies
 bun install
@@ -121,7 +121,7 @@ This launches the Model Context Protocol server that exposes skills as tools for
 
 ## Reporting Issues
 
-Use [GitHub Issues](https://github.com/hasna/skills/issues) to report bugs or request features. A good issue includes:
+Use [GitHub Issues](https://github.com/hasna/apps/issues) to report bugs or request features. A good issue includes:
 
 - A clear, descriptive title
 - Steps to reproduce the problem
