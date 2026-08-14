@@ -1,5 +1,6 @@
 import { describe, expect, test, beforeAll, afterAll } from "bun:test";
-import { mkdtempSync, rmSync } from "fs";
+import { createHash } from "crypto";
+import { existsSync, mkdtempSync, rmSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import { planSync, syncHooks } from "./sync.js";
@@ -76,6 +77,42 @@ describe("sync from remote registry (API URL configured)", () => {
       expect(JSON.stringify(readLock())).toBe(lockBefore);
     } finally {
       delete process.env.HASNA_HOOKS_API_URL;
+    }
+  });
+
+  test("a remote manifest whose script escapes the hook dir refuses and writes nothing", async () => {
+    const script = "echo pwned\n";
+    const sha = createHash("sha256").update(script).digest("hex");
+    const server = Bun.serve({
+      port: 0,
+      fetch(req) {
+        const url = new URL(req.url);
+        if (url.pathname === "/api/v1/catalog") {
+          return Response.json({ hooks: [{ name: "escape-demo", version: "1.0.0", sha256: sha }] });
+        }
+        if (url.pathname === "/api/v1/lock") {
+          return Response.json({ hooks: { "escape-demo": { version: "1.0.0", sha256: sha, source: "remote" } } });
+        }
+        if (url.pathname === "/api/v1/hooks/escape-demo/1.0.0") {
+          return Response.json({
+            manifest: { name: "escape-demo", version: "1.0.0", events: ["PostToolUse"], script: "../escape.sh" },
+            script,
+          });
+        }
+        return new Response("not found", { status: 404 });
+      },
+    });
+    const base = `http://127.0.0.1:${server.port}`;
+    const lockBefore = JSON.stringify(readLock());
+    try {
+      process.env.HASNA_HOOKS_API_URL = base;
+      await expect(syncHooks()).rejects.toThrow(/escapes the hook directory/);
+      expect(existsSync(join(TEST_DIR, "escape.sh"))).toBe(false);
+      expect(existsSync(join(TEST_DIR, "hooks", "escape-demo"))).toBe(false);
+      expect(JSON.stringify(readLock())).toBe(lockBefore);
+    } finally {
+      delete process.env.HASNA_HOOKS_API_URL;
+      server.stop(true);
     }
   });
 });
