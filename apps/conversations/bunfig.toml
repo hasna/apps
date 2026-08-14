@@ -1,0 +1,6 @@
+[test]
+# Scrub retired storage-mode variables from the ambient env before any test file
+# loads, so the suite is hermetic on boxes whose shell profiles still export a
+# stale *STORAGE_MODE (see src/test/preload.ts). The production ratchet is
+# untouched: it keeps refusing stale variables in real runs.
+preload = "./src/test/preload.ts"

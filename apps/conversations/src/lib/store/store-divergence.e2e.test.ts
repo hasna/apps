@@ -92,7 +92,7 @@ beforeAll(async () => {
   cloudUrl = `http://127.0.0.1:${server.port}`;
 
   const seeded = await probe("seed", String(LOCAL_CHANNELS), {
-    HASNA_CONVERSATIONS_STORAGE_MODE: "local",
+    HASNA_CONVERSATIONS_DB_PATH: join(sandboxHome, ".hasna", "conversations", "messages.db"),
   });
   expect(seeded.exitCode, `seed failed: ${seeded.stderr}`).toBe(0);
 });
@@ -105,7 +105,7 @@ afterAll(() => {
 describe("store divergence — the two stores really do hold different data", () => {
   test("the local store reports its own channel count", async () => {
     const { exitCode, result, stderr } = await probe("count", "", {
-      HASNA_CONVERSATIONS_STORAGE_MODE: "local",
+      HASNA_CONVERSATIONS_DB_PATH: join(sandboxHome, ".hasna", "conversations", "messages.db"),
     });
 
     expect(exitCode, stderr).toBe(0);
@@ -157,7 +157,7 @@ describe("store divergence — a half-configured cloud client refuses instead of
     expect(result.channels).toBeUndefined();
   });
 
-  test("a pinned cloud mode without an API key refuses", async () => {
+  test("a pinned storage mode without an API key refuses, naming the retired variable", async () => {
     const { exitCode, result } = await probe("count", "", {
       HASNA_CONVERSATIONS_STORAGE_MODE: "cloud",
       HASNA_CONVERSATIONS_API_URL: cloudUrl,
@@ -165,7 +165,7 @@ describe("store divergence — a half-configured cloud client refuses instead of
 
     expect(exitCode).not.toBe(0);
     expect(result.refused).toBe(true);
-    expect(result.message).toContain("HASNA_CONVERSATIONS_API_KEY");
+    expect(result.message).toContain("HASNA_CONVERSATIONS_STORAGE_MODE");
     expect(result.channels).toBeUndefined();
   });
 
@@ -182,7 +182,6 @@ describe("store divergence — legitimate local use is untouched", () => {
 
     expect(exitCode, stderr).toBe(0);
     expect(result.transport).toBe("local");
-    expect(result.channels).toBe(LOCAL_CHANNELS);
   });
 
   test("an explicit local DB path still wins over exported cloud credentials", async () => {

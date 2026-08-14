@@ -7,26 +7,38 @@ const CLOUD_ENV = {
 };
 
 describe("conversationsCloudEnv", () => {
-  test("implies self_hosted when API url + key present and no mode", () => {
-    expect(conversationsCloudEnv({ ...CLOUD_ENV }).HASNA_CONVERSATIONS_STORAGE_MODE).toBe("self_hosted");
+  test("API url + key present => env unchanged, no mode variable invented", () => {
+    const env = conversationsCloudEnv({ ...CLOUD_ENV });
+    expect(env.HASNA_CONVERSATIONS_API_URL).toBe(CLOUD_ENV.HASNA_CONVERSATIONS_API_URL);
+    expect(env.HASNA_CONVERSATIONS_API_KEY).toBe(CLOUD_ENV.HASNA_CONVERSATIONS_API_KEY);
+    expect(env.HASNA_CONVERSATIONS_STORAGE_MODE).toBeUndefined();
+    expect(env.HASNA_CONVERSATIONS_MODE).toBeUndefined();
+    expect(resolveConversationsCloud(env)).not.toBeNull();
   });
 
-  test("respects an explicit local mode", () => {
-    const env = conversationsCloudEnv({ ...CLOUD_ENV, HASNA_CONVERSATIONS_STORAGE_MODE: "local" });
-    expect(env.HASNA_CONVERSATIONS_STORAGE_MODE).toBe("local");
+  test("a retired storage-mode variable throws, even beside a valid pair", () => {
+    expect(() =>
+      conversationsCloudEnv({ ...CLOUD_ENV, HASNA_CONVERSATIONS_STORAGE_MODE: "local" }),
+    ).toThrow(/HASNA_CONVERSATIONS_STORAGE_MODE/);
+    expect(() =>
+      conversationsCloudEnv({ ...CLOUD_ENV, CONVERSATIONS_MODE: "cloud" }),
+    ).toThrow(/CONVERSATIONS_MODE/);
   });
 
-  test("local DB path overrides inherited cloud routing", () => {
+  test("local DB path overrides inherited API routing and strips the credentials", () => {
     const env = conversationsCloudEnv({
       ...CLOUD_ENV,
-      HASNA_CONVERSATIONS_STORAGE_MODE: "cloud",
       CONVERSATIONS_DB_PATH: "/tmp/conversations-test.db",
     });
-    expect(env.HASNA_CONVERSATIONS_STORAGE_MODE).toBe("local");
+    expect(env.HASNA_CONVERSATIONS_STORAGE_MODE).toBeUndefined();
+    expect(env.HASNA_CONVERSATIONS_API_URL).toBeUndefined();
+    expect(env.HASNA_CONVERSATIONS_API_KEY).toBeUndefined();
     expect(resolveConversationsCloud(env)).toBeNull();
   });
 
   test("no-op without url/key", () => {
-    expect(conversationsCloudEnv({}).HASNA_CONVERSATIONS_STORAGE_MODE).toBeUndefined();
+    const env = conversationsCloudEnv({});
+    expect(env.HASNA_CONVERSATIONS_STORAGE_MODE).toBeUndefined();
+    expect(resolveConversationsCloud(env)).toBeNull();
   });
 });

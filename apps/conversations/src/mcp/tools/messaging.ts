@@ -11,7 +11,7 @@ import { registerMcpTool } from "../tool-compat.js";
 import { sendResult } from "../redaction-result.js";
 import { getStore } from "../../lib/store/index.js";
 // Reads/writes route through getStore(): ApiStore when HASNA_CONVERSATIONS_API_URL
-// + _API_KEY are set (self_hosted/cloud), else LocalStore.
+// + _API_KEY are set, else LocalStore.
 import { identityFor } from "../identity.js";
 import { compactPreviewPage, compactWindowedSessions, jsonText, resolveMcpPageOptions } from "../compact.js";
 import { resolveReadWindow, takeWindow } from "../../lib/message-window.js";

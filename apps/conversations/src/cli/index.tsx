@@ -76,10 +76,10 @@ registerBrainsCommand(program);
 // ---- default: TUI ----
 // The interactive TUI reads/writes the on-box SQLite domain helpers directly
 // (real-time polling). That is the local Store's own backing, so it is correct
-// in `local` mode. In api mode (self_hosted/cloud) rendering it would silently
-// show/mutate the LOCAL db instead of the cloud API — the split-brain bug this
-// architecture forbids. So in cloud mode we refuse and route the operator to the
-// Store-backed subcommands instead of quietly serving stale local data.
+// when the client is local. In API mode it would silently show/mutate the LOCAL
+// db instead of the cloud API — the split-brain bug this architecture forbids. So
+// in API mode we refuse and route the operator to the Store-backed subcommands
+// instead of quietly serving stale local data.
 program
   .action(() => {
     if (isCloudStore()) {

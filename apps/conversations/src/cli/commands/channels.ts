@@ -1,7 +1,7 @@
 import type { Command } from "commander";
 import { getStore } from "../../lib/store/index.js";
 import chalk from "chalk";
-// Reads/writes route through getStore(): ApiStore (self_hosted/cloud) or LocalStore.
+// Reads/writes route through getStore(): ApiStore (HTTP API) or LocalStore.
 import { closeDb } from "../../lib/db.js";
 import { resolveIdentity } from "../../lib/identity.js";
 import { previewText, windowItems } from "../../lib/compact-output.js";

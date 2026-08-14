@@ -1,6 +1,6 @@
-# conversations-serve — ARM64 / Bun runtime image for the self_hosted service.
-# PURE REMOTE (Amendment A1): the serve process talks to the shared cloud
-# Postgres directly. No SQLite, no local state.
+# conversations-serve — ARM64 / Bun runtime image for the HTTP API service.
+# The serve process reads/writes Postgres selected by
+# HASNA_CONVERSATIONS_DATABASE_URL. No SQLite, no local state.
 #
 # Base image: AWS's credential-free ECR Public mirror of the Debian Official
 # Image, with a pinned Bun installed via the official installer. oven/bun:1 is
@@ -40,8 +40,7 @@ RUN bun run scripts/ci/render-build-sha.ts "$BUILD_SHA" src/server/build-sha.gen
 
 ENV NODE_ENV=production \
     PORT=8080 \
-    HOST=0.0.0.0 \
-    HASNA_CONVERSATIONS_STORAGE_MODE=cloud
+    HOST=0.0.0.0
 
 EXPOSE 8080
 

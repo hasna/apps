@@ -354,16 +354,16 @@ function purgeAttachmentFiles(row: RawMessageRow): { deleted: number; errors: nu
 
 export function redactMessagesById(options: RedactMessagesOptions): RedactMessagesResult {
   // This tool redacts on-box SQLite only (secure_delete + WAL truncate + VACUUM).
-  // When the station is flipped to cloud/self_hosted, the messages live in the
-  // cloud store (RDS), not in local sqlite — running here would silently scan an
+  // When the client is flipped to the HTTP API, the messages live in the API
+  // store (RDS), not in local sqlite — running here would silently scan an
   // empty/stale local DB and falsely report a clean result. Fail loud instead so a
   // security remediation is never mistaken for done. Mirrors the split-brain guard
   // the public SDK surface enforces via getStore().
   if (isCloudStore()) {
     throw new Error(
-      "Refusing to run local SQLite redaction: conversations is flipped to cloud/self_hosted mode. " +
-      "The target messages live in the cloud store (RDS), not on-box sqlite. " +
-      "Redact through the cloud API/database, or unset the cloud client-flip env to operate on local sqlite.",
+      "Refusing to run local SQLite redaction: conversations is flipped to the HTTP API. " +
+      "The target messages live in the API store (RDS), not on-box sqlite. " +
+      "Redact through the cloud API/database, or unset the API client-flip env to operate on local sqlite.",
     );
   }
 

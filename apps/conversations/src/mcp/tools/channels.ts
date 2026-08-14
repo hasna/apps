@@ -6,7 +6,7 @@
  * set_channel_topic, get_channel_topic, summarize_channel
  *
  * Every read/write routes through the Store (getStore()): LocalStore on-box, or
- * ApiStore against the self_hosted/cloud API. Nothing here touches sqlite directly.
+ * ApiStore against the HTTP API. Nothing here touches sqlite directly.
  */
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";

@@ -16,8 +16,10 @@ import Foundation
 /// honours them in. Mirrors `clientTransportEnvKeys("conversations")` and
 /// `DB_PATH_KEYS` from src/lib/store/index.ts.
 public enum StoreEnvContract {
-    /// Storage-mode keys, highest precedence first.
-    public static let modeKeys: [String] = [
+    /// Retired storage-mode keys, in precedence order. Any of them being SET is
+    /// an error naming the variable; they exist here only so the shell can strip
+    /// them from the child environment and refuse on them in the fleet config.
+    public static let legacyModeKeys: [String] = [
         "HASNA_CONVERSATIONS_STORAGE_MODE",
         "HASNA_CONVERSATIONS_MODE",
         "CONVERSATIONS_STORAGE_MODE",
@@ -43,27 +45,11 @@ public enum StoreEnvContract {
         "CONVERSATIONS_DB_PATH",
     ]
 
-    /// Base URL the transport uses when an API key is present but no URL is set.
-    public static let defaultCloudBaseUrl = "https://conversations.hasna.xyz"
-
-    /// Mode token selecting the on-box SQLite store. Observed from the resolver
-    /// itself rather than written by hand — see localModeToken() in
-    /// src/lib/store/swift-env-contract.ts for why a literal here would be a bet.
-    public static let localModeToken = "local"
-
-    /// Mode tokens selecting the hosted service, including the deprecated
-    /// aliases this generation of the vendored contracts client still accepts.
-    public static let cloudModeTokens: [String] = [
-        "cloud",
-        "remote",
-        "hybrid",
-        "self_hosted",
-    ]
-
     /// Every key that can steer the child server's store choice. The child env is
     /// built by removing all of these and re-emitting only the resolved
     /// selection, so no inherited variable can redirect the store behind the
-    /// shell's back.
+    /// shell's back. The retired mode keys are included because a mode variable
+    /// that survived into the child would trip the resolver's fail-loud ratchet.
     public static let storeSelectingKeys: [String] =
-        modeKeys + apiUrlKeys + apiKeyKeys + dbPathKeys
+        legacyModeKeys + apiUrlKeys + apiKeyKeys + dbPathKeys
 }

@@ -167,7 +167,9 @@ beforeAll(async () => {
   });
   cloudUrl = `http://127.0.0.1:${cloud.port}`;
 
-  const seeded = await probe("seed", { HASNA_CONVERSATIONS_STORAGE_MODE: "local" });
+  const seeded = await probe("seed", {
+    HASNA_CONVERSATIONS_DB_PATH: join(sandboxHome, ".hasna", "conversations", "messages.db"),
+  });
   expect(seeded.exitCode, `seed failed: ${seeded.stderr}`).toBe(0);
 });
 
@@ -176,17 +178,16 @@ afterAll(() => {
   if (sandboxHome) rmSync(sandboxHome, { recursive: true, force: true });
 });
 
-test("the default-host API status still identifies the API connection when api_url is null", () => {
-  const status = storeStatusLocation({
-    HASNA_CONVERSATIONS_STORAGE_MODE: "cloud",
-    HASNA_CONVERSATIONS_API_KEY: FAKE_KEY,
-  });
-
-  expect(status).toEqual({ api_url: null });
-  expect(statusConnectionMarkers(status)).toEqual({
-    apiUrlPresent: true,
-    dbPathPresent: false,
-  });
+test("a retired storage-mode variable makes the status location refuse, not answer", () => {
+  // Deployment modes no longer exist: the status fragment shares the resolver's
+  // fail-loud ratchet, so a stale storage-mode variable is an error naming the
+  // variable, never a "default-host" answer from an invented server token.
+  expect(() =>
+    storeStatusLocation({
+      HASNA_CONVERSATIONS_STORAGE_MODE: "cloud",
+      HASNA_CONVERSATIONS_API_KEY: FAKE_KEY,
+    }),
+  ).toThrow(/HASNA_CONVERSATIONS_STORAGE_MODE/);
 });
 
 // Which stub-cloud count each endpoint class must return when the store is hosted.
@@ -319,21 +320,18 @@ describe("dashboard server — a half-configured client refuses instead of servi
 // A local-selecting variable BEATS a valid url+key pair (store/index.ts precedence
 // rules 1 and 2), and that is correct: an operator asking for local gets local.
 //
-// It matters here because the macOS shell's guard (PR #51) reads only three of the
-// variables this resolver honours, so a stray DB_PATH or an unprefixed mode alias
-// makes the shell report `store=hosted` while the child resolves LOCAL. serve.ts
-// CANNOT prevent that — from the server's side "DB_PATH is set" is indistinguishable
-// from a deliberate local configuration — so what it owes instead is TRUTHFULNESS:
-// /api/status must name the store that actually answered, so the condition is
-// detectable rather than invisible. These cases pin that, so the shell-side fix has
-// something dependable to be verified against.
+// It matters here because the macOS shell's guard (PR #51) reads only some of the
+// variables this resolver honours, so a stray DB_PATH makes the shell report
+// `store=hosted` while the child resolves LOCAL. serve.ts CANNOT prevent that —
+// from the server's side "DB_PATH is set" is indistinguishable from a deliberate
+// local configuration — so what it owes instead is TRUTHFULNESS: /api/status must
+// name the store that actually answered, so the condition is detectable rather
+// than invisible. These cases pin that, so the shell-side fix has something
+// dependable to be verified against.
 describe("dashboard server — a local-selecting variable is reported honestly, never as hosted", () => {
   const LOCAL_SELECTORS: Array<[string, (db: string) => Record<string, string>]> = [
     ["HASNA_CONVERSATIONS_DB_PATH", (db) => ({ HASNA_CONVERSATIONS_DB_PATH: db })],
     ["CONVERSATIONS_DB_PATH", (db) => ({ CONVERSATIONS_DB_PATH: db })],
-    ["CONVERSATIONS_MODE=local", () => ({ CONVERSATIONS_MODE: "local" })],
-    ["HASNA_CONVERSATIONS_MODE=local", () => ({ HASNA_CONVERSATIONS_MODE: "local" })],
-    ["CONVERSATIONS_STORAGE_MODE=local", () => ({ CONVERSATIONS_STORAGE_MODE: "local" })],
   ];
 
   for (const [label, build] of LOCAL_SELECTORS) {
@@ -374,7 +372,9 @@ describe("dashboard server — legitimate local use is untouched", () => {
   let local: Record<string, any>;
 
   beforeAll(async () => {
-    const run = await probe("probe", { HASNA_CONVERSATIONS_STORAGE_MODE: "local" });
+    const run = await probe("probe", {
+      HASNA_CONVERSATIONS_DB_PATH: join(sandboxHome, ".hasna", "conversations", "messages.db"),
+    });
     expect(run.exitCode, `probe failed: ${run.stderr}`).toBe(0);
     local = run.result;
   });

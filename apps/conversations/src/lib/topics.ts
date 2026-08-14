@@ -19,7 +19,7 @@ function corpusFrom(rows: Array<{ preview_source: string | null }>): string {
 }
 
 // Topic extraction is storage-agnostic and lives in ./topic-extract.js so the
-// self_hosted/cloud API server can reuse the identical algorithm without a
+// HTTP API server can reuse the identical algorithm without a
 // sqlite import. Re-exported here for existing callers.
 export { extractTopics, type TopicWeight };
 

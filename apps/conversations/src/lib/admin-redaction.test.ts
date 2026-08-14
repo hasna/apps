@@ -64,11 +64,11 @@ function seedLeakedMessage(opts: {
 }
 
 describe("redactMessagesById", () => {
-  test("refuses to run when conversations is flipped to cloud/self_hosted mode", () => {
+  test("refuses to run when conversations is flipped to the HTTP API", () => {
     const msg = seedLeakedMessage({ content: markerContent() });
 
-    // Simulate a cloud client-flip: remove the explicit local DB path override and
-    // export API url + key so isCloudStore() resolves to self_hosted.
+    // Simulate an API client-flip: remove the explicit local DB path override and
+    // export API url + key so isCloudStore() resolves to the HTTP API.
     clearStoreEnv();
     process.env.HASNA_CONVERSATIONS_API_URL = "https://conversations.example.invalid";
     process.env.HASNA_CONVERSATIONS_API_KEY = ["fixture", "not", "a", "credential"].join("-");
@@ -77,7 +77,7 @@ describe("redactMessagesById", () => {
         ids: [msg.id],
         actor: "security",
         reason: "test cloud guard",
-      })).toThrow("cloud/self_hosted");
+      })).toThrow("flipped to the HTTP API");
     } finally {
       pinStoreToDb(TEST_DB);
     }

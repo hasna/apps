@@ -80,20 +80,23 @@ describe("storeStatusLocation", () => {
     expect("db_path" in cloud).toBe(false);
   });
 
-  test("a pinned local selector reports the SQLite connection even with API credentials present", () => {
-    const local = storeStatusLocation({ [MODE_VAR]: "local", [URL_VAR]: RAW, [KEY_VAR]: FAKE_KEY });
+  test("an explicit local DB path reports the SQLite connection even with API credentials present", () => {
+    const local = storeStatusLocation({ [DB_VAR]: "/tmp/conversations-status-location-probe.db", [URL_VAR]: RAW, [KEY_VAR]: FAKE_KEY });
     expect("db_path" in local).toBe(true);
     expect("api_url" in local).toBe(false);
     expect(MARKERS.filter((m) => JSON.stringify(local).includes(m))).toEqual([]);
   });
 
-  // A cloud mode pinned by name, with a key and no URL, is the documented
-  // default-host case: the transport supplies the host. It must read as "set but
-  // unnamed" so the CLI's `(set)` fallback fires, rather than as a parse failure
-  // — which is why `loggableUrl` distinguishes null from its sentinel.
-  test("a hosted store on the default host announces null, not a sentinel", () => {
-    const location = storeStatusLocation({ [MODE_VAR]: "cloud", [KEY_VAR]: FAKE_KEY });
-    expect("api_url" in location ? location.api_url : "missing").toBeNull();
+  // A retired storage-mode variable is an error, never a selector — the status
+  // fragment shares the resolver's fail-loud ratchet, so a stale mode variable
+  // names itself instead of inventing a "default host" answer.
+  test("a retired storage-mode variable refuses by name, even for the status fragment", () => {
+    expect(() => storeStatusLocation({ [MODE_VAR]: "cloud", [KEY_VAR]: FAKE_KEY })).toThrow(
+      new RegExp(MODE_VAR),
+    );
+    expect(() => storeStatusLocation({ [MODE_VAR]: "local", [URL_VAR]: RAW, [KEY_VAR]: FAKE_KEY })).toThrow(
+      new RegExp(MODE_VAR),
+    );
   });
 
   // A key with NO url and NO mode is refused rather than downgraded, and the

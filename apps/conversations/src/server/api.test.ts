@@ -1,7 +1,7 @@
 import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { startApiServer, type ApiServerDeps } from "./api.js";
 import { mintApiKey } from "@hasna/contracts/auth";
-import { verifyApiKey, ApiKeyStore } from "@hasna/contracts/auth";
+import { verifyApiKey, ApiKeyStore, type ApiKeyStatus } from "@hasna/contracts/auth";
 import { gzipSync } from "node:zlib";
 import { createHasnaHttpTransport } from "../lib/contracts-client/transport.js";
 import { createHasnaStorageClient } from "../lib/contracts-client/storage.js";
@@ -823,7 +823,12 @@ function makeDeps(): ApiServerDeps {
   const client = makeFakeClient();
   activeFakeClient = client;
   const keys = new ApiKeyStore(client as any);
-  const verifier = verifyApiKey({ app: "conversations", signingSecret: SIGNING, isRevoked: async () => false });
+  // @hasna/contracts >= 0.10.6 rejects a bare `isRevoked` boolean predicate
+  // (it cannot refuse an unregistered key). The fake store's `keyStatus`
+  // resolves "unknown" for minted keys it has no record of, so the stub pins
+  // every cryptographically valid token to "active" — exactly what the old
+  // `isRevoked: async () => false` meant, expressed through the strict hook.
+  const verifier = verifyApiKey({ app: "conversations", signingSecret: SIGNING, keyStatus: async (): Promise<ApiKeyStatus> => "active" });
   return { client: client as any, keys, verifier };
 }
 
@@ -898,7 +903,7 @@ describe("conversations-serve", () => {
     const projectVerifier = verifyApiKey({
       app: "conversations",
       signingSecret: SIGNING,
-      isRevoked: async () => false,
+      keyStatus: async (): Promise<ApiKeyStatus> => "active",
     });
     const projectServer = startApiServer({
       port: 0,
@@ -1108,7 +1113,7 @@ describe("conversations-serve", () => {
     const lockVerifier = verifyApiKey({
       app: "conversations",
       signingSecret: SIGNING,
-      isRevoked: async () => false,
+      keyStatus: async (): Promise<ApiKeyStatus> => "active",
     });
     const lockServer = startApiServer({
       port: 0,
@@ -1552,7 +1557,7 @@ describe("conversations-serve", () => {
     const renameVerifier = verifyApiKey({
       app: "conversations",
       signingSecret: SIGNING,
-      isRevoked: async () => false,
+      keyStatus: async (): Promise<ApiKeyStatus> => "active",
     });
     const renameServer = startApiServer({
       port: 0,
@@ -1656,7 +1661,7 @@ describe("conversations-serve", () => {
         verifier: verifyApiKey({
           app: "conversations",
           signingSecret: SIGNING,
-          isRevoked: async () => false,
+          keyStatus: async (): Promise<ApiKeyStatus> => "active",
         }),
       },
     });
@@ -1722,7 +1727,7 @@ describe("conversations-serve", () => {
         verifier: verifyApiKey({
           app: "conversations",
           signingSecret: SIGNING,
-          isRevoked: async () => false,
+          keyStatus: async (): Promise<ApiKeyStatus> => "active",
         }),
       },
     });

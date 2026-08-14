@@ -27,10 +27,6 @@ describe("bounded message collection projections", () => {
     const store = createDisposableStore("safe-reads");
     cleanupStore = store.cleanup;
     restoreEnv = enterHermeticTestEnv({
-      HASNA_CONVERSATIONS_STORAGE_MODE: "local",
-      HASNA_CONVERSATIONS_MODE: "local",
-      CONVERSATIONS_STORAGE_MODE: "local",
-      CONVERSATIONS_MODE: "local",
       CONVERSATIONS_DB_PATH: store.dbPath,
       HASNA_CONVERSATIONS_API_URL: "https://ambient-route.invalid",
       HASNA_CONVERSATIONS_API_KEY: "synthetic-routing-key-not-a-credential",
