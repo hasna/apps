@@ -1,0 +1,9 @@
+tests/
+.github/
+.gitignore
+.git/
+.env*
+*.test.ts
+*.test.js
+tsconfig.json
+bun.lockb

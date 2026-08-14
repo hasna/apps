@@ -1,0 +1,3451 @@
+import { createArtifactStore, normalizeArtifactKey } from './artifact-store';
+import { createHash } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
+import { hostname } from 'node:os';
+import { join, resolve } from 'node:path';
+import {
+  assertAppWikiWriteAllowed,
+  getAppWikiNote,
+  ingestAppWikiSourceRef,
+  initAppWikiScope,
+  listAppWikiNotes,
+  writeAppWikiNote,
+  type AppWikiInitResult,
+  type AppWikiNoteGetResult,
+  type AppWikiNoteRecord,
+  type AppWikiNoteWriteResult,
+} from './app-wiki';
+import {
+  clearKnowledgeAuth,
+  getKnowledgeApiKey,
+  knowledgeAuthStatus,
+  normalizeKnowledgeApiOrigin,
+  resolveKnowledgeApiUrl,
+  saveKnowledgeAuth,
+  type KnowledgeAuthStatus,
+} from './auth';
+import { runKnowledgePrompt, runKnowledgePromptOverItems, type KnowledgePromptOptions } from './agent';
+import {
+  isKnowledgeApiMode,
+  resolveKnowledgeCloudStore,
+  fetchAllCloudItems,
+  type KnowledgeCloudStore,
+} from './cloud-store';
+import { buildKnowledgeAgentContextPack, type KnowledgeAgentContextPack, type KnowledgeAgentContextPackOptions } from './context-pack';
+import {
+  proposeKnowledgeSyncConflictResolutionWithAi,
+  type KnowledgeSyncConflictAiProposalOptions,
+} from './conflict-agent';
+import {
+  embeddingIndexStatus,
+  indexKnowledgeEmbeddings,
+  searchVectorIndex,
+  type EmbeddingIndexOptions,
+  type EmbeddingSearchOptions,
+} from './embeddings';
+import { consumeOpenFilesOutbox } from './outbox-consume';
+import { assertLocalCatalogMode, getKnowledgeDbStats, migrateKnowledgeDb, openKnowledgeDb } from './knowledge-db';
+import { ingestOpenFilesManifest } from './manifest-ingest';
+import {
+  discoverKnowledgeMachineTopology,
+  preflightKnowledgeMachine,
+  resolveKnowledgeMachineRoute,
+  resolveKnowledgeMachineWorkspace,
+  type KnowledgeMachinePreflightOptions,
+  type KnowledgeMachineRouteResolution,
+  type KnowledgeMachineWorkspaceResolution,
+  type KnowledgeMachineTopologyOptions,
+} from './machines';
+import { ingestSourceRef } from './source-ingest';
+import { resolveOpenFilesSource } from './source-resolver';
+import { providerStatus, listModelRegistry, type ProviderStatusResult, type ModelRegistryEntry } from './providers';
+import {
+  enqueueKnowledgePromotion,
+  getKnowledgePromotion,
+  listDurableKnowledgeRecords,
+  listKnowledgePromotions,
+  promoteKnowledgeCandidate,
+  rejectKnowledgePromotion,
+  reviewKnowledgePromotion,
+  type DurableKnowledgeRecord,
+  type EnqueueKnowledgePromotionInput,
+  type KnowledgePromotionCandidate,
+  type KnowledgePromotionKind,
+  type KnowledgePromotionStatus,
+  type PromoteKnowledgeCandidateOptions,
+} from './promotion-inbox';
+import { enqueueMissingEmbeddings, refreshEmbeddingIndex, reindexHealth, type ReindexRuntimeOptions } from './reindex';
+import { retrieveKnowledgeContext, retrieveKnowledgeContextFromSearch, type KnowledgeContextPack, type RetrievalOptions } from './retrieval';
+import {
+  importRulesProvenance,
+  type RulesProvenanceImportResult,
+} from './rules-provenance';
+import {
+  hybridSearch,
+  hybridSearchFromProducerPage,
+  hybridSearchLegacyStore,
+  type HybridSearchOptions,
+  type HybridSearchResult,
+} from './search';
+import { recordAuditEvent, redactSecrets, resolveSafetyPolicy, type SafetyPolicy } from './safety';
+import { runProviderWebSearch, type WebSearchOptions } from './web-search';
+import {
+  applyKnowledgeSyncBundle,
+  createKnowledgeSyncSnapshot,
+  createKnowledgeSyncBundle,
+  getKnowledgeSyncConflict,
+  getKnowledgeSyncStatus,
+  KNOWLEDGE_SYNC_MIN_PROTOCOL_VERSION,
+  KNOWLEDGE_SYNC_PROTOCOL_VERSION,
+  listKnowledgeMachines,
+  listKnowledgeSyncConflicts,
+  proposeKnowledgeSyncConflictResolution,
+  recordKnowledgeMachineResolverEvidence,
+  resolveKnowledgeSyncConflict,
+  type KnowledgeSyncConflict,
+  type KnowledgeSyncConflictResolutionProposal,
+  type KnowledgePeerSyncResult,
+  type KnowledgeSyncApplyResult,
+  type KnowledgeSyncBundle,
+  type KnowledgeSyncMachineRow,
+  type KnowledgeSyncSnapshotResult,
+  type KnowledgeSyncStatus,
+} from './sync';
+import { compileWikiPage, fileAnswerToWiki, lintWiki, type WikiCompileOptions } from './wiki-compiler';
+import {
+  recordStorageObjects,
+  resolveStorageContract,
+  validateStorageConfig,
+  type StorageContract,
+  type StorageValidationResult,
+} from './storage-contract';
+import { ensureStore, type KnowledgeItem } from './store';
+import {
+  resolveItemStore,
+  type ItemStore,
+  type ItemCreateInput,
+  type ItemPatch,
+  type ItemListOptions,
+  type ItemListResult,
+} from './item-store';
+import { initializeWikiLayout, recordWikiLayoutCatalog } from './wiki-layout';
+import {
+  canonicalExampleKnowledgeStorage,
+  defaultKnowledgeConfig,
+  ensureKnowledgeWorkspace,
+  legacyGlobalStorePath,
+  projectKnowledgeHome,
+  readKnowledgeConfig,
+  resolveLegacyScopedWorkspace,
+  resolveScopedWorkspace,
+  workspaceForHome,
+  writeKnowledgeConfig,
+  type KnowledgeConfig,
+  type KnowledgeWorkspace,
+} from './workspace';
+import {
+  mergeLegacyKnowledgeWorkspace,
+  migrateLegacyKnowledgeWorkspace,
+  type KnowledgeLegacyWorkspaceMergeResult,
+  type KnowledgeLegacyWorkspaceMigrationResult,
+} from './workspace-migration';
+import {
+  createKnowledgeProjectLinksHttpClient,
+  createLocalKnowledgeProjectLinksAuthority,
+  type KnowledgeProjectLinksAuthority,
+} from './project-links';
+import pkg from '../package.json' with { type: 'json' };
+
+export interface KnowledgeServiceOptions {
+  scope?: string;
+  cwd?: string;
+  projectLinksAuthority?: KnowledgeProjectLinksAuthority;
+  projectLinksIdentity?: {
+    authorityId?: string;
+    tenantId?: string;
+    corpusId?: string;
+  };
+}
+
+export interface KnowledgePathsResult {
+  ok: true;
+  scope: string;
+  home: string;
+  exists: boolean;
+  config_path: string;
+  config_exists: boolean;
+  json_store_path: string;
+  json_store_exists: boolean;
+  knowledge_db_path: string;
+  knowledge_db_exists: boolean;
+  artifacts_dir: string;
+  indexes_dir: string;
+  logs_dir: string;
+  runs_dir: string;
+  schemas_dir: string;
+  wiki_dir: string;
+  config: KnowledgeConfig;
+  message: string;
+}
+
+export interface KnowledgeInventoryOptions {
+  limit?: number;
+  storePath?: string;
+  includeArchived?: boolean;
+}
+
+export interface KnowledgeInventoryLegacyItem {
+  id: string;
+  short_id: string | null;
+  title: string;
+  content_preview: string;
+  url: string | null;
+  tags: string[];
+  metadata: Record<string, unknown>;
+  archived: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface KnowledgeInventoryResult {
+  ok: true;
+  scope: string;
+  home: string;
+  limit: number;
+  paths: {
+    json_store_path: string;
+    json_store_exists: boolean;
+    knowledge_db_path: string;
+    knowledge_db_exists: boolean;
+    artifacts_dir: string;
+    indexes_dir: string;
+    logs_dir: string;
+    wiki_dir: string;
+  };
+  summary: Record<string, number>;
+  legacy_store: {
+    path: string;
+    exists: boolean;
+    read_error: string | null;
+    total_items: number;
+    active_items: number;
+    archived_items: number;
+    items_returned: number;
+  };
+  items: KnowledgeInventoryLegacyItem[];
+  sources: Array<Record<string, unknown>>;
+  source_revisions: Array<Record<string, unknown>>;
+  chunks: Array<Record<string, unknown>>;
+  wiki_pages: Array<Record<string, unknown>>;
+  indexes: Array<Record<string, unknown>>;
+  storage_objects: Array<Record<string, unknown>>;
+  runs: Array<Record<string, unknown>>;
+  vector_indexes: Array<Record<string, unknown>>;
+  reindex_queue: Array<Record<string, unknown>>;
+  machines: Array<Record<string, unknown>>;
+  sync_conflicts: Array<Record<string, unknown>>;
+  approval_gates: Array<Record<string, unknown>>;
+  audit_events: Array<Record<string, unknown>>;
+  promotion_candidates: Array<Record<string, unknown>>;
+  durable_records: Array<Record<string, unknown>>;
+  message: string;
+}
+
+export interface KnowledgeSetupResult {
+  ok: true;
+  mode: KnowledgeConfig['mode'];
+  api_url: string | null;
+  storage_type: KnowledgeConfig['storage']['type'];
+  artifact_uri_prefix: string;
+  canonical_example: StorageContract['canonical_example'];
+  config_path: string;
+  next: string[];
+  message: string;
+}
+
+export type KnowledgeLegacyPathMigrationResult = KnowledgeLegacyWorkspaceMigrationResult;
+export type KnowledgeLegacyPathMergeResult = KnowledgeLegacyWorkspaceMergeResult;
+
+export interface KnowledgeSyncSnapshotOptions {
+  includeTailscale?: boolean;
+  machineId?: string;
+}
+
+export interface KnowledgeSyncBundleOptions {
+  machineId?: string | null;
+  tables?: string[];
+  includeArtifactContent?: boolean;
+  recordClocks?: boolean;
+}
+
+export interface KnowledgeSyncImportOptions {
+  bundle: KnowledgeSyncBundle;
+  dryRun?: boolean;
+  direction?: 'pull' | 'push' | 'import';
+  machineId?: string | null;
+}
+
+export interface KnowledgePeerSyncOptions {
+  peerWorkspace: string;
+  direction?: 'pull' | 'push' | 'both';
+  dryRun?: boolean;
+  tables?: string[];
+  includeArtifactContent?: boolean;
+  machineId?: string | null;
+}
+
+export interface KnowledgeRemotePeerSyncOptions extends Omit<KnowledgePeerSyncOptions, 'peerWorkspace'> {
+  machine: string;
+  peerWorkspace?: string;
+  includeTailscale?: boolean;
+}
+
+export interface KnowledgeRemotePeerSyncResult extends KnowledgePeerSyncResult {
+  transport: 'ssh';
+  machine: string;
+  resolved_machine: string;
+  resolved_route: {
+    source: KnowledgeMachineRouteResolution['source'];
+    adapter: KnowledgeMachineRouteResolution['adapter'];
+    target: string;
+    route: KnowledgeMachineRouteResolution['route'];
+    target_kind: KnowledgeMachineRouteResolution['targetKind'];
+    confidence: KnowledgeMachineRouteResolution['confidence'];
+    evidence: KnowledgeMachineRouteResolution['evidence'];
+    cacheability: KnowledgeMachineRouteResolution['cacheability'];
+  };
+  resolved_workspace: NonNullable<KnowledgePeerSyncResult['resolved_workspace']>;
+  peer_workspace: string;
+}
+
+export interface KnowledgeSyncDoctorOptions {
+  machine?: string | null;
+  peerWorkspace?: string | null;
+  includeTailscale?: boolean;
+  tables?: string[];
+}
+
+export interface KnowledgeSyncRecommendedCommand {
+  id: string;
+  reason: string;
+  command: string[];
+  shell_command: string;
+}
+
+export interface KnowledgeOpenFilesBoundaryStatus {
+  ok: boolean;
+  source_of_truth: 'open-files';
+  configured_root: string | null;
+  configured_root_source: KnowledgeMachineWorkspaceResolution['open_files_root_source'] | null;
+  source_refs: {
+    open_files: number;
+    metadata_mentions: number;
+  };
+  extracted_text_artifacts: number;
+  raw_source_bytes_owned_by: 'open-files';
+  raw_payload_sentinel_hits: number;
+  message: string;
+}
+
+export interface KnowledgeArtifactManifestStatus {
+  ok: boolean;
+  read_only: true;
+  storage_type: StorageContract['storage_type'];
+  artifact_uri_prefix: string;
+  s3: StorageContract['artifact_store']['s3'];
+  artifacts: {
+    total: number;
+    by_kind: Array<{ kind: string; count: number }>;
+    with_hash: number;
+    missing_hash: number;
+    with_size: number;
+    missing_size: number;
+    total_size_bytes: number;
+  };
+  modified_time: {
+    with_modified_at: number;
+    missing_modified_at: number;
+    invalid_modified_at: number;
+    examples: string[];
+  };
+  provenance: {
+    with_provenance: number;
+    missing_provenance: number;
+    with_artifact_key: number;
+    missing_artifact_key: number;
+    artifact_key_mismatches: number;
+    generated_from: Array<{ value: string; count: number }>;
+    examples: string[];
+  };
+  uri_prefix: {
+    matching: number;
+    mismatched: number;
+    examples: string[];
+  };
+  keys: {
+    with_key: number;
+    missing_key: number;
+    prefixed_with_storage_prefix: number;
+    prefixed_examples: string[];
+  };
+  sync_manifest: {
+    copied_by_sync: true;
+    generated_artifacts_only: true;
+    includes_raw_source_bytes: false;
+    hash_algorithm: 'sha256';
+    portable_keys: boolean;
+    tracks_modified_time: boolean;
+    preserves_provenance: boolean;
+  };
+  raw_payload_sentinel_hits: number;
+  warnings: string[];
+  message: string;
+}
+
+export interface KnowledgeArtifactManifestKeyRepairCandidate {
+  id: string;
+  artifact_uri: string;
+  kind: string;
+  current_key: string;
+  repaired_key: string;
+  hash: string | null;
+  size_bytes: number | null;
+}
+
+export interface KnowledgeArtifactManifestKeyRepairResult {
+  ok: boolean;
+  dry_run: boolean;
+  approval_required: boolean;
+  storage_type: StorageContract['storage_type'];
+  storage_prefix: string | null;
+  candidates: KnowledgeArtifactManifestKeyRepairCandidate[];
+  repaired: number;
+  audit_event_id: string | null;
+  message: string;
+}
+
+export interface KnowledgeSyncDoctorResult {
+  ok: boolean;
+  read_only: true;
+  generated_at: string;
+  scope: string;
+  workspace_home: string;
+  database: {
+    sqlite_schema_version: number;
+    table_counts: Record<string, number>;
+  };
+  storage: {
+    contract: StorageContract;
+    validation: StorageValidationResult;
+    artifact_manifest: KnowledgeArtifactManifestStatus;
+  };
+  sync: {
+    machines: number;
+    snapshots: number;
+    clocks: number;
+    imports: number;
+    open_conflicts: number;
+    table_clocks: KnowledgeSyncStatus['clocks']['rows'];
+  };
+  open_files: KnowledgeOpenFilesBoundaryStatus;
+  resolved_route: KnowledgeRemotePeerSyncResult['resolved_route'] | null;
+  resolved_workspace: KnowledgePeerSyncResult['resolved_workspace'] | null;
+  recommended_commands: KnowledgeSyncRecommendedCommand[];
+  warnings: string[];
+  message: string;
+}
+
+export interface KnowledgeSyncConflictResolveOptions {
+  id: string;
+  strategy?: string;
+  approvedBy?: string;
+  approveWrite?: boolean;
+  proposedPatchUri?: string | null;
+}
+
+export interface KnowledgeSyncConflictAiProposalServiceOptions {
+  id: string;
+  modelRef?: string;
+  fake?: boolean;
+  env?: KnowledgeSyncConflictAiProposalOptions['env'];
+}
+
+export interface KnowledgeRulesProvenanceImportOptions {
+  root?: string;
+  owner?: string;
+  dryRun?: boolean;
+  deprecateLegacy?: boolean;
+  includeLegacy?: boolean;
+  maxItems?: number;
+  limit?: number;
+}
+
+export type KnowledgeRulesProvenanceImportResult = RulesProvenanceImportResult;
+
+export interface KnowledgeAppWikiWriteOptions {
+  allowGlobal?: boolean;
+}
+
+export interface KnowledgeAppWikiNoteInput extends KnowledgeAppWikiWriteOptions {
+  title: string;
+  content: string;
+  tags?: string[];
+  sourceRefs?: string[];
+  path?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface KnowledgeAppWikiSourceInput extends KnowledgeAppWikiWriteOptions {
+  sourceRef: string;
+  purpose?: string;
+}
+
+export type KnowledgeAppWikiInitResult = AppWikiInitResult;
+export type KnowledgeAppWikiNoteResult = AppWikiNoteWriteResult;
+export type KnowledgeAppWikiNote = AppWikiNoteRecord;
+export type KnowledgeAppWikiNoteReadResult = AppWikiNoteGetResult;
+
+export type KnowledgeSyncConflictResolveResult = {
+  ok: false;
+  approval_required: true;
+  conflict: KnowledgeSyncConflict;
+  proposal: KnowledgeSyncConflictResolutionProposal;
+  message: string;
+} | {
+  ok: true;
+  approval_required: false;
+  conflict: KnowledgeSyncConflict;
+  audit_event_id: string;
+  message: string;
+};
+
+function resolvePeerWorkspace(input: string): KnowledgeWorkspace {
+  const target = resolve(input);
+  if (existsSync(join(target, 'knowledge.db')) || existsSync(join(target, 'config.json'))) {
+    return ensureKnowledgeWorkspace(target);
+  }
+  return ensureKnowledgeWorkspace(workspaceForHome(projectKnowledgeHome(target)).home);
+}
+
+function workspaceMachineId(workspace: KnowledgeWorkspace): string {
+  return `${hostname()}:${createHash('sha256').update(workspace.home).digest('hex').slice(0, 12)}`;
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function knowledgeCliCommand(args: string[]): KnowledgeSyncRecommendedCommand['shell_command'] {
+  return ['knowledge', ...args].map(shellQuote).join(' ');
+}
+
+function remoteKnowledgeCommand(peerWorkspace: string, args: string[]): string {
+  return `cd ${shellQuote(peerWorkspace)} && knowledge ${args.map(shellQuote).join(' ')}`;
+}
+
+function serviceMachineIsLocal(machine: string | null | undefined): boolean {
+  return !machine || machine === 'local' || machine === 'localhost';
+}
+
+function workspaceSummary(resolvedWorkspace: KnowledgeMachineWorkspaceResolution, projectRoot: string): NonNullable<KnowledgePeerSyncResult['resolved_workspace']> {
+  return {
+    source: resolvedWorkspace.source,
+    adapter: resolvedWorkspace.adapter,
+    project_root: projectRoot,
+    project_root_source: resolvedWorkspace.project_root_source,
+    workspace_root: resolvedWorkspace.workspace_root,
+    workspace_root_source: resolvedWorkspace.workspace_root_source,
+    open_files_root: resolvedWorkspace.open_files_root,
+    open_files_root_source: resolvedWorkspace.open_files_root_source,
+    trust_status: resolvedWorkspace.trust_status,
+    auth_status: resolvedWorkspace.auth_status,
+    current: resolvedWorkspace.current,
+    primary: resolvedWorkspace.primary,
+    diagnostics: resolvedWorkspace.diagnostics,
+    repair_hints: resolvedWorkspace.repair_hints,
+    evidence: resolvedWorkspace.evidence,
+    cacheability: resolvedWorkspace.cacheability,
+    warnings: resolvedWorkspace.warnings,
+  };
+}
+
+function routeSummary(resolvedMachine: KnowledgeMachineRouteResolution): KnowledgeRemotePeerSyncResult['resolved_route'] {
+  return {
+    source: resolvedMachine.source,
+    adapter: resolvedMachine.adapter,
+    target: resolvedMachine.target,
+    route: resolvedMachine.route,
+    target_kind: resolvedMachine.targetKind,
+    confidence: resolvedMachine.confidence,
+    evidence: resolvedMachine.evidence,
+    cacheability: resolvedMachine.cacheability,
+  };
+}
+
+function parseJsonStringArray(value: string): string[] {
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.filter((entry): entry is string => typeof entry === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+function recordValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function stringValue(value: unknown): string | null {
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+function numberValue(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function booleanValue(value: unknown): boolean | null {
+  return typeof value === 'boolean' ? value : null;
+}
+
+function stringArrayValue(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : [];
+}
+
+function registryCacheability(
+  value: unknown,
+  resolver: Record<string, unknown>,
+  prefix: 'route' | 'workspace',
+): KnowledgeMachineRouteResolution['cacheability'] {
+  const raw = recordValue(value);
+  const observedAt = stringValue(raw.observed_at) ?? stringValue(resolver[`${prefix}_observed_at`]);
+  const sourceAuthority = stringValue(raw.source_authority) ?? stringValue(resolver[`${prefix}_source_authority`]);
+  if (!observedAt || !sourceAuthority) return null;
+  return {
+    observed_at: observedAt,
+    verified_at: stringValue(raw.verified_at),
+    expires_at: stringValue(raw.expires_at) ?? stringValue(resolver[`${prefix}_expires_at`]),
+    ttl_ms: numberValue(raw.ttl_ms),
+    source_authority: sourceAuthority,
+    confidence: stringValue(raw.confidence) ?? (prefix === 'route' ? stringValue(resolver.route_confidence) : null),
+    cacheable: booleanValue(raw.cacheable) ?? booleanValue(resolver[`${prefix}_cacheable`]) ?? false,
+    stale: booleanValue(raw.stale) ?? booleanValue(resolver[`${prefix}_stale`]) ?? false,
+    reasons: stringArrayValue(raw.reasons),
+  };
+}
+
+function registryMachineMatches(row: KnowledgeSyncMachineRow, machine: string): boolean {
+  return row.machine_id === machine
+    || row.hostname === machine
+    || row.ssh_target === machine
+    || row.tailscale_dns === machine
+    || parseJsonStringArray(row.tailscale_ips_json).includes(machine);
+}
+
+function findRegistryMachine(dbPath: string, machine: string): KnowledgeSyncMachineRow | null {
+  return listKnowledgeMachines(dbPath).find((row) => registryMachineMatches(row, machine)) ?? null;
+}
+
+function registryResolverEvidence(row: KnowledgeSyncMachineRow): Record<string, unknown> {
+  return recordValue(parseMetadataJson(row.metadata_json).resolver_evidence);
+}
+
+function registryResolverCapabilities(row: KnowledgeSyncMachineRow): Record<string, unknown> {
+  return recordValue(parseMetadataJson(row.capabilities_json).resolver);
+}
+
+function registryRouteKind(row: KnowledgeSyncMachineRow): KnowledgeMachineRouteResolution['route'] {
+  const resolver = registryResolverCapabilities(row);
+  const kind = stringValue(resolver.route_kind);
+  if (kind === 'local' || kind === 'lan' || kind === 'tailscale' || kind === 'ssh' || kind === 'unknown') return kind;
+  if (row.tailscale_dns && row.ssh_target === row.tailscale_dns) return 'tailscale';
+  return row.ssh_target ? 'ssh' : 'unknown';
+}
+
+function registryRouteTargetKind(row: KnowledgeSyncMachineRow): KnowledgeMachineRouteResolution['targetKind'] {
+  const resolver = registryResolverCapabilities(row);
+  const kind = stringValue(resolver.route_target_kind);
+  if (kind === 'local' || kind === 'lan' || kind === 'tailscale' || kind === 'ssh' || kind === 'unknown') return kind;
+  return registryRouteKind(row);
+}
+
+function registryRouteConfidence(row: KnowledgeSyncMachineRow): KnowledgeMachineRouteResolution['confidence'] {
+  return stringValue(registryResolverCapabilities(row).route_confidence) ?? 'medium';
+}
+
+function routeFromRegistry(row: KnowledgeSyncMachineRow, machine: string, fallback: KnowledgeMachineRouteResolution): KnowledgeMachineRouteResolution {
+  const evidence = registryResolverEvidence(row);
+  const routeEvidence = recordValue(evidence.route);
+  const resolver = registryResolverCapabilities(row);
+  return {
+    target: row.ssh_target ?? row.tailscale_dns ?? row.hostname ?? row.machine_id,
+    route: registryRouteKind(row),
+    targetKind: registryRouteTargetKind(row),
+    confidence: registryRouteConfidence(row),
+    source: 'registry',
+    adapter: fallback.adapter,
+    evidence: {
+      registry: true,
+      requested_machine_id: machine,
+      machine_id: row.machine_id,
+      recorded_at: row.updated_at,
+      route: routeEvidence,
+    },
+    cacheability: registryCacheability(routeEvidence.cacheability, resolver, 'route') ?? fallback.cacheability,
+    warnings: [...new Set([...fallback.warnings, 'registry_route_fallback'])],
+  };
+}
+
+function workspaceFromRegistry(row: KnowledgeSyncMachineRow, machine: string, fallback: KnowledgeMachineWorkspaceResolution): KnowledgeMachineWorkspaceResolution | null {
+  if (!row.workspace_home) return null;
+  const evidence = registryResolverEvidence(row);
+  const workspaceEvidence = recordValue(evidence.workspace);
+  const resolver = registryResolverCapabilities(row);
+  return {
+    ok: true,
+    source: 'registry',
+    adapter: fallback.adapter,
+    requested_machine_id: machine,
+    machine_id: row.machine_id,
+    project_id: stringValue(workspaceEvidence.project_id) ?? fallback.project_id,
+    repo_name: stringValue(workspaceEvidence.repo_name) ?? fallback.repo_name,
+    project_root: row.workspace_home,
+    project_root_source: stringValue(resolver.project_root_source) ?? 'registry',
+    workspace_root: stringValue(workspaceEvidence.workspace_root),
+    workspace_root_source: stringValue(resolver.workspace_root_source) ?? 'registry',
+    open_files_root: stringValue(workspaceEvidence.open_files_root),
+    open_files_root_source: stringValue(resolver.open_files_root_source) ?? 'registry',
+    trust_status: stringValue(resolver.trust_status) ?? 'unknown',
+    auth_status: stringValue(resolver.auth_status) ?? 'unknown',
+    current: false,
+    primary: false,
+    diagnostics: [],
+    repair_hints: [],
+    evidence: {
+      registry: true,
+      requested_machine_id: machine,
+      machine_id: row.machine_id,
+      recorded_at: row.updated_at,
+      workspace: workspaceEvidence,
+    },
+    cacheability: registryCacheability(workspaceEvidence.cacheability, resolver, 'workspace') ?? fallback.cacheability,
+    warnings: [...new Set([...fallback.warnings, 'registry_workspace_fallback'])],
+  };
+}
+
+function workspaceReadinessMessage(resolvedWorkspace: KnowledgePeerSyncResult['resolved_workspace']): string | null {
+  if (!resolvedWorkspace) return null;
+  const nonOkDiagnostics = resolvedWorkspace.diagnostics.filter((entry) => entry.severity !== 'ok');
+  const firstRepair = resolvedWorkspace.repair_hints[0];
+  if (!nonOkDiagnostics.length && !resolvedWorkspace.warnings.length && !firstRepair) return null;
+  return [
+    nonOkDiagnostics.length ? `workspace diagnostics: ${nonOkDiagnostics.map((entry) => `${entry.id}=${entry.status}`).join(', ')}` : null,
+    resolvedWorkspace.warnings.length ? `warnings: ${resolvedWorkspace.warnings.join(', ')}` : null,
+    firstRepair ? `repair: ${firstRepair.shell_command}` : null,
+  ].filter(Boolean).join('; ');
+}
+
+function syncCommand(input: {
+  id: string;
+  reason: string;
+  args: string[];
+}): KnowledgeSyncRecommendedCommand {
+  return {
+    id: input.id,
+    reason: input.reason,
+    command: ['knowledge', ...input.args],
+    shell_command: knowledgeCliCommand(input.args),
+  };
+}
+
+function countQuery(dbPath: string, sql: string): number {
+  const db = openKnowledgeDb(dbPath);
+  try {
+    return Number(db.query<{ count: number }, []>(sql).get()?.count ?? 0);
+  } finally {
+    db.close();
+  }
+}
+
+function openFilesBoundaryStatus(
+  dbPath: string,
+  resolvedWorkspace: KnowledgePeerSyncResult['resolved_workspace'] | null,
+): KnowledgeOpenFilesBoundaryStatus {
+  const openFilesRefs = countQuery(dbPath, "SELECT COUNT(*) AS count FROM sources WHERE uri LIKE 'open-files://%'");
+  const metadataMentions = countQuery(dbPath, "SELECT COUNT(*) AS count FROM sources WHERE metadata_json LIKE '%open-files://%' OR metadata_json LIKE '%source_ref%'");
+  const extractedTextArtifacts = countQuery(dbPath, 'SELECT COUNT(*) AS count FROM source_revisions WHERE extracted_text_uri IS NOT NULL');
+  const rawPayloadSentinelHits = countQuery(dbPath, [
+    "SELECT COUNT(*) AS count FROM sources",
+    "WHERE metadata_json LIKE '%raw_bytes%'",
+    "OR metadata_json LIKE '%raw_content%'",
+    "OR metadata_json LIKE '%content_base64%'",
+    "OR metadata_json LIKE '%source_bytes%'",
+  ].join(' '));
+  const ok = rawPayloadSentinelHits === 0;
+  return {
+    ok,
+    source_of_truth: 'open-files',
+    configured_root: resolvedWorkspace?.open_files_root ?? null,
+    configured_root_source: resolvedWorkspace?.open_files_root_source ?? null,
+    source_refs: {
+      open_files: openFilesRefs,
+      metadata_mentions: metadataMentions,
+    },
+    extracted_text_artifacts: extractedTextArtifacts,
+    raw_source_bytes_owned_by: 'open-files',
+    raw_payload_sentinel_hits: rawPayloadSentinelHits,
+    message: ok
+      ? `${openFilesRefs} open-files source ref(s); raw source bytes remain owned by open-files`
+      : `${rawPayloadSentinelHits} raw source payload metadata sentinel(s) found`,
+  };
+}
+
+const RAW_ARTIFACT_PAYLOAD_METADATA_KEYS = new Set([
+  'raw',
+  'raw_bytes',
+  'raw_content',
+  'content_base64',
+  'source_bytes',
+  'source_content',
+  'body',
+  'body_bytes',
+]);
+
+function metadataHasRawPayloadSentinel(value: unknown, depth = 0): boolean {
+  if (depth > 8) return false;
+  if (!value || typeof value !== 'object') return false;
+  if (Array.isArray(value)) return value.some((entry) => metadataHasRawPayloadSentinel(entry, depth + 1));
+  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+    if (RAW_ARTIFACT_PAYLOAD_METADATA_KEYS.has(key.toLowerCase())) return true;
+    if (metadataHasRawPayloadSentinel(entry, depth + 1)) return true;
+  }
+  return false;
+}
+
+function parseMetadataJson(value: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+  } catch {
+    return {};
+  }
+}
+
+function inventoryLimit(value: number | undefined, fallback = 20, max = 200): number {
+  if (!Number.isFinite(value) || (value as number) <= 0) return fallback;
+  return Math.min(Math.floor(value as number), max);
+}
+
+function previewText(value: string | null | undefined, max = 220): string {
+  const text = value ?? '';
+  return text.length > max ? `${text.slice(0, max)}...` : text;
+}
+
+function rowsWithJsonFields(
+  rows: Array<Record<string, unknown>>,
+  fields = ['metadata_json'],
+): Array<Record<string, unknown>> {
+  return rows.map((row) => {
+    const next: Record<string, unknown> = { ...row };
+    for (const field of fields) {
+      const raw = next[field];
+      if (typeof raw === 'string') {
+        const parsedField = field.endsWith('_json') ? field.slice(0, -5) : field;
+        next[parsedField] = parseMetadataJson(raw);
+        delete next[field];
+      }
+    }
+    return next;
+  });
+}
+
+function parseInventoryJsonArray(value: unknown): unknown[] {
+  if (typeof value !== 'string') return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function parseInventoryJsonObject(value: unknown): Record<string, unknown> {
+  if (typeof value !== 'string') return {};
+  return parseMetadataJson(value);
+}
+
+function promotionCandidateInventoryRow(row: Record<string, unknown>): Record<string, unknown> {
+  const next: Record<string, unknown> = { ...row };
+  next.source_refs = parseInventoryJsonArray(next.source_refs_json);
+  next.evidence_refs = parseInventoryJsonArray(next.evidence_refs_json);
+  next.requires_approval = next.requires_approval === 1 || next.requires_approval === true;
+  next.checks = parseInventoryJsonObject(next.checks_json);
+  next.metadata = parseInventoryJsonObject(next.metadata_json);
+  delete next.source_refs_json;
+  delete next.evidence_refs_json;
+  delete next.checks_json;
+  delete next.metadata_json;
+  return next;
+}
+
+function durableRecordInventoryRow(row: Record<string, unknown>): Record<string, unknown> {
+  const next: Record<string, unknown> = { ...row };
+  next.source_refs = parseInventoryJsonArray(next.source_refs_json);
+  next.evidence_refs = parseInventoryJsonArray(next.evidence_refs_json);
+  next.metadata = parseInventoryJsonObject(next.metadata_json);
+  delete next.source_refs_json;
+  delete next.evidence_refs_json;
+  delete next.metadata_json;
+  return next;
+}
+
+function selectInventoryRows(
+  db: ReturnType<typeof openKnowledgeDb>,
+  sql: string,
+  params: unknown[] = [],
+): Array<Record<string, unknown>> {
+  return db.query(sql).all(...params as any[]) as Array<Record<string, unknown>>;
+}
+
+function readLegacyInventoryStore(path: string): {
+  exists: boolean;
+  read_error: string | null;
+  items: KnowledgeItem[];
+} {
+  if (!existsSync(path)) return { exists: false, read_error: null, items: [] };
+  try {
+    const parsed = JSON.parse(readFileSync(path, 'utf8')) as { items?: unknown };
+    if (!parsed || !Array.isArray(parsed.items)) {
+      return { exists: true, read_error: 'invalid_store_shape', items: [] };
+    }
+    return { exists: true, read_error: null, items: parsed.items as KnowledgeItem[] };
+  } catch (error) {
+    return {
+      exists: true,
+      read_error: error instanceof Error ? error.message : String(error),
+      items: [],
+    };
+  }
+}
+
+function legacyInventoryItem(item: KnowledgeItem): KnowledgeInventoryLegacyItem {
+  return {
+    id: item.id,
+    short_id: item.short_id ?? null,
+    title: item.title,
+    content_preview: previewText(item.content),
+    url: item.url ?? null,
+    tags: item.tags ?? [],
+    metadata: item.metadata ?? {},
+    archived: item.archived === true,
+    created_at: item.created_at,
+    updated_at: item.updated_at,
+  };
+}
+
+function emptyKnowledgeDbStats(): ReturnType<typeof getKnowledgeDbStats> {
+  return {
+    schema_version: 0,
+    sources: 0,
+    source_revisions: 0,
+    chunks: 0,
+    wiki_pages: 0,
+    citations: 0,
+    indexes: 0,
+    runs: 0,
+    run_events: 0,
+    redaction_findings: 0,
+    audit_events: 0,
+    approval_gates: 0,
+    storage_objects: 0,
+    embeddings: 0,
+    vector_entries: 0,
+    reindex_queue: 0,
+    knowledge_machines: 0,
+    sync_snapshots: 0,
+    sync_changes: 0,
+    sync_conflicts: 0,
+    sync_table_clocks: 0,
+    sync_imports: 0,
+    promotion_candidates: 0,
+    durable_records: 0,
+  };
+}
+
+function emptySearchResult(query: string, limit: number, semantic = false): HybridSearchResult {
+  return {
+    query,
+    limit,
+    offset: 0,
+    mode: {
+      keyword: true,
+      catalog: true,
+      semantic,
+    },
+    semantic_provider: null,
+    semantic_model: null,
+    semantic_dimensions: null,
+    counts: {
+      keyword_results: 0,
+      catalog_results: 0,
+      semantic_results: 0,
+      merged_results: 0,
+    },
+    warnings: ['knowledge_db_missing'],
+    results: [],
+  };
+}
+
+function normalizeContextQuery(query: string): string {
+  return query.normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+function emptyContextPack(query: string, limit: number, semantic = false): KnowledgeContextPack {
+  const search = emptySearchResult(query, limit, semantic);
+  return {
+    query,
+    normalized_query: normalizeContextQuery(query),
+    created_at: new Date().toISOString(),
+    mode: search.mode,
+    warnings: search.warnings,
+    search_counts: search.counts,
+    results: [],
+    citations: [],
+    excerpts: [],
+    graph: {
+      citations: [],
+      backlinks: [],
+    },
+    notes: {
+      permissions: [],
+      freshness: [],
+    },
+  };
+}
+
+function legacyStorePathForRead(scope: string, workspace: KnowledgeWorkspace, preferred?: string): string {
+  const current = preferred ?? workspace.jsonStorePath;
+  if (existsSync(current)) return current;
+  if (scope === 'global') {
+    const legacy = legacyGlobalStorePath();
+    if (existsSync(legacy)) return legacy;
+  }
+  return current;
+}
+
+function estimateTokensForValue(value: unknown): number {
+  const text = JSON.stringify(value);
+  return Math.max(1, Math.ceil(text.length / 4));
+}
+
+function compactText(value: string | null | undefined, maxChars: number): string {
+  const normalized = (value ?? '').normalize('NFKC').trim().replace(/\s+/g, ' ');
+  if (normalized.length <= maxChars) return normalized;
+  return `${normalized.slice(0, Math.max(0, maxChars - 1)).trim()}...`;
+}
+
+function redactPreviewForPack(value: string | null | undefined, policy: SafetyPolicy, maxChars: number): { text: string; redactions: number } {
+  const redacted = redactSecrets(compactText(value, maxChars), policy);
+  return { text: redacted.text, redactions: redacted.findings.length };
+}
+
+function legacyAgentContextPack(
+  options: Omit<KnowledgeAgentContextPackOptions, 'dbPath' | 'config' | 'safetyPolicy'>,
+  context: KnowledgeContextPack,
+  policy: SafetyPolicy,
+): KnowledgeAgentContextPack {
+  const now = options.now ?? new Date();
+  const source = options.source ?? 'search';
+  const purpose = options.purpose ?? (source === 'loops' || source === 'runs' ? 'proposal' : 'agent_context');
+  const query = (options.query ?? options.topic ?? context.query).normalize('NFKC').trim().replace(/\s+/g, ' ');
+  const maxItems = Math.max(1, Math.min(options.maxItems ?? options.limit ?? 8, 50));
+  const maxTokens = Math.max(500, Math.min(options.maxTokens ?? 6000, 100000));
+  let redactions = 0;
+  const citations = context.citations.slice(0, Math.max(maxItems * 2, maxItems)).map((citation, index) => {
+    const quote = redactPreviewForPack(citation.quote, policy, index < 3 ? 220 : 140);
+    redactions += quote.redactions;
+    const ref = citation.source_ref ?? citation.source_uri ?? citation.artifact_path ?? citation.artifact_uri ?? citation.id;
+    return {
+      id: `cite_${createHash('sha256').update(`${citation.id}\u0000${ref}`).digest('hex').slice(0, 12)}`,
+      kind: citation.artifact_uri || citation.artifact_path ? 'artifact' as const : 'source' as const,
+      ref,
+      source_ref: citation.source_ref,
+      source_uri: citation.source_uri,
+      artifact_uri: citation.artifact_uri,
+      artifact_path: citation.artifact_path,
+      run_id: null,
+      run_event_id: null,
+      revision: citation.revision,
+      hash: citation.hash,
+      chunk_id: citation.chunk_id,
+      offsets: {
+        start: citation.start_offset,
+        end: citation.end_offset,
+      },
+      quote_preview: quote.text,
+    };
+  });
+  const citationByRetrievalId = new Map(context.citations.map((citation, index) => [citation.id, citations[index]]));
+  const evidence = context.excerpts.slice(0, Math.max(maxItems * 2, maxItems)).map((excerpt) => {
+    const result = context.results.find((entry) => entry.id === excerpt.result_id);
+    const citation = excerpt.citation_id ? citationByRetrievalId.get(excerpt.citation_id) : undefined;
+    const preview = redactPreviewForPack(excerpt.text, policy, 520);
+    redactions += preview.redactions;
+    return {
+      id: `ev_${createHash('sha256').update(`${excerpt.kind}\u0000${excerpt.result_id}\u0000${excerpt.citation_id ?? ''}`).digest('hex').slice(0, 14)}`,
+      kind: excerpt.kind,
+      title: compactText(result?.title ?? citation?.ref ?? excerpt.kind, 100),
+      text_preview: preview.text,
+      score: Number(excerpt.score.toFixed(6)),
+      citation_ids: citation ? [citation.id] : [],
+      provenance: {
+        source,
+        record_ref: `${excerpt.kind}:${excerpt.result_id}`,
+        created_at: context.created_at,
+        updated_at: null,
+        metadata_keys: [],
+      },
+    };
+  }).sort((a, b) => b.score - a.score || a.id.localeCompare(b.id)).slice(0, maxItems);
+  const usedCitationIds = new Set(evidence.flatMap((entry) => entry.citation_ids));
+  const usedCitations = citations.filter((citation) => usedCitationIds.has(citation.id));
+  const warnings = Array.from(new Set(context.warnings));
+  const idempotencyKey = `ctx_${createHash('sha256')
+    .update([source, purpose, query, warnings.join(','), evidence.map((entry) => entry.id).join(',')].join('\u0000'))
+    .digest('hex')
+    .slice(0, 20)}`;
+  const pack: KnowledgeAgentContextPack = {
+    ok: true,
+    format: 'knowledge-agent-context-pack',
+    version: 1,
+    created_at: now.toISOString(),
+    source,
+    purpose,
+    query,
+    topic: options.topic ?? null,
+    since: options.since ?? null,
+    dry_run: true,
+    idempotency_key: idempotencyKey,
+    budgets: {
+      max_tokens: maxTokens,
+      estimated_tokens: 0,
+      max_items: maxItems,
+      items_included: evidence.length,
+      items_available: context.excerpts.length,
+      items_truncated: Math.max(0, context.excerpts.length - evidence.length),
+      token_budget_exceeded: false,
+    },
+    safety: {
+      raw_artifact_content_included: false,
+      durable_writes_performed: false,
+      redactions,
+      reminders: [
+        'This pack is read-only and performs no durable writes.',
+        'Legacy JSON note evidence is bounded and redacted before inclusion.',
+      ],
+    },
+    citations: usedCitations,
+    evidence,
+    duplicate_candidates: [],
+    outline: {
+      title: query ? `Knowledge context: ${compactText(query, 80)}` : 'Knowledge context',
+      bullets: evidence.length > 0
+        ? evidence.slice(0, 5).map((entry) => `${entry.id}: ${entry.title}`)
+        : ['No matching bounded evidence was found.'],
+      evidence_ids: evidence.slice(0, 8).map((entry) => entry.id),
+      duplicate_candidate_ids: [],
+      next_actions: [
+        'Use evidence_ids and citation_ids in prompts instead of raw excerpts when possible.',
+        'Inspect cited refs only if the bounded preview is insufficient.',
+        'Use knowledge build/file-answer only with explicit approval for durable writes.',
+      ],
+    },
+    warnings,
+    message: `${evidence.length} bounded evidence item(s), estimated under ${maxTokens} token(s)`,
+  };
+  pack.budgets.estimated_tokens = estimateTokensForValue(pack);
+  pack.budgets.token_budget_exceeded = pack.budgets.estimated_tokens > maxTokens;
+  pack.message = `${pack.evidence.length} bounded evidence item(s), estimated ${pack.budgets.estimated_tokens}/${maxTokens} token(s)`;
+  return pack;
+}
+
+function emptyReindexHealth(): ReturnType<typeof reindexHealth> {
+  return {
+    schema_version: 0,
+    chunks: 0,
+    vector_entries: 0,
+    missing_embeddings: 0,
+    queued: {},
+    stale_revisions: 0,
+  };
+}
+
+function emptyEmbeddingStatus(): ReturnType<typeof embeddingIndexStatus> {
+  return {
+    total_embeddings: 0,
+    total_vector_entries: 0,
+    indexes: [],
+  };
+}
+
+function emptySyncStatus(input: { scope: string; workspaceHome: string; localMachineId?: string | null }): KnowledgeSyncStatus {
+  return {
+    ok: true,
+    scope: input.scope,
+    workspace_home: input.workspaceHome,
+    sqlite_schema_version: 0,
+    local_machine_id: input.localMachineId ?? null,
+    machines: {
+      total: 0,
+      rows: [],
+    },
+    snapshots: {
+      total: 0,
+      latest: null,
+    },
+    changes: {
+      total: 0,
+      by_operation: [],
+    },
+    clocks: {
+      total: 0,
+      rows: [],
+    },
+    imports: {
+      total: 0,
+      latest: null,
+    },
+    conflicts: {
+      total: 0,
+      by_status: [],
+      open: 0,
+    },
+    table_counts: {},
+    message: '0 machine(s), 0 open sync conflict(s)',
+  };
+}
+
+function emptyAgentContextPack(
+  options: Omit<KnowledgeAgentContextPackOptions, 'dbPath' | 'config' | 'safetyPolicy'>,
+): KnowledgeAgentContextPack {
+  const now = options.now ?? new Date();
+  const source = options.source ?? 'search';
+  const purpose = options.purpose ?? (source === 'loops' || source === 'runs' ? 'proposal' : 'agent_context');
+  const query = (options.query ?? options.topic ?? '').normalize('NFKC').trim().replace(/\s+/g, ' ');
+  const maxItems = Math.max(1, Math.min(options.maxItems ?? options.limit ?? 8, 50));
+  const maxTokens = Math.max(500, Math.min(options.maxTokens ?? 6000, 100000));
+  const idempotencyKey = `ctx_${createHash('sha256')
+    .update(['empty', source, purpose, query, options.topic ?? '', options.since ?? ''].join('\u0000'))
+    .digest('hex')
+    .slice(0, 20)}`;
+  return {
+    ok: true,
+    format: 'knowledge-agent-context-pack',
+    version: 1,
+    created_at: now.toISOString(),
+    source,
+    purpose,
+    query,
+    topic: options.topic ?? null,
+    since: options.since ?? null,
+    dry_run: true,
+    idempotency_key: idempotencyKey,
+    budgets: {
+      max_tokens: maxTokens,
+      estimated_tokens: 0,
+      max_items: maxItems,
+      items_included: 0,
+      items_available: 0,
+      items_truncated: 0,
+      token_budget_exceeded: false,
+    },
+    safety: {
+      raw_artifact_content_included: false,
+      durable_writes_performed: false,
+      redactions: 0,
+      reminders: [
+        'This pack is read-only and performs no durable writes.',
+        'No knowledge.db exists for this scope yet.',
+      ],
+    },
+    citations: [],
+    evidence: [],
+    duplicate_candidates: [],
+    outline: {
+      title: query ? `Context for ${query}` : 'Knowledge context',
+      bullets: [],
+      evidence_ids: [],
+      duplicate_candidate_ids: [],
+      next_actions: [],
+    },
+    warnings: ['knowledge_db_missing'],
+    message: `0 bounded evidence item(s), estimated 0/${maxTokens} token(s)`,
+  };
+}
+
+function storagePrefixKey(storage: StorageContract): string | null {
+  const prefix = storage.artifact_store.s3?.prefix?.replace(/^\/+|\/+$/g, '');
+  return prefix ? `${prefix}/` : null;
+}
+
+function artifactManifestStatus(dbPath: string, storage: StorageContract): KnowledgeArtifactManifestStatus {
+  const db = openKnowledgeDb(dbPath);
+  try {
+    const rows = db.query<{
+      artifact_uri: string;
+      kind: string;
+      hash: string | null;
+      size_bytes: number | null;
+      metadata_json: string;
+    }, []>(
+      `SELECT artifact_uri, kind, hash, size_bytes, metadata_json
+       FROM storage_objects
+       ORDER BY artifact_uri ASC`,
+    ).all();
+
+    const byKind = new Map<string, number>();
+    let withHash = 0;
+    let withSize = 0;
+    let totalSizeBytes = 0;
+    let matchingPrefix = 0;
+    let missingKey = 0;
+    let prefixedKey = 0;
+    let rawPayloadSentinelHits = 0;
+    let withModifiedAt = 0;
+    let invalidModifiedAt = 0;
+    let withProvenance = 0;
+    let withProvenanceArtifactKey = 0;
+    let provenanceArtifactKeyMismatches = 0;
+    const generatedFrom = new Map<string, number>();
+    const mismatchedExamples: string[] = [];
+    const prefixedExamples: string[] = [];
+    const invalidModifiedExamples: string[] = [];
+    const provenanceExamples: string[] = [];
+    const expectedPrefix = storage.artifact_store.uri_prefix;
+    const s3StoragePrefix = storagePrefixKey(storage);
+
+    for (const row of rows) {
+      byKind.set(row.kind, (byKind.get(row.kind) ?? 0) + 1);
+      if (row.hash?.startsWith('sha256:')) withHash += 1;
+      if (typeof row.size_bytes === 'number' && row.size_bytes >= 0) {
+        withSize += 1;
+        totalSizeBytes += row.size_bytes;
+      }
+      if (row.artifact_uri.startsWith(expectedPrefix)) {
+        matchingPrefix += 1;
+      } else if (mismatchedExamples.length < 5) {
+        mismatchedExamples.push(row.artifact_uri);
+      }
+
+      const metadata = parseMetadataJson(row.metadata_json);
+      if (metadataHasRawPayloadSentinel(metadata)) rawPayloadSentinelHits += 1;
+      const key = typeof metadata.key === 'string' ? metadata.key : null;
+      if (!key) {
+        missingKey += 1;
+      } else if (s3StoragePrefix && key.startsWith(s3StoragePrefix)) {
+        prefixedKey += 1;
+        if (prefixedExamples.length < 5) prefixedExamples.push(key);
+      }
+      const modifiedAt = typeof metadata.artifact_modified_at === 'string' ? metadata.artifact_modified_at : null;
+      if (modifiedAt) {
+        if (Number.isNaN(Date.parse(modifiedAt))) {
+          invalidModifiedAt += 1;
+          if (invalidModifiedExamples.length < 5) invalidModifiedExamples.push(row.artifact_uri);
+        } else {
+          withModifiedAt += 1;
+        }
+      }
+
+      const provenance = metadata.provenance && typeof metadata.provenance === 'object' && !Array.isArray(metadata.provenance)
+        ? metadata.provenance as Record<string, unknown>
+        : null;
+      if (provenance) {
+        withProvenance += 1;
+        const artifactKey = typeof provenance.artifact_key === 'string' ? provenance.artifact_key : null;
+        const generated = typeof provenance.generated_from === 'string' ? provenance.generated_from : 'unknown';
+        generatedFrom.set(generated, (generatedFrom.get(generated) ?? 0) + 1);
+        if (artifactKey) {
+          withProvenanceArtifactKey += 1;
+          if (key && artifactKey !== key) {
+            provenanceArtifactKeyMismatches += 1;
+            if (provenanceExamples.length < 5) provenanceExamples.push(`${row.artifact_uri}:provenance.artifact_key=${artifactKey}:key=${key}`);
+          }
+        } else if (provenanceExamples.length < 5) {
+          provenanceExamples.push(`${row.artifact_uri}:missing_provenance_artifact_key`);
+        }
+      } else if (provenanceExamples.length < 5) {
+        provenanceExamples.push(`${row.artifact_uri}:missing_provenance`);
+      }
+    }
+
+    const missingHash = rows.length - withHash;
+    const missingSize = rows.length - withSize;
+    const missingModifiedAt = rows.length - withModifiedAt - invalidModifiedAt;
+    const missingProvenance = rows.length - withProvenance;
+    const missingProvenanceArtifactKey = withProvenance - withProvenanceArtifactKey;
+    const mismatchedPrefix = rows.length - matchingPrefix;
+    const warnings = [
+      missingHash > 0 ? `artifact_manifest_missing_hash:${missingHash}` : null,
+      missingSize > 0 ? `artifact_manifest_missing_size:${missingSize}` : null,
+      missingKey > 0 ? `artifact_manifest_missing_key:${missingKey}` : null,
+      mismatchedPrefix > 0 ? `artifact_manifest_uri_prefix_mismatch:${mismatchedPrefix}` : null,
+      prefixedKey > 0 ? `artifact_manifest_s3_key_contains_storage_prefix:${prefixedKey}` : null,
+      invalidModifiedAt > 0 ? `artifact_manifest_invalid_modified_at:${invalidModifiedAt}` : null,
+      missingProvenance > 0 ? `artifact_manifest_missing_provenance:${missingProvenance}` : null,
+      missingProvenanceArtifactKey > 0 ? `artifact_manifest_missing_provenance_artifact_key:${missingProvenanceArtifactKey}` : null,
+      provenanceArtifactKeyMismatches > 0 ? `artifact_manifest_provenance_key_mismatch:${provenanceArtifactKeyMismatches}` : null,
+      rawPayloadSentinelHits > 0 ? `artifact_manifest_raw_payload_sentinels:${rawPayloadSentinelHits}` : null,
+    ].filter((entry): entry is string => Boolean(entry));
+    const ok = warnings.length === 0;
+
+    return {
+      ok,
+      read_only: true,
+      storage_type: storage.storage_type,
+      artifact_uri_prefix: expectedPrefix,
+      s3: storage.artifact_store.s3,
+      artifacts: {
+        total: rows.length,
+        by_kind: [...byKind.entries()]
+          .map(([kind, count]) => ({ kind, count }))
+          .sort((a, b) => a.kind.localeCompare(b.kind)),
+        with_hash: withHash,
+        missing_hash: missingHash,
+        with_size: withSize,
+        missing_size: missingSize,
+        total_size_bytes: totalSizeBytes,
+      },
+      modified_time: {
+        with_modified_at: withModifiedAt,
+        missing_modified_at: missingModifiedAt,
+        invalid_modified_at: invalidModifiedAt,
+        examples: invalidModifiedExamples,
+      },
+      provenance: {
+        with_provenance: withProvenance,
+        missing_provenance: missingProvenance,
+        with_artifact_key: withProvenanceArtifactKey,
+        missing_artifact_key: missingProvenanceArtifactKey,
+        artifact_key_mismatches: provenanceArtifactKeyMismatches,
+        generated_from: [...generatedFrom.entries()]
+          .map(([value, count]) => ({ value, count }))
+          .sort((a, b) => a.value.localeCompare(b.value)),
+        examples: provenanceExamples,
+      },
+      uri_prefix: {
+        matching: matchingPrefix,
+        mismatched: mismatchedPrefix,
+        examples: mismatchedExamples,
+      },
+      keys: {
+        with_key: rows.length - missingKey,
+        missing_key: missingKey,
+        prefixed_with_storage_prefix: prefixedKey,
+        prefixed_examples: prefixedExamples,
+      },
+      sync_manifest: {
+        copied_by_sync: true,
+        generated_artifacts_only: true,
+        includes_raw_source_bytes: false,
+        hash_algorithm: 'sha256',
+        portable_keys: prefixedKey === 0 && missingKey === 0,
+        tracks_modified_time: withModifiedAt > 0 && invalidModifiedAt === 0,
+        preserves_provenance: missingProvenance === 0 && missingProvenanceArtifactKey === 0 && provenanceArtifactKeyMismatches === 0,
+      },
+      raw_payload_sentinel_hits: rawPayloadSentinelHits,
+      warnings,
+      message: ok
+        ? `${rows.length} generated artifact manifest row(s) ready for ${storage.storage_type} sync`
+        : `Generated artifact manifest needs attention: ${warnings.join(', ')}`,
+    };
+  } finally {
+    db.close();
+  }
+}
+
+function artifactManifestKeyRepairCandidates(dbPath: string, storage: StorageContract): KnowledgeArtifactManifestKeyRepairCandidate[] {
+  const prefix = storagePrefixKey(storage);
+  if (!prefix) return [];
+  const db = openKnowledgeDb(dbPath);
+  try {
+    const rows = db.query<{
+      id: string;
+      artifact_uri: string;
+      kind: string;
+      hash: string | null;
+      size_bytes: number | null;
+      metadata_json: string;
+    }, []>(
+      `SELECT id, artifact_uri, kind, hash, size_bytes, metadata_json
+       FROM storage_objects
+       ORDER BY artifact_uri ASC`,
+    ).all();
+    const candidates: KnowledgeArtifactManifestKeyRepairCandidate[] = [];
+    for (const row of rows) {
+      const metadata = parseMetadataJson(row.metadata_json);
+      const currentKey = typeof metadata.key === 'string' ? metadata.key : null;
+      if (!currentKey?.startsWith(prefix)) continue;
+      const repaired = currentKey.slice(prefix.length);
+      if (!repaired) continue;
+      candidates.push({
+        id: row.id,
+        artifact_uri: row.artifact_uri,
+        kind: row.kind,
+        current_key: currentKey,
+        repaired_key: normalizeArtifactKey(repaired),
+        hash: row.hash,
+        size_bytes: row.size_bytes,
+      });
+    }
+    return candidates;
+  } finally {
+    db.close();
+  }
+}
+
+function doctorRecommendations(input: {
+  scope: string;
+  machine: string | null;
+  peerWorkspace: string | null;
+  tables?: string[];
+  resolvedWorkspace: KnowledgePeerSyncResult['resolved_workspace'] | null;
+  openConflicts: number;
+}): KnowledgeSyncRecommendedCommand[] {
+  const scopeArgs = ['--scope', input.scope, '--json'];
+  const tableArgs = input.tables?.length ? ['--tables', input.tables.join(',')] : [];
+  const commands: KnowledgeSyncRecommendedCommand[] = [
+    syncCommand({
+      id: 'sync_status',
+      reason: 'Inspect local sync registry, clocks, snapshots, and conflicts.',
+      args: ['sync', 'status', ...scopeArgs],
+    }),
+  ];
+  if (input.machine && !serviceMachineIsLocal(input.machine)) {
+    commands.push(syncCommand({
+      id: 'sync_dry_run_remote',
+      reason: 'Preview remote machine sync before changing either workspace.',
+      args: [
+        'sync',
+        'dry-run',
+        '--machine',
+        input.machine,
+        ...(input.peerWorkspace ? ['--peer-workspace', input.peerWorkspace] : []),
+        ...tableArgs,
+        ...scopeArgs,
+      ],
+    }));
+  } else if (input.peerWorkspace) {
+    commands.push(syncCommand({
+      id: 'sync_dry_run_peer',
+      reason: 'Preview local peer sync before changing either workspace.',
+      args: ['sync', 'dry-run', '--peer-workspace', input.peerWorkspace, ...tableArgs, ...scopeArgs],
+    }));
+  }
+  for (const hint of input.resolvedWorkspace?.repair_hints ?? []) {
+    commands.push({
+      id: hint.id,
+      reason: hint.reason,
+      command: hint.command,
+      shell_command: hint.shell_command,
+    });
+  }
+  if (input.openConflicts > 0) {
+    commands.push(syncCommand({
+      id: 'sync_conflicts',
+      reason: 'Review open conflicts before relying on bidirectional sync.',
+      args: ['sync', 'conflicts', ...scopeArgs],
+    }));
+  }
+  return commands;
+}
+
+function resolveSshSpawnSpec(): { command: string; argsPrefix: string[] } {
+  const command = process.env.KNOWLEDGE_SSH_COMMAND?.trim() || 'ssh';
+  const rawArgs = process.env.KNOWLEDGE_SSH_COMMAND_ARGS_JSON;
+  if (!rawArgs) return { command, argsPrefix: [] };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawArgs);
+  } catch (error) {
+    throw new Error(`KNOWLEDGE_SSH_COMMAND_ARGS_JSON must be a JSON string array: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (!Array.isArray(parsed) || !parsed.every((arg): arg is string => typeof arg === 'string')) {
+    throw new Error('KNOWLEDGE_SSH_COMMAND_ARGS_JSON must be a JSON string array.');
+  }
+  return { command, argsPrefix: parsed };
+}
+
+function runSshCommand(machine: string, command: string, input: string | undefined, resolved: KnowledgeMachineRouteResolution): string {
+  const ssh = resolveSshSpawnSpec();
+  const result = spawnSync(ssh.command, [...ssh.argsPrefix, resolved.target, command], {
+    encoding: 'utf8',
+    env: process.env,
+    input,
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  if ((result.status ?? 1) !== 0) {
+    const route = resolved.source === 'open-machines' ? ` via ${resolved.route ?? 'resolved'}:${resolved.target}` : '';
+    throw new Error(`ssh ${machine}${route} failed: ${(result.stderr || result.stdout || String(result.status)).trim()}`);
+  }
+  return result.stdout || '';
+}
+
+function parseRemoteJson(machine: string, action: string, raw: string): unknown {
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    const preview = raw.trim().slice(0, 240);
+    throw new Error(`Remote knowledge ${action} on ${machine} did not return JSON. Install a compatible @hasna/knowledge CLI on the remote machine. Output: ${preview || String(error)}`);
+  }
+}
+
+function assertRemoteSyncBundle(machine: string, value: unknown): asserts value is KnowledgeSyncBundle {
+  if (
+    typeof value !== 'object'
+    || value === null
+    || !('format' in value)
+    || (value as { format?: unknown }).format !== 'knowledge-sync-bundle'
+  ) {
+    throw new Error(`Remote knowledge sync export on ${machine} did not return a knowledge sync bundle. Install @hasna/knowledge 0.2.32 or newer on the remote machine.`);
+  }
+  const protocolVersion = (value as { protocol_version?: unknown }).protocol_version;
+  const minProtocolVersion = (value as { min_protocol_version?: unknown }).min_protocol_version;
+  if (
+    typeof protocolVersion !== 'number'
+    || typeof minProtocolVersion !== 'number'
+    || protocolVersion < KNOWLEDGE_SYNC_MIN_PROTOCOL_VERSION
+    || minProtocolVersion > KNOWLEDGE_SYNC_PROTOCOL_VERSION
+  ) {
+    throw new Error(`Remote knowledge sync export on ${machine} uses an unsupported sync protocol. Install @hasna/knowledge 0.2.32 or newer on both machines.`);
+  }
+}
+
+function assertRemoteSyncApplyResult(machine: string, value: unknown): asserts value is KnowledgeSyncApplyResult {
+  if (
+    typeof value !== 'object'
+    || value === null
+    || !('ok' in value)
+    || !('target' in value)
+    || !('tables' in value)
+    || !('artifacts' in value)
+    || !('conflicts_created' in value)
+  ) {
+    throw new Error(`Remote knowledge sync import on ${machine} did not return a sync import result. Install @hasna/knowledge 0.2.32 or newer on the remote machine.`);
+  }
+  const protocolVersion = (value as { protocol_version?: unknown }).protocol_version;
+  const minProtocolVersion = (value as { min_protocol_version?: unknown }).min_protocol_version;
+  if (
+    typeof protocolVersion !== 'number'
+    || typeof minProtocolVersion !== 'number'
+    || protocolVersion < KNOWLEDGE_SYNC_MIN_PROTOCOL_VERSION
+    || minProtocolVersion > KNOWLEDGE_SYNC_PROTOCOL_VERSION
+  ) {
+    throw new Error(`Remote knowledge sync import on ${machine} uses an unsupported sync protocol. Install @hasna/knowledge 0.2.32 or newer on both machines.`);
+  }
+}
+
+function normalizeMode(value: string | undefined): KnowledgeConfig['mode'] | undefined {
+  if (!value) return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'local' || normalized === 'offline') return 'local';
+  if (normalized === 'hosted' || normalized === 'remote' || normalized === 'knowledge.md') return 'hosted';
+  throw new Error('Invalid setup mode. Use hosted or local.');
+}
+
+export class KnowledgeSemanticSearchUnavailableError extends Error {
+  readonly code = 'semantic_query_unavailable';
+
+  constructor() {
+    super('semantic_query_unavailable: the hosted Knowledge item store has no configured vector index.');
+    this.name = 'KnowledgeSemanticSearchUnavailableError';
+  }
+}
+
+export class KnowledgeService {
+  private ensuredWorkspace?: KnowledgeWorkspace;
+  private cachedConfig?: KnowledgeConfig;
+  private cachedProjectLinksAuthority?: KnowledgeProjectLinksAuthority;
+
+  constructor(private readonly options: KnowledgeServiceOptions = {}) {}
+
+  get scope(): string {
+    return this.options.scope ?? 'global';
+  }
+
+  get workspace(): KnowledgeWorkspace {
+    return this.ensuredWorkspace ?? resolveScopedWorkspace(this.options.scope, this.options.cwd);
+  }
+
+  ensureWorkspace(): KnowledgeWorkspace {
+    if (!this.ensuredWorkspace) this.ensuredWorkspace = ensureKnowledgeWorkspace(this.workspace.home);
+    return this.ensuredWorkspace;
+  }
+
+  jsonStorePath(): string {
+    return this.ensureWorkspace().jsonStorePath;
+  }
+
+  /**
+   * The single knowledge-item Store for this scope. One interface, two
+   * transports resolved from the environment: LocalItemStore (on-box db.json)
+   * in sqlite mode, ApiItemStore (HTTP `/v1` + bearer key) in postgres mode.
+   * EVERY item read/write — CLI, MCP, and SDK — routes through this one
+   * surface, so no path touches sqlite or the raw HTTP client directly.
+   */
+  itemStore(): ItemStore {
+    const workspace = this.ensureWorkspace();
+    return resolveItemStore({
+      storePath: workspace.jsonStorePath,
+      storePathOverridden: false,
+    });
+  }
+
+  /**
+   * Package-owned Projects resource-link producer.
+   *
+   * Local mode keeps aggregate membership and immutable receipts in the
+   * existing knowledge.db SQLite catalog while resolving item bodies through
+   * the same JSON ItemStore used by CLI/MCP/SDK. Postgres mode routes through
+   * the authenticated HTTP producer, never a local mirror.
+   */
+  projectLinksAuthority(): KnowledgeProjectLinksAuthority {
+    if (this.options.projectLinksAuthority) return this.options.projectLinksAuthority;
+    if (this.cachedProjectLinksAuthority) return this.cachedProjectLinksAuthority;
+    if (isKnowledgeApiMode()) {
+      const { apiKey } = getKnowledgeApiKey(process.env);
+      if (!apiKey) {
+        throw new Error(
+          'Knowledge project links require the configured API credential in postgres mode.',
+        );
+      }
+      this.cachedProjectLinksAuthority = createKnowledgeProjectLinksHttpClient({
+        baseUrl: resolveKnowledgeApiUrl(this.config(), process.env),
+        apiKey,
+      });
+      return this.cachedProjectLinksAuthority;
+    }
+    const workspace = this.ensureWorkspace();
+    this.cachedProjectLinksAuthority = createLocalKnowledgeProjectLinksAuthority({
+      databasePath: workspace.knowledgeDbPath,
+      itemStore: this.itemStore(),
+      options: {
+        packageVersion: pkg.version,
+        authorityId: this.options.projectLinksIdentity?.authorityId
+          ?? process.env.HASNA_KNOWLEDGE_PROJECT_AUTHORITY_ID
+          ?? 'knowledge',
+        tenantId: this.options.projectLinksIdentity?.tenantId
+          ?? process.env.HASNA_KNOWLEDGE_PROJECT_TENANT_ID
+          ?? 'local',
+        corpusId: this.options.projectLinksIdentity?.corpusId
+          ?? process.env.HASNA_KNOWLEDGE_PROJECT_CORPUS_ID
+          ?? 'knowledge',
+      },
+    });
+    return this.cachedProjectLinksAuthority;
+  }
+
+  async close(): Promise<void> {
+    const authority = this.cachedProjectLinksAuthority;
+    this.cachedProjectLinksAuthority = undefined;
+    await authority?.close();
+  }
+
+  /** Bounded list query via the unified Store. */
+  async listItems(options: ItemListOptions = {}): Promise<ItemListResult> {
+    return this.itemStore().list(options);
+  }
+
+  /** Fetch one knowledge item by id or short id via the unified Store. */
+  async getItem(idOrShort: string): Promise<KnowledgeItem | null> {
+    return this.itemStore().get(idOrShort);
+  }
+
+  /** Create (or upsert on a caller-supplied id) an item via the unified Store. */
+  async createItem(input: ItemCreateInput): Promise<KnowledgeItem> {
+    return this.itemStore().create(input);
+  }
+
+  /** Patch an item by id or short id via the unified Store. */
+  async updateItem(idOrShort: string, patch: ItemPatch): Promise<KnowledgeItem | null> {
+    return this.itemStore().update(idOrShort, patch);
+  }
+
+  /** Delete one item by id or short id via the unified Store. */
+  async deleteItem(idOrShort: string): Promise<boolean> {
+    return this.itemStore().delete(idOrShort);
+  }
+
+  /** Delete many items by id/short id via the unified Store; returns the count. */
+  async deleteItems(idsOrShorts: string[]): Promise<number> {
+    return this.itemStore().deleteMany(idsOrShorts);
+  }
+
+  /**
+   * Unified inventory dispatch: the shared API knowledge-item corpus in
+   * postgres mode, the local sqlite/JSON catalog otherwise. CLI, MCP,
+   * and SDK all call this so no surface reads a divergent store.
+   */
+  async resolveInventory(options: KnowledgeInventoryOptions = {}): Promise<KnowledgeInventoryResult> {
+    if (this.isApiMode()) return this.cloudInventory(options);
+    return this.inventory(options);
+  }
+
+  config(options: { ensure?: boolean } = {}): KnowledgeConfig {
+    const workspace = options.ensure ? this.ensureWorkspace() : this.workspace;
+    if (!this.cachedConfig || options.ensure || existsSync(workspace.configPath)) {
+      this.cachedConfig = existsSync(workspace.configPath)
+        ? readKnowledgeConfig(workspace.configPath)
+        : defaultKnowledgeConfig();
+    }
+    return this.cachedConfig;
+  }
+
+  safetyPolicy() {
+    return resolveSafetyPolicy(this.config(), this.workspace);
+  }
+
+  artifactStore() {
+    return createArtifactStore(this.config(), this.ensureWorkspace());
+  }
+
+  storageContract(): StorageContract {
+    return resolveStorageContract(this.config(), this.workspace, this.scope);
+  }
+
+  validateStorage(): StorageValidationResult {
+    return validateStorageConfig(this.config(), this.workspace);
+  }
+
+  assertStorageValid(action: string): void {
+    const validation = this.validateStorage();
+    if (!validation.ok) {
+      throw new Error(`Storage contract invalid before ${action}: ${validation.errors.join('; ')}`);
+    }
+  }
+
+  migrateLegacyPath(options: { approveWrite?: boolean; approvedBy?: string } = {}): KnowledgeLegacyPathMigrationResult {
+    const current = this.workspace;
+    const legacy = resolveLegacyScopedWorkspace(this.options.scope, this.options.cwd);
+    const result = migrateLegacyKnowledgeWorkspace({
+      scope: this.scope,
+      current,
+      legacy,
+      approveWrite: options.approveWrite,
+      approvedBy: options.approvedBy,
+    });
+    if (!result.dry_run && result.ok) {
+      this.ensuredWorkspace = undefined;
+      this.cachedConfig = undefined;
+    }
+    return result;
+  }
+
+  mergeLegacyPath(options: { approveWrite?: boolean; approvedBy?: string } = {}): KnowledgeLegacyWorkspaceMergeResult {
+    const current = this.workspace;
+    const legacy = resolveLegacyScopedWorkspace(this.options.scope, this.options.cwd);
+    const result = mergeLegacyKnowledgeWorkspace({
+      scope: this.scope,
+      current,
+      legacy,
+      approveWrite: options.approveWrite,
+      approvedBy: options.approvedBy,
+    });
+    if (!result.dry_run && result.ok) {
+      this.ensuredWorkspace = undefined;
+      this.cachedConfig = undefined;
+    }
+    return result;
+  }
+
+  setup(options: { mode?: string; apiUrl?: string; canonicalExample?: boolean } = {}): KnowledgeSetupResult {
+    const workspace = this.ensureWorkspace();
+    const current = this.config({ ensure: true });
+    const mode = normalizeMode(options.mode) ?? current.mode;
+    const apiUrl = options.apiUrl
+      ? normalizeKnowledgeApiOrigin(options.apiUrl)
+      : current.hosted?.api_url
+        ? normalizeKnowledgeApiOrigin(current.hosted.api_url)
+        : null;
+    const nextConfig: KnowledgeConfig = {
+      ...current,
+      mode,
+      hosted: {
+        ...(current.hosted ?? {}),
+        ...(apiUrl ? { api_url: apiUrl } : {}),
+      },
+      storage: options.canonicalExample
+        ? canonicalExampleKnowledgeStorage()
+        : current.storage,
+    };
+    writeKnowledgeConfig(workspace.configPath, nextConfig);
+    this.cachedConfig = nextConfig;
+    const storage = resolveStorageContract(nextConfig, workspace, this.scope);
+    return {
+      ok: true,
+      mode,
+      api_url: nextConfig.hosted?.api_url ?? null,
+      storage_type: nextConfig.storage.type,
+      artifact_uri_prefix: storage.artifact_store.uri_prefix,
+      canonical_example: storage.canonical_example,
+      config_path: workspace.configPath,
+      next: mode === 'hosted'
+        ? ['knowledge auth login --api-key <key>', 'knowledge storage status --json']
+        : ['knowledge search <query>', 'knowledge <prompt>'],
+      message: `Set knowledge mode to ${mode}`,
+    };
+  }
+
+  authStatus(env: Record<string, string | undefined> = process.env): KnowledgeAuthStatus {
+    return knowledgeAuthStatus(this.config(), env);
+  }
+
+  saveAuth(input: {
+    apiKey: string;
+    email?: string;
+    orgId?: string;
+    orgSlug?: string;
+    userId?: string;
+    apiUrl?: string;
+  }, env: Record<string, string | undefined> = process.env) {
+    const apiUrl = input.apiUrl ?? this.config().hosted?.api_url;
+    return saveKnowledgeAuth({
+      api_key: input.apiKey,
+      email: input.email,
+      org_id: input.orgId,
+      org_slug: input.orgSlug,
+      user_id: input.userId,
+      api_url: apiUrl,
+    }, env);
+  }
+
+  clearAuth(env: Record<string, string | undefined> = process.env) {
+    return clearKnowledgeAuth(env);
+  }
+
+  paths(): KnowledgePathsResult {
+    const workspace = this.workspace;
+    return {
+      ok: true,
+      scope: this.scope,
+      home: workspace.home,
+      exists: existsSync(workspace.home),
+      config_path: workspace.configPath,
+      config_exists: existsSync(workspace.configPath),
+      json_store_path: workspace.jsonStorePath,
+      json_store_exists: existsSync(workspace.jsonStorePath),
+      knowledge_db_path: workspace.knowledgeDbPath,
+      knowledge_db_exists: existsSync(workspace.knowledgeDbPath),
+      artifacts_dir: workspace.artifactsDir,
+      indexes_dir: workspace.indexesDir,
+      logs_dir: workspace.logsDir,
+      runs_dir: workspace.runsDir,
+      schemas_dir: workspace.schemasDir,
+      wiki_dir: workspace.wikiDir,
+      config: this.config(),
+      message: workspace.home,
+    };
+  }
+
+  initDb() {
+    return migrateKnowledgeDb(this.ensureWorkspace().knowledgeDbPath);
+  }
+
+  dbStats() {
+    // Refuse in api mode even when no local db exists yet, so `db stats` never
+    // reports the on-box catalog as authoritative while the cloud flip is active.
+    assertLocalCatalogMode('reading knowledge.db stats');
+    const workspace = this.workspace;
+    if (!existsSync(workspace.knowledgeDbPath)) return emptyKnowledgeDbStats();
+    return getKnowledgeDbStats(workspace.knowledgeDbPath);
+  }
+
+  enqueuePromotion(input: EnqueueKnowledgePromotionInput): { created: boolean; candidate: KnowledgePromotionCandidate } {
+    return enqueueKnowledgePromotion(this.ensureWorkspace().knowledgeDbPath, input);
+  }
+
+  promotionInbox(options: {
+    status?: KnowledgePromotionStatus | 'inbox';
+    kind?: KnowledgePromotionKind;
+    limit?: number;
+  } = {}): KnowledgePromotionCandidate[] {
+    return listKnowledgePromotions(this.ensureWorkspace().knowledgeDbPath, options);
+  }
+
+  getPromotion(id: string): KnowledgePromotionCandidate | null {
+    return getKnowledgePromotion(this.ensureWorkspace().knowledgeDbPath, id);
+  }
+
+  reviewPromotion(id: string, now?: Date): KnowledgePromotionCandidate {
+    return reviewKnowledgePromotion(this.ensureWorkspace().knowledgeDbPath, id, now);
+  }
+
+  promoteCandidate(id: string, options: PromoteKnowledgeCandidateOptions = {}) {
+    return promoteKnowledgeCandidate(this.ensureWorkspace().knowledgeDbPath, id, options);
+  }
+
+  rejectPromotion(id: string, options: { rejectedBy?: string; now?: Date } = {}): KnowledgePromotionCandidate {
+    return rejectKnowledgePromotion(this.ensureWorkspace().knowledgeDbPath, id, options);
+  }
+
+  durableRecords(options: { kind?: KnowledgePromotionKind; status?: string; limit?: number } = {}): DurableKnowledgeRecord[] {
+    return listDurableKnowledgeRecords(this.ensureWorkspace().knowledgeDbPath, options);
+  }
+
+  /**
+   * Build a knowledge inventory from a bare item list (no local sqlite catalog).
+   * Shared by the local no-db path and the cloud path so both produce the exact
+   * same KnowledgeInventoryResult shape with empty catalog sections.
+   */
+  private itemOnlyInventory(params: {
+    items: KnowledgeItem[];
+    limit: number;
+    includeArchived: boolean;
+    storePath: string;
+    storeExists: boolean;
+    storeReadError: string | null;
+  }): KnowledgeInventoryResult {
+    const workspace = this.workspace;
+    const { items, limit, includeArchived, storePath, storeExists, storeReadError } = params;
+    const activeItems = items.filter((item) => item.archived !== true);
+    const visibleItems = includeArchived ? items : activeItems;
+    const stats = emptyKnowledgeDbStats();
+    const summary = {
+      legacy_items: items.length,
+      active_items: activeItems.length,
+      archived_items: items.length - activeItems.length,
+      schema_version: stats.schema_version,
+      sources: stats.sources,
+      source_revisions: stats.source_revisions,
+      chunks: stats.chunks,
+      wiki_pages: stats.wiki_pages,
+      citations: stats.citations,
+      indexes: stats.indexes,
+      runs: stats.runs,
+      run_events: stats.run_events,
+      storage_objects: stats.storage_objects,
+      embeddings: stats.embeddings,
+      vector_entries: stats.vector_entries,
+      reindex_queue: stats.reindex_queue,
+      redaction_findings: stats.redaction_findings,
+      audit_events: stats.audit_events,
+      approval_gates: stats.approval_gates,
+      knowledge_machines: stats.knowledge_machines,
+      sync_snapshots: stats.sync_snapshots,
+      sync_changes: stats.sync_changes,
+      sync_conflicts: stats.sync_conflicts,
+      sync_table_clocks: stats.sync_table_clocks,
+      sync_imports: stats.sync_imports,
+      promotion_candidates: stats.promotion_candidates,
+      durable_records: stats.durable_records,
+    };
+    return {
+      ok: true,
+      scope: this.scope,
+      home: workspace.home,
+      limit,
+      // The `paths` block describes the real on-box workspace layout and MUST
+      // agree with the `paths` command regardless of item transport. In cloud
+      // (api) mode the items come from the cloud corpus, but json_store_path /
+      // knowledge_db_exists here still report the local filesystem — the cloud
+      // source is surfaced via `legacy_store` below. Reporting the transport URL
+      // or a hardcoded db-missing flag here made `inventory` disagree with
+      // `paths`.
+      paths: {
+        json_store_path: workspace.jsonStorePath,
+        json_store_exists: existsSync(workspace.jsonStorePath),
+        knowledge_db_path: workspace.knowledgeDbPath,
+        knowledge_db_exists: existsSync(workspace.knowledgeDbPath),
+        artifacts_dir: workspace.artifactsDir,
+        indexes_dir: workspace.indexesDir,
+        logs_dir: workspace.logsDir,
+        wiki_dir: workspace.wikiDir,
+      },
+      summary,
+      // `legacy_store` describes where the item corpus was actually read from —
+      // the local db.json in local mode, or the cloud base URL in api mode.
+      legacy_store: {
+        path: storePath,
+        exists: storeExists,
+        read_error: storeReadError,
+        total_items: items.length,
+        active_items: activeItems.length,
+        archived_items: items.length - activeItems.length,
+        items_returned: Math.min(visibleItems.length, limit),
+      },
+      items: visibleItems.slice(0, limit).map(legacyInventoryItem),
+      sources: [],
+      source_revisions: [],
+      chunks: [],
+      wiki_pages: [],
+      indexes: [],
+      storage_objects: [],
+      runs: [],
+      vector_indexes: [],
+      reindex_queue: [],
+      machines: [],
+      sync_conflicts: [],
+      approval_gates: [],
+      audit_events: [],
+      promotion_candidates: [],
+      durable_records: [],
+      message: `${items.length} item(s), 0 source(s), 0 chunk(s), 0 wiki page(s), 0 artifact(s)`,
+    };
+  }
+
+  /**
+   * Cloud (api mode) inventory: reports the shared cloud knowledge-item corpus.
+   * The RAG catalog (sources/chunks/wiki/sync/machines) lives only in the local
+   * sqlite pipeline and has no cloud counterpart, so those sections are empty —
+   * this routes through the same cloud item transport every item command uses,
+   * never the local db.json or sqlite catalog.
+   */
+  async cloudInventory(options: KnowledgeInventoryOptions = {}): Promise<KnowledgeInventoryResult> {
+    const limit = inventoryLimit(options.limit);
+    const items = await this.fetchCloudItems();
+    const cloud = resolveKnowledgeCloudStore();
+    return this.itemOnlyInventory({
+      items,
+      limit,
+      includeArchived: options.includeArchived ?? false,
+      storePath: cloud?.baseUrl ?? 'cloud',
+      storeExists: true,
+      storeReadError: null,
+    });
+  }
+
+  inventory(options: KnowledgeInventoryOptions = {}): KnowledgeInventoryResult {
+    const workspace = this.workspace;
+    const limit = inventoryLimit(options.limit);
+    const storePath = options.storePath ?? workspace.jsonStorePath;
+    const legacyStore = readLegacyInventoryStore(storePath);
+    const activeItems = legacyStore.items.filter((item) => item.archived !== true);
+    const visibleItems = options.includeArchived ? legacyStore.items : activeItems;
+    const dbExists = existsSync(workspace.knowledgeDbPath);
+    if (!dbExists) {
+      return this.itemOnlyInventory({
+        items: legacyStore.items,
+        limit,
+        includeArchived: options.includeArchived ?? false,
+        storePath,
+        storeExists: legacyStore.exists,
+        storeReadError: legacyStore.read_error,
+      });
+    }
+    migrateKnowledgeDb(workspace.knowledgeDbPath);
+    const stats = getKnowledgeDbStats(workspace.knowledgeDbPath);
+    const db = openKnowledgeDb(workspace.knowledgeDbPath);
+    try {
+      const sources = rowsWithJsonFields(selectInventoryRows(db, `
+        SELECT
+          s.id,
+          s.uri,
+          s.kind,
+          s.title,
+          s.metadata_json,
+          s.acl_json,
+          s.created_at,
+          s.updated_at,
+          COUNT(DISTINCT sr.id) AS revisions,
+          COUNT(DISTINCT c.id) AS chunks
+        FROM sources s
+        LEFT JOIN source_revisions sr ON sr.source_id = s.id
+        LEFT JOIN chunks c ON c.source_revision_id = sr.id
+        GROUP BY s.id
+        ORDER BY s.updated_at DESC, s.created_at DESC
+        LIMIT ?
+      `, [limit]), ['metadata_json', 'acl_json']);
+
+      const sourceRevisions = rowsWithJsonFields(selectInventoryRows(db, `
+        SELECT
+          sr.id,
+          s.uri AS source_uri,
+          sr.revision,
+          sr.hash,
+          sr.extracted_text_uri,
+          sr.metadata_json,
+          sr.created_at
+        FROM source_revisions sr
+        JOIN sources s ON s.id = sr.source_id
+        ORDER BY sr.created_at DESC
+        LIMIT ?
+      `, [limit]));
+
+      const chunks = rowsWithJsonFields(selectInventoryRows(db, `
+        SELECT
+          c.id,
+          c.kind,
+          c.ordinal,
+          substr(c.text, 1, 220) AS text_preview,
+          c.token_count,
+          c.start_offset,
+          c.end_offset,
+          c.metadata_json,
+          c.created_at,
+          s.uri AS source_uri,
+          sr.revision AS source_revision,
+          wp.path AS wiki_path,
+          wp.title AS wiki_title
+        FROM chunks c
+        LEFT JOIN source_revisions sr ON sr.id = c.source_revision_id
+        LEFT JOIN sources s ON s.id = sr.source_id
+        LEFT JOIN wiki_pages wp ON wp.id = c.wiki_page_id
+        ORDER BY c.created_at DESC, c.ordinal ASC
+        LIMIT ?
+      `, [limit]));
+
+      const wikiPages = rowsWithJsonFields(selectInventoryRows(db, `
+        SELECT id, path, title, artifact_uri, content_hash, status, metadata_json, created_at, updated_at
+        FROM wiki_pages
+        ORDER BY updated_at DESC, created_at DESC
+        LIMIT ?
+      `, [limit]));
+
+      const indexes = rowsWithJsonFields(selectInventoryRows(db, `
+        SELECT id, kind, name, artifact_uri, shard_key, metadata_json, created_at, updated_at
+        FROM knowledge_indexes
+        ORDER BY updated_at DESC, created_at DESC
+        LIMIT ?
+      `, [limit]));
+
+      const storageObjects = rowsWithJsonFields(selectInventoryRows(db, `
+        SELECT id, artifact_uri, kind, content_type, hash, size_bytes, metadata_json, created_at, updated_at
+        FROM storage_objects
+        ORDER BY updated_at DESC, created_at DESC
+        LIMIT ?
+      `, [limit]));
+
+      const runs = rowsWithJsonFields(selectInventoryRows(db, `
+        SELECT
+          id,
+          type,
+          substr(prompt, 1, 220) AS prompt_preview,
+          status,
+          provider,
+          model,
+          cost_tokens,
+          cost_usd,
+          metadata_json,
+          created_at,
+          updated_at
+        FROM runs
+        ORDER BY updated_at DESC, created_at DESC
+        LIMIT ?
+      `, [limit]));
+
+      const vectorIndexes = selectInventoryRows(db, `
+        SELECT provider, model, dimensions, status, COUNT(*) AS entries
+        FROM vector_index_entries
+        GROUP BY provider, model, dimensions, status
+        ORDER BY entries DESC
+        LIMIT ?
+      `, [limit]);
+
+      const reindexQueue = rowsWithJsonFields(selectInventoryRows(db, `
+        SELECT id, kind, target_id, source_uri, reason, status, attempts, metadata_json, created_at, updated_at
+        FROM reindex_queue
+        ORDER BY updated_at DESC, created_at DESC
+        LIMIT ?
+      `, [limit]));
+
+      const machines = rowsWithJsonFields(selectInventoryRows(db, `
+        SELECT
+          machine_id,
+          hostname,
+          platform,
+          user_label,
+          workspace_home,
+          tailscale_dns,
+          tailscale_ips_json,
+          ssh_target,
+          last_seen_at,
+          capabilities_json,
+          metadata_json,
+          created_at,
+          updated_at
+        FROM knowledge_machines
+        ORDER BY updated_at DESC, created_at DESC
+        LIMIT ?
+      `, [limit]), ['tailscale_ips_json', 'capabilities_json', 'metadata_json']);
+
+      const syncConflicts = rowsWithJsonFields(selectInventoryRows(db, `
+        SELECT
+          id,
+          entity_kind,
+          entity_id,
+          local_machine_id,
+          remote_machine_id,
+          status,
+          resolution_strategy,
+          proposed_patch_uri,
+          approved_by,
+          resolved_at,
+          metadata_json,
+          created_at
+        FROM knowledge_sync_conflicts
+        ORDER BY created_at DESC
+        LIMIT ?
+      `, [limit]));
+
+      const approvalGates = rowsWithJsonFields(selectInventoryRows(db, `
+        SELECT id, action, target_uri, status, reason, approved_by, metadata_json, created_at, updated_at
+        FROM approval_gates
+        ORDER BY updated_at DESC, created_at DESC
+        LIMIT ?
+      `, [limit]));
+
+      const auditEvents = rowsWithJsonFields(selectInventoryRows(db, `
+        SELECT id, event_type, action, target_uri, decision, metadata_json, created_at
+        FROM audit_events
+        ORDER BY created_at DESC
+        LIMIT ?
+      `, [limit]));
+
+      const promotionCandidates = selectInventoryRows(db, `
+        SELECT
+          id,
+          record_kind,
+          title,
+          substr(content, 1, 220) AS content_preview,
+          canonical_key,
+          content_hash,
+          source_kind,
+          source_refs_json,
+          evidence_refs_json,
+          status,
+          requires_approval,
+          checks_json,
+          duplicate_of,
+          approved_by,
+          promoted_record_id,
+          metadata_json,
+          created_at,
+          updated_at,
+          reviewed_at,
+          promoted_at
+        FROM knowledge_promotion_candidates
+        ORDER BY updated_at DESC, created_at DESC
+        LIMIT ?
+      `, [limit]).map(promotionCandidateInventoryRow);
+
+      const durableRecords = selectInventoryRows(db, `
+        SELECT
+          id,
+          record_kind,
+          title,
+          substr(content, 1, 220) AS content_preview,
+          canonical_key,
+          content_hash,
+          status,
+          source_refs_json,
+          evidence_refs_json,
+          confidence,
+          valid_from,
+          valid_to,
+          promoted_from_candidate_id,
+          approved_by,
+          metadata_json,
+          created_at,
+          updated_at
+        FROM durable_knowledge_records
+        ORDER BY updated_at DESC, created_at DESC
+        LIMIT ?
+      `, [limit]).map(durableRecordInventoryRow);
+
+      const summary = {
+        legacy_items: legacyStore.items.length,
+        active_items: activeItems.length,
+        archived_items: legacyStore.items.length - activeItems.length,
+        schema_version: stats.schema_version,
+        sources: stats.sources,
+        source_revisions: stats.source_revisions,
+        chunks: stats.chunks,
+        wiki_pages: stats.wiki_pages,
+        citations: stats.citations,
+        indexes: stats.indexes,
+        runs: stats.runs,
+        run_events: stats.run_events,
+        storage_objects: stats.storage_objects,
+        embeddings: stats.embeddings,
+        vector_entries: stats.vector_entries,
+        reindex_queue: stats.reindex_queue,
+        redaction_findings: stats.redaction_findings,
+        audit_events: stats.audit_events,
+        approval_gates: stats.approval_gates,
+        knowledge_machines: stats.knowledge_machines,
+        sync_snapshots: stats.sync_snapshots,
+        sync_changes: stats.sync_changes,
+        sync_conflicts: stats.sync_conflicts,
+        sync_table_clocks: stats.sync_table_clocks,
+        sync_imports: stats.sync_imports,
+        promotion_candidates: stats.promotion_candidates,
+        durable_records: stats.durable_records,
+      };
+
+      return {
+        ok: true,
+        scope: this.scope,
+        home: workspace.home,
+        limit,
+        paths: {
+          json_store_path: storePath,
+          json_store_exists: legacyStore.exists,
+          knowledge_db_path: workspace.knowledgeDbPath,
+          knowledge_db_exists: true,
+          artifacts_dir: workspace.artifactsDir,
+          indexes_dir: workspace.indexesDir,
+          logs_dir: workspace.logsDir,
+          wiki_dir: workspace.wikiDir,
+        },
+        summary,
+        legacy_store: {
+          path: storePath,
+          exists: legacyStore.exists,
+          read_error: legacyStore.read_error,
+          total_items: legacyStore.items.length,
+          active_items: activeItems.length,
+          archived_items: legacyStore.items.length - activeItems.length,
+          items_returned: Math.min(visibleItems.length, limit),
+        },
+        items: visibleItems.slice(0, limit).map(legacyInventoryItem),
+        sources,
+        source_revisions: sourceRevisions,
+        chunks,
+        wiki_pages: wikiPages,
+        indexes,
+        storage_objects: storageObjects,
+        runs,
+        vector_indexes: vectorIndexes,
+        reindex_queue: reindexQueue,
+        machines,
+        sync_conflicts: syncConflicts,
+        approval_gates: approvalGates,
+        audit_events: auditEvents,
+        promotion_candidates: promotionCandidates,
+        durable_records: durableRecords,
+        message: `${legacyStore.items.length} item(s), ${stats.sources} source(s), ${stats.chunks} chunk(s), ${stats.wiki_pages} wiki page(s), ${stats.storage_objects} artifact(s)`,
+      };
+    } finally {
+      db.close();
+    }
+  }
+
+  private assertAppWikiWrite(allowGlobal?: boolean): void {
+    assertAppWikiWriteAllowed({
+      scope: this.scope,
+      workspace: this.workspace,
+      safetyPolicy: this.safetyPolicy(),
+      allowGlobal,
+    });
+  }
+
+  async initAppWiki(options: KnowledgeAppWikiWriteOptions = {}): Promise<KnowledgeAppWikiInitResult> {
+    this.assertAppWikiWrite(options.allowGlobal);
+    const workspace = this.ensureWorkspace();
+    return initAppWikiScope({
+      scope: this.scope,
+      workspace,
+      store: this.artifactStore(),
+      safetyPolicy: this.safetyPolicy(),
+      allowGlobal: options.allowGlobal,
+    });
+  }
+
+  async addAppWikiNote(options: KnowledgeAppWikiNoteInput): Promise<KnowledgeAppWikiNoteResult> {
+    this.assertAppWikiWrite(options.allowGlobal);
+    const workspace = this.ensureWorkspace();
+    return writeAppWikiNote({
+      scope: this.scope,
+      workspace,
+      store: this.artifactStore(),
+      safetyPolicy: this.safetyPolicy(),
+      allowGlobal: options.allowGlobal,
+      title: options.title,
+      content: options.content,
+      tags: options.tags,
+      sourceRefs: options.sourceRefs,
+      path: options.path,
+      metadata: options.metadata,
+    });
+  }
+
+  listAppWikiNotes(options: { limit?: number } = {}): KnowledgeAppWikiNote[] {
+    const workspace = this.workspace;
+    if (!existsSync(workspace.knowledgeDbPath)) return [];
+    return listAppWikiNotes({
+      dbPath: workspace.knowledgeDbPath,
+      limit: options.limit,
+    });
+  }
+
+  async getAppWikiNote(id: string, options: { includeContent?: boolean } = {}): Promise<KnowledgeAppWikiNoteReadResult | null> {
+    const workspace = this.workspace;
+    if (!existsSync(workspace.knowledgeDbPath)) return null;
+    return getAppWikiNote({
+      dbPath: workspace.knowledgeDbPath,
+      store: this.artifactStore(),
+      id,
+      includeContent: options.includeContent,
+    });
+  }
+
+  async addAppWikiSourceRef(options: KnowledgeAppWikiSourceInput) {
+    this.assertAppWikiWrite(options.allowGlobal);
+    const workspace = this.ensureWorkspace();
+    return ingestAppWikiSourceRef({
+      scope: this.scope,
+      workspace,
+      sourceRef: options.sourceRef,
+      purpose: options.purpose,
+      config: this.config(),
+      safetyPolicy: this.safetyPolicy(),
+      allowGlobal: options.allowGlobal,
+    });
+  }
+
+  async searchAppWiki(options: Omit<HybridSearchOptions, 'dbPath' | 'config'>) {
+    return this.search(options);
+  }
+
+  async queryAppWiki(options: Omit<RetrievalOptions, 'dbPath' | 'config'>) {
+    return this.retrieveContext(options);
+  }
+
+  async initWiki() {
+    const workspace = this.ensureWorkspace();
+    migrateKnowledgeDb(workspace.knowledgeDbPath);
+    const result = await initializeWikiLayout(this.artifactStore());
+    const db = openKnowledgeDb(workspace.knowledgeDbPath);
+    try {
+      recordStorageObjects(db, result.artifacts);
+      recordWikiLayoutCatalog(db, result.artifacts);
+    } finally {
+      db.close();
+    }
+    return result;
+  }
+
+  async compileWiki(options: Omit<WikiCompileOptions, 'dbPath' | 'store'> = {}) {
+    const workspace = this.ensureWorkspace();
+    return compileWikiPage({
+      ...options,
+      dbPath: workspace.knowledgeDbPath,
+      store: this.artifactStore(),
+    });
+  }
+
+  async fileAnswer(options: {
+    prompt: string;
+    answer: string;
+    approveWrite?: boolean;
+    limit?: number;
+    semantic?: boolean;
+    modelRef?: string;
+    dimensions?: number;
+    fake?: boolean;
+  }) {
+    const workspace = this.ensureWorkspace();
+    const context = await this.retrieveContext({
+      query: options.prompt,
+      limit: options.limit,
+      semantic: options.semantic,
+      modelRef: options.modelRef,
+      dimensions: options.dimensions,
+      fake: options.fake,
+    });
+    return fileAnswerToWiki({
+      dbPath: workspace.knowledgeDbPath,
+      store: this.artifactStore(),
+      prompt: options.prompt,
+      answer: options.answer,
+      context,
+      approveWrite: options.approveWrite,
+    });
+  }
+
+  lintWiki() {
+    const workspace = this.ensureWorkspace();
+    return lintWiki({ dbPath: workspace.knowledgeDbPath });
+  }
+
+  async ingestManifest(input: string) {
+    const workspace = this.ensureWorkspace();
+    return ingestOpenFilesManifest({
+      dbPath: workspace.knowledgeDbPath,
+      input,
+      config: this.config(),
+      safetyPolicy: this.safetyPolicy(),
+    });
+  }
+
+  async ingestSource(sourceRef: string, purpose?: string) {
+    const workspace = this.ensureWorkspace();
+    return ingestSourceRef({
+      dbPath: workspace.knowledgeDbPath,
+      sourceRef,
+      purpose,
+      config: this.config(),
+      safetyPolicy: this.safetyPolicy(),
+    });
+  }
+
+  async importRulesProvenance(options: KnowledgeRulesProvenanceImportOptions = {}): Promise<KnowledgeRulesProvenanceImportResult> {
+    const dryRun = options.dryRun !== false;
+    const workspace = dryRun ? this.workspace : this.ensureWorkspace();
+    return importRulesProvenance({
+      root: options.root ?? this.options.cwd ?? process.cwd(),
+      scope: this.scope,
+      owner: options.owner,
+      dryRun,
+      deprecateLegacy: options.deprecateLegacy,
+      includeLegacy: options.includeLegacy,
+      legacyStorePath: workspace.jsonStorePath,
+      dbPath: workspace.knowledgeDbPath,
+      safetyPolicy: this.safetyPolicy(),
+      maxItems: options.maxItems,
+      limit: options.limit,
+    });
+  }
+
+  async resolveSource(sourceRef: string, options: { purpose?: string; limit?: number } = {}) {
+    const workspace = this.ensureWorkspace();
+    return resolveOpenFilesSource({
+      dbPath: workspace.knowledgeDbPath,
+      sourceRef,
+      purpose: options.purpose,
+      limit: options.limit,
+      safetyPolicy: this.safetyPolicy(),
+    });
+  }
+
+  async consumeOutbox(input: string) {
+    const workspace = this.ensureWorkspace();
+    return consumeOpenFilesOutbox({
+      dbPath: workspace.knowledgeDbPath,
+      input,
+      config: this.config(),
+      safetyPolicy: this.safetyPolicy(),
+    });
+  }
+
+  reindexHealth(options: Omit<ReindexRuntimeOptions, 'dbPath' | 'config'> = {}) {
+    const workspace = this.workspace;
+    if (!existsSync(workspace.knowledgeDbPath)) return emptyReindexHealth();
+    return reindexHealth({
+      ...options,
+      dbPath: workspace.knowledgeDbPath,
+      config: this.config(),
+    });
+  }
+
+  enqueueReindex(options: Omit<ReindexRuntimeOptions, 'dbPath' | 'config'> = {}) {
+    const workspace = this.ensureWorkspace();
+    return enqueueMissingEmbeddings({
+      ...options,
+      dbPath: workspace.knowledgeDbPath,
+      config: this.config(),
+    });
+  }
+
+  async refreshEmbeddings(options: Omit<ReindexRuntimeOptions & { full?: boolean; limit?: number }, 'dbPath' | 'config'> = {}) {
+    const workspace = this.ensureWorkspace();
+    return refreshEmbeddingIndex({
+      ...options,
+      dbPath: workspace.knowledgeDbPath,
+      config: this.config(),
+    });
+  }
+
+  providerStatus(env: Record<string, string | undefined> = process.env): ProviderStatusResult {
+    return providerStatus(this.config(), env);
+  }
+
+  modelRegistry(): ModelRegistryEntry[] {
+    return listModelRegistry(this.config());
+  }
+
+  embeddingStatus() {
+    const workspace = this.workspace;
+    if (!existsSync(workspace.knowledgeDbPath)) return emptyEmbeddingStatus();
+    return embeddingIndexStatus(workspace.knowledgeDbPath);
+  }
+
+  async indexEmbeddings(options: Omit<EmbeddingIndexOptions, 'dbPath' | 'config'> = {}) {
+    const workspace = this.ensureWorkspace();
+    return indexKnowledgeEmbeddings({
+      ...options,
+      dbPath: workspace.knowledgeDbPath,
+      config: this.config(),
+    });
+  }
+
+  /** True when the client-flip resolves to the cloud HTTP transport. In api mode
+   * the shared corpus is the cloud knowledge-items, not a local sqlite catalog. */
+  private isApiMode(): boolean {
+    return isKnowledgeApiMode();
+  }
+
+  private cloudStore(): KnowledgeCloudStore {
+    const cloud = resolveKnowledgeCloudStore();
+    if (!cloud) {
+      throw new Error(
+        'knowledge: cloud store requested but not resolvable '
+        + '(check HASNA_KNOWLEDGE_API_URL + HASNA_KNOWLEDGE_API_KEY).',
+      );
+    }
+    return cloud;
+  }
+
+  /** Fetch the entire shared knowledge-item corpus from the cloud (api mode). */
+  private async fetchCloudItems(): Promise<KnowledgeItem[]> {
+    return fetchAllCloudItems(this.cloudStore());
+  }
+
+  async semanticSearch(options: Omit<EmbeddingSearchOptions, 'dbPath' | 'config'>) {
+    const workspace = this.workspace;
+    if (this.isApiMode()) {
+      throw new KnowledgeSemanticSearchUnavailableError();
+    }
+    if (!existsSync(workspace.knowledgeDbPath)) {
+      return {
+        provider: 'openai' as const,
+        model: 'text-embedding-3-small',
+        dimensions: options.dimensions ?? 1536,
+        query: options.query,
+        results: [],
+      };
+    }
+    return searchVectorIndex({
+      ...options,
+      dbPath: workspace.knowledgeDbPath,
+      config: this.config(),
+    });
+  }
+
+  async search(options: Omit<HybridSearchOptions, 'dbPath' | 'config'>) {
+    const workspace = this.workspace;
+    if (this.isApiMode()) {
+      if (options.semantic === true || options.fake === true || Boolean(options.modelRef)) {
+        throw new KnowledgeSemanticSearchUnavailableError();
+      }
+      const producer = await this.cloudStore().search({
+        query: options.query,
+        archive: 'active',
+        limit: options.limit,
+        offset: options.offset,
+      });
+      return hybridSearchFromProducerPage(producer.items, options, [], producer.total);
+    }
+    const legacyStorePath = legacyStorePathForRead(this.scope, workspace, options.legacyStorePath);
+    if (!existsSync(workspace.knowledgeDbPath)) {
+      if (existsSync(legacyStorePath)) {
+        return hybridSearchLegacyStore({
+          ...options,
+          legacyStorePath,
+          config: this.config(),
+        });
+      }
+      return emptySearchResult(
+        options.query,
+        Math.max(1, Math.min(options.limit ?? 10, 100)),
+        options.semantic === true || options.fake === true || Boolean(options.modelRef),
+      );
+    }
+    return hybridSearch({
+      ...options,
+      dbPath: workspace.knowledgeDbPath,
+      legacyStorePath,
+      config: this.config(),
+    });
+  }
+
+  async retrieveContext(options: Omit<RetrievalOptions, 'dbPath' | 'config'>) {
+    const workspace = this.workspace;
+    if (this.isApiMode()) {
+      const search = await this.search(options);
+      return retrieveKnowledgeContextFromSearch(search, {
+        contextChars: options.contextChars,
+      });
+    }
+    const legacyStorePath = legacyStorePathForRead(this.scope, workspace, options.legacyStorePath);
+    if (!existsSync(workspace.knowledgeDbPath)) {
+      if (existsSync(legacyStorePath)) {
+        const search = await hybridSearchLegacyStore({
+          ...options,
+          legacyStorePath,
+          config: this.config(),
+        });
+        return retrieveKnowledgeContextFromSearch(search, {
+          contextChars: options.contextChars,
+        });
+      }
+      return emptyContextPack(
+        options.query,
+        Math.max(1, Math.min(options.limit ?? 10, 100)),
+        options.semantic === true || options.fake === true || Boolean(options.modelRef),
+      );
+    }
+    return retrieveKnowledgeContext({
+      ...options,
+      dbPath: workspace.knowledgeDbPath,
+      legacyStorePath,
+      config: this.config(),
+    });
+  }
+
+  async contextPack(options: Omit<KnowledgeAgentContextPackOptions, 'dbPath' | 'config' | 'safetyPolicy'>) {
+    const workspace = this.workspace;
+    if (this.isApiMode()) {
+      const query = (options.query ?? options.topic ?? '').trim();
+      if (query && options.source !== 'loops' && options.source !== 'runs') {
+        const search = await this.search({ ...options, query });
+        const context = retrieveKnowledgeContextFromSearch(search, { contextChars: options.contextChars });
+        return legacyAgentContextPack(options, context, this.safetyPolicy());
+      }
+      return emptyAgentContextPack(options);
+    }
+    const legacyStorePath = legacyStorePathForRead(this.scope, workspace, options.legacyStorePath);
+    if (!existsSync(workspace.knowledgeDbPath)) {
+      const query = (options.query ?? options.topic ?? '').trim();
+      if (query && options.source !== 'loops' && options.source !== 'runs' && existsSync(legacyStorePath)) {
+        const search = await hybridSearchLegacyStore({
+          ...options,
+          query,
+          legacyStorePath,
+          config: this.config(),
+        });
+        const context = retrieveKnowledgeContextFromSearch(search, {
+          contextChars: options.contextChars,
+        });
+        return legacyAgentContextPack(options, context, this.safetyPolicy());
+      }
+      return emptyAgentContextPack(options);
+    }
+    return buildKnowledgeAgentContextPack({
+      ...options,
+      dbPath: workspace.knowledgeDbPath,
+      legacyStorePath,
+      config: this.config(),
+      safetyPolicy: this.safetyPolicy(),
+    });
+  }
+
+  async runPrompt(options: Omit<KnowledgePromptOptions, 'dbPath' | 'config'>) {
+    if (this.isApiMode()) {
+      if (options.semantic === true || options.fake === true || Boolean(options.modelRef)) {
+        throw new KnowledgeSemanticSearchUnavailableError();
+      }
+      const producer = await this.cloudStore().search({
+        query: options.prompt,
+        archive: 'active',
+        limit: options.limit,
+        offset: options.offset,
+      });
+      const producerSearch = hybridSearchFromProducerPage(
+        producer.items,
+        {
+          query: options.prompt,
+          limit: options.limit,
+          offset: options.offset,
+          semantic: false,
+        },
+        [],
+        producer.total,
+      );
+      return runKnowledgePromptOverItems(
+        producer.items.map((hit) => hit.item),
+        { ...options, config: this.config() },
+        producerSearch,
+      );
+    }
+    const workspace = this.ensureWorkspace();
+    const legacyStorePath = options.legacyStorePath ?? workspace.jsonStorePath;
+    if (!options.legacyStorePath) ensureStore(legacyStorePath);
+    return runKnowledgePrompt({
+      ...options,
+      dbPath: workspace.knowledgeDbPath,
+      legacyStorePath,
+      config: this.config(),
+    });
+  }
+
+  async webSearch(options: Omit<WebSearchOptions, 'dbPath' | 'config' | 'safetyPolicy'>) {
+    const workspace = this.ensureWorkspace();
+    return runProviderWebSearch({
+      ...options,
+      dbPath: workspace.knowledgeDbPath,
+      config: this.config(),
+      safetyPolicy: this.safetyPolicy(),
+    });
+  }
+
+  async machineTopology(options: Omit<KnowledgeMachineTopologyOptions, 'knowledge'> = {}) {
+    const workspace = this.workspace;
+    return discoverKnowledgeMachineTopology({
+      ...options,
+      knowledge: {
+        scope: this.scope,
+        workspace_home: workspace.home,
+      },
+    });
+  }
+
+  async machinePreflight(options: Omit<KnowledgeMachinePreflightOptions, 'knowledge'> = {}) {
+    const workspace = this.workspace;
+    return preflightKnowledgeMachine({
+      ...options,
+      knowledge: {
+        scope: this.scope,
+        workspace_home: workspace.home,
+      },
+    });
+  }
+
+  syncStatus() {
+    const workspace = this.workspace;
+    if (!existsSync(workspace.knowledgeDbPath)) {
+      return emptySyncStatus({
+        scope: this.scope,
+        workspaceHome: workspace.home,
+      });
+    }
+    return getKnowledgeSyncStatus({
+      dbPath: workspace.knowledgeDbPath,
+      scope: this.scope,
+      workspaceHome: workspace.home,
+    });
+  }
+
+  async syncDoctor(options: KnowledgeSyncDoctorOptions = {}): Promise<KnowledgeSyncDoctorResult> {
+    const workspace = this.ensureWorkspace();
+    migrateKnowledgeDb(workspace.knowledgeDbPath);
+    const status = this.syncStatus();
+    const storage = this.storageContract();
+    const validation = this.validateStorage();
+    const artifactManifest = artifactManifestStatus(workspace.knowledgeDbPath, storage);
+    const machine = options.machine?.trim() || null;
+    const peerWorkspace = options.peerWorkspace?.trim() || null;
+    const warnings: string[] = [];
+    let resolvedRoute: KnowledgeSyncDoctorResult['resolved_route'] = null;
+    let resolvedWorkspace: KnowledgeSyncDoctorResult['resolved_workspace'] = null;
+
+    if (machine && !serviceMachineIsLocal(machine)) {
+      const route = await resolveKnowledgeMachineRoute({
+        machineId: machine,
+        includeTailscale: options.includeTailscale,
+      });
+      resolvedRoute = routeSummary(route);
+      warnings.push(...route.warnings);
+    }
+
+    if (machine || peerWorkspace) {
+      const workspaceResolution = await resolveKnowledgeMachineWorkspace({
+        machineId: machine ?? workspaceMachineId(workspace),
+        peerWorkspace,
+        includeTailscale: options.includeTailscale,
+      });
+      if (machine && !peerWorkspace && (resolvedRoute?.source === 'raw' || !workspaceResolution.ok || !workspaceResolution.project_root)) {
+        const registryRow = findRegistryMachine(workspace.knowledgeDbPath, machine);
+        if (registryRow) {
+          if (resolvedRoute?.source === 'raw' && registryRow.ssh_target) {
+            resolvedRoute = routeSummary(routeFromRegistry(registryRow, machine, {
+              target: resolvedRoute.target,
+              route: resolvedRoute.route,
+              targetKind: resolvedRoute.target_kind,
+              confidence: resolvedRoute.confidence,
+              source: resolvedRoute.source,
+              adapter: resolvedRoute.adapter,
+              evidence: resolvedRoute.evidence,
+              cacheability: resolvedRoute.cacheability,
+              warnings: [],
+            }));
+          }
+          if (!workspaceResolution.ok || !workspaceResolution.project_root) {
+            const registryWorkspace = workspaceFromRegistry(registryRow, machine, workspaceResolution);
+            if (registryWorkspace) {
+              resolvedWorkspace = workspaceSummary(registryWorkspace, registryWorkspace.project_root);
+              warnings.push(...registryWorkspace.warnings);
+            }
+          }
+        }
+      }
+      resolvedWorkspace = workspaceResolution.ok && workspaceResolution.project_root
+        ? workspaceSummary(workspaceResolution, workspaceResolution.project_root)
+        : resolvedWorkspace ?? {
+            ...workspaceSummary(workspaceResolution, peerWorkspace ?? ''),
+            project_root: workspaceResolution.project_root ?? peerWorkspace ?? '',
+          };
+      warnings.push(...workspaceResolution.warnings);
+    }
+
+    if (!validation.ok) warnings.push(...validation.errors.map((error) => `storage:${error}`));
+    const openFiles = openFilesBoundaryStatus(workspace.knowledgeDbPath, resolvedWorkspace);
+    if (!openFiles.ok) warnings.push('open_files_boundary_raw_payload_sentinels');
+    if (!artifactManifest.ok) warnings.push(...artifactManifest.warnings);
+    const diagnosticFailures = resolvedWorkspace?.diagnostics.filter((entry) => entry.severity === 'fail') ?? [];
+    const ok = validation.ok && artifactManifest.ok && openFiles.ok && diagnosticFailures.length === 0 && (resolvedWorkspace?.project_root !== '' || !resolvedWorkspace);
+    const recommendedCommands = doctorRecommendations({
+      scope: this.scope,
+      machine,
+      peerWorkspace,
+      tables: options.tables,
+      resolvedWorkspace,
+      openConflicts: status.conflicts.open,
+    });
+
+    return {
+      ok,
+      read_only: true,
+      generated_at: new Date().toISOString(),
+      scope: this.scope,
+      workspace_home: workspace.home,
+      database: {
+        sqlite_schema_version: status.sqlite_schema_version,
+        table_counts: status.table_counts,
+      },
+      storage: {
+        contract: storage,
+        validation,
+        artifact_manifest: artifactManifest,
+      },
+      sync: {
+        machines: status.machines.total,
+        snapshots: status.snapshots.total,
+        clocks: status.clocks.total,
+        imports: status.imports.total,
+        open_conflicts: status.conflicts.open,
+        table_clocks: status.clocks.rows,
+      },
+      open_files: openFiles,
+      resolved_route: resolvedRoute,
+      resolved_workspace: resolvedWorkspace,
+      recommended_commands: recommendedCommands,
+      warnings: [...new Set(warnings)],
+      message: ok
+        ? `Sync readiness ok: ${status.clocks.total} table clock(s), ${status.conflicts.open} open conflict(s)`
+        : `Sync readiness needs attention: ${[...new Set(warnings)].join(', ') || 'workspace diagnostics failed'}`,
+    };
+  }
+
+  repairArtifactManifestKeys(options: {
+    approveWrite?: boolean;
+    approvedBy?: string;
+    dryRun?: boolean;
+  } = {}): KnowledgeArtifactManifestKeyRepairResult {
+    const workspace = this.ensureWorkspace();
+    migrateKnowledgeDb(workspace.knowledgeDbPath);
+    const storage = this.storageContract();
+    const storagePrefix = storagePrefixKey(storage);
+    const candidates = artifactManifestKeyRepairCandidates(workspace.knowledgeDbPath, storage);
+    const dryRun = options.dryRun === true || options.approveWrite !== true;
+    if (candidates.length === 0) {
+      return {
+        ok: true,
+        dry_run: dryRun,
+        approval_required: false,
+        storage_type: storage.storage_type,
+        storage_prefix: storagePrefix,
+        candidates,
+        repaired: 0,
+        audit_event_id: null,
+        message: 'No legacy S3 artifact manifest keys found',
+      };
+    }
+    if (options.dryRun === true) {
+      return {
+        ok: true,
+        dry_run: true,
+        approval_required: false,
+        storage_type: storage.storage_type,
+        storage_prefix: storagePrefix,
+        candidates,
+        repaired: 0,
+        audit_event_id: null,
+        message: `Would repair ${candidates.length} legacy S3 artifact manifest key(s)`,
+      };
+    }
+    if (options.approveWrite !== true || !options.approvedBy) {
+      return {
+        ok: false,
+        dry_run: true,
+        approval_required: true,
+        storage_type: storage.storage_type,
+        storage_prefix: storagePrefix,
+        candidates,
+        repaired: 0,
+        audit_event_id: null,
+        message: 'Artifact key repair requires --approve-write and --approved-by <name>',
+      };
+    }
+
+    const db = openKnowledgeDb(workspace.knowledgeDbPath);
+    try {
+      const now = new Date().toISOString();
+      const update = db.transaction((entries: KnowledgeArtifactManifestKeyRepairCandidate[]) => {
+        const statement = db.query('UPDATE storage_objects SET metadata_json = ?, updated_at = ? WHERE id = ?');
+        const currentRows = db.query<{ id: string; metadata_json: string }, []>(
+          'SELECT id, metadata_json FROM storage_objects',
+        ).all();
+        const metadataById = new Map(currentRows.map((row) => [row.id, parseMetadataJson(row.metadata_json)]));
+        for (const entry of entries) {
+          const metadata = metadataById.get(entry.id) ?? {};
+          metadata.key = entry.repaired_key;
+          statement.run(JSON.stringify(metadata), now, entry.id);
+        }
+      });
+      update(candidates);
+      const auditEventId = recordAuditEvent(db, {
+        event_type: 'artifact_manifest_key_repair',
+        action: 'storage.artifact_manifest.repair_keys',
+        target_uri: `knowledge-storage://${workspace.home}/storage_objects`,
+        decision: 'allow',
+        metadata: {
+          approved_by: options.approvedBy,
+          repaired: candidates.length,
+          storage_type: storage.storage_type,
+          storage_prefix: storagePrefix,
+          artifact_uris: candidates.map((entry) => entry.artifact_uri),
+        },
+      });
+      return {
+        ok: true,
+        dry_run: false,
+        approval_required: false,
+        storage_type: storage.storage_type,
+        storage_prefix: storagePrefix,
+        candidates,
+        repaired: candidates.length,
+        audit_event_id: auditEventId,
+        message: `Repaired ${candidates.length} legacy S3 artifact manifest key(s)`,
+      };
+    } finally {
+      db.close();
+    }
+  }
+
+  async createSyncSnapshot(options: KnowledgeSyncSnapshotOptions = {}): Promise<KnowledgeSyncSnapshotResult> {
+    const workspace = this.ensureWorkspace();
+    const topology = await this.machineTopology({
+      includeTailscale: options.includeTailscale !== false,
+    });
+    return createKnowledgeSyncSnapshot({
+      dbPath: workspace.knowledgeDbPath,
+      scope: this.scope,
+      workspaceHome: workspace.home,
+      storage: this.storageContract(),
+      topology,
+      machineId: options.machineId,
+    });
+  }
+
+  syncConflicts(options: { status?: string; limit?: number } = {}) {
+    const workspace = this.workspace;
+    if (!existsSync(workspace.knowledgeDbPath)) return [];
+    return listKnowledgeSyncConflicts(workspace.knowledgeDbPath, options);
+  }
+
+  syncConflict(id: string) {
+    const workspace = this.ensureWorkspace();
+    const conflict = getKnowledgeSyncConflict(workspace.knowledgeDbPath, id);
+    if (!conflict) throw new Error(`Sync conflict not found: ${id}`);
+    return conflict;
+  }
+
+  proposeSyncConflictResolution(id: string) {
+    const workspace = this.ensureWorkspace();
+    return proposeKnowledgeSyncConflictResolution(workspace.knowledgeDbPath, id);
+  }
+
+  async proposeSyncConflictResolutionWithAi(options: KnowledgeSyncConflictAiProposalServiceOptions) {
+    const workspace = this.ensureWorkspace();
+    return proposeKnowledgeSyncConflictResolutionWithAi({
+      dbPath: workspace.knowledgeDbPath,
+      id: options.id,
+      config: this.config(),
+      modelRef: options.modelRef,
+      fake: options.fake,
+      env: options.env,
+    });
+  }
+
+  resolveSyncConflict(options: KnowledgeSyncConflictResolveOptions): KnowledgeSyncConflictResolveResult {
+    const workspace = this.ensureWorkspace();
+    const proposal = proposeKnowledgeSyncConflictResolution(workspace.knowledgeDbPath, options.id);
+    if (options.approveWrite !== true || !options.approvedBy) {
+      return {
+        ok: false,
+        approval_required: true,
+        conflict: proposal.conflict,
+        proposal,
+        message: 'Sync conflict resolution requires --approve-write and --approved-by <name>',
+      };
+    }
+    const conflict = resolveKnowledgeSyncConflict(workspace.knowledgeDbPath, {
+      id: options.id,
+      strategy: options.strategy ?? proposal.proposed_strategy,
+      approvedBy: options.approvedBy,
+      proposedPatchUri: options.proposedPatchUri,
+    });
+    const db = openKnowledgeDb(workspace.knowledgeDbPath);
+    try {
+      const auditEventId = recordAuditEvent(db, {
+        event_type: 'sync_conflict_resolution',
+        action: 'sync.conflict.resolve',
+        target_uri: `knowledge-sync-conflict://${options.id}`,
+        decision: 'allow',
+        metadata: {
+          conflict_id: options.id,
+          entity_kind: conflict.entity_kind,
+          entity_id: conflict.entity_id,
+          strategy: conflict.resolution_strategy,
+          approved_by: conflict.approved_by,
+          proposed_patch_uri: conflict.proposed_patch_uri,
+        },
+      });
+      return {
+        ok: true,
+        approval_required: false,
+        conflict,
+        audit_event_id: auditEventId,
+        message: `Resolved sync conflict ${options.id}`,
+      };
+    } finally {
+      db.close();
+    }
+  }
+
+  syncMachines() {
+    const workspace = this.workspace;
+    if (!existsSync(workspace.knowledgeDbPath)) return [];
+    return listKnowledgeMachines(workspace.knowledgeDbPath);
+  }
+
+  exportSyncBundle(options: KnowledgeSyncBundleOptions = {}): KnowledgeSyncBundle {
+    const workspace = this.ensureWorkspace();
+    this.assertStorageValid('sync export');
+    migrateKnowledgeDb(workspace.knowledgeDbPath);
+    return createKnowledgeSyncBundle({
+      dbPath: workspace.knowledgeDbPath,
+      scope: this.scope,
+      workspaceHome: workspace.home,
+      storage: this.storageContract(),
+      machineId: options.machineId ?? null,
+      tables: options.tables,
+      includeArtifactContent: options.includeArtifactContent,
+      recordClocks: options.recordClocks !== false,
+    });
+  }
+
+  async importSyncBundle(options: KnowledgeSyncImportOptions): Promise<KnowledgeSyncApplyResult> {
+    const workspace = this.ensureWorkspace();
+    this.assertStorageValid('sync import');
+    migrateKnowledgeDb(workspace.knowledgeDbPath);
+    return applyKnowledgeSyncBundle({
+      targetDbPath: workspace.knowledgeDbPath,
+      targetScope: this.scope,
+      targetWorkspaceHome: workspace.home,
+      targetStorage: this.storageContract(),
+      targetStore: this.artifactStore(),
+      bundle: options.bundle,
+      direction: options.direction ?? 'import',
+      dryRun: options.dryRun,
+      localMachineId: options.machineId ?? null,
+    });
+  }
+
+  async syncRemotePeer(options: KnowledgeRemotePeerSyncOptions): Promise<KnowledgeRemotePeerSyncResult> {
+    const direction = options.direction ?? 'both';
+    const dryRun = options.dryRun === true;
+    const localWorkspace = this.ensureWorkspace();
+    migrateKnowledgeDb(localWorkspace.knowledgeDbPath);
+    const tableArgs = options.tables?.length ? ['--tables', options.tables.join(',')] : [];
+    const artifactArgs = options.includeArtifactContent === false ? ['--no-artifact-content'] : [];
+    const scopeArgs = ['--scope', this.scope, '--json'];
+    let resolvedMachine = await resolveKnowledgeMachineRoute({
+      machineId: options.machine,
+      includeTailscale: options.includeTailscale,
+    });
+    let resolvedWorkspace = await resolveKnowledgeMachineWorkspace({
+      machineId: options.machine,
+      peerWorkspace: options.peerWorkspace,
+      includeTailscale: options.includeTailscale,
+    });
+    if ((!options.peerWorkspace && resolvedMachine.source === 'raw') || !resolvedWorkspace.ok || !resolvedWorkspace.project_root) {
+      const registryRow = findRegistryMachine(localWorkspace.knowledgeDbPath, options.machine);
+      if (registryRow) {
+        if (!options.peerWorkspace && resolvedMachine.source === 'raw' && registryRow.ssh_target) {
+          resolvedMachine = routeFromRegistry(registryRow, options.machine, resolvedMachine);
+        }
+        if (!resolvedWorkspace.ok || !resolvedWorkspace.project_root) {
+          const registryWorkspace = workspaceFromRegistry(registryRow, options.machine, resolvedWorkspace);
+          if (registryWorkspace) resolvedWorkspace = registryWorkspace;
+        }
+      }
+    }
+    if (!resolvedWorkspace.ok || !resolvedWorkspace.project_root) {
+      throw new Error([
+        `Unable to resolve peer workspace for ${options.machine}.`,
+        `Pass --peer-workspace <repo-or-knowledge-home> or configure workspace path mapping in machines.`,
+        resolvedWorkspace.warnings.length ? `Warnings: ${resolvedWorkspace.warnings.join(', ')}` : null,
+      ].filter(Boolean).join(' '));
+    }
+    const peerWorkspace = resolvedWorkspace.project_root;
+    const result: KnowledgeRemotePeerSyncResult = {
+      ok: true,
+      dry_run: dryRun,
+      direction,
+      transport: 'ssh',
+      machine: options.machine,
+      resolved_machine: resolvedMachine.target,
+      resolved_route: routeSummary(resolvedMachine),
+      resolved_workspace: workspaceSummary(resolvedWorkspace, resolvedWorkspace.project_root),
+      peer_workspace: peerWorkspace,
+      message: '',
+    };
+    let resolverEvidenceRecorded = false;
+    const recordResolverEvidence = () => {
+      if (dryRun || resolverEvidenceRecorded) return;
+      recordKnowledgeMachineResolverEvidence(localWorkspace.knowledgeDbPath, {
+        machineId: options.machine,
+        route: resolvedMachine,
+        workspace: resolvedWorkspace,
+      });
+      resolverEvidenceRecorded = true;
+    };
+
+    if (direction === 'pull' || direction === 'both') {
+      const remoteExport = remoteKnowledgeCommand(peerWorkspace, [
+        'sync', 'export',
+        ...scopeArgs,
+        ...tableArgs,
+        ...artifactArgs,
+      ]);
+      const raw = runSshCommand(options.machine, remoteExport, undefined, resolvedMachine);
+      const bundle = parseRemoteJson(options.machine, 'sync export', raw);
+      assertRemoteSyncBundle(options.machine, bundle);
+      result.pull = await this.importSyncBundle({
+        bundle,
+        dryRun,
+        direction: 'pull',
+        machineId: options.machineId ?? null,
+      });
+    }
+
+    if (direction === 'push' || direction === 'both') {
+      recordResolverEvidence();
+      const bundle = this.exportSyncBundle({
+        machineId: options.machineId ?? null,
+        tables: options.tables,
+        includeArtifactContent: options.includeArtifactContent,
+        recordClocks: !dryRun,
+      });
+      const remoteImport = remoteKnowledgeCommand(peerWorkspace, [
+        'sync', 'import',
+        ...scopeArgs,
+        ...(dryRun ? ['--dry-run'] : []),
+      ]);
+      const applyResult = parseRemoteJson(options.machine, 'sync import', runSshCommand(options.machine, remoteImport, JSON.stringify(bundle), resolvedMachine));
+      assertRemoteSyncApplyResult(options.machine, applyResult);
+      result.push = applyResult;
+    }
+
+    result.ok = (result.pull?.ok ?? true) && (result.push?.ok ?? true);
+    recordResolverEvidence();
+    result.message = [
+      workspaceReadinessMessage(result.resolved_workspace),
+      result.pull ? `pull: ${result.pull.message}` : null,
+      result.push ? `push: ${result.push.message}` : null,
+    ].filter(Boolean).join('; ');
+    return result;
+  }
+
+  async syncPeer(options: KnowledgePeerSyncOptions): Promise<KnowledgePeerSyncResult> {
+    const direction = options.direction ?? 'both';
+    const localWorkspace = this.ensureWorkspace();
+    migrateKnowledgeDb(localWorkspace.knowledgeDbPath);
+
+    const peerWorkspaceInput = resolve(options.peerWorkspace);
+    const peerWorkspace = resolvePeerWorkspace(peerWorkspaceInput);
+    migrateKnowledgeDb(peerWorkspace.knowledgeDbPath);
+    const peerConfig = readKnowledgeConfig(peerWorkspace.configPath);
+    const peerStorage = resolveStorageContract(peerConfig, peerWorkspace, this.scope);
+    const peerStore = createArtifactStore(peerConfig, peerWorkspace);
+    const localMachineId = options.machineId ?? workspaceMachineId(localWorkspace);
+    const peerMachineId = workspaceMachineId(peerWorkspace);
+    const resolvedWorkspace = await resolveKnowledgeMachineWorkspace({
+      machineId: options.machineId ?? peerMachineId,
+      peerWorkspace: peerWorkspaceInput,
+      includeTailscale: false,
+    });
+
+    const localBundle = () => createKnowledgeSyncBundle({
+      dbPath: localWorkspace.knowledgeDbPath,
+      scope: this.scope,
+      workspaceHome: localWorkspace.home,
+      storage: this.storageContract(),
+      machineId: localMachineId,
+      tables: options.tables,
+      includeArtifactContent: options.includeArtifactContent,
+      recordClocks: options.dryRun !== true,
+    });
+    const peerBundle = () => createKnowledgeSyncBundle({
+      dbPath: peerWorkspace.knowledgeDbPath,
+      scope: this.scope,
+      workspaceHome: peerWorkspace.home,
+      storage: peerStorage,
+      machineId: peerMachineId,
+      tables: options.tables,
+      includeArtifactContent: options.includeArtifactContent,
+      recordClocks: options.dryRun !== true,
+    });
+
+    const result: KnowledgePeerSyncResult = {
+      ok: true,
+      dry_run: options.dryRun === true,
+      direction,
+      resolved_workspace: workspaceSummary(resolvedWorkspace, resolvedWorkspace.project_root ?? peerWorkspaceInput),
+      message: '',
+    };
+
+    if (direction === 'pull' || direction === 'both') {
+      result.pull = await applyKnowledgeSyncBundle({
+        targetDbPath: localWorkspace.knowledgeDbPath,
+        targetScope: this.scope,
+        targetWorkspaceHome: localWorkspace.home,
+        targetStorage: this.storageContract(),
+        targetStore: this.artifactStore(),
+        bundle: peerBundle(),
+        targetBundle: localBundle(),
+        direction: 'pull',
+        dryRun: options.dryRun,
+        localMachineId,
+      });
+    }
+
+    if (direction === 'push' || direction === 'both') {
+      result.push = await applyKnowledgeSyncBundle({
+        targetDbPath: peerWorkspace.knowledgeDbPath,
+        targetScope: this.scope,
+        targetWorkspaceHome: peerWorkspace.home,
+        targetStorage: peerStorage,
+        targetStore: peerStore,
+        bundle: localBundle(),
+        targetBundle: peerBundle(),
+        direction: 'push',
+        dryRun: options.dryRun,
+        localMachineId: peerMachineId,
+      });
+    }
+
+    result.ok = (result.pull?.ok ?? true) && (result.push?.ok ?? true);
+    result.message = [
+      workspaceReadinessMessage(result.resolved_workspace),
+      result.pull ? `pull: ${result.pull.message}` : null,
+      result.push ? `push: ${result.push.message}` : null,
+    ].filter(Boolean).join('; ');
+    return result;
+  }
+}
+
+export function createKnowledgeService(options: KnowledgeServiceOptions = {}): KnowledgeService {
+  return new KnowledgeService(options);
+}
