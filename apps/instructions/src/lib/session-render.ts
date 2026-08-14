@@ -1,0 +1,2822 @@
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { homedir } from "node:os";
+import { basename, dirname, extname, isAbsolute, join, parse, posix, relative, resolve } from "node:path";
+import type { Config } from "../types/index.js";
+import {
+  AGENT_OPERATING_RULES_HEADING_PATTERN,
+  AGENT_OPERATING_RULES_ROLE,
+  AGENT_OPERATING_RULES_PAYLOAD_SHA256,
+  AGENT_OPERATING_RULES_SEMANTIC_POLICY_KEY,
+  AGENT_OPERATING_RULES_SENTINEL_PATTERN,
+  AGENT_OPERATING_RULES_SOURCE_ID,
+  GLOBAL_AGENT_RULES_STANDARD_SLUG,
+  type AgentOperatingRulesPayloadIntegrity,
+  compareAgentOperatingRulesVersions,
+  parseAgentOperatingRulesVersion,
+  resolveAgentOperatingRulesPayload,
+} from "./global-agent-rules-standard.js";
+import { CODEWITH_SHARED_TODOS_STORAGE_STANDARD_SLUG } from "./codewith-shared-todos-storage-standard.js";
+import {
+  SESSION_MANAGED_OUTPUT_MAX_BYTES,
+  SESSION_MANAGED_OUTPUT_WARN_BYTES,
+  composeProjectContextSessionRender,
+  isSessionManagedOutputRelativePath,
+  observeProjectContextSessionGuard,
+  type ProjectContextSessionGuard,
+} from "./project-context.js";
+import { isRetiredOrUnsupportedConfigAgent } from "./config-agents.js";
+import { applyTransform } from "./transforms.js";
+import { configAssetDigest, resolveAssetDestination, type AssetPlan } from "./asset-plan.js";
+import {
+  detectCursorAuthorityConflicts,
+  observeCursorGlobalAuthority,
+  type CursorAuthorityConflict,
+  type CursorAuthorityObservation,
+} from "./cursor-authority.js";
+import {
+  CODEWITH_NATIVE_IMPORTS_ENV,
+  SESSION_INSTRUCTION_LAYERS,
+  SESSION_RENDER_INSTRUCTIONS_MANAGED_DIR,
+  SESSION_RENDER_MANAGED_MARKER,
+  SESSION_RENDER_MANIFEST_RELATIVE_PATH,
+  SESSION_RENDER_SCHEMA,
+  SESSION_RENDER_SNAPSHOT_RELATIVE_DIR,
+} from "./session-render-contract.js";
+
+export {
+  CODEWITH_NATIVE_IMPORTS_ENV,
+  SESSION_INSTRUCTION_LAYERS,
+  SESSION_RENDER_INSTRUCTIONS_MANAGED_DIR,
+  SESSION_RENDER_MANAGED_MARKER,
+  SESSION_RENDER_MANAGED_NAMESPACE,
+  SESSION_RENDER_MANIFEST_RELATIVE_PATH,
+  SESSION_RENDER_SCHEMA,
+  SESSION_RENDER_SNAPSHOT_RELATIVE_DIR,
+} from "./session-render-contract.js";
+export const RAW_STORE_ROOT_ENV = "HASNA_CONFIGS_HOME";
+export const ANTIGRAVITY_RULE_FILE_CHAR_LIMIT = 12_000;
+export const SESSION_RENDERER_OWNER_ID = "instructions-session-renderer";
+
+export const SESSION_RENDER_TOOLS = [
+  "claude",
+  "codex",
+  "cursor",
+  "opencode",
+  "codewith",
+  "qwen",
+  "aicopilot",
+  "antigravity",
+  "grok",
+  "copilot",
+  "devin",
+  "windsurf-legacy",
+  "cline",
+] as const;
+
+export const SESSION_RENDER_PROFILE_ENTRYPOINTS = [
+  ".claude/CLAUDE.md",
+  ".codex/AGENTS.md",
+  ".codewith/CODEWITH.md",
+  ".config/opencode/AGENTS.md",
+] as const;
+export const SESSION_RENDER_OWNED_CONFIG_TARGETS = [
+  ...SESSION_RENDER_PROFILE_ENTRYPOINTS,
+  ".gemini/GEMINI.md",
+  ".gemini/ANTIGRAVITY.md",
+] as const;
+
+export type SessionRenderTool = (typeof SESSION_RENDER_TOOLS)[number];
+export type SessionRenderMode = "native-imports" | "flattened-markdown" | "cursor-mdc" | "opencode-instructions" | "antigravity-rules" | "provider-rules";
+export type SessionProviderSurface =
+  | "opencode-config-instructions"
+  | "opencode-agents-md"
+  | "copilot-repository-instructions"
+  | "copilot-path-instructions";
+export type SessionInstructionLayer = (typeof SESSION_INSTRUCTION_LAYERS)[number];
+export type SessionInstructionLayerAlias = SessionInstructionLayer | "provider" | "identity" | "project";
+export type SessionInstructionMerge = "append" | "replace";
+export type SessionRenderFileRole = "index" | "fragment" | "rule" | "config" | "asset" | "manifest";
+export type SessionRenderTargetKind = "session-home" | "project-root" | "blocked";
+export type SessionTargetOwnerKind = "provider-profile" | "project" | "blocked";
+
+export interface SessionInstructionOwner {
+  kind: string;
+  id: string;
+}
+
+export interface SessionInstructionSourcePath {
+  path: string;
+  editable?: boolean;
+  required?: boolean;
+  hash?: string;
+}
+
+export interface SessionInstructionRule {
+  id: string;
+  content: string;
+  label?: string;
+  path?: string;
+  globs?: string[];
+  hash?: string;
+  metadata?: Record<string, unknown> | null;
+}
+
+export interface SessionToolAdapter {
+  tool: SessionRenderTool;
+  mode: SessionRenderMode;
+  indexFile?: string;
+  configFile?: string;
+  managedDir: string;
+  envVar?: string;
+  nativeImports: boolean;
+  description: string;
+  providerSurface?: "legacy-dual" | SessionProviderSurface;
+  projectScoped?: boolean;
+  ruleExtension?: ".md" | ".instructions.md";
+}
+
+export interface SessionInstructionSource {
+  id: string;
+  content: string;
+  label?: string;
+  layer?: SessionInstructionLayerAlias;
+  merge?: SessionInstructionMerge;
+  order?: number;
+  path?: string;
+  rules?: SessionInstructionRule[];
+  provenance?: Record<string, unknown> | null;
+  targetProviders?: string[];
+  owner?: SessionInstructionOwner | null;
+  sourcePaths?: SessionInstructionSourcePath[];
+  globs?: string[];
+  hash?: string;
+  nonOverridable?: boolean;
+  replacementScope?: string;
+  metadata?: Record<string, unknown> | null;
+}
+
+const IDENTITY_EXPORT_AUTHORITY = Symbol("hasna.instructions.identity-export-authority");
+
+const CODEWITH_PROTECTED_REPLACEMENT_TARGETS = new Map<string, string>([
+  [
+    "codewith-adversarial-review-proportionality",
+    "global-adversarial-review-proportionality-system-prompt",
+  ],
+  [
+    "codewith-workflow-reviewer-neutralizer",
+    "global-workflow-construction-standard",
+  ],
+]);
+
+interface IdentityExportAuthority {
+  token: object;
+  shape: IdentityExportShape;
+  packageName: string | null;
+}
+
+interface IdentityExportBoundSessionInstructionSource extends SessionInstructionSource {
+  [IDENTITY_EXPORT_AUTHORITY]?: IdentityExportAuthority;
+}
+
+interface OrderedSessionInstructionSource extends SessionInstructionSource {
+  normalizedId: string;
+  resolvedLabel: string;
+  resolvedLayer: SessionInstructionLayer;
+  resolvedMerge: SessionInstructionMerge;
+  resolvedOrder: number;
+  resolvedRules: OrderedSessionInstructionRule[];
+  [IDENTITY_EXPORT_AUTHORITY]?: IdentityExportAuthority;
+}
+
+interface OrderedSessionInstructionRule extends SessionInstructionRule {
+  normalizedId: string;
+  resolvedLabel: string;
+  resolvedPath: string;
+}
+
+type IdentityExportShape = "configs-contract" | "canonical-open-identities";
+
+export interface SessionTargetOwner {
+  kind: SessionTargetOwnerKind;
+  tool: SessionRenderTool;
+  profile: string;
+  targetHome: string;
+  projectRoot: string | null;
+  ownedBy: "open-configs";
+  canonicalOwner: "instructions";
+  writer: {
+    id: typeof SESSION_RENDERER_OWNER_ID;
+    canonical: true;
+    legacyAliases: ["open-configs"];
+    scope: "managed-provider-files" | "managed-instruction-fields";
+  };
+  reason: string;
+}
+
+export interface SessionProviderConfig {
+  sourceId: string;
+  content: string;
+}
+
+export interface SessionSkippedSource {
+  id: string;
+  label: string;
+  targetProviders: string[];
+  reason: string;
+  source?: {
+    layer: SessionInstructionLayer;
+    merge: SessionInstructionMerge;
+    order: number;
+    path: string | null;
+    hash: string | null;
+    renderedPayloadSha256: string;
+    nonOverridable: boolean;
+    provenance: Record<string, unknown> | null;
+  };
+}
+
+export interface SessionProfileRenderSelection {
+  sources: SessionInstructionSource[];
+  skippedSources: SessionSkippedSource[];
+  providerConfig?: SessionProviderConfig;
+}
+
+export interface SessionRenderInput {
+  tool: SessionRenderTool;
+  profile: string;
+  sources: SessionInstructionSource[];
+  projectRoot?: string;
+  targetHome?: string;
+  sessionId?: string;
+  /**
+   * Explicit Cursor authority home for isolated planners/tests. Production
+   * callers omit this and the detector resolves the current user home.
+   */
+  cursorAuthorityHome?: string;
+  generatedAt?: string;
+  codewithNativeImports?: boolean;
+  allowEmptySources?: boolean;
+  providerConfig?: SessionProviderConfig;
+  /** Explicit provider loading surface selected by the compiled capability descriptor. */
+  providerSurface?: SessionProviderSurface;
+  skippedSources?: SessionSkippedSource[];
+  /** Executable/supporting assets remain separate from instruction sources. */
+  assetPlan?: AssetPlan;
+  /** Pinned source bytes keyed by source config id; never serialized into the plan or manifest. */
+  assetContents?: Readonly<Record<string, string>>;
+}
+
+export interface SessionRenderFile {
+  path: string;
+  relativePath: string;
+  role: SessionRenderFileRole;
+  content: string;
+  sha256: string;
+  sourceIds: string[];
+}
+
+export interface SessionRenderManifest {
+  schema: typeof SESSION_RENDER_SCHEMA;
+  tool: SessionRenderTool;
+  adapterMode: SessionRenderMode;
+  profile: string;
+  sessionId: string | null;
+  targetHome: string;
+  targetKind: SessionRenderTargetKind;
+  targetOwner: SessionTargetOwner;
+  writable: boolean;
+  blocked: boolean;
+  blockers: string[];
+  authorityObservations: CursorAuthorityObservation[];
+  authorityConflicts: CursorAuthorityConflict[];
+  generatedAt: string;
+  env: Record<string, string>;
+  sourceHash: string;
+  sources: Array<{
+    id: string;
+    label: string;
+    layer: SessionInstructionLayer;
+    merge: SessionInstructionMerge;
+    order: number;
+    path: string | null;
+    targetProviders: string[];
+    owner: SessionInstructionOwner | null;
+    sourcePaths: SessionInstructionSourcePath[];
+    hash: string | null;
+    nonOverridable: boolean;
+    replacementScope: string | null;
+    rules: Array<{
+      id: string;
+      label: string;
+      path: string;
+      globs: string[];
+      hash: string | null;
+      // Attestation for the rule PATH. Before todos `9af165a8` this entry stopped at
+      // `hash` — which is the caller's declared hash and is null on the export transport
+      // — so a rule-borne policy payload that had been repaired, and one that had never
+      // been checked at all, produced byte-identical manifests. There was no field a
+      // repair could be recorded in, which is why that failure was silent as well as
+      // unguarded. `contentSha256` is always present and is the digest of the bytes this
+      // render actually emitted; the floor keys are null when the floor did not apply.
+      contentSha256: string;
+      payloadFloorApplied: boolean | null;
+      flooredFromRulesVersion: string | null;
+      flooredFromPayloadSha256: string | null;
+      payloadIntegrity: string | null;
+    }>;
+    renderedPayloadSha256: string;
+    provenance: Record<string, unknown> | null;
+    metadata?: Record<string, unknown> | null;
+  }>;
+  skippedSources: Array<{
+    id: string;
+    label: string;
+    targetProviders: string[];
+    reason: string;
+    source?: {
+      layer: SessionInstructionLayer;
+      merge: SessionInstructionMerge;
+      order: number;
+      path: string | null;
+      hash: string | null;
+      renderedPayloadSha256: string;
+      nonOverridable: boolean;
+      provenance: Record<string, unknown> | null;
+    };
+  }>;
+  files: Array<{
+    path: string;
+    relativePath: string;
+    role: SessionRenderFileRole;
+    sha256: string;
+    sourceIds: string[];
+  }>;
+  warnings: string[];
+  providerConfig?: {
+    sourceId: string;
+    selectedPayloadSha256: string;
+    renderedPayloadSha256: string;
+    selected: boolean;
+  };
+  projectContext?: {
+    schema: string;
+    projectId: string;
+    revision: string;
+    hash: string;
+    status: string;
+    ageSeconds: number;
+    cachePath: string;
+    fragmentPath: string;
+  };
+  compatibility?: Record<string, unknown>;
+  assetPlan?: {
+    schema: AssetPlan["schema"];
+    planDigest: string;
+    profileId: string;
+    providerVersion: string;
+    surface: string;
+    scope: string;
+    assets: Array<{
+      assetId: string;
+      assetKey: string;
+      kind: string;
+      action: string;
+      mutationMode: string;
+      destination: AssetPlan["assets"][number]["destination"];
+      digest: string;
+      exactOnceKey: string;
+    }>;
+  };
+}
+
+export interface SessionRenderPlan {
+  dryRun: true;
+  tool: SessionRenderTool;
+  adapter: SessionToolAdapter;
+  profile: string;
+  sessionId: string | null;
+  targetHome: string;
+  targetKind: SessionRenderTargetKind;
+  targetOwner: SessionTargetOwner;
+  writable: boolean;
+  blocked: boolean;
+  blockers: string[];
+  authorityObservations: CursorAuthorityObservation[];
+  authorityConflicts: CursorAuthorityConflict[];
+  /**
+   * Carries the caller's --allow-empty-sources choice from plan-build time into
+   * apply time. Apply-time emptiness (a plan that deletes every previously
+   * managed file under the adapter's managed directory while creating or
+   * updating none — see planStaleFileResults in session-apply.ts) cannot be
+   * detected here, because it depends on the previous manifest on disk, which
+   * this function never reads. It can only be detected once the stale-file
+   * diff is computed in applySessionRenderUnlocked, so the flag has to travel
+   * on the plan rather than being re-decided there.
+   */
+  allowEmptySources: boolean;
+  env: Record<string, string>;
+  files: SessionRenderFile[];
+  assetPlan?: AssetPlan;
+  assetFiles: SessionRenderFile[];
+  manifest: SessionRenderManifest;
+  manifestFile: SessionRenderFile;
+  allFiles: SessionRenderFile[];
+  warnings: string[];
+  projectContextGuard?: ProjectContextSessionGuard;
+}
+
+const CODEWITH_FLATTENED_ADAPTER: SessionToolAdapter = {
+  tool: "codewith",
+  mode: "flattened-markdown",
+  indexFile: "CODEWITH.md",
+  managedDir: SESSION_RENDER_INSTRUCTIONS_MANAGED_DIR,
+  envVar: "CODEWITH_HOME",
+  nativeImports: false,
+  description: "Codewith CODEWITH.md flattened until native @ imports are implemented in Codewith.",
+};
+
+const CODEWITH_NATIVE_ADAPTER: SessionToolAdapter = {
+  tool: "codewith",
+  mode: "native-imports",
+  indexFile: "CODEWITH.md",
+  managedDir: SESSION_RENDER_INSTRUCTIONS_MANAGED_DIR,
+  envVar: "CODEWITH_HOME",
+  nativeImports: true,
+  description: "Codewith CODEWITH.md with gated @ imports into managed fragments.",
+};
+
+export const SESSION_TOOL_ADAPTERS: Record<SessionRenderTool, SessionToolAdapter> = {
+  claude: {
+    tool: "claude",
+    mode: "native-imports",
+    indexFile: "CLAUDE.md",
+    managedDir: SESSION_RENDER_INSTRUCTIONS_MANAGED_DIR,
+    envVar: "CLAUDE_CONFIG_DIR",
+    nativeImports: true,
+    description: "Claude Code CLAUDE.md with @ imports into managed fragments.",
+  },
+  codex: {
+    tool: "codex",
+    mode: "flattened-markdown",
+    indexFile: "AGENTS.md",
+    managedDir: SESSION_RENDER_INSTRUCTIONS_MANAGED_DIR,
+    envVar: "CODEX_HOME",
+    nativeImports: false,
+    description: "Codex AGENTS.md flattened instruction file.",
+  },
+  cursor: {
+    tool: "cursor",
+    mode: "cursor-mdc",
+    managedDir: ".cursor/rules",
+    nativeImports: false,
+    description: "Cursor project rule files in .cursor/rules/*.mdc.",
+    projectScoped: true,
+  },
+  opencode: {
+    tool: "opencode",
+    mode: "opencode-instructions",
+    indexFile: "AGENTS.md",
+    configFile: "opencode.json",
+    managedDir: SESSION_RENDER_INSTRUCTIONS_MANAGED_DIR,
+    envVar: "OPENCODE_CONFIG_DIR",
+    nativeImports: false,
+    description: "OpenCode AGENTS.md plus opencode.json instructions pointing at managed fragments.",
+    providerSurface: "legacy-dual",
+  },
+  aicopilot: {
+    tool: "aicopilot",
+    mode: "flattened-markdown",
+    indexFile: "AICOPILOT.md",
+    managedDir: SESSION_RENDER_INSTRUCTIONS_MANAGED_DIR,
+    envVar: "AICOPILOT_CONFIG_DIR",
+    nativeImports: false,
+    description: "AI Copilot AICOPILOT.md flattened instruction file.",
+  },
+  qwen: {
+    tool: "qwen",
+    mode: "flattened-markdown",
+    indexFile: "QWEN.md",
+    managedDir: ".qwen/instructions",
+    envVar: "QWEN_HOME",
+    nativeImports: false,
+    description: "Qwen Code QWEN.md hierarchical instructional context file.",
+  },
+  antigravity: {
+    tool: "antigravity",
+    mode: "antigravity-rules",
+    managedDir: ".agents/rules",
+    nativeImports: false,
+    description: "Google Antigravity project rules in .agents/rules/*.md.",
+    projectScoped: true,
+  },
+  grok: {
+    tool: "grok",
+    mode: "flattened-markdown",
+    indexFile: "AGENTS.md",
+    managedDir: ".grok/instructions",
+    nativeImports: false,
+    description: "Grok Build repository instructions in AGENTS.md.",
+    projectScoped: true,
+  },
+  copilot: {
+    tool: "copilot",
+    mode: "flattened-markdown",
+    indexFile: ".github/copilot-instructions.md",
+    managedDir: ".github/instructions",
+    nativeImports: false,
+    description: "GitHub Copilot repository-wide instructions.",
+    projectScoped: true,
+    providerSurface: "copilot-repository-instructions",
+  },
+  devin: {
+    tool: "devin",
+    mode: "provider-rules",
+    managedDir: ".devin/rules",
+    nativeImports: false,
+    description: "Devin repository rules in .devin/rules/*.md.",
+    projectScoped: true,
+    ruleExtension: ".md",
+  },
+  "windsurf-legacy": {
+    tool: "windsurf-legacy",
+    mode: "provider-rules",
+    managedDir: ".windsurf/rules",
+    nativeImports: false,
+    description: "Legacy Windsurf repository rules in .windsurf/rules/*.md.",
+    projectScoped: true,
+    ruleExtension: ".md",
+  },
+  cline: {
+    tool: "cline",
+    mode: "provider-rules",
+    managedDir: ".clinerules",
+    nativeImports: false,
+    description: "Cline repository rules in .clinerules/*.md.",
+    projectScoped: true,
+    ruleExtension: ".md",
+  },
+  codewith: CODEWITH_FLATTENED_ADAPTER,
+};
+
+/**
+ * Every directory the session renderer writes into, derived from the adapters
+ * themselves so the ownership guard tracks the renderer instead of duplicating
+ * a hand-maintained path list.
+ */
+export const SESSION_RENDER_MANAGED_DIRS: readonly string[] = [
+  ...new Set(
+    [
+      CODEWITH_FLATTENED_ADAPTER,
+      CODEWITH_NATIVE_ADAPTER,
+      ...Object.values(SESSION_TOOL_ADAPTERS),
+    ].map((adapter) => adapter.managedDir),
+  ),
+];
+
+/**
+ * Managed directories the renderer does NOT own exclusively: the config fan-out
+ * writes `cursor-mdc` transform outputs into `~/.cursor/rules` as well, so a
+ * static ownership match there would break `apply`/`sync` for those rows. Files
+ * the renderer actually wrote under a shared directory are still protected —
+ * they are claimed by that target home's session render manifest.
+ *
+ * `session-render-ownership.test.ts` machine-checks this set against the fan-out
+ * outputs in `sync.ts`, so the two cannot drift apart silently.
+ */
+export const SESSION_RENDER_SHARED_MANAGED_DIRS: readonly string[] = [".cursor/rules"];
+
+/**
+ * Paths under any session target home that only the session renderer may write.
+ * `apply` refuses these regardless of which home they sit in, because the
+ * renderer's target homes are provider profile homes, not the config home.
+ */
+export const SESSION_RENDER_EXCLUSIVE_MANAGED_PATHS: readonly string[] = [
+  ...SESSION_RENDER_MANAGED_DIRS.filter((dir) => !SESSION_RENDER_SHARED_MANAGED_DIRS.includes(dir)),
+  SESSION_RENDER_MANIFEST_RELATIVE_PATH,
+  SESSION_RENDER_SNAPSHOT_RELATIVE_DIR,
+];
+
+export const SESSION_LAYER_RANK: Record<SessionInstructionLayer, number> = {
+  global: 10,
+  tool: 20,
+  account: 30,
+  machine: 40,
+  division: 50,
+  workspace: 60,
+  repo: 70,
+  path: 80,
+  agent: 90,
+  session: 100,
+  local: 110,
+};
+
+export function normalizeSessionInstructionLayer(value: unknown): SessionInstructionLayer {
+  if (value === "provider") return "tool";
+  if (value === "identity") return "agent";
+  if (value === "project") return "repo";
+  if (
+    value === "global" ||
+    value === "tool" ||
+    value === "account" ||
+    value === "machine" ||
+    value === "division" ||
+    value === "workspace" ||
+    value === "repo" ||
+    value === "path" ||
+    value === "agent" ||
+    value === "session" ||
+    value === "local"
+  ) return value;
+  throw new Error(`Invalid session instruction layer: ${String(value)}`);
+}
+
+function ensureTrailingNewline(content: string): string {
+  return content.endsWith("\n") ? content : `${content}\n`;
+}
+
+function sha256(content: string): string {
+  return createHash("sha256").update(content).digest("hex");
+}
+
+function fingerprint(value: unknown): string {
+  return sha256(JSON.stringify(value));
+}
+
+function canonicalFingerprintValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalFingerprintValue);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, entry]) => [key, canonicalFingerprintValue(entry)]),
+    );
+  }
+  return value;
+}
+
+/**
+ * Per-rule attestation for the manifest.
+ *
+ * Reads the keys {@link applyAgentOperatingRulesFloorToRule} stamps onto rule metadata and
+ * flattens them onto the manifest entry, so an audit can tell FLOORED from UNFLOORED
+ * without re-deriving anything. Absent keys are emitted as explicit nulls rather than
+ * omitted: a missing key and a key that is legitimately null read identically to a
+ * consumer, and the whole point of this entry is that the two must be distinguishable.
+ */
+function ruleAttestation(rule: OrderedSessionInstructionRule): {
+  contentSha256: string;
+  payloadFloorApplied: boolean | null;
+  flooredFromRulesVersion: string | null;
+  flooredFromPayloadSha256: string | null;
+  payloadIntegrity: string | null;
+} {
+  const metadata = rule.metadata ?? {};
+  const read = (key: string): string | null => {
+    const value = metadata[key];
+    return typeof value === "string" ? value : null;
+  };
+  const applied = metadata["payloadFloorApplied"];
+  return {
+    contentSha256: sha256(rule.content ?? ""),
+    payloadFloorApplied: typeof applied === "boolean" ? applied : null,
+    flooredFromRulesVersion: read("flooredFromRulesVersion"),
+    flooredFromPayloadSha256: read("flooredFromPayloadSha256"),
+    payloadIntegrity: read("payloadIntegrity"),
+  };
+}
+
+function sourceFingerprint(source: OrderedSessionInstructionSource): Record<string, unknown> {
+  return {
+    id: source.id,
+    label: source.resolvedLabel,
+    layer: source.resolvedLayer,
+    order: source.resolvedOrder,
+    merge: source.resolvedMerge,
+    content: source.content,
+    path: source.path ?? null,
+    targetProviders: source.targetProviders ?? [],
+    owner: canonicalFingerprintValue(source.owner ?? null),
+    sourcePaths: canonicalFingerprintValue(source.sourcePaths ?? []),
+    globs: source.globs ?? [],
+    hash: source.hash ?? null,
+    nonOverridable: source.nonOverridable === true,
+    replacementScope: source.replacementScope ?? null,
+    rules: source.resolvedRules.map((rule) => ({
+      id: rule.id,
+      label: rule.resolvedLabel,
+      path: rule.resolvedPath,
+      content: rule.content,
+      globs: rule.globs ?? [],
+      hash: rule.hash ?? null,
+      metadata: canonicalFingerprintValue(rule.metadata ?? null),
+    })),
+    provenance: canonicalFingerprintValue(source.provenance ?? null),
+    metadata: canonicalFingerprintValue(source.metadata ?? null),
+  };
+}
+
+export function normalizeSessionInstructionSourceId(value: string): string {
+  const s = value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return s || "instruction";
+}
+
+function slug(value: string): string {
+  return normalizeSessionInstructionSourceId(value);
+}
+
+function yamlQuote(value: string): string {
+  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+
+function getRawStoreRoot(): string {
+  return resolve(process.env[RAW_STORE_ROOT_ENV] || join(process.env["HOME"] || homedir(), ".hasna", "configs"));
+}
+
+function defaultTargetHome(tool: SessionRenderTool, profile: string, sessionId?: string): string {
+  return join(getRawStoreRoot(), "sessions", tool, slug(profile), slug(sessionId || "latest"));
+}
+
+function joinTarget(targetHome: string, relativePath: string): string {
+  const safeTargetHome = assertSafeTargetRoot(targetHome);
+  const safeRelativePath = assertSafeRelativePath(relativePath);
+  return join(safeTargetHome, ...safeRelativePath.split("/"));
+}
+
+function makeFile(
+  targetHome: string,
+  relativePath: string,
+  role: SessionRenderFileRole,
+  content: string,
+  sourceIds: string[],
+): SessionRenderFile {
+  const safeTargetHome = assertSafeTargetRoot(targetHome);
+  const safeRelativePath = assertSafeRelativePath(relativePath);
+  const normalizedContent = ensureTrailingNewline(content);
+  return {
+    path: joinTarget(safeTargetHome, safeRelativePath),
+    relativePath: safeRelativePath,
+    role,
+    content: normalizedContent,
+    sha256: sha256(normalizedContent),
+    sourceIds,
+  };
+}
+
+/**
+ * Applies the agent-operating-rules currency floor to any source that declares itself to
+ * be that policy, whatever route it arrived by.
+ *
+ * The floor used to live in `sourceFromConfig` alone, which covered the config store and
+ * nothing else. An identity export reaches the renderer through
+ * `sourcesFromIdentityExport`, carries its own `nonOverridable` flag, and never touched
+ * the floor — so an export could render rules BELOW the embedded baseline, or keep the
+ * baseline sentinel over a rewritten body, and still be stamped non-overridable. Running
+ * the floor here instead means every source declaring the sentinel is checked once, at
+ * the point where all routes converge and before deduplication picks a winner.
+ *
+ * A substitution is recorded rather than performed silently: the attestation keeps the
+ * version and digest that were rejected, so a repaired payload is visible in the manifest
+ * as an event instead of looking like a clean render.
+ */
+/**
+ * Whether a source is CLAIMING to be the agent operating rules, as opposed to merely
+ * quoting them.
+ *
+ * The floor replaces a whole body, so applying it on a bare sentinel match destroyed any
+ * composite document that embedded the rules alongside its own content — including this
+ * renderer's own flattened output, which carries the sentinel plus every other source's
+ * text and can be re-ingested as a `--source`. Two claims are recognised, and each is one
+ * an attacker gains nothing by dropping:
+ *
+ * - PRIVILEGE OR IDENTITY: the source asks to be treated as the managed policy
+ *   (`nonOverridable`, the managed slug or source id, or the agent-operating-rules role).
+ *   These are exactly the markers that let a source tie on priority and win on version in
+ *   `deduplicateSemanticPolicySources`, so a payload that drops them to escape the floor
+ *   also drops its ability to displace the genuine rules.
+ * - WHOLE-DOCUMENT PRESENTATION: the body OPENS with the canonical rules heading, i.e. it
+ *   presents itself as the rules document rather than a file that quotes them.
+ */
+function claimsAgentOperatingRulesPolicy(source: SessionInstructionSource, content: string): boolean {
+  if (!AGENT_OPERATING_RULES_SENTINEL_PATTERN.test(content)) return false;
+  if (source.nonOverridable === true) return true;
+  if (source.id === GLOBAL_AGENT_RULES_STANDARD_SLUG || source.id === AGENT_OPERATING_RULES_SOURCE_ID) return true;
+  if (source.metadata?.["role"] === AGENT_OPERATING_RULES_ROLE) return true;
+  return AGENT_OPERATING_RULES_HEADING_PATTERN.test(content.trimStart());
+}
+
+function applyAgentOperatingRulesFloor(
+  source: SessionInstructionSource,
+  content: string,
+): { content: string; provenance: Record<string, unknown> | null; metadata: Record<string, unknown> | null } {
+  const unchanged = {
+    content,
+    provenance: source.provenance ?? null,
+    metadata: source.metadata ?? null,
+  };
+  if (!claimsAgentOperatingRulesPolicy(source, content)) return unchanged;
+
+  const payload = resolveAgentOperatingRulesPayload(content);
+  if (payload.content === content) {
+    return {
+      content,
+      provenance: { ...(source.provenance ?? {}), payloadIntegrity: payload.integrity },
+      metadata: { ...(source.metadata ?? {}), payloadIntegrity: payload.integrity },
+    };
+  }
+
+  const floored = {
+    payloadFloorApplied: true,
+    flooredFromRulesVersion: parseAgentOperatingRulesVersion(content),
+    flooredFromPayloadSha256: sha256(content),
+  };
+  return {
+    content: payload.content,
+    provenance: { ...(source.provenance ?? {}), ...payload.provenance, ...floored },
+    metadata: { ...(source.metadata ?? {}), ...payload.metadata, ...floored },
+  };
+}
+
+/**
+ * The rule-body twin of {@link applyAgentOperatingRulesFloor}.
+ *
+ * WHY THIS EXISTS AT ALL. The floor above guards exactly one field, `source.content`.
+ * `source.rules[].content` arrives on the SAME untrusted identity-export transport —
+ * `normalizeIdentityRules` copies rule bodies straight out of export JSON — and was
+ * neither floored, deduped, nor attested. So an export could install a below-baseline or
+ * tampered NON-OVERRIDABLE rules document simply by putting it in `rules[]` instead of
+ * `content`, and the render reported `floored: null`, `integrity: null`, `warnings: []`
+ * and `skipped: []`: indistinguishable from healthy. Measured on 088b862 and in the
+ * shipped 0.4.18 bundle (todos `9af165a8`).
+ *
+ * THE GATE IS THE DANGEROUS PART, and it is deliberately the SAME predicate the source
+ * path uses — {@link claimsAgentOperatingRulesPolicy}, evaluated against the RULE body
+ * with the rule's PARENT source supplying the privilege markers. Gating on a bare
+ * sentinel match instead would destroy any rule file that merely QUOTES the rules, which
+ * is the exact F2 failure `662a0bd` introduced and `4ba8737` had to fix at source level.
+ * Do not "simplify" this to a sentinel test.
+ *
+ * That predicate gives the property the source-level doc block already relies on: the
+ * privilege markers that let a payload win precedence (`nonOverridable`, the managed
+ * slug/source id, the agent-operating-rules role) are the same markers that pull it into
+ * the floor. A payload that drops them to escape the floor also drops its ability to
+ * displace the genuine rules. A rule that opens with the canonical heading is caught on
+ * presentation alone; one that merely quotes the heading mid-body is not, because
+ * {@link AGENT_OPERATING_RULES_HEADING_PATTERN} is anchored at the start of the body.
+ *
+ * Metadata is merged from the RULE, not the source, so a repair is recorded against the
+ * rule that was repaired.
+ */
+function applyAgentOperatingRulesFloorToRule(
+  source: SessionInstructionSource,
+  rule: SessionInstructionRule,
+  content: string,
+): { content: string; metadata: Record<string, unknown> | null } {
+  const unchanged = { content, metadata: rule.metadata ?? null };
+  if (!claimsAgentOperatingRulesPolicy(source, content)) return unchanged;
+
+  const payload = resolveAgentOperatingRulesPayload(content);
+  if (payload.content === content) {
+    return {
+      content,
+      metadata: { ...(rule.metadata ?? {}), payloadIntegrity: payload.integrity },
+    };
+  }
+
+  const floored = {
+    payloadFloorApplied: true,
+    flooredFromRulesVersion: parseAgentOperatingRulesVersion(content),
+    flooredFromPayloadSha256: sha256(content),
+  };
+  return {
+    content: payload.content,
+    metadata: { ...(rule.metadata ?? {}), ...payload.metadata, ...floored },
+  };
+}
+
+/**
+ * A source the render deliberately discarded, and why.
+ *
+ * Every path that removes a source produces one of these. That is the whole point:
+ * discarding is legitimate, discarding INVISIBLY is not. Before todos `0c7ffd33` the
+ * collapse below returned a shorter array and said nothing, so an operator comparing the
+ * slugs they passed against `manifest.sources` saw one vanish with rc=0, `warnings: []`
+ * and `skippedSources: []` — three surfaces that all agreed nothing had happened. The
+ * loss was misdiagnosed for a day as a cap at fifteen sources, because a silent
+ * subtraction looks exactly like a limit.
+ */
+function skippedSource(source: OrderedSessionInstructionSource, reason: string): SessionSkippedSource {
+  return {
+    id: source.id,
+    label: source.resolvedLabel,
+    targetProviders: source.targetProviders ?? [],
+    reason,
+    source: {
+      layer: source.resolvedLayer,
+      merge: source.resolvedMerge,
+      order: source.resolvedOrder,
+      path: source.path ?? null,
+      hash: source.hash ?? null,
+      renderedPayloadSha256: sha256(source.content),
+      nonOverridable: source.nonOverridable === true,
+      provenance: source.provenance ?? null,
+    },
+  };
+}
+
+function normalizeSources(
+  sources: SessionInstructionSource[],
+  tool: SessionRenderTool,
+  allowEmptySources: boolean,
+): { sources: OrderedSessionInstructionSource[]; skipped: SessionSkippedSource[] } {
+  const normalized = sources
+    .map((source, index) => {
+      if (!source.id.trim()) throw new Error("Session instruction source id is required.");
+      // Floor BEFORE provider filtering: the pinned digest describes the payload as
+      // published, so comparing filtered bytes against it would fail for any payload that
+      // legitimately uses provider-only blocks and would silently replace it.
+      const floored = applyAgentOperatingRulesFloor(source, source.content ?? "");
+      const content = filterProviderOnlyBlocks(floored.content, tool);
+      const normalized = {
+        ...source,
+        content,
+        provenance: floored.provenance,
+        metadata: floored.metadata,
+        normalizedId: slug(source.id),
+        resolvedLabel: source.label ?? source.id,
+        resolvedLayer: source.layer === undefined ? "agent" : normalizeSessionInstructionLayer(source.layer),
+        resolvedMerge: source.merge ?? "append",
+        resolvedOrder: source.order ?? index,
+        resolvedRules: normalizeInstructionRules(source, tool),
+      };
+      const hasPathReferences = (normalized.sourcePaths ?? []).length > 0;
+      if (!allowEmptySources && !normalized.content.trim() && normalized.resolvedRules.length === 0 && !hasPathReferences) {
+        throw new Error(`Session instruction source "${source.id}" is empty. Pass --allow-empty-sources only for explicit empty renders.`);
+      }
+      return normalized;
+    });
+  const originalOrder = [...normalized].sort(compareSessionInstructionSources);
+  const deduplicated = deduplicateSemanticPolicySources(normalized);
+  const ordered = deduplicated.selected.sort(compareSessionInstructionSources);
+  validateTargetedReplacementSources(originalOrder, ordered, deduplicated.skipped, tool);
+  rejectDuplicateSourceSlugs(ordered);
+  rejectDuplicateRulePaths(ordered);
+  return { sources: ordered, skipped: deduplicated.skipped };
+}
+
+function compareSessionInstructionSources(
+  a: OrderedSessionInstructionSource,
+  b: OrderedSessionInstructionSource,
+): number {
+  return SESSION_LAYER_RANK[a.resolvedLayer] - SESSION_LAYER_RANK[b.resolvedLayer]
+    || a.resolvedOrder - b.resolvedOrder
+    || a.id.localeCompare(b.id);
+}
+
+/**
+ * Collapses sources that declare the same semantic policy down to one.
+ *
+ * Keyed on the policy IDENTITY, not on the declared version: once a store can hold a
+ * newer rules payload, a version-keyed map would let a newer source and a stale
+ * duplicate both survive and stamp one instruction file with two contradictory rule-set
+ * versions. Selection is priority-first, then version — so the managed non-overridable
+ * source still wins over an ordinary source that merely declares a higher version, and
+ * two equally-privileged sources resolve to the newer one.
+ */
+/**
+ * What a source declares as the semantic policy, from EITHER field it can arrive in.
+ *
+ * `source.content` is checked first and on a bare sentinel, exactly as before — that
+ * branch is unchanged on purpose. Weakening it to the claim predicate would let a source
+ * carrying a bare sentinel escape the dedupe guard, trading one hole for another.
+ *
+ * The RULE branch is additive and is claim-gated rather than sentinel-gated, for the same
+ * F2 reason the floor is: a rule that merely QUOTES the rules contains the sentinel, and
+ * treating that as a declaration would let an innocent quoting file evict the genuine
+ * policy source. Gate and floor therefore agree by construction — a rule body is deduped
+ * on exactly the condition that also got it floored, so the bytes compared here are the
+ * floored bytes.
+ *
+ * Without this branch, a sentinel living only in a rule body walked straight past the
+ * collapse and one home rendered TWO contradictory rule-set versions with `skipped: []`
+ * and `warnings: []` — measured on 088b862, v115 and v116 side by side (todos `9af165a8`).
+ */
+interface SemanticPolicyDeclaration {
+  version: string;
+  normalizedContent: string;
+  integrity: AgentOperatingRulesPayloadIntegrity;
+}
+
+/**
+ * Whether the bytes about to be compared were checked against a digest this build pins.
+ *
+ * This is the ONLY signal available at selection time that the payload's own author does
+ * not control. `nonOverridable`, the source id, `metadata.role`, `kind` and the sentinel
+ * VERSION are all fields an identity export writes for itself; two candidates arriving on
+ * the same export are indistinguishable by any of them. The digest is computed here from
+ * the bytes against {@link AGENT_OPERATING_RULES_PAYLOAD_SHA256}, so it cannot be asserted
+ * into existence by a payload. Same predicate `resolveAgentOperatingRulesPayload` uses —
+ * this reads the value rather than inventing a new trust signal.
+ */
+function semanticPolicyIntegrity(body: string): AgentOperatingRulesPayloadIntegrity {
+  return sha256(body) === AGENT_OPERATING_RULES_PAYLOAD_SHA256 ? "pinned-digest" : "unverified-self-declared";
+}
+
+function semanticPolicyDeclaration(
+  source: OrderedSessionInstructionSource,
+): SemanticPolicyDeclaration | null {
+  const normalize = (value: string) => value.replace(/\r\n/g, "\n").trim();
+  const sentinel = source.content.match(AGENT_OPERATING_RULES_SENTINEL_PATTERN);
+  if (sentinel) {
+    return {
+      version: sentinel[1]!,
+      normalizedContent: normalize(source.content),
+      integrity: semanticPolicyIntegrity(source.content),
+    };
+  }
+  for (const rule of source.resolvedRules) {
+    const body = rule.content ?? "";
+    if (!claimsAgentOperatingRulesPolicy(source, body)) continue;
+    const ruleSentinel = body.match(AGENT_OPERATING_RULES_SENTINEL_PATTERN);
+    if (!ruleSentinel) continue;
+    return {
+      version: ruleSentinel[1]!,
+      normalizedContent: normalize(body),
+      integrity: semanticPolicyIntegrity(body),
+    };
+  }
+  return null;
+}
+
+/**
+ * The losing source with its policy payload removed and everything else intact, or null
+ * when the policy WAS the whole source.
+ *
+ * Before this, losing the collapse discarded the entire source. A valid `@hasna/identities`
+ * export may carry ordinary content plus several `rules[]` entries beside a policy rule;
+ * promoting that one rule to a declaration for the whole source and then skipping the
+ * source deleted unrelated safety and operational instructions from the rendered home,
+ * with only a source-level skip record and no copy of what was lost. That is a home
+ * carrying LESS than the ratified rule set, which is the failure this collapse exists to
+ * prevent arriving by a different door (hasna/instructions#54, @agent-chief-strategy P1).
+ *
+ * Every declaring carrier is removed, not just the one `semanticPolicyDeclaration`
+ * happened to report: a source whose content AND a rule both declare would otherwise keep
+ * the second copy and defeat the collapse it just lost.
+ */
+function withoutSemanticPolicyPayloads(
+  source: OrderedSessionInstructionSource,
+): OrderedSessionInstructionSource | null {
+  const content = AGENT_OPERATING_RULES_SENTINEL_PATTERN.test(source.content) ? "" : source.content;
+  const resolvedRules = source.resolvedRules.filter((rule) => {
+    const body = rule.content ?? "";
+    return !(AGENT_OPERATING_RULES_SENTINEL_PATTERN.test(body) && claimsAgentOperatingRulesPolicy(source, body));
+  });
+  const hasPathReferences = (source.sourcePaths ?? []).length > 0;
+  if (!content.trim() && resolvedRules.length === 0 && !hasPathReferences) return null;
+  return { ...source, content, resolvedRules };
+}
+
+function deduplicateSemanticPolicySources(
+  sources: OrderedSessionInstructionSource[],
+): { selected: OrderedSessionInstructionSource[]; skipped: SessionSkippedSource[] } {
+  const selected: OrderedSessionInstructionSource[] = [];
+  const skipped: SessionSkippedSource[] = [];
+  const policySources = new Map<string, {
+    index: number;
+    version: string;
+    normalizedContent: string;
+    integrity: AgentOperatingRulesPayloadIntegrity;
+  }>();
+  const collapseReason = (
+    winner: OrderedSessionInstructionSource,
+    key: string,
+    partial: boolean,
+    displacesVerified: boolean,
+  ) =>
+    `superseded by "${winner.id}": sources declaring the semantic policy ${key} collapse to one so a single instruction home cannot carry two rule-set versions`
+    + (partial
+      ? "; only the policy payload was removed and this source's other instructions still render"
+      : "")
+    + (displacesVerified
+      ? "; WARNING the surviving payload is unverified-self-declared and displaced a digest-verified one on its own version claim"
+      : "");
+  // A loser is stripped rather than deleted where it carries anything else, and the skip
+  // record says which of the two happened.
+  const discard = (
+    loser: OrderedSessionInstructionSource,
+    winner: OrderedSessionInstructionSource,
+    key: string,
+    displacesVerified: boolean,
+  ) => {
+    const remainder = withoutSemanticPolicyPayloads(loser);
+    skipped.push(skippedSource(loser, collapseReason(winner, key, remainder !== null, displacesVerified)));
+    return remainder;
+  };
+  for (const source of sources) {
+    const declaration = semanticPolicyDeclaration(source);
+    if (!declaration) {
+      selected.push(source);
+      continue;
+    }
+    const { version, normalizedContent, integrity } = declaration;
+    const key = AGENT_OPERATING_RULES_SEMANTIC_POLICY_KEY;
+    const existing = policySources.get(key);
+    if (!existing) {
+      policySources.set(key, { index: selected.length, version, normalizedContent, integrity });
+      selected.push(source);
+      continue;
+    }
+    const versionOrder = compareAgentOperatingRulesVersions(version, existing.version);
+    // Two sources claiming the same version must agree byte for byte, whatever their
+    // privilege — silently picking one of two conflicting same-version policies would
+    // hide a real distribution fault.
+    if (versionOrder === 0 && existing.normalizedContent !== normalizedContent) {
+      throw new Error(`Conflicting semantic policy sources declare ${key}/v${version} with different content.`);
+    }
+    const current = selected[existing.index]!;
+    const priorityOrder = semanticPolicySourcePriority(source) - semanticPolicySourcePriority(current);
+    // SELECTION IS PRIORITY-THEN-VERSION, and the version half is NOT a trust decision.
+    //
+    // The reachable eviction reported on hasna/instructions#54 was a `9.9.9` payload
+    // displacing the genuine rules at EQUAL priority. It was reachable because
+    // `semanticPolicySourcePriority` credited only {@link GLOBAL_AGENT_RULES_STANDARD_SLUG}
+    // while {@link claimsAgentOperatingRulesPolicy} recognises {@link
+    // AGENT_OPERATING_RULES_SOURCE_ID} as the managed identity too — so the canonical
+    // managed source tied with an ordinary export instead of outranking it, and the
+    // attacker-chosen version number became the tiebreak. That asymmetry is fixed in
+    // `semanticPolicySourcePriority`.
+    //
+    // ORDERING BY INTEGRITY INSTEAD WAS TRIED AND REJECTED, recorded so it is not
+    // re-proposed as an obvious improvement. Ranking `pinned-digest` above
+    // `unverified-self-declared` closes the equal-priority case, and it also inverts
+    // `collapses to the newer version regardless of source ordering` in
+    // `session-render.test.ts`: the pinned digest describes THIS BUILD's embedded snapshot,
+    // so "verified" and "stale" are the same payload, and preferring it would freeze any
+    // home that carries the old snapshot beside a newly published rules document on the
+    // snapshot. That is the downgrade the floor exists to prevent, arriving by the
+    // selection path instead.
+    //
+    // WHAT REMAINS OPEN, because a comparison cannot close it: every field here is one the
+    // payload writes about itself, so an export that also mimics the canonical source id
+    // ties on priority and wins on version again. Selection is precedence, not
+    // authentication — closing it needs a signed payload or a digest delivered by the
+    // package channel. Until then the residual is made LOUD rather than silent: when an
+    // unverified payload displaces a digest-verified one, the skip reason says so, and
+    // `planSessionRender` turns every skip reason into a warning line.
+    const displacesVerified = existing.integrity === "pinned-digest"
+      && integrity === "unverified-self-declared";
+    const arrivingWins = priorityOrder > 0
+      || (priorityOrder === 0 && versionOrder > 0);
+    // The incumbent wins: the ARRIVING source is the one being discarded.
+    if (!arrivingWins) {
+      const remainder = discard(source, current, key, false);
+      if (remainder) selected.push(remainder);
+      continue;
+    }
+    // The arriving source wins: the INCUMBENT is the one being discarded. Reporting only
+    // the first case would leave exactly the eviction an operator is most likely to care
+    // about — a payload they explicitly passed losing to a later one — unreported.
+    const remainder = discard(current, source, key, displacesVerified);
+    selected[existing.index] = {
+      ...source,
+      resolvedOrder: current.resolvedOrder,
+    };
+    // Appended rather than left in place: the winner takes the incumbent's slot, and
+    // `normalizeSources` re-sorts on layer/order/id immediately after, so the remainder
+    // returns to its own position rather than to the end of the render.
+    if (remainder) selected.push(remainder);
+    policySources.set(key, { index: existing.index, version, normalizedContent, integrity });
+  }
+  return { selected, skipped };
+}
+
+/**
+ * Precedence among sources declaring the same semantic policy.
+ *
+ * BOTH canonical managed ids are credited, and the omission of the second one was the
+ * reachable defect behind hasna/instructions#54: {@link claimsAgentOperatingRulesPolicy}
+ * treats {@link GLOBAL_AGENT_RULES_STANDARD_SLUG} and {@link AGENT_OPERATING_RULES_SOURCE_ID}
+ * as the same managed identity, but only the first earned precedence here. A render whose
+ * genuine policy source carried the SECOND id therefore tied with any ordinary export that
+ * set `nonOverridable`, and the tie fell through to the sentinel VERSION — which the
+ * export writes for itself. An export stamping `9.9.9` evicted the genuine rules and
+ * rendered in their place as the non-overridable policy.
+ *
+ * This is PRECEDENCE, not authentication. Every input is self-declared, so an export that
+ * also mimics a canonical id ties again; see the ordering note in
+ * `deduplicateSemanticPolicySources` for why a digest comparison cannot substitute.
+ */
+function semanticPolicySourcePriority(source: OrderedSessionInstructionSource): number {
+  let priority = 0;
+  if (source.nonOverridable) priority += 4;
+  if (source.id === GLOBAL_AGENT_RULES_STANDARD_SLUG || source.id === AGENT_OPERATING_RULES_SOURCE_ID) priority += 2;
+  if (source.metadata?.["role"] === AGENT_OPERATING_RULES_ROLE) priority += 1;
+  return priority;
+}
+
+function filterProviderOnlyBlocks(content: string, tool: SessionRenderTool): string {
+  const lines = content.split(/\r?\n/);
+  const output: string[] = [];
+  let activeProviders: string[] | null = null;
+  for (const line of lines) {
+    const start = line.match(/^\s*<!--\s*@hasna-provider:\s*([^>]+?)\s*-->\s*$/i);
+    if (start) {
+      if (activeProviders) throw new Error("Nested provider-only instruction blocks are not supported.");
+      activeProviders = start[1]!.split(",").map((item) => item.trim().toLowerCase()).filter(Boolean);
+      continue;
+    }
+    if (/^\s*<!--\s*@hasna-end-provider\s*-->\s*$/i.test(line)) {
+      if (!activeProviders) throw new Error("Provider-only instruction block end marker without start marker.");
+      activeProviders = null;
+      continue;
+    }
+    if (!activeProviders || activeProviders.includes(tool) || activeProviders.includes("all") || activeProviders.includes("generic")) {
+      output.push(line);
+    }
+  }
+  if (activeProviders) throw new Error("Provider-only instruction block was not closed.");
+  return output.join("\n");
+}
+
+function targetedReplacementTarget(source: OrderedSessionInstructionSource): string | null {
+  if (source.replacementScope == null) return null;
+  if (source.resolvedMerge !== "replace") {
+    throw new Error(
+      `Session instruction source "${source.id}" uses replacement scope "${source.replacementScope}" `
+      + `with merge=${source.resolvedMerge}; replacement scopes require merge=replace, not append.`,
+    );
+  }
+  const scope = source.replacementScope.trim();
+  if (!scope.startsWith("source:")) {
+    throw new Error(
+      `Invalid replacement scope "${source.replacementScope}" for source "${source.id}"; `
+      + 'expected "source:<normalized-source-id>".',
+    );
+  }
+  const target = scope.slice("source:".length);
+  if (!target || target !== slug(target)) {
+    throw new Error(
+      `Invalid replacement scope "${source.replacementScope}" for source "${source.id}"; `
+      + "the target must be a non-empty normalized source id.",
+    );
+  }
+  return target;
+}
+
+/**
+ * Validate scoped replacement against the graph before semantic-policy deduplication can
+ * make the requested target disappear.
+ *
+ * Deduplication remains intentionally before composition. A targeted replacement is a
+ * claim about one exact earlier source, though, so a dedupe loser cannot be reported as
+ * if the scoped replacer removed it.
+ */
+function validateTargetedReplacementSources(
+  originalSources: OrderedSessionInstructionSource[],
+  selectedSources: OrderedSessionInstructionSource[],
+  deduplicatedSources: SessionSkippedSource[],
+  tool: SessionRenderTool,
+): void {
+  for (let replacerIndex = 0; replacerIndex < originalSources.length; replacerIndex++) {
+    const replacer = originalSources[replacerIndex]!;
+    const targetNormalizedId = targetedReplacementTarget(replacer);
+    if (targetNormalizedId === null) continue;
+
+    const matches = originalSources.filter((source) => source.normalizedId === targetNormalizedId);
+    if (matches.length === 0) {
+      throw new Error(
+        `Targeted replacement source "${replacer.id}" names missing source "${targetNormalizedId}".`,
+      );
+    }
+    if (matches.length > 1) {
+      throw new Error(
+        `Targeted replacement source "${replacer.id}" is ambiguous after normalization: `
+        + `"${targetNormalizedId}" matches ${matches.map((source) => `"${source.id}"`).join(", ")}.`,
+      );
+    }
+
+    const target = matches[0]!;
+    const targetIndex = originalSources.indexOf(target);
+    if (targetIndex >= replacerIndex) {
+      throw new Error(
+        `Targeted replacement source "${replacer.id}" must name an earlier source; `
+        + `"${target.id}" is later than or identical to the replacer.`,
+      );
+    }
+    if (target.nonOverridable && !authorizedProtectedTargetedReplacement(replacer, target, tool)) {
+      throw new Error(
+        `Targeted replacement source "${replacer.id}" cannot replace non-overridable source "${target.id}".`,
+      );
+    }
+    if (!selectedSources.some((source) => source.id === replacer.id)) {
+      throw new Error(
+        `Targeted replacement source "${replacer.id}" was removed by semantic-policy deduplication before composition.`,
+      );
+    }
+    if (deduplicatedSources.some((source) => source.id === target.id)) {
+      throw new Error(
+        `Targeted replacement source "${replacer.id}" cannot claim success because target "${target.id}" `
+        + "was removed by semantic-policy deduplication before composition.",
+      );
+    }
+  }
+}
+
+function authorizedProtectedTargetedReplacement(
+  replacer: OrderedSessionInstructionSource,
+  target: OrderedSessionInstructionSource,
+  tool: SessionRenderTool,
+): boolean {
+  if (tool !== "codewith" || replacer.nonOverridable !== true) return false;
+  if (CODEWITH_PROTECTED_REPLACEMENT_TARGETS.get(replacer.id) !== target.id) return false;
+  const providers = (replacer.targetProviders ?? []).map((provider) => provider.trim().toLowerCase());
+  if (providers.length !== 1 || providers[0] !== "codewith") return false;
+  const replacerAuthority = replacer[IDENTITY_EXPORT_AUTHORITY];
+  const targetAuthority = target[IDENTITY_EXPORT_AUTHORITY];
+  return replacerAuthority !== undefined
+    && targetAuthority !== undefined
+    && replacerAuthority.token === targetAuthority.token
+    && replacerAuthority.shape === "canonical-open-identities"
+    && targetAuthority.shape === "canonical-open-identities"
+    && replacerAuthority.packageName !== null
+    && replacerAuthority.packageName === targetAuthority.packageName;
+}
+
+function composeBroadReplaceSources(
+  sources: OrderedSessionInstructionSource[],
+): { sources: OrderedSessionInstructionSource[]; skipped: SessionSkippedSource[] } {
+  let start = -1;
+  for (let i = 0; i < sources.length; i++) {
+    if (sources[i]!.resolvedMerge === "replace") start = i;
+  }
+  if (start < 0) return { sources, skipped: [] };
+  const earlier = sources.slice(0, start);
+  const protectedSources = earlier.filter((source) => source.nonOverridable);
+  // The second silent-drop path, and it is the same defect as the collapse above: a
+  // replace-merge source legitimately discards every earlier overridable layer, and said
+  // nothing about it. Non-overridable sources survive and are not reported, because
+  // nothing was lost.
+  const replacer = sources[start]!;
+  const skipped = earlier
+    .filter((source) => !source.nonOverridable)
+    .map((source) => skippedSource(
+      source,
+      `superseded by "${replacer.id}": a replace-merge source discards earlier overridable instruction layers`,
+    ));
+  return { sources: [...protectedSources, ...sources.slice(start)], skipped };
+}
+
+function composeSources(
+  sources: OrderedSessionInstructionSource[],
+  tool: SessionRenderTool,
+): { sources: OrderedSessionInstructionSource[]; skipped: SessionSkippedSource[] } {
+  const hasTargetedReplacement = sources.some((source) => source.replacementScope !== undefined);
+  if (!hasTargetedReplacement) return composeBroadReplaceSources(sources);
+
+  const selected: OrderedSessionInstructionSource[] = [];
+  const skipped: SessionSkippedSource[] = [];
+  for (const source of sources) {
+    const targetNormalizedId = targetedReplacementTarget(source);
+    if (targetNormalizedId !== null) {
+      const targetIndex = selected.findIndex((candidate) => candidate.normalizedId === targetNormalizedId);
+      if (targetIndex < 0) {
+        throw new Error(
+          `Targeted replacement source "${source.id}" cannot replace "${targetNormalizedId}": `
+          + "the earlier target was already removed.",
+        );
+      }
+      const target = selected[targetIndex]!;
+      const protectedReplacement = target.nonOverridable === true;
+      if (protectedReplacement && !authorizedProtectedTargetedReplacement(source, target, tool)) {
+        throw new Error(
+          `Targeted replacement source "${source.id}" cannot replace non-overridable source "${target.id}".`,
+        );
+      }
+      selected.splice(targetIndex, 1);
+      skipped.push(skippedSource(
+        target,
+        `superseded by "${source.id}": targeted replacement ${source.replacementScope} `
+        + `removed exactly source "${target.id}"`,
+      ));
+      selected.push({
+        ...source,
+        provenance: {
+          ...(source.provenance ?? {}),
+          targetedReplacement: {
+            scope: source.replacementScope,
+            targetSourceId: target.id,
+            targetNormalizedSourceId: target.normalizedId,
+            targetHash: target.hash ?? null,
+            targetRenderedPayloadSha256: sha256(target.content),
+            targetNonOverridable: protectedReplacement,
+            authority: protectedReplacement
+              ? "canonical-identity-export/codewith-provider/v1"
+              : "overridable-source/v1",
+          },
+        },
+      });
+      continue;
+    }
+
+    if (source.resolvedMerge === "replace") {
+      const retained = selected.filter((candidate) => candidate.nonOverridable);
+      for (const candidate of selected) {
+        if (candidate.nonOverridable) continue;
+        skipped.push(skippedSource(
+          candidate,
+          `superseded by "${source.id}": a replace-merge source discards earlier overridable instruction layers`,
+        ));
+      }
+      selected.length = 0;
+      selected.push(...retained, source);
+      continue;
+    }
+
+    selected.push(source);
+  }
+  return { sources: selected, skipped };
+}
+
+function sectionForSource(source: OrderedSessionInstructionSource): string {
+  const parts = [
+    `<!-- ${SESSION_RENDER_MANAGED_MARKER}. Do not edit this generated file directly. -->`,
+    `# ${source.resolvedLabel}`,
+  ];
+  if (source.path) parts.push(`Source: ${source.path}`);
+  if (source.sourcePaths && source.sourcePaths.length > 0) {
+    parts.push([
+      "Source paths:",
+      ...source.sourcePaths.map((sourcePath) => {
+        const flags = [
+          sourcePath.editable ? "editable" : null,
+          sourcePath.required ? "required" : null,
+          sourcePath.hash ? sourcePath.hash : null,
+        ].filter(Boolean);
+        return `- ${sourcePath.path}${flags.length > 0 ? ` (${flags.join(", ")})` : ""}`;
+      }),
+    ].join("\n"));
+  }
+  if (source.owner) parts.push(`Owner: ${source.owner.kind}:${source.owner.id}`);
+  const content = source.content.trim();
+  if (content) parts.push(content);
+  return parts.join("\n\n");
+}
+
+function sectionForRule(source: OrderedSessionInstructionSource, rule: OrderedSessionInstructionRule): string {
+  const parts = [
+    `<!-- ${SESSION_RENDER_MANAGED_MARKER}. Do not edit this generated file directly. -->`,
+    `# ${rule.resolvedLabel}`,
+  ];
+  if (source.path) parts.push(`Source: ${source.path}`);
+  if (rule.path) parts.push(`Rule path: ${rule.path}`);
+  const content = rule.content.trim();
+  if (content) parts.push(content);
+  return parts.join("\n\n");
+}
+
+function fragmentPath(adapter: SessionToolAdapter, index: number, source: OrderedSessionInstructionSource): string {
+  const n = String(index + 1).padStart(2, "0");
+  return posix.join(adapter.managedDir, `${n}-${source.normalizedId}.md`);
+}
+
+function ruleFragmentPath(
+  adapter: SessionToolAdapter,
+  source: OrderedSessionInstructionSource,
+  rule: OrderedSessionInstructionRule,
+): string {
+  return posix.join(adapter.managedDir, "rules", source.normalizedId, rule.resolvedPath);
+}
+
+function importPath(indexRelativePath: string, fragmentRelativePath: string): string {
+  const relative = posix.relative(posix.dirname(indexRelativePath), fragmentRelativePath);
+  if (relative.startsWith("./") || relative.startsWith("../")) return relative;
+  return `./${relative}`;
+}
+
+function indexHeader(tool: SessionRenderTool, profile: string): string {
+  return [
+    `<!-- ${SESSION_RENDER_MANAGED_MARKER}. Do not edit this generated file directly. -->`,
+    `# ${tool} session instructions`,
+    "",
+    `Profile: ${profile}`,
+  ].join("\n");
+}
+
+function buildNativeImportFiles(
+  targetHome: string,
+  adapter: SessionToolAdapter,
+  profile: string,
+  sources: OrderedSessionInstructionSource[],
+): SessionRenderFile[] {
+  const indexFile = adapter.indexFile!;
+  const fragments = sources.flatMap((source, index) => [
+    makeFile(targetHome, fragmentPath(adapter, index, source), "fragment", sectionForSource(source), [source.id]),
+    ...source.resolvedRules.map((rule) =>
+      makeFile(targetHome, ruleFragmentPath(adapter, source, rule), "rule", sectionForRule(source, rule), [source.id, rule.id])
+    ),
+  ]);
+  const imports = fragments.map((file) => `@${importPath(indexFile, file.relativePath)}`);
+  const index = makeFile(
+    targetHome,
+    indexFile,
+    "index",
+    [indexHeader(adapter.tool, profile), ...imports].join("\n"),
+    sources.map((source) => source.id),
+  );
+  return [index, ...fragments];
+}
+
+function buildFlattenedMarkdownFiles(
+  targetHome: string,
+  adapter: SessionToolAdapter,
+  profile: string,
+  sources: OrderedSessionInstructionSource[],
+): SessionRenderFile[] {
+  const content = [
+    indexHeader(adapter.tool, profile),
+    ...sources.flatMap((source) => [
+      sectionForSource(source),
+      ...source.resolvedRules.map((rule) => sectionForRule(source, rule)),
+    ]),
+  ].join("\n\n");
+  return [
+    makeFile(targetHome, adapter.indexFile!, "index", content, [
+      ...sources.map((source) => source.id),
+      ...sources.flatMap((source) => source.resolvedRules.map((rule) => rule.id)),
+    ]),
+  ];
+}
+
+function buildCursorRuleFiles(
+  targetHome: string,
+  adapter: SessionToolAdapter,
+  sources: OrderedSessionInstructionSource[],
+): SessionRenderFile[] {
+  return sources.flatMap((source, index) => {
+    const n = String(index + 1).padStart(2, "0");
+    const stem = `${n}-${source.normalizedId}`;
+    const relativePath = posix.join(adapter.managedDir, `${stem}.mdc`);
+    const compiledBinding = source.provenance?.["profileBinding"];
+    const activation = compiledBinding && typeof compiledBinding === "object"
+      ? source.metadata?.["activation"] as { mode?: string; description?: string } | undefined
+      : undefined;
+    const description = activation?.description ?? `${source.resolvedLabel} (${source.resolvedLayer})`;
+    const sourceGlobs = source.globs && source.globs.length > 0 ? source.globs : ["**/*"];
+    const alwaysApply = activation?.mode !== "glob";
+    const content = [
+      "---",
+      `description: ${yamlQuote(description)}`,
+      `globs: ${JSON.stringify(sourceGlobs)}`,
+      `alwaysApply: ${alwaysApply}`,
+      "---",
+      "",
+      `<!-- ${SESSION_RENDER_MANAGED_MARKER}. Do not edit this generated file directly. -->`,
+      "",
+      source.content.trim(),
+    ].join("\n");
+    const sourceFile = makeFile(targetHome, relativePath, "rule", content, [source.id]);
+    const ruleFiles = source.resolvedRules.map((rule) => {
+      const ruleStem = `${n}-${source.normalizedId}-${rule.normalizedId}`;
+      const ruleRelativePath = posix.join(adapter.managedDir, `${ruleStem}.mdc`);
+      const ruleDescription = `${rule.resolvedLabel} (${source.resolvedLayer})`;
+      const ruleContent = [
+        "---",
+        `description: ${yamlQuote(ruleDescription)}`,
+        `globs: ${JSON.stringify(rule.globs && rule.globs.length > 0 ? rule.globs : ["**/*"])}`,
+        "alwaysApply: true",
+        "---",
+        "",
+        `<!-- ${SESSION_RENDER_MANAGED_MARKER}. Do not edit this generated file directly. -->`,
+        "",
+        rule.content.trim(),
+      ].join("\n");
+      return makeFile(targetHome, ruleRelativePath, "rule", ruleContent, [source.id, rule.id]);
+    });
+    return [sourceFile, ...ruleFiles];
+  });
+}
+
+function buildOpenCodeFiles(
+  targetHome: string,
+  adapter: SessionToolAdapter,
+  profile: string,
+  sources: OrderedSessionInstructionSource[],
+  providerConfig?: SessionProviderConfig,
+): SessionRenderFile[] {
+  const surface = adapter.providerSurface ?? "legacy-dual";
+  const fragments = sources.flatMap((source, index) => [
+    makeFile(targetHome, fragmentPath(adapter, index, source), "fragment", sectionForSource(source), [source.id]),
+    ...source.resolvedRules.map((rule) =>
+      makeFile(targetHome, ruleFragmentPath(adapter, source, rule), "rule", sectionForRule(source, rule), [source.id, rule.id])
+    ),
+  ]);
+  const flattenedIndex = makeFile(
+    targetHome,
+    adapter.indexFile!,
+    "index",
+    [
+      indexHeader(adapter.tool, profile),
+      ...sources.flatMap((source) => [
+        sectionForSource(source),
+        ...source.resolvedRules.map((rule) => sectionForRule(source, rule)),
+      ]),
+    ].join("\n\n"),
+    [
+      ...sources.map((source) => source.id),
+      ...sources.flatMap((source) => source.resolvedRules.map((rule) => rule.id)),
+    ],
+  );
+  const existingConfigPath = joinTarget(targetHome, adapter.configFile!);
+  const selectedConfig = existsSync(existingConfigPath)
+    ? readOpenCodeConfig(readFileSync(existingConfigPath, "utf8"), existingConfigPath)
+    : providerConfig
+      ? readOpenCodeConfig(providerConfig.content, providerConfig.sourceId)
+      : {};
+  const preservedInstructions = normalizeOpenCodeInstructions(selectedConfig["instructions"])
+    .filter((path) => !pathIsManagedOpenCodeInstruction(path, adapter.managedDir));
+  const config = {
+    ...selectedConfig,
+    $schema: typeof selectedConfig["$schema"] === "string"
+      ? selectedConfig["$schema"]
+      : "https://opencode.ai/config.json",
+    instructions: [
+      ...preservedInstructions,
+      ...fragments.map((file) => file.relativePath),
+    ],
+  };
+  const configSourceIds = [
+    ...sources.map((source) => source.id),
+    ...(providerConfig ? [providerConfig.sourceId] : []),
+  ];
+  const configFile = makeFile(targetHome, adapter.configFile!, "config", JSON.stringify(config, null, 2), configSourceIds);
+  if (surface === "opencode-config-instructions") return [configFile, ...fragments];
+  if (surface === "opencode-agents-md") {
+    const agentsOnlyConfig = {
+      ...config,
+      instructions: preservedInstructions,
+    };
+    return [
+      flattenedIndex,
+      makeFile(targetHome, adapter.configFile!, "config", JSON.stringify(agentsOnlyConfig, null, 2), configSourceIds),
+      // This non-provider-loaded marker keeps the managed namespace explicit
+      // during a v1 -> v2 transition. It lets the existing silent-wipe guard
+      // distinguish an intentional surface replacement from an empty render
+      // without duplicating any instruction payload.
+      makeFile(
+        targetHome,
+        posix.join(adapter.managedDir, "opencode-v2-surface.json"),
+        "config",
+        JSON.stringify({ schema: "hasna.instructions.opencode-surface/v1", surface }, null, 2),
+        [],
+      ),
+    ];
+  }
+  return [flattenedIndex, configFile, ...fragments];
+}
+
+function readOpenCodeConfig(content: string, source: string): Record<string, unknown> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    throw new Error(`OpenCode config ${source} is not valid JSON.`);
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`OpenCode config ${source} must contain a JSON object.`);
+  }
+  return parsed as Record<string, unknown>;
+}
+
+function normalizeOpenCodeInstructions(value: unknown): string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string")) {
+    throw new Error("OpenCode config instructions must be an array of strings.");
+  }
+  return value as string[];
+}
+
+function pathIsManagedOpenCodeInstruction(path: string, managedDir: string): boolean {
+  const normalized = posix.normalize(path.replaceAll("\\", "/")).replace(/^\.\//, "");
+  return normalized === managedDir || normalized.startsWith(`${managedDir}/`);
+}
+
+function buildAntigravityRuleFiles(
+  targetHome: string,
+  adapter: SessionToolAdapter,
+  sources: OrderedSessionInstructionSource[],
+): SessionRenderFile[] {
+  return sources.flatMap((source, index) => {
+    const n = String(index + 1).padStart(2, "0");
+    const sourcePath = posix.join(adapter.managedDir, `${n}-${source.normalizedId}.md`);
+    const sourceFile = makeAntigravityRuleFile(targetHome, sourcePath, sectionForSource(source), [source.id]);
+    const ruleFiles = source.resolvedRules.map((rule) => {
+      const rulePath = posix.join(adapter.managedDir, `${n}-${source.normalizedId}-${rule.resolvedPath}`);
+      return makeAntigravityRuleFile(targetHome, rulePath, sectionForRule(source, rule), [source.id, rule.id]);
+    });
+    return [sourceFile, ...ruleFiles];
+  });
+}
+
+function buildProviderRuleFiles(
+  targetHome: string,
+  adapter: SessionToolAdapter,
+  sources: OrderedSessionInstructionSource[],
+): SessionRenderFile[] {
+  const extension = adapter.ruleExtension ?? ".md";
+  return sources.flatMap((source, index) => {
+    const n = String(index + 1).padStart(2, "0");
+    const sourcePath = posix.join(adapter.managedDir, `${n}-${source.normalizedId}${extension}`);
+    const sourceFile = makeFile(targetHome, sourcePath, "rule", providerRuleContent(adapter, source, sectionForSource(source)), [source.id]);
+    const ruleFiles = source.resolvedRules.map((rule) => {
+      const stem = rule.resolvedPath.replace(/\.(md|instructions\.md)$/i, "");
+      const rulePath = posix.join(adapter.managedDir, `${n}-${source.normalizedId}-${stem}${extension}`);
+      return makeFile(targetHome, rulePath, "rule", providerRuleContent(adapter, source, sectionForRule(source, rule), rule.globs), [source.id, rule.id]);
+    });
+    return [sourceFile, ...ruleFiles];
+  });
+}
+
+function providerRuleContent(
+  adapter: SessionToolAdapter,
+  source: OrderedSessionInstructionSource,
+  content: string,
+  ruleGlobs?: string[],
+): string {
+  const activation = source.metadata?.["activation"] as { mode?: string; globs?: string[]; models?: string[]; description?: string } | undefined;
+  const globs = ruleGlobs?.length ? ruleGlobs : activation?.globs;
+  if (adapter.tool === "copilot") {
+    return globs?.length
+      ? ["---", `applyTo: ${yamlQuote(globs.join(","))}`, "---", "", content].join("\n")
+      : content;
+  }
+  if (adapter.tool === "devin" || adapter.tool === "windsurf-legacy") {
+    const mode = activation?.mode === "glob"
+      ? "glob"
+      : activation?.mode === "model"
+        ? "model_decision"
+        : activation?.mode === "manual"
+          ? "manual"
+          : "always_on";
+    const frontmatter = ["---", `activation: ${mode}`];
+    if (globs?.length) frontmatter.push(`globs: ${JSON.stringify(globs)}`);
+    if (activation?.description) frontmatter.push(`description: ${yamlQuote(activation.description)}`);
+    return [...frontmatter, "---", "", content].join("\n");
+  }
+  return content;
+}
+
+function makeAntigravityRuleFile(
+  targetHome: string,
+  relativePath: string,
+  content: string,
+  sourceIds: string[],
+): SessionRenderFile {
+  const file = makeFile(targetHome, relativePath, "rule", content, sourceIds);
+  if (file.content.length > ANTIGRAVITY_RULE_FILE_CHAR_LIMIT) {
+    throw new Error(
+      `Antigravity rule file ${file.relativePath} is ${file.content.length} characters; split it before rendering because Antigravity limits rule files to ${ANTIGRAVITY_RULE_FILE_CHAR_LIMIT} characters.`
+    );
+  }
+  return file;
+}
+
+function buildFiles(
+  targetHome: string,
+  adapter: SessionToolAdapter,
+  profile: string,
+  sources: OrderedSessionInstructionSource[],
+  providerConfig?: SessionProviderConfig,
+): SessionRenderFile[] {
+  switch (adapter.mode) {
+    case "native-imports":
+      return buildNativeImportFiles(targetHome, adapter, profile, sources);
+    case "flattened-markdown":
+      return buildFlattenedMarkdownFiles(targetHome, adapter, profile, sources);
+    case "cursor-mdc":
+      return buildCursorRuleFiles(targetHome, adapter, sources);
+    case "opencode-instructions":
+      return buildOpenCodeFiles(targetHome, adapter, profile, sources, providerConfig);
+    case "antigravity-rules":
+      return buildAntigravityRuleFiles(targetHome, adapter, sources);
+    case "provider-rules":
+      return buildProviderRuleFiles(targetHome, adapter, sources);
+  }
+}
+
+function buildAssetFiles(input: SessionRenderInput, targetHome: string, blocked: boolean): SessionRenderFile[] {
+  const plan = input.assetPlan;
+  if (!plan || blocked) return [];
+  if (plan.provider !== input.tool) throw new Error(`Asset plan provider ${plan.provider} cannot render with ${input.tool}.`);
+  return plan.assets.filter((item) => item.action === "write").map((item) => {
+    if (item.destination.strategy !== "emit-file") throw new Error(`Asset ${item.assetKey} has write action without emit-file strategy.`);
+    const content = input.assetContents?.[item.sourceConfigId];
+    if (content === undefined) throw new Error(`Asset ${item.assetKey} is missing its pinned source bytes.`);
+    if (configAssetDigest(content) !== item.source.digest) throw new Error(`Asset ${item.assetKey} bytes no longer match its validated digest.`);
+    const path = resolveAssetDestination(item, {
+      targetHome,
+      ...(input.projectRoot ? { projectRoot: resolveSessionPath(input.projectRoot) } : {}),
+    });
+    const relativePath = relative(targetHome, path).replaceAll("\\", "/");
+    if (!relativePath || relativePath === ".." || relativePath.startsWith("../") || isAbsolute(relativePath)) {
+      throw new Error(`Asset ${item.assetKey} is outside the session snapshot root; use a project-scoped session plan for atomic application.`);
+    }
+    return {
+      path,
+      relativePath: assertSafeRelativePath(relativePath),
+      role: "asset" as const,
+      content,
+      sha256: sha256(content),
+      sourceIds: [item.sourceConfigId, item.assetId],
+    };
+  });
+}
+
+function adapterFor(input: SessionRenderInput): SessionToolAdapter {
+  if (input.tool === "opencode" && input.providerSurface) {
+    if (input.providerSurface !== "opencode-config-instructions" && input.providerSurface !== "opencode-agents-md") {
+      throw new Error(`Provider surface ${input.providerSurface} is not valid for OpenCode.`);
+    }
+    return Object.freeze({
+      ...SESSION_TOOL_ADAPTERS.opencode,
+      providerSurface: input.providerSurface,
+      description: input.providerSurface === "opencode-config-instructions"
+        ? "OpenCode v1 instructions loaded exactly once through opencode.json managed fragments."
+        : "OpenCode v2 instructions loaded exactly once through flattened AGENTS.md.",
+    });
+  }
+  if (input.tool === "copilot" && input.providerSurface) {
+    if (input.providerSurface === "copilot-repository-instructions") return SESSION_TOOL_ADAPTERS.copilot;
+    if (input.providerSurface === "copilot-path-instructions") {
+      return Object.freeze({
+        ...SESSION_TOOL_ADAPTERS.copilot,
+        mode: "provider-rules",
+        indexFile: undefined,
+        ruleExtension: ".instructions.md",
+        providerSurface: input.providerSurface,
+        description: "GitHub Copilot path-specific instructions in .github/instructions/*.instructions.md.",
+      });
+    }
+    throw new Error(`Provider surface ${input.providerSurface} is not valid for GitHub Copilot.`);
+  }
+  if (input.providerSurface && input.tool !== "opencode" && input.tool !== "copilot") {
+    throw new Error(`Provider surface ${input.providerSurface} is not valid for ${input.tool}.`);
+  }
+  if (input.tool !== "codewith") return SESSION_TOOL_ADAPTERS[input.tool];
+  const gatedNativeImports =
+    input.codewithNativeImports === true ||
+    process.env[CODEWITH_NATIVE_IMPORTS_ENV] === "1" ||
+    process.env[CODEWITH_NATIVE_IMPORTS_ENV] === "true";
+  return gatedNativeImports ? CODEWITH_NATIVE_ADAPTER : CODEWITH_FLATTENED_ADAPTER;
+}
+
+function getHomeDir(): string {
+  return process.env["CONFIGS_HOME"] || process.env["HOME"] || homedir();
+}
+
+export function cleanSessionPathInput(path: string): string {
+  const trimmed = path.trim();
+  if (
+    trimmed.length >= 2 &&
+    ((trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+      (trimmed.startsWith("'") && trimmed.endsWith("'")))
+  ) {
+    return trimmed.slice(1, -1);
+  }
+  return trimmed;
+}
+
+export function resolveSessionPath(path: string): string {
+  const cleaned = cleanSessionPathInput(path);
+  if (!cleaned) throw new Error("Session render path cannot be empty.");
+  const home = getHomeDir();
+  if (cleaned === "~") return resolve(home);
+  if (cleaned.startsWith("~/")) return resolve(home, cleaned.slice(2));
+  if (cleaned === "{{HOME}}" || cleaned === "${HOME}") return resolve(home);
+  if (cleaned.startsWith("{{HOME}}/")) return resolve(home, cleaned.slice("{{HOME}}/".length));
+  if (cleaned.startsWith("${HOME}/")) return resolve(home, cleaned.slice("${HOME}/".length));
+  return resolve(cleaned);
+}
+
+function assertSafeRelativePath(relativePath: string): string {
+  if (!relativePath.trim()) throw new Error("Session render relative path cannot be empty.");
+  if (relativePath.includes("\\")) throw new Error(`Session render relative path must use POSIX separators: ${relativePath}`);
+  const normalized = posix.normalize(relativePath);
+  if (normalized === "." || posix.isAbsolute(normalized) || normalized === ".." || normalized.startsWith("../")) {
+    throw new Error(`Session render relative path escapes target root: ${relativePath}`);
+  }
+  return normalized;
+}
+
+function assertSafeTargetRoot(targetHome: string): string {
+  if (!isAbsolute(targetHome)) throw new Error(`Session render target must be an absolute path: ${targetHome}`);
+  const normalized = resolve(targetHome);
+  if (normalized === parse(normalized).root) {
+    throw new Error(`Session render target cannot be the filesystem root: ${targetHome}`);
+  }
+  return normalized;
+}
+
+function resolveRenderTarget(input: SessionRenderInput): {
+  targetHome: string;
+  targetKind: SessionRenderTargetKind;
+  blockers: string[];
+} {
+  const adapter = SESSION_TOOL_ADAPTERS[input.tool];
+  if (adapter.projectScoped) {
+    if (!input.projectRoot) {
+      const label = input.tool === "cursor"
+        ? "Cursor rules"
+        : input.tool === "antigravity"
+          ? "Antigravity rules"
+          : `${adapter.description.split(".")[0]} files`;
+      const path = input.tool === "cursor"
+        ? ".cursor/rules files"
+        : input.tool === "antigravity"
+          ? ".agents/rules files"
+          : adapter.indexFile ?? `${adapter.managedDir} files`;
+      return {
+        targetHome: defaultTargetHome(input.tool, input.profile, input.sessionId),
+        targetKind: "blocked",
+        blockers: [
+          `${label} are project-scoped; pass --project-root (or projectRoot) before applying ${path}. --target-home is not treated as a repository root for ${input.tool}.`,
+        ],
+      };
+    }
+    return {
+      targetHome: resolveSessionPath(input.projectRoot),
+      targetKind: "project-root",
+      blockers: [],
+    };
+  }
+
+  return {
+    targetHome: input.targetHome
+      ? resolveSessionPath(input.targetHome)
+      : defaultTargetHome(input.tool, input.profile, input.sessionId),
+    targetKind: "session-home",
+    blockers: [],
+  };
+}
+
+export function resolveSessionTargetOwnership(input: Pick<SessionRenderInput, "tool" | "profile" | "projectRoot">, target: {
+  targetHome: string;
+  targetKind: SessionRenderTargetKind;
+}): SessionTargetOwner {
+  if (target.targetKind === "blocked") {
+    return {
+      kind: "blocked",
+      tool: input.tool,
+      profile: input.profile,
+      targetHome: target.targetHome,
+      projectRoot: input.projectRoot ? resolveSessionPath(input.projectRoot) : null,
+      ownedBy: "open-configs",
+      canonicalOwner: "instructions",
+      writer: {
+        id: SESSION_RENDERER_OWNER_ID,
+        canonical: true,
+        legacyAliases: ["open-configs"],
+        scope: input.tool === "opencode" ? "managed-instruction-fields" : "managed-provider-files",
+      },
+      reason: "target resolution blocked before provider files can be owned",
+    };
+  }
+  if (target.targetKind === "project-root") {
+    return {
+      kind: "project",
+      tool: input.tool,
+      profile: input.profile,
+      targetHome: target.targetHome,
+      projectRoot: target.targetHome,
+      ownedBy: "open-configs",
+      canonicalOwner: "instructions",
+      writer: {
+        id: SESSION_RENDERER_OWNER_ID,
+        canonical: true,
+        legacyAliases: ["open-configs"],
+        scope: input.tool === "opencode" ? "managed-instruction-fields" : "managed-provider-files",
+      },
+      reason: "project-scoped provider files are generated in the explicit repository root",
+    };
+  }
+  return {
+    kind: "provider-profile",
+    tool: input.tool,
+    profile: input.profile,
+    targetHome: target.targetHome,
+    projectRoot: null,
+    ownedBy: "open-configs",
+    canonicalOwner: "instructions",
+    writer: {
+      id: SESSION_RENDERER_OWNER_ID,
+      canonical: true,
+      legacyAliases: ["open-configs"],
+      scope: input.tool === "opencode" ? "managed-instruction-fields" : "managed-provider-files",
+    },
+    reason: "profile-scoped provider home is generated by Instructions from identity/config sources",
+  };
+}
+
+export function planSessionRender(input: SessionRenderInput): SessionRenderPlan {
+  if (!SESSION_RENDER_TOOLS.includes(input.tool)) throw new Error(`Unsupported session render tool: ${input.tool}`);
+  if (!input.profile.trim()) throw new Error("Session render profile is required.");
+
+  const adapter = adapterFor(input);
+  const {
+    targetHome,
+    targetKind,
+    blockers: targetBlockers,
+  } = resolveRenderTarget(input);
+  const authorityObservations = input.tool === "cursor" && targetKind !== "blocked"
+    ? [observeCursorGlobalAuthority({ home: input.cursorAuthorityHome })]
+    : [];
+  const authorityConflicts = input.tool === "cursor" && targetKind !== "blocked"
+    ? detectCursorAuthorityConflicts(authorityObservations[0])
+    : [];
+  const blockers = [
+    ...targetBlockers,
+    ...authorityConflicts.map((conflict) => `${conflict.relativePath}: ${conflict.reason}`),
+  ];
+  const targetOwner = resolveSessionTargetOwnership(input, { targetHome, targetKind });
+  const blocked = blockers.length > 0;
+  const allowEmptySources = input.allowEmptySources === true;
+  const normalized = normalizeSources(input.sources, input.tool, allowEmptySources);
+  const composed = composeSources(normalized.sources, input.tool);
+  const orderedSources = composed.sources;
+  // Caller-supplied entries first (provider filtering, done before the render was even
+  // asked for), then everything this render discarded itself.
+  const skippedSources: SessionSkippedSource[] = [
+    ...(input.skippedSources ?? []),
+    ...normalized.skipped,
+    ...composed.skipped,
+  ];
+  if (orderedSources.length === 0 && !allowEmptySources) {
+    throw new Error("Session render has no instruction sources. Pass --allow-empty-sources only for explicit empty renders.");
+  }
+  const generatedAt = input.generatedAt ?? new Date().toISOString();
+  const env = adapter.envVar && !blocked ? { [adapter.envVar]: targetHome } : {};
+  const warnings = [
+    ...(orderedSources.length === 0 ? ["No instruction sources were provided."] : []),
+    ...blockers,
+    // `skippedSources` is the structured surface an automated consumer reads; `warnings`
+    // is what the human CLI output prints. A discarded source has to reach both, or the
+    // operator running the command by hand stays exactly as blind as before.
+    ...skippedSources.map((entry) => `Instruction source "${entry.id}" was not rendered: ${entry.reason}`),
+  ];
+  if (input.providerConfig && input.tool !== "opencode") {
+    throw new Error("Provider base config is supported only for OpenCode session renders.");
+  }
+  const baseFiles = blocked ? [] : buildFiles(targetHome, adapter, input.profile, orderedSources, input.providerConfig);
+  const projectContext = blocked
+    ? null
+    : composeProjectContextSessionRender({
+      tool: input.tool,
+      adapter_mode: adapter.mode,
+      target_home: targetHome,
+      project_root: input.projectRoot,
+      files: baseFiles,
+    });
+  const projectContextGuard = blocked
+    ? null
+    : projectContext?.guard ?? observeProjectContextSessionGuard({
+      tool: input.tool,
+      target_home: targetHome,
+      project_root: input.projectRoot,
+    });
+  if (projectContext && orderedSources.some((source) => source.id === projectContext.source.id)) {
+    throw new Error(`Session source ${projectContext.source.id} is reserved for the durable Instructions project-context renderer.`);
+  }
+  const files = projectContext?.files ?? baseFiles;
+  const assetFiles = buildAssetFiles(input, targetHome, blocked);
+  rejectDuplicateRenderPaths([...files, ...assetFiles]);
+
+  const manifest: SessionRenderManifest = {
+    schema: SESSION_RENDER_SCHEMA,
+    tool: input.tool,
+    adapterMode: adapter.mode,
+    profile: input.profile,
+    sessionId: input.sessionId ?? null,
+    targetHome,
+    targetKind,
+    targetOwner,
+    writable: !blocked,
+    blocked,
+    blockers,
+    authorityObservations,
+    authorityConflicts,
+    generatedAt,
+    env,
+    sourceHash: fingerprint(projectContext
+      ? {
+        sources: orderedSources.map(sourceFingerprint),
+        providerSurface: input.providerSurface ?? null,
+        providerConfig: input.providerConfig
+          ? { sourceId: input.providerConfig.sourceId, content: input.providerConfig.content }
+          : null,
+        projectContext: projectContext.project_context,
+        assetPlanDigest: input.assetPlan?.planDigest ?? null,
+      }
+      : {
+        sources: orderedSources.map(sourceFingerprint),
+        providerSurface: input.providerSurface ?? null,
+        providerConfig: input.providerConfig
+          ? { sourceId: input.providerConfig.sourceId, content: input.providerConfig.content }
+          : null,
+        assetPlanDigest: input.assetPlan?.planDigest ?? null,
+      }),
+    sources: [
+      ...orderedSources.map((source) => ({
+        id: source.id,
+        label: source.resolvedLabel,
+        layer: source.resolvedLayer,
+        merge: source.resolvedMerge,
+        order: source.resolvedOrder,
+        path: source.path ?? null,
+        targetProviders: source.targetProviders ?? [],
+        owner: source.owner ?? null,
+        sourcePaths: source.sourcePaths ?? [],
+        hash: source.hash ?? null,
+        nonOverridable: source.nonOverridable === true,
+        replacementScope: source.replacementScope ?? null,
+        rules: source.resolvedRules.map((rule) => ({
+          id: rule.id,
+          label: rule.resolvedLabel,
+          path: rule.resolvedPath,
+          globs: rule.globs ?? [],
+          hash: rule.hash ?? null,
+          ...ruleAttestation(rule),
+        })),
+        renderedPayloadSha256: sha256(source.content),
+        provenance: source.provenance ?? null,
+        metadata: source.metadata ?? null,
+      })),
+      ...(projectContext ? [projectContext.source] : []),
+    ],
+    skippedSources,
+    files: [...files, ...assetFiles].map((file) => ({
+      path: file.path,
+      relativePath: file.relativePath,
+      role: file.role,
+      sha256: file.sha256,
+      sourceIds: file.sourceIds,
+    })),
+    warnings,
+    ...(input.assetPlan
+      ? {
+        assetPlan: {
+          schema: input.assetPlan.schema,
+          planDigest: input.assetPlan.planDigest,
+          profileId: input.assetPlan.profileId,
+          providerVersion: input.assetPlan.providerVersion,
+          surface: input.assetPlan.surface,
+          scope: input.assetPlan.scope,
+          assets: input.assetPlan.assets.map((item) => ({
+            assetId: item.assetId,
+            assetKey: item.assetKey,
+            kind: item.kind,
+            action: item.action,
+            mutationMode: item.mutationMode,
+            destination: item.destination,
+            digest: item.source.digest,
+            exactOnceKey: item.exactOnceKey,
+          })),
+        },
+      }
+      : {}),
+    ...(input.providerConfig
+      ? {
+        providerConfig: {
+          sourceId: input.providerConfig.sourceId,
+          selectedPayloadSha256: sha256(input.providerConfig.content),
+          renderedPayloadSha256: files.find((file) => file.relativePath === adapter.configFile)?.sha256
+            ?? sha256(input.providerConfig.content),
+          selected: !existsSync(joinTarget(targetHome, adapter.configFile!)),
+        },
+      }
+      : {}),
+    ...(projectContext
+      ? {
+        projectContext: projectContext.project_context,
+        compatibility: projectContext.compatibility,
+      }
+      : {}),
+  };
+  const manifestFile = makeFile(
+    targetHome,
+    posix.join(".hasna", "session-render-manifest.json"),
+    "manifest",
+    JSON.stringify(manifest, null, 2),
+    orderedSources.map((source) => source.id),
+  );
+  // The manifest is checked alongside the entrypoints because it is allowlisted at the same
+  // raised bound and grows with the same corpus — a render that only guards the entrypoint
+  // moves the identical wedge onto the manifest and calls the job done.
+  const managedOutputs = [...files, ...assetFiles, manifestFile];
+  rejectOversizedManagedOutputs(managedOutputs);
+  warnings.push(...managedOutputHeadroomWarnings(managedOutputs));
+
+  return {
+    dryRun: true,
+    tool: input.tool,
+    adapter,
+    profile: input.profile,
+    sessionId: input.sessionId ?? null,
+    targetHome,
+    targetKind,
+    targetOwner,
+    writable: !blocked,
+    blocked,
+    blockers,
+    authorityObservations,
+    authorityConflicts,
+    allowEmptySources,
+    env,
+    files,
+    ...(input.assetPlan ? { assetPlan: input.assetPlan } : {}),
+    assetFiles,
+    manifest,
+    manifestFile,
+    allFiles: [...files, ...assetFiles, manifestFile],
+    warnings,
+    ...(projectContextGuard ? { projectContextGuard } : {}),
+  };
+}
+
+export function sourceFromFilePath(path: string, content: string, order = 0): SessionInstructionSource {
+  const file = basename(path);
+  return {
+    id: file.replace(extname(file), ""),
+    label: file,
+    content,
+    layer: "agent",
+    order,
+    path,
+  };
+}
+
+export function sourceFromConfig(
+  config: Pick<Config, "slug" | "name" | "content" | "agent" | "target_path">,
+  order = 0,
+  layer?: SessionInstructionLayer,
+): SessionInstructionSource {
+  const isAgentOperatingRules = config.slug === GLOBAL_AGENT_RULES_STANDARD_SLUG;
+  const isNonOverridableManagedPolicy = isAgentOperatingRules
+    || config.slug === CODEWITH_SHARED_TODOS_STORAGE_STANDARD_SLUG;
+  // Stored content is authoritative once it declares a current rules version; the
+  // embedded baseline only backstops an empty, unversioned, or strictly older record.
+  const rules = isAgentOperatingRules ? resolveAgentOperatingRulesPayload(config.content) : null;
+  return {
+    id: config.slug,
+    label: config.name,
+    content: rules ? rules.content : config.content,
+    layer: layer ?? (config.agent === "global" ? "global" : "agent"),
+    order,
+    path: config.target_path ?? undefined,
+    provenance: rules
+      ? {
+        ...rules.provenance,
+        configSlug: config.slug,
+        configAgent: config.agent,
+      }
+      : {
+        source: "open-configs",
+        configSlug: config.slug,
+        configAgent: config.agent,
+      },
+    metadata: rules ? { ...rules.metadata } : null,
+    nonOverridable: isNonOverridableManagedPolicy,
+  };
+}
+
+export function selectProfileConfigsForSessionRender(
+  configs: Config[],
+  tool: SessionRenderTool,
+): SessionProfileRenderSelection {
+  const sources: Array<{ config: Config; source: SessionInstructionSource }> = [];
+  const skippedSources: SessionSkippedSource[] = [];
+  const providerConfigs: Config[] = [];
+
+  for (const config of configs) {
+    if (isRetiredOrUnsupportedConfigAgent(config.agent)) {
+      skippedSources.push(skippedProfileConfig(config, [], "retired or unsupported provider config"));
+      continue;
+    }
+    if (isOpenCodeProviderConfig(config)) {
+      if (tool === "opencode") providerConfigs.push(config);
+      else skippedSources.push(skippedProfileConfig(config, ["opencode"], "provider settings belong to OpenCode"));
+      continue;
+    }
+    if (config.category !== "rules") {
+      skippedSources.push(skippedProfileConfig(
+        config,
+        [],
+        config.kind === "reference"
+          ? "reference config is not a provider instruction source"
+          : "profile config is handled by direct config preview/apply",
+      ));
+      continue;
+    }
+
+    const output = config.outputs.find((candidate) => candidate.agent === tool);
+    if (config.agent !== "global" && config.agent !== tool && !output) {
+      skippedSources.push(skippedProfileConfig(config, [config.agent], "rule targets a different provider"));
+      continue;
+    }
+    const selectedContent = output
+      ? applyTransform(config, output, { configs })
+      : config.content;
+    sources.push({
+      config,
+      source: sourceFromConfig({ ...config, content: selectedContent }, sources.length),
+    });
+  }
+
+  const selectedSources: SessionInstructionSource[] = [];
+  const equivalentSources = new Map<string, {
+    config: Config;
+    index: number;
+    nonOverridable: boolean;
+  }>();
+  for (const candidate of sources) {
+    const key = sha256(candidate.source.content);
+    const existing = equivalentSources.get(key);
+    if (!existing) {
+      equivalentSources.set(key, {
+        config: candidate.config,
+        index: selectedSources.length,
+        nonOverridable: candidate.source.nonOverridable === true,
+      });
+      selectedSources.push(candidate.source);
+      continue;
+    }
+    const candidateIsNonOverridable = candidate.source.nonOverridable === true;
+    const replaceExisting = candidateIsNonOverridable !== existing.nonOverridable
+      ? candidateIsNonOverridable
+      : candidate.config.updated_at > existing.config.updated_at;
+    if (replaceExisting) {
+      skippedSources.push(skippedProfileConfig(existing.config, [tool], `equivalent rule superseded by ${candidate.config.slug}`));
+      selectedSources[existing.index] = {
+        ...candidate.source,
+        order: selectedSources[existing.index]!.order,
+      };
+      equivalentSources.set(key, {
+        config: candidate.config,
+        index: existing.index,
+        nonOverridable: candidateIsNonOverridable,
+      });
+    } else {
+      skippedSources.push(skippedProfileConfig(candidate.config, [tool], `equivalent rule superseded by ${existing.config.slug}`));
+    }
+  }
+
+  const providerConfig = selectProviderConfig(providerConfigs, skippedSources);
+  return {
+    sources: selectedSources,
+    skippedSources,
+    ...(providerConfig ? { providerConfig } : {}),
+  };
+}
+
+function skippedProfileConfig(
+  config: Config,
+  targetProviders: string[],
+  reason: string,
+): SessionSkippedSource {
+  return {
+    id: config.slug,
+    label: config.name,
+    targetProviders,
+    reason,
+  };
+}
+
+function isOpenCodeProviderConfig(config: Config): boolean {
+  return config.kind === "file"
+    && config.agent === "opencode"
+    && config.format === "json"
+    && basename(config.target_path ?? "") === "opencode.json";
+}
+
+function selectProviderConfig(
+  configs: Config[],
+  skippedSources: SessionSkippedSource[],
+): SessionProviderConfig | undefined {
+  if (configs.length === 0) return undefined;
+  const selected = [...configs].sort((left, right) =>
+    right.updated_at.localeCompare(left.updated_at) || left.slug.localeCompare(right.slug)
+  )[0]!;
+  for (const config of configs) {
+    if (config.id === selected.id) continue;
+    if (config.content !== selected.content) {
+      throw new Error(`Conflicting OpenCode provider configs in profile: ${selected.slug}, ${config.slug}`);
+    }
+    skippedSources.push(skippedProfileConfig(config, ["opencode"], `equivalent provider config superseded by ${selected.slug}`));
+  }
+  return {
+    sourceId: selected.slug,
+    content: selected.content,
+  };
+}
+
+export function sourcesFromIdentityExport(
+  value: unknown,
+  options: { path?: string; tool?: SessionRenderTool; orderOffset?: number } = {},
+): SessionInstructionSource[] {
+  const record = asRecord(value, "identity instruction export");
+  const shape = requireIdentityExportShape(record);
+  const authority: IdentityExportAuthority = {
+    token: {},
+    shape,
+    packageName: shape === "canonical-open-identities"
+      ? requireString(record["package"], "canonical identity export package")
+      : null,
+  };
+  const validation = asOptionalRecord(record["validation"]);
+  if (validation && validation["valid"] === false) {
+    const issues = Array.isArray(validation["issues"]) ? validation["issues"] : [];
+    throw new Error(`Identity instruction export is invalid: ${JSON.stringify(issues)}`);
+  }
+  const sources = record["sources"];
+  if (!Array.isArray(sources)) throw new Error("Identity instruction export sources must be an array.");
+  const offset = options.orderOffset ?? 0;
+  return sources
+    .map((item, index) => identitySourceToSessionSource(item, {
+      path: options.path,
+      tool: options.tool,
+      orderFallback: offset + index,
+      exportShape: shape,
+      authority,
+    }))
+    .filter((source): source is SessionInstructionSource => source !== null);
+}
+
+/**
+ * Package names a canonical identity export may be published under.
+ *
+ * `@hasna/identities` is being renamed to `@hasna/personas`. Both are accepted for the
+ * duration of the migration so that a renderer and an exporter can be upgraded
+ * independently, in either order. This matters because the render runs under
+ * `set -euo pipefail`: a renderer that rejects the name its exporter emits aborts on the
+ * first home and leaves a PARTIAL render behind, which reads far more like success than
+ * like a failure. Accepting both names removes that ordering hazard entirely.
+ *
+ * Deliberately a closed set, not a prefix or wildcard match — this guard is what stops an
+ * arbitrary payload from being rendered into every agent home, so widening it to "anything
+ * @hasna" would disarm it fleet-wide. Drop the legacy entry only once no exporter in the
+ * fleet still emits it.
+ */
+const CANONICAL_IDENTITY_EXPORT_PACKAGES: ReadonlySet<string> = new Set([
+  "@hasna/identities",
+  "@hasna/personas",
+]);
+
+function requireIdentityExportShape(record: Record<string, unknown>): IdentityExportShape {
+  if (record["contract"] === "hasna.identities.configs-instructions/v1") return "configs-contract";
+  const packageName = record["package"];
+  if (record["version"] === 1 && typeof packageName === "string" && CANONICAL_IDENTITY_EXPORT_PACKAGES.has(packageName)) {
+    return "canonical-open-identities";
+  }
+  throw new Error("Unsupported identity instruction export contract.");
+}
+
+function normalizeInstructionRules(source: SessionInstructionSource, tool: SessionRenderTool): OrderedSessionInstructionRule[] {
+  const seen = new Set<string>();
+  return (source.rules ?? []).map((rule) => {
+    if (!rule.id.trim()) throw new Error(`Instruction rule id is required for source ${source.id}.`);
+    // Floor BEFORE provider filtering, for the same reason `normalizeSources` does at the
+    // source level: the pinned digest describes the payload AS PUBLISHED, so comparing
+    // filtered bytes against it would fail for any payload that legitimately uses
+    // provider-only blocks and would silently replace it.
+    const floored = applyAgentOperatingRulesFloorToRule(source, rule, rule.content ?? "");
+    const content = filterProviderOnlyBlocks(floored.content, tool);
+    if (!content.trim() && !rule.path) throw new Error(`Instruction rule content or path is required for rule ${rule.id}.`);
+    const resolvedPath = normalizeRulePath(rule.path ?? `${slug(rule.id)}.md`);
+    const key = resolvedPath.toLowerCase();
+    if (seen.has(key)) throw new Error(`Duplicate rule path for source ${source.id}: ${resolvedPath}`);
+    seen.add(key);
+    return {
+      ...rule,
+      content,
+      metadata: floored.metadata,
+      normalizedId: slug(rule.id),
+      resolvedLabel: rule.label ?? rule.id,
+      resolvedPath,
+    };
+  });
+}
+
+function rejectDuplicateRenderPaths(files: SessionRenderFile[]): void {
+  const seen = new Set<string>();
+  for (const file of files) {
+    const key = file.relativePath.toLowerCase();
+    if (seen.has(key)) throw new Error(`Duplicate session render file path: ${file.relativePath}`);
+    seen.add(key);
+  }
+}
+
+/**
+ * Refuse a managed output the reader would later refuse.
+ *
+ * 0.4.23 raised the READ bound on these paths to SESSION_MANAGED_OUTPUT_MAX_BYTES and left the
+ * WRITE unbounded, so the two agreed only by headroom. Measured on origin/main @ 6091ba6: a
+ * render emitted an 8,389,869-byte AGENTS.md at rc=0, and every subsequent planSessionRender on
+ * that home threw PROJECT_CONTEXT_INPUT_TOO_LARGE from observeProjectContextSessionGuard —
+ * including a render that would have SHRUNK the file back under the bound. The home is then
+ * unrecoverable through this tool at all, because planning reads the oversized file before it
+ * can decide to replace it, and the failure is silent in the way that matters: the home simply
+ * stops updating.
+ *
+ * Refusing HERE, at plan time, is what makes that recoverable. planSessionRender writes nothing,
+ * so the previous home survives intact and merely stale, `session plan` and `--dry-run` predict
+ * the failure instead of discovering it, and the operator sees it while their hands are on the
+ * command. Refusing at the write instead would land mid-loop over per-file atomic replacements
+ * and leave the home half-new, half-old with a manifest describing neither.
+ *
+ * NOT truncation, deliberately: a silently shortened instruction home is a home that looks
+ * complete to every agent that reads it and is missing directives. A stale home is wrong in a
+ * way somebody notices; a truncated one is wrong in a way nobody can see.
+ */
+function rejectOversizedManagedOutputs(files: SessionRenderFile[]): void {
+  for (const file of files) {
+    if (!isSessionManagedOutputRelativePath(file.relativePath)) continue;
+    const bytes = Buffer.byteLength(file.content, "utf8");
+    if (bytes <= SESSION_MANAGED_OUTPUT_MAX_BYTES) continue;
+    throw new Error(
+      `Session render output ${file.relativePath} is ${bytes} bytes and the managed read bound is `
+      + `${SESSION_MANAGED_OUTPUT_MAX_BYTES}. Writing it would wedge this home: every later render `
+      + `refuses to read it, including one that would shrink it back. Reduce the instruction corpus `
+      + `for this profile, or raise SESSION_MANAGED_OUTPUT_MAX_BYTES — it is one constant and both `
+      + `the reader and this check read it.`
+    );
+  }
+}
+
+/**
+ * Headroom warnings for the same set. The refusal above is a backstop that should never fire;
+ * this is the signal that stops it becoming the thing that discovers the problem.
+ */
+function managedOutputHeadroomWarnings(files: SessionRenderFile[]): string[] {
+  const warnings: string[] = [];
+  for (const file of files) {
+    if (!isSessionManagedOutputRelativePath(file.relativePath)) continue;
+    const bytes = Buffer.byteLength(file.content, "utf8");
+    if (bytes <= SESSION_MANAGED_OUTPUT_WARN_BYTES) continue;
+    if (bytes > SESSION_MANAGED_OUTPUT_MAX_BYTES) continue;
+    warnings.push(
+      `Managed output ${file.relativePath} is ${bytes} bytes, past ${SESSION_MANAGED_OUTPUT_WARN_BYTES} `
+      + `of a ${SESSION_MANAGED_OUTPUT_MAX_BYTES} byte bound. Renders refuse at the bound; raise `
+      + `SESSION_MANAGED_OUTPUT_MAX_BYTES or reduce this profile's instruction corpus before then.`
+    );
+  }
+  return warnings;
+}
+
+function rejectDuplicateSourceSlugs(sources: OrderedSessionInstructionSource[]): void {
+  const seen = new Map<string, string>();
+  for (const source of sources) {
+    const existing = seen.get(source.normalizedId);
+    if (existing) throw new Error(`Duplicate session instruction source slug: ${source.normalizedId} (${existing}, ${source.id})`);
+    seen.set(source.normalizedId, source.id);
+  }
+}
+
+function rejectDuplicateRulePaths(sources: OrderedSessionInstructionSource[]): void {
+  const seen = new Map<string, string>();
+  for (const source of sources) {
+    for (const rule of source.resolvedRules) {
+      const key = rule.resolvedPath.toLowerCase();
+      const existing = seen.get(key);
+      if (existing) throw new Error(`Duplicate instruction rule path: ${rule.resolvedPath} (${existing}, ${rule.id})`);
+      seen.set(key, rule.id);
+    }
+  }
+}
+
+function normalizeRulePath(path: string): string {
+  if (!path.trim()) throw new Error("Instruction rule path cannot be empty.");
+  if (path.includes("\\")) throw new Error(`Instruction rule path must use POSIX separators: ${path}`);
+  const normalized = posix.normalize(path);
+  if (normalized === "." || posix.isAbsolute(normalized) || normalized === ".." || normalized.startsWith("../")) {
+    throw new Error(`Instruction rule path escapes managed rule directory: ${path}`);
+  }
+  return normalized;
+}
+
+function identitySourceToSessionSource(
+  value: unknown,
+  options: {
+    path?: string;
+    tool?: SessionRenderTool;
+    orderFallback: number;
+    exportShape: IdentityExportShape;
+    authority: IdentityExportAuthority;
+  },
+): SessionInstructionSource | null {
+  const record = asRecord(value, "identity instruction source");
+  const providers = asStringArray(record["targetProviders"]);
+  if (options.tool && providers.length > 0 && !providerTargetsTool(providers, options.tool)) return null;
+  const sourcePaths = normalizeSourcePaths(record["sourcePaths"]);
+  const kind = maybeString(record["kind"]);
+  const layer = record["layer"] === undefined ? layerFromIdentityKind(kind, options.exportShape) : requireLayer(record["layer"]);
+  const merge = requireMerge(record["merge"] ?? record["mergePolicy"] ?? "append");
+  const id = requireString(record["id"], "identity instruction source id");
+  const inlineContent = maybeString(record["content"]);
+  const resolvedContent = inlineContent && inlineContent.trim()
+    ? inlineContent
+    : contentFromIdentitySourcePaths(sourcePaths, options.path, id) ?? inlineContent;
+  const source: IdentityExportBoundSessionInstructionSource = {
+    id,
+    label: maybeString(record["label"]) ?? maybeString(record["title"]) ?? id,
+    layer,
+    merge,
+    order: typeof record["order"] === "number"
+      ? record["order"]
+      : typeof record["precedence"] === "number"
+        ? record["precedence"]
+        : options.orderFallback,
+    content: resolvedContent ?? "",
+    // The export location is a transport used only to resolve sourcePaths.
+    // Canonical provenance lives in the export itself, so persisted files and
+    // stdin must produce byte-identical plans.
+    path: undefined,
+    rules: normalizeIdentityRules(record["rules"]),
+    provenance: asOptionalRecord(record["provenance"]) ?? null,
+    targetProviders: providers,
+    owner: normalizeIdentityOwner(record["owner"]),
+    sourcePaths,
+    globs: asStringArray(record["globs"]),
+    hash: maybeString(record["hash"]),
+    nonOverridable: record["nonOverridable"] === true,
+    replacementScope: maybeString(record["replacementScope"]),
+    metadata: asOptionalRecord(record["metadata"]) ?? null,
+    [IDENTITY_EXPORT_AUTHORITY]: options.authority,
+  };
+  return source;
+}
+
+function layerFromIdentityKind(kind: string | undefined, exportShape: IdentityExportShape): SessionInstructionLayer {
+  if (!kind) {
+    if (exportShape === "configs-contract") throw new Error("Invalid session instruction layer: undefined");
+    return "agent";
+  }
+  switch (kind) {
+    case "global-rules":
+    case "global-system-prompt":
+      return "global";
+    case "provider-rules":
+    case "provider-system-prompt":
+      return "tool";
+    case "identity-doc":
+    case "persona-doc":
+      return "agent";
+    case "account-overlay":
+      return "account";
+    case "project-overlay":
+      return "repo";
+    case "machine-overlay":
+      return "machine";
+    case "session-overlay":
+      return "session";
+    default:
+      throw new Error(`Invalid identity instruction source kind: ${kind}`);
+  }
+}
+
+function contentFromIdentitySourcePaths(
+  sourcePaths: SessionInstructionSourcePath[],
+  exportPath: string | undefined,
+  sourceId: string,
+): string | undefined {
+  if (sourcePaths.length === 0 || !exportPath) return undefined;
+  const baseDir = dirname(resolveSessionPath(exportPath));
+  const contents: Array<{ path: string; content: string }> = [];
+  for (const sourcePath of sourcePaths) {
+    const content = readIdentitySourcePath(sourcePath, baseDir, sourceId);
+    if (content !== undefined) contents.push({ path: sourcePath.path, content });
+  }
+  if (contents.length === 0) return undefined;
+  if (contents.length === 1) return ensureTrailingNewline(contents[0]!.content);
+  return ensureTrailingNewline(contents.map((item) => `<!-- Source path: ${item.path} -->\n${item.content.trimEnd()}`).join("\n\n"));
+}
+
+function readIdentitySourcePath(
+  sourcePath: SessionInstructionSourcePath,
+  baseDir: string,
+  sourceId: string,
+): string | undefined {
+  const resolvedPath = resolveIdentitySourcePath(sourcePath.path, baseDir, sourceId);
+  if (!existsSync(resolvedPath)) {
+    if (sourcePath.required) {
+      throw new Error(`Required identity instruction source path not found for ${sourceId}: ${sourcePath.path}`);
+    }
+    return undefined;
+  }
+  const stat = statSync(resolvedPath);
+  if (!stat.isFile()) {
+    throw new Error(`Identity instruction source path is not a file for ${sourceId}: ${sourcePath.path}`);
+  }
+  const realBase = realpathSync(baseDir);
+  const realPath = realpathSync(resolvedPath);
+  if (!pathIsInside(realPath, realBase)) {
+    throw new Error(`Identity instruction source path escapes export directory for ${sourceId}: ${sourcePath.path}`);
+  }
+  return readFileSync(realPath, "utf-8");
+}
+
+function resolveIdentitySourcePath(path: string, baseDir: string, sourceId: string): string {
+  const cleaned = cleanSessionPathInput(path);
+  if (!cleaned) throw new Error(`Identity instruction source path cannot be empty for ${sourceId}.`);
+  if (cleaned.includes("\\")) throw new Error(`Identity instruction source path must use POSIX separators for ${sourceId}: ${path}`);
+  const resolvedPath = isAbsolute(cleaned) ? resolve(cleaned) : resolve(baseDir, cleaned);
+  if (!pathIsInside(resolvedPath, resolve(baseDir))) {
+    throw new Error(`Identity instruction source path escapes export directory for ${sourceId}: ${path}`);
+  }
+  return resolvedPath;
+}
+
+function pathIsInside(path: string, baseDir: string): boolean {
+  const rel = relative(baseDir, path);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+
+function providerTargetsTool(targets: string[], tool: SessionRenderTool): boolean {
+  return targets.map((target) => target.toLowerCase()).some((target) => target === tool || target === "all" || target === "generic");
+}
+
+function normalizeIdentityRules(value: unknown): SessionInstructionRule[] {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) throw new Error("Identity instruction source rules must be an array.");
+  return value.map((item) => {
+    const record = asRecord(item, "identity instruction rule");
+    const id = requireString(record["id"], "identity instruction rule id");
+    return {
+      id,
+      label: maybeString(record["label"]) ?? id,
+      path: maybeString(record["path"]),
+      content: maybeString(record["content"]) ?? "",
+      globs: asStringArray(record["globs"]),
+      hash: maybeString(record["hash"]),
+      metadata: asOptionalRecord(record["metadata"]) ?? null,
+    };
+  });
+}
+
+function normalizeIdentityOwner(value: unknown): SessionInstructionOwner | null {
+  if (value === undefined || value === null) return null;
+  const record = asRecord(value, "identity instruction owner");
+  return {
+    kind: requireString(record["kind"], "identity instruction owner kind"),
+    id: requireString(record["id"], "identity instruction owner id"),
+  };
+}
+
+function normalizeSourcePaths(value: unknown): SessionInstructionSourcePath[] {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) throw new Error("Identity instruction source paths must be an array.");
+  return value.map((item) => {
+    const record = asRecord(item, "identity instruction source path");
+    return {
+      path: requireString(record["path"], "identity instruction source path"),
+      editable: record["editable"] === true,
+      required: record["required"] === true,
+      hash: maybeString(record["hash"]),
+    };
+  });
+}
+
+function requireLayer(value: unknown): SessionInstructionLayer {
+  return normalizeSessionInstructionLayer(value);
+}
+
+function requireMerge(value: unknown): SessionInstructionMerge {
+  if (value === "append" || value === "replace") return value;
+  throw new Error(`Invalid session instruction merge policy: ${String(value)}`);
+}
+
+function asRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`Invalid ${label}.`);
+  return value as Record<string, unknown>;
+}
+
+function asOptionalRecord(value: unknown): Record<string, unknown> | null {
+  if (value === undefined || value === null) return null;
+  return asRecord(value, "record");
+}
+
+function maybeString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function requireString(value: unknown, label: string): string {
+  if (typeof value !== "string" || !value.trim()) throw new Error(`Invalid ${label}.`);
+  return value;
+}
+
+function asStringArray(value: unknown): string[] {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === "string");
+}
