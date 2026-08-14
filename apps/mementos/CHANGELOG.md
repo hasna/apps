@@ -212,7 +212,7 @@ These landed on `main` after 0.14.71 was published and ship here for the first
 time; they are unrelated to the `recall` change.
 
 - Stop destroying the global config file when it is unparseable (#27).
-- Align with `@hasna/contracts` conformance (moderate) for iapp-mementos (#18).
+- Align with `@hasna/contracts` conformance (moderate) for the mementos app (#18).
 - Add mementos project-panel contract fixtures.
 
 ## 0.14.68 — Harden storage cloud-runtime diagnostics
