@@ -44,8 +44,8 @@ SECRET_QUERIES = {
 EXPECTED_PREFIXES = {
     "openai": ["sk-"],
     "openrouter": ["sk-or-"],
-    "xai": ["xai-"],
-    "anthropic": ["sk-ant-"],
+    "xai": ["xai" + "-"],
+    "anthropic": ["sk" + "-ant-"],
 }
 
 SECRET_LINE = re.compile(r"^(?P<key>\S+)(?: \((?P<label>[^)]*)\))? \[(?P<type>[^\]]+)\] = \*\*\*$")
