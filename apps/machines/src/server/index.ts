@@ -3,7 +3,7 @@
  * machines-serve — standalone HTTP control-plane API for the machine registry.
  *
  * Usage: machines-serve [--port 8080] [--host 0.0.0.0]
- * Env:   PORT, HOST, HASNA_MACHINES_STORAGE_MODE=cloud, HASNA_MACHINES_DATABASE_URL,
+ * Env:   PORT, HOST, HASNA_MACHINES_DATABASE_URL (set -> postgresql backend),
  *        HASNA_MACHINES_API_SIGNING_KEY (or API_KEY_SIGNING_SECRET).
  */
 
@@ -34,8 +34,7 @@ Options:
   -h, --help      show this help
 
 Environment:
-  HASNA_MACHINES_STORAGE_MODE=cloud
-  HASNA_MACHINES_DATABASE_URL=<app-role DSN>
+  HASNA_MACHINES_DATABASE_URL=<app-role DSN>  (set -> postgresql backend; unset -> sqlite)
   HASNA_MACHINES_API_SIGNING_KEY=<hmac signing secret>`);
     return;
   }

@@ -725,9 +725,13 @@ machines storage sync --json
 ```
 
 Configure database storage with `HASNA_MACHINES_DATABASE_URL` or fallback
-`MACHINES_DATABASE_URL`. Optional storage mode env vars are
-`HASNA_MACHINES_STORAGE_MODE` or `MACHINES_STORAGE_MODE` with `local`,
-`hybrid`, or `remote`.
+`MACHINES_DATABASE_URL`. The server data backend is `sqlite | postgresql`,
+selected by the presence of that variable — deployment modes were removed, so
+any set storage-mode variable (`HASNA_MACHINES_STORAGE_MODE`,
+`HASNA_MACHINES_MODE`, or the `MACHINES_*` aliases) is rejected with an error
+naming the variable. Clients route to the hosted HTTP API when both
+`HASNA_MACHINES_API_URL` and `HASNA_MACHINES_API_KEY` are set, and use the
+local SQLite store otherwise.
 
 Remote PostgreSQL storage is fail-closed for TLS. Non-loopback database hosts
 default to verified TLS, and `sslmode=disable`, `ssl=false`,

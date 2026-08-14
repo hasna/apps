@@ -1,6 +1,6 @@
 // HTTP storage client for the Hasna Service Contract v1.
 //
-// This is the piece that makes `mode=cloud` real for a client. It sits on
+// This is the piece that makes the hosted-API client real. It sits on
 // top of `createHasnaHttpTransport` and implements the generic resource CRUD
 // vocabulary every Hasna serve app exposes under `/v1`:
 //
@@ -10,9 +10,9 @@
 //   update -> PATCH  /v1/<resource>/<id>       -> <entity>   (PUT via method opt)
 //   delete -> DELETE /v1/<resource>/<id>       -> void       (204/404 => ok)
 //
-// An app's storage resolver selects this client when the client-flip contract
-// resolves to `cloud-http` (mode=cloud AND API_URL+API_KEY set), and
-// falls through to the local store otherwise. See `resolveClientTransport` /
+// An app's storage resolver selects this client when the API env pair
+// (HASNA_<APP>_API_URL + HASNA_<APP>_API_KEY) is present, and falls through
+// to the local store otherwise. See `resolveClientTransport` /
 // `createClientTransport` in ./transport.ts.
 //
 // Guarantees carried up from the transport: JSON in/out, per-request timeout,
@@ -210,12 +210,12 @@ export type ResolveStorageClientResult =
   | { transport: "cloud-http"; client: HasnaStorageClient };
 
 /**
- * The one call an app's storage resolver makes. Reads the client-flip env for
- * `name`; when it resolves to `cloud-http` (mode=cloud + API_URL +
- * API_KEY), returns a ready {@link HasnaStorageClient}. Otherwise returns
+ * The one call an app's storage resolver makes. Reads the client env for
+ * `name`; when it resolves to `cloud-http` (API_URL + API_KEY both present),
+ * returns a ready {@link HasnaStorageClient}. Otherwise returns
  * `{ transport: 'local', client: null }` so the app uses its local store.
- * Throws if cloud was requested but is misconfigured (so callers never silently
- * read the wrong dataset).
+ * Throws on a partial API env pair or a set storage-mode variable (so callers
+ * never silently read the wrong dataset).
  */
 export function resolveStorageClient(
   name: string,

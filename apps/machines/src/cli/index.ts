@@ -3724,7 +3724,7 @@ healCommand
 
 const flipCommand = program
   .command("flip")
-  .description("Coordinate fleet storage-mode flips (local <-> cloud) per app");
+  .description("Coordinate fleet client-backend flips (local store <-> hosted HTTP API) per app");
 
 function parseMachineList(value?: string): string[] | undefined {
   if (!value) return undefined;

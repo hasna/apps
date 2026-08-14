@@ -49,7 +49,7 @@
     "test": "bun test --timeout 10000",
     "sdk:generate": "bun run scripts/generate-sdk.ts",
     "schema:generate": "bun run scripts/generate-consumer-schema.ts",
-    "kit:check": "bunx @hasna/contracts vendor-kit --check",
+    "kit:check": "bunx @hasna/contracts@0.10.6 vendor-kit --check .",
     "smoke:consumer-conformance": "bun scripts/consumer-conformance.mjs",
     "verify:release": "bun run typecheck && bun run test && bun run build && bun run smoke:consumer-conformance && bun run scripts/verify-release.ts",
     "dev": "bun run src/cli/index.ts",
@@ -84,7 +84,7 @@
     "bun": ">=1.0.0"
   },
   "dependencies": {
-    "@hasna/contracts": "^0.4.2",
+    "@hasna/contracts": "0.10.6",
     "@hasna/events": "^0.1.7",
     "@hasna/mcp-harness": "^0.1.0",
     "@modelcontextprotocol/sdk": "^1.26.0",

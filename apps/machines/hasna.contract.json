@@ -3,8 +3,8 @@
   "name": "machines",
   "class": "service",
   "contractVersion": "v1",
-  "kitVersion": "0.4.2",
-  "description": "Machine fleet control-plane: CLI + MCP + serve (HTTP /v1 registry API) + typed SDK. Local mode uses SQLite at ~/.hasna/machines/machines.db for the CLI/agent; the deployed serve runs cloud mode (HASNA_MACHINES_STORAGE_MODE=cloud), PURE REMOTE per Amendment A1 with all reads/writes hitting the shared cloud Postgres. Every /v1 route requires an @hasna/contracts API key.",
+  "kitVersion": "0.10.6",
+  "description": "Machine fleet control-plane: CLI + MCP + serve (HTTP /v1 registry API) + typed SDK. The data backend is the only runtime switch: SQLite at ~/.hasna/machines/machines.db by default, or PostgreSQL when a database URL is configured, in which case the serve process reads and writes PostgreSQL directly (PURE REMOTE — no sync engine). Every /v1 route requires an @hasna/contracts API key.",
   "bins": [
     "machines",
     "machines-mcp",
@@ -12,10 +12,14 @@
     "machines-agent"
   ],
   "storage": {
-    "mode": "cloud",
+    "backend": "sqlite",
+    "engines": [
+      "sqlite",
+      "postgresql"
+    ],
     "envPrefix": "HASNA_MACHINES_",
     "aliasEnvPrefix": "MACHINES_",
-    "databaseUrlSecretRef": "hasna/oss/machines/database-url"
+    "sqlitePath": "~/.hasna/machines/machines.db"
   },
   "metadata": {
     "serve": {
