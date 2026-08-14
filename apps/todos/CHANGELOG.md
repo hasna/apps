@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.33] - 2026-08-14
+
+### Fixed
+
+- **Historical project-registration receipts can be looked up by their
+  immutable stored corpus identity while current create and inverse authority
+  guards remain bound to the current capability.**
+
 ## [0.15.32] - 2026-08-12
 
 ### Fixed
