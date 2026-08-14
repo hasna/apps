@@ -1,0 +1,24 @@
+
+ domains — interactive portfolio browser
+ Portfolio · All · 3 domains
+
+ NAME                        STATUS        EXPIRES     REGISTRAR        TTL
+ ────────────────────────────────────────────────────────────────────────────
+ ❯ example.io                  offered       —           Namecheap        —
+   hasna.com                   active        2027-01-15  Route53          226d
+   legacy.net                  expired       2024-06-01  GoDaddy          expired
+
+ Selected
+  example.io
+  [offered]
+
+  Registrar     Namecheap
+  Registered    —
+  Expires       —
+  Auto-renew    yes
+  Premium       yes
+  Premium ask   2500
+  SSL issuer    —
+  SSL expires   —
+
+ ↑↓ j/k navigate · enter detail · / search · f filter · r refresh · q quit

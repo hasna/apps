@@ -1,4 +1,4 @@
-import { For, Show, createEffect, createMemo, createSignal, untrack } from "solid-js";
+import { For, Show, createEffect, createMemo, createSignal, onMount, untrack } from "solid-js";
 import { useKeyboard } from "@opentui/solid";
 import { useEmails, COMMON_LABELS, MAILBOXES } from "../context/emails-state.js";
 import { useCommands } from "../context/commands.js";
@@ -8,11 +8,12 @@ import { SelectDialog, type SelectDialogItem } from "../ui/select-dialog.js";
 import { copyTextToClipboardAsync } from "../../tui/clipboard.js";
 import { useToast } from "../context/toast.js";
 import { Button, EmptyState, Row } from "../ui/primitives.js";
-import { labelDisplayName, mailboxGroupModeLabel, mailboxLabel, MAILBOX_GROUP_MODES, type Mailbox, type MailboxGroupMode } from "../../tui/data.js";
+import { addPrioritySenderRule, labelDisplayName, listPrioritySenderRules, mailboxGroupModeLabel, mailboxLabel, MAILBOX_GROUP_MODES, removePrioritySenderRule, type Mailbox, type MailboxGroupMode } from "../../tui/data.js";
 import { formatDate, wrapText } from "../../tui/format.js";
 import { formatAttachmentSize, mergeAttachmentDetails, type AttachmentDetail, type AttachmentPathLike } from "../../../lib/attachment-actions.js";
 import { openLocalTarget } from "../../../lib/local-actions.js";
 import { emailDigestPeriodLabel, type EmailDigestPeriod } from "../../../db/email-digests.js";
+import { normalizePriorityRuleInput, type PrioritySenderRule, type PrioritySenderRuleKind } from "../../../lib/priority-senders.js";
 
 export function EmailsDialogs() {
   const emails = useEmails();
@@ -180,6 +181,16 @@ export function EmailsDialogs() {
 
     if (kind === "filter") {
       dialog.replace(() => <FilterDialog close={close} />, { size: "large", onClose: emails.actions.closeDialog });
+      return;
+    }
+
+    if (kind === "saved-filters") {
+      dialog.replace(() => <SavedFiltersDialog close={close} />, { size: "large", onClose: emails.actions.closeDialog });
+      return;
+    }
+
+    if (kind === "save-filter") {
+      dialog.replace(() => <SaveFilterDialog close={close} />, { size: "large", onClose: emails.actions.closeDialog });
       return;
     }
 
@@ -505,6 +516,126 @@ function FilterDialog(props: { close: () => void }) {
   );
 }
 
+function SavedFiltersDialog(props: { close: () => void }) {
+  const emails = useEmails();
+  const theme = useTheme();
+  const toast = useToast();
+  const items = createMemo<SelectDialogItem[]>(() => emails.state.savedFilters.map((filter) => ({
+    id: filter.id,
+    title: filter.name,
+    detail: `${filter.mailbox} · ${Object.keys(filter.criteria).length} criteria`,
+    marker: emails.state.activeFilterId === filter.id ? "●" : " ",
+    markerColor: theme.primary,
+  })));
+  const [selected, setSelected] = createSignal(emails.state.activeFilterId ?? "");
+  createEffect(() => {
+    if (!selected() && emails.state.savedFilters[0]) setSelected(emails.state.savedFilters[0].id);
+  });
+  const selectedFilter = () => emails.state.savedFilters.find((filter) => filter.id === selected());
+  const reportError = (error: unknown) => toast.show({
+    title: "Saved filter failed",
+    message: error instanceof Error ? error.message : String(error),
+    tone: "error",
+  });
+
+  useKeyboard((key) => {
+    if (key.name === "escape") props.close();
+  });
+
+  return (
+    <box flexDirection="column" width="100%" rowGap={1}>
+      <SelectDialog
+        title="Saved Filters"
+        placeholder="Search saved filters"
+        items={items()}
+        query=""
+        onQuery={() => undefined}
+        onSelect={(item) => setSelected(item.id)}
+        onClose={props.close}
+        footer="Choose a filter, then apply or delete it."
+      />
+      <Show when={selectedFilter()} fallback={<text fg={theme.textMuted}>No saved filters yet.</text>}>
+        {(filter) => (
+          <box flexDirection="column" rowGap={1}>
+            <text fg={theme.textMuted}>Criteria: {Object.entries(filter().criteria).map(([key, value]) => `${key}=${String(value)}`).join(" · ") || "none"}</text>
+            <box height={1} flexDirection="row" columnGap={1}>
+              <Button
+                label="Apply"
+                tone="primary"
+                active
+                onPress={() => {
+                  void emails.actions.applySavedFilter(filter().id).then(props.close).catch(reportError);
+                }}
+              />
+              <Button
+                label="Delete"
+                onPress={() => {
+                  void emails.actions.deleteSavedFilter(filter().id).then(props.close).catch(reportError);
+                }}
+              />
+            </box>
+          </box>
+        )}
+      </Show>
+    </box>
+  );
+}
+
+function SaveFilterDialog(props: { close: () => void }) {
+  const emails = useEmails();
+  const theme = useTheme();
+  const toast = useToast();
+  const [name, setName] = createSignal("");
+  const [saving, setSaving] = createSignal(false);
+  const save = () => {
+    const value = name().trim();
+    if (!value) {
+      toast.show({ title: "Name required", message: "Enter a name for this saved filter.", tone: "error" });
+      return;
+    }
+    if (saving()) return;
+    setSaving(true);
+    void emails.actions.saveCurrentFilter(value).then(() => {
+      toast.show({ title: "Filter saved", message: value, tone: "success" });
+      props.close();
+    }).catch((error) => {
+      setSaving(false);
+      toast.show({ title: "Save failed", message: error instanceof Error ? error.message : String(error), tone: "error" });
+    });
+  };
+
+  useKeyboard((key) => {
+    if (key.name === "escape") props.close();
+  });
+
+  return (
+    <box flexDirection="column" width="100%" rowGap={1}>
+      <box height={1} flexDirection="row" justifyContent="space-between">
+        <text fg={theme.text}>Save Filter</text>
+        <Button label="Close" onPress={props.close} />
+      </box>
+      <text fg={theme.textMuted}>Save the current inbox, search, and label criteria.</text>
+      <input
+        focused
+        value={name()}
+        placeholder="Filter name"
+        width="100%"
+        textColor={theme.text}
+        backgroundColor={theme.backgroundElement}
+        focusedTextColor={theme.text}
+        focusedBackgroundColor={theme.backgroundActive}
+        placeholderColor={theme.textMuted}
+        cursorColor={theme.text}
+        onInput={setName}
+        onSubmit={save}
+      />
+      <box height={1} flexDirection="row" columnGap={1}>
+        <Button label={saving() ? "Saving…" : "Save"} tone="primary" active={!saving()} onPress={save} />
+      </box>
+    </box>
+  );
+}
+
 function attachmentCopyTarget(attachment: AttachmentDetail): string {
   return attachment.file_url ?? attachment.location ?? attachment.filename;
 }
@@ -706,13 +837,14 @@ function DomainsDialog(props: { close: () => void }) {
   );
 }
 
-type SettingsSection = "main" | "sync" | "defaults" | "display";
+type SettingsSection = "main" | "sync" | "defaults" | "display" | "priority";
 
 function settingsTitle(section: SettingsSection): string {
   switch (section) {
     case "sync": return "Settings / Sync";
     case "defaults": return "Settings / Defaults";
     case "display": return "Settings / Display";
+    case "priority": return "Settings / Priority Inbox";
     default: return "Settings";
   }
 }
@@ -738,6 +870,85 @@ function SettingsActionRow(props: { title: string; value: string; onPress: () =>
         <text fg={theme.textMuted}>{props.value}</text>
       </box>
     </Row>
+  );
+}
+
+function PriorityRulesSettings() {
+  const theme = useTheme();
+  const toast = useToast();
+  const [kind, setKind] = createSignal<PrioritySenderRuleKind>("address");
+  const [value, setValue] = createSignal("");
+  const [rules, setRules] = createSignal<PrioritySenderRule[]>([]);
+  const [error, setError] = createSignal<string | null>(null);
+
+  const refresh = () => {
+    try {
+      setRules(listPrioritySenderRules() as PrioritySenderRule[]);
+      setError(null);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    }
+  };
+
+  onMount(refresh);
+
+  const addRule = () => {
+    try {
+      const normalized = normalizePriorityRuleInput(kind(), value());
+      addPrioritySenderRule(normalized.kind, normalized.value);
+      setValue("");
+      setError(null);
+      refresh();
+      toast.show({ title: "Priority rule saved", message: `${normalized.kind}: ${normalized.value}`, tone: "success" });
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    }
+  };
+
+  const removeRule = (rule: PrioritySenderRule) => {
+    try {
+      removePrioritySenderRule(rule.id);
+      refresh();
+      toast.show({ title: "Priority rule removed", message: `${rule.kind}: ${rule.value}`, tone: "success" });
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    }
+  };
+
+  return (
+    <box flexDirection="column" width="100%" rowGap={1}>
+      <text fg={theme.textMuted}>Rules match inbound senders case-insensitively. Addresses match exactly; domains match the sender domain.</text>
+      <box flexDirection="row" columnGap={1}>
+        <Button label="Exact address" active={kind() === "address"} onPress={() => setKind("address")} />
+        <Button label="Sender domain" active={kind() === "domain"} onPress={() => setKind("domain")} />
+      </box>
+      <input
+        focused
+        value={value()}
+        placeholder={kind() === "address" ? "person@example.com" : "example.com"}
+        onInput={(next) => setValue(next)}
+        onSubmit={addRule}
+      />
+      <Button label="Add priority rule" onPress={addRule} />
+      <Show when={error()}>
+        {(message) => <text fg={theme.error}>Validation failed: {message()}</text>}
+      </Show>
+      <text fg={theme.text}>Current rules ({rules().length})</text>
+      <Show when={rules().length > 0} fallback={<text fg={theme.textMuted}>No priority sender rules.</text>}>
+        <scrollbox height={10} width="100%">
+          <For each={rules()}>
+            {(rule) => (
+              <Row>
+                <box flexDirection="row" width="100%" justifyContent="space-between">
+                  <text fg={theme.text}>★ {rule.kind === "address" ? "Address" : "Domain"}: {rule.value}</text>
+                  <Button label="Remove" onPress={() => removeRule(rule)} />
+                </box>
+              </Row>
+            )}
+          </For>
+        </scrollbox>
+      </Show>
+    </box>
   );
 }
 
@@ -782,6 +993,7 @@ function SettingsDialog(props: { close: () => void }) {
           <SettingsMenuRow title="Sync" detail="Auto-pull inbound mail" onPress={() => setSection("sync")} />
           <SettingsMenuRow title="Defaults" detail="Inbox, folder, and sender" onPress={() => setSection("defaults")} />
           <SettingsMenuRow title="Display" detail="Theme and read-state styling" onPress={() => setSection("display")} />
+          <SettingsMenuRow title="Priority Inbox" detail="Exact senders and domains" onPress={() => setSection("priority")} />
         </box>
       </Show>
 
@@ -816,6 +1028,10 @@ function SettingsDialog(props: { close: () => void }) {
             onPress={() => emails.actions.setSetting("theme", settings().theme === "dark" ? "light" : "dark")}
           />
         </box>
+      </Show>
+
+      <Show when={section() === "priority"}>
+        <PriorityRulesSettings />
       </Show>
     </box>
   );

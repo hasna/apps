@@ -27,6 +27,7 @@ import type { StoreDescriptor } from "../store/descriptor.js";
 import type { AddressOwnershipLedger } from "../store-address-ownership-ledger.js";
 import type { GroupMembership } from "../store-group-membership.js";
 import type { SequenceCapableEmailStore } from "../store-sequence-subledger.js";
+import type { PrioritySenderRulesStore } from "../store/email-store.js";
 import { createAttachmentRepairRepository, createSendIntentsRepository } from "./ledger.js";
 import {
   createEmailContentRepository,
@@ -41,7 +42,7 @@ import {
   createDomainsRepository,
   createProvisioningRepository,
 } from "./registry.js";
-import { RESOURCE_TABLES, createResourceRepository } from "./resources.js";
+import { RESOURCE_TABLES, createPrioritySenderRulesRepository, createResourceRepository } from "./resources.js";
 import { createSendKeysRepository } from "./send-keys.js";
 
 /**
@@ -121,7 +122,7 @@ export interface SqliteEmailStoreOptions {
  */
 export function createSqliteEmailStore(
   options: SqliteEmailStoreOptions = {},
-): SequenceCapableEmailStore & GroupMembership & AddressOwnershipLedger {
+): SequenceCapableEmailStore & GroupMembership & AddressOwnershipLedger & PrioritySenderRulesStore {
   const db = options.database ?? getDatabase();
   const capabilities = SQLITE_STORE_CAPABILITIES;
   const resource = (family: keyof typeof RESOURCE_TABLES) =>
@@ -137,11 +138,13 @@ export function createSqliteEmailStore(
     provisioning: createProvisioningRepository(db),
 
     messages: createMessagesRepository(db, capabilities),
+    mailboxFilters: resource("mailboxFilters"),
     emailContent: createEmailContentRepository(db, capabilities),
     inbound: createInboundRepository(db, capabilities),
     threads: createThreadsRepository(db, capabilities),
 
     sandbox: resource("sandbox"),
+    prioritySenderRules: createPrioritySenderRulesRepository(db),
     emailDigests: resource("emailDigests"),
     scheduled: resource("scheduled"),
     events: resource("events"),

@@ -38,6 +38,11 @@ import {
   type AddressOwnershipPatch,
 } from "./store.js";
 import {
+  MailboxFilterConflictError,
+  MailboxFilterInputError,
+  MailboxFilterNotFoundError,
+} from "../../lib/mailbox-filters.js";
+import {
   humanLimitBytes,
   requiredSendJsonBodyBytes,
   SELF_HOSTED_SEND_ATTACHMENT_LIMITS,
@@ -53,6 +58,7 @@ import {
 import { validateAttachmentRepairReviewedDryRun } from "./attachment-repair-maintenance.js";
 import { emailsSelfHostedOpenApi } from "./openapi.js";
 import { resourceSpecForPath, type SelfHostedResourceSpec } from "./resources.js";
+import { normalizePriorityRuleInput, prioritySenderRuleId } from "../../lib/priority-senders.js";
 import {
   handleSelfHostedResendWebhook,
   handleSelfHostedSesWebhook,
@@ -528,6 +534,14 @@ function queryIsoDate(url: URL, key: string): { value?: string; error?: string }
   const time = Date.parse(raw);
   if (!Number.isFinite(time)) return { error: `${key} must be a valid ISO date` };
   return { value: new Date(time).toISOString() };
+}
+
+function queryBoolean(url: URL, key: string): { value?: boolean; error?: string } {
+  const raw = url.searchParams.get(key);
+  if (raw === null || raw.trim() === "") return {};
+  if (raw === "true" || raw === "1") return { value: true };
+  if (raw === "false" || raw === "0") return { value: false };
+  return { error: `${key} must be true or false` };
 }
 
 /**
@@ -1560,6 +1574,16 @@ export async function handleSelfHostedRequest(
         const direction = directionValue === "inbound" || directionValue === "outbound" ? directionValue : undefined;
         const since = queryIsoDate(url, "since");
         if (since.error) return json(400, { error: since.error });
+        const until = queryIsoDate(url, "until");
+        if (until.error) return json(400, { error: until.error });
+        const readFlag = queryBoolean(url, "read");
+        if (readFlag.error) return json(400, { error: readFlag.error });
+        const unreadFlag = queryBoolean(url, "unread");
+        if (unreadFlag.error) return json(400, { error: unreadFlag.error });
+        const starredFlag = queryBoolean(url, "starred");
+        if (starredFlag.error) return json(400, { error: starredFlag.error });
+        const archivedFlag = queryBoolean(url, "archived");
+        if (archivedFlag.error) return json(400, { error: archivedFlag.error });
         const folderValue = url.searchParams.get("folder")?.trim().toLowerCase();
         if (folderValue && !MESSAGE_FOLDERS.includes(folderValue as MessageFolder)) {
           return json(400, { error: `folder must be one of ${MESSAGE_FOLDERS.join(", ")}` });
@@ -1581,10 +1605,17 @@ export async function handleSelfHostedRequest(
           domains: queryDomains(url),
           to: url.searchParams.get("to") ?? undefined,
           from: url.searchParams.get("from") ?? undefined,
+          address: url.searchParams.get("address") ?? undefined,
           subject: url.searchParams.get("subject") ?? undefined,
+          label: url.searchParams.get("label") ?? undefined,
           // `q` is the native-client spelling; `search` is the original one.
           search: url.searchParams.get("q") ?? url.searchParams.get("search") ?? undefined,
           since: since.value,
+          until: until.value,
+          read: readFlag.value,
+          unread: unreadFlag.value,
+          starred: starredFlag.value,
+          archived: archivedFlag.value,
         });
         return json(200, {
           messages: page.items.map(publicMessageListItem),
@@ -2169,6 +2200,136 @@ export async function handleSelfHostedRequest(
       return json(200, { valid: true, authorized, key });
     }
 
+    // Saved mailbox filters have generic CRUD semantics, but apply is a
+    // distinct operation and must be claimed before the generic resource
+    // matcher. Applying reads through the tenant-scoped store so every
+    // criterion is evaluated by the database query, not by a short page
+    // post-filter in the client.
+    const mailboxFilterCollection = "/v1/mailbox-filters";
+    const mailboxFilterMatch = path.match(/^\/v1\/mailbox-filters\/([^/]+)(?:\/apply)?$/);
+    if (path === mailboxFilterCollection) {
+      if (method === "GET") {
+        const auth = await authenticate(deps, req, url, read);
+        if (!auth.ok) return auth.response;
+        const filters: { normalized_name?: string; mailbox?: string } = {};
+        const normalizedName = url.searchParams.get("normalized_name");
+        const mailbox = url.searchParams.get("mailbox");
+        if (normalizedName !== null) filters.normalized_name = normalizedName;
+        if (mailbox !== null) filters.mailbox = mailbox;
+        return json(200, {
+          items: await auth.store.listMailboxFilters({
+            limit: queryInt(url, "limit"),
+            offset: queryInt(url, "offset"),
+            filters,
+          }),
+        });
+      }
+      if (method === "POST") {
+        const auth = await authenticate(deps, req, url, write);
+        if (!auth.ok) return auth.response;
+        return json(201, await auth.store.createMailboxFilter(await readJsonBody(req) as unknown as import("../../lib/mailbox-filters.js").MailboxFilterInput));
+      }
+      return json(405, { error: "method not allowed" });
+    }
+    if (mailboxFilterMatch) {
+      const identifier = decodeURIComponent(mailboxFilterMatch[1]!);
+      const isApply = path.endsWith("/apply");
+      if (isApply) {
+        if (method !== "POST") return json(405, { error: "method not allowed" });
+        const auth = await authenticate(deps, req, url, read);
+        if (!auth.ok) return auth.response;
+        const result = await auth.store.applyMailboxFilter(identifier, {
+          limit: queryInt(url, "limit"),
+          offset: queryInt(url, "offset"),
+        });
+        return json(200, {
+          filter: result.filter,
+          items: result.page.items.slice(0, result.limit).map(publicMessageListItem),
+          limit: result.limit,
+          offset: result.offset,
+          truncated: result.page.items.length > result.limit,
+        });
+      }
+      if (method === "GET") {
+        const auth = await authenticate(deps, req, url, read);
+        if (!auth.ok) return auth.response;
+        const filter = await auth.store.getMailboxFilter(identifier);
+        return filter ? json(200, filter) : json(404, { error: "mailbox filter not found", code: "not_found" });
+      }
+      if (method === "PATCH" || method === "PUT") {
+        const auth = await authenticate(deps, req, url, write);
+        if (!auth.ok) return auth.response;
+        const body = await readJsonBody(req) as Partial<import("../../lib/mailbox-filters.js").MailboxFilterInput>;
+        const putFields = ["name", "mailbox", "criteria"] as const;
+        if (method === "PUT" && !putFields.every((field) => field in body)) {
+          return json(400, { error: "PUT requires name, mailbox, and criteria", code: "invalid_input" });
+        }
+        return json(200, await auth.store.updateMailboxFilter(identifier, body, { replaceCriteria: method === "PUT" }));
+      }
+      if (method === "DELETE") {
+        const auth = await authenticate(deps, req, url, write);
+        if (!auth.ok) return auth.response;
+        const deleted = await auth.store.deleteMailboxFilter(identifier);
+        return deleted
+          ? json(200, { deleted: true, id: identifier })
+          : json(404, { error: "mailbox filter not found", code: "not_found" });
+      }
+      return json(405, { error: "method not allowed" });
+    }
+    // Priority sender rules use the generic tenant-scoped resource store, but
+    // their write surface normalizes the user input and forbids changing a
+    // canonical rule into a different kind/value through PATCH.
+    const priorityRulesSpec = resourceSpecForPath("priority-sender-rules");
+    if (priorityRulesSpec) {
+      if (path === "/v1/priority-sender-rules" && method === "GET") {
+        const auth = await authenticate(deps, req, url, read);
+        if (!auth.ok) return auth.response;
+        return json(200, {
+          items: await auth.store.listResource(priorityRulesSpec, {
+            limit: queryInt(url, "limit"),
+            offset: queryInt(url, "offset"),
+            filters: {
+              ...(url.searchParams.has("kind") ? { kind: url.searchParams.get("kind") } : {}),
+              ...(url.searchParams.has("value") ? { value: url.searchParams.get("value") } : {}),
+            },
+          }),
+        });
+      }
+      if (path === "/v1/priority-sender-rules" && method === "POST") {
+        const auth = await authenticate(deps, req, url, write);
+        if (!auth.ok) return auth.response;
+        const body = await readJsonBody(req);
+        let normalized: ReturnType<typeof normalizePriorityRuleInput>;
+        try {
+          normalized = normalizePriorityRuleInput(body.kind, body.value);
+        } catch (error) {
+          return json(400, { error: error instanceof Error ? error.message : String(error) });
+        }
+        const created = await auth.store.createResource(priorityRulesSpec, {
+          id: prioritySenderRuleId(normalized.kind, normalized.value),
+          kind: normalized.kind,
+          value: normalized.value,
+        });
+        return json(201, created);
+      }
+      const priorityRuleMatch = path.match(/^\/v1\/priority-sender-rules\/([^/]+)$/);
+      if (priorityRuleMatch && (method === "GET" || method === "DELETE")) {
+        const auth = await authenticate(deps, req, url, method === "GET" ? read : write);
+        if (!auth.ok) return auth.response;
+        const id = decodeURIComponent(priorityRuleMatch[1]!);
+        if (method === "GET") {
+          const row = await auth.store.getResource(priorityRulesSpec, id);
+          return row ? json(200, row) : json(404, { error: "priority-sender-rules not found" });
+        }
+        return (await auth.store.deleteResource(priorityRulesSpec, id))
+          ? json(200, { deleted: true, id })
+          : json(404, { error: "priority-sender-rules not found" });
+      }
+      if (priorityRuleMatch && (method === "PATCH" || method === "PUT")) {
+        return json(405, { error: "method not allowed" });
+      }
+    }
+
     // ---- generic resources (contacts/providers/templates/groups/…) --------
     const resourceMatch = path.match(/^\/v1\/([^/]+)(?:\/([^/]+))?$/);
     if (resourceMatch) {
@@ -2244,6 +2405,15 @@ export async function handleSelfHostedRequest(
     }
     if (err instanceof InboundDomainRouteConflictError) {
       return json(409, { error: "inbound domain route is already claimed", reason: "inbound_route_conflict" });
+    }
+    if (err instanceof MailboxFilterInputError) {
+      return json(400, { error: err.message, code: err.code });
+    }
+    if (err instanceof MailboxFilterConflictError) {
+      return json(409, { error: err.message, code: err.code });
+    }
+    if (err instanceof MailboxFilterNotFoundError) {
+      return json(404, { error: err.message, code: err.code });
     }
     if (err instanceof SyntaxError || (err instanceof Error && err.message.includes("JSON"))) {
       return json(400, { error: `invalid request body: ${err.message}` });

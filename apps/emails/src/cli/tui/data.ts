@@ -53,6 +53,11 @@ export const addressChoiceByAddress = routed("addressChoiceByAddress");
 export const listSources = routed("listSources");
 export const getSettings = routed("getSettings");
 export const setSetting = routed("setSetting");
+export {
+  listPrioritySenderRules,
+  addPrioritySenderRule,
+  removePrioritySenderRule,
+} from "../../db/priority-senders.js";
 
 export const getTenantContext: typeof remote.getTenantContext = (force = false) =>
   isSelfHostedMode() ? remote.getTenantContext(force) : { identity: null, label: "Local" };
