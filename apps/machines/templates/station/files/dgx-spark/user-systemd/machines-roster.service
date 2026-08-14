@@ -11,7 +11,7 @@ Type=simple
 # Local mutation authority is scoped to this controller. roster.json remains
 # manual until the first kill drill passes; only then may applyMode become auto.
 Environment=HASNA_MACHINES_ALLOW_MUTATIONS=1
-ExecStart=/home/hasna/.bun/bin/machines-agent roster daemon --config %h/.hasna/machines/roster.json
+ExecStart=/home/hasna/.bun/bin/machines-daemon roster daemon --config %h/.hasna/machines/roster.json
 Restart=on-failure
 RestartSec=10
 

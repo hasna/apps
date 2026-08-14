@@ -24,7 +24,7 @@ import {
 import { runMachineCommand, type MachineCommandRunner } from "../remote.js";
 import type { ExactBunAppsPlan, ExactBunAppsStatusResult, ExactBunRegistryPlanStep, FleetManifest, FreezeEntry, ManifestPackageSpec } from "../types.js";
 
-// Desired-state package reconcile loop for machines-agent.
+// Desired-state package reconcile loop for machines-daemon.
 //
 // Desired state comes from the machines.json manifest (fleet-wide `packages`
 // plus per-machine overrides). Installed state comes from the bun global

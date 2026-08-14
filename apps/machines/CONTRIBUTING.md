@@ -19,7 +19,7 @@ bun run src/cli/index.ts --help
 
 ```text
 src/
-  agent/       - `machines-agent` heartbeat daemon entrypoint
+  agent/       - `machines-daemon` heartbeat daemon entrypoint
   cli/         - Commander CLI for the `machines` binary
   commands/    - CLI command implementations
   mcp/         - MCP server and Streamable HTTP transport

@@ -27,7 +27,7 @@
   "bin": {
     "machines": "dist/cli/index.js",
     "machines-mcp": "dist/mcp/index.js",
-    "machines-agent": "dist/agent/index.js",
+    "machines-daemon": "dist/agent/index.js",
     "machines-serve": "dist/server/index.js"
   },
   "files": [
@@ -44,18 +44,20 @@
     "CODE_OF_CONDUCT.md"
   ],
   "scripts": {
-    "build": "rm -rf dist && bun build src/exact-bun-bootstrap.ts --outfile dist/exact-bun-bootstrap.js --target bun && bun build src/cli/index.ts --outdir dist/cli --target bun --external @hasna/events --external @hasna/events/* --external @hasna/contracts --external @hasna/contracts/* --external pg && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @hasna/events --external @hasna/events/* --external @modelcontextprotocol/sdk --external @hasna/mcp-harness --external @hasna/mcp-harness/* --external pg && bun build src/agent/index.ts --outdir dist/agent --target bun && bun build src/server/index.ts --outdir dist/server --target bun --external @hasna/events --external @hasna/events/* --external @hasna/contracts --external @hasna/contracts/* --external pg && bun build src/sdk/index.ts --outdir dist/sdk --target bun && bun build src/index.ts src/storage.ts src/consumer.ts --outdir dist --target bun --external @hasna/events --external @hasna/events/* --external @hasna/contracts --external @hasna/contracts/* --external pg && tsc -p tsconfig.build.json",
+    "build": "rm -rf dist && bun build src/exact-bun-bootstrap.ts --outfile dist/exact-bun-bootstrap.js --target bun && bun build src/cli/index.ts --outdir dist/cli --target bun --external @hasna/events --external @hasna/events/* --external @hasna/contracts --external @hasna/contracts/* --external pg && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @hasna/events --external @hasna/events/* --external @modelcontextprotocol/sdk --external @hasna/mcp-harness --external @hasna/mcp-harness/* --external pg && bun build src/agent/index.ts --outdir dist/agent --target bun && bun build src/server/index.ts --outdir dist/server --target bun --external @hasna/events --external @hasna/events/* --external @hasna/contracts --external @hasna/contracts/* --external pg && bun build src/sdk/index.ts --outdir dist/sdk --target bun && bun build src/index.ts src/storage.ts src/consumer.ts --outdir dist --target bun --external @hasna/events --external @hasna/events/* --external pg && tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "test": "bun test --timeout 10000",
     "sdk:generate": "bun run scripts/generate-sdk.ts",
     "schema:generate": "bun run scripts/generate-consumer-schema.ts",
-    "kit:check": "bunx @hasna/contracts vendor-kit --check",
+    "kit:check": "bunx @hasna/contracts@0.10.6 vendor-kit --check .",
     "smoke:consumer-conformance": "bun scripts/consumer-conformance.mjs",
+    "verify:pack": "bun run scripts/verify-release.ts",
     "verify:release": "bun run typecheck && bun run test && bun run build && bun run smoke:consumer-conformance && bun run scripts/verify-release.ts",
     "dev": "bun run src/cli/index.ts",
     "dev:mcp": "bun run src/mcp/index.ts",
     "dev:agent": "bun run src/agent/index.ts",
     "dev:serve": "bun run src/server/index.ts",
+    "prepack": "bun run verify:pack",
     "prepublishOnly": "bun run verify:release",
     "postinstall": "mkdir -p $HOME/.hasna/machines 2>/dev/null || true"
   },
@@ -84,7 +86,7 @@
     "bun": ">=1.0.0"
   },
   "dependencies": {
-    "@hasna/contracts": "^0.4.2",
+    "@hasna/contracts": "0.10.6",
     "@hasna/events": "^0.1.7",
     "@hasna/mcp-harness": "^0.1.0",
     "@modelcontextprotocol/sdk": "^1.26.0",
