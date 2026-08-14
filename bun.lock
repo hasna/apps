@@ -846,9 +846,10 @@
     },
     "apps/hooks": {
       "name": "@hasna/hooks",
-      "version": "0.5.0",
+      "version": "0.6.0",
       "bin": {
         "hooks": "bin/index.js",
+        "hooks-serve": "bin/serve.js",
       },
       "dependencies": {
         "@hasna/events": "^0.1.6",
