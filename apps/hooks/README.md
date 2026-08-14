@@ -90,6 +90,59 @@ direct write path exists only for explicit local/test use:
 hooks install knowledge-context --target codewith --apply-codewith --codewith-config /tmp/codewith-config.toml
 ```
 
+## Custom and remote hooks
+
+A hook is defined by a manifest — `{ name, version, description, events, script, args?, timeout_ms? }` — where `script` is a relative path or inline content. Hooks come from three sources: the bundled registry, a user custom directory, or a remote registry.
+
+**Install custom hooks** from a local directory, a git URL, or a manifest URL:
+
+```bash
+hooks install ./my-hook            # directory with manifest.json
+hooks install git@github.com:org/hook-repo.git
+hooks install https://example.com/hooks/my-hook/manifest.json
+```
+
+Custom hooks land in `~/.hasna/hooks/hooks/<name>/`. A custom hook with the same name as a bundled hook takes precedence (visible in `hooks info <name>`).
+
+**Trust model.** Every hook script is pinned by sha256 in `~/.hasna/hooks/hooks.lock` and the SQLite `hooks` table. `hooks run` verifies the script hash before executing; if the script changed, the run is refused:
+
+```bash
+hooks trust <name>   # re-pin the current script content
+hooks update         # re-register hooks and refresh pins
+```
+
+**Registry server.** `hooks serve` exposes the local store over HTTP — catalog, artifacts, and the published lock:
+
+```bash
+hooks serve --port 39428 --api-key "$HASNA_HOOKS_API_KEY"
+# GET /health, GET /api/v1/catalog, GET /api/v1/hooks/:name/:version,
+# PUT /api/v1/hooks (publish, requires the key), GET /api/v1/lock
+```
+
+**Cloudflare registry (opt-in).** Presence of an API URL selects the remote registry; absence means local. There is no mode concept.
+
+```bash
+hooks init --cloudflare --api-url https://registry.example.com --api-key <vault-key-name>
+hooks sync            # fetch catalog + lock from the API, verify sha256, update the local store
+hooks sync --dry-run  # print the plan without changing anything
+```
+
+`hooks init --cloudflare` stores the API URL and a vault key NAME in `~/.hasna/hooks/config.json` — never the key value. Serve with the key resolved from the vault:
+
+```bash
+secrets exec <vault-key-name> --as HASNA_HOOKS_API_KEY -- hooks serve
+```
+
+**Cloudflare provisioning.** `hooks cf deploy` creates the D1 database and R2 bucket via the Cloudflare API, then prints the exact wrangler commands for the worker upload (the worker needs the workerd target, which only wrangler can bundle):
+
+```bash
+export CF_API_TOKEN=...   # resolve from the vault, never paste the value
+hooks cf deploy --account-id <id> --dry-run   # plan first
+hooks cf deploy --account-id <id>
+```
+
+The worker (`src/cf/worker.ts`) implements the same API routes against D1 + R2, with artifacts at `hook_artifacts/<name>/<version>.json`. See `src/cf/wrangler.toml.example`.
+
 ## Storage
 
 Hooks stores data locally by default in `~/.hasna/hooks/` and uses SQLite

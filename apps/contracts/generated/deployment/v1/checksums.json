@@ -1,0 +1,22 @@
+{
+  "contractVersion": "1.0.0",
+  "files": {
+    "fixture-bundle.json": "e6f5a998404bbdb12d31c890164961c0840de48beb921761b6489a15424412d0",
+    "fixtures/artifact-attestation.valid.json": "09439b2757a883b94be4d09e0ea9d58c9073616c4cf5ac8ab3f2a0aec4f64eec",
+    "fixtures/build-artifact.valid.json": "5a635e158079ba7fd12bf927ca807e7f7bd8af89f15206dd6c97db0d1c3141d4",
+    "fixtures/deployment-approval-decision.valid.json": "226e9c744243f24abe67214f3ffe0984796974306534a9636a75e183925216af",
+    "fixtures/deployment-attempt.valid.json": "25c2d098c70a2741d534ad3e9f9aa7e2a70cd9a1a466e36bfd3f5fb3471ce4cb",
+    "fixtures/deployment-plan.valid.json": "f827c78f219508c09f43686b9c619958b600739ef45a0275d5e9fde3a8880bd1",
+    "fixtures/deployment-receipt.valid.json": "4ef301e3485c8dc22bead5c385cd9f539d2f4845011c0b560a08ae91bb37c598",
+    "fixtures/deployment-request.valid.json": "47701f55f2bd4c234a5582c72e9a27b7e4e3ff56525b5f7e45ca455c2cf8dbe1",
+    "fixtures/environment-binding.valid.json": "7607d0000fff1b68de7e0e251c3d32ca472f22ca68cfab3297f6907594bb89a1",
+    "fixtures/intent-snapshot.valid.json": "f98c6e7bbbd4f25b4a1a8004cfe786b81a5d8dd42320b78ebfde727a7fb7e1b2",
+    "fixtures/launch-evidence.valid.json": "44445c3675fda69c10ac267124b6076dba2ae8b5528a2f2e386af84a6667975e",
+    "fixtures/product-projection.valid.json": "830dd826540ee9b13a00d2add27cb0b76bc339434b9136ecc3af8185c2166e73",
+    "fixtures/provider-receipt.valid.json": "69e4788c8a0f3464b7398401ae17af674ba36668f25d9802f6555cd6368abdc8",
+    "fixtures/verified-source-candidate.valid.json": "2bbe702f74c0caf3ee22399b7a1e734b39f5d122e9ea9ad791ad822eb5ba8f46",
+    "schema-bundle.json": "52a5593cbf77a9c4209de10425f56bcde01530ee57891c619ff8ef48ecc6dade"
+  },
+  "manifestDigest": "7bffe387d2ccaace03c1077f875387f0b895390f79b662cee223104b677f898d",
+  "schema": "hasna.deployment.artifact_checksums.v1"
+}

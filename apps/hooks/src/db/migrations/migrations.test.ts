@@ -133,7 +133,7 @@ describe("migrations", () => {
       .query<{ version: string }, []>("SELECT version FROM schema_migrations ORDER BY version")
       .all()
       .map((r) => r.version);
-    expect(versions).toEqual(["001_initial", "002_session_events", "003_user_prompt_submit_event"]);
+    expect(versions).toEqual(["001_initial", "002_session_events", "003_user_prompt_submit_event", "004_hooks_table"]);
     db.close();
   });
 

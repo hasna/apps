@@ -15,6 +15,7 @@ import { join, dirname } from "path";
 import { homedir } from "os";
 import { fileURLToPath } from "url";
 import { getHook, getHookEvents, type HookEvent } from "./registry.js";
+import { resolveHookDir, resolveHookMeta } from "./resolve.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const HOOKS_DIR = existsSync(join(__dirname, "..", "..", "hooks", "hook-gitguard"))
@@ -142,8 +143,8 @@ export function getSettingsPath(scope: Scope = "global", target: SingleTarget = 
 
 export function getHookPath(name: string): string {
   const shortName = shortHookName(name);
-  const direct = join(HOOKS_DIR, shortName);
-  if (existsSync(direct)) return direct;
+  const resolved = resolveHookDir(shortName);
+  if (resolved) return resolved;
   return join(HOOKS_DIR, normalizeHookName(shortName));
 }
 
@@ -231,7 +232,7 @@ function codewithStatusMessage(name: string): string {
 
 export function buildCodewithTomlFragment(name: string, profile?: string): string {
   const shortName = shortHookName(name);
-  const meta = getHook(shortName);
+  const meta = resolveHookMeta(shortName);
   if (!meta) throw new Error(`Hook '${shortName}' not found`);
 
   const command = profile ? `hooks run ${shortName} --profile ${profile}` : `hooks run ${shortName}`;
@@ -283,7 +284,7 @@ function appendCodewithFragment(fragment: string, scope: Scope, configPath?: str
 
 /** Check if a hook conflicts with any already-installed hook (same event + overlapping matcher) */
 function detectConflict(name: string, scope: Scope, target: SingleTarget): string | undefined {
-  const meta = getHook(name);
+  const meta = resolveHookMeta(name);
   if (!meta || !meta.matcher) return undefined; // hooks with no matcher can't conflict
   const events = new Set(getHookEvents(meta));
 
@@ -396,7 +397,7 @@ export function installHook(name: string, options: InstallOptions = {}): Install
 
   if (target === "all") {
     const shortName = shortHookName(name);
-    const meta = getHook(shortName);
+    const meta = resolveHookMeta(shortName);
     if (meta) {
       const unsupportedTargets = (["claude", "codewith"] as const).filter(
         (agentTarget) => getHookEvents(meta).some((event) => !isEventSupported(event, agentTarget))
@@ -434,7 +435,7 @@ export function installHook(name: string, options: InstallOptions = {}): Install
 }
 
 function registerHook(name: string, scope: Scope = "global", target: WritableJsonTarget = "claude", profile?: string): void {
-  const meta = getHook(name);
+  const meta = resolveHookMeta(name);
   if (!meta) return;
 
   const eventKeys = getHookEvents(meta).map((event) => {
@@ -487,7 +488,7 @@ function removeHookFromAllEvents(settings: Record<string, any>, name: string): v
 }
 
 function unregisterHook(name: string, scope: Scope = "global", target: WritableJsonTarget = "claude"): void {
-  const meta = getHook(name);
+  const meta = resolveHookMeta(name);
   if (!meta) return;
 
   const settings = readSettings(scope, target);

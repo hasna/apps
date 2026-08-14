@@ -13,8 +13,8 @@ import {
 
 describe("registry", () => {
   describe("HOOKS", () => {
-    test("contains 49 hooks", () => {
-      expect(HOOKS).toHaveLength(49);
+    test("contains 50 hooks", () => {
+      expect(HOOKS).toHaveLength(50);
     });
 
     test("every hook has required fields", () => {
@@ -84,12 +84,13 @@ describe("registry", () => {
   describe("getHooksByCategory", () => {
     test("returns Git Safety hooks", () => {
       const hooks = getHooksByCategory("Git Safety");
-      expect(hooks).toHaveLength(5);
+      expect(hooks).toHaveLength(6);
       expect(hooks.map((h) => h.name)).toContain("gitguard");
       expect(hooks.map((h) => h.name)).toContain("branchprotect");
       expect(hooks.map((h) => h.name)).toContain("checkpoint");
       expect(hooks.map((h) => h.name)).toContain("conflict-detect");
       expect(hooks.map((h) => h.name)).toContain("worktree-guard");
+      expect(hooks.map((h) => h.name)).toContain("workspace-repos-guard");
     });
 
     test("returns Code Quality hooks", () => {
@@ -314,7 +315,7 @@ describe("registry", () => {
     });
 
     test("correct count per event type", () => {
-      expect(HOOKS.filter((h) => h.event === "PreToolUse")).toHaveLength(15);
+      expect(HOOKS.filter((h) => h.event === "PreToolUse")).toHaveLength(16);
       expect(HOOKS.filter((h) => h.event === "PostToolUse")).toHaveLength(16);
       expect(HOOKS.filter((h) => h.event === "Stop")).toHaveLength(9);
       expect(HOOKS.filter((h) => h.event === "Notification")).toHaveLength(3);
