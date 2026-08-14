@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SEDOFAULT ver="1.0">
+    <faultcode type="xsd:string">E1201</faultcode>
+    <faultstring type="xsd:string">ERROR_E1201</faultstring>
+</SEDOFAULT>
