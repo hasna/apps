@@ -123,6 +123,19 @@ jobs:
           fi
           echo "release commit ${GITHUB_SHA} is contained in protected main"
 
+      # The npm-release environment carries no human reviewer. This package-
+      # owned verifier requires an Ed25519-signed GO receipt from the one fixed
+      # independent native Codewith sub-agent and binds it to the exact commit,
+      # package/version, annotated tag, workflow blob, registry, and publisher.
+      - name: Require independent agent release review
+        env:
+          NPM_RELEASE_AGENT_REVIEW_RECEIPT: ${{ secrets.NPM_RELEASE_AGENT_REVIEW_RECEIPT }}
+          RELEASE_REVIEWER_AGENT: ${{ vars.RELEASE_REVIEWER_AGENT }}
+          RELEASE_REVIEW_KEY_ID: ${{ vars.RELEASE_REVIEW_KEY_ID }}
+          RELEASE_REVIEW_PUBLIC_KEY: ${{ vars.RELEASE_REVIEW_PUBLIC_KEY }}
+          HASNA_PROJECTS_EXPECTED_COMMIT: ${{ github.sha }}
+        run: bun run verify:release-review
+
       # npm versions are immutable, so a version that already exists can never
       # be replaced by this run. Failing here names that plainly instead of
       # letting the publish step report it after the whole suite has run.
@@ -160,10 +173,11 @@ jobs:
       # documents provenance as automatic under trusted publishing, but that
       # has been reported not to hold in practice, and passing the flag is a
       # no-op when it is already automatic. The dedicated release gates above
-      # have already run typecheck, tests, contracts conformance, no-cloud scan,
-      # and build. --ignore-scripts prevents npm from re-entering prepublishOnly
-      # and prepack after those exact gates pass, while normal/manual package
-      # publishes still retain the package lifecycle scripts in package.json.
+      # have already run the independent-agent receipt verifier, typecheck,
+      # tests, contracts conformance, no-cloud scan, and build. --ignore-scripts
+      # prevents npm from re-entering prepublishOnly and prepack after those
+      # exact gates pass, while normal/manual package publishes still retain
+      # the package lifecycle scripts in package.json.
       - name: Publish to npm via OIDC trusted publishing
         run: npm publish --provenance --access public --ignore-scripts
 
