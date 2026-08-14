@@ -730,12 +730,54 @@ export function assertDeterministicPacks(
   firstBytes?: Uint8Array,
   secondBytes?: Uint8Array,
 ): void {
+  // DIAG (task 92e14208): dump the exact difference when the two cycles
+  // disagree, so the runner-only flake is diagnosable from CI logs. This
+  // instrumentation lives ONLY on the diag branch and is removed with it.
+  if (JSON.stringify(first) !== JSON.stringify(second)) {
+    const aMap = new Map(first.files.map((f) => [f.path, f]));
+    const bMap = new Map(second.files.map((f) => [f.path, f]));
+    console.error("DIAG deterministic-pack JSON mismatch:");
+    console.error(`  A: ${first.files.length} files, ${first.size} bytes, shasum ${first.shasum}`);
+    console.error(`  B: ${second.files.length} files, ${second.size} bytes, shasum ${second.shasum}`);
+    for (const [p, fa] of aMap) {
+      const fb = bMap.get(p);
+      if (!fb || fb.size !== fa.size || fb.mode !== fa.mode) {
+        console.error(
+          `  DIFF ${p}: A(size=${fa.size},mode=${fa.mode}) ` +
+            (fb ? `B(size=${fb.size},mode=${fb.mode})` : "B=ABSENT"),
+        );
+      }
+    }
+    for (const [p, fb] of bMap) {
+      if (!aMap.has(p)) console.error(`  DIFF ${p}: A=ABSENT B(size=${fb.size},mode=${fb.mode})`);
+    }
+  }
   check(
     JSON.stringify(first) === JSON.stringify(second),
     "two clean build-and-pack runs produced different artifacts; refusing release",
   );
   if (firstBytes || secondBytes) {
     check(firstBytes && secondBytes, "both packed byte streams are required");
+    if (!Buffer.from(firstBytes).equals(Buffer.from(secondBytes))) {
+      console.error(
+        "DIAG tarball bytes differ:",
+        "A sha256", createHash("sha256").update(firstBytes).digest("hex"),
+        "B sha256", createHash("sha256").update(secondBytes).digest("hex"),
+      );
+      try {
+        const a = verifyArchive(firstBytes).files;
+        const b = verifyArchive(secondBytes).files;
+        const bm = new Map(b.map((f) => [f.path, f.size]));
+        for (const f of a) if (bm.get(f.path) !== f.size) console.error(`  DIFF ${f.path}: A=${f.size} B=${bm.get(f.path) ?? "ABSENT"}`);
+        for (const f of b) if (!bm.has(f.path) || bm.get(f.path) === f.size) { /* covered */ }
+        for (const f of b) {
+          const af = a.find((x) => x.path === f.path);
+          if (!af) console.error(`  DIFF ${f.path}: A=ABSENT B=${f.size}`);
+        }
+      } catch (e: any) {
+        console.error("DIAG archive parse failed:", e?.message ?? String(e));
+      }
+    }
     check(
       Buffer.from(firstBytes).equals(Buffer.from(secondBytes)),
       "two clean build-and-pack runs produced different tarball bytes; refusing release",
