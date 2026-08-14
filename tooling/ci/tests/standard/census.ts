@@ -22,6 +22,20 @@
  * fires only where the removed runtime-placement env var is still set
  * (station01 deployment state; remediation task 26ad6a16 stays open for
  * the deployment-side cleanup).
+ * Refreshed 2026-08-15 by the fixer for the ci/test-suites main-gate
+ * break (todos ee9fbb4d) at origin/main @ 607c03ec, after the
+ * deployment-modes vocabulary-removal family landed (#124 machines,
+ * #123 telephony, #122 accounts): the machines conformance record was
+ * REMOVED — #124 bumped @hasna/contracts to 0.10.6 and its manifest now
+ * validates clean (the two-sided registry contract: a recorded exception
+ * that passes fails the suite). Cause strings refreshed to exact current
+ * failure text for calendar, catalog, emails, instructions, prompts and
+ * shield. Locally on station01, machines and telephony still report
+ * server_backend_configuration because the retired HASNA_*_STORAGE_MODE
+ * env vars remain exported in the interactive shell (deployment residue,
+ * same class as the telephony note above; machines cleanup is part of
+ * todos 7abbf333, telephony 26ad6a16) — in CI's clean environment both
+ * pass and neither has a registry entry.
  * The exception registry is DATA, not prose: every entry
  * is keyed to a measured violation class and carries the reason and the
  * tracked remediation task. When a violation is fixed, DELETE its exception
@@ -308,12 +322,12 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
   },
   {
     member: "calendar",
-    cause: "mode_enum_compliance: HASNA_CALENDAR_STORAGE_MODE='cloud' — the runtime-placement axis was removed; must be sqlite/postgres. Also published_artifact_gate: metadata.release.artifactScan.script missing.",
+    cause: "manifest_valid at pinned 0.4.2 (mode-era schema vs mixed-era manifest): storage.mode Invalid enum value. Expected 'local' | 'cloud', received 'sqlite'; storage Unrecognized key(s) in object: 'engines', 'pgTestGate'; <root> Unrecognized key(s) in object: 'hosting', 'serviceSurfaces'. The earlier mode_enum_compliance env-var cause no longer fires.",
     task: "todos a967c9bd (contracts task — calendar)",
   },
   {
     member: "catalog",
-    cause: "kitVersion 0.8.3 does not exist on npm and no @hasna/contracts dep is pinned; validated at latest, manifest is pre-backend-schema era (storage.backend required, storage.mode unrecognized).",
+    cause: "kitVersion 0.8.3 does not exist on npm and no @hasna/contracts dep is pinned; validated at latest, manifest is pre-backend-schema era: storage.backend Required; storage Unrecognized key(s) in object: 'mode'; serviceSurfaces.* Unrecognized key(s) in object: 'deploymentModes'; metadata.conformance.waivedStorageEngines.0.engine Invalid enum value. Expected 'postgresql', received 'postgres'; <root> Unrecognized key(s) in object: 'deploymentModes'.",
     task: "todos e4d8cd62 (contracts task — catalog)",
   },
   {
@@ -328,7 +342,7 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
   },
   {
     member: "emails",
-    cause: "published_artifact_gate: metadata.release.artifactScan.script required; no_cloud_guard: src/no-cloud-artifact-scan.test.ts imports the shared @hasna/cloud runtime (forbidden module import).",
+    cause: "published_artifact_gate: metadata.release.artifactScan.script is required for a published package: name the script that scans the PACKED artifact, then wire it into prepack. (The earlier no_cloud_guard cause no longer fires at main.)",
     task: "todos e0ef3e32 (contracts task — emails)",
   },
   {
@@ -348,7 +362,7 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
   },
   {
     member: "instructions",
-    cause: "manifest_valid: bins 'configs' and 'configs-mcp' are not allowlisted for app 'instructions' — the manifest declares bins the kit does not know.",
+    cause: "manifest_valid at pinned 0.4.2 (mode-era validator vs backend-era manifest): storage.mode Required; storage Unrecognized key(s) in object: 'backend'. (The earlier bins-allowlist cause no longer fires at main.)",
     task: "todos c15cca18 (contracts task — instructions)",
   },
   {
@@ -362,11 +376,6 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
     task: "todos d166125e (contracts task — logs)",
   },
   {
-    member: "machines",
-    cause: "manifest_valid: bins 'machines-agent' is not allowlisted for app 'machines' — the manifest declares a bin the kit does not know.",
-    task: "todos 6ab8775b (contracts task — machines)",
-  },
-  {
     member: "mementos",
     cause: "surface_bindings: serviceSurfaces[1].generatedFrom is required for a supported service SDK.",
     task: "todos 5695459d (contracts task — mementos)",
@@ -378,7 +387,7 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
   },
   {
     member: "prompts",
-    cause: "surface_matrix (api/sdk missing or unwaived), service_api_topology, self_host_artifact (no compose/Dockerfile), storage_capabilities (sqlite/postgres + pgTestGate missing).",
+    cause: "surface_matrix (api/sdk missing or unwaived) and service_api_topology (a supported API surface is required). (The earlier self_host_artifact and storage_capabilities causes no longer fire at main.)",
     task: "todos eb3f331d (contracts task — prompts)",
   },
   {
@@ -403,7 +412,7 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
   },
   {
     member: "shield",
-    cause: "surface_matrix/service_api_topology: no supported API surface declared; surface_bindings: serviceSurfaces[2].exportSubpath targets missing ./sdk/dist files and generatedFrom is required; self_host_artifact: service-class repo lacks a self-host deployment artifact. Imported by #74 after the original census; validated at 0.8.5 (no pinned dep, kitVersion resolution).",
+    cause: "surface_matrix/service_api_topology: no supported API surface declared; surface_bindings: serviceSurfaces[2].exportSubpath targets missing ./sdk/dist files and generatedFrom is required. Imported by #74 after the original census; validated at 0.8.5 (no pinned dep, kitVersion resolution). (The earlier self_host_artifact cause no longer fires at main.)",
     task: "todos 2aceeb94-7077-4479-b61a-0a7b33b856f7 (contracts task — shield)",
   },
   {
