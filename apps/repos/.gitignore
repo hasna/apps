@@ -1,0 +1,14 @@
+node_modules/
+dist/
+*.db
+*.db-wal
+*.db-shm
+.env
+.DS_Store
+*.tgz
+.secrets/
+coverage/
+.git-local/
+# Scratch git repositories created by the scanner test suites
+.test-repos/
+.test-remote-preservation/

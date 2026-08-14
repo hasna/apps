@@ -1,0 +1,10 @@
+{
+  "name": "ad-creative-pack",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Hosted premium paid ad creative artifact generator",
+  "type": "module",
+  "skills": {
+    "kind": "instruction"
+  }
+}

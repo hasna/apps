@@ -1,0 +1,591 @@
+/**
+ * Skill info - reads docs, requirements, and metadata from skill source
+ */
+
+import { existsSync, readFileSync } from "fs";
+import { join } from "path";
+import { getInstalledSkills, getSkillPath } from "./installer.js";
+import { getSkill, loadRegistry, type SkillMeta } from "./registry.js";
+import { normalizeSkillName } from "./utils.js";
+import { parseSkillFrontmatter } from "./skill-validation.js";
+
+/**
+ * Detect whether a skill directory is an instruction (prose-only) skill.
+ * Instruction skills are declared via `kind: instruction` in SKILL.md
+ * frontmatter and are consumed by agents, not run locally.
+ */
+function isInstructionSkillDir(skillPath: string, meta?: SkillMeta): boolean {
+  if (meta?.kind === "instruction") return true;
+  const skillMdPath = join(skillPath, "SKILL.md");
+  if (!existsSync(skillMdPath)) return false;
+  try {
+    return parseSkillFrontmatter(readFileSync(skillMdPath, "utf-8"))?.kind === "instruction";
+  } catch {
+    return false;
+  }
+}
+
+export interface SkillDocs {
+  skillMd: string | null;
+  readme: string | null;
+  claudeMd: string | null;
+}
+
+export interface SkillRequirements {
+  envVars: string[];
+  systemDeps: string[];
+  cliCommand: string | null;
+  dependencies: Record<string, string>;
+}
+
+const HOSTED_PROVIDER_ENV_PREFIXES = [
+  "OPENAI_",
+  "ANTHROPIC_",
+  "GEMINI_",
+  "GOOGLE_",
+  "XAI_",
+  "MINIMAX_",
+  "ELEVENLABS_",
+  "DEEPGRAM_",
+  "REPLICATE_",
+  "FAL_",
+  "STABILITY_",
+  "EXA_",
+  "FIRECRAWL_",
+  "AWS_",
+];
+
+/**
+ * Read documentation files from a skill
+ */
+export function getSkillDocs(name: string): SkillDocs | null {
+  const skillPath = getSkillPath(name);
+  if (!existsSync(skillPath)) return null;
+
+  return {
+    skillMd: readIfExists(join(skillPath, "SKILL.md")),
+    readme: readIfExists(join(skillPath, "README.md")),
+    claudeMd: readIfExists(join(skillPath, "CLAUDE.md")),
+  };
+}
+
+/**
+ * Get the best available documentation for a skill (SKILL.md > README.md > CLAUDE.md)
+ */
+export function getSkillBestDoc(name: string): string | null {
+  const docs = getSkillDocs(name);
+  if (!docs) return null;
+  return docs.skillMd || docs.readme || docs.claudeMd || null;
+}
+
+/**
+ * Extract requirements from a skill's source files
+ */
+export function getSkillRequirements(name: string): SkillRequirements | null {
+  const skillPath = getSkillPath(name);
+  if (!existsSync(skillPath)) return null;
+
+  // Read all text content to scan
+  const texts: string[] = [];
+  for (const file of ["SKILL.md", "README.md", "CLAUDE.md", ".env.example", ".env.local.example"]) {
+    const content = readIfExists(join(skillPath, file));
+    if (content) texts.push(content);
+  }
+  const allText = texts.join("\n");
+  const meta = getSkill(name);
+  const canonicalName = meta?.name ?? normalizeSkillName(name);
+
+  // Extract env vars
+  const envVars = extractEnvVars(allText);
+  if (isHostedPremiumSkill(canonicalName, meta)) {
+    for (const envVar of Array.from(envVars)) {
+      if (HOSTED_PROVIDER_ENV_PREFIXES.some((prefix) => envVar.startsWith(prefix))) {
+        envVars.delete(envVar);
+      }
+    }
+    envVars.delete("SKILL_API_KEY");
+    envVars.add("SKILLS_API_KEY");
+  }
+
+  // Extract system deps
+  const systemDeps = new Set<string>();
+  const depPatterns: [RegExp, string][] = [
+    [/\bffmpeg\b/i, "ffmpeg"],
+    [/\bplaywright\b/i, "playwright"],
+    [/\bchromium\b/i, "chromium"],
+    [/\bpuppeteer\b/i, "puppeteer"],
+    [/\bpython3?\b/i, "python"],
+    [/\bdocker\b/i, "docker"],
+    [/\bpandoc\b/i, "pandoc"],
+    [/\bimageMagick\b|imagemagick|\bconvert\b.*image/i, "imagemagick"],
+    [/\bwkhtmltopdf\b/i, "wkhtmltopdf"],
+    [/\bgit\b(?! ?(hub|lab|ignore))/i, "git"],
+  ];
+  for (const [pattern, dep] of depPatterns) {
+    if (pattern.test(allText)) {
+      systemDeps.add(dep);
+    }
+  }
+
+  // User-facing execution goes through the root CLI. package.json bin entries
+  // are implementation details for runSkill() resolution.
+  const skillName = normalizeSkillName(name);
+  let cliCommand: string | null = `skills run ${skillName}`;
+  let dependencies: Record<string, string> = {};
+  const pkgPath = join(skillPath, "package.json");
+  if (existsSync(pkgPath)) {
+    try {
+      const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
+      dependencies = pkg.dependencies || {};
+    } catch {}
+  }
+
+  return {
+    envVars: Array.from(envVars).sort(),
+    systemDeps: Array.from(systemDeps).sort(),
+    cliCommand,
+    dependencies,
+  };
+}
+
+function isHostedPremiumSkill(skillName: string, meta?: SkillMeta): boolean {
+  return Boolean(meta?.tags.includes("premium") || meta?.tags.includes("remote"));
+}
+
+export interface SkillDependencyStatus {
+  name: string;
+  version: string;
+  installed: boolean;
+}
+
+/**
+ * Check whether `pkgName` is resolvable from `fromDir` using node_modules
+ * resolution: walk up ancestor directories looking for
+ * `node_modules/<pkgName>/package.json`. Handles scoped packages because
+ * `pkgName` already contains the `@scope/` prefix. This mirrors how a skill
+ * actually imports the dependency at runtime.
+ */
+function isPackageResolvable(pkgName: string, fromDir: string): boolean {
+  let dir = fromDir;
+  while (true) {
+    if (existsSync(join(dir, "node_modules", pkgName, "package.json"))) return true;
+    const parent = join(dir, "..");
+    if (parent === dir) return false;
+    dir = parent;
+  }
+}
+
+/**
+ * Resolve npm dependency install status for a skill.
+ *
+ * A dependency counts as installed only when it is resolvable from the skill
+ * directory (the skill's own node_modules or any ancestor node_modules),
+ * matching how the skill imports it when it runs. This keeps the doctor/test
+ * readiness signal truthful: a runnable skill that imports `xlsx` is not
+ * "ready" until `xlsx` is actually installed, even if every env var is set.
+ */
+export function getSkillDependencyStatus(name: string): SkillDependencyStatus[] {
+  const skillPath = getSkillPath(name);
+  const reqs = getSkillRequirements(name);
+  const deps = reqs?.dependencies ?? {};
+  return Object.entries(deps).map(([pkgName, version]) => ({
+    name: pkgName,
+    version: version as string,
+    installed: isPackageResolvable(pkgName, skillPath),
+  }));
+}
+
+/**
+ * Run a skill by name with given arguments
+ */
+export async function runSkill(
+  name: string,
+  args: string[],
+  options: { installed?: boolean; stdio?: "inherit" | "pipe"; env?: Record<string, string> } = {}
+): Promise<{ exitCode: number; error?: string; stdout?: string; stderr?: string }> {
+  // Skills execute from the bundled package source. Project `.skills/` is only
+  // for pins, run metadata, logs, and exports; it is never a source directory.
+  const meta = getSkill(name);
+  const canonicalName = meta?.name ?? name;
+  const skillPath = getSkillPath(canonicalName);
+
+  if (!existsSync(skillPath)) {
+    return { exitCode: 1, error: `Skill '${name}' not found` };
+  }
+
+  // Instruction skills are prose-only and are consumed by agents, not executed.
+  if (isInstructionSkillDir(skillPath, meta)) {
+    return {
+      exitCode: 1,
+      error: `Skill '${name}' is an instruction skill (kind: instruction) and is not runnable. Instruction skills are consumed by coding agents via SKILL.md, not executed with 'skills run'.`,
+    };
+  }
+
+  // Read package.json for bin entry
+  const pkgPath = join(skillPath, "package.json");
+  if (!existsSync(pkgPath)) {
+    return { exitCode: 1, error: `No package.json in skill '${name}'` };
+  }
+
+  let entryPoint: string;
+  try {
+    const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
+    if (pkg.bin) {
+      const binValues = Object.values(pkg.bin) as string[];
+      entryPoint = binValues[0];
+    } else if (pkg.scripts?.dev) {
+      // Parse "bun run bin/cli.ts" -> "bin/cli.ts"
+      const devScript = pkg.scripts.dev as string;
+      const match = devScript.match(/(?:bun\s+run\s+)(.+)/);
+      entryPoint = match ? match[1] : "bin/cli.ts";
+    } else {
+      entryPoint = "bin/cli.ts";
+    }
+  } catch {
+    return { exitCode: 1, error: `Failed to parse package.json for skill '${name}'` };
+  }
+
+  const entryPath = join(skillPath, entryPoint);
+  if (!existsSync(entryPath)) {
+    return { exitCode: 1, error: `Entry point '${entryPoint}' not found in skill '${name}'` };
+  }
+
+  // Install deps if node_modules missing
+  const nodeModules = join(skillPath, "node_modules");
+  if (!existsSync(nodeModules)) {
+    const install = Bun.spawn(["bun", "install", "--no-save"], {
+      cwd: skillPath,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    await install.exited;
+  }
+
+  // Run the skill
+  const proc = Bun.spawn(["bun", "run", entryPath, ...args], {
+    cwd: skillPath,
+    stdout: options.stdio === "pipe" ? "pipe" : "inherit",
+    stderr: options.stdio === "pipe" ? "pipe" : "inherit",
+    stdin: "inherit",
+    env: { ...process.env, ...options.env },
+  });
+
+  if (options.stdio === "pipe") {
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    return { exitCode, stdout, stderr };
+  }
+
+  const exitCode = await proc.exited;
+  return { exitCode };
+}
+
+export interface DetectedProjectSkills {
+  detected: string[];
+  recommended: SkillMeta[];
+}
+
+/**
+ * Detect project type from package.json and recommend relevant skills
+ */
+export function detectProjectSkills(cwd: string = process.cwd()): DetectedProjectSkills {
+  const pkgPath = join(cwd, "package.json");
+  if (!existsSync(pkgPath)) {
+    // No package.json — return always-recommended skills only
+    const alwaysRecommend = ["market-research-report", "repo-onboarding-report", "blog-article"];
+    const recommended = alwaysRecommend
+      .map((name) => loadRegistry().find((s) => s.name === name))
+      .filter((s): s is SkillMeta => s !== undefined);
+    return { detected: [], recommended };
+  }
+
+  let pkg: { dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
+  try {
+    pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
+  } catch {
+    const alwaysRecommend = ["market-research-report", "repo-onboarding-report", "blog-article"];
+    const recommended = alwaysRecommend
+      .map((name) => loadRegistry().find((s) => s.name === name))
+      .filter((s): s is SkillMeta => s !== undefined);
+    return { detected: [], recommended };
+  }
+
+  const allDeps = {
+    ...pkg.dependencies,
+    ...pkg.devDependencies,
+  };
+
+  const depNames = Object.keys(allDeps);
+
+  const detected: string[] = [];
+  const recommendedNames = new Set<string>();
+
+  // Always recommend these
+  for (const name of ["market-research-report", "repo-onboarding-report", "blog-article"]) {
+    recommendedNames.add(name);
+  }
+
+  // Frontend frameworks
+  const frontendDeps = ["next", "react", "vue", "svelte", "nuxt", "@nuxtjs/nuxt"];
+  for (const dep of frontendDeps) {
+    if (depNames.some((d) => d === dep || d.startsWith(`${dep}/`))) {
+      detected.push(dep);
+      for (const name of ["landing-page-pack", "seo-content-pack", "brand-kit"]) {
+        recommendedNames.add(name);
+      }
+      break;
+    }
+  }
+
+  // Backend frameworks
+  const backendDeps = ["express", "fastify", "hono", "koa", "@hono/hono"];
+  for (const dep of backendDeps) {
+    if (depNames.some((d) => d === dep || d.startsWith(`${dep}/`))) {
+      detected.push(dep);
+      for (const name of ["test-suite-generator", "security-audit-report"]) {
+        recommendedNames.add(name);
+      }
+      break;
+    }
+  }
+
+  // AI SDKs
+  const aiDeps = ["@anthropic-ai/sdk", "openai", "@openai/openai", "anthropic"];
+  for (const dep of aiDeps) {
+    if (depNames.includes(dep)) {
+      detected.push(dep);
+      for (const name of ["market-research-report", "seo-content-pack"]) {
+        recommendedNames.add(name);
+      }
+      break;
+    }
+  }
+
+  // Stripe
+  if (depNames.includes("stripe")) {
+    detected.push("stripe");
+    recommendedNames.add("proposal-pack");
+  }
+
+  // Email
+  const emailDeps = ["nodemailer", "@sendgrid/mail", "@sendgrid/client"];
+  for (const dep of emailDeps) {
+    if (depNames.includes(dep)) {
+      detected.push(dep);
+      recommendedNames.add("email-sequence");
+      break;
+    }
+  }
+
+  // Test frameworks
+  const testDeps = ["vitest", "jest", "mocha", "@jest/core"];
+  for (const dep of testDeps) {
+    if (depNames.includes(dep)) {
+      detected.push(dep);
+      recommendedNames.add("test-suite-generator");
+      break;
+    }
+  }
+
+  // TypeScript
+  if (depNames.includes("typescript")) {
+    detected.push("typescript");
+    recommendedNames.add("repo-onboarding-report");
+  }
+
+  // Deduplicate detected list
+  const uniqueDetected = Array.from(new Set(detected));
+
+  const recommended = Array.from(recommendedNames)
+    .map((name) => loadRegistry().find((s) => s.name === name))
+    .filter((s): s is SkillMeta => s !== undefined);
+
+  return { detected: uniqueDetected, recommended };
+}
+
+/**
+ * Generate a .env.example from pinned skills
+ */
+export function generateEnvExample(targetDir: string = process.cwd()): string {
+  const dirs = getInstalledSkills(targetDir);
+  if (!dirs.length) return "";
+
+  const envMap = new Map<string, string[]>();
+
+  for (const dir of dirs) {
+    const skillName = normalizeSkillName(dir);
+    const reqs = getSkillRequirements(skillName);
+    for (const envVar of reqs?.envVars ?? []) {
+      if (!envMap.has(envVar)) {
+        envMap.set(envVar, []);
+      }
+      if (!envMap.get(envVar)!.includes(skillName)) {
+        envMap.get(envVar)!.push(skillName);
+      }
+    }
+  }
+
+  if (envMap.size === 0) return "";
+
+  const lines = [
+    "# Environment variables for pinned skills",
+    "# Auto-generated by: skills init",
+    "",
+  ];
+
+  // Group by provider prefix
+  const sorted = Array.from(envMap.entries()).sort(([a], [b]) => a.localeCompare(b));
+
+  let lastPrefix = "";
+  for (const [envVar, skills] of sorted) {
+    const prefix = envVar.split("_")[0];
+    if (prefix !== lastPrefix) {
+      if (lastPrefix) lines.push("");
+      lines.push(`# ${prefix}`);
+      lastPrefix = prefix;
+    }
+    lines.push(`# Used by: ${skills.join(", ")}`);
+    lines.push(`${envVar}=`);
+  }
+
+  return lines.join("\n") + "\n";
+}
+
+/**
+ * Generate a SKILL.md for a skill that doesn't have one.
+ * Builds from registry metadata, README.md/CLAUDE.md content, and package.json info.
+ */
+export function generateSkillMd(name: string): string | null {
+  const meta = getSkill(name);
+  if (!meta) return null;
+
+  const skillPath = getSkillPath(name);
+  if (!existsSync(skillPath)) return null;
+
+  // Build frontmatter
+  const frontmatter = [
+    "---",
+    `name: ${meta.name}`,
+    `description: ${meta.description}`,
+    "---",
+  ].join("\n");
+
+  // Try to extract useful content from existing docs
+  const readme = readIfExists(join(skillPath, "README.md"));
+  const claudeMd = readIfExists(join(skillPath, "CLAUDE.md"));
+
+  // Get CLI command from package.json
+  let cliCommand: string | null = null;
+  const pkgPath = join(skillPath, "package.json");
+  if (existsSync(pkgPath)) {
+    try {
+      const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
+      if (pkg.bin) {
+        const binKeys = Object.keys(pkg.bin);
+        if (binKeys.length > 0) cliCommand = binKeys[0];
+      }
+    } catch {}
+  }
+
+  // Build body from available sources
+  const sections: string[] = [];
+  sections.push(`# ${meta.displayName}`);
+  sections.push("");
+  sections.push(meta.description);
+
+  // Extract content from README (skip title if it duplicates)
+  if (readme) {
+    const lines = readme.split("\n");
+    // Skip first heading if it matches the display name
+    let startIdx = 0;
+    if (lines[0]?.startsWith("# ")) {
+      startIdx = 1;
+      // Skip blank line after title
+      if (lines[1]?.trim() === "") startIdx = 2;
+    }
+    const body = lines.slice(startIdx).join("\n").trim();
+    if (body) {
+      sections.push("");
+      sections.push(body);
+    }
+  } else if (claudeMd) {
+    const lines = claudeMd.split("\n");
+    let startIdx = 0;
+    if (lines[0]?.startsWith("# ")) {
+      startIdx = 1;
+      if (lines[1]?.trim() === "") startIdx = 2;
+    }
+    const body = lines.slice(startIdx).join("\n").trim();
+    if (body) {
+      sections.push("");
+      sections.push(body);
+    }
+  }
+
+  if (cliCommand) {
+    sections.push("");
+    sections.push("## CLI");
+    sections.push("");
+    sections.push("```bash");
+    sections.push(`skills run ${meta.name}`);
+    sections.push("```");
+  }
+
+  sections.push("");
+  sections.push(`Category: ${meta.category}`);
+  sections.push(`Tags: ${meta.tags.join(", ")}`);
+
+  return frontmatter + "\n\n" + sections.join("\n") + "\n";
+}
+
+const ENV_VAR_PATTERN = /\b([A-Z][A-Z0-9_]{2,}(?:_API_KEY|_KEY|_TOKEN|_SECRET|_URL|_ID|_PASSWORD|_ENDPOINT|_REGION|_BUCKET))\b/g;
+const GENERIC_ENV_PATTERN = /\b((?:OPENAI|ANTHROPIC|GEMINI|XAI|ELEVENLABS|DEEPGRAM|REPLICATE|FAL|STABILITY|EXA|FIRECRAWL|TWILIO|SENDGRID|RESEND|SLACK|DISCORD|NOTION|LINEAR|GITHUB|AWS|GOOGLE|CLOUDFLARE|VERCEL|SUPABASE|STRIPE)_[A-Z_]+)\b/g;
+
+/**
+ * Extract environment variable names from text using known patterns
+ */
+function extractEnvVars(text: string): Set<string> {
+  const envVars = new Set<string>();
+  for (const pattern of [ENV_VAR_PATTERN, GENERIC_ENV_PATTERN]) {
+    pattern.lastIndex = 0;
+    let match;
+    while ((match = pattern.exec(text)) !== null) {
+      envVars.add(match[1]);
+    }
+  }
+  return envVars;
+}
+
+function docsDeclareHostedRuntime(skillPath: string, text: string): boolean {
+  if (/hosted skills\/connectors runtime/i.test(text) || /provider-specific keys are managed by that runtime/i.test(text)) {
+    return true;
+  }
+
+  const sourceFiles = [
+    join(skillPath, "src", "index.ts"),
+    join(skillPath, "src", "index.js"),
+    join(skillPath, "src", "index-local.ts"),
+    join(skillPath, "src", "index-local.js"),
+  ];
+
+  for (const sourceFile of sourceFiles) {
+    const source = readIfExists(sourceFile);
+    if (source && /requiredEnvVars\s*:\s*\[\s*["']SKILL_API_KEY["']\s*\]/.test(source)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function readIfExists(path: string): string | null {
+  try {
+    if (existsSync(path)) {
+      return readFileSync(path, "utf-8");
+    }
+  } catch {}
+  return null;
+}
