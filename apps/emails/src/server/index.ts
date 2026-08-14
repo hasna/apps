@@ -35,6 +35,16 @@ Commands:
                      Operator-only, image-bundled checkpoint ledger maintenance.
                      Reads one canonical secret manifest, proves ECS/image
                      provenance, and emits aggregate JSON only.
+  gmail-recovery-reconcile
+                     Read-only census of legacy-inbound messages with attachment
+                     metadata but no payload bytes (issue #52). Aggregates by
+                     resolvability class; --ids emits a bounded exact-id manifest.
+                     Never reads or emits payload bytes.
+  gmail-recovery-replay
+                     Bounded exact-id attachment payload recovery from the Gmail
+                     source mailbox (issue #52). Dry-run unless --apply; apply
+                     requires --reviewed-dry-run-sha256 matching the dry-run
+                     report. Fail-closed without EMAILS_GMAIL_ACCESS_TOKEN.
   inbound-provenance-audit
                      Read-only all-tenant post-fence provenance audit. Emits
                      aggregate counts only and exits nonzero on any gap.
@@ -50,6 +60,11 @@ Options:
   --object-key <key> One exact S3 object key (repair command only)
   --recipient <addr> Trusted envelope recipient (repeatable; repair command only)
   --region <name>    AWS region (repair command; else AWS_REGION)
+  --ids              Emit the bounded exact-id manifest (reconcile command only)
+  --limit <n>        Manifest bound (reconcile; default 500, max 5000) or max
+                     messages processed (replay; default 25, max 200)
+  --reviewed-dry-run-sha256 <hex>
+                     Reviewed dry-run gate (replay --apply only)
   --since <ISO8601>  Required post-fence cutoff (provenance audit only)
   --apply            Apply attachment-only CAS after reviewed dry-run
   -V, --version      output the version number
@@ -107,6 +122,32 @@ if (args[0] === "ingest-worker") {
   const { runAttachmentRepairMaintenanceCommand } =
     await import("./self-hosted/attachment-repair-maintenance.js");
   await runAttachmentRepairMaintenanceCommand(args.slice(1));
+} else if (args[0] === "gmail-recovery-reconcile") {
+  if (args.includes("--apply") || args.includes("--message-id")) {
+    throw new Error("gmail recovery reconcile is read-only and accepts only --ids and --limit");
+  }
+  const { runGmailRecoveryReconcile } = await import("./self-hosted/gmail-recovery.js");
+  const limitValues = repeated("--limit");
+  const limit = limitValues.length === 0
+    ? 500
+    : limitValues.length === 1
+      ? Number(limitValues[0]!)
+      : NaN;
+  await runGmailRecoveryReconcile({ emitIds: args.includes("--ids"), limit });
+} else if (args[0] === "gmail-recovery-replay") {
+  const { runGmailRecoveryReplay } = await import("./self-hosted/gmail-recovery.js");
+  const limitValues = repeated("--limit");
+  const limit = limitValues.length === 0
+    ? 25
+    : limitValues.length === 1
+      ? Number(limitValues[0]!)
+      : NaN;
+  await runGmailRecoveryReplay({
+    messageIds: repeated("--message-id"),
+    apply: args.includes("--apply"),
+    reviewedDryRunSha256: option("--reviewed-dry-run-sha256"),
+    limit,
+  });
 } else if (args[0] === "inbound-provenance-audit") {
   const sinceValues = repeated("--since");
   if (args.length !== 3 || args[1] !== "--since" || sinceValues.length !== 1) {

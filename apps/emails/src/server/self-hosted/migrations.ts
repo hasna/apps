@@ -2926,6 +2926,29 @@ const PRIORITY_SENDER_RULES = defineMigration(
   `,
 );
 
+/**
+ * 0026 — provenance for legacy-inbound Gmail replay (issue hasna/emails#52).
+ *
+ * Legacy-inbound rows (migration 0007) carry attachment metadata with no
+ * payload bytes and no `inbound_message_sources` row, so the canonical S3
+ * replay path cannot bind them. Recovery is a bounded re-fetch from the Gmail
+ * source mailbox; the provenance row keeps the same immutable shape — `bucket`
+ * names the source system ('gmail'), `object_key` is the Gmail message id used
+ * for the fetch, `raw_sha256` attests the recovered raw RFC822 bytes. Only the
+ * CHECK constraint widens; the immutable trigger and the canonical-repair
+ * predicates are untouched.
+ */
+const LEGACY_GMAIL_REPLAY_PROVENANCE = defineMigration(
+  "0026_legacy_gmail_replay_provenance",
+  `
+  ALTER TABLE inbound_message_sources
+    DROP CONSTRAINT inbound_message_sources_established_via_check;
+  ALTER TABLE inbound_message_sources
+    ADD CONSTRAINT inbound_message_sources_established_via_check
+    CHECK (established_via IN ('normal_ingest', 'canonical_replay', 'gmail_replay'));
+  `,
+);
+
 /** All migrations, in order: api-keys table (auth), the core schema, inbound. */
 export function emailsSelfHostedMigrations(): Migration[] {
   const authMigrations = apiKeyMigrations().map((m) => defineMigration(m.id, m.sql));
@@ -2960,5 +2983,6 @@ export function emailsSelfHostedMigrations(): Migration[] {
     ADDRESS_PROVIDER_BINDING,
     MAILBOX_FILTERS,
     PRIORITY_SENDER_RULES,
+    LEGACY_GMAIL_REPLAY_PROVENANCE,
   ];
 }
