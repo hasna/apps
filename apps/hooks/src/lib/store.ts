@@ -146,12 +146,14 @@ export interface TrustCheck {
 }
 
 /**
- * Verify a hook script's content hash against the trusted record.
+ * Check a hook script's content hash against the trusted record.
  * No record exists (first run) => pin the current hash and pass.
  * Record or pin exists and differs => refuse.
+ *
+ * Takes a precomputed hash so callers can verify the exact bytes they are
+ * about to execute (content-based verification), instead of re-reading a path.
  */
-export async function verifyScriptHash(name: string, scriptPath: string): Promise<TrustCheck> {
-  const actual = await sha256File(scriptPath);
+export function checkScriptHash(name: string, actual: string): TrustCheck {
   const db = getDb();
   const record = getHookRecord(db, name);
   const pin = getPinnedHook(name);
@@ -182,6 +184,15 @@ export async function verifyScriptHash(name: string, scriptPath: string): Promis
     last_verified_at: now,
   });
   return { ok: true, pinned: true, expected, actual, name };
+}
+
+/**
+ * Verify a hook script's content hash against the trusted record, reading the
+ * script from disk. Execution paths should prefer checkScriptHash with the
+ * bytes they already hold so the verified bytes are the executed bytes.
+ */
+export async function verifyScriptHash(name: string, scriptPath: string): Promise<TrustCheck> {
+  return checkScriptHash(name, await sha256File(scriptPath));
 }
 
 export function retrustHook(name: string, scriptPath: string, version: string, source: string): TrustCheck {

@@ -248,7 +248,7 @@ program
   .description("Execute a hook (called by AI coding agents)")
   .action(async (hook: string, options: { profile?: string }) => {
     const { resolveHook, resolveScriptPath } = await import("../lib/resolve.js");
-    const { verifyScriptHash } = await import("../lib/store.js");
+    const { sha256Of, checkScriptHash } = await import("../lib/store.js");
     const resolved = resolveHook(hook);
     if (!resolved) {
       console.error(JSON.stringify({ error: `Hook '${hook}' not found` }));
@@ -261,7 +261,10 @@ program
       process.exit(1);
     }
 
-    const check = await verifyScriptHash(hook, hookScript);
+    // Read the bytes ONCE. The verified bytes are the executed bytes: the
+    // path is never re-opened for execution after the trust check (TOCTOU).
+    const content = readFileSync(hookScript);
+    const check = checkScriptHash(hook, sha256Of(content));
     if (!check.ok) {
       console.error(
         JSON.stringify({
@@ -298,22 +301,21 @@ program
       }
     }
 
-    // Execute the hook script with bun, passing stdin through
+    // Execute the verified bytes with bun, passing stdin through
     const { readCustomManifest } = await import("../lib/manifest.js");
+    const { executeVerifiedScript } = await import("../lib/run.js");
     const custom = readCustomManifest(hook);
     const args = custom?.manifest.args ?? [];
     const timeout = custom?.manifest.timeout_ms;
-    const proc = Bun.spawn(["bun", "run", hookScript, ...args], {
-      stdin: new Response(hookStdin),
-      stdout: "pipe",
-      stderr: "pipe",
+    const { stdout, stderr, exitCode } = await executeVerifiedScript({
+      name: hook,
+      scriptPath: hookScript,
+      content,
+      args,
+      stdin: hookStdin,
       env: process.env,
-      ...(timeout ? { timeout } : {}),
+      timeout,
     });
-
-    const stdout = await new Response(proc.stdout).text();
-    const stderr = await new Response(proc.stderr).text();
-    const exitCode = await proc.exited;
 
     if (stdout) process.stdout.write(stdout);
     if (stderr) process.stderr.write(stderr);

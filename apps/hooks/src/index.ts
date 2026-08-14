@@ -107,7 +107,7 @@ export function removeProjectHook(name: string): boolean {
 
 import { getHook as _getHook } from "./lib/registry.js";
 import { getHookPath as _getHookPath, hookExists as _hookExists } from "./lib/installer.js";
-import { existsSync } from "fs";
+import { existsSync, readFileSync } from "fs";
 
 export interface RunHookOptions {
   /** Agent profile ID to inject into hook input */
@@ -138,8 +138,11 @@ export async function runHook(name: string, input: HookInput, options: RunHookOp
   const script = resolvedScript ?? (existsSync(hookScript) ? hookScript : undefined);
   if (!script) throw new Error(`Hook script not found: ${name}`);
 
-  const { verifyScriptHash } = await import("./lib/store.js");
-  const check = await verifyScriptHash(name, script);
+  // Read the bytes ONCE. The verified bytes are the executed bytes: the path
+  // is never re-opened for execution after the trust check (TOCTOU).
+  const { sha256Of, checkScriptHash } = await import("./lib/store.js");
+  const content = readFileSync(script);
+  const check = checkScriptHash(name, sha256Of(content));
   if (!check.ok) {
     throw new Error(
       `Hook '${name}' script changed since it was trusted (sha256 ${check.expected} != ${check.actual}). Run 'hooks trust ${name}' to trust the new content.`,
@@ -160,19 +163,16 @@ export async function runHook(name: string, input: HookInput, options: RunHookOp
     }
   }
 
-  const proc = Bun.spawn(["bun", "run", script, ...(custom?.manifest.args ?? [])], {
-    stdin: new Response(JSON.stringify(hookInput)),
-    stdout: "pipe",
-    stderr: "pipe",
+  const { executeVerifiedScript } = await import("./lib/run.js");
+  const { stdout: stdoutText, stderr: stderrText, exitCode } = await executeVerifiedScript({
+    name,
+    scriptPath: script,
+    content,
+    args: custom?.manifest.args ?? [],
+    stdin: JSON.stringify(hookInput),
     env: process.env,
-    ...(custom?.manifest.timeout_ms ? { timeout: custom.manifest.timeout_ms } : {}),
+    timeout: custom?.manifest.timeout_ms,
   });
-
-  const [stdoutText, stderrText, exitCode] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-    proc.exited,
-  ]);
 
   let output: HookOutput = {};
   try {
@@ -248,6 +248,7 @@ export {
   getPinnedHook,
   removePinnedHook,
   verifyScriptHash,
+  checkScriptHash,
   retrustHook,
   sha256Of,
   sha256File,
