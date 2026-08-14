@@ -371,19 +371,33 @@ function runResult(
   cwd: string,
   options: RunOptions = {},
 ) {
+  const childEnv: NodeJS.ProcessEnv = {
+    ...process.env,
+    ...options.env,
+    NO_UPDATE_NOTIFIER: "1",
+    NPM_CONFIG_AUDIT: "false",
+    NPM_CONFIG_FUND: "false",
+  };
+  // npm propagates its own resolved config into lifecycle-script
+  // environments as npm_config_*: an outer `npm pack --dry-run` therefore
+  // injects npm_config_dry_run=true into this script, and a nested `npm
+  // pack --pack-destination` then reports success in its JSON while writing
+  // no tarball (npm honors the ambient config; measured on npm 10.9.8 and
+  // 11.18). The publish guard's `npm pack --dry-run --json` is exactly that
+  // outer shape, so every guard run silently broke the real pack here.
+  // This script declares dry-run explicitly where it wants it (the staged
+  // preview); ambient dry-run must never turn a real pack or publish into a
+  // no-op. Strip the ambient value unless the caller overrides it.
+  if (childEnv.npm_config_dry_run !== undefined && options.env?.npm_config_dry_run === undefined) {
+    delete childEnv.npm_config_dry_run;
+  }
   const spawnOptions: SpawnSyncOptionsWithStringEncoding = {
     cwd,
     encoding: "utf8",
     maxBuffer: MAX_COMMAND_OUTPUT_BYTES,
     timeout: options.timeoutMs ?? COMMAND_TIMEOUT_MS,
     stdio: options.inherit ? "inherit" : "pipe",
-    env: {
-      ...process.env,
-      ...options.env,
-      NO_UPDATE_NOTIFIER: "1",
-      NPM_CONFIG_AUDIT: "false",
-      NPM_CONFIG_FUND: "false",
-    },
+    env: childEnv,
     input: options.input,
   };
   return spawnSync(executable, args, spawnOptions);

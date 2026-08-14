@@ -49,7 +49,17 @@ const FORBIDDEN_PATTERNS = [
 
 async function main(): Promise<void> {
   assertReleaseScripts();
-  await assertVersionIsPublishable();
+  // The unpublished-version gate is a PUBLISH decision, not a pack
+  // property: `npm pack --dry-run` (the repo's publish guard) and a local
+  // pack must verify the artifact for a version that already shipped, while
+  // `npm publish` must still refuse to re-publish it. npm_command cannot
+  // discriminate here: bun run overwrites it (and npm_lifecycle_event) with
+  // the invoked script's own values (measured on bun 1.3.14), so the stable
+  // discriminator is the entry script — verify:release runs on the publish
+  // path (prepublishOnly), verify:pack on the pack path (prepack/guard).
+  if (process.env.npm_lifecycle_event === "verify:release") {
+    await assertVersionIsPublishable();
+  }
   const tmp = mkdtempSync(join(tmpdir(), "machines-release-"));
   try {
     const packed = await pack(tmp);
