@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.2] - 2026-08-14
+
+### Changed
+
+- **Registry privacy lock-down.** When the worker `HOOKS_API_KEY` binding is set, every registry route except `/health` requires a valid API key (`X-API-Key` or `Bearer`); `/health` stays open for probes. Without the binding, reads stay open — the behavior is config-driven, preserving the OSS default.
+- API key comparison is now timing-safe (`secureEqual`, constant-time) instead of a plain string compare.
+
+### Fixed
+
+- **Bundled-hook runtime resolution** (bug 3e69199c): a hook installed at runtime from the bundled set now resolves to its own bundled copy instead of failing or resolving to the wrong location.
+- **`hooks doctor` matcher fix**: hook matching no longer misclassifies hooks when matching against the registry.
+
 ## [Unreleased]
 
 ### Added
